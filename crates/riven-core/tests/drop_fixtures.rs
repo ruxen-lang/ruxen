@@ -25,6 +25,17 @@ use riven_core::parser::Parser;
 use riven_core::typeck;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Mutex;
+
+/// Serializes the `RIVEN_RUNTIME` env-var window across the parallel
+/// tests in this binary. `cargo test` runs `#[test]` fns on a thread
+/// pool that shares process env, so without this lock two concurrent
+/// `compile_and_run_with_tracking` calls can race: one thread's
+/// `remove_var` clobbers another thread's `set_var` between the
+/// matching `codegen::compile` invocation, leaving the second compile
+/// linked against the default (untracked) runtime — which never emits
+/// the `RIVEN_TEST_LEAK` marker the assertion expects.
+static RIVEN_RUNTIME_ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn workspace_root() -> PathBuf {
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -289,10 +300,19 @@ fn compile_and_run_with_tracking(name: &str, source: &str) -> (String, String, O
         .lower_program(&result.program)
         .expect("MIR lowering");
 
-    // Point the codegen at the tracked runtime.
-    std::env::set_var("RIVEN_RUNTIME", &runtime_path);
-    let compile_result = codegen::compile(&mir, bin_path.to_str().unwrap());
-    std::env::remove_var("RIVEN_RUNTIME");
+    // Point the codegen at the tracked runtime. `codegen::compile`
+    // reads `RIVEN_RUNTIME` from the process env, so we hold the
+    // lock across the whole compile to keep parallel tests from
+    // racing on env state. See `RIVEN_RUNTIME_ENV_LOCK`.
+    let compile_result = {
+        let _env_guard = RIVEN_RUNTIME_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        std::env::set_var("RIVEN_RUNTIME", &runtime_path);
+        let result = codegen::compile(&mir, bin_path.to_str().unwrap());
+        std::env::remove_var("RIVEN_RUNTIME");
+        result
+    };
 
     compile_result.expect("codegen failed");
 
