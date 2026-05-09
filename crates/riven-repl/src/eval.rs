@@ -16,8 +16,8 @@ use riven_core::lexer::Lexer;
 use riven_core::mir::lower::Lowerer;
 use riven_core::mir::nodes::MirFunction;
 use riven_core::parser::ast::{
-    Block, Expr, ExprKind, FuncDef, LetBinding, Pattern, Program, ReplInput,
-    ReplParseResult, Statement, TopLevelItem, Visibility,
+    Block, Expr, ExprKind, FuncDef, LetBinding, Pattern, Program, ReplInput, ReplParseResult,
+    Statement, TopLevelItem, Visibility,
 };
 use riven_core::parser::Parser;
 use riven_core::typeck;
@@ -37,12 +37,20 @@ fn is_side_effect_expr(expr: &Expr) -> bool {
         // Mutations always count.
         ExprKind::Assign { .. } | ExprKind::CompoundAssign { .. } => true,
         // Control flow that wraps a block can drive mutations inside.
-        ExprKind::For(_) | ExprKind::While(_) | ExprKind::WhileLet(_)
-        | ExprKind::Loop(_) | ExprKind::If(_) | ExprKind::IfLet(_)
-        | ExprKind::Match(_) | ExprKind::Block(_) | ExprKind::UnsafeBlock(_) => true,
+        ExprKind::For(_)
+        | ExprKind::While(_)
+        | ExprKind::WhileLet(_)
+        | ExprKind::Loop(_)
+        | ExprKind::If(_)
+        | ExprKind::IfLet(_)
+        | ExprKind::Match(_)
+        | ExprKind::Block(_)
+        | ExprKind::UnsafeBlock(_) => true,
         // Calls / method calls may print, mutate, or allocate.
-        ExprKind::Call { .. } | ExprKind::MethodCall { .. }
-        | ExprKind::ClosureCall { .. } | ExprKind::SafeNavCall { .. } => true,
+        ExprKind::Call { .. }
+        | ExprKind::MethodCall { .. }
+        | ExprKind::ClosureCall { .. }
+        | ExprKind::SafeNavCall { .. } => true,
         // `c.inc` — zero-arg method call with no parens — parses as
         // FieldAccess and only later resolves to a method call. Treat as
         // side-effecting to avoid dropping mutations.
@@ -92,13 +100,9 @@ pub fn eval_input(session: &mut ReplSession, input: &str) -> EvalResult {
     let repl_input = parser.parse_repl_input();
 
     match repl_input {
-        ReplParseResult::Incomplete => return EvalResult::Incomplete,
-        ReplParseResult::Error(diags) => {
-            return EvalResult::Error(format_diagnostics(&diags));
-        }
-        ReplParseResult::Complete(input_node) => {
-            eval_parsed_input(session, input, input_node)
-        }
+        ReplParseResult::Incomplete => EvalResult::Incomplete,
+        ReplParseResult::Error(diags) => EvalResult::Error(format_diagnostics(&diags)),
+        ReplParseResult::Complete(input_node) => eval_parsed_input(session, input, input_node),
     }
 }
 
@@ -116,11 +120,7 @@ fn eval_parsed_input(
 }
 
 /// Evaluate an expression by wrapping it in a function, compiling, and executing.
-fn eval_expression(
-    session: &mut ReplSession,
-    raw_input: &str,
-    expr: Expr,
-) -> EvalResult {
+fn eval_expression(session: &mut ReplSession, raw_input: &str, expr: Expr) -> EvalResult {
     let fn_name = session.next_repl_fn_name();
     let span = expr.span.clone();
     let side_effecting = is_side_effect_expr(&expr);
@@ -150,11 +150,7 @@ fn eval_expression(
 }
 
 /// Evaluate a statement (let binding or expression statement).
-fn eval_statement(
-    session: &mut ReplSession,
-    raw_input: &str,
-    stmt: Statement,
-) -> EvalResult {
+fn eval_statement(session: &mut ReplSession, raw_input: &str, stmt: Statement) -> EvalResult {
     let fn_name = session.next_repl_fn_name();
 
     match stmt {
@@ -192,7 +188,11 @@ fn eval_statement(
             // error semantics clean.
             let new_binding = binding;
             compile_and_execute(
-                session, raw_input, &fn_name, wrapper, true,
+                session,
+                raw_input,
+                &fn_name,
+                wrapper,
+                true,
                 Some(CompileHook::RecordLet(new_binding)),
             )
         }
@@ -206,11 +206,7 @@ fn eval_statement(
 }
 
 /// Evaluate a top-level item (def, class, struct, etc.).
-fn eval_top_level(
-    session: &mut ReplSession,
-    raw_input: &str,
-    item: TopLevelItem,
-) -> EvalResult {
+fn eval_top_level(session: &mut ReplSession, raw_input: &str, item: TopLevelItem) -> EvalResult {
     let item_span = get_item_span(&item);
     match item {
         TopLevelItem::Function(func_def) => {
@@ -221,9 +217,13 @@ fn eval_top_level(
             // between them. Type-level items (class/enum/trait/...) are
             // replayed first so methods can resolve their target types.
             let mut items: Vec<TopLevelItem> = session.type_items.clone();
-            items.extend(session.func_defs.iter()
-                .cloned()
-                .map(TopLevelItem::Function));
+            items.extend(
+                session
+                    .func_defs
+                    .iter()
+                    .cloned()
+                    .map(TopLevelItem::Function),
+            );
             items.push(TopLevelItem::Function(func_def.clone()));
 
             let program = Program {
@@ -233,7 +233,9 @@ fn eval_top_level(
 
             // Type check
             let type_result = typeck::type_check(&program);
-            let has_errors = type_result.diagnostics.iter()
+            let has_errors = type_result
+                .diagnostics
+                .iter()
                 .any(|d| d.level == DiagnosticLevel::Error);
 
             // Some functions (e.g. `def with_x; yield 42; end`) can't be
@@ -242,26 +244,30 @@ fn eval_top_level(
             // wait for a later input (usually the call) to force inference
             // to ground out. We still report the def as accepted.
             if has_errors {
-                let only_cant_infer = type_result.diagnostics.iter()
+                let only_cant_infer = type_result
+                    .diagnostics
+                    .iter()
                     .filter(|d| d.level == DiagnosticLevel::Error)
-                    .all(|d| d.message.contains("could not infer")
-                        || d.message.contains("type mismatch"));
+                    .all(|d| {
+                        d.message.contains("could not infer") || d.message.contains("type mismatch")
+                    });
                 if only_cant_infer {
                     session.func_defs.push(func_def);
                     session.record_input(raw_input);
                     return EvalResult::Ok(Some(format!(
-                        "\x1b[32m=>\x1b[0m {} \x1b[2m: <deferred>\x1b[0m", name
+                        "\x1b[32m=>\x1b[0m {} \x1b[2m: <deferred>\x1b[0m",
+                        name
                     )));
                 }
                 return EvalResult::Error(format_diagnostics(&type_result.diagnostics));
             }
 
             // Borrow check
-            let borrow_errors = riven_core::borrow_check::borrow_check(
-                &type_result.program, &type_result.symbols,
-            );
+            let borrow_errors =
+                riven_core::borrow_check::borrow_check(&type_result.program, &type_result.symbols);
             if !borrow_errors.is_empty() {
-                let msg = borrow_errors.iter()
+                let msg = borrow_errors
+                    .iter()
                     .map(|e| format!("{}", e))
                     .collect::<Vec<_>>()
                     .join("\n");
@@ -298,11 +304,16 @@ fn eval_top_level(
 
             // Extract param info for display — look at the just-defined fn
             // (matched by name) in the typechecked HIR.
-            let (params, return_ty) = type_result.program.items.iter()
+            let (params, return_ty) = type_result
+                .program
+                .items
+                .iter()
                 .filter_map(|item| {
                     if let riven_core::hir::nodes::HirItem::Function(f) = item {
                         if f.name == name {
-                            let params: Vec<(String, Ty)> = f.params.iter()
+                            let params: Vec<(String, Ty)> = f
+                                .params
+                                .iter()
                                 .map(|p| (p.name.clone(), p.ty.clone()))
                                 .collect();
                             return Some((params, f.return_ty.clone()));
@@ -328,9 +339,13 @@ fn eval_top_level(
             // lower to MIR, and JIT-compile any newly-introduced functions
             // (e.g. methods on a class or `impl` block).
             let mut items: Vec<TopLevelItem> = session.type_items.clone();
-            items.extend(session.func_defs.iter()
-                .cloned()
-                .map(TopLevelItem::Function));
+            items.extend(
+                session
+                    .func_defs
+                    .iter()
+                    .cloned()
+                    .map(TopLevelItem::Function),
+            );
             items.push(other.clone());
 
             let program = Program {
@@ -339,7 +354,9 @@ fn eval_top_level(
             };
 
             let type_result = typeck::type_check(&program);
-            let has_errors = type_result.diagnostics.iter()
+            let has_errors = type_result
+                .diagnostics
+                .iter()
                 .any(|d| d.level == DiagnosticLevel::Error);
 
             if has_errors {
@@ -347,11 +364,11 @@ fn eval_top_level(
             }
 
             // Borrow check
-            let borrow_errors = riven_core::borrow_check::borrow_check(
-                &type_result.program, &type_result.symbols,
-            );
+            let borrow_errors =
+                riven_core::borrow_check::borrow_check(&type_result.program, &type_result.symbols);
             if !borrow_errors.is_empty() {
-                let msg = borrow_errors.iter()
+                let msg = borrow_errors
+                    .iter()
                     .map(|e| format!("{}", e))
                     .collect::<Vec<_>>()
                     .join("\n");
@@ -387,9 +404,7 @@ fn eval_top_level(
             // Accumulate for future inputs.
             session.type_items.push(other);
             session.record_input(raw_input);
-            EvalResult::Ok(Some(format!(
-                "\x1b[32m=>\x1b[0m \x1b[2mdefined\x1b[0m"
-            )))
+            EvalResult::Ok(Some("\x1b[32m=>\x1b[0m \x1b[2mdefined\x1b[0m".to_string()))
         }
     }
 }
@@ -412,7 +427,9 @@ fn compile_and_execute(
 ) -> EvalResult {
     // Type check
     let type_result = typeck::type_check(&program);
-    let has_errors = type_result.diagnostics.iter()
+    let has_errors = type_result
+        .diagnostics
+        .iter()
         .any(|d| d.level == DiagnosticLevel::Error);
 
     if has_errors {
@@ -420,11 +437,11 @@ fn compile_and_execute(
     }
 
     // Borrow check
-    let borrow_errors = riven_core::borrow_check::borrow_check(
-        &type_result.program, &type_result.symbols,
-    );
+    let borrow_errors =
+        riven_core::borrow_check::borrow_check(&type_result.program, &type_result.symbols);
     if !borrow_errors.is_empty() {
-        let msg = borrow_errors.iter()
+        let msg = borrow_errors
+            .iter()
             .map(|e| format!("{}", e))
             .collect::<Vec<_>>()
             .join("\n");
@@ -435,7 +452,10 @@ fn compile_and_execute(
     // (matched by name). This is the inferred result type of the expression
     // we are about to execute — everything downstream (MIR, Cranelift
     // signature, result transmute) keys off this.
-    let return_ty = type_result.program.items.iter()
+    let return_ty = type_result
+        .program
+        .items
+        .iter()
         .filter_map(|item| {
             if let riven_core::hir::nodes::HirItem::Function(f) = item {
                 if f.name == fn_name {
@@ -482,9 +502,12 @@ fn compile_and_execute(
     // Find the REPL wrapper function in MIR
     let mir_func = match mir_program.functions.iter().find(|f| f.name == fn_name) {
         Some(f) => f,
-        None => return EvalResult::Error(display::format_error(
-            &format!("Internal error: REPL function '{}' not found in MIR", fn_name),
-        )),
+        None => {
+            return EvalResult::Error(display::format_error(&format!(
+                "Internal error: REPL function '{}' not found in MIR",
+                fn_name
+            )))
+        }
     };
 
     // JIT compile the wrapper last.
@@ -612,9 +635,7 @@ fn compile_and_execute(
 /// Handle a REPL command.
 fn eval_command(session: &mut ReplSession, input: &str) -> EvalResult {
     match commands::parse_command(input) {
-        Some(Command::Help) => {
-            EvalResult::Command(commands::help_text().to_string())
-        }
+        Some(Command::Help) => EvalResult::Command(commands::help_text().to_string()),
         Some(Command::Quit) => EvalResult::Quit,
         Some(Command::Reset) => {
             match session.reset() {
@@ -625,17 +646,11 @@ fn eval_command(session: &mut ReplSession, input: &str) -> EvalResult {
                 Err(e) => EvalResult::Error(display::format_error(&e)),
             }
         }
-        Some(Command::Type(expr_str)) => {
-            eval_type_command(session, &expr_str)
-        }
-        Some(Command::Unknown(cmd)) => {
-            EvalResult::Error(display::format_error(
-                &format!("Unknown command ':{cmd}'. Type :help for available commands."),
-            ))
-        }
-        None => {
-            EvalResult::Error(display::format_error("Invalid command"))
-        }
+        Some(Command::Type(expr_str)) => eval_type_command(session, &expr_str),
+        Some(Command::Unknown(cmd)) => EvalResult::Error(display::format_error(&format!(
+            "Unknown command ':{cmd}'. Type :help for available commands."
+        ))),
+        None => EvalResult::Error(display::format_error("Invalid command")),
     }
 }
 
@@ -662,16 +677,19 @@ fn eval_type_command(session: &mut ReplSession, expr_str: &str) -> EvalResult {
             // `Ty::Fn` itself only carries anonymous parameter types.
             if let ExprKind::Identifier(name) = &expr.kind {
                 if let Some(f) = session.func_defs.iter().find(|f| &f.name == name) {
-                    return EvalResult::Command(
-                        display::format_fn_type_for_def(f, &session.func_defs),
-                    );
+                    return EvalResult::Command(display::format_fn_type_for_def(
+                        f,
+                        &session.func_defs,
+                    ));
                 }
             }
 
             let span = expr.span.clone();
             // Build a wrapper that sees all prior defs + lets (so the
             // expression can reference them).
-            let mut statements: Vec<Statement> = session.let_bindings.iter()
+            let mut statements: Vec<Statement> = session
+                .let_bindings
+                .iter()
                 .cloned()
                 .map(Statement::Let)
                 .collect();
@@ -685,7 +703,9 @@ fn eval_type_command(session: &mut ReplSession, expr_str: &str) -> EvalResult {
             );
             let type_result = typeck::type_check(&wrapper);
 
-            let has_errors = type_result.diagnostics.iter()
+            let has_errors = type_result
+                .diagnostics
+                .iter()
                 .any(|d| d.level == DiagnosticLevel::Error);
             if has_errors {
                 // `:type` is an inspection command — if the expression
@@ -696,7 +716,10 @@ fn eval_type_command(session: &mut ReplSession, expr_str: &str) -> EvalResult {
                 return EvalResult::Ok(None);
             }
 
-            let return_ty = type_result.program.items.iter()
+            let return_ty = type_result
+                .program
+                .items
+                .iter()
                 .filter_map(|item| {
                     if let riven_core::hir::nodes::HirItem::Function(f) = item {
                         if f.name == "__type_check" {
@@ -719,9 +742,7 @@ fn eval_type_command(session: &mut ReplSession, expr_str: &str) -> EvalResult {
         ReplParseResult::Incomplete => {
             EvalResult::Error(display::format_error("Incomplete expression"))
         }
-        ReplParseResult::Error(d) => {
-            EvalResult::Error(format_diagnostics(&d))
-        }
+        ReplParseResult::Error(d) => EvalResult::Error(format_diagnostics(&d)),
     }
 }
 
@@ -744,6 +765,7 @@ fn build_program(
         generic_params: None,
         self_mode: None,
         is_class_method: false,
+        is_async: false,
         params: Vec::new(),
         return_type: None,
         where_clause: None,
@@ -751,15 +773,14 @@ fn build_program(
             statements,
             span: span.clone(),
         },
+        doc_comments: Vec::new(),
         span: span.clone(),
     };
 
     // Order: type-level items first (so methods/fns can reference them),
     // then function defs, then the wrapper.
     let mut items: Vec<TopLevelItem> = type_items.to_vec();
-    items.extend(func_defs.iter()
-        .cloned()
-        .map(TopLevelItem::Function));
+    items.extend(func_defs.iter().cloned().map(TopLevelItem::Function));
     items.push(TopLevelItem::Function(wrapper));
 
     Program {
@@ -809,11 +830,14 @@ mod tests {
         match p.parse_repl_input() {
             ReplParseResult::Complete(ReplInput::Expression(e)) => e,
             ReplParseResult::Complete(ReplInput::Statement(Statement::Expression(e))) => e,
-            other => panic!("expected expression, got {:?}", match other {
-                ReplParseResult::Complete(_) => "top-level",
-                ReplParseResult::Incomplete => "incomplete",
-                ReplParseResult::Error(_) => "error",
-            }),
+            other => panic!(
+                "expected expression, got {:?}",
+                match other {
+                    ReplParseResult::Complete(_) => "top-level",
+                    ReplParseResult::Incomplete => "incomplete",
+                    ReplParseResult::Error(_) => "error",
+                }
+            ),
         }
     }
 

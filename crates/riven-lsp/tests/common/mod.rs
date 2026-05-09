@@ -343,7 +343,7 @@ fn reader_loop<R: Read>(reader: R, tx: Sender<Incoming>) {
                 Ok(_) => {}
                 Err(_) => return,
             }
-            let trimmed = line.trim_end_matches(|c| c == '\r' || c == '\n');
+            let trimmed = line.trim_end_matches(['\r', '\n']);
             if trimmed.is_empty() {
                 break;
             }
@@ -373,7 +373,10 @@ fn reader_loop<R: Read>(reader: R, tx: Sender<Incoming>) {
 
 fn parse_incoming(msg: Value) -> Incoming {
     let id = msg.get("id").cloned();
-    let method = msg.get("method").and_then(|m| m.as_str()).map(str::to_owned);
+    let method = msg
+        .get("method")
+        .and_then(|m| m.as_str())
+        .map(str::to_owned);
     let result = msg.get("result").cloned();
     let error = msg.get("error").cloned();
     let params = msg.get("params").cloned().unwrap_or(Value::Null);

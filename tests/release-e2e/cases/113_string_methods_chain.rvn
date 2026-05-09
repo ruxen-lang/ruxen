@@ -1,0 +1,6 @@
+def main
+  let s = "  Hello World  "
+  puts s.trim
+  puts s.trim.to_upper
+  puts s.trim.to_lower
+end

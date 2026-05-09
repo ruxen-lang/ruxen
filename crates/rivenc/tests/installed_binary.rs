@@ -29,28 +29,29 @@ use tempfile::TempDir;
 /// tests run.
 fn shared_install() -> &'static Path {
     static INSTALL: OnceLock<(TempDir, PathBuf)> = OnceLock::new();
-    &INSTALL.get_or_init(|| {
-        let temp = tempfile::tempdir().expect("mktemp shared install");
-        let bin_dir = temp.path().join("bin");
-        let lib_dir = temp.path().join("lib");
-        fs::create_dir_all(&bin_dir).unwrap();
-        fs::create_dir_all(&lib_dir).unwrap();
+    &INSTALL
+        .get_or_init(|| {
+            let temp = tempfile::tempdir().expect("mktemp shared install");
+            let bin_dir = temp.path().join("bin");
+            let lib_dir = temp.path().join("lib");
+            fs::create_dir_all(&bin_dir).unwrap();
+            fs::create_dir_all(&lib_dir).unwrap();
 
-        let staged_rivenc = bin_dir.join("rivenc");
-        fs::copy(rivenc_exe(), &staged_rivenc).expect("copy rivenc");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&staged_rivenc).unwrap().permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&staged_rivenc, perms).unwrap();
-        }
+            let staged_rivenc = bin_dir.join("rivenc");
+            fs::copy(rivenc_exe(), &staged_rivenc).expect("copy rivenc");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mut perms = fs::metadata(&staged_rivenc).unwrap().permissions();
+                perms.set_mode(0o755);
+                fs::set_permissions(&staged_rivenc, perms).unwrap();
+            }
 
-        fs::copy(runtime_c_src(), lib_dir.join("runtime.c"))
-            .expect("copy runtime.c");
+            fs::copy(runtime_c_src(), lib_dir.join("runtime.c")).expect("copy runtime.c");
 
-        (temp, staged_rivenc)
-    }).1
+            (temp, staged_rivenc)
+        })
+        .1
 }
 
 /// Resolve the workspace root by walking up from this crate's manifest dir.
@@ -177,6 +178,28 @@ end
 "##,
     );
     assert_eq!(out.trim(), "3\n7\n24\n5\n2");
+}
+
+#[test]
+fn owned_rebind_does_not_double_drop() {
+    let (temp, rivenc) = stage_install();
+    let out = compile_and_run(
+        &rivenc,
+        temp.path(),
+        "owned_rebind.rvn",
+        r##"struct Pair
+  left: Int
+  right: Int
+end
+
+def main
+  let pair = Pair.new(7, 11)
+  let rebound = pair
+  puts "#{rebound.left + rebound.right}"
+end
+"##,
+    );
+    assert_eq!(out.trim(), "18");
 }
 
 #[test]
@@ -352,8 +375,7 @@ fn sample_program_fixture_compiles_and_runs() {
     // matching together.
     let (temp, rivenc) = stage_install();
     let src = fs::read_to_string(
-        workspace_root()
-            .join("crates/riven-core/tests/fixtures/sample_program.rvn"),
+        workspace_root().join("crates/riven-core/tests/fixtures/sample_program.rvn"),
     )
     .expect("sample_program.rvn fixture exists");
 
@@ -407,9 +429,7 @@ end
         String::from_utf8_lossy(&compile.stderr)
     );
 
-    let run = Command::new(temp.path().join("env_ov"))
-        .output()
-        .unwrap();
+    let run = Command::new(temp.path().join("env_ov")).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "ok");
 }
 
@@ -430,11 +450,7 @@ fn missing_runtime_gives_clear_error() {
         fs::set_permissions(&rivenc, perms).unwrap();
     }
 
-    fs::write(
-        temp.path().join("x.rvn"),
-        "def main\n  puts \"hi\"\nend\n",
-    )
-    .unwrap();
+    fs::write(temp.path().join("x.rvn"), "def main\n  puts \"hi\"\nend\n").unwrap();
 
     // Deliberately do NOT create lib/runtime.c. Also clear RIVEN_RUNTIME
     // and CARGO_MANIFEST_DIR so the dev fallback can't accidentally save us.
@@ -455,8 +471,7 @@ fn missing_runtime_gives_clear_error() {
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(
-            stderr.contains("runtime.c not found")
-                && stderr.contains("RIVEN_RUNTIME"),
+            stderr.contains("runtime.c not found") && stderr.contains("RIVEN_RUNTIME"),
             "unhelpful error message: {}",
             stderr
         );
@@ -843,7 +858,10 @@ def main
 end
 "##,
     );
-    assert_eq!(out.trim(), "origin\non x-axis at 3\non y-axis at 4\nat (3, 4)");
+    assert_eq!(
+        out.trim(),
+        "origin\non x-axis at 3\non y-axis at 4\nat (3, 4)"
+    );
 }
 
 #[test]
@@ -1627,7 +1645,7 @@ end
 #[test]
 fn e2e_104_hash_basic() {
     // Fixture 104: `hash!{ k => v, ... }` macro literal builds a
-    // `Hash[String, Int]` and `.get(key)` returns `Option[&Int]`.
+    // `HashMap[String, Int]` and `.get(key)` returns `Option[&Int]`.
     let (temp, rivenc) = stage_install();
     let out = compile_and_run(
         &rivenc,

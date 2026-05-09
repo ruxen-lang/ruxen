@@ -42,10 +42,10 @@ let first_big = nums.find { |n| n > 3 }    # Option[&Int]
 let (evens, odds) = nums.partition { |n| n % 2 == 0 }
 ```
 
-## Hash (Key-Value Map)
+## HashMap (Key-Value Map)
 
 ```riven
-let mut h: Hash[String, Int] = Hash.new
+let mut h: HashMap[String, Int] = HashMap.new
 let h = hash!{ "a" => 1, "b" => 2, "c" => 3 }
 
 # Insert / update

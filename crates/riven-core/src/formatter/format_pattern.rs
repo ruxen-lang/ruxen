@@ -1,5 +1,4 @@
 /// AST-to-Doc conversion for patterns.
-
 use crate::parser::ast::*;
 
 use super::comments::CommentMap;
@@ -21,7 +20,10 @@ pub fn format_pattern(pat: &Pattern, comments: &CommentMap) -> Doc {
         Pattern::Wildcard { .. } => text("_"),
 
         Pattern::Tuple { elements, .. } => {
-            let items: Vec<Doc> = elements.iter().map(|e| format_pattern(e, comments)).collect();
+            let items: Vec<Doc> = elements
+                .iter()
+                .map(|e| format_pattern(e, comments))
+                .collect();
             group(concat(vec![
                 text("("),
                 nest(
@@ -70,10 +72,7 @@ pub fn format_pattern(pat: &Pattern, comments: &CommentMap) -> Doc {
         }
 
         Pattern::Struct {
-            path,
-            fields,
-            rest,
-            ..
+            path, fields, rest, ..
         } => {
             let path_str = path.join(".");
             let mut field_docs: Vec<Doc> = fields
@@ -112,8 +111,10 @@ pub fn format_pattern(pat: &Pattern, comments: &CommentMap) -> Doc {
         }
 
         Pattern::Or { patterns, .. } => {
-            let pat_docs: Vec<Doc> =
-                patterns.iter().map(|p| format_pattern(p, comments)).collect();
+            let pat_docs: Vec<Doc> = patterns
+                .iter()
+                .map(|p| format_pattern(p, comments))
+                .collect();
             join(text(" | "), pat_docs)
         }
 
@@ -133,11 +134,7 @@ pub fn format_pattern(pat: &Pattern, comments: &CommentMap) -> Doc {
 pub fn format_match_pattern(pat: &Pattern, guard: Option<&Expr>, comments: &CommentMap) -> Doc {
     let pat_doc = format_pattern(pat, comments);
     match guard {
-        Some(g) => concat(vec![
-            pat_doc,
-            text(" if "),
-            format_expr(g, comments),
-        ]),
+        Some(g) => concat(vec![pat_doc, text(" if "), format_expr(g, comments)]),
         None => pat_doc,
     }
 }

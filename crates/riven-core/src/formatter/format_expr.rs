@@ -1,5 +1,4 @@
 /// AST-to-Doc conversion for expressions.
-
 use crate::lexer::token::{NumericSuffix, StringPart};
 use crate::parser::ast::*;
 
@@ -240,13 +239,18 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
 
         ExprKind::Continue => text("continue"),
 
+        ExprKind::Await(inner) => concat(vec![format_expr(inner, comments), text(".await")]),
+
         // ── Yield ──
         ExprKind::Yield(exprs) => {
             let arg_docs: Vec<Doc> = exprs.iter().map(|e| format_expr(e, comments)).collect();
             if arg_docs.is_empty() {
                 text("yield")
             } else {
-                concat(vec![text("yield "), join(concat(vec![text(","), space()]), arg_docs)])
+                concat(vec![
+                    text("yield "),
+                    join(concat(vec![text(","), space()]), arg_docs),
+                ])
             }
         }
 
@@ -407,7 +411,7 @@ fn format_interpolated_string(parts: &[StringPart]) -> Doc {
                 // Preserve interpolation content exactly as-is.
                 let content: String = tokens
                     .iter()
-                    .map(|t| format!("{}", token_to_source(t)))
+                    .map(|t| token_to_source(t).to_string())
                     .collect::<Vec<_>>()
                     .join("");
                 segments.push(text(format!("#{{{}}}", content)));
@@ -600,14 +604,9 @@ fn collect_chain(kind: &ExprKind) -> (Doc, Vec<Doc>) {
     let mut links: Vec<ExprKind> = Vec::new();
     let mut current = kind;
 
-    loop {
-        match current {
-            ExprKind::MethodCall { object, .. } | ExprKind::FieldAccess { object, .. } => {
-                links.push(current.clone());
-                current = &object.kind;
-            }
-            _ => break,
-        }
+    while let ExprKind::MethodCall { object, .. } | ExprKind::FieldAccess { object, .. } = current {
+        links.push(current.clone());
+        current = &object.kind;
     }
 
     // `current` is now the receiver (base of the chain).
@@ -621,10 +620,12 @@ fn collect_chain(kind: &ExprKind) -> (Doc, Vec<Doc>) {
         .map(|link| match link {
             ExprKind::FieldAccess { field, .. } => concat(vec![text("."), text(field.clone())]),
             ExprKind::MethodCall {
-                method, args, block, ..
+                method,
+                args,
+                block,
+                ..
             } => {
-                let arg_docs: Vec<Doc> =
-                    args.iter().map(|a| format_expr(a, &comments)).collect();
+                let arg_docs: Vec<Doc> = args.iter().map(|a| format_expr(a, &comments)).collect();
                 let mut parts = vec![text("."), text(method.clone())];
                 if !arg_docs.is_empty() || block.is_some() {
                     parts.push(format_call_args(arg_docs));
@@ -653,12 +654,15 @@ fn format_method_chain(kind: &ExprKind, _comments: &CommentMap) -> Doc {
     // Try flat first, break at each `.` if too long.
     group(concat(vec![
         receiver,
-        nest(INDENT_WIDTH, concat(
-            links
-                .into_iter()
-                .map(|link| concat(vec![softline(), link]))
-                .collect(),
-        )),
+        nest(
+            INDENT_WIDTH,
+            concat(
+                links
+                    .into_iter()
+                    .map(|link| concat(vec![softline(), link]))
+                    .collect(),
+            ),
+        ),
     ]))
 }
 
@@ -694,7 +698,10 @@ fn format_if_expr(if_expr: &IfExpr, comments: &CommentMap) -> Doc {
         format_expr(&if_expr.condition, comments),
         nest(
             INDENT_WIDTH,
-            concat(vec![hardline(), format_block_body(&if_expr.then_body, comments)]),
+            concat(vec![
+                hardline(),
+                format_block_body(&if_expr.then_body, comments),
+            ]),
         ),
     ];
 
@@ -731,7 +738,10 @@ fn format_if_let_expr(if_let: &IfLetExpr, comments: &CommentMap) -> Doc {
         format_expr(&if_let.value, comments),
         nest(
             INDENT_WIDTH,
-            concat(vec![hardline(), format_block_body(&if_let.then_body, comments)]),
+            concat(vec![
+                hardline(),
+                format_block_body(&if_let.then_body, comments),
+            ]),
         ),
     ];
 
@@ -776,8 +786,7 @@ fn format_match_expr(match_expr: &MatchExpr, comments: &CommentMap) -> Doc {
 }
 
 fn format_match_arm(arm: &MatchArm, comments: &CommentMap) -> Doc {
-    let pattern_doc =
-        format_match_pattern(&arm.pattern, arm.guard.as_deref(), comments);
+    let pattern_doc = format_match_pattern(&arm.pattern, arm.guard.as_deref(), comments);
 
     match &arm.body {
         MatchArmBody::Expr(expr) => {
@@ -795,21 +804,14 @@ fn format_match_arm(arm: &MatchArm, comments: &CommentMap) -> Doc {
             } else if block.statements.len() == 1 {
                 // Single statement — try inline
                 let body_doc = format_block_body(block, comments);
-                group(concat(vec![
-                    pattern_doc,
-                    text(" -> "),
-                    body_doc,
-                ]))
+                group(concat(vec![pattern_doc, text(" -> "), body_doc]))
             } else {
                 // Multi-line: break after ->, indent body, close with end
                 let body_doc = format_block_body(block, comments);
                 concat(vec![
                     pattern_doc,
                     text(" ->"),
-                    nest(
-                        INDENT_WIDTH,
-                        concat(vec![hardline(), body_doc]),
-                    ),
+                    nest(INDENT_WIDTH, concat(vec![hardline(), body_doc])),
                     hardline(),
                     text("end"),
                 ])
@@ -954,10 +956,7 @@ pub fn format_closure(closure: &ClosureExpr, comments: &CommentMap) -> Doc {
                 let do_form = concat(vec![
                     text("do "),
                     params_doc,
-                    nest(
-                        INDENT_WIDTH,
-                        concat(vec![hardline(), body_doc]),
-                    ),
+                    nest(INDENT_WIDTH, concat(vec![hardline(), body_doc])),
                     hardline(),
                     text("end"),
                 ]);
@@ -970,10 +969,7 @@ pub fn format_closure(closure: &ClosureExpr, comments: &CommentMap) -> Doc {
                 concat(vec![
                     text("do "),
                     params_doc,
-                    nest(
-                        INDENT_WIDTH,
-                        concat(vec![hardline(), body_doc]),
-                    ),
+                    nest(INDENT_WIDTH, concat(vec![hardline(), body_doc])),
                     hardline(),
                     text("end"),
                 ])
@@ -991,7 +987,11 @@ fn format_closure_params(params: &[ClosureParam], comments: &CommentMap) -> Doc 
         .iter()
         .map(|p| {
             if let Some(ty) = &p.type_expr {
-                concat(vec![text(p.name.clone()), text(": "), format_type_expr(ty, comments)])
+                concat(vec![
+                    text(p.name.clone()),
+                    text(": "),
+                    format_type_expr(ty, comments),
+                ])
             } else {
                 text(p.name.clone())
             }

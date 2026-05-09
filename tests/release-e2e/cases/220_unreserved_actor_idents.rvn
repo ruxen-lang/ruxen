@@ -1,0 +1,7 @@
+def main
+  let actor = 1
+  let spawn = 2
+  let send = 3
+  let receive = 4
+  puts "#{actor + spawn + send + receive}"
+end

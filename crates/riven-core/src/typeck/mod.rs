@@ -44,7 +44,9 @@ pub fn type_check(program: &ast::Program) -> TypeCheckResult {
         mut diagnostics,
     } = resolver.resolve(program);
 
-    // Phase 2: Collect all trait impls
+    // Phase 2: Validate derive usage and collect all trait impls
+    diagnostics.extend(crate::r#derive::validate_program(&program, &symbols));
+
     let mut trait_resolver = TraitResolver::new();
     trait_resolver.collect_impls(&program, &symbols);
 
@@ -131,7 +133,9 @@ fn resolve_item_types(item: &mut crate::hir::nodes::HirItem, ctx: &TypeContext) 
         HirItem::Trait(t) => {
             for item in &mut t.items {
                 match item {
-                    crate::hir::nodes::HirTraitItem::MethodSig { return_ty, params, .. } => {
+                    crate::hir::nodes::HirTraitItem::MethodSig {
+                        return_ty, params, ..
+                    } => {
                         *return_ty = ctx.resolve(return_ty);
                         for p in params {
                             p.ty = ctx.resolve(&p.ty);
@@ -187,7 +191,11 @@ fn resolve_expr_types(expr: &mut crate::hir::nodes::HirExpr, ctx: &TypeContext) 
         }
         UnaryOp { operand, .. } => resolve_expr_types(operand, ctx),
         Borrow { expr: inner, .. } => resolve_expr_types(inner, ctx),
-        If { cond, then_branch, else_branch } => {
+        If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
             resolve_expr_types(cond, ctx);
             resolve_expr_types(then_branch, ctx);
             if let Some(ref mut e) = else_branch {
@@ -212,7 +220,12 @@ fn resolve_expr_types(expr: &mut crate::hir::nodes::HirExpr, ctx: &TypeContext) 
             resolve_expr_types(iterable, ctx);
             resolve_expr_types(body, ctx);
         }
-        MethodCall { object, args, block, .. } => {
+        MethodCall {
+            object,
+            args,
+            block,
+            ..
+        } => {
             resolve_expr_types(object, ctx);
             for arg in args {
                 resolve_expr_types(arg, ctx);
@@ -235,16 +248,10 @@ fn resolve_expr_types(expr: &mut crate::hir::nodes::HirExpr, ctx: &TypeContext) 
             resolve_expr_types(target, ctx);
             resolve_expr_types(value, ctx);
         }
-        Return(val) => {
-            if let Some(ref mut v) = val {
-                resolve_expr_types(v, ctx);
-            }
+        Return(Some(v)) | Break(Some(v)) => {
+            resolve_expr_types(v, ctx);
         }
-        Break(val) => {
-            if let Some(ref mut v) = val {
-                resolve_expr_types(v, ctx);
-            }
-        }
+        Return(None) | Break(None) => {}
         Closure { body, params, .. } => {
             for p in params {
                 p.ty = ctx.resolve(&p.ty);
@@ -297,11 +304,7 @@ fn resolve_expr_types(expr: &mut crate::hir::nodes::HirExpr, ctx: &TypeContext) 
 }
 
 /// Validate the type-checked program.
-fn validate(
-    program: &HirProgram,
-    symbols: &SymbolTable,
-    ctx: &TypeContext,
-) -> Vec<Diagnostic> {
+fn validate(program: &HirProgram, symbols: &SymbolTable, ctx: &TypeContext) -> Vec<Diagnostic> {
     let mut diags = Vec::new();
     for item in &program.items {
         validate_item(item, symbols, ctx, &mut diags);
@@ -363,7 +366,10 @@ fn validate_func(
     for param in &func.params {
         if !ctx.is_fully_resolved(&param.ty) {
             diags.push(Diagnostic::error(
-                format!("could not infer type for parameter `{}` in function `{}`", param.name, func.name),
+                format!(
+                    "could not infer type for parameter `{}` in function `{}`",
+                    param.name, func.name
+                ),
                 param.span.clone(),
             ));
         }

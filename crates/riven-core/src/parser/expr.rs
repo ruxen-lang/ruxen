@@ -1,6 +1,6 @@
 //! Expression parsing for the Riven language using Pratt-style precedence climbing.
 
-use crate::lexer::token::{TokenKind, Span};
+use crate::lexer::token::{Span, TokenKind};
 use crate::parser::ast::*;
 use crate::parser::Parser;
 
@@ -10,8 +10,12 @@ use crate::parser::Parser;
 fn infix_binding_power(kind: &TokenKind) -> Option<(u8, u8)> {
     match kind {
         // Assignment: right-associative (1, 2)
-        TokenKind::Eq | TokenKind::PlusEq | TokenKind::MinusEq | TokenKind::StarEq
-        | TokenKind::SlashEq | TokenKind::PercentEq => Some((1, 2)),
+        TokenKind::Eq
+        | TokenKind::PlusEq
+        | TokenKind::MinusEq
+        | TokenKind::StarEq
+        | TokenKind::SlashEq
+        | TokenKind::PercentEq => Some((1, 2)),
 
         // Logical OR: left-associative (3, 4)
         TokenKind::PipePipe => Some((3, 4)),
@@ -20,8 +24,12 @@ fn infix_binding_power(kind: &TokenKind) -> Option<(u8, u8)> {
         TokenKind::AmpAmp => Some((5, 6)),
 
         // Comparison: non-associative (7, 8)
-        TokenKind::EqEq | TokenKind::NotEq | TokenKind::Lt | TokenKind::Gt
-        | TokenKind::LtEq | TokenKind::GtEq => Some((7, 8)),
+        TokenKind::EqEq
+        | TokenKind::NotEq
+        | TokenKind::Lt
+        | TokenKind::Gt
+        | TokenKind::LtEq
+        | TokenKind::GtEq => Some((7, 8)),
 
         // Range: non-associative (9, 10)
         TokenKind::DotDot | TokenKind::DotDotEq => Some((9, 10)),
@@ -98,7 +106,10 @@ impl Parser {
     fn is_postfix_op(&self, kind: &TokenKind) -> bool {
         matches!(
             kind,
-            TokenKind::Dot | TokenKind::QuestionDot | TokenKind::LBracket | TokenKind::Question
+            TokenKind::Dot
+                | TokenKind::QuestionDot
+                | TokenKind::LBracket
+                | TokenKind::Question
                 | TokenKind::LParen
         )
     }
@@ -377,7 +388,7 @@ impl Parser {
             TokenKind::LBracket => self.parse_array_literal(),
 
             // Block expressions (closures)
-            TokenKind::LBrace => self.parse_brace_closure(false),
+            TokenKind::LBrace => self.parse_brace_closure(false, false),
 
             // do ... end — either a closure (if `|params|` follow) or a
             // block expression whose value is the last expression.
@@ -387,8 +398,11 @@ impl Parser {
                 while matches!(self.peek_at_kind(look), TokenKind::Newline) {
                     look += 1;
                 }
-                if matches!(self.peek_at_kind(look), TokenKind::Pipe | TokenKind::PipePipe) {
-                    self.parse_do_closure(false)
+                if matches!(
+                    self.peek_at_kind(look),
+                    TokenKind::Pipe | TokenKind::PipePipe
+                ) {
+                    self.parse_do_closure(false, false)
                 } else {
                     self.parse_do_block_expr()
                 }
@@ -398,15 +412,40 @@ impl Parser {
             TokenKind::Move => {
                 self.advance();
                 if self.at(TokenKind::LBrace) {
-                    self.parse_brace_closure(true)
+                    self.parse_brace_closure(false, true)
                 } else if self.at(TokenKind::Do) {
-                    self.parse_do_closure(true)
+                    self.parse_do_closure(false, true)
                 } else {
                     self.error("expected `{` or `do` after `move`");
                     Expr {
                         kind: ExprKind::Identifier("_error".to_string()),
                         span: start,
                     }
+                }
+            }
+
+            TokenKind::Async => {
+                self.advance();
+                let is_move = self.eat(TokenKind::Move);
+                if self.at(TokenKind::LBrace) {
+                    self.parse_brace_closure(true, is_move)
+                } else if self.at(TokenKind::Do) {
+                    self.parse_do_closure(true, is_move)
+                } else {
+                    self.error("expected `def`, `do`, or `{` after `async`");
+                    Expr {
+                        kind: ExprKind::Identifier("_error".to_string()),
+                        span: start,
+                    }
+                }
+            }
+
+            TokenKind::Await => {
+                self.advance();
+                self.error("prefix `await` is not supported; use postfix `.await`");
+                Expr {
+                    kind: ExprKind::Identifier("_error".to_string()),
+                    span: start,
                 }
             }
 
@@ -518,7 +557,10 @@ impl Parser {
             }
 
             _ => {
-                self.error(&format!("expected expression, found {:?}", self.current_kind()));
+                self.error(&format!(
+                    "expected expression, found {:?}",
+                    self.current_kind()
+                ));
                 self.advance();
                 Expr {
                     kind: ExprKind::Identifier("_error".to_string()),
@@ -647,7 +689,9 @@ impl Parser {
                         let variant_name;
                         // Collect path: A.B.C — all TypeIdentifiers
                         loop {
-                            if let TokenKind::TypeIdentifier(ref vname) = self.current_kind().clone() {
+                            if let TokenKind::TypeIdentifier(ref vname) =
+                                self.current_kind().clone()
+                            {
                                 let vname = vname.clone();
                                 self.advance();
                                 if self.at(TokenKind::Dot) {
@@ -907,6 +951,14 @@ impl Parser {
             // Method/field access: .name or .name(args) [block]
             TokenKind::Dot => {
                 self.advance(); // consume .
+                if self.at(TokenKind::Await) {
+                    self.advance();
+                    let span = self.span_from(&start_span);
+                    return Expr {
+                        kind: ExprKind::Await(Box::new(lhs)),
+                        span,
+                    };
+                }
                 // .( for closure call
                 if self.at(TokenKind::LParen) {
                     let args = self.parse_call_args();
@@ -1261,6 +1313,7 @@ impl Parser {
                 | TokenKind::Loop
                 | TokenKind::Do
                 | TokenKind::Move
+                | TokenKind::Async
                 | TokenKind::Return
                 | TokenKind::Break
                 | TokenKind::Continue
@@ -1372,7 +1425,7 @@ impl Parser {
 
     // ─── Closures ──────────────────────────────────────────────────────
 
-    fn parse_brace_closure(&mut self, is_move: bool) -> Expr {
+    fn parse_brace_closure(&mut self, is_async: bool, is_move: bool) -> Expr {
         let start = self.current_span();
         self.advance(); // consume {
         self.skip_newlines();
@@ -1427,6 +1480,7 @@ impl Parser {
         let span = self.span_from(&start);
         Expr {
             kind: ExprKind::Closure(ClosureExpr {
+                is_async,
                 is_move,
                 params,
                 body,
@@ -1452,7 +1506,7 @@ impl Parser {
         }
     }
 
-    fn parse_do_closure(&mut self, is_move: bool) -> Expr {
+    fn parse_do_closure(&mut self, is_async: bool, is_move: bool) -> Expr {
         let start = self.current_span();
         self.advance(); // consume do
         self.skip_newlines();
@@ -1473,6 +1527,7 @@ impl Parser {
         let span = self.span_from(&start);
         Expr {
             kind: ExprKind::Closure(ClosureExpr {
+                is_async,
                 is_move,
                 params,
                 body: ClosureBody::Block(block),
@@ -1534,10 +1589,7 @@ impl Parser {
             while matches!(self.peek_at_kind(i), TokenKind::Newline) {
                 i += 1;
             }
-            return matches!(
-                self.peek_at_kind(i),
-                TokenKind::Pipe | TokenKind::PipePipe
-            );
+            return matches!(self.peek_at_kind(i), TokenKind::Pipe | TokenKind::PipePipe);
         }
         false
     }
@@ -1546,9 +1598,9 @@ impl Parser {
     /// Returns Some if { |params| ... } or do |params| ... end follows.
     pub(crate) fn maybe_parse_block_arg(&mut self) -> Option<Expr> {
         if self.at(TokenKind::LBrace) {
-            Some(self.parse_brace_closure(false))
+            Some(self.parse_brace_closure(false, false))
         } else if self.at(TokenKind::Do) {
-            Some(self.parse_do_closure(false))
+            Some(self.parse_do_closure(false, false))
         } else {
             None
         }

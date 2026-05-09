@@ -62,10 +62,7 @@ pub fn resolve(
     // Build lock file
     let lock = build_lock_file(&sorted, project_dir, manifest)?;
 
-    Ok(ResolveResult {
-        deps: sorted,
-        lock,
-    })
+    Ok(ResolveResult { deps: sorted, lock })
 }
 
 /// Resolve a single dependency recursively.
@@ -100,11 +97,7 @@ fn resolve_dep(
     let (source_dir, version, is_path, checksum) = match dep {
         Dependency::Version(_ver) => {
             in_flight.remove(name);
-            return Err(format!(
-                "registry dependencies are not yet supported. \
-                 Use `--git` or `--path` for piece `{}`",
-                name
-            ));
+            return Err(registry_deferred_error(name));
         }
         Dependency::Detailed(detail) => {
             if let Some(path) = &detail.path {
@@ -113,15 +106,11 @@ fn resolve_dep(
                 resolve_git_dep(name, git_url, detail, deps_dir, existing_lock)?
             } else if detail.version.is_some() {
                 in_flight.remove(name);
-                return Err(format!(
-                    "registry dependencies are not yet supported. \
-                     Use `--git` or `--path` for piece `{}`",
-                    name
-                ));
+                return Err(registry_deferred_error(name));
             } else {
                 in_flight.remove(name);
                 return Err(format!(
-                    "dependency `{}` has no source (specify `path`, `git`, or `version`)",
+                    "dependency `{}` has no source (specify `path = \"...\"` or `git = \"...\"`)",
                     name
                 ));
             }
@@ -141,7 +130,15 @@ fn resolve_dep(
     if let Some(ref dm) = dep_manifest {
         for (trans_name, trans_dep) in &dm.dependencies {
             dep_names.push(trans_name.clone());
-            resolve_dep(trans_name, trans_dep, &source_dir, deps_dir, existing_lock, resolved, in_flight)?;
+            resolve_dep(
+                trans_name,
+                trans_dep,
+                &source_dir,
+                deps_dir,
+                existing_lock,
+                resolved,
+                in_flight,
+            )?;
         }
     }
 
@@ -160,6 +157,25 @@ fn resolve_dep(
     );
 
     Ok(())
+}
+
+/// Error emitted when a registry-style dependency is encountered.
+///
+/// Per CEO ruling TEC-13, the v1 registry model is git-URL only (Go-style):
+/// there is no centralized registry. Users must declare deps as
+/// `foo = { git = "https://..." }`. We accept the parsed registry form so
+/// downstream tooling that only reads the manifest still works, but reject
+/// it at resolve time with a clear migration path.
+fn registry_deferred_error(name: &str) -> String {
+    format!(
+        "registry dependencies are not supported in v1 (piece `{}`).\n\
+         Riven v1 uses Go-style git-URL dependencies — there is no centralized registry.\n\
+         Replace the version string with a git URL, for example:\n\
+         \n    [dependencies]\n    {} = {{ git = \"https://github.com/user/{}.git\" }}\n\n\
+         You can also pin to a tag, branch, or revision via `tag = \"...\"`, \
+         `branch = \"...\"`, or `rev = \"...\"`. See CEO ruling TEC-13.",
+        name, name, name
+    )
 }
 
 /// Resolve a path dependency.
@@ -218,7 +234,8 @@ fn resolve_git_dep(
 
     // Check if we have a locked revision
     let locked_rev = existing_lock.and_then(|l| {
-        l.find(name).and_then(|p| p.git_rev().map(|s| s.to_string()))
+        l.find(name)
+            .and_then(|p| p.git_rev().map(|s| s.to_string()))
     });
 
     // Use locked revision if available and no specific ref override
@@ -393,11 +410,7 @@ mod tests {
     #[test]
     fn test_cycle_detection_real_projects() {
         // Create two projects that depend on each other
-        let tmp = std::env::temp_dir().join(format!(
-            "riven_cycle_test_{:?}",
-            std::thread::current().id()
-        ));
-        let _ = std::fs::remove_dir_all(&tmp);
+        let tmp = test_tmp_dir("cycle");
         std::fs::create_dir_all(tmp.join("cycle-a/src")).unwrap();
         std::fs::create_dir_all(tmp.join("cycle-b/src")).unwrap();
 
@@ -495,6 +508,118 @@ mod tests {
         assert!(tls_idx < http_idx);
         assert!(http_idx < app_idx);
         assert!(json_idx < app_idx);
+    }
+
+    /// Build a temp dir keyed on the test name (the caller's
+    /// `function_path!()`). Thread IDs alone are not unique across cargo's
+    /// test worker pool — a second test landing on the same worker would
+    /// share the path and `remove_dir_all` from one would race the other's
+    /// `create_dir_all`. Embedding the test name keeps paths disjoint and
+    /// reproducible.
+    fn test_tmp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "riven_test_{}_{}_{:?}",
+            name,
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn test_registry_version_dep_parses_but_rejects_at_resolve() {
+        // Bare version string: foo = "0.1.0"
+        let tmp = test_tmp_dir("registry_v");
+        std::fs::create_dir_all(tmp.join("src")).unwrap();
+        std::fs::write(tmp.join("src/main.rvn"), "def main\nend\n").unwrap();
+        std::fs::write(
+            tmp.join("Riven.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nfoo = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        // Parse must succeed — downstream tooling reads manifests of all shapes.
+        let manifest = crate::manifest::Manifest::load(&tmp).unwrap();
+        assert!(manifest.dependencies.contains_key("foo"));
+
+        // Resolve must fail with the deferred-feature diagnostic.
+        let result = resolve(&tmp, &manifest, None);
+        assert!(result.is_err(), "expected resolve to fail for registry dep");
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("TEC-13"),
+            "diagnostic should cite TEC-13, got: {}",
+            err
+        );
+        assert!(
+            err.contains("git ="),
+            "diagnostic should mention `git = \"...\"` migration, got: {}",
+            err
+        );
+        assert!(
+            err.contains("foo"),
+            "diagnostic should name the offending piece, got: {}",
+            err
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_registry_detailed_version_dep_rejected_at_resolve() {
+        // Detailed table form with only `version`: foo = { version = "0.1.0" }
+        let tmp = test_tmp_dir("registry_d");
+        std::fs::create_dir_all(tmp.join("src")).unwrap();
+        std::fs::write(tmp.join("src/main.rvn"), "def main\nend\n").unwrap();
+        std::fs::write(
+            tmp.join("Riven.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nbar = { version = \"0.1.0\" }\n",
+        )
+        .unwrap();
+
+        let manifest = crate::manifest::Manifest::load(&tmp).unwrap();
+        let result = resolve(&tmp, &manifest, None);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("TEC-13"));
+        assert!(err.contains("git ="));
+        assert!(err.contains("bar"));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_path_dep_still_resolves() {
+        // Regression check: the fix for registry deps must not break path deps.
+        let tmp = test_tmp_dir("path_ok");
+        std::fs::create_dir_all(tmp.join("app/src")).unwrap();
+        std::fs::create_dir_all(tmp.join("lib/src")).unwrap();
+        std::fs::write(tmp.join("app/src/main.rvn"), "def main\nend\n").unwrap();
+        std::fs::write(tmp.join("lib/src/lib.rvn"), "pub def hi\nend\n").unwrap();
+
+        std::fs::write(
+            tmp.join("lib/Riven.toml"),
+            "[package]\nname = \"lib\"\nversion = \"0.2.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.join("app/Riven.toml"),
+            format!(
+                "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nlib = {{ path = \"{}\" }}\n",
+                tmp.join("lib").display()
+            ),
+        )
+        .unwrap();
+
+        let manifest = crate::manifest::Manifest::load(&tmp.join("app")).unwrap();
+        let result = resolve(&tmp.join("app"), &manifest, None).expect("path dep should resolve");
+        assert_eq!(result.deps.len(), 1);
+        assert_eq!(result.deps[0].name, "lib");
+        assert_eq!(result.deps[0].version, "0.2.0");
+        assert!(result.deps[0].is_path);
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

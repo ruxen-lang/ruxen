@@ -1,0 +1,13 @@
+def main
+  let mut a: Vec[Int] = Vec.new
+  a.push(1)
+  a.push(2)
+  let mut b: Vec[Int] = Vec.new
+  b.push(3)
+  b.push(4)
+  a.extend(&b)
+  puts "len=#{a.len}"
+  for x in &a
+    puts "#{x}"
+  end
+end

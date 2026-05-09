@@ -72,10 +72,6 @@ fn test_all_keywords() {
         ("Some", TokenKind::SomeKw),
         ("Ok", TokenKind::OkKw),
         ("Err", TokenKind::ErrKw),
-        ("actor", TokenKind::Actor),
-        ("spawn", TokenKind::Spawn),
-        ("send", TokenKind::Send),
-        ("receive", TokenKind::Receive),
         ("macro", TokenKind::Macro),
         ("crate", TokenKind::Crate),
         ("extern", TokenKind::Extern),
@@ -100,7 +96,26 @@ fn test_all_keywords() {
 fn test_keyword_not_prefix() {
     // "letter" should not be lexed as "let" + "ter"
     let kinds = lex_kinds("letter");
-    assert_eq!(kinds, vec![TokenKind::Identifier("letter".into()), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![TokenKind::Identifier("letter".into()), TokenKind::Eof]
+    );
+}
+
+#[test]
+fn test_unreserved_keywords_lex_as_identifiers() {
+    // P0.12 / TEC-13: `actor`, `send`, `receive` are no longer reserved and
+    // must lex as plain identifiers so users can name their own functions
+    // and variables with these words.
+    for name in ["actor", "send", "receive"] {
+        let kinds = lex_kinds(name);
+        assert_eq!(
+            kinds,
+            vec![TokenKind::Identifier(name.into()), TokenKind::Eof],
+            "'{}' should lex as an identifier, not a keyword",
+            name
+        );
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -193,7 +208,11 @@ fn test_amp_mut_not_partial() {
     let kinds = lex_kinds("&mutable");
     assert_eq!(
         kinds,
-        vec![TokenKind::Amp, TokenKind::Identifier("mutable".into()), TokenKind::Eof]
+        vec![
+            TokenKind::Amp,
+            TokenKind::Identifier("mutable".into()),
+            TokenKind::Eof
+        ]
     );
 }
 
@@ -223,45 +242,90 @@ fn test_decimal_integers() {
 #[test]
 fn test_integer_with_underscores() {
     let kinds = lex_kinds("1_000_000");
-    assert_eq!(kinds, vec![TokenKind::IntLiteral(1_000_000, None), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![TokenKind::IntLiteral(1_000_000, None), TokenKind::Eof]
+    );
 }
 
 #[test]
 fn test_hex_literal() {
     let kinds = lex_kinds("0xFF");
-    assert_eq!(kinds, vec![TokenKind::IntLiteral(0xFF, None), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![TokenKind::IntLiteral(0xFF, None), TokenKind::Eof]
+    );
 }
 
 #[test]
 fn test_hex_with_underscores() {
     let kinds = lex_kinds("0xFF_FF");
-    assert_eq!(kinds, vec![TokenKind::IntLiteral(0xFFFF, None), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![TokenKind::IntLiteral(0xFFFF, None), TokenKind::Eof]
+    );
 }
 
 #[test]
 fn test_binary_literal() {
     let kinds = lex_kinds("0b1010_0101");
-    assert_eq!(kinds, vec![TokenKind::IntLiteral(0b1010_0101, None), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![TokenKind::IntLiteral(0b1010_0101, None), TokenKind::Eof]
+    );
 }
 
 #[test]
 fn test_octal_literal() {
     let kinds = lex_kinds("0o777");
-    assert_eq!(kinds, vec![TokenKind::IntLiteral(0o777, None), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![TokenKind::IntLiteral(0o777, None), TokenKind::Eof]
+    );
 }
 
 #[test]
 fn test_integer_with_suffix() {
     let kinds = lex_kinds("42i8");
-    assert_eq!(kinds, vec![TokenKind::IntLiteral(42, Some(NumericSuffix::I8)), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::IntLiteral(42, Some(NumericSuffix::I8)),
+            TokenKind::Eof
+        ]
+    );
     let kinds = lex_kinds("42u64");
-    assert_eq!(kinds, vec![TokenKind::IntLiteral(42, Some(NumericSuffix::U64)), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::IntLiteral(42, Some(NumericSuffix::U64)),
+            TokenKind::Eof
+        ]
+    );
     let kinds = lex_kinds("42usize");
-    assert_eq!(kinds, vec![TokenKind::IntLiteral(42, Some(NumericSuffix::USize)), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::IntLiteral(42, Some(NumericSuffix::USize)),
+            TokenKind::Eof
+        ]
+    );
     let kinds = lex_kinds("42isize");
-    assert_eq!(kinds, vec![TokenKind::IntLiteral(42, Some(NumericSuffix::ISize)), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::IntLiteral(42, Some(NumericSuffix::ISize)),
+            TokenKind::Eof
+        ]
+    );
     let kinds = lex_kinds("42u");
-    assert_eq!(kinds, vec![TokenKind::IntLiteral(42, Some(NumericSuffix::U)), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::IntLiteral(42, Some(NumericSuffix::U)),
+            TokenKind::Eof
+        ]
+    );
 }
 
 #[test]
@@ -275,29 +339,52 @@ fn test_zero() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[test]
+#[allow(clippy::approx_constant)]
 fn test_float_basic() {
     let kinds = lex_kinds("3.14");
-    assert_eq!(kinds, vec![TokenKind::FloatLiteral(3.14, None), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![TokenKind::FloatLiteral(3.14, None), TokenKind::Eof]
+    );
 }
 
 #[test]
 fn test_float_scientific() {
     let kinds = lex_kinds("1.0e10");
-    assert_eq!(kinds, vec![TokenKind::FloatLiteral(1.0e10, None), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![TokenKind::FloatLiteral(1.0e10, None), TokenKind::Eof]
+    );
 }
 
 #[test]
 fn test_float_scientific_negative_exponent() {
     let kinds = lex_kinds("1.0e-3");
-    assert_eq!(kinds, vec![TokenKind::FloatLiteral(1.0e-3, None), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![TokenKind::FloatLiteral(1.0e-3, None), TokenKind::Eof]
+    );
 }
 
 #[test]
+#[allow(clippy::approx_constant)]
 fn test_float_with_suffix() {
     let kinds = lex_kinds("3.14f32");
-    assert_eq!(kinds, vec![TokenKind::FloatLiteral(3.14, Some(NumericSuffix::F32)), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::FloatLiteral(3.14, Some(NumericSuffix::F32)),
+            TokenKind::Eof
+        ]
+    );
     let kinds = lex_kinds("3.14f64");
-    assert_eq!(kinds, vec![TokenKind::FloatLiteral(3.14, Some(NumericSuffix::F64)), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::FloatLiteral(3.14, Some(NumericSuffix::F64)),
+            TokenKind::Eof
+        ]
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -340,19 +427,31 @@ fn test_inclusive_range() {
 #[test]
 fn test_simple_string() {
     let kinds = lex_kinds(r#""hello""#);
-    assert_eq!(kinds, vec![TokenKind::StringLiteral("hello".into()), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![TokenKind::StringLiteral("hello".into()), TokenKind::Eof]
+    );
 }
 
 #[test]
 fn test_string_with_escapes() {
     let kinds = lex_kinds(r#""hello\nworld""#);
-    assert_eq!(kinds, vec![TokenKind::StringLiteral("hello\nworld".into()), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::StringLiteral("hello\nworld".into()),
+            TokenKind::Eof
+        ]
+    );
 }
 
 #[test]
 fn test_string_with_unicode_escape() {
     let kinds = lex_kinds(r#""\u{1F600}""#);
-    assert_eq!(kinds, vec![TokenKind::StringLiteral("\u{1F600}".into()), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![TokenKind::StringLiteral("\u{1F600}".into()), TokenKind::Eof]
+    );
 }
 
 #[test]
@@ -398,7 +497,13 @@ fn test_string_interpolation_with_expression() {
 #[test]
 fn test_escaped_interpolation() {
     let kinds = lex_kinds(r#""\#{not interpolation}""#);
-    assert_eq!(kinds, vec![TokenKind::StringLiteral("#{not interpolation}".into()), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::StringLiteral("#{not interpolation}".into()),
+            TokenKind::Eof
+        ]
+    );
 }
 
 #[test]
@@ -429,13 +534,25 @@ fn test_multiline_string() {
   world
 \"\"\"";
     let kinds = lex_kinds(input);
-    assert_eq!(kinds, vec![TokenKind::StringLiteral("hello\nworld".into()), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::StringLiteral("hello\nworld".into()),
+            TokenKind::Eof
+        ]
+    );
 }
 
 #[test]
 fn test_raw_string() {
     let kinds = lex_kinds(r#"r"no\escape""#);
-    assert_eq!(kinds, vec![TokenKind::StringLiteral(r"no\escape".into()), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::StringLiteral(r"no\escape".into()),
+            TokenKind::Eof
+        ]
+    );
 }
 
 #[test]
@@ -443,7 +560,10 @@ fn test_raw_string_with_hashes() {
     let kinds = lex_kinds(r###"r#"can contain "quotes""#"###);
     assert_eq!(
         kinds,
-        vec![TokenKind::StringLiteral(r#"can contain "quotes""#.into()), TokenKind::Eof]
+        vec![
+            TokenKind::StringLiteral(r#"can contain "quotes""#.into()),
+            TokenKind::Eof
+        ]
     );
 }
 
@@ -466,7 +586,10 @@ fn test_char_escape() {
 #[test]
 fn test_char_unicode() {
     let kinds = lex_kinds(r"'\u{1F600}'");
-    assert_eq!(kinds, vec![TokenKind::CharLiteral('\u{1F600}'), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![TokenKind::CharLiteral('\u{1F600}'), TokenKind::Eof]
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -488,13 +611,19 @@ fn test_booleans() {
 #[test]
 fn test_snake_case_identifier() {
     let kinds = lex_kinds("user_name");
-    assert_eq!(kinds, vec![TokenKind::Identifier("user_name".into()), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![TokenKind::Identifier("user_name".into()), TokenKind::Eof]
+    );
 }
 
 #[test]
 fn test_type_identifier() {
     let kinds = lex_kinds("TaskList");
-    assert_eq!(kinds, vec![TokenKind::TypeIdentifier("TaskList".into()), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![TokenKind::TypeIdentifier("TaskList".into()), TokenKind::Eof]
+    );
 }
 
 #[test]
@@ -514,19 +643,28 @@ fn test_identifier_with_question_suffix() {
 #[test]
 fn test_identifier_with_bang_suffix() {
     let kinds = lex_kinds("unwrap!");
-    assert_eq!(kinds, vec![TokenKind::Identifier("unwrap!".into()), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![TokenKind::Identifier("unwrap!".into()), TokenKind::Eof]
+    );
 }
 
 #[test]
 fn test_identifier_with_underscore_prefix() {
     let kinds = lex_kinds("_unused");
-    assert_eq!(kinds, vec![TokenKind::Identifier("_unused".into()), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![TokenKind::Identifier("_unused".into()), TokenKind::Eof]
+    );
 }
 
 #[test]
 fn test_single_underscore() {
     let kinds = lex_kinds("_");
-    assert_eq!(kinds, vec![TokenKind::Identifier("_".into()), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![TokenKind::Identifier("_".into()), TokenKind::Eof]
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -545,13 +683,19 @@ fn test_line_comment() {
 #[test]
 fn test_block_comment() {
     let kinds = lex_kinds("#= block comment =# x");
-    assert_eq!(kinds, vec![TokenKind::Identifier("x".into()), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![TokenKind::Identifier("x".into()), TokenKind::Eof]
+    );
 }
 
 #[test]
 fn test_nested_block_comment() {
     let kinds = lex_kinds("#= outer #= inner =# still outer =# x");
-    assert_eq!(kinds, vec![TokenKind::Identifier("x".into()), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![TokenKind::Identifier("x".into()), TokenKind::Eof]
+    );
 }
 
 #[test]
@@ -559,7 +703,10 @@ fn test_doc_comment() {
     let kinds = lex_kinds("## This is a doc comment");
     assert_eq!(
         kinds,
-        vec![TokenKind::DocComment("This is a doc comment".into()), TokenKind::Eof]
+        vec![
+            TokenKind::DocComment("This is a doc comment".into()),
+            TokenKind::Eof
+        ]
     );
 }
 
@@ -670,7 +817,10 @@ fn test_newline_suppressed_after_arrow() {
 #[test]
 fn test_no_leading_newline() {
     let kinds = lex_kinds("\n\na");
-    assert_eq!(kinds, vec![TokenKind::Identifier("a".into()), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![TokenKind::Identifier("a".into()), TokenKind::Eof]
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -955,7 +1105,10 @@ fn test_lifetime() {
 #[test]
 fn test_lifetime_long_name() {
     let kinds = lex_kinds("'input");
-    assert_eq!(kinds, vec![TokenKind::Lifetime("input".into()), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![TokenKind::Lifetime("input".into()), TokenKind::Eof]
+    );
 }
 
 #[test]
@@ -990,7 +1143,10 @@ fn test_backslash_continuation() {
 #[test]
 fn test_empty_string() {
     let kinds = lex_kinds(r#""""#);
-    assert_eq!(kinds, vec![TokenKind::StringLiteral("".into()), TokenKind::Eof]);
+    assert_eq!(
+        kinds,
+        vec![TokenKind::StringLiteral("".into()), TokenKind::Eof]
+    );
 }
 
 #[test]

@@ -1,0 +1,12 @@
+def main
+  let mut v: Vec[Int] = Vec.new
+  match v.pop
+    Some(_) -> puts "unexpected"
+    None    -> puts "got_none"
+  end
+  v.push(7)
+  match v.pop
+    Some(x) -> puts "got #{x}"
+    None    -> puts "unexpected"
+  end
+end

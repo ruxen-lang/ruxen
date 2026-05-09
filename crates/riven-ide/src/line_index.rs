@@ -25,8 +25,10 @@ impl LineIndex {
     /// Convert a byte offset to an LSP Position.
     pub fn position_of(&self, byte_offset: usize) -> lsp_types::Position {
         let byte_offset = byte_offset.min(self.source.len());
-        let line =
-            self.line_starts.partition_point(|&start| (start as usize) <= byte_offset).saturating_sub(1);
+        let line = self
+            .line_starts
+            .partition_point(|&start| (start as usize) <= byte_offset)
+            .saturating_sub(1);
         let line_start = self.line_starts[line] as usize;
 
         // Convert byte column to UTF-16 column
@@ -223,7 +225,10 @@ mod tests {
     fn byte_offset_of_line_past_eof_returns_end() {
         let src = "abc\ndef";
         let idx = LineIndex::new(src);
-        let pos = lsp_types::Position { line: 100, character: 0 };
+        let pos = lsp_types::Position {
+            line: 100,
+            character: 0,
+        };
         let offset = idx.byte_offset_of(pos);
         assert_eq!(offset, src.len());
     }
@@ -267,7 +272,12 @@ mod tests {
         let src = "abc\ndef\nghi";
         let idx = LineIndex::new(src);
         // Span covers from byte 2 (line 0, col 2) to byte 9 (line 2, col 1)
-        let span = Span { start: 2, end: 9, line: 0, column: 2 };
+        let span = Span {
+            start: 2,
+            end: 9,
+            line: 0,
+            column: 2,
+        };
         let range = idx.span_to_range(&span);
         assert_eq!(range.start.line, 0);
         assert_eq!(range.start.character, 2);
@@ -307,8 +317,15 @@ mod tests {
     fn byte_offset_of_char_exceeds_line_length_saturates() {
         let idx = LineIndex::new("abc\ndef");
         // Ask for character 100 on line 0 — should not go beyond '\n' (byte 3)
-        let offset = idx.byte_offset_of(lsp_types::Position { line: 0, character: 100 });
-        assert!(offset <= 4, "Expected offset not to overshoot, got {}", offset);
+        let offset = idx.byte_offset_of(lsp_types::Position {
+            line: 0,
+            character: 100,
+        });
+        assert!(
+            offset <= 4,
+            "Expected offset not to overshoot, got {}",
+            offset
+        );
     }
 
     #[test]

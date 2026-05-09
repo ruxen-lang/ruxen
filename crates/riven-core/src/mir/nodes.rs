@@ -184,10 +184,7 @@ impl BasicBlock {
 #[derive(Debug, Clone)]
 pub enum MirInst {
     /// `dest = value`
-    Assign {
-        dest: LocalId,
-        value: MirValue,
-    },
+    Assign { dest: LocalId, value: MirValue },
     /// `dest = lhs op rhs`
     BinOp {
         dest: LocalId,
@@ -196,15 +193,9 @@ pub enum MirInst {
         rhs: MirValue,
     },
     /// `dest = -operand`
-    Negate {
-        dest: LocalId,
-        operand: MirValue,
-    },
+    Negate { dest: LocalId, operand: MirValue },
     /// `dest = !operand`
-    Not {
-        dest: LocalId,
-        operand: MirValue,
-    },
+    Not { dest: LocalId, operand: MirValue },
     /// `dest = lhs cmp rhs`  (result is Bool)
     Compare {
         dest: LocalId,
@@ -227,10 +218,7 @@ pub enum MirInst {
         size: usize,
     },
     /// `dest = stack_alloc(ty)`  — stack slot
-    StackAlloc {
-        dest: LocalId,
-        ty: Ty,
-    },
+    StackAlloc { dest: LocalId, ty: Ty },
     /// `dest = base.field_index`
     GetField {
         dest: LocalId,
@@ -244,55 +232,25 @@ pub enum MirInst {
         value: MirValue,
     },
     /// Write the discriminant tag of an enum local.
-    SetTag {
-        dest: LocalId,
-        tag: u32,
-    },
+    SetTag { dest: LocalId, tag: u32 },
     /// `dest = enum_local.tag`
-    GetTag {
-        dest: LocalId,
-        src: LocalId,
-    },
+    GetTag { dest: LocalId, src: LocalId },
     /// `dest = enum_local.payload` (cast to the payload type)
-    GetPayload {
-        dest: LocalId,
-        src: LocalId,
-        ty: Ty,
-    },
+    GetPayload { dest: LocalId, src: LocalId, ty: Ty },
     /// `dest = &src`  — immutable borrow
-    Ref {
-        dest: LocalId,
-        src: LocalId,
-    },
+    Ref { dest: LocalId, src: LocalId },
     /// `dest = &mut src`  — mutable borrow
-    RefMut {
-        dest: LocalId,
-        src: LocalId,
-    },
+    RefMut { dest: LocalId, src: LocalId },
     /// `dest = copy src`  — explicit copy (for Copy types)
-    Copy {
-        dest: LocalId,
-        src: LocalId,
-    },
+    Copy { dest: LocalId, src: LocalId },
     /// `dest = move src`  — explicit move (src is invalidated)
-    Move {
-        dest: LocalId,
-        src: LocalId,
-    },
+    Move { dest: LocalId, src: LocalId },
     /// Run the destructor for `local` (inserted by drop elaboration).
-    Drop {
-        local: LocalId,
-    },
+    Drop { local: LocalId },
     /// `dest = "string_data"`
-    StringLiteral {
-        dest: LocalId,
-        value: String,
-    },
+    StringLiteral { dest: LocalId, value: String },
     /// `dest = &func_name` — get address of a named function as a pointer
-    FuncAddr {
-        dest: LocalId,
-        func_name: String,
-    },
+    FuncAddr { dest: LocalId, func_name: String },
     /// `dest = call_indirect(callee_ptr, args...)` — indirect function call
     CallIndirect {
         dest: Option<LocalId>,

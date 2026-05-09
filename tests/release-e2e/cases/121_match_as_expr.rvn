@@ -1,0 +1,13 @@
+def label(n: Int) -> String
+  match n
+    1 -> String.from("one")
+    2 -> String.from("two")
+    _ -> String.from("many")
+  end
+end
+
+def main
+  puts label(1)
+  puts label(2)
+  puts label(99)
+end

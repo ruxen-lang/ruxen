@@ -1,0 +1,4 @@
+@[derive(NotARealTrait)]
+struct Point
+  x: Int
+end

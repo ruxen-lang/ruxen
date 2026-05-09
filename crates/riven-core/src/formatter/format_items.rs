@@ -1,6 +1,5 @@
 /// AST-to-Doc conversion for top-level items (classes, structs, enums, traits,
 /// impls, functions, modules, constants, type aliases, etc.)
-
 use crate::parser::ast::*;
 
 use super::comments::CommentMap;
@@ -19,7 +18,8 @@ pub fn format_program(program: &Program, comments: &CommentMap) -> Doc {
 
     // Collect all comment span starts that we emit, to avoid duplication.
     // Comments attached to the program span are also attached to the first item.
-    let mut emitted_comment_spans: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut emitted_comment_spans: std::collections::HashSet<usize> =
+        std::collections::HashSet::new();
 
     // Emit leading comments that appear before all items (program-level only)
     let leading = comments.leading_comments(program.span.start);
@@ -35,10 +35,10 @@ pub fn format_program(program: &Program, comments: &CommentMap) -> Doc {
 
         if i > 0 {
             // Insert blank line(s) between items
-            let needs_blank = match (&prev_kind, &current_kind) {
-                (Some(ItemKind::Use), ItemKind::Use) => false,
-                _ => true,
-            };
+            let needs_blank = !matches!(
+                (&prev_kind, &current_kind),
+                (Some(ItemKind::Use), ItemKind::Use)
+            );
             if needs_blank {
                 parts.push(hardline());
             }
@@ -161,19 +161,19 @@ fn is_simple_inline_body(block: &Block) -> bool {
 }
 
 fn is_simple_expr(kind: &ExprKind) -> bool {
-    match kind {
+    !matches!(
+        kind,
         ExprKind::If(_)
-        | ExprKind::IfLet(_)
-        | ExprKind::Match(_)
-        | ExprKind::While(_)
-        | ExprKind::WhileLet(_)
-        | ExprKind::For(_)
-        | ExprKind::Loop(_)
-        | ExprKind::Block(_)
-        | ExprKind::Closure(_)
-        | ExprKind::UnsafeBlock(_) => false,
-        _ => true,
-    }
+            | ExprKind::IfLet(_)
+            | ExprKind::Match(_)
+            | ExprKind::While(_)
+            | ExprKind::WhileLet(_)
+            | ExprKind::For(_)
+            | ExprKind::Loop(_)
+            | ExprKind::Block(_)
+            | ExprKind::Closure(_)
+            | ExprKind::UnsafeBlock(_)
+    )
 }
 
 // ─── Functions ──────────────────────────────────────────────────────
@@ -247,10 +247,7 @@ pub fn format_func_def(func: &FuncDef, comments: &CommentMap) -> Doc {
         if dangling.is_empty() {
             concat(vec![sig, hardline(), text("end")])
         } else {
-            let comment_docs: Vec<Doc> = dangling
-                .iter()
-                .map(|c| format_comment(c))
-                .collect();
+            let comment_docs: Vec<Doc> = dangling.iter().map(format_comment).collect();
             concat(vec![
                 sig,
                 nest(
@@ -280,10 +277,7 @@ pub fn format_func_def(func: &FuncDef, comments: &CommentMap) -> Doc {
 
             let expanded = concat(vec![
                 sig,
-                nest(
-                    INDENT_WIDTH,
-                    concat(vec![hardline(), body_doc]),
-                ),
+                nest(INDENT_WIDTH, concat(vec![hardline(), body_doc])),
                 hardline(),
                 text("end"),
             ]);
@@ -376,6 +370,11 @@ fn format_field_decl(field: &FieldDecl, comments: &CommentMap) -> Doc {
 // ─── Structs ────────────────────────────────────────────────────────
 
 fn format_struct(s: &StructDef, comments: &CommentMap) -> Doc {
+    let mut prelude: Vec<Doc> = Vec::new();
+    for arg in &s.repr {
+        prelude.push(concat(vec![text(format!("@[repr({})]", arg)), hardline()]));
+    }
+
     let mut header = vec![text("struct "), text(s.name.clone())];
 
     if let Some(gp) = &s.generic_params {
@@ -404,6 +403,7 @@ fn format_struct(s: &StructDef, comments: &CommentMap) -> Doc {
     let body = join(hardline(), body_parts);
 
     concat(vec![
+        concat(prelude),
         concat(header),
         nest(INDENT_WIDTH, concat(vec![hardline(), body])),
         hardline(),
@@ -420,7 +420,11 @@ fn format_enum(e: &EnumDef, comments: &CommentMap) -> Doc {
         header.push(format_generic_params(gp));
     }
 
-    let variant_docs: Vec<Doc> = e.variants.iter().map(|v| format_variant(v, comments)).collect();
+    let variant_docs: Vec<Doc> = e
+        .variants
+        .iter()
+        .map(|v| format_variant(v, comments))
+        .collect();
     let body = join(hardline(), variant_docs);
 
     concat(vec![
@@ -440,7 +444,11 @@ fn format_variant(variant: &Variant, comments: &CommentMap) -> Doc {
                 .iter()
                 .map(|f| {
                     if let Some(n) = &f.name {
-                        concat(vec![text(n.clone()), text(": "), format_type_expr(&f.type_expr, comments)])
+                        concat(vec![
+                            text(n.clone()),
+                            text(": "),
+                            format_type_expr(&f.type_expr, comments),
+                        ])
                     } else {
                         format_type_expr(&f.type_expr, comments)
                     }
@@ -465,7 +473,11 @@ fn format_variant(variant: &Variant, comments: &CommentMap) -> Doc {
                 .iter()
                 .map(|f| {
                     if let Some(n) = &f.name {
-                        concat(vec![text(n.clone()), text(": "), format_type_expr(&f.type_expr, comments)])
+                        concat(vec![
+                            text(n.clone()),
+                            text(": "),
+                            format_type_expr(&f.type_expr, comments),
+                        ])
                     } else {
                         format_type_expr(&f.type_expr, comments)
                     }
@@ -659,9 +671,12 @@ pub fn format_use(u: &UseDecl) -> Doc {
     let path_str = u.path.join(".");
     match &u.kind {
         UseKind::Simple => concat(vec![text("use "), text(path_str)]),
-        UseKind::Alias(alias) => {
-            concat(vec![text("use "), text(path_str), text(" as "), text(alias.clone())])
-        }
+        UseKind::Alias(alias) => concat(vec![
+            text("use "),
+            text(path_str),
+            text(" as "),
+            text(alias.clone()),
+        ]),
         UseKind::Group(names) => {
             let mut sorted_names = names.clone();
             sorted_names.sort();

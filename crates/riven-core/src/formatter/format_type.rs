@@ -1,5 +1,4 @@
 /// AST-to-Doc conversion for type expressions.
-
 use crate::parser::ast::*;
 
 use super::comments::CommentMap;
@@ -95,18 +94,12 @@ pub fn format_type_expr(ty: &TypeExpr, _comments: &CommentMap) -> Doc {
 
         TypeExpr::ImplTrait { bounds, .. } => {
             let bound_docs: Vec<Doc> = bounds.iter().map(|b| format_type_path(&b.path)).collect();
-            concat(vec![
-                text("impl "),
-                join(text(" + "), bound_docs),
-            ])
+            concat(vec![text("impl "), join(text(" + "), bound_docs)])
         }
 
         TypeExpr::DynTrait { bounds, .. } => {
             let bound_docs: Vec<Doc> = bounds.iter().map(|b| format_type_path(&b.path)).collect();
-            concat(vec![
-                text("dyn "),
-                join(text(" + "), bound_docs),
-            ])
+            concat(vec![text("dyn "), join(text(" + "), bound_docs)])
         }
 
         TypeExpr::Never { .. } => text("!"),
@@ -153,9 +146,7 @@ pub fn format_generic_params(gp: &GenericParams) -> Doc {
         .iter()
         .map(|p| match p {
             GenericParam::Lifetime { name, .. } => text(format!("'{}", name)),
-            GenericParam::Type {
-                name, bounds, ..
-            } => {
+            GenericParam::Type { name, bounds, .. } => {
                 if bounds.is_empty() {
                     text(name.clone())
                 } else {
@@ -190,8 +181,7 @@ pub fn format_where_clause(wc: &WhereClause) -> Doc {
         .predicates
         .iter()
         .map(|p| {
-            let bound_docs: Vec<Doc> =
-                p.bounds.iter().map(|b| format_type_path(&b.path)).collect();
+            let bound_docs: Vec<Doc> = p.bounds.iter().map(|b| format_type_path(&b.path)).collect();
             concat(vec![
                 format_type_expr(&p.type_expr, &CommentMap::new()),
                 text(": "),

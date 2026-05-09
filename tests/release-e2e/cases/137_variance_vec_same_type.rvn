@@ -1,0 +1,16 @@
+def sum_vec(v: Vec[Int]) -> Int
+  let mut total = 0
+  for x in v
+    total = total + x
+  end
+  total
+end
+
+def main
+  let mut a: Vec[Int] = Vec.new
+  a.push(1)
+  a.push(2)
+  a.push(3)
+  let b: Vec[Int] = a
+  puts "#{sum_vec(b)}"
+end

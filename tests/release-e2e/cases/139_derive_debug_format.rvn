@@ -1,0 +1,10 @@
+struct Point
+  x: Int
+  y: Int
+  derive Debug
+end
+
+def main
+  let p = Point.new(1, 2)
+  puts "#{p}"
+end

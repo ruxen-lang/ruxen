@@ -5,7 +5,10 @@
 //! unification. After type checking, all `Infer` types must be resolved
 //! to concrete types.
 
+use std::collections::HashSet;
 use std::fmt;
+
+use crate::resolve::symbols::SymbolTable;
 
 /// Unique identifier for type variables during inference.
 pub type TypeId = u32;
@@ -73,8 +76,8 @@ pub enum Ty {
     Array(Box<Ty>, usize),
     /// `Vec[T]` — dynamic, heap-allocated
     Vec(Box<Ty>),
-    /// `Hash[K, V]` — key-value map
-    Hash(Box<Ty>, Box<Ty>),
+    /// `HashMap[K, V]` — key-value map
+    HashMap(Box<Ty>, Box<Ty>),
     /// `Set[T]`
     Set(Box<Ty>),
 
@@ -189,11 +192,24 @@ impl Ty {
     pub fn is_copy(&self) -> bool {
         match self {
             // Primitives are always Copy
-            Ty::Int | Ty::Int8 | Ty::Int16 | Ty::Int32 | Ty::Int64
-            | Ty::UInt | Ty::UInt8 | Ty::UInt16 | Ty::UInt32 | Ty::UInt64
-            | Ty::ISize | Ty::USize
-            | Ty::Float | Ty::Float32 | Ty::Float64
-            | Ty::Bool | Ty::Char | Ty::Unit => true,
+            Ty::Int
+            | Ty::Int8
+            | Ty::Int16
+            | Ty::Int32
+            | Ty::Int64
+            | Ty::UInt
+            | Ty::UInt8
+            | Ty::UInt16
+            | Ty::UInt32
+            | Ty::UInt64
+            | Ty::ISize
+            | Ty::USize
+            | Ty::Float
+            | Ty::Float32
+            | Ty::Float64
+            | Ty::Bool
+            | Ty::Char
+            | Ty::Unit => true,
 
             // Never is Copy (vacuously — you can never have a Never value)
             Ty::Never => true,
@@ -218,6 +234,120 @@ impl Ty {
             // Everything else is Move
             _ => false,
         }
+    }
+
+    /// Returns true if this type should be treated as Copy after consulting
+    /// symbol-table metadata for nominal user-defined types.
+    pub fn is_copy_with(&self, symbols: &SymbolTable) -> bool {
+        match self {
+            _ if self.is_copy() => true,
+            Ty::Tuple(elems) => elems.iter().all(|elem| elem.is_copy_with(symbols)),
+            Ty::Array(elem, _) => elem.is_copy_with(symbols),
+            Ty::Alias { target, .. } => target.is_copy_with(symbols),
+            Ty::Newtype { inner, .. } => inner.is_copy_with(symbols),
+            Ty::Struct { .. } | Ty::Class { .. } | Ty::Enum { .. } => {
+                crate::resolve::symbols::ty_has_derive_trait(self, symbols, "Copy")
+            }
+            _ => false,
+        }
+    }
+
+    /// Returns true if this type is Send without consulting nominal field
+    /// metadata from the symbol table.
+    pub fn is_send(&self) -> bool {
+        match self {
+            Ty::Int
+            | Ty::Int8
+            | Ty::Int16
+            | Ty::Int32
+            | Ty::Int64
+            | Ty::UInt
+            | Ty::UInt8
+            | Ty::UInt16
+            | Ty::UInt32
+            | Ty::UInt64
+            | Ty::ISize
+            | Ty::USize
+            | Ty::Float
+            | Ty::Float32
+            | Ty::Float64
+            | Ty::Bool
+            | Ty::Char
+            | Ty::Unit
+            | Ty::Never
+            | Ty::String
+            | Ty::Str => true,
+            Ty::Ref(inner) | Ty::RefLifetime(_, inner) => inner.is_sync(),
+            Ty::RefMut(inner) | Ty::RefMutLifetime(_, inner) => inner.is_send(),
+            Ty::Tuple(elems) => elems.iter().all(|elem| elem.is_send()),
+            Ty::Array(elem, _) | Ty::Vec(elem) | Ty::Set(elem) | Ty::Option(elem) => elem.is_send(),
+            Ty::HashMap(key, value) | Ty::Result(key, value) => key.is_send() && value.is_send(),
+            Ty::RawPtr(_) | Ty::RawPtrMut(_) | Ty::RawPtrVoid | Ty::RawPtrMutVoid => false,
+            Ty::ImplTrait(bounds) | Ty::DynTrait(bounds) => has_trait_bound(bounds, "Send"),
+            Ty::Fn { .. } | Ty::FnMut { .. } | Ty::FnOnce { .. } => true,
+            Ty::TypeParam { bounds, .. } => has_trait_bound(bounds, "Send"),
+            Ty::Alias { target, .. } => target.is_send(),
+            Ty::Newtype { inner, .. } => inner.is_send(),
+            Ty::Error => true,
+            Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. } | Ty::Infer(_) => false,
+        }
+    }
+
+    /// Returns true if this type is Send after consulting nominal field
+    /// metadata from the symbol table.
+    pub fn is_send_with(&self, symbols: &SymbolTable) -> bool {
+        let mut visiting = HashSet::new();
+        is_send_with_inner(self, symbols, &mut visiting)
+    }
+
+    /// Returns true if this type is Sync without consulting nominal field
+    /// metadata from the symbol table.
+    pub fn is_sync(&self) -> bool {
+        match self {
+            Ty::Int
+            | Ty::Int8
+            | Ty::Int16
+            | Ty::Int32
+            | Ty::Int64
+            | Ty::UInt
+            | Ty::UInt8
+            | Ty::UInt16
+            | Ty::UInt32
+            | Ty::UInt64
+            | Ty::ISize
+            | Ty::USize
+            | Ty::Float
+            | Ty::Float32
+            | Ty::Float64
+            | Ty::Bool
+            | Ty::Char
+            | Ty::Unit
+            | Ty::Never
+            | Ty::String
+            | Ty::Str => true,
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => inner.is_sync(),
+            Ty::Tuple(elems) => elems.iter().all(|elem| elem.is_sync()),
+            Ty::Array(elem, _) | Ty::Vec(elem) | Ty::Set(elem) | Ty::Option(elem) => elem.is_sync(),
+            Ty::HashMap(key, value) | Ty::Result(key, value) => key.is_sync() && value.is_sync(),
+            Ty::RawPtr(_) | Ty::RawPtrMut(_) | Ty::RawPtrVoid | Ty::RawPtrMutVoid => false,
+            Ty::ImplTrait(bounds) | Ty::DynTrait(bounds) => has_trait_bound(bounds, "Sync"),
+            Ty::Fn { .. } | Ty::FnMut { .. } | Ty::FnOnce { .. } => true,
+            Ty::TypeParam { bounds, .. } => has_trait_bound(bounds, "Sync"),
+            Ty::Alias { target, .. } => target.is_sync(),
+            Ty::Newtype { inner, .. } => inner.is_sync(),
+            Ty::Error => true,
+            Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. } | Ty::Infer(_) => false,
+        }
+    }
+
+    /// Returns true if this type is Sync after consulting nominal field
+    /// metadata from the symbol table.
+    pub fn is_sync_with(&self, symbols: &SymbolTable) -> bool {
+        let mut visiting = HashSet::new();
+        is_sync_with_inner(self, symbols, &mut visiting)
     }
 
     /// Returns true if this type has Move semantics.
@@ -285,9 +415,18 @@ impl Ty {
     pub fn is_integer(&self) -> bool {
         matches!(
             self,
-            Ty::Int | Ty::Int8 | Ty::Int16 | Ty::Int32 | Ty::Int64
-            | Ty::UInt | Ty::UInt8 | Ty::UInt16 | Ty::UInt32 | Ty::UInt64
-            | Ty::ISize | Ty::USize
+            Ty::Int
+                | Ty::Int8
+                | Ty::Int16
+                | Ty::Int32
+                | Ty::Int64
+                | Ty::UInt
+                | Ty::UInt8
+                | Ty::UInt16
+                | Ty::UInt32
+                | Ty::UInt64
+                | Ty::ISize
+                | Ty::USize
         )
     }
 
@@ -320,7 +459,7 @@ impl Ty {
             Ty::Int32 | Ty::UInt32 | Ty::Float32 => Some(32),
             Ty::Int64 | Ty::UInt64 | Ty::Float64 => Some(64),
             Ty::Int | Ty::UInt | Ty::Float => Some(64), // defaults
-            Ty::ISize | Ty::USize => Some(64),           // assume 64-bit platform
+            Ty::ISize | Ty::USize => Some(64),          // assume 64-bit platform
             _ => None,
         }
     }
@@ -339,6 +478,192 @@ impl Ty {
     pub fn type_name(&self) -> std::string::String {
         format!("{}", self)
     }
+}
+
+fn has_trait_bound(bounds: &[TraitRef], trait_name: &str) -> bool {
+    bounds.iter().any(|bound| bound.name == trait_name)
+}
+
+fn is_send_with_inner(ty: &Ty, symbols: &SymbolTable, visiting: &mut HashSet<u32>) -> bool {
+    match ty {
+        Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. } => {
+            nominal_members_are_thread_safe(ty, symbols, visiting, is_send_with_inner, true)
+        }
+        Ty::Ref(inner) | Ty::RefLifetime(_, inner) => is_sync_with_inner(inner, symbols, visiting),
+        Ty::RefMut(inner) | Ty::RefMutLifetime(_, inner) => {
+            is_send_with_inner(inner, symbols, visiting)
+        }
+        Ty::Tuple(elems) => elems
+            .iter()
+            .all(|elem| is_send_with_inner(elem, symbols, visiting)),
+        Ty::Array(elem, _) | Ty::Vec(elem) | Ty::Set(elem) | Ty::Option(elem) => {
+            is_send_with_inner(elem, symbols, visiting)
+        }
+        Ty::HashMap(key, value) | Ty::Result(key, value) => {
+            is_send_with_inner(key, symbols, visiting)
+                && is_send_with_inner(value, symbols, visiting)
+        }
+        Ty::Alias { target, .. } => is_send_with_inner(target, symbols, visiting),
+        Ty::Newtype { inner, .. } => is_send_with_inner(inner, symbols, visiting),
+        _ => ty.is_send(),
+    }
+}
+
+fn is_sync_with_inner(ty: &Ty, symbols: &SymbolTable, visiting: &mut HashSet<u32>) -> bool {
+    match ty {
+        Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. } => {
+            nominal_members_are_thread_safe(ty, symbols, visiting, is_sync_with_inner, false)
+        }
+        Ty::Ref(inner)
+        | Ty::RefMut(inner)
+        | Ty::RefLifetime(_, inner)
+        | Ty::RefMutLifetime(_, inner) => is_sync_with_inner(inner, symbols, visiting),
+        Ty::Tuple(elems) => elems
+            .iter()
+            .all(|elem| is_sync_with_inner(elem, symbols, visiting)),
+        Ty::Array(elem, _) | Ty::Vec(elem) | Ty::Set(elem) | Ty::Option(elem) => {
+            is_sync_with_inner(elem, symbols, visiting)
+        }
+        Ty::HashMap(key, value) | Ty::Result(key, value) => {
+            is_sync_with_inner(key, symbols, visiting)
+                && is_sync_with_inner(value, symbols, visiting)
+        }
+        Ty::Alias { target, .. } => is_sync_with_inner(target, symbols, visiting),
+        Ty::Newtype { inner, .. } => is_sync_with_inner(inner, symbols, visiting),
+        _ => ty.is_sync(),
+    }
+}
+
+fn nominal_members_are_thread_safe(
+    ty: &Ty,
+    symbols: &SymbolTable,
+    visiting: &mut HashSet<u32>,
+    recurse: fn(&Ty, &SymbolTable, &mut HashSet<u32>) -> bool,
+    is_send: bool,
+) -> bool {
+    let Some(def) = nominal_definition(ty, symbols) else {
+        return false;
+    };
+    if nominal_type_has_manual_auto_trait(def, is_send) {
+        return true;
+    }
+    if nominal_type_has_negative_auto_trait(def, is_send) {
+        return false;
+    }
+    if !visiting.insert(def.id) {
+        return true;
+    }
+
+    let result = match &def.kind {
+        crate::resolve::symbols::DefKind::Class { info } => info.fields.iter().all(|field_id| {
+            symbols
+                .def_ty(*field_id)
+                .is_some_and(|field_ty| recurse(&field_ty, symbols, visiting))
+        }),
+        crate::resolve::symbols::DefKind::Struct { info } => info.fields.iter().all(|field_id| {
+            symbols
+                .def_ty(*field_id)
+                .is_some_and(|field_ty| recurse(&field_ty, symbols, visiting))
+        }),
+        crate::resolve::symbols::DefKind::Enum { info } => info.variants.iter().all(|variant_id| {
+            match symbols.get(*variant_id).map(|variant| &variant.kind) {
+                Some(crate::resolve::symbols::DefKind::EnumVariant { kind, .. }) => match kind {
+                    crate::resolve::symbols::VariantDefKind::Unit => true,
+                    crate::resolve::symbols::VariantDefKind::Tuple(fields) => fields
+                        .iter()
+                        .all(|field_ty| recurse(field_ty, symbols, visiting)),
+                    crate::resolve::symbols::VariantDefKind::Struct(fields) => fields
+                        .iter()
+                        .all(|(_, field_ty)| recurse(field_ty, symbols, visiting)),
+                },
+                _ => false,
+            }
+        }),
+        _ => false,
+    };
+
+    visiting.remove(&def.id);
+    result
+}
+
+fn nominal_type_has_manual_auto_trait(
+    def: &crate::resolve::symbols::Definition,
+    is_send: bool,
+) -> bool {
+    match &def.kind {
+        crate::resolve::symbols::DefKind::Class { info } => {
+            if is_send {
+                info.manual_send
+            } else {
+                info.manual_sync
+            }
+        }
+        crate::resolve::symbols::DefKind::Struct { info } => {
+            if is_send {
+                info.manual_send
+            } else {
+                info.manual_sync
+            }
+        }
+        crate::resolve::symbols::DefKind::Enum { info } => {
+            if is_send {
+                info.manual_send
+            } else {
+                info.manual_sync
+            }
+        }
+        _ => false,
+    }
+}
+
+fn nominal_type_has_negative_auto_trait(
+    def: &crate::resolve::symbols::Definition,
+    is_send: bool,
+) -> bool {
+    match &def.kind {
+        crate::resolve::symbols::DefKind::Class { info } => {
+            if is_send {
+                info.opt_out_send
+            } else {
+                info.opt_out_sync
+            }
+        }
+        crate::resolve::symbols::DefKind::Struct { info } => {
+            if is_send {
+                info.opt_out_send
+            } else {
+                info.opt_out_sync
+            }
+        }
+        crate::resolve::symbols::DefKind::Enum { info } => {
+            if is_send {
+                info.opt_out_send
+            } else {
+                info.opt_out_sync
+            }
+        }
+        _ => false,
+    }
+}
+
+fn nominal_definition<'a>(
+    ty: &Ty,
+    symbols: &'a SymbolTable,
+) -> Option<&'a crate::resolve::symbols::Definition> {
+    let name = match ty {
+        Ty::Class { name, .. } | Ty::Struct { name, .. } | Ty::Enum { name, .. } => name,
+        _ => return None,
+    };
+
+    symbols.iter().find(|def| {
+        def.name == *name
+            && matches!(
+                def.kind,
+                crate::resolve::symbols::DefKind::Class { .. }
+                    | crate::resolve::symbols::DefKind::Struct { .. }
+                    | crate::resolve::symbols::DefKind::Enum { .. }
+            )
+    })
 }
 
 impl fmt::Display for Ty {
@@ -380,7 +705,7 @@ impl fmt::Display for Ty {
             }
             Ty::Array(elem, size) => write!(f, "[{}; {}]", elem, size),
             Ty::Vec(elem) => write!(f, "Vec[{}]", elem),
-            Ty::Hash(k, v) => write!(f, "Hash[{}, {}]", k, v),
+            Ty::HashMap(k, v) => write!(f, "HashMap[{}, {}]", k, v),
             Ty::Set(elem) => write!(f, "Set[{}]", elem),
             Ty::Option(inner) => write!(f, "Option[{}]", inner),
             Ty::Result(ok, err) => write!(f, "Result[{}, {}]", ok, err),
@@ -388,7 +713,9 @@ impl fmt::Display for Ty {
             Ty::RefMut(inner) => write!(f, "&mut {}", inner),
             Ty::RefLifetime(lt, inner) => write!(f, "&'{} {}", lt, inner),
             Ty::RefMutLifetime(lt, inner) => write!(f, "&'{} mut {}", lt, inner),
-            Ty::Class { name, generic_args } | Ty::Struct { name, generic_args } | Ty::Enum { name, generic_args } => {
+            Ty::Class { name, generic_args }
+            | Ty::Struct { name, generic_args }
+            | Ty::Enum { name, generic_args } => {
                 write!(f, "{}", name)?;
                 if !generic_args.is_empty() {
                     write!(f, "[")?;

@@ -277,6 +277,9 @@ pub enum ExprKind {
     // Try operator
     Try(Box<Expr>),
 
+    // Async
+    Await(Box<Expr>),
+
     // Assignment
     Assign {
         target: Box<Expr>,
@@ -480,6 +483,7 @@ pub struct LoopExpr {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClosureExpr {
+    pub is_async: bool,
     pub is_move: bool,
     pub params: Vec<ClosureParam>,
     pub body: ClosureBody,
@@ -546,6 +550,7 @@ pub struct FieldDecl {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FuncDef {
     pub visibility: Visibility,
+    pub is_async: bool,
     pub self_mode: Option<SelfMode>,
     pub is_class_method: bool,
     pub name: String,
@@ -554,6 +559,7 @@ pub struct FuncDef {
     pub return_type: Option<TypeExpr>,
     pub where_clause: Option<WhereClause>,
     pub body: Block,
+    pub doc_comments: Vec<String>,
     pub span: Span,
 }
 
@@ -567,6 +573,7 @@ pub struct Param {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MethodSig {
+    pub is_async: bool,
     pub self_mode: Option<SelfMode>,
     pub is_class_method: bool,
     pub name: String,
@@ -586,6 +593,13 @@ pub struct ClassDef {
     pub fields: Vec<FieldDecl>,
     pub methods: Vec<FuncDef>,
     pub inner_impls: Vec<InnerImpl>,
+    /// Traits declared via `@[derive(...)]` at class top level or via an
+    /// in-body `derive Trait1, Trait2` line. Consumed by the tier-1 derive
+    /// expander (pillar 05 phase 5a+). Empty for v1 classes that do not
+    /// opt in.
+    pub derive_traits: Vec<String>,
+    /// Captured `##` doc comments preceding the class (P0.13).
+    pub doc_comments: Vec<String>,
     pub span: Span,
 }
 
@@ -596,7 +610,16 @@ pub struct StructDef {
     pub name: String,
     pub generic_params: Option<GenericParams>,
     pub fields: Vec<FieldDecl>,
+    /// Traits declared via `@[derive(...)]` at top level or via an in-body
+    /// `derive Trait1, Trait2` line. Does NOT include `@[repr(...)]` args —
+    /// those live on `repr`.
     pub derive_traits: Vec<String>,
+    /// Representation hints from `@[repr(...)]` (e.g. `C`, `packed`). Kept
+    /// as raw argument strings for v1; a real `Repr` enum arrives with the
+    /// tier-4 stable-ABI/cbindgen work.
+    pub repr: Vec<String>,
+    /// Captured `##` doc comments preceding the struct (P0.13).
+    pub doc_comments: Vec<String>,
     pub span: Span,
 }
 
@@ -607,6 +630,10 @@ pub struct EnumDef {
     pub name: String,
     pub generic_params: Option<GenericParams>,
     pub variants: Vec<Variant>,
+    /// Traits declared via `@[derive(...)]` or in-body `derive Trait` line.
+    pub derive_traits: Vec<String>,
+    /// Captured `##` doc comments preceding the enum (P0.13).
+    pub doc_comments: Vec<String>,
     pub span: Span,
 }
 
@@ -639,15 +666,13 @@ pub struct TraitDef {
     pub generic_params: Option<GenericParams>,
     pub super_traits: Vec<TraitBound>,
     pub items: Vec<TraitItem>,
+    pub doc_comments: Vec<String>,
     pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TraitItem {
-    AssocType {
-        name: String,
-        span: Span,
-    },
+    AssocType { name: String, span: Span },
     MethodSig(MethodSig),
     DefaultMethod(FuncDef),
 }
@@ -657,6 +682,8 @@ pub enum TraitItem {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImplBlock {
     pub generic_params: Option<GenericParams>,
+    pub is_unsafe: bool,
+    pub negative_trait: bool,
     pub trait_name: Option<TypePath>,
     pub target_type: TypeExpr,
     pub items: Vec<ImplItem>,
@@ -675,6 +702,8 @@ pub enum ImplItem {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct InnerImpl {
+    pub is_unsafe: bool,
+    pub negative_trait: bool,
     pub trait_name: TypePath,
     pub items: Vec<ImplItem>,
     pub span: Span,
@@ -729,6 +758,7 @@ pub struct ConstDef {
     pub name: String,
     pub type_expr: TypeExpr,
     pub value: Expr,
+    pub doc_comments: Vec<String>,
     pub span: Span,
 }
 
@@ -786,11 +816,39 @@ pub enum LinkKind {
 
 // ─── Attributes ────────────────────────────────────────────────────
 
+/// A single argument inside an `@[name(args)]` attribute list.
+///
+/// Widened from `String` in tier-1 B2 so downstream passes can distinguish
+/// identifiers (`C` in `@[repr(C)]`) from string literals (`"libc"` in
+/// `@[link("libc")]`). Tier-2 may extend this with key/value and nested
+/// forms; for v1 only the two leaf shapes exist.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AttrArg {
+    /// Bare identifier: `@[repr(C)]` → `Ident("C")`.
+    Ident(String, Span),
+    /// String literal: `@[link("libc")]` → `Str("libc")`.
+    Str(String, Span),
+}
+
+impl AttrArg {
+    pub fn as_str(&self) -> &str {
+        match self {
+            AttrArg::Ident(s, _) | AttrArg::Str(s, _) => s,
+        }
+    }
+
+    pub fn span(&self) -> &Span {
+        match self {
+            AttrArg::Ident(_, s) | AttrArg::Str(_, s) => s,
+        }
+    }
+}
+
 /// A general attribute: `@[name(args)]`
 #[derive(Debug, Clone, PartialEq)]
 pub struct Attribute {
     pub name: String,
-    pub args: Vec<String>,
+    pub args: Vec<AttrArg>,
     pub span: Span,
 }
 

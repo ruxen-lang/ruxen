@@ -65,10 +65,7 @@ pub fn add(
     };
 
     if target_map.contains_key(piece) {
-        return Err(format!(
-            "piece `{}` is already in {}",
-            piece, dep_section
-        ));
+        return Err(format!("piece `{}` is already in {}", piece, dep_section));
     }
 
     // Add the dependency
@@ -202,11 +199,12 @@ pub fn tree() -> Result<(), String> {
                 let child_prefix = if is_last { "    " } else { "│   " };
                 for (j, child) in locked.dependencies.iter().enumerate() {
                     let child_last = j == locked.dependencies.len() - 1;
-                    let child_sym = if child_last { "└── " } else { "├── " };
-                    let child_ver = l
-                        .find(child)
-                        .map(|p| p.version.as_str())
-                        .unwrap_or("*");
+                    let child_sym = if child_last {
+                        "└── "
+                    } else {
+                        "├── "
+                    };
+                    let child_ver = l.find(child).map(|p| p.version.as_str()).unwrap_or("*");
                     println!("{}{}{} v{}", child_prefix, child_sym, child, child_ver);
                 }
             }
@@ -230,8 +228,7 @@ pub fn verify() -> Result<(), String> {
             return Ok(());
         }
         return Err(
-            "Riven.lock not found; run `riven build` to generate it before verifying"
-                .to_string(),
+            "Riven.lock not found; run `riven build` to generate it before verifying".to_string(),
         );
     }
 
@@ -239,10 +236,7 @@ pub fn verify() -> Result<(), String> {
     lock.verify_checksums(&project_dir)?;
 
     let count = lock.pieces.iter().filter(|p| p.checksum.is_some()).count();
-    println!(
-        "  Verified checksums for {} piece(s). All OK.",
-        count
-    );
+    println!("  Verified checksums for {} piece(s). All OK.", count);
 
     Ok(())
 }
@@ -299,7 +293,11 @@ mod tests {
             "[package]\nname = \"my-dep\"\nversion = \"0.2.0\"\n\n[build]\ntype = \"library\"\n",
         )
         .unwrap();
-        fs::write(dep_dir.join("src/lib.rvn"), "pub def greet\n  puts \"hi\"\nend\n").unwrap();
+        fs::write(
+            dep_dir.join("src/lib.rvn"),
+            "pub def greet\n  puts \"hi\"\nend\n",
+        )
+        .unwrap();
 
         // Manually add the dep to manifest to test parsing
         let manifest_content = format!(

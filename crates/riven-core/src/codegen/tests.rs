@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
-    use crate::codegen::layout::{layout_of, layout_struct_fields, TypeLayout};
     use crate::codegen::cranelift::CodeGen;
+    use crate::codegen::layout::{layout_of, layout_struct_fields, TypeLayout};
     use crate::hir::types::Ty;
     use crate::mir::nodes::*;
     use crate::parser::ast::BinOp;
@@ -142,7 +142,7 @@ mod tests {
     #[test]
     fn hash_layout() {
         let layout = layout_of(
-            &Ty::Hash(Box::new(Ty::String), Box::new(Ty::Int)),
+            &Ty::HashMap(Box::new(Ty::String), Box::new(Ty::Int)),
             &symbols(),
         );
         assert_eq!(layout.size, 48);
@@ -278,8 +278,16 @@ mod tests {
     fn struct_fields_mixed_alignment() {
         // [Bool(1,1), Int(8,8)] → offset 0, then padded to 8 → offset 8, total 16
         let fields = vec![
-            TypeLayout { size: 1, alignment: 1, field_offsets: vec![] },
-            TypeLayout { size: 8, alignment: 8, field_offsets: vec![] },
+            TypeLayout {
+                size: 1,
+                alignment: 1,
+                field_offsets: vec![],
+            },
+            TypeLayout {
+                size: 8,
+                alignment: 8,
+                field_offsets: vec![],
+            },
         ];
         let layout = layout_struct_fields(&fields);
         assert_eq!(layout.size, 16);
@@ -291,8 +299,16 @@ mod tests {
     fn struct_fields_same_alignment() {
         // [Int(8,8), Int(8,8)] → offsets [0, 8], size 16, align 8
         let fields = vec![
-            TypeLayout { size: 8, alignment: 8, field_offsets: vec![] },
-            TypeLayout { size: 8, alignment: 8, field_offsets: vec![] },
+            TypeLayout {
+                size: 8,
+                alignment: 8,
+                field_offsets: vec![],
+            },
+            TypeLayout {
+                size: 8,
+                alignment: 8,
+                field_offsets: vec![],
+            },
         ];
         let layout = layout_struct_fields(&fields);
         assert_eq!(layout.size, 16);
@@ -311,10 +327,7 @@ mod tests {
     // ─── Cranelift codegen tests ────────────────────────────────────────────────
 
     /// Helper: build a minimal MIR program with a single `main` function.
-    fn make_main_program(
-        locals: Vec<MirLocal>,
-        blocks: Vec<BasicBlock>,
-    ) -> MirProgram {
+    fn make_main_program(locals: Vec<MirLocal>, blocks: Vec<BasicBlock>) -> MirProgram {
         MirProgram {
             functions: vec![MirFunction::with_parts(
                 "main".to_string(),
@@ -355,8 +368,18 @@ mod tests {
     fn codegen_return_int() {
         // Function with two locals: a = 10, b = a + 32, then return.
         let locals = vec![
-            MirLocal { id: 0, name: "a".to_string(), ty: Ty::Int, mutable: false },
-            MirLocal { id: 1, name: "b".to_string(), ty: Ty::Int, mutable: false },
+            MirLocal {
+                id: 0,
+                name: "a".to_string(),
+                ty: Ty::Int,
+                mutable: false,
+            },
+            MirLocal {
+                id: 1,
+                name: "b".to_string(),
+                ty: Ty::Int,
+                mutable: false,
+            },
         ];
 
         let blocks = vec![BasicBlock {
@@ -392,9 +415,12 @@ mod tests {
     #[test]
     fn codegen_branch() {
         // Function with a branch: if cond goto block1 else block2; both return.
-        let locals = vec![
-            MirLocal { id: 0, name: "cond".to_string(), ty: Ty::Bool, mutable: false },
-        ];
+        let locals = vec![MirLocal {
+            id: 0,
+            name: "cond".to_string(),
+            ty: Ty::Bool,
+            mutable: false,
+        }];
 
         let blocks = vec![
             BasicBlock {

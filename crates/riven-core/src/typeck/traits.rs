@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 
 use crate::hir::nodes::*;
-use crate::hir::types::{Ty, TraitRef};
+use crate::hir::types::{TraitRef, Ty};
 use crate::resolve::symbols::{DefKind, FnSignature, SymbolTable, TraitInfo};
 
 /// Result of checking whether a type satisfies a trait.
@@ -21,9 +21,7 @@ pub enum TraitSatisfaction {
     /// Type satisfies the trait structurally (has all required methods).
     Structural,
     /// Type does not satisfy the trait.
-    Unsatisfied {
-        missing_methods: Vec<String>,
-    },
+    Unsatisfied { missing_methods: Vec<String> },
 }
 
 /// The trait resolver manages all known impl blocks and performs
@@ -61,15 +59,23 @@ impl TraitResolver {
     }
 
     /// Register an impl block discovered during name resolution.
-    pub fn register_impl(&mut self, target_type: &str, trait_name: Option<&str>, methods: Vec<(String, FnSignature)>) {
+    pub fn register_impl(
+        &mut self,
+        target_type: &str,
+        trait_name: Option<&str>,
+        methods: Vec<(String, FnSignature)>,
+    ) {
         let type_name = target_type.to_string();
 
         if let Some(tname) = trait_name {
             let key = (type_name.clone(), tname.to_string());
-            let impl_methods: Vec<ImplMethod> = methods.iter().map(|(name, sig)| ImplMethod {
-                name: name.clone(),
-                signature: sig.clone(),
-            }).collect();
+            let impl_methods: Vec<ImplMethod> = methods
+                .iter()
+                .map(|(name, sig)| ImplMethod {
+                    name: name.clone(),
+                    signature: sig.clone(),
+                })
+                .collect();
             self.nominal_impls.insert(key, impl_methods);
         }
 
@@ -94,6 +100,24 @@ impl TraitResolver {
         symbols: &SymbolTable,
         require_nominal: bool,
     ) -> TraitSatisfaction {
+        if matches!(trait_ref.name.as_str(), "Send" | "Sync") {
+            let satisfied = match trait_ref.name.as_str() {
+                "Send" => ty.is_send_with(symbols),
+                "Sync" => ty.is_sync_with(symbols),
+                _ => unreachable!(),
+            };
+            return if satisfied {
+                TraitSatisfaction::Structural
+            } else {
+                TraitSatisfaction::Unsatisfied {
+                    missing_methods: vec![format!(
+                        "type `{}` does not satisfy `{}`",
+                        ty, trait_ref.name
+                    )],
+                }
+            };
+        }
+
         let type_name = Self::type_name(ty);
 
         // Check nominal satisfaction first
@@ -104,7 +128,10 @@ impl TraitResolver {
 
         if require_nominal {
             return TraitSatisfaction::Unsatisfied {
-                missing_methods: vec![format!("no explicit `impl {} for {}`", trait_ref.name, type_name)],
+                missing_methods: vec![format!(
+                    "no explicit `impl {} for {}`",
+                    trait_ref.name, type_name
+                )],
             };
         }
 
@@ -115,9 +142,9 @@ impl TraitResolver {
             let mut missing = Vec::new();
 
             for required in &info.required_methods {
-                let found = type_meths.map(|meths| {
-                    meths.iter().any(|m| m.name == *required)
-                }).unwrap_or(false);
+                let found = type_meths
+                    .map(|meths| meths.iter().any(|m| m.name == *required))
+                    .unwrap_or(false);
 
                 if !found {
                     missing.push(required.clone());
@@ -127,7 +154,9 @@ impl TraitResolver {
             if missing.is_empty() {
                 TraitSatisfaction::Structural
             } else {
-                TraitSatisfaction::Unsatisfied { missing_methods: missing }
+                TraitSatisfaction::Unsatisfied {
+                    missing_methods: missing,
+                }
             }
         } else {
             // Unknown trait — assume unsatisfied
@@ -159,6 +188,18 @@ impl TraitResolver {
                     if found.is_none() {
                         found = Some(sig.clone());
                     }
+                }
+            } else if matches!(b.name.as_str(), "Hashable" | "Hash") && method_name == "hash_code" {
+                providers.push(b.name.clone());
+                if found.is_none() {
+                    found = Some(FnSignature {
+                        self_mode: Some(HirSelfMode::Ref),
+                        is_class_method: false,
+                        is_async: false,
+                        generic_params: vec![],
+                        params: vec![],
+                        return_ty: Ty::Int,
+                    });
                 }
             }
         }
@@ -197,7 +238,7 @@ impl TraitResolver {
         // Check trait default methods for each trait the type implements.
         // If the impl block itself didn't provide `method_name` (handled
         // above), the trait's own default body supplies the signature.
-        for ((impl_target, trait_name), _methods) in &self.nominal_impls {
+        for (impl_target, trait_name) in self.nominal_impls.keys() {
             if *impl_target == type_name {
                 if let Some(methods) = self.trait_method_sigs.get(trait_name) {
                     if let Some(sig) = methods.get(method_name) {
@@ -244,17 +285,26 @@ impl TraitResolver {
                 for ti in &tdef.items {
                     match ti {
                         HirTraitItem::MethodSig {
-                            name, self_mode, is_class_method, params, return_ty, ..
+                            name,
+                            self_mode,
+                            is_class_method,
+                            params,
+                            return_ty,
+                            ..
                         } => {
                             let sig = FnSignature {
                                 self_mode: *self_mode,
                                 is_class_method: *is_class_method,
+                                is_async: false,
                                 generic_params: vec![],
-                                params: params.iter().map(|p| ParamInfo {
-                                    name: p.name.clone(),
-                                    ty: p.ty.clone(),
-                                    auto_assign: p.auto_assign,
-                                }).collect(),
+                                params: params
+                                    .iter()
+                                    .map(|p| ParamInfo {
+                                        name: p.name.clone(),
+                                        ty: p.ty.clone(),
+                                        auto_assign: p.auto_assign,
+                                    })
+                                    .collect(),
                                 return_ty: return_ty.clone(),
                             };
                             new_entries.push((name.clone(), sig));
@@ -265,9 +315,7 @@ impl TraitResolver {
                         HirTraitItem::AssocType { .. } => {}
                     }
                 }
-                let entry = self.trait_method_sigs
-                    .entry(tdef.name.clone())
-                    .or_default();
+                let entry = self.trait_method_sigs.entry(tdef.name.clone()).or_default();
                 for (k, v) in new_entries {
                     entry.insert(k, v);
                 }
@@ -275,33 +323,69 @@ impl TraitResolver {
             HirItem::Class(class) => {
                 let type_name = class.name.clone();
                 // Register class methods
-                let methods: Vec<(String, FnSignature)> = class.methods.iter().map(|m| {
-                    (m.name.clone(), self.func_to_sig(m))
-                }).collect();
+                let methods: Vec<(String, FnSignature)> = class
+                    .methods
+                    .iter()
+                    .map(|m| (m.name.clone(), self.func_to_sig(m)))
+                    .collect();
                 self.register_impl(&type_name, None, methods);
+                self.register_derived_impls(
+                    &type_name,
+                    &Ty::Class {
+                        name: type_name.clone(),
+                        generic_args: vec![],
+                    },
+                    &class.derive_traits,
+                );
 
                 // Register inner impl blocks
                 for imp in &class.impl_blocks {
                     if let Some(ref trait_ref) = imp.trait_ref {
-                        let methods: Vec<(String, FnSignature)> = imp.items.iter().filter_map(|item| {
-                            match item {
-                                HirImplItem::Method(m) => Some((m.name.clone(), self.func_to_sig(m))),
+                        let methods: Vec<(String, FnSignature)> = imp
+                            .items
+                            .iter()
+                            .filter_map(|item| match item {
+                                HirImplItem::Method(m) => {
+                                    Some((m.name.clone(), self.func_to_sig(m)))
+                                }
                                 _ => None,
-                            }
-                        }).collect();
+                            })
+                            .collect();
                         self.register_impl(&type_name, Some(&trait_ref.name), methods);
                     }
                 }
             }
+            HirItem::Struct(strukt) => {
+                self.register_derived_impls(
+                    &strukt.name,
+                    &Ty::Struct {
+                        name: strukt.name.clone(),
+                        generic_args: vec![],
+                    },
+                    &strukt.derive_traits,
+                );
+            }
+            HirItem::Enum(enm) => {
+                self.register_derived_impls(
+                    &enm.name,
+                    &Ty::Enum {
+                        name: enm.name.clone(),
+                        generic_args: vec![],
+                    },
+                    &enm.derive_traits,
+                );
+            }
             HirItem::Impl(imp) => {
                 let type_name = Self::type_name(&imp.target_ty);
                 let trait_name = imp.trait_ref.as_ref().map(|tr| tr.name.as_str());
-                let methods: Vec<(String, FnSignature)> = imp.items.iter().filter_map(|item| {
-                    match item {
+                let methods: Vec<(String, FnSignature)> = imp
+                    .items
+                    .iter()
+                    .filter_map(|item| match item {
                         HirImplItem::Method(m) => Some((m.name.clone(), self.func_to_sig(m))),
                         _ => None,
-                    }
-                }).collect();
+                    })
+                    .collect();
                 self.register_impl(&type_name, trait_name, methods);
             }
             HirItem::Module(m) => {
@@ -313,22 +397,121 @@ impl TraitResolver {
         }
     }
 
+    fn register_derived_impls(
+        &mut self,
+        type_name: &str,
+        target_ty: &Ty,
+        derive_traits: &[String],
+    ) {
+        for trait_name in derive_traits {
+            let methods = match trait_name.as_str() {
+                "Clone" => vec![(
+                    "clone".to_string(),
+                    FnSignature {
+                        self_mode: Some(HirSelfMode::Ref),
+                        is_class_method: false,
+                        is_async: false,
+                        generic_params: vec![],
+                        params: vec![],
+                        return_ty: target_ty.clone(),
+                    },
+                )],
+                "PartialEq" => vec![(
+                    "eq".to_string(),
+                    FnSignature {
+                        self_mode: Some(HirSelfMode::Ref),
+                        is_class_method: false,
+                        is_async: false,
+                        generic_params: vec![],
+                        params: vec![crate::resolve::symbols::ParamInfo {
+                            name: "other".to_string(),
+                            ty: Ty::Ref(Box::new(target_ty.clone())),
+                            auto_assign: false,
+                        }],
+                        return_ty: Ty::Bool,
+                    },
+                )],
+                "Hashable" | "Hash" => vec![(
+                    "hash_code".to_string(),
+                    FnSignature {
+                        self_mode: Some(HirSelfMode::Ref),
+                        is_class_method: false,
+                        is_async: false,
+                        generic_params: vec![],
+                        params: vec![],
+                        return_ty: Ty::Int,
+                    },
+                )],
+                "Default" => vec![(
+                    "default".to_string(),
+                    FnSignature {
+                        self_mode: None,
+                        is_class_method: true,
+                        is_async: false,
+                        generic_params: vec![],
+                        params: vec![],
+                        return_ty: target_ty.clone(),
+                    },
+                )],
+                "Ord" => vec![(
+                    "cmp".to_string(),
+                    FnSignature {
+                        self_mode: Some(HirSelfMode::Ref),
+                        is_class_method: false,
+                        is_async: false,
+                        generic_params: vec![],
+                        params: vec![crate::resolve::symbols::ParamInfo {
+                            name: "other".to_string(),
+                            ty: Ty::Ref(Box::new(target_ty.clone())),
+                            auto_assign: false,
+                        }],
+                        return_ty: Ty::Int,
+                    },
+                )],
+                "PartialOrd" => vec![(
+                    "partial_cmp".to_string(),
+                    FnSignature {
+                        self_mode: Some(HirSelfMode::Ref),
+                        is_class_method: false,
+                        is_async: false,
+                        generic_params: vec![],
+                        params: vec![crate::resolve::symbols::ParamInfo {
+                            name: "other".to_string(),
+                            ty: Ty::Ref(Box::new(target_ty.clone())),
+                            auto_assign: false,
+                        }],
+                        return_ty: Ty::Int,
+                    },
+                )],
+                _ => vec![],
+            };
+            self.register_impl(type_name, Some(trait_name), methods);
+        }
+    }
+
     fn func_to_sig(&self, func: &HirFuncDef) -> FnSignature {
         use crate::resolve::symbols::ParamInfo;
         FnSignature {
             self_mode: func.self_mode,
             is_class_method: func.is_class_method,
-            generic_params: func.generic_params.iter().map(|gp| {
-                crate::resolve::symbols::GenericParamInfo {
+            is_async: func.is_async,
+            generic_params: func
+                .generic_params
+                .iter()
+                .map(|gp| crate::resolve::symbols::GenericParamInfo {
                     name: gp.name.clone(),
                     bounds: gp.bounds.clone(),
-                }
-            }).collect(),
-            params: func.params.iter().map(|p| ParamInfo {
-                name: p.name.clone(),
-                ty: p.ty.clone(),
-                auto_assign: p.auto_assign,
-            }).collect(),
+                })
+                .collect(),
+            params: func
+                .params
+                .iter()
+                .map(|p| ParamInfo {
+                    name: p.name.clone(),
+                    ty: p.ty.clone(),
+                    auto_assign: p.auto_assign,
+                })
+                .collect(),
             return_ty: func.return_ty.clone(),
         }
     }

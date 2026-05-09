@@ -1,6 +1,6 @@
+use crate::borrow_check::regions::ScopeId;
 use crate::hir::nodes::DefId;
 use crate::lexer::token::Span;
-use crate::borrow_check::regions::ScopeId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BorrowId(pub u32);
@@ -37,23 +37,38 @@ pub struct BorrowSet {
 }
 
 impl Default for BorrowSet {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BorrowSet {
     pub fn new() -> Self {
-        Self { borrows: Vec::new(), next_id: 0 }
+        Self {
+            borrows: Vec::new(),
+            next_id: 0,
+        }
     }
 
     pub fn create(
-        &mut self, kind: BorrowKind, borrowed_place: DefId, borrower: DefId,
-        span: Span, scope: ScopeId,
+        &mut self,
+        kind: BorrowKind,
+        borrowed_place: DefId,
+        borrower: DefId,
+        span: Span,
+        scope: ScopeId,
     ) -> BorrowId {
         let id = BorrowId(self.next_id);
         self.next_id += 1;
         self.borrows.push(BorrowInfo {
-            id, kind, borrowed_place, borrower, created_span: span,
-            scope, last_use: None, alive: true,
+            id,
+            kind,
+            borrowed_place,
+            borrower,
+            created_span: span,
+            scope,
+            last_use: None,
+            alive: true,
         });
         id
     }
@@ -70,7 +85,10 @@ impl BorrowSet {
             match (kind, borrow.kind) {
                 (BorrowKind::Shared, BorrowKind::Shared) => {} // OK
                 _ => {
-                    return Err(BorrowConflict { existing: borrow.clone(), new_kind: kind });
+                    return Err(BorrowConflict {
+                        existing: borrow.clone(),
+                        new_kind: kind,
+                    });
                 }
             }
         }
@@ -80,7 +98,10 @@ impl BorrowSet {
     /// Check if moving `place` would conflict with active borrows.
     pub fn check_move(&self, place: DefId) -> Result<(), BorrowConflict> {
         if let Some(borrow) = self.active_borrows_of(place).first() {
-            Err(BorrowConflict { existing: (*borrow).clone(), new_kind: BorrowKind::Mutable })
+            Err(BorrowConflict {
+                existing: (*borrow).clone(),
+                new_kind: BorrowKind::Mutable,
+            })
         } else {
             Ok(())
         }
@@ -92,12 +113,18 @@ impl BorrowSet {
     }
 
     pub fn active_borrows_of(&self, place: DefId) -> Vec<&BorrowInfo> {
-        self.borrows.iter().filter(|b| b.alive && b.borrowed_place == place).collect()
+        self.borrows
+            .iter()
+            .filter(|b| b.alive && b.borrowed_place == place)
+            .collect()
     }
 
     /// All active borrows where `borrower` is the given DefId.
     pub fn borrows_held_by(&self, borrower: DefId) -> Vec<&BorrowInfo> {
-        self.borrows.iter().filter(|b| b.alive && b.borrower == borrower).collect()
+        self.borrows
+            .iter()
+            .filter(|b| b.alive && b.borrower == borrower)
+            .collect()
     }
 
     /// Returns the current number of borrows (used as a checkpoint for temporary borrows).
@@ -227,7 +254,7 @@ mod tests {
         let scope = ScopeId(0);
         let id = set.create(BorrowKind::Shared, 10, 20, span(1, 1), scope);
         set.record_use(id, span(3, 1)); // last use at line 3
-        // At line 5, the borrow should be dead
+                                        // At line 5, the borrow should be dead
         set.expire_before(Span::new(50, 51, 5, 1));
         assert!(set.active_borrows_of(10).is_empty());
     }
@@ -238,7 +265,7 @@ mod tests {
         let scope = ScopeId(0);
         let id = set.create(BorrowKind::Shared, 10, 20, Span::new(0, 1, 1, 1), scope);
         set.record_use(id, Span::new(50, 55, 5, 1)); // last use at offset 50
-        // At offset 30 (before last use), borrow should still be alive
+                                                     // At offset 30 (before last use), borrow should still be alive
         set.expire_before(Span::new(30, 31, 3, 1));
         assert_eq!(set.active_borrows_of(10).len(), 1);
     }

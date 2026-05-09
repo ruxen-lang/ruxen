@@ -89,8 +89,8 @@ pub fn create_rlib(
     metadata: &TypeMetadata,
     source_hash: &str,
 ) -> Result<(), String> {
-    let file = std::fs::File::create(output_path)
-        .map_err(|e| format!("failed to create .rlib: {}", e))?;
+    let file =
+        std::fs::File::create(output_path).map_err(|e| format!("failed to create .rlib: {}", e))?;
 
     let mut builder = ar::Builder::new(file);
 
@@ -106,8 +106,7 @@ pub fn create_rlib(
     let metadata_json = serde_json::to_string_pretty(metadata)
         .map_err(|e| format!("failed to serialize metadata: {}", e))?;
     let metadata_bytes = metadata_json.as_bytes();
-    let mut meta_header =
-        ar::Header::new(b"metadata.json".to_vec(), metadata_bytes.len() as u64);
+    let mut meta_header = ar::Header::new(b"metadata.json".to_vec(), metadata_bytes.len() as u64);
     meta_header.set_mode(0o644);
     builder
         .append(&meta_header, metadata_bytes)
@@ -125,10 +124,7 @@ pub fn create_rlib(
 }
 
 /// Create an .rmeta file (metadata only, no object code) for `riven check`.
-pub fn create_rmeta(
-    output_path: &Path,
-    metadata: &TypeMetadata,
-) -> Result<(), String> {
+pub fn create_rmeta(output_path: &Path, metadata: &TypeMetadata) -> Result<(), String> {
     let file = std::fs::File::create(output_path)
         .map_err(|e| format!("failed to create .rmeta: {}", e))?;
 
@@ -137,8 +133,7 @@ pub fn create_rmeta(
     let metadata_json = serde_json::to_string_pretty(metadata)
         .map_err(|e| format!("failed to serialize metadata: {}", e))?;
     let metadata_bytes = metadata_json.as_bytes();
-    let mut meta_header =
-        ar::Header::new(b"metadata.json".to_vec(), metadata_bytes.len() as u64);
+    let mut meta_header = ar::Header::new(b"metadata.json".to_vec(), metadata_bytes.len() as u64);
     meta_header.set_mode(0o644);
     builder
         .append(&meta_header, metadata_bytes)
@@ -266,7 +261,7 @@ fn hash_dir_recursive(dir: &Path, hasher: &mut Sha256) -> Result<(), String> {
             if !name.starts_with('.') && name != "target" {
                 hash_dir_recursive(&path, hasher)?;
             }
-        } else if path.extension().map_or(false, |ext| ext == "rvn") {
+        } else if path.extension().is_some_and(|ext| ext == "rvn") {
             let content = std::fs::read(&path)
                 .map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
             // Include relative path in hash so renames are detected

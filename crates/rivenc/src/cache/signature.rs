@@ -286,9 +286,7 @@ fn impl_sig(ib: &HirImplBlock) -> PublicItem {
     }
 }
 
-fn generic_param_names(
-    params: &[riven_core::hir::nodes::HirGenericParam],
-) -> Vec<String> {
+fn generic_param_names(params: &[riven_core::hir::nodes::HirGenericParam]) -> Vec<String> {
     params
         .iter()
         .map(|g| {

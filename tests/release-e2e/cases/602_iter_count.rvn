@@ -1,0 +1,8 @@
+def main
+  let v = vec![10, 20, 30, 40]
+  let n = v.iter.count
+  puts "n=#{n}"
+  let empty: Vec[Int] = Vec.new
+  let z = empty.iter.count
+  puts "z=#{z}"
+end

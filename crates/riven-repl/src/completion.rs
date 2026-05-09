@@ -9,16 +9,42 @@ use rustyline::Context;
 pub struct RivenCompleter;
 
 const KEYWORDS: &[&str] = &[
-    "def", "end", "class", "struct", "enum", "trait", "impl",
-    "let", "mut", "if", "elsif", "else", "match", "while", "for",
-    "in", "loop", "do", "return", "true", "false", "self", "Self",
-    "pub", "protected", "use", "module", "break", "continue",
-    "Some", "None", "Ok", "Err",
+    "def",
+    "end",
+    "class",
+    "struct",
+    "enum",
+    "trait",
+    "impl",
+    "let",
+    "mut",
+    "if",
+    "elsif",
+    "else",
+    "match",
+    "while",
+    "for",
+    "in",
+    "loop",
+    "do",
+    "return",
+    "true",
+    "false",
+    "self",
+    "Self",
+    "pub",
+    "protected",
+    "use",
+    "module",
+    "break",
+    "continue",
+    "Some",
+    "None",
+    "Ok",
+    "Err",
 ];
 
-const COMMANDS: &[&str] = &[
-    ":help", ":quit", ":exit", ":q", ":reset", ":type",
-];
+const COMMANDS: &[&str] = &[":help", ":quit", ":exit", ":q", ":reset", ":type"];
 
 impl Completer for RivenCompleter {
     type Candidate = Pair;

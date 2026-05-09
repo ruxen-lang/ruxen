@@ -67,7 +67,11 @@ impl LockFile {
                 output.push_str(&format!("checksum = \"{}\"\n", checksum));
             }
             if !piece.dependencies.is_empty() {
-                let deps: Vec<String> = piece.dependencies.iter().map(|d| format!("\"{}\"", d)).collect();
+                let deps: Vec<String> = piece
+                    .dependencies
+                    .iter()
+                    .map(|d| format!("\"{}\"", d))
+                    .collect();
                 output.push_str(&format!("dependencies = [{}]\n", deps.join(", ")));
             }
         }
@@ -112,10 +116,7 @@ impl LockFile {
         for piece in &self.pieces {
             if let Some(expected) = &piece.checksum {
                 // Determine where the source was fetched to
-                let dep_dir = project_dir
-                    .join("target")
-                    .join("deps")
-                    .join(&piece.name);
+                let dep_dir = project_dir.join("target").join("deps").join(&piece.name);
 
                 if dep_dir.exists() {
                     let actual = crate::rlib::hash_sources(&dep_dir)?;
@@ -152,7 +153,13 @@ impl LockedPiece {
     }
 
     /// Create a locked piece for a git dependency.
-    pub fn for_git(name: &str, version: &str, url: &str, rev: &str, checksum: Option<String>) -> Self {
+    pub fn for_git(
+        name: &str,
+        version: &str,
+        url: &str,
+        rev: &str,
+        checksum: Option<String>,
+    ) -> Self {
         Self {
             name: name.to_string(),
             version: version.to_string(),
@@ -281,7 +288,8 @@ mod tests {
     fn test_is_up_to_date() {
         use crate::manifest::Manifest;
 
-        let manifest = Manifest::from_str(r#"
+        let manifest = Manifest::from_str(
+            r#"
 [package]
 name = "test"
 version = "0.1.0"
@@ -289,7 +297,9 @@ version = "0.1.0"
 [dependencies]
 http = "1.0.0"
 utils = { path = "../utils" }
-"#).unwrap();
+"#,
+        )
+        .unwrap();
 
         // Lock file matching manifest
         let lock = LockFile {
@@ -304,9 +314,7 @@ utils = { path = "../utils" }
         // Lock file missing a dep
         let incomplete = LockFile {
             version: 1,
-            pieces: vec![
-                LockedPiece::for_path("http", "1.0.0", "..."),
-            ],
+            pieces: vec![LockedPiece::for_path("http", "1.0.0", "...")],
         };
         assert!(!incomplete.is_up_to_date(&manifest));
 

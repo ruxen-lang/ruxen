@@ -2,6 +2,11 @@
 crates/*/target/
 
 CLAUDE.md
+.claude-flow/
+.mcp.json
+.swarm/
+.DS_Store
+**/.DS_Store
 
 # release-e2e harness per-run artifacts
 tests/release-e2e/results/

@@ -1,0 +1,11 @@
+def main
+  let mut s: HashSet[Int] = HashSet.new
+  s.insert(1)
+  s.insert(2)
+  let removed = s.remove(1)
+  let missing = s.remove(99)
+  let n = s.len
+  puts "removed=#{removed}"
+  puts "missing=#{missing}"
+  puts "len=#{n}"
+end

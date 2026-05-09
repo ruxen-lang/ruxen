@@ -9,11 +9,11 @@ use inkwell::OptimizationLevel;
 
 use crate::mir::nodes::MirProgram;
 
-pub mod types;
-pub mod emit;
-pub mod runtime_decl;
-pub mod optimize;
 mod debug;
+pub mod emit;
+pub mod optimize;
+pub mod runtime_decl;
+pub mod types;
 
 /// LLVM code generation engine.
 pub struct CodeGen {
@@ -42,8 +42,8 @@ impl CodeGen {
         let target_triple = TargetMachine::get_default_triple();
         module.set_triple(&target_triple);
 
-        let target = Target::from_triple(&target_triple)
-            .map_err(|e| format!("Unknown target: {}", e))?;
+        let target =
+            Target::from_triple(&target_triple).map_err(|e| format!("Unknown target: {}", e))?;
         let target_machine = target
             .create_target_machine(
                 &target_triple,

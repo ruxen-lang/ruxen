@@ -69,7 +69,11 @@ fn banner_and_quit() {
         "banner missing: {:?}",
         stdout,
     );
-    assert!(stdout.contains("Goodbye"), "quit message missing: {:?}", stdout);
+    assert!(
+        stdout.contains("Goodbye"),
+        "quit message missing: {:?}",
+        stdout
+    );
 }
 
 #[test]

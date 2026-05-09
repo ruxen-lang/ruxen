@@ -3,6 +3,19 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+fn linker_args(sanitize: bool, extra_link_flags: &[String]) -> Vec<String> {
+    let mut args = vec![
+        "-lc".to_string(),
+        "-lm".to_string(),
+        "-lpthread".to_string(),
+    ];
+    if sanitize {
+        args.push("-fsanitize=address,undefined".to_string());
+    }
+    args.extend(extra_link_flags.iter().cloned());
+    args
+}
+
 /// Compile the C runtime to an object file, returning its path.
 ///
 /// When `sanitize` is true, the runtime is compiled with AddressSanitizer
@@ -18,10 +31,7 @@ pub fn compile_runtime(runtime_c_path: &Path, sanitize: bool) -> Result<PathBuf,
     ));
 
     let mut cmd = Command::new("cc");
-    cmd.arg("-c")
-        .arg(runtime_c_path)
-        .arg("-o")
-        .arg(&runtime_o);
+    cmd.arg("-c").arg(runtime_c_path).arg("-o").arg(&runtime_o);
 
     if sanitize {
         cmd.arg("-fsanitize=address,undefined")
@@ -62,19 +72,10 @@ pub fn emit_executable(
         .map_err(|e| format!("Failed to write object file: {}", e))?;
 
     let mut cmd = Command::new("cc");
-    cmd.arg(&obj_path)
-        .arg(runtime_o)
-        .arg("-o")
-        .arg(output_path)
-        .arg("-lc")
-        .arg("-lm");
+    cmd.arg(&obj_path).arg(runtime_o).arg("-o").arg(output_path);
 
-    if sanitize {
-        cmd.arg("-fsanitize=address,undefined");
-    }
-
-    for flag in extra_link_flags {
-        cmd.arg(flag);
+    for arg in linker_args(sanitize, extra_link_flags) {
+        cmd.arg(arg);
     }
 
     let status = cmd
@@ -89,4 +90,24 @@ pub fn emit_executable(
     let _ = std::fs::remove_file(runtime_o);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::linker_args;
+
+    #[test]
+    fn linker_args_always_include_pthread() {
+        let args = linker_args(false, &[]);
+        assert!(args.iter().any(|arg| arg == "-lpthread"));
+    }
+
+    #[test]
+    fn linker_args_preserve_sanitizers_and_extra_flags() {
+        let args = linker_args(true, &[String::from("-lssl"), String::from("-lcrypto")]);
+        assert!(args.iter().any(|arg| arg == "-lpthread"));
+        assert!(args.iter().any(|arg| arg == "-fsanitize=address,undefined"));
+        assert!(args.iter().any(|arg| arg == "-lssl"));
+        assert!(args.iter().any(|arg| arg == "-lcrypto"));
+    }
 }

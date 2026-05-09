@@ -1,6 +1,7 @@
 pub mod build;
 pub mod cli;
 pub mod deps;
+pub mod explain;
 pub mod lock;
 pub mod manifest;
 pub mod module_discovery;

@@ -14,7 +14,11 @@ pub enum VarState {
     /// Variable is live and owns its value.
     Live { ty: Ty },
     /// Variable has been moved (value transferred to another variable).
-    Moved { ty: Ty, moved_to: String, moved_at: u32 },
+    Moved {
+        ty: Ty,
+        moved_to: String,
+        moved_at: u32,
+    },
     /// Variable has been explicitly dropped or reassigned.
     Dropped,
 }
@@ -61,18 +65,16 @@ impl ReplEnv {
 
     /// Mark a variable as moved.
     pub fn mark_moved(&mut self, name: &str, moved_to: &str, input_num: u32) {
-        if let Some(state) = self.states.get(name) {
-            if let VarState::Live { ty } = state {
-                let ty = ty.clone();
-                self.states.insert(
-                    name.to_string(),
-                    VarState::Moved {
-                        ty,
-                        moved_to: moved_to.to_string(),
-                        moved_at: input_num,
-                    },
-                );
-            }
+        if let Some(VarState::Live { ty }) = self.states.get(name) {
+            let ty = ty.clone();
+            self.states.insert(
+                name.to_string(),
+                VarState::Moved {
+                    ty,
+                    moved_to: moved_to.to_string(),
+                    moved_at: input_num,
+                },
+            );
         }
     }
 

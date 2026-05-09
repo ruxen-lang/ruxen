@@ -1,6 +1,8 @@
 use crate::lexer::token::Span;
 use std::fmt;
 
+pub mod codes;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticLevel {
     Error,
@@ -36,7 +38,11 @@ impl Diagnostic {
         }
     }
 
-    pub fn error_with_code(message: impl Into<String>, span: Span, code: impl Into<String>) -> Self {
+    pub fn error_with_code(
+        message: impl Into<String>,
+        span: Span,
+        code: impl Into<String>,
+    ) -> Self {
         Self {
             level: DiagnosticLevel::Error,
             message: message.into(),

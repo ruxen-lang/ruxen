@@ -41,8 +41,7 @@ pub struct CompileOutput {
 ///
 /// Must be `Send + Sync` so it can be invoked from rayon worker threads when
 /// parallel compilation is enabled.
-pub type CompileFn<'a> =
-    &'a (dyn Fn(&SourceFile) -> Result<CompileOutput, String> + Send + Sync);
+pub type CompileFn<'a> = &'a (dyn Fn(&SourceFile) -> Result<CompileOutput, String> + Send + Sync);
 
 /// Build-wide configuration.
 pub struct BuildOptions {
@@ -215,7 +214,12 @@ pub fn build(
         .into_iter()
         .zip(source_hashes.iter().copied())
         .map(|(src, sh)| {
-            let key = CacheKey::new(sh, super::hash::compiler_version(), &options.target, &options.opt_level);
+            let key = CacheKey::new(
+                sh,
+                super::hash::compiler_version(),
+                &options.target,
+                &options.opt_level,
+            );
             let prior_entry = prior.as_ref().and_then(|m| m.find(&src.path).cloned());
             let prior_sig = prior_entry.as_ref().and_then(|e| {
                 let filename = e.signature_file.as_ref()?;
@@ -277,10 +281,7 @@ pub fn build(
                 item.object_path = Some(store.object_path(hex));
                 item.new_signature = item.prior_signature.clone();
                 if options.verbose {
-                    eprintln!(
-                        "[cache] {}: cache hit (object unchanged)",
-                        item.source.path
-                    );
+                    eprintln!("[cache] {}: cache hit (object unchanged)", item.source.path);
                 }
             }
             None => {
@@ -442,7 +443,9 @@ pub fn build(
             };
             let output_changed = matches!(
                 item.status,
-                Some(FileStatus::Recompiled { output_changed: true })
+                Some(FileStatus::Recompiled {
+                    output_changed: true
+                })
             );
             if sig_changed && output_changed {
                 seeds.push(idx);
@@ -652,7 +655,11 @@ mod tests {
         let calls2 = AtomicUsize::new(0);
         let f2 = compile_identity(&deps, &calls2);
         let r = build(files, &store, &opts(), &f2).unwrap();
-        assert_eq!(calls2.load(Ordering::SeqCst), 0, "no compile calls expected on warm cache");
+        assert_eq!(
+            calls2.load(Ordering::SeqCst),
+            0,
+            "no compile calls expected on warm cache"
+        );
         assert!(!r.any_object_changed);
         for s in r.statuses.values() {
             assert_eq!(*s, FileStatus::CacheHit);
@@ -673,7 +680,9 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert!(matches!(
             r.statuses.get("a.rvn"),
-            Some(FileStatus::Recompiled { output_changed: true })
+            Some(FileStatus::Recompiled {
+                output_changed: true
+            })
         ));
         assert!(r.any_object_changed);
     }
@@ -745,7 +754,11 @@ mod tests {
         calls.store(0, Ordering::SeqCst);
 
         let r = build(vec![src("a.rvn", "x")], &store, &opts(), &f).unwrap();
-        assert_eq!(calls.load(Ordering::SeqCst), 1, "recompile after corrupt manifest");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "recompile after corrupt manifest"
+        );
         assert_eq!(r.objects.len(), 1);
     }
 
@@ -831,7 +844,11 @@ mod tests {
                         self_mode: None,
                         is_class_method: false,
                         params: vec![],
-                        return_ty: if v == 1 { "Int".into() } else { "String".into() },
+                        return_ty: if v == 1 {
+                            "Int".into()
+                        } else {
+                            "String".into()
+                        },
                     })],
                 }
             } else {
@@ -876,7 +893,7 @@ mod tests {
             let sig = if f.path == "b.rvn" {
                 FileSignature {
                     items: vec![PublicItem::Function(SigFn {
-                        name: f.source.clone(),  // signature depends on source
+                        name: f.source.clone(), // signature depends on source
                         generic_params: vec![],
                         self_mode: None,
                         is_class_method: false,

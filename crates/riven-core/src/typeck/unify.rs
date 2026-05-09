@@ -42,13 +42,21 @@ pub fn unify(a: &Ty, b: &Ty, ctx: &mut TypeContext, span: &Span) -> Result<Ty, T
     match (&a, &b) {
         // Inference variables unify with anything
         (Ty::Infer(id), _) => {
-            ctx.bind(*id, b.clone())
-                .map_err(|msg| TypeError { message: msg, expected: a.clone(), found: b.clone(), span: span.clone() })?;
+            ctx.bind(*id, b.clone()).map_err(|msg| TypeError {
+                message: msg,
+                expected: a.clone(),
+                found: b.clone(),
+                span: span.clone(),
+            })?;
             Ok(b)
         }
         (_, Ty::Infer(id)) => {
-            ctx.bind(*id, a.clone())
-                .map_err(|msg| TypeError { message: msg, expected: a.clone(), found: b.clone(), span: span.clone() })?;
+            ctx.bind(*id, a.clone()).map_err(|msg| TypeError {
+                message: msg,
+                expected: a.clone(),
+                found: b.clone(),
+                span: span.clone(),
+            })?;
             Ok(a)
         }
 
@@ -65,7 +73,8 @@ pub fn unify(a: &Ty, b: &Ty, ctx: &mut TypeContext, span: &Span) -> Result<Ty, T
             if a_elems.len() != b_elems.len() {
                 return Err(TypeError::mismatch(&a, &b, span));
             }
-            let unified: Result<Vec<Ty>, TypeError> = a_elems.iter()
+            let unified: Result<Vec<Ty>, TypeError> = a_elems
+                .iter()
                 .zip(b_elems.iter())
                 .map(|(ae, be)| unify(ae, be, ctx, span))
                 .collect();
@@ -87,11 +96,11 @@ pub fn unify(a: &Ty, b: &Ty, ctx: &mut TypeContext, span: &Span) -> Result<Ty, T
             Ok(Ty::Vec(Box::new(elem)))
         }
 
-        // Hash
-        (Ty::Hash(ak, av), Ty::Hash(bk, bv)) => {
+        // HashMap
+        (Ty::HashMap(ak, av), Ty::HashMap(bk, bv)) => {
             let k = unify(ak, bk, ctx, span)?;
             let v = unify(av, bv, ctx, span)?;
-            Ok(Ty::Hash(Box::new(k), Box::new(v)))
+            Ok(Ty::HashMap(Box::new(k), Box::new(v)))
         }
 
         // Set
@@ -124,67 +133,117 @@ pub fn unify(a: &Ty, b: &Ty, ctx: &mut TypeContext, span: &Span) -> Result<Ty, T
         }
 
         // Class types
-        (Ty::Class { name: an, generic_args: aa }, Ty::Class { name: bn, generic_args: ba }) => {
+        (
+            Ty::Class {
+                name: an,
+                generic_args: aa,
+            },
+            Ty::Class {
+                name: bn,
+                generic_args: ba,
+            },
+        ) => {
             if an != bn {
                 return Err(TypeError::mismatch(&a, &b, span));
             }
             if aa.len() != ba.len() {
                 return Err(TypeError::mismatch(&a, &b, span));
             }
-            let args: Result<Vec<Ty>, TypeError> = aa.iter()
+            let args: Result<Vec<Ty>, TypeError> = aa
+                .iter()
                 .zip(ba.iter())
                 .map(|(x, y)| unify(x, y, ctx, span))
                 .collect();
-            Ok(Ty::Class { name: an.clone(), generic_args: args? })
+            Ok(Ty::Class {
+                name: an.clone(),
+                generic_args: args?,
+            })
         }
 
         // Struct types
-        (Ty::Struct { name: an, generic_args: aa }, Ty::Struct { name: bn, generic_args: ba }) => {
+        (
+            Ty::Struct {
+                name: an,
+                generic_args: aa,
+            },
+            Ty::Struct {
+                name: bn,
+                generic_args: ba,
+            },
+        ) => {
             if an != bn {
                 return Err(TypeError::mismatch(&a, &b, span));
             }
             if aa.len() != ba.len() {
                 return Err(TypeError::mismatch(&a, &b, span));
             }
-            let args: Result<Vec<Ty>, TypeError> = aa.iter()
+            let args: Result<Vec<Ty>, TypeError> = aa
+                .iter()
                 .zip(ba.iter())
                 .map(|(x, y)| unify(x, y, ctx, span))
                 .collect();
-            Ok(Ty::Struct { name: an.clone(), generic_args: args? })
+            Ok(Ty::Struct {
+                name: an.clone(),
+                generic_args: args?,
+            })
         }
 
         // Enum types
-        (Ty::Enum { name: an, generic_args: aa }, Ty::Enum { name: bn, generic_args: ba }) => {
+        (
+            Ty::Enum {
+                name: an,
+                generic_args: aa,
+            },
+            Ty::Enum {
+                name: bn,
+                generic_args: ba,
+            },
+        ) => {
             if an != bn {
                 return Err(TypeError::mismatch(&a, &b, span));
             }
             if aa.len() != ba.len() {
                 return Err(TypeError::mismatch(&a, &b, span));
             }
-            let args: Result<Vec<Ty>, TypeError> = aa.iter()
+            let args: Result<Vec<Ty>, TypeError> = aa
+                .iter()
                 .zip(ba.iter())
                 .map(|(x, y)| unify(x, y, ctx, span))
                 .collect();
-            Ok(Ty::Enum { name: an.clone(), generic_args: args? })
+            Ok(Ty::Enum {
+                name: an.clone(),
+                generic_args: args?,
+            })
         }
 
         // Function types
-        (Ty::Fn { params: ap, ret: ar }, Ty::Fn { params: bp, ret: br }) => {
+        (
+            Ty::Fn {
+                params: ap,
+                ret: ar,
+            },
+            Ty::Fn {
+                params: bp,
+                ret: br,
+            },
+        ) => {
             if ap.len() != bp.len() {
                 return Err(TypeError::mismatch(&a, &b, span));
             }
-            let params: Result<Vec<Ty>, TypeError> = ap.iter()
+            let params: Result<Vec<Ty>, TypeError> = ap
+                .iter()
                 .zip(bp.iter())
                 .map(|(x, y)| unify(x, y, ctx, span))
                 .collect();
             let ret = unify(ar, br, ctx, span)?;
-            Ok(Ty::Fn { params: params?, ret: Box::new(ret) })
+            Ok(Ty::Fn {
+                params: params?,
+                ret: Box::new(ret),
+            })
         }
 
         // TypeParam: unify if same name
-        (Ty::TypeParam { name: an, .. }, Ty::TypeParam { name: bn, .. }) if an == bn => {
-            Ok(a)
-        }
+        (Ty::TypeParam { name: an, .. }, Ty::TypeParam { name: bn, .. }) if an == bn => Ok(a),
 
         // TypeParam unifies with any concrete type (the concrete type wins).
         // In a generic context, T can be instantiated to any type that satisfies bounds.
@@ -195,18 +254,14 @@ pub fn unify(a: &Ty, b: &Ty, ctx: &mut TypeContext, span: &Span) -> Result<Ty, T
         // Reference coercion: &T can unify with T (auto-deref) and
         // T can unify with &T (auto-ref). This handles cases like
         // Vec[&&T] vs Vec[&T] or Vec[&T] vs Vec[T].
-        (Ty::Ref(inner_a), _) => {
-            match unify(inner_a, &b, ctx, span) {
-                Ok(_) => Ok(a),
-                Err(_) => Err(TypeError::mismatch(&a, &b, span)),
-            }
-        }
-        (_, Ty::Ref(inner_b)) => {
-            match unify(&a, inner_b, ctx, span) {
-                Ok(_) => Ok(b),
-                Err(_) => Err(TypeError::mismatch(&a, &b, span)),
-            }
-        }
+        (Ty::Ref(inner_a), _) => match unify(inner_a, &b, ctx, span) {
+            Ok(_) => Ok(a),
+            Err(_) => Err(TypeError::mismatch(&a, &b, span)),
+        },
+        (_, Ty::Ref(inner_b)) => match unify(&a, inner_b, ctx, span) {
+            Ok(_) => Ok(b),
+            Err(_) => Err(TypeError::mismatch(&a, &b, span)),
+        },
 
         // No match
         _ => Err(TypeError::mismatch(&a, &b, span)),
@@ -235,9 +290,7 @@ pub fn can_coerce(from: &Ty, to: &Ty, ctx: &TypeContext) -> bool {
         (Ty::Error, _) | (_, Ty::Error) => true,
 
         // &mut T → &T (always allowed)
-        (Ty::RefMut(inner_from), Ty::Ref(inner_to)) => {
-            can_coerce(inner_from, inner_to, ctx)
-        }
+        (Ty::RefMut(inner_from), Ty::Ref(inner_to)) => can_coerce(inner_from, inner_to, ctx),
 
         // &String → &str (string deref coercion)
         (Ty::Ref(inner), Ty::Str) => matches!(&**inner, Ty::String),
@@ -260,9 +313,7 @@ pub fn can_coerce(from: &Ty, to: &Ty, ctx: &TypeContext) -> bool {
         (Ty::Int, Ty::Float) | (Ty::Int, Ty::Float64) | (Ty::Int, Ty::Float32) => true,
 
         // Option covariance: Option[&Child] → Option[&Parent]
-        (Ty::Option(a_inner), Ty::Option(b_inner)) => {
-            can_coerce(a_inner, b_inner, ctx)
-        }
+        (Ty::Option(a_inner), Ty::Option(b_inner)) => can_coerce(a_inner, b_inner, ctx),
 
         _ => false,
     }

@@ -3,8 +3,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use riven_cli::manifest::Manifest;
 use riven_cli::lock::LockFile;
+use riven_cli::manifest::Manifest;
 use riven_cli::module_discovery::ModuleTree;
 use riven_cli::scaffold;
 use riven_cli::version::{SemVer, VersionReq};
@@ -62,16 +62,11 @@ fn test_invalid_manifest_errors() {
 
 #[test]
 fn test_manifest_validation() {
-    let bad = Manifest::from_str(
-        "[package]\nname = \"Invalid\"\nversion = \"0.1.0\"\n",
-    )
-    .unwrap();
+    let bad = Manifest::from_str("[package]\nname = \"Invalid\"\nversion = \"0.1.0\"\n").unwrap();
     assert!(bad.validate().is_err());
 
-    let good = Manifest::from_str(
-        "[package]\nname = \"valid-name\"\nversion = \"0.1.0\"\n",
-    )
-    .unwrap();
+    let good =
+        Manifest::from_str("[package]\nname = \"valid-name\"\nversion = \"0.1.0\"\n").unwrap();
     assert!(good.validate().is_ok());
 }
 
@@ -279,7 +274,10 @@ fn test_lock_file_up_to_date_check() {
     };
     assert!(matching_lock.is_up_to_date(&manifest));
 
-    let stale_lock = LockFile { version: 1, pieces: vec![] };
+    let stale_lock = LockFile {
+        version: 1,
+        pieces: vec![],
+    };
     assert!(!stale_lock.is_up_to_date(&manifest));
 }
 
@@ -413,7 +411,11 @@ fn test_source_hash_changes_on_modification() {
 
     let h1 = rlib::hash_sources(&tmp).unwrap();
 
-    fs::write(tmp.join("src/main.rvn"), "def main\n  puts \"changed\"\nend\n").unwrap();
+    fs::write(
+        tmp.join("src/main.rvn"),
+        "def main\n  puts \"changed\"\nend\n",
+    )
+    .unwrap();
     let h2 = rlib::hash_sources(&tmp).unwrap();
 
     assert_ne!(h1, h2);

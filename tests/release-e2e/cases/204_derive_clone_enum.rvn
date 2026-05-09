@@ -1,0 +1,23 @@
+@[derive(Clone)]
+enum Shape
+  Circle(radius: Int)
+  Rect(width: Int, height: Int)
+  Empty
+end
+
+def main
+  let a = Shape.Rect(width: 3, height: 4)
+  let b = a.clone
+  let c = Shape.Empty
+  let d = c.clone
+  match b
+    Shape.Rect(w, h) -> puts "rect #{w}x#{h}"
+    Shape.Circle(r)  -> puts "circle #{r}"
+    Shape.Empty      -> puts "empty (wrong)"
+  end
+  match d
+    Shape.Empty      -> puts "empty"
+    Shape.Rect(w, h) -> puts "rect (wrong)"
+    Shape.Circle(r)  -> puts "circle (wrong)"
+  end
+end

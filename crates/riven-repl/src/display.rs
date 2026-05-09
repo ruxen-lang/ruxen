@@ -3,7 +3,6 @@
 //! Formats values with their types: `=> value : Type`
 //! Uses ANSI colors for terminal output.
 
-
 use riven_core::hir::types::Ty;
 use riven_core::parser::ast::{FuncDef, Program, TopLevelItem};
 use riven_core::typeck;
@@ -53,7 +52,11 @@ pub fn format_value(raw: i64, ty: &Ty) -> String {
             format!("{}", f)
         }
         Ty::Bool => {
-            if raw != 0 { "true".to_string() } else { "false".to_string() }
+            if raw != 0 {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            }
         }
         Ty::Char => {
             if let Some(c) = char::from_u32(raw as u32) {
@@ -117,19 +120,19 @@ pub fn format_type(ty: &Ty) -> String {
         Ty::String => "String".to_string(),
         Ty::Str => "&str".to_string(),
         Ty::Vec(inner) => format!("Vec[{}]", format_type(inner)),
-        Ty::Hash(k, v) => format!("Hash[{}, {}]", format_type(k), format_type(v)),
+        Ty::HashMap(k, v) => format!("HashMap[{}, {}]", format_type(k), format_type(v)),
         Ty::Set(inner) => format!("Set[{}]", format_type(inner)),
         Ty::Option(inner) => format!("Option[{}]", format_type(inner)),
         Ty::Result(ok, err) => format!("Result[{}, {}]", format_type(ok), format_type(err)),
         Ty::Ref(inner) => format!("&{}", format_type(inner)),
         Ty::RefMut(inner) => format!("&mut {}", format_type(inner)),
         Ty::Tuple(elems) => {
-            let parts: Vec<String> = elems.iter().map(|t| format_type(t)).collect();
+            let parts: Vec<String> = elems.iter().map(format_type).collect();
             format!("({})", parts.join(", "))
         }
         Ty::Array(inner, size) => format!("[{}; {}]", format_type(inner), size),
         Ty::Fn { params, ret } => {
-            let parts: Vec<String> = params.iter().map(|t| format_type(t)).collect();
+            let parts: Vec<String> = params.iter().map(format_type).collect();
             format!("Fn({}) -> {}", parts.join(", "), format_type(ret))
         }
         Ty::Class { name, .. } => name.clone(),
@@ -147,7 +150,8 @@ pub fn format_type(ty: &Ty) -> String {
 pub fn format_fn_type_for_def(target: &FuncDef, all_defs: &[FuncDef]) -> String {
     // Build a program containing all accumulated defs so the target can
     // reference its siblings during type checking.
-    let items: Vec<TopLevelItem> = all_defs.iter()
+    let items: Vec<TopLevelItem> = all_defs
+        .iter()
         .cloned()
         .map(TopLevelItem::Function)
         .collect();
@@ -157,11 +161,16 @@ pub fn format_fn_type_for_def(target: &FuncDef, all_defs: &[FuncDef]) -> String 
     };
     let result = typeck::type_check(&program);
 
-    let resolved = result.program.items.iter()
+    let resolved = result
+        .program
+        .items
+        .iter()
         .filter_map(|item| {
             if let riven_core::hir::nodes::HirItem::Function(f) = item {
                 if f.name == target.name {
-                    let params: Vec<(String, Ty)> = f.params.iter()
+                    let params: Vec<(String, Ty)> = f
+                        .params
+                        .iter()
                         .map(|p| (p.name.clone(), p.ty.clone()))
                         .collect();
                     return Some((params, f.return_ty.clone()));
@@ -173,10 +182,15 @@ pub fn format_fn_type_for_def(target: &FuncDef, all_defs: &[FuncDef]) -> String 
 
     let (params, return_ty) = resolved.unwrap_or_else(|| (Vec::new(), Ty::Unit));
 
-    let param_strs: Vec<String> = params.iter()
+    let param_strs: Vec<String> = params
+        .iter()
         .map(|(n, t)| format!("{}: {}", n, format_type(t)))
         .collect();
-    format!("Fn({}) -> {}", param_strs.join(", "), format_type(&return_ty))
+    format!(
+        "Fn({}) -> {}",
+        param_strs.join(", "),
+        format_type(&return_ty)
+    )
 }
 
 /// Format a function signature for display after definition.
@@ -199,9 +213,7 @@ pub fn format_error(message: &str) -> String {
 
 /// Format a REPL error with a hint.
 pub fn format_error_with_hint(message: &str, hint: &str) -> String {
-    format!(
-        "{RED}{BOLD}Error:{RESET} {RED}{message}{RESET}\n  {CYAN}Hint:{RESET} {hint}"
-    )
+    format!("{RED}{BOLD}Error:{RESET} {RED}{message}{RESET}\n  {CYAN}Hint:{RESET} {hint}")
 }
 
 /// Format a warning message.
@@ -243,8 +255,8 @@ mod tests {
     fn format_type_composite() {
         assert_eq!(format_type(&Ty::Vec(Box::new(Ty::Int))), "Vec[Int]");
         assert_eq!(
-            format_type(&Ty::Hash(Box::new(Ty::String), Box::new(Ty::Int))),
-            "Hash[String, Int]",
+            format_type(&Ty::HashMap(Box::new(Ty::String), Box::new(Ty::Int))),
+            "HashMap[String, Int]",
         );
         assert_eq!(format_type(&Ty::Set(Box::new(Ty::Bool))), "Set[Bool]");
         assert_eq!(format_type(&Ty::Option(Box::new(Ty::Int))), "Option[Int]");
@@ -280,7 +292,10 @@ mod tests {
 
     #[test]
     fn format_type_class_uses_name() {
-        let ty = Ty::Class { name: "Point".to_string(), generic_args: vec![] };
+        let ty = Ty::Class {
+            name: "Point".to_string(),
+            generic_args: vec![],
+        };
         assert_eq!(format_type(&ty), "Point");
     }
 
@@ -320,7 +335,11 @@ mod tests {
         // Surrogate range is not a valid Unicode scalar → fallback path.
         let invalid: i64 = 0xD800;
         let out = format_value(invalid, &Ty::Char);
-        assert!(out.starts_with("'\\u{"), "expected \\u{{...}} fallback, got {:?}", out);
+        assert!(
+            out.starts_with("'\\u{"),
+            "expected \\u{{...}} fallback, got {:?}",
+            out
+        );
     }
 
     #[test]
@@ -409,7 +428,11 @@ mod tests {
         // The display contract for `format_result` is that the top-level
         // output stays on one line (the REPL prints it with `println!`).
         let out = format_result(42, &Ty::Int).expect("non-unit result");
-        assert!(!out.contains('\n'), "format_result must be single-line, got {:?}", out);
+        assert!(
+            !out.contains('\n'),
+            "format_result must be single-line, got {:?}",
+            out
+        );
     }
 
     // ── format_fn_signature ─────────────────────────────────────────
@@ -475,7 +498,7 @@ mod tests {
         while let Some(c) = chars.next() {
             if c == '\x1b' && chars.peek() == Some(&'[') {
                 chars.next(); // consume '['
-                // Consume until a letter terminates the sequence.
+                              // Consume until a letter terminates the sequence.
                 for inner in chars.by_ref() {
                     if inner.is_ascii_alphabetic() {
                         break;

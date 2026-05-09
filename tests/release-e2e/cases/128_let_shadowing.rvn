@@ -1,0 +1,8 @@
+def main
+  let x = 1
+  let x = x + 1
+  let x = x * 10
+  puts "#{x}"
+  let x = "twenty"
+  puts x
+end

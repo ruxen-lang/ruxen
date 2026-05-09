@@ -1,0 +1,6 @@
+def main
+  let mut s = String.from("hello")
+  let _c = s.remove(0)
+  puts "len=#{s.len}"
+  puts s
+end

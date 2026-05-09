@@ -1,0 +1,19 @@
+## B3: derive Default synthesises `<Type>_default() -> Self` so that
+## `Type.default()` returns a value with each field initialised to
+## that field type's zero value (`0` / `0.0` / `false` / `""` /
+## recursive `<Inner>_default()`).
+struct Origin
+  x: Int
+  y: Int
+  flag: Bool
+  derive Default
+end
+
+def main
+  let o = Origin.default()
+  puts "#{o.x}"
+  puts "#{o.y}"
+  if !o.flag
+    puts "flag-clear"
+  end
+end

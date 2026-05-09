@@ -167,8 +167,8 @@ mod tests {
     fn print_float_shim_formats_correctly() {
         let _g = LOCK.lock().unwrap_or_else(|p| p.into_inner());
         clear();
-        riven_repl_print_float_shim(3.14);
-        assert_eq!(take_all(), "3.14\n");
+        riven_repl_print_float_shim(2.5);
+        assert_eq!(take_all(), "2.5\n");
     }
 
     #[test]

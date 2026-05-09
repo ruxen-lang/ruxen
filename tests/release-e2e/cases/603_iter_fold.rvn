@@ -1,0 +1,8 @@
+def main
+  let v = vec![1, 2, 3, 4, 5]
+  let total = v.iter.fold(0) { |acc, n| acc + n }
+  puts "total=#{total}"
+  let empty: Vec[Int] = Vec.new
+  let z = empty.iter.fold(100) { |acc, n| acc + n }
+  puts "empty=#{z}"
+end

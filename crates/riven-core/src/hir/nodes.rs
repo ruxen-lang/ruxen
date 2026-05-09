@@ -6,7 +6,7 @@
 //! - Syntactic sugar is desugared
 //! - Copy/Move annotations on all value transfers
 
-use crate::hir::types::{MoveSemantics, Ty, TraitRef};
+use crate::hir::types::{MoveSemantics, TraitRef, Ty};
 use crate::lexer::token::Span;
 use crate::parser::ast::{BinOp, UnaryOp, Visibility};
 
@@ -169,6 +169,7 @@ pub enum HirExprKind {
         params: Vec<HirClosureParam>,
         body: Box<HirExpr>,
         captures: Vec<Capture>,
+        is_async: bool,
         is_move: bool,
     },
 
@@ -270,14 +271,9 @@ pub enum HirPattern {
         span: Span,
     },
     /// Wildcard `_`
-    Wildcard {
-        span: Span,
-    },
+    Wildcard { span: Span },
     /// Literal pattern
-    Literal {
-        expr: Box<HirExpr>,
-        span: Span,
-    },
+    Literal { expr: Box<HirExpr>, span: Span },
     /// Tuple destructuring
     Tuple {
         elements: Vec<HirPattern>,
@@ -311,9 +307,7 @@ pub enum HirPattern {
         span: Span,
     },
     /// Rest pattern: `..`
-    Rest {
-        span: Span,
-    },
+    Rest { span: Span },
 }
 
 // ─── Statements ─────────────────────────────────────────────────────
@@ -380,12 +374,14 @@ pub struct HirFuncDef {
     pub def_id: DefId,
     pub name: String,
     pub visibility: Visibility,
+    pub is_async: bool,
     pub self_mode: Option<HirSelfMode>,
     pub is_class_method: bool,
     pub generic_params: Vec<HirGenericParam>,
     pub params: Vec<HirParam>,
     pub return_ty: Ty,
     pub body: Box<HirExpr>,
+    pub doc_comments: Vec<String>,
     pub span: Span,
 }
 
@@ -407,6 +403,8 @@ pub struct HirClassDef {
     pub fields: Vec<HirFieldDef>,
     pub methods: Vec<HirFuncDef>,
     pub impl_blocks: Vec<HirImplBlock>,
+    pub derive_traits: Vec<String>,
+    pub doc_comments: Vec<String>,
     pub span: Span,
 }
 
@@ -429,6 +427,9 @@ pub struct HirStructDef {
     pub generic_params: Vec<HirGenericParam>,
     pub fields: Vec<HirFieldDef>,
     pub derive_traits: Vec<String>,
+    /// Representation hints from `@[repr(...)]` (e.g. ["C"], ["C", "packed"]).
+    pub repr: Vec<String>,
+    pub doc_comments: Vec<String>,
     pub span: Span,
 }
 
@@ -440,6 +441,8 @@ pub struct HirEnumDef {
     pub name: String,
     pub generic_params: Vec<HirGenericParam>,
     pub variants: Vec<HirVariant>,
+    pub derive_traits: Vec<String>,
+    pub doc_comments: Vec<String>,
     pub span: Span,
 }
 
@@ -475,6 +478,7 @@ pub struct HirTraitDef {
     pub generic_params: Vec<HirGenericParam>,
     pub super_traits: Vec<TraitRef>,
     pub items: Vec<HirTraitItem>,
+    pub doc_comments: Vec<String>,
     pub span: Span,
 }
 
@@ -500,6 +504,8 @@ pub enum HirTraitItem {
 #[derive(Debug, Clone)]
 pub struct HirImplBlock {
     pub generic_params: Vec<HirGenericParam>,
+    pub is_unsafe: bool,
+    pub negative_trait: bool,
     pub trait_ref: Option<TraitRef>,
     pub target_ty: Ty,
     pub items: Vec<HirImplItem>,
@@ -508,11 +514,7 @@ pub struct HirImplBlock {
 
 #[derive(Debug, Clone)]
 pub enum HirImplItem {
-    AssocType {
-        name: String,
-        ty: Ty,
-        span: Span,
-    },
+    AssocType { name: String, ty: Ty, span: Span },
     Method(HirFuncDef),
 }
 
@@ -552,5 +554,6 @@ pub struct HirConst {
     pub name: String,
     pub ty: Ty,
     pub value: HirExpr,
+    pub doc_comments: Vec<String>,
     pub span: Span,
 }

@@ -8,18 +8,18 @@ use crate::line_index::LineIndex;
 
 /// The token type legend — must match the order declared in server capabilities.
 pub const TOKEN_TYPES: &[SemanticTokenType] = &[
-    SemanticTokenType::KEYWORD,      // 0
-    SemanticTokenType::VARIABLE,     // 1
-    SemanticTokenType::PARAMETER,    // 2
-    SemanticTokenType::FUNCTION,     // 3
-    SemanticTokenType::METHOD,       // 4
-    SemanticTokenType::TYPE,         // 5
-    SemanticTokenType::PROPERTY,     // 6
-    SemanticTokenType::ENUM_MEMBER,  // 7
-    SemanticTokenType::NUMBER,       // 8
-    SemanticTokenType::STRING,       // 9
-    SemanticTokenType::COMMENT,      // 10
-    SemanticTokenType::OPERATOR,     // 11
+    SemanticTokenType::KEYWORD,     // 0
+    SemanticTokenType::VARIABLE,    // 1
+    SemanticTokenType::PARAMETER,   // 2
+    SemanticTokenType::FUNCTION,    // 3
+    SemanticTokenType::METHOD,      // 4
+    SemanticTokenType::TYPE,        // 5
+    SemanticTokenType::PROPERTY,    // 6
+    SemanticTokenType::ENUM_MEMBER, // 7
+    SemanticTokenType::NUMBER,      // 8
+    SemanticTokenType::STRING,      // 9
+    SemanticTokenType::COMMENT,     // 10
+    SemanticTokenType::OPERATOR,    // 11
 ];
 
 pub const TOKEN_MODIFIERS: &[SemanticTokenModifier] = &[
@@ -181,7 +181,12 @@ struct HirTokenWalker<'a> {
 }
 
 impl<'a> HirTokenWalker<'a> {
-    fn push_token(&mut self, span: &riven_core::lexer::token::Span, token_type: u32, modifiers: u32) {
+    fn push_token(
+        &mut self,
+        span: &riven_core::lexer::token::Span,
+        token_type: u32,
+        modifiers: u32,
+    ) {
         let pos = self.line_index.position_of(span.start);
         let end_pos = self.line_index.position_of(span.end);
         if pos.line == end_pos.line && end_pos.character > pos.character {
@@ -257,7 +262,10 @@ impl<'a> HirTokenWalker<'a> {
                 }
             }
             HirExprKind::MethodCall {
-                object, args, block, ..
+                object,
+                args,
+                block,
+                ..
             } => {
                 self.visit_expr(object);
                 // Method name is part of the expression — classified as METHOD
@@ -403,13 +411,13 @@ impl<'a> HirTokenWalker<'a> {
                     let mods = if *mutable { 0 } else { 1 }; // READONLY = bit 0
                     (1, mods) // VARIABLE
                 }
-                DefKind::Param { .. } => (2, 0),     // PARAMETER
-                DefKind::Function { .. } => (3, 0),   // FUNCTION
-                DefKind::Method { .. } => (4, 0),     // METHOD
-                DefKind::Field { .. } => (6, 0),      // PROPERTY
+                DefKind::Param { .. } => (2, 0),       // PARAMETER
+                DefKind::Function { .. } => (3, 0),    // FUNCTION
+                DefKind::Method { .. } => (4, 0),      // METHOD
+                DefKind::Field { .. } => (6, 0),       // PROPERTY
                 DefKind::EnumVariant { .. } => (7, 0), // ENUM_MEMBER
-                DefKind::SelfValue { .. } => (1, 0),  // VARIABLE
-                _ => (1, 0),                          // VARIABLE fallback
+                DefKind::SelfValue { .. } => (1, 0),   // VARIABLE
+                _ => (1, 0),                           // VARIABLE fallback
             }
         } else {
             (1, 0) // VARIABLE fallback
@@ -419,7 +427,8 @@ impl<'a> HirTokenWalker<'a> {
 
 /// Remove duplicate tokens at the same position, keeping the last one (HIR overrides lexical).
 fn dedup_tokens(tokens: &mut Vec<RawToken>) {
-    tokens.dedup_by(|b, a| a.line == b.line && a.start_char == b.start_char && a.length == b.length);
+    tokens
+        .dedup_by(|b, a| a.line == b.line && a.start_char == b.start_char && a.length == b.length);
 }
 
 fn encode_deltas(tokens: &[RawToken]) -> Vec<SemanticToken> {
@@ -523,7 +532,10 @@ mod tests {
             assert!(
                 (l1, s1) >= (l0, s0),
                 "Tokens not monotonic: ({},{}) then ({},{})",
-                l0, s0, l1, s1
+                l0,
+                s0,
+                l1,
+                s1
             );
         }
     }

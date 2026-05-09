@@ -1,0 +1,18 @@
+## TEC-13: the trait formerly known as `Hash` is `Hashable`.
+## Both names should compile during the transition release.
+struct KeyA
+  v: Int
+  derive Hashable
+end
+
+struct KeyB
+  v: Int
+  derive Hash
+end
+
+def main
+  let a = KeyA.new(1)
+  let b = KeyB.new(2)
+  puts "#{a.v}"
+  puts "#{b.v}"
+end

@@ -2,8 +2,8 @@
 //! null literal, and @[repr(C)] attributes.
 
 use riven_core::lexer::Lexer;
-use riven_core::parser::Parser;
 use riven_core::parser::ast::*;
+use riven_core::parser::Parser;
 
 fn parse(source: &str) -> Program {
     let mut lexer = Lexer::new(source);
@@ -237,10 +237,117 @@ end
     if let TopLevelItem::Struct(s) = &program.items[0] {
         assert_eq!(s.name, "Point");
         assert_eq!(s.fields.len(), 2);
-        // repr(C) stored in derive_traits
-        assert!(s.derive_traits.iter().any(|t| t == "repr(C)"));
+        // `@[repr(C)]` is stored on its own `repr` field — not stuffed
+        // into `derive_traits`. The dispatched `@[derive(...)]` form
+        // populates `derive_traits` instead.
+        assert!(s.repr.iter().any(|r| r == "C"));
+        assert!(
+            s.derive_traits.is_empty(),
+            "repr must not leak into derive_traits: {:?}",
+            s.derive_traits
+        );
     } else {
         panic!("expected Struct item");
+    }
+}
+
+// ── @[derive(...)] parse surface ───────────────────────────────────
+
+#[test]
+fn parse_derive_attr_on_struct() {
+    let source = r#"
+@[derive(Copy, Clone)]
+struct Pair
+  x: Int
+  y: Int
+end
+"#;
+    let program = parse(source);
+    if let TopLevelItem::Struct(s) = &program.items[0] {
+        assert_eq!(s.name, "Pair");
+        assert_eq!(
+            s.derive_traits,
+            vec!["Copy".to_string(), "Clone".to_string()]
+        );
+        assert!(s.repr.is_empty());
+    } else {
+        panic!("expected Struct item");
+    }
+}
+
+#[test]
+fn parse_derive_attr_on_class() {
+    let source = r#"
+@[derive(Debug)]
+class Widget
+  value: Int
+end
+"#;
+    let program = parse(source);
+    if let TopLevelItem::Class(c) = &program.items[0] {
+        assert_eq!(c.name, "Widget");
+        assert_eq!(c.derive_traits, vec!["Debug".to_string()]);
+    } else {
+        panic!("expected Class item");
+    }
+}
+
+#[test]
+fn parse_derive_attr_on_enum() {
+    let source = r#"
+@[derive(Debug, Clone)]
+enum Color
+  Red
+  Green
+  Blue
+end
+"#;
+    let program = parse(source);
+    if let TopLevelItem::Enum(e) = &program.items[0] {
+        assert_eq!(e.name, "Color");
+        assert_eq!(
+            e.derive_traits,
+            vec!["Debug".to_string(), "Clone".to_string()]
+        );
+    } else {
+        panic!("expected Enum item");
+    }
+}
+
+#[test]
+fn parse_inbody_derive_on_enum() {
+    let source = r#"
+enum Shape
+  Circle
+  Square
+  derive Debug
+end
+"#;
+    let program = parse(source);
+    if let TopLevelItem::Enum(e) = &program.items[0] {
+        assert_eq!(e.derive_traits, vec!["Debug".to_string()]);
+        assert_eq!(e.variants.len(), 2);
+    } else {
+        panic!("expected Enum item");
+    }
+}
+
+#[test]
+fn parse_inbody_derive_on_class() {
+    let source = r#"
+class Counter
+  value: Int
+  derive Debug, Clone
+end
+"#;
+    let program = parse(source);
+    if let TopLevelItem::Class(c) = &program.items[0] {
+        assert_eq!(
+            c.derive_traits,
+            vec!["Debug".to_string(), "Clone".to_string()]
+        );
+    } else {
+        panic!("expected Class item");
     }
 }
 
@@ -278,8 +385,16 @@ fn packed_struct_layout() {
     // A struct with UInt8 (1 byte) and Int64 (8 bytes).
     // Packed: no padding, total = 9 bytes, align = 1.
     let fields = vec![
-        TypeLayout { size: 1, alignment: 1, field_offsets: vec![] },
-        TypeLayout { size: 8, alignment: 8, field_offsets: vec![] },
+        TypeLayout {
+            size: 1,
+            alignment: 1,
+            field_offsets: vec![],
+        },
+        TypeLayout {
+            size: 8,
+            alignment: 8,
+            field_offsets: vec![],
+        },
     ];
     let layout = packed_struct_layout(&fields);
     assert_eq!(layout.size, 9);
@@ -291,9 +406,11 @@ fn packed_struct_layout() {
 fn transparent_struct_layout() {
     use riven_core::codegen::layout::{transparent_struct_layout, TypeLayout};
 
-    let fields = vec![
-        TypeLayout { size: 8, alignment: 8, field_offsets: vec![] },
-    ];
+    let fields = vec![TypeLayout {
+        size: 8,
+        alignment: 8,
+        field_offsets: vec![],
+    }];
     let layout = transparent_struct_layout(&fields).unwrap();
     assert_eq!(layout.size, 8);
     assert_eq!(layout.alignment, 8);
@@ -304,8 +421,16 @@ fn transparent_struct_rejects_multiple_fields() {
     use riven_core::codegen::layout::{transparent_struct_layout, TypeLayout};
 
     let fields = vec![
-        TypeLayout { size: 8, alignment: 8, field_offsets: vec![] },
-        TypeLayout { size: 4, alignment: 4, field_offsets: vec![] },
+        TypeLayout {
+            size: 8,
+            alignment: 8,
+            field_offsets: vec![],
+        },
+        TypeLayout {
+            size: 4,
+            alignment: 4,
+            field_offsets: vec![],
+        },
     ];
     assert!(transparent_struct_layout(&fields).is_err());
 }
@@ -317,9 +442,21 @@ fn c_struct_layout_matches_regular() {
     // C layout should match the regular struct layout
     // (since Riven already uses C-compatible layout rules).
     let fields = vec![
-        TypeLayout { size: 1, alignment: 1, field_offsets: vec![] },
-        TypeLayout { size: 8, alignment: 8, field_offsets: vec![] },
-        TypeLayout { size: 4, alignment: 4, field_offsets: vec![] },
+        TypeLayout {
+            size: 1,
+            alignment: 1,
+            field_offsets: vec![],
+        },
+        TypeLayout {
+            size: 8,
+            alignment: 8,
+            field_offsets: vec![],
+        },
+        TypeLayout {
+            size: 4,
+            alignment: 4,
+            field_offsets: vec![],
+        },
     ];
     let c_layout = c_struct_layout(&fields);
     let regular_layout = layout_struct_fields(&fields);

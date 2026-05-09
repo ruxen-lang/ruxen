@@ -138,7 +138,7 @@ impl DependencyGraph {
                                     .dependencies
                                     .get(&next)
                                     .map(|s| s.iter().copied().collect())
-                                    .unwrap_or_else(Vec::new);
+                                    .unwrap_or_default();
                                 children.sort();
                                 dfs.push((next, children.into_iter()));
                             }
@@ -289,10 +289,7 @@ mod tests {
         let mut g = DependencyGraph::new();
         g.add_edge(0, 1);
         g.add_edge(1, 0);
-        assert!(matches!(
-            g.topological_levels(),
-            Err(GraphError::Cycle(_))
-        ));
+        assert!(matches!(g.topological_levels(), Err(GraphError::Cycle(_))));
     }
 
     #[test]

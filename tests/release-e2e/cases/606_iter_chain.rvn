@@ -1,0 +1,13 @@
+def main
+  let a = vec![1, 2, 3]
+  let b = vec![4, 5]
+  let n = a.iter.chain(b.iter).count
+  puts "n=#{n}"
+  let total = a.iter.chain(b.iter).sum
+  puts "total=#{total}"
+  let empty: Vec[Int] = Vec.new
+  let m = empty.iter.chain(a.iter).count
+  puts "empty_lhs=#{m}"
+  let k = a.iter.chain(empty.iter).count
+  puts "empty_rhs=#{k}"
+end

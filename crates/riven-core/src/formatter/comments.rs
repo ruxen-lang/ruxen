@@ -4,7 +4,6 @@
 /// are emitted as tokens). The formatter needs all comments, so we re-scan
 /// the raw source text to extract them, then attach each comment to the
 /// nearest AST node by byte position.
-
 use std::collections::HashMap;
 
 use crate::lexer::token::Span;
@@ -71,22 +70,18 @@ impl CommentMap {
     }
 
     pub fn trailing_comments(&self, span_start: usize) -> &[Comment] {
-        self.trailing
-            .get(&span_start)
-            .map_or(&[], |v| v.as_slice())
+        self.trailing.get(&span_start).map_or(&[], |v| v.as_slice())
     }
 
     pub fn dangling_comments(&self, span_start: usize) -> &[Comment] {
-        self.dangling
-            .get(&span_start)
-            .map_or(&[], |v| v.as_slice())
+        self.dangling.get(&span_start).map_or(&[], |v| v.as_slice())
     }
 
     /// Check if a byte position falls within a `# fmt: off` range.
     pub fn is_fmt_off(&self, byte_pos: usize) -> bool {
-        self.fmt_off_ranges.iter().any(|r| {
-            byte_pos >= r.start_byte && r.end_byte.map_or(true, |end| byte_pos < end)
-        })
+        self.fmt_off_ranges
+            .iter()
+            .any(|r| byte_pos >= r.start_byte && r.end_byte.is_none_or(|end| byte_pos < end))
     }
 }
 
@@ -368,7 +363,7 @@ impl<'a> CommentCollector<'a> {
 
     fn skip_raw_string(&mut self) {
         self.advance(); // r
-        // Count leading # chars
+                        // Count leading # chars
         let mut hashes = 0;
         while !self.is_at_end() && self.current() == '#' {
             hashes += 1;
@@ -408,7 +403,9 @@ impl<'a> CommentCollector<'a> {
             if next.is_alphabetic() || next == '_' {
                 // Could be lifetime — check if followed by more ident chars
                 self.advance();
-                while !self.is_at_end() && (self.current().is_alphanumeric() || self.current() == '_') {
+                while !self.is_at_end()
+                    && (self.current().is_alphanumeric() || self.current() == '_')
+                {
                     self.advance();
                 }
                 // If we hit a ', it's a char literal; otherwise it was a lifetime.
@@ -546,10 +543,7 @@ impl CommentAttacher {
     }
 
     /// Find the node whose span end is closest to and before `pos`.
-    fn find_preceding_node<'a>(
-        spans: &'a [(usize, usize)],
-        pos: usize,
-    ) -> Option<&'a (usize, usize)> {
+    fn find_preceding_node(spans: &[(usize, usize)], pos: usize) -> Option<&(usize, usize)> {
         let mut best: Option<&(usize, usize)> = None;
         for span in spans {
             if span.1 <= pos {
@@ -567,10 +561,7 @@ impl CommentAttacher {
     }
 
     /// Find the node whose span start is closest to and after `pos`.
-    fn find_following_node<'a>(
-        spans: &'a [(usize, usize)],
-        pos: usize,
-    ) -> Option<&'a (usize, usize)> {
+    fn find_following_node(spans: &[(usize, usize)], pos: usize) -> Option<&(usize, usize)> {
         let mut best: Option<&(usize, usize)> = None;
         for span in spans {
             if span.0 >= pos {
@@ -588,10 +579,7 @@ impl CommentAttacher {
     }
 
     /// Find the smallest node that contains `pos`.
-    fn find_enclosing_node<'a>(
-        spans: &'a [(usize, usize)],
-        pos: usize,
-    ) -> Option<&'a (usize, usize)> {
+    fn find_enclosing_node(spans: &[(usize, usize)], pos: usize) -> Option<&(usize, usize)> {
         let mut best: Option<&(usize, usize)> = None;
         for span in spans {
             if span.0 <= pos && pos < span.1 {
@@ -705,13 +693,15 @@ pub fn collect_node_spans(program: &crate::parser::ast::Program) -> Vec<(usize, 
                 visit_expr(spans, right);
             }
             ExprKind::UnaryOp { operand, .. } => visit_expr(spans, operand),
-            ExprKind::Borrow(e) | ExprKind::BorrowMut(e) | ExprKind::Try(e) => {
-                visit_expr(spans, e)
+            ExprKind::Borrow(e) | ExprKind::BorrowMut(e) | ExprKind::Try(e) => visit_expr(spans, e),
+            ExprKind::FieldAccess { object, .. } | ExprKind::SafeNav { object, .. } => {
+                visit_expr(spans, object)
             }
-            ExprKind::FieldAccess { object, .. }
-            | ExprKind::SafeNav { object, .. } => visit_expr(spans, object),
             ExprKind::MethodCall {
-                object, args, block, ..
+                object,
+                args,
+                block,
+                ..
             } => {
                 visit_expr(spans, object);
                 for a in args {
@@ -750,10 +740,7 @@ pub fn collect_node_spans(program: &crate::parser::ast::Program) -> Vec<(usize, 
                     visit_expr(spans, a);
                 }
             }
-            ExprKind::Assign { target, value }
-            | ExprKind::CompoundAssign {
-                target, value, ..
-            } => {
+            ExprKind::Assign { target, value } | ExprKind::CompoundAssign { target, value, .. } => {
                 visit_expr(spans, target);
                 visit_expr(spans, value);
             }

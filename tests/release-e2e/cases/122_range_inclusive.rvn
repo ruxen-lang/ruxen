@@ -1,0 +1,12 @@
+def main
+  let mut excl = 0
+  for n in 1..5
+    excl += n
+  end
+  let mut incl = 0
+  for n in 1..=5
+    incl += n
+  end
+  puts "excl=#{excl}"
+  puts "incl=#{incl}"
+end

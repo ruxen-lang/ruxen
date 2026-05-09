@@ -1,0 +1,16 @@
+def main
+  let some_v: Option[Int] = Some(5)
+  let none_v: Option[Int] = None
+
+  let r1: Result[Int, String] = some_v.ok_or(String.from("missing"))
+  let r2: Result[Int, String] = none_v.ok_or(String.from("missing"))
+
+  match r1
+    Ok(v)  -> puts "ok #{v}"
+    Err(e) -> puts "err #{e}"
+  end
+  match r2
+    Ok(v)  -> puts "ok #{v}"
+    Err(e) -> puts "err #{e}"
+  end
+end

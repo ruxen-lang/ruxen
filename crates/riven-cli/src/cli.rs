@@ -111,4 +111,10 @@ pub enum Command {
 
     /// Verify lock file checksums
     Verify,
+
+    /// Explain a compiler error code (e.g. `riven explain E0001`)
+    Explain {
+        /// Error code to look up (e.g. `E0001`)
+        code: String,
+    },
 }

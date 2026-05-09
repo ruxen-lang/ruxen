@@ -1,0 +1,6 @@
+def main
+  let s = String.from("alpha\nbeta\ngamma")
+  for line in s.lines
+    puts line
+  end
+end

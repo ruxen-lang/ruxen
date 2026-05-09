@@ -1,0 +1,4 @@
+@[derive(Clone, Clone)]
+struct Point
+  x: Int
+end

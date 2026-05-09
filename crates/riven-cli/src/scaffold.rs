@@ -6,8 +6,8 @@ use std::process::Command;
 
 /// Create a new Riven project in a new directory under the current working directory.
 pub fn new_project(name: &str, lib: bool, no_git: bool) -> Result<(), String> {
-    let cwd = std::env::current_dir()
-        .map_err(|e| format!("failed to get current directory: {}", e))?;
+    let cwd =
+        std::env::current_dir().map_err(|e| format!("failed to get current directory: {}", e))?;
     new_project_in(name, lib, no_git, &cwd)
 }
 
@@ -37,8 +37,7 @@ pub fn new_project_in(name: &str, lib: bool, no_git: bool, parent: &Path) -> Res
 
     // Generate source file
     if lib {
-        let lib_src = "pub def hello -> String\n  \"Hello from {}!\"\nend\n"
-            .replace("{}", name);
+        let lib_src = "pub def hello -> String\n  \"Hello from {}!\"\nend\n".replace("{}", name);
         fs::write(project_dir.join("src/lib.rvn"), lib_src)
             .map_err(|e| format!("failed to write src/lib.rvn: {}", e))?;
         println!("      Created src/lib.rvn");
@@ -65,8 +64,8 @@ pub fn new_project_in(name: &str, lib: bool, no_git: bool, parent: &Path) -> Res
 
 /// Initialize a Riven project in the current directory.
 pub fn init_project() -> Result<(), String> {
-    let cwd = std::env::current_dir()
-        .map_err(|e| format!("failed to get current directory: {}", e))?;
+    let cwd =
+        std::env::current_dir().map_err(|e| format!("failed to get current directory: {}", e))?;
 
     if cwd.join("Riven.toml").exists() {
         return Err("Riven.toml already exists in this directory".to_string());

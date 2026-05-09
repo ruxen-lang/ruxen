@@ -42,10 +42,7 @@ impl TypeContext {
     pub fn bind(&mut self, id: TypeId, ty: Ty) -> Result<(), String> {
         // Occurs check: prevent infinite types
         if self.occurs_in(id, &ty) {
-            return Err(format!(
-                "infinite type: ?T{} occurs in {}",
-                id, ty
-            ));
+            return Err(format!("infinite type: ?T{} occurs in {}", id, ty));
         }
         self.substitutions.insert(id, ty);
         Ok(())
@@ -68,21 +65,13 @@ impl TypeContext {
             Ty::Tuple(elems) => elems.iter().any(|e| self.occurs_in(id, e)),
             Ty::Array(elem, _) => self.occurs_in(id, elem),
             Ty::Vec(elem) | Ty::Set(elem) | Ty::Option(elem) => self.occurs_in(id, elem),
-            Ty::Hash(k, v) | Ty::Result(k, v) => {
-                self.occurs_in(id, k) || self.occurs_in(id, v)
-            }
+            Ty::HashMap(k, v) | Ty::Result(k, v) => self.occurs_in(id, k) || self.occurs_in(id, v),
             Ty::Ref(inner) | Ty::RefMut(inner) => self.occurs_in(id, inner),
-            Ty::RefLifetime(_, inner) | Ty::RefMutLifetime(_, inner) => {
-                self.occurs_in(id, inner)
-            }
+            Ty::RefLifetime(_, inner) | Ty::RefMutLifetime(_, inner) => self.occurs_in(id, inner),
             Ty::Class { generic_args, .. }
             | Ty::Struct { generic_args, .. }
-            | Ty::Enum { generic_args, .. } => {
-                generic_args.iter().any(|a| self.occurs_in(id, a))
-            }
-            Ty::Fn { params, ret }
-            | Ty::FnMut { params, ret }
-            | Ty::FnOnce { params, ret } => {
+            | Ty::Enum { generic_args, .. } => generic_args.iter().any(|a| self.occurs_in(id, a)),
+            Ty::Fn { params, ret } | Ty::FnMut { params, ret } | Ty::FnOnce { params, ret } => {
                 params.iter().any(|p| self.occurs_in(id, p)) || self.occurs_in(id, ret)
             }
             Ty::Alias { target, .. } => self.occurs_in(id, target),
@@ -103,16 +92,10 @@ impl TypeContext {
                     ty.clone()
                 }
             }
-            Ty::Tuple(elems) => {
-                Ty::Tuple(elems.iter().map(|e| self.resolve(e)).collect())
-            }
-            Ty::Array(elem, size) => {
-                Ty::Array(Box::new(self.resolve(elem)), *size)
-            }
+            Ty::Tuple(elems) => Ty::Tuple(elems.iter().map(|e| self.resolve(e)).collect()),
+            Ty::Array(elem, size) => Ty::Array(Box::new(self.resolve(elem)), *size),
             Ty::Vec(elem) => Ty::Vec(Box::new(self.resolve(elem))),
-            Ty::Hash(k, v) => {
-                Ty::Hash(Box::new(self.resolve(k)), Box::new(self.resolve(v)))
-            }
+            Ty::HashMap(k, v) => Ty::HashMap(Box::new(self.resolve(k)), Box::new(self.resolve(v))),
             Ty::Set(elem) => Ty::Set(Box::new(self.resolve(elem))),
             Ty::Option(inner) => Ty::Option(Box::new(self.resolve(inner))),
             Ty::Result(ok, err) => {
@@ -163,7 +146,7 @@ impl TypeContext {
             Ty::Tuple(elems) => elems.iter().all(|e| self.is_fully_resolved(e)),
             Ty::Array(elem, _) => self.is_fully_resolved(elem),
             Ty::Vec(elem) | Ty::Set(elem) | Ty::Option(elem) => self.is_fully_resolved(elem),
-            Ty::Hash(k, v) | Ty::Result(k, v) => {
+            Ty::HashMap(k, v) | Ty::Result(k, v) => {
                 self.is_fully_resolved(k) && self.is_fully_resolved(v)
             }
             Ty::Ref(inner) | Ty::RefMut(inner) => self.is_fully_resolved(inner),
@@ -175,11 +158,8 @@ impl TypeContext {
             | Ty::Enum { generic_args, .. } => {
                 generic_args.iter().all(|a| self.is_fully_resolved(a))
             }
-            Ty::Fn { params, ret }
-            | Ty::FnMut { params, ret }
-            | Ty::FnOnce { params, ret } => {
-                params.iter().all(|p| self.is_fully_resolved(p))
-                    && self.is_fully_resolved(ret)
+            Ty::Fn { params, ret } | Ty::FnMut { params, ret } | Ty::FnOnce { params, ret } => {
+                params.iter().all(|p| self.is_fully_resolved(p)) && self.is_fully_resolved(ret)
             }
             _ => true,
         }

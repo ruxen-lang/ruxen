@@ -1,0 +1,8 @@
+def main
+  let mut v: Vec[Int] = Vec.with_capacity(8)
+  v.push(1)
+  v.push(2)
+  v.push(3)
+  puts "len=#{v.len}"
+  puts "cap_ge_3=#{v.capacity >= 3}"
+end

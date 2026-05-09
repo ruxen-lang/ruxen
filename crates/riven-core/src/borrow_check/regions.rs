@@ -29,19 +29,30 @@ pub struct ScopeStack {
 }
 
 impl Default for ScopeStack {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ScopeStack {
     pub fn new() -> Self {
-        Self { scopes: Vec::new(), stack: Vec::new(), next_id: 0 }
+        Self {
+            scopes: Vec::new(),
+            stack: Vec::new(),
+            next_id: 0,
+        }
     }
 
     pub fn push(&mut self, kind: ScopeKind) -> ScopeId {
         let id = ScopeId(self.next_id);
         self.next_id += 1;
         let parent = self.stack.last().copied();
-        self.scopes.push(Scope { _id: id, parent, kind, bindings: Vec::new() });
+        self.scopes.push(Scope {
+            _id: id,
+            parent,
+            kind,
+            bindings: Vec::new(),
+        });
         self.stack.push(id);
         id
     }
@@ -65,10 +76,14 @@ impl ScopeStack {
 
     /// Returns true if `outer` contains `inner` (inner is a descendant of outer).
     pub fn scope_contains(&self, outer: ScopeId, inner: ScopeId) -> bool {
-        if outer == inner { return true; }
+        if outer == inner {
+            return true;
+        }
         let mut current = inner;
         while let Some(parent) = self.parent_of(current) {
-            if parent == outer { return true; }
+            if parent == outer {
+                return true;
+            }
             current = parent;
         }
         false
@@ -94,17 +109,20 @@ impl ScopeStack {
     /// Is the current scope inside a loop?
     pub fn is_in_loop(&self) -> bool {
         for &id in self.stack.iter().rev() {
-            if self.get(id).kind == ScopeKind::Loop { return true; }
+            if self.get(id).kind == ScopeKind::Loop {
+                return true;
+            }
         }
         false
     }
 
     /// Find the nearest enclosing function scope.
     pub fn enclosing_function(&self) -> Option<ScopeId> {
-        for &id in self.stack.iter().rev() {
-            if self.get(id).kind == ScopeKind::Function { return Some(id); }
-        }
-        None
+        self.stack
+            .iter()
+            .rev()
+            .find(|&&id| self.get(id).kind == ScopeKind::Function)
+            .copied()
     }
 
     fn get(&self, id: ScopeId) -> &Scope {

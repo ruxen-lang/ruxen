@@ -1,6 +1,6 @@
 use riven_core::lexer::Lexer;
-use riven_core::parser::Parser;
 use riven_core::parser::ast::*;
+use riven_core::parser::Parser;
 
 #[test]
 fn test_sample_program_parses_without_errors() {
@@ -10,7 +10,11 @@ fn test_sample_program_parses_without_errors() {
     let tokens = lexer.tokenize().expect("lexer failed");
     let mut parser = Parser::new(tokens);
     let program = parser.parse().expect("parser failed on sample program");
-    assert!(program.items.len() > 10, "expected many top-level items, got {}", program.items.len());
+    assert!(
+        program.items.len() > 10,
+        "expected many top-level items, got {}",
+        program.items.len()
+    );
 }
 
 #[test]
@@ -27,7 +31,10 @@ fn test_sample_first_item_is_enum_priority() {
             assert_eq!(e.name, "Priority");
             assert_eq!(e.variants.len(), 4);
         }
-        other => panic!("expected enum Priority, got {:?}", std::mem::discriminant(other)),
+        other => panic!(
+            "expected enum Priority, got {:?}",
+            std::mem::discriminant(other)
+        ),
     }
 }
 

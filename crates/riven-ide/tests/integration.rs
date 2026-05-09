@@ -4,18 +4,30 @@ use riven_ide::analysis::analyze;
 fn analysis_produces_program_for_valid_source() {
     let source = "def main\n  let x = 42\nend\n";
     let result = analyze(source);
-    assert!(result.program.is_some(), "Expected a program for valid source");
+    assert!(
+        result.program.is_some(),
+        "Expected a program for valid source"
+    );
     assert!(result.symbols.is_some(), "Expected a symbol table");
-    assert!(result.diagnostics.is_empty() || result.diagnostics.iter().all(|d| {
-        d.level != riven_core::diagnostics::DiagnosticLevel::Error
-    }), "Expected no error diagnostics for valid source: {:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.is_empty()
+            || result
+                .diagnostics
+                .iter()
+                .all(|d| { d.level != riven_core::diagnostics::DiagnosticLevel::Error }),
+        "Expected no error diagnostics for valid source: {:?}",
+        result.diagnostics
+    );
 }
 
 #[test]
 fn analysis_stops_on_lex_error() {
     let source = "let x = \"\n"; // unterminated string
     let result = analyze(source);
-    assert!(result.program.is_none(), "Should not produce a program on lex error");
+    assert!(
+        result.program.is_none(),
+        "Should not produce a program on lex error"
+    );
     assert!(!result.diagnostics.is_empty(), "Should have diagnostics");
 }
 
@@ -105,11 +117,17 @@ fn analysis_of_sample_program() {
     let source = std::fs::read_to_string("../riven-core/tests/fixtures/sample_program.rvn")
         .expect("failed to read sample_program.rvn");
     let result = analyze(&source);
-    assert!(result.program.is_some(), "Sample program should analyze successfully");
+    assert!(
+        result.program.is_some(),
+        "Sample program should analyze successfully"
+    );
 
     // Should produce semantic tokens
     let tokens = riven_ide::semantic_tokens::semantic_tokens(&result);
-    assert!(!tokens.is_empty(), "Expected semantic tokens from sample program");
+    assert!(
+        !tokens.is_empty(),
+        "Expected semantic tokens from sample program"
+    );
 
     // Should produce diagnostics (collect them)
     let uri = lsp_types::Url::parse("file:///test.rvn").unwrap();
@@ -119,8 +137,11 @@ fn analysis_of_sample_program() {
 #[test]
 fn analysis_of_arithmetic_program() {
     let source = "def main\n  let x = 10\n  let y = 20\n  let sum = x + y\nend\n";
-    let result = analyze(&source);
-    assert!(result.program.is_some(), "Arithmetic program should analyze successfully");
+    let result = analyze(source);
+    assert!(
+        result.program.is_some(),
+        "Arithmetic program should analyze successfully"
+    );
     assert!(result.symbols.is_some());
 }
 
@@ -166,7 +187,8 @@ fn e2e_semantic_tokens_and_diagnostics_on_type_error() {
 
 #[test]
 fn e2e_goto_def_for_named_function() {
-    let source = "def compute(x: Int) -> Int\n  x * 2\nend\n\ndef main\n  let r = compute(5)\nend\n";
+    let source =
+        "def compute(x: Int) -> Int\n  x * 2\nend\n\ndef main\n  let r = compute(5)\nend\n";
     let result = analyze(source);
     // Find 'compute' in "let r = compute(5)"
     let offset = source.rfind("compute").unwrap();
@@ -209,7 +231,8 @@ fn e2e_analysis_result_has_correct_source_and_line_index() {
 #[test]
 fn e2e_pipeline_recovers_from_nonfatal_warnings() {
     // A valid program should pass through all phases and produce a full HIR.
-    let source = "def add(a: Int, b: Int) -> Int\n  a + b\nend\n\ndef main\n  let r = add(1, 2)\nend\n";
+    let source =
+        "def add(a: Int, b: Int) -> Int\n  a + b\nend\n\ndef main\n  let r = add(1, 2)\nend\n";
     let result = analyze(source);
     assert!(result.program.is_some());
     assert!(result.symbols.is_some());

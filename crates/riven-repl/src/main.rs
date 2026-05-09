@@ -39,8 +39,8 @@ use validate::RivenValidator;
 /// accumulated chunk. Used when stdin is not a TTY so multi-line
 /// items like `class Foo ... end` are evaluated as one input.
 fn split_repl_chunks(input: &str) -> Vec<String> {
-    use riven_core::lexer::Lexer;
     use riven_core::lexer::token::TokenKind;
+    use riven_core::lexer::Lexer;
 
     let mut chunks = Vec::new();
     let mut current = String::new();
@@ -76,7 +76,10 @@ fn split_repl_chunks(input: &str) -> Vec<String> {
                 // `trait ... end` is a signature and should NOT count as
                 // a block-opener.
                 #[derive(Clone, Copy, PartialEq)]
-                enum LineKind { Normal, HasArrow }
+                enum LineKind {
+                    Normal,
+                    HasArrow,
+                }
                 let mut line_kinds: Vec<LineKind> = Vec::new();
                 let mut cur = LineKind::Normal;
                 for t in &tokens {
@@ -86,7 +89,9 @@ fn split_repl_chunks(input: &str) -> Vec<String> {
                             line_kinds.push(cur);
                             cur = LineKind::Normal;
                         }
-                        TokenKind::Eof => { line_kinds.push(cur); }
+                        TokenKind::Eof => {
+                            line_kinds.push(cur);
+                        }
                         _ => {}
                     }
                 }
@@ -118,10 +123,12 @@ fn split_repl_chunks(input: &str) -> Vec<String> {
                                     // Look ahead to next meaningful token
                                     // after this line's Newline.
                                     let mut j = i + 1;
-                                    while j < tokens.len() && !matches!(
-                                        tokens[j].kind,
-                                        TokenKind::Newline | TokenKind::Eof
-                                    ) {
+                                    while j < tokens.len()
+                                        && !matches!(
+                                            tokens[j].kind,
+                                            TokenKind::Newline | TokenKind::Eof
+                                        )
+                                    {
                                         j += 1;
                                     }
                                     let mut k = j + 1;
@@ -134,9 +141,11 @@ fn split_repl_chunks(input: &str) -> Vec<String> {
                                     if let Some(t2) = tokens.get(k) {
                                         let is_sig_follower = matches!(
                                             t2.kind,
-                                            TokenKind::Def | TokenKind::Pub
-                                            | TokenKind::Protected | TokenKind::Type
-                                            | TokenKind::End
+                                            TokenKind::Def
+                                                | TokenKind::Pub
+                                                | TokenKind::Protected
+                                                | TokenKind::Type
+                                                | TokenKind::End
                                         );
                                         if is_sig_follower {
                                             def_is_signature[i] = true;
@@ -147,24 +156,33 @@ fn split_repl_chunks(input: &str) -> Vec<String> {
                                     sim_stack.push("def");
                                 }
                             }
-                            TokenKind::While | TokenKind::Loop | TokenKind::Match
-                            | TokenKind::Do | TokenKind::For | TokenKind::If
+                            TokenKind::While
+                            | TokenKind::Loop
+                            | TokenKind::Match
+                            | TokenKind::Do
+                            | TokenKind::For
+                            | TokenKind::If
                             | TokenKind::Module => {
                                 // Rough simulation — doesn't matter for the
                                 // trait-signature decision, just need
                                 // accurate trait stack nesting.
                                 sim_stack.push("ctrl");
                             }
-                            TokenKind::End => { sim_stack.pop(); }
+                            TokenKind::End => {
+                                sim_stack.pop();
+                            }
                             _ => {}
                         }
                         // Very light type-position tracking for `impl` so we
                         // don't treat `-> impl Trait` as an impl block.
                         sim_in_type = matches!(
                             t.kind,
-                            TokenKind::Arrow | TokenKind::FatArrow
-                            | TokenKind::Colon | TokenKind::Amp | TokenKind::Comma
-                            | TokenKind::LParen
+                            TokenKind::Arrow
+                                | TokenKind::FatArrow
+                                | TokenKind::Colon
+                                | TokenKind::Amp
+                                | TokenKind::Comma
+                                | TokenKind::LParen
                         );
                     }
                 }
@@ -180,15 +198,13 @@ fn split_repl_chunks(input: &str) -> Vec<String> {
                 #[derive(Clone, Copy, PartialEq)]
                 enum PrevKind {
                     None,
-                    TypeContext,   // `:`, `&`, `,`, `(`, `->`, `=`, etc.
+                    TypeContext, // `:`, `&`, `,`, `(`, `->`, `=`, etc.
                     Other,
                 }
                 let mut prev_on_line = PrevKind::None;
                 for (tok_idx, t) in tokens.iter().enumerate() {
-                    let on_arrow_line = matches!(
-                        line_kinds.get(line_idx).copied(),
-                        Some(LineKind::HasArrow)
-                    );
+                    let on_arrow_line =
+                        matches!(line_kinds.get(line_idx).copied(), Some(LineKind::HasArrow));
                     match &t.kind {
                         TokenKind::Trait => {
                             block += 1;
@@ -214,8 +230,8 @@ fn split_repl_chunks(input: &str) -> Vec<String> {
                             // `impl` in a type position is not a block opener:
                             //   - preceded by `->` / `:` / `&` / `,` / `(`
                             //   - or on a line that has an `->` (return type)
-                            let in_type_position = on_arrow_line
-                                || prev_on_line == PrevKind::TypeContext;
+                            let in_type_position =
+                                on_arrow_line || prev_on_line == PrevKind::TypeContext;
                             if in_type_position {
                                 // Type-position impl, no block.
                             } else {
@@ -239,8 +255,7 @@ fn split_repl_chunks(input: &str) -> Vec<String> {
                             }
                             meaningful_tokens += 1;
                         }
-                        TokenKind::While | TokenKind::Loop
-                        | TokenKind::Match | TokenKind::Do => {
+                        TokenKind::While | TokenKind::Loop | TokenKind::Match | TokenKind::Do => {
                             block += 1;
                             opener_stack.push("ctrl");
                             meaningful_tokens += 1;
@@ -269,30 +284,57 @@ fn split_repl_chunks(input: &str) -> Vec<String> {
                             opener_stack.pop();
                             meaningful_tokens += 1;
                         }
-                        TokenKind::LParen => { paren += 1; meaningful_tokens += 1; }
-                        TokenKind::RParen => { paren -= 1; meaningful_tokens += 1; }
-                        TokenKind::LBracket => { bracket += 1; meaningful_tokens += 1; }
-                        TokenKind::RBracket => { bracket -= 1; meaningful_tokens += 1; }
-                        TokenKind::LBrace => { brace += 1; meaningful_tokens += 1; }
-                        TokenKind::RBrace => { brace -= 1; meaningful_tokens += 1; }
+                        TokenKind::LParen => {
+                            paren += 1;
+                            meaningful_tokens += 1;
+                        }
+                        TokenKind::RParen => {
+                            paren -= 1;
+                            meaningful_tokens += 1;
+                        }
+                        TokenKind::LBracket => {
+                            bracket += 1;
+                            meaningful_tokens += 1;
+                        }
+                        TokenKind::RBracket => {
+                            bracket -= 1;
+                            meaningful_tokens += 1;
+                        }
+                        TokenKind::LBrace => {
+                            brace += 1;
+                            meaningful_tokens += 1;
+                        }
+                        TokenKind::RBrace => {
+                            brace -= 1;
+                            meaningful_tokens += 1;
+                        }
                         TokenKind::Newline => {
                             line_idx += 1;
                             impl_header_pending = false;
                             prev_on_line = PrevKind::None;
                             continue;
                         }
-                        TokenKind::DocComment(_) => { continue; }
+                        TokenKind::DocComment(_) => {
+                            continue;
+                        }
                         TokenKind::Eof => break,
-                        _ => { meaningful_tokens += 1; }
+                        _ => {
+                            meaningful_tokens += 1;
+                        }
                     }
                     // Update prev_on_line for the NEXT token's context check.
                     prev_on_line = match &t.kind {
-                        TokenKind::Colon | TokenKind::Amp | TokenKind::Comma
-                        | TokenKind::LParen | TokenKind::LBracket
-                        | TokenKind::Arrow | TokenKind::FatArrow
+                        TokenKind::Colon
+                        | TokenKind::Amp
+                        | TokenKind::Comma
+                        | TokenKind::LParen
+                        | TokenKind::LBracket
+                        | TokenKind::Arrow
+                        | TokenKind::FatArrow
                         | TokenKind::Eq => PrevKind::TypeContext,
-                        TokenKind::Newline | TokenKind::Eof
-                        | TokenKind::DocComment(_) => prev_on_line,
+                        TokenKind::Newline | TokenKind::Eof | TokenKind::DocComment(_) => {
+                            prev_on_line
+                        }
                         _ => PrevKind::Other,
                     };
                 }
@@ -305,15 +347,17 @@ fn split_repl_chunks(input: &str) -> Vec<String> {
                         unclosed_string = true;
                     }
                 }
-                if !unclosed_string
-                    && current.chars().filter(|&c| c == '"').count() % 2 != 0
-                {
+                if !unclosed_string && current.chars().filter(|&c| c == '"').count() % 2 != 0 {
                     unclosed_string = true;
                 }
             }
         }
-        let balanced = block <= 0 && paren <= 0 && bracket <= 0 && brace <= 0
-            && !unclosed_string && !unclosed_block_comment;
+        let balanced = block <= 0
+            && paren <= 0
+            && bracket <= 0
+            && brace <= 0
+            && !unclosed_string
+            && !unclosed_block_comment;
         if balanced {
             // Skip chunks that are pure comments / whitespace / doc comments —
             // the parser would otherwise report "Incomplete" and the REPL
@@ -483,7 +527,11 @@ fn main() {
     let mut pending: String = String::new();
 
     loop {
-        let prompt = if pending.is_empty() { PRIMARY_PROMPT } else { "..... " };
+        let prompt = if pending.is_empty() {
+            PRIMARY_PROMPT
+        } else {
+            "..... "
+        };
         let readline = editor.readline(prompt);
 
         match readline {

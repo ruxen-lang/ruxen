@@ -1,0 +1,24 @@
+## B3: derive Ord (and PartialOrd) synthesises `<Type>_cmp` /
+## `<Type>_partial_cmp` that walks fields in declaration order and
+## returns the first non-equal field's ordering. Confirms lex-tuple
+## semantics: ties on the first field defer to the second.
+struct Pair
+  a: Int
+  b: Int
+  derive Ord, Eq, PartialOrd, PartialEq
+end
+
+def main
+  let p = Pair.new(1, 5)
+  let q = Pair.new(1, 9)
+  let r = Pair.new(2, 0)
+  if p < q
+    puts "p<q"
+  end
+  if q < r
+    puts "q<r"
+  end
+  if p < r
+    puts "p<r"
+  end
+end

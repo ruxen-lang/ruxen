@@ -85,10 +85,10 @@ impl CacheKey {
     /// filesystem path component.
     pub fn content_hash(&self) -> [u8; 32] {
         let mut hasher = Sha256::new();
-        hasher.update(&self.source_hash);
-        hasher.update(&self.compiler_version.to_le_bytes());
+        hasher.update(self.source_hash);
+        hasher.update(self.compiler_version.to_le_bytes());
         hasher.update(self.target.as_bytes());
-        hasher.update(&[0u8]); // separator between variable-length fields
+        hasher.update([0u8]); // separator between variable-length fields
         hasher.update(self.opt_level.as_bytes());
         let digest = hasher.finalize();
         let mut out = [0u8; 32];

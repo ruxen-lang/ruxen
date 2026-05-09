@@ -18,11 +18,15 @@ fn bench_hash_file(c: &mut Criterion) {
     let medium = small.repeat(100);
     let large = small.repeat(2000); // ~50kB, representative of a real file
 
-    c.bench_function("hash_file/small", |b| b.iter(|| hash_file(black_box(&small))));
+    c.bench_function("hash_file/small", |b| {
+        b.iter(|| hash_file(black_box(&small)))
+    });
     c.bench_function("hash_file/medium", |b| {
         b.iter(|| hash_file(black_box(&medium)))
     });
-    c.bench_function("hash_file/large", |b| b.iter(|| hash_file(black_box(&large))));
+    c.bench_function("hash_file/large", |b| {
+        b.iter(|| hash_file(black_box(&large)))
+    });
 }
 
 fn bench_manifest_roundtrip(c: &mut Criterion) {
@@ -91,9 +95,7 @@ fn bench_signature_comparison(c: &mut Criterion) {
 fn bench_cache_key(c: &mut Criterion) {
     let sh = hash_file("fn main() {}");
     c.bench_function("cache_key/to_hex", |b| {
-        b.iter(|| {
-            CacheKey::new(black_box(sh), 1, "x86_64-linux", "debug").to_hex()
-        })
+        b.iter(|| CacheKey::new(black_box(sh), 1, "x86_64-linux", "debug").to_hex())
     });
 }
 

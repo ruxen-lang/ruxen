@@ -5,10 +5,15 @@ mod tests {
     use crate::hir::context::TypeContext;
     use crate::hir::types::Ty;
     use crate::lexer::token::Span;
-    use crate::typeck::unify::{unify, can_coerce};
+    use crate::typeck::unify::{can_coerce, unify};
 
     fn span() -> Span {
-        Span { start: 0, end: 0, line: 1, column: 1 }
+        Span {
+            start: 0,
+            end: 0,
+            line: 1,
+            column: 1,
+        }
     }
 
     // ─── Unification Tests ──────────────────────────────────────────
@@ -127,24 +132,42 @@ mod tests {
     #[test]
     fn unify_different_classes_fails() {
         let mut ctx = TypeContext::new();
-        let a = Ty::Class { name: "Dog".to_string(), generic_args: vec![] };
-        let b = Ty::Class { name: "Cat".to_string(), generic_args: vec![] };
+        let a = Ty::Class {
+            name: "Dog".to_string(),
+            generic_args: vec![],
+        };
+        let b = Ty::Class {
+            name: "Cat".to_string(),
+            generic_args: vec![],
+        };
         assert!(unify(&a, &b, &mut ctx, &span()).is_err());
     }
 
     #[test]
     fn unify_fn_types() {
         let mut ctx = TypeContext::new();
-        let a = Ty::Fn { params: vec![Ty::Int], ret: Box::new(Ty::Bool) };
-        let b = Ty::Fn { params: vec![Ty::Int], ret: Box::new(Ty::Bool) };
+        let a = Ty::Fn {
+            params: vec![Ty::Int],
+            ret: Box::new(Ty::Bool),
+        };
+        let b = Ty::Fn {
+            params: vec![Ty::Int],
+            ret: Box::new(Ty::Bool),
+        };
         assert_eq!(unify(&a, &b, &mut ctx, &span()).unwrap(), a);
     }
 
     #[test]
     fn unify_fn_different_arity_fails() {
         let mut ctx = TypeContext::new();
-        let a = Ty::Fn { params: vec![Ty::Int], ret: Box::new(Ty::Bool) };
-        let b = Ty::Fn { params: vec![Ty::Int, Ty::Int], ret: Box::new(Ty::Bool) };
+        let a = Ty::Fn {
+            params: vec![Ty::Int],
+            ret: Box::new(Ty::Bool),
+        };
+        let b = Ty::Fn {
+            params: vec![Ty::Int, Ty::Int],
+            ret: Box::new(Ty::Bool),
+        };
         assert!(unify(&a, &b, &mut ctx, &span()).is_err());
     }
 
@@ -152,10 +175,22 @@ mod tests {
     fn unify_generic_class() {
         let mut ctx = TypeContext::new();
         let t = ctx.fresh_type_var();
-        let a = Ty::Class { name: "Repo".to_string(), generic_args: vec![Ty::Int] };
-        let b = Ty::Class { name: "Repo".to_string(), generic_args: vec![t] };
+        let a = Ty::Class {
+            name: "Repo".to_string(),
+            generic_args: vec![Ty::Int],
+        };
+        let b = Ty::Class {
+            name: "Repo".to_string(),
+            generic_args: vec![t],
+        };
         let result = unify(&a, &b, &mut ctx, &span()).unwrap();
-        assert_eq!(result, Ty::Class { name: "Repo".to_string(), generic_args: vec![Ty::Int] });
+        assert_eq!(
+            result,
+            Ty::Class {
+                name: "Repo".to_string(),
+                generic_args: vec![Ty::Int]
+            }
+        );
     }
 
     // ─── Coercion Tests ─────────────────────────────────────────────
@@ -238,15 +273,20 @@ mod tests {
     fn infer_int_literal() {
         let result = parse_and_check("def test\n  let x = 42\nend");
         // Should compile without type errors
-        let type_errors: Vec<_> = result.diagnostics.iter()
+        let type_errors: Vec<_> = result
+            .diagnostics
+            .iter()
             .filter(|d| d.level == crate::diagnostics::DiagnosticLevel::Error)
             .collect();
         // x should have type Int — check that we resolved it
-        assert!(type_errors.is_empty() || type_errors.iter().all(|d| {
-            // Some errors are acceptable (e.g., unresolved types for variables
-            // not referenced further)
-            d.message.contains("could not infer")
-        }));
+        assert!(
+            type_errors.is_empty()
+                || type_errors.iter().all(|d| {
+                    // Some errors are acceptable (e.g., unresolved types for variables
+                    // not referenced further)
+                    d.message.contains("could not infer")
+                })
+        );
     }
 
     #[test]
@@ -254,7 +294,9 @@ mod tests {
         let result = parse_and_check("def test\n  let x: Float = 42\nend");
         // Float annotation should work with an integer literal
         // (backward inference / int-to-float coercion)
-        let errors: Vec<_> = result.diagnostics.iter()
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
             .filter(|d| d.level == crate::diagnostics::DiagnosticLevel::Error)
             .filter(|d| d.message.contains("type mismatch"))
             .collect();
@@ -264,7 +306,9 @@ mod tests {
     #[test]
     fn infer_bool_literal() {
         let result = parse_and_check("def test\n  let x = true\nend");
-        let errors: Vec<_> = result.diagnostics.iter()
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
             .filter(|d| d.level == crate::diagnostics::DiagnosticLevel::Error)
             .filter(|d| d.message.contains("type mismatch"))
             .collect();
@@ -273,22 +317,22 @@ mod tests {
 
     #[test]
     fn type_error_on_mismatch() {
-        let result = parse_and_check(
-            "def test\n  let x: Int = true\nend"
-        );
+        let result = parse_and_check("def test\n  let x: Int = true\nend");
         // Should produce a type error: Bool doesn't unify with Int
-        let has_mismatch = result.diagnostics.iter().any(|d| {
-            d.message.contains("type mismatch")
-        });
+        let has_mismatch = result
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("type mismatch"));
         assert!(has_mismatch, "Expected type mismatch error");
     }
 
     #[test]
     fn undefined_variable_error() {
         let result = parse_and_check("def test\n  let x = undefined_var\nend");
-        let has_error = result.diagnostics.iter().any(|d| {
-            d.message.contains("undefined variable")
-        });
+        let has_error = result
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("undefined variable"));
         assert!(has_error, "Expected undefined variable error");
     }
 
@@ -306,10 +350,16 @@ end
 "#;
         let result = parse_and_check(source);
         // Should resolve Priority.Low without errors
-        let errors: Vec<_> = result.diagnostics.iter()
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
             .filter(|d| d.message.contains("undefined enum variant"))
             .collect();
-        assert!(errors.is_empty(), "Enum variant should resolve: {:?}", errors);
+        assert!(
+            errors.is_empty(),
+            "Enum variant should resolve: {:?}",
+            errors
+        );
     }
 
     #[test]
@@ -324,11 +374,17 @@ class Point
 end
 "#;
         let result = parse_and_check(source);
-        let type_errors: Vec<_> = result.diagnostics.iter()
+        let type_errors: Vec<_> = result
+            .diagnostics
+            .iter()
             .filter(|d| d.level == crate::diagnostics::DiagnosticLevel::Error)
             .filter(|d| !d.message.contains("could not infer"))
             .collect();
-        assert!(type_errors.is_empty(), "Class def should type-check: {:?}", type_errors);
+        assert!(
+            type_errors.is_empty(),
+            "Class def should type-check: {:?}",
+            type_errors
+        );
     }
 
     #[test]
@@ -352,11 +408,17 @@ impl Greetable for Dog
 end
 "#;
         let result = parse_and_check(source);
-        let type_errors: Vec<_> = result.diagnostics.iter()
+        let type_errors: Vec<_> = result
+            .diagnostics
+            .iter()
             .filter(|d| d.level == crate::diagnostics::DiagnosticLevel::Error)
             .filter(|d| !d.message.contains("could not infer"))
             .collect();
-        assert!(type_errors.is_empty(), "Trait+impl should type-check: {:?}", type_errors);
+        assert!(
+            type_errors.is_empty(),
+            "Trait+impl should type-check: {:?}",
+            type_errors
+        );
     }
 
     #[test]
@@ -375,11 +437,17 @@ def describe(c: Color) -> String
 end
 "#;
         let result = parse_and_check(source);
-        let type_errors: Vec<_> = result.diagnostics.iter()
+        let type_errors: Vec<_> = result
+            .diagnostics
+            .iter()
             .filter(|d| d.level == crate::diagnostics::DiagnosticLevel::Error)
             .filter(|d| !d.message.contains("could not infer"))
             .collect();
-        assert!(type_errors.is_empty(), "Match should type-check: {:?}", type_errors);
+        assert!(
+            type_errors.is_empty(),
+            "Match should type-check: {:?}",
+            type_errors
+        );
     }
 
     #[test]
@@ -394,20 +462,27 @@ def test(x: Bool) -> Int
 end
 "#;
         let result = parse_and_check(source);
-        let type_errors: Vec<_> = result.diagnostics.iter()
+        let type_errors: Vec<_> = result
+            .diagnostics
+            .iter()
             .filter(|d| d.level == crate::diagnostics::DiagnosticLevel::Error)
             .filter(|d| !d.message.contains("could not infer"))
             .collect();
-        assert!(type_errors.is_empty(), "If expr should type-check: {:?}", type_errors);
+        assert!(
+            type_errors.is_empty(),
+            "If expr should type-check: {:?}",
+            type_errors
+        );
     }
 
     #[test]
     fn break_outside_loop_errors() {
         let source = "def test\n  break\nend";
         let result = parse_and_check(source);
-        let has_error = result.diagnostics.iter().any(|d| {
-            d.message.contains("break")
-        });
+        let has_error = result
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("break"));
         assert!(has_error, "break outside loop should error");
     }
 
@@ -415,9 +490,10 @@ end
     fn continue_outside_loop_errors() {
         let source = "def test\n  continue\nend";
         let result = parse_and_check(source);
-        let has_error = result.diagnostics.iter().any(|d| {
-            d.message.contains("continue")
-        });
+        let has_error = result
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("continue"));
         assert!(has_error, "continue outside loop should error");
     }
 
@@ -432,10 +508,156 @@ class Container[T]
 end
 "#;
         let result = parse_and_check(source);
-        let type_errors: Vec<_> = result.diagnostics.iter()
+        let type_errors: Vec<_> = result
+            .diagnostics
+            .iter()
             .filter(|d| d.level == crate::diagnostics::DiagnosticLevel::Error)
             .filter(|d| !d.message.contains("could not infer"))
             .collect();
-        assert!(type_errors.is_empty(), "Generic class should parse: {:?}", type_errors);
+        assert!(
+            type_errors.is_empty(),
+            "Generic class should parse: {:?}",
+            type_errors
+        );
+    }
+
+    #[test]
+    fn send_bound_rejects_raw_pointer_payload() {
+        let source = r#"
+class RawBox
+  ptr: *mut Void
+
+  def init(@ptr: *mut Void)
+  end
+end
+
+def require_send[T: Send](value: T)
+end
+
+def test
+  let box = RawBox.new(null)
+  require_send(box)
+end
+"#;
+        let result = parse_and_check(source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.code.as_deref() == Some("E1011")),
+            "expected E1011 Send-bound rejection, got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn sync_bound_rejects_negative_impl_opt_out() {
+        let source = r#"
+class NotSync
+  def init
+  end
+end
+
+impl !Sync for NotSync
+end
+
+def require_sync[T: Sync](value: T)
+end
+
+def test
+  let value = NotSync.new()
+  require_sync(value)
+end
+"#;
+        let result = parse_and_check(source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.code.as_deref() == Some("E1012")),
+            "expected E1012 Sync-bound rejection, got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn unsafe_impl_send_satisfies_send_bound() {
+        let source = r#"
+class FfiHandle
+  ptr: *mut Void
+
+  def init(@ptr: *mut Void)
+  end
+end
+
+unsafe impl Send for FfiHandle
+end
+
+def require_send[T: Send](value: T)
+end
+
+def test
+  let handle = FfiHandle.new(null)
+  require_send(handle)
+end
+"#;
+        let result = parse_and_check(source);
+        assert!(
+            !result
+                .diagnostics
+                .iter()
+                .any(|d| d.code.as_deref() == Some("E1011")),
+            "unexpected E1011 for unsafe impl Send: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn async_function_call_returns_future_and_await_unwraps_output() {
+        let source = r#"
+async def fetch_user(id: Int) -> Int
+  id
+end
+
+async def main -> Int
+  fetch_user(42).await
+end
+"#;
+        let result = parse_and_check(source);
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.level == crate::diagnostics::DiagnosticLevel::Error)
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "async await should type-check: {:?}",
+            errors
+        );
+
+        let crate::hir::nodes::HirItem::Function(main_fn) = &result.program.items[1] else {
+            panic!("expected main function");
+        };
+        let crate::hir::nodes::HirExprKind::Block(_, Some(tail)) = &main_fn.body.kind else {
+            panic!("expected block tail");
+        };
+        assert_eq!(tail.ty, Ty::Int, "await should unwrap Future output");
+        let crate::hir::nodes::HirExprKind::MethodCall {
+            object,
+            method_name,
+            ..
+        } = &tail.kind
+        else {
+            panic!("expected await method call");
+        };
+        assert_eq!(method_name, "await");
+        assert_eq!(
+            object.ty,
+            Ty::Class {
+                name: "Future".to_string(),
+                generic_args: vec![Ty::Int],
+            },
+            "async call should synthesize Future[Int] before await",
+        );
     }
 }

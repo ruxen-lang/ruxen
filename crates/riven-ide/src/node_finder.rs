@@ -5,10 +5,23 @@ use riven_core::lexer::token::Span;
 /// Describes the innermost HIR node found at a cursor position.
 pub enum NodeAtPosition {
     VarRef(DefId, Span),
-    FnCall { callee: DefId, span: Span },
-    MethodCall { method: DefId, span: Span },
-    FieldAccess { object_ty: Ty, field_name: String, span: Span },
-    TypeRef { name: String, span: Span },
+    FnCall {
+        callee: DefId,
+        span: Span,
+    },
+    MethodCall {
+        method: DefId,
+        span: Span,
+    },
+    FieldAccess {
+        object_ty: Ty,
+        field_name: String,
+        span: Span,
+    },
+    TypeRef {
+        name: String,
+        span: Span,
+    },
     Definition(DefId, Span),
 }
 
@@ -44,7 +57,9 @@ impl NodeFinder {
             HirItem::Class(class) => {
                 if self.contains(&class.span) {
                     // Check if cursor is on the class name
-                    if let Some(name_span) = self.name_span_in_def(class.def_id, &class.name, &class.span) {
+                    if let Some(name_span) =
+                        self.name_span_in_def(class.def_id, &class.name, &class.span)
+                    {
                         if self.contains(&name_span) {
                             self.result = Some(NodeAtPosition::Definition(class.def_id, name_span));
                         }
@@ -71,8 +86,10 @@ impl NodeFinder {
                 if self.contains(&e.span) {
                     for variant in &e.variants {
                         if self.contains(&variant.span) {
-                            self.result =
-                                Some(NodeAtPosition::Definition(variant.def_id, variant.span.clone()));
+                            self.result = Some(NodeAtPosition::Definition(
+                                variant.def_id,
+                                variant.span.clone(),
+                            ));
                         }
                     }
                 }
@@ -146,11 +163,7 @@ impl NodeFinder {
             HirExprKind::VarRef(def_id) => {
                 self.result = Some(NodeAtPosition::VarRef(*def_id, expr.span.clone()));
             }
-            HirExprKind::FnCall {
-                callee,
-                args,
-                ..
-            } => {
+            HirExprKind::FnCall { callee, args, .. } => {
                 self.result = Some(NodeAtPosition::FnCall {
                     callee: *callee,
                     span: expr.span.clone(),
@@ -182,9 +195,7 @@ impl NodeFinder {
                 }
             }
             HirExprKind::FieldAccess {
-                object,
-                field_name,
-                ..
+                object, field_name, ..
             } => {
                 self.visit_expr(object);
                 if !self.found_inside(object) {
@@ -367,9 +378,7 @@ impl NodeFinder {
 
     fn visit_pattern(&mut self, pattern: &HirPattern) {
         match pattern {
-            HirPattern::Binding {
-                def_id, span, ..
-            } => {
+            HirPattern::Binding { def_id, span, .. } => {
                 if self.contains(span) {
                     self.result = Some(NodeAtPosition::Definition(*def_id, span.clone()));
                 }
@@ -399,9 +408,7 @@ impl NodeFinder {
                     self.result = Some(NodeAtPosition::Definition(*def_id, span.clone()));
                 }
             }
-            HirPattern::Wildcard { .. }
-            | HirPattern::Literal { .. }
-            | HirPattern::Rest { .. } => {}
+            HirPattern::Wildcard { .. } | HirPattern::Literal { .. } | HirPattern::Rest { .. } => {}
         }
     }
 
@@ -427,7 +434,8 @@ impl NodeFinder {
             };
             // If the result span is strictly inside the given expression span,
             // we found something more specific
-            result_span.start >= expr.span.start && result_span.end <= expr.span.end
+            result_span.start >= expr.span.start
+                && result_span.end <= expr.span.end
                 && (result_span.start != expr.span.start || result_span.end != expr.span.end)
         } else {
             false
@@ -560,15 +568,8 @@ mod tests {
         let offset = src.rfind(".a").unwrap() + 1;
         let node = node_at_position(program, offset);
         // We should find a node — either field access or a def
-        if let Some(n) = node {
-            match n {
-                NodeAtPosition::FieldAccess { field_name, .. } => {
-                    assert_eq!(field_name, "a");
-                }
-                _ => {
-                    // Could also be a var-ref for the outer expression
-                }
-            }
+        if let Some(NodeAtPosition::FieldAccess { field_name, .. }) = node {
+            assert_eq!(field_name, "a");
         }
     }
 

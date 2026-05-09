@@ -134,7 +134,14 @@ impl Manifest {
 
     /// Parse a Riven.toml from a string.
     pub fn from_str(s: &str) -> Result<Self, String> {
-        toml::from_str(s).map_err(|e| format!("failed to parse Riven.toml: {}", e))
+        let manifest: Self =
+            toml::from_str(s).map_err(|e| format!("failed to parse Riven.toml: {}", e))?;
+        // Edition is the only field validated at parse time so unknown
+        // editions are rejected uniformly across every load path (build,
+        // dependency resolution, lockfile, etc.). Other fields are still
+        // validated lazily by `Manifest::validate`.
+        parse_edition(manifest.package.edition.as_deref())?;
+        Ok(manifest)
     }
 
     /// Serialize the manifest back to TOML.
@@ -180,12 +187,37 @@ impl Manifest {
         crate::version::SemVer::parse(&self.package.version)
             .map_err(|_| format!("invalid package version: '{}'", self.package.version))?;
 
+        // Validate edition
+        parse_edition(self.package.edition.as_deref())?;
+
         // Validate keywords count
         if self.package.keywords.len() > 5 {
             return Err("too many keywords (max 5)".to_string());
         }
 
         Ok(())
+    }
+
+    /// Return the resolved edition for this package, defaulting to "2026"
+    /// when the field is omitted. Returns an error for unknown editions.
+    pub fn edition(&self) -> Result<&'static str, String> {
+        parse_edition(self.package.edition.as_deref())
+    }
+}
+
+/// The default Riven edition when the manifest omits `edition`.
+pub const DEFAULT_EDITION: &str = "2026";
+
+/// Validate and normalize a manifest edition value. Accepts `None` (defaults
+/// to `DEFAULT_EDITION`) or `Some("2026")`. Rejects every other value.
+pub fn parse_edition(value: Option<&str>) -> Result<&'static str, String> {
+    match value {
+        None => Ok(DEFAULT_EDITION),
+        Some("2026") => Ok("2026"),
+        Some(other) => Err(format!(
+            "unknown edition \"{}\": valid values are \"2026\"",
+            other
+        )),
     }
 }
 
@@ -350,6 +382,34 @@ lto = true
         let profiles = manifest.profile.as_ref().unwrap();
         assert_eq!(profiles.release.as_ref().unwrap().opt_level, Some(3));
         assert_eq!(profiles.release.as_ref().unwrap().lto, Some(true));
+    }
+
+    #[test]
+    fn test_unknown_edition_is_rejected() {
+        let toml = r#"
+[package]
+name = "my-project"
+version = "0.1.0"
+edition = "2099"
+"#;
+        let err = Manifest::from_str(toml).unwrap_err();
+        assert!(
+            err.contains(r#"unknown edition "2099": valid values are "2026""#),
+            "expected edition error, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_default_edition_is_2026() {
+        let toml = r#"
+[package]
+name = "my-project"
+version = "0.1.0"
+"#;
+        let manifest = Manifest::from_str(toml).unwrap();
+        assert_eq!(manifest.package.edition, None);
+        assert_eq!(manifest.edition().unwrap(), "2026");
     }
 
     #[test]

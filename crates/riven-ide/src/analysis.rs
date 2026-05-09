@@ -195,7 +195,11 @@ mod tests {
         assert!(result.program.is_some());
         let symbols = result.symbols.as_ref().unwrap();
         // There should be at least a few definitions (builtins + add + params a,b)
-        assert!(symbols.len() > 5, "Expected some symbols, got {}", symbols.len());
+        assert!(
+            symbols.len() > 5,
+            "Expected some symbols, got {}",
+            symbols.len()
+        );
     }
 
     #[test]

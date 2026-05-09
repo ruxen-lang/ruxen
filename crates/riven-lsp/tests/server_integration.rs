@@ -68,9 +68,12 @@ fn initialize_reports_expected_capabilities() {
         .get("textDocumentSync")
         .unwrap_or_else(|| panic!("missing textDocumentSync: {}", caps));
     // tower-lsp serializes the options form — verify open_close + change
-    let sync_opts = sync
-        .as_object()
-        .unwrap_or_else(|| panic!("textDocumentSync should be an options object, got: {}", sync));
+    let sync_opts = sync.as_object().unwrap_or_else(|| {
+        panic!(
+            "textDocumentSync should be an options object, got: {}",
+            sync
+        )
+    });
     assert_eq!(
         sync_opts.get("openClose"),
         Some(&Value::Bool(true)),
@@ -338,10 +341,7 @@ fn goto_definition_points_at_definition_line() {
     let mut bucket = Vec::new();
     let result = client.recv_response_timeout(id, &mut bucket, DEFAULT_TIMEOUT);
 
-    assert!(
-        !result.is_null(),
-        "expected a Location response, got null"
-    );
+    assert!(!result.is_null(), "expected a Location response, got null");
 
     // Response is either a single Location or Location[] — handle both.
     let loc = if result.is_array() {

@@ -12,4 +12,4 @@ pub mod types;
 
 pub use context::TypeContext;
 pub use nodes::*;
-pub use types::{MoveSemantics, Ty, TraitRef, TypeId};
+pub use types::{MoveSemantics, TraitRef, Ty, TypeId};

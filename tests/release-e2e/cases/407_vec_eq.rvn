@@ -1,0 +1,16 @@
+def main
+  let mut a: Vec[Int] = Vec.new
+  a.push(1)
+  a.push(2)
+  a.push(3)
+  let mut b: Vec[Int] = Vec.new
+  b.push(1)
+  b.push(2)
+  b.push(3)
+  let mut c: Vec[Int] = Vec.new
+  c.push(1)
+  c.push(2)
+  puts "a_eq_b=#{a == b}"
+  puts "a_eq_c=#{a == c}"
+  puts "a_neq_c=#{a != c}"
+end

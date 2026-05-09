@@ -106,8 +106,8 @@ mod tests {
     use super::*;
     use riven_core::hir::types::Ty;
     use riven_core::lexer::Lexer;
-    use riven_core::parser::Parser;
     use riven_core::parser::ast::{ReplInput, ReplParseResult, Statement};
+    use riven_core::parser::Parser;
 
     /// Parse a REPL input and extract a single `LetBinding` — handy
     /// when the test needs to stuff a realistic binding into the
@@ -155,7 +155,10 @@ mod tests {
         let mut s = ReplSession::new().expect("create session");
         s.record_input("1 + 2");
         s.record_input("let x = 3");
-        assert_eq!(s.source_history, vec!["1 + 2".to_string(), "let x = 3".to_string()]);
+        assert_eq!(
+            s.source_history,
+            vec!["1 + 2".to_string(), "let x = 3".to_string()]
+        );
     }
 
     #[test]
@@ -169,7 +172,10 @@ mod tests {
 
         s.reset().expect("reset");
 
-        assert!(s.source_history.is_empty(), "source_history should be cleared");
+        assert!(
+            s.source_history.is_empty(),
+            "source_history should be cleared"
+        );
         assert_eq!(s.input_counter, 0, "input_counter should reset to 0");
         assert!(s.let_bindings.is_empty(), "let_bindings should be cleared");
         assert!(s.func_defs.is_empty(), "func_defs should be cleared");
@@ -235,7 +241,8 @@ mod tests {
     #[test]
     fn reset_clears_all_statements_and_capture_prefix() {
         let mut s = ReplSession::new().expect("create session");
-        s.all_statements.push(Statement::Let(parse_let_binding("let a = 1")));
+        s.all_statements
+            .push(Statement::Let(parse_let_binding("let a = 1")));
         s.prev_captured_output.push_str("prior output\n");
         assert_eq!(s.all_statements.len(), 1);
         assert!(!s.prev_captured_output.is_empty());

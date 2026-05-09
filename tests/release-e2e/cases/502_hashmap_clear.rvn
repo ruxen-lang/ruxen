@@ -1,0 +1,13 @@
+def main
+  let mut h: HashMap[Int, Int] = HashMap.new
+  h.insert(1, 10)
+  h.insert(2, 20)
+  h.insert(3, 30)
+  let before = h.len
+  h.clear
+  let after = h.len
+  let empty = h.is_empty
+  puts "before=#{before}"
+  puts "after=#{after}"
+  puts "empty=#{empty}"
+end

@@ -178,7 +178,10 @@ mod tests {
                     .rfind('\n')
                     .map(|i| prefix[i + 1..].chars().count())
                     .unwrap_or_else(|| prefix.chars().count()) as u32;
-                return Position { line, character: col };
+                return Position {
+                    line,
+                    character: col,
+                };
             }
             search_start += found + needle.len();
         }
@@ -219,7 +222,8 @@ mod tests {
 
     #[test]
     fn hover_on_function_name_shows_signature() {
-        let src = "def add(a: Int, b: Int) -> Int\n  a + b\nend\n\ndef main\n  let r = add(1, 2)\nend\n";
+        let src =
+            "def add(a: Int, b: Int) -> Int\n  a + b\nend\n\ndef main\n  let r = add(1, 2)\nend\n";
         let result = analyze(src);
         // The 'add' call in main
         let pos = pos_of(src, "add", 1);
@@ -260,7 +264,10 @@ mod tests {
         let hover = hover_at(&result, pos);
         // Hover may or may not fire depending on span resolution — just verify no crash
         if let Some(info) = hover {
-            assert!(!info.content.is_empty(), "Hover content should be non-empty");
+            assert!(
+                !info.content.is_empty(),
+                "Hover content should be non-empty"
+            );
         }
     }
 
@@ -271,12 +278,18 @@ mod tests {
         // Whitespace between 'main' and 'let'
         // Line 0: "def main" — after 'main' end (byte 8) there's '\n'.
         // Line 1: "  let x = 42" — first 2 chars are spaces.
-        let pos = Position { line: 1, character: 0 };
+        let pos = Position {
+            line: 1,
+            character: 0,
+        };
         let hover = hover_at(&result, pos);
         // May or may not be None depending on whether a func-level span envelops whitespace.
         // Accept either outcome but ensure no crash
         if let Some(info) = hover {
-            assert!(!info.content.is_empty(), "Hover content must not be empty when returned");
+            assert!(
+                !info.content.is_empty(),
+                "Hover content must not be empty when returned"
+            );
         }
     }
 
@@ -284,7 +297,10 @@ mod tests {
     fn hover_beyond_eof_returns_none_or_handles_gracefully() {
         let src = "def main\n  let x = 42\nend\n";
         let result = analyze(src);
-        let pos = Position { line: 100, character: 0 };
+        let pos = Position {
+            line: 100,
+            character: 0,
+        };
         let hover = hover_at(&result, pos);
         assert!(hover.is_none(), "Expected None for position beyond EOF");
     }
@@ -293,7 +309,10 @@ mod tests {
     fn hover_with_empty_source_returns_none() {
         let src = "";
         let result = analyze(src);
-        let pos = Position { line: 0, character: 0 };
+        let pos = Position {
+            line: 0,
+            character: 0,
+        };
         let hover = hover_at(&result, pos);
         assert!(hover.is_none(), "Expected None for empty source");
     }
@@ -303,7 +322,10 @@ mod tests {
         let src = "def main\n  let x = 42\nend\n";
         let result = analyze(src);
         // Position in middle of end keyword
-        let pos = Position { line: 2, character: 1 };
+        let pos = Position {
+            line: 2,
+            character: 1,
+        };
         let _ = hover_at(&result, pos);
         // Just verify no panic
     }
@@ -323,7 +345,10 @@ mod tests {
     fn hover_with_parse_error_returns_none() {
         let src = "def\n"; // parse error
         let result = analyze(src);
-        let pos = Position { line: 0, character: 0 };
+        let pos = Position {
+            line: 0,
+            character: 0,
+        };
         let hover = hover_at(&result, pos);
         assert!(hover.is_none(), "Expected None when program is missing");
     }

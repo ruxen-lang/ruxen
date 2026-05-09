@@ -1,5 +1,6 @@
 pub mod borrow_check;
 pub mod codegen;
+pub mod r#derive;
 pub mod diagnostics;
 pub mod formatter;
 pub mod hir;

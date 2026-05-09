@@ -7,10 +7,10 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::hir::nodes::*;
-use crate::hir::types::Ty;
+use crate::hir::types::{MoveSemantics, Ty};
 use crate::mir::nodes::*;
 use crate::parser::ast::{BinOp, UnaryOp};
-use crate::resolve::symbols::SymbolTable;
+use crate::resolve::symbols::{ty_is_effectively_copy, SymbolTable};
 
 // ─── Lowerer ────────────────────────────────────────────────────────────────
 
@@ -61,6 +61,11 @@ pub struct Lowerer<'a> {
     /// that each `impl Trait for Type` can monomorphize the default body
     /// for `Type` if the impl does not override the method itself.
     trait_default_methods: HashMap<String, HashMap<String, HirFuncDef>>,
+    /// Set of class names that have a user-defined `def drop` (typically
+    /// inside an `impl Drop` block). Consulted by `insert_drops` so that
+    /// scope-exit cleanup of an instance of such a class emits a call to
+    /// the user's `{ClassName}_drop` method before the no-op `MirInst::Drop`.
+    user_drop_classes: HashSet<String>,
     /// Active inside a closure body during lowering: for each captured
     /// `DefId`, the (slot_index_in_captures_struct, storage_kind). This
     /// lets `VarRef`/`Assign`/`CompoundAssign` on a captured variable
@@ -71,6 +76,13 @@ pub struct Lowerer<'a> {
     /// `None` when not lowering a closure body (or when the closure has no
     /// captures).
     captures_ptr_local: Option<LocalId>,
+    /// Locals that currently hold an initialized, frame-owned heap
+    /// allocation (Class/Struct/Enum). Populated when a `let` binds a
+    /// heap-typed value and when an `Assign` overwrites such a local.
+    /// Consulted by `Assign` lowering so that re-binding a heap-typed
+    /// local frees the prior allocation before the new pointer overwrites
+    /// it. Cleared per function in `lower_method` and closure entry.
+    initialized_heap_locals: HashSet<LocalId>,
 }
 
 /// A captured variable's storage inside the captures struct.
@@ -95,13 +107,26 @@ enum CaptureKind {
     ByRef,
 }
 
-/// Per-active-loop book-keeping: targets for `continue`/`break` and the
-/// optional result local that `break <value>` writes into.
-#[derive(Debug, Clone, Copy)]
+/// Per-active-loop book-keeping: targets for `continue`/`break`, the
+/// optional result local that `break <value>` writes into, and the set
+/// of heap-owned locals declared inside the loop body that must be
+/// freed at every loop-exit edge (break, continue, back-edge) so they
+/// do not leak across iterations.
+#[derive(Debug, Clone)]
 struct LoopFrame {
     continue_target: BlockId,
     break_target: BlockId,
     result_local: Option<LocalId>,
+    /// Block at the top of each iteration. Zero-init prologue for
+    /// `body_locals` is prepended here after lowering so a path that
+    /// bypasses a `let` can still reach a back-edge with a NULL local.
+    body_entry_block: BlockId,
+    /// Heap-owned (`Class`/`Struct`/`Enum`) locals declared inside this
+    /// loop's body. At every loop-exit edge we emit
+    /// `riven_dealloc(L)` followed by `Assign L = 0` so the next
+    /// iteration sees a NULL slot and `free(NULL)` is a documented
+    /// no-op for paths that did not run the `let`. (P0.2)
+    body_locals: Vec<LocalId>,
 }
 
 impl<'a> Lowerer<'a> {
@@ -119,8 +144,10 @@ impl<'a> Lowerer<'a> {
             const_values: HashMap::new(),
             into_impls: HashSet::new(),
             trait_default_methods: HashMap::new(),
+            user_drop_classes: HashSet::new(),
             capture_map: HashMap::new(),
             captures_ptr_local: None,
+            initialized_heap_locals: HashSet::new(),
         }
     }
 
@@ -149,6 +176,11 @@ impl<'a> Lowerer<'a> {
                     }
                 }
                 HirItem::Class(class) => {
+                    for derive_trait in &class.derive_traits {
+                        map.entry(derive_trait.clone())
+                            .or_default()
+                            .push(class.name.clone());
+                    }
                     for inner in &class.impl_blocks {
                         if let Some(ref trait_ref) = inner.trait_ref {
                             map.entry(trait_ref.name.clone())
@@ -161,6 +193,20 @@ impl<'a> Lowerer<'a> {
                                 }
                             }
                         }
+                    }
+                }
+                HirItem::Struct(strukt) => {
+                    for derive_trait in &strukt.derive_traits {
+                        map.entry(derive_trait.clone())
+                            .or_default()
+                            .push(strukt.name.clone());
+                    }
+                }
+                HirItem::Enum(enm) => {
+                    for derive_trait in &enm.derive_traits {
+                        map.entry(derive_trait.clone())
+                            .or_default()
+                            .push(enm.name.clone());
                     }
                 }
                 HirItem::Module(m) => {
@@ -225,6 +271,62 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// Walk the program and record every class that defines its own
+    /// `def drop` method (typically inside an `impl Drop` block, but we
+    /// also accept a top-level `def drop` on the class). This drives the
+    /// drop-elaboration pass to emit a call to `{ClassName}_drop` before
+    /// the no-op `MirInst::Drop` cleanup at scope exit.
+    fn collect_user_drop_classes(&mut self, program: &HirProgram) {
+        fn class_has_drop_method(class: &HirClassDef) -> bool {
+            if class.methods.iter().any(|m| m.name == "drop") {
+                return true;
+            }
+            for impl_block in &class.impl_blocks {
+                for item in &impl_block.items {
+                    if let HirImplItem::Method(m) = item {
+                        if m.name == "drop" {
+                            return true;
+                        }
+                    }
+                }
+            }
+            false
+        }
+
+        fn visit(item: &HirItem, set: &mut HashSet<String>) {
+            match item {
+                HirItem::Class(class) => {
+                    if class_has_drop_method(class) {
+                        set.insert(class.name.clone());
+                    }
+                }
+                HirItem::Impl(impl_block) => {
+                    let target = type_name_from_ty(&impl_block.target_ty);
+                    if !target.is_empty() {
+                        for inner in &impl_block.items {
+                            if let HirImplItem::Method(m) = inner {
+                                if m.name == "drop" {
+                                    set.insert(target.clone());
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                HirItem::Module(m) => {
+                    for sub in &m.items {
+                        visit(sub, set);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        for item in &program.items {
+            visit(item, &mut self.user_drop_classes);
+        }
+    }
+
     /// Given a generic type parameter's bounds, return the unique concrete
     /// implementor if exactly one exists across all the trait bounds
     /// (so that `a.method(...)` on a TypeParam dispatches unambiguously).
@@ -281,6 +383,11 @@ impl<'a> Lowerer<'a> {
         // substituted with the RHS value at every use site.
         self.collect_const_values(program);
 
+        // Record every class that defines its own `def drop` so that
+        // drop-elaboration emits a call to `{ClassName}_drop` before
+        // the no-op `MirInst::Drop` cleanup at scope exit.
+        self.collect_user_drop_classes(program);
+
         for item in &program.items {
             match item {
                 HirItem::Function(func) => {
@@ -300,14 +407,51 @@ impl<'a> Lowerer<'a> {
                     for impl_block in &class.impl_blocks {
                         self.lower_impl_block(impl_block, &class.name, &mut mir)?;
                     }
+                    if class.derive_traits.iter().any(|t| t == "Clone") {
+                        mir.functions.push(self.synthesize_class_clone(class));
+                    }
+                }
+                HirItem::Struct(s) => {
+                    // Synthesize `{StructName}_to_debug` when the struct
+                    // declares `derive Debug` so that interpolation of a
+                    // value of this struct prints `Name { field: value, ... }`
+                    // rather than a raw pointer address.
+                    if s.derive_traits.iter().any(|t| t == "Debug") {
+                        let dbg_fn = self.synthesize_struct_to_debug(s);
+                        mir.functions.push(dbg_fn);
+                    }
+                    if s.derive_traits.iter().any(|t| t == "PartialEq") {
+                        mir.functions.push(self.synthesize_struct_eq(s));
+                    }
+                    if s.derive_traits
+                        .iter()
+                        .any(|t| t == "Hashable" || t == "Hash")
+                    {
+                        mir.functions.push(self.synthesize_struct_hash_code(s));
+                    }
+                    if s.derive_traits.iter().any(|t| t == "Default") {
+                        mir.functions.push(self.synthesize_struct_default(s));
+                    }
+                    if s.derive_traits.iter().any(|t| t == "Ord") {
+                        mir.functions.push(self.synthesize_struct_cmp(s, false));
+                    }
+                    if s.derive_traits.iter().any(|t| t == "PartialOrd") {
+                        mir.functions.push(self.synthesize_struct_cmp(s, true));
+                    }
+                    if s.derive_traits.iter().any(|t| t == "Clone") {
+                        mir.functions.push(self.synthesize_struct_clone(s));
+                    }
+                }
+                HirItem::Enum(e) => {
+                    if e.derive_traits.iter().any(|t| t == "Clone") {
+                        mir.functions.push(self.synthesize_enum_clone(e));
+                    }
                 }
                 HirItem::Impl(impl_block) => {
                     let type_name = type_name_from_ty(&impl_block.target_ty);
                     self.lower_impl_block(impl_block, &type_name, &mut mir)?;
                 }
-                HirItem::Struct(_)
-                | HirItem::Enum(_)
-                | HirItem::Trait(_)
+                HirItem::Trait(_)
                 | HirItem::TypeAlias(_)
                 | HirItem::Newtype(_)
                 | HirItem::Const(_)
@@ -375,14 +519,11 @@ impl<'a> Lowerer<'a> {
         self.lower_method(&func.name, func)
     }
 
-    fn lower_method(
-        &mut self,
-        name: &str,
-        func: &HirFuncDef,
-    ) -> Result<MirFunction, String> {
+    fn lower_method(&mut self, name: &str, func: &HirFuncDef) -> Result<MirFunction, String> {
         // Reset per-function state.
         self.def_to_local.clear();
         self.cell_promoted.clear();
+        self.initialized_heap_locals.clear();
         let mir_fn = MirFunction::new(name, func.return_ty.clone());
         self.current_block = mir_fn.entry_block;
         self.current_fn = Some(mir_fn);
@@ -391,7 +532,10 @@ impl<'a> Lowerer<'a> {
         if func.self_mode.is_some() {
             // Derive the self type from the mangled method name (ClassName_method)
             let self_ty = if let Some(class_name) = name.split('_').next() {
-                Ty::Class { name: class_name.to_string(), generic_args: vec![] }
+                Ty::Class {
+                    name: class_name.to_string(),
+                    generic_args: vec![],
+                }
             } else {
                 Ty::Unit
             };
@@ -409,7 +553,9 @@ impl<'a> Lowerer<'a> {
 
         // Create locals for parameters.
         for param in &func.params {
-            let local = self.fn_mut().new_local(&param.name, param.ty.clone(), false);
+            let local = self
+                .fn_mut()
+                .new_local(&param.name, param.ty.clone(), false);
             self.fn_mut().params.push(local);
             self.def_to_local.insert(param.def_id, local);
         }
@@ -434,7 +580,10 @@ impl<'a> Lowerer<'a> {
                             .position(|f| f == &param.name)
                             .unwrap_or_else(|| {
                                 // Fallback: try to find in the param list by position
-                                func.params.iter().position(|p| p.def_id == param.def_id).unwrap_or(0)
+                                func.params
+                                    .iter()
+                                    .position(|p| p.def_id == param.def_id)
+                                    .unwrap_or(0)
                             });
                         self.emit(MirInst::SetField {
                             base: self_local,
@@ -463,25 +612,38 @@ impl<'a> Lowerer<'a> {
 
         let mut mir_fn = self.current_fn.take().expect("current_fn must be Some");
 
-        // Determine the return-value local so we don't drop it.
-        let return_local = self.find_return_local(&mir_fn);
+        // Determine the return-value locals so we don't drop them. A
+        // function may return through multiple `Return` terminators (one
+        // per match arm, for example), so we collect every distinct local
+        // referenced in such a terminator.
+        let return_locals = self.find_return_locals(&mir_fn);
 
         // Insert Drop instructions for Move-type locals before every Return.
-        insert_drops(&mut mir_fn, return_local);
+        insert_drops(
+            &mut mir_fn,
+            &return_locals,
+            self.symbols,
+            &self.user_drop_classes,
+        );
 
         Ok(mir_fn)
     }
 
-    /// Find the local that is being returned, if any.
-    /// Scans all blocks for Return(Some(Use(local))) terminators and returns
-    /// the local id if there is a consistent single return value.
-    fn find_return_local(&self, func: &MirFunction) -> Option<LocalId> {
+    /// Find every local that appears as the value of a `Return` terminator.
+    ///
+    /// Functions with multiple early-return paths (e.g. each match arm
+    /// returning a freshly built `String`) end up with several `Return`
+    /// terminators referencing different locals. Drop elaboration must
+    /// exclude all of them — otherwise the final scope-exit free would
+    /// release the value the caller is about to read.
+    fn find_return_locals(&self, func: &MirFunction) -> HashSet<LocalId> {
+        let mut out = HashSet::new();
         for block in &func.blocks {
             if let Terminator::Return(Some(MirValue::Use(local))) = &block.terminator {
-                return Some(*local);
+                out.insert(*local);
             }
         }
-        None
+        out
     }
 
     /// Lower a function-call argument, auto-invoking bare zero-arg function
@@ -563,11 +725,10 @@ impl<'a> Lowerer<'a> {
                 Ok(Some(dest))
             }
             HirExprKind::StringLiteral(s) => {
-                let dest = self.new_temp(Ty::String);
-                self.emit(MirInst::StringLiteral {
-                    dest,
-                    value: s.clone(),
-                });
+                // P0.7: wrap raw .rodata pointer through riven_string_from so
+                // the local owns a heap-allocated String. Without the wrap,
+                // String::drop -> free() would double-free a literal pointer.
+                let dest = self.emit_owned_string_literal(s);
                 Ok(Some(dest))
             }
             HirExprKind::UnitLiteral => Ok(None),
@@ -578,7 +739,8 @@ impl<'a> Lowerer<'a> {
                 // captures pointer.  ByValue → a direct load; ByRef → load
                 // the cell pointer and dereference through it.
                 if let Some(slot) = self.capture_map.get(def_id).copied() {
-                    let cap_ptr = self.captures_ptr_local
+                    let cap_ptr = self
+                        .captures_ptr_local
                         .expect("capture_map non-empty implies captures_ptr_local is set");
                     match slot.kind {
                         CaptureKind::ByValue => {
@@ -634,10 +796,143 @@ impl<'a> Lowerer<'a> {
 
             // ── Binary operations ───────────────────────────────────
             HirExprKind::BinaryOp { op, left, right } => {
+                // ── derive PartialEq: structural equality on structs ──
+                // `a == b` and `a != b` on a struct that derives PartialEq
+                // must compare field-by-field. The default `Compare` lowering
+                // would compare struct *pointers* (heap addresses), false for
+                // two distinct allocations even when their fields match.
+                if matches!(op, BinOp::Eq | BinOp::NotEq) {
+                    if let Some(struct_name) = struct_name_with_partial_eq(&left.ty, self.symbols) {
+                        if let Some(field_info) = struct_field_layout(&struct_name, self.symbols) {
+                            return Ok(Some(self.lower_struct_partial_eq(
+                                left,
+                                right,
+                                *op,
+                                &field_info,
+                            )?));
+                        }
+                    }
+                }
+
+                // ── derive Ord / PartialOrd: route ordering operators to
+                // the synthesised `<Type>_cmp` / `<Type>_partial_cmp`
+                // helper. The default `Compare` lowering below would
+                // compare struct *pointers* (heap addresses), which
+                // gives meaningless lex order across allocations. The
+                // synthesiser's tuple-style field walk already returns
+                // -1 / 0 / +1, so we only need to fold that result
+                // through the requested operator.
+                if matches!(op, BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq) {
+                    if let Some((struct_name, partial)) =
+                        struct_name_with_ord(&left.ty, self.symbols)
+                    {
+                        return Ok(Some(self.lower_struct_ord(
+                            left,
+                            right,
+                            *op,
+                            &struct_name,
+                            partial,
+                        )?));
+                    }
+                }
+
                 let lhs_local = self.lower_expr(left)?;
                 let rhs_local = self.lower_expr(right)?;
                 let lhs_val = local_to_value(lhs_local);
                 let rhs_val = local_to_value(rhs_local);
+
+                // ── Phase 2 stdlib batch 2 (#02): String + String ──
+                // The default `MirInst::BinOp { op: Add, ... }` would
+                // treat both operands as integers and codegen would
+                // emit an integer-add over heap pointers — undefined
+                // behaviour. Route through `riven_string_concat`
+                // instead. Matches the existing string-interpolation
+                // lowering, which already calls the same runtime fn.
+                if matches!(op, BinOp::Add)
+                    && matches!(left.ty, Ty::String | Ty::Str)
+                    && matches!(right.ty, Ty::String | Ty::Str)
+                {
+                    let dest = self.new_temp(Ty::String);
+                    self.emit(MirInst::Call {
+                        dest: Some(dest),
+                        callee: "riven_string_concat".to_string(),
+                        args: vec![lhs_val, rhs_val],
+                    });
+                    return Ok(Some(dest));
+                }
+
+                // ── Phase 2 stdlib batch 1 (#03): Vec[T] == Vec[T] ──
+                // The default integer Compare would compare heap
+                // pointers, returning false for any two distinct
+                // allocations even when their elements match. Route
+                // through `riven_vec_eq` for both `==` and `!=`.
+                if matches!(op, BinOp::Eq | BinOp::NotEq)
+                    && matches!(left.ty, Ty::Vec(_))
+                    && matches!(right.ty, Ty::Vec(_))
+                {
+                    let cmp = self.new_temp(Ty::Bool);
+                    self.emit(MirInst::Call {
+                        dest: Some(cmp),
+                        callee: "riven_vec_eq".to_string(),
+                        args: vec![lhs_val, rhs_val],
+                    });
+                    if matches!(op, BinOp::Eq) {
+                        return Ok(Some(cmp));
+                    }
+                    let dest = self.new_temp(Ty::Bool);
+                    self.emit(MirInst::Not {
+                        dest,
+                        operand: MirValue::Use(cmp),
+                    });
+                    return Ok(Some(dest));
+                }
+
+                // ── Phase 2 stdlib (#04): HashMap == HashMap ──
+                // Same justification as Vec equality above — default
+                // integer compare on the spine pointers is meaningless
+                // across allocations. Route through `riven_hash_eq`.
+                if matches!(op, BinOp::Eq | BinOp::NotEq)
+                    && matches!(left.ty, Ty::HashMap(_, _))
+                    && matches!(right.ty, Ty::HashMap(_, _))
+                {
+                    let cmp = self.new_temp(Ty::Bool);
+                    self.emit(MirInst::Call {
+                        dest: Some(cmp),
+                        callee: "riven_hash_eq".to_string(),
+                        args: vec![lhs_val, rhs_val],
+                    });
+                    if matches!(op, BinOp::Eq) {
+                        return Ok(Some(cmp));
+                    }
+                    let dest = self.new_temp(Ty::Bool);
+                    self.emit(MirInst::Not {
+                        dest,
+                        operand: MirValue::Use(cmp),
+                    });
+                    return Ok(Some(dest));
+                }
+
+                // ── Phase 2 stdlib (#04): HashSet == HashSet ──
+                if matches!(op, BinOp::Eq | BinOp::NotEq)
+                    && matches!(left.ty, Ty::Set(_))
+                    && matches!(right.ty, Ty::Set(_))
+                {
+                    let cmp = self.new_temp(Ty::Bool);
+                    self.emit(MirInst::Call {
+                        dest: Some(cmp),
+                        callee: "riven_set_eq".to_string(),
+                        args: vec![lhs_val, rhs_val],
+                    });
+                    if matches!(op, BinOp::Eq) {
+                        return Ok(Some(cmp));
+                    }
+                    let dest = self.new_temp(Ty::Bool);
+                    self.emit(MirInst::Not {
+                        dest,
+                        operand: MirValue::Use(cmp),
+                    });
+                    return Ok(Some(dest));
+                }
 
                 let dest = self.new_temp(expr.ty.clone());
 
@@ -666,23 +961,14 @@ impl<'a> Lowerer<'a> {
                 let val = local_to_value(src);
                 let dest = self.new_temp(expr.ty.clone());
                 match op {
-                    UnaryOp::Neg => self.emit(MirInst::Negate {
-                        dest,
-                        operand: val,
-                    }),
-                    UnaryOp::Not => self.emit(MirInst::Not {
-                        dest,
-                        operand: val,
-                    }),
+                    UnaryOp::Neg => self.emit(MirInst::Negate { dest, operand: val }),
+                    UnaryOp::Not => self.emit(MirInst::Not { dest, operand: val }),
                     UnaryOp::Deref => {
                         // `*x` — strip one reference level. In Riven's value
                         // model a reference is represented the same as its
                         // pointee for scalar types, so this is a plain copy
                         // of the underlying value.
-                        self.emit(MirInst::Assign {
-                            dest,
-                            value: val,
-                        });
+                        self.emit(MirInst::Assign { dest, value: val });
                     }
                 }
                 Ok(Some(dest))
@@ -804,12 +1090,16 @@ impl<'a> Lowerer<'a> {
                     continue_target: header_block,
                     break_target: exit_block,
                     result_local: None,
+                    body_entry_block: body_block,
+                    body_locals: Vec::new(),
                 });
                 let _ = self.lower_expr(body)?;
-                self.loop_stack.pop();
+                let frame = self.loop_stack.pop().expect("loop frame");
                 if matches!(self.get_terminator(), Terminator::Unreachable) {
+                    self.emit_dealloc_loop_locals(&frame.body_locals);
                     self.set_terminator(Terminator::Goto(header_block));
                 }
+                self.prepend_zero_init_for_body_locals(&frame);
 
                 self.current_block = exit_block;
                 Ok(None) // while loops produce Unit
@@ -836,12 +1126,16 @@ impl<'a> Lowerer<'a> {
                     continue_target: loop_block,
                     break_target: exit_block,
                     result_local,
+                    body_entry_block: loop_block,
+                    body_locals: Vec::new(),
                 });
                 let _ = self.lower_expr(body)?;
-                self.loop_stack.pop();
+                let frame = self.loop_stack.pop().expect("loop frame");
                 if matches!(self.get_terminator(), Terminator::Unreachable) {
+                    self.emit_dealloc_loop_locals(&frame.body_locals);
                     self.set_terminator(Terminator::Goto(loop_block));
                 }
+                self.prepend_zero_init_for_body_locals(&frame);
 
                 // exit_block is only reachable via break (which we handle below)
                 self.current_block = exit_block;
@@ -923,7 +1217,9 @@ impl<'a> Lowerer<'a> {
                 block,
                 ..
             } => {
-                let type_name = type_name_from_ty(&object.ty);
+                let type_name = self
+                    .receiver_type_name(object)
+                    .unwrap_or_else(|| type_name_from_ty(&object.ty));
 
                 // Handle .new() constructor calls: allocate + call init
                 if method_name == "new" {
@@ -934,13 +1230,35 @@ impl<'a> Lowerer<'a> {
                     } else {
                         type_name.as_str()
                     };
-                    if matches!(base_type, "Vec" | "Hash" | "Set") {
+                    if matches!(base_type, "Vec" | "Hash" | "HashMap" | "Set" | "HashSet") {
                         let obj = self.new_temp(expr.ty.clone());
-                        // Emit Call to runtime constructor (e.g., Vec_new)
+                        // Emit Call to runtime constructor (e.g., Vec_new).
+                        // Use the base type so the mangled callee elides the
+                        // generic parameter list (`HashMap[K, V]_new` would
+                        // not match a real runtime symbol).
                         self.emit(MirInst::Call {
                             dest: Some(obj),
-                            callee: format!("{}_new", type_name),
+                            callee: format!("{}_new", base_type),
                             args: vec![],
+                        });
+                        return Ok(Some(obj));
+                    }
+                    // String.new / String.with_capacity — dispatch to the
+                    // C runtime directly. The dispatch table in
+                    // codegen/runtime.rs maps `String_new` and
+                    // `String_with_capacity` to their `riven_string_*`
+                    // implementations.
+                    if base_type == "String" {
+                        let obj = self.new_temp(expr.ty.clone());
+                        let mut call_args = Vec::with_capacity(args.len());
+                        for arg in args {
+                            let local = self.lower_expr(arg)?;
+                            call_args.push(local_to_value(local));
+                        }
+                        self.emit(MirInst::Call {
+                            dest: Some(obj),
+                            callee: "String_new".to_string(),
+                            args: call_args,
                         });
                         return Ok(Some(obj));
                     }
@@ -969,7 +1287,11 @@ impl<'a> Lowerer<'a> {
 
                     let layout = crate::codegen::layout::layout_of(&expr.ty, self.symbols);
                     let obj = self.new_temp(expr.ty.clone());
-                    self.emit(MirInst::Alloc { dest: obj, ty: expr.ty.clone(), size: self.alloc_size(&expr.ty) });
+                    self.emit(MirInst::Alloc {
+                        dest: obj,
+                        ty: expr.ty.clone(),
+                        size: self.alloc_size(&expr.ty),
+                    });
 
                     // Call ClassName_init(self, args...)
                     let mut arg_values = vec![MirValue::Use(obj)];
@@ -992,9 +1314,9 @@ impl<'a> Lowerer<'a> {
                 // (closure), inline the closure body as a loop instead of
                 // passing a (null) function pointer.
                 if let Some(block_expr) = block {
-                    if let Some(result) = self.try_inline_closure_method(
-                        expr, object, method_name, args, block_expr,
-                    )? {
+                    if let Some(result) =
+                        self.try_inline_closure_method(expr, object, method_name, args, block_expr)?
+                    {
                         return Ok(result);
                     }
                 }
@@ -1010,7 +1332,10 @@ impl<'a> Lowerer<'a> {
 
                     // Read the tag: 0 = Ok/Some, 1 = Err/None
                     let tag = self.new_temp(Ty::Int32);
-                    self.emit(MirInst::GetTag { dest: tag, src: scrut });
+                    self.emit(MirInst::GetTag {
+                        dest: tag,
+                        src: scrut,
+                    });
 
                     let ok_block = self.new_block();
                     let err_block = self.new_block();
@@ -1056,7 +1381,10 @@ impl<'a> Lowerer<'a> {
                         size: 16,
                     });
                     // Tag 1 = Err
-                    self.emit(MirInst::SetTag { dest: err_result, tag: 1 });
+                    self.emit(MirInst::SetTag {
+                        dest: err_result,
+                        tag: 1,
+                    });
                     // Copy error payload from source
                     let err_payload_ptr = self.new_temp(Ty::Int);
                     self.emit(MirInst::GetPayload {
@@ -1075,17 +1403,17 @@ impl<'a> Lowerer<'a> {
                     // from the source's Err type and an `impl Into[Outer]
                     // for Inner` was registered, insert a call to
                     // `Inner_into(err_payload)` to coerce the error.
-                    let final_payload = if let (
-                        Ty::Result(_, src_err),
-                        Ty::Result(_, dst_err),
-                    ) = (&object.ty, &self.fn_mut().return_ty.clone())
+                    let final_payload = if let (Ty::Result(_, src_err), Ty::Result(_, dst_err)) =
+                        (&object.ty, &self.fn_mut().return_ty.clone())
                     {
                         let src_name = type_name_from_ty(src_err);
                         let dst_name = type_name_from_ty(dst_err);
                         if !src_name.is_empty()
                             && !dst_name.is_empty()
                             && src_name != dst_name
-                            && self.into_impls.contains(&(src_name.clone(), dst_name.clone()))
+                            && self
+                                .into_impls
+                                .contains(&(src_name.clone(), dst_name.clone()))
                         {
                             let converted = self.new_temp((**dst_err).clone());
                             self.emit(MirInst::Call {
@@ -1140,7 +1468,10 @@ impl<'a> Lowerer<'a> {
                     // Read the Option tag: 0 = None (in Option), 1 = Some
                     // Note: inline_position uses tag 0 = None, tag 1 = Some
                     let tag = self.new_temp(Ty::Int32);
-                    self.emit(MirInst::GetTag { dest: tag, src: scrut });
+                    self.emit(MirInst::GetTag {
+                        dest: tag,
+                        src: scrut,
+                    });
 
                     let some_block = self.new_block();
                     let none_block = self.new_block();
@@ -1162,7 +1493,10 @@ impl<'a> Lowerer<'a> {
 
                     // Some block: Result::Ok(payload) — tag 0
                     self.current_block = some_block;
-                    self.emit(MirInst::SetTag { dest: result, tag: 0 }); // Ok
+                    self.emit(MirInst::SetTag {
+                        dest: result,
+                        tag: 0,
+                    }); // Ok
                     let payload_ptr = self.new_temp(Ty::Int);
                     self.emit(MirInst::GetPayload {
                         dest: payload_ptr,
@@ -1184,7 +1518,10 @@ impl<'a> Lowerer<'a> {
 
                     // None block: Result::Err(err_val) — tag 1
                     self.current_block = none_block;
-                    self.emit(MirInst::SetTag { dest: result, tag: 1 }); // Err
+                    self.emit(MirInst::SetTag {
+                        dest: result,
+                        tag: 1,
+                    }); // Err
                     self.emit(MirInst::SetField {
                         base: result,
                         field_index: 1,
@@ -1199,8 +1536,15 @@ impl<'a> Lowerer<'a> {
                 // Check if this is a static/class method call (no `self`
                 // argument needed). Covers built-in static methods as well
                 // as user-defined `def self.method` forms on classes.
+                let static_dispatch_ty = if matches!(&object.ty, Ty::Infer(_)) {
+                    &expr.ty
+                } else {
+                    &object.ty
+                };
                 let is_static = is_builtin_static_method(&type_name, method_name)
-                    || self.is_user_static_method(&type_name, method_name);
+                    || self.is_user_static_method(&type_name, method_name)
+                    || (method_name == "default"
+                        && self.type_supports_trait(static_dispatch_ty, "Default"));
 
                 // Regular method call: object becomes the first argument (self).
                 let obj_local = self.lower_expr(object)?;
@@ -1228,22 +1572,21 @@ impl<'a> Lowerer<'a> {
                 // exists.
                 let resolved_class = match &object.ty {
                     Ty::Class { name, .. } => self.resolve_method_class(name, method_name),
-                    Ty::TypeParam { bounds, .. }
-                    | Ty::ImplTrait(bounds)
-                    | Ty::DynTrait(bounds) => {
-                        self.unique_bound_impl(bounds).unwrap_or_else(|| type_name.clone())
+                    Ty::TypeParam { bounds, .. } | Ty::ImplTrait(bounds) | Ty::DynTrait(bounds) => {
+                        self.unique_bound_impl(bounds)
+                            .unwrap_or_else(|| type_name.clone())
                     }
-                    Ty::Ref(inner) | Ty::RefMut(inner)
-                    | Ty::RefLifetime(_, inner) | Ty::RefMutLifetime(_, inner) => {
-                        match inner.as_ref() {
-                            Ty::TypeParam { bounds, .. }
-                            | Ty::ImplTrait(bounds)
-                            | Ty::DynTrait(bounds) => {
-                                self.unique_bound_impl(bounds).unwrap_or_else(|| type_name.clone())
-                            }
-                            _ => type_name.clone(),
-                        }
-                    }
+                    Ty::Ref(inner)
+                    | Ty::RefMut(inner)
+                    | Ty::RefLifetime(_, inner)
+                    | Ty::RefMutLifetime(_, inner) => match inner.as_ref() {
+                        Ty::TypeParam { bounds, .. }
+                        | Ty::ImplTrait(bounds)
+                        | Ty::DynTrait(bounds) => self
+                            .unique_bound_impl(bounds)
+                            .unwrap_or_else(|| type_name.clone()),
+                        _ => type_name.clone(),
+                    },
                     _ => type_name.clone(),
                 };
                 let mangled = format!("{}_{}", resolved_class, method_name);
@@ -1271,8 +1614,7 @@ impl<'a> Lowerer<'a> {
                         // we must store the returned buffer back through
                         // the pointer.
                         let ptr_arg = arg_values[0].clone();
-                        let tail_args: Vec<MirValue> =
-                            arg_values.iter().skip(1).cloned().collect();
+                        let tail_args: Vec<MirValue> = arg_values.iter().skip(1).cloned().collect();
                         let cur = self.new_temp(Ty::String);
                         self.emit(MirInst::Call {
                             dest: Some(cur),
@@ -1323,20 +1665,19 @@ impl<'a> Lowerer<'a> {
                 // the deref/store runtime helpers so the caller's local
                 // is updated in place.  For an owned local String binding
                 // we just rebind the variable to the new buffer.
-                if method_name == "push"
-                    && resolved_class == "String"
-                    && arg_values.len() == 2
-                {
+                if method_name == "push" && resolved_class == "String" && arg_values.len() == 2 {
+                    // Phase 2 stdlib batch 2 (#02): route through the
+                    // dedicated `riven_string_push(s, codepoint)` runtime
+                    // fn rather than synthesising
+                    // `riven_char_to_string` + `String_push_str` here.
+                    // The dedicated fn allocates exactly one fresh
+                    // buffer per call and frees its internal char-string
+                    // temporary, so we don't leak the codepoint
+                    // intermediate. The prior receiver buffer is freed
+                    // here explicitly so the rebind doesn't leak it.
                     let char_arg = arg_values[1].clone();
                     let self_arg = arg_values[0].clone();
-                    let one_char_str = self.new_temp(Ty::String);
-                    self.emit(MirInst::Call {
-                        dest: Some(one_char_str),
-                        callee: "riven_char_to_string".to_string(),
-                        args: vec![char_arg],
-                    });
                     if receiver_is_mut_string_ref {
-                        // Deref the &mut String pointer → current char*.
                         let cur = self.new_temp(Ty::String);
                         self.emit(MirInst::Call {
                             dest: Some(cur),
@@ -1346,10 +1687,16 @@ impl<'a> Lowerer<'a> {
                         let new_buf = self.new_temp(Ty::String);
                         self.emit(MirInst::Call {
                             dest: Some(new_buf),
-                            callee: "String_push_str".to_string(),
-                            args: vec![MirValue::Use(cur), MirValue::Use(one_char_str)],
+                            callee: "String_push".to_string(),
+                            args: vec![MirValue::Use(cur), char_arg],
                         });
-                        // Store the new buffer back through the pointer.
+                        // Free the prior buffer before overwriting the
+                        // pointer slot, otherwise it leaks.
+                        self.emit(MirInst::Call {
+                            dest: None,
+                            callee: "riven_string_free".to_string(),
+                            args: vec![MirValue::Use(cur)],
+                        });
                         self.emit(MirInst::Call {
                             dest: None,
                             callee: "riven_store_ptr".to_string(),
@@ -1360,10 +1707,124 @@ impl<'a> Lowerer<'a> {
                     let new_buf = self.new_temp(Ty::String);
                     self.emit(MirInst::Call {
                         dest: Some(new_buf),
-                        callee: "String_push_str".to_string(),
-                        args: vec![self_arg, MirValue::Use(one_char_str)],
+                        callee: "String_push".to_string(),
+                        args: vec![self_arg.clone(), char_arg],
                     });
                     if let HirExprKind::VarRef(def_id) = &object.kind {
+                        if let Some(&obj_var) = self.def_to_local.get(def_id) {
+                            // Free the prior buffer first; the local
+                            // owns it (we just lowered it as the self
+                            // arg above) and the assignment below is
+                            // about to overwrite the slot.
+                            self.emit(MirInst::Call {
+                                dest: None,
+                                callee: "riven_string_free".to_string(),
+                                args: vec![MirValue::Use(obj_var)],
+                            });
+                            self.emit(MirInst::Assign {
+                                dest: obj_var,
+                                value: MirValue::Use(new_buf),
+                            });
+                        }
+                    }
+                    return Ok(None);
+                }
+
+                // Phase 2 stdlib: mutating String methods that allocate a
+                // fresh buffer (insert, insert_str). Same dance as push_str.
+                if matches!(method_name.as_str(), "insert" | "insert_str")
+                    && resolved_class == "String"
+                {
+                    if receiver_is_mut_string_ref {
+                        let ptr_arg = arg_values[0].clone();
+                        let tail_args: Vec<MirValue> = arg_values.iter().skip(1).cloned().collect();
+                        let cur = self.new_temp(Ty::String);
+                        self.emit(MirInst::Call {
+                            dest: Some(cur),
+                            callee: "riven_deref_ptr".to_string(),
+                            args: vec![ptr_arg.clone()],
+                        });
+                        let new_buf = self.new_temp(Ty::String);
+                        let mut call_args = vec![MirValue::Use(cur)];
+                        call_args.extend(tail_args);
+                        self.emit(MirInst::Call {
+                            dest: Some(new_buf),
+                            callee: format!("String_{}", method_name),
+                            args: call_args,
+                        });
+                        self.emit(MirInst::Call {
+                            dest: None,
+                            callee: "riven_store_ptr".to_string(),
+                            args: vec![ptr_arg, MirValue::Use(new_buf)],
+                        });
+                        return Ok(None);
+                    }
+                    if let HirExprKind::VarRef(def_id) = &object.kind {
+                        if let Some(&obj_var) = self.def_to_local.get(def_id) {
+                            let tmp = self.new_temp(Ty::String);
+                            self.emit(MirInst::Call {
+                                dest: Some(tmp),
+                                callee: format!("String_{}", method_name),
+                                args: arg_values,
+                            });
+                            self.emit(MirInst::Assign {
+                                dest: obj_var,
+                                value: MirValue::Use(tmp),
+                            });
+                            return Ok(None);
+                        }
+                    }
+                }
+
+                // String.remove(i) — returns the removed Char and
+                // simultaneously rewrites the buffer. The runtime returns
+                // a 16-byte struct {removed: i64, new_buffer: ptr}; we read
+                // .removed for the value and .new_buffer to update the
+                // local / &mut String.
+                if method_name == "remove" && resolved_class == "String" {
+                    let self_arg = arg_values[0].clone();
+                    // For &mut String, we must first deref to get the buf.
+                    let buf_arg = if receiver_is_mut_string_ref {
+                        let cur = self.new_temp(Ty::String);
+                        self.emit(MirInst::Call {
+                            dest: Some(cur),
+                            callee: "riven_deref_ptr".to_string(),
+                            args: vec![self_arg.clone()],
+                        });
+                        MirValue::Use(cur)
+                    } else {
+                        self_arg.clone()
+                    };
+                    let tail_args: Vec<MirValue> = arg_values.iter().skip(1).cloned().collect();
+                    let result_struct = self.new_temp(Ty::Int);
+                    let mut call_args = vec![buf_arg];
+                    call_args.extend(tail_args);
+                    self.emit(MirInst::Call {
+                        dest: Some(result_struct),
+                        callee: "String_remove".to_string(),
+                        args: call_args,
+                    });
+                    // Read the removed Char (field 0 of the 16-byte struct).
+                    let removed = self.new_temp(Ty::Char);
+                    self.emit(MirInst::GetField {
+                        dest: removed,
+                        base: result_struct,
+                        field_index: 0,
+                    });
+                    // Read the new buffer (field 1).
+                    let new_buf = self.new_temp(Ty::String);
+                    self.emit(MirInst::GetField {
+                        dest: new_buf,
+                        base: result_struct,
+                        field_index: 1,
+                    });
+                    if receiver_is_mut_string_ref {
+                        self.emit(MirInst::Call {
+                            dest: None,
+                            callee: "riven_store_ptr".to_string(),
+                            args: vec![self_arg, MirValue::Use(new_buf)],
+                        });
+                    } else if let HirExprKind::VarRef(def_id) = &object.kind {
                         if let Some(&obj_var) = self.def_to_local.get(def_id) {
                             self.emit(MirInst::Assign {
                                 dest: obj_var,
@@ -1371,6 +1832,38 @@ impl<'a> Lowerer<'a> {
                             });
                         }
                     }
+                    return Ok(Some(removed));
+                }
+
+                // String.clear / truncate — in-place mutation; for &mut
+                // String we must deref to the buffer pointer first.
+                if matches!(method_name.as_str(), "clear" | "truncate")
+                    && resolved_class == "String"
+                {
+                    if receiver_is_mut_string_ref {
+                        let ptr_arg = arg_values[0].clone();
+                        let tail_args: Vec<MirValue> = arg_values.iter().skip(1).cloned().collect();
+                        let cur = self.new_temp(Ty::String);
+                        self.emit(MirInst::Call {
+                            dest: Some(cur),
+                            callee: "riven_deref_ptr".to_string(),
+                            args: vec![ptr_arg],
+                        });
+                        let mut call_args = vec![MirValue::Use(cur)];
+                        call_args.extend(tail_args);
+                        self.emit(MirInst::Call {
+                            dest: None,
+                            callee: format!("String_{}", method_name),
+                            args: call_args,
+                        });
+                        return Ok(None);
+                    }
+                    // Owned local: pass the buffer pointer directly.
+                    self.emit(MirInst::Call {
+                        dest: None,
+                        callee: format!("String_{}", method_name),
+                        args: arg_values,
+                    });
                     return Ok(None);
                 }
 
@@ -1383,16 +1876,20 @@ impl<'a> Lowerer<'a> {
                 // For calls on Fn/FnMut/FnOnce types (closure invocation),
                 // emit an indirect call through the function pointer instead
                 // of a regular named call.
-                let is_fn_type = matches!(&object.ty,
+                let is_fn_type = matches!(
+                    &object.ty,
                     Ty::Fn { .. } | Ty::FnMut { .. } | Ty::FnOnce { .. }
                 );
                 let is_ref_fn_type = matches!(&object.ty,
                     Ty::Ref(inner) | Ty::RefMut(inner)
                     if matches!(inner.as_ref(), Ty::Fn { .. } | Ty::FnMut { .. } | Ty::FnOnce { .. })
                 );
-                let is_fn_call = is_fn_type || is_ref_fn_type
-                    || type_name.starts_with("Fn(") || type_name.starts_with("Fn[")
-                    || type_name.starts_with("&Fn(") || type_name.starts_with("&Fn[");
+                let is_fn_call = is_fn_type
+                    || is_ref_fn_type
+                    || type_name.starts_with("Fn(")
+                    || type_name.starts_with("Fn[")
+                    || type_name.starts_with("&Fn(")
+                    || type_name.starts_with("&Fn[");
 
                 if is_fn_call {
                     // The closure value is a heap pair {fn_ptr, captures_ptr}.
@@ -1469,7 +1966,31 @@ impl<'a> Lowerer<'a> {
                                     value: val,
                                 });
                             } else {
+                                // Re-binding a heap-owned local: free the
+                                // prior allocation before the new pointer
+                                // overwrites it. (P0.2)
+                                if self.initialized_heap_locals.contains(&dest) {
+                                    self.emit(MirInst::Call {
+                                        dest: None,
+                                        callee: "riven_dealloc".to_string(),
+                                        args: vec![MirValue::Use(dest)],
+                                    });
+                                }
                                 self.emit(MirInst::Assign { dest, value: val });
+                                let dest_ty = self
+                                    .fn_ref()
+                                    .locals
+                                    .iter()
+                                    .find(|l| l.id == dest)
+                                    .map(|l| l.ty.clone());
+                                if matches!(
+                                    dest_ty,
+                                    Some(Ty::Class { .. })
+                                        | Some(Ty::Struct { .. })
+                                        | Some(Ty::Enum { .. })
+                                ) {
+                                    self.initialized_heap_locals.insert(dest);
+                                }
                             }
                         }
                     }
@@ -1496,6 +2017,39 @@ impl<'a> Lowerer<'a> {
             HirExprKind::CompoundAssign { target, op, value } => {
                 let rhs_local = self.lower_expr(value)?;
                 let rhs_val = local_to_value(rhs_local);
+
+                // ── Phase 2 stdlib batch 2 (#02): String += String ──
+                // Lower as `target = String_push_str(target, value)`.
+                // The default integer-add path below would treat the
+                // heap pointer operands as i64 and corrupt them.
+                //
+                // Note: we don't emit an explicit free for the prior
+                // buffer here. That mirrors the existing `s.push_str(x)`
+                // method-call lowering at line ~1546, which also rebinds
+                // without freeing. The known temporary leak is shared
+                // by both paths and tracked for a future buffer-owning
+                // String redesign; closing it here would diverge from
+                // push_str semantics and confuse the leak-tracker tests.
+                if matches!(op, BinOp::Add)
+                    && matches!(target.ty, Ty::String | Ty::Str)
+                    && matches!(value.ty, Ty::String | Ty::Str)
+                {
+                    if let HirExprKind::VarRef(def_id) = &target.kind {
+                        if let Some(&dest) = self.def_to_local.get(def_id) {
+                            let new_buf = self.new_temp(Ty::String);
+                            self.emit(MirInst::Call {
+                                dest: Some(new_buf),
+                                callee: "String_push_str".to_string(),
+                                args: vec![MirValue::Use(dest), rhs_val],
+                            });
+                            self.emit(MirInst::Assign {
+                                dest,
+                                value: MirValue::Use(new_buf),
+                            });
+                            return Ok(None);
+                        }
+                    }
+                }
 
                 match &target.kind {
                     HirExprKind::VarRef(def_id) => {
@@ -1639,9 +2193,7 @@ impl<'a> Lowerer<'a> {
             }
 
             // ── Construct (struct/class instantiation) ──────────────
-            HirExprKind::Construct {
-                fields, ..
-            } => {
+            HirExprKind::Construct { fields, .. } => {
                 let dest = self.new_temp(expr.ty.clone());
                 self.emit(MirInst::Alloc {
                     dest,
@@ -1700,25 +2252,40 @@ impl<'a> Lowerer<'a> {
             }
 
             // ── Match ───────────────────────────────────────────────
-            HirExprKind::Match { scrutinee, arms } => {
-                self.lower_match(expr, scrutinee, arms)
-            }
+            HirExprKind::Match { scrutinee, arms } => self.lower_match(expr, scrutinee, arms),
 
             // ── Field access ────────────────────────────────────────
             HirExprKind::FieldAccess {
-                object, field_name, field_idx, ..
+                object,
+                field_name,
+                field_idx,
+                ..
             } => {
                 // Handle safe navigation `?.field` on Option types.
                 // The resolver desugars `x?.field` as FieldAccess with object
                 // type Option(...) and result type Option(...). We inline
                 // an Option match: if Some, extract inner and call method,
                 // otherwise produce None.
-                if is_option_type(&object.ty) && is_option_type(&expr.ty)
-                    && !matches!(field_name.as_str(),
-                        "is_some" | "is_none" | "map" | "unwrap_or" |
-                        "unwrap_or_else" | "ok_or" | "unwrap!" | "expect!" |
-                        "and_then" | "or" | "filter" | "flatten" | "as_ref" |
-                        "take" | "replace")
+                if is_option_type(&object.ty)
+                    && is_option_type(&expr.ty)
+                    && !matches!(
+                        field_name.as_str(),
+                        "is_some"
+                            | "is_none"
+                            | "map"
+                            | "unwrap_or"
+                            | "unwrap_or_else"
+                            | "ok_or"
+                            | "unwrap!"
+                            | "expect!"
+                            | "and_then"
+                            | "or"
+                            | "filter"
+                            | "flatten"
+                            | "as_ref"
+                            | "take"
+                            | "replace"
+                    )
                 {
                     let opt_local = self.lower_expr(object)?;
                     let opt_id = opt_local.unwrap_or_else(|| self.new_temp(Ty::Int));
@@ -1733,7 +2300,10 @@ impl<'a> Lowerer<'a> {
 
                     // Check tag
                     let tag = self.new_temp(Ty::Int32);
-                    self.emit(MirInst::GetTag { dest: tag, src: opt_id });
+                    self.emit(MirInst::GetTag {
+                        dest: tag,
+                        src: opt_id,
+                    });
                     let is_some = self.new_temp(Ty::Bool);
                     self.emit(MirInst::Compare {
                         dest: is_some,
@@ -1774,8 +2344,9 @@ impl<'a> Lowerer<'a> {
                                 other => other,
                             };
                             match inner_ty {
-                                Ty::Class { name, .. } =>
-                                    self.resolve_method_class(name, field_name),
+                                Ty::Class { name, .. } => {
+                                    self.resolve_method_class(name, field_name)
+                                }
                                 _ => inner_type_name.clone(),
                             }
                         }
@@ -1795,7 +2366,10 @@ impl<'a> Lowerer<'a> {
                     });
 
                     // Wrap in Some
-                    self.emit(MirInst::SetTag { dest: result, tag: 1 });
+                    self.emit(MirInst::SetTag {
+                        dest: result,
+                        tag: 1,
+                    });
                     self.emit(MirInst::SetField {
                         base: result,
                         field_index: 1,
@@ -1805,7 +2379,10 @@ impl<'a> Lowerer<'a> {
 
                     // None block
                     self.current_block = none_block;
-                    self.emit(MirInst::SetTag { dest: result, tag: 0 });
+                    self.emit(MirInst::SetTag {
+                        dest: result,
+                        tag: 0,
+                    });
                     self.set_terminator(Terminator::Goto(merge_block));
 
                     self.current_block = merge_block;
@@ -1822,11 +2399,25 @@ impl<'a> Lowerer<'a> {
                     } else {
                         type_name.as_str()
                     };
-                    if matches!(base_type, "Vec" | "Hash" | "Set") {
+                    if matches!(base_type, "Vec" | "Hash" | "HashMap" | "Set" | "HashSet") {
+                        let obj = self.new_temp(expr.ty.clone());
+                        // Use the base type so the mangled callee elides the
+                        // generic parameter list (`HashMap[K, V]_new` would
+                        // not match a real runtime symbol).
+                        self.emit(MirInst::Call {
+                            dest: Some(obj),
+                            callee: format!("{}_new", base_type),
+                            args: vec![],
+                        });
+                        return Ok(Some(obj));
+                    }
+                    // String.new (no parens) — direct dispatch to the
+                    // runtime constructor; see #02 stdlib brief.
+                    if base_type == "String" {
                         let obj = self.new_temp(expr.ty.clone());
                         self.emit(MirInst::Call {
                             dest: Some(obj),
-                            callee: format!("{}_new", type_name),
+                            callee: "String_new".to_string(),
                             args: vec![],
                         });
                         return Ok(Some(obj));
@@ -1859,14 +2450,18 @@ impl<'a> Lowerer<'a> {
                 // method call.  The parser produces FieldAccess whenever no
                 // parentheses follow the dot, but in Riven method calls can
                 // omit parens.
-                let obj_type_name = type_name_from_ty(&object.ty);
+                let obj_type_name = self
+                    .receiver_type_name(object)
+                    .unwrap_or_else(|| type_name_from_ty(&object.ty));
                 // Peel through references to find the underlying class type.
                 let base_ty = {
                     let mut ty = &object.ty;
                     loop {
                         match ty {
-                            Ty::Ref(inner) | Ty::RefMut(inner)
-                            | Ty::RefLifetime(_, inner) | Ty::RefMutLifetime(_, inner) => {
+                            Ty::Ref(inner)
+                            | Ty::RefMut(inner)
+                            | Ty::RefLifetime(_, inner)
+                            | Ty::RefMutLifetime(_, inner) => {
                                 ty = inner;
                             }
                             _ => break ty,
@@ -1889,9 +2484,18 @@ impl<'a> Lowerer<'a> {
                     // This is a no-arg method call, not a field access.
                     // For static/class methods (`def self.foo`), the callee
                     // takes no `self` parameter, so omit the receiver.
-                    let is_static = is_builtin_static_method(&obj_type_name, field_name)
+                    let is_static_builtin = is_builtin_static_method(&obj_type_name, field_name)
                         || self.is_user_static_method(&obj_type_name, field_name);
                     let obj_local = self.lower_expr(object)?;
+
+                    let dispatch_ty = if matches!(base_ty, Ty::Infer(_)) {
+                        &expr.ty
+                    } else {
+                        base_ty
+                    };
+                    let is_static = is_static_builtin
+                        || (field_name == "default"
+                            && self.type_supports_trait(dispatch_ty, "Default"));
                     let arg_values: Vec<MirValue> = if is_static {
                         Vec::new()
                     } else {
@@ -1902,13 +2506,13 @@ impl<'a> Lowerer<'a> {
                     // Use base_ty (refs peeled) to find the class name.
                     // For a generic type parameter or impl/dyn Trait,
                     // dispatch to the unique implementor of the trait bound.
-                    let resolved_class = match base_ty {
+                    let resolved_class = match dispatch_ty {
                         Ty::Class { name, .. } => self.resolve_method_class(name, field_name),
                         Ty::TypeParam { bounds, .. }
                         | Ty::ImplTrait(bounds)
-                        | Ty::DynTrait(bounds) => {
-                            self.unique_bound_impl(bounds).unwrap_or_else(|| obj_type_name.clone())
-                        }
+                        | Ty::DynTrait(bounds) => self
+                            .unique_bound_impl(bounds)
+                            .unwrap_or_else(|| obj_type_name.clone()),
                         _ => obj_type_name.clone(),
                     };
                     let mangled = format!("{}_{}", resolved_class, field_name);
@@ -1942,7 +2546,10 @@ impl<'a> Lowerer<'a> {
             }
 
             // ── Borrow ──────────────────────────────────────────────
-            HirExprKind::Borrow { mutable, expr: inner } => {
+            HirExprKind::Borrow {
+                mutable,
+                expr: inner,
+            } => {
                 let src_local = self.lower_expr(inner)?;
                 if let Some(src) = src_local {
                     let dest = self.new_temp(expr.ty.clone());
@@ -1958,15 +2565,13 @@ impl<'a> Lowerer<'a> {
             }
 
             // ── String interpolation ────────────────────────────────
-            HirExprKind::Interpolation { parts } => {
-                self.lower_interpolation(parts, &expr.ty)
-            }
+            HirExprKind::Interpolation { parts } => self.lower_interpolation(parts, &expr.ty),
 
             // ── Break / Continue ────────────────────────────────────
             HirExprKind::Break(value) => {
                 // Look up the innermost loop. If there is no enclosing
                 // loop, treat as a no-op (earlier passes should reject).
-                if let Some(frame) = self.loop_stack.last().copied() {
+                if let Some(frame) = self.loop_stack.last().cloned() {
                     // If a value is provided, lower it and assign into
                     // the loop's result local so the loop expression
                     // evaluates to that value at the exit block.
@@ -1979,6 +2584,9 @@ impl<'a> Lowerer<'a> {
                             });
                         }
                     }
+                    // Free heap-owned locals declared in the loop body
+                    // before exiting. (P0.2)
+                    self.emit_dealloc_loop_locals(&frame.body_locals);
                     self.set_terminator(Terminator::Goto(frame.break_target));
                     // Any code after `break` in this source block is
                     // unreachable — lower it into a fresh dead block so
@@ -1990,7 +2598,8 @@ impl<'a> Lowerer<'a> {
                 Ok(None)
             }
             HirExprKind::Continue => {
-                if let Some(&frame) = self.loop_stack.last() {
+                if let Some(frame) = self.loop_stack.last().cloned() {
+                    self.emit_dealloc_loop_locals(&frame.body_locals);
                     self.set_terminator(Terminator::Goto(frame.continue_target));
                     let dead = self.new_block();
                     self.current_block = dead;
@@ -2011,13 +2620,18 @@ impl<'a> Lowerer<'a> {
                 // and `end` once each into hidden temporaries, then loop
                 // while `i < end` (or `i <= end` for inclusive) and
                 // increment by one at the end of each iteration.
-                if let HirExprKind::Range { start, end, inclusive } = &iterable.kind {
-                    let start_expr = start.as_ref().ok_or_else(|| {
-                        "for-range requires a start bound".to_string()
-                    })?;
-                    let end_expr = end.as_ref().ok_or_else(|| {
-                        "for-range requires an end bound".to_string()
-                    })?;
+                if let HirExprKind::Range {
+                    start,
+                    end,
+                    inclusive,
+                } = &iterable.kind
+                {
+                    let start_expr = start
+                        .as_ref()
+                        .ok_or_else(|| "for-range requires a start bound".to_string())?;
+                    let end_expr = end
+                        .as_ref()
+                        .ok_or_else(|| "for-range requires an end bound".to_string())?;
 
                     // Evaluate start and end exactly once.
                     let start_local = self.lower_expr(start_expr)?;
@@ -2076,12 +2690,16 @@ impl<'a> Lowerer<'a> {
                         continue_target: step_block,
                         break_target: exit_block,
                         result_local: None,
+                        body_entry_block: body_block,
+                        body_locals: Vec::new(),
                     });
                     let _ = self.lower_expr(body)?;
-                    self.loop_stack.pop();
+                    let frame = self.loop_stack.pop().expect("loop frame");
                     if matches!(self.get_terminator(), Terminator::Unreachable) {
+                        self.emit_dealloc_loop_locals(&frame.body_locals);
                         self.set_terminator(Terminator::Goto(step_block));
                     }
+                    self.prepend_zero_init_for_body_locals(&frame);
 
                     // Step: i = i + 1, then jump back to header.
                     self.current_block = step_block;
@@ -2107,9 +2725,7 @@ impl<'a> Lowerer<'a> {
                 // Lower iterable expression (after iterator no-ops, this
                 // is typically a Vec pointer).
                 let iter_local = self.lower_expr(iterable)?;
-                let iter_id = iter_local.unwrap_or_else(|| {
-                    self.new_temp(Ty::Int)
-                });
+                let iter_id = iter_local.unwrap_or_else(|| self.new_temp(Ty::Int));
 
                 // Index counter: _i = 0
                 let idx = self.new_temp(Ty::Int);
@@ -2161,12 +2777,8 @@ impl<'a> Lowerer<'a> {
                 let binding_ty = element_type_of(&iterable.ty);
                 let binding_local = {
                     let func = self.fn_mut();
-                    let id = func.new_local(
-                        binding_name.clone(),
-                        binding_ty,
-                        false,
-                    );
-                    id
+
+                    func.new_local(binding_name.clone(), binding_ty, false)
                 };
                 self.def_to_local.insert(*binding, binding_local);
 
@@ -2208,13 +2820,17 @@ impl<'a> Lowerer<'a> {
                     continue_target: step_block,
                     break_target: exit_block,
                     result_local: None,
+                    body_entry_block: body_block,
+                    body_locals: Vec::new(),
                 });
                 self.lower_expr(body)?;
-                self.loop_stack.pop();
+                let frame = self.loop_stack.pop().expect("loop frame");
 
                 if matches!(self.get_terminator(), Terminator::Unreachable) {
+                    self.emit_dealloc_loop_locals(&frame.body_locals);
                     self.set_terminator(Terminator::Goto(step_block));
                 }
+                self.prepend_zero_init_for_body_locals(&frame);
 
                 // Step: increment index and jump back to header.
                 self.current_block = step_block;
@@ -2240,7 +2856,12 @@ impl<'a> Lowerer<'a> {
             }
 
             // ── Closure ─────────────────────────────────────────────
-            HirExprKind::Closure { params, body, is_move, .. } => {
+            HirExprKind::Closure {
+                params,
+                body,
+                is_move,
+                ..
+            } => {
                 // Closure layout (heap-allocated, 16 bytes):
                 //   [0] fn_ptr       — address of the synthesized function
                 //   [8] captures_ptr — heap block holding captured values
@@ -2258,12 +2879,16 @@ impl<'a> Lowerer<'a> {
                 // Collect captured def_ids by walking the body.  A def is
                 // captured when it is referenced but not defined inside
                 // the closure body or declared as a closure parameter.
-                let param_def_ids: HashSet<DefId> =
-                    params.iter().map(|p| p.def_id).collect();
+                let param_def_ids: HashSet<DefId> = params.iter().map(|p| p.def_id).collect();
                 let mut captured_def_ids: Vec<DefId> = Vec::new();
                 let mut seen: HashSet<DefId> = HashSet::new();
-                collect_captures(body, &param_def_ids, &self.def_to_local,
-                    &mut captured_def_ids, &mut seen);
+                collect_captures(
+                    body,
+                    &param_def_ids,
+                    &self.def_to_local,
+                    &mut captured_def_ids,
+                    &mut seen,
+                );
 
                 // Decide storage kind per capture.  Copy-typed values
                 // can always be captured by value; moved/Copy values go
@@ -2368,19 +2993,12 @@ impl<'a> Lowerer<'a> {
                 // is the captures pointer (may be NULL for no captures).
                 let ret_ty = body.ty.clone();
                 let mut closure_fn = MirFunction::new(&closure_name, ret_ty);
-                let cap_param = closure_fn.new_local(
-                    "__captures".to_string(),
-                    Ty::Int,
-                    false,
-                );
+                let cap_param = closure_fn.new_local("__captures".to_string(), Ty::Int, false);
                 closure_fn.params.push(cap_param);
                 let mut closure_param_ids: Vec<LocalId> = Vec::with_capacity(params.len());
                 for param in params {
-                    let local_id = closure_fn.new_local(
-                        param.name.clone(),
-                        param.ty.clone(),
-                        false,
-                    );
+                    let local_id =
+                        closure_fn.new_local(param.name.clone(), param.ty.clone(), false);
                     closure_fn.params.push(local_id);
                     closure_param_ids.push(local_id);
                 }
@@ -2396,11 +3014,16 @@ impl<'a> Lowerer<'a> {
 
                 self.current_fn = Some(closure_fn);
                 self.current_block = 0;
-                self.captures_ptr_local = if slots.is_empty() { None } else { Some(cap_param) };
+                self.captures_ptr_local = if slots.is_empty() {
+                    None
+                } else {
+                    Some(cap_param)
+                };
 
                 // Clear def_to_local: only closure params (and captures
                 // via the capture map) should be visible inside the body.
                 self.def_to_local.clear();
+                self.initialized_heap_locals.clear();
                 for (i, param) in params.iter().enumerate() {
                     self.def_to_local.insert(param.def_id, closure_param_ids[i]);
                 }
@@ -2511,6 +3134,54 @@ impl<'a> Lowerer<'a> {
                         }
                     }
                 }
+                // ── Phase 2 stdlib batch 1 (#03): Vec[i] ──
+                // Indexing a Vec at runtime panics on OOB with a
+                // descriptive message ("index N out of range, len M").
+                // The runtime fn returns the raw 64-bit slot; the
+                // typeck-emitted result type pulls out the element T.
+                if matches!(object.ty, Ty::Vec(_))
+                    || matches!(
+                        &object.ty,
+                        Ty::Ref(inner) | Ty::RefMut(inner)
+                            if matches!(inner.as_ref(), Ty::Vec(_))
+                    )
+                {
+                    let base_local = self.lower_expr(object)?;
+                    let idx_local = self.lower_expr(index)?;
+                    let base_val = local_to_value(base_local);
+                    let idx_val = local_to_value(idx_local);
+                    let dest = self.new_temp(expr.ty.clone());
+                    self.emit(MirInst::Call {
+                        dest: Some(dest),
+                        callee: "riven_vec_get_or_panic".to_string(),
+                        args: vec![base_val, idx_val],
+                    });
+                    return Ok(Some(dest));
+                }
+                // ── Phase 2 stdlib batch 3 (#04): HashMap[&K] ──
+                // `m[k]` panics on missing keys via `riven_hash_index`
+                // (mirrors `riven_vec_get_or_panic` for Vec). The
+                // surface type is V (set in typeck::infer_index_ty);
+                // runtime returns the raw 64-bit value slot.
+                if matches!(object.ty, Ty::HashMap(_, _))
+                    || matches!(
+                        &object.ty,
+                        Ty::Ref(inner) | Ty::RefMut(inner)
+                            if matches!(inner.as_ref(), Ty::HashMap(_, _))
+                    )
+                {
+                    let base_local = self.lower_expr(object)?;
+                    let idx_local = self.lower_expr(index)?;
+                    let base_val = local_to_value(base_local);
+                    let idx_val = local_to_value(idx_local);
+                    let dest = self.new_temp(expr.ty.clone());
+                    self.emit(MirInst::Call {
+                        dest: Some(dest),
+                        callee: "riven_hash_index".to_string(),
+                        args: vec![base_val, idx_val],
+                    });
+                    return Ok(Some(dest));
+                }
                 // Dynamic index / other collection kinds still need runtime
                 // support; fall through as a no-op.
                 let _ = (object, index);
@@ -2586,11 +3257,9 @@ impl<'a> Lowerer<'a> {
                             callee: hash_new_name,
                             args: vec![],
                         });
-                        let hash_insert_name =
-                            format!("{}_insert", type_name_from_ty(&hash_ty));
+                        let hash_insert_name = format!("{}_insert", type_name_from_ty(&hash_ty));
                         let mut iter = args.iter();
-                        while let (Some(k_expr), Some(v_expr)) = (iter.next(), iter.next())
-                        {
+                        while let (Some(k_expr), Some(v_expr)) = (iter.next(), iter.next()) {
                             let k_local = self.lower_expr(k_expr)?;
                             let v_local = self.lower_expr(v_expr)?;
                             let k_val = local_to_value(k_local);
@@ -2613,8 +3282,7 @@ impl<'a> Lowerer<'a> {
                             callee: set_new_name,
                             args: vec![],
                         });
-                        let set_insert_name =
-                            format!("{}_insert", type_name_from_ty(&set_ty));
+                        let set_insert_name = format!("{}_insert", type_name_from_ty(&set_ty));
                         for arg_expr in args {
                             let arg_local = self.lower_expr(arg_expr)?;
                             let arg_val = local_to_value(arg_local);
@@ -2681,9 +3349,9 @@ impl<'a> Lowerer<'a> {
             }
 
             // ── Catch-all for unhandled expressions ─────────────────
-            HirExprKind::ArrayFill { .. }
-            | HirExprKind::Range { .. }
-            | HirExprKind::Error => Ok(None),
+            HirExprKind::ArrayFill { .. } | HirExprKind::Range { .. } | HirExprKind::Error => {
+                Ok(None)
+            }
         }
     }
 
@@ -2719,7 +3387,12 @@ impl<'a> Lowerer<'a> {
 
                     // Extract each element via GetField
                     for (i, elem_pat) in elements.iter().enumerate() {
-                        if let HirPattern::Binding { def_id: elem_def, name: elem_name, .. } = elem_pat {
+                        if let HirPattern::Binding {
+                            def_id: elem_def,
+                            name: elem_name,
+                            ..
+                        } = elem_pat
+                        {
                             let elem_ty = match ty {
                                 Ty::Tuple(tys) if i < tys.len() => tys[i].clone(),
                                 _ => Ty::Int,
@@ -2762,16 +3435,31 @@ impl<'a> Lowerer<'a> {
                     ty.clone()
                 };
 
-                let local = self.new_local_named(&name, refined_ty, *mutable);
+                let local = self.new_local_named(&name, refined_ty.clone(), *mutable);
                 self.def_to_local.insert(*def_id, local);
 
                 if let Some(init) = value {
                     let val_local = self.lower_expr(init)?;
-                    let val = local_to_value(val_local);
-                    self.emit(MirInst::Assign {
-                        dest: local,
-                        value: val,
-                    });
+                    // Owned rebinding of a VarRef must emit `MirInst::Move`
+                    // so drop-elaboration tracks ownership correctly.
+                    if let (HirExprKind::VarRef(_), Some(src)) = (&init.kind, val_local) {
+                        self.emit_transfer(local, src, &init.ty, init.ty.move_semantics());
+                    } else {
+                        let val = local_to_value(val_local);
+                        self.emit(MirInst::Assign {
+                            dest: local,
+                            value: val,
+                        });
+                    }
+                    if matches!(
+                        refined_ty,
+                        Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
+                    ) {
+                        self.initialized_heap_locals.insert(local);
+                        if let Some(frame) = self.loop_stack.last_mut() {
+                            frame.body_locals.push(local);
+                        }
+                    }
                 }
                 Ok(())
             }
@@ -2798,7 +3486,9 @@ impl<'a> Lowerer<'a> {
         let is_enum = matches!(
             scrutinee.ty,
             Ty::Enum { .. } | Ty::Result(_, _) | Ty::Option(_)
-        ) || arms.iter().any(|arm| matches!(arm.pattern, HirPattern::Enum { .. }));
+        ) || arms
+            .iter()
+            .any(|arm| matches!(arm.pattern, HirPattern::Enum { .. }));
 
         let merge_block = self.new_block();
         let result_local = if expr.ty != Ty::Unit && expr.ty != Ty::Never {
@@ -2888,10 +3578,10 @@ impl<'a> Lowerer<'a> {
                 let arm_block = arm_entry_blocks[arm_idx];
                 if let HirPattern::Enum { variant_idx, .. } = &arm.pattern {
                     let disc = *variant_idx as i64;
-                    if !seen_variants.contains_key(&disc) {
+                    seen_variants.entry(disc).or_insert_with(|| {
                         targets.push((disc, arm_block));
-                        seen_variants.insert(disc, arm_block);
-                    }
+                        arm_block
+                    });
                     arm_blocks.push((arm_block, arm));
                 } else {
                     // Wildcard / binding — first one lives at
@@ -2913,7 +3603,13 @@ impl<'a> Lowerer<'a> {
                 self.current_block = *arm_block;
 
                 // Bind pattern variables if it's an Enum pattern with field bindings.
-                if let HirPattern::Enum { type_def, variant_idx, fields, .. } = &arm.pattern {
+                if let HirPattern::Enum {
+                    type_def,
+                    variant_idx,
+                    fields,
+                    ..
+                } = &arm.pattern
+                {
                     if !fields.is_empty() {
                         // For Option/Result, derive field types from the scrutinee type
                         // since the variant definitions use TypeParam placeholders.
@@ -2944,10 +3640,16 @@ impl<'a> Lowerer<'a> {
                         for (idx, field_pat) in fields.iter().enumerate() {
                             let binding_info = match field_pat {
                                 HirPattern::Binding {
-                                    def_id, name, mutable, ..
+                                    def_id,
+                                    name,
+                                    mutable,
+                                    ..
                                 } => Some((*def_id, name.as_str(), *mutable)),
                                 HirPattern::Ref {
-                                    def_id, name, mutable, ..
+                                    def_id,
+                                    name,
+                                    mutable,
+                                    ..
                                 } => {
                                     // `ref` pattern: bind a reference to
                                     // the field. At runtime references are
@@ -2959,10 +3661,8 @@ impl<'a> Lowerer<'a> {
                                 _ => None,
                             };
                             if let Some((def_id, name, mutable)) = binding_info {
-                                let field_ty = variant_field_types
-                                    .get(idx)
-                                    .cloned()
-                                    .unwrap_or(Ty::Int);
+                                let field_ty =
+                                    variant_field_types.get(idx).cloned().unwrap_or(Ty::Int);
                                 let local = self.new_local_named(name, field_ty, mutable);
                                 self.def_to_local.insert(def_id, local);
                                 self.emit(MirInst::GetField {
@@ -2985,12 +3685,9 @@ impl<'a> Lowerer<'a> {
                             {
                                 // Extract the outer field (the inner enum
                                 // value) from the payload.
-                                let inner_enum_ty = variant_field_types
-                                    .get(idx)
-                                    .cloned()
-                                    .unwrap_or(Ty::Int);
-                                let inner_enum_local =
-                                    self.new_temp(inner_enum_ty.clone());
+                                let inner_enum_ty =
+                                    variant_field_types.get(idx).cloned().unwrap_or(Ty::Int);
+                                let inner_enum_local = self.new_temp(inner_enum_ty.clone());
                                 self.emit(MirInst::GetField {
                                     dest: inner_enum_local,
                                     base: payload_ptr,
@@ -3005,9 +3702,7 @@ impl<'a> Lowerer<'a> {
                                         );
 
                                     // Get the inner payload pointer.
-                                    let inner_payload = self.new_temp(
-                                        inner_enum_ty.clone(),
-                                    );
+                                    let inner_payload = self.new_temp(inner_enum_ty.clone());
                                     self.emit(MirInst::GetPayload {
                                         dest: inner_payload,
                                         src: inner_enum_local,
@@ -3019,10 +3714,16 @@ impl<'a> Lowerer<'a> {
                                     {
                                         let inner_binding = match inner_field_pat {
                                             HirPattern::Binding {
-                                                def_id, name, mutable, ..
+                                                def_id,
+                                                name,
+                                                mutable,
+                                                ..
                                             } => Some((*def_id, name.as_str(), *mutable)),
                                             HirPattern::Ref {
-                                                def_id, name, mutable, ..
+                                                def_id,
+                                                name,
+                                                mutable,
+                                                ..
                                             } => Some((*def_id, name.as_str(), *mutable)),
                                             _ => None,
                                         };
@@ -3038,10 +3739,7 @@ impl<'a> Lowerer<'a> {
                                                 inner_field_ty,
                                                 inner_mutable,
                                             );
-                                            self.def_to_local.insert(
-                                                inner_def_id,
-                                                inner_local,
-                                            );
+                                            self.def_to_local.insert(inner_def_id, inner_local);
                                             self.emit(MirInst::GetField {
                                                 dest: inner_local,
                                                 base: inner_payload,
@@ -3054,7 +3752,10 @@ impl<'a> Lowerer<'a> {
                         }
                     }
                 } else if let HirPattern::Binding {
-                    def_id, name, mutable, ..
+                    def_id,
+                    name,
+                    mutable,
+                    ..
                 } = &arm.pattern
                 {
                     // Bind the scrutinee value to the variable — use the scrutinee's type.
@@ -3088,10 +3789,7 @@ impl<'a> Lowerer<'a> {
                 if matches!(self.get_terminator(), Terminator::Unreachable) {
                     if let Some(dest) = result_local {
                         let val = local_to_value(body_result);
-                        self.emit(MirInst::Assign {
-                            dest,
-                            value: val,
-                        });
+                        self.emit(MirInst::Assign { dest, value: val });
                     }
                     self.set_terminator(Terminator::Goto(merge_block));
                 }
@@ -3104,7 +3802,13 @@ impl<'a> Lowerer<'a> {
             }
         } else {
             // Non-enum match: cascading branches (if/else chain).
-            self.lower_match_cascading(scrut_local, &scrutinee.ty, arms, result_local, merge_block)?;
+            self.lower_match_cascading(
+                scrut_local,
+                &scrutinee.ty,
+                arms,
+                result_local,
+                merge_block,
+            )?;
         }
 
         self.current_block = merge_block;
@@ -3137,7 +3841,11 @@ impl<'a> Lowerer<'a> {
             // intermediate block that evaluates the guard before
             // dispatching to the body or falling through to `next_block`.
             let has_guard = arm.guard.is_some();
-            let match_target = if has_guard { self.new_block() } else { arm_body_block };
+            let match_target = if has_guard {
+                self.new_block()
+            } else {
+                arm_body_block
+            };
 
             match &arm.pattern {
                 HirPattern::Wildcard { .. }
@@ -3145,10 +3853,18 @@ impl<'a> Lowerer<'a> {
                 | HirPattern::Ref { .. } => {
                     // Wildcard / binding / ref always matches.
                     let binding_info = match &arm.pattern {
-                        HirPattern::Binding { def_id, name, mutable, .. }
-                        | HirPattern::Ref { def_id, name, mutable, .. } => {
-                            Some((*def_id, name.clone(), *mutable))
+                        HirPattern::Binding {
+                            def_id,
+                            name,
+                            mutable,
+                            ..
                         }
+                        | HirPattern::Ref {
+                            def_id,
+                            name,
+                            mutable,
+                            ..
+                        } => Some((*def_id, name.clone(), *mutable)),
                         _ => None,
                     };
                     if let Some((def_id, name, mutable)) = binding_info {
@@ -3171,8 +3887,7 @@ impl<'a> Lowerer<'a> {
                     let mut all_literal_or_wild = true;
                     for p in patterns {
                         match p {
-                            HirPattern::Literal { .. }
-                            | HirPattern::Wildcard { .. } => {}
+                            HirPattern::Literal { .. } | HirPattern::Wildcard { .. } => {}
                             _ => all_literal_or_wild = false,
                         }
                     }
@@ -3184,7 +3899,13 @@ impl<'a> Lowerer<'a> {
                         self.set_terminator(Terminator::Goto(match_target));
                     } else {
                         // Build a chain of tests across alternatives.
-                        self.lower_or_pattern(scrut_local, scrut_ty, patterns, match_target, next_block)?;
+                        self.lower_or_pattern(
+                            scrut_local,
+                            scrut_ty,
+                            patterns,
+                            match_target,
+                            next_block,
+                        )?;
                     }
                 }
                 HirPattern::Tuple { elements, .. } => {
@@ -3192,7 +3913,13 @@ impl<'a> Lowerer<'a> {
                     // scrutinee's corresponding field. Literals gate the
                     // match; bindings always accept and introduce a local.
                     if let Some(scrut) = scrut_local {
-                        self.lower_tuple_pattern(scrut, scrut_ty, elements, match_target, next_block)?;
+                        self.lower_tuple_pattern(
+                            scrut,
+                            scrut_ty,
+                            elements,
+                            match_target,
+                            next_block,
+                        )?;
                     } else {
                         self.set_terminator(Terminator::Goto(match_target));
                     }
@@ -3243,10 +3970,7 @@ impl<'a> Lowerer<'a> {
             if matches!(self.get_terminator(), Terminator::Unreachable) {
                 if let Some(dest) = result_local {
                     let val = local_to_value(body_result);
-                    self.emit(MirInst::Assign {
-                        dest,
-                        value: val,
-                    });
+                    self.emit(MirInst::Assign { dest, value: val });
                 }
                 self.set_terminator(Terminator::Goto(merge_block));
             }
@@ -3296,8 +4020,7 @@ impl<'a> Lowerer<'a> {
                     // unresolved types from type inference).
                     let effective_ty = val_local
                         .and_then(|lid| {
-                            self.fn_mut().locals.get(lid as usize)
-                                .map(|l| l.ty.clone())
+                            self.fn_mut().locals.get(lid as usize).map(|l| l.ty.clone())
                         })
                         .unwrap_or_else(|| expr.ty.clone());
 
@@ -3315,6 +4038,26 @@ impl<'a> Lowerer<'a> {
                             });
                             d
                         })
+                    } else if let Some(struct_name) = self.struct_with_derive_debug(&effective_ty) {
+                        // Non-primitive type with `derive Debug`: dispatch
+                        // to the synthesized `{Name}_to_debug` so the
+                        // interpolation prints the formatted struct rather
+                        // than a raw pointer address.
+                        let src = val_local.unwrap_or_else(|| {
+                            let d = self.new_temp(Ty::String);
+                            self.emit(MirInst::StringLiteral {
+                                dest: d,
+                                value: String::new(),
+                            });
+                            d
+                        });
+                        let dest = self.new_temp(Ty::String);
+                        self.emit(MirInst::Call {
+                            dest: Some(dest),
+                            callee: format!("{}_to_debug", struct_name),
+                            args: vec![MirValue::Use(src)],
+                        });
+                        dest
                     } else {
                         let src = val_local.unwrap_or_else(|| {
                             let d = self.new_temp(Ty::String);
@@ -3380,7 +4123,7 @@ impl<'a> Lowerer<'a> {
         expr: &HirExpr,
         object: &HirExpr,
         method_name: &str,
-        _args: &[HirExpr],
+        args: &[HirExpr],
         block_expr: &HirExpr,
     ) -> Result<Option<Option<LocalId>>, String> {
         // Extract closure params and body from the block expression.
@@ -3392,6 +4135,56 @@ impl<'a> Lowerer<'a> {
         // Handle Option.map { |x| expr } inline: check tag, transform payload.
         if is_option_type(&object.ty) && method_name == "map" {
             return self.inline_option_map(expr, object, closure_params, closure_body);
+        }
+
+        // Result.map / Result.map_err — same shape: branch on tag,
+        // run the closure on the matching arm's payload, repackage.
+        if is_result_type(&object.ty) {
+            match method_name {
+                "map" => {
+                    return self.inline_result_map(
+                        expr,
+                        object,
+                        closure_params,
+                        closure_body,
+                        /*on_ok=*/ true,
+                    );
+                }
+                "map_err" => {
+                    return self.inline_result_map(
+                        expr,
+                        object,
+                        closure_params,
+                        closure_body,
+                        /*on_ok=*/ false,
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        // Result.unwrap_or_else { |e| ... } / Option.unwrap_or_else { |e| ... }
+        // — branch on tag, return payload on the success arm, evaluate
+        // closure with the error payload otherwise.
+        if method_name == "unwrap_or_else" {
+            if is_result_type(&object.ty) {
+                return self.inline_unwrap_or_else(
+                    expr,
+                    object,
+                    closure_params,
+                    closure_body,
+                    /*ok_tag=*/ 0,
+                );
+            }
+            if is_option_type(&object.ty) {
+                return self.inline_unwrap_or_else(
+                    expr,
+                    object,
+                    closure_params,
+                    closure_body,
+                    /*ok_tag=*/ 1,
+                );
+            }
         }
 
         // Determine the Vec source. For Vec/iterator types, peel through
@@ -3448,8 +4241,382 @@ impl<'a> Lowerer<'a> {
                 let result = self.inline_partition(expr, vec_id, closure_params, closure_body)?;
                 Ok(Some(Some(result)))
             }
+            // Phase 2 stdlib batch 2 (#03): closure-takers reuse the
+            // same per-element loop machinery as `each` / `filter`.
+            //
+            //  * `retain { |x| keep? }`    — in-place filter.
+            //  * `sort_by { |a, b| ord }`  — comparator-driven insertion sort.
+            "retain" => {
+                self.inline_retain(vec_id, closure_params, closure_body)?;
+                Ok(Some(None))
+            }
+            "sort_by" => {
+                self.inline_sort_by(vec_id, closure_params, closure_body)?;
+                Ok(Some(None))
+            }
+            // Phase 2 stdlib (#05 batch 2): closure-taking eager
+            // terminators on `*Iter` receivers. These inline the same
+            // `riven_vec_len` + `riven_vec_get` per-element loop as
+            // `each` / `find`, but they accumulate (`fold`) or
+            // short-circuit on a boolean predicate (`all` / `any`).
+            "fold" => {
+                let result = self.inline_fold(expr, vec_id, args, closure_params, closure_body)?;
+                Ok(Some(Some(result)))
+            }
+            "all" => {
+                let result = self.inline_all_any(
+                    expr,
+                    vec_id,
+                    closure_params,
+                    closure_body,
+                    /*all=*/ true,
+                )?;
+                Ok(Some(Some(result)))
+            }
+            "any" => {
+                let result = self.inline_all_any(
+                    expr,
+                    vec_id,
+                    closure_params,
+                    closure_body,
+                    /*all=*/ false,
+                )?;
+                Ok(Some(Some(result)))
+            }
             _ => Ok(None), // Not a recognized closure method.
         }
+    }
+
+    /// Emit an inlined `vec.retain { |item| pred }` — in-place filter.
+    /// Read-write cursor walks the backing array; elements where the
+    /// closure returns `true` are kept (compacted into the prefix);
+    /// elements where it returns `false` are dropped (the slot at
+    /// position `read` is overwritten by a future kept element). Final
+    /// `len` becomes the count of survivors. The element backing
+    /// (e.g. `Vec[String]` slot strings) is NOT freed by this lowering
+    /// — v1 documents `retain` as a slot-level forget, the same
+    /// contract as `clear` / `truncate` (#03 batch 1).
+    fn inline_retain(
+        &mut self,
+        vec_id: LocalId,
+        closure_params: &[HirClosureParam],
+        closure_body: &HirExpr,
+    ) -> Result<(), String> {
+        // read = 0; write = 0
+        let read = self.new_temp(Ty::Int);
+        self.emit(MirInst::Assign {
+            dest: read,
+            value: MirValue::Literal(Literal::Int(0)),
+        });
+        let write = self.new_temp(Ty::Int);
+        self.emit(MirInst::Assign {
+            dest: write,
+            value: MirValue::Literal(Literal::Int(0)),
+        });
+
+        let len = self.new_temp(Ty::Int);
+        self.emit(MirInst::Call {
+            dest: Some(len),
+            callee: "riven_vec_len".to_string(),
+            args: vec![MirValue::Use(vec_id)],
+        });
+
+        let header_block = self.new_block();
+        let body_block = self.new_block();
+        let keep_block = self.new_block();
+        let inc_block = self.new_block();
+        let exit_block = self.new_block();
+
+        self.set_terminator(Terminator::Goto(header_block));
+        self.current_block = header_block;
+
+        let cond = self.new_temp(Ty::Bool);
+        self.emit(MirInst::Compare {
+            dest: cond,
+            op: CmpOp::Lt,
+            lhs: MirValue::Use(read),
+            rhs: MirValue::Use(len),
+        });
+        self.set_terminator(Terminator::Branch {
+            cond: MirValue::Use(cond),
+            then_block: body_block,
+            else_block: exit_block,
+        });
+
+        // Body: bind item, evaluate predicate.
+        self.current_block = body_block;
+
+        let item_local = if let Some(param) = closure_params.first() {
+            let item = self.new_local_named(&param.name, param.ty.clone(), false);
+            self.def_to_local.insert(param.def_id, item);
+            self.emit(MirInst::Call {
+                dest: Some(item),
+                callee: "riven_vec_get".to_string(),
+                args: vec![MirValue::Use(vec_id), MirValue::Use(read)],
+            });
+            item
+        } else {
+            self.new_temp(Ty::Int)
+        };
+
+        let pred_result = self.lower_expr(closure_body)?;
+        let pred_val = local_to_value(pred_result);
+
+        self.set_terminator(Terminator::Branch {
+            cond: pred_val,
+            then_block: keep_block,
+            else_block: inc_block,
+        });
+
+        // Keep: write the slot at `write`, then write++.
+        self.current_block = keep_block;
+        self.emit(MirInst::Call {
+            dest: None,
+            callee: "riven_vec_set".to_string(),
+            args: vec![
+                MirValue::Use(vec_id),
+                MirValue::Use(write),
+                MirValue::Use(item_local),
+            ],
+        });
+        let next_write = self.new_temp(Ty::Int);
+        self.emit(MirInst::BinOp {
+            dest: next_write,
+            op: BinOp::Add,
+            lhs: MirValue::Use(write),
+            rhs: MirValue::Literal(Literal::Int(1)),
+        });
+        self.emit(MirInst::Assign {
+            dest: write,
+            value: MirValue::Use(next_write),
+        });
+        self.set_terminator(Terminator::Goto(inc_block));
+
+        // Increment read.
+        self.current_block = inc_block;
+        let next_read = self.new_temp(Ty::Int);
+        self.emit(MirInst::BinOp {
+            dest: next_read,
+            op: BinOp::Add,
+            lhs: MirValue::Use(read),
+            rhs: MirValue::Literal(Literal::Int(1)),
+        });
+        self.emit(MirInst::Assign {
+            dest: read,
+            value: MirValue::Use(next_read),
+        });
+        self.set_terminator(Terminator::Goto(header_block));
+
+        // Exit: truncate to `write`.
+        self.current_block = exit_block;
+        self.emit(MirInst::Call {
+            dest: None,
+            callee: "riven_vec_truncate".to_string(),
+            args: vec![MirValue::Use(vec_id), MirValue::Use(write)],
+        });
+        Ok(())
+    }
+
+    /// Emit an inlined `vec.sort_by { |a, b| order }` — selection sort
+    /// on the backing slots driven by the user's comparator. The
+    /// comparator returns a signed Int (negative=a-before-b,
+    /// positive=b-before-a). For v1 we use selection sort O(n^2) which
+    /// is the simplest stable shape; switching to a heapsort or a
+    /// merge-sort lands alongside the wider trait-driven sort surface
+    /// in #05. Sort is in-place — bitwise slot swap.
+    fn inline_sort_by(
+        &mut self,
+        vec_id: LocalId,
+        closure_params: &[HirClosureParam],
+        closure_body: &HirExpr,
+    ) -> Result<(), String> {
+        // i = 0
+        let i_idx = self.new_temp(Ty::Int);
+        self.emit(MirInst::Assign {
+            dest: i_idx,
+            value: MirValue::Literal(Literal::Int(0)),
+        });
+
+        // len = riven_vec_len(vec)
+        let len = self.new_temp(Ty::Int);
+        self.emit(MirInst::Call {
+            dest: Some(len),
+            callee: "riven_vec_len".to_string(),
+            args: vec![MirValue::Use(vec_id)],
+        });
+
+        let outer_header = self.new_block();
+        let outer_body = self.new_block();
+        let inner_header = self.new_block();
+        let inner_body = self.new_block();
+        let swap_block = self.new_block();
+        let inner_inc = self.new_block();
+        let outer_inc = self.new_block();
+        let exit_block = self.new_block();
+
+        self.set_terminator(Terminator::Goto(outer_header));
+        self.current_block = outer_header;
+
+        // outer cond: i < len
+        let outer_cond = self.new_temp(Ty::Bool);
+        self.emit(MirInst::Compare {
+            dest: outer_cond,
+            op: CmpOp::Lt,
+            lhs: MirValue::Use(i_idx),
+            rhs: MirValue::Use(len),
+        });
+        self.set_terminator(Terminator::Branch {
+            cond: MirValue::Use(outer_cond),
+            then_block: outer_body,
+            else_block: exit_block,
+        });
+
+        // outer body: j = i + 1
+        self.current_block = outer_body;
+        let j_idx = self.new_temp(Ty::Int);
+        let i_plus_1 = self.new_temp(Ty::Int);
+        self.emit(MirInst::BinOp {
+            dest: i_plus_1,
+            op: BinOp::Add,
+            lhs: MirValue::Use(i_idx),
+            rhs: MirValue::Literal(Literal::Int(1)),
+        });
+        self.emit(MirInst::Assign {
+            dest: j_idx,
+            value: MirValue::Use(i_plus_1),
+        });
+        self.set_terminator(Terminator::Goto(inner_header));
+
+        // inner cond: j < len
+        self.current_block = inner_header;
+        let inner_cond = self.new_temp(Ty::Bool);
+        self.emit(MirInst::Compare {
+            dest: inner_cond,
+            op: CmpOp::Lt,
+            lhs: MirValue::Use(j_idx),
+            rhs: MirValue::Use(len),
+        });
+        self.set_terminator(Terminator::Branch {
+            cond: MirValue::Use(inner_cond),
+            then_block: inner_body,
+            else_block: outer_inc,
+        });
+
+        // inner body: bind closure params a = vec[i], b = vec[j];
+        // result = closure(a, b); if result > 0: swap(i, j).
+        self.current_block = inner_body;
+        let elem_ty = element_type_of(&self.fn_local_ty(vec_id));
+        let a_local = if let Some(param) = closure_params.get(0) {
+            let l = self.new_local_named(&param.name, param.ty.clone(), false);
+            self.def_to_local.insert(param.def_id, l);
+            self.emit(MirInst::Call {
+                dest: Some(l),
+                callee: "riven_vec_get".to_string(),
+                args: vec![MirValue::Use(vec_id), MirValue::Use(i_idx)],
+            });
+            l
+        } else {
+            let l = self.new_temp(elem_ty.clone());
+            self.emit(MirInst::Call {
+                dest: Some(l),
+                callee: "riven_vec_get".to_string(),
+                args: vec![MirValue::Use(vec_id), MirValue::Use(i_idx)],
+            });
+            l
+        };
+        let _b_local = if let Some(param) = closure_params.get(1) {
+            let l = self.new_local_named(&param.name, param.ty.clone(), false);
+            self.def_to_local.insert(param.def_id, l);
+            self.emit(MirInst::Call {
+                dest: Some(l),
+                callee: "riven_vec_get".to_string(),
+                args: vec![MirValue::Use(vec_id), MirValue::Use(j_idx)],
+            });
+            l
+        } else {
+            let l = self.new_temp(elem_ty.clone());
+            self.emit(MirInst::Call {
+                dest: Some(l),
+                callee: "riven_vec_get".to_string(),
+                args: vec![MirValue::Use(vec_id), MirValue::Use(j_idx)],
+            });
+            l
+        };
+        let _ = a_local;
+
+        let cmp_result = self.lower_expr(closure_body)?;
+        let cmp_val = local_to_value(cmp_result);
+        let zero = MirValue::Literal(Literal::Int(0));
+        let need_swap = self.new_temp(Ty::Bool);
+        self.emit(MirInst::Compare {
+            dest: need_swap,
+            op: CmpOp::Gt,
+            lhs: cmp_val,
+            rhs: zero,
+        });
+        self.set_terminator(Terminator::Branch {
+            cond: MirValue::Use(need_swap),
+            then_block: swap_block,
+            else_block: inner_inc,
+        });
+
+        // swap_block: riven_vec_swap(vec, i, j)
+        self.current_block = swap_block;
+        self.emit(MirInst::Call {
+            dest: None,
+            callee: "riven_vec_swap".to_string(),
+            args: vec![
+                MirValue::Use(vec_id),
+                MirValue::Use(i_idx),
+                MirValue::Use(j_idx),
+            ],
+        });
+        self.set_terminator(Terminator::Goto(inner_inc));
+
+        // inner_inc: j += 1
+        self.current_block = inner_inc;
+        let next_j = self.new_temp(Ty::Int);
+        self.emit(MirInst::BinOp {
+            dest: next_j,
+            op: BinOp::Add,
+            lhs: MirValue::Use(j_idx),
+            rhs: MirValue::Literal(Literal::Int(1)),
+        });
+        self.emit(MirInst::Assign {
+            dest: j_idx,
+            value: MirValue::Use(next_j),
+        });
+        self.set_terminator(Terminator::Goto(inner_header));
+
+        // outer_inc: i += 1
+        self.current_block = outer_inc;
+        let next_i = self.new_temp(Ty::Int);
+        self.emit(MirInst::BinOp {
+            dest: next_i,
+            op: BinOp::Add,
+            lhs: MirValue::Use(i_idx),
+            rhs: MirValue::Literal(Literal::Int(1)),
+        });
+        self.emit(MirInst::Assign {
+            dest: i_idx,
+            value: MirValue::Use(next_i),
+        });
+        self.set_terminator(Terminator::Goto(outer_header));
+
+        self.current_block = exit_block;
+        Ok(())
+    }
+
+    /// Look up the `Ty` of a local in the function being lowered.
+    /// Falls back to `Ty::Int` if the local isn't found (defensive — the
+    /// element-type extraction in `inline_sort_by` is the only caller
+    /// and operates on locals it just allocated).
+    fn fn_local_ty(&self, local_id: LocalId) -> Ty {
+        self.current_fn
+            .as_ref()
+            .and_then(|f| f.locals.iter().find(|l| l.id == local_id))
+            .map(|l| l.ty.clone())
+            .unwrap_or(Ty::Int)
     }
 
     /// Lower the "vec source" from a method call chain, peeling through
@@ -3458,7 +4625,12 @@ impl<'a> Lowerer<'a> {
     /// `self.items`.
     fn lower_vec_source(&mut self, expr: &HirExpr) -> Result<Option<LocalId>, String> {
         match &expr.kind {
-            HirExprKind::MethodCall { object, method_name, block, .. } => {
+            HirExprKind::MethodCall {
+                object,
+                method_name,
+                block,
+                ..
+            } => {
                 match method_name.as_str() {
                     "iter" | "into_iter" | "to_vec" | "enumerate" => {
                         // These are passthrough — recurse into the object.
@@ -3477,7 +4649,11 @@ impl<'a> Lowerer<'a> {
                     }
                 }
             }
-            HirExprKind::FieldAccess { object: inner_obj, field_name, .. } => {
+            HirExprKind::FieldAccess {
+                object: inner_obj,
+                field_name,
+                ..
+            } => {
                 // .iter, .into_iter etc. may be parsed as FieldAccess (no parens)
                 match field_name.as_str() {
                     "iter" | "into_iter" | "to_vec" | "enumerate" => {
@@ -3695,7 +4871,10 @@ impl<'a> Lowerer<'a> {
             size: 16,
         });
         // Initialize to None (tag=0)
-        self.emit(MirInst::SetTag { dest: result, tag: 0 });
+        self.emit(MirInst::SetTag {
+            dest: result,
+            tag: 0,
+        });
 
         let idx = self.new_temp(Ty::Int);
         self.emit(MirInst::Assign {
@@ -3759,7 +4938,10 @@ impl<'a> Lowerer<'a> {
 
         // Found: set result to Some(item)
         self.current_block = found_block;
-        self.emit(MirInst::SetTag { dest: result, tag: 1 });
+        self.emit(MirInst::SetTag {
+            dest: result,
+            tag: 1,
+        });
         // Store item as payload (offset 8 from base)
         self.emit(MirInst::SetField {
             base: result,
@@ -3802,7 +4984,10 @@ impl<'a> Lowerer<'a> {
             ty: expr.ty.clone(),
             size: 16,
         });
-        self.emit(MirInst::SetTag { dest: result, tag: 0 }); // None
+        self.emit(MirInst::SetTag {
+            dest: result,
+            tag: 0,
+        }); // None
 
         let idx = self.new_temp(Ty::Int);
         self.emit(MirInst::Assign {
@@ -3862,7 +5047,10 @@ impl<'a> Lowerer<'a> {
 
         // Found: set result to Some(idx)
         self.current_block = found_block;
-        self.emit(MirInst::SetTag { dest: result, tag: 1 });
+        self.emit(MirInst::SetTag {
+            dest: result,
+            tag: 1,
+        });
         self.emit(MirInst::SetField {
             base: result,
             field_index: 1,
@@ -4123,6 +5311,236 @@ impl<'a> Lowerer<'a> {
         Ok(result)
     }
 
+    /// Emit an inlined `iter.fold(init) { |acc, item| body }` loop
+    /// (Phase 2 stdlib #05 batch 2). The accumulator is seeded from
+    /// the lowered `init` argument, then the closure is invoked once
+    /// per element with the running accumulator and the current item.
+    /// The accumulator's type comes from the inferred result type
+    /// (`expr.ty`); we copy `init` into a fresh local so subsequent
+    /// closure-body lowerings can both read and write it.
+    fn inline_fold(
+        &mut self,
+        expr: &HirExpr,
+        vec_id: LocalId,
+        args: &[HirExpr],
+        closure_params: &[HirClosureParam],
+        closure_body: &HirExpr,
+    ) -> Result<LocalId, String> {
+        // Lower `init` first; that yields the seed value for the accumulator.
+        let init_arg = args
+            .first()
+            .ok_or_else(|| "fold requires an init argument".to_string())?;
+        let init_local = self
+            .lower_expr(init_arg)?
+            .ok_or_else(|| "fold init argument has no value".to_string())?;
+
+        // The accumulator local takes its name from the closure's first
+        // parameter so the closure body's `acc` reference resolves to it.
+        // Without a named local, the body's reference would have nowhere
+        // to bind. Type comes from the closure-param annotation if
+        // present, else falls back to `expr.ty` (the fold result type).
+        let acc_ty = closure_params
+            .first()
+            .map(|p| p.ty.clone())
+            .unwrap_or_else(|| expr.ty.clone());
+        let acc_local = if let Some(param) = closure_params.first() {
+            let l = self.new_local_named(&param.name, acc_ty.clone(), true);
+            self.def_to_local.insert(param.def_id, l);
+            l
+        } else {
+            self.new_temp(acc_ty.clone())
+        };
+        // Seed accumulator with init.
+        self.emit_transfer(acc_local, init_local, &acc_ty, MoveSemantics::Copy);
+
+        // Loop counters.
+        let idx = self.new_temp(Ty::Int);
+        self.emit(MirInst::Assign {
+            dest: idx,
+            value: MirValue::Literal(Literal::Int(0)),
+        });
+        let len = self.new_temp(Ty::Int);
+        self.emit(MirInst::Call {
+            dest: Some(len),
+            callee: "riven_vec_len".to_string(),
+            args: vec![MirValue::Use(vec_id)],
+        });
+
+        let header_block = self.new_block();
+        let body_block = self.new_block();
+        let exit_block = self.new_block();
+
+        self.set_terminator(Terminator::Goto(header_block));
+        self.current_block = header_block;
+
+        let cond = self.new_temp(Ty::Bool);
+        self.emit(MirInst::Compare {
+            dest: cond,
+            op: CmpOp::Lt,
+            lhs: MirValue::Use(idx),
+            rhs: MirValue::Use(len),
+        });
+        self.set_terminator(Terminator::Branch {
+            cond: MirValue::Use(cond),
+            then_block: body_block,
+            else_block: exit_block,
+        });
+
+        // Body: bind the per-iteration item (closure param 1), invoke
+        // the closure body, store the result back into `acc`.
+        self.current_block = body_block;
+        if let Some(param) = closure_params.get(1) {
+            let item_local = self.new_local_named(&param.name, param.ty.clone(), false);
+            self.def_to_local.insert(param.def_id, item_local);
+            self.emit(MirInst::Call {
+                dest: Some(item_local),
+                callee: "riven_vec_get".to_string(),
+                args: vec![MirValue::Use(vec_id), MirValue::Use(idx)],
+            });
+        }
+        let body_result = self.lower_expr(closure_body)?;
+        if let Some(body_id) = body_result {
+            // acc = closure_body(acc, item)
+            self.emit(MirInst::Assign {
+                dest: acc_local,
+                value: MirValue::Use(body_id),
+            });
+        }
+
+        // idx += 1; back to header.
+        let next_idx = self.new_temp(Ty::Int);
+        self.emit(MirInst::BinOp {
+            dest: next_idx,
+            op: BinOp::Add,
+            lhs: MirValue::Use(idx),
+            rhs: MirValue::Literal(Literal::Int(1)),
+        });
+        self.emit(MirInst::Assign {
+            dest: idx,
+            value: MirValue::Use(next_idx),
+        });
+        if matches!(self.get_terminator(), Terminator::Unreachable) {
+            self.set_terminator(Terminator::Goto(header_block));
+        }
+
+        self.current_block = exit_block;
+        Ok(acc_local)
+    }
+
+    /// Emit an inlined `iter.all { |x| pred }` / `iter.any { |x| pred }`
+    /// loop (Phase 2 stdlib #05 batch 2). Both share the same loop
+    /// shape — bind item, evaluate predicate, branch — but they
+    /// short-circuit on different boolean values:
+    ///   - `all`: stop and return `false` on the first `false`
+    ///   - `any`: stop and return `true`  on the first `true`
+    /// The `is_all` flag selects between these two early-exit modes.
+    /// On a fully-iterated empty/uneventful sequence the result is
+    /// the *vacuous truth* for `all` (`true`) or the *vacuous
+    /// falsehood* for `any` (`false`), matching Rust's `Iterator`.
+    fn inline_all_any(
+        &mut self,
+        _expr: &HirExpr,
+        vec_id: LocalId,
+        closure_params: &[HirClosureParam],
+        closure_body: &HirExpr,
+        is_all: bool,
+    ) -> Result<LocalId, String> {
+        // Result lives in a single mutable Bool local; seed with the
+        // vacuous answer (true for all, false for any).
+        let result = self.new_temp(Ty::Bool);
+        self.emit(MirInst::Assign {
+            dest: result,
+            value: MirValue::Literal(Literal::Bool(is_all)),
+        });
+
+        let idx = self.new_temp(Ty::Int);
+        self.emit(MirInst::Assign {
+            dest: idx,
+            value: MirValue::Literal(Literal::Int(0)),
+        });
+        let len = self.new_temp(Ty::Int);
+        self.emit(MirInst::Call {
+            dest: Some(len),
+            callee: "riven_vec_len".to_string(),
+            args: vec![MirValue::Use(vec_id)],
+        });
+
+        let header_block = self.new_block();
+        let body_block = self.new_block();
+        let short_block = self.new_block();
+        let inc_block = self.new_block();
+        let exit_block = self.new_block();
+
+        self.set_terminator(Terminator::Goto(header_block));
+        self.current_block = header_block;
+
+        let cond = self.new_temp(Ty::Bool);
+        self.emit(MirInst::Compare {
+            dest: cond,
+            op: CmpOp::Lt,
+            lhs: MirValue::Use(idx),
+            rhs: MirValue::Use(len),
+        });
+        self.set_terminator(Terminator::Branch {
+            cond: MirValue::Use(cond),
+            then_block: body_block,
+            else_block: exit_block,
+        });
+
+        self.current_block = body_block;
+        if let Some(param) = closure_params.first() {
+            let item = self.new_local_named(&param.name, param.ty.clone(), false);
+            self.def_to_local.insert(param.def_id, item);
+            self.emit(MirInst::Call {
+                dest: Some(item),
+                callee: "riven_vec_get".to_string(),
+                args: vec![MirValue::Use(vec_id), MirValue::Use(idx)],
+            });
+        }
+        let pred_result = self.lower_expr(closure_body)?;
+        let pred_val = local_to_value(pred_result);
+
+        // For `all`: predicate=false  → short-circuit (set false, exit)
+        // For `any`: predicate=true   → short-circuit (set true,  exit)
+        // The branch selects which arm goes to short-circuit vs continue.
+        let (then_block, else_block) = if is_all {
+            (inc_block, short_block) // pred=true → continue, false → short
+        } else {
+            (short_block, inc_block) // pred=true → short, false → continue
+        };
+        self.set_terminator(Terminator::Branch {
+            cond: pred_val,
+            then_block,
+            else_block,
+        });
+
+        // Short-circuit: flip result to the opposite seed and exit.
+        self.current_block = short_block;
+        self.emit(MirInst::Assign {
+            dest: result,
+            value: MirValue::Literal(Literal::Bool(!is_all)),
+        });
+        self.set_terminator(Terminator::Goto(exit_block));
+
+        // Increment: idx += 1; back to header.
+        self.current_block = inc_block;
+        let next_idx = self.new_temp(Ty::Int);
+        self.emit(MirInst::BinOp {
+            dest: next_idx,
+            op: BinOp::Add,
+            lhs: MirValue::Use(idx),
+            rhs: MirValue::Literal(Literal::Int(1)),
+        });
+        self.emit(MirInst::Assign {
+            dest: idx,
+            value: MirValue::Use(next_idx),
+        });
+        self.set_terminator(Terminator::Goto(header_block));
+
+        self.current_block = exit_block;
+        Ok(result)
+    }
+
     /// Inline an `Option.map { |x| expr }` call.
     ///
     /// Generates: if tag == 1 (Some): apply closure to payload, wrap in new Some
@@ -4147,7 +5565,10 @@ impl<'a> Lowerer<'a> {
 
         // Get the tag of the input Option
         let tag = self.new_temp(Ty::Int32);
-        self.emit(MirInst::GetTag { dest: tag, src: opt_id });
+        self.emit(MirInst::GetTag {
+            dest: tag,
+            src: opt_id,
+        });
 
         // Check if Some (tag == 1)
         let is_some = self.new_temp(Ty::Bool);
@@ -4205,7 +5626,10 @@ impl<'a> Lowerer<'a> {
         let mapped_val = local_to_value(mapped_result);
 
         // Set result to Some(mapped_value)
-        self.emit(MirInst::SetTag { dest: result, tag: 1 });
+        self.emit(MirInst::SetTag {
+            dest: result,
+            tag: 1,
+        });
         self.emit(MirInst::SetField {
             base: result,
             field_index: 1,
@@ -4215,7 +5639,222 @@ impl<'a> Lowerer<'a> {
 
         // None block: set result to None
         self.current_block = none_block;
-        self.emit(MirInst::SetTag { dest: result, tag: 0 });
+        self.emit(MirInst::SetTag {
+            dest: result,
+            tag: 0,
+        });
+        self.set_terminator(Terminator::Goto(merge_block));
+
+        self.current_block = merge_block;
+        Ok(Some(Some(result)))
+    }
+
+    /// Inline `result.map { |v| ... }` (when `on_ok = true`) or
+    /// `result.map_err { |e| ... }` (when `on_ok = false`). Both variants
+    /// branch on the Result tag, run the closure on the matching arm's
+    /// payload, and pass the other arm's payload through unchanged.
+    fn inline_result_map(
+        &mut self,
+        expr: &HirExpr,
+        result_expr: &HirExpr,
+        closure_params: &[HirClosureParam],
+        closure_body: &HirExpr,
+        on_ok: bool,
+    ) -> Result<Option<Option<LocalId>>, String> {
+        let res_local = self.lower_expr(result_expr)?;
+        let res_id = res_local.unwrap_or_else(|| self.new_temp(Ty::Int));
+
+        let result = self.new_temp(expr.ty.clone());
+        self.emit(MirInst::Alloc {
+            dest: result,
+            ty: expr.ty.clone(),
+            size: 16,
+        });
+
+        let tag = self.new_temp(Ty::Int32);
+        self.emit(MirInst::GetTag {
+            dest: tag,
+            src: res_id,
+        });
+
+        // Result: Ok=0, Err=1.
+        let match_tag = if on_ok { 0 } else { 1 };
+        let match_block = self.new_block();
+        let other_block = self.new_block();
+        let merge_block = self.new_block();
+
+        let take_branch = self.new_temp(Ty::Bool);
+        self.emit(MirInst::Compare {
+            dest: take_branch,
+            op: CmpOp::Eq,
+            lhs: MirValue::Use(tag),
+            rhs: MirValue::Literal(Literal::Int(match_tag)),
+        });
+        self.set_terminator(Terminator::Branch {
+            cond: MirValue::Use(take_branch),
+            then_block: match_block,
+            else_block: other_block,
+        });
+
+        // Matching arm: payload → closure → repackage with same tag.
+        self.current_block = match_block;
+        let payload = self.new_temp(Ty::Int);
+        self.emit(MirInst::GetField {
+            dest: payload,
+            base: res_id,
+            field_index: 1,
+        });
+
+        if let Some(param) = closure_params.first() {
+            let param_ty = if matches!(param.ty, Ty::Infer(_)) {
+                match &result_expr.ty {
+                    Ty::Result(ok, err) => {
+                        if on_ok {
+                            ok.as_ref().clone()
+                        } else {
+                            err.as_ref().clone()
+                        }
+                    }
+                    _ => param.ty.clone(),
+                }
+            } else {
+                param.ty.clone()
+            };
+            let param_local = self.new_local_named(&param.name, param_ty, false);
+            self.def_to_local.insert(param.def_id, param_local);
+            self.emit(MirInst::Assign {
+                dest: param_local,
+                value: MirValue::Use(payload),
+            });
+        }
+
+        let mapped = self.lower_expr(closure_body)?;
+        let mapped_val = local_to_value(mapped);
+
+        self.emit(MirInst::SetTag {
+            dest: result,
+            tag: match_tag as u32,
+        });
+        self.emit(MirInst::SetField {
+            base: result,
+            field_index: 1,
+            value: mapped_val,
+        });
+        self.set_terminator(Terminator::Goto(merge_block));
+
+        // Other arm: passthrough — same tag, same payload.
+        self.current_block = other_block;
+        let other_payload = self.new_temp(Ty::Int);
+        self.emit(MirInst::GetField {
+            dest: other_payload,
+            base: res_id,
+            field_index: 1,
+        });
+        let other_tag = if on_ok { 1 } else { 0 };
+        self.emit(MirInst::SetTag {
+            dest: result,
+            tag: other_tag as u32,
+        });
+        self.emit(MirInst::SetField {
+            base: result,
+            field_index: 1,
+            value: MirValue::Use(other_payload),
+        });
+        self.set_terminator(Terminator::Goto(merge_block));
+
+        self.current_block = merge_block;
+        Ok(Some(Some(result)))
+    }
+
+    /// Inline `result.unwrap_or_else { |e| ... }` and
+    /// `option.unwrap_or_else { |_| ... }`. `ok_tag` is 0 for Result
+    /// (Ok=0), 1 for Option (Some=1). On the success arm the inner
+    /// payload is returned; otherwise the closure runs (for Result the
+    /// closure binds the Err payload; for Option it binds nothing).
+    fn inline_unwrap_or_else(
+        &mut self,
+        expr: &HirExpr,
+        receiver_expr: &HirExpr,
+        closure_params: &[HirClosureParam],
+        closure_body: &HirExpr,
+        ok_tag: i64,
+    ) -> Result<Option<Option<LocalId>>, String> {
+        let recv_local = self.lower_expr(receiver_expr)?;
+        let recv_id = recv_local.unwrap_or_else(|| self.new_temp(Ty::Int));
+
+        let result = self.new_temp(expr.ty.clone());
+
+        let tag = self.new_temp(Ty::Int32);
+        self.emit(MirInst::GetTag {
+            dest: tag,
+            src: recv_id,
+        });
+
+        let is_ok = self.new_temp(Ty::Bool);
+        self.emit(MirInst::Compare {
+            dest: is_ok,
+            op: CmpOp::Eq,
+            lhs: MirValue::Use(tag),
+            rhs: MirValue::Literal(Literal::Int(ok_tag)),
+        });
+
+        let ok_block = self.new_block();
+        let err_block = self.new_block();
+        let merge_block = self.new_block();
+
+        self.set_terminator(Terminator::Branch {
+            cond: MirValue::Use(is_ok),
+            then_block: ok_block,
+            else_block: err_block,
+        });
+
+        // Success arm: result = payload.
+        self.current_block = ok_block;
+        let ok_payload = self.new_temp(expr.ty.clone());
+        self.emit(MirInst::GetField {
+            dest: ok_payload,
+            base: recv_id,
+            field_index: 1,
+        });
+        self.emit(MirInst::Assign {
+            dest: result,
+            value: MirValue::Use(ok_payload),
+        });
+        self.set_terminator(Terminator::Goto(merge_block));
+
+        // Error arm: bind closure param to err payload, run body.
+        self.current_block = err_block;
+        if let Some(param) = closure_params.first() {
+            let err_payload = self.new_temp(Ty::Int);
+            self.emit(MirInst::GetField {
+                dest: err_payload,
+                base: recv_id,
+                field_index: 1,
+            });
+            let param_ty = if matches!(param.ty, Ty::Infer(_)) {
+                match &receiver_expr.ty {
+                    Ty::Result(_, err) => err.as_ref().clone(),
+                    _ => param.ty.clone(),
+                }
+            } else {
+                param.ty.clone()
+            };
+            let param_local = self.new_local_named(&param.name, param_ty, false);
+            self.def_to_local.insert(param.def_id, param_local);
+            self.emit(MirInst::Assign {
+                dest: param_local,
+                value: MirValue::Use(err_payload),
+            });
+        }
+        let body_val = self.lower_expr(closure_body)?;
+        // If the closure body produces a value, use it as the result;
+        // otherwise leave `result` uninitialised (Unit-typed call sites).
+        if let Some(v) = body_val {
+            self.emit(MirInst::Assign {
+                dest: result,
+                value: MirValue::Use(v),
+            });
+        }
         self.set_terminator(Terminator::Goto(merge_block));
 
         self.current_block = merge_block;
@@ -4229,11 +5868,1150 @@ impl<'a> Lowerer<'a> {
         self.current_fn.as_mut().expect("no current function")
     }
 
+    fn fn_ref(&self) -> &MirFunction {
+        self.current_fn.as_ref().expect("no current function")
+    }
+
+    /// Emit `riven_dealloc(L); L = 0` for each `L`, in the current
+    /// block. Used at every loop-exit edge (break, continue, back-edge)
+    /// to free heap allocations made inside the body. The zero-store
+    /// after dealloc keeps `compute_dealloc_safe_locals` from re-
+    /// emitting a function-end dealloc on a stale pointer, and means a
+    /// later iteration that bypasses the `let` will dealloc NULL.
+    fn emit_dealloc_loop_locals(&mut self, locals: &[LocalId]) {
+        for &local in locals {
+            self.emit(MirInst::Call {
+                dest: None,
+                callee: "riven_dealloc".to_string(),
+                args: vec![MirValue::Use(local)],
+            });
+            self.emit(MirInst::Assign {
+                dest: local,
+                value: MirValue::Literal(Literal::Int(0)),
+            });
+        }
+    }
+
+    /// Insert `Assign L = 0` at the very top of the loop's body-entry
+    /// block for every body-local. Runs once before the first iteration
+    /// so a path that bypasses a `let` (e.g. inside a nested `if`)
+    /// reaches its first dealloc with a NULL value.
+    fn prepend_zero_init_for_body_locals(&mut self, frame: &LoopFrame) {
+        if frame.body_locals.is_empty() {
+            return;
+        }
+        let block = &mut self.fn_mut().blocks[frame.body_entry_block];
+        for (i, &local) in frame.body_locals.iter().enumerate() {
+            block.instructions.insert(
+                i,
+                MirInst::Assign {
+                    dest: local,
+                    value: MirValue::Literal(Literal::Int(0)),
+                },
+            );
+        }
+    }
+
     /// Push an instruction onto the current basic block.
     fn emit(&mut self, inst: MirInst) {
         let block_id = self.current_block;
         let func = self.current_fn.as_mut().expect("no current function");
         func.blocks[block_id].instructions.push(inst);
+    }
+
+    /// Emit a value-transfer instruction selected by the source's move
+    /// semantics and the type's effective Copy-ness. Move-bound owned
+    /// values become `MirInst::Move` (so drop-elaboration follows the
+    /// LIFO order); Copy values become `MirInst::Copy`; everything else
+    /// degrades to a plain `Assign`.
+    fn emit_transfer(&mut self, dest: LocalId, src: LocalId, ty: &Ty, semantics: MoveSemantics) {
+        let inst = match semantics {
+            MoveSemantics::Move if !ty_is_effectively_copy(ty, self.symbols) => {
+                MirInst::Move { dest, src }
+            }
+            _ if ty_is_effectively_copy(ty, self.symbols) => MirInst::Copy { dest, src },
+            _ => MirInst::Assign {
+                dest,
+                value: MirValue::Use(src),
+            },
+        };
+        self.emit(inst);
+    }
+
+    /// Lower a string literal as a heap-owned `String`. The raw
+    /// `MirInst::StringLiteral` produces a pointer into `.rodata`;
+    /// dropping such a pointer would call `free()` on a static address.
+    /// `riven_string_from` copies it to the heap so `String::drop` is
+    /// safe on the result. (P0.7)
+    fn emit_owned_string_literal(&mut self, value: &str) -> LocalId {
+        let raw = self.new_temp(Ty::Str);
+        self.emit(MirInst::StringLiteral {
+            dest: raw,
+            value: value.to_string(),
+        });
+        let owned = self.new_temp(Ty::String);
+        self.emit(MirInst::Call {
+            dest: Some(owned),
+            callee: "riven_string_from".to_string(),
+            args: vec![MirValue::Use(raw)],
+        });
+        owned
+    }
+
+    /// Synthesize the body of `{StructName}_to_debug(self) -> String` for a
+    /// struct that declares `derive Debug`. Output shape:
+    /// `Name { field1: <fmt(field1)>, field2: <fmt(field2)>, ... }`.
+    /// v1 limitation: only primitive field types are formatted faithfully;
+    /// other struct fields with `derive Debug` recurse; everything else
+    /// renders as `<...>` so the formatter never panics.
+    fn synthesize_struct_to_debug(&self, s: &HirStructDef) -> MirFunction {
+        let fn_name = format!("{}_to_debug", s.name);
+        let self_ty = Ty::Struct {
+            name: s.name.clone(),
+            generic_args: vec![],
+        };
+
+        let mut mir_fn = MirFunction::new(&fn_name, Ty::String);
+        let self_local = mir_fn.new_local("self", self_ty, false);
+        mir_fn.params.push(self_local);
+
+        let entry = mir_fn.entry_block;
+
+        let leading = if s.fields.is_empty() {
+            format!("{} {{}}", s.name)
+        } else {
+            format!("{} {{ ", s.name)
+        };
+
+        let leading_local = mir_fn.new_temp(Ty::String);
+        mir_fn.blocks[entry]
+            .instructions
+            .push(MirInst::StringLiteral {
+                dest: leading_local,
+                value: leading,
+            });
+        let mut acc = leading_local;
+
+        for (idx, field) in s.fields.iter().enumerate() {
+            if idx > 0 {
+                let sep = mir_fn.new_temp(Ty::String);
+                mir_fn.blocks[entry]
+                    .instructions
+                    .push(MirInst::StringLiteral {
+                        dest: sep,
+                        value: ", ".to_string(),
+                    });
+                let next = mir_fn.new_temp(Ty::String);
+                mir_fn.blocks[entry].instructions.push(MirInst::Call {
+                    dest: Some(next),
+                    callee: "riven_string_concat".to_string(),
+                    args: vec![MirValue::Use(acc), MirValue::Use(sep)],
+                });
+                acc = next;
+            }
+
+            let label = mir_fn.new_temp(Ty::String);
+            mir_fn.blocks[entry]
+                .instructions
+                .push(MirInst::StringLiteral {
+                    dest: label,
+                    value: format!("{}: ", field.name),
+                });
+            let after_label = mir_fn.new_temp(Ty::String);
+            mir_fn.blocks[entry].instructions.push(MirInst::Call {
+                dest: Some(after_label),
+                callee: "riven_string_concat".to_string(),
+                args: vec![MirValue::Use(acc), MirValue::Use(label)],
+            });
+            acc = after_label;
+
+            let field_local = mir_fn.new_temp(field.ty.clone());
+            mir_fn.blocks[entry].instructions.push(MirInst::GetField {
+                dest: field_local,
+                base: self_local,
+                field_index: idx,
+            });
+
+            let field_str = if field.ty == Ty::Char {
+                let dest = mir_fn.new_temp(Ty::String);
+                mir_fn.blocks[entry].instructions.push(MirInst::Call {
+                    dest: Some(dest),
+                    callee: "riven_char_to_string".to_string(),
+                    args: vec![MirValue::Use(field_local)],
+                });
+                dest
+            } else if field.ty.is_integer() {
+                let dest = mir_fn.new_temp(Ty::String);
+                mir_fn.blocks[entry].instructions.push(MirInst::Call {
+                    dest: Some(dest),
+                    callee: "riven_int_to_string".to_string(),
+                    args: vec![MirValue::Use(field_local)],
+                });
+                dest
+            } else if field.ty.is_float() {
+                let dest = mir_fn.new_temp(Ty::String);
+                mir_fn.blocks[entry].instructions.push(MirInst::Call {
+                    dest: Some(dest),
+                    callee: "riven_float_to_string".to_string(),
+                    args: vec![MirValue::Use(field_local)],
+                });
+                dest
+            } else if field.ty == Ty::Bool {
+                let dest = mir_fn.new_temp(Ty::String);
+                mir_fn.blocks[entry].instructions.push(MirInst::Call {
+                    dest: Some(dest),
+                    callee: "riven_bool_to_string".to_string(),
+                    args: vec![MirValue::Use(field_local)],
+                });
+                dest
+            } else if matches!(field.ty, Ty::String | Ty::Str) {
+                field_local
+            } else if let Some(inner_struct_name) = self.struct_with_derive_debug(&field.ty) {
+                let dest = mir_fn.new_temp(Ty::String);
+                mir_fn.blocks[entry].instructions.push(MirInst::Call {
+                    dest: Some(dest),
+                    callee: format!("{}_to_debug", inner_struct_name),
+                    args: vec![MirValue::Use(field_local)],
+                });
+                dest
+            } else {
+                let dest = mir_fn.new_temp(Ty::String);
+                mir_fn.blocks[entry]
+                    .instructions
+                    .push(MirInst::StringLiteral {
+                        dest,
+                        value: "<...>".to_string(),
+                    });
+                dest
+            };
+
+            let next = mir_fn.new_temp(Ty::String);
+            mir_fn.blocks[entry].instructions.push(MirInst::Call {
+                dest: Some(next),
+                callee: "riven_string_concat".to_string(),
+                args: vec![MirValue::Use(acc), MirValue::Use(field_str)],
+            });
+            acc = next;
+        }
+
+        if !s.fields.is_empty() {
+            let trailing = mir_fn.new_temp(Ty::String);
+            mir_fn.blocks[entry]
+                .instructions
+                .push(MirInst::StringLiteral {
+                    dest: trailing,
+                    value: " }".to_string(),
+                });
+            let next = mir_fn.new_temp(Ty::String);
+            mir_fn.blocks[entry].instructions.push(MirInst::Call {
+                dest: Some(next),
+                callee: "riven_string_concat".to_string(),
+                args: vec![MirValue::Use(acc), MirValue::Use(trailing)],
+            });
+            acc = next;
+        }
+
+        mir_fn.blocks[entry].terminator = Terminator::Return(Some(MirValue::Use(acc)));
+        mir_fn
+    }
+
+    fn synthesize_struct_eq(&self, s: &HirStructDef) -> MirFunction {
+        let fn_name = format!("{}_eq", s.name);
+        let self_ty = Ty::Struct {
+            name: s.name.clone(),
+            generic_args: vec![],
+        };
+
+        let mut mir_fn = MirFunction::new(&fn_name, Ty::Bool);
+        let self_local = mir_fn.new_local("self", self_ty.clone(), false);
+        let other_local = mir_fn.new_local("other", Ty::Ref(Box::new(self_ty)), false);
+        mir_fn.params.push(self_local);
+        mir_fn.params.push(other_local);
+
+        let entry = mir_fn.entry_block;
+        let mut acc = mir_fn.new_temp(Ty::Bool);
+        mir_fn.blocks[entry].instructions.push(MirInst::Assign {
+            dest: acc,
+            value: MirValue::Literal(Literal::Bool(true)),
+        });
+
+        for (idx, field) in s.fields.iter().enumerate() {
+            let lhs = mir_fn.new_temp(field.ty.clone());
+            mir_fn.blocks[entry].instructions.push(MirInst::GetField {
+                dest: lhs,
+                base: self_local,
+                field_index: idx,
+            });
+            let rhs = mir_fn.new_temp(field.ty.clone());
+            mir_fn.blocks[entry].instructions.push(MirInst::GetField {
+                dest: rhs,
+                base: other_local,
+                field_index: idx,
+            });
+
+            let field_eq =
+                if let Some(inner_name) = self.struct_with_derive_trait(&field.ty, "PartialEq") {
+                    let dest = mir_fn.new_temp(Ty::Bool);
+                    mir_fn.blocks[entry].instructions.push(MirInst::Call {
+                        dest: Some(dest),
+                        callee: format!("{}_eq", inner_name),
+                        args: vec![MirValue::Use(lhs), MirValue::Use(rhs)],
+                    });
+                    dest
+                } else if matches!(field.ty, Ty::String | Ty::Str) {
+                    let dest = mir_fn.new_temp(Ty::Bool);
+                    mir_fn.blocks[entry].instructions.push(MirInst::Call {
+                        dest: Some(dest),
+                        callee: "riven_string_eq".to_string(),
+                        args: vec![MirValue::Use(lhs), MirValue::Use(rhs)],
+                    });
+                    dest
+                } else {
+                    let dest = mir_fn.new_temp(Ty::Bool);
+                    mir_fn.blocks[entry].instructions.push(MirInst::Compare {
+                        dest,
+                        op: CmpOp::Eq,
+                        lhs: MirValue::Use(lhs),
+                        rhs: MirValue::Use(rhs),
+                    });
+                    dest
+                };
+
+            let next = mir_fn.new_temp(Ty::Bool);
+            mir_fn.blocks[entry].instructions.push(MirInst::BinOp {
+                dest: next,
+                op: BinOp::And,
+                lhs: MirValue::Use(acc),
+                rhs: MirValue::Use(field_eq),
+            });
+            acc = next;
+        }
+
+        mir_fn.blocks[entry].terminator = Terminator::Return(Some(MirValue::Use(acc)));
+        mir_fn
+    }
+
+    fn synthesize_struct_hash_code(&self, s: &HirStructDef) -> MirFunction {
+        let fn_name = format!("{}_hash_code", s.name);
+        let self_ty = Ty::Struct {
+            name: s.name.clone(),
+            generic_args: vec![],
+        };
+
+        let mut mir_fn = MirFunction::new(&fn_name, Ty::Int);
+        let self_local = mir_fn.new_local("self", self_ty, false);
+        mir_fn.params.push(self_local);
+
+        let entry = mir_fn.entry_block;
+        let mut acc = mir_fn.new_temp(Ty::Int);
+        mir_fn.blocks[entry].instructions.push(MirInst::Assign {
+            dest: acc,
+            value: MirValue::Literal(Literal::Int(1469598103934665603_i64)),
+        });
+
+        for (idx, field) in s.fields.iter().enumerate() {
+            let field_local = mir_fn.new_temp(field.ty.clone());
+            mir_fn.blocks[entry].instructions.push(MirInst::GetField {
+                dest: field_local,
+                base: self_local,
+                field_index: idx,
+            });
+
+            let field_hash = if let Some(inner_name) = self
+                .struct_with_derive_trait(&field.ty, "Hashable")
+                .or_else(|| self.struct_with_derive_trait(&field.ty, "Hash"))
+            {
+                let dest = mir_fn.new_temp(Ty::Int);
+                mir_fn.blocks[entry].instructions.push(MirInst::Call {
+                    dest: Some(dest),
+                    callee: format!("{}_hash_code", inner_name),
+                    args: vec![MirValue::Use(field_local)],
+                });
+                dest
+            } else if matches!(field.ty, Ty::String | Ty::Str) {
+                let dest = mir_fn.new_temp(Ty::Int);
+                mir_fn.blocks[entry].instructions.push(MirInst::Call {
+                    dest: Some(dest),
+                    callee: "riven_string_hash".to_string(),
+                    args: vec![MirValue::Use(field_local)],
+                });
+                dest
+            } else {
+                field_local
+            };
+
+            let xored = mir_fn.new_temp(Ty::Int);
+            mir_fn.blocks[entry].instructions.push(MirInst::BinOp {
+                dest: xored,
+                op: BinOp::BitXor,
+                lhs: MirValue::Use(acc),
+                rhs: MirValue::Use(field_hash),
+            });
+            let next = mir_fn.new_temp(Ty::Int);
+            mir_fn.blocks[entry].instructions.push(MirInst::BinOp {
+                dest: next,
+                op: BinOp::Mul,
+                lhs: MirValue::Use(xored),
+                rhs: MirValue::Literal(Literal::Int(1099511628211_i64)),
+            });
+            acc = next;
+        }
+
+        mir_fn.blocks[entry].terminator = Terminator::Return(Some(MirValue::Use(acc)));
+        mir_fn
+    }
+
+    fn synthesize_struct_default(&self, s: &HirStructDef) -> MirFunction {
+        let fn_name = format!("{}_default", s.name);
+        let self_ty = Ty::Struct {
+            name: s.name.clone(),
+            generic_args: vec![],
+        };
+
+        let mut mir_fn = MirFunction::new(&fn_name, self_ty.clone());
+        let entry = mir_fn.entry_block;
+        let obj = mir_fn.new_temp(self_ty.clone());
+        mir_fn.blocks[entry].instructions.push(MirInst::Alloc {
+            dest: obj,
+            ty: self_ty.clone(),
+            size: self.alloc_size(&self_ty),
+        });
+
+        for (idx, field) in s.fields.iter().enumerate() {
+            let value = self.synthesize_default_value(&mut mir_fn, entry, &field.ty);
+            mir_fn.blocks[entry].instructions.push(MirInst::SetField {
+                base: obj,
+                field_index: idx,
+                value: MirValue::Use(value),
+            });
+        }
+
+        mir_fn.blocks[entry].terminator = Terminator::Return(Some(MirValue::Use(obj)));
+        mir_fn
+    }
+
+    fn synthesize_struct_cmp(&self, s: &HirStructDef, partial: bool) -> MirFunction {
+        let method_name = if partial { "partial_cmp" } else { "cmp" };
+        let fn_name = format!("{}_{}", s.name, method_name);
+        let self_ty = Ty::Struct {
+            name: s.name.clone(),
+            generic_args: vec![],
+        };
+
+        let mut mir_fn = MirFunction::new(&fn_name, Ty::Int);
+        let self_local = mir_fn.new_local("self", self_ty.clone(), false);
+        let other_local = mir_fn.new_local("other", Ty::Ref(Box::new(self_ty)), false);
+        mir_fn.params.push(self_local);
+        mir_fn.params.push(other_local);
+
+        let mut current_block = mir_fn.entry_block;
+        for (idx, field) in s.fields.iter().enumerate() {
+            let lhs = mir_fn.new_temp(field.ty.clone());
+            mir_fn.blocks[current_block]
+                .instructions
+                .push(MirInst::GetField {
+                    dest: lhs,
+                    base: self_local,
+                    field_index: idx,
+                });
+            let rhs = mir_fn.new_temp(field.ty.clone());
+            mir_fn.blocks[current_block]
+                .instructions
+                .push(MirInst::GetField {
+                    dest: rhs,
+                    base: other_local,
+                    field_index: idx,
+                });
+
+            if let Some(inner_name) =
+                self.struct_with_derive_trait(&field.ty, if partial { "PartialOrd" } else { "Ord" })
+            {
+                let cmp = mir_fn.new_temp(Ty::Int);
+                mir_fn.blocks[current_block]
+                    .instructions
+                    .push(MirInst::Call {
+                        dest: Some(cmp),
+                        callee: format!("{}_{}", inner_name, method_name),
+                        args: vec![MirValue::Use(lhs), MirValue::Use(rhs)],
+                    });
+                let is_eq = mir_fn.new_temp(Ty::Bool);
+                mir_fn.blocks[current_block]
+                    .instructions
+                    .push(MirInst::Compare {
+                        dest: is_eq,
+                        op: CmpOp::Eq,
+                        lhs: MirValue::Use(cmp),
+                        rhs: MirValue::Literal(Literal::Int(0)),
+                    });
+                let next_block = mir_fn.new_block();
+                let diff_block = mir_fn.new_block();
+                mir_fn.blocks[current_block].terminator = Terminator::Branch {
+                    cond: MirValue::Use(is_eq),
+                    then_block: next_block,
+                    else_block: diff_block,
+                };
+                mir_fn.blocks[diff_block].terminator = Terminator::Return(Some(MirValue::Use(cmp)));
+                current_block = next_block;
+                continue;
+            }
+
+            if matches!(field.ty, Ty::String | Ty::Str) {
+                let cmp = mir_fn.new_temp(Ty::Int);
+                mir_fn.blocks[current_block]
+                    .instructions
+                    .push(MirInst::Call {
+                        dest: Some(cmp),
+                        callee: "riven_string_cmp".to_string(),
+                        args: vec![MirValue::Use(lhs), MirValue::Use(rhs)],
+                    });
+                let is_eq = mir_fn.new_temp(Ty::Bool);
+                mir_fn.blocks[current_block]
+                    .instructions
+                    .push(MirInst::Compare {
+                        dest: is_eq,
+                        op: CmpOp::Eq,
+                        lhs: MirValue::Use(cmp),
+                        rhs: MirValue::Literal(Literal::Int(0)),
+                    });
+                let next_block = mir_fn.new_block();
+                let diff_block = mir_fn.new_block();
+                mir_fn.blocks[current_block].terminator = Terminator::Branch {
+                    cond: MirValue::Use(is_eq),
+                    then_block: next_block,
+                    else_block: diff_block,
+                };
+                mir_fn.blocks[diff_block].terminator = Terminator::Return(Some(MirValue::Use(cmp)));
+                current_block = next_block;
+                continue;
+            }
+
+            let lt = mir_fn.new_temp(Ty::Bool);
+            mir_fn.blocks[current_block]
+                .instructions
+                .push(MirInst::Compare {
+                    dest: lt,
+                    op: CmpOp::Lt,
+                    lhs: MirValue::Use(lhs),
+                    rhs: MirValue::Use(rhs),
+                });
+            let lt_block = mir_fn.new_block();
+            let ge_block = mir_fn.new_block();
+            mir_fn.blocks[current_block].terminator = Terminator::Branch {
+                cond: MirValue::Use(lt),
+                then_block: lt_block,
+                else_block: ge_block,
+            };
+            mir_fn.blocks[lt_block].terminator =
+                Terminator::Return(Some(MirValue::Literal(Literal::Int(-1))));
+
+            let gt = mir_fn.new_temp(Ty::Bool);
+            mir_fn.blocks[ge_block].instructions.push(MirInst::Compare {
+                dest: gt,
+                op: CmpOp::Gt,
+                lhs: MirValue::Use(lhs),
+                rhs: MirValue::Use(rhs),
+            });
+            let gt_block = mir_fn.new_block();
+            let next_block = mir_fn.new_block();
+            mir_fn.blocks[ge_block].terminator = Terminator::Branch {
+                cond: MirValue::Use(gt),
+                then_block: gt_block,
+                else_block: next_block,
+            };
+            mir_fn.blocks[gt_block].terminator =
+                Terminator::Return(Some(MirValue::Literal(Literal::Int(1))));
+            current_block = next_block;
+        }
+
+        mir_fn.blocks[current_block].terminator =
+            Terminator::Return(Some(MirValue::Literal(Literal::Int(0))));
+        mir_fn
+    }
+
+    /// Emit MIR that produces a deep clone of the value `src` of type
+    /// `field_ty`, returning the local that holds the cloned value.
+    /// Inserts instructions into `block`.
+    ///
+    /// Recipe:
+    ///   * Copy types (primitives, references, function pointers,
+    ///     `derive Copy` user types) → bitwise reuse of `src`.
+    ///   * `String` / `Str`           → `riven_string_from(src)`.
+    ///   * `Vec[_]`                   → `riven_vec_clone(src)`.
+    ///   * `HashMap[_, _]`            → `riven_hash_clone(src)`.
+    ///   * `Set[_]`                   → `riven_set_clone(src)`.
+    ///   * Struct/Class/Enum that itself derives Clone → recursive
+    ///     `<Type>_clone(src)`.
+    ///   * Anything else falls back to a bitwise reuse — drop
+    ///     elaboration in `derive/mod.rs::validate_clone_requirements`
+    ///     ensures the fallback only triggers for types with E0610
+    ///     already emitted, so the synthesised function still has a
+    ///     compilable body for downstream codegen even though the
+    ///     program will not link.
+    fn synthesize_clone_field(
+        &self,
+        mir_fn: &mut MirFunction,
+        block: BlockId,
+        src: LocalId,
+        field_ty: &Ty,
+    ) -> LocalId {
+        if ty_is_effectively_copy(field_ty, self.symbols) {
+            return src;
+        }
+        if matches!(field_ty, Ty::String | Ty::Str) {
+            let dest = mir_fn.new_temp(field_ty.clone());
+            mir_fn.blocks[block].instructions.push(MirInst::Call {
+                dest: Some(dest),
+                callee: "riven_string_from".to_string(),
+                args: vec![MirValue::Use(src)],
+            });
+            return dest;
+        }
+        if matches!(field_ty, Ty::Vec(_)) {
+            let dest = mir_fn.new_temp(field_ty.clone());
+            mir_fn.blocks[block].instructions.push(MirInst::Call {
+                dest: Some(dest),
+                callee: "riven_vec_clone".to_string(),
+                args: vec![MirValue::Use(src)],
+            });
+            return dest;
+        }
+        if matches!(field_ty, Ty::HashMap(_, _)) {
+            let dest = mir_fn.new_temp(field_ty.clone());
+            mir_fn.blocks[block].instructions.push(MirInst::Call {
+                dest: Some(dest),
+                callee: "riven_hash_clone".to_string(),
+                args: vec![MirValue::Use(src)],
+            });
+            return dest;
+        }
+        if matches!(field_ty, Ty::Set(_)) {
+            let dest = mir_fn.new_temp(field_ty.clone());
+            mir_fn.blocks[block].instructions.push(MirInst::Call {
+                dest: Some(dest),
+                callee: "riven_set_clone".to_string(),
+                args: vec![MirValue::Use(src)],
+            });
+            return dest;
+        }
+        if let Some(inner_name) = self.user_type_with_derive_clone(field_ty) {
+            let dest = mir_fn.new_temp(field_ty.clone());
+            mir_fn.blocks[block].instructions.push(MirInst::Call {
+                dest: Some(dest),
+                callee: format!("{}_clone", inner_name),
+                args: vec![MirValue::Use(src)],
+            });
+            return dest;
+        }
+        // Fallback: bitwise reuse. The companion validator in
+        // `derive/mod.rs` will already have surfaced E0610 for this
+        // path, so the resulting MIR exists only to keep the rest of
+        // codegen consistent during the same compilation unit.
+        src
+    }
+
+    /// Look up a user-defined type by name and return the type name
+    /// when the underlying definition (struct / class / enum) carries
+    /// `derive Clone`.
+    fn user_type_with_derive_clone(&self, ty: &Ty) -> Option<String> {
+        use crate::resolve::symbols::DefKind;
+        let name = match ty {
+            Ty::Struct { name, .. } | Ty::Class { name, .. } | Ty::Enum { name, .. } => {
+                name.clone()
+            }
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => return self.user_type_with_derive_clone(inner),
+            Ty::Alias { target, .. } => return self.user_type_with_derive_clone(target),
+            Ty::Newtype { inner, .. } => return self.user_type_with_derive_clone(inner),
+            _ => return None,
+        };
+        for def in self.symbols.iter() {
+            if def.name != name {
+                continue;
+            }
+            let derives = match &def.kind {
+                DefKind::Struct { info } => &info.derive_traits,
+                DefKind::Class { info } => &info.derive_traits,
+                DefKind::Enum { info } => &info.derive_traits,
+                _ => continue,
+            };
+            if derives.iter().any(|t| t == "Clone") {
+                return Some(name);
+            }
+        }
+        None
+    }
+
+    /// Synthesise `{StructName}_clone(self) -> StructName` for a
+    /// struct that declares `derive Clone`. The body allocates a fresh
+    /// instance, clones each field according to
+    /// [`Self::synthesize_clone_field`], and returns the new value.
+    fn synthesize_struct_clone(&self, s: &HirStructDef) -> MirFunction {
+        let fn_name = format!("{}_clone", s.name);
+        let self_ty = Ty::Struct {
+            name: s.name.clone(),
+            generic_args: vec![],
+        };
+
+        let mut mir_fn = MirFunction::new(&fn_name, self_ty.clone());
+        let self_local = mir_fn.new_local("self", self_ty.clone(), false);
+        mir_fn.params.push(self_local);
+        let entry = mir_fn.entry_block;
+
+        let dest = mir_fn.new_temp(self_ty.clone());
+        mir_fn.blocks[entry].instructions.push(MirInst::Alloc {
+            dest,
+            ty: self_ty.clone(),
+            size: self.alloc_size(&self_ty),
+        });
+
+        for (idx, field) in s.fields.iter().enumerate() {
+            let field_local = mir_fn.new_temp(field.ty.clone());
+            mir_fn.blocks[entry].instructions.push(MirInst::GetField {
+                dest: field_local,
+                base: self_local,
+                field_index: idx,
+            });
+            let cloned = self.synthesize_clone_field(&mut mir_fn, entry, field_local, &field.ty);
+            mir_fn.blocks[entry].instructions.push(MirInst::SetField {
+                base: dest,
+                field_index: idx,
+                value: MirValue::Use(cloned),
+            });
+        }
+
+        mir_fn.blocks[entry].terminator = Terminator::Return(Some(MirValue::Use(dest)));
+        mir_fn
+    }
+
+    /// Synthesise `{ClassName}_clone(self) -> ClassName` for a class
+    /// that declares `derive Clone`. Same body shape as the struct
+    /// version; the storage layout (8-byte field slots) is identical
+    /// at the MIR level.
+    fn synthesize_class_clone(&self, c: &HirClassDef) -> MirFunction {
+        let fn_name = format!("{}_clone", c.name);
+        let self_ty = Ty::Class {
+            name: c.name.clone(),
+            generic_args: vec![],
+        };
+
+        let mut mir_fn = MirFunction::new(&fn_name, self_ty.clone());
+        let self_local = mir_fn.new_local("self", self_ty.clone(), false);
+        mir_fn.params.push(self_local);
+        let entry = mir_fn.entry_block;
+
+        let dest = mir_fn.new_temp(self_ty.clone());
+        mir_fn.blocks[entry].instructions.push(MirInst::Alloc {
+            dest,
+            ty: self_ty.clone(),
+            size: self.alloc_size(&self_ty),
+        });
+
+        for (idx, field) in c.fields.iter().enumerate() {
+            let field_local = mir_fn.new_temp(field.ty.clone());
+            mir_fn.blocks[entry].instructions.push(MirInst::GetField {
+                dest: field_local,
+                base: self_local,
+                field_index: idx,
+            });
+            let cloned = self.synthesize_clone_field(&mut mir_fn, entry, field_local, &field.ty);
+            mir_fn.blocks[entry].instructions.push(MirInst::SetField {
+                base: dest,
+                field_index: idx,
+                value: MirValue::Use(cloned),
+            });
+        }
+
+        mir_fn.blocks[entry].terminator = Terminator::Return(Some(MirValue::Use(dest)));
+        mir_fn
+    }
+
+    /// Synthesise `{EnumName}_clone(self) -> EnumName` for an enum
+    /// that declares `derive Clone`. Lowering is a switch on the
+    /// discriminant: each variant allocates a new enum, copies the
+    /// tag, clones every payload field, and goto's a shared join
+    /// block that returns the cloned value.
+    fn synthesize_enum_clone(&self, e: &HirEnumDef) -> MirFunction {
+        let fn_name = format!("{}_clone", e.name);
+        let self_ty = Ty::Enum {
+            name: e.name.clone(),
+            generic_args: vec![],
+        };
+
+        let mut mir_fn = MirFunction::new(&fn_name, self_ty.clone());
+        let self_local = mir_fn.new_local("self", self_ty.clone(), false);
+        mir_fn.params.push(self_local);
+
+        let entry = mir_fn.entry_block;
+        let result = mir_fn.new_temp(self_ty.clone());
+        mir_fn.blocks[entry].instructions.push(MirInst::Alloc {
+            dest: result,
+            ty: self_ty.clone(),
+            size: self.alloc_size(&self_ty),
+        });
+
+        let tag = mir_fn.new_temp(Ty::Int32);
+        mir_fn.blocks[entry].instructions.push(MirInst::GetTag {
+            dest: tag,
+            src: self_local,
+        });
+
+        // One block per variant + a shared join block that holds the
+        // single Return terminator. Variant 0 doubles as the Switch's
+        // `otherwise` target so a malformed tag still reaches a real
+        // arm rather than falling off the end.
+        let join = mir_fn.new_block();
+        let mut targets: Vec<(i64, BlockId)> = Vec::with_capacity(e.variants.len());
+        let mut variant_blocks: Vec<BlockId> = Vec::with_capacity(e.variants.len());
+        for _ in &e.variants {
+            variant_blocks.push(mir_fn.new_block());
+        }
+        for (i, variant) in e.variants.iter().enumerate() {
+            targets.push((variant.index as i64, variant_blocks[i]));
+        }
+        let otherwise = variant_blocks.first().copied().unwrap_or(join);
+
+        mir_fn.blocks[entry].terminator = Terminator::Switch {
+            value: MirValue::Use(tag),
+            targets,
+            otherwise,
+        };
+
+        for (i, variant) in e.variants.iter().enumerate() {
+            let block = variant_blocks[i];
+            mir_fn.blocks[block].instructions.push(MirInst::SetTag {
+                dest: result,
+                tag: variant.index as u32,
+            });
+
+            let payload_fields: &[HirVariantField] = match &variant.kind {
+                HirVariantKind::Unit => &[],
+                HirVariantKind::Tuple(fields) | HirVariantKind::Struct(fields) => fields,
+            };
+
+            if !payload_fields.is_empty() {
+                let self_payload = mir_fn.new_temp(self_ty.clone());
+                mir_fn.blocks[block].instructions.push(MirInst::GetPayload {
+                    dest: self_payload,
+                    src: self_local,
+                    ty: self_ty.clone(),
+                });
+                let dest_payload = mir_fn.new_temp(self_ty.clone());
+                mir_fn.blocks[block].instructions.push(MirInst::GetPayload {
+                    dest: dest_payload,
+                    src: result,
+                    ty: self_ty.clone(),
+                });
+                for (idx, field) in payload_fields.iter().enumerate() {
+                    let read = mir_fn.new_temp(field.ty.clone());
+                    mir_fn.blocks[block].instructions.push(MirInst::GetField {
+                        dest: read,
+                        base: self_payload,
+                        field_index: idx,
+                    });
+                    let cloned = self.synthesize_clone_field(&mut mir_fn, block, read, &field.ty);
+                    mir_fn.blocks[block].instructions.push(MirInst::SetField {
+                        base: dest_payload,
+                        field_index: idx,
+                        value: MirValue::Use(cloned),
+                    });
+                }
+            }
+
+            mir_fn.blocks[block].terminator = Terminator::Goto(join);
+        }
+
+        mir_fn.blocks[join].terminator = Terminator::Return(Some(MirValue::Use(result)));
+        mir_fn
+    }
+
+    fn synthesize_default_value(
+        &self,
+        mir_fn: &mut MirFunction,
+        block: BlockId,
+        ty: &Ty,
+    ) -> LocalId {
+        if ty.is_integer() {
+            let dest = mir_fn.new_temp(ty.clone());
+            mir_fn.blocks[block].instructions.push(MirInst::Assign {
+                dest,
+                value: MirValue::Literal(Literal::Int(0)),
+            });
+            return dest;
+        }
+        if ty.is_float() {
+            let dest = mir_fn.new_temp(ty.clone());
+            mir_fn.blocks[block].instructions.push(MirInst::Assign {
+                dest,
+                value: MirValue::Literal(Literal::Float(0.0)),
+            });
+            return dest;
+        }
+        if *ty == Ty::Bool {
+            let dest = mir_fn.new_temp(Ty::Bool);
+            mir_fn.blocks[block].instructions.push(MirInst::Assign {
+                dest,
+                value: MirValue::Literal(Literal::Bool(false)),
+            });
+            return dest;
+        }
+        if *ty == Ty::Char {
+            let dest = mir_fn.new_temp(Ty::Char);
+            mir_fn.blocks[block].instructions.push(MirInst::Assign {
+                dest,
+                value: MirValue::Literal(Literal::Char('\0')),
+            });
+            return dest;
+        }
+        if matches!(ty, Ty::String) {
+            let raw = mir_fn.new_temp(Ty::Str);
+            mir_fn.blocks[block]
+                .instructions
+                .push(MirInst::StringLiteral {
+                    dest: raw,
+                    value: String::new(),
+                });
+            let dest = mir_fn.new_temp(Ty::String);
+            mir_fn.blocks[block].instructions.push(MirInst::Call {
+                dest: Some(dest),
+                callee: "riven_string_from".to_string(),
+                args: vec![MirValue::Use(raw)],
+            });
+            return dest;
+        }
+        if matches!(ty, Ty::Str) {
+            let dest = mir_fn.new_temp(Ty::Str);
+            mir_fn.blocks[block]
+                .instructions
+                .push(MirInst::StringLiteral {
+                    dest,
+                    value: String::new(),
+                });
+            return dest;
+        }
+        if let Some(inner_name) = self.struct_with_derive_trait(ty, "Default") {
+            let dest = mir_fn.new_temp(ty.clone());
+            mir_fn.blocks[block].instructions.push(MirInst::Call {
+                dest: Some(dest),
+                callee: format!("{}_default", inner_name),
+                args: vec![],
+            });
+            return dest;
+        }
+        if matches!(ty, Ty::Vec(_) | Ty::HashMap(_, _) | Ty::Set(_)) {
+            let dest = mir_fn.new_temp(ty.clone());
+            let type_name = type_name_from_ty(ty);
+            let base = type_name.split('[').next().unwrap_or(type_name.as_str());
+            mir_fn.blocks[block].instructions.push(MirInst::Call {
+                dest: Some(dest),
+                callee: format!("{}_new", base),
+                args: vec![],
+            });
+            return dest;
+        }
+        if let Ty::Option(_) = ty {
+            let dest = mir_fn.new_temp(ty.clone());
+            mir_fn.blocks[block].instructions.push(MirInst::Alloc {
+                dest,
+                ty: ty.clone(),
+                size: self.alloc_size(ty),
+            });
+            mir_fn.blocks[block]
+                .instructions
+                .push(MirInst::SetTag { dest, tag: 0 });
+            return dest;
+        }
+
+        let dest = mir_fn.new_temp(ty.clone());
+        mir_fn.blocks[block].instructions.push(MirInst::Assign {
+            dest,
+            value: MirValue::Literal(Literal::Int(0)),
+        });
+        dest
+    }
+
+    /// Lower `lhs == rhs` (or `lhs != rhs`) for a struct that derives
+    /// `PartialEq`. Compares each field of the two structs in turn and
+    /// returns the AND of all field equalities (for `Eq`) or its negation
+    /// (for `NotEq`). Both sides must already have the struct shape
+    /// described by `fields` (`(index, field_ty)` pairs).
+    fn lower_struct_partial_eq(
+        &mut self,
+        lhs: &HirExpr,
+        rhs: &HirExpr,
+        op: BinOp,
+        fields: &[(usize, Ty)],
+    ) -> Result<LocalId, String> {
+        let lhs_local = self
+            .lower_expr(lhs)?
+            .ok_or_else(|| "lhs of struct == has no value".to_string())?;
+        let rhs_local = self
+            .lower_expr(rhs)?
+            .ok_or_else(|| "rhs of struct == has no value".to_string())?;
+
+        if fields.is_empty() {
+            let dest = self.new_temp(Ty::Bool);
+            self.emit(MirInst::Assign {
+                dest,
+                value: MirValue::Literal(Literal::Bool(matches!(op, BinOp::Eq))),
+            });
+            return Ok(dest);
+        }
+
+        let mut acc: Option<LocalId> = None;
+        for (idx, field_ty) in fields {
+            let lf = self.new_temp(field_ty.clone());
+            self.emit(MirInst::GetField {
+                dest: lf,
+                base: lhs_local,
+                field_index: *idx,
+            });
+            let rf = self.new_temp(field_ty.clone());
+            self.emit(MirInst::GetField {
+                dest: rf,
+                base: rhs_local,
+                field_index: *idx,
+            });
+
+            let field_eq = self.new_temp(Ty::Bool);
+            self.emit(MirInst::Compare {
+                dest: field_eq,
+                op: CmpOp::Eq,
+                lhs: MirValue::Use(lf),
+                rhs: MirValue::Use(rf),
+            });
+
+            acc = Some(match acc {
+                None => field_eq,
+                Some(prev) => {
+                    let combined = self.new_temp(Ty::Bool);
+                    self.emit(MirInst::BinOp {
+                        dest: combined,
+                        op: BinOp::And,
+                        lhs: MirValue::Use(prev),
+                        rhs: MirValue::Use(field_eq),
+                    });
+                    combined
+                }
+            });
+        }
+
+        let eq_result = acc.expect("non-empty fields handled above");
+        if matches!(op, BinOp::NotEq) {
+            let negated = self.new_temp(Ty::Bool);
+            self.emit(MirInst::Not {
+                dest: negated,
+                operand: MirValue::Use(eq_result),
+            });
+            Ok(negated)
+        } else {
+            Ok(eq_result)
+        }
+    }
+
+    /// Lower `<` / `<=` / `>` / `>=` on a struct that derives `Ord`
+    /// (or `PartialOrd`) by calling the synthesised
+    /// `<Type>_cmp` / `<Type>_partial_cmp`, then comparing its
+    /// `-1 / 0 / +1` result to `0` according to `op`.
+    fn lower_struct_ord(
+        &mut self,
+        lhs: &HirExpr,
+        rhs: &HirExpr,
+        op: BinOp,
+        struct_name: &str,
+        partial: bool,
+    ) -> Result<LocalId, String> {
+        let lhs_local = self
+            .lower_expr(lhs)?
+            .ok_or_else(|| "lhs of struct ordering has no value".to_string())?;
+        let rhs_local = self
+            .lower_expr(rhs)?
+            .ok_or_else(|| "rhs of struct ordering has no value".to_string())?;
+
+        let method_name = if partial { "partial_cmp" } else { "cmp" };
+        let cmp = self.new_temp(Ty::Int);
+        self.emit(MirInst::Call {
+            dest: Some(cmp),
+            callee: format!("{}_{}", struct_name, method_name),
+            args: vec![MirValue::Use(lhs_local), MirValue::Use(rhs_local)],
+        });
+
+        let cmp_op = binop_to_cmpop(op);
+        let dest = self.new_temp(Ty::Bool);
+        self.emit(MirInst::Compare {
+            dest,
+            op: cmp_op,
+            lhs: MirValue::Use(cmp),
+            rhs: MirValue::Literal(Literal::Int(0)),
+        });
+        Ok(dest)
+    }
+
+    /// Returns Some(struct_name) if `ty` (peeling refs/aliases) is a struct
+    /// whose declaration includes `derive Debug`; otherwise None.
+    fn struct_with_derive_debug(&self, ty: &Ty) -> Option<String> {
+        self.struct_with_derive_trait(ty, "Debug")
+    }
+
+    fn receiver_type_name(&self, expr: &HirExpr) -> Option<String> {
+        use crate::resolve::symbols::DefKind;
+
+        let HirExprKind::VarRef(def_id) = expr.kind else {
+            return None;
+        };
+        let def = self.symbols.get(def_id)?;
+        match &def.kind {
+            DefKind::Class { .. } | DefKind::Struct { .. } | DefKind::Enum { .. } => {
+                Some(def.name.clone())
+            }
+            DefKind::TypeAlias { target } => Some(type_name_from_ty(target)),
+            _ => None,
+        }
+    }
+
+    fn type_supports_trait(&self, ty: &Ty, trait_name: &str) -> bool {
+        if self.struct_with_derive_trait(ty, trait_name).is_some() {
+            return true;
+        }
+        match ty {
+            Ty::TypeParam { bounds, .. } | Ty::ImplTrait(bounds) | Ty::DynTrait(bounds) => {
+                bounds.iter().any(|bound| bound.name == trait_name)
+            }
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => self.type_supports_trait(inner, trait_name),
+            Ty::Alias { target, .. } => self.type_supports_trait(target, trait_name),
+            Ty::Newtype { inner, .. } => self.type_supports_trait(inner, trait_name),
+            _ => false,
+        }
+    }
+
+    fn struct_with_derive_trait(&self, ty: &Ty, trait_name: &str) -> Option<String> {
+        use crate::resolve::symbols::DefKind;
+        let name = match ty {
+            Ty::Struct { name, .. } => name.clone(),
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => {
+                return self.struct_with_derive_trait(inner, trait_name)
+            }
+            Ty::Alias { target, .. } => return self.struct_with_derive_trait(target, trait_name),
+            Ty::Newtype { inner, .. } => return self.struct_with_derive_trait(inner, trait_name),
+            _ => return None,
+        };
+        for def in self.symbols.iter() {
+            if def.name == name {
+                if let DefKind::Struct { info } = &def.kind {
+                    if info.derive_traits.iter().any(|t| t == trait_name) {
+                        return Some(name);
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Set the terminator of the current basic block.
@@ -4286,7 +7064,9 @@ impl<'a> Lowerer<'a> {
                         match &def.kind {
                             DefKind::Class { info } => {
                                 total_fields += info.fields.len();
-                                cur = info.parent.and_then(|p| self.symbols.get(p).map(|d| d.name.clone()));
+                                cur = info
+                                    .parent
+                                    .and_then(|p| self.symbols.get(p).map(|d| d.name.clone()));
                                 break;
                             }
                             DefKind::Struct { info } => {
@@ -4381,7 +7161,11 @@ impl<'a> Lowerer<'a> {
         };
         for (i, pat) in patterns.iter().enumerate() {
             let is_last = i + 1 == patterns.len();
-            let fail_block = if is_last { next_block } else { self.new_block() };
+            let fail_block = if is_last {
+                next_block
+            } else {
+                self.new_block()
+            };
             match pat {
                 HirPattern::Wildcard { .. } => {
                     self.set_terminator(Terminator::Goto(match_target));
@@ -4426,9 +7210,10 @@ impl<'a> Lowerer<'a> {
     ) -> Result<(), String> {
         let elem_tys: Vec<Ty> = match scrut_ty {
             Ty::Tuple(ts) => ts.clone(),
-            _ => return Ok({
+            _ => {
                 self.set_terminator(Terminator::Goto(match_target));
-            }),
+                return Ok(());
+            }
         };
         for (idx, pat) in elements.iter().enumerate() {
             let elem_ty = elem_tys.get(idx).cloned().unwrap_or(Ty::Unit);
@@ -4440,7 +7225,12 @@ impl<'a> Lowerer<'a> {
             });
             match pat {
                 HirPattern::Wildcard { .. } => {}
-                HirPattern::Binding { def_id, name, mutable, .. } => {
+                HirPattern::Binding {
+                    def_id,
+                    name,
+                    mutable,
+                    ..
+                } => {
                     let local = self.new_local_named(name, elem_ty, *mutable);
                     self.def_to_local.insert(*def_id, local);
                     self.emit(MirInst::Assign {
@@ -4577,7 +7367,11 @@ impl<'a> Lowerer<'a> {
         // Scan all methods whose parent matches this class.
         for def in self.symbols.iter() {
             if def.name == method_name {
-                if let DefKind::Method { parent, ref signature } = def.kind {
+                if let DefKind::Method {
+                    parent,
+                    ref signature,
+                } = def.kind
+                {
                     if parent == class_def_id {
                         return signature.is_class_method;
                     }
@@ -4626,9 +7420,23 @@ impl<'a> Lowerer<'a> {
 fn is_option_type(ty: &Ty) -> bool {
     match ty {
         Ty::Option(_) => true,
-        Ty::Ref(inner) | Ty::RefMut(inner)
-        | Ty::RefLifetime(_, inner) | Ty::RefMutLifetime(_, inner) => is_option_type(inner),
+        Ty::Ref(inner)
+        | Ty::RefMut(inner)
+        | Ty::RefLifetime(_, inner)
+        | Ty::RefMutLifetime(_, inner) => is_option_type(inner),
         Ty::Class { name, .. } => name.starts_with("Option"),
+        _ => false,
+    }
+}
+
+fn is_result_type(ty: &Ty) -> bool {
+    match ty {
+        Ty::Result(_, _) => true,
+        Ty::Ref(inner)
+        | Ty::RefMut(inner)
+        | Ty::RefLifetime(_, inner)
+        | Ty::RefMutLifetime(_, inner) => is_result_type(inner),
+        Ty::Class { name, .. } => name.starts_with("Result"),
         _ => false,
     }
 }
@@ -4638,8 +7446,15 @@ fn is_option_type(ty: &Ty) -> bool {
 fn is_collection_method(method_name: &str) -> bool {
     matches!(
         method_name,
-        "each" | "filter" | "where_matching" | "find" | "position"
-        | "map" | "partition" | "into_filtered" | "display_all"
+        "each"
+            | "filter"
+            | "where_matching"
+            | "find"
+            | "position"
+            | "map"
+            | "partition"
+            | "into_filtered"
+            | "display_all"
     )
 }
 
@@ -4649,10 +7464,10 @@ fn is_collection_method(method_name: &str) -> bool {
 fn is_vec_or_iterator_type(ty: &Ty) -> bool {
     match ty {
         Ty::Vec(_) => true,
-        Ty::Ref(inner) | Ty::RefMut(inner)
-        | Ty::RefLifetime(_, inner) | Ty::RefMutLifetime(_, inner) => {
-            is_vec_or_iterator_type(inner)
-        }
+        Ty::Ref(inner)
+        | Ty::RefMut(inner)
+        | Ty::RefLifetime(_, inner)
+        | Ty::RefMutLifetime(_, inner) => is_vec_or_iterator_type(inner),
         Ty::Class { name, .. } => {
             let base = if let Some(pos) = name.find('[') {
                 &name[..pos]
@@ -4661,8 +7476,7 @@ fn is_vec_or_iterator_type(ty: &Ty) -> bool {
             };
             matches!(
                 base,
-                "Vec" | "VecIter" | "VecIntoIter"
-                    | "SplitIter" | "HashIter" | "SetIter"
+                "Vec" | "VecIter" | "VecIntoIter" | "SplitIter" | "HashIter" | "SetIter"
             )
         }
         // For inferred types, check if the type name suggests a collection.
@@ -4682,10 +7496,21 @@ fn is_builtin_static_method(type_name: &str, method_name: &str) -> bool {
         type_name
     };
     match base_type {
-        "String" => matches!(method_name, "from"),
-        "Vec" => matches!(method_name, "new"),
-        "Hash" => matches!(method_name, "new"),
-        "Set" => matches!(method_name, "new"),
+        "String" => matches!(method_name, "from" | "new" | "with_capacity"),
+        // `Vec.with_capacity(n)` is a stateless static constructor — like
+        // `Vec.new` but takes one Int arg. Phase 2 stdlib batch 1 (#03).
+        // `Vec.from_iter(iter)` (#03 batch 2) takes any iterator-producing
+        // expression and treats it as a fresh allocation.
+        "Vec" => matches!(method_name, "new" | "with_capacity" | "from_iter"),
+        // Phase 2 stdlib (#04): full HashMap[K,V] / HashSet[T] surface.
+        // The `Hash` and `HashMap` aliases both reach here for the
+        // `HashMap.new` / `HashMap.with_capacity(n)` constructors; same
+        // for `Set` / `HashSet`.
+        "Hash" | "HashMap" => matches!(method_name, "new" | "with_capacity"),
+        "Set" | "HashSet" => matches!(method_name, "new" | "with_capacity"),
+        "Thread" => matches!(method_name, "spawn" | "current" | "sleep" | "yield_now"),
+        "Mutex" => matches!(method_name, "new"),
+        "Arc" => matches!(method_name, "new"),
         _ => false,
     }
 }
@@ -4698,8 +7523,10 @@ fn is_builtin_static_method(type_name: &str, method_name: &str) -> bool {
 fn element_type_of(ty: &Ty) -> Ty {
     match ty {
         Ty::Vec(inner) => *inner.clone(),
-        Ty::Ref(inner) | Ty::RefMut(inner)
-        | Ty::RefLifetime(_, inner) | Ty::RefMutLifetime(_, inner) => element_type_of(inner),
+        Ty::Ref(inner)
+        | Ty::RefMut(inner)
+        | Ty::RefLifetime(_, inner)
+        | Ty::RefMutLifetime(_, inner) => element_type_of(inner),
         Ty::Class { name, generic_args } => {
             // Iterator wrapper types: VecIter[T], VecIntoIter[T], etc.
             if (name == "VecIter" || name == "VecIntoIter" || name == "SplitIter")
@@ -4719,8 +7546,10 @@ fn element_type_of(ty: &Ty) -> Ty {
 fn is_string_like(ty: &Ty) -> bool {
     match ty {
         Ty::String | Ty::Str => true,
-        Ty::Ref(inner) | Ty::RefMut(inner)
-        | Ty::RefLifetime(_, inner) | Ty::RefMutLifetime(_, inner) => is_string_like(inner),
+        Ty::Ref(inner)
+        | Ty::RefMut(inner)
+        | Ty::RefLifetime(_, inner)
+        | Ty::RefMutLifetime(_, inner) => is_string_like(inner),
         _ => false,
     }
 }
@@ -4735,10 +7564,19 @@ fn is_inferred_string_expr(expr: &HirExpr) -> bool {
     }
     // Known string-returning method names.
     let string_methods = [
-        "to_display", "to_string", "message", "summary",
-        "serialize", "clone", "title_ref", "deadline_ref",
-        "to_lower", "trim", "push_str",
-        "unwrap_or", "unwrap_or_else",
+        "to_display",
+        "to_string",
+        "message",
+        "summary",
+        "serialize",
+        "clone",
+        "title_ref",
+        "deadline_ref",
+        "to_lower",
+        "trim",
+        "push_str",
+        "unwrap_or",
+        "unwrap_or_else",
     ];
 
     match &expr.kind {
@@ -4802,6 +7640,89 @@ fn binop_to_cmpop(op: BinOp) -> CmpOp {
     }
 }
 
+/// If `ty` (after peeling reference layers) is a struct that derives
+/// `PartialEq`, return the struct's name. Otherwise return `None`.
+fn struct_name_with_partial_eq(ty: &Ty, symbols: &SymbolTable) -> Option<String> {
+    use crate::resolve::symbols::DefKind;
+    let mut cur = ty;
+    loop {
+        match cur {
+            Ty::Ref(inner) | Ty::RefMut(inner) => cur = inner,
+            Ty::RefLifetime(_, inner) | Ty::RefMutLifetime(_, inner) => cur = inner,
+            Ty::Struct { name, .. } => {
+                for def in symbols.iter() {
+                    if def.name == *name {
+                        if let DefKind::Struct { ref info } = def.kind {
+                            if info.derive_traits.iter().any(|t| t == "PartialEq") {
+                                return Some(name.clone());
+                            }
+                        }
+                        return None;
+                    }
+                }
+                return None;
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// Return `Some((struct_name, partial))` when `ty` (peeling refs and
+/// aliases) is a struct that declares `derive Ord` or `derive
+/// PartialOrd`. The boolean is `true` only when the struct derives
+/// `PartialOrd` *without* `Ord`, in which case the BinaryOp lowering
+/// must dispatch to `<Type>_partial_cmp` rather than `<Type>_cmp`.
+fn struct_name_with_ord(ty: &Ty, symbols: &SymbolTable) -> Option<(String, bool)> {
+    use crate::resolve::symbols::DefKind;
+    let mut cur = ty;
+    loop {
+        match cur {
+            Ty::Ref(inner) | Ty::RefMut(inner) => cur = inner,
+            Ty::RefLifetime(_, inner) | Ty::RefMutLifetime(_, inner) => cur = inner,
+            Ty::Struct { name, .. } => {
+                for def in symbols.iter() {
+                    if def.name == *name {
+                        if let DefKind::Struct { ref info } = def.kind {
+                            let has_ord = info.derive_traits.iter().any(|t| t == "Ord");
+                            let has_partial = info.derive_traits.iter().any(|t| t == "PartialOrd");
+                            if has_ord {
+                                return Some((name.clone(), false));
+                            }
+                            if has_partial {
+                                return Some((name.clone(), true));
+                            }
+                        }
+                        return None;
+                    }
+                }
+                return None;
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// Return the ordered `(field_index, field_ty)` list for a struct, or
+/// `None` if the name doesn't refer to a known struct.
+fn struct_field_layout(name: &str, symbols: &SymbolTable) -> Option<Vec<(usize, Ty)>> {
+    use crate::resolve::symbols::DefKind;
+    for def in symbols.iter() {
+        if def.name == name {
+            if let DefKind::Struct { ref info } = def.kind {
+                let mut out = Vec::with_capacity(info.fields.len());
+                for &fid in &info.fields {
+                    let field_def = symbols.get(fid)?;
+                    if let DefKind::Field { index, ref ty, .. } = field_def.kind {
+                        out.push((index, ty.clone()));
+                    }
+                }
+                return Some(out);
+            }
+        }
+    }
+    None
+}
+
 // ─── Drop insertion ────────────────────────────────────────────────────────
 
 /// Insert `MirInst::Drop` instructions for all locals that have Move semantics
@@ -4811,48 +7732,111 @@ fn binop_to_cmpop(op: BinOp) -> CmpOp {
 /// first dropped). We skip:
 /// - Copy types (primitives, references, bools, etc.)
 /// - Parameters (owned by the caller)
-/// - The return value local (it is being returned, not dropped)
-fn insert_drops(func: &mut MirFunction, return_local: Option<LocalId>) {
-    use std::collections::HashSet;
+/// - Any local that appears as the value of a `Return` terminator
+///   (returning the value, not dropping it).
+fn insert_drops(
+    func: &mut MirFunction,
+    return_locals: &HashSet<LocalId>,
+    symbols: &SymbolTable,
+    user_drop_classes: &HashSet<String>,
+) {
+    // Avoid recursing into a class's own `drop` method: if `Holder_drop`
+    // takes `self: Holder`, drop-elaboration on `self` would emit a call
+    // back to `Holder_drop`, recursing forever at runtime.
+    let in_user_drop_method = func
+        .name
+        .strip_suffix("_drop")
+        .map(|prefix| user_drop_classes.contains(prefix))
+        .unwrap_or(false);
 
     // Build a set of parameter locals to skip.
     let param_set: HashSet<LocalId> = func.params.iter().copied().collect();
 
+    // Determine which locals' value provenance is a fresh allocation that
+    // this frame owns exclusively. We need this set BEFORE building
+    // `drop_locals` because String / Vec / HashMap intermediates that are
+    // technically compiler temporaries (`_t…` names) can still own heap
+    // (e.g. the implicit `riven_string_from` wrap inserted around a string
+    // literal whose owner is an outer `String.from(_)` call). Without
+    // dropping such intermediates, every interpolated literal leaks the
+    // owned-string copy of itself.
+    let dealloc_safe = compute_dealloc_safe_locals(func);
+
+    // Locals whose pointer transitively flows into a `Return` value via
+    // `Assign`/`Copy`/`Move`. The dealloc-safety analysis processes blocks
+    // in linear order, so a forward edge such as `block 4: Assign 2 = 5`
+    // (where `5` is initialized later in `block 5`) leaves `2` tainted
+    // and `5` alloc-rooted. Without this fixpoint, dropping `5` at the
+    // common return block would free the value the caller is about to
+    // read through `2`. We compute the set iteratively from the seed
+    // `return_locals` and exclude every member from `drop_locals` below.
+    let return_alias_chain = compute_return_alias_chain(func, return_locals);
+
     // Collect locals that need dropping: Move types, not params, not the
-    // return value, not compiler temporaries. Collect in declaration order.
+    // return value. Collect in declaration order.
     //
-    // We only drop user-declared locals (let bindings), not compiler-
-    // generated temporaries (`_t0`, `_t1`, ...). Temporaries may hold
-    // pointers to static data (e.g. string literals in data sections) or
-    // intermediate values that don't represent owned heap allocations.
+    // We always drop user-declared locals (`let` bindings) of an owning
+    // type. Compiler-generated temporaries (`_t0`, `_t1`, …) are dropped
+    // only when:
+    //   * the temp's type is a built-in heap-owning type
+    //     (`String`, `Vec`, `HashMap`), AND
+    //   * the dealloc-safety analysis classified the temp as alloc-rooted
+    //     (its value chain traces to a fresh-alloc callee like
+    //     `riven_string_from` / `riven_vec_new` / `riven_hash_new`, with
+    //     no aliasing or transfer).
+    //
+    // Class / Struct / Enum temps are still skipped: they almost always
+    // arise from `MirInst::Alloc` followed by an `Assign` to a named
+    // local, and the dealloc-safety pass already moves ownership to the
+    // named local — dropping the temp would double-free.
     let drop_locals: Vec<LocalId> = func
         .locals
         .iter()
         .filter(|local| {
-            // Must be a Move type.
-            if local.ty.is_copy() {
+            // Must be a Move type. Honors `derive Copy` on user-declared
+            // structs/classes/enums by consulting the symbol table.
+            if ty_is_effectively_copy(&local.ty, symbols) {
                 return false;
             }
             // Must not be a parameter.
             if param_set.contains(&local.id) {
                 return false;
             }
-            // Must not be the return value.
-            if return_local == Some(local.id) {
+            // Must not be the return value (any block) or alias to one.
+            if return_locals.contains(&local.id) || return_alias_chain.contains(&local.id) {
                 return false;
             }
-            // Must not be a compiler temporary.
-            if local.name.starts_with("_t") {
-                return false;
-            }
-            // Only drop types that are always heap-allocated via Alloc
-            // (Class, Struct, Enum). String/Vec/etc. may hold pointers to
-            // static data sections and can't be safely freed in v1.
+            // Drop types that own heap memory:
+            //   * Class/Struct/Enum — always heap-allocated via `riven_alloc`.
+            //   * String/Vec/HashMap — heap-allocated via the built-in
+            //     constructors (`riven_string_from`, `riven_vec_new`,
+            //     `riven_hash_new`). Each gets a dedicated free helper at
+            //     drop time (see drop callee dispatch below).
+            //
+            // The dealloc-safety analysis (`compute_dealloc_safe_locals`)
+            // is what guards against double-free for locals whose value
+            // came from a non-fresh source (e.g. a function-call return
+            // pointing into the caller's heap).
             if !matches!(
                 local.ty,
-                Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
+                Ty::Class { .. }
+                    | Ty::Struct { .. }
+                    | Ty::Enum { .. }
+                    | Ty::String
+                    | Ty::Vec(_)
+                    | Ty::HashMap(_, _)
+                    | Ty::Set(_)
             ) {
                 return false;
+            }
+            // Compiler temporaries: only drop heap-owning built-ins
+            // whose value is a fresh allocation (see comment above).
+            if local.name.starts_with("_t") {
+                let is_builtin_heap = matches!(
+                    local.ty,
+                    Ty::String | Ty::Vec(_) | Ty::HashMap(_, _) | Ty::Set(_)
+                );
+                return is_builtin_heap && dealloc_safe.contains(&local.id);
             }
             true
         })
@@ -4863,18 +7847,638 @@ fn insert_drops(func: &mut MirFunction, return_local: Option<LocalId>) {
         return;
     }
 
+    // Pre-compute, for each drop-eligible local, the user-drop class name
+    // so we can emit `{ClassName}_drop(self)` immediately before the
+    // dealloc + no-op cleanup. Indexed for cheap lookup inside the loop.
+    let drop_callees: HashMap<LocalId, String> = drop_locals
+        .iter()
+        .filter_map(|&id| {
+            let local = func.locals.iter().find(|l| l.id == id)?;
+            if let Ty::Class { name, .. } = &local.ty {
+                if user_drop_classes.contains(name) {
+                    return Some((id, format!("{}_drop", name)));
+                }
+            }
+            None
+        })
+        .collect();
+
     // For each block that ends with a Return terminator, insert Drop
     // instructions (in reverse declaration order) before the return.
     for block in &mut func.blocks {
         if matches!(block.terminator, Terminator::Return(_)) {
             // Insert drops in reverse declaration order (LIFO).
             for &local_id in drop_locals.iter().rev() {
+                // 1) User-defined `def drop` runs first (if any), so the
+                //    body still sees the live allocation. Skip when we're
+                //    already lowering that class's own drop method to
+                //    avoid infinite self-recursion.
+                if !in_user_drop_method {
+                    if let Some(callee) = drop_callees.get(&local_id) {
+                        block.instructions.push(MirInst::Call {
+                            dest: None,
+                            callee: callee.clone(),
+                            args: vec![MirValue::Use(local_id)],
+                        });
+                    }
+                }
+                // 2) Heap-allocated values need their backing memory
+                // freed at scope exit. `MirInst::Drop` itself remains a
+                // no-op in both backends — the free call we emit just
+                // below is what releases memory.
+                //
+                // Only emit the free when we can prove the local owns a
+                // fresh allocation (see `compute_dealloc_safe_locals`).
+                // The callee depends on the local's type:
+                //   * Class/Struct/Enum     → `riven_dealloc`
+                //   * String                → `riven_string_free`
+                //   * Vec[_]                → `riven_vec_free` (spine only)
+                //   * HashMap[_, _]         → `riven_hash_free` (spine only)
+                if dealloc_safe.contains(&local_id) {
+                    let local = func
+                        .locals
+                        .iter()
+                        .find(|l| l.id == local_id)
+                        .expect("drop_locals references a missing local");
+                    let drop_callee = match &local.ty {
+                        Ty::String => "riven_string_free",
+                        // Phase 2 stdlib batch 2 (#03): pick the
+                        // element-aware drop helper for Vec types whose
+                        // element owns heap. `riven_vec_drop_string`
+                        // walks slots as `char*` and frees each before
+                        // releasing the spine; `riven_vec_drop_vec`
+                        // walks slots as `RivenVec*` and recurses one
+                        // level. Anything else (primitive elements,
+                        // HashMap-of-Vec, deeper nesting) falls back to
+                        // the spine-only `riven_vec_free`. The deeper
+                        // shapes will land alongside the trait-driven
+                        // drop dispatch in #05.
+                        Ty::Vec(elem) => match elem.as_ref() {
+                            Ty::String => "riven_vec_drop_string",
+                            Ty::Vec(_) => "riven_vec_drop_vec",
+                            _ => "riven_vec_free",
+                        },
+                        // Phase 2 stdlib batch 2 (#04): pick the
+                        // element-aware drop helper for HashMap types
+                        // whose key and/or value owns heap. The selector
+                        // mirrors the Vec one above: a four-way table
+                        // over `(K is heap, V is heap)`. Heap-owned in
+                        // v1 means String or Vec[_]; the deeper Trie of
+                        // nested heap (HashMap-in-HashMap, Set-in-V) is
+                        // a follow-up alongside the trait-driven drop
+                        // dispatch in #05 and is documented in
+                        // CHANGELOG known limitations.
+                        Ty::HashMap(k, v) => {
+                            let k_string = matches!(k.as_ref(), Ty::String);
+                            let v_string = matches!(v.as_ref(), Ty::String);
+                            let v_vec = matches!(v.as_ref(), Ty::Vec(_));
+                            match (k_string, v_string, v_vec) {
+                                (true, true, _) => "riven_hash_drop_string_string",
+                                (true, false, _) => "riven_hash_drop_string_v",
+                                (false, true, _) => "riven_hash_drop_v_string",
+                                (false, false, true) => "riven_hash_drop_v_vec",
+                                _ => "riven_hash_free",
+                            }
+                        }
+                        // Phase 2 stdlib batch 2 (#04): HashSet[T] —
+                        // spine free is `riven_set_free`; if T is a
+                        // String the per-element drop selector walks
+                        // slots before delegating.
+                        Ty::Set(elem) => match elem.as_ref() {
+                            Ty::String => "riven_set_drop_string",
+                            _ => "riven_set_free",
+                        },
+                        Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. } => "riven_dealloc",
+                        // Unreachable: the drop_locals filter above
+                        // restricts to exactly the variants matched here.
+                        // We use unimplemented! rather than a silent
+                        // fallback so a future widening of the filter
+                        // surfaces immediately.
+                        other => {
+                            unimplemented!("insert_drops: no drop callee for type {:?}", other)
+                        }
+                    };
+                    block.instructions.push(MirInst::Call {
+                        dest: None,
+                        callee: drop_callee.to_string(),
+                        args: vec![MirValue::Use(local_id)],
+                    });
+                }
                 block.instructions.push(MirInst::Drop { local: local_id });
             }
         }
     }
 }
 
+/// Compute the set of locals whose value provenance is a fresh
+/// `MirInst::Alloc` (or a chain of `Assign`/`Copy`/`Move` from one) AND
+/// whose ownership of that allocation has not been aliased away to
+/// another local or transferred to a callee/aggregate.
+///
+/// These are the locals safe to pass to `riven_dealloc` at scope exit:
+/// freeing them releases an allocation that this frame owns exclusively.
+///
+/// A local is excluded (NOT dealloc-safe) when:
+///
+///   * Its provenance is not a fresh `Alloc` — for example `GetField` /
+///     `GetPayload` (pointer into a parent struct), a function-call
+///     return value (caller-owned semantics), `Ref`/`RefMut`, or numeric
+///     /string literal output.
+///   * Ownership escapes the current frame: the local is passed as a
+///     `Use(local)` argument to any `Call`/`CallIndirect`, or stored
+///     into another aggregate via `SetField`. After such a transfer the
+///     callee/aggregate may have copied or freed the pointer, so a
+///     scope-exit dealloc could double-free or use-after-free.
+///   * Its value flows (via `Assign`/`Copy`/`Move`) into another local.
+///     The MIR doesn't deep-copy structs/classes/enums on assignment —
+///     the destination receives the same pointer — so dealloc'ing both
+///     would double-free the shared allocation. We move the dealloc
+///     responsibility to the last local in each propagation chain.
+fn compute_dealloc_safe_locals(func: &MirFunction) -> std::collections::HashSet<LocalId> {
+    use std::collections::HashSet;
+
+    // `alloc_rooted`: locals whose value currently traces back to a fresh
+    // `MirInst::Alloc` and that have not yet been aliased away or
+    // transferred. We process instructions in a single forward pass over
+    // a flattened block order; an instruction may both *grant* a local
+    // alloc-rooted status (e.g. `Alloc dest=L`) and *revoke* it (e.g.
+    // `Use(L)` as a Call argument later in the same block).
+    let mut alloc_rooted: HashSet<LocalId> = HashSet::new();
+    // `tainted_perm`: once a local was passed to a callee/aggregate or
+    // its value was propagated to another local, it can never become
+    // dealloc-safe. Re-allocations into the same id (rare) would still
+    // honor this — we conservatively keep the local out of the safe set.
+    let mut tainted_perm: HashSet<LocalId> = HashSet::new();
+
+    // Single forward pass — block order is the lowering order, which
+    // matches program execution order for the cases we care about.
+    // Loops/back-edges are not modeled; back-edges only matter when an
+    // alloc-rooted local is mutated mid-loop, which the lowerer
+    // currently never produces for user `let` bindings of Class/Struct
+    // /Enum types.
+    for block in &func.blocks {
+        for inst in &block.instructions {
+            match inst {
+                MirInst::Alloc { dest, .. } | MirInst::StackAlloc { dest, .. } => {
+                    if !tainted_perm.contains(dest) {
+                        alloc_rooted.insert(*dest);
+                    }
+                }
+                MirInst::Assign { dest, value } => {
+                    if let MirValue::Use(src) = value {
+                        if alloc_rooted.contains(src) && !tainted_perm.contains(dest) {
+                            // Pointer-copy: dest now aliases src's
+                            // allocation. Hand dealloc responsibility to
+                            // dest by tainting src permanently.
+                            tainted_perm.insert(*src);
+                            alloc_rooted.remove(src);
+                            alloc_rooted.insert(*dest);
+                            continue;
+                        }
+                    }
+                    // Literal or non-alloc-rooted source → permanently
+                    // exclude dest. (We also drop any prior alloc-root
+                    // status, since the local is being overwritten.)
+                    tainted_perm.insert(*dest);
+                    alloc_rooted.remove(dest);
+                }
+                MirInst::Copy { dest, src } | MirInst::Move { dest, src } => {
+                    if alloc_rooted.contains(src) && !tainted_perm.contains(dest) {
+                        tainted_perm.insert(*src);
+                        alloc_rooted.remove(src);
+                        alloc_rooted.insert(*dest);
+                    } else {
+                        tainted_perm.insert(*dest);
+                        alloc_rooted.remove(dest);
+                    }
+                }
+                // Every other instruction that defines a local produces
+                // a value that is NOT a fresh allocation owned by this
+                // frame — taint the destination.
+                MirInst::BinOp { dest, .. }
+                | MirInst::Negate { dest, .. }
+                | MirInst::Not { dest, .. }
+                | MirInst::Compare { dest, .. }
+                | MirInst::GetField { dest, .. }
+                | MirInst::GetTag { dest, .. }
+                | MirInst::GetPayload { dest, .. }
+                | MirInst::Ref { dest, .. }
+                | MirInst::RefMut { dest, .. }
+                | MirInst::StringLiteral { dest, .. }
+                | MirInst::FuncAddr { dest, .. } => {
+                    tainted_perm.insert(*dest);
+                    alloc_rooted.remove(dest);
+                }
+                MirInst::Call { dest, callee, args } => {
+                    // Whitelist of callees that produce a fresh, heap
+                    // allocation owned exclusively by `dest`. The result
+                    // behaves like `MirInst::Alloc { dest }` — the local
+                    // can be freed at scope exit by the matching helper.
+                    //
+                    // Rule: the callee must allocate new heap that is
+                    // returned to the caller, with no pre-existing alias
+                    // on entry. `riven_string_from` / `riven_string_concat`
+                    // both return a fresh `malloc`'d buffer; `riven_vec_new`
+                    // and `riven_hash_new` return fresh struct heap.
+                    // The whitelist covers both the MIR-level mangled
+                    // names emitted by the lowerer (e.g. `Vec_new`,
+                    // `HashMap_new`, `String_from`) and the runtime-
+                    // level names used at internal emit sites (e.g.
+                    // `riven_string_from` in literal materialisation).
+                    // Both forms reach the codegen as `Call { callee }`
+                    // and both produce fresh heap.
+                    const FRESH_ALLOC_CALLEES: &[&str] = &[
+                        "String_from",
+                        "Vec_new",
+                        "Hash_new",
+                        "HashMap_new",
+                        "riven_string_from",
+                        "riven_string_concat",
+                        "riven_vec_new",
+                        "riven_hash_new",
+                        // Phase 2 stdlib batch 2 (#02): `into_bytes`
+                        // returns a freshly-allocated Vec[U8] whose
+                        // ownership is exclusive to the dest local —
+                        // drop-elaborate it like any other Vec.
+                        "String_into_bytes",
+                        "riven_string_into_bytes",
+                        // `push` allocates a fresh char buffer and the
+                        // surrounding mir lowering rebinds the receiver
+                        // local to it; the local must remain alloc-rooted
+                        // so scope-exit drop emits `riven_string_free`.
+                        "String_push",
+                        "riven_string_push",
+                        // Phase 2 stdlib batch 2 (#03): `Vec.from_iter`
+                        // takes ownership of the source iter (which IS a
+                        // RivenVec* in v1) and re-emerges as a fresh
+                        // owning Vec. Drop-elaborate as a fresh alloc; the
+                        // source iter local is tainted via the consume
+                        // helper match below.
+                        "Vec_from_iter",
+                        "riven_vec_from_iter",
+                        // Phase 2 stdlib (#04): HashMap[K,V] / HashSet[T]
+                        // surface. Each of these returns a freshly-
+                        // allocated heap object whose ownership is the
+                        // caller's drop frame. Without this whitelist
+                        // the dest local would be tainted on the very
+                        // first instruction (default Call rule) and the
+                        // scope-exit drop pass would skip the spine
+                        // free, leaking the allocation.
+                        // The bare constructors are emitted via the
+                        // mangled `Hash_new` / `HashMap_new` / `Set_new`
+                        // / `HashSet_new` callee names; without them
+                        // here the dest local would be tainted by the
+                        // default Call rule and the spine would leak.
+                        "Set_new",
+                        "HashSet_new",
+                        "riven_set_new",
+                        "HashMap_with_capacity",
+                        "Hash_with_capacity",
+                        "riven_hash_with_capacity",
+                        "HashMap_keys",
+                        "HashMap_values",
+                        "HashMap_iter",
+                        "Hash_keys",
+                        "Hash_values",
+                        "Hash_iter",
+                        "riven_hash_keys",
+                        "riven_hash_values",
+                        "riven_hash_iter",
+                        // `riven_hash_remove` returns a fresh
+                        // 16-byte tagged Option allocated via
+                        // `riven_alloc` — drop-elaborate as a fresh
+                        // allocation so the temp is freed on scope exit.
+                        "HashMap_remove",
+                        "Hash_remove",
+                        "riven_hash_remove",
+                        "HashSet_with_capacity",
+                        "Set_with_capacity",
+                        "riven_set_with_capacity",
+                        "HashSet_iter",
+                        "Set_iter",
+                        "riven_set_iter",
+                        // Set ops (`union` / `intersection` /
+                        // `difference`) each materialise a brand-new
+                        // RivenSet. The two source sets are borrowed.
+                        "HashSet_union",
+                        "HashSet_intersection",
+                        "HashSet_difference",
+                        "Set_union",
+                        "Set_intersection",
+                        "Set_difference",
+                        "riven_set_union",
+                        "riven_set_intersection",
+                        "riven_set_difference",
+                        // Phase 2 stdlib (#05 batch 3): `chain(other)` and
+                        // `zip(other)` materialise into a fresh
+                        // `RivenVec*` (and, for `zip`, fresh per-pair
+                        // tuple cells). The destination local owns the
+                        // spine so the scope-exit drop pass must emit
+                        // a `riven_vec_free` on it. Both source iters
+                        // are *borrowed* (not consumed) — they remain
+                        // owned by their caller frames, mirroring
+                        // `clone` / `take` / `skip`.
+                        "riven_vec_chain",
+                        "riven_vec_zip",
+                    ];
+                    let returns_fresh_alloc = FRESH_ALLOC_CALLEES
+                        .iter()
+                        .any(|name| *name == callee.as_str());
+                    if let Some(d) = dest {
+                        if returns_fresh_alloc && !tainted_perm.contains(d) {
+                            alloc_rooted.insert(*d);
+                        } else {
+                            tainted_perm.insert(*d);
+                            alloc_rooted.remove(d);
+                        }
+                    }
+                    // Args passed as `Use(L)` may have their ownership
+                    // transferred to the callee — taint L by default.
+                    // Structural exceptions (callee borrows rather than
+                    // consumes its first arg, so the local stays
+                    // dealloc-safe afterwards):
+                    //
+                    //  * `{Type}_init`: constructor pseudo-call that only
+                    //    initializes fields of `self` (first arg).
+                    //  * `riven_dealloc` / `riven_string_free` /
+                    //    `riven_vec_free` / `riven_hash_free`: emitted by
+                    //    drop elaboration itself; treating their arg as a
+                    //    transfer would cancel the free we are about to
+                    //    insert.
+                    //  * `riven_*` runtime helpers (other than the four
+                    //    above): in v1 every runtime built-in borrows its
+                    //    pointer arguments. `riven_vec_push(v, item)`,
+                    //    `riven_hash_insert(h, k, v)`, `riven_string_len(s)`
+                    //    and friends mutate or read in place — they never
+                    //    free the pointer, so passing a heap-owned local
+                    //    must not invalidate its dealloc-safety.
+                    //
+                    // User-defined callees fall through to the
+                    // conservative default and taint every `Use(L)` arg.
+                    let borrows_first_arg = callee.ends_with("_init")
+                        || callee == "riven_dealloc"
+                        || callee == "riven_string_free"
+                        || callee == "riven_vec_free"
+                        || callee == "riven_vec_drop_string"
+                        || callee == "riven_vec_drop_vec"
+                        || callee == "riven_hash_free"
+                        // Phase 2 stdlib batch 2 (#04): set spine +
+                        // hash/set per-element drop selectors are
+                        // emitted by the drop pass itself; treating
+                        // their first arg as a transfer would cancel
+                        // the free we are about to insert.
+                        || callee == "riven_set_free"
+                        || callee == "riven_hash_drop_string_v"
+                        || callee == "riven_hash_drop_v_string"
+                        || callee == "riven_hash_drop_string_string"
+                        || callee == "riven_hash_drop_v_vec"
+                        || callee == "riven_set_drop_string";
+                    // A callee borrows its pointer args (does not transfer
+                    // ownership) when it is a runtime helper. Two forms
+                    // appear in MIR:
+                    //
+                    //  1. The literal `riven_*` runtime symbol (emitted at
+                    //     internal lowering sites that bypass the method
+                    //     dispatch path).
+                    //  2. The MIR-level mangled name (`Vec_push`,
+                    //     `HashMap_insert`, `String_len`, …) which is
+                    //     translated to a `riven_*` symbol by
+                    //     `codegen::runtime::runtime_name`. The mangled
+                    //     name uses one of the known built-in type prefixes,
+                    //     so we recognise it by prefix.
+                    //
+                    // The four free helpers are excluded — they are the
+                    // ONLY runtime helpers that consume their pointer
+                    // arg, but the drop pass inserts those itself, so the
+                    // analysis must stop before they appear.
+                    let is_runtime_consume_helper = matches!(
+                        callee.as_str(),
+                        "riven_dealloc"
+                            | "riven_string_free"
+                            | "riven_vec_free"
+                            | "riven_vec_drop_string"
+                            | "riven_vec_drop_vec"
+                            | "riven_hash_free"
+                            // Phase 2 stdlib batch 2 (#04): set spine +
+                            // hash/set per-element drop helpers consume
+                            // their first arg the same way the rest of
+                            // the free family does. Excluded from the
+                            // borrow-helper analysis below so the drop
+                            // pass that emits the call doesn't get the
+                            // arg double-tainted.
+                            | "riven_set_free"
+                            | "riven_hash_drop_string_v"
+                            | "riven_hash_drop_v_string"
+                            | "riven_hash_drop_string_string"
+                            | "riven_hash_drop_v_vec"
+                            | "riven_set_drop_string"
+                            // Phase 2 stdlib batch 2 (#02): `into_bytes`
+                            // is the consuming variant of `bytes` — its
+                            // runtime fn frees the source `char*`
+                            // internally. Treat it as a transfer so the
+                            // drop pass does NOT also emit a
+                            // `riven_string_free` on the receiver
+                            // (which would double-free).
+                            | "riven_string_into_bytes"
+                            | "String_into_bytes"
+                            // Phase 2 stdlib batch 2 (#03): `Vec.from_iter`
+                            // and `Vec.into_iter` both consume their
+                            // source iterator/Vec. The runtime
+                            // representation is identity so the destination
+                            // owns the same backing array as the source
+                            // — taint the source local so scope-exit
+                            // drop does not emit a second
+                            // `riven_vec_free` (double-free).
+                            | "riven_vec_from_iter"
+                            | "Vec_from_iter"
+                    );
+                    let is_runtime_borrow_helper = !is_runtime_consume_helper
+                        && (callee.starts_with("riven_")
+                            || callee.starts_with("Vec_")
+                            || callee.starts_with("Vec[")
+                            || callee.starts_with("Hash_")
+                            || callee.starts_with("Hash[")
+                            || callee.starts_with("HashMap_")
+                            || callee.starts_with("HashMap[")
+                            || callee.starts_with("Set_")
+                            || callee.starts_with("Set[")
+                            || callee.starts_with("HashSet_")
+                            || callee.starts_with("HashSet[")
+                            || callee.starts_with("String_")
+                            || callee.starts_with("&str_"));
+                    // `riven_store_ptr(p, v)` writes `v` into `*p`,
+                    // transferring `v`'s allocation through the pointer
+                    // to whatever owns `*p`. The store is the moment
+                    // ownership leaves this frame, so `v` must be
+                    // tainted even though the helper itself starts
+                    // with `riven_`. Without this special-case the
+                    // mir-emitted free at scope-exit on the temp would
+                    // race the caller's free on the same pointer
+                    // (P0.7 double-free).
+                    let is_pointer_store_helper = callee == "riven_store_ptr";
+                    // Phase 2 stdlib batch 2 (#03): `riven_vec_push(v, item)`
+                    // is normally a borrow helper (mutates `v` in place,
+                    // returns nothing). But for `Vec[String]` /
+                    // `Vec[Vec[_]]` / `Vec[HashMap[_,_]]`, the item slot
+                    // takes ownership of the heap allocation behind
+                    // `item`. Now that `riven_vec_drop_string` /
+                    // `riven_vec_drop_vec` walk those slots and free the
+                    // contents at scope exit (#03 batch 2 drop selector
+                    // wiring), the pushed temp must be tainted so the
+                    // drop pass does NOT also emit a `riven_string_free`
+                    // / `riven_vec_free` on it (double-free).
+                    //
+                    // Same logic for `riven_vec_insert(v, idx, item)` and
+                    // `riven_hash_insert(h, k, v)` whose value slots also
+                    // take ownership.
+                    // Match both the un-mangled runtime name and the
+                    // MIR-level mangled `Vec[T]_push` form. The mangled
+                    // form is what `mangled = format!("{}_{}", type_name,
+                    // method_name)` produces (line ~1545); type_name for
+                    // a `Vec[String]` receiver is the full `"Vec[String]"`
+                    // string. Use `extract_method_name` to pull the
+                    // method off the mangled form so we don't have to
+                    // enumerate every `Vec[T]` instantiation.
+                    // Returns the indices of arguments whose ownership
+                    // is transferred by this callee (set of arg
+                    // positions). For Vec.push / Vec.insert the slot
+                    // is single (1 or 2); for HashMap.insert and
+                    // HashSet.insert BOTH the key and the value can
+                    // own heap, so we taint each independently. The
+                    // dynamic check on element type was considered
+                    // and rejected: at this point in the analysis we
+                    // don't carry per-arg static types, but tainting
+                    // a primitive temp is a no-op (it has no heap to
+                    // double-free), so over-tainting is safe.
+                    let transfer_indices: &[usize] = {
+                        use crate::codegen::runtime::extract_method_name;
+                        let m = extract_method_name(callee.as_str());
+                        let is_vec_method =
+                            callee.starts_with("Vec_") || callee.starts_with("Vec[");
+                        let is_hash_method = callee.starts_with("Hash_")
+                            || callee.starts_with("Hash[")
+                            || callee.starts_with("HashMap_")
+                            || callee.starts_with("HashMap[");
+                        let is_set_method = callee.starts_with("Set_")
+                            || callee.starts_with("Set[")
+                            || callee.starts_with("HashSet_")
+                            || callee.starts_with("HashSet[");
+                        match (is_vec_method, is_hash_method, is_set_method, m) {
+                            (true, _, _, "push") => &[1],
+                            (true, _, _, "insert") => &[2],
+                            // HashMap.insert(self, K, V) — both K (1)
+                            // and V (2) can own heap.
+                            (_, true, _, "insert") => &[1, 2],
+                            // HashSet.insert(self, T) — T (1) can own
+                            // heap.
+                            (_, _, true, "insert") => &[1],
+                            _ if callee == "riven_vec_push" => &[1],
+                            _ if callee == "riven_vec_insert" => &[2],
+                            _ if callee == "riven_hash_insert" => &[1, 2],
+                            _ if callee == "riven_set_insert" => &[1],
+                            _ => &[],
+                        }
+                    };
+                    for (idx, arg) in args.iter().enumerate() {
+                        if let MirValue::Use(l) = arg {
+                            if borrows_first_arg && idx == 0 {
+                                continue;
+                            }
+                            if is_pointer_store_helper && idx == 1 {
+                                tainted_perm.insert(*l);
+                                alloc_rooted.remove(l);
+                                continue;
+                            }
+                            if transfer_indices.contains(&idx) {
+                                tainted_perm.insert(*l);
+                                alloc_rooted.remove(l);
+                                continue;
+                            }
+                            if is_runtime_borrow_helper {
+                                continue;
+                            }
+                            tainted_perm.insert(*l);
+                            alloc_rooted.remove(l);
+                        }
+                    }
+                }
+                MirInst::CallIndirect { dest, args, .. } => {
+                    if let Some(d) = dest {
+                        tainted_perm.insert(*d);
+                        alloc_rooted.remove(d);
+                    }
+                    for arg in args {
+                        if let MirValue::Use(l) = arg {
+                            tainted_perm.insert(*l);
+                            alloc_rooted.remove(l);
+                        }
+                    }
+                }
+                MirInst::SetField { value, .. } => {
+                    // Storing a local into another aggregate transfers
+                    // ownership (the aggregate now references it).
+                    if let MirValue::Use(l) = value {
+                        tainted_perm.insert(*l);
+                        alloc_rooted.remove(l);
+                    }
+                }
+                // No-op for instructions that don't define or move a
+                // local.
+                MirInst::SetTag { .. } | MirInst::Drop { .. } | MirInst::Nop => {}
+            }
+        }
+    }
+
+    alloc_rooted
+}
+
+/// Compute the transitive set of locals whose value flows into a `Return`
+/// terminator via `Assign` / `Copy` / `Move`.
+///
+/// Seed the set with the locals that appear directly in any
+/// `Return(Some(Use(L)))` terminator, then iterate to a fixpoint: every
+/// `Assign { dest: D, value: Use(S) }` (and `Copy`/`Move`) where `D` is
+/// already in the set adds `S` as well — `S` aliases the same heap as
+/// `D`, so freeing it would corrupt the returned value.
+///
+/// We need this because `compute_dealloc_safe_locals` walks blocks in
+/// linear order. A function whose return block precedes the producer
+/// block (typical for `match`-arm-as-tail-expression) leaves the
+/// intermediate alloc-rooted, which would otherwise be picked up as a
+/// drop candidate. Excluding the alias chain keeps the dealloc safe.
+fn compute_return_alias_chain(
+    func: &MirFunction,
+    seed_locals: &HashSet<LocalId>,
+) -> HashSet<LocalId> {
+    use std::collections::HashSet;
+    let mut chain: HashSet<LocalId> = seed_locals.clone();
+    loop {
+        let before = chain.len();
+        for block in &func.blocks {
+            for inst in &block.instructions {
+                match inst {
+                    MirInst::Assign { dest, value } => {
+                        if chain.contains(dest) {
+                            if let MirValue::Use(src) = value {
+                                chain.insert(*src);
+                            }
+                        }
+                    }
+                    MirInst::Copy { dest, src } | MirInst::Move { dest, src } => {
+                        if chain.contains(dest) {
+                            chain.insert(*src);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if chain.len() == before {
+            break;
+        }
+    }
+    chain
+}
 
 // ─── Closure capture analysis ───────────────────────────────────────────────
 
@@ -4896,7 +8500,14 @@ fn collect_captures(
     seen: &mut HashSet<DefId>,
 ) {
     let mut locally_bound: HashSet<DefId> = HashSet::new();
-    collect_captures_inner(expr, closure_params, outer_defs, &mut locally_bound, out, seen);
+    collect_captures_inner(
+        expr,
+        closure_params,
+        outer_defs,
+        &mut locally_bound,
+        out,
+        seen,
+    );
 }
 
 fn collect_captures_inner(
@@ -4921,7 +8532,12 @@ fn collect_captures_inner(
         HirExprKind::FieldAccess { object, .. } => {
             collect_captures_inner(object, closure_params, outer_defs, locally_bound, out, seen);
         }
-        HirExprKind::MethodCall { object, args, block, .. } => {
+        HirExprKind::MethodCall {
+            object,
+            args,
+            block,
+            ..
+        } => {
             collect_captures_inner(object, closure_params, outer_defs, locally_bound, out, seen);
             for a in args {
                 collect_captures_inner(a, closure_params, outer_defs, locally_bound, out, seen);
@@ -4940,7 +8556,14 @@ fn collect_captures_inner(
             collect_captures_inner(right, closure_params, outer_defs, locally_bound, out, seen);
         }
         HirExprKind::UnaryOp { operand, .. } => {
-            collect_captures_inner(operand, closure_params, outer_defs, locally_bound, out, seen);
+            collect_captures_inner(
+                operand,
+                closure_params,
+                outer_defs,
+                locally_bound,
+                out,
+                seen,
+            );
         }
         HirExprKind::Borrow { expr: inner, .. } => {
             collect_captures_inner(inner, closure_params, outer_defs, locally_bound, out, seen);
@@ -4955,31 +8578,76 @@ fn collect_captures_inner(
             }
             *locally_bound = saved_bound;
         }
-        HirExprKind::If { cond, then_branch, else_branch } => {
+        HirExprKind::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
             collect_captures_inner(cond, closure_params, outer_defs, locally_bound, out, seen);
-            collect_captures_inner(then_branch, closure_params, outer_defs, locally_bound, out, seen);
+            collect_captures_inner(
+                then_branch,
+                closure_params,
+                outer_defs,
+                locally_bound,
+                out,
+                seen,
+            );
             if let Some(e) = else_branch {
                 collect_captures_inner(e, closure_params, outer_defs, locally_bound, out, seen);
             }
         }
         HirExprKind::Match { scrutinee, arms } => {
-            collect_captures_inner(scrutinee, closure_params, outer_defs, locally_bound, out, seen);
+            collect_captures_inner(
+                scrutinee,
+                closure_params,
+                outer_defs,
+                locally_bound,
+                out,
+                seen,
+            );
             for arm in arms {
                 if let Some(g) = &arm.guard {
                     collect_captures_inner(g, closure_params, outer_defs, locally_bound, out, seen);
                 }
-                collect_captures_inner(&arm.body, closure_params, outer_defs, locally_bound, out, seen);
+                collect_captures_inner(
+                    &arm.body,
+                    closure_params,
+                    outer_defs,
+                    locally_bound,
+                    out,
+                    seen,
+                );
             }
         }
         HirExprKind::While { condition, body } => {
-            collect_captures_inner(condition, closure_params, outer_defs, locally_bound, out, seen);
+            collect_captures_inner(
+                condition,
+                closure_params,
+                outer_defs,
+                locally_bound,
+                out,
+                seen,
+            );
             collect_captures_inner(body, closure_params, outer_defs, locally_bound, out, seen);
         }
         HirExprKind::Loop { body } => {
             collect_captures_inner(body, closure_params, outer_defs, locally_bound, out, seen);
         }
-        HirExprKind::For { iterable, body, binding, tuple_bindings, .. } => {
-            collect_captures_inner(iterable, closure_params, outer_defs, locally_bound, out, seen);
+        HirExprKind::For {
+            iterable,
+            body,
+            binding,
+            tuple_bindings,
+            ..
+        } => {
+            collect_captures_inner(
+                iterable,
+                closure_params,
+                outer_defs,
+                locally_bound,
+                out,
+                seen,
+            );
             let saved_bound = locally_bound.clone();
             locally_bound.insert(*binding);
             for (d, _) in tuple_bindings {
@@ -5038,7 +8706,11 @@ fn collect_captures_inner(
         HirExprKind::ArrayFill { value, .. } => {
             collect_captures_inner(value, closure_params, outer_defs, locally_bound, out, seen);
         }
-        HirExprKind::Closure { body: nested, params: nested_params, .. } => {
+        HirExprKind::Closure {
+            body: nested,
+            params: nested_params,
+            ..
+        } => {
             // A nested closure sees our captured vars too.  Merge its
             // parameters into `closure_params` just for the nested walk.
             let mut merged = closure_params.clone();
@@ -5092,10 +8764,17 @@ fn closure_body_mutates(body: &HirExpr, def_id: DefId) -> bool {
             closure_body_mutates(target, def_id) || closure_body_mutates(value, def_id)
         }
         HirExprKind::FieldAccess { object, .. } => closure_body_mutates(object, def_id),
-        HirExprKind::MethodCall { object, args, block, .. } => {
+        HirExprKind::MethodCall {
+            object,
+            args,
+            block,
+            ..
+        } => {
             closure_body_mutates(object, def_id)
                 || args.iter().any(|a| closure_body_mutates(a, def_id))
-                || block.as_ref().map_or(false, |b| closure_body_mutates(b, def_id))
+                || block
+                    .as_ref()
+                    .is_some_and(|b| closure_body_mutates(b, def_id))
         }
         HirExprKind::FnCall { args, .. } => args.iter().any(|a| closure_body_mutates(a, def_id)),
         HirExprKind::BinaryOp { left, right, .. } => {
@@ -5109,19 +8788,28 @@ fn closure_body_mutates(body: &HirExpr, def_id: DefId) -> bool {
                     return true;
                 }
             }
-            tail.as_ref().map_or(false, |t| closure_body_mutates(t, def_id))
+            tail.as_ref()
+                .is_some_and(|t| closure_body_mutates(t, def_id))
         }
-        HirExprKind::If { cond, then_branch, else_branch } => {
+        HirExprKind::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
             closure_body_mutates(cond, def_id)
                 || closure_body_mutates(then_branch, def_id)
-                || else_branch.as_ref().map_or(false, |e| closure_body_mutates(e, def_id))
+                || else_branch
+                    .as_ref()
+                    .is_some_and(|e| closure_body_mutates(e, def_id))
         }
         HirExprKind::Match { scrutinee, arms } => {
             if closure_body_mutates(scrutinee, def_id) {
                 return true;
             }
             arms.iter().any(|arm| {
-                arm.guard.as_ref().map_or(false, |g| closure_body_mutates(g, def_id))
+                arm.guard
+                    .as_ref()
+                    .is_some_and(|g| closure_body_mutates(g, def_id))
                     || closure_body_mutates(&arm.body, def_id)
             })
         }
@@ -5147,8 +8835,12 @@ fn closure_body_mutates(body: &HirExpr, def_id: DefId) -> bool {
         }),
         HirExprKind::MacroCall { args, .. } => args.iter().any(|a| closure_body_mutates(a, def_id)),
         HirExprKind::Range { start, end, .. } => {
-            start.as_ref().map_or(false, |s| closure_body_mutates(s, def_id))
-                || end.as_ref().map_or(false, |e| closure_body_mutates(e, def_id))
+            start
+                .as_ref()
+                .is_some_and(|s| closure_body_mutates(s, def_id))
+                || end
+                    .as_ref()
+                    .is_some_and(|e| closure_body_mutates(e, def_id))
         }
         HirExprKind::ArrayFill { value, .. } => closure_body_mutates(value, def_id),
         HirExprKind::Return(Some(inner)) | HirExprKind::Break(Some(inner)) => {
@@ -5213,7 +8905,12 @@ fn rewrite_self_in_expr(expr: &mut HirExpr, concrete: &Ty) {
         HirExprKind::FieldAccess { object, .. } => {
             rewrite_self_in_expr(object, concrete);
         }
-        HirExprKind::MethodCall { object, args, block, .. } => {
+        HirExprKind::MethodCall {
+            object,
+            args,
+            block,
+            ..
+        } => {
             rewrite_self_in_expr(object, concrete);
             for a in args {
                 rewrite_self_in_expr(a, concrete);
@@ -5245,7 +8942,11 @@ fn rewrite_self_in_expr(expr: &mut HirExpr, concrete: &Ty) {
                 rewrite_self_in_expr(t, concrete);
             }
         }
-        HirExprKind::If { cond, then_branch, else_branch } => {
+        HirExprKind::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
             rewrite_self_in_expr(cond, concrete);
             rewrite_self_in_expr(then_branch, concrete);
             if let Some(e) = else_branch {
@@ -5286,8 +8987,7 @@ fn rewrite_self_in_expr(expr: &mut HirExpr, concrete: &Ty) {
         HirExprKind::Closure { body, .. } => {
             rewrite_self_in_expr(body, concrete);
         }
-        HirExprKind::Construct { fields, .. }
-        | HirExprKind::EnumVariant { fields, .. } => {
+        HirExprKind::Construct { fields, .. } | HirExprKind::EnumVariant { fields, .. } => {
             for (_, e) in fields {
                 rewrite_self_in_expr(e, concrete);
             }
@@ -5301,7 +9001,10 @@ fn rewrite_self_in_expr(expr: &mut HirExpr, concrete: &Ty) {
             rewrite_self_in_expr(object, concrete);
             rewrite_self_in_expr(index, concrete);
         }
-        HirExprKind::Cast { expr: inner, target } => {
+        HirExprKind::Cast {
+            expr: inner,
+            target,
+        } => {
             rewrite_self_in_expr(inner, concrete);
             rewrite_self_in_ty(target, concrete);
         }

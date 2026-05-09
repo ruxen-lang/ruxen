@@ -1,0 +1,21 @@
+## Demonstrates `derive Debug` for structs. The compiler synthesizes a
+## printable representation usable in string interpolation.
+
+struct Point
+  x: Int
+  y: Int
+  derive Debug
+end
+
+struct Line
+  from: Point
+  to: Point
+  derive Debug
+end
+
+def main
+  let origin = Point.new(0, 0)
+  let target = Point.new(3, 4)
+  let segment = Line.new(origin, target)
+  puts "#{segment}"
+end

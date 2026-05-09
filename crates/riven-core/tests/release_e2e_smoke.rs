@@ -1,0 +1,189 @@
+//! Walk every fixture in `tests/release-e2e/cases/*.rvn`, compile with
+//! the in-process codegen pipeline, run the binary, and diff stdout
+//! against the matching `tests/release-e2e/expected/*.out`. Acts as a
+//! cargo-test stand-in for the shell-based release harness so changes
+//! that affect codegen (drop elaboration, runtime layout, …) are caught
+//! by `cargo test -p riven-core`.
+
+use riven_core::codegen;
+use riven_core::lexer::Lexer;
+use riven_core::mir::lower::Lowerer;
+use riven_core::parser::Parser;
+use riven_core::typeck;
+use std::path::PathBuf;
+use std::process::Command;
+
+fn workspace_root() -> PathBuf {
+    let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    crate_dir.parent().unwrap().parent().unwrap().to_path_buf()
+}
+
+struct CaseOutcome {
+    name: String,
+    ok: bool,
+    detail: String,
+}
+
+fn compile_and_run(case_name: &str) -> CaseOutcome {
+    let root = workspace_root();
+    let src_path = root.join(format!("tests/release-e2e/cases/{}.rvn", case_name));
+    let expected_path = root.join(format!("tests/release-e2e/expected/{}.out", case_name));
+    let tmp_dir = root.join("tmp");
+    let _ = std::fs::create_dir_all(&tmp_dir);
+    let bin_path = tmp_dir.join(format!("e2e_{}.bin", case_name));
+
+    let source = match std::fs::read_to_string(&src_path) {
+        Ok(s) => s,
+        Err(e) => {
+            return CaseOutcome {
+                name: case_name.to_string(),
+                ok: false,
+                detail: format!("read source: {}", e),
+            }
+        }
+    };
+
+    let mut lexer = Lexer::new(&source);
+    let tokens = match lexer.tokenize() {
+        Ok(t) => t,
+        Err(e) => {
+            return CaseOutcome {
+                name: case_name.to_string(),
+                ok: false,
+                detail: format!("lex: {:?}", e),
+            }
+        }
+    };
+    let mut parser = Parser::new(tokens);
+    let program = match parser.parse() {
+        Ok(p) => p,
+        Err(e) => {
+            return CaseOutcome {
+                name: case_name.to_string(),
+                ok: false,
+                detail: format!("parse: {:?}", e),
+            }
+        }
+    };
+    let result = typeck::type_check(&program);
+    let errors: Vec<_> = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.level == riven_core::diagnostics::DiagnosticLevel::Error)
+        .collect();
+    if !errors.is_empty() {
+        return CaseOutcome {
+            name: case_name.to_string(),
+            ok: false,
+            detail: format!("typecheck: {} errors", errors.len()),
+        };
+    }
+
+    let mut lowerer = Lowerer::new(&result.symbols);
+    let mir = match lowerer.lower_program(&result.program) {
+        Ok(m) => m,
+        Err(e) => {
+            return CaseOutcome {
+                name: case_name.to_string(),
+                ok: false,
+                detail: format!("MIR lowering: {}", e),
+            }
+        }
+    };
+
+    if let Err(e) = codegen::compile(&mir, bin_path.to_str().unwrap()) {
+        return CaseOutcome {
+            name: case_name.to_string(),
+            ok: false,
+            detail: format!("codegen: {}", e),
+        };
+    }
+
+    // Compile-only when no expected file exists.
+    let expected = match std::fs::read_to_string(&expected_path) {
+        Ok(s) => s,
+        Err(_) => {
+            return CaseOutcome {
+                name: case_name.to_string(),
+                ok: true,
+                detail: String::from("compile-only"),
+            }
+        }
+    };
+
+    let output = match Command::new(&bin_path).output() {
+        Ok(o) => o,
+        Err(e) => {
+            return CaseOutcome {
+                name: case_name.to_string(),
+                ok: false,
+                detail: format!("run: {}", e),
+            }
+        }
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let exit = output.status.code();
+
+    if stdout != expected {
+        return CaseOutcome {
+            name: case_name.to_string(),
+            ok: false,
+            detail: format!(
+                "stdout mismatch (exit={:?})\n  got: {}\n  expected: {}\n  stderr: {}",
+                exit,
+                stdout.escape_debug(),
+                expected.escape_debug(),
+                stderr.escape_debug()
+            ),
+        };
+    }
+    CaseOutcome {
+        name: case_name.to_string(),
+        ok: true,
+        detail: String::new(),
+    }
+}
+
+#[test]
+fn release_e2e_all_fixtures() {
+    let cases_dir = workspace_root().join("tests/release-e2e/cases");
+    let mut names: Vec<String> = std::fs::read_dir(&cases_dir)
+        .unwrap_or_else(|e| panic!("read {}: {}", cases_dir.display(), e))
+        .filter_map(|e| e.ok())
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rvn") {
+                return None;
+            }
+            path.file_stem().and_then(|s| s.to_str()).map(String::from)
+        })
+        .collect();
+    names.sort();
+
+    let mut outcomes = Vec::with_capacity(names.len());
+    for name in &names {
+        outcomes.push(compile_and_run(name));
+    }
+
+    let pass = outcomes.iter().filter(|o| o.ok).count();
+    let fail = outcomes.iter().filter(|o| !o.ok).count();
+    eprintln!(
+        "release-e2e: {} pass, {} fail / {} total",
+        pass,
+        fail,
+        outcomes.len()
+    );
+    if fail > 0 {
+        let failures: Vec<String> = outcomes
+            .iter()
+            .filter(|o| !o.ok)
+            .map(|o| format!("  - {}: {}", o.name, o.detail))
+            .collect();
+        panic!(
+            "{} release-e2e fixture(s) failed:\n{}",
+            fail,
+            failures.join("\n")
+        );
+    }
+}

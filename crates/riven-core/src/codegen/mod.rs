@@ -4,8 +4,8 @@
 
 pub mod cranelift;
 pub mod layout;
-pub mod runtime;
 pub mod object;
+pub mod runtime;
 
 #[cfg(feature = "llvm")]
 pub mod llvm;
@@ -68,7 +68,9 @@ pub fn find_runtime_c() -> Result<PathBuf, String> {
 pub enum Backend {
     Cranelift,
     #[cfg(feature = "llvm")]
-    Llvm { opt_level: u8 },
+    Llvm {
+        opt_level: u8,
+    },
 }
 
 /// Compile a MIR program to a native executable.
@@ -120,7 +122,13 @@ pub fn compile_with_options(
     }
 
     // Step 4: Link into executable
-    object::emit_executable(&object_bytes, &runtime_o, output_path, sanitize, &all_link_flags)?;
+    object::emit_executable(
+        &object_bytes,
+        &runtime_o,
+        output_path,
+        sanitize,
+        &all_link_flags,
+    )?;
 
     // Clean up runtime object
     let _ = std::fs::remove_file(&runtime_o);

@@ -1,9 +1,9 @@
 //! Integration tests for the Riven REPL.
 
-use riven_core::lexer::Lexer;
 use riven_core::lexer::token::TokenKind;
-use riven_core::parser::Parser;
+use riven_core::lexer::Lexer;
 use riven_core::parser::ast::{ReplInput, ReplParseResult};
+use riven_core::parser::Parser;
 
 // ── Parser REPL entry point tests ──────────────────────────────────
 
@@ -117,10 +117,18 @@ fn check_balanced(input: &str) -> bool {
 
     for tok in &tokens {
         match &tok.kind {
-            TokenKind::Def | TokenKind::Class | TokenKind::Struct
-            | TokenKind::Enum | TokenKind::Trait | TokenKind::Impl
-            | TokenKind::Module | TokenKind::If | TokenKind::While
-            | TokenKind::For | TokenKind::Loop | TokenKind::Match => block_depth += 1,
+            TokenKind::Def
+            | TokenKind::Class
+            | TokenKind::Struct
+            | TokenKind::Enum
+            | TokenKind::Trait
+            | TokenKind::Impl
+            | TokenKind::Module
+            | TokenKind::If
+            | TokenKind::While
+            | TokenKind::For
+            | TokenKind::Loop
+            | TokenKind::Match => block_depth += 1,
             TokenKind::Do => block_depth += 1,
             TokenKind::End => block_depth -= 1,
             TokenKind::LParen => paren_depth += 1,

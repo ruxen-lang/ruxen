@@ -1,10 +1,10 @@
 //! Integration tests: compile milestone fixtures to executables and verify output.
 
+use riven_core::codegen;
 use riven_core::lexer::Lexer;
+use riven_core::mir::lower::Lowerer;
 use riven_core::parser::Parser;
 use riven_core::typeck;
-use riven_core::mir::lower::Lowerer;
-use riven_core::codegen;
 use std::process::Command;
 
 fn compile_fixture(name: &str) -> String {
@@ -17,13 +17,17 @@ fn compile_fixture(name: &str) -> String {
     let program = parser.parse().expect("parser failed");
     let result = typeck::type_check(&program);
 
-    let errors: Vec<_> = result.diagnostics.iter()
+    let errors: Vec<_> = result
+        .diagnostics
+        .iter()
         .filter(|d| d.level == riven_core::diagnostics::DiagnosticLevel::Error)
         .collect();
     assert!(errors.is_empty(), "type errors in {}: {:?}", name, errors);
 
     let mut lowerer = Lowerer::new(&result.symbols);
-    let mir = lowerer.lower_program(&result.program).expect("MIR lowering failed");
+    let mir = lowerer
+        .lower_program(&result.program)
+        .expect("MIR lowering failed");
 
     let output_path = format!("tests/fixtures/{}_test", name);
     codegen::compile(&mir, &output_path).expect("codegen failed");
@@ -32,7 +36,7 @@ fn compile_fixture(name: &str) -> String {
 
 fn run_fixture(name: &str, expected: &str) {
     let binary = compile_fixture(name);
-    let output = Command::new(&format!("./{}", binary))
+    let output = Command::new(format!("./{}", binary))
         .output()
         .expect("failed to run binary");
 
@@ -42,9 +46,12 @@ fn run_fixture(name: &str, expected: &str) {
     let _ = std::fs::remove_file(&binary);
 
     assert_eq!(
-        stdout.trim(), expected,
+        stdout.trim(),
+        expected,
         "fixture '{}': expected {:?}, got {:?}",
-        name, expected, stdout.trim()
+        name,
+        expected,
+        stdout.trim()
     );
 }
 
@@ -70,7 +77,7 @@ fn test_enum_data_output() {
 #[test]
 fn test_tasklist() {
     let binary = compile_fixture("tasklist");
-    let output = Command::new(&format!("./{}", binary))
+    let output = Command::new(format!("./{}", binary))
         .output()
         .expect("failed to run binary");
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -79,16 +86,20 @@ fn test_tasklist() {
     eprintln!("=== STDOUT ===\n{}", stdout);
     eprintln!("=== STDERR ===\n{}", stderr);
     eprintln!("=== EXIT CODE: {:?} ===", output.status.code());
-    assert!(output.status.success(),
+    assert!(
+        output.status.success(),
         "tasklist exited with {:?}\nstdout: {}\nstderr: {}",
-        output.status.code(), stdout, stderr);
+        output.status.code(),
+        stdout,
+        stderr
+    );
 }
 
 /// Mini sample: stripped down version of sample program.
 #[test]
 fn test_mini_sample() {
     let binary = compile_fixture("mini_sample");
-    let output = Command::new(&format!("./{}", binary))
+    let output = Command::new(format!("./{}", binary))
         .output()
         .expect("failed to run binary");
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -97,9 +108,13 @@ fn test_mini_sample() {
     eprintln!("=== STDOUT ===\n{}", stdout);
     eprintln!("=== STDERR ===\n{}", stderr);
     eprintln!("=== EXIT CODE: {:?} ===", output.status.code());
-    assert!(output.status.success(),
+    assert!(
+        output.status.success(),
         "mini sample exited with {:?}\nstdout: {}\nstderr: {}",
-        output.status.code(), stdout, stderr);
+        output.status.code(),
+        stdout,
+        stderr
+    );
 }
 
 /// String interpolation test.
@@ -124,7 +139,7 @@ fn test_simple_class() {
 #[test]
 fn test_sample_program_compiles_and_runs() {
     let binary = compile_fixture("sample_program");
-    let output = Command::new(&format!("./{}", binary))
+    let output = Command::new(format!("./{}", binary))
         .output()
         .expect("failed to run binary");
 
@@ -140,11 +155,18 @@ fn test_sample_program_compiles_and_runs() {
     eprintln!("=== EXIT CODE: {:?} ===", output.status.code());
 
     // The program should exit successfully (code 0).
-    assert!(output.status.success(),
+    assert!(
+        output.status.success(),
         "sample program exited with {:?}\nstdout: {}\nstderr: {}",
-        output.status.code(), stdout, stderr);
+        output.status.code(),
+        stdout,
+        stderr
+    );
 
     // It should produce at least some output (the "Creating tasks..." line).
-    assert!(stdout.contains("Creating tasks"),
-        "Expected 'Creating tasks' in output, got: {}", stdout);
+    assert!(
+        stdout.contains("Creating tasks"),
+        "Expected 'Creating tasks' in output, got: {}",
+        stdout
+    );
 }

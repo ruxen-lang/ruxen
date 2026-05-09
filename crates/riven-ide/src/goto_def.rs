@@ -48,9 +48,7 @@ mod tests {
         let mut remaining = skip + 1;
         let mut search_start = 0;
         while remaining > 0 {
-            let found = src[search_start..]
-                .find(needle)
-                .expect("needle not found");
+            let found = src[search_start..].find(needle).expect("needle not found");
             remaining -= 1;
             if remaining == 0 {
                 let byte_offset = search_start + found;
@@ -60,7 +58,10 @@ mod tests {
                     .rfind('\n')
                     .map(|i| prefix[i + 1..].chars().count())
                     .unwrap_or_else(|| prefix.chars().count()) as u32;
-                return Position { line, character: col };
+                return Position {
+                    line,
+                    character: col,
+                };
             }
             search_start += found + needle.len();
         }
@@ -82,7 +83,8 @@ mod tests {
 
     #[test]
     fn goto_def_function_call_points_at_def() {
-        let src = "def add(a: Int, b: Int) -> Int\n  a + b\nend\n\ndef main\n  let r = add(1, 2)\nend\n";
+        let src =
+            "def add(a: Int, b: Int) -> Int\n  a + b\nend\n\ndef main\n  let r = add(1, 2)\nend\n";
         let result = analyze(src);
         let pos = pos_of(src, "add", 1);
         let loc = goto_definition(&result, pos);
@@ -125,7 +127,10 @@ mod tests {
         let src = "def main\n  let x = 42\nend\n";
         let result = analyze(src);
         // Whitespace in the middle
-        let pos = Position { line: 1, character: 0 };
+        let pos = Position {
+            line: 1,
+            character: 0,
+        };
         let loc = goto_definition(&result, pos);
         // Should be None or point to something high-level — just not crash
         let _ = loc;
@@ -135,7 +140,10 @@ mod tests {
     fn goto_def_on_empty_source_returns_none() {
         let src = "";
         let result = analyze(src);
-        let pos = Position { line: 0, character: 0 };
+        let pos = Position {
+            line: 0,
+            character: 0,
+        };
         let loc = goto_definition(&result, pos);
         assert!(loc.is_none());
     }
@@ -144,7 +152,10 @@ mod tests {
     fn goto_def_on_parse_error_returns_none() {
         let src = "def\n"; // parse error
         let result = analyze(src);
-        let pos = Position { line: 0, character: 0 };
+        let pos = Position {
+            line: 0,
+            character: 0,
+        };
         let loc = goto_definition(&result, pos);
         assert!(loc.is_none());
     }
@@ -153,7 +164,10 @@ mod tests {
     fn goto_def_beyond_eof_returns_none() {
         let src = "def main\n  let x = 1\nend\n";
         let result = analyze(src);
-        let pos = Position { line: 1000, character: 0 };
+        let pos = Position {
+            line: 1000,
+            character: 0,
+        };
         let loc = goto_definition(&result, pos);
         // We may or may not get a location — but should not panic
         let _ = loc;
@@ -172,7 +186,8 @@ mod tests {
     #[test]
     fn goto_def_captures_multiple_calls() {
         // Two calls to the same function — both should point at the same def
-        let src = "def hello -> Int\n  42\nend\n\ndef main\n  let a = hello\n  let b = hello\nend\n";
+        let src =
+            "def hello -> Int\n  42\nend\n\ndef main\n  let a = hello\n  let b = hello\nend\n";
         let result = analyze(src);
         let pos1 = pos_of(src, "hello", 1);
         let pos2 = pos_of(src, "hello", 2);

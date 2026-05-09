@@ -15,7 +15,7 @@ use crate::lock::LockFile;
 use crate::manifest::Manifest;
 use crate::module_discovery::ModuleTree;
 use crate::resolve_deps;
-use crate::rlib::{self, TypeMetadata, Exports};
+use crate::rlib::{self, Exports, TypeMetadata};
 
 /// `riven build [--release] [--locked] [--bin <name>]`
 pub fn build(release: bool, locked: bool, bin_name: Option<&str>) -> Result<(), String> {
@@ -39,18 +39,14 @@ pub fn build(release: bool, locked: bool, bin_name: Option<&str>) -> Result<(), 
             match &existing_lock {
                 Some(lock) if lock.is_up_to_date(&manifest) => {}
                 Some(_) => {
-                    return Err(
-                        "Riven.lock is out of date with Riven.toml.\n  \
+                    return Err("Riven.lock is out of date with Riven.toml.\n  \
                          Run `riven update` to regenerate the lock file."
-                            .to_string(),
-                    );
+                        .to_string());
                 }
                 None => {
-                    return Err(
-                        "Riven.lock not found but --locked was specified.\n  \
+                    return Err("Riven.lock not found but --locked was specified.\n  \
                          Run `riven build` first to generate the lock file."
-                            .to_string(),
-                    );
+                        .to_string());
                 }
             }
         }
@@ -73,12 +69,16 @@ pub fn build(release: bool, locked: bool, bin_name: Option<&str>) -> Result<(), 
 
     if let Some(ref resolve_result) = resolved {
         for dep in &resolve_result.deps {
-            println!(
-                "  Compiling piece `{}` v{}",
-                dep.name, dep.version
-            );
+            println!("  Compiling piece `{}` v{}", dep.name, dep.version);
             let rlib_path = target_dir.join("deps").join(format!("{}.rlib", dep.name));
-            compile_piece(&dep.source_dir, &dep.name, &dep.version, &rlib_path, release, &extern_libs)?;
+            compile_piece(
+                &dep.source_dir,
+                &dep.name,
+                &dep.version,
+                &rlib_path,
+                release,
+                &extern_libs,
+            )?;
             extern_libs.push((dep.name.clone(), rlib_path));
         }
     }
@@ -158,10 +158,7 @@ pub fn check() -> Result<(), String> {
 
     let entry = project_dir.join(manifest.entry_point());
     if !entry.exists() {
-        return Err(format!(
-            "entry point not found: {}",
-            entry.display()
-        ));
+        return Err(format!("entry point not found: {}", entry.display()));
     }
 
     // Discover and gather all module sources
@@ -199,8 +196,8 @@ pub fn clean() -> Result<(), String> {
 
 /// Find the project root by searching upward for Riven.toml.
 pub fn find_project_root() -> Result<PathBuf, String> {
-    let mut dir = std::env::current_dir()
-        .map_err(|e| format!("failed to get current directory: {}", e))?;
+    let mut dir =
+        std::env::current_dir().map_err(|e| format!("failed to get current directory: {}", e))?;
 
     loop {
         if dir.join("Riven.toml").exists() {
@@ -222,27 +219,23 @@ fn compile_single_file(
 ) -> Result<(Vec<u8>, TypeMetadata), String> {
     // Phase 1: Lexing
     let mut lexer = Lexer::new(source);
-    let tokens = lexer
-        .tokenize()
-        .map_err(|diagnostics| {
-            diagnostics
-                .iter()
-                .map(|d| d.to_string())
-                .collect::<Vec<_>>()
-                .join("\n")
-        })?;
+    let tokens = lexer.tokenize().map_err(|diagnostics| {
+        diagnostics
+            .iter()
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    })?;
 
     // Phase 2: Parsing
     let mut parser = Parser::new(tokens);
-    let program = parser
-        .parse()
-        .map_err(|diagnostics| {
-            diagnostics
-                .iter()
-                .map(|d| d.to_string())
-                .collect::<Vec<_>>()
-                .join("\n")
-        })?;
+    let program = parser.parse().map_err(|diagnostics| {
+        diagnostics
+            .iter()
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    })?;
 
     // Phase 3: Type checking
     let type_result = typeck::type_check(&program);
@@ -310,26 +303,22 @@ fn compile_single_file(
 /// Type-check a single file (no codegen).
 fn check_single_file(source: &str, file_path: &Path) -> Result<(), String> {
     let mut lexer = Lexer::new(source);
-    let tokens = lexer
-        .tokenize()
-        .map_err(|diagnostics| {
-            diagnostics
-                .iter()
-                .map(|d| format!("{}: {}", file_path.display(), d))
-                .collect::<Vec<_>>()
-                .join("\n")
-        })?;
+    let tokens = lexer.tokenize().map_err(|diagnostics| {
+        diagnostics
+            .iter()
+            .map(|d| format!("{}: {}", file_path.display(), d))
+            .collect::<Vec<_>>()
+            .join("\n")
+    })?;
 
     let mut parser = Parser::new(tokens);
-    let program = parser
-        .parse()
-        .map_err(|diagnostics| {
-            diagnostics
-                .iter()
-                .map(|d| format!("{}: {}", file_path.display(), d))
-                .collect::<Vec<_>>()
-                .join("\n")
-        })?;
+    let program = parser.parse().map_err(|diagnostics| {
+        diagnostics
+            .iter()
+            .map(|d| format!("{}: {}", file_path.display(), d))
+            .collect::<Vec<_>>()
+            .join("\n")
+    })?;
 
     let type_result = typeck::type_check(&program);
     let has_errors = type_result
@@ -424,10 +413,7 @@ fn compile_project(
 ) -> Result<(), String> {
     let entry = project_dir.join(manifest.entry_point());
     if !entry.exists() {
-        return Err(format!(
-            "entry point not found: {}",
-            entry.display()
-        ));
+        return Err(format!("entry point not found: {}", entry.display()));
     }
 
     let tree = ModuleTree::discover(project_dir)?;
@@ -435,27 +421,23 @@ fn compile_project(
 
     // Phase 1: Lex
     let mut lexer = Lexer::new(&source);
-    let tokens = lexer
-        .tokenize()
-        .map_err(|diagnostics| {
-            diagnostics
-                .iter()
-                .map(|d| d.to_string())
-                .collect::<Vec<_>>()
-                .join("\n")
-        })?;
+    let tokens = lexer.tokenize().map_err(|diagnostics| {
+        diagnostics
+            .iter()
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    })?;
 
     // Phase 2: Parse
     let mut parser = Parser::new(tokens);
-    let program = parser
-        .parse()
-        .map_err(|diagnostics| {
-            diagnostics
-                .iter()
-                .map(|d| d.to_string())
-                .collect::<Vec<_>>()
-                .join("\n")
-        })?;
+    let program = parser.parse().map_err(|diagnostics| {
+        diagnostics
+            .iter()
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    })?;
 
     // Phase 3: Type check
     let type_result = typeck::type_check(&program);
@@ -592,9 +574,16 @@ fn build_metadata_from_hir(type_result: &typeck::TypeCheckResult) -> TypeMetadat
                 });
             }
             HirItem::Trait(t) => {
-                let methods = t.items.iter().filter_map(|item| match item {
-                    HirTraitItem::MethodSig { name, params, return_ty, .. } => {
-                        Some(rlib::ExportedFunction {
+                let methods = t
+                    .items
+                    .iter()
+                    .filter_map(|item| match item {
+                        HirTraitItem::MethodSig {
+                            name,
+                            params,
+                            return_ty,
+                            ..
+                        } => Some(rlib::ExportedFunction {
                             name: name.clone(),
                             params: params
                                 .iter()
@@ -605,21 +594,23 @@ fn build_metadata_from_hir(type_result: &typeck::TypeCheckResult) -> TypeMetadat
                                 .collect(),
                             return_type: format!("{:?}", return_ty),
                             visibility: "public".to_string(),
-                        })
-                    }
-                    HirTraitItem::DefaultMethod(func) => {
-                        Some(rlib::ExportedFunction {
+                        }),
+                        HirTraitItem::DefaultMethod(func) => Some(rlib::ExportedFunction {
                             name: func.name.clone(),
-                            params: func.params.iter().map(|p| rlib::ExportedParam {
-                                name: p.name.clone(),
-                                ty: format!("{:?}", p.ty),
-                            }).collect(),
+                            params: func
+                                .params
+                                .iter()
+                                .map(|p| rlib::ExportedParam {
+                                    name: p.name.clone(),
+                                    ty: format!("{:?}", p.ty),
+                                })
+                                .collect(),
                             return_type: format!("{:?}", func.return_ty),
                             visibility: "public".to_string(),
-                        })
-                    }
-                    _ => None,
-                }).collect();
+                        }),
+                        _ => None,
+                    })
+                    .collect();
 
                 exports.traits.push(rlib::ExportedTrait {
                     name: t.name.clone(),

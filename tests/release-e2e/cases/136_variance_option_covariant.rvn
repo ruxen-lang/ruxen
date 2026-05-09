@@ -1,0 +1,13 @@
+def take_opt(x: Option[Int]) -> Int
+  match x
+    Some(v) -> v
+    None    -> 0
+  end
+end
+
+def main
+  let a: Option[Int] = Some(5)
+  let b: Option[Int] = a
+  let n = take_opt(b)
+  puts "#{n}"
+end

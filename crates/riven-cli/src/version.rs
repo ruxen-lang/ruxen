@@ -12,7 +12,11 @@ pub struct SemVer {
 
 impl SemVer {
     pub fn new(major: u64, minor: u64, patch: u64) -> Self {
-        Self { major, minor, patch }
+        Self {
+            major,
+            minor,
+            patch,
+        }
     }
 
     pub fn parse(s: &str) -> Result<Self, String> {
@@ -171,16 +175,20 @@ impl VersionReq {
 
 impl fmt::Display for VersionReq {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let parts: Vec<String> = self.comparators.iter().map(|c| match c {
-            Comparator::Caret(v) => format!("^{}", v),
-            Comparator::Tilde(v) => format!("~{}", v),
-            Comparator::Exact(v) => format!("={}", v),
-            Comparator::Gte(v) => format!(">={}", v),
-            Comparator::Gt(v) => format!(">{}", v),
-            Comparator::Lte(v) => format!("<={}", v),
-            Comparator::Lt(v) => format!("<{}", v),
-            Comparator::Wildcard => "*".to_string(),
-        }).collect();
+        let parts: Vec<String> = self
+            .comparators
+            .iter()
+            .map(|c| match c {
+                Comparator::Caret(v) => format!("^{}", v),
+                Comparator::Tilde(v) => format!("~{}", v),
+                Comparator::Exact(v) => format!("={}", v),
+                Comparator::Gte(v) => format!(">={}", v),
+                Comparator::Gt(v) => format!(">{}", v),
+                Comparator::Lte(v) => format!("<={}", v),
+                Comparator::Lt(v) => format!("<{}", v),
+                Comparator::Wildcard => "*".to_string(),
+            })
+            .collect();
         write!(f, "{}", parts.join(", "))
     }
 }

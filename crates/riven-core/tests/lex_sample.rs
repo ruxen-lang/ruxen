@@ -5,7 +5,9 @@ use riven_core::lexer::Lexer;
 fn test_sample_program_lexes_without_errors() {
     let source = include_str!("fixtures/sample_program.rvn");
     let mut lexer = Lexer::new(source);
-    let tokens = lexer.tokenize().expect("sample program should lex without errors");
+    let tokens = lexer
+        .tokenize()
+        .expect("sample program should lex without errors");
 
     // A 500-line program should produce a significant number of tokens
     assert!(
@@ -87,11 +89,17 @@ fn test_sample_program_contains_key_tokens() {
     assert!(kinds.contains(&&TokenKind::NoneKw));
 
     // Check that interpolated strings exist
-    assert!(kinds.iter().any(|k| matches!(k, TokenKind::InterpolatedString(_))));
+    assert!(kinds
+        .iter()
+        .any(|k| matches!(k, TokenKind::InterpolatedString(_))));
 
     // Check that string literals exist
-    assert!(kinds.iter().any(|k| matches!(k, TokenKind::StringLiteral(_))));
+    assert!(kinds
+        .iter()
+        .any(|k| matches!(k, TokenKind::StringLiteral(_))));
 
     // Check that integer literals exist
-    assert!(kinds.iter().any(|k| matches!(k, TokenKind::IntLiteral(_, _))));
+    assert!(kinds
+        .iter()
+        .any(|k| matches!(k, TokenKind::IntLiteral(_, _))));
 }

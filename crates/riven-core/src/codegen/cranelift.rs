@@ -100,7 +100,9 @@ impl CodeGen {
                 let func_id = self
                     .module
                     .declare_function(&ffi_fn.name, Linkage::Import, &sig)
-                    .map_err(|e| format!("Failed to declare FFI function '{}': {}", ffi_fn.name, e))?;
+                    .map_err(|e| {
+                        format!("Failed to declare FFI function '{}': {}", ffi_fn.name, e)
+                    })?;
                 self.declared_fns.insert(ffi_fn.name.clone(), func_id);
 
                 // Also register with the lib-qualified name (e.g., "LibM.sin")
@@ -139,7 +141,9 @@ impl CodeGen {
     /// Emit the finished object file as raw bytes.
     pub fn finish(self) -> Result<Vec<u8>, String> {
         let product = self.module.finish();
-        let bytes = product.emit().map_err(|e| format!("Failed to emit object: {}", e))?;
+        let bytes = product
+            .emit()
+            .map_err(|e| format!("Failed to emit object: {}", e))?;
         Ok(bytes)
     }
 
@@ -152,8 +156,7 @@ impl CodeGen {
         // builder_ctx, while instruction translation needs module, declared_fns,
         // string_data, etc. We extract the "env" fields into a separate struct.
         {
-            let mut builder =
-                FunctionBuilder::new(&mut self.ctx.func, &mut self.builder_ctx);
+            let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut self.builder_ctx);
 
             let mut env = TranslationEnv {
                 module: &mut self.module,
@@ -221,13 +224,36 @@ impl CodeGen {
             builder.switch_to_block(entry_cl_block);
             builder.append_block_params_for_function_params(entry_cl_block);
 
+            if func.name == "main" {
+                let params_vals = builder.block_params(entry_cl_block).to_vec();
+                let argc = params_vals
+                    .first()
+                    .copied()
+                    .ok_or_else(|| "missing argc param for main".to_string())?;
+                let argv = params_vals
+                    .get(1)
+                    .copied()
+                    .ok_or_else(|| "missing argv param for main".to_string())?;
+                let env_init = env.declare_runtime_func(
+                    "riven_env_init",
+                    &[types::I32, types::I64],
+                    None,
+                    &mut builder,
+                )?;
+                builder.ins().call(env_init, &[argc, argv]);
+            }
+
             // Bind function parameters to their local variables.
             if func.name != "main" {
                 let params_vals = builder.block_params(entry_cl_block).to_vec();
                 for (i, &param_id) in func.params.iter().enumerate() {
                     if i < params_vals.len() {
                         def_local(
-                            &var_map, &stack_slots, &mut builder, param_id, params_vals[i],
+                            &var_map,
+                            &stack_slots,
+                            &mut builder,
+                            param_id,
+                            params_vals[i],
                         );
                     }
                 }
@@ -243,7 +269,13 @@ impl CodeGen {
 
                 for inst in &mir_block.instructions {
                     if let Err(e) = translate_instruction(
-                        inst, func, &var_map, &stack_slots, &block_map, &mut builder, &mut env,
+                        inst,
+                        func,
+                        &var_map,
+                        &stack_slots,
+                        &block_map,
+                        &mut builder,
+                        &mut env,
                     ) {
                         return Err(format!(
                             "Error in function '{}', block {}, instruction {:?}: {}",
@@ -253,8 +285,13 @@ impl CodeGen {
                 }
 
                 translate_terminator(
-                    &mir_block.terminator, func, &var_map, &stack_slots, &block_map,
-                    &mut builder, &mut env,
+                    &mir_block.terminator,
+                    func,
+                    &var_map,
+                    &stack_slots,
+                    &block_map,
+                    &mut builder,
+                    &mut env,
                 )?;
             }
 
@@ -266,9 +303,10 @@ impl CodeGen {
         }
 
         // Define the function in the module.
-        let func_id = *self.declared_fns.get(&func.name).ok_or_else(|| {
-            format!("Function '{}' was not declared", func.name)
-        })?;
+        let func_id = *self
+            .declared_fns
+            .get(&func.name)
+            .ok_or_else(|| format!("Function '{}' was not declared", func.name))?;
 
         self.module
             .define_function(func_id, &mut self.ctx)
@@ -345,7 +383,9 @@ impl<'a> TranslationEnv<'a> {
             // right after the type name, with only one underscore-delimited
             // segment before the method name.  If multiple candidates match,
             // pick the shortest (most specific).
-            let match_name = self.declared_fns.keys()
+            let match_name = self
+                .declared_fns
+                .keys()
                 .filter(|k| k.ends_with(&suffix) && !k.starts_with("?"))
                 .min_by_key(|k| k.len())
                 .cloned();
@@ -366,13 +406,16 @@ impl<'a> TranslationEnv<'a> {
                 ""
             };
             // Match single-letter type params or common generic names
-            let is_generic_param = type_prefix.len() <= 2
-                && type_prefix.chars().all(|c| c.is_ascii_uppercase());
+            let is_generic_param =
+                type_prefix.len() <= 2 && type_prefix.chars().all(|c| c.is_ascii_uppercase());
             if is_generic_param && !type_prefix.is_empty() {
                 let suffix = format!("_{}", method);
-                let match_name = self.declared_fns.keys()
-                    .filter(|k| k.ends_with(&suffix) && !k.starts_with("?")
-                        && k.len() > suffix.len())
+                let match_name = self
+                    .declared_fns
+                    .keys()
+                    .filter(|k| {
+                        k.ends_with(&suffix) && !k.starts_with("?") && k.len() > suffix.len()
+                    })
                     .min_by_key(|k| k.len())
                     .cloned();
                 if let Some(resolved) = match_name {
@@ -452,6 +495,8 @@ fn build_signature(module: &ObjectModule, func: &MirFunction) -> Signature {
     let mut sig = Signature::new(call_conv);
 
     if func.name == "main" {
+        sig.params.push(AbiParam::new(types::I32));
+        sig.params.push(AbiParam::new(types::I64));
         sig.returns.push(AbiParam::new(types::I32));
         return sig;
     }
@@ -526,7 +571,9 @@ fn translate_instruction(
         MirInst::Assign { dest, value } => {
             let val = gen_value(value, func, var_map, stack_slots, builder)?;
             // Coerce value to match the declared type of the destination local.
-            let dest_ty = func.locals.get(*dest as usize)
+            let dest_ty = func
+                .locals
+                .get(*dest as usize)
                 .and_then(|l| ty_to_cranelift(&l.ty))
                 .unwrap_or(types::I64);
             let val = coerce_value(val, dest_ty, builder);
@@ -540,7 +587,9 @@ fn translate_instruction(
             let common_ty = builder.func.dfg.value_type(l);
             let r = coerce_value(r, common_ty, builder);
             let result = emit_binop(*op, l, r, builder);
-            let dest_ty = func.locals.get(*dest as usize)
+            let dest_ty = func
+                .locals
+                .get(*dest as usize)
                 .and_then(|l| ty_to_cranelift(&l.ty))
                 .unwrap_or(types::I64);
             let result = coerce_value(result, dest_ty, builder);
@@ -554,7 +603,9 @@ fn translate_instruction(
             } else {
                 builder.ins().ineg(val)
             };
-            let dest_ty = func.locals.get(*dest as usize)
+            let dest_ty = func
+                .locals
+                .get(*dest as usize)
                 .and_then(|l| ty_to_cranelift(&l.ty))
                 .unwrap_or(types::I64);
             let result = coerce_value(result, dest_ty, builder);
@@ -566,7 +617,9 @@ fn translate_instruction(
             let val_ty = builder.func.dfg.value_type(val);
             let one = builder.ins().iconst(val_ty, 1);
             let result = builder.ins().bxor(val, one);
-            let dest_ty = func.locals.get(*dest as usize)
+            let dest_ty = func
+                .locals
+                .get(*dest as usize)
                 .and_then(|l| ty_to_cranelift(&l.ty))
                 .unwrap_or(types::I8);
             let result = coerce_value(result, dest_ty, builder);
@@ -580,8 +633,8 @@ fn translate_instruction(
             // Check if either operand is a string type — if so, use
             // runtime string comparison (strcmp) instead of pointer
             // equality.
-            let is_string_compare = is_string_typed_value(lhs, func)
-                || is_string_typed_value(rhs, func);
+            let is_string_compare =
+                is_string_typed_value(lhs, func) || is_string_typed_value(rhs, func);
 
             let result = if is_string_compare && matches!(op, CmpOp::Eq | CmpOp::NotEq) {
                 // Call riven_string_eq(a, b) which returns 1 for equal, 0 for not.
@@ -627,7 +680,9 @@ fn translate_instruction(
                 }
             };
             // icmp always produces I8; coerce if dest expects something else.
-            let dest_ty = func.locals.get(*dest as usize)
+            let dest_ty = func
+                .locals
+                .get(*dest as usize)
                 .and_then(|l| ty_to_cranelift(&l.ty))
                 .unwrap_or(types::I8);
             let result = coerce_value(result, dest_ty, builder);
@@ -640,7 +695,7 @@ fn translate_instruction(
                 arg_vals.push(gen_value(arg, func, var_map, stack_slots, builder)?);
             }
 
-            let actual_name = runtime_name(callee);
+            let actual_name = runtime_name(callee)?;
 
             // Widen narrow-integer arguments to match the callee's expected
             // parameter types. Runtime helpers like `riven_puts`,
@@ -657,7 +712,9 @@ fn translate_instruction(
                 "riven_noop_passthrough" => {
                     // Return the first argument, or zero if no args.
                     if let Some(dest_id) = dest {
-                        let dest_ty = func.locals.get(*dest_id as usize)
+                        let dest_ty = func
+                            .locals
+                            .get(*dest_id as usize)
                             .and_then(|l| ty_to_cranelift(&l.ty))
                             .unwrap_or(types::I64);
                         let val = if !arg_vals.is_empty() {
@@ -672,7 +729,9 @@ fn translate_instruction(
                 "riven_noop_return_null" => {
                     // Return a null/zero pointer.
                     if let Some(dest_id) = dest {
-                        let dest_ty = func.locals.get(*dest_id as usize)
+                        let dest_ty = func
+                            .locals
+                            .get(*dest_id as usize)
                             .and_then(|l| ty_to_cranelift(&l.ty))
                             .unwrap_or(types::I64);
                         let zero = builder.ins().iconst(dest_ty, 0);
@@ -682,7 +741,9 @@ fn translate_instruction(
                 "riven_noop" => {
                     // Do nothing, don't even set a result.
                     if let Some(dest_id) = dest {
-                        let dest_ty = func.locals.get(*dest_id as usize)
+                        let dest_ty = func
+                            .locals
+                            .get(*dest_id as usize)
                             .and_then(|l| ty_to_cranelift(&l.ty))
                             .unwrap_or(types::I64);
                         let zero = builder.ins().iconst(dest_ty, 0);
@@ -698,7 +759,9 @@ fn translate_instruction(
                     if let Some(dest_id) = dest {
                         let results = builder.inst_results(call);
                         if !results.is_empty() {
-                            let dest_ty = func.locals.get(*dest_id as usize)
+                            let dest_ty = func
+                                .locals
+                                .get(*dest_id as usize)
                                 .and_then(|l| ty_to_cranelift(&l.ty))
                                 .unwrap_or(types::I64);
                             let result = coerce_value(results[0], dest_ty, builder);
@@ -709,45 +772,57 @@ fn translate_instruction(
             }
         }
 
-        MirInst::Alloc { dest, ty: alloc_ty, size: precomputed_size } => {
+        MirInst::Alloc {
+            dest,
+            ty: alloc_ty,
+            size: precomputed_size,
+        } => {
             let size = if *precomputed_size > 0 {
                 *precomputed_size as i64
             } else {
                 simple_type_size(alloc_ty) as i64
             };
             let size_val = builder.ins().iconst(types::I64, size);
-            let func_ref = env.declare_runtime_func(
-                "riven_alloc",
-                &[types::I64],
-                Some(types::I64),
-                builder,
-            )?;
+            let func_ref =
+                env.declare_runtime_func("riven_alloc", &[types::I64], Some(types::I64), builder)?;
             let call = builder.ins().call(func_ref, &[size_val]);
             let ptr = builder.inst_results(call)[0];
             def_local(var_map, stack_slots, builder, *dest, ptr);
         }
 
         MirInst::StackAlloc { dest, .. } => {
-            let dest_ty = func.locals.get(*dest as usize)
+            let dest_ty = func
+                .locals
+                .get(*dest as usize)
                 .and_then(|l| ty_to_cranelift(&l.ty))
                 .unwrap_or(types::I64);
             let zero = builder.ins().iconst(dest_ty, 0);
             def_local(var_map, stack_slots, builder, *dest, zero);
         }
 
-        MirInst::GetField { dest, base, field_index } => {
+        MirInst::GetField {
+            dest,
+            base,
+            field_index,
+        } => {
             let base_val = use_local(var_map, stack_slots, builder, *base);
             let offset = (*field_index as i64) * 8;
             let addr = builder.ins().iadd_imm(base_val, offset);
             // Load using the declared type of the destination local.
-            let dest_ty = func.locals.get(*dest as usize)
+            let dest_ty = func
+                .locals
+                .get(*dest as usize)
                 .and_then(|l| ty_to_cranelift(&l.ty))
                 .unwrap_or(types::I64);
             let loaded = builder.ins().load(dest_ty, MemFlags::new(), addr, 0);
             def_local(var_map, stack_slots, builder, *dest, loaded);
         }
 
-        MirInst::SetField { base, field_index, value } => {
+        MirInst::SetField {
+            base,
+            field_index,
+            value,
+        } => {
             let base_val = use_local(var_map, stack_slots, builder, *base);
             let val = gen_value(value, func, var_map, stack_slots, builder)?;
             let offset = (*field_index as i64) * 8;
@@ -799,17 +874,29 @@ fn translate_instruction(
             }
         }
 
-        MirInst::Copy { dest, src } | MirInst::Move { dest, src } => {
+        MirInst::Copy { dest, src } => {
             let val = use_local(var_map, stack_slots, builder, *src);
             def_local(var_map, stack_slots, builder, *dest, val);
         }
 
+        MirInst::Move { dest, src } => {
+            let val = use_local(var_map, stack_slots, builder, *src);
+            def_local(var_map, stack_slots, builder, *dest, val);
+
+            let src_ty = func
+                .locals
+                .get(*src as usize)
+                .and_then(|local| ty_to_cranelift(&local.ty))
+                .unwrap_or(types::I64);
+            let zero = builder.ins().iconst(src_ty, 0);
+            def_local(var_map, stack_slots, builder, *src, zero);
+        }
+
         MirInst::Drop { local: _ } => {
-            // Drop is currently a no-op. The MIR drop-insertion pass
-            // does not yet track ownership transfers (e.g. moves into
-            // function calls), so calling riven_dealloc here would
-            // double-free pointers that were moved into collections.
-            // Memory will be cleaned up at process exit for now.
+            // MirInst::Drop is a marker — the actual `riven_dealloc` call
+            // is emitted by `insert_drops` in `mir/lower.rs`, gated by the
+            // `compute_dealloc_safe_locals` flow analysis. Doing both here
+            // would double-free.
         }
 
         MirInst::StringLiteral { dest, value } => {
@@ -822,8 +909,7 @@ fn translate_instruction(
         MirInst::Nop => {}
 
         MirInst::FuncAddr { dest, func_name } => {
-            let func_ref =
-                env.get_or_declare_func(func_name, &[], true, builder)?;
+            let func_ref = env.get_or_declare_func(func_name, &[], true, builder)?;
             let addr = builder.ins().func_addr(types::I64, func_ref);
             def_local(var_map, stack_slots, builder, *dest, addr);
         }
@@ -851,7 +937,9 @@ fn translate_instruction(
             if let Some(dest_id) = dest {
                 let results = builder.inst_results(call);
                 if !results.is_empty() {
-                    let dest_ty = func.locals.get(*dest_id as usize)
+                    let dest_ty = func
+                        .locals
+                        .get(*dest_id as usize)
                         .and_then(|l| ty_to_cranelift(&l.ty))
                         .unwrap_or(types::I64);
                     let result = coerce_value(results[0], dest_ty, builder);
@@ -902,7 +990,11 @@ fn translate_terminator(
             builder.ins().jump(block_map[*target], &[]);
         }
 
-        Terminator::Branch { cond, then_block, else_block } => {
+        Terminator::Branch {
+            cond,
+            then_block,
+            else_block,
+        } => {
             let cond_val = gen_value(cond, func, var_map, stack_slots, builder)?;
             builder.ins().brif(
                 cond_val,
@@ -913,7 +1005,11 @@ fn translate_terminator(
             );
         }
 
-        Terminator::Switch { value, targets, otherwise } => {
+        Terminator::Switch {
+            value,
+            targets,
+            otherwise,
+        } => {
             let val = gen_value(value, func, var_map, stack_slots, builder)?;
             let mut switch = cranelift_frontend::Switch::new();
             for &(discriminant, block_id) in targets {
@@ -1015,7 +1111,9 @@ fn emit_binop(
             BinOp::Lt => builder.ins().icmp(IntCC::SignedLessThan, lhs, rhs),
             BinOp::LtEq => builder.ins().icmp(IntCC::SignedLessThanOrEqual, lhs, rhs),
             BinOp::Gt => builder.ins().icmp(IntCC::SignedGreaterThan, lhs, rhs),
-            BinOp::GtEq => builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, lhs, rhs),
+            BinOp::GtEq => builder
+                .ins()
+                .icmp(IntCC::SignedGreaterThanOrEqual, lhs, rhs),
         }
     }
 }
@@ -1134,7 +1232,8 @@ fn mir_arg_is_signed(arg: &MirValue, func: &MirFunction) -> bool {
         MirValue::Literal(Literal::Int(_)) => return true,
         MirValue::Literal(Literal::Char(_)) => return true,
         MirValue::Literal(Literal::Bool(_)) => return false,
-        MirValue::Literal(Literal::Float(_)) | MirValue::Literal(Literal::String(_))
+        MirValue::Literal(Literal::Float(_))
+        | MirValue::Literal(Literal::String(_))
         | MirValue::Unit => return false,
         MirValue::Use(local_id) => match func.locals.get(*local_id as usize) {
             Some(local) => &local.ty,
@@ -1143,8 +1242,7 @@ fn mir_arg_is_signed(arg: &MirValue, func: &MirFunction) -> bool {
     };
     matches!(
         ty,
-        Ty::Int8 | Ty::Int16 | Ty::Int32 | Ty::Int | Ty::Int64
-        | Ty::ISize | Ty::Char
+        Ty::Int8 | Ty::Int16 | Ty::Int32 | Ty::Int | Ty::Int64 | Ty::ISize | Ty::Char
     )
 }
 
@@ -1166,7 +1264,7 @@ fn ty_to_cranelift(ty: &Ty) -> Option<Type> {
         Ty::String
         | Ty::Str
         | Ty::Vec(_)
-        | Ty::Hash(_, _)
+        | Ty::HashMap(_, _)
         | Ty::Set(_)
         | Ty::Ref(_)
         | Ty::RefMut(_)
@@ -1240,8 +1338,10 @@ fn is_string_typed_value(val: &MirValue, func: &MirFunction) -> bool {
 fn is_string_mir_ty(ty: &Ty) -> bool {
     match ty {
         Ty::String | Ty::Str => true,
-        Ty::Ref(inner) | Ty::RefMut(inner)
-        | Ty::RefLifetime(_, inner) | Ty::RefMutLifetime(_, inner) => is_string_mir_ty(inner),
+        Ty::Ref(inner)
+        | Ty::RefMut(inner)
+        | Ty::RefLifetime(_, inner)
+        | Ty::RefMutLifetime(_, inner) => is_string_mir_ty(inner),
         _ => false,
     }
 }
@@ -1257,14 +1357,26 @@ fn simple_type_size(ty: &Ty) -> usize {
         Ty::Bool | Ty::Int8 | Ty::UInt8 => 1,
         Ty::Int16 | Ty::UInt16 => 2,
         Ty::Int32 | Ty::UInt32 | Ty::Float32 | Ty::Char => 4,
-        Ty::Int | Ty::Int64 | Ty::UInt | Ty::UInt64 | Ty::ISize | Ty::USize
-        | Ty::Float | Ty::Float64 => 8,
+        Ty::Int
+        | Ty::Int64
+        | Ty::UInt
+        | Ty::UInt64
+        | Ty::ISize
+        | Ty::USize
+        | Ty::Float
+        | Ty::Float64 => 8,
         Ty::String => 24,
         Ty::Str => 16,
         Ty::Vec(_) => 24,
-        Ty::Hash(_, _) | Ty::Set(_) => 48,
-        Ty::Ref(_) | Ty::RefMut(_) | Ty::RefLifetime(_, _) | Ty::RefMutLifetime(_, _)
-        | Ty::RawPtr(_) | Ty::RawPtrMut(_) | Ty::RawPtrVoid | Ty::RawPtrMutVoid => 8,
+        Ty::HashMap(_, _) | Ty::Set(_) => 48,
+        Ty::Ref(_)
+        | Ty::RefMut(_)
+        | Ty::RefLifetime(_, _)
+        | Ty::RefMutLifetime(_, _)
+        | Ty::RawPtr(_)
+        | Ty::RawPtrMut(_)
+        | Ty::RawPtrVoid
+        | Ty::RawPtrMutVoid => 8,
         Ty::Unit | Ty::Never => 0,
         // Enums: tag (8 bytes aligned) + payload (conservatively 8 bytes per field,
         // with space for the largest variant's payload).
@@ -1294,6 +1406,31 @@ fn runtime_signature(name: &str) -> Option<(Vec<Type>, Option<Type>)> {
         "puts" | "riven_puts" => Some((vec![types::I64], None)),
         "eputs" | "riven_eputs" => Some((vec![types::I64], None)),
         "print" | "riven_print" => Some((vec![types::I64], None)),
+        "println" => Some((vec![types::I64], None)),
+        "eprintln" => Some((vec![types::I64], None)),
+        "read_line" | "riven_read_line" => Some((vec![], Some(types::I64))),
+        "stdin" | "riven_stdin" => Some((vec![], Some(types::I64))),
+        "stdout" | "riven_stdout" => Some((vec![], Some(types::I64))),
+        "stderr" | "riven_stderr" => Some((vec![], Some(types::I64))),
+        "riven_stdin_read_line" => Some((vec![types::I64], Some(types::I64))),
+        "riven_stdin_read_to_string" => Some((vec![types::I64], Some(types::I64))),
+        "riven_stdout_write_str" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "riven_stdout_flush" => Some((vec![types::I64], Some(types::I64))),
+        "riven_stderr_write_str" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "riven_stderr_flush" => Some((vec![types::I64], Some(types::I64))),
+        "riven_env_init" => Some((vec![types::I32, types::I64], None)),
+        "riven_env_args_count" => Some((vec![], Some(types::I64))),
+        "riven_env_args_at" => Some((vec![types::I64], Some(types::I64))),
+        "args" | "riven_env_args" => Some((vec![], Some(types::I64))),
+        "riven_env_var" => Some((vec![types::I64], Some(types::I64))),
+        "riven_process_exit" => Some((vec![types::I64], None)),
+        "riven_fs_read_to_string" => Some((vec![types::I64], Some(types::I64))),
+        "riven_fs_write" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "riven_fs_exists" => Some((vec![types::I64], Some(types::I64))),
+        "riven_fs_remove_file" => Some((vec![types::I64], Some(types::I64))),
+        "riven_fs_create_dir" => Some((vec![types::I64], Some(types::I64))),
+        "riven_fs_create_dir_all" => Some((vec![types::I64], Some(types::I64))),
+        "riven_fs_rename" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "riven_print_int" => Some((vec![types::I64], None)),
         // Conversions
         "riven_int_to_string" => Some((vec![types::I64], Some(types::I64))),
@@ -1313,12 +1450,61 @@ fn runtime_signature(name: &str) -> Option<(Vec<Type>, Option<Type>)> {
         "riven_string_to_lower" => Some((vec![types::I64], Some(types::I64))),
         "riven_string_to_upper" => Some((vec![types::I64], Some(types::I64))),
         "riven_string_chars" => Some((vec![types::I64], Some(types::I64))),
+        // String stdlib (#02): all char* / Vec ptr / Option / Result are
+        // pointer-sized, so they ride the I64 calling convention.
+        "riven_string_new" => Some((vec![], Some(types::I64))),
+        "riven_string_with_capacity" => Some((vec![types::I64], Some(types::I64))),
+        "riven_string_as_str" => Some((vec![types::I64], Some(types::I64))),
+        "riven_string_to_string" => Some((vec![types::I64], Some(types::I64))),
+        "riven_string_bytes" => Some((vec![types::I64], Some(types::I64))),
+        "riven_string_trim_start" => Some((vec![types::I64], Some(types::I64))),
+        "riven_string_trim_end" => Some((vec![types::I64], Some(types::I64))),
+        "riven_string_find" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "riven_string_splitn" => Some((vec![types::I64, types::I64, types::I64], Some(types::I64))),
+        "riven_string_clear" => Some((vec![types::I64], None)),
+        "riven_string_truncate" => Some((vec![types::I64, types::I64], None)),
+        "riven_string_insert" => Some((vec![types::I64, types::I64, types::I64], Some(types::I64))),
+        "riven_string_insert_str" => {
+            Some((vec![types::I64, types::I64, types::I64], Some(types::I64)))
+        }
+        "riven_string_remove" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "riven_string_parse_int" => Some((vec![types::I64], Some(types::I64))),
+        "riven_string_parse_float" => Some((vec![types::I64], Some(types::I64))),
+        "riven_parse_error_message" => Some((vec![types::I64], Some(types::I64))),
+        // String stdlib batch 2 (#02): split / push / into_bytes.
+        "riven_string_split" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "riven_string_push" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "riven_string_into_bytes" => Some((vec![types::I64], Some(types::I64))),
+        "riven_string_eq" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "riven_string_cmp" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "riven_string_hash" => Some((vec![types::I64], Some(types::I64))),
+        "riven_thread_sleep_ns" => Some((vec![types::I64], None)),
+        "riven_thread_yield" => Some((vec![], None)),
         "riven_str_split" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "riven_str_parse_uint" => Some((vec![types::I64], Some(types::I64))),
         // Memory
         "riven_alloc" => Some((vec![types::I64], Some(types::I64))),
         "riven_dealloc" => Some((vec![types::I64], None)),
         "riven_realloc" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        // Heap-owned built-in drops (P0.7).
+        "riven_string_free" => Some((vec![types::I64], None)),
+        "riven_vec_free" => Some((vec![types::I64], None)),
+        "riven_hash_free" => Some((vec![types::I64], None)),
+        // Phase 2 stdlib (#04 batch 2): set spine + HashMap/Set
+        // per-element drop selectors.
+        "riven_set_free" => Some((vec![types::I64], None)),
+        "riven_hash_drop_string_v" => Some((vec![types::I64], None)),
+        "riven_hash_drop_v_string" => Some((vec![types::I64], None)),
+        "riven_hash_drop_string_string" => Some((vec![types::I64], None)),
+        "riven_hash_drop_v_vec" => Some((vec![types::I64], None)),
+        "riven_set_drop_string" => Some((vec![types::I64], None)),
+        // Phase 2 stdlib batch 2 (#03): element-aware Vec drop helpers
+        // and the new from_iter / dedup / set surface.
+        "riven_vec_drop_string" => Some((vec![types::I64], None)),
+        "riven_vec_drop_vec" => Some((vec![types::I64], None)),
+        "riven_vec_from_iter" => Some((vec![types::I64], Some(types::I64))),
+        "riven_vec_dedup" => Some((vec![types::I64], None)),
+        "riven_vec_set" => Some((vec![types::I64, types::I64, types::I64], None)),
         // Panic
         "riven_panic" => Some((vec![types::I64], None)),
         // Vec operations
@@ -1345,6 +1531,24 @@ fn runtime_signature(name: &str) -> Option<(Vec<Type>, Option<Type>)> {
         "riven_set_contains" => Some((vec![types::I64, types::I64], Some(types::I8))),
         "riven_set_len" => Some((vec![types::I64], Some(types::I64))),
         "riven_set_is_empty" => Some((vec![types::I64], Some(types::I8))),
+        // Phase 2 stdlib (#04): HashMap[K,V] full surface.
+        "riven_hash_with_capacity" => Some((vec![types::I64], Some(types::I64))),
+        "riven_hash_remove" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "riven_hash_clear" => Some((vec![types::I64], None)),
+        "riven_hash_keys" => Some((vec![types::I64], Some(types::I64))),
+        "riven_hash_values" => Some((vec![types::I64], Some(types::I64))),
+        "riven_hash_iter" => Some((vec![types::I64], Some(types::I64))),
+        "riven_hash_eq" => Some((vec![types::I64, types::I64], Some(types::I8))),
+        "riven_hash_index" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        // Phase 2 stdlib (#04): HashSet[T] full surface.
+        "riven_set_with_capacity" => Some((vec![types::I64], Some(types::I64))),
+        "riven_set_remove" => Some((vec![types::I64, types::I64], Some(types::I8))),
+        "riven_set_clear" => Some((vec![types::I64], None)),
+        "riven_set_iter" => Some((vec![types::I64], Some(types::I64))),
+        "riven_set_eq" => Some((vec![types::I64, types::I64], Some(types::I8))),
+        "riven_set_union" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "riven_set_intersection" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "riven_set_difference" => Some((vec![types::I64, types::I64], Some(types::I64))),
         // Option/Result helpers
         "riven_option_unwrap_or" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "riven_result_unwrap_or_else" => Some((vec![types::I64, types::I64], Some(types::I64))),
@@ -1364,4 +1568,3 @@ fn runtime_signature(name: &str) -> Option<(Vec<Type>, Option<Type>)> {
         _ => None,
     }
 }
-

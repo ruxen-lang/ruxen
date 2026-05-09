@@ -107,6 +107,7 @@ backend_test!(string_interp_identical, "string_interp.rvn");
 backend_test!(mini_sample_identical, "mini_sample.rvn");
 backend_test!(tasklist_identical, "tasklist.rvn");
 backend_test!(sample_program_identical, "sample_program.rvn");
+backend_test!(drop_owned_struct_identical, "drop_owned_struct.rvn");
 
 /// Test that all optimization levels produce correct output.
 #[test]

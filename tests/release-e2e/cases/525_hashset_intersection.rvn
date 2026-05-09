@@ -1,0 +1,16 @@
+def main
+  let mut a: HashSet[Int] = HashSet.new
+  a.insert(1)
+  a.insert(2)
+  a.insert(3)
+  let mut b: HashSet[Int] = HashSet.new
+  b.insert(2)
+  b.insert(3)
+  b.insert(4)
+  let i = a.intersection(&b)
+  let n = i.len
+  puts "len=#{n}"
+  puts "has1=#{i.contains(1)}"
+  puts "has2=#{i.contains(2)}"
+  puts "has3=#{i.contains(3)}"
+end

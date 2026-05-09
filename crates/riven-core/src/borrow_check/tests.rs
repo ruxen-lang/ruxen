@@ -16,6 +16,7 @@ fn make_program(body_stmts: Vec<HirStatement>) -> (HirProgram, SymbolTable) {
         def_id: 100, // use a high id to avoid collisions with test bindings
         name: "test_fn".to_string(),
         visibility: Visibility::Private,
+        is_async: false,
         self_mode: None,
         is_class_method: false,
         generic_params: vec![],
@@ -26,6 +27,7 @@ fn make_program(body_stmts: Vec<HirStatement>) -> (HirProgram, SymbolTable) {
             ty: Ty::Unit,
             span: span(1, 1),
         }),
+        doc_comments: vec![],
         span: span(1, 1),
     };
     let program = HirProgram {
@@ -548,9 +550,21 @@ fn detects_mut_immut_borrow_conflict() {
                 kind: HirExprKind::MacroCall {
                     name: "vec".to_string(),
                     args: vec![
-                        HirExpr { kind: HirExprKind::IntLiteral(1), ty: Ty::Int, span: span(1, 14) },
-                        HirExpr { kind: HirExprKind::IntLiteral(2), ty: Ty::Int, span: span(1, 17) },
-                        HirExpr { kind: HirExprKind::IntLiteral(3), ty: Ty::Int, span: span(1, 20) },
+                        HirExpr {
+                            kind: HirExprKind::IntLiteral(1),
+                            ty: Ty::Int,
+                            span: span(1, 14),
+                        },
+                        HirExpr {
+                            kind: HirExprKind::IntLiteral(2),
+                            ty: Ty::Int,
+                            span: span(1, 17),
+                        },
+                        HirExpr {
+                            kind: HirExprKind::IntLiteral(3),
+                            ty: Ty::Int,
+                            span: span(1, 20),
+                        },
                     ],
                 },
                 ty: vec_ty.clone(),
@@ -698,9 +712,21 @@ fn nll_borrow_ends_at_last_use() {
                 kind: HirExprKind::MacroCall {
                     name: "vec".to_string(),
                     args: vec![
-                        HirExpr { kind: HirExprKind::IntLiteral(1), ty: Ty::Int, span: span(1, 14) },
-                        HirExpr { kind: HirExprKind::IntLiteral(2), ty: Ty::Int, span: span(1, 17) },
-                        HirExpr { kind: HirExprKind::IntLiteral(3), ty: Ty::Int, span: span(1, 20) },
+                        HirExpr {
+                            kind: HirExprKind::IntLiteral(1),
+                            ty: Ty::Int,
+                            span: span(1, 14),
+                        },
+                        HirExpr {
+                            kind: HirExprKind::IntLiteral(2),
+                            ty: Ty::Int,
+                            span: span(1, 17),
+                        },
+                        HirExpr {
+                            kind: HirExprKind::IntLiteral(3),
+                            ty: Ty::Int,
+                            span: span(1, 20),
+                        },
                     ],
                 },
                 ty: vec_ty.clone(),
@@ -806,5 +832,111 @@ fn nll_borrow_ends_at_last_use() {
         "expected no borrow conflict errors (NLL allows mutation after last borrow use), \
          got: {:?}",
         conflict_errors.iter().map(|e| e.code).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn send_required_closure_rejects_borrow_capture() {
+    let closure_ty = Ty::Fn {
+        params: vec![],
+        ret: Box::new(Ty::Unit),
+    };
+    let require_send_sig = crate::resolve::symbols::FnSignature {
+        self_mode: None,
+        is_class_method: false,
+        generic_params: vec![crate::resolve::symbols::GenericParamInfo {
+            name: "T".to_string(),
+            bounds: vec![crate::hir::types::TraitRef {
+                name: "Send".to_string(),
+                generic_args: vec![],
+            }],
+        }],
+        params: vec![crate::resolve::symbols::ParamInfo {
+            name: "value".to_string(),
+            ty: Ty::TypeParam {
+                name: "T".to_string(),
+                bounds: vec![crate::hir::types::TraitRef {
+                    name: "Send".to_string(),
+                    generic_args: vec![],
+                }],
+            },
+            auto_assign: false,
+        }],
+        return_ty: Ty::Unit,
+        is_async: false,
+    };
+
+    let stmts = vec![
+        HirStatement::Let {
+            def_id: 0,
+            pattern: HirPattern::Binding {
+                def_id: 0,
+                name: "x".to_string(),
+                mutable: false,
+                span: span(1, 5),
+            },
+            ty: Ty::Int,
+            value: Some(HirExpr {
+                kind: HirExprKind::IntLiteral(42),
+                ty: Ty::Int,
+                span: span(1, 9),
+            }),
+            mutable: false,
+            span: span(1, 1),
+        },
+        HirStatement::Expr(HirExpr {
+            kind: HirExprKind::FnCall {
+                callee: 10,
+                callee_name: "require_send".to_string(),
+                args: vec![HirExpr {
+                    kind: HirExprKind::Closure {
+                        params: vec![],
+                        body: Box::new(HirExpr {
+                            kind: HirExprKind::VarRef(0),
+                            ty: Ty::Int,
+                            span: span(2, 18),
+                        }),
+                        captures: vec![Capture {
+                            def_id: 0,
+                            name: "x".to_string(),
+                            by_move: false,
+                            ty: Ty::Int,
+                        }],
+                        is_async: false,
+                        is_move: false,
+                    },
+                    ty: closure_ty,
+                    span: span(2, 3),
+                }],
+            },
+            ty: Ty::Unit,
+            span: span(2, 1),
+        }),
+    ];
+
+    let (program, mut symbols) = make_program(stmts);
+    symbols.define(
+        "x".to_string(),
+        DefKind::Variable {
+            mutable: false,
+            ty: Ty::Int,
+        },
+        Visibility::Private,
+        span(1, 5),
+    );
+    symbols.define(
+        "require_send".to_string(),
+        DefKind::Function {
+            signature: require_send_sig,
+        },
+        Visibility::Private,
+        span(2, 1),
+    );
+
+    let errors = borrow_check(&program, &symbols);
+    assert!(
+        errors.iter().any(|err| err.code == ErrorCode::E1013),
+        "expected E1013 for borrowed capture in send-required closure, got {:?}",
+        errors
     );
 }

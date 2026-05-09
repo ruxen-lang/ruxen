@@ -27,11 +27,7 @@ pub fn to_lsp_diagnostic(diag: &Diagnostic, line_index: &LineIndex) -> LspDiagno
     }
 }
 
-pub fn borrow_error_to_lsp(
-    err: &BorrowError,
-    line_index: &LineIndex,
-    uri: &Url,
-) -> LspDiagnostic {
+pub fn borrow_error_to_lsp(err: &BorrowError, line_index: &LineIndex, uri: &Url) -> LspDiagnostic {
     let related: Vec<DiagnosticRelatedInformation> = err
         .secondary
         .iter()
@@ -287,7 +283,9 @@ mod tests {
         let uri = Url::parse("file:///x.rvn").unwrap();
         let diagnostics = collect_diagnostics(&result, &uri);
         assert!(
-            diagnostics.iter().all(|d| d.severity != Some(DiagnosticSeverity::ERROR)),
+            diagnostics
+                .iter()
+                .all(|d| d.severity != Some(DiagnosticSeverity::ERROR)),
             "Expected no errors for valid source: {:?}",
             diagnostics
         );
@@ -314,6 +312,10 @@ mod tests {
             .iter()
             .filter(|d| d.severity == Some(DiagnosticSeverity::ERROR))
             .count();
-        assert_eq!(error_count, 0, "Expected zero error diagnostics, got {:?}", diagnostics);
+        assert_eq!(
+            error_count, 0,
+            "Expected zero error diagnostics, got {:?}",
+            diagnostics
+        );
     }
 }

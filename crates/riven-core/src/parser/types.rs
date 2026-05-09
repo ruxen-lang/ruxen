@@ -488,8 +488,10 @@ impl Parser {
         while self.eat(TokenKind::Comma) {
             self.skip_newlines();
             // Stop if we hit something that's not a type
-            if self.at(TokenKind::Newline) || self.at(TokenKind::Eof)
-                || self.at(TokenKind::LBrace) || self.at(TokenKind::End)
+            if self.at(TokenKind::Newline)
+                || self.at(TokenKind::Eof)
+                || self.at(TokenKind::LBrace)
+                || self.at(TokenKind::End)
             {
                 break;
             }
@@ -542,5 +544,8 @@ impl Parser {
 
 /// Check if a lowercase identifier is a known primitive type name.
 fn is_primitive_type_name(name: &str) -> bool {
-    matches!(name, "str" | "bool" | "int" | "float" | "char" | "uint" | "usize")
+    matches!(
+        name,
+        "str" | "bool" | "int" | "float" | "char" | "uint" | "usize"
+    )
 }

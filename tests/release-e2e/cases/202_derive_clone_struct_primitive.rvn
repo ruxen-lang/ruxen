@@ -1,0 +1,11 @@
+@[derive(Clone)]
+struct Point
+  x: Int
+  y: Int
+end
+
+def main
+  let a = Point.new(1, 2)
+  let b = a.clone
+  puts "#{a.x},#{a.y};#{b.x},#{b.y}"
+end

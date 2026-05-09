@@ -1,0 +1,7 @@
+def main
+  let mut parts: Vec[String] = Vec.new
+  parts.push(String.from("alpha"))
+  parts.push(String.from("beta"))
+  parts.push(String.from("gamma"))
+  puts parts.join(", ")
+end

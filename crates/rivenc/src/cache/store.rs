@@ -196,13 +196,15 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
         f.sync_all()
             .map_err(|e| format!("fsync {:?}: {}", tmp, e))?;
     }
-    fs::rename(&tmp, path)
-        .map_err(|e| format!("rename {:?} -> {:?}: {}", tmp, path, e))?;
+    fs::rename(&tmp, path).map_err(|e| format!("rename {:?} -> {:?}: {}", tmp, path, e))?;
     Ok(())
 }
 
 fn tmp_path(path: &Path) -> PathBuf {
-    let mut name = path.file_name().map(|s| s.to_os_string()).unwrap_or_default();
+    let mut name = path
+        .file_name()
+        .map(|s| s.to_os_string())
+        .unwrap_or_default();
     name.push(".tmp");
     path.with_file_name(name)
 }
@@ -246,7 +248,7 @@ pub fn global_cache_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache::manifest::{CachedFile, CacheManifest};
+    use crate::cache::manifest::{CacheManifest, CachedFile};
 
     fn store() -> (tempfile::TempDir, CacheStore) {
         let td = tempfile::tempdir().unwrap();

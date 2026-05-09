@@ -3,7 +3,10 @@
 #[cfg(test)]
 mod tests {
     use crate::hir::context::TypeContext;
-    use crate::hir::types::{MoveSemantics, Ty};
+    use crate::hir::types::{MoveSemantics, TraitRef, Ty};
+    use crate::lexer::token::Span;
+    use crate::parser::ast::Visibility;
+    use crate::resolve::symbols::{DefKind, EnumInfo, StructInfo, SymbolTable, VariantDefKind};
 
     // ─── Copy/Move Classification ───────────────────────────────────
 
@@ -16,9 +19,18 @@ mod tests {
     #[test]
     fn all_primitive_integers_are_copy() {
         let ints = [
-            Ty::Int, Ty::Int8, Ty::Int16, Ty::Int32, Ty::Int64,
-            Ty::UInt, Ty::UInt8, Ty::UInt16, Ty::UInt32, Ty::UInt64,
-            Ty::ISize, Ty::USize,
+            Ty::Int,
+            Ty::Int8,
+            Ty::Int16,
+            Ty::Int32,
+            Ty::Int64,
+            Ty::UInt,
+            Ty::UInt8,
+            Ty::UInt16,
+            Ty::UInt32,
+            Ty::UInt64,
+            Ty::ISize,
+            Ty::USize,
         ];
         for ty in &ints {
             assert!(ty.is_copy(), "{} should be Copy", ty);
@@ -72,7 +84,7 @@ mod tests {
 
     #[test]
     fn hash_is_move() {
-        assert!(Ty::Hash(Box::new(Ty::String), Box::new(Ty::Int)).is_move());
+        assert!(Ty::HashMap(Box::new(Ty::String), Box::new(Ty::Int)).is_move());
     }
 
     #[test]
@@ -106,6 +118,285 @@ mod tests {
             generic_args: vec![],
         };
         assert!(cls.is_move());
+    }
+
+    #[test]
+    fn derive_copy_struct_is_copy_with_symbols() {
+        let mut symbols = SymbolTable::new();
+        symbols.define(
+            "Point".to_string(),
+            DefKind::Struct {
+                info: StructInfo {
+                    generic_params: vec![],
+                    fields: vec![],
+                    derive_traits: vec!["Copy".to_string(), "Clone".to_string()],
+                    repr: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                },
+            },
+            Visibility::Public,
+            Span::new(0, 0, 1, 1),
+        );
+
+        let point = Ty::Struct {
+            name: "Point".to_string(),
+            generic_args: vec![],
+        };
+
+        assert!(!point.is_copy());
+        assert!(point.is_copy_with(&symbols));
+    }
+
+    #[test]
+    fn raw_pointers_are_not_send_or_sync() {
+        assert!(!Ty::RawPtr(Box::new(Ty::Int)).is_send());
+        assert!(!Ty::RawPtrMut(Box::new(Ty::Int)).is_send());
+        assert!(!Ty::RawPtr(Box::new(Ty::Int)).is_sync());
+        assert!(!Ty::RawPtrVoid.is_sync());
+    }
+
+    #[test]
+    fn references_follow_send_sync_rules() {
+        assert!(Ty::Ref(Box::new(Ty::Int)).is_send());
+        assert!(Ty::RefMut(Box::new(Ty::Int)).is_send());
+        assert!(!Ty::Ref(Box::new(Ty::RawPtr(Box::new(Ty::Int)))).is_send());
+        assert!(!Ty::RefMut(Box::new(Ty::RawPtr(Box::new(Ty::Int)))).is_send());
+        assert!(Ty::Ref(Box::new(Ty::String)).is_sync());
+        assert!(!Ty::RefMut(Box::new(Ty::RawPtr(Box::new(Ty::Int)))).is_sync());
+    }
+
+    #[test]
+    fn trait_bounds_gate_trait_objects_and_type_params() {
+        let send_bound = vec![TraitRef {
+            name: "Send".to_string(),
+            generic_args: vec![],
+        }];
+        let sync_bound = vec![TraitRef {
+            name: "Sync".to_string(),
+            generic_args: vec![],
+        }];
+
+        assert!(Ty::DynTrait(send_bound.clone()).is_send());
+        assert!(!Ty::DynTrait(sync_bound.clone()).is_send());
+        assert!(Ty::ImplTrait(sync_bound.clone()).is_sync());
+        assert!(Ty::TypeParam {
+            name: "T".to_string(),
+            bounds: send_bound,
+        }
+        .is_send());
+        assert!(Ty::TypeParam {
+            name: "T".to_string(),
+            bounds: sync_bound,
+        }
+        .is_sync());
+    }
+
+    #[test]
+    fn nominal_struct_send_sync_uses_field_metadata() {
+        let mut symbols = SymbolTable::new();
+        let safe_field = symbols.define(
+            "value".to_string(),
+            DefKind::Field {
+                parent: 1,
+                ty: Ty::Int,
+                index: 0,
+            },
+            Visibility::Private,
+            Span::new(0, 0, 1, 1),
+        );
+        let safe_struct = symbols.define(
+            "Counter".to_string(),
+            DefKind::Struct {
+                info: StructInfo {
+                    generic_params: vec![],
+                    fields: vec![safe_field],
+                    derive_traits: vec![],
+                    repr: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                },
+            },
+            Visibility::Public,
+            Span::new(0, 0, 1, 1),
+        );
+        let bad_field = symbols.define(
+            "ptr".to_string(),
+            DefKind::Field {
+                parent: safe_struct + 2,
+                ty: Ty::RawPtr(Box::new(Ty::Int)),
+                index: 0,
+            },
+            Visibility::Private,
+            Span::new(0, 0, 1, 1),
+        );
+        symbols.define(
+            "Buffer".to_string(),
+            DefKind::Struct {
+                info: StructInfo {
+                    generic_params: vec![],
+                    fields: vec![bad_field],
+                    derive_traits: vec![],
+                    repr: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                },
+            },
+            Visibility::Public,
+            Span::new(0, 0, 1, 1),
+        );
+
+        let counter = Ty::Struct {
+            name: "Counter".to_string(),
+            generic_args: vec![],
+        };
+        let buffer = Ty::Struct {
+            name: "Buffer".to_string(),
+            generic_args: vec![],
+        };
+
+        assert!(counter.is_send_with(&symbols));
+        assert!(counter.is_sync_with(&symbols));
+        assert!(!buffer.is_send_with(&symbols));
+        assert!(!buffer.is_sync_with(&symbols));
+    }
+
+    #[test]
+    fn nominal_enum_send_sync_walks_variant_payloads() {
+        let mut symbols = SymbolTable::new();
+        let ok_variant = symbols.define(
+            "Ready".to_string(),
+            DefKind::EnumVariant {
+                parent: 1,
+                variant_idx: 0,
+                kind: VariantDefKind::Tuple(vec![Ty::Int]),
+            },
+            Visibility::Public,
+            Span::new(0, 0, 1, 1),
+        );
+        let bad_variant = symbols.define(
+            "Poisoned".to_string(),
+            DefKind::EnumVariant {
+                parent: 1,
+                variant_idx: 1,
+                kind: VariantDefKind::Struct(vec![(
+                    "ptr".to_string(),
+                    Ty::RawPtr(Box::new(Ty::Int)),
+                )]),
+            },
+            Visibility::Public,
+            Span::new(0, 0, 1, 1),
+        );
+        symbols.define(
+            "State".to_string(),
+            DefKind::Enum {
+                info: EnumInfo {
+                    generic_params: vec![],
+                    variants: vec![ok_variant, bad_variant],
+                    derive_traits: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                },
+            },
+            Visibility::Public,
+            Span::new(0, 0, 1, 1),
+        );
+
+        let state = Ty::Enum {
+            name: "State".to_string(),
+            generic_args: vec![],
+        };
+
+        assert!(!state.is_send_with(&symbols));
+        assert!(!state.is_sync_with(&symbols));
+    }
+
+    #[test]
+    fn manual_auto_trait_impl_overrides_structural_rejection() {
+        let mut symbols = SymbolTable::new();
+        let ptr_field = symbols.define(
+            "ptr".to_string(),
+            DefKind::Field {
+                parent: 1,
+                ty: Ty::RawPtr(Box::new(Ty::Int)),
+                index: 0,
+            },
+            Visibility::Private,
+            Span::new(0, 0, 1, 1),
+        );
+        symbols.define(
+            "Buffer".to_string(),
+            DefKind::Struct {
+                info: StructInfo {
+                    generic_params: vec![],
+                    fields: vec![ptr_field],
+                    derive_traits: vec![],
+                    repr: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: true,
+                    manual_sync: true,
+                },
+            },
+            Visibility::Public,
+            Span::new(0, 0, 1, 1),
+        );
+
+        let buffer = Ty::Struct {
+            name: "Buffer".to_string(),
+            generic_args: vec![],
+        };
+
+        assert!(buffer.is_send_with(&symbols));
+        assert!(buffer.is_sync_with(&symbols));
+    }
+
+    #[test]
+    fn negative_auto_trait_impl_overrides_structural_acceptance() {
+        let mut symbols = SymbolTable::new();
+        let value_field = symbols.define(
+            "value".to_string(),
+            DefKind::Field {
+                parent: 1,
+                ty: Ty::Int,
+                index: 0,
+            },
+            Visibility::Private,
+            Span::new(0, 0, 1, 1),
+        );
+        symbols.define(
+            "Counter".to_string(),
+            DefKind::Struct {
+                info: StructInfo {
+                    generic_params: vec![],
+                    fields: vec![value_field],
+                    derive_traits: vec![],
+                    repr: vec![],
+                    opt_out_send: true,
+                    opt_out_sync: true,
+                    manual_send: false,
+                    manual_sync: false,
+                },
+            },
+            Visibility::Public,
+            Span::new(0, 0, 1, 1),
+        );
+
+        let counter = Ty::Struct {
+            name: "Counter".to_string(),
+            generic_args: vec![],
+        };
+
+        assert!(!counter.is_send_with(&symbols));
+        assert!(!counter.is_sync_with(&symbols));
     }
 
     // ─── Type Queries ───────────────────────────────────────────────
@@ -175,11 +466,14 @@ mod tests {
     fn display_composite() {
         assert_eq!(format!("{}", Ty::Vec(Box::new(Ty::Int))), "Vec[Int]");
         assert_eq!(
-            format!("{}", Ty::Hash(Box::new(Ty::String), Box::new(Ty::Int))),
-            "Hash[String, Int]"
+            format!("{}", Ty::HashMap(Box::new(Ty::String), Box::new(Ty::Int))),
+            "HashMap[String, Int]"
         );
         assert_eq!(format!("{}", Ty::Option(Box::new(Ty::Int))), "Option[Int]");
-        assert_eq!(format!("{}", Ty::Tuple(vec![Ty::Int, Ty::Bool])), "(Int, Bool)");
+        assert_eq!(
+            format!("{}", Ty::Tuple(vec![Ty::Int, Ty::Bool])),
+            "(Int, Bool)"
+        );
         assert_eq!(format!("{}", Ty::Ref(Box::new(Ty::Int))), "&Int");
         assert_eq!(format!("{}", Ty::RefMut(Box::new(Ty::Int))), "&mut Int");
     }
@@ -219,7 +513,7 @@ mod tests {
         let _t0 = ctx.fresh_type_var(); // ?T0
         let _t1 = ctx.fresh_type_var(); // ?T1
         ctx.bind(0, Ty::Infer(1)).unwrap(); // ?T0 = ?T1
-        ctx.bind(1, Ty::Int).unwrap();       // ?T1 = Int
+        ctx.bind(1, Ty::Int).unwrap(); // ?T1 = Int
         let resolved = ctx.resolve(&Ty::Infer(0));
         assert_eq!(resolved, Ty::Int);
     }

@@ -1,0 +1,15 @@
+## Examples
+
+Each example is a stand-alone Riven package. Build and run with:
+
+```
+cd <example-dir>
+riven run
+```
+
+| Example                | Showcases                                                     |
+|------------------------|---------------------------------------------------------------|
+| `01-cli-utility`       | `std::env::args`, `std::fs::read_to_string`, `?` operator     |
+| `02-fizzbuzz`          | `for ..=` range loops, `if`/`elsif`, string interpolation     |
+| `03-tasklist`          | classes, `def mut`, `Vec[T]`, encapsulation                   |
+| `04-derive-debug`      | `derive Debug` on nested structs, interpolation of `Debug`    |

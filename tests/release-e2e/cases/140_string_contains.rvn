@@ -1,0 +1,12 @@
+def main
+  let s = String.from("hello world")
+  if s.contains("world")
+    puts "found"
+  end
+  if s.starts_with("hello")
+    puts "starts"
+  end
+  if s.ends_with("world")
+    puts "ends"
+  end
+end

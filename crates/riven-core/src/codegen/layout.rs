@@ -22,7 +22,11 @@ pub struct TypeLayout {
 impl TypeLayout {
     /// Convenience constructor for primitive/opaque types with no fields.
     fn primitive(size: usize, alignment: usize) -> Self {
-        TypeLayout { size, alignment, field_offsets: vec![] }
+        TypeLayout {
+            size,
+            alignment,
+            field_offsets: vec![],
+        }
     }
 }
 
@@ -30,7 +34,10 @@ impl TypeLayout {
 ///
 /// `alignment` must be a power of two.
 pub fn align_up(offset: usize, alignment: usize) -> usize {
-    debug_assert!(alignment.is_power_of_two(), "alignment must be a power of two");
+    debug_assert!(
+        alignment.is_power_of_two(),
+        "alignment must be a power of two"
+    );
     if alignment == 0 {
         return offset;
     }
@@ -155,11 +162,7 @@ fn layout_tagged_union(payload_sizes: &[usize], payload_aligns: &[usize]) -> Typ
 fn layout_user_type(name: &str, symbols: &SymbolTable) -> TypeLayout {
     // Find the class or struct definition by name.
     let def = symbols.iter().find(|d| {
-        d.name == name
-            && matches!(
-                d.kind,
-                DefKind::Class { .. } | DefKind::Struct { .. }
-            )
+        d.name == name && matches!(d.kind, DefKind::Class { .. } | DefKind::Struct { .. })
     });
 
     let field_def_ids: Vec<u32> = match def {
@@ -254,8 +257,14 @@ pub fn layout_of(ty: &Ty, symbols: &SymbolTable) -> TypeLayout {
         Ty::Bool | Ty::Int8 | Ty::UInt8 => TypeLayout::primitive(1, 1),
         Ty::Int16 | Ty::UInt16 => TypeLayout::primitive(2, 2),
         Ty::Int32 | Ty::UInt32 | Ty::Float32 | Ty::Char => TypeLayout::primitive(4, 4),
-        Ty::Int | Ty::Int64 | Ty::UInt | Ty::UInt64 | Ty::ISize | Ty::USize
-        | Ty::Float | Ty::Float64 => TypeLayout::primitive(8, 8),
+        Ty::Int
+        | Ty::Int64
+        | Ty::UInt
+        | Ty::UInt64
+        | Ty::ISize
+        | Ty::USize
+        | Ty::Float
+        | Ty::Float64 => TypeLayout::primitive(8, 8),
         Ty::Unit | Ty::Never => TypeLayout::primitive(0, 1),
 
         // ── Strings ─────────────────────────────────────────────────────────
@@ -279,8 +288,8 @@ pub fn layout_of(ty: &Ty, symbols: &SymbolTable) -> TypeLayout {
         // ── Collections ─────────────────────────────────────────────────────
         // Vec[T] — (ptr, len, cap) = 24 bytes, align 8
         Ty::Vec(_) => TypeLayout::primitive(24, 8),
-        // Hash[K,V] and Set[T] — 48 bytes (HashMap/HashSet header), align 8
-        Ty::Hash(_, _) | Ty::Set(_) => TypeLayout::primitive(48, 8),
+        // HashMap[K,V] and Set[T] — 48 bytes (HashMap/HashSet header), align 8
+        Ty::HashMap(_, _) | Ty::Set(_) => TypeLayout::primitive(48, 8),
 
         // ── Option[T] ───────────────────────────────────────────────────────
         Ty::Option(inner) => {

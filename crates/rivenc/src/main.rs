@@ -15,7 +15,6 @@ use rivenc::cache::{
     CompileOutput, FileStatus, SourceFile,
 };
 
-
 fn main() {
     let args: Vec<String> = env::args().collect();
 
@@ -207,7 +206,7 @@ fn discover_rvn_files_recursive(dir: &Path, files: &mut Vec<String>) {
 
         if path.is_dir() {
             discover_rvn_files_recursive(&path, files);
-        } else if path.extension().map_or(false, |ext| ext == "rvn") {
+        } else if path.extension().is_some_and(|ext| ext == "rvn") {
             if let Some(s) = path.to_str() {
                 files.push(s.to_string());
             }
@@ -234,7 +233,7 @@ fn print_diff(path: &str, original: &str, formatted: &str) {
         if orig_line != fmt_line {
             if !in_hunk {
                 hunk_start = i;
-                let context_start = if i > 2 { i - 2 } else { 0 };
+                let context_start = i.saturating_sub(2);
                 println!(
                     "@@ -{},{} +{},{} @@",
                     context_start + 1,
@@ -273,7 +272,10 @@ fn print_diff(path: &str, original: &str, formatted: &str) {
 fn run_clean(args: &[String]) {
     if args.iter().any(|a| a == "--global") {
         match clear_global_cache() {
-            Ok(()) => println!("Cleaned global cache at {}", cache::global_cache_dir().display()),
+            Ok(()) => println!(
+                "Cleaned global cache at {}",
+                cache::global_cache_dir().display()
+            ),
             Err(e) => {
                 eprintln!("Failed to clean global cache: {}", e);
                 process::exit(1);
@@ -508,14 +510,20 @@ fn compile_to_object(
     opt_level_override: Option<&str>,
 ) -> Result<CompileOutput, String> {
     let mut lexer = Lexer::new(source);
-    let tokens = lexer
-        .tokenize()
-        .map_err(|ds| ds.iter().map(|d| d.to_string()).collect::<Vec<_>>().join("\n"))?;
+    let tokens = lexer.tokenize().map_err(|ds| {
+        ds.iter()
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    })?;
 
     let mut parser = Parser::new(tokens);
-    let program = parser
-        .parse()
-        .map_err(|ds| ds.iter().map(|d| d.to_string()).collect::<Vec<_>>().join("\n"))?;
+    let program = parser.parse().map_err(|ds| {
+        ds.iter()
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    })?;
 
     let type_result = typeck::type_check(&program);
     let has_errors = type_result
@@ -700,7 +708,13 @@ fn resolve_backend(
         Some("3") => 3,
         Some("s") => 4,
         Some("z") => 5,
-        _ => if release { 2 } else { 0 },
+        _ => {
+            if release {
+                2
+            } else {
+                0
+            }
+        }
     };
 
     match backend_override {
@@ -708,11 +722,15 @@ fn resolve_backend(
         Some("llvm") => {
             #[cfg(feature = "llvm")]
             {
-                riven_core::codegen::Backend::Llvm { opt_level: _opt_level }
+                riven_core::codegen::Backend::Llvm {
+                    opt_level: _opt_level,
+                }
             }
             #[cfg(not(feature = "llvm"))]
             {
-                eprintln!("LLVM backend not available. Install LLVM 18 and rebuild with --features llvm.");
+                eprintln!(
+                    "LLVM backend not available. Install LLVM 18 and rebuild with --features llvm."
+                );
                 process::exit(1);
             }
         }
@@ -720,7 +738,9 @@ fn resolve_backend(
             if release {
                 #[cfg(feature = "llvm")]
                 {
-                    riven_core::codegen::Backend::Llvm { opt_level: _opt_level }
+                    riven_core::codegen::Backend::Llvm {
+                        opt_level: _opt_level,
+                    }
                 }
                 #[cfg(not(feature = "llvm"))]
                 {

@@ -13,6 +13,12 @@ pub struct PrettyPrinter {
     output: String,
 }
 
+impl Default for PrettyPrinter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PrettyPrinter {
     pub fn new() -> Self {
         Self {
@@ -68,7 +74,11 @@ impl PrettyPrinter {
                 self.line(&format!("lib {} ({} functions)", l.name, l.functions.len()));
             }
             TopLevelItem::Extern(e) => {
-                self.line(&format!("extern \"{}\" ({} functions)", e.abi, e.functions.len()));
+                self.line(&format!(
+                    "extern \"{}\" ({} functions)",
+                    e.abi,
+                    e.functions.len()
+                ));
             }
         }
     }
@@ -241,6 +251,7 @@ impl PrettyPrinter {
 
     fn print_func(&mut self, f: &FuncDef) {
         let vis = format_visibility(f.visibility);
+        let async_kw = if f.is_async { "async " } else { "" };
         let generics = format_opt_generic_params(&f.generic_params);
         let class_marker = if f.is_class_method { "self." } else { "" };
         let self_mode = f
@@ -267,8 +278,9 @@ impl PrettyPrinter {
             .map(|w| format!(" {}", format_where_clause(w)))
             .unwrap_or_default();
         self.line(&format!(
-            "{}fn {}{}{}({}{}){}{}",
+            "{}{}fn {}{}{}({}{}){}{}",
             vis,
+            async_kw,
             class_marker,
             f.name,
             generics,
@@ -289,9 +301,7 @@ impl PrettyPrinter {
         match &u.kind {
             UseKind::Simple => self.line(&format!("Use {}", path)),
             UseKind::Alias(alias) => self.line(&format!("Use {} as {}", path, alias)),
-            UseKind::Group(names) => {
-                self.line(&format!("Use {}::{{{}}}", path, names.join(", ")))
-            }
+            UseKind::Group(names) => self.line(&format!("Use {}::{{{}}}", path, names.join(", "))),
         }
     }
 
@@ -330,7 +340,12 @@ impl PrettyPrinter {
 
     fn print_field_decl(&mut self, f: &FieldDecl) {
         let vis = format_visibility(f.visibility);
-        self.line(&format!("{}field {}: {}", vis, f.name, format_type(&f.type_expr)));
+        self.line(&format!(
+            "{}field {}: {}",
+            vis,
+            f.name,
+            format_type(&f.type_expr)
+        ));
     }
 
     // ── block & statements ──────────────────────────────────────────
@@ -464,6 +479,7 @@ impl PrettyPrinter {
                 self.dedent();
             }
             ExprKind::Closure(closure) => {
+                let async_kw = if closure.is_async { "async " } else { "" };
                 let mv = if closure.is_move { "move " } else { "" };
                 let params: Vec<String> = closure
                     .params
@@ -475,7 +491,7 @@ impl PrettyPrinter {
                             .unwrap_or_else(|| p.name.clone())
                     })
                     .collect();
-                self.line(&format!("{}|{}|", mv, params.join(", ")));
+                self.line(&format!("{}{}|{}|", async_kw, mv, params.join(", ")));
                 self.indent();
                 match &closure.body {
                     ClosureBody::Expr(e) => {
@@ -522,9 +538,7 @@ fn format_opt_generic_params(gp: &Option<GenericParams>) -> String {
                 .iter()
                 .map(|p| match p {
                     GenericParam::Lifetime { name, .. } => format!("'{}", name),
-                    GenericParam::Type {
-                        name, bounds, ..
-                    } => {
+                    GenericParam::Type { name, bounds, .. } => {
                         if bounds.is_empty() {
                             name.clone()
                         } else {
@@ -719,7 +733,11 @@ pub fn format_expr_short(e: &Expr) -> String {
             format!("{}({})", format_expr_short(callee), a.join(", "))
         }
         ExprKind::Index { object, index } => {
-            format!("{}[{}]", format_expr_short(object), format_expr_short(index))
+            format!(
+                "{}[{}]",
+                format_expr_short(object),
+                format_expr_short(index)
+            )
         }
         ExprKind::ClosureCall { callee, args } => {
             let a: Vec<String> = args.iter().map(format_expr_short).collect();
@@ -727,9 +745,14 @@ pub fn format_expr_short(e: &Expr) -> String {
         }
 
         ExprKind::Try(inner) => format!("{}?", format_expr_short(inner)),
+        ExprKind::Await(inner) => format!("{}.await", format_expr_short(inner)),
 
         ExprKind::Assign { target, value } => {
-            format!("{} = {}", format_expr_short(target), format_expr_short(value))
+            format!(
+                "{} = {}",
+                format_expr_short(target),
+                format_expr_short(value)
+            )
         }
         ExprKind::CompoundAssign { target, op, value } => {
             format!(
@@ -808,7 +831,11 @@ pub fn format_expr_short(e: &Expr) -> String {
         }
 
         ExprKind::Cast { expr, target_type } => {
-            format!("{} as {}", format_expr_short(expr), format_type(target_type))
+            format!(
+                "{} as {}",
+                format_expr_short(expr),
+                format_type(target_type)
+            )
         }
 
         ExprKind::EnumVariant {
@@ -873,10 +900,7 @@ pub fn format_pattern(p: &Pattern) -> String {
             }
         }
         Pattern::Struct {
-            path,
-            fields,
-            rest,
-            ..
+            path, fields, rest, ..
         } => {
             let base = path.join("::");
             let mut fs: Vec<String> = fields
@@ -897,9 +921,7 @@ pub fn format_pattern(p: &Pattern) -> String {
             let ps: Vec<String> = patterns.iter().map(format_pattern).collect();
             ps.join(" | ")
         }
-        Pattern::Ref {
-            mutable, name, ..
-        } => {
+        Pattern::Ref { mutable, name, .. } => {
             if *mutable {
                 format!("ref mut {}", name)
             } else {

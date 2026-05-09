@@ -29,13 +29,21 @@ pub fn try_coerce(
     match (&from, &to) {
         // Inference variables — bind
         (Ty::Infer(id), _) => {
-            ctx.bind(*id, to.clone())
-                .map_err(|msg| TypeError { message: msg, expected: to.clone(), found: from.clone(), span: span.clone() })?;
+            ctx.bind(*id, to.clone()).map_err(|msg| TypeError {
+                message: msg,
+                expected: to.clone(),
+                found: from.clone(),
+                span: span.clone(),
+            })?;
             Ok(to)
         }
         (_, Ty::Infer(id)) => {
-            ctx.bind(*id, from.clone())
-                .map_err(|msg| TypeError { message: msg, expected: to.clone(), found: from.clone(), span: span.clone() })?;
+            ctx.bind(*id, from.clone()).map_err(|msg| TypeError {
+                message: msg,
+                expected: to.clone(),
+                found: from.clone(),
+                span: span.clone(),
+            })?;
             Ok(from)
         }
 
@@ -53,9 +61,7 @@ pub fn try_coerce(
         }
 
         // &String → &str
-        (Ty::Ref(inner), Ty::Str) if **inner == Ty::String => {
-            Ok(Ty::Str)
-        }
+        (Ty::Ref(inner), Ty::Str) if **inner == Ty::String => Ok(Ty::Str),
 
         // Auto-deref: &&T → &T (for method calls and field access)
         (Ty::Ref(inner), target) if inner.is_ref() => {
@@ -65,8 +71,8 @@ pub fn try_coerce(
         // Integer widening
         (from_ty, to_ty) if from_ty.is_integer() && to_ty.is_integer() => {
             match (from_ty.bit_width(), to_ty.bit_width()) {
-                (Some(fw), Some(tw)) if fw <= tw
-                    && from_ty.is_signed_integer() == to_ty.is_signed_integer() =>
+                (Some(fw), Some(tw))
+                    if fw <= tw && from_ty.is_signed_integer() == to_ty.is_signed_integer() =>
                 {
                     Ok(to)
                 }
@@ -105,7 +111,7 @@ pub fn try_coerce(
             }
         }
 
-        // Vec, Hash, Set — invariant (no coercion)
+        // Vec, HashMap, Set — invariant (no coercion)
         // &mut T — invariant (no coercion to &mut U)
 
         // No coercion possible
@@ -117,8 +123,12 @@ pub fn try_coerce(
 fn is_subtype_class(child: &Ty, parent: &Ty, symbols: &SymbolTable) -> bool {
     match (child, parent) {
         (
-            Ty::Class { name: child_name, .. },
-            Ty::Class { name: parent_name, .. },
+            Ty::Class {
+                name: child_name, ..
+            },
+            Ty::Class {
+                name: parent_name, ..
+            },
         ) => {
             if child_name == parent_name {
                 return true;

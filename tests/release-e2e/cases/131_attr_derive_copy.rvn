@@ -1,0 +1,25 @@
+## Demonstrates that `@[derive(...)]` produces the same HIR as
+## body-form `derive Trait1, Trait2`.
+@[derive(Copy, Clone)]
+struct AttrPoint
+  x: Int
+  y: Int
+end
+
+struct BodyPoint
+  x: Int
+  y: Int
+  derive Copy, Clone
+end
+
+def main
+  let a = AttrPoint.new(1, 2)
+  let b = a            # Copy: a still usable
+  puts "#{a.x} #{a.y}"
+  puts "#{b.x} #{b.y}"
+
+  let c = BodyPoint.new(3, 4)
+  let d = c            # Copy: c still usable
+  puts "#{c.x} #{c.y}"
+  puts "#{d.x} #{d.y}"
+end

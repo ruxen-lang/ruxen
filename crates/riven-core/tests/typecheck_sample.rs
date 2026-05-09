@@ -17,7 +17,11 @@ fn sample_program_lexes() {
     let source = load_sample();
     let mut lexer = Lexer::new(&source);
     let tokens = lexer.tokenize().expect("lexer failed on sample program");
-    assert!(tokens.len() > 100, "expected many tokens, got {}", tokens.len());
+    assert!(
+        tokens.len() > 100,
+        "expected many tokens, got {}",
+        tokens.len()
+    );
 }
 
 #[test]
@@ -41,7 +45,9 @@ fn sample_program_type_checks() {
     let result = typeck::type_check(&program);
 
     // Count actual type errors (not inference gaps)
-    let fatal_errors: Vec<_> = result.diagnostics.iter()
+    let fatal_errors: Vec<_> = result
+        .diagnostics
+        .iter()
         .filter(|d| d.level == riven_core::diagnostics::DiagnosticLevel::Error)
         .filter(|d| {
             // Filter out "could not infer" for private helpers — those are
@@ -64,7 +70,9 @@ fn sample_program_type_checks() {
 
     // Print summary
     let total_diags = result.diagnostics.len();
-    let error_count = result.diagnostics.iter()
+    let error_count = result
+        .diagnostics
+        .iter()
         .filter(|d| d.level == riven_core::diagnostics::DiagnosticLevel::Error)
         .count();
     eprintln!(

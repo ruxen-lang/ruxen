@@ -7,7 +7,11 @@ mod tests {
     fn mir_function_creates_entry_block() {
         let func = MirFunction::new("test_fn", Ty::Unit);
         // A freshly created function must have exactly one block.
-        assert_eq!(func.blocks.len(), 1, "expected exactly 1 block (the entry block)");
+        assert_eq!(
+            func.blocks.len(),
+            1,
+            "expected exactly 1 block (the entry block)"
+        );
         assert_eq!(func.entry_block, 0, "entry_block should be index 0");
     }
 
@@ -96,12 +100,14 @@ mod lowering_tests {
             def_id,
             name: name.to_string(),
             visibility: Visibility::Public,
+            is_async: false,
             self_mode: None,
             is_class_method: false,
             generic_params: vec![],
             params,
             return_ty,
             body: Box::new(body),
+            doc_comments: vec![],
             span: span(),
         }
     }
@@ -124,7 +130,11 @@ mod lowering_tests {
         let mut lowerer = Lowerer::new(&symbols);
         let mir = lowerer.lower_program(&program).expect("lowering failed");
 
-        assert_eq!(mir.entry, Some("main".to_string()), "entry should be 'main'");
+        assert_eq!(
+            mir.entry,
+            Some("main".to_string()),
+            "entry should be 'main'"
+        );
         assert_eq!(mir.functions.len(), 1, "should have 1 function");
 
         let main_fn = &mir.functions[0];
@@ -153,6 +163,7 @@ mod lowering_tests {
                 signature: crate::resolve::symbols::FnSignature {
                     self_mode: None,
                     is_class_method: false,
+                    is_async: false,
                     generic_params: vec![],
                     params: vec![],
                     return_ty: Ty::Unit,
@@ -231,10 +242,7 @@ mod lowering_tests {
                 value: MirValue::Literal(Literal::Int(42)),
                 ..
             } => {} // correct
-            other => panic!(
-                "expected Assign with Literal(Int(42)), got {:?}",
-                other
-            ),
+            other => panic!("expected Assign with Literal(Int(42)), got {:?}", other),
         }
     }
 
@@ -251,6 +259,7 @@ mod lowering_tests {
                 signature: crate::resolve::symbols::FnSignature {
                     self_mode: None,
                     is_class_method: false,
+                    is_async: false,
                     generic_params: vec![],
                     params: vec![
                         crate::resolve::symbols::ParamInfo {
@@ -347,24 +356,16 @@ mod lowering_tests {
 
         // Entry block should contain a BinOp(Add) instruction.
         let entry = &add_fn.blocks[add_fn.entry_block];
-        let has_binop = entry.instructions.iter().any(|inst| {
-            matches!(
-                inst,
-                MirInst::BinOp {
-                    op: BinOp::Add,
-                    ..
-                }
-            )
-        });
+        let has_binop = entry
+            .instructions
+            .iter()
+            .any(|inst| matches!(inst, MirInst::BinOp { op: BinOp::Add, .. }));
         assert!(has_binop, "entry block should contain a BinOp(Add)");
 
         // Terminator should be Return(Some(...)).
         match &entry.terminator {
             Terminator::Return(Some(_)) => {} // correct
-            other => panic!(
-                "expected Return(Some(...)), got {:?}",
-                other
-            ),
+            other => panic!("expected Return(Some(...)), got {:?}", other),
         }
     }
 
@@ -440,6 +441,7 @@ mod lowering_tests {
                 signature: crate::resolve::symbols::FnSignature {
                     self_mode: None,
                     is_class_method: false,
+                    is_async: false,
                     generic_params: vec![],
                     params: vec![],
                     return_ty: Ty::Unit,
@@ -511,9 +513,10 @@ mod lowering_tests {
             .expect("should have a Return block");
 
         // The return block should contain at least one Drop instruction.
-        let has_drop = return_block.instructions.iter().any(|inst| {
-            matches!(inst, MirInst::Drop { .. })
-        });
+        let has_drop = return_block
+            .instructions
+            .iter()
+            .any(|inst| matches!(inst, MirInst::Drop { .. }));
         assert!(
             has_drop,
             "Enum local should have a Drop instruction before Return"
@@ -548,9 +551,208 @@ mod lowering_tests {
                 false
             }
         });
+        assert!(!int_local_dropped, "Copy-type locals should not be dropped");
+    }
+
+    #[test]
+    fn derive_copy_struct_is_not_dropped() {
+        let mut symbols = SymbolTable::new();
+
+        let _point_def = symbols.define(
+            "Point".to_string(),
+            crate::resolve::symbols::DefKind::Struct {
+                info: crate::resolve::symbols::StructInfo {
+                    generic_params: vec![],
+                    fields: vec![],
+                    derive_traits: vec!["Copy".to_string(), "Clone".to_string()],
+                    repr: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                },
+            },
+            Visibility::Public,
+            span(),
+        );
+
+        let point_ty = Ty::Struct {
+            name: "Point".to_string(),
+            generic_args: vec![],
+        };
+
+        let point_def = symbols.define(
+            "p".to_string(),
+            crate::resolve::symbols::DefKind::Variable {
+                mutable: false,
+                ty: point_ty.clone(),
+            },
+            Visibility::Private,
+            span(),
+        );
+
+        let body = expr(
+            HirExprKind::Block(
+                vec![HirStatement::Let {
+                    def_id: point_def,
+                    pattern: HirPattern::Binding {
+                        def_id: point_def,
+                        name: "p".to_string(),
+                        mutable: false,
+                        span: span(),
+                    },
+                    ty: point_ty.clone(),
+                    value: Some(expr(
+                        HirExprKind::Construct {
+                            type_def: 0,
+                            type_name: "Point".to_string(),
+                            fields: vec![],
+                        },
+                        point_ty.clone(),
+                    )),
+                    mutable: false,
+                    span: span(),
+                }],
+                None,
+            ),
+            Ty::Unit,
+        );
+
+        let func = simple_func(0, "test", vec![], Ty::Unit, body);
+        let program = program_with_fn(func);
+
+        let mut lowerer = Lowerer::new(&symbols);
+        let mir = lowerer.lower_program(&program).expect("lowering failed");
+        let test_fn = &mir.functions[0];
+        let return_block = test_fn
+            .blocks
+            .iter()
+            .find(|b| matches!(b.terminator, Terminator::Return(_)))
+            .expect("should have a Return block");
+
         assert!(
-            !int_local_dropped,
-            "Copy-type locals should not be dropped"
+            return_block
+                .instructions
+                .iter()
+                .all(|inst| !matches!(inst, MirInst::Drop { .. })),
+            "derive Copy locals should not receive Drop instructions"
+        );
+    }
+
+    #[test]
+    fn owned_rebind_lowers_to_move() {
+        let mut symbols = SymbolTable::new();
+
+        symbols.define(
+            "Pair".to_string(),
+            crate::resolve::symbols::DefKind::Struct {
+                info: crate::resolve::symbols::StructInfo {
+                    generic_params: vec![],
+                    fields: vec![],
+                    derive_traits: vec![],
+                    repr: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                },
+            },
+            Visibility::Public,
+            span(),
+        );
+
+        let pair_ty = Ty::Struct {
+            name: "Pair".to_string(),
+            generic_args: vec![],
+        };
+
+        let a_def = symbols.define(
+            "a".to_string(),
+            crate::resolve::symbols::DefKind::Variable {
+                mutable: false,
+                ty: pair_ty.clone(),
+            },
+            Visibility::Private,
+            span(),
+        );
+        let b_def = symbols.define(
+            "b".to_string(),
+            crate::resolve::symbols::DefKind::Variable {
+                mutable: false,
+                ty: pair_ty.clone(),
+            },
+            Visibility::Private,
+            span(),
+        );
+
+        let body = expr(
+            HirExprKind::Block(
+                vec![
+                    HirStatement::Let {
+                        def_id: a_def,
+                        pattern: HirPattern::Binding {
+                            def_id: a_def,
+                            name: "a".to_string(),
+                            mutable: false,
+                            span: span(),
+                        },
+                        ty: pair_ty.clone(),
+                        value: Some(expr(
+                            HirExprKind::Construct {
+                                type_def: 0,
+                                type_name: "Pair".to_string(),
+                                fields: vec![],
+                            },
+                            pair_ty.clone(),
+                        )),
+                        mutable: false,
+                        span: span(),
+                    },
+                    HirStatement::Let {
+                        def_id: b_def,
+                        pattern: HirPattern::Binding {
+                            def_id: b_def,
+                            name: "b".to_string(),
+                            mutable: false,
+                            span: span(),
+                        },
+                        ty: pair_ty.clone(),
+                        value: Some(expr(HirExprKind::VarRef(a_def), pair_ty.clone())),
+                        mutable: false,
+                        span: span(),
+                    },
+                ],
+                None,
+            ),
+            Ty::Unit,
+        );
+
+        let func = simple_func(0, "test", vec![], Ty::Unit, body);
+        let program = program_with_fn(func);
+
+        let mut lowerer = Lowerer::new(&symbols);
+        let mir = lowerer.lower_program(&program).expect("lowering failed");
+        let test_fn = &mir.functions[0];
+        let a_local = test_fn
+            .locals
+            .iter()
+            .find(|local| local.name == "a")
+            .expect("missing local a")
+            .id;
+        let b_local = test_fn
+            .locals
+            .iter()
+            .find(|local| local.name == "b")
+            .expect("missing local b")
+            .id;
+
+        assert!(
+            test_fn.blocks.iter().any(|block| {
+                block.instructions.iter().any(|inst| {
+                matches!(inst, MirInst::Move { dest, src } if *dest == b_local && *src == a_local)
+            })
+            }),
+            "owned let rebinding should lower to MirInst::Move"
         );
     }
 
@@ -589,9 +791,10 @@ mod lowering_tests {
         let entry = &caller_fn.blocks[caller_fn.entry_block];
 
         // Should have a Call instruction to "foo".
-        let has_call = entry.instructions.iter().any(|inst| {
-            matches!(inst, MirInst::Call { callee, .. } if callee == "foo")
-        });
+        let has_call = entry
+            .instructions
+            .iter()
+            .any(|inst| matches!(inst, MirInst::Call { callee, .. } if callee == "foo"));
         assert!(has_call, "should emit a Call to 'foo'");
     }
 }

@@ -17,7 +17,7 @@ use crate::resolve::symbols::{DefKind, SymbolTable};
 
 use super::coerce::auto_deref;
 use super::traits::TraitResolver;
-use super::unify::{unify, can_coerce, TypeError};
+use super::unify::{can_coerce, unify, TypeError};
 
 /// The type inference engine — walks HIR and resolves all types.
 pub struct InferenceEngine<'a> {
@@ -77,6 +77,55 @@ impl<'a> InferenceEngine<'a> {
 
                 Err(TypeError::mismatch(expected, found, span))
             }
+        }
+    }
+
+    fn future_ty(output: Ty) -> Ty {
+        Ty::Class {
+            name: "Future".to_string(),
+            generic_args: vec![output],
+        }
+    }
+
+    fn result_ty(ok: Ty, err_name: &str) -> Ty {
+        Ty::Result(
+            Box::new(ok),
+            Box::new(Ty::Class {
+                name: err_name.to_string(),
+                generic_args: vec![],
+            }),
+        )
+    }
+
+    fn option_ty(inner: Ty) -> Ty {
+        Ty::Option(Box::new(inner))
+    }
+
+    fn class_ty(name: &str, generic_args: Vec<Ty>) -> Ty {
+        Ty::Class {
+            name: name.to_string(),
+            generic_args,
+        }
+    }
+
+    fn callable_return_ty(ty: &Ty) -> Option<Ty> {
+        match ty {
+            Ty::Fn { ret, .. } | Ty::FnMut { ret, .. } | Ty::FnOnce { ret, .. } => {
+                Some((**ret).clone())
+            }
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => Self::callable_return_ty(inner),
+            _ => None,
+        }
+    }
+
+    fn wrap_async_return(&self, signature: &crate::resolve::symbols::FnSignature) -> Ty {
+        if signature.is_async {
+            Self::future_ty(self.ctx.resolve(&signature.return_ty))
+        } else {
+            self.ctx.resolve(&signature.return_ty)
         }
     }
 
@@ -201,6 +250,7 @@ impl<'a> InferenceEngine<'a> {
                 }
             }
         }
+        self.check_concurrency_bounds(&func.return_ty, &body_ty, &func.span);
 
         // Resolve the return type now
         func.return_ty = self.ctx.resolve(&func.return_ty);
@@ -238,7 +288,11 @@ impl<'a> InferenceEngine<'a> {
                 }
             }
 
-            HirExprKind::FieldAccess { object, field_name, field_idx } => {
+            HirExprKind::FieldAccess {
+                object,
+                field_name,
+                field_idx,
+            } => {
                 self.infer_expr(object);
                 let obj_ty = self.ctx.resolve(&object.ty);
                 let (_, derefed) = auto_deref(&obj_ty, self.ctx);
@@ -246,14 +300,21 @@ impl<'a> InferenceEngine<'a> {
                 match &derefed {
                     Ty::Class { name, .. } | Ty::Struct { name, .. } => {
                         // Look up field in symbol table (including parent classes)
-                        if let Some((field_ty, idx)) = self.lookup_field_with_parents(name, field_name) {
+                        if let Some((field_ty, idx)) =
+                            self.lookup_field_with_parents(name, field_name)
+                        {
                             expr.ty = self.substitute_generics_in_return(&derefed, &field_ty);
                             *field_idx = idx;
-                        } else if let Some(ret) = self.builtin_method_type(&derefed, field_name, &[]) {
+                        } else if let Some(ret) =
+                            self.builtin_method_type(&derefed, field_name, &[], &expr.span)
+                        {
                             // Try method resolution as fallback — parser sometimes
                             // produces FieldAccess for no-arg method calls
                             expr.ty = self.substitute_generics_in_return(&derefed, &ret);
-                        } else if let Some(sig) = self.traits.lookup_method(&derefed, field_name, self.symbols) {
+                        } else if let Some(sig) =
+                            self.traits
+                                .lookup_method(&derefed, field_name, self.symbols)
+                        {
                             let raw = self.ctx.resolve(&sig.return_ty);
                             expr.ty = self.substitute_generics_in_return(&derefed, &raw);
                         } else {
@@ -277,7 +338,11 @@ impl<'a> InferenceEngine<'a> {
                                 *field_idx = idx;
                             } else {
                                 self.error(
-                                    format!("tuple index {} out of range (tuple has {} elements)", idx, elems.len()),
+                                    format!(
+                                        "tuple index {} out of range (tuple has {} elements)",
+                                        idx,
+                                        elems.len()
+                                    ),
                                     &expr.span,
                                 );
                                 expr.ty = Ty::Error;
@@ -305,13 +370,21 @@ impl<'a> InferenceEngine<'a> {
                     }
                     Ty::Enum { .. } => {
                         // Try method resolution as fallback (e.g. .to_display, .weight)
-                        if let Some(ret) = self.builtin_method_type(&derefed, field_name, &[]) {
+                        if let Some(ret) =
+                            self.builtin_method_type(&derefed, field_name, &[], &expr.span)
+                        {
                             expr.ty = ret;
-                        } else if let Some(sig) = self.traits.lookup_method(&derefed, field_name, self.symbols) {
+                        } else if let Some(sig) =
+                            self.traits
+                                .lookup_method(&derefed, field_name, self.symbols)
+                        {
                             expr.ty = self.ctx.resolve(&sig.return_ty);
                         } else {
                             self.error(
-                                format!("cannot access field `{}` on enum `{}`", field_name, derefed),
+                                format!(
+                                    "cannot access field `{}` on enum `{}`",
+                                    field_name, derefed
+                                ),
                                 &expr.span,
                             );
                             expr.ty = Ty::Error;
@@ -325,20 +398,28 @@ impl<'a> InferenceEngine<'a> {
                         // Try to resolve the field on the inner type
                         let field_ty = match &inner_derefed {
                             Ty::Class { name, .. } | Ty::Struct { name, .. } => {
-                                if let Some((ft, idx)) = self.lookup_field_with_parents(name, field_name) {
+                                if let Some((ft, idx)) =
+                                    self.lookup_field_with_parents(name, field_name)
+                                {
                                     *field_idx = idx;
                                     Some(ft)
-                                } else if let Some(ret) = self.builtin_method_type(&inner_derefed, field_name, &[]) {
-                                    Some(ret)
-                                } else if let Some(ret) = self.lookup_class_method_return(name, field_name) {
+                                } else if let Some(ret) = self.builtin_method_type(
+                                    &inner_derefed,
+                                    field_name,
+                                    &[],
+                                    &expr.span,
+                                ) {
                                     Some(ret)
                                 } else {
-                                    None
+                                    self.lookup_class_method_return(name, field_name)
                                 }
                             }
-                            _ => {
-                                self.builtin_method_type(&inner_derefed, field_name, &[])
-                            }
+                            _ => self.builtin_method_type(
+                                &inner_derefed,
+                                field_name,
+                                &[],
+                                &expr.span,
+                            ),
                         };
                         if let Some(ft) = field_ty {
                             // Wrap the field type in Option for safe navigation
@@ -358,11 +439,18 @@ impl<'a> InferenceEngine<'a> {
                         // Try method resolution as fallback for FieldAccess on types
                         // like Vec, String, &str, Option, Result, Class, etc.
                         // The parser sometimes produces FieldAccess for no-arg method calls.
-                        if let Some(ret) = self.builtin_method_type(&derefed, field_name, &[]) {
+                        if let Some(ret) =
+                            self.builtin_method_type(&derefed, field_name, &[], &expr.span)
+                        {
                             expr.ty = ret;
-                        } else if let Some(sig) = self.traits.lookup_method(&derefed, field_name, self.symbols) {
+                        } else if let Some(sig) =
+                            self.traits
+                                .lookup_method(&derefed, field_name, self.symbols)
+                        {
                             expr.ty = self.ctx.resolve(&sig.return_ty);
-                        } else if let Some(ret) = self.lookup_on_type_param_bounds(&derefed, field_name, &expr.span) {
+                        } else if let Some(ret) =
+                            self.lookup_on_type_param_bounds(&derefed, field_name, &expr.span)
+                        {
                             expr.ty = ret;
                         } else {
                             self.error(
@@ -375,7 +463,13 @@ impl<'a> InferenceEngine<'a> {
                 }
             }
 
-            HirExprKind::MethodCall { object, method_name, args, block, .. } => {
+            HirExprKind::MethodCall {
+                object,
+                method_name,
+                args,
+                block,
+                ..
+            } => {
                 self.infer_expr(object);
                 for arg in args.iter_mut() {
                     self.infer_expr(arg);
@@ -428,7 +522,10 @@ impl<'a> InferenceEngine<'a> {
                     if let Ty::Class { name, generic_args } = &derefed {
                         if generic_args.is_empty() {
                             if let Some(inferred) = self.infer_class_generics(name, args) {
-                                Ty::Class { name: name.clone(), generic_args: inferred }
+                                Ty::Class {
+                                    name: name.clone(),
+                                    generic_args: inferred,
+                                }
                             } else {
                                 self.resolve_method_call(&derefed, method_name, args, &expr.span)
                             }
@@ -454,9 +551,7 @@ impl<'a> InferenceEngine<'a> {
                         if let HirExprKind::Closure { body, .. } = &blk.kind {
                             let body_ty = self.ctx.resolve(&body.ty);
                             match &ret_ty {
-                                Ty::Option(inner)
-                                | Ty::Vec(inner)
-                                | Ty::Result(inner, _) => {
+                                Ty::Option(inner) | Ty::Vec(inner) | Ty::Result(inner, _) => {
                                     let _ = unify(inner, &body_ty, self.ctx, &expr.span);
                                 }
                                 _ => {}
@@ -468,19 +563,25 @@ impl<'a> InferenceEngine<'a> {
                 expr.ty = self.ctx.resolve(&ret_ty);
             }
 
-            HirExprKind::FnCall { callee, callee_name, args } => {
+            HirExprKind::FnCall {
+                callee,
+                callee_name,
+                args,
+            } => {
                 for arg in args.iter_mut() {
                     self.infer_expr(arg);
                 }
 
                 // Emit a friendly diagnostic when one of the built-in I/O
-                // functions (`puts`, `eputs`, `print`) is called with a
+                // functions (`puts`, `eputs`, `print`, `println`, `eprintln`) is called with a
                 // non-string argument. Without this check, the argument is
                 // silently passed through unify (which allows arbitrary
                 // integers or function references to reach the runtime),
                 // and the resulting binary crashes or prints `(nil)`.
-                if matches!(callee_name.as_str(), "puts" | "eputs" | "print")
-                    && args.len() == 1
+                if matches!(
+                    callee_name.as_str(),
+                    "puts" | "eputs" | "print" | "println" | "eprintln"
+                ) && args.len() == 1
                 {
                     let arg_ty = self.ctx.resolve(&args[0].ty);
                     if !Self::is_puts_compatible(&arg_ty) {
@@ -496,13 +597,11 @@ impl<'a> InferenceEngine<'a> {
 
                 if *callee != UNRESOLVED_DEF {
                     // Clone the signature out to avoid borrow conflict
-                    let sig_opt = self.symbols.get(*callee).and_then(|def| {
-                        match &def.kind {
-                            DefKind::Function { signature } | DefKind::Method { signature, .. } => {
-                                Some(signature.clone())
-                            }
-                            _ => None,
+                    let sig_opt = self.symbols.get(*callee).and_then(|def| match &def.kind {
+                        DefKind::Function { signature } | DefKind::Method { signature, .. } => {
+                            Some(signature.clone())
                         }
+                        _ => None,
                     });
                     if let Some(signature) = sig_opt {
                         // super() is variadic — skip argument count check
@@ -512,16 +611,19 @@ impl<'a> InferenceEngine<'a> {
                             self.error(
                                 format!(
                                     "function `{}` expects {} arguments, got {}",
-                                    callee_name, signature.params.len(), args.len()
+                                    callee_name,
+                                    signature.params.len(),
+                                    args.len()
                                 ),
                                 &expr.span,
                             );
                         } else {
                             for (arg, param) in args.iter().zip(&signature.params) {
                                 let _ = unify(&arg.ty, &param.ty, self.ctx, &expr.span);
+                                self.check_concurrency_bounds(&param.ty, &arg.ty, &arg.span);
                             }
                         }
-                        expr.ty = self.ctx.resolve(&signature.return_ty);
+                        expr.ty = self.wrap_async_return(&signature);
                     }
                 }
             }
@@ -540,7 +642,10 @@ impl<'a> InferenceEngine<'a> {
                 expr.ty = self.infer_unaryop(*op, &operand_ty, &expr.span);
             }
 
-            HirExprKind::Borrow { mutable, expr: inner } => {
+            HirExprKind::Borrow {
+                mutable,
+                expr: inner,
+            } => {
                 self.infer_expr(inner);
                 let inner_ty = self.ctx.resolve(&inner.ty);
                 expr.ty = if *mutable {
@@ -562,7 +667,11 @@ impl<'a> InferenceEngine<'a> {
                 }
             }
 
-            HirExprKind::If { cond, then_branch, else_branch } => {
+            HirExprKind::If {
+                cond,
+                then_branch,
+                else_branch,
+            } => {
                 self.infer_expr(cond);
                 // Condition must be Bool
                 let cond_ty = self.ctx.resolve(&cond.ty);
@@ -645,7 +754,11 @@ impl<'a> InferenceEngine<'a> {
                 expr.ty = Ty::Unit;
             }
 
-            HirExprKind::Assign { target, value, semantics } => {
+            HirExprKind::Assign {
+                target,
+                value,
+                semantics,
+            } => {
                 self.infer_expr(target);
                 self.infer_expr(value);
                 let target_ty = self.ctx.resolve(&target.ty);
@@ -658,7 +771,11 @@ impl<'a> InferenceEngine<'a> {
                 expr.ty = Ty::Unit;
             }
 
-            HirExprKind::CompoundAssign { target, op: _, value } => {
+            HirExprKind::CompoundAssign {
+                target,
+                op: _,
+                value,
+            } => {
                 self.infer_expr(target);
                 self.infer_expr(value);
                 expr.ty = Ty::Unit;
@@ -695,7 +812,11 @@ impl<'a> InferenceEngine<'a> {
                 };
             }
 
-            HirExprKind::Construct { fields, type_name: _, .. } => {
+            HirExprKind::Construct {
+                fields,
+                type_name: _,
+                ..
+            } => {
                 for (_, field_expr) in fields.iter_mut() {
                     self.infer_expr(field_expr);
                 }
@@ -703,7 +824,14 @@ impl<'a> InferenceEngine<'a> {
                 expr.ty = self.ctx.resolve(&expr.ty);
             }
 
-            HirExprKind::EnumVariant { fields, type_name, variant_name, type_def, variant_idx, .. } => {
+            HirExprKind::EnumVariant {
+                fields,
+                type_name,
+                variant_name,
+                type_def,
+                variant_idx,
+                ..
+            } => {
                 for (_, field_expr) in fields.iter_mut() {
                     self.infer_expr(field_expr);
                 }
@@ -712,7 +840,8 @@ impl<'a> InferenceEngine<'a> {
                 if type_name == "Option" {
                     match variant_name.as_str() {
                         "Some" => {
-                            let inner_ty = fields.first()
+                            let inner_ty = fields
+                                .first()
                                 .map(|(_, e)| self.ctx.resolve(&e.ty))
                                 .unwrap_or(Ty::Error);
                             expr.ty = Ty::Option(Box::new(inner_ty));
@@ -720,7 +849,9 @@ impl<'a> InferenceEngine<'a> {
                         "None" => {
                             // None — use the expected type if we have one, otherwise
                             // use an inference variable
-                            let inner = self.current_return_ty.as_ref()
+                            let inner = self
+                                .current_return_ty
+                                .as_ref()
                                 .and_then(|ret| match ret {
                                     Ty::Option(inner) => Some(*inner.clone()),
                                     _ => None,
@@ -729,17 +860,23 @@ impl<'a> InferenceEngine<'a> {
                             expr.ty = Ty::Option(Box::new(inner));
                         }
                         _ => {
-                            expr.ty = Ty::Enum { name: type_name.clone(), generic_args: vec![] };
+                            expr.ty = Ty::Enum {
+                                name: type_name.clone(),
+                                generic_args: vec![],
+                            };
                         }
                     }
                 } else if type_name == "Result" {
                     match variant_name.as_str() {
                         "Ok" => {
-                            let ok_ty = fields.first()
+                            let ok_ty = fields
+                                .first()
                                 .map(|(_, e)| self.ctx.resolve(&e.ty))
                                 .unwrap_or(Ty::Unit);
                             // Try to get the error type from the function return type
-                            let err_ty = self.current_return_ty.as_ref()
+                            let err_ty = self
+                                .current_return_ty
+                                .as_ref()
                                 .and_then(|ret| match ret {
                                     Ty::Result(_, err) => Some(*err.clone()),
                                     _ => None,
@@ -748,11 +885,14 @@ impl<'a> InferenceEngine<'a> {
                             expr.ty = Ty::Result(Box::new(ok_ty), Box::new(err_ty));
                         }
                         "Err" => {
-                            let err_ty = fields.first()
+                            let err_ty = fields
+                                .first()
                                 .map(|(_, e)| self.ctx.resolve(&e.ty))
                                 .unwrap_or(Ty::Error);
                             // Try to get the ok type from the function return type
-                            let ok_ty = self.current_return_ty.as_ref()
+                            let ok_ty = self
+                                .current_return_ty
+                                .as_ref()
                                 .and_then(|ret| match ret {
                                     Ty::Result(ok, _) => Some(*ok.clone()),
                                     _ => None,
@@ -761,7 +901,10 @@ impl<'a> InferenceEngine<'a> {
                             expr.ty = Ty::Result(Box::new(ok_ty), Box::new(err_ty));
                         }
                         _ => {
-                            expr.ty = Ty::Enum { name: type_name.clone(), generic_args: vec![] };
+                            expr.ty = Ty::Enum {
+                                name: type_name.clone(),
+                                generic_args: vec![],
+                            };
                         }
                     }
                 } else {
@@ -771,14 +914,13 @@ impl<'a> InferenceEngine<'a> {
                     // corresponding payload slot.  Fall back to the
                     // expected return type (for bare unit variants like
                     // `MyOpt.None`) or a fresh inference variable.
-                    let generic_args =
-                        infer_user_enum_generic_args(
-                            self,
-                            *type_def,
-                            *variant_idx,
-                            fields,
-                            type_name,
-                        );
+                    let generic_args = infer_user_enum_generic_args(
+                        self,
+                        *type_def,
+                        *variant_idx,
+                        fields,
+                        type_name,
+                    );
                     expr.ty = Ty::Enum {
                         name: type_name.clone(),
                         generic_args,
@@ -801,7 +943,10 @@ impl<'a> InferenceEngine<'a> {
                 expr.ty = self.infer_index_ty(&obj_ty);
             }
 
-            HirExprKind::Cast { expr: inner, target } => {
+            HirExprKind::Cast {
+                expr: inner,
+                target,
+            } => {
                 self.infer_expr(inner);
                 expr.ty = target.clone();
             }
@@ -872,7 +1017,9 @@ impl<'a> InferenceEngine<'a> {
 
     fn infer_statement(&mut self, stmt: &mut HirStatement) {
         match stmt {
-            HirStatement::Let { ty, value, def_id, .. } => {
+            HirStatement::Let {
+                ty, value, def_id, ..
+            } => {
                 if let Some(ref mut val) = value {
                     self.infer_expr(val);
                     // Coerce a `[e1, e2, ..., eN]` array literal (which the
@@ -884,6 +1031,7 @@ impl<'a> InferenceEngine<'a> {
                     if let Err(e) = self.unify_or_coerce(ty, &val_ty, &val.span) {
                         self.type_error(e);
                     }
+                    self.check_concurrency_bounds(ty, &val_ty, &val.span);
                 }
                 let resolved = self.ctx.resolve(ty);
                 *ty = resolved.clone();
@@ -921,6 +1069,38 @@ impl<'a> InferenceEngine<'a> {
                 return;
             }
             val.ty = Ty::Array(Box::new(elem_ty), expected_len);
+        }
+    }
+
+    fn check_concurrency_bounds(&mut self, expected: &Ty, found: &Ty, span: &Span) {
+        let expected = self.ctx.resolve(expected);
+        let found = self.ctx.resolve(found);
+
+        let bounds: &[crate::hir::types::TraitRef] = match &expected {
+            Ty::TypeParam { bounds, .. } | Ty::ImplTrait(bounds) | Ty::DynTrait(bounds) => {
+                bounds.as_slice()
+            }
+            _ => return,
+        };
+
+        for bound in bounds {
+            match bound.name.as_str() {
+                "Send" if !found.is_send_with(self.symbols) => {
+                    self.diagnostics.push(Diagnostic::error_with_code(
+                        format!("type `{}` does not satisfy `Send`", found),
+                        span.clone(),
+                        "E1011",
+                    ));
+                }
+                "Sync" if !found.is_sync_with(self.symbols) => {
+                    self.diagnostics.push(Diagnostic::error_with_code(
+                        format!("type `{}` does not satisfy `Sync`", found),
+                        span.clone(),
+                        "E1012",
+                    ));
+                }
+                _ => {}
+            }
         }
     }
 
@@ -972,9 +1152,7 @@ impl<'a> InferenceEngine<'a> {
             }
 
             // Logical: both sides Bool, result is Bool
-            BinOp::And | BinOp::Or => {
-                Ty::Bool
-            }
+            BinOp::And | BinOp::Or => Ty::Bool,
 
             // Bitwise: both sides integer, result is same type
             BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => {
@@ -1026,13 +1204,14 @@ impl<'a> InferenceEngine<'a> {
         // the receiver's `Ty::Fn { params, ret }` to concrete types.
         if method_name == "call" {
             let derefed = match obj_ty {
-                Ty::Ref(inner) | Ty::RefMut(inner)
-                | Ty::RefLifetime(_, inner) | Ty::RefMutLifetime(_, inner) => inner.as_ref(),
+                Ty::Ref(inner)
+                | Ty::RefMut(inner)
+                | Ty::RefLifetime(_, inner)
+                | Ty::RefMutLifetime(_, inner) => inner.as_ref(),
                 other => other,
             };
-            if let Ty::Fn { params, ret }
-                | Ty::FnMut { params, ret }
-                | Ty::FnOnce { params, ret } = derefed
+            if let Ty::Fn { params, ret } | Ty::FnMut { params, ret } | Ty::FnOnce { params, ret } =
+                derefed
             {
                 for (arg, param_ty) in args.iter().zip(params.iter()) {
                     let _ = unify(&arg.ty, param_ty, self.ctx, span);
@@ -1042,13 +1221,13 @@ impl<'a> InferenceEngine<'a> {
         }
 
         // Handle built-in methods on known types
-        if let Some(ret) = self.builtin_method_type(obj_ty, method_name, args) {
+        if let Some(ret) = self.builtin_method_type(obj_ty, method_name, args, span) {
             return ret;
         }
 
         // Look up in trait resolver
         if let Some(sig) = self.traits.lookup_method(obj_ty, method_name, self.symbols) {
-            return self.ctx.resolve(&sig.return_ty);
+            return self.wrap_async_return(&sig);
         }
 
         // Method call on a generic type parameter `T: Trait + Trait`
@@ -1070,23 +1249,18 @@ impl<'a> InferenceEngine<'a> {
     /// If `ty` is (a reference to) a `TypeParam`, `impl Trait`, or `dyn Trait`,
     /// consult the trait bounds for a method named `name`. Reports an
     /// ambiguity diagnostic when more than one bound declares the method.
-    fn lookup_on_type_param_bounds(
-        &mut self,
-        ty: &Ty,
-        name: &str,
-        span: &Span,
-    ) -> Option<Ty> {
+    fn lookup_on_type_param_bounds(&mut self, ty: &Ty, name: &str, span: &Span) -> Option<Ty> {
         let bounds: &[crate::hir::types::TraitRef] = match ty {
-            Ty::TypeParam { bounds, .. }
-            | Ty::ImplTrait(bounds)
-            | Ty::DynTrait(bounds) => bounds.as_slice(),
+            Ty::TypeParam { bounds, .. } | Ty::ImplTrait(bounds) | Ty::DynTrait(bounds) => {
+                bounds.as_slice()
+            }
             _ => return None,
         };
         if bounds.is_empty() {
             return None;
         }
         match self.traits.lookup_method_on_bounds(bounds, name) {
-            Ok(Some(sig)) => Some(self.ctx.resolve(&sig.return_ty)),
+            Ok(Some(sig)) => Some(self.wrap_async_return(&sig)),
             Ok(None) => None,
             Err(providers) => {
                 self.error(
@@ -1104,7 +1278,13 @@ impl<'a> InferenceEngine<'a> {
         }
     }
 
-    fn builtin_method_type(&mut self, ty: &Ty, method: &str, _args: &[HirExpr]) -> Option<Ty> {
+    fn builtin_method_type(
+        &mut self,
+        ty: &Ty,
+        method: &str,
+        args: &[HirExpr],
+        span: &Span,
+    ) -> Option<Ty> {
         match (ty, method) {
             // String methods
             (Ty::String, "clone") => Some(Ty::String),
@@ -1115,18 +1295,79 @@ impl<'a> InferenceEngine<'a> {
             (Ty::String, "to_lower") => Some(Ty::String),
             (Ty::String, "to_upper") => Some(Ty::String),
             (Ty::String, "chars") => Some(Ty::Vec(Box::new(Ty::Char))),
-            (Ty::String, "split") => Some(Ty::Class { name: "SplitIter".to_string(), generic_args: vec![] }),
+            // Phase 2 stdlib batch 2 (#02): split returns owned Vec[String]
+            // (per the v1 rule: iterator producers return Vec, not lazy
+            // SplitIter, until prompt 05 ships the lazy iterator story).
+            (Ty::String, "split") => Some(Ty::Vec(Box::new(Ty::String))),
+            (Ty::String, "push") => Some(Ty::Unit),
             (Ty::String, "as_str") => Some(Ty::Str),
             (Ty::String, "from") => Some(Ty::String),
+            (Ty::String, "contains") => Some(Ty::Bool),
+            (Ty::String, "starts_with") => Some(Ty::Bool),
+            (Ty::String, "ends_with") => Some(Ty::Bool),
+            (Ty::String, "repeat") => Some(Ty::String),
+            (Ty::String, "lines") => Some(Ty::Vec(Box::new(Ty::String))),
+            (Ty::String, "replace") => Some(Ty::String),
+            // Phase 2 stdlib (#02).
+            (Ty::String, "new") => Some(Ty::String),
+            (Ty::String, "with_capacity") => Some(Ty::String),
+            (Ty::String, "to_string") => Some(Ty::String),
+            (Ty::String, "bytes") => Some(Ty::Vec(Box::new(Ty::UInt8))),
+            (Ty::String, "trim_start") => Some(Ty::Str),
+            (Ty::String, "trim_end") => Some(Ty::Str),
+            (Ty::String, "find") => Some(Ty::Option(Box::new(Ty::USize))),
+            (Ty::String, "splitn") => Some(Ty::Vec(Box::new(Ty::String))),
+            (Ty::String, "clear") => Some(Ty::Unit),
+            (Ty::String, "truncate") => Some(Ty::Unit),
+            (Ty::String, "insert") => Some(Ty::Unit),
+            (Ty::String, "insert_str") => Some(Ty::Unit),
+            (Ty::String, "remove") => Some(Ty::Char),
+            (Ty::String, "parse_int") => Some(Ty::Result(
+                Box::new(Ty::Int),
+                Box::new(Self::class_ty("ParseIntError", vec![])),
+            )),
+            (Ty::String, "parse_float") => Some(Ty::Result(
+                Box::new(Ty::Float),
+                Box::new(Self::class_ty("ParseFloatError", vec![])),
+            )),
+            (Ty::String, "into_bytes") => Some(Ty::Vec(Box::new(Ty::UInt8))),
             (Ty::Str, "len") => Some(Ty::USize),
             (Ty::Str, "is_empty") => Some(Ty::Bool),
             (Ty::Str, "trim") => Some(Ty::Str),
             (Ty::Str, "to_lower") => Some(Ty::Str),
             (Ty::Str, "to_upper") => Some(Ty::Str),
             (Ty::Str, "chars") => Some(Ty::Vec(Box::new(Ty::Char))),
-            (Ty::Str, "split") => Some(Ty::Class { name: "SplitIter".to_string(), generic_args: vec![] }),
+            (Ty::Str, "split") => Some(Ty::Class {
+                name: "SplitIter".to_string(),
+                generic_args: vec![],
+            }),
             (Ty::Str, "parse_uint") => Some(Ty::Result(Box::new(Ty::USize), Box::new(Ty::Error))),
             (Ty::Str, "as_str") => Some(Ty::Str),
+            (Ty::Str, "contains") => Some(Ty::Bool),
+            (Ty::Str, "starts_with") => Some(Ty::Bool),
+            (Ty::Str, "ends_with") => Some(Ty::Bool),
+            (Ty::Str, "lines") => Some(Ty::Vec(Box::new(Ty::String))),
+            (Ty::Str, "replace") => Some(Ty::String),
+            (Ty::Str, "to_string") => Some(Ty::String),
+            (Ty::Str, "bytes") => Some(Ty::Vec(Box::new(Ty::UInt8))),
+            (Ty::Str, "trim_start") => Some(Ty::Str),
+            (Ty::Str, "trim_end") => Some(Ty::Str),
+            (Ty::Str, "find") => Some(Ty::Option(Box::new(Ty::USize))),
+            (Ty::Str, "splitn") => Some(Ty::Vec(Box::new(Ty::String))),
+            (Ty::Str, "parse_int") => Some(Ty::Result(
+                Box::new(Ty::Int),
+                Box::new(Self::class_ty("ParseIntError", vec![])),
+            )),
+            (Ty::Str, "parse_float") => Some(Ty::Result(
+                Box::new(Ty::Float),
+                Box::new(Self::class_ty("ParseFloatError", vec![])),
+            )),
+            // ParseIntError / ParseFloatError accessors.
+            (Ty::Class { name, .. }, "message")
+                if name == "ParseIntError" || name == "ParseFloatError" =>
+            {
+                Some(Ty::String)
+            }
 
             // Vec methods
             (Ty::Vec(_), "len") => Some(Ty::USize),
@@ -1135,8 +1376,14 @@ impl<'a> InferenceEngine<'a> {
             (Ty::Vec(elem), "pop") => Some(Ty::Option(elem.clone())),
             (Ty::Vec(elem), "get") => Some(Ty::Option(Box::new(Ty::Ref(elem.clone())))),
             (Ty::Vec(elem), "get_mut") => Some(Ty::Option(Box::new(Ty::RefMut(elem.clone())))),
-            (Ty::Vec(elem), "iter") => Some(Ty::Class { name: "VecIter".to_string(), generic_args: vec![*elem.clone()] }),
-            (Ty::Vec(elem), "into_iter") => Some(Ty::Class { name: "VecIntoIter".to_string(), generic_args: vec![*elem.clone()] }),
+            (Ty::Vec(elem), "iter") => Some(Ty::Class {
+                name: "VecIter".to_string(),
+                generic_args: vec![*elem.clone()],
+            }),
+            (Ty::Vec(elem), "into_iter") => Some(Ty::Class {
+                name: "VecIntoIter".to_string(),
+                generic_args: vec![*elem.clone()],
+            }),
             (Ty::Vec(_), "each") => Some(Ty::Unit),
             (Ty::Vec(_), "map") => Some(Ty::Vec(Box::new(self.ctx.fresh_type_var()))),
             (Ty::Vec(elem), "filter") => Some(Ty::Vec(elem.clone())),
@@ -1144,14 +1391,46 @@ impl<'a> InferenceEngine<'a> {
             (Ty::Vec(_), "position") => Some(Ty::Option(Box::new(Ty::USize))),
             (Ty::Vec(_), "to_vec") => Some(ty.clone()),
             (Ty::Vec(_), "new") => Some(ty.clone()),
+            (Ty::Vec(_), "sum") => Some(Ty::Int),
+            (Ty::Vec(_), "count") => Some(Ty::USize),
+            (Ty::Vec(_), "reverse") => Some(ty.clone()),
+            (Ty::Vec(elem), "first") => Some(Ty::Option(elem.clone())),
+            (Ty::Vec(elem), "last") => Some(Ty::Option(elem.clone())),
+            (Ty::Vec(_), "clone") => Some(ty.clone()),
+            (Ty::Vec(_), "contains") => Some(Ty::Bool),
+            (Ty::Vec(_), "sort") => Some(ty.clone()),
+            (Ty::Vec(_), "join") => Some(Ty::String),
+            // Phase 2 stdlib batch 1 (#03).
+            (Ty::Vec(_), "with_capacity") => Some(ty.clone()),
+            (Ty::Vec(_), "capacity") => Some(Ty::USize),
+            (Ty::Vec(_), "clear") => Some(Ty::Unit),
+            (Ty::Vec(_), "truncate") => Some(Ty::Unit),
+            (Ty::Vec(_), "swap") => Some(Ty::Unit),
+            (Ty::Vec(_), "insert") => Some(Ty::Unit),
+            (Ty::Vec(elem), "remove") => Some(*elem.clone()),
+            (Ty::Vec(_), "extend") => Some(Ty::Unit),
+            (Ty::Vec(_), "iter_mut") => Some(ty.clone()),
+            (Ty::Vec(_), "as_slice") => Some(ty.clone()),
+            // Phase 2 stdlib batch 2 (#03).
+            (Ty::Vec(_), "from_iter") => Some(ty.clone()),
+            (Ty::Vec(_), "dedup") => Some(Ty::Unit),
+            (Ty::Vec(_), "sort_by") => Some(Ty::Unit),
+            (Ty::Vec(_), "retain") => Some(Ty::Unit),
 
-            // Hash methods
-            (Ty::Hash(_, _), "new") => Some(ty.clone()),
-            (Ty::Hash(_, _), "insert") => Some(Ty::Unit),
-            (Ty::Hash(_, v), "get") => Some(Ty::Option(Box::new(Ty::Ref(v.clone())))),
-            (Ty::Hash(_, _), "contains_key") => Some(Ty::Bool),
-            (Ty::Hash(_, _), "len") => Some(Ty::USize),
-            (Ty::Hash(_, _), "is_empty") => Some(Ty::Bool),
+            // HashMap methods
+            (Ty::HashMap(_, _), "new") => Some(ty.clone()),
+            (Ty::HashMap(_, _), "insert") => Some(Ty::Unit),
+            (Ty::HashMap(_, v), "get") => Some(Ty::Option(Box::new(Ty::Ref(v.clone())))),
+            (Ty::HashMap(_, _), "contains_key") => Some(Ty::Bool),
+            (Ty::HashMap(_, _), "len") => Some(Ty::USize),
+            (Ty::HashMap(_, _), "is_empty") => Some(Ty::Bool),
+            // Phase 2 stdlib (#04): full HashMap[K,V] surface.
+            (Ty::HashMap(_, _), "with_capacity") => Some(ty.clone()),
+            (Ty::HashMap(_, v), "remove") => Some(Ty::Option(v.clone())),
+            (Ty::HashMap(_, _), "clear") => Some(Ty::Unit),
+            (Ty::HashMap(k, _), "keys") => Some(Ty::Vec(Box::new(Ty::Ref(k.clone())))),
+            (Ty::HashMap(_, v), "values") => Some(Ty::Vec(Box::new(Ty::Ref(v.clone())))),
+            (Ty::HashMap(k, _), "iter") => Some(Ty::Vec(Box::new(Ty::Ref(k.clone())))),
 
             // Set methods
             (Ty::Set(_), "new") => Some(ty.clone()),
@@ -1159,6 +1438,14 @@ impl<'a> InferenceEngine<'a> {
             (Ty::Set(_), "contains") => Some(Ty::Bool),
             (Ty::Set(_), "len") => Some(Ty::USize),
             (Ty::Set(_), "is_empty") => Some(Ty::Bool),
+            // Phase 2 stdlib (#04): full HashSet[T] surface.
+            (Ty::Set(_), "with_capacity") => Some(ty.clone()),
+            (Ty::Set(_), "remove") => Some(Ty::Bool),
+            (Ty::Set(_), "clear") => Some(Ty::Unit),
+            (Ty::Set(t), "iter") => Some(Ty::Vec(Box::new(Ty::Ref(t.clone())))),
+            (Ty::Set(_), "union") => Some(ty.clone()),
+            (Ty::Set(_), "intersection") => Some(ty.clone()),
+            (Ty::Set(_), "difference") => Some(ty.clone()),
 
             // Option try_op (the ? operator desugars to this)
             (Ty::Option(inner), "try_op") => Some(*inner.clone()),
@@ -1179,18 +1466,231 @@ impl<'a> InferenceEngine<'a> {
             (Ty::Result(ok, _), "unwrap") => Some(*ok.clone()),
             (Ty::Result(ok, _), "unwrap_or") => Some(*ok.clone()),
             (Ty::Result(ok, _), "unwrap_or_else") => Some(*ok.clone()),
-            (Ty::Result(_, _), "map") => Some(Ty::Result(Box::new(self.ctx.fresh_type_var()), Box::new(Ty::Error))),
-            (Ty::Result(_, err), "map_err") => Some(Ty::Result(Box::new(self.ctx.fresh_type_var()), err.clone())),
+            (Ty::Result(_, _), "map") => Some(Ty::Result(
+                Box::new(self.ctx.fresh_type_var()),
+                Box::new(Ty::Error),
+            )),
+            (Ty::Result(_, err), "map_err") => {
+                Some(Ty::Result(Box::new(self.ctx.fresh_type_var()), err.clone()))
+            }
             (Ty::Result(_, _), "is_ok") => Some(Ty::Bool),
             (Ty::Result(_, _), "is_err") => Some(Ty::Bool),
 
+            (Ty::Class { name, generic_args }, "await") if name == "Future" => {
+                generic_args.first().cloned()
+            }
+            (Ty::Class { name, .. }, "spawn") if name == "Thread" => {
+                let output = args
+                    .first()
+                    .and_then(|arg| Self::callable_return_ty(&arg.ty))
+                    .unwrap_or_else(|| self.ctx.fresh_type_var());
+                Some(Self::class_ty("JoinHandle", vec![output]))
+            }
+            (Ty::Class { name, .. }, "current") if name == "Thread" => {
+                Some(Self::class_ty("Thread", vec![]))
+            }
+            (Ty::Class { name, .. }, "sleep") if name == "Thread" => Some(Ty::Unit),
+            (Ty::Class { name, .. }, "yield_now") if name == "Thread" => Some(Ty::Unit),
+            (Ty::Class { name, generic_args }, "join") if name == "JoinHandle" => {
+                let output = generic_args.first().cloned().unwrap_or(Ty::Error);
+                Some(Self::result_ty(output, "ThreadPanic"))
+            }
+            (Ty::Class { name, generic_args }, "join!") if name == "JoinHandle" => {
+                generic_args.first().cloned()
+            }
+            (Ty::Class { name, .. }, "thread_id") if name == "JoinHandle" => {
+                Some(Self::class_ty("ThreadId", vec![]))
+            }
+            (Ty::Class { name, .. }, "id") if name == "Thread" => {
+                Some(Self::class_ty("ThreadId", vec![]))
+            }
+            (Ty::Class { name, .. }, "name") if name == "Thread" => {
+                Some(Self::option_ty(Ty::String))
+            }
+            (Ty::Class { name, .. }, "message") if name == "ThreadPanic" => Some(Ty::String),
+            (Ty::Class { name, .. }, "new") if name == "Mutex" => {
+                let inner = args
+                    .first()
+                    .map(|arg| arg.ty.clone())
+                    .unwrap_or_else(|| self.ctx.fresh_type_var());
+                Some(Self::class_ty("Mutex", vec![inner]))
+            }
+            (Ty::Class { name, generic_args }, "lock") if name == "Mutex" => {
+                let inner = generic_args.first().cloned().unwrap_or(Ty::Error);
+                Some(Self::result_ty(
+                    Self::class_ty("MutexGuard", vec![inner]),
+                    "PoisonError",
+                ))
+            }
+            (Ty::Class { name, generic_args }, "lock!") if name == "Mutex" => {
+                let inner = generic_args.first().cloned().unwrap_or(Ty::Error);
+                Some(Self::class_ty("MutexGuard", vec![inner]))
+            }
+            (Ty::Class { name, generic_args }, "try_lock") if name == "Mutex" => {
+                let inner = generic_args.first().cloned().unwrap_or(Ty::Error);
+                Some(Self::option_ty(Self::class_ty("MutexGuard", vec![inner])))
+            }
+            (Ty::Class { name, generic_args }, "into_inner") if name == "Mutex" => {
+                let inner = generic_args.first().cloned().unwrap_or(Ty::Error);
+                Some(Self::result_ty(inner, "PoisonError"))
+            }
+            (Ty::Class { name, generic_args }, "deref")
+                if name == "MutexGuard" || name == "Arc" =>
+            {
+                let inner = generic_args.first().cloned().unwrap_or(Ty::Error);
+                Some(Ty::Ref(Box::new(inner)))
+            }
+            (Ty::Class { name, generic_args }, "deref_mut") if name == "MutexGuard" => {
+                let inner = generic_args.first().cloned().unwrap_or(Ty::Error);
+                Some(Ty::RefMut(Box::new(inner)))
+            }
+            (Ty::Class { name, .. }, "new") if name == "Arc" => {
+                let inner = args
+                    .first()
+                    .map(|arg| arg.ty.clone())
+                    .unwrap_or_else(|| self.ctx.fresh_type_var());
+                Some(Self::class_ty("Arc", vec![inner]))
+            }
+            (Ty::Class { name, .. }, "clone") if name == "Arc" => Some(ty.clone()),
+            (Ty::Class { name, .. }, "strong_count") if name == "Arc" => Some(Ty::USize),
+            (Ty::Class { name, .. }, "weak_count") if name == "Arc" => Some(Ty::USize),
+
             // Iterator-like methods on any "Iter" class
-            (Ty::Class { name, .. }, "filter") if name.ends_with("Iter") => {
-                Some(ty.clone())
+            //
+            // Phase 2 stdlib (#05): the Iterator surface lives at the MIR
+            // layer — `vec.iter` returns a `*Iter` class which is a
+            // run-time no-op pass-through (`riven_iter_to_vec`). Eager
+            // terminators that don't take a closure (`sum`, `count`,
+            // `first`, `last`, `contains`, `reverse`, `clone`) route to
+            // the same `riven_vec_*` helpers their `Vec` counterparts use,
+            // so all that's missing is the type-check entry.
+            (Ty::Class { name, .. }, "filter") if name.ends_with("Iter") => Some(ty.clone()),
+            (Ty::Class { name, .. }, "map") if name.ends_with("Iter") => Some(ty.clone()),
+            (Ty::Class { name, generic_args }, "sum") if name.ends_with("Iter") => {
+                // Sum returns the element type for numeric Items. The
+                // runtime path is `riven_vec_sum` which integer-sums
+                // raw 64-bit slots — calling it on a non-`Add` element
+                // type produces nonsensical bytes-as-int sums (e.g.
+                // `Vec[String].iter.sum` would add string pointers).
+                //
+                // Phase 2 stdlib (#05 batch 3): reject non-`Add` Items
+                // up front. The v1 trait machinery only models a few
+                // built-in numeric types as `Add`; surface the rejection
+                // here rather than at the runtime layer so users get a
+                // typeck-time error with a real source span. Inferred
+                // element types (`Ty::Infer`) and the type-error sentinel
+                // pass through silently — they will be either pinned by
+                // a downstream constraint (still numeric) or already
+                // surfaced as a separate diagnostic.
+                let elem = generic_args.first().cloned().unwrap_or_else(|| Ty::Int);
+                let resolved = self.ctx.resolve(&elem);
+                if !is_iter_sum_compatible(&resolved) {
+                    self.diagnostics.push(Diagnostic::error_with_code(
+                        format!(
+                            "`sum` requires an iterator whose Item implements `Add`; \
+                             `{resolved}` is not numeric"
+                        ),
+                        span.clone(),
+                        "E0700",
+                    ));
+                    return Some(Ty::Error);
+                }
+                Some(resolved)
             }
-            (Ty::Class { name, .. }, "map") if name.ends_with("Iter") => {
-                Some(ty.clone())
+            (Ty::Class { name, .. }, "count") if name.ends_with("Iter") => Some(Ty::USize),
+            // Phase 2 stdlib (#05 batch 2): closure-taking eager
+            // terminators. `fold` returns the accumulator type — for
+            // v1 we surface a fresh inference variable that the
+            // closure-body unification will pin to the real type
+            // (the MIR inliner reads `args[0].ty` to seed the seed).
+            // `all` / `any` always return Bool. Inlining happens at
+            // MIR; the runtime never sees a `VecIter_fold` call.
+            (Ty::Class { name, .. }, "fold") if name.ends_with("Iter") => {
+                if let Some(init) = args.first() {
+                    Some(self.ctx.resolve(&init.ty))
+                } else {
+                    Some(self.ctx.fresh_type_var())
+                }
             }
+            (Ty::Class { name, .. }, "all") if name.ends_with("Iter") => Some(Ty::Bool),
+            (Ty::Class { name, .. }, "any") if name.ends_with("Iter") => Some(Ty::Bool),
+            // `take(n)` / `skip(n)` are lazy combinators — they return
+            // a same-shape iter wrapper. v1 ships eager-materialising
+            // runtime helpers (`riven_vec_take` / `riven_vec_skip`)
+            // that hand back a fresh `RivenVec*`, so the surface type
+            // stays the receiver's iter class for chaining.
+            (Ty::Class { name, .. }, "take") if name.ends_with("Iter") => Some(ty.clone()),
+            (Ty::Class { name, .. }, "skip") if name.ends_with("Iter") => Some(ty.clone()),
+            // Phase 2 stdlib (#05 batch 3): `chain(other)` returns the
+            // same iter shape (concatenation preserves Item type).
+            // `zip(other)` returns an iter whose Item is the pair
+            // `(Self.Item, Other.Item)` — for v1 we surface a fresh
+            // `*Iter[(T, U)]` so downstream `.count` and `.collect_vec`
+            // see the right element type.  `collect_vec` is the v1
+            // type-specific shorthand for `collect[Vec[T]]` — it
+            // materialises the iter into a `Vec[T]`.
+            (Ty::Class { name, .. }, "chain") if name.ends_with("Iter") => Some(ty.clone()),
+            (Ty::Class { name, generic_args }, "zip") if name.ends_with("Iter") => {
+                let self_item = generic_args
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| self.ctx.fresh_type_var());
+                let other_item = match args.first() {
+                    Some(arg) => match self.ctx.resolve(&arg.ty) {
+                        Ty::Class { generic_args, .. } => generic_args
+                            .first()
+                            .cloned()
+                            .unwrap_or_else(|| self.ctx.fresh_type_var()),
+                        Ty::Vec(elem) => *elem,
+                        other => other,
+                    },
+                    None => self.ctx.fresh_type_var(),
+                };
+                Some(Ty::Class {
+                    name: name.clone(),
+                    generic_args: vec![Ty::Tuple(vec![self_item, other_item])],
+                })
+            }
+            (Ty::Class { name, generic_args }, "collect_vec") if name.ends_with("Iter") => {
+                let elem = generic_args
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| self.ctx.fresh_type_var());
+                Some(Ty::Vec(Box::new(elem)))
+            }
+            (Ty::Class { name, .. }, "read_line") if name == "Stdin" => Some(Ty::Result(
+                Box::new(Ty::String),
+                Box::new(Ty::Class {
+                    name: "IoError".to_string(),
+                    generic_args: vec![],
+                }),
+            )),
+            (Ty::Class { name, .. }, "read_to_string") if name == "Stdin" => Some(Ty::Result(
+                Box::new(Ty::String),
+                Box::new(Ty::Class {
+                    name: "IoError".to_string(),
+                    generic_args: vec![],
+                }),
+            )),
+            (Ty::Class { name, .. }, "write_str") if name == "Stdout" || name == "Stderr" => {
+                Some(Ty::Result(
+                    Box::new(Ty::Unit),
+                    Box::new(Ty::Class {
+                        name: "IoError".to_string(),
+                        generic_args: vec![],
+                    }),
+                ))
+            }
+            (Ty::Class { name, .. }, "flush") if name == "Stdout" || name == "Stderr" => {
+                Some(Ty::Result(
+                    Box::new(Ty::Unit),
+                    Box::new(Ty::Class {
+                        name: "IoError".to_string(),
+                        generic_args: vec![],
+                    }),
+                ))
+            }
+            (Ty::Class { name, .. }, "message") if name == "IoError" => Some(Ty::String),
             (Ty::Class { name, generic_args }, "to_vec") if name.ends_with("Iter") => {
                 let elem = if name == "SplitIter" {
                     // SplitIter yields &str segments
@@ -1200,7 +1700,9 @@ impl<'a> InferenceEngine<'a> {
                 };
                 Some(Ty::Vec(Box::new(elem)))
             }
-            (Ty::Class { name, .. }, "enumerate") if name.ends_with("Iter") || name.ends_with("IntoIter") => {
+            (Ty::Class { name, .. }, "enumerate")
+                if name.ends_with("Iter") || name.ends_with("IntoIter") =>
+            {
                 Some(ty.clone())
             }
             (Ty::Class { name, generic_args }, "partition") if name.ends_with("Iter") => {
@@ -1247,10 +1749,20 @@ impl<'a> InferenceEngine<'a> {
         match obj_ty {
             Ty::Vec(elem) => *elem.clone(),
             Ty::Array(elem, _) => *elem.clone(),
-            Ty::Hash(_, v) => Ty::Option(v.clone()),
+            // `m[&k]` panics on missing keys (mirrors Rust's `Index for
+            // HashMap`); the runtime helper `riven_hash_index` returns the
+            // raw value slot rather than an Option, so the surface type is
+            // V directly. See lower.rs Index handler for the dispatch.
+            Ty::HashMap(_, v) => *v.clone(),
+            // Reference-to-HashMap also indexable (e.g. `&map[k]`).
+            Ty::Ref(inner) | Ty::RefMut(inner) => self.infer_index_ty(inner),
             Ty::Tuple(elems) => {
                 // Dynamic index — can't know at compile time
-                if elems.is_empty() { Ty::Error } else { elems[0].clone() }
+                if elems.is_empty() {
+                    Ty::Error
+                } else {
+                    elems[0].clone()
+                }
             }
             Ty::String | Ty::Str => Ty::Char,
             _ => Ty::Error,
@@ -1322,7 +1834,8 @@ impl<'a> InferenceEngine<'a> {
     }
 
     fn error(&mut self, message: String, span: &Span) {
-        self.diagnostics.push(Diagnostic::error(message, span.clone()));
+        self.diagnostics
+            .push(Diagnostic::error(message, span.clone()));
     }
 
     /// Returns `true` if the type is acceptable as an argument to `puts`,
@@ -1343,7 +1856,8 @@ impl<'a> InferenceEngine<'a> {
     }
 
     fn type_error(&mut self, err: TypeError) {
-        self.diagnostics.push(Diagnostic::error(err.message, err.span));
+        self.diagnostics
+            .push(Diagnostic::error(err.message, err.span));
     }
 
     /// Infer the generic arguments of a class from the concrete types of a
@@ -1359,7 +1873,10 @@ impl<'a> InferenceEngine<'a> {
                 if def.name == class_name {
                     if let DefKind::Class { info } = &def.kind {
                         result = Some(
-                            info.generic_params.iter().map(|gp| gp.name.clone()).collect()
+                            info.generic_params
+                                .iter()
+                                .map(|gp| gp.name.clone())
+                                .collect(),
                         );
                         break;
                     }
@@ -1379,9 +1896,8 @@ impl<'a> InferenceEngine<'a> {
                     if let DefKind::Method { parent, signature } = &def.kind {
                         if let Some(parent_def) = self.symbols.get(*parent) {
                             if parent_def.name == class_name {
-                                result = Some(
-                                    signature.params.iter().map(|p| p.ty.clone()).collect()
-                                );
+                                result =
+                                    Some(signature.params.iter().map(|p| p.ty.clone()).collect());
                                 break;
                             }
                         }
@@ -1392,8 +1908,7 @@ impl<'a> InferenceEngine<'a> {
         };
 
         // Walk the parameters and capture TypeParam positions.
-        let mut bindings: std::collections::HashMap<String, Ty> =
-            std::collections::HashMap::new();
+        let mut bindings: std::collections::HashMap<String, Ty> = std::collections::HashMap::new();
         for (param_ty, arg) in init_params.iter().zip(args.iter()) {
             Self::collect_typeparam_bindings(param_ty, &self.ctx.resolve(&arg.ty), &mut bindings);
         }
@@ -1419,10 +1934,11 @@ impl<'a> InferenceEngine<'a> {
     ) {
         match (param, arg) {
             (Ty::TypeParam { name, .. }, concrete) => {
-                bindings.entry(name.clone()).or_insert_with(|| concrete.clone());
+                bindings
+                    .entry(name.clone())
+                    .or_insert_with(|| concrete.clone());
             }
-            (Ty::Ref(a), Ty::Ref(b))
-            | (Ty::RefMut(a), Ty::RefMut(b)) => {
+            (Ty::Ref(a), Ty::Ref(b)) | (Ty::RefMut(a), Ty::RefMut(b)) => {
                 Self::collect_typeparam_bindings(a, b, bindings);
             }
             (Ty::Ref(a), b) | (Ty::RefMut(a), b) => {
@@ -1460,11 +1976,19 @@ impl<'a> InferenceEngine<'a> {
             for def in self.symbols.iter() {
                 if def.name == *name {
                     if let DefKind::Class { info } = &def.kind {
-                        out = info.generic_params.iter().map(|gp| gp.name.clone()).collect();
+                        out = info
+                            .generic_params
+                            .iter()
+                            .map(|gp| gp.name.clone())
+                            .collect();
                         break;
                     }
                     if let DefKind::Struct { info } = &def.kind {
-                        out = info.generic_params.iter().map(|gp| gp.name.clone()).collect();
+                        out = info
+                            .generic_params
+                            .iter()
+                            .map(|gp| gp.name.clone())
+                            .collect();
                         break;
                     }
                 }
@@ -1483,9 +2007,7 @@ impl<'a> InferenceEngine<'a> {
 
     fn subst_ty(ty: &Ty, subst: &std::collections::HashMap<String, Ty>) -> Ty {
         match ty {
-            Ty::TypeParam { name, .. } => {
-                subst.get(name).cloned().unwrap_or_else(|| ty.clone())
-            }
+            Ty::TypeParam { name, .. } => subst.get(name).cloned().unwrap_or_else(|| ty.clone()),
             Ty::Ref(inner) => Ty::Ref(Box::new(Self::subst_ty(inner, subst))),
             Ty::RefMut(inner) => Ty::RefMut(Box::new(Self::subst_ty(inner, subst))),
             Ty::Option(inner) => Ty::Option(Box::new(Self::subst_ty(inner, subst))),
@@ -1493,6 +2015,39 @@ impl<'a> InferenceEngine<'a> {
             _ => ty.clone(),
         }
     }
+}
+
+/// Whether `*Iter[T].sum` should be accepted at typeck.
+///
+/// The runtime path is `riven_vec_sum`, an integer-only summation over
+/// the raw 64-bit slot. Allowing only `Add`-style numeric Items here
+/// matches that runtime contract: any pointer-shaped Item (String,
+/// Vec, HashMap, custom class) would silently produce nonsense.
+///
+/// `Ty::Infer` and `Ty::Error` pass through — they will be either
+/// pinned to a numeric type by a downstream constraint or already
+/// surfaced as a separate diagnostic. Phase 2 stdlib (#05 batch 3).
+fn is_iter_sum_compatible(ty: &Ty) -> bool {
+    matches!(
+        ty,
+        Ty::Int
+            | Ty::Int8
+            | Ty::Int16
+            | Ty::Int32
+            | Ty::Int64
+            | Ty::ISize
+            | Ty::UInt
+            | Ty::UInt8
+            | Ty::UInt16
+            | Ty::UInt32
+            | Ty::UInt64
+            | Ty::USize
+            | Ty::Float
+            | Ty::Float32
+            | Ty::Float64
+            | Ty::Infer(_)
+            | Ty::Error
+    )
 }
 
 /// Infer the concrete `generic_args` for a user-defined enum variant
@@ -1520,8 +2075,11 @@ fn infer_user_enum_generic_args(
             DefKind::Enum { info } => info,
             _ => return vec![],
         };
-        let param_names: Vec<String> =
-            info.generic_params.iter().map(|gp| gp.name.clone()).collect();
+        let param_names: Vec<String> = info
+            .generic_params
+            .iter()
+            .map(|gp| gp.name.clone())
+            .collect();
         if param_names.is_empty() {
             return vec![];
         }
@@ -1546,8 +2104,7 @@ fn infer_user_enum_generic_args(
 
     // Match each declared payload slot to the actual arg type and build
     // a name -> concrete-ty substitution.
-    let mut subst: std::collections::HashMap<String, Ty> =
-        std::collections::HashMap::new();
+    let mut subst: std::collections::HashMap<String, Ty> = std::collections::HashMap::new();
     for (decl_ty, (_, arg_expr)) in variant_field_tys.iter().zip(fields.iter()) {
         let arg_ty = engine.ctx.resolve(&arg_expr.ty);
         record_tyvar_binding(decl_ty, &arg_ty, &mut subst);
@@ -1556,13 +2113,9 @@ fn infer_user_enum_generic_args(
     // For any generic param we didn't pin, try the enclosing return type
     // (`Ty::Enum { name: type_name, generic_args: [...] }`), else fall
     // back to a fresh inference variable.
-    let return_args: Option<Vec<Ty>> = engine
-        .current_return_ty
-        .as_ref()
-        .and_then(|ret| match ret {
-            Ty::Enum { name, generic_args } if name == type_name => {
-                Some(generic_args.clone())
-            }
+    let return_args: Option<Vec<Ty>> =
+        engine.current_return_ty.as_ref().and_then(|ret| match ret {
+            Ty::Enum { name, generic_args } if name == type_name => Some(generic_args.clone()),
             _ => None,
         });
 
@@ -1596,7 +2149,9 @@ fn record_tyvar_binding(
 ) {
     match (decl_ty, arg_ty) {
         (Ty::TypeParam { name, .. }, concrete) => {
-            subst.entry(name.clone()).or_insert_with(|| concrete.clone());
+            subst
+                .entry(name.clone())
+                .or_insert_with(|| concrete.clone());
         }
         (Ty::Option(a), Ty::Option(b)) => record_tyvar_binding(a, b, subst),
         (Ty::Vec(a), Ty::Vec(b)) => record_tyvar_binding(a, b, subst),
@@ -1611,10 +2166,16 @@ fn record_tyvar_binding(
                 record_tyvar_binding(x, y, subst);
             }
         }
-        (Ty::Enum { name: an, generic_args: aa },
-         Ty::Enum { name: bn, generic_args: ba })
-            if an == bn && aa.len() == ba.len() =>
-        {
+        (
+            Ty::Enum {
+                name: an,
+                generic_args: aa,
+            },
+            Ty::Enum {
+                name: bn,
+                generic_args: ba,
+            },
+        ) if an == bn && aa.len() == ba.len() => {
             for (x, y) in aa.iter().zip(ba.iter()) {
                 record_tyvar_binding(x, y, subst);
             }
@@ -1647,9 +2208,7 @@ fn collect_break_types(
             }
         }
         // Nested loops own their own breaks — do not descend.
-        HirExprKind::Loop { .. }
-        | HirExprKind::While { .. }
-        | HirExprKind::For { .. } => {}
+        HirExprKind::Loop { .. } | HirExprKind::While { .. } | HirExprKind::For { .. } => {}
         // Returns never flow into our loop's result either; skip entirely.
         HirExprKind::Return(_) => {}
 
@@ -1671,7 +2230,11 @@ fn collect_break_types(
                 collect_break_types(t, ctx, acc, loop_span);
             }
         }
-        HirExprKind::If { cond, then_branch, else_branch } => {
+        HirExprKind::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
             collect_break_types(cond, ctx, acc, loop_span);
             collect_break_types(then_branch, ctx, acc, loop_span);
             if let Some(e) = else_branch {
@@ -1707,7 +2270,12 @@ fn collect_break_types(
                 collect_break_types(a, ctx, acc, loop_span);
             }
         }
-        HirExprKind::MethodCall { object, args, block, .. } => {
+        HirExprKind::MethodCall {
+            object,
+            args,
+            block,
+            ..
+        } => {
             collect_break_types(object, ctx, acc, loop_span);
             for a in args {
                 collect_break_types(a, ctx, acc, loop_span);

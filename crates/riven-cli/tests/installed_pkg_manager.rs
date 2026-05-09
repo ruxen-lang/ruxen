@@ -23,8 +23,7 @@ fn workspace_root() -> PathBuf {
 }
 
 fn runtime_c_src() -> PathBuf {
-    workspace_root()
-        .join("crates/riven-core/runtime/runtime.c")
+    workspace_root().join("crates/riven-core/runtime/runtime.c")
 }
 
 fn riven_exe() -> PathBuf {
@@ -40,26 +39,28 @@ fn riven_exe() -> PathBuf {
 /// started.
 fn shared_install() -> &'static Path {
     static INSTALL: OnceLock<(TempDir, PathBuf)> = OnceLock::new();
-    &INSTALL.get_or_init(|| {
-        let temp = tempfile::tempdir().expect("mktemp shared install");
-        let bin_dir = temp.path().join("bin");
-        let lib_dir = temp.path().join("lib");
-        fs::create_dir_all(&bin_dir).unwrap();
-        fs::create_dir_all(&lib_dir).unwrap();
+    &INSTALL
+        .get_or_init(|| {
+            let temp = tempfile::tempdir().expect("mktemp shared install");
+            let bin_dir = temp.path().join("bin");
+            let lib_dir = temp.path().join("lib");
+            fs::create_dir_all(&bin_dir).unwrap();
+            fs::create_dir_all(&lib_dir).unwrap();
 
-        let staged = bin_dir.join("riven");
-        fs::copy(riven_exe(), &staged).expect("copy riven");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&staged).unwrap().permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&staged, perms).unwrap();
-        }
+            let staged = bin_dir.join("riven");
+            fs::copy(riven_exe(), &staged).expect("copy riven");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mut perms = fs::metadata(&staged).unwrap().permissions();
+                perms.set_mode(0o755);
+                fs::set_permissions(&staged, perms).unwrap();
+            }
 
-        fs::copy(runtime_c_src(), lib_dir.join("runtime.c")).unwrap();
-        (temp, staged)
-    }).1
+            fs::copy(runtime_c_src(), lib_dir.join("runtime.c")).unwrap();
+            (temp, staged)
+        })
+        .1
 }
 
 /// Return a fresh per-test tempdir for project files and the path to the
@@ -154,11 +155,7 @@ fn run_after_editing_main() {
 
     let project = project_parent.join("edits");
     let main = project.join("src/main.rvn");
-    fs::write(
-        &main,
-        "def main\n  puts \"first\"\nend\n",
-    )
-    .unwrap();
+    fs::write(&main, "def main\n  puts \"first\"\nend\n").unwrap();
 
     let first = Command::new(&riven)
         .arg("run")
@@ -168,11 +165,7 @@ fn run_after_editing_main() {
     assert!(first.status.success());
     assert!(String::from_utf8_lossy(&first.stdout).contains("first"));
 
-    fs::write(
-        &main,
-        "def main\n  puts \"second\"\nend\n",
-    )
-    .unwrap();
+    fs::write(&main, "def main\n  puts \"second\"\nend\n").unwrap();
 
     let second = Command::new(&riven)
         .arg("run")
@@ -184,6 +177,34 @@ fn run_after_editing_main() {
     assert!(
         stdout.contains("second"),
         "edits didn't take effect. got:\n{}",
+        stdout,
+    );
+}
+
+#[test]
+fn example_cli_utility_runs_from_staged_install() {
+    let (_temp, riven) = stage_install();
+    let example = workspace_root().join("examples/01-cli-utility");
+
+    let run = Command::new(&riven)
+        .arg("run")
+        .arg("--")
+        .arg("README.md")
+        .current_dir(&example)
+        .output()
+        .expect("spawn riven run for example");
+
+    assert!(
+        run.status.success(),
+        "example run failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(
+        stdout.contains("Prints a file to stdout using the current Tier-1 stdlib surface."),
+        "example output did not include README content. got:\n{}",
         stdout,
     );
 }

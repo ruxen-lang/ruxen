@@ -1,0 +1,15 @@
+def main
+  let mut v: Vec[Int] = Vec.new
+  v.push(3)
+  v.push(1)
+  v.push(4)
+  v.push(1)
+  v.push(5)
+  v.push(9)
+  v.push(2)
+  v.push(6)
+  v.sort_by { |a, b| a - b }
+  for x in &v
+    puts "#{x}"
+  end
+end

@@ -101,6 +101,12 @@ riven build
 riven run
 ```
 
+### Examples
+
+For complete runnable projects, see [examples/](examples/README.md).
+
+The first in-tree example is [`examples/01-cli-utility/`](examples/01-cli-utility/README.md), a small CLI that exercises `std::env::args`, `std::fs::read_to_string`, the `?` operator, and `std::process::exit`.
+
 ### Compile a Single File
 
 ```bash
@@ -271,8 +277,8 @@ Two codegen backends:
 | Type Inference | Complete | Bidirectional inference, trait resolution, coercion |
 | Borrow Checker | Mostly complete | Move/borrow tracking with NLL; lifetime checking infrastructure present, not fully wired |
 | MIR Lowering | Mostly complete | Break/continue and capturing closures have gaps |
-| Cranelift Codegen | Mostly complete | Primary backend; drop is currently a no-op |
-| LLVM Codegen | Experimental | Feature-gated; less complete than Cranelift |
+| Cranelift Codegen | Mostly complete | Primary backend; drop is wired (user `def drop` runs, heap-owning locals freed at scope exit per type) |
+| LLVM Codegen | Experimental | Feature-gated; less complete than Cranelift; no DWARF debug info yet — gdb/lldb show no source-line mapping for `--backend=llvm` builds |
 | C Runtime | Mostly complete | String, Vec, I/O, Option/Result operations; Hash/Set stubs |
 | Formatter | Complete | AST-based, zero-config, comment preservation, `fmt: off` support |
 | Package Manager | Complete | Project scaffolding, dependency resolution, lock files |
@@ -293,4 +299,13 @@ Two codegen backends:
 
 ## License
 
-TBD
+Riven is dual-licensed under either of:
+
+- [Apache License, Version 2.0](LICENSE-APACHE)
+- [MIT License](LICENSE-MIT)
+
+at your option. This is the same licensing scheme used by the Rust project.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in Riven by you, as defined in the Apache-2.0 license, shall be
+dual-licensed as above, without any additional terms or conditions.

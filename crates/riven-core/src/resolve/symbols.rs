@@ -4,7 +4,7 @@
 //! DefId and a corresponding Definition entry in the symbol table.
 
 use crate::hir::nodes::{DefId, HirSelfMode};
-use crate::hir::types::{Ty, TraitRef};
+use crate::hir::types::{TraitRef, Ty};
 use crate::lexer::token::Span;
 use crate::parser::ast::Visibility;
 
@@ -13,6 +13,7 @@ use crate::parser::ast::Visibility;
 pub struct FnSignature {
     pub self_mode: Option<HirSelfMode>,
     pub is_class_method: bool,
+    pub is_async: bool,
     pub generic_params: Vec<GenericParamInfo>,
     pub params: Vec<ParamInfo>,
     pub return_ty: Ty,
@@ -38,6 +39,11 @@ pub struct ClassInfo {
     pub parent: Option<DefId>,
     pub fields: Vec<DefId>,
     pub methods: Vec<DefId>,
+    pub derive_traits: Vec<String>,
+    pub opt_out_send: bool,
+    pub opt_out_sync: bool,
+    pub manual_send: bool,
+    pub manual_sync: bool,
 }
 
 /// Information about a struct definition.
@@ -46,6 +52,11 @@ pub struct StructInfo {
     pub generic_params: Vec<GenericParamInfo>,
     pub fields: Vec<DefId>,
     pub derive_traits: Vec<String>,
+    pub repr: Vec<String>,
+    pub opt_out_send: bool,
+    pub opt_out_sync: bool,
+    pub manual_send: bool,
+    pub manual_sync: bool,
 }
 
 /// Information about an enum definition.
@@ -53,6 +64,11 @@ pub struct StructInfo {
 pub struct EnumInfo {
     pub generic_params: Vec<GenericParamInfo>,
     pub variants: Vec<DefId>,
+    pub derive_traits: Vec<String>,
+    pub opt_out_send: bool,
+    pub opt_out_sync: bool,
+    pub manual_send: bool,
+    pub manual_sync: bool,
 }
 
 /// Information about a trait definition.
@@ -226,11 +242,25 @@ impl SymbolTable {
             DefKind::Const { ty } => Some(ty.clone()),
             DefKind::Function { signature } => Some(Ty::Fn {
                 params: signature.params.iter().map(|p| p.ty.clone()).collect(),
-                ret: Box::new(signature.return_ty.clone()),
+                ret: Box::new(if signature.is_async {
+                    Ty::Class {
+                        name: "Future".to_string(),
+                        generic_args: vec![signature.return_ty.clone()],
+                    }
+                } else {
+                    signature.return_ty.clone()
+                }),
             }),
             DefKind::Method { signature, .. } => Some(Ty::Fn {
                 params: signature.params.iter().map(|p| p.ty.clone()).collect(),
-                ret: Box::new(signature.return_ty.clone()),
+                ret: Box::new(if signature.is_async {
+                    Ty::Class {
+                        name: "Future".to_string(),
+                        generic_args: vec![signature.return_ty.clone()],
+                    }
+                } else {
+                    signature.return_ty.clone()
+                }),
             }),
             _ => None,
         })
@@ -241,6 +271,39 @@ impl Default for SymbolTable {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Returns `true` when the type should be treated as `Copy` after consulting
+/// user-defined `derive Copy` metadata in the symbol table.
+pub fn ty_is_effectively_copy(ty: &Ty, symbols: &SymbolTable) -> bool {
+    ty.is_copy_with(symbols)
+}
+
+/// Walk through transparent wrappers and check whether the underlying
+/// user-defined type carries the requested derive trait.
+pub fn ty_has_derive_trait(ty: &Ty, symbols: &SymbolTable, trait_name: &str) -> bool {
+    let name = match ty {
+        Ty::Struct { name, .. } | Ty::Class { name, .. } | Ty::Enum { name, .. } => name,
+        Ty::Ref(inner)
+        | Ty::RefMut(inner)
+        | Ty::RefLifetime(_, inner)
+        | Ty::RefMutLifetime(_, inner) => return ty_has_derive_trait(inner, symbols, trait_name),
+        Ty::Alias { target, .. } => return ty_has_derive_trait(target, symbols, trait_name),
+        Ty::Newtype { inner, .. } => return ty_has_derive_trait(inner, symbols, trait_name),
+        _ => return false,
+    };
+
+    symbols.iter().any(|def| {
+        if def.name != *name {
+            return false;
+        }
+        match &def.kind {
+            DefKind::Class { info } => info.derive_traits.iter().any(|t| t == trait_name),
+            DefKind::Struct { info } => info.derive_traits.iter().any(|t| t == trait_name),
+            DefKind::Enum { info } => info.derive_traits.iter().any(|t| t == trait_name),
+            _ => false,
+        }
+    })
 }
 
 #[cfg(test)]
@@ -261,11 +324,46 @@ mod tests {
             signature: FnSignature {
                 self_mode: None,
                 is_class_method: false,
+                is_async: false,
                 generic_params: Vec::new(),
                 params: Vec::new(),
                 return_ty: ret,
             },
         }
+    }
+
+    #[test]
+    fn derive_copy_struct_is_effectively_copy() {
+        let mut symbols = SymbolTable::new();
+        symbols.define(
+            "Point".to_string(),
+            DefKind::Struct {
+                info: StructInfo {
+                    generic_params: Vec::new(),
+                    fields: Vec::new(),
+                    derive_traits: vec!["Copy".to_string(), "Clone".to_string()],
+                    repr: Vec::new(),
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                },
+            },
+            Visibility::Public,
+            dummy_span(),
+        );
+
+        let point = Ty::Struct {
+            name: "Point".to_string(),
+            generic_args: Vec::new(),
+        };
+
+        assert!(ty_is_effectively_copy(&point, &symbols));
+        assert!(ty_is_effectively_copy(
+            &Ty::Tuple(vec![point.clone(), Ty::Int]),
+            &symbols
+        ));
+        assert!(!ty_is_effectively_copy(&Ty::Vec(Box::new(point)), &symbols));
     }
 
     fn class_kind() -> DefKind {
@@ -275,6 +373,11 @@ mod tests {
                 parent: None,
                 fields: Vec::new(),
                 methods: Vec::new(),
+                derive_traits: Vec::new(),
+                opt_out_send: false,
+                opt_out_sync: false,
+                manual_send: false,
+                manual_sync: false,
             },
         }
     }
@@ -295,9 +398,24 @@ mod tests {
     #[test]
     fn define_returns_sequential_defids_starting_at_zero() {
         let mut table = SymbolTable::new();
-        let a = table.define("a".to_string(), var_kind(Ty::Int), Visibility::Private, dummy_span());
-        let b = table.define("b".to_string(), var_kind(Ty::Bool), Visibility::Private, dummy_span());
-        let c = table.define("c".to_string(), var_kind(Ty::Unit), Visibility::Private, dummy_span());
+        let a = table.define(
+            "a".to_string(),
+            var_kind(Ty::Int),
+            Visibility::Private,
+            dummy_span(),
+        );
+        let b = table.define(
+            "b".to_string(),
+            var_kind(Ty::Bool),
+            Visibility::Private,
+            dummy_span(),
+        );
+        let c = table.define(
+            "c".to_string(),
+            var_kind(Ty::Unit),
+            Visibility::Private,
+            dummy_span(),
+        );
         assert_eq!(a, 0);
         assert_eq!(b, 1);
         assert_eq!(c, 2);
@@ -342,10 +460,21 @@ mod tests {
             Visibility::Public,
             dummy_span(),
         );
-        let c = table.define("Widget".to_string(), class_kind(), Visibility::Public, dummy_span());
+        let c = table.define(
+            "Widget".to_string(),
+            class_kind(),
+            Visibility::Public,
+            dummy_span(),
+        );
 
-        assert!(matches!(table.get(v).unwrap().kind, DefKind::Variable { .. }));
-        assert!(matches!(table.get(f).unwrap().kind, DefKind::Function { .. }));
+        assert!(matches!(
+            table.get(v).unwrap().kind,
+            DefKind::Variable { .. }
+        ));
+        assert!(matches!(
+            table.get(f).unwrap().kind,
+            DefKind::Function { .. }
+        ));
         assert!(matches!(table.get(c).unwrap().kind, DefKind::Class { .. }));
     }
 
@@ -390,9 +519,24 @@ mod tests {
     #[test]
     fn iter_yields_definitions_in_insertion_order() {
         let mut table = SymbolTable::new();
-        table.define("a".to_string(), var_kind(Ty::Int), Visibility::Private, dummy_span());
-        table.define("b".to_string(), var_kind(Ty::Bool), Visibility::Private, dummy_span());
-        table.define("c".to_string(), var_kind(Ty::Char), Visibility::Private, dummy_span());
+        table.define(
+            "a".to_string(),
+            var_kind(Ty::Int),
+            Visibility::Private,
+            dummy_span(),
+        );
+        table.define(
+            "b".to_string(),
+            var_kind(Ty::Bool),
+            Visibility::Private,
+            dummy_span(),
+        );
+        table.define(
+            "c".to_string(),
+            var_kind(Ty::Char),
+            Visibility::Private,
+            dummy_span(),
+        );
         let names: Vec<_> = table.iter().map(|d| d.name.as_str()).collect();
         assert_eq!(names, vec!["a", "b", "c"]);
     }
@@ -418,7 +562,12 @@ mod tests {
     #[test]
     fn update_ty_is_noop_for_class_definitions() {
         let mut table = SymbolTable::new();
-        let id = table.define("C".to_string(), class_kind(), Visibility::Public, dummy_span());
+        let id = table.define(
+            "C".to_string(),
+            class_kind(),
+            Visibility::Public,
+            dummy_span(),
+        );
         // Class is not one of the variants update_ty touches; it must be a no-op.
         table.update_ty(id, Ty::Int);
         assert!(matches!(table.get(id).unwrap().kind, DefKind::Class { .. }));
@@ -457,7 +606,12 @@ mod tests {
     #[test]
     fn def_ty_returns_none_for_class() {
         let mut table = SymbolTable::new();
-        let id = table.define("C".to_string(), class_kind(), Visibility::Public, dummy_span());
+        let id = table.define(
+            "C".to_string(),
+            class_kind(),
+            Visibility::Public,
+            dummy_span(),
+        );
         assert_eq!(table.def_ty(id), None);
     }
 
@@ -466,8 +620,18 @@ mod tests {
         // The symbol table itself has no name-keyed lookup (scopes own that).
         // Confirm that `iter` sees case-sensitive, distinct names.
         let mut table = SymbolTable::new();
-        table.define("Foo".to_string(), var_kind(Ty::Int), Visibility::Private, dummy_span());
-        table.define("foo".to_string(), var_kind(Ty::Int), Visibility::Private, dummy_span());
+        table.define(
+            "Foo".to_string(),
+            var_kind(Ty::Int),
+            Visibility::Private,
+            dummy_span(),
+        );
+        table.define(
+            "foo".to_string(),
+            var_kind(Ty::Int),
+            Visibility::Private,
+            dummy_span(),
+        );
         let hits: Vec<_> = table.iter().map(|d| d.name.as_str()).collect();
         assert!(hits.contains(&"Foo"));
         assert!(hits.contains(&"foo"));
@@ -493,8 +657,18 @@ mod tests {
     #[test]
     fn visibility_is_preserved_per_definition() {
         let mut table = SymbolTable::new();
-        let a = table.define("a".to_string(), var_kind(Ty::Int), Visibility::Private, dummy_span());
-        let b = table.define("b".to_string(), var_kind(Ty::Int), Visibility::Public, dummy_span());
+        let a = table.define(
+            "a".to_string(),
+            var_kind(Ty::Int),
+            Visibility::Private,
+            dummy_span(),
+        );
+        let b = table.define(
+            "b".to_string(),
+            var_kind(Ty::Int),
+            Visibility::Public,
+            dummy_span(),
+        );
         let c = table.define(
             "c".to_string(),
             var_kind(Ty::Int),

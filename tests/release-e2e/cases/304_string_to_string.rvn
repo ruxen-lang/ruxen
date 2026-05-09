@@ -1,0 +1,6 @@
+def main
+  let s = String.from("riven")
+  let copy = s.to_string
+  puts "len=#{copy.len}"
+  puts copy
+end

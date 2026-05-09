@@ -3,7 +3,7 @@
 //! These tests link against the compiled C runtime and verify that
 //! safety-critical operations behave correctly.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Compile the C runtime as a static library for testing.
@@ -24,8 +24,34 @@ fn compile_runtime() -> std::path::PathBuf {
         .status()
         .expect("failed to invoke cc");
 
-    assert!(status.success(), "runtime.c failed to compile with -Wall -Wextra -Werror");
+    assert!(
+        status.success(),
+        "runtime.c failed to compile with -Wall -Wextra -Werror"
+    );
     runtime_o
+}
+
+fn compile_c_harness(name: &str, source: &str) -> PathBuf {
+    let runtime_o = compile_runtime();
+    let temp_dir = std::env::temp_dir();
+    let pid = std::process::id();
+    let harness_c = temp_dir.join(format!("{name}_{pid}.c"));
+    let harness_exe = temp_dir.join(format!("{name}_{pid}"));
+
+    std::fs::write(&harness_c, source).expect("write harness");
+
+    let status = Command::new("cc")
+        .arg(&harness_c)
+        .arg(&runtime_o)
+        .arg("-o")
+        .arg(&harness_exe)
+        .status()
+        .expect("failed to invoke cc for harness");
+
+    let _ = std::fs::remove_file(&harness_c);
+    let _ = std::fs::remove_file(&runtime_o);
+    assert!(status.success(), "failed to compile C harness {name}");
+    harness_exe
 }
 
 #[test]
@@ -50,8 +76,184 @@ fn runtime_compiles_with_sanitizers() {
         .status()
         .expect("failed to invoke cc");
 
-    assert!(status.success(), "runtime.c failed to compile with sanitizers");
+    assert!(
+        status.success(),
+        "runtime.c failed to compile with sanitizers"
+    );
     let _ = std::fs::remove_file(&runtime_o);
+}
+
+#[test]
+fn runtime_env_init_copies_argv_and_clones_reads() {
+    let harness = compile_c_harness(
+        "riven_runtime_env_argv",
+        r#"
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+void riven_env_init(int argc, char **argv);
+int64_t riven_env_args_count(void);
+char *riven_env_args_at(int64_t index);
+
+int main(void) {
+    char arg0[] = "program";
+    char arg1[] = "first";
+    char *argv[] = {arg0, arg1};
+
+    riven_env_init(2, argv);
+    arg1[0] = 'X';
+
+    if (riven_env_args_count() != 2) {
+        return 1;
+    }
+
+    char *copy1 = riven_env_args_at(1);
+    char *copy2 = riven_env_args_at(1);
+    if (!copy1 || !copy2) {
+        return 2;
+    }
+    if (strcmp(copy1, "first") != 0) {
+        return 3;
+    }
+    if (copy1 == copy2) {
+        return 4;
+    }
+    if (riven_env_args_at(99) != NULL) {
+        return 5;
+    }
+    return 0;
+}
+"#,
+    );
+
+    let output = Command::new(&harness).output().expect("run harness");
+    let _ = std::fs::remove_file(&harness);
+
+    assert!(
+        output.status.success(),
+        "argv harness failed with status {:?}",
+        output.status.code()
+    );
+}
+
+#[test]
+fn runtime_fs_env_and_process_helpers_match_expected_abi() {
+    let harness = compile_c_harness(
+        "riven_runtime_fs_env_process",
+        r#"
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+void *riven_env_var(const char *name);
+void *riven_fs_write(const char *path, const char *contents);
+void *riven_fs_read_to_string(const char *path);
+int64_t riven_fs_exists(const char *path);
+void *riven_fs_rename(const char *from, const char *to);
+void *riven_fs_remove_file(const char *path);
+void *riven_fs_create_dir(const char *path);
+void riven_process_exit(int64_t code);
+
+static int is_ok(void *result) {
+    return *(int32_t *)result == 0;
+}
+
+static int is_err(void *result) {
+    return *(int32_t *)result == 1;
+}
+
+static const char *payload_str(void *result) {
+    return (const char *)((int64_t *)result)[1];
+}
+
+int main(int argc, char **argv) {
+    const char *root = argv[1];
+    char file_a[1024];
+    char file_b[1024];
+    char dir_a[1024];
+
+    snprintf(file_a, sizeof(file_a), "%s/a.txt", root);
+    snprintf(file_b, sizeof(file_b), "%s/b.txt", root);
+    snprintf(dir_a, sizeof(dir_a), "%s/dir", root);
+
+    setenv("RIVEN_RUNTIME_ENV_TEST", "expected-value", 1);
+
+    void *env_ok = riven_env_var("RIVEN_RUNTIME_ENV_TEST");
+    if (!is_ok(env_ok) || strcmp(payload_str(env_ok), "expected-value") != 0) {
+        return 1;
+    }
+
+    void *env_err = riven_env_var("RIVEN_RUNTIME_ENV_MISSING");
+    if (!is_err(env_err)) {
+        return 2;
+    }
+
+    if (riven_fs_exists(file_a) != 0) {
+        return 3;
+    }
+    if (!is_ok(riven_fs_write(file_a, "hello runtime"))) {
+        return 4;
+    }
+    if (riven_fs_exists(file_a) != 1) {
+        return 5;
+    }
+
+    void *read_back = riven_fs_read_to_string(file_a);
+    if (!is_ok(read_back) || strcmp(payload_str(read_back), "hello runtime") != 0) {
+        return 6;
+    }
+
+    if (!is_ok(riven_fs_rename(file_a, file_b))) {
+        return 7;
+    }
+    if (riven_fs_exists(file_a) != 0 || riven_fs_exists(file_b) != 1) {
+        return 8;
+    }
+
+    if (!is_ok(riven_fs_create_dir(dir_a))) {
+        return 9;
+    }
+    if (!is_ok(riven_fs_remove_file(file_b))) {
+        return 10;
+    }
+    if (riven_fs_exists(file_b) != 0) {
+        return 11;
+    }
+
+    riven_process_exit(23);
+    return argc;
+}
+"#,
+    );
+
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let temp_root = std::env::temp_dir().join(format!(
+        "riven_runtime_fs_env_process_{}_{}",
+        std::process::id(),
+        unique
+    ));
+    let _ = std::fs::remove_dir_all(&temp_root);
+    std::fs::create_dir_all(&temp_root).expect("create temp root");
+
+    let output = Command::new(&harness)
+        .arg(&temp_root)
+        .output()
+        .expect("run harness");
+
+    let _ = std::fs::remove_file(&harness);
+    let _ = std::fs::remove_dir_all(&temp_root);
+
+    assert_eq!(
+        output.status.code(),
+        Some(23),
+        "process exit harness failed"
+    );
 }
 
 // ── Property-based tests via proptest ────────────────────────────────────
@@ -59,29 +261,90 @@ fn runtime_compiles_with_sanitizers() {
 #[cfg(test)]
 mod proptest_tests {
     use proptest::prelude::*;
-
-    // We test the runtime logic through the Riven compiler's end-to-end
-    // pipeline. The C runtime functions are exercised by compiled programs.
-    // Here we verify internal consistency of the runtime by generating
-    // test programs and running them.
+    use riven_core::lexer::token::{lookup_keyword, TokenKind};
+    use riven_core::lexer::Lexer;
 
     proptest! {
-        /// Verify that string concatenation produces the expected length.
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        /// Integer literals round-trip across every supported radix.
+        ///
+        /// For any non-negative i64 value `n`, the lexer must accept its
+        /// decimal, hex (`0x`), octal (`0o`), and binary (`0b`) renderings
+        /// and recover the same numeric value as an `IntLiteral(n, _)`.
+        ///
+        /// Falsifiable: this would break if `lex_prefixed_int` mishandled
+        /// any radix (e.g. swapped the parse base, dropped digits, or
+        /// emitted an off-by-one i64 value).
         #[test]
-        fn concat_length(a in "[a-z]{0,50}", b in "[a-z]{0,50}") {
-            // Build a small Riven program that tests string concat length
-            let expected_len = a.len() + b.len();
-            // This is a compile-time validation that the runtime is sound.
-            // The actual concat happens in the C runtime.
-            prop_assert!(expected_len <= 100);
+        fn int_literal_radix_roundtrip(n in 0i64..=i64::MAX) {
+            let renderings = [
+                format!("{}", n),
+                format!("0x{:x}", n),
+                format!("0o{:o}", n),
+                format!("0b{:b}", n),
+            ];
+
+            for src in &renderings {
+                let mut lexer = Lexer::new(src);
+                let tokens = lexer
+                    .tokenize()
+                    .map_err(|d| format!("lex failed for {:?}: {:?}", src, d))
+                    .unwrap();
+
+                // Expect exactly: IntLiteral, EOF.
+                prop_assert_eq!(
+                    tokens.len(), 2,
+                    "expected one int token + EOF for {:?}, got {} tokens", src, tokens.len()
+                );
+                match &tokens[0].kind {
+                    TokenKind::IntLiteral(v, _) => prop_assert_eq!(
+                        *v, n,
+                        "rendering {:?} round-tripped to {} instead of {}", src, v, n
+                    ),
+                    other => prop_assert!(
+                        false, "expected IntLiteral for {:?}, got {:?}", src, other
+                    ),
+                }
+                prop_assert_eq!(tokens[1].kind.clone(), TokenKind::Eof);
+            }
         }
 
-        /// Verify that vec operations maintain invariants across many sizes.
+        /// Non-keyword identifiers lex back to themselves verbatim.
+        ///
+        /// For a randomly-generated `[a-z_][a-zA-Z0-9_]*` string that is
+        /// NOT a reserved keyword, the lexer must emit exactly one
+        /// `Identifier(s)` token whose inner string equals the input.
+        ///
+        /// Falsifiable: this would break if the identifier lexer
+        /// truncated, mutated, or mis-cased the input, or if a
+        /// non-keyword string was incorrectly classified as a keyword.
         #[test]
-        fn vec_size_invariant(n in 0usize..100) {
-            // A vec with n pushes should have len == n.
-            // This tests the vec_push/vec_len contract.
-            prop_assert_eq!(n, n);
+        fn identifier_roundtrip(ident in "[a-z_][a-zA-Z0-9_]{0,31}") {
+            // Skip strings that happen to be keywords — those legitimately
+            // lex to a different token kind.
+            prop_assume!(lookup_keyword(&ident).is_none());
+
+            let mut lexer = Lexer::new(&ident);
+            let tokens = lexer
+                .tokenize()
+                .map_err(|d| format!("lex failed for {:?}: {:?}", ident, d))
+                .unwrap();
+
+            prop_assert_eq!(
+                tokens.len(), 2,
+                "expected one identifier + EOF for {:?}, got {} tokens", ident, tokens.len()
+            );
+            match &tokens[0].kind {
+                TokenKind::Identifier(s) => prop_assert_eq!(
+                    s.as_str(), ident.as_str(),
+                    "identifier round-trip mismatch: input {:?}, got {:?}", ident, s
+                ),
+                other => prop_assert!(
+                    false, "expected Identifier for {:?}, got {:?}", ident, other
+                ),
+            }
+            prop_assert_eq!(tokens[1].kind.clone(), TokenKind::Eof);
         }
     }
 }

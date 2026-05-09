@@ -7,7 +7,6 @@
 ///
 /// Within each group, imports are alphabetized. Duplicate imports from the
 /// same module path are merged into grouped imports.
-
 use crate::parser::ast::{UseDecl, UseKind};
 
 use super::doc::*;
@@ -36,21 +35,21 @@ pub fn format_sorted_imports(imports: &[UseDecl]) -> Doc {
     }
 
     // Sort each group alphabetically
-    std_imports.sort_by(|a, b| import_sort_key(a).cmp(&import_sort_key(b)));
-    external_imports.sort_by(|a, b| import_sort_key(a).cmp(&import_sort_key(b)));
-    local_imports.sort_by(|a, b| import_sort_key(a).cmp(&import_sort_key(b)));
+    std_imports.sort_by_key(import_sort_key);
+    external_imports.sort_by_key(import_sort_key);
+    local_imports.sort_by_key(import_sort_key);
 
     // Build doc
     let mut groups: Vec<Vec<Doc>> = Vec::new();
 
     if !std_imports.is_empty() {
-        groups.push(std_imports.iter().map(|u| format_use(u)).collect());
+        groups.push(std_imports.iter().map(format_use).collect());
     }
     if !external_imports.is_empty() {
-        groups.push(external_imports.iter().map(|u| format_use(u)).collect());
+        groups.push(external_imports.iter().map(format_use).collect());
     }
     if !local_imports.is_empty() {
-        groups.push(local_imports.iter().map(|u| format_use(u)).collect());
+        groups.push(local_imports.iter().map(format_use).collect());
     }
 
     let mut parts: Vec<Doc> = Vec::new();
@@ -84,7 +83,7 @@ fn classify_import(u: &UseDecl) -> ImportGroup {
         }
         // Heuristic: uppercase first segment = external package
         // lowercase first segment = local module
-        if first.chars().next().map_or(false, |c| c.is_uppercase()) {
+        if first.chars().next().is_some_and(|c| c.is_uppercase()) {
             return ImportGroup::External;
         }
     }
@@ -173,7 +172,7 @@ fn merge_imports(imports: &[UseDecl]) -> Vec<UseDecl> {
                 result.push(group[0].clone());
             } else {
                 result.push(UseDecl {
-                    path: path,
+                    path,
                     kind: UseKind::Group(simple_names),
                     span: group[0].span.clone(),
                 });

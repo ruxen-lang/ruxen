@@ -1,0 +1,12 @@
+def main
+  let mut h: HashMap[Int, Int] = HashMap.new
+  h.insert(1, 10)
+  h.insert(2, 20)
+  h.insert(3, 30)
+  let a = h[1]
+  let b = h[2]
+  let c = h[3]
+  puts "a=#{a}"
+  puts "b=#{b}"
+  puts "c=#{c}"
+end

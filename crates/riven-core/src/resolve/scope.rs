@@ -135,11 +135,16 @@ impl ScopeStack {
 
     /// Look up a value name, walking up the scope chain.
     pub fn lookup(&self, name: &str) -> Option<DefId> {
+        self.lookup_with_scope(name).map(|(def_id, _)| def_id)
+    }
+
+    /// Look up a value name, returning both the DefId and the scope that owns it.
+    pub fn lookup_with_scope(&self, name: &str) -> Option<(DefId, ScopeId)> {
         let mut scope_id = Some(self.current);
         while let Some(id) = scope_id {
             let scope = &self.scopes[id as usize];
             if let Some(def_id) = scope.lookup_local(name) {
-                return Some(def_id);
+                return Some((def_id, id));
             }
             scope_id = scope.parent;
         }
@@ -194,7 +199,10 @@ impl ScopeStack {
         let mut scope_id = Some(self.current);
         while let Some(id) = scope_id {
             let scope = &self.scopes[id as usize];
-            if matches!(scope.kind, ScopeKind::Class | ScopeKind::Impl | ScopeKind::Trait) {
+            if matches!(
+                scope.kind,
+                ScopeKind::Class | ScopeKind::Impl | ScopeKind::Trait
+            ) {
                 return Some(scope.kind);
             }
             scope_id = scope.parent;
@@ -205,6 +213,19 @@ impl ScopeStack {
     /// Get a reference to a scope by ID.
     pub fn get_scope(&self, id: ScopeId) -> &Scope {
         &self.scopes[id as usize]
+    }
+
+    /// Returns true when `scope_id` is the same scope as `ancestor_id` or is
+    /// nested somewhere underneath it.
+    pub fn is_within_scope(&self, scope_id: ScopeId, ancestor_id: ScopeId) -> bool {
+        let mut current = Some(scope_id);
+        while let Some(id) = current {
+            if id == ancestor_id {
+                return true;
+            }
+            current = self.scopes[id as usize].parent;
+        }
+        false
     }
 }
 

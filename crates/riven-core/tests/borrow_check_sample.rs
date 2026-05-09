@@ -1,9 +1,9 @@
 //! Integration test: borrow-check the phase5 sample program.
 
+use riven_core::borrow_check;
 use riven_core::lexer::Lexer;
 use riven_core::parser::Parser;
 use riven_core::typeck;
-use riven_core::borrow_check;
 
 fn load_sample() -> String {
     std::fs::read_to_string("tests/fixtures/sample_program.rvn")
@@ -25,7 +25,10 @@ fn sample_program_borrow_checks() {
 
     // Report all borrow diagnostics
     if !errors.is_empty() {
-        eprintln!("--- borrow check produced {} diagnostic(s) ---", errors.len());
+        eprintln!(
+            "--- borrow check produced {} diagnostic(s) ---",
+            errors.len()
+        );
         for err in &errors {
             eprintln!("{}", err);
         }
@@ -34,8 +37,5 @@ fn sample_program_borrow_checks() {
         // doesn't fully handle yet. The goal is zero errors on the sample program.
     }
 
-    eprintln!(
-        "Sample program borrow-check: {} error(s)",
-        errors.len()
-    );
+    eprintln!("Sample program borrow-check: {} error(s)", errors.len());
 }

@@ -12,8 +12,7 @@ use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
 use inkwell::values::{
-    BasicMetadataValueEnum, BasicValueEnum, FunctionValue, GlobalValue, IntValue,
-    PointerValue,
+    BasicMetadataValueEnum, BasicValueEnum, FunctionValue, GlobalValue, IntValue, PointerValue,
 };
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
@@ -92,8 +91,11 @@ fn declare_ffi_function<'ctx>(
             .fn_type(&param_types, ffi_fn.is_variadic),
     };
 
-    let llvm_fn =
-        module.add_function(&ffi_fn.name, fn_type, Some(inkwell::module::Linkage::External));
+    let llvm_fn = module.add_function(
+        &ffi_fn.name,
+        fn_type,
+        Some(inkwell::module::Linkage::External),
+    );
 
     // Also register with lib-qualified name
     if !lib_name.is_empty() {
@@ -101,7 +103,11 @@ fn declare_ffi_function<'ctx>(
         if module.get_function(&qualified).is_none() {
             // Create an alias by adding a second function that calls through
             // For simplicity, just add the function under both names
-            module.add_function(&qualified, fn_type, Some(inkwell::module::Linkage::External));
+            module.add_function(
+                &qualified,
+                fn_type,
+                Some(inkwell::module::Linkage::External),
+            );
         }
     }
 
@@ -116,9 +122,9 @@ fn compile_function<'ctx>(
     context: &'ctx Context,
     string_cache: &mut HashMap<String, GlobalValue<'ctx>>,
 ) -> Result<(), String> {
-    let llvm_fn = module.get_function(&func.name).ok_or_else(|| {
-        format!("Function '{}' was not declared", func.name)
-    })?;
+    let llvm_fn = module
+        .get_function(&func.name)
+        .ok_or_else(|| format!("Function '{}' was not declared", func.name))?;
 
     let builder = context.create_builder();
 
@@ -143,10 +149,7 @@ fn compile_function<'ctx>(
             let param_ty = ty_to_llvm(&func.locals[param_id as usize].ty, context);
             if param_ty.is_some() {
                 let param_val = llvm_fn.get_nth_param(param_idx).ok_or_else(|| {
-                    format!(
-                        "Missing param {} for function '{}'",
-                        param_idx, func.name
-                    )
+                    format!("Missing param {} for function '{}'", param_idx, func.name)
                 })?;
                 builder
                     .build_store(local_allocas[&param_id], param_val)
@@ -154,6 +157,19 @@ fn compile_function<'ctx>(
                 param_idx += 1;
             }
         }
+    } else {
+        let env_init = module
+            .get_function("riven_env_init")
+            .ok_or_else(|| "missing runtime declaration for riven_env_init".to_string())?;
+        let argc = llvm_fn
+            .get_nth_param(0)
+            .ok_or_else(|| "missing argc param for main".to_string())?;
+        let argv = llvm_fn
+            .get_nth_param(1)
+            .ok_or_else(|| "missing argv param for main".to_string())?;
+        builder
+            .build_call(env_init, &[argc.into(), argv.into()], "")
+            .map_err(|e| format!("Failed to build riven_env_init call: {:?}", e))?;
     }
 
     // Create LLVM basic blocks for each MIR block
@@ -224,9 +240,9 @@ fn gen_value<'ctx>(
                 .into()),
         },
         MirValue::Use(local_id) => {
-            let alloca = local_allocas.get(local_id).ok_or_else(|| {
-                format!("Unknown local {} in function '{}'", local_id, func.name)
-            })?;
+            let alloca = local_allocas
+                .get(local_id)
+                .ok_or_else(|| format!("Unknown local {} in function '{}'", local_id, func.name))?;
             let local_ty = ty_to_llvm(&func.locals[*local_id as usize].ty, context)
                 .unwrap_or(context.i64_type().into());
             let val = builder
@@ -276,11 +292,33 @@ fn coerce_value<'ctx>(
         (val, target_ty)
     {
         let src_bits = match float_val.get_type() {
-            t if t == builder.get_insert_block().unwrap().get_parent().unwrap().get_type().get_context().f32_type() => 32,
+            t if t
+                == builder
+                    .get_insert_block()
+                    .unwrap()
+                    .get_parent()
+                    .unwrap()
+                    .get_type()
+                    .get_context()
+                    .f32_type() =>
+            {
+                32
+            }
             _ => 64,
         };
         let dst_bits = match target_float {
-            t if t == builder.get_insert_block().unwrap().get_parent().unwrap().get_type().get_context().f32_type() => 32,
+            t if t
+                == builder
+                    .get_insert_block()
+                    .unwrap()
+                    .get_parent()
+                    .unwrap()
+                    .get_type()
+                    .get_context()
+                    .f32_type() =>
+            {
+                32
+            }
             _ => 64,
         };
         return if src_bits > dst_bits {
@@ -351,12 +389,7 @@ fn translate_instruction<'ctx>(
                 .map_err(|e| format!("Failed to store assign: {:?}", e))?;
         }
 
-        MirInst::BinOp {
-            dest,
-            op,
-            lhs,
-            rhs,
-        } => {
+        MirInst::BinOp { dest, op, lhs, rhs } => {
             let l = gen_value(lhs, func, local_allocas, builder, context)?;
             let r = gen_value(rhs, func, local_allocas, builder, context)?;
 
@@ -406,20 +439,13 @@ fn translate_instruction<'ctx>(
                 .map_err(|e| format!("Failed to store not: {:?}", e))?;
         }
 
-        MirInst::Compare {
-            dest,
-            op,
-            lhs,
-            rhs,
-        } => {
+        MirInst::Compare { dest, op, lhs, rhs } => {
             let l = gen_value(lhs, func, local_allocas, builder, context)?;
             let r = gen_value(rhs, func, local_allocas, builder, context)?;
 
             let is_string = is_string_typed_value(lhs, func) || is_string_typed_value(rhs, func);
 
-            let result: BasicValueEnum = if is_string
-                && matches!(op, CmpOp::Eq | CmpOp::NotEq)
-            {
+            let result: BasicValueEnum = if is_string && matches!(op, CmpOp::Eq | CmpOp::NotEq) {
                 // String equality via runtime
                 let eq_fn = get_or_declare_runtime(module, context, "riven_string_eq");
                 let l = coerce_value(l, context.ptr_type(AddressSpace::default()).into(), builder);
@@ -496,7 +522,7 @@ fn translate_instruction<'ctx>(
                 arg_vals.push(val.into());
             }
 
-            let actual_name = runtime_name(callee);
+            let actual_name = runtime_name(callee)?;
 
             // Handle inline no-op operations
             match actual_name {
@@ -505,9 +531,9 @@ fn translate_instruction<'ctx>(
                         let dest_ty = ty_to_llvm(&func.locals[*dest_id as usize].ty, context)
                             .unwrap_or(context.i64_type().into());
                         let val = if !arg_vals.is_empty() {
-                            let first: BasicValueEnum = arg_vals[0].try_into().unwrap_or(
-                                context.i64_type().const_int(0, false).into(),
-                            );
+                            let first: BasicValueEnum = arg_vals[0]
+                                .try_into()
+                                .unwrap_or(context.i64_type().const_int(0, false).into());
                             coerce_value(first, dest_ty, builder)
                         } else {
                             dest_ty.const_zero()
@@ -538,21 +564,24 @@ fn translate_instruction<'ctx>(
                     }
                 }
                 _ => {
-                    let callee_fn =
-                        get_or_declare_func(actual_name, &arg_vals, dest.is_some(), func, program, module, context)?;
+                    let callee_fn = get_or_declare_func(
+                        actual_name,
+                        &arg_vals,
+                        dest.is_some(),
+                        func,
+                        program,
+                        module,
+                        context,
+                    )?;
 
                     // Coerce arguments to match the declared parameter types
                     let mut coerced_args: Vec<BasicMetadataValueEnum> =
                         Vec::with_capacity(arg_vals.len());
                     for (i, arg) in arg_vals.iter().enumerate() {
-                        let arg_val: BasicValueEnum = (*arg).try_into().unwrap_or(
-                            context.i64_type().const_int(0, false).into(),
-                        );
-                        if let Some(param_ty) = callee_fn
-                            .get_type()
-                            .get_param_types()
-                            .get(i)
-                        {
+                        let arg_val: BasicValueEnum = (*arg)
+                            .try_into()
+                            .unwrap_or(context.i64_type().const_int(0, false).into());
+                        if let Some(param_ty) = callee_fn.get_type().get_param_types().get(i) {
                             let coerced = coerce_value(arg_val, *param_ty, builder);
                             coerced_args.push(coerced.into());
                         } else {
@@ -562,24 +591,22 @@ fn translate_instruction<'ctx>(
 
                     let call = builder
                         .build_call(callee_fn, &coerced_args, "call")
-                        .map_err(|e| format!("Failed to build call to '{}': {:?}", actual_name, e))?;
+                        .map_err(|e| {
+                            format!("Failed to build call to '{}': {:?}", actual_name, e)
+                        })?;
 
                     if let Some(dest_id) = dest {
                         if let Some(result) = call.try_as_basic_value().left() {
-                            let dest_ty =
-                                ty_to_llvm(&func.locals[*dest_id as usize].ty, context)
-                                    .unwrap_or(context.i64_type().into());
+                            let dest_ty = ty_to_llvm(&func.locals[*dest_id as usize].ty, context)
+                                .unwrap_or(context.i64_type().into());
                             let result = coerce_value(result, dest_ty, builder);
                             builder
                                 .build_store(local_allocas[dest_id], result)
-                                .map_err(|e| {
-                                    format!("Failed to store call result: {:?}", e)
-                                })?;
+                                .map_err(|e| format!("Failed to store call result: {:?}", e))?;
                         } else {
                             // Void function but we have a dest — store zero
-                            let dest_ty =
-                                ty_to_llvm(&func.locals[*dest_id as usize].ty, context)
-                                    .unwrap_or(context.i64_type().into());
+                            let dest_ty = ty_to_llvm(&func.locals[*dest_id as usize].ty, context)
+                                .unwrap_or(context.i64_type().into());
                             let zero = dest_ty.const_zero();
                             builder
                                 .build_store(local_allocas[dest_id], zero)
@@ -773,7 +800,7 @@ fn translate_instruction<'ctx>(
                 .map_err(|e| format!("Failed to store ref: {:?}", e))?;
         }
 
-        MirInst::Copy { dest, src } | MirInst::Move { dest, src } => {
+        MirInst::Copy { dest, src } => {
             let src_ty = ty_to_llvm(&func.locals[*src as usize].ty, context)
                 .unwrap_or(context.i64_type().into());
             let val = builder
@@ -787,8 +814,28 @@ fn translate_instruction<'ctx>(
                 .map_err(|e| format!("Failed to store copy: {:?}", e))?;
         }
 
-        MirInst::Drop { .. } => {
-            // No-op for now. Matches Cranelift backend.
+        MirInst::Move { dest, src } => {
+            let src_ty = ty_to_llvm(&func.locals[*src as usize].ty, context)
+                .unwrap_or(context.i64_type().into());
+            let val = builder
+                .build_load(src_ty, local_allocas[src], "move")
+                .map_err(|e| format!("Failed to load move src: {:?}", e))?;
+            let dest_ty = ty_to_llvm(&func.locals[*dest as usize].ty, context)
+                .unwrap_or(context.i64_type().into());
+            let val = coerce_value(val, dest_ty, builder);
+            builder
+                .build_store(local_allocas[dest], val)
+                .map_err(|e| format!("Failed to store move: {:?}", e))?;
+            builder
+                .build_store(local_allocas[src], src_ty.const_zero())
+                .map_err(|e| format!("Failed to clear moved-from local: {:?}", e))?;
+        }
+
+        MirInst::Drop { local: _ } => {
+            // MirInst::Drop is a marker — the actual `riven_dealloc` call
+            // is emitted by `insert_drops` in `mir/lower.rs`, gated by the
+            // `compute_dealloc_safe_locals` flow analysis. Doing both here
+            // would double-free.
         }
 
         MirInst::StringLiteral { dest, value } => {
@@ -811,15 +858,8 @@ fn translate_instruction<'ctx>(
         }
 
         MirInst::FuncAddr { dest, func_name } => {
-            let target_fn = get_or_declare_func(
-                func_name,
-                &[],
-                true,
-                func,
-                program,
-                module,
-                context,
-            )?;
+            let target_fn =
+                get_or_declare_func(func_name, &[], true, func, program, module, context)?;
             let ptr: BasicValueEnum = target_fn.as_global_value().as_pointer_value().into();
             builder
                 .build_store(local_allocas[dest], ptr)
@@ -846,9 +886,9 @@ fn translate_instruction<'ctx>(
             let param_types: Vec<BasicMetadataTypeEnum> = arg_vals
                 .iter()
                 .map(|a| {
-                    let bv: BasicValueEnum = (*a).try_into().unwrap_or(
-                        context.i64_type().const_int(0, false).into(),
-                    );
+                    let bv: BasicValueEnum = (*a)
+                        .try_into()
+                        .unwrap_or(context.i64_type().const_int(0, false).into());
                     bv.get_type().into()
                 })
                 .collect();
@@ -904,8 +944,7 @@ fn translate_terminator<'ctx>(
             } else {
                 match val {
                     Some(v) => {
-                        let ret_val =
-                            gen_value(v, func, local_allocas, builder, context)?;
+                        let ret_val = gen_value(v, func, local_allocas, builder, context)?;
                         if let Some(ret_ty) = ty_to_llvm(&func.return_ty, context) {
                             let ret_val = coerce_value(ret_val, ret_ty, builder);
                             builder
@@ -920,8 +959,7 @@ fn translate_terminator<'ctx>(
                     None => {
                         if ty_to_llvm(&func.return_ty, context).is_some() {
                             // Non-void return type but no value — return zero
-                            let ret_ty =
-                                ty_to_llvm(&func.return_ty, context).unwrap();
+                            let ret_ty = ty_to_llvm(&func.return_ty, context).unwrap();
                             let zero = ret_ty.const_zero();
                             builder
                                 .build_return(Some(&zero))
@@ -947,8 +985,7 @@ fn translate_terminator<'ctx>(
             then_block,
             else_block,
         } => {
-            let cond_val =
-                gen_value(cond, func, local_allocas, builder, context)?;
+            let cond_val = gen_value(cond, func, local_allocas, builder, context)?;
             // Convert to i1 for LLVM's br instruction
             let cond_i1 = if cond_val.is_pointer_value() {
                 // Pointer: compare != null
@@ -957,8 +994,12 @@ fn translate_terminator<'ctx>(
                 builder
                     .build_int_compare(
                         IntPredicate::NE,
-                        builder.build_ptr_to_int(ptr_val, context.i64_type(), "ptrtoint").unwrap(),
-                        builder.build_ptr_to_int(null, context.i64_type(), "nullint").unwrap(),
+                        builder
+                            .build_ptr_to_int(ptr_val, context.i64_type(), "ptrtoint")
+                            .unwrap(),
+                        builder
+                            .build_ptr_to_int(null, context.i64_type(), "nullint")
+                            .unwrap(),
                         "tobool",
                     )
                     .map_err(|e| format!("Failed to build ptr compare: {:?}", e))?
@@ -1196,8 +1237,10 @@ fn is_string_typed_value(val: &MirValue, func: &MirFunction) -> bool {
 fn is_string_mir_ty(ty: &Ty) -> bool {
     match ty {
         Ty::String | Ty::Str => true,
-        Ty::Ref(inner) | Ty::RefMut(inner)
-        | Ty::RefLifetime(_, inner) | Ty::RefMutLifetime(_, inner) => is_string_mir_ty(inner),
+        Ty::Ref(inner)
+        | Ty::RefMut(inner)
+        | Ty::RefLifetime(_, inner)
+        | Ty::RefMutLifetime(_, inner) => is_string_mir_ty(inner),
         _ => false,
     }
 }
@@ -1249,9 +1292,7 @@ fn get_or_declare_func<'ctx>(
     // For generic type parameter methods (T_assign, E_message)
     if let Some(pos) = name.find('_') {
         let prefix = &name[..pos];
-        if prefix.len() <= 2
-            && !prefix.is_empty()
-            && prefix.chars().all(|c| c.is_ascii_uppercase())
+        if prefix.len() <= 2 && !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_uppercase())
         {
             let method = &name[pos..]; // includes the _
             if let Some(resolved) = find_function_by_suffix(module, method) {
@@ -1319,12 +1360,18 @@ fn simple_type_size(ty: &Ty) -> usize {
         Ty::Bool | Ty::Int8 | Ty::UInt8 => 1,
         Ty::Int16 | Ty::UInt16 => 2,
         Ty::Int32 | Ty::UInt32 | Ty::Float32 | Ty::Char => 4,
-        Ty::Int | Ty::Int64 | Ty::UInt | Ty::UInt64 | Ty::ISize | Ty::USize | Ty::Float
+        Ty::Int
+        | Ty::Int64
+        | Ty::UInt
+        | Ty::UInt64
+        | Ty::ISize
+        | Ty::USize
+        | Ty::Float
         | Ty::Float64 => 8,
         Ty::String => 24,
         Ty::Str => 16,
         Ty::Vec(_) => 24,
-        Ty::Hash(_, _) | Ty::Set(_) => 48,
+        Ty::HashMap(_, _) | Ty::Set(_) => 48,
         Ty::Ref(_)
         | Ty::RefMut(_)
         | Ty::RefLifetime(_, _)

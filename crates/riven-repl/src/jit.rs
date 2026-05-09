@@ -17,10 +17,10 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{DataDescription, FuncId, Linkage, Module};
 
+use riven_core::codegen::runtime::{extract_method_name, runtime_name};
 use riven_core::hir::types::Ty;
 use riven_core::mir::nodes::*;
 use riven_core::parser::ast::BinOp;
-use riven_core::codegen::runtime::{extract_method_name, runtime_name};
 
 // ── C runtime function declarations ────────────────────────────────
 // These are linked into the REPL binary and registered as JIT symbols.
@@ -145,16 +145,18 @@ impl JITCodeGen {
 
     /// Compile a single REPL input (wrapped as `__repl_N` function) and return
     /// a callable function pointer.
-    pub fn compile_repl_input(
-        &mut self,
-        mir_function: &MirFunction,
-    ) -> Result<*const u8, String> {
+    pub fn compile_repl_input(&mut self, mir_function: &MirFunction) -> Result<*const u8, String> {
         // Declare
         let sig = build_jit_signature(&self.module, mir_function);
         let func_id = self
             .module
             .declare_function(&mir_function.name, Linkage::Export, &sig)
-            .map_err(|e| format!("Failed to declare REPL function '{}': {}", mir_function.name, e))?;
+            .map_err(|e| {
+                format!(
+                    "Failed to declare REPL function '{}': {}",
+                    mir_function.name, e
+                )
+            })?;
 
         self.declared_fns.insert(mir_function.name.clone(), func_id);
 
@@ -166,7 +168,8 @@ impl JITCodeGen {
         }
 
         // Finalize and get pointer
-        self.module.finalize_definitions()
+        self.module
+            .finalize_definitions()
             .map_err(|e| format!("Failed to finalize: {}", e))?;
 
         let code_ptr = self.module.get_finalized_function(func_id);
@@ -178,10 +181,7 @@ impl JITCodeGen {
     /// Does NOT finalize — callers that compile a batch of inter-referencing
     /// functions (e.g. `make_adder` + its `__closure_0`) must call
     /// `finalize_definitions` exactly once after all bodies are defined.
-    pub fn compile_function(
-        &mut self,
-        mir_function: &MirFunction,
-    ) -> Result<(), String> {
+    pub fn compile_function(&mut self, mir_function: &MirFunction) -> Result<(), String> {
         self.declare_function(mir_function)?;
         let func_id = self.declared_fns[&mir_function.name];
         self.compile_function_inner(mir_function, func_id)
@@ -189,10 +189,7 @@ impl JITCodeGen {
 
     /// Declare (but don't define) a function. Idempotent — declaring an
     /// already-declared function is a no-op.
-    pub fn declare_function(
-        &mut self,
-        mir_function: &MirFunction,
-    ) -> Result<FuncId, String> {
+    pub fn declare_function(&mut self, mir_function: &MirFunction) -> Result<FuncId, String> {
         if let Some(&id) = self.declared_fns.get(&mir_function.name) {
             return Ok(id);
         }
@@ -207,7 +204,8 @@ impl JITCodeGen {
 
     /// Finalize all pending definitions so their symbols become callable.
     pub fn finalize(&mut self) -> Result<(), String> {
-        self.module.finalize_definitions()
+        self.module
+            .finalize_definitions()
             .map_err(|e| format!("Failed to finalize: {}", e))
     }
 
@@ -226,8 +224,7 @@ impl JITCodeGen {
         self.ctx.func.signature = sig;
 
         {
-            let mut builder =
-                FunctionBuilder::new(&mut self.ctx.func, &mut self.builder_ctx);
+            let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut self.builder_ctx);
 
             let mut env = JITTranslationEnv {
                 module: &mut self.module,
@@ -286,7 +283,13 @@ impl JITCodeGen {
             let params_vals = builder.block_params(entry_cl_block).to_vec();
             for (i, &param_id) in func.params.iter().enumerate() {
                 if i < params_vals.len() {
-                    def_local(&var_map, &stack_slots, &mut builder, param_id, params_vals[i]);
+                    def_local(
+                        &var_map,
+                        &stack_slots,
+                        &mut builder,
+                        param_id,
+                        params_vals[i],
+                    );
                 }
             }
 
@@ -300,7 +303,13 @@ impl JITCodeGen {
 
                 for inst in &mir_block.instructions {
                     if let Err(e) = translate_instruction(
-                        inst, func, &var_map, &stack_slots, &block_map, &mut builder, &mut env,
+                        inst,
+                        func,
+                        &var_map,
+                        &stack_slots,
+                        &block_map,
+                        &mut builder,
+                        &mut env,
                     ) {
                         return Err(format!(
                             "Error in function '{}', block {}: {}",
@@ -310,8 +319,13 @@ impl JITCodeGen {
                 }
 
                 translate_terminator(
-                    &mir_block.terminator, func, &var_map, &stack_slots, &block_map,
-                    &mut builder, &mut env,
+                    &mir_block.terminator,
+                    func,
+                    &var_map,
+                    &stack_slots,
+                    &block_map,
+                    &mut builder,
+                    &mut env,
                 )?;
             }
 
@@ -325,8 +339,7 @@ impl JITCodeGen {
         // sees the prior input's instructions and the verifier complains
         // about stale blocks).
         self.module.clear_context(&mut self.ctx);
-        define_result
-            .map_err(|e| format!("Failed to define function '{}': {:?}", func.name, e))?;
+        define_result.map_err(|e| format!("Failed to define function '{}': {:?}", func.name, e))?;
 
         Ok(())
     }
@@ -374,11 +387,26 @@ fn register_runtime_symbols(builder: &mut JITBuilder) {
 
     // Print family → capture shims so the REPL can diff cumulative stdout
     // between inputs and surface only the newest input's output.
-    builder.symbol("riven_puts",       crate::capture::riven_repl_puts_shim as *const u8);
-    builder.symbol("riven_print",      crate::capture::riven_repl_print_shim as *const u8);
-    builder.symbol("riven_eputs",      crate::capture::riven_repl_eputs_shim as *const u8);
-    builder.symbol("riven_print_int",  crate::capture::riven_repl_print_int_shim as *const u8);
-    builder.symbol("riven_print_float",crate::capture::riven_repl_print_float_shim as *const u8);
+    builder.symbol(
+        "riven_puts",
+        crate::capture::riven_repl_puts_shim as *const u8,
+    );
+    builder.symbol(
+        "riven_print",
+        crate::capture::riven_repl_print_shim as *const u8,
+    );
+    builder.symbol(
+        "riven_eputs",
+        crate::capture::riven_repl_eputs_shim as *const u8,
+    );
+    builder.symbol(
+        "riven_print_int",
+        crate::capture::riven_repl_print_int_shim as *const u8,
+    );
+    builder.symbol(
+        "riven_print_float",
+        crate::capture::riven_repl_print_float_shim as *const u8,
+    );
     reg!(builder, riven_int_to_string);
     reg!(builder, riven_float_to_string);
     reg!(builder, riven_bool_to_string);
@@ -493,7 +521,9 @@ impl<'a> JITTranslationEnv<'a> {
         if name.starts_with("?") {
             let method = extract_method_name(name);
             let suffix = format!("_{}", method);
-            let match_name = self.declared_fns.keys()
+            let match_name = self
+                .declared_fns
+                .keys()
                 .filter(|k| k.ends_with(&suffix) && !k.starts_with("?"))
                 .min_by_key(|k| k.len())
                 .cloned();
@@ -512,13 +542,16 @@ impl<'a> JITTranslationEnv<'a> {
             } else {
                 ""
             };
-            let is_generic_param = type_prefix.len() <= 2
-                && type_prefix.chars().all(|c| c.is_ascii_uppercase());
+            let is_generic_param =
+                type_prefix.len() <= 2 && type_prefix.chars().all(|c| c.is_ascii_uppercase());
             if is_generic_param && !type_prefix.is_empty() {
                 let suffix = format!("_{}", method);
-                let match_name = self.declared_fns.keys()
-                    .filter(|k| k.ends_with(&suffix) && !k.starts_with("?")
-                        && k.len() > suffix.len())
+                let match_name = self
+                    .declared_fns
+                    .keys()
+                    .filter(|k| {
+                        k.ends_with(&suffix) && !k.starts_with("?") && k.len() > suffix.len()
+                    })
                     .min_by_key(|k| k.len())
                     .cloned();
                 if let Some(resolved) = match_name {
@@ -621,7 +654,9 @@ fn translate_instruction(
     match inst {
         MirInst::Assign { dest, value } => {
             let val = gen_value(value, func, var_map, stack_slots, builder)?;
-            let dest_ty = func.locals.get(*dest as usize)
+            let dest_ty = func
+                .locals
+                .get(*dest as usize)
                 .and_then(|l| ty_to_cranelift(&l.ty))
                 .unwrap_or(types::I64);
             let val = coerce_value(val, dest_ty, builder);
@@ -650,7 +685,9 @@ fn translate_instruction(
                 emit_binop(*op, l, r, builder)
             };
 
-            let dest_ty = func.locals.get(*dest as usize)
+            let dest_ty = func
+                .locals
+                .get(*dest as usize)
                 .and_then(|l| ty_to_cranelift(&l.ty))
                 .unwrap_or(types::I64);
             let result = coerce_value(result, dest_ty, builder);
@@ -664,7 +701,9 @@ fn translate_instruction(
             } else {
                 builder.ins().ineg(val)
             };
-            let dest_ty = func.locals.get(*dest as usize)
+            let dest_ty = func
+                .locals
+                .get(*dest as usize)
                 .and_then(|l| ty_to_cranelift(&l.ty))
                 .unwrap_or(types::I64);
             let result = coerce_value(result, dest_ty, builder);
@@ -676,7 +715,9 @@ fn translate_instruction(
             let val_ty = builder.func.dfg.value_type(val);
             let one = builder.ins().iconst(val_ty, 1);
             let result = builder.ins().bxor(val, one);
-            let dest_ty = func.locals.get(*dest as usize)
+            let dest_ty = func
+                .locals
+                .get(*dest as usize)
                 .and_then(|l| ty_to_cranelift(&l.ty))
                 .unwrap_or(types::I8);
             let result = coerce_value(result, dest_ty, builder);
@@ -687,12 +728,15 @@ fn translate_instruction(
             let l = gen_value(lhs, func, var_map, stack_slots, builder)?;
             let r = gen_value(rhs, func, var_map, stack_slots, builder)?;
 
-            let is_string_compare = is_string_typed_value(lhs, func)
-                || is_string_typed_value(rhs, func);
+            let is_string_compare =
+                is_string_typed_value(lhs, func) || is_string_typed_value(rhs, func);
 
             let result = if is_string_compare && matches!(op, CmpOp::Eq | CmpOp::NotEq) {
                 let func_ref = env.declare_runtime_func(
-                    "riven_string_eq", &[types::I64, types::I64], Some(types::I64), builder,
+                    "riven_string_eq",
+                    &[types::I64, types::I64],
+                    Some(types::I64),
+                    builder,
                 )?;
                 let call = builder.ins().call(func_ref, &[l, r]);
                 let eq_result = builder.inst_results(call)[0];
@@ -704,7 +748,10 @@ fn translate_instruction(
                 }
             } else if is_string_compare {
                 let func_ref = env.declare_runtime_func(
-                    "riven_string_cmp", &[types::I64, types::I64], Some(types::I64), builder,
+                    "riven_string_cmp",
+                    &[types::I64, types::I64],
+                    Some(types::I64),
+                    builder,
                 )?;
                 let call = builder.ins().call(func_ref, &[l, r]);
                 let cmp_result = builder.inst_results(call)[0];
@@ -722,7 +769,9 @@ fn translate_instruction(
                     builder.ins().icmp(cc, l, r)
                 }
             };
-            let dest_ty = func.locals.get(*dest as usize)
+            let dest_ty = func
+                .locals
+                .get(*dest as usize)
                 .and_then(|l| ty_to_cranelift(&l.ty))
                 .unwrap_or(types::I8);
             let result = coerce_value(result, dest_ty, builder);
@@ -735,7 +784,7 @@ fn translate_instruction(
                 arg_vals.push(gen_value(arg, func, var_map, stack_slots, builder)?);
             }
 
-            let actual_name = runtime_name(callee);
+            let actual_name = runtime_name(callee)?;
 
             // Widen narrow-integer args to match callee parameter types.
             coerce_call_args(&mut arg_vals, args, func, actual_name, builder);
@@ -743,7 +792,9 @@ fn translate_instruction(
             match actual_name {
                 "riven_noop_passthrough" => {
                     if let Some(dest_id) = dest {
-                        let dest_ty = func.locals.get(*dest_id as usize)
+                        let dest_ty = func
+                            .locals
+                            .get(*dest_id as usize)
                             .and_then(|l| ty_to_cranelift(&l.ty))
                             .unwrap_or(types::I64);
                         let val = if !arg_vals.is_empty() {
@@ -756,7 +807,9 @@ fn translate_instruction(
                 }
                 "riven_noop_return_null" => {
                     if let Some(dest_id) = dest {
-                        let dest_ty = func.locals.get(*dest_id as usize)
+                        let dest_ty = func
+                            .locals
+                            .get(*dest_id as usize)
                             .and_then(|l| ty_to_cranelift(&l.ty))
                             .unwrap_or(types::I64);
                         let zero = builder.ins().iconst(dest_ty, 0);
@@ -765,7 +818,9 @@ fn translate_instruction(
                 }
                 "riven_noop" => {
                     if let Some(dest_id) = dest {
-                        let dest_ty = func.locals.get(*dest_id as usize)
+                        let dest_ty = func
+                            .locals
+                            .get(*dest_id as usize)
                             .and_then(|l| ty_to_cranelift(&l.ty))
                             .unwrap_or(types::I64);
                         let zero = builder.ins().iconst(dest_ty, 0);
@@ -780,7 +835,9 @@ fn translate_instruction(
                     if let Some(dest_id) = dest {
                         let results = builder.inst_results(call);
                         if !results.is_empty() {
-                            let dest_ty = func.locals.get(*dest_id as usize)
+                            let dest_ty = func
+                                .locals
+                                .get(*dest_id as usize)
                                 .and_then(|l| ty_to_cranelift(&l.ty))
                                 .unwrap_or(types::I64);
                             let result = coerce_value(results[0], dest_ty, builder);
@@ -791,41 +848,56 @@ fn translate_instruction(
             }
         }
 
-        MirInst::Alloc { dest, ty: alloc_ty, size: precomputed_size } => {
+        MirInst::Alloc {
+            dest,
+            ty: alloc_ty,
+            size: precomputed_size,
+        } => {
             let size = if *precomputed_size > 0 {
                 *precomputed_size as i64
             } else {
                 simple_type_size(alloc_ty) as i64
             };
             let size_val = builder.ins().iconst(types::I64, size);
-            let func_ref = env.declare_runtime_func(
-                "riven_alloc", &[types::I64], Some(types::I64), builder,
-            )?;
+            let func_ref =
+                env.declare_runtime_func("riven_alloc", &[types::I64], Some(types::I64), builder)?;
             let call = builder.ins().call(func_ref, &[size_val]);
             let ptr = builder.inst_results(call)[0];
             def_local(var_map, stack_slots, builder, *dest, ptr);
         }
 
         MirInst::StackAlloc { dest, .. } => {
-            let dest_ty = func.locals.get(*dest as usize)
+            let dest_ty = func
+                .locals
+                .get(*dest as usize)
                 .and_then(|l| ty_to_cranelift(&l.ty))
                 .unwrap_or(types::I64);
             let zero = builder.ins().iconst(dest_ty, 0);
             def_local(var_map, stack_slots, builder, *dest, zero);
         }
 
-        MirInst::GetField { dest, base, field_index } => {
+        MirInst::GetField {
+            dest,
+            base,
+            field_index,
+        } => {
             let base_val = use_local(var_map, stack_slots, builder, *base);
             let offset = (*field_index as i64) * 8;
             let addr = builder.ins().iadd_imm(base_val, offset);
-            let dest_ty = func.locals.get(*dest as usize)
+            let dest_ty = func
+                .locals
+                .get(*dest as usize)
                 .and_then(|l| ty_to_cranelift(&l.ty))
                 .unwrap_or(types::I64);
             let loaded = builder.ins().load(dest_ty, MemFlags::new(), addr, 0);
             def_local(var_map, stack_slots, builder, *dest, loaded);
         }
 
-        MirInst::SetField { base, field_index, value } => {
+        MirInst::SetField {
+            base,
+            field_index,
+            value,
+        } => {
             let base_val = use_local(var_map, stack_slots, builder, *base);
             let val = gen_value(value, func, var_map, stack_slots, builder)?;
             let offset = (*field_index as i64) * 8;
@@ -888,8 +960,7 @@ fn translate_instruction(
         MirInst::Nop => {}
 
         MirInst::FuncAddr { dest, func_name } => {
-            let func_ref =
-                env.get_or_declare_func(func_name, &[], true, builder)?;
+            let func_ref = env.get_or_declare_func(func_name, &[], true, builder)?;
             let addr = builder.ins().func_addr(types::I64, func_ref);
             def_local(var_map, stack_slots, builder, *dest, addr);
         }
@@ -924,7 +995,9 @@ fn translate_instruction(
             if let Some(dest_id) = dest {
                 let results = builder.inst_results(call);
                 if !results.is_empty() {
-                    let dest_ty = func.locals.get(*dest_id as usize)
+                    let dest_ty = func
+                        .locals
+                        .get(*dest_id as usize)
                         .and_then(|l| ty_to_cranelift(&l.ty))
                         .unwrap_or(types::I64);
                     let result = coerce_value(results[0], dest_ty, builder);
@@ -947,37 +1020,45 @@ fn translate_terminator(
     _env: &mut JITTranslationEnv,
 ) -> Result<(), String> {
     match term {
-        Terminator::Return(val) => {
-            match val {
-                Some(v) => {
-                    let ret_val = gen_value(v, func, var_map, stack_slots, builder)?;
-                    if let Some(ret_ty) = ty_to_cranelift(&func.return_ty) {
-                        let ret_val = coerce_value(ret_val, ret_ty, builder);
-                        builder.ins().return_(&[ret_val]);
-                    } else {
-                        builder.ins().return_(&[]);
-                    }
-                }
-                None => {
+        Terminator::Return(val) => match val {
+            Some(v) => {
+                let ret_val = gen_value(v, func, var_map, stack_slots, builder)?;
+                if let Some(ret_ty) = ty_to_cranelift(&func.return_ty) {
+                    let ret_val = coerce_value(ret_val, ret_ty, builder);
+                    builder.ins().return_(&[ret_val]);
+                } else {
                     builder.ins().return_(&[]);
                 }
             }
-        }
+            None => {
+                builder.ins().return_(&[]);
+            }
+        },
 
         Terminator::Goto(target) => {
             builder.ins().jump(block_map[*target], &[]);
         }
 
-        Terminator::Branch { cond, then_block, else_block } => {
+        Terminator::Branch {
+            cond,
+            then_block,
+            else_block,
+        } => {
             let cond_val = gen_value(cond, func, var_map, stack_slots, builder)?;
             builder.ins().brif(
                 cond_val,
-                block_map[*then_block], &[],
-                block_map[*else_block], &[],
+                block_map[*then_block],
+                &[],
+                block_map[*else_block],
+                &[],
             );
         }
 
-        Terminator::Switch { value, targets, otherwise } => {
+        Terminator::Switch {
+            value,
+            targets,
+            otherwise,
+        } => {
             let val = gen_value(value, func, var_map, stack_slots, builder)?;
             let mut switch = cranelift_frontend::Switch::new();
             for &(discriminant, block_id) in targets {
@@ -1016,7 +1097,8 @@ fn gen_value(
         MirValue::Use(local_id) => {
             if !var_map.contains_key(local_id) {
                 return Err(format!(
-                    "Unknown local {} in function '{}'", local_id, func.name
+                    "Unknown local {} in function '{}'",
+                    local_id, func.name
                 ));
             }
             Ok(use_local(var_map, stack_slots, builder, *local_id))
@@ -1064,7 +1146,8 @@ fn mir_arg_is_signed(arg: &MirValue, func: &MirFunction) -> bool {
         MirValue::Literal(Literal::Int(_)) => return true,
         MirValue::Literal(Literal::Char(_)) => return true,
         MirValue::Literal(Literal::Bool(_)) => return false,
-        MirValue::Literal(Literal::Float(_)) | MirValue::Literal(Literal::String(_))
+        MirValue::Literal(Literal::Float(_))
+        | MirValue::Literal(Literal::String(_))
         | MirValue::Unit => return false,
         MirValue::Use(local_id) => match func.locals.get(*local_id as usize) {
             Some(local) => &local.ty,
@@ -1073,8 +1156,7 @@ fn mir_arg_is_signed(arg: &MirValue, func: &MirFunction) -> bool {
     };
     matches!(
         ty,
-        Ty::Int8 | Ty::Int16 | Ty::Int32 | Ty::Int | Ty::Int64
-        | Ty::ISize | Ty::Char
+        Ty::Int8 | Ty::Int16 | Ty::Int32 | Ty::Int | Ty::Int64 | Ty::ISize | Ty::Char
     )
 }
 
@@ -1140,7 +1222,9 @@ fn emit_binop(
             BinOp::Lt => builder.ins().icmp(IntCC::SignedLessThan, lhs, rhs),
             BinOp::LtEq => builder.ins().icmp(IntCC::SignedLessThanOrEqual, lhs, rhs),
             BinOp::Gt => builder.ins().icmp(IntCC::SignedGreaterThan, lhs, rhs),
-            BinOp::GtEq => builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, lhs, rhs),
+            BinOp::GtEq => builder
+                .ins()
+                .icmp(IntCC::SignedGreaterThanOrEqual, lhs, rhs),
         }
     }
 }
@@ -1191,13 +1275,35 @@ fn ty_to_cranelift(ty: &Ty) -> Option<Type> {
         Ty::Int | Ty::Int64 | Ty::UInt | Ty::UInt64 | Ty::ISize | Ty::USize => Some(types::I64),
         Ty::Float32 => Some(types::F32),
         Ty::Float | Ty::Float64 => Some(types::F64),
-        Ty::String | Ty::Str | Ty::Vec(_) | Ty::Hash(_, _) | Ty::Set(_)
-        | Ty::Ref(_) | Ty::RefMut(_) | Ty::RefLifetime(_, _) | Ty::RefMutLifetime(_, _)
-        | Ty::RawPtr(_) | Ty::RawPtrMut(_) | Ty::RawPtrVoid | Ty::RawPtrMutVoid
-        | Ty::Option(_) | Ty::Result(_, _) | Ty::Class { .. } | Ty::Struct { .. }
-        | Ty::Enum { .. } | Ty::Fn { .. } | Ty::FnMut { .. } | Ty::FnOnce { .. }
-        | Ty::DynTrait(_) | Ty::ImplTrait(_) | Ty::Alias { .. } | Ty::Newtype { .. }
-        | Ty::TypeParam { .. } | Ty::Infer(_) | Ty::Tuple(_) | Ty::Array(_, _) => Some(types::I64),
+        Ty::String
+        | Ty::Str
+        | Ty::Vec(_)
+        | Ty::HashMap(_, _)
+        | Ty::Set(_)
+        | Ty::Ref(_)
+        | Ty::RefMut(_)
+        | Ty::RefLifetime(_, _)
+        | Ty::RefMutLifetime(_, _)
+        | Ty::RawPtr(_)
+        | Ty::RawPtrMut(_)
+        | Ty::RawPtrVoid
+        | Ty::RawPtrMutVoid
+        | Ty::Option(_)
+        | Ty::Result(_, _)
+        | Ty::Class { .. }
+        | Ty::Struct { .. }
+        | Ty::Enum { .. }
+        | Ty::Fn { .. }
+        | Ty::FnMut { .. }
+        | Ty::FnOnce { .. }
+        | Ty::DynTrait(_)
+        | Ty::ImplTrait(_)
+        | Ty::Alias { .. }
+        | Ty::Newtype { .. }
+        | Ty::TypeParam { .. }
+        | Ty::Infer(_)
+        | Ty::Tuple(_)
+        | Ty::Array(_, _) => Some(types::I64),
         Ty::Unit | Ty::Never => None,
         Ty::Error => None,
     }
@@ -1226,8 +1332,10 @@ fn is_string_typed_value(val: &MirValue, func: &MirFunction) -> bool {
 fn is_string_mir_ty(ty: &Ty) -> bool {
     match ty {
         Ty::String | Ty::Str => true,
-        Ty::Ref(inner) | Ty::RefMut(inner)
-        | Ty::RefLifetime(_, inner) | Ty::RefMutLifetime(_, inner) => is_string_mir_ty(inner),
+        Ty::Ref(inner)
+        | Ty::RefMut(inner)
+        | Ty::RefLifetime(_, inner)
+        | Ty::RefMutLifetime(_, inner) => is_string_mir_ty(inner),
         _ => false,
     }
 }
@@ -1237,14 +1345,26 @@ fn simple_type_size(ty: &Ty) -> usize {
         Ty::Bool | Ty::Int8 | Ty::UInt8 => 1,
         Ty::Int16 | Ty::UInt16 => 2,
         Ty::Int32 | Ty::UInt32 | Ty::Float32 | Ty::Char => 4,
-        Ty::Int | Ty::Int64 | Ty::UInt | Ty::UInt64 | Ty::ISize | Ty::USize
-        | Ty::Float | Ty::Float64 => 8,
+        Ty::Int
+        | Ty::Int64
+        | Ty::UInt
+        | Ty::UInt64
+        | Ty::ISize
+        | Ty::USize
+        | Ty::Float
+        | Ty::Float64 => 8,
         Ty::String => 24,
         Ty::Str => 16,
         Ty::Vec(_) => 24,
-        Ty::Hash(_, _) | Ty::Set(_) => 48,
-        Ty::Ref(_) | Ty::RefMut(_) | Ty::RefLifetime(_, _) | Ty::RefMutLifetime(_, _)
-        | Ty::RawPtr(_) | Ty::RawPtrMut(_) | Ty::RawPtrVoid | Ty::RawPtrMutVoid => 8,
+        Ty::HashMap(_, _) | Ty::Set(_) => 48,
+        Ty::Ref(_)
+        | Ty::RefMut(_)
+        | Ty::RefLifetime(_, _)
+        | Ty::RefMutLifetime(_, _)
+        | Ty::RawPtr(_)
+        | Ty::RawPtrMut(_)
+        | Ty::RawPtrVoid
+        | Ty::RawPtrMutVoid => 8,
         Ty::Unit | Ty::Never => 0,
         Ty::Enum { .. } => 32,
         Ty::Class { .. } | Ty::Struct { .. } => 64,

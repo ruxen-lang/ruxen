@@ -1,7 +1,7 @@
-use std::collections::HashMap;
 use crate::hir::nodes::DefId;
 use crate::hir::types::Ty;
 use crate::lexer::token::Span;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 struct BindingInfo {
@@ -31,24 +31,35 @@ pub struct MoveChecker {
 }
 
 impl Default for MoveChecker {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MoveChecker {
     pub fn new() -> Self {
-        Self { bindings: HashMap::new() }
+        Self {
+            bindings: HashMap::new(),
+        }
     }
 
     pub fn declare(&mut self, def_id: DefId, ty: Ty, span: Span) {
-        self.bindings.insert(def_id, BindingInfo {
-            ty, declared_span: span, state: MoveState::Live,
-        });
+        self.bindings.insert(
+            def_id,
+            BindingInfo {
+                ty,
+                declared_span: span,
+                state: MoveState::Live,
+            },
+        );
     }
 
     /// Process a value transfer (assignment or function call argument).
     /// If the type is Copy, this is a no-op. If Move, source is invalidated.
     pub fn process_transfer(&mut self, source: DefId, _target: Option<DefId>, ty: &Ty, span: Span) {
-        if ty.is_copy() { return; }
+        if ty.is_copy() {
+            return;
+        }
         if let Some(info) = self.bindings.get_mut(&source) {
             info.state = MoveState::Moved { span, callee: None };
         }
@@ -56,9 +67,14 @@ impl MoveChecker {
 
     /// Process a move into a function call with a known callee name.
     pub fn process_call_move(&mut self, source: DefId, callee: String, ty: &Ty, span: Span) {
-        if ty.is_copy() { return; }
+        if ty.is_copy() {
+            return;
+        }
         if let Some(info) = self.bindings.get_mut(&source) {
-            info.state = MoveState::Moved { span, callee: Some(callee) };
+            info.state = MoveState::Moved {
+                span,
+                callee: Some(callee),
+            };
         }
     }
 
@@ -67,8 +83,11 @@ impl MoveChecker {
         if let Some(info) = self.bindings.get(&def_id) {
             if let MoveState::Moved { span, callee } = &info.state {
                 return Err(UseAfterMoveError {
-                    def_id, declared_span: info.declared_span.clone(),
-                    move_span: span.clone(), use_span, callee: callee.clone(),
+                    def_id,
+                    declared_span: info.declared_span.clone(),
+                    move_span: span.clone(),
+                    use_span,
+                    callee: callee.clone(),
                 });
             }
         }
@@ -85,12 +104,15 @@ impl MoveChecker {
 
     /// Is this def_id currently live (not moved)?
     pub fn is_live(&self, def_id: DefId) -> bool {
-        self.bindings.get(&def_id)
+        self.bindings
+            .get(&def_id)
             .map(|i| matches!(i.state, MoveState::Live))
             .unwrap_or(true) // Unknown bindings assumed live
     }
 
-    pub fn snapshot(&self) -> Self { self.clone() }
+    pub fn snapshot(&self) -> Self {
+        self.clone()
+    }
 
     pub fn restore(&mut self, snapshot: &Self) {
         self.bindings = snapshot.bindings.clone();
@@ -98,7 +120,9 @@ impl MoveChecker {
 
     /// Conservative merge: if moved on ANY branch, moved after.
     pub fn merge(&mut self, branches: Vec<Self>) {
-        if branches.is_empty() { return; }
+        if branches.is_empty() {
+            return;
+        }
         self.bindings = branches[0].bindings.clone();
         for branch in &branches[1..] {
             for (def_id, info) in &branch.bindings {
@@ -125,7 +149,9 @@ mod tests {
     use crate::hir::types::Ty;
     use crate::lexer::token::Span;
 
-    fn span(line: u32) -> Span { Span::new(0, 1, line, 1) }
+    fn span(line: u32) -> Span {
+        Span::new(0, 1, line, 1)
+    }
 
     #[test]
     fn copy_type_does_not_move() {
@@ -136,7 +162,10 @@ mod tests {
         // "Move" a copy type — should not actually invalidate
         checker.process_transfer(10, Some(20), &Ty::Int, span(2));
         let result = checker.check_use(10, span(3));
-        assert!(result.is_ok(), "Copy type should still be usable after transfer");
+        assert!(
+            result.is_ok(),
+            "Copy type should still be usable after transfer"
+        );
     }
 
     #[test]
@@ -145,7 +174,10 @@ mod tests {
         checker.declare(10, Ty::String, span(1));
         checker.process_transfer(10, Some(20), &Ty::String, span(2));
         let result = checker.check_use(10, span(3));
-        assert!(result.is_err(), "Move type should be invalid after transfer");
+        assert!(
+            result.is_err(),
+            "Move type should be invalid after transfer"
+        );
     }
 
     #[test]

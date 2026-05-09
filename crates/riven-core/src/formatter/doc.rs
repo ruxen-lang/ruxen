@@ -3,7 +3,6 @@
 /// The Doc IR represents formatted code as a tree of layout instructions.
 /// The printer algorithm decides which groups fit on a single line and which
 /// must be broken across multiple lines.
-
 pub const INDENT_WIDTH: i32 = 2;
 pub const MAX_LINE_WIDTH: i32 = 100;
 
@@ -150,20 +149,18 @@ pub fn print_doc(doc: &Doc, width: i32) -> String {
                 pos += s.len() as i32;
             }
 
-            Doc::Line => {
-                match cmd.mode {
-                    Mode::Flat => {
-                        output.push(' ');
-                        pos += 1;
-                    }
-                    Mode::Break => {
-                        flush_line_suffix(&mut output, &mut pos, &mut line_suffix_buf);
-                        output.push('\n');
-                        emit_indent(&mut output, cmd.indent);
-                        pos = cmd.indent;
-                    }
+            Doc::Line => match cmd.mode {
+                Mode::Flat => {
+                    output.push(' ');
+                    pos += 1;
                 }
-            }
+                Mode::Break => {
+                    flush_line_suffix(&mut output, &mut pos, &mut line_suffix_buf);
+                    output.push('\n');
+                    emit_indent(&mut output, cmd.indent);
+                    pos = cmd.indent;
+                }
+            },
 
             Doc::Softline => {
                 match cmd.mode {
@@ -243,24 +240,22 @@ pub fn print_doc(doc: &Doc, width: i32) -> String {
                 fill_to_stack(&mut stack, &items, cmd.indent, width - pos);
             }
 
-            Doc::IfBreak(ref broken, ref flat) => {
-                match cmd.mode {
-                    Mode::Flat => {
-                        stack.push(PrintCmd {
-                            indent: cmd.indent,
-                            mode: cmd.mode,
-                            doc: *flat.clone(),
-                        });
-                    }
-                    Mode::Break => {
-                        stack.push(PrintCmd {
-                            indent: cmd.indent,
-                            mode: cmd.mode,
-                            doc: *broken.clone(),
-                        });
-                    }
+            Doc::IfBreak(ref broken, ref flat) => match cmd.mode {
+                Mode::Flat => {
+                    stack.push(PrintCmd {
+                        indent: cmd.indent,
+                        mode: cmd.mode,
+                        doc: *flat.clone(),
+                    });
                 }
-            }
+                Mode::Break => {
+                    stack.push(PrintCmd {
+                        indent: cmd.indent,
+                        mode: cmd.mode,
+                        doc: *broken.clone(),
+                    });
+                }
+            },
 
             Doc::LineSuffix(ref inner) => {
                 line_suffix_buf.push((cmd.indent, *inner.clone()));
@@ -428,10 +423,7 @@ mod tests {
     fn test_nest() {
         let doc = concat(vec![
             text("if cond"),
-            nest(
-                INDENT_WIDTH,
-                concat(vec![hardline(), text("body")]),
-            ),
+            nest(INDENT_WIDTH, concat(vec![hardline(), text("body")])),
             hardline(),
             text("end"),
         ]);
@@ -469,11 +461,7 @@ mod tests {
             text("("),
             nest(
                 INDENT_WIDTH,
-                concat(vec![
-                    hardline(),
-                    text("item"),
-                    if_break(text(","), nil()),
-                ]),
+                concat(vec![hardline(), text("item"), if_break(text(","), nil())]),
             ),
             hardline(),
             text(")"),

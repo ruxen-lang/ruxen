@@ -9,7 +9,12 @@ pub struct Span {
 
 impl Span {
     pub fn new(start: usize, end: usize, line: u32, column: u32) -> Self {
-        Self { start, end, line, column }
+        Self {
+            start,
+            end,
+            line,
+            column,
+        }
     }
 }
 
@@ -75,8 +80,8 @@ pub enum TokenKind {
     Pub,
     Protected,
     Consume,
-    SelfValue,  // `self`
-    SelfType,   // `Self`
+    SelfValue, // `self`
+    SelfType,  // `Self`
     Init,
     Super,
     Return,
@@ -124,10 +129,6 @@ pub enum TokenKind {
     Null,
 
     // ── Keywords: Reserved ──
-    Actor,
-    Spawn,
-    Send,
-    Receive,
     Macro,
     Crate,
     Extern,
@@ -137,31 +138,31 @@ pub enum TokenKind {
     Unless,
 
     // ── Operators: Arithmetic ──
-    Plus,       // +
-    Minus,      // -
-    Star,       // *
-    Slash,      // /
-    Percent,    // %
+    Plus,    // +
+    Minus,   // -
+    Star,    // *
+    Slash,   // /
+    Percent, // %
 
     // ── Operators: Comparison ──
-    EqEq,      // ==
-    NotEq,     // !=
-    Lt,        // <
-    Gt,        // >
-    LtEq,     // <=
-    GtEq,     // >=
+    EqEq,  // ==
+    NotEq, // !=
+    Lt,    // <
+    Gt,    // >
+    LtEq,  // <=
+    GtEq,  // >=
 
     // ── Operators: Logical ──
-    AmpAmp,    // &&
-    PipePipe,  // ||
-    Bang,      // !
+    AmpAmp,   // &&
+    PipePipe, // ||
+    Bang,     // !
 
     // ── Operators: Bitwise ──
-    Amp,       // &
-    Pipe,      // |
-    Caret,     // ^
-    Shl,       // <<
-    Shr,       // >>
+    Amp,   // &
+    Pipe,  // |
+    Caret, // ^
+    Shl,   // <<
+    Shr,   // >>
 
     // ── Operators: Assignment ──
     Eq,        // =
@@ -172,12 +173,12 @@ pub enum TokenKind {
     PercentEq, // %=
 
     // ── Operators: Range ──
-    DotDot,    // ..
-    DotDotEq,  // ..=
+    DotDot,   // ..
+    DotDotEq, // ..=
 
     // ── Operators: Arrow ──
-    Arrow,     // ->
-    FatArrow,  // =>
+    Arrow,    // ->
+    FatArrow, // =>
 
     // ── Operators: Special ──
     QuestionDot, // ?.
@@ -187,12 +188,12 @@ pub enum TokenKind {
     AmpMut,      // &mut
 
     // ── Delimiters ──
-    LParen,    // (
-    RParen,    // )
-    LBracket,  // [
-    RBracket,  // ]
-    LBrace,    // {
-    RBrace,    // }
+    LParen,   // (
+    RParen,   // )
+    LBracket, // [
+    RBracket, // ]
+    LBrace,   // {
+    RBrace,   // }
 
     // ── Punctuation ──
     Dot,       // .
@@ -212,7 +213,7 @@ pub enum TokenKind {
     TypeIdentifier(String),
 
     // ── Lifetime ──
-    Lifetime(String),  // 'a, 'input — lifetime parameters
+    Lifetime(String), // 'a, 'input — lifetime parameters
 
     // ── Comments ──
     DocComment(String),
@@ -348,10 +349,6 @@ pub fn lookup_keyword(ident: &str) -> Option<TokenKind> {
         "Err" => Some(TokenKind::ErrKw),
 
         // Reserved
-        "actor" => Some(TokenKind::Actor),
-        "spawn" => Some(TokenKind::Spawn),
-        "send" => Some(TokenKind::Send),
-        "receive" => Some(TokenKind::Receive),
         "macro" => Some(TokenKind::Macro),
         "crate" => Some(TokenKind::Crate),
         "extern" => Some(TokenKind::Extern),

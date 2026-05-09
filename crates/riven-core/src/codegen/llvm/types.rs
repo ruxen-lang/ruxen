@@ -31,7 +31,7 @@ pub fn ty_to_llvm<'ctx>(ty: &Ty, context: &'ctx Context) -> Option<BasicTypeEnum
         Ty::String
         | Ty::Str
         | Ty::Vec(_)
-        | Ty::Hash(_, _)
+        | Ty::HashMap(_, _)
         | Ty::Set(_)
         | Ty::Ref(_)
         | Ty::RefMut(_)
@@ -64,21 +64,18 @@ pub fn ty_to_llvm<'ctx>(ty: &Ty, context: &'ctx Context) -> Option<BasicTypeEnum
 }
 
 /// Build an LLVM function type from a MIR function signature.
-pub fn build_function_type<'ctx>(
-    func: &MirFunction,
-    context: &'ctx Context,
-) -> FunctionType<'ctx> {
+pub fn build_function_type<'ctx>(func: &MirFunction, context: &'ctx Context) -> FunctionType<'ctx> {
     // Special case: main returns i32
     if func.name == "main" {
-        return context.i32_type().fn_type(&[], false);
+        let ptr_ty = context.ptr_type(AddressSpace::default());
+        let params: &[BasicMetadataTypeEnum] = &[context.i32_type().into(), ptr_ty.into()];
+        return context.i32_type().fn_type(params, false);
     }
 
     let param_types: Vec<BasicMetadataTypeEnum> = func
         .params
         .iter()
-        .filter_map(|&pid| {
-            ty_to_llvm(&func.locals[pid as usize].ty, context).map(|t| t.into())
-        })
+        .filter_map(|&pid| ty_to_llvm(&func.locals[pid as usize].ty, context).map(|t| t.into()))
         .collect();
 
     match ty_to_llvm(&func.return_ty, context) {

@@ -1,0 +1,9 @@
+def divmod(a: Int, b: Int) -> (Int, Int)
+  (a / b, a % b)
+end
+
+def main
+  let (q, r) = divmod(17, 5)
+  puts "q=#{q}"
+  puts "r=#{r}"
+end

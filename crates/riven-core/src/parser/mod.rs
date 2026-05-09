@@ -19,6 +19,7 @@ use ast::*;
 /// Internal helper for parsing method signatures before deciding if body follows.
 struct ParsedMethodSig {
     vis: Visibility,
+    is_async: bool,
     self_mode: Option<SelfMode>,
     is_class_method: bool,
     name: String,
@@ -33,6 +34,9 @@ pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
     diagnostics: Vec<Diagnostic>,
+    /// Doc comments (`## ...`) accumulated while skipping leading trivia.
+    /// Drained by `take_pending_docs()` when a definition is built.
+    pending_doc_comments: Vec<String>,
 }
 
 // ─── Token Navigation ───────────────────────────────────────────────
@@ -43,7 +47,32 @@ impl Parser {
             tokens,
             pos: 0,
             diagnostics: Vec::new(),
+            pending_doc_comments: Vec::new(),
         }
+    }
+
+    /// Consume any leading `##` doc-comment tokens, returning their bodies.
+    /// The lexer has already stripped the `##` prefix and one optional
+    /// space, so the captured strings are the doc body verbatim.
+    fn collect_doc_comments(&mut self) -> Vec<String> {
+        let mut docs = Vec::new();
+        loop {
+            // Allow blank newlines between consecutive `##` lines.
+            self.skip_newlines();
+            let body = match self.current_kind() {
+                TokenKind::DocComment(body) => body.clone(),
+                _ => break,
+            };
+            docs.push(body);
+            self.advance();
+        }
+        docs
+    }
+
+    /// Drain any pending doc comments accumulated by ambient skipping into
+    /// a fresh `Vec` for attachment to the next definition.
+    fn take_pending_docs(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.pending_doc_comments)
     }
 
     /// Return a reference to accumulated diagnostics.
@@ -69,6 +98,7 @@ impl Parser {
         // Try top-level item first (def, class, struct, enum, trait, impl, module, use, const)
         match self.current_kind().clone() {
             TokenKind::Def
+            | TokenKind::Async
             | TokenKind::Class
             | TokenKind::Struct
             | TokenKind::Enum
@@ -85,7 +115,8 @@ impl Parser {
                 if self.diagnostics.len() > saved_diags {
                     // Check if the errors indicate incomplete input
                     let has_eof_error = self.diagnostics[saved_diags..].iter().any(|d| {
-                        d.message.contains("expected End") || d.message.contains("expected {:?}, found Eof")
+                        d.message.contains("expected End")
+                            || d.message.contains("expected {:?}, found Eof")
                             || d.message.contains("found Eof")
                     });
                     if has_eof_error || self.at_eof() {
@@ -119,9 +150,9 @@ impl Parser {
             TokenKind::Pub | TokenKind::Protected => {
                 let result = self.parse_top_level_item();
                 if self.diagnostics.len() > saved_diags {
-                    let has_eof_error = self.diagnostics[saved_diags..].iter().any(|d| {
-                        d.message.contains("found Eof")
-                    });
+                    let has_eof_error = self.diagnostics[saved_diags..]
+                        .iter()
+                        .any(|d| d.message.contains("found Eof"));
                     if has_eof_error {
                         self.pos = saved_pos;
                         self.diagnostics.truncate(saved_diags);
@@ -181,6 +212,7 @@ impl Parser {
             match &tok.kind {
                 // Block openers
                 TokenKind::Def
+                | TokenKind::Async
                 | TokenKind::Class
                 | TokenKind::Struct
                 | TokenKind::Enum
@@ -236,7 +268,11 @@ impl Parser {
         let span = self.span_from(&start);
         let program = Program { items, span };
 
-        if self.diagnostics.iter().any(|d| d.level == crate::diagnostics::DiagnosticLevel::Error) {
+        if self
+            .diagnostics
+            .iter()
+            .any(|d| d.level == crate::diagnostics::DiagnosticLevel::Error)
+        {
             Err(self.diagnostics.clone())
         } else {
             Ok(program)
@@ -246,7 +282,9 @@ impl Parser {
     // ─── Current / Peek / Advance ────────────────────────────────────
 
     pub(crate) fn current(&self) -> &Token {
-        self.tokens.get(self.pos).unwrap_or_else(|| self.tokens.last().unwrap())
+        self.tokens
+            .get(self.pos)
+            .unwrap_or_else(|| self.tokens.last().unwrap())
     }
 
     pub(crate) fn current_kind(&self) -> &TokenKind {
@@ -258,7 +296,9 @@ impl Parser {
     }
 
     pub(crate) fn peek(&self) -> &Token {
-        self.tokens.get(self.pos + 1).unwrap_or_else(|| self.tokens.last().unwrap())
+        self.tokens
+            .get(self.pos + 1)
+            .unwrap_or_else(|| self.tokens.last().unwrap())
     }
 
     pub(crate) fn peek_kind(&self) -> TokenKind {
@@ -266,7 +306,9 @@ impl Parser {
     }
 
     pub(crate) fn peek_at(&self, offset: usize) -> &Token {
-        self.tokens.get(self.pos + offset).unwrap_or_else(|| self.tokens.last().unwrap())
+        self.tokens
+            .get(self.pos + offset)
+            .unwrap_or_else(|| self.tokens.last().unwrap())
     }
 
     pub(crate) fn peek_at_kind(&self, offset: usize) -> TokenKind {
@@ -274,7 +316,10 @@ impl Parser {
     }
 
     pub(crate) fn advance(&mut self) -> &Token {
-        let tok = self.tokens.get(self.pos).unwrap_or_else(|| self.tokens.last().unwrap());
+        let tok = self
+            .tokens
+            .get(self.pos)
+            .unwrap_or_else(|| self.tokens.last().unwrap());
         if self.pos < self.tokens.len() {
             self.pos += 1;
         }
@@ -305,7 +350,11 @@ impl Parser {
             self.advance();
             true
         } else {
-            self.error(&format!("expected {:?}, found {:?}", kind, self.current_kind()));
+            self.error(&format!(
+                "expected {:?}, found {:?}",
+                kind,
+                self.current_kind()
+            ));
             false
         }
     }
@@ -335,7 +384,10 @@ impl Parser {
                 name
             }
             _ => {
-                self.error(&format!("expected identifier, found {:?}", self.current_kind()));
+                self.error(&format!(
+                    "expected identifier, found {:?}",
+                    self.current_kind()
+                ));
                 "_error".to_string()
             }
         }
@@ -378,7 +430,10 @@ impl Parser {
                 "self".to_string()
             }
             _ => {
-                self.error(&format!("expected identifier, found {:?}", self.current_kind()));
+                self.error(&format!(
+                    "expected identifier, found {:?}",
+                    self.current_kind()
+                ));
                 "_error".to_string()
             }
         }
@@ -412,6 +467,11 @@ impl Parser {
         self.diagnostics.push(Diagnostic::error(message, span));
     }
 
+    pub(crate) fn error_at_with_code(&mut self, message: &str, span: Span, code: &str) {
+        self.diagnostics
+            .push(Diagnostic::error_with_code(message, span, code));
+    }
+
     // ─── Error Recovery ──────────────────────────────────────────────
 
     pub(crate) fn synchronize(&mut self) {
@@ -420,6 +480,7 @@ impl Parser {
                 TokenKind::Eof => return,
                 TokenKind::Let
                 | TokenKind::Def
+                | TokenKind::Async
                 | TokenKind::Class
                 | TokenKind::Struct
                 | TokenKind::Enum
@@ -451,10 +512,11 @@ impl Parser {
 impl Parser {
     fn parse_top_level_item(&mut self) -> Option<TopLevelItem> {
         self.skip_newlines();
-        // Skip doc comments for now
-        while let TokenKind::DocComment(_) = self.current_kind() {
-            self.advance();
-            self.skip_newlines();
+        // Capture any leading `##` doc comments so the next item can pick
+        // them up via `take_pending_docs()`.
+        let docs = self.collect_doc_comments();
+        if !docs.is_empty() {
+            self.pending_doc_comments.extend(docs);
         }
 
         match self.current_kind().clone() {
@@ -463,7 +525,11 @@ impl Parser {
             TokenKind::Struct => Some(TopLevelItem::Struct(self.parse_struct_def())),
             TokenKind::Enum => Some(TopLevelItem::Enum(self.parse_enum_def())),
             TokenKind::Trait => Some(TopLevelItem::Trait(self.parse_trait_def())),
-            TokenKind::Impl => Some(TopLevelItem::Impl(self.parse_impl_block())),
+            TokenKind::Impl => Some(TopLevelItem::Impl(self.parse_impl_block(false))),
+            TokenKind::Unsafe if matches!(self.peek_kind(), TokenKind::Impl) => {
+                self.advance(); // consume `unsafe`
+                Some(TopLevelItem::Impl(self.parse_impl_block(true)))
+            }
             TokenKind::Use => Some(TopLevelItem::Use(self.parse_use_decl())),
             TokenKind::Type => Some(TopLevelItem::TypeAlias(self.parse_type_alias())),
             TokenKind::Newtype => Some(TopLevelItem::Newtype(self.parse_newtype_def())),
@@ -471,50 +537,122 @@ impl Parser {
             TokenKind::Lib => Some(TopLevelItem::Lib(self.parse_lib_decl(vec![]))),
             TokenKind::Extern => Some(TopLevelItem::Extern(self.parse_extern_block())),
             TokenKind::At => {
-                // Parse @[...] attributes, then the item that follows
+                // Parse @[...] attributes, then the item that follows.
+                // Recognised attributes:
+                //   @[link("name")]            — applies to `lib`
+                //   @[repr(C)] / @[repr(C, packed)] — applies to `struct`
+                //   @[derive(Trait1, Trait2)]  — applies to struct/class/enum;
+                //                                produces the same HIR as the
+                //                                body-form `derive Trait1, Trait2`
                 let attrs = self.parse_attributes();
                 self.skip_newlines();
+                let has_derive_attr = attrs.iter().any(|attr| attr.name == "derive");
                 match self.current_kind() {
                     TokenKind::Lib => {
                         let mut lib = self.parse_lib_decl(vec![]);
-                        // Convert attributes to link attrs
                         for attr in attrs {
                             if attr.name == "link" {
                                 for arg in &attr.args {
                                     lib.link_attrs.push(LinkAttr {
-                                        name: arg.clone(),
+                                        name: arg.as_str().to_string(),
                                         kind: LinkKind::Dynamic,
                                     });
                                 }
-                            } else if attr.name == "repr" {
-                                // repr attrs handled by struct parsing
+                            } else {
+                                self.error(&format!(
+                                    "attribute `{}` is not valid on `lib`",
+                                    attr.name
+                                ));
                             }
                         }
                         Some(TopLevelItem::Lib(lib))
                     }
                     TokenKind::Struct => {
                         let mut s = self.parse_struct_def();
-                        // Store repr attributes in derive_traits for now
-                        for attr in attrs {
-                            if attr.name == "repr" {
-                                for arg in &attr.args {
-                                    s.derive_traits.push(format!("repr({})", arg));
+                        self.apply_struct_attrs(&mut s, &attrs);
+                        Some(TopLevelItem::Struct(s))
+                    }
+                    TokenKind::Class => {
+                        let mut c = self.parse_class_def();
+                        self.apply_class_attrs(&mut c, &attrs);
+                        Some(TopLevelItem::Class(c))
+                    }
+                    TokenKind::Enum => {
+                        let mut e = self.parse_enum_def();
+                        self.apply_enum_attrs(&mut e, &attrs);
+                        Some(TopLevelItem::Enum(e))
+                    }
+                    TokenKind::Trait => {
+                        if has_derive_attr {
+                            for attr in &attrs {
+                                if attr.name == "derive" {
+                                    self.error_at_with_code(
+                                        "@[derive] cannot be applied to a trait",
+                                        attr.span.clone(),
+                                        "E0607",
+                                    );
                                 }
                             }
                         }
-                        Some(TopLevelItem::Struct(s))
+                        Some(TopLevelItem::Trait(self.parse_trait_def()))
+                    }
+                    TokenKind::Def => {
+                        if has_derive_attr {
+                            for attr in &attrs {
+                                if attr.name == "derive" {
+                                    self.error_at_with_code(
+                                        "@[derive] cannot be applied to a function",
+                                        attr.span.clone(),
+                                        "E0607",
+                                    );
+                                }
+                            }
+                        }
+                        Some(TopLevelItem::Function(
+                            self.parse_func_def(Visibility::Private),
+                        ))
+                    }
+                    TokenKind::Pub | TokenKind::Protected => {
+                        if has_derive_attr {
+                            for attr in &attrs {
+                                if attr.name == "derive" {
+                                    self.error_at_with_code(
+                                        "@[derive] cannot be applied to a function",
+                                        attr.span.clone(),
+                                        "E0607",
+                                    );
+                                }
+                            }
+                        }
+                        let vis = self.parse_visibility();
+                        match self.current_kind() {
+                            TokenKind::Def | TokenKind::Async => {
+                                Some(TopLevelItem::Function(self.parse_func_def(vis)))
+                            }
+                            _ => {
+                                self.error("expected `def` after visibility modifier at top level");
+                                None
+                            }
+                        }
                     }
                     _ => {
-                        self.error("expected `lib` or `struct` after attribute");
+                        self.error("expected declaration after attribute");
                         None
                     }
                 }
             }
-            TokenKind::Def => Some(TopLevelItem::Function(self.parse_func_def(Visibility::Private))),
+            TokenKind::Async => Some(TopLevelItem::Function(
+                self.parse_func_def(Visibility::Private),
+            )),
+            TokenKind::Def => Some(TopLevelItem::Function(
+                self.parse_func_def(Visibility::Private),
+            )),
             TokenKind::Pub => {
                 let vis = self.parse_visibility();
                 match self.current_kind() {
-                    TokenKind::Def => Some(TopLevelItem::Function(self.parse_func_def(vis))),
+                    TokenKind::Def | TokenKind::Async => {
+                        Some(TopLevelItem::Function(self.parse_func_def(vis)))
+                    }
                     _ => {
                         self.error("expected `def` after visibility modifier at top level");
                         None
@@ -524,7 +662,9 @@ impl Parser {
             TokenKind::Protected => {
                 let vis = self.parse_visibility();
                 match self.current_kind() {
-                    TokenKind::Def => Some(TopLevelItem::Function(self.parse_func_def(vis))),
+                    TokenKind::Def | TokenKind::Async => {
+                        Some(TopLevelItem::Function(self.parse_func_def(vis)))
+                    }
                     _ => {
                         self.error("expected `def` after visibility modifier at top level");
                         None
@@ -560,7 +700,7 @@ impl Parser {
     fn parse_module_def(&mut self) -> ModuleDef {
         let start = self.current_span();
         self.advance(); // consume module
-        let name = self.expect_type_identifier();
+        let name = self.expect_any_identifier();
         self.skip_newlines();
 
         let mut items = Vec::new();
@@ -588,12 +728,15 @@ impl Parser {
 
         let mut path = Vec::new();
         // Module path: segments separated by .
-        path.push(self.expect_type_identifier());
+        path.push(self.expect_any_identifier());
         while self.at(TokenKind::Dot) {
-            // Peek: if next is TypeIdentifier and then either . or end, continue path
-            if let TokenKind::TypeIdentifier(_) = self.peek_kind() {
+            // Continue while the next token is an identifier segment.
+            if matches!(
+                self.peek_kind(),
+                TokenKind::Identifier(_) | TokenKind::TypeIdentifier(_)
+            ) {
                 self.advance(); // consume .
-                path.push(self.expect_type_identifier());
+                path.push(self.expect_any_identifier());
             } else if self.peek_kind() == TokenKind::LBrace {
                 // use Path.{A, B}
                 self.advance(); // consume .
@@ -609,20 +752,20 @@ impl Parser {
             self.skip_newlines();
             let mut names = Vec::new();
             if !self.at(TokenKind::RBrace) {
-                names.push(self.expect_type_identifier());
+                names.push(self.expect_any_identifier());
                 while self.eat(TokenKind::Comma) {
                     self.skip_newlines();
                     if self.at(TokenKind::RBrace) {
                         break;
                     }
-                    names.push(self.expect_type_identifier());
+                    names.push(self.expect_any_identifier());
                 }
             }
             self.skip_newlines();
             self.expect(TokenKind::RBrace);
             UseKind::Group(names)
         } else if self.eat(TokenKind::As) {
-            let alias = self.expect_type_identifier();
+            let alias = self.expect_any_identifier();
             UseKind::Alias(alias)
         } else {
             UseKind::Simple
@@ -677,6 +820,7 @@ impl Parser {
     // ─── Const ───────────────────────────────────────────────────────
 
     fn parse_const_def(&mut self) -> ConstDef {
+        let doc_comments = self.take_pending_docs();
         let start = self.current_span();
         self.advance(); // consume const
         let name = self.expect_type_identifier();
@@ -697,6 +841,7 @@ impl Parser {
             name,
             type_expr,
             value,
+            doc_comments,
             span,
         }
     }
@@ -704,6 +849,7 @@ impl Parser {
     // ─── Enum ────────────────────────────────────────────────────────
 
     fn parse_enum_def(&mut self) -> EnumDef {
+        let doc_comments = self.take_pending_docs();
         let start = self.current_span();
         self.advance(); // consume enum
         let name = self.expect_type_identifier();
@@ -716,10 +862,20 @@ impl Parser {
         self.skip_newlines();
 
         let mut variants = Vec::new();
+        let mut derive_traits = Vec::new();
         while !self.at(TokenKind::End) && !self.at(TokenKind::Eof) {
             self.skip_newlines();
             if self.at(TokenKind::End) {
                 break;
+            }
+            if self.at(TokenKind::Derive) {
+                self.advance();
+                derive_traits.push(self.expect_type_identifier());
+                while self.eat(TokenKind::Comma) {
+                    self.skip_newlines();
+                    derive_traits.push(self.expect_type_identifier());
+                }
+                continue;
             }
             variants.push(self.parse_variant());
             self.skip_newlines();
@@ -730,6 +886,8 @@ impl Parser {
             name,
             generic_params,
             variants,
+            derive_traits,
+            doc_comments,
             span,
         }
     }
@@ -842,6 +1000,7 @@ impl Parser {
     // ─── Struct ──────────────────────────────────────────────────────
 
     fn parse_struct_def(&mut self) -> StructDef {
+        let doc_comments = self.take_pending_docs();
         let start = self.current_span();
         self.advance(); // consume struct
         let name = self.expect_type_identifier();
@@ -883,6 +1042,8 @@ impl Parser {
             generic_params,
             fields,
             derive_traits,
+            repr: Vec::new(),
+            doc_comments,
             span,
         }
     }
@@ -890,6 +1051,7 @@ impl Parser {
     // ─── Trait ───────────────────────────────────────────────────────
 
     fn parse_trait_def(&mut self) -> TraitDef {
+        let doc_comments = self.take_pending_docs();
         let start = self.current_span();
         self.advance(); // consume trait
         let name = self.expect_type_identifier();
@@ -913,10 +1075,11 @@ impl Parser {
             if self.at(TokenKind::End) {
                 break;
             }
-            // Skip doc comments
-            while let TokenKind::DocComment(_) = self.current_kind() {
-                self.advance();
-                self.skip_newlines();
+            // Capture leading `##` doc comments so the next inner item
+            // (method sig / default method) can pick them up.
+            let docs = self.collect_doc_comments();
+            if !docs.is_empty() {
+                self.pending_doc_comments.extend(docs);
             }
             if self.at(TokenKind::End) {
                 break;
@@ -931,11 +1094,16 @@ impl Parser {
             generic_params,
             super_traits,
             items,
+            doc_comments,
             span,
         }
     }
 
     fn parse_trait_item(&mut self) -> TraitItem {
+        // Doc comments accumulated by `parse_trait_def`'s body loop apply to
+        // the next inner item. They flow through `take_pending_docs()` to
+        // any `FuncDef` we build below.
+        let doc_comments = self.take_pending_docs();
         let start = self.current_span();
 
         if self.at(TokenKind::Type) {
@@ -950,7 +1118,7 @@ impl Parser {
         // Could have visibility
         let vis = self.parse_visibility();
         // Should be `def`
-        if !self.at(TokenKind::Def) {
+        if !matches!(self.current_kind(), TokenKind::Def | TokenKind::Async) {
             self.error("expected `def` or `type` in trait body");
             self.synchronize();
             return TraitItem::AssocType {
@@ -987,6 +1155,7 @@ impl Parser {
             let span = self.span_from(&start);
             TraitItem::DefaultMethod(FuncDef {
                 visibility: sig.vis,
+                is_async: sig.is_async,
                 self_mode: sig.self_mode,
                 is_class_method: sig.is_class_method,
                 name: sig.name,
@@ -995,16 +1164,23 @@ impl Parser {
                 return_type: sig.return_type,
                 where_clause: None,
                 body,
+                doc_comments,
                 span,
             })
         } else if matches!(
             self.current_kind(),
-            TokenKind::Def | TokenKind::Pub | TokenKind::Protected
-            | TokenKind::Type | TokenKind::End | TokenKind::Eof
+            TokenKind::Def
+                | TokenKind::Async
+                | TokenKind::Pub
+                | TokenKind::Protected
+                | TokenKind::Type
+                | TokenKind::End
+                | TokenKind::Eof
         ) {
             // Case 3: Next declaration keyword → signature only, no body
             let span = self.span_from(&start);
             TraitItem::MethodSig(MethodSig {
+                is_async: sig.is_async,
                 self_mode: sig.self_mode,
                 is_class_method: sig.is_class_method,
                 name: sig.name,
@@ -1020,6 +1196,7 @@ impl Parser {
             let span = self.span_from(&start);
             TraitItem::DefaultMethod(FuncDef {
                 visibility: sig.vis,
+                is_async: sig.is_async,
                 self_mode: sig.self_mode,
                 is_class_method: sig.is_class_method,
                 name: sig.name,
@@ -1028,17 +1205,16 @@ impl Parser {
                 return_type: sig.return_type,
                 where_clause: None,
                 body,
+                doc_comments,
                 span,
             })
         }
     }
 
-    /// Helper to check if current token starts an expression or is `let`.
-
-
     /// Parse a method signature (everything except the body).
     /// Returns the parsed signature components.
     fn parse_method_signature(&mut self, visibility: Visibility) -> ParsedMethodSig {
+        let is_async = self.eat(TokenKind::Async);
         self.expect(TokenKind::Def);
 
         // Self mode: mut or consume
@@ -1092,6 +1268,7 @@ impl Parser {
 
         ParsedMethodSig {
             vis: visibility,
+            is_async,
             self_mode,
             is_class_method,
             name,
@@ -1103,9 +1280,10 @@ impl Parser {
 
     // ─── Impl Block ─────────────────────────────────────────────────
 
-    fn parse_impl_block(&mut self) -> ImplBlock {
+    fn parse_impl_block(&mut self, is_unsafe: bool) -> ImplBlock {
         let start = self.current_span();
         self.advance(); // consume impl
+        let negative_trait = self.eat(TokenKind::Bang);
 
         let generic_params = if self.at(TokenKind::LBracket) {
             Some(self.parse_generic_params())
@@ -1141,10 +1319,11 @@ impl Parser {
             if self.at(TokenKind::End) {
                 break;
             }
-            // Skip doc comments
-            while let TokenKind::DocComment(_) = self.current_kind() {
-                self.advance();
-                self.skip_newlines();
+            // Capture leading `##` doc comments so the next inner item
+            // (impl method / assoc type) can pick them up.
+            let docs = self.collect_doc_comments();
+            if !docs.is_empty() {
+                self.pending_doc_comments.extend(docs);
             }
             if self.at(TokenKind::End) {
                 break;
@@ -1156,6 +1335,8 @@ impl Parser {
         let span = self.span_from(&start);
         ImplBlock {
             generic_params,
+            is_unsafe,
+            negative_trait,
             trait_name,
             target_type,
             items,
@@ -1189,6 +1370,7 @@ impl Parser {
     // ─── Class ───────────────────────────────────────────────────────
 
     fn parse_class_def(&mut self) -> ClassDef {
+        let doc_comments = self.take_pending_docs();
         let start = self.current_span();
         self.advance(); // consume class
         let name = self.expect_type_identifier();
@@ -1210,16 +1392,18 @@ impl Parser {
         let mut fields = Vec::new();
         let mut methods = Vec::new();
         let mut inner_impls = Vec::new();
+        let mut derive_traits = Vec::new();
 
         while !self.at(TokenKind::End) && !self.at(TokenKind::Eof) {
             self.skip_newlines();
             if self.at(TokenKind::End) {
                 break;
             }
-            // Skip doc comments
-            while let TokenKind::DocComment(_) = self.current_kind() {
-                self.advance();
-                self.skip_newlines();
+            // Capture leading `##` doc comments so the next class member
+            // (method / field / inner impl) can pick them up.
+            let docs = self.collect_doc_comments();
+            if !docs.is_empty() {
+                self.pending_doc_comments.extend(docs);
             }
             if self.at(TokenKind::End) {
                 break;
@@ -1227,14 +1411,29 @@ impl Parser {
 
             match self.current_kind().clone() {
                 TokenKind::Impl => {
-                    inner_impls.push(self.parse_inner_impl());
+                    inner_impls.push(self.parse_inner_impl(false));
+                }
+                TokenKind::Unsafe if matches!(self.peek_kind(), TokenKind::Impl) => {
+                    self.advance(); // consume `unsafe`
+                    inner_impls.push(self.parse_inner_impl(true));
+                }
+                TokenKind::Async => {
+                    methods.push(self.parse_func_def(Visibility::Private));
                 }
                 TokenKind::Def => {
                     methods.push(self.parse_func_def(Visibility::Private));
                 }
+                TokenKind::Derive => {
+                    self.advance();
+                    derive_traits.push(self.expect_type_identifier());
+                    while self.eat(TokenKind::Comma) {
+                        self.skip_newlines();
+                        derive_traits.push(self.expect_type_identifier());
+                    }
+                }
                 TokenKind::Pub | TokenKind::Protected => {
                     let vis = self.parse_visibility();
-                    if self.at(TokenKind::Def) {
+                    if matches!(self.current_kind(), TokenKind::Def | TokenKind::Async) {
                         methods.push(self.parse_func_def(vis));
                     } else {
                         // Could be a field with visibility
@@ -1264,13 +1463,16 @@ impl Parser {
             fields,
             methods,
             inner_impls,
+            derive_traits,
+            doc_comments,
             span,
         }
     }
 
-    fn parse_inner_impl(&mut self) -> InnerImpl {
+    fn parse_inner_impl(&mut self, is_unsafe: bool) -> InnerImpl {
         let start = self.current_span();
         self.advance(); // consume impl
+        let negative_trait = self.eat(TokenKind::Bang);
         let trait_name = self.parse_type_path();
         self.skip_newlines();
 
@@ -1286,6 +1488,8 @@ impl Parser {
         self.expect(TokenKind::End);
         let span = self.span_from(&start);
         InnerImpl {
+            is_unsafe,
+            negative_trait,
             trait_name,
             items,
             span,
@@ -1316,7 +1520,9 @@ impl Parser {
     // ─── Function Definition ─────────────────────────────────────────
 
     fn parse_func_def(&mut self, visibility: Visibility) -> FuncDef {
+        let doc_comments = self.take_pending_docs();
         let start = self.current_span();
+        let is_async = self.eat(TokenKind::Async);
         self.expect(TokenKind::Def);
 
         // Self mode: mut or consume
@@ -1384,9 +1590,7 @@ impl Parser {
             while matches!(self.peek_at_kind(look), TokenKind::Newline) {
                 look += 1;
             }
-            if self.at(TokenKind::Where)
-                || matches!(self.peek_at_kind(look), TokenKind::Where)
-            {
+            if self.at(TokenKind::Where) || matches!(self.peek_at_kind(look), TokenKind::Where) {
                 self.skip_newlines();
                 Some(self.parse_where_clause())
             } else {
@@ -1420,7 +1624,7 @@ impl Parser {
 
         // Determine self_mode: if no explicit mode but method has body referencing self,
         // default to Immutable for methods (non-class methods).
-        let final_self_mode = self_mode.or_else(|| {
+        let final_self_mode = self_mode.or({
             // If it's not a class method and not init and doesn't have explicit self_mode,
             // we don't add one — it means no self param.
             None
@@ -1428,6 +1632,7 @@ impl Parser {
 
         FuncDef {
             visibility,
+            is_async,
             self_mode: final_self_mode,
             is_class_method,
             name,
@@ -1436,6 +1641,7 @@ impl Parser {
             return_type,
             where_clause,
             body,
+            doc_comments,
             span,
         }
     }
@@ -1612,6 +1818,62 @@ impl Parser {
 
     // ─── FFI Parsing ────────────────────────────────────────────────────
 
+    /// Route `@[derive(...)]` / `@[repr(...)]` attributes onto a struct.
+    /// Unknown attribute names emit a diagnostic.
+    fn apply_struct_attrs(&mut self, s: &mut StructDef, attrs: &[Attribute]) {
+        for attr in attrs {
+            match attr.name.as_str() {
+                "derive" => {
+                    for arg in &attr.args {
+                        s.derive_traits.push(arg.as_str().to_string());
+                    }
+                }
+                "repr" => {
+                    for arg in &attr.args {
+                        s.repr.push(arg.as_str().to_string());
+                    }
+                }
+                other => {
+                    self.error(&format!("attribute `{}` is not valid on `struct`", other));
+                }
+            }
+        }
+    }
+
+    /// Route `@[derive(...)]` attributes onto a class. `@[repr(...)]` is
+    /// rejected — classes use the boxed GC layout and cannot opt into
+    /// a C layout.
+    fn apply_class_attrs(&mut self, c: &mut ClassDef, attrs: &[Attribute]) {
+        for attr in attrs {
+            match attr.name.as_str() {
+                "derive" => {
+                    for arg in &attr.args {
+                        c.derive_traits.push(arg.as_str().to_string());
+                    }
+                }
+                other => {
+                    self.error(&format!("attribute `{}` is not valid on `class`", other));
+                }
+            }
+        }
+    }
+
+    /// Route `@[derive(...)]` attributes onto an enum.
+    fn apply_enum_attrs(&mut self, e: &mut EnumDef, attrs: &[Attribute]) {
+        for attr in attrs {
+            match attr.name.as_str() {
+                "derive" => {
+                    for arg in &attr.args {
+                        e.derive_traits.push(arg.as_str().to_string());
+                    }
+                }
+                other => {
+                    self.error(&format!("attribute `{}` is not valid on `enum`", other));
+                }
+            }
+        }
+    }
+
     /// Parse `@[name(args)]` attributes.
     fn parse_attributes(&mut self) -> Vec<Attribute> {
         let mut attrs = Vec::new();
@@ -1621,7 +1883,15 @@ impl Parser {
             self.expect(TokenKind::LBracket);
             self.skip_newlines();
 
-            let name = self.expect_any_identifier();
+            // `derive` is a reserved keyword but is also a valid attribute
+            // name (`@[derive(Copy, Clone)]`). Accept it here explicitly so
+            // the tokenizer's keyword status doesn't block the attribute.
+            let name = if self.at(TokenKind::Derive) {
+                self.advance();
+                "derive".to_string()
+            } else {
+                self.expect_any_identifier()
+            };
             let mut args = Vec::new();
 
             if self.at(TokenKind::LParen) {
@@ -1652,25 +1922,31 @@ impl Parser {
         attrs
     }
 
+    // (apply_type_attrs removed during merge — superseded by per-kind helpers
+    // apply_struct_attrs, apply_class_attrs, apply_enum_attrs from HEAD which
+    // already exist on master and have richer per-kind validation including
+    // E0607 error codes for misplaced @[derive].)
+
     /// Parse a single attribute argument (string literal or identifier).
-    fn parse_attr_arg(&mut self) -> String {
+    fn parse_attr_arg(&mut self) -> AttrArg {
+        let start = self.current_span();
         match self.current_kind().clone() {
             TokenKind::StringLiteral(s) => {
                 self.advance();
-                s
+                AttrArg::Str(s, self.span_from(&start))
             }
             TokenKind::Identifier(s) => {
                 self.advance();
-                s
+                AttrArg::Ident(s, self.span_from(&start))
             }
             TokenKind::TypeIdentifier(s) => {
                 self.advance();
-                s
+                AttrArg::Ident(s, self.span_from(&start))
             }
             _ => {
                 self.error("expected string or identifier in attribute argument");
                 self.advance();
-                String::new()
+                AttrArg::Ident(String::new(), self.span_from(&start))
             }
         }
     }
@@ -1703,7 +1979,10 @@ impl Parser {
             if self.at(TokenKind::Def) {
                 functions.push(self.parse_ffi_function());
             } else {
-                self.error(&format!("expected `def` in lib block, found {:?}", self.current_kind()));
+                self.error(&format!(
+                    "expected `def` in lib block, found {:?}",
+                    self.current_kind()
+                ));
                 self.advance();
             }
             self.expect_terminator();
@@ -1749,7 +2028,10 @@ impl Parser {
             if self.at(TokenKind::Def) {
                 functions.push(self.parse_ffi_function());
             } else {
-                self.error(&format!("expected `def` in extern block, found {:?}", self.current_kind()));
+                self.error(&format!(
+                    "expected `def` in extern block, found {:?}",
+                    self.current_kind()
+                ));
                 self.advance();
             }
             self.expect_terminator();

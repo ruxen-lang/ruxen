@@ -1,5 +1,4 @@
 /// Tests for the Riven code formatter.
-
 use super::*;
 
 // ─── Idempotency Helper ─────────────────────────────────────────────
@@ -14,15 +13,21 @@ fn assert_idempotent(source: &str) {
     );
 }
 
+#[allow(dead_code)]
 fn assert_formats_to(source: &str, expected: &str) {
     let result = format(source);
     assert_eq!(result.output, expected, "\nGot:\n{}", result.output);
     assert_idempotent(source);
 }
 
+#[allow(dead_code)]
 fn assert_unchanged(source: &str) {
     let result = format(source);
-    assert!(!result.changed, "Expected no change, but got:\n{}", result.output);
+    assert!(
+        !result.changed,
+        "Expected no change, but got:\n{}",
+        result.output
+    );
 }
 
 // ─── Basic Formatting ───────────────────────────────────────────────
@@ -107,14 +112,22 @@ fn test_syntax_error_returns_original() {
 fn test_line_comment_preserved() {
     let source = "# A comment\ndef main\n  puts \"hello\"\nend\n";
     let result = format(source);
-    assert!(result.output.contains("# A comment"), "Comment missing from output: {}", result.output);
+    assert!(
+        result.output.contains("# A comment"),
+        "Comment missing from output: {}",
+        result.output
+    );
 }
 
 #[test]
 fn test_doc_comment_preserved() {
     let source = "## Documentation\ndef main\n  puts \"hello\"\nend\n";
     let result = format(source);
-    assert!(result.output.contains("## Documentation"), "Doc comment missing from output: {}", result.output);
+    assert!(
+        result.output.contains("## Documentation"),
+        "Doc comment missing from output: {}",
+        result.output
+    );
 }
 
 // ─── String Interpolation ───────────────────────────────────────────
@@ -124,7 +137,11 @@ fn test_string_interpolation() {
     let source = "def main\n  let x = 42\n  puts \"The answer is #{x}\"\nend\n";
     let result = format(source);
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
-    assert!(result.output.contains("#{x}") || result.output.contains("#{"), "Interpolation missing: {}", result.output);
+    assert!(
+        result.output.contains("#{x}") || result.output.contains("#{"),
+        "Interpolation missing: {}",
+        result.output
+    );
     assert_idempotent(source);
 }
 
@@ -141,7 +158,8 @@ fn test_impl_block() {
 
 #[test]
 fn test_trait_impl() {
-    let source = "impl Displayable for Priority\n  def to_display -> String\n    \"hello\"\n  end\nend\n";
+    let source =
+        "impl Displayable for Priority\n  def to_display -> String\n    \"hello\"\n  end\nend\n";
     let result = format(source);
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
     assert!(result.output.contains("impl Displayable for Priority"));
@@ -156,8 +174,16 @@ fn test_enum_with_data() {
     let result = format(source);
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
     // The formatter outputs variant fields with parentheses
-    assert!(result.output.contains("Circle"), "Missing Circle in:\n{}", result.output);
-    assert!(result.output.contains("radius"), "Missing radius in:\n{}", result.output);
+    assert!(
+        result.output.contains("Circle"),
+        "Missing Circle in:\n{}",
+        result.output
+    );
+    assert!(
+        result.output.contains("radius"),
+        "Missing radius in:\n{}",
+        result.output
+    );
     assert_idempotent(source);
 }
 
@@ -178,11 +204,8 @@ macro_rules! fixture_test {
     ($name:ident, $file:expr) => {
         #[test]
         fn $name() {
-            let source =
-                std::fs::read_to_string(concat!("tests/fixtures/", $file)).expect(&format!(
-                    "Failed to read fixture file: {}",
-                    $file
-                ));
+            let source = std::fs::read_to_string(concat!("tests/fixtures/", $file))
+                .expect(&format!("Failed to read fixture file: {}", $file));
             let result = format(&source);
             assert!(
                 result.errors.is_empty(),
@@ -237,7 +260,13 @@ fn test_doc_group_break_on_narrow() {
         text("def f("),
         nest(
             INDENT_WIDTH,
-            concat(vec![softline(), text("a: Int"), text(","), line(), text("b: Int")]),
+            concat(vec![
+                softline(),
+                text("a: Int"),
+                text(","),
+                line(),
+                text("b: Int"),
+            ]),
         ),
         softline(),
         text(")"),
@@ -246,7 +275,11 @@ fn test_doc_group_break_on_narrow() {
     assert_eq!(print_doc(&doc, 100), "def f(a: Int, b: Int)");
     // Narrow: breaks
     let narrow = print_doc(&doc, 15);
-    assert!(narrow.contains('\n'), "Expected line break in narrow mode: {}", narrow);
+    assert!(
+        narrow.contains('\n'),
+        "Expected line break in narrow mode: {}",
+        narrow
+    );
 }
 
 // ─── Comment Collector Tests ────────────────────────────────────────
@@ -272,9 +305,9 @@ fn test_comment_inside_interpolation_ignored() {
 
 #[test]
 fn test_import_sorting_groups() {
+    use super::format_imports::format_sorted_imports;
     use crate::lexer::token::Span;
     use crate::parser::ast::{UseDecl, UseKind};
-    use super::format_imports::format_sorted_imports;
 
     let imports = vec![
         UseDecl {
@@ -299,5 +332,9 @@ fn test_import_sorting_groups() {
     let lines: Vec<&str> = rendered.lines().collect();
 
     // Std should come first
-    assert!(lines[0].contains("Std"), "First line should be Std import: {}", lines[0]);
+    assert!(
+        lines[0].contains("Std"),
+        "First line should be Std import: {}",
+        lines[0]
+    );
 }

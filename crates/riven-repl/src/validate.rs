@@ -5,8 +5,8 @@
 
 use rustyline::validate::{ValidationContext, ValidationResult, Validator};
 
-use riven_core::lexer::Lexer;
 use riven_core::lexer::token::TokenKind;
+use riven_core::lexer::Lexer;
 
 /// Validates REPL input for completeness (delimiter balance).
 pub struct RivenValidator;

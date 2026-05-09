@@ -31,10 +31,7 @@ impl ModuleTree {
     pub fn discover(project_root: &Path) -> Result<Self, String> {
         let src_dir = project_root.join("src");
         if !src_dir.exists() {
-            return Err(format!(
-                "source directory not found: {}",
-                src_dir.display()
-            ));
+            return Err(format!("source directory not found: {}", src_dir.display()));
         }
 
         let mut root = ModuleNode {
@@ -104,18 +101,14 @@ fn discover_recursive(
         let path = entry.path();
         if path.is_dir() {
             subdirs.push(path);
-        } else if path.extension().map_or(false, |ext| ext == "rvn") {
+        } else if path.extension().is_some_and(|ext| ext == "rvn") {
             rvn_files.push(path);
         }
     }
 
     // Process .rvn files
     for file_path in &rvn_files {
-        let file_name = file_path
-            .file_stem()
-            .unwrap()
-            .to_string_lossy()
-            .to_string();
+        let file_name = file_path.file_stem().unwrap().to_string_lossy().to_string();
 
         let rel_path = file_path
             .strip_prefix(src_dir)
@@ -129,9 +122,7 @@ fn discover_recursive(
         }
 
         let module_name = to_upper_camel_case(&file_name);
-        let module_path = ModuleTree::module_path_for_file(
-            &rel_path.with_extension(""),
-        );
+        let module_path = ModuleTree::module_path_for_file(&rel_path.with_extension(""));
 
         // If there's a matching directory, this file is the module root
         let node = parent_node
@@ -148,11 +139,7 @@ fn discover_recursive(
 
     // Process subdirectories
     for dir_path in &subdirs {
-        let dir_name = dir_path
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .to_string();
+        let dir_name = dir_path.file_name().unwrap().to_string_lossy().to_string();
 
         // Skip hidden directories
         if dir_name.starts_with('.') {

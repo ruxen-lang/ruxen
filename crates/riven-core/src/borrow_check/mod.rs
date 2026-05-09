@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use crate::hir::nodes::*;
 use crate::hir::types::{MoveSemantics, Ty};
 use crate::lexer::token::Span;
-use crate::resolve::symbols::{DefKind, SymbolTable};
+use crate::resolve::symbols::{ty_is_effectively_copy, DefKind, SymbolTable};
 
 use self::borrows::{BorrowKind, BorrowSet};
 use self::errors::{BorrowError, ErrorCode, SpanLabel};
@@ -187,7 +187,10 @@ impl<'a> BorrowChecker<'a> {
                 self.check_expr(operand);
             }
 
-            HirExprKind::Borrow { mutable, expr: inner } => {
+            HirExprKind::Borrow {
+                mutable,
+                expr: inner,
+            } => {
                 self.check_borrow(*mutable, inner, &expr.span);
             }
 
@@ -255,6 +258,7 @@ impl<'a> BorrowChecker<'a> {
                 body,
                 captures,
                 is_move,
+                ..
             } => {
                 self.check_closure(params, body, captures, *is_move, &expr.span);
             }
@@ -339,15 +343,23 @@ impl<'a> BorrowChecker<'a> {
     fn check_var_ref(&mut self, def_id: DefId, span: &Span) {
         // NLL: update last_use for borrows associated with this variable.
         // Direct borrows held by this def_id:
-        let held: Vec<_> = self.borrows.borrows_held_by(def_id)
-            .iter().map(|b| b.id).collect();
+        let held: Vec<_> = self
+            .borrows
+            .borrows_held_by(def_id)
+            .iter()
+            .map(|b| b.id)
+            .collect();
         for borrow_id in held {
             self.borrows.record_use(borrow_id, span.clone());
         }
         // If this is a reference variable (e.g., `let r = &v`), update borrows on the source:
         if let Some(&source) = self.ref_bindings.get(&def_id) {
-            let source_borrows: Vec<_> = self.borrows.active_borrows_of(source)
-                .iter().map(|b| b.id).collect();
+            let source_borrows: Vec<_> = self
+                .borrows
+                .active_borrows_of(source)
+                .iter()
+                .map(|b| b.id)
+                .collect();
             for borrow_id in source_borrows {
                 self.borrows.record_use(borrow_id, span.clone());
             }
@@ -383,10 +395,7 @@ impl<'a> BorrowChecker<'a> {
                     label: format!("`{}` used here after move", name),
                 },
                 secondary,
-                help: vec![format!(
-                    "consider cloning the value: `{}.clone`",
-                    name
-                )],
+                help: vec![format!("consider cloning the value: `{}.clone`", name)],
             });
         }
     }
@@ -413,8 +422,7 @@ impl<'a> BorrowChecker<'a> {
                 if !self.ty_is_effectively_copy(&val.ty) {
                     self.moves
                         .process_transfer(*source_id, Some(def_id), &val.ty, span.clone());
-                    self.ownership
-                        .record_move(*source_id, def_id, span.clone());
+                    self.ownership.record_move(*source_id, def_id, span.clone());
                 }
             }
         }
@@ -430,8 +438,7 @@ impl<'a> BorrowChecker<'a> {
 
         // Register the new binding
         self.register_binding(def_id, ty, mutable, span.clone());
-        self.lifetimes
-            .register_local(def_id, self.scopes.current());
+        self.lifetimes.register_local(def_id, self.scopes.current());
 
         // Process pattern bindings (for destructuring)
         self.process_pattern(pattern);
@@ -578,9 +585,18 @@ impl<'a> BorrowChecker<'a> {
     fn check_fn_call(&mut self, callee_name: &str, args: &[HirExpr], _span: &Span) {
         // Checkpoint: borrows created for function args are temporary
         let checkpoint = self.borrows.checkpoint();
+        let send_required_params = self.lookup_send_required_params(callee_name, args.len());
 
-        for arg in args {
+        for (idx, arg) in args.iter().enumerate() {
             self.check_expr(arg);
+            if send_required_params.get(idx).copied().unwrap_or(false) {
+                if let HirExprKind::Closure {
+                    captures, is_move, ..
+                } = &arg.kind
+                {
+                    self.check_send_required_closure(captures, *is_move, &arg.span);
+                }
+            }
             // If arg is a VarRef and type is Move, record the move.
             // Structs that `derive Copy` are treated as Copy here.
             if let HirExprKind::VarRef(source_id) = &arg.kind {
@@ -602,6 +618,62 @@ impl<'a> BorrowChecker<'a> {
 
         // Kill temporary borrows from args — they're consumed by the callee
         self.borrows.kill_after_checkpoint(checkpoint);
+    }
+
+    fn lookup_send_required_params(&self, callee_name: &str, arg_len: usize) -> Vec<bool> {
+        let mut required = vec![false; arg_len];
+        let Some(def) = self.symbols.iter().find(|def| {
+            def.name == callee_name
+                && matches!(def.kind, DefKind::Function { .. } | DefKind::Method { .. })
+        }) else {
+            return required;
+        };
+        let signature = match &def.kind {
+            DefKind::Function { signature } | DefKind::Method { signature, .. } => signature,
+            _ => return required,
+        };
+        for (idx, param) in signature.params.iter().enumerate().take(arg_len) {
+            required[idx] = ty_has_bound(&param.ty, "Send");
+        }
+        required
+    }
+
+    fn check_send_required_closure(&mut self, captures: &[Capture], is_move: bool, span: &Span) {
+        for cap in captures {
+            if cap.by_move || is_move {
+                if !cap.ty.is_send_with(self.symbols) {
+                    self.errors.push(BorrowError {
+                        code: ErrorCode::E1011,
+                        primary: SpanLabel {
+                            span: span.clone(),
+                            label: format!(
+                                "captured value `{}` of type `{}` is not `Send`",
+                                cap.name, cap.ty
+                            ),
+                        },
+                        secondary: vec![],
+                        help: vec![
+                            "move only `Send` values into send-required closures".to_string()
+                        ],
+                    });
+                }
+            } else {
+                self.errors.push(BorrowError {
+                    code: ErrorCode::E1013,
+                    primary: SpanLabel {
+                        span: span.clone(),
+                        label: format!(
+                            "closure captures local `{}` by borrow and is not `'static`",
+                            cap.name
+                        ),
+                    },
+                    secondary: vec![],
+                    help: vec![
+                        "use a `move` closure or avoid capturing stack-local borrows".to_string(),
+                    ],
+                });
+            }
+        }
     }
 
     // ─── MethodCall ────────────────────────────────────────────────
@@ -675,17 +747,25 @@ impl<'a> BorrowChecker<'a> {
                                     code: ErrorCode::E1002,
                                     primary: SpanLabel {
                                         span: span.clone(),
-                                        label: format!("cannot mutably borrow `{}` — already borrowed", name),
+                                        label: format!(
+                                            "cannot mutably borrow `{}` — already borrowed",
+                                            name
+                                        ),
                                     },
                                     secondary: vec![SpanLabel {
                                         span: conflict.existing.created_span.clone(),
                                         label: format!(
                                             "previous {} borrow of `{}` here",
-                                            if conflict.existing.kind == BorrowKind::Mutable { "mutable" } else { "immutable" },
+                                            if conflict.existing.kind == BorrowKind::Mutable {
+                                                "mutable"
+                                            } else {
+                                                "immutable"
+                                            },
                                             name
                                         ),
                                     }],
-                                    help: vec!["ensure the previous borrow is no longer in use".to_string()],
+                                    help: vec!["ensure the previous borrow is no longer in use"
+                                        .to_string()],
                                 });
                             }
                         }
@@ -694,10 +774,22 @@ impl<'a> BorrowChecker<'a> {
                 }
             } else {
                 // Method not in symbol table — use name-based heuristic for common mutating methods
-                let is_mutating = matches!(method_name,
-                    "push" | "pop" | "insert" | "remove" | "clear" | "sort" | "reverse"
-                    | "push_str" | "truncate" | "extend" | "retain" | "drain"
-                    | "iter_mut" | "set"
+                let is_mutating = matches!(
+                    method_name,
+                    "push"
+                        | "pop"
+                        | "insert"
+                        | "remove"
+                        | "clear"
+                        | "sort"
+                        | "reverse"
+                        | "push_str"
+                        | "truncate"
+                        | "extend"
+                        | "retain"
+                        | "drain"
+                        | "iter_mut"
+                        | "set"
                 );
                 if is_mutating {
                     if let Err(conflict) = self.borrows.check_mutation(*obj_id) {
@@ -725,15 +817,26 @@ impl<'a> BorrowChecker<'a> {
                 match method_name {
                     "iter" => {
                         let scope = self.scopes.current();
-                        self.borrows.create(BorrowKind::Shared, *obj_id, *obj_id, span.clone(), scope);
+                        self.borrows.create(
+                            BorrowKind::Shared,
+                            *obj_id,
+                            *obj_id,
+                            span.clone(),
+                            scope,
+                        );
                     }
                     "into_iter" => {
                         if !self.ty_is_effectively_copy(&object.ty) {
                             self.moves.process_call_move(
-                                *obj_id, "into_iter".to_string(), &object.ty, span.clone(),
+                                *obj_id,
+                                "into_iter".to_string(),
+                                &object.ty,
+                                span.clone(),
                             );
                             self.ownership.record_move_into_call(
-                                *obj_id, "into_iter".to_string(), span.clone(),
+                                *obj_id,
+                                "into_iter".to_string(),
+                                span.clone(),
                             );
                         }
                     }
@@ -786,12 +889,7 @@ impl<'a> BorrowChecker<'a> {
 
     // ─── If ────────────────────────────────────────────────────────
 
-    fn check_if(
-        &mut self,
-        cond: &HirExpr,
-        then_branch: &HirExpr,
-        else_branch: Option<&HirExpr>,
-    ) {
+    fn check_if(&mut self, cond: &HirExpr, then_branch: &HirExpr, else_branch: Option<&HirExpr>) {
         self.check_expr(cond);
 
         // Snapshot state before branches
@@ -817,8 +915,7 @@ impl<'a> BorrowChecker<'a> {
 
         // Merge: conservative — moved on ANY branch → moved after
         self.ownership = OwnershipState::merge(vec![then_ownership, else_ownership]);
-        self.moves
-            .merge(vec![then_moves, else_moves]);
+        self.moves.merge(vec![then_moves, else_moves]);
     }
 
     // ─── Match ─────────────────────────────────────────────────────
@@ -1012,10 +1109,7 @@ impl<'a> BorrowChecker<'a> {
                 ..
             } => {
                 // Register from the symbol table type if available, else use Infer
-                let ty = self
-                    .symbols
-                    .def_ty(*def_id)
-                    .unwrap_or(Ty::Infer(0));
+                let ty = self.symbols.def_ty(*def_id).unwrap_or(Ty::Infer(0));
                 self.register_binding(*def_id, &ty, *mutable, span.clone());
             }
             HirPattern::Tuple { elements, .. } => {
@@ -1044,15 +1138,10 @@ impl<'a> BorrowChecker<'a> {
                 span,
                 ..
             } => {
-                let ty = self
-                    .symbols
-                    .def_ty(*def_id)
-                    .unwrap_or(Ty::Infer(0));
+                let ty = self.symbols.def_ty(*def_id).unwrap_or(Ty::Infer(0));
                 self.register_binding(*def_id, &ty, *mutable, span.clone());
             }
-            HirPattern::Wildcard { .. }
-            | HirPattern::Literal { .. }
-            | HirPattern::Rest { .. } => {}
+            HirPattern::Wildcard { .. } | HirPattern::Literal { .. } | HirPattern::Rest { .. } => {}
         }
     }
 
@@ -1097,36 +1186,15 @@ impl<'a> BorrowChecker<'a> {
     /// the `derive_traits` list on user-defined structs — a struct with
     /// `derive Copy` behaves like a primitive for move analysis.
     fn ty_is_effectively_copy(&self, ty: &Ty) -> bool {
-        if ty.is_copy() {
-            return true;
-        }
-        struct_has_derive(ty, self.symbols, "Copy")
+        ty_is_effectively_copy(ty, self.symbols)
     }
 }
 
-/// Walk through transparent wrappers (refs, aliases, newtypes) to find the
-/// underlying struct name and check whether its `derive_traits` list contains
-/// the given trait.
-fn struct_has_derive(ty: &Ty, symbols: &SymbolTable, trait_name: &str) -> bool {
-    let name = match ty {
-        Ty::Struct { name, .. } => name,
-        Ty::Ref(inner)
-        | Ty::RefMut(inner)
-        | Ty::RefLifetime(_, inner)
-        | Ty::RefMutLifetime(_, inner) => return struct_has_derive(inner, symbols, trait_name),
-        Ty::Alias { target, .. } => return struct_has_derive(target, symbols, trait_name),
-        Ty::Newtype { inner, .. } => return struct_has_derive(inner, symbols, trait_name),
-        _ => return false,
-    };
-    for def in symbols.iter() {
-        if def.name == *name {
-            if let DefKind::Struct { info } = &def.kind {
-                return info
-                    .derive_traits
-                    .iter()
-                    .any(|t| t == trait_name);
-            }
+fn ty_has_bound(ty: &Ty, bound_name: &str) -> bool {
+    match ty {
+        Ty::TypeParam { bounds, .. } | Ty::ImplTrait(bounds) | Ty::DynTrait(bounds) => {
+            bounds.iter().any(|bound| bound.name == bound_name)
         }
+        _ => false,
     }
-    false
 }

@@ -1,6 +1,6 @@
-use std::collections::HashMap;
 use crate::hir::nodes::DefId;
 use crate::lexer::token::Span;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub enum BindingState {
@@ -17,12 +17,16 @@ pub struct OwnershipState {
 }
 
 impl Default for OwnershipState {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl OwnershipState {
     pub fn new() -> Self {
-        Self { bindings: HashMap::new() }
+        Self {
+            bindings: HashMap::new(),
+        }
     }
 
     pub fn declare(&mut self, def_id: DefId) {
@@ -34,11 +38,13 @@ impl OwnershipState {
     }
 
     pub fn record_move(&mut self, source: DefId, target: DefId, span: Span) {
-        self.bindings.insert(source, BindingState::Moved { target, span });
+        self.bindings
+            .insert(source, BindingState::Moved { target, span });
     }
 
     pub fn record_move_into_call(&mut self, source: DefId, callee: String, span: Span) {
-        self.bindings.insert(source, BindingState::MovedIntoCall { callee, span });
+        self.bindings
+            .insert(source, BindingState::MovedIntoCall { callee, span });
     }
 
     pub fn record_partial_move(&mut self, source: DefId, field: String) {
@@ -49,7 +55,12 @@ impl OwnershipState {
                 }
             }
             _ => {
-                self.bindings.insert(source, BindingState::PartiallyMoved { moved_fields: vec![field] });
+                self.bindings.insert(
+                    source,
+                    BindingState::PartiallyMoved {
+                        moved_fields: vec![field],
+                    },
+                );
             }
         }
     }
@@ -63,15 +74,24 @@ impl OwnershipState {
     }
 
     pub fn is_moved(&self, def_id: DefId) -> bool {
-        matches!(self.bindings.get(&def_id), Some(BindingState::Moved { .. } | BindingState::MovedIntoCall { .. }))
+        matches!(
+            self.bindings.get(&def_id),
+            Some(BindingState::Moved { .. } | BindingState::MovedIntoCall { .. })
+        )
     }
 
     pub fn is_partially_moved(&self, def_id: DefId) -> bool {
-        matches!(self.bindings.get(&def_id), Some(BindingState::PartiallyMoved { .. }))
+        matches!(
+            self.bindings.get(&def_id),
+            Some(BindingState::PartiallyMoved { .. })
+        )
     }
 
     pub fn is_uninitialized(&self, def_id: DefId) -> bool {
-        matches!(self.bindings.get(&def_id), Some(BindingState::Uninitialized))
+        matches!(
+            self.bindings.get(&def_id),
+            Some(BindingState::Uninitialized)
+        )
     }
 
     pub fn state_of(&self, def_id: DefId) -> Option<&BindingState> {
@@ -81,7 +101,9 @@ impl OwnershipState {
     /// Returns (callee_or_target_name, span) for error reporting on moved values.
     pub fn move_info(&self, def_id: DefId) -> Option<(String, Span)> {
         match self.bindings.get(&def_id)? {
-            BindingState::Moved { target, span } => Some((format!("variable {}", target), span.clone())),
+            BindingState::Moved { target, span } => {
+                Some((format!("variable {}", target), span.clone()))
+            }
             BindingState::MovedIntoCall { callee, span } => Some((callee.clone(), span.clone())),
             _ => None,
         }
@@ -93,7 +115,9 @@ impl OwnershipState {
 
     /// Conservative merge: if a binding is moved on ANY branch, it's moved after.
     pub fn merge(branches: Vec<Self>) -> Self {
-        if branches.is_empty() { return Self::new(); }
+        if branches.is_empty() {
+            return Self::new();
+        }
         let mut result = branches[0].clone();
         for branch in &branches[1..] {
             for (def_id, state) in &branch.bindings {
@@ -105,9 +129,13 @@ impl OwnershipState {
                     }
                     BindingState::PartiallyMoved { moved_fields } => {
                         match result.bindings.get_mut(def_id) {
-                            Some(BindingState::PartiallyMoved { moved_fields: existing }) => {
+                            Some(BindingState::PartiallyMoved {
+                                moved_fields: existing,
+                            }) => {
                                 for f in moved_fields {
-                                    if !existing.contains(f) { existing.push(f.clone()); }
+                                    if !existing.contains(f) {
+                                        existing.push(f.clone());
+                                    }
                                 }
                             }
                             Some(BindingState::Owned) => {
@@ -129,7 +157,9 @@ mod tests {
     use super::*;
     use crate::lexer::token::Span;
 
-    fn span() -> Span { Span::new(0, 1, 1, 1) }
+    fn span() -> Span {
+        Span::new(0, 1, 1, 1)
+    }
 
     #[test]
     fn new_binding_is_owned() {
@@ -180,7 +210,10 @@ mod tests {
 
         // Merge
         state = OwnershipState::merge(vec![branch_a, branch_b]);
-        assert!(state.is_moved(10), "moved on any branch → moved after merge");
+        assert!(
+            state.is_moved(10),
+            "moved on any branch → moved after merge"
+        );
         assert!(state.is_owned(20), "untouched → still owned");
     }
 

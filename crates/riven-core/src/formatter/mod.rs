@@ -10,7 +10,6 @@
 ///     // Write result.output to the file
 /// }
 /// ```
-
 pub mod comments;
 pub mod doc;
 pub mod format_expr;
@@ -94,7 +93,7 @@ pub fn format(source: &str) -> FormatResult {
         && comment_map
             .fmt_off_ranges
             .first()
-            .map_or(false, |r| r.end_byte.is_none())
+            .is_some_and(|r| r.end_byte.is_none())
     {
         return FormatResult {
             output: source.to_string(),

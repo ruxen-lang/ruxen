@@ -270,7 +270,10 @@ impl Parser {
             }
 
             _ => {
-                self.error(&format!("expected pattern, found {:?}", self.current_kind()));
+                self.error(&format!(
+                    "expected pattern, found {:?}",
+                    self.current_kind()
+                ));
                 Pattern::Wildcard { span: start }
             }
         }
@@ -342,7 +345,9 @@ impl Parser {
 
             // Check if any field has a name — if so, treat as struct pattern
             let has_named = fields.iter().any(|f| f.name.is_some());
-            let has_rest = fields.iter().any(|f| matches!(f.pattern, Pattern::Rest { .. }));
+            let has_rest = fields
+                .iter()
+                .any(|f| matches!(f.pattern, Pattern::Rest { .. }));
 
             if has_named || has_rest {
                 Pattern::Struct {

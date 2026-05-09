@@ -1,0 +1,12 @@
+def main
+  let mut v: Vec[Int] = Vec.new
+  v.push(10)
+  v.push(20)
+  v.push(30)
+  v.push(40)
+  v.truncate(2)
+  puts "after_trunc=#{v.len}"
+  v.clear
+  puts "after_clear=#{v.len}"
+  puts "is_empty=#{v.is_empty}"
+end

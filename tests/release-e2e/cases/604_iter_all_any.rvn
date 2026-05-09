@@ -1,0 +1,38 @@
+def main
+  let evens = vec![2, 4, 6, 8]
+  let all_even = evens.iter.all { |n| n % 2 == 0 }
+  if all_even
+    puts "all_even=true"
+  else
+    puts "all_even=false"
+  end
+
+  let mixed = vec![1, 2, 3]
+  let any_gt2 = mixed.iter.any { |n| n > 2 }
+  if any_gt2
+    puts "any_gt2=true"
+  else
+    puts "any_gt2=false"
+  end
+
+  let none_gt100 = mixed.iter.any { |n| n > 100 }
+  if none_gt100
+    puts "any_gt100=true"
+  else
+    puts "any_gt100=false"
+  end
+
+  let empty: Vec[Int] = Vec.new
+  let vac_all = empty.iter.all { |n| n > 0 }
+  let vac_any = empty.iter.any { |n| n > 0 }
+  if vac_all
+    puts "empty_all=true"
+  else
+    puts "empty_all=false"
+  end
+  if vac_any
+    puts "empty_any=true"
+  else
+    puts "empty_any=false"
+  end
+end

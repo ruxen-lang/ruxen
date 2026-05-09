@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
     use crate::lexer::Lexer;
-    use crate::parser::Parser;
     use crate::parser::ast::*;
+    use crate::parser::Parser;
 
     fn parse(input: &str) -> Program {
         let mut lexer = Lexer::new(input);
@@ -32,6 +32,13 @@ mod tests {
             other => panic!("expected function, got {:?}", std::mem::discriminant(other)),
         };
         func.body.statements[0].clone()
+    }
+
+    fn parse_err(input: &str) -> Vec<crate::diagnostics::Diagnostic> {
+        let mut lexer = Lexer::new(input);
+        let tokens = lexer.tokenize().expect("lexer failed");
+        let mut parser = Parser::new(tokens);
+        parser.parse().expect_err("parser should fail")
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -210,7 +217,10 @@ mod tests {
             other => panic!("expected function, got {:?}", other),
         };
         assert_eq!(func.name, "find");
-        let gp = func.generic_params.as_ref().expect("expected generic params");
+        let gp = func
+            .generic_params
+            .as_ref()
+            .expect("expected generic params");
         assert_eq!(gp.params.len(), 1);
         match &gp.params[0] {
             GenericParam::Type { name, bounds, .. } => {
@@ -241,17 +251,38 @@ mod tests {
                 let args = path.generic_args.as_ref().unwrap();
                 assert_eq!(args.len(), 1);
                 match &args[0] {
-                    TypeExpr::Reference { inner, .. } => {
-                        match inner.as_ref() {
-                            TypeExpr::Named(p) => assert_eq!(p.segments, vec!["T"]),
-                            other => panic!("expected Named(T), got {:?}", other),
-                        }
-                    }
+                    TypeExpr::Reference { inner, .. } => match inner.as_ref() {
+                        TypeExpr::Named(p) => assert_eq!(p.segments, vec!["T"]),
+                        other => panic!("expected Named(T), got {:?}", other),
+                    },
                     other => panic!("expected reference type, got {:?}", other),
                 }
             }
             other => panic!("expected Option return type, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn async_func_basic() {
+        let program = parse("async def fetch(id: Int) -> Int\n  id\nend");
+        let func = match &program.items[0] {
+            TopLevelItem::Function(f) => f,
+            other => panic!("expected function, got {:?}", other),
+        };
+        assert!(func.is_async);
+        assert_eq!(func.name, "fetch");
+        assert_eq!(func.params.len(), 1);
+    }
+
+    #[test]
+    fn pub_async_func_basic() {
+        let program = parse("pub async def fetch\nend");
+        let func = match &program.items[0] {
+            TopLevelItem::Function(f) => f,
+            other => panic!("expected function, got {:?}", other),
+        };
+        assert_eq!(func.visibility, Visibility::Public);
+        assert!(func.is_async);
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -311,7 +342,10 @@ end";
             other => panic!("expected class, got {:?}", other),
         };
         assert_eq!(class.name, "Container");
-        let gp = class.generic_params.as_ref().expect("expected generic params");
+        let gp = class
+            .generic_params
+            .as_ref()
+            .expect("expected generic params");
         assert_eq!(gp.params.len(), 1);
         match &gp.params[0] {
             GenericParam::Type { name, bounds, .. } => {
@@ -474,6 +508,38 @@ end";
         assert_eq!(imp.items.len(), 1);
     }
 
+    #[test]
+    fn unsafe_impl_trait_for_type() {
+        let src = "\
+unsafe impl Send for Buffer
+end";
+        let program = parse(src);
+        let imp = match &program.items[0] {
+            TopLevelItem::Impl(i) => i,
+            other => panic!("expected impl, got {:?}", other),
+        };
+        assert!(imp.is_unsafe);
+        assert!(!imp.negative_trait);
+        let trait_name = imp.trait_name.as_ref().expect("expected trait name");
+        assert_eq!(trait_name.segments, vec!["Send"]);
+    }
+
+    #[test]
+    fn negative_impl_trait_for_type() {
+        let src = "\
+impl !Sync for Buffer
+end";
+        let program = parse(src);
+        let imp = match &program.items[0] {
+            TopLevelItem::Impl(i) => i,
+            other => panic!("expected impl, got {:?}", other),
+        };
+        assert!(!imp.is_unsafe);
+        assert!(imp.negative_trait);
+        let trait_name = imp.trait_name.as_ref().expect("expected trait name");
+        assert_eq!(trait_name.segments, vec!["Sync"]);
+    }
+
     // ═══════════════════════════════════════════════════════════════════
     //  Expressions — Binary Precedence
     // ═══════════════════════════════════════════════════════════════════
@@ -490,7 +556,11 @@ end";
                     other => panic!("expected 1, got {:?}", other),
                 }
                 match &right.kind {
-                    ExprKind::BinaryOp { left: l2, op: op2, right: r2 } => {
+                    ExprKind::BinaryOp {
+                        left: l2,
+                        op: op2,
+                        right: r2,
+                    } => {
                         assert_eq!(*op2, BinOp::Mul);
                         match &l2.kind {
                             ExprKind::IntLiteral(2, _) => {}
@@ -520,7 +590,10 @@ end";
             ExprKind::FieldAccess { object, field } => {
                 assert_eq!(field, "c");
                 match &object.kind {
-                    ExprKind::FieldAccess { object: inner, field: f2 } => {
+                    ExprKind::FieldAccess {
+                        object: inner,
+                        field: f2,
+                    } => {
                         assert_eq!(f2, "b");
                         match &inner.kind {
                             ExprKind::Identifier(name) => assert_eq!(name, "a"),
@@ -542,7 +615,12 @@ end";
     fn method_call_with_block() {
         let expr = parse_expr("items.each { |x| x }");
         match &expr.kind {
-            ExprKind::MethodCall { object, method, args, block } => {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                block,
+            } => {
                 assert_eq!(method, "each");
                 match &object.kind {
                     ExprKind::Identifier(name) => assert_eq!(name, "items"),
@@ -557,6 +635,28 @@ end";
                     }
                     other => panic!("expected Closure, got {:?}", other),
                 }
+            }
+            other => panic!("expected MethodCall, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn reserved_keyword_method_name_after_dot() {
+        let expr = parse_expr("Thread.spawn({ || 42 })");
+        match &expr.kind {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                block,
+            } => {
+                assert_eq!(method, "spawn");
+                match &object.kind {
+                    ExprKind::Identifier(name) => assert_eq!(name, "Thread"),
+                    other => panic!("expected Identifier(Thread), got {:?}", other),
+                }
+                assert_eq!(args.len(), 1);
+                assert!(block.is_none());
             }
             other => panic!("expected MethodCall, got {:?}", other),
         }
@@ -589,18 +689,16 @@ end";
     fn try_operator() {
         let expr = parse_expr("file.read?");
         match &expr.kind {
-            ExprKind::Try(inner) => {
-                match &inner.kind {
-                    ExprKind::FieldAccess { object, field } => {
-                        assert_eq!(field, "read");
-                        match &object.kind {
-                            ExprKind::Identifier(name) => assert_eq!(name, "file"),
-                            other => panic!("expected Identifier(file), got {:?}", other),
-                        }
+            ExprKind::Try(inner) => match &inner.kind {
+                ExprKind::FieldAccess { object, field } => {
+                    assert_eq!(field, "read");
+                    match &object.kind {
+                        ExprKind::Identifier(name) => assert_eq!(name, "file"),
+                        other => panic!("expected Identifier(file), got {:?}", other),
                     }
-                    other => panic!("expected FieldAccess, got {:?}", other),
                 }
-            }
+                other => panic!("expected FieldAccess, got {:?}", other),
+            },
             other => panic!("expected Try, got {:?}", other),
         }
     }
@@ -614,6 +712,7 @@ end";
         let expr = parse_expr("do |x|\n      x + 1\n    end");
         match &expr.kind {
             ExprKind::Closure(c) => {
+                assert!(!c.is_async);
                 assert!(!c.is_move);
                 assert_eq!(c.params.len(), 1);
                 assert_eq!(c.params[0].name, "x");
@@ -628,6 +727,56 @@ end";
         }
     }
 
+    #[test]
+    fn async_do_closure() {
+        let expr = parse_expr("async do |x|\n      x + 1\n    end");
+        match &expr.kind {
+            ExprKind::Closure(c) => {
+                assert!(c.is_async);
+                assert!(!c.is_move);
+                assert_eq!(c.params.len(), 1);
+            }
+            other => panic!("expected Closure, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn async_move_brace_closure() {
+        let expr = parse_expr("async move { |x| x }");
+        match &expr.kind {
+            ExprKind::Closure(c) => {
+                assert!(c.is_async);
+                assert!(c.is_move);
+                assert_eq!(c.params.len(), 1);
+            }
+            other => panic!("expected Closure, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn await_prefix_expr_rejected() {
+        let diags = parse_err("def _test_\n  await fetch_user(42)\nend");
+        assert!(
+            diags
+                .iter()
+                .any(|diag| diag.message.contains("postfix `.await`")),
+            "expected postfix-await guidance, got {:?}",
+            diags
+        );
+    }
+
+    #[test]
+    fn await_postfix_expr() {
+        let expr = parse_expr("fetch_user(42).await");
+        match expr.kind {
+            ExprKind::Await(inner) => match inner.kind {
+                ExprKind::Call { .. } => {}
+                other => panic!("expected call inside await, got {:?}", other),
+            },
+            other => panic!("expected await, got {:?}", other),
+        }
+    }
+
     // ═══════════════════════════════════════════════════════════════════
     //  Expressions — Range
     // ═══════════════════════════════════════════════════════════════════
@@ -636,7 +785,11 @@ end";
     fn range_exclusive() {
         let expr = parse_expr("0..10");
         match &expr.kind {
-            ExprKind::Range { start, end, inclusive } => {
+            ExprKind::Range {
+                start,
+                end,
+                inclusive,
+            } => {
                 assert!(!inclusive);
                 assert!(start.is_some());
                 assert!(end.is_some());
@@ -657,7 +810,11 @@ end";
     fn range_inclusive() {
         let expr = parse_expr("0..=10");
         match &expr.kind {
-            ExprKind::Range { start, end, inclusive } => {
+            ExprKind::Range {
+                start,
+                end,
+                inclusive,
+            } => {
                 assert!(*inclusive);
                 assert!(start.is_some());
                 assert!(end.is_some());
@@ -833,15 +990,13 @@ end";
     fn pattern_or() {
         let expr = parse_expr("match x\n    1 | 2 | 3 -> true\n  end");
         match &expr.kind {
-            ExprKind::Match(m) => {
-                match &m.arms[0].pattern {
-                    Pattern::Or { patterns, .. } => {
-                        assert_eq!(patterns.len(), 3);
-                        assert!(matches!(&patterns[0], Pattern::Literal { .. }));
-                    }
-                    other => panic!("expected Or pattern, got {:?}", other),
+            ExprKind::Match(m) => match &m.arms[0].pattern {
+                Pattern::Or { patterns, .. } => {
+                    assert_eq!(patterns.len(), 3);
+                    assert!(matches!(&patterns[0], Pattern::Literal { .. }));
                 }
-            }
+                other => panic!("expected Or pattern, got {:?}", other),
+            },
             other => panic!("expected Match, got {:?}", other),
         }
     }
@@ -850,16 +1005,19 @@ end";
     fn pattern_enum_variant() {
         let expr = parse_expr("match x\n    Status.Pending -> 0\n  end");
         match &expr.kind {
-            ExprKind::Match(m) => {
-                match &m.arms[0].pattern {
-                    Pattern::Enum { path, variant, fields, .. } => {
-                        assert_eq!(path, &vec!["Status".to_string()]);
-                        assert_eq!(variant, "Pending");
-                        assert!(fields.is_empty());
-                    }
-                    other => panic!("expected Enum pattern, got {:?}", other),
+            ExprKind::Match(m) => match &m.arms[0].pattern {
+                Pattern::Enum {
+                    path,
+                    variant,
+                    fields,
+                    ..
+                } => {
+                    assert_eq!(path, &vec!["Status".to_string()]);
+                    assert_eq!(variant, "Pending");
+                    assert!(fields.is_empty());
                 }
-            }
+                other => panic!("expected Enum pattern, got {:?}", other),
+            },
             other => panic!("expected Match, got {:?}", other),
         }
     }
@@ -868,15 +1026,13 @@ end";
     fn pattern_ref() {
         let expr = parse_expr("match x\n    ref y -> y\n  end");
         match &expr.kind {
-            ExprKind::Match(m) => {
-                match &m.arms[0].pattern {
-                    Pattern::Ref { mutable, name, .. } => {
-                        assert!(!mutable);
-                        assert_eq!(name, "y");
-                    }
-                    other => panic!("expected Ref pattern, got {:?}", other),
+            ExprKind::Match(m) => match &m.arms[0].pattern {
+                Pattern::Ref { mutable, name, .. } => {
+                    assert!(!mutable);
+                    assert_eq!(name, "y");
                 }
-            }
+                other => panic!("expected Ref pattern, got {:?}", other),
+            },
             other => panic!("expected Match, got {:?}", other),
         }
     }
@@ -925,12 +1081,10 @@ end";
     fn return_expression() {
         let expr = parse_expr("return 42");
         match &expr.kind {
-            ExprKind::Return(Some(val)) => {
-                match &val.kind {
-                    ExprKind::IntLiteral(42, _) => {}
-                    other => panic!("expected 42, got {:?}", other),
-                }
-            }
+            ExprKind::Return(Some(val)) => match &val.kind {
+                ExprKind::IntLiteral(42, _) => {}
+                other => panic!("expected 42, got {:?}", other),
+            },
             other => panic!("expected Return, got {:?}", other),
         }
     }
@@ -965,10 +1119,40 @@ end";
     }
 
     #[test]
+    fn use_simple_lowercase_std_path() {
+        let program = parse("use std.io");
+        let u = match &program.items[0] {
+            TopLevelItem::Use(u) => u,
+            other => panic!("expected use, got {:?}", other),
+        };
+        assert_eq!(u.path, vec!["std", "io"]);
+        assert!(matches!(u.kind, UseKind::Simple));
+    }
+
+    #[test]
+    fn use_group_mixed_case_segments() {
+        let program = parse("use std.io.{read_line, Stdin}");
+        let u = match &program.items[0] {
+            TopLevelItem::Use(u) => u,
+            other => panic!("expected use, got {:?}", other),
+        };
+        assert_eq!(u.path, vec!["std", "io"]);
+        match &u.kind {
+            UseKind::Group(names) => assert_eq!(names, &vec!["read_line", "Stdin"]),
+            other => panic!("expected group import, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn method_call_with_args() {
         let expr = parse_expr("list.push(42)");
         match &expr.kind {
-            ExprKind::MethodCall { object, method, args, block } => {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                block,
+            } => {
                 assert_eq!(method, "push");
                 assert_eq!(args.len(), 1);
                 assert!(block.is_none());

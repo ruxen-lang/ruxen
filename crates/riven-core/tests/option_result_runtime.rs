@@ -2,11 +2,11 @@
 //! and assert the stdout matches the expected output.  Used while
 //! debugging generic-enum runtime issues.
 
+use riven_core::codegen;
 use riven_core::lexer::Lexer;
+use riven_core::mir::lower::Lowerer;
 use riven_core::parser::Parser;
 use riven_core::typeck;
-use riven_core::mir::lower::Lowerer;
-use riven_core::codegen;
 use std::process::Command;
 
 fn workspace_root() -> std::path::PathBuf {

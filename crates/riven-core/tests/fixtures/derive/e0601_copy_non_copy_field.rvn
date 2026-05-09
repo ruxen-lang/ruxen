@@ -1,0 +1,4 @@
+@[derive(Copy, Clone)]
+struct Bag
+  items: Vec[Int]
+end

@@ -12,10 +12,10 @@ use std::collections::HashMap;
 use crate::diagnostics::Diagnostic;
 use crate::hir::context::TypeContext;
 use crate::hir::nodes::*;
-use crate::hir::types::{MoveSemantics, Ty, TraitRef};
+use crate::hir::types::{MoveSemantics, TraitRef, Ty};
 use crate::lexer::token::Span;
 use crate::parser::ast::{self, Visibility};
-use scope::{ScopeKind, ScopeStack};
+use scope::{ScopeId, ScopeKind, ScopeStack};
 use symbols::*;
 
 /// The result of name resolution: a partially-typed HIR plus symbol table.
@@ -59,6 +59,19 @@ pub struct Resolver {
     /// arity of the first observed `yield` (used to pre-shape the block's
     /// `Ty::Fn` parameter list so inference can unify with caller blocks).
     yield_fns: HashMap<String, usize>,
+
+    /// Nesting depth of async functions/closures currently being resolved.
+    async_scope_depth: usize,
+
+    /// Active closure stack used to record free-variable captures.
+    closure_stack: Vec<ClosureCaptureContext>,
+}
+
+#[derive(Debug)]
+struct ClosureCaptureContext {
+    scope_id: ScopeId,
+    is_move: bool,
+    captures: Vec<Capture>,
 }
 
 impl Resolver {
@@ -75,6 +88,8 @@ impl Resolver {
             current_impl_assoc_types: HashMap::new(),
             current_trait_context: None,
             yield_fns: HashMap::new(),
+            async_scope_depth: 0,
+            closure_stack: Vec::new(),
         }
     }
 
@@ -161,6 +176,9 @@ impl Resolver {
         }
 
         // Register built-in traits: Displayable, Error, Serializable, etc.
+        // Per TEC-13, the trait formerly known as `Hash` is `Hashable`.
+        // `Hash` remains a deprecated alias for one transition release —
+        // see the alias-registration block below.
         let builtin_traits = [
             ("Displayable", vec!["to_display"]),
             ("Error", vec!["message"]),
@@ -171,10 +189,19 @@ impl Resolver {
             ("FromIterator", vec!["from_iter"]),
             ("Copy", vec![]),
             ("Clone", vec!["clone"]),
+            ("Send", vec![]),
+            ("Sync", vec![]),
             ("Debug", vec![]),
+            ("PartialEq", vec!["eq"]),
+            ("Eq", vec![]),
+            ("Hash", vec!["hash"]),
+            ("Default", vec!["default"]),
+            ("Ord", vec!["cmp"]),
+            ("PartialOrd", vec!["partial_cmp"]),
             ("Drop", vec!["drop"]),
         ];
 
+        let mut hashable_id: Option<DefId> = None;
         for (name, methods) in builtin_traits {
             let id = self.symbols.define(
                 name.to_string(),
@@ -192,15 +219,366 @@ impl Resolver {
             );
             self.scopes.insert_type(name.to_string(), id);
             self.type_registry.insert(name.to_string(), id);
+            if name == "Hashable" {
+                hashable_id = Some(id);
+            }
+        }
+
+        let future_trait_id = self.symbols.define(
+            "Future".to_string(),
+            DefKind::Trait {
+                info: TraitInfo {
+                    generic_params: vec![],
+                    super_traits: vec![],
+                    required_methods: vec!["poll".to_string()],
+                    default_methods: vec![],
+                    assoc_types: vec!["Output".to_string()],
+                },
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.scopes
+            .insert_type("Future".to_string(), future_trait_id);
+        self.type_registry
+            .insert("Future".to_string(), future_trait_id);
+
+        // Deprecated alias: `Hash` (the trait) → `Hashable`.
+        // The collection type `Hash[K,V]` has its own resolution path
+        // (see `resolve_type_path` / the `Hash`/`Vec`/`Set` match in
+        // type-position) and is unaffected by this alias.
+        if let Some(id) = hashable_id {
+            self.scopes.insert_type("Hash".to_string(), id);
+            self.type_registry.insert("Hash".to_string(), id);
         }
 
         // Register built-in functions
+        let io_error_ty = Ty::Class {
+            name: "IoError".to_string(),
+            generic_args: vec![],
+        };
+        let stdin_ty = Ty::Class {
+            name: "Stdin".to_string(),
+            generic_args: vec![],
+        };
+        let stdout_ty = Ty::Class {
+            name: "Stdout".to_string(),
+            generic_args: vec![],
+        };
+        let stderr_ty = Ty::Class {
+            name: "Stderr".to_string(),
+            generic_args: vec![],
+        };
+        let env_var_error_ty = io_error_ty.clone();
+
         let builtin_fns = [
-            ("puts", vec![ParamInfo { name: "value".into(), ty: Ty::Ref(Box::new(Ty::String)), auto_assign: false }], Ty::Unit),
-            ("eputs", vec![ParamInfo { name: "value".into(), ty: Ty::Ref(Box::new(Ty::String)), auto_assign: false }], Ty::Unit),
-            ("print", vec![ParamInfo { name: "value".into(), ty: Ty::Ref(Box::new(Ty::String)), auto_assign: false }], Ty::Unit),
+            (
+                "puts",
+                vec![ParamInfo {
+                    name: "value".into(),
+                    ty: Ty::Ref(Box::new(Ty::String)),
+                    auto_assign: false,
+                }],
+                Ty::Unit,
+            ),
+            (
+                "eputs",
+                vec![ParamInfo {
+                    name: "value".into(),
+                    ty: Ty::Ref(Box::new(Ty::String)),
+                    auto_assign: false,
+                }],
+                Ty::Unit,
+            ),
+            (
+                "print",
+                vec![ParamInfo {
+                    name: "value".into(),
+                    ty: Ty::Ref(Box::new(Ty::String)),
+                    auto_assign: false,
+                }],
+                Ty::Unit,
+            ),
+            (
+                "println",
+                vec![ParamInfo {
+                    name: "value".into(),
+                    ty: Ty::Ref(Box::new(Ty::String)),
+                    auto_assign: false,
+                }],
+                Ty::Unit,
+            ),
+            (
+                "eprintln",
+                vec![ParamInfo {
+                    name: "value".into(),
+                    ty: Ty::Ref(Box::new(Ty::String)),
+                    auto_assign: false,
+                }],
+                Ty::Unit,
+            ),
+            (
+                "read_line",
+                vec![],
+                Ty::Result(Box::new(Ty::String), Box::new(io_error_ty.clone())),
+            ),
+            ("stdin", vec![], stdin_ty.clone()),
+            ("stdout", vec![], stdout_ty.clone()),
+            ("stderr", vec![], stderr_ty.clone()),
+            ("args", vec![], Ty::Vec(Box::new(Ty::String))),
+            (
+                "var",
+                vec![ParamInfo {
+                    name: "name".into(),
+                    ty: Ty::Ref(Box::new(Ty::String)),
+                    auto_assign: false,
+                }],
+                Ty::Result(Box::new(Ty::String), Box::new(env_var_error_ty)),
+            ),
+            (
+                "read_to_string",
+                vec![ParamInfo {
+                    name: "path".into(),
+                    ty: Ty::Ref(Box::new(Ty::String)),
+                    auto_assign: false,
+                }],
+                Ty::Result(Box::new(Ty::String), Box::new(io_error_ty.clone())),
+            ),
+            (
+                "write",
+                vec![
+                    ParamInfo {
+                        name: "path".into(),
+                        ty: Ty::Ref(Box::new(Ty::String)),
+                        auto_assign: false,
+                    },
+                    ParamInfo {
+                        name: "contents".into(),
+                        ty: Ty::Ref(Box::new(Ty::String)),
+                        auto_assign: false,
+                    },
+                ],
+                Ty::Result(Box::new(Ty::Unit), Box::new(io_error_ty.clone())),
+            ),
+            (
+                "exists",
+                vec![ParamInfo {
+                    name: "path".into(),
+                    ty: Ty::Ref(Box::new(Ty::String)),
+                    auto_assign: false,
+                }],
+                Ty::Bool,
+            ),
+            (
+                "remove_file",
+                vec![ParamInfo {
+                    name: "path".into(),
+                    ty: Ty::Ref(Box::new(Ty::String)),
+                    auto_assign: false,
+                }],
+                Ty::Result(Box::new(Ty::Unit), Box::new(io_error_ty.clone())),
+            ),
+            (
+                "create_dir",
+                vec![ParamInfo {
+                    name: "path".into(),
+                    ty: Ty::Ref(Box::new(Ty::String)),
+                    auto_assign: false,
+                }],
+                Ty::Result(Box::new(Ty::Unit), Box::new(io_error_ty.clone())),
+            ),
+            (
+                "create_dir_all",
+                vec![ParamInfo {
+                    name: "path".into(),
+                    ty: Ty::Ref(Box::new(Ty::String)),
+                    auto_assign: false,
+                }],
+                Ty::Result(Box::new(Ty::Unit), Box::new(io_error_ty.clone())),
+            ),
+            (
+                "rename",
+                vec![
+                    ParamInfo {
+                        name: "from".into(),
+                        ty: Ty::Ref(Box::new(Ty::String)),
+                        auto_assign: false,
+                    },
+                    ParamInfo {
+                        name: "to".into(),
+                        ty: Ty::Ref(Box::new(Ty::String)),
+                        auto_assign: false,
+                    },
+                ],
+                Ty::Result(Box::new(Ty::Unit), Box::new(io_error_ty.clone())),
+            ),
+            (
+                "exit",
+                vec![ParamInfo {
+                    name: "code".into(),
+                    ty: Ty::Int,
+                    auto_assign: false,
+                }],
+                Ty::Never,
+            ),
+            // std::time — Phase 3. Both clocks return nanoseconds in Int.
+            // `now_ns` is monotonic (only differences are meaningful);
+            // `unix_ns` is wall-clock (nanoseconds since 1970-01-01 UTC).
+            ("now_ns", vec![], Ty::Int),
+            ("unix_ns", vec![], Ty::Int),
+            // std::path — Phase 3. Unix-style separators only. The
+            // path_ prefix avoids collision with the `join` method on
+            // Vec[String]; Riven-side wrappers can rename later.
+            // parent/file_name/extension return "" when the value is
+            // absent (no Option[String] tagged-union runtime helper for
+            // heap payloads yet — promote when one lands).
+            (
+                "path_join",
+                vec![
+                    ParamInfo {
+                        name: "a".into(),
+                        ty: Ty::Ref(Box::new(Ty::String)),
+                        auto_assign: false,
+                    },
+                    ParamInfo {
+                        name: "b".into(),
+                        ty: Ty::Ref(Box::new(Ty::String)),
+                        auto_assign: false,
+                    },
+                ],
+                Ty::String,
+            ),
+            (
+                "path_parent",
+                vec![ParamInfo {
+                    name: "path".into(),
+                    ty: Ty::Ref(Box::new(Ty::String)),
+                    auto_assign: false,
+                }],
+                Ty::String,
+            ),
+            (
+                "path_file_name",
+                vec![ParamInfo {
+                    name: "path".into(),
+                    ty: Ty::Ref(Box::new(Ty::String)),
+                    auto_assign: false,
+                }],
+                Ty::String,
+            ),
+            (
+                "path_extension",
+                vec![ParamInfo {
+                    name: "path".into(),
+                    ty: Ty::Ref(Box::new(Ty::String)),
+                    auto_assign: false,
+                }],
+                Ty::String,
+            ),
+            (
+                "path_is_absolute",
+                vec![ParamInfo {
+                    name: "path".into(),
+                    ty: Ty::Ref(Box::new(Ty::String)),
+                    auto_assign: false,
+                }],
+                Ty::Bool,
+            ),
+            // std::process::run — Phase 3. Fork+execvp a child process,
+            // inheriting stdin/stdout/stderr from the parent, and return
+            // the exit code. Output capture is a follow-up; for v1 the
+            // return type is just Int (128+signal on signal termination,
+            // 127 on fork/exec failure — matches POSIX shell convention).
+            (
+                "process_run",
+                vec![
+                    ParamInfo {
+                        name: "cmd".into(),
+                        ty: Ty::Ref(Box::new(Ty::String)),
+                        auto_assign: false,
+                    },
+                    ParamInfo {
+                        name: "args".into(),
+                        ty: Ty::Vec(Box::new(Ty::String)),
+                        auto_assign: false,
+                    },
+                ],
+                Ty::Int,
+            ),
+            // std::net — Phase 3. Minimum-viable TCP. fds surfaced as
+            // Int with -1 on failure (POSIX-style). Class wrappers
+            // (TcpStream/TcpListener) are a follow-up.
+            (
+                "tcp_connect",
+                vec![ParamInfo {
+                    name: "addr".into(),
+                    ty: Ty::Ref(Box::new(Ty::String)),
+                    auto_assign: false,
+                }],
+                Ty::Int,
+            ),
+            (
+                "tcp_listen",
+                vec![ParamInfo {
+                    name: "addr".into(),
+                    ty: Ty::Ref(Box::new(Ty::String)),
+                    auto_assign: false,
+                }],
+                Ty::Int,
+            ),
+            (
+                "tcp_accept",
+                vec![ParamInfo {
+                    name: "fd".into(),
+                    ty: Ty::Int,
+                    auto_assign: false,
+                }],
+                Ty::Int,
+            ),
+            (
+                "tcp_read",
+                vec![
+                    ParamInfo {
+                        name: "fd".into(),
+                        ty: Ty::Int,
+                        auto_assign: false,
+                    },
+                    ParamInfo {
+                        name: "max".into(),
+                        ty: Ty::Int,
+                        auto_assign: false,
+                    },
+                ],
+                Ty::String,
+            ),
+            (
+                "tcp_write",
+                vec![
+                    ParamInfo {
+                        name: "fd".into(),
+                        ty: Ty::Int,
+                        auto_assign: false,
+                    },
+                    ParamInfo {
+                        name: "data".into(),
+                        ty: Ty::Ref(Box::new(Ty::String)),
+                        auto_assign: false,
+                    },
+                ],
+                Ty::Int,
+            ),
+            (
+                "tcp_close",
+                vec![ParamInfo {
+                    name: "fd".into(),
+                    ty: Ty::Int,
+                    auto_assign: false,
+                }],
+                Ty::Unit,
+            ),
         ];
 
+        let mut builtin_fn_ids = HashMap::new();
         for (name, params, ret_ty) in builtin_fns {
             let id = self.symbols.define(
                 name.to_string(),
@@ -208,6 +586,7 @@ impl Resolver {
                     signature: FnSignature {
                         self_mode: None,
                         is_class_method: false,
+                        is_async: false,
                         generic_params: vec![],
                         params,
                         return_ty: ret_ty,
@@ -217,17 +596,525 @@ impl Resolver {
                 span.clone(),
             );
             self.scopes.insert(name.to_string(), id);
+            builtin_fn_ids.insert(name.to_string(), id);
         }
+
+        let io_error_id = self.symbols.define(
+            "IoError".to_string(),
+            DefKind::Class {
+                info: ClassInfo {
+                    generic_params: vec![],
+                    parent: None,
+                    fields: vec![],
+                    methods: vec![],
+                    derive_traits: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                },
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.type_registry
+            .insert("IoError".to_string(), io_error_id);
+        let stdin_id = self.symbols.define(
+            "Stdin".to_string(),
+            DefKind::Class {
+                info: ClassInfo {
+                    generic_params: vec![],
+                    parent: None,
+                    fields: vec![],
+                    methods: vec![],
+                    derive_traits: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                },
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.type_registry.insert("Stdin".to_string(), stdin_id);
+        let stdout_id = self.symbols.define(
+            "Stdout".to_string(),
+            DefKind::Class {
+                info: ClassInfo {
+                    generic_params: vec![],
+                    parent: None,
+                    fields: vec![],
+                    methods: vec![],
+                    derive_traits: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                },
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.type_registry.insert("Stdout".to_string(), stdout_id);
+        let stderr_id = self.symbols.define(
+            "Stderr".to_string(),
+            DefKind::Class {
+                info: ClassInfo {
+                    generic_params: vec![],
+                    parent: None,
+                    fields: vec![],
+                    methods: vec![],
+                    derive_traits: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                },
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.type_registry.insert("Stderr".to_string(), stderr_id);
+        let context_id = self.symbols.define(
+            "Context".to_string(),
+            DefKind::Class {
+                info: ClassInfo {
+                    generic_params: vec![],
+                    parent: None,
+                    fields: vec![],
+                    methods: vec![],
+                    derive_traits: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                },
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.scopes.insert_type("Context".to_string(), context_id);
+        self.type_registry.insert("Context".to_string(), context_id);
+        let waker_id = self.symbols.define(
+            "Waker".to_string(),
+            DefKind::Class {
+                info: ClassInfo {
+                    generic_params: vec![],
+                    parent: None,
+                    fields: vec![],
+                    methods: vec![],
+                    derive_traits: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                },
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.scopes.insert_type("Waker".to_string(), waker_id);
+        self.type_registry.insert("Waker".to_string(), waker_id);
+        let thread_id_id = self.symbols.define(
+            "ThreadId".to_string(),
+            DefKind::Class {
+                info: ClassInfo {
+                    generic_params: vec![],
+                    parent: None,
+                    fields: vec![],
+                    methods: vec![],
+                    derive_traits: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                },
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.scopes
+            .insert_type("ThreadId".to_string(), thread_id_id);
+        self.type_registry
+            .insert("ThreadId".to_string(), thread_id_id);
+        let thread_id_ty = Ty::Class {
+            name: "ThreadId".to_string(),
+            generic_args: vec![],
+        };
+        let thread_id_value_id = self.symbols.define(
+            "ThreadId".to_string(),
+            DefKind::Variable {
+                mutable: false,
+                ty: thread_id_ty.clone(),
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.scopes
+            .insert("ThreadId".to_string(), thread_id_value_id);
+
+        let thread_id = self.symbols.define(
+            "Thread".to_string(),
+            DefKind::Class {
+                info: ClassInfo {
+                    generic_params: vec![],
+                    parent: None,
+                    fields: vec![],
+                    methods: vec![],
+                    derive_traits: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                },
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.scopes.insert_type("Thread".to_string(), thread_id);
+        self.type_registry.insert("Thread".to_string(), thread_id);
+
+        let join_handle_id = self.symbols.define(
+            "JoinHandle".to_string(),
+            DefKind::Class {
+                info: ClassInfo {
+                    generic_params: vec![GenericParamInfo {
+                        name: "T".to_string(),
+                        bounds: vec![TraitRef {
+                            name: "Send".to_string(),
+                            generic_args: vec![],
+                        }],
+                    }],
+                    parent: None,
+                    fields: vec![],
+                    methods: vec![],
+                    derive_traits: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                },
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.scopes
+            .insert_type("JoinHandle".to_string(), join_handle_id);
+        self.type_registry
+            .insert("JoinHandle".to_string(), join_handle_id);
+
+        let mutex_id = self.symbols.define(
+            "Mutex".to_string(),
+            DefKind::Class {
+                info: ClassInfo {
+                    generic_params: vec![GenericParamInfo {
+                        name: "T".to_string(),
+                        bounds: vec![],
+                    }],
+                    parent: None,
+                    fields: vec![],
+                    methods: vec![],
+                    derive_traits: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                },
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.scopes.insert_type("Mutex".to_string(), mutex_id);
+        self.type_registry.insert("Mutex".to_string(), mutex_id);
+
+        let mutex_guard_id = self.symbols.define(
+            "MutexGuard".to_string(),
+            DefKind::Class {
+                info: ClassInfo {
+                    generic_params: vec![GenericParamInfo {
+                        name: "T".to_string(),
+                        bounds: vec![],
+                    }],
+                    parent: None,
+                    fields: vec![],
+                    methods: vec![],
+                    derive_traits: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                },
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.scopes
+            .insert_type("MutexGuard".to_string(), mutex_guard_id);
+        self.type_registry
+            .insert("MutexGuard".to_string(), mutex_guard_id);
+
+        let arc_id = self.symbols.define(
+            "Arc".to_string(),
+            DefKind::Class {
+                info: ClassInfo {
+                    generic_params: vec![GenericParamInfo {
+                        name: "T".to_string(),
+                        bounds: vec![],
+                    }],
+                    parent: None,
+                    fields: vec![],
+                    methods: vec![],
+                    derive_traits: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                },
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.scopes.insert_type("Arc".to_string(), arc_id);
+        self.type_registry.insert("Arc".to_string(), arc_id);
+
+        let poison_error_id = self.symbols.define(
+            "PoisonError".to_string(),
+            DefKind::Class {
+                info: ClassInfo {
+                    generic_params: vec![],
+                    parent: None,
+                    fields: vec![],
+                    methods: vec![],
+                    derive_traits: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                },
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.scopes
+            .insert_type("PoisonError".to_string(), poison_error_id);
+        self.type_registry
+            .insert("PoisonError".to_string(), poison_error_id);
+
+        let thread_panic_id = self.symbols.define(
+            "ThreadPanic".to_string(),
+            DefKind::Class {
+                info: ClassInfo {
+                    generic_params: vec![],
+                    parent: None,
+                    fields: vec![],
+                    methods: vec![],
+                    derive_traits: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                },
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.scopes
+            .insert_type("ThreadPanic".to_string(), thread_panic_id);
+        self.type_registry
+            .insert("ThreadPanic".to_string(), thread_panic_id);
+
+        // Register a minimal builtin std module tree so `use std.io`
+        // resolves before the fuller Tier-1 stdlib lands.
+        let io_id = self.symbols.define(
+            "io".to_string(),
+            DefKind::Module {
+                items: vec![
+                    builtin_fn_ids["puts"],
+                    builtin_fn_ids["eputs"],
+                    builtin_fn_ids["print"],
+                    builtin_fn_ids["println"],
+                    builtin_fn_ids["eprintln"],
+                    builtin_fn_ids["read_line"],
+                    builtin_fn_ids["stdin"],
+                    builtin_fn_ids["stdout"],
+                    builtin_fn_ids["stderr"],
+                    io_error_id,
+                    stdin_id,
+                    stdout_id,
+                    stderr_id,
+                ],
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        let env_id = self.symbols.define(
+            "env".to_string(),
+            DefKind::Module {
+                items: vec![builtin_fn_ids["args"], builtin_fn_ids["var"]],
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        let fs_id = self.symbols.define(
+            "fs".to_string(),
+            DefKind::Module {
+                items: vec![
+                    builtin_fn_ids["read_to_string"],
+                    builtin_fn_ids["write"],
+                    builtin_fn_ids["exists"],
+                    builtin_fn_ids["remove_file"],
+                    builtin_fn_ids["create_dir"],
+                    builtin_fn_ids["create_dir_all"],
+                    builtin_fn_ids["rename"],
+                ],
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        let process_id = self.symbols.define(
+            "process".to_string(),
+            DefKind::Module {
+                items: vec![builtin_fn_ids["exit"], builtin_fn_ids["process_run"]],
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        let time_id = self.symbols.define(
+            "time".to_string(),
+            DefKind::Module {
+                items: vec![builtin_fn_ids["now_ns"], builtin_fn_ids["unix_ns"]],
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        let path_id = self.symbols.define(
+            "path".to_string(),
+            DefKind::Module {
+                items: vec![
+                    builtin_fn_ids["path_join"],
+                    builtin_fn_ids["path_parent"],
+                    builtin_fn_ids["path_file_name"],
+                    builtin_fn_ids["path_extension"],
+                    builtin_fn_ids["path_is_absolute"],
+                ],
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        let net_id = self.symbols.define(
+            "net".to_string(),
+            DefKind::Module {
+                items: vec![
+                    builtin_fn_ids["tcp_connect"],
+                    builtin_fn_ids["tcp_listen"],
+                    builtin_fn_ids["tcp_accept"],
+                    builtin_fn_ids["tcp_read"],
+                    builtin_fn_ids["tcp_write"],
+                    builtin_fn_ids["tcp_close"],
+                ],
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        let sync_id = self.symbols.define(
+            "sync".to_string(),
+            DefKind::Module {
+                items: vec![
+                    thread_id,
+                    thread_id_value_id,
+                    join_handle_id,
+                    thread_id_id,
+                    mutex_id,
+                    mutex_guard_id,
+                    arc_id,
+                    poison_error_id,
+                    thread_panic_id,
+                ],
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        let std_id = self.symbols.define(
+            "std".to_string(),
+            DefKind::Module {
+                items: vec![
+                    io_id, env_id, fs_id, process_id, time_id, path_id, net_id, sync_id,
+                ],
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.scopes.insert_type("std".to_string(), std_id);
+        self.type_registry.insert("std".to_string(), std_id);
 
         // Register type constructors in the value scope so Vec.new, String.from, etc. resolve
         let type_constructors = [
-            ("Vec", Ty::Vec(Box::new(Ty::TypeParam { name: "T".to_string(), bounds: vec![] }))),
-            ("Hash", Ty::Hash(
-                Box::new(Ty::TypeParam { name: "K".to_string(), bounds: vec![] }),
-                Box::new(Ty::TypeParam { name: "V".to_string(), bounds: vec![] }),
-            )),
-            ("Set", Ty::Set(Box::new(Ty::TypeParam { name: "T".to_string(), bounds: vec![] }))),
+            (
+                "Vec",
+                Ty::Vec(Box::new(Ty::TypeParam {
+                    name: "T".to_string(),
+                    bounds: vec![],
+                })),
+            ),
+            (
+                "HashMap",
+                Ty::HashMap(
+                    Box::new(Ty::TypeParam {
+                        name: "K".to_string(),
+                        bounds: vec![],
+                    }),
+                    Box::new(Ty::TypeParam {
+                        name: "V".to_string(),
+                        bounds: vec![],
+                    }),
+                ),
+            ),
+            (
+                "Set",
+                Ty::Set(Box::new(Ty::TypeParam {
+                    name: "T".to_string(),
+                    bounds: vec![],
+                })),
+            ),
+            // `HashSet[T]` alias — same Ty::Set representation. Lets
+            // `HashSet.new` / `HashSet.with_capacity(_)` resolve in the
+            // value scope alongside `Set.new`.
+            (
+                "HashSet",
+                Ty::Set(Box::new(Ty::TypeParam {
+                    name: "T".to_string(),
+                    bounds: vec![],
+                })),
+            ),
             ("String", Ty::String),
+            (
+                "Thread",
+                Ty::Class {
+                    name: "Thread".to_string(),
+                    generic_args: vec![],
+                },
+            ),
+            (
+                "Mutex",
+                Ty::Class {
+                    name: "Mutex".to_string(),
+                    generic_args: vec![Ty::TypeParam {
+                        name: "T".to_string(),
+                        bounds: vec![],
+                    }],
+                },
+            ),
+            (
+                "Arc",
+                Ty::Class {
+                    name: "Arc".to_string(),
+                    generic_args: vec![Ty::TypeParam {
+                        name: "T".to_string(),
+                        bounds: vec![],
+                    }],
+                },
+            ),
         ];
         for (name, ty) in type_constructors {
             let id = self.symbols.define(
@@ -247,8 +1134,16 @@ impl Resolver {
             "Option".to_string(),
             DefKind::Enum {
                 info: EnumInfo {
-                    generic_params: vec![GenericParamInfo { name: "T".to_string(), bounds: vec![] }],
+                    generic_params: vec![GenericParamInfo {
+                        name: "T".to_string(),
+                        bounds: vec![],
+                    }],
                     variants: vec![], // will be filled below
+                    derive_traits: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
                 },
             },
             Visibility::Public,
@@ -274,7 +1169,10 @@ impl Resolver {
             DefKind::EnumVariant {
                 parent: option_id,
                 variant_idx: 1,
-                kind: VariantDefKind::Tuple(vec![Ty::TypeParam { name: "T".to_string(), bounds: vec![] }]),
+                kind: VariantDefKind::Tuple(vec![Ty::TypeParam {
+                    name: "T".to_string(),
+                    bounds: vec![],
+                }]),
             },
             Visibility::Public,
             span.clone(),
@@ -301,10 +1199,21 @@ impl Resolver {
             DefKind::Enum {
                 info: EnumInfo {
                     generic_params: vec![
-                        GenericParamInfo { name: "T".to_string(), bounds: vec![] },
-                        GenericParamInfo { name: "E".to_string(), bounds: vec![] },
+                        GenericParamInfo {
+                            name: "T".to_string(),
+                            bounds: vec![],
+                        },
+                        GenericParamInfo {
+                            name: "E".to_string(),
+                            bounds: vec![],
+                        },
                     ],
                     variants: vec![], // will be filled below
+                    derive_traits: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
                 },
             },
             Visibility::Public,
@@ -318,7 +1227,10 @@ impl Resolver {
             DefKind::EnumVariant {
                 parent: result_id,
                 variant_idx: 0,
-                kind: VariantDefKind::Tuple(vec![Ty::TypeParam { name: "T".to_string(), bounds: vec![] }]),
+                kind: VariantDefKind::Tuple(vec![Ty::TypeParam {
+                    name: "T".to_string(),
+                    bounds: vec![],
+                }]),
             },
             Visibility::Public,
             span.clone(),
@@ -328,7 +1240,10 @@ impl Resolver {
             DefKind::EnumVariant {
                 parent: result_id,
                 variant_idx: 1,
-                kind: VariantDefKind::Tuple(vec![Ty::TypeParam { name: "E".to_string(), bounds: vec![] }]),
+                kind: VariantDefKind::Tuple(vec![Ty::TypeParam {
+                    name: "E".to_string(),
+                    bounds: vec![],
+                }]),
             },
             Visibility::Public,
             span.clone(),
@@ -349,6 +1264,62 @@ impl Resolver {
             }
         }
 
+        let poll_id = self.symbols.define(
+            "Poll".to_string(),
+            DefKind::Enum {
+                info: EnumInfo {
+                    generic_params: vec![GenericParamInfo {
+                        name: "T".to_string(),
+                        bounds: vec![],
+                    }],
+                    variants: vec![],
+                    derive_traits: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                },
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.scopes.insert_type("Poll".to_string(), poll_id);
+        self.type_registry.insert("Poll".to_string(), poll_id);
+
+        let ready_id = self.symbols.define(
+            "Ready".to_string(),
+            DefKind::EnumVariant {
+                parent: poll_id,
+                variant_idx: 0,
+                kind: VariantDefKind::Tuple(vec![Ty::TypeParam {
+                    name: "T".to_string(),
+                    bounds: vec![],
+                }]),
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        let pending_id = self.symbols.define(
+            "Pending".to_string(),
+            DefKind::EnumVariant {
+                parent: poll_id,
+                variant_idx: 1,
+                kind: VariantDefKind::Unit,
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.scopes.insert("Poll.Ready".to_string(), ready_id);
+        self.scopes.insert("Poll.Pending".to_string(), pending_id);
+        self.scopes.insert("Ready".to_string(), ready_id);
+        self.scopes.insert("Pending".to_string(), pending_id);
+
+        if let Some(poll_def) = self.symbols.get_mut(poll_id) {
+            if let DefKind::Enum { ref mut info } = poll_def.kind {
+                info.variants = vec![ready_id, pending_id];
+            }
+        }
+
         // Register super as a built-in function (for parent class constructor calls)
         let super_id = self.symbols.define(
             "super".to_string(),
@@ -356,6 +1327,7 @@ impl Resolver {
                 signature: FnSignature {
                     self_mode: None,
                     is_class_method: false,
+                    is_async: false,
                     generic_params: vec![],
                     params: vec![], // variadic-like; type checker handles it
                     return_ty: Ty::Unit,
@@ -370,7 +1342,12 @@ impl Resolver {
     // ─── Pass 1: Forward Declaration of Types ───────────────────────
 
     fn register_top_level_type(&mut self, item: &ast::TopLevelItem) {
-        let _span_zero = Span { start: 0, end: 0, line: 0, column: 0 };
+        let _span_zero = Span {
+            start: 0,
+            end: 0,
+            line: 0,
+            column: 0,
+        };
 
         match item {
             ast::TopLevelItem::Class(class) => {
@@ -382,6 +1359,11 @@ impl Resolver {
                             parent: None,
                             fields: vec![],
                             methods: vec![],
+                            derive_traits: class.derive_traits.clone(),
+                            opt_out_send: false,
+                            opt_out_sync: false,
+                            manual_send: false,
+                            manual_sync: false,
                         },
                     },
                     Visibility::Public,
@@ -398,6 +1380,11 @@ impl Resolver {
                             generic_params: vec![],
                             fields: vec![],
                             derive_traits: s.derive_traits.clone(),
+                            repr: s.repr.clone(),
+                            opt_out_send: false,
+                            opt_out_sync: false,
+                            manual_send: false,
+                            manual_sync: false,
                         },
                     },
                     Visibility::Public,
@@ -413,6 +1400,11 @@ impl Resolver {
                         info: EnumInfo {
                             generic_params: vec![],
                             variants: vec![],
+                            derive_traits: e.derive_traits.clone(),
+                            opt_out_send: false,
+                            opt_out_sync: false,
+                            manual_send: false,
+                            manual_sync: false,
                         },
                     },
                     Visibility::Public,
@@ -453,7 +1445,9 @@ impl Resolver {
                     for (name, bounds, span) in &enum_generic_names {
                         let gp_def = self.symbols.define(
                             name.clone(),
-                            DefKind::TypeParam { bounds: bounds.clone() },
+                            DefKind::TypeParam {
+                                bounds: bounds.clone(),
+                            },
                             Visibility::Private,
                             span.clone(),
                         );
@@ -471,21 +1465,23 @@ impl Resolver {
                 for (idx, variant) in e.variants.iter().enumerate() {
                     let vkind = match &variant.fields {
                         ast::VariantKind::Unit => VariantDefKind::Unit,
-                        ast::VariantKind::Tuple(fields) => {
-                            VariantDefKind::Tuple(
-                                fields.iter().map(|f| self.resolve_type_expr(&f.type_expr)).collect()
-                            )
-                        }
-                        ast::VariantKind::Struct(fields) => {
-                            VariantDefKind::Struct(
-                                fields.iter().map(|f| {
+                        ast::VariantKind::Tuple(fields) => VariantDefKind::Tuple(
+                            fields
+                                .iter()
+                                .map(|f| self.resolve_type_expr(&f.type_expr))
+                                .collect(),
+                        ),
+                        ast::VariantKind::Struct(fields) => VariantDefKind::Struct(
+                            fields
+                                .iter()
+                                .map(|f| {
                                     (
                                         f.name.clone().unwrap_or_default(),
                                         self.resolve_type_expr(&f.type_expr),
                                     )
-                                }).collect()
-                            )
-                        }
+                                })
+                                .collect(),
+                        ),
                     };
                     let vid = self.symbols.define(
                         variant.name.clone(),
@@ -497,10 +1493,7 @@ impl Resolver {
                         Visibility::Public,
                         variant.span.clone(),
                     );
-                    pending_registrations.push((
-                        format!("{}.{}", e.name, variant.name),
-                        vid,
-                    ));
+                    pending_registrations.push((format!("{}.{}", e.name, variant.name), vid));
                 }
 
                 if has_generics {
@@ -529,10 +1522,14 @@ impl Resolver {
                     DefKind::Trait {
                         info: TraitInfo {
                             generic_params: vec![],
-                            super_traits: t.super_traits.iter().map(|b| TraitRef {
-                                name: b.path.segments.join("."),
-                                generic_args: vec![],
-                            }).collect(),
+                            super_traits: t
+                                .super_traits
+                                .iter()
+                                .map(|b| TraitRef {
+                                    name: b.path.segments.join("."),
+                                    generic_args: vec![],
+                                })
+                                .collect(),
                             required_methods: required,
                             default_methods: defaults,
                             assoc_types: assoc,
@@ -589,13 +1586,17 @@ impl Resolver {
                 for gp in &generic_params {
                     let gp_def = self.symbols.define(
                         gp.name.clone(),
-                        DefKind::TypeParam { bounds: gp.bounds.clone() },
+                        DefKind::TypeParam {
+                            bounds: gp.bounds.clone(),
+                        },
                         Visibility::Private,
                         gp.span.clone(),
                     );
                     self.scopes.insert_type(gp.name.clone(), gp_def);
                 }
-                let return_ty = f.return_type.as_ref()
+                let return_ty = f
+                    .return_type
+                    .as_ref()
                     .map(|t| self.resolve_type_expr(t))
                     .unwrap_or_else(|| {
                         if f.name == "main" {
@@ -604,14 +1605,18 @@ impl Resolver {
                             self.type_context.fresh_type_var()
                         }
                     });
-                let params: Vec<ParamInfo> = f.params.iter().map(|p| {
-                    let ty = self.resolve_type_expr(&p.type_expr);
-                    ParamInfo {
-                        name: p.name.clone(),
-                        ty,
-                        auto_assign: p.auto_assign,
-                    }
-                }).collect();
+                let params: Vec<ParamInfo> = f
+                    .params
+                    .iter()
+                    .map(|p| {
+                        let ty = self.resolve_type_expr(&p.type_expr);
+                        ParamInfo {
+                            name: p.name.clone(),
+                            ty,
+                            auto_assign: p.auto_assign,
+                        }
+                    })
+                    .collect();
                 self.scopes.pop();
                 let id = self.symbols.define(
                     f.name.clone(),
@@ -619,10 +1624,14 @@ impl Resolver {
                         signature: FnSignature {
                             self_mode: None,
                             is_class_method: false,
-                            generic_params: generic_params.iter().map(|gp| GenericParamInfo {
-                                name: gp.name.clone(),
-                                bounds: gp.bounds.clone(),
-                            }).collect(),
+                            is_async: f.is_async,
+                            generic_params: generic_params
+                                .iter()
+                                .map(|gp| GenericParamInfo {
+                                    name: gp.name.clone(),
+                                    bounds: gp.bounds.clone(),
+                                })
+                                .collect(),
                             params,
                             return_ty,
                         },
@@ -631,6 +1640,74 @@ impl Resolver {
                     f.span.clone(),
                 );
                 self.scopes.insert(f.name.clone(), id);
+            }
+            ast::TopLevelItem::Lib(lib) => {
+                for ffi_fn in &lib.functions {
+                    let params: Vec<ParamInfo> = ffi_fn
+                        .params
+                        .iter()
+                        .map(|p| ParamInfo {
+                            name: p.name.clone(),
+                            ty: self.resolve_type_expr(&p.type_expr),
+                            auto_assign: false,
+                        })
+                        .collect();
+                    let return_ty = ffi_fn
+                        .return_type
+                        .as_ref()
+                        .map(|t| self.resolve_type_expr(t))
+                        .unwrap_or(Ty::Unit);
+                    let id = self.symbols.define(
+                        ffi_fn.name.clone(),
+                        DefKind::Function {
+                            signature: FnSignature {
+                                self_mode: None,
+                                is_class_method: false,
+                                is_async: false,
+                                generic_params: vec![],
+                                params,
+                                return_ty,
+                            },
+                        },
+                        Visibility::Public,
+                        ffi_fn.span.clone(),
+                    );
+                    self.scopes.insert(ffi_fn.name.clone(), id);
+                }
+            }
+            ast::TopLevelItem::Extern(ext) => {
+                for ffi_fn in &ext.functions {
+                    let params: Vec<ParamInfo> = ffi_fn
+                        .params
+                        .iter()
+                        .map(|p| ParamInfo {
+                            name: p.name.clone(),
+                            ty: self.resolve_type_expr(&p.type_expr),
+                            auto_assign: false,
+                        })
+                        .collect();
+                    let return_ty = ffi_fn
+                        .return_type
+                        .as_ref()
+                        .map(|t| self.resolve_type_expr(t))
+                        .unwrap_or(Ty::Unit);
+                    let id = self.symbols.define(
+                        ffi_fn.name.clone(),
+                        DefKind::Function {
+                            signature: FnSignature {
+                                self_mode: None,
+                                is_class_method: false,
+                                is_async: false,
+                                generic_params: vec![],
+                                params,
+                                return_ty,
+                            },
+                        },
+                        Visibility::Public,
+                        ffi_fn.span.clone(),
+                    );
+                    self.scopes.insert(ffi_fn.name.clone(), id);
+                }
             }
             _ => {
                 // Use, Const — resolved in pass 2
@@ -647,9 +1724,15 @@ impl Resolver {
             ast::TopLevelItem::Enum(e) => Some(HirItem::Enum(self.resolve_enum(e))),
             ast::TopLevelItem::Trait(t) => Some(HirItem::Trait(self.resolve_trait(t))),
             ast::TopLevelItem::Impl(imp) => Some(HirItem::Impl(self.resolve_impl(imp))),
-            ast::TopLevelItem::Function(f) => Some(HirItem::Function(self.resolve_func_def(f, None))),
+            ast::TopLevelItem::Function(f) => {
+                Some(HirItem::Function(self.resolve_func_def(f, None)))
+            }
             ast::TopLevelItem::TypeAlias(ta) => {
-                let def_id = self.type_registry.get(&ta.name).copied().unwrap_or(UNRESOLVED_DEF);
+                let def_id = self
+                    .type_registry
+                    .get(&ta.name)
+                    .copied()
+                    .unwrap_or(UNRESOLVED_DEF);
                 let ty = self.resolve_type_expr(&ta.type_expr);
                 Some(HirItem::TypeAlias(HirTypeAlias {
                     def_id,
@@ -659,7 +1742,11 @@ impl Resolver {
                 }))
             }
             ast::TopLevelItem::Newtype(nt) => {
-                let def_id = self.type_registry.get(&nt.name).copied().unwrap_or(UNRESOLVED_DEF);
+                let def_id = self
+                    .type_registry
+                    .get(&nt.name)
+                    .copied()
+                    .unwrap_or(UNRESOLVED_DEF);
                 let inner_ty = self.resolve_type_expr(&nt.inner_type);
                 Some(HirItem::Newtype(HirNewtype {
                     def_id,
@@ -684,6 +1771,7 @@ impl Resolver {
                     name: c.name.clone(),
                     ty,
                     value,
+                    doc_comments: c.doc_comments.clone(),
                     span: c.span.clone(),
                 }))
             }
@@ -703,7 +1791,11 @@ impl Resolver {
     // ─── Class Resolution ───────────────────────────────────────────
 
     fn resolve_class(&mut self, class: &ast::ClassDef) -> HirClassDef {
-        let def_id = self.type_registry.get(&class.name).copied().unwrap_or(UNRESOLVED_DEF);
+        let def_id = self
+            .type_registry
+            .get(&class.name)
+            .copied()
+            .unwrap_or(UNRESOLVED_DEF);
 
         let generic_params = self.resolve_generic_params(&class.generic_params);
 
@@ -715,9 +1807,13 @@ impl Resolver {
         // Build the self type
         let self_ty = Ty::Class {
             name: class.name.clone(),
-            generic_args: generic_params.iter().map(|gp| {
-                Ty::TypeParam { name: gp.name.clone(), bounds: gp.bounds.clone() }
-            }).collect(),
+            generic_args: generic_params
+                .iter()
+                .map(|gp| Ty::TypeParam {
+                    name: gp.name.clone(),
+                    bounds: gp.bounds.clone(),
+                })
+                .collect(),
         };
 
         let old_self_ty = self.current_self_ty.replace(self_ty.clone());
@@ -729,7 +1825,9 @@ impl Resolver {
         for gp in &generic_params {
             let gp_def = self.symbols.define(
                 gp.name.clone(),
-                DefKind::TypeParam { bounds: gp.bounds.clone() },
+                DefKind::TypeParam {
+                    bounds: gp.bounds.clone(),
+                },
                 Visibility::Private,
                 gp.span.clone(),
             );
@@ -739,7 +1837,9 @@ impl Resolver {
         // Register `Self` type
         let self_def_id = self.symbols.define(
             "Self".to_string(),
-            DefKind::TypeAlias { target: self_ty.clone() },
+            DefKind::TypeAlias {
+                target: self_ty.clone(),
+            },
             Visibility::Private,
             class.span.clone(),
         );
@@ -748,6 +1848,10 @@ impl Resolver {
         // Resolve fields
         let mut fields = Vec::new();
         let mut field_def_ids = Vec::new();
+        let mut opt_out_send = false;
+        let mut opt_out_sync = false;
+        let mut manual_send = false;
+        let mut manual_sync = false;
         for (idx, field) in class.fields.iter().enumerate() {
             let ty = self.resolve_type_expr(&field.type_expr);
             let fid = self.symbols.define(
@@ -786,7 +1890,10 @@ impl Resolver {
         for inner in &class.inner_impls {
             let trait_ref = TraitRef {
                 name: inner.trait_name.segments.join("."),
-                generic_args: inner.trait_name.generic_args.as_ref()
+                generic_args: inner
+                    .trait_name
+                    .generic_args
+                    .as_ref()
                     .map(|args| args.iter().map(|a| self.resolve_type_expr(a)).collect())
                     .unwrap_or_default(),
             };
@@ -795,7 +1902,10 @@ impl Resolver {
             // that `Self.Foo` in method signatures resolves concretely.
             let old_assoc = std::mem::take(&mut self.current_impl_assoc_types);
             for ii in &inner.items {
-                if let ast::ImplItem::AssocType { name, type_expr, .. } = ii {
+                if let ast::ImplItem::AssocType {
+                    name, type_expr, ..
+                } = ii
+                {
                     let ty = self.resolve_type_expr(type_expr);
                     self.current_impl_assoc_types.insert(name.clone(), ty);
                 }
@@ -807,7 +1917,11 @@ impl Resolver {
                     ast::ImplItem::Method(f) => {
                         items.push(HirImplItem::Method(self.resolve_func_def(f, Some(def_id))));
                     }
-                    ast::ImplItem::AssocType { name, type_expr, span } => {
+                    ast::ImplItem::AssocType {
+                        name,
+                        type_expr,
+                        span,
+                    } => {
                         items.push(HirImplItem::AssocType {
                             name: name.clone(),
                             ty: self.resolve_type_expr(type_expr),
@@ -817,9 +1931,25 @@ impl Resolver {
                 }
             }
             self.current_impl_assoc_types = old_assoc;
+            self.record_auto_trait_flags(
+                &self_ty,
+                Some(&trait_ref.name),
+                inner.negative_trait,
+                inner.is_unsafe,
+                inner.span.clone(),
+            );
+            match trait_ref.name.as_str() {
+                "Send" if inner.negative_trait => opt_out_send = true,
+                "Sync" if inner.negative_trait => opt_out_sync = true,
+                "Send" if inner.is_unsafe => manual_send = true,
+                "Sync" if inner.is_unsafe => manual_sync = true,
+                _ => {}
+            }
 
             impl_blocks.push(HirImplBlock {
                 generic_params: vec![],
+                is_unsafe: inner.is_unsafe,
+                negative_trait: inner.negative_trait,
                 trait_ref: Some(trait_ref),
                 target_ty: self_ty.clone(),
                 items,
@@ -835,13 +1965,21 @@ impl Resolver {
         if let Some(def) = self.symbols.get_mut(def_id) {
             def.kind = DefKind::Class {
                 info: ClassInfo {
-                    generic_params: generic_params.iter().map(|gp| GenericParamInfo {
-                        name: gp.name.clone(),
-                        bounds: gp.bounds.clone(),
-                    }).collect(),
+                    generic_params: generic_params
+                        .iter()
+                        .map(|gp| GenericParamInfo {
+                            name: gp.name.clone(),
+                            bounds: gp.bounds.clone(),
+                        })
+                        .collect(),
                     parent: parent_def,
                     fields: field_def_ids,
                     methods: method_def_ids,
+                    derive_traits: class.derive_traits.clone(),
+                    opt_out_send,
+                    opt_out_sync,
+                    manual_send,
+                    manual_sync,
                 },
             };
         }
@@ -854,6 +1992,8 @@ impl Resolver {
             fields,
             methods,
             impl_blocks,
+            derive_traits: class.derive_traits.clone(),
+            doc_comments: class.doc_comments.clone(),
             span: class.span.clone(),
         }
     }
@@ -861,7 +2001,11 @@ impl Resolver {
     // ─── Struct Resolution ──────────────────────────────────────────
 
     fn resolve_struct(&mut self, s: &ast::StructDef) -> HirStructDef {
-        let def_id = self.type_registry.get(&s.name).copied().unwrap_or(UNRESOLVED_DEF);
+        let def_id = self
+            .type_registry
+            .get(&s.name)
+            .copied()
+            .unwrap_or(UNRESOLVED_DEF);
         let generic_params = self.resolve_generic_params(&s.generic_params);
 
         let mut fields = Vec::new();
@@ -893,12 +2037,20 @@ impl Resolver {
         if let Some(def) = self.symbols.get_mut(def_id) {
             def.kind = DefKind::Struct {
                 info: StructInfo {
-                    generic_params: generic_params.iter().map(|gp| GenericParamInfo {
-                        name: gp.name.clone(),
-                        bounds: gp.bounds.clone(),
-                    }).collect(),
+                    generic_params: generic_params
+                        .iter()
+                        .map(|gp| GenericParamInfo {
+                            name: gp.name.clone(),
+                            bounds: gp.bounds.clone(),
+                        })
+                        .collect(),
                     fields: field_def_ids,
                     derive_traits: s.derive_traits.clone(),
+                    repr: s.repr.clone(),
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
                 },
             };
         }
@@ -909,6 +2061,8 @@ impl Resolver {
             generic_params,
             fields,
             derive_traits: s.derive_traits.clone(),
+            repr: s.repr.clone(),
+            doc_comments: s.doc_comments.clone(),
             span: s.span.clone(),
         }
     }
@@ -916,7 +2070,11 @@ impl Resolver {
     // ─── Enum Resolution ────────────────────────────────────────────
 
     fn resolve_enum(&mut self, e: &ast::EnumDef) -> HirEnumDef {
-        let def_id = self.type_registry.get(&e.name).copied().unwrap_or(UNRESOLVED_DEF);
+        let def_id = self
+            .type_registry
+            .get(&e.name)
+            .copied()
+            .unwrap_or(UNRESOLVED_DEF);
         let generic_params = self.resolve_generic_params(&e.generic_params);
 
         // Push a scope so enum generic params are visible while resolving
@@ -928,7 +2086,9 @@ impl Resolver {
         for gp in &generic_params {
             let gp_def = self.symbols.define(
                 gp.name.clone(),
-                DefKind::TypeParam { bounds: gp.bounds.clone() },
+                DefKind::TypeParam {
+                    bounds: gp.bounds.clone(),
+                },
                 Visibility::Private,
                 gp.span.clone(),
             );
@@ -941,24 +2101,26 @@ impl Resolver {
         for (idx, variant) in e.variants.iter().enumerate() {
             let kind = match &variant.fields {
                 ast::VariantKind::Unit => HirVariantKind::Unit,
-                ast::VariantKind::Tuple(fields) => {
-                    HirVariantKind::Tuple(
-                        fields.iter().map(|f| HirVariantField {
+                ast::VariantKind::Tuple(fields) => HirVariantKind::Tuple(
+                    fields
+                        .iter()
+                        .map(|f| HirVariantField {
                             name: f.name.clone(),
                             ty: self.resolve_type_expr(&f.type_expr),
                             span: f.span.clone(),
-                        }).collect()
-                    )
-                }
-                ast::VariantKind::Struct(fields) => {
-                    HirVariantKind::Struct(
-                        fields.iter().map(|f| HirVariantField {
+                        })
+                        .collect(),
+                ),
+                ast::VariantKind::Struct(fields) => HirVariantKind::Struct(
+                    fields
+                        .iter()
+                        .map(|f| HirVariantField {
                             name: f.name.clone(),
                             ty: self.resolve_type_expr(&f.type_expr),
                             span: f.span.clone(),
-                        }).collect()
-                    )
-                }
+                        })
+                        .collect(),
+                ),
             };
 
             // Look up the variant DefId registered in pass 1
@@ -991,11 +2153,19 @@ impl Resolver {
         if let Some(def) = self.symbols.get_mut(def_id) {
             def.kind = DefKind::Enum {
                 info: EnumInfo {
-                    generic_params: generic_params.iter().map(|gp| GenericParamInfo {
-                        name: gp.name.clone(),
-                        bounds: gp.bounds.clone(),
-                    }).collect(),
+                    generic_params: generic_params
+                        .iter()
+                        .map(|gp| GenericParamInfo {
+                            name: gp.name.clone(),
+                            bounds: gp.bounds.clone(),
+                        })
+                        .collect(),
                     variants: variant_def_ids,
+                    derive_traits: e.derive_traits.clone(),
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
                 },
             };
         }
@@ -1007,6 +2177,8 @@ impl Resolver {
             name: e.name.clone(),
             generic_params,
             variants,
+            derive_traits: e.derive_traits.clone(),
+            doc_comments: e.doc_comments.clone(),
             span: e.span.clone(),
         }
     }
@@ -1014,7 +2186,11 @@ impl Resolver {
     // ─── Trait Resolution ───────────────────────────────────────────
 
     fn resolve_trait(&mut self, t: &ast::TraitDef) -> HirTraitDef {
-        let def_id = self.type_registry.get(&t.name).copied().unwrap_or(UNRESOLVED_DEF);
+        let def_id = self
+            .type_registry
+            .get(&t.name)
+            .copied()
+            .unwrap_or(UNRESOLVED_DEF);
         let generic_params = self.resolve_generic_params(&t.generic_params);
 
         self.scopes.push(ScopeKind::Trait);
@@ -1029,7 +2205,9 @@ impl Resolver {
         };
         let self_type_id = self.symbols.define(
             "Self".to_string(),
-            DefKind::TypeAlias { target: self_ty.clone() },
+            DefKind::TypeAlias {
+                target: self_ty.clone(),
+            },
             Visibility::Private,
             t.span.clone(),
         );
@@ -1042,24 +2220,34 @@ impl Resolver {
         // and typechecker treat it as a valid method-context value.
         let old_self_ty = self.current_self_ty.replace(self_ty);
 
-        let super_traits: Vec<TraitRef> = t.super_traits.iter().map(|b| TraitRef {
-            name: b.path.segments.join("."),
-            generic_args: b.path.generic_args.as_ref()
-                .map(|args| args.iter().map(|a| self.resolve_type_expr(a)).collect())
-                .unwrap_or_default(),
-        }).collect();
+        let super_traits: Vec<TraitRef> = t
+            .super_traits
+            .iter()
+            .map(|b| TraitRef {
+                name: b.path.segments.join("."),
+                generic_args: b
+                    .path
+                    .generic_args
+                    .as_ref()
+                    .map(|args| args.iter().map(|a| self.resolve_type_expr(a)).collect())
+                    .unwrap_or_default(),
+            })
+            .collect();
 
         // Make the trait's declared associated-type names visible so
         // `Self.Name` inside method signatures resolves to a placeholder
         // `Ty::TypeParam` (which behaves opaquely during trait resolution).
-        let assoc_names: Vec<String> = t.items.iter().filter_map(|ti| match ti {
-            ast::TraitItem::AssocType { name, .. } => Some(name.clone()),
-            _ => None,
-        }).collect();
-        let old_trait_ctx = std::mem::replace(
-            &mut self.current_trait_context,
-            Some((t.name.clone(), assoc_names)),
-        );
+        let assoc_names: Vec<String> = t
+            .items
+            .iter()
+            .filter_map(|ti| match ti {
+                ast::TraitItem::AssocType { name, .. } => Some(name.clone()),
+                _ => None,
+            })
+            .collect();
+        let old_trait_ctx = self
+            .current_trait_context
+            .replace((t.name.clone(), assoc_names));
 
         let mut items = Vec::new();
         for ti in &t.items {
@@ -1072,7 +2260,9 @@ impl Resolver {
                 }
                 ast::TraitItem::MethodSig(sig) => {
                     let params = self.resolve_params(&sig.params);
-                    let return_ty = sig.return_type.as_ref()
+                    let return_ty = sig
+                        .return_type
+                        .as_ref()
                         .map(|t| self.resolve_type_expr(t))
                         .unwrap_or(Ty::Unit);
                     let self_mode = sig.self_mode.map(|m| self.convert_self_mode(m));
@@ -1087,9 +2277,7 @@ impl Resolver {
                     });
                 }
                 ast::TraitItem::DefaultMethod(f) => {
-                    items.push(HirTraitItem::DefaultMethod(
-                        self.resolve_func_def(f, None),
-                    ));
+                    items.push(HirTraitItem::DefaultMethod(self.resolve_func_def(f, None)));
                 }
             }
         }
@@ -1104,6 +2292,7 @@ impl Resolver {
             generic_params,
             super_traits,
             items,
+            doc_comments: t.doc_comments.clone(),
             span: t.span.clone(),
         }
     }
@@ -1115,10 +2304,27 @@ impl Resolver {
         let target_ty = self.resolve_type_expr(&imp.target_type);
         let trait_ref = imp.trait_name.as_ref().map(|tp| TraitRef {
             name: tp.segments.join("."),
-            generic_args: tp.generic_args.as_ref()
+            generic_args: tp
+                .generic_args
+                .as_ref()
                 .map(|args| args.iter().map(|a| self.resolve_type_expr(a)).collect())
                 .unwrap_or_default(),
         });
+        if let Some(ref trait_ref) = trait_ref {
+            self.record_auto_trait_flags(
+                &target_ty,
+                Some(&trait_ref.name),
+                imp.negative_trait,
+                imp.is_unsafe,
+                imp.span.clone(),
+            );
+        } else if imp.is_unsafe {
+            self.diagnostics.push(Diagnostic::error_with_code(
+                "`unsafe impl` is only meaningful for trait implementations",
+                imp.span.clone(),
+                "E1014",
+            ));
+        }
 
         // Determine the class def for self resolution
         let class_def = match &target_ty {
@@ -1136,7 +2342,9 @@ impl Resolver {
         // Register Self type
         let self_type_id = self.symbols.define(
             "Self".to_string(),
-            DefKind::TypeAlias { target: target_ty.clone() },
+            DefKind::TypeAlias {
+                target: target_ty.clone(),
+            },
             Visibility::Private,
             imp.span.clone(),
         );
@@ -1147,7 +2355,10 @@ impl Resolver {
         // concrete type declared here.
         let old_assoc = std::mem::take(&mut self.current_impl_assoc_types);
         for ii in &imp.items {
-            if let ast::ImplItem::AssocType { name, type_expr, .. } = ii {
+            if let ast::ImplItem::AssocType {
+                name, type_expr, ..
+            } = ii
+            {
                 let ty = self.resolve_type_expr(type_expr);
                 self.current_impl_assoc_types.insert(name.clone(), ty);
             }
@@ -1157,11 +2368,13 @@ impl Resolver {
         for ii in &imp.items {
             match ii {
                 ast::ImplItem::Method(f) => {
-                    items.push(HirImplItem::Method(
-                        self.resolve_func_def(f, class_def),
-                    ));
+                    items.push(HirImplItem::Method(self.resolve_func_def(f, class_def)));
                 }
-                ast::ImplItem::AssocType { name, type_expr, span } => {
+                ast::ImplItem::AssocType {
+                    name,
+                    type_expr,
+                    span,
+                } => {
                     items.push(HirImplItem::AssocType {
                         name: name.clone(),
                         ty: self.resolve_type_expr(type_expr),
@@ -1178,10 +2391,93 @@ impl Resolver {
 
         HirImplBlock {
             generic_params,
+            is_unsafe: imp.is_unsafe,
+            negative_trait: imp.negative_trait,
             trait_ref,
             target_ty,
             items,
             span: imp.span.clone(),
+        }
+    }
+
+    fn record_auto_trait_flags(
+        &mut self,
+        target_ty: &Ty,
+        trait_name: Option<&str>,
+        negative_trait: bool,
+        is_unsafe: bool,
+        span: Span,
+    ) {
+        let Some(trait_name) = trait_name else {
+            return;
+        };
+
+        let (mark_send, mark_sync) = match trait_name {
+            "Send" => (true, false),
+            "Sync" => (false, true),
+            _ => {
+                if negative_trait {
+                    self.diagnostics.push(Diagnostic::error_with_code(
+                        "negative impls are only supported for Send and Sync",
+                        span,
+                        "E1014",
+                    ));
+                } else if is_unsafe {
+                    self.diagnostics.push(Diagnostic::error_with_code(
+                        "`unsafe impl` is only required for Send and Sync",
+                        span,
+                        "E1014",
+                    ));
+                }
+                return;
+            }
+        };
+
+        if !negative_trait && !is_unsafe {
+            self.diagnostics.push(Diagnostic::error_with_code(
+                "manual Send/Sync impls must be declared as `unsafe impl`",
+                span,
+                "E1014",
+            ));
+            return;
+        }
+
+        let Some(def) = nominal_type_definition_mut(target_ty, &mut self.symbols) else {
+            return;
+        };
+
+        match &mut def.kind {
+            DefKind::Class { info } => {
+                if mark_send {
+                    info.opt_out_send = negative_trait;
+                    info.manual_send = !negative_trait;
+                }
+                if mark_sync {
+                    info.opt_out_sync = negative_trait;
+                    info.manual_sync = !negative_trait;
+                }
+            }
+            DefKind::Struct { info } => {
+                if mark_send {
+                    info.opt_out_send = negative_trait;
+                    info.manual_send = !negative_trait;
+                }
+                if mark_sync {
+                    info.opt_out_sync = negative_trait;
+                    info.manual_sync = !negative_trait;
+                }
+            }
+            DefKind::Enum { info } => {
+                if mark_send {
+                    info.opt_out_send = negative_trait;
+                    info.manual_send = !negative_trait;
+                }
+                if mark_sync {
+                    info.opt_out_sync = negative_trait;
+                    info.manual_sync = !negative_trait;
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1203,8 +2499,13 @@ impl Resolver {
                             for bound in &pred.bounds {
                                 gp.bounds.push(TraitRef {
                                     name: bound.path.segments.join("."),
-                                    generic_args: bound.path.generic_args.as_ref()
-                                        .map(|args| args.iter().map(|a| self.resolve_type_expr(a)).collect())
+                                    generic_args: bound
+                                        .path
+                                        .generic_args
+                                        .as_ref()
+                                        .map(|args| {
+                                            args.iter().map(|a| self.resolve_type_expr(a)).collect()
+                                        })
                                         .unwrap_or_default(),
                                 });
                             }
@@ -1222,7 +2523,9 @@ impl Resolver {
         for gp in &generic_params {
             let gp_def = self.symbols.define(
                 gp.name.clone(),
-                DefKind::TypeParam { bounds: gp.bounds.clone() },
+                DefKind::TypeParam {
+                    bounds: gp.bounds.clone(),
+                },
                 Visibility::Private,
                 gp.span.clone(),
             );
@@ -1237,24 +2540,24 @@ impl Resolver {
         //   - &mut self for init (needs to assign fields)
         //   - &self for all other instance methods
         // Class methods (self.method_name) don't get implicit self.
-        let self_mode = if self_mode.is_none()
-            && self.current_self_ty.is_some()
-            && !f.is_class_method
-        {
-            if f.name == "init" {
-                Some(HirSelfMode::RefMut)
+        let self_mode =
+            if self_mode.is_none() && self.current_self_ty.is_some() && !f.is_class_method {
+                if f.name == "init" {
+                    Some(HirSelfMode::RefMut)
+                } else {
+                    Some(HirSelfMode::Ref)
+                }
             } else {
-                Some(HirSelfMode::Ref)
-            }
-        } else {
-            self_mode
-        };
+                self_mode
+            };
 
         if let Some(ref self_ty) = self.current_self_ty {
             if self_mode.is_some() {
                 let self_def = self.symbols.define(
                     "self".to_string(),
-                    DefKind::SelfValue { ty: self_ty.clone() },
+                    DefKind::SelfValue {
+                        ty: self_ty.clone(),
+                    },
                     Visibility::Private,
                     f.span.clone(),
                 );
@@ -1270,12 +2573,17 @@ impl Resolver {
         // to `__block.(VALUE)` and callers can forward a trailing block.
         if let Some(&arity) = self.yield_fns.get(&f.name) {
             let block_ty = Ty::Fn {
-                params: (0..arity).map(|_| self.type_context.fresh_type_var()).collect(),
+                params: (0..arity)
+                    .map(|_| self.type_context.fresh_type_var())
+                    .collect(),
                 ret: Box::new(self.type_context.fresh_type_var()),
             };
             let block_def_id = self.symbols.define(
                 "__block".to_string(),
-                DefKind::Param { ty: block_ty.clone(), auto_assign: false },
+                DefKind::Param {
+                    ty: block_ty.clone(),
+                    auto_assign: false,
+                },
                 Visibility::Private,
                 f.span.clone(),
             );
@@ -1289,7 +2597,9 @@ impl Resolver {
             });
         }
 
-        let return_ty = f.return_type.as_ref()
+        let return_ty = f
+            .return_type
+            .as_ref()
             .map(|t| self.resolve_type_expr(t))
             .unwrap_or_else(|| {
                 // Default to Unit for:
@@ -1310,42 +2620,51 @@ impl Resolver {
             });
 
         let old_return_ty = self.current_return_ty.replace(return_ty.clone());
+        let old_async_scope_depth = self.async_scope_depth;
+        if f.is_async {
+            self.async_scope_depth += 1;
+        }
 
         let body = self.resolve_block_as_expr(&f.body);
 
+        self.async_scope_depth = old_async_scope_depth;
         self.current_return_ty = old_return_ty;
         self.scopes.pop();
 
         let sig = FnSignature {
             self_mode,
             is_class_method: f.is_class_method,
-            generic_params: generic_params.iter().map(|gp| GenericParamInfo {
-                name: gp.name.clone(),
-                bounds: gp.bounds.clone(),
-            }).collect(),
-            params: params.iter().map(|p| ParamInfo {
-                name: p.name.clone(),
-                ty: p.ty.clone(),
-                auto_assign: p.auto_assign,
-            }).collect(),
+            is_async: f.is_async,
+            generic_params: generic_params
+                .iter()
+                .map(|gp| GenericParamInfo {
+                    name: gp.name.clone(),
+                    bounds: gp.bounds.clone(),
+                })
+                .collect(),
+            params: params
+                .iter()
+                .map(|p| ParamInfo {
+                    name: p.name.clone(),
+                    ty: p.ty.clone(),
+                    auto_assign: p.auto_assign,
+                })
+                .collect(),
             return_ty: return_ty.clone(),
         };
 
-        let def_kind = if parent.is_some() {
+        let def_kind = if let Some(parent) = parent {
             DefKind::Method {
-                parent: parent.unwrap(),
+                parent,
                 signature: sig,
             }
         } else {
             DefKind::Function { signature: sig }
         };
 
-        let def_id = self.symbols.define(
-            f.name.clone(),
-            def_kind,
-            f.visibility,
-            f.span.clone(),
-        );
+        let def_id = self
+            .symbols
+            .define(f.name.clone(), def_kind, f.visibility, f.span.clone());
 
         // Register the function name in the enclosing scope (not the function scope we just popped)
         self.scopes.insert(f.name.clone(), def_id);
@@ -1354,12 +2673,14 @@ impl Resolver {
             def_id,
             name: f.name.clone(),
             visibility: f.visibility,
+            is_async: f.is_async,
             self_mode,
             is_class_method: f.is_class_method,
             generic_params,
             params,
             return_ty,
             body: Box::new(body),
+            doc_comments: f.doc_comments.clone(),
             span: f.span.clone(),
         }
     }
@@ -1380,7 +2701,9 @@ impl Resolver {
 
         // Try to resolve the first segment as a known type or module
         let first = &path[0];
-        let root_def_id = self.scopes.lookup_type(first)
+        let root_def_id = self
+            .scopes
+            .lookup_type(first)
             .or_else(|| self.scopes.lookup(first));
 
         match root_def_id {
@@ -1511,7 +2834,7 @@ impl Resolver {
             }
             None => {
                 self.diagnostics.push(Diagnostic::error(
-                    format!("unresolved name in use path"),
+                    "unresolved name in use path".to_string(),
                     use_decl.span.clone(),
                 ));
                 None
@@ -1520,7 +2843,11 @@ impl Resolver {
     }
 
     fn resolve_module(&mut self, m: &ast::ModuleDef) -> HirModule {
-        let def_id = self.type_registry.get(&m.name).copied().unwrap_or(UNRESOLVED_DEF);
+        let def_id = self
+            .type_registry
+            .get(&m.name)
+            .copied()
+            .unwrap_or(UNRESOLVED_DEF);
 
         self.scopes.push(ScopeKind::Module);
 
@@ -1548,52 +2875,78 @@ impl Resolver {
         match &expr.kind {
             ast::ExprKind::IntLiteral(val, suffix) => {
                 let ty = self.int_literal_type(*suffix);
-                HirExpr { kind: HirExprKind::IntLiteral(*val), ty, span }
+                HirExpr {
+                    kind: HirExprKind::IntLiteral(*val),
+                    ty,
+                    span,
+                }
             }
             ast::ExprKind::FloatLiteral(val, suffix) => {
                 let ty = self.float_literal_type(*suffix);
-                HirExpr { kind: HirExprKind::FloatLiteral(*val), ty, span }
+                HirExpr {
+                    kind: HirExprKind::FloatLiteral(*val),
+                    ty,
+                    span,
+                }
             }
-            ast::ExprKind::StringLiteral(s) => {
-                HirExpr { kind: HirExprKind::StringLiteral(s.clone()), ty: Ty::Str, span }
-            }
+            ast::ExprKind::StringLiteral(s) => HirExpr {
+                kind: HirExprKind::StringLiteral(s.clone()),
+                ty: Ty::Str,
+                span,
+            },
             ast::ExprKind::InterpolatedString(parts) => {
-                let hir_parts: Vec<HirInterpolationPart> = parts.iter().map(|p| {
-                    match p {
-                        crate::lexer::token::StringPart::Literal(s) => {
-                            HirInterpolationPart::Literal(s.clone())
+                let hir_parts: Vec<HirInterpolationPart> = parts
+                    .iter()
+                    .map(|p| {
+                        match p {
+                            crate::lexer::token::StringPart::Literal(s) => {
+                                HirInterpolationPart::Literal(s.clone())
+                            }
+                            crate::lexer::token::StringPart::Expr(tokens) => {
+                                // Parse the interpolation tokens as an expression
+                                let inner_expr = self.resolve_interpolation_tokens(tokens, &span);
+                                HirInterpolationPart::Expr(inner_expr)
+                            }
                         }
-                        crate::lexer::token::StringPart::Expr(tokens) => {
-                            // Parse the interpolation tokens as an expression
-                            let inner_expr = self.resolve_interpolation_tokens(tokens, &span);
-                            HirInterpolationPart::Expr(inner_expr)
-                        }
-                    }
-                }).collect();
+                    })
+                    .collect();
                 HirExpr {
                     kind: HirExprKind::Interpolation { parts: hir_parts },
                     ty: Ty::String, // interpolated strings produce owned Strings
                     span,
                 }
             }
-            ast::ExprKind::CharLiteral(c) => {
-                HirExpr { kind: HirExprKind::CharLiteral(*c), ty: Ty::Char, span }
-            }
-            ast::ExprKind::BoolLiteral(b) => {
-                HirExpr { kind: HirExprKind::BoolLiteral(*b), ty: Ty::Bool, span }
-            }
-            ast::ExprKind::UnitLiteral => {
-                HirExpr { kind: HirExprKind::UnitLiteral, ty: Ty::Unit, span }
-            }
+            ast::ExprKind::CharLiteral(c) => HirExpr {
+                kind: HirExprKind::CharLiteral(*c),
+                ty: Ty::Char,
+                span,
+            },
+            ast::ExprKind::BoolLiteral(b) => HirExpr {
+                kind: HirExprKind::BoolLiteral(*b),
+                ty: Ty::Bool,
+                span,
+            },
+            ast::ExprKind::UnitLiteral => HirExpr {
+                kind: HirExprKind::UnitLiteral,
+                ty: Ty::Unit,
+                span,
+            },
             ast::ExprKind::Identifier(name) => {
-                if let Some(def_id) = self.scopes.lookup(name) {
+                if let Some((def_id, def_scope_id)) = self.scopes.lookup_with_scope(name) {
                     // If the identifier resolves to an enum variant (e.g.
                     // bare `None`, `Color.Red`), lower it as an
                     // EnumVariant construction rather than a VarRef so
                     // codegen allocates and tags it correctly.
                     if let Some(def) = self.symbols.get(def_id) {
-                        if let DefKind::EnumVariant { parent, variant_idx, .. } = def.kind {
-                            let parent_name = self.symbols.get(parent)
+                        if let DefKind::EnumVariant {
+                            parent,
+                            variant_idx,
+                            ..
+                        } = def.kind
+                        {
+                            let parent_name = self
+                                .symbols
+                                .get(parent)
                                 .map(|p| p.name.clone())
                                 .unwrap_or_default();
                             return HirExpr {
@@ -1604,44 +2957,88 @@ impl Resolver {
                                     variant_idx,
                                     fields: vec![],
                                 },
-                                ty: Ty::Enum { name: parent_name, generic_args: vec![] },
+                                ty: Ty::Enum {
+                                    name: parent_name,
+                                    generic_args: vec![],
+                                },
                                 span,
                             };
                         }
                     }
-                    let ty = self.symbols.def_ty(def_id).unwrap_or_else(|| self.type_context.fresh_type_var());
-                    HirExpr { kind: HirExprKind::VarRef(def_id), ty, span }
+                    self.record_capture_if_needed(def_id, def_scope_id);
+                    let ty = self
+                        .symbols
+                        .def_ty(def_id)
+                        .unwrap_or_else(|| self.type_context.fresh_type_var());
+                    HirExpr {
+                        kind: HirExprKind::VarRef(def_id),
+                        ty,
+                        span,
+                    }
                 } else if let Some(def_id) = self.scopes.lookup_type(name) {
                     // Type name used as a value — needed for constructor calls
                     // like Point.new(...), Color.Red, etc.
                     let ty = match self.symbols.get(def_id).map(|d| &d.kind) {
-                        Some(DefKind::Class { .. }) => Ty::Class { name: name.clone(), generic_args: vec![] },
-                        Some(DefKind::Struct { .. }) => Ty::Struct { name: name.clone(), generic_args: vec![] },
-                        Some(DefKind::Enum { .. }) => Ty::Enum { name: name.clone(), generic_args: vec![] },
+                        Some(DefKind::Class { .. }) => Ty::Class {
+                            name: name.clone(),
+                            generic_args: vec![],
+                        },
+                        Some(DefKind::Struct { .. }) => Ty::Struct {
+                            name: name.clone(),
+                            generic_args: vec![],
+                        },
+                        Some(DefKind::Enum { .. }) => Ty::Enum {
+                            name: name.clone(),
+                            generic_args: vec![],
+                        },
                         _ => self.type_context.fresh_type_var(),
                     };
-                    HirExpr { kind: HirExprKind::VarRef(def_id), ty, span }
+                    HirExpr {
+                        kind: HirExprKind::VarRef(def_id),
+                        ty,
+                        span,
+                    }
                 } else {
                     self.error(format!("undefined variable `{}`", name), &span);
-                    HirExpr { kind: HirExprKind::Error, ty: Ty::Error, span }
+                    HirExpr {
+                        kind: HirExprKind::Error,
+                        ty: Ty::Error,
+                        span,
+                    }
                 }
             }
             ast::ExprKind::SelfRef => {
                 if let Some(def_id) = self.scopes.lookup("self") {
                     let ty = self.current_self_ty.clone().unwrap_or(Ty::Error);
-                    HirExpr { kind: HirExprKind::VarRef(def_id), ty, span }
+                    HirExpr {
+                        kind: HirExprKind::VarRef(def_id),
+                        ty,
+                        span,
+                    }
                 } else {
                     self.error("`self` used outside of method context".to_string(), &span);
-                    HirExpr { kind: HirExprKind::Error, ty: Ty::Error, span }
+                    HirExpr {
+                        kind: HirExprKind::Error,
+                        ty: Ty::Error,
+                        span,
+                    }
                 }
             }
             ast::ExprKind::SelfType => {
                 if let Some(ref ty) = self.current_self_ty {
                     let def_id = self.scopes.lookup_type("Self").unwrap_or(UNRESOLVED_DEF);
-                    HirExpr { kind: HirExprKind::VarRef(def_id), ty: ty.clone(), span }
+                    HirExpr {
+                        kind: HirExprKind::VarRef(def_id),
+                        ty: ty.clone(),
+                        span,
+                    }
                 } else {
                     self.error("`Self` used outside of type context".to_string(), &span);
-                    HirExpr { kind: HirExprKind::Error, ty: Ty::Error, span }
+                    HirExpr {
+                        kind: HirExprKind::Error,
+                        ty: Ty::Error,
+                        span,
+                    }
                 }
             }
             ast::ExprKind::BinaryOp { left, op, right } => {
@@ -1674,7 +3071,10 @@ impl Resolver {
                 let inner_hir = self.resolve_expr(inner);
                 let ty = Ty::Ref(Box::new(inner_hir.ty.clone()));
                 HirExpr {
-                    kind: HirExprKind::Borrow { mutable: false, expr: Box::new(inner_hir) },
+                    kind: HirExprKind::Borrow {
+                        mutable: false,
+                        expr: Box::new(inner_hir),
+                    },
                     ty,
                     span,
                 }
@@ -1683,7 +3083,10 @@ impl Resolver {
                 let inner_hir = self.resolve_expr(inner);
                 let ty = Ty::RefMut(Box::new(inner_hir.ty.clone()));
                 HirExpr {
-                    kind: HirExprKind::Borrow { mutable: true, expr: Box::new(inner_hir) },
+                    kind: HirExprKind::Borrow {
+                        mutable: true,
+                        expr: Box::new(inner_hir),
+                    },
                     ty,
                     span,
                 }
@@ -1701,7 +3104,12 @@ impl Resolver {
                     span,
                 }
             }
-            ast::ExprKind::MethodCall { object, method, args, block } => {
+            ast::ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                block,
+            } => {
                 let obj_hir = self.resolve_expr(object);
                 let args_hir: Vec<HirExpr> = args.iter().map(|a| self.resolve_expr(a)).collect();
                 let block_hir = block.as_ref().map(|b| Box::new(self.resolve_expr(b)));
@@ -1718,8 +3126,13 @@ impl Resolver {
                     span,
                 }
             }
-            ast::ExprKind::Call { callee, args, block } => {
-                let mut args_hir: Vec<HirExpr> = args.iter().map(|a| self.resolve_expr(a)).collect();
+            ast::ExprKind::Call {
+                callee,
+                args,
+                block,
+            } => {
+                let mut args_hir: Vec<HirExpr> =
+                    args.iter().map(|a| self.resolve_expr(a)).collect();
                 let mut block_hir = block.as_ref().map(|b| Box::new(self.resolve_expr(b)));
 
                 // Try to resolve the callee
@@ -1782,7 +3195,8 @@ impl Resolver {
                                         self.error(
                                             format!(
                                                 "newtype `{}` expects exactly 1 argument, got {}",
-                                                name, args_hir.len(),
+                                                name,
+                                                args_hir.len(),
                                             ),
                                             &span,
                                         );
@@ -1809,11 +3223,19 @@ impl Resolver {
                                 }
                             }
                             self.error(format!("undefined function `{}`", name), &span);
-                            HirExpr { kind: HirExprKind::Error, ty: Ty::Error, span }
+                            HirExpr {
+                                kind: HirExprKind::Error,
+                                ty: Ty::Error,
+                                span,
+                            }
                         } else {
                             // Could be a type constructor: Type.new(...)
                             self.error(format!("undefined function `{}`", name), &span);
-                            HirExpr { kind: HirExprKind::Error, ty: Ty::Error, span }
+                            HirExpr {
+                                kind: HirExprKind::Error,
+                                ty: Ty::Error,
+                                span,
+                            }
                         }
                     }
                     // FieldAccess could be a static method call: Type.method(...)
@@ -1952,7 +3374,10 @@ impl Resolver {
                 let binding_ty = self.type_context.fresh_type_var();
                 let binding_def = self.symbols.define(
                     binding_name.clone(),
-                    DefKind::Variable { mutable: false, ty: binding_ty.clone() },
+                    DefKind::Variable {
+                        mutable: false,
+                        ty: binding_ty.clone(),
+                    },
                     Visibility::Private,
                     for_expr.pattern.span().clone(),
                 );
@@ -1961,7 +3386,11 @@ impl Resolver {
                 // and collect their DefIds so the MIR lowerer can destructure.
                 let mut tuple_bindings = Vec::new();
                 if let ast::Pattern::Tuple { elements, .. } = &for_expr.pattern {
-                    self.register_pattern_bindings(&for_expr.pattern, false, &for_expr.pattern.span());
+                    self.register_pattern_bindings(
+                        &for_expr.pattern,
+                        false,
+                        for_expr.pattern.span(),
+                    );
                     for elem in elements {
                         if let ast::Pattern::Identifier { name, .. } = elem {
                             if let Some(def_id) = self.scopes.lookup(name) {
@@ -1989,17 +3418,15 @@ impl Resolver {
                 let body = self.resolve_block_as_expr(&loop_expr.body);
                 self.scopes.pop();
                 HirExpr {
-                    kind: HirExprKind::Loop { body: Box::new(body) },
+                    kind: HirExprKind::Loop {
+                        body: Box::new(body),
+                    },
                     ty: self.type_context.fresh_type_var(),
                     span,
                 }
             }
-            ast::ExprKind::Block(block) => {
-                self.resolve_block_as_expr(block)
-            }
-            ast::ExprKind::Closure(closure) => {
-                self.resolve_closure(closure, &span)
-            }
+            ast::ExprKind::Block(block) => self.resolve_block_as_expr(block),
+            ast::ExprKind::Closure(closure) => self.resolve_closure(closure, &span),
             ast::ExprKind::Return(value) => {
                 let value_hir = value.as_ref().map(|v| Box::new(self.resolve_expr(v)));
                 HirExpr {
@@ -2029,7 +3456,11 @@ impl Resolver {
                     span,
                 }
             }
-            ast::ExprKind::Range { start, end, inclusive } => {
+            ast::ExprKind::Range {
+                start,
+                end,
+                inclusive,
+            } => {
                 let start_hir = start.as_ref().map(|s| Box::new(self.resolve_expr(s)));
                 let end_hir = end.as_ref().map(|e| Box::new(self.resolve_expr(e)));
                 let ty = self.type_context.fresh_type_var();
@@ -2084,7 +3515,10 @@ impl Resolver {
                     span,
                 }
             }
-            ast::ExprKind::Cast { expr: inner, target_type } => {
+            ast::ExprKind::Cast {
+                expr: inner,
+                target_type,
+            } => {
                 let inner_hir = self.resolve_expr(inner);
                 let target = self.resolve_type_expr(target_type);
                 HirExpr {
@@ -2093,6 +3527,28 @@ impl Resolver {
                         target: target.clone(),
                     },
                     ty: target,
+                    span,
+                }
+            }
+            ast::ExprKind::Await(inner) => {
+                if self.async_scope_depth == 0 {
+                    self.diagnostics.push(Diagnostic::error_with_code(
+                        "cannot `await` outside an `async` function or closure",
+                        span.clone(),
+                        "E_await_outside_async",
+                    ));
+                }
+                let inner_hir = self.resolve_expr(inner);
+                let ty = self.type_context.fresh_type_var();
+                HirExpr {
+                    kind: HirExprKind::MethodCall {
+                        object: Box::new(inner_hir),
+                        method: UNRESOLVED_DEF,
+                        method_name: "await".to_string(),
+                        args: vec![],
+                        block: None,
+                    },
+                    ty,
                     span,
                 }
             }
@@ -2128,7 +3584,11 @@ impl Resolver {
                     span,
                 }
             }
-            ast::ExprKind::SafeNavCall { object, method, args } => {
+            ast::ExprKind::SafeNavCall {
+                object,
+                method,
+                args,
+            } => {
                 let obj_hir = self.resolve_expr(object);
                 let args_hir: Vec<HirExpr> = args.iter().map(|a| self.resolve_expr(a)).collect();
                 let ty = self.type_context.fresh_type_var();
@@ -2159,9 +3619,12 @@ impl Resolver {
                         let (k, v) = if args_hir.len() >= 2 {
                             (args_hir[0].ty.clone(), args_hir[1].ty.clone())
                         } else {
-                            (self.type_context.fresh_type_var(), self.type_context.fresh_type_var())
+                            (
+                                self.type_context.fresh_type_var(),
+                                self.type_context.fresh_type_var(),
+                            )
                         };
-                        Ty::Hash(Box::new(k), Box::new(v))
+                        Ty::HashMap(Box::new(k), Box::new(v))
                     }
                     "set" => {
                         let elem = if args_hir.is_empty() {
@@ -2175,16 +3638,27 @@ impl Resolver {
                     _ => self.type_context.fresh_type_var(),
                 };
                 HirExpr {
-                    kind: HirExprKind::MacroCall { name: name.clone(), args: args_hir },
+                    kind: HirExprKind::MacroCall {
+                        name: name.clone(),
+                        args: args_hir,
+                    },
                     ty,
                     span,
                 }
             }
-            ast::ExprKind::EnumVariant { type_path, variant, args } => {
+            ast::ExprKind::EnumVariant {
+                type_path,
+                variant,
+                args,
+            } => {
                 let type_name = type_path.join(".");
                 let composite = format!("{}.{}", type_name, variant);
                 let variant_def = self.scopes.lookup(&composite).unwrap_or(UNRESOLVED_DEF);
-                let mut type_def = self.type_registry.get(&type_name).copied().unwrap_or(UNRESOLVED_DEF);
+                let mut type_def = self
+                    .type_registry
+                    .get(&type_name)
+                    .copied()
+                    .unwrap_or(UNRESOLVED_DEF);
 
                 // For bare variants (Ok, Err, Some, None) where type_path is empty,
                 // look up the parent enum from the variant definition
@@ -2202,24 +3676,39 @@ impl Resolver {
 
                 // Extract variant_idx first to avoid borrow conflicts
                 let variant_idx = if variant_def != UNRESOLVED_DEF {
-                    self.symbols.get(variant_def).and_then(|def| {
-                        if let DefKind::EnumVariant { variant_idx, .. } = &def.kind {
-                            Some(*variant_idx)
-                        } else {
-                            None
-                        }
-                    }).unwrap_or(0)
+                    self.symbols
+                        .get(variant_def)
+                        .and_then(|def| {
+                            if let DefKind::EnumVariant { variant_idx, .. } = &def.kind {
+                                Some(*variant_idx)
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or(0)
                 } else {
-                    self.error(format!("undefined enum variant `{}.{}`", type_name, variant), &span);
+                    self.error(
+                        format!("undefined enum variant `{}.{}`", type_name, variant),
+                        &span,
+                    );
                     0
                 };
 
-                let fields_hir: Vec<(String, HirExpr)> = args.iter().map(|fa| {
-                    (fa.name.clone().unwrap_or_default(), self.resolve_expr(&fa.value))
-                }).collect();
+                let fields_hir: Vec<(String, HirExpr)> = args
+                    .iter()
+                    .map(|fa| {
+                        (
+                            fa.name.clone().unwrap_or_default(),
+                            self.resolve_expr(&fa.value),
+                        )
+                    })
+                    .collect();
 
                 let ty = if type_def != UNRESOLVED_DEF {
-                    Ty::Enum { name: resolved_type_name.clone(), generic_args: vec![] }
+                    Ty::Enum {
+                        name: resolved_type_name.clone(),
+                        generic_args: vec![],
+                    }
                 } else {
                     Ty::Error
                 };
@@ -2264,7 +3753,9 @@ impl Resolver {
                 // whose enclosing method has no block), we keep the old
                 // unresolved-FnCall shape so downstream passes can report
                 // a clearer error.
-                let block_def = self.scopes.lookup("__block")
+                let block_def = self
+                    .scopes
+                    .lookup("__block")
                     .or_else(|| self.scopes.lookup("&block"));
                 if let Some(block_def) = block_def {
                     let block_ty = self.symbols.def_ty(block_def).unwrap_or(Ty::Error);
@@ -2320,10 +3811,7 @@ impl Resolver {
                     }
                 }
                 self.scopes.pop();
-                let ty = tail_expr
-                    .as_ref()
-                    .map(|e| e.ty.clone())
-                    .unwrap_or(Ty::Unit);
+                let ty = tail_expr.as_ref().map(|e| e.ty.clone()).unwrap_or(Ty::Unit);
                 HirExpr {
                     kind: HirExprKind::UnsafeBlock(stmts, tail_expr),
                     ty,
@@ -2368,9 +3856,7 @@ impl Resolver {
 
         self.scopes.pop();
 
-        let ty = tail_expr.as_ref()
-            .map(|e| e.ty.clone())
-            .unwrap_or(Ty::Unit);
+        let ty = tail_expr.as_ref().map(|e| e.ty.clone()).unwrap_or(Ty::Unit);
 
         HirExpr {
             kind: HirExprKind::Block(stmts, tail_expr),
@@ -2380,7 +3866,9 @@ impl Resolver {
     }
 
     fn resolve_let(&mut self, binding: &ast::LetBinding) -> HirStatement {
-        let ty = binding.type_annotation.as_ref()
+        let ty = binding
+            .type_annotation
+            .as_ref()
             .map(|t| self.resolve_type_expr(t))
             .unwrap_or_else(|| self.type_context.fresh_type_var());
 
@@ -2392,7 +3880,10 @@ impl Resolver {
         let name = self.pattern_binding_name(&binding.pattern);
         let def_id = self.symbols.define(
             name,
-            DefKind::Variable { mutable: binding.mutable, ty: ty.clone() },
+            DefKind::Variable {
+                mutable: binding.mutable,
+                ty: ty.clone(),
+            },
             Visibility::Private,
             binding.span.clone(),
         );
@@ -2426,7 +3917,9 @@ impl Resolver {
         // Handle elsif + else chain by nesting
         let else_branch = if !if_expr.elsif_clauses.is_empty() {
             // Build nested if-else from elsif chain
-            let mut else_expr = if_expr.else_body.as_ref()
+            let mut else_expr = if_expr
+                .else_body
+                .as_ref()
                 .map(|b| self.resolve_block_as_expr(b));
 
             for elsif in if_expr.elsif_clauses.iter().rev() {
@@ -2445,7 +3938,10 @@ impl Resolver {
             }
             else_expr
         } else {
-            if_expr.else_body.as_ref().map(|b| self.resolve_block_as_expr(b))
+            if_expr
+                .else_body
+                .as_ref()
+                .map(|b| self.resolve_block_as_expr(b))
         };
 
         let ty = self.type_context.fresh_type_var();
@@ -2469,11 +3965,16 @@ impl Resolver {
         let then_body = self.resolve_block_as_expr(&if_let.then_body);
         self.scopes.pop();
 
-        let else_body = if_let.else_body.as_ref().map(|b| self.resolve_block_as_expr(b));
+        let else_body = if_let
+            .else_body
+            .as_ref()
+            .map(|b| self.resolve_block_as_expr(b));
 
         // Desugar to match
         let wildcard_arm = HirMatchArm {
-            pattern: HirPattern::Wildcard { span: if_let.span.clone() },
+            pattern: HirPattern::Wildcard {
+                span: if_let.span.clone(),
+            },
             guard: None,
             body: Box::new(else_body.unwrap_or(HirExpr {
                 kind: HirExprKind::UnitLiteral,
@@ -2540,16 +4041,26 @@ impl Resolver {
     // ─── Closure Resolution ─────────────────────────────────────────
 
     fn resolve_closure(&mut self, closure: &ast::ClosureExpr, span: &Span) -> HirExpr {
-        self.scopes.push(ScopeKind::Closure);
+        let closure_scope_id = self.scopes.push(ScopeKind::Closure);
+        self.closure_stack.push(ClosureCaptureContext {
+            scope_id: closure_scope_id,
+            is_move: closure.is_move,
+            captures: Vec::new(),
+        });
 
         let mut params = Vec::new();
         for p in &closure.params {
-            let ty = p.type_expr.as_ref()
+            let ty = p
+                .type_expr
+                .as_ref()
                 .map(|t| self.resolve_type_expr(t))
                 .unwrap_or_else(|| self.type_context.fresh_type_var());
             let def_id = self.symbols.define(
                 p.name.clone(),
-                DefKind::Param { ty: ty.clone(), auto_assign: false },
+                DefKind::Param {
+                    ty: ty.clone(),
+                    auto_assign: false,
+                },
                 Visibility::Private,
                 p.span.clone(),
             );
@@ -2562,15 +4073,33 @@ impl Resolver {
             });
         }
 
+        let old_async_scope_depth = self.async_scope_depth;
+        if closure.is_async {
+            self.async_scope_depth += 1;
+        }
+
         let body = match &closure.body {
             ast::ClosureBody::Expr(e) => self.resolve_expr(e),
             ast::ClosureBody::Block(b) => self.resolve_block_as_expr(b),
         };
 
+        self.async_scope_depth = old_async_scope_depth;
+        let captures = self
+            .closure_stack
+            .pop()
+            .map(|ctx| ctx.captures)
+            .unwrap_or_default();
         self.scopes.pop();
 
         let param_tys: Vec<Ty> = params.iter().map(|p| p.ty.clone()).collect();
-        let ret_ty = body.ty.clone();
+        let ret_ty = if closure.is_async {
+            Ty::Class {
+                name: "Future".to_string(),
+                generic_args: vec![body.ty.clone()],
+            }
+        } else {
+            body.ty.clone()
+        };
         let fn_ty = Ty::Fn {
             params: param_tys,
             ret: Box::new(ret_ty),
@@ -2580,12 +4109,38 @@ impl Resolver {
             kind: HirExprKind::Closure {
                 params,
                 body: Box::new(body),
-                captures: vec![], // filled in during type checking
+                captures,
+                is_async: closure.is_async,
                 is_move: closure.is_move,
             },
             ty: fn_ty,
             span: span.clone(),
         }
+    }
+
+    fn record_capture_if_needed(&mut self, def_id: DefId, def_scope_id: ScopeId) {
+        let Some(closure) = self.closure_stack.last_mut() else {
+            return;
+        };
+        if self.scopes.is_within_scope(def_scope_id, closure.scope_id) {
+            return;
+        }
+        let Some(def) = self.symbols.get(def_id) else {
+            return;
+        };
+        let should_capture = matches!(
+            def.kind,
+            DefKind::Variable { .. } | DefKind::Param { .. } | DefKind::SelfValue { .. }
+        );
+        if !should_capture || closure.captures.iter().any(|cap| cap.def_id == def_id) {
+            return;
+        }
+        closure.captures.push(Capture {
+            def_id,
+            name: def.name.clone(),
+            by_move: closure.is_move,
+            ty: self.symbols.def_ty(def_id).unwrap_or(Ty::Error),
+        });
     }
 
     // ─── Pattern Resolution ─────────────────────────────────────────
@@ -2594,14 +4149,25 @@ impl Resolver {
         self.resolve_pattern_with_type(pattern, &Ty::Error)
     }
 
-    fn resolve_pattern_with_type(&mut self, pattern: &ast::Pattern, _expected_ty: &Ty) -> HirPattern {
+    fn resolve_pattern_with_type(
+        &mut self,
+        pattern: &ast::Pattern,
+        _expected_ty: &Ty,
+    ) -> HirPattern {
         match pattern {
             ast::Pattern::Wildcard { span } => HirPattern::Wildcard { span: span.clone() },
-            ast::Pattern::Identifier { mutable, name, span } => {
+            ast::Pattern::Identifier {
+                mutable,
+                name,
+                span,
+            } => {
                 let ty = self.type_context.fresh_type_var();
                 let def_id = self.symbols.define(
                     name.clone(),
-                    DefKind::Variable { mutable: *mutable, ty },
+                    DefKind::Variable {
+                        mutable: *mutable,
+                        ty,
+                    },
                     Visibility::Private,
                     span.clone(),
                 );
@@ -2625,12 +4191,19 @@ impl Resolver {
                 }
             }
             ast::Pattern::Tuple { elements, span } => {
-                let elems: Vec<HirPattern> = elements.iter()
-                    .map(|e| self.resolve_pattern(e))
-                    .collect();
-                HirPattern::Tuple { elements: elems, span: span.clone() }
+                let elems: Vec<HirPattern> =
+                    elements.iter().map(|e| self.resolve_pattern(e)).collect();
+                HirPattern::Tuple {
+                    elements: elems,
+                    span: span.clone(),
+                }
             }
-            ast::Pattern::Enum { path, variant, fields, span } => {
+            ast::Pattern::Enum {
+                path,
+                variant,
+                fields,
+                span,
+            } => {
                 let type_name = path.join(".");
                 let composite = format!("{}.{}", type_name, variant);
                 let variant_def = self.scopes.lookup(&composite).unwrap_or_else(|| {
@@ -2642,14 +4215,23 @@ impl Resolver {
                     if let Some(def) = self.symbols.get(variant_def) {
                         if let DefKind::EnumVariant { variant_idx, .. } = &def.kind {
                             *variant_idx
-                        } else { 0 }
-                    } else { 0 }
-                } else { 0 };
+                        } else {
+                            0
+                        }
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                };
 
-                let type_def = self.type_registry.get(&type_name).copied().unwrap_or(UNRESOLVED_DEF);
-                let fields_hir: Vec<HirPattern> = fields.iter()
-                    .map(|f| self.resolve_pattern(f))
-                    .collect();
+                let type_def = self
+                    .type_registry
+                    .get(&type_name)
+                    .copied()
+                    .unwrap_or(UNRESOLVED_DEF);
+                let fields_hir: Vec<HirPattern> =
+                    fields.iter().map(|f| self.resolve_pattern(f)).collect();
 
                 HirPattern::Enum {
                     type_def,
@@ -2659,14 +4241,26 @@ impl Resolver {
                     span: span.clone(),
                 }
             }
-            ast::Pattern::Struct { path, fields, rest, span } => {
+            ast::Pattern::Struct {
+                path,
+                fields,
+                rest,
+                span,
+            } => {
                 let type_name = path.join(".");
-                let type_def = self.type_registry.get(&type_name).copied().unwrap_or(UNRESOLVED_DEF);
-                let fields_hir: Vec<(String, HirPattern)> = fields.iter().map(|f| {
-                    let name = f.name.clone().unwrap_or_default();
-                    let pat = self.resolve_pattern(&f.pattern);
-                    (name, pat)
-                }).collect();
+                let type_def = self
+                    .type_registry
+                    .get(&type_name)
+                    .copied()
+                    .unwrap_or(UNRESOLVED_DEF);
+                let fields_hir: Vec<(String, HirPattern)> = fields
+                    .iter()
+                    .map(|f| {
+                        let name = f.name.clone().unwrap_or_default();
+                        let pat = self.resolve_pattern(&f.pattern);
+                        (name, pat)
+                    })
+                    .collect();
                 HirPattern::Struct {
                     type_def,
                     fields: fields_hir,
@@ -2675,16 +4269,25 @@ impl Resolver {
                 }
             }
             ast::Pattern::Or { patterns, span } => {
-                let pats: Vec<HirPattern> = patterns.iter()
-                    .map(|p| self.resolve_pattern(p))
-                    .collect();
-                HirPattern::Or { patterns: pats, span: span.clone() }
+                let pats: Vec<HirPattern> =
+                    patterns.iter().map(|p| self.resolve_pattern(p)).collect();
+                HirPattern::Or {
+                    patterns: pats,
+                    span: span.clone(),
+                }
             }
-            ast::Pattern::Ref { mutable, name, span } => {
+            ast::Pattern::Ref {
+                mutable,
+                name,
+                span,
+            } => {
                 let ty = self.type_context.fresh_type_var();
                 let def_id = self.symbols.define(
                     name.clone(),
-                    DefKind::Variable { mutable: *mutable, ty },
+                    DefKind::Variable {
+                        mutable: *mutable,
+                        ty,
+                    },
                     Visibility::Private,
                     span.clone(),
                 );
@@ -2698,9 +4301,7 @@ impl Resolver {
                     span: span.clone(),
                 }
             }
-            ast::Pattern::Rest { span } => {
-                HirPattern::Rest { span: span.clone() }
-            }
+            ast::Pattern::Rest { span } => HirPattern::Rest { span: span.clone() },
         }
     }
 
@@ -2741,7 +4342,9 @@ impl Resolver {
                     self.register_pattern_bindings(first, mutable, span);
                 }
             }
-            ast::Pattern::Ref { name, mutable: m, .. } => {
+            ast::Pattern::Ref {
+                name, mutable: m, ..
+            } => {
                 if self.scopes.lookup(name).is_none() {
                     let ty = self.type_context.fresh_type_var();
                     let def_id = self.symbols.define(
@@ -2762,7 +4365,12 @@ impl Resolver {
     pub fn resolve_type_expr(&mut self, type_expr: &ast::TypeExpr) -> Ty {
         match type_expr {
             ast::TypeExpr::Named(path) => self.resolve_type_path(path),
-            ast::TypeExpr::Reference { lifetime, mutable, inner, .. } => {
+            ast::TypeExpr::Reference {
+                lifetime,
+                mutable,
+                inner,
+                ..
+            } => {
                 let inner_ty = self.resolve_type_expr(inner);
                 match (lifetime, mutable) {
                     (Some(lt), true) => Ty::RefMutLifetime(lt.clone(), Box::new(inner_ty)),
@@ -2792,28 +4400,42 @@ impl Resolver {
                     Ty::Vec(Box::new(elem_ty))
                 }
             }
-            ast::TypeExpr::Function { params, return_type, .. } => {
-                Ty::Fn {
-                    params: params.iter().map(|p| self.resolve_type_expr(p)).collect(),
-                    ret: Box::new(self.resolve_type_expr(return_type)),
-                }
-            }
-            ast::TypeExpr::ImplTrait { bounds, .. } => {
-                Ty::ImplTrait(bounds.iter().map(|b| TraitRef {
-                    name: b.path.segments.join("."),
-                    generic_args: b.path.generic_args.as_ref()
-                        .map(|args| args.iter().map(|a| self.resolve_type_expr(a)).collect())
-                        .unwrap_or_default(),
-                }).collect())
-            }
-            ast::TypeExpr::DynTrait { bounds, .. } => {
-                Ty::DynTrait(bounds.iter().map(|b| TraitRef {
-                    name: b.path.segments.join("."),
-                    generic_args: b.path.generic_args.as_ref()
-                        .map(|args| args.iter().map(|a| self.resolve_type_expr(a)).collect())
-                        .unwrap_or_default(),
-                }).collect())
-            }
+            ast::TypeExpr::Function {
+                params,
+                return_type,
+                ..
+            } => Ty::Fn {
+                params: params.iter().map(|p| self.resolve_type_expr(p)).collect(),
+                ret: Box::new(self.resolve_type_expr(return_type)),
+            },
+            ast::TypeExpr::ImplTrait { bounds, .. } => Ty::ImplTrait(
+                bounds
+                    .iter()
+                    .map(|b| TraitRef {
+                        name: b.path.segments.join("."),
+                        generic_args: b
+                            .path
+                            .generic_args
+                            .as_ref()
+                            .map(|args| args.iter().map(|a| self.resolve_type_expr(a)).collect())
+                            .unwrap_or_default(),
+                    })
+                    .collect(),
+            ),
+            ast::TypeExpr::DynTrait { bounds, .. } => Ty::DynTrait(
+                bounds
+                    .iter()
+                    .map(|b| TraitRef {
+                        name: b.path.segments.join("."),
+                        generic_args: b
+                            .path
+                            .generic_args
+                            .as_ref()
+                            .map(|args| args.iter().map(|a| self.resolve_type_expr(a)).collect())
+                            .unwrap_or_default(),
+                    })
+                    .collect(),
+            ),
             ast::TypeExpr::Never { .. } => Ty::Never,
             ast::TypeExpr::Inferred { .. } => self.type_context.fresh_type_var(),
             ast::TypeExpr::RawPointer { mutable, inner, .. } => {
@@ -2821,12 +4443,20 @@ impl Resolver {
                 // Check for *Void and *mut Void
                 if matches!(&inner_ty, Ty::Struct { name, .. } | Ty::Class { name, .. } if name == "Void")
                     || matches!(&inner_ty, Ty::Error)
-                    && matches!(inner.as_ref(), ast::TypeExpr::Named(p) if p.segments == ["Void"])
+                        && matches!(inner.as_ref(), ast::TypeExpr::Named(p) if p.segments == ["Void"])
                 {
-                    if *mutable { Ty::RawPtrMutVoid } else { Ty::RawPtrVoid }
+                    if *mutable {
+                        Ty::RawPtrMutVoid
+                    } else {
+                        Ty::RawPtrVoid
+                    }
                 } else if let ast::TypeExpr::Named(p) = inner.as_ref() {
                     if p.segments == ["Void"] {
-                        if *mutable { Ty::RawPtrMutVoid } else { Ty::RawPtrVoid }
+                        if *mutable {
+                            Ty::RawPtrMutVoid
+                        } else {
+                            Ty::RawPtrVoid
+                        }
                     } else if *mutable {
                         Ty::RawPtrMut(Box::new(inner_ty))
                     } else {
@@ -2866,43 +4496,90 @@ impl Resolver {
         }
 
         let name = path.segments.join(".");
-        let generic_args: Vec<Ty> = path.generic_args.as_ref()
+        let generic_args: Vec<Ty> = path
+            .generic_args
+            .as_ref()
             .map(|args| args.iter().map(|a| self.resolve_type_expr(a)).collect())
             .unwrap_or_default();
 
         // Check built-in generic types
         match name.as_str() {
             "Vec" => {
-                let elem = generic_args.into_iter().next()
+                let elem = generic_args
+                    .into_iter()
+                    .next()
                     .unwrap_or_else(|| self.type_context.fresh_type_var());
                 return Ty::Vec(Box::new(elem));
             }
-            "Hash" => {
+            "HashMap" => {
                 let mut iter = generic_args.into_iter();
-                let k = iter.next().unwrap_or_else(|| self.type_context.fresh_type_var());
-                let v = iter.next().unwrap_or_else(|| self.type_context.fresh_type_var());
-                return Ty::Hash(Box::new(k), Box::new(v));
-            }
-            "Set" => {
-                let elem = generic_args.into_iter().next()
+                let k = iter
+                    .next()
                     .unwrap_or_else(|| self.type_context.fresh_type_var());
+                let v = iter
+                    .next()
+                    .unwrap_or_else(|| self.type_context.fresh_type_var());
+                // K must be Hash + Eq. Reject compound containers
+                // (Vec/Set/HashMap) and aggregates that don't derive Hash.
+                if !ty_is_valid_hash_key(&k, &self.symbols) {
+                    self.diagnostics.push(Diagnostic::error_with_code(
+                        format!(
+                            "HashMap key type `{}` is not hashable: K must implement Hash + Eq",
+                            k
+                        ),
+                        path.span.clone(),
+                        "E0615",
+                    ));
+                }
+                return Ty::HashMap(Box::new(k), Box::new(v));
+            }
+            "Set" | "HashSet" => {
+                // `HashSet[T]` is an alias for `Set[T]` per the v1 stdlib
+                // surface (prompt #04). Both desugar to the same runtime
+                // representation; method dispatch in
+                // `codegen::runtime::runtime_name` accepts either prefix.
+                let elem = generic_args
+                    .into_iter()
+                    .next()
+                    .unwrap_or_else(|| self.type_context.fresh_type_var());
+                if !ty_is_valid_hash_key(&elem, &self.symbols) {
+                    self.diagnostics.push(Diagnostic::error_with_code(
+                        format!(
+                            "HashSet element type `{}` is not hashable: T must implement Hash + Eq",
+                            elem
+                        ),
+                        path.span.clone(),
+                        "E0615",
+                    ));
+                }
                 return Ty::Set(Box::new(elem));
             }
             "Option" => {
-                let inner = generic_args.into_iter().next()
+                let inner = generic_args
+                    .into_iter()
+                    .next()
                     .unwrap_or_else(|| self.type_context.fresh_type_var());
                 return Ty::Option(Box::new(inner));
             }
             "Result" => {
                 let mut iter = generic_args.into_iter();
-                let ok = iter.next().unwrap_or_else(|| self.type_context.fresh_type_var());
-                let err = iter.next().unwrap_or_else(|| self.type_context.fresh_type_var());
+                let ok = iter
+                    .next()
+                    .unwrap_or_else(|| self.type_context.fresh_type_var());
+                let err = iter
+                    .next()
+                    .unwrap_or_else(|| self.type_context.fresh_type_var());
                 return Ty::Result(Box::new(ok), Box::new(err));
             }
             "Box" => {
-                let inner = generic_args.into_iter().next()
+                let inner = generic_args
+                    .into_iter()
+                    .next()
                     .unwrap_or_else(|| self.type_context.fresh_type_var());
-                return Ty::Class { name: "Box".to_string(), generic_args: vec![inner] };
+                return Ty::Class {
+                    name: "Box".to_string(),
+                    generic_args: vec![inner],
+                };
             }
             "Fn" => {
                 if let Some((ret, params)) = generic_args.split_last() {
@@ -3000,68 +4677,95 @@ impl Resolver {
     // ─── Helper Methods ─────────────────────────────────────────────
 
     fn resolve_generic_params(&mut self, gp: &Option<ast::GenericParams>) -> Vec<HirGenericParam> {
-        gp.as_ref().map(|gps| {
-            gps.params.iter().filter_map(|p| {
-                match p {
-                    ast::GenericParam::Type { name, bounds, span } => {
-                        let trait_refs: Vec<TraitRef> = bounds.iter().map(|b| TraitRef {
-                            name: b.path.segments.join("."),
-                            generic_args: b.path.generic_args.as_ref()
-                                .map(|args| args.iter().map(|a| self.resolve_type_expr(a)).collect())
-                                .unwrap_or_default(),
-                        }).collect();
-                        Some(HirGenericParam {
-                            name: name.clone(),
-                            bounds: trait_refs,
-                            span: span.clone(),
-                        })
-                    }
-                    ast::GenericParam::Lifetime { .. } => {
-                        // Lifetimes are tracked but not yet used in Phase 3
-                        None
-                    }
-                }
-            }).collect()
-        }).unwrap_or_default()
+        gp.as_ref()
+            .map(|gps| {
+                gps.params
+                    .iter()
+                    .filter_map(|p| {
+                        match p {
+                            ast::GenericParam::Type { name, bounds, span } => {
+                                let trait_refs: Vec<TraitRef> = bounds
+                                    .iter()
+                                    .map(|b| TraitRef {
+                                        name: b.path.segments.join("."),
+                                        generic_args: b
+                                            .path
+                                            .generic_args
+                                            .as_ref()
+                                            .map(|args| {
+                                                args.iter()
+                                                    .map(|a| self.resolve_type_expr(a))
+                                                    .collect()
+                                            })
+                                            .unwrap_or_default(),
+                                    })
+                                    .collect();
+                                Some(HirGenericParam {
+                                    name: name.clone(),
+                                    bounds: trait_refs,
+                                    span: span.clone(),
+                                })
+                            }
+                            ast::GenericParam::Lifetime { .. } => {
+                                // Lifetimes are tracked but not yet used in Phase 3
+                                None
+                            }
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     fn resolve_params(&mut self, params: &[ast::Param]) -> Vec<HirParam> {
-        params.iter().map(|p| {
-            let ty = self.resolve_type_expr(&p.type_expr);
-            let def_id = self.symbols.define(
-                p.name.clone(),
-                DefKind::Param { ty: ty.clone(), auto_assign: p.auto_assign },
-                Visibility::Private,
-                p.span.clone(),
-            );
-            HirParam {
-                def_id,
-                name: p.name.clone(),
-                ty,
-                auto_assign: p.auto_assign,
-                span: p.span.clone(),
-            }
-        }).collect()
+        params
+            .iter()
+            .map(|p| {
+                let ty = self.resolve_type_expr(&p.type_expr);
+                let def_id = self.symbols.define(
+                    p.name.clone(),
+                    DefKind::Param {
+                        ty: ty.clone(),
+                        auto_assign: p.auto_assign,
+                    },
+                    Visibility::Private,
+                    p.span.clone(),
+                );
+                HirParam {
+                    def_id,
+                    name: p.name.clone(),
+                    ty,
+                    auto_assign: p.auto_assign,
+                    span: p.span.clone(),
+                }
+            })
+            .collect()
     }
 
     fn resolve_and_register_params(&mut self, params: &[ast::Param]) -> Vec<HirParam> {
-        params.iter().map(|p| {
-            let ty = self.resolve_type_expr(&p.type_expr);
-            let def_id = self.symbols.define(
-                p.name.clone(),
-                DefKind::Param { ty: ty.clone(), auto_assign: p.auto_assign },
-                Visibility::Private,
-                p.span.clone(),
-            );
-            self.scopes.insert(p.name.clone(), def_id);
-            HirParam {
-                def_id,
-                name: p.name.clone(),
-                ty,
-                auto_assign: p.auto_assign,
-                span: p.span.clone(),
-            }
-        }).collect()
+        params
+            .iter()
+            .map(|p| {
+                let ty = self.resolve_type_expr(&p.type_expr);
+                let def_id = self.symbols.define(
+                    p.name.clone(),
+                    DefKind::Param {
+                        ty: ty.clone(),
+                        auto_assign: p.auto_assign,
+                    },
+                    Visibility::Private,
+                    p.span.clone(),
+                );
+                self.scopes.insert(p.name.clone(), def_id);
+                HirParam {
+                    def_id,
+                    name: p.name.clone(),
+                    ty,
+                    auto_assign: p.auto_assign,
+                    span: p.span.clone(),
+                }
+            })
+            .collect()
     }
 
     fn convert_self_mode(&self, mode: ast::SelfMode) -> HirSelfMode {
@@ -3111,7 +4815,11 @@ impl Resolver {
         }
     }
 
-    fn resolve_interpolation_tokens(&mut self, tokens: &[crate::lexer::token::Token], span: &Span) -> HirExpr {
+    fn resolve_interpolation_tokens(
+        &mut self,
+        tokens: &[crate::lexer::token::Token],
+        span: &Span,
+    ) -> HirExpr {
         // The lexer gives us pre-tokenized expression tokens from #{...}
         // We need to parse them as an expression.
         // Wrap in a function body so the parser can handle them.
@@ -3125,17 +4833,43 @@ impl Resolver {
 
         // Build a synthetic token stream: def _interp_ \n <tokens> \n end
         use crate::lexer::token::{Token, TokenKind};
-        let dummy_span = Span { start: 0, end: 0, line: 0, column: 0 };
+        let dummy_span = Span {
+            start: 0,
+            end: 0,
+            line: 0,
+            column: 0,
+        };
         let mut wrapped_tokens = vec![
-            Token { kind: TokenKind::Def, span: dummy_span.clone() },
-            Token { kind: TokenKind::Identifier("_interp_".to_string()), span: dummy_span.clone() },
-            Token { kind: TokenKind::Newline, span: dummy_span.clone() },
+            Token {
+                kind: TokenKind::Def,
+                span: dummy_span.clone(),
+            },
+            Token {
+                kind: TokenKind::Identifier("_interp_".to_string()),
+                span: dummy_span.clone(),
+            },
+            Token {
+                kind: TokenKind::Newline,
+                span: dummy_span.clone(),
+            },
         ];
         wrapped_tokens.extend(tokens.iter().cloned());
-        wrapped_tokens.push(Token { kind: TokenKind::Newline, span: dummy_span.clone() });
-        wrapped_tokens.push(Token { kind: TokenKind::End, span: dummy_span.clone() });
-        wrapped_tokens.push(Token { kind: TokenKind::Newline, span: dummy_span.clone() });
-        wrapped_tokens.push(Token { kind: TokenKind::Eof, span: dummy_span.clone() });
+        wrapped_tokens.push(Token {
+            kind: TokenKind::Newline,
+            span: dummy_span.clone(),
+        });
+        wrapped_tokens.push(Token {
+            kind: TokenKind::End,
+            span: dummy_span.clone(),
+        });
+        wrapped_tokens.push(Token {
+            kind: TokenKind::Newline,
+            span: dummy_span.clone(),
+        });
+        wrapped_tokens.push(Token {
+            kind: TokenKind::Eof,
+            span: dummy_span.clone(),
+        });
 
         let mut parser = crate::parser::Parser::new(wrapped_tokens);
         if let Ok(program) = parser.parse() {
@@ -3151,7 +4885,10 @@ impl Resolver {
         if tokens.len() == 1 {
             if let TokenKind::Identifier(ref name) = tokens[0].kind {
                 if let Some(def_id) = self.scopes.lookup(name) {
-                    let ty = self.symbols.def_ty(def_id).unwrap_or_else(|| self.type_context.fresh_type_var());
+                    let ty = self
+                        .symbols
+                        .def_ty(def_id)
+                        .unwrap_or_else(|| self.type_context.fresh_type_var());
                     return HirExpr {
                         kind: HirExprKind::VarRef(def_id),
                         ty,
@@ -3169,8 +4906,82 @@ impl Resolver {
     }
 
     fn error(&mut self, message: String, span: &Span) {
-        self.diagnostics.push(Diagnostic::error(message, span.clone()));
+        self.diagnostics
+            .push(Diagnostic::error(message, span.clone()));
     }
+}
+
+/// Returns true iff `ty` is a valid HashMap key / HashSet element type
+/// (i.e. implements Hash + Eq). Phase 2 stdlib (#04 batch 3): reject
+/// compound containers (`Vec`, `Set`/`HashSet`, `HashMap`) — they are
+/// explicitly NOT Hash in v1, even when their element type is. Aggregate
+/// types (struct/class/enum) must opt in via `#[derive(Hash)]`.
+///
+/// This mirrors the per-field validator in `derive::validate_per_field_traits`
+/// for E0615 but is rooted at the *type-construction* site so that any
+/// `HashMap[K, V]` / `HashSet[T]` whose K/T is non-Hash is caught at
+/// resolve time, not just when a user tries to derive Hash on a field.
+fn ty_is_valid_hash_key(ty: &Ty, symbols: &crate::resolve::symbols::SymbolTable) -> bool {
+    use crate::resolve::symbols::ty_has_derive_trait;
+    if ty.is_integer() || ty.is_float() {
+        return true;
+    }
+    if matches!(
+        ty,
+        Ty::Bool | Ty::Char | Ty::Unit | Ty::String | Ty::Str | Ty::Never
+    ) {
+        return true;
+    }
+    match ty {
+        // Compound containers are NOT Hash even when their elements are.
+        // Vec/HashMap/HashSet have interior heap pointers whose hash would
+        // not be stable across allocations; v1 chooses not to derive a
+        // structural hash for them.
+        Ty::Vec(_) | Ty::Set(_) | Ty::HashMap(_, _) => false,
+        // Tuples / arrays / Option / Result : recurse — Hash if every
+        // component is Hash.
+        Ty::Array(inner, _) | Ty::Option(inner) => ty_is_valid_hash_key(inner, symbols),
+        Ty::Result(a, b) => ty_is_valid_hash_key(a, symbols) && ty_is_valid_hash_key(b, symbols),
+        Ty::Tuple(elems) => elems.iter().all(|e| ty_is_valid_hash_key(e, symbols)),
+        Ty::Ref(inner)
+        | Ty::RefMut(inner)
+        | Ty::RefLifetime(_, inner)
+        | Ty::RefMutLifetime(_, inner) => ty_is_valid_hash_key(inner, symbols),
+        Ty::Alias { target, .. } => ty_is_valid_hash_key(target, symbols),
+        Ty::Newtype { inner, .. } => ty_is_valid_hash_key(inner, symbols),
+        Ty::Struct { .. } | Ty::Class { .. } | Ty::Enum { .. } => {
+            ty_has_derive_trait(ty, symbols, "Hash") || ty_has_derive_trait(ty, symbols, "Hashable")
+        }
+        // Type-vars / param types: assume satisfiable (typeck unifies later).
+        // Returning true here keeps generic code (e.g. `def f[K]`) compiling;
+        // the actual Hash bound check on call sites is enforced via trait
+        // bounds elsewhere.
+        Ty::TypeParam { .. } | Ty::Infer(_) | Ty::Error => true,
+        _ => false,
+    }
+}
+
+fn nominal_type_definition_mut<'a>(
+    target_ty: &Ty,
+    symbols: &'a mut SymbolTable,
+) -> Option<&'a mut Definition> {
+    let name = match target_ty {
+        Ty::Class { name, .. } | Ty::Struct { name, .. } | Ty::Enum { name, .. } => name,
+        _ => return None,
+    };
+
+    let def_id = symbols
+        .iter()
+        .find(|def| {
+            def.name == *name
+                && matches!(
+                    def.kind,
+                    DefKind::Class { .. } | DefKind::Struct { .. } | DefKind::Enum { .. }
+                )
+        })
+        .map(|def| def.id)?;
+
+    symbols.get_mut(def_id)
 }
 
 impl Default for Resolver {
@@ -3240,30 +5051,43 @@ fn find_first_yield_arity_in_expr(expr: &ast::Expr) -> Option<usize> {
     use ast::ExprKind::*;
     match &expr.kind {
         Yield(args) => Some(args.len()),
-        BinaryOp { left, right, .. } => find_first_yield_arity_in_expr(left)
-            .or_else(|| find_first_yield_arity_in_expr(right)),
+        BinaryOp { left, right, .. } => {
+            find_first_yield_arity_in_expr(left).or_else(|| find_first_yield_arity_in_expr(right))
+        }
         UnaryOp { operand, .. } => find_first_yield_arity_in_expr(operand),
         Borrow(e) | BorrowMut(e) => find_first_yield_arity_in_expr(e),
         FieldAccess { object, .. } | SafeNav { object, .. } => {
             find_first_yield_arity_in_expr(object)
         }
-        MethodCall { object, args, block, .. } => find_first_yield_arity_in_expr(object)
+        MethodCall {
+            object,
+            args,
+            block,
+            ..
+        } => find_first_yield_arity_in_expr(object)
             .or_else(|| args.iter().find_map(find_first_yield_arity_in_expr))
             .or_else(|| block.as_deref().and_then(find_first_yield_arity_in_expr)),
         SafeNavCall { object, args, .. } => find_first_yield_arity_in_expr(object)
             .or_else(|| args.iter().find_map(find_first_yield_arity_in_expr)),
-        Call { callee, args, block } => find_first_yield_arity_in_expr(callee)
+        Call {
+            callee,
+            args,
+            block,
+        } => find_first_yield_arity_in_expr(callee)
             .or_else(|| args.iter().find_map(find_first_yield_arity_in_expr))
             .or_else(|| block.as_deref().and_then(find_first_yield_arity_in_expr)),
-        Index { object, index } => find_first_yield_arity_in_expr(object)
-            .or_else(|| find_first_yield_arity_in_expr(index)),
+        Index { object, index } => {
+            find_first_yield_arity_in_expr(object).or_else(|| find_first_yield_arity_in_expr(index))
+        }
         ClosureCall { callee, args } => find_first_yield_arity_in_expr(callee)
             .or_else(|| args.iter().find_map(find_first_yield_arity_in_expr)),
         Try(e) => find_first_yield_arity_in_expr(e),
-        Assign { target, value } => find_first_yield_arity_in_expr(target)
-            .or_else(|| find_first_yield_arity_in_expr(value)),
-        CompoundAssign { target, value, .. } => find_first_yield_arity_in_expr(target)
-            .or_else(|| find_first_yield_arity_in_expr(value)),
+        Assign { target, value } => {
+            find_first_yield_arity_in_expr(target).or_else(|| find_first_yield_arity_in_expr(value))
+        }
+        CompoundAssign { target, value, .. } => {
+            find_first_yield_arity_in_expr(target).or_else(|| find_first_yield_arity_in_expr(value))
+        }
         If(ife) => find_first_yield_arity_in_expr(&ife.condition)
             .or_else(|| find_first_yield_arity_in_block(&ife.then_body))
             .or_else(|| {
@@ -3272,10 +5096,18 @@ fn find_first_yield_arity_in_expr(expr: &ast::Expr) -> Option<usize> {
                         .or_else(|| find_first_yield_arity_in_block(&c.body))
                 })
             })
-            .or_else(|| ife.else_body.as_ref().and_then(find_first_yield_arity_in_block)),
+            .or_else(|| {
+                ife.else_body
+                    .as_ref()
+                    .and_then(find_first_yield_arity_in_block)
+            }),
         IfLet(ile) => find_first_yield_arity_in_expr(&ile.value)
             .or_else(|| find_first_yield_arity_in_block(&ile.then_body))
-            .or_else(|| ile.else_body.as_ref().and_then(find_first_yield_arity_in_block)),
+            .or_else(|| {
+                ile.else_body
+                    .as_ref()
+                    .and_then(find_first_yield_arity_in_block)
+            }),
         Match(me) => find_first_yield_arity_in_expr(&me.subject).or_else(|| {
             me.arms.iter().find_map(|a| match &a.body {
                 ast::MatchArmBody::Expr(e) => find_first_yield_arity_in_expr(e),
@@ -3301,16 +5133,17 @@ fn find_first_yield_arity_in_expr(expr: &ast::Expr) -> Option<usize> {
             .and_then(find_first_yield_arity_in_expr)
             .or_else(|| end.as_deref().and_then(find_first_yield_arity_in_expr)),
         ArrayLiteral(elems) => elems.iter().find_map(find_first_yield_arity_in_expr),
-        ArrayFill { value, count } => find_first_yield_arity_in_expr(value)
-            .or_else(|| find_first_yield_arity_in_expr(count)),
+        ArrayFill { value, count } => {
+            find_first_yield_arity_in_expr(value).or_else(|| find_first_yield_arity_in_expr(count))
+        }
         TupleLiteral(elems) => elems.iter().find_map(find_first_yield_arity_in_expr),
         Return(e) | Break(e) => e.as_deref().and_then(find_first_yield_arity_in_expr),
         Continue => None,
         MacroCall { args, .. } => args.iter().find_map(find_first_yield_arity_in_expr),
         Cast { expr, .. } => find_first_yield_arity_in_expr(expr),
-        EnumVariant { args, .. } => {
-            args.iter().find_map(|fa| find_first_yield_arity_in_expr(&fa.value))
-        }
+        EnumVariant { args, .. } => args
+            .iter()
+            .find_map(|fa| find_first_yield_arity_in_expr(&fa.value)),
         InterpolatedString(_) => None,
         _ => None,
     }
@@ -3334,5 +5167,279 @@ impl PatternSpan for ast::Pattern {
             | ast::Pattern::Ref { span, .. }
             | ast::Pattern::Rest { span } => span,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DefKind, Resolver};
+    use crate::hir::nodes::{HirExprKind, HirItem};
+    use crate::lexer::Lexer;
+    use crate::parser::Parser;
+
+    fn resolve_source(input: &str) -> super::ResolveResult {
+        let mut lexer = Lexer::new(input);
+        let tokens = lexer.tokenize().expect("lexer failed");
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().expect("parser failed");
+        Resolver::new().resolve(&program)
+    }
+
+    #[test]
+    fn register_builtins_includes_send_and_sync_traits() {
+        let mut resolver = Resolver::new();
+        resolver.register_builtins();
+
+        let has_send = resolver
+            .symbols
+            .iter()
+            .any(|def| def.name == "Send" && matches!(def.kind, DefKind::Trait { .. }));
+        let has_sync = resolver
+            .symbols
+            .iter()
+            .any(|def| def.name == "Sync" && matches!(def.kind, DefKind::Trait { .. }));
+
+        assert!(has_send, "expected builtins to include Send");
+        assert!(has_sync, "expected builtins to include Sync");
+    }
+
+    #[test]
+    fn register_builtins_includes_async_core_symbols() {
+        let mut resolver = Resolver::new();
+        resolver.register_builtins();
+
+        let future_trait = resolver
+            .symbols
+            .iter()
+            .find(|def| def.name == "Future")
+            .expect("expected Future trait");
+        let DefKind::Trait { info } = &future_trait.kind else {
+            panic!("expected Future to be a trait");
+        };
+        assert_eq!(info.required_methods, vec!["poll".to_string()]);
+        assert_eq!(info.assoc_types, vec!["Output".to_string()]);
+
+        let poll_enum = resolver
+            .symbols
+            .iter()
+            .find(|def| def.name == "Poll")
+            .expect("expected Poll enum");
+        let DefKind::Enum { info } = &poll_enum.kind else {
+            panic!("expected Poll to be an enum");
+        };
+        assert_eq!(info.variants.len(), 2, "expected Ready/Pending variants");
+
+        assert!(
+            resolver
+                .symbols
+                .iter()
+                .any(|def| def.name == "Context" && matches!(def.kind, DefKind::Class { .. })),
+            "expected Context builtin class"
+        );
+        assert!(
+            resolver
+                .symbols
+                .iter()
+                .any(|def| def.name == "Waker" && matches!(def.kind, DefKind::Class { .. })),
+            "expected Waker builtin class"
+        );
+    }
+
+    #[test]
+    fn register_builtins_includes_concurrency_core_symbols() {
+        let mut resolver = Resolver::new();
+        resolver.register_builtins();
+
+        for name in [
+            "Thread",
+            "JoinHandle",
+            "ThreadId",
+            "Mutex",
+            "MutexGuard",
+            "Arc",
+            "PoisonError",
+            "ThreadPanic",
+        ] {
+            assert!(
+                resolver
+                    .symbols
+                    .iter()
+                    .any(|def| def.name == name && matches!(def.kind, DefKind::Class { .. })),
+                "expected {name} builtin class"
+            );
+        }
+
+        let std_sync = resolver
+            .symbols
+            .iter()
+            .find(|def| def.name == "sync")
+            .expect("expected sync module");
+        let DefKind::Module { items } = &std_sync.kind else {
+            panic!("expected sync to be a module");
+        };
+        assert!(
+            items.iter().any(|id| resolver
+                .symbols
+                .get(*id)
+                .is_some_and(|def| def.name == "Thread")),
+            "expected std.sync to expose Thread"
+        );
+        assert!(
+            items.iter().any(|id| resolver
+                .symbols
+                .get(*id)
+                .is_some_and(|def| def.name == "Mutex")),
+            "expected std.sync to expose Mutex"
+        );
+        assert!(
+            items.iter().any(|id| resolver
+                .symbols
+                .get(*id)
+                .is_some_and(|def| def.name == "Arc")),
+            "expected std.sync to expose Arc"
+        );
+    }
+
+    #[test]
+    fn await_outside_async_reports_resolver_error() {
+        let result = resolve_source(
+            "def main\n  fetch_user(42).await\nend\n\ndef fetch_user(id: Int) -> Int\n  id\nend",
+        );
+
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diag| diag.code.as_deref() == Some("E_await_outside_async")),
+            "expected E_await_outside_async, got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn await_inside_async_function_resolves_without_async_scope_error() {
+        let result = resolve_source(
+            "async def main\n  fetch_user(42).await\nend\n\ndef fetch_user(id: Int) -> Int\n  id\nend",
+        );
+
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diag| diag.code.as_deref() != Some("E_await_outside_async")),
+            "unexpected async-scope diagnostic: {:?}",
+            result.diagnostics
+        );
+
+        let HirItem::Function(func) = &result.program.items[0] else {
+            panic!("expected top-level function");
+        };
+        assert!(func.is_async, "expected async flag on HIR function");
+        match &func.body.kind {
+            HirExprKind::Block(stmts, tail) => {
+                let expr = match (stmts.first(), tail.as_deref()) {
+                    (Some(crate::hir::nodes::HirStatement::Expr(expr)), _) => expr,
+                    (_, Some(expr)) => expr,
+                    other => panic!("expected await expression in block, got {:?}", other),
+                };
+                match &expr.kind {
+                    HirExprKind::MethodCall { method_name, .. } => {
+                        assert_eq!(method_name, "await");
+                    }
+                    other => panic!("expected await desugaring, got {:?}", other),
+                }
+            }
+            other => panic!("expected block body, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn await_inside_async_closure_resolves_without_async_scope_error() {
+        let result = resolve_source(
+            "def main\n  let f = async do\n    fetch_user(42).await\n  end\nend\n\ndef fetch_user(id: Int) -> Int\n  id\nend",
+        );
+
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diag| diag.code.as_deref() != Some("E_await_outside_async")),
+            "unexpected async-scope diagnostic: {:?}",
+            result.diagnostics
+        );
+
+        let HirItem::Function(func) = &result.program.items[0] else {
+            panic!("expected top-level function");
+        };
+        let HirExprKind::Block(stmts, _) = &func.body.kind else {
+            panic!("expected block body");
+        };
+        let crate::hir::nodes::HirStatement::Let {
+            value: Some(value), ..
+        } = &stmts[0]
+        else {
+            panic!("expected let binding with closure value");
+        };
+        let HirExprKind::Closure { is_async, .. } = &value.kind else {
+            panic!("expected closure expression");
+        };
+        assert!(*is_async, "expected async flag on HIR closure");
+    }
+
+    #[test]
+    fn closure_records_capture_from_outer_scope() {
+        let result = resolve_source("def main\n  let x = 42\n  let f = do |y|\n    x\n  end\nend");
+
+        let HirItem::Function(func) = &result.program.items[0] else {
+            panic!("expected top-level function");
+        };
+        let HirExprKind::Block(stmts, _) = &func.body.kind else {
+            panic!("expected block body");
+        };
+        let crate::hir::nodes::HirStatement::Let {
+            value: Some(value), ..
+        } = &stmts[1]
+        else {
+            panic!("expected closure binding");
+        };
+        let HirExprKind::Closure {
+            captures, is_move, ..
+        } = &value.kind
+        else {
+            panic!("expected closure expression");
+        };
+
+        assert!(!*is_move, "expected plain closure");
+        assert_eq!(captures.len(), 1, "expected one outer capture");
+        assert_eq!(captures[0].name, "x");
+        assert!(!captures[0].by_move, "expected non-move capture");
+    }
+
+    #[test]
+    fn move_closure_marks_capture_as_by_move() {
+        let result = resolve_source("def main\n  let x = 42\n  let f = move do\n    x\n  end\nend");
+
+        let HirItem::Function(func) = &result.program.items[0] else {
+            panic!("expected top-level function");
+        };
+        let HirExprKind::Block(stmts, _) = &func.body.kind else {
+            panic!("expected block body");
+        };
+        let crate::hir::nodes::HirStatement::Let {
+            value: Some(value), ..
+        } = &stmts[1]
+        else {
+            panic!("expected closure binding");
+        };
+        let HirExprKind::Closure {
+            captures, is_move, ..
+        } = &value.kind
+        else {
+            panic!("expected closure expression");
+        };
+
+        assert!(*is_move, "expected move closure");
+        assert_eq!(captures.len(), 1, "expected one outer capture");
+        assert!(captures[0].by_move, "expected move capture");
     }
 }

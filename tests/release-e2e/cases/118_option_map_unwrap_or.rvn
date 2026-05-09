@@ -1,0 +1,8 @@
+def main
+  let some_v: Option[Int] = Some(5)
+  let none_v: Option[Int] = None
+  let a = some_v.map { |n| n * 10 }.unwrap_or(0)
+  let b = none_v.map { |n| n * 10 }.unwrap_or(0)
+  puts "#{a}"
+  puts "#{b}"
+end

@@ -1,0 +1,14 @@
+def main
+  let mut a: HashSet[Int] = HashSet.new
+  a.insert(1)
+  a.insert(2)
+  let mut b: HashSet[Int] = HashSet.new
+  b.insert(2)
+  b.insert(1)
+  let mut c: HashSet[Int] = HashSet.new
+  c.insert(1)
+  c.insert(3)
+  puts "a_eq_b=#{a == b}"
+  puts "a_eq_c=#{a == c}"
+  puts "a_neq_c=#{a != c}"
+end
