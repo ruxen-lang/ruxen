@@ -1390,7 +1390,9 @@ impl<'a> InferenceEngine<'a> {
 
     fn iter_item_ty(&self, ty: &Ty) -> Option<Ty> {
         match ty {
-            Ty::Class { name, generic_args } if name.ends_with("Iter") => generic_args.first().cloned(),
+            Ty::Class { name, generic_args } if name.ends_with("Iter") => {
+                generic_args.first().cloned()
+            }
             Ty::Ref(inner)
             | Ty::RefMut(inner)
             | Ty::RefLifetime(_, inner)

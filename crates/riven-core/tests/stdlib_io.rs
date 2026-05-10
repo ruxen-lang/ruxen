@@ -191,23 +191,20 @@ end
 /// emits exactly the supplied bytes — no trailing newline. The Result
 /// is Ok when the write succeeds.
 ///
-/// Riven match arms are single-expression and use `->` (not `=>`) — see
-/// the `or_empty` helper-fn workaround in stdlib_fs.rs for the v1
-/// idiom. Here we wrap `write_str` in a `did_ok` reducer that returns
-/// a String tag the caller can print.
+/// Riven match arms are single-expression and use `->` (not `=>`).
+/// Match-as-expression (test 121) means we can bind the tag inline
+/// without a helper fn — `Result[Unit, IoError]` isn't expressible at
+/// the source-syntax level (`Unit` is a typeck-internal type, not a
+/// reserved type name).
 #[test]
 fn stdout_write_str_emits_exact_bytes() {
     let source = r##"
-def did_ok(r: Result[Unit, IoError]) -> String
-  match r
+def main
+  let out = stdout()
+  let tag = match out.write_str("hello")
     Ok(_)  -> String.from("ok")
     Err(_) -> String.from("err")
   end
-end
-
-def main
-  let out = stdout()
-  let tag = did_ok(out.write_str("hello"))
   out.print(tag)
 end
 "##;
@@ -221,17 +218,13 @@ end
 #[test]
 fn stdout_flush_returns_ok() {
     let source = r##"
-def did_ok(r: Result[Unit, IoError]) -> String
-  match r
-    Ok(_)  -> String.from(" flushed")
-    Err(_) -> String.from(" failed")
-  end
-end
-
 def main
   let out = stdout()
   out.print("before")
-  let tag = did_ok(out.flush())
+  let tag = match out.flush()
+    Ok(_)  -> String.from(" flushed")
+    Err(_) -> String.from(" failed")
+  end
   out.println(tag)
 end
 "##;
@@ -244,16 +237,12 @@ end
 #[test]
 fn stderr_write_str_routes_to_stderr() {
     let source = r##"
-def did_ok(r: Result[Unit, IoError]) -> String
-  match r
+def main
+  let err = stderr()
+  let tag = match err.write_str("oops")
     Ok(_)  -> String.from("!")
     Err(_) -> String.from("?")
   end
-end
-
-def main
-  let err = stderr()
-  let tag = did_ok(err.write_str("oops"))
   err.eprint(tag)
 end
 "##;
@@ -273,6 +262,7 @@ end
 /// each line; trailing '\n' does NOT produce a final empty element.
 ///
 /// Helper `unwrap_line` reduces each match arm to a single expression.
+/// Riven `for` syntax has no `do` keyword (see fixture `26_vec_basic.rvn`).
 #[test]
 fn stdin_lines_yields_each_line() {
     let source = r##"
@@ -287,7 +277,7 @@ def main
   let stream = stdin()
   let lines = stream.lines()
   let out = stdout()
-  for line_result in lines do
+  for line_result in lines
     out.println(unwrap_line(line_result))
   end
 end
@@ -301,7 +291,8 @@ end
 /// `Stdin.lines()` does NOT emit an empty trailing element when the
 /// input ends with '\n' (matches Rust's BufRead::lines). A final
 /// partial line with no trailing newline IS emitted. We assert the
-/// full transcript plus the count via `.length` on the Vec.
+/// full transcript plus the count via interpolation on `.len`
+/// (`.to_string()` on USize is typeck-only — no runtime symbol yet).
 #[test]
 fn stdin_lines_no_trailing_empty_and_partial_final_line() {
     let source = r##"
@@ -316,12 +307,12 @@ def main
   let stream = stdin()
   let lines = stream.lines()
   let out = stdout()
-  for line_result in lines do
+  for line_result in lines
     out.print("[")
     out.print(unwrap_line(line_result))
     out.println("]")
   end
-  out.println(lines.len.to_string())
+  puts "#{lines.len}"
 end
 "##;
     // Input has no trailing newline — final partial line "z" should
@@ -339,8 +330,7 @@ fn stdin_lines_empty_input_yields_empty_vec() {
 def main
   let stream = stdin()
   let lines = stream.lines()
-  let out = stdout()
-  out.println(lines.len.to_string())
+  puts "#{lines.len}"
 end
 "##;
     let (stdout, _stderr, ok) = compile_and_run_with_stdin(source, "stdlib_io_lines_empty", b"");

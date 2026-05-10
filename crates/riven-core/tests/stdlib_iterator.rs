@@ -492,7 +492,10 @@ end
         .iter()
         .filter(|d| d.level == DiagnosticLevel::Error)
         .collect();
-    assert!(!errors.is_empty(), "expected collect[HashMap[_, _]] rejection");
+    assert!(
+        !errors.is_empty(),
+        "expected collect[HashMap[_, _]] rejection"
+    );
     assert!(
         errors.iter().any(|d| d.code.as_deref() == Some("E0700")),
         "expected E0700; got {:#?}",

@@ -1359,7 +1359,9 @@ impl<'a> Lowerer<'a> {
                         Ty::HashMap(_, _) => "riven_hash_from_iter",
                         Ty::Set(_) => "riven_set_from_iter",
                         other => {
-                            return Err(format!("unsupported collect target in MIR lowering: {other}"));
+                            return Err(format!(
+                                "unsupported collect target in MIR lowering: {other}"
+                            ));
                         }
                     };
                     self.emit(MirInst::Call {
