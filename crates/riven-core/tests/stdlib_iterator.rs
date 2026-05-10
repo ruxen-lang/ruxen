@@ -187,6 +187,32 @@ end
     assert_compiles(source);
 }
 
+#[test]
+fn iter_filter_then_count_compiles() {
+    let source = r#"
+def main
+  let v = vec![1, 2, 3, 4, 5, 6]
+  let n = v.iter.filter { |n| n % 2 == 0 }.count
+  let s = n.to_string
+  puts "n=#{s}"
+end
+"#;
+    assert_compiles(source);
+}
+
+#[test]
+fn iter_map_changes_item_type_then_collect_vec_compiles() {
+    let source = r##"
+def main
+  let v = vec![1, 2, 3]
+  let out = v.iter.map { |n| "#{n}" }.collect_vec
+  let joined = out.join(",")
+  puts joined
+end
+"##;
+    assert_compiles(source);
+}
+
 // ─── Existing (batch 1) terminators — sanity guard ──────────────────
 
 #[test]
@@ -337,6 +363,80 @@ end
     assert_compiles(source);
 }
 
+#[test]
+fn iter_collect_string_compiles() {
+    let source = r##"
+def main
+  let v = vec![1, 2, 3]
+  let out = v.iter.map { |n| "#{n}" }.collect[String]
+  puts out
+end
+"##;
+    assert_compiles(source);
+}
+
+#[test]
+fn iter_collect_hashmap_compiles() {
+    let source = r#"
+def main
+  let keys = vec![1, 2, 3]
+  let vals = vec![10, 20, 30]
+  let m = keys.iter.zip(vals.iter).collect[HashMap[Int, Int]]
+  puts m.len.to_string
+end
+"#;
+    assert_compiles(source);
+}
+
+#[test]
+fn iter_collect_hashset_compiles() {
+    let source = r#"
+def main
+  let v = vec![1, 2, 2, 3]
+  let s = v.iter.collect[HashSet[Int]]
+  puts s.len.to_string
+end
+"#;
+    assert_compiles(source);
+}
+
+#[test]
+fn string_from_iter_compiles() {
+    let source = r##"
+def main
+  let v = vec!["a", "b", "c"]
+  let s = String.from_iter(v.iter)
+  puts s
+end
+"##;
+    assert_compiles(source);
+}
+
+#[test]
+fn hashmap_from_iter_compiles() {
+    let source = r#"
+def main
+  let keys = vec![1, 2]
+  let vals = vec![10, 20]
+  let m: HashMap[Int, Int] = HashMap.from_iter(keys.iter.zip(vals.iter))
+  puts m.len.to_string
+end
+"#;
+    assert_compiles(source);
+}
+
+#[test]
+fn hashset_from_iter_compiles() {
+    let source = r#"
+def main
+  let v = vec![1, 2, 2, 3]
+  let s: HashSet[Int] = HashSet.from_iter(v.iter)
+  puts s.len.to_string
+end
+"#;
+    assert_compiles(source);
+}
+
 // ─── Negatives ──────────────────────────────────────────────────────
 
 /// `Vec[String].iter.sum` — String does not implement Add, so a
@@ -375,6 +475,27 @@ end
     assert!(
         saw_message,
         "expected diagnostic message to mention `Add`/numeric; got: {:#?}",
+        errors
+    );
+}
+
+#[test]
+fn collect_hashmap_rejects_non_pair_items() {
+    let source = r#"
+def main
+  let v = vec![1, 2, 3]
+  let _ = v.iter.collect[HashMap[Int, Int]]
+end
+"#;
+    let diags = typecheck_diagnostics(source);
+    let errors: Vec<&Diagnostic> = diags
+        .iter()
+        .filter(|d| d.level == DiagnosticLevel::Error)
+        .collect();
+    assert!(!errors.is_empty(), "expected collect[HashMap[_, _]] rejection");
+    assert!(
+        errors.iter().any(|d| d.code.as_deref() == Some("E0700")),
+        "expected E0700; got {:#?}",
         errors
     );
 }

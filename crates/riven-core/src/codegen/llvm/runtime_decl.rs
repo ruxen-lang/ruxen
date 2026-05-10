@@ -100,6 +100,7 @@ pub fn declare_runtime_functions<'ctx>(module: &Module<'ctx>, context: &'ctx Con
     decl!("riven_str_split", ptr_ty, [ptr_ty, ptr_ty]);
     decl!("riven_str_parse_uint", ptr_ty, [ptr_ty]);
     decl!("riven_iter_to_vec", ptr_ty, [ptr_ty]);
+    decl!("riven_string_from_iter", ptr_ty, [ptr_ty]);
 
     // Memory
     decl!("riven_alloc", ptr_ty, [i64_ty]);
@@ -171,6 +172,7 @@ pub fn declare_runtime_functions<'ctx>(module: &Module<'ctx>, context: &'ctx Con
 
     // Hash operations
     decl!("riven_hash_new", ptr_ty, []);
+    decl!("riven_hash_from_iter", ptr_ty, [ptr_ty]);
     decl!("riven_hash_insert", void, [ptr_ty, i64_ty, i64_ty]);
     decl!("riven_hash_get", ptr_ty, [ptr_ty, i64_ty]);
     decl!("riven_hash_contains_key", i8_ty, [ptr_ty, i64_ty]);
@@ -179,6 +181,7 @@ pub fn declare_runtime_functions<'ctx>(module: &Module<'ctx>, context: &'ctx Con
 
     // Set operations
     decl!("riven_set_new", ptr_ty, []);
+    decl!("riven_set_from_iter", ptr_ty, [ptr_ty]);
     decl!("riven_set_insert", void, [ptr_ty, i64_ty]);
     decl!("riven_set_contains", i8_ty, [ptr_ty, i64_ty]);
     decl!("riven_set_len", i64_ty, [ptr_ty]);

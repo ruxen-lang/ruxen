@@ -1504,6 +1504,7 @@ fn runtime_signature(name: &str) -> Option<(Vec<Type>, Option<Type>)> {
         "riven_vec_drop_string" => Some((vec![types::I64], None)),
         "riven_vec_drop_vec" => Some((vec![types::I64], None)),
         "riven_vec_from_iter" => Some((vec![types::I64], Some(types::I64))),
+        "riven_string_from_iter" => Some((vec![types::I64], Some(types::I64))),
         "riven_vec_dedup" => Some((vec![types::I64], None)),
         "riven_vec_set" => Some((vec![types::I64, types::I64, types::I64], None)),
         // Panic
@@ -1521,6 +1522,7 @@ fn runtime_signature(name: &str) -> Option<(Vec<Type>, Option<Type>)> {
         "riven_vec_each" => Some((vec![types::I64, types::I64], None)),
         // Hash operations
         "riven_hash_new" => Some((vec![], Some(types::I64))),
+        "riven_hash_from_iter" => Some((vec![types::I64], Some(types::I64))),
         "riven_hash_insert" => Some((vec![types::I64, types::I64, types::I64], None)),
         "riven_hash_get" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "riven_hash_contains_key" => Some((vec![types::I64, types::I64], Some(types::I8))),
@@ -1528,6 +1530,7 @@ fn runtime_signature(name: &str) -> Option<(Vec<Type>, Option<Type>)> {
         "riven_hash_is_empty" => Some((vec![types::I64], Some(types::I8))),
         // Set operations
         "riven_set_new" => Some((vec![], Some(types::I64))),
+        "riven_set_from_iter" => Some((vec![types::I64], Some(types::I64))),
         "riven_set_insert" => Some((vec![types::I64, types::I64], None)),
         "riven_set_contains" => Some((vec![types::I64, types::I64], Some(types::I8))),
         "riven_set_len" => Some((vec![types::I64], Some(types::I64))),

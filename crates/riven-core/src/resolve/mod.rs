@@ -3164,18 +3164,24 @@ impl Resolver {
             ast::ExprKind::MethodCall {
                 object,
                 method,
+                generic_args,
                 args,
                 block,
             } => {
                 let obj_hir = self.resolve_expr(object);
                 let args_hir: Vec<HirExpr> = args.iter().map(|a| self.resolve_expr(a)).collect();
                 let block_hir = block.as_ref().map(|b| Box::new(self.resolve_expr(b)));
+                let generic_args_hir = generic_args
+                    .iter()
+                    .map(|a| self.resolve_type_expr(a))
+                    .collect();
                 let ty = self.type_context.fresh_type_var();
                 HirExpr {
                     kind: HirExprKind::MethodCall {
                         object: Box::new(obj_hir),
                         method: UNRESOLVED_DEF, // resolved during type checking
                         method_name: method.clone(),
+                        generic_args: generic_args_hir,
                         args: args_hir,
                         block: block_hir,
                     },
@@ -3230,6 +3236,7 @@ impl Resolver {
                                     }),
                                     method: UNRESOLVED_DEF,
                                     method_name: "call".to_string(),
+                                    generic_args: vec![],
                                     args: args_hir,
                                     block: Some(blk),
                                 },
@@ -3304,6 +3311,7 @@ impl Resolver {
                                 object: Box::new(obj_hir),
                                 method: UNRESOLVED_DEF,
                                 method_name: field.clone(),
+                                generic_args: vec![],
                                 args: args_hir,
                                 block: block_hir,
                             },
@@ -3319,6 +3327,7 @@ impl Resolver {
                                 object: Box::new(callee_hir),
                                 method: UNRESOLVED_DEF,
                                 method_name: "call".to_string(),
+                                generic_args: vec![],
                                 args: args_hir,
                                 block: block_hir,
                             },
@@ -3602,6 +3611,7 @@ impl Resolver {
                         object: Box::new(inner_hir),
                         method: UNRESOLVED_DEF,
                         method_name: "await".to_string(),
+                        generic_args: vec![],
                         args: vec![],
                         block: None,
                     },
@@ -3620,6 +3630,7 @@ impl Resolver {
                         object: Box::new(inner_hir),
                         method: UNRESOLVED_DEF,
                         method_name: "try_op".to_string(),
+                        generic_args: vec![],
                         args: vec![],
                         block: None,
                     },
@@ -3654,6 +3665,7 @@ impl Resolver {
                         object: Box::new(obj_hir),
                         method: UNRESOLVED_DEF,
                         method_name: method.clone(),
+                        generic_args: vec![],
                         args: args_hir,
                         block: None,
                     },
@@ -3791,6 +3803,7 @@ impl Resolver {
                         object: Box::new(callee_hir),
                         method: UNRESOLVED_DEF,
                         method_name: "call".to_string(),
+                        generic_args: vec![],
                         args: args_hir,
                         block: None,
                     },
@@ -3827,6 +3840,7 @@ impl Resolver {
                             object: Box::new(callee),
                             method: UNRESOLVED_DEF,
                             method_name: "call".to_string(),
+                            generic_args: vec![],
                             args: args_hir,
                             block: None,
                         },

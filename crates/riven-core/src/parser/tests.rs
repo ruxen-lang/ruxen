@@ -618,10 +618,12 @@ end";
             ExprKind::MethodCall {
                 object,
                 method,
+                generic_args,
                 args,
                 block,
             } => {
                 assert_eq!(method, "each");
+                assert!(generic_args.is_empty());
                 match &object.kind {
                     ExprKind::Identifier(name) => assert_eq!(name, "items"),
                     other => panic!("expected Identifier(items), got {:?}", other),
@@ -647,10 +649,12 @@ end";
             ExprKind::MethodCall {
                 object,
                 method,
+                generic_args,
                 args,
                 block,
             } => {
                 assert_eq!(method, "spawn");
+                assert!(generic_args.is_empty());
                 match &object.kind {
                     ExprKind::Identifier(name) => assert_eq!(name, "Thread"),
                     other => panic!("expected Identifier(Thread), got {:?}", other),
@@ -1150,15 +1154,41 @@ end";
             ExprKind::MethodCall {
                 object,
                 method,
+                generic_args,
                 args,
                 block,
             } => {
                 assert_eq!(method, "push");
+                assert!(generic_args.is_empty());
                 assert_eq!(args.len(), 1);
                 assert!(block.is_none());
                 match &object.kind {
                     ExprKind::Identifier(name) => assert_eq!(name, "list"),
                     other => panic!("expected Identifier(list), got {:?}", other),
+                }
+            }
+            other => panic!("expected MethodCall, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn method_call_with_generic_args() {
+        let expr = parse_expr("v.iter.collect[Vec[Int]]");
+        match &expr.kind {
+            ExprKind::MethodCall {
+                object,
+                method,
+                generic_args,
+                args,
+                block,
+            } => {
+                assert_eq!(method, "collect");
+                assert_eq!(generic_args.len(), 1);
+                assert!(args.is_empty());
+                assert!(block.is_none());
+                match &object.kind {
+                    ExprKind::FieldAccess { field, .. } => assert_eq!(field, "iter"),
+                    other => panic!("expected FieldAccess(iter), got {:?}", other),
                 }
             }
             other => panic!("expected MethodCall, got {:?}", other),

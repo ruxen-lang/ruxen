@@ -1,0 +1,6 @@
+def main
+  let v = vec![1, 2, 2, 3]
+  let s = v.iter.collect[HashSet[Int]]
+  puts "#{s.len}"
+  puts "#{s.contains(2)}"
+end

@@ -246,6 +246,7 @@ pub enum ExprKind {
     MethodCall {
         object: Box<Expr>,
         method: String,
+        generic_args: Vec<TypeExpr>,
         args: Vec<Expr>,
         block: Option<Box<Expr>>,
     },

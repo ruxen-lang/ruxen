@@ -55,6 +55,7 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
             method,
             args,
             block,
+            ..
         } => {
             if is_chain_start(object) {
                 format_method_chain(kind, comments)

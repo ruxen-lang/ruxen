@@ -72,6 +72,7 @@ pub enum HirExprKind {
         object: Box<HirExpr>,
         method: DefId,
         method_name: String,
+        generic_args: Vec<Ty>,
         args: Vec<HirExpr>,
         /// Trailing block argument (desugared closure)
         block: Option<Box<HirExpr>>,

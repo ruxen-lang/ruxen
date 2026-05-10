@@ -166,6 +166,7 @@ impl<'a> BorrowChecker<'a> {
                 method_name,
                 args,
                 block,
+                ..
             } => {
                 self.check_method_call(object, *method, method_name, args, block, &expr.span);
             }

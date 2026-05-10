@@ -8,6 +8,15 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- Phase 2 stdlib `Iterator` typing for closure-based `*Iter.map` /
+  `*Iter.filter` chains (#05 follow-up). Typeck now seeds closure
+  parameters from iterator `Item` for `*Iter.map` and `*Iter.filter`,
+  and `*Iter.map` rewrites the iterator item type to the closure-body
+  result so downstream `.collect_vec` and Vec methods see the mapped
+  element type instead of the source one. New focused unit coverage in
+  `crates/riven-core/tests/stdlib_iterator.rs` pins
+  `v.iter.filter { ... }.count` and cross-type
+  `v.iter.map { |n| "#{n}" }.collect_vec.join(",")`.
 - Phase 2 stdlib `std::io` no-Result print conveniences (#06.1 partial):
   `Stdout.print(s)`, `Stdout.println(s)`, `Stderr.eprint(s)`, and
   `Stderr.eprintln(s)`. The `*ln` variants emit a literal `\n` after the

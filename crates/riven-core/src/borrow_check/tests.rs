@@ -617,6 +617,7 @@ fn detects_mut_immut_borrow_conflict() {
                 }),
                 method: 50,
                 method_name: "push".to_string(),
+                generic_args: vec![],
                 args: vec![HirExpr {
                     kind: HirExprKind::IntLiteral(4),
                     ty: Ty::Int,
@@ -787,6 +788,7 @@ fn nll_borrow_ends_at_last_use() {
                 }),
                 method: 50,
                 method_name: "push".to_string(),
+                generic_args: vec![],
                 args: vec![HirExpr {
                     kind: HirExprKind::IntLiteral(4),
                     ty: Ty::Int,

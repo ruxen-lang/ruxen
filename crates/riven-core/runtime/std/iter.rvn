@@ -1,0 +1,30 @@
+## Iterator and FromIterator stdlib surface for Phase 2 prompt 05.
+##
+## This file is declarative documentation for the intended stdlib source
+## layout. v1 still models the executable behavior through built-in
+## resolver/typeck/MIR hooks rather than loading `.rvn` stdlib modules.
+
+trait Iterator
+  type Item
+
+  def mut next -> Option[Self.Item]
+
+  def map[U](f: |Self.Item| -> U) -> Self
+  def filter(f: |&Self.Item| -> Bool) -> Self
+  def take(n: Int) -> Self
+  def skip(n: Int) -> Self
+  def chain[I](other: I) -> Self
+  def zip[I](other: I) -> Self
+  def enumerate -> Self
+
+  def collect[C: FromIterator[Self.Item]] -> C
+  def fold[B](init: B, f: |B, Self.Item| -> B) -> B
+  def count -> Int
+  def sum -> Self.Item
+  def all(f: |&Self.Item| -> Bool) -> Bool
+  def any(f: |&Self.Item| -> Bool) -> Bool
+end
+
+trait FromIterator[T]
+  def from_iter[I: Iterator](iter: I) -> Self
+end

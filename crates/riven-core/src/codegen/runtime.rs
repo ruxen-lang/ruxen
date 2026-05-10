@@ -111,6 +111,7 @@ pub const RUNTIME_FUNCTIONS: &[&str] = &[
     "riven_string_split",
     "riven_string_push",
     "riven_string_into_bytes",
+    "riven_string_from_iter",
     "riven_vec_pop",
     "riven_vec_sum",
     "riven_vec_count",
@@ -149,12 +150,14 @@ pub const RUNTIME_FUNCTIONS: &[&str] = &[
     "riven_vec_dedup",
     "riven_vec_set",
     "riven_hash_new",
+    "riven_hash_from_iter",
     "riven_hash_insert",
     "riven_hash_get",
     "riven_hash_contains_key",
     "riven_hash_len",
     "riven_hash_is_empty",
     "riven_set_new",
+    "riven_set_from_iter",
     "riven_set_insert",
     "riven_set_contains",
     "riven_set_len",
@@ -315,6 +318,7 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "String_split" => return Ok("riven_string_split"),
         "String_push" => return Ok("riven_string_push"),
         "String_into_bytes" => return Ok("riven_string_into_bytes"),
+        "String_from_iter" => return Ok("riven_string_from_iter"),
         // &str methods.
         "&str_split" => return Ok("riven_str_split"),
         "&str_parse_uint" => return Ok("riven_str_parse_uint"),
@@ -454,6 +458,7 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
     {
         return match method {
             "new" => Ok("riven_hash_new"),
+            "from_iter" => Ok("riven_hash_from_iter"),
             // Phase 2 stdlib (#04): full HashMap surface.
             "with_capacity" => Ok("riven_hash_with_capacity"),
             "insert" => Ok("riven_hash_insert"),
@@ -478,6 +483,7 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
     {
         return match method {
             "new" => Ok("riven_set_new"),
+            "from_iter" => Ok("riven_set_from_iter"),
             // Phase 2 stdlib (#04): full HashSet surface.
             "with_capacity" => Ok("riven_set_with_capacity"),
             "insert" => Ok("riven_set_insert"),

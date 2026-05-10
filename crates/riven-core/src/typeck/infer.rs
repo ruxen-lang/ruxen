@@ -466,6 +466,7 @@ impl<'a> InferenceEngine<'a> {
             HirExprKind::MethodCall {
                 object,
                 method_name,
+                generic_args,
                 args,
                 block,
                 ..
@@ -570,6 +571,17 @@ impl<'a> InferenceEngine<'a> {
                 for arg in args.iter_mut() {
                     self.infer_expr(arg);
                 }
+                for targ in generic_args.iter_mut() {
+                    *targ = self.ctx.resolve(targ);
+                }
+
+                if method_name == "collect" {
+                    let obj_ty = self.ctx.resolve(&object.ty);
+                    let (_, derefed) = auto_deref(&obj_ty, self.ctx);
+                    expr.ty =
+                        self.infer_iter_collect_type(&derefed, generic_args.as_slice(), &expr.span);
+                    return;
+                }
 
                 // Seed the block's closure parameter type from the object's
                 // element type before inferring the block body. E.g.
@@ -588,13 +600,16 @@ impl<'a> InferenceEngine<'a> {
                 // would start emitting literal "T: Displayable_method"
                 // symbols the linker cannot resolve.
                 if let Some(ref mut blk) = block {
-                    if method_name == "map" {
+                    if method_name == "map" || method_name == "filter" {
                         let obj_ty_pre = self.ctx.resolve(&object.ty);
                         let (_, derefed_pre) = auto_deref(&obj_ty_pre, self.ctx);
                         let elem_ty: Option<Ty> = match &derefed_pre {
                             Ty::Option(inner) => Some((**inner).clone()),
                             Ty::Vec(inner) => Some((**inner).clone()),
                             Ty::Result(ok, _) => Some((**ok).clone()),
+                            Ty::Class { name, generic_args } if name.ends_with("Iter") => {
+                                generic_args.first().cloned()
+                            }
                             _ => None,
                         };
                         if let (Some(elem_ty), HirExprKind::Closure { params, .. }) =
@@ -649,6 +664,11 @@ impl<'a> InferenceEngine<'a> {
                             match &ret_ty {
                                 Ty::Option(inner) | Ty::Vec(inner) | Ty::Result(inner, _) => {
                                     let _ = unify(inner, &body_ty, self.ctx, &expr.span);
+                                }
+                                Ty::Class { name, generic_args } if name.ends_with("Iter") => {
+                                    if let Some(inner) = generic_args.first() {
+                                        let _ = unify(inner, &body_ty, self.ctx, &expr.span);
+                                    }
                                 }
                                 _ => {}
                             }
@@ -1342,6 +1362,126 @@ impl<'a> InferenceEngine<'a> {
         self.ctx.fresh_type_var()
     }
 
+    fn infer_iter_collect_type(&mut self, obj_ty: &Ty, generic_args: &[Ty], span: &Span) -> Ty {
+        if generic_args.len() != 1 {
+            self.diagnostics.push(Diagnostic::error_with_code(
+                "`collect` requires exactly one target type: `iter.collect[Vec[T]]`".to_string(),
+                span.clone(),
+                "E0700",
+            ));
+            return Ty::Error;
+        }
+
+        let Some(item_ty) = self.iter_item_ty(obj_ty) else {
+            self.diagnostics.push(Diagnostic::error_with_code(
+                format!("`collect` is only defined on iterator values; got `{obj_ty}`"),
+                span.clone(),
+                "E0700",
+            ));
+            return Ty::Error;
+        };
+
+        let target = self.ctx.resolve(&generic_args[0]);
+        if !self.collect_target_compatible(&target, &item_ty, span) {
+            return Ty::Error;
+        }
+        target
+    }
+
+    fn iter_item_ty(&self, ty: &Ty) -> Option<Ty> {
+        match ty {
+            Ty::Class { name, generic_args } if name.ends_with("Iter") => generic_args.first().cloned(),
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => self.iter_item_ty(inner),
+            _ => None,
+        }
+    }
+
+    fn collect_target_compatible(&mut self, target: &Ty, item_ty: &Ty, span: &Span) -> bool {
+        match target {
+            Ty::Vec(elem) => {
+                let ok = unify(elem.as_ref(), item_ty, self.ctx, span).is_ok();
+                if !ok {
+                    self.diagnostics.push(Diagnostic::error_with_code(
+                        format!(
+                            "`collect[{}]` expects iterator items of type `{}`; got `{}`",
+                            target,
+                            elem.as_ref(),
+                            item_ty
+                        ),
+                        span.clone(),
+                        "E0700",
+                    ));
+                }
+                ok
+            }
+            Ty::String | Ty::Str => {
+                let resolved = self.ctx.resolve(item_ty);
+                let ok = matches!(resolved, Ty::String | Ty::Str);
+                if !ok {
+                    self.diagnostics.push(Diagnostic::error_with_code(
+                        format!(
+                            "`collect[String]` expects iterator items of type `String` or `&str`; got `{}`",
+                            resolved
+                        ),
+                        span.clone(),
+                        "E0700",
+                    ));
+                }
+                ok
+            }
+            Ty::HashMap(k, v) => {
+                let resolved = self.ctx.resolve(item_ty);
+                let ok = match resolved {
+                    Ty::Tuple(ref elems) if elems.len() == 2 => {
+                        unify(k.as_ref(), &elems[0], self.ctx, span).is_ok()
+                            && unify(v.as_ref(), &elems[1], self.ctx, span).is_ok()
+                    }
+                    _ => false,
+                };
+                if !ok {
+                    self.diagnostics.push(Diagnostic::error_with_code(
+                        format!(
+                            "`collect[{}]` expects iterator items of type `(K, V)`; got `{}`",
+                            target, item_ty
+                        ),
+                        span.clone(),
+                        "E0700",
+                    ));
+                }
+                ok
+            }
+            Ty::Set(elem) => {
+                let ok = unify(elem.as_ref(), item_ty, self.ctx, span).is_ok();
+                if !ok {
+                    self.diagnostics.push(Diagnostic::error_with_code(
+                        format!(
+                            "`collect[{}]` expects iterator items of type `{}`; got `{}`",
+                            target,
+                            elem.as_ref(),
+                            item_ty
+                        ),
+                        span.clone(),
+                        "E0700",
+                    ));
+                }
+                ok
+            }
+            other => {
+                self.diagnostics.push(Diagnostic::error_with_code(
+                    format!(
+                        "`collect[{other}]` is not supported yet; use Vec, String, HashMap, or HashSet"
+                    ),
+                    span.clone(),
+                    "E0700",
+                ));
+                false
+            }
+        }
+    }
+
     /// If `ty` is (a reference to) a `TypeParam`, `impl Trait`, or `dyn Trait`,
     /// consult the trait bounds for a method named `name`. Reports an
     /// ambiguity diagnostic when more than one bound declares the method.
@@ -1512,9 +1652,11 @@ impl<'a> InferenceEngine<'a> {
             (Ty::Vec(_), "dedup") => Some(Ty::Unit),
             (Ty::Vec(_), "sort_by") => Some(Ty::Unit),
             (Ty::Vec(_), "retain") => Some(Ty::Unit),
+            (Ty::String, "from_iter") => Some(Ty::String),
 
             // HashMap methods
             (Ty::HashMap(_, _), "new") => Some(ty.clone()),
+            (Ty::HashMap(_, _), "from_iter") => Some(ty.clone()),
             (Ty::HashMap(_, _), "insert") => Some(Ty::Unit),
             (Ty::HashMap(_, v), "get") => Some(Ty::Option(Box::new(Ty::Ref(v.clone())))),
             (Ty::HashMap(_, _), "contains_key") => Some(Ty::Bool),
@@ -1530,6 +1672,7 @@ impl<'a> InferenceEngine<'a> {
 
             // Set methods
             (Ty::Set(_), "new") => Some(ty.clone()),
+            (Ty::Set(_), "from_iter") => Some(ty.clone()),
             (Ty::Set(_), "insert") => Some(Ty::Unit),
             (Ty::Set(_), "contains") => Some(Ty::Bool),
             (Ty::Set(_), "len") => Some(Ty::USize),
@@ -1661,7 +1804,10 @@ impl<'a> InferenceEngine<'a> {
             // the same `riven_vec_*` helpers their `Vec` counterparts use,
             // so all that's missing is the type-check entry.
             (Ty::Class { name, .. }, "filter") if name.ends_with("Iter") => Some(ty.clone()),
-            (Ty::Class { name, .. }, "map") if name.ends_with("Iter") => Some(ty.clone()),
+            (Ty::Class { name, .. }, "map") if name.ends_with("Iter") => Some(Ty::Class {
+                name: name.clone(),
+                generic_args: vec![self.ctx.fresh_type_var()],
+            }),
             (Ty::Class { name, generic_args }, "sum") if name.ends_with("Iter") => {
                 // Sum returns the element type for numeric Items. The
                 // runtime path is `riven_vec_sum` which integer-sums

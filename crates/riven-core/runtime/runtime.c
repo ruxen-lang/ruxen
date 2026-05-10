@@ -2465,6 +2465,22 @@ RivenVec *riven_vec_from_iter(RivenVec *iter) {
     return iter;
 }
 
+/* String.from_iter(iter[String]) / iter.collect[String] — concatenate
+   the owned string (or &str-like) elements in iteration order into one
+   fresh owned string. v1 keeps this narrow: typeck only accepts
+   String/&str items, not arbitrary Display/ToString conversions. */
+char *riven_string_from_iter(RivenVec *iter) {
+    char *out = riven_string_from("");
+    if (!iter) return out;
+    for (uint64_t i = 0; i < iter->len; i++) {
+        const char *part = (const char *)iter->data[i];
+        char *next = riven_string_concat(out, part ? part : "");
+        riven_string_ORIG_FREE(out);
+        out = next;
+    }
+    return out;
+}
+
 /* Vec slot store — used by the inlined `retain` lowering to compact
    surviving elements into the prefix. Panics on OOB so a buggy
    inliner (or a future user-callable use that escapes) doesn't
@@ -3144,6 +3160,31 @@ void riven_set_clear(RivenSet *s) {
 RivenVec *riven_set_iter(RivenSet *s) {
     if (!s) return riven_vec_new();
     return riven_hash_keys(&s->inner);
+}
+
+/* HashMap.from_iter(iter[(K, V)]) / iter.collect[HashMap[K, V]].
+   Each iter slot is a heap-allocated 2-tuple with field0 at +0 and
+   field1 at +8, matching `riven_vec_zip`'s tuple layout and the
+   compiler's generic tuple allocation rule. */
+RivenHash *riven_hash_from_iter(RivenVec *iter) {
+    RivenHash *out = riven_hash_new();
+    if (!iter) return out;
+    for (uint64_t i = 0; i < iter->len; i++) {
+        int64_t *pair = (int64_t *)iter->data[i];
+        if (!pair) continue;
+        riven_hash_insert(out, pair[0], pair[1]);
+    }
+    return out;
+}
+
+/* HashSet.from_iter(iter[T]) / iter.collect[HashSet[T]]. */
+RivenSet *riven_set_from_iter(RivenVec *iter) {
+    RivenSet *out = riven_set_new();
+    if (!iter) return out;
+    for (uint64_t i = 0; i < iter->len; i++) {
+        riven_set_insert(out, iter->data[i]);
+    }
+    return out;
 }
 
 /* HashSet.union(&Self) -> HashSet[T]

@@ -1213,6 +1213,7 @@ impl<'a> Lowerer<'a> {
             HirExprKind::MethodCall {
                 object,
                 method_name,
+                generic_args: _generic_args,
                 args,
                 block,
                 ..
@@ -1340,6 +1341,33 @@ impl<'a> Lowerer<'a> {
                     {
                         return Ok(result);
                     }
+                }
+
+                // Phase 2 stdlib (#05 follow-up): built-in
+                // `iter.collect[Target]` lowers directly to a runtime
+                // constructor over the v1 eager-iterator representation
+                // (`RivenVec*`). Typeck has already validated the target
+                // and item compatibility, so lowering only picks the
+                // concrete helper by the expression's result type.
+                if method_name == "collect" {
+                    let iter_local = self.lower_expr(object)?;
+                    let iter_id = iter_local.unwrap_or_else(|| self.new_temp(Ty::Int));
+                    let dest = self.new_temp(expr.ty.clone());
+                    let callee = match &expr.ty {
+                        Ty::Vec(_) => "riven_vec_from_iter",
+                        Ty::String | Ty::Str => "riven_string_from_iter",
+                        Ty::HashMap(_, _) => "riven_hash_from_iter",
+                        Ty::Set(_) => "riven_set_from_iter",
+                        other => {
+                            return Err(format!("unsupported collect target in MIR lowering: {other}"));
+                        }
+                    };
+                    self.emit(MirInst::Call {
+                        dest: Some(dest),
+                        callee: callee.to_string(),
+                        args: vec![MirValue::Use(iter_id)],
+                    });
+                    return Ok(Some(dest));
                 }
 
                 // ── Inline try_op (? operator) ──────────────────────────
@@ -7637,7 +7665,7 @@ fn is_builtin_static_method(type_name: &str, method_name: &str) -> bool {
         type_name
     };
     match base_type {
-        "String" => matches!(method_name, "from" | "new" | "with_capacity"),
+        "String" => matches!(method_name, "from" | "new" | "with_capacity" | "from_iter"),
         // `Vec.with_capacity(n)` is a stateless static constructor — like
         // `Vec.new` but takes one Int arg. Phase 2 stdlib batch 1 (#03).
         // `Vec.from_iter(iter)` (#03 batch 2) takes any iterator-producing
@@ -7647,8 +7675,8 @@ fn is_builtin_static_method(type_name: &str, method_name: &str) -> bool {
         // The `Hash` and `HashMap` aliases both reach here for the
         // `HashMap.new` / `HashMap.with_capacity(n)` constructors; same
         // for `Set` / `HashSet`.
-        "Hash" | "HashMap" => matches!(method_name, "new" | "with_capacity"),
-        "Set" | "HashSet" => matches!(method_name, "new" | "with_capacity"),
+        "Hash" | "HashMap" => matches!(method_name, "new" | "with_capacity" | "from_iter"),
+        "Set" | "HashSet" => matches!(method_name, "new" | "with_capacity" | "from_iter"),
         "Thread" => matches!(method_name, "spawn" | "current" | "sleep" | "yield_now"),
         "Mutex" => matches!(method_name, "new"),
         "Arc" => matches!(method_name, "new"),
@@ -8257,6 +8285,18 @@ fn compute_dealloc_safe_locals(func: &MirFunction) -> std::collections::HashSet<
                         // helper match below.
                         "Vec_from_iter",
                         "riven_vec_from_iter",
+                        "String_from_iter",
+                        "HashMap_from_iter",
+                        "Hash_from_iter",
+                        "Set_from_iter",
+                        "HashSet_from_iter",
+                        // Phase 2 stdlib (#05 follow-up): built-in
+                        // `collect[Target]` helpers materialise fresh
+                        // heap-owned collections / strings from the
+                        // eager v1 iterator representation.
+                        "riven_string_from_iter",
+                        "riven_hash_from_iter",
+                        "riven_set_from_iter",
                         // Phase 2 stdlib (#04): HashMap[K,V] / HashSet[T]
                         // surface. Each of these returns a freshly-
                         // allocated heap object whose ownership is the

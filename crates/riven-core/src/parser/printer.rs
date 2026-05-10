@@ -705,11 +705,24 @@ pub fn format_expr_short(e: &Expr) -> String {
         ExprKind::MethodCall {
             object,
             method,
+            generic_args,
             args,
             ..
         } => {
             let a: Vec<String> = args.iter().map(format_expr_short).collect();
-            format!("{}.{}({})", format_expr_short(object), method, a.join(", "))
+            let generics = if generic_args.is_empty() {
+                String::new()
+            } else {
+                let parts: Vec<String> = generic_args.iter().map(format_type).collect();
+                format!("[{}]", parts.join(", "))
+            };
+            format!(
+                "{}.{}{}({})",
+                format_expr_short(object),
+                method,
+                generics,
+                a.join(", ")
+            )
         }
         ExprKind::SafeNav { object, field } => {
             format!("{}?.{}", format_expr_short(object), field)

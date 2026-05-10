@@ -1018,6 +1018,12 @@ impl Parser {
                     self.expect_any_identifier()
                 };
 
+                let generic_args = if self.at(TokenKind::LBracket) {
+                    self.parse_generic_args()
+                } else {
+                    vec![]
+                };
+
                 if self.at(TokenKind::LParen) {
                     let args = self.parse_call_args();
                     let block = self.maybe_parse_block_arg();
@@ -1026,6 +1032,7 @@ impl Parser {
                         kind: ExprKind::MethodCall {
                             object: Box::new(lhs),
                             method: field,
+                            generic_args,
                             args,
                             block: block.map(Box::new),
                         },
@@ -1034,12 +1041,13 @@ impl Parser {
                 } else {
                     // Check for block arg after field access (method call with no parens but with block)
                     let block = self.maybe_parse_block_arg();
-                    if block.is_some() {
+                    if block.is_some() || !generic_args.is_empty() {
                         let span = self.span_from(&start_span);
                         Expr {
                             kind: ExprKind::MethodCall {
                                 object: Box::new(lhs),
                                 method: field,
+                                generic_args,
                                 args: vec![],
                                 block: block.map(Box::new),
                             },
