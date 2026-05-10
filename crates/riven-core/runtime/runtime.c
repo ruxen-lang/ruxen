@@ -55,15 +55,23 @@ void riven_hash_insert(RivenHash *h, int64_t key, int64_t value);
  * (`free(` → `riven_test_free(`) does not mangle these call sites; the
  * actual link symbols are `riven_vec_free` / `riven_string_free`,
  * pinned via `RIVEN_ASM_LABEL` on the definitions below. */
-void riven_vec_ORIG_FREE(RivenVec *v);
-void riven_string_ORIG_FREE(char *s);
-/* Public link-symbol forward decls (no asm label here — these names
- * ARE the link symbols, so `riven_fs_read_dir` and friends earlier in
- * the file can call them without triggering macOS clang's "asm label
- * after first use" error). The internal `_ORIG_FREE` aliases at the
- * bottom of the file pin the same symbols via RIVEN_ASM_LABEL once the
- * macro is in scope. */
-void riven_vec_free(RivenVec *v);
+/* The `_ORIG_FREE` C-side identifier is mapped to the public link
+ * symbol (`riven_vec_free` / `riven_string_free` / `riven_hash_free`)
+ * via `__asm__` labels. The labels MUST be visible on the forward
+ * declaration here — macOS clang errors "cannot apply asm label to
+ * function after its first use" if any caller (e.g.
+ * `riven_fs_read_dir` further down the file) takes the address of
+ * the symbol before the labelled declaration is parsed. Linux gcc
+ * tolerates the late label; clang does not. See `docs/dev/rss-cap.md`-
+ * style note in the splice header below for the textual-rewrite
+ * intent of the `_ORIG_FREE` rename. */
+#if defined(__APPLE__)
+#  define RIVEN_ASM_LABEL(sym) __asm__("_" #sym)
+#else
+#  define RIVEN_ASM_LABEL(sym) __asm__(#sym)
+#endif
+void riven_vec_ORIG_FREE(RivenVec *v) RIVEN_ASM_LABEL(riven_vec_free);
+void riven_string_ORIG_FREE(char *s) RIVEN_ASM_LABEL(riven_string_free);
 static uint64_t riven_hash_str(const char *s);
 
 static void *riven_result_ok_value(int64_t payload) {
@@ -594,12 +602,10 @@ void *riven_fs_read_dir(const char *path) {
     int saved = errno;
     closedir(dir);
     if (saved != 0) {
-        /* Use the public symbol name (`riven_vec_free`) rather than
-         * the internal `riven_vec_ORIG_FREE` alias: the asm-label
-         * declaration that maps the alias to the public symbol lives
-         * later in the file, and macOS clang rejects "asm label after
-         * first use" if we call the alias here. */
-        riven_vec_free(names);
+        /* `_ORIG_FREE` survives the drop_fixtures textual `free(` →
+         * `riven_test_free(` splice; the asm-label decl at the top of
+         * this file maps it to the public `riven_vec_free` symbol. */
+        riven_vec_ORIG_FREE(names);
         return riven_io_error_message(strerror(saved));
     }
     return riven_result_ok_value((int64_t)names);
@@ -1170,13 +1176,10 @@ void riven_dealloc(void *ptr) {
  * The `inject_helper_counter` splice then matches the post-rewrite
  * header and decorates the body with a per-kind counter increment.
  */
-#if defined(__APPLE__)
-#  define RIVEN_ASM_LABEL(sym) __asm__("_" #sym)
-#else
-#  define RIVEN_ASM_LABEL(sym) __asm__(#sym)
-#endif
-
-void riven_string_ORIG_FREE(char *s) RIVEN_ASM_LABEL(riven_string_free);
+/* `RIVEN_ASM_LABEL` and the labelled forward decls live near the top
+ * of the file (around line ~50) — they have to be in scope before the
+ * first caller takes the address of `_ORIG_FREE` or macOS clang
+ * rejects with "asm label after first use". */
 void riven_string_ORIG_FREE(char *s) {
     if (s) free(s);
 }
@@ -1660,7 +1663,8 @@ RivenVec *riven_vec_new(void) {
    heap (e.g. for `Vec[String]`) is a known v1 limitation: only the
    data buffer and outer struct are released; recursive element
    drops are codegen-driven and not yet emitted. */
-void riven_vec_ORIG_FREE(RivenVec *v) RIVEN_ASM_LABEL(riven_vec_free);
+/* asm label declared at the top of the file alongside the matching
+ * forward decl — see the `RIVEN_ASM_LABEL` block there. */
 void riven_vec_ORIG_FREE(RivenVec *v) {
     if (!v) return;
     if (v->data) free(v->data);
