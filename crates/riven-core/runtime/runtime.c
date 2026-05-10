@@ -57,6 +57,13 @@ void riven_hash_insert(RivenHash *h, int64_t key, int64_t value);
  * pinned via `RIVEN_ASM_LABEL` on the definitions below. */
 void riven_vec_ORIG_FREE(RivenVec *v);
 void riven_string_ORIG_FREE(char *s);
+/* Public link-symbol forward decls (no asm label here — these names
+ * ARE the link symbols, so `riven_fs_read_dir` and friends earlier in
+ * the file can call them without triggering macOS clang's "asm label
+ * after first use" error). The internal `_ORIG_FREE` aliases at the
+ * bottom of the file pin the same symbols via RIVEN_ASM_LABEL once the
+ * macro is in scope. */
+void riven_vec_free(RivenVec *v);
 static uint64_t riven_hash_str(const char *s);
 
 static void *riven_result_ok_value(int64_t payload) {
@@ -587,7 +594,12 @@ void *riven_fs_read_dir(const char *path) {
     int saved = errno;
     closedir(dir);
     if (saved != 0) {
-        riven_vec_ORIG_FREE(names);
+        /* Use the public symbol name (`riven_vec_free`) rather than
+         * the internal `riven_vec_ORIG_FREE` alias: the asm-label
+         * declaration that maps the alias to the public symbol lives
+         * later in the file, and macOS clang rejects "asm label after
+         * first use" if we call the alias here. */
+        riven_vec_free(names);
         return riven_io_error_message(strerror(saved));
     }
     return riven_result_ok_value((int64_t)names);
