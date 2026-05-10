@@ -335,6 +335,19 @@ impl Resolver {
                 }],
                 Ty::Result(Box::new(Ty::String), Box::new(env_var_error_ty)),
             ),
+            // Phase 2 stdlib (#06): env::vars / env::current_dir.
+            // `vars` snapshots the process environment; mutations to
+            // it after the call do not propagate to the returned map.
+            (
+                "vars",
+                vec![],
+                Ty::HashMap(Box::new(Ty::String), Box::new(Ty::String)),
+            ),
+            (
+                "current_dir",
+                vec![],
+                Ty::Result(Box::new(Ty::String), Box::new(io_error_ty.clone())),
+            ),
             (
                 "read_to_string",
                 vec![ParamInfo {
@@ -368,6 +381,40 @@ impl Resolver {
                     auto_assign: false,
                 }],
                 Ty::Bool,
+            ),
+            // Phase 2 stdlib (#06): fs::is_file / fs::is_dir / fs::read_dir.
+            // is_file / is_dir mirror exists' Bool-on-error convention so
+            // they slot into `if` predicates without `?`. read_dir wraps
+            // the entry list in Result so the IO error is surfaced.
+            (
+                "is_file",
+                vec![ParamInfo {
+                    name: "path".into(),
+                    ty: Ty::Ref(Box::new(Ty::String)),
+                    auto_assign: false,
+                }],
+                Ty::Bool,
+            ),
+            (
+                "is_dir",
+                vec![ParamInfo {
+                    name: "path".into(),
+                    ty: Ty::Ref(Box::new(Ty::String)),
+                    auto_assign: false,
+                }],
+                Ty::Bool,
+            ),
+            (
+                "read_dir",
+                vec![ParamInfo {
+                    name: "path".into(),
+                    ty: Ty::Ref(Box::new(Ty::String)),
+                    auto_assign: false,
+                }],
+                Ty::Result(
+                    Box::new(Ty::Vec(Box::new(Ty::String))),
+                    Box::new(io_error_ty.clone()),
+                ),
             ),
             (
                 "remove_file",
@@ -951,7 +998,13 @@ impl Resolver {
         let env_id = self.symbols.define(
             "env".to_string(),
             DefKind::Module {
-                items: vec![builtin_fn_ids["args"], builtin_fn_ids["var"]],
+                items: vec![
+                    builtin_fn_ids["args"],
+                    builtin_fn_ids["var"],
+                    // Phase 2 stdlib (#06).
+                    builtin_fn_ids["vars"],
+                    builtin_fn_ids["current_dir"],
+                ],
             },
             Visibility::Public,
             span.clone(),
@@ -967,6 +1020,10 @@ impl Resolver {
                     builtin_fn_ids["create_dir"],
                     builtin_fn_ids["create_dir_all"],
                     builtin_fn_ids["rename"],
+                    // Phase 2 stdlib (#06).
+                    builtin_fn_ids["is_file"],
+                    builtin_fn_ids["is_dir"],
+                    builtin_fn_ids["read_dir"],
                 ],
             },
             Visibility::Public,

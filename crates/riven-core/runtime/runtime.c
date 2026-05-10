@@ -14,6 +14,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <sched.h>
+#include <dirent.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <sys/socket.h>
@@ -46,6 +47,9 @@ char *riven_char_to_string(int64_t codepoint);
 typedef struct RivenVec RivenVec;
 RivenVec *riven_vec_new(void);
 void riven_vec_push(RivenVec *v, int64_t item);
+typedef struct RivenHash RivenHash;
+RivenHash *riven_hash_new(void);
+void riven_hash_insert(RivenHash *h, int64_t key, int64_t value);
 /* Forward decls for the free helpers (called from `riven_vec_drop_*`).
  * We use the `_ORIG_FREE` sentinel so the drop_fixtures textual splice
  * (`free(` → `riven_test_free(`) does not mangle these call sites; the
@@ -448,6 +452,145 @@ void *riven_fs_rename(const char *from, const char *to) {
         return riven_io_error_message(strerror(errno));
     }
     return riven_result_ok_value(0);
+}
+
+/* ── Phase 2 stdlib (#06): env::vars / env::current_dir + fs::is_file
+ * / fs::is_dir / fs::read_dir helpers.
+ *
+ * `riven_env_vars` walks `extern char **environ` and copies each
+ * "KEY=VALUE" entry into a fresh RivenHash[String, String]. Both key
+ * and value strings are heap-copied via `riven_string_from` so the
+ * returned map owns its storage independently of `environ`.
+ *
+ * `riven_env_current_dir` calls `getcwd` with a growing buffer until
+ * the cwd fits, then wraps the result in Result[String, IoError].
+ *
+ * `riven_fs_read_dir` returns Result[Vec[String], IoError] of the
+ * directory entry names (skipping "." and ".."), heap-copied. Order
+ * matches the underlying readdir() — caller must sort if needed.
+ *
+ * `riven_fs_is_file` / `riven_fs_is_dir` consult `stat()` and return
+ * 1/0. They mirror `riven_fs_exists`'s convention of returning 0 on
+ * any error rather than surfacing IoError, since they are typically
+ * used as boolean predicates inside `if`. */
+
+extern char **environ;
+
+void *riven_env_vars(void) {
+    RivenHash *h = riven_hash_new();
+    if (!environ) {
+        return h;
+    }
+    for (char **p = environ; *p; ++p) {
+        const char *entry = *p;
+        const char *eq = strchr(entry, '=');
+        if (!eq) {
+            /* Malformed entry without '='. POSIX says environ entries
+               are KEY=VALUE; treat the whole thing as a key with an
+               empty value rather than dropping it silently. */
+            riven_hash_insert(
+                h,
+                (int64_t)riven_string_from(entry),
+                (int64_t)riven_string_from("")
+            );
+            continue;
+        }
+        size_t key_len = (size_t)(eq - entry);
+        char *key_buf = (char *)malloc(key_len + 1);
+        if (!key_buf) {
+            riven_panic("out of memory");
+        }
+        memcpy(key_buf, entry, key_len);
+        key_buf[key_len] = '\0';
+        riven_hash_insert(
+            h,
+            (int64_t)riven_string_from(key_buf),
+            (int64_t)riven_string_from(eq + 1)
+        );
+        free(key_buf);
+    }
+    return h;
+}
+
+void *riven_env_current_dir(void) {
+    size_t cap = 256;
+    char *buf = (char *)malloc(cap);
+    if (!buf) {
+        riven_panic("out of memory");
+    }
+    while (1) {
+        if (getcwd(buf, cap) != NULL) {
+            void *result = riven_result_ok_value((int64_t)riven_string_from(buf));
+            free(buf);
+            return result;
+        }
+        if (errno != ERANGE) {
+            void *err = riven_io_error_message(strerror(errno));
+            free(buf);
+            return err;
+        }
+        size_t next = cap * 2;
+        char *next_buf = (char *)realloc(buf, next);
+        if (!next_buf) {
+            free(buf);
+            riven_panic("out of memory");
+        }
+        buf = next_buf;
+        cap = next;
+    }
+}
+
+int64_t riven_fs_is_file(const char *path) {
+    if (!path) {
+        return 0;
+    }
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        return 0;
+    }
+    return S_ISREG(st.st_mode) ? 1 : 0;
+}
+
+int64_t riven_fs_is_dir(const char *path) {
+    if (!path) {
+        return 0;
+    }
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        return 0;
+    }
+    return S_ISDIR(st.st_mode) ? 1 : 0;
+}
+
+void *riven_fs_read_dir(const char *path) {
+    if (!path) {
+        return riven_io_error_message("path is null");
+    }
+    DIR *dir = opendir(path);
+    if (!dir) {
+        return riven_io_error_message(strerror(errno));
+    }
+    RivenVec *names = riven_vec_new();
+    errno = 0;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        const char *n = entry->d_name;
+        /* Skip "." and ".." — callers asking for the directory's
+           contents almost never want them, and including them
+           complicates downstream sorting / filtering. */
+        if (n[0] == '.' && (n[1] == '\0' || (n[1] == '.' && n[2] == '\0'))) {
+            continue;
+        }
+        riven_vec_push(names, (int64_t)riven_string_from(n));
+        errno = 0;
+    }
+    int saved = errno;
+    closedir(dir);
+    if (saved != 0) {
+        riven_vec_ORIG_FREE(names);
+        return riven_io_error_message(strerror(saved));
+    }
+    return riven_result_ok_value((int64_t)names);
 }
 
 void riven_print_int(int64_t n) {
@@ -2363,7 +2506,7 @@ typedef struct RivenHashEntry {
 
 #define RIVEN_HASH_BUCKETS 16u
 
-typedef struct {
+struct RivenHash {
     RivenHashEntry *buckets[RIVEN_HASH_BUCKETS];
     uint64_t len;
     /* Flag set to 1 if keys should be compared/hashed as C strings. The
@@ -2381,7 +2524,7 @@ typedef struct {
        insert calls on the same string literals, this works for the
        common case where the same string constant pointer is reused. */
     int8_t string_keys;
-} RivenHash;
+};
 
 static uint64_t riven_hash_bits(int64_t k) {
     /* splitmix64-ish finalizer for decent distribution on raw int bits. */

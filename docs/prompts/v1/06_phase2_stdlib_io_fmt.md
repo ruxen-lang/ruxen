@@ -68,8 +68,18 @@
 ## Definition of done
 
 - [ ] Every listed function has a positive + negative test.
+      **Partial:** `std::env` (`vars`, `current_dir`) and `std::fs`
+      (`is_file`, `is_dir`, `read_dir`) shipped as a first batch with
+      positive integration tests in `crates/riven-core/tests/stdlib_env.rs`
+      + `stdlib_fs.rs` and a negative test for `read_dir` on a missing
+      path. Still pending: full `std::io` (`Stdin`/`Stdout`/`Stderr`
+      surface + `IoError` enum), `std::fmt` (`Display` trait +
+      `Formatter`), `std::process::Command` builder. `fs::metadata`
+      deferred — needs a struct surface to expose size / kind / mtime;
+      the boolean helpers (`is_file`, `is_dir`) plus the existing
+      `exists` cover the v1 minimum.
 - [ ] String interpolation routes through `Display::fmt`.
 - [ ] `Debug` interpolation `"#{x:?}"` works for any `derive Debug`
       type.
 - [ ] CI green.
-- [ ] CHANGELOG bullet.
+- [ ] CHANGELOG bullet. **Partial:** env/fs first-batch entry shipped.

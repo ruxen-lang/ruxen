@@ -8,6 +8,26 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- Phase 2 stdlib `std::env` / `std::fs` additions (#06 partial): `env.vars()`
+  snapshots the process environment into `HashMap[String, String]` (walks
+  `extern char **environ`, splits at first `=`, heap-copies both halves
+  via `riven_string_from`); `env.current_dir()` returns
+  `Result[String, IoError]` via `getcwd` with a growing buffer;
+  `fs.is_file(path)` and `fs.is_dir(path)` consult `stat()` and return
+  `Bool` (matching `fs.exists`'s "false on error" convention so they slot
+  into `if` predicates without `?`); `fs.read_dir(path)` returns
+  `Result[Vec[String], IoError]` of the directory entry names, skipping
+  `.` and `..`. Five new C runtime fns (`riven_env_vars`,
+  `riven_env_current_dir`, `riven_fs_is_file`, `riven_fs_is_dir`,
+  `riven_fs_read_dir`) wired through `codegen/runtime.rs` and registered
+  in the `std::env` / `std::fs` builtin modules. New integration tests in
+  `crates/riven-core/tests/stdlib_env.rs` (3 tests) and
+  `crates/riven-core/tests/stdlib_fs.rs` (4 tests) compile inline Riven
+  programs and run them against staged temp dirs / sentinel env vars.
+  Outstanding from prompt 06: `env.vars` value extraction via
+  `Option[&String].get` interpolates the raw pointer (pre-existing v1
+  limitation — slated for the `Display` interpolation refactor in 06.2);
+  `fs.metadata` deferred (needs a struct surface).
 - Phase 2 stdlib `HashMap[K,V]` Entry API: `m.entry(K).or_insert(V)` and
   `m.entry(K).or_insert_with { || V }` (#04 final batch). The chain is
   detected and inlined as a single MIR unit — there is no real

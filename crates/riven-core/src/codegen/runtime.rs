@@ -27,6 +27,12 @@ pub const RUNTIME_FUNCTIONS: &[&str] = &[
     "riven_env_args_at",
     "riven_env_args",
     "riven_env_var",
+    // Phase 2 stdlib (#06): env / fs additions.
+    "riven_env_vars",
+    "riven_env_current_dir",
+    "riven_fs_is_file",
+    "riven_fs_is_dir",
+    "riven_fs_read_dir",
     "riven_process_exit",
     // std::process::run (Phase 3): fork+execvp a child, inherit stdio,
     // return exit code (or 128+signal on signal termination, 127 on
@@ -249,6 +255,12 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // Top-level env / fs.
         "args" => return Ok("riven_env_args"),
         "var" => return Ok("riven_env_var"),
+        // Phase 2 stdlib (#06): env / fs additions.
+        "vars" => return Ok("riven_env_vars"),
+        "current_dir" => return Ok("riven_env_current_dir"),
+        "is_file" => return Ok("riven_fs_is_file"),
+        "is_dir" => return Ok("riven_fs_is_dir"),
+        "read_dir" => return Ok("riven_fs_read_dir"),
         "read_to_string" => return Ok("riven_fs_read_to_string"),
         "write" => return Ok("riven_fs_write"),
         "exists" => return Ok("riven_fs_exists"),
