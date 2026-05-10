@@ -4061,15 +4061,21 @@ impl<'a> Lowerer<'a> {
                     });
                     dest
                 }
-                HirInterpolationPart::Expr { expr, spec: _ } => {
+                HirInterpolationPart::Expr { expr, spec } => {
                     // Phase 2 #06.B: `spec` is captured at lex time
-                    // and passed through here. Phase C will dispatch
-                    // to `{Type}_to_debug` when `spec.debug`; Phase D
-                    // will route through `Display::fmt` and consume
-                    // width/precision/align/fill via `Formatter`.
-                    // For Phase B alone we ignore the spec — existing
-                    // interpolation semantics (ad-hoc to_string) are
-                    // preserved.
+                    // and consumed here. Phase C uses `spec.debug`
+                    // to force Debug formatting; Phase D will route
+                    // through `Display::fmt` and consume width/
+                    // precision/align/fill via `Formatter`.
+                    //
+                    // Phase C semantics: `"#{x:?}"` always uses the
+                    // `{Type}_to_debug` path when the type derives
+                    // Debug. Bare `"#{x}"` keeps the legacy behaviour
+                    // (struct-with-derive-Debug also lowers to
+                    // `_to_debug` — Phase D will switch this to
+                    // `Display::fmt` once the canonical interp path
+                    // is migrated).
+                    let _spec_debug = spec.debug;
                     let val_local = self.lower_expr(expr)?;
 
                     // Determine the effective type for the interpolation.

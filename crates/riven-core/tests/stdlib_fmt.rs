@@ -88,6 +88,56 @@ end
     );
 }
 
+/// Phase 2 #06.B: format spec `"#{x:?}"` is captured at lex time.
+/// This is a typecheck-level test — the spec must not break parse
+/// or typecheck, even when applied to a struct with `derive Debug`.
+/// MIR routing (Phase C) preserves existing behaviour: structs with
+/// `derive Debug` already lower through `{Name}_to_debug`, so the
+/// spec is currently a no-op semantically. Phase D will refactor
+/// the canonical interp path through `Display::fmt`.
+#[test]
+fn debug_interpolation_spec_typechecks() {
+    let src = r##"
+class Point
+  x: Int
+  y: Int
+
+  derive Debug
+end
+
+def main
+  let p = Point.new(1, 2)
+  puts "raw=#{p:?}"
+end
+"##;
+    let errs = type_errors(src);
+    assert!(
+        errs.is_empty(),
+        "expected no type errors for `:?` on derive Debug, got: {:#?}",
+        errs.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+}
+
+/// Phase 2 #06.B: width/precision/align specs typecheck on numeric
+/// types. Phase D will consume them via `Formatter`; for now the
+/// spec is captured but not yet applied.
+#[test]
+fn width_and_precision_specs_typecheck() {
+    let src = r##"
+def main
+  let n = 42
+  let pi = 3.14159
+  puts "n=#{n:>5} pi=#{pi:.2}"
+end
+"##;
+    let errs = type_errors(src);
+    assert!(
+        errs.is_empty(),
+        "expected no type errors for width/precision specs, got: {:#?}",
+        errs.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+}
+
 /// Phase A3: `Formatter::write_str(&str) -> Result[(), FmtError]` is
 /// callable from inside an `impl Display`. Locks in the method
 /// signature; Phase D wires the runtime semantics.

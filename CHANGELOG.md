@@ -8,6 +8,27 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- Phase 2 stdlib `std::fmt` foundation surface (#06 fmt MVP, plan
+  in `docs/superpowers/plans/2026-05-10-stdlib-fmt.md`):
+  - **Phase A** — Display/Debug formal traits registered with
+    `fmt(&self, &mut Formatter) -> Result[(), FmtError]` signature.
+    `Formatter` and `FmtError` registered as built-in classes.
+    Runtime: `RivenFormatter { char* buf; size_t len, cap }` plus
+    `riven_fmt_formatter_{new,free,write_str,write_char,buffer,len}`
+    helpers; v1 always returns `Ok(0)` from write_*. User `class T ...
+    impl Display ... end ... end` parses and typechecks.
+  - **Phase B** — Format-spec lexing for `"#{x:spec}"`. The lexer
+    captures `[fill align] [width] ['.' precision] ['?']` into a
+    `FormatSpec` struct on `StringPart::Expr`, threaded through HIR
+    `HirInterpolationPart::Expr { expr, spec }` and into MIR.
+    Examples: `"#{x:?}"`, `"#{x:>10}"`, `"#{pi:.2}"`,
+    `"#{x:*<10.3?}"`. Five lexer pin-tests; printer + formatter
+    round-trip non-default specs.
+  - **Phase C+D MVP** — `:?` typechecks for derive Debug types and
+    width/precision/align specs typecheck on numeric types; existing
+    `_to_debug` synthesis on derive-Debug structs already produces
+    the expected output. Full `lower_interpolation` refactor through
+    `Display::fmt` (Phase D2) deferred to a follow-up session.
 - Phase 2 stdlib `Iterator` typing for closure-based `*Iter.map` /
   `*Iter.filter` chains (#05 follow-up). Typeck now seeds closure
   parameters from iterator `Item` for `*Iter.map` and `*Iter.filter`,

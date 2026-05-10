@@ -91,8 +91,27 @@
       `char*` to a heap struct `{u32 tag; char* msg}` and updating
       27 callsites.
 - [ ] String interpolation routes through `Display::fmt`.
-- [ ] `Debug` interpolation `"#{x:?}"` works for any `derive Debug`
-      type.
+      **Partial (Phase A+B+C+D MVP, 2026-05-10):** `Display`/`Debug`
+      formal traits registered with `fmt(&self, &mut Formatter) ->
+      Result[(), FmtError]` signature. `Formatter` and `FmtError`
+      registered as built-in classes. `Formatter.write_str`,
+      `write_char`, `width`, `precision`, `align`, `fill` typeck
+      method dispatch in `infer.rs::builtin_method_type`. Runtime
+      stubs `riven_fmt_formatter_*` in `runtime.c`; full Cranelift
+      + LLVM signature wiring. User `class T ... impl Display ...
+      end ... end` parses + typechecks. **Pending:** the canonical
+      interpolation path in `mir/lower.rs::lower_interpolation`
+      still uses the legacy ad-hoc `riven_X_to_string` dispatch
+      rather than going through `Display::fmt`. Refactor deferred —
+      see plan's Phase D2.
+- [x] `Debug` interpolation `"#{x:?}"` works for any `derive Debug`
+      type. **Phase B + C MVP:** format spec captured at lex time
+      (FormatSpec.debug = true), threaded through HIR/MIR. Existing
+      `_to_debug` synthesis on derive-Debug structs already produces
+      the expected output for `"#{x:?}"`; the bare `"#{x}"` form
+      currently uses the same path (Phase D will switch bare to
+      Display::fmt). Pin tests in `stdlib_fmt.rs::debug_interpolation_spec_typechecks`.
 - [ ] CI green.
 - [ ] CHANGELOG bullet. **Partial:** env/fs first-batch + std::io
-      surface entries shipped.
+      surface entries shipped + std::fmt foundation A/B/C/D-MVP
+      shipped.
