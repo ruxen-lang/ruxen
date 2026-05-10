@@ -52,15 +52,18 @@ fn compile_and_run(source: &str, basename: &str) -> (String, String, bool) {
     )
 }
 
-/// `/bin/true` — POSIX no-op that exits 0. The simplest possible
-/// fork+execvp success path.
+/// `/usr/bin/true` — POSIX no-op that exits 0. The simplest possible
+/// fork+execvp success path. Use `/usr/bin/`, not `/bin/`: macOS keeps
+/// only a fixed minimal set in `/bin/` and `true`/`false` live in
+/// `/usr/bin/` only. On most modern Linux distros `/bin → /usr/bin`,
+/// so `/usr/bin/true` works there too.
 #[test]
 fn process_run_true_returns_zero() {
     let source = r##"
 use std.process.process_run
 
 def main
-  let cmd = "/bin/true"
+  let cmd = "/usr/bin/true"
   let args: Vec[String] = Vec.new
   let code = process_run(cmd, args)
   if code == 0
@@ -78,13 +81,13 @@ end
     );
     assert!(
         stdout.contains("ok"),
-        "expected exit code 0 from /bin/true, got: stdout=[{}] stderr=[{}]",
+        "expected exit code 0 from /usr/bin/true, got: stdout=[{}] stderr=[{}]",
         stdout,
         stderr
     );
 }
 
-/// `/bin/false` — POSIX no-op that exits 1. Verifies that we faithfully
+/// `/usr/bin/false` — POSIX no-op that exits 1. Verifies that we faithfully
 /// surface non-zero exit codes (and don't, e.g., always return 0 because
 /// of a sign-extension bug or a misread `WEXITSTATUS`).
 #[test]
@@ -93,7 +96,7 @@ fn process_run_false_returns_one() {
 use std.process.process_run
 
 def main
-  let cmd = "/bin/false"
+  let cmd = "/usr/bin/false"
   let args: Vec[String] = Vec.new
   let code = process_run(cmd, args)
   if code == 1
@@ -111,18 +114,18 @@ end
     );
     assert!(
         stdout.contains("ok"),
-        "expected exit code 1 from /bin/false, got: stdout=[{}] stderr=[{}]",
+        "expected exit code 1 from /usr/bin/false, got: stdout=[{}] stderr=[{}]",
         stdout,
         stderr
     );
 }
 
-/// `/bin/echo hello` — verifies that args propagate from a Riven
+/// `/usr/bin/echo hello` — verifies that args propagate from a Riven
 /// `Vec[String]` into the child's argv. Exit code is 0; we don't
 /// capture stdout (out of scope for v1) but the child inherits the
 /// parent's stdout, so "hello" lands in the test process's captured
 /// stdout. We assert exit-code success only — output checking is a
-/// nicety and would be brittle on systems where /bin/echo behaves
+/// nicety and would be brittle on systems where echo behaves
 /// slightly differently.
 #[test]
 fn process_run_echo_with_args_returns_zero() {
@@ -130,7 +133,7 @@ fn process_run_echo_with_args_returns_zero() {
 use std.process.process_run
 
 def main
-  let cmd = "/bin/echo"
+  let cmd = "/usr/bin/echo"
   let mut args: Vec[String] = Vec.new
   args.push("hello")
   let code = process_run(cmd, args)
