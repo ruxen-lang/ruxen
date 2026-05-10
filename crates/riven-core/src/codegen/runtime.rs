@@ -22,6 +22,11 @@ pub const RUNTIME_FUNCTIONS: &[&str] = &[
     "riven_stdout_flush",
     "riven_stderr_write_str",
     "riven_stderr_flush",
+    // Phase 2 stdlib (#06.1): Stdout / Stderr convenience methods.
+    "riven_stdout_print",
+    "riven_stdout_println",
+    "riven_stderr_eprint",
+    "riven_stderr_eprintln",
     "riven_env_init",
     "riven_env_args_count",
     "riven_env_args_at",
@@ -341,6 +346,11 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "Stdout_flush" => return Ok("riven_stdout_flush"),
         "Stderr_write_str" => return Ok("riven_stderr_write_str"),
         "Stderr_flush" => return Ok("riven_stderr_flush"),
+        // Phase 2 stdlib (#06.1): no-Result print convenience methods.
+        "Stdout_print" => return Ok("riven_stdout_print"),
+        "Stdout_println" => return Ok("riven_stdout_println"),
+        "Stderr_eprint" => return Ok("riven_stderr_eprint"),
+        "Stderr_eprintln" => return Ok("riven_stderr_eprintln"),
         "Thread_sleep" => return Ok("riven_thread_sleep_ns"),
         "Thread_yield_now" => return Ok("riven_thread_yield"),
         // std::time top-level functions (resolved before module-prefixing).

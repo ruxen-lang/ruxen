@@ -8,6 +8,21 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- Phase 2 stdlib `std::io` no-Result print conveniences (#06.1 partial):
+  `Stdout.print(s)`, `Stdout.println(s)`, `Stderr.eprint(s)`, and
+  `Stderr.eprintln(s)`. The `*ln` variants emit a literal `\n` after the
+  user's text. Failures are silently swallowed — Rust-style
+  panic-on-broken-pipe is a v1 simplification omission, the
+  matching `write_str` / `flush` on the same handles still surface the
+  IoError when explicit handling is desired. Four new C runtime fns
+  (`riven_stdout_print`, `riven_stdout_println`, `riven_stderr_eprint`,
+  `riven_stderr_eprintln`) wired through `codegen/runtime.rs` plus
+  matching method-type entries in `typeck/infer.rs`. New integration
+  tests in `crates/riven-core/tests/stdlib_io.rs` (4 tests) pin the
+  per-stream stdout / stderr routing and the with/without-newline
+  contract. `IoError` enum migration (the second half of prompt 06.1)
+  remains deferred — it is a runtime layout change touching every
+  Result-returning fn.
 - Phase 2 stdlib `std::env` / `std::fs` additions (#06 partial): `env.vars()`
   snapshots the process environment into `HashMap[String, String]` (walks
   `extern char **environ`, splits at first `=`, heap-copies both halves

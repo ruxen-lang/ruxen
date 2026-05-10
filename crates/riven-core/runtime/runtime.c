@@ -278,6 +278,46 @@ void *riven_stderr_flush(void *handle) {
     return riven_result_ok_value(0);
 }
 
+/* ── Phase 2 stdlib (#06.1): Stdout / Stderr convenience methods.
+ *
+ * `print`, `println`, `eprint`, `eprintln` are the no-Result variants
+ * of `write_str`. Failures are silently swallowed (matching the Rust
+ * `print!` / `println!` / `eprintln!` macros' "panic on broken pipe"
+ * lineage trimmed for v1 simplicity — we just discard the error).
+ * The trailing-newline variants emit `\n` after the user-supplied
+ * text via a second fputs so the buffer flush behaviour matches what
+ * `puts(3)` would do on a stdio stream. */
+
+void riven_stdout_print(void *handle, const char *s) {
+    FILE *stream = riven_stream_from_handle(handle, stdout);
+    if (s) {
+        (void)fputs(s, stream);
+    }
+}
+
+void riven_stdout_println(void *handle, const char *s) {
+    FILE *stream = riven_stream_from_handle(handle, stdout);
+    if (s) {
+        (void)fputs(s, stream);
+    }
+    (void)fputc('\n', stream);
+}
+
+void riven_stderr_eprint(void *handle, const char *s) {
+    FILE *stream = riven_stream_from_handle(handle, stderr);
+    if (s) {
+        (void)fputs(s, stream);
+    }
+}
+
+void riven_stderr_eprintln(void *handle, const char *s) {
+    FILE *stream = riven_stream_from_handle(handle, stderr);
+    if (s) {
+        (void)fputs(s, stream);
+    }
+    (void)fputc('\n', stream);
+}
+
 /* ── Env / Process / FS ────────────────────────────────────────────── */
 
 void riven_env_init(int argc, char **argv) {

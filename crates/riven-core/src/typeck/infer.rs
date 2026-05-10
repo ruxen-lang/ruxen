@@ -1786,6 +1786,15 @@ impl<'a> InferenceEngine<'a> {
                     }),
                 ))
             }
+            // Phase 2 stdlib (#06.1): Stdout / Stderr convenience methods
+            // that swallow errors and return `Unit`. Mirror Rust's
+            // `print!` / `println!` / `eprint!` / `eprintln!` macros at
+            // method-shape level. Use `write_str` + `match` if you need
+            // the IoError back.
+            (Ty::Class { name, .. }, "print") if name == "Stdout" => Some(Ty::Unit),
+            (Ty::Class { name, .. }, "println") if name == "Stdout" => Some(Ty::Unit),
+            (Ty::Class { name, .. }, "eprint") if name == "Stderr" => Some(Ty::Unit),
+            (Ty::Class { name, .. }, "eprintln") if name == "Stderr" => Some(Ty::Unit),
             (Ty::Class { name, .. }, "message") if name == "IoError" => Some(Ty::String),
             (Ty::Class { name, generic_args }, "to_vec") if name.ends_with("Iter") => {
                 let elem = if name == "SplitIter" {
