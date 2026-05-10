@@ -120,20 +120,26 @@ end
     );
 }
 
-/// `/usr/bin/echo hello` — verifies that args propagate from a Riven
+/// `/bin/echo hello` — verifies that args propagate from a Riven
 /// `Vec[String]` into the child's argv. Exit code is 0; we don't
 /// capture stdout (out of scope for v1) but the child inherits the
 /// parent's stdout, so "hello" lands in the test process's captured
 /// stdout. We assert exit-code success only — output checking is a
 /// nicety and would be brittle on systems where echo behaves
 /// slightly differently.
+///
+/// Path note: unlike `true`/`false`, `echo` IS in macOS's `/bin/`.
+/// `/usr/bin/echo` is missing on the GitHub `macos-14` runner image —
+/// CI surfaced this via the runtime's execvp diagnostic. So we use
+/// `/bin/echo`, which exists on both macOS and modern Linux distros
+/// (where `/bin → /usr/bin`).
 #[test]
 fn process_run_echo_with_args_returns_zero() {
     let source = r##"
 use std.process.process_run
 
 def main
-  let cmd = "/usr/bin/echo"
+  let cmd = "/bin/echo"
   let mut args: Vec[String] = Vec.new
   args.push("hello")
   let code = process_run(cmd, args)
