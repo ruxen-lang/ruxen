@@ -4061,7 +4061,15 @@ impl<'a> Lowerer<'a> {
                     });
                     dest
                 }
-                HirInterpolationPart::Expr(expr) => {
+                HirInterpolationPart::Expr { expr, spec: _ } => {
+                    // Phase 2 #06.B: `spec` is captured at lex time
+                    // and passed through here. Phase C will dispatch
+                    // to `{Type}_to_debug` when `spec.debug`; Phase D
+                    // will route through `Display::fmt` and consume
+                    // width/precision/align/fill via `Formatter`.
+                    // For Phase B alone we ignore the spec — existing
+                    // interpolation semantics (ad-hoc to_string) are
+                    // preserved.
                     let val_local = self.lower_expr(expr)?;
 
                     // Determine the effective type for the interpolation.
@@ -8866,7 +8874,7 @@ fn collect_captures_inner(
         }
         HirExprKind::Interpolation { parts } => {
             for p in parts {
-                if let crate::hir::nodes::HirInterpolationPart::Expr(e) = p {
+                if let crate::hir::nodes::HirInterpolationPart::Expr { expr: e, .. } = p {
                     collect_captures_inner(e, closure_params, outer_defs, locally_bound, out, seen);
                 }
             }
@@ -9011,7 +9019,9 @@ fn closure_body_mutates(body: &HirExpr, def_id: DefId) -> bool {
             fields.iter().any(|(_, v)| closure_body_mutates(v, def_id))
         }
         HirExprKind::Interpolation { parts } => parts.iter().any(|p| match p {
-            crate::hir::nodes::HirInterpolationPart::Expr(e) => closure_body_mutates(e, def_id),
+            crate::hir::nodes::HirInterpolationPart::Expr { expr: e, .. } => {
+                closure_body_mutates(e, def_id)
+            }
             _ => false,
         }),
         HirExprKind::MacroCall { args, .. } => args.iter().any(|a| closure_body_mutates(a, def_id)),
@@ -9202,7 +9212,7 @@ fn rewrite_self_in_expr(expr: &mut HirExpr, concrete: &Ty) {
         }
         HirExprKind::Interpolation { parts } => {
             for p in parts {
-                if let HirInterpolationPart::Expr(e) = p {
+                if let HirInterpolationPart::Expr { expr: e, .. } = p {
                     rewrite_self_in_expr(e, concrete);
                 }
             }

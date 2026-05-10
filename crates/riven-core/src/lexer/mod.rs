@@ -297,8 +297,11 @@ impl<'a> Lexer<'a> {
                 // Lex the interpolation expression
                 self.advance(); // #
                 self.advance(); // {
-                let expr_tokens = self.lex_interpolation_expr();
-                parts.push(StringPart::Expr(expr_tokens));
+                let (expr_tokens, spec) = self.lex_interpolation_expr();
+                parts.push(StringPart::Expr {
+                    tokens: expr_tokens,
+                    spec,
+                });
                 continue;
             }
 
@@ -527,8 +530,14 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn lex_interpolation_expr(&mut self) -> Vec<Token> {
+    /// Phase 2 #06.B: lex `expr[:spec]` for `"#{expr:spec}"`. The
+    /// expression is delimited by either the closing `}` (no spec) or
+    /// by `:` at brace depth 1 (spec follows, terminated by `}`).
+    /// Returns the expression tokens plus the parsed `FormatSpec`
+    /// (default if no spec was present).
+    fn lex_interpolation_expr(&mut self) -> (Vec<Token>, crate::lexer::token::FormatSpec) {
         let mut tokens = Vec::new();
+        let mut spec = crate::lexer::token::FormatSpec::default();
         let mut depth = 1u32; // we've already consumed #{
 
         while !self.is_at_end() && depth > 0 {
@@ -538,6 +547,21 @@ impl<'a> Lexer<'a> {
             }
 
             let ch = self.current();
+
+            // Phase 2 #06.B: at brace depth 1 (the outer #{...}
+            // braces), a `:` switches us into format-spec mode. The
+            // expression part is closed at this point, and we lex
+            // the spec characters until the matching `}`. Inside
+            // nested braces (depth > 1), `:` is a normal operator
+            // (associated-type qualifier, module path, etc.) and is
+            // left alone.
+            if ch == ':' && depth == 1 {
+                self.advance(); // consume `:`
+                spec = self.lex_format_spec();
+                // `lex_format_spec` consumes up to and including the
+                // closing `}`; we're done with this interpolation.
+                break;
+            }
 
             if ch == '}' {
                 depth -= 1;
@@ -590,7 +614,97 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        tokens
+        (tokens, spec)
+    }
+
+    /// Phase 2 #06.B: lex the format-spec characters between `:` and
+    /// the closing `}`. Grammar (subset of Rust's):
+    ///
+    /// ```text
+    /// spec := [fill align] [width] ['.' precision] ['?']
+    /// fill  := any non-`}` non-`:` non-digit char
+    /// align := '<' | '>' | '^'
+    /// width := <digit>+
+    /// precision := <digit>+
+    /// ```
+    ///
+    /// Consumes up to and including the closing `}`. Unrecognized
+    /// characters are tolerated (silently dropped) for now — Phase B3
+    /// will tighten the grammar with E0xxx diagnostics.
+    fn lex_format_spec(&mut self) -> crate::lexer::token::FormatSpec {
+        use crate::lexer::token::FormatSpec;
+        let mut spec = FormatSpec::default();
+
+        // Step 1: optional `fill align` prefix. Detect by peeking
+        // two chars: if char₂ ∈ {<,>,^} then char₁ is fill.
+        if let (Some(_c1), Some(c2)) = (self.peek_at(0), self.peek_at(1)) {
+            if matches!(c2, '<' | '>' | '^') {
+                spec.fill = self.peek_at(0);
+                self.advance(); // consume fill
+                spec.align = self.peek_at(0);
+                self.advance(); // consume align
+            }
+        }
+
+        // Step 2: bare `align` (no fill).
+        if spec.align.is_none() {
+            if let Some(c) = self.peek_at(0) {
+                if matches!(c, '<' | '>' | '^') {
+                    spec.align = Some(c);
+                    self.advance();
+                }
+            }
+        }
+
+        // Step 3: width (digits).
+        let mut width_str = String::new();
+        while let Some(c) = self.peek_at(0) {
+            if c.is_ascii_digit() {
+                width_str.push(c);
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        if !width_str.is_empty() {
+            spec.width = width_str.parse::<usize>().ok();
+        }
+
+        // Step 4: optional `.precision`.
+        if self.peek_at(0) == Some('.') {
+            self.advance(); // consume `.`
+            let mut prec_str = String::new();
+            while let Some(c) = self.peek_at(0) {
+                if c.is_ascii_digit() {
+                    prec_str.push(c);
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            if !prec_str.is_empty() {
+                spec.precision = prec_str.parse::<usize>().ok();
+            }
+        }
+
+        // Step 5: optional `?` debug flag.
+        if self.peek_at(0) == Some('?') {
+            spec.debug = true;
+            self.advance();
+        }
+
+        // Step 6: consume any tolerated whitespace + the closing `}`.
+        while let Some(c) = self.peek_at(0) {
+            if c == '}' {
+                self.advance(); // consume `}`
+                break;
+            }
+            // Skip unrecognized chars silently for v1; Phase B3 adds
+            // a diagnostic.
+            self.advance();
+        }
+
+        spec
     }
 
     // ── Characters ──

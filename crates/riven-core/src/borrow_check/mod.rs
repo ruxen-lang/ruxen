@@ -312,7 +312,7 @@ impl<'a> BorrowChecker<'a> {
 
             HirExprKind::Interpolation { parts } => {
                 for part in parts {
-                    if let HirInterpolationPart::Expr(e) = part {
+                    if let HirInterpolationPart::Expr { expr: e, .. } = part {
                         self.check_expr(e);
                     }
                 }

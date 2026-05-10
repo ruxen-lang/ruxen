@@ -3049,10 +3049,15 @@ impl Resolver {
                             crate::lexer::token::StringPart::Literal(s) => {
                                 HirInterpolationPart::Literal(s.clone())
                             }
-                            crate::lexer::token::StringPart::Expr(tokens) => {
-                                // Parse the interpolation tokens as an expression
+                            crate::lexer::token::StringPart::Expr { tokens, spec } => {
+                                // Parse the interpolation tokens as an expression.
+                                // The format spec (Phase 2 #06.B) is threaded through
+                                // unchanged to MIR — Phase C/D consume it.
                                 let inner_expr = self.resolve_interpolation_tokens(tokens, &span);
-                                HirInterpolationPart::Expr(inner_expr)
+                                HirInterpolationPart::Expr {
+                                    expr: inner_expr,
+                                    spec: spec.clone(),
+                                }
                             }
                         }
                     })

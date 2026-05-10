@@ -289,7 +289,10 @@ fn resolve_expr_types(expr: &mut crate::hir::nodes::HirExpr, ctx: &TypeContext) 
         }
         Interpolation { parts } => {
             for p in parts {
-                if let crate::hir::nodes::HirInterpolationPart::Expr(ref mut e) = p {
+                if let crate::hir::nodes::HirInterpolationPart::Expr {
+                    expr: ref mut e, ..
+                } = p
+                {
                     resolve_expr_types(e, ctx);
                 }
             }

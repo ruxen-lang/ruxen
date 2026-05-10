@@ -314,7 +314,7 @@ impl NodeFinder {
             }
             HirExprKind::Interpolation { parts } => {
                 for part in parts {
-                    if let HirInterpolationPart::Expr(e) = part {
+                    if let HirInterpolationPart::Expr { expr: e, .. } = part {
                         self.visit_expr(e);
                     }
                 }

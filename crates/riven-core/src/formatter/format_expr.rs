@@ -408,19 +408,49 @@ fn format_interpolated_string(parts: &[StringPart]) -> Doc {
     for part in parts {
         match part {
             StringPart::Literal(s) => segments.push(text(escape_string(s))),
-            StringPart::Expr(tokens) => {
-                // Preserve interpolation content exactly as-is.
+            StringPart::Expr { tokens, spec } => {
+                // Preserve interpolation content exactly as-is. Phase
+                // 2 #06.B: spec is also reconstructed when non-default,
+                // matching the input syntax (`:?`, `:>10.2`, etc.).
                 let content: String = tokens
                     .iter()
                     .map(|t| token_to_source(t).to_string())
                     .collect::<Vec<_>>()
                     .join("");
-                segments.push(text(format!("#{{{}}}", content)));
+                let spec_str = format_spec_to_source(spec);
+                segments.push(text(format!("#{{{}{}}}", content, spec_str)));
             }
         }
     }
     segments.push(text("\""));
     concat(segments)
+}
+
+/// Phase 2 #06.B: reconstruct a `FormatSpec` to its source form.
+/// Returns `""` for the default spec (so bare `"#{x}"` round-trips
+/// unchanged), or `:fill_align_width.precision?` for non-default.
+fn format_spec_to_source(spec: &crate::lexer::token::FormatSpec) -> String {
+    if spec.is_default() {
+        return String::new();
+    }
+    let mut out = String::from(":");
+    if let Some(c) = spec.fill {
+        out.push(c);
+    }
+    if let Some(c) = spec.align {
+        out.push(c);
+    }
+    if let Some(w) = spec.width {
+        out.push_str(&w.to_string());
+    }
+    if let Some(p) = spec.precision {
+        out.push('.');
+        out.push_str(&p.to_string());
+    }
+    if spec.debug {
+        out.push('?');
+    }
+    out
 }
 
 /// Best-effort reconstruction of a token to its source form.

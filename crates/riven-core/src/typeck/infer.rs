@@ -1096,7 +1096,10 @@ impl<'a> InferenceEngine<'a> {
 
             HirExprKind::Interpolation { parts } => {
                 for part in parts.iter_mut() {
-                    if let HirInterpolationPart::Expr(ref mut e) = part {
+                    if let HirInterpolationPart::Expr {
+                        expr: ref mut e, ..
+                    } = part
+                    {
                         self.infer_expr(e);
                     }
                 }
@@ -2589,7 +2592,7 @@ fn collect_break_types(
         }
         HirExprKind::Interpolation { parts } => {
             for p in parts {
-                if let HirInterpolationPart::Expr(e) = p {
+                if let HirInterpolationPart::Expr { expr: e, .. } = p {
                     collect_break_types(e, ctx, acc, loop_span);
                 }
             }

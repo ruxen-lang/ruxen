@@ -671,7 +671,30 @@ pub fn format_expr_short(e: &Expr) -> String {
             for part in parts {
                 match part {
                     StringPart::Literal(s) => out.push_str(s),
-                    StringPart::Expr(_) => out.push_str("#{...}"),
+                    StringPart::Expr { spec, .. } => {
+                        if spec.is_default() {
+                            out.push_str("#{...}");
+                        } else {
+                            out.push_str("#{...:");
+                            if let Some(c) = spec.fill {
+                                out.push(c);
+                            }
+                            if let Some(c) = spec.align {
+                                out.push(c);
+                            }
+                            if let Some(w) = spec.width {
+                                out.push_str(&w.to_string());
+                            }
+                            if let Some(p) = spec.precision {
+                                out.push('.');
+                                out.push_str(&p.to_string());
+                            }
+                            if spec.debug {
+                                out.push('?');
+                            }
+                            out.push('}');
+                        }
+                    }
                 }
             }
             out.push('"');

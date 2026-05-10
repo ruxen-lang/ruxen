@@ -18,13 +18,60 @@ impl Span {
     }
 }
 
+/// Phase 2 #06.B: format specification for interpolated `"#{x:spec}"`.
+///
+/// Subset of Rust's format-spec grammar:
+///
+/// ```text
+/// spec  := [fill align] [width] ['.' precision] ['?']
+/// fill  := any char (only meaningful when followed by `align`)
+/// align := '<' (left) | '>' (right) | '^' (center)
+/// width := <digit>+
+/// precision := <digit>+
+/// ```
+///
+/// Examples:
+/// - `"#{x:?}"` — Debug formatting (`debug = true`).
+/// - `"#{x:>5}"` — right-aligned, width 5.
+/// - `"#{x:.2}"` — precision 2 (e.g. for floats).
+/// - `"#{x:*^10.2}"` — fill `*`, center-aligned, width 10, precision 2.
+///
+/// Phase B (this layer) captures the spec syntactically. Phase C
+/// wires the `?` flag into the MIR Debug-interpolation path and
+/// Phase D threads width/precision/align/fill into `Display::fmt`
+/// via the `Formatter` runtime.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FormatSpec {
+    pub debug: bool,
+    pub width: Option<usize>,
+    pub precision: Option<usize>,
+    pub align: Option<char>,
+    pub fill: Option<char>,
+}
+
+impl FormatSpec {
+    /// Returns true when no field is set — equivalent to `"#{x}"`.
+    pub fn is_default(&self) -> bool {
+        !self.debug
+            && self.width.is_none()
+            && self.precision.is_none()
+            && self.align.is_none()
+            && self.fill.is_none()
+    }
+}
+
 /// A part of an interpolated string.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StringPart {
     /// Literal text segment.
     Literal(String),
-    /// An expression span (byte offsets into source) to be parsed later.
-    Expr(Vec<Token>),
+    /// An expression span (byte offsets into source) to be parsed
+    /// later, plus an optional format spec captured at lex time.
+    /// Default `FormatSpec` corresponds to bare `"#{x}"`.
+    Expr {
+        tokens: Vec<Token>,
+        spec: FormatSpec,
+    },
 }
 
 /// A token produced by the lexer.

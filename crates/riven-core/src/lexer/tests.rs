@@ -462,7 +462,7 @@ fn test_string_interpolation() {
             assert_eq!(parts.len(), 2);
             assert_eq!(parts[0], StringPart::Literal("hello ".into()));
             match &parts[1] {
-                StringPart::Expr(tokens) => {
+                StringPart::Expr { tokens, .. } => {
                     assert_eq!(tokens.len(), 1);
                     assert_eq!(tokens[0].kind, TokenKind::Identifier("name".into()));
                 }
@@ -481,7 +481,7 @@ fn test_string_interpolation_with_expression() {
             assert_eq!(parts.len(), 2);
             assert_eq!(parts[0], StringPart::Literal("result: ".into()));
             match &parts[1] {
-                StringPart::Expr(tokens) => {
+                StringPart::Expr { tokens, .. } => {
                     assert_eq!(tokens.len(), 3);
                     assert_eq!(tokens[0].kind, TokenKind::Identifier("a".into()));
                     assert_eq!(tokens[1].kind, TokenKind::Plus);
@@ -515,7 +515,7 @@ fn test_nested_string_interpolation() {
         TokenKind::InterpolatedString(parts) => {
             assert_eq!(parts.len(), 1);
             match &parts[0] {
-                StringPart::Expr(tokens) => {
+                StringPart::Expr { tokens, .. } => {
                     assert_eq!(tokens[0].kind, TokenKind::Identifier("a".into()));
                     assert_eq!(tokens[1].kind, TokenKind::Plus);
                     assert_eq!(tokens[2].kind, TokenKind::StringLiteral("inner".into()));
@@ -524,6 +524,98 @@ fn test_nested_string_interpolation() {
             }
         }
         _ => panic!("expected interpolated string"),
+    }
+}
+
+/// Phase 2 #06.B: bare `"#{x}"` carries the default `FormatSpec`.
+#[test]
+fn test_interpolation_default_spec() {
+    let kinds = lex_kinds(r#""val=#{x}""#);
+    match &kinds[0] {
+        TokenKind::InterpolatedString(parts) => match &parts[1] {
+            StringPart::Expr { spec, tokens } => {
+                assert!(spec.is_default(), "expected default spec, got {:?}", spec);
+                assert_eq!(tokens.len(), 1);
+                assert_eq!(tokens[0].kind, TokenKind::Identifier("x".into()));
+            }
+            _ => panic!("expected Expr part"),
+        },
+        _ => panic!("expected InterpolatedString"),
+    }
+}
+
+/// Phase 2 #06.B: `"#{x:?}"` sets the `debug` flag.
+#[test]
+fn test_interpolation_debug_spec() {
+    let kinds = lex_kinds(r#""val=#{x:?}""#);
+    match &kinds[0] {
+        TokenKind::InterpolatedString(parts) => match &parts[1] {
+            StringPart::Expr { spec, tokens } => {
+                assert!(spec.debug, "expected debug=true");
+                assert!(spec.width.is_none());
+                assert_eq!(tokens.len(), 1);
+                assert_eq!(tokens[0].kind, TokenKind::Identifier("x".into()));
+            }
+            _ => panic!("expected Expr part"),
+        },
+        _ => panic!("expected InterpolatedString"),
+    }
+}
+
+/// Phase 2 #06.B: `"#{x:>10}"` parses align=`>` and width=10.
+#[test]
+fn test_interpolation_width_spec() {
+    // Use plain string with escapes — `r#""#{...}"#` collides with
+    // Rust's raw-string `#` delimiters.
+    let kinds = lex_kinds("\"#{x:>10}\"");
+    match &kinds[0] {
+        TokenKind::InterpolatedString(parts) => match &parts[0] {
+            StringPart::Expr { spec, .. } => {
+                assert_eq!(spec.align, Some('>'));
+                assert_eq!(spec.width, Some(10));
+                assert!(spec.precision.is_none());
+                assert!(!spec.debug);
+            }
+            _ => panic!("expected Expr part"),
+        },
+        _ => panic!("expected InterpolatedString"),
+    }
+}
+
+/// Phase 2 #06.B: `"#{x:.2}"` parses precision=2 (e.g. for floats).
+#[test]
+fn test_interpolation_precision_spec() {
+    let kinds = lex_kinds("\"#{pi:.2}\"");
+    match &kinds[0] {
+        TokenKind::InterpolatedString(parts) => match &parts[0] {
+            StringPart::Expr { spec, .. } => {
+                assert_eq!(spec.precision, Some(2));
+                assert!(spec.width.is_none());
+                assert!(spec.align.is_none());
+            }
+            _ => panic!("expected Expr part"),
+        },
+        _ => panic!("expected InterpolatedString"),
+    }
+}
+
+/// Phase 2 #06.B: `"#{x:*<10.3?}"` parses fill=`*`, align=`<`,
+/// width=10, precision=3, debug=true. Exercises the full spec.
+#[test]
+fn test_interpolation_full_spec() {
+    let kinds = lex_kinds("\"#{x:*<10.3?}\"");
+    match &kinds[0] {
+        TokenKind::InterpolatedString(parts) => match &parts[0] {
+            StringPart::Expr { spec, .. } => {
+                assert_eq!(spec.fill, Some('*'));
+                assert_eq!(spec.align, Some('<'));
+                assert_eq!(spec.width, Some(10));
+                assert_eq!(spec.precision, Some(3));
+                assert!(spec.debug);
+            }
+            _ => panic!("expected Expr part"),
+        },
+        _ => panic!("expected InterpolatedString"),
     }
 }
 
@@ -1048,7 +1140,7 @@ fn test_hash_in_interpolated_string() {
             assert_eq!(parts.len(), 3);
             assert_eq!(parts[0], StringPart::Literal("Task #".into()));
             match &parts[1] {
-                StringPart::Expr(tokens) => {
+                StringPart::Expr { tokens, .. } => {
                     assert_eq!(tokens[0].kind, TokenKind::Identifier("id".into()));
                 }
                 _ => panic!("expected expr"),

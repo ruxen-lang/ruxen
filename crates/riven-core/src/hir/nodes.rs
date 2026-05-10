@@ -247,7 +247,14 @@ pub enum HirExprKind {
 #[derive(Debug, Clone)]
 pub enum HirInterpolationPart {
     Literal(String),
-    Expr(HirExpr),
+    /// Phase 2 #06.B: interpolated expression with optional format
+    /// spec (default = bare `"#{x}"`). The spec is captured at lex
+    /// time and threaded through to MIR for Phase C (`:?` debug
+    /// dispatch) and Phase D (Display routing with width/precision).
+    Expr {
+        expr: HirExpr,
+        spec: crate::lexer::token::FormatSpec,
+    },
 }
 
 // ─── Match Arms ─────────────────────────────────────────────────────
