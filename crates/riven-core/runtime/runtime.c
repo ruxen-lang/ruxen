@@ -244,6 +244,79 @@ void *riven_stdin_read_to_string(void *handle) {
     return riven_stream_read_to_string(riven_stream_from_handle(handle, stdin));
 }
 
+/* Phase 2 stdlib (#06.2): `Stdin.lines() -> Vec[Result[String, IoError]]`.
+ *
+ * v1 simplification of Rust's `BufRead::lines`: read all of stdin to
+ * EOF up front, split on '\n', materialise into a `RivenVec*` of
+ * `Result::Ok(line)` elements. If the read itself fails the returned
+ * vec contains a single `Result::Err(IoError(strerror))`. Newlines are
+ * stripped from each line; a trailing '\n' does NOT produce a final
+ * empty element (matches Rust). Empty input → empty vec. */
+void *riven_stdin_lines(void *handle) {
+    FILE *stream = riven_stream_from_handle(handle, stdin);
+
+    size_t cap = 256;
+    size_t len = 0;
+    char *buf = (char *)malloc(cap);
+    int ch;
+
+    if (!buf) {
+        riven_panic("out of memory");
+    }
+
+    while ((ch = fgetc(stream)) != EOF) {
+        if (len + 1 >= cap) {
+            size_t next_cap = cap * 2;
+            char *next = (char *)realloc(buf, next_cap);
+            if (!next) {
+                free(buf);
+                riven_panic("out of memory");
+            }
+            buf = next;
+            cap = next_cap;
+        }
+        buf[len++] = (char)ch;
+    }
+
+    /* Capture errno BEFORE any other call that might clobber it. The
+     * original `errno` from a failed `fgetc` could be overwritten by
+     * `riven_vec_new` (allocator path) or `clearerr`, so snapshot it
+     * here. */
+    int saved_errno = errno;
+
+    RivenVec *v = riven_vec_new();
+
+    if (ferror(stream)) {
+        const char *err = strerror(saved_errno);
+        free(buf);
+        clearerr(stream);
+        riven_vec_push(v, (int64_t)riven_io_error_message(err));
+        return v;
+    }
+
+    size_t line_start = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (buf[i] == '\n') {
+            size_t line_len = i - line_start;
+            char *line = (char *)riven_alloc(line_len + 1);
+            memcpy(line, &buf[line_start], line_len);
+            line[line_len] = '\0';
+            riven_vec_push(v, (int64_t)riven_result_ok_value((int64_t)line));
+            line_start = i + 1;
+        }
+    }
+    if (line_start < len) {
+        size_t line_len = len - line_start;
+        char *line = (char *)riven_alloc(line_len + 1);
+        memcpy(line, &buf[line_start], line_len);
+        line[line_len] = '\0';
+        riven_vec_push(v, (int64_t)riven_result_ok_value((int64_t)line));
+    }
+
+    free(buf);
+    return v;
+}
+
 void *riven_stdout_write_str(void *handle, const char *s) {
     FILE *stream = riven_stream_from_handle(handle, stdout);
     const char *text = s ? s : "";

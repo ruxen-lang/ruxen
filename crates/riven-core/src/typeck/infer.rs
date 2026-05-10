@@ -1768,6 +1768,20 @@ impl<'a> InferenceEngine<'a> {
                     generic_args: vec![],
                 }),
             )),
+            // Phase 2 stdlib (#06.2): `Stdin.lines()` returns
+            // `Vec[Result[String, IoError]]`. v1 simplification of
+            // Rust's `BufRead::lines` iterator — every line is read
+            // up front (see `riven_stdin_lines` in runtime.c). On
+            // read failure the vec holds a single Err element.
+            (Ty::Class { name, .. }, "lines") if name == "Stdin" => Some(Ty::Vec(Box::new(
+                Ty::Result(
+                    Box::new(Ty::String),
+                    Box::new(Ty::Class {
+                        name: "IoError".to_string(),
+                        generic_args: vec![],
+                    }),
+                ),
+            ))),
             (Ty::Class { name, .. }, "write_str") if name == "Stdout" || name == "Stderr" => {
                 Some(Ty::Result(
                     Box::new(Ty::Unit),

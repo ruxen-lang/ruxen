@@ -50,6 +50,7 @@ pub fn declare_runtime_functions<'ctx>(module: &Module<'ctx>, context: &'ctx Con
     decl!("riven_stderr", ptr_ty, []);
     decl!("riven_stdin_read_line", ptr_ty, [ptr_ty]);
     decl!("riven_stdin_read_to_string", ptr_ty, [ptr_ty]);
+    decl!("riven_stdin_lines", ptr_ty, [ptr_ty]);
     decl!("riven_stdout_write_str", ptr_ty, [ptr_ty, ptr_ty]);
     decl!("riven_stdout_flush", ptr_ty, [ptr_ty]);
     decl!("riven_stderr_write_str", ptr_ty, [ptr_ty, ptr_ty]);

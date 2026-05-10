@@ -72,14 +72,27 @@
       (`is_file`, `is_dir`, `read_dir`) shipped as a first batch with
       positive integration tests in `crates/riven-core/tests/stdlib_env.rs`
       + `stdlib_fs.rs` and a negative test for `read_dir` on a missing
-      path. Still pending: full `std::io` (`Stdin`/`Stdout`/`Stderr`
-      surface + `IoError` enum), `std::fmt` (`Display` trait +
-      `Formatter`), `std::process::Command` builder. `fs::metadata`
-      deferred — needs a struct surface to expose size / kind / mtime;
-      the boolean helpers (`is_file`, `is_dir`) plus the existing
-      `exists` cover the v1 minimum.
+      path. **`std::io` surface shipped (#06.2):** `Stdin.read_line` /
+      `read_to_string` / `lines` (Vec[Result[String, IoError]] —
+      v1 simplification of Rust's BufRead iterator); `Stdout.write_str`
+      / `flush` / `print` / `println`; `Stderr.write_str` / `flush` /
+      `eprint` / `eprintln`. Tests in `crates/riven-core/tests/stdlib_io.rs`
+      cover positive paths for every method + Stdin.lines edge cases
+      (trailing newline, partial final line, empty input). Still
+      pending: `std::fmt` (`Display` trait + `Formatter`),
+      `std::process::Command` builder. `fs::metadata` deferred — needs
+      a struct surface to expose size / kind / mtime; the boolean
+      helpers (`is_file`, `is_dir`) plus the existing `exists` cover
+      the v1 minimum. **`IoError` shipped as message-only**
+      (`riven_io_error_message` wraps strerror in `Result::Err`);
+      tagged-variant matching (`NotFound` / `PermissionDenied` /
+      `Interrupted` / `UnexpectedEof` / `Other`) deferred to v2 —
+      requires changing the FFI repr of `Result::Err(IoError)` from
+      `char*` to a heap struct `{u32 tag; char* msg}` and updating
+      27 callsites.
 - [ ] String interpolation routes through `Display::fmt`.
 - [ ] `Debug` interpolation `"#{x:?}"` works for any `derive Debug`
       type.
 - [ ] CI green.
-- [ ] CHANGELOG bullet. **Partial:** env/fs first-batch entry shipped.
+- [ ] CHANGELOG bullet. **Partial:** env/fs first-batch + std::io
+      surface entries shipped.
