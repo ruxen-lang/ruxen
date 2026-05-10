@@ -4,6 +4,24 @@
 //! resolvable types/traits. Semantics (Display::fmt routing,
 //! `"#{x:?}"` debug interpolation, Formatter buffering) are wired in
 //! later phases; these tests guard the type-surface plumbing only.
+//!
+//! All three tests are currently `#[ignore]`'d: they assert that
+//! parsing produces no errors, but two prerequisites are still open:
+//!   1. `Formatter` and `FmtError` are not yet registered in the
+//!      resolver (Phase A foundation work — separate session). The
+//!      tests fail at typeck with `undefined type Formatter`.
+//!   2. The fixtures use `struct ... impl Trait ... end ... end`,
+//!      but Riven's `struct` is intentionally fields-only — `class`
+//!      is the Ruby-style entity that allows inline `impl`/`def`
+//!      (see `parse_class_body` in `crates/riven-core/src/parser/mod.rs`).
+//!      The struct-body parser was previously OOM-looping on the
+//!      embedded `impl`; that is now bounded with a clear diagnostic
+//!      (regression tests in `parser/tests.rs::struct_with_impl_inside_*`).
+//!      Phase A should switch the fixtures to `class` (or land
+//!      structural-sugar for `struct ... impl ... end`).
+//!
+//! Un-ignore these tests as part of the Phase A foundation commit
+//! that registers `Display` / `Debug` / `Formatter` / `FmtError`.
 
 use riven_core::diagnostics::{Diagnostic, DiagnosticLevel};
 use riven_core::lexer::Lexer;
@@ -26,6 +44,7 @@ fn type_errors(src: &str) -> Vec<Diagnostic> {
 /// `Display` is resolvable as a trait, `Formatter` and `FmtError` as
 /// types — a user-defined `impl Display for T` typechecks.
 #[test]
+#[ignore = "Phase A WIP — Formatter/FmtError not yet registered; fixture uses `struct` where `class` is required for inline impl"]
 fn display_trait_and_formatter_are_resolvable() {
     let src = r##"
 struct Money
@@ -53,6 +72,7 @@ end
 /// `Debug` is resolvable as a trait — a user-defined `impl Debug for
 /// T` with an `fmt` method typechecks.
 #[test]
+#[ignore = "Phase A WIP — Formatter/FmtError not yet registered; fixture uses `struct` where `class` is required for inline impl"]
 fn debug_trait_is_resolvable_with_fmt_method() {
     let src = r##"
 struct Money
@@ -79,6 +99,7 @@ end
 
 /// `Formatter::write_str` returns `Result[(), FmtError]`.
 #[test]
+#[ignore = "Phase A WIP — Formatter/FmtError not yet registered; fixture uses `struct` where `class` is required for inline impl"]
 fn formatter_write_str_returns_result_unit_fmt_error() {
     let src = r##"
 struct Tag

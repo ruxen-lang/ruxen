@@ -1470,12 +1470,14 @@ impl Parser {
                 let mut stmts = vec![Statement::Expression(expr)];
                 self.skip_newlines();
                 while !self.at(TokenKind::RBrace) && !self.at(TokenKind::Eof) {
+                    let __progress = self.pos;
                     self.skip_newlines();
                     if self.at(TokenKind::RBrace) {
                         break;
                     }
                     stmts.push(self.parse_statement());
                     self.skip_newlines();
+                    self.ensure_loop_progress(__progress);
                 }
                 ClosureBody::Block(Block {
                     statements: stmts,
@@ -1706,12 +1708,14 @@ impl Parser {
 
         let mut arms = Vec::new();
         while !self.at(TokenKind::End) && !self.at(TokenKind::Eof) {
+            let __progress = self.pos;
             self.skip_newlines();
             if self.at(TokenKind::End) {
                 break;
             }
             arms.push(self.parse_match_arm());
             self.skip_newlines();
+            self.ensure_loop_progress(__progress);
         }
 
         self.expect(TokenKind::End);

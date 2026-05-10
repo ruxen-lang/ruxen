@@ -1111,6 +1111,128 @@ end";
         assert_eq!(s.fields[1].name, "y");
     }
 
+    /// Regression: `impl`/`def` inside a struct body must produce a
+    /// bounded diagnostic, not infinite-loop while pushing placeholder
+    /// FieldDecls until OOM (≈1.25 GiB observed before fix). The
+    /// `expect_identifier` helper does NOT advance on a non-identifier
+    /// token, so without explicit recovery in `parse_struct_def` the
+    /// outer loop repeatedly invokes `parse_field_decl` on the same
+    /// `Impl` / `Def` token.
+    ///
+    /// Use `class` if you want method bodies inline (Ruby-style); the
+    /// `struct` keyword is intentionally fields-only.
+    #[test]
+    fn struct_with_impl_inside_errors_without_oom() {
+        let src = "\
+struct Money
+  cents: Int
+
+  impl Display
+    def fmt
+      Ok(())
+    end
+  end
+end";
+        let mut lexer = Lexer::new(src);
+        let tokens = lexer.tokenize().expect("lex");
+        let mut parser = Parser::new(tokens);
+        // 50ms is generous — well-formed input parses in <1ms; the
+        // pre-fix bug ran until OOM (multiple seconds + GiBs of RAM).
+        let start = std::time::Instant::now();
+        let result = parser.parse();
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_millis(50),
+            "parse took {:?}; expected <50ms — guarding against the OOM-loop regression",
+            elapsed
+        );
+        let diags = result.expect_err("expected parse to fail with diagnostics");
+        let msg = diags
+            .iter()
+            .map(|d| d.message.as_str())
+            .collect::<Vec<_>>()
+            .join(" | ");
+        assert!(
+            msg.contains("`impl` blocks are not allowed inside `struct` bodies"),
+            "missing `impl` rejection diagnostic; got: {}",
+            msg
+        );
+    }
+
+    /// Regression: the universal `Parser::ensure_loop_progress` guard
+    /// must bound any body-loop where the per-iteration parser fails
+    /// to advance the cursor. Tests trait-body recovery here — without
+    /// the guard, `parse_trait_item` calls `synchronize()` on a
+    /// `class` keyword (itself a sync point) which is a no-op, and
+    /// the outer body-loop spins. The guard's `error + advance`
+    /// fallback bounds the parse.
+    #[test]
+    fn trait_with_rogue_token_inside_errors_without_oom() {
+        let src = "\
+trait MyTrait
+  class Bogus
+end";
+        let mut lexer = Lexer::new(src);
+        let tokens = lexer.tokenize().expect("lex");
+        let mut parser = Parser::new(tokens);
+        let start = std::time::Instant::now();
+        let result = parser.parse();
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_millis(50),
+            "parse took {:?}; expected <50ms — guarding against the OOM-loop regression",
+            elapsed
+        );
+        // Parse must have produced diagnostics. We don't pin the
+        // exact message because either the trait-body recovery
+        // diagnostic OR the universal guard diagnostic is an
+        // acceptable signal — the invariant is bounded time +
+        // non-empty diagnostic set.
+        let diags = result.expect_err("expected parse to fail with diagnostics");
+        assert!(
+            !diags.is_empty(),
+            "expected at least one diagnostic from guard or parse_trait_item recovery"
+        );
+    }
+
+    /// Regression: `def` (non-impl) inside a struct body must also
+    /// produce a bounded diagnostic. Same root cause as the
+    /// `impl`-inside-struct case — the outer loop must not blindly
+    /// retry `parse_field_decl` on a non-identifier keyword.
+    #[test]
+    fn struct_with_def_inside_errors_without_oom() {
+        let src = "\
+struct Money
+  cents: Int
+
+  def total
+    self.cents
+  end
+end";
+        let mut lexer = Lexer::new(src);
+        let tokens = lexer.tokenize().expect("lex");
+        let mut parser = Parser::new(tokens);
+        let start = std::time::Instant::now();
+        let result = parser.parse();
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_millis(50),
+            "parse took {:?}; expected <50ms — guarding against the OOM-loop regression",
+            elapsed
+        );
+        let diags = result.expect_err("expected parse to fail with diagnostics");
+        let msg = diags
+            .iter()
+            .map(|d| d.message.as_str())
+            .collect::<Vec<_>>()
+            .join(" | ");
+        assert!(
+            msg.contains("method definitions are not allowed inside `struct` bodies"),
+            "missing `def` rejection diagnostic; got: {}",
+            msg
+        );
+    }
+
     #[test]
     fn use_simple() {
         let program = parse("use Collections.Vec");

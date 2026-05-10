@@ -326,6 +326,49 @@ impl Parser {
         tok
     }
 
+    /// Universal anti-OOM guard for parser body-loops.
+    ///
+    /// Many `parse_X_def` methods iterate
+    /// `while !self.at(End) && !self.at(Eof) { self.parse_X_item(); }`.
+    /// If `parse_X_item` doesn't advance the cursor — typically because
+    /// `expect_identifier` / `expect(kind)` reported a missing terminal
+    /// without advancing on mismatch — the outer loop spins on the same
+    /// token forever and unbounded-allocates placeholder AST nodes
+    /// (≈1.25 GiB observed on `struct ... impl Display ... end ... end`
+    /// before the targeted fix in `parse_struct_def`).
+    ///
+    /// Caveat: `Parser::synchronize()` stops at top-level keywords
+    /// (`Impl`, `Def`, `Class`, ...) so it is a no-op when the
+    /// offending token is itself a sync point. The body-loop *must*
+    /// either consume the offending block via the appropriate
+    /// sub-parser (`parse_inner_impl` / `parse_func_def`) OR call this
+    /// helper to force one token of forward progress.
+    ///
+    /// Call at the BOTTOM of every body-loop iteration with the cursor
+    /// position captured at the TOP. Returns whether progress was
+    /// natural (`true`) or had to be forced (`false`); the boolean is
+    /// useful for tests but most callers can ignore it.
+    pub(crate) fn ensure_loop_progress(&mut self, before_pos: usize) -> bool {
+        if self.pos > before_pos {
+            return true;
+        }
+        if self.at(TokenKind::Eof) {
+            // The outer loop's `!self.at(Eof)` guard will terminate
+            // on the next check; nothing to advance past.
+            return true;
+        }
+        // The body-loop iteration consumed zero tokens despite not
+        // being at EOF. Emit a structured diagnostic and force-advance
+        // so the loop cannot spin.
+        self.error(&format!(
+            "parser made no progress at {:?} — forcing advance to avoid an OOM loop \
+             (this is a parser bug; please report)",
+            self.current_kind()
+        ));
+        self.advance();
+        false
+    }
+
     pub(crate) fn at(&self, kind: TokenKind) -> bool {
         std::mem::discriminant(self.current_kind()) == std::mem::discriminant(&kind)
     }
@@ -705,6 +748,7 @@ impl Parser {
 
         let mut items = Vec::new();
         while !self.at(TokenKind::End) && !self.at(TokenKind::Eof) {
+            let __progress = self.pos;
             self.skip_newlines();
             if self.at(TokenKind::End) {
                 break;
@@ -714,6 +758,7 @@ impl Parser {
             } else {
                 self.synchronize();
             }
+            self.ensure_loop_progress(__progress);
         }
         self.expect(TokenKind::End);
         let span = self.span_from(&start);
@@ -864,6 +909,7 @@ impl Parser {
         let mut variants = Vec::new();
         let mut derive_traits = Vec::new();
         while !self.at(TokenKind::End) && !self.at(TokenKind::Eof) {
+            let __progress = self.pos;
             self.skip_newlines();
             if self.at(TokenKind::End) {
                 break;
@@ -875,10 +921,12 @@ impl Parser {
                     self.skip_newlines();
                     derive_traits.push(self.expect_type_identifier());
                 }
+                self.ensure_loop_progress(__progress);
                 continue;
             }
             variants.push(self.parse_variant());
             self.skip_newlines();
+            self.ensure_loop_progress(__progress);
         }
         self.expect(TokenKind::End);
         let span = self.span_from(&start);
@@ -1016,24 +1064,79 @@ impl Parser {
         let mut derive_traits = Vec::new();
 
         while !self.at(TokenKind::End) && !self.at(TokenKind::Eof) {
+            let __progress = self.pos;
             self.skip_newlines();
             if self.at(TokenKind::End) {
                 break;
             }
 
-            if self.at(TokenKind::Derive) {
-                self.advance();
-                // derive Trait1, Trait2, ...
-                derive_traits.push(self.expect_type_identifier());
-                while self.eat(TokenKind::Comma) {
-                    self.skip_newlines();
+            match self.current_kind().clone() {
+                TokenKind::Derive => {
+                    self.advance();
+                    // derive Trait1, Trait2, ...
                     derive_traits.push(self.expect_type_identifier());
+                    while self.eat(TokenKind::Comma) {
+                        self.skip_newlines();
+                        derive_traits.push(self.expect_type_identifier());
+                    }
                 }
-                continue;
+                TokenKind::Pub | TokenKind::Protected => {
+                    let vis = self.parse_visibility();
+                    fields.push(self.parse_field_decl_with_vis(vis));
+                }
+                TokenKind::Identifier(_) => {
+                    fields.push(self.parse_field_decl());
+                }
+                // Reject — but DON'T loop. Emit a structured error and
+                // consume the offending block so parsing makes progress.
+                // Without this, `parse_field_decl` would call
+                // `expect_identifier` on (e.g.) `Impl`, which emits a
+                // diagnostic but does NOT advance the cursor; the outer
+                // loop then re-enters with the same token and pushes a
+                // placeholder field forever (OOM at ~1 GiB of empty
+                // FieldDecls). Class bodies allow inline `impl`/`def`
+                // (see `parse_class_body`); structs intentionally do not.
+                TokenKind::Impl => {
+                    self.error(
+                        "`impl` blocks are not allowed inside `struct` bodies; \
+                         write `impl Trait for StructName ... end` outside the struct, \
+                         or use `class` instead of `struct` if you want method bodies inline",
+                    );
+                    // Consume `impl ... end` to keep the cursor moving.
+                    let _ = self.parse_inner_impl(false);
+                }
+                TokenKind::Unsafe if matches!(self.peek_kind(), TokenKind::Impl) => {
+                    self.error(
+                        "`unsafe impl` blocks are not allowed inside `struct` bodies; \
+                         write `unsafe impl Trait for StructName ... end` outside the struct",
+                    );
+                    self.advance(); // consume `unsafe`
+                    let _ = self.parse_inner_impl(true);
+                }
+                TokenKind::Def | TokenKind::Async => {
+                    self.error(
+                        "method definitions are not allowed inside `struct` bodies; \
+                         declare an `impl StructName ... def name ... end ... end` block \
+                         outside the struct, or switch to `class` for inline methods",
+                    );
+                    let _ = self.parse_func_def(Visibility::Private);
+                }
+                _ => {
+                    self.error(&format!(
+                        "expected field declaration in struct body, found {:?}",
+                        self.current_kind()
+                    ));
+                    // Hard-advance one token so we cannot loop on a sync
+                    // keyword that `synchronize()` would itself stop at
+                    // (e.g. `Impl`, `Def`, `Class`).
+                    if !self.at(TokenKind::Eof) {
+                        self.advance();
+                    }
+                    self.synchronize();
+                }
             }
-
-            fields.push(self.parse_field_decl());
             self.skip_newlines();
+            self.ensure_loop_progress(__progress);
         }
         self.expect(TokenKind::End);
         let span = self.span_from(&start);
@@ -1071,6 +1174,7 @@ impl Parser {
 
         let mut items = Vec::new();
         while !self.at(TokenKind::End) && !self.at(TokenKind::Eof) {
+            let __progress = self.pos;
             self.skip_newlines();
             if self.at(TokenKind::End) {
                 break;
@@ -1086,6 +1190,7 @@ impl Parser {
             }
             items.push(self.parse_trait_item());
             self.skip_newlines();
+            self.ensure_loop_progress(__progress);
         }
         self.expect(TokenKind::End);
         let span = self.span_from(&start);
@@ -1315,6 +1420,7 @@ impl Parser {
 
         let mut items = Vec::new();
         while !self.at(TokenKind::End) && !self.at(TokenKind::Eof) {
+            let __progress = self.pos;
             self.skip_newlines();
             if self.at(TokenKind::End) {
                 break;
@@ -1330,6 +1436,7 @@ impl Parser {
             }
             items.push(self.parse_impl_item());
             self.skip_newlines();
+            self.ensure_loop_progress(__progress);
         }
         self.expect(TokenKind::End);
         let span = self.span_from(&start);
@@ -1395,6 +1502,7 @@ impl Parser {
         let mut derive_traits = Vec::new();
 
         while !self.at(TokenKind::End) && !self.at(TokenKind::Eof) {
+            let __progress = self.pos;
             self.skip_newlines();
             if self.at(TokenKind::End) {
                 break;
@@ -1449,10 +1557,17 @@ impl Parser {
                         "expected field, method, or impl in class body, found {:?}",
                         self.current_kind()
                     ));
+                    // Hard-advance one token first; otherwise
+                    // `synchronize()` is a no-op when the offending
+                    // token is itself a sync point (Impl/Def/Class/...).
+                    if !self.at(TokenKind::Eof) {
+                        self.advance();
+                    }
                     self.synchronize();
                 }
             }
             self.skip_newlines();
+            self.ensure_loop_progress(__progress);
         }
         self.expect(TokenKind::End);
         let span = self.span_from(&start);
@@ -1478,12 +1593,14 @@ impl Parser {
 
         let mut items = Vec::new();
         while !self.at(TokenKind::End) && !self.at(TokenKind::Eof) {
+            let __progress = self.pos;
             self.skip_newlines();
             if self.at(TokenKind::End) {
                 break;
             }
             items.push(self.parse_impl_item());
             self.skip_newlines();
+            self.ensure_loop_progress(__progress);
         }
         self.expect(TokenKind::End);
         let span = self.span_from(&start);
@@ -1972,6 +2089,7 @@ impl Parser {
         let mut functions = Vec::new();
 
         while !self.at(TokenKind::End) && !self.at(TokenKind::Eof) {
+            let __progress = self.pos;
             self.skip_newlines();
             if self.at(TokenKind::End) {
                 break;
@@ -1986,6 +2104,7 @@ impl Parser {
                 self.advance();
             }
             self.expect_terminator();
+            self.ensure_loop_progress(__progress);
         }
 
         self.expect(TokenKind::End);
@@ -2021,6 +2140,7 @@ impl Parser {
         let mut functions = Vec::new();
 
         while !self.at(TokenKind::End) && !self.at(TokenKind::Eof) {
+            let __progress = self.pos;
             self.skip_newlines();
             if self.at(TokenKind::End) {
                 break;
@@ -2035,6 +2155,7 @@ impl Parser {
                 self.advance();
             }
             self.expect_terminator();
+            self.ensure_loop_progress(__progress);
         }
 
         self.expect(TokenKind::End);
