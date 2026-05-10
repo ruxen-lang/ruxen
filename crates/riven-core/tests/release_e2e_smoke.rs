@@ -145,7 +145,13 @@ fn compile_and_run(case_name: &str) -> CaseOutcome {
     }
 }
 
+// Gated with `#[ignore]`: 213 fixtures × in-process compile-and-run
+// pushes a workspace `cargo test` to ~1h on PR runners, so this is
+// kept off the default suite (PRs) and is only invoked on the
+// post-merge `release-e2e` job in `.github/workflows/ci.yml` (and
+// any time a developer runs `cargo test ... -- --ignored` locally).
 #[test]
+#[ignore]
 fn release_e2e_all_fixtures() {
     let cases_dir = workspace_root().join("tests/release-e2e/cases");
     let mut names: Vec<String> = std::fs::read_dir(&cases_dir)

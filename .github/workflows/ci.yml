@@ -33,6 +33,31 @@ jobs:
       - name: cargo test
         run: cargo test --workspace --no-fail-fast
 
+  # Release-e2e fixture sweep (213 cases × compile-and-run). Gated to
+  # post-merge `push` events only — the in-process harness pushes PR
+  # CI past 1h, while the per-fixture diff coverage is most valuable
+  # against `master` rather than every feature branch. Re-run locally
+  # with `cargo test -p riven-core --test release_e2e_smoke -- --ignored`.
+  release-e2e:
+    name: Release E2E (${{ matrix.os }})
+    if: github.event_name == 'push'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo test (release-e2e fixtures)
+        run: cargo test -p riven-core --test release_e2e_smoke -- --ignored --nocapture
+
   msrv:
     name: MSRV (1.91)
     runs-on: ubuntu-latest
