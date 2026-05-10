@@ -5,12 +5,24 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Compile the C runtime as a static library for testing.
+/// Per-test unique suffix for files in `std::env::temp_dir()`. Cargo
+/// runs `#[test]` fns on a thread pool, so any fixed-name temp file
+/// collides across parallel tests; we append `(pid, counter)` to keep
+/// each test's intermediate files separate.
+fn unique_suffix() -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{}_{}", std::process::id(), n)
+}
+
+/// Compile the C runtime to a fresh `.o` file. Each call produces a
+/// distinct path so parallel callers don't race on shared output.
 fn compile_runtime() -> std::path::PathBuf {
     let crate_dir = env!("CARGO_MANIFEST_DIR");
     let runtime_c = Path::new(crate_dir).join("runtime").join("runtime.c");
-    let runtime_o = std::env::temp_dir().join("riven_runtime_test.o");
+    let runtime_o = std::env::temp_dir().join(format!("riven_runtime_test_{}.o", unique_suffix()));
 
     let status = Command::new("cc")
         .arg("-c")
@@ -34,9 +46,9 @@ fn compile_runtime() -> std::path::PathBuf {
 fn compile_c_harness(name: &str, source: &str) -> PathBuf {
     let runtime_o = compile_runtime();
     let temp_dir = std::env::temp_dir();
-    let pid = std::process::id();
-    let harness_c = temp_dir.join(format!("{name}_{pid}.c"));
-    let harness_exe = temp_dir.join(format!("{name}_{pid}"));
+    let suffix = unique_suffix();
+    let harness_c = temp_dir.join(format!("{name}_{suffix}.c"));
+    let harness_exe = temp_dir.join(format!("{name}_{suffix}"));
 
     std::fs::write(&harness_c, source).expect("write harness");
 
@@ -63,7 +75,8 @@ fn runtime_compiles_with_strict_warnings() {
 fn runtime_compiles_with_sanitizers() {
     let crate_dir = env!("CARGO_MANIFEST_DIR");
     let runtime_c = Path::new(crate_dir).join("runtime").join("runtime.c");
-    let runtime_o = std::env::temp_dir().join("riven_runtime_asan_test.o");
+    let runtime_o =
+        std::env::temp_dir().join(format!("riven_runtime_asan_test_{}.o", unique_suffix()));
 
     let status = Command::new("cc")
         .arg("-c")

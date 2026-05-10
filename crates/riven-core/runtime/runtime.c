@@ -2125,16 +2125,26 @@ int64_t riven_process_run(const char *cmd, RivenVec *args) {
 
     pid_t pid = fork();
     if (pid < 0) {
+        int saved = errno;
+        fprintf(stderr, "riven_process_run: fork failed: %s (errno=%d)\n",
+                strerror(saved), saved);
         free(argv);
         return 127;
     }
 
     if (pid == 0) {
         /* Child: replace image. On success, execvp does not return.
-           On failure, we have to bail with `_exit` (not `exit`) so
-           the parent's atexit/stdio cleanup is not duplicated. The
-           parent will see this as exit code 127. */
+           On failure, write the cause to stderr (the parent's stderr
+           is inherited) so CI logs surface *why* exec failed instead
+           of just "child exited 127". Then `_exit` (not `exit`) so
+           the parent's atexit/stdio cleanup is not duplicated. */
         execvp(cmd, argv);
+        int saved = errno;
+        fprintf(stderr,
+                "riven_process_run: execvp(\"%s\") failed: %s (errno=%d)\n",
+                cmd ? cmd : "(null)",
+                strerror(saved),
+                saved);
         _exit(127);
     }
 
@@ -2146,6 +2156,9 @@ int64_t riven_process_run(const char *cmd, RivenVec *args) {
         if (errno == EINTR) {
             continue;
         }
+        int saved = errno;
+        fprintf(stderr, "riven_process_run: waitpid failed: %s (errno=%d)\n",
+                strerror(saved), saved);
         return 127;
     }
 
