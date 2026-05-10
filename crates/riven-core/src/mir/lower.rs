@@ -4527,7 +4527,7 @@ impl<'a> Lowerer<'a> {
         // result = closure(a, b); if result > 0: swap(i, j).
         self.current_block = inner_body;
         let elem_ty = element_type_of(&self.fn_local_ty(vec_id));
-        let a_local = if let Some(param) = closure_params.get(0) {
+        let a_local = if let Some(param) = closure_params.first() {
             let l = self.new_local_named(&param.name, param.ty.clone(), false);
             self.def_to_local.insert(param.def_id, l);
             self.emit(MirInst::Call {
@@ -5573,6 +5573,7 @@ impl<'a> Lowerer<'a> {
     /// short-circuit on different boolean values:
     ///   - `all`: stop and return `false` on the first `false`
     ///   - `any`: stop and return `true`  on the first `true`
+    ///
     /// The `is_all` flag selects between these two early-exit modes.
     /// On a fully-iterated empty/uneventful sequence the result is
     /// the *vacuous truth* for `all` (`true`) or the *vacuous
@@ -8321,9 +8322,7 @@ fn compute_dealloc_safe_locals(func: &MirFunction) -> std::collections::HashSet<
                         "riven_vec_chain",
                         "riven_vec_zip",
                     ];
-                    let returns_fresh_alloc = FRESH_ALLOC_CALLEES
-                        .iter()
-                        .any(|name| *name == callee.as_str());
+                    let returns_fresh_alloc = FRESH_ALLOC_CALLEES.contains(&callee.as_str());
                     if let Some(d) = dest {
                         if returns_fresh_alloc && !tainted_perm.contains(d) {
                             alloc_rooted.insert(*d);

@@ -224,10 +224,6 @@ fn write_tracking_runtime(target: &PathBuf) {
     // splice is a no-op and the corresponding counter simply stays at 0,
     // which manifests as a test-level assertion failure that points the
     // coder at the missing helper.
-    tracked = tracked.replace(
-        "void riven_test_free_string_marker(",
-        "void riven_test_free_string_marker(",
-    );
     tracked = inject_helper_counter(
         &tracked,
         "void riven_string_free(char *s) {",

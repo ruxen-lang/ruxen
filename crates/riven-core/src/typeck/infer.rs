@@ -1678,7 +1678,7 @@ impl<'a> InferenceEngine<'a> {
                 // pass through silently — they will be either pinned by
                 // a downstream constraint (still numeric) or already
                 // surfaced as a separate diagnostic.
-                let elem = generic_args.first().cloned().unwrap_or_else(|| Ty::Int);
+                let elem = generic_args.first().cloned().unwrap_or(Ty::Int);
                 let resolved = self.ctx.resolve(&elem);
                 if !is_iter_sum_compatible(&resolved) {
                     self.diagnostics.push(Diagnostic::error_with_code(
@@ -1773,15 +1773,15 @@ impl<'a> InferenceEngine<'a> {
             // Rust's `BufRead::lines` iterator — every line is read
             // up front (see `riven_stdin_lines` in runtime.c). On
             // read failure the vec holds a single Err element.
-            (Ty::Class { name, .. }, "lines") if name == "Stdin" => Some(Ty::Vec(Box::new(
-                Ty::Result(
+            (Ty::Class { name, .. }, "lines") if name == "Stdin" => {
+                Some(Ty::Vec(Box::new(Ty::Result(
                     Box::new(Ty::String),
                     Box::new(Ty::Class {
                         name: "IoError".to_string(),
                         generic_args: vec![],
                     }),
-                ),
-            ))),
+                ))))
+            }
             (Ty::Class { name, .. }, "write_str") if name == "Stdout" || name == "Stderr" => {
                 Some(Ty::Result(
                     Box::new(Ty::Unit),

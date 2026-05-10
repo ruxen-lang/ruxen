@@ -259,7 +259,11 @@ end
 "##;
     let (stdout, stderr, ok) = compile_and_run(source, "stdlib_io_stderr_write");
     assert!(ok);
-    assert!(stdout.is_empty(), "stdout should be empty, got: {:?}", stdout);
+    assert!(
+        stdout.is_empty(),
+        "stdout should be empty, got: {:?}",
+        stdout
+    );
     assert_eq!(stderr, "oops!", "got stderr: {:?}", stderr);
 }
 
@@ -339,8 +343,7 @@ def main
   out.println(lines.len.to_string())
 end
 "##;
-    let (stdout, _stderr, ok) =
-        compile_and_run_with_stdin(source, "stdlib_io_lines_empty", b"");
+    let (stdout, _stderr, ok) = compile_and_run_with_stdin(source, "stdlib_io_lines_empty", b"");
     assert!(ok);
     assert_eq!(stdout, "0\n", "got: {:?}", stdout);
 }
