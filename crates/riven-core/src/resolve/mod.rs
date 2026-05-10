@@ -191,7 +191,16 @@ impl Resolver {
             ("Clone", vec!["clone"]),
             ("Send", vec![]),
             ("Sync", vec![]),
-            ("Debug", vec![]),
+            // Phase 2 #06.A1: `Display` and `Debug` formal traits.
+            // Both share the `fmt(&self, &mut Formatter) -> Result[(), FmtError]`
+            // signature. `Display` is the canonical interpolation
+            // trait (Phase D will route `"#{x}"` through
+            // `Display::fmt`); `Debug` is the `"#{x:?}"` (and existing
+            // `derive Debug` synthesis) target. Required-methods list
+            // is `["fmt"]` for both — typeck checks user `impl
+            // Display for T` / `impl Debug for T` provides `fmt`.
+            ("Display", vec!["fmt"]),
+            ("Debug", vec!["fmt"]),
             ("PartialEq", vec!["eq"]),
             ("Eq", vec![]),
             ("Hash", vec!["hash"]),
@@ -723,6 +732,65 @@ impl Resolver {
             span.clone(),
         );
         self.type_registry.insert("Stderr".to_string(), stderr_id);
+
+        // Phase 2 #06.A1/A3: `std::fmt::Formatter` is the buffer that
+        // `Display::fmt` / `Debug::fmt` write into. v1 carries width
+        // / alignment / precision metadata as opaque internal fields
+        // (no public surface yet) plus a `Vec[Char]`-equivalent
+        // backing buffer at the runtime layer (`riven_fmt_*` helpers
+        // in `runtime.c`). Phase D wires the constructor + dispatch
+        // into `lower_interpolation`.
+        let formatter_id = self.symbols.define(
+            "Formatter".to_string(),
+            DefKind::Class {
+                info: ClassInfo {
+                    generic_params: vec![],
+                    parent: None,
+                    fields: vec![],
+                    methods: vec![],
+                    derive_traits: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                },
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.scopes
+            .insert_type("Formatter".to_string(), formatter_id);
+        self.type_registry
+            .insert("Formatter".to_string(), formatter_id);
+
+        // Phase 2 #06.A4: `std::fmt::FmtError` is a unit struct
+        // returned by `Formatter::write_str/write_char`. v1 has no
+        // variant payload (matches Rust's `std::fmt::Error`) — it's
+        // just a sentinel type. Registered as a class so it can
+        // appear in `Result[(), FmtError]` return annotations.
+        let fmt_error_id = self.symbols.define(
+            "FmtError".to_string(),
+            DefKind::Class {
+                info: ClassInfo {
+                    generic_params: vec![],
+                    parent: None,
+                    fields: vec![],
+                    methods: vec![],
+                    derive_traits: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                },
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.scopes
+            .insert_type("FmtError".to_string(), fmt_error_id);
+        self.type_registry
+            .insert("FmtError".to_string(), fmt_error_id);
+
         let context_id = self.symbols.define(
             "Context".to_string(),
             DefKind::Class {
@@ -1092,11 +1160,33 @@ impl Resolver {
             Visibility::Public,
             span.clone(),
         );
+        // Phase 2 #06.A1: `std::fmt` module — Display/Debug traits +
+        // Formatter/FmtError types. Lookups via `use std.fmt.{...}`.
+        // Display + Debug are registered as builtin traits above; we
+        // re-export their DefIds here so module-path resolution
+        // (`std.fmt.Display`) works.
+        let display_trait_id = *self
+            .type_registry
+            .get("Display")
+            .expect("Display trait registered above");
+        let debug_trait_id = *self
+            .type_registry
+            .get("Debug")
+            .expect("Debug trait registered above");
+        let fmt_id = self.symbols.define(
+            "fmt".to_string(),
+            DefKind::Module {
+                items: vec![display_trait_id, debug_trait_id, formatter_id, fmt_error_id],
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+
         let std_id = self.symbols.define(
             "std".to_string(),
             DefKind::Module {
                 items: vec![
-                    io_id, env_id, fs_id, process_id, time_id, path_id, net_id, sync_id,
+                    io_id, env_id, fs_id, process_id, time_id, path_id, net_id, sync_id, fmt_id,
                 ],
             },
             Visibility::Public,

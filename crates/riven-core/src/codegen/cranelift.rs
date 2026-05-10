@@ -1415,6 +1415,13 @@ fn runtime_signature(name: &str) -> Option<(Vec<Type>, Option<Type>)> {
         "riven_stdin_read_line" => Some((vec![types::I64], Some(types::I64))),
         "riven_stdin_read_to_string" => Some((vec![types::I64], Some(types::I64))),
         "riven_stdin_lines" => Some((vec![types::I64], Some(types::I64))),
+        // Phase 2 stdlib (#06.A3): std::fmt::Formatter buffer surface.
+        "riven_fmt_formatter_new" => Some((vec![], Some(types::I64))),
+        "riven_fmt_formatter_free" => Some((vec![types::I64], None)),
+        "riven_fmt_formatter_write_str" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "riven_fmt_formatter_write_char" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "riven_fmt_formatter_buffer" => Some((vec![types::I64], Some(types::I64))),
+        "riven_fmt_formatter_len" => Some((vec![types::I64], Some(types::I64))),
         "riven_stdout_write_str" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "riven_stdout_flush" => Some((vec![types::I64], Some(types::I64))),
         "riven_stderr_write_str" => Some((vec![types::I64, types::I64], Some(types::I64))),

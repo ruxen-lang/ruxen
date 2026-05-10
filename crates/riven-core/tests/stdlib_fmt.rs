@@ -5,23 +5,12 @@
 //! `"#{x:?}"` debug interpolation, Formatter buffering) are wired in
 //! later phases; these tests guard the type-surface plumbing only.
 //!
-//! All three tests are currently `#[ignore]`'d: they assert that
-//! parsing produces no errors, but two prerequisites are still open:
-//!   1. `Formatter` and `FmtError` are not yet registered in the
-//!      resolver (Phase A foundation work — separate session). The
-//!      tests fail at typeck with `undefined type Formatter`.
-//!   2. The fixtures use `struct ... impl Trait ... end ... end`,
-//!      but Riven's `struct` is intentionally fields-only — `class`
-//!      is the Ruby-style entity that allows inline `impl`/`def`
-//!      (see `parse_class_body` in `crates/riven-core/src/parser/mod.rs`).
-//!      The struct-body parser was previously OOM-looping on the
-//!      embedded `impl`; that is now bounded with a clear diagnostic
-//!      (regression tests in `parser/tests.rs::struct_with_impl_inside_*`).
-//!      Phase A should switch the fixtures to `class` (or land
-//!      structural-sugar for `struct ... impl ... end`).
-//!
-//! Un-ignore these tests as part of the Phase A foundation commit
-//! that registers `Display` / `Debug` / `Formatter` / `FmtError`.
+//! Riven's `class` is the Ruby-style entity that allows inline
+//! `impl`/`def` blocks (see `parse_class_body` in `parser/mod.rs`);
+//! `struct` is intentionally fields-only and rejects inline impl
+//! blocks with a structured diagnostic (regression tests in
+//! `parser/tests.rs::struct_with_impl_inside_*`). Fixtures here use
+//! `class` accordingly.
 
 use riven_core::diagnostics::{Diagnostic, DiagnosticLevel};
 use riven_core::lexer::Lexer;
@@ -41,17 +30,19 @@ fn type_errors(src: &str) -> Vec<Diagnostic> {
         .collect()
 }
 
-/// `Display` is resolvable as a trait, `Formatter` and `FmtError` as
-/// types — a user-defined `impl Display for T` typechecks.
+/// Phase A1: `Display` resolves as a built-in trait, `Formatter` and
+/// `FmtError` as built-in classes. A user-defined `class T ... impl
+/// Display ... end ... end` parses and typechecks (the trait method
+/// `fmt(&self, &mut Formatter) -> Result[(), FmtError]` is the Phase
+/// A contract — Phase D wires the canonical interpolation dispatch).
 #[test]
-#[ignore = "Phase A WIP — Formatter/FmtError not yet registered; fixture uses `struct` where `class` is required for inline impl"]
 fn display_trait_and_formatter_are_resolvable() {
     let src = r##"
-struct Money
+class Money
   cents: Int
 
   impl Display
-    def fmt(&self, f: &mut Formatter) -> Result[(), FmtError]
+    def fmt(f: &mut Formatter) -> Result[(), FmtError]
       Ok(())
     end
   end
@@ -69,17 +60,17 @@ end
     );
 }
 
-/// `Debug` is resolvable as a trait — a user-defined `impl Debug for
-/// T` with an `fmt` method typechecks.
+/// Phase A1: `Debug` resolves as a built-in trait with the same
+/// `fmt(&mut Formatter) -> Result[(), FmtError]` contract as
+/// `Display`. A user-defined `impl Debug` typechecks identically.
 #[test]
-#[ignore = "Phase A WIP — Formatter/FmtError not yet registered; fixture uses `struct` where `class` is required for inline impl"]
 fn debug_trait_is_resolvable_with_fmt_method() {
     let src = r##"
-struct Money
+class Money
   cents: Int
 
   impl Debug
-    def fmt(&self, f: &mut Formatter) -> Result[(), FmtError]
+    def fmt(f: &mut Formatter) -> Result[(), FmtError]
       Ok(())
     end
   end
@@ -97,16 +88,17 @@ end
     );
 }
 
-/// `Formatter::write_str` returns `Result[(), FmtError]`.
+/// Phase A3: `Formatter::write_str(&str) -> Result[(), FmtError]` is
+/// callable from inside an `impl Display`. Locks in the method
+/// signature; Phase D wires the runtime semantics.
 #[test]
-#[ignore = "Phase A WIP — Formatter/FmtError not yet registered; fixture uses `struct` where `class` is required for inline impl"]
 fn formatter_write_str_returns_result_unit_fmt_error() {
     let src = r##"
-struct Tag
+class Tag
   name: String
 
   impl Display
-    def fmt(&self, f: &mut Formatter) -> Result[(), FmtError]
+    def fmt(f: &mut Formatter) -> Result[(), FmtError]
       f.write_str("tag")
     end
   end

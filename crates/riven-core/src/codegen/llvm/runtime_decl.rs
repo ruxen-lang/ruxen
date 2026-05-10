@@ -51,6 +51,13 @@ pub fn declare_runtime_functions<'ctx>(module: &Module<'ctx>, context: &'ctx Con
     decl!("riven_stdin_read_line", ptr_ty, [ptr_ty]);
     decl!("riven_stdin_read_to_string", ptr_ty, [ptr_ty]);
     decl!("riven_stdin_lines", ptr_ty, [ptr_ty]);
+    // Phase 2 stdlib (#06.A3): std::fmt::Formatter buffer surface.
+    decl!("riven_fmt_formatter_new", ptr_ty, []);
+    decl!("riven_fmt_formatter_free", void, [ptr_ty]);
+    decl!("riven_fmt_formatter_write_str", ptr_ty, [ptr_ty, ptr_ty]);
+    decl!("riven_fmt_formatter_write_char", ptr_ty, [ptr_ty, i64_ty]);
+    decl!("riven_fmt_formatter_buffer", ptr_ty, [ptr_ty]);
+    decl!("riven_fmt_formatter_len", i64_ty, [ptr_ty]);
     decl!("riven_stdout_write_str", ptr_ty, [ptr_ty, ptr_ty]);
     decl!("riven_stdout_flush", ptr_ty, [ptr_ty]);
     decl!("riven_stderr_write_str", ptr_ty, [ptr_ty, ptr_ty]);

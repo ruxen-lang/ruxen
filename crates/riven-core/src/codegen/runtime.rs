@@ -28,6 +28,13 @@ pub const RUNTIME_FUNCTIONS: &[&str] = &[
     "riven_stdout_println",
     "riven_stderr_eprint",
     "riven_stderr_eprintln",
+    // Phase 2 stdlib (#06.A3): std::fmt::Formatter buffer surface.
+    "riven_fmt_formatter_new",
+    "riven_fmt_formatter_free",
+    "riven_fmt_formatter_write_str",
+    "riven_fmt_formatter_write_char",
+    "riven_fmt_formatter_buffer",
+    "riven_fmt_formatter_len",
     "riven_env_init",
     "riven_env_args_count",
     "riven_env_args_at",
@@ -357,6 +364,13 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "Stdout_println" => return Ok("riven_stdout_println"),
         "Stderr_eprint" => return Ok("riven_stderr_eprint"),
         "Stderr_eprintln" => return Ok("riven_stderr_eprintln"),
+        // Phase 2 stdlib (#06.A3): std::fmt::Formatter methods.
+        "Formatter_new" => return Ok("riven_fmt_formatter_new"),
+        "Formatter_free" => return Ok("riven_fmt_formatter_free"),
+        "Formatter_write_str" => return Ok("riven_fmt_formatter_write_str"),
+        "Formatter_write_char" => return Ok("riven_fmt_formatter_write_char"),
+        "Formatter_buffer" => return Ok("riven_fmt_formatter_buffer"),
+        "Formatter_len" => return Ok("riven_fmt_formatter_len"),
         "Thread_sleep" => return Ok("riven_thread_sleep_ns"),
         "Thread_yield_now" => return Ok("riven_thread_yield"),
         // std::time top-level functions (resolved before module-prefixing).
