@@ -599,6 +599,89 @@ fn test_interpolation_precision_spec() {
     }
 }
 
+/// Phase 2 #06.B regression: `:` inside parens (named arguments) or
+/// brackets (generic args) must NOT be treated as a format-spec start.
+/// Pre-fix bug: lexer truncated `area(Shape.Circle(radius: 2.0))` at
+/// the `:` after `radius`, dropping the rest of the expression and
+/// emitting an empty interpolation. Result: `puts "#{...}"` produced
+/// no output (assertion fail in
+/// rivenc/tests/installed_binary.rs::enum_with_match).
+#[test]
+fn test_interpolation_named_arg_colon_is_not_spec() {
+    let kinds = lex_kinds("\"#{Shape.Circle(radius: 2.0)}\"");
+    match &kinds[0] {
+        TokenKind::InterpolatedString(parts) => match &parts[0] {
+            StringPart::Expr { tokens, spec } => {
+                assert!(
+                    spec.is_default(),
+                    "named-arg `:` must NOT trigger spec mode, got {:?}",
+                    spec
+                );
+                let kinds: Vec<&TokenKind> = tokens.iter().map(|t| &t.kind).collect();
+                assert!(
+                    kinds
+                        .iter()
+                        .any(|k| matches!(k, TokenKind::FloatLiteral(_, _))),
+                    "expected FloatLiteral 2.0 in tokens, got {:?}",
+                    kinds
+                );
+            }
+            _ => panic!("expected Expr part"),
+        },
+        _ => panic!("expected InterpolatedString"),
+    }
+}
+
+/// Phase 2 #06.B regression: `::` path qualifier (`Vec::<Int>::new`-
+/// style at the lexer level — Riven uses `Vec[Int]::new` but the
+/// lexer needs to handle path `::` regardless) must NOT trigger spec
+/// mode. The check `peek_at(1) != Some(':')` in the lexer guards
+/// this case.
+#[test]
+fn test_interpolation_path_colon_is_not_spec() {
+    let kinds = lex_kinds("\"#{a::b}\"");
+    match &kinds[0] {
+        TokenKind::InterpolatedString(parts) => match &parts[0] {
+            StringPart::Expr { spec, tokens } => {
+                assert!(
+                    spec.is_default(),
+                    "path `::` must NOT trigger spec mode, got {:?}",
+                    spec
+                );
+                let kinds: Vec<&TokenKind> = tokens.iter().map(|t| &t.kind).collect();
+                assert!(
+                    kinds.iter().any(|k| matches!(k, TokenKind::ColonColon)),
+                    "expected ColonColon in tokens, got {:?}",
+                    kinds
+                );
+            }
+            _ => panic!("expected Expr part"),
+        },
+        _ => panic!("expected InterpolatedString"),
+    }
+}
+
+/// Phase 2 #06.B regression: `:` inside generic brackets (Riven uses
+/// `Vec[T]` for generics) must NOT trigger spec mode. Covers nested
+/// generic args + a colon (for type bounds, `T: Trait` etc.).
+#[test]
+fn test_interpolation_bracket_colon_is_not_spec() {
+    let kinds = lex_kinds("\"#{f[T: Foo]}\"");
+    match &kinds[0] {
+        TokenKind::InterpolatedString(parts) => match &parts[0] {
+            StringPart::Expr { spec, .. } => {
+                assert!(
+                    spec.is_default(),
+                    "`:` inside [...] must NOT trigger spec mode, got {:?}",
+                    spec
+                );
+            }
+            _ => panic!("expected Expr part"),
+        },
+        _ => panic!("expected InterpolatedString"),
+    }
+}
+
 /// Phase 2 #06.B: `"#{x:*<10.3?}"` parses fill=`*`, align=`<`,
 /// width=10, precision=3, debug=true. Exercises the full spec.
 #[test]

@@ -532,15 +532,26 @@ impl<'a> Lexer<'a> {
 
     /// Phase 2 #06.B: lex `expr[:spec]` for `"#{expr:spec}"`. The
     /// expression is delimited by either the closing `}` (no spec) or
-    /// by `:` at brace depth 1 (spec follows, terminated by `}`).
+    /// by `:` at the OUTERMOST grouping level (spec follows, terminated
+    /// by `}`).
+    ///
+    /// "Outermost" means: brace depth 1 (the interpolation `#{...}`
+    /// itself), paren depth 0, bracket depth 0. This is critical —
+    /// `:` is also Riven syntax for named arguments
+    /// (`Shape.Circle(radius: 2.0)`), associated-type qualifiers
+    /// (`Self::Item`), and let-binding type ascriptions
+    /// (`let x: Int`). Only treat `:` as a spec-start when no nested
+    /// grouping is open; otherwise it's part of the expression.
     /// Returns the expression tokens plus the parsed `FormatSpec`
     /// (default if no spec was present).
     fn lex_interpolation_expr(&mut self) -> (Vec<Token>, crate::lexer::token::FormatSpec) {
         let mut tokens = Vec::new();
         let mut spec = crate::lexer::token::FormatSpec::default();
-        let mut depth = 1u32; // we've already consumed #{
+        let mut brace_depth = 1u32; // we've already consumed #{
+        let mut paren_depth = 0u32;
+        let mut bracket_depth = 0u32;
 
-        while !self.is_at_end() && depth > 0 {
+        while !self.is_at_end() && brace_depth > 0 {
             self.skip_whitespace();
             if self.is_at_end() {
                 break;
@@ -548,14 +559,15 @@ impl<'a> Lexer<'a> {
 
             let ch = self.current();
 
-            // Phase 2 #06.B: at brace depth 1 (the outer #{...}
-            // braces), a `:` switches us into format-spec mode. The
-            // expression part is closed at this point, and we lex
-            // the spec characters until the matching `}`. Inside
-            // nested braces (depth > 1), `:` is a normal operator
-            // (associated-type qualifier, module path, etc.) and is
-            // left alone.
-            if ch == ':' && depth == 1 {
+            // Format-spec start. Only fire at the absolute outermost
+            // level — see the doc-comment above for why this matters.
+            if ch == ':'
+                && brace_depth == 1
+                && paren_depth == 0
+                && bracket_depth == 0
+                && self.peek_at(1) != Some(':')
+            // `::` (path qualifier) is not a spec start.
+            {
                 self.advance(); // consume `:`
                 spec = self.lex_format_spec();
                 // `lex_format_spec` consumes up to and including the
@@ -564,8 +576,8 @@ impl<'a> Lexer<'a> {
             }
 
             if ch == '}' {
-                depth -= 1;
-                if depth == 0 {
+                brace_depth -= 1;
+                if brace_depth == 0 {
                     self.advance();
                     break;
                 }
@@ -581,7 +593,7 @@ impl<'a> Lexer<'a> {
             }
 
             if ch == '{' {
-                depth += 1;
+                brace_depth += 1;
                 let sb = self.byte_pos;
                 let sl = self.line;
                 let sc = self.column;
@@ -608,9 +620,19 @@ impl<'a> Lexer<'a> {
                 _ => self.lex_operator_or_punct(),
             }
 
-            // Move any newly emitted tokens to our local vec
+            // Move any newly emitted tokens to our local vec, and track
+            // paren/bracket depth on the fly so a later `:` knows
+            // whether it's inside a grouping construct.
             while self.tokens.len() > before {
-                tokens.push(self.tokens.remove(before));
+                let tok = self.tokens.remove(before);
+                match tok.kind {
+                    TokenKind::LParen => paren_depth += 1,
+                    TokenKind::RParen => paren_depth = paren_depth.saturating_sub(1),
+                    TokenKind::LBracket => bracket_depth += 1,
+                    TokenKind::RBracket => bracket_depth = bracket_depth.saturating_sub(1),
+                    _ => {}
+                }
+                tokens.push(tok);
             }
         }
 
