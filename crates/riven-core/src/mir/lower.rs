@@ -4727,9 +4727,9 @@ impl<'a> Lowerer<'a> {
                 method_name: m,
                 ..
             } if m == "entry" => {
-                let k = entry_args.first().ok_or_else(|| {
-                    "HashMap.entry expects exactly one key argument".to_string()
-                })?;
+                let k = entry_args
+                    .first()
+                    .ok_or_else(|| "HashMap.entry expects exactly one key argument".to_string())?;
                 (object.as_ref(), k)
             }
             _ => unreachable!("inline_entry_or_insert called without entry chain"),
@@ -4740,8 +4740,8 @@ impl<'a> Lowerer<'a> {
             map_local_opt.ok_or_else(|| "HashMap receiver lowered to no value".to_string())?;
 
         let k_local_opt = self.lower_expr(k_expr)?;
-        let k_local = k_local_opt
-            .ok_or_else(|| "HashMap.entry key arg lowered to no value".to_string())?;
+        let k_local =
+            k_local_opt.ok_or_else(|| "HashMap.entry key arg lowered to no value".to_string())?;
 
         // contains_key check.
         let has = self.new_temp(Ty::Bool);
@@ -4763,9 +4763,9 @@ impl<'a> Lowerer<'a> {
         self.current_block = insert_block;
         let v_local_opt = match method_name {
             "or_insert" => {
-                let v_expr = outer_args.first().ok_or_else(|| {
-                    "or_insert expects exactly one value argument".to_string()
-                })?;
+                let v_expr = outer_args
+                    .first()
+                    .ok_or_else(|| "or_insert expects exactly one value argument".to_string())?;
                 self.lower_expr(v_expr)?
             }
             "or_insert_with" => {
@@ -4775,10 +4775,7 @@ impl<'a> Lowerer<'a> {
                 let body = match &block_expr.kind {
                     HirExprKind::Closure { body, .. } => body,
                     _ => {
-                        return Err(
-                            "or_insert_with expects a closure block as its body"
-                                .to_string(),
-                        )
+                        return Err("or_insert_with expects a closure block as its body".to_string())
                     }
                 };
                 self.lower_expr(body)?
@@ -4788,8 +4785,8 @@ impl<'a> Lowerer<'a> {
                 method_name
             ),
         };
-        let v_local = v_local_opt
-            .ok_or_else(|| format!("`{}` value lowered to no value", method_name))?;
+        let v_local =
+            v_local_opt.ok_or_else(|| format!("`{}` value lowered to no value", method_name))?;
 
         // Discard the Option[V] return — we don't expose the displaced
         // value because typeck pinned this chain's type to Unit.
