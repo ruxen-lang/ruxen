@@ -8,6 +8,22 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- Phase 2 stdlib `HashMap[K,V]` Entry API: `m.entry(K).or_insert(V)` and
+  `m.entry(K).or_insert_with { || V }` (#04 final batch). The chain is
+  detected and inlined as a single MIR unit — there is no real
+  `Entry[K,V]` runtime value, sidestepping the pointer-returning
+  two-variant dispatch the prompt-04 deferred note flagged. Lowering
+  emits `if !riven_hash_contains_key(m, k) { riven_hash_insert(m, k, v); }`
+  so the lazy-default contract of `or_insert_with` is honoured: the
+  closure body only runs on the missing-key path. The chain returns
+  `Unit` (v1 simplification — Rust's `&mut V` return is deferred). Typeck
+  rejects splitting the chain across statements (`let e = m.entry(k); e.or_insert(v)`)
+  with a clear error so users do not silently fall through the lenient
+  unknown-method path. New release-e2e fixtures
+  `510_hashmap_entry_or_insert.rvn` and `511_hashmap_entry_or_insert_with.rvn`
+  cover the populated, empty, and lazy-default paths; positive
+  type-check tests in `crates/riven-core/tests/stdlib_hashmap.rs` and
+  matching negative tests in `stdlib_hashmap_negatives.rs`.
 - Phase 2 stdlib `Iterator` eager terminators on `*Iter` classes
   (#05 batch 1). `vec.iter.sum` and `vec.iter.count` now type-check
   and dispatch to the existing `riven_vec_sum` / `riven_vec_count`

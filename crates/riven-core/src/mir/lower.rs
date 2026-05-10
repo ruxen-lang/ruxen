@@ -1308,6 +1308,27 @@ impl<'a> Lowerer<'a> {
                     return Ok(Some(obj));
                 }
 
+                // ── Phase 2 stdlib (#04): HashMap.entry chain ──────────
+                // `m.entry(K).or_insert(V)` and `m.entry(K).or_insert_with { || V }`
+                // are recognized as a single MIR unit and inlined to:
+                //
+                //   if !riven_hash_contains_key(map, k) {
+                //       riven_hash_insert(map, k, v);   // discard prior value
+                //   }
+                //
+                // Typeck has already verified the chain shape and the V
+                // type — see `infer.rs` MethodCall handler. This emission
+                // never materializes an `Entry[K,V]` value at runtime.
+                if (method_name == "or_insert" || method_name == "or_insert_with")
+                    && matches!(
+                        &object.kind,
+                        HirExprKind::MethodCall { method_name: m, .. } if m == "entry"
+                    )
+                {
+                    let result = self.inline_entry_or_insert(object, method_name, args, block)?;
+                    return Ok(result);
+                }
+
                 // ── Inline closure-taking methods ──────────────────────
                 // When a method like .each, .filter, .find, .position,
                 // .map, .partition, .where_matching takes a trailing block
@@ -4664,6 +4685,128 @@ impl<'a> Lowerer<'a> {
             }
             _ => self.lower_expr(expr),
         }
+    }
+
+    /// Emit the inlined contains_key+insert pattern that backs
+    /// `m.entry(K).or_insert(V)` and `m.entry(K).or_insert_with { || V }`.
+    ///
+    /// `entry_expr` is the receiver of the outer call — it is the inner
+    /// `.entry(K)` HIR node, whose `object` is the original HashMap and
+    /// whose `args[0]` is the key K. `outer_args` is the (possibly empty)
+    /// arg list of the outer `or_insert*` call; for `or_insert(V)` it
+    /// holds `[V]`, for `or_insert_with` it is empty and the closure
+    /// body is in `outer_block`.
+    ///
+    /// Emits:
+    ///
+    /// ```text
+    ///   k_local       = lower(K)
+    ///   has           = riven_hash_contains_key(map, k_local)
+    ///   if has goto MERGE else goto INSERT
+    /// INSERT:
+    ///   v_local       = lower(V)            // or closure body
+    ///   _             = riven_hash_insert(map, k_local, v_local)
+    ///   goto MERGE
+    /// MERGE:
+    /// ```
+    ///
+    /// The chain returns Unit (no `&mut V` like Rust — see prompt 04
+    /// deferred-Entry note: that requires pointer-returning method
+    /// dispatch we have not built).
+    fn inline_entry_or_insert(
+        &mut self,
+        entry_expr: &HirExpr,
+        method_name: &str,
+        outer_args: &[HirExpr],
+        outer_block: &Option<Box<HirExpr>>,
+    ) -> Result<Option<LocalId>, String> {
+        let (map_expr, k_expr) = match &entry_expr.kind {
+            HirExprKind::MethodCall {
+                object,
+                args: entry_args,
+                method_name: m,
+                ..
+            } if m == "entry" => {
+                let k = entry_args.first().ok_or_else(|| {
+                    "HashMap.entry expects exactly one key argument".to_string()
+                })?;
+                (object.as_ref(), k)
+            }
+            _ => unreachable!("inline_entry_or_insert called without entry chain"),
+        };
+
+        let map_local_opt = self.lower_expr(map_expr)?;
+        let map_local =
+            map_local_opt.ok_or_else(|| "HashMap receiver lowered to no value".to_string())?;
+
+        let k_local_opt = self.lower_expr(k_expr)?;
+        let k_local = k_local_opt
+            .ok_or_else(|| "HashMap.entry key arg lowered to no value".to_string())?;
+
+        // contains_key check.
+        let has = self.new_temp(Ty::Bool);
+        self.emit(MirInst::Call {
+            dest: Some(has),
+            callee: "riven_hash_contains_key".to_string(),
+            args: vec![MirValue::Use(map_local), MirValue::Use(k_local)],
+        });
+
+        let insert_block = self.new_block();
+        let merge_block = self.new_block();
+        self.set_terminator(Terminator::Branch {
+            cond: MirValue::Use(has),
+            then_block: merge_block,
+            else_block: insert_block,
+        });
+
+        // INSERT block: lower V (or closure body), then call insert.
+        self.current_block = insert_block;
+        let v_local_opt = match method_name {
+            "or_insert" => {
+                let v_expr = outer_args.first().ok_or_else(|| {
+                    "or_insert expects exactly one value argument".to_string()
+                })?;
+                self.lower_expr(v_expr)?
+            }
+            "or_insert_with" => {
+                let block_expr = outer_block
+                    .as_deref()
+                    .ok_or_else(|| "or_insert_with expects a closure block".to_string())?;
+                let body = match &block_expr.kind {
+                    HirExprKind::Closure { body, .. } => body,
+                    _ => {
+                        return Err(
+                            "or_insert_with expects a closure block as its body"
+                                .to_string(),
+                        )
+                    }
+                };
+                self.lower_expr(body)?
+            }
+            _ => unreachable!(
+                "inline_entry_or_insert called for unknown method `{}`",
+                method_name
+            ),
+        };
+        let v_local = v_local_opt
+            .ok_or_else(|| format!("`{}` value lowered to no value", method_name))?;
+
+        // Discard the Option[V] return — we don't expose the displaced
+        // value because typeck pinned this chain's type to Unit.
+        self.emit(MirInst::Call {
+            dest: None,
+            callee: "riven_hash_insert".to_string(),
+            args: vec![
+                MirValue::Use(map_local),
+                MirValue::Use(k_local),
+                MirValue::Use(v_local),
+            ],
+        });
+        self.set_terminator(Terminator::Goto(merge_block));
+
+        // Merge: chain's type is Unit, so no result local.
+        self.current_block = merge_block;
+        Ok(None)
     }
 
     /// Emit an inlined `.each { |item| body }` loop.

@@ -470,6 +470,102 @@ impl<'a> InferenceEngine<'a> {
                 block,
                 ..
             } => {
+                // ── Phase 2 stdlib (#04): HashMap.entry(K).or_insert(V) /
+                //    .or_insert_with(closure) chain.
+                //
+                // The chain is the v1 surface for the prompt-04 entry API.
+                // It is detected and inlined as a single MIR unit; there
+                // is no real `Entry[K,V]` runtime value. Reject any use of
+                // `or_insert` / `or_insert_with` whose receiver is not an
+                // immediate `.entry(K)` call, so users get a clear error
+                // rather than a silent fall-through into the lenient
+                // unknown-method path.
+                if method_name == "or_insert" || method_name == "or_insert_with" {
+                    let receiver_is_entry_chain = matches!(
+                        &object.kind,
+                        HirExprKind::MethodCall { method_name: m, .. } if m == "entry"
+                    );
+                    if !receiver_is_entry_chain {
+                        self.error(
+                            format!(
+                                "`{}` requires an immediate `.entry(K)` \
+                                 receiver — write `m.entry(k).{}(...)`",
+                                method_name, method_name,
+                            ),
+                            &expr.span,
+                        );
+                        // Recurse so the rest of the program still type-
+                        // checks; we just want to surface this diagnostic.
+                        self.infer_expr(object);
+                        for arg in args.iter_mut() {
+                            self.infer_expr(arg);
+                        }
+                        if let Some(ref mut blk) = block {
+                            self.infer_expr(blk);
+                        }
+                        expr.ty = Ty::Unit;
+                        return;
+                    }
+                    // Valid chain. Type-check the inner pieces and seed
+                    // the closure return type for or_insert_with from V.
+                    let map_ty: Option<Ty> = if let HirExprKind::MethodCall {
+                        object: entry_recv,
+                        args: entry_args,
+                        ..
+                    } = &mut object.kind
+                    {
+                        self.infer_expr(entry_recv);
+                        for arg in entry_args.iter_mut() {
+                            self.infer_expr(arg);
+                        }
+                        let recv_ty = self.ctx.resolve(&entry_recv.ty);
+                        let (_, derefed) = auto_deref(&recv_ty, self.ctx);
+                        if !matches!(&derefed, Ty::HashMap(_, _)) {
+                            self.error(
+                                format!(
+                                    "`.entry(K)` is only defined on \
+                                     `HashMap[K,V]`; got `{}`",
+                                    derefed
+                                ),
+                                &entry_recv.span,
+                            );
+                        }
+                        Some(derefed)
+                    } else {
+                        None
+                    };
+                    // Pin the entry-call's own type to Unit so it doesn't
+                    // leak as an unresolved fresh var into later passes.
+                    object.ty = Ty::Unit;
+
+                    for arg in args.iter_mut() {
+                        self.infer_expr(arg);
+                    }
+                    if let Some(ref mut blk) = block {
+                        self.infer_expr(blk);
+                    }
+
+                    // Pin: for `or_insert_with`, the closure body's
+                    // inferred type must match V. For `or_insert(v)`,
+                    // arg[0]'s type must match V.
+                    if let Some(Ty::HashMap(_, v_ty)) = map_ty.as_ref() {
+                        if method_name == "or_insert_with" {
+                            if let Some(blk) = block.as_ref() {
+                                if let HirExprKind::Closure { body, .. } = &blk.kind {
+                                    let body_ty = self.ctx.resolve(&body.ty);
+                                    let _ = unify(&body_ty, v_ty, self.ctx, &blk.span);
+                                }
+                            }
+                        } else if let Some(arg0) = args.first() {
+                            let arg_ty = self.ctx.resolve(&arg0.ty);
+                            let _ = unify(&arg_ty, v_ty, self.ctx, &arg0.span);
+                        }
+                    }
+
+                    expr.ty = Ty::Unit;
+                    return;
+                }
+
                 self.infer_expr(object);
                 for arg in args.iter_mut() {
                     self.infer_expr(arg);

@@ -169,3 +169,56 @@ end
         errs
     );
 }
+
+// ── #04 Entry API: chain-only enforcement ─────────────────────────
+
+/// The v1 entry surface is intentionally restricted to the chain
+/// `m.entry(K).or_insert(V)` / `.or_insert_with(closure)`. The chain
+/// is detected and inlined as a single MIR unit; there is no runtime
+/// `Entry[K,V]` value. Splitting the chain — binding `entry()` to a
+/// local and calling `.or_insert(...)` on the local later — must
+/// produce a typeck error so users get a clear message instead of a
+/// silently-broken MIR fall-through.
+#[test]
+fn hashmap_entry_then_or_insert_split_is_rejected() {
+    let source = r#"
+def main
+  let mut m: HashMap[Int, Int] = HashMap.new
+  let e = m.entry(1)
+  e.or_insert(10)
+end
+"#;
+    let diags = typecheck_diagnostics_from_source(source);
+    let errs: Vec<_> = diags
+        .iter()
+        .filter(|d| d.level == DiagnosticLevel::Error)
+        .collect();
+    assert!(
+        !errs.is_empty(),
+        "Splitting the chain (`let e = m.entry(1); e.or_insert(10)`) must \
+         be rejected by typeck — `or_insert` requires an immediate \
+         `.entry(K)` receiver"
+    );
+}
+
+/// `or_insert` called on something that isn't `m.entry(K)` must be
+/// rejected. There is no other receiver type that has `or_insert` in
+/// the v1 builtin method table.
+#[test]
+fn hashmap_or_insert_on_non_entry_receiver_rejected() {
+    let source = r#"
+def main
+  let mut m: HashMap[Int, Int] = HashMap.new
+  m.or_insert(10)
+end
+"#;
+    let diags = typecheck_diagnostics_from_source(source);
+    let errs: Vec<_> = diags
+        .iter()
+        .filter(|d| d.level == DiagnosticLevel::Error)
+        .collect();
+    assert!(
+        !errs.is_empty(),
+        "`m.or_insert(v)` (no `.entry(k)` receiver) must be rejected"
+    );
+}

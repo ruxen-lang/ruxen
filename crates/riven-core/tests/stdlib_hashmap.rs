@@ -138,3 +138,52 @@ end
         errs
     );
 }
+
+// ── #04 Entry API (entry(K).or_insert(V) / .or_insert_with(closure)) ──
+
+/// `m.entry(K).or_insert(V)` is the v1 entry-API surface. Per prompt 04
+/// (deferred sub-task), the chain is recognized as a single syntactic
+/// unit; the value is inserted only when the key is absent. Returns
+/// Unit (no `&mut V` like Rust — the v1 simplification documented in
+/// the prompt). Must typecheck cleanly with concrete K=Int, V=Int.
+#[test]
+fn hashmap_entry_or_insert_typechecks() {
+    let source = r##"
+def main
+  let mut m: HashMap[Int, Int] = HashMap.new
+  m.entry(1).or_insert(10)
+  m.entry(1).or_insert(99)
+  puts "#{m.len}"
+end
+"##;
+    let diags = typecheck_diagnostics(source);
+    let errs = errors(&diags);
+    assert!(
+        errs.is_empty(),
+        "m.entry(k).or_insert(v) must typecheck cleanly; got: {:#?}",
+        errs
+    );
+}
+
+/// `m.entry(K).or_insert_with { || V }` accepts a zero-arg closure
+/// whose body type matches V. The closure body is only evaluated
+/// when the key is absent (the lazy-default contract). Riven uses a
+/// trailing-block form for closure args (parser rejects `(|| 42)` as
+/// an inline expression).
+#[test]
+fn hashmap_entry_or_insert_with_typechecks() {
+    let source = r##"
+def main
+  let mut m: HashMap[String, Int] = HashMap.new
+  m.entry("a").or_insert_with { || 42 }
+  puts "#{m.len}"
+end
+"##;
+    let diags = typecheck_diagnostics(source);
+    let errs = errors(&diags);
+    assert!(
+        errs.is_empty(),
+        "m.entry(k).or_insert_with {{ || v }} must typecheck cleanly; got: {:#?}",
+        errs
+    );
+}

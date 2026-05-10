@@ -76,18 +76,20 @@ available.
       every nested-compound variant at the type-construction site
       via `E0615` (`resolve/mod.rs::ty_is_valid_hash_key`). Six pin
       tests in `crates/riven-core/tests/stdlib_hashmap_negatives.rs`.
-- [ ] `Entry[K,V]` API (`entry(K).or_insert(V) /
-      .or_insert_with(closure)`) — deferred to a #05 follow-up
-      batch. The closure-inliner template (#03 retain/sort_by, see
-      `riven-v1-closure-method-inliner-template`) is the proven
-      shape; `entry` additionally needs a two-variant return type
-      and pointer-returning method dispatch that require new MIR
-      plumbing not shared with the existing inliners. The remaining
-      HashMap surface (indexing, key constraint) is now closed,
-      so v1 can ship without `entry` if the iterator-surface batch
-      slips. Mitigation: users can express `entry().or_insert(v)`
-      as `if !m.contains_key(&k) { m.insert(k, v) }` — runs at most
-      one extra hash-lookup vs. the proper `Entry` API.
+- [x] `Entry[K,V]` API (`entry(K).or_insert(V) /
+      .or_insert_with { || V }`) — landed via single-MIR-unit chain
+      detection. Both typeck (`infer.rs` MethodCall handler) and
+      MIR (`lower.rs::inline_entry_or_insert`) recognise the chain
+      atomically; the inlined emission is `if !riven_hash_contains_key(m, k)
+      { riven_hash_insert(m, k, v); }`, honouring the lazy-default
+      contract of `or_insert_with`. Chain returns `Unit` (v1
+      simplification — Rust's `&mut V` return required pointer-
+      dispatch infrastructure deferred to v2). Splitting the chain
+      across statements is rejected by typeck with a clear error.
+      Pin tests in `crates/riven-core/tests/stdlib_hashmap.rs`
+      (positive) + `stdlib_hashmap_negatives.rs` (rejection); e2e
+      fixtures `510_hashmap_entry_or_insert.rvn` and
+      `511_hashmap_entry_or_insert_with.rvn`.
 - [x] `cargo test --workspace` green — 0 failed across all 30+ test
       binaries including the new fixtures. The release-e2e suite
       runs every `tests/release-e2e/cases/*.rvn` end-to-end and
