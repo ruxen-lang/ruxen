@@ -351,7 +351,11 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // `&str → &str` is a true semantic identity, not a stub.
         "&str_as_str" => return Ok("riven_noop_passthrough"),
         // I/O type methods (Stdin/Stdout/Stderr/IoError).
-        "IoError_message" => return Ok("riven_noop_passthrough"),
+        // Phase 2 #06.5: `IoError` is a tagged enum (see runtime.c
+        // for the wire format). The previous noop-passthrough worked
+        // only while the payload literally was the message string;
+        // with proper variants we need a real dispatcher.
+        "IoError_message" => return Ok("riven_io_error_get_message"),
         "Stdin_read_line" => return Ok("riven_stdin_read_line"),
         "Stdin_read_to_string" => return Ok("riven_stdin_read_to_string"),
         "Stdin_lines" => return Ok("riven_stdin_lines"),

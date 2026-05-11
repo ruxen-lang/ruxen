@@ -1940,14 +1940,14 @@ impl<'a> InferenceEngine<'a> {
             }
             (Ty::Class { name, .. }, "read_line") if name == "Stdin" => Some(Ty::Result(
                 Box::new(Ty::String),
-                Box::new(Ty::Class {
+                Box::new(Ty::Enum {
                     name: "IoError".to_string(),
                     generic_args: vec![],
                 }),
             )),
             (Ty::Class { name, .. }, "read_to_string") if name == "Stdin" => Some(Ty::Result(
                 Box::new(Ty::String),
-                Box::new(Ty::Class {
+                Box::new(Ty::Enum {
                     name: "IoError".to_string(),
                     generic_args: vec![],
                 }),
@@ -1960,7 +1960,7 @@ impl<'a> InferenceEngine<'a> {
             (Ty::Class { name, .. }, "lines") if name == "Stdin" => {
                 Some(Ty::Vec(Box::new(Ty::Result(
                     Box::new(Ty::String),
-                    Box::new(Ty::Class {
+                    Box::new(Ty::Enum {
                         name: "IoError".to_string(),
                         generic_args: vec![],
                     }),
@@ -1969,7 +1969,7 @@ impl<'a> InferenceEngine<'a> {
             (Ty::Class { name, .. }, "write_str") if name == "Stdout" || name == "Stderr" => {
                 Some(Ty::Result(
                     Box::new(Ty::Unit),
-                    Box::new(Ty::Class {
+                    Box::new(Ty::Enum {
                         name: "IoError".to_string(),
                         generic_args: vec![],
                     }),
@@ -1978,7 +1978,7 @@ impl<'a> InferenceEngine<'a> {
             (Ty::Class { name, .. }, "flush") if name == "Stdout" || name == "Stderr" => {
                 Some(Ty::Result(
                     Box::new(Ty::Unit),
-                    Box::new(Ty::Class {
+                    Box::new(Ty::Enum {
                         name: "IoError".to_string(),
                         generic_args: vec![],
                     }),
@@ -1993,7 +1993,10 @@ impl<'a> InferenceEngine<'a> {
             (Ty::Class { name, .. }, "println") if name == "Stdout" => Some(Ty::Unit),
             (Ty::Class { name, .. }, "eprint") if name == "Stderr" => Some(Ty::Unit),
             (Ty::Class { name, .. }, "eprintln") if name == "Stderr" => Some(Ty::Unit),
-            (Ty::Class { name, .. }, "message") if name == "IoError" => Some(Ty::String),
+            // Phase 2 #06.5: `IoError` is a tagged enum, not a class.
+            // `.message() -> String` dispatches on tag in the runtime
+            // (see `riven_io_error_get_message` in runtime.c).
+            (Ty::Enum { name, .. }, "message") if name == "IoError" => Some(Ty::String),
             (Ty::Class { name, generic_args }, "to_vec") if name.ends_with("Iter") => {
                 let elem = if name == "SplitIter" {
                     // SplitIter yields &str segments

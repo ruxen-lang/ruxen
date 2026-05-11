@@ -88,10 +88,121 @@ static void *riven_result_err_value(int64_t payload) {
     return result;
 }
 
+/* ── IoError (tagged enum, Phase 2 #06.5) ─────────────────────────────
+ *
+ * Wire format (matches the Riven type-level `enum IoError` registered
+ * in resolve/mod.rs — keep these constants in sync):
+ *   offset 0: int32 tag
+ *   offset 4: 4 bytes padding (payload aligns to 8)
+ *   offset 8: variant-specific payload slot (one int64; pointer for
+ *             `Other`, unused for unit variants)
+ *
+ * We allocate a uniform 16 bytes for every variant so the int64 slot
+ * in `Result::Err` always points at a layout-stable struct.
+ *
+ * Variant tag values mirror the order in `resolve::register_builtins`:
+ *   0  NotFound
+ *   1  PermissionDenied
+ *   2  AlreadyExists
+ *   3  Interrupted
+ *   4  WouldBlock
+ *   5  InvalidInput
+ *   6  UnexpectedEof
+ *   7  BrokenPipe
+ *   8  Other(message: String)
+ */
+#define RIVEN_IO_ERROR_NOT_FOUND          0
+#define RIVEN_IO_ERROR_PERMISSION_DENIED  1
+#define RIVEN_IO_ERROR_ALREADY_EXISTS     2
+#define RIVEN_IO_ERROR_INTERRUPTED        3
+#define RIVEN_IO_ERROR_WOULD_BLOCK        4
+#define RIVEN_IO_ERROR_INVALID_INPUT      5
+#define RIVEN_IO_ERROR_UNEXPECTED_EOF     6
+#define RIVEN_IO_ERROR_BROKEN_PIPE        7
+#define RIVEN_IO_ERROR_OTHER              8
+
+static void *riven_io_error_unit(int32_t tag) {
+    int64_t *err = (int64_t *)riven_alloc(16);
+    *(int32_t *)err = tag;
+    err[1] = 0;
+    return err;
+}
+
+static void *riven_io_error_other(const char *message) {
+    int64_t *err = (int64_t *)riven_alloc(16);
+    *(int32_t *)err = RIVEN_IO_ERROR_OTHER;
+    err[1] = (int64_t)riven_string_from(message ? message : "io error");
+    return err;
+}
+
+static int32_t riven_io_error_classify_errno(int saved_errno) {
+    switch (saved_errno) {
+        case ENOENT:  return RIVEN_IO_ERROR_NOT_FOUND;
+        case EACCES:
+        case EPERM:   return RIVEN_IO_ERROR_PERMISSION_DENIED;
+        case EEXIST:  return RIVEN_IO_ERROR_ALREADY_EXISTS;
+        case EINTR:   return RIVEN_IO_ERROR_INTERRUPTED;
+#ifdef EAGAIN
+        case EAGAIN:  return RIVEN_IO_ERROR_WOULD_BLOCK;
+#endif
+        case EINVAL:  return RIVEN_IO_ERROR_INVALID_INPUT;
+        case EPIPE:   return RIVEN_IO_ERROR_BROKEN_PIPE;
+        default:      return RIVEN_IO_ERROR_OTHER;
+    }
+}
+
+/* Build a Result::Err(IoError) from a user-supplied message. The
+ * resulting variant is always `Other(message)`. Call sites without a
+ * meaningful errno (EOF, env-var-not-found, …) use this helper. */
 static void *riven_io_error_message(const char *message) {
-    return riven_result_err_value((int64_t)riven_string_from(
-        message ? message : "io error"
-    ));
+    return riven_result_err_value((int64_t)riven_io_error_other(message));
+}
+
+/* Build a Result::Err(IoError) from a captured errno. Maps the errno
+ * onto a curated variant when possible; falls back to
+ * `Other(strerror(errno))`. Always capture errno into a local before
+ * calling — any subsequent libc call may clobber it. */
+static void *riven_io_error_from_errno(int saved_errno) {
+    int32_t tag = riven_io_error_classify_errno(saved_errno);
+    if (tag == RIVEN_IO_ERROR_OTHER) {
+        return riven_io_error_message(strerror(saved_errno));
+    }
+    return riven_result_err_value((int64_t)riven_io_error_unit(tag));
+}
+
+/* `IoError.message() -> String`. Wired in `codegen/runtime.rs`
+ * (`"IoError_message" -> "riven_io_error_get_message"`). Returns a
+ * heap-allocated String pointer (interned static for unit variants;
+ * the captured payload for `Other`). */
+char *riven_io_error_get_message(void *err) {
+    if (!err) {
+        return riven_string_from("io error");
+    }
+    int32_t tag = *(int32_t *)err;
+    switch (tag) {
+        case RIVEN_IO_ERROR_NOT_FOUND:
+            return riven_string_from("entity not found");
+        case RIVEN_IO_ERROR_PERMISSION_DENIED:
+            return riven_string_from("permission denied");
+        case RIVEN_IO_ERROR_ALREADY_EXISTS:
+            return riven_string_from("entity already exists");
+        case RIVEN_IO_ERROR_INTERRUPTED:
+            return riven_string_from("operation interrupted");
+        case RIVEN_IO_ERROR_WOULD_BLOCK:
+            return riven_string_from("operation would block");
+        case RIVEN_IO_ERROR_INVALID_INPUT:
+            return riven_string_from("invalid input");
+        case RIVEN_IO_ERROR_UNEXPECTED_EOF:
+            return riven_string_from("unexpected end of file");
+        case RIVEN_IO_ERROR_BROKEN_PIPE:
+            return riven_string_from("broken pipe");
+        case RIVEN_IO_ERROR_OTHER: {
+            char *msg = (char *)((int64_t *)err)[1];
+            return msg ? msg : riven_string_from("io error");
+        }
+        default:
+            return riven_string_from("io error");
+    }
 }
 
 static void *riven_stream_handle(FILE *stream) {
@@ -132,15 +243,16 @@ static void *riven_stream_read_line(FILE *stream) {
     }
 
     if (ferror(stream)) {
-        const char *err = strerror(errno);
+        int saved_errno = errno;
         free(buf);
         clearerr(stream);
-        return riven_io_error_message(err);
+        return riven_io_error_from_errno(saved_errno);
     }
 
     if (len == 0 && ch == EOF) {
         free(buf);
-        return riven_io_error_message("end of input");
+        return riven_result_err_value(
+            (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_UNEXPECTED_EOF));
     }
 
     buf[len] = '\0';
@@ -188,10 +300,10 @@ static void *riven_stream_read_to_string(FILE *stream) {
     }
 
     if (ferror(stream)) {
-        const char *err = strerror(errno);
+        int saved_errno = errno;
         free(buf);
         clearerr(stream);
-        return riven_io_error_message(err);
+        return riven_io_error_from_errno(saved_errno);
     }
 
     buf[len] = '\0';
@@ -287,10 +399,9 @@ void *riven_stdin_lines(void *handle) {
     RivenVec *v = riven_vec_new();
 
     if (ferror(stream)) {
-        const char *err = strerror(saved_errno);
         free(buf);
         clearerr(stream);
-        riven_vec_push(v, (int64_t)riven_io_error_message(err));
+        riven_vec_push(v, (int64_t)riven_io_error_from_errno(saved_errno));
         return v;
     }
 
@@ -321,7 +432,7 @@ void *riven_stdout_write_str(void *handle, const char *s) {
     FILE *stream = riven_stream_from_handle(handle, stdout);
     const char *text = s ? s : "";
     if (fputs(text, stream) == EOF) {
-        return riven_io_error_message(strerror(errno));
+        return riven_io_error_from_errno(errno);
     }
     return riven_result_ok_value(0);
 }
@@ -329,7 +440,7 @@ void *riven_stdout_write_str(void *handle, const char *s) {
 void *riven_stdout_flush(void *handle) {
     FILE *stream = riven_stream_from_handle(handle, stdout);
     if (fflush(stream) != 0) {
-        return riven_io_error_message(strerror(errno));
+        return riven_io_error_from_errno(errno);
     }
     return riven_result_ok_value(0);
 }
@@ -338,7 +449,7 @@ void *riven_stderr_write_str(void *handle, const char *s) {
     FILE *stream = riven_stream_from_handle(handle, stderr);
     const char *text = s ? s : "";
     if (fputs(text, stream) == EOF) {
-        return riven_io_error_message(strerror(errno));
+        return riven_io_error_from_errno(errno);
     }
     return riven_result_ok_value(0);
 }
@@ -346,7 +457,7 @@ void *riven_stderr_write_str(void *handle, const char *s) {
 void *riven_stderr_flush(void *handle) {
     FILE *stream = riven_stream_from_handle(handle, stderr);
     if (fflush(stream) != 0) {
-        return riven_io_error_message(strerror(errno));
+        return riven_io_error_from_errno(errno);
     }
     return riven_result_ok_value(0);
 }
@@ -470,12 +581,12 @@ void *riven_fs_read_to_string(const char *path) {
     void *result;
 
     if (!stream) {
-        return riven_io_error_message(strerror(errno));
+        return riven_io_error_from_errno(errno);
     }
 
     result = riven_stream_read_to_string(stream);
     if (fclose(stream) != 0 && *(int32_t *)result == 0) {
-        return riven_io_error_message(strerror(errno));
+        return riven_io_error_from_errno(errno);
     }
 
     return result;
@@ -487,17 +598,17 @@ void *riven_fs_write(const char *path, const char *contents) {
     size_t len = strlen(text);
 
     if (!stream) {
-        return riven_io_error_message(strerror(errno));
+        return riven_io_error_from_errno(errno);
     }
 
     if (fwrite(text, 1, len, stream) != len) {
-        const char *err = strerror(errno);
+        int saved_errno = errno;
         fclose(stream);
-        return riven_io_error_message(err);
+        return riven_io_error_from_errno(saved_errno);
     }
 
     if (fclose(stream) != 0) {
-        return riven_io_error_message(strerror(errno));
+        return riven_io_error_from_errno(errno);
     }
 
     return riven_result_ok_value(0);
@@ -515,7 +626,7 @@ void *riven_fs_remove_file(const char *path) {
         return riven_io_error_message("path is null");
     }
     if (unlink(path) != 0) {
-        return riven_io_error_message(strerror(errno));
+        return riven_io_error_from_errno(errno);
     }
     return riven_result_ok_value(0);
 }
@@ -525,7 +636,7 @@ void *riven_fs_create_dir(const char *path) {
         return riven_io_error_message("path is null");
     }
     if (mkdir(path, 0777) != 0) {
-        return riven_io_error_message(strerror(errno));
+        return riven_io_error_from_errno(errno);
     }
     return riven_result_ok_value(0);
 }
@@ -555,17 +666,17 @@ void *riven_fs_create_dir_all(const char *path) {
         }
         *p = '\0';
         if (mkdir(copy, 0777) != 0 && errno != EEXIST) {
-            const char *err = strerror(errno);
+            int saved_errno = errno;
             free(copy);
-            return riven_io_error_message(err);
+            return riven_io_error_from_errno(saved_errno);
         }
         *p = '/';
     }
 
     if (mkdir(copy, 0777) != 0 && errno != EEXIST) {
-        const char *err = strerror(errno);
+        int saved_errno = errno;
         free(copy);
-        return riven_io_error_message(err);
+        return riven_io_error_from_errno(saved_errno);
     }
 
     free(copy);
@@ -577,7 +688,7 @@ void *riven_fs_rename(const char *from, const char *to) {
         return riven_io_error_message("path is null");
     }
     if (rename(from, to) != 0) {
-        return riven_io_error_message(strerror(errno));
+        return riven_io_error_from_errno(errno);
     }
     return riven_result_ok_value(0);
 }
@@ -653,9 +764,9 @@ void *riven_env_current_dir(void) {
             return result;
         }
         if (errno != ERANGE) {
-            void *err = riven_io_error_message(strerror(errno));
+            int saved_errno = errno;
             free(buf);
-            return err;
+            return riven_io_error_from_errno(saved_errno);
         }
         size_t next = cap * 2;
         char *next_buf = (char *)realloc(buf, next);
@@ -696,7 +807,7 @@ void *riven_fs_read_dir(const char *path) {
     }
     DIR *dir = opendir(path);
     if (!dir) {
-        return riven_io_error_message(strerror(errno));
+        return riven_io_error_from_errno(errno);
     }
     RivenVec *names = riven_vec_new();
     errno = 0;
@@ -719,7 +830,7 @@ void *riven_fs_read_dir(const char *path) {
          * `riven_test_free(` splice; the asm-label decl at the top of
          * this file maps it to the public `riven_vec_free` symbol. */
         riven_vec_ORIG_FREE(names);
-        return riven_io_error_message(strerror(saved));
+        return riven_io_error_from_errno(saved);
     }
     return riven_result_ok_value((int64_t)names);
 }

@@ -337,3 +337,69 @@ end
     assert!(ok);
     assert_eq!(stdout, "0\n", "got: {:?}", stdout);
 }
+
+/// Phase 2 #06.5: with `IoError` promoted to a tagged enum, user code
+/// can now construct variants directly. `.message()` dispatches to
+/// the runtime helper that knows how to render each tag.
+#[test]
+fn io_error_variants_are_constructible_and_message_dispatches() {
+    let source = r##"
+def show(e: IoError) -> String
+  e.message()
+end
+
+def main
+  let nf  = IoError.NotFound
+  let pd  = IoError.PermissionDenied
+  let oth = IoError.Other(message: "boom")
+  puts show(nf)
+  puts show(pd)
+  puts show(oth)
+end
+"##;
+    let (stdout, _stderr, ok) = compile_and_run(source, "stdlib_io_err_construct");
+    assert!(ok);
+    assert_eq!(
+        stdout, "entity not found\npermission denied\nboom\n",
+        "got: {:?}",
+        stdout
+    );
+}
+
+/// Phase 2 #06.5: `IoError` is now a tagged enum. Reading from an
+/// empty stdin yields `Err(IoError.UnexpectedEof)`; calling
+/// `.message()` on the captured error dispatches through the new
+/// runtime helper (`riven_io_error_get_message`) and returns the
+/// per-variant description string. The explicit `e: IoError` type
+/// annotation pins inference so the method-call callee is mangled
+/// as `IoError_message` (which `codegen/runtime.rs` maps to the
+/// real dispatcher). Without the annotation, the bound pattern
+/// variable's type stays an unresolved inference variable and the
+/// callee gets mangled with the type-var name instead of `IoError`
+/// — a pre-existing inference gap unrelated to the C2/IoError
+/// refactor.
+#[test]
+fn io_error_message_dispatches_per_variant_on_empty_stdin() {
+    let source = r##"
+def describe(e: IoError) -> String
+  e.message()
+end
+
+def main
+  let stream = stdin()
+  let line = stream.read_line()
+  match line
+    Ok(_)  -> puts "ok"
+    Err(e) -> puts describe(e)
+  end
+end
+"##;
+    let (stdout, _stderr, ok) =
+        compile_and_run_with_stdin(source, "stdlib_io_err_message", b"");
+    assert!(ok);
+    assert_eq!(
+        stdout, "unexpected end of file\n",
+        "expected UnexpectedEof variant message, got: {:?}",
+        stdout
+    );
+}

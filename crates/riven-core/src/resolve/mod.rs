@@ -261,8 +261,13 @@ impl Resolver {
             self.type_registry.insert("Hash".to_string(), id);
         }
 
-        // Register built-in functions
-        let io_error_ty = Ty::Class {
+        // Register built-in functions. `IoError` is registered below
+        // as `DefKind::Enum`, so the type reference here uses
+        // `Ty::Enum` to keep the symbol-table kind and the type kind
+        // in sync. Mismatching the two (Ty::Class vs DefKind::Enum)
+        // breaks `enum_with_derive_trait` lookups and the codegen
+        // enum-tag dispatch.
+        let io_error_ty = Ty::Enum {
             name: "IoError".to_string(),
             generic_args: vec![],
         };
@@ -655,14 +660,19 @@ impl Resolver {
             builtin_fn_ids.insert(name.to_string(), id);
         }
 
+        // Phase 2 #06.5: `IoError` is a tagged-enum mirroring a small
+        // subset of Rust's `std::io::ErrorKind`. Each errno class maps
+        // to a unit variant; `Other(message: String)` is the fallback
+        // for codes outside the curated subset. The runtime helpers
+        // `riven_io_error_*` produce values matching this layout, and
+        // the synthesized `IoError.message() -> String` method (wired
+        // in codegen/runtime.rs) dispatches on tag.
         let io_error_id = self.symbols.define(
             "IoError".to_string(),
-            DefKind::Class {
-                info: ClassInfo {
+            DefKind::Enum {
+                info: EnumInfo {
                     generic_params: vec![],
-                    parent: None,
-                    fields: vec![],
-                    methods: vec![],
+                    variants: vec![], // filled below
                     derive_traits: vec![],
                     opt_out_send: false,
                     opt_out_sync: false,
@@ -673,8 +683,56 @@ impl Resolver {
             Visibility::Public,
             span.clone(),
         );
+        self.scopes.insert_type("IoError".to_string(), io_error_id);
         self.type_registry
             .insert("IoError".to_string(), io_error_id);
+
+        // Variant DefIds (tag indices match the runtime constants in
+        // crates/riven-core/runtime/runtime.c — keep them in sync).
+        let io_unit_variants: &[(&str, usize)] = &[
+            ("NotFound", 0),
+            ("PermissionDenied", 1),
+            ("AlreadyExists", 2),
+            ("Interrupted", 3),
+            ("WouldBlock", 4),
+            ("InvalidInput", 5),
+            ("UnexpectedEof", 6),
+            ("BrokenPipe", 7),
+        ];
+        let mut io_variant_ids: Vec<DefId> = Vec::with_capacity(io_unit_variants.len() + 1);
+        for (vname, idx) in io_unit_variants {
+            let vid = self.symbols.define(
+                (*vname).to_string(),
+                DefKind::EnumVariant {
+                    parent: io_error_id,
+                    variant_idx: *idx,
+                    kind: VariantDefKind::Unit,
+                },
+                Visibility::Public,
+                span.clone(),
+            );
+            self.scopes
+                .insert(format!("IoError.{}", vname), vid);
+            io_variant_ids.push(vid);
+        }
+        let io_other_id = self.symbols.define(
+            "Other".to_string(),
+            DefKind::EnumVariant {
+                parent: io_error_id,
+                variant_idx: 8,
+                kind: VariantDefKind::Struct(vec![("message".to_string(), Ty::String)]),
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.scopes.insert("IoError.Other".to_string(), io_other_id);
+        io_variant_ids.push(io_other_id);
+
+        if let Some(def) = self.symbols.get_mut(io_error_id) {
+            if let DefKind::Enum { ref mut info } = def.kind {
+                info.variants = io_variant_ids;
+            }
+        }
         let stdin_id = self.symbols.define(
             "Stdin".to_string(),
             DefKind::Class {
