@@ -650,9 +650,11 @@ impl<'a> Lexer<'a> {
     /// precision := <digit>+
     /// ```
     ///
-    /// Consumes up to and including the closing `}`. Unrecognized
-    /// characters are tolerated (silently dropped) for now — Phase B3
-    /// will tighten the grammar with E0xxx diagnostics.
+    /// Consumes up to and including the closing `}`. Phase B3 emits
+    /// `E0007` for malformed specs (e.g. `.` without precision digits,
+    /// stray non-whitespace characters after the well-formed prefix)
+    /// while still recovering by consuming through `}` so downstream
+    /// phases can keep going.
     fn lex_format_spec(&mut self) -> crate::lexer::token::FormatSpec {
         use crate::lexer::token::FormatSpec;
         let mut spec = FormatSpec::default();
@@ -692,8 +694,12 @@ impl<'a> Lexer<'a> {
             spec.width = width_str.parse::<usize>().ok();
         }
 
-        // Step 4: optional `.precision`.
+        // Step 4: optional `.precision`. `.` without a following digit
+        // is malformed (E0007).
         if self.peek_at(0) == Some('.') {
+            let dot_byte = self.byte_pos;
+            let dot_line = self.line;
+            let dot_col = self.column;
             self.advance(); // consume `.`
             let mut prec_str = String::new();
             while let Some(c) = self.peek_at(0) {
@@ -706,6 +712,13 @@ impl<'a> Lexer<'a> {
             }
             if !prec_str.is_empty() {
                 spec.precision = prec_str.parse::<usize>().ok();
+            } else {
+                let span = Span::new(dot_byte, self.byte_pos, dot_line, dot_col);
+                self.diagnostics.push(Diagnostic::error_with_code(
+                    "malformed format spec: `.` must be followed by precision digits",
+                    span,
+                    "E0007",
+                ));
             }
         }
 
@@ -715,15 +728,44 @@ impl<'a> Lexer<'a> {
             self.advance();
         }
 
-        // Step 6: consume any tolerated whitespace + the closing `}`.
+        // Step 6: consume up to the closing `}`. Whitespace is
+        // tolerated; any other character is malformed (E0007). We
+        // still consume them so the outer interpolation loop sees a
+        // balanced `}` and downstream phases keep running.
+        let mut stray_start: Option<(usize, u32, u32)> = None;
+        let mut stray_end: usize = self.byte_pos;
         while let Some(c) = self.peek_at(0) {
             if c == '}' {
                 self.advance(); // consume `}`
                 break;
             }
-            // Skip unrecognized chars silently for v1; Phase B3 adds
-            // a diagnostic.
+            if c.is_whitespace() {
+                // Tolerated. Flush any pending stray run first so the
+                // diagnostic span doesn't include the whitespace.
+                if let Some((sb, sl, sc)) = stray_start.take() {
+                    let span = Span::new(sb, stray_end, sl, sc);
+                    self.diagnostics.push(Diagnostic::error_with_code(
+                        "malformed format spec: unexpected character(s)",
+                        span,
+                        "E0007",
+                    ));
+                }
+                self.advance();
+                continue;
+            }
+            if stray_start.is_none() {
+                stray_start = Some((self.byte_pos, self.line, self.column));
+            }
             self.advance();
+            stray_end = self.byte_pos;
+        }
+        if let Some((sb, sl, sc)) = stray_start {
+            let span = Span::new(sb, stray_end, sl, sc);
+            self.diagnostics.push(Diagnostic::error_with_code(
+                "malformed format spec: unexpected character(s)",
+                span,
+                "E0007",
+            ));
         }
 
         spec

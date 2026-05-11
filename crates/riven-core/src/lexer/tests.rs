@@ -702,6 +702,101 @@ fn test_interpolation_full_spec() {
     }
 }
 
+/// Phase 2 #06.B3: `.` without precision digits is malformed (E0007).
+/// The lexer still recovers — the interpolation closes cleanly — but
+/// a diagnostic is emitted.
+#[test]
+fn test_interpolation_spec_dot_without_precision_is_e0007() {
+    let (_, diags) = lex_with_errors("\"#{x:5.}\"");
+    assert!(
+        diags.iter().any(|d| d.code.as_deref() == Some("E0007")
+            && d.message.contains("`.`")
+            && d.message.contains("precision")),
+        "expected E0007 (`.` without precision), got {:?}",
+        diags
+    );
+}
+
+/// Phase 2 #06.B3: trailing junk after the well-formed prefix is
+/// malformed (E0007). `"#{x:5xy}"` has width=5 followed by stray `xy`.
+#[test]
+fn test_interpolation_spec_trailing_junk_is_e0007() {
+    let (_, diags) = lex_with_errors("\"#{x:5xy}\"");
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.code.as_deref() == Some("E0007")
+                && d.message.contains("unexpected character")),
+        "expected E0007 (trailing junk), got {:?}",
+        diags
+    );
+}
+
+/// Phase 2 #06.B3: `?` followed by more characters is malformed —
+/// `?` is the terminal flag and nothing should follow it before `}`.
+#[test]
+fn test_interpolation_spec_chars_after_debug_flag_is_e0007() {
+    let (_, diags) = lex_with_errors("\"#{x:?nope}\"");
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.code.as_deref() == Some("E0007")),
+        "expected E0007 (chars after ?), got {:?}",
+        diags
+    );
+}
+
+/// Phase 2 #06.B3: a totally unrecognised spec body is malformed.
+/// `"#{x:@@@}"` has neither fill+align nor any other valid prefix
+/// (the doubled `@` defeats the `fill align` lookahead because `@`
+/// isn't an alignment marker).
+#[test]
+fn test_interpolation_spec_unrecognised_body_is_e0007() {
+    let (_, diags) = lex_with_errors("\"#{x:@@@}\"");
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.code.as_deref() == Some("E0007")),
+        "expected E0007 (unrecognised body), got {:?}",
+        diags
+    );
+}
+
+/// Phase 2 #06.B3: a *well-formed* spec must still produce zero
+/// diagnostics. Regression guard for over-eager error emission.
+#[test]
+fn test_interpolation_well_formed_spec_no_diagnostics() {
+    for src in [
+        "\"#{x:?}\"",
+        "\"#{x:>5}\"",
+        "\"#{x:.2}\"",
+        "\"#{x:*^10.2}\"",
+        "\"#{x:*<10.3?}\"",
+        "\"#{x:5}\"",
+    ] {
+        let (_, diags) = lex_with_errors(src);
+        assert!(
+            diags.is_empty(),
+            "well-formed spec `{}` produced diagnostics: {:?}",
+            src,
+            diags
+        );
+    }
+}
+
+/// Phase 2 #06.B3: tolerated whitespace inside the spec must not
+/// emit a diagnostic on its own. (Whitespace is the documented
+/// tolerance carve-out in `lex_format_spec` step 6.)
+#[test]
+fn test_interpolation_spec_internal_whitespace_is_tolerated() {
+    let (_, diags) = lex_with_errors("\"#{x:5 }\"");
+    assert!(
+        diags.is_empty(),
+        "trailing whitespace inside spec should be tolerated, got {:?}",
+        diags
+    );
+}
+
 #[test]
 fn test_multiline_string() {
     let input = "\"\"\"

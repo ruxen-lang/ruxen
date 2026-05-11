@@ -49,6 +49,10 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E0006",
         title: "unexpected character",
     },
+    CodeInfo {
+        code: "E0007",
+        title: "malformed format spec",
+    },
     // ── Reserved diagnostic-test code ────────────────────────────────
     // Used by `diagnostics::tests` to exercise the `code` field.
     CodeInfo {

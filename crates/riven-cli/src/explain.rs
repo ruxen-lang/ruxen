@@ -26,6 +26,7 @@ static EXPLAINS: &[(&str, &str)] = &[
     ("E0004", include_str!("../../../docs/errors/E0004.md")),
     ("E0005", include_str!("../../../docs/errors/E0005.md")),
     ("E0006", include_str!("../../../docs/errors/E0006.md")),
+    ("E0007", include_str!("../../../docs/errors/E0007.md")),
     // ── Test fixture sentinel ───────────────────────────────────────
     ("E0042", include_str!("../../../docs/errors/E0042.md")),
     // ── Derive macros ───────────────────────────────────────────────
