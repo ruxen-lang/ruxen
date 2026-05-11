@@ -1,0 +1,11 @@
+enum Color
+  Red
+  Green
+  Blue
+  derive Debug
+end
+
+def main
+  let c = Color.Green
+  puts "#{c}"
+end

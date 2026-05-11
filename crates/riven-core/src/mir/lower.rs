@@ -443,6 +443,9 @@ impl<'a> Lowerer<'a> {
                     }
                 }
                 HirItem::Enum(e) => {
+                    if e.derive_traits.iter().any(|t| t == "Debug") {
+                        mir.functions.push(self.synthesize_enum_to_debug(e));
+                    }
                     if e.derive_traits.iter().any(|t| t == "Clone") {
                         mir.functions.push(self.synthesize_enum_clone(e));
                     }
@@ -4123,6 +4126,25 @@ impl<'a> Lowerer<'a> {
                             args: vec![MirValue::Use(src)],
                         });
                         dest
+                    } else if let Some(enum_name) = self.enum_with_derive_debug(&effective_ty) {
+                        // Phase 2 #06.C2: same dispatch for enums that
+                        // derive Debug — interpolation lowers to the
+                        // synthesized `{EnumName}_to_debug`.
+                        let src = val_local.unwrap_or_else(|| {
+                            let d = self.new_temp(Ty::String);
+                            self.emit(MirInst::StringLiteral {
+                                dest: d,
+                                value: String::new(),
+                            });
+                            d
+                        });
+                        let dest = self.new_temp(Ty::String);
+                        self.emit(MirInst::Call {
+                            dest: Some(dest),
+                            callee: format!("{}_to_debug", enum_name),
+                            args: vec![MirValue::Use(src)],
+                        });
+                        dest
                     } else {
                         let src = val_local.unwrap_or_else(|| {
                             let d = self.new_temp(Ty::String);
@@ -6911,6 +6933,231 @@ impl<'a> Lowerer<'a> {
         mir_fn
     }
 
+    /// Phase 2 #06.C2: synthesize `{EnumName}_to_debug(self) -> String`
+    /// for an enum that declares `derive Debug`. Output shape mirrors
+    /// Rust's `Debug`:
+    ///
+    /// * `Unit` variants  → `"Variant"`
+    /// * `Tuple(a, b)`    → `"Variant(<a>, <b>)"`
+    /// * `Struct{x, y}`   → `"Variant { x: <x>, y: <y> }"`
+    ///
+    /// Field formatting mirrors `synthesize_struct_to_debug`: primitives
+    /// use the `riven_*_to_string` runtime helpers, nested structs with
+    /// `derive Debug` recurse, anything else renders as `<...>` so the
+    /// formatter never panics.
+    fn synthesize_enum_to_debug(&self, e: &HirEnumDef) -> MirFunction {
+        let fn_name = format!("{}_to_debug", e.name);
+        let self_ty = Ty::Enum {
+            name: e.name.clone(),
+            generic_args: vec![],
+        };
+
+        let mut mir_fn = MirFunction::new(&fn_name, Ty::String);
+        let self_local = mir_fn.new_local("self", self_ty.clone(), false);
+        mir_fn.params.push(self_local);
+
+        let entry = mir_fn.entry_block;
+        let tag = mir_fn.new_temp(Ty::Int32);
+        mir_fn.blocks[entry].instructions.push(MirInst::GetTag {
+            dest: tag,
+            src: self_local,
+        });
+
+        // One block per variant. Each block builds the variant's
+        // debug string and terminates with its own `Return`, so we
+        // don't need a join block. Variant 0 doubles as the Switch's
+        // `otherwise` target to mirror `synthesize_enum_clone`.
+        let mut variant_blocks: Vec<BlockId> = Vec::with_capacity(e.variants.len());
+        for _ in &e.variants {
+            variant_blocks.push(mir_fn.new_block());
+        }
+        let targets: Vec<(i64, BlockId)> = e
+            .variants
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (v.index as i64, variant_blocks[i]))
+            .collect();
+        let otherwise = variant_blocks.first().copied().unwrap_or(entry);
+
+        mir_fn.blocks[entry].terminator = Terminator::Switch {
+            value: MirValue::Use(tag),
+            targets,
+            otherwise,
+        };
+
+        for (i, variant) in e.variants.iter().enumerate() {
+            let block = variant_blocks[i];
+
+            // Start with the variant name.
+            let mut acc = mir_fn.new_temp(Ty::String);
+            mir_fn.blocks[block]
+                .instructions
+                .push(MirInst::StringLiteral {
+                    dest: acc,
+                    value: variant.name.clone(),
+                });
+
+            let payload_fields: &[HirVariantField] = match &variant.kind {
+                HirVariantKind::Unit => &[],
+                HirVariantKind::Tuple(fields) | HirVariantKind::Struct(fields) => fields,
+            };
+
+            if !payload_fields.is_empty() {
+                let is_struct_variant =
+                    matches!(variant.kind, HirVariantKind::Struct(_));
+                let open = if is_struct_variant { " { " } else { "(" };
+                let close = if is_struct_variant { " }" } else { ")" };
+
+                acc = self.concat_string_literal(&mut mir_fn, block, acc, open);
+
+                let payload = mir_fn.new_temp(self_ty.clone());
+                mir_fn.blocks[block].instructions.push(MirInst::GetPayload {
+                    dest: payload,
+                    src: self_local,
+                    ty: self_ty.clone(),
+                });
+
+                for (idx, field) in payload_fields.iter().enumerate() {
+                    if idx > 0 {
+                        acc = self.concat_string_literal(&mut mir_fn, block, acc, ", ");
+                    }
+                    if is_struct_variant {
+                        if let Some(name) = &field.name {
+                            let label = format!("{}: ", name);
+                            acc = self.concat_string_literal(&mut mir_fn, block, acc, &label);
+                        }
+                    }
+
+                    let field_local = mir_fn.new_temp(field.ty.clone());
+                    mir_fn.blocks[block].instructions.push(MirInst::GetField {
+                        dest: field_local,
+                        base: payload,
+                        field_index: idx,
+                    });
+
+                    let field_str =
+                        self.format_field_for_debug(&mut mir_fn, block, field_local, &field.ty);
+
+                    let next = mir_fn.new_temp(Ty::String);
+                    mir_fn.blocks[block].instructions.push(MirInst::Call {
+                        dest: Some(next),
+                        callee: "riven_string_concat".to_string(),
+                        args: vec![MirValue::Use(acc), MirValue::Use(field_str)],
+                    });
+                    acc = next;
+                }
+
+                acc = self.concat_string_literal(&mut mir_fn, block, acc, close);
+            }
+
+            mir_fn.blocks[block].terminator = Terminator::Return(Some(MirValue::Use(acc)));
+        }
+
+        mir_fn
+    }
+
+    /// Append a literal `&str` to a String accumulator. Returns the
+    /// new accumulator local. Helper for `synthesize_enum_to_debug`.
+    fn concat_string_literal(
+        &self,
+        mir_fn: &mut MirFunction,
+        block: BlockId,
+        acc: LocalId,
+        text: &str,
+    ) -> LocalId {
+        let lit = mir_fn.new_temp(Ty::String);
+        mir_fn.blocks[block]
+            .instructions
+            .push(MirInst::StringLiteral {
+                dest: lit,
+                value: text.to_string(),
+            });
+        let next = mir_fn.new_temp(Ty::String);
+        mir_fn.blocks[block].instructions.push(MirInst::Call {
+            dest: Some(next),
+            callee: "riven_string_concat".to_string(),
+            args: vec![MirValue::Use(acc), MirValue::Use(lit)],
+        });
+        next
+    }
+
+    /// Format a single field value for `_to_debug` output. Mirrors
+    /// the per-field branch in `synthesize_struct_to_debug`. Phase D
+    /// will replace this with a canonical `Display::fmt` dispatch.
+    fn format_field_for_debug(
+        &self,
+        mir_fn: &mut MirFunction,
+        block: BlockId,
+        field_local: LocalId,
+        field_ty: &Ty,
+    ) -> LocalId {
+        if *field_ty == Ty::Char {
+            let dest = mir_fn.new_temp(Ty::String);
+            mir_fn.blocks[block].instructions.push(MirInst::Call {
+                dest: Some(dest),
+                callee: "riven_char_to_string".to_string(),
+                args: vec![MirValue::Use(field_local)],
+            });
+            return dest;
+        }
+        if field_ty.is_integer() {
+            let dest = mir_fn.new_temp(Ty::String);
+            mir_fn.blocks[block].instructions.push(MirInst::Call {
+                dest: Some(dest),
+                callee: "riven_int_to_string".to_string(),
+                args: vec![MirValue::Use(field_local)],
+            });
+            return dest;
+        }
+        if field_ty.is_float() {
+            let dest = mir_fn.new_temp(Ty::String);
+            mir_fn.blocks[block].instructions.push(MirInst::Call {
+                dest: Some(dest),
+                callee: "riven_float_to_string".to_string(),
+                args: vec![MirValue::Use(field_local)],
+            });
+            return dest;
+        }
+        if *field_ty == Ty::Bool {
+            let dest = mir_fn.new_temp(Ty::String);
+            mir_fn.blocks[block].instructions.push(MirInst::Call {
+                dest: Some(dest),
+                callee: "riven_bool_to_string".to_string(),
+                args: vec![MirValue::Use(field_local)],
+            });
+            return dest;
+        }
+        if matches!(field_ty, Ty::String | Ty::Str) {
+            return field_local;
+        }
+        if let Some(inner_struct_name) = self.struct_with_derive_debug(field_ty) {
+            let dest = mir_fn.new_temp(Ty::String);
+            mir_fn.blocks[block].instructions.push(MirInst::Call {
+                dest: Some(dest),
+                callee: format!("{}_to_debug", inner_struct_name),
+                args: vec![MirValue::Use(field_local)],
+            });
+            return dest;
+        }
+        if let Some(inner_enum_name) = self.enum_with_derive_debug(field_ty) {
+            let dest = mir_fn.new_temp(Ty::String);
+            mir_fn.blocks[block].instructions.push(MirInst::Call {
+                dest: Some(dest),
+                callee: format!("{}_to_debug", inner_enum_name),
+                args: vec![MirValue::Use(field_local)],
+            });
+            return dest;
+        }
+        let dest = mir_fn.new_temp(Ty::String);
+        mir_fn.blocks[block]
+            .instructions
+            .push(MirInst::StringLiteral {
+                dest,
+                value: "<...>".to_string(),
+            });
+        dest
+    }
+
     fn synthesize_default_value(
         &self,
         mir_fn: &mut MirFunction,
@@ -7137,6 +7384,40 @@ impl<'a> Lowerer<'a> {
     /// whose declaration includes `derive Debug`; otherwise None.
     fn struct_with_derive_debug(&self, ty: &Ty) -> Option<String> {
         self.struct_with_derive_trait(ty, "Debug")
+    }
+
+    /// Phase 2 #06.C2: like `struct_with_derive_debug` but for enums.
+    /// Returns the enum's name when `ty` resolves (through refs/
+    /// aliases/newtypes) to an enum whose `derive_traits` contains
+    /// `Debug`.
+    fn enum_with_derive_debug(&self, ty: &Ty) -> Option<String> {
+        self.enum_with_derive_trait(ty, "Debug")
+    }
+
+    fn enum_with_derive_trait(&self, ty: &Ty, trait_name: &str) -> Option<String> {
+        use crate::resolve::symbols::DefKind;
+        let name = match ty {
+            Ty::Enum { name, .. } => name.clone(),
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => {
+                return self.enum_with_derive_trait(inner, trait_name)
+            }
+            Ty::Alias { target, .. } => return self.enum_with_derive_trait(target, trait_name),
+            Ty::Newtype { inner, .. } => return self.enum_with_derive_trait(inner, trait_name),
+            _ => return None,
+        };
+        for def in self.symbols.iter() {
+            if def.name == name {
+                if let DefKind::Enum { info } = &def.kind {
+                    if info.derive_traits.iter().any(|t| t == trait_name) {
+                        return Some(name);
+                    }
+                }
+            }
+        }
+        None
     }
 
     fn receiver_type_name(&self, expr: &HirExpr) -> Option<String> {
