@@ -832,3 +832,112 @@ mod lowering_tests {
         assert!(has_call, "should emit a Call to 'foo'");
     }
 }
+
+// ─── Lowerer helper tests ──────────────────────────────────────────────────
+//
+// These tests target private `Lowerer` helpers that cannot be reached from
+// integration tests in `crates/riven-core/tests/`. They drive the helper
+// after running the real lex / parse / typeck / lower pipeline, so the
+// `Lowerer`'s internal state (e.g. `trait_impls`) is populated as it would
+// be during a real compilation.
+
+#[cfg(test)]
+mod helper_tests {
+    use crate::diagnostics::DiagnosticLevel;
+    use crate::hir::types::Ty;
+    use crate::lexer::Lexer;
+    use crate::mir::lower::Lowerer;
+    use crate::parser::Parser;
+    use crate::typeck;
+
+    /// Phase 2 #06.D2.S2: direct unit test for `Lowerer::user_has_impl_display`.
+    ///
+    /// Covers the three observable cases of the helper:
+    /// 1. A user `class Money` with `impl Display for Money` → returns
+    ///    `Some("Money")`.
+    /// 2. A primitive `Ty::Int` → returns `None` (the early-return arm for
+    ///    types that are not Struct/Class/Enum/Ref/Alias/Newtype).
+    /// 3. `Ty::Ref(Box::new(Class { name: "Money", .. }))` → returns
+    ///    `Some("Money")` (proves the Ref-recursion path).
+    ///
+    /// The helper was previously only validated indirectly through the
+    /// Stage-3 behaviour test `user_impl_display_lowers_t_fmt_function` in
+    /// `tests/stdlib_fmt_display_dispatch.rs`. This direct test closes the
+    /// spec gap surfaced in the Stage 2 spec review.
+    #[test]
+    fn user_has_impl_display_resolves_class_int_and_ref() {
+        // Canonical impl-Display fixture (mirrors `tests/stdlib_fmt.rs`).
+        // `class Money` declares a single `cents: Int` field and an
+        // `impl Display` block whose `def fmt` matches the
+        // `fmt(&mut Formatter) -> Result[(), FmtError]` contract.
+        let src = r#"
+class Money
+  cents: Int
+
+  impl Display
+    def fmt(f: &mut Formatter) -> Result[(), FmtError]
+      Ok(())
+    end
+  end
+end
+
+def main
+  let _m = Money.new(100)
+end
+"#;
+
+        // Drive the real pipeline so `trait_impls` is populated exactly as
+        // it would be in compilation.
+        let mut lexer = Lexer::new(src);
+        let tokens = lexer.tokenize().expect("lex should succeed");
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().expect("parse should succeed");
+        let tc = typeck::type_check(&program);
+        assert!(
+            tc.diagnostics
+                .iter()
+                .all(|d| d.level != DiagnosticLevel::Error),
+            "fixture must typecheck cleanly, got: {:?}",
+            tc.diagnostics
+        );
+
+        // `lower_program` calls `collect_trait_impls`, which is the
+        // source-of-truth that `user_has_impl_display` consults.
+        let mut lowerer = Lowerer::new(&tc.symbols);
+        lowerer
+            .lower_program(&tc.program)
+            .expect("lower_program should succeed");
+
+        // Case 1: `Money` class with an `impl Display` block.
+        let money_ty = Ty::Class {
+            name: "Money".to_string(),
+            generic_args: vec![],
+        };
+        assert_eq!(
+            lowerer.user_has_impl_display(&money_ty),
+            Some("Money".to_string()),
+            "class Money with impl Display must resolve to Some(\"Money\")"
+        );
+
+        // Case 2: primitive `Int` — not a Struct/Class/Enum, hits the
+        // `_ => return None` arm directly.
+        assert_eq!(
+            lowerer.user_has_impl_display(&Ty::Int),
+            None,
+            "primitive Int has no impl Display, must return None"
+        );
+
+        // Case 3: `&Money` — exercises the `Ty::Ref(inner)` recursive
+        // arm; the helper must peel the ref and find the impl on the
+        // inner Class.
+        let ref_money_ty = Ty::Ref(Box::new(Ty::Class {
+            name: "Money".to_string(),
+            generic_args: vec![],
+        }));
+        assert_eq!(
+            lowerer.user_has_impl_display(&ref_money_ty),
+            Some("Money".to_string()),
+            "&Money must resolve via Ref-recursion to Some(\"Money\")"
+        );
+    }
+}

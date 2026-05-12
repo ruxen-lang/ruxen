@@ -7465,7 +7465,7 @@ impl<'a> Lowerer<'a> {
     /// / `Alias` / `Newtype` so that `&Money` and `Money` both hit the same
     /// impl. Returns `None` for primitive types (Int, Float, …) and any
     /// nominal type whose name is not in the Display impl registry.
-    fn user_has_impl_display(&self, ty: &Ty) -> Option<String> {
+    pub(super) fn user_has_impl_display(&self, ty: &Ty) -> Option<String> {
         let name = match ty {
             Ty::Struct { name, .. } | Ty::Class { name, .. } | Ty::Enum { name, .. } => {
                 name.clone()

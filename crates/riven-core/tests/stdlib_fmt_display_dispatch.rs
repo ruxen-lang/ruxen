@@ -104,12 +104,9 @@ end
     );
 }
 
-/// Stage 2 plumbing marker: `user_has_impl_display` is a private helper on
-/// the MIR lowerer and cannot be called directly from an integration test.
-/// Indirect validation is done via `user_impl_display_lowers_t_fmt_function`
-/// above.  Stage 3 will add a direct behavioural assertion once the helper
-/// gates an interpolation call site.
-#[test]
-fn user_has_impl_display_marker() {
-    // Intentionally empty — validated indirectly above.
-}
+// Stage 2 plumbing test: `user_has_impl_display` is a private helper on
+// `Lowerer` (`pub(super) fn`) and cannot be reached from an integration
+// test in `tests/`.  A direct unit test now lives next to the helper at
+// `crates/riven-core/src/mir/tests.rs::helper_tests::user_has_impl_display_resolves_class_int_and_ref`.
+// `user_impl_display_lowers_t_fmt_function` (above) remains the
+// behavioural end-to-end coverage.
