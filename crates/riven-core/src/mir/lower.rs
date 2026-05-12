@@ -1234,7 +1234,9 @@ impl<'a> Lowerer<'a> {
                     } else {
                         type_name.as_str()
                     };
-                    if matches!(base_type, "Vec" | "Hash" | "HashMap" | "Set" | "HashSet") {
+                    // Phase 2 #06.D2.S0: `Formatter.new()` dispatches to
+                    // the runtime constructor just like Vec/Hash.
+                    if matches!(base_type, "Vec" | "Hash" | "HashMap" | "Set" | "HashSet" | "Formatter") {
                         let obj = self.new_temp(expr.ty.clone());
                         // Emit Call to runtime constructor (e.g., Vec_new).
                         // Use the base type so the mangled callee elides the
@@ -2453,7 +2455,9 @@ impl<'a> Lowerer<'a> {
                     } else {
                         type_name.as_str()
                     };
-                    if matches!(base_type, "Vec" | "Hash" | "HashMap" | "Set" | "HashSet") {
+                    // Phase 2 #06.D2.S0: `Formatter.new()` dispatches to
+                    // the runtime constructor just like Vec/Hash.
+                    if matches!(base_type, "Vec" | "Hash" | "HashMap" | "Set" | "HashSet" | "Formatter") {
                         let obj = self.new_temp(expr.ty.clone());
                         // Use the base type so the mangled callee elides the
                         // generic parameter list (`HashMap[K, V]_new` would

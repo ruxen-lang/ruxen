@@ -72,6 +72,11 @@ void riven_hash_insert(RivenHash *h, int64_t key, int64_t value);
 #endif
 void riven_vec_ORIG_FREE(RivenVec *v) RIVEN_ASM_LABEL(riven_vec_free);
 void riven_string_ORIG_FREE(char *s) RIVEN_ASM_LABEL(riven_string_free);
+/* Phase 2 #06.D2.S0: Formatter forward decl — asm label must appear
+ * before any caller to satisfy macOS clang's "asm label after first
+ * use" constraint (same pattern as riven_vec/string above). */
+typedef struct RivenFormatter RivenFormatter;
+void riven_fmt_formatter_ORIG_FREE(RivenFormatter *f) RIVEN_ASM_LABEL(riven_fmt_formatter_free);
 static uint64_t riven_hash_str(const char *s);
 
 static void *riven_result_ok_value(int64_t payload) {
@@ -1350,6 +1355,114 @@ char *riven_string_from(const char *s) {
     }
     memcpy(result, s, len + 1);
     return result;
+}
+
+/* ── std::fmt::Formatter ─────────────────────────────────────────────
+ *
+ * Phase 2 #06.D2.S0: six runtime helpers that Phase A's CHANGELOG
+ * claimed but never landed. Codegen in cranelift.rs and llvm/ already
+ * has the signatures wired; these definitions close the link gap.
+ *
+ * Layout: heap-owned grow-able byte buffer plus reserved spec slots
+ * (width/precision/align/fill) for Phase D4.
+ */
+
+typedef struct RivenFormatter {
+    char    *buf;
+    size_t   len;
+    size_t   cap;
+    /* Reserved spec slots — populated by Phase D4. */
+    int32_t  width;
+    int32_t  precision;
+    int8_t   align;    /* 0 = default, 1 = left, 2 = center, 3 = right */
+    int32_t  fill_cp;  /* UTF-32 codepoint; -1 = default ' ' */
+} RivenFormatter;
+
+/* Grow the buffer so at least `additional` more bytes can be appended. */
+static void riven_fmt_formatter_reserve(RivenFormatter *f, size_t additional) {
+    size_t needed = f->len + additional + 1; /* +1 for NUL */
+    if (needed <= f->cap) return;
+    size_t newcap = f->cap == 0 ? 16 : f->cap;
+    while (newcap < needed) newcap *= 2;
+    char *nb = (char *) realloc(f->buf, newcap);
+    if (!nb) { fprintf(stderr, "riven: formatter alloc failed\n"); exit(101); }
+    f->buf = nb;
+    f->cap = newcap;
+}
+
+/* Allocate and initialise a fresh Formatter with an empty buffer. */
+RivenFormatter *riven_fmt_formatter_new(void) {
+    RivenFormatter *f = (RivenFormatter *) calloc(1, sizeof(RivenFormatter));
+    if (!f) { fprintf(stderr, "riven: formatter alloc failed\n"); exit(101); }
+    f->precision = -1;
+    f->fill_cp   = -1;
+    riven_fmt_formatter_reserve(f, 0);
+    f->buf[0] = '\0';
+    return f;
+}
+
+/* Free the Formatter and its buffer.
+ * Uses the _ORIG_FREE sentinel + RIVEN_ASM_LABEL rebind so the
+ * drop_fixtures textual `free(` → `riven_test_free(` rewrite does not
+ * mangle this call site (same pattern as riven_string_free /
+ * riven_vec_free).  Forward decl + asm label are at the top of the
+ * file to satisfy macOS clang's "asm label after first use" rule. */
+void riven_fmt_formatter_ORIG_FREE(RivenFormatter *f) {
+    if (!f) return;
+    if (f->buf) free(f->buf);
+    free(f);
+}
+
+/* Append the NUL-terminated string `s` to the buffer.
+ * Returns 0 (tag-0 = Ok(())) on success, 1 (tag-1 = FmtError) on
+ * null input (v1 simplification — buffer overflow is not surfaced). */
+int64_t riven_fmt_formatter_write_str(RivenFormatter *f, const char *s) {
+    if (!f || !s) return 1;
+    size_t n = strlen(s);
+    riven_fmt_formatter_reserve(f, n);
+    memcpy(f->buf + f->len, s, n);
+    f->len += n;
+    f->buf[f->len] = '\0';
+    return 0;
+}
+
+/* Append a single Unicode codepoint.
+ * v1: ASCII codepoints (0–0x7F) are stored directly; non-ASCII
+ * codepoints emit '?' (Phase D3 will add full UTF-8 encoding). */
+int64_t riven_fmt_formatter_write_char(RivenFormatter *f, int64_t codepoint) {
+    if (!f) return 1;
+    if (codepoint >= 0 && codepoint <= 0x7f) {
+        riven_fmt_formatter_reserve(f, 1);
+        f->buf[f->len++] = (char) codepoint;
+        f->buf[f->len]   = '\0';
+    } else {
+        /* Non-ASCII placeholder until Phase D3 UTF-8 encoding lands. */
+        riven_fmt_formatter_reserve(f, 1);
+        f->buf[f->len++] = '?';
+        f->buf[f->len]   = '\0';
+    }
+    return 0;
+}
+
+/* Transfer buffer ownership to a Riven String and free the Formatter.
+ * The accumulated `buf` is taken directly (no copy) and returned as
+ * a heap `char*` that satisfies the Riven String ABI.  Codegen must
+ * not emit a follow-up `_free` call on the Formatter after this. */
+const char *riven_fmt_formatter_buffer(RivenFormatter *f) {
+    if (!f) return riven_string_from("");
+    char *taken = f->buf;
+    /* Disown the buffer before freeing the struct so the struct's
+     * destructor cannot double-free it. */
+    f->buf = NULL;
+    f->len = 0;
+    f->cap = 0;
+    free(f);
+    return taken ? taken : riven_string_from("");
+}
+
+/* Return the number of bytes currently accumulated in the buffer. */
+int64_t riven_fmt_formatter_len(const RivenFormatter *f) {
+    return f ? (int64_t) f->len : 0;
 }
 
 /* ── Memory Management ─────────────────────────────────────────────── */

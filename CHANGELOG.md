@@ -8,6 +8,16 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- Phase 2 #06.D2.S0: land the `riven_fmt_formatter_*` C runtime
+  implementations (`new` / `free` / `write_str` / `write_char` /
+  `buffer` / `len`) that Phase A's CHANGELOG referenced but never
+  committed. `_free` uses `_ORIG_FREE` sentinel + asm-label rebind
+  (same pattern as `riven_string_free` / `riven_vec_free`); `_buffer`
+  transfers buffer ownership and self-frees the Formatter struct.
+  Also adds `"Formatter"` to the MIR lowerer's built-in constructor
+  special-case list so `Formatter.new()` emits `Formatter_new` rather
+  than `Alloc + Formatter_init`. Pin test: `stdlib_fmt_runtime.rs` —
+  round-trips `Formatter.new()` + `.write_str` + `.buffer` end-to-end.
 - Phase 2 stdlib `std::fmt` foundation surface (#06 fmt MVP, plan
   in `docs/superpowers/plans/2026-05-10-stdlib-fmt.md`):
   - **Phase A** — Display/Debug formal traits registered with
