@@ -7,7 +7,7 @@
 use riven_core::diagnostics::DiagnosticLevel;
 use riven_core::lexer::Lexer;
 use riven_core::mir::lower::lower_program;
-use riven_core::mir::nodes::MirProgram;
+use riven_core::mir::nodes::{MirInst, MirProgram};
 use riven_core::parser::Parser;
 use riven_core::typeck;
 
@@ -110,3 +110,56 @@ end
 // `crates/riven-core/src/mir/tests.rs::helper_tests::user_has_impl_display_resolves_class_int_and_ref`.
 // `user_impl_display_lowers_t_fmt_function` (above) remains the
 // behavioural end-to-end coverage.
+
+/// Stage 3: a primitive interpolation `"#{x}"` for `x: Int` lowers through
+/// the canonical Display::fmt dispatch — `Formatter_new`, `Int_fmt`,
+/// `Formatter_buffer` — and the legacy direct call to `riven_int_to_string`
+/// at the interp site is gone.  The synth `Int_fmt` fn (Stage 1) still wraps
+/// `riven_int_to_string` internally, so existing fixture output is preserved.
+#[test]
+fn interpolation_primitive_goes_through_display() {
+    let src = r#"
+def main
+  let x: Int = 42
+  let s = "x is #{x}"
+  let _ = s
+end
+    "#;
+    let m = lower(src);
+    let main = m
+        .functions
+        .iter()
+        .find(|f| f.name == "main")
+        .expect("main fn");
+    let callees: Vec<&str> = main
+        .blocks
+        .iter()
+        .flat_map(|b| b.instructions.iter())
+        .filter_map(|inst| match inst {
+            MirInst::Call { callee, .. } => Some(callee.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        callees.contains(&"Formatter_new"),
+        "missing Formatter_new in: {:?}",
+        callees
+    );
+    assert!(
+        callees.contains(&"Int_fmt"),
+        "missing Int_fmt in: {:?}",
+        callees
+    );
+    assert!(
+        callees.contains(&"Formatter_buffer"),
+        "missing Formatter_buffer in: {:?}",
+        callees
+    );
+    // And the old direct interp-site call is gone (it still lives inside
+    // the synth `Int_fmt` body, but that's a different fn, not `main`).
+    assert!(
+        !callees.contains(&"riven_int_to_string"),
+        "old direct call to riven_int_to_string should be gone from main; got: {:?}",
+        callees
+    );
+}

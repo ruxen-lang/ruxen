@@ -8,6 +8,21 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- Phase 2 #06.D2.S3: route string interpolation through `Display::fmt`
+  dispatch — `Formatter_new` → `{T}_fmt(value, fmt)` → `Formatter_buffer`
+  for primitives (Char / Int / Float / Bool) and any type with
+  `impl Display for T`. Output is byte-identical to the legacy
+  `riven_*_to_string` path because the Stage 1 synth fns wrap the same
+  helpers. Derive-Debug-only types still fall back to `{Name}_to_debug`
+  until users provide their own `impl Display`. Closes prompt 06's
+  "string interpolation routes through Display::fmt" DoD bullet.
+
+  Also lands a small Cranelift-codegen fix: `coerce_call_args` now
+  consults a `user_fn_param_tys` side-table (populated during Pass 0/1)
+  when computing the call-site argument coercion. Without this, a narrow
+  `Bool`(i8) argument to the new synth `Bool_fmt` would be unconditionally
+  widened to i64 by the default fallback rule and fail Cranelift IR
+  verification. Runtime helpers still flow through `runtime_signature`.
 - Phase 2 #06.D2.S2: add `user_has_impl_display(ty) -> Option<String>`
   helper on the MIR lowerer for the Stage-3 interpolation rewrite.
   Walks the HIR program's `impl_blocks` (via the `trait_impls` map

@@ -36,6 +36,14 @@ pub struct CodeGen {
     string_data: HashMap<String, cranelift_module::DataId>,
     string_counter: u32,
     declared_fns: HashMap<String, FuncId>,
+    /// Cranelift parameter types for every function declared in this
+    /// module (FFI + user MIR fns).  Used by `coerce_call_args` to apply
+    /// the *correct* narrow-int signature when the callee is a known
+    /// user-defined function — runtime helpers still flow through
+    /// `runtime_signature`.  Without this, an `i8` argument to e.g.
+    /// `Bool_fmt` would be unconditionally widened to `i64` by the
+    /// fallback widening rule and fail Cranelift IR verification.
+    user_fn_param_tys: HashMap<String, Vec<Type>>,
 }
 
 impl CodeGen {
@@ -73,6 +81,7 @@ impl CodeGen {
             string_data: HashMap::new(),
             string_counter: 0,
             declared_fns: HashMap::new(),
+            user_fn_param_tys: HashMap::new(),
         })
     }
 
@@ -87,9 +96,11 @@ impl CodeGen {
             for ffi_fn in &lib.functions {
                 let call_conv = self.module.isa().default_call_conv();
                 let mut sig = Signature::new(call_conv);
+                let mut param_tys: Vec<Type> = Vec::with_capacity(ffi_fn.param_types.len());
                 for param_ty in &ffi_fn.param_types {
                     if let Some(cl_ty) = ty_to_cranelift(param_ty) {
                         sig.params.push(AbiParam::new(cl_ty));
+                        param_tys.push(cl_ty);
                     }
                 }
                 if let Some(ref ret_ty) = ffi_fn.return_type {
@@ -104,11 +115,14 @@ impl CodeGen {
                         format!("Failed to declare FFI function '{}': {}", ffi_fn.name, e)
                     })?;
                 self.declared_fns.insert(ffi_fn.name.clone(), func_id);
+                self.user_fn_param_tys
+                    .insert(ffi_fn.name.clone(), param_tys.clone());
 
                 // Also register with the lib-qualified name (e.g., "LibM.sin")
                 if !lib.name.is_empty() {
                     let qualified = format!("{}_{}", lib.name, ffi_fn.name);
-                    self.declared_fns.insert(qualified, func_id);
+                    self.declared_fns.insert(qualified.clone(), func_id);
+                    self.user_fn_param_tys.insert(qualified, param_tys);
                 }
             }
         }
@@ -121,6 +135,14 @@ impl CodeGen {
             } else {
                 Linkage::Local
             };
+
+            // Record the cranelift param types so `coerce_call_args` can
+            // apply the correct narrow-int signature when this fn is the
+            // callee (Phase 2 #06.D2.S3: synth `Bool_fmt`/`Char_fmt` etc.
+            // legitimately take narrow params and must not be widened).
+            let param_tys: Vec<Type> = sig.params.iter().map(|p| p.value_type).collect();
+            self.user_fn_param_tys
+                .insert(func.name.clone(), param_tys);
 
             let func_id = self
                 .module
@@ -163,6 +185,7 @@ impl CodeGen {
                 declared_fns: &mut self.declared_fns,
                 string_data: &mut self.string_data,
                 string_counter: &mut self.string_counter,
+                user_fn_param_tys: &self.user_fn_param_tys,
             };
 
             // ── Map MIR blocks → Cranelift blocks ────────────────────────
@@ -327,6 +350,11 @@ struct TranslationEnv<'a> {
     declared_fns: &'a mut HashMap<String, FuncId>,
     string_data: &'a mut HashMap<String, cranelift_module::DataId>,
     string_counter: &'a mut u32,
+    /// Param types of every previously-declared user / FFI fn.  Read-only:
+    /// instruction lowering never declares new entries here.  Used so that
+    /// `coerce_call_args` can apply the *real* narrow-int signature of
+    /// known user fns instead of the default widen-to-i64 fallback.
+    user_fn_param_tys: &'a HashMap<String, Vec<Type>>,
 }
 
 impl<'a> TranslationEnv<'a> {
@@ -705,7 +733,14 @@ fn translate_instruction(
             // and fail the IR verifier. We do this BEFORE declaring the
             // function so call-site signature inference also sees widened
             // types for unknown runtime helpers.
-            coerce_call_args(&mut arg_vals, args, func, actual_name, builder);
+            coerce_call_args(
+                &mut arg_vals,
+                args,
+                func,
+                actual_name,
+                env.user_fn_param_tys,
+                builder,
+            );
 
             // Handle inline no-op operations that don't need a real C call.
             match actual_name {
@@ -1195,16 +1230,27 @@ fn coerce_call_args(
     args: &[MirValue],
     func: &MirFunction,
     callee: &str,
+    user_fn_param_tys: &HashMap<String, Vec<Type>>,
     builder: &mut FunctionBuilder,
 ) {
-    let known_sig = runtime_signature(callee);
+    // Resolve the callee's signature in priority order:
+    //   1. `runtime_signature` — hand-rolled signature table for the C
+    //      runtime helpers (`riven_*`).  Wins for known runtime fns.
+    //   2. `user_fn_param_tys` — recorded at Pass 0/1 of compile_program
+    //      for FFI fns and every MIR function in the program.  This
+    //      catches synthesized fns like `Bool_fmt` (`(i8, i64) -> ()`)
+    //      that legitimately take narrow params.
+    //   3. fallback — widen narrow ints to i64 (variadic-style for
+    //      unknown imports).
+    let known_sig: Option<Vec<Type>> = runtime_signature(callee)
+        .map(|(p, _)| p)
+        .or_else(|| user_fn_param_tys.get(callee).cloned());
     for (i, arg_val) in arg_vals.iter_mut().enumerate() {
         let val_ty = builder.func.dfg.value_type(*arg_val);
 
         // Determine the target Cranelift type for this argument.
         let target_ty = match &known_sig {
-            Some((params, _)) if i < params.len() => params[i],
-            // Fallback: widen narrow ints to i64, leave non-ints alone.
+            Some(params) if i < params.len() => params[i],
             _ => {
                 if val_ty.is_int() && val_ty.bits() < 64 {
                     types::I64

@@ -4050,6 +4050,45 @@ impl<'a> Lowerer<'a> {
 
     // ── String interpolation lowering ───────────────────────────────────
 
+    /// Phase 2 #06.D2.S3: emit the canonical `Display::fmt` dispatch
+    /// sequence at the current interpolation site:
+    ///
+    /// ```text
+    /// fmt = Formatter_new()
+    /// {T}_fmt(src, fmt)
+    /// buf = Formatter_buffer(fmt)
+    /// ```
+    ///
+    /// Returns the `String` local holding the formatted buffer. The
+    /// `Formatter_buffer` runtime impl transfers ownership of the buffer
+    /// to the returned String and frees the `Formatter` struct in the
+    /// same call, so callers do not (and must not) emit an explicit
+    /// `Formatter_free`. `callee_name` is the fully-resolved MIR
+    /// function name to dispatch into (e.g. `"Int_fmt"`, `"Money_fmt"`).
+    fn emit_display_dispatch(&mut self, src: LocalId, callee_name: &str) -> LocalId {
+        let fmt_local = self.new_temp(Ty::Class {
+            name: "Formatter".to_string(),
+            generic_args: vec![],
+        });
+        self.emit(MirInst::Call {
+            dest: Some(fmt_local),
+            callee: "Formatter_new".to_string(),
+            args: vec![],
+        });
+        self.emit(MirInst::Call {
+            dest: None,
+            callee: callee_name.to_string(),
+            args: vec![MirValue::Use(src), MirValue::Use(fmt_local)],
+        });
+        let dest = self.new_temp(Ty::String);
+        self.emit(MirInst::Call {
+            dest: Some(dest),
+            callee: "Formatter_buffer".to_string(),
+            args: vec![MirValue::Use(fmt_local)],
+        });
+        dest
+    }
+
     fn lower_interpolation(
         &mut self,
         parts: &[HirInterpolationPart],
@@ -4104,11 +4143,24 @@ impl<'a> Lowerer<'a> {
                         })
                         .unwrap_or_else(|| expr.ty.clone());
 
-                    // If the expression is already a string-like type, use it
-                    // directly. Otherwise call a to_string conversion.
-                    // Also treat Infer types as string-like when the
-                    // expression is a method call known to return a string
-                    // (e.g., to_display, message, summary, clone).
+                    // Phase 2 #06.D2.S3 dispatch priority (top-down):
+                    //   1. string-like / inferred-string  → pass-through
+                    //   2. user `impl Display for T`      → `{T}_fmt` via Formatter
+                    //   3. struct with `derive Debug`     → `{Name}_to_debug` (legacy)
+                    //   4. enum with `derive Debug`       → `{Name}_to_debug` (legacy)
+                    //   5. primitive Char/Int/Float/Bool  → synth `{Prim}_fmt` via Formatter
+                    //   6. anything else                  → synth `Int_fmt` (pointer-as-int fallback)
+                    //
+                    // Priorities 2/5/6 emit the canonical Display dispatch:
+                    //     fmt = Formatter_new()
+                    //     {T}_fmt(value, fmt)
+                    //     buf = Formatter_buffer(fmt)
+                    // The synth `{Prim}_fmt` fns (Stage 1) wrap the same
+                    // `riven_<prim>_to_string` helpers the legacy direct path
+                    // used, so output is byte-identical for all fixtures.
+                    // `user_has_impl_display` is checked BEFORE the derive-Debug
+                    // arms so a user-supplied `impl Display for T` wins over
+                    // an auto-derived `Debug` formatter.
                     if is_string_like(&effective_ty) || is_inferred_string_expr(expr) {
                         val_local.unwrap_or_else(|| {
                             let d = self.new_temp(Ty::String);
@@ -4118,11 +4170,22 @@ impl<'a> Lowerer<'a> {
                             });
                             d
                         })
+                    } else if let Some(user_t) = self.user_has_impl_display(&effective_ty) {
+                        // Priority #2: user `impl Display for T`.
+                        let src = val_local.unwrap_or_else(|| {
+                            let d = self.new_temp(Ty::String);
+                            self.emit(MirInst::StringLiteral {
+                                dest: d,
+                                value: String::new(),
+                            });
+                            d
+                        });
+                        self.emit_display_dispatch(src, &format!("{}_fmt", user_t))
                     } else if let Some(struct_name) = self.struct_with_derive_debug(&effective_ty) {
-                        // Non-primitive type with `derive Debug`: dispatch
-                        // to the synthesized `{Name}_to_debug` so the
-                        // interpolation prints the formatted struct rather
-                        // than a raw pointer address.
+                        // Priority #3: struct with `derive Debug` (and no user
+                        // `impl Display`) — keep the legacy `{Name}_to_debug`
+                        // path so bare `"#{x}"` still prints the formatted
+                        // struct rather than a raw pointer address.
                         let src = val_local.unwrap_or_else(|| {
                             let d = self.new_temp(Ty::String);
                             self.emit(MirInst::StringLiteral {
@@ -4139,9 +4202,7 @@ impl<'a> Lowerer<'a> {
                         });
                         dest
                     } else if let Some(enum_name) = self.enum_with_derive_debug(&effective_ty) {
-                        // Phase 2 #06.C2: same dispatch for enums that
-                        // derive Debug — interpolation lowers to the
-                        // synthesized `{EnumName}_to_debug`.
+                        // Priority #4: enum with `derive Debug` (Phase 2 #06.C2).
                         let src = val_local.unwrap_or_else(|| {
                             let d = self.new_temp(Ty::String);
                             self.emit(MirInst::StringLiteral {
@@ -4158,6 +4219,14 @@ impl<'a> Lowerer<'a> {
                         });
                         dest
                     } else {
+                        // Priorities #5 + #6: primitives + last-resort
+                        // fallback.  Each dispatches through the canonical
+                        // `Formatter_new` → `{Prim}_fmt(value, fmt)` →
+                        // `Formatter_buffer(fmt)` sequence.  `Char` must be
+                        // checked BEFORE `is_integer()` because `Char` is a
+                        // 32-bit codepoint and currently also satisfies the
+                        // integer predicate in some lowerings — without this
+                        // priority a `Char` would render as a decimal number.
                         let src = val_local.unwrap_or_else(|| {
                             let d = self.new_temp(Ty::String);
                             self.emit(MirInst::StringLiteral {
@@ -4166,30 +4235,22 @@ impl<'a> Lowerer<'a> {
                             });
                             d
                         });
-                        let conv_name = if effective_ty == Ty::Char {
-                            // `Char` must be checked BEFORE the generic integer
-                            // branch so string interpolation renders the UTF-8
-                            // character rather than its decimal codepoint.
-                            "riven_char_to_string"
+                        let fmt_callee = if effective_ty == Ty::Char {
+                            "Char_fmt"
                         } else if effective_ty.is_integer() {
-                            "riven_int_to_string"
+                            "Int_fmt"
                         } else if effective_ty.is_float() {
-                            "riven_float_to_string"
+                            "Float_fmt"
                         } else if effective_ty == Ty::Bool {
-                            "riven_bool_to_string"
+                            "Bool_fmt"
                         } else {
                             // Unknown type — treat as integer (pointer
-                            // value) as a fallback. This handles USize,
-                            // enum tags, etc.
-                            "riven_int_to_string"
+                            // value) as a fallback.  This handles USize,
+                            // enum tags, and any not-yet-inferred type.
+                            // Preserves the pre-Stage-3 default behaviour.
+                            "Int_fmt"
                         };
-                        let dest = self.new_temp(Ty::String);
-                        self.emit(MirInst::Call {
-                            dest: Some(dest),
-                            callee: conv_name.to_string(),
-                            args: vec![MirValue::Use(src)],
-                        });
-                        dest
+                        self.emit_display_dispatch(src, fmt_callee)
                     }
                 }
             };
