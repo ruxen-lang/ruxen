@@ -466,6 +466,8 @@ impl<'a> Lowerer<'a> {
 
         // Emit the primitive Display::fmt synth functions unconditionally
         // (Phase 2 #06.D2.S1). These are program-level, not per-use.
+        // Stage 3 (D2) `lower_interpolation` rewrite assumes these are always
+        // present; conditional emission would require a two-pass approach.
         for f in self.synthesize_primitive_fmt_displays() {
             mir.functions.push(f);
         }
@@ -6220,6 +6222,8 @@ impl<'a> Lowerer<'a> {
                     });
                     dest
                 }
+                // String is already a `char*` pointer at the Cranelift/C ABI layer;
+                // no explicit conversion needed — write_str accepts it directly.
                 None => self_local,
             };
 
@@ -7449,6 +7453,39 @@ impl<'a> Lowerer<'a> {
             rhs: MirValue::Literal(Literal::Int(0)),
         });
         Ok(dest)
+    }
+
+    /// Phase 2 #06.D2: returns `Some(type_name)` when the HIR program
+    /// contains an `impl Display for ty` block whose target resolves to the
+    /// given type. Used by `lower_interpolation` (Stage 3) to prefer
+    /// user-supplied formatting over the synthesized primitive / derive-Debug
+    /// fallbacks.
+    ///
+    /// Resolves through `Ref` / `RefMut` / `RefLifetime` / `RefMutLifetime`
+    /// / `Alias` / `Newtype` so that `&Money` and `Money` both hit the same
+    /// impl. Returns `None` for primitive types (Int, Float, …) and any
+    /// nominal type whose name is not in the Display impl registry.
+    fn user_has_impl_display(&self, ty: &Ty) -> Option<String> {
+        let name = match ty {
+            Ty::Struct { name, .. } | Ty::Class { name, .. } | Ty::Enum { name, .. } => {
+                name.clone()
+            }
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => return self.user_has_impl_display(inner),
+            Ty::Alias { target, .. } => return self.user_has_impl_display(target),
+            Ty::Newtype { inner, .. } => return self.user_has_impl_display(inner),
+            _ => return None,
+        };
+        // `self.trait_impls` is populated by `collect_trait_impls` at the
+        // start of `lower_program` and maps trait name → Vec<target type name>.
+        if let Some(impls) = self.trait_impls.get("Display") {
+            if impls.iter().any(|n| n == &name) {
+                return Some(name);
+            }
+        }
+        None
     }
 
     /// Returns Some(struct_name) if `ty` (peeling refs/aliases) is a struct

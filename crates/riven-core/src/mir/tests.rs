@@ -215,7 +215,11 @@ mod lowering_tests {
 
         let mut lowerer = Lowerer::new(&symbols);
         let mir = lowerer.lower_program(&program).expect("lowering failed");
-        let test_fn = &mir.functions[0];
+        let test_fn = mir
+            .functions
+            .iter()
+            .find(|f| f.name == "test")
+            .expect("expected fn `test` in MIR");
 
         // Should have locals: _t0 (the literal temp) and x (the let binding).
         assert!(
@@ -347,7 +351,11 @@ mod lowering_tests {
         let mut lowerer = Lowerer::new(&symbols);
         let mir = lowerer.lower_program(&program).expect("lowering failed");
 
-        let add_fn = &mir.functions[0];
+        let add_fn = mir
+            .functions
+            .iter()
+            .find(|f| f.name == "add")
+            .expect("expected fn `add` in MIR");
         assert_eq!(add_fn.name, "add");
         assert_eq!(add_fn.params.len(), 2, "add takes 2 params");
         assert_eq!(add_fn.return_ty, Ty::Int);
@@ -415,7 +423,11 @@ mod lowering_tests {
         let mut lowerer = Lowerer::new(&symbols);
         let mir = lowerer.lower_program(&program).expect("lowering failed");
 
-        let test_fn = &mir.functions[0];
+        let test_fn = mir
+            .functions
+            .iter()
+            .find(|f| f.name == "test_if")
+            .expect("expected fn `test_if` in MIR");
         assert_eq!(test_fn.name, "test_if");
 
         // Should have multiple blocks: entry, then, else, merge.
@@ -509,7 +521,11 @@ mod lowering_tests {
 
         let mut lowerer = Lowerer::new(&symbols);
         let mir = lowerer.lower_program(&program).expect("lowering failed");
-        let test_fn = &mir.functions[0];
+        let test_fn = mir
+            .functions
+            .iter()
+            .find(|f| f.name == "test")
+            .expect("expected fn `test` in MIR (drops_inserted_for_owned_locals)");
 
         // Find the block that ends with Return.
         let return_block = test_fn
@@ -629,7 +645,11 @@ mod lowering_tests {
 
         let mut lowerer = Lowerer::new(&symbols);
         let mir = lowerer.lower_program(&program).expect("lowering failed");
-        let test_fn = &mir.functions[0];
+        let test_fn = mir
+            .functions
+            .iter()
+            .find(|f| f.name == "test")
+            .expect("expected fn `test` in MIR (derive_copy_struct_is_not_dropped)");
         let return_block = test_fn
             .blocks
             .iter()
@@ -738,7 +758,11 @@ mod lowering_tests {
 
         let mut lowerer = Lowerer::new(&symbols);
         let mir = lowerer.lower_program(&program).expect("lowering failed");
-        let test_fn = &mir.functions[0];
+        let test_fn = mir
+            .functions
+            .iter()
+            .find(|f| f.name == "test")
+            .expect("expected fn `test` in MIR (owned_rebind_lowers_to_move)");
         let a_local = test_fn
             .locals
             .iter()
@@ -793,7 +817,11 @@ mod lowering_tests {
         let mut lowerer = Lowerer::new(&symbols);
         let mir = lowerer.lower_program(&program).expect("lowering failed");
 
-        let caller_fn = &mir.functions[0];
+        let caller_fn = mir
+            .functions
+            .iter()
+            .find(|f| f.name == "caller")
+            .expect("expected fn `caller` in MIR");
         let entry = &caller_fn.blocks[caller_fn.entry_block];
 
         // Should have a Call instruction to "foo".

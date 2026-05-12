@@ -8,6 +8,18 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- Phase 2 #06.D2.S2: add `user_has_impl_display(ty) -> Option<String>`
+  helper on the MIR lowerer for the Stage-3 interpolation rewrite.
+  Walks the HIR program's `impl_blocks` (via the `trait_impls` map
+  collected at lowering start) and resolves through Ref / RefMut /
+  Alias / Newtype. No call site uses the helper yet — pure plumbing.
+
+  Also bundles four S1 review follow-ups: harden seven `functions[0]`
+  index lookups in `mir/tests.rs` to `.find(|f| f.name == ...)`;
+  strengthen `synth_primitive_fmt_functions_emitted` to assert
+  `params.len() == 2` + `return_ty == Ty::Unit` + non-empty body;
+  document "why unconditional emission" + transparent String pass
+  in `mir/lower.rs`.
 - Phase 2 #06.D2.S1: synthesize primitive `Display::fmt` MIR
   functions — `Char_fmt` / `Int_fmt` / `Float_fmt` / `Bool_fmt` /
   `String_fmt` are emitted at program lowering and wrap the existing
