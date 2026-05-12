@@ -1428,7 +1428,7 @@ int64_t riven_fmt_formatter_write_str(RivenFormatter *f, const char *s) {
 
 /* Append a single Unicode codepoint.
  * v1: ASCII codepoints (0–0x7F) are stored directly; non-ASCII
- * codepoints emit '?' (Phase D3 will add full UTF-8 encoding). */
+ * codepoints emit '?' (Phase D4 will add full UTF-8 encoding). */
 int64_t riven_fmt_formatter_write_char(RivenFormatter *f, int64_t codepoint) {
     if (!f) return 1;
     if (codepoint >= 0 && codepoint <= 0x7f) {
@@ -1436,7 +1436,7 @@ int64_t riven_fmt_formatter_write_char(RivenFormatter *f, int64_t codepoint) {
         f->buf[f->len++] = (char) codepoint;
         f->buf[f->len]   = '\0';
     } else {
-        /* Non-ASCII placeholder until Phase D3 UTF-8 encoding lands. */
+        /* Non-ASCII placeholder until Phase D4 UTF-8 encoding lands. */
         riven_fmt_formatter_reserve(f, 1);
         f->buf[f->len++] = '?';
         f->buf[f->len]   = '\0';
@@ -1456,7 +1456,10 @@ const char *riven_fmt_formatter_buffer(RivenFormatter *f) {
     f->buf = NULL;
     f->len = 0;
     f->cap = 0;
-    free(f);
+    /* Delegate to the _ORIG_FREE sentinel so drop_fixtures.rs can track
+     * Formatter deallocations via the raw-free counter. With f->buf
+     * already NULL the inner `if (f->buf) free(f->buf)` is a no-op. */
+    riven_fmt_formatter_ORIG_FREE(f);
     return taken ? taken : riven_string_from("");
 }
 

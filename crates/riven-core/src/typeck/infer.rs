@@ -1820,6 +1820,9 @@ impl<'a> InferenceEngine<'a> {
                     generic_args: vec![],
                 }),
             )),
+            // `len()` returns the current byte count of the accumulated
+            // buffer — mirrors `riven_fmt_formatter_len` (returns int64_t).
+            (Ty::Class { name, .. }, "len") if name == "Formatter" => Some(Ty::Int),
             // Read-only spec accessors that Phase D will use when
             // formatting widths / precision / fill. Optional types
             // because `"#{x}"` (no spec) leaves them all None.

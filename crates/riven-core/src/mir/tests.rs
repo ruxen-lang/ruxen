@@ -135,10 +135,16 @@ mod lowering_tests {
             Some("main".to_string()),
             "entry should be 'main'"
         );
-        assert_eq!(mir.functions.len(), 1, "should have 1 function");
+        // Phase 2 #06.D2.S1: 1 user function + 5 unconditionally-emitted
+        // primitive `_fmt` synth functions (Char_fmt / Int_fmt / Float_fmt /
+        // Bool_fmt / String_fmt).
+        assert_eq!(mir.functions.len(), 6, "should have 1 user fn + 5 primitive _fmt synth fns");
 
-        let main_fn = &mir.functions[0];
-        assert_eq!(main_fn.name, "main");
+        let main_fn = mir
+            .functions
+            .iter()
+            .find(|f| f.name == "main")
+            .expect("main not found");
         assert_eq!(main_fn.params.len(), 0, "main takes no params");
 
         // The entry block should have a Return(None) terminator.

@@ -464,6 +464,12 @@ impl<'a> Lowerer<'a> {
             }
         }
 
+        // Emit the primitive Display::fmt synth functions unconditionally
+        // (Phase 2 #06.D2.S1). These are program-level, not per-use.
+        for f in self.synthesize_primitive_fmt_displays() {
+            mir.functions.push(f);
+        }
+
         // Append any closure functions generated during lowering.
         mir.functions.append(&mut self.pending_closures);
 
@@ -6167,6 +6173,67 @@ impl<'a> Lowerer<'a> {
             args: vec![MirValue::Use(raw)],
         });
         owned
+    }
+
+    /// Phase 2 #06.D2.S1: synthesize a `Display::fmt` MIR function for each
+    /// primitive type that participates in string interpolation. Each emitted
+    /// function has signature `(self: Prim, fmt: &mut Formatter) -> Unit` and
+    /// delegates to the existing `riven_<prim>_to_string` runtime helper
+    /// (except `String_fmt`, which writes `self` directly). These functions
+    /// are emitted unconditionally at program-lowering time and serve as the
+    /// canonical target once `lower_interpolation` is rewired in Stage 3.
+    fn synthesize_primitive_fmt_displays(&self) -> Vec<MirFunction> {
+        let formatter_ty = Ty::RefMut(Box::new(Ty::Class {
+            name: "Formatter".to_string(),
+            generic_args: vec![],
+        }));
+
+        // (fn_name, self_ty, Option<to_string_runtime_fn>)
+        // None means write self directly (String case).
+        let specs: &[(&str, Ty, Option<&str>)] = &[
+            ("Char_fmt", Ty::Char, Some("riven_char_to_string")),
+            ("Int_fmt", Ty::Int, Some("riven_int_to_string")),
+            ("Float_fmt", Ty::Float, Some("riven_float_to_string")),
+            ("Bool_fmt", Ty::Bool, Some("riven_bool_to_string")),
+            ("String_fmt", Ty::String, None),
+        ];
+
+        let mut out = Vec::with_capacity(specs.len());
+        for (name, self_ty, to_string_fn) in specs {
+            let mut mir_fn = MirFunction::new(*name, Ty::Unit);
+            let self_local = mir_fn.new_local("self", self_ty.clone(), false);
+            mir_fn.params.push(self_local);
+            let fmt_local = mir_fn.new_local("fmt", formatter_ty.clone(), true);
+            mir_fn.params.push(fmt_local);
+
+            let entry = mir_fn.entry_block;
+
+            // Resolve the string value: call riven_<prim>_to_string(self)
+            // for non-String primitives; for String pass self directly.
+            let str_local = match to_string_fn {
+                Some(fn_name) => {
+                    let dest = mir_fn.new_temp(Ty::String);
+                    mir_fn.blocks[entry].instructions.push(MirInst::Call {
+                        dest: Some(dest),
+                        callee: fn_name.to_string(),
+                        args: vec![MirValue::Use(self_local)],
+                    });
+                    dest
+                }
+                None => self_local,
+            };
+
+            // Formatter_write_str(fmt, str_value) — result discarded.
+            mir_fn.blocks[entry].instructions.push(MirInst::Call {
+                dest: None,
+                callee: "Formatter_write_str".to_string(),
+                args: vec![MirValue::Use(fmt_local), MirValue::Use(str_local)],
+            });
+
+            mir_fn.blocks[entry].terminator = Terminator::Return(None);
+            out.push(mir_fn);
+        }
+        out
     }
 
     /// Synthesize the body of `{StructName}_to_debug(self) -> String` for a

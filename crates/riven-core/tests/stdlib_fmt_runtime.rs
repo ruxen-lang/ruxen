@@ -70,3 +70,38 @@ end
     assert!(ok, "program exited non-zero\nstdout={stdout:?}\nstderr={stderr:?}");
     assert_eq!(stdout.trim(), "hello world");
 }
+
+/// Phase 2 #06.D2.S1 follow-up: `Formatter.write_char` with an ASCII
+/// codepoint stores the byte correctly and `buffer()` returns it as a
+/// one-character string.
+#[test]
+fn formatter_write_char_ascii_round_trips() {
+    let src = r#"
+def main
+  let mut f = Formatter.new()
+  let _ = f.write_char('A')
+  println(f.buffer())
+end
+"#;
+    let (stdout, stderr, ok) = compile_and_run(src, "fmt_write_char_ascii");
+    assert!(ok, "program exited non-zero\nstdout={stdout:?}\nstderr={stderr:?}");
+    assert_eq!(stdout.trim(), "A");
+}
+
+/// Phase 2 #06.D2.S1 follow-up: `Formatter.len()` returns the number of
+/// bytes accumulated in the buffer so far. Captured into a binding and
+/// interpolated to satisfy Riven's `println` String requirement.
+#[test]
+fn formatter_len_after_write_str() {
+    let src = r##"
+def main
+  let mut f = Formatter.new()
+  let _ = f.write_str("hi")
+  let n = f.len()
+  println("#{n}")
+end
+"##;
+    let (stdout, stderr, ok) = compile_and_run(src, "fmt_len_after_write");
+    assert!(ok, "program exited non-zero\nstdout={stdout:?}\nstderr={stderr:?}");
+    assert_eq!(stdout.trim(), "2");
+}

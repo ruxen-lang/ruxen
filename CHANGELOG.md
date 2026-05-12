@@ -8,6 +8,15 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- Phase 2 #06.D2.S1: synthesize primitive `Display::fmt` MIR
+  functions — `Char_fmt` / `Int_fmt` / `Float_fmt` / `Bool_fmt` /
+  `String_fmt` are emitted at program lowering and wrap the existing
+  `riven_<prim>_to_string` helpers via `Formatter_write_str`. No
+  interpolation call site is rewritten yet (Stage 3 will switch
+  `lower_interpolation`). Bundles three S0 follow-ups: leak-tracker
+  visibility for `riven_fmt_formatter_free`; isolated pin tests for
+  `Formatter.write_char` (ASCII) + `Formatter.len`; phase-designator
+  alignment in the `write_char` placeholder.
 - Phase 2 #06.D2.S0: land the `riven_fmt_formatter_*` C runtime
   implementations (`new` / `free` / `write_str` / `write_char` /
   `buffer` / `len`) that Phase A's CHANGELOG referenced but never
