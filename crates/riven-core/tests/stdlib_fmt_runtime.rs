@@ -88,6 +88,47 @@ end
     assert_eq!(stdout.trim(), "A");
 }
 
+/// Phase 2 #06.D2.S4: user `impl Display for Money` routes through
+/// interpolation. Exercises the full Display dispatch path: the
+/// `"#{m}"` site emits `Formatter_new` + `Money_fmt(m, fmt)` +
+/// `Formatter_buffer(fmt)`, then `Money_fmt` itself uses the inner
+/// primitive `"#{self.cents}"` interpolation which routes through
+/// `Int_fmt`. Mirrors the release-e2e fixture at
+/// `tests/release-e2e/cases/070_interp_display_dispatch.rvn`.
+#[test]
+fn interpolation_user_impl_display_money_round_trips() {
+    let src = r##"
+class Money
+  cents: Int
+
+  def init(@cents: Int)
+  end
+end
+
+impl Display for Money
+  def fmt(f: &mut Formatter) -> Result[(), FmtError]
+    let _ = f.write_str("$")
+    f.write_str("#{self.cents}")
+  end
+end
+
+def main
+  let m = Money.new(4250)
+  puts "price: #{m}"
+  let n: Int = 7
+  puts "count: #{n}"
+  let b: Bool = true
+  puts "ok: #{b}"
+end
+"##;
+    let (stdout, stderr, ok) = compile_and_run(src, "fmt_user_impl_display_money");
+    assert!(
+        ok,
+        "program exited non-zero\nstdout={stdout:?}\nstderr={stderr:?}"
+    );
+    assert_eq!(stdout, "price: $4250\ncount: 7\nok: true\n");
+}
+
 /// Phase 2 #06.D2.S1 follow-up: `Formatter.len()` returns the number of
 /// bytes accumulated in the buffer so far. Captured into a binding and
 /// interpolated to satisfy Riven's `println` String requirement.
