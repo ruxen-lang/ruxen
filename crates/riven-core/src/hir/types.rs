@@ -42,6 +42,43 @@ impl ConstExpr {
             _ => None,
         }
     }
+
+    /// T2.02 S7: evaluate the const expression against a binding map.
+    ///
+    /// - `Lit(n)`   → `Ok(n)`.
+    /// - `Param(n)` → `Ok(value)` if `n` is bound; `Err(Unresolved)`
+    ///                 otherwise (the caller may treat this as an
+    ///                 "unresolved param" condition rather than an
+    ///                 error, depending on context).
+    /// - `Op(...)`  → S8 wiring; today returns `Err(NotImplemented)`.
+    /// - `Error`    → `Err(Malformed)` — propagated from a parser
+    ///                 recovery path; should not reach a code-gen
+    ///                 layout call.
+    pub fn eval(
+        &self,
+        bindings: &std::collections::HashMap<String, u64>,
+    ) -> Result<u64, ConstEvalError> {
+        match self {
+            ConstExpr::Lit(n) => Ok(*n),
+            ConstExpr::Param(name) => bindings
+                .get(name)
+                .copied()
+                .ok_or_else(|| ConstEvalError::Unresolved(name.clone())),
+            ConstExpr::Op(_, _, _) => Err(ConstEvalError::NotImplemented),
+            ConstExpr::Error => Err(ConstEvalError::Malformed),
+        }
+    }
+}
+
+/// Errors returned by `ConstExpr::eval`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConstEvalError {
+    /// A `Param(name)` couldn't be resolved against the bindings.
+    Unresolved(String),
+    /// Arithmetic eval lands in S8.
+    NotImplemented,
+    /// Parser recovery produced a `ConstExpr::Error`.
+    Malformed,
 }
 
 impl fmt::Display for ConstExpr {

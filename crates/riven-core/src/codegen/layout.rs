@@ -320,13 +320,15 @@ pub fn layout_of(ty: &Ty, symbols: &SymbolTable) -> TypeLayout {
         // ── Array ───────────────────────────────────────────────────────────
         Ty::Array(elem, n) => {
             let elem_layout = layout_of(elem, symbols);
-            // T2.02 stage 4: `n` is now a `ConstExpr`.  Stage 7 will
-            // pass full param bindings through; for now the only
-            // reachable variant in codegen-time arrays is `Lit(N)`.
-            // Unresolved `Param`s produce a zero-size layout, which
-            // matches the pre-stage-4 fallback when the resolver
-            // failed to read the literal.
-            let count = n.as_lit().unwrap_or(0) as usize;
+            // T2.02 S7: evaluate the const expression with an empty
+            // binding map.  `Lit(N)` resolves to `N`; `Param(...)`
+            // (unbound at this call) falls back to size 0 — the
+            // monomorphization wrapper introduced in S7+ will pass a
+            // populated binding map per instantiation.  Arithmetic
+            // (`Op`) is S8 wiring; today eval returns `NotImplemented`
+            // which we treat as 0.
+            let bindings: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+            let count = n.eval(&bindings).unwrap_or(0) as usize;
             TypeLayout {
                 size: elem_layout.size * count,
                 alignment: elem_layout.alignment,

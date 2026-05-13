@@ -299,6 +299,45 @@ end
     );
 }
 
+// ── Stage 7: ConstExpr evaluator + layout integration ───────────────
+
+/// B7 (S7 minimal): `ConstExpr::eval` resolves `Lit` directly and
+/// `Param` against a binding map.  Unresolved params return an
+/// `Err`; arithmetic is deferred to S8.
+#[test]
+fn const_expr_eval_lit_and_param() {
+    use riven_core::hir::types::ConstExpr;
+    use std::collections::HashMap;
+
+    let empty: HashMap<String, u64> = HashMap::new();
+    let mut bound: HashMap<String, u64> = HashMap::new();
+    bound.insert("N".to_string(), 4);
+
+    assert_eq!(ConstExpr::Lit(7).eval(&empty), Ok(7));
+    assert_eq!(ConstExpr::Lit(0).eval(&empty), Ok(0));
+    assert_eq!(ConstExpr::Param("N".to_string()).eval(&bound), Ok(4));
+    assert!(ConstExpr::Param("M".to_string()).eval(&bound).is_err());
+    assert!(ConstExpr::Error.eval(&empty).is_err());
+}
+
+/// B7: `layout_of(Ty::Array(Int, ConstExpr::Lit(4)))` returns 32
+/// bytes (4 × 8) — the array layout consults the const expression
+/// rather than the pre-S4 `usize` field.
+#[test]
+fn array_layout_evaluates_const_expr_lit() {
+    use riven_core::codegen::layout::layout_of;
+    use riven_core::hir::types::{ConstExpr, Ty};
+    use riven_core::resolve::symbols::SymbolTable;
+
+    let symbols = SymbolTable::new();
+    let layout = layout_of(
+        &Ty::Array(Box::new(Ty::Int), ConstExpr::Lit(4)),
+        &symbols,
+    );
+    assert_eq!(layout.size, 32);
+    assert_eq!(layout.alignment, 8);
+}
+
 // ── Stage 6: distinct const args produce distinct types ─────────────
 
 /// B6 (S6 minimal): `Vector[Int, 3]` and `Vector[Int, 4]` resolve to
