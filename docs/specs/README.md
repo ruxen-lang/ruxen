@@ -111,6 +111,12 @@ cross-link rather than duplicate.
 - [Drop](ownership/drop.spec.md) — drop elaboration, user `impl
   Drop`, leak-tracker fixtures.
 
+### Type system (in flight)
+
+- [Const generics](types/const-generics.spec.md) — `const N: Type`
+  generic-param surface, `Array[T, N]`, etc.  Stage 1 (parser-only)
+  shipped 2026-05-13 (commit b8a371c); S2-S9 pending.
+
 ### Codegen
 
 - [Backends](codegen/backends.spec.md) — Cranelift (default) + LLVM
