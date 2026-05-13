@@ -874,6 +874,23 @@ char *riven_float_to_string(double f) {
     return result;
 }
 
+/* Phase 2 #06.D4: format a float with an explicit decimal precision.
+ * `prec < 0` falls back to `%g` (matches `riven_float_to_string`).
+ * `prec >= 0` uses `%.<prec>f`. */
+char *riven_float_to_string_prec(double f, int64_t prec) {
+    if (prec < 0) return riven_float_to_string(f);
+    if (prec > 60) prec = 60; /* snprintf safety bound */
+    char buf[96];
+    snprintf(buf, sizeof(buf), "%.*f", (int)prec, f);
+    size_t len = strlen(buf);
+    char *result = (char *)malloc(len + 1);
+    if (!result) {
+        riven_panic("out of memory");
+    }
+    memcpy(result, buf, len + 1);
+    return result;
+}
+
 /* Convert a Unicode codepoint (passed widened to i64) into a heap-allocated
    UTF-8 string. Used for `"#{c}"` interpolation on values of type `Char`. */
 char *riven_char_to_string(int64_t codepoint) {
@@ -1357,6 +1374,37 @@ char *riven_string_from(const char *s) {
     return result;
 }
 
+/* Phase 2 #06.D4: return a fresh string truncated to at most `max_chars`
+ * UTF-8 codepoints.  `max_chars < 0` returns a copy of the input
+ * unchanged (used when the precision spec is unset).  Truncation
+ * respects UTF-8 boundaries — the returned string is always valid
+ * UTF-8.  Returns a freshly-allocated heap string the caller owns.
+ *
+ * Distinct from the in-place `riven_string_truncate(char*, n)` used by
+ * `String.truncate(n)` — this variant takes char count (not bytes) and
+ * returns a fresh string so the source remains usable. */
+char *riven_string_truncate_chars(const char *s, int64_t max_chars) {
+    if (!s) return riven_string_from("");
+    if (max_chars < 0) return riven_string_from(s);
+    size_t kept_bytes = 0;
+    int64_t kept_chars = 0;
+    while (s[kept_bytes] != '\0' && kept_chars < max_chars) {
+        unsigned char c = (unsigned char) s[kept_bytes];
+        size_t step = 1;
+        if      ((c & 0x80) == 0x00) step = 1;
+        else if ((c & 0xE0) == 0xC0) step = 2;
+        else if ((c & 0xF0) == 0xE0) step = 3;
+        else if ((c & 0xF8) == 0xF0) step = 4;
+        kept_bytes += step;
+        kept_chars += 1;
+    }
+    char *result = (char *) malloc(kept_bytes + 1);
+    if (!result) riven_panic("out of memory");
+    memcpy(result, s, kept_bytes);
+    result[kept_bytes] = '\0';
+    return result;
+}
+
 /* ── std::fmt::Formatter ─────────────────────────────────────────────
  *
  * Phase 2 #06.D2.S0: six runtime helpers that Phase A's CHANGELOG
@@ -1399,6 +1447,33 @@ RivenFormatter *riven_fmt_formatter_new(void) {
     riven_fmt_formatter_reserve(f, 0);
     f->buf[0] = '\0';
     return f;
+}
+
+/* Phase 2 #06.D4: spec-aware constructor.  Used by interpolation sites
+ * that carry a non-default `FormatSpec` (width / precision / align /
+ * fill).  Sentinel encoding mirrors the MIR lowerer:
+ *   width      == 0  → unset
+ *   precision  == -1 → unset
+ *   align      == 0  → default (right for numerics, left for strings);
+ *                       1 = left, 2 = center, 3 = right
+ *   fill_cp    == -1 → default ' ' (space)
+ */
+RivenFormatter *riven_fmt_formatter_new_with_spec(
+    int64_t width, int64_t precision, int64_t align, int64_t fill
+) {
+    RivenFormatter *f = riven_fmt_formatter_new();
+    f->width     = (int32_t) width;
+    f->precision = (int32_t) precision;
+    f->align     = (int8_t)  align;
+    f->fill_cp   = (int32_t) fill;
+    return f;
+}
+
+/* Phase 2 #06.D4: precision accessor.  Synth `Float_fmt` / `String_fmt`
+ * read this to know whether to truncate / round.  Returns -1 when the
+ * formatter was constructed without a precision (the default). */
+int64_t riven_fmt_formatter_precision(const RivenFormatter *f) {
+    return f ? (int64_t) f->precision : -1;
 }
 
 /* Free the Formatter and its buffer.
@@ -1444,23 +1519,69 @@ int64_t riven_fmt_formatter_write_char(RivenFormatter *f, int64_t codepoint) {
     return 0;
 }
 
+/* Phase 2 #06.D4: apply width / align / fill to `taken` in place.
+ * Returns a freshly allocated buffer when padding is needed; otherwise
+ * returns `taken` untouched.  When a new buffer is allocated the input
+ * is freed.  `len` is the byte length of `taken` (must not include the
+ * trailing NUL).  The padded buffer is NUL-terminated. */
+static char *riven_fmt_apply_pad(
+    char *taken, size_t len,
+    int32_t width, int8_t align, int32_t fill_cp
+) {
+    if (width <= 0 || (size_t) width <= len) return taken;
+    size_t pad = (size_t) width - len;
+    /* v1: ASCII fill only.  Non-ASCII codepoints fall back to ' '. */
+    char fill_ch = ' ';
+    if (fill_cp > 0 && fill_cp <= 0x7f) fill_ch = (char) fill_cp;
+    /* align: 0 default = right for numerics; the lowerer defaults to
+     * align=0 when the spec omits it, so we treat 0 as right-align here.
+     * 1 = left, 2 = center, 3 = right. */
+    size_t left_pad  = 0;
+    size_t right_pad = 0;
+    if (align == 1) {              /* left  */
+        right_pad = pad;
+    } else if (align == 2) {       /* center: prefer extra on right */
+        left_pad  = pad / 2;
+        right_pad = pad - left_pad;
+    } else {                       /* default + 3 = right */
+        left_pad  = pad;
+    }
+    char *out = (char *) malloc((size_t) width + 1);
+    if (!out) { fprintf(stderr, "riven: pad alloc failed\n"); exit(101); }
+    memset(out, fill_ch, left_pad);
+    if (taken && len > 0) memcpy(out + left_pad, taken, len);
+    memset(out + left_pad + len, fill_ch, right_pad);
+    out[(size_t) width] = '\0';
+    if (taken) free(taken);
+    return out;
+}
+
 /* Transfer buffer ownership to a Riven String and free the Formatter.
- * The accumulated `buf` is taken directly (no copy) and returned as
- * a heap `char*` that satisfies the Riven String ABI.  Codegen must
- * not emit a follow-up `_free` call on the Formatter after this. */
+ * The accumulated `buf` is taken directly (no copy unless padding is
+ * required by the spec) and returned as a heap `char*` that satisfies
+ * the Riven String ABI.  Codegen must not emit a follow-up `_free` call
+ * on the Formatter after this.
+ *
+ * Phase 2 #06.D4: when the formatter was constructed with a width spec,
+ * width/align/fill are applied here.  Precision is type-specific and is
+ * consumed earlier by the synth `Float_fmt` / `String_fmt` bodies, not
+ * here. */
 const char *riven_fmt_formatter_buffer(RivenFormatter *f) {
     if (!f) return riven_string_from("");
-    char *taken = f->buf;
+    char  *taken = f->buf;
+    size_t len   = f->len;
+    int32_t width   = f->width;
+    int8_t  align   = f->align;
+    int32_t fill_cp = f->fill_cp;
     /* Disown the buffer before freeing the struct so the struct's
      * destructor cannot double-free it. */
     f->buf = NULL;
     f->len = 0;
     f->cap = 0;
-    /* Delegate to the _ORIG_FREE sentinel so drop_fixtures.rs can track
-     * Formatter deallocations via the raw-free counter. With f->buf
-     * already NULL the inner `if (f->buf) free(f->buf)` is a no-op. */
     riven_fmt_formatter_ORIG_FREE(f);
-    return taken ? taken : riven_string_from("");
+    if (!taken) return riven_string_from("");
+    taken = riven_fmt_apply_pad(taken, len, width, align, fill_cp);
+    return taken;
 }
 
 /* Return the number of bytes currently accumulated in the buffer. */

@@ -129,6 +129,107 @@ end
     assert_eq!(stdout, "price: $4250\ncount: 7\nok: true\n");
 }
 
+/// Phase 2 #06.D4: width + right-align (default) pads numerics on the
+/// left with spaces to the requested width.
+#[test]
+fn interpolation_width_right_align_pads_int() {
+    let src = r##"
+def main
+  let n: Int = 42
+  puts "[#{n:>5}]"
+end
+"##;
+    let (stdout, stderr, ok) = compile_and_run(src, "fmt_width_right_int");
+    assert!(ok, "stdout={stdout:?} stderr={stderr:?}");
+    assert_eq!(stdout, "[   42]\n");
+}
+
+/// Phase 2 #06.D4: left-align pads on the right.
+#[test]
+fn interpolation_width_left_align_pads_int() {
+    let src = r##"
+def main
+  let n: Int = 42
+  puts "[#{n:<5}]"
+end
+"##;
+    let (stdout, stderr, ok) = compile_and_run(src, "fmt_width_left_int");
+    assert!(ok, "stdout={stdout:?} stderr={stderr:?}");
+    assert_eq!(stdout, "[42   ]\n");
+}
+
+/// Phase 2 #06.D4: center-align splits padding, extra char goes right.
+#[test]
+fn interpolation_width_center_align_pads_int() {
+    let src = r##"
+def main
+  let n: Int = 42
+  puts "[#{n:^6}]"
+end
+"##;
+    let (stdout, stderr, ok) = compile_and_run(src, "fmt_width_center_int");
+    assert!(ok, "stdout={stdout:?} stderr={stderr:?}");
+    assert_eq!(stdout, "[  42  ]\n");
+}
+
+/// Phase 2 #06.D4: custom fill character with left-align.
+#[test]
+fn interpolation_fill_char_left_align() {
+    let src = r##"
+def main
+  let n: Int = 7
+  puts "[#{n:*<5}]"
+end
+"##;
+    let (stdout, stderr, ok) = compile_and_run(src, "fmt_fill_left_int");
+    assert!(ok, "stdout={stdout:?} stderr={stderr:?}");
+    assert_eq!(stdout, "[7****]\n");
+}
+
+/// Phase 2 #06.D4: float precision via snprintf round-trips through
+/// `Float_to_string_prec`.  `3.14159` with `.2` becomes `3.14`.
+#[test]
+fn interpolation_float_precision() {
+    let src = r##"
+def main
+  let pi: Float = 3.14159
+  puts "pi=#{pi:.2}"
+end
+"##;
+    let (stdout, stderr, ok) = compile_and_run(src, "fmt_float_precision");
+    assert!(ok, "stdout={stdout:?} stderr={stderr:?}");
+    assert_eq!(stdout, "pi=3.14\n");
+}
+
+/// Phase 2 #06.D4: string precision truncates at character boundaries.
+#[test]
+fn interpolation_string_precision_truncates() {
+    let src = r##"
+def main
+  let s: String = String.from("hello world")
+  puts "[#{s:.5}]"
+end
+"##;
+    let (stdout, stderr, ok) = compile_and_run(src, "fmt_string_precision");
+    assert!(ok, "stdout={stdout:?} stderr={stderr:?}");
+    assert_eq!(stdout, "[hello]\n");
+}
+
+/// Phase 2 #06.D4: width and precision compose — precision shortens
+/// the float to N decimals, width pads the result to M total chars.
+#[test]
+fn interpolation_width_and_precision_compose() {
+    let src = r##"
+def main
+  let pi: Float = 3.14159
+  puts "[#{pi:>8.2}]"
+end
+"##;
+    let (stdout, stderr, ok) = compile_and_run(src, "fmt_width_precision_compose");
+    assert!(ok, "stdout={stdout:?} stderr={stderr:?}");
+    assert_eq!(stdout, "[    3.14]\n");
+}
+
 /// Phase 2 #06.D2.S1 follow-up: `Formatter.len()` returns the number of
 /// bytes accumulated in the buffer so far. Captured into a binding and
 /// interpolated to satisfy Riven's `println` String requirement.

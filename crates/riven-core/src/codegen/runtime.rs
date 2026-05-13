@@ -35,6 +35,13 @@ pub const RUNTIME_FUNCTIONS: &[&str] = &[
     "riven_fmt_formatter_write_char",
     "riven_fmt_formatter_buffer",
     "riven_fmt_formatter_len",
+    // Phase 2 stdlib (#06.D4): spec-aware constructor + precision
+    // accessor + per-type precision helpers used by the synth `_fmt`
+    // bodies.
+    "riven_fmt_formatter_new_with_spec",
+    "riven_fmt_formatter_precision",
+    "riven_float_to_string_prec",
+    "riven_string_truncate_chars",
     "riven_env_init",
     "riven_env_args_count",
     "riven_env_args_at",
@@ -375,6 +382,12 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "Formatter_write_char" => return Ok("riven_fmt_formatter_write_char"),
         "Formatter_buffer" => return Ok("riven_fmt_formatter_buffer"),
         "Formatter_len" => return Ok("riven_fmt_formatter_len"),
+        // Phase 2 stdlib (#06.D4): spec-aware constructor + precision
+        // accessor + per-type precision helpers.
+        "Formatter_new_with_spec" => return Ok("riven_fmt_formatter_new_with_spec"),
+        "Formatter_precision" => return Ok("riven_fmt_formatter_precision"),
+        "Float_to_string_prec" => return Ok("riven_float_to_string_prec"),
+        "String_truncate_chars" => return Ok("riven_string_truncate_chars"),
         "Thread_sleep" => return Ok("riven_thread_sleep_ns"),
         "Thread_yield_now" => return Ok("riven_thread_yield"),
         // std::time top-level functions (resolved before module-prefixing).

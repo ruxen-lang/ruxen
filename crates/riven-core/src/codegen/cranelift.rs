@@ -1468,6 +1468,14 @@ fn runtime_signature(name: &str) -> Option<(Vec<Type>, Option<Type>)> {
         "riven_fmt_formatter_write_char" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "riven_fmt_formatter_buffer" => Some((vec![types::I64], Some(types::I64))),
         "riven_fmt_formatter_len" => Some((vec![types::I64], Some(types::I64))),
+        // Phase 2 stdlib (#06.D4): spec helpers.
+        "riven_fmt_formatter_new_with_spec" => Some((
+            vec![types::I64, types::I64, types::I64, types::I64],
+            Some(types::I64),
+        )),
+        "riven_fmt_formatter_precision" => Some((vec![types::I64], Some(types::I64))),
+        "riven_float_to_string_prec" => Some((vec![types::F64, types::I64], Some(types::I64))),
+        "riven_string_truncate_chars" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "riven_stdout_write_str" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "riven_stdout_flush" => Some((vec![types::I64], Some(types::I64))),
         "riven_stderr_write_str" => Some((vec![types::I64, types::I64], Some(types::I64))),

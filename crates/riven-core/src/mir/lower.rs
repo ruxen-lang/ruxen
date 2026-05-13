@@ -4054,7 +4054,7 @@ impl<'a> Lowerer<'a> {
     /// sequence at the current interpolation site:
     ///
     /// ```text
-    /// fmt = Formatter_new()
+    /// fmt = Formatter_new()                      // or _new_with_spec(...)
     /// {T}_fmt(src, fmt)
     /// buf = Formatter_buffer(fmt)
     /// ```
@@ -4065,16 +4065,43 @@ impl<'a> Lowerer<'a> {
     /// same call, so callers do not (and must not) emit an explicit
     /// `Formatter_free`. `callee_name` is the fully-resolved MIR
     /// function name to dispatch into (e.g. `"Int_fmt"`, `"Money_fmt"`).
-    fn emit_display_dispatch(&mut self, src: LocalId, callee_name: &str) -> LocalId {
+    ///
+    /// Phase 2 #06.D4: when `spec` is non-default, the formatter is
+    /// constructed via `Formatter_new_with_spec(width, precision, align,
+    /// fill)` so the runtime can apply width / align / fill at finalize
+    /// and the synth `_fmt` body can read precision via
+    /// `Formatter_precision`.
+    fn emit_display_dispatch(
+        &mut self,
+        src: LocalId,
+        callee_name: &str,
+        spec: Option<&crate::lexer::token::FormatSpec>,
+    ) -> LocalId {
         let fmt_local = self.new_temp(Ty::Class {
             name: "Formatter".to_string(),
             generic_args: vec![],
         });
-        self.emit(MirInst::Call {
-            dest: Some(fmt_local),
-            callee: "Formatter_new".to_string(),
-            args: vec![],
-        });
+        let use_spec = spec.map(|s| !s.is_default()).unwrap_or(false);
+        if use_spec {
+            let spec = spec.unwrap();
+            let (width, precision, align, fill) = encode_format_spec(spec);
+            self.emit(MirInst::Call {
+                dest: Some(fmt_local),
+                callee: "Formatter_new_with_spec".to_string(),
+                args: vec![
+                    MirValue::Literal(Literal::Int(width)),
+                    MirValue::Literal(Literal::Int(precision)),
+                    MirValue::Literal(Literal::Int(align)),
+                    MirValue::Literal(Literal::Int(fill)),
+                ],
+            });
+        } else {
+            self.emit(MirInst::Call {
+                dest: Some(fmt_local),
+                callee: "Formatter_new".to_string(),
+                args: vec![],
+            });
+        }
         self.emit(MirInst::Call {
             dest: None,
             callee: callee_name.to_string(),
@@ -4161,7 +4188,14 @@ impl<'a> Lowerer<'a> {
                     // `user_has_impl_display` is checked BEFORE the derive-Debug
                     // arms so a user-supplied `impl Display for T` wins over
                     // an auto-derived `Debug` formatter.
-                    if is_string_like(&effective_ty) || is_inferred_string_expr(expr) {
+                    // Phase 2 #06.D4: when the spec is non-default we
+                    // must route strings through `String_fmt` so the
+                    // Formatter can apply width / precision / align /
+                    // fill — the legacy pass-through skips the formatter
+                    // entirely and would silently drop the spec.
+                    if (is_string_like(&effective_ty) || is_inferred_string_expr(expr))
+                        && spec.is_default()
+                    {
                         val_local.unwrap_or_else(|| {
                             let d = self.new_temp(Ty::String);
                             self.emit(MirInst::StringLiteral {
@@ -4180,7 +4214,7 @@ impl<'a> Lowerer<'a> {
                             });
                             d
                         });
-                        self.emit_display_dispatch(src, &format!("{}_fmt", user_t))
+                        self.emit_display_dispatch(src, &format!("{}_fmt", user_t), Some(spec))
                     } else if let Some(struct_name) = self.struct_with_derive_debug(&effective_ty) {
                         // Priority #3: struct with `derive Debug` (and no user
                         // `impl Display`) — keep the legacy `{Name}_to_debug`
@@ -4237,6 +4271,13 @@ impl<'a> Lowerer<'a> {
                         });
                         let fmt_callee = if effective_ty == Ty::Char {
                             "Char_fmt"
+                        } else if is_string_like(&effective_ty) {
+                            // Phase 2 #06.D4: a String value with a
+                            // non-default spec falls here (the spec-
+                            // default pass-through above is skipped).
+                            // Route through `String_fmt` so width /
+                            // precision / align / fill all apply.
+                            "String_fmt"
                         } else if effective_ty.is_integer() {
                             "Int_fmt"
                         } else if effective_ty.is_float() {
@@ -4250,7 +4291,7 @@ impl<'a> Lowerer<'a> {
                             // Preserves the pre-Stage-3 default behaviour.
                             "Int_fmt"
                         };
-                        self.emit_display_dispatch(src, fmt_callee)
+                        self.emit_display_dispatch(src, fmt_callee, Some(spec))
                     }
                 }
             };
@@ -6251,18 +6292,28 @@ impl<'a> Lowerer<'a> {
             generic_args: vec![],
         }));
 
-        // (fn_name, self_ty, Option<to_string_runtime_fn>)
-        // None means write self directly (String case).
-        let specs: &[(&str, Ty, Option<&str>)] = &[
-            ("Char_fmt", Ty::Char, Some("riven_char_to_string")),
-            ("Int_fmt", Ty::Int, Some("riven_int_to_string")),
-            ("Float_fmt", Ty::Float, Some("riven_float_to_string")),
-            ("Bool_fmt", Ty::Bool, Some("riven_bool_to_string")),
-            ("String_fmt", Ty::String, None),
+        // (fn_name, self_ty, primitive kind — controls how the value is
+        // converted to a string before write_str).  Kind drives which
+        // runtime helper is invoked and whether precision is read from
+        // the Formatter (Float / String only — Char / Int / Bool ignore
+        // precision per Rust semantics).
+        enum Kind {
+            Char,
+            Int,
+            Float,
+            Bool,
+            String_,
+        }
+        let specs: &[(&str, Ty, Kind)] = &[
+            ("Char_fmt", Ty::Char, Kind::Char),
+            ("Int_fmt", Ty::Int, Kind::Int),
+            ("Float_fmt", Ty::Float, Kind::Float),
+            ("Bool_fmt", Ty::Bool, Kind::Bool),
+            ("String_fmt", Ty::String, Kind::String_),
         ];
 
         let mut out = Vec::with_capacity(specs.len());
-        for (name, self_ty, to_string_fn) in specs {
+        for (name, self_ty, kind) in specs {
             let mut mir_fn = MirFunction::new(*name, Ty::Unit);
             let self_local = mir_fn.new_local("self", self_ty.clone(), false);
             mir_fn.params.push(self_local);
@@ -6271,21 +6322,70 @@ impl<'a> Lowerer<'a> {
 
             let entry = mir_fn.entry_block;
 
-            // Resolve the string value: call riven_<prim>_to_string(self)
-            // for non-String primitives; for String pass self directly.
-            let str_local = match to_string_fn {
-                Some(fn_name) => {
+            // Phase 2 #06.D4: Float and String consult the formatter's
+            // precision slot; Char / Int / Bool do not.
+            let str_local = match kind {
+                Kind::Char => {
                     let dest = mir_fn.new_temp(Ty::String);
                     mir_fn.blocks[entry].instructions.push(MirInst::Call {
                         dest: Some(dest),
-                        callee: fn_name.to_string(),
+                        callee: "riven_char_to_string".to_string(),
                         args: vec![MirValue::Use(self_local)],
                     });
                     dest
                 }
-                // String is already a `char*` pointer at the Cranelift/C ABI layer;
-                // no explicit conversion needed — write_str accepts it directly.
-                None => self_local,
+                Kind::Int => {
+                    let dest = mir_fn.new_temp(Ty::String);
+                    mir_fn.blocks[entry].instructions.push(MirInst::Call {
+                        dest: Some(dest),
+                        callee: "riven_int_to_string".to_string(),
+                        args: vec![MirValue::Use(self_local)],
+                    });
+                    dest
+                }
+                Kind::Bool => {
+                    let dest = mir_fn.new_temp(Ty::String);
+                    mir_fn.blocks[entry].instructions.push(MirInst::Call {
+                        dest: Some(dest),
+                        callee: "riven_bool_to_string".to_string(),
+                        args: vec![MirValue::Use(self_local)],
+                    });
+                    dest
+                }
+                Kind::Float => {
+                    // p = Formatter_precision(fmt)
+                    let prec_local = mir_fn.new_temp(Ty::Int);
+                    mir_fn.blocks[entry].instructions.push(MirInst::Call {
+                        dest: Some(prec_local),
+                        callee: "Formatter_precision".to_string(),
+                        args: vec![MirValue::Use(fmt_local)],
+                    });
+                    // s = Float_to_string_prec(self, p)
+                    let dest = mir_fn.new_temp(Ty::String);
+                    mir_fn.blocks[entry].instructions.push(MirInst::Call {
+                        dest: Some(dest),
+                        callee: "Float_to_string_prec".to_string(),
+                        args: vec![MirValue::Use(self_local), MirValue::Use(prec_local)],
+                    });
+                    dest
+                }
+                Kind::String_ => {
+                    // p = Formatter_precision(fmt)
+                    let prec_local = mir_fn.new_temp(Ty::Int);
+                    mir_fn.blocks[entry].instructions.push(MirInst::Call {
+                        dest: Some(prec_local),
+                        callee: "Formatter_precision".to_string(),
+                        args: vec![MirValue::Use(fmt_local)],
+                    });
+                    // s = String_truncate_chars(self, p)   (p == -1 → copy)
+                    let dest = mir_fn.new_temp(Ty::String);
+                    mir_fn.blocks[entry].instructions.push(MirInst::Call {
+                        dest: Some(dest),
+                        callee: "String_truncate_chars".to_string(),
+                        args: vec![MirValue::Use(self_local), MirValue::Use(prec_local)],
+                    });
+                    dest
+                }
             };
 
             // Formatter_write_str(fmt, str_value) — result discarded.
@@ -8174,6 +8274,26 @@ fn element_type_of(ty: &Ty) -> Ty {
         }
         _ => Ty::Int,
     }
+}
+
+/// Phase 2 #06.D4: encode a `FormatSpec` into the four i64 arguments
+/// accepted by `riven_fmt_formatter_new_with_spec`.
+///
+/// * `width`:     0  = unset
+/// * `precision`: -1 = unset
+/// * `align`:     0  = default, 1 = left ('<'), 2 = center ('^'), 3 = right ('>')
+/// * `fill`:      -1 = unset (runtime treats as ' ')
+fn encode_format_spec(spec: &crate::lexer::token::FormatSpec) -> (i64, i64, i64, i64) {
+    let width = spec.width.map(|w| w as i64).unwrap_or(0);
+    let precision = spec.precision.map(|p| p as i64).unwrap_or(-1);
+    let align = match spec.align {
+        Some('<') => 1,
+        Some('^') => 2,
+        Some('>') => 3,
+        _ => 0,
+    };
+    let fill = spec.fill.map(|c| c as i64).unwrap_or(-1);
+    (width, precision, align, fill)
 }
 
 /// Returns true if the type is a string-like type whose runtime representation
