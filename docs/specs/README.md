@@ -96,6 +96,14 @@ cross-link rather than duplicate.
 - [std::sync](stdlib/sync.spec.md) — concurrency surface: Thread,
   Mutex, Arc, JoinHandle, MutexGuard.  v1: typeck contract +
   `Thread.sleep`/`yield_now` runtime; full runtime in Phase 4.
+- [std::future / async](stdlib/async.spec.md) — Future trait, Poll
+  enum, Waker, Context, `async fn` / `async { }` / `.await` syntax.
+  v1: parser + typeck only.  Executor in Phase 4.
+- [Primitives](stdlib/primitives.spec.md) — Int / sized integers /
+  Float / Bool / Char method surfaces, numeric literal suffixes
+  (`123u8`, `1.5f32`), escape sequences (`'\n'`, `'\u{1F600}'`).
+- [std::prelude](stdlib/prelude.spec.md) — auto-imported names
+  available without a `use` statement.
 
 ### Traits
 
@@ -134,6 +142,9 @@ cross-link rather than duplicate.
 - [Module resolution + runtime startup](system/module-resolution.spec.md) —
   `use std.x.{...}` import surface, group imports, method dispatch
   on imported types, end-to-end round-trips, `main` shim argv init.
+- [User-defined modules](system/user-modules.spec.md) — `module foo
+  ... end` parser surface (shipped) + resolver path lookup
+  (pending).
 
 ### Future (backfill as we touch them)
 
