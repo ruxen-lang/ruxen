@@ -120,6 +120,18 @@ pub enum GenericParam {
         bounds: Vec<TraitBound>,
         span: Span,
     },
+    /// Tier-2 const generics (`const N: USize`).
+    ///
+    /// Phase 02a stage 1 — parser only.  `ty` carries the user-written
+    /// type annotation as a `TypeExpr`; resolve will validate that it
+    /// is a built-in integer or `Bool` in S3 and surface E-CONST-BAD-TYPE
+    /// otherwise.  No semantic effects yet — every downstream pass
+    /// treats `Const` as a no-op until S3-S6 wire it through.
+    Const {
+        name: String,
+        ty: TypeExpr,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

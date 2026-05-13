@@ -1640,6 +1640,9 @@ impl Resolver {
                                     Some((name.clone(), trait_refs, span.clone()))
                                 }
                                 ast::GenericParam::Lifetime { .. } => None,
+                                // Stage 1 of const generics — parser only.
+                                // Resolve / typeck integration lands in S3.
+                                ast::GenericParam::Const { .. } => None,
                             })
                             .collect()
                     })
@@ -4934,6 +4937,10 @@ impl Resolver {
                                 // Lifetimes are tracked but not yet used in Phase 3
                                 None
                             }
+                            // Stage 1 of const generics — parser only.
+                            // Resolve / typeck integration lands in S3
+                            // (DefKind::ConstParam + scope binding).
+                            ast::GenericParam::Const { .. } => None,
                         }
                     })
                     .collect()

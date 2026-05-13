@@ -385,6 +385,29 @@ impl Parser {
         self.skip_newlines();
         let start = self.current_span();
 
+        // Tier-2 const generics: `const NAME: Type`.  Stage 1 — parser
+        // only.  Resolve validates the type in S3.
+        if self.eat(TokenKind::Const) {
+            // `const` consumed.  Expect identifier or type-identifier
+            // (Riven convention: `N`, `CAP`, `LEN` — all live in the
+            // `Identifier` lexer slot, not `TypeIdentifier`, because
+            // they're value-level names).
+            let name = match self.current_kind().clone() {
+                TokenKind::Identifier(n) | TokenKind::TypeIdentifier(n) => {
+                    self.advance();
+                    n
+                }
+                _ => {
+                    self.error("expected const generic parameter name after `const`");
+                    "_".to_string()
+                }
+            };
+            self.expect(TokenKind::Colon);
+            let ty = self.parse_type();
+            let span = self.span_from(&start);
+            return GenericParam::Const { name, ty, span };
+        }
+
         if let TokenKind::Lifetime(ref name) = self.current_kind().clone() {
             let name = name.clone();
             self.advance();

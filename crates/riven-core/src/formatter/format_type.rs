@@ -159,6 +159,12 @@ pub fn format_generic_params(gp: &GenericParams) -> Doc {
                     ])
                 }
             }
+            GenericParam::Const { name, ty, .. } => concat(vec![
+                text("const "),
+                text(name.clone()),
+                text(": "),
+                format_type_expr(ty, &CommentMap::new()),
+            ]),
         })
         .collect();
 

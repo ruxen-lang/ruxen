@@ -547,6 +547,9 @@ fn format_opt_generic_params(gp: &Option<GenericParams>) -> String {
                             format!("{}: {}", name, bs.join(" + "))
                         }
                     }
+                    GenericParam::Const { name, ty, .. } => {
+                        format!("const {}: {}", name, format_type(ty))
+                    }
                 })
                 .collect();
             format!("[{}]", params.join(", "))
