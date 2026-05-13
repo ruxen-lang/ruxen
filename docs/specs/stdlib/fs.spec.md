@@ -90,16 +90,18 @@ through the E2E pipeline but are not yet covered by dedicated
 | B5        | `fs_is_dir_distinguishes_directories`         | `stdlib_fs.rs`   |
 | B6        | `fs_read_dir_lists_all_entries`               | `stdlib_fs.rs`   |
 | B7        | `fs_read_dir_missing_path_returns_err`        | `stdlib_fs.rs`   |
-| B8 mkdir  | `fs_create_dir_then_is_dir`                   | `stdlib_fs.rs`   |
-| B8 rmfile | `fs_remove_file_then_exists_false`            | `stdlib_fs.rs`   |
+| B8 mkdir  | `fs_create_dir_then_is_dir`                   | `stdlib_fs.rs`           |
+| B8 rmfile | `fs_remove_file_then_exists_false`            | `stdlib_fs.rs`           |
+| B8 mkdir-p| `std_fs_create_dir_all_round_trip`            | `std_use_resolution.rs`  |
+| B8 rename | `std_fs_mutation_helpers_round_trip`          | `std_use_resolution.rs`  |
 
 ---
 
 ## Gaps
 
-- B8 still needs dedicated pin tests for `create_dir_all` (recursive
-  mkdir) and `rename`.  `create_dir` and `remove_file` are pinned
-  as of 2026-05.
+None at present — every behaviour has a direct pin (B1/B2/B3/B8
+direct pins added 2026-05; B8 `create_dir_all` and `rename` were
+already covered by `std_use_resolution.rs` round-trips).
 
 ## Out of scope (v2)
 

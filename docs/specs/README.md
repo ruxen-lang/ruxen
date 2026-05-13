@@ -93,6 +93,9 @@ cross-link rather than duplicate.
 - [Option / Result](stdlib/option_result.spec.md) — tagged-enum
   surface, `?` operator, `if let Some`, `expect!`, `unwrap_or`,
   `map`.
+- [std::sync](stdlib/sync.spec.md) — concurrency surface: Thread,
+  Mutex, Arc, JoinHandle, MutexGuard.  v1: typeck contract +
+  `Thread.sleep`/`yield_now` runtime; full runtime in Phase 4.
 
 ### Traits
 
@@ -126,14 +129,21 @@ cross-link rather than duplicate.
 - [FFI](codegen/ffi.spec.md) — Phase 7 unsafe blocks, raw pointers,
   `lib` / `extern "C"`, `#[repr(C/packed/transparent)]`.
 
+### System
+
+- [Module resolution + runtime startup](system/module-resolution.spec.md) —
+  `use std.x.{...}` import surface, group imports, method dispatch
+  on imported types, end-to-end round-trips, `main` shim argv init.
+
 ### Future (backfill as we touch them)
 
 - std::hash (top-level hashing utilities — separate from HashMap /
   HashSet).
-- std::thread / concurrency (Phase 3+).
 - Error-code registry as its own spec (currently informal —
   `derive.spec.md` B12 lists the relevant codes).
 - LSP / formatter / REPL / package manager — not yet spec'd.
+- User-defined modules (`module foo ... end`) — parsed but resolve
+  only handles `std.*` paths today.
 
 ## Cross-references
 

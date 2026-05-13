@@ -118,7 +118,10 @@ e.message()` chains is currently incomplete (deferred).
 
 - `BufRead` iterator (true streaming line reader); v1 buffers the
   whole input.
-- `Stdin.read_to_string()` round-trip pin test (helper is shipped but
-  not pinned by a fixture yet — add when next touched).
 - The `Err(e).message()` inference chain inside `if let Err(e) = ...`
   arms (separately tracked).
+
+> **Note:** `Stdin.read_to_string()` is pinned by
+> `std_io_stdin_read_to_string_round_trip` in
+> `crates/riven-core/tests/std_use_resolution.rs` — the round-trip
+> test was previously hidden behind a sibling-file naming convention.
