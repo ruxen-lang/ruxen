@@ -59,23 +59,25 @@ directly.  Capturing output requires the full `Command` builder
 
 ## Pin tests
 
-| Behaviour | Test fn                                | File                  |
-|-----------|----------------------------------------|-----------------------|
-| B1        | covered transitively by REPL exit-code tests | `tests/release-e2e/scripts/` |
-| B2        | `process_run_true_returns_zero`        | `stdlib_process.rs`   |
-| B2        | `process_run_false_returns_one`        | `stdlib_process.rs`   |
-| B3        | `process_run_echo_with_args_returns_zero` | `stdlib_process.rs` |
-| B4        | partial — exit-code branches covered by B2/B3; signal / fork / exec error paths are documented but not pinned |  |
+| Behaviour | Test fn                                       | File                       |
+|-----------|-----------------------------------------------|----------------------------|
+| B1 zero   | `process_exit_zero_returns_zero`              | `stdlib_process.rs`        |
+| B1 one    | `process_exit_one_returns_one`                | `stdlib_process.rs`        |
+| B1 42     | `process_exit_forty_two_returns_forty_two`    | `stdlib_process.rs`        |
+| B1 23     | `std_process_exit_round_trip`                 | `std_use_resolution.rs`    |
+| B2        | `process_run_true_returns_zero`               | `stdlib_process.rs`        |
+| B2        | `process_run_false_returns_one`               | `stdlib_process.rs`        |
+| B3        | `process_run_echo_with_args_returns_zero`     | `stdlib_process.rs`        |
+| B4 exec   | `process_run_nonexistent_binary_returns_127`  | `stdlib_process.rs`        |
+| B4 signal | gap — see below                               |                            |
 
 ---
 
-## Gaps (add pin tests when next touched)
+## Gaps
 
-- B1: dedicated `process_exit_*` pin tests for the common codes
-  (0, 1, 2, 42).
-- B4: pin tests for signal termination (kill the child with SIGTERM,
-  expect `128 + 15 = 143`) and for `execvp` failure (nonexistent
-  binary, expect `127`).
+- B4 signal-termination pin (kill the child with SIGTERM, expect
+  `128 + 15 = 143`) is not yet shipped — needs careful platform
+  handling to avoid CI flakes.  Tracked.
 
 ## Out of scope (v2)
 

@@ -163,3 +163,104 @@ end
         stderr
     );
 }
+
+// ─── process spec B1 direct exit-code pins (gap fill 2026-05) ──────────
+//
+// `std_use_resolution.rs::std_process_exit_round_trip` already pins
+// `exit(23)`.  Below we cover the spec-named common codes (0, 1, 2, 42)
+// in a single test that records every exit and asserts on each.
+
+fn compile_and_get_exit_code(source: &str, basename: &str) -> i32 {
+    let root = workspace_root();
+    let tmp_dir = root.join("tmp");
+    let _ = std::fs::create_dir_all(&tmp_dir);
+    let bin_path = tmp_dir.join(format!("{}.bin", basename));
+
+    let mut lexer = Lexer::new(source);
+    let tokens = lexer.tokenize().expect("lex");
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse().expect("parse");
+    let result = typeck::type_check(&program);
+    let errors: Vec<_> = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.level == riven_core::diagnostics::DiagnosticLevel::Error)
+        .collect();
+    assert!(errors.is_empty(), "typecheck errors: {:?}", errors);
+
+    let mut lowerer = Lowerer::new(&result.symbols);
+    let mir = lowerer
+        .lower_program(&result.program)
+        .expect("MIR lowering");
+    codegen::compile(&mir, bin_path.to_str().unwrap()).expect("codegen");
+
+    let output = Command::new(&bin_path).output().expect("run binary");
+    output.status.code().expect("process should exit normally")
+}
+
+#[test]
+fn process_exit_zero_returns_zero() {
+    let source = r##"
+use std.process.exit
+
+def main
+  exit(0)
+end
+"##;
+    assert_eq!(compile_and_get_exit_code(source, "stdlib_process_exit_0"), 0);
+}
+
+#[test]
+fn process_exit_one_returns_one() {
+    let source = r##"
+use std.process.exit
+
+def main
+  exit(1)
+end
+"##;
+    assert_eq!(compile_and_get_exit_code(source, "stdlib_process_exit_1"), 1);
+}
+
+#[test]
+fn process_exit_forty_two_returns_forty_two() {
+    let source = r##"
+use std.process.exit
+
+def main
+  exit(42)
+end
+"##;
+    assert_eq!(
+        compile_and_get_exit_code(source, "stdlib_process_exit_42"),
+        42
+    );
+}
+
+/// `process_run` of a nonexistent binary returns `127` per the spec's
+/// B4 failure-mode encoding.  Pins the execvp-failure branch.
+#[test]
+fn process_run_nonexistent_binary_returns_127() {
+    let source = r##"
+use std.process.process_run
+
+def main
+  let cmd = "/no/such/binary/we/hope/exists"
+  let args: Vec[String] = Vec.new
+  let code = process_run(cmd, args)
+  if code == 127
+    puts "ok"
+  else
+    puts "fail code=#{code}"
+  end
+end
+"##;
+    let (stdout, stderr, ok) = compile_and_run(source, "stdlib_process_run_missing");
+    assert!(ok, "stdout=[{}] stderr=[{}]", stdout, stderr);
+    assert!(
+        stdout.contains("ok"),
+        "expected 127 from missing binary, got: stdout=[{}] stderr=[{}]",
+        stdout,
+        stderr
+    );
+}

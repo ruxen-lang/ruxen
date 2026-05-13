@@ -56,21 +56,21 @@ absolute path.
 
 ## Pin tests
 
-| Behaviour | Test fn                              | File                |
-|-----------|--------------------------------------|---------------------|
-| B1        | `args_returns_program_name_and_user_args` (existing pre-#06 surface — covered transitively by E2E fixtures that call `args()`) | `tests/release-e2e/cases/` |
-| B2        | (existing pre-#06 surface; covered transitively in REPL coverage tests) | |
-| B3        | `env_vars_snapshots_process_environment` | `stdlib_env.rs` |
-| B3        | `env_vars_is_non_empty_when_one_var_set` | `stdlib_env.rs` |
-| B4        | `env_current_dir_returns_ok_path`        | `stdlib_env.rs` |
+| Behaviour | Test fn                                      | File             |
+|-----------|----------------------------------------------|------------------|
+| B1        | `env_args_includes_program_name`             | `stdlib_env.rs`  |
+| B2 ok     | `env_var_returns_ok_for_set_key`             | `stdlib_env.rs`  |
+| B2 err    | `env_var_returns_err_for_missing_key`        | `stdlib_env.rs`  |
+| B3        | `env_vars_snapshots_process_environment`     | `stdlib_env.rs`  |
+| B3        | `env_vars_is_non_empty_when_one_var_set`     | `stdlib_env.rs`  |
+| B4        | `env_current_dir_returns_ok_path`            | `stdlib_env.rs`  |
 
 ---
 
-## Gaps (add pin tests when next touched)
+## Gaps
 
-- B1 and B2 ship via the pre-#06 runtime surface but have no dedicated
-  `stdlib_env.rs` pin tests; coverage comes from E2E fixtures + REPL
-  scenarios.  Adding direct pins is a small follow-up.
+None at present — every behaviour has a direct pin (B1/B2 pins added
+2026-05).
 
 ## Out of scope (v2)
 

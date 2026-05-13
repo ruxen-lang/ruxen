@@ -82,9 +82,11 @@ series.
 
 - B1, B4: tighten `Vec.from(...)` and `Vec.with_capacity(...)` to
   reject obviously wrong arg types.
-- `Vec.first / last / contains / clone / reverse` are wired in the
-  runtime but lack dedicated pin tests; covered transitively by
-  iterator + E2E fixtures.
+- `Vec.first / last / contains / clone / reverse` now have direct
+  runtime pin tests in `stdlib_vec_runtime.rs` (added 2026-05):
+  `vec_first_returns_first_element`, `vec_last_returns_last_element`,
+  `vec_contains_finds_element`, `vec_clone_returns_independent_copy`,
+  `vec_reverse_inverts_order`.
 
 ## Out of scope (v2)
 

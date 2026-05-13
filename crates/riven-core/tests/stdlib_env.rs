@@ -2,6 +2,10 @@
 //! `vars` (snapshot of process env into HashMap[String, String]) and
 //! `current_dir` (Result[String, IoError]).
 //!
+//! Pin tests for the older pre-#06 surface (`args()` / `var(name)`)
+//! live below the #06 group — added 2026-05 to close the gap noted
+//! in `docs/specs/stdlib/env.spec.md`.
+//!
 //! Strategy: compile a tiny Riven program that exercises the new
 //! function, run the resulting binary in a controlled environment,
 //! and assert on the program's stdout. Avoids embedding non-
@@ -160,4 +164,71 @@ end
         "expected non-empty cwd path, got: {}",
         stdout
     );
+}
+
+// ─── env spec B1 / B2 direct pins (gap fill 2026-05) ──────────────────
+
+/// `env::var("KEY")` returns `Result::Ok(value)` when the key is set.
+/// Pins the spec's B2 happy path.
+#[test]
+fn env_var_returns_ok_for_set_key() {
+    let source = r##"
+use std.env.var
+
+def main
+  match var("RIVEN_SENTINEL")
+    Ok(v)  -> puts "got=#{v}"
+    Err(_) -> puts "missing"
+  end
+end
+"##;
+    let (stdout, stderr, ok) = compile_and_run_with_env(
+        source,
+        "stdlib_env_var_set",
+        [("RIVEN_SENTINEL", "hello")],
+    );
+    assert!(ok, "stderr: {}", stderr);
+    assert!(stdout.contains("got=hello"), "stdout: {}", stdout);
+}
+
+/// `env::var` returns `Result::Err(...)` for an unset key.  Pins
+/// spec B2 negative path.
+#[test]
+fn env_var_returns_err_for_missing_key() {
+    let source = r##"
+use std.env.var
+
+def main
+  match var("RIVEN_DEFINITELY_NOT_SET_12345")
+    Ok(v)  -> puts "got=#{v}"
+    Err(_) -> puts "missing"
+  end
+end
+"##;
+    let (stdout, stderr, ok) =
+        compile_and_run_with_env(source, "stdlib_env_var_missing", std::iter::empty::<(&str, &str)>());
+    assert!(ok, "stderr: {}", stderr);
+    assert!(stdout.contains("missing"), "stdout: {}", stdout);
+}
+
+/// `args()` returns a non-empty Vec — element 0 is the program name.
+/// Pins the spec's B1 lower-bound guarantee.
+#[test]
+fn env_args_includes_program_name() {
+    let source = r##"
+use std.env.args
+
+def main
+  let a = args()
+  if a.len() > 0
+    puts "ok len=#{a.len()}"
+  else
+    puts "fail empty"
+  end
+end
+"##;
+    let (stdout, stderr, ok) =
+        compile_and_run_with_env(source, "stdlib_env_args_present", std::iter::empty::<(&str, &str)>());
+    assert!(ok, "stderr: {}", stderr);
+    assert!(stdout.contains("ok"), "expected non-empty args, got: {}", stdout);
 }

@@ -228,3 +228,154 @@ end
         stdout
     );
 }
+
+// ─── fs spec B1 / B2 / B3 / B8 direct pins (gap fill 2026-05) ──────────
+
+/// `fs::write(path, contents)` then `fs::read_to_string(path)` round-trip.
+/// Pins spec B1 + B2.
+#[test]
+fn fs_write_then_read_to_string_round_trips() {
+    let dir = unique_tmp_dir("write_read");
+    let file = dir.join("a.txt");
+    let source = format!(
+        r##"
+use std.fs.{{write, read_to_string}}
+
+def main
+  match write("{file}", "hello fs")
+    Ok(_)  -> puts "wrote"
+    Err(_) -> puts "write_fail"
+  end
+  match read_to_string("{file}")
+    Ok(c)  -> puts "read=#{{c}}"
+    Err(_) -> puts "read_fail"
+  end
+end
+"##,
+        file = file.display()
+    );
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_fs_write_read");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(ok, "stderr: {}", stderr);
+    assert!(stdout.contains("wrote"), "write branch: {}", stdout);
+    assert!(stdout.contains("read=hello fs"), "read branch: {}", stdout);
+}
+
+/// `fs::read_to_string(missing)` returns `Result::Err(_)`.  Pins B1 negative.
+#[test]
+fn fs_read_to_string_missing_returns_err() {
+    let source = r##"
+use std.fs.read_to_string
+
+def main
+  match read_to_string("/no/such/file/we/hope.txt")
+    Ok(_)  -> puts "unexpected_ok"
+    Err(_) -> puts "err_ok"
+  end
+end
+"##;
+    let (stdout, stderr, ok) = compile_and_run(source, "stdlib_fs_read_missing");
+    assert!(ok, "stderr: {}", stderr);
+    assert!(stdout.contains("err_ok"), "got: {}", stdout);
+}
+
+/// `fs::exists(path)` returns `true` for an existing file, `false`
+/// for a missing path.  Pins spec B3.
+#[test]
+fn fs_exists_distinguishes_existing_and_missing() {
+    let dir = unique_tmp_dir("exists");
+    let file = dir.join("a.txt");
+    std::fs::write(&file, b"x").expect("write");
+
+    let source = format!(
+        r##"
+use std.fs.exists
+
+def main
+  if exists("{file}")
+    puts "yes"
+  else
+    puts "no_existing"
+  end
+  if exists("{missing}")
+    puts "missing_yes"
+  else
+    puts "missing_no"
+  end
+end
+"##,
+        file = file.display(),
+        missing = dir.join("nope").display(),
+    );
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_fs_exists");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(ok, "stderr: {}", stderr);
+    assert!(stdout.contains("yes"), "existing: {}", stdout);
+    assert!(stdout.contains("missing_no"), "missing: {}", stdout);
+}
+
+/// `fs::create_dir(path)` creates the directory, then `fs::is_dir`
+/// confirms it.  Pins one half of spec B8.
+#[test]
+fn fs_create_dir_then_is_dir() {
+    let dir = unique_tmp_dir("create_dir");
+    // Use a nested name that doesn't yet exist.
+    let sub = dir.join("nested");
+
+    let source = format!(
+        r##"
+use std.fs.{{create_dir, is_dir}}
+
+def main
+  match create_dir("{sub}")
+    Ok(_)  -> puts "created"
+    Err(_) -> puts "create_fail"
+  end
+  if is_dir("{sub}")
+    puts "is_dir_yes"
+  else
+    puts "is_dir_no"
+  end
+end
+"##,
+        sub = sub.display()
+    );
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_fs_create_dir");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(ok, "stderr: {}", stderr);
+    assert!(stdout.contains("created"), "create: {}", stdout);
+    assert!(stdout.contains("is_dir_yes"), "is_dir: {}", stdout);
+}
+
+/// `fs::write` then `fs::remove_file` then `fs::exists` round-trip.
+/// Pins another half of spec B8.
+#[test]
+fn fs_remove_file_then_exists_false() {
+    let dir = unique_tmp_dir("remove_file");
+    let file = dir.join("byebye.txt");
+
+    let source = format!(
+        r##"
+use std.fs.{{write, remove_file, exists}}
+
+def main
+  let _ = write("{file}", "hi")
+  match remove_file("{file}")
+    Ok(_)  -> puts "removed"
+    Err(_) -> puts "remove_fail"
+  end
+  if exists("{file}")
+    puts "still_there"
+  else
+    puts "gone"
+  end
+end
+"##,
+        file = file.display()
+    );
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_fs_remove_file");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(ok, "stderr: {}", stderr);
+    assert!(stdout.contains("removed"), "remove: {}", stdout);
+    assert!(stdout.contains("gone"), "after-remove exists: {}", stdout);
+}

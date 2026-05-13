@@ -80,25 +80,26 @@ through the E2E pipeline but are not yet covered by dedicated
 
 ## Pin tests
 
-| Behaviour | Test fn                              | File           |
-|-----------|--------------------------------------|----------------|
-| B1        | covered transitively by E2E fixtures that round-trip files | `tests/release-e2e/cases/` |
-| B2        | covered transitively by E2E fixtures | |
-| B3        | covered transitively (existing pre-#06 surface) | |
-| B4        | `fs_is_file_distinguishes_regular_files` | `stdlib_fs.rs` |
-| B5        | `fs_is_dir_distinguishes_directories`    | `stdlib_fs.rs` |
-| B6        | `fs_read_dir_lists_all_entries`          | `stdlib_fs.rs` |
-| B7        | `fs_read_dir_missing_path_returns_err`   | `stdlib_fs.rs` |
-| B8        | gap — see below                          |                |
+| Behaviour | Test fn                                       | File             |
+|-----------|-----------------------------------------------|------------------|
+| B1 ok     | `fs_write_then_read_to_string_round_trips`    | `stdlib_fs.rs`   |
+| B1 err    | `fs_read_to_string_missing_returns_err`       | `stdlib_fs.rs`   |
+| B2        | `fs_write_then_read_to_string_round_trips`    | `stdlib_fs.rs`   |
+| B3        | `fs_exists_distinguishes_existing_and_missing`| `stdlib_fs.rs`   |
+| B4        | `fs_is_file_distinguishes_regular_files`      | `stdlib_fs.rs`   |
+| B5        | `fs_is_dir_distinguishes_directories`         | `stdlib_fs.rs`   |
+| B6        | `fs_read_dir_lists_all_entries`               | `stdlib_fs.rs`   |
+| B7        | `fs_read_dir_missing_path_returns_err`        | `stdlib_fs.rs`   |
+| B8 mkdir  | `fs_create_dir_then_is_dir`                   | `stdlib_fs.rs`   |
+| B8 rmfile | `fs_remove_file_then_exists_false`            | `stdlib_fs.rs`   |
 
 ---
 
-## Gaps (add pin tests when next touched)
+## Gaps
 
-- B1 / B2 / B3: direct unit tests in `stdlib_fs.rs` would harden the
-  contract; today they ride on E2E coverage.
-- B8: `create_dir` / `create_dir_all` / `remove_file` / `rename`
-  have runtime helpers + codegen wiring but no dedicated pin tests.
+- B8 still needs dedicated pin tests for `create_dir_all` (recursive
+  mkdir) and `rename`.  `create_dir` and `remove_file` are pinned
+  as of 2026-05.
 
 ## Out of scope (v2)
 
