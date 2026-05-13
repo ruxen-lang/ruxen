@@ -846,13 +846,13 @@ fn send_required_closure_rejects_borrow_capture() {
     let require_send_sig = crate::resolve::symbols::FnSignature {
         self_mode: None,
         is_class_method: false,
-        generic_params: vec![crate::resolve::symbols::GenericParamInfo {
-            name: "T".to_string(),
-            bounds: vec![crate::hir::types::TraitRef {
+        generic_params: vec![crate::resolve::symbols::GenericParamInfo::type_param(
+            "T".to_string(),
+            vec![crate::hir::types::TraitRef {
                 name: "Send".to_string(),
                 generic_args: vec![],
             }],
-        }],
+        )],
         params: vec![crate::resolve::symbols::ParamInfo {
             name: "value".to_string(),
             ty: Ty::TypeParam {

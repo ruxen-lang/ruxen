@@ -498,9 +498,11 @@ impl TraitResolver {
             generic_params: func
                 .generic_params
                 .iter()
-                .map(|gp| crate::resolve::symbols::GenericParamInfo {
-                    name: gp.name.clone(),
-                    bounds: gp.bounds.clone(),
+                .map(|gp| {
+                    crate::resolve::symbols::GenericParamInfo::type_param(
+                        gp.name.clone(),
+                        gp.bounds.clone(),
+                    )
                 })
                 .collect(),
             params: func

@@ -952,13 +952,13 @@ impl Resolver {
             "JoinHandle".to_string(),
             DefKind::Class {
                 info: ClassInfo {
-                    generic_params: vec![GenericParamInfo {
-                        name: "T".to_string(),
-                        bounds: vec![TraitRef {
+                    generic_params: vec![GenericParamInfo::type_param(
+                        "T".to_string(),
+                        vec![TraitRef {
                             name: "Send".to_string(),
                             generic_args: vec![],
                         }],
-                    }],
+                    )],
                     parent: None,
                     fields: vec![],
                     methods: vec![],
@@ -981,10 +981,7 @@ impl Resolver {
             "Mutex".to_string(),
             DefKind::Class {
                 info: ClassInfo {
-                    generic_params: vec![GenericParamInfo {
-                        name: "T".to_string(),
-                        bounds: vec![],
-                    }],
+                    generic_params: vec![GenericParamInfo::type_param("T".to_string(), vec![])],
                     parent: None,
                     fields: vec![],
                     methods: vec![],
@@ -1005,10 +1002,7 @@ impl Resolver {
             "MutexGuard".to_string(),
             DefKind::Class {
                 info: ClassInfo {
-                    generic_params: vec![GenericParamInfo {
-                        name: "T".to_string(),
-                        bounds: vec![],
-                    }],
+                    generic_params: vec![GenericParamInfo::type_param("T".to_string(), vec![])],
                     parent: None,
                     fields: vec![],
                     methods: vec![],
@@ -1031,10 +1025,7 @@ impl Resolver {
             "Arc".to_string(),
             DefKind::Class {
                 info: ClassInfo {
-                    generic_params: vec![GenericParamInfo {
-                        name: "T".to_string(),
-                        bounds: vec![],
-                    }],
+                    generic_params: vec![GenericParamInfo::type_param("T".to_string(), vec![])],
                     parent: None,
                     fields: vec![],
                     methods: vec![],
@@ -1339,10 +1330,7 @@ impl Resolver {
             "Option".to_string(),
             DefKind::Enum {
                 info: EnumInfo {
-                    generic_params: vec![GenericParamInfo {
-                        name: "T".to_string(),
-                        bounds: vec![],
-                    }],
+                    generic_params: vec![GenericParamInfo::type_param("T".to_string(), vec![])],
                     variants: vec![], // will be filled below
                     derive_traits: vec![],
                     opt_out_send: false,
@@ -1404,14 +1392,8 @@ impl Resolver {
             DefKind::Enum {
                 info: EnumInfo {
                     generic_params: vec![
-                        GenericParamInfo {
-                            name: "T".to_string(),
-                            bounds: vec![],
-                        },
-                        GenericParamInfo {
-                            name: "E".to_string(),
-                            bounds: vec![],
-                        },
+                        GenericParamInfo::type_param("T".to_string(), vec![]),
+                        GenericParamInfo::type_param("E".to_string(), vec![]),
                     ],
                     variants: vec![], // will be filled below
                     derive_traits: vec![],
@@ -1473,10 +1455,7 @@ impl Resolver {
             "Poll".to_string(),
             DefKind::Enum {
                 info: EnumInfo {
-                    generic_params: vec![GenericParamInfo {
-                        name: "T".to_string(),
-                        bounds: vec![],
-                    }],
+                    generic_params: vec![GenericParamInfo::type_param("T".to_string(), vec![])],
                     variants: vec![],
                     derive_traits: vec![],
                     opt_out_send: false,
@@ -1556,11 +1535,17 @@ impl Resolver {
 
         match item {
             ast::TopLevelItem::Class(class) => {
+                // T2.02 S5: pre-populate generic_params with kinds so
+                // use-site E0700 checks during pass 1 (e.g. inside a
+                // forward-declared fn signature that references this
+                // class) see the right param kinds.  Without this,
+                // const params would still register as `Type` kind.
+                let class_gp = self.collect_generic_param_infos(&class.generic_params);
                 let id = self.symbols.define(
                     class.name.clone(),
                     DefKind::Class {
                         info: ClassInfo {
-                            generic_params: vec![],
+                            generic_params: class_gp,
                             parent: None,
                             fields: vec![],
                             methods: vec![],
@@ -1578,11 +1563,12 @@ impl Resolver {
                 self.type_registry.insert(class.name.clone(), id);
             }
             ast::TopLevelItem::Struct(s) => {
+                let struct_gp = self.collect_generic_param_infos(&s.generic_params);
                 let id = self.symbols.define(
                     s.name.clone(),
                     DefKind::Struct {
                         info: StructInfo {
-                            generic_params: vec![],
+                            generic_params: struct_gp,
                             fields: vec![],
                             derive_traits: s.derive_traits.clone(),
                             repr: s.repr.clone(),
@@ -1599,11 +1585,12 @@ impl Resolver {
                 self.type_registry.insert(s.name.clone(), id);
             }
             ast::TopLevelItem::Enum(e) => {
+                let enum_gp = self.collect_generic_param_infos(&e.generic_params);
                 let id = self.symbols.define(
                     e.name.clone(),
                     DefKind::Enum {
                         info: EnumInfo {
-                            generic_params: vec![],
+                            generic_params: enum_gp,
                             variants: vec![],
                             derive_traits: e.derive_traits.clone(),
                             opt_out_send: false,
@@ -1830,6 +1817,8 @@ impl Resolver {
                     })
                     .collect();
                 self.scopes.pop();
+                let fn_generic_param_infos =
+                    self.collect_generic_param_infos(&f.generic_params);
                 let id = self.symbols.define(
                     f.name.clone(),
                     DefKind::Function {
@@ -1837,13 +1826,7 @@ impl Resolver {
                             self_mode: None,
                             is_class_method: false,
                             is_async: f.is_async,
-                            generic_params: generic_params
-                                .iter()
-                                .map(|gp| GenericParamInfo {
-                                    name: gp.name.clone(),
-                                    bounds: gp.bounds.clone(),
-                                })
-                                .collect(),
+                            generic_params: fn_generic_param_infos,
                             params,
                             return_ty,
                         },
@@ -2173,17 +2156,14 @@ impl Resolver {
         self.current_self_ty = old_self_ty;
         self.current_class_def = old_class_def;
 
-        // Update the symbol table with full class info
+        // Update the symbol table with full class info.  Pre-compute
+        // generic_params (which needs `&mut self` for type-expr
+        // resolution) before grabbing the mutable borrow of the symbol.
+        let class_generic_param_infos = self.collect_generic_param_infos(&class.generic_params);
         if let Some(def) = self.symbols.get_mut(def_id) {
             def.kind = DefKind::Class {
                 info: ClassInfo {
-                    generic_params: generic_params
-                        .iter()
-                        .map(|gp| GenericParamInfo {
-                            name: gp.name.clone(),
-                            bounds: gp.bounds.clone(),
-                        })
-                        .collect(),
+                    generic_params: class_generic_param_infos,
                     parent: parent_def,
                     fields: field_def_ids,
                     methods: method_def_ids,
@@ -2245,17 +2225,13 @@ impl Resolver {
             });
         }
 
-        // Update symbol table
+        // Update symbol table.  Pre-compute generic_params before
+        // grabbing the mutable symbol borrow.
+        let struct_generic_param_infos = self.collect_generic_param_infos(&s.generic_params);
         if let Some(def) = self.symbols.get_mut(def_id) {
             def.kind = DefKind::Struct {
                 info: StructInfo {
-                    generic_params: generic_params
-                        .iter()
-                        .map(|gp| GenericParamInfo {
-                            name: gp.name.clone(),
-                            bounds: gp.bounds.clone(),
-                        })
-                        .collect(),
+                    generic_params: struct_generic_param_infos,
                     fields: field_def_ids,
                     derive_traits: s.derive_traits.clone(),
                     repr: s.repr.clone(),
@@ -2361,17 +2337,13 @@ impl Resolver {
             });
         }
 
-        // Update symbol table
+        // Update symbol table.  Pre-compute generic_params before
+        // grabbing the mutable symbol borrow.
+        let enum_generic_param_infos = self.collect_generic_param_infos(&e.generic_params);
         if let Some(def) = self.symbols.get_mut(def_id) {
             def.kind = DefKind::Enum {
                 info: EnumInfo {
-                    generic_params: generic_params
-                        .iter()
-                        .map(|gp| GenericParamInfo {
-                            name: gp.name.clone(),
-                            bounds: gp.bounds.clone(),
-                        })
-                        .collect(),
+                    generic_params: enum_generic_param_infos,
                     variants: variant_def_ids,
                     derive_traits: e.derive_traits.clone(),
                     opt_out_send: false,
@@ -2847,13 +2819,7 @@ impl Resolver {
             self_mode,
             is_class_method: f.is_class_method,
             is_async: f.is_async,
-            generic_params: generic_params
-                .iter()
-                .map(|gp| GenericParamInfo {
-                    name: gp.name.clone(),
-                    bounds: gp.bounds.clone(),
-                })
-                .collect(),
+            generic_params: self.collect_generic_param_infos(&f.generic_params),
             params: params
                 .iter()
                 .map(|p| ParamInfo {
@@ -4748,6 +4714,55 @@ impl Resolver {
         }
 
         let name = path.segments.join(".");
+
+        // Tier-2 const generics S5: kind-check each generic-arg slot
+        // against the declared param kind on the target type before
+        // running the generic-arg resolution loop.  A `ConstLit` at
+        // a slot whose declared param is `Type` is E0700 (kind
+        // mismatch).  We look the target up by name in the type
+        // registry; built-in containers (Vec/HashMap/Set/etc.) have
+        // no const-param slots, so any ConstLit against them is E0700.
+        if let Some(ast_args) = path.generic_args.as_ref() {
+            // Snapshot the declared param kinds.  For built-in
+            // generics every declared slot is a Type param; for user
+            // types we look at the registered info.
+            let declared_kinds: Option<Vec<GenericParamKind>> = self
+                .type_registry
+                .get(&name)
+                .copied()
+                .and_then(|id| self.symbols.get(id))
+                .and_then(|def| match &def.kind {
+                    DefKind::Class { info } => Some(info.generic_params.iter().map(|gp| gp.kind.clone()).collect()),
+                    DefKind::Struct { info } => Some(info.generic_params.iter().map(|gp| gp.kind.clone()).collect()),
+                    DefKind::Enum { info } => Some(info.generic_params.iter().map(|gp| gp.kind.clone()).collect()),
+                    _ => None,
+                });
+            for (idx, arg) in ast_args.iter().enumerate() {
+                let is_const_lit = matches!(arg, ast::TypeExpr::ConstLit { .. });
+                if !is_const_lit {
+                    continue;
+                }
+                let declared_kind = declared_kinds
+                    .as_ref()
+                    .and_then(|ks| ks.get(idx).cloned())
+                    .unwrap_or(GenericParamKind::Type);
+                if matches!(declared_kind, GenericParamKind::Type) {
+                    let arg_span = match arg {
+                        ast::TypeExpr::ConstLit { span, .. } => span.clone(),
+                        _ => path.span.clone(),
+                    };
+                    self.diagnostics.push(Diagnostic::error_with_code(
+                        format!(
+                            "expected a type at generic argument position {}, found const literal",
+                            idx + 1
+                        ),
+                        arg_span,
+                        "E0700",
+                    ));
+                }
+            }
+        }
+
         let generic_args: Vec<Ty> = path
             .generic_args
             .as_ref()
@@ -4927,6 +4942,39 @@ impl Resolver {
     }
 
     // ─── Helper Methods ─────────────────────────────────────────────
+
+    /// Tier-2 const generics S5: walk the AST `GenericParams` and
+    /// produce a kind-aware `Vec<GenericParamInfo>` suitable for
+    /// storage on `ClassInfo` / `StructInfo` / `EnumInfo` / `FnSignature`.
+    /// Each entry preserves the source-order position (so use-site
+    /// generic-arg validation can pair the i'th arg with the i'th
+    /// declared param).  Lifetimes are skipped (not stored on info).
+    pub(crate) fn collect_generic_param_infos(
+        &mut self,
+        gp: &Option<ast::GenericParams>,
+    ) -> Vec<GenericParamInfo> {
+        let Some(gps) = gp.as_ref() else { return vec![] };
+        gps.params
+            .iter()
+            .filter_map(|p| match p {
+                ast::GenericParam::Type { name, bounds, .. } => {
+                    let trait_refs: Vec<TraitRef> = bounds
+                        .iter()
+                        .map(|b| TraitRef {
+                            name: b.path.segments.join("."),
+                            generic_args: vec![],
+                        })
+                        .collect();
+                    Some(GenericParamInfo::type_param(name.clone(), trait_refs))
+                }
+                ast::GenericParam::Const { name, ty, .. } => {
+                    let resolved_ty = self.resolve_type_expr(ty);
+                    Some(GenericParamInfo::const_param(name.clone(), resolved_ty))
+                }
+                ast::GenericParam::Lifetime { .. } => None,
+            })
+            .collect()
+    }
 
     fn resolve_generic_params(&mut self, gp: &Option<ast::GenericParams>) -> Vec<HirGenericParam> {
         // Stage 3 of const generics: first pass registers every

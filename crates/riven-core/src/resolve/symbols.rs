@@ -23,6 +23,40 @@ pub struct FnSignature {
 pub struct GenericParamInfo {
     pub name: String,
     pub bounds: Vec<TraitRef>,
+    /// Tier-2 const generics (T2.02 S5): tracks whether this slot
+    /// holds a type parameter or a const parameter.  Default `Type`
+    /// keeps every pre-S5 construction site backwards-compatible.
+    pub kind: GenericParamKind,
+}
+
+/// Tier-2 const generics: kind of a declared generic parameter.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum GenericParamKind {
+    #[default]
+    Type,
+    Const {
+        ty: Ty,
+    },
+}
+
+impl GenericParamInfo {
+    /// Backwards-compatible constructor for type generic params.
+    pub fn type_param(name: String, bounds: Vec<TraitRef>) -> Self {
+        Self {
+            name,
+            bounds,
+            kind: GenericParamKind::Type,
+        }
+    }
+
+    /// Stage 5: constructor for a const generic parameter.
+    pub fn const_param(name: String, ty: Ty) -> Self {
+        Self {
+            name,
+            bounds: vec![],
+            kind: GenericParamKind::Const { ty },
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -299,6 +299,77 @@ end
     );
 }
 
+// ── Stage 5: typeck unification + E0700 kind mismatch ───────────────
+
+/// B5 (S5 minimal): passing an integer literal where the declared
+/// param is a type → E0700 kind mismatch.
+#[test]
+fn const_lit_against_type_param_emits_e0700() {
+    let src = r#"
+class OnlyType[T]
+  data: USize
+
+  def init(@data: USize)
+  end
+end
+
+def main
+  let _x: OnlyType[4] = OnlyType.new(0)
+end
+"#;
+    let mut lx = riven_core::lexer::Lexer::new(src);
+    let toks = lx.tokenize().expect("lex");
+    let mut p = riven_core::parser::Parser::new(toks);
+    let prog = p.parse().expect("parse");
+    let result = riven_core::typeck::type_check(&prog);
+    let codes: Vec<&str> = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.level == riven_core::diagnostics::DiagnosticLevel::Error)
+        .filter_map(|d| d.code.as_deref())
+        .collect();
+    assert!(
+        codes.contains(&"E0700"),
+        "expected E0700 for ConstLit on Type param; got codes: {:?}, all diagnostics: {:?}",
+        codes,
+        result.diagnostics.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+}
+
+/// B5 (S5 minimal): passing a literal where the param is declared
+/// `const` and types match → no diagnostic.
+#[test]
+fn const_lit_against_const_param_typechecks_clean() {
+    let src = r#"
+class Wrap[const N: USize]
+  data: USize
+
+  def init(@data: USize)
+  end
+end
+
+def use_wrap -> Wrap[7]
+  Wrap.new(0)
+end
+"#;
+    let mut lx = riven_core::lexer::Lexer::new(src);
+    let toks = lx.tokenize().expect("lex");
+    let mut p = riven_core::parser::Parser::new(toks);
+    let prog = p.parse().expect("parse");
+    let result = riven_core::typeck::type_check(&prog);
+    let e0700s: Vec<_> = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.level == riven_core::diagnostics::DiagnosticLevel::Error)
+        .filter(|d| d.code.as_deref() == Some("E0700"))
+        .collect();
+    assert!(
+        e0700s.is_empty(),
+        "ConstLit on a Const param must not emit E0700; got: {:?}",
+        e0700s.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+}
+
 // ── Stage 4: HIR ConstExpr + Ty::Array carries it ───────────────────
 
 /// B4 (S4 minimal): `Ty::Array` now carries a `ConstExpr` rather
