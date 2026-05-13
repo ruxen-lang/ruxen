@@ -260,6 +260,87 @@ end
     }
 }
 
+// ── Stage 3: resolver registers DefKind::ConstParam ────────────────
+
+/// B3 (S3 minimal): declaring a struct / class / enum / fn with a
+/// const generic param typechecks cleanly.  Regression canary:
+/// confirms the resolver registers `GenericParam::Const` without
+/// emitting spurious diagnostics (treating it as an unknown
+/// identifier or expecting trait bounds).
+#[test]
+fn const_generic_declarations_typecheck_clean() {
+    let src = r#"
+struct Vector[T, const N: USize]
+  data: USize
+end
+
+class Matrix[T, const M: USize, const N: USize]
+  rows: USize
+end
+
+def rotate[const K: USize](x: Int) -> Int
+  x
+end
+"#;
+    let mut lx = riven_core::lexer::Lexer::new(src);
+    let toks = lx.tokenize().expect("lex");
+    let mut p = riven_core::parser::Parser::new(toks);
+    let prog = p.parse().expect("parse");
+    let result = riven_core::typeck::type_check(&prog);
+    let errors: Vec<_> = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.level == riven_core::diagnostics::DiagnosticLevel::Error)
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "expected zero typeck errors for const-generic declarations; got: {:?}",
+        errors.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+}
+
+/// B3 (S3 deliverable): after typeck, the symbol table contains a
+/// `DefKind::ConstParam` entry for every `const NAME: Type` generic
+/// parameter declared in the program.  This is the load-bearing
+/// claim of S3 — later stages (S4 HIR ConstExpr, S5 typeck
+/// unification) look these defs up via `symbols.iter()`.
+#[test]
+fn const_generic_param_registered_in_symbol_table() {
+    use riven_core::resolve::symbols::DefKind;
+
+    let src = r#"
+struct Vector[T, const N: USize]
+  data: USize
+end
+
+class Matrix[T, const M: USize, const N: USize]
+  rows: USize
+end
+"#;
+    let mut lx = riven_core::lexer::Lexer::new(src);
+    let toks = lx.tokenize().expect("lex");
+    let mut p = riven_core::parser::Parser::new(toks);
+    let prog = p.parse().expect("parse");
+    let result = riven_core::typeck::type_check(&prog);
+
+    let const_params: Vec<&str> = result
+        .symbols
+        .iter()
+        .filter(|d| matches!(d.kind, DefKind::ConstParam { .. }))
+        .map(|d| d.name.as_str())
+        .collect();
+
+    // Expect exactly three const params: N (struct), M, N (class).
+    assert_eq!(
+        const_params.len(),
+        3,
+        "expected 3 ConstParam defs, got {:?}",
+        const_params
+    );
+    assert!(const_params.iter().any(|n| *n == "N"), "missing `N`: {:?}", const_params);
+    assert!(const_params.iter().any(|n| *n == "M"), "missing `M`: {:?}", const_params);
+}
+
 /// B2: integer-literal generic args coexist with type-args on either side.
 /// `Foo[Int, 8, Bar]` — type / const / type ordering — must round-trip.
 #[test]

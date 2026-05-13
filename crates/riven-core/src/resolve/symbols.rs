@@ -117,6 +117,17 @@ pub enum DefKind {
     TypeParam {
         bounds: Vec<TraitRef>,
     },
+    /// Tier-2 const generics (T2.02 stage 3).
+    ///
+    /// Registered when the resolver encounters
+    /// `GenericParam::Const { name, ty, .. }`.  `ty` is the resolved
+    /// `Ty` of the annotation (typically `Ty::USize` / `Ty::Int` /
+    /// `Ty::Bool`).  Stage 5 will use this to validate const-arg
+    /// types at use sites and emit E0701 when the wrong primitive
+    /// is passed.
+    ConstParam {
+        ty: Ty,
+    },
     Module {
         items: Vec<DefId>,
     },
@@ -227,6 +238,7 @@ impl SymbolTable {
                 DefKind::Param { ty, .. } => *ty = new_ty,
                 DefKind::SelfValue { ty } => *ty = new_ty,
                 DefKind::Const { ty } => *ty = new_ty,
+                DefKind::ConstParam { ty } => *ty = new_ty,
                 _ => {}
             }
         }
@@ -240,6 +252,7 @@ impl SymbolTable {
             DefKind::Param { ty, .. } => Some(ty.clone()),
             DefKind::SelfValue { ty } => Some(ty.clone()),
             DefKind::Const { ty } => Some(ty.clone()),
+            DefKind::ConstParam { ty } => Some(ty.clone()),
             DefKind::Function { signature } => Some(Ty::Fn {
                 params: signature.params.iter().map(|p| p.ty.clone()).collect(),
                 ret: Box::new(if signature.is_async {

@@ -1640,8 +1640,12 @@ impl Resolver {
                                     Some((name.clone(), trait_refs, span.clone()))
                                 }
                                 ast::GenericParam::Lifetime { .. } => None,
-                                // Stage 1 of const generics — parser only.
-                                // Resolve / typeck integration lands in S3.
+                                // Stage 3 of const generics: const
+                                // params are registered separately
+                                // below as `DefKind::ConstParam`
+                                // (not type params), so this filter
+                                // (which collects type-generic names
+                                // for the enum's HIR) skips them.
                                 ast::GenericParam::Const { .. } => None,
                             })
                             .collect()
@@ -4912,6 +4916,27 @@ impl Resolver {
     // ─── Helper Methods ─────────────────────────────────────────────
 
     fn resolve_generic_params(&mut self, gp: &Option<ast::GenericParams>) -> Vec<HirGenericParam> {
+        // Stage 3 of const generics: first pass registers every
+        // `GenericParam::Const` as a `DefKind::ConstParam` in the
+        // symbol table so future passes (S4 HIR ConstExpr, S5
+        // typeck unification) can look the name up.  We do this in
+        // a separate pre-pass because `filter_map` captures `&mut
+        // self` and Rust's borrow checker dislikes the symbol-table
+        // mutation happening inside the type-param iteration.
+        if let Some(gps) = gp.as_ref() {
+            for p in &gps.params {
+                if let ast::GenericParam::Const { name, ty, span } = p {
+                    let resolved_ty = self.resolve_type_expr(ty);
+                    let _ = self.symbols.define(
+                        name.clone(),
+                        DefKind::ConstParam { ty: resolved_ty },
+                        Visibility::Public,
+                        span.clone(),
+                    );
+                }
+            }
+        }
+
         gp.as_ref()
             .map(|gps| {
                 gps.params
@@ -4945,9 +4970,10 @@ impl Resolver {
                                 // Lifetimes are tracked but not yet used in Phase 3
                                 None
                             }
-                            // Stage 1 of const generics — parser only.
-                            // Resolve / typeck integration lands in S3
-                            // (DefKind::ConstParam + scope binding).
+                            // Const params were registered in the
+                            // pre-pass above and don't appear in the
+                            // HirGenericParam list (which is for
+                            // type params only).
                             ast::GenericParam::Const { .. } => None,
                         }
                     })
