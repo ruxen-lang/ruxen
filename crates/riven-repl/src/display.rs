@@ -278,7 +278,13 @@ mod tests {
             format_type(&Ty::Tuple(vec![Ty::Int, Ty::Bool, Ty::Char])),
             "(Int, Bool, Char)",
         );
-        assert_eq!(format_type(&Ty::Array(Box::new(Ty::Int), 4)), "[Int; 4]");
+        assert_eq!(
+            format_type(&Ty::Array(
+                Box::new(Ty::Int),
+                riven_core::hir::types::ConstExpr::Lit(4)
+            )),
+            "[Int; 4]"
+        );
     }
 
     #[test]

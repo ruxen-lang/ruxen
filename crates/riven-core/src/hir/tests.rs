@@ -3,7 +3,7 @@
 #[cfg(test)]
 mod tests {
     use crate::hir::context::TypeContext;
-    use crate::hir::types::{MoveSemantics, TraitRef, Ty};
+    use crate::hir::types::{ConstExpr, MoveSemantics, TraitRef, Ty};
     use crate::lexer::token::Span;
     use crate::parser::ast::Visibility;
     use crate::resolve::symbols::{DefKind, EnumInfo, StructInfo, SymbolTable, VariantDefKind};
@@ -101,13 +101,13 @@ mod tests {
 
     #[test]
     fn array_of_copy_is_copy() {
-        let array = Ty::Array(Box::new(Ty::Int), 10);
+        let array = Ty::Array(Box::new(Ty::Int), ConstExpr::Lit(10));
         assert!(array.is_copy());
     }
 
     #[test]
     fn array_of_move_is_move() {
-        let array = Ty::Array(Box::new(Ty::String), 3);
+        let array = Ty::Array(Box::new(Ty::String), ConstExpr::Lit(3));
         assert!(array.is_move());
     }
 

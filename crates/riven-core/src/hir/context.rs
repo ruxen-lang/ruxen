@@ -93,7 +93,7 @@ impl TypeContext {
                 }
             }
             Ty::Tuple(elems) => Ty::Tuple(elems.iter().map(|e| self.resolve(e)).collect()),
-            Ty::Array(elem, size) => Ty::Array(Box::new(self.resolve(elem)), *size),
+            Ty::Array(elem, size) => Ty::Array(Box::new(self.resolve(elem)), size.clone()),
             Ty::Vec(elem) => Ty::Vec(Box::new(self.resolve(elem))),
             Ty::HashMap(k, v) => Ty::HashMap(Box::new(self.resolve(k)), Box::new(self.resolve(v))),
             Ty::Set(elem) => Ty::Set(Box::new(self.resolve(elem))),

@@ -320,8 +320,15 @@ pub fn layout_of(ty: &Ty, symbols: &SymbolTable) -> TypeLayout {
         // ── Array ───────────────────────────────────────────────────────────
         Ty::Array(elem, n) => {
             let elem_layout = layout_of(elem, symbols);
+            // T2.02 stage 4: `n` is now a `ConstExpr`.  Stage 7 will
+            // pass full param bindings through; for now the only
+            // reachable variant in codegen-time arrays is `Lit(N)`.
+            // Unresolved `Param`s produce a zero-size layout, which
+            // matches the pre-stage-4 fallback when the resolver
+            // failed to read the literal.
+            let count = n.as_lit().unwrap_or(0) as usize;
             TypeLayout {
-                size: elem_layout.size * n,
+                size: elem_layout.size * count,
                 alignment: elem_layout.alignment,
                 field_offsets: vec![],
             }

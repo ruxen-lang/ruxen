@@ -1437,8 +1437,9 @@ fn simple_type_size(ty: &Ty) -> usize {
         Ty::Result(_, _) => 16,
         // Tuples: 8 bytes per element
         Ty::Tuple(elems) => elems.len().max(1) * 8,
-        // Arrays
-        Ty::Array(_, n) => n * 8,
+        // Arrays.  T2.02 stage 4: `n` is a `ConstExpr`; pre-stage-7
+        // codegen only resolves `Lit` values.
+        Ty::Array(_, n) => n.as_lit().unwrap_or(0) as usize * 8,
         _ => 8,
     }
 }

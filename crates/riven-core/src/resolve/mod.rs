@@ -3728,7 +3728,10 @@ impl Resolver {
                         value: Box::new(value_hir),
                         count: count_val,
                     },
-                    ty: Ty::Array(Box::new(elem_ty), count_val),
+                    ty: Ty::Array(
+                        Box::new(elem_ty),
+                        crate::hir::types::ConstExpr::Lit(count_val as u64),
+                    ),
                     span,
                 }
             }
@@ -4620,10 +4623,20 @@ impl Resolver {
             ast::TypeExpr::Array { element, size, .. } => {
                 let elem_ty = self.resolve_type_expr(element);
                 if let Some(size_expr) = size {
-                    // Fixed-size array [T; N]
+                    // Fixed-size array [T; N].  T2.02 stage 4: the
+                    // size is captured as a `ConstExpr` rather than
+                    // a bare `usize`.  Stage 8 will add arithmetic
+                    // support; today only integer literals and
+                    // bare-identifier const-param references are
+                    // recognised.
                     let n = match &size_expr.kind {
-                        ast::ExprKind::IntLiteral(v, _) => *v as usize,
-                        _ => 0,
+                        ast::ExprKind::IntLiteral(v, _) => {
+                            crate::hir::types::ConstExpr::Lit(*v as u64)
+                        }
+                        ast::ExprKind::Identifier(name) => {
+                            crate::hir::types::ConstExpr::Param(name.clone())
+                        }
+                        _ => crate::hir::types::ConstExpr::Error,
                     };
                     Ty::Array(Box::new(elem_ty), n)
                 } else {

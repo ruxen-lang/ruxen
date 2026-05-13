@@ -87,7 +87,7 @@ pub fn unify(a: &Ty, b: &Ty, ctx: &mut TypeContext, span: &Span) -> Result<Ty, T
                 return Err(TypeError::mismatch(&a, &b, span));
             }
             let elem = unify(a_elem, b_elem, ctx, span)?;
-            Ok(Ty::Array(Box::new(elem), *a_size))
+            Ok(Ty::Array(Box::new(elem), a_size.clone()))
         }
 
         // Vec

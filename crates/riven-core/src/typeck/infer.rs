@@ -1171,7 +1171,12 @@ impl<'a> InferenceEngine<'a> {
     fn coerce_array_literal_to_fixed(&mut self, expected: &Ty, val: &mut HirExpr) {
         let expected_resolved = self.ctx.resolve(expected);
         let (elem_ty, expected_len) = match &expected_resolved {
-            Ty::Array(elem, n) => ((**elem).clone(), *n),
+            Ty::Array(elem, n) => match n.as_lit() {
+                Some(v) => ((**elem).clone(), v as usize),
+                // Unresolved const-param size — skip the literal-len
+                // check (S5+ will compare structurally instead).
+                None => return,
+            },
             _ => return,
         };
         if let HirExprKind::ArrayLiteral(elems) = &val.kind {
@@ -1187,7 +1192,10 @@ impl<'a> InferenceEngine<'a> {
                 );
                 return;
             }
-            val.ty = Ty::Array(Box::new(elem_ty), expected_len);
+            val.ty = Ty::Array(
+                Box::new(elem_ty),
+                crate::hir::types::ConstExpr::Lit(expected_len as u64),
+            );
         }
     }
 

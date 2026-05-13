@@ -299,6 +299,41 @@ end
     );
 }
 
+// ── Stage 4: HIR ConstExpr + Ty::Array carries it ───────────────────
+
+/// B4 (S4 minimal): `Ty::Array` now carries a `ConstExpr` rather
+/// than a bare `usize`.  Constructing an array type from a literal
+/// integer wraps it as `ConstExpr::Lit(n)`.
+#[test]
+fn ty_array_carries_const_expr_lit() {
+    use riven_core::hir::types::{ConstExpr, Ty};
+
+    let ty = Ty::Array(Box::new(Ty::Int), ConstExpr::Lit(4));
+    match &ty {
+        Ty::Array(elem, size) => {
+            assert!(matches!(**elem, Ty::Int));
+            assert!(matches!(size, ConstExpr::Lit(4)));
+        }
+        other => panic!("expected Ty::Array, got {:?}", other),
+    }
+    // Display fmt should still print `[Int; 4]`.
+    assert_eq!(format!("{}", ty), "[Int; 4]");
+}
+
+/// B4: `ConstExpr::Param(name)` represents an unresolved const-param
+/// reference.  Two `Ty::Array`s with the same param name compare
+/// equal; with different names they don't.
+#[test]
+fn const_expr_param_equality() {
+    use riven_core::hir::types::{ConstExpr, Ty};
+
+    let a = Ty::Array(Box::new(Ty::Int), ConstExpr::Param("N".to_string()));
+    let b = Ty::Array(Box::new(Ty::Int), ConstExpr::Param("N".to_string()));
+    let c = Ty::Array(Box::new(Ty::Int), ConstExpr::Param("M".to_string()));
+    assert_eq!(a, b);
+    assert_ne!(a, c);
+}
+
 /// B3 (S3 deliverable): after typeck, the symbol table contains a
 /// `DefKind::ConstParam` entry for every `const NAME: Type` generic
 /// parameter declared in the program.  This is the load-bearing

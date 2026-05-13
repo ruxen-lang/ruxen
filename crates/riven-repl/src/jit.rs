@@ -1371,7 +1371,7 @@ fn simple_type_size(ty: &Ty) -> usize {
         Ty::Option(_) => 16,
         Ty::Result(_, _) => 16,
         Ty::Tuple(elems) => elems.len().max(1) * 8,
-        Ty::Array(_, n) => n * 8,
+        Ty::Array(_, n) => n.as_lit().unwrap_or(0) as usize * 8,
         _ => 8,
     }
 }

@@ -13,6 +13,67 @@ use crate::resolve::symbols::SymbolTable;
 /// Unique identifier for type variables during inference.
 pub type TypeId = u32;
 
+/// Tier-2 const generics (T2.02): a compile-time integer expression
+/// that may appear in a type-level position (array size, generic-arg
+/// slot of a const parameter).
+///
+/// Stage 4 ships the data layout; the evaluator and arithmetic
+/// operators are stage 8.  For now the only producers are
+/// `Lit` (from integer literals at use sites) and `Param` (from a
+/// const-generic parameter reference inside a body).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ConstExpr {
+    /// A concrete integer value.
+    Lit(u64),
+    /// A reference to an in-scope const generic parameter.
+    Param(String),
+    /// Arithmetic on other const expressions.  Stage 8 wiring.
+    Op(Box<ConstExpr>, ConstOp, Box<ConstExpr>),
+    /// Recovery placeholder so resolve doesn't crash on malformed
+    /// const-arg positions.
+    Error,
+}
+
+impl ConstExpr {
+    /// Return the literal value if this expression is a bare `Lit`.
+    pub fn as_lit(&self) -> Option<u64> {
+        match self {
+            ConstExpr::Lit(n) => Some(*n),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for ConstExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConstExpr::Lit(n) => write!(f, "{}", n),
+            ConstExpr::Param(name) => write!(f, "{}", name),
+            ConstExpr::Op(a, op, b) => write!(f, "{} {} {}", a, op, b),
+            ConstExpr::Error => write!(f, "<const-error>"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ConstOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+}
+
+impl fmt::Display for ConstOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConstOp::Add => write!(f, "+"),
+            ConstOp::Sub => write!(f, "-"),
+            ConstOp::Mul => write!(f, "*"),
+            ConstOp::Div => write!(f, "/"),
+        }
+    }
+}
+
 /// A reference to a trait, optionally with generic arguments.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TraitRef {
@@ -72,8 +133,9 @@ pub enum Ty {
     // Composite types
     /// `(T, U, V)` — fixed-size heterogeneous tuple
     Tuple(Vec<Ty>),
-    /// `[T; N]` — fixed-size array
-    Array(Box<Ty>, usize),
+    /// `[T; N]` — fixed-size array (N is a `ConstExpr`; was `usize`
+    /// before T2.02 stage 4).
+    Array(Box<Ty>, ConstExpr),
     /// `Vec[T]` — dynamic, heap-allocated
     Vec(Box<Ty>),
     /// `HashMap[K, V]` — key-value map

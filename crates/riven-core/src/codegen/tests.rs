@@ -199,7 +199,10 @@ mod tests {
     #[test]
     fn array_layout() {
         // [Int; 4] → 8 * 4 = 32 bytes, align 8
-        let layout = layout_of(&Ty::Array(Box::new(Ty::Int), 4), &symbols());
+        let layout = layout_of(
+            &Ty::Array(Box::new(Ty::Int), crate::hir::types::ConstExpr::Lit(4)),
+            &symbols(),
+        );
         assert_eq!(layout.size, 32);
         assert_eq!(layout.alignment, 8);
     }
@@ -207,7 +210,10 @@ mod tests {
     #[test]
     fn array_zero_size() {
         // [Int; 0] → 0 bytes, align 8
-        let layout = layout_of(&Ty::Array(Box::new(Ty::Int), 0), &symbols());
+        let layout = layout_of(
+            &Ty::Array(Box::new(Ty::Int), crate::hir::types::ConstExpr::Lit(0)),
+            &symbols(),
+        );
         assert_eq!(layout.size, 0);
         assert_eq!(layout.alignment, 8);
     }
@@ -215,7 +221,10 @@ mod tests {
     #[test]
     fn array_bool() {
         // [Bool; 8] → 8 bytes, align 1
-        let layout = layout_of(&Ty::Array(Box::new(Ty::Bool), 8), &symbols());
+        let layout = layout_of(
+            &Ty::Array(Box::new(Ty::Bool), crate::hir::types::ConstExpr::Lit(8)),
+            &symbols(),
+        );
         assert_eq!(layout.size, 8);
         assert_eq!(layout.alignment, 1);
     }
