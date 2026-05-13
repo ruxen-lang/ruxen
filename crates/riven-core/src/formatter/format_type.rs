@@ -110,6 +110,8 @@ pub fn format_type_expr(ty: &TypeExpr, _comments: &CommentMap) -> Doc {
             let prefix = if *mutable { "*mut " } else { "*" };
             concat(vec![text(prefix), format_type_expr(inner, _comments)])
         }
+
+        TypeExpr::ConstLit { value, .. } => text(value.to_string()),
     }
 }
 

@@ -4695,6 +4695,14 @@ impl Resolver {
                     Ty::RawPtr(Box::new(inner_ty))
                 }
             }
+            // Stage 2 of const generics — parser only.  A ConstLit in
+            // generic-arg position has no type-level meaning yet;
+            // resolve currently treats it as `Ty::Error` so that any
+            // accidental use against a type parameter degrades safely.
+            // S3 will introduce DefKind::ConstParam and promote ConstLit
+            // to a real `ConstExpr::Lit` against const params, then
+            // emit E0700 against type params.
+            ast::TypeExpr::ConstLit { .. } => Ty::Error,
         }
     }
 

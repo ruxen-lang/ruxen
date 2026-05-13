@@ -175,3 +175,118 @@ end
         other => panic!("expected Type as second param, got {:?}", other),
     }
 }
+
+// ── Stage 2: use-site integer-literal generic args ──────────────────
+
+/// Walk a `TypeExpr` down through references / arrays to the first
+/// `Named` path and return a clone — the field-type AST is a
+/// reference type in some fixtures, so we strip wrappers.
+fn into_named<'a>(ty: &'a TypeExpr) -> &'a riven_core::parser::ast::TypePath {
+    match ty {
+        TypeExpr::Named(path) => path,
+        other => panic!("expected Named, got {:?}", other),
+    }
+}
+
+/// B2: a struct field annotated as `Vector[Int, 4]` parses with the
+/// second generic argument captured as `TypeExpr::ConstLit(4, _)`.
+/// Stage 2 is parser-only — resolve / typeck reject in S5 if the
+/// literal lands against a type parameter; here we just assert the
+/// AST shape.
+#[test]
+fn parse_const_lit_as_generic_arg() {
+    let src = r#"
+struct Holder
+  v: Vector[Int, 4]
+end
+"#;
+    let prog = parse(src);
+    let mut found_struct = None;
+    for item in &prog.items {
+        if let TopLevelItem::Struct(s) = item {
+            if s.name == "Holder" {
+                found_struct = Some(s);
+                break;
+            }
+        }
+    }
+    let s = found_struct.expect("no Holder struct");
+    assert_eq!(s.fields.len(), 1);
+    let path = into_named(&s.fields[0].type_expr);
+    let args = path
+        .generic_args
+        .as_ref()
+        .expect("Vector should have generic args");
+    assert_eq!(args.len(), 2, "expected 2 generic args, got {:?}", args);
+    match &args[0] {
+        TypeExpr::Named(p) => assert_eq!(p.segments.last().map(|s| s.as_str()), Some("Int")),
+        other => panic!("first arg expected Named(Int), got {:?}", other),
+    }
+    match &args[1] {
+        TypeExpr::ConstLit { value, .. } => assert_eq!(*value, 4),
+        other => panic!(
+            "second arg expected TypeExpr::ConstLit(4, _), got {:?}",
+            other
+        ),
+    }
+}
+
+/// B2: multiple const literals in a single arg list.
+#[test]
+fn parse_multiple_const_lits_as_generic_args() {
+    let src = r#"
+struct Holder
+  m: Matrix[Float, 3, 4]
+end
+"#;
+    let prog = parse(src);
+    let s = prog
+        .items
+        .iter()
+        .find_map(|i| match i {
+            TopLevelItem::Struct(s) if s.name == "Holder" => Some(s),
+            _ => None,
+        })
+        .expect("no Holder struct");
+    let path = into_named(&s.fields[0].type_expr);
+    let args = path.generic_args.as_ref().expect("Matrix generic args");
+    assert_eq!(args.len(), 3);
+    match (&args[1], &args[2]) {
+        (TypeExpr::ConstLit { value: m, .. }, TypeExpr::ConstLit { value: n, .. }) => {
+            assert_eq!(*m, 3);
+            assert_eq!(*n, 4);
+        }
+        other => panic!("expected two ConstLits, got {:?}", other),
+    }
+}
+
+/// B2: integer-literal generic args coexist with type-args on either side.
+/// `Foo[Int, 8, Bar]` — type / const / type ordering — must round-trip.
+#[test]
+fn parse_const_lit_with_trailing_type_arg() {
+    let src = r#"
+struct Holder
+  x: Foo[Int, 8, Bar]
+end
+"#;
+    let prog = parse(src);
+    let s = prog
+        .items
+        .iter()
+        .find_map(|i| match i {
+            TopLevelItem::Struct(s) if s.name == "Holder" => Some(s),
+            _ => None,
+        })
+        .expect("no Holder struct");
+    let path = into_named(&s.fields[0].type_expr);
+    let args = path.generic_args.as_ref().expect("Foo generic args");
+    assert_eq!(args.len(), 3);
+    match &args[1] {
+        TypeExpr::ConstLit { value, .. } => assert_eq!(*value, 8),
+        other => panic!("expected ConstLit(8), got {:?}", other),
+    }
+    match &args[2] {
+        TypeExpr::Named(p) => assert_eq!(p.segments.last().map(|s| s.as_str()), Some("Bar")),
+        other => panic!("expected Named(Bar), got {:?}", other),
+    }
+}

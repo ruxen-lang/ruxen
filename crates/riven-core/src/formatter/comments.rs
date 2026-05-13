@@ -644,6 +644,7 @@ pub fn collect_node_spans(program: &crate::parser::ast::Program) -> Vec<(usize, 
                 add_span(spans, span);
                 visit_type_expr(spans, inner);
             }
+            TypeExpr::ConstLit { span, .. } => add_span(spans, span),
         }
     }
 

@@ -648,6 +648,7 @@ pub fn format_type(t: &TypeExpr) -> String {
                 format!("*{}", format_type(inner))
             }
         }
+        TypeExpr::ConstLit { value, .. } => value.to_string(),
     }
 }
 

@@ -338,24 +338,42 @@ impl Parser {
     }
 
     /// Parse generic arguments: [Type, Type, ...]
+    ///
+    /// Tier-2 const generics (stage 2): if the next token is an
+    /// integer literal we emit `TypeExpr::ConstLit` instead of
+    /// calling `parse_type()`.  Resolve disambiguates whether that
+    /// landed against a type param (→ E0700) or a const param
+    /// (→ `ConstExpr::Lit`) in S3.  S8 will extend the lookahead to
+    /// accept arithmetic in generic-arg position.
     pub(crate) fn parse_generic_args(&mut self) -> Vec<TypeExpr> {
         self.expect(TokenKind::LBracket);
         self.skip_newlines();
         let mut args = Vec::new();
 
         if !self.at(TokenKind::RBracket) {
-            args.push(self.parse_type());
+            args.push(self.parse_generic_arg());
             while self.eat(TokenKind::Comma) {
                 self.skip_newlines();
                 if self.at(TokenKind::RBracket) {
                     break;
                 }
-                args.push(self.parse_type());
+                args.push(self.parse_generic_arg());
             }
         }
         self.skip_newlines();
         self.expect(TokenKind::RBracket);
         args
+    }
+
+    /// Parse a single generic argument — a type expression, or an
+    /// integer literal that lowers to `TypeExpr::ConstLit`.
+    fn parse_generic_arg(&mut self) -> TypeExpr {
+        if let TokenKind::IntLiteral(v, _suffix) = self.current_kind().clone() {
+            let span = self.current_span();
+            self.advance();
+            return TypeExpr::ConstLit { value: v, span };
+        }
+        self.parse_type()
     }
 
     /// Parse generic parameters: [T, U: Trait, 'a]

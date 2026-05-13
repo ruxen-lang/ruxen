@@ -93,6 +93,19 @@ pub enum TypeExpr {
         inner: Box<TypeExpr>,
         span: Span,
     },
+    /// Tier-2 const generics: an integer literal appearing in a
+    /// generic-argument position (e.g. the `4` in `Vector[Int, 4]`).
+    ///
+    /// Phase 02a stage 2 — parser only.  Resolve will promote this
+    /// to `ConstExpr::Lit` for const parameters in S3 and emit a
+    /// kind-mismatch diagnostic (E0700) when it lands against a type
+    /// parameter.  The variant uses `i64` so the parser can carry
+    /// negative literals through faithfully even though const
+    /// parameters bound to unsigned types will reject them later.
+    ConstLit {
+        value: i64,
+        span: Span,
+    },
 }
 
 // ─── Trait Bounds & Generics ─────────────────────────────────────────
