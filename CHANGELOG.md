@@ -8,6 +8,22 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- Phase 2 #06.D4: `FormatSpec` (width / align / fill / precision) is
+  applied at runtime.  `lower_interpolation` emits
+  `Formatter_new_with_spec(w, p, a, f)` when the lex-captured spec is
+  non-default; `Formatter_buffer` pads with the requested fill char /
+  alignment at finalize.  Float precision routes through
+  `Float_to_string_prec` (snprintf `%.*f`); String precision routes
+  through `String_truncate_chars` (UTF-8 char-count truncate); Int /
+  Bool / Char ignore precision per Rust semantics.  Strings with a
+  non-default spec are no longer short-circuited by the legacy
+  string-like pass-through — they fall through to `String_fmt` so
+  width / precision / align / fill all apply.  Covered by 7 new
+  `stdlib_fmt_runtime.rs` tests and E2E fixture
+  `tests/release-e2e/cases/071_interp_format_specs.rvn`.  Out of
+  scope (deferred to v2): width on `"#{x:?}"` debug-spec
+  interpolation (debug path still bypasses the Formatter); sign /
+  `#` alternate / `0` zero-pad / radix flags.
 - Phase 2 #06.D2.S4: end-to-end fixture
   `tests/release-e2e/cases/070_interp_display_dispatch.rvn` proves the
   Display dispatch path runs at runtime — a `class Money` with user

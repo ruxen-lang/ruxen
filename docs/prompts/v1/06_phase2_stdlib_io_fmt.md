@@ -100,11 +100,21 @@
       runtime helpers so observable output is byte-identical to the
       legacy ad-hoc switch. Derive-Debug-only types still fall back
       to `{Name}_to_debug` for the bare `"#{x}"` form until users
-      provide their own `impl Display`. Width / align / precision /
-      fill runtime application (D4) and the `Err(e).message()`
-      inference gap remain separately tracked. Commits: S0
+      provide their own `impl Display`. The `Err(e).message()`
+      inference gap remains separately tracked. Commits: S0
       24b84c3 → S1 2683c6d → S2 47250b1 / fd24313 → S3 eb297e2 →
       S4 a1658e9.
+      **Phase D4 (2026-05-13):** width / align / precision / fill
+      now apply at runtime.  Spec-aware constructor
+      `Formatter_new_with_spec(w, p, a, f)` is emitted by
+      `emit_display_dispatch` when the lex-captured `FormatSpec` is
+      non-default.  Width / align / fill applied at
+      `Formatter_buffer` finalize; precision routes through
+      `Float_to_string_prec` (snprintf `%.*f`) for floats and
+      `String_truncate_chars` (UTF-8 char-count truncate) for
+      strings — `Int` / `Bool` / `Char` ignore precision per Rust
+      semantics.  Out of scope: width-on-`:?` (debug path bypasses
+      Formatter); sign / `#` / `0` / radix flags.  Commit: 4491508.
 - [x] `Debug` interpolation `"#{x:?}"` works for any `derive Debug`
       type. **Phase B + C MVP:** format spec captured at lex time
       (FormatSpec.debug = true), threaded through HIR/MIR. Existing
