@@ -1,0 +1,94 @@
+# Spec — `Vec[T]`
+
+**Source docs:**
+[docs/requirements/tier1_01_stdlib.md §5.1](../../requirements/tier1_01_stdlib.md).
+
+**Status:** shipped Phase 2 #04.
+
+`Vec[T]` is a growable contiguous heap array with `O(1)` amortised
+push/pop and `O(1)` index access.  The C runtime stores
+`{ ptr, len, cap }` and grows by doubling.
+
+---
+
+## B1 — `Vec.from(v: T)` is currently lenient at typeck
+
+The constructor `Vec.from(...)` accepts any single value at typecheck
+time today (v1 simplification — strict `From` impls deferred to v2).
+A v2 cleanup will tighten this so that only `Vec.from(iter)` etc. are
+accepted.  Until then, `Vec.from(1)` typechecks (and the runtime will
+do its best at MIR-lowering time).
+
+## B2 — `pop() -> Option[T]`
+
+Removes and returns the last element, or `None` when empty.
+
+## B3 — Indexing yields the element type
+
+**Given** `v: Vec[Int]`
+**Then** `v[0]` has type `Int` (not `Option[Int]` — bounds checking
+is dynamic; out-of-bounds panics).
+
+## B4 — `with_capacity(n)` accepts non-Int args today
+
+Like B1, `Vec.with_capacity(...)` is currently lenient — passing a
+`String` typechecks (the runtime coerces).  Tightening to `Int`-only
+is a v2 cleanup.
+
+## B5 — `dedup()` typechecks as `Unit`
+
+In-place dedup of consecutive equal elements.  Returns nothing.
+
+## B6 — `retain(|x| pred)` closure typechecks
+
+Filters in-place; the closure receives `&T` and returns `Bool`.
+
+## B7 — `sort_by(|a, b| order)` closure typechecks
+
+Stable sort in place.  The closure receives `&T, &T` and returns
+`Int` (Ordering — negative / zero / positive).
+
+## B8 — `Vec.from_iter(iter)` typechecks (static method)
+
+Constructs a `Vec[T]` by draining the iterator.
+
+## B9 — Equality (`==`) yields `Bool`
+
+Pairwise comparison of two vectors at corresponding indices.
+
+---
+
+## Pin tests
+
+| Behaviour | Test fn                                                | File                       |
+|-----------|--------------------------------------------------------|----------------------------|
+| B1        | `vec_from_int_is_currently_accepted_at_typeck`         | `stdlib_vec_negatives.rs`  |
+| B2        | `vec_pop_returns_option_typechecks`                    | `stdlib_vec_negatives.rs`  |
+| B3        | `vec_index_yields_element_type`                        | `stdlib_vec_negatives.rs`  |
+| B4        | `vec_with_capacity_string_arg_is_currently_accepted_at_typeck` | `stdlib_vec_negatives.rs` |
+| B5        | `vec_dedup_typechecks_as_unit`                         | `stdlib_vec_negatives.rs`  |
+| B6        | `vec_retain_closure_typechecks`                        | `stdlib_vec_negatives.rs`  |
+| B7        | `vec_sort_by_closure_typechecks`                       | `stdlib_vec_negatives.rs`  |
+| B8        | `vec_from_iter_static_typechecks`                      | `stdlib_vec_negatives.rs`  |
+| B9        | `vec_equality_yields_bool`                             | `stdlib_vec_negatives.rs`  |
+
+Runtime round-trips covered by E2E fixtures
+`tests/release-e2e/cases/107_vec_push_pop.rvn` and the `60x_iter_*`
+series.
+
+---
+
+## Gaps + v2 cleanups
+
+- B1, B4: tighten `Vec.from(...)` and `Vec.with_capacity(...)` to
+  reject obviously wrong arg types.
+- `Vec.first / last / contains / clone / reverse` are wired in the
+  runtime but lack dedicated pin tests; covered transitively by
+  iterator + E2E fixtures.
+
+## Out of scope (v2)
+
+- `VecDeque` / `LinkedList`.
+- `slice` primitives independent of `Vec`.
+- `drain`, `splice`, `chunks`, `windows` — wired piecemeal as
+  needed.

@@ -71,7 +71,7 @@ cross-link rather than duplicate.
 
 ## Index
 
-### Phase 2 #06 — stdlib
+### stdlib (Phase 2 #04-#06)
 
 - [std::fmt](stdlib/fmt.spec.md) — Display, Debug, Formatter,
   interpolation routing (D2), format specs (D4).
@@ -80,12 +80,54 @@ cross-link rather than duplicate.
 - [std::fs](stdlib/fs.spec.md) — read_to_string, write, read_dir,
   predicates.
 - [std::process](stdlib/process.spec.md) — exit, process_run.
+- [std::path](stdlib/path.spec.md) — POSIX path manipulation.
+- [std::time](stdlib/time.spec.md) — `now_ns`, `unix_ns`.
+- [std::net](stdlib/net.spec.md) — minimal TCP surface.
+- [std::iter (Iterator)](stdlib/iterator.spec.md) — pipeline +
+  collect surface.
+- [HashMap](stdlib/hashmap.spec.md) — separate-chaining hash table.
+- [HashSet](stdlib/hashset.spec.md) — `HashMap[T, ()]` alias.
+- [Vec](stdlib/vec.spec.md) — growable contiguous array.
+- [String / &str](stdlib/string.spec.md) — UTF-8 owned + borrowed
+  string surface and ownership negatives.
+- [Option / Result](stdlib/option_result.spec.md) — tagged-enum
+  surface, `?` operator, `if let Some`, `expect!`, `unwrap_or`,
+  `map`.
+
+### Traits
+
+- [derive `<Trait>`](traits/derive.spec.md) — Debug, Clone,
+  PartialEq, Eq, Hash, Default, Ord, PartialOrd, Copy.
+- [Trait system](traits/system.spec.md) — declaration, impl-for,
+  default methods, inheritance, assoc types, `impl Trait`, `dyn
+  Trait`, multi-bound, `where`, static methods.
+- [Variance](traits/variance.spec.md) — invariance for `&mut T` /
+  `Vec[T]`; covariance for `Option[T]`.
+
+### Ownership
+
+- [Borrow check](ownership/borrow-check.spec.md) — move / ref /
+  mut-ref rejection envelope.
+- [Drop](ownership/drop.spec.md) — drop elaboration, user `impl
+  Drop`, leak-tracker fixtures.
+
+### Codegen
+
+- [Backends](codegen/backends.spec.md) — Cranelift (default) + LLVM
+  18 (feature-gated); byte-identical stdout invariant.
+- [Runtime safety](codegen/runtime-safety.spec.md) — strict warnings,
+  sanitisers, ABI pins, 64-bit pointer asserts.
+- [FFI](codegen/ffi.spec.md) — Phase 7 unsafe blocks, raw pointers,
+  `lib` / `extern "C"`, `#[repr(C/packed/transparent)]`.
 
 ### Future (backfill as we touch them)
 
-- std::path, std::time, std::net, std::hash — not yet spec'd.
-- Trait system, ownership / borrow checker — not yet spec'd.
-- Codegen backends (Cranelift / LLVM) — not yet spec'd.
+- std::hash (top-level hashing utilities — separate from HashMap /
+  HashSet).
+- std::thread / concurrency (Phase 3+).
+- Error-code registry as its own spec (currently informal —
+  `derive.spec.md` B12 lists the relevant codes).
+- LSP / formatter / REPL / package manager — not yet spec'd.
 
 ## Cross-references
 
