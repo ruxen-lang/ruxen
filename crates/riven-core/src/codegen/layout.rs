@@ -361,5 +361,11 @@ pub fn layout_of(ty: &Ty, symbols: &SymbolTable) -> TypeLayout {
 
         // ── Error sentinel ──────────────────────────────────────────────────
         Ty::Error => TypeLayout::primitive(0, 1),
+
+        // ── Const-generic argument marker ───────────────────────────────────
+        // `Ty::ConstArg` is a type-level marker inside a parent's
+        // generic_args list, not a real value type.  It never reaches
+        // layout for an actual variable; return zero-size.
+        Ty::ConstArg(_) => TypeLayout::primitive(0, 1),
     }
 }

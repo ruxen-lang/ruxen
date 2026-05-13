@@ -1306,6 +1306,7 @@ fn ty_to_cranelift(ty: &Ty) -> Option<Type> {
         | Ty::Array(_, _) => Some(types::I64),
         Ty::Unit | Ty::Never => None,
         Ty::Error => None,
+        Ty::ConstArg(_) => None,
     }
 }
 

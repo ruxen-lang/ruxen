@@ -4685,7 +4685,15 @@ impl Resolver {
             // S3 will introduce DefKind::ConstParam and promote ConstLit
             // to a real `ConstExpr::Lit` against const params, then
             // emit E0700 against type params.
-            ast::TypeExpr::ConstLit { .. } => Ty::Error,
+            // T2.02 S6: a `ConstLit` in a generic-arg position
+            // becomes a `Ty::ConstArg(ConstExpr::Lit(v))` so distinct
+            // const instantiations of a generic type produce
+            // distinct Ty values.  The S5 kind-check (above the call
+            // site) emits E0700 when this lands against a Type slot;
+            // here we only build the value.
+            ast::TypeExpr::ConstLit { value, .. } => {
+                Ty::ConstArg(crate::hir::types::ConstExpr::Lit(*value as u64))
+            }
         }
     }
 

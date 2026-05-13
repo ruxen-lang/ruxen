@@ -1339,6 +1339,9 @@ fn ty_to_cranelift(ty: &Ty) -> Option<Type> {
 
         Ty::Unit | Ty::Never => None,
         Ty::Error => None,
+        // T2.02 S6: const-arg markers never reach codegen on their
+        // own — they live inside a parent type's generic_args list.
+        Ty::ConstArg(_) => None,
     }
 }
 

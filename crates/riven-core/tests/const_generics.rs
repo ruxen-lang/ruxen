@@ -299,6 +299,94 @@ end
     );
 }
 
+// ── Stage 6: distinct const args produce distinct types ─────────────
+
+/// B6 (S6 minimal): `Vector[Int, 3]` and `Vector[Int, 4]` resolve to
+/// **distinct** types.  Today (before S6) they both collapse to
+/// `Ty::Class { name: "Vector", generic_args: [Ty::Int, Ty::Error] }`
+/// and compare equal — a soundness gap.
+#[test]
+fn distinct_const_args_produce_distinct_types() {
+    use riven_core::hir::types::{ConstExpr, Ty};
+
+    // Build the type-expression shape the resolver would produce.
+    let three = Ty::ConstArg(ConstExpr::Lit(3));
+    let four = Ty::ConstArg(ConstExpr::Lit(4));
+    let a = Ty::Class {
+        name: "Vector".to_string(),
+        generic_args: vec![Ty::Int, three.clone()],
+    };
+    let b = Ty::Class {
+        name: "Vector".to_string(),
+        generic_args: vec![Ty::Int, four.clone()],
+    };
+    let c = Ty::Class {
+        name: "Vector".to_string(),
+        generic_args: vec![Ty::Int, three.clone()],
+    };
+
+    assert_ne!(a, b, "Vector[Int, 3] must differ from Vector[Int, 4]");
+    assert_eq!(a, c, "two Vector[Int, 3] values must compare equal");
+}
+
+/// B6: in a real source program, two fn signatures returning
+/// different `Vector[Int, N]` types end up with different resolved
+/// `Ty::Class` arg lists.  The HIR of two distinct-arg fns must
+/// contain distinct return-type values.
+#[test]
+fn const_args_thread_into_class_generic_args() {
+    use riven_core::hir::types::{ConstExpr, Ty};
+
+    let src = r#"
+class Vector[T, const N: USize]
+  data: USize
+
+  def init(@data: USize)
+  end
+end
+
+def make_three -> Vector[Int, 3]
+  Vector.new(0)
+end
+
+def make_four -> Vector[Int, 4]
+  Vector.new(0)
+end
+"#;
+    let mut lx = riven_core::lexer::Lexer::new(src);
+    let toks = lx.tokenize().expect("lex");
+    let mut p = riven_core::parser::Parser::new(toks);
+    let prog = p.parse().expect("parse");
+    let result = riven_core::typeck::type_check(&prog);
+
+    let return_tys: Vec<Ty> = result
+        .program
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            riven_core::hir::nodes::HirItem::Function(f) => Some(f.return_ty.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(return_tys.len(), 2, "expected two fns, got: {:?}", return_tys);
+    assert_ne!(
+        return_tys[0], return_tys[1],
+        "make_three and make_four must return distinct types: {:?} vs {:?}",
+        return_tys[0], return_tys[1]
+    );
+    // And specifically the const args differ.
+    let arg_three = match &return_tys[0] {
+        Ty::Class { generic_args, .. } => generic_args.get(1).cloned(),
+        _ => None,
+    };
+    assert_eq!(
+        arg_three,
+        Some(Ty::ConstArg(ConstExpr::Lit(3))),
+        "make_three should carry ConstArg(Lit(3)) at slot 1; got {:?}",
+        return_tys[0]
+    );
+}
+
 // ── Stage 5: typeck unification + E0700 kind mismatch ───────────────
 
 /// B5 (S5 minimal): passing an integer literal where the declared

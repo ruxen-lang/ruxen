@@ -136,6 +136,14 @@ pub enum Ty {
     /// `[T; N]` — fixed-size array (N is a `ConstExpr`; was `usize`
     /// before T2.02 stage 4).
     Array(Box<Ty>, ConstExpr),
+    /// Tier-2 const generics S6: a const-argument slot inside a
+    /// `Ty::Class { generic_args }` / `Ty::Struct { generic_args }` /
+    /// `Ty::Enum { generic_args }` list.  Distinguishes
+    /// `Vector[Int, 3]` from `Vector[Int, 4]` at the type level so
+    /// unification rejects assignment between distinct
+    /// instantiations and monomorphization (S7+) can key on the
+    /// pair `(type-args, const-args)`.
+    ConstArg(ConstExpr),
     /// `Vec[T]` — dynamic, heap-allocated
     Vec(Box<Ty>),
     /// `HashMap[K, V]` — key-value map
@@ -352,6 +360,9 @@ impl Ty {
             Ty::Newtype { inner, .. } => inner.is_send(),
             Ty::Error => true,
             Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. } | Ty::Infer(_) => false,
+            // Const args are a type-level marker, not a real type — they
+            // never block thread-safety classification of their parent.
+            Ty::ConstArg(_) => true,
         }
     }
 
@@ -402,6 +413,7 @@ impl Ty {
             Ty::Newtype { inner, .. } => inner.is_sync(),
             Ty::Error => true,
             Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. } | Ty::Infer(_) => false,
+            Ty::ConstArg(_) => true,
         }
     }
 
@@ -862,6 +874,7 @@ impl fmt::Display for Ty {
             Ty::RawPtrVoid => write!(f, "*Void"),
             Ty::RawPtrMutVoid => write!(f, "*mut Void"),
             Ty::Error => write!(f, "<error>"),
+            Ty::ConstArg(e) => write!(f, "{}", e),
         }
     }
 }
