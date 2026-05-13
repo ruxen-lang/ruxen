@@ -8,6 +8,14 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- Phase 2 #06.D2.S4: end-to-end fixture
+  `tests/release-e2e/cases/070_interp_display_dispatch.rvn` proves the
+  Display dispatch path runs at runtime — a `class Money` with user
+  `impl Display for Money` interpolates via `"#{m}"`, while inner
+  `"#{self.cents}"` routes through synth `Int_fmt`. Mirrored as an
+  inline cargo test (`stdlib_fmt_runtime.rs::interpolation_user_impl_display_money_round_trips`)
+  so the default `cargo test --workspace` run exercises it without
+  waiting for the `--ignored` `release_e2e_all_fixtures` harness.
 - Phase 2 #06.D2.S3: route string interpolation through `Display::fmt`
   dispatch — `Formatter_new` → `{T}_fmt(value, fmt)` → `Formatter_buffer`
   for primitives (Char / Int / Float / Bool) and any type with

@@ -90,20 +90,21 @@
       requires changing the FFI repr of `Result::Err(IoError)` from
       `char*` to a heap struct `{u32 tag; char* msg}` and updating
       27 callsites.
-- [ ] String interpolation routes through `Display::fmt`.
-      **Partial (Phase A+B+C+D MVP, 2026-05-10):** `Display`/`Debug`
-      formal traits registered with `fmt(&self, &mut Formatter) ->
-      Result[(), FmtError]` signature. `Formatter` and `FmtError`
-      registered as built-in classes. `Formatter.write_str`,
-      `write_char`, `width`, `precision`, `align`, `fill` typeck
-      method dispatch in `infer.rs::builtin_method_type`. Runtime
-      stubs `riven_fmt_formatter_*` in `runtime.c`; full Cranelift
-      + LLVM signature wiring. User `class T ... impl Display ...
-      end ... end` parses + typechecks. **Pending:** the canonical
-      interpolation path in `mir/lower.rs::lower_interpolation`
-      still uses the legacy ad-hoc `riven_X_to_string` dispatch
-      rather than going through `Display::fmt`. Refactor deferred —
-      see plan's Phase D2.
+- [x] String interpolation routes through `Display::fmt`.
+      **Phase D2 (2026-05-13):** `lower_interpolation` emits the
+      canonical `Formatter_new` → `{T}_fmt(value, fmt)` →
+      `Formatter_buffer` sequence for primitives (Char / Int /
+      Float / Bool) and for any user type with `impl Display for T`.
+      Synth `Char_fmt` / `Int_fmt` / `Float_fmt` / `Bool_fmt` /
+      `String_fmt` MIR fns wrap the existing `riven_*_to_string`
+      runtime helpers so observable output is byte-identical to the
+      legacy ad-hoc switch. Derive-Debug-only types still fall back
+      to `{Name}_to_debug` for the bare `"#{x}"` form until users
+      provide their own `impl Display`. Width / align / precision /
+      fill runtime application (D4) and the `Err(e).message()`
+      inference gap remain separately tracked. Commits: S0
+      24b84c3 → S1 2683c6d → S2 47250b1 / fd24313 → S3 eb297e2 →
+      S4 a1658e9.
 - [x] `Debug` interpolation `"#{x:?}"` works for any `derive Debug`
       type. **Phase B + C MVP:** format spec captured at lex time
       (FormatSpec.debug = true), threaded through HIR/MIR. Existing
