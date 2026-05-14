@@ -47,6 +47,9 @@ static EXPLAINS: &[(&str, &str)] = &[
     ("E0618", include_str!("../../../docs/errors/E0618.md")),
     // ── Tier-2 type system ──────────────────────────────────────────
     ("E0700", include_str!("../../../docs/errors/E0700.md")),
+    ("E0701", include_str!("../../../docs/errors/E0701.md")),
+    ("E0702", include_str!("../../../docs/errors/E0702.md")),
+    ("E0703", include_str!("../../../docs/errors/E0703.md")),
     // ── Borrow checker / trait-impl ─────────────────────────────────
     ("E1001", include_str!("../../../docs/errors/E1001.md")),
     ("E1002", include_str!("../../../docs/errors/E1002.md")),

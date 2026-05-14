@@ -125,9 +125,36 @@ pub const REGISTRY: &[CodeInfo] = &[
         title: "derive PartialOrd: field type does not implement PartialOrd",
     },
     // ── Tier-2 type system (E0700-E0799) ─────────────────────────────
+    //
+    // Known collision: E0700 is currently emitted by two unrelated
+    // sites — the iterator-`sum` rejection in typeck and the
+    // const-generic kind-mismatch in resolve (per
+    // docs/specs/types/const-generics.spec.md §"Error code
+    // reservations").  Both predate this registry pass.  Resolution
+    // is a tier-2 follow-up: re-number whichever site doesn't fit the
+    // tier-2 range conceptually (iterator-sum is method-resolution,
+    // not type-system).  Until then the title here covers the
+    // historically-first usage; const-generics docs reference the
+    // same code with the kind-mismatch framing.
     CodeInfo {
         code: "E0700",
         title: "iterator `sum` requires an Item that implements `Add`",
+    },
+    // E0701-E0703 reserved by const-generics spec §"Error code
+    // reservations" but not yet emitted; registered so docs/errors/
+    // stays in sync and future S8/S9 work can emit them without
+    // separate registry plumbing.
+    CodeInfo {
+        code: "E0701",
+        title: "wrong const-arg type (reserved)",
+    },
+    CodeInfo {
+        code: "E0702",
+        title: "non-const expression in const-arg position (reserved)",
+    },
+    CodeInfo {
+        code: "E0703",
+        title: "const-arg expression overflows during evaluation (reserved)",
     },
     // ── Borrow checking + trait/impl (E1001-E1099) ───────────────────
     // The borrow checker maintains a parallel `ErrorCode` enum in

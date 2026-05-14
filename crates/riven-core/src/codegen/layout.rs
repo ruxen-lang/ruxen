@@ -320,13 +320,14 @@ pub fn layout_of(ty: &Ty, symbols: &SymbolTable) -> TypeLayout {
         // ── Array ───────────────────────────────────────────────────────────
         Ty::Array(elem, n) => {
             let elem_layout = layout_of(elem, symbols);
-            // T2.02 S7: evaluate the const expression with an empty
-            // binding map.  `Lit(N)` resolves to `N`; `Param(...)`
-            // (unbound at this call) falls back to size 0 — the
-            // monomorphization wrapper introduced in S7+ will pass a
-            // populated binding map per instantiation.  Arithmetic
-            // (`Op`) is S8 wiring; today eval returns `NotImplemented`
-            // which we treat as 0.
+            // T2.02 S7+S8.S1: evaluate the const expression with an
+            // empty binding map.  `Lit(N)` resolves to `N`; `Op(...)`
+            // arithmetic folds via the S8.S1 evaluator (checked u64
+            // ops).  `Param(...)` (unbound at this call) and
+            // overflow / div-zero fold to size 0 here — the
+            // monomorphization wrapper that threads per-instantiation
+            // bindings (and surfaces evaluator errors as E0703) is a
+            // follow-up.
             let bindings: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
             let count = n.eval(&bindings).unwrap_or(0) as usize;
             TypeLayout {

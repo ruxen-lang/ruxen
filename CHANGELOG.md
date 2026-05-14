@@ -8,6 +8,36 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- Tier-5 / T5.04 phase 1 follow-up: register reserved const-generic
+  diagnostic codes **E0701** (wrong const-arg type), **E0702**
+  (non-const expression in const-arg position), and **E0703**
+  (const-arg expression overflows during evaluation) per
+  `docs/specs/types/const-generics.spec.md` §"Error code
+  reservations".  Each gets a `CodeInfo` entry in
+  `codes::REGISTRY`, an `include_str!` row in
+  `riven-cli/src/explain.rs::EXPLAINS`, and a
+  `docs/errors/<code>.md` page describing the (planned) trigger,
+  example, fix, and relationship to sibling codes.  No emit site
+  yet — the reservations document where future S8 / S9 work will
+  surface eval errors (overflow / div-zero — see the §B8 mapping
+  noted in `E0703.md`) and where the S5 kind-mismatch path will
+  split into separate kind vs. type diagnostics.
+
+  Also adds two reciprocal pin tests to
+  `tests/error_code_registry.rs` so the registry, the
+  `EXPLAINS` table, and `docs/errors/` stay in three-way sync:
+  `every_registered_error_code_has_a_docs_page` (no registry
+  entry without a docs page) and
+  `every_docs_error_page_has_a_registry_entry` (no orphan
+  docs page without a registry entry).  Catches the drift
+  pattern that left E0700 with two simultaneous meanings (an
+  open follow-up noted in the registry header).
+
+  Stale `codegen/layout.rs::layout_of` comment updated to reflect
+  S8.S1 evaluator semantics — `Op` arithmetic now folds via
+  checked `u64` ops, and overflow / div-zero fold to size 0 here
+  pending the monomorphization-side wiring that will surface them
+  as E0703.
 - Phase 3 stdlib remainder closure: docs/specs/stdlib/hash.spec.md
   backfilled.  Spec covers the `Hashable` trait surface, the
   `derive Hashable` synthesis path, the `T: Hashable` generic bound

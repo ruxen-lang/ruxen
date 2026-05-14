@@ -105,3 +105,65 @@ fn every_emitted_error_code_is_registered() {
         unregistered.join("\n  ")
     );
 }
+
+/// Every code in `codes::REGISTRY` must have a matching
+/// `docs/errors/<code>.md` page.  Catches the drift that lets a
+/// reserved code be registered with no human-facing explanation —
+/// the failure surfaces with the missing filename so the fix is to
+/// either author the doc or strike the registry entry.
+#[test]
+fn every_registered_error_code_has_a_docs_page() {
+    use riven_core::diagnostics::codes::REGISTRY;
+    let errors_dir = workspace_root().join("docs/errors");
+    let mut missing = Vec::new();
+    for entry in REGISTRY {
+        let doc_path = errors_dir.join(format!("{}.md", entry.code));
+        if !doc_path.exists() {
+            missing.push(format!(
+                "{} — expected docs page at {}",
+                entry.code,
+                doc_path.display()
+            ));
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "registered error codes without a docs/errors/*.md page:\n  {}",
+        missing.join("\n  ")
+    );
+}
+
+/// Inverse direction: every `docs/errors/E*.md` file must correspond
+/// to a `REGISTRY` entry.  A stale doc page (e.g. left over after a
+/// code is renumbered) is a footgun for users following stale
+/// links from earlier compiler output; fail the build so the
+/// orphan gets reconciled either by re-registering or by deleting.
+#[test]
+fn every_docs_error_page_has_a_registry_entry() {
+    let errors_dir = workspace_root().join("docs/errors");
+    let entries = match std::fs::read_dir(&errors_dir) {
+        Ok(e) => e,
+        Err(err) => panic!("read docs/errors: {}", err),
+    };
+    let mut orphans = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with('E') || !name.ends_with(".md") {
+            continue;
+        }
+        let code = name.trim_end_matches(".md");
+        if !is_registered(code) {
+            orphans.push(format!(
+                "{} — docs page at {} has no REGISTRY entry",
+                code,
+                entry.path().display()
+            ));
+        }
+    }
+    assert!(
+        orphans.is_empty(),
+        "orphan docs/errors/*.md pages:\n  {}",
+        orphans.join("\n  ")
+    );
+}
