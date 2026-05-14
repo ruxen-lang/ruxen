@@ -908,6 +908,11 @@ mention of the prior forms.
 | `@[link(name = "x")]`               | options on `lib`: `lib "x", ...`                          |
 | `@[inline]`                         | `inline def f` modifier; or `inline :f` directive         |
 | `@[...]` syntax overall             | retired                                                   |
+| `@[test]` / `@[ignore]` / `@[should_panic]` | in-body `test` / `ignore` / `should_panic` directives in a test fn's body |
+| `@[bench]`                          | in-body `bench` directive                                 |
+| `@[deprecated]` / `@[stable]` / `@[unstable]` | in-body `deprecated` / `stable` / `unstable` directives |
+| `@[no_std]`                         | package-level `no_std` directive (one line at the top of the package root) |
+| `@[opt_out_send]` / `@[unsafe_impl_send]` | body-level `opt_out_send` / `unsafe_impl_send` directives |
 | `extern "C" ... end`                | `lib "<linkname>" ... end`                                |
 | `crate` (in path or keyword)        | `package`                                                 |
 | `null` (FFI null literal)           | `nil`                                                     |
