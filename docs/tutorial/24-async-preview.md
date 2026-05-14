@@ -5,12 +5,12 @@
 > binary panics at runtime.  Full async runtime lands in Phase 4
 > (prompt 15).
 >
-> **See also:** [Spec — std::future](../specs/stdlib/async.spec.md)
+> **See also:** [Spec — std.future](../specs/stdlib/async.spec.md)
 > for the full contract + pin tests.
 
-Async support in Riven follows Rust's design: a `Future` trait with
+Async support in Riven follows Rust's design: a `Future` mixin with
 a `poll` method, a `Poll[T]` enum with `Ready(T)` / `Pending`
-variants, and `async fn` / `async { }` / `.await` syntax that lowers
+variants, and `async def` / `async { }` / `.await` syntax that lowers
 to a state-machine.
 
 In v1 only the syntax + types ship.  The runtime executor that
@@ -29,7 +29,7 @@ use std.future.{Future, Poll, Waker, Context}
 
 | Type            | Role                                              | Status            |
 |-----------------|---------------------------------------------------|-------------------|
-| `Future[T]`     | Trait with required `poll(&mut, &mut Context) -> Poll[T]` | types ✓ runtime ✗ |
+| `Future[T]`     | Mixin with required `poll(&mut, &mut Context) -> Poll[T]` | types ✓ runtime ✗ |
 | `Poll[T]`       | Enum: `Ready(T)` or `Pending`                     | types ✓ runtime ✗ |
 | `Waker`         | Class — wraps a wake callback                     | types ✓ runtime ✗ |
 | `Context`       | Class — wraps a `&Waker` for the poll call        | types ✓ runtime ✗ |
@@ -39,7 +39,7 @@ write functions that take `&mut Context` as a parameter.
 
 ---
 
-## 2. `async fn`
+## 2. `async def`
 
 ```riven
 async def fetch(url: &str) -> Result[String, IoError]
@@ -49,8 +49,8 @@ end
 
 The compiler accepts `async` as a function modifier.  The return
 type as written is `Result[String, IoError]`, but the actual return
-type of an `async fn` is `impl Future[Output = Result[String, IoError]]`
-(matches Rust).
+type of an `async def` is `some Future[Output = Result[String, IoError]]`
+(matches what Rust would express).
 
 Calling `fetch(...)` today produces a typed value but doesn't run
 the body — you need the executor.
@@ -63,7 +63,7 @@ the body — you need the executor.
 let fut = async { 42 }
 ```
 
-`fut` has type `impl Future[Output = Int]`.
+`fut` has type `some Future[Output = Int]`.
 
 ---
 
@@ -77,7 +77,7 @@ end
 ```
 
 `.await` is a postfix operator legal only inside `async` contexts
-(async fn or async block).  The parser rejects it elsewhere.
+(`async def` or `async { ... }` block).  The parser rejects it elsewhere.
 
 When the runtime ships, `.await` will desugar to a `loop { match
 poll(...) { Ready(v) => break v, Pending => yield } }`.
@@ -86,7 +86,7 @@ poll(...) { Ready(v) => break v, Pending => yield } }`.
 
 ## 5. What you can do today
 
-- **Design async APIs.**  Method signatures, trait definitions, and
+- **Design async APIs.**  Method signatures, mixin definitions, and
   return types all typecheck.  You can iterate on shape before the
   runtime lands.
 - **Document expected behaviour in specs.**  When the runtime lands,
@@ -96,7 +96,7 @@ poll(...) { Ready(v) => break v, Pending => yield } }`.
 
 What you **can't** do:
 
-- Run any `async fn` body.
+- Run any `async def` body.
 - Schedule futures concurrently.
 - Test `.await` against real I/O.
 - Benchmark async code.
@@ -109,9 +109,9 @@ The phase-4 prompt at
 [`docs/prompts/v1/15_phase4_async.md`](../prompts/v1/15_phase4_async.md)
 describes the executor design.  Rough sequence:
 
-1. **MIR lowering** for `async fn` produces a state-machine struct
+1. **MIR lowering** for `async def` produces a state-machine struct
    with one variant per `.await` point.
-2. **`Executor::block_on(future)`** synchronously polls a future to
+2. **`Executor.block_on(future)`** synchronously polls a future to
    completion.  Single-threaded for v1.
 3. **`Waker` is wired to a parker** so `Pending` returns from `poll`
    actually wait until something rings the waker.
@@ -125,9 +125,9 @@ drift while the runtime is built up underneath.
 
 ## 7. Concurrency vs async — different surfaces
 
-Don't confuse `std::future` (this chapter) with `std::sync`
-(chapter 22 — concurrency primitives).  `std::sync` is OS threads
-+ mutexes + atomics; `std::future` is cooperative single-threaded
+Don't confuse `std.future` (this chapter) with `std.sync`
+(chapter 22 — concurrency primitives).  `std.sync` is OS threads
++ mutexes + atomics; `std.future` is cooperative single-threaded
 async/await.  They compose — a future can spawn a thread and a
 thread can run an executor — but they're independent v1 features.
 

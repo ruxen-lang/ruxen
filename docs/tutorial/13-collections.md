@@ -1,13 +1,13 @@
 # Collections
 
-## Vec (Dynamic Array)
+## Array (Growable Sequence)
 
-The most common collection — a growable, heap-allocated array.
+The most common collection — a growable, heap-allocated sequence.
 
 ```riven
 # Create
-let mut v = Vec.new            # empty
-let v = vec![1, 2, 3]          # with initial values
+var v = Array.new              # empty
+let v = array![1, 2, 3]        # with initial values
 
 # Add elements
 v.push(4)
@@ -24,7 +24,7 @@ v.is_empty                     # true if empty
 ### Iterating
 
 ```riven
-let nums = vec![1, 2, 3, 4, 5]
+let nums = array![1, 2, 3, 4, 5]
 
 # Iterate
 nums.each { |n| puts n }
@@ -42,11 +42,11 @@ let first_big = nums.find { |n| n > 3 }    # Option[&Int]
 let (evens, odds) = nums.partition { |n| n % 2 == 0 }
 ```
 
-## HashMap (Key-Value Map)
+## Map (Key-Value)
 
 ```riven
-let mut h: HashMap[String, Int] = HashMap.new
-let h = hash!{ "a" => 1, "b" => 2, "c" => 3 }
+var h: Map[String, Int] = Map.new
+let h = map!{ "a" => 1, "b" => 2, "c" => 3 }
 
 # Insert / update
 h.insert("d", 4)
@@ -63,7 +63,7 @@ h.contains_key("a")
 ## Set (Unique Values)
 
 ```riven
-let mut s: Set[Int] = Set.new
+var s: Set[Int] = Set.new
 
 s.insert(1)
 s.insert(2)
@@ -100,7 +100,7 @@ greeting.char_count            # Unicode scalar count
 Collections follow ownership rules:
 
 ```riven
-let names = vec!["Alice", "Bob", "Charlie"]
+let names = array!["Alice", "Bob", "Charlie"]
 
 # Borrowing elements
 for name in &names             # iterate by reference

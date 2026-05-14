@@ -60,9 +60,9 @@ Attach to the following item. Support Markdown formatting:
 ```riven
 ## Finds a user by their ID.
 ##
-## Returns `None` if no user with the given ID exists.
+## Returns `nil` if no user with the given ID exists.
 ## The returned reference borrows from the user store.
-pub def find_user(id: Int) -> Option[&User]
+def find_user(id: Int) -> Option[&User]
   # ...
 end
 ```
@@ -72,10 +72,10 @@ end
 | Convention | Used for | Example |
 |------------|----------|---------|
 | `snake_case` | Variables, functions, methods, file names | `user_name`, `find_by_id` |
-| `UpperCamelCase` | Types, classes, traits, enums, modules | `TaskList`, `Serializable` |
+| `UpperCamelCase` | Types, classes, mixins, enums, modules | `TaskList`, `Serializable` |
 | `SCREAMING_SNAKE_CASE` | Constants | `MAX_RETRIES`, `DEFAULT_PORT` |
 | `_` prefix | Unused variables | `_unused`, `_` |
-| `'a` | Lifetime parameters | `'a`, `'input` |
+| lowercase identifier | Lifetime parameters (in `[...]` slot) | `a`, `input` |
 
 ## Line Structure
 

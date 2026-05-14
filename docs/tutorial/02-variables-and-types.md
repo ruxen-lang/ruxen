@@ -2,7 +2,7 @@
 
 ## Variable Bindings
 
-Variables are declared with `let`. They are **immutable by default**.
+Riven has two binding keywords. `let` is immutable; `var` is mutable.
 
 ```riven
 let name = "Alaric"
@@ -12,10 +12,10 @@ let pi = 3.14
 name = "Voss"   # COMPILE ERROR: `name` is immutable
 ```
 
-Use `let mut` to make a variable mutable:
+Use `var` to make a variable mutable:
 
 ```riven
-let mut counter = 0
+var counter = 0
 counter = counter + 1
 counter += 1              # compound assignment
 ```
@@ -36,7 +36,7 @@ You can add explicit type annotations when needed:
 
 ```riven
 let x: Float = 42         # 42 interpreted as Float
-let bytes: Vec[UInt8] = Vec.new
+var bytes: Array[UInt8] = Array.new
 ```
 
 ## Primitive Types
@@ -119,14 +119,14 @@ let record = ("Alice", 30, true)     # (String, Int, Bool)
 let (x, y) = point                   # destructuring
 ```
 
-## Arrays and Vectors
+## Fixed Arrays and Growable Arrays
 
 ```riven
-# Arrays — fixed size, stack-allocated
+# Fixed-size arrays — stack-allocated
 let nums: [Int; 3] = [1, 2, 3]
 
-# Vectors — dynamic, heap-allocated
-let mut v = vec![1, 2, 3]
+# Growable arrays — heap-allocated
+var v = array![1, 2, 3]
 v.push(4)
 ```
 

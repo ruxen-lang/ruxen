@@ -1,21 +1,21 @@
 # Concurrency Primitives (typeck-only preview)
 
 > **Status:** Type surface ships now.  Runtime support is **`Thread.sleep`
-> + `Thread.yield_now` only**.  `Mutex`, `Arc`, `JoinHandle`, and
+> + `Thread.yield_now` only**.  `Mutex`, `SharedSync`, `JoinHandle`, and
 > `Thread.spawn` typecheck but currently panic with "not implemented"
 > at runtime.  Full implementations land in Phase 4.
 >
-> **See also:** [Spec — std::sync](../specs/stdlib/sync.spec.md) for
+> **See also:** [Spec — std.sync](../specs/stdlib/sync.spec.md) for
 > the full v1 typeck surface + pin tests.
 
-`std::sync` is Riven's concurrency module.  The user-facing surface
+`std.sync` is Riven's concurrency module.  The user-facing surface
 mirrors Rust closely, but v1 ships the types in two waves:
 
 1. **Now (Phase 1-3):** typeck contract + the two utility helpers
    (`Thread.sleep`, `Thread.yield_now`).  Lets you write the shape of
    your concurrent code today.
 2. **Later (Phase 4):** full runtime — `pthread_create` for
-   `Thread.spawn`, atomic refcounts for `Arc`, `pthread_mutex_*` for
+   `Thread.spawn`, atomic refcounts for `SharedSync`, `pthread_mutex_*` for
    `Mutex`.
 
 This chapter shows what's typeable today, with explicit markers for
@@ -74,25 +74,29 @@ same source compiles unchanged with a working runtime.
 
 ---
 
-## 3. Arc (typeck only)
+## 3. SharedSync (typeck only)
+
+`SharedSync[T]` is Riven's atomically reference-counted, thread-safe
+shared pointer. Cloning a `SharedSync` bumps the atomic refcount;
+when the last clone drops, the value is freed.
 
 ```riven
-use std.sync.Arc
+use std.sync.SharedSync
 
 def main
-  let shared: Arc[Int] = Arc.new(42)             # types ✓ runtime ✗
-  let snd: Arc[Int] = shared.clone()
+  let shared: SharedSync[Int] = SharedSync.new(42)   # types ✓ runtime ✗
+  let snd: SharedSync[Int] = shared.clone()
   puts "count = #{shared.strong_count()}"
 end
 ```
 
-| Method                   | Returns   | Status            |
-|--------------------------|-----------|-------------------|
-| `Arc.new(v)`             | `Arc[T]`  | types ✓ runtime ✗ |
-| `arc.clone()`            | `Arc[T]`  | types ✓ runtime ✗ |
-| `arc.strong_count()`     | `USize`   | types ✓ runtime ✗ |
-| `arc.weak_count()`       | `USize`   | types ✓ runtime ✗ |
-| `arc.deref()`            | `&T`      | types ✓ runtime ✗ |
+| Method                       | Returns          | Status            |
+|------------------------------|------------------|-------------------|
+| `SharedSync.new(v)`          | `SharedSync[T]`  | types ✓ runtime ✗ |
+| `shared.clone()`             | `SharedSync[T]`  | types ✓ runtime ✗ |
+| `shared.strong_count()`      | `USize`          | types ✓ runtime ✗ |
+| `shared.weak_count()`        | `USize`          | types ✓ runtime ✗ |
+| `shared.deref()`             | `&T`             | types ✓ runtime ✗ |
 
 ---
 
@@ -122,7 +126,7 @@ return value (or any panic) through `join`.
 
 Even with the runtime gaps, the typeck surface is useful:
 
-- **Design APIs that take `Arc[Mutex[T]]` shared state** and have
+- **Design APIs that take `SharedSync[Mutex[T]]` shared state** and have
   the compiler check the types end-to-end.
 - **Prototype the call-site ergonomics** of `lock!()` vs
   `lock().unwrap_or(...)` etc.  The diagnostics are the same the
@@ -150,7 +154,7 @@ The expected sequence:
    slot the `JoinHandle` reads.
 2. **`Mutex`** → `pthread_mutex_*`.  Poison detection by setting a
    sentinel inside `panic`'s unwind path.
-3. **`Arc`** → bare `__atomic_fetch_add` on a 64-bit refcount
+3. **`SharedSync`** → bare `__atomic_fetch_add` on a 64-bit refcount
    embedded in the heap allocation.
 
 Each piece gets its own spec section in `sync.spec.md` and its own

@@ -26,7 +26,7 @@ mirror the major surface areas:
 | Subdir         | Covers                                                  |
 |----------------|---------------------------------------------------------|
 | `stdlib/`      | Every shipped stdlib module + collection                |
-| `traits/`      | Trait system, derive, variance                          |
+| `traits/`      | Mixin system, derive, variance                          |
 | `ownership/`   | Borrow check + Drop                                     |
 | `codegen/`     | Cranelift + LLVM backends, runtime safety, FFI surface  |
 | `types/`       | In-flight type-system features (const generics, …)      |
@@ -157,7 +157,7 @@ Specs explicitly list what they **don't** cover.  These come from
 the requirements docs' non-goals plus pragmatic v1 cutoffs:
 
 - `BTreeMap` (no ordered hash variant in v1)
-- `fs::metadata` (needs a `Metadata` struct surface)
+- `fs.metadata` (needs a `Metadata` struct surface)
 - Width on `:?` Debug interpolation (Debug bypasses the Formatter)
 - ...and so on, per spec.
 

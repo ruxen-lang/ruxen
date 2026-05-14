@@ -25,7 +25,7 @@ end
 Methods that can panic use `!` suffix — they're safe but signal danger:
 
 ```riven
-let value = option.unwrap!           # panics on None
+let value = option.unwrap!           # panics on nil
 let value = result.expect!("oops")   # panics on Err
 ```
 
@@ -49,9 +49,9 @@ class SafeBuffer
   end
 
   # Safe public API
-  pub def get(index: Int) -> Option[UInt8]
+  def get(index: Int) -> Option[UInt8]
     if index < 0 || index >= self.len
-      None
+      nil
     else
       unsafe
         Some(*(self.ptr + index))
@@ -59,14 +59,14 @@ class SafeBuffer
     end
   end
 
-  impl Drop
-    def drop
-      unsafe
-        free(self.ptr as *Void)
-      end
+  include Drop
+
+  def mut drop
+    unsafe
+      free(self.ptr as *mut Void)
     end
   end
 end
 ```
 
-Users of `SafeBuffer` never need to write `unsafe` — the type's API is fully safe.
+Users of `SafeBuffer` never need to write `unsafe` — the type's API is fully safe. `include Drop` declares the type a `Drop` participant; the mutating `drop` method runs when an instance goes out of scope.

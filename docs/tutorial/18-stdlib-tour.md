@@ -11,7 +11,7 @@ spec link at the top of each section.
 
 ---
 
-## `std::io` — stdin / stdout / stderr
+## `std.io` — stdin / stdout / stderr
 
 [Spec](../specs/stdlib/io.spec.md)
 
@@ -39,7 +39,7 @@ Cheat sheet:
 - `Stdout.new()` / `Stderr.new()` are zero-cost handle constructors.
 - `println(s)` adds `\n`; `print(s)` doesn't.
 - `Stderr.eprintln(s)` is the stderr version (returns `Result[(), IoError]`).
-- `Stdin.lines()` returns `Vec[Result[String, IoError]]` — fully
+- `Stdin.lines()` returns `Array[Result[String, IoError]]` — fully
   buffered (v1 simplification; not a streaming `BufRead`).
 
 `IoError` is a tagged enum with `NotFound`, `PermissionDenied`,
@@ -48,7 +48,7 @@ Cheat sheet:
 
 ---
 
-## `std::fs` — files & directories
+## `std.fs` — files & directories
 
 [Spec](../specs/stdlib/fs.spec.md)
 
@@ -79,12 +79,12 @@ Everything returns `Result[T, IoError]`.  Predicates (`exists`,
 `is_file`, `is_dir`) return `Bool` (a missing path returns `false`,
 not an error).
 
-`read_dir(path)` returns `Result[Vec[String], IoError]` — order is
+`read_dir(path)` returns `Result[Array[String], IoError]` — order is
 unspecified; sort before comparing.
 
 ---
 
-## `std::env` — process environment
+## `std.env` — process environment
 
 [Spec](../specs/stdlib/env.spec.md)
 
@@ -107,17 +107,17 @@ def main
 end
 ```
 
-- `args() -> Vec[String]` — element 0 is the program name; never empty.
+- `args() -> Array[String]` — element 0 is the program name; never empty.
 - `var(name)` returns `Result[String, VarError]` (`Err(NotPresent)`
   when unset).
-- `vars()` returns a `HashMap[String, String]` snapshot.
+- `vars()` returns a `Map[String, String]` snapshot.
 - `current_dir()` returns `Result[String, IoError]`.
 
 Read-only in v1: no `set_var` / `remove_var`.
 
 ---
 
-## `std::process` — exit & spawn
+## `std.process` — exit & spawn
 
 [Spec](../specs/stdlib/process.spec.md)
 
@@ -125,7 +125,7 @@ Read-only in v1: no `set_var` / `remove_var`.
 use std.process.{exit, process_run}
 
 def main
-  let mut args: Vec[String] = Vec.new
+  var args: Array[String] = Array.new
   args.push("hello")
   let code = process_run("/bin/echo", args)
   if code != 0
@@ -144,7 +144,7 @@ For now, `process_run` is the only spawn primitive.  The full
 
 ---
 
-## `std::net` — minimal TCP
+## `std.net` — minimal TCP
 
 [Spec](../specs/stdlib/net.spec.md)
 
@@ -169,7 +169,7 @@ fd and `drop` automatically are also v2.
 
 ---
 
-## `std::path` — POSIX path manipulation
+## `std.path` — POSIX path manipulation
 
 [Spec](../specs/stdlib/path.spec.md)
 
@@ -191,11 +191,11 @@ end
 - An absolute second argument to `path_join` overrides the first
   (matches Rust).
 - A path without an extension (or a dotfile like `.hidden`) yields
-  an empty string from `path_extension` — not a `Result::Err`.
+  an empty string from `path_extension` — not a `Result.Err`.
 
 ---
 
-## `std::time` — nanosecond clocks
+## `std.time` — nanosecond clocks
 
 [Spec](../specs/stdlib/time.spec.md)
 
@@ -227,23 +227,23 @@ Typed `Duration` / `Instant` wrappers are v2.
 
 ---
 
-## `std::fmt` — formatting & interpolation
+## `std.fmt` — formatting & interpolation
 
 [Spec](../specs/stdlib/fmt.spec.md) ·
 [Tutorial chapter 17](17-string-formatting-and-interpolation.md)
 
-`std::fmt` is the only stdlib module with its own dedicated tutorial
+`std.fmt` is the only stdlib module with its own dedicated tutorial
 chapter — see chapter 17 for the full walk-through of `Display`,
 `Debug`, format specs (`:>10`, `:.2`, `:*<5`), and writing
-`impl Display for T`.
+classes that `include Display`.
 
 ---
 
 ## Collections
 
-[HashMap spec](../specs/stdlib/hashmap.spec.md) ·
-[HashSet spec](../specs/stdlib/hashset.spec.md) ·
-[Vec spec](../specs/stdlib/vec.spec.md) ·
+[Map spec](../specs/stdlib/hashmap.spec.md) ·
+[Set spec](../specs/stdlib/hashset.spec.md) ·
+[Array spec](../specs/stdlib/vec.spec.md) ·
 [Iterator spec](../specs/stdlib/iterator.spec.md)
 
 Collections are introduced in [Chapter 13 — Collections](13-collections.md).
@@ -251,17 +251,17 @@ The specs above cover the v1 method surface; the most common
 patterns are:
 
 ```riven
-let mut counts: HashMap[String, Int] = HashMap.new
+var counts: Map[String, Int] = Map.new
 for word in text.split(" ")
   counts.entry(word).or_insert(0)
 end
 
-let unique: HashSet[Int] = HashSet.new
+var unique: Set[Int] = Set.new
 unique.insert(1); unique.insert(1); unique.insert(2)
 # unique now has 2 elements
 
-let v: Vec[Int] = Vec.new
-let doubled: Vec[Int] = v.iter.map(|x| x * 2).collect[Vec[Int]]()
+let v: Array[Int] = Array.new
+let doubled: Array[Int] = v.iter.map(|x| x * 2).collect[Array[Int]]()
 ```
 
 ---
@@ -270,14 +270,14 @@ let doubled: Vec[Int] = v.iter.map(|x| x * 2).collect[Vec[Int]]()
 
 | Module       | Riven-side resolution           | C runtime fn prefix         |
 |--------------|----------------------------------|------------------------------|
-| `std::io`    | `resolve/mod.rs` builtin reg     | `riven_stdin_*` / `riven_stdout_*` / `riven_stderr_*` |
-| `std::fs`    | same                             | `riven_fs_*`                 |
-| `std::env`   | same                             | `riven_env_*`                |
-| `std::process` | same                           | `riven_process_*`            |
-| `std::net`   | same                             | `riven_tcp_*` / `riven_net_*`|
-| `std::path`  | same                             | `riven_path_*`               |
-| `std::time`  | same                             | `riven_time_*`               |
-| `std::fmt`   | same + `Formatter` class         | `riven_fmt_formatter_*`      |
+| `std.io`    | `resolve/mod.rs` builtin reg     | `riven_stdin_*` / `riven_stdout_*` / `riven_stderr_*` |
+| `std.fs`    | same                             | `riven_fs_*`                 |
+| `std.env`   | same                             | `riven_env_*`                |
+| `std.process` | same                           | `riven_process_*`            |
+| `std.net`   | same                             | `riven_tcp_*` / `riven_net_*`|
+| `std.path`  | same                             | `riven_path_*`               |
+| `std.time`  | same                             | `riven_time_*`               |
+| `std.fmt`   | same + `Formatter` class         | `riven_fmt_formatter_*`      |
 
 Codegen wiring lives in
 [`codegen/runtime.rs`](../../crates/riven-core/src/codegen/runtime.rs)

@@ -31,7 +31,7 @@ end
 Public functions **must** have explicit type annotations (design principle P5 — Clarity At The Boundaries):
 
 ```riven
-pub def add(a: Int, b: Int) -> Int
+def add(a: Int, b: Int) -> Int
   a + b
 end
 ```
@@ -41,13 +41,13 @@ end
 Use `return` for early exit:
 
 ```riven
-pub def find_positive(nums: &Vec[Int]) -> Option[Int]
+def find_positive(nums: &Array[Int]) -> Option[Int]
   for n in nums
     if n > 0
       return Some(n)
     end
   end
-  None
+  nil
 end
 ```
 
@@ -62,16 +62,26 @@ def is_even(n: Int) -> Bool { n % 2 == 0 }
 
 ## Visibility
 
-| Modifier | Scope |
-|----------|-------|
-| (none) | Private to the current module |
-| `pub` | Public — accessible from anywhere |
+Riven is **public by default**. Section markers (`private`, `protected`) inside a module, class, struct, or mixin body gate subsequent declarations until the next marker.
+
+| Section marker | Scope |
+|----------------|-------|
+| (default) | Public — accessible from anywhere |
+| `private` | Private — accessible only within the current module/type |
 | `protected` | Accessible from subclasses |
 
 ```riven
-def private_helper(x) ... end
-pub def public_api(x: Int) -> Int ... end
-protected def for_subclasses(x: Int) ... end
+module Util
+  def public_api(x: Int) -> Int       # public — module default
+    helper(x)
+  end
+
+  private
+
+  def helper(x: Int) -> Int           # private — until next marker
+    x * 2
+  end
+end
 ```
 
 ## Generic Functions
@@ -79,12 +89,12 @@ protected def for_subclasses(x: Int) ... end
 Use square brackets for type parameters:
 
 ```riven
-pub def identity[T](x: T) -> T
+def identity[T](x: T) -> T
   x
 end
 
-pub def largest[T: Comparable](list: &Vec[T]) -> &T
-  let mut best = &list[0]
+def largest[T: Comparable](list: &Array[T]) -> &T
+  var best = &list[0]
   for item in list
     if item > best
       best = item
@@ -99,7 +109,7 @@ end
 For complex generic bounds:
 
 ```riven
-pub def merge[A, B, C](left: &A, right: &B) -> C
+def merge[A, B, C](left: &A, right: &B) -> C
   where A: Iterable[Item = Int],
         B: Iterable[Item = Int],
         C: FromIterator[Int]
@@ -115,33 +125,33 @@ class User
 
   def init(@name: String) end
 
-  # Instance method — implicitly borrows &self
-  pub def display -> String
+  # Reading method — borrows the receiver immutably
+  def display -> String
     "User: #{self.name}"
   end
 
-  # Mutable method — borrows &mut self
-  pub def mut rename(name: String)
+  # Mutating method — borrows the receiver mutably
+  def mut rename(name: String)
     self.name = name
   end
 
-  # Consuming method — takes ownership of self
-  pub def consume into_name -> String
+  # Consuming method — takes ownership of the receiver
+  def consume into_name -> String
     self.name
   end
 
-  # Class method — no self
+  # Class method — no receiver
   def self.anonymous -> User
     User.new("Anonymous")
   end
 end
 ```
 
-### Self-Mode Summary
+### Method-Mode Summary
 
-| Declaration | Self mode | Meaning |
-|-------------|-----------|---------|
-| `def method` | `&self` | Borrows self immutably |
-| `def mut method` | `&mut self` | Borrows self mutably |
-| `def consume method` | `self` | Takes ownership of self |
-| `def self.method` | (none) | Class method, no self |
+| Declaration | Mode | Meaning |
+|-------------|------|---------|
+| `def method` | reading | Borrows the receiver immutably |
+| `def mut method` | mutating | Borrows the receiver mutably |
+| `def consume method` | consuming | Takes ownership of the receiver |
+| `def self.method` | class | No receiver — module-style call |

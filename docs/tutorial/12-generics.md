@@ -4,10 +4,10 @@ Generics let you write code that works with multiple types while maintaining typ
 
 ## Generic Functions
 
-Type parameters go in square brackets:
+Type parameters go in square brackets. **Uppercase identifiers are type parameters; lowercase identifiers are lifetime parameters** (see "Lifetime Parameters" below).
 
 ```riven
-pub def identity[T](x: T) -> T
+def identity[T](x: T) -> T
   x
 end
 
@@ -15,13 +15,13 @@ let n = identity(42)          # T = Int
 let s = identity("hello")    # T = &str
 ```
 
-## Trait Bounds
+## Mixin Bounds
 
 Constrain type parameters with `:`:
 
 ```riven
-pub def largest[T: Comparable](list: &Vec[T]) -> &T
-  let mut best = &list[0]
+def largest[T: Comparable](list: &Array[T]) -> &T
+  var best = &list[0]
   for item in list
     if item > best
       best = item
@@ -33,10 +33,10 @@ end
 
 ### Multiple Bounds
 
-Use `+` for multiple trait requirements:
+Use `+` for multiple mixin requirements:
 
 ```riven
-pub def log_and_save[T: Displayable + Serializable](item: &T)
+def log_and_save[T: Displayable + Serializable](item: &T)
   puts item.to_display
   save(item.serialize)
 end
@@ -46,29 +46,29 @@ end
 
 ```riven
 class Stack[T]
-  items: Vec[T]
+  items: Array[T]
 
   def init
-    self.items = Vec.new
+    self.items = Array.new
   end
 
-  pub def mut push(item: T)
+  def mut push(item: T)
     self.items.push(item)
   end
 
-  pub def mut pop -> Option[T]
+  def mut pop -> Option[T]
     self.items.pop
   end
 
-  pub def peek -> Option[&T]
+  def peek -> Option[&T]
     if self.items.is_empty
-      None
+      nil
     else
       Some(&self.items[self.items.len - 1])
     end
   end
 
-  pub def is_empty -> Bool
+  def is_empty -> Bool
     self.items.is_empty
   end
 end
@@ -101,7 +101,7 @@ end
 For complex constraints:
 
 ```riven
-pub def merge[A, B, C](left: &A, right: &B) -> C
+def merge[A, B, C](left: &A, right: &B) -> C
   where A: Iterable[Item = Int],
         B: Iterable[Item = Int],
         C: FromIterator[Int]
@@ -109,21 +109,21 @@ pub def merge[A, B, C](left: &A, right: &B) -> C
 end
 ```
 
-## Conditional Implementation
+## Conditional Methods (Extensions)
 
-Add methods only when type parameters meet certain bounds:
+Use an `extension` block to add methods to a generic type — optionally gated by a `where` clause. The class body stays focused on the unconditional surface; conditional methods live in `extension` blocks alongside it.
 
 ```riven
-# All Containers get these methods
-impl[T] Container[T]
-  pub def count -> Int
+# All Containers get this method (unconditional extension)
+extension Container[T]
+  def count -> Int
     self.items.len
   end
 end
 
 # Only Containers of Displayable types get print_all
-impl[T: Displayable] Container[T]
-  pub def print_all
+extension Container[T] where T: Displayable
+  def print_all
     for item in self.items
       puts item.to_display
     end
@@ -133,16 +133,26 @@ end
 
 ## Lifetime Parameters
 
-When returning references, you may need lifetime annotations:
+Lifetime parameters appear in the same `[...]` slot as type parameters. **Lowercase identifiers are lifetimes; uppercase identifiers are types.** No sigil.
 
 ```riven
-pub def longest['a](a: &'a String, b: &'a String) -> &'a String
-  if a.len > b.len
-    a
+def longest[a](x: &a String, y: &a String) -> &a String
+  if x.len > y.len
+    x
   else
-    b
+    y
   end
 end
 ```
 
-Most of the time, lifetime elision rules handle this automatically and you don't need explicit annotations.
+Lifetimes can mix freely with type parameters:
+
+```riven
+class Slice[T, a]
+  data: &a Array[T]
+  start: USize
+  len: USize
+end
+```
+
+Most of the time, lifetime elision rules handle this automatically and you don't need explicit lifetime annotations. Spell them out only when the compiler asks for them.

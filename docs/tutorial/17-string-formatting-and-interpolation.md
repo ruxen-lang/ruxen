@@ -1,14 +1,14 @@
 # String Formatting and Interpolation
 
-> **See also:** [Spec — std::fmt](../specs/stdlib/fmt.spec.md).  This
+> **See also:** [Spec — std.fmt](../specs/stdlib/fmt.spec.md).  This
 > tutorial is the user-facing companion; the spec is the source of
 > truth for the compiler's behaviour.
 
 Riven gives you three layers for turning values into strings:
 
 1. **Interpolation** — `"hello #{name}"` inline in any string literal.
-2. **The `Display` trait** — how *your* types render in interpolation.
-3. **The `Debug` trait** — `"#{x:?}"` for diagnostic output, usually
+2. **The `Display` mixin** — how *your* types render in interpolation.
+3. **The `Debug` mixin** — `"#{x:?}"` for diagnostic output, usually
    via `derive Debug`.
 
 ---
@@ -32,17 +32,17 @@ hello, world! count = 42
 ```
 
 The compiler routes every interpolated expression through the
-`Display::fmt` dispatch path:
+`Display.fmt` dispatch path:
 
 ```text
 fmt = Formatter.new()
-{T}_fmt(value, fmt)          # T_fmt = Display impl for the value's type
+{T}_fmt(value, fmt)          # T_fmt = Display fmt for the value's type
 buf = fmt.buffer()           # consumes the Formatter, returns String
 ```
 
 For primitives (`Char`, `Int`, `Float`, `Bool`, `String`) the compiler
 synthesises the `T_fmt` function automatically.  For your own types,
-write an `impl Display for T` (see §4).
+include the `Display` mixin and provide a `fmt` method (see §4).
 
 ## 2. Debug interpolation: `"#{x:?}"`
 
@@ -55,7 +55,6 @@ struct Point
   x: Int
   y: Int
 
-  derive Debug
 end
 
 def main
@@ -79,12 +78,11 @@ enum Color
   Blue
   Custom { r: Int, g: Int, b: Int }
 
-  derive Debug
 end
 
 def main
-  puts "#{Color::Red:?}"
-  puts "#{Color::Custom { r: 10, g: 20, b: 30 }:?}"
+  puts "#{Color.Red:?}"
+  puts "#{Color.Custom { r: 10, g: 20, b: 30 }:?}"
 end
 ```
 
@@ -226,9 +224,9 @@ class Money
 
   def init(@cents: Int)
   end
-end
 
-impl Display for Money
+  include Display
+
   def fmt(f: &mut Formatter) -> Result[(), FmtError]
     let _ = f.write_str("$")
     f.write_str("#{self.cents}")
@@ -249,13 +247,13 @@ price: $4250
 
 Things to note:
 
-- `fmt` takes `&mut Formatter`, not `self` explicitly — `self` is
-  implicit on impl methods, same as elsewhere in Riven.
+- `fmt` takes `&mut Formatter` explicitly; `self` is the implicit
+  reading receiver, same as elsewhere in Riven.
 - `f.write_str` returns `Result[(), FmtError]`.  Returning that
   result directly from `fmt` is idiomatic; `let _ = ...` discards
   earlier intermediate calls.
 - Inside `fmt` you can use interpolation `"#{...}"` itself — that
-  inner interpolation routes through `Display::fmt` again (`Int_fmt`
+  inner interpolation routes through `Display.fmt` again (`Int_fmt`
   in this case).
 
 ### 4.1 User `Display` plus format specs
@@ -268,7 +266,7 @@ padding at finalize time.  Precision is type-specific and your
 
 ## 5. `Formatter` helpers
 
-Inside an `impl Display`, the formatter exposes:
+Inside a class that includes `Display`, the formatter exposes:
 
 | Method                | Returns                | Notes                          |
 |-----------------------|------------------------|--------------------------------|
@@ -288,9 +286,9 @@ output and let the compiler call `buffer()` at the call site.
 ## 6. Common pitfalls
 
 - **`derive Debug` only.** A bare `"#{x}"` for a type that derives
-  `Debug` but does **not** implement `Display` falls back to the
-  Debug path (so you still see something useful).  Once you add an
-  `impl Display for T`, the bare form picks Display automatically.
+  `Debug` but does **not** include `Display` falls back to the
+  Debug path (so you still see something useful).  Once the type
+  includes `Display`, the bare form picks Display automatically.
 - **Width on `:?`.** The Debug path bypasses the Formatter today, so
   `"#{x:?}"` ignores width / align / fill.  This is a documented v1
   limitation (see [fmt.spec.md Out of scope](../specs/stdlib/fmt.spec.md)).

@@ -30,7 +30,7 @@ let s = Shape.Circle(5.0)
 ```riven
 enum Option[T]
   Some(T)
-  None
+  nil
 end
 
 enum Result[T, E]
@@ -58,14 +58,14 @@ end
 
 ## Option[T]
 
-Riven has no `nil` or `null`. Optional values use `Option[T]`:
+Riven has no nullable references for ordinary values. (`nil` exists only as a raw-pointer literal in `unsafe`/FFI contexts — see [Chapter 14](14-ffi.md) and [Chapter 15](15-unsafe.md).) Optional values use `Option[T]`:
 
 ```riven
 def find_user(id: Int) -> Option[User]
   if id == 42
     Some(User.new("Alice", 30))
   else
-    None
+    nil
   end
 end
 ```
@@ -78,7 +78,7 @@ let user = find_user(42)
 # Pattern match
 match user
   Some(u) -> puts u.name
-  None    -> puts "not found"
+  nil    -> puts "not found"
 end
 
 # If-let
@@ -92,7 +92,7 @@ let name = find_user(42)?.name       # Option[String]
 # Default value
 let name = find_user(42).unwrap_or(default_user)
 
-# Panic on None (use sparingly!)
+# Panic on nil (use sparingly!)
 let name = find_user(42).unwrap!
 let name = find_user(42).expect!("user 42 must exist")
 ```
@@ -113,7 +113,7 @@ end
 
 ### The `?` Operator
 
-`?` propagates errors — returns early on `Err` or `None`:
+`?` propagates errors — returns early on `Err` or `nil`:
 
 ```riven
 def load_config(path: &str) -> Result[Config, AppError]
@@ -130,9 +130,9 @@ enum AppError
   NotFound(resource: String)
   Validation(message: String)
   Io(IoError)
-end
 
-impl Error for AppError
+  include Error
+
   def message -> String
     match self
       AppError.NotFound(r)   -> "Not found: #{r}"

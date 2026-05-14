@@ -2,23 +2,23 @@
 
 ## Defining Modules
 
-Group related code with `module`:
+Group related code with `module`. Items inside a module body are **public by default**; use a `private` section marker to gate subsequent declarations.
 
 ```riven
 module Http
-  pub class Request
+  class Request
     url: String
     method: String
     def init(@url: String, @method: String) end
   end
 
-  pub class Response
+  class Response
     status: Int
     body: String
     def init(@status: Int, @body: String) end
   end
 
-  pub def get(url: &str) -> Result[Response, HttpError]
+  def get(url: &str) -> Result[Response, HttpError]
     # ...
   end
 end
@@ -29,14 +29,14 @@ end
 ```riven
 module App
   module Models
-    pub class User
+    class User
       name: String
       def init(@name: String) end
     end
   end
 
   module Services
-    pub def create_user(name: String) -> User
+    def create_user(name: String) -> User
       User.new(name)
     end
   end
@@ -64,6 +64,15 @@ use Http.{ Request, Response }
 use Http.Client as HC
 ```
 
+### Package-Relative Imports
+
+The compilation unit is a **package**. Use `package` to refer to "this package" in an import path:
+
+```riven
+use package.utils.format
+use package.models.User
+```
+
 ### Using Imported Names
 
 ```riven
@@ -74,19 +83,19 @@ let req = Request.new("https://example.com", "GET")
 
 ## Visibility Rules
 
-Items are **private by default**. Mark items as `pub` to make them accessible outside their module:
+Items inside a module are **public by default**. A `private` section marker inside a module body makes subsequent declarations module-local; a `protected` section marker scopes them to subclass-visible.
 
 ```riven
 module Database
-  # Private — only accessible within Database module
-  def connect_internal -> Connection
+  def query(sql: &str) -> Result[Rows, DbError]
+    let conn = connect_internal()
     # ...
   end
 
-  # Public — accessible from outside
-  pub def query(sql: &str) -> Result[Rows, DbError]
-    let conn = connect_internal()
-    # ...
+  private
+
+  def connect_internal -> Connection
+    # only accessible inside Database
   end
 end
 ```

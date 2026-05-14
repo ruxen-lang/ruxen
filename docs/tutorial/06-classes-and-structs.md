@@ -7,12 +7,12 @@ Classes are heap-allocated, support inheritance, and have reference semantics fo
 ```riven
 class User
   name: String
-  pub age: Int
+  age: Int
 
   def init(@name: String, @age: Int)
   end
 
-  pub def display -> String
+  def display -> String
     "#{self.name} (age #{self.age})"
   end
 end
@@ -23,11 +23,25 @@ puts user.display
 
 ### Field Visibility
 
-| Modifier | Access |
-|----------|--------|
-| (none) | Private — only accessible within the class |
-| `pub` | Public — accessible from anywhere |
+Fields and methods are **public by default**. Use the `private` and `protected` section markers inside the class body to gate subsequent declarations until the next marker.
+
+| Section marker | Access |
+|----------------|--------|
+| (default) | Public — accessible from anywhere |
+| `private` | Private — only accessible within the class |
 | `protected` | Accessible from the class and its subclasses |
+
+```riven
+class Account
+  name: String              # public field
+
+  private
+  audit_id: Int             # private field
+
+  protected
+  internal_notes: String    # protected field
+end
+```
 
 ### Constructor Auto-Assign
 
@@ -45,29 +59,31 @@ end
 
 ### Method Self-Modes
 
+Every method has a relationship to its receiver — *reading*, *mutating*, *consuming*, or *class-method* (no receiver).
+
 ```riven
 class Account
   balance: Int
 
   def init(@balance: Int) end
 
-  # &self — immutable borrow (default)
-  pub def get_balance -> Int
+  # Reading method — borrows the receiver immutably
+  def get_balance -> Int
     self.balance
   end
 
-  # &mut self — mutable borrow
-  pub def mut deposit(amount: Int)
+  # Mutating method — borrows the receiver mutably
+  def mut deposit(amount: Int)
     self.balance += amount
   end
 
-  # self — takes ownership, consumes the instance
-  pub def consume close -> Int
+  # Consuming method — takes ownership of the receiver
+  def consume close -> Int
     puts "Account closed"
     self.balance
   end
 
-  # No self — class method
+  # Class method — no receiver
   def self.create(initial: Int) -> Account
     Account.new(initial)
   end
@@ -82,35 +98,41 @@ Classes can inherit from one parent with `<`:
 class Animal
   name: String
   def init(@name: String) end
-  pub def speak -> String { "..." }
+  def speak -> String { "..." }
 end
 
 class Dog < Animal
-  pub def speak -> String
+  def speak -> String
     "Woof! I'm #{self.name}"
   end
 end
 
 class Cat < Animal
-  pub def speak -> String
+  def speak -> String
     "Meow! I'm #{self.name}"
   end
 end
 ```
 
-### Inline Trait Implementation
+### Adopting a Mixin
 
-Implement traits directly inside the class body:
+To adopt a mixin (a contract-and-provision unit — see [Chapter 8](08-traits.md)), use the `include` directive in the class body. The mixin's required methods become obligations; default methods are pulled in as if defined inline.
 
 ```riven
+mixin Displayable
+  def to_display -> String
+end
+
 class User
   name: String
-  def init(@name: String) end
+  email: String
 
-  impl Displayable
-    def to_display -> String
-      self.name.clone
-    end
+  def init(@name: String, @email: String) end
+
+  include Displayable
+
+  def to_display -> String
+    "#{self.name} <#{self.email}>"
   end
 end
 ```
@@ -128,21 +150,22 @@ end
 let p = Point.new(3.0, 4.0)
 ```
 
-### Deriving Traits
+### Deriving Mixins
 
-Structs can derive `Copy` if all fields are Copy:
+Structs can derive `Copy`, `Clone`, and other supported mixins via an in-body `derive` directive:
 
 ```riven
 struct Color
   r: UInt8
   g: UInt8
   b: UInt8
-  derive Copy, Clone
 end
 
 let red = Color.new(255, 0, 0)
 let also_red = red               # copy, both valid
 ```
+
+See [Chapter 23](23-attributes.md) for the full set of derivable mixins.
 
 ### Structs vs Classes
 
@@ -153,7 +176,7 @@ let also_red = red               # copy, both valid
 | Copy | No (unless all fields Copy) | Yes (with `derive Copy`) |
 | Default semantics | Move | Move (Copy if derived) |
 | Methods | Yes | Yes |
-| Trait impl | Yes | Yes |
+| Mixin inclusion | Yes | Yes |
 
 ## Newtypes
 
@@ -173,21 +196,21 @@ let email = Email(String.new("user@example.com"))
 
 ```riven
 class Container[T]
-  items: Vec[T]
+  items: Array[T]
 
   def init
-    self.items = Vec.new
+    self.items = Array.new
   end
 
-  pub def mut add(item: T)
+  def mut add(item: T)
     self.items.push(item)
   end
 
-  pub def count -> Int
+  def count -> Int
     self.items.len
   end
 end
 
-let mut box = Container[String].new
+var box = Container[String].new
 box.add(String.new("hello"))
 ```

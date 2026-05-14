@@ -27,8 +27,8 @@ end
 ```
 
 Riven's design follows Rust's `min_const_generics` plus simple
-arithmetic on const expressions.  No general `const fn` evaluation;
-no recursion or branching at the const level.
+arithmetic on const expressions.  No general compile-time-function
+evaluation; no recursion or branching at the const level.
 
 ---
 
@@ -38,11 +38,11 @@ The parser accepts `const NAME: Type` anywhere a generic parameter
 can go:
 
 ```riven
-struct Vector[T, const N: USize] end         # struct
-class SmallVec[T, const N: USize] end        # class
-def rotate[const K: USize](x: Int) end       # fn
-trait FixedBuffer[const CAP: USize] end      # trait
-impl[T, const N: USize] SmallVec[T, N] end   # impl
+struct Vector[T, const N: USize] end             # struct
+class SmallVec[T, const N: USize] end            # class
+def rotate[const K: USize](x: Int) end           # function
+mixin FixedBuffer[const CAP: USize] end          # mixin
+extension SmallVec[T, const N: USize] end        # extension
 ```
 
 Multiple const params and mixed type/const ordering both work:
@@ -103,9 +103,9 @@ Two different source forms that denote the same compile-time integer
 produce **the same type** thanks to a normal-form rewriter:
 
 ```riven
-fn need_four(v: Vector[Int, 4]) end
+def need_four(v: Vector[Int, 4]) end
 
-fn main
+def main
   need_four(Vector.new(0) : Vector[Int, 2 + 2])   # OK — 2 + 2 folds to 4
   need_four(Vector.new(0) : Vector[Int, 4 * 1])   # OK — 4 * 1 folds to 4
   need_four(Vector.new(0) : Vector[Int, 4 + 0])   # OK — N + 0 folds to N (and 4)
@@ -226,10 +226,10 @@ Everything else listed in spec §B1–§B8 is wired through.
 
 These are explicit non-goals — they won't ship even in v2.next:
 
-- **Arbitrary `const fn`** (Zig's `comptime` model is a separate feature).
+- **Arbitrary compile-time-evaluated functions** (Zig's `comptime` model is a separate feature).
 - **Floating-point const generics** (`NaN != NaN` breaks type equality).
 - **`String` / `&str` const generics**.
-- **Const-generic type parameters** (`fn foo[const T: Type]`).
+- **Const-generic type parameters** (`def foo[const T: Type]`).
 - **Const-generic specialization**.
 - **Defaults for const generics** (`const N: USize = 4`).
 - **Inference of const arguments** (Rust says no in `min_const_generics`).
@@ -247,4 +247,4 @@ named test.
 ---
 
 **Next:** [Chapter 22 — Concurrency Primitives](22-concurrency-primitives.md)
-covers the next big surface (Thread, Mutex, Arc).
+covers the next big surface (Thread, Mutex, SharedSync).

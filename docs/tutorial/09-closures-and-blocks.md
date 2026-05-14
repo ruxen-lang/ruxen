@@ -34,9 +34,9 @@ puts add.(3, 4)                    # 7
 Closure parameter types are usually inferred from context:
 
 ```riven
-let nums = vec![1, 2, 3]
+let nums = array![1, 2, 3]
 
-# `n` is inferred as &Int from Vec[Int]
+# `n` is inferred as &Int from Array[Int]
 nums.each { |n| puts n }
 
 # Explicit types when needed
@@ -48,7 +48,7 @@ let parse = { |s: &str| s.parse_int }
 Closures power Riven's iterator chain:
 
 ```riven
-let nums = vec![1, 2, 3, 4, 5, 6]
+let nums = array![1, 2, 3, 4, 5, 6]
 
 let result = nums
   .filter { |n| n % 2 == 0 }
@@ -82,7 +82,7 @@ let multiply = { |x: Int| x * multiplier }  # captures `multiplier`
 When a closure needs to own its captures (e.g., returned from a function):
 
 ```riven
-def make_adder(n: Int) -> impl Fn(Int) -> Int
+def make_adder(n: Int) -> some Fn(Int) -> Int
   move { |x| x + n }
 end
 

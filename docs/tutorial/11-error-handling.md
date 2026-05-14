@@ -7,7 +7,7 @@ Riven has **no exceptions**. All errors are values, handled through `Result[T, E
 Functions that can fail return `Result`:
 
 ```riven
-pub def parse_number(input: &str) -> Result[Int, String]
+def parse_number(input: &str) -> Result[Int, String]
   match input.trim.parse_int
     Ok(n)  -> Ok(n)
     Err(_) -> Err(String.new("not a number: #{input}"))
@@ -20,7 +20,7 @@ end
 `?` is the primary way to handle errors. It returns early on `Err`, unwraps on `Ok`:
 
 ```riven
-pub def process(path: &str) -> Result[Data, AppError]
+def process(path: &str) -> Result[Data, AppError]
   let text = read_file(path)?          # early return if Err
   let parsed = parse_data(&text)?      # early return if Err
   validate(parsed)                      # returns Result
@@ -30,7 +30,7 @@ end
 Without `?`, you'd have to write:
 
 ```riven
-pub def process(path: &str) -> Result[Data, AppError]
+def process(path: &str) -> Result[Data, AppError]
   let text = match read_file(path)
     Ok(t)  -> t
     Err(e) -> return Err(e)
@@ -65,7 +65,7 @@ result.map_err { |e| wrap(e) }    # transform Err value
 For values that may or may not exist:
 
 ```riven
-pub def find(id: Int) -> Option[User]
+def find(id: Int) -> Option[User]
   # ...
 end
 ```
@@ -76,7 +76,7 @@ end
 let maybe_user = find(42)
 
 maybe_user.unwrap_or(default)      # value or default
-maybe_user.unwrap!                 # panics on None
+maybe_user.unwrap!                 # panics on nil
 maybe_user.map { |u| u.name }     # transform if Some
 ```
 
@@ -91,24 +91,24 @@ let name = find_user(42)?.profile?.display_name
 let name = match find_user(42)
   Some(user) -> match user.profile
     Some(profile) -> profile.display_name
-    None -> None
+    nil -> nil
   end
-  None -> None
+  nil -> nil
 end
 ```
 
 ## Custom Error Types
 
-Define your own error types as enums:
+Define your own error types as enums. Include the `Error` mixin to participate in the standard error surface.
 
 ```riven
 enum AppError
   NotFound(resource: String)
   InvalidInput(message: String)
   Io(IoError)
-end
 
-impl Error for AppError
+  include Error
+
   def message -> String
     match self
       AppError.NotFound(r)      -> "Not found: #{r}"
@@ -121,17 +121,19 @@ end
 
 ### Error Conversion
 
-Implement `Into` for automatic conversion with `?`:
+Include the `Into[AppError]` mixin on the source error to enable automatic conversion through `?`:
 
 ```riven
-impl Into[AppError] for IoError
+extension IoError
+  include Into[AppError]
+
   def consume into -> AppError
     AppError.Io(self)
   end
 end
 
 # Now ? automatically converts IoError to AppError
-pub def load(path: &str) -> Result[String, AppError]
+def load(path: &str) -> Result[String, AppError]
   File.read_string(path)?    # IoError converted to AppError
 end
 ```
@@ -143,7 +145,7 @@ For bugs and invariant violations — not for expected errors:
 ```riven
 panic!("this should never happen")
 
-let value = option.unwrap!                  # panics on None
+let value = option.unwrap!                  # panics on nil
 let value = result.expect!("must succeed")  # panics on Err
 ```
 
