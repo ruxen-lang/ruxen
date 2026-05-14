@@ -149,7 +149,7 @@ pub const REGISTRY: &[CodeInfo] = &[
     },
     CodeInfo {
         code: "E0703",
-        title: "const-arg expression overflows during evaluation (reserved)",
+        title: "const expression overflows or divides by zero during evaluation",
     },
     CodeInfo {
         code: "E0704",

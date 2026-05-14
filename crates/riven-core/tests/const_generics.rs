@@ -1318,6 +1318,140 @@ end
     assert_eq!(unwrap_class(lhs), unwrap_class(rhs), "4 * 1 must normalise to 4");
 }
 
+// ── Stage 8.S4 follow-up: E0703 overflow / div-zero surfacing ───────
+//
+// After the S8.S4 normal-form pass, pure-literal sub-trees whose
+// eval failed (overflow / division-by-zero) survive as `Op(Lit, _,
+// Lit)` rather than folding to a single `Lit`.  The resolver runs
+// `check_const_expr_eval_errors` on the normalised result; that
+// helper calls `eval(empty)` and maps the evaluator's `Overflow` /
+// `DivisionByZero` variants to E0703 against the source span.
+// Param-bearing trees are deferred (`Err(Unresolved)` is silenced)
+// because their overflow status depends on the instantiation.
+
+fn typecheck_diag_codes(src: &str) -> Vec<String> {
+    let mut lx = riven_core::lexer::Lexer::new(src);
+    let toks = lx.tokenize().expect("lex");
+    let mut p = riven_core::parser::Parser::new(toks);
+    let prog = p.parse().expect("parse");
+    let result = riven_core::typeck::type_check(&prog);
+    result
+        .diagnostics
+        .iter()
+        .filter(|d| d.level == riven_core::diagnostics::DiagnosticLevel::Error)
+        .filter_map(|d| d.code.clone())
+        .collect()
+}
+
+#[test]
+fn array_size_overflow_emits_e0703() {
+    // i64::MAX (9_223_372_036_854_775_807) — the largest literal
+    // the lexer accepts; `* 4` produces 36_893_488_147_419_103_228
+    // which exceeds u64::MAX (18_446_744_073_709_551_615), so
+    // the checked u64 multiplication in `eval` returns
+    // `Err(Overflow)` and the resolver surfaces E0703.
+    let src = r#"
+struct Buf
+  data: [Int; 9223372036854775807 * 4]
+end
+"#;
+    let codes = typecheck_diag_codes(src);
+    assert!(
+        codes.iter().any(|c| c == "E0703"),
+        "expected E0703 for array-size overflow; got: {:?}",
+        codes
+    );
+}
+
+#[test]
+fn array_size_division_by_zero_emits_e0703() {
+    let src = r#"
+struct Bad
+  data: [Int; 10 / 0]
+end
+"#;
+    let codes = typecheck_diag_codes(src);
+    assert!(
+        codes.iter().any(|c| c == "E0703"),
+        "expected E0703 for array-size div-zero; got: {:?}",
+        codes
+    );
+}
+
+#[test]
+fn const_arg_position_overflow_emits_e0703() {
+    let src = r#"
+class Vector[T, const N: USize]
+  data: USize
+  def init(@data: USize)
+  end
+end
+
+def take_vec(v: Vector[Int, 9223372036854775807 * 4])
+end
+"#;
+    let codes = typecheck_diag_codes(src);
+    assert!(
+        codes.iter().any(|c| c == "E0703"),
+        "expected E0703 for const-arg overflow; got: {:?}",
+        codes
+    );
+}
+
+#[test]
+fn array_size_param_arithmetic_does_not_emit_e0703() {
+    // Param-bearing trees (`N + 1`) defer the overflow check to
+    // monomorphization; resolve must NOT emit E0703 here even
+    // though some instantiations of N would overflow.
+    let src = r#"
+struct Buf[T, const N: USize]
+  data: [T; N + 1]
+end
+"#;
+    let codes = typecheck_diag_codes(src);
+    assert!(
+        !codes.iter().any(|c| c == "E0703"),
+        "did not expect E0703 for param-bearing arithmetic; got: {:?}",
+        codes
+    );
+}
+
+#[test]
+fn array_size_bare_literal_does_not_emit_e0703() {
+    // No-arithmetic baseline — the `Lit(4)` form has nothing to
+    // evaluate.  Pin the absence so a future regression of the
+    // helper doesn't start spamming E0703 on every array type.
+    let src = r#"
+struct Buf
+  data: [Int; 4]
+end
+"#;
+    let codes = typecheck_diag_codes(src);
+    assert!(
+        !codes.iter().any(|c| c == "E0703"),
+        "did not expect E0703 for bare literal; got: {:?}",
+        codes
+    );
+}
+
+#[test]
+fn array_size_clean_arithmetic_does_not_emit_e0703() {
+    // Non-overflowing literal arithmetic constant-folds to `Lit(5)`
+    // pre-eval-check; the helper sees a `Lit`, `eval` returns
+    // `Ok(5)`, no diagnostic.
+    let src = r#"
+struct Buf
+  data: [Int; 2 + 3]
+end
+"#;
+    let codes = typecheck_diag_codes(src);
+    assert!(
+        !codes.iter().any(|c| c == "E0703"),
+        "did not expect E0703 for non-overflowing arithmetic; got: {:?}",
+        codes
+    );
+}
+
 #[test]
 fn const_arg_arithmetic_against_type_param_emits_e0704() {
     // Kind-check: arithmetic in a Type slot is still a kind

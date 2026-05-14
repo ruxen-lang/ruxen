@@ -4595,8 +4595,12 @@ impl Resolver {
                     // parens fold into `ConstExpr::Op` trees; S8.S4
                     // normalises identities (`N + 0 = N`, …) so
                     // `[T; N + 0]` and `[T; N]` produce the same
-                    // `Ty`.
+                    // `Ty`.  S8.S4 follow-up: pure-literal subtrees
+                    // that overflow or divide by zero surface as
+                    // E0703 here — they're invariant across
+                    // instantiations.
                     let n = lower_const_expr_from_expr(size_expr).normal_form();
+                    self.check_const_expr_eval_errors(&n, &size_expr.span);
                     Ty::Array(Box::new(elem_ty), n)
                 } else {
                     // Slice [T] — treat as Vec for now
@@ -4694,8 +4698,12 @@ impl Resolver {
             // the call site) also treats this as a const-arg slot.
             // S8.S4: rewrite to normal form so `Vector[T, N + 0]`
             // and `Vector[T, N]` produce the same `Ty::ConstArg`.
-            ast::TypeExpr::ConstExprArg { expr, .. } => {
-                Ty::ConstArg(lower_const_expr_from_expr(expr).normal_form())
+            // S8.S4 follow-up: surface pure-literal overflow /
+            // div-zero as E0703 against the source span.
+            ast::TypeExpr::ConstExprArg { expr, span } => {
+                let folded = lower_const_expr_from_expr(expr).normal_form();
+                self.check_const_expr_eval_errors(&folded, span);
+                Ty::ConstArg(folded)
             }
         }
     }
@@ -5259,6 +5267,48 @@ impl Resolver {
     fn error(&mut self, message: String, span: &Span) {
         self.diagnostics
             .push(Diagnostic::error(message, span.clone()));
+    }
+
+    /// T2.02 S8.S4 follow-up: surface pure-literal overflow /
+    /// div-zero in a `ConstExpr` as **E0703**.  Called immediately
+    /// after the S8.S4 normal-form pass at every const-arg /
+    /// array-size resolve site; the normalisation collapses
+    /// successful pure-literal `Op` nodes to `Lit`, so any `Op`
+    /// that survives with literal children is by definition an
+    /// eval failure and is invariant across instantiations.
+    ///
+    /// Param-bearing trees (`N + 1`, `M * 2`) surface
+    /// `Err(Unresolved(name))` from `eval` — those are *deferred*
+    /// to the monomorphization-side check (the spec's per-
+    /// instantiation eval surfacing pass that's still pending).
+    /// `Err(Malformed)` (parser recovery) is also skipped — the
+    /// parser already emitted its own diagnostic upstream.
+    fn check_const_expr_eval_errors(
+        &mut self,
+        expr: &crate::hir::types::ConstExpr,
+        span: &Span,
+    ) {
+        use crate::hir::types::ConstEvalError;
+        let bindings = std::collections::HashMap::new();
+        match expr.eval(&bindings) {
+            Ok(_) => {}
+            Err(ConstEvalError::Unresolved(_)) | Err(ConstEvalError::Malformed) => {}
+            Err(ConstEvalError::NotImplemented) => {}
+            Err(ConstEvalError::Overflow) => {
+                self.diagnostics.push(Diagnostic::error_with_code(
+                    "const expression overflows during evaluation".to_string(),
+                    span.clone(),
+                    "E0703",
+                ));
+            }
+            Err(ConstEvalError::DivisionByZero) => {
+                self.diagnostics.push(Diagnostic::error_with_code(
+                    "const expression divides by zero".to_string(),
+                    span.clone(),
+                    "E0703",
+                ));
+            }
+        }
     }
 }
 

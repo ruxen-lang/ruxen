@@ -8,6 +8,39 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- Phase 3 #07 follow-up: **E0703 surfacing for pure-literal const
+  overflow / division-by-zero**.  New
+  `Resolver::check_const_expr_eval_errors` runs immediately after
+  the S8.S4 normal-form pass at every `TypeExpr::Array { size }`
+  and `TypeExpr::ConstExprArg` resolve site.  It calls
+  `eval(empty)` on the normalised tree and maps
+  `ConstEvalError::Overflow` and `ConstEvalError::DivisionByZero`
+  to **E0703** with the source span of the const expression.
+
+  Pure-literal sub-trees whose eval failed survive the normaliser
+  as `Op(Lit, _, Lit)` (the successful pure-literal `Op` cases
+  collapse to `Lit`), so detection is local and accurate.  Trees
+  that mention a const-generic parameter return
+  `Err(Unresolved(name))` from eval and are silently skipped —
+  their overflow status depends on the instantiation, so the
+  check defers to the (still-pending) monomorphization-side pass
+  that needs the per-instantiation binding-threading prep work.
+
+  The registry / explain / docs trio refreshed:
+  - `codes::REGISTRY` title for E0703 dropped its "(reserved)"
+    qualifier and now reads "const expression overflows or
+    divides by zero during evaluation".
+  - `docs/errors/E0703.md` rewritten with concrete examples for
+    `+` overflow, `/0`, nested multiplication overflow, and a
+    note on why param-bearing trees aren't flagged.
+
+  Pin tests in `const_generics.rs`:
+  `array_size_overflow_emits_e0703` (`i64::MAX * 4` overflows
+  u64), `array_size_division_by_zero_emits_e0703`,
+  `const_arg_position_overflow_emits_e0703`,
+  `array_size_param_arithmetic_does_not_emit_e0703`
+  (`N + 1` deferred), `array_size_bare_literal_does_not_emit_e0703`,
+  `array_size_clean_arithmetic_does_not_emit_e0703`.
 - Phase 3 #07.S8.S4: `ConstExpr::normal_form()` rewriter canonicalises
   arithmetic trees so two source-level forms that denote the same
   compile-time integer produce the same `Ty::ConstArg`.  Rules
