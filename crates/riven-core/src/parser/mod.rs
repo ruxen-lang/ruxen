@@ -171,8 +171,8 @@ impl Parser {
                     }
                 }
             }
-            // Let binding → Statement
-            TokenKind::Let => {
+            // Let / var binding → Statement
+            TokenKind::Let | TokenKind::Var => {
                 let stmt = self.parse_statement();
                 if self.diagnostics.len() > saved_diags {
                     let diags = self.diagnostics[saved_diags..].to_vec();
@@ -522,13 +522,16 @@ impl Parser {
             match self.current_kind() {
                 TokenKind::Eof => return,
                 TokenKind::Let
+                | TokenKind::Var
                 | TokenKind::Def
                 | TokenKind::Async
                 | TokenKind::Class
                 | TokenKind::Struct
                 | TokenKind::Enum
                 | TokenKind::Trait
+                | TokenKind::Mixin
                 | TokenKind::Impl
+                | TokenKind::Extension
                 | TokenKind::Module
                 | TokenKind::Use
                 | TokenKind::If
@@ -567,9 +570,13 @@ impl Parser {
             TokenKind::Class => Some(TopLevelItem::Class(self.parse_class_def())),
             TokenKind::Struct => Some(TopLevelItem::Struct(self.parse_struct_def())),
             TokenKind::Enum => Some(TopLevelItem::Enum(self.parse_enum_def())),
-            TokenKind::Trait => Some(TopLevelItem::Trait(self.parse_trait_def())),
-            TokenKind::Impl => Some(TopLevelItem::Impl(self.parse_impl_block(false))),
-            TokenKind::Unsafe if matches!(self.peek_kind(), TokenKind::Impl) => {
+            TokenKind::Trait | TokenKind::Mixin => {
+                Some(TopLevelItem::Trait(self.parse_trait_def()))
+            }
+            TokenKind::Impl | TokenKind::Extension => {
+                Some(TopLevelItem::Impl(self.parse_impl_block(false)))
+            }
+            TokenKind::Unsafe if matches!(self.peek_kind(), TokenKind::Impl | TokenKind::Extension) => {
                 self.advance(); // consume `unsafe`
                 Some(TopLevelItem::Impl(self.parse_impl_block(true)))
             }
@@ -1919,16 +1926,19 @@ impl Parser {
         self.skip_newlines();
 
         match self.current_kind() {
-            TokenKind::Let => Statement::Let(self.parse_let_binding()),
+            TokenKind::Let | TokenKind::Var => Statement::Let(self.parse_let_binding()),
             _ => Statement::Expression(self.parse_expression()),
         }
     }
 
     fn parse_let_binding(&mut self) -> LetBinding {
         let start = self.current_span();
-        self.advance(); // consume let
+        // `var x = ...` is the mutable form; `let x = ...` is immutable
+        // (with `let mut x = ...` accepted only during migration).
+        let var_form = matches!(self.current_kind(), TokenKind::Var);
+        self.advance(); // consume let | var
 
-        let mutable = self.eat(TokenKind::Mut);
+        let mutable = var_form || self.eat(TokenKind::Mut);
         let pattern = self.parse_pattern();
 
         let type_annotation = if self.eat(TokenKind::Colon) {

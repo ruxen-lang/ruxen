@@ -98,29 +98,37 @@ var bytes: Array[UInt8] = Array.new
 
 ### 3.2 Visibility
 
-Public by default. Section markers within `class`, `struct`,
-`module`, and `mixin` bodies gate subsequent declarations:
+Public by default. Three section markers — `public`, `private`,
+`protected` — gate subsequent declarations within `class`, `struct`,
+`module`, and `mixin` bodies. Each marker stays in effect until the
+next marker or the end of the body:
 
 ```riven
 class Account
-  balance: Int                # public field
+  balance: Int                  # public field (default)
 
   def init(@balance: Int) end
 
-  def get_balance -> Int      # public method
+  def get_balance -> Int        # public method
     self.balance
   end
 
   private
 
-  def normalize_balance       # private — until next marker
+  def normalize_balance         # private — until next marker
     self.balance.max(0)
   end
 
   protected
 
-  def admin_dump -> String    # protected — subclass-visible
+  def admin_dump -> String      # protected — subclass-visible
     "Account(#{self.balance})"
+  end
+
+  public                        # switch back to public
+
+  def freeze -> Account         # public again
+    Account.new(self.balance)
   end
 end
 ```
@@ -129,16 +137,31 @@ Field visibility uses the same markers:
 
 ```riven
 class User
-  name: String                # public field
+  name: String                  # public field
+  email: String                 # public field
 
   private
-  audit_id: Int               # private field
+  audit_id: Int                 # private field
+  audit_log: Array[String]      # private field
 end
 ```
 
-The Ruby `private :method_name` alternate form is also accepted at
-the end of the body for forward-declared visibility (parser
-preserves source order, applies as a final pass).
+A method-name-list form is also accepted, matching Ruby:
+
+```riven
+class User
+  def helper_a; ...; end
+  def helper_b; ...; end
+  def public_thing; ...; end
+
+  private :helper_a, :helper_b
+end
+```
+
+This form is applied as a final pass after the body is parsed — it
+re-marks the listed methods, overriding any section marker they
+were under. Useful for forward-declared visibility when readability
+benefits from defining helpers near where they're used.
 
 ### 3.3 Lifetimes
 
@@ -572,7 +595,7 @@ in `!`.
 | Modes          | `mut`, `consume`, `inline`                                               |
 | Control flow   | `if`, `elsif`, `else`, `match`, `while`, `for`, `in`, `loop`, `do`, `end`, `break`, `continue` |
 | Type system    | `where`, `as`, `some`, `any`, `layout`, `include`, `extension`           |
-| Visibility     | `private`, `protected`                                                   |
+| Visibility     | `public`, `private`, `protected`                                         |
 | Modules        | `module`, `use`, `package`                                               |
 | Safety         | `unsafe`                                                                 |
 | Literals       | `true`, `false`, `nil`, `Some`, `Ok`, `Err`                              |

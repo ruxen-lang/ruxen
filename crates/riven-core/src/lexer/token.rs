@@ -129,6 +129,7 @@ pub enum TokenKind {
     // ── Keywords: Functions & Methods ──
     Def,
     Pub,
+    Public,    // `public` — section marker; switches subsequent decls to public
     Private,   // `private` — section marker; replaces `pub` prefix model
     Protected, // already a section marker
     Consume,
@@ -360,6 +361,7 @@ pub fn lookup_keyword(ident: &str) -> Option<TokenKind> {
         // Functions & Methods
         "def" => Some(TokenKind::Def),
         "pub" => Some(TokenKind::Pub),
+        "public" => Some(TokenKind::Public),
         "private" => Some(TokenKind::Private),
         "protected" => Some(TokenKind::Protected),
         "consume" => Some(TokenKind::Consume),

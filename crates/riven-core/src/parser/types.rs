@@ -44,11 +44,11 @@ impl Parser {
             // Array type: [Type; size]
             TokenKind::LBracket => self.parse_array_type(),
 
-            // impl Trait
-            TokenKind::Impl => self.parse_impl_trait_type(),
+            // `some Mixin` (preferred) or `impl Trait` (migration)
+            TokenKind::SomeBound | TokenKind::Impl => self.parse_impl_trait_type(),
 
-            // dyn Trait
-            TokenKind::Dyn => self.parse_dyn_trait_type(),
+            // `any Mixin` (preferred) or `dyn Trait` (migration)
+            TokenKind::AnyBound | TokenKind::Dyn => self.parse_dyn_trait_type(),
 
             // Fn type: Fn(T1, T2) -> R
             TokenKind::TypeIdentifier(ref name) if name == "Fn" => self.parse_fn_type(),
