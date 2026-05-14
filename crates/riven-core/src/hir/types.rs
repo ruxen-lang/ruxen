@@ -43,14 +43,17 @@ impl ConstExpr {
         }
     }
 
-    /// T2.02 S7: evaluate the const expression against a binding map.
+    /// T2.02 S7/S8: evaluate the const expression against a binding map.
     ///
     /// - `Lit(n)`   → `Ok(n)`.
     /// - `Param(n)` → `Ok(value)` if `n` is bound; `Err(Unresolved)`
     ///                 otherwise (the caller may treat this as an
     ///                 "unresolved param" condition rather than an
     ///                 error, depending on context).
-    /// - `Op(...)`  → S8 wiring; today returns `Err(NotImplemented)`.
+    /// - `Op(a, ⊙, b)` → recurse on both sides, then apply checked
+    ///                 `u64` arithmetic.  Wrap-around / borrow surface
+    ///                 as `Err(Overflow)`; `_/0` as
+    ///                 `Err(DivisionByZero)`.
     /// - `Error`    → `Err(Malformed)` — propagated from a parser
     ///                 recovery path; should not reach a code-gen
     ///                 layout call.
@@ -64,7 +67,24 @@ impl ConstExpr {
                 .get(name)
                 .copied()
                 .ok_or_else(|| ConstEvalError::Unresolved(name.clone())),
-            ConstExpr::Op(_, _, _) => Err(ConstEvalError::NotImplemented),
+            ConstExpr::Op(a, op, b) => {
+                let av = a.eval(bindings)?;
+                let bv = b.eval(bindings)?;
+                match op {
+                    ConstOp::Add => av.checked_add(bv).ok_or(ConstEvalError::Overflow),
+                    // `u64` has no negatives — borrow below zero surfaces as Overflow,
+                    // matching the spec's single "E-CONST-OVERFLOW" diagnostic slot.
+                    ConstOp::Sub => av.checked_sub(bv).ok_or(ConstEvalError::Overflow),
+                    ConstOp::Mul => av.checked_mul(bv).ok_or(ConstEvalError::Overflow),
+                    ConstOp::Div => {
+                        if bv == 0 {
+                            Err(ConstEvalError::DivisionByZero)
+                        } else {
+                            Ok(av / bv)
+                        }
+                    }
+                }
+            }
             ConstExpr::Error => Err(ConstEvalError::Malformed),
         }
     }
@@ -75,10 +95,16 @@ impl ConstExpr {
 pub enum ConstEvalError {
     /// A `Param(name)` couldn't be resolved against the bindings.
     Unresolved(String),
-    /// Arithmetic eval lands in S8.
+    /// Reserved for future eval modes that may temporarily lack support
+    /// (e.g. `where`-clause predicate eval before S9 lands).  No live
+    /// emit site post-S8.
     NotImplemented,
     /// Parser recovery produced a `ConstExpr::Error`.
     Malformed,
+    /// Checked arithmetic overflowed (or `u64` borrow went below zero).
+    Overflow,
+    /// `_ / 0` evaluated at monomorphization (E-CONST-DIV-ZERO).
+    DivisionByZero,
 }
 
 impl fmt::Display for ConstExpr {

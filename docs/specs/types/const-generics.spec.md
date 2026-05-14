@@ -22,15 +22,19 @@ no recursion or branching at the const level.
 
 | Stage | Scope                                                            | Status      |
 |-------|------------------------------------------------------------------|-------------|
-| S1    | Parser accepts `const N: Type` in generic-param positions        | shipping    |
-| S2    | Parser accepts integer literals as generic args at use sites     | pending     |
-| S3    | Resolver records `DefKind::ConstParam { ty }`; brings `N` into scope inside the type / fn body | pending |
-| S4    | HIR: `Ty::Array(Box<Ty>, ConstExpr)` + `ConstExpr` enum          | pending     |
-| S5    | Typeck: const args participate in unification; distinct const args produce distinct types | pending |
-| S6    | Monomorphization (M2): one MIR fn per `(type-args, const-args)` key | pending |
-| S7    | Codegen layout: arrays evaluate `ConstExpr` to a concrete size; `alloca` honours it | pending |
-| S8    | Arithmetic in const exprs (`+ - * /`), normal-form rewriter, overflow + div-zero diagnostics | pending |
+| S1    | Parser accepts `const N: Type` in generic-param positions        | shipped (b8a371c) |
+| S2    | Parser accepts integer literals as generic args at use sites     | shipped (bde3e1f) |
+| S3    | Resolver records `DefKind::ConstParam { ty }`; brings `N` into scope inside the type / fn body | shipped (3d2d7ac) |
+| S4    | HIR: `Ty::Array(Box<Ty>, ConstExpr)` + `ConstExpr` enum          | shipped (e2d073b) |
+| S5    | Typeck: const args participate in unification; distinct const args produce distinct types | shipped (afac3fc) |
+| S6    | Monomorphization (M2): one MIR fn per `(type-args, const-args)` key | shipped (a9fcb19 — `Ty::ConstArg` distinguishes instantiations; per-key MIR fn lowering tracked separately) |
+| S7    | Codegen layout: arrays evaluate `ConstExpr` to a concrete size; `alloca` honours it | shipped (bc6cca3 — evaluator + `layout_of` integration; per-instantiation binding threading is a follow-up) |
+| S8    | Arithmetic in const exprs (`+ - * /`), normal-form rewriter, overflow + div-zero diagnostics | in flight   |
 | S9    | `where` clause const predicates (`where N > 0`, `where N == M`)  | pending     |
+
+### S7 follow-up — per-instantiation bindings through layout
+
+The S7 evaluator integration sites all today's call site (`codegen/layout.rs::layout_of`) on an empty `&HashMap<String, u64>`.  This works for `[Int; 4]` (literal sizes), but a struct field `data: [T; N]` where `N` is a const param produces `Err(Unresolved("N"))` until the layout call learns to thread the per-instantiation binding map through.  Tracked as task before S9 lands, since `where`-clause predicates need the same plumbing.
 
 Each stage commits its own spec+tests+impl trio.  Behaviours below
 are tagged with the stage that lands them.

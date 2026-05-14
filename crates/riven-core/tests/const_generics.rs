@@ -604,3 +604,179 @@ end
         other => panic!("expected Named(Bar), got {:?}", other),
     }
 }
+
+// ── Stage 8: arithmetic in const exprs ──────────────────────────────
+//
+// B8 (S8.S1): `ConstExpr::Op` evaluator.  Recurses on both sides,
+// applies checked `u64` arithmetic, and propagates Unresolved /
+// Malformed errors from inner sub-trees.  Overflow on `+ - *` and
+// `_ / 0` surface as `ConstEvalError::Overflow` and
+// `ConstEvalError::DivisionByZero` respectively.  Parser-side
+// arithmetic (`Vector[Int, M + N]`, `[T; A * B]`) lands in
+// later S8 substages.
+
+#[test]
+fn const_expr_eval_op_basic_arithmetic() {
+    use riven_core::hir::types::{ConstExpr, ConstOp};
+    use std::collections::HashMap;
+
+    let empty: HashMap<String, u64> = HashMap::new();
+    let mk = |a: u64, op: ConstOp, b: u64| {
+        ConstExpr::Op(
+            Box::new(ConstExpr::Lit(a)),
+            op,
+            Box::new(ConstExpr::Lit(b)),
+        )
+    };
+
+    assert_eq!(mk(2, ConstOp::Add, 3).eval(&empty), Ok(5));
+    assert_eq!(mk(7, ConstOp::Sub, 3).eval(&empty), Ok(4));
+    assert_eq!(mk(4, ConstOp::Mul, 5).eval(&empty), Ok(20));
+    assert_eq!(mk(10, ConstOp::Div, 2).eval(&empty), Ok(5));
+}
+
+#[test]
+fn const_expr_eval_op_with_param() {
+    use riven_core::hir::types::{ConstExpr, ConstOp};
+    use std::collections::HashMap;
+
+    let mut bound: HashMap<String, u64> = HashMap::new();
+    bound.insert("N".to_string(), 4);
+
+    // N + 1 = 5
+    let expr = ConstExpr::Op(
+        Box::new(ConstExpr::Param("N".to_string())),
+        ConstOp::Add,
+        Box::new(ConstExpr::Lit(1)),
+    );
+    assert_eq!(expr.eval(&bound), Ok(5));
+}
+
+#[test]
+fn const_expr_eval_op_nested_precedence_preserved() {
+    use riven_core::hir::types::{ConstExpr, ConstOp};
+    use std::collections::HashMap;
+
+    let empty: HashMap<String, u64> = HashMap::new();
+    // (2 + 3) * 4 = 20 — the parser is responsible for grouping; the
+    // evaluator just walks the tree it gets.
+    let expr = ConstExpr::Op(
+        Box::new(ConstExpr::Op(
+            Box::new(ConstExpr::Lit(2)),
+            ConstOp::Add,
+            Box::new(ConstExpr::Lit(3)),
+        )),
+        ConstOp::Mul,
+        Box::new(ConstExpr::Lit(4)),
+    );
+    assert_eq!(expr.eval(&empty), Ok(20));
+
+    // 2 + 3 * 4 = 14 (right side grouped)
+    let expr = ConstExpr::Op(
+        Box::new(ConstExpr::Lit(2)),
+        ConstOp::Add,
+        Box::new(ConstExpr::Op(
+            Box::new(ConstExpr::Lit(3)),
+            ConstOp::Mul,
+            Box::new(ConstExpr::Lit(4)),
+        )),
+    );
+    assert_eq!(expr.eval(&empty), Ok(14));
+}
+
+#[test]
+fn const_expr_eval_op_division_by_zero() {
+    use riven_core::hir::types::{ConstEvalError, ConstExpr, ConstOp};
+    use std::collections::HashMap;
+
+    let empty: HashMap<String, u64> = HashMap::new();
+    let expr = ConstExpr::Op(
+        Box::new(ConstExpr::Lit(7)),
+        ConstOp::Div,
+        Box::new(ConstExpr::Lit(0)),
+    );
+    assert_eq!(expr.eval(&empty), Err(ConstEvalError::DivisionByZero));
+
+    // 0 / 0 also surfaces as DivisionByZero, not "indeterminate".
+    let expr = ConstExpr::Op(
+        Box::new(ConstExpr::Lit(0)),
+        ConstOp::Div,
+        Box::new(ConstExpr::Lit(0)),
+    );
+    assert_eq!(expr.eval(&empty), Err(ConstEvalError::DivisionByZero));
+}
+
+#[test]
+fn const_expr_eval_op_overflow() {
+    use riven_core::hir::types::{ConstEvalError, ConstExpr, ConstOp};
+    use std::collections::HashMap;
+
+    let empty: HashMap<String, u64> = HashMap::new();
+
+    let add_overflow = ConstExpr::Op(
+        Box::new(ConstExpr::Lit(u64::MAX)),
+        ConstOp::Add,
+        Box::new(ConstExpr::Lit(1)),
+    );
+    assert_eq!(add_overflow.eval(&empty), Err(ConstEvalError::Overflow));
+
+    // u64 borrow: 0 - 1 surfaces as Overflow per spec (single E-CONST-OVERFLOW slot).
+    let sub_underflow = ConstExpr::Op(
+        Box::new(ConstExpr::Lit(0)),
+        ConstOp::Sub,
+        Box::new(ConstExpr::Lit(1)),
+    );
+    assert_eq!(sub_underflow.eval(&empty), Err(ConstEvalError::Overflow));
+
+    let mul_overflow = ConstExpr::Op(
+        Box::new(ConstExpr::Lit(u64::MAX)),
+        ConstOp::Mul,
+        Box::new(ConstExpr::Lit(2)),
+    );
+    assert_eq!(mul_overflow.eval(&empty), Err(ConstEvalError::Overflow));
+}
+
+#[test]
+fn const_expr_eval_op_propagates_inner_errors() {
+    use riven_core::hir::types::{ConstEvalError, ConstExpr, ConstOp};
+    use std::collections::HashMap;
+
+    let empty: HashMap<String, u64> = HashMap::new();
+
+    // Unbound param on the right surfaces through Op.
+    let unresolved = ConstExpr::Op(
+        Box::new(ConstExpr::Lit(1)),
+        ConstOp::Add,
+        Box::new(ConstExpr::Param("M".to_string())),
+    );
+    assert_eq!(
+        unresolved.eval(&empty),
+        Err(ConstEvalError::Unresolved("M".to_string()))
+    );
+
+    // Parser-recovery `Error` on either side surfaces as Malformed.
+    let malformed = ConstExpr::Op(
+        Box::new(ConstExpr::Error),
+        ConstOp::Mul,
+        Box::new(ConstExpr::Lit(2)),
+    );
+    assert_eq!(malformed.eval(&empty), Err(ConstEvalError::Malformed));
+}
+
+#[test]
+fn array_layout_evaluates_const_expr_arithmetic() {
+    // [Int; 2 + 2] = 4 elements * 8 bytes = 32-byte layout.
+    use riven_core::codegen::layout::layout_of;
+    use riven_core::hir::types::{ConstExpr, ConstOp, Ty};
+    use riven_core::resolve::symbols::SymbolTable;
+
+    let symbols = SymbolTable::new();
+    let arith = ConstExpr::Op(
+        Box::new(ConstExpr::Lit(2)),
+        ConstOp::Add,
+        Box::new(ConstExpr::Lit(2)),
+    );
+    let layout = layout_of(&Ty::Array(Box::new(Ty::Int), arith), &symbols);
+    assert_eq!(layout.size, 32);
+    assert_eq!(layout.alignment, 8);
+}

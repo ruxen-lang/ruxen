@@ -8,6 +8,20 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- Phase 3 #07.S8.S1: `ConstExpr::eval` now implements the `Op` branch
+  for `+ - * /` against `u64` bindings.  Inner sub-trees are recursed
+  on first, so unresolved-param / parser-recovery errors propagate
+  unchanged.  Checked arithmetic on `+ - *` surfaces wrap-around as
+  `ConstEvalError::Overflow`; `u64` borrow on `Sub` (`0 - 1`) also
+  surfaces as `Overflow` — the spec reserves a single
+  `E-CONST-OVERFLOW` slot.  `_ / 0` surfaces as
+  `ConstEvalError::DivisionByZero` (E-CONST-DIV-ZERO).  Pin tests in
+  `const_generics.rs` cover basic add/sub/mul/div, mixed
+  param-on-left, nested precedence (`(2+3)*4` and right-grouped
+  `2+(3*4)`), every overflow direction, both error propagations,
+  and `[Int; 2+2]` round-tripping through `layout_of`.  Parser
+  acceptance of `+ - * /` in const-arg position is the S8.S2
+  follow-up.
 - Phase 2 #06.D4: `FormatSpec` (width / align / fill / precision) is
   applied at runtime.  `lower_interpolation` emits
   `Formatter_new_with_spec(w, p, a, f)` when the lex-captured spec is
