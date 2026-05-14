@@ -4592,8 +4592,11 @@ impl Resolver {
                     // Fixed-size array [T; N].  T2.02 stage 4: the
                     // size is captured as a `ConstExpr` rather than
                     // a bare `usize`.  T2.02 stage 8: `+ - * /` and
-                    // parens fold into `ConstExpr::Op` trees.
-                    let n = lower_const_expr_from_expr(size_expr);
+                    // parens fold into `ConstExpr::Op` trees; S8.S4
+                    // normalises identities (`N + 0 = N`, …) so
+                    // `[T; N + 0]` and `[T; N]` produce the same
+                    // `Ty`.
+                    let n = lower_const_expr_from_expr(size_expr).normal_form();
                     Ty::Array(Box::new(elem_ty), n)
                 } else {
                     // Slice [T] — treat as Vec for now
@@ -4689,8 +4692,10 @@ impl Resolver {
             // `lower_const_expr_from_expr` helper that S8.S2 uses
             // for `[T; expr]` array sizes.  The kind-check (above
             // the call site) also treats this as a const-arg slot.
+            // S8.S4: rewrite to normal form so `Vector[T, N + 0]`
+            // and `Vector[T, N]` produce the same `Ty::ConstArg`.
             ast::TypeExpr::ConstExprArg { expr, .. } => {
-                Ty::ConstArg(lower_const_expr_from_expr(expr))
+                Ty::ConstArg(lower_const_expr_from_expr(expr).normal_form())
             }
         }
     }

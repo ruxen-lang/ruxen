@@ -816,7 +816,12 @@ fn resolve_first_struct_field_ty(
 
 #[test]
 fn resolve_array_size_lowers_binary_add_to_const_op() {
-    use riven_core::hir::types::{ConstExpr, ConstOp, Ty};
+    // Pure literal arithmetic is constant-folded by the S8.S4
+    // normal-form rewriter, so `[Int; 2 + 3]` produces `Lit(5)`.
+    // The pre-S8.S4 shape (`Op(Lit(2), Add, Lit(3))`) is no longer
+    // observable through the resolver — see the S8.S4 isolated-
+    // tree-shape pin for the unfolded form.
+    use riven_core::hir::types::{ConstExpr, Ty};
 
     let src = r#"
 struct Buf
@@ -827,13 +832,7 @@ end
     match ty {
         Ty::Array(elem, size) => {
             assert!(matches!(*elem, Ty::Int));
-            match size {
-                ConstExpr::Op(a, ConstOp::Add, b) => {
-                    assert_eq!(*a, ConstExpr::Lit(2));
-                    assert_eq!(*b, ConstExpr::Lit(3));
-                }
-                other => panic!("expected ConstExpr::Op(_, Add, _), got {:?}", other),
-            }
+            assert_eq!(size, ConstExpr::Lit(5));
         }
         other => panic!("expected Ty::Array, got {:?}", other),
     }
@@ -841,14 +840,18 @@ end
 
 #[test]
 fn resolve_array_size_lowers_all_four_operators() {
-    use riven_core::hir::types::{ConstExpr, ConstOp, Ty};
+    // Each pure-literal arithmetic case constant-folds to a single
+    // `Lit` via the S8.S4 rewriter; we pin the eval result through
+    // both the folded form (`ConstExpr::Lit(n)`) and the explicit
+    // eval call so any future representation change is caught.
+    use riven_core::hir::types::{ConstExpr, Ty};
     let cases = [
-        ("2 + 3", ConstOp::Add, 5),
-        ("7 - 3", ConstOp::Sub, 4),
-        ("4 * 5", ConstOp::Mul, 20),
-        ("12 / 3", ConstOp::Div, 4),
+        ("2 + 3", 5u64),
+        ("7 - 3", 4),
+        ("4 * 5", 20),
+        ("12 / 3", 4),
     ];
-    for (expr_text, expected_op, expected_eval) in cases {
+    for (expr_text, expected_eval) in cases {
         let src = format!(
             "struct Buf\n  data: [Int; {}]\nend\n",
             expr_text
@@ -856,14 +859,16 @@ fn resolve_array_size_lowers_all_four_operators() {
         let ty = resolve_first_struct_field_ty(&src, "Buf");
         match ty {
             Ty::Array(_, size) => {
-                match &size {
-                    ConstExpr::Op(_, got_op, _) => {
-                        assert_eq!(*got_op, expected_op, "wrong op for {}", expr_text);
-                    }
-                    other => panic!("expected Op for `{}`, got {:?}", expr_text, other),
-                }
+                assert_eq!(
+                    size, ConstExpr::Lit(expected_eval),
+                    "wrong folded value for `{}`", expr_text
+                );
                 let bindings = std::collections::HashMap::new();
-                assert_eq!(size.eval(&bindings), Ok(expected_eval), "wrong eval for {}", expr_text);
+                assert_eq!(
+                    size.eval(&bindings),
+                    Ok(expected_eval),
+                    "wrong eval for {}", expr_text
+                );
             }
             other => panic!("expected Ty::Array for `{}`, got {:?}", expr_text, other),
         }
@@ -872,12 +877,12 @@ fn resolve_array_size_lowers_all_four_operators() {
 
 #[test]
 fn resolve_array_size_lowers_nested_arithmetic() {
-    use riven_core::hir::types::{ConstExpr, ConstOp, Ty};
+    // Pure-literal nested arithmetic constant-folds end-to-end.
+    // The user-written grouping `(2 + 3) * 4` evaluates to 20;
+    // without parens `2 + 3 * 4` evaluates to 14 (precedence: `*`
+    // binds tighter than `+`).  Both fold to a single `Lit`.
+    use riven_core::hir::types::{ConstExpr, Ty};
 
-    // (2 + 3) * 4 — parser binds * tighter than + by precedence, so
-    // the user-written grouping here is the only way to get
-    // (2 + 3) * 4 = 20.  Without parens, `2 + 3 * 4` parses as
-    // 2 + (3 * 4) = 14.
     let src = r#"
 struct WithParens
   data: [Int; (2 + 3) * 4]
@@ -889,27 +894,16 @@ end
 "#;
     let with_parens = resolve_first_struct_field_ty(src, "WithParens");
     let no_parens = resolve_first_struct_field_ty(src, "NoParens");
-    let bindings = std::collections::HashMap::new();
 
     match with_parens {
         Ty::Array(_, size) => {
-            // Root op is the outer * with an inner Add on the left.
-            match &size {
-                ConstExpr::Op(_, ConstOp::Mul, _) => {}
-                other => panic!("expected outer Mul, got {:?}", other),
-            }
-            assert_eq!(size.eval(&bindings), Ok(20));
+            assert_eq!(size, ConstExpr::Lit(20));
         }
         other => panic!("expected Ty::Array, got {:?}", other),
     }
     match no_parens {
         Ty::Array(_, size) => {
-            // Root op is Add with a nested Mul on the right.
-            match &size {
-                ConstExpr::Op(_, ConstOp::Add, _) => {}
-                other => panic!("expected outer Add, got {:?}", other),
-            }
-            assert_eq!(size.eval(&bindings), Ok(14));
+            assert_eq!(size, ConstExpr::Lit(14));
         }
         other => panic!("expected Ty::Array, got {:?}", other),
     }
@@ -1083,19 +1077,245 @@ end
         Ty::Class { name, generic_args, .. } => {
             assert_eq!(name, "Vector");
             assert_eq!(generic_args.len(), 2);
+            // Pure-literal `2 + 3` constant-folds to `Lit(5)` via
+            // the S8.S4 normal-form rewriter.  Param-mixed
+            // arithmetic (`N + 1`) keeps the Op shape — see the
+            // sibling array-size tests for that case.
             match &generic_args[1] {
-                Ty::ConstArg(ce) => match ce {
-                    ConstExpr::Op(a, ConstOp::Add, b) => {
-                        assert_eq!(**a, ConstExpr::Lit(2));
-                        assert_eq!(**b, ConstExpr::Lit(3));
-                    }
-                    other => panic!("expected Op(Lit(2), Add, Lit(3)), got {:?}", other),
-                },
-                other => panic!("expected ConstArg, got {:?}", other),
+                Ty::ConstArg(ce) => assert_eq!(*ce, ConstExpr::Lit(5)),
+                other => panic!("expected ConstArg(Lit(5)), got {:?}", other),
             }
         }
         other => panic!("expected Ty::Class(Vector), got {:?}", other),
     }
+    // Suppress unused-import warning if the const-arg path stops
+    // using these tags.
+    let _ = (ConstExpr::Lit(0), ConstOp::Add);
+}
+
+// ── Stage 8.S4: normal-form rewriter ────────────────────────────────
+//
+// B8 (S8.S4): identity-removal rewrites canonicalise `ConstExpr`
+// trees so that `[T; N + 0]` and `[T; N]` produce the same
+// `Ty::Array`.  Constant folding collapses `Lit(a) ⊙ Lit(b)` to a
+// single `Lit(c)` when eval succeeds.  Spec §B8 documents the
+// distributive / commutative cases the rewriter intentionally
+// leaves as distinct forms in v1.
+
+#[test]
+fn const_expr_normal_form_identity_rewrites() {
+    use riven_core::hir::types::{ConstExpr, ConstOp};
+
+    let n = || ConstExpr::Param("N".to_string());
+
+    // N + 0 = N (and 0 + N = N)
+    assert_eq!(
+        ConstExpr::Op(Box::new(n()), ConstOp::Add, Box::new(ConstExpr::Lit(0)))
+            .normal_form(),
+        n()
+    );
+    assert_eq!(
+        ConstExpr::Op(Box::new(ConstExpr::Lit(0)), ConstOp::Add, Box::new(n()))
+            .normal_form(),
+        n()
+    );
+
+    // N - 0 = N (but 0 - N is left as-is: u64 has no negatives)
+    assert_eq!(
+        ConstExpr::Op(Box::new(n()), ConstOp::Sub, Box::new(ConstExpr::Lit(0)))
+            .normal_form(),
+        n()
+    );
+    let zero_minus_n =
+        ConstExpr::Op(Box::new(ConstExpr::Lit(0)), ConstOp::Sub, Box::new(n()));
+    assert_eq!(zero_minus_n.clone().normal_form(), zero_minus_n);
+
+    // N * 1 = N, 1 * N = N
+    assert_eq!(
+        ConstExpr::Op(Box::new(n()), ConstOp::Mul, Box::new(ConstExpr::Lit(1)))
+            .normal_form(),
+        n()
+    );
+    assert_eq!(
+        ConstExpr::Op(Box::new(ConstExpr::Lit(1)), ConstOp::Mul, Box::new(n()))
+            .normal_form(),
+        n()
+    );
+
+    // N * 0 = 0, 0 * N = 0
+    assert_eq!(
+        ConstExpr::Op(Box::new(n()), ConstOp::Mul, Box::new(ConstExpr::Lit(0)))
+            .normal_form(),
+        ConstExpr::Lit(0)
+    );
+    assert_eq!(
+        ConstExpr::Op(Box::new(ConstExpr::Lit(0)), ConstOp::Mul, Box::new(n()))
+            .normal_form(),
+        ConstExpr::Lit(0)
+    );
+
+    // N / 1 = N (but 1 / N is left as-is)
+    assert_eq!(
+        ConstExpr::Op(Box::new(n()), ConstOp::Div, Box::new(ConstExpr::Lit(1)))
+            .normal_form(),
+        n()
+    );
+    let one_div_n =
+        ConstExpr::Op(Box::new(ConstExpr::Lit(1)), ConstOp::Div, Box::new(n()));
+    assert_eq!(one_div_n.clone().normal_form(), one_div_n);
+}
+
+#[test]
+fn const_expr_normal_form_folds_pure_arithmetic() {
+    // `Lit ⊙ Lit` collapses to a single Lit when eval succeeds.
+    use riven_core::hir::types::{ConstExpr, ConstOp};
+
+    let two_plus_three = ConstExpr::Op(
+        Box::new(ConstExpr::Lit(2)),
+        ConstOp::Add,
+        Box::new(ConstExpr::Lit(3)),
+    );
+    assert_eq!(two_plus_three.normal_form(), ConstExpr::Lit(5));
+
+    // Constant-fold nested: (2 + 3) * 4 → Lit(20).
+    let nested = ConstExpr::Op(
+        Box::new(ConstExpr::Op(
+            Box::new(ConstExpr::Lit(2)),
+            ConstOp::Add,
+            Box::new(ConstExpr::Lit(3)),
+        )),
+        ConstOp::Mul,
+        Box::new(ConstExpr::Lit(4)),
+    );
+    assert_eq!(nested.normal_form(), ConstExpr::Lit(20));
+}
+
+#[test]
+fn const_expr_normal_form_preserves_op_on_overflow() {
+    // Overflow / div-zero in `Lit ⊙ Lit` leaves the Op shape so a
+    // later E0703 surfacing pass still has both spans.
+    use riven_core::hir::types::{ConstExpr, ConstOp};
+
+    let overflow = ConstExpr::Op(
+        Box::new(ConstExpr::Lit(u64::MAX)),
+        ConstOp::Add,
+        Box::new(ConstExpr::Lit(1)),
+    );
+    // Should NOT collapse — the Op is preserved.
+    assert!(matches!(overflow.clone().normal_form(), ConstExpr::Op(..)));
+
+    let div_zero = ConstExpr::Op(
+        Box::new(ConstExpr::Lit(7)),
+        ConstOp::Div,
+        Box::new(ConstExpr::Lit(0)),
+    );
+    assert!(matches!(div_zero.normal_form(), ConstExpr::Op(..)));
+}
+
+#[test]
+fn const_expr_normal_form_recurses_into_children() {
+    // `(N + 0) * 1 = N` — identities apply through nested Op.
+    use riven_core::hir::types::{ConstExpr, ConstOp};
+
+    let n = || ConstExpr::Param("N".to_string());
+    let inner_add = ConstExpr::Op(Box::new(n()), ConstOp::Add, Box::new(ConstExpr::Lit(0)));
+    let outer = ConstExpr::Op(Box::new(inner_add), ConstOp::Mul, Box::new(ConstExpr::Lit(1)));
+    assert_eq!(outer.normal_form(), n());
+}
+
+#[test]
+fn resolve_normalises_array_size_n_plus_zero_equals_n() {
+    // End-to-end: `[T; N + 0]` and `[T; N]` produce equal Ty values
+    // through the resolver, so any downstream code that compares
+    // them with PartialEq (e.g. unification, the kind-check)
+    // treats them as the same type.
+    use riven_core::hir::nodes::HirItem;
+
+    let src = r#"
+struct Buf[T, const N: USize]
+  data: [T; N + 0]
+end
+
+struct BufBare[T, const N: USize]
+  data: [T; N]
+end
+"#;
+    let mut lx = riven_core::lexer::Lexer::new(src);
+    let toks = lx.tokenize().expect("lex");
+    let mut p = riven_core::parser::Parser::new(toks);
+    let prog = p.parse().expect("parse");
+    let result = riven_core::typeck::type_check(&prog);
+    let find = |name: &str| {
+        result
+            .program
+            .items
+            .iter()
+            .find_map(|i| match i {
+                HirItem::Struct(s) if s.name == name => Some(s.fields[0].ty.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no struct {} in HIR", name))
+    };
+    let with_zero = find("Buf");
+    let bare = find("BufBare");
+    assert_eq!(with_zero, bare, "[T; N + 0] should normalise to [T; N]");
+}
+
+#[test]
+fn resolve_normalises_const_arg_arithmetic_with_one_factor() {
+    // `Vector[Int, N * 1]` and `Vector[Int, N]` produce equal Ty
+    // through the parameter annotation path.
+    use riven_core::hir::nodes::HirItem;
+    use riven_core::hir::types::Ty;
+
+    let src = r#"
+class Vector[T, const N: USize]
+  data: USize
+
+  def init(@data: USize)
+  end
+end
+
+def take_one(v: Vector[Int, 4 * 1])
+end
+
+def take_two(v: Vector[Int, 4])
+end
+"#;
+    let mut lx = riven_core::lexer::Lexer::new(src);
+    let toks = lx.tokenize().expect("lex");
+    let mut p = riven_core::parser::Parser::new(toks);
+    let prog = p.parse().expect("parse");
+    let result = riven_core::typeck::type_check(&prog);
+    let errors: Vec<_> = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.level == riven_core::diagnostics::DiagnosticLevel::Error)
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "expected no errors; got: {:?}",
+        errors.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+    let param_ty = |name: &str| {
+        result
+            .program
+            .items
+            .iter()
+            .find_map(|i| match i {
+                HirItem::Function(f) if f.name == name => Some(f.params[0].ty.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no fn {} in HIR", name))
+    };
+    let lhs = param_ty("take_one");
+    let rhs = param_ty("take_two");
+    let unwrap_class = |t: Ty| match t {
+        Ty::Ref(inner) | Ty::RefMut(inner) => *inner,
+        Ty::RefLifetime(_, inner) | Ty::RefMutLifetime(_, inner) => *inner,
+        other => other,
+    };
+    assert_eq!(unwrap_class(lhs), unwrap_class(rhs), "4 * 1 must normalise to 4");
 }
 
 #[test]

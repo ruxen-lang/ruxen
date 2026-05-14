@@ -43,6 +43,93 @@ impl ConstExpr {
         }
     }
 
+    /// T2.02 S8.S4: rewrite to a canonical normal form by applying
+    /// arithmetic identity rules.  Two `ConstExpr` values that
+    /// denote the same compile-time integer for *every* binding
+    /// should produce the same normal form, so that
+    /// `Ty::ConstArg(N + 0)` and `Ty::ConstArg(N)` compare equal
+    /// through derived `PartialEq`.
+    ///
+    /// Rules applied bottom-up (recursive normalization of children
+    /// before the parent rewrite):
+    ///
+    /// - `Lit(a) ⊙ Lit(b)` collapses to a single `Lit(c)` whenever
+    ///   the eval succeeds with an empty binding map.  Overflow /
+    ///   div-zero leave the `Op` shape intact so a later E0703 pass
+    ///   can surface the failure with the original spans.
+    /// - `x + 0` and `0 + x` → `x`.
+    /// - `x - 0` → `x`.  (`0 - x` is not rewritten — it would
+    ///   require negation, which `u64` doesn't have.)
+    /// - `x * 1` and `1 * x` → `x`.
+    /// - `x * 0` and `0 * x` → `0`.
+    /// - `x / 1` → `x`.
+    ///
+    /// Not handled (intentional spec limitation §B8): distributive
+    /// rewrites like `N * (M + 1)` vs. `N*M + N`, commutative
+    /// reordering of mixed `Param`/`Lit`, associative reassociation.
+    /// These cases produce distinct normal forms in v1 even though
+    /// they denote the same value; the v2 plan is to surface
+    /// `E-CONST-NORMAL-FORM` at the kind-check when two
+    /// instantiations differ only by a form the rewriter can't
+    /// canonicalise.
+    pub fn normal_form(self) -> ConstExpr {
+        match self {
+            ConstExpr::Op(a, op, b) => {
+                let a = a.normal_form();
+                let b = b.normal_form();
+                // Constant fold first — if both sides are literals
+                // and eval succeeds, replace with a single Lit.
+                if let (ConstExpr::Lit(_), ConstExpr::Lit(_)) = (&a, &b) {
+                    let empty = std::collections::HashMap::new();
+                    let folded = ConstExpr::Op(
+                        Box::new(a.clone()),
+                        op,
+                        Box::new(b.clone()),
+                    );
+                    if let Ok(v) = folded.eval(&empty) {
+                        return ConstExpr::Lit(v);
+                    }
+                    // Overflow / div-zero: keep the Op shape so the
+                    // downstream E0703 wiring still has the spans.
+                    return folded;
+                }
+                match op {
+                    ConstOp::Add => {
+                        if matches!(b, ConstExpr::Lit(0)) {
+                            return a;
+                        }
+                        if matches!(a, ConstExpr::Lit(0)) {
+                            return b;
+                        }
+                    }
+                    ConstOp::Sub => {
+                        if matches!(b, ConstExpr::Lit(0)) {
+                            return a;
+                        }
+                    }
+                    ConstOp::Mul => {
+                        if matches!(b, ConstExpr::Lit(1)) {
+                            return a;
+                        }
+                        if matches!(a, ConstExpr::Lit(1)) {
+                            return b;
+                        }
+                        if matches!(b, ConstExpr::Lit(0)) || matches!(a, ConstExpr::Lit(0)) {
+                            return ConstExpr::Lit(0);
+                        }
+                    }
+                    ConstOp::Div => {
+                        if matches!(b, ConstExpr::Lit(1)) {
+                            return a;
+                        }
+                    }
+                }
+                ConstExpr::Op(Box::new(a), op, Box::new(b))
+            }
+            other => other,
+        }
+    }
+
     /// T2.02 S7/S8: evaluate the const expression against a binding map.
     ///
     /// - `Lit(n)`   → `Ok(n)`.

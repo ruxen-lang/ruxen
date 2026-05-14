@@ -8,6 +8,41 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- Phase 3 #07.S8.S4: `ConstExpr::normal_form()` rewriter canonicalises
+  arithmetic trees so two source-level forms that denote the same
+  compile-time integer produce the same `Ty::ConstArg`.  Rules
+  applied bottom-up: pure `Lit ⊙ Lit` constant-folds via the S8.S1
+  evaluator (overflow / div-zero leave the `Op` shape intact so a
+  later E0703 surfacing pass keeps both spans); identity rewrites
+  collapse `x + 0`, `0 + x`, `x - 0`, `x * 1`, `1 * x`, `x / 1`
+  to `x`; `x * 0` and `0 * x` to `0`.  Applied at the resolve
+  construction sites for both `TypeExpr::Array { size }` and
+  `TypeExpr::ConstExprArg`, so `[T; N + 0]` and `[T; N]` compare
+  equal through derived `PartialEq`.  Not handled (spec §B8
+  intentional limit): distributive rewrites (`N*(M+1)` vs.
+  `N*M + N`), commutative reordering of mixed `Param`/`Lit`,
+  associative reassociation — v2 will surface
+  `E-CONST-NORMAL-FORM` at the kind-check when two instantiations
+  differ only by a form the rewriter can't canonicalise.
+
+  Pin tests in `const_generics.rs`:
+  `const_expr_normal_form_identity_rewrites` (all eight rules),
+  `const_expr_normal_form_folds_pure_arithmetic` (basic + nested),
+  `const_expr_normal_form_preserves_op_on_overflow` (`u64::MAX + 1`
+  and `7 / 0` keep the `Op` shape),
+  `const_expr_normal_form_recurses_into_children` (`(N + 0) * 1 = N`),
+  `resolve_normalises_array_size_n_plus_zero_equals_n` (full
+  parse-→-resolve round trip pinning `[T; N + 0] == [T; N]`),
+  `resolve_normalises_const_arg_arithmetic_with_one_factor`
+  (`Vector[Int, 4 * 1] == Vector[Int, 4]`).
+
+  Four pre-existing S8.S2 tests (`resolve_array_size_lowers_*`)
+  were rewritten to pin the post-fold `ConstExpr::Lit(n)` shape
+  rather than the unfolded `Op` shape — eval round-trip
+  assertions retained so any future representation change is
+  still caught.  Spec stage map updated to mark S8 shipped;
+  remaining tier-2 work is the S9 `where`-clause const
+  predicates.
 - Phase 3 #07.S8.S3: arithmetic in const-arg position
   (`Vector[Int, 2 + 3]`).  Parser's `parse_generic_arg` looks one
   token ahead after an `IntLiteral`; if a binary arithmetic op
