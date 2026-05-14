@@ -51,6 +51,7 @@ static EXPLAINS: &[(&str, &str)] = &[
     ("E0702", include_str!("../../../docs/errors/E0702.md")),
     ("E0703", include_str!("../../../docs/errors/E0703.md")),
     ("E0704", include_str!("../../../docs/errors/E0704.md")),
+    ("E0705", include_str!("../../../docs/errors/E0705.md")),
     // ── Borrow checker / trait-impl ─────────────────────────────────
     ("E1001", include_str!("../../../docs/errors/E1001.md")),
     ("E1002", include_str!("../../../docs/errors/E1002.md")),

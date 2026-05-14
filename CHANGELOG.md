@@ -8,6 +8,35 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- Phase 3 #07 follow-up: **E0705 const-generic parameter bad-type
+  diagnostic** (spec §B8 `E-CONST-BAD-TYPE`).  `Resolver::
+  collect_generic_params` now validates the resolved type of every
+  `const NAME: TY` parameter against the v1 allow-list (integer
+  family + `Bool`).  Float* / String / user class / Vec / tuple /
+  every other shape surfaces as **E0705** with the parameter name
+  and the rejected type in the message.  `Ty::Error` is treated as
+  valid so the diagnostic doesn't stack on top of an upstream
+  "unknown type" error.
+
+  New helper `is_valid_const_param_ty(&Ty)` placed alongside the
+  existing `ty_is_valid_hash_key` in `resolve/mod.rs`.  Registry
+  entry, `EXPLAINS` row, and `docs/errors/E0705.md` page added per
+  the existing three-way sync invariant; the page documents the
+  full rejected-types list with NG2 / NG3 / OQ-3 cross-references.
+
+  Pin tests in `const_generics.rs`:
+  - `const_param_float_type_emits_e0705` — NG2 (NaN ≠ NaN).
+  - `const_param_string_type_emits_e0705` — NG3.
+  - `const_param_user_class_type_emits_e0705` — user aggregate
+    types.
+  - `const_param_integer_types_do_not_emit_e0705` — pins every
+    integer family + `Bool` as accepted.
+  - `const_param_bad_type_does_not_stack_on_unresolved_type` —
+    `Bogus` (unresolved) doesn't compound diagnostics.
+
+  Spec §"Error code reservations" updated to mark E0703/E0704/E0705
+  shipped (E0701/E0702 remain reserved pending the const-arg-vs-
+  param-type and non-const-expr emit sites).
 - Phase 3 #07 follow-up: **E0703 surfacing for pure-literal const
   overflow / division-by-zero**.  New
   `Resolver::check_const_expr_eval_errors` runs immediately after

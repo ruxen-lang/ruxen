@@ -1318,6 +1318,103 @@ end
     assert_eq!(unwrap_class(lhs), unwrap_class(rhs), "4 * 1 must normalise to 4");
 }
 
+// ── Stage 1 follow-up: E0705 const-param bad type ───────────────────
+//
+// Spec §B8 (E-CONST-BAD-TYPE / E0705): a `const N: TY` parameter's
+// declared type must be an integer family or `Bool`.  Anything else
+// (Float, String, user class, Vec, …) is rejected at resolve time.
+// `Ty::Error` placeholders are intentionally allowed so the
+// diagnostic doesn't stack on top of an upstream "unknown type"
+// error.
+
+#[test]
+fn const_param_float_type_emits_e0705() {
+    let src = r#"
+struct Buf[T, const N: Float]
+  data: [T; 4]
+end
+"#;
+    let codes = typecheck_diag_codes(src);
+    assert!(
+        codes.iter().any(|c| c == "E0705"),
+        "expected E0705 for `const N: Float`; got: {:?}",
+        codes
+    );
+}
+
+#[test]
+fn const_param_string_type_emits_e0705() {
+    let src = r#"
+struct Bag[T, const N: String]
+  data: [T; 4]
+end
+"#;
+    let codes = typecheck_diag_codes(src);
+    assert!(
+        codes.iter().any(|c| c == "E0705"),
+        "expected E0705 for `const N: String`; got: {:?}",
+        codes
+    );
+}
+
+#[test]
+fn const_param_user_class_type_emits_e0705() {
+    let src = r#"
+class Wrapper
+  x: Int
+end
+
+struct Bag[T, const N: Wrapper]
+  data: [T; 4]
+end
+"#;
+    let codes = typecheck_diag_codes(src);
+    assert!(
+        codes.iter().any(|c| c == "E0705"),
+        "expected E0705 for `const N: Wrapper`; got: {:?}",
+        codes
+    );
+}
+
+#[test]
+fn const_param_integer_types_do_not_emit_e0705() {
+    // Pin every integer family + Bool as accepted.  USize is the
+    // canonical choice but the others must also stay accepted.
+    let cases = ["Int", "Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16",
+                 "UInt32", "UInt64", "USize", "ISize", "Bool"];
+    for ty in cases {
+        let src = format!(
+            "struct Buf[T, const N: {}]\n  data: [T; 4]\nend\n",
+            ty
+        );
+        let codes = typecheck_diag_codes(&src);
+        assert!(
+            !codes.iter().any(|c| c == "E0705"),
+            "did not expect E0705 for `const N: {}`; got: {:?}",
+            ty,
+            codes
+        );
+    }
+}
+
+#[test]
+fn const_param_bad_type_does_not_stack_on_unresolved_type() {
+    // `Bogus` doesn't resolve, so the type expression yields
+    // `Ty::Error`.  E0705 must NOT fire on top of that — the user
+    // already gets an "unknown type" diagnostic.
+    let src = r#"
+struct Bag[T, const N: Bogus]
+  data: [T; 4]
+end
+"#;
+    let codes = typecheck_diag_codes(src);
+    assert!(
+        !codes.iter().any(|c| c == "E0705"),
+        "did not expect E0705 stacked on Ty::Error; got: {:?}",
+        codes
+    );
+}
+
 // ── Stage 8.S4 follow-up: E0703 overflow / div-zero surfacing ───────
 //
 // After the S8.S4 normal-form pass, pure-literal sub-trees whose

@@ -155,6 +155,10 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E0704",
         title: "kind mismatch on const-generic argument",
     },
+    CodeInfo {
+        code: "E0705",
+        title: "const-generic parameter type must be an integer or `Bool`",
+    },
     // ── Borrow checking + trait/impl (E1001-E1099) ───────────────────
     // The borrow checker maintains a parallel `ErrorCode` enum in
     // `borrow_check/errors.rs`; titles below mirror its `title()`

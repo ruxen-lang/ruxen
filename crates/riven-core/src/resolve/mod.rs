@@ -5021,6 +5021,22 @@ impl Resolver {
             for p in &gps.params {
                 if let ast::GenericParam::Const { name, ty, span } = p {
                     let resolved_ty = self.resolve_type_expr(ty);
+                    // T2.02 spec §B8 (E-CONST-BAD-TYPE → E0705):
+                    // a const-generic parameter's declared type must be
+                    // an integer family or `Bool`.  Float* is non-goal
+                    // NG2 (NaN ≠ NaN breaks the Eq contract const
+                    // generics share); String / class / Vec / tuple
+                    // const generics are also non-goals (NG3).
+                    if !is_valid_const_param_ty(&resolved_ty) {
+                        self.diagnostics.push(Diagnostic::error_with_code(
+                            format!(
+                                "const-generic parameter `{}` must be an integer or `Bool`, found `{}`",
+                                name, resolved_ty
+                            ),
+                            span.clone(),
+                            "E0705",
+                        ));
+                    }
                     let _ = self.symbols.define(
                         name.clone(),
                         DefKind::ConstParam { ty: resolved_ty },
@@ -5359,6 +5375,22 @@ fn lower_const_expr_from_expr(expr: &ast::Expr) -> crate::hir::types::ConstExpr 
         }
         _ => ConstExpr::Error,
     }
+}
+
+/// T2.02 §B8 (E0705): valid types for a `const N: TY` parameter.
+///
+/// Accepts every integer width (`Int`, `Int8`..`Int64`, `UInt8`..`UInt64`,
+/// `USize`, `ISize`) and `Bool`.  Rejects floats, strings, chars, units,
+/// references, tuples, arrays, classes, traits, and every other
+/// shape — those are spec non-goals (NG2 / NG3 / OQ-3).
+///
+/// `Ty::Error` is treated as valid so a stand-alone E0705 doesn't fire
+/// on top of whatever earlier diagnostic produced the `Error` placeholder.
+fn is_valid_const_param_ty(ty: &Ty) -> bool {
+    if matches!(ty, Ty::Error) {
+        return true;
+    }
+    ty.is_integer() || matches!(ty, Ty::Bool)
 }
 
 fn ty_is_valid_hash_key(ty: &Ty, symbols: &crate::resolve::symbols::SymbolTable) -> bool {
