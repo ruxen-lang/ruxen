@@ -94,6 +94,34 @@ end
     );
 }
 
+/// `docs/specs/stdlib/hash.spec.md` §B2 v2 follow-up: primitives
+/// already hash internally for `HashMap` keys, but the v1 surface
+/// does not yet expose a user-callable `.hash_code` on primitives.
+/// Generic `T: Hashable` dispatch for primitive `T` would mangle to
+/// `Int_hash_code` / `String_hash_code` which are not registered in
+/// `runtime_name` today, so the linker fails with
+/// "Undefined symbols: _T: Hashable_hash_code".  This pin documents
+/// the gap; remove the `#[ignore]` once primitive Hashable impls
+/// are wired and re-run to confirm the dispatch path closes.
+#[test]
+#[ignore = "v2: primitive Hashable monomorphisation not wired (spec §B2 out-of-scope)"]
+fn primitive_int_and_string_dispatch_through_hashable_bound() {
+    let source = r##"
+def hash_it[T: Hashable](a: &T) -> Int
+  a.hash_code
+end
+
+def main
+  let a: Int = 42
+  let s: String = "hello".to_string
+  puts "#{hash_it(&a)}"
+  puts "#{hash_it(&s)}"
+end
+"##;
+    let (stdout, exit) = compile_and_run(source, "primitive_hashable_dispatch");
+    assert_eq!(exit, Some(0), "non-zero exit; stdout={}", stdout);
+}
+
 #[test]
 fn derive_default_emits_concrete_static_method() {
     let source = r##"

@@ -8,6 +8,25 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- Phase 3 stdlib remainder closure: docs/specs/stdlib/hash.spec.md
+  backfilled.  Spec covers the `Hashable` trait surface, the
+  `derive Hashable` synthesis path, the `T: Hashable` generic bound
+  dispatch (working today for user types), the `HashMap` /
+  `HashSet` key-validity gate (`ty_is_valid_hash_key`), and the
+  primitive runtime hashing (`riven_hash_bits`, `riven_hash_str`).
+  Documents the v2 gap on user-callable `.hash_code` for primitives
+  and on `T: Hashable` monomorphisation for primitive `T` (link
+  fails today with `_T: Hashable_hash_code`); a new `#[ignore]`
+  pin test in `derive_trait_dispatch.rs::primitive_int_and_string_
+  dispatch_through_hashable_bound` documents the gap so future v2
+  work can flip the `#[ignore]` off.
+
+  Phase 3 stdlib task 236fa21f's other listed items are deferred to
+  v2 per their canonical specs: `fs::metadata` (needs a struct
+  surface, `fs.spec.md` §"Out of scope"), `env::set_var` (write-side
+  helpers, `env.spec.md` §"Out of scope"), and the full
+  `Command` builder (`process.spec.md` §"Out of scope").  v1 ships
+  `process_run` for one-shot invocations.
 - Phase 3 #07.S8.S2: source-level arithmetic in `[T; <expr>]`
   array-size positions.  The parser already accepted any expression
   in that slot via `parse_expression`; resolve now folds
