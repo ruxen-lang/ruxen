@@ -269,6 +269,72 @@ Structural satisfaction is accepted for `some Mixin` only. `any
 Mixin` requires an explicit `include Mixin` directive in the
 implementing class.
 
+### 3.4a Methods on a type
+
+A class, struct, or enum's methods live inside the type body — there
+are no separate "methods-for-this-type" blocks for the common case:
+
+```riven
+class Container[T]
+  items: Array[T]
+
+  def init
+    self.items = Array.new
+  end
+
+  def count -> Int
+    self.items.len
+  end
+end
+```
+
+For methods that should exist **only when a type parameter satisfies
+a bound**, use an `extension` block:
+
+```riven
+extension Container[T] where T: Display
+  def print_all
+    for item in self.items
+      puts item.to_display
+    end
+  end
+end
+```
+
+An `extension` may also add methods unconditionally to a foreign or
+generic type, without re-opening the original definition. The same
+syntax applies; the `where` clause is optional.
+
+The body of a `class`, `struct`, `enum`, or `extension` block may
+also carry `include` directives. The destructor pattern is one
+example:
+
+```riven
+class SafeBuffer
+  ptr: *mut UInt8
+  len: USize
+
+  def init(size: USize)
+    unsafe
+      self.ptr = malloc(size) as *mut UInt8
+      self.len = size
+    end
+  end
+
+  include Drop
+
+  def mut drop
+    unsafe
+      free(self.ptr as *Void)
+    end
+  end
+end
+```
+
+`include Drop` declares the type as a `Drop` participant. The
+mixin requires a `def mut drop` method; the class provides one.
+Same `include` directive, same scattered-method rule as §3.4.
+
 ### 3.5 Layout directives
 
 `struct` bodies may carry a `layout` directive at the top of the
@@ -469,7 +535,7 @@ in `!`.
 | Functions      | `def`, `init`, `self`, `Self`, `super`, `return`, `yield`                |
 | Modes          | `mut`, `consume`, `inline`                                               |
 | Control flow   | `if`, `elsif`, `else`, `match`, `while`, `for`, `in`, `loop`, `do`, `end`, `break`, `continue` |
-| Type system    | `where`, `as`, `some`, `any`, `derive`, `layout`, `include`              |
+| Type system    | `where`, `as`, `some`, `any`, `derive`, `layout`, `include`, `extension` |
 | Visibility     | `private`, `protected`                                                   |
 | Modules        | `module`, `use`, `package`                                               |
 | Safety         | `unsafe`                                                                 |
@@ -752,6 +818,42 @@ This is not stable ABI for FFI use. Internal layout only.
   defining its own method. Less surprising than implicit ordering.
 
 ---
+
+## 10a. Migration mapping (working reference)
+
+For the duration of the rename, the following equivalences apply.
+Once §11 cleanup is done, this section is deleted along with any
+mention of the prior forms.
+
+| Prior form                          | New form                                                 |
+|-------------------------------------|-----------------------------------------------------------|
+| `let mut x = ...`                   | `var x = ...`                                             |
+| `pub` prefix on item                | omit (public is default); use `private` / `protected` section markers |
+| `trait T ... end`                   | `mixin T ... end`                                         |
+| `impl T for U ... end` (block)      | `include T` directive in `U`'s body; methods scattered    |
+| `impl U ... end` (inherent block)   | move methods into `U`'s body directly                     |
+| `impl[T: B] C[T] ... end`           | `extension C[T] where T: B ... end`                       |
+| `impl Drop ... end` inside class    | `include Drop` + `def mut drop` in class body             |
+| `&impl T` (param/return type)       | `&some T`                                                 |
+| `&dyn T` (param/return type)        | `&any T`                                                  |
+| `'a` lifetime sigil                 | bare lowercase identifier in `[...]`: `[a]`, `&a T`       |
+| `@[derive(D1, D2)]`                 | `derive D1, D2` in type body (existing form, only form)   |
+| `@[repr(C)]`                        | `layout c` at top of type body                            |
+| `@[repr(packed)]`                   | `layout packed`                                           |
+| `@[repr(transparent)]`              | `layout transparent`                                      |
+| `@[link(name = "x")]`               | options on `lib`: `lib "x", ...`                          |
+| `@[inline]`                         | `inline def f` modifier; or `inline :f` directive         |
+| `@[...]` syntax overall             | retired                                                   |
+| `extern "C" ... end`                | `lib "<linkname>" ... end`                                |
+| `crate` (in path or keyword)        | `package`                                                 |
+| `null` (FFI null literal)           | `nil`                                                     |
+| `Vec[T]`                            | `Array[T]`                                                |
+| `HashMap[K, V]`                     | `Map[K, V]`                                               |
+| `HashSet[T]`                        | `Set[T]`                                                  |
+| `Rc[T]`                             | `Shared[T]`                                               |
+| `Arc[T]`                            | `SharedSync[T]`                                           |
+| `vec![...]` macro                   | `array![...]`                                             |
+| tutorial language `&self` / `&mut self` | "reading method" / "mutating method"                  |
 
 ## 11. Implementation handoff
 

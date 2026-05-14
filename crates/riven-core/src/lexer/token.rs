@@ -120,8 +120,9 @@ pub enum TokenKind {
     Enum,
     Trait,
     Impl,
-    Mixin,   // `mixin` — replaces `trait`
-    Include, // `include` — replaces `impl Trait for X`
+    Mixin,     // `mixin` — replaces `trait`
+    Include,   // `include` — replaces `impl Trait for X`
+    Extension, // `extension` — replaces conditional `impl[T: B] C[T]`
     Newtype,
     Type,
 
@@ -352,6 +353,7 @@ pub fn lookup_keyword(ident: &str) -> Option<TokenKind> {
         "impl" => Some(TokenKind::Impl),
         "mixin" => Some(TokenKind::Mixin),
         "include" => Some(TokenKind::Include),
+        "extension" => Some(TokenKind::Extension),
         "newtype" => Some(TokenKind::Newtype),
         "type" => Some(TokenKind::Type),
 
