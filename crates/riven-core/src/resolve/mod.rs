@@ -4755,7 +4755,11 @@ impl Resolver {
                             idx + 1
                         ),
                         arg_span,
-                        "E0700",
+                        // E0704 — kind mismatch on const-generic arg.  Previously
+                        // shared E0700 with the iterator-`sum` validator; spec
+                        // §"Error code reservations" was amended to fork them
+                        // (iterator-sum keeps E0700; this is E0704).
+                        "E0704",
                     ));
                 }
             }

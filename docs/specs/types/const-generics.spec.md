@@ -138,10 +138,18 @@ monomorphization; failing predicate emits E-CONST-WHERE-FALSE.
 
 | Code  | Meaning                                              | Stage |
 |-------|------------------------------------------------------|-------|
-| E0700 | kind mismatch on generic arg (passed type where const expected, or vice versa) | S5 |
 | E0701 | wrong const-arg type (e.g. `Bool` where `USize` expected) | S5 |
 | E0702 | non-const expression in const-arg position           | S2/S3 |
 | E0703 | const-arg expression overflows during evaluation     | S8    |
+| E0704 | kind mismatch on generic arg (passed type where const expected, or vice versa) | S5 |
+
+> **Note (2026-05-14):** the kind-mismatch slot was originally
+> assigned E0700, but the typeck `iterator-sum requires Add`
+> validator predates the spec and already squats on E0700.  The
+> spec was amended to use E0704 for kind mismatch; iterator-sum
+> retains E0700.  All current emit sites have been updated to the
+> new code (see `crates/riven-core/src/resolve/mod.rs` and the
+> `const_lit_against_type_param_emits_e0704` pin test).
 
 (Specific E-CONST-* names from §B8 will map to the E07xx slot once
 reserved in the registry.)

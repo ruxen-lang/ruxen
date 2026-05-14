@@ -7,6 +7,27 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+### Changed
+- **Breaking diagnostic-code rename:** const-generic kind-mismatch
+  diagnostic moved from **E0700** to **E0704**.  E0700 was originally
+  given to this slot by `docs/specs/types/const-generics.spec.md`
+  §"Error code reservations", but the typeck iterator-`sum`
+  validator already emits E0700 with the "requires `Add`" framing
+  — the codes were colliding.  Spec amended to use E0704;
+  iterator-`sum` keeps E0700.  Affects:
+  - `crates/riven-core/src/resolve/mod.rs`: kind-mismatch emit site
+    now writes `"E0704"`.
+  - `crates/riven-core/src/diagnostics/codes.rs`: new `CodeInfo`
+    for E0704 ("kind mismatch on const-generic argument") with a
+    header comment recording the collision resolution.
+  - `crates/riven-cli/src/explain.rs`: new `include_str!` row so
+    `riven explain E0704` works.
+  - `docs/errors/E0704.md`: full Why / Example / Fix / Notes /
+    Related stub with historical note.
+  - Pin test renamed:
+    `const_lit_against_type_param_emits_e0700` →
+    `const_lit_against_type_param_emits_e0704`.
+
 ### Added
 - Tier-5 / T5.04 phase 1 follow-up: register reserved const-generic
   diagnostic codes **E0701** (wrong const-arg type), **E0702**

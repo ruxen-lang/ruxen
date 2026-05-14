@@ -426,12 +426,17 @@ end
     );
 }
 
-// ── Stage 5: typeck unification + E0700 kind mismatch ───────────────
+// ── Stage 5: typeck unification + E0704 kind mismatch ───────────────
+//
+// (Historical note: the kind-mismatch slot was E0700 from S5 ship
+// through 2026-05-14; the typeck iterator-`sum` validator was
+// already squatting on E0700, so the spec was amended and this
+// code moved to E0704.)
 
 /// B5 (S5 minimal): passing an integer literal where the declared
-/// param is a type → E0700 kind mismatch.
+/// param is a type → E0704 kind mismatch.
 #[test]
-fn const_lit_against_type_param_emits_e0700() {
+fn const_lit_against_type_param_emits_e0704() {
     let src = r#"
 class OnlyType[T]
   data: USize
@@ -456,8 +461,8 @@ end
         .filter_map(|d| d.code.as_deref())
         .collect();
     assert!(
-        codes.contains(&"E0700"),
-        "expected E0700 for ConstLit on Type param; got codes: {:?}, all diagnostics: {:?}",
+        codes.contains(&"E0704"),
+        "expected E0704 for ConstLit on Type param; got codes: {:?}, all diagnostics: {:?}",
         codes,
         result.diagnostics.iter().map(|d| &d.message).collect::<Vec<_>>()
     );
@@ -484,16 +489,16 @@ end
     let mut p = riven_core::parser::Parser::new(toks);
     let prog = p.parse().expect("parse");
     let result = riven_core::typeck::type_check(&prog);
-    let e0700s: Vec<_> = result
+    let kind_mismatch_diags: Vec<_> = result
         .diagnostics
         .iter()
         .filter(|d| d.level == riven_core::diagnostics::DiagnosticLevel::Error)
-        .filter(|d| d.code.as_deref() == Some("E0700"))
+        .filter(|d| d.code.as_deref() == Some("E0704"))
         .collect();
     assert!(
-        e0700s.is_empty(),
-        "ConstLit on a Const param must not emit E0700; got: {:?}",
-        e0700s.iter().map(|d| &d.message).collect::<Vec<_>>()
+        kind_mismatch_diags.is_empty(),
+        "ConstLit on a Const param must not emit E0704; got: {:?}",
+        kind_mismatch_diags.iter().map(|d| &d.message).collect::<Vec<_>>()
     );
 }
 

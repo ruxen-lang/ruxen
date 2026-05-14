@@ -126,16 +126,11 @@ pub const REGISTRY: &[CodeInfo] = &[
     },
     // ── Tier-2 type system (E0700-E0799) ─────────────────────────────
     //
-    // Known collision: E0700 is currently emitted by two unrelated
-    // sites — the iterator-`sum` rejection in typeck and the
-    // const-generic kind-mismatch in resolve (per
-    // docs/specs/types/const-generics.spec.md §"Error code
-    // reservations").  Both predate this registry pass.  Resolution
-    // is a tier-2 follow-up: re-number whichever site doesn't fit the
-    // tier-2 range conceptually (iterator-sum is method-resolution,
-    // not type-system).  Until then the title here covers the
-    // historically-first usage; const-generics docs reference the
-    // same code with the kind-mismatch framing.
+    // E0700 was originally used by both the iterator-`sum` validator
+    // (typeck) and the const-generic kind-mismatch (resolve).  The
+    // collision was resolved 2026-05-14: iterator-sum keeps E0700;
+    // const-generic kind-mismatch moved to E0704.  The const-generics
+    // spec §"Error code reservations" mirrors the assignment.
     CodeInfo {
         code: "E0700",
         title: "iterator `sum` requires an Item that implements `Add`",
@@ -155,6 +150,10 @@ pub const REGISTRY: &[CodeInfo] = &[
     CodeInfo {
         code: "E0703",
         title: "const-arg expression overflows during evaluation (reserved)",
+    },
+    CodeInfo {
+        code: "E0704",
+        title: "kind mismatch on const-generic argument",
     },
     // ── Borrow checking + trait/impl (E1001-E1099) ───────────────────
     // The borrow checker maintains a parallel `ErrorCode` enum in
