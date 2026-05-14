@@ -1,15 +1,16 @@
-# Const Generics (in flight)
+# Const Generics
 
-> **Status:** Stage 1 + Stage 2 shipped (commits `b8a371c` and
-> `bde3e1f`); Stages 3–9 pending.  This chapter reflects only what's
-> shippable today.
+> **Status:** Stages 1–8 shipped (S8.S1 through S8.S4 + diagnostics
+> E0702/E0703/E0704/E0705).  Stage 9 (`where`-clause const
+> predicates) and the S7 per-instantiation binding-threading
+> follow-up remain.
 >
 > **See also:** [Spec — const generics](../specs/types/const-generics.spec.md)
 > for the full nine-stage roadmap and behaviour catalogue.
 
 Const generics let types and functions be parameterised by a
-compile-time **value** — usually an integer that determines an array
-size or a fixed-capacity buffer length.
+compile-time **value** — typically an integer that determines an
+array size, a fixed-capacity buffer length, or a build-time toggle.
 
 ```riven
 struct Vector[T, const N: USize]
@@ -25,11 +26,13 @@ def rotate[const K: USize](x: Int) -> Int
 end
 ```
 
+Riven's design follows Rust's `min_const_generics` plus simple
+arithmetic on const expressions.  No general `const fn` evaluation;
+no recursion or branching at the const level.
+
 ---
 
-## What works today (Stage 1 + Stage 2)
-
-### Stage 1 — declaring const params
+## Declaring const parameters
 
 The parser accepts `const NAME: Type` anywhere a generic parameter
 can go:
@@ -52,62 +55,170 @@ struct Buffer[const CAP: USize, T] end       # const-first is legal
 The convention is **types first, consts after** (matches Rust).  The
 formatter enforces this; the parser is permissive.
 
-### Stage 2 — passing integer literals
+The declared type must be an integer family (`Int`, `Int8`/`Int16`/
+`Int32`/`Int64`, `UInt8`/`UInt16`/`UInt32`/`UInt64`, `USize`,
+`ISize`) or `Bool`.  Anything else surfaces as
+[**E0705**](../errors/E0705.md):
 
-At use sites, integer literals can appear in generic-argument
-position:
+```riven
+struct Buf[T, const N: Float] end    # error[E0705]
+struct Bag[T, const N: String] end   # error[E0705]
+```
+
+---
+
+## Passing const arguments at use sites
+
+### Bare literals
+
+Integer literals are the simplest form:
 
 ```riven
 struct Holder
   v: Vector[Int, 4]
   m: Matrix[Float, 3, 4]
-  x: Foo[Int, 8, Bar]       # type / const / type ordering
+  x: Foo[Int, 8, Bar]    # type / const / type ordering
 end
 ```
 
-Internally the parser emits `TypeExpr::ConstLit(value, span)` for
-the literal.  Stage 3 (resolver) will validate that the literal
-actually lands against a `const` parameter; today there's no check,
-so `Vec[5]` parses but produces a resolver error at typeck time
-(it tries to interpret `5` as a type).
+### Arithmetic
 
----
-
-## What's not yet implemented (Stages 3–9)
-
-| Stage | What it adds                                                | Status   |
-|-------|-------------------------------------------------------------|----------|
-| S3    | Resolver records `DefKind::ConstParam`; brings `N` into scope inside type/fn bodies | pending |
-| S4    | HIR: `Ty::Array(Box<Ty>, ConstExpr)` + `ConstExpr` enum     | pending  |
-| S5    | Typeck unification; distinct const args produce distinct types | pending |
-| S6    | Monomorphization: one MIR fn per `(type-args, const-args)`  | pending  |
-| S7    | Codegen layout: arrays evaluate `ConstExpr`; `alloca` honours it | pending |
-| S8    | Arithmetic in const exprs (`+ - * /`), normal-form rewriter | pending  |
-| S9    | `where` clause const predicates (`where N > 0`)             | pending  |
-
-So today you can write:
+`+ - * /` and parens work in both **array-size position** and
+**const-arg position**:
 
 ```riven
-struct Vec[T, const N: USize] end
-let v: Vec[Int, 4] = ...
+struct Buf
+  data: [Int; 2 + 3]            # array size with arithmetic
+  pad:  [Int; (4 + 4) * 2]      # parens for grouping
+end
+
+class Vector[T, const N: USize]
+  data: [T; N + 1]              # in-scope const param + literal
+end
+
+def take_one(v: Vector[Int, 2 + 3]) end   # arithmetic at use site
 ```
 
-… and the parser will happily produce the AST, but the resolver
-doesn't yet know that `4` is a const-generic argument.  This is the
-nature of a feature implemented under SDD: each stage commits its
-own slice of behaviour with its own pin tests, and you can read the
-spec to know exactly what's wired.
+Two different source forms that denote the same compile-time integer
+produce **the same type** thanks to a normal-form rewriter:
+
+```riven
+fn need_four(v: Vector[Int, 4]) end
+
+fn main
+  need_four(Vector.new(0) : Vector[Int, 2 + 2])   # OK — 2 + 2 folds to 4
+  need_four(Vector.new(0) : Vector[Int, 4 * 1])   # OK — 4 * 1 folds to 4
+  need_four(Vector.new(0) : Vector[Int, 4 + 0])   # OK — N + 0 folds to N (and 4)
+end
+```
+
+The rewriter applies algebraic identities (`x + 0 = x`,
+`x - 0 = x`, `x * 1 = x`, `x * 0 = 0`, `x / 1 = x`) and constant-
+folds pure `Lit ⊙ Lit` arithmetic.  It deliberately does NOT
+distribute (`N * (M + 1)` vs. `N*M + N`), reorder commutatively, or
+reassociate — those are intentional v1 limits (spec §B8).
+
+### What's NOT a valid const expression
+
+Anything outside `Lit`, `Param`, and `+ - * /` arithmetic surfaces
+as [**E0702**](../errors/E0702.md):
+
+```riven
+struct Bad
+  data: [Int; 5 % 2]      # error[E0702]: `%` not in v1 const language
+end
+
+struct Worse
+  data: [Int; 3 < 4]      # error[E0702]: comparisons not allowed
+end
+
+def count -> Int; 4; end
+struct Tricky
+  data: [Int; count()]    # error[E0702]: function calls not allowed
+end
+```
+
+There's also no const-arg **inference** (spec OQ-3) — write the
+const argument explicitly at every use site.
+
+### Overflow and division by zero
+
+Pure-literal const arithmetic that overflows `u64` or divides by
+zero surfaces as [**E0703**](../errors/E0703.md):
+
+```riven
+struct Boom
+  data: [Int; 9223372036854775807 * 4]    # error[E0703]: overflows
+end
+
+struct DivZero
+  data: [Int; 10 / 0]                     # error[E0703]: divides by zero
+end
+```
+
+Param-bearing expressions (`N + 1`) defer this check — overflow
+status depends on the eventual instantiation, and per-instantiation
+checking lands with the S7 binding-threading follow-up.
+
+### Kind mismatches
+
+Passing a const where a type is expected (or vice versa) surfaces as
+[**E0704**](../errors/E0704.md):
+
+```riven
+class OnlyType[T] end
+
+let _x: OnlyType[4] = ...    # error[E0704]: kind mismatch (const where type expected)
+```
 
 ---
 
-## Reserved error codes
+## Distinct const args produce distinct types
 
-| Code  | Meaning                                              | Stage |
-|-------|------------------------------------------------------|-------|
-| E0700 | Kind mismatch on generic arg (type vs const)         | S5    |
-| E0701 | Wrong const-arg type (`Bool` where `USize` expected) | S5    |
-| E0702 | Non-const expression in const-arg position           | S2/S3 |
-| E0703 | Const-arg expression overflows during evaluation     | S8    |
+After Stage 5, two instantiations of the same generic that differ
+only in their const args are **distinct types**:
+
+```riven
+class SmallVec[T, const N: USize] end
+
+let a: SmallVec[Int, 3] = ...
+let b: SmallVec[Int, 4] = a   # type error: cannot assign 3-vec to 4-vec slot
+```
+
+This is the soundness gap S5 closes — before that fix, both shapes
+folded to `SmallVec[Int]` and silently swapped.
+
+---
+
+## Diagnostic summary
+
+| Code  | When it fires                                                            | Tutorial section |
+|-------|--------------------------------------------------------------------------|------------------|
+| [E0702](../errors/E0702.md) | Expression isn't a valid v1 const expression               | "What's NOT a valid const expression" |
+| [E0703](../errors/E0703.md) | Pure-literal overflow or `_ / 0`                            | "Overflow and division by zero" |
+| [E0704](../errors/E0704.md) | Kind mismatch — const in type slot, or vice versa           | "Kind mismatches" |
+| [E0705](../errors/E0705.md) | Const-param type isn't integer or `Bool`                    | "Declaring const parameters" |
+| E0701 | (reserved) — wrong const-arg type once it splits from E0704              | n/a |
+
+---
+
+## What's still pending
+
+Two follow-ups remain for the v1 const-generics story:
+
+- **S7 binding-threading** — `codegen/layout.rs::layout_of` is
+  called with an empty `HashMap<String, u64>` today, so
+  `struct Buf[T, const N: USize]` with field `data: [T; N]` produces
+  a 0-byte field at the layout pass.  The monomorphization wrapper
+  needs to thread per-instantiation bindings through.  Once this
+  lands, per-instantiation overflow / div-zero detection (the
+  deferred half of E0703) flips on automatically.
+- **S9 `where`-clause const predicates** — `where N > 0`,
+  `where N == M`, `where N + M == 8` evaluated at monomorphization;
+  failing predicate emits `E-CONST-WHERE-FALSE` (a new E07xx slot
+  TBD).
+
+Everything else listed in spec §B1–§B8 is wired through.
 
 ---
 
@@ -127,35 +238,13 @@ These are explicit non-goals — they won't ship even in v2.next:
 
 ## How to read this chapter
 
-The hardest part of using an in-flight feature is knowing where the
-edge is.  Three rules:
-
-1. **The spec's stage map is authoritative.**  If
-   [`docs/specs/types/const-generics.spec.md`](../specs/types/const-generics.spec.md)
-   says S3 is pending, you can rely on S2 working and S3 not.
-2. **Pin tests are the contract.**
-   `crates/riven-core/tests/const_generics.rs` shows every observable
-   behaviour the compiler currently enforces.
-3. **Don't write production code that needs S3+ behaviour.**  Use
-   plain generics or a custom wrapper until the relevant stage lands.
+If something here doesn't work the way the text claims, the spec is
+authoritative: [`docs/specs/types/const-generics.spec.md`](../specs/types/const-generics.spec.md).
+The pin tests in `crates/riven-core/tests/const_generics.rs` are
+the executable contract — every behaviour above corresponds to a
+named test.
 
 ---
 
-## Tracking progress
-
-The const-generics roadmap lives in three places, kept in sync:
-
-- **Spec stage map** —
-  [`docs/specs/types/const-generics.spec.md`](../specs/types/const-generics.spec.md).
-- **Prompt 07 DoD** —
-  [`docs/prompts/v1/07_phase3_const_generics.md`](../prompts/v1/07_phase3_const_generics.md).
-- **Flukebase memory** — a procedural memory scoped to the `riven`
-  project that records which stages have shipped + their commits.
-
-When you pick up the next stage, update all three.
-
----
-
-**Next:** [Chapter 14 — Foreign Function Interface](14-ffi.md) if you
-want to call into C, or browse the [Spec index](../specs/README.md)
-to see every area that has a formal contract.
+**Next:** [Chapter 22 — Concurrency Primitives](22-concurrency-primitives.md)
+covers the next big surface (Thread, Mutex, Arc).

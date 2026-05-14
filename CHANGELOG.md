@@ -7,6 +7,22 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+### Changed
+- `docs/tutorial/21-const-generics.md` rewritten end-to-end to
+  match the shipped reality.  Previously the status block said
+  "Stage 1+2 shipped, 3–9 pending" and the body taught only literal
+  use sites.  Updated to cover: bare literals, `+ - * /`
+  arithmetic in both array-size and const-arg positions, the
+  normal-form rewriter (`2 + 2`, `4 * 1`, `4 + 0` all unify with
+  the bare `4` form), the four shipped diagnostics
+  (E0702 / E0703 / E0704 / E0705) with cross-links to their
+  detailed pages, distinct-types semantics, S5 soundness fix,
+  and the two genuinely-remaining v1 follow-ups (S7
+  binding-threading, S9 where-clause predicates).  Stage table
+  removed in favour of a "what's pending" callout — the spec is
+  the canonical stage map.  Examples chosen to mirror the
+  pin-test bodies in `tests/const_generics.rs`.
+
 ### Added
 - Phase 3 #07 follow-up: **E0702 non-const-expression diagnostic**
   (spec §B8 E-CONST-NONCONST).  The lowerer
