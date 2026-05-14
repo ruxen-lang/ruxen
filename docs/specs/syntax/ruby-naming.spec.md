@@ -389,50 +389,73 @@ end
 Without a `layout` directive, the compiler may reorder fields for
 size optimization (declaration order is **not** guaranteed).
 
-### 3.6 Automatic mixin synthesis
+### 3.6 Implicit includes for structural mixins
 
-There is no derive keyword. The compiler **automatically synthesizes**
-implementations of the following mixins for any class, struct, or
-enum whose fields structurally support them:
+`Debug`, `Clone`, `Eq`, `Hash`, etc. are mixins. The `include`
+directive (§3.4) is the only mechanism for adopting a mixin —
+there is no separate auto-synthesis concept and no `derive` keyword.
 
-| Mixin       | Auto-synth rule                                            |
-|-------------|------------------------------------------------------------|
-| `Debug`     | Always — formats as `TypeName(field=value, ...)`.          |
-| `Clone`     | When every field is `Clone`.                               |
-| `Eq`        | When every field is `Eq`. Field-wise `==`.                 |
-| `PartialEq` | Same as `Eq`, partial.                                     |
-| `Hash`      | When every field is `Hash`. FNV mixer over fields in source order. |
-| `Default`   | When every field has a default value.                      |
-| `Ord`       | When every field is `Ord`. Lexicographic by source order.  |
-| `PartialOrd`| Same as `Ord`, partial.                                    |
+For a fixed set of **structural mixins**, `include` is **implicit**.
+The compiler treats the class as if `include` had been written, when
+the fields structurally support the mixin. The implicit-include set
+and its rule:
 
-`Copy` is the one mixin not driven by a list — it's structural and
-ownership-affecting:
+| Mixin       | Implicit when…                                              |
+|-------------|-------------------------------------------------------------|
+| `Debug`     | Always — formats as `TypeName(field=value, ...)`.           |
+| `Clone`     | Every field is `Clone`.                                     |
+| `Eq`        | Every field is `Eq`. Field-wise `==`.                       |
+| `PartialEq` | Same as `Eq`, partial.                                      |
+| `Hash`      | Every field is `Hash`. FNV mixer over fields in source order. |
+| `Default`   | Every field has a default value.                            |
+| `Ord`       | Every field is `Ord`. Lexicographic by source order.        |
+| `PartialOrd`| Same as `Ord`, partial.                                     |
 
-- A `struct` whose every field is `Copy` is itself `Copy`.
-- A `struct` with any non-`Copy` field is not `Copy`.
-- A `class` is never `Copy` (reference semantics).
+`Copy` is structural and ownership-affecting:
 
-Override any auto-synthesized method by defining it in the type body.
-The user's definition wins; the compiler does not synthesize a
-duplicate.
+- A `struct` whose every field is `Copy` implicitly `include`s `Copy`.
+- A `struct` with any non-`Copy` field does not.
+- A `class` never implicitly `include`s `Copy` (reference semantics).
+
+For any **other** mixin — `Greetable`, `Drawable`, custom mixins —
+`include` is required at the use site.
+
+#### Writing the include explicitly
+
+For documentation clarity or when you want the inclusion to fail
+loudly if the rule no longer applies, write it:
+
+```riven
+struct Point
+  x: Int
+  y: Int
+  include Debug, Clone, Eq, Hash    # all four are also implicit; loud form
+end
+```
+
+If an explicit `include Hash` is written and a field doesn't support
+`Hash`, the error fires at the **include site** (early). With
+implicit-only, the same error fires at the **use site** (later, but
+still caught at compile time).
+
+#### Overriding a default method
+
+Default methods of any included mixin (implicit or explicit) can be
+overridden by defining the method in the class body:
 
 ```riven
 struct Point
   x: Int
   y: Int
 
-  def to_debug -> String              # overrides synthesized Debug
+  def to_debug -> String              # overrides implicit Debug
     "(#{self.x}, #{self.y})"
   end
 end
 ```
 
-If a field's type does not support a mixin (e.g., a struct contains
-a non-`Hash` field), the type does not implement that mixin. The
-error appears at the **use site** (e.g., when the value is used as a
-`Map` key), not at the type declaration. The diagnostic names the
-offending field and the missing mixin.
+The user's definition wins; the implicit `include` does not provide
+a duplicate.
 
 ### 3.7 FFI
 
@@ -899,8 +922,8 @@ mention of the prior forms.
 | `&impl T` (param/return type)       | `&some T`                                                 |
 | `&dyn T` (param/return type)        | `&any T`                                                  |
 | `'a` lifetime sigil                 | bare lowercase identifier in `[...]`: `[a]`, `&a T`       |
-| `@[derive(D1, D2)]`                 | DELETE — automatic synthesis (§3.6); user override wins   |
-| `derive D1, D2` in-body             | DELETE — same reason; no `derive` keyword exists          |
+| `@[derive(D1, D2)]`                 | DELETE — structural mixins are implicitly included (§3.6); user override wins; loud form is `include D1, D2` |
+| `derive D1, D2` in-body             | `include D1, D2` (if you want the loud form); else DELETE  |
 | `None` (`Option` variant constructor) | `nil`                                                   |
 | `@[repr(C)]`                        | `layout c` at top of type body                            |
 | `@[repr(packed)]`                   | `layout packed`                                           |

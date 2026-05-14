@@ -2,7 +2,7 @@
 
 Status: draft
 Depends on: tier1_04_drop_copy_clone (pending)
-Blocks: stdlib trait coverage, every struct/enum that needs `Debug`/`Eq`/`Hash`
+Blocks: stdlib mixin coverage, every struct/enum that needs `Debug`/`Eq`/`Hash`
 
 ---
 
@@ -34,35 +34,29 @@ compile-time evaluation are explicit non-goals for v1.
 
 ### 2.1 Syntax surface
 
-Two distinct attribute-adjacent syntaxes are already parsed:
+The current parser machinery still carries a historic prefix-attribute
+parser (`parse_attributes`) and a body-level `derive Mixin1, Mixin2`
+clause. The end-state spec has retired the prefix-attribute surface and
+relies on the body-level form for all derives (and `layout` for
+representation declarations).
 
-1. **Top-level `@[name(arg, ...)]` attributes** — e.g. `@[link("m")]`,
-   `@[repr(C)]`. Parsed by `parse_attributes` at
-   `crates/riven-core/src/parser/mod.rs:1573-1610`. Produces
-   `ast::Attribute { name, args: Vec<String>, span }`
-   (`crates/riven-core/src/parser/ast.rs:787-793`).
-
-2. **In-body `derive Trait1, Trait2` clause** inside a `struct ... end`.
-   Lexed as a dedicated keyword token `TokenKind::Derive`
-   (`crates/riven-core/src/lexer/token.rs:105`, `:327`) and parsed by
-   `parse_struct_def` at
-   `crates/riven-core/src/parser/mod.rs:832-841` into
-   `StructDef.derive_traits: Vec<String>`
-   (`crates/riven-core/src/parser/ast.rs:597`).
+**In-body `derive Mixin1, Mixin2` clause** inside a `struct ... end`.
+Lexed as a dedicated keyword token `TokenKind::Derive`
+(`crates/riven-core/src/lexer/token.rs:105`, `:327`) and parsed by
+`parse_struct_def` at
+`crates/riven-core/src/parser/mod.rs:832-841` into
+`StructDef.derive_traits: Vec<String>`
+(`crates/riven-core/src/parser/ast.rs:597`).
 
 The tutorial documents the in-body form
 (`docs/tutorial/06-classes-and-structs.md:135-141`,
 `docs/tutorial/08-traits.md:141-148`,
-`docs/tutorial/04-ownership-and-borrowing.md:119-125`). `@[derive(...)]` is
-**not** a supported surface form today — the top-level attribute dispatch at
-`crates/riven-core/src/parser/mod.rs:473-511` only handles `@[link]` and
-`@[repr]`; an `@[derive(...)]` on a struct would be a syntax error because
-the `_ => self.error("expected `lib` or `struct` after attribute")` path on
-line 508 is reached after the attributes are consumed but `TokenKind::Struct`
-is the only struct-opening case, and the `@[repr]` branch stuffs its args
-into `derive_traits` as `"repr(C)"`-style strings (see
-`parser/mod.rs:497-504`), which is a hack that will conflict with this
-proposal.
+`docs/tutorial/04-ownership-and-borrowing.md:119-125`).
+
+The parser-state cleanup that closes this gap is described in §9.1: the
+remaining prefix-attribute branches (`link`, `repr`) are migrated to the
+body-level `lib`/`layout` forms in their respective specs; this doc
+focuses on the derive surface.
 
 ### 2.2 Propagation through the pipeline
 
@@ -94,7 +88,7 @@ traits with empty/minimal method sets
 ```
 
 `Eq`, `PartialEq`, `Hash`, `Default`, `Ord`, `PartialOrd` are **not**
-registered as built-in traits. Structural method resolution in
+registered as built-in mixins. Structural method resolution in
 `typeck/traits.rs:81-120` would fail for them today.
 
 ### 2.4 `is_copy` does not consult derives
@@ -132,11 +126,11 @@ AST synthesis pass or a post-HIR impl-synthesis pass. This doc picks one in
 
 ### Goals (v1)
 
-- A working `@[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Default, Ord, PartialOrd)]`
+- A working `derive Debug, Clone, Copy, Eq, PartialEq, Hash, Default, Ord, PartialOrd`
   surface syntax that produces real impls — i.e. the derive list actually
   drives codegen, `is_copy` consults it, `puts` can print any
-  `@[derive(Debug)]` struct.
-- Unify the two current entry points (`@[derive(...)]` and in-body
+  `derive Debug` struct.
+- Unify the two current entry points (`derive ...` and in-body
   `derive T1, T2`) on one canonical form. Both should work; one becomes the
   idiomatic default.
 - Coverage: structs (named + tuple + unit), enums (unit + tuple + struct
@@ -162,9 +156,9 @@ AST synthesis pass or a post-HIR impl-synthesis pass. This doc picks one in
 
 ### Non-goals with soft yes later
 
-- Attribute helpers on derived fields (e.g.
-  `@[serde(rename = "foo")]`). The attribute AST already has room for named
-  args; we carve out space without implementing it.
+- Field-level derive helpers (e.g. a hypothetical
+  `derive Serde rename: "foo"` annotation). The body-form storage already
+  has room for keyword args; we carve out space without implementing it.
 
 ---
 
@@ -176,7 +170,7 @@ generates, what bounds it adds, what errors are raised.
 
 ### 4.1 `Debug`
 
-**Generates:** `impl[GP] Debug for T[GP]` with method
+**Generates:** an in-body `include Debug` directive on `T[GP]` with method
 `def fmt(&self) -> String`. The returned string is the struct/enum printed
 in Riven source-ish form:
 
@@ -195,11 +189,11 @@ in any field type.
 needed. Each field is `field.fmt()` spliced into the interpolated string.
 
 **Errors:** None inherent — all fields getting `Debug` is a bound on the
-generated impl, enforced by typeck at impl definition time.
+generated provision, enforced by typeck at impl definition time.
 
 ### 4.2 `Clone`
 
-**Generates:** `impl[GP] Clone for T[GP]` with
+**Generates:** an in-body `include Clone` directive on `T[GP]` with
 `def clone(&self) -> Self`. For each field, emits
 `self.field.clone()`. For an enum, a `match` over variants reconstructing
 each one.
@@ -207,15 +201,15 @@ each one.
 **Bounds added:** `T_i: Clone` for each type parameter in a field type.
 
 **Errors:** None at definition site — missing `Clone` on a field type is a
-trait-bound failure inside the generated body, reported with a span that
+mixin-bound failure inside the generated body, reported with a span that
 points at the field whose type is missing `Clone` (§9.4).
 
 ### 4.3 `Copy`
 
-**Generates:** `impl[GP] Copy for T[GP]` — the trait has no methods
+**Generates:** an in-body `include Copy` directive on `T[GP]` — the trait has no methods
 (`resolve/mod.rs:147`). Also updates `Ty::is_copy` to return `true` for
 `Ty::Struct { name, .. }` / `Ty::Enum { name, .. }` when the symbol table
-records a derived `Copy` impl for `name` (§5.5).
+records a derived `Copy` provision for `name` (§5.5).
 
 **Bounds added:** `T_i: Copy` for every type parameter referenced in a field.
 
@@ -226,59 +220,60 @@ records a derived `Copy` impl for `name` (§5.5).
   parameterized.
 - **Copy without Clone.** Rust requires `Copy: Clone`. Riven should follow
   suit: emit `E0602: deriving Copy also requires Clone` and suggest
-  `@[derive(Copy, Clone)]`. (Alternative: auto-add Clone; rejected for
+  `derive Copy, Clone`. (Alternative: auto-add Clone; rejected for
   explicitness.)
 - **Derived on a `class`.** Classes are heap/reference types; emit
   `E0603: Copy cannot be derived on classes; use a struct`.
 
 ### 4.4 `PartialEq`
 
-**Generates:** `impl[GP] PartialEq for T[GP]` with
+**Generates:** an in-body `include PartialEq` directive on `T[GP]` with
 `def eq(&self, other: &Self) -> Bool`. Struct: conjunction of
 `self.f_i == other.f_i`. Enum: `match` on `(&self, &other)` returning `true`
 when both sides are the same variant with all corresponding fields equal.
 
 **Bounds added:** `T_i: PartialEq` for every type parameter in a field.
 
-**Trait registration:** adds `PartialEq` with required method `eq` to
-the built-in trait list at `resolve/mod.rs:139-151`.
+**Mixin registration:** adds `PartialEq` with required method `eq` to
+the built-in mixin list at `resolve/mod.rs:139-151`.
 
 ### 4.5 `Eq`
 
-**Generates:** `impl[GP] Eq for T[GP]` — marker trait, no methods.
+**Generates:** an in-body `include Eq` directive on `T[GP]` — marker mixin, no methods.
 `Eq: PartialEq` is required.
 
 **Errors:** `E0604: deriving Eq also requires PartialEq`.
 
 ### 4.6 `Hash`
 
-**Generates:** `impl[GP] Hash for T[GP]` with
+**Generates:** an in-body `include Hashable` directive on `T[GP]` with
 `def hash(&self, hasher: &mut Hasher) -> Unit`. For each field emits
 `self.field.hash(hasher)`. For enums, also hashes the variant discriminant
 first.
 
 **Bounds added:** `T_i: Hash`.
 
-**Trait registration:** adds `Hash` as a built-in trait (currently the
+**Mixin registration:** adds `Hash` as a built-in mixin (currently the
 token `Hash` is already a built-in **type constructor** for hash maps at
 `resolve/mod.rs:200`; the trait needs a disambiguated name or the type
 constructor needs a rename. See §12 Open questions.).
 
 ### 4.7 `Default`
 
-**Generates:** `impl[GP] Default for T[GP]` with
+**Generates:** an in-body `include Default` directive on `T[GP]` with
 `def default() -> Self`. Struct: `Self { f_i: Default::default(), ... }`.
-Enum: requires exactly one variant annotated `@[default]`; otherwise error.
-Unit variant defaults to itself.
+Enum: requires exactly one variant marked with a body-level `default`
+directive (e.g. `default Variant`); otherwise error. Unit variant defaults
+to itself.
 
 **Bounds added:** `T_i: Default`.
 
-**Errors:** `E0605: cannot derive Default on enum Foo without a #[default]
+**Errors:** `E0605: cannot derive Default on enum Foo without a default
 variant`. For structs with no fields, trivially emit `Self {}` / unit.
 
 ### 4.8 `Ord`
 
-**Generates:** `impl[GP] Ord for T[GP]` with
+**Generates:** an in-body `include Ord` directive on `T[GP]` with
 `def cmp(&self, other: &Self) -> Ordering`. Struct: lexicographic over
 fields in declaration order. Enum: by variant index first, then
 lexicographic over payload.
@@ -336,9 +331,9 @@ The candidates considered:
    method call to `DefId`.
 
 3. **Post-HIR, in MIR.** Rejected. MIR is function-scoped, not
-   item-scoped; synthesizing impl blocks there means bypassing trait
-   resolution and the borrow checker, both of which need to see derived
-   impls as real impls.
+   item-scoped; synthesizing provision blocks there means bypassing
+   mixin resolution and the borrow checker, both of which need to see
+   derived provisions as real provisions.
 
 ### 5.2 Pipeline placement
 
@@ -440,11 +435,12 @@ pub struct StructInfo {
 ### 5.6 Generic bound propagation
 
 For a generic type `struct Pair[T, U] { a: T, b: U } derive Debug`, the
-generated impl must carry `where T: Debug, U: Debug`. The expander walks
+generated provision must carry `where T: Debug, U: Debug`. The expander walks
 each field type and collects every type-parameter name referenced. Each
 reference → one bound. Transitive: if the field type is
-`Vec[T]`, we still only need `T: Debug` because `Vec`'s `Debug` impl is
-itself `impl[T: Debug] Debug for Vec[T]`.
+`Array[T]`, we still only need `T: Debug` because `Array`'s `Debug`
+provision is itself a conditional `extension Array[T] where T: Debug
+... include Debug ... end` block.
 
 The generated `HirImplBlock.generic_params` replicates the type's
 `generic_params` with bounds augmented.
@@ -456,72 +452,57 @@ derive in §4. Trait-bound violations inside a generated body (e.g. Clone
 derives a body that calls `field.clone()` but the field type doesn't
 implement Clone) are **not** caught by the expander; they surface during
 type-check of the generated HIR. That is correct because: (a) the
-expander doesn't have full trait resolution yet, and (b) the resulting
-error points at the generated impl with a note that the body was
+expander doesn't have full mixin resolution yet, and (b) the resulting
+error points at the generated provision with a note that the body was
 auto-derived — see §9.4 for the span strategy.
 
 ---
 
-## 6. Attribute syntax
+## 6. Derive syntax
 
 ### 6.1 Canonical form
 
-```
-@[derive(Debug, Clone, Copy)]
+```riven
 struct Point
   x: Float
   y: Float
+  derive Debug, Clone, Copy
 end
 ```
 
-Decision: `@[derive(...)]` is the canonical form. The existing
-`@[derive(...)]` dispatch gap in the parser (§2.1) **must be closed**: the
-top-level attribute handler at
-`crates/riven-core/src/parser/mod.rs:473-511` needs a `"derive"` arm that
-stores the args on `StructDef.derive_traits` (similar to how `"repr"` is
-handled on line 499-503, minus the `repr()` stringification hack).
+The `derive` directive is body-level, alongside `layout` and `include`.
 
-### 6.2 Backward-compat for the in-body `derive` keyword
+### 6.2 In-body only
 
-Two options:
-
-- **(A) Keep both.** `@[derive(...)]` above the struct **and** `derive ..`
-  inside the body merge into the same `derive_traits`. Tutorial uses the
-  `@[derive]` form going forward; the in-body form stays as a deprecated
-  alias for one release.
-- **(B) Remove in-body.** Breaking change; touches `TokenKind::Derive`,
-  the struct-parsing loop, all three tutorial files, and the formatter.
-
-Recommendation: **(A)**. Zero breakage, cost is a line of merge logic.
-The formatter emits the `@[derive(...)]` form on reformat, migrating
-sources organically.
+All derive metadata lives inside the type body. There is no
+prefix-attribute form. The parser-state cleanup (§9.1) deletes any
+remaining prefix-attribute branches.
 
 ### 6.3 Composition
 
-`@[derive(A, B)]` and `@[derive(C)]` on the same item stack additively.
-Duplicates are silently deduplicated. Order is irrelevant.
+Multiple `derive A, B` and `derive C` lines on the same item stack
+additively. Duplicates are silently deduplicated. Order is irrelevant.
 
-### 6.4 Attribute arg grammar
+### 6.4 Derive arg grammar
 
-`parse_attr_arg` (`parser/mod.rs:1613-1633`) currently accepts string
-literals, identifiers, and type identifiers. For derive we only need
-type identifiers (trait names). Future derives may need key-value args
-(e.g. `@[serde(rename = "foo")]`) — that is a grammar extension we defer.
-Document in §12 as an open question.
+The `derive` directive accepts a comma-separated list of mixin
+identifiers. Future field- or type-level derive helpers may need
+key-value args — that is a grammar extension we defer. Documented in
+§12 as an open question.
 
 ### 6.5 Applicable targets
 
-| attribute   | struct | enum  | class | trait | fn  |
+| directive   | struct | enum  | class | mixin | fn  |
 |-------------|--------|-------|-------|-------|-----|
 | `derive`    | yes    | yes   | no*   | no    | no  |
-| `repr`      | yes    | no    | no    | no    | no  |
-| `link`      | no     | no    | no    | no    | lib |
+| `layout`    | yes    | no    | no    | no    | no  |
+| `lib`       | top-level FFI block keyword (n/a as a target marker)  |
 
-\*Classes can have `@[derive(Clone)]` later (needs recursive Clone over a
+\*Classes can carry `derive Clone` later (needs recursive Clone over a
 heap pointer — fine) but **not** `Copy` (§4.3). Out of scope for v1.
 
-Attribute application on an invalid target is a parse-level error:
-`E0607: @[derive] cannot be applied to a trait`.
+A `derive` directive in an invalid container is a parse-level error:
+`E0607: derive cannot appear in a mixin body`.
 
 ---
 
@@ -534,15 +515,15 @@ This is the 5d milestone, not v1. Sketch only.
 Borrowing from Rust's `macro_rules!` but rendered in Riven keyword style:
 
 ```
-macro vec!
-  () => { Vec.new }
+macro array!
+  () => { Array.new }
   ($x:expr) => {
-    let v = Vec.new
+    var v = Array.new
     v.push($x)
     v
   end }
   ($x:expr, $($rest:expr),+) => {
-    let v = vec!($($rest),+)
+    var v = array!($($rest),+)
     v.push($x)
     v
   end }
@@ -559,10 +540,10 @@ end
   `TokenTree` enum (`Group`, `Ident`, `Punct`, `Literal`) — add this to
   `riven-core/src/macros/` when 5d lands.
 
-### 7.2 Function-like, attribute-like, custom derives
+### 7.2 Function-like and custom derives
 
-All three are compile-time Riven code that runs inside the compiler. The
-Rust approach (separate `proc_macro` crates compiled separately, loaded
+Both are compile-time Riven code that runs inside the compiler. The
+Rust approach (separate proc-macro packages compiled separately, loaded
 as shared libraries) is a significant engineering investment. Crystal's
 approach (macros are interpreted in a mini-AST-level evaluator built into
 the compiler) is cheaper. Riven is unlikely to need proc-macros for
@@ -609,28 +590,28 @@ user structs — tolerable but regressive.
 ### 8.2 Stdlib circular dependency
 
 `Debug`, `Clone`, etc. are declared in stdlib. Derives emit impls that
-reference these trait names. If stdlib itself has structs that need
-`@[derive(Debug)]`, the derive expander runs on stdlib compilation and
+reference these mixin names. If stdlib itself has structs that need
+`derive Debug`, the derive expander runs on stdlib compilation and
 references a trait that is defined **in the same compilation unit**. This
 is fine because:
 
-- Resolve pre-pass registers all top-level trait names before the expander
+- Resolve pre-pass registers all top-level mixin names before the expander
   runs (`resolve/mod.rs:138-170` already does this for the built-in list).
-- The generated impl's method signatures are fully concrete HIR — no
+- The generated provision's method signatures are fully concrete HIR — no
   forward name lookup required during typeck.
 
-For stdlib trait definitions themselves (the definition of `trait Clone
+For stdlib trait definitions themselves (the definition of `mixin Clone
 ... end` in stdlib source), we do **not** derive; those are hand-written.
-The built-in trait list in `resolve/mod.rs` is a bootstrap shim that will
+The built-in mixin list in `resolve/mod.rs` is a bootstrap shim that will
 eventually be removed once stdlib is loaded as a real dependency.
 
 ### 8.3 LSP / `riven-ide`
 
 Derived impls must be discoverable by hover and goto-definition. The
 expander attaches a `Span` to each generated item pointing at the
-original `@[derive(TraitName)]` attribute's span — not a synthesized
+original `derive MixinName` attribute's span — not a synthesized
 span. `riven-ide` then treats goto-def on a call to `.clone()` on a
-derived struct as "jumps to the `@[derive(Clone)]` attribute on the
+derived struct as "jumps to the `derive Clone` attribute on the
 struct definition", which is the right UX.
 
 If we later want goto-def to instead show a synthesized code view, add a
@@ -640,7 +621,7 @@ for v1.
 ### 8.4 Formatter
 
 `formatter/format_items.rs:391-402` today emits the in-body `derive X, Y`
-form. It must be taught the `@[derive(...)]` form and emit that when
+form. It must be taught the `derive ...` form and emit that when
 either syntax is input. See §6.2.
 
 ### 8.5 Trait resolution
@@ -659,19 +640,21 @@ Each step is a separately reviewable PR.
 
 ### 9.1 Step 1 — Close the parser gap
 
-- Add `"derive"` arm at `parser/mod.rs:477-511`. Args go into
-  `StructDef.derive_traits`.
-- Extend `parse_attributes` dispatch to also accept `@[derive]` on
-  `enum` (currently `enum` isn't even in the match — see
-  `parser/mod.rs:495` only handles `Lib` and `Struct`). Add enum support
-  by extending `EnumDef` with `derive_traits: Vec<String>` (mirror of
-  `StructDef.derive_traits`).
-- Remove the `repr(C)` string-stuffing hack at `parser/mod.rs:499-503`;
-  move `repr` to its own field on `StructDef`.
-- Unit tests: parse `@[derive(Debug)]`, `@[derive(A, B, C)]`, both forms
-  together; error for `@[derive]` on `fn` or `trait`.
+- Extend the body-form `derive Mixin1, Mixin2` parser at
+  `parser/mod.rs:832-841` to also fire inside `enum` bodies (currently
+  only `struct` accepts it). Mirror `derive_traits: Vec<String>` onto
+  `EnumDef` (and `ClassDef` even if classes reject Copy, for
+  consistency with the mixin table).
+- Migrate the `repr(C)` string-stuffing hack at `parser/mod.rs:499-503`
+  to the body-level `layout` directive (see the syntax spec §3.5);
+  add the dedicated `layout_kind` field on `StructDef` and reroute the
+  parser.
+- Delete the prefix-attribute branches once nothing in tests or stdlib
+  emits them.
+- Unit tests: parse `derive Debug` inside struct/enum/class; reject
+  `derive` inside `mixin`/`def`.
 
-### 9.2 Step 2 — Register missing built-in traits
+### 9.2 Step 2 — Register missing built-in mixins
 
 - `resolve/mod.rs:138-151`: append `PartialEq`, `Eq`, `Hash` (as trait,
   distinct from the `Hash` **type constructor** at line 200 — see §4.6 /
@@ -709,7 +692,7 @@ Each generator:
    `trait_ref = Some(TraitRef { name: "Debug", generic_args: vec![] })`
    and `target_ty = Ty::Struct { name, generic_args }`.
 3. Append to `program.items`.
-4. Every span inside the generated impl uses the original derive
+4. Every span inside the generated provision uses the original derive
    attribute's span (§8.3). Every synthesized identifier is prefixed
    `$riven$` (§7.3).
 
@@ -720,20 +703,20 @@ Diagnostic codes: E0601–E0609 (reserved block). Template:
 ```
 error[E0601]: cannot derive Copy on struct `Foo`
   --> foo.rvn:3:3
-3 |   inner: Vec[Int]
-  |   ^^^^^^^^^^^^^^^ field type `Vec[Int]` is not Copy
+3 |   inner: Array[Int]
+  |   ^^^^^^^^^^^^^^^^^ field type `Array[Int]` is not Copy
   |
 note: Copy was requested here
-  --> foo.rvn:1:1
-1 | @[derive(Copy)]
-  | ^^^^^^^^^^^^^^^
+  --> foo.rvn:5:3
+5 |   derive Copy
+  |   ^^^^^^^^^^^
 ```
 
 Two spans always: the offending field (or variant), and the
-`@[derive(...)]` origin.
+`derive ...` origin.
 
 For errors that surface in generated bodies (§5.7), the
-type-check pipeline must detect "this impl came from a derive" via a
+type-check pipeline must detect "this provision came from a derive" via a
 `HirImplBlock.origin: ImplOrigin` field (new — `Origin::Source` vs
 `Origin::Derived { attr_span, trait_name }`). Type errors inside derived
 bodies then reformat as "deriving `Clone` on `Foo` failed because …".
@@ -743,19 +726,19 @@ bodies then reformat as "deriving `Clone` on `Foo` failed because …".
 - `is_copy_with` (§5.5) in `hir/types.rs`.
 - `borrow_check/moves.rs:51,59` switch from `Ty::is_copy` to
   `is_copy_with(&symbols)`.
-- Regression tests: struct with `@[derive(Copy, Clone)]` survives a
+- Regression tests: struct with `derive Copy, Clone` survives a
   re-use after assignment; struct without derive still errors.
 
 ### 9.7 Step 7 — Formatter update
 
 Teach `formatter/format_items.rs:385-402` and `formatter/format_items.rs`
-(new enum branch) to emit `@[derive(...)]` above the struct/enum. Leave
+(new enum branch) to emit `derive ...` above the struct/enum. Leave
 the in-body emit path only for sources where the input used it, or
-default all emits to `@[derive(...)]` (cleaner; adopt this).
+default all emits to `derive ...` (cleaner; adopt this).
 
 ### 9.8 Step 8 — Documentation
 
-- `docs/tutorial/08-traits.md:139-149`: rewrite using `@[derive(...)]`.
+- `docs/tutorial/08-traits.md:139-149`: rewrite using `derive ...`.
 - Same for `docs/tutorial/06-classes-and-structs.md:131-145` and
   `docs/tutorial/04-ownership-and-borrowing.md:119-125`.
 
@@ -791,23 +774,23 @@ PartialEq)`, all nine together.
 
 ### 10.3 Error axis
 
-- `@[derive(Copy)]` on struct with `Vec[Int]` field → E0601, points at
+- `derive Copy` on struct with `Array[Int]` field → E0601, points at
   the field.
-- `@[derive(Copy)]` without `Clone` → E0602.
-- `@[derive(Copy)]` on a class → E0603.
-- `@[derive(Eq)]` without `PartialEq` → E0604.
-- `@[derive(Default)]` on enum without `@[default]` variant → E0605.
-- `@[derive(Ord)]` without `Eq, PartialOrd` → E0606.
-- `@[derive]` on `fn foo` → E0607.
-- `@[derive(NotARealTrait)]` → E0608 (unknown derive).
-- Generic `@[derive(Clone)]` where a type-param field is not Clone →
+- `derive Copy` without `Clone` → E0602.
+- `derive Copy` on a class → E0603.
+- `derive Eq` without `PartialEq` → E0604.
+- `derive Default` on enum without a `default` variant directive → E0605.
+- `derive Ord` without `Eq, PartialOrd` → E0606.
+- `derive` inside `def foo` → E0607.
+- `derive NotARealMixin` → E0608 (unknown derive).
+- Generic `derive Clone` where a type-param field is not Clone →
   reported at use site (not definition).
 
-### 10.4 Attribute ordering
+### 10.4 Directive ordering
 
-- `@[derive(Debug)] @[derive(Clone)]` stacks.
-- `@[derive(Debug)] @[repr(C)]` does not interfere.
-- Mixed in-body `derive X` **and** `@[derive(Y)]` merges (§6.2).
+- `derive Debug` and `derive Clone` on separate lines stack.
+- `derive Debug` plus `layout c` in the same body do not interfere.
+- Mixed `derive X` and `derive Y` lines merge (§6.3).
 
 ### 10.5 Formatter roundtrip
 
@@ -817,7 +800,7 @@ the same HIR.
 ### 10.6 LSP / IDE
 
 `riven-ide` hover on a `.clone()` call for a derived struct shows the
-generated impl signature; goto-def lands on the `@[derive(Clone)]`
+generated provision signature; goto-def lands on the `derive Clone`
 attribute (§8.3).
 
 ---
@@ -826,7 +809,7 @@ attribute (§8.3).
 
 | Phase | Content                                       | Blocks                         |
 |-------|-----------------------------------------------|--------------------------------|
-| 5a    | Parser gap closed (§9.1), trait registration (§9.2), `DeriveExpander` scaffold (§9.3), `Debug`+`Clone` generators (§9.4), basic error reporting (§9.5), formatter update (§9.7), docs (§9.8) | printing/logging any struct |
+| 5a    | Parser gap closed (§9.1), mixin registration (§9.2), `DeriveExpander` scaffold (§9.3), `Debug`+`Clone` generators (§9.4), basic error reporting (§9.5), formatter update (§9.7), docs (§9.8) | printing/logging any struct |
 | 5b    | `Copy`+`PartialEq`, `is_copy_with` + borrow check integration (§9.6) | tier1_04 Drop/Copy/Clone doc |
 | 5c    | `Eq`+`Hash`+`Default`                         | stdlib hash-map usage          |
 | 5c'   | `Ord`+`PartialOrd`                            | `sort`, `BTreeMap`             |
@@ -841,51 +824,42 @@ explicitly deferred.
 
 ## 12. Open questions & risks
 
-### 12.1 `Hash` naming collision
+### 12.1 `Hashable` vs hash-keyed map
 
-`Hash` is both:
+The collection type is `Map[K, V]` (per the syntax spec §3.11). The
+mixin describing "value that can be hashed" is `Hashable` (fits the
+existing `Displayable`, `Comparable` pattern at `resolve/mod.rs:140-143`).
+`derive Hash` is the body-level derive spelling; expansion produces an
+`include Hashable` provision on `T`.
 
-- a built-in type constructor for hash maps
-  (`resolve/mod.rs:200`), and
-- the trait we want to register for `@[derive(Hash)]`.
+Document the naming convention in a cross-cutting ADR — all stdlib
+derive-able mixins end in `-able` (`Displayable`, `Hashable`, `Clonable`?)
+or none do. Currently `Debug`, `Clone`, `Copy`, `Eq`, `Ord` are fine by
+both Rust and English. Pick and commit.
 
-In Rust these are `std::collections::HashMap` and `std::hash::Hash`, distinct by
-path. Riven doesn't have modules in the symbol table that disambiguate
-them in the same way. Options:
+### 12.2 Derive args beyond bare mixin names
 
-- Rename the hash-map type to `HashMap` (breaks existing code).
-- Rename the trait to `Hashable` (fits the existing `Displayable`,
-  `Comparable` pattern at `resolve/mod.rs:140-143`). **Recommended.** Then
-  `@[derive(Hashable)]` emits an `impl Hashable for T` block. The type
-  constructor `Hash[K, V]` is untouched.
-
-If we go with `Hashable`: document the naming convention in a cross-cutting
-ADR — all stdlib derive-able traits end in `-able` (`Displayable`,
-`Hashable`, `Clonable`?) or none do. Currently `Debug`, `Clone`, `Copy`,
-`Eq`, `Ord` are fine by both Rust and English. Pick and commit.
-
-### 12.2 Attribute args beyond bare type names
-
-`@[derive(Debug)]` uses `parse_attr_arg` which accepts string literals
-and identifiers. Future `@[serde(rename = "foo", default)]` needs
-key-value pairs and richer expressions. Not needed for v1 but the AST
-(`Attribute { args: Vec<String> }` at `ast.rs:789-793`) is too weak.
-Change to `args: Vec<AttrArg>` where `AttrArg` supports
+`derive Debug` accepts identifiers only today. Future derive helpers
+(e.g. `derive Serde rename: "foo"`, default-variant tagging) need
+key-value pairs and richer expressions. Not needed for v1 but the
+internal storage (`Attribute { args: Vec<String> }` at `ast.rs:789-793`,
+held over from the prefix-attribute machinery) is too weak. Change to
+`args: Vec<DeriveArg>` where `DeriveArg` supports
 `Value(Expr)` / `KeyValue(String, Expr)` **now**, even if the grammar
 doesn't parse them yet. Cheap future-proofing.
 
 ### 12.3 Orphan rule for derived impls
 
-Rust's orphan rule forbids `impl ForeignTrait for ForeignType` except
+Rust's orphan rule forbids `include ForeignMixin on ForeignType` except
 when one is local. Derives sidestep this because the type is always
 local (you can only derive on a type you own). Nothing to decide, but
-document explicitly: v1 does not support deriving a foreign trait for a
+document explicitly: v1 does not support deriving a foreign mixin for a
 foreign type because no mechanism exists for it.
 
 ### 12.4 Generic bound explosion
 
 `struct Tree[T] { left: Box[Tree[T]], right: Box[Tree[T]], val: T }` with
-`@[derive(Debug)]` produces an impl with bound `T: Debug`. Rust's
+`derive Debug` produces an impl with bound `T: Debug`. Rust's
 current heuristic adds `T: Debug` for every type parameter that appears
 "anywhere" in a field. Mostly right but over-bounded in phantom-data
 cases — we don't have phantom data in Riven yet, so the simple heuristic
