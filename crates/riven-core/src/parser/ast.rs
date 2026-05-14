@@ -98,12 +98,25 @@ pub enum TypeExpr {
     ///
     /// Phase 02a stage 2 — parser only.  Resolve will promote this
     /// to `ConstExpr::Lit` for const parameters in S3 and emit a
-    /// kind-mismatch diagnostic (E0700) when it lands against a type
+    /// kind-mismatch diagnostic (E0704) when it lands against a type
     /// parameter.  The variant uses `i64` so the parser can carry
     /// negative literals through faithfully even though const
     /// parameters bound to unsigned types will reject them later.
     ConstLit {
         value: i64,
+        span: Span,
+    },
+    /// Tier-2 const generics S8.S3: an arithmetic const expression
+    /// appearing in a generic-argument position (e.g. `2 + 3` in
+    /// `Vector[Int, 2 + 3]`).  Stored as a parser `Expr` so the
+    /// existing arithmetic precedence parser does the work; resolve
+    /// folds the result into a HIR `ConstExpr` via
+    /// `lower_const_expr_from_expr`.  Triggered when the lookahead
+    /// after an `IntLiteral` token is a binary arithmetic op
+    /// (`+ - * /`).  Bare literals still emit `ConstLit` for
+    /// backwards compatibility with existing call sites.
+    ConstExprArg {
+        expr: Box<Expr>,
         span: Span,
     },
 }

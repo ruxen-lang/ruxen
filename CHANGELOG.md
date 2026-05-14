@@ -7,6 +7,40 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+### Added
+- Phase 3 #07.S8.S3: arithmetic in const-arg position
+  (`Vector[Int, 2 + 3]`).  Parser's `parse_generic_arg` looks one
+  token ahead after an `IntLiteral`; if a binary arithmetic op
+  (`+ - * /`) follows, the whole expression is captured via
+  `parse_expression` and emitted as the new
+  `TypeExpr::ConstExprArg { expr: Box<Expr>, span }` AST variant.
+  Bare literals (`Vector[Int, 4]`) continue to emit `ConstLit`
+  unchanged — backwards-compat fast path preserved.  Resolve folds
+  `ConstExprArg` through the existing
+  `lower_const_expr_from_expr` helper that S8.S2 added for
+  `[T; expr]` array sizes, so const-arg arithmetic produces
+  identically-shaped `Ty::ConstArg(ConstExpr::Op(...))` HIR.  The
+  kind-check now treats both `ConstLit` and `ConstExprArg` as
+  const-kind args; a kind mismatch (const arithmetic landing in a
+  type slot) still emits E0704 with the diagnostic message
+  refined to say "found const expression" rather than "found const
+  literal".  Pin tests in `const_generics.rs`:
+  `parse_const_arg_arithmetic_emits_const_expr_arg`,
+  `parse_const_arg_bare_literal_still_emits_const_lit`,
+  `resolve_const_arg_arithmetic_lowers_to_const_expr_op` (full
+  parse→resolve→typeck round trip through a function parameter
+  annotation), and
+  `const_arg_arithmetic_against_type_param_emits_e0704`.  Spec
+  stage map updated to reflect S8.S3 shipped; S8 still in flight
+  pending the normal-form rewriter (`[T; N + 0] = [T; N]`).
+- Three formatter / printer arms also extended so the new
+  `ConstExprArg` variant doesn't crash exhaustive matches in
+  `parser/printer.rs`, `formatter/comments.rs`, and
+  `formatter/format_type.rs`.  The Doc-native printer routes
+  through `format_expr_short` for now — a custom Doc layout for
+  const-arg arithmetic can come when formatting that surface gets
+  style attention.
+
 ### Changed
 - **Breaking diagnostic-code rename:** const-generic kind-mismatch
   diagnostic moved from **E0700** to **E0704**.  E0700 was originally

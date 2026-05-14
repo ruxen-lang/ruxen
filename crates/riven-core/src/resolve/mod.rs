@@ -4674,15 +4674,23 @@ impl Resolver {
             // accidental use against a type parameter degrades safely.
             // S3 will introduce DefKind::ConstParam and promote ConstLit
             // to a real `ConstExpr::Lit` against const params, then
-            // emit E0700 against type params.
+            // emit E0704 against type params.
             // T2.02 S6: a `ConstLit` in a generic-arg position
             // becomes a `Ty::ConstArg(ConstExpr::Lit(v))` so distinct
             // const instantiations of a generic type produce
             // distinct Ty values.  The S5 kind-check (above the call
-            // site) emits E0700 when this lands against a Type slot;
+            // site) emits E0704 when this lands against a Type slot;
             // here we only build the value.
             ast::TypeExpr::ConstLit { value, .. } => {
                 Ty::ConstArg(crate::hir::types::ConstExpr::Lit(*value as u64))
+            }
+            // T2.02 S8.S3: an arithmetic const expression in a
+            // generic-arg position folds through the same
+            // `lower_const_expr_from_expr` helper that S8.S2 uses
+            // for `[T; expr]` array sizes.  The kind-check (above
+            // the call site) also treats this as a const-arg slot.
+            ast::TypeExpr::ConstExprArg { expr, .. } => {
+                Ty::ConstArg(lower_const_expr_from_expr(expr))
             }
         }
     }
@@ -4736,8 +4744,11 @@ impl Resolver {
                     _ => None,
                 });
             for (idx, arg) in ast_args.iter().enumerate() {
-                let is_const_lit = matches!(arg, ast::TypeExpr::ConstLit { .. });
-                if !is_const_lit {
+                let is_const_arg = matches!(
+                    arg,
+                    ast::TypeExpr::ConstLit { .. } | ast::TypeExpr::ConstExprArg { .. }
+                );
+                if !is_const_arg {
                     continue;
                 }
                 let declared_kind = declared_kinds
@@ -4747,12 +4758,19 @@ impl Resolver {
                 if matches!(declared_kind, GenericParamKind::Type) {
                     let arg_span = match arg {
                         ast::TypeExpr::ConstLit { span, .. } => span.clone(),
+                        ast::TypeExpr::ConstExprArg { span, .. } => span.clone(),
                         _ => path.span.clone(),
+                    };
+                    let what = match arg {
+                        ast::TypeExpr::ConstLit { .. } => "const literal",
+                        ast::TypeExpr::ConstExprArg { .. } => "const expression",
+                        _ => "const argument",
                     };
                     self.diagnostics.push(Diagnostic::error_with_code(
                         format!(
-                            "expected a type at generic argument position {}, found const literal",
-                            idx + 1
+                            "expected a type at generic argument position {}, found {}",
+                            idx + 1,
+                            what
                         ),
                         arg_span,
                         // E0704 — kind mismatch on const-generic arg.  Previously

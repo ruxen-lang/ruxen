@@ -941,6 +941,198 @@ end
     }
 }
 
+// ── Stage 8.S3: arithmetic in const-arg position ────────────────────
+//
+// B8 (S8.S3): the parser also accepts `+ - * /` arithmetic in
+// const-arg position (`Vector[Int, 2 + 3]`).  Triggered by an
+// IntLiteral followed by an arithmetic op; the whole expression
+// parses through `parse_expression` and emits
+// `TypeExpr::ConstExprArg`, which resolve folds through the same
+// `lower_const_expr_from_expr` helper used for array-size form.
+// Bare literals (`Vector[Int, 4]`) continue to emit `ConstLit`.
+
+#[test]
+fn parse_const_arg_arithmetic_emits_const_expr_arg() {
+    use riven_core::parser::ast::{Expr, ExprKind, BinOp, TopLevelItem, TypeExpr};
+    let src = r#"
+struct Holder
+  x: Foo[Int, 2 + 3]
+end
+"#;
+    let prog = parse(src);
+    let s = prog
+        .items
+        .iter()
+        .find_map(|i| match i {
+            TopLevelItem::Struct(s) if s.name == "Holder" => Some(s),
+            _ => None,
+        })
+        .expect("no Holder struct");
+    let path = into_named(&s.fields[0].type_expr);
+    let args = path.generic_args.as_ref().expect("Foo generic args");
+    assert_eq!(args.len(), 2);
+    match &args[1] {
+        TypeExpr::ConstExprArg { expr, .. } => {
+            // The captured `Expr` should be a `BinaryOp(2, Add, 3)`.
+            match &expr.as_ref().kind {
+                ExprKind::BinaryOp { left, op, right } => {
+                    assert_eq!(*op, BinOp::Add);
+                    assert!(matches!(left.as_ref().kind, ExprKind::IntLiteral(2, _)));
+                    assert!(matches!(right.as_ref().kind, ExprKind::IntLiteral(3, _)));
+                    // Suppress unused-binding warnings if the const
+                    // arms get refactored.
+                    let _ = (left, right);
+                    let _: &Expr = left.as_ref();
+                }
+                other => panic!("expected BinaryOp, got {:?}", other),
+            }
+        }
+        other => panic!("expected ConstExprArg, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_const_arg_bare_literal_still_emits_const_lit() {
+    // Backwards-compat: no arithmetic follow-up means the historic
+    // `ConstLit` fast path is still used.
+    use riven_core::parser::ast::{TopLevelItem, TypeExpr};
+    let src = r#"
+struct Holder
+  x: Foo[Int, 4]
+end
+"#;
+    let prog = parse(src);
+    let s = prog
+        .items
+        .iter()
+        .find_map(|i| match i {
+            TopLevelItem::Struct(s) if s.name == "Holder" => Some(s),
+            _ => None,
+        })
+        .expect("no Holder struct");
+    let path = into_named(&s.fields[0].type_expr);
+    let args = path.generic_args.as_ref().expect("Foo generic args");
+    assert_eq!(args.len(), 2);
+    assert!(
+        matches!(&args[1], TypeExpr::ConstLit { value: 4, .. }),
+        "expected ConstLit(4), got {:?}",
+        &args[1]
+    );
+}
+
+#[test]
+fn resolve_const_arg_arithmetic_lowers_to_const_expr_op() {
+    // End-to-end: parse + resolve of `Vector[Int, 2 + 3]` in a
+    // parameter-type annotation threads through to
+    // `Ty::ConstArg(ConstExpr::Op(Lit(2), Add, Lit(3)))`.  The
+    // kind-check accepts it (it's a const-kind arg landing in a
+    // const-kind slot).  We pin the resolved param type directly
+    // because constructor return-type inference doesn't fold the
+    // const arg back in — that's a separate (S6 follow-up)
+    // monomorphization concern.
+    use riven_core::hir::nodes::HirItem;
+    use riven_core::hir::types::{ConstExpr, ConstOp, Ty};
+
+    let src = r#"
+class Vector[T, const N: USize]
+  data: USize
+
+  def init(@data: USize)
+  end
+end
+
+def take_vec(v: Vector[Int, 2 + 3])
+end
+"#;
+    let mut lx = riven_core::lexer::Lexer::new(src);
+    let toks = lx.tokenize().expect("lex");
+    let mut p = riven_core::parser::Parser::new(toks);
+    let prog = p.parse().expect("parse");
+    let result = riven_core::typeck::type_check(&prog);
+    let errors: Vec<_> = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.level == riven_core::diagnostics::DiagnosticLevel::Error)
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "expected no errors; got: {:?}",
+        errors.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+
+    // The first parameter of `consume` should resolve to
+    // `Vector` with generic_args = [Int, ConstArg(Op(Lit(2), Add, Lit(3)))].
+    let func = result
+        .program
+        .items
+        .iter()
+        .find_map(|i| match i {
+            HirItem::Function(f) if f.name == "take_vec" => Some(f),
+            _ => None,
+        })
+        .expect("no take_vec function in HIR");
+    let param_ty = &func.params[0].ty;
+    let inner = match param_ty {
+        // Walk through any Ref wrapper that comes from `&` or method
+        // synthesis; the spec only commits to the unwrapped shape.
+        Ty::Ref(inner) | Ty::RefMut(inner) => inner.as_ref(),
+        Ty::RefLifetime(_, inner) | Ty::RefMutLifetime(_, inner) => inner.as_ref(),
+        other => other,
+    };
+    match inner {
+        Ty::Class { name, generic_args, .. } => {
+            assert_eq!(name, "Vector");
+            assert_eq!(generic_args.len(), 2);
+            match &generic_args[1] {
+                Ty::ConstArg(ce) => match ce {
+                    ConstExpr::Op(a, ConstOp::Add, b) => {
+                        assert_eq!(**a, ConstExpr::Lit(2));
+                        assert_eq!(**b, ConstExpr::Lit(3));
+                    }
+                    other => panic!("expected Op(Lit(2), Add, Lit(3)), got {:?}", other),
+                },
+                other => panic!("expected ConstArg, got {:?}", other),
+            }
+        }
+        other => panic!("expected Ty::Class(Vector), got {:?}", other),
+    }
+}
+
+#[test]
+fn const_arg_arithmetic_against_type_param_emits_e0704() {
+    // Kind-check: arithmetic in a Type slot is still a kind
+    // mismatch — same diagnostic the bare `ConstLit` version
+    // produces.
+    let src = r#"
+class OnlyType[T]
+  data: USize
+
+  def init(@data: USize)
+  end
+end
+
+def main
+  let _x: OnlyType[2 + 3] = OnlyType.new(0)
+end
+"#;
+    let mut lx = riven_core::lexer::Lexer::new(src);
+    let toks = lx.tokenize().expect("lex");
+    let mut p = riven_core::parser::Parser::new(toks);
+    let prog = p.parse().expect("parse");
+    let result = riven_core::typeck::type_check(&prog);
+    let codes: Vec<&str> = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.level == riven_core::diagnostics::DiagnosticLevel::Error)
+        .filter_map(|d| d.code.as_deref())
+        .collect();
+    assert!(
+        codes.contains(&"E0704"),
+        "expected E0704 for arithmetic ConstExprArg on Type param; got: {:?}",
+        codes
+    );
+}
+
 #[test]
 fn resolve_array_size_unsupported_op_becomes_error() {
     // `%` is not in the S8 arithmetic set (spec §B8 lists only

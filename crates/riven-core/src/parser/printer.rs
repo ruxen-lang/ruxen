@@ -649,6 +649,7 @@ pub fn format_type(t: &TypeExpr) -> String {
             }
         }
         TypeExpr::ConstLit { value, .. } => value.to_string(),
+        TypeExpr::ConstExprArg { expr, .. } => format_expr_short(expr),
     }
 }
 

@@ -365,10 +365,35 @@ impl Parser {
         args
     }
 
-    /// Parse a single generic argument — a type expression, or an
-    /// integer literal that lowers to `TypeExpr::ConstLit`.
+    /// Parse a single generic argument — a type expression, an
+    /// integer literal that lowers to `TypeExpr::ConstLit`, or an
+    /// arithmetic const expression that lowers to
+    /// `TypeExpr::ConstExprArg`.
+    ///
+    /// Tier-2 const generics S8.S3: when an `IntLiteral` is followed
+    /// by a binary arithmetic op (`+ - * /`), the whole expression
+    /// is parsed via `parse_expression` and emitted as
+    /// `ConstExprArg`.  Bare literals (no arithmetic follow-up)
+    /// continue to emit `ConstLit` so existing call sites stay
+    /// byte-identical.
     fn parse_generic_arg(&mut self) -> TypeExpr {
         if let TokenKind::IntLiteral(v, _suffix) = self.current_kind().clone() {
+            // Peek one token past the literal.  If it's an arithmetic
+            // op, fall through to expression parsing so `2 + 3` is
+            // captured as a single `ConstExprArg`.  Otherwise the
+            // historic `ConstLit` fast path applies.
+            if matches!(
+                self.peek_at_kind(1),
+                TokenKind::Plus | TokenKind::Minus | TokenKind::Star | TokenKind::Slash
+            ) {
+                let start = self.current_span();
+                let expr = self.parse_expression();
+                let span = self.span_from(&start);
+                return TypeExpr::ConstExprArg {
+                    expr: Box::new(expr),
+                    span,
+                };
+            }
             let span = self.current_span();
             self.advance();
             return TypeExpr::ConstLit { value: v, span };

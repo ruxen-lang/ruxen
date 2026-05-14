@@ -112,6 +112,13 @@ pub fn format_type_expr(ty: &TypeExpr, _comments: &CommentMap) -> Doc {
         }
 
         TypeExpr::ConstLit { value, .. } => text(value.to_string()),
+        // For now route ConstExprArg through the parser's
+        // short-printer; a Doc-native printer for arithmetic in
+        // const-arg position can come later when formatting
+        // const-generic arithmetic gets style attention.
+        TypeExpr::ConstExprArg { expr, .. } => {
+            text(crate::parser::printer::format_expr_short(expr))
+        }
     }
 }
 
