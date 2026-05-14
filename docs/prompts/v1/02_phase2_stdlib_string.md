@@ -21,7 +21,7 @@ Drop semantics (P0.7) must be done first.
   `insert(Int, Char)`, `insert_str(Int, &str)`,
   `remove(Int) -> Char`.
 - Conversions: `parse[Int]`, `parse[Float]`, `to_string`,
-  `into_bytes -> Vec[U8]`.
+  `into_bytes -> Array[U8]`.
 - Operators: `+` (concat owned), `+=` (push_str), `==`, `!=`, `<`,
   ordering, `Hash`.
 
@@ -49,7 +49,7 @@ For every method above:
 - `&str_*` and `String_*` dispatch tables stay separate (the audit
   already split them; do not collapse).
 - Iterators (`chars`, `bytes`, `lines`, `split`) return owned
-  `Vec[T]` for v1 — the lazy iterator story lives in prompt 05.
+  `Array[T]` for v1 — the lazy iterator story lives in prompt 05.
 - `parse[T]` returns `Result[T, ParseIntError]` /
   `Result[T, ParseFloatError]`. Define both error types in stdlib.
 - No `riven_noop_passthrough` for unimplemented methods; codegen

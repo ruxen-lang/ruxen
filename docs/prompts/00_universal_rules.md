@@ -45,8 +45,9 @@ The following lead to silent regressions and are forbidden:
   pattern.
 - **`free(NULL)`-style "safe stub"** for unimplemented runtime fns.
   If `riven_xxx` is declared, it must do its job or panic.
-- **`#[allow(dead_code)]`** to hide unused error paths. Use
-  `unimplemented!("...")` so it shows up in failures.
+- **Rust-side `#[allow(dead_code)]`** to hide unused error paths in
+  the compiler. Use `unimplemented!("...")` so it shows up in
+  failures.
 - **String-typed magic constants.** New error codes go in
   `crates/riven-core/src/diagnostics/codes.rs`. New runtime function
   names go in the dispatch table at `codegen/runtime.rs`.
@@ -65,14 +66,14 @@ the same PR. Do not skip or `#[ignore]`.
 
 ## 5. Error-code namespace discipline
 
-| Range         | Owner                         |
-|---------------|-------------------------------|
-| E0001-E0099   | lexer                         |
-| E0601-E0609   | derive macros (T1.05)         |
-| E0700-E0799   | tier-2 type system            |
-| E1001-E1099   | borrow / trait / impl         |
-| E1100-E1199   | async + concurrency (T1.02/3) |
-| E1200-E1299   | LSP / DX (T3.01)              |
+| Range         | Owner                              |
+|---------------|------------------------------------|
+| E0001-E0099   | lexer                              |
+| E0601-E0609   | derive generators (T1.05)          |
+| E0700-E0799   | tier-2 type system                 |
+| E1001-E1099   | borrow / mixin / include / extension |
+| E1100-E1199   | async + concurrency (T1.02/3)      |
+| E1200-E1299   | LSP / DX (T3.01)                   |
 
 Pick a code in the right range. Add it to
 `diagnostics/codes.rs::REGISTRY` AND emit it via
@@ -87,7 +88,7 @@ user-visible change.
 
 ## 7. Doc comment discipline
 
-Every public function, struct, enum, trait you add gets at least one
+Every public function, struct, enum, mixin you add gets at least one
 `##` doc comment line summarising what it does. P0.13 wired
 `##` capture; T3.04 (rivendoc) will harvest it.
 
@@ -112,5 +113,6 @@ Before a prompt is considered complete:
 - [ ] No new `riven_noop_passthrough` introductions.
 - [ ] CHANGELOG `[Unreleased]` updated with one bullet.
 - [ ] CI green on the PR (build + test on Ubuntu and macOS, MSRV).
-- [ ] All new public surface has a `##` doc comment.
+- [ ] All new public surface (public-by-default; no Ruby visibility
+      marker downgrade) has a `##` doc comment.
 - [ ] Every new error code is in `diagnostics/codes.rs::REGISTRY`.

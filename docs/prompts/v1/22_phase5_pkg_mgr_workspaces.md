@@ -30,7 +30,7 @@ members = ["pkg-a", "pkg-b", "examples/*"]
 
 ## B. Publish (git-URL registry)
 
-`riven publish` packages the current crate and pushes a tag to a
+`riven publish` packages the current package and pushes a tag to a
 configured git remote. Consumers reference by `git = "..."`,
 `tag = "..."` (already supported per existing `gh` flow).
 

@@ -18,8 +18,8 @@ docs/prompts/
 │   ├── 05_phase2_stdlib_iterator.md
 │   ├── 06_phase2_stdlib_io_fmt.md
 │   ├── 07_phase3_const_generics.md
-│   ├── 08_phase3_hrtbs_impl_trait.md
-│   ├── 09_phase3_gats_trait_objects.md
+│   ├── 08_phase3_hrtbs_some_mixin.md
+│   ├── 09_phase3_gats_any_mixin.md
 │   ├── 10_phase3_lsp.md
 │   ├── 11_phase3_incremental.md
 │   ├── 12_phase3_diagnostics_polish.md  # T5.03 + T5.05

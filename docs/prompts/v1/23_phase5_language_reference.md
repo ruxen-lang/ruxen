@@ -14,24 +14,25 @@ chapter coverage of every surface feature.
 1. Introduction + design philosophy
 2. Lexical structure (tokens, comments, doc comments)
 3. Identifiers + keywords (reserved list)
-4. Items (def, struct, class, enum, trait, impl, use)
+4. Items (def, struct, class, enum, mixin, include, extension, use)
 5. Types (primitives, references, tuples, arrays, generics, const
-   generics, trait objects, opaque types)
+   generics, `some Mixin`, `any Mixin`, opaque types)
 6. Expressions (operators, control flow, match, closures, async,
    .await)
-7. Statements (let, assignment, expression statements)
+7. Statements (let, var, assignment, expression statements)
 8. Patterns
-9. Traits + associated types + GATs
+9. Mixins (contract + provision) + associated types + GATs
 10. Generics + bounds + where clauses
 11. Variance
 12. Drop + Copy + Clone
 13. Derive
 14. Concurrency (Send/Sync, Thread, Mutex, channels, atomics)
 15. Async (Future, .await, executor, async I/O)
-16. Module system + visibility
-17. Attributes (`@[...]`)
+16. Module system + visibility (`private` / `protected` markers)
+17. In-body directives (derive, include, layout, inline, deprecated,
+    test, bench, etc.)
 18. Macros (deferred — point at v2)
-19. FFI (extern fn, repr(C), cbindgen)
+19. FFI (`lib` blocks, `layout c`, cbindgen)
 20. Standard library overview
 21. Editions + stability
 22. Grammar (BNF/EBNF appendix)

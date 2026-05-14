@@ -5,16 +5,16 @@
 
 ## Goal
 
-`riven bench` runs `@[bench]` annotated functions in a project and
-reports per-iteration timing.
+`riven bench` runs functions annotated with a `bench` directive in a
+project and reports per-iteration timing.
 
 ## Surface
 
 ```riven
-@[bench]
 def bench_string_concat(b: &mut Bencher)
+  bench
   b.iter || -> {
-    let mut s = String.new
+    var s = String.new
     for i in 0..100
       s.push_str("xx")
     end
@@ -23,12 +23,17 @@ def bench_string_concat(b: &mut Bencher)
 end
 ```
 
+`bench` is an in-body directive (same pattern as `derive`,
+`include`, `inline :name`, `deprecated`). When the directive
+appears in a `def` body, the function is collected by the bench
+runner.
+
 ## TDD
 
-- Unit test: `Bencher::iter(closure)` runs the closure ≥ N times,
+- Unit test: `Bencher.iter(closure)` runs the closure ≥ N times,
   reports min/median/p99 in ns.
-- Integration test: a fixture project with two `@[bench]` fns runs
-  via `riven bench`, parses output, asserts timings reported.
+- Integration test: a fixture project with two `bench`-marked fns
+  runs via `riven bench`, parses output, asserts timings reported.
 
 ## Implementation
 

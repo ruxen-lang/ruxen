@@ -14,30 +14,35 @@
 ## Surface
 
 ### Language
-- `async def foo(...) -> T` lowers to `def foo(...) -> impl Future[Output=T]`.
+- `async def foo(...) -> T` lowers to `def foo(...) -> some Future[Output=T]`.
 - `expr.await` desugars to a state-machine poll.
-- `async ||` closure → `impl Future`.
+- `async ||` closure → `some Future`.
 
-### `std::future`
-- `trait Future { type Output; def mut poll(self: &mut Self, cx: &mut Context) -> Poll[Self.Output] }`
+### `std.future`
+- ```riven
+  mixin Future
+    type Output
+    def mut poll(self: &mut Self, cx: &mut Context) -> Poll[Self.Output]
+  end
+  ```
 - `enum Poll[T] { Ready(T), Pending }`
 - `Context` carries `Waker`; `Waker` wakes a parked task.
 
-### `std::task`
-- `task::spawn(future) -> JoinHandle[T]` for executor-managed tasks.
-- `task::yield_now() -> impl Future[Output=()]`.
+### `std.task`
+- `task.spawn(future) -> JoinHandle[T]` for executor-managed tasks.
+- `task.yield_now -> some Future[Output=()]`.
 
-### `std::executor::block_on`
+### `std.executor.block_on`
 - Single-threaded executor entry point. Runs the future to
   completion, polling on wake.
 
-### `std::time`
+### `std.time`
 - `Duration`, `Instant`.
-- `time::sleep(Duration) -> impl Future[Output=()]`.
+- `time.sleep(Duration) -> some Future[Output=()]`.
 
 ### Async I/O (minimum)
-- `AsyncTcpStream::connect`, `read`, `write`, `close`.
-- `AsyncFile::open`, `read_to_string`, `write_all`.
+- `AsyncTcpStream.connect`, `read`, `write`, `close`.
+- `AsyncFile.open`, `read_to_string`, `write_all`.
 
 ## TDD
 
@@ -45,24 +50,24 @@
   `block_on` runs it.
 - Parser test: `async def` and `.await` parse.
 - Lowering test: `async def f -> Int { x.await + 1 }` lowers to a
-  state-machine struct + `Future` impl.
+  state-machine struct + `include Future`.
 - E2E: TCP echo server + client running on `block_on`, asserts
   message round-trip.
 - Negative: `.await` outside async context → E1110.
 
 ## Implementation phases (sub-prompt)
 
-1. **Future trait + Poll enum + Context/Waker**. Pure Rust impls in
-   stdlib first to derisk semantics.
+1. **Future mixin + Poll enum + Context/Waker**. Pure surface
+   includes in stdlib first to derisk semantics.
 2. **`async def` parsing + lowering**. Build the state machine
    struct generation. Each `.await` becomes a state.
 3. **block_on executor**. Cooperative loop, wakeup queue,
    single-threaded.
 4. **Async I/O via mio/epoll/kqueue.** Wrap the OS event loop.
-5. **`task::spawn`**. Multi-task within the single-threaded executor
+5. **`task.spawn`**. Multi-task within the single-threaded executor
    (round-robin).
 
-Each sub-step: red test → impl → green → next.
+Each sub-step: red test → implementation → green → next.
 
 ## Reserved error codes
 

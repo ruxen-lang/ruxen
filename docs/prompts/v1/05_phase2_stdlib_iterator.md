@@ -1,4 +1,4 @@
-# 05 — Phase 2 stdlib: `Iterator` trait + lazy combinators
+# 05 — Phase 2 stdlib: `Iterator` mixin + lazy combinators
 
 **Depends on:** prompts 02-04 (collections to iterate).
 **Reads:** `docs/requirements/tier1_01_stdlib.md` §Iterator,
@@ -7,9 +7,9 @@ already wired).
 
 ## Surface
 
-`trait Iterator`:
+`mixin Iterator`:
 ```riven
-trait Iterator
+mixin Iterator
   type Item
   def mut next -> Option[Self.Item]
 
@@ -32,31 +32,33 @@ trait Iterator
 end
 ```
 
-`trait FromIterator[T]`:
+`mixin FromIterator[T]`:
 ```riven
-trait FromIterator[T]
+mixin FromIterator[T]
   def from_iter[I: Iterator[Item=T]](iter: I) -> Self
 end
 ```
 
-Implement `FromIterator` for `Vec[T]`, `String` (where `T: ToString`),
-`HashMap[K,V]` (collecting `(K,V)` pairs), `HashSet[T]`.
+Implement `FromIterator` for `Array[T]`, `String` (where `T: ToString`),
+`Map[K,V]` (collecting `(K,V)` pairs), `Set[T]`.
 
 ## TDD
 
 For each combinator + terminator:
 
-1. Unit test exercising it on `Vec[Int]`, `Vec[String]`, range.
+1. Unit test exercising it on `Array[Int]`, `Array[String]`, range.
 2. E2E fixture `6NN_iter_<op>.rvn`.
-3. Test combinator chaining: `(0..10).filter(...).map(...).take(3).collect[Vec[Int]]`.
+3. Test combinator chaining: `(0..10).filter(...).map(...).take(3).collect[Array[Int]]`.
 
 ## Implementation
 
 - The `Item` assoc type is already plumbed (T2.01). Verify by writing
-  a unit test in `typeck` that asserts `<Vec[Int] as Iterator>::Item
-  == Int`.
-- Each lazy combinator is a struct with one or two type params and an
-  `Iterator` impl that delegates to the inner.
+  a unit test in `typeck` that asserts `<Array[Int] as Iterator>::Item
+  == Int`. (Note: internal compiler accessor name preserved pending
+  a separate sweep; surface vocabulary is `Item` on `Iterator`.)
+- Each lazy combinator is a struct with one or two type params; the
+  struct body uses `include Iterator` and delegates `next` to the
+  inner iterator.
 - No `riven_noop_passthrough`. Each `next()` is real code.
 - Closures captured by combinators must respect existing `move` /
   borrow rules.
@@ -64,15 +66,15 @@ For each combinator + terminator:
 ## Surprise checks
 
 - Infinite iterator + `.take(N)` must terminate.
-- `collect[Vec[T]]` from an empty iter returns `Vec.new`, not panic.
+- `collect[Array[T]]` from an empty iter returns `Array.new`, not panic.
 - `sum` on empty iter returns the additive identity (0 for Int).
 
 ## Definition of done
 
-- [ ] Trait `Iterator` lives in `crates/riven-core/runtime/std/iter.rvn`
+- [ ] Mixin `Iterator` lives in `crates/riven-core/runtime/std/iter.rvn`
       (or wherever stdlib sources go). **Deferred (#05 batch 1):** no
-      `.rvn` stdlib source loader exists in v1; the trait is currently
-      modelled implicitly by the MIR-level inliner suite at
+      `.rvn` stdlib source loader exists in v1; the mixin is
+      currently modelled implicitly by the MIR-level inliner suite at
       `crates/riven-core/src/mir/lower.rs::try_inline_closure_method`.
       Lifting it into a real `.rvn` source requires a stdlib loader
       (not yet built); re-evaluate once #07/#09 land the missing
@@ -83,22 +85,23 @@ For each combinator + terminator:
       eager terminators `fold` / `all` / `any` (MIR-inlined, no
       runtime helper), the lazy combinators `take(n)` / `skip(n)`
       (eager-materialising via new `riven_vec_take` /
-      `riven_vec_skip` runtime fns), and verifies `enumerate` as a
+      `riven_vec_skip` runtime fns — internal `vec` naming
+      preserved pending sweep), and verifies `enumerate` as a
       typeck-passthrough. Still deferred: `chain` / `zip` (need
       real iterator structs that hold two sources) and
-      `collect[C: FromIterator]` (needs the `FromIterator` trait +
-      impl machinery; a `.collect_vec` shorthand is the planned
+      `collect[C: FromIterator]` (needs the `FromIterator` mixin +
+      include machinery; a `.collect_array` shorthand is the planned
       v1 escape hatch). Primary TDD loop now lives at
       `crates/riven-core/tests/stdlib_iterator.rs` (~30 ms; 14
       tests); `release-e2e/cases/60{3..5}_iter_*.rvn` confirm
       end-to-end (`release_e2e_smoke` reports `PASS=208 / 208`).
-- [ ] Vec, String, HashMap, HashSet implement `FromIterator` where
-      sensible. **Deferred:** depends on the trait-Iterator + collect
+- [ ] Array, String, Map, Set implement `FromIterator` where
+      sensible. **Deferred:** depends on the mixin-Iterator + collect
       surface above.
 - [x] `for x in collection` syntax desugars through `Iterator`.
       Verified: `HirExprKind::For` at `mir/lower.rs:2609` lowers
-      ranges and Vec-like collections directly via `riven_vec_len` /
-      `riven_vec_get` (no trait-method hop). Existing fixtures
+      ranges and Array-like collections directly via `riven_vec_len`
+      / `riven_vec_get` (no mixin-method hop). Existing fixtures
       `78_enum_in_vec.rvn` and `120_iter_each.rvn` exercise it.
 - [x] CI green. `cargo test --test p05_e2e_check` reports `PASS=205`
       (was 203 before this batch); `cargo test --workspace` green

@@ -8,28 +8,31 @@
 
 ### Goal
 - Move type-system-only fundamentals (Option, Result, Iterator,
-  Drop, basic numerics) into `core` crate.
-- `std` re-exports `core` and adds heap-using types (String, Vec,
-  HashMap, io, fs, thread).
-- `@[no_std]` crate attribute opts out of std.
+  Drop, basic numerics) into the `core` package.
+- `std` re-exports `core` and adds heap-using types (String, Array,
+  Map, io, fs, thread).
+- A package-level `no_std` directive opts out of std (the directive
+  sits at the top of the package's manifest module body, mirroring
+  every other body directive).
 
 ### TDD
-- Unit test: `@[no_std]` minimal binary builds with only `core`.
+- Unit test: a `no_std`-marked package builds a minimal binary with
+  only `core`.
 - E2E fixture: `no_std` hello-world on a synthetic embedded target
   (LLVM `--target thumbv7em-none-eabi` build; run-test optional).
-- Negative: heap allocation without `alloc` crate → E1400.
+- Negative: heap allocation without the `alloc` package → E1400.
 
 ### Implementation
 - Carve `crates/riven-core/runtime/std/core.rvn` and `std.rvn`.
-- Compiler accepts `@[no_std]` and rejects heap-allocating types in
-  scope.
+- Compiler accepts the `no_std` directive and rejects heap-allocating
+  types in scope.
 - Panic strategy: `abort` only (Open Decision #5 ruling).
 
 ## B. WASM target (T4.03)
 
 ### Goal
 - `riven build --target wasm32-unknown-unknown` produces a `.wasm`.
-- Demonstrate calling Riven from JS via wasm-bindgen-style shim.
+- Demonstrate calling Riven from JS via a wasm-bindgen-style shim.
 
 ### TDD
 - Unit test invokes the LLVM backend with wasm32 triple, asserts
@@ -48,11 +51,11 @@
 ## Reserved error codes
 
 - E1400 — heap allocation in `no_std` context
-- E1401 — `std::*` import in `no_std` crate
+- E1401 — `std.*` import in `no_std` package
 - E1402 — target triple unsupported
 
 ## Definition of done
 
-- [ ] `core` and `std` crates separated; `@[no_std]` attribute works.
+- [ ] `core` and `std` packages separated; `no_std` directive works.
 - [ ] WASM build green; example loads + executes in a JS host.
 - [ ] CHANGELOG bullet.

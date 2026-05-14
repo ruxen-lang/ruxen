@@ -15,7 +15,7 @@ promote to language feature only if usage validates it.
 
 ### Goal
 
-`std::actor::Actor[Msg]` library type. Built entirely on top of v1
+`std.actor.Actor[Msg]` library type. Built entirely on top of v1
 async + channels. No new keywords, no parser changes.
 
 ### Surface
@@ -41,9 +41,9 @@ end
 
 async def main
   let counter = Actor[CounterMsg].spawn(Counter.new).await
-  counter.send(CounterMsg::Inc).await
+  counter.send(CounterMsg.Inc).await
   let reply: ActorRef[Int] = ActorRef.new
-  counter.send(CounterMsg::Get(reply.clone)).await
+  counter.send(CounterMsg.Get(reply.clone)).await
   let value = reply.recv.await
   puts "#{value}"
 end
@@ -61,7 +61,7 @@ end
 ### Implementation
 
 - `Actor[Msg]` wraps `(receiver: Channel[Msg], state: Cell[State])`.
-- `spawn(state)` creates the channel + `task::spawn` an async loop
+- `spawn(state)` creates the channel + `task.spawn` an async loop
   that pulls messages and dispatches `handle`.
 - `ActorRef[Msg]` is `Sender[Msg]` wrapper; cheaply cloneable.
 - Panics in `handle` caught via async-aware panic hook; supervisor
@@ -82,7 +82,7 @@ end
 
 Promote to language feature only if **all three** are true:
 
-1. ≥3 third-party crates in production use the Phase A library.
+1. ≥3 third-party packages in production use the Phase A library.
 2. User feedback identifies ergonomic gaps (typed addresses,
    selective receive, supervisor trees) that library can't bridge.
 3. The team has bandwidth for a 6-month language change.
@@ -90,7 +90,7 @@ Promote to language feature only if **all three** are true:
 ### Scope (if triggered)
 
 - Reserve `actor`/`spawn`/`send`/`receive` again on a new edition.
-- `actor` syntax sugar for `class + Actor::spawn` boilerplate.
+- `actor` syntax sugar for `class + Actor.spawn` boilerplate.
 - Compiler-checked typed mailboxes.
 - Supervisor tree syntax.
 - Distribution story (cross-process / cross-machine).

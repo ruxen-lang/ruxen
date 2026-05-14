@@ -8,7 +8,7 @@
 Replace full-pipeline-on-every-change with a salsa-style query system
 that re-runs only what's downstream of the actual edit.
 
-## Surface
+## Surface (internal Rust API inside the compiler)
 
 ```rust
 trait QueryDb {
@@ -20,8 +20,9 @@ trait QueryDb {
 }
 ```
 
-Memoize each query by input hash. Invalidate downstream when an
-input file changes.
+This is the Rust trait that the compiler crates implement — not a
+Riven-source mixin. Memoize each query by input hash. Invalidate
+downstream when an input file changes.
 
 ## TDD
 

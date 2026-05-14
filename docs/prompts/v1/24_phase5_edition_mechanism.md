@@ -31,11 +31,13 @@ field already validates (P0.11). Wire actual semantic gating.
 ## Implementation
 
 - New `crates/riven-core/src/lints/` module.
-- `EditionLint` trait: `fn check(item: &HirItem, ctx: &mut LintCtx)`.
+- `EditionLint` Rust trait (internal compiler API):
+  `fn check(item: &HirItem, ctx: &mut LintCtx)`.
 - Rules registered per edition.
-- The Hash → HashMap rename (P0.6) is the first edition-lint canary
-  — pre-2026 saw `Hash[K,V]`, 2026 sees `HashMap[K,V]`. Test that
-  loading 2026 source rejects `Hash[K,V]`.
+- The legacy Hash → Map rename (P0.6) is the first edition-lint
+  canary — pre-2026 saw the legacy `Hash[K,V]` spelling, 2026 sees
+  `Map[K,V]`. Test that loading 2026 source rejects the legacy
+  `Hash[K,V]` spelling.
 
 ## Reserved error codes
 
@@ -46,6 +48,7 @@ field already validates (P0.11). Wire actual semantic gating.
 ## Definition of done
 
 - [ ] Edition field gates at least one observable behavior (the
-      Hash/HashMap canary).
-- [ ] `riven fix --edition <Y>` scaffold compiles (full impl in v2).
+      legacy Hash / current Map canary).
+- [ ] `riven fix --edition <Y>` scaffold compiles (full
+      implementation in v2).
 - [ ] CHANGELOG bullet.

@@ -5,30 +5,31 @@
 
 ## Surface
 
-`std::thread`:
-- `Thread::spawn(closure) -> JoinHandle[T]`
-- `JoinHandle::join -> Result[T, ThreadPanic]`
-- `Thread::sleep(Duration)`, `Thread::yield_now`,
-  `Thread::current_id`
+`std.thread`:
+- `Thread.spawn(closure) -> JoinHandle[T]`
+- `JoinHandle.join -> Result[T, ThreadPanic]`
+- `Thread.sleep(Duration)`, `Thread.yield_now`,
+  `Thread.current_id`
 
-`std::sync`:
-- `Mutex[T]`, `Mutex::new(T)`, `lock -> MutexGuard[T]`
+`std.sync`:
+- `Mutex[T]`, `Mutex.new(T)`, `lock -> MutexGuard[T]`
 - `RwLock[T]`
-- `Arc[T]`, `Arc::new(T)`, `Arc::clone(&self) -> Arc[T]`
+- `SharedSync[T]`, `SharedSync.new(T)`,
+  `SharedSync.clone(&self) -> SharedSync[T]`
 - `Once`, `OnceLock[T]`
 
-`std::sync::mpsc`:
-- `channel[T]() -> (Sender[T], Receiver[T])`
-- `Sender::send(T) -> Result[(), SendError]`
-- `Receiver::recv -> Result[T, RecvError]`,
+`std.sync.mpsc`:
+- `channel[T] -> (Sender[T], Receiver[T])`
+- `Sender.send(T) -> Result[(), SendError]`
+- `Receiver.recv -> Result[T, RecvError]`,
   `try_recv -> Option[T]`
 
-`std::sync::atomic`:
+`std.sync.atomic`:
 - `AtomicI64`, `AtomicBool`, `AtomicUsize` with `load`, `store`,
   `compare_and_swap`, `fetch_add`, `fetch_sub`, `Ordering` enum.
 
-Auto-traits:
-- `Send`, `Sync` already declared. Fully wire negative impls and
+Auto-mixins:
+- `Send`, `Sync` already declared. Fully wire negative includes and
   derivation through composite types.
 
 ## TDD
@@ -36,7 +37,7 @@ Auto-traits:
 For each primitive:
 
 - Unit test exercising the API.
-- Stress test: 100 threads + Mutex<Counter> incrementing reaches
+- Stress test: 100 threads + Mutex[Counter] incrementing reaches
   N*100.
 - Negative tests: closure capturing non-`Send` rejected with E1011.
 - Channel close test: dropping last Sender returns `Err` from recv.
@@ -47,19 +48,20 @@ For each primitive:
   enables Windows).
 - Mutex: backed by pthread_mutex_t. `MutexGuard` is a Drop type that
   releases on scope exit.
-- Arc: 8-byte refcount header preceding the payload. `clone`
+- SharedSync: 8-byte refcount header preceding the payload. `clone`
   increments via atomic; `Drop` decrements and frees on zero.
-- Channels: bounded MPSC ring buffer; unbounded uses VecDeque
+- Channels: bounded MPSC ring buffer; unbounded uses a deque
   protected by Mutex + condvar.
 - `Send`/`Sync` propagate through composite types automatically
-  unless `@[opt_out_send]` / `@[unsafe_impl_send]` (already in
-  ClassInfo per P0.4 audit).
+  unless a body-level `opt_out_send` / `unsafe_include_send`
+  directive opts out (already in ClassInfo per P0.4 audit, with the
+  body-directive surface in place of any prefix-annotation form).
 
 ## Reserved error codes
 
 - E1100 — closure captures non-Send across thread boundary
 - E1101 — Mutex used with non-Send T
-- E1102 — Arc::new with non-Sync T (when sharing across threads)
+- E1102 — `SharedSync.new` with non-Sync T (when sharing across threads)
 - E1103 — channel send error (runtime)
 
 ## Definition of done
@@ -67,5 +69,5 @@ For each primitive:
 - [ ] Every primitive has unit + stress + negative tests.
 - [ ] Bench: 100k Mutex acquisitions/release < 100ms.
 - [ ] Drop semantics correct: leaks proven absent under
-      `drop_fixtures.rs` extensions for Mutex/Arc/Channel.
+      `drop_fixtures.rs` extensions for Mutex / SharedSync / Channel.
 - [ ] CHANGELOG bullet.

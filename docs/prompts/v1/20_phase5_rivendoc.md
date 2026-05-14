@@ -24,8 +24,8 @@ sidebar nav, full-text search.
 ## Implementation
 
 - New crate `crates/rivendoc/`.
-- Walks `HirProgram`, harvests `doc_comments: Vec<String>` from
-  every public item.
+- Walks `HirProgram`, harvests the Rust-side `doc_comments` field
+  (a `Vec<String>` on the internal HIR node) from every public item.
 - Markdown → HTML via `pulldown-cmark`.
 - Templates via `tera` or hand-rolled (avoid heavy dep).
 - Search: build a flat JSON index, ship a small JS file for

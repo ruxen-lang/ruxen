@@ -25,7 +25,8 @@
 - [ ] Build release tarball via `release.yml`; install on a clean VM
       per OS (linux-x64, linux-aarch64, darwin-x64, darwin-aarch64).
 - [ ] `riven new hello && cd hello && riven run` works end-to-end.
-- [ ] `riven test` finds and runs `@[test]` fns.
+- [ ] `riven test` finds and runs functions marked with the `test`
+      in-body directive.
 - [ ] `riven explain E0001` prints title + long-form.
 - [ ] `riven doc` generates a doc site for the new project.
 - [ ] LSP launches in VSCode extension and serves diagnostics +
@@ -38,7 +39,7 @@
 - [ ] Run a UB audit: build with `RUSTFLAGS="-Zsanitizer=address"`
       (or equivalent) and execute the e2e suite; no failures.
 - [ ] Review every `unsafe` block in the Rust compiler for
-      justification comments. None should be undocumented.
+      justification comments. nil should be undocumented.
 
 ## Docs
 

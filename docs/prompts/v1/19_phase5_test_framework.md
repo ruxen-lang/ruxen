@@ -5,33 +5,38 @@
 
 ## Goal
 
-`riven test` runs `@[test]` functions in a project, reports
-pass/fail/ignore counts, captures panics.
+`riven test` runs functions marked with a `test` directive in a
+project, reports pass/fail/ignore counts, captures panics.
 
 ## Surface
 
 ```riven
-@[test]
 def adds_two_numbers
+  test
   assert_eq!(2 + 2, 4)
 end
 
-@[test]
-@[ignore]
 def slow_test
+  test
+  ignore
   ...
 end
 
-@[test]
-@[should_panic("expected message")]
 def bad_input
-  panic "expected message"
+  test
+  should_panic "expected message"
+  panic!("expected message")
 end
 ```
 
-`std::test` module:
-- `assert!(cond)`, `assert_eq!(a, b)`, `assert_ne!(a, b)` — macros or
-  fns; whichever fits the language.
+`test`, `ignore`, and `should_panic` are in-body directives — the
+same shape as `derive`, `include`, `inline :name`, `deprecated`,
+`bench`. The directive lives at the top of the function body and
+marks the function for the test runner.
+
+`std.test` module:
+- `assert!(cond)`, `assert_eq!(a, b)`, `assert_ne!(a, b)` — compiler-
+  aware `!` forms (per spec §3.13).
 - `panic!(msg)` — already exists.
 
 ## TDD
@@ -41,13 +46,13 @@ end
 - Integration: `--filter <pat>` skips non-matching.
 - Integration: `--exact` matches name exactly.
 - E2E: parallel test execution (multiple OS threads, each running
-  one `@[test]`).
+  one `test`-marked function).
 
 ## Implementation
 
 - `riven test` subcommand in CLI.
-- Per `@[test]` fn, emit a thunk that calls into a registry; the
-  registry binary collects all thunks at link time.
+- Per `test`-marked function, emit a thunk that calls into a
+  registry; the registry binary collects all thunks at link time.
 - Test runner spawns each test on its own thread with a panic-catch
   hook.
 - Output format: same as cargo test.

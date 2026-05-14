@@ -30,8 +30,8 @@ simple arithmetic over const params (`N + 1`).
 1. Failing parser test: `Array[Int, 4]` parses.
 2. Failing typeck test: `Array[Int, 4]` is distinct from
    `Array[Int, 5]`.
-3. Failing monomorphization test: `Array[Int, 4]::new` and
-   `Array[Int, 5]::new` lower to two distinct MIR functions with
+3. Failing monomorphization test: `Array[Int, 4].new` and
+   `Array[Int, 5].new` lower to two distinct MIR functions with
    correct array sizes.
 4. E2E fixture exercising stack-allocated fixed-size array.
 5. Negative test: `Array[Int, "hello"]` — type mismatch (E0701).

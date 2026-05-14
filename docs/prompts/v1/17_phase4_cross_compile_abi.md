@@ -25,25 +25,34 @@ triple. The release.yml already cross-builds aarch64-linux; generalize.
 ## B. Stable ABI + cbindgen (T4.05)
 
 ### Goal
-Riven types annotated `@[repr(C)]` are FFI-stable. `riven cbindgen`
-emits a `.h` for `extern fn` exports.
+Riven structs that carry `layout c` are FFI-stable. `riven cbindgen`
+emits a `.h` for functions declared inside a `lib` block (the FFI-
+export surface).
 
 ### TDD
-- Unit test: `@[repr(C)] struct Point { x: Int, y: Int }` lowers to
-  a 16-byte struct with predictable field order.
+- Unit test: `struct Point { layout c; x: Int; y: Int end }` lowers
+  to a 16-byte struct with predictable field order.
 - Integration test: build a Riven cdylib + a C harness; assert C
-  can call `extern fn riven_double(x: Int) -> Int`.
+  can call a Riven-defined function with ABI-stable parameters
+  (use the C-export surface that maps to `lib` semantics in
+  reverse — final export-side syntax is the prompt-17 design
+  decision; the spec covers `lib "..." ... end` only for imports).
 - E2E fixture exercising ABI round-trip.
 
 ### Implementation
-- `extern "C" fn` syntax → ABI-stable function (already partially:
-  P0.4 split repr/derive). Verify lowering uses C ABI.
-- `riven cbindgen` walks public `extern fn` decls and emits a header.
+- For C imports, `lib "..." ... end` blocks declare the foreign
+  surface (already partially: P0.4 split layout/derive).
+- For C exports, decide the surface form during this prompt
+  (candidates: a `lib "self" ... end` block, an `export` body
+  directive, etc.). Whatever lands must lower to a function with
+  C ABI.
+- `riven cbindgen` walks every C-export declaration and emits a
+  header.
 - Document ABI stability promise in `docs/abi-stability.md`.
 
 ## Reserved error codes
 
-- E1500 — `extern "C"` on non-`@[repr(C)]` aggregate
+- E1500 — C-exported function passes a non-`layout c` aggregate
 - E1501 — invalid target triple
 - E1502 — sysroot for target not installed
 

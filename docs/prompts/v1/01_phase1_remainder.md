@@ -1,6 +1,6 @@
 # 01 — Phase 1 remainder
 
-Closes the four leftover items from Phase 0/1: P0.7 string/vec drops,
+Closes the four leftover items from Phase 0/1: P0.7 string/array drops,
 T1.05 builtin derive generators, T5.04 phase 3 long-form explanations,
 and P0.12 un-reservation of actor tokens.
 
@@ -11,27 +11,27 @@ and P0.12 un-reservation of actor tokens.
 
 ---
 
-## A. P0.7 — built-in drops for `String` / `Vec` / `HashMap`
+## A. P0.7 — built-in drops for `String` / `Array` / `Map`
 
 ### Problem
 String literals lower to `riven_string_from(...)` (heap copy) — owned.
 But `mir/lower.rs:6082` skips drop for non-Class/Struct/Enum types,
-so heap-owned `String`/`Vec`/`HashMap` locals leak at scope exit.
+so heap-owned `String`/`Array`/`Map` locals leak at scope exit.
 
 ### TDD
 1. Extend `tests/drop_fixtures.rs` with three failing tests:
    - `string_local_freed_at_scope_exit` — `let s = String.from("x"); ...`
      asserts allocs == frees.
-   - `vec_local_freed_at_scope_exit` — `let v = Vec.new()` + push.
-   - `hashmap_local_freed_at_scope_exit` — `let m = HashMap.new()`.
+   - `array_local_freed_at_scope_exit` — `var v = Array.new` + push.
+   - `map_local_freed_at_scope_exit` — `var m = Map.new`.
 2. Run; confirm they fail with `outstanding > 0`.
 
 ### Implementation
 - Widen the heap-owned predicate in `insert_drops`
-  (`mir/lower.rs:6058-6088`) to include `Ty::String`, `Ty::Vec(_)`,
-  `Ty::HashMap(_,_)`.
+  (`mir/lower.rs:6058-6088`) to include the internal type-tags for
+  `String`, `Array`, and `Map`.
 - Add type-specific drop callees so the runtime walks owned
-  pointers. Wire `String_drop`, `Vec_drop`, `HashMap_drop` runtime
+  pointers. Wire `String_drop`, `Array_drop`, `Map_drop` runtime
   functions in `crates/riven-core/runtime/runtime.c` (free element
   storage + outer struct).
 - Update `compute_dealloc_safe_locals` to permit these types.
@@ -53,11 +53,11 @@ so heap-owned `String`/`Vec`/`HashMap` locals leak at scope exit.
 ### Problem
 `derive Debug`, `derive Clone`, `derive Copy`, `derive PartialEq`,
 `derive Eq`, `derive Hash`, `derive Default`, `derive Ord`,
-`derive PartialOrd` are validated (`derive/mod.rs`) but no `impl`
-blocks are synthesized.
+`derive PartialOrd` are validated (`derive/mod.rs`) but no
+include-blocks are synthesized.
 
 ### TDD
-For each derive trait, add a fixture pair:
+For each derive mixin, add a fixture pair:
 
 ```
 tests/release-e2e/cases/2NN_derive_debug_struct.rvn
@@ -74,8 +74,8 @@ one nested enum-with-payload. Expected output asserts:
 - `Copy` → bit-copy semantics, source still usable.
 - `PartialEq` / `Eq` → `==` comparisons.
 - `Hash` → equal values produce equal hashes (use existing
-  HashMap as proxy).
-- `Default` → field-wise zero/`Default::default()`.
+  Map as proxy).
+- `Default` → field-wise zero/`Default.default()`.
 - `Ord` / `PartialOrd` → field-order tuple semantics.
 
 Add unit tests in `crates/riven-core/src/derive/` covering the HIR
@@ -83,17 +83,17 @@ synthesis (assert that `derive Debug` on `Point { x: Int, y: Int }`
 produces a `Point_fmt_debug` HIR method with the right shape).
 
 ### Implementation
-- Generate HIR `Impl` items in a new pass `derive::synthesize` that
+- Generate HIR include-items in a new pass `derive::synthesize` that
   runs after `validate_program` and before `lower`.
-- Each derived trait emits one `impl <Trait> for <Type>` HIR block
-  with method bodies built from field iteration.
+- Each derived mixin emits one synthesized include for `<Mixin>` on
+  `<Type>` with method bodies built from field iteration.
 - Reuse runtime helpers where available; for `Debug` use new
   `riven_string_concat` runtime fn (already in `runtime.c`).
 - Reject derive on types whose fields don't themselves satisfy the
-  trait — emit `E0610-E0618` per the namespace.
+  mixin — emit `E0610-E0618` per the namespace.
 
 ### Definition of done
-- [x] All 9 builtin derives generate working impls.
+- [x] All 9 builtin derives generate working includes.
 - [x] Per-derive fixture pair under `tests/release-e2e/cases/`.
 - [x] Negative tests for "field doesn't satisfy bound" cases.
 - [x] `cargo test --workspace` green.

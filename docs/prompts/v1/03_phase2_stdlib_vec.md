@@ -1,14 +1,16 @@
-# 03 — Phase 2 stdlib: full `Vec[T]` surface
+# 03 — Phase 2 stdlib: full `Array[T]` surface
 
-**Depends on:** prompt 02 (String surface lands first; some Vec
-methods consume String). Drop semantics for Vec via prompt 01A.
-**Reads:** `docs/requirements/tier1_01_stdlib.md` §Vec.
+**Depends on:** prompt 02 (String surface lands first; some Array
+methods consume String). Drop semantics for Array via prompt 01A.
+**Reads:** `docs/requirements/tier1_01_stdlib.md` §Vec (requirements
+doc section header pending separate rename — surface vocabulary is
+`Array`).
 
 ## Surface
 
-`Vec[T]`:
-- Constructors: `Vec.new`, `Vec.with_capacity(Int)`,
-  `Vec.from_iter(I)` where `I: Iterator[Item=T]`.
+`Array[T]`:
+- Constructors: `Array.new`, `Array.with_capacity(Int)`,
+  `Array.from_iter(I)` where `I: Iterator[Item=T]`.
 - Inspectors: `len`, `is_empty`, `capacity`, `get(Int) -> Option[&T]`,
   `first`, `last`, `contains(&T)` (where `T: PartialEq`),
   `iter`, `into_iter`, `iter_mut`.
@@ -16,7 +18,7 @@ methods consume String). Drop semantics for Vec via prompt 01A.
   `remove(Int) -> T`, `clear`, `truncate(Int)`, `swap(Int, Int)`,
   `reverse`, `sort` (where `T: Ord`), `sort_by(closure)`, `dedup`
   (where `T: PartialEq`), `extend(I)`, `retain(closure)`.
-- Conversions: `clone` (where `T: Clone`), `to_vec`,
+- Conversions: `clone` (where `T: Clone`), `to_array`,
   `as_slice -> &[T]`.
 - Operators: `==`, `!=`, indexing `v[i]` (panics on OOB).
 
@@ -28,21 +30,27 @@ methods consume String). Drop semantics for Vec via prompt 01A.
 
 Per method:
 
-1. Unit test in `crates/riven-core/tests/stdlib_vec.rs` with a `.rvn`
+1. Unit test in `crates/riven-core/tests/stdlib_vec.rs` (legacy
+   test-file slug preserved pending the internal sweep) with a `.rvn`
    source asserting stdout.
-2. E2E fixture `4NN_vec_<op>.rvn` + expected output.
+2. E2E fixture `4NN_vec_<op>.rvn` + expected output (fixture-name
+   slugs preserved from the pre-rename era; surface vocabulary in
+   fixture *content* is `Array`).
 3. Drop-fixtures test for any owning method (push, extend, insert)
-   confirms `frees == allocs` for `Vec[String]` (nested heap).
+   confirms `frees == allocs` for `Array[String]` (nested heap).
 
 ## Implementation
 
-- Backing storage: same layout as today (`riven_vec_*` runtime fns).
+- Backing storage: same layout as today (the internal `riven_vec_*`
+  runtime fns stay — internal rename out of scope for this prompt;
+  treat them as opaque helpers that back `Array[T]`).
 - Element type erased to `i64` slot at runtime (same as current); the
   type system enforces correctness statically.
-- `Vec[String]`, `Vec[Vec[T]]`, etc. — element-drop must run before
-  the outer vec frees its backing array. Add `Vec_drop` runtime fn
-  that walks elements and calls their drop, then frees backing.
-- `iter` returns a `VecIter[T]` struct with `next -> Option[&T]`.
+- `Array[String]`, `Array[Array[T]]`, etc. — element-drop must run
+  before the outer array frees its backing storage. Add the
+  `Array_drop` dispatch that walks elements and calls their drop,
+  then frees backing.
+- `iter` returns an `ArrayIter[T]` struct with `next -> Option[&T]`.
   Lazy iterator surface is OK here (just iter, not full Iterator
   combinators — those land in prompt 05).
 - Closure-taking methods (`sort_by`, `retain`) call into existing
@@ -53,7 +61,7 @@ Per method:
 - Push past capacity → realloc. Test that `iter` invalidation rules
   are clear (document: any mutator invalidates outstanding iters;
   enforce via borrow checker — `iter` returns `&mut self` borrow).
-- `pop` on empty returns `None`, no panic.
+- `pop` on empty returns `nil`, no panic.
 - Indexing out of range panics with `"index N out of range, len M"`.
 
 ## Definition of done
@@ -62,15 +70,17 @@ Per method:
   (Batch 1: `with_capacity`, `capacity`, `clear`, `truncate`, `swap`,
   `insert`, `remove`, `extend`, `==`/`!=`, indexing, `pop->Option`,
   `as_slice`, `iter_mut` covered. Batch 2: `from_iter`, `dedup`,
-  `sort_by`, `retain`, `Vec[String]` / `Vec[Vec[T]]` drop selector
-  wiring; positive fixtures at `tests/release-e2e/cases/40[9-11]_*`,
-  negatives in `crates/riven-core/tests/stdlib_vec_negatives.rs`.
-  The full `&[T]` slice surface and the lazy `VecIter` cursor class
-  remain queued for #05 alongside the trait-driven sort/iterator
-  surface.)
-- [x] Nested heap (`Vec[String]`, `Vec[Vec[Int]]`) leak tests pass.
-  (Batch 1: runtime helpers `riven_vec_drop_string` / `_drop_vec`
-  shipped. Batch 2: MIR drop-selector wired in `insert_drops`
+  `sort_by`, `retain`, `Array[String]` / `Array[Array[T]]` drop
+  selector wiring; positive fixtures at
+  `tests/release-e2e/cases/40[9-11]_*`, negatives in
+  `crates/riven-core/tests/stdlib_vec_negatives.rs` (legacy slug
+  preserved). The full
+  `&[T]` slice surface and the lazy `ArrayIter` cursor class remain
+  queued for #05 alongside the mixin-driven sort/iterator surface.)
+- [x] Nested heap (`Array[String]`, `Array[Array[Int]]`) leak tests
+  pass. (Batch 1: runtime helpers `riven_vec_drop_string` /
+  `_drop_vec` shipped — internal `vec` naming preserved pending a
+  separate sweep. Batch 2: MIR drop-selector wired in `insert_drops`
   (`crates/riven-core/src/mir/lower.rs`) plus the push-time
   ownership-transfer rule in `compute_dealloc_safe_locals` that
   prevents the source temp from double-freeing the slot. Two
@@ -79,7 +89,8 @@ Per method:
   alongside the per-kind free counts.)
 - [x] `cargo test --workspace` green (batch 1, batch 2).
 - [x] Documented borrow rules for `iter` / mutator interleaving.
-  (See `docs/dev/vec_iter_borrow_rules.md` for the receiver-mode
+  (See `docs/dev/vec_iter_borrow_rules.md` — internal file slug
+  preserved pending the internal sweep — for the receiver-mode
   table and the consume-helper / push-transfer notes for
   implementers.)
 - [x] CHANGELOG bullet (batch 1, batch 2).
