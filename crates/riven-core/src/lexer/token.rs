@@ -112,6 +112,7 @@ pub enum TokenKind {
     Mut,
     Move,
     Ref,
+    Var, // `var` — mutable binding (replaces `let mut`)
 
     // ── Keywords: Type Definitions ──
     Class,
@@ -119,14 +120,18 @@ pub enum TokenKind {
     Enum,
     Trait,
     Impl,
+    Mixin,   // `mixin` — replaces `trait`
+    Include, // `include` — replaces `impl Trait for X`
     Newtype,
     Type,
 
     // ── Keywords: Functions & Methods ──
     Def,
     Pub,
-    Protected,
+    Private,   // `private` — section marker; replaces `pub` prefix model
+    Protected, // already a section marker
     Consume,
+    Inline,    // `inline` — modifier on `def`
     SelfValue, // `self`
     SelfType,  // `Self`
     Init,
@@ -154,11 +159,15 @@ pub enum TokenKind {
     Where,
     As,
     Dyn,
+    SomeBound, // lowercase `some` — `some Mixin` type position
+    AnyBound,  // lowercase `any`  — `any Mixin` type position
     Derive,
+    Layout, // `layout c` / `layout packed` / `layout transparent`
 
     // ── Keywords: Modules ──
     Module,
     Use,
+    Package, // `package` — replaces `crate`
 
     // ── Keywords: Safety ──
     Unsafe,
@@ -167,18 +176,19 @@ pub enum TokenKind {
     True,
     False,
     NoneKw,
-    SomeKw,
+    SomeKw, // `Some` constructor for Option
     OkKw,
     ErrKw,
+    Nil, // `nil` — raw-pointer null literal (replaces `null`)
 
     // ── Keywords: FFI & Interop ──
     Lib,
-    Null,
+    Null, // deprecated; will be removed once all sources migrate to `nil`
 
     // ── Keywords: Reserved ──
     Macro,
-    Crate,
-    Extern,
+    Crate, // deprecated; will be removed once all sources migrate to `package`
+    Extern, // deprecated; folded into `lib`
     Static,
     Const,
     When,
@@ -332,6 +342,7 @@ pub fn lookup_keyword(ident: &str) -> Option<TokenKind> {
         "mut" => Some(TokenKind::Mut),
         "move" => Some(TokenKind::Move),
         "ref" => Some(TokenKind::Ref),
+        "var" => Some(TokenKind::Var),
 
         // Type Definitions
         "class" => Some(TokenKind::Class),
@@ -339,14 +350,18 @@ pub fn lookup_keyword(ident: &str) -> Option<TokenKind> {
         "enum" => Some(TokenKind::Enum),
         "trait" => Some(TokenKind::Trait),
         "impl" => Some(TokenKind::Impl),
+        "mixin" => Some(TokenKind::Mixin),
+        "include" => Some(TokenKind::Include),
         "newtype" => Some(TokenKind::Newtype),
         "type" => Some(TokenKind::Type),
 
         // Functions & Methods
         "def" => Some(TokenKind::Def),
         "pub" => Some(TokenKind::Pub),
+        "private" => Some(TokenKind::Private),
         "protected" => Some(TokenKind::Protected),
         "consume" => Some(TokenKind::Consume),
+        "inline" => Some(TokenKind::Inline),
         "self" => Some(TokenKind::SelfValue),
         "Self" => Some(TokenKind::SelfType),
         "init" => Some(TokenKind::Init),
@@ -374,11 +389,15 @@ pub fn lookup_keyword(ident: &str) -> Option<TokenKind> {
         "where" => Some(TokenKind::Where),
         "as" => Some(TokenKind::As),
         "dyn" => Some(TokenKind::Dyn),
+        "some" => Some(TokenKind::SomeBound),
+        "any" => Some(TokenKind::AnyBound),
         "derive" => Some(TokenKind::Derive),
+        "layout" => Some(TokenKind::Layout),
 
         // Modules
         "module" => Some(TokenKind::Module),
         "use" => Some(TokenKind::Use),
+        "package" => Some(TokenKind::Package),
 
         // Safety
         "unsafe" => Some(TokenKind::Unsafe),
@@ -386,6 +405,7 @@ pub fn lookup_keyword(ident: &str) -> Option<TokenKind> {
         // FFI & Interop
         "lib" => Some(TokenKind::Lib),
         "null" => Some(TokenKind::Null),
+        "nil" => Some(TokenKind::Nil),
 
         // Literals
         "true" => Some(TokenKind::True),
