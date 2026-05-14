@@ -7,6 +7,23 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+### Added
+- `tests/release-e2e/cases/072_const_generic_array_arithmetic.rvn`:
+  new end-to-end fixture exercising the S8.S2/S8.S4 array-size
+  arithmetic path through full compile-and-run.  Covers literal
+  arithmetic (`2 + 1`), paren-grouped precedence
+  (`(1 + 1) * 2`), and identity folding (`5 + 0`).  Verifies that
+  the const evaluator + normal-form rewriter agree with the
+  codegen layout pass — three arrays of sizes 3 / 4 / 5
+  initialise correctly and read back the expected elements.
+
+  The release-e2e harness (`release_e2e_all_fixtures`) now runs 222
+  fixtures (was 221; +1 const-generic case).  Note: const-generic
+  *class* / *struct* instantiation through codegen
+  (`Counter[10].new(...)`) still hits the per-key MIR lowering
+  gap tracked as the S6 follow-up; that's a separate workstream
+  from the array-size form which this fixture pins.
+
 ### Changed
 - `docs/tutorial/21-const-generics.md` rewritten end-to-end to
   match the shipped reality.  Previously the status block said
