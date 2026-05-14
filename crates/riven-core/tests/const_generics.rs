@@ -101,10 +101,18 @@ end
 "#;
     let prog = parse(src);
     let params = first_struct_generic_params(&prog, "Vector");
-    assert_eq!(params.len(), 2, "expected 2 generic params, got {:?}", params);
+    assert_eq!(
+        params.len(),
+        2,
+        "expected 2 generic params, got {:?}",
+        params
+    );
     match &params[0] {
         GenericParam::Type { name, .. } => assert_eq!(name, "T"),
-        other => panic!("expected first param to be Type {{ name: \"T\" }}, got {:?}", other),
+        other => panic!(
+            "expected first param to be Type {{ name: \"T\" }}, got {:?}",
+            other
+        ),
     }
     assert_const_param(&params[1], "N", "USize");
 }
@@ -330,10 +338,7 @@ fn array_layout_evaluates_const_expr_lit() {
     use riven_core::resolve::symbols::SymbolTable;
 
     let symbols = SymbolTable::new();
-    let layout = layout_of(
-        &Ty::Array(Box::new(Ty::Int), ConstExpr::Lit(4)),
-        &symbols,
-    );
+    let layout = layout_of(&Ty::Array(Box::new(Ty::Int), ConstExpr::Lit(4)), &symbols);
     assert_eq!(layout.size, 32);
     assert_eq!(layout.alignment, 8);
 }
@@ -407,7 +412,12 @@ end
             _ => None,
         })
         .collect();
-    assert_eq!(return_tys.len(), 2, "expected two fns, got: {:?}", return_tys);
+    assert_eq!(
+        return_tys.len(),
+        2,
+        "expected two fns, got: {:?}",
+        return_tys
+    );
     assert_ne!(
         return_tys[0], return_tys[1],
         "make_three and make_four must return distinct types: {:?} vs {:?}",
@@ -464,7 +474,11 @@ end
         codes.contains(&"E0704"),
         "expected E0704 for ConstLit on Type param; got codes: {:?}, all diagnostics: {:?}",
         codes,
-        result.diagnostics.iter().map(|d| &d.message).collect::<Vec<_>>()
+        result
+            .diagnostics
+            .iter()
+            .map(|d| &d.message)
+            .collect::<Vec<_>>()
     );
 }
 
@@ -498,7 +512,10 @@ end
     assert!(
         kind_mismatch_diags.is_empty(),
         "ConstLit on a Const param must not emit E0704; got: {:?}",
-        kind_mismatch_diags.iter().map(|d| &d.message).collect::<Vec<_>>()
+        kind_mismatch_diags
+            .iter()
+            .map(|d| &d.message)
+            .collect::<Vec<_>>()
     );
 }
 
@@ -575,8 +592,16 @@ end
         "expected 3 ConstParam defs, got {:?}",
         const_params
     );
-    assert!(const_params.iter().any(|n| *n == "N"), "missing `N`: {:?}", const_params);
-    assert!(const_params.iter().any(|n| *n == "M"), "missing `M`: {:?}", const_params);
+    assert!(
+        const_params.iter().any(|n| *n == "N"),
+        "missing `N`: {:?}",
+        const_params
+    );
+    assert!(
+        const_params.iter().any(|n| *n == "M"),
+        "missing `M`: {:?}",
+        const_params
+    );
 }
 
 /// B2: integer-literal generic args coexist with type-args on either side.
@@ -627,11 +652,7 @@ fn const_expr_eval_op_basic_arithmetic() {
 
     let empty: HashMap<String, u64> = HashMap::new();
     let mk = |a: u64, op: ConstOp, b: u64| {
-        ConstExpr::Op(
-            Box::new(ConstExpr::Lit(a)),
-            op,
-            Box::new(ConstExpr::Lit(b)),
-        )
+        ConstExpr::Op(Box::new(ConstExpr::Lit(a)), op, Box::new(ConstExpr::Lit(b)))
     };
 
     assert_eq!(mk(2, ConstOp::Add, 3).eval(&empty), Ok(5));
@@ -794,10 +815,7 @@ fn array_layout_evaluates_const_expr_arithmetic() {
 // them to `ConstExpr::Error`.  These tests exercise the full
 // parse-→-resolve pipeline so a regression on either side is caught.
 
-fn resolve_first_struct_field_ty(
-    src: &str,
-    struct_name: &str,
-) -> riven_core::hir::types::Ty {
+fn resolve_first_struct_field_ty(src: &str, struct_name: &str) -> riven_core::hir::types::Ty {
     use riven_core::hir::nodes::HirItem;
     let mut lx = riven_core::lexer::Lexer::new(src);
     let toks = lx.tokenize().expect("lex");
@@ -845,29 +863,24 @@ fn resolve_array_size_lowers_all_four_operators() {
     // both the folded form (`ConstExpr::Lit(n)`) and the explicit
     // eval call so any future representation change is caught.
     use riven_core::hir::types::{ConstExpr, Ty};
-    let cases = [
-        ("2 + 3", 5u64),
-        ("7 - 3", 4),
-        ("4 * 5", 20),
-        ("12 / 3", 4),
-    ];
+    let cases = [("2 + 3", 5u64), ("7 - 3", 4), ("4 * 5", 20), ("12 / 3", 4)];
     for (expr_text, expected_eval) in cases {
-        let src = format!(
-            "struct Buf\n  data: [Int; {}]\nend\n",
-            expr_text
-        );
+        let src = format!("struct Buf\n  data: [Int; {}]\nend\n", expr_text);
         let ty = resolve_first_struct_field_ty(&src, "Buf");
         match ty {
             Ty::Array(_, size) => {
                 assert_eq!(
-                    size, ConstExpr::Lit(expected_eval),
-                    "wrong folded value for `{}`", expr_text
+                    size,
+                    ConstExpr::Lit(expected_eval),
+                    "wrong folded value for `{}`",
+                    expr_text
                 );
                 let bindings = std::collections::HashMap::new();
                 assert_eq!(
                     size.eval(&bindings),
                     Ok(expected_eval),
-                    "wrong eval for {}", expr_text
+                    "wrong eval for {}",
+                    expr_text
                 );
             }
             other => panic!("expected Ty::Array for `{}`, got {:?}", expr_text, other),
@@ -998,7 +1011,7 @@ end
 
 #[test]
 fn parse_const_arg_arithmetic_emits_const_expr_arg() {
-    use riven_core::parser::ast::{Expr, ExprKind, BinOp, TopLevelItem, TypeExpr};
+    use riven_core::parser::ast::{BinOp, Expr, ExprKind, TopLevelItem, TypeExpr};
     let src = r#"
 struct Holder
   x: Foo[Int, 2 + 3]
@@ -1125,7 +1138,9 @@ end
         other => other,
     };
     match inner {
-        Ty::Class { name, generic_args, .. } => {
+        Ty::Class {
+            name, generic_args, ..
+        } => {
             assert_eq!(name, "Vector");
             assert_eq!(generic_args.len(), 2);
             // Pure-literal `2 + 3` constant-folds to `Lit(5)` via
@@ -1161,58 +1176,48 @@ fn const_expr_normal_form_identity_rewrites() {
 
     // N + 0 = N (and 0 + N = N)
     assert_eq!(
-        ConstExpr::Op(Box::new(n()), ConstOp::Add, Box::new(ConstExpr::Lit(0)))
-            .normal_form(),
+        ConstExpr::Op(Box::new(n()), ConstOp::Add, Box::new(ConstExpr::Lit(0))).normal_form(),
         n()
     );
     assert_eq!(
-        ConstExpr::Op(Box::new(ConstExpr::Lit(0)), ConstOp::Add, Box::new(n()))
-            .normal_form(),
+        ConstExpr::Op(Box::new(ConstExpr::Lit(0)), ConstOp::Add, Box::new(n())).normal_form(),
         n()
     );
 
     // N - 0 = N (but 0 - N is left as-is: u64 has no negatives)
     assert_eq!(
-        ConstExpr::Op(Box::new(n()), ConstOp::Sub, Box::new(ConstExpr::Lit(0)))
-            .normal_form(),
+        ConstExpr::Op(Box::new(n()), ConstOp::Sub, Box::new(ConstExpr::Lit(0))).normal_form(),
         n()
     );
-    let zero_minus_n =
-        ConstExpr::Op(Box::new(ConstExpr::Lit(0)), ConstOp::Sub, Box::new(n()));
+    let zero_minus_n = ConstExpr::Op(Box::new(ConstExpr::Lit(0)), ConstOp::Sub, Box::new(n()));
     assert_eq!(zero_minus_n.clone().normal_form(), zero_minus_n);
 
     // N * 1 = N, 1 * N = N
     assert_eq!(
-        ConstExpr::Op(Box::new(n()), ConstOp::Mul, Box::new(ConstExpr::Lit(1)))
-            .normal_form(),
+        ConstExpr::Op(Box::new(n()), ConstOp::Mul, Box::new(ConstExpr::Lit(1))).normal_form(),
         n()
     );
     assert_eq!(
-        ConstExpr::Op(Box::new(ConstExpr::Lit(1)), ConstOp::Mul, Box::new(n()))
-            .normal_form(),
+        ConstExpr::Op(Box::new(ConstExpr::Lit(1)), ConstOp::Mul, Box::new(n())).normal_form(),
         n()
     );
 
     // N * 0 = 0, 0 * N = 0
     assert_eq!(
-        ConstExpr::Op(Box::new(n()), ConstOp::Mul, Box::new(ConstExpr::Lit(0)))
-            .normal_form(),
+        ConstExpr::Op(Box::new(n()), ConstOp::Mul, Box::new(ConstExpr::Lit(0))).normal_form(),
         ConstExpr::Lit(0)
     );
     assert_eq!(
-        ConstExpr::Op(Box::new(ConstExpr::Lit(0)), ConstOp::Mul, Box::new(n()))
-            .normal_form(),
+        ConstExpr::Op(Box::new(ConstExpr::Lit(0)), ConstOp::Mul, Box::new(n())).normal_form(),
         ConstExpr::Lit(0)
     );
 
     // N / 1 = N (but 1 / N is left as-is)
     assert_eq!(
-        ConstExpr::Op(Box::new(n()), ConstOp::Div, Box::new(ConstExpr::Lit(1)))
-            .normal_form(),
+        ConstExpr::Op(Box::new(n()), ConstOp::Div, Box::new(ConstExpr::Lit(1))).normal_form(),
         n()
     );
-    let one_div_n =
-        ConstExpr::Op(Box::new(ConstExpr::Lit(1)), ConstOp::Div, Box::new(n()));
+    let one_div_n = ConstExpr::Op(Box::new(ConstExpr::Lit(1)), ConstOp::Div, Box::new(n()));
     assert_eq!(one_div_n.clone().normal_form(), one_div_n);
 }
 
@@ -1270,7 +1275,11 @@ fn const_expr_normal_form_recurses_into_children() {
 
     let n = || ConstExpr::Param("N".to_string());
     let inner_add = ConstExpr::Op(Box::new(n()), ConstOp::Add, Box::new(ConstExpr::Lit(0)));
-    let outer = ConstExpr::Op(Box::new(inner_add), ConstOp::Mul, Box::new(ConstExpr::Lit(1)));
+    let outer = ConstExpr::Op(
+        Box::new(inner_add),
+        ConstOp::Mul,
+        Box::new(ConstExpr::Lit(1)),
+    );
     assert_eq!(outer.normal_form(), n());
 }
 
@@ -1366,7 +1375,11 @@ end
         Ty::RefLifetime(_, inner) | Ty::RefMutLifetime(_, inner) => *inner,
         other => other,
     };
-    assert_eq!(unwrap_class(lhs), unwrap_class(rhs), "4 * 1 must normalise to 4");
+    assert_eq!(
+        unwrap_class(lhs),
+        unwrap_class(rhs),
+        "4 * 1 must normalise to 4"
+    );
 }
 
 // ── Stage 9 parser cut: where-clause const predicates ───────────────
@@ -1383,7 +1396,7 @@ end
 
 #[test]
 fn parse_where_clause_const_predicate_n_gt_zero() {
-    use riven_core::parser::ast::{ExprKind, BinOp, TopLevelItem};
+    use riven_core::parser::ast::{BinOp, ExprKind, TopLevelItem};
     let src = r#"
 def take_pos[const N: USize](x: Int) -> Int
 where N > 0
@@ -1399,10 +1412,7 @@ end
             _ => None,
         })
         .expect("no take_pos function");
-    let wc = func
-        .where_clause
-        .as_ref()
-        .expect("where clause present");
+    let wc = func.where_clause.as_ref().expect("where clause present");
     assert!(
         wc.predicates.is_empty(),
         "no trait-bound predicates expected; got: {:?}",
@@ -1422,7 +1432,7 @@ end
 
 #[test]
 fn parse_where_clause_const_predicate_n_eq_m() {
-    use riven_core::parser::ast::{ExprKind, BinOp, TopLevelItem};
+    use riven_core::parser::ast::{BinOp, ExprKind, TopLevelItem};
     let src = r#"
 def pair[const N: USize, const M: USize](x: Int) -> Int
 where N == M
@@ -1450,7 +1460,7 @@ end
 fn parse_where_clause_const_predicate_arithmetic_eq() {
     // `where N + M == 8` — the LHS itself is arithmetic; trigger
     // peek sees `+` after `N`.  Full expression is captured.
-    use riven_core::parser::ast::{ExprKind, BinOp, TopLevelItem};
+    use riven_core::parser::ast::{BinOp, ExprKind, TopLevelItem};
     let src = r#"
 def fixed[const N: USize, const M: USize](x: Int) -> Int
 where N + M == 8
@@ -1597,13 +1607,12 @@ end
 fn const_param_integer_types_do_not_emit_e0705() {
     // Pin every integer family + Bool as accepted.  USize is the
     // canonical choice but the others must also stay accepted.
-    let cases = ["Int", "Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16",
-                 "UInt32", "UInt64", "USize", "ISize", "Bool"];
+    let cases = [
+        "Int", "Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64", "USize",
+        "ISize", "Bool",
+    ];
     for ty in cases {
-        let src = format!(
-            "struct Buf[T, const N: {}]\n  data: [T; 4]\nend\n",
-            ty
-        );
+        let src = format!("struct Buf[T, const N: {}]\n  data: [T; 4]\nend\n", ty);
         let codes = typecheck_diag_codes(&src);
         assert!(
             !codes.iter().any(|c| c == "E0705"),

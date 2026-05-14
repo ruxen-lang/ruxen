@@ -133,7 +133,10 @@ fn format_definition_hover(def: &Definition) -> String {
             format!("```riven\nconst {}: {}\n```", def.name, ty)
         }
         DefKind::ConstParam { ty } => {
-            format!("```riven\nconst {}: {}  (const generic param)\n```", def.name, ty)
+            format!(
+                "```riven\nconst {}: {}  (const generic param)\n```",
+                def.name, ty
+            )
         }
         DefKind::SelfValue { ty } => {
             format!("```riven\nself: {}\n```", ty)

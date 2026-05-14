@@ -52,7 +52,12 @@ fn compile_and_run(rvn_path: PathBuf, out_basename: &str, expect_fn: &str) -> Ru
         .iter()
         .filter(|d| d.level == riven_core::diagnostics::DiagnosticLevel::Error)
         .collect();
-    assert!(errors.is_empty(), "type errors in {:?}: {:?}", rvn_path, errors);
+    assert!(
+        errors.is_empty(),
+        "type errors in {:?}: {:?}",
+        rvn_path,
+        errors
+    );
 
     let mut lowerer = Lowerer::new(&result.symbols);
     let mir = lowerer
@@ -107,7 +112,11 @@ fn enum_with_derive_debug_unit_variant_prints_name() {
 fn enum_with_derive_debug_explicit_debug_spec_dispatches() {
     let root = workspace_root();
     let rvn = root.join("tests/release-e2e/cases/212_derive_debug_enum_explicit_q.rvn");
-    let run = compile_and_run(rvn, "riven_derive_debug_enum_explicit_q_bin", "Color_to_debug");
+    let run = compile_and_run(
+        rvn,
+        "riven_derive_debug_enum_explicit_q_bin",
+        "Color_to_debug",
+    );
 
     assert!(
         run.has_synthesized_fn,

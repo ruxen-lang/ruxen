@@ -207,7 +207,10 @@ def main
   exit(0)
 end
 "##;
-    assert_eq!(compile_and_get_exit_code(source, "stdlib_process_exit_0"), 0);
+    assert_eq!(
+        compile_and_get_exit_code(source, "stdlib_process_exit_0"),
+        0
+    );
 }
 
 #[test]
@@ -219,7 +222,10 @@ def main
   exit(1)
 end
 "##;
-    assert_eq!(compile_and_get_exit_code(source, "stdlib_process_exit_1"), 1);
+    assert_eq!(
+        compile_and_get_exit_code(source, "stdlib_process_exit_1"),
+        1
+    );
 }
 
 #[test]

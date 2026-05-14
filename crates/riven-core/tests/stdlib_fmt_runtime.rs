@@ -67,7 +67,10 @@ def main
 end
 "#;
     let (stdout, stderr, ok) = compile_and_run(src, "fmt_runtime_round_trip");
-    assert!(ok, "program exited non-zero\nstdout={stdout:?}\nstderr={stderr:?}");
+    assert!(
+        ok,
+        "program exited non-zero\nstdout={stdout:?}\nstderr={stderr:?}"
+    );
     assert_eq!(stdout.trim(), "hello world");
 }
 
@@ -84,7 +87,10 @@ def main
 end
 "#;
     let (stdout, stderr, ok) = compile_and_run(src, "fmt_write_char_ascii");
-    assert!(ok, "program exited non-zero\nstdout={stdout:?}\nstderr={stderr:?}");
+    assert!(
+        ok,
+        "program exited non-zero\nstdout={stdout:?}\nstderr={stderr:?}"
+    );
     assert_eq!(stdout.trim(), "A");
 }
 
@@ -244,6 +250,9 @@ def main
 end
 "##;
     let (stdout, stderr, ok) = compile_and_run(src, "fmt_len_after_write");
-    assert!(ok, "program exited non-zero\nstdout={stdout:?}\nstderr={stderr:?}");
+    assert!(
+        ok,
+        "program exited non-zero\nstdout={stdout:?}\nstderr={stderr:?}"
+    );
     assert_eq!(stdout.trim(), "2");
 }

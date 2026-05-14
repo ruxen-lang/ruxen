@@ -46,7 +46,10 @@ struct BodyPoint
 end
 "#;
     let prog = parse(src);
-    assert_eq!(struct_derives(&prog, "AttrPoint"), struct_derives(&prog, "BodyPoint"));
+    assert_eq!(
+        struct_derives(&prog, "AttrPoint"),
+        struct_derives(&prog, "BodyPoint")
+    );
     assert!(struct_derives(&prog, "AttrPoint").contains(&"Debug".to_string()));
 }
 
@@ -100,6 +103,11 @@ end
     body.sort();
     assert_eq!(attr, body);
     for expected in ["Default", "Ord", "PartialOrd"] {
-        assert!(attr.contains(&expected.to_string()), "missing `{}`: {:?}", expected, attr);
+        assert!(
+            attr.contains(&expected.to_string()),
+            "missing `{}`: {:?}",
+            expected,
+            attr
+        );
     }
 }

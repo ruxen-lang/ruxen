@@ -141,6 +141,10 @@ end
         module.items.len() >= 5,
         "expected ≥5 inner items, got {} ({:?})",
         module.items.len(),
-        module.items.iter().map(|i| std::mem::discriminant(i)).collect::<Vec<_>>()
+        module
+            .items
+            .iter()
+            .map(|i| std::mem::discriminant(i))
+            .collect::<Vec<_>>()
     );
 }

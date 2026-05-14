@@ -141,8 +141,7 @@ impl CodeGen {
             // callee (Phase 2 #06.D2.S3: synth `Bool_fmt`/`Char_fmt` etc.
             // legitimately take narrow params and must not be widened).
             let param_tys: Vec<Type> = sig.params.iter().map(|p| p.value_type).collect();
-            self.user_fn_param_tys
-                .insert(func.name.clone(), param_tys);
+            self.user_fn_param_tys.insert(func.name.clone(), param_tys);
 
             let func_id = self
                 .module

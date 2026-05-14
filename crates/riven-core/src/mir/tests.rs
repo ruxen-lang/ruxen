@@ -138,7 +138,11 @@ mod lowering_tests {
         // Phase 2 #06.D2.S1: 1 user function + 5 unconditionally-emitted
         // primitive `_fmt` synth functions (Char_fmt / Int_fmt / Float_fmt /
         // Bool_fmt / String_fmt).
-        assert_eq!(mir.functions.len(), 6, "should have 1 user fn + 5 primitive _fmt synth fns");
+        assert_eq!(
+            mir.functions.len(),
+            6,
+            "should have 1 user fn + 5 primitive _fmt synth fns"
+        );
 
         let main_fn = mir
             .functions

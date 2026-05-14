@@ -60,7 +60,11 @@ pub fn declare_runtime_functions<'ctx>(module: &Module<'ctx>, context: &'ctx Con
     decl!("riven_fmt_formatter_len", i64_ty, [ptr_ty]);
     // Phase 2 stdlib (#06.D4): spec-aware Formatter constructor +
     // precision accessor + per-type precision helpers.
-    decl!("riven_fmt_formatter_new_with_spec", ptr_ty, [i64_ty, i64_ty, i64_ty, i64_ty]);
+    decl!(
+        "riven_fmt_formatter_new_with_spec",
+        ptr_ty,
+        [i64_ty, i64_ty, i64_ty, i64_ty]
+    );
     decl!("riven_fmt_formatter_precision", i64_ty, [ptr_ty]);
     decl!("riven_float_to_string_prec", ptr_ty, [f64_ty, i64_ty]);
     decl!("riven_string_truncate_chars", ptr_ty, [ptr_ty, i64_ty]);

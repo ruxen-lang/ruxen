@@ -738,9 +738,7 @@ fn test_interpolation_spec_trailing_junk_is_e0007() {
 fn test_interpolation_spec_chars_after_debug_flag_is_e0007() {
     let (_, diags) = lex_with_errors("\"#{x:?nope}\"");
     assert!(
-        diags
-            .iter()
-            .any(|d| d.code.as_deref() == Some("E0007")),
+        diags.iter().any(|d| d.code.as_deref() == Some("E0007")),
         "expected E0007 (chars after ?), got {:?}",
         diags
     );
@@ -754,9 +752,7 @@ fn test_interpolation_spec_chars_after_debug_flag_is_e0007() {
 fn test_interpolation_spec_unrecognised_body_is_e0007() {
     let (_, diags) = lex_with_errors("\"#{x:@@@}\"");
     assert!(
-        diags
-            .iter()
-            .any(|d| d.code.as_deref() == Some("E0007")),
+        diags.iter().any(|d| d.code.as_deref() == Some("E0007")),
         "expected E0007 (unrecognised body), got {:?}",
         diags
     );

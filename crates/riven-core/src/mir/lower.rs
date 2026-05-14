@@ -1244,7 +1244,10 @@ impl<'a> Lowerer<'a> {
                     };
                     // Phase 2 #06.D2.S0: `Formatter.new()` dispatches to
                     // the runtime constructor just like Vec/Hash.
-                    if matches!(base_type, "Vec" | "Hash" | "HashMap" | "Set" | "HashSet" | "Formatter") {
+                    if matches!(
+                        base_type,
+                        "Vec" | "Hash" | "HashMap" | "Set" | "HashSet" | "Formatter"
+                    ) {
                         let obj = self.new_temp(expr.ty.clone());
                         // Emit Call to runtime constructor (e.g., Vec_new).
                         // Use the base type so the mangled callee elides the
@@ -2465,7 +2468,10 @@ impl<'a> Lowerer<'a> {
                     };
                     // Phase 2 #06.D2.S0: `Formatter.new()` dispatches to
                     // the runtime constructor just like Vec/Hash.
-                    if matches!(base_type, "Vec" | "Hash" | "HashMap" | "Set" | "HashSet" | "Formatter") {
+                    if matches!(
+                        base_type,
+                        "Vec" | "Hash" | "HashMap" | "Set" | "HashSet" | "Formatter"
+                    ) {
                         let obj = self.new_temp(expr.ty.clone());
                         // Use the base type so the mangled callee elides the
                         // generic parameter list (`HashMap[K, V]_new` would
@@ -7239,8 +7245,7 @@ impl<'a> Lowerer<'a> {
             };
 
             if !payload_fields.is_empty() {
-                let is_struct_variant =
-                    matches!(variant.kind, HirVariantKind::Struct(_));
+                let is_struct_variant = matches!(variant.kind, HirVariantKind::Struct(_));
                 let open = if is_struct_variant { " { " } else { "(" };
                 let close = if is_struct_variant { " }" } else { ")" };
 

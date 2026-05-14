@@ -182,11 +182,8 @@ def main
   end
 end
 "##;
-    let (stdout, stderr, ok) = compile_and_run_with_env(
-        source,
-        "stdlib_env_var_set",
-        [("RIVEN_SENTINEL", "hello")],
-    );
+    let (stdout, stderr, ok) =
+        compile_and_run_with_env(source, "stdlib_env_var_set", [("RIVEN_SENTINEL", "hello")]);
     assert!(ok, "stderr: {}", stderr);
     assert!(stdout.contains("got=hello"), "stdout: {}", stdout);
 }
@@ -205,8 +202,11 @@ def main
   end
 end
 "##;
-    let (stdout, stderr, ok) =
-        compile_and_run_with_env(source, "stdlib_env_var_missing", std::iter::empty::<(&str, &str)>());
+    let (stdout, stderr, ok) = compile_and_run_with_env(
+        source,
+        "stdlib_env_var_missing",
+        std::iter::empty::<(&str, &str)>(),
+    );
     assert!(ok, "stderr: {}", stderr);
     assert!(stdout.contains("missing"), "stdout: {}", stdout);
 }
@@ -227,8 +227,15 @@ def main
   end
 end
 "##;
-    let (stdout, stderr, ok) =
-        compile_and_run_with_env(source, "stdlib_env_args_present", std::iter::empty::<(&str, &str)>());
+    let (stdout, stderr, ok) = compile_and_run_with_env(
+        source,
+        "stdlib_env_args_present",
+        std::iter::empty::<(&str, &str)>(),
+    );
     assert!(ok, "stderr: {}", stderr);
-    assert!(stdout.contains("ok"), "expected non-empty args, got: {}", stdout);
+    assert!(
+        stdout.contains("ok"),
+        "expected non-empty args, got: {}",
+        stdout
+    );
 }

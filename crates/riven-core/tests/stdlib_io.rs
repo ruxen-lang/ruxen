@@ -394,8 +394,7 @@ def main
   end
 end
 "##;
-    let (stdout, _stderr, ok) =
-        compile_and_run_with_stdin(source, "stdlib_io_err_message", b"");
+    let (stdout, _stderr, ok) = compile_and_run_with_stdin(source, "stdlib_io_err_message", b"");
     assert!(ok);
     assert_eq!(
         stdout, "unexpected end of file\n",

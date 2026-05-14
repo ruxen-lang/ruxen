@@ -711,8 +711,7 @@ impl Resolver {
                 Visibility::Public,
                 span.clone(),
             );
-            self.scopes
-                .insert(format!("IoError.{}", vname), vid);
+            self.scopes.insert(format!("IoError.{}", vname), vid);
             io_variant_ids.push(vid);
         }
         let io_other_id = self.symbols.define(
@@ -1817,8 +1816,7 @@ impl Resolver {
                     })
                     .collect();
                 self.scopes.pop();
-                let fn_generic_param_infos =
-                    self.collect_generic_param_infos(&f.generic_params);
+                let fn_generic_param_infos = self.collect_generic_param_infos(&f.generic_params);
                 let id = self.symbols.define(
                     f.name.clone(),
                     DefKind::Function {
@@ -4753,9 +4751,24 @@ impl Resolver {
                 .copied()
                 .and_then(|id| self.symbols.get(id))
                 .and_then(|def| match &def.kind {
-                    DefKind::Class { info } => Some(info.generic_params.iter().map(|gp| gp.kind.clone()).collect()),
-                    DefKind::Struct { info } => Some(info.generic_params.iter().map(|gp| gp.kind.clone()).collect()),
-                    DefKind::Enum { info } => Some(info.generic_params.iter().map(|gp| gp.kind.clone()).collect()),
+                    DefKind::Class { info } => Some(
+                        info.generic_params
+                            .iter()
+                            .map(|gp| gp.kind.clone())
+                            .collect(),
+                    ),
+                    DefKind::Struct { info } => Some(
+                        info.generic_params
+                            .iter()
+                            .map(|gp| gp.kind.clone())
+                            .collect(),
+                    ),
+                    DefKind::Enum { info } => Some(
+                        info.generic_params
+                            .iter()
+                            .map(|gp| gp.kind.clone())
+                            .collect(),
+                    ),
                     _ => None,
                 });
             for (idx, arg) in ast_args.iter().enumerate() {
@@ -4988,7 +5001,9 @@ impl Resolver {
         &mut self,
         gp: &Option<ast::GenericParams>,
     ) -> Vec<GenericParamInfo> {
-        let Some(gps) = gp.as_ref() else { return vec![] };
+        let Some(gps) = gp.as_ref() else {
+            return vec![];
+        };
         gps.params
             .iter()
             .filter_map(|p| match p {
@@ -5301,11 +5316,7 @@ impl Resolver {
     /// instantiation eval surfacing pass that's still pending).
     /// `Err(Malformed)` (parser recovery) is also skipped — the
     /// parser already emitted its own diagnostic upstream.
-    fn check_const_expr_eval_errors(
-        &mut self,
-        expr: &crate::hir::types::ConstExpr,
-        span: &Span,
-    ) {
+    fn check_const_expr_eval_errors(&mut self, expr: &crate::hir::types::ConstExpr, span: &Span) {
         use crate::hir::types::ConstEvalError;
         let bindings = std::collections::HashMap::new();
         match expr.eval(&bindings) {
@@ -5340,11 +5351,7 @@ impl Resolver {
     /// resolve-site span — the first reachable `Error` triggers
     /// it; nested noise stays quiet so the user sees the source
     /// location, not a diagnostic for every leaf.
-    fn check_const_expr_for_non_const(
-        &mut self,
-        expr: &crate::hir::types::ConstExpr,
-        span: &Span,
-    ) {
+    fn check_const_expr_for_non_const(&mut self, expr: &crate::hir::types::ConstExpr, span: &Span) {
         if contains_const_expr_error(expr) {
             self.diagnostics.push(Diagnostic::error_with_code(
                 "expression is not a valid const expression \
@@ -5417,9 +5424,7 @@ fn contains_const_expr_error(expr: &crate::hir::types::ConstExpr) -> bool {
     match expr {
         ConstExpr::Error => true,
         ConstExpr::Lit(_) | ConstExpr::Param(_) => false,
-        ConstExpr::Op(a, _, b) => {
-            contains_const_expr_error(a) || contains_const_expr_error(b)
-        }
+        ConstExpr::Op(a, _, b) => contains_const_expr_error(a) || contains_const_expr_error(b),
     }
 }
 

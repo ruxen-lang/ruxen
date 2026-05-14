@@ -81,11 +81,7 @@ impl ConstExpr {
                 // and eval succeeds, replace with a single Lit.
                 if let (ConstExpr::Lit(_), ConstExpr::Lit(_)) = (&a, &b) {
                     let empty = std::collections::HashMap::new();
-                    let folded = ConstExpr::Op(
-                        Box::new(a.clone()),
-                        op,
-                        Box::new(b.clone()),
-                    );
+                    let folded = ConstExpr::Op(Box::new(a.clone()), op, Box::new(b.clone()));
                     if let Ok(v) = folded.eval(&empty) {
                         return ConstExpr::Lit(v);
                     }
