@@ -1,8 +1,8 @@
-trait A
+mixin A
   def a_msg -> String
 end
 
-trait B: A
+mixin B: A
   def b_msg -> String
 end
 
@@ -11,15 +11,15 @@ class Thing
 
   def init(@name: String)
   end
-end
 
-impl A for Thing
+  include A
+
   def a_msg -> String
     "A: #{self.name}"
   end
-end
 
-impl B for Thing
+  include B
+
   def b_msg -> String
     "B: #{self.name}"
   end

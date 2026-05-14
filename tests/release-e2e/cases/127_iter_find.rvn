@@ -1,11 +1,11 @@
 def main
-  let v = vec![1, 2, 3, 4, 5]
+  let v = array![1, 2, 3, 4, 5]
   match v.iter.find { |n| n > 3 }
     Some(x) -> puts "found #{x}"
-    None    -> puts "none"
+    nil     -> puts "none"
   end
   match v.iter.find { |n| n > 100 }
     Some(x) -> puts "found #{x}"
-    None    -> puts "none"
+    nil     -> puts "none"
   end
 end

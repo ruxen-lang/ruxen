@@ -5,17 +5,17 @@ class Counter
     self.count = 0
   end
 
-  pub def value -> Int
+  def value -> Int
     self.count
   end
 
-  pub def mut inc
+  def mut inc
     self.count = self.count + 1
   end
 end
 
 def main
-  let mut c = Counter.new
+  var c = Counter.new
   c.inc
   c.inc
   puts "#{c.value}"

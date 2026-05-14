@@ -1,4 +1,0 @@
-@[derive(Copy)]
-struct Point
-  x: Int
-end

@@ -2,10 +2,10 @@ def main
   let s = "hello world"
   match s.find("world")
     Some(idx) -> puts "found at #{idx}"
-    None      -> puts "missing"
+    nil       -> puts "missing"
   end
   match s.find("zzz")
     Some(idx) -> puts "found at #{idx}"
-    None      -> puts "missing"
+    nil       -> puts "missing"
   end
 end

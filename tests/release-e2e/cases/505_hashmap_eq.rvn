@@ -1,11 +1,11 @@
 def main
-  let mut a: HashMap[Int, Int] = HashMap.new
+  var a: Map[Int, Int] = Map.new
   a.insert(1, 10)
   a.insert(2, 20)
-  let mut b: HashMap[Int, Int] = HashMap.new
+  var b: Map[Int, Int] = Map.new
   b.insert(2, 20)
   b.insert(1, 10)
-  let mut c: HashMap[Int, Int] = HashMap.new
+  var c: Map[Int, Int] = Map.new
   c.insert(1, 99)
   c.insert(2, 20)
   puts "a_eq_b=#{a == b}"

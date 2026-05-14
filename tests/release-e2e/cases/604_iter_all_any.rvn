@@ -1,5 +1,5 @@
 def main
-  let evens = vec![2, 4, 6, 8]
+  let evens = array![2, 4, 6, 8]
   let all_even = evens.iter.all { |n| n % 2 == 0 }
   if all_even
     puts "all_even=true"
@@ -7,7 +7,7 @@ def main
     puts "all_even=false"
   end
 
-  let mixed = vec![1, 2, 3]
+  let mixed = array![1, 2, 3]
   let any_gt2 = mixed.iter.any { |n| n > 2 }
   if any_gt2
     puts "any_gt2=true"
@@ -22,7 +22,7 @@ def main
     puts "any_gt100=false"
   end
 
-  let empty: Vec[Int] = Vec.new
+  let empty: Array[Int] = Array.new
   let vac_all = empty.iter.all { |n| n > 0 }
   let vac_any = empty.iter.any { |n| n > 0 }
   if vac_all

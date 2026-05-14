@@ -1,8 +1,10 @@
-trait Displayable
+mixin Displayable
   def to_display -> String
 end
 
-impl Displayable for Int
+extension Int
+  include Displayable
+
   def to_display -> String
     "#{self}"
   end

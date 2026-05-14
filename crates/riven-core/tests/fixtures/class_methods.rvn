@@ -2,10 +2,8 @@
 enum Priority
   Low
   High
-end
 
-impl Priority
-  pub def weight -> Int
+  def weight -> Int
     match self
       Priority.Low  -> 1
       Priority.High -> 3
@@ -20,7 +18,7 @@ class Task
   def init(@id: Int, @priority: Priority)
   end
 
-  pub def is_high -> Bool
+  def is_high -> Bool
     match &self.priority
       Priority.High -> true
       _ -> false

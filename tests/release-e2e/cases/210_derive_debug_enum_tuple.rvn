@@ -1,7 +1,6 @@
 enum Shape
   Circle(radius: Float)
   Rect(w: Int, h: Int)
-  derive Debug
 end
 
 def main

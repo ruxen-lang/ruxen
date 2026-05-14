@@ -1,31 +1,31 @@
 ## Minimal task tracker built on a class with mutable methods.
-## Demonstrates classes, `def mut`, encapsulation, and `Vec[T]`.
+## Demonstrates classes, `def mut`, encapsulation, and `Array[T]`.
 
 class TaskList
-  items: Vec[String]
+  items: Array[String]
   done: Int
 
   def init
-    self.items = Vec.new
+    self.items = Array.new
     self.done = 0
   end
 
-  pub def mut add(name: &String)
+  def mut add(name: &String)
     self.items.push(name.clone)
   end
 
-  pub def mut complete
+  def mut complete
     self.done = self.done + 1
   end
 
-  pub def remaining -> Int
+  def remaining -> Int
     let total: Int = self.items.len() as Int
     total - self.done
   end
 end
 
 def main
-  let mut list = TaskList.new
+  var list = TaskList.new
   list.add("write docs")
   list.add("ship CI")
   list.add("close P0s")

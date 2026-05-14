@@ -1,7 +1,6 @@
 struct Point
   x: Int
   y: Int
-  derive Debug
 end
 
 def main

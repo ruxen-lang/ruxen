@@ -1,12 +1,12 @@
 def main
-  let v = vec![1, 2, 3, 4, 5]
+  let v = array![1, 2, 3, 4, 5]
   let head = v.iter.take(3).collect_vec
   puts "head_len=#{head.len}"
   let tail = v.iter.skip(2).collect_vec
   puts "tail_len=#{tail.len}"
   let all = v.iter.collect_vec
   puts "all_len=#{all.len}"
-  let empty: Vec[Int] = Vec.new
+  let empty: Array[Int] = Array.new
   let z = empty.iter.collect_vec
   puts "empty_len=#{z.len}"
 end

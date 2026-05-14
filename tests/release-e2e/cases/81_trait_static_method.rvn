@@ -1,4 +1,4 @@
-trait Empty
+mixin Empty
   def self.empty -> Self
 end
 
@@ -7,9 +7,9 @@ class Bag
 
   def init(@count: Int)
   end
-end
 
-impl Empty for Bag
+  include Empty
+
   def self.empty -> Self
     Bag.new(0)
   end

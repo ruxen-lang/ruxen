@@ -1,7 +1,6 @@
 struct P
   x: Int
   y: Int
-  derive PartialEq
 end
 
 def main

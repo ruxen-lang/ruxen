@@ -1,5 +1,5 @@
 def main
-  let mut s: Set[Int] = Set.new
+  var s: Set[Int] = Set.new
   s.insert(1)
   s.insert(2)
   s.insert(1)

@@ -4,7 +4,7 @@ class Thing
   def init(@value: Int)
   end
 
-  pub def value -> Int
+  def value -> Int
     self.value
   end
 

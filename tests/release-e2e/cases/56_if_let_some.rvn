@@ -2,7 +2,7 @@ def find(n: Int) -> Option[Int]
   if n > 0
     Some(n * 10)
   else
-    None
+    nil
   end
 end
 

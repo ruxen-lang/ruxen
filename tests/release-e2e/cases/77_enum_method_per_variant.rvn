@@ -2,10 +2,8 @@ enum Light
   Red
   Yellow
   Green
-end
 
-impl Light
-  pub def describe -> String
+  def describe -> String
     match self
       Light.Red    -> String.from("stop")
       Light.Yellow -> String.from("slow")

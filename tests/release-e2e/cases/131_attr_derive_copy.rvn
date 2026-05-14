@@ -1,6 +1,5 @@
-## Demonstrates that `@[derive(...)]` produces the same HIR as
-## body-form `derive Trait1, Trait2`.
-@[derive(Copy, Clone)]
+## Demonstrates that Copy/Clone are auto-synthesized when every field
+## supports them — no declaration needed.
 struct AttrPoint
   x: Int
   y: Int
@@ -9,7 +8,6 @@ end
 struct BodyPoint
   x: Int
   y: Int
-  derive Copy, Clone
 end
 
 def main

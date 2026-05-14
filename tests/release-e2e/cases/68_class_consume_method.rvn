@@ -4,7 +4,7 @@ class Holder
   def init(@x: Int)
   end
 
-  pub def consume into_x -> Int
+  def consume into_x -> Int
     self.x
   end
 end

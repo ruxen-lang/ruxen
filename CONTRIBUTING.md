@@ -45,9 +45,9 @@ Reserved namespaces (see `docs/requirements/ROADMAP.md`):
 | Range         | Owner                       |
 |---------------|-----------------------------|
 | E0001-E0099   | lexer                       |
-| E0601-E0609   | derive macros               |
+| E0601-E0609   | auto-synth mixins           |
 | E0700-E0799   | tier-2 type system          |
-| E1001-E1099   | borrow / trait / impl       |
+| E1001-E1099   | borrow / mixin / include    |
 
 ## Memory caps
 

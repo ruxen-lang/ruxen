@@ -20,10 +20,10 @@ The research agents independently uncovered broken or aspirational-but-nonfuncti
 |---|----------|-------------|----------|-----|
 | **P0.1** | Legal | `README.md:294-296` says "License: TBD"; release workflow already ships tarballs. `release.yml:96` silently no-ops on missing `LICENSE*`. | root | tier4_08 |
 | **P0.2** | Correctness | `MirInst::Drop` is emitted but both codegen backends silently discard it. Every program leaks heap memory until exit. | `codegen/cranelift.rs:692-698`, `codegen/llvm/emit.rs:790-792` | tier1_04 |
-| **P0.3** | Correctness | `@[derive(...)]` attribute errors out — only `@[repr]`/`@[link]` are dispatched. Separate body-level `derive Trait` syntax is parsed but no pass consumes it. `Ty::is_copy()` ignores `derive_traits`. | `parser/mod.rs:473-511`, `hir/types.rs:189-221` | tier1_05 |
-| **P0.4** | Design | `@[repr(C)]` is stuffed into the same `Vec<String>` field as `derive Trait` names. | `parser/mod.rs:499-503` | tier1_05 |
+| **P0.3** | Correctness | The body-level `derive Mixin` directive is parsed but no pass consumes it. `Ty::is_copy()` ignores `derive_traits`. | `parser/mod.rs:473-511`, `hir/types.rs:189-221` | tier1_05 |
+| **P0.4** | Design | `layout` storage and `derive Mixin` storage share the same `Vec<String>` field. | `parser/mod.rs:499-503` | tier1_05 |
 | **P0.5** | Correctness | `?T..._method` codegen fallback maps unresolved generic method calls to `riven_noop_passthrough`. Some currently-passing tests are no-ops. | `codegen/runtime.rs` | tier1_01 |
-| **P0.6** | Design | `Hash[K,V]` collection name collides with the conventional `Hash` trait. Both stdlib and derive docs recommend renaming to `HashMap`. | `resolve/mod.rs:200` | tier1_01 / tier1_05 |
+| **P0.6** | Design | `Hash[K,V]` collection name collides with the conventional `Hash` mixin. Both stdlib and derive docs recommend renaming to `Map`. | `resolve/mod.rs:200` | tier1_01 / tier1_05 |
 | **P0.7** | Correctness | String literals flow as `Ty::String`; lowering `String::drop` to `free()` would double-free. | `mir/lower.rs` + runtime | tier1_04 |
 | **P0.8** | UX | Manifest parses registry dependencies (`manifest.rs:51-57`) but `resolve_deps.rs:100-108` hard-rejects them with "not yet supported". | `crates/riven-cli/src/` | tier4_01 |
 | **P0.9** | Policy | `Cargo.toml` workspace root is 4 lines with no `rust-version`. Contributor can land nightly-only Rust. | root | tier4_06 |
@@ -32,7 +32,7 @@ The research agents independently uncovered broken or aspirational-but-nonfuncti
 | **P0.12** | Dead code | `async`/`await`/`spawn`/`actor`/`send`/`receive` reserved in lexer but never consumed by the parser. | `lexer/token.rs:83-85,:127-130` | tier1_02 / tier1_03 |
 | **P0.13** | UX | Doc comments `##` are lexed as `TokenKind::DocComment` but discarded at four parser sites. | `parser/mod.rs:455-458,:884-887,:1112-1115,:1187-1190` | tier3_04 |
 | **P0.14** | Correctness | `DWARF` emission is a 3-line stub. `--backend=llvm` debug builds have no line info. | `codegen/llvm/debug.rs:1-3` | tier3_02 |
-| **P0.15** | Soundness | Variance rules for built-in type constructors (`&mut T` invariant in T, `Vec[T]` invariant, `Option[T]` covariant) are encoded as *comments only*. No fixture proves them. | `typeck/coerce.rs:108-109` | tier2_07 |
+| **P0.15** | Soundness | Variance rules for built-in type constructors (`&mut T` invariant in T, `Array[T]` invariant, `Option[T]` covariant) are encoded as *comments only*. No fixture proves them. | `typeck/coerce.rs:108-109` | tier2_07 |
 
 ## Cross-tier dependency graph
 
@@ -89,8 +89,8 @@ The research agents independently uncovered broken or aspirational-but-nonfuncti
 
 Critical orderings extracted from the individual docs:
 
-- **Drop must work before stdlib ships.** Every heap-backed stdlib type (`String`, `Vec`, `HashMap`, `File`, `TcpStream`) leaks until exit without P0.2 fixed.
-- **Derive must work before stdlib ships.** Users hand-writing `impl Debug` for every struct is a non-starter.
+- **Drop must work before stdlib ships.** Every heap-backed stdlib type (`String`, `Array`, `Map`, `File`, `TcpStream`) leaks until exit without P0.2 fixed.
+- **Derive must work before stdlib ships.** Users hand-writing a `Debug` `include` for every struct is a non-starter.
 - **Associated types before `Iterator`.** Tier-1 stdlib's `Iterator` trait needs tier-2.01. These land together in practice.
 - **Incremental compile before LSP completion.** LSP can ship with debounced full-file re-analysis first (tier-3.01 phase 1), then migrate to the tier-3.06 query layer.
 - **no_std before WASM.** `wasm32-unknown-unknown` is a special case of no_std — tier-4.04 before tier-4.03.
@@ -107,8 +107,8 @@ Fixes P0.1, P0.3, P0.4, P0.6, P0.9, P0.10, P0.11, P0.13 — anything that's eith
 1. **License** (P0.1): pick MIT OR Apache-2.0 (tier-4.08 recommends dual), add `LICENSE-MIT` + `LICENSE-APACHE`, fix README.
 2. **MSRV** (P0.9): pin `rust-version = "1.78"` at workspace root, add MSRV check to CI.
 3. **CI bootstrap** (tier-4.06 phase 1): ship `ci.yml` running `cargo test` + `cargo clippy` + MSRV check. 0.5 weeks.
-4. **Attribute untangle** (P0.3, P0.4): wire `@[derive(...)]` dispatch, widen `ast::Attribute.args` to `Vec<AttrArg>`, separate `derive_traits` from `repr` storage, add `derive_traits` to class/enum.
-5. **Hash rename** (P0.6): `Hash[K,V]` → `HashMap[K,V]`. Update tutorial + fixtures. First `EditionLint` canary once tier-5.02 ships.
+4. **Directive untangle** (P0.3, P0.4): wire body-level `derive` dispatch, widen the storage from `Vec<String>` to a structured form, separate `derive_traits` from `layout` storage, add `derive_traits` to class/enum.
+5. **Hash rename** (P0.6): `Hash[K,V]` → `Map[K,V]`. Update tutorial + fixtures. First `EditionLint` canary once tier-5.02 ships.
 6. **Doc-comment capture** (P0.13): stop discarding `##` at 4 parser sites; thread into HIR. Unblocks both tier-3.04 (rivendoc) and tier-3.01 hover enrichment.
 7. **Edition removal or wiring** (P0.11): either delete the inert `edition` field from the manifest or gate a single behavior on it as a smoke test.
 8. **Proptest cleanup** (P0.10): either add real properties per tier-3.08, or remove the claim from `CLAUDE.md`.
@@ -118,9 +118,9 @@ Fixes P0.1, P0.3, P0.4, P0.6, P0.9, P0.10, P0.11, P0.13 — anything that's eith
 Fixes the remaining P0s that are actual semantic bugs, and lands the trait infrastructure stdlib depends on.
 
 1. Tier-1.04 Drop infrastructure + MIR drop elaboration + real codegen (P0.2). Closes the heap-leak hole.
-2. Tier-1.04 Copy/Clone traits + `Ty::is_copy_with(&SymbolTable)`.
-3. Tier-1.05 builtin-derive infrastructure + `@[derive(Debug, Clone)]` + `@[derive(Copy, PartialEq)]`.
-4. Tier-1.04 phase 4d: built-in drops for `String`/`Vec`/`Option`/`Result` (requires P0.7 string-literal-ownership fix first).
+2. Tier-1.04 Copy/Clone mixins + `Ty::is_copy_with(&SymbolTable)`.
+3. Tier-1.05 builtin-derive infrastructure + `derive Debug, Clone` + `derive Copy, PartialEq`.
+4. Tier-1.04 phase 4d: built-in drops for `String`/`Array`/`Option`/`Result` (requires P0.7 string-literal-ownership fix first).
 5. Tier-1.05 phase 5c: remaining derives (`Eq`/`Hash`/`Default`/`Ord`/`PartialOrd`).
 6. Tier-5.04 error-code registry bootstrap (unifies diagnostic namespaces).
 7. P0.5 `?T..._method` removal — accept test regressions, fix them.
@@ -135,7 +135,7 @@ Overlaps nicely with tier-3.03 (test framework) because now users have a stdlib 
 
 | Track | Content | Engineer-weeks |
 |-------|---------|----------------|
-| Types | Tier-2.01 assoc types, tier-2.05 GATs, tier-2.06 trait objects, tier-2.07 variance | ~12 |
+| Types | Tier-2.01 assoc types, tier-2.05 GATs, tier-2.06 mixin existentials, tier-2.07 variance | ~12 |
 | DX | Tier-3.01 LSP completion + diagnostics-on-edit, tier-3.06 incremental compile, tier-3.05 benchmarking | ~10 |
 | Infra | Tier-5.03 deprecation/stability attributes, tier-5.05 suggestions framework | ~5 |
 
@@ -143,13 +143,13 @@ Total ~27 engineer-weeks, achievable in ~8 wall-clock weeks with 3-4 engineers.
 
 ### Phase 4 — concurrency, async, ecosystem (8-12 weeks)
 
-1. Tier-1.02 concurrency (Send/Sync + Thread + Mutex + Arc + channels + atomics).
-2. Tier-1.03 async (Future trait → async/await syntax → single-threaded executor → async I/O).
+1. Tier-1.02 concurrency (Send/Sync + Thread + Mutex + SharedSync + channels + atomics).
+2. Tier-1.03 async (Future mixin → async/await syntax → single-threaded executor → async I/O).
 3. Tier-4.04 no_std/embedded split (blocks WASM).
 4. Tier-4.03 WASM target.
 5. Tier-4.02 general `--target` support.
 6. Tier-4.05 stable-ABI / cbindgen (requires P0.3-P0.4 fixed).
-7. Tier-2.02 const generics (unblocks real generic collections) + tier-2.03 HRTBs + tier-2.04 impl-trait.
+7. Tier-2.02 const generics (unblocks real generic collections) + tier-2.03 HRTBs + tier-2.04 `some` existentials.
 8. Tier-3.02 debugger (LLVM-only, DWARF emission).
 
 ### Phase 5 — long-term health (ongoing from day 1)
@@ -204,5 +204,5 @@ Consolidated from all five tier overviews:
 1. **The research surfaced 15 pre-existing issues that none of the individual tier conversations would have exposed.** Phase 0 is not overhead — it's debt repayment that unblocks everything else.
 2. **Tiers are not strictly ordered.** Tier-4 CI must ship in Phase 0. Tier-5 error-code registry must ship before tier-1 diagnostic work. Tier-3 LSP wiring the existing `formatter` is a 30-line tier-3.01 win that should land in Phase 0.
 3. **Three reserved-but-unused design primitives** (`async`/`await`, `actor`/`spawn`/`send`/`receive`, `edition`) hint at design intent that has not been delivered. Either commit or un-reserve.
-4. **Several fixes unlock disproportionate value.** Fixing the `@[derive]` wiring (P0.3) unblocks tier-1.04 Copy/Clone, tier-1.05 derive, tier-4.05 cbindgen, and part of tier-5.03 stability attrs.
+4. **Several fixes unlock disproportionate value.** Fixing the `derive` wiring (P0.3) unblocks tier-1.04 Copy/Clone, tier-1.05 derive, tier-4.05 cbindgen, and part of tier-5.03 stability attrs.
 5. **Total scope is tractable.** ~6-8 months with a small team is a realistic path from current-state to a language users can write production code in — provided the open decisions above are made soon.

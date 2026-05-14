@@ -1,5 +1,0 @@
-@[derive(Default)]
-enum Color
-  Red
-  Blue
-end

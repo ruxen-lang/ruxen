@@ -15,7 +15,7 @@ sockets and timers. A thread-per-connection model wastes memory and context
 switches; green-thread runtimes (Go, Crystal) trade a simpler mental model for
 an opaque, always-on scheduler that is awkward to embed in libraries.
 
-Rust's stackless `async fn` + `Future` trait has emerged as the
+Rust's stackless `async def` + `Future` mixin has emerged as the
 ownership-friendly compromise: zero-cost suspension, no hidden heap
 allocations per task, pluggable executors. Because Riven already commits to
 Rust-style ownership, borrowing, move semantics, and AOT compilation (see
@@ -81,7 +81,7 @@ end
 |--------------|-------------------------------------------------------------------------|
 | AST          | `is_async: bool` on `FuncDef`; `ExprKind::Await(Box<Expr>)`; `async do` block form |
 | HIR          | `HirExprKind::Await`; function `is_async` flag; desugared-future type   |
-| Ty           | `Ty::Future(Box<Ty>)` (or modelled via a built-in trait `Future`)       |
+| Ty           | `Ty::Future(Box<Ty>)` (or modelled via a built-in mixin `Future`)       |
 | Resolver     | Check `await` only inside `async` functions / closures; track an "async scope" bit |
 | Typeck       | `T: Future<Output = U>` constraint; default `Output` associated type    |
 | Borrow check | Detect borrows live across a suspend point; diagnose `!Send` futures when spawned |
@@ -111,19 +111,19 @@ today. Section 10 discusses whether to repurpose it or deprecate it.
   in Rust".
 - G4. A minimal built-in single-threaded executor ships with the compiler,
   callable as `runtime.block_on(async_expr)`.
-- G5. The `Future` trait is part of `core`, user-implementable, and has a
+- G5. The `Future` mixin is part of `core`, user-includable, and has a
   stable `Poll[T]` enum.
 - G6. Async functions interoperate with non-async code: a non-async caller
   can await via `block_on`; an async function can call non-async code
   freely.
 - G7. The design must not preclude a future work-stealing, multi-threaded
-  executor (`runtime::spawn`, `Send`-bound tasks).
+  executor (`runtime.spawn`, `Send`-bound tasks).
 - G8. Diagnostics: "cannot `await` outside an `async` function" is a
   first-class error with a fix-it suggestion.
 
 ### Non-goals (for Tier 1)
 
-- N1. `async fn` in traits with full object-safety (deferred; see §15).
+- N1. `async def` in mixins with full object-safety (deferred; see §15).
 - N2. `async Drop`.
 - N3. Structured concurrency primitives (`TaskGroup`, nursery) — deferred
   to Tier 2 once the base works.
@@ -146,7 +146,7 @@ today. Section 10 discusses whether to repurpose it or deprecate it.
 | Ownership / borrow   | Transparent to borrow checker: suspend points are visible in MIR | Opaque: any call may suspend, violating "no borrows across suspend" is hard to express |
 | User ergonomics      | Viral (`async` colour)  | Non-viral (looks sync)         |
 | Debuggability        | Async backtraces are synthetic | Native stack traces work     |
-| AOT binary size      | Small, one state enum per async fn | Large runtime, growable stacks |
+| AOT binary size      | Small, one state enum per async function | Large runtime, growable stacks |
 
 *Kotlin coroutines are technically stackless via CPS, but the programmer
 experience is stackful.
@@ -187,7 +187,7 @@ FuncDef   ::= Visibility? "async"? "def" ...
 
 `async` is allowed before `def` but after visibility:
 `pub async def ...`. It is also allowed on methods in `class`, `impl`, and
-`trait` bodies. `async` before `init`/`def mut` is **rejected** (an async
+`mixin` bodies. `async` before `init`/`def mut` is **rejected** (an async
 constructor makes no semantic sense; an async mutating method is allowed).
 
 `FuncDef` gains a field: `pub is_async: bool`. Printer and formatter must
@@ -264,22 +264,22 @@ PostfixOp     ::= ... | "." "await"                # postfix form
 ### 6.1 Definition (in `core`)
 
 ```riven
-pub enum Poll[T]
+enum Poll[T]
   Ready(T)
   Pending
 end
 
-pub trait Future
+mixin Future
   type Output
-  def poll(&mut self, ctx: &mut Context) -> Poll[Self.Output]
+  def mut poll(ctx: &mut Context) -> Poll[Self.Output]
 end
 
-pub class Context
+class Context
   # Opaque for user code; wraps a waker handle for the executor
 end
 
-pub class Waker
-  def wake(consume self)
+class Waker
+  def consume wake
   def wake_by_ref(&self)
   def clone(&self) -> Waker
 end
@@ -288,7 +288,7 @@ end
 ### 6.2 Where it lives
 
 - Source: `crates/riven-core/src/corelib/future.rvn` (new directory).
-- Parsed and resolved identically to other built-in types (`Vec`, `Option`).
+- Parsed and resolved identically to other built-in types (`Array`, `Option`).
 - `Ty::Future(Box<Ty>)` is **not** a primitive; it is represented as
   `Ty::Class { name: "Future", generic_args: [T] }` with a registered
   associated type. This avoids growing the `Ty` enum in `hir/types.rs:39`.
@@ -298,8 +298,8 @@ end
 Rust needs `Pin<&mut T>` because a self-referential generator, once moved,
 invalidates internal pointers into itself. Riven has two options:
 
-1. **Replicate Pin.** Add `core::pin::Pin[T]`, require `poll` to take
-   `Pin<&mut Self>`, and introduce `Unpin` as an auto-trait.
+1. **Replicate Pin.** Add `core.pin::Pin[T]`, require `poll` to take
+   `Pin<&mut Self>`, and introduce `Unpin` as an auto-mixin.
 
 2. **Make all generated futures address-stable by construction.** Pin's
    purpose is runtime enforcement of "don't move this value after
@@ -310,7 +310,7 @@ invalidates internal pointers into itself. Riven has two options:
      borrow checker honours (same mechanism as `!Move` in some
      proposals for Rust).
    - Alternatively, force every future into a heap box at creation
-     (`Box<dyn Future>`), which moots the problem at a per-task
+     (`Box[any Future]`), which moots the problem at a per-task
      allocation cost.
 
 **Recommendation for Phase 3b**: take option (2a). Generated futures are
@@ -320,7 +320,7 @@ move a future after its first `.poll()`. This deletes an entire concept
 Riven's philosophy of compiler-enforced invariants over library types.
 
 If the design proves too restrictive (e.g., users want to build
-`Vec<Box<dyn Future>>`), fall back to option (1) and introduce `Pin`
+`Array[Box[any Future]]`), fall back to option (1) and introduce `Pin`
 explicitly in a Tier 2 revision.
 
 ### 6.4 Built-in impls required
@@ -354,7 +354,7 @@ place.** Rationale:
   function was async — it sees an ordinary function whose body happens to
   be `poll` and whose surrounding struct is the state.
 
-### 7.2 Transform outline (per async fn `foo -> T`)
+### 7.2 Transform outline (per async function `foo -> T`)
 
 1. **Collect live state**: every local variable, parameter, and temporary
    whose live range crosses any `await` point.
@@ -376,8 +376,10 @@ place.** Rationale:
    end
    ```
    `FooFuture` is marked `!Move` (see §6.3).
-4. **Generate `impl Future for FooFuture`**: the `poll` method is a large
-   match on `self.state` that dispatches to the corresponding basic block.
+4. **Generate the `Future` provision on `FooFuture`** (an in-body
+   `include Future` directive plus the required `poll` method): the
+   `poll` method is a large match on `self.state` that dispatches to the
+   corresponding basic block.
 5. **Rewrite call sites**: a call `foo(args)` in an async context becomes
    `FooFuture { state: Init(args) }`; it does not execute until polled.
 6. **Rewrite `await` expressions** in the original body:
@@ -398,8 +400,9 @@ place.** Rationale:
    ```
 7. **Drop handling**: if the future is dropped while in state
    `Suspend_i`, each live local must be dropped. Extend the existing
-   drop-elaboration pass to synthesize a `Drop` impl for `FooFuture` that
-   matches on state and drops in the right order.
+   drop-elaboration pass to synthesize a `Drop` provision (`include Drop` +
+   `def mut drop`) on `FooFuture` that matches on state and drops in the
+   right order.
 
 ### 7.3 New MIR nodes
 
@@ -434,7 +437,7 @@ Run on HIR (`borrow_check::borrow_check`, `borrow_check/mod.rs:30`)
 Example rejected:
 
 ```riven
-async def bad(v: &mut Vec[Int])
+async def bad(v: &mut Array[Int])
   let r = &mut v[0]        # &mut borrow
   await yield_now()        # suspension
   *r += 1                  # ERROR: &mut borrow held across await
@@ -444,7 +447,7 @@ end
 Example accepted (borrow released before await):
 
 ```riven
-async def good(v: &mut Vec[Int])
+async def good(v: &mut Array[Int])
   v[0] += 1
   await yield_now()
   v[0] += 2                # fresh borrow after resume
@@ -463,7 +466,7 @@ struct: if any field is `!Send`, the whole future is `!Send`.
 Phase 3c ships **one** executor: a single-threaded event-loop reactor
 patterned after smol / tokio's current-thread runtime.
 
-Public surface (in `core::runtime`):
+Public surface (in `core.runtime`):
 
 ```riven
 # Drive a future to completion on the calling thread.
@@ -474,8 +477,8 @@ def runtime.block_on[F: Future](fut: F) -> F.Output
 async def runtime.yield_now() -> ()
 
 # Spawn an additional task onto the current-thread executor.
-# Requires F: Future + 'static (task outlives its creator).
-def runtime.spawn[F: Future + 'static](fut: F) -> JoinHandle[F.Output]
+# Requires F: Future + static (task outlives its creator).
+def runtime.spawn[F: Future + static](fut: F) -> JoinHandle[F.Output]
 ```
 
 ### 8.2 Reactor abstraction
@@ -542,10 +545,10 @@ async_main! app.run()
 
 ### 9.1 Current state
 
-Riven has **no `Send` or `Sync` marker traits today**. The reserved
+Riven has **no `Send` or `Sync` marker mixins today**. The reserved
 keyword `Send` (lexer `:129`, `:351`) refers to message-send for the
-unimplemented actor system, not the auto-trait. This document reserves
-the trait names `core::marker::Send` and `core::marker::Sync` (different
+unimplemented actor system, not the auto-mixin. This document reserves
+the mixin names `core.marker.Send` and `core.marker.Sync` (different
 path from the keyword) for Phase 3c onward.
 
 ### 9.2 For the single-threaded executor
@@ -555,16 +558,16 @@ is polled on the thread that created it. No new constraints.
 
 ### 9.3 For a future work-stealing executor
 
-`runtime::spawn_mt[F: Future + Send + 'static]` requires `Send`. The
+`runtime.spawn_mt[F: Future + Send + static]` requires `Send`. The
 compiler-generated state struct is `Send` iff every field
 (i.e., every "live across await" local) is `Send`. Because `Send` is an
-auto-trait, this is derived mechanically.
+auto-mixin, this is derived mechanically.
 
-### 9.4 Relationship to a `'static` bound
+### 9.4 Relationship to a `static` bound
 
 Async tasks outlive the stack frame that spawned them. `spawn` therefore
-requires the task future to be `'static`. This forces captures to be owned
-or `Arc`-equivalent. The `'static` concept already exists in
+requires the task future to be `static`. This forces captures to be owned
+or `Arc`-equivalent. The `static` concept already exists in
 `hir/types.rs` as `Ty::RefLifetime("static", ...)`; we extend lifetime
 bound checking in `borrow_check/lifetimes.rs` to enforce it on spawn
 arguments.
@@ -622,7 +625,7 @@ Phase 2 (Tier 2): structured concurrency with `TaskGroup` and
 
 ### 12.1 Approach
 
-Create a new stdlib module `core::async_io`. Do **not** re-export
+Create a new stdlib module `core.async_io`. Do **not** re-export
 blocking `fs`/`net` with an `async_` prefix — keep the namespaces
 separated to avoid ambiguity about which API a user is using.
 
@@ -669,7 +672,7 @@ Parser:
 - `crates/riven-core/src/parser/mod.rs` — in the item-level
   dispatcher around `:513`/`:517`, accept optional `Async` token
   before `Def`; thread through to `parse_func_def` (`:1285`) — add
-  `is_async` parameter. Same for trait / impl method parsing
+  `is_async` parameter. Same for mixin / extension method parsing
   (`:1152`, `:1200`, `:1205`).
 - `crates/riven-core/src/parser/expr.rs` — in postfix-chain loop,
   handle `Dot Await` → `ExprKind::Await`; in primary dispatcher,
@@ -691,12 +694,13 @@ Resolver / HIR:
 Typeck:
 - `crates/riven-core/src/typeck/infer.rs` — typing rule for
   `Await`: `e: F` where `F: Future[Output = T]` yields expression
-  of type `T`. Emit constraint via the trait solver. For an `async
+  of type `T`. Emit constraint via the mixin solver. For an `async
   def -> T`, the function's exported type is
-  `impl Future[Output = T]` (desugared at type-check or at MIR
+  `some Future[Output = T]` (desugared at type-check or at MIR
   lowering).
 - `crates/riven-core/src/typeck/traits.rs` — register `Future` as
-  a known trait with one associated type `Output`.
+
+  a known mixin with one associated type `Output`.
 
 Borrow check:
 - `crates/riven-core/src/borrow_check/mod.rs` — new pass
@@ -724,8 +728,8 @@ Codegen:
 - `crates/riven-core/src/codegen/llvm/mod.rs` — same, for LLVM
   backend.
 - `crates/riven-core/src/codegen/runtime.rs` — map
-  `core::runtime::block_on`, `core::runtime::yield_now`,
-  `core::runtime::spawn` to C runtime entry points.
+  `core.runtime.block_on`, `core.runtime.yield_now`,
+  `core.runtime.spawn` to C runtime entry points.
 
 Runtime (C):
 - `crates/riven-core/runtime/reactor.c` — new, epoll/kqueue loop.
@@ -755,14 +759,14 @@ Tests:
 
 ## 14. Phasing
 
-### Phase 3a — `Future` trait, hand-written state machines (2 weeks)
+### Phase 3a — `Future` mixin, hand-written provisions (2 weeks)
 
-- Ship `core::future::Future`, `Poll`, `Context`, `Waker` as Riven
+- Ship `core.future.Future`, `Poll`, `Context`, `Waker` as Riven
   source.
-- No `async`/`await` syntax. Users manually implement `Future` for
-  their own types.
+- No `async`/`await` syntax. Users manually `include Future` and
+  provide `poll` for their own types.
 - No executor beyond a test-only `poll_once` helper.
-- Unblocks: design validation of the trait shape, concrete test cases
+- Unblocks: design validation of the mixin shape, concrete test cases
   for the borrow checker's `!Move` rule.
 
 ### Phase 3b — `async def` + `.await` + state-machine lowering (4-6 weeks)
@@ -774,7 +778,7 @@ Tests:
 
 ### Phase 3c — Minimal single-threaded executor (2 weeks)
 
-- `core::runtime::block_on`, `yield_now`, `spawn` (current-thread).
+- `core.runtime.block_on`, `yield_now`, `spawn` (current-thread).
 - `reactor.c` with epoll-only (Linux) + timer wheel.
 - Add `async_io::time::sleep`.
 
@@ -797,7 +801,7 @@ Out of scope here.
 - **R1. `!Move` future strategy may paint us into a corner.** If users
   want to store futures in collections, we'll need `Pin` after all. Keep
   the door open by making `!Move` an internal compiler attribute rather
-  than a user-facing marker trait, so we can retrofit `Pin` without a
+  than a user-facing marker mixin, so we can retrofit `Pin` without a
   breaking change. *Severity: medium. Mitigation: phase 3a tests with
   hand-written impls will expose this early.*
 
@@ -836,12 +840,12 @@ Out of scope here.
   method that the type checker synthesizes — clever but obscures
   diagnostics.
 
-- **Q3.** `async fn` in traits: do we punt to Tier 2 or ship with
-  dynamic dispatch only (via `dyn Future`)? **Recommendation**: punt to
+- **Q3.** `async def` in mixins: do we punt to Tier 2 or ship with
+  dynamic dispatch only (via `any Future`)? **Recommendation**: punt to
   Tier 2; ship static-only in Phase 3b.
 
 - **Q4.** Do we need `Unpin` if `!Move` futures can never be moved?
-  Probably not — but keep the trait name reserved in case we need it.
+  Probably not — but keep the mixin name reserved in case we need it.
 
 - **Q5.** Formatter: one-line `expr.await` vs `expr.await` on a new
   line for long chains. Follow existing formatter conventions from
@@ -875,7 +879,7 @@ Phase 3b is complete when:
 
 Phase 3c is complete when:
 
-7. A 20-line TCP echo client using `runtime::block_on` +
+7. A 20-line TCP echo client using `runtime.block_on` +
    `async_io::net::TcpStream` compiles and runs against a local netcat
    listener.
 8. A 1000-task sleep/wake benchmark completes in < 100 ms on a modern

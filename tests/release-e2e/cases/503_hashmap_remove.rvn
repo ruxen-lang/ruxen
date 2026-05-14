@@ -1,14 +1,14 @@
 def main
-  let mut h: HashMap[Int, Int] = HashMap.new
+  var h: Map[Int, Int] = Map.new
   h.insert(1, 10)
   h.insert(2, 20)
   match h.remove(1)
     Some(v) -> puts "got=#{v}"
-    None    -> puts "got=missing"
+    nil     -> puts "got=missing"
   end
   match h.remove(99)
     Some(v) -> puts "miss=#{v}"
-    None    -> puts "miss=none"
+    nil     -> puts "miss=none"
   end
   let n = h.len
   puts "len=#{n}"

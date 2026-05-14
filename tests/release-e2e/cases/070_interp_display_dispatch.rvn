@@ -1,13 +1,13 @@
-# Phase 2 #06.D2 — user impl Display routes through interpolation.
+# Phase 2 #06.D2 — user Display include routes through interpolation.
 
 class Money
   cents: Int
 
   def init(@cents: Int)
   end
-end
 
-impl Display for Money
+  include Display
+
   def fmt(f: &mut Formatter) -> Result[(), FmtError]
     let _ = f.write_str("$")
     f.write_str("#{self.cents}")

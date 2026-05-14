@@ -1,6 +1,5 @@
 struct Score
   v: Int
-  derive Ord, Eq, PartialOrd, PartialEq
 end
 
 def main

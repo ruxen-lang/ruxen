@@ -5,11 +5,11 @@ class Pair[A, B]
   def init(@first: A, @second: B)
   end
 
-  pub def first_ref -> &A
+  def first_ref -> &A
     &self.first
   end
 
-  pub def second_ref -> &B
+  def second_ref -> &B
     &self.second
   end
 end

@@ -3,7 +3,7 @@ struct Buffer
 end
 
 def main
-  let mut a = Buffer.new(1)
+  var a = Buffer.new(1)
   a = Buffer.new(2)
   a = Buffer.new(3)
   let _x = a.value

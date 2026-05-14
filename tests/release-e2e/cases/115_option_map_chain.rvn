@@ -2,7 +2,7 @@ def find(n: Int) -> Option[Int]
   if n > 0
     Some(n)
   else
-    None
+    nil
   end
 end
 
@@ -10,11 +10,11 @@ def main
   let r = find(5).map { |n| n + 1 }.map { |n| n * 2 }.map { |n| n - 3 }
   match r
     Some(v) -> puts "some #{v}"
-    None    -> puts "none"
+    nil     -> puts "none"
   end
   let z = find(-1).map { |n| n + 1 }.map { |n| n * 2 }
   match z
     Some(v) -> puts "some #{v}"
-    None    -> puts "none"
+    nil     -> puts "none"
   end
 end

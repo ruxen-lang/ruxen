@@ -1,7 +1,7 @@
 def main
-  let keys = vec![1, 2, 3]
-  let vals = vec![10, 20, 30]
-  let m = keys.iter.zip(vals.iter).collect[HashMap[Int, Int]]
+  let keys = array![1, 2, 3]
+  let vals = array![10, 20, 30]
+  let m = keys.iter.zip(vals.iter).collect[Map[Int, Int]]
   puts "#{m.len}"
   puts "#{m.contains_key(2)}"
 end

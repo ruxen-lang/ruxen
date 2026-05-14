@@ -4,7 +4,7 @@
 ## layout. v1 still models the executable behavior through built-in
 ## resolver/typeck/MIR hooks rather than loading `.rvn` stdlib modules.
 
-trait Iterator
+mixin Iterator
   type Item
 
   def mut next -> Option[Self.Item]
@@ -25,6 +25,6 @@ trait Iterator
   def any(f: |&Self.Item| -> Bool) -> Bool
 end
 
-trait FromIterator[T]
+mixin FromIterator[T]
   def from_iter[I: Iterator](iter: I) -> Self
 end

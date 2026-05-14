@@ -1,6 +1,6 @@
 def main
   let s = "abc"
-  let mut count = 0
+  var count = 0
   for ch in s.chars
     count += 1
   end

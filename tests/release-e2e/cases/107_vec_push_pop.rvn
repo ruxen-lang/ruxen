@@ -1,12 +1,12 @@
 def main
-  let mut v: Vec[Int] = Vec.new
+  var v: Array[Int] = Array.new
   v.push(1)
   v.push(2)
   v.push(3)
   puts "#{v.len}"
   match v.pop
     Some(x) -> puts "popped #{x}"
-    None    -> puts "empty"
+    nil     -> puts "empty"
   end
   puts "#{v.len}"
 end

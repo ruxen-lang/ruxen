@@ -1,4 +1,0 @@
-@[derive(Copy, Clone)]
-class Session
-  token: String
-end

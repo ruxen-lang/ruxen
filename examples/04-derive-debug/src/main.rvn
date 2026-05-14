@@ -1,16 +1,14 @@
-## Demonstrates `derive Debug` for structs. The compiler synthesizes a
-## printable representation usable in string interpolation.
+## Demonstrates auto-synthesised Debug for structs. The compiler
+## generates a printable representation usable in string interpolation.
 
 struct Point
   x: Int
   y: Int
-  derive Debug
 end
 
 struct Line
   from: Point
   to: Point
-  derive Debug
 end
 
 def main

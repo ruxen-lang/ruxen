@@ -1,5 +1,5 @@
 def main
-  let mut s: HashSet[Int] = HashSet.new
+  var s: Set[Int] = Set.new
   s.insert(1)
   s.insert(2)
   let removed = s.remove(1)

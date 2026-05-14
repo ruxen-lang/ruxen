@@ -1,11 +1,10 @@
-## B3: derive Hash synthesises `<Type>_hash_code(self) -> Int` so that
-## structurally equal values produce identical hash codes (the
+## Auto-synthesised Hash mixin produces `<Type>_hash_code(self) -> Int`
+## so that structurally equal values produce identical hash codes (the
 ## `equal-keys-equal-hashes` invariant Hash demands). The synthesiser
 ## walks each field and folds the FNV-1a polynomial over their hashes.
 struct Key
   ns: Int
   id: Int
-  derive Hash
 end
 
 def main

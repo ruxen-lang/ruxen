@@ -9,7 +9,7 @@ class Greeter
   def init(@name: String)
   end
 
-  pub def greet -> String
+  def greet -> String
     "Hello, #{self.name}!"
   end
 end
@@ -25,7 +25,7 @@ Riven targets developers coming from Ruby, Python, and JavaScript who want predi
 - **Reads like Ruby** — classes, blocks, `do...end`, string interpolation, implicit returns
 - **Compiles like Rust** — ownership, borrowing, no GC, deterministic destruction
 - **Types disappear** — aggressive bidirectional inference makes code look dynamically typed while every value has a known type at compile time
-- **Safety by default** — no null, no exceptions, no data races. `Option[T]` and `Result[T, E]` with `?` propagation
+- **Safety by default** — references are always valid, no exceptions, no data races. `Option[T]` and `Result[T, E]` with `?` propagation
 
 ## Design Principles
 
@@ -143,43 +143,43 @@ rivenc fmt --diff file.rvn  # show unified diff
 ### Variables and Ownership
 
 ```riven
-let name = "Riven"               # immutable (default)
-let mut counter = 0               # mutable
+let name = "Riven"               # immutable
+var counter = 0                  # mutable
 counter += 1
 
 let a = String.new("hello")
-let b = a                         # move — `a` is now invalid
-# puts a                          # COMPILE ERROR: use after move
+let b = a                        # move — `a` is now invalid
+# puts a                         # COMPILE ERROR: use after move
 ```
 
 ### Functions
 
 ```riven
-# Private — types inferred
+# Types inferred where possible
 def double(x)
   x * 2
 end
 
-# Public — types required at boundaries (P5)
-pub def add(a: Int, b: Int) -> Int
+# Types required at public API boundaries (P5)
+def add(a: Int, b: Int) -> Int
   a + b
 end
 ```
 
-### Classes and Traits
+### Classes and Mixins
 
 ```riven
 class Animal
   name: String
   def init(@name: String) end
-  pub def speak -> String { "..." }
+  def speak -> String; "..."; end
 end
 
 class Dog < Animal
-  pub def speak -> String { "Woof! I'm #{self.name}" }
+  def speak -> String; "Woof! I'm #{self.name}"; end
 end
 
-trait Displayable
+mixin Displayable
   def to_display -> String
 end
 ```
@@ -206,13 +206,13 @@ def load_config(path: &str) -> Result[Config, AppError]
 end
 
 let user = find_user(42)?.name          # ?. safe navigation
-let user = find_user(42).unwrap!        # panics on None
+let user = find_user(42).unwrap!        # panics on nil
 ```
 
 ### Closures
 
 ```riven
-let nums = vec![1, 2, 3, 4, 5]
+let nums = array![1, 2, 3, 4, 5]
 let evens = nums.filter { |n| n % 2 == 0 }
 
 nums.each do |n|
@@ -273,13 +273,13 @@ Two codegen backends:
 |-------|--------|-------|
 | Lexer | Complete | All tokens, string interpolation, raw strings, numeric suffixes |
 | Parser | Complete | Full language syntax, error recovery, REPL support |
-| Name Resolution | Complete | Two-pass, full scope management, built-in types/traits |
-| Type Inference | Complete | Bidirectional inference, trait resolution, coercion |
+| Name Resolution | Complete | Two-pass, full scope management, built-in types/mixins |
+| Type Inference | Complete | Bidirectional inference, mixin resolution, coercion |
 | Borrow Checker | Mostly complete | Move/borrow tracking with NLL; lifetime checking infrastructure present, not fully wired |
 | MIR Lowering | Mostly complete | Break/continue and capturing closures have gaps |
-| Cranelift Codegen | Mostly complete | Primary backend; drop is wired (user `def drop` runs, heap-owning locals freed at scope exit per type) |
+| Cranelift Codegen | Mostly complete | Primary backend; drop is wired (user `def mut drop` runs, heap-owning locals freed at scope exit per type) |
 | LLVM Codegen | Experimental | Feature-gated; less complete than Cranelift; no DWARF debug info yet — gdb/lldb show no source-line mapping for `--backend=llvm` builds |
-| C Runtime | Mostly complete | String, Vec, I/O, Option/Result operations; Hash/Set stubs |
+| C Runtime | Mostly complete | String, Array, I/O, Option/Result operations; Map/Set stubs |
 | Formatter | Complete | AST-based, zero-config, comment preservation, `fmt: off` support |
 | Package Manager | Complete | Project scaffolding, dependency resolution, lock files |
 | LSP / IDE | Phase 1 MVP | Hover, goto-def, diagnostics, semantic tokens (single-file) |

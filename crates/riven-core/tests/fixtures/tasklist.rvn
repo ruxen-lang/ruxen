@@ -7,13 +7,13 @@ class Counter
     self.count = 0
   end
 
-  pub def mut increment
+  def mut increment
     self.count = self.count + 1
   end
 end
 
 def main
   puts "Before new"
-  let mut c = Counter.new
+  var c = Counter.new
   puts "After new"
 end

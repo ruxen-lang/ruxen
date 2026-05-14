@@ -2,7 +2,7 @@
 
 Status: Draft (requirements)
 Owner: compiler
-Depends on: attribute parsing (existing), trait resolution (existing),
+Depends on: body-level directive parsing (existing), mixin resolution (existing),
             MIR drop insertion stub (existing), panic strategy (follow-up)
 
 ## 1. Summary & Motivation
@@ -16,9 +16,9 @@ a no-op (`crates/riven-core/src/codegen/cranelift.rs:692-698`,
 `crates/riven-core/src/codegen/llvm/emit.rs:790-792`), so every Riven
 program leaks memory until `exit(3)` reclaims it.
 
-This document specifies the `Drop`, `Copy` and `Clone` traits, the
+This document specifies the `Drop`, `Copy` and `Clone` mixins, the
 drop-insertion algorithm, derive support, and the borrow-check/codegen
-changes required to fulfil rule 5. It covers the three traits as a single
+changes required to fulfil rule 5. It covers the three mixins as a single
 Tier-1 feature because they are deeply interdependent:
 
 - `Drop` needs move-tracking to avoid double-free.
@@ -32,8 +32,8 @@ Tier-1 feature because they are deeply interdependent:
 - File/socket handles that close on scope exit.
 - Mutex/lock guards (`MutexGuard`-style).
 - Arena/region allocators that free on drop.
-- String / Vec buffers freed instead of leaked.
-- Reference-counted smart pointers (`Rc`), once we have them.
+- String / Array buffers freed instead of leaked.
+- Reference-counted smart pointers (`Shared`), once we have them.
 
 ## 2. Current State
 
@@ -43,7 +43,7 @@ Tier-1 feature because they are deeply interdependent:
 the Copy set: all integer/float primitives, `Bool`, `Char`, `Unit`,
 `Never`, `&T` / `&'a T` / `&str`, raw pointers, `Ty::Error`, plus tuples
 and fixed arrays whose elements are Copy. Everything else (including
-`String`, `Vec[T]`, `Hash[K,V]`, `Option[T]`, `Result[T,E]`, any user
+`String`, `Array[T]`, `Map[K,V]`, `Option[T]`, `Result[T,E]`, any user
 `class`/`struct`/`enum`) reports `is_copy() == false`.
 
 `MoveSemantics { Copy, Move }` is defined at
@@ -58,9 +58,9 @@ semantics** — the `derive Copy` mentioned in the tutorial
 the parser but never actually makes the struct Copy. The struct is still
 Move because `Ty::is_copy` returns `false` for any `Ty::Struct { .. }`.
 
-### 2.2 Built-in traits exist as names only
+### 2.2 Built-in mixins exist as names only
 
-`Copy`, `Clone`, and `Drop` are registered as built-in traits with the
+`Copy`, `Clone`, and `Drop` are registered as built-in mixins with the
 right method-name lists in `resolve/mod.rs:147-151`:
 
 ```rust
@@ -70,15 +70,15 @@ right method-name lists in `resolve/mod.rs:147-151`:
 ```
 
 Registration gives them `DefId`s and puts them in scope for
-`impl Copy for T` or `@[derive(Copy)]`, but:
+`include Copy on T` or `derive Copy`, but:
 
-- `TraitResolver` (`typeck/traits.rs`) treats them as ordinary traits.
+- `TraitResolver` (`typeck/traits.rs`) treats them as ordinary mixins.
   There is no special-casing for `Copy` (marker with no methods), no
   mutual-exclusion check with `Drop`, no check that all fields satisfy
   the same bound.
-- Implementing `Drop` for a user type has **no effect** on `is_copy`,
+- Including `Drop` on a user type has **no effect** on `is_copy`,
   on move semantics, or on codegen.
-- `Ty::is_copy` ignores the trait table entirely.
+- `Ty::is_copy` ignores the mixin table entirely.
 
 ### 2.3 MIR already inserts Drop (partially) — but codegen ignores it
 
@@ -94,7 +94,7 @@ after lowering and appends Drop instructions **before every
 - have a name that does not start with `_t` (skip compiler temps),
 - are `Ty::Class { .. }` | `Ty::Struct { .. }` | `Ty::Enum { .. }` —
   strings, vecs, options, results, tuples, arrays are explicitly
-  excluded (lower.rs:3379-3387) "because String/Vec/etc. may hold
+  excluded (lower.rs:3379-3387) "because String/Array/etc. may hold
   pointers to static data sections and can't be safely freed in v1".
 
 Both backends then **treat Drop as a no-op**:
@@ -107,9 +107,9 @@ Both backends then **treat Drop as a no-op**:
 Consequences:
 
 - Owned user-defined heap objects (class/struct/enum) are leaked.
-- `String` / `Vec` etc. are always leaked — they aren't even in the drop
+- `String` / `Array` etc. are always leaked — they aren't even in the drop
   set.
-- `Drop` is not a trait anyone can implement; user `def drop` methods on
+- `Drop` is not a mixin anyone can include; user `def drop` methods on
   a class are never called.
 - No drop on panic, break, continue, early return after move — but none
   of those paths call drop anyway.
@@ -155,12 +155,15 @@ up.
 
 ### 2.6 Attribute / derive syntax
 
-Attributes are parsed as `@[name(args)]`
-(`parser/mod.rs:1572-1610`). Today the attribute form is only applied to
-`lib` and `struct` items (mod.rs:473-512), and for struct it only
-understands `@[repr(...)]` (mod.rs:498-503).
+A historic prefix-attribute form was parsed by the lexer/parser
+(`parser/mod.rs:1572-1610`). Riven's surface syntax has since moved all
+type-level metadata into the body (see spec §3.5–§3.6): `layout c` for
+ABI/repr declarations, `derive Mixin, ...` for derive sets. The
+prefix-attribute machinery is retired from the user-facing grammar; the
+parser still accepts the storage shape for migration but emits no new
+attributes from any spec'd construct.
 
-A struct body may additionally contain a `derive Trait1, Trait2` line
+A struct body may additionally contain a `derive Mixin1, Mixin2` line
 (`parser/mod.rs:824-845`), which populates
 `HirStructDef::derive_traits: Vec<String>` (`hir/nodes.rs:431`) and
 `StructInfo::derive_traits` (`resolve/symbols.rs:48`). **Nothing
@@ -178,18 +181,17 @@ otherwise a completely ordinary method.
 
 ### 3.1 Goals
 
-- **G1** — `Drop` is a real trait. Implementing it (or deriving it, via
+- **G1** — `Drop` is a real mixin. Including it (or deriving it, via
   compiler-synthesized field-recursive glue) causes a destructor call to
   run exactly once per owned value at the correct program point.
-- **G2** — `Copy` is a marker trait. A type is Copy iff it implements /
+- **G2** — `Copy` is a marker mixin. A type is Copy iff it includes /
   derives `Copy`; every Copy type must also be Clone; no Copy type may
-  implement Drop (neither manually nor through a Drop field).
+  include Drop (neither manually nor through a Drop field).
 - **G3** — `Clone` is an explicit, always-deep copy via `x.clone`.
   `Copy: Clone` (everything Copy is automatically Clone with a trivial
   implementation).
-- **G4** — `@[derive(Copy, Clone, Drop)]` and the body-level
-  `derive Copy, Clone` both work for structs; `@[derive(...)]` also
-  works for enums and for classes (see §8).
+- **G4** — Body-level `derive Copy, Clone` works for structs, enums, and
+  classes (see §8).
 - **G5** — No memory leaks for `class/struct/enum` instances in the
   common path (assignment moves, end-of-scope drops). Leaks for
   conditionally-moved locals are acceptable only if behind a
@@ -209,20 +211,20 @@ otherwise a completely ordinary method.
 - **NG4** — Stabilising a `ManuallyDrop[T]` / `MaybeUninit[T]` standard
   library type. These are useful future additions but are not required
   to ship Drop.
-- **NG5** — Specialisation (e.g. "blanket impl Clone where T: Copy"
-  overridable by a more specific impl). §6 prescribes a compiler-built
-  rule, not a user-visible blanket impl.
+- **NG5** — Specialisation (e.g. "blanket Clone provision where T: Copy"
+  overridable by a more specific provision). §6 prescribes a
+  compiler-built rule, not a user-visible blanket provision.
 - **NG6** — `Pin`, `drop_in_place` on raw pointers, or any other
   unsafe-Drop interface. Unsafe Drop users write C-level `unsafe {
   free(...) }` today (see `docs/tutorial/15-unsafe.md:62-68`); that
   stays unchanged.
 
-## 4. Drop Trait Specification
+## 4. Drop Mixin Specification
 
 ### 4.1 Declaration (compiler built-in)
 
 ```riven
-trait Drop
+mixin Drop
   def mut drop
 end
 ```
@@ -232,37 +234,39 @@ Registered in `resolve/mod.rs`; the entry already exists
 express:
 
 - exactly one required method `drop`,
-- `self_mode: HirSelfMode::RefMut` (equivalent to `&mut self`),
+- `self_mode: HirSelfMode::RefMut` (the spec calls this a "mutating method", `def mut drop`),
 - return type `Unit`,
 - no generic parameters.
 
-Rationale for `&mut self` (not `consume self`): Rust chose this because
+Rationale for the mutating-method form (not `def consume drop`): Rust chose this because
 consuming `self` inside `drop` would recursively need another drop call.
 Riven follows the same rule.
 
 ### 4.2 User implementation
 
-Inline in a class body:
+In the class body:
 
 ```riven
 class File
   handle: *mut Void
   def init(@handle: *mut Void) end
 
-  impl Drop
-    def mut drop
-      unsafe
-        riven_fclose(self.handle)
-      end
+  include Drop
+
+  def mut drop
+    unsafe
+      riven_fclose(self.handle)
     end
   end
 end
 ```
 
-Standalone:
+Out-of-line via an extension block:
 
 ```riven
-impl Drop for File
+extension File
+  include Drop
+
   def mut drop
     unsafe
       riven_fclose(self.handle)
@@ -273,8 +277,9 @@ end
 
 ### 4.3 Semantics
 
-- **D1** — If `impl Drop for T` exists, the compiler invokes `T::drop(&mut
-  self)` exactly once when a value of type `T` is dropped, before the
+- **D1** — If `include Drop on T` exists, the compiler invokes the
+  `drop(&mut self)` provision exactly once when a value of type `T` is
+  dropped, before the
   recursive drop of `T`'s fields.
 - **D2** — Recursive field drops happen **after** the user-written
   `drop`, in **reverse declaration order** of fields. This matches Rust
@@ -299,10 +304,10 @@ end
   to the same name after drop reinitialises it (just like the
   post-move reinit path already implemented at
   `borrow_check/mod.rs:466-469`).
-- **D8** — **No `Drop::drop` may be called by the user.** Typeck rejects
-  any method call whose resolved method is `Drop::drop`. To drop a value
+- **D8** — **No `Drop.drop` may be called by the user.** Typeck rejects
+  any method call whose resolved method is `Drop.drop`. To drop a value
   early, users call the built-in free function `drop(value)` from the
-  prelude (a generic `def drop[T](x: T) {}`), which consumes the value
+  prelude (a generic `def drop[T](x: T) end`), which consumes the value
   and lets the normal end-of-scope mechanism kick in. Same idea as
   Rust's `std::mem::drop`.
 
@@ -325,13 +330,13 @@ end
 
 Given the rule in D8:
 
-- `x.drop()` — resolves to `<T as Drop>::drop`, and is **rejected**
-  by typeck with E-DROP-MANUAL.
+- `x.drop()` — resolves to the `Drop` provision's `drop` method on `T`,
+  and is **rejected** by typeck with E-DROP-MANUAL.
 - `drop(x)` — the prelude helper, consumes `x`; typeck already supports
   generics over T and moves on consuming self (see `HirSelfMode::Consuming`
   handling at `borrow_check/mod.rs:649-664`).
 
-Implementation: add `pub def drop[T](_x: T) {}` to the prelude, make it
+Implementation: add `def drop[T](_x: T) end` to the prelude, make it
 trivially compile-lowered to just consume its argument (the existing
 move machinery will synthesise the Drop call inside the helper's own
 body, which then runs at the caller's expected point because that's
@@ -353,19 +358,19 @@ Three bound shapes that must work:
 generic context instantiates `T = SomeType` where `SomeType: Copy +
 Drop`, that is rejected with E-COPY-DROP-CONFLICT (see §5).
 
-## 5. Copy Trait Specification
+## 5. Copy Mixin Specification
 
 ### 5.1 Declaration (compiler built-in)
 
 ```riven
-trait Copy: Clone end
+mixin Copy: Clone end
 ```
 
-A **marker trait**: no required methods. Having `Clone` as a super-trait
+A **marker mixin**: no required methods. Having `Clone` as a super-mixin
 makes "`Copy: Clone`" natural (§6.3).
 
 Registered in `resolve/mod.rs:147` (already present as a zero-method
-trait; needs the `super_traits` field populated with `Clone`).
+mixin; needs the `super_traits` field populated with `Clone`).
 
 ### 5.2 Which types can be Copy
 
@@ -373,16 +378,17 @@ A type `T` may implement `Copy` iff all of the following hold:
 
 - **C1** — `T` does **not** implement `Drop` (user-written or
   compiler-derived), and no field's type implements `Drop`. Checked at
-  the point `impl Copy for T` or `@[derive(Copy)]` is processed.
+  the point `include Copy on T` or `derive Copy` is processed.
 - **C2** — Every field of `T` is Copy (recursively). Includes tuple
   elements and enum-variant payloads.
 - **C3** — `T` has no mutable reference field (`&mut U`). &mut is not
   Copy. (Immutable `&U` is Copy.)
-- **C4** — `T` is not a builtin heap-allocated type: `String`, `Vec`,
-  `Hash`, `Set`, `Option` (if payload is non-Copy), `Result`,
-  `DynTrait`, `Fn`/`FnMut`/`FnOnce` closure types. The existing
-  `Ty::is_copy` list in `hir/types.rs:189-221` is the source of truth;
-  we extend it to consult the trait-impl table for user types.
+- **C4** — `T` is not a builtin heap-allocated type: `String`, `Array`,
+  `Map`, `Set`, `Option` (if payload is non-Copy), `Result`,
+  `any Mixin` existential, `Fn`/`FnMut`/`FnOnce` closure types. The
+  existing `Ty::is_copy` list in `hir/types.rs:189-221` is the source
+  of truth; we extend it to consult the mixin-include table for user
+  types.
 
 Diagnostics:
 
@@ -396,10 +402,10 @@ Diagnostics:
 ### 5.3 Effect on move semantics
 
 Today `Ty::is_copy` makes a purely structural decision
-(`hir/types.rs:189`). We change it to also consult the trait-impl
+(`hir/types.rs:189`). We change it to also consult the mixin-include
 table for `Ty::Class`, `Ty::Struct`, `Ty::Enum`, `Ty::Newtype`: a
-user-defined type is Copy iff it has a registered `impl Copy` (nominal;
-structural-Copy is nonsense for a marker trait).
+user-defined type is Copy iff it has a registered `include Copy`
+directive (nominal; structural-Copy is nonsense for a marker mixin).
 
 Concretely:
 
@@ -419,33 +425,32 @@ Once Copy is connected, the existing flow "just works":
 - `MirInst::Copy` vs. `MirInst::Move` is already chosen by the MIR
   lowerer based on `is_copy`.
 
-### 5.4 Marker-trait semantics for traits.rs
+### 5.4 Marker-mixin semantics for traits.rs
 
 Extend `TraitResolver::check_satisfaction` at `typeck/traits.rs:86`
-with a marker-trait shortcut: for a trait whose `required_methods` and
+with a marker-mixin shortcut: for a mixin whose `required_methods` and
 `default_methods` are both empty and whose `super_traits` are all
-satisfied, satisfaction is by **explicit `impl` only** (nominal). No
+satisfied, satisfaction is by **explicit `include` only** (nominal). No
 structural satisfaction — "this type happens to have no methods, so
 it's Copy" is obviously wrong.
 
 ### 5.5 Auto-derive rule
 
-When the compiler sees `@[derive(Copy)]` (or body-level
-`derive Copy`), it:
+When the compiler sees `derive Copy` in a type body, it:
 
 1. Verifies C1–C4 for the current type definition.
-2. Synthesises a nominal `impl Copy for T` with no method body.
-3. Also synthesises `impl Clone for T` with a `clone` method that
+2. Synthesises a nominal `include Copy` directive with no method body.
+3. Also synthesises `include Clone` with a `clone` method that
    simply `*self`-copies (bitwise) — see §6.5.
 
 Failure at step 1 is a hard error, not a silent skip.
 
-## 6. Clone Trait Specification
+## 6. Clone Mixin Specification
 
 ### 6.1 Declaration (compiler built-in)
 
 ```riven
-trait Clone
+mixin Clone
   def clone -> Self
 end
 ```
@@ -471,12 +476,13 @@ Already registered (`resolve/mod.rs:148`) but with no method mode.
 
 ### 6.3 `Copy: Clone`
 
-Because `Clone` is a super-trait of `Copy`, any `impl Copy` for a type
-must be accompanied by an `impl Clone`. We enforce this by having
-`@[derive(Copy)]` auto-synthesise Clone as well (§5.5). A manual
-`impl Copy for T` without a Clone impl is a hard error:
+Because `Clone` is a super-mixin of `Copy`, any `include Copy` directive on
+a type must be accompanied by an `include Clone` directive. We enforce
+this by having `derive Copy` auto-synthesise Clone as well (§5.5). A
+manual `include Copy` in a type body without a corresponding `include
+Clone` is a hard error:
 
-> E-COPY-NEEDS-CLONE: "`impl Copy for T` requires `impl Clone for T`"
+> E-COPY-NEEDS-CLONE: "`include Copy on T` requires `include Clone on T`"
 
 ### 6.4 Blanket / built-in impls
 
@@ -485,8 +491,8 @@ must be accompanied by an `impl Clone`. We enforce this by having
   method — already available in the runtime (runtime.c:410-412).
 - Tuples `(T, U, ...)`: Clone iff every element is Clone. Synthesised.
 - Arrays `[T; N]`: Clone iff T is Clone. Synthesised as a loop.
-- `Vec[T]`: Clone iff T is Clone. Runtime provides `riven_vec_clone`.
-  (Not in scope for the first phase — `Vec[T].clone` already resolves
+- `Array[T]`: Clone iff T is Clone. Runtime provides `riven_vec_clone`.
+  (Not in scope for the first phase — `Array[T].clone` already resolves
   to a missing method; we either ship the runtime helper with Drop or
   diagnose it as unimplemented.)
 - `String`: already `Clone`; `String_clone` → `riven_string_from`
@@ -494,17 +500,19 @@ must be accompanied by an `impl Clone`. We enforce this by having
 - `&T`: `(&T).clone() = *self` — references are Copy, Clone is
   trivial.
 - `Option[T]`, `Result[T, E]`: Clone iff inner(s) are Clone.
-- `Hash[K, V]`, `Set[T]`: Clone iff inner(s) are Clone. Needs runtime
+- `Map[K, V]`, `Set[T]`: Clone iff inner(s) are Clone. Needs runtime
   helper; not on the critical path for Drop.
 
 ### 6.5 Auto-derive for user types
 
-`@[derive(Clone)]` on a struct/enum/class synthesises:
+`derive Clone` on a struct/enum/class synthesises:
 
 - struct `S { a: A, b: B }` →
 
 ```riven
-impl Clone for S
+extension S
+  include Clone
+
   def clone -> S
     S { a: self.a.clone, b: self.b.clone }
   end
@@ -530,7 +538,7 @@ does **drop elaboration**, analogous to rustc's `drop_elaboration`.
 ### 7.1 Inputs
 
 - `MirFunction` after lowering.
-- `SymbolTable` + `TraitResolver` (to look up `impl Drop for T`).
+- `SymbolTable` + `TraitResolver` (to look up `include Drop on T`).
 - Per-local move facts computed during HIR borrow-check (exported:
   extend `borrow_check::BorrowChecker` to emit a per-function
   `MoveFlow` map keyed by `LocalId` — built from `DefId` via the
@@ -545,7 +553,7 @@ does **drop elaboration**, analogous to rustc's `drop_elaboration`.
    - `T` transitively contains a field that needs drop.
    Call the resulting predicate `needs_drop(T)`. This replaces the
    ad-hoc whitelist at lower.rs:3379-3387 and crucially includes
-   `String`, `Vec`, `Option`, `Result`, `Tuple`, `Array` when their
+   `String`, `Array`, `Option`, `Result`, `Tuple`, fixed-size arrays when their
    payloads are non-Copy.
 
 2. **Compute per-local drop state.** For each local, compute one of:
@@ -628,7 +636,7 @@ Two surface forms are accepted; they are synonyms post-parse:
 
 ```riven
 # Attribute form (preferred, works everywhere):
-@[derive(Copy, Clone, Debug)]
+derive Copy, Clone, Debug
 struct Point
   x: Float
   y: Float
@@ -644,16 +652,16 @@ end
 
 ### 8.2 Parser changes
 
-- Extend the `@[...]` acceptor at `parser/mod.rs:473-512` to accept
-  `@[derive(...)]` and forward to struct, enum, and class parsing.
-- When `@[derive(Trait1, Trait2)]` is applied, push the trait names
-  into a common `derive_traits: Vec<String>` field.
+- Extend the body parser at `parser/mod.rs:473-512` to accept the
+  `derive Mixin1, Mixin2` body-form for struct, enum, and class.
+- The form `derive Mixin1, Mixin2` pushes the mixin names into a common
+  `derive_traits: Vec<String>` field on each item type.
 - Add `derive_traits: Vec<String>` to `HirEnumDef` and `HirClassDef`
   (currently only on `HirStructDef` at `hir/nodes.rs:431`).
 - Similarly extend `EnumInfo` and `ClassInfo` in
   `resolve/symbols.rs:36-56`.
 
-### 8.3 Which traits can be derived
+### 8.3 Which mixins can be derived
 
 Phase 4d: `Copy`, `Clone`, `Drop`. Out of scope: `Debug`,
 `Displayable`, `Comparable`, `Hashable`, `Error` — those are separate
@@ -667,24 +675,24 @@ type-checking. For each type with `derive_traits`:
 - `Copy`: insert a synthesised `HirImplBlock { trait_ref: "Copy",
   target_ty: T, items: [] }` after checking §5.2 constraints. Also
   auto-inserts `Clone` if not present.
-- `Clone`: insert a synthesised impl with a recursive `clone` method
-  (§6.5).
-- `Drop`: insert a synthesised impl with `def drop { }` — a no-op user
-  body. The recursive field-drop is emitted by drop glue (§7.2.4), so
-  the empty user body is correct. **The main reason to derive Drop is
-  to register the type as nominally `Drop` and forbid `impl Copy for
-  T`.** If the user just wants field-recursive freeing, they don't
-  need to derive Drop at all — the MIR pass produces drop glue for
-  every type whose fields need drop.
+- `Clone`: insert a synthesised provision (`include Clone` + a
+  recursive `clone` method) (§6.5).
+- `Drop`: insert a synthesised provision (`include Drop` +
+  `def mut drop { }` — a no-op user body). The recursive field-drop is
+  emitted by drop glue (§7.2.4), so the empty user body is correct.
+  **The main reason to derive Drop is to register the type as nominally
+  `Drop` and forbid `include Copy on T`.** If the user just wants
+  field-recursive freeing, they don't need to derive Drop at all — the
+  MIR pass produces drop glue for every type whose fields need drop.
 
 ### 8.5 Interaction with manual impls
 
-- Explicit `impl Drop for T` + `@[derive(Drop)]` → duplicate-impl
+- Explicit `include Drop on T` + `derive Drop` → duplicate-impl
   error.
-- Explicit `impl Clone for T` + `@[derive(Clone)]` → duplicate-impl
+- Explicit `include Clone on T` + `derive Clone` → duplicate-impl
   error (unless we spec later that derive is skipped when an explicit
-  impl exists; recommendation: error, like Rust).
-- `@[derive(Copy)]` + explicit `impl Drop for T` → E-COPY-HAS-DROP.
+  provision exists; recommendation: error, like Rust).
+- `derive Copy` + explicit `include Drop on T` → E-COPY-HAS-DROP.
 
 ## 9. Panic / Unwind Interaction
 
@@ -717,12 +725,12 @@ Rust.
 | Change | File(s) |
 |---|---|
 | `TraitInfo { self_mode, is_marker }` | `resolve/symbols.rs:60-66` |
-| Built-in trait metadata (Drop `&mut self`, Copy marker/super=Clone, Clone `&self → Self`) | `resolve/mod.rs:138-151` |
-| Marker-trait satisfaction rule | `typeck/traits.rs:85-133` |
-| `Ty::is_copy(resolver)` consults nominal Copy impls | `hir/types.rs:189-221` |
-| Copy/Drop mutual exclusion check | new pass in `typeck/` (call it `trait_consistency`) |
+| Built-in mixin metadata (Drop `&mut self`, Copy marker/super=Clone, Clone `&self → Self`) | `resolve/mod.rs:138-151` |
+| Marker-mixin satisfaction rule | `typeck/traits.rs:85-133` |
+| `Ty::is_copy(resolver)` consults nominal Copy provisions | `hir/types.rs:189-221` |
+| Copy/Drop mutual exclusion check | new pass in `typeck/` (call it `mixin_consistency`) |
 | Derive expansion | new pass `resolve::expand_derives`, after resolve, before typeck |
-| `@[derive(..)]` on enum/class | `parser/mod.rs:473-512`, `hir/nodes.rs` (add `derive_traits` to enum/class), `resolve/symbols.rs` |
+| `derive Mixin, ...` on enum/class | `parser/mod.rs:473-512`, `hir/nodes.rs` (add `derive_traits` to enum/class), `resolve/symbols.rs` |
 | Drop flags + real drop-elaboration pass | rewrite `insert_drops` at `mir/lower.rs:3346-3407`; new module `mir/drop_elab.rs` |
 | Emit `MoveFlow` from borrow-check | extend `borrow_check/moves.rs` public API with per-local history |
 | Real codegen of `MirInst::Drop` | `codegen/cranelift.rs:692-698`, `codegen/llvm/emit.rs:790-792` |
@@ -757,19 +765,19 @@ compiler emits an element-level drop loop *before* calling
 
 ### 10.3 Type-check rules to add
 
-1. At `impl Copy for T`: verify §5.2 (C1–C4) using the trait-impl
+1. At `include Copy on T`: verify §5.2 (C1–C4) using the mixin-include
    table + field types.
-2. At `impl Drop for T`: record `T: Drop` in the impl table. Reject
-   `T` if `T: Copy` is already recorded. Reject generic `impl Drop
-   for Foo[T]` only if neither phase can statically prove T is
+2. At `include Drop on T`: record `T: Drop` in the include table. Reject
+   `T` if `T: Copy` is already recorded. Reject generic `include Drop`
+   on `Foo[T]` only if neither phase can statically prove T is
    Drop-safe — for this phase, allow it and re-check at monomorphisation
    per §4.6.
-3. At `impl Clone for T`: verify the method signature matches
+3. At `include Clone on T`: verify the method signature matches
    `def clone -> Self` with `&self` self-mode.
-4. `t.drop()` where the resolved method is `<T as Drop>::drop`: reject
-   with E-DROP-MANUAL.
+4. `t.drop()` where the resolved method is the `Drop` provision on `T`:
+   reject with E-DROP-MANUAL.
 5. Generic bound `T: Copy` at a call site where the instantiated type
-   has a Drop impl: E-COPY-DROP-CONFLICT at monomorphisation.
+   has a Drop provision: E-COPY-DROP-CONFLICT at monomorphisation.
 
 ### 10.4 Borrow-check changes
 
@@ -799,26 +807,26 @@ compiler emits an element-level drop loop *before* calling
 ### 10.6 Phasing
 
 - **4a** — Foundations (no behaviour change for existing programs):
-  - Built-in trait metadata (self_mode, marker flag, super-trait).
-  - `@[derive(..)]` parsed for struct/enum/class; `derive_traits`
+  - Built-in mixin metadata (self_mode, marker flag, super-mixin).
+  - `derive Mixin, ...` parsed for struct/enum/class; `derive_traits`
     threaded into HIR + symbol table.
-  - Marker-trait satisfaction rule in `TraitResolver`.
-- **4b** — `Drop` trait + drop glue for user class/struct/enum:
-  - `impl Drop for T` registered, checked, dispatched.
+  - Marker-mixin satisfaction rule in `TraitResolver`.
+- **4b** — `Drop` mixin + drop glue for user class/struct/enum:
+  - `include Drop on T` registered, checked, dispatched.
   - Rewrite `insert_drops` → `drop_elab` with reverse-order field drop.
   - Real Drop codegen for `Ty::Class/Struct/Enum` (today's whitelist).
   - Runtime: no new functions yet; uses `riven_dealloc`.
   - Parameters and whitelisted temporaries start being dropped.
 - **4c** — Drop flags + `Copy` marker:
-  - `Copy` nominal impl recognised; `is_copy` consults trait table.
+  - `Copy` nominal `include` recognised; `is_copy` consults mixin table.
   - Copy ⊕ Drop mutual exclusion enforced.
   - Drop-flag insertion for `MaybeDropped` locals.
   - Early-exit (return/break/continue) drop paths correct.
 - **4d** — `Clone` + derive:
   - `Clone` methods typechecked; derive synthesises field-wise clone.
-  - `derive(Copy)` auto-derives `Clone`.
+  - `derive Copy` auto-derives `Clone`.
   - Built-in `drop(x)` prelude helper.
-  - Extend drop elaboration to `String`, `Vec`, `Option`, `Result`,
+  - Extend drop elaboration to `String`, `Array`, `Option`, `Result`,
     `Tuple`, `Array` (removes the whitelist at lower.rs:3382-3387).
   - Runtime: add `riven_string_free`, `riven_vec_free`, tagged-union
     free helpers.
@@ -832,7 +840,7 @@ phase's module. Minimum coverage:
 
 ### 11.1 Drop semantics
 
-1. **DROP-BASIC**: `impl Drop for File` runs on scope end. Assert by
+1. **DROP-BASIC**: `include Drop on File` runs on scope end. Assert by
    observing a side-effecting `drop` method (e.g. increments a global
    counter via FFI).
 2. **DROP-ORDER-LOCALS**: locals `a`, `b`, `c` declared in that order
@@ -864,27 +872,27 @@ phase's module. Minimum coverage:
 ### 11.2 Copy semantics
 
 15. **COPY-PRIMITIVE**: `let a: Int = 42; let b = a; a + b` compiles.
-16. **COPY-USER-STRUCT**: `@[derive(Copy, Clone)] struct Point { x:
+16. **COPY-USER-STRUCT**: `derive Copy, Clone struct Point { x:
     Float, y: Float }` compiles; `let p2 = p1` does not invalidate
     `p1`.
 17. **COPY-REJECTS-DROP-FIELD**: deriving Copy on a struct with a
     `String` field is E-COPY-NON-COPY-FIELD.
-18. **COPY-REJECTS-IMPL-DROP**: `@[derive(Copy)]` + `impl Drop for T`
+18. **COPY-REJECTS-IMPL-DROP**: `derive Copy` + `include Drop on T`
     is E-COPY-HAS-DROP.
 19. **COPY-MUT-REF-FIELD**: struct with `&mut T` field cannot derive
     Copy.
-20. **COPY-GENERIC**: `fn needs_copy[T: Copy](t: T) { let _x = t; t
-    }` compiles; instantiation with `String` is rejected.
+20. **COPY-GENERIC**: `def needs_copy[T: Copy](t: T) -> T; let _x = t; t end`
+    compiles; instantiation with `String` is rejected.
 
 ### 11.3 Clone semantics
 
 21. **CLONE-STRING**: `let s2 = s1.clone; use(s1); use(s2)` compiles
     and produces two independent heaps.
-22. **CLONE-DERIVED-STRUCT**: `@[derive(Clone)]` synthesises a
+22. **CLONE-DERIVED-STRUCT**: `derive Clone` synthesises a
     recursive clone.
-23. **CLONE-NON-CLONE-FIELD**: `@[derive(Clone)]` on a struct whose
+23. **CLONE-NON-CLONE-FIELD**: `derive Clone` on a struct whose
     field isn't Clone is E-CLONE-NON-CLONE-FIELD.
-24. **CLONE-OF-COPY**: a `derive(Copy)` struct is also Clone
+24. **CLONE-OF-COPY**: a `derive Copy` struct is also Clone
     (auto-derived); `x.clone` works and is equivalent to `let y = x`.
 25. **CLONE-TUPLE**: `(String, Int).clone` works iff all elements are
     Clone.
@@ -892,7 +900,7 @@ phase's module. Minimum coverage:
 ### 11.4 Ownership + codegen end-to-end
 
 26. **RUNTIME-NO-LEAK**: a program that allocates and drops a
-    `Vec[String]` in a loop doesn't grow RSS linearly (assert via
+    `Array[String]` in a loop doesn't grow RSS linearly (assert via
     `valgrind --leak-check=full` in CI, 0 definite leaks).
 27. **DOUBLE-FREE-GUARD**: moved-then-dropped code path does not
     double-free (valgrind).
@@ -907,7 +915,7 @@ phase's module. Minimum coverage:
   panic-strategy RFC before writing any landing-pad code.
 - **OQ-2** — `Copy` for user enums: allowed if every variant payload
   is Copy. This matches Rust. Confirm we want the same rule.
-- **OQ-3** — `String` and `Vec` Drop glue: currently the whitelist at
+- **OQ-3** — `String` and `Array` Drop glue: currently the whitelist at
   lower.rs:3382-3387 explicitly excludes them citing "pointers to
   static data". Part of phase 4d is removing that exclusion; we need a
   runtime invariant that `String` locals are always heap-owned
@@ -920,10 +928,10 @@ phase's module. Minimum coverage:
   `String::from` call at MIR-lowering time, or type string literals as
   `Ty::Str` and force an explicit `.to_string` for owned storage. The
   latter matches Rust. This decision is load-bearing for phase 4d.
-- **OQ-4** — Generic Drop impl soundness: `impl[T] Drop for Box[T]`
+- **OQ-4** — Generic Drop provision soundness: `extension Box[T] ... include Drop ... end`
   needs Rust's drop-check (`#[may_dangle]`) story. For now, disallow
   type parameters escaping the Drop body via generic bounds — the
-  simplest sound rule is: "generic `impl Drop` is allowed; `drop` body
+  simplest sound rule is: "generic `include Drop` is allowed; `drop` body
   may only call `T`'s methods that are in `T`'s explicit bounds."
 - **OQ-5** — Class inheritance + Drop: does the parent's Drop run after
   the child's? Today there is no destructor chain. Propose: yes,

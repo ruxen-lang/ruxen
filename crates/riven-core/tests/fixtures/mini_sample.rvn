@@ -5,10 +5,8 @@ enum Priority
   Medium
   High
   Critical
-end
 
-impl Priority
-  pub def weight -> Int
+  def weight -> Int
     match self
       Priority.Low      -> 1
       Priority.Medium   -> 2
@@ -30,7 +28,7 @@ class Task
   def init(@id: Int, @title: String, @priority: Priority)
   end
 
-  pub def id -> Int { self.id }
+  def id -> Int { self.id }
 end
 
 def parse_priority(input: &str) -> Result[Priority, TaskError]

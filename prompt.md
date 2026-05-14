@@ -92,7 +92,7 @@ Reviewer verifies:
 - No `#[ignore]` added.
 - New error codes are in the registry and emitted via
   `Diagnostic::error_with_code`.
-- New public functions/structs/enums/traits have at least one `##` line.
+- New public functions/structs/enums/mixins have at least one `##` line.
 - For every language-surface change: at least one positive `.rvn`
   fixture in `tests/release-e2e/cases/` plus a negative unit test.
 

@@ -9,10 +9,8 @@ enum Priority
   Medium
   High
   Critical
-end
 
-impl Priority
-  pub def weight -> Int
+  def weight -> Int
     match self
       Priority.Low      -> 1
       Priority.Medium   -> 2
@@ -20,9 +18,9 @@ impl Priority
       Priority.Critical -> 4
     end
   end
-end
 
-impl Displayable for Priority
+  include Displayable
+
   def to_display -> String
     match self
       Priority.Low      -> String.from("LOW")
@@ -38,9 +36,9 @@ enum Status
   InProgress(assignee: String)
   Completed(completed_at: String)
   Cancelled(reason: String)
-end
 
-impl Displayable for Status
+  include Displayable
+
   def to_display -> String
     match self
       Status.Pending              -> String.from("Pending")
@@ -56,9 +54,9 @@ enum TaskError
   MissingField(name: String)
   ParseFailed(message: String)
   NotFound(id: USize)
-end
 
-impl Error for TaskError
+  include Error
+
   def message -> String
     match self
       TaskError.InvalidPriority(v)  -> "Invalid priority: '#{v}'"
@@ -69,14 +67,14 @@ impl Error for TaskError
   end
 end
 
-# --- Traits ---
+# --- Mixins ---
 
-trait Serializable
+mixin Serializable
   def serialize -> String
   def self.deserialize(data: &str) -> Result[Self, TaskError]
 end
 
-trait Summarizable
+mixin Summarizable
   def summary -> String
   def is_actionable -> Bool
 end
@@ -94,13 +92,13 @@ class Task
     self.status = Status.Pending
   end
 
-  pub def id -> USize { self.id }
+  def id -> USize { self.id }
 
-  pub def title_ref -> &String { &self.title }
+  def title_ref -> &String { &self.title }
 
-  pub def priority_ref -> &Priority { &self.priority }
+  def priority_ref -> &Priority { &self.priority }
 
-  pub def is_done -> Bool
+  def is_done -> Bool
     match &self.status
       Status.Completed(_) -> true
       Status.Cancelled(_) -> true
@@ -108,26 +106,26 @@ class Task
     end
   end
 
-  pub def mut assign(assignee: String)
+  def mut assign(assignee: String)
     self.status = Status.InProgress(assignee: assignee)
   end
 
-  pub def mut complete(date: String)
+  def mut complete(date: String)
     self.status = Status.Completed(completed_at: date)
   end
 
-  pub def mut cancel(reason: String)
+  def mut cancel(reason: String)
     self.status = Status.Cancelled(reason: reason)
   end
-end
 
-impl Displayable for Task
+  include Displayable
+
   def to_display -> String
     "[##{self.id}] #{self.title} | #{self.priority.to_display} | #{self.status.to_display}"
   end
-end
 
-impl Summarizable for Task
+  include Summarizable
+
   def summary -> String
     "#{self.title} (#{self.priority.to_display})"
   end
@@ -139,15 +137,15 @@ impl Summarizable for Task
       _                       -> false
     end
   end
-end
 
-impl Serializable for Task
+  include Serializable
+
   def serialize -> String
     "#{self.id}|#{self.title}|#{self.description}|#{self.priority.to_display}"
   end
 
   def self.deserialize(data: &str) -> Result[Task, TaskError]
-    let parts: Vec[&str] = data.split("|").to_vec
+    let parts: Array[&str] = data.split("|").to_vec
     if parts.len < 4
       return Err(TaskError.ParseFailed(
         message: String.from("expected 4 fields, got #{parts.len}")
@@ -183,15 +181,15 @@ class TimedTask < Task
     super(id, title, description, priority)
   end
 
-  pub def is_overdue(current_date: &str) -> Bool
+  def is_overdue(current_date: &str) -> Bool
     # Simple string comparison — a real app would use proper date types
     !self.is_done && current_date > &self.deadline
   end
 
-  pub def deadline_ref -> &String { &self.deadline }
-end
+  def deadline_ref -> &String { &self.deadline }
 
-impl Displayable for TimedTask
+  include Displayable
+
   def to_display -> String
     let base = "[##{self.id}] #{self.title} | #{self.priority.to_display}"
     let time = "Due: #{self.deadline} (#{self.estimated_hours}h est.)"
@@ -202,53 +200,53 @@ end
 # --- Generic Repository ---
 
 class Repository[T: Displayable]
-  items: Vec[T]
+  items: Array[T]
   next_id: USize
 
   def init
-    self.items = Vec.new
+    self.items = Array.new
     self.next_id = 1
   end
 
-  pub def mut add(item: T) -> USize
-    # item is moved into the Vec — caller gives up ownership
+  def mut add(item: T) -> USize
+    # item is moved into the Array — caller gives up ownership
     let id = self.next_id
     self.items.push(item)
     self.next_id += 1
     id
   end
 
-  pub def count -> USize
+  def count -> USize
     self.items.len
   end
 
-  pub def get(index: USize) -> Option[&T]
+  def get(index: USize) -> Option[&T]
     self.items.get(index)
   end
 
-  pub def get_mut(index: USize) -> Option[&mut T]
+  def get_mut(index: USize) -> Option[&mut T]
     self.items.get_mut(index)
   end
 
-  pub def all -> &Vec[T]
+  def all -> &Array[T]
     &self.items
   end
 
   # Takes a predicate block, returns borrowed references to matching items
-  pub def where_matching(&block: Block(&T) -> Bool) -> Vec[&T]
+  def where_matching(&block: Block(&T) -> Bool) -> Array[&T]
     self.items.iter
       .filter { |item| yield item }
       .to_vec
   end
 
   # Consumes the repository, returns only items that pass the predicate
-  pub def consume into_filtered(predicate: Fn(&T) -> Bool) -> Vec[T]
+  def consume into_filtered(predicate: Fn(&T) -> Bool) -> Array[T]
     self.items.into_iter
       .filter { |item| predicate.(&item) }
       .to_vec
   end
 
-  pub def display_all
+  def display_all
     if self.items.is_empty
       puts "  (empty)"
       return
@@ -266,16 +264,16 @@ class TaskList
     self.repo = Repository.new
   end
 
-  pub def mut add_task(title: String, desc: String, priority: Priority) -> USize
+  def mut add_task(title: String, desc: String, priority: Priority) -> USize
     let task = Task.new(self.repo.count, title, desc, priority)
     self.repo.add(task)
   end
 
-  pub def find_by_id(id: USize) -> Option[&Task]
+  def find_by_id(id: USize) -> Option[&Task]
     self.repo.all.iter.find { |t| t.id == id }
   end
 
-  pub def mut update_status(id: USize, status: Status) -> Result[(), TaskError]
+  def mut update_status(id: USize, status: Status) -> Result[(), TaskError]
     let task = self.repo.all.iter
       .position { |t| t.id == id }
       .ok_or(TaskError.NotFound(id: id))?
@@ -287,27 +285,27 @@ class TaskList
         Status.Cancelled(ref reason)    -> t.cancel(reason.clone)
         Status.Pending                  -> t.status = Status.Pending
       end
-      None -> return Err(TaskError.NotFound(id: id))
+      nil -> return Err(TaskError.NotFound(id: id))
     end
 
     Ok(())
   end
 
-  pub def high_priority_tasks -> Vec[&Task]
+  def high_priority_tasks -> Array[&Task]
     self.repo.where_matching { |t| t.priority_ref.weight >= 3 }
   end
 
-  pub def actionable_tasks -> Vec[&Task]
+  def actionable_tasks -> Array[&Task]
     self.repo.where_matching { |t| t.is_actionable }
   end
 
-  pub def display
+  def display
     puts "--- All Tasks ---"
     self.repo.display_all
   end
 
   # Consumes the TaskList, returns only completed tasks
-  pub def consume into_completed -> Vec[Task]
+  def consume into_completed -> Array[Task]
     self.repo.into_filtered({ |t| t.is_done })
   end
 end
@@ -325,10 +323,10 @@ def parse_priority(input: &str) -> Result[Priority, TaskError]
 end
 
 # Accepts borrowed tasks, returns a formatted report — no ownership taken
-def generate_report(tasks: &Vec[&Task]) -> String
-  let mut report = String.from("=== Task Report ===\n")
+def generate_report(tasks: &Array[&Task]) -> String
+  var report = String.from("=== Task Report ===\n")
 
-  let (done, active): (Vec[&&Task], Vec[&&Task]) = tasks.iter
+  let (done, active): (Array[&&Task], Array[&&Task]) = tasks.iter
     .partition { |t| t.is_done }
 
   report.push_str("Active: #{active.len}\n")
@@ -344,8 +342,8 @@ def generate_report(tasks: &Vec[&Task]) -> String
   report
 end
 
-# Demonstrates generic function with trait bounds
-def print_items[T: Displayable + Summarizable](items: &Vec[T], label: &str)
+# Demonstrates generic function with mixin bounds
+def print_items[T: Displayable + Summarizable](items: &Array[T], label: &str)
   puts "--- #{label} ---"
   items.each do |item|
     if item.is_actionable
@@ -357,7 +355,7 @@ def print_items[T: Displayable + Summarizable](items: &Vec[T], label: &str)
 end
 
 # Demonstrates closure stored in a variable
-def apply_filter[T](items: &Vec[T], predicate: &Fn(&T) -> Bool) -> Vec[&T]
+def apply_filter[T](items: &Array[T], predicate: &Fn(&T) -> Bool) -> Array[&T]
   items.iter.filter { |item| predicate.(item) }.to_vec
 end
 
@@ -387,12 +385,12 @@ end
 # --- Main ---
 
 def main
-  let mut list = TaskList.new
+  var list = TaskList.new
 
   # ── Create tasks via helper (demonstrates ? operator) ──
   puts "Creating tasks..."
 
-  let results = vec![
+  let results = array![
     create_task_from_input(&mut list, "Design ownership model", "Define borrow rules", "critical"),
     create_task_from_input(&mut list, "Write parser",           "Implement lexer+parser", "high"),
     create_task_from_input(&mut list, "Add syntax highlighting", "Editor plugin",         "medium"),
@@ -474,7 +472,7 @@ def main
   puts ""
 
   # ── Generate report (demonstrates borrowing — list is NOT consumed) ──
-  let all_refs: Vec[&Task] = list.repo.all.iter.to_vec
+  let all_refs: Array[&Task] = list.repo.all.iter.to_vec
   let report = generate_report(&all_refs)
   puts report
 

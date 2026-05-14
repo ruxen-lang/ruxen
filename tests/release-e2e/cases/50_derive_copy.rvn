@@ -1,7 +1,6 @@
 struct Point
   x: Int
   y: Int
-  derive Copy, Clone
 end
 
 def main

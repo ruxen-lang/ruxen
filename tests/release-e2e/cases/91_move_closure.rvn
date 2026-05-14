@@ -1,4 +1,4 @@
-def make_adder(n: Int) -> impl Fn(Int) -> Int
+def make_adder(n: Int) -> some Fn(Int) -> Int
   move { |x| x + n }
 end
 

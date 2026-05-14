@@ -1,7 +1,6 @@
 struct Point
   x: Int
   y: Int
-  derive Copy, Clone
 end
 
 class Circle
@@ -11,7 +10,7 @@ class Circle
   def init(@center: Point, @radius: Int)
   end
 
-  pub def describe -> String
+  def describe -> String
     "center=(#{self.center.x},#{self.center.y}) r=#{self.radius}"
   end
 end

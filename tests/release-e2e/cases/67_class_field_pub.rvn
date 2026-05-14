@@ -1,6 +1,6 @@
 class User
-  pub name: String
-  pub age: Int
+  name: String
+  age: Int
 
   def init(@name: String, @age: Int)
   end

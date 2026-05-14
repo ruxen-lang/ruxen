@@ -1,8 +1,8 @@
-trait Displayable
+mixin Displayable
   def to_display -> String
 end
 
-trait Tagged
+mixin Tagged
   def tag -> String
 end
 
@@ -11,15 +11,15 @@ class Item
 
   def init(@name: String)
   end
-end
 
-impl Displayable for Item
+  include Displayable
+
   def to_display -> String
     self.name.clone
   end
-end
 
-impl Tagged for Item
+  include Tagged
+
   def tag -> String
     "T:#{self.name}"
   end

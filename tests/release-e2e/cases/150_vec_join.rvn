@@ -1,5 +1,5 @@
 def main
-  let mut parts: Vec[String] = Vec.new
+  var parts: Array[String] = Array.new
   parts.push(String.from("alpha"))
   parts.push(String.from("beta"))
   parts.push(String.from("gamma"))

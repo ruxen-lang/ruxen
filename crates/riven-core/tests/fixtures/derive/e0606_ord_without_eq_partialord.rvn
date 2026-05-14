@@ -1,4 +1,0 @@
-@[derive(Ord)]
-struct Point
-  x: Int
-end

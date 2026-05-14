@@ -4,6 +4,6 @@ enum Shape
 end
 
 def main
-  let shapes = vec![Shape.Circle(radius: 1.0), Shape.Square(side: 2.0)]
+  let shapes = array![Shape.Circle(radius: 1.0), Shape.Square(side: 2.0)]
   puts "#{shapes.len}"
 end

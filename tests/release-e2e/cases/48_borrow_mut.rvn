@@ -3,7 +3,7 @@ def append_bang(s: &mut String)
 end
 
 def main
-  let mut greeting = String.from("hello")
+  var greeting = String.from("hello")
   append_bang(&mut greeting)
   puts "#{greeting}"
 end

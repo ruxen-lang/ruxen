@@ -1,5 +1,5 @@
 def main
-  let mut v = vec![String.from("a"), String.from("b"), String.from("c")]
+  var v = array![String.from("a"), String.from("b"), String.from("c")]
   while let Some(s) = v.pop
     puts s
   end

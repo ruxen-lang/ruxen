@@ -14,13 +14,13 @@ once 1.0.0 ships.
   `+ - * /` arithmetic) on const-generic functions / types.  Each
   predicate is captured as a raw parser `Expr` on the new
   `WhereClause::const_predicates: Vec<ConstPredicate>` field;
-  existing `WhereClause::predicates` (trait bounds) is untouched, so
+  existing `WhereClause::predicates` (mixin bounds) is untouched, so
   existing consumers see no shape change.
 
   Disambiguation: a one-token lookahead past the leading identifier
   picks the path.  If the next token is a comparison or arithmetic
   op, parse as a const predicate; otherwise fall through to the
-  historic trait-bound parser (which expects `:`).  Mixed clauses
+  historic mixin-bound parser (which expects `:`).  Mixed clauses
   (`where T: Display, N > 0`) split correctly into the two lists.
 
   Spec stage map S9 entry updated to "in flight" with the parser-
@@ -164,7 +164,7 @@ once 1.0.0 ships.
   diagnostic** (spec §B8 `E-CONST-BAD-TYPE`).  `Resolver::
   collect_generic_params` now validates the resolved type of every
   `const NAME: TY` parameter against the v1 allow-list (integer
-  family + `Bool`).  Float* / String / user class / Vec / tuple /
+  family + `Bool`).  Float* / String / user class / Array / tuple /
   every other shape surfaces as **E0705** with the parameter name
   and the rejected type in the message.  `Ty::Error` is treated as
   valid so the diagnostic doesn't stack on top of an upstream
@@ -343,10 +343,10 @@ once 1.0.0 ships.
   pending the monomorphization-side wiring that will surface them
   as E0703.
 - Phase 3 stdlib remainder closure: docs/specs/stdlib/hash.spec.md
-  backfilled.  Spec covers the `Hashable` trait surface, the
-  `derive Hashable` synthesis path, the `T: Hashable` generic bound
-  dispatch (working today for user types), the `HashMap` /
-  `HashSet` key-validity gate (`ty_is_valid_hash_key`), and the
+  backfilled.  Spec covers the `Hashable` mixin surface, the
+  auto-synth path for `Hashable`, the `T: Hashable` generic bound
+  dispatch (working today for user types), the `Map` /
+  `Set` key-validity gate (`ty_is_valid_hash_key`), and the
   primitive runtime hashing (`riven_hash_bits`, `riven_hash_str`).
   Documents the v2 gap on user-callable `.hash_code` for primitives
   and on `T: Hashable` monomorphisation for primitive `T` (link
@@ -411,20 +411,22 @@ once 1.0.0 ships.
   `#` alternate / `0` zero-pad / radix flags.
 - Phase 2 #06.D2.S4: end-to-end fixture
   `tests/release-e2e/cases/070_interp_display_dispatch.rvn` proves the
-  Display dispatch path runs at runtime — a `class Money` with user
-  `impl Display for Money` interpolates via `"#{m}"`, while inner
-  `"#{self.cents}"` routes through synth `Int_fmt`. Mirrored as an
-  inline cargo test (`stdlib_fmt_runtime.rs::interpolation_user_impl_display_money_round_trips`)
+  Display dispatch path runs at runtime — a `class Money` whose body
+  `include Display`s and supplies `def fmt` interpolates via `"#{m}"`,
+  while inner `"#{self.cents}"` routes through synth `Int_fmt`.
+  Mirrored as an inline cargo test
+  (`stdlib_fmt_runtime.rs::interpolation_user_impl_display_money_round_trips`)
   so the default `cargo test --workspace` run exercises it without
   waiting for the `--ignored` `release_e2e_all_fixtures` harness.
 - Phase 2 #06.D2.S3: route string interpolation through `Display::fmt`
   dispatch — `Formatter_new` → `{T}_fmt(value, fmt)` → `Formatter_buffer`
-  for primitives (Char / Int / Float / Bool) and any type with
-  `impl Display for T`. Output is byte-identical to the legacy
-  `riven_*_to_string` path because the Stage 1 synth fns wrap the same
-  helpers. Derive-Debug-only types still fall back to `{Name}_to_debug`
-  until users provide their own `impl Display`. Closes prompt 06's
-  "string interpolation routes through Display::fmt" DoD bullet.
+  for primitives (Char / Int / Float / Bool) and any type whose body
+  `include Display`s with a user `def fmt`. Output is byte-identical
+  to the legacy `riven_*_to_string` path because the Stage 1 synth
+  fns wrap the same helpers. Auto-`Debug`-only types still fall back
+  to `{Name}_to_debug` until users provide their own `Display`
+  implementation. Closes prompt 06's "string interpolation routes
+  through Display::fmt" DoD bullet.
 
   Also lands a small Cranelift-codegen fix: `coerce_call_args` now
   consults a `user_fn_param_tys` side-table (populated during Pass 0/1)
@@ -435,8 +437,10 @@ once 1.0.0 ships.
 - Phase 2 #06.D2.S2: add `user_has_impl_display(ty) -> Option<String>`
   helper on the MIR lowerer for the Stage-3 interpolation rewrite.
   Walks the HIR program's `impl_blocks` (via the `trait_impls` map
-  collected at lowering start) and resolves through Ref / RefMut /
-  Alias / Newtype. No call site uses the helper yet — pure plumbing.
+  collected at lowering start; both are the Rust-side internal name
+  for the user-visible `include` directive's record) and resolves
+  through Ref / RefMut / Alias / Newtype. No call site uses the
+  helper yet — pure plumbing.
 
   Also bundles four S1 review follow-ups: harden seven `functions[0]`
   index lookups in `mir/tests.rs` to `.find(|f| f.name == ...)`;
@@ -465,13 +469,14 @@ once 1.0.0 ships.
   round-trips `Formatter.new()` + `.write_str` + `.buffer` end-to-end.
 - Phase 2 stdlib `std::fmt` foundation surface (#06 fmt MVP, plan
   in `docs/superpowers/plans/2026-05-10-stdlib-fmt.md`):
-  - **Phase A** — Display/Debug formal traits registered with
-    `fmt(&self, &mut Formatter) -> Result[(), FmtError]` signature.
-    `Formatter` and `FmtError` registered as built-in classes.
-    Runtime: `RivenFormatter { char* buf; size_t len, cap }` plus
-    `riven_fmt_formatter_{new,free,write_str,write_char,buffer,len}`
-    helpers; v1 always returns `Ok(0)` from write_*. User `class T ...
-    impl Display ... end ... end` parses and typechecks.
+  - **Phase A** — Display/Debug formal mixins registered with a
+    reading `def fmt(f: &mut Formatter) -> Result[(), FmtError]`
+    signature. `Formatter` and `FmtError` registered as built-in
+    classes. Runtime: `RivenFormatter { char* buf; size_t len, cap }`
+    plus `riven_fmt_formatter_{new,free,write_str,write_char,buffer,len}`
+    helpers; v1 always returns `Ok(0)` from write_*. A user
+    `class T ... include Display ... def fmt ... end ... end`
+    parses and typechecks.
   - **Phase B** — Format-spec lexing for `"#{x:spec}"`. The lexer
     captures `[fill align] [width] ['.' precision] ['?']` into a
     `FormatSpec` struct on `StringPart::Expr`, threaded through HIR
@@ -479,18 +484,18 @@ once 1.0.0 ships.
     Examples: `"#{x:?}"`, `"#{x:>10}"`, `"#{pi:.2}"`,
     `"#{x:*<10.3?}"`. Five lexer pin-tests; printer + formatter
     round-trip non-default specs.
-  - **Phase C+D MVP** — `:?` typechecks for derive Debug types and
-    width/precision/align specs typecheck on numeric types; existing
-    `_to_debug` synthesis on derive-Debug structs already produces
+  - **Phase C+D MVP** — `:?` typechecks for auto-synth `Debug` types
+    and width/precision/align specs typecheck on numeric types; existing
+    `_to_debug` synthesis on auto-Debug structs already produces
     the expected output. Full `lower_interpolation` refactor through
     `Display::fmt` (Phase D2) deferred to a follow-up session.
 - Phase 2 stdlib `Iterator` typing for closure-based `*Iter.map` /
   `*Iter.filter` chains (#05 follow-up). Typeck now seeds closure
   parameters from iterator `Item` for `*Iter.map` and `*Iter.filter`,
   and `*Iter.map` rewrites the iterator item type to the closure-body
-  result so downstream `.collect_vec` and Vec methods see the mapped
-  element type instead of the source one. New focused unit coverage in
-  `crates/riven-core/tests/stdlib_iterator.rs` pins
+  result so downstream `.collect_vec` and `Array` methods see the
+  mapped element type instead of the source one. New focused unit
+  coverage in `crates/riven-core/tests/stdlib_iterator.rs` pins
   `v.iter.filter { ... }.count` and cross-type
   `v.iter.map { |n| "#{n}" }.collect_vec.join(",")`.
 - Phase 2 stdlib `std::io` no-Result print conveniences (#06.1 partial):
@@ -509,14 +514,14 @@ once 1.0.0 ships.
   remains deferred — it is a runtime layout change touching every
   Result-returning fn.
 - Phase 2 stdlib `std::env` / `std::fs` additions (#06 partial): `env.vars()`
-  snapshots the process environment into `HashMap[String, String]` (walks
+  snapshots the process environment into `Map[String, String]` (walks
   `extern char **environ`, splits at first `=`, heap-copies both halves
   via `riven_string_from`); `env.current_dir()` returns
   `Result[String, IoError]` via `getcwd` with a growing buffer;
   `fs.is_file(path)` and `fs.is_dir(path)` consult `stat()` and return
   `Bool` (matching `fs.exists`'s "false on error" convention so they slot
   into `if` predicates without `?`); `fs.read_dir(path)` returns
-  `Result[Vec[String], IoError]` of the directory entry names, skipping
+  `Result[Array[String], IoError]` of the directory entry names, skipping
   `.` and `..`. Five new C runtime fns (`riven_env_vars`,
   `riven_env_current_dir`, `riven_fs_is_file`, `riven_fs_is_dir`,
   `riven_fs_read_dir`) wired through `codegen/runtime.rs` and registered
@@ -528,10 +533,10 @@ once 1.0.0 ships.
   `Option[&String].get` interpolates the raw pointer (pre-existing v1
   limitation — slated for the `Display` interpolation refactor in 06.2);
   `fs.metadata` deferred (needs a struct surface).
-- Phase 2 stdlib `HashMap[K,V]` Entry API: `m.entry(K).or_insert(V)` and
+- Phase 2 stdlib `Map[K, V]` Entry API: `m.entry(K).or_insert(V)` and
   `m.entry(K).or_insert_with { || V }` (#04 final batch). The chain is
   detected and inlined as a single MIR unit — there is no real
-  `Entry[K,V]` runtime value, sidestepping the pointer-returning
+  `Entry[K, V]` runtime value, sidestepping the pointer-returning
   two-variant dispatch the prompt-04 deferred note flagged. Lowering
   emits `if !riven_hash_contains_key(m, k) { riven_hash_insert(m, k, v); }`
   so the lazy-default contract of `or_insert_with` is honoured: the
@@ -551,9 +556,9 @@ once 1.0.0 ships.
   `*Iter.filter` / `*Iter.map`, so any other terminator on an iter
   receiver was rejected by typeck before reaching codegen. New entries
   in `typeck/infer.rs` cover `sum` (returns the iter element type, so
-  `Vec[Int].iter.sum -> Int` and a future `Vec[U64].iter.sum -> U64`
+  `Array[Int].iter.sum -> Int` and a future `Array[UInt64].iter.sum -> UInt64`
   flows the right type through use-sites) and `count` (returns
-  `USize`, mirroring `Vec.count`). Both helpers were already wired
+  `USize`, mirroring `Array.count`). Both helpers were already wired
   through `codegen/runtime.rs` for `VecIter` / `VecIntoIter` /
   `SplitIter`, so this is pure typeck plumbing — no new runtime fns,
   no new error codes. New release-e2e fixtures
@@ -563,7 +568,7 @@ once 1.0.0 ships.
   check from the prompt brief (sum of empty = 0).
   The remaining Iterator surface (`fold`, `all`, `any`, `take(n)`,
   `skip(n)`, `chain`, `zip`, `enumerate`, `collect[FromIterator]`,
-  full `trait Iterator` in stdlib source) is deferred to a follow-up:
+  full `mixin Iterator` in stdlib source) is deferred to a follow-up:
   closing it requires either per-method MIR inliners (for the
   closure-takers, mirroring the `inline_each` / `inline_filter`
   template) or new `*Iter`-specific runtime helpers — verifying
@@ -613,23 +618,23 @@ once 1.0.0 ships.
   (`PASS=208 / 208` on `release_e2e_smoke`). Still deferred to a
   later batch: `chain` / `zip` (need real iterator structs holding
   two sources), `collect[C: FromIterator]` (needs the
-  `FromIterator` trait + impl machinery; a v1 `iter.collect_vec`
+  `FromIterator` mixin + include machinery; a v1 `iter.collect_vec`
   shorthand is the planned escape hatch), and lifting the surface
-  into a real `.rvn` `trait Iterator` source (needs a stdlib
+  into a real `.rvn` `mixin Iterator` source (needs a stdlib
   loader, not yet built).
-- Phase 2 stdlib `HashMap[K,V]` indexing operator and Hash-key
+- Phase 2 stdlib `Map[K, V]` indexing operator and Hash-key
   constraint negatives (#04 batch 3). `m[k]` now lowers through
   `riven_hash_index` and panics with `"hashmap index: missing key"`
-  on miss (mirrors `Vec[i]` / `riven_vec_get_or_panic`). The MIR
+  on miss (mirrors `Array[i]` / `riven_vec_get_or_panic`). The MIR
   `Index` handler in `mir/lower.rs` was extended to recognise
   `Ty::HashMap(_, _)` and `Ty::Ref(HashMap)` receivers; `infer_index_ty`
   in `typeck/infer.rs` was changed from `Ty::Option(V)` to `V` to
   match the panicking-index surface. Resolver-time validation in
   `resolve/mod.rs::ty_is_valid_hash_key` rejects compound containers
-  (`Vec`, `Set`/`HashSet`, `HashMap`) as `HashMap` keys / `HashSet`
-  elements, emitting `E0615` at the type-construction site (parallel
-  to the per-field derive validator in `derive/mod.rs`). New release-e2e
-  fixture `tests/release-e2e/cases/509_hashmap_index_op.rvn` exercises
+  (`Array`, `Set`, `Map`) as `Map` keys / `Set` elements, emitting
+  `E0615` at the type-construction site (parallel to the per-field
+  auto-synth validator in `derive/mod.rs`). New release-e2e fixture
+  `tests/release-e2e/cases/509_hashmap_index_op.rvn` exercises
   the hit path; six new negative tests in
   `crates/riven-core/tests/stdlib_hashmap_negatives.rs`
   (`hashmap_with_non_hash_key_emits_e0615`,
@@ -637,48 +642,47 @@ once 1.0.0 ships.
   `hashmap_with_nested_compound_key_emits_e0615`,
   `hashset_of_hashmap_emits_e0615`, plus two accept-path sanity
   checks) pin the typeck-level diagnostic.
-- Phase 2 stdlib `HashMap[K,V]` + `HashSet[T]` per-element drop
+- Phase 2 stdlib `Map[K, V]` + `Set[T]` per-element drop
   selectors (#04 batch 2). Five new runtime helpers
   (`riven_hash_drop_string_v`, `riven_hash_drop_v_string`,
   `riven_hash_drop_string_string`, `riven_hash_drop_v_vec`,
   `riven_set_drop_string`) walk the bucket chains and release the
   heap-owned key/value/element before delegating to the spine free.
   New runtime helper `riven_set_free` (paired with `riven_set_new`)
-  closes the HashSet spine-leak gap that batch 1 deferred. The MIR
+  closes the `Set` spine-leak gap that batch 1 deferred. The MIR
   drop-elaboration in `mir/lower.rs::insert_drops` now dispatches on
   `Ty::HashMap(K, V)` and `Ty::Set(T)` to pick the right helper based
   on whether K/V/T own heap. Push-time ownership transfer extended
   to taint BOTH the key (idx 1) and value (idx 2) of
   `riven_hash_insert` (and the value of `riven_set_insert`) so source
-  `String.from(...)` / `Vec.new` temps don't double-free with the
+  `String.from(...)` / `Array.new` temps don't double-free with the
   per-element drop walk. Four new leak regression tests in
   `crates/riven-core/tests/drop_fixtures.rs`
   (`p04_hashmap_string_to_int_releases_every_key`,
   `p04_hashmap_int_to_string_releases_every_value`,
   `p04_hashmap_string_to_vec_int_releases_every_value`,
   `p04_hashset_string_releases_every_element`).
-- Phase 2 stdlib `HashMap[K,V]` + `HashSet[T]` full surface (#04). New
-  HashMap methods (runtime + Cranelift sig + LLVM extern + dispatch):
+- Phase 2 stdlib `Map[K, V]` + `Set[T]` full surface (#04). New
+  `Map` methods (runtime + Cranelift sig + LLVM extern + dispatch):
   `with_capacity(Int)`, `remove(&K) -> Option[V]`, `clear`, `keys ->
-  Vec[&K]`, `values -> Vec[&V]`, `iter -> Vec[&K]`, plus `==` /  `!=`
-  routed through `riven_hash_eq` (mirrors `riven_vec_eq` from #03).
-  New HashSet methods: `with_capacity`, `remove(&T) -> Bool`, `clear`,
-  `iter -> Vec[&T]`, set operations `union(&Self) -> HashSet[T]`,
-  `intersection(&Self) -> HashSet[T]`, `difference(&Self) -> HashSet[T]`,
-  plus `==` via `riven_set_eq`. `HashSet[T]` is a v1 alias for `Set[T]`
-  registered in `resolve::mod`; `HashSet.new` / `HashSet.with_capacity`
-  reach the runtime through the same dispatch as `Set.new`. Set-op
-  helpers and HashMap container-returning helpers (`keys`, `values`,
-  `iter`, `remove`, `with_capacity`) are added to the
-  `FRESH_ALLOC_CALLEES` whitelist in `mir/lower.rs` so their fresh
-  allocations are dropped at scope exit. 13 new release-e2e fixtures
-  at `tests/release-e2e/cases/50[1-6]_hashmap_*.rvn` and
+  Array[&K]`, `values -> Array[&V]`, `iter -> Array[&K]`, plus `==` /
+  `!=` routed through `riven_hash_eq` (mirrors `riven_vec_eq` from
+  #03). New `Set` methods: `with_capacity`, `remove(&T) -> Bool`,
+  `clear`, `iter -> Array[&T]`, set operations
+  `union(&Self) -> Set[T]`, `intersection(&Self) -> Set[T]`,
+  `difference(&Self) -> Set[T]`, plus `==` via `riven_set_eq`.
+  Set-op helpers and `Map`
+  container-returning helpers (`keys`, `values`, `iter`, `remove`,
+  `with_capacity`) are added to the `FRESH_ALLOC_CALLEES` whitelist
+  in `mir/lower.rs` so their fresh allocations are dropped at scope
+  exit. 13 new release-e2e fixtures at
+  `tests/release-e2e/cases/50[1-6]_hashmap_*.rvn` and
   `52[1-7]_hashset_*.rvn`; new typecheck-level pin tests in
   `crates/riven-core/tests/stdlib_hashmap.rs` and `stdlib_hashset.rs`.
-- Phase 2 stdlib `Vec[T]` surface batch 2 (#03): closes the closure
+- Phase 2 stdlib `Array[T]` surface batch 2 (#03): closes the closure
   surface and wires the per-element drop selector. New methods:
-  `Vec.from_iter(I)` static constructor (runtime fn
-  `riven_vec_from_iter`, registered as a `Vec` static method
+  `Array.from_iter(I)` static constructor (runtime fn
+  `riven_vec_from_iter`, registered as an `Array` static method
   alongside `new` / `with_capacity`); `dedup` (runtime fn
   `riven_vec_dedup`, removes consecutive bitwise-equal slots);
   `sort_by(closure)` and `retain(closure)` (inlined at MIR via the
@@ -686,8 +690,8 @@ once 1.0.0 ships.
   selection-sort driven by the user comparator, `retain` lowers to
   a read-write cursor loop using the new runtime helper
   `riven_vec_set`). MIR drop-elaboration now selects per-element
-  drop helpers based on element type: `Vec[String]` →
-  `riven_vec_drop_string`, `Vec[Vec[T]]` → `riven_vec_drop_vec`,
+  drop helpers based on element type: `Array[String]` →
+  `riven_vec_drop_string`, `Array[Array[T]]` → `riven_vec_drop_vec`,
   primitives still use the spine-only `riven_vec_free`. Push-time
   ownership transfer (`riven_vec_push` / `riven_vec_insert` /
   `riven_hash_insert`) now taints the value-arg local so the drop
@@ -701,33 +705,33 @@ once 1.0.0 ships.
   New developer-facing reference at
   `docs/dev/vec_iter_borrow_rules.md` documenting the receiver-mode
   rules that statically reject iterator–mutator interleavings.
-- Phase 2 stdlib `Vec[T]` surface batch 1 (#03): new constructors and
-  inspectors `Vec.with_capacity(Int)`, `capacity`; new mutators
+- Phase 2 stdlib `Array[T]` surface batch 1 (#03): new constructors and
+  inspectors `Array.with_capacity(Int)`, `capacity`; new mutators
   `clear`, `truncate(Int)`, `swap(Int, Int)`, `insert(Int, T)`,
-  `remove(Int) -> T`, `extend(&Vec[T])`; new conversions / iter
+  `remove(Int) -> T`, `extend(&Array[T])`; new conversions / iter
   surface stubs `as_slice`, `iter_mut` (both passthrough on the v1
-  RivenVec representation); operator wiring `Vec[T] == Vec[T]` /
+  RivenVec representation); operator wiring `Array[T] == Array[T]` /
   `!=` (routed through `riven_vec_eq`, replacing the prior
   pointer-compare); indexing `v[i]` (routed through
   `riven_vec_get_or_panic`, panic message `"index N out of range,
   len M"`). Per-element drop helpers `riven_vec_drop_string` and
   `riven_vec_drop_vec` ship as runtime fns ready for the drop
-  selector wiring (closes the runtime half of the `Vec[String]`
+  selector wiring (closes the runtime half of the `Array[String]`
   spine-only limitation; full MIR selector lands in batch 2). Eight
   new release-e2e fixture pairs at `tests/release-e2e/cases/40[1-8]_*`.
   New negatives suite `crates/riven-core/tests/stdlib_vec_negatives.rs`
-  pinning the typecheck contract for `Vec[i]`, `Vec.pop -> Option`,
-  `Vec[T] == Vec[T] -> Bool`, plus two TODO-tagged tests recording
-  current typeck laxness for `Vec.from(_)` / non-Int args to
+  pinning the typecheck contract for `Array[i]`, `Array.pop -> Option`,
+  `Array[T] == Array[T] -> Bool`, plus two TODO-tagged tests recording
+  current typeck laxness for `Array.from(_)` / non-Int args to
   `with_capacity`.
 - Phase 2 stdlib `String` surface batch 2 (#02): closes the surface
   gap left by batch 1. New runtime fns `riven_string_split`,
   `riven_string_push`, `riven_string_into_bytes` (registered in the
   Cranelift signatures, LLVM externs, and `RUNTIME_FUNCTIONS`
-  dispatch). New language wiring: `String.split(&str) -> Vec[String]`
+  dispatch). New language wiring: `String.split(&str) -> Array[String]`
   (standalone, distinct from `splitn`); `String.push(Char)` (now
   routed through the dedicated runtime fn so the codepoint
-  intermediate doesn't leak); `String.into_bytes -> Vec[U8]` (the
+  intermediate doesn't leak); `String.into_bytes -> Array[UInt8]` (the
   consuming variant of `bytes` — frees the source spine internally
   and the dealloc-safety analysis taints the receiver to avoid a
   double-free); `String + String` (concat owned, reuses
@@ -769,33 +773,34 @@ once 1.0.0 ships.
 - `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md` (T4.08).
 - Drop elaboration: heap-owned locals freed on reassignment and at
   every loop-exit edge (break, continue, back-edge) (P0.2).
-- Registered derive error codes E0601, E0603, E0605, E0608, E0609
+- Registered auto-synth error codes E0601, E0603, E0605, E0608, E0609
   (previously emitted by `derive/mod.rs` but missing from the public
   registry) and reserved E0610, E0611, E0613, E0615, E0616, E0617,
-  E0618 ahead of T1.05 derive synthesizer work (#01-B1).
-- `derive Clone` now synthesizes a working `<Type>_clone` for structs,
-  classes, and enums (including variants with payloads). Per-field
-  clone dispatches to bitwise copy for primitives, `riven_string_clone`
-  for `String`, `riven_vec_clone` / `riven_hash_clone` / `riven_set_clone`
-  for built-in containers, and recursively to `<Inner>_clone` for
-  user types that themselves derive Clone. Non-Clone field/payload
-  types are rejected with `E0610` at validation time (T1.05 #01-B2).
-- Remaining built-in derives — `Debug`, `PartialEq`, `Eq`, `Hash`,
-  `Default`, `Ord`, `PartialOrd`, `Copy` — now produce working code
-  rather than validate-only skeletons (T1.05 #01-B3): struct
-  ordering operators (`<`, `<=`, `>`, `>=`) dispatch through the
-  synthesised `<Type>_cmp` / `<Type>_partial_cmp` so multi-field
+  E0618 ahead of T1.05 auto-synth work (#01-B1).
+- Auto-synthesized `Clone` now produces a working `<Type>_clone` for
+  structs, classes, and enums (including variants with payloads).
+  Per-field clone dispatches to bitwise copy for primitives,
+  `riven_string_clone` for `String`, `riven_vec_clone` /
+  `riven_hash_clone` / `riven_set_clone` for built-in containers, and
+  recursively to `<Inner>_clone` for user types that themselves
+  satisfy `Clone`. Non-`Clone` field/payload types are rejected with
+  `E0610` at validation time (T1.05 #01-B2).
+- Remaining built-in auto-synth mixins — `Debug`, `PartialEq`, `Eq`,
+  `Hash`, `Default`, `Ord`, `PartialOrd`, `Copy` — now produce
+  working code rather than validate-only skeletons (T1.05 #01-B3):
+  struct ordering operators (`<`, `<=`, `>`, `>=`) dispatch through
+  the synthesised `<Type>_cmp` / `<Type>_partial_cmp` so multi-field
   structs are ordered lex-tuple style instead of pointer-compared.
   Per-field bound checks emit `E0613` (PartialEq), `E0615` (Hash),
   `E0617` (Ord), and `E0618` (PartialOrd) when an inner field type
-  doesn't satisfy the trait, and `E0616` fires when `Default` is
-  derived on an empty enum. Six new release-e2e fixtures
+  doesn't satisfy the mixin, and `E0616` fires when `Default` is
+  auto-synthesized on an empty enum. Six new release-e2e fixtures
   (`tests/release-e2e/cases/201`, `206`, `207`, `208`, `209`)
   exercise the green path; five negatives in
   `crates/riven-core/tests/derive_negatives.rs` pin the red path.
 
 ### Fixed
-- Heap-owned `String`, `Vec`, and `HashMap` locals are now freed on
+- Heap-owned `String`, `Array`, and `Map` locals are now freed on
   scope exit (P0.7). Previously these types leaked until program
   exit; drop elaboration only released `Class`/`Struct`/`Enum`
   storage. Three new runtime helpers (`riven_string_free`,
@@ -805,17 +810,17 @@ once 1.0.0 ships.
   `atexit` so leak-tracking test harnesses see a clean exit ledger.
 
 ### Known limitations
-- `Vec[String]` and `HashMap[K, V]` with heap-owned element types
+- `Array[String]` and `Map[K, V]` with heap-owned element types
   only free the spine (data buffer + outer struct). Element heap is
   leaked; recursive element drops are deferred to a future prompt.
-  *Update (#04 batch 2):* `HashMap[String, V]`, `HashMap[K, String]`,
-  `HashMap[String, String]`, `HashMap[K, Vec[T]]`, and
-  `HashSet[String]` now release every owned key/value/element via
+  *Update (#04 batch 2):* `Map[String, V]`, `Map[K, String]`,
+  `Map[String, String]`, `Map[K, Array[T]]`, and
+  `Set[String]` now release every owned key/value/element via
   the per-element drop selectors `riven_hash_drop_string_v` /
   `riven_hash_drop_v_string` / `riven_hash_drop_string_string` /
   `riven_hash_drop_v_vec` / `riven_set_drop_string`. Deeper nesting
-  (HashMap-in-HashMap, HashSet-in-V, etc.) is still spine-only and
-  lands with the trait-driven drop dispatch in #05.
+  (Map-in-Map, Set-in-V, etc.) is still spine-only and
+  lands with the mixin-driven drop dispatch in #05.
 
 ### Changed
 - `LoopFrame` now tracks `body_locals` for the drop pass.

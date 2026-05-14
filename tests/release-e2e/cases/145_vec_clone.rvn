@@ -1,9 +1,9 @@
 def main
-  let mut v: Vec[Int] = Vec.new
+  var v: Array[Int] = Array.new
   v.push(1)
   v.push(2)
   v.push(3)
-  let mut copy = v.clone
+  var copy = v.clone
   copy.push(4)
   puts "#{v.count}"
   puts "#{copy.count}"

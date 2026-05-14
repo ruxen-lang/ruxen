@@ -2,10 +2,8 @@ enum Priority
   Low
   Medium
   High
-end
 
-impl Priority
-  pub def label -> String
+  def label -> String
     match self
       Priority.Low    -> String.from("low")
       Priority.Medium -> String.from("medium")

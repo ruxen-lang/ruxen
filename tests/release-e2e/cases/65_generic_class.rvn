@@ -4,7 +4,7 @@ class Box[T]
   def init(@value: T)
   end
 
-  pub def get -> &T
+  def get -> &T
     &self.value
   end
 end

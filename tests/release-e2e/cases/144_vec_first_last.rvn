@@ -1,14 +1,14 @@
 def main
-  let mut v: Vec[Int] = Vec.new
+  var v: Array[Int] = Array.new
   v.push(10)
   v.push(20)
   v.push(30)
   match v.first
     Some(x) -> puts "first=#{x}"
-    None    -> puts "empty"
+    nil     -> puts "empty"
   end
   match v.last
     Some(x) -> puts "last=#{x}"
-    None    -> puts "empty"
+    nil     -> puts "empty"
   end
 end

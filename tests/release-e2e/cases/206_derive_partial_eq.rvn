@@ -1,11 +1,10 @@
-## B3: derive PartialEq on a struct holding a String field. The
+## Auto-synthesised PartialEq on a struct holding a String field. The
 ## synthesised `<Type>_eq` walks each field and dispatches to
 ## `riven_string_eq` for String fields, so two distinct heap copies
 ## with the same characters compare equal.
 struct Person
   name: String
   age: Int
-  derive PartialEq
 end
 
 def main

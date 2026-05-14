@@ -1,4 +1,4 @@
-trait Container
+mixin Container
   type Item
   def get_first -> Self.Item
 end
@@ -8,9 +8,9 @@ class IntBox
 
   def init(@v: Int)
   end
-end
 
-impl Container for IntBox
+  include Container
+
   type Item = Int
   def get_first -> Int
     self.v

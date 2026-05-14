@@ -1,7 +1,7 @@
 def take_opt(x: Option[Int]) -> Int
   match x
     Some(v) -> v
-    None    -> 0
+    nil     -> 0
   end
 end
 

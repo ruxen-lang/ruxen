@@ -1,5 +1,5 @@
 def main
-  let mut data = vec![1, 2, 3]
+  var data = array![1, 2, 3]
   let view = &data
   puts "#{view.len}"
   data.push(4)

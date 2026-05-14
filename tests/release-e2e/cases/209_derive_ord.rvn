@@ -1,11 +1,10 @@
-## B3: derive Ord (and PartialOrd) synthesises `<Type>_cmp` /
+## Auto-synthesised Ord (and PartialOrd) mixin produces `<Type>_cmp` /
 ## `<Type>_partial_cmp` that walks fields in declaration order and
 ## returns the first non-equal field's ordering. Confirms lex-tuple
 ## semantics: ties on the first field defer to the second.
 struct Pair
   a: Int
   b: Int
-  derive Ord, Eq, PartialOrd, PartialEq
 end
 
 def main

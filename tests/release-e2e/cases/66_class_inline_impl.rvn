@@ -1,4 +1,4 @@
-trait Displayable
+mixin Displayable
   def to_display -> String
 end
 
@@ -8,10 +8,10 @@ class User
   def init(@name: String)
   end
 
-  impl Displayable
-    def to_display -> String
-      self.name.clone
-    end
+  include Displayable
+
+  def to_display -> String
+    self.name.clone
   end
 end
 

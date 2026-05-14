@@ -1,4 +1,0 @@
-@[derive(Eq)]
-struct Point
-  x: Int
-end

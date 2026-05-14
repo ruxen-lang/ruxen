@@ -1,5 +1,5 @@
 def main
-  let v = vec![1, 2, 3]
+  let v = array![1, 2, 3]
   puts "len=#{v.len}"
   for x in &v
     puts "#{x}"

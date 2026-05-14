@@ -1,8 +1,10 @@
-trait Comparable
+mixin Comparable
   def greater_than(other: &Self) -> Bool
 end
 
-impl Comparable for Int
+extension Int
+  include Comparable
+
   def greater_than(other: &Int) -> Bool
     self > *other
   end

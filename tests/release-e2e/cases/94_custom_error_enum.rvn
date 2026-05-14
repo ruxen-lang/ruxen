@@ -1,8 +1,8 @@
 enum MyErr
   NotFound(id: Int)
-end
 
-impl Error for MyErr
+  include Error
+
   def message -> String
     match self
       MyErr.NotFound(id) -> "not found: #{id}"

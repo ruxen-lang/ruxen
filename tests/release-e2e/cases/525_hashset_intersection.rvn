@@ -1,9 +1,9 @@
 def main
-  let mut a: HashSet[Int] = HashSet.new
+  var a: Set[Int] = Set.new
   a.insert(1)
   a.insert(2)
   a.insert(3)
-  let mut b: HashSet[Int] = HashSet.new
+  var b: Set[Int] = Set.new
   b.insert(2)
   b.insert(3)
   b.insert(4)

@@ -2,17 +2,17 @@ def find(n: Int) -> Option[Int]
   if n > 0
     Some(n * 10)
   else
-    None
+    nil
   end
 end
 
 def main
   match find(5)
     Some(v) -> puts "got #{v}"
-    None    -> puts "nothing"
+    nil     -> puts "nothing"
   end
   match find(-1)
     Some(v) -> puts "got #{v}"
-    None    -> puts "nothing"
+    nil     -> puts "nothing"
   end
 end

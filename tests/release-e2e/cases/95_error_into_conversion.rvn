@@ -1,12 +1,12 @@
-enum SrcErr
-  Bad
-end
-
 enum DstErr
   Wrapped(msg: String)
 end
 
-impl Into[DstErr] for SrcErr
+enum SrcErr
+  Bad
+
+  include Into[DstErr]
+
   def consume into -> DstErr
     DstErr.Wrapped(msg: String.from("src was bad"))
   end

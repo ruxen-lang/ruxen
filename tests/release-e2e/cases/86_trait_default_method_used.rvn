@@ -1,4 +1,4 @@
-trait Greeter
+mixin Greeter
   def name -> String
   def greet -> String
     "Hello, #{self.name}!"
@@ -10,9 +10,9 @@ class Bot
 
   def init(@nm: String)
   end
-end
 
-impl Greeter for Bot
+  include Greeter
+
   def name -> String
     self.nm.clone
   end

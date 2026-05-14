@@ -1,9 +1,8 @@
-## B3: derive Debug synthesises `<Type>_to_debug` so that string
-## interpolation of a struct value prints `Foo { x: 1, y: 2 }`.
+## Auto-synthesised Debug mixin produces `<Type>_to_debug` so that
+## string interpolation of a struct value prints `Foo { x: 1, y: 2 }`.
 struct Point
   x: Int
   y: Int
-  derive Debug
 end
 
 def main

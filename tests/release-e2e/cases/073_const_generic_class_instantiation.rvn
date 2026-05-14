@@ -11,7 +11,7 @@ class Counter[const LIMIT: USize]
   def init(@value: Int)
   end
 
-  pub def get -> Int
+  def get -> Int
     self.value
   end
 end
@@ -22,7 +22,7 @@ class Pair[T, const N: USize]
   def init(@payload: T)
   end
 
-  pub def get -> T
+  def get -> T
     self.payload
   end
 end

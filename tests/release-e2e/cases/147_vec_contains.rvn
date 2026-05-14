@@ -1,5 +1,5 @@
 def main
-  let mut v: Vec[Int] = Vec.new
+  var v: Array[Int] = Array.new
   v.push(10)
   v.push(20)
   v.push(30)

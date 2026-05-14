@@ -8,7 +8,7 @@ class Record
   def init(@a: Int, @b: Int, @c: Int, @d: Int, @e: Int)
   end
 
-  pub def sum -> Int
+  def sum -> Int
     self.a + self.b + self.c + self.d + self.e
   end
 end

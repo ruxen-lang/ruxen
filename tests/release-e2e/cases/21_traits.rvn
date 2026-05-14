@@ -1,4 +1,4 @@
-trait Greet
+mixin Greet
   def hello -> String
 end
 
@@ -7,9 +7,9 @@ class Dog
 
   def init(@name: String)
   end
-end
 
-impl Greet for Dog
+  include Greet
+
   def hello -> String
     "Woof! I'm #{self.name}"
   end

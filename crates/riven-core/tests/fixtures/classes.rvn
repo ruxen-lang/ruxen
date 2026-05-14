@@ -4,7 +4,7 @@ class Point
 
   def init(@x: Int, @y: Int) end
 
-  pub def sum -> Int
+  def sum -> Int
     self.x + self.y
   end
 end

@@ -7,23 +7,23 @@ class Builder
     self.b = 0
   end
 
-  pub def mut set_a(v: Int) -> &mut Self
+  def mut set_a(v: Int) -> &mut Self
     self.a = v
     self
   end
 
-  pub def mut set_b(v: Int) -> &mut Self
+  def mut set_b(v: Int) -> &mut Self
     self.b = v
     self
   end
 
-  pub def sum -> Int
+  def sum -> Int
     self.a + self.b
   end
 end
 
 def main
-  let mut b = Builder.new
+  var b = Builder.new
   b.set_a(1).set_b(2)
   puts "#{b.sum}"
 end

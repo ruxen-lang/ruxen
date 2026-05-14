@@ -1,5 +1,5 @@
 def main
-  let mut s = String.from("hello world")
+  var s = String.from("hello world")
   s.truncate(5)
   puts "len=#{s.len}"
   puts s

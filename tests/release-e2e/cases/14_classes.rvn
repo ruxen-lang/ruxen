@@ -4,11 +4,11 @@ class Box
   def init(@x: Int)
   end
 
-  pub def value -> Int
+  def value -> Int
     self.x
   end
 
-  pub def doubled -> Int
+  def doubled -> Int
     self.x * 2
   end
 end

@@ -1,7 +1,6 @@
 struct Pair
   a: Int
   b: Int
-  derive Debug, Copy, Clone
 end
 
 def main
