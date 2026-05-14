@@ -7,6 +7,25 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+### Added
+- E2E harness supports a `RIVEN_E2E_CASES` env-var case filter for
+  selective runs.  Comma-separated case stems (filenames without
+  `.rvn`); absent var preserves the existing behaviour (full
+  sweep).  Whitespace is trimmed; empty entries ignored; unknown
+  cases fail fast with a clear message so typos don't silently
+  skip the case the developer was trying to verify.
+
+  New workflow:
+  - **Per-commit**: skip e2e entirely (`#[ignore]`-gated as before).
+  - **New / changed fixture**:
+    `RIVEN_E2E_CASES=NAME cargo test --test release_e2e_smoke
+     -- --ignored` runs just that one in ~1s.
+  - **Phase / tier completion**: `cargo test --test
+     release_e2e_smoke -- --ignored` runs the full ~3-min sweep.
+
+  Documented inline at `tests/release_e2e_smoke.rs::release_e2e_
+  all_fixtures`.
+
 ### Fixed
 - **Const-generic class instantiation parses correctly at value-
   expression call sites.**  Before this fix, `Counter[10].new(42)`

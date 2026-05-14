@@ -145,11 +145,26 @@ fn compile_and_run(case_name: &str) -> CaseOutcome {
     }
 }
 
-// Gated with `#[ignore]`: 213 fixtures × in-process compile-and-run
+// Gated with `#[ignore]`: 223 fixtures × in-process compile-and-run
 // pushes a workspace `cargo test` to ~1h on PR runners, so this is
 // kept off the default suite (PRs) and is only invoked on the
 // post-merge `release-e2e` job in `.github/workflows/ci.yml` (and
 // any time a developer runs `cargo test ... -- --ignored` locally).
+//
+// Selective runs:
+//
+// Set `RIVEN_E2E_CASES=072_const_generic_array_arithmetic,073_…` to
+// restrict the harness to a comma-separated subset of case stems
+// (the filename without `.rvn`).  Whitespace around entries is
+// trimmed; empty entries are ignored.  An unknown case name fails
+// the run with a clear message so typos don't silently skip cases.
+//
+// Workflow:
+//   - per-commit: skip the harness entirely (it's `#[ignore]`-gated).
+//   - new fixture: `RIVEN_E2E_CASES=NAME cargo test --test
+//     release_e2e_smoke -- --ignored` runs just that one (~1s).
+//   - phase / tier completion: `cargo test --test release_e2e_smoke
+//     -- --ignored` runs the full sweep (~3 min).
 #[test]
 #[ignore]
 fn release_e2e_all_fixtures() {
@@ -166,6 +181,42 @@ fn release_e2e_all_fixtures() {
         })
         .collect();
     names.sort();
+
+    // Apply the RIVEN_E2E_CASES filter, if set.  An unknown
+    // requested case is a hard error — better to surface a typo
+    // immediately than to silently skip the case the developer was
+    // trying to verify.
+    if let Ok(filter) = std::env::var("RIVEN_E2E_CASES") {
+        let requested: Vec<String> = filter
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !requested.is_empty() {
+            let discovered: std::collections::HashSet<&str> =
+                names.iter().map(|s| s.as_str()).collect();
+            let missing: Vec<&str> = requested
+                .iter()
+                .map(|s| s.as_str())
+                .filter(|n| !discovered.contains(n))
+                .collect();
+            if !missing.is_empty() {
+                panic!(
+                    "RIVEN_E2E_CASES requested unknown case(s): {}\n\
+                     (case stem is the filename without `.rvn`; \
+                     check `tests/release-e2e/cases/`)",
+                    missing.join(", ")
+                );
+            }
+            let keep: std::collections::HashSet<String> = requested.into_iter().collect();
+            names.retain(|n| keep.contains(n));
+            eprintln!(
+                "release-e2e: RIVEN_E2E_CASES filter active, running {} case(s): {}",
+                names.len(),
+                names.join(", ")
+            );
+        }
+    }
 
     let mut outcomes = Vec::with_capacity(names.len());
     for name in &names {
