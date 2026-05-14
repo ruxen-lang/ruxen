@@ -1591,6 +1591,125 @@ end
     );
 }
 
+// ── Stage 9 enforcement: where-clause const predicates ──────────────
+//
+// B9 (S9 enforcement): the where-clause const predicates parsed in
+// S9.S1 are now lowered to HirConstPredicate at class registration
+// and evaluated at every instantiation site.  Failing predicates
+// produce E0706.  Param-referencing predicates that can't yet be
+// evaluated against the local binding map skip the check
+// (re-evaluate at the outer instantiation).
+
+#[test]
+fn where_n_gt_zero_at_zero_emits_e0706() {
+    let src = r#"
+class Buf[const N: USize] where N > 0
+  data: Int
+end
+
+def take_zero(_b: Buf[0])
+end
+"#;
+    let codes = typecheck_diag_codes(src);
+    assert!(
+        codes.iter().any(|c| c == "E0706"),
+        "expected E0706 for Buf[0] under `where N > 0`; got: {:?}",
+        codes
+    );
+}
+
+#[test]
+fn where_n_gt_zero_at_positive_typechecks_clean() {
+    let src = r#"
+class Buf[const N: USize] where N > 0
+  data: Int
+end
+
+def take_one(_b: Buf[1])
+end
+
+def take_big(_b: Buf[1024])
+end
+"#;
+    let codes = typecheck_diag_codes(src);
+    assert!(
+        !codes.iter().any(|c| c == "E0706"),
+        "did not expect E0706 for valid Buf instantiations; got: {:?}",
+        codes
+    );
+}
+
+#[test]
+fn where_n_eq_m_at_mismatched_values_emits_e0706() {
+    // Struct uses two const params with an equality predicate.
+    let src = r#"
+struct Square[const W: USize, const H: USize] where W == H
+  area: Int
+end
+
+def take_rect(_s: Square[3, 4])
+end
+"#;
+    let codes = typecheck_diag_codes(src);
+    assert!(
+        codes.iter().any(|c| c == "E0706"),
+        "expected E0706 for Square[3, 4] under `where W == H`; got: {:?}",
+        codes
+    );
+}
+
+#[test]
+fn where_arithmetic_predicate_evaluates_at_instantiation() {
+    // `N + M == 8` with N=3, M=5 satisfies; with N=3, M=4 doesn't.
+    let src_ok = r#"
+struct Eight[const N: USize, const M: USize] where N + M == 8
+  data: Int
+end
+
+def take_ok(_e: Eight[3, 5])
+end
+"#;
+    let codes = typecheck_diag_codes(src_ok);
+    assert!(
+        !codes.iter().any(|c| c == "E0706"),
+        "did not expect E0706 for 3 + 5 == 8; got: {:?}",
+        codes
+    );
+
+    let src_bad = r#"
+struct Eight[const N: USize, const M: USize] where N + M == 8
+  data: Int
+end
+
+def take_bad(_e: Eight[3, 4])
+end
+"#;
+    let codes = typecheck_diag_codes(src_bad);
+    assert!(
+        codes.iter().any(|c| c == "E0706"),
+        "expected E0706 for 3 + 4 != 8; got: {:?}",
+        codes
+    );
+}
+
+#[test]
+fn class_without_where_clause_is_unaffected() {
+    let src = r#"
+class Buf[const N: USize]
+  data: Int
+end
+
+def take_any(_b: Buf[0])
+end
+"#;
+    let codes = typecheck_diag_codes(src);
+    assert!(
+        !codes.iter().any(|c| c == "E0706"),
+        "class without where clause should not emit E0706; got: {:?}",
+        codes
+    );
+}
+
 // ── Stage 9 parser cut: where-clause const predicates ───────────────
 //
 // B9 (S9 parser-only cut): the parser now accepts const predicates in

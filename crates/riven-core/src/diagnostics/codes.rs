@@ -159,6 +159,10 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E0705",
         title: "const-generic parameter type must be an integer or `Bool`",
     },
+    CodeInfo {
+        code: "E0706",
+        title: "where-clause const predicate is not satisfied at this instantiation",
+    },
     // ── Borrow checking + trait/impl (E1001-E1099) ───────────────────
     // The borrow checker maintains a parallel `ErrorCode` enum in
     // `borrow_check/errors.rs`; titles below mirror its `title()`

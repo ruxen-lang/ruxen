@@ -663,6 +663,11 @@ pub struct ClassDef {
     pub derive_traits: Vec<String>,
     /// Captured `##` doc comments preceding the class (P0.13).
     pub doc_comments: Vec<String>,
+    /// T2.02 S9: where-clause predicates (`where T: Display, N > 0`).
+    /// Trait bounds land on the matching generic param at resolve;
+    /// const predicates land on `ClassInfo::const_predicates` and are
+    /// evaluated at every `Ty::Class` instantiation.
+    pub where_clause: Option<WhereClause>,
     pub span: Span,
 }
 
@@ -683,6 +688,8 @@ pub struct StructDef {
     pub repr: Vec<String>,
     /// Captured `##` doc comments preceding the struct (P0.13).
     pub doc_comments: Vec<String>,
+    /// T2.02 S9: see `ClassDef::where_clause`.
+    pub where_clause: Option<WhereClause>,
     pub span: Span,
 }
 
@@ -697,6 +704,8 @@ pub struct EnumDef {
     pub derive_traits: Vec<String>,
     /// Captured `##` doc comments preceding the enum (P0.13).
     pub doc_comments: Vec<String>,
+    /// T2.02 S9: see `ClassDef::where_clause`.
+    pub where_clause: Option<WhereClause>,
     pub span: Span,
 }
 

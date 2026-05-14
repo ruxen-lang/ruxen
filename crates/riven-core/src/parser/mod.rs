@@ -904,6 +904,12 @@ impl Parser {
         } else {
             None
         };
+        // T2.02 S9: optional `where ...` clause between header and body.
+        let where_clause = if self.at(TokenKind::Where) {
+            Some(self.parse_where_clause())
+        } else {
+            None
+        };
         self.skip_newlines();
 
         let mut variants = Vec::new();
@@ -936,6 +942,7 @@ impl Parser {
             variants,
             derive_traits,
             doc_comments,
+            where_clause,
             span,
         }
     }
@@ -1058,6 +1065,12 @@ impl Parser {
         } else {
             None
         };
+        // T2.02 S9: optional `where ...` clause between header and body.
+        let where_clause = if self.at(TokenKind::Where) {
+            Some(self.parse_where_clause())
+        } else {
+            None
+        };
         self.skip_newlines();
 
         let mut fields = Vec::new();
@@ -1147,6 +1160,7 @@ impl Parser {
             derive_traits,
             repr: Vec::new(),
             doc_comments,
+            where_clause,
             span,
         }
     }
@@ -1494,6 +1508,12 @@ impl Parser {
         } else {
             None
         };
+        // T2.02 S9: optional `where ...` clause between header and body.
+        let where_clause = if self.at(TokenKind::Where) {
+            Some(self.parse_where_clause())
+        } else {
+            None
+        };
         self.skip_newlines();
 
         let mut fields = Vec::new();
@@ -1580,6 +1600,7 @@ impl Parser {
             inner_impls,
             derive_traits,
             doc_comments,
+            where_clause,
             span,
         }
     }

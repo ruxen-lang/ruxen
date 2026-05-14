@@ -2208,6 +2208,18 @@ impl Resolver {
         // generic_params (which needs `&mut self` for type-expr
         // resolution) before grabbing the mutable borrow of the symbol.
         let class_generic_param_infos = self.collect_generic_param_infos(&class.generic_params);
+        // T2.02 S9: lower where-clause const predicates so the
+        // instantiation site can evaluate them against the binding map.
+        let const_predicates: Vec<_> = class
+            .where_clause
+            .as_ref()
+            .map(|wc| {
+                wc.const_predicates
+                    .iter()
+                    .map(lower_const_predicate)
+                    .collect()
+            })
+            .unwrap_or_default();
         if let Some(def) = self.symbols.get_mut(def_id) {
             def.kind = DefKind::Class {
                 info: ClassInfo {
@@ -2220,7 +2232,7 @@ impl Resolver {
                     opt_out_sync,
                     manual_send,
                     manual_sync,
-                    const_predicates: vec![],
+                    const_predicates,
                 },
             };
         }
@@ -2277,6 +2289,17 @@ impl Resolver {
         // Update symbol table.  Pre-compute generic_params before
         // grabbing the mutable symbol borrow.
         let struct_generic_param_infos = self.collect_generic_param_infos(&s.generic_params);
+        // T2.02 S9: lower where-clause const predicates.
+        let const_predicates: Vec<_> = s
+            .where_clause
+            .as_ref()
+            .map(|wc| {
+                wc.const_predicates
+                    .iter()
+                    .map(lower_const_predicate)
+                    .collect()
+            })
+            .unwrap_or_default();
         if let Some(def) = self.symbols.get_mut(def_id) {
             def.kind = DefKind::Struct {
                 info: StructInfo {
@@ -2288,7 +2311,7 @@ impl Resolver {
                     opt_out_sync: false,
                     manual_send: false,
                     manual_sync: false,
-                    const_predicates: vec![],
+                    const_predicates,
                 },
             };
         }
@@ -4924,6 +4947,62 @@ impl Resolver {
             .map(|args| args.iter().map(|a| self.resolve_type_expr(a)).collect())
             .unwrap_or_default();
 
+        // T2.02 S9 enforcement: at every instantiation site with const
+        // args, walk the target type's where-clause const predicates
+        // against the binding map.  Any predicate that evaluates to
+        // false produces E0706.  Predicates that still reference
+        // unresolved params (e.g. instantiating with a parent's const
+        // param that hasn't been substituted yet) are skipped — they
+        // re-evaluate at the outer instantiation.
+        if let Some(class_def_id) = self.type_registry.get(&name).copied() {
+            // Build the binding map for this instantiation.
+            let predicates: Vec<crate::resolve::symbols::HirConstPredicate> = self
+                .symbols
+                .get(class_def_id)
+                .map(|def| match &def.kind {
+                    DefKind::Class { info } => info.const_predicates.clone(),
+                    DefKind::Struct { info } => info.const_predicates.clone(),
+                    DefKind::Enum { info } => info.const_predicates.clone(),
+                    _ => vec![],
+                })
+                .unwrap_or_default();
+            if !predicates.is_empty() {
+                let declared_params: Vec<crate::resolve::symbols::GenericParamInfo> = self
+                    .symbols
+                    .get(class_def_id)
+                    .map(|def| match &def.kind {
+                        DefKind::Class { info } => info.generic_params.clone(),
+                        DefKind::Struct { info } => info.generic_params.clone(),
+                        DefKind::Enum { info } => info.generic_params.clone(),
+                        _ => vec![],
+                    })
+                    .unwrap_or_default();
+                let mut bindings = std::collections::HashMap::new();
+                let empty_inner = std::collections::HashMap::new();
+                for (param, arg) in declared_params.iter().zip(generic_args.iter()) {
+                    if matches!(param.kind, GenericParamKind::Const { .. }) {
+                        if let Ty::ConstArg(ce) = arg {
+                            if let Ok(v) = ce.eval(&empty_inner) {
+                                bindings.insert(param.name.clone(), v);
+                            }
+                        }
+                    }
+                }
+                for pred in &predicates {
+                    if let Some(false) = eval_const_predicate(pred, &bindings) {
+                        self.diagnostics.push(Diagnostic::error_with_code(
+                            format!(
+                                "where-clause predicate is not satisfied at this instantiation of `{}`",
+                                name
+                            ),
+                            pred.span.clone(),
+                            "E0706",
+                        ));
+                    }
+                }
+            }
+        }
+
         // Check built-in generic types
         match name.as_str() {
             "Vec" => {
@@ -5498,6 +5577,73 @@ impl Resolver {
 /// The returned `Error` propagates through `eval` as
 /// `ConstEvalError::Malformed`; the call site decides whether to
 /// downgrade to a layout-zero placeholder or emit a hard diagnostic.
+/// T2.02 S9: lower a parser-level where-clause const predicate
+/// (e.g. `N > 0`, `N + M == 8`) into a HIR `HirConstPredicate` —
+/// `(lhs: ConstExpr, op: ConstPredOp, rhs: ConstExpr)`.
+///
+/// Recognised top-level shape: `BinaryOp { left, op: cmp, right }`
+/// where `cmp` ∈ `{Eq, NotEq, Lt, Gt, LtEq, GtEq}`.  Both sides
+/// lower via `lower_const_expr_from_expr` — so they can be literals,
+/// in-scope const-param references, or `+ - * /` arithmetic.
+///
+/// Anything else (top-level non-comparison, etc.) lowers to a
+/// sentinel: `0 == 1` which evaluates to false at every
+/// instantiation, with the original span — so users see a clear
+/// E0706 "predicate cannot be satisfied" rather than a silent
+/// no-op.
+fn lower_const_predicate(
+    pred: &ast::ConstPredicate,
+) -> crate::resolve::symbols::HirConstPredicate {
+    use crate::resolve::symbols::{ConstPredOp, HirConstPredicate};
+    let sentinel = || HirConstPredicate {
+        lhs: crate::hir::types::ConstExpr::Lit(0),
+        op: ConstPredOp::Eq,
+        rhs: crate::hir::types::ConstExpr::Lit(1),
+        span: pred.span.clone(),
+    };
+    match &pred.expr.as_ref().kind {
+        ast::ExprKind::BinaryOp { left, op, right } => {
+            let pred_op = match op {
+                ast::BinOp::Eq => ConstPredOp::Eq,
+                ast::BinOp::NotEq => ConstPredOp::Ne,
+                ast::BinOp::Lt => ConstPredOp::Lt,
+                ast::BinOp::LtEq => ConstPredOp::Le,
+                ast::BinOp::Gt => ConstPredOp::Gt,
+                ast::BinOp::GtEq => ConstPredOp::Ge,
+                _ => return sentinel(),
+            };
+            HirConstPredicate {
+                lhs: lower_const_expr_from_expr(left),
+                op: pred_op,
+                rhs: lower_const_expr_from_expr(right),
+                span: pred.span.clone(),
+            }
+        }
+        _ => sentinel(),
+    }
+}
+
+/// T2.02 S9: evaluate a lowered predicate against a binding map.
+/// Returns `Some(true)` / `Some(false)` when both sides eval cleanly;
+/// `None` when an unresolved param (or other eval failure) means
+/// "we can't tell yet" — caller skips the check in that case.
+fn eval_const_predicate(
+    pred: &crate::resolve::symbols::HirConstPredicate,
+    bindings: &std::collections::HashMap<String, u64>,
+) -> Option<bool> {
+    use crate::resolve::symbols::ConstPredOp;
+    let lhs = pred.lhs.eval(bindings).ok()?;
+    let rhs = pred.rhs.eval(bindings).ok()?;
+    Some(match pred.op {
+        ConstPredOp::Eq => lhs == rhs,
+        ConstPredOp::Ne => lhs != rhs,
+        ConstPredOp::Lt => lhs < rhs,
+        ConstPredOp::Le => lhs <= rhs,
+        ConstPredOp::Gt => lhs > rhs,
+        ConstPredOp::Ge => lhs >= rhs,
+    })
+}
+
 fn lower_const_expr_from_expr(expr: &ast::Expr) -> crate::hir::types::ConstExpr {
     use crate::hir::types::{ConstExpr, ConstOp};
     match &expr.kind {
