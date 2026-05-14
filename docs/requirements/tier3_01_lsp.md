@@ -129,7 +129,7 @@ already distinguishable and therefore serve as the basis for document
 symbols, workspace symbols, and the semantic-tokens mapping:
 
 ```
-Variable, Function, Class, Struct, Enum, EnumVariant, Trait,
+Variable, Function, Class, Struct, Enum, EnumVariant, Mixin,
 TypeAlias, Newtype, TypeParam, Module, Field, Method, Const,
 Param, SelfValue
 ```
@@ -338,11 +338,11 @@ Completion is the most complex capability. Split into four triggers:
    - Every built-in keyword that fits the context (heuristically, see below).
 2. **After `.`.** Offer:
    - Fields of the receiver's resolved type.
-   - Methods defined on the receiver's type (including via trait impls).
+   - Methods defined on the receiver's type (including via mixin includes).
    - Built-in methods from `typeck::infer::builtin_method_type` for
      primitive / stdlib types.
-3. **After `::` (if we adopt Rust-style paths) or after a module
-   qualifier.** Offer module contents.
+3. **After `.` for a module path** (Riven uses `.` everywhere — `std.io`,
+   `package.utils`).** Offer module contents.
 4. **After `(` or `,` inside a call.** Offer signature help instead
    of completion, but also filter completion by the expected parameter
    type.
@@ -506,14 +506,14 @@ handler boilerplate. **Very cheap first win.**
   (`resolve/symbols.rs:140`) and render it in `hover.rs:75` under the
   signature.
 - **Doc 03 (test framework).** LSP code-lens ("Run test", "Debug test")
-  above each `@[test]` function. Phase 1.5 — after the test framework
-  ships.
+  above each function whose body contains a `test` directive. Phase 1.5 —
+  after the test framework ships.
 - **Doc 02 (debugger).** LSP → DAP handoff. Not in scope for this doc;
   the debug experience lives in the editor's debug UI, which consumes
   DAP directly.
-- **Tier-1 doc 05 (derive).** LSP completion for `@[derive(...)]`
-  argument list needs to know the set of valid derivable traits. Once
-  tier-1 doc 05 lands, add a special case in completion's `.rs:context_for_attr_arg`.
+- **Tier-1 doc 05 (macros).** LSP completion for `include` argument
+  lists needs to know the set of structural mixins. Once tier-1 doc 05
+  lands, add a special case in completion's `.rs:context_for_include_arg`.
 
 ---
 

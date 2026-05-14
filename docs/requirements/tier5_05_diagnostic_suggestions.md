@@ -62,7 +62,7 @@ pub struct BorrowError {
 Use sites in `borrow_check/mod.rs`:
 
 - `:386` — "consider cloning the value: `{name}.clone`"
-- `:500`, `:525` — "consider declaring with `let mut {name}`"
+- `:500`, `:525` — "consider declaring with `var {name}`"
 - `:684`, `:715` — "ensure the previous borrow is no longer in use"
 - (empty vec in many cases)
 
@@ -264,7 +264,7 @@ Diagnostic::error(E1007, primary_label)
     .suggest_insert_after(
         let_span,
         "mut ",
-        "consider declaring with `let mut {name}`",
+        "consider declaring with `var {name}`",
         Applicability::MachineApplicable,
     )
 ```
@@ -406,7 +406,7 @@ Guidelines for the compiler's own code:
   - Adding `&` before an expression to make a borrow (`E1001` on
     some sites).
   - Renaming a typo to a known candidate with Levenshtein distance ≤ 1.
-  - Edition-migration rewrites (`Hash[K, V]` → `HashMap[K, V]`).
+  - Edition-migration rewrites (`Hash[K, V]` → `Map[K, V]`).
 - **MaybeIncorrect** when the replacement compiles but the user's
   intent is ambiguous, e.g.:
   - Suggesting `.clone()` for a move error (the user might have
@@ -490,14 +490,16 @@ Pick high-value sites first. Concrete targets (each is one PR):
    `MaybeIncorrect` (cloning is a semantic choice); "consider
    borrowing:" `MaybeIncorrect`.
 2. **E1006 assign-to-immutable** — "consider declaring with
-   `let mut`:" `MachineApplicable`. Edit: insert `mut ` at let-span.
+   `var`:" `MachineApplicable`. Edit: replace `let` with `var` at
+   binding-keyword span.
 3. **E1007 mut-borrow of immutable** — same as E1006.
 4. **Typo / unresolved-name (E0300-ish)** — Levenshtein candidate
    search over symbols in scope. `MachineApplicable` for distance ≤ 1,
    else `MaybeIncorrect`.
 5. **Private-item access (E0603-ish)** — "make `X` public:"
-   `MaybeIncorrect`. Edit: insert `pub ` before the `def`/`class`
-   keyword at the target's definition span.
+   `MaybeIncorrect`. Edit: remove the `private` section marker that
+   gates the target, or move the target above one (visibility is
+   section-marker-based per tier5_01 §3.2).
 6. **Type mismatch (E0500-ish)** — if the mismatch is `T` vs `&T`,
    "consider borrowing:" `MachineApplicable`. If it's `T` vs
    `Option[T]`, "consider wrapping with `Some(...)`:"
@@ -511,7 +513,7 @@ Each suggestion is one PR with a fixture.
 2. `riven-lsp/src/server.rs` implements
    `textDocument/codeAction`.
 3. VSCode integration-test (manual): write a program with E1006, hit
-   `Cmd-.`, assert `let mut` fix applies.
+   `Cmd-.`, assert the `let` → `var` fix applies.
 
 ### 6.5 Phase 5e — JSON output + `riven fix` (2 weeks)
 
@@ -528,18 +530,19 @@ Each suggestion is one PR with a fixture.
 - **Tier 5 doc 02 (editions):** `riven fix --edition=YYYY` is the
   primary consumer. Edition migration is "apply all
   MachineApplicable suggestions and re-compile."
-- **Tier 5 doc 03 (attributes):** deprecation warnings may emit
-  suggestions (e.g. `@[deprecated(note = "use `new`")]` → "replace
-  `old_name` with `new_name`", `MaybeIncorrect` by default because
-  we don't know call-site context).
+- **Tier 5 doc 03 (directives):** deprecation warnings may emit
+  suggestions (e.g. an in-body `deprecated note: "use `new`"`
+  directive → "replace `old_name` with `new_name`", `MaybeIncorrect`
+  by default because we don't know call-site context).
 - **Tier 5 doc 04 (error codes):** the `Diagnostic` carrier is shared;
   the JSON format emits both together.
 - **Tier 3 LSP:** this doc is effectively the LSP story for code
   actions. The LSP pipeline already handles diagnostics; code
   actions are the remaining big win.
-- **Tier 1 B2 / derive:** the derive pipeline's errors (e.g. "Copy
-  requires Clone") get machine-applicable suggestions: "add `Clone`
-  to the derive list."
+- **Tier 1 B2 / auto-implicit-include:** the implicit-include
+  pipeline's errors (e.g. "`Copy` requires `Clone`") get machine-
+  applicable suggestions: "add `Clone` to the explicit `include`
+  list."
 - **Tier 2 (parser macros, if any):** macro-generated suggestions
   must carry the expansion context. Deferred.
 

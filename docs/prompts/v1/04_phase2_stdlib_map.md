@@ -24,8 +24,8 @@ vocabulary is `Map` / `Set`).
 
 ## TDD
 
-- Unit tests in `crates/riven-core/tests/stdlib_hashmap.rs` and
-  `stdlib_hashset.rs`.
+- Unit tests in `crates/riven-core/tests/stdlib_map.rs` and
+  `stdlib_set.rs`.
 - E2E fixtures `5NN_hashmap_<op>.rvn` and `5NN_hashset_<op>.rvn`
   (fixture-name slugs preserved from the pre-rename era; surface
   vocabulary in fixture *content* is `Map` / `Set`).
@@ -60,9 +60,9 @@ vocabulary is `Map` / `Set`).
       (`50[1-9]_hashmap_*.rvn`, `52[1-7]_hashset_*.rvn` — legacy
       fixture slugs preserved pending the internal sweep) and
       typecheck-level pin tests
-      (`crates/riven-core/tests/stdlib_hashmap.rs`,
-      `crates/riven-core/tests/stdlib_hashset.rs`,
-      `crates/riven-core/tests/stdlib_hashmap_negatives.rs`).
+      (`crates/riven-core/tests/stdlib_map.rs`,
+      `crates/riven-core/tests/stdlib_set.rs`,
+      `crates/riven-core/tests/stdlib_map_negatives.rs`).
 - [x] Per-element drop selector for `Map[String, V]` /
       `Set[String]` — landed in batch 2 (commit 45b0e33). Five
       drop helpers (`riven_hash_drop_string_v`,
@@ -77,13 +77,13 @@ vocabulary is `Map` / `Set`).
       landed in batch 3. New `riven_hash_index` dispatch in
       `mir/lower.rs` Index handler; surface type changed from
       `Option[V]` to `V` in `typeck/infer.rs::infer_index_ty`.
-      Fixture: `tests/release-e2e/cases/509_hashmap_index_op.rvn`.
+      Fixture: `tests/release-e2e/cases/509_map_index_op.rvn`.
 - [x] Negative tests for non-Hash key constraint — batch 3.
       Resolver now rejects `Map[Array[Int], V]` /
       `Set[Array[Int]]` and every nested-compound variant at the
       type-construction site via `E0615`
       (`resolve/mod.rs::ty_is_valid_hash_key`). Six pin tests in
-      `crates/riven-core/tests/stdlib_hashmap_negatives.rs`.
+      `crates/riven-core/tests/stdlib_map_negatives.rs`.
 - [x] `Entry[K,V]` API (`entry(K).or_insert(V) /
       .or_insert_with { || V }`) — landed via single-MIR-unit chain
       detection. Both typeck (`infer.rs` MethodCall handler) and
@@ -94,10 +94,10 @@ vocabulary is `Map` / `Set`).
       simplification — Rust's `&mut V` return required pointer-
       dispatch infrastructure deferred to v2). Splitting the chain
       across statements is rejected by typeck with a clear error.
-      Pin tests in `crates/riven-core/tests/stdlib_hashmap.rs`
-      (positive) + `stdlib_hashmap_negatives.rs` (rejection); e2e
-      fixtures `510_hashmap_entry_or_insert.rvn` and
-      `511_hashmap_entry_or_insert_with.rvn`.
+      Pin tests in `crates/riven-core/tests/stdlib_map.rs`
+      (positive) + `stdlib_map_negatives.rs` (rejection); e2e
+      fixtures `510_map_entry_or_insert.rvn` and
+      `511_map_entry_or_insert_with.rvn`.
 - [x] `cargo test --workspace` green — 0 failed across all 30+ test
       binaries including the new fixtures. The release-e2e suite
       runs every `tests/release-e2e/cases/*.rvn` end-to-end and

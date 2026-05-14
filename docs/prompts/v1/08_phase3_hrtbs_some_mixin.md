@@ -2,9 +2,7 @@
 
 **Depends on:** prompt 07.
 **Reads:** `docs/requirements/tier2_03_hrtbs.md`,
-`docs/requirements/tier2_04_impl_trait_and_specialization.md`
-(requirements doc slug pending separate rename — content concerns
-the `some Mixin` feature).
+`docs/requirements/tier2_04_some_mixin_and_specialization.md`.
 
 ## A. Higher-ranked mixin bounds (HRTBs)
 

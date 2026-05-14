@@ -7,7 +7,7 @@ WebAssembly is the single target with the largest payoff-to-effort ratio in tier
 This document specifies two levels of WASM support:
 
 - **`wasm32-unknown-unknown`** — minimum viable WASM. No libc, no syscalls, no filesystem. Pure computation. Suitable for web and plugin embedding.
-- **`wasm32-wasi`** — WASI Preview 1 support. The `runtime.c` largely compiles as-is against `wasi-libc`, so `std::fs`, `std::io::stdin`, `std::env::args` work.
+- **`wasm32-wasi`** — WASI Preview 1 support. The `runtime.c` largely compiles as-is against `wasi-libc`, so `std.fs`, `std.io.stdin`, `std.env.args` work.
 
 The Component Model + WIT (WebAssembly Interface Types) story is explicitly **future work** — a paragraph here and a pointer, but no implementation budget in tier 4.
 
@@ -43,7 +43,7 @@ For `wasm32-wasi`:
 
 For `wasm32-wasi`, `wasi-libc` provides `stdio.h`, `stdlib.h`, `string.h` so the runtime *mostly* works. `stderr` is file descriptor 2 by WASI convention; `fprintf(stderr, …)` does the right thing.
 
-For `wasm32-unknown-unknown`, we need either (a) a tiny allocator inside the runtime (e.g. bump or `dlmalloc`), (b) to go no-alloc (impossible for `Vec`, `String`), or (c) to import an `alloc`/`free` pair from the host.
+For `wasm32-unknown-unknown`, we need either (a) a tiny allocator inside the runtime (e.g. bump or `dlmalloc`), (b) to go no-alloc (impossible for `Array`, `String`), or (c) to import an `alloc`/`free` pair from the host.
 
 ### 2.4 Entry points
 
@@ -58,7 +58,7 @@ The current compiler emits a function literally called `main`, which is not a re
 
 `tier1_00_roadmap.md` B5 documents that string literals flow into `Ty::String` slots as raw pointers. On wasm32, pointers are 32-bit (unlike the 64-bit `i64` slot used in the int64-erased runtime). Every place that currently assumes `sizeof(void*) == sizeof(int64_t)` must be triaged before wasm32-unknown-unknown works.
 
-Specifically, `runtime.c:220-225` (Vec stores `int64_t` elements per tier-1 §01 2.1):
+Specifically, `runtime.c:220-225` (Array stores `int64_t` elements per tier-1 §01 2.1):
 
 ```c
 typedef struct {
@@ -68,7 +68,7 @@ typedef struct {
 } RivenVec;
 ```
 
-`int64_t` on wasm32 is still 64 bits — wasm32 means 32-bit *pointers*, not 32-bit integers. So Vec-of-int64 works. But `Vec<String>` stores `char*` pointers in 64-bit slots; on wasm32, half of each slot is padding. That wastes memory and breaks any runtime code that casts `int64_t` → pointer assuming the pointer occupies the low bits (endianness trap on big-endian wasm, though wasm is LE).
+`int64_t` on wasm32 is still 64 bits — wasm32 means 32-bit *pointers*, not 32-bit integers. So `Array[Int64]` works. But `Array[String]` stores `char*` pointers in 64-bit slots; on wasm32, half of each slot is padding. That wastes memory and breaks any runtime code that casts `int64_t` → pointer assuming the pointer occupies the low bits (endianness trap on big-endian wasm, though wasm is LE).
 
 Recommendation: introduce `riven_slot_t` in the runtime, `typedef` to `intptr_t`. It's `int32_t` on wasm32 and `int64_t` on 64-bit targets. Tier-1 §10 R5 already flags this.
 
@@ -78,10 +78,10 @@ Recommendation: introduce `riven_slot_t` in the runtime, `typedef` to `intptr_t`
 
 1. `riven build --target wasm32-unknown-unknown` produces a valid `.wasm` module.
 2. `riven build --target wasm32-wasi` produces a WASI-compatible `.wasm` executable runnable under `wasmtime run <file>.wasm`.
-3. `@[wasm_export("name")]` on a `pub def` exports it to the host.
-4. `@[wasm_import("module", "name")]` in an `extern "C"` block imports a host function.
+3. Body-level `wasm_export("name")` directive on a public `def` exports it to the host.
+4. Body-level `wasm_import("module", "name")` directive in a `lib "..." ... end` block imports a host function.
 5. A minimal in-runtime allocator for `wasm32-unknown-unknown` (bump or `dlmalloc`).
-6. `std::io::println` works on WASI (writes to fd 1 via `fd_write`).
+6. `std.io.println` works on WASI (writes to fd 1 via `fd_write`).
 7. Example in `examples/04-wasm-hello/` (doc 07) demonstrating the full pipeline + an HTML harness.
 8. `slot_t` plumbing so `sizeof(riven_slot_t) == sizeof(void*)`.
 
@@ -107,18 +107,18 @@ riven build --target wasm32-wasi [--release]
 
 Output: `target/wasm32-<env>/<profile>/<pkg-name>.wasm`.
 
-### 4.2 Source annotations
+### 4.2 Source directives
 
 **Exports** (wasm32-unknown-unknown or wasi):
 
 ```riven
-@[wasm_export("add")]
-pub def add(a: Int32, b: Int32) -> Int32
+def add(a: Int32, b: Int32) -> Int32
+  wasm_export "add"
   a + b
 end
 
-@[wasm_export]                              # name defaults to the function's name
-pub def greet(name: *UInt8, len: USize) -> *UInt8
+def greet(name: *UInt8, len: USize) -> *UInt8
+  wasm_export                               # name defaults to the function's name
   # ... returns a pointer the caller must free via alloc/free imports
 end
 ```
@@ -126,18 +126,18 @@ end
 **Imports** (host-provided):
 
 ```riven
-@[wasm_import("env", "console_log")]
-extern "wasm"                               # new ABI string; "C" is the existing one
+lib "wasm:env"                              # new ABI link string; "c" is the existing one
   def console_log(ptr: *UInt8, len: USize)
-end
+    wasm_import "env", "console_log"
+  end
 
-@[wasm_import("env", "now_ms")]
-extern "wasm"
   def now_ms -> Int64
+    wasm_import "env", "now_ms"
+  end
 end
 ```
 
-For `wasm32-wasi`, the WASI imports are *implicit* and come from a curated set in `std::wasi::*` (new hidden module). The user does not manually write WASI imports; `std::io::println`, `std::fs::read_to_string`, `std::env::args` use them internally.
+For `wasm32-wasi`, the WASI imports are *implicit* and come from a curated set in `std.wasi.*` (new hidden module). The user does not manually write WASI imports; `std.io.println`, `std.fs.read_to_string`, `std.env.args` use them internally.
 
 ### 4.3 Manifest
 
@@ -180,7 +180,7 @@ LLVM 18's wasm32 backend emits a WebAssembly object (a `.wasm` with a `reloc` se
 In `codegen/llvm/mod.rs:47-61`, the `CodeType` passed to `create_target_machine` is already `CodeModel::Default`; for wasm that's correct. Set:
 
 - `RelocMode::PIC` (existing) — required for wasm.
-- `--export=<name>` linker args per `@[wasm_export]`. Collected in the MIR program (new `MirProgram::wasm_exports: Vec<String>` field).
+- `--export=<name>` linker args per in-body `wasm_export` directive. Collected in the MIR program (new `MirProgram::wasm_exports: Vec<String>` field).
 - `--no-entry` for `wasm32-unknown-unknown` (no `_start` — it's a reactor module).
 - `--export-dynamic` to keep exports from being stripped.
 - `--import-memory` (optional — discussion §9).
@@ -192,7 +192,7 @@ In `codegen/llvm/mod.rs:47-61`, the `CodeType` passed to `create_target_machine`
 
 Easiest path for `wasm32-wasi`: link with `wasi-libc`'s crt0 and let it provide `_start`, which calls the user's `main`. No compiler change needed.
 
-For `wasm32-unknown-unknown`: the current codegen emits a `main` function symbol; on wasm linker, with `--no-entry` and no `_start`, this is harmless — `main` becomes an unused internal function. Users that want their `main` to be callable add `@[wasm_export("main")]`.
+For `wasm32-unknown-unknown`: the current codegen emits a `main` function symbol; on wasm linker, with `--no-entry` and no `_start`, this is harmless — `main` becomes an unused internal function. Users that want their `main` to be callable add an in-body `wasm_export "main"` directive.
 
 ### 5.4 Runtime for `wasm32-unknown-unknown`
 
@@ -208,7 +208,7 @@ Replacements needed:
 | `strlen`, `memcpy`, `memset` | libc | compiler-rt / Clang builtins (automatic when compiled with `--target=wasm32-unknown-unknown`) |
 | `printf` family | libc | Drop — only used indirectly; replace with explicit byte-length functions |
 
-Recommendation: ship `dlmalloc` (well-tested, used by Rust's wasm32 allocator). ~2KB of wasm binary size. Users can opt into a smaller `wee_alloc`-style allocator later. Bump-only is too restrictive for `Vec.pop` + reallocation scenarios.
+Recommendation: ship `dlmalloc` (well-tested, used by Rust's wasm32 allocator). ~2KB of wasm binary size. Users can opt into a smaller `wee_alloc`-style allocator later. Bump-only is too restrictive for `Array.pop` + reallocation scenarios.
 
 ### 5.5 Runtime for `wasm32-wasi`
 
@@ -224,9 +224,9 @@ $WASI_SDK_PATH/bin/clang --target=wasm32-wasi \
 
 `argv`: `wasi-libc` fills it via `__wasi_args_get`; the existing tier-1 plumbing (`riven_env_init(argc, argv)` in tier1_01_stdlib.md §7.6) works unchanged.
 
-### 5.6 `@[wasm_export]` / `@[wasm_import]` lowering
+### 5.6 `wasm_export` / `wasm_import` lowering
 
-- Parser: extend `parse_attributes` (`parser/mod.rs:1572-1610`) to accept `@[wasm_export("name")]` and `@[wasm_import("module", "name")]`. Keep shape compatible with the existing attribute machinery.
+- Parser: extend `parse_attributes` (`parser/mod.rs:1572-1610`) to accept body-level `wasm_export "name"` and `wasm_import "module", "name"` directives. Keep shape compatible with the existing directive machinery.
 - Typeck / HIR: annotate the `HirFunction` with `export_name: Option<String>` and `import_source: Option<(String, String)>`.
 - MIR: propagate. `MirProgram` grows `pub wasm_exports: Vec<(String, String)>` (Riven symbol, wasm export name).
 - LLVM emit: for exports, set `LLVMSetLinkage(fn, LLVMExternalLinkage)` + `LLVMSetDLLStorageClass` (the wasm attribute equivalent) and emit `wasm.custom.attributes = ["used"]`. For imports, declare the function with `LLVMLinkageExternalWeak` and attach the `wasm-import-module` + `wasm-import-name` attributes.
@@ -238,24 +238,24 @@ $WASI_SDK_PATH/bin/clang --target=wasm32-wasi \
 - `wasm32-wasi`: same, plus WASI imports for fs/io.
 - Stack: wasm32-ld defaults to 1MB stack. Sufficient for v1.
 
-### 5.8 `std::wasm` module (host API surface)
+### 5.8 `std.wasm` module (host API surface)
 
-New hidden module. Users don't write `@[wasm_import]` directly; they call:
+New hidden module. Users don't write `wasm_import` directives directly; they call:
 
 ```riven
-use std::wasm
-std::wasm::debug_log("hello")                 # wraps @[wasm_import("env", "debug_log")]
-std::wasm::memory_size_bytes() -> USize
-std::wasm::memory_grow_pages(n: USize) -> USize
+use std.wasm
+std.wasm.debug_log("hello")                 # wraps in-body wasm_import("env", "debug_log")
+std.wasm.memory_size_bytes() -> USize
+std.wasm.memory_grow_pages(n: USize) -> USize
 ```
 
-Each entry is a thin Riven wrapper over an `extern "wasm"` declaration. Users that want ad-hoc imports do it at the FFI level.
+Each entry is a thin Riven wrapper over a `lib "wasm:..."` declaration. Users that want ad-hoc imports do it at the FFI level.
 
 ### 5.9 `slot_t` plumbing (tier-1 pre-work)
 
-In `runtime.c`, replace `int64_t` slots with `intptr_t` throughout Vec/Hash/Set/`riven_vec_push`/etc. This is a ~50-line churn. Required before wasm32 vector operations are correct; compatible with host 64-bit as `intptr_t` == `int64_t` there.
+In `runtime.c`, replace `int64_t` slots with `intptr_t` throughout Array/Map/Set/`riven_vec_push`/etc. This is a ~50-line churn. Required before wasm32 array operations are correct; compatible with host 64-bit as `intptr_t` == `int64_t` there.
 
-This is tier-1 work (flagged there under tier1_00 §10 R5). If tier 4.03 ships before tier-1 resolves R5, we carry the `int64_t`-only wasm32 restriction and type-error any `Vec.map` that would store a pointer-sized element.
+This is tier-1 work (flagged there under tier1_00 §10 R5). If tier 4.03 ships before tier-1 resolves R5, we carry the `int64_t`-only wasm32 restriction and type-error any `Array.map` that would store a pointer-sized element.
 
 ### 5.10 WIT / Component Model (future work)
 
@@ -268,7 +268,7 @@ For Riven this would mean:
 
 - A `[wit]` table in `Riven.toml` pointing at `.wit` files.
 - A `riven wit bindgen` subcommand that generates Riven-side stubs.
-- `@[wit_export("interface-name", "method")]` attributes.
+- Body-level `wit_export("interface-name", "method")` directives.
 
 Explicitly deferred. Call out in the book that the Component Model will be Riven's v2 story for WASM ABI stability.
 
@@ -279,13 +279,13 @@ Explicitly deferred. Call out in the book that the Component Model will be Riven
 - `crates/riven-core/runtime/runtime_wasm.c` — the `wasm32-unknown-unknown` subset with bundled `dlmalloc` and import-based `console_log`.
 - `crates/riven-core/runtime/dlmalloc.c` + `dlmalloc.h` — vendored from the canonical `ftp.gnu.org/…/dlmalloc.c` (BSD-0 license, public domain).
 - `crates/riven-core/src/codegen/wasm.rs` — wasm-specific codegen helpers: export/import attribute emission, linker invocation.
-- `share/riven/std/wasm.rvn` — `std::wasm` module (exposed once stdlib-as-source lands per tier 1 §7.8).
-- `share/riven/std/wasi/` — `std::wasi` hidden module with `fd_write`, `args_get`, etc., imports.
+- `share/riven/std/wasm.rvn` — `std.wasm` module (exposed once stdlib-as-source lands per tier 1 §7.8).
+- `share/riven/std/wasi/` — `std.wasi` hidden module with `fd_write`, `args_get`, etc., imports.
 - `examples/04-wasm-hello/` — see doc 07.
 
 ### Touched files
 
-- `crates/riven-core/src/parser/mod.rs:1572-1610` — attribute parser: accept `wasm_export`, `wasm_import`.
+- `crates/riven-core/src/parser/mod.rs:1572-1610` — directive parser: accept `wasm_export`, `wasm_import`.
 - `crates/riven-core/src/parser/ast.rs:770-` — `LinkAttr` etc. grow a `WasmImport` / `WasmExport` variant.
 - `crates/riven-core/src/hir/nodes.rs` — `HirFunction` gains `wasm_export_name: Option<String>`, `wasm_import: Option<(String, String)>`.
 - `crates/riven-core/src/mir/nodes.rs:19-26` — `MirProgram` gains `wasm_exports: Vec<(String, String)>`, `wasm_imports: Vec<FfiFuncDecl>` (wasm-flavored).
@@ -307,8 +307,8 @@ Explicitly deferred. Call out in the book that the Component Model will be Riven
 
 - **Tier 4.02 cross-compilation.** Hard dependency. Every piece of this doc assumes `--target` works.
 - **Tier 4.04 no_std.** `wasm32-unknown-unknown` is essentially a no_std target with an allocator. The `runtime_wasm.c` is very close to what doc 04's `runtime_core.c` would be — worth unifying.
-- **Tier 1 stdlib.** `std::io`, `std::env`, `std::fs` on wasi are wrappers over WASI syscalls (via `wasi-libc`). The existing `runtime.c` entries for `fopen`/`fread`/`fwrite` work unmodified. On `wasm32-unknown-unknown`, these modules are `@[cfg(not(target_arch = "wasm32"))]` gated and unavailable.
-- **Tier 1 concurrency.** Not supported on wasm32 in v1. `std::thread::spawn` is `@[cfg(not(target_arch = "wasm32"))]`. Raising this restriction requires the WASI threads proposal + shared-memory support.
+- **Tier 1 stdlib.** `std.io`, `std.env`, `std.fs` on wasi are wrappers over WASI syscalls (via `wasi-libc`). The existing `runtime.c` entries for `fopen`/`fread`/`fwrite` work unmodified. On `wasm32-unknown-unknown`, these modules are gated by an in-body `cfg(not(target_arch = "wasm32"))` directive and unavailable.
+- **Tier 1 concurrency.** Not supported on wasm32 in v1. `std.thread.spawn` carries an in-body `cfg(not(target_arch = "wasm32"))` directive. Raising this restriction requires the WASI threads proposal + shared-memory support.
 - **Tier 1 async.** Single-threaded `block_on` (tier1_03 §8 phase 3c) is fine on wasm. Async I/O via WASI pollables is a future integration.
 - **Tier 4.05 cbindgen.** Irrelevant for wasm — cbindgen emits C headers, wasm consumers use WIT or raw imports.
 - **Tier 4.06 CI.** A `wasm32-wasi` matrix entry that runs `wasmtime run` on the compiled artifact is the strongest possible smoke test.
@@ -327,16 +327,16 @@ Explicitly deferred. Call out in the book that the Component Model will be Riven
 ### Phase 3b — wasm32-unknown-unknown MVP (2 weeks)
 
 1. `runtime_wasm.c` with `dlmalloc` + imported `debug_log`.
-2. `@[wasm_export]` / `@[wasm_import]` attribute parsing + lowering.
+2. In-body `wasm_export` / `wasm_import` directive parsing + lowering.
 3. LLVM emit: attach wasm-specific attributes.
 4. `wasm-ld --no-entry --export-dynamic …` invocation.
-5. **Exit:** a Riven program with `@[wasm_export("fib")] pub def fib(n: Int32) -> Int32` produces a `.wasm` that the example HTML page in `examples/04-wasm-hello/` loads via `WebAssembly.instantiate` and invokes from JS, returning the correct value.
+5. **Exit:** a Riven program with `def fib(n: Int32) -> Int32` + in-body `wasm_export "fib"` produces a `.wasm` that the example HTML page in `examples/04-wasm-hello/` loads via `WebAssembly.instantiate` and invokes from JS, returning the correct value.
 
-### Phase 3c — std::wasm module (0.5 week)
+### Phase 3c — std.wasm module (0.5 week)
 
-1. `std::wasm::debug_log`, `memory_size_bytes`, `memory_grow_pages`.
-2. `@[cfg(target_arch = "wasm32")]` gating of wasm-only stdlib items.
-3. **Exit:** `use std::wasm; std::wasm::debug_log("hi")` works in a wasm32-unknown-unknown build.
+1. `std.wasm.debug_log`, `memory_size_bytes`, `memory_grow_pages`.
+2. In-body `cfg(target_arch = "wasm32")` gating of wasm-only stdlib items.
+3. **Exit:** `use std.wasm; std.wasm.debug_log("hi")` works in a wasm32-unknown-unknown build.
 
 ### Phase 3d — CI + examples (0.5 week)
 
@@ -364,9 +364,9 @@ Explicitly deferred. Call out in the book that the Component Model will be Riven
 7. **Binary size.** Riven's wasm output will be larger than Rust's — our runtime brings a C malloc + stdlib shims. Recommend: document that `--release` + `wasm-opt -Oz` (user-run) brings it in line with Rust; budget ~30KB for "Hello World" on `wasm32-unknown-unknown`.
 8. **Debug info.** `wasmtime` has limited DWARF support on wasm. Recommend: emit DWARF in debug builds anyway; it's useful in browsers via the DevTools C/C++ DevTools extension.
 9. **Floating-point traps.** Wasm2 SIMD has `f32x4.div`-style traps on NaN in some runtimes. Recommend: document; no action.
-10. **Reactor vs command module conflict.** A user might want a wasm32-wasi reactor (no `_start`, only exports). Recommend: support via `@[package.wasm-crate-type = "cdylib"]` manifest key → pass `--no-entry` to `wasm-ld` even on wasi.
+10. **Reactor vs command module conflict.** A user might want a wasm32-wasi reactor (no `_start`, only exports). Recommend: support via `[package] wasm-crate-type = "cdylib"` manifest key → pass `--no-entry` to `wasm-ld` even on wasi.
 11. **Imported memory.** If the host provides memory, Riven's allocator needs to start from a nonzero offset to avoid clobbering the host's data. Recommend: v1 always uses `--export-memory` (Riven owns memory); `--import-memory` deferred.
-12. **`intptr_t` on wasm32 is `i32`.** Anywhere the codegen assumes 64-bit slots breaks. Tier-1 R5 (slot erasure) must land before wasm32 has a correct Vec of pointers. Gate wasm32 release-tier behind R5.
+12. **`intptr_t` on wasm32 is `i32`.** Anywhere the codegen assumes 64-bit slots breaks. Tier-1 R5 (slot erasure) must land before wasm32 has a correct `Array` of pointers. Gate wasm32 release-tier behind R5.
 
 ## 10. Acceptance Criteria
 
@@ -374,21 +374,21 @@ Phase 3a — wasm32-wasi:
 
 - [ ] `riven build --target wasm32-wasi` on a hello-world produces a valid `.wasm` file (validated with `wasm-validate` if available, else via `wasmtime --help | head`).
 - [ ] `wasmtime run target/wasm32-wasi/debug/hello.wasm` prints "Hello, Riven!" to stdout.
-- [ ] `wasmtime run --dir=. target/wasm32-wasi/debug/cat.wasm -- README.md` reads a file from the current directory and prints its contents (requires tier-1 `std::fs::read_to_string` and `std::env::args`).
+- [ ] `wasmtime run --dir=. target/wasm32-wasi/debug/cat.wasm -- README.md` reads a file from the current directory and prints its contents (requires tier-1 `std.fs.read_to_string` and `std.env.args`).
 - [ ] Binary size of hello-world on `wasm32-wasi` is ≤ 200KB in `--release`.
 
 Phase 3b — wasm32-unknown-unknown:
 
-- [ ] `riven build --target wasm32-unknown-unknown` on a program with `@[wasm_export("add")] pub def add(a: Int32, b: Int32) -> Int32` produces a `.wasm` whose exports include `add` (validated via `wasm-objdump -x`).
+- [ ] `riven build --target wasm32-unknown-unknown` on a program with `def add(a: Int32, b: Int32) -> Int32` + in-body `wasm_export "add"` produces a `.wasm` whose exports include `add` (validated via `wasm-objdump -x`).
 - [ ] Loading that `.wasm` in Node.js via `WebAssembly.instantiate` and calling `instance.exports.add(2, 3)` returns `5`.
-- [ ] A program using `std::wasm::debug_log("hello")` compiled for wasm32-unknown-unknown imports `env.console_log` (validated via `wasm-objdump -x`).
-- [ ] `@[wasm_import("host", "now_ms")] extern "wasm" def now_ms -> Int64 end` declares an import on module `host` with field `now_ms` of signature `() -> i64`.
+- [ ] A program using `std.wasm.debug_log("hello")` compiled for wasm32-unknown-unknown imports `env.console_log` (validated via `wasm-objdump -x`).
+- [ ] A `lib "wasm:host"` block containing `def now_ms -> Int64` with an in-body `wasm_import "host", "now_ms"` directive declares an import on module `host` with field `now_ms` of signature `() -> i64`.
 - [ ] Binary size of `fib(n)` on `wasm32-unknown-unknown` is ≤ 50KB in `--release`.
 
-Phase 3c — std::wasm:
+Phase 3c — std.wasm:
 
-- [ ] `use std::wasm` works in a wasm32-unknown-unknown build and fails to resolve on x86_64 (`@[cfg(target_arch = "wasm32")]` gating).
-- [ ] `std::wasm::memory_size_bytes` returns a multiple of 65536.
+- [ ] `use std.wasm` works in a wasm32-unknown-unknown build and fails to resolve on x86_64 (in-body `cfg(target_arch = "wasm32")` gating).
+- [ ] `std.wasm.memory_size_bytes` returns a multiple of 65536.
 
 Phase 3d — CI + examples:
 

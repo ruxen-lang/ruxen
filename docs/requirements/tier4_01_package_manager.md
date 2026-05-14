@@ -193,7 +193,7 @@ rustls = { version = "0.22", optional = true }
 http = { version = "1.2", default-features = false }
 ```
 
-`#[cfg(feature = "ansi")]` is conceptually available in Riven as `@[cfg(feature = "ansi")]` attribute on items. Resolution: the existing `@[link]`/`@[repr]` attribute machinery (`parser/mod.rs:1572-1610`) is extended to accept `cfg`. Items whose `cfg` evaluates to false are dropped in the resolver before type checking.
+`#[cfg(feature = "ansi")]` is conceptually available in Riven as a body-level `cfg(feature = "ansi")` directive on items. Resolution: the existing directive machinery (`parser/mod.rs:1572-1610`) is extended to accept `cfg`. Items whose `cfg` evaluates to false are dropped in the resolver before type checking.
 
 **Target-specific dependencies:**
 
@@ -391,7 +391,7 @@ This is a *pure* resolver: no backtracking needed because we pick greedily per p
 ### Touched files
 
 - `crates/riven-cli/src/manifest.rs:7-21` — add `Option<Workspace>`, `BTreeMap<String, Feature>`, `BTreeMap<String, TargetSpec>`, `BTreeMap<String, RegistryConfig>`.
-- `crates/riven-cli/src/manifest.rs:61-74` — `DependencyDetail` grows `optional: bool`, `default_features: bool`, `features: Vec<String>`, `registry: Option<String>`, `package: Option<String>` (for rename).
+- `crates/riven-cli/src/manifest.rs:61-74` — `DependencyDetail` grows `optional: bool`, `default_features: bool`, `features: Vec<String>`, `registry: Option<String>`, `package: Option<String>` (for rename — internal Rust field).
 - `crates/riven-cli/src/manifest.rs:120-150` — `Manifest::load` delegates to `Workspace::load` when a `[workspace]` table is found.
 - `crates/riven-cli/src/resolve_deps.rs:33-69` — `resolve()` takes a `Workspace` + `FeatureSet`, builds a registry-aware graph, picks versions.
 - `crates/riven-cli/src/resolve_deps.rs:100-108, 116-120` — remove the "registry dependencies are not yet supported" errors.
@@ -400,7 +400,7 @@ This is a *pure* resolver: no backtracking needed because we pick greedily per p
 - `crates/riven-cli/src/build.rs:21-118` — `build` accepts `-p`, `--workspace`, `--features`, threads through to `compile_piece`.
 - `crates/riven-cli/src/cli.rs:24-114` — add subcommands from §4.2.
 - `crates/riven-core/src/parser/mod.rs:1572-1610` — `parse_attributes` grows a `cfg` case and evaluates conditional compilation.
-- `crates/riven-core/src/resolve/mod.rs` — items with `@[cfg(…)]` evaluating to false are skipped at registration.
+- `crates/riven-core/src/resolve/mod.rs` — items with body-level `cfg(...)` evaluating to false are skipped at registration.
 - `crates/riven-cli/Cargo.toml:17-24` — add `reqwest` (TLS feature), `pubgrub` (semver resolver), `tar` + `flate2` (tarball), `rpassword` (publish token prompt).
 
 ### Tests
@@ -417,8 +417,8 @@ This is a *pure* resolver: no backtracking needed because we pick greedily per p
 - **Tier 1 stdlib.** §7.8 of `tier1_01_stdlib.md` proposes shipping stdlib as Riven source in `share/riven/std/`. If stdlib grows into a proper `std` piece inside the compiler workspace, workspaces (§5.1) are prerequisite.
 - **Tier 2 codegen / Tier 3 borrow checker.** `[features]` interacts with type-checking: items gated by inactive features must be pruned *before* resolve/typeck so that their `use`s don't produce unresolved-name errors. This is the `parser/mod.rs:1572-1610` → `resolve/mod.rs` plumbing.
 - **Tier 4.02 cross-compilation.** `[target.<triple>.dependencies]` lives in the manifest (§4.1). The target triple the user passes via `--target` (doc 02 §4) is the input to `cfg(...)` evaluation (doc 02 §5.1).
-- **Tier 4.03 WASM.** `@[wasm_export]` / `@[wasm_import]` attributes interact with `[package.publish]` — a piece that only compiles on wasm32 should be publishable but warn on `x86_64-unknown-linux-gnu` builds.
-- **Tier 4.05 stable ABI / cbindgen.** `riven package` should include generated `.h` files when the package has `pub extern "C"` items and `[package.cbindgen] generate = true` is set.
+- **Tier 4.03 WASM.** Body-level `wasm_export` / `wasm_import` directives interact with `[package.publish]` — a piece that only compiles on wasm32 should be publishable but warn on `x86_64-unknown-linux-gnu` builds.
+- **Tier 4.05 stable ABI / cbindgen.** `riven package` should include generated `.h` files when the package has public C-ABI items and `[package.cbindgen] generate = true` is set.
 - **Tier 4.08 repo hygiene.** `[package.license]` and `[package.license-file]` must match the SPDX expression in the registry's validation. The registry rejects publishes with unknown licenses.
 
 ## 8. Phasing
@@ -437,8 +437,8 @@ This is a *pure* resolver: no backtracking needed because we pick greedily per p
 1. `[features]` table parsing.
 2. Optional dependencies (`optional = true`, `dep:name` syntax).
 3. `--features` / `--no-default-features` / `--all-features` flags.
-4. `@[cfg(feature = "...")]` attribute evaluation in resolver.
-5. `@[cfg(target_os = "linux")]` and friends, keyed off the host triple initially, off `--target` once doc 02 lands.
+4. In-body `cfg(feature = "...")` directive evaluation in resolver.
+5. Body-level `cfg(target_os = "linux")` and friends, keyed off the host triple initially, off `--target` once doc 02 lands.
 6. Feature-unification algorithm (Cargo v2 resolver).
 7. **Exit:** a piece with `[features] default = ["ansi"]` and an optional `termcolor` dep compiles with and without `--no-default-features`; disabled-feature items are not visible to typeck.
 
@@ -500,8 +500,8 @@ Phase 1a — Workspaces:
 Phase 1b — Features:
 
 - [ ] `[features] default = ["a"]`, `a = ["dep:foo"]`, `foo = { version = "1", optional = true }` — `riven build` includes `foo`, `riven build --no-default-features` omits it.
-- [ ] `@[cfg(feature = "a")] pub def f` — `f` is resolvable with default features, not resolvable with `--no-default-features`.
-- [ ] `@[cfg(target_os = "linux")] pub def f` — skipped on non-Linux host.
+- [ ] `def f` with in-body `cfg(feature = "a")` — `f` is resolvable with default features, not resolvable with `--no-default-features`.
+- [ ] `def f` with in-body `cfg(target_os = "linux")` — skipped on non-Linux host.
 - [ ] A dependency's feature is transitively activated via `"foo/x"` syntax.
 - [ ] Two sibling members in a workspace activating different features on the same dep see the union at resolve time (Cargo v2 resolver semantics).
 

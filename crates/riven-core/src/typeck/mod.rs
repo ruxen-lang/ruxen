@@ -5,9 +5,9 @@
 
 pub mod coerce;
 pub mod infer;
+pub mod mixins;
 #[cfg(test)]
 mod tests;
-pub mod traits;
 pub mod unify;
 
 use crate::diagnostics::Diagnostic;
@@ -17,7 +17,7 @@ use crate::parser::ast;
 use crate::resolve::symbols::SymbolTable;
 use crate::resolve::{ResolveResult, Resolver};
 use infer::InferenceEngine;
-use traits::TraitResolver;
+use mixins::TraitResolver;
 
 /// The result of full type checking.
 pub struct TypeCheckResult {
@@ -45,7 +45,9 @@ pub fn type_check(program: &ast::Program) -> TypeCheckResult {
     } = resolver.resolve(program);
 
     // Phase 2: Validate derive usage and collect all trait impls
-    diagnostics.extend(crate::r#derive::validate_program(&program, &symbols));
+    diagnostics.extend(crate::implicit_includes::validate_program(
+        &program, &symbols,
+    ));
 
     let mut trait_resolver = TraitResolver::new();
     trait_resolver.collect_impls(&program, &symbols);

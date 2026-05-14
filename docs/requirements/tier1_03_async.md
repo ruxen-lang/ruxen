@@ -182,11 +182,11 @@ Grammar addition (parser/mod.rs at the item-level dispatcher around
 `:513` and `:517`):
 
 ```
-FuncDef   ::= Visibility? "async"? "def" ...
+FuncDef   ::= "async"? "def" ...
 ```
 
-`async` is allowed before `def` but after visibility:
-`pub async def ...`. It is also allowed on methods in `class`, `impl`, and
+`async` is allowed before `def`:
+`async def ...`. It is also allowed on methods in `class`, `extension`, and
 `mixin` bodies. `async` before `init`/`def mut` is **rejected** (an async
 constructor makes no semantic sense; an async mutating method is allowed).
 
@@ -250,7 +250,7 @@ normalizes to postfix `.await` (more Ruby-like chaining).
 ### 5.5 Grammar summary (new productions)
 
 ```
-Item          ::= Vis? "async"? "def" ...
+Item          ::= "async"? "def" ...
 ClosureExpr   ::= "async"? "move"? ("do" ... "end" | "{" ... "}")
 AsyncBlock    ::= "async" "do" Block "end"
 PrimaryExpr   ::= ... | "await" Expr               # prefix form
@@ -298,8 +298,8 @@ end
 Rust needs `Pin<&mut T>` because a self-referential generator, once moved,
 invalidates internal pointers into itself. Riven has two options:
 
-1. **Replicate Pin.** Add `core.pin::Pin[T]`, require `poll` to take
-   `Pin<&mut Self>`, and introduce `Unpin` as an auto-mixin.
+1. **Replicate Pin.** Add `core.pin.Pin[T]`, require `poll` to take
+   `Pin[&mut Self]`, and introduce `Unpin` as an auto-mixin.
 
 2. **Make all generated futures address-stable by construction.** Pin's
    purpose is runtime enforcement of "don't move this value after
@@ -323,7 +323,7 @@ If the design proves too restrictive (e.g., users want to build
 `Array[Box[any Future]]`), fall back to option (1) and introduce `Pin`
 explicitly in a Tier 2 revision.
 
-### 6.4 Built-in impls required
+### 6.4 Built-in provisions required
 
 | Type                | Source              | Output         |
 |---------------------|---------------------|----------------|
@@ -337,7 +337,7 @@ explicitly in a Tier 2 revision.
 ## 7. State-Machine Lowering
 
 This is the heart of the feature. The transform converts each async
-function body into a state-machine struct plus a `Future` impl.
+function body into a state-machine struct plus a `Future` provision.
 
 ### 7.1 Where in the pipeline
 
@@ -567,7 +567,7 @@ auto-mixin, this is derived mechanically.
 
 Async tasks outlive the stack frame that spawned them. `spawn` therefore
 requires the task future to be `static`. This forces captures to be owned
-or `Arc`-equivalent. The `static` concept already exists in
+or `SharedSync`-equivalent. The `static` concept already exists in
 `hir/types.rs` as `Ty::RefLifetime("static", ...)`; we extend lifetime
 bound checking in `borrow_check/lifetimes.rs` to enforce it on spawn
 arguments.
@@ -613,7 +613,7 @@ let result = runtime.timeout(5.seconds, fetch_user(id)).await
 
 `timeout` is a combinator future that wakes on a timer and drops the
 inner future when it fires. Because drop runs the state machine's
-synthesized `Drop` impl (§7.2 step 7), all outstanding resources (open
+synthesized `Drop` provision (§7.2 step 7), all outstanding resources (open
 sockets, in-flight reads) are released.
 
 Phase 2 (Tier 2): structured concurrency with `TaskGroup` and
@@ -632,18 +632,18 @@ separated to avoid ambiguity about which API a user is using.
 Minimum viable surface for Phase 3d:
 
 ```riven
-# async_io::net
+# async_io.net
 async def TcpStream.connect(addr: &str) -> Result[TcpStream, IoError]
 async def TcpStream.read(&mut self, buf: &mut [UInt8]) -> Result[USize, IoError]
 async def TcpStream.write(&mut self, buf: &[UInt8]) -> Result[USize, IoError]
 async def TcpListener.bind(addr: &str) -> Result[TcpListener, IoError]
 async def TcpListener.accept(&mut self) -> Result[(TcpStream, SocketAddr), IoError]
 
-# async_io::time
+# async_io.time
 async def sleep(duration: Duration) -> ()
 def Instant.now() -> Instant
 
-# async_io::fs (Phase 3d+1)
+# async_io.fs (Phase 3d+1)
 async def fs.read_to_string(path: &str) -> Result[String, IoError]
 async def fs.write(path: &str, data: &[UInt8]) -> Result[(), IoError]
 ```
@@ -780,11 +780,11 @@ Tests:
 
 - `core.runtime.block_on`, `yield_now`, `spawn` (current-thread).
 - `reactor.c` with epoll-only (Linux) + timer wheel.
-- Add `async_io::time::sleep`.
+- Add `async_io.time.sleep`.
 
 ### Phase 3d — Async TCP + kqueue port (2-3 weeks)
 
-- `async_io::net::TcpStream`, `TcpListener`.
+- `async_io.net.TcpStream`, `TcpListener`.
 - macOS kqueue backend.
 - Windows reactor returns `Unsupported`.
 
@@ -803,7 +803,7 @@ Out of scope here.
   the door open by making `!Move` an internal compiler attribute rather
   than a user-facing marker mixin, so we can retrofit `Pin` without a
   breaking change. *Severity: medium. Mitigation: phase 3a tests with
-  hand-written impls will expose this early.*
+  hand-written provisions will expose this early.*
 
 - **R2. `yield` keyword collision.** Ruby-style block `yield` and
   generator `yield` want the same word. Migrating block-yield to
@@ -874,13 +874,13 @@ Phase 3b is complete when:
 3. `f().await` in a non-async context is a compiler error.
 4. Borrow-across-await rejection emits diagnostic
    `E_borrow_across_await` with correct spans.
-5. All Phase 3a hand-written future impls still work unchanged.
+5. All Phase 3a hand-written future provisions still work unchanged.
 6. `cargo test -p riven-core -- async` passes.
 
 Phase 3c is complete when:
 
 7. A 20-line TCP echo client using `runtime.block_on` +
-   `async_io::net::TcpStream` compiles and runs against a local netcat
+   `async_io.net.TcpStream` compiles and runs against a local netcat
    listener.
 8. A 1000-task sleep/wake benchmark completes in < 100 ms on a modern
    Linux laptop with no per-task heap allocation beyond the initial

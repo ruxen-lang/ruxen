@@ -1,11 +1,11 @@
-# Spec — `std::net`
+# Spec — `std.net`
 
 **Source docs:**
 [docs/requirements/tier1_01_stdlib.md §4.4](../../requirements/tier1_01_stdlib.md).
 
 **Status:** shipped Phase 3 (minimal TCP surface).
 
-`std::net` provides a minimal blocking TCP socket surface.  Addresses
+`std.net` provides a minimal blocking TCP socket surface.  Addresses
 are passed as `"host:port"` strings; sockets are file descriptors
 (`Int`); failure modes are signalled via negative return values.
 

@@ -1,4 +1,4 @@
-# Spec — `std::fmt`
+# Spec — `std.fmt`
 
 **Source docs:**
 [docs/requirements/tier1_01_stdlib.md §4.8](../../requirements/tier1_01_stdlib.md),
@@ -6,33 +6,33 @@
 
 **Status:** shipped Phase A/B/C/D MVP (2026-05-10) → Phase D2 (2026-05-13) → Phase D4 (2026-05-13).
 
-This spec describes the **observable behaviour** of `std::fmt` — the
-`Display` and `Debug` traits, the `Formatter` class, the string-
+This spec describes the **observable behaviour** of `std.fmt` — the
+`Display` and `Debug` mixins, the `Formatter` class, the string-
 interpolation lowering, and the format-spec surface (`width`, `align`,
 `fill`, `precision`, `:?`).  Each behaviour is numbered and pinned by
 one or more Rust integration tests in `crates/riven-core/tests/`.
 
 ---
 
-## B1 — `Display` trait surface
+## B1 — `Display` mixin surface
 
-`std::fmt::Display` is resolvable at the type level with method
-signature `def fmt(&self, f: &mut Formatter) -> Result[(), FmtError]`.
+`std.fmt.Display` is resolvable at the type level with method
+signature `def fmt(f: &mut Formatter) -> Result[(), FmtError]`.
 
-**Given** a user type `T` with `impl Display for T`
+**Given** a user type `T` with `include Display` in its body
 **When** `T` is used in an interpolation `"#{t}"`
 **Then** the lowerer emits a call to `T_fmt(value, fmt)` and uses the
 formatter's accumulated buffer as the interpolated text.
 
-## B2 — `Debug` trait surface
+## B2 — `Debug` mixin surface
 
-`std::fmt::Debug` is resolvable with the same signature as `Display`.
-`derive Debug` on a struct or enum synthesises a `T_to_debug(self)
--> String` MIR function whose output shape matches Rust's derived
-Debug (`Name { field1: <fmt(field1)>, ... }` for structs;
-`Variant(<payload>)` / `Variant { .. }` for enums).
+`std.fmt.Debug` is resolvable with the same signature as `Display`.
+The implicit `include Debug` on a struct or enum synthesises a
+`T_to_debug(self) -> String` MIR function whose output shape matches
+Rust's derived Debug (`Name { field1: <fmt(field1)>, ... }` for
+structs; `Variant(<payload>)` / `Variant { .. }` for enums).
 
-**Given** `struct Point` with `derive Debug` and fields `x: Int`, `y: Int`
+**Given** `struct Point` with fields `x: Int`, `y: Int` (implicit `Debug`)
 **When** `"#{p:?}"` is evaluated for `p = Point { x: 1, y: 2 }`
 **Then** the output is `Point { x: 1, y: 2 }`.
 
@@ -54,10 +54,10 @@ to the returned String and frees the Formatter struct in the same call.
 Codegen must not emit a follow-up `Formatter_free` on `f` after
 `buffer()`.
 
-## B4 — Bare interpolation routes through `Display::fmt`
+## B4 — Bare interpolation routes through `Display.fmt`
 
 For every interpolated expression `"#{x}"` whose type is `Char`, `Int`,
-`Float`, `Bool`, `String`, or any type `T` with `impl Display for T`,
+`Float`, `Bool`, `String`, or any type `T` with `include Display` in its body,
 `lower_interpolation` emits exactly:
 
 ```text
@@ -70,13 +70,13 @@ The legacy ad-hoc `riven_<prim>_to_string` direct call at the
 interp site is gone (it still lives inside the synth `_fmt` body — a
 different MIR function).
 
-## B5 — Derive-Debug fallback for bare `"#{x}"`
+## B5 — Implicit-Debug fallback for bare `"#{x}"`
 
-When `x: T` where `T` derives `Debug` but does **not** have
-`impl Display for T`, bare `"#{x}"` lowers to a direct call to
+When `x: T` where `T` has implicit `Debug` but does **not** have
+`include Display`, bare `"#{x}"` lowers to a direct call to
 `{T}_to_debug(x)` (no Formatter involved).  This is a fallback that
-will be removed once every derive-Debug type also gets a generated
-`Display` impl (deferred to v2).
+will be removed once every implicit-Debug type also gets a generated
+`Display` include (deferred to v2).
 
 ## B6 — Format spec syntax + lex-time capture
 
@@ -167,14 +167,14 @@ inside `_buffer` itself.
 | B1        | `interpolation_user_impl_display_money_round_trips`              | `stdlib_fmt_runtime.rs`               |
 | B2        | `debug_trait_is_resolvable_with_fmt_method`                      | `stdlib_fmt.rs`                       |
 | B2        | `debug_interpolation_spec_typechecks`                            | `stdlib_fmt.rs`                       |
-| B2        | derive-Debug E2E fixtures `85_derive_debug.rvn` etc.             | `tests/release-e2e/cases/`            |
+| B2        | implicit-Debug E2E fixtures `85_implicit_debug.rvn` etc.         | `tests/release-e2e/cases/`            |
 | B3        | `formatter_write_str_then_buffer_round_trips`                    | `stdlib_fmt_runtime.rs`               |
 | B3        | `formatter_write_char_ascii_round_trips`                         | `stdlib_fmt_runtime.rs`               |
 | B3        | `formatter_len_after_write_str`                                  | `stdlib_fmt_runtime.rs`               |
 | B3        | `formatter_write_str_returns_result_unit_fmt_error`              | `stdlib_fmt.rs`                       |
 | B4        | `synth_primitive_fmt_functions_emitted`                          | `stdlib_fmt_display_dispatch.rs`      |
 | B4        | `interpolation_primitive_goes_through_display`                   | `stdlib_fmt_display_dispatch.rs`      |
-| B5        | derive-Debug fixtures + existing interp E2E in `05_string_interp.rvn` | `tests/release-e2e/cases/`        |
+| B5        | implicit-Debug fixtures + existing interp E2E in `05_string_interp.rvn` | `tests/release-e2e/cases/`      |
 | B6        | `lex_format_spec_*` (8 tests)                                    | `crates/riven-core/src/lexer/tests.rs`|
 | B6        | `width_and_precision_specs_typecheck`                            | `stdlib_fmt.rs`                       |
 | B7        | `interpolation_width_right_align_pads_int`                       | `stdlib_fmt_runtime.rs`               |
@@ -198,7 +198,7 @@ E2E coverage: `tests/release-e2e/cases/070_interp_display_dispatch.rvn`
   Formatter and goes through `{T}_to_debug` directly, so width is lost.
 - Sign / `#` alternate / `0` zero-pad / radix flags (`x`, `X`, `b`,
   `o`, `e`) — not yet parsed in `lex_format_spec`.
-- Blanket `Display` impls for `Vec` / `Hash` / `Set` / `Option` /
+- Blanket `Display` includes for `Array` / `Map` / `Set` / `Option` /
   `Result` / tuples / arrays — only primitives + user types covered.
-- The `Err(e).message()` inference gap inside `impl Display` bodies
+- The `Err(e).message()` inference gap inside `include Display` bodies
   on Result-returning expressions (separately tracked).

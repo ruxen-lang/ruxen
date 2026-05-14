@@ -62,18 +62,18 @@ Pairwise comparison of two vectors at corresponding indices.
 
 | Behaviour | Test fn                                                | File                       |
 |-----------|--------------------------------------------------------|----------------------------|
-| B1        | `vec_from_int_is_currently_accepted_at_typeck`         | `stdlib_vec_negatives.rs`  |
-| B2        | `vec_pop_returns_option_typechecks`                    | `stdlib_vec_negatives.rs`  |
-| B3        | `vec_index_yields_element_type`                        | `stdlib_vec_negatives.rs`  |
-| B4        | `vec_with_capacity_string_arg_is_currently_accepted_at_typeck` | `stdlib_vec_negatives.rs` |
-| B5        | `vec_dedup_typechecks_as_unit`                         | `stdlib_vec_negatives.rs`  |
-| B6        | `vec_retain_closure_typechecks`                        | `stdlib_vec_negatives.rs`  |
-| B7        | `vec_sort_by_closure_typechecks`                       | `stdlib_vec_negatives.rs`  |
-| B8        | `vec_from_iter_static_typechecks`                      | `stdlib_vec_negatives.rs`  |
-| B9        | `vec_equality_yields_bool`                             | `stdlib_vec_negatives.rs`  |
+| B1        | `vec_from_int_is_currently_accepted_at_typeck`         | `stdlib_array_negatives.rs`  |
+| B2        | `vec_pop_returns_option_typechecks`                    | `stdlib_array_negatives.rs`  |
+| B3        | `vec_index_yields_element_type`                        | `stdlib_array_negatives.rs`  |
+| B4        | `vec_with_capacity_string_arg_is_currently_accepted_at_typeck` | `stdlib_array_negatives.rs` |
+| B5        | `vec_dedup_typechecks_as_unit`                         | `stdlib_array_negatives.rs`  |
+| B6        | `vec_retain_closure_typechecks`                        | `stdlib_array_negatives.rs`  |
+| B7        | `vec_sort_by_closure_typechecks`                       | `stdlib_array_negatives.rs`  |
+| B8        | `vec_from_iter_static_typechecks`                      | `stdlib_array_negatives.rs`  |
+| B9        | `vec_equality_yields_bool`                             | `stdlib_array_negatives.rs`  |
 
 Runtime round-trips covered by E2E fixtures
-`tests/release-e2e/cases/107_vec_push_pop.rvn` and the `60x_iter_*`
+`tests/release-e2e/cases/107_array_push_pop.rvn` and the `60x_iter_*`
 series.
 
 ---
@@ -83,7 +83,7 @@ series.
 - B1, B4: tighten `Vec.from(...)` and `Vec.with_capacity(...)` to
   reject obviously wrong arg types.
 - `Vec.first / last / contains / clone / reverse` now have direct
-  runtime pin tests in `stdlib_vec_runtime.rs` (added 2026-05):
+  runtime pin tests in `stdlib_array_runtime.rs` (added 2026-05):
   `vec_first_returns_first_element`, `vec_last_returns_last_element`,
   `vec_contains_finds_element`, `vec_clone_returns_independent_copy`,
   `vec_reverse_inverts_order`.

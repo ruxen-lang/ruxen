@@ -8,9 +8,9 @@ Companion index for the eight Tier-3 requirements documents. Read this first.
 |---|---------|-----|
 | 01 | LSP enhancements (completion, diagnostics-on-edit, inlay hints, signature help, document/workspace symbols, rename, find-references, code actions, LSP formatting) | [tier3_01_lsp.md](tier3_01_lsp.md) |
 | 02 | Debugger (DWARF emission + DAP adapter) | [tier3_02_debugger.md](tier3_02_debugger.md) |
-| 03 | Test framework (`@[test]`, `riven test`) | [tier3_03_test_framework.md](tier3_03_test_framework.md) |
+| 03 | Test framework (`test` in-body directive, `riven test`) | [tier3_03_test_framework.md](tier3_03_test_framework.md) |
 | 04 | Doc generator (`rivendoc`) | [tier3_04_doc_generator.md](tier3_04_doc_generator.md) |
-| 05 | Benchmarking (`@[bench]`, `riven bench`) | [tier3_05_benchmarking.md](tier3_05_benchmarking.md) |
+| 05 | Benchmarking (`bench` in-body directive, `riven bench`) | [tier3_05_benchmarking.md](tier3_05_benchmarking.md) |
 | 06 | Incremental compilation at the core level (query / salsa-style) | [tier3_06_incremental_compile.md](tier3_06_incremental_compile.md) |
 | 07 | MIR optimizations (const fold, DCE, simplify, inline) | [tier3_07_mir_optimizations.md](tier3_07_mir_optimizations.md) |
 | 08 | Property testing (CLAUDE.md claim audit + recommendation) | [tier3_08_property_testing.md](tier3_08_property_testing.md) |
@@ -44,9 +44,9 @@ is the 30-second summary.
 |---|---|
 | LSP | `tower-lsp` server with 5 capabilities: `textDocument/didOpen`, `didChange` (FULL sync, no re-analysis), `didSave` (triggers full re-analysis + diagnostics), `hover`, `definition` (same file only), `semanticTokens/full`. No completion, no rename, no references, no inlay hints, no signature help, no document symbols, no code actions, no LSP formatting, no workspace symbols, no `didChangeConfiguration`, no file-watch response. (`crates/riven-lsp/src/server.rs:38-238`) |
 | Debugger | Zero. One stub file `crates/riven-core/src/codegen/llvm/debug.rs:1-3` says "Full DWARF debug info will be implemented in a follow-up phase." No DWARF emission in Cranelift. No DAP adapter. No `--emit-debug` flag. No `.debug_info` sections. |
-| Test framework | Zero. All tests are Rust `#[test]` inside `crates/riven-core/tests/*.rs` and `crates/*/src/**/tests.rs`. There is no Riven-language `@[test]` attribute, no `riven test` subcommand (see `crates/riven-cli/src/cli.rs:25-114`), no assertion macros, no test runner. |
+| Test framework | Zero. All tests are Rust `#[test]` inside `crates/riven-core/tests/*.rs` and `crates/*/src/**/tests.rs`. There is no Riven-language `test` in-body directive, no `riven test` subcommand (see `crates/riven-cli/src/cli.rs:25-114`), no assertion macros, no test runner. |
 | Doc generator | Zero. Doc comments `## ...` are lexed into `TokenKind::DocComment` (`crates/riven-core/src/lexer/mod.rs:211-226`) and immediately *discarded* at four sites in the parser (`parser/mod.rs:455-458`, `:884-887`, `:1112-1115`, `:1187-1190`). No `rivendoc` binary. No HTML emission. No search index. |
-| Benchmarking | Partial at the Rust level: `rivenc/benches/cache_bench.rs` uses `criterion`. No Riven-language `@[bench]` attribute. No `riven bench` subcommand. No statistical harness. No regression-tracking output. |
+| Benchmarking | Partial at the Rust level: `rivenc/benches/cache_bench.rs` uses `criterion`. No Riven-language `bench` in-body directive. No `riven bench` subcommand. No statistical harness. No regression-tracking output. |
 | Incremental | **File-level only** via `rivenc/src/cache/`: content-addressed object cache that hashes the full source file + compiler version + flags, and on hit re-uses the compiled `.o` plus a serialized public `FileSignature` (`rivenc/src/cache/mod.rs:1-55`). There is **no query-based memoization** inside `riven-core`. A single-character edit busts the cache for that file and re-runs lex → parse → resolve → typeck → borrow-check → MIR → codegen from scratch. |
 | MIR opts | Zero. `crates/riven-core/src/mir/mod.rs:1-4` declares only `nodes` and `lower`. The lowerer produces MIR and hands it straight to codegen — no `const_fold`, no `simplify_cfg`, no `dce`, no `inline` pass module exists. Inkwell's LLVM optimizer (`codegen/llvm/optimize.rs`) runs on the LLVM IR, not MIR — so Cranelift debug builds have no optimization layer at all. |
 | Property testing | CLAUDE.md claims "`proptest` for property-based testing in `riven-core`". `proptest` is in `crates/riven-core/Cargo.toml:17` as a dev-dependency. The *only* file that imports it is `crates/riven-core/tests/runtime_safety.rs:61`, and the two `proptest!` blocks there are placeholders: `prop_assert!(expected_len <= 100)` and `prop_assert_eq!(n, n)` (`runtime_safety.rs:68-86`). They assert nothing about actual compiler behavior. The claim is effectively false. |
@@ -56,7 +56,8 @@ is the 30-second summary.
 ```
                     ┌────────────────────────────────┐
                     │ Tier 1 prerequisites           │
-                    │ (derive, Drop, stdlib 1a)      │
+                    │ (structural mixins, Drop,      │
+                    │  stdlib 1a)                    │
                     └───────────────┬────────────────┘
                                     │
                     ┌───────────────┴─────────────────┐
@@ -83,7 +84,7 @@ is the 30-second summary.
  └────────┘ └────────┘ └────────────────┘ └────────────────┘
 
  02: Debugger — parallel track, depends on Tier-1 stdlib only in the
-     sense that good pretty-printers need Debug derive (doc 05).
+     sense that good pretty-printers need an included Debug mixin (doc 05).
 ```
 
 ### Key cross-cutting dependencies
@@ -100,14 +101,16 @@ is the 30-second summary.
   well under 50 ms on that size. Inlay hints and type-based completion on
   10k+ line files will need 06.
 
-- **Doc 05 (bench) and doc 03 (test) both need a `@[...]` attribute
+- **Doc 05 (bench) and doc 03 (test) both need an in-body directive
   dispatch that actually works.** Today `@[link]` and `@[repr]` are the
-  only two attribute forms consumed (`crates/riven-core/src/parser/mod.rs:473-511`).
-  `@[derive]` is parsed two ways, consumed zero ways (tier1 §B2). Doc
-  03 and 05 *both* need a real attribute pipeline — the same one tier1 doc
-  05 specifies. A v1 shortcut that bolts `@[test]`/`@[bench]` into the same
-  `if attr.name == "..."` ladder as `@[repr]` buys weeks, but it will have
-  to be rewritten when tier1 doc 05 lands. Both docs flag this trade-off.
+  only two prefix-attribute forms consumed (`crates/riven-core/src/parser/mod.rs:473-511`).
+  Those are retired (replaced by `lib` options and body-level `layout`), but
+  the lookup machinery is still in place. Doc 03 and 05 *both* need an
+  in-body directive pipeline (test/bench/ignore/should_panic in a fn body)
+  — the same surface tier1 doc 05 specifies. A v1 shortcut that bolts
+  `test`/`bench` recognition into the parser directly buys weeks, but it
+  will have to be rewritten when tier1 doc 05 lands. Both docs flag this
+  trade-off.
 
 - **Doc 04 (docs) is gated on deciding what `##` attaches to.** Today
   `## ...` is a `TokenKind::DocComment` that every parser site silently
@@ -169,16 +172,16 @@ HTML generator second.
    stdlib for self-hosting the stdlib docs, but can ship against any
    user crate first.
 
-**Phase 3C — `@[test]` + `riven test` (1-2 weeks).**
-Ship with a compiler-builtin `@[test]` attribute that the typechecker
-recognizes without a derive-system prerequisite. Full macro/derive
-integration (tier1 doc 05) follows later.
+**Phase 3C — `test` in-body directive + `riven test` (1-2 weeks).**
+Ship with a compiler-builtin `test` in-body directive that the typechecker
+recognizes without a macro-system prerequisite. Full macro integration
+(tier1 doc 05) follows later.
 
 **Phase 3D — MIR opts (2 weeks).**
 Add a pass pipeline between MIR lowering and codegen. Ship `const_fold`
 + `simplify_cfg` + `dce` in the first drop. Inline later.
 
-**Phase 3E — `@[bench]` + `riven bench` (1 week).**
+**Phase 3E — `bench` in-body directive + `riven bench` (1 week).**
 Reuses 99% of the test-framework infrastructure. Add statistical harness
 (uses `criterion`-style loop + warmup + mean/stddev).
 
@@ -215,10 +218,10 @@ implementation begins:
    `TokenKind::DocComment` (`crates/riven-core/src/lexer/mod.rs:211-226`).
    Doc 04 proposes keeping `##` (Ruby-flavored) rather than adding `///`
    or `/**`. Decide.
-2. **Test attribute spelling.** Tier-1 doc 05 §B2 flagged
-   `@[derive(...)]` is parsed wrong today. Doc 03 has the same problem
-   for `@[test]`. Pick `@[test]` (matches existing `@[repr]`/`@[link]`)
-   or `@test` (no brackets) as canonical now.
+2. **Test directive form.** Prefix attribute `@[test]` is retired. Doc 03
+   uses an in-body directive — a `test` keyword on its own line inside the
+   function body. Confirm in-body form is the canonical surface; reject
+   any leftover prefix proposals.
 3. **Test expectation API.** Assert macros? (`assert_eq!`, `assert!`.)
    Panic-on-fail with a free `expect(actual, expected)` helper? Rust
    uses both; Go uses neither. Pick one.
@@ -237,10 +240,10 @@ implementation begins:
 
 ## Interactions with earlier tiers
 
-- **Tier 1 doc 05 (derive + macros)** is a soft dependency for docs 03
+- **Tier 1 doc 05 (macros)** is a soft dependency for docs 03
   (test) and 05 (bench). Both can ship with compiler-builtin
-  `@[test]`/`@[bench]` that side-step the full derive system; revisit
-  when doc 05 lands.
+  `test`/`bench` in-body directives that side-step the full macro system;
+  revisit when doc 05 lands.
 - **Tier 1 doc 01 (stdlib)** is a hard dependency for doc 03: assertion
   macros need `fmt::Debug` to print values on failure, and `panic!` /
   `process::exit` must be available to abort a failing test. Ship
@@ -248,4 +251,5 @@ implementation begins:
   until stdlib catches up.
 - **Tier 1 doc 04 (Drop)** has to land before `riven test` can run tests
   that allocate — otherwise tests that pass today will leak enough memory
-  to OOM a CI runner given enough iterations.
+  to OOM a CI runner given enough iterations. Drop is delivered via
+  `include Drop` + `def mut drop` in the implementing class body.

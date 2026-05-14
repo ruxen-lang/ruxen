@@ -429,7 +429,7 @@ def set_request(id: UInt64)
 end
 ```
 
-The `thread_local!` macro (new in the macro set, alongside `array!` and `hash!`)
+The `thread_local!` macro (new in the macro set, alongside `array!` and `map!`)
 expands to a `ThreadLocal[T]` static whose accessors wrap `pthread_key_create`
 / `pthread_getspecific` / `pthread_setspecific`. Phase 2b may defer this to 2d
 if schedule pressure requires.
@@ -716,14 +716,14 @@ struct Channel[T] {
   mutex:    pthread_mutex_t
   not_full: pthread_cond_t     // bounded only
   not_empty: pthread_cond_t
-  queue:    VecDeque[T]
+  queue:    ArrayDeque[T]
   cap:      Option[USize]
   n_senders: AtomicUsize
   receiver_alive: AtomicBool
 }
 ```
 
-`Sender` and `Receiver` are fat pointers `(Arc[Channel[T]], ())`.
+`Sender` and `Receiver` are fat pointers `(SharedSync[Channel[T]], ())`.
 This is O(1) per op, trades raw throughput for simplicity. A lock-free
 implementation (Rust's `crossbeam`) can replace it later with no API break.
 
@@ -961,7 +961,7 @@ use std.thread.Thread
 use std.sync.{SharedSync, Mutex}
 
 def main
-  let counter = Arc.new(Mutex.new(0))
+  let counter = SharedSync.new(Mutex.new(0))
   var handles = array![]
 
   for _ in 0..8
@@ -989,7 +989,7 @@ Borrow-check expectations:
   `Mutex[Int]: Send + Sync` because `Int: Send`. ✓
 - Closure captures `c` by move (inferred because `Thread.spawn`'s bound is
   `F: FnOnce + Send + static`). Captured `c: SharedSync[Mutex[Int]]` is `Send`. ✓
-- Inside closure, `c.lock!` returns `MutexGuard<Int>`. The guard owns a live
+- Inside closure, `c.lock!` returns `MutexGuard[Int]`. The guard owns a live
   borrow of the mutex; NLL expires it at end of loop iteration. ✓
 
 ### 10.2 Channel pipeline
@@ -1147,7 +1147,7 @@ Full atomic set, `Ordering` enum, Cranelift/LLVM codegen for atomic ops,
 **Deliverable:** `std.sync.atomic` module, 2+ fixtures per primitive.
 
 ### Post-2 (deferred)
-MPMC channels, `Weak[T]` (Arc backrefs), `LazyStatic`/`lazy_static!` macro,
+MPMC channels, `Weak[T]` (SharedSync backrefs), `LazyStatic`/`lazy_static!` macro,
 Windows runtime, async/await (separate Tier 2 doc),
 actor syntax (separate Tier 2 doc).
 
@@ -1194,11 +1194,11 @@ actor syntax (separate Tier 2 doc).
    the process. Implement via a thread-local "panic count" incremented on
    entry to panic handler.
 
-6. **Signature synthesis for built-in generic methods.** `Mutex::lock`
-   returns a `MutexGuard` whose lifetime is tied to `&self`. Riven's
-   inference engine (`typeck/infer.rs`) needs to understand self-borrowing
-   return types. Check whether `Vec::iter` (which has the same shape) is
-   already modeled; if so, reuse.
+6. **Signature synthesis for built-in generic methods.** `Mutex.lock`
+   returns a `MutexGuard` whose lifetime is tied to a reading-receiver
+   borrow. Riven's inference engine (`typeck/infer.rs`) needs to understand
+   self-borrowing return types. Check whether `Array.iter` (which has the
+   same shape) is already modeled; if so, reuse.
 
 7. **`static` bound.** Riven has `Ty::RefLifetime(String, ...)`. Need to
    make the name `static` reserved and recognized as "outlives all scopes".
@@ -1207,10 +1207,11 @@ actor syntax (separate Tier 2 doc).
    `Ty` checking for any `RefLifetime(name, _)` with `name != "static"`.
 
 8. **Interaction with existing `Copy` inference.** Today `Ty::is_copy()` (at
-   `hir/types.rs:189`) is hand-rolled. For a user struct to be `Copy`, it
-   must `derive Copy`. `Send`/`Sync` should parallel this: auto-inferred
-   structurally, with `derive` not strictly necessary but permitted
-   (`derive Send`, `derive Sync` being a no-op — inference already said yes).
+   `hir/types.rs:189`) is hand-rolled. `Copy` is a structural mixin and is
+   implicitly included per §3.6 when every field is `Copy`. `Send`/`Sync`
+   should parallel this: auto-inferred structurally, with explicit
+   `include Send` / `include Sync` permitted as the loud form (a no-op
+   when inference already said yes).
 
 9. **Cache compatibility.** The incremental-compilation cache (`rivenc::cache`)
    keys on the hash of compilation inputs. Adding `Send`/`Sync` inference to
@@ -1276,7 +1277,7 @@ Files to modify (Phase 2d):
 - Stdlib Riven source: `std.sync.atomic`, `Ordering`, each `AtomicX`,
   `RwLock`, `Barrier`, `Once`, `ThreadBuilder`.
 - `thread_local!` macro handler in the macro dispatcher (wherever `array!` and
-  `hash!` are handled today).
+  `map!` are handled today).
 
 ---
 

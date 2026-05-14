@@ -576,7 +576,9 @@ impl Parser {
             TokenKind::Impl | TokenKind::Extension => {
                 Some(TopLevelItem::Impl(self.parse_impl_block(false)))
             }
-            TokenKind::Unsafe if matches!(self.peek_kind(), TokenKind::Impl | TokenKind::Extension) => {
+            TokenKind::Unsafe
+                if matches!(self.peek_kind(), TokenKind::Impl | TokenKind::Extension) =>
+            {
                 self.advance(); // consume `unsafe`
                 Some(TopLevelItem::Impl(self.parse_impl_block(true)))
             }

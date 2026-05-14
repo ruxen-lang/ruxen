@@ -30,8 +30,7 @@ doc section header pending separate rename — surface vocabulary is
 
 Per method:
 
-1. Unit test in `crates/riven-core/tests/stdlib_vec.rs` (legacy
-   test-file slug preserved pending the internal sweep) with a `.rvn`
+1. Unit test in `crates/riven-core/tests/stdlib_array.rs` with a `.rvn`
    source asserting stdout.
 2. E2E fixture `4NN_vec_<op>.rvn` + expected output (fixture-name
    slugs preserved from the pre-rename era; surface vocabulary in
@@ -73,8 +72,7 @@ Per method:
   `sort_by`, `retain`, `Array[String]` / `Array[Array[T]]` drop
   selector wiring; positive fixtures at
   `tests/release-e2e/cases/40[9-11]_*`, negatives in
-  `crates/riven-core/tests/stdlib_vec_negatives.rs` (legacy slug
-  preserved). The full
+  `crates/riven-core/tests/stdlib_array_negatives.rs`. The full
   `&[T]` slice surface and the lazy `ArrayIter` cursor class remain
   queued for #05 alongside the mixin-driven sort/iterator surface.)
 - [x] Nested heap (`Array[String]`, `Array[Array[Int]]`) leak tests
@@ -89,8 +87,7 @@ Per method:
   alongside the per-kind free counts.)
 - [x] `cargo test --workspace` green (batch 1, batch 2).
 - [x] Documented borrow rules for `iter` / mutator interleaving.
-  (See `docs/dev/vec_iter_borrow_rules.md` — internal file slug
-  preserved pending the internal sweep — for the receiver-mode
+  (See `docs/dev/array_iter_borrow_rules.md` for the receiver-mode
   table and the consume-helper / push-transfer notes for
   implementers.)
 - [x] CHANGELOG bullet (batch 1, batch 2).

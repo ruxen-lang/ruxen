@@ -1004,8 +1004,8 @@ end
 }
 
 #[test]
-fn e2e_22_trait_default() {
-    // Fixture 22_trait_default: a trait's default method body may refer
+fn e2e_22_mixin_default() {
+    // Fixture 22_mixin_default: a mixin's default method body may refer
     // to `self.<abstract>` and is monomorphized per impl.
     let (temp, rivenc) = stage_install();
     let out = compile_and_run(
@@ -1042,8 +1042,8 @@ end
 }
 
 #[test]
-fn e2e_86_trait_default_method_used() {
-    // Fixture 86: trait default method used via interpolation.
+fn e2e_86_mixin_default_method_used() {
+    // Fixture 86: mixin default method used via interpolation.
     let (temp, rivenc) = stage_install();
     let out = compile_and_run(
         &rivenc,
@@ -1079,8 +1079,8 @@ end
 }
 
 #[test]
-fn e2e_87_trait_override_default() {
-    // Fixture 87: impl overrides the trait default; the override wins.
+fn e2e_87_mixin_override_default() {
+    // Fixture 87: include overrides the mixin default; the override wins.
     let (temp, rivenc) = stage_install();
     let out = compile_and_run(
         &rivenc,
@@ -1181,8 +1181,8 @@ end
 }
 
 #[test]
-fn e2e_21_traits() {
-    // Fixture 21_traits: trait with only required methods (no defaults).
+fn e2e_21_mixins() {
+    // Fixture 21_mixins: mixin with only required methods (no defaults).
     let (temp, rivenc) = stage_install();
     let out = compile_and_run(
         &rivenc,
@@ -1260,7 +1260,7 @@ end
 }
 
 #[test]
-fn e2e_107_vec_push_pop() {
+fn e2e_107_array_push_pop() {
     // Fixture 107: `Vec.push` grows the vector, `Vec.pop` returns an
     // `Option[T]` tagged union matching the runtime convention used by
     // `riven_vec_get_opt`.
@@ -1361,7 +1361,7 @@ end
 }
 
 #[test]
-fn e2e_26_vec_basic() {
+fn e2e_26_array_basic() {
     // Fixture 26: smoke test — `vec![1,2,3]` + `len` + `for x in &v`
     // must still round-trip after the pop/chars changes.
     let (temp, rivenc) = stage_install();
@@ -1422,7 +1422,7 @@ end
 }
 
 #[test]
-fn e2e_64_struct_derive() {
+fn e2e_64_struct_implicit() {
     // Fixture 64: struct with `derive Copy, Clone` — `let also_red = red`
     // must not move the original; both names remain readable.
     let (temp, rivenc) = stage_install();
@@ -1487,7 +1487,7 @@ end
 }
 
 #[test]
-fn e2e_85_derive_debug() {
+fn e2e_85_implicit_debug() {
     // Fixture 85: struct with `derive Debug, Copy, Clone` — we only
     // assert field access + interpolation works (we don't ship a full
     // `#{p}` Debug printer yet; the fixture itself doesn't rely on it).

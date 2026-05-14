@@ -1,15 +1,15 @@
-# Spec — `std::sync`
+# Spec — `std.sync`
 
 **Source docs:**
 [docs/requirements/tier1_02_concurrency.md](../../requirements/tier1_02_concurrency.md).
 
 **Status:** typeck surface shipped Phase 1 (resolver + typeck);
 runtime support is **`Thread.sleep` + `Thread.yield_now` only**.
-Everything else (`Mutex`, `Arc`, `JoinHandle.join`, `Thread.spawn`)
+Everything else (`Mutex`, `SharedSync`, `JoinHandle.join`, `Thread.spawn`)
 types correctly but has no runtime impl yet — Phase 4 lands the
 remainder.
 
-`std::sync` is the concurrency surface.  The v1 cut prioritises the
+`std.sync` is the concurrency surface.  The v1 cut prioritises the
 typeck contract so user code can be written and reviewed before the
 runtime work ships.
 
@@ -26,7 +26,7 @@ The following types are resolvable at the type level:
 | `ThreadId`              | Opaque thread identifier                    |
 | `Mutex[T]`              | Mutual-exclusion wrapper                    |
 | `MutexGuard[T]`         | RAII guard returned by `Mutex.lock`         |
-| `Arc[T]`                | Atomic reference-counted shared owner       |
+| `SharedSync[T]`         | Atomic reference-counted shared owner       |
 | `PoisonError`           | Error from a poisoned mutex                 |
 | `ThreadPanic`           | Error from a panicked spawned thread        |
 
@@ -63,15 +63,15 @@ The following method signatures resolve cleanly:
 **Runtime is not yet wired.**  Calling `mutex.lock()` at runtime
 panics with "not implemented" until the Phase 4 mutex helpers land.
 
-## B5 — `Arc[T]` typeck signatures
+## B5 — `SharedSync[T]` typeck signatures
 
-| Call                            | Returns          |
-|---------------------------------|------------------|
-| `Arc.new(value: T)`             | `Arc[T]`         |
-| `arc.clone()`                   | `Arc[T]`         |
-| `arc.strong_count()`            | `USize`          |
-| `arc.weak_count()`              | `USize`          |
-| `arc.deref()`                   | `&T`             |
+| Call                              | Returns               |
+|-----------------------------------|-----------------------|
+| `SharedSync.new(value: T)`        | `SharedSync[T]`       |
+| `shared.clone()`                  | `SharedSync[T]`       |
+| `shared.strong_count()`           | `USize`               |
+| `shared.weak_count()`             | `USize`               |
+| `shared.deref()`                  | `&T`                  |
 
 **Runtime is not yet wired** (same caveat as B4).
 
@@ -106,7 +106,7 @@ shape stabilises now; the runtime fills in later.
 When Phase 4 lands:
 - `Mutex.lock()` should panic on poison via a deterministic check,
   not segfault.
-- `Arc.clone()` should atomically increment via `__atomic_fetch_add`.
+- `SharedSync.clone()` should atomically increment via `__atomic_fetch_add`.
 - `Thread.spawn` should call `pthread_create(3)` and propagate the
   closure's return value back via `JoinHandle.join`.
 
@@ -121,4 +121,4 @@ Each will get its own behaviour + pin test as it ships.
 - `AtomicI64` / `AtomicBool` / typed atomics.
 - `Barrier`, `Semaphore`, `CondVar`.
 - `thread_local!` storage.
-- Async runtime (entire `std::future` surface lives in Phase 4 prompts).
+- Async runtime (entire `std.future` surface lives in Phase 4 prompts).

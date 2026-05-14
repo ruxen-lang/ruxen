@@ -6891,7 +6891,7 @@ impl<'a> Lowerer<'a> {
     ///   * Struct/Class/Enum that itself derives Clone → recursive
     ///     `<Type>_clone(src)`.
     ///   * Anything else falls back to a bitwise reuse — drop
-    ///     elaboration in `derive/mod.rs::validate_clone_requirements`
+    ///     elaboration in `implicit_includes/mod.rs::validate_clone_requirements`
     ///     ensures the fallback only triggers for types with E0610
     ///     already emitted, so the synthesised function still has a
     ///     compilable body for downstream codegen even though the
@@ -6952,7 +6952,7 @@ impl<'a> Lowerer<'a> {
             return dest;
         }
         // Fallback: bitwise reuse. The companion validator in
-        // `derive/mod.rs` will already have surfaced E0610 for this
+        // `implicit_includes/mod.rs` will already have surfaced E0610 for this
         // path, so the resulting MIR exists only to keep the rest of
         // codegen consistent during the same compilation unit.
         src

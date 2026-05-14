@@ -1,7 +1,7 @@
 # Spec — `derive <Trait>` (compiler-generated impls)
 
 **Source docs:**
-[docs/requirements/tier1_05_derive_macros.md](../../requirements/tier1_05_derive_macros.md).
+[docs/requirements/tier1_05_implicit_includes.md](../../requirements/tier1_05_implicit_includes.md).
 
 **Status:** shipped Phase 2 #C1-#C2 (Debug for struct + enum) + extended
 derives Phase 2 #C3-#C4 (Clone, PartialEq, Eq, Hash, Default, Ord,
@@ -100,28 +100,28 @@ derive-generated type.
 
 | Behaviour | Test fn                                       | File                                     |
 |-----------|-----------------------------------------------|------------------------------------------|
-| B1        | `struct_with_derive_debug_prints_named_fields`| `derive_debug_formats_struct.rs`         |
-| B2        | `enum_with_derive_debug_unit_variant_prints_name` | `derive_debug_formats_enum.rs`       |
-| B3        | `enum_with_derive_debug_named_field_variant_prints_braces` | `derive_debug_formats_enum.rs` |
-| B4        | `enum_with_derive_debug_explicit_debug_spec_dispatches` | `derive_debug_formats_enum.rs`  |
-| B5        | E2E `202_derive_clone_struct_primitive.rvn` + 203/204/205 | `tests/release-e2e/cases/`   |
-| B6        | `derive_partial_eq_compares_fields_struct`    | `derive_partial_eq_returns_correct.rs`   |
-| B6        | E2E `206_derive_partial_eq.rvn` + `133_derive_partial_eq.rvn` | `tests/release-e2e/cases/` |
-| B8        | `derive_hashable_dispatches_through_trait_bounds` | `derive_trait_dispatch.rs`           |
-| B8        | E2E `207_derive_hash.rvn` + `132_derive_hashable.rvn` | `tests/release-e2e/cases/`       |
-| B9, B14   | `derive_default_emits_concrete_static_method` | `derive_trait_dispatch.rs`               |
-| B9        | E2E `208_derive_default.rvn`                  | `tests/release-e2e/cases/`               |
-| B10       | `derive_ord_and_partial_ord_dispatch_through_trait_bounds` | `derive_trait_dispatch.rs` |
-| B10       | E2E `126_derive_ord_compare.rvn` + `209_derive_ord.rvn` | `tests/release-e2e/cases/`     |
-| B11       | E2E `131_attr_derive_copy.rvn` + `derive_copy_clone_fixture_typechecks_cleanly` | `derive_diagnostics.rs` |
-| B12 E0607 | `derive_invalid_target_reports_e0607`         | `derive_diagnostics.rs`                  |
-| B12 E0610/E0611 | `derive_clone_on_struct_with_non_clone_field_emits_e0610_or_e0611` + enum equivalent | `derive_negatives.rs` |
-| B12 E0613 | `derive_partial_eq_on_struct_with_non_eq_field_emits_e0613` | `derive_negatives.rs`        |
-| B12 E0615 | `derive_hash_on_struct_with_non_hash_field_emits_e0615` | `derive_negatives.rs`            |
-| B12 E0616 | `derive_default_on_empty_enum_emits_e0616`    | `derive_negatives.rs`                    |
-| B12 E0617 | `derive_ord_on_struct_with_non_ord_field_emits_e0617` | `derive_negatives.rs`              |
-| B12 E0618 | `derive_partial_ord_on_struct_with_non_partial_ord_field_emits_e0618` | `derive_negatives.rs` |
-| B12 catalog | `derive_validation_reports_expected_codes`  | `derive_diagnostics.rs`                  |
+| B1        | `struct_with_derive_debug_prints_named_fields`| `implicit_debug_formats_struct.rs`         |
+| B2        | `enum_with_derive_debug_unit_variant_prints_name` | `implicit_debug_formats_enum.rs`       |
+| B3        | `enum_with_derive_debug_named_field_variant_prints_braces` | `implicit_debug_formats_enum.rs` |
+| B4        | `enum_with_derive_debug_explicit_debug_spec_dispatches` | `implicit_debug_formats_enum.rs`  |
+| B5        | E2E `202_implicit_clone_struct_primitive.rvn` + 203/204/205 | `tests/release-e2e/cases/` |
+| B6        | `derive_partial_eq_compares_fields_struct`    | `implicit_partial_eq_returns_correct.rs`   |
+| B6        | E2E `206_implicit_partial_eq.rvn` + `133_implicit_partial_eq.rvn` | `tests/release-e2e/cases/` |
+| B8        | `derive_hashable_dispatches_through_trait_bounds` | `implicit_mixin_dispatch.rs`           |
+| B8        | E2E `207_implicit_hash.rvn` + `132_implicit_hashable.rvn` | `tests/release-e2e/cases/`   |
+| B9, B14   | `derive_default_emits_concrete_static_method` | `implicit_mixin_dispatch.rs`               |
+| B9        | E2E `208_implicit_default.rvn`                | `tests/release-e2e/cases/`               |
+| B10       | `derive_ord_and_partial_ord_dispatch_through_trait_bounds` | `implicit_mixin_dispatch.rs` |
+| B10       | E2E `126_implicit_ord_compare.rvn` + `209_implicit_ord.rvn` | `tests/release-e2e/cases/` |
+| B11       | E2E `131_implicit_copy.rvn` + `derive_copy_clone_fixture_typechecks_cleanly` | `implicit_diagnostics.rs` |
+| B12 E0607 | `derive_invalid_target_reports_e0607`         | `implicit_diagnostics.rs`                  |
+| B12 E0610/E0611 | `derive_clone_on_struct_with_non_clone_field_emits_e0610_or_e0611` + enum equivalent | `implicit_negatives.rs` |
+| B12 E0613 | `derive_partial_eq_on_struct_with_non_eq_field_emits_e0613` | `implicit_negatives.rs`        |
+| B12 E0615 | `derive_hash_on_struct_with_non_hash_field_emits_e0615` | `implicit_negatives.rs`            |
+| B12 E0616 | `derive_default_on_empty_enum_emits_e0616`    | `implicit_negatives.rs`                    |
+| B12 E0617 | `derive_ord_on_struct_with_non_ord_field_emits_e0617` | `implicit_negatives.rs`              |
+| B12 E0618 | `derive_partial_ord_on_struct_with_non_partial_ord_field_emits_e0618` | `implicit_negatives.rs` |
+| B12 catalog | `derive_validation_reports_expected_codes`  | `implicit_diagnostics.rs`                  |
 | B13       | covered transitively by B8/B9/B10 + E2E fixtures |                                        |
 
 Error-code registry is itself pin-tested by

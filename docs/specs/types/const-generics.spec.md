@@ -61,8 +61,8 @@ The same form is accepted on:
 - `class T[..., const N: Type]`
 - `enum T[..., const N: Type]`
 - `def name[..., const N: Type](args)`
-- `impl[..., const N: Type] T[..., N]`
-- `trait T[..., const N: Type]`
+- `extension T[..., const N: Type]`
+- `mixin T[..., const N: Type]`
 
 Multiple const params and arbitrary ordering are accepted at the
 parser layer (canonical style — types first, consts after — is a
@@ -181,9 +181,9 @@ Pin tests added as each stage lands; see prompt-07 phasing notes.
   `comptime` and is a different feature entirely. (NG1)
 - Floating-point const generics.  `NaN != NaN` breaks type equality. (NG2)
 - `String` / `&str` const generics. (NG3)
-- Const-generic type parameters (`fn foo[const T: Type]`). (NG4)
-- Const-generic specialization (`impl SmallVec[T, 0]` overriding the
-  generic impl). (NG5)
+- Const-generic type parameters (`def foo[const T: Type]`). (NG4)
+- Const-generic specialization (`extension SmallVec[T, 0]` overriding the
+  generic extension). (NG5)
 - Default values for const generics (`const N: USize = 4`). (NG6)
 - Inference of const arguments — must always be written explicitly
   at the use site, matching Rust's `min_const_generics`. (OQ-3)

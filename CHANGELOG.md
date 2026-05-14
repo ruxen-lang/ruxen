@@ -351,7 +351,7 @@ once 1.0.0 ships.
   Documents the v2 gap on user-callable `.hash_code` for primitives
   and on `T: Hashable` monomorphisation for primitive `T` (link
   fails today with `_T: Hashable_hash_code`); a new `#[ignore]`
-  pin test in `derive_trait_dispatch.rs::primitive_int_and_string_
+  pin test in `implicit_mixin_dispatch.rs::primitive_int_and_string_
   dispatch_through_hashable_bound` documents the gap so future v2
   work can flip the `#[ignore]` off.
 
@@ -545,10 +545,10 @@ once 1.0.0 ships.
   rejects splitting the chain across statements (`let e = m.entry(k); e.or_insert(v)`)
   with a clear error so users do not silently fall through the lenient
   unknown-method path. New release-e2e fixtures
-  `510_hashmap_entry_or_insert.rvn` and `511_hashmap_entry_or_insert_with.rvn`
+  `510_map_entry_or_insert.rvn` and `511_map_entry_or_insert_with.rvn`
   cover the populated, empty, and lazy-default paths; positive
-  type-check tests in `crates/riven-core/tests/stdlib_hashmap.rs` and
-  matching negative tests in `stdlib_hashmap_negatives.rs`.
+  type-check tests in `crates/riven-core/tests/stdlib_map.rs` and
+  matching negative tests in `stdlib_map_negatives.rs`.
 - Phase 2 stdlib `Iterator` eager terminators on `*Iter` classes
   (#05 batch 1). `vec.iter.sum` and `vec.iter.count` now type-check
   and dispatch to the existing `riven_vec_sum` / `riven_vec_count`
@@ -633,10 +633,10 @@ once 1.0.0 ships.
   `resolve/mod.rs::ty_is_valid_hash_key` rejects compound containers
   (`Array`, `Set`, `Map`) as `Map` keys / `Set` elements, emitting
   `E0615` at the type-construction site (parallel to the per-field
-  auto-synth validator in `derive/mod.rs`). New release-e2e fixture
-  `tests/release-e2e/cases/509_hashmap_index_op.rvn` exercises
+  auto-synth validator in `implicit_includes/mod.rs`). New release-e2e fixture
+  `tests/release-e2e/cases/509_map_index_op.rvn` exercises
   the hit path; six new negative tests in
-  `crates/riven-core/tests/stdlib_hashmap_negatives.rs`
+  `crates/riven-core/tests/stdlib_map_negatives.rs`
   (`hashmap_with_non_hash_key_emits_e0615`,
   `hashset_with_non_hash_element_emits_e0615`,
   `hashmap_with_nested_compound_key_emits_e0615`,
@@ -676,9 +676,9 @@ once 1.0.0 ships.
   `with_capacity`) are added to the `FRESH_ALLOC_CALLEES` whitelist
   in `mir/lower.rs` so their fresh allocations are dropped at scope
   exit. 13 new release-e2e fixtures at
-  `tests/release-e2e/cases/50[1-6]_hashmap_*.rvn` and
-  `52[1-7]_hashset_*.rvn`; new typecheck-level pin tests in
-  `crates/riven-core/tests/stdlib_hashmap.rs` and `stdlib_hashset.rs`.
+  `tests/release-e2e/cases/50[1-6]_map_*.rvn` and
+  `52[1-7]_set_*.rvn`; new typecheck-level pin tests in
+  `crates/riven-core/tests/stdlib_map.rs` and `stdlib_set.rs`.
 - Phase 2 stdlib `Array[T]` surface batch 2 (#03): closes the closure
   surface and wires the per-element drop selector. New methods:
   `Array.from_iter(I)` static constructor (runtime fn
@@ -703,7 +703,7 @@ once 1.0.0 ships.
   `vec_of_vec_int_releases_every_inner_vec`). New typeck negatives
   pinning `dedup`, `retain`, `sort_by`, and `from_iter` contracts.
   New developer-facing reference at
-  `docs/dev/vec_iter_borrow_rules.md` documenting the receiver-mode
+  `docs/dev/array_iter_borrow_rules.md` documenting the receiver-mode
   rules that statically reject iterator–mutator interleavings.
 - Phase 2 stdlib `Array[T]` surface batch 1 (#03): new constructors and
   inspectors `Array.with_capacity(Int)`, `capacity`; new mutators
@@ -719,7 +719,7 @@ once 1.0.0 ships.
   selector wiring (closes the runtime half of the `Array[String]`
   spine-only limitation; full MIR selector lands in batch 2). Eight
   new release-e2e fixture pairs at `tests/release-e2e/cases/40[1-8]_*`.
-  New negatives suite `crates/riven-core/tests/stdlib_vec_negatives.rs`
+  New negatives suite `crates/riven-core/tests/stdlib_array_negatives.rs`
   pinning the typecheck contract for `Array[i]`, `Array.pop -> Option`,
   `Array[T] == Array[T] -> Bool`, plus two TODO-tagged tests recording
   current typeck laxness for `Array.from(_)` / non-Int args to
@@ -774,7 +774,7 @@ once 1.0.0 ships.
 - Drop elaboration: heap-owned locals freed on reassignment and at
   every loop-exit edge (break, continue, back-edge) (P0.2).
 - Registered auto-synth error codes E0601, E0603, E0605, E0608, E0609
-  (previously emitted by `derive/mod.rs` but missing from the public
+  (previously emitted by `implicit_includes/mod.rs` but missing from the public
   registry) and reserved E0610, E0611, E0613, E0615, E0616, E0617,
   E0618 ahead of T1.05 auto-synth work (#01-B1).
 - Auto-synthesized `Clone` now produces a working `<Type>_clone` for
@@ -797,7 +797,7 @@ once 1.0.0 ships.
   auto-synthesized on an empty enum. Six new release-e2e fixtures
   (`tests/release-e2e/cases/201`, `206`, `207`, `208`, `209`)
   exercise the green path; five negatives in
-  `crates/riven-core/tests/derive_negatives.rs` pin the red path.
+  `crates/riven-core/tests/implicit_negatives.rs` pin the red path.
 
 ### Fixed
 - Heap-owned `String`, `Array`, and `Map` locals are now freed on

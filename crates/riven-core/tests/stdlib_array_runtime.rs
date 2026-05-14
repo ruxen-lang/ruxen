@@ -1,4 +1,4 @@
-//! Pin tests for `docs/specs/stdlib/vec.spec.md` gaps:
+//! Pin tests for `docs/specs/stdlib/array.spec.md` gaps:
 //! `Vec.first / last / contains / clone / reverse` — wired in the
 //! runtime + codegen but not directly pinned.  These tests compile a
 //! tiny Riven program for each, run it, and assert on the stdout so

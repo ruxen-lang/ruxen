@@ -112,7 +112,7 @@ property-shaped assertions.
 ### Non-goals
 
 - **Property testing for user Riven code.** That's a tier-4 item
-  (if we ever add a `@[proptest]` attribute). Out of scope here.
+  (if we ever add a `proptest` in-body directive). Out of scope here.
 - **Fuzzing.** `cargo fuzz` + libfuzzer is complementary; this doc
   specifies proptest-style randomized testing inside the standard
   `cargo test` flow, not continuous fuzzing.
@@ -322,9 +322,9 @@ default 256.
 - **Doc 06 (incremental).** Property P6 (borrow-check determinism)
   composes with doc 06's "differential testing" recommendation
   (incremental vs fresh analysis agreement).
-- **Doc 03 (test framework).** If `@[test]` lands, a future
-  `@[test(proptest)]` annotation could expose proptest to user
-  Riven code. v2+.
+- **Doc 03 (test framework).** If the `test` in-body directive lands, a
+  future `proptest` directive (alongside `test`) could expose proptest to
+  user Riven code. v2+.
 - **Doc 02 (debugger).** No interaction.
 - **Doc 01 (LSP).** No direct interaction, but LSP benefits
   indirectly from a panic-free lexer/parser.

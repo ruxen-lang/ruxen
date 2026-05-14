@@ -18,7 +18,7 @@ All extant stdlib surface resolves to one of ~25 C functions in a single file:
 | To-string conversions | `riven_int_to_string`, `riven_float_to_string`, `riven_bool_to_string` | 59-92 |
 | String ops | `riven_string_eq`, `riven_string_cmp`, `riven_string_concat`, `riven_string_from`, `riven_string_len`, `riven_string_is_empty`, `riven_string_push_str`, `riven_string_trim`, `riven_string_to_lower` | 98-216 |
 | Memory | `riven_alloc`, `riven_dealloc`, `riven_realloc` | 144-163 |
-| Vec | `riven_vec_new`, `riven_vec_push`, `riven_vec_len`, `riven_vec_get`, `riven_vec_get_mut`, `riven_vec_get_opt`, `riven_vec_get_mut_opt`, `riven_vec_is_empty`, `riven_vec_each` | 221-322 |
+| Array | `riven_vec_new`, `riven_vec_push`, `riven_vec_len`, `riven_vec_get`, `riven_vec_get_mut`, `riven_vec_get_opt`, `riven_vec_get_mut_opt`, `riven_vec_is_empty`, `riven_vec_each` | 221-322 |
 | `&str` | `riven_str_split`, `riven_str_parse_uint` | 326-372 |
 | Option/Result | `riven_option_unwrap_or`, `riven_result_unwrap_or_else`, `riven_result_try_op` | 377-405 |
 | Fallbacks | `riven_noop_passthrough`, `riven_noop_return_null`, `riven_noop` | 410-419 |
@@ -31,7 +31,7 @@ Critical limitations:
 - `Array.map`, `Array.filter`, `Array.find`, `Array.position`, `Array.partition`, `Option.map`, `Result.map_err`, `Result.ok_or`, all iterator chain methods → compile to `riven_noop_passthrough` or `riven_noop_return_null`. See `crates/riven-core/src/codegen/runtime.rs:86-167`. They typecheck but do nothing at runtime.
 - `String.to_upper` is declared in `builtin_method_type` (`crates/riven-core/src/typeck/infer.rs:822`) but has no C implementation — it would link against `String_to_upper` which does not exist.
 - No `FILE*`, no `fopen`, no sockets, no clock, no env, no `argv`.
-- No `panic!`, `println!`, `eprintln!`, `format!`, `dbg!` macros. `array!` exists (`crates/riven-core/src/mir/lower.rs:1502-1535`), `hash!` is documented (tutorial 13) but unimplemented.
+- No `panic!`, `println!`, `eprintln!`, `format!`, `dbg!` macros. `array!` exists (`crates/riven-core/src/mir/lower.rs:1502-1535`), `map!` is documented (tutorial 13) but unimplemented.
 
 ### 2.2 Type system (`crates/riven-core/src/hir/types.rs`)
 
@@ -45,7 +45,7 @@ The internal `Ty` enum already knows about all the prelude type forms. Today its
 - 10 built-in mixins (`Displayable`, `Error`, `Comparable`, `Hashable`, `Iterable`, `Iterator`, `FromIterator`, `Copy`, `Clone`, `Debug`, `Drop`) at 139-151. All of them have zero generic params in their internal info record and only list required method names as strings — the method signatures are not registered, which is why the typechecker falls back to structural matching in `traits.rs:106-125`.
 - 3 built-in top-level functions (`puts`, `eputs`, `print`) at 173-195.
 - 4 built-in type constructors (`Array`, `Map`, `Set`, `String`) at 198-215, registered as `DefKind::Variable` so that `Array.new` resolves.
-- `Option`/`Result` enums with `Some`/`None`/`Ok`/`Err` variants (221-325).
+- `Option`/`Result` enums with `Some`/`nil`/`Ok`/`Err` variants (221-325).
 - A `super` shim (328-342).
 
 The registry uses string-keyed lookups in a string-to-`DefId` table (`type_registry`, line 37). This is the point at which a new module like `io` or `fs` would be injected.
@@ -69,7 +69,7 @@ Use-decls are resolved by `resolve_use_decl` (line 1180-1238) and already suppor
 
 ### 2.7 Documentation surface
 
-The tutorial (`docs/tutorial/`) *already* writes code that calls methods not yet implemented: `File.read_string(path)?` (tutorial 11, 7), `input.trim.parse_int` (tutorial 11), `read_line()` (tutorial 5), `hash!{...}` (tutorial 13), `h.insert`, `h.contains_key`, `s.insert`, `s.contains`, `greeting.chars`, `greeting.char_count` (tutorial 13). These are *aspirational* and frame what v1 must deliver.
+The tutorial (`docs/tutorial/`) *already* writes code that calls methods not yet implemented: `File.read_string(path)?` (tutorial 11, 7), `input.trim.parse_int` (tutorial 11), `read_line()` (tutorial 5), `map!{...}` (tutorial 13), `h.insert`, `h.contains_key`, `s.insert`, `s.contains`, `greeting.chars`, `greeting.char_count` (tutorial 13). These are *aspirational* and frame what v1 must deliver.
 
 ## 3. Goals & Non-Goals
 
@@ -103,7 +103,7 @@ Everything listed here is in scope without a `use`. Matches Ruby's "core" feel (
 
 - Types: `String`, `Array[T]`, `Map[K,V]`, `Set[T]`, `Option[T]`, `Result[T,E]`, `Box[T]` (deferred — see §9), `Range`, `RangeInclusive`.
 - Mixins: `Display`, `Debug`, `Clone`, `Copy`, `Drop`, `Eq`, `Ord` (new), `PartialEq`/`PartialOrd` (new, explicit), `Hashable` (distinct from `Map[K,V]`), `Iterator`, `IntoIterator`, `FromIterator`, `Error`, `Default`, `From[T]`, `Into[T]`, `TryFrom[T]`, `TryInto[T]`.
-- Macros: `println!`, `eprintln!`, `print!`, `eprint!`, `format!`, `panic!`, `dbg!`, `todo!`, `unimplemented!`, `assert!`, `assert_eq!`, `array!`, `hash!`, `set!`.
+- Macros: `println!`, `eprintln!`, `print!`, `eprint!`, `format!`, `panic!`, `dbg!`, `todo!`, `unimplemented!`, `assert!`, `assert_eq!`, `array!`, `map!`, `set!`.
 - Functions: `puts` (legacy; kept for one release, delegates to `println!`), `eputs`, `print`.
 
 ### 4.2 `std.io`
@@ -351,7 +351,7 @@ module std.fmt
 end
 ```
 
-Every primitive (`Int`, `Float`, `Bool`, `Char`, `String`, `&str`), `Array`, `Map`, `Set`, `Option`, `Result`, `Tuple`, and fixed-size array types ship with blanket `Display` and/or `Debug` provisions. User types adopt `Display` via an `include Display` directive plus the required `fmt` method; `Debug` is auto-derivable (`derive Debug` on struct/class bodies, already parsed — see `StructDef::derive_traits` at `parser/ast.rs:597`).
+Every primitive (`Int`, `Float`, `Bool`, `Char`, `String`, `&str`), `Array`, `Map`, `Set`, `Option`, `Result`, `Tuple`, and fixed-size array types ship with blanket `Display` and/or `Debug` provisions. User types adopt `Display` via an `include Display` directive plus the required `fmt` method; `Debug` is implicitly included on struct/class bodies per §3.6 of the syntax spec (auto-implicit-include).
 
 Format strings handled by the compiler-side macro expander: `{}` (Display), `{:?}` (Debug), `{:width.precision$}`, `{:>10}`, `{:<}`, `{:^}`, `{:0>4}`, `{:x}`, `{:X}`, `{:b}`, `{:o}`, `{:e}`, `{:.3}`.
 
@@ -504,7 +504,7 @@ Requires `K: Hashable + Eq`.
 | `get_mut` | `(&mut self, k: &K) -> Option[&mut V]` | mutable lookup |
 | `remove` | `(&mut self, k: &K) -> Option[V]` | returns removed |
 | `contains_key` | `(&self, k: &K) -> Bool` | tutorial 13 uses this spelling |
-| `len` / `is_empty` | as `Vec` | |
+| `len` / `is_empty` | as `Array` | |
 | `clear` | `(&mut self)` | |
 | `keys` | `(&self) -> Keys[K, V]` | iterator over &K |
 | `values` | `(&self) -> Values[K, V]` | iterator over &V |
@@ -545,7 +545,7 @@ Requires `K: Hashable + Eq`.
 | `ok_or_else` | `[E](self, f: Fn() -> E) -> Result[T, E]` | |
 | `as_ref` | `(&self) -> Option[&T]` | |
 | `as_mut` | `(&mut self) -> Option[&mut T]` | |
-| `take` | `(&mut self) -> Option[T]` | leaves `None` behind |
+| `take` | `(&mut self) -> Option[T]` | leaves `nil` behind |
 | `replace` | `(&mut self, v: T) -> Option[T]` | |
 | `filter` | `(self, f: Fn(&T) -> Bool) -> Option[T]` | |
 | `try_op` | desugar target for `?` | already wired |
@@ -837,7 +837,7 @@ end
 
 This allows the existing borrow checker and type checker to work unchanged. Alternative: build a single `vformat` runtime call with a compile-time type-tag array — rejected because it hides errors from the borrow checker and multiplies codegen complexity.
 
-Each macro call site becomes a `HirExprKind::Block` after expansion, with `HirExprKind::MacroCall` kept only as a fallback for `array!`/`hash!`/`set!` literal macros which already have a lowering path in `mir/lower.rs:1503`.
+Each macro call site becomes a `HirExprKind::Block` after expansion, with `HirExprKind::MacroCall` kept only as a fallback for `array!`/`map!`/`set!` literal macros which already have a lowering path in `mir/lower.rs:1503`.
 
 ### 7.5 Threading through the pipeline
 
@@ -848,7 +848,7 @@ Walk order (lexer is unchanged):
 3. **Resolver** (`resolve/mod.rs`): `register_std()` loads stdlib `.rvn` sources from the search path, runs a mini resolve pass, and merges their `SymbolTable` into the main one. Also registers all new DefIds for stdlib types/mixins/fns.
 4. **Typechecker** (`typeck/infer.rs`): new `builtin_method_type` entries + mixin default methods now resolve via normal nominal `include` lookup (`traits.rs:136-180`), not hard-coded returns.
 5. **Borrow checker** (unchanged): new types follow the existing Move/Copy rules (`hir/types.rs:184-235`). `File`, `Stdin`, `TcpStream` are Move; `Path` is borrow; `Duration`, `Instant` are Copy.
-6. **MIR lowerer** (`mir/lower.rs`): add `hash!` / `set!` macro lowering next to the existing `array!` case at line 1502. Format-macro expansion is already handled at step 2 so no lowerer change.
+6. **MIR lowerer** (`mir/lower.rs`): add `map!` / `set!` macro lowering next to the existing `array!` case at line 1502. Format-macro expansion is already handled at step 2 so no lowerer change.
 7. **Codegen** (`codegen/runtime.rs`): extend `runtime_name()` with the new mangled names. The `?T...` fallback block (lines 131-167) can shrink once real mixin dispatch lands.
 
 ### 7.6 Program entry shim
@@ -887,9 +887,9 @@ Update `install.sh` (already at lines 161-168) to install `share/riven/std/` fro
 - `Map[K,V]` and `Set[T]` end-to-end (runtime.c + typechecker + mangled names).
 - `Iterator` mixin in `std.iter` with default methods; `IntoIterator`, `FromIterator`.
 - `String` full surface (§5.6).
-- `hash!{…}` and `set!{…}` macros in `mir/lower.rs`.
+- `map!{…}` and `set!{…}` macros in `mir/lower.rs`.
 - `println!`, `eprintln!`, `print!`, `eprint!`, `format!`, `dbg!`, `panic!`, `assert!`, `assert_eq!` format macros.
-- `Display` / `Debug` mixins with blanket provisions for primitives; `derive Debug` on structs/classes.
+- `Display` / `Debug` mixins with blanket provisions for primitives; implicit `Debug` include on structs/classes per §3.6.
 - Prelude registration.
 - Delete `riven_noop_passthrough`, `riven_noop_return_null` (they become unreferenced once real dispatch lands).
 
@@ -930,7 +930,7 @@ Exit: a minimal HTTP client demo compiles and runs (`TcpStream.connect` + `write
 1. **`Hashable` vs hash-keyed map.** The canonical resolution chosen by spec §3.11 is:
    - Collection type is `Map[K,V]` (Ruby word, no conflict). **Final.**
    - Mixin describing "value that can be hashed" is `Hashable`. **Final.**
-   - The derive marker for `Hashable` is the in-body `derive Hash` directive, where `Hash` names the derive set, not a type.
+   - `Hashable` is included via the usual `include Hashable` directive (or implicitly per §3.6 when every field is `Hashable`).
 2. **`Char` width.** `hir/types.rs:57` has `Ty::Char` but the lexer/string code treats strings as byte arrays. For `String.chars`: emit `Char` as `u32` and UTF-8 decode in `riven_string_chars_next`? Or keep `Char` as ASCII byte and defer? **Recommend**: `Char` stays 32-bit Unicode scalar; `String.chars` decodes; non-ASCII strings that come via FFI get validated lazily.
 3. **`UInt128`.** `Duration.as_nanos` wants a 128-bit result. Riven does not model `Int128`/`UInt128` yet (`hir/types.rs:40-56`). Options: add it; return `Result[UInt64, OverflowError]`; return `UInt64` with saturating semantics. **Recommend**: saturating `UInt64` in v1, add `UInt128` in phase 2.
 4. **Operator overloading for arithmetic mixins (`Add`, `Sub`, `Mul`, …).** Needed for `Duration + Duration`. Riven parses `a + b` via `BinOp::Add` in `parser/ast.rs:367`. The typechecker today only accepts numeric operands. Do we (a) hard-code Duration arithmetic in the typechecker (ugly) or (b) add operator overloading via mixin lookup (principled but larger scope)? **Recommend (b)**, track as a dependency of `std.time`.
@@ -947,6 +947,6 @@ Exit: a minimal HTTP client demo compiles and runs (`TcpStream.connect` + `write
 4. **`argv` ownership.** Turning `char **argv` into `Array[String]` means copying — argv strings live until process exit, but our `Array[String]` owns its elements and frees them on drop, which would `free()` memory we don't own. Mitigation: copy argv into heap strings at `riven_env_init` time.
 5. **The `?T...` codegen fallback masks real bugs.** `runtime.c`'s `riven_noop_passthrough` makes miscompiled code *run without error*. Once real dispatch lands, some currently-passing tests may start failing because the noop hid a type-resolution bug. Mitigation: in phase 1a, add a `rivenc --strict-dispatch` flag that turns all `?T...` → `riven_noop_passthrough` lookups into hard errors, and run the full test suite with it on.
 6. **Scope creep.** The obvious temptation is to ship `BTreeMap`, async, UTF-8, rand, thread, and sync all at once. Mitigation: this doc is explicit about v1 vs phase 2, and the sibling concurrency doc owns thread/sync.
-7. **Tutorial drift.** The tutorial already promises `Hash.new` and `hash!{}`. The rename to `Map` requires the tutorial sweep tracked as a blocking subtask of phase 1a.
+7. **Tutorial drift.** The tutorial already promises `Map.new` and `map!{}`. The rename to `Map` requires the tutorial sweep tracked as a blocking subtask of phase 1a.
 8. **Macro hygiene / identifier capture.** `println!("{}", x)` expanding to `var __buf = ...` risks name collision with a user variable named `__buf`. Mitigation: use gensym'd names with a reserved prefix (`__rvn_fmt_N`) that the lexer rejects at the user surface.
 9. **Sanitizer builds.** `object.rs:10-42` compiles `runtime.c` with `-fsanitize=address,undefined` under `--sanitize`. New stdlib C code must be ASan-clean; expect several rounds of fixing leaks and UB in the first implementation pass.

@@ -45,8 +45,8 @@ module produces another `ModuleDef`.
 ## B3 — Module body accepts every top-level item form
 
 Inside a `module ... end` body, the parser accepts the same items
-the top level accepts: `struct`, `class`, `enum`, `trait`, `impl`,
-`def`, `use`, `type` alias, `newtype`, `const`, `lib`, `extern`.
+the top level accepts: `struct`, `class`, `enum`, `mixin`,
+`extension`, `def`, `use`, `type` alias, `newtype`, `const`, `lib`.
 
 ## B4 — Resolver currently rejects `outer.inner` paths for user modules
 
@@ -86,13 +86,13 @@ existing `use` machinery for `std.*` paths.
 ## Out of scope until resolver support lands
 
 - `mod foo;` file-based module declarations (Rust style).
-- `pub` visibility on user-module items.
-- Re-exports (`pub use ...`).
+- `private` visibility markers on user-module items.
+- Re-exports (`use ...` re-exports).
 - Cross-file module trees.
 - Use-paths into user modules (`use geometry.Point`).
 
 When the resolver gains user-module support, this spec gains B-rows
 for:
 - B5: `use mymod.X` binds `X` in scope.
-- B6: `mymod::X` qualified path works.
-- B7: `pub def f` is reachable from outside; private `def f` is not.
+- B6: `mymod.X` qualified path works.
+- B7: public `def f` is reachable from outside; `private def f` is not.

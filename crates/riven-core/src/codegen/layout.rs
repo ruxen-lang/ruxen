@@ -421,7 +421,12 @@ fn layout_of_inner(
         // and recurse into the field layout with that map.  Type
         // args (`Ty::ConstArg`-free entries) are ignored — they only
         // affect monomorphization mangling, not in-memory layout.
-        Ty::Class { name, generic_args, .. } | Ty::Struct { name, generic_args, .. } => {
+        Ty::Class {
+            name, generic_args, ..
+        }
+        | Ty::Struct {
+            name, generic_args, ..
+        } => {
             let class_bindings = bindings_from_generic_args(name, generic_args, symbols);
             layout_user_type(name, symbols, &class_bindings)
         }

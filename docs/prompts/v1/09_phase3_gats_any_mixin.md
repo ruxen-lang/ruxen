@@ -2,9 +2,7 @@
 
 **Depends on:** prompts 07-08.
 **Reads:** `docs/requirements/tier2_05_gats.md`,
-`docs/requirements/tier2_06_trait_objects.md` (requirements doc
-slug pending separate rename — content concerns the `any Mixin`
-feature).
+`docs/requirements/tier2_06_any_mixin.md`.
 
 ## A. Generic associated types (GATs)
 

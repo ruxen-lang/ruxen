@@ -1,35 +1,35 @@
-# Tier 2.04 — `impl Trait` and Specialization
+# Tier 2.04 — `some Mixin` and Specialization
 
 Status: Draft (requirements)
 Owner: compiler
 Depends on: monomorphization (M2); associated types (doc 01) for
-            return-position `impl Trait` that desugars to an associated
+            return-position `some Mixin` that desugars to an associated
             type
 Blocks: the cleanest signature for iterator combinators; return-position
-        `impl Fn`, `impl Iterator` from stdlib
+        `some Fn`, `some Iterator` from stdlib
 
 ## 1. Summary & Motivation
 
 This doc bundles two features that are historically tangled:
 
-- **`impl Trait`** in argument position and return position — opaque
+- **`some Mixin`** in argument position and return position — opaque
   existential types that let the caller or callee hide a concrete type
-  behind a trait bound.
+  behind a mixin bound.
 - **Specialization** — the ability to write multiple overlapping impls
   and let the compiler pick the most specific one at each call site.
 
-They are bundled because (a) return-position `impl Trait` historically
-pressured Rust toward specialization for the `impl Display for T` case
+They are bundled because (a) return-position `some Mixin` historically
+pressured Rust toward specialization for the `include Display on T` case
 (a blanket impl plus a specific override), and (b) both are about
 narrowing a generic signature at compile time. But they are *not* the
 same feature and can ship independently.
 
 **The recommendation, summarised:**
 
-- **Ship `impl Trait` in argument position in phase 04a** — it is a
+- **Ship `some Mixin` in argument position in phase 04a** — it is a
   trivial desugaring to a fresh type parameter plus a bound, already
   half-implemented (`Ty::ImplTrait` exists at `hir/types.rs:113`).
-- **Ship `impl Trait` in return position in phase 04b**, blocked on
+- **Ship `some Mixin` in return position in phase 04b**, blocked on
   monomorphization (M2) and a notion of opaque types (§5.2).
 - **Do not ship specialization in v1.** See §9. Document the feature
   request, reserve the syntax, and defer to a future release.
@@ -41,7 +41,7 @@ same feature and can ship independently.
 `hir/types.rs:112-113`:
 
 ```rust
-/// `impl Trait` — static dispatch, structural satisfaction OK
+/// `some Mixin` — static dispatch, structural satisfaction OK
 ImplTrait(Vec<TraitRef>),
 ```
 
@@ -55,41 +55,41 @@ Resolver: `resolve/mod.rs:2484-2491` builds `Ty::ImplTrait(Vec<TraitRef>)`.
 `codegen/layout.rs:337-339`:
 
 ```rust
-// ── impl Trait (static dispatch) ────────────────────────────────────
+// ── some Mixin (static dispatch) ────────────────────────────────────
 // The concrete type is erased here; we conservatively return pointer size.
 Ty::ImplTrait(_) => TypeLayout::primitive(8, 8),
 ```
 
 This is wrong for anything larger than a pointer, and gets us back to
-the int64-slot-erasure problem (overview §Dependency). `impl Trait`
+the int64-slot-erasure problem (overview §Dependency). `some Mixin`
 return position cannot ship until M2 lands.
 
 ### 2.3 Trait resolution accepts structural satisfaction
 
-`typeck/traits.rs:83-125`: for `impl Trait`, structural satisfaction
+`typeck/traits.rs:83-125`: for `some Mixin`, structural satisfaction
 is accepted (the type has methods with matching signatures, no
-explicit `impl T for U` required). For `dyn Trait`, nominal only.
+explicit `include T on U` required). For `any Mixin`, nominal only.
 
 This is the *semantic difference* between `impl` and `dyn` that must
-be preserved through any refactor. It also means `impl Trait` cannot
+be preserved through any refactor. It also means `some Mixin` cannot
 be stored — a structurally-satisfied type has no vtable.
 
-### 2.4 No `impl Trait` in return position
+### 2.4 No `some Mixin` in return position
 
 Parser accepts the syntax in return types (same `TypeExpr::ImplTrait`),
 but the resolver / typeck treats it the same as an argument-position
-`impl Trait` — a fresh type parameter. For return position this is
+`some Mixin` — a fresh type parameter. For return position this is
 wrong: the concrete type must not leak to the caller. The caller sees
 an opaque type.
 
-No fixture uses `impl Trait` in return position today.
+No fixture uses `some Mixin` in return position today.
 
 ### 2.5 Specialization — nothing exists
 
 No `impl` overlap check. `TraitResolver::register_impl`
 (`typeck/traits.rs:59-79`) uses `HashMap<(String, String), Vec<ImplMethod>>`
 keyed by `(type_name, trait_name)` — there is silently a *single*
-entry per pair. Two `impl Foo for Vec[Int]` in the same program would
+entry per pair. Two `extension Array[Int] ... include Foo ... end` in the same program would
 overwrite each other with no diagnostic.
 
 This is a pre-existing coherence hole (tier 1 does not surface it;
@@ -99,22 +99,22 @@ see §9 risk).
 
 ### Goals
 
-- **G1.** `def foo(x: impl Displayable)` — argument-position `impl
-  Trait` is a syntactic sugar for `def foo[T: Displayable](x: T)`. Type-
+- **G1.** `def foo(x: some Displayable)` — argument-position `some Mixin`
+  is a syntactic sugar for `def foo[T: Displayable](x: T)`. Type-
   check, monomorphize, run.
-- **G2.** `def iter() -> impl Iterator[Item = Int]` — return-position
-  `impl Trait` produces an opaque type whose concrete body is the
+- **G2.** `def iter() -> some Iterator[Item = Int]` — return-position
+  `some Mixin` produces an opaque type whose concrete body is the
   function's return type, erased from the caller's view.
-- **G3.** Two call sites of a return-position `impl Trait` function
+- **G3.** Two call sites of a return-position `some Mixin` function
   see *the same opaque type* — not "any iterator," but "the specific
   iterator this function returns." Needed for e.g. passing the return
   value back into the same function.
-- **G4.** Argument-position `impl Trait` does not monomorphize once
+- **G4.** Argument-position `some Mixin` does not monomorphize once
   per call site (the whole point is one body per distinct concrete
   type, same as any generic).
-- **G5.** `impl Trait` is not storable in a field unless the field's
+- **G5.** `some Mixin` is not storable in a field unless the field's
   type is the same function's return type via a `type` alias — i.e.,
-  `type MyIter = impl Iterator[Item = Int]` (phase 04c).
+  `type MyIter = some Iterator[Item = Int]` (phase 04c).
 - **G6.** Coherence: multiple `impl` blocks for the same `(trait,
   type)` pair produce E-IMPL-DUP at impl-register time. Fixes the
   pre-existing hole in §2.5.
@@ -122,21 +122,21 @@ see §9 risk).
 ### Non-goals
 
 - **NG1.** Specialization. See §9.
-- **NG2.** Trait alias (`trait Foo = Iterator + Clone`). Separate
-  feature; frequently paired with `impl Trait` but independent.
-- **NG3.** `impl Trait` in trait method signatures (RPITIT). Rust
+- **NG2.** Mixin alias (`mixin Foo = Iterator + Clone`). Separate
+  feature; frequently paired with `some Mixin` but independent.
+- **NG3.** `some Mixin` in trait method signatures (RPITIT). Rust
   shipped this in 2023; requires careful interaction with associated
   types and sendability. Defer.
-- **NG4.** `impl Trait` in `let` bindings. Rust did not stabilize.
+- **NG4.** `some Mixin` in `let` bindings. Rust did not stabilize.
 - **NG5.** Named opaque types (`type MyIter: Iterator[Item = Int]`).
   Phase 04c only if requested by stdlib.
 
 ## 4. Surface Syntax
 
-### 4.1 Argument-position `impl Trait`
+### 4.1 Argument-position `some Mixin`
 
 ```riven
-def print_all(items: impl Iterator[Item = String])
+def print_all(items: some Iterator[Item = String])
   for s in items
     puts s
   end
@@ -149,22 +149,22 @@ def print_all[I: Iterator[Item = String]](items: I) ...
 Multiple bounds:
 
 ```riven
-def log(x: impl Displayable + Serializable)
+def log(x: some Displayable + Serializable)
   puts x.to_display
   save(x.serialize)
 end
 ```
 
-`&impl Trait`, `&mut impl Trait` work the usual way.
+`&some Mixin`, `&mut some Mixin` work the usual way.
 
-### 4.2 Return-position `impl Trait`
+### 4.2 Return-position `some Mixin`
 
 ```riven
-def ones -> impl Iterator[Item = Int]
+def ones -> some Iterator[Item = Int]
   (1..).map { |_| 1 }
 end
 
-def make_closure(x: Int) -> impl Fn(Int) -> Int
+def make_closure(x: Int) -> some Fn(Int) -> Int
   { |y| x + y }
 end
 ```
@@ -174,14 +174,14 @@ Rules:
 - The concrete return type is inferred from the body.
 - Every `return` in the function must produce the same concrete
   type (E-IMPL-RET-MISMATCH). Different types with a common trait
-  are not collapsed; the user must go through `Box[dyn Trait]` (doc
+  are not collapsed; the user must go through `Box[any Mixin]` (doc
   06) if they want heterogeneity.
 - The caller sees an opaque type that implements the declared traits.
 
 ### 4.3 Named opaque types (phase 04c, optional)
 
 ```riven
-type FizzBuzzIter = impl Iterator[Item = String]
+type FizzBuzzIter = some Iterator[Item = String]
 
 def fizzbuzz -> FizzBuzzIter
   (1..101).map { |n| ... }
@@ -240,7 +240,7 @@ pub enum Ty {
 
 Resolver:
 
-- For each `impl Trait` *in return position*, synthesise a
+- For each `some Mixin` *in return position*, synthesise a
   `Ty::Opaque { def_id: enclosing_fn, bounds }`.
 - Attach a "hidden-type" slot to the function's `FnSignature`:
   `pub hidden_return_ty: Option<Ty>` — filled in by typeck once the
@@ -279,8 +279,8 @@ New pass `typeck/coherence.rs` runs after all impls are collected:
 - For every `(trait_name, target_ty_skeleton)` pair, count impls.
   > 1 → E-IMPL-DUP.
 - "Skeleton" means: compare structurally, treating generic params as
-  alpha-equivalent. So `impl Foo for Vec[T]` and `impl Foo for Vec[U]`
-  are duplicates, but `impl Foo for Vec[Int]` and `impl Foo for Vec[T]`
+  alpha-equivalent. So `impl Foo for Array[T]` and `impl Foo for Array[U]`
+  are duplicates, but `extension Array[Int] ... include Foo ... end` and `impl Foo for Array[T]`
   are not — the first is more specific and *would* be a specialization
   case (§9 forbids it today with E-IMPL-OVERLAP instead of resolving
   it).
@@ -290,7 +290,7 @@ New pass `typeck/coherence.rs` runs after all impls are collected:
 All overlapping impls produce E-IMPL-OVERLAP at coherence time. The
 user must refactor to a single impl with a generic bound.
 
-Reserved syntax: `@[specialize]` on an impl block. Currently rejected
+Reserved syntax: `in-body `specialize` directive` on an impl block. Currently rejected
 as "not implemented"; reserving signals intent without shipping.
 
 ## 6. Implementation Plan
@@ -299,7 +299,7 @@ as "not implemented"; reserving signals intent without shipping.
 
 | Change | File(s) |
 |---|---|
-| Argument-position `impl Trait` → synthetic generic param | `resolve/mod.rs:2484-2491` + new helper `impl_trait_to_generic` |
+| Argument-position `some Mixin` → synthetic generic param | `resolve/mod.rs:2484-2491` + new helper `impl_trait_to_generic` |
 | `Ty::Opaque { def_id, bounds }` | `hir/types.rs:112-115` |
 | `FnSignature.hidden_return_ty` | `resolve/symbols.rs:13-19` |
 | Body-check fills in hidden type | `typeck/infer.rs` in function-body check |
@@ -311,30 +311,30 @@ as "not implemented"; reserving signals intent without shipping.
 
 ### 6.2 Phasing
 
-**Phase 04a — argument-position `impl Trait` + coherence (1 week).**
+**Phase 04a — argument-position `some Mixin` + coherence (1 week).**
 
 1. Resolver lowers `Ty::ImplTrait` in argument position to a
    synthetic generic param.
 2. Coherence pass runs over all registered impls.
-3. Tests: `fn each(items: impl Iterator)` works; overlap produces
+3. Tests: `fn each(items: some Iterator)` works; overlap produces
    E-IMPL-OVERLAP.
 
-At end of 04a, argument-position `impl Trait` is indistinguishable
+At end of 04a, argument-position `some Mixin` is indistinguishable
 from explicit generics. No codegen change.
 
-**Phase 04b — return-position `impl Trait` (2 weeks, blocks on M2).**
+**Phase 04b — return-position `some Mixin` (2 weeks, blocks on M2).**
 
 4. Add `Ty::Opaque`.
-5. Synthesize an opaque when parsing a return-position `impl Trait`.
+5. Synthesize an opaque when parsing a return-position `some Mixin`.
 6. Fill `hidden_return_ty` during body check.
 7. Coerce `Ty::Opaque` against declared bounds for method dispatch.
 8. Monomorphization uses the hidden type for layout and codegen.
-9. Tests: `fn ones -> impl Iterator[Item = Int]` returns a real
+9. Tests: `fn ones -> some Iterator[Item = Int]` returns a real
    iterator, and `ones.map(|x| x + 1)` type-checks.
 
 **Phase 04c — named opaque types (1 week, optional).**
 
-10. `type FooIter = impl Iterator[Item = Int]` parses.
+10. `type FooIter = some Iterator[Item = Int]` parses.
 11. Two functions returning `FooIter` return *the same* opaque type
     — this requires extending `Ty::Opaque { def_id }` to also allow
     a `type_alias_def_id` variant.
@@ -344,24 +344,24 @@ from explicit generics. No codegen change.
 
 ### 7.1 With associated types (doc 01)
 
-`impl Iterator[Item = Int]` uses the equality-constraint sugar from
+`some Iterator[Item = Int]` uses the equality-constraint sugar from
 doc 01. Phase 04a requires doc 01 phase 01a to have landed.
 
 ### 7.2 With GATs (doc 05)
 
-`impl LendingIterator[Item['a] = &'a Str]` — the constraint on the
+`include LendingIterator[Item['a] = &'a Str]` — the constraint on the
 GAT is parsed via the same sugar. No new logic; GATs simply produce
 a projection with a bound lifetime.
 
-### 7.3 With trait objects (doc 06)
+### 7.3 With mixin existentials (doc 06)
 
-`impl Trait` and `dyn Trait` are the two ways to "hide a type."
+`some Mixin` and `any Mixin` are the two ways to "hide a type."
 Static (impl) vs dynamic (dyn). Documentation should make the
 difference prominent:
 
-- `impl Trait` — one concrete type, opaque to the caller, zero
+- `some Mixin` — one concrete type, opaque to the caller, zero
   runtime cost beyond monomorphization.
-- `dyn Trait` — vtable dispatch, fat pointer, cannot be copied.
+- `any Mixin` — vtable dispatch, fat pointer, cannot be copied.
 
 ### 7.4 With HRTBs (doc 03)
 
@@ -377,11 +377,11 @@ unknown types. Document.
 
 ### 7.6 With specialization (§9)
 
-If specialization ever ships, return-position `impl Trait` gains a
+If specialization ever ships, return-position `some Mixin` gains a
 new behaviour: `def foo -> impl Display` in a blanket impl could be
 overridden per type. Design for this hook now — `coherence.rs`'s
 rejection of overlapping impls becomes a warning-and-pick-most-
-specific if a `@[specialize]` attribute is present.
+specific if a `in-body `specialize` directive` attribute is present.
 
 ## 8. Phasing
 
@@ -402,17 +402,17 @@ end
 
 # Specific impl overrides for Int — picks this one when the concrete
 # type is Int.
-impl Transform for Int
+extension Int ... include Transform ... end   # specialised
   def transform(self) -> Int { self * 2 }
 end
 ```
 
 Attractive for:
 
-- efficient fallback implementations (blanket `impl Clone` for
+- efficient fallback implementations (blanket `include Clone` for
   copyable types that trivially `*x`),
 - deriving `Debug` with a specialised format for strings,
-- numeric-tower optimisations (`impl Add for Rationals` with
+- numeric-tower optimisations (`extension Rationals ... include Add ... end` with
   Rational/Rational fast path).
 
 ### 9.2 The cost
@@ -425,9 +425,9 @@ Specialization is known to be unsound in the presence of:
   ill-typed code at monomorphization. Rust solved this with
   `always_applicable` predicates and still has open soundness holes
   (rust-lang/rust#40582, open since 2017).
-- **Associated types.** A blanket `type Item = Vec[T]` and a
+- **Associated types.** A blanket `type Item = Array[T]` and a
   specialised `type Item = &'static [T]` — a user who wrote code
-  against `Self.Item = Vec[T]` now sees a different type at a
+  against `Self.Item = Array[T]` now sees a different type at a
   call site that picked the specialised impl.
 - **Drop.** A specialised impl with a different Drop behaviour
   changes observable program behaviour silently.
@@ -443,7 +443,7 @@ problem.
 
 - Do not implement specialization in tier 2.
 - Coherence rejects overlaps with E-IMPL-OVERLAP. No workaround.
-- Reserve `@[specialize]` as an attribute name so it is free for a
+- Reserve `in-body `specialize` directive` as an attribute name so it is free for a
   future release.
 - Document in the tutorial: "To share code between impls, extract a
   free function or use a helper trait with a `where` bound."
@@ -467,19 +467,19 @@ This is ~4-6 weeks of careful design + coherence work. Deferred.
 ## 10. Open Questions & Risks
 
 - **OQ-1: opaque type leak through dataflow.** If `def a -> impl
-  Iterator` and `def b -> impl Iterator` both exist, can the same
+  Iterator` and `def b -> some Iterator` both exist, can the same
   variable hold either? No — they are different opaque types.
   Document. Error message must say "function `a`'s return type and
   function `b`'s return type are different opaque types, even though
   both implement `Iterator`."
-- **OQ-2: can impl Trait be used in a closure return?** `|| -> impl
+- **OQ-2: can some Mixin be used in a closure return?** `|| -> impl
   Fn()` — probably yes, but the opaque identity must be keyed by the
   closure's def_id. Reject in 04b; revisit.
 - **OQ-3: what happens at a recursive call?** `def nested -> impl
   Iterator { if cond { nested() } else { empty_iter } }` — the opaque
   type's body mentions itself. Accept iff the inferred type agrees
   with the declared bounds (normal recursion).
-- **OQ-4: does argument-position `impl Trait` allow turbofish?**
+- **OQ-4: does argument-position `some Mixin` allow turbofish?**
   Rust says no — the user can't specify `T` for a synthetic param.
   Riven follows: E-IMPL-ARG-TURBOFISH.
 - **R-1: the current coherence hole.** `TraitResolver::register_impl`
@@ -493,7 +493,7 @@ This is ~4-6 weeks of careful design + coherence work. Deferred.
   until body-check. A layout query before body-check either errors
   (correct but noisy) or returns a conservative placeholder
   (unsound). Recommendation: layout is a post-body pass.
-- **R-3: trait inheritance and opaque.** `def f -> impl Iterator`
+- **R-3: trait inheritance and opaque.** `def f -> some Iterator`
   inferred body returns `VecIter[T]` which also implements
   `DoubleEndedIterator`. May the caller call `rev()`? Rust says no —
   only the declared bounds are exposed. Riven follows.
@@ -502,35 +502,35 @@ This is ~4-6 weeks of careful design + coherence work. Deferred.
 
 ### 11.1 Positive tests (04a)
 
-- T1: `fn each(items: impl Iterator)` — call with `Vec.new.iter`.
-- T2: `fn log(x: impl Displayable + Serializable)` — multi-bound.
-- T3: Method call through `impl Trait`: `fn display(x: impl
+- T1: `def each(items: some Iterator)` — call with `Array.new.iter`.
+- T2: `def log(x: some Displayable + Serializable)` — multi-bound.
+- T3: Method call through `some Mixin`: `def display(x: some
   Displayable) { x.to_display }`.
-- T4: `fn each(items: &impl Iterator)` — reference over impl.
+- T4: `def each(items: &some Iterator)` — reference over `some Mixin`.
 
 ### 11.2 Positive tests (04b)
 
-- T5: `fn ones -> impl Iterator[Item = Int] { (1..).map(|_| 1) }`
+- T5: `fn ones -> some Iterator[Item = Int] { (1..).map(|_| 1) }`
   compiles and `ones.take(3).to_vec` returns `[1, 1, 1]`.
 - T6: Opaque identity: `let a = ones; let b = ones; a = b` type-
   checks (same opaque type).
-- T7: Recursive opaque: `fn rec -> impl Iterator { if ... rec ...
+- T7: Recursive opaque: `fn rec -> some Iterator { if ... rec ...
   else empty }` — both arms return the same type.
 
 ### 11.3 Negative tests
 
 - N1: Two arms of `if` return different concrete types: `fn bad ->
-  impl Iterator { if c then vec!().iter else (1..) }` →
+  some Iterator { if c then vec!().iter else (1..) }` →
   E-IMPL-RET-MISMATCH.
-- N2: Opaque type leaks across two functions: `fn a -> impl Iterator
-  { ... } fn b -> impl Iterator { ... } let x = a; x = b` →
+- N2: Opaque type leaks across two functions: `fn a -> some Iterator
+  { ... } fn b -> some Iterator { ... } let x = a; x = b` →
   E-OPAQUE-NEQ.
 - N3: Two `impl Foo for Int` in the same crate → E-IMPL-DUP.
 - N4: Overlapping blanket: `impl[T: Clone] Foo for T; impl Foo for
   Int` → E-IMPL-OVERLAP (phase 04a).
-- N5: `impl Trait` used as a field type: `struct S { x: impl
+- N5: `some Mixin` used as a field type: `struct S { x: impl
   Iterator }` → E-IMPL-NOT-ALLOWED-HERE. (Use a named opaque type.)
-- N6: Turbofish on `impl Trait` param: `each[String](items)` →
+- N6: Turbofish on `some Mixin` param: `each[String](items)` →
   E-IMPL-ARG-TURBOFISH.
 
 ### 11.4 Fixture additions

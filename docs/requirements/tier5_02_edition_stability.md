@@ -1,8 +1,9 @@
 # Tier 5 — Edition / Stability Mechanism
 
 Status: draft
-Depends on: tier5_03 (attributes — editions use `@[unstable(feature = ...)]`),
-tier5_05 (suggestions — machine-applicable suggestions drive migration).
+Depends on: tier5_03 (directives — editions use the in-body
+`unstable(feature = ...)` directive), tier5_05 (suggestions —
+machine-applicable suggestions drive migration).
 Blocks: long-term language evolution. Every breaking change before the
 edition mechanism is in place is either "too expensive to do" or "painful
 when it lands."
@@ -30,7 +31,7 @@ version-check, no semantic effect.
 This is a ticking bug: every time we publish a library on the current
 edition, we lock in *whatever the compiler did at that time*, with no way
 to describe "this crate expects 2026 semantics." The first time we try to
-make a cleanup change (e.g. tier-1 B3's proposed `Hash` → `HashMap`
+make a cleanup change (e.g. tier-1 B3's proposed `Hash` → `Map`
 rename), we'll either break everyone or shrug and accept a bad name.
 
 This doc specifies:
@@ -70,19 +71,20 @@ require a newer compiler).
 
 ### 2.3 Features / feature-gates: none
 
-No `@[unstable(feature = "foo")]` exists. No `#[cfg(feature = "…")]`.
+No in-body `unstable(feature = "foo")` directive exists. No `#[cfg(feature = "…")]`.
 `BuildConfig` (`manifest.rs:77-91`) has `link` and `link-search` but no
 `features` section. Cargo-style feature propagation is not modelled.
 
 ### 2.4 What edition-like behaviour Riven has de facto
 
 - **Reserved keywords** (`lexer/token.rs:127-137`) — `actor`, `spawn`,
-  `send`, `receive`, `macro`, `crate`, `extern`, `static`, `const`,
+  `send`, `receive`, `macro`, `package`, `extern`, `static`, `const`,
   `when`, `unless`. Reserved *today*, so introducing them as real
   keywords in a future version does not need an edition.
-- **`derive`** (`token.rs:105`) — already a keyword; activating its
-  semantics (tier1_05) is not an edition-breaking change because current
-  usage errors out.
+- **Implicit-include for structural mixins** — `Debug`, `Clone`, etc.
+  are auto-included today (no `derive` keyword exists); tightening the
+  rule on a future edition is not edition-breaking because current
+  user code does not write `derive` at all.
 
 ---
 
@@ -98,9 +100,9 @@ No `@[unstable(feature = "foo")]` exists. No `#[cfg(feature = "…")]`.
   it.)
 - A **migration tool** `riven fix --edition=N` rewrites source
   mechanically using machine-applicable suggestions (tier5_05).
-- **Per-edition feature gates**: `@[unstable(feature = "foo")]` items
-  are locked out unless the manifest opts in via `features = ["foo"]` or
-  an equivalent.
+- **Per-edition feature gates**: items carrying an in-body
+  `unstable(feature = "foo")` directive are locked out unless the
+  manifest opts in via `features = ["foo"]` or an equivalent.
 
 ### 3.2 Non-goals
 
@@ -154,11 +156,12 @@ Validation:
 | Deprecation of old syntax → error | **Edition only.** Old edition keeps the warning; new edition promotes to error. |
 | New semantic rule applying to existing syntax | **No.** E.g. changing `&String → &str` coercion to a different rule. |
 | New method resolution preference | **No.** Method resolution order is cross-edition stable. |
-| ABI / mangling changes | **No.** ABI is cross-edition stable (or explicitly opt-in via separate attribute, not edition). |
+| ABI / mangling changes | **No.** ABI is cross-edition stable (or explicitly opt-in via separate directive, not edition). |
 | Stdlib item rename/removal | **Yes**, new edition hides the old name. Cross-edition code calls it via a re-export shim. |
 | Precedence change | **No.** Violates the principle that fixtures from the old edition parse the same way in the new compiler. |
 | Lifetime-elision rule change | **No** (would silently change behaviour). |
 | New reserved word | **Yes.** `lexer/token.rs:127-137` already does this via "reserved but unused" status. |
+| `@[...]` annotation syntax | **N/A.** Retired in the Ruby-flavor migration; replaced by in-body directives (tier5_03). |
 
 Principle: **editions may reshape surface syntax; they may not change
 semantics of syntax that both editions accept.** If you need semantic
@@ -188,27 +191,29 @@ syntax keeps its old meaning.
 ### 4.5 Feature gates (unstable features)
 
 ```riven
-@[unstable(feature = "try_trait", issue = "42")]
-pub trait Try
+mixin Try
+  unstable feature: "try_mixin", issue: "42"
+
   ...
 end
 ```
 
-- Using an `@[unstable]` item requires opting in via manifest:
+- Using an `unstable`-marked item requires opting in via manifest:
   ```toml
   [features]
   # nightly-like: must be named in the manifest explicitly
-  unstable = ["try_trait"]
+  unstable = ["try_mixin"]
   ```
 - On a **stable release** of the compiler, `unstable = […]` is rejected
   unless `RIVENC_ALLOW_UNSTABLE=1` is set (intentional friction, matches
   Rust's nightly channel pattern).
 - On a **nightly / dev** compiler (future: add a channel to the compiler
   build), `unstable = […]` works transparently.
-- An unstable feature graduates via an `@[stable(since = "0.5.0",
-  feature = "try_trait")]` attribute when the design is settled.
+- An unstable feature graduates via an in-body
+  `stable since: "0.5.0", feature: "try_mixin"` directive when the
+  design is settled.
 
-Detailed attribute syntax lives in tier5_03.
+Detailed directive syntax lives in tier5_03.
 
 ### 4.6 The migrator: `riven fix`
 
@@ -340,11 +345,11 @@ pub struct EditionLint {
 
 pub const EDITION_LINTS: &[EditionLint] = &[
     EditionLint {
-        name: "hash_to_hashmap",
+        name: "hash_to_map",
         from: Edition::E2026,
         to: Edition::E2027,
-        message: "type `Hash[K, V]` is renamed to `HashMap[K, V]`",
-        rewriter: rewrite_hash_to_hashmap,
+        message: "type `Hash[K, V]` is renamed to `Map[K, V]`",
+        rewriter: rewrite_hash_to_map,
     },
     // ...
 ];
@@ -359,7 +364,7 @@ This is the hardest part.
 
 **Problem.** A library built on `"2026"` exports `Hash[K, V]`. A
 `"2027"` binary wants to call into it. On 2027, `Hash[K, V]` doesn't
-exist — it's `HashMap`.
+exist — it's `Map`.
 
 **Solution.** At compile time of the library (2026), the compiler emits
 a symbol table metadata file (`*.rivenmeta`) alongside the `*.rlib`.
@@ -367,8 +372,8 @@ The metadata records **canonical** names — the names used internally
 by the compiler across editions. Consumers see canonical names remapped
 through the consumer's edition.
 
-- `Hash[K, V]` on 2026 → canonical `::core::collections::Map[K, V]`.
-- `HashMap[K, V]` on 2027 → canonical `::core::collections::Map[K, V]`.
+- `Hash[K, V]` on 2026 → canonical `core.collections.Map[K, V]`.
+- `Map[K, V]` on 2027 → canonical `core.collections.Map[K, V]`.
 - Identical canonical → linkable.
 
 This implies:
@@ -382,13 +387,13 @@ This implies:
 
 ### 5.6 Library consumers
 
-A crate on edition 2027 wants to `use foo::Hash` where `foo` is a 2026
+A crate on edition 2027 wants to `use foo.Hash` where `foo` is a 2026
 crate. Options:
 
 - **Canonicalize on import.** The 2027 compiler sees `foo`'s metadata,
   knows `Hash[K, V]` in 2026 is canonical `Map[K, V]`, and resolves
-  `foo::Hash` to the canonical. Downstream, the 2027 crate prefers
-  `HashMap` but `use foo::Hash as ThatHash` still works.
+  `foo.Hash` to the canonical. Downstream, the 2027 crate prefers
+  `Map` but `use foo.Hash as ThatHash` still works.
 - This means **surface names are edition-local; canonical names are
   cross-edition.** Same rule as Rust's paths-to-item resolution.
 
@@ -419,7 +424,8 @@ crate. Options:
   `EditionCtx`.
 - `crates/riven-core/src/typeck/mod.rs` — pass `&EditionCtx` through.
 - `crates/riven-core/src/resolve/mod.rs` — consult
-  `EditionCtx.features` when marking an `@[unstable]` use.
+  `EditionCtx.features` when marking a use of an `unstable`-directive
+  item.
 - `crates/riven-cli/src/manifest.rs` — validate `edition`, add `[features]`.
 - `crates/riven-cli/src/manifest.rs:184` (`validate`) — call
   `Edition::from_str` and return `E4100` on unknown.
@@ -432,7 +438,7 @@ crate. Options:
 
 - `crates/riven-core/tests/edition_keyword_gating.rs` — `try` is ident
   on 2026, keyword on 2027.
-- `crates/riven-core/tests/edition_rewrites.rs` — `Hash[…]` → `HashMap[…]`
+- `crates/riven-core/tests/edition_rewrites.rs` — `Hash[…]` → `Map[…]`
   suggestion fires on 2026, error on 2027.
 - `crates/riven-cli/tests/fix_migrator.rs` — run the migrator on a small
   fixture, assert the rewritten source compiles on the new edition.
@@ -450,9 +456,9 @@ crate. Options:
 
 ## 7. Interactions with other tiers
 
-- **Tier 5 doc 03 (attributes):** `@[stable]`, `@[unstable]`,
-  `@[deprecated]`, `@[rustc_since]`-like — shared syntax. Editions use
-  them extensively.
+- **Tier 5 doc 03 (directives):** in-body `stable`, `unstable`,
+  `deprecated`, `since`-like directives — shared syntax. Editions
+  use them extensively.
 - **Tier 5 doc 05 (suggestions):** the migrator `riven fix` is the
   canonical consumer of machine-applicable suggestions. Any feature that
   goes through an edition deprecation must ship with a suggestion.
@@ -460,7 +466,7 @@ crate. Options:
   edition/manifest errors (§5.1 of doc 04 also reserves this range).
 - **Tier 5 doc 01 (reference):** edition-scoped chapters.
 - **Tier 1 (stdlib):** stdlib-wide renames (e.g. `Hash[K, V]` →
-  `HashMap[K, V]`) are edition lints. Tier-1 B3 is the first such
+  `Map[K, V]`) are edition lints. Tier-1 B3 is the first such
   candidate.
 - **Tier 1 concurrency / async:** reserved keywords (`async`, `await`,
   `actor`, `spawn`, `send`, `receive`) become real keywords on a future
@@ -487,9 +493,9 @@ and is observable in `--emit=ast` output. Nothing changes semantically.
 
 ### Phase 2b: first edition-lint (1-2 weeks)
 
-Use B3 (Hash→HashMap) as the canary:
+Use B3 (Hash→Map) as the canary:
 
-1. Land `HashMap[K, V]` as an alias of `Hash[K, V]` — tier-1 B3.
+1. Land `Map[K, V]` as an alias of `Hash[K, V]` — tier-1 B3.
 2. Register an `EditionLint { from: E2026, to: E2027, ... }` that warns
    on 2026 and errors on 2027.
 3. Add `Edition::E2027` to `KNOWN`. It's not the default.
@@ -501,7 +507,7 @@ with E???? + suggestion, migrates cleanly.
 ### Phase 2c: features (2-3 weeks)
 
 1. `[features]` section in `Riven.toml`.
-2. `@[unstable(feature = "...")]` attribute recognition (requires
+2. In-body `unstable feature: "..."` directive recognition (requires
    tier5_03 phase 3a).
 3. `features = ["..."]` resolution and checking.
 4. `E4103: use of unstable feature '...' requires manifest feature
@@ -531,8 +537,9 @@ with E???? + suggestion, migrates cleanly.
 
 The Go team argues editions are an anti-pattern: they split the
 ecosystem and create compiler complexity. Rust's experience: edition
-machinery has paid for itself many times (2018 `?` operator, 2021
-disjoint captures, 2024 `Cell::new`).
+machinery has paid for itself many times (the analogous wins in
+Rust's editions: 2018 `?` operator, 2021 disjoint captures, 2024
+`Cell::new` — internal Rust history, cited for the argument).
 
 **Recommended stance (confirms overview §7.5):** Riven adopts editions.
 Justification:
@@ -633,8 +640,8 @@ import-from-previous-edition.
 - [ ] `lexer` / `parser` / `resolve` / `typeck` all take `&EditionCtx`.
 - [ ] Cache key includes `EditionCtx::fingerprint()`.
 - [ ] `[features]` table is parsed from `Riven.toml`.
-- [ ] `@[unstable(feature = "x")]` + `features = ["x"]` opt-in works;
-      without opt-in, error `E4103`.
+- [ ] In-body `unstable feature: "x"` directive + `features = ["x"]`
+      opt-in works; without opt-in, error `E4103`.
 - [ ] `RIVENC_ALLOW_UNSTABLE=1` (or nightly channel) bypasses.
 - [ ] At least one `EditionLint` exists and is exercised: warning on
       2026, error on 2027.

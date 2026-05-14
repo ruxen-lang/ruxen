@@ -4,26 +4,26 @@
 [docs/requirements/tier1_04_drop_copy_clone.md](../../requirements/tier1_04_drop_copy_clone.md).
 
 **Status:** shipped Phase 2 #02-#03 (drop elaboration + user `Drop`
-impl + leak-tracker).
+include + leak-tracker).
 
 Riven elaborates drop calls on MIR so that every owned heap value
-(`String`, `Vec`, `HashMap`, `HashSet`, user types that own them) is
+(`String`, `Array`, `Map`, `Set`, user types that own them) is
 released at scope exit.  The `drop_fixtures.rs` test suite uses a
 specially-rewritten runtime that counts `free` calls so we can assert
 "every alloc has a matching free".
 
 ---
 
-## B1 — User `Drop` impl runs at scope exit
+## B1 — User `Drop` include runs at scope exit
 
-**Given** a class `T` with `impl Drop for T  def drop(&mut self) ... end`
-**When** `let x = T::new(...)` exits its enclosing scope
-**Then** `T::drop(&mut x)` is invoked exactly once, before the
+**Given** a class `T` with `include Drop` and `def mut drop ... end`
+**When** `let x = T.new(...)` exits its enclosing scope
+**Then** `T.drop` is invoked on `x` exactly once, before the
 allocation is freed.
 
 ## B2 — Reassignment frees the prior value
 
-**Given** `let mut s = String.from("a")` followed by
+**Given** `var s = String.from("a")` followed by
 `s = String.from("b")`
 **Then** the heap buffer for `"a"` is freed at the assignment, not
 leaked.
@@ -41,12 +41,12 @@ drop calls for any live owned bindings before transferring control.
 
 ## B5 — Owned containers free every element
 
-- `Vec[String]` frees every element string when the Vec is dropped.
-- `Vec[Vec[Int]]` frees every inner Vec.
-- `HashMap[String, Int]` frees every key string.
-- `HashMap[Int, String]` frees every value string.
-- `HashMap[String, Vec[Int]]` frees every key and every value.
-- `HashSet[String]` frees every element.
+- `Array[String]` frees every element string when the Array is dropped.
+- `Array[Array[Int]]` frees every inner Array.
+- `Map[String, Int]` frees every key string.
+- `Map[Int, String]` frees every value string.
+- `Map[String, Array[Int]]` frees every key and every value.
+- `Set[String]` frees every element.
 
 ## B6 — `String.push(s)` does not leak the appended slice
 
@@ -57,7 +57,7 @@ leaks.
 ## B7 — `String.into_bytes()` transfers ownership
 
 The receiver becomes invalid after `into_bytes()` (matches B3 in
-borrow-check.spec.md); the returned `Vec[U8]` owns the bytes; no
+borrow-check.spec.md); the returned `Array[UInt8]` owns the bytes; no
 double-free or leak.
 
 ## B8 — `String + String` frees both operands
@@ -87,9 +87,9 @@ For every fixture the suite runs, `allocs == frees` at process exit
 | B3        | `loop_body_local_does_not_leak_across_iterations`      | `drop_fixtures.rs`  |
 | B4        | `break_drops_loop_body_local` + `continue_drops_loop_body_local` | `drop_fixtures.rs` |
 | B5 String | `string_local_is_freed_on_scope_exit`                  | `drop_fixtures.rs`  |
-| B5 Vec    | `vec_local_is_freed_on_scope_exit` + `vec_of_string_releases_every_element` + `vec_of_vec_int_releases_every_inner_vec` | `drop_fixtures.rs` |
-| B5 HashMap | `hashmap_local_is_freed_on_scope_exit` + `p04_hashmap_string_to_int_releases_every_key` + `p04_hashmap_int_to_string_releases_every_value` + `p04_hashmap_string_to_vec_int_releases_every_value` | `drop_fixtures.rs` |
-| B5 HashSet | `p04_hashset_string_releases_every_element`           | `drop_fixtures.rs`  |
+| B5 Array  | `vec_local_is_freed_on_scope_exit` + `vec_of_string_releases_every_element` + `vec_of_vec_int_releases_every_inner_vec` | `drop_fixtures.rs` |
+| B5 Map    | `hashmap_local_is_freed_on_scope_exit` + `p04_hashmap_string_to_int_releases_every_key` + `p04_hashmap_int_to_string_releases_every_value` + `p04_hashmap_string_to_vec_int_releases_every_value` | `drop_fixtures.rs` |
+| B5 Set    | `p04_hashset_string_releases_every_element`           | `drop_fixtures.rs`  |
 | B6        | `string_push_does_not_leak`                            | `drop_fixtures.rs`  |
 | B7        | `string_into_bytes_transfers_ownership`                | `drop_fixtures.rs`  |
 | B8        | `string_plus_op_frees_both_operands`                   | `drop_fixtures.rs`  |

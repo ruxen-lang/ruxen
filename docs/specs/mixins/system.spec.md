@@ -2,16 +2,16 @@
 
 **Source docs:**
 [docs/requirements/tier2_01_assoc_types.md](../../requirements/tier2_01_assoc_types.md),
-[docs/requirements/tier2_04_impl_trait_and_specialization.md](../../requirements/tier2_04_impl_trait_and_specialization.md),
-[docs/requirements/tier2_06_trait_objects.md](../../requirements/tier2_06_trait_objects.md).
+[docs/requirements/tier2_04_some_mixin_and_specialization.md](../../requirements/tier2_04_some_mixin_and_specialization.md),
+[docs/requirements/tier2_06_any_mixin.md](../../requirements/tier2_06_any_mixin.md).
 
 **Status:** shipped through Phase 2 #02-#04 plus Tier-2 surface
 (assoc types, multi-bound, trait objects).
 
 This spec covers Riven's user-facing trait surface: declaring traits,
-implementing them, default methods, trait inheritance, associated
-types, generic constraints, and `dyn`-trait parameters.  Derive
-macros are spec'd separately in [derive.spec.md](derive.spec.md).
+implementing them, default methods, mixin inheritance, associated
+types, generic constraints, and `any`-mixin parameters.  Implicit
+includes are spec'd separately in [implicit_includes.spec.md](implicit_includes.spec.md).
 
 ---
 
@@ -145,17 +145,17 @@ implementation and a user's override exist, the override wins.
 
 | Behaviour | Test fixture / fn                                  | File                                  |
 |-----------|----------------------------------------------------|---------------------------------------|
-| B1, B2    | `21_traits.rvn`                                    | `tests/release-e2e/cases/`            |
-| B2        | `22_trait_default.rvn` (positive override)         | `tests/release-e2e/cases/`            |
-| B3, B4    | `86_trait_default_method_used.rvn` + `87_trait_override_default.rvn` | `tests/release-e2e/cases/`  |
-| B5        | `79_trait_inherit.rvn`                             | `tests/release-e2e/cases/`            |
-| B6        | `80_trait_assoc_type.rvn`                          | `tests/release-e2e/cases/`            |
-| B7        | `82_impl_trait_param.rvn`                          | `tests/release-e2e/cases/`            |
-| B8        | `83_dyn_trait_param.rvn`                           | `tests/release-e2e/cases/`            |
+| B1, B2    | `21_mixins.rvn`                                    | `tests/release-e2e/cases/`            |
+| B2        | `22_mixin_default.rvn` (positive override)         | `tests/release-e2e/cases/`            |
+| B3, B4    | `86_mixin_default_method_used.rvn` + `87_mixin_override_default.rvn` | `tests/release-e2e/cases/`  |
+| B5        | `79_mixin_inherit.rvn`                             | `tests/release-e2e/cases/`            |
+| B6        | `80_mixin_assoc_type.rvn`                          | `tests/release-e2e/cases/`            |
+| B7        | `82_some_mixin_param.rvn`                          | `tests/release-e2e/cases/`            |
+| B8        | `83_any_mixin_param.rvn`                           | `tests/release-e2e/cases/`            |
 | B9        | `84_multi_bound.rvn`                               | `tests/release-e2e/cases/`            |
 | B10       | `100_where_clause.rvn` + `103_generic_constraint.rvn` | `tests/release-e2e/cases/`         |
-| B11       | `81_trait_static_method.rvn`                       | `tests/release-e2e/cases/`            |
-| B12       | covered transitively by B4 + `66_class_inline_impl.rvn` | `tests/release-e2e/cases/`       |
+| B11       | `81_mixin_static_method.rvn`                       | `tests/release-e2e/cases/`            |
+| B12       | covered transitively by B4 + `66_class_inline_include.rvn` | `tests/release-e2e/cases/`    |
 
 Trait-dispatch correctness for derive-generated impls covered by
 [derive.spec.md](derive.spec.md) B13.

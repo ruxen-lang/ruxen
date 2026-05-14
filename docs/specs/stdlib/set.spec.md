@@ -53,16 +53,16 @@ hashable)
 
 | Behaviour | Test fn                                       | File                          |
 |-----------|-----------------------------------------------|-------------------------------|
-| B1        | `hashset_alias_constructs_via_either_name`    | `stdlib_hashset.rs`           |
-| B2        | `hashset_insert_typechecks_as_unit_today`     | `stdlib_hashset.rs`           |
-| B3        | `hashset_remove_returns_bool`                 | `stdlib_hashset.rs`           |
-| B4        | `hashset_set_ops_return_fresh_set`            | `stdlib_hashset.rs`           |
-| B5        | `hashset_iter_returns_vec`                    | `stdlib_hashset.rs`           |
-| B6        | `hashset_equality_yields_bool`                | `stdlib_hashset.rs`           |
-| B7        | `hashset_with_non_hash_element_emits_e0615` + `hashset_of_hashmap_emits_e0615` | `stdlib_hashmap_negatives.rs` |
+| B1        | `hashset_alias_constructs_via_either_name`    | `stdlib_set.rs`           |
+| B2        | `hashset_insert_typechecks_as_unit_today`     | `stdlib_set.rs`           |
+| B3        | `hashset_remove_returns_bool`                 | `stdlib_set.rs`           |
+| B4        | `hashset_set_ops_return_fresh_set`            | `stdlib_set.rs`           |
+| B5        | `hashset_iter_returns_vec`                    | `stdlib_set.rs`           |
+| B6        | `hashset_equality_yields_bool`                | `stdlib_set.rs`           |
+| B7        | `hashset_with_non_hash_element_emits_e0615` + `hashset_of_hashmap_emits_e0615` | `stdlib_map_negatives.rs` |
 
 Runtime round-trips covered by E2E fixture `105_set_basic.rvn` and
-`611_iter_collect_hashset.rvn`.
+`611_iter_collect_set.rvn`.
 
 ---
 

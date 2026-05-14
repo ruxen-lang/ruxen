@@ -68,6 +68,6 @@ Pin tests for these live in the E2E fixture set
 - `String` interning / `&'static str` literal table.
 - Grapheme clusters (`chars()` returns Unicode scalar values, not
   grapheme clusters).
-- Regex (separate `std::regex` module, deferred).
+- Regex (separate `std.regex` module, deferred).
 - `Cow[str]` — v1 chooses between `String` and `&str` at the source
   level; no copy-on-write wrapper.

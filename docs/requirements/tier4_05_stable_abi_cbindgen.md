@@ -2,9 +2,9 @@
 
 ## 1. Summary & Motivation
 
-Riven can *consume* C via `lib Name ... end` blocks and `extern "C" ... end` blocks (`crates/riven-core/src/parser/mod.rs:1636-1723`, documented in `docs/tutorial/14-ffi.md`). What Riven cannot do is *produce* a C-consumable header. A user who writes a Riven library and wants to expose it to C, Python (`ctypes`), Ruby (`fiddle`), Node (N-API), Go (`cgo`), Swift, Kotlin, or anything else that speaks the C ABI has no way to tell those languages what Riven's `pub extern "C" def foo(...)` signatures look like.
+Riven can *consume* C via `lib "name" ... end` blocks (`crates/riven-core/src/parser/mod.rs:1636-1723`, documented in `docs/tutorial/14-ffi.md`). What Riven cannot do is *produce* a C-consumable header. A user who writes a Riven library and wants to expose it to C, Python (`ctypes`), Ruby (`fiddle`), Node (N-API), Go (`cgo`), Swift, Kotlin, or anything else that speaks the C ABI has no way to tell those languages what Riven's public C-ABI `def foo(...)` signatures look like.
 
-This document specifies a header-emission subsystem: a `rivenc --emit=c-header` mode that walks the typed HIR, finds every `pub extern "C"` function and `@[repr(C)]` struct in the compilation unit, and writes a valid `.h` file. It also specifies the **stability rules** — what can safely appear in a Riven public C ABI, what can't, and what the compiler must reject.
+This document specifies a header-emission subsystem: a `rivenc --emit=c-header` mode that walks the typed HIR, finds every public C-ABI function and `layout c` struct in the compilation unit, and writes a valid `.h` file. It also specifies the **stability rules** — what can safely appear in a Riven public C ABI, what can't, and what the compiler must reject.
 
 This is intentionally small. Big-ABI questions (Swift-style stable ABI for Riven-to-Riven dynamic linking) are out of scope. We only care about emitting C headers for the items users explicitly opt into.
 
@@ -14,17 +14,16 @@ This is intentionally small. Big-ABI questions (Swift-style stable ABI for Riven
 
 Riven already parses:
 
-- `@[link("foo")]` attribute for linker flags.
-- `lib Foo ... end` blocks (named C libraries).
-- `extern "C" ... end` blocks (ABI-tagged but nameless).
-- `def func(param: T) -> RetType` inside both.
+- Body-level `link` directive for linker flags.
+- `lib "name" ... end` blocks (named C libraries).
+- `def func(param: T) -> RetType` inside.
 - Variadic `...` parameter.
 
-These produce `LibDecl` / `ExternBlock` AST nodes. Typechecking and MIR preserve them. Codegen declares the listed functions as `Linkage::Import` (`codegen/cranelift.rs:98-103`).
+These produce `LibDecl` AST nodes. Typechecking and MIR preserve them. Codegen declares the listed functions as `Linkage::Import` (`codegen/cranelift.rs:98-103`).
 
 ### 2.2 Outgoing ABI — nothing
 
-There is **no** `pub extern "C" def foo` → exported-C-symbol path. Every Riven function is internally-linked by default, with the compiler applying its own name mangling (`Vec[T]_push` → `riven_vec_push` or similar, see `codegen/runtime.rs:47-71`). The `extern "C"` ABI string today is parser-only — it goes nowhere on the MIR/codegen side.
+There is **no** public C-ABI `def foo` → exported-C-symbol path. Every Riven function is internally-linked by default, with the compiler applying its own name mangling (`Array[T]_push` → `riven_array_push` or similar, see `codegen/runtime.rs:47-71`). The C ABI marker today is parser-only — it goes nowhere on the MIR/codegen side.
 
 To make a Riven function callable from C today, a user would need to:
 
@@ -34,15 +33,15 @@ To make a Riven function callable from C today, a user would need to:
 
 None of that is acceptable for an ABI promise.
 
-### 2.3 `@[repr(C)]` (tier-1 B2)
+### 2.3 `layout c` (tier-1 B2)
 
-Riven parses `@[repr(C)]` on struct/class declarations (`parser/mod.rs:499-503`), but:
+Riven parses `layout c` on struct/class declarations (`parser/mod.rs:499-503`), but:
 
-- The attribute args are stuffed into `HirStructDef::derive_traits: Vec<String>` along with derive traits (tier-1 B2).
-- No layout machinery consumes the attribute. Structs are always laid out via the compiler's own rules (`crates/riven-core/src/codegen/layout.rs`).
-- So `@[repr(C)]` is a lie today. A struct declared `@[repr(C)]` on the Riven side has the *same* layout as one without — which is not guaranteed to match C's layout rules.
+- The directive args are stuffed into `HirStructDef::derive_traits: Vec<String>` along with structural-mixin includes (tier-1 B2).
+- No layout machinery consumes the directive. Structs are always laid out via the compiler's own rules (`crates/riven-core/src/codegen/layout.rs`).
+- So `layout c` is a lie today. A struct declared `layout c` on the Riven side has the *same* layout as one without — which is not guaranteed to match C's layout rules.
 
-**Tier 5's cbindgen cannot start until B2 is fixed and `@[repr(C)]` actually produces C-layout.**
+**Tier 5's cbindgen cannot start until B2 is fixed and `layout c` actually produces C-layout.**
 
 ### 2.4 No `--emit=c-header` flag
 
@@ -57,9 +56,9 @@ Riven parses `@[repr(C)]` on struct/class declarations (`parser/mod.rs:499-503`)
 ### Goals
 
 1. `rivenc --emit=c-header <file.rvn> -o lib.h` generates a valid, self-contained C header for the public C-ABI surface of the input.
-2. `@[repr(C)]` on structs/classes produces a layout that matches the C ABI for the target triple.
-3. `pub extern "C" def foo(...)` emits `foo` as an un-mangled external symbol.
-4. A `#[no_mangle]` attribute (doc 04 §4.2) carries over: `@[no_mangle] pub extern "C" def foo` exposes literally `foo`.
+2. `layout c` on structs/classes produces a layout that matches the C ABI for the target triple.
+3. A public C-ABI `def foo(...)` emits `foo` as an un-mangled external symbol.
+4. A `no_mangle` directive (doc 04 §4.2) carries over: a public C-ABI `def foo` with in-body `no_mangle` exposes literally `foo`.
 5. Stability rules: reject Riven-only types (`Option`, `Result`, closures, references with lifetimes, generics) at C-ABI boundaries.
 6. A compile-baked `riven_abi_version()` function consumers call to detect mismatches.
 7. `Riven.toml`-driven integration: `[package.cbindgen] generate = true` + `output = "include/lib.h"` produces the header as a build step.
@@ -72,8 +71,8 @@ Riven parses `@[repr(C)]` on struct/class declarations (`parser/mod.rs:499-503`)
 - Async / coroutine cross-ABI.
 - Python / Ruby / Node binding generators (downstream; once the `.h` is stable, `ctypes`/N-API/etc. work off of it).
 - Versioning the header format itself — just stamp the compiler version.
-- Auto-generating getters/setters for Riven classes. The C API surface is whatever the user exposes via `pub extern "C" def`.
-- Generic-struct monomorphization across the ABI. `Vec[T]` cannot be exposed; users wrap with a fixed-type `RivenIntVec`.
+- Auto-generating getters/setters for Riven classes. The C API surface is whatever the user exposes via a public `def` with `abi "c"`.
+- Generic-struct monomorphization across the ABI. `Array[T]` cannot be exposed; users wrap with a fixed-type `RivenIntArray`.
 
 ## 4. Surface
 
@@ -107,47 +106,50 @@ style = "c11"                         # or "c99" — default c11
 namespace = []                        # (future) for C++ namespacing; ignored in C
 ```
 
-### 4.3 Source attributes
+### 4.3 Source directives
 
-The existing `@[link]` / `@[repr]` attribute syntax extends:
+The existing `link` / `layout` directive syntax extends:
 
 ```riven
-@[repr(C)]                                          # enforces C-compatible layout
 struct Point
+  layout c                                          # enforces C-compatible layout
   x: Float32
   y: Float32
 end
 
-@[repr(C)]
 enum Color
+  layout c
   Red
   Green
   Blue
 end
 
-@[repr(C)]
-@[cbindgen_alias("RivenColor")]                     # override the emitted C typedef name
 enum Color2
+  layout c
+  cbindgen_alias "RivenColor"                       # override the emitted C typedef name
   R
   G
 end
 
-@[no_mangle]
-pub extern "C" def add(a: Int32, b: Int32) -> Int32
+def add(a: Int32, b: Int32) -> Int32
+  abi "c"
+  no_mangle
   a + b
 end
 
 # Opaque: the C side gets a `typedef struct RivenFoo RivenFoo;` but not the layout.
-@[repr(opaque)]
-pub struct Handle
+struct Handle
+  layout opaque
   # private state
 end
 
-pub extern "C" def handle_new -> *mut Handle
+def handle_new -> *mut Handle
+  abi "c"
   # ... returns heap-allocated Handle
 end
 
-pub extern "C" def handle_free(h: *mut Handle)
+def handle_free(h: *mut Handle)
+  abi "c"
   # ... frees
 end
 ```
@@ -157,26 +159,28 @@ end
 Input `mylib.rvn`:
 
 ```riven
-@[repr(C)]
-pub struct Point
+struct Point
+  layout c
   x: Float32
   y: Float32
 end
 
-@[repr(C)]
-pub enum Status
+enum Status
+  layout c
   Ok
   Error
 end
 
-@[no_mangle]
-pub extern "C" def add_points(a: Point, b: Point) -> Point
-  Point { x: a.x + b.x, y: a.y + b.y }
+def add_points(a: Point, b: Point) -> Point
+  abi "c"
+  no_mangle
+  Point.new(x: a.x + b.x, y: a.y + b.y)
 end
 
-@[no_mangle]
-pub extern "C" def check(x: Int32) -> Status
-  if x > 0 then Status.Ok else Status.Error end
+def check(x: Int32) -> Status
+  abi "c"
+  no_mangle
+  if x > 0; Status.Ok; else; Status.Error; end
 end
 ```
 
@@ -220,7 +224,7 @@ Status check(int32_t x);
 
 ### 4.5 Type-mapping table
 
-Every Riven type that can appear in a `pub extern "C"` signature maps to a single C type:
+Every Riven type that can appear in a public C-ABI signature maps to a single C type:
 
 | Riven | C | Notes |
 |---|---|---|
@@ -241,19 +245,19 @@ Every Riven type that can appear in a `pub extern "C"` signature maps to a singl
 | `*T` / `*mut T` | `const T *` / `T *` | Raw pointers only |
 | `&T` | `const T *` | With a **warning**: reference lifetimes don't cross the C ABI |
 | `&mut T` | `T *` | Same warning |
-| `@[repr(C)] struct { ... }` | `struct Name { ... }` | Layout matches |
-| `@[repr(C)] enum` (no payload) | `typedef enum Name { ... }` | Field-less |
-| `@[repr(C)] @[repr(opaque)] struct` | `typedef struct Name Name;` | Forward decl only |
-| Function pointer `fn(T, U) -> R` | `R (*name)(T, U)` | |
+| `struct` with `layout c` | `struct Name { ... }` | Layout matches |
+| `enum` with `layout c` (no payload) | `typedef enum Name { ... }` | Field-less |
+| `struct` with `layout opaque` | `typedef struct Name Name;` | Forward decl only |
+| Function pointer `|T, U| -> R` | `R (*name)(T, U)` | |
 | Tuple `(T, U)` | **error** | No tuple equivalent in C |
 | `String` | **error** | Non-C-compatible |
-| `Vec[T]` | **error** | Use a `(T *, size_t)` wrapper |
+| `Array[T]` | **error** | Use a `(T *, size_t)` wrapper |
 | `Option[T]` | **error** | Use a nullable pointer or error code |
 | `Result[T, E]` | **error** | Use an out-parameter + error code |
-| Generic `Foo[T]` | **error** | Monomorphize via newtype: `struct FooInt = Foo[Int]` |
+| Generic `Foo[T]` | **error** | Monomorphize via newtype: `newtype FooInt = Foo[Int]` |
 | Closures | **error** | Use a function pointer |
 
-For errors, emit the precise diagnostic: "type `String` cannot appear in `pub extern \"C\"` signatures. Use `*const uint8_t` and `size_t` for a byte string, or `char *` for a null-terminated C string.".
+For errors, emit the precise diagnostic: "type `String` cannot appear in public C-ABI signatures. Use `*const uint8_t` and `size_t` for a byte string, or `char *` for a null-terminated C string.".
 
 ### 4.6 ABI version stamping
 
@@ -269,7 +273,9 @@ Compiler emits:
 
 ```riven
 # Auto-generated; always public
-pub extern "C" def riven_abi_version -> UInt32
+def riven_abi_version -> UInt32
+  abi "c"
+  no_mangle
   0x00020000u
 end
 ```
@@ -300,13 +306,13 @@ Inputs:
 
 Walk:
 
-1. Collect every `HirItem::Struct` / `HirItem::Class` / `HirItem::Enum` with a `@[repr(C)]` attribute.
-2. Collect every `HirItem::Function` with visibility `Public` and ABI `"C"` (either via `pub extern "C"` or `@[no_mangle] pub ...`).
+1. Collect every `HirItem::Struct` / `HirItem::Class` / `HirItem::Enum` with an in-body `layout c` directive.
+2. Collect every `HirItem::Function` with public visibility and `abi "c"` directive (with or without an in-body `no_mangle`).
 3. For each, validate signatures against the §4.5 table. Accumulate diagnostics; emit all at once (don't bail on first).
 4. Topologically sort types so forward-refs aren't needed (a struct that contains another struct must come after its dependency).
 5. Emit header text.
 
-### 5.3 Layout validation (`@[repr(C)]`)
+### 5.3 Layout validation (`layout c`)
 
 For structs/classes:
 
@@ -318,23 +324,23 @@ For structs/classes:
 For enums:
 
 - No-payload enums → `enum` in C (discriminant picked by the compiler; document as `int`).
-- Payload enums → error: "`@[repr(C)]` enums with payloads are not yet supported. Use a tagged union struct instead."
-- This is restrictive but honest; Rust has the same history and eventually added `@[repr(C, u8)]` for payload enums.
+- Payload enums → error: "`layout c` enums with payloads are not yet supported. Use a tagged union struct instead."
+- This is restrictive but honest; Rust has the same history and eventually added `#[repr(C, u8)]` for payload enums.
 
 ### 5.4 Symbol emission
 
-`pub extern "C" def foo` emits:
+A public C-ABI `def foo` emits:
 
-- LLVM/Cranelift: linkage `External`, symbol name `foo` (no mangling). Respects `@[no_mangle]` redundantly.
+- LLVM/Cranelift: linkage `External`, symbol name `foo` (no mangling). Respects in-body `no_mangle` redundantly.
 - Header: `ReturnType foo(...);` signature.
 
-If the user writes `pub def foo` *without* `extern "C"`, it stays Riven-internal — even if marked `pub`. Only `pub extern "C"` crosses the boundary.
+If the user writes public `def foo` *without* an `abi "c"` directive, it stays Riven-internal — even if marked public. Only `abi "c"`-tagged functions cross the boundary.
 
 `--prefix=mylib_` in the CLI prepends to the emitted C symbol *and* the header's declaration. Implementation: walk the MIR to rewrite the function's export name; walk the HIR to emit the prefixed name in the header.
 
 ### 5.5 Layout table
 
-`codegen/layout.rs` already has struct-layout machinery. Extend (or add a sibling) to compute C-layout for `@[repr(C)]` types. The algorithm:
+`codegen/layout.rs` already has struct-layout machinery. Extend (or add a sibling) to compute C-layout for `layout c` types. The algorithm:
 
 1. For each field, align to `alignof(T)` in C terms, accumulate offset.
 2. Struct alignment = max alignment of all fields.
@@ -352,10 +358,10 @@ After emitting the header, optionally run `gcc -fsyntax-only mylib.h` (or `clang
 A printed contract users can rely on. Recommend shipping this as `docs/c-abi.md`:
 
 1. **ABI covers C-exposed items only.** Everything reachable only through Riven-to-Riven calls has no stability guarantee.
-2. **Struct layouts:** `@[repr(C)]` fields are laid out C-style, padding/alignment follows the C ABI for the target triple. Adding or reordering fields is a breaking change.
+2. **Struct layouts:** `layout c` fields are laid out C-style, padding/alignment follows the C ABI for the target triple. Adding or reordering fields is a breaking change.
 3. **Enum discriminants:** assigned in source order starting from 0. Reordering variants is a breaking change. Removing variants is a breaking change. Adding variants is a breaking change *unless* consumers handle the `default:` case.
-4. **Function signatures:** every `pub extern "C" def foo(...)` is stable as long as its signature doesn't change. Adding an argument is a breaking change. Changing a parameter type is a breaking change.
-5. **Symbol names:** `@[no_mangle]` functions are stable. Non-no-mangle `pub extern "C"` functions get a predictable mangled name the header captures — also stable.
+4. **Function signatures:** every public `def foo(...)` with `abi "c"` is stable as long as its signature doesn't change. Adding an argument is a breaking change. Changing a parameter type is a breaking change.
+5. **Symbol names:** `no_mangle`-marked functions are stable. Non-no-mangle `abi "c"` functions get a predictable mangled name the header captures — also stable.
 6. **ABI version:** `riven_abi_version()` returns `(major << 16) | (minor << 8) | patch`. Major version bumps on compiler-side ABI breaks.
 7. **No unwinding across the ABI.** `panic = "abort"` is required for crates emitting a C ABI.
 
@@ -372,12 +378,12 @@ A printed contract users can rely on. Recommend shipping this as `docs/c-abi.md`
 
 ### Touched files
 
-- `crates/riven-core/src/parser/mod.rs:499-503` — untangle `@[repr(C)]` from `derive_traits` (tier-1 B2 prework).
-- `crates/riven-core/src/parser/mod.rs:1572-1610` — parse `@[no_mangle]`, `@[cbindgen_alias("...")]`, `@[repr(opaque)]`.
+- `crates/riven-core/src/parser/mod.rs:499-503` — untangle `layout c` from `derive_traits` (tier-1 B2 prework).
+- `crates/riven-core/src/parser/mod.rs:1572-1610` — parse `no_mangle`, `cbindgen_alias "..."`, `layout opaque` directives.
 - `crates/riven-core/src/hir/nodes.rs` — `HirStructDef` / `HirClassDef` / `HirEnumDef` gain `repr: Option<Repr>` (`C`, `Rust`, `Transparent`, `Opaque`, etc.).
 - `crates/riven-core/src/hir/nodes.rs` — `HirFunction` gains `is_no_mangle: bool`, `abi: Option<String>`, `c_alias: Option<String>`.
 - `crates/riven-core/src/codegen/layout.rs` — C-layout variant when `repr == Repr::C`.
-- `crates/riven-core/src/codegen/cranelift.rs` + `llvm/emit.rs` — respect `is_no_mangle` / `abi == "C"` in linkage and symbol naming.
+- `crates/riven-core/src/codegen/cranelift.rs` + `llvm/emit.rs` — respect `is_no_mangle` / `abi == "c"` in linkage and symbol naming.
 - `crates/rivenc/src/main.rs:27-67` — new `--emit=c-header` handling.
 - `crates/riven-cli/src/manifest.rs` — `CbindgenConfig` struct nested under `[package]`.
 - `crates/riven-cli/src/build.rs` — call cbindgen step when `[package.cbindgen].generate = true`.
@@ -385,45 +391,45 @@ A printed contract users can rely on. Recommend shipping this as `docs/c-abi.md`
 ### Tests
 
 - `crates/riven-core/tests/cbindgen_basic.rs` — simple struct + function, verify header text.
-- `crates/riven-core/tests/cbindgen_reject.rs` — `pub extern "C" def f(s: String)` errors with the §4.5 message.
-- `crates/riven-core/tests/cbindgen_layout.rs` — `@[repr(C)] struct Point { x: Float32, y: Float32 }` has sizeof 8 on x86_64 and aarch64 (match what the C compiler would produce).
+- `crates/riven-core/tests/cbindgen_reject.rs` — a public `def f(s: String)` with `abi "c"` errors with the §4.5 message.
+- `crates/riven-core/tests/cbindgen_layout.rs` — `struct Point` with `layout c` + `Float32` fields has sizeof 8 on x86_64 and aarch64 (match what the C compiler would produce).
 - `crates/riven-core/tests/cbindgen_round_trip.rs` — build a tiny Riven lib, generate header, compile a C main with `cc` linking against the `.rlib`, run, assert behavior.
-- `crates/riven-core/tests/cbindgen_opaque.rs` — `@[repr(opaque)]` emits forward decl only.
+- `crates/riven-core/tests/cbindgen_opaque.rs` — `layout opaque` emits forward decl only.
 - `crates/riven-core/tests/cbindgen_abi_version.rs` — `riven_abi_version()` is auto-exported and returns the expected constant.
 
 ## 7. Interactions with Other Tiers
 
-- **Tier 1 (derive, B2).** Prework. `@[repr(C)]` and `@[derive]` must be disentangled.
-- **Tier 1 (drop, B1).** If a user exposes `pub extern "C" def handle_new -> *mut Handle`, the corresponding `handle_free` must properly drop the Handle's fields. B1's Drop-in-codegen fix unblocks this.
+- **Tier 1 (derive, B2).** Prework. `layout c` and structural-mixin includes must be disentangled.
+- **Tier 1 (drop, B1).** If a user exposes a public `def handle_new -> *mut Handle` with `abi "c"`, the corresponding `handle_free` must properly drop the Handle's fields. B1's Drop-in-codegen fix unblocks this.
 - **Tier 1 (formatting macros).** Irrelevant; cbindgen doesn't touch format output.
 - **Tier 4.01 package manager.** `[package.cbindgen]` lives in `Riven.toml`. `riven publish` should include the generated `.h` in the tarball if `output = "include/…"` is set.
 - **Tier 4.02 cross-compilation.** Layout is target-dependent. Header generated for `aarch64-unknown-linux-gnu` is valid on that triple only. Recommend: emit the triple as a comment in the header (`/* Generated for target: aarch64-unknown-linux-gnu */`) and `#error` if someone #includes it on a mismatched target? Probably overkill. v1: document the triple dependency; users handle it.
 - **Tier 4.03 WASM.** WASM does not use C headers — it uses WIT or raw imports. Cbindgen is a no-op for `wasm32-*` targets; `riven build --target wasm32-* ` with cbindgen enabled emits a warning and skips.
-- **Tier 4.04 no_std.** `@[no_mangle]` attribute is shared — defined in doc 04 §4.2, consumed here. Good.
+- **Tier 4.04 no_std.** `no_mangle` directive is shared — defined in doc 04 §4.2, consumed here. Good.
 - **Tier 4.06 CI.** A matrix entry that runs `rivenc --emit=c-header tests/fixtures/cabi_lib.rvn -o /tmp/h.h && gcc -fsyntax-only /tmp/h.h` catches header-syntax regressions.
 
 ## 8. Phasing
 
-### Phase 5a — Attribute cleanup + basic emit (1-2 weeks, depends on tier-1 B2)
+### Phase 5a — Directive cleanup + basic emit (1-2 weeks, depends on tier-1 B2)
 
-1. Untangle `@[repr(C)]` from `derive_traits` — add `Repr` enum field to struct/class/enum HIR nodes.
-2. Parse `@[no_mangle]`, `@[cbindgen_alias("...")]`, `@[repr(opaque)]`.
+1. Untangle `layout c` from `derive_traits` — add `Repr` enum field to struct/class/enum HIR nodes.
+2. Parse `no_mangle`, `cbindgen_alias "..."`, `layout opaque` directives.
 3. `--emit=c-header` CLI flag.
-4. Walk HIR, emit the header for a trivial case: primitives, `@[repr(C)]` structs of primitives, `pub extern "C"` functions of primitives.
+4. Walk HIR, emit the header for a trivial case: primitives, `layout c` structs of primitives, public C-ABI functions of primitives.
 5. **Exit:** §4.4 example produces the shown header; tests pass.
 
 ### Phase 5b — Layout + symbol emission (1 week)
 
 1. C-compatible layout in `codegen/layout.rs` triggered by `Repr::C`.
-2. Symbol emission: `pub extern "C"` + `@[no_mangle]` → external-linkage, no-mangle LLVM/Cranelift symbols.
+2. Symbol emission: `abi "c"` + `no_mangle` → external-linkage, no-mangle LLVM/Cranelift symbols.
 3. Round-trip test: Riven lib + generated header + C main links and runs.
 4. **Exit:** the round-trip test passes on x86_64-linux and aarch64-linux.
 
 ### Phase 5c — Stability rules (1 week)
 
-1. Reject `String`, `Vec`, `Option`, `Result`, tuples, closures, generics at C-ABI boundaries with specific error messages.
-2. Reject payload enums with `@[repr(C)]`.
-3. Accept `@[repr(opaque)]` → forward declaration.
+1. Reject `String`, `Array`, `Option`, `Result`, tuples, closures, generics at C-ABI boundaries with specific error messages.
+2. Reject payload enums with `layout c`.
+3. Accept `layout opaque` → forward declaration.
 4. `riven_abi_version()` auto-emitted.
 5. `--prefix=…` symbol prefixing.
 6. **Exit:** stability-rule violations produce diagnostics matching the §4.5 table.
@@ -438,28 +444,28 @@ A printed contract users can rely on. Recommend shipping this as `docs/c-abi.md`
 
 ## 9. Open Questions & Risks
 
-1. **Which enum discriminant type?** The standard C choice is `int`. Rust's `repr(C)` enums with no payload are also `int` by default. Recommend: `int`. Users can pin with `@[repr(u8)]` / `@[repr(u32)]` — but we don't implement that in v1 (error: "`@[repr(u8)]` is not supported").
+1. **Which enum discriminant type?** The standard C choice is `int`. Rust's `repr(C)` enums with no payload are also `int` by default. Recommend: `int`. Users can pin with a `layout u8` / `layout u32` directive — but we don't implement that in v1 (error: "`layout u8` is not supported").
 2. **Anonymous tagged enums?** C doesn't have them (payload enums). We reject. Users who need them define a `struct { int tag; union { ... }; }` manually in C and wrap with Riven.
-3. **`Option<*T>` at the C boundary.** C has nullable pointers. `Option[*T]` semantically maps to `T *` with NULL meaning None. Worth a special-case? Recommend v1: no, reject `Option`. v2: special-case pointer-backed `Option`.
-4. **`#[non_exhaustive]`-style struct/enum stability.** If users add a field later, C consumers break. Rust has `#[non_exhaustive]` to opt out of construction-compat. Recommend v1: all `@[repr(C)]` items are "exhaustive" (additions are breaking); document, no attribute.
+3. **`Option<*T>` at the C boundary.** C has nullable pointers. `Option[*T]` semantically maps to `T *` with NULL meaning nil. Worth a special-case? Recommend v1: no, reject `Option`. v2: special-case pointer-backed `Option`.
+4. **`#[non_exhaustive]`-style struct/enum stability.** If users add a field later, C consumers break. Rust has `#[non_exhaustive]` to opt out of construction-compat. Recommend v1: all `layout c` items are "exhaustive" (additions are breaking); document, no directive.
 5. **Header output deterministic?** Must be — CI diffs won't tolerate reordering. Recommend: emit in source order (not HashMap iteration order). Write tests.
-6. **`#pragma pack` equivalents.** Rust has `#[repr(C, packed)]`. Recommend v1: reject `@[repr(packed)]` with "not yet supported". Workaround: manual field arrangement + `@[repr(C)]`.
+6. **`#pragma pack` equivalents.** Rust has `#[repr(C, packed)]`. The Riven equivalent would combine `layout c` + `layout packed`. Recommend v1: reject the combination with "not yet supported". Workaround: manual field arrangement + `layout c`.
 7. **Header includes.** We include `<stdint.h>`, `<stddef.h>`, `<stdbool.h>` always. Should we include `<float.h>`? Recommend: only when the header uses `float`/`double` — minor optimization, easy to get right.
-8. **Symbol mangling for pub extern "C" WITHOUT @[no_mangle].** Recommend: also emit unmangled. `pub extern "C"` without `@[no_mangle]` is meaningless — the linkage is C, but the symbol name is Riven-mangled? Choose: `pub extern "C"` **implies** `@[no_mangle]`. `@[no_mangle]` alone on a non-extern function errors "`@[no_mangle]` requires `extern \"C\"`."
-9. **Generics monomorphization.** `pub extern "C" def foo[T](x: T)` errors: "generic functions cannot have C ABI". Users wrap with a non-generic dispatch. Unchanged.
+8. **Symbol mangling for `abi "c"` WITHOUT `no_mangle`.** Recommend: also emit unmangled. `abi "c"` without `no_mangle` is meaningless — the linkage is C, but the symbol name is Riven-mangled? Choose: `abi "c"` **implies** `no_mangle`. `no_mangle` alone on a function without `abi "c"` errors "`no_mangle` requires `abi \"c\"`."
+9. **Generics monomorphization.** A generic `def foo[T](x: T)` with `abi "c"` errors: "generic functions cannot have C ABI". Users wrap with a non-generic dispatch. Unchanged.
 10. **C++ support.** `extern "C++"` is a C++-only concept. Not planned. Users wrap manually.
-11. **Opaque pointer + lifetime.** `pub extern "C" def handle_new(alloc: &Allocator) -> *mut Handle` — the `&Allocator` parameter is a reference with a lifetime. We accept at the surface (reference ≡ non-null pointer in C), but the caller must ensure aliasing rules. Document as a warning in the header comment.
+11. **Opaque pointer + lifetime.** `def handle_new(alloc: &Allocator) -> *mut Handle` with `abi "c"` — the `&Allocator` parameter is a reference with a lifetime. We accept at the surface (reference ≡ non-null pointer in C), but the caller must ensure aliasing rules. Document as a warning in the header comment.
 12. **Versioning the header file.** Do we emit `#define RIVEN_MYLIB_VERSION "0.1.0"`? Useful for consumers. Recommend: yes, as `#define <PREFIX>VERSION "0.1.0"` where PREFIX is the `--prefix` config or `RIVEN_<PACKAGE>_`.
 13. **Layout vs ABI across architectures.** x86_64 SysV, aarch64 AAPCS, and wasm32 have different struct layouts for the same source. Recommend: the header is *target-specific*. Emit a `/* Generated for: x86_64-unknown-linux-gnu */` comment. If the user needs multi-target support, they regenerate per target.
 14. **DLL / dylib symbol visibility.** On Windows, `__declspec(dllexport)`. On macOS, default visibility is public; on Linux, `__attribute__((visibility("default")))` for `-fvisibility=hidden` builds. Recommend v1: emit nothing; trust the platform default. Revisit if needed.
-15. **Interaction with `@[repr(transparent)]`.** A newtype wrapping a single field should have the same C representation as the inner type. Nice to have; recommend v1: reject (`"@[repr(transparent)]` not yet supported"). Easy v2 add.
+15. **Interaction with `layout transparent`.** A newtype wrapping a single field should have the same C representation as the inner type. Nice to have; recommend v1: reject (`"layout transparent` not yet supported"). Easy v2 add.
 
 ## 10. Acceptance Criteria
 
 Phase 5a:
 
-- [ ] `@[repr(C)]` is parsed separately from `@[derive]` (tier-1 B2 resolved).
-- [ ] `rivenc --emit=c-header trivial.rvn` prints a valid header for `@[repr(C)] struct Point { x: Float32, y: Float32 } @[no_mangle] pub extern "C" def zero -> Point`.
+- [ ] `layout c` is parsed separately from structural-mixin includes (tier-1 B2 resolved).
+- [ ] `rivenc --emit=c-header trivial.rvn` prints a valid header for `struct Point` with `layout c` + `Float32 x, y` and `def zero -> Point` with `abi "c"` + `no_mangle`.
 - [ ] Output is deterministic (byte-identical across runs).
 
 Phase 5b:
@@ -467,14 +473,14 @@ Phase 5b:
 - [ ] The emitted header compiles under `gcc -fsyntax-only -std=c11 -Wall -Werror`.
 - [ ] `sizeof(Point)` in the generated header equals `riven_sizeof_Point()` (emit a diagnostic helper) on x86_64 and aarch64.
 - [ ] A C main `#include`ing the header, linking against the Riven `.rlib`, calls `add_points({1,2}, {3,4})` and gets `{4, 6}`.
-- [ ] `pub extern "C" def foo` emits symbol `foo` (not `riven_foo` or anything mangled) — verified with `nm`.
+- [ ] A public `def foo` with `abi "c"` emits symbol `foo` (not `riven_foo` or anything mangled) — verified with `nm`.
 
 Phase 5c:
 
-- [ ] `pub extern "C" def f(s: String)` errors at `--emit=c-header`-time with the specific diagnostic from §4.5.
-- [ ] `pub extern "C" def f(x: Option[Int32])` errors similarly.
-- [ ] `@[repr(C)] enum E { A(Int32), B }` errors: payload enums not supported.
-- [ ] `@[repr(opaque)] pub struct Handle ...` emits `typedef struct Handle Handle;` in the header and nothing else.
+- [ ] A public `def f(s: String)` with `abi "c"` errors at `--emit=c-header`-time with the specific diagnostic from §4.5.
+- [ ] A public `def f(x: Option[Int32])` with `abi "c"` errors similarly.
+- [ ] `enum E` with `layout c` containing `A(Int32), B` errors: payload enums not supported.
+- [ ] A `struct Handle` with `layout opaque` emits `typedef struct Handle Handle;` in the header and nothing else.
 - [ ] `riven_abi_version()` is auto-declared in the header and auto-defined in the `.rlib`; a C consumer linking + calling gets the expected `(major << 16) | (minor << 8) | patch` value.
 - [ ] `rivenc --emit=c-header --prefix=mylib_ file.rvn` emits `mylib_add_points` instead of `add_points`, both in the header and as the `.rlib` symbol.
 

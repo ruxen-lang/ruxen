@@ -1469,8 +1469,8 @@ fn layout_of_class_without_const_param_field_unchanged() {
     // Regression gate: classes without a const-param-referencing
     // field layout the same way they did before S7.
     use riven_core::codegen::layout::layout_of;
-    use riven_core::hir::types::Ty;
     use riven_core::hir::nodes::HirItem;
+    use riven_core::hir::types::Ty;
 
     let src = r#"
 class Plain

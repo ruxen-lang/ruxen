@@ -62,7 +62,7 @@ Use Group A's closure capture-cell pattern as prior art (see `CaptureKind::ByRef
 
 Root cause: trait method dispatch and default-body monomorphization work in batch codegen (see `mir/lower.rs::collect_trait_default_methods` and `impl`-block method synthesis), but the REPL compiles the trait/impl pair in one pass and may not re-emit synthesized method bodies when new impls arrive.
 
-**Fixtures (10):** `21_traits`, `22_trait_default`, `79_trait_inherit`, `80_trait_assoc_type`, `81_trait_static_method`, `82_impl_trait_param`, `83_dyn_trait_param`, `84_multi_bound`, `86_trait_default_method_used`, `87_trait_override_default`.
+**Fixtures (10):** `21_mixins`, `22_mixin_default`, `79_mixin_inherit`, `80_mixin_assoc_type`, `81_mixin_static_method`, `82_some_mixin_param`, `83_any_mixin_param`, `84_multi_bound`, `86_mixin_default_method_used`, `87_mixin_override_default`.
 
 **Fix strategy.** In `eval.rs`, the `other` branch already lowers the full replayed program through MIR + JIT, but `session.jit.is_declared(&mir_func.name)` may skip re-emitting a default-method monomorphization that was synthesized AFTER a class impl was added. Ensure the JIT compiles every MIR function it hasn't seen yet — including those with mangled names like `Bot_greet` or `Cat_speak`. Log what's being compiled during a failing fixture with `--verbose` and cross-check against a batch compile's `--emit=mir`.
 
@@ -70,7 +70,7 @@ Root cause: trait method dispatch and default-body monomorphization work in batc
 
 Root cause: Vec/Hash/Set/String method calls rely on runtime helpers registered in `crates/riven-core/src/codegen/runtime.rs`. The JIT may not import every runtime symbol, or the resolver maps methods to names the JIT doesn't know.
 
-**Fixtures (6):** `45_string_methods`, `57_while_let_pop`, `104_hash_basic`, `105_set_basic`, `106_string_chars`, `107_vec_push_pop`.
+**Fixtures (6):** `45_string_methods`, `57_while_let_pop`, `104_hash_basic`, `105_set_basic`, `106_string_chars`, `107_array_push_pop`.
 
 **Fix strategy.** In `jit.rs`'s runtime-symbol registration section, mirror every entry from `crates/riven-core/src/codegen/cranelift.rs::declare_runtime_funcs` (or whatever the batch uses). Grep both files for `riven_string_*`, `riven_vec_*`, `riven_hash_*`, `riven_set_*` and ensure parity.
 

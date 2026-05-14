@@ -3,7 +3,7 @@
 //! `tests/release-e2e/cases/50[1-9]_hashmap_*.rvn` and the leak guard
 //! in `drop_fixtures.rs::hashmap_*_releases_every_value`.
 //!
-//! Mirrors the `stdlib_vec_negatives.rs` harness shape: drive the real
+//! Mirrors the `stdlib_array_negatives.rs` harness shape: drive the real
 //! lex → parse → typecheck pipeline from a source string, then assert
 //! on the diagnostic shape.
 

@@ -13,8 +13,8 @@ docs/prompts/
 ├── v1/
 │   ├── 01_phase1_remainder.md          # P0.7, T1.05 derive, T5.04 phase 3, P0.12 un-reserve
 │   ├── 02_phase2_stdlib_string.md
-│   ├── 03_phase2_stdlib_vec.md
-│   ├── 04_phase2_stdlib_hashmap.md
+│   ├── 03_phase2_stdlib_array.md
+│   ├── 04_phase2_stdlib_map.md
 │   ├── 05_phase2_stdlib_iterator.md
 │   ├── 06_phase2_stdlib_io_fmt.md
 │   ├── 07_phase3_const_generics.md

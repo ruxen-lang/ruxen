@@ -30,50 +30,52 @@ types are spelled `*T` (read-only) and `*mut T` (write).
 
 ```riven
 lib "c"
-  fn malloc(n: USize) -> *mut Void
+  def malloc(n: USize) -> *mut Void
 end
 ```
 
-Declares an external shared library; nested `fn` declarations expose
-its symbols.  An optional `#[link]` attribute pins the linker name.
+Declares an external shared library; nested `def` declarations expose
+its symbols.  An optional `path:` / `version:` option on `lib` pins
+the linker name.
 
-## B4 — `extern "C"` block parses
+## B4 — `lib "<linkname>"` block parses (C-ABI)
 
-`extern "C"` blocks declare C-callable functions with explicit ABI;
-parameter types follow the same `*T` / `*mut T` rules as B2.
+`lib "<linkname>"` blocks declare C-callable functions; parameter
+types follow the same `*T` / `*mut T` rules as B2.
 
 ## B5 — `void` return type
 
-FFI fns may return the void type (mapped to Riven's `Unit`).
+FFI defs may return the void type (mapped to Riven's `Unit`).
 
 ## B6 — Multi-parameter FFI
 
 Accepts arbitrarily many parameters, mixing scalars and pointers.
 
-## B7 — `#[repr(C)]` struct layout
+## B7 — `layout c` struct layout
 
-`#[repr(C)]` on a struct guarantees C-compatible layout (fields in
+`layout c` on a struct guarantees C-compatible layout (fields in
 declaration order, native alignment, no reordering).
 
-## B8 — `#[derive(...)]` attribute syntax on struct / class / enum
+## B8 — Implicit structural mixin inclusion on struct / class / enum
 
-The attribute parses on all three declarators.  Equivalent to the
-`derive` keyword form; both lower to the same AST node.
+Structural mixins (`Debug`, `Clone`, `Eq`, `Hash`, …) are implicitly
+included when the fields support them; an explicit `include D1, D2`
+inside the body is the loud form and lowers to the same AST node.
 
-## B9 — In-body `derive` clause syntax
+## B9 — In-body `include` clause syntax
 
-A `derive Foo, Bar` clause inside a struct/class/enum body parses
-the same way as the attribute form.
+An `include Foo, Bar` clause inside a struct/class/enum body parses
+the loud form of the implicit-include rule.
 
 ## B10 — Layout invariants
 
-| Layout                    | Guarantee                              |
-|---------------------------|----------------------------------------|
-| Raw pointer (`*T`)        | 8 bytes (64-bit pointer)               |
-| `#[repr(packed)]` struct  | No padding between fields              |
-| `#[repr(transparent)]`    | Same layout as inner field             |
-| `#[repr(transparent)]` w/ multiple fields | rejected at typeck     |
-| `#[repr(C)]` struct       | Matches plain struct on the target ABI |
+| Layout                                  | Guarantee                              |
+|-----------------------------------------|----------------------------------------|
+| Raw pointer (`*T`)                      | 8 bytes (64-bit pointer)               |
+| `layout packed` struct                  | No padding between fields              |
+| `layout transparent`                    | Same layout as inner field             |
+| `layout transparent` w/ multiple fields | rejected at typeck                     |
+| `layout c` struct                       | Matches plain struct on the target ABI |
 
 ---
 

@@ -1,11 +1,11 @@
-# Spec — `std::path`
+# Spec — `std.path`
 
 **Source docs:**
 [docs/requirements/tier1_01_stdlib.md §4.9](../../requirements/tier1_01_stdlib.md).
 
 **Status:** shipped Phase 3 (POSIX path operations).
 
-`std::path` provides string-based POSIX path manipulation.  Linux-
+`std.path` provides string-based POSIX path manipulation.  Linux-
 style forward-slash separators only — Windows backslash support is a
 non-goal for v1.
 
@@ -79,4 +79,4 @@ Returns `true` iff `p` starts with `/`.
 - Normalisation (`..` / `.` resolution beyond what `path_parent`
   does on the trailing segment).
 - Canonicalisation that touches the filesystem (would belong in
-  `std::fs`).
+  `std.fs`).

@@ -45,8 +45,8 @@ ship `dyn Trait` end-to-end.
 
 ### 2.2 No fixture uses `dyn Trait`
 
-The tutorial mentions it (`docs/tutorial/08-traits.md:98-108`) with a
-note about the difference from `impl Trait`, but no fixture exercises
+The tutorial mentions it (`docs/tutorial/08-mixins.md:98-108`) with a
+note about the difference from `some Mixin`, but no fixture exercises
 it. Today, typing `fn f(x: &dyn Displayable)` probably compiles but
 does not produce a real trait-object argument — the resolver attaches
 `Ty::DynTrait(...)`, the layout says 16 bytes, but method dispatch
@@ -413,7 +413,7 @@ traits must be droppable. Tier-1 is a hard prerequisite.
   the method is not in the vtable, but is callable on the concrete
   type. Useful for `trait IntoIterator; fn into_iter(self) -> Self.Iter`.
   Recommendation: add in 06a or explicitly defer. See tutorial's
-  `docs/tutorial/08-traits.md:108`.
+  `docs/tutorial/08-mixins.md:108`.
 - **OQ-2: vtable alignment.** 8-byte on 64-bit. ARM32 / wasm32 would
   need 4-byte. Riven currently targets 64-bit only (tier-1 assumes
   `ISize/USize == 64`).

@@ -241,9 +241,9 @@ classes that `include Display`.
 
 ## Collections
 
-[Map spec](../specs/stdlib/hashmap.spec.md) ·
-[Set spec](../specs/stdlib/hashset.spec.md) ·
-[Array spec](../specs/stdlib/vec.spec.md) ·
+[Map spec](../specs/stdlib/map.spec.md) ·
+[Set spec](../specs/stdlib/set.spec.md) ·
+[Array spec](../specs/stdlib/array.spec.md) ·
 [Iterator spec](../specs/stdlib/iterator.spec.md)
 
 Collections are introduced in [Chapter 13 — Collections](13-collections.md).

@@ -212,7 +212,7 @@ the relevant doc §OQ for the full argument.
 2. **Error-code number space.** `E1001-E1010` already ship
    (`borrow_check/errors.rs:6-16`), and tier-1 docs reserve `E1011-E1016`
    (concurrency, `tier1_02_concurrency.md:785-790`) and `E0601-E0609`
-   (derive, `tier1_05_derive_macros.md:718`). **Doc 04 §4.2** proposes:
+   (implicit includes, `tier1_05_implicit_includes.md:718`). **Doc 04 §4.2** proposes:
 
    - `E0001-E0999` — parser/lexer/general.
    - `E0100-E0499` — resolve/name resolution.

@@ -262,7 +262,7 @@ end
 /// each line; trailing '\n' does NOT produce a final empty element.
 ///
 /// Helper `unwrap_line` reduces each match arm to a single expression.
-/// Riven `for` syntax has no `do` keyword (see fixture `26_vec_basic.rvn`).
+/// Riven `for` syntax has no `do` keyword (see fixture `26_array_basic.rvn`).
 #[test]
 fn stdin_lines_yields_each_line() {
     let source = r##"

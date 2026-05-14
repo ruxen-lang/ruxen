@@ -6,7 +6,7 @@
 //! `210_*.rvn`) which exercise the green path.
 //!
 //! Each test compiles a small Riven snippet through the same lex →
-//! parse → typecheck pipeline used by `derive_diagnostics.rs`, but
+//! parse → typecheck pipeline used by `implicit_diagnostics.rs`, but
 //! takes the source as a string literal so a single test file holds
 //! all related negatives without scattering tiny `.rvn` files across
 //! `tests/fixtures/`.

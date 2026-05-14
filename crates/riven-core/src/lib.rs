@@ -1,9 +1,9 @@
 pub mod borrow_check;
 pub mod codegen;
-pub mod r#derive;
 pub mod diagnostics;
 pub mod formatter;
 pub mod hir;
+pub mod implicit_includes;
 pub mod lexer;
 pub mod mir;
 pub mod parser;

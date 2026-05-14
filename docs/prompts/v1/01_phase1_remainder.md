@@ -6,7 +6,7 @@ and P0.12 un-reservation of actor tokens.
 
 **Depends on:** Phase 0 done (squashed into commits prior to `master@{HEAD}`; verified 2026-05-05 against substantive evidence — LICENSE files, MSRV pin, attr untangle fixtures, doc-comment capture, Drop infra, variance fixtures all present).
 **Reads:** `docs/requirements/tier1_04_drop_copy_clone.md`,
-`docs/requirements/tier1_05_derive_macros.md`,
+`docs/requirements/tier1_05_implicit_includes.md`,
 `docs/requirements/tier5_04_error_code_registry.md`.
 
 ---
@@ -53,7 +53,7 @@ so heap-owned `String`/`Array`/`Map` locals leak at scope exit.
 ### Problem
 `derive Debug`, `derive Clone`, `derive Copy`, `derive PartialEq`,
 `derive Eq`, `derive Hash`, `derive Default`, `derive Ord`,
-`derive PartialOrd` are validated (`derive/mod.rs`) but no
+`derive PartialOrd` are validated (`implicit_includes/mod.rs`) but no
 include-blocks are synthesized.
 
 ### TDD
@@ -78,7 +78,7 @@ one nested enum-with-payload. Expected output asserts:
 - `Default` → field-wise zero/`Default.default()`.
 - `Ord` / `PartialOrd` → field-order tuple semantics.
 
-Add unit tests in `crates/riven-core/src/derive/` covering the HIR
+Add unit tests in `crates/riven-core/src/implicit_includes/` covering the HIR
 synthesis (assert that `derive Debug` on `Point { x: Int, y: Int }`
 produces a `Point_fmt_debug` HIR method with the right shape).
 

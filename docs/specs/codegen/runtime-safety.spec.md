@@ -33,8 +33,8 @@ LD_PRELOAD would corrupt later reads.
 
 ## B4 — `fs`, `env`, and `process` helpers match their declared ABI
 
-Each runtime helper used by `std::fs`, `std::env`, and
-`std::process` has a fixed C signature.  The pin test compiles a
+Each runtime helper used by `std.fs`, `std.env`, and
+`std.process` has a fixed C signature.  The pin test compiles a
 minimal C harness that includes the runtime header and calls every
 helper with the declared argument types — any signature drift fails
 the build.

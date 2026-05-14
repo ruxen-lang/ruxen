@@ -1,7 +1,7 @@
 //! Pin tests for `@[derive(...)]` attribute form vs in-body `derive`
 //! clause parity.
 //!
-//! `tests/release-e2e/cases/131_attr_derive_copy.rvn` covers Copy + Clone
+//! `tests/release-e2e/cases/131_implicit_copy.rvn` covers Copy + Clone
 //! end-to-end.  This file pins **AST shape parity** — both forms must
 //! populate `StructDef.derive_traits` with the same `Vec<String>` so
 //! every downstream pass (typeck, MIR derive expansion) treats them

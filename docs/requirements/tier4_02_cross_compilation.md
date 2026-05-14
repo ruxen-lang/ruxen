@@ -470,7 +470,7 @@ The release workflow (`.github/workflows/release.yml`) grows a matrix job per ti
 - **Tier 4.03 WASM.** WASM is the first target that *requires* this work — `wasm32-unknown-unknown` has no `cc`, no `-lc`, no `-lm`. Doc 03 §6 lists the specific drops.
 - **Tier 4.04 no_std.** `thumbv7em-none-eabihf` and kin imply `no_std`. The linker is the embedded toolchain's `arm-none-eabi-ld`. No runtime libc. Doc 04 §5.3 covers the runtime subset.
 - **Tier 4.06 CI.** The CI matrix needs to smoke-test cross-compilation. Recommend `aarch64-unknown-linux-gnu` from Ubuntu runners using `qemu-user-static` for `riven run` to succeed.
-- **Tier 1 stdlib.** Some stdlib items are Unix-only (`std::os::unix`), some are Windows-only (future `std::os::windows`). These are `@[cfg(unix)]` / `@[cfg(windows)]` gated and consume the cfg evaluator.
+- **Tier 1 stdlib.** Some stdlib items are Unix-only (`std.os.unix`), some are Windows-only (future `std.os.windows`). These are gated by in-body `cfg(unix)` / `cfg(windows)` directives and consume the cfg evaluator.
 - **Tier 2 codegen.** The `Linkage::Import` FFI resolution (`cranelift.rs:98-103`) must still name-mangle the same way regardless of target — that's already correct, but worth guarding with a per-target test.
 
 ## 8. Phasing
@@ -525,8 +525,8 @@ Best-effort. Document what works. Don't gate releases on tier-3.
 - [ ] `riven target list` lists runtimes present in `~/.riven/lib/runtime/*/`.
 - [ ] `riven target add aarch64-unknown-linux-gnu` downloads and extracts the runtime from the release URL, verifies the sha256.
 - [ ] `target/<triple>/debug/myapp` exists after `riven build --target <triple>`; `target/debug/myapp` still exists after `riven build` with no flag.
-- [ ] `@[cfg(target_os = "linux")] pub def foo` is visible only when the resolved triple's OS is Linux.
-- [ ] `@[cfg(target_arch = "wasm32")]` is visible only when targeting wasm32-*.
+- [ ] `def foo` with in-body `cfg(target_os = "linux")` is visible only when the resolved triple's OS is Linux.
+- [ ] In-body `cfg(target_arch = "wasm32")` is visible only when targeting wasm32-*.
 - [ ] CI matrix includes an `aarch64-unknown-linux-gnu` job that builds the compiler's own test fixtures with `--target` and runs them via `qemu-aarch64-static`.
 - [ ] Passing `--backend=cranelift --target=wasm32-unknown-unknown` errors with a specific message pointing at `--backend=llvm`.
 - [ ] Passing `--target=invalid-triple` errors with a `target-lexicon` parse-diagnostic pointer at the failing segment.

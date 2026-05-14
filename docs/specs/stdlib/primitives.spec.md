@@ -23,7 +23,7 @@ typechecker resolves and the runtime helpers that back them.
 **Then** the result is `"42"`.
 
 Same surface holds for `USize` (the type sometimes inferred for array
-sizes and `Vec.len`).
+sizes and `Array.len`).
 
 ## B2 — `Float.to_string() -> String`
 
@@ -126,11 +126,11 @@ fine (literal narrows on assignment).
 
 ## Out of scope (v2)
 
-- Trait-bound numeric primitives — Rust's `Num`, `One`, `Zero` traits
+- Mixin-bound numeric primitives — Rust's `Num`, `One`, `Zero` traits
   don't exist in v1; arithmetic is hardwired.
 - 128-bit integers (`Int128`, `UInt128`) and arbitrary-precision
   big-int.
 - Float NaN / Infinity literal syntax (`Float.NAN`, `Float.INFINITY`).
-- `Char::from_u32` / `Char::to_digit` helpers — only `to_string` ships
+- `Char.from_u32` / `Char.to_digit` helpers — only `to_string` ships
   today.
 - Bit-manipulation methods (`leading_zeros`, `count_ones`, etc.).

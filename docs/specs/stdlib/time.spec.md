@@ -1,11 +1,11 @@
-# Spec — `std::time`
+# Spec — `std.time`
 
 **Source docs:**
 [docs/requirements/tier1_01_stdlib.md §4.5](../../requirements/tier1_01_stdlib.md).
 
 **Status:** shipped Phase 3 (timestamps).
 
-`std::time` provides two clock primitives.  All values are
+`std.time` provides two clock primitives.  All values are
 nanoseconds expressed as `Int`.
 
 ---
@@ -46,6 +46,6 @@ Suitable for timestamps, not for measuring elapsed time.
 
 - `Duration` / `Instant` typed values; v1 uses raw `Int`
   nanoseconds.
-- Calendar arithmetic (`time::Date`, `time::DateTime`, timezones).
-- Sleeping primitives — `Thread.sleep` is in `std::thread`, not here.
+- Calendar arithmetic (`time.Date`, `time.DateTime`, timezones).
+- Sleeping primitives — `Thread.sleep` is in `std.sync`, not here.
 - Higher-resolution counters (`rdtsc`) or platform-specific clocks.

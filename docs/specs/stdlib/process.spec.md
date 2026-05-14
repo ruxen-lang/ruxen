@@ -1,4 +1,4 @@
-# Spec — `std::process`
+# Spec — `std.process`
 
 **Source docs:**
 [docs/requirements/tier1_01_stdlib.md §4.7](../../requirements/tier1_01_stdlib.md),
@@ -7,13 +7,13 @@
 **Status:** `exit` + `process_run` helper shipped Phase 2 #06.  Full
 `Command` builder deferred to v2.
 
-`std::process` provides primitive operations on the current process
+`std.process` provides primitive operations on the current process
 (exit) and a minimal child-process spawner (`process_run`) that
 covers the v1 "run an external tool synchronously" use case.
 
 ---
 
-## B1 — `process::exit(code: Int) -> !`
+## B1 — `process.exit(code: Int) -> !`
 
 Terminates the current process with the given exit code.  Returns the
 never-type `!` — control never returns to the caller.
@@ -21,7 +21,7 @@ never-type `!` — control never returns to the caller.
 `code` is widened to the OS-native exit code (8 bits on POSIX).
 Caller-side encoding (e.g. `exit(-1)` → `255`) follows libc semantics.
 
-## B2 — `process_run(cmd: &str, args: Vec[String]) -> Int`
+## B2 — `process_run(cmd: &str, args: Array[String]) -> Int`
 
 Fork+execvp a child, inherit stdio, wait for completion, return the
 child's exit code.
@@ -81,8 +81,8 @@ directly.  Capturing output requires the full `Command` builder
 
 ## Out of scope (v2)
 
-- `Command::new(...).arg(...).env(K, V).spawn() -> Child` builder.
-- `Command::output() -> Result[Output, IoError]` (capture stdout +
+- `Command.new(...).arg(...).env(K, V).spawn() -> Child` builder.
+- `Command.output() -> Result[Output, IoError]` (capture stdout +
   stderr + exit code as a struct).
-- `Command::status() -> Result[ExitStatus, IoError]`.
+- `Command.status() -> Result[ExitStatus, IoError]`.
 - Windows support — POSIX-only in v1 (tier4_04 carve-out).

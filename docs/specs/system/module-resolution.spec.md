@@ -21,12 +21,12 @@ more symbols typechecks cleanly with **zero** diagnostics:
 
 | Module        | Import form                                            |
 |---------------|--------------------------------------------------------|
-| `std::io`     | `use std.io.{Stdin, Stdout, Stderr}`                   |
-| `std::io`     | `use std.io.{stdin, stdout, stderr}` (lowercase helpers) |
-| `std::env`    | `use std.env.{args, var, vars, current_dir}`           |
-| `std::fs`     | `use std.fs.{read_to_string, write, exists, …}`        |
-| `std::process`| `use std.process.{exit, process_run}`                  |
-| `std::sync`   | `use std.sync.{Thread, Mutex, Arc, JoinHandle, …}`     |
+| `std.io`      | `use std.io.{Stdin, Stdout, Stderr}`                   |
+| `std.io`      | `use std.io.{stdin, stdout, stderr}` (lowercase helpers) |
+| `std.env`     | `use std.env.{args, var, vars, current_dir}`           |
+| `std.fs`      | `use std.fs.{read_to_string, write, exists, …}`        |
+| `std.process` | `use std.process.{exit, process_run}`                  |
+| `std.sync`    | `use std.sync.{Thread, Mutex, SharedSync, JoinHandle, …}` |
 
 ## B2 — Group imports
 
@@ -46,28 +46,28 @@ For modules with shipped runtime impls, a complete
 
 | Module                  | Round-trip pin                              |
 |-------------------------|---------------------------------------------|
-| `std::io` println       | `std_io_println_and_eprintln_round_trip`    |
-| `std::io` write_str     | `std_io_write_str_result_is_unit_and_round_trips` |
-| `std::io` read_line     | `std_io_read_line_and_stdout_round_trip`    |
-| `std::io` read_to_string| `std_io_stdin_read_to_string_round_trip`    |
-| `std::env` args         | `std_env_args_round_trip`                   |
-| `std::env` var          | `std_env_var_round_trip`                    |
-| `std::fs`               | `std_fs_round_trip`                         |
-| `std::fs` mutations     | `std_fs_mutation_helpers_round_trip`        |
-| `std::fs` create_dir_all| `std_fs_create_dir_all_round_trip`          |
-| `std::process` exit     | `std_process_exit_round_trip`               |
-| `std::sync` thread util | `std_sync_thread_sleep_and_yield_round_trip`|
+| `std.io` println        | `std_io_println_and_eprintln_round_trip`    |
+| `std.io` write_str      | `std_io_write_str_result_is_unit_and_round_trips` |
+| `std.io` read_line      | `std_io_read_line_and_stdout_round_trip`    |
+| `std.io` read_to_string | `std_io_stdin_read_to_string_round_trip`    |
+| `std.env` args          | `std_env_args_round_trip`                   |
+| `std.env` var           | `std_env_var_round_trip`                    |
+| `std.fs`                | `std_fs_round_trip`                         |
+| `std.fs` mutations      | `std_fs_mutation_helpers_round_trip`        |
+| `std.fs` create_dir_all | `std_fs_create_dir_all_round_trip`          |
+| `std.process` exit      | `std_process_exit_round_trip`               |
+| `std.sync` thread util  | `std_sync_thread_sleep_and_yield_round_trip`|
 
 ## B5 — `main` shim initialises runtime argv
 
 Every Riven binary has a generated `main` shim that calls
 `riven_env_init(argc, argv)` before user code runs.  This lets
-`std::env::args()` return the right values from the first line of
+`std.env.args()` return the right values from the first line of
 `main`.
 
 **Given** a program that calls `args()` from `def main`
 **When** the binary runs with `argv = [bin, "a", "b"]`
-**Then** `args()` returns a `Vec[String]` with at least three
+**Then** `args()` returns an `Array[String]` with at least three
 entries (the program name plus the two user args).
 
 ---
@@ -98,9 +98,9 @@ All behaviours live in
 - User-defined modules with `module foo ... end`.  The parser
   accepts them but resolve currently only handles `std.*` paths
   for type lookup.
-- External crates (`use othercrate.mod.X`).  Tracked in tier4_01
+- External packages (`use otherpackage.mod.X`).  Tracked in tier4_01
   package-manager work.
-- Re-exports (`pub use ...`).
+- Re-exports (`use ...` re-exports).
 - Glob imports (`use std.io.*`).
 - Submodule lookup (`use std.io.{Stdin, Stdout as Out}` — the
   `as` alias is parsed but the alias rebind isn't yet enforced).

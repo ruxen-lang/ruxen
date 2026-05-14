@@ -6,12 +6,12 @@
 //! `error_code_registry.rs` has a fixed-width lookahead window that
 //! silently masks `error_with_code(...)` calls whose code literal
 //! lands more than five lines after the call header (which is the
-//! norm in `derive/mod.rs`).
+//! norm in `implicit_includes/mod.rs`).
 //!
 //! ## What this file pins
 //!
 //! 1. `e0601_through_e0609_emitted_codes_are_registered`
-//!    Codes already emitted by `crates/riven-core/src/derive/mod.rs`
+//!    Codes already emitted by `crates/riven-core/src/implicit_includes/mod.rs`
 //!    (E0601, E0603, E0605, E0608, E0609) must appear in the
 //!    registry. They are emitted today but unregistered — fixing this
 //!    is the first half of B1.
@@ -28,7 +28,7 @@
 
 use riven_core::diagnostics::codes::{is_registered, REGISTRY};
 
-/// Pre-existing codes emitted by `crates/riven-core/src/derive/mod.rs`
+/// Pre-existing codes emitted by `crates/riven-core/src/implicit_includes/mod.rs`
 /// must be registered. Currently they are not — this test goes red on
 /// the empty registry slots and stays green once B1 lands the missing
 /// `CodeInfo` rows.
@@ -42,7 +42,7 @@ fn e0601_through_e0609_emitted_codes_are_registered() {
     }
     assert!(
         missing.is_empty(),
-        "the following codes are emitted by `derive/mod.rs` but absent \
+        "the following codes are emitted by `implicit_includes/mod.rs` but absent \
          from `diagnostics::codes::REGISTRY`: {:?}.\nAdd a `CodeInfo` \
          row for each in `crates/riven-core/src/diagnostics/codes.rs`.",
         missing

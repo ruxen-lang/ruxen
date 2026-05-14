@@ -1,12 +1,12 @@
-# Spec — `std::iter` (Iterator trait)
+# Spec — `std.iter` (Iterator mixin)
 
 **Source docs:**
 [docs/requirements/tier1_01_stdlib.md §5.8](../../requirements/tier1_01_stdlib.md).
 
 **Status:** shipped Phase 2 #05 (typeck surface; runtime is a
-pass-through to `Vec` helpers).
+pass-through to `Array` helpers).
 
-`.iter()` on a `Vec[T]` returns a `*Iter` class.  Riven v1 takes a
+`.iter()` on an `Array[T]` returns a `*Iter` class.  Riven v1 takes a
 pragmatic shortcut: the `Iter` is a runtime no-op (`riven_iter_to_vec`)
 and every method routes back to a `riven_vec_*` helper.  This means
 the iterator surface composes correctly at the type level and lowers
@@ -26,29 +26,29 @@ runtime round-trip (the runtime layer reuses the audited
 
 | B# | Pipeline                                              | Result type     |
 |----|-------------------------------------------------------|-----------------|
-| B1 | `vec.iter().fold(init, |acc, x| acc + x)`             | accumulator type|
-| B2 | `vec.iter().all(|x| pred(x))`                         | `Bool`          |
-| B3 | `vec.iter().any(|x| pred(x))`                         | `Bool`          |
-| B4 | `vec.iter().take(n)` / `.skip(n)`                     | `*Iter[T]`      |
+| B1 | `arr.iter().fold(init, |acc, x| acc + x)`             | accumulator type|
+| B2 | `arr.iter().all(|x| pred(x))`                         | `Bool`          |
+| B3 | `arr.iter().any(|x| pred(x))`                         | `Bool`          |
+| B4 | `arr.iter().take(n)` / `.skip(n)`                     | `*Iter[T]`      |
 | B5 | `.take(n).sum()` / `.skip(n).sum()`                   | element type    |
 | B6 | `.enumerate()` passthrough                            | `*Iter[(USize, T)]` |
 | B7 | `.filter(pred).count()`                               | `USize` (Int)   |
-| B8 | `.map(f).collect[Vec[U]]()`                           | `Vec[U]`        |
+| B8 | `.map(f).collect[Array[U]]()`                         | `Array[U]`      |
 | B9 | `.sum()` / `.count()` on `*Iter[Int]`                 | `Int`           |
 | B10| `.skip(a).take(b).count()`                            | `USize`         |
 | B11| `.take(n).fold(init, f)`                              | accumulator     |
 | B12| `.skip(n).all(pred)`                                  | `Bool`          |
 | B13| `.chain(other)` / `.chain(other).sum()`               | `*Iter[T]` / `T`|
 | B14| `.zip(other).count()`                                 | `USize`         |
-| B15| `.collect[Vec[T]]()` / `[String]()` / `[HashMap]()` / `[HashSet]()` | named collection |
-| B16| `String.from_iter(iter)`, `HashMap.from_iter(iter)`, `HashSet.from_iter(iter)` | named collection |
+| B15| `.collect[Array[T]]()` / `[String]()` / `[Map]()` / `[Set]()` | named collection |
+| B16| `String.from_iter(iter)`, `Map.from_iter(iter)`, `Set.from_iter(iter)` | named collection |
 
 ## Negative behaviours (rejection)
 
 | B# | Mis-use                                              | Diagnostic       |
 |----|------------------------------------------------------|------------------|
 | B17| `sum()` on `*Iter[String]`                           | typeck error     |
-| B18| `collect[HashMap[K,V]]()` on a non-pair iterator     | typeck error     |
+| B18| `collect[Map[K,V]]()` on a non-pair iterator         | typeck error     |
 | B19| `sum()` on `*Iter[Int]` still passes (tightening did not break the positive case) | none |
 
 ---
@@ -86,7 +86,7 @@ through `611_…`).
 ## Out of scope (v2)
 
 - True streaming iterators (don't materialise the source eagerly).
-- `Iterator` as a user-implementable trait.
+- `Iterator` as a user-implementable mixin.
 - `iter_mut` / `into_iter` distinctions (v1 is `iter` only).
 - `Peekable`, `Cycle`, `StepBy`, `Inspect`, `Scan`, `FlatMap`,
   `Flatten` — only the methods listed above are wired.

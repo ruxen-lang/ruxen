@@ -65,7 +65,7 @@ fn scan_file(path: &PathBuf, hits: &mut Vec<(String, PathBuf, usize)>) {
             continue;
         }
         // Look ahead up to 14 lines for the code literal. The original
-        // 5-line window silently missed `derive/mod.rs` call sites
+        // 5-line window silently missed `implicit_includes/mod.rs` call sites
         // where the format!() argument spans several lines and the
         // `"EXXXX"` literal lands 6+ lines after `error_with_code(`.
         // Twelve lines is enough for every emitter in-tree today and

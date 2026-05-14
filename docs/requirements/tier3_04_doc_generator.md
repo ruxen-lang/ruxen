@@ -24,7 +24,7 @@ except tutorial prose.
 This doc specifies:
 
 1. Capturing `##` doc comments on every documentable item
-   (functions, methods, classes, structs, enums, variants, traits,
+   (functions, methods, classes, structs, enums, variants, mixins,
    modules, type aliases, newtypes, consts, fields).
 2. A `rivendoc` binary that produces an HTML reference site from a
    project's source, including cross-links, a search index, and
@@ -112,8 +112,8 @@ Private}`) and are tracked on `Definition.visibility`
    `src/**.rvn` in a project.
 2. Every public item in the source has a dedicated page (or section)
    with its doc comment rendered.
-3. Cross-references: `see [Vec.push]` in a doc comment renders as a
-   link to the `Vec.push` method page.
+3. Cross-references: `see [Array.push]` in a doc comment renders as a
+   link to the `Array.push` method page.
 4. A fuzzy-searchable index page (client-side JS, single JSON blob).
 5. Markdown formatting inside doc comments (bold, code blocks, lists,
    links).
@@ -155,7 +155,7 @@ Private}`) and are tracked on `Definition.visibility`
 ## assert_eq(result, 5)
 ## ```
 ##
-## See also: [sub], [Vec.push]
+## See also: [sub], [Array.push]
 def add(a: Int, b: Int) -> Int
   a + b
 end
@@ -212,7 +212,7 @@ target/doc/
 │   ├── index.html            # module page
 │   ├── struct.Foo.html       # one page per top-level item
 │   ├── fn.bar.html
-│   └── trait.Baz.html
+│   └── mixin.Baz.html
 └── std/                      # if --document-deps (v2), dep docs live here
 ```
 
@@ -227,13 +227,13 @@ to their items; item pages link back to modules via breadcrumbs.
   "project": "my-app",
   "items": [
     {
-      "path": "my_app::math::add",
+      "path": "my_app.math.add",
       "kind": "function",
       "visibility": "public",
       "signature": "def add(a: Int, b: Int) -> Int",
       "doc": "Adds two integers.\n\nPanics if the addition overflows.",
       "span": { "file": "src/math.rvn", "line": 12, "col": 1 },
-      "links": ["my_app::math::sub", "std::Vec::push"]
+      "links": ["my_app.math.sub", "std.Array.push"]
     }
   ]
 }
@@ -248,8 +248,8 @@ to their items; item pages link back to modules via breadcrumbs.
 New field `doc_comments: Vec<String>` on every documentable AST node:
 
 - `ast::FuncDef`
-- `ast::ClassDef`, `ast::StructDef`, `ast::EnumDef`, `ast::TraitDef`
-- `ast::ImplBlock` (for impl-level docs; rare but useful)
+- `ast::ClassDef`, `ast::StructDef`, `ast::EnumDef`, `ast::MixinDef`
+- `ast::ExtensionBlock` (for extension-level docs; rare but useful)
 - `ast::ModuleDef`
 - `ast::TypeAlias`, `ast::NewtypeDef`
 - `ast::ConstDef`
@@ -319,7 +319,7 @@ crates/rivendoc/
 │   │   ├── class.rs
 │   │   ├── struct.rs
 │   │   ├── enum.rs
-│   │   └── trait.rs
+│   │   └── mixin.rs
 │   └── assets/
 │       ├── style.css
 │       └── script.js
@@ -339,7 +339,7 @@ Reuse `riven_core::{lexer, parser, resolve, typeck}`. After `typeck`,
 
 ```rust
 struct CollectedItem {
-    path: String,         // "my_app::math::add"
+    path: String,         // "my_app.math.add"
     kind: ItemKind,       // Function, Class, Struct, Enum, ...
     visibility: Visibility,
     signature: String,    // pretty-printed signature
@@ -412,12 +412,12 @@ logic.
 crate-path/module/module/item.html
 ```
 
-For `my_app::math::add`:
+For `my_app.math.add`:
 - Module page: `my_app/math/index.html`
 - Item page: `my_app/math/fn.add.html`
 
 Item pages are prefixed by kind (`fn.`, `struct.`, `class.`, `enum.`,
-`trait.`, `type.`, `const.`) to avoid collisions.
+`mixin.`, `type.`, `const.`) to avoid collisions.
 
 ### 5.9 Incremental
 
@@ -494,8 +494,9 @@ Total: ~9 engineer-days.
 - **Tier-1 doc 01 (stdlib).** Once stdlib lands, `rivendoc` becomes
   how users discover it. Stdlib must ship with doc comments on every
   exported item. Coordinate with doc 01 authors.
-- **Tier-1 doc 05 (derive).** Deriving `Debug` etc. — the derive
-  annotations should surface in docs ("Implements: Debug, Clone").
+- **Tier-1 doc 05 (macros).** Implicit mixin includes (Debug, Clone,
+  etc.) — the implicit/explicit `include` directives should surface in
+  docs ("Includes: Debug, Clone").
 
 ---
 
@@ -538,11 +539,11 @@ Total: ~9 engineer-days.
 7. **OQ-7 — Versioned docs.**
    Publishing multiple versions of a project's docs is a package-registry
    concern. Out of scope v1.
-8. **R1 — Doc comments on anonymous impl blocks.**
-   Low value. Skip; no doc page for impls in v1.
+8. **R1 — Doc comments on anonymous extension blocks.**
+   Low value. Skip; no doc page for extensions in v1.
 9. **R2 — Cross-refs to stdlib items.**
    Works if `rivendoc` can resolve `std.*` paths. Requires loading
-   stdlib's symbol table. v1 punt: document `[std.Vec.push]` as plain
+   stdlib's symbol table. v1 punt: document `[std.Array.push]` as plain
    text if not found in the current project.
 10. **R3 — `pulldown-cmark` dependency weight.**
     ~200KB compiled. Acceptable for a tooling binary. Not shipped to

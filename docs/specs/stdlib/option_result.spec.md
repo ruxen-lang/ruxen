@@ -12,13 +12,13 @@ in the high half) so they pass cleanly through the C ABI.
 
 ---
 
-## B1 — `Option::Some(x)` / `Option::None` round-trip
+## B1 — `Option.Some(x)` / `nil` round-trip
 
 Programs can construct, pattern-match, and destructure `Option`
 values across function boundaries.  Round-trip:
 `construct → match → extract → reuse` produces the original value.
 
-## B2 — `Result::Ok(x)` / `Result::Err(e)` round-trip
+## B2 — `Result.Ok(x)` / `Result.Err(e)` round-trip
 
 Same as B1 for `Result`.
 
@@ -41,10 +41,10 @@ on the `Some` arm; the `else` arm has no binding.
 **Then** monomorphisation routes the right payload type per
 instantiation.
 
-## B6 — `.expect!(msg)` panics on `None` / `Err` with `msg`
+## B6 — `.expect!(msg)` panics on `nil` / `Err` with `msg`
 
 `expect!` is the v1 name for Rust's `expect` (the `!` marks it as
-panicking).  On `Some(x)` / `Ok(x)` it returns `x`; on `None` /
+panicking).  On `Some(x)` / `Ok(x)` it returns `x`; on `nil` /
 `Err(_)` it panics with `msg`.
 
 ## B7 — `.unwrap_or(default)` falls back
@@ -54,8 +54,8 @@ Returns the contained value on `Some(x)` / `Ok(x)`; returns
 
 ## B8 — `.map(|x| f(x))` transforms the payload
 
-`Option::map` and `Result::map` apply `f` to the contained value when
-present and pass through `None` / `Err` unchanged.
+`Option.map` and `Result.map` apply `f` to the contained value when
+present and pass through `nil` / `Err` unchanged.
 
 ---
 
@@ -81,9 +81,9 @@ runs E2E fixtures:
 
 ## Out of scope (v2)
 
-- `Result::map_err`, `Result::and_then`, `Result::or_else` — wired
+- `Result.map_err`, `Result.and_then`, `Result.or_else` — wired
   in the typeck/MIR layer but only `map` has a dedicated pin.
-- `Option::and_then` / `Option::or_else` / `Option::flatten`.
-- `Try` trait that user types can implement (the `?` operator is
+- `Option.and_then` / `Option.or_else` / `Option.flatten`.
+- `Try` mixin that user types can implement (the `?` operator is
   hard-wired to `Option` and `Result` in v1).
 - `Result[T, !]` (`Infallible` payload type).

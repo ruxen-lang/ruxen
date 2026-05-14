@@ -1,4 +1,4 @@
-# Spec — `std::future` (Future / Poll / Waker / Context)
+# Spec — `std.future` (Future / Poll / Waker / Context)
 
 **Source docs:**
 [docs/requirements/tier1_03_async.md](../../requirements/tier1_03_async.md),
@@ -15,10 +15,10 @@ the type level only.
 
 ---
 
-## B1 — `Future` trait is registered
+## B1 — `Future` mixin is registered
 
-`Future` is a trait with required method
-`def poll(&mut self, ctx: &mut Context) -> Poll[T]`.  Resolvable
+`Future` is a mixin with required method
+`def mut poll(ctx: &mut Context) -> Poll[T]`.  Resolvable
 via `use std.future.Future`.
 
 ## B2 — `Poll[T]` enum has `Ready(T)` and `Pending` variants
@@ -37,7 +37,7 @@ end
 `Waker` carries a wake callback; `Context` wraps a `&Waker`.  Both
 are class types — opaque to user code in v1.
 
-## B4 — `async fn` parses
+## B4 — `async def` parses
 
 ```riven
 async def fetch(url: &str) -> Result[String, IoError]
@@ -92,7 +92,7 @@ end
 
 ## Out of scope (v2)
 
-- `async fn` in traits.
+- `async def` in mixins.
 - Stream / AsyncIterator surface.
 - Pin / Unpin.
 - Cancellation tokens / `JoinSet`.

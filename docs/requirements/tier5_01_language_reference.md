@@ -1,7 +1,7 @@
 # Tier 5 — Language Reference (Formal Grammar + Normative Prose)
 
 Status: draft
-Depends on: tier5_03 (attributes — shared syntax), tier5_02 (editions — the
+Depends on: tier5_03 (directives — shared syntax), tier5_02 (editions — the
 reference must be per-edition), tier5_04 (error codes — referenced from
 normative-error sections).
 Blocks: external implementers, stability claims ("Riven supports X"),
@@ -92,9 +92,9 @@ Even without a reference, some conventions surfaced in the code:
   (`token.rs:206-207` — `InterpolatedString(Vec<StringPart>)`).
 - Doc comments: `##` (tutorial ch. 16).
 - Case conventions: `snake_case` for fns/locals, `UpperCamelCase` for
-  types, `SCREAMING_SNAKE_CASE` for constants, `'a` for lifetimes
-  (documented in tutorial ch. 16, enforced by the formatter where
-  applicable).
+  types, `SCREAMING_SNAKE_CASE` for constants, bare lowercase `a` for
+  lifetimes (documented in tutorial ch. 16, enforced by the formatter
+  where applicable).
 
 ---
 
@@ -105,7 +105,7 @@ Even without a reference, some conventions surfaced in the code:
 - A **normative grammar** (EBNF-with-extensions) covering lex + parse +
   type-expression grammar + pattern grammar. One section per construct.
 - **Normative prose chapters** for semantic rules: name resolution,
-  ownership, borrow check, lifetime elision, coercion rules, trait
+  ownership, borrow check, lifetime elision, coercion rules, mixin
   resolution order, const evaluation, method resolution.
 - **Examples and counter-examples** for every rule (machine-checked, see
   §5.3).
@@ -156,19 +156,19 @@ docs/reference/
 │   ├── 03-expressions.md             # + precedence table
 │   ├── 04-patterns.md
 │   ├── 05-types.md                   # type-expression grammar
-│   ├── 06-attributes.md              # @[...] (cites tier5_03)
+│   ├── 06-directives.md              # in-body directives (cites tier5_03)
 │   └── 07-generics.md
 ├── 04-names/
 │   ├── 00-resolution.md
 │   ├── 01-paths-and-use.md
-│   ├── 02-visibility.md              # pub / pub(crate) / private
+│   ├── 02-visibility.md              # public / private / protected section markers
 │   └── 03-shadowing.md
 ├── 05-types/
 │   ├── 00-primitive-types.md
 │   ├── 01-references-and-lifetimes.md
 │   ├── 02-collection-types.md
 │   ├── 03-user-defined-types.md      # struct / class / enum / newtype
-│   ├── 04-trait-objects-and-dyn.md
+│   ├── 04-mixin-existentials.md      # some Mixin / any Mixin
 │   └── 05-inference.md               # normative inference algorithm
 ├── 06-semantics/
 │   ├── 00-evaluation-order.md
@@ -176,7 +176,7 @@ docs/reference/
 │   ├── 02-ownership-and-move.md
 │   ├── 03-borrowing.md
 │   ├── 04-lifetime-elision.md
-│   ├── 05-trait-resolution.md        # nominal vs structural priority
+│   ├── 05-mixin-resolution.md        # nominal vs structural priority
 │   ├── 06-method-resolution.md       # includes auto-deref
 │   ├── 07-drop-order.md              # (cites tier1_04)
 │   └── 08-unsafe.md
@@ -331,7 +331,7 @@ reachable at `docs/reference/07-editions/01-edition-2026.md`-linked URLs.
 
 For chapters that change between editions, the delta is documented in
 `07-editions/NN-edition-YYYY.md` as a bullet list ("new keyword `foo`",
-"syntax `Hash[K,V]` removed, use `HashMap[K,V]`").
+"stdlib name `Hash[K, V]` removed, use `Map[K, V]`").
 
 ### 5.5 Worked examples embedded as fixtures
 
@@ -407,8 +407,8 @@ Total initial seed: ~10 days to publishable draft.
 - **Tier 5 doc 02 (editions):** the reference is edition-scoped. Its
   chapters carry edition frontmatter; new editions add delta documents in
   `07-editions/`.
-- **Tier 5 doc 03 (attributes):** `03-grammar/06-attributes.md` normatively
-  specifies the `@[name(args)]` form that deprecation/stability attrs use.
+- **Tier 5 doc 03 (directives):** `03-grammar/06-directives.md` normatively
+  specifies the in-body directive form that deprecation/stability directives use.
 - **Tier 5 doc 04 (error codes):** `08-errors/index.md` links to
   `docs/errors/E????.md`. Every error code the reference mentions must
   exist in the registry.
@@ -436,19 +436,19 @@ Total initial seed: ~10 days to publishable draft.
 
 1. Chapter 02 (lexical), all subchapters.
 2. Chapter 03 (grammar): items, statements, expressions, patterns, types,
-   attributes, generics.
+   directives, generics.
 3. Fixtures for every production.
 
 ### Phase 1c: names + types (2 weeks)
 
 1. Chapter 04 (names): resolution, visibility, shadowing, paths.
-2. Chapter 05 (types): primitives, references, user-defined, traits,
+2. Chapter 05 (types): primitives, references, user-defined, mixins,
    inference.
 
 ### Phase 1d: semantics (3 weeks)
 
 1. Chapter 06 (semantics): coercions, ownership, borrowing, lifetime
-   elision, trait resolution, method resolution, drop order, unsafe.
+   elision, mixin resolution, method resolution, drop order, unsafe.
 
 ### Phase 1e: finalisation (1 week)
 

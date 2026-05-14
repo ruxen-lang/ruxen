@@ -41,7 +41,7 @@
 //! both issues and exercises *only* the constructor's variance rule.
 //! The corresponding positive (compilable) cases live in the e2e
 //! fixtures `tests/release-e2e/cases/136_variance_option_covariant.rvn`
-//! and `137_variance_vec_same_type.rvn`.
+//! and `137_variance_array_same_type.rvn`.
 
 use riven_core::hir::context::TypeContext;
 use riven_core::hir::types::Ty;
@@ -167,7 +167,7 @@ fn vec_same_type_works() {
     // Sanity: `Vec[Int] → Vec[Int]` succeeds. This pins the legal
     // direction so a regression that broke same-type identity would
     // also fail this test — the e2e fixture
-    // `137_variance_vec_same_type.rvn` covers the same case at the
+    // `137_variance_array_same_type.rvn` covers the same case at the
     // surface-syntax level.
     let ctx = TypeContext::new();
     let v = Ty::Vec(Box::new(Ty::Int));

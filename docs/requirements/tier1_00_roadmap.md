@@ -10,7 +10,7 @@ Companion index for the five Tier-1 requirements documents. Read this first.
 | 02 | Concurrency (threads, sync, Send/Sync) | [tier1_02_concurrency.md](tier1_02_concurrency.md) |
 | 03 | Async / await | [tier1_03_async.md](tier1_03_async.md) |
 | 04 | Drop, Copy, Clone | [tier1_04_drop_copy_clone.md](tier1_04_drop_copy_clone.md) |
-| 05 | Derive + macros | [tier1_05_derive_macros.md](tier1_05_derive_macros.md) |
+| 05 | Implicit includes | [tier1_05_implicit_includes.md](tier1_05_implicit_includes.md) |
 
 ## Pre-existing bugs surfaced during research (fix first)
 

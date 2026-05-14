@@ -63,7 +63,7 @@ pub const REGISTRY: &[CodeInfo] = &[
     // E0612 and E0614 are intentionally reserved (Copy uses E0602, Eq
     // uses E0604). The reservation is enforced by the test
     // `e0612_and_e0614_remain_reserved_unless_explicitly_unblocked` in
-    // `crates/riven-core/tests/derive_codes_registered.rs`.
+    // `crates/riven-core/tests/implicit_codes_registered.rs`.
     CodeInfo {
         code: "E0601",
         title: "cannot derive Copy: field has non-Copy type",

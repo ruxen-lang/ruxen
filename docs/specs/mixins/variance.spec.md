@@ -27,15 +27,15 @@ This spec lists the rules that have explicit pin tests.
 The standard "mutable to immutable" reborrow remains legal; a
 `&mut T` automatically demotes to `&T` at coercion sites.
 
-## B3 — `Vec[T]` is **invariant** in `T`
+## B3 — `Array[T]` is **invariant** in `T`
 
-`Vec[Inner1]` does not coerce to `Vec[Inner2]`, by the same logic
+`Array[Inner1]` does not coerce to `Array[Inner2]`, by the same logic
 as B1 (a write through the wider alias would be unsound).
 
-## B4 — `Vec[T]` of the same `T` is accepted
+## B4 — `Array[T]` of the same `T` is accepted
 
 Sanity check that the invariance rule does not over-reject:
-`Vec[Foo]` flows where `Vec[Foo]` is expected.
+`Array[Foo]` flows where `Array[Foo]` is expected.
 
 ## B5 — `Option[T]` is **covariant** in `T`
 
@@ -72,8 +72,8 @@ module is reachable.
 
 ## Out of scope (v2)
 
-- User-controllable variance annotations (`#[covariant]` /
-  `#[contravariant]`).
+- User-controllable variance annotations (in-body `covariant` /
+  `contravariant` directives).
 - Variance for higher-kinded types and GATs.
 - Contravariance — Riven has no surface today that admits it
   (closures are invariant in their parameter types).

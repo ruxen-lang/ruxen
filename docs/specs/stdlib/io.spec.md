@@ -1,4 +1,4 @@
-# Spec — `std::io`
+# Spec — `std.io`
 
 **Source docs:**
 [docs/requirements/tier1_01_stdlib.md §4.2](../../requirements/tier1_01_stdlib.md),
@@ -6,7 +6,7 @@
 
 **Status:** shipped Phase 2 #06.1 (2026-05-09) + #06.5 IoError promotion (2026-05-13).
 
-`std::io` provides line-oriented stdin reading and stdout/stderr
+`std.io` provides line-oriented stdin reading and stdout/stderr
 writing.  Errors are surfaced via the `IoError` tagged enum.
 
 ---
@@ -51,10 +51,10 @@ runtime it never fails (no buffered writer) — always `Ok(())`.
 
 **Given** stdin contains `"a\nb\nc\n"`
 **When** the program iterates `Stdin.new().lines()`
-**Then** the iterator yields three `Result::Ok` items with payload
+**Then** the iterator yields three `Result.Ok` items with payload
 `"a"`, `"b"`, `"c"` (line terminators stripped).
 
-**Simplification (v1):** `lines()` returns `Vec[Result[String, IoError]]`
+**Simplification (v1):** `lines()` returns `Array[Result[String, IoError]]`
 rather than Rust's `BufRead` iterator — the file is read fully into
 memory first.  Documented in prompt-06.
 
@@ -67,10 +67,10 @@ emitted, not dropped).
 **Given** stdin `"a\nb\n"` (trailing newline)
 **Then** `lines()` yields `["a", "b"]` (no trailing empty item).
 
-## B10 — `Stdin.lines()` on empty input yields empty Vec
+## B10 — `Stdin.lines()` on empty input yields empty Array
 
 **Given** stdin is empty
-**Then** `lines()` returns an empty `Vec`, not an error.
+**Then** `lines()` returns an empty `Array`, not an error.
 
 ## B11 — `IoError` is constructible and `.message()` dispatches per variant
 
@@ -78,17 +78,17 @@ emitted, not dropped).
 `Interrupted`, `UnexpectedEof`, and `Other(String)`.  Each variant
 exposes `.message() -> String`.
 
-**Given** `let e = IoError::NotFound`
+**Given** `let e = IoError.NotFound`
 **When** evaluating `e.message()`
 **Then** the result is a stable human-readable string (currently
 `"entity not found"`).
 
-**Given** `let e = IoError::Other(String.from("disk full"))`
+**Given** `let e = IoError.Other(String.from("disk full"))`
 **Then** `e.message()` is `"disk full"`.
 
-## B12 — `IoError.message()` is reachable through `Result::Err` payloads
+## B12 — `IoError.message()` is reachable through `Result.Err` payloads
 
-Programs can pattern-match `Result::Err(io_err)` returned by
+Programs can pattern-match `Result.Err(io_err)` returned by
 `Stdin.read_to_string`, `Stdout.write_str`, etc., and call
 `.message()` on the bound name.  Inference for `let Err(e) = ... ;
 e.message()` chains is currently incomplete (deferred).

@@ -1,7 +1,7 @@
 # Tier 3.02 — Debugger (DWARF + DAP)
 
 Status: draft
-Depends on: LLVM backend (feature-gated; already present); Tier-1 doc 05 (derive Debug) for pretty-printers
+Depends on: LLVM backend (feature-gated; already present); Tier-1 doc 05 (implicit Debug mixin) for pretty-printers
 Blocks: none
 
 ---
@@ -28,8 +28,8 @@ This doc specifies:
 2. A lightweight Debug Adapter Protocol (DAP) server, shipped as a new
    crate `riven-dap`, so VSCode / Neovim / any DAP-capable client can
    set breakpoints, step, and inspect locals in a Riven program.
-3. Pretty-printer support for the v1 stdlib types (`String`, `Vec`,
-   `Option`, `Result`, `HashMap`) — delivered as optional Python
+3. Pretty-printer support for the v1 stdlib types (`String`, `Array`,
+   `Option`, `Result`, `Map`) — delivered as optional Python
    scripts for `lldb`/`gdb` that the DAP adapter auto-loads.
 
 Out of scope for v1: (a) time-travel / reverse debugging;
@@ -110,8 +110,8 @@ cannot launch a Riven debugger today.
    currently in scope, by source name.
 5. Primitive types (`Int`, `Float`, `Bool`, `String`, `&str`) display
    as their source value, not the underlying pointer / integer.
-6. `Vec[T]`, `Option[T]`, `Result[T, E]` display as
-   `Vec([1, 2, 3])`, `Some(42)`, `Err("msg")` via a pretty-printer.
+6. `Array[T]`, `Option[T]`, `Result[T, E]` display as
+   `Array([1, 2, 3])`, `Some(42)`, `Err("msg")` via a pretty-printer.
 7. Works at opt-level 0. Higher opt levels may show
    `<optimized out>` — standard behavior, no special work.
 8. Runs on Linux (gdb + lldb) and macOS (lldb). Windows is a stretch.
@@ -262,15 +262,15 @@ Each Riven `Ty` maps to a DWARF type tag:
 | `Char` | `DW_ATE_UTF`, 32 bits | ditto |
 | `String` | `DW_TAG_structure_type` with `ptr: *u8`, `len: usize`, `cap: usize` members | `create_struct_type` |
 | `&str` | `DW_TAG_structure_type` with `ptr: *u8`, `len: usize` | ditto |
-| `Vec[T]` | struct with `ptr: *T, len: usize, cap: usize` | ditto |
-| `Option[T]` | `DW_TAG_enumeration_type` with variants `None, Some(T)` | `create_enumeration_type` |
+| `Array[T]` | struct with `ptr: *T, len: usize, cap: usize` | ditto |
+| `Option[T]` | `DW_TAG_enumeration_type` with variants `nil, Some(T)` | `create_enumeration_type` |
 | `Result[T, E]` | similar to Option | ditto |
 | `Ref(T)` / `Ref(mut T)` | `DW_TAG_pointer_type` / `DW_TAG_reference_type` | `create_pointer_type` |
 | `Class { name }` / `Struct { name }` | `DW_TAG_structure_type` | recurse into fields |
 | `Enum { name }` | `DW_TAG_variant_part` under a structure | see §9 OQ-2 |
 | `Fn { params, ret }` | `DW_TAG_subroutine_type` | `create_subroutine_type` |
 | `Tuple(elements)` | struct with unnamed fields | ditto |
-| `Array(T, n)` | `DW_TAG_array_type` with bound `n` | `create_array_type` |
+| `Array(T, n)` (fixed-size) | `DW_TAG_array_type` with bound `n` | `create_array_type` |
 
 The mapping lives in a new helper `codegen/llvm/debug.rs::type_to_di`
 that memoizes per-`Ty` (types can be recursive via class self-reference).
@@ -361,7 +361,7 @@ Install location: `<installroot>/share/riven/debug/riven_pp.py`
 `<installroot>/lib/runtime.c`). `riven-dap` locates it via the same
 search order as `find_runtime_c` (`codegen/mod.rs:27-65`).
 
-Example lldb printer for `Vec[T]`:
+Example lldb printer for `Array[T]`:
 
 ```python
 def vec_summary(valobj, _):
@@ -451,9 +451,9 @@ Total: 12-16 engineer-days.
 - **Doc 07 (MIR opts).** At opt level 0, no MIR opts run. Above opt
   level 0, locals may be eliminated by DCE — this is fine and matches
   rustc/clang behavior. Document it.
-- **Tier-1 doc 05 (derive Debug).** Pretty-printers for user classes
-  benefit enormously from `#[derive(Debug)]`: if the type derives
-  `Debug`, the printer can delegate to that impl instead of hand-rolling
+- **Tier-1 doc 05 (implicit Debug mixin).** Pretty-printers for user classes
+  benefit enormously from the implicit `Debug` include: if the type has it,
+  the printer can delegate to the mixin's `to_debug` instead of hand-rolling
   field walks. Phase 6 is where the two meet.
 
 ---
@@ -467,7 +467,7 @@ Total: 12-16 engineer-days.
 | 3 | DAP adapter | 4 | VSCode breakpoints work |
 | 4 | VSCode integration | 1 | One-click debug in VSCode |
 | 5 | Distribution | 0.5 | Released binaries include debugger |
-| 6 | Stdlib pretty-printers | co-dev | `Vec` / `Option` / etc. display nicely |
+| 6 | Stdlib pretty-printers | co-dev | `Array` / `Option` / etc. display nicely |
 
 ---
 
@@ -531,8 +531,8 @@ Total: 12-16 engineer-days.
 | Step over `let x = 42` | Step moves to next source line |
 | `frame variable` shows `x = 42` | lldb prints the integer value |
 | String local shows source text | `frame var s` prints `"hello"` not pointer address |
-| `Vec[Int]` local with pretty-printer | Prints `[1, 2, 3]` |
-| `Option::Some(5)` | Prints `Some(5)` |
+| `Array[Int]` local with pretty-printer | Prints `[1, 2, 3]` |
+| `Option.Some(5)` | Prints `Some(5)` |
 | Nested function call | Backtrace shows parent → callee with correct names |
 | `--release --debug` | Optimized binary still has locals when DCE didn't eliminate them |
 | `--debug` with unused local | Either printed or `<optimized out>` — not a crash |

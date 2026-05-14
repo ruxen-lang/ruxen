@@ -16,7 +16,7 @@ use crate::parser::ast::{BinOp, UnaryOp, Visibility};
 use crate::resolve::symbols::{DefKind, SymbolTable};
 
 use super::coerce::auto_deref;
-use super::traits::TraitResolver;
+use super::mixins::TraitResolver;
 use super::unify::{can_coerce, unify, TypeError};
 
 /// The type inference engine — walks HIR and resolves all types.

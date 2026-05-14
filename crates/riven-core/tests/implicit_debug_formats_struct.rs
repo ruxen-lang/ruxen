@@ -78,7 +78,7 @@ fn compile_and_run(rvn_path: PathBuf, out_basename: &str) -> (String, String, Op
 #[test]
 fn struct_with_derive_debug_prints_named_fields() {
     let root = workspace_root();
-    let rvn = root.join("tests/release-e2e/cases/139_derive_debug_format.rvn");
+    let rvn = root.join("tests/release-e2e/cases/139_implicit_debug_format.rvn");
     let (stdout, stderr, code) = compile_and_run(rvn, "riven_derive_debug_test_bin");
 
     assert_eq!(

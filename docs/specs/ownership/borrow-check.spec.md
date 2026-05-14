@@ -40,7 +40,7 @@ receiver.  Subsequent use of the original binding is rejected.
 
 ## B4 — `&mut T` does not coerce in ways that would alias
 
-Covered by [variance.spec.md](../traits/variance.spec.md) B1 / B3.
+Covered by [variance.spec.md](../mixins/variance.spec.md) B1 / B3.
 Mentioned here because the borrow checker enforces the rule at
 function boundaries; the variance checker enforces it at coercion
 sites.  Both must agree.

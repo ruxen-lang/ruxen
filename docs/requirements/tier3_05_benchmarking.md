@@ -1,4 +1,4 @@
-# Tier 3.05 — Benchmarking (`@[bench]` + `riven bench`)
+# Tier 3.05 — Benchmarking (`bench` in-body directive + `riven bench`)
 
 Status: draft
 Depends on: doc 03 (test framework) — shares 90% of the harness
@@ -9,7 +9,7 @@ Blocks: regression tracking of compiler performance (as a special application)
 ## 1. Summary & motivation
 
 Riven has no first-class benchmarking surface. Users cannot write
-`@[bench] def measure_x ... end` and run `riven bench` to get
+`def measure_x; bench; ... end` and run `riven bench` to get
 statistical measurements. `criterion` is used for Rust-level
 benchmarks inside the compiler (`rivenc/benches/cache_bench.rs` + the
 `criterion = "0.5"` dev-dep in `rivenc/Cargo.toml:22`), but that
@@ -23,11 +23,13 @@ everything here reuses the test-framework plumbing from doc 03.
 
 ## 2. Current state
 
-### 2.1 No `@[bench]` attribute
+### 2.1 No `bench` in-body directive
 
-Same state as `@[test]`. Parser attribute dispatch at
-`crates/riven-core/src/parser/mod.rs:473-511` recognizes only `link`
-and `repr`. `@[bench]` above a `def` errors out.
+Same state as the `test` directive. The `@[...]` prefix-attribute
+surface is retired entirely; no in-body `bench` keyword is recognized
+by the parser. A `bench` directive on its own line inside a `def` body
+is currently treated as a regular identifier reference and fails
+resolution.
 
 ### 2.2 No `riven bench` subcommand
 
@@ -57,7 +59,7 @@ count auto-scaling, mean + stddev, outlier detection via MAD
 
 ### Goals
 
-1. Write a benchmark in Riven with `@[bench]` above a `def`.
+1. Write a benchmark in Riven with a `bench` directive inside a `def` body.
 2. `riven bench` builds and runs all benchmarks, reports wall time +
    stddev + throughput.
 3. Auto-scaling iteration count so that even fast benchmarks produce
@@ -83,14 +85,14 @@ count auto-scaling, mean + stddev, outlier detection via MAD
 
 ## 4. Surface
 
-### 4.1 Attribute
+### 4.1 In-body directive
 
 ```
-## Measures the cost of allocating a Vec of 1000 ints.
-@[bench]
+## Measures the cost of allocating an Array of 1000 ints.
 def alloc_vec(ctx: &mut Bencher)
+  bench
   ctx.iter do
-    let mut v = Vec.new()
+    var v = Array.new()
     for i in 0..1000
       v.push(i)
     end
@@ -99,14 +101,23 @@ def alloc_vec(ctx: &mut Bencher)
 end
 ```
 
-Variants:
+Variants (additional directives on their own lines at the head of the body):
 
 ```
-@[bench]                              # standard
-@[bench(skip)]                        # discovered but not run
-@[bench(skip = "too slow for CI")]
-@[bench(warmup = 100)]                # override warmup iterations
-@[bench(sample_size = 1000)]          # override sample count
+def x(ctx: &mut Bencher)
+  bench
+  ignore                              # discovered but not run
+  # OR with reason:
+  ignore "too slow for CI"
+  ...
+end
+
+def y(ctx: &mut Bencher)
+  bench
+  warmup 100                          # override warmup iterations
+  sample_size 1000                    # override sample count
+  ...
+end
 ```
 
 ### 4.2 CLI
@@ -128,20 +139,20 @@ riven bench --bin foo                # limit to a specific binary
 ### 4.3 `Bencher` type and `black_box`
 
 ```
-# In std::test::bench (same module as @[test] helpers)
+# In std.test.bench (same module as test-directive helpers)
 
 class Bencher
-  pub def iter[F](f: F) where F: Fn -> Unit
+  def iter[F](f: F) where F: Fn -> Unit
     # Internally: warmup + sample loop + timing
   end
 
-  pub def iter_with_setup[F, G, S](setup: G, run: F)
+  def iter_with_setup[F, G, S](setup: G, run: F)
     where G: Fn -> S, F: Fn(S) -> Unit
     # Amortize setup cost
   end
 end
 
-pub def black_box[T](value: T) -> T
+def black_box[T](value: T) -> T
   # Opaque to the optimizer — implemented as a volatile asm intrinsic.
 end
 ```
@@ -150,9 +161,9 @@ end
 
 ```
 running 3 benches
-bench tests::vec::alloc_1000           ...   1.24 µs ± 0.03 µs  (804 Melem/s)  [n=500]
-bench tests::hash::insert_1000         ...  12.31 µs ± 0.22 µs  ( 81 Melem/s)  [n=500]
-bench tests::sort::quicksort_random    ... 142.50 µs ± 3.10 µs  (  7 Melem/s)  [n=200]
+bench tests.vec.alloc_1000             ...   1.24 µs ± 0.03 µs  (804 Melem/s)  [n=500]
+bench tests.hash.insert_1000           ...  12.31 µs ± 0.22 µs  ( 81 Melem/s)  [n=500]
+bench tests.sort.quicksort_random      ... 142.50 µs ± 3.10 µs  (  7 Melem/s)  [n=200]
 
 bench result: 3 ran, 0 skipped; finished in 3.72s
 ```
@@ -161,7 +172,7 @@ JSON format: one record per benchmark:
 
 ```json
 {
-  "name": "tests::vec::alloc_1000",
+  "name": "tests.vec.alloc_1000",
   "mean_ns": 1240.3,
   "stddev_ns": 31.2,
   "median_ns": 1230.0,
@@ -182,9 +193,9 @@ $ riven bench --save-baseline=master
 
 # After change:
 $ riven bench --baseline=master
-bench tests::vec::alloc_1000   ...   1.38 µs ± 0.04 µs  [n=500]  +11.2% (regressed)
-bench tests::hash::insert_1000 ...  12.12 µs ± 0.20 µs  [n=500]   -1.5% (noise)
-bench tests::sort::quicksort   ... 142.01 µs ± 3.00 µs  [n=200]  -0.3% (unchanged)
+bench tests.vec.alloc_1000     ...   1.38 µs ± 0.04 µs  [n=500]  +11.2% (regressed)
+bench tests.hash.insert_1000   ...  12.12 µs ± 0.20 µs  [n=500]   -1.5% (noise)
+bench tests.sort.quicksort     ... 142.01 µs ± 3.00 µs  [n=200]  -0.3% (unchanged)
 ```
 
 Regression threshold: difference outside mean ± 3× stddev of combined
@@ -198,8 +209,9 @@ samples. Tunable via `--significance=n` flag.
 
 Every §5.x section in doc 03 applies here with renaming:
 
-- Attribute-pipeline work from doc 03 Phase 1 is shared. `@[test]` and
-  `@[bench]` both need `attributes: Vec<Attribute>` on `FuncDef`.
+- Directive-pipeline work from doc 03 Phase 1 is shared. Both `test`
+  and `bench` directives are recognized via the same body-head pass on
+  `FuncDef`.
 - Discovery walks the same tree (`src/**.rvn` + `benches/**.rvn` ++
   `tests/**.rvn`; see §5.3 for where benches live).
 - Harness generation is the same pattern: collect, synth a `main`,
@@ -208,7 +220,7 @@ Every §5.x section in doc 03 applies here with renaming:
 
 New bits specific to bench:
 
-- The `Bencher` type and `iter` method — lives in `std::test::bench`.
+- The `Bencher` type and `iter` method — lives in `std.test.bench`.
 - The `black_box` intrinsic (§5.5).
 - Statistical analysis (§5.6).
 - Baseline storage + comparison (§5.7).
@@ -230,21 +242,21 @@ Parent collects and aggregates.
 Three options:
 
 - **`benches/**.rvn`** — dedicated directory (Rust/Cargo convention).
-- **Inline with `@[bench]`** in `src/**.rvn`.
-- **Inline with `@[bench]` in `tests/**.rvn`** — co-locate perf regression
+- **Inline with `bench` directive** in `src/**.rvn`.
+- **Inline with `bench` directive in `tests/**.rvn`** — co-locate perf regression
   tests with correctness tests.
 
 Support all three. `riven bench` picks up benches anywhere in `src/`,
 `tests/`, or `benches/`. Paths:
 
-- `src/foo.rvn` `@[bench] def b` → `foo::b`
-- `tests/foo.rvn` `@[bench] def b` → `tests::foo::b`
-- `benches/foo.rvn` `@[bench] def b` → `benches::foo::b`
+- `src/foo.rvn` with `bench` directive in `def b` → `foo.b`
+- `tests/foo.rvn` with `bench` directive in `def b` → `tests.foo.b`
+- `benches/foo.rvn` with `bench` directive in `def b` → `benches.foo.b`
 
 ### 5.4 Timing measurement
 
 Use the clock primitive exposed by tier-1 stdlib:
-`std::time::Instant::now() -> Instant`, `Instant.elapsed() -> Duration`,
+`std.time.Instant.now() -> Instant`, `Instant.elapsed() -> Duration`,
 `Duration.as_nanos() -> UInt64`. If stdlib hasn't landed, ship a
 minimal C-level wrapper in the runtime for the bench harness only:
 `riven_bench_now_ns() -> UInt64` using `clock_gettime(CLOCK_MONOTONIC)`.
@@ -308,7 +320,7 @@ Rust behavior).
 
 | Phase | File | Change |
 |---|---|---|
-| 1 | *shared with doc 03* | Attribute pipeline for `@[bench]` — same change as `@[test]`; if doc 03 lands first, this is a one-line attribute-name addition |
+| 1 | *shared with doc 03* | Directive pipeline for `bench` — same change as the `test` directive; if doc 03 lands first, this is a one-line directive-name addition |
 | 2 | `crates/riven-cli/src/cli.rs:25-114` | Add `Bench` command |
 | 2 | `crates/riven-cli/src/bench.rs` *new* | Parallel to `test.rs`; ~300 lines |
 | 2 | `crates/riven-cli/src/main.rs` | Wire `Command::Bench` |
@@ -323,10 +335,10 @@ Rust behavior).
 
 ### Phase breakdown
 
-**Phase 1 — Attribute plumbing (0.5 day).**
-If doc 03 has landed: add `"bench"` to the allowed attribute names.
-If not: do the same AST/HIR work doc 03 describes for `@[test]` at
-the same time as `@[bench]`.
+**Phase 1 — Directive plumbing (0.5 day).**
+If doc 03 has landed: add `"bench"` to the allowed in-body directive
+names. If not: do the same AST/HIR work doc 03 describes for the
+`test` directive at the same time as the `bench` directive.
 
 **Phase 2 — CLI + harness (3 days).**
 - Day 1: `riven bench` subcommand; discovery walks `benches/**.rvn`
@@ -350,7 +362,7 @@ Total: ~7 engineer-days after doc 03.
 
 ## 7. Interactions with other tier-3 items
 
-- **Doc 03 (test).** Shared attribute pipeline and harness. Extract
+- **Doc 03 (test).** Shared directive pipeline and harness. Extract
   shared code into `crates/riven-cli/src/test_harness.rs`.
 - **Doc 07 (MIR opts).** `black_box` correctness must be preserved
   through any MIR optimization. Any new opt pass must not see through
@@ -364,13 +376,13 @@ Total: ~7 engineer-days after doc 03.
 
 ### Tier-1 dependencies
 
-- **Tier-1 doc 01 (stdlib).** `std::time::Instant` is the clock source.
+- **Tier-1 doc 01 (stdlib).** `std.time.Instant` is the clock source.
   Until it exists, `riven_bench_now_ns` ships as a bench-only runtime
   helper.
 - **Tier-1 doc 04 (Drop).** Leaking benches are fine for fork-per-bench
   runs (child exits, OS reclaims) but allocate-hot benches will skew
   results without Drop. Document the caveat.
-- **Tier-1 doc 05 (derive/macros).** Doesn't block v1.
+- **Tier-1 doc 05 (macros).** Doesn't block v1.
 
 ---
 
@@ -378,7 +390,7 @@ Total: ~7 engineer-days after doc 03.
 
 | Phase | Scope | Days | Prereqs |
 |---|---|---|---|
-| 1 | Attribute plumbing | 0.5 | Doc 03 Phase 1 |
+| 1 | Directive plumbing | 0.5 | Doc 03 Phase 1 |
 | 2 | CLI + harness | 3 | 1 |
 | 3 | Stats + `black_box` | 2 | 2 |
 | 4 | Baselines + formats | 1 | 3 |
@@ -425,10 +437,10 @@ Total: ~7 engineer-days after doc 03.
     Different `--sample-size` shouldn't rebuild the bench binary — it's
     a runtime argument. Verify.
 11. **OQ-7 — Throughput annotations.**
-    Author writes `@[bench(throughput = "1000 elem")]` to get
-    Melem/s reporting? Or compute from a `ctx.throughput(Throughput::Elements(1000))`
+    Author writes a `throughput "1000 elem"` directive to get
+    Melem/s reporting? Or compute from a `ctx.throughput(Throughput.Elements(1000))`
     call inside the bench body? Recommend the latter (matches
-    criterion; stays on the Riven side, not the attribute side).
+    criterion; stays on the Riven side, not the directive side).
 
 ---
 
@@ -436,8 +448,8 @@ Total: ~7 engineer-days after doc 03.
 
 | Case | Assertion |
 |---|---|
-| `@[bench] def b(ctx: &mut Bencher)` compiles | No parse/type error |
-| `@[bench] def b` without ctx param | Compile error: benches need `&mut Bencher` param |
+| `def b(ctx: &mut Bencher); bench; ... end` compiles | No parse/type error |
+| `def b; bench; ... end` without ctx param | Compile error: benches need `&mut Bencher` param |
 | `riven bench` runs all benches | Exit 0, output lists them |
 | `riven bench --filter=foo` | Only matching benches run |
 | `riven bench --list` | No execution, just names |

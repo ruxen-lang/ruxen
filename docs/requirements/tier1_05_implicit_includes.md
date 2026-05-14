@@ -50,7 +50,7 @@ Lexed as a dedicated keyword token `TokenKind::Derive`
 
 The tutorial documents the in-body form
 (`docs/tutorial/06-classes-and-structs.md:135-141`,
-`docs/tutorial/08-traits.md:141-148`,
+`docs/tutorial/08-mixins.md:141-148`,
 `docs/tutorial/04-ownership-and-borrowing.md:119-125`).
 
 The parser-state cleanup that closes this gap is described in §9.1: the
@@ -127,19 +127,18 @@ AST synthesis pass or a post-HIR impl-synthesis pass. This doc picks one in
 ### Goals (v1)
 
 - A working `derive Debug, Clone, Copy, Eq, PartialEq, Hash, Default, Ord, PartialOrd`
-  surface syntax that produces real impls — i.e. the derive list actually
-  drives codegen, `is_copy` consults it, `puts` can print any
+  surface syntax that produces real provisions — i.e. the derive list
+  actually drives codegen, `is_copy` consults it, `puts` can print any
   `derive Debug` struct.
-- Unify the two current entry points (`derive ...` and in-body
-  `derive T1, T2`) on one canonical form. Both should work; one becomes the
-  idiomatic default.
+- The single canonical entry point is the body-level `derive M1, M2`
+  directive (per the syntax spec). No competing prefix form.
 - Coverage: structs (named + tuple + unit), enums (unit + tuple + struct
-  variants), generics (with correct bound propagation: `T: Debug` for every
-  type parameter referenced in a derived `Debug` impl).
-- Actionable diagnostics: `derive(Copy)` on a struct with a non-Copy field
+  variants), generics (with correct bound propagation: `T: Debug` for
+  every type parameter referenced in a derived `Debug` provision).
+- Actionable diagnostics: `derive Copy` on a struct with a non-Copy field
   points at the offending field.
 - Hooks so tier1_04 (Drop/Copy/Clone) can rely on derived `Copy`/`Clone`
-  impls existing after this phase.
+  provisions existing after this phase.
 
 ### Non-goals (v1)
 
@@ -189,7 +188,7 @@ in any field type.
 needed. Each field is `field.fmt()` spliced into the interpolated string.
 
 **Errors:** None inherent — all fields getting `Debug` is a bound on the
-generated provision, enforced by typeck at impl definition time.
+generated provision, enforced by typeck at provision-definition time.
 
 ### 4.2 `Clone`
 
@@ -206,7 +205,7 @@ points at the field whose type is missing `Clone` (§9.4).
 
 ### 4.3 `Copy`
 
-**Generates:** an in-body `include Copy` directive on `T[GP]` — the trait has no methods
+**Generates:** an in-body `include Copy` directive on `T[GP]` — the mixin has no methods
 (`resolve/mod.rs:147`). Also updates `Ty::is_copy` to return `true` for
 `Ty::Struct { name, .. }` / `Ty::Enum { name, .. }` when the symbol table
 records a derived `Copy` provision for `name` (§5.5).
@@ -255,7 +254,7 @@ first.
 
 **Mixin registration:** adds `Hash` as a built-in mixin (currently the
 token `Hash` is already a built-in **type constructor** for hash maps at
-`resolve/mod.rs:200`; the trait needs a disambiguated name or the type
+`resolve/mod.rs:200`; the mixin needs a disambiguated name or the type
 constructor needs a rename. See §12 Open questions.).
 
 ### 4.7 `Default`
@@ -358,7 +357,7 @@ impls include the derived ones.
 
 ### 5.3 `DeriveExpander` module
 
-New file: `crates/riven-core/src/derive/mod.rs` (and submodules per derive
+New file: `crates/riven-core/src/implicit_includes/mod.rs` (and submodules per implicit
 kind). Public API:
 
 ```rust
@@ -592,7 +591,7 @@ user structs — tolerable but regressive.
 `Debug`, `Clone`, etc. are declared in stdlib. Derives emit impls that
 reference these mixin names. If stdlib itself has structs that need
 `derive Debug`, the derive expander runs on stdlib compilation and
-references a trait that is defined **in the same compilation unit**. This
+references a mixin that is defined **in the same compilation unit**. This
 is fine because:
 
 - Resolve pre-pass registers all top-level mixin names before the expander
@@ -600,18 +599,18 @@ is fine because:
 - The generated provision's method signatures are fully concrete HIR — no
   forward name lookup required during typeck.
 
-For stdlib trait definitions themselves (the definition of `mixin Clone
+For stdlib mixin definitions themselves (the definition of `mixin Clone
 ... end` in stdlib source), we do **not** derive; those are hand-written.
 The built-in mixin list in `resolve/mod.rs` is a bootstrap shim that will
 eventually be removed once stdlib is loaded as a real dependency.
 
 ### 8.3 LSP / `riven-ide`
 
-Derived impls must be discoverable by hover and goto-definition. The
-expander attaches a `Span` to each generated item pointing at the
-original `derive MixinName` attribute's span — not a synthesized
+Derived provisions must be discoverable by hover and goto-definition.
+The expander attaches a `Span` to each generated item pointing at the
+original `derive MixinName` directive's span — not a synthesized
 span. `riven-ide` then treats goto-def on a call to `.clone()` on a
-derived struct as "jumps to the `derive Clone` attribute on the
+derived struct as "jumps to the `derive Clone` directive on the
 struct definition", which is the right UX.
 
 If we later want goto-def to instead show a synthesized code view, add a
@@ -621,16 +620,16 @@ for v1.
 ### 8.4 Formatter
 
 `formatter/format_items.rs:391-402` today emits the in-body `derive X, Y`
-form. It must be taught the `derive ...` form and emit that when
-either syntax is input. See §6.2.
+form, which is now the only form. The formatter continues to emit this
+shape on round-trip.
 
-### 8.5 Trait resolution
+### 8.5 Mixin resolution
 
-`typeck/traits.rs` collects impls via `collect_impls`. Derived impls
-appended in §5.3 flow through unchanged. Structural satisfaction
-(`TraitSatisfaction::Structural` at `traits.rs:20-22`) continues to work
-for static-dispatch cases; nominal satisfaction now covers derived
-impls too.
+`typeck/traits.rs` collects provisions via `collect_impls`. Derived
+provisions appended in §5.3 flow through unchanged. Structural
+satisfaction (`TraitSatisfaction::Structural` at `traits.rs:20-22`)
+continues to work for static-dispatch cases; nominal satisfaction now
+covers derived provisions too.
 
 ---
 
@@ -656,7 +655,7 @@ Each step is a separately reviewable PR.
 
 ### 9.2 Step 2 — Register missing built-in mixins
 
-- `resolve/mod.rs:138-151`: append `PartialEq`, `Eq`, `Hash` (as trait,
+- `resolve/mod.rs:138-151`: append `PartialEq`, `Eq`, `Hashable` (as mixin,
   distinct from the `Hash` **type constructor** at line 200 — see §4.6 /
   §12 about the naming collision), `Default`, `Ord`, `PartialOrd`.
 - Each with correct required methods (`eq`, `hash`, `default`, `cmp`,
@@ -664,7 +663,7 @@ Each step is a separately reviewable PR.
 
 ### 9.3 Step 3 — Scaffold `riven-core::derive` module
 
-- Create `crates/riven-core/src/derive/mod.rs` with the struct layout
+- Create `crates/riven-core/src/implicit_includes/mod.rs` with the struct layout
   from §5.3.
 - Wire into `typeck::type_check` between phase 1 (resolve) and phase 2
   (collect_impls).
@@ -738,7 +737,7 @@ default all emits to `derive ...` (cleaner; adopt this).
 
 ### 9.8 Step 8 — Documentation
 
-- `docs/tutorial/08-traits.md:139-149`: rewrite using `derive ...`.
+- `docs/tutorial/08-mixins.md:139-149`: rewrite using `implicit ...`.
 - Same for `docs/tutorial/06-classes-and-structs.md:131-145` and
   `docs/tutorial/04-ownership-and-borrowing.md:119-125`.
 
@@ -877,7 +876,7 @@ Deriving nine traits on every struct across a large program is a
 non-trivial HIR volume increase. Measure at 5a landing: count HIR item
 count before/after. If the expander materially hurts incremental rebuilds
 in `rivenc`'s content-addressed cache, adopt lazy generation (derive on
-demand when a trait bound requires it). Almost certainly a premature
+demand when a mixin bound requires it). Almost certainly a premature
 optimization; flag for vigilance.
 
 ### 12.7 Risk: scope creep into full macros

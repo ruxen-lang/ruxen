@@ -105,7 +105,7 @@ rs:30-60` has two different conversion functions.
 |-------|-------------|---------|
 | `E1001-E1010` | Live today | Borrow check (`borrow_check/errors.rs`) |
 | `E1011-E1016` | tier1_02_concurrency.md:785-790 | Send/Sync, mutex, etc. |
-| `E0601-E0609` | tier1_05_derive_macros.md:718 | Derive |
+| `E0601-E0609` | tier1_05_implicit_includes.md:718 | Implicit includes |
 
 ### 2.4 What's absent
 

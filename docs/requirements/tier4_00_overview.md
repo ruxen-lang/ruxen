@@ -23,7 +23,7 @@ Tier 4 is about the *outside* of the compiler — the surfaces that make Riven a
 - **Cross-compilation**: **zero support.** Cranelift backend hard-codes the host machine via `cranelift_native::builder()` (`crates/riven-core/src/codegen/cranelift.rs:50`). LLVM backend calls `TargetMachine::get_default_triple()` (`crates/riven-core/src/codegen/llvm/mod.rs:42`). No `--target` CLI flag anywhere (`crates/riven-cli/src/cli.rs:24-114`, `crates/rivenc/src/main.rs:40-67`). The linker is unconditionally `cc` (`crates/riven-core/src/codegen/object.rs:20,64`).
 - **WASM target**: absent. No `wasm32` anywhere except test-name collisions. `emit_executable` always invokes `cc` with `-lc -lm` (`object.rs:64-70`) — fundamentally incompatible with `wasm32-unknown-unknown`.
 - **no_std / embedded**: absent. The runtime `runtime.c` (`crates/riven-core/runtime/runtime.c`, 426 lines) unconditionally pulls in `stdio.h`, `stdlib.h`, `string.h`, `stdint.h` and links `-lc -lm`. `riven_panic` calls `fprintf(stderr, …)` + `abort()`. No `#[panic_handler]` equivalent, no `panic = "abort"` knob, no no-alloc path.
-- **Stable ABI / cbindgen**: absent for the *Riven surface*. Riven-side `extern "C"` + `lib` blocks exist (`parser/mod.rs:1570-1723`) for **importing** C; there is no generator that emits a `.h` header from Riven's `pub` items. `@[repr(C)]` is parsed but conflated with `@[derive]` (see tier-1 B2).
+- **Stable ABI / cbindgen**: absent for the *Riven surface*. Riven-side `lib "..."` blocks exist (`parser/mod.rs:1570-1723`) for **importing** C; there is no generator that emits a `.h` header from Riven's public items. `layout c` is parsed but conflated with implicit-include structural mixins (see tier-1 B2).
 - **CI**: only a release workflow (`/.github/workflows/release.yml`, 144 lines) that fires on `v*` tags. **No `ci.yml`.** No lint job, no coverage, no fuzzing, no MSRV enforcement. The workspace `Cargo.toml` is 4 lines with no `rust-version` field (`Cargo.toml:1-4`). Every crate is `edition = "2021"`.
 - **`examples/`**: **the directory does not exist.** `crates/riven-core/tests/fixtures/` has 13 small `.rvn` test fixtures but nothing larger than ~50 lines, and none are runnable as projects with `riven run`.
 - **Repo hygiene**: `README.md` exists. **`LICENSE` is missing** (the release workflow does `cp LICENSE* … 2>/dev/null || true` — so it silently ships with no license). `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `CHANGELOG.md`, `SECURITY.md` all missing. README.md line 294-296: `## License\n\nTBD`.
@@ -112,12 +112,12 @@ Key dependencies:
 1. `[package] no-std = true` key → skip stdlib prelude, ship only `core`.
 2. `panic = "abort" | "unwind"` in `[profile.*]`. Default abort. No unwinding in v1.
 3. Split `runtime.c` into `runtime_core.c` (no libc, no malloc) and `runtime_std.c` (everything else). `core` only needs the former.
-4. Expose a `@[panic_handler]` attribute on a user-supplied function when `no-std = true`.
+4. Expose a body-level `panic_handler` directive on a user-supplied function when `no-std = true`.
 
 **Phase 4-5 — WASM (2 weeks, after 4-3 and 4-4).** Doc 03.
 
 1. `wasm32-unknown-unknown` as a target. `runtime_core.c` with a tiny bump-allocator shipped inside the runtime.
-2. Entry point: export `_start` / user-named exports via `@[wasm_export]`; host functions imported via `@[wasm_import("module", "name")]`.
+2. Entry point: export `_start` / user-named exports via in-body `wasm_export` directive; host functions imported via in-body `wasm_import("module", "name")` directive.
 3. `wasm32-wasi` as a second target (easier: existing `runtime.c` Just Works with `wasi-libc`).
 4. WIT / Component Model explicitly future-work — call it out in the doc and don't ship.
 
@@ -125,7 +125,7 @@ Key dependencies:
 
 Run in parallel with 4-1 onward. Minimum set:
 - `examples/01-cli-utility/` — a word-count clone, synchronous.
-- `examples/02-tcp-echo-server/` — single-threaded TCP echo, exercises `std::net`.
+- `examples/02-tcp-echo-server/` — single-threaded TCP echo, exercises `std.net`.
 - `examples/03-threaded-server/` — multi-threaded HTTP echo (depends on tier-1 concurrency).
 - `examples/04-wasm-hello/` — tiny wasm32 demo with an HTML harness (depends on doc 03).
 - `examples/05-snake-game/` — terminal-based Snake with a single git dependency on a hypothetical `termio` piece (demonstrates the package manager).
@@ -140,8 +140,8 @@ Run in parallel with 4-1 onward. Minimum set:
 
 **Phase 4-8 — stable ABI / cbindgen (2-3 weeks, independent).** Doc 05.
 
-1. `rivenc --emit=c-header` walks the HIR, finds `pub extern "C"` items, emits a `.h` file.
-2. Stability rules: only `@[repr(C)]` structs, only `extern "C"` functions, no generics, no `Option`/`Result` (emit as `*T` / `int` with a sibling error-struct).
+1. `rivenc --emit=c-header` walks the HIR, finds public C-ABI items, emits a `.h` file.
+2. Stability rules: only `layout c` structs, only C-ABI functions, no generics, no `Option`/`Result` (emit as `*T` / `int` with a sibling error-struct).
 3. Version-bake the header: `riven_abi_version()` compiles in the compiler version at emission time, so consumers can `riven_abi_version() != EXPECTED` at runtime.
 
 ## Total estimate
@@ -175,7 +175,7 @@ These surfaced across the docs and need a single ruling before implementation be
 5. **CI provider.** **Recommend: GitHub Actions** — the release workflow already uses it, runners are free for public repos, matrix support is fine. Don't split across providers.
 6. **Examples: in-tree or separate repo?** **Recommend: in-tree `examples/`** at the repo root. Rust is in-tree, Go is in-tree, Python is in-tree. The "separate repo" pattern (Node.js) harms discoverability. See doc 07.
 7. **WASM: which toolchain?** `wasm-ld` (bundled with LLVM) or `lld` (bundled with Rust)? **Recommend: `lld`**, which is bundled with `rustup`'s default Rust install and already ships with every dev machine that builds Riven from source. Fall back to `wasm-ld` if `lld` is absent.
-8. **no_std: ship a `core` crate or just a feature flag?** **Recommend: feature flag in v1, crate split in v2.** Tier-1 stdlib doc (§6.3) already recommends this. The `core` *subdirectory* under `std::core::*` is a mechanical `mv` once stable.
+8. **no_std: ship a `core` crate or just a feature flag?** **Recommend: feature flag in v1, crate split in v2.** Tier-1 stdlib doc (§6.3) already recommends this. The `core` *subdirectory* under `std.core.*` is a mechanical `mv` once stable.
 9. **Panic strategy default.** `abort` or `unwind`? **Recommend: `abort`** in v1. Unwinding requires landing-pad emission (MIR lowering change), per-function DWARF CFI, and an unwinder (libunwind / LLVM builtins). All deferred to v2.
 
 ## Pre-existing issues that block tier-4 work
@@ -184,4 +184,4 @@ These surfaced across the docs and need a single ruling before implementation be
 - **The release workflow `cp LICENSE* "${STAGE}/" 2>/dev/null || true` silently succeeds when `LICENSE` doesn't exist** (`.github/workflows/release.yml:96`). Ship doc 08 first so releases include the license.
 - **`Cargo.toml` has no `rust-version` field.** A contributor can land code that only builds on nightly and nothing will catch it. Unblock with doc 06.
 - **Registry dependencies are parsed in `manifest.rs:51-57` but rejected at resolve time with `"registry dependencies are not yet supported"` (`resolve_deps.rs:104-108, 116-120`).** Either delete the registry branch (it's aspirational and misleading) or implement it. Doc 01 implements it.
-- **`@[repr(C)]` and `@[derive]` are conflated into a single `derive_traits: Vec<String>` field.** Tier-1 B2 must be fixed before doc 05 (cbindgen) can run: cbindgen needs to see "is this a repr(C) struct?" as a first-class question, not a string match.
+- **`layout c` and structural-mixin includes are conflated into a single `derive_traits: Vec<String>` field.** Tier-1 B2 must be fixed before doc 05 (cbindgen) can run: cbindgen needs to see "is this a `layout c` struct?" as a first-class question, not a string match.

@@ -89,7 +89,7 @@ fn compile_and_run(rvn_path: PathBuf, out_basename: &str, expect_fn: &str) -> Ru
 #[test]
 fn enum_with_derive_debug_unit_variant_prints_name() {
     let root = workspace_root();
-    let rvn = root.join("tests/release-e2e/cases/200_derive_debug_enum_unit.rvn");
+    let rvn = root.join("tests/release-e2e/cases/200_implicit_debug_enum_unit.rvn");
     let run = compile_and_run(rvn, "riven_derive_debug_enum_unit_bin", "Color_to_debug");
 
     assert!(
@@ -111,7 +111,7 @@ fn enum_with_derive_debug_unit_variant_prints_name() {
 #[test]
 fn enum_with_derive_debug_explicit_debug_spec_dispatches() {
     let root = workspace_root();
-    let rvn = root.join("tests/release-e2e/cases/212_derive_debug_enum_explicit_q.rvn");
+    let rvn = root.join("tests/release-e2e/cases/212_implicit_debug_enum_explicit_q.rvn");
     let run = compile_and_run(
         rvn,
         "riven_derive_debug_enum_explicit_q_bin",
@@ -137,7 +137,7 @@ fn enum_with_derive_debug_explicit_debug_spec_dispatches() {
 #[test]
 fn enum_with_derive_debug_named_field_variant_prints_braces() {
     let root = workspace_root();
-    let rvn = root.join("tests/release-e2e/cases/210_derive_debug_enum_tuple.rvn");
+    let rvn = root.join("tests/release-e2e/cases/210_implicit_debug_enum_tuple.rvn");
     let run = compile_and_run(rvn, "riven_derive_debug_enum_tuple_bin", "Shape_to_debug");
 
     assert!(

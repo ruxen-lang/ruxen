@@ -77,19 +77,19 @@ on a plain `HashMap` receiver.  Same for `or_insert_with`.
 
 | Behaviour | Test fn                                       | File                          |
 |-----------|-----------------------------------------------|-------------------------------|
-| B1        | `hashmap_constructors_typecheck`              | `stdlib_hashmap.rs`           |
-| B3        | `hashmap_remove_returns_option`               | `stdlib_hashmap.rs`           |
-| B4        | `hashmap_keys_values_iter_typecheck`          | `stdlib_hashmap.rs`           |
-| B5        | `hashmap_clear_typechecks_as_unit`            | `stdlib_hashmap.rs`           |
-| B6        | `hashmap_equality_yields_bool`                | `stdlib_hashmap.rs`           |
-| B7        | `hashmap_entry_or_insert_typechecks`          | `stdlib_hashmap.rs`           |
-| B8        | `hashmap_entry_or_insert_with_typechecks`     | `stdlib_hashmap.rs`           |
-| B9        | `hashmap_with_string_key_is_accepted` + `hashmap_with_vec_value_is_accepted` + `hashmap_with_non_hash_key_emits_e0615` + `hashmap_with_nested_compound_key_emits_e0615` | `stdlib_hashmap_negatives.rs` |
-| B10       | `hashmap_or_insert_on_non_entry_receiver_rejected` | `stdlib_hashmap_negatives.rs` |
-| B11       | `hashmap_entry_then_or_insert_split_is_rejected` | `stdlib_hashmap_negatives.rs` |
+| B1        | `hashmap_constructors_typecheck`              | `stdlib_map.rs`           |
+| B3        | `hashmap_remove_returns_option`               | `stdlib_map.rs`           |
+| B4        | `hashmap_keys_values_iter_typecheck`          | `stdlib_map.rs`           |
+| B5        | `hashmap_clear_typechecks_as_unit`            | `stdlib_map.rs`           |
+| B6        | `hashmap_equality_yields_bool`                | `stdlib_map.rs`           |
+| B7        | `hashmap_entry_or_insert_typechecks`          | `stdlib_map.rs`           |
+| B8        | `hashmap_entry_or_insert_with_typechecks`     | `stdlib_map.rs`           |
+| B9        | `hashmap_with_string_key_is_accepted` + `hashmap_with_vec_value_is_accepted` + `hashmap_with_non_hash_key_emits_e0615` + `hashmap_with_nested_compound_key_emits_e0615` | `stdlib_map_negatives.rs` |
+| B10       | `hashmap_or_insert_on_non_entry_receiver_rejected` | `stdlib_map_negatives.rs` |
+| B11       | `hashmap_entry_then_or_insert_split_is_rejected` | `stdlib_map_negatives.rs` |
 
 Runtime round-trips covered by E2E fixtures `104_hash_basic.rvn` and
-`610_iter_collect_hashmap.rvn`.
+`610_iter_collect_map.rvn`.
 
 ---
 

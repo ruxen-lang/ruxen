@@ -188,7 +188,7 @@ fills).
 ## 6. Diagnostics tests
 
 For typeck rejections, use `typeck::type_check(&program)` directly
-and inspect `.diagnostics`.  See `crates/riven-core/tests/derive_negatives.rs`
+and inspect `.diagnostics`.  See `crates/riven-core/tests/implicit_negatives.rs`
 for the canonical pattern: compile-only (no codegen) and assert on
 the diagnostic `code` (e.g. `"E0610"`) rather than the message
 text.  Error-message wording can change; codes are stable.

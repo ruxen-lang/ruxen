@@ -189,7 +189,7 @@ pub enum TokenKind {
 
     // ── Keywords: Reserved ──
     Macro,
-    Crate, // deprecated; will be removed once all sources migrate to `package`
+    Crate,  // deprecated; will be removed once all sources migrate to `package`
     Extern, // deprecated; folded into `lib`
     Static,
     Const,

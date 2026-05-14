@@ -8,16 +8,20 @@ Blocks: GATs (doc 05), stdlib Iterator (tier-1 doc 01 phase 1a)
 
 ## 1. Summary & Motivation
 
-An *associated type* is a type-level member of a trait that each impl
-resolves to a concrete type. The canonical example is `Iterator::Item`:
+An *associated type* is a type-level member of a mixin that each
+`include` directive resolves to a concrete type. The canonical example
+is `Iterator.Item`:
 
 ```riven
-trait Iterator
+mixin Iterator
   type Item
   def mut next -> Option[Self.Item]
 end
 
-impl Iterator for Vec[Int]
+class Array[Int]
+  # ... existing array methods ...
+
+  include Iterator
   type Item = Int
   def mut next -> Option[Int]
     self.pop
@@ -26,33 +30,33 @@ end
 ```
 
 Without associated types, the stdlib cannot express `Iterator` — the
-trait either has to be generic over `Item` (`trait Iterator[Item]`), in
-which case `Vec.iter` returns `impl Iterator[&Int]` but the *type* of
+mixin either has to be generic over `Item` (`mixin Iterator[Item]`), in
+which case `Array.iter` returns `some Iterator[Item = &Int]` but the *type* of
 `.next` forgets that binding and `.collect` cannot recover it, or it
 has to fix `Item` to a single type (`Int` today — see tier-1 doc 01
 §2.1: the runtime is hardcoded int64). Every mainstream language with a
-trait/protocol system and a generic iterator (Rust, Swift, Haskell,
-Scala) uses an associated type, not a trait type parameter, for this
+mixin/protocol system and a generic iterator (Rust, Swift, Haskell,
+Scala) uses an associated type, not a mixin type parameter, for this
 reason.
 
 Beyond `Iterator`, the same mechanism is wanted for:
 
-- `FromIterator::Item` (mirror of `Iterator::Item`),
-- `IntoIterator::IntoIter` (the iterator type, not the item),
-- `Hasher::Output` (a future hash-abstraction trait — tier-1 doc 01
+- `FromIterator.Item` (mirror of `Iterator.Item`),
+- `IntoIterator.IntoIter` (the iterator type, not the item),
+- `Hasher.Output` (a future hash-abstraction mixin — tier-1 doc 01
   phase 1c),
-- `Future::Output` (blocks tier-1 doc 03 async),
-- `Add::Output`, `Mul::Output` (operator traits — not in tier 1 or 2
+- `Future.Output` (blocks tier-1 doc 03 async),
+- `Add.Output`, `Mul.Output` (operator mixins — not in tier 1 or 2
   but mentioned to show the pattern),
-- `Deref::Target` (if/when `Deref`-style auto-dereferencing ships).
+- `Deref.Target` (if/when `Deref`-style auto-dereferencing ships).
 
 The tutorial already describes the feature
-(`docs/tutorial/08-traits.md:27-33`), and the fixture sample program
-in tier-1 doc 01 (stdlib) implicitly depends on it (Vec chains that
+(`docs/tutorial/08-mixins.md:27-33`), and the fixture sample program
+in tier-1 doc 01 (stdlib) implicitly depends on it (Array chains that
 compile to `riven_noop_passthrough`).
 
 This doc specifies syntax, resolution, projection (the type-level
-operation that turns `Vec[Int]::Item` into `Int`), type-check rules,
+operation that turns `Array[Int].Item` into `Int`), type-check rules,
 and the MIR / codegen story post-monomorphization.
 
 ## 2. Current State
@@ -77,8 +81,8 @@ requires `type Name = Type`.
 
 The HIR equivalents (`HirTraitItem::AssocType` at `hir/nodes.rs:483-486`;
 `HirImplItem::AssocType` at `hir/nodes.rs:511-515`) are built in
-`resolve/mod.rs:940-945` (trait side) and `721-728`, `1024-1033` (impl
-side).
+`resolve/mod.rs:940-945` (mixin side) and `721-728`, `1024-1033`
+(include-directive side).
 
 `TraitInfo::assoc_types: Vec<String>`
 (`resolve/symbols.rs:65`) records the names. `resolve/mod.rs:444`:
@@ -91,10 +95,10 @@ ast::TraitItem::AssocType { name, .. } => assoc.push(name.clone()),
 
 - `TraitResolver` (`typeck/traits.rs`) has no notion of associated
   types. `check_satisfaction` (lines 85-133) only verifies required
-  methods. A trait with an unset associated type on an impl will
+  methods. A mixin with an unset associated type on an `include` will
   silently check as "satisfied" today if the methods match.
 - `Ty` has **no projection variant**. There is no `Ty::Projection { of,
-  trait_name, assoc_name }`. Anywhere in a trait signature where
+  trait_name, assoc_name }`. Anywhere in a mixin signature where
   `Self.Item` appears, resolve today has to pick something to store;
   it falls back to `Ty::TypeParam { name: "Self.Item", bounds: vec![] }`
   (via `resolve/mod.rs:2596-2615` taking the `DefKind::Trait` path,
@@ -104,18 +108,18 @@ ast::TraitItem::AssocType { name, .. } => assoc.push(name.clone()),
 - The MIR lowerer treats `HirImplItem::AssocType` as a no-op
   (`mir/lower.rs:107`). The associated type is never used in codegen
   because it never reaches MIR.
-- No use-site syntax parses today. `Self.Item` in a trait body, or
-  `T::Item` / `T.Item` in a function signature, exercises the general
+- No use-site syntax parses today. `Self.Item` in a mixin body, or
+  `T.Item` in a function signature, exercises the general
   type-path parser (`parser/types.rs:264-314`) which returns
   `TypePath { segments: ["Self", "Item"] }` — and resolve then fails to
   look it up.
 
 ### 2.3 Tutorial already uses associated types
 
-- `docs/tutorial/08-traits.md:27-33`: `trait Iterator` with `type Item`,
+- `docs/tutorial/08-mixins.md:27-33`: `mixin Iterator` with `type Item`,
   return type `Option[Self.Item]`.
 - `docs/tutorial/12-generics.md:105-107`: `where A: Iterable[Item = Int]`
-  — the equality-constraint sugar on a trait bound. **This form is the
+  — the equality-constraint sugar on a mixin bound. **This form is the
   surface syntax the parser must accept for associated-type bounds.**
 
 ### 2.4 Monomorphization is absent
@@ -132,33 +136,34 @@ pure type-check elaboration.
 
 ### Goals
 
-- **G1.** `trait Iterator; type Item; def mut next -> Option[Self.Item] end`
-  parses, resolves, type-checks, and is usable in impl blocks.
-- **G2.** `impl Iterator for Vec[Int]; type Item = Int; ...` binds
-  `Item` and type-checks every use of `Self.Item` inside the impl body
+- **G1.** `mixin Iterator; type Item; def mut next -> Option[Self.Item] end`
+  parses, resolves, type-checks, and is usable in type bodies via
+  `include`.
+- **G2.** A `class Array[Int] ... include Iterator; type Item = Int; ... end` block binds
+  `Item` and type-checks every use of `Self.Item` inside the type body
   against `Int`.
-- **G3.** At a use site `fn iter_sum[I: Iterator](i: &mut I) -> I::Item`
+- **G3.** At a use site `def iter_sum[I: Iterator](i: &mut I) -> I.Item`
   (pick one syntax — see §4), the return type projects to the concrete
   associated type for each monomorphization.
 - **G4.** Equality constraints in bounds: `where I: Iterator[Item = Int]`
   compiles and restricts `I` to iterators over `Int`.
-- **G5.** An impl that does not bind every required associated type
-  produces a clear error (E-ASSOC-MISSING).
-- **G6.** Auto-projection: `I::Item` in a generic signature participates
+- **G5.** A type whose `include` directive does not bind every
+  required associated type produces a clear error (E-ASSOC-MISSING).
+- **G6.** Auto-projection: `I.Item` in a generic signature participates
   in type inference (unifies with `Int` when `I` is constrained to
   `Iterator[Item = Int]`).
-- **G7.** Super-trait associated types are visible in sub-trait bounds:
-  `trait ExactSizeIterator: Iterator` may refer to `Self.Item`.
+- **G7.** Super-mixin associated types are visible in sub-mixin bounds:
+  `mixin ExactSizeIterator: Iterator` may refer to `Self.Item`.
 
 ### Non-goals
 
 - **NG1.** GATs. These are doc 05. The surface syntax here is
   `type Name` (no generic parameters on the associated type).
-- **NG2.** `impl Trait` return-position *desugaring* to an associated
+- **NG2.** `some Mixin` return-position *desugaring* to an associated
   type. Rust does this internally for `async fn` / RPITIT; Riven ships
   this in doc 04.
 - **NG3.** Associated consts. `type Item` only — no `const N: Int` in
-  traits. Can be added later (see overview §Open #3).
+  mixins. Can be added later (see overview §Open #3).
 - **NG4.** Defaulted associated types: `type Item = Int`. Feasible
   (Rust has it) but not required for the Iterator use case. Defer.
 - **NG5.** Normalization of higher-ranked projections. Requires both
@@ -169,16 +174,16 @@ pure type-check elaboration.
 ### 4.1 Declaration
 
 ```riven
-trait Iterator
+mixin Iterator
   type Item
   def mut next -> Option[Self.Item]
 end
 
-trait FromIterator[T]
+mixin FromIterator[T]
   def self.from_iter[I: Iterator[Item = T]](iter: I) -> Self
 end
 
-trait IntoIterator
+mixin IntoIterator
   type Item
   type IntoIter: Iterator[Item = Self.Item]
   def consume into_iter -> Self.IntoIter
@@ -187,40 +192,42 @@ end
 
 Rules:
 
-- Associated types have no bounds at the `trait` declaration today,
+- Associated types have no bounds at the `mixin` declaration today,
   but may acquire bounds via `type IntoIter: Iterator[Item = Self.Item]`
-  syntax (see `IntoIterator` above). The bound is checked at every impl.
+  syntax (see `IntoIterator` above). The bound is checked at every include.
 - Each associated type is introduced in a `type Name` line, terminated
   by newline. No `end`.
-- Associated types live in the trait's namespace. Outside the trait
-  body, refer to them as `<Self.Item>` in the trait body (while `Self`
-  is in scope) or `<T.Item>` / `<T::Item>` at a use site (syntax in 4.3).
+- Associated types live in the mixin's namespace. Outside the mixin
+  body, refer to them as `<Self.Item>` in the mixin body (while `Self`
+  is in scope) or `<T.Item>` at a use site (syntax in 4.3).
 
-### 4.2 Impl binding
+### 4.2 Binding via `include`
 
 ```riven
-impl Iterator for Vec[Int]
+extension Array[Int]
+  include Iterator
   type Item = Int
   def mut next -> Option[Int]
     self.pop
   end
 end
 
-impl[T] IntoIterator for Vec[T]
+extension Array[T]
+  include IntoIterator
   type Item = T
-  type IntoIter = VecIntoIter[T]
-  def consume into_iter -> VecIntoIter[T]
-    VecIntoIter.new(self)
+  type IntoIter = ArrayIntoIter[T]
+  def consume into_iter -> ArrayIntoIter[T]
+    ArrayIntoIter.new(self)
   end
 end
 ```
 
 Rules:
 
-- Every associated type declared on the trait must be bound in the
-  impl, else E-ASSOC-MISSING.
+- Every associated type declared on the mixin must be bound in the
+  type body that includes it, else E-ASSOC-MISSING.
 - A bound like `type IntoIter: Iterator[Item = Self.Item]` must be
-  satisfied by the binding. Riven checks this at impl-registration
+  satisfied by the binding. Riven checks this at include-registration
   time (§5.3).
 - Defaulted associated types (NG4) would skip the required-to-bind
   rule; not in scope.
@@ -232,7 +239,7 @@ Two forms, equivalent:
 ```riven
 # Dot form (Ruby-style, matches tutorial 08:31):
 def sum[I: Iterator[Item = Int]](i: &mut I) -> Int
-  let mut total = 0
+  var total = 0
   while let Some(x) = i.next
     total = total + x
   end
@@ -242,7 +249,7 @@ end
 # Generic-over-Item form:
 def sum_all[I: Iterator](i: &mut I) -> I.Item
   where I.Item: Add[Output = I.Item] + Default
-  let mut total = I.Item.default
+  var total = I.Item.default
   while let Some(x) = i.next
     total = total + x
   end
@@ -254,10 +261,10 @@ Rules:
 
 - `T.Name` (dot form) is the projection operator. The parser already
   accepts `TypePath { segments: ["T", "Name"] }` (`parser/types.rs:289-299`).
-- Resolution rewrites `<T as Trait>.Name` into `Ty::Projection { base:
-  T, trait_name: Trait, assoc_name: Name }` (§5.1).
-- If `T` is constrained by exactly one trait that declares an
-  associated type of that name, the `as Trait` is elided; otherwise
+- Resolution rewrites `<T as Mixin>.Name` into `Ty::Projection { base:
+  T, trait_name: Mixin, assoc_name: Name }` (§5.1).
+- If `T` is constrained by exactly one mixin that declares an
+  associated type of that name, the `as Mixin` is elided; otherwise
   the user must disambiguate.
 - **Disambiguation syntax (decision needed — see §9):** either
   `T.(Iterator.Item)` or `<T as Iterator>.Item`. Recommendation:
@@ -268,7 +275,7 @@ Rules:
 
 ```riven
 def process[I: Iterator[Item = Int]](i: &mut I) ...
-def collect_strings[I: Iterator[Item = String]](i: I) -> Vec[String] ...
+def collect_strings[I: Iterator[Item = String]](i: I) -> Array[String] ...
 ```
 
 Sugar for: `I: Iterator where I.Item = Int`.
@@ -362,21 +369,21 @@ site that reads `.assoc_types.contains(&name)` becomes
 
 ### 5.4 Impl-side binding table
 
-New `ImplInfo` stored per-impl (replacing the existing per-type
+New `ImplInfo` stored per-include (replacing the existing per-type
 `nominal_impls: HashMap<(String, String), Vec<ImplMethod>>` in
 `TraitResolver`, `typeck/traits.rs:32-36`):
 
 ```rust
 pub struct ImplInfo {
     pub trait_ref: TraitRef,       // Trait[generic_args]
-    pub target_ty: Ty,             // the type we're impl-ing for
+    pub target_ty: Ty,             // the type we're including the mixin on
     pub methods: Vec<ImplMethod>,
     pub assoc_bindings: HashMap<String, Ty>,  // "Item" -> Int
 }
 ```
 
 Built in `collect_item_impls` (`typeck/traits.rs:189-230`): when
-walking an impl, extract `HirImplItem::AssocType { name, ty, .. }`
+walking an include directive, extract `HirImplItem::AssocType { name, ty, .. }`
 entries into `assoc_bindings`.
 
 ### 5.5 Normalization (projection → concrete)
@@ -391,9 +398,9 @@ Rules:
 
 - For `Ty::Projection { base, trait_name, assoc_name }`:
   - Resolve `base` (may itself contain projections, recurse).
-  - Find an impl where `trait_ref.name == trait_name` and
+  - Find an include where `trait_ref.name == trait_name` and
     `target_ty` unifies with `base`.
-  - Look up `assoc_bindings[assoc_name]`, substitute the impl's
+  - Look up `assoc_bindings[assoc_name]`, substitute the include's
     generic args, recurse.
   - If `base` is a generic parameter with a matching bound, keep the
     projection (cannot normalize further until monomorphized).
@@ -408,7 +415,7 @@ Normalization is called:
 
 ### 5.6 Equality-constraint sugar
 
-Parser change: in `parse_trait_bounds` / `parse_single_trait_bound`
+Parser change: in `parse_mixin_bounds` / `parse_single_mixin_bound`
 (`parser/types.rs:390-405`), accept `Name[AssocName = Type]` where
 `AssocName` is an uppercase identifier and `Type` is a type expression.
 Build an AST `AssocEqConstraint { name, ty }` and attach to the bound.
@@ -444,7 +451,7 @@ New pass `typeck/check_impls.rs`, runs after `TraitResolver::collect_impls`:
 - For every impl, verify every associated type declared on the trait
   is bound in the impl (else E-ASSOC-MISSING at impl.span).
 - For every bound on an associated-type declaration (§5.3 bounds),
-  verify the impl's binding satisfies it via normal trait solving.
+  verify the include's binding satisfies it via normal mixin solving.
   E.g., `type IntoIter: Iterator[Item = Self.Item]` + `type IntoIter = VecIntoIter[T]`
   + `type Item = T` → check `VecIntoIter[T]: Iterator[Item = T]`.
 - Reject duplicate bindings (E-ASSOC-DUP).
@@ -482,12 +489,13 @@ New pass `typeck/check_impls.rs`, runs after `TraitResolver::collect_impls`:
 5. `check_impls.rs`: completeness and consistency.
 6. Error messages.
 
-At the end of phase 01a, `trait Iterator` parses; impls bind
-`type Item`; function signatures mentioning `I.Item` type-check; but
-generic functions *calling* `i.next` still use the erased
-`I64` slot at codegen. `impl Iterator for Vec[Int]` works as a
-stand-alone test if the function is called on a concrete `Vec[Int]`
-directly (the projection normalizes to `Int` at the call site).
+At the end of phase 01a, `mixin Iterator` parses; type bodies bind
+`type Item` via `include Iterator`; function signatures mentioning
+`I.Item` type-check; but generic functions *calling* `i.next` still
+use the erased `I64` slot at codegen. An `extension Array[Int]`
+including `Iterator` works as a stand-alone test if the function is
+called on a concrete `Array[Int]` directly (the projection normalizes
+to `Int` at the call site).
 
 **Phase 01b — generic monomorphization hook (blocks on M2).**
 
@@ -496,23 +504,24 @@ directly (the projection normalizes to `Int` at the call site).
    types.
 8. Remove the Cranelift/LLVM `I64` fallback for generic fields that
    project to known types.
-9. Drop-glue per-instantiation: if `type Item = String`, the Vec's
+9. Drop-glue per-instantiation: if `type Item = String`, the Array's
    drop pass (per tier-1 doc 04 §7) sees `Ty::String` per
    instantiation and emits `riven_string_free` per element.
 
 **Phase 01c — stdlib Iterator.** Depends on 01a + 01b + doc 01
 phase 1a of tier-1.
 
-10. Declare `trait Iterator { type Item; def mut next -> Option[Self.Item]; end }`
-    as a *user-level* trait in the prelude, not a built-in with
+10. Declare `mixin Iterator; type Item; def mut next -> Option[Self.Item]; end`
+    as a *user-level* mixin in the prelude, not a built-in with
     special-case resolution (the current list at `resolve/mod.rs:
     139-151` just carries a name; this is adequate).
-11. Write `impl Iterator for VecIter[T]`, `VecIntoIter[T]`, `SplitIter`,
-    `Range`, `RangeInclusive` — each with a real `next` that is not
-    `riven_noop_passthrough`. Tier-1 doc 01 §6 lists the concrete
-    type list; each gains an `impl Iterator` block.
+11. Write `extension` blocks that `include Iterator` on `ArrayIter[T]`,
+    `ArrayIntoIter[T]`, `SplitIter`, `Range`, `RangeInclusive` — each
+    with a real `next` that is not `riven_noop_passthrough`. Tier-1
+    doc 01 §6 lists the concrete type list; each gains an
+    `include Iterator` provision.
 12. Add the default methods `map`, `filter`, `take`, `skip`, `enumerate`,
-    `chain`, `collect` to the trait body. These are legitimate default
+    `chain`, `collect` to the mixin body. These are legitimate default
     methods — they call `self.next` and reuse the Iterator machinery.
 
 ## 7. Interactions With Other Tier-2 Features
@@ -531,18 +540,18 @@ applies those generics at projection sites.
 has no consumers — every current use case (Iterator, IntoIterator,
 FromIterator, Future) is a plain associated type.
 
-### 7.2 With trait objects (doc 06)
+### 7.2 With mixin existentials (doc 06)
 
-A `dyn Trait` over a trait with associated types requires the trait
+An `any Mixin` over a mixin with associated types requires the mixin
 either to:
 
-- forbid being used as `dyn` unless every associated type is *bound*
-  at the use site: `dyn Iterator[Item = Int]` — this is the common
+- forbid being used as `any` unless every associated type is *bound*
+  at the use site: `any Iterator[Item = Int]` — this is the common
   case and the one Rust picked, and
 - include the associated types in the vtable's type-info slot
   (expensive and unused today).
 
-Recommendation: `dyn Trait` is only object-safe if every associated
+Recommendation: `any Mixin` is only object-safe if every associated
 type has a binding at the use site, and that binding is recorded in
 the resulting `Ty::DynTrait`. Doc 06 §4 item 5 codifies this.
 
@@ -550,26 +559,26 @@ the resulting `Ty::DynTrait`. Doc 06 §4 item 5 codifies this.
 
 An associated type projection is *invariant* with respect to the base
 unless declared otherwise. `<I as Iterator>.Item` cannot be subtyped
-to anything except the exact binding, because the same `Iterator` impl
-is indexed on the concrete type of `I`. Doc 07 §5 enumerates this
-rule and explains why it differs from tuple/container variance.
+to anything except the exact binding, because the same `Iterator`
+provision is indexed on the concrete type of `I`. Doc 07 §5 enumerates
+this rule and explains why it differs from tuple/container variance.
 
 ### 7.4 With HRTBs (doc 03)
 
 Normalization interacts poorly with HRTBs when the projection mentions
-a bound lifetime: `for['a] I: Iterator[Item = &'a T]`. The "for all 'a"
+a bound lifetime: `for[a] I: Iterator[Item = &a T]`. The "for all a"
 quantifier moves the projection into a higher-ranked context; doc 03
 §7 describes the conservative approach (delay normalization under
 quantifiers) that covers our use cases.
 
 ### 7.5 With specialization (doc 04 §9)
 
-Multiple impls with overlapping trait bounds + different associated
+Multiple includes with overlapping mixin bounds + different associated
 type bindings is the classic specialization case. If specialization is
 omitted (overview rec #5), the coherence check forbids it, and
-`impl Iterator for Vec[T]` must have exactly one definition of
-`type Item`. If specialization is shipped, the most-specific impl
-wins, and the type-checker must remember which associated-type
+an `Array[T]` type body that `include Iterator` must have exactly one
+`type Item` binding. If specialization is shipped, the most-specific
+include wins, and the type-checker must remember which associated-type
 binding to use at each call site.
 
 ## 8. Phasing
@@ -577,7 +586,7 @@ binding to use at each call site.
 See §6.2. Summary:
 
 - **01a (3 weeks, front-end):** parsing, resolve, normalization for
-  concrete bases, impl completeness. Ships as a no-op runtime feature
+  concrete bases, include completeness. Ships as a no-op runtime feature
   ( every associated-type-using function still erases to `I64`
   because monomorphization hasn't landed).
 - **01b (blocks on M2):** generic codegen via monomorphization.
@@ -585,13 +594,13 @@ See §6.2. Summary:
 
 ## 9. Open Questions & Risks
 
-- **OQ-1: projection syntax.** `T.Item` vs `T::Item` vs both. See
-  overview §Open #2. Recommendation: `T.Item`. Accept both in the
-  parser; formatter rewrites `::` to `.`. Ambiguity with field
-  access is resolved by capitalization (`Item` vs `item`).
+- **OQ-1: projection syntax.** `T.Item` (the spec form). The parser
+  uses `.` consistently; ambiguity with field access is resolved by
+  capitalization (`Item` vs `item`).
 - **OQ-2: disambiguation syntax.** When `T: Iterator + Other` and
   both declare `Item`, which syntax do we write? Rust uses
-  `<T as Iterator>::Item`. Recommendation: copy Rust — this is a
+  `<T as Iterator>.Item`. Recommendation: copy Rust's syntax shape —
+  this is a
   corner case, a verbose syntax is fine.
 - **OQ-3: early vs late normalization.** Rust has a reputation for
   subtle bugs around "I didn't normalize early enough, so inference
@@ -600,7 +609,7 @@ See §6.2. Summary:
   01a, and revisit when HRTBs land.
 - **OQ-4: defaulted associated types.** Out of scope for tier 2; will
   users miss it? Probably not for Iterator; check with stdlib consumers
-  once the trait lands.
+  once the mixin lands.
 - **OQ-5: what about `type Iter: Iterator<Item = Self.Item>` where
   `Item` has not been declared yet?** Enforce declaration order:
   associated types must be declared before they are referenced. This
@@ -609,15 +618,15 @@ See §6.2. Summary:
   today (via `DefKind::Trait` → `TypeParam`, `resolve/mod.rs:2609-2615`)
   must be removed. Any code that currently type-checks only because of
   this fallback will break. Expect test-fixture churn.
-- **R-2:** normalization under Drop check. A `Vec[I.Item]` field
+- **R-2:** normalization under Drop check. An `Array[I.Item]` field
   where `I.Item = String` needs drop; a field where `I.Item = Int`
   does not. The drop-elaboration pass (tier-1 doc 04 §7) consumes
   the post-monomorphization types, so this just works — but only
   because M2 lands first. Sequencing matters.
 - **R-3:** the existing `DefKind::Trait { info }` path in
-  `resolve_type_path` (`resolve/mod.rs:2609`) turns a bare trait name
+  `resolve_type_path` (`resolve/mod.rs:2609`) turns a bare mixin name
   used as a type into a `Ty::TypeParam`. With projections, bare
-  `Iterator` as a type becomes `impl Iterator` or `dyn Iterator`; the
+  `Iterator` as a type becomes `some Iterator` or `any Iterator`; the
   resolver must no longer silently invent a type parameter. This is
   a blocking pre-cleanup for 01a.
 
@@ -625,16 +634,16 @@ See §6.2. Summary:
 
 ### 10.1 Positive tests
 
-- T1: declare `trait Iterator` with `type Item`; impl for `Vec[Int]`
-  binds `type Item = Int`; call `i.next` on `Vec[Int]::iter`; return
-  type is `Option[Int]`.
+- T1: declare `mixin Iterator` with `type Item`; an extension on
+  `Array[Int]` includes Iterator and binds `type Item = Int`; call
+  `i.next` on `Array[Int].iter`; return type is `Option[Int]`.
 - T2: generic function `def sum[I: Iterator[Item = Int]](...)` —
   monomorphizes, type-checks, runs.
-- T3: projection at use site: `fn first[I: Iterator](i: &mut I) -> Option[I.Item]`.
+- T3: projection at use site: `def first[I: Iterator](i: &mut I) -> Option[I.Item]`.
   Unification of the return at the call site with a concrete iterator
   yields the concrete item type.
-- T4: super-trait referring to sub-trait's `Self.Item`:
-  `trait DoubleEndedIterator: Iterator`; impl verifies `Self.Item`
+- T4: super-mixin referring to sub-mixin's `Self.Item`:
+  `mixin DoubleEndedIterator: Iterator`; impl verifies `Self.Item`
   matches the parent binding.
 - T5: equality-constraint sugar: `where I: Iterator[Item = String]`
   accepts iterators over `String`, rejects iterators over `&str`.
@@ -649,7 +658,7 @@ See §6.2. Summary:
   `Option[Int]` → E-ASSOC-METHOD-MISMATCH (reuses existing type error
   wording).
 - N3: `I.Item` where `I` is unconstrained → E-ASSOC-UNBOUND.
-- N4: two traits declare `Item`, projection is ambiguous → E-ASSOC-AMBIG
+- N4: two mixins declare `Item`, projection is ambiguous → E-ASSOC-AMBIG
   (suggest `<T as Iterator>.Item`).
 - N5: equality-constraint sugar references a name that is not an
   associated type of the bound → E-ASSOC-UNKNOWN.
@@ -660,7 +669,7 @@ See §6.2. Summary:
 
 ### 10.3 Fixture additions
 
-- `tests/fixtures/assoc_basic.rvn` — Iterator on Vec[Int].
+- `tests/fixtures/assoc_basic.rvn` — Iterator on Array[Int].
 - `tests/fixtures/assoc_generic.rvn` — generic function over
   `I: Iterator[Item = T]`.
 - `tests/fixtures/assoc_bound_chain.rvn` — IntoIterator with

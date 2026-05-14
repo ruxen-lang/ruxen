@@ -102,7 +102,7 @@ For each combinator + terminator:
       Verified: `HirExprKind::For` at `mir/lower.rs:2609` lowers
       ranges and Array-like collections directly via `riven_vec_len`
       / `riven_vec_get` (no mixin-method hop). Existing fixtures
-      `78_enum_in_vec.rvn` and `120_iter_each.rvn` exercise it.
+      `78_enum_in_array.rvn` and `120_iter_each.rvn` exercise it.
 - [x] CI green. `cargo test --test p05_e2e_check` reports `PASS=205`
       (was 203 before this batch); `cargo test --workspace` green
       single-threaded (the `runtime_safety` shared-tmp parallel flake

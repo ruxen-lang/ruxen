@@ -1,4 +1,4 @@
-# Spec — `std::env`
+# Spec — `std.env`
 
 **Source docs:**
 [docs/requirements/tier1_01_stdlib.md §4.6](../../requirements/tier1_01_stdlib.md),
@@ -6,14 +6,14 @@
 
 **Status:** shipped Phase 2 #06 (first batch, 2026-04).
 
-`std::env` exposes process-level environment access: command-line
+`std.env` exposes process-level environment access: command-line
 arguments, environment variables, and the working directory.
 
 ---
 
-## B1 — `args() -> Vec[String]`
+## B1 — `args() -> Array[String]`
 
-Returns the process's command-line argv as a `Vec[String]`.  Element 0
+Returns the process's command-line argv as an `Array[String]`.  Element 0
 is the program name; subsequent elements are user arguments.  Always
 non-empty (at least the program name is present).
 
@@ -22,18 +22,18 @@ non-empty (at least the program name is present).
 Looks up a single environment variable.
 
 **Given** an environment with `FOO=bar`
-**When** the program calls `env::var("FOO")`
-**Then** the result is `Result::Ok("bar")`.
+**When** the program calls `env.var("FOO")`
+**Then** the result is `Result.Ok("bar")`.
 
 **Given** the variable is unset
-**Then** the result is `Result::Err(VarError::NotPresent)`.
+**Then** the result is `Result.Err(VarError.NotPresent)`.
 
-## B3 — `vars() -> HashMap[String, String]`
+## B3 — `vars() -> Map[String, String]`
 
-Returns a snapshot of every environment variable as a `HashMap`.
+Returns a snapshot of every environment variable as a `Map`.
 
 **Given** an environment with at least one variable set
-**Then** `env::vars()` returns a non-empty map containing that key →
+**Then** `env.vars()` returns a non-empty map containing that key →
 value pair.
 
 **Snapshot semantics:** modifications to the OS environment after
@@ -45,11 +45,11 @@ Returns the process's current working directory as an absolute path
 string.
 
 **Given** the process started in any directory
-**When** the program calls `env::current_dir()`
-**Then** the result is `Result::Ok(path)` where `path` is a non-empty
+**When** the program calls `env.current_dir()`
+**Then** the result is `Result.Ok(path)` where `path` is a non-empty
 absolute path.
 
-`Result::Err` is reserved for the rare case where `getcwd(3)` fails
+`Result.Err` is reserved for the rare case where `getcwd(3)` fails
 (directory unlinked while the process is alive, permission errors).
 
 ---

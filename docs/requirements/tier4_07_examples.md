@@ -109,7 +109,7 @@ The doc 00 overview §"Recommended implementation order" lists three as the mini
 
 This doc adds:
 
-- **Single-threaded TCP echo** — ships earlier than the threaded server (tier 1.01 `std::net` only).
+- **Single-threaded TCP echo** — ships earlier than the threaded server (tier 1.01 `std.net` only).
 - **Game (Snake)** — demonstrates the package manager (depends on a hypothetical `termio` piece) + pattern matching + mutable state.
 
 ### 4.3 Example detail — `01-cli-utility` (word-count clone)
@@ -130,33 +130,33 @@ type = "binary"
 `src/main.rvn`:
 
 ```riven
-use std::env
-use std::fs
-use std::io::IoError
+use std.env
+use std.fs
+use std.io.IoError
 
 def main
-  let args = env::args()
+  let args = env.args
   if args.len < 2
     eputs "usage: wc <file>"
-    std::process::exit(1)
+    std.process.exit(1)
   end
 
   let path = args.get(1).unwrap!
-  match fs::read_to_string(&path)
+  match fs.read_to_string(&path)
     Ok(content)  -> count(&content)
-    Err(IoError::NotFound(p)) -> eputs "no such file: #{p}"
+    Err(IoError.NotFound(p)) -> eputs "no such file: #{p}"
     Err(err)     -> eputs "error: #{err}"
   end
 end
 
 def count(text: &str)
-  let mut lines = 0
-  let mut words = 0
-  let mut bytes = text.len
+  var lines = 0
+  var words = 0
+  var bytes = text.len
 
-  for line in text.lines()
+  for line in text.lines
     lines += 1
-    words += line.split_whitespace().count()
+    words += line.split_whitespace.count
   end
 
   puts "#{lines} #{words} #{bytes}"
@@ -165,13 +165,13 @@ end
 
 What it exercises:
 
-- `std::env::args`
-- `std::fs::read_to_string`
-- `std::io::IoError` pattern matching
+- `std.env.args`
+- `std.fs.read_to_string`
+- `std.io.IoError` pattern matching
 - Mutable locals
 - `for` over an iterator
-- String method chaining (`split_whitespace().count()`)
-- `std::process::exit`
+- String method chaining (`split_whitespace.count`)
+- `std.process.exit`
 
 Prerequisites:
 
@@ -182,23 +182,23 @@ Prerequisites:
 `src/main.rvn`:
 
 ```riven
-use std::net::TcpListener
-use std::io
+use std.net.TcpListener
+use std.io
 
 def main
-  let listener = TcpListener::bind("127.0.0.1:7878").unwrap!
+  let listener = TcpListener.bind("127.0.0.1:7878").unwrap!
   puts "listening on 127.0.0.1:7878"
 
-  for conn in listener.incoming()
+  for conn in listener.incoming
     match conn
-      Ok(mut stream) -> handle(&mut stream)
+      Ok(stream) -> handle(&mut stream)
       Err(e)     -> eputs "connection error: #{e}"
     end
   end
 end
 
 def handle(stream: &mut TcpStream)
-  let mut buf = [UInt8; 1024]
+  var buf: Array[UInt8] = Array.with_size(1024)
   loop
     match stream.read(&mut buf)
       Ok(0)  -> break                            # client closed
@@ -211,9 +211,9 @@ end
 
 What it exercises:
 
-- `std::net::TcpListener`, `TcpStream`.
+- `std.net.TcpListener`, `TcpStream`.
 - `Result` pattern matching with error arms.
-- Mutable slices / fixed-size arrays.
+- Mutable slices / arrays.
 - `.unwrap!` with the danger-suffix convention.
 
 Prerequisites:
@@ -222,11 +222,11 @@ Prerequisites:
 
 ### 4.5 Example detail — `03-threaded-http-server`
 
-Spawn-per-connection with an `Arc<Mutex<HitCounter>>` for request counting. Exercises:
+Spawn-per-connection with a `SharedSync[Mutex[HitCounter]]` for request counting. Exercises:
 
-- `std::thread::spawn`
-- `std::sync::{Arc, Mutex}`
-- `Send`/`Sync` auto-trait inference
+- `std.thread.spawn`
+- `std.sync.{SharedSync, Mutex}`
+- `Send`/`Sync` auto-mixin inference
 - Simple HTTP/1.1 parsing (hand-written)
 
 Prerequisites: tier 1 phase 2.
@@ -236,9 +236,9 @@ Prerequisites: tier 1 phase 2.
 Riven side (`src/main.rvn`):
 
 ```riven
-@[wasm_export("greet")]
-pub def greet(count: Int32) -> Int32
-  let mut total = 0
+def greet(count: Int32) -> Int32
+  wasm_export "greet"
+  var total = 0
   for i in 0..count
     total += i
   end
@@ -274,7 +274,7 @@ Prerequisites: tier 4.03 phase 3b.
 
 ### 4.7 Example detail — `05-snake-game`
 
-Classical terminal Snake. Grid, pattern-matching on input (`W`/`A`/`S`/`D`/`Q`), game state as a pair of `Vec<Point>` (snake body) + `Point` (food).
+Classical terminal Snake. Grid, pattern-matching on input (`W`/`A`/`S`/`D`/`Q`), game state as a pair of `Array[Point]` (snake body) + `Point` (food).
 
 Depends on a hypothetical `termio` piece (cursor positioning, nonblocking key read):
 
@@ -287,7 +287,7 @@ This is the single example that exercises the package manager's external-dep pat
 
 What it exercises:
 
-- Pattern matching on enums (`Direction::Up | Down | Left | Right`)
+- Pattern matching on enums (`Direction.Up | Down | Left | Right`)
 - Mutable state across a `loop`
 - Class definitions with methods
 - A cross-package dependency
@@ -296,7 +296,7 @@ Prerequisites: tier 1 phases 1a-1c for stdlib collections; doc 01 phase 1a works
 
 ### 4.8 Example detail — `06-embedded-qemu` (optional)
 
-Bare-metal cortex-m3 "blink" analog — writes a pattern to a QEMU UART. `@[no_std]`, `@[panic_handler]`, `@[global_allocator]` (or a no-alloc design).
+Bare-metal cortex-m3 "blink" analog — writes a pattern to a QEMU UART. Package-level `no_std` directive, body-level `panic_handler` directive, `global_allocator` directive (or a no-alloc design).
 
 Prerequisites: tier 4.04.
 
@@ -320,7 +320,7 @@ Curated, complete Riven projects. Each has its own `README.md` and `Riven.toml`;
 | # | Example | What it teaches | Prerequisites |
 |---|---------|-----------------|---------------|
 | 01 | [cli-utility](01-cli-utility/) | stdin, env, fs, error handling | stdlib 1b |
-| 02 | [tcp-echo-server](02-tcp-echo-server/) | std::net basics | stdlib 1c |
+| 02 | [tcp-echo-server](02-tcp-echo-server/) | std.net basics | stdlib 1c |
 | 03 | [threaded-http-server](03-threaded-http-server/) | threads + Arc<Mutex<T>> | concurrency |
 | 04 | [wasm-hello](04-wasm-hello/) | wasm32 target | tier-4 WASM |
 | 05 | [snake-game](05-snake-game/) | Git dependencies, terminal I/O | package-mgr |
@@ -417,7 +417,7 @@ Each example has its own `target/` directory (inside the example's folder, gitig
 ## 7. Interactions with Other Tiers
 
 - **Tier 1 stdlib (01).** Examples 01, 02, 03 exercise stdlib I/O, fs, env, net. `wc` (example 01) is the acceptance test for phase 1b's `fs::read_to_string`.
-- **Tier 1 concurrency (02).** Example 03 is the first place `Thread::spawn` + `Mutex<T>` + `Arc<T>` compose in a user program.
+- **Tier 1 concurrency (02).** Example 03 is the first place `Thread.spawn` + `Mutex[T]` + `SharedSync[T]` compose in a user program.
 - **Tier 1 async (03).** Example 07 tests the async/await pipeline end-to-end.
 - **Tier 4.01 package manager.** Example 05 tests git deps with a real (eventually registry-hosted) piece.
 - **Tier 4.02 cross-compilation.** No example targets a non-host triple directly; the `cross` CI job (doc 06) cross-compiles the compiler itself. Could optionally add an `examples/cross/` that demos building 01-cli-utility for aarch64-linux-gnu.
@@ -467,7 +467,7 @@ Each example has its own `target/` directory (inside the example's folder, gitig
 
 ### Phase 7f — `06-embedded-qemu` (1 week, after doc 04 phase 4d)
 
-1. `examples/06-embedded-qemu/` with `@[no_std]` + minimal `@[panic_handler]` + `@[global_allocator]` (or no-alloc design).
+1. `examples/06-embedded-qemu/` with package-level `no_std` + minimal `panic_handler` + `global_allocator` directives (or no-alloc design).
 2. A `memory.ld` linker script.
 3. `smoke.sh`: `riven build --target thumbv7em-none-eabihf` then `qemu-system-arm -M mps2-an386 -nographic -kernel target/…/example`; pipe stdout through `timeout 5`; grep the UART output for the expected string.
 4. CI entry.

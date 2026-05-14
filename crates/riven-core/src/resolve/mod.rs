@@ -5591,9 +5591,7 @@ impl Resolver {
 /// instantiation, with the original span — so users see a clear
 /// E0706 "predicate cannot be satisfied" rather than a silent
 /// no-op.
-fn lower_const_predicate(
-    pred: &ast::ConstPredicate,
-) -> crate::resolve::symbols::HirConstPredicate {
+fn lower_const_predicate(pred: &ast::ConstPredicate) -> crate::resolve::symbols::HirConstPredicate {
     use crate::resolve::symbols::{ConstPredOp, HirConstPredicate};
     let sentinel = || HirConstPredicate {
         lhs: crate::hir::types::ConstExpr::Lit(0),

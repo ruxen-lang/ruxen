@@ -6,7 +6,7 @@
 //! when a Vec API is misused at compile time, plus the runtime-panic
 //! behaviour for `v[i]` out-of-range.
 //!
-//! The harness mirrors `derive_negatives.rs` — drive the real lex →
+//! The harness mirrors `implicit_negatives.rs` — drive the real lex →
 //! parse → typecheck pipeline from a source string, and assert on the
 //! emitted diagnostic codes. The final OOB-panic test is integration-
 //! style: it compiles a fixture with the workspace `rivenc` and runs
@@ -65,7 +65,7 @@ end
 /// This is a positive runtime-behaviour test rather than a diagnostic
 /// test, but it pins the contract. Compiling the snippet succeeds; we
 /// just exercise typecheck here. The release-e2e fixture
-/// `408_vec_pop_empty.rvn` is the runtime half.
+/// `408_array_pop_empty.rvn` is the runtime half.
 #[test]
 fn vec_pop_returns_option_typechecks() {
     let source = r##"
@@ -137,7 +137,7 @@ end
 
 /// `Vec.dedup` (#03 batch 2) returns Unit and consumes consecutive
 /// duplicates in place. Pins the typeck entry — at runtime the e2e
-/// fixture `409_vec_dedup.rvn` exercises the actual semantics.
+/// fixture `409_array_dedup.rvn` exercises the actual semantics.
 #[test]
 fn vec_dedup_typechecks_as_unit() {
     let source = r##"
@@ -160,7 +160,7 @@ end
 /// `Vec.retain { |x| pred }` (#03 batch 2) takes a predicate closure
 /// and is inlined at the MIR layer. Pins the typeck contract: returns
 /// Unit, takes a closure with one arg whose body produces Bool. The
-/// runtime fixture `410_vec_retain.rvn` covers the lowering itself.
+/// runtime fixture `410_array_retain.rvn` covers the lowering itself.
 #[test]
 fn vec_retain_closure_typechecks() {
     let source = r##"

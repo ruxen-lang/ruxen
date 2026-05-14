@@ -85,9 +85,9 @@ cross-link rather than duplicate.
 - [std::net](stdlib/net.spec.md) — minimal TCP surface.
 - [std::iter (Iterator)](stdlib/iterator.spec.md) — pipeline +
   collect surface.
-- [HashMap](stdlib/hashmap.spec.md) — separate-chaining hash table.
-- [HashSet](stdlib/hashset.spec.md) — `HashMap[T, ()]` alias.
-- [Vec](stdlib/vec.spec.md) — growable contiguous array.
+- [Map](stdlib/map.spec.md) — separate-chaining hash table.
+- [Set](stdlib/set.spec.md) — `Map[T, ()]` alias.
+- [Array](stdlib/array.spec.md) — growable contiguous array.
 - [String / &str](stdlib/string.spec.md) — UTF-8 owned + borrowed
   string surface and ownership negatives.
 - [Option / Result](stdlib/option_result.spec.md) — tagged-enum
@@ -105,15 +105,15 @@ cross-link rather than duplicate.
 - [std::prelude](stdlib/prelude.spec.md) — auto-imported names
   available without a `use` statement.
 
-### Traits
+### Mixins
 
-- [derive `<Trait>`](traits/derive.spec.md) — Debug, Clone,
+- [Implicit includes](mixins/implicit_includes.spec.md) — Debug, Clone,
   PartialEq, Eq, Hash, Default, Ord, PartialOrd, Copy.
-- [Trait system](traits/system.spec.md) — declaration, impl-for,
-  default methods, inheritance, assoc types, `impl Trait`, `dyn
-  Trait`, multi-bound, `where`, static methods.
-- [Variance](traits/variance.spec.md) — invariance for `&mut T` /
-  `Vec[T]`; covariance for `Option[T]`.
+- [Mixin system](mixins/system.spec.md) — declaration, include-for,
+  default methods, inheritance, assoc types, `some Mixin`, `any
+  Mixin`, multi-bound, `where`, static methods.
+- [Variance](mixins/variance.spec.md) — invariance for `&mut T` /
+  `Array[T]`; covariance for `Option[T]`.
 
 ### Ownership
 

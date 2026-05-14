@@ -4,7 +4,7 @@ Status: Draft (requirements)
 Owner: compiler
 Depends on: monomorphization (M2 in overview); associated-type resolver
             improvements (doc 01 phase 01a) for parser reuse
-Blocks: nothing on the tier-1 critical path; unblocks `SmallVec`,
+Blocks: nothing on the tier-1 critical path; unblocks `SmallArray`,
         `Matrix[T, M, N]`, SIMD lane types, any fixed-size-buffer API
 
 ## 1. Summary & Motivation
@@ -29,12 +29,12 @@ The three pressure points:
    `Ty::Array(Box<Ty>, usize)` — the `usize` is extracted once at
    resolve time from an integer literal
    (`resolve/mod.rs:2470-2472`) and cannot vary across instantiations.
-   `SmallVec[T; N]` cannot be written.
+   `SmallArray[T; N]` cannot be written.
 2. **Type-level computation for fixed-size wrappers.** Matrix, vector,
    stack-allocated hashmap, bitset — all need `N` to flow from a user
    to a field type.
 3. **SIMD lane width.** Any vectorised stdlib API would pass the lane
-   width as a const generic (`fn sum[const N]([f32; N])`).
+   width as a const generic (`def sum[const N]([f32; N])`).
 
 Const generics are a well-known cliff. Rust shipped `min_const_generics`
 in 2021 (integer types, no expressions); the more general
@@ -137,7 +137,7 @@ new surface.**
   `NaN != NaN` breaks type equality. Riven follows suit.
 - **NG3.** `String` or `&str` const generics. Rust is moving toward
   this slowly; not in tier 2.
-- **NG4.** Const-generic type parameters: `fn foo[const T: Type]`.
+- **NG4.** Const-generic type parameters: `def foo[const T: Type]`.
   That's Scala's type functions, a separate feature.
 - **NG5.** Const-generic specialization. Picking a different impl
   based on `N == 0`. Out of scope (see doc 04 §9 on specialization
@@ -159,7 +159,7 @@ class Matrix[T, const M: USize, const N: USize]
   def init(@data: [[T; N]; M]) end
 end
 
-trait FixedBuffer[const CAP: USize]
+mixin FixedBuffer[const CAP: USize]
   def capacity -> USize { CAP }
 end
 
@@ -174,7 +174,7 @@ Rules:
 - Const parameters appear in the same brackets as type parameters,
   in any order. Canonical style: types first, consts after.
 - A const parameter may appear anywhere a const expression is
-  expected: array sizes `[T; N]`, other generic args `SmallVec[T, N]`,
+  expected: array sizes `[T; N]`, other generic args `SmallArray[T, N]`,
   method bodies (`N` is in scope as a `USize` constant).
 
 ### 4.2 Instantiation
@@ -198,18 +198,18 @@ Rules:
 ### 4.3 In signatures
 
 ```riven
-struct SmallVec[T, const N: USize]
+struct SmallArray[T, const N: USize]
   data: [T; N]
   len: USize
 end
 
-impl[T, const N: USize] SmallVec[T, N]
+extension SmallArray[T, const N: USize]
   def init
     self.data = [T.default; N]
     self.len = 0
   end
 
-  def push(item: T) -> Result[Unit, T]
+  def mut push(item: T) -> Result[Unit, T]
     if self.len == N
       return Err(item)
     end
@@ -456,7 +456,7 @@ The mangler (part of M2) must include const args in its output:
 
 ### 7.1 With associated types (doc 01)
 
-None directly. A trait with a const generic and an associated type is
+None directly. A mixin with a const generic and an associated type is
 legal; the two live in separate namespaces
 (`TraitInfo.generic_params` gains `Const` entries; `assoc_types`
 unchanged).
@@ -466,11 +466,11 @@ unchanged).
 Const generics on a GAT are legal but unmotivated by any concrete use
 case. Permit them syntactically; no special-case logic.
 
-### 7.3 With trait objects (doc 06)
+### 7.3 With mixin existentials (doc 06)
 
-`dyn Trait[const N: USize]` requires `N` to be bound at the
-use site, same as associated types (doc 06 §4). `dyn FixedBuffer[4]`
-is object-safe; bare `dyn FixedBuffer` is not (the vtable would need
+`any Mixin[const N: USize]` requires `N` to be bound at the
+use site, same as associated types (doc 06 §4). `any FixedBuffer[4]`
+is object-safe; bare `any FixedBuffer` is not (the vtable would need
 to include the constant, which makes no sense — the constant is not
 a runtime value).
 
@@ -488,11 +488,11 @@ No interaction. Const parameters have no lifetime component.
 
 ### 7.6 With specialization (doc 04 §9)
 
-If specialization ships: `impl SmallVec[T, 0]` could override the
-generic `impl[const N] SmallVec[T, N]` for the zero case. This is a
+If specialization ships: an `extension SmallArray[T, 0]` could override
+the generic `extension SmallArray[T, const N: USize]` for the zero case. This is a
 legitimate use and is the single motivation for specialization plus
 const generics. However, see doc 04 §9 recommendation to defer
-specialization; without it, users write a separate type `EmptySmallVec`.
+specialization; without it, users write a separate type `EmptySmallArray`.
 
 ## 8. Phasing
 
@@ -523,9 +523,9 @@ See §6.2.
   Recommendation: overflow-check everything; reject wraparound at
   monomorphization time.
 - **OQ-6: default const params.** Left out per NG6. Revisit if stdlib
-  wants `SmallVec[T]` to default to `N = 8`.
+  wants `SmallArray[T]` to default to `N = 8`.
 - **R-1: test matrix explosion.** Each const instantiation is a new
-  monomorphization; a `Vec[Matrix[Float, M, N]]` with varying M, N
+  monomorphization; a `Array[Matrix[Float, M, N]]` with varying M, N
   multiplies compile cost linearly. Mitigation: document in the
   style guide that const generics should be used sparingly for
   hot-loop types, and never on public API where users can pick
@@ -547,14 +547,14 @@ See §6.2.
 
 - T1: `struct Vector[T, const N: USize]` with `data: [T; N]`.
   Instantiate as `Vector[Int, 3]`; verify layout = 24 bytes (3 × 8).
-- T2: generic function `fn sum[const N: USize](arr: &[Int; N]) -> Int`
+- T2: generic function `def sum[const N: USize](arr: &[Int; N]) -> Int`
   called with `&[1, 2, 3]` (N inferred from context, or explicit).
-- T3: `SmallVec[T, N].push` errors when `self.len == N`.
+- T3: `SmallArray[T, N].push` errors when `self.len == N`.
 - T4: monomorphization: `Vector[Int, 3]` and `Vector[Int, 4]` are
   distinct types; assignment between them fails.
 - T5 (02b): `[T; A + B]` in `concat[A, B]`. Call with `A = 2, B = 3`;
   return type `[T; 5]`.
-- T6 (02b): `where N > 0` on `fn head[T, const N: USize](arr: &[T; N]) -> &T`.
+- T6 (02b): `where N > 0` on `def head[T, const N: USize](arr: &[T; N]) -> &T`.
   Call with `N = 0` → E-CONST-WHERE-FALSE.
 
 ### 10.2 Negative tests
@@ -573,7 +573,7 @@ See §6.2.
 
 ### 10.3 Fixture additions
 
-- `tests/fixtures/const_basic.rvn` — SmallVec with fixed capacity.
+- `tests/fixtures/const_basic.rvn` — SmallArray with fixed capacity.
 - `tests/fixtures/const_matrix.rvn` — Matrix[T, M, N] with transpose.
 - `tests/fixtures/const_inference.rvn` — array size inferred from
   literal argument.
