@@ -8,6 +8,24 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- Phase 3 #07.S8.S2: source-level arithmetic in `[T; <expr>]`
+  array-size positions.  The parser already accepted any expression
+  in that slot via `parse_expression`; resolve now folds
+  `BinaryOp { op: Add | Sub | Mul | Div, ... }` recursively into
+  `ConstExpr::Op` trees rather than collapsing them to
+  `ConstExpr::Error`.  `Identifier(name)` legs preserve as
+  `ConstExpr::Param` (S3 wiring) so `[T; N + 1]` works inside a
+  `const N: USize` parameter scope.  Other binary ops (`%`,
+  comparisons, `&&`, bit / shift ops) still fall through to
+  `ConstExpr::Error`, surfacing as `ConstEvalError::Malformed` if
+  evaluated — the spec reserves `+ - * /` for v1 const generics.
+  Pin tests in `const_generics.rs`: parse/resolve of `[Int; 2+3]`,
+  every operator individually with eval round-trip, paren grouping
+  vs. operator precedence (`(2+3)*4 = 20` vs `2 + 3*4 = 14`), const
+  param reference inside arithmetic (`[T; N + 1]`), and the `%`
+  fallback path.  Const-arg position (`Vector[Int, 2 + 3]`) is the
+  S8.S3 follow-up — `parse_generic_arg` still only accepts a bare
+  integer literal.
 - Phase 3 #07.S8.S1: `ConstExpr::eval` now implements the `Op` branch
   for `+ - * /` against `u64` bindings.  Inner sub-trees are recursed
   on first, so unresolved-param / parser-recovery errors propagate

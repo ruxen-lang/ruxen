@@ -780,3 +780,183 @@ fn array_layout_evaluates_const_expr_arithmetic() {
     assert_eq!(layout.size, 32);
     assert_eq!(layout.alignment, 8);
 }
+
+// ── Stage 8.S2: source-level arithmetic in `[T; expr]` array sizes ──
+//
+// The parser already accepts arbitrary expressions inside the
+// array-size slot (it calls `parse_expression`); S8.S2 wires resolve
+// to fold `+ - * /` into `ConstExpr::Op` trees rather than collapsing
+// them to `ConstExpr::Error`.  These tests exercise the full
+// parse-→-resolve pipeline so a regression on either side is caught.
+
+fn resolve_first_struct_field_ty(
+    src: &str,
+    struct_name: &str,
+) -> riven_core::hir::types::Ty {
+    use riven_core::hir::nodes::HirItem;
+    let mut lx = riven_core::lexer::Lexer::new(src);
+    let toks = lx.tokenize().expect("lex");
+    let mut p = riven_core::parser::Parser::new(toks);
+    let prog = p.parse().expect("parse");
+    let result = riven_core::typeck::type_check(&prog);
+    for item in &result.program.items {
+        if let HirItem::Struct(s) = item {
+            if s.name == struct_name {
+                return s.fields[0].ty.clone();
+            }
+        }
+    }
+    panic!("no struct {} in source", struct_name);
+}
+
+#[test]
+fn resolve_array_size_lowers_binary_add_to_const_op() {
+    use riven_core::hir::types::{ConstExpr, ConstOp, Ty};
+
+    let src = r#"
+struct Buf
+  data: [Int; 2 + 3]
+end
+"#;
+    let ty = resolve_first_struct_field_ty(src, "Buf");
+    match ty {
+        Ty::Array(elem, size) => {
+            assert!(matches!(*elem, Ty::Int));
+            match size {
+                ConstExpr::Op(a, ConstOp::Add, b) => {
+                    assert_eq!(*a, ConstExpr::Lit(2));
+                    assert_eq!(*b, ConstExpr::Lit(3));
+                }
+                other => panic!("expected ConstExpr::Op(_, Add, _), got {:?}", other),
+            }
+        }
+        other => panic!("expected Ty::Array, got {:?}", other),
+    }
+}
+
+#[test]
+fn resolve_array_size_lowers_all_four_operators() {
+    use riven_core::hir::types::{ConstExpr, ConstOp, Ty};
+    let cases = [
+        ("2 + 3", ConstOp::Add, 5),
+        ("7 - 3", ConstOp::Sub, 4),
+        ("4 * 5", ConstOp::Mul, 20),
+        ("12 / 3", ConstOp::Div, 4),
+    ];
+    for (expr_text, expected_op, expected_eval) in cases {
+        let src = format!(
+            "struct Buf\n  data: [Int; {}]\nend\n",
+            expr_text
+        );
+        let ty = resolve_first_struct_field_ty(&src, "Buf");
+        match ty {
+            Ty::Array(_, size) => {
+                match &size {
+                    ConstExpr::Op(_, got_op, _) => {
+                        assert_eq!(*got_op, expected_op, "wrong op for {}", expr_text);
+                    }
+                    other => panic!("expected Op for `{}`, got {:?}", expr_text, other),
+                }
+                let bindings = std::collections::HashMap::new();
+                assert_eq!(size.eval(&bindings), Ok(expected_eval), "wrong eval for {}", expr_text);
+            }
+            other => panic!("expected Ty::Array for `{}`, got {:?}", expr_text, other),
+        }
+    }
+}
+
+#[test]
+fn resolve_array_size_lowers_nested_arithmetic() {
+    use riven_core::hir::types::{ConstExpr, ConstOp, Ty};
+
+    // (2 + 3) * 4 — parser binds * tighter than + by precedence, so
+    // the user-written grouping here is the only way to get
+    // (2 + 3) * 4 = 20.  Without parens, `2 + 3 * 4` parses as
+    // 2 + (3 * 4) = 14.
+    let src = r#"
+struct WithParens
+  data: [Int; (2 + 3) * 4]
+end
+
+struct NoParens
+  data: [Int; 2 + 3 * 4]
+end
+"#;
+    let with_parens = resolve_first_struct_field_ty(src, "WithParens");
+    let no_parens = resolve_first_struct_field_ty(src, "NoParens");
+    let bindings = std::collections::HashMap::new();
+
+    match with_parens {
+        Ty::Array(_, size) => {
+            // Root op is the outer * with an inner Add on the left.
+            match &size {
+                ConstExpr::Op(_, ConstOp::Mul, _) => {}
+                other => panic!("expected outer Mul, got {:?}", other),
+            }
+            assert_eq!(size.eval(&bindings), Ok(20));
+        }
+        other => panic!("expected Ty::Array, got {:?}", other),
+    }
+    match no_parens {
+        Ty::Array(_, size) => {
+            // Root op is Add with a nested Mul on the right.
+            match &size {
+                ConstExpr::Op(_, ConstOp::Add, _) => {}
+                other => panic!("expected outer Add, got {:?}", other),
+            }
+            assert_eq!(size.eval(&bindings), Ok(14));
+        }
+        other => panic!("expected Ty::Array, got {:?}", other),
+    }
+}
+
+#[test]
+fn resolve_array_size_lowers_param_reference_in_arithmetic() {
+    // `[Int; N + 1]` where N is an in-scope const param.  The S3
+    // resolver already lowers a bare `Identifier(name)` to
+    // `ConstExpr::Param(name)`; S8.S2 just preserves that under the
+    // arithmetic recursion.
+    use riven_core::hir::types::{ConstExpr, ConstOp, Ty};
+
+    let src = r#"
+struct Vector[T, const N: USize]
+  data: [T; N + 1]
+end
+"#;
+    let ty = resolve_first_struct_field_ty(src, "Vector");
+    match ty {
+        Ty::Array(_, size) => match size {
+            ConstExpr::Op(a, ConstOp::Add, b) => {
+                assert_eq!(*a, ConstExpr::Param("N".to_string()));
+                assert_eq!(*b, ConstExpr::Lit(1));
+            }
+            other => panic!("expected Op(Param(N), Add, Lit(1)), got {:?}", other),
+        },
+        other => panic!("expected Ty::Array, got {:?}", other),
+    }
+}
+
+#[test]
+fn resolve_array_size_unsupported_op_becomes_error() {
+    // `%` is not in the S8 arithmetic set (spec §B8 lists only
+    // `+ - * /`).  The resolver folds it into `ConstExpr::Error`
+    // rather than silently treating it as another op, so the
+    // downstream eval path surfaces a Malformed error rather than
+    // a wrong value.
+    use riven_core::hir::types::{ConstEvalError, ConstExpr, Ty};
+
+    let src = r#"
+struct Buf
+  data: [Int; 5 % 2]
+end
+"#;
+    let ty = resolve_first_struct_field_ty(src, "Buf");
+    match ty {
+        Ty::Array(_, size) => {
+            assert_eq!(size, ConstExpr::Error);
+            let bindings = std::collections::HashMap::new();
+            assert_eq!(size.eval(&bindings), Err(ConstEvalError::Malformed));
+        }
+        other => panic!("expected Ty::Array, got {:?}", other),
+    }
+}

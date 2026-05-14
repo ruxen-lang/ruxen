@@ -4591,19 +4591,9 @@ impl Resolver {
                 if let Some(size_expr) = size {
                     // Fixed-size array [T; N].  T2.02 stage 4: the
                     // size is captured as a `ConstExpr` rather than
-                    // a bare `usize`.  Stage 8 will add arithmetic
-                    // support; today only integer literals and
-                    // bare-identifier const-param references are
-                    // recognised.
-                    let n = match &size_expr.kind {
-                        ast::ExprKind::IntLiteral(v, _) => {
-                            crate::hir::types::ConstExpr::Lit(*v as u64)
-                        }
-                        ast::ExprKind::Identifier(name) => {
-                            crate::hir::types::ConstExpr::Param(name.clone())
-                        }
-                        _ => crate::hir::types::ConstExpr::Error,
-                    };
+                    // a bare `usize`.  T2.02 stage 8: `+ - * /` and
+                    // parens fold into `ConstExpr::Op` trees.
+                    let n = lower_const_expr_from_expr(size_expr);
                     Ty::Array(Box::new(elem_ty), n)
                 } else {
                     // Slice [T] — treat as Vec for now
@@ -5255,6 +5245,45 @@ impl Resolver {
 /// for E0615 but is rooted at the *type-construction* site so that any
 /// `HashMap[K, V]` / `HashSet[T]` whose K/T is non-Hash is caught at
 /// resolve time, not just when a user tries to derive Hash on a field.
+/// T2.02 S8: fold a parser `Expr` appearing in a `[T; <expr>]`
+/// array-size slot into a HIR `ConstExpr`.
+///
+/// Accepted forms (per `docs/specs/types/const-generics.spec.md` §B8):
+/// - `IntLiteral(v, _)` → `ConstExpr::Lit(v)`.
+/// - `Identifier(name)` → `ConstExpr::Param(name)`.
+/// - `BinaryOp { left, op: + | - | * | /, right }` → recurse on
+///   both sides and build a `ConstExpr::Op`.  Non-arithmetic ops
+///   (`%`, comparisons, `&&`, bit ops, shifts) fall through to
+///   `ConstExpr::Error`; S9 may admit a wider set for where-clause
+///   predicates.
+/// - Anything else (calls, field access, ...) → `ConstExpr::Error`.
+///
+/// The returned `Error` propagates through `eval` as
+/// `ConstEvalError::Malformed`; the call site decides whether to
+/// downgrade to a layout-zero placeholder or emit a hard diagnostic.
+fn lower_const_expr_from_expr(expr: &ast::Expr) -> crate::hir::types::ConstExpr {
+    use crate::hir::types::{ConstExpr, ConstOp};
+    match &expr.kind {
+        ast::ExprKind::IntLiteral(v, _) => ConstExpr::Lit(*v as u64),
+        ast::ExprKind::Identifier(name) => ConstExpr::Param(name.clone()),
+        ast::ExprKind::BinaryOp { left, op, right } => {
+            let const_op = match op {
+                ast::BinOp::Add => ConstOp::Add,
+                ast::BinOp::Sub => ConstOp::Sub,
+                ast::BinOp::Mul => ConstOp::Mul,
+                ast::BinOp::Div => ConstOp::Div,
+                _ => return ConstExpr::Error,
+            };
+            ConstExpr::Op(
+                Box::new(lower_const_expr_from_expr(left)),
+                const_op,
+                Box::new(lower_const_expr_from_expr(right)),
+            )
+        }
+        _ => ConstExpr::Error,
+    }
+}
+
 fn ty_is_valid_hash_key(ty: &Ty, symbols: &crate::resolve::symbols::SymbolTable) -> bool {
     use crate::resolve::symbols::ty_has_derive_trait;
     if ty.is_integer() || ty.is_float() {
