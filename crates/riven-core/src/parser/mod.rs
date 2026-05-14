@@ -1548,9 +1548,20 @@ impl Parser {
                 TokenKind::Impl => {
                     inner_impls.push(self.parse_inner_impl(false));
                 }
+                TokenKind::Include => {
+                    // `include Mixin` directive — declares mixin participation
+                    // without nesting methods. Required methods are provided
+                    // by class methods at the same body level; default methods
+                    // are synthesized in the resolver.
+                    inner_impls.push(self.parse_include_directive(false));
+                }
                 TokenKind::Unsafe if matches!(self.peek_kind(), TokenKind::Impl) => {
                     self.advance(); // consume `unsafe`
                     inner_impls.push(self.parse_inner_impl(true));
+                }
+                TokenKind::Unsafe if matches!(self.peek_kind(), TokenKind::Include) => {
+                    self.advance(); // consume `unsafe`
+                    inner_impls.push(self.parse_include_directive(true));
                 }
                 TokenKind::Async => {
                     methods.push(self.parse_func_def(Visibility::Private));
@@ -1637,6 +1648,24 @@ impl Parser {
             negative_trait,
             trait_name,
             items,
+            span,
+        }
+    }
+
+    /// Parse an `include Mixin` directive inside a class body. Produces an
+    /// InnerImpl with no items — the contract is satisfied by methods
+    /// scattered at the class-body level (resolver/typecker enforce).
+    fn parse_include_directive(&mut self, is_unsafe: bool) -> InnerImpl {
+        let start = self.current_span();
+        self.advance(); // consume `include`
+        let negative_trait = self.eat(TokenKind::Bang);
+        let trait_name = self.parse_type_path();
+        let span = self.span_from(&start);
+        InnerImpl {
+            is_unsafe,
+            negative_trait,
+            trait_name,
+            items: Vec::new(),
             span,
         }
     }
