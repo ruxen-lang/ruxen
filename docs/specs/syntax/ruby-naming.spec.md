@@ -917,6 +917,9 @@ mention of the prior forms.
 | `Rc[T]`                             | `Shared[T]`                                               |
 | `Arc[T]`                            | `SharedSync[T]`                                           |
 | `vec![...]` macro                   | `array![...]`                                             |
+| `hash!{...}` macro                  | `map!{...}` (and `set!{...}` for the `Set` analogue)      |
+| `::` path separator                 | `.` everywhere (`std.io`, `Color.Red`, `package.utils`)   |
+| `extern "C" ... end` with no link name | `lib "c" ... end`                                      |
 | tutorial language `&self` / `&mut self` | "reading method" / "mutating method"                  |
 
 ## 11. Implementation handoff
