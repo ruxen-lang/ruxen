@@ -1369,6 +1369,172 @@ end
     assert_eq!(unwrap_class(lhs), unwrap_class(rhs), "4 * 1 must normalise to 4");
 }
 
+// ── Stage 9 parser cut: where-clause const predicates ───────────────
+//
+// B9 (S9 parser-only cut): the parser now accepts const predicates in
+// `where` clauses (`where N > 0`, `where N == M`, `where N + M == 8`)
+// and stores them on `WhereClause::const_predicates` as raw parser
+// `Expr` trees.  Trait bounds (`T: SomeTrait`) keep landing on
+// `WhereClause::predicates`, so existing consumers are unaffected.
+//
+// Enforcement (per-instantiation eval + `E-CONST-WHERE-FALSE`
+// diagnostic) is deferred to the deeper S7 binding-threading
+// follow-up.  These pins only verify the parse + AST round-trip.
+
+#[test]
+fn parse_where_clause_const_predicate_n_gt_zero() {
+    use riven_core::parser::ast::{ExprKind, BinOp, TopLevelItem};
+    let src = r#"
+def take_pos[const N: USize](x: Int) -> Int
+where N > 0
+  x
+end
+"#;
+    let prog = parse(src);
+    let func = prog
+        .items
+        .iter()
+        .find_map(|i| match i {
+            TopLevelItem::Function(f) if f.name == "take_pos" => Some(f),
+            _ => None,
+        })
+        .expect("no take_pos function");
+    let wc = func
+        .where_clause
+        .as_ref()
+        .expect("where clause present");
+    assert!(
+        wc.predicates.is_empty(),
+        "no trait-bound predicates expected; got: {:?}",
+        wc.predicates
+    );
+    assert_eq!(wc.const_predicates.len(), 1, "one const predicate expected");
+    let expr = &wc.const_predicates[0].expr;
+    match &expr.kind {
+        ExprKind::BinaryOp { left, op, right } => {
+            assert_eq!(*op, BinOp::Gt);
+            assert!(matches!(left.as_ref().kind, ExprKind::Identifier(ref n) if n == "N"));
+            assert!(matches!(right.as_ref().kind, ExprKind::IntLiteral(0, _)));
+        }
+        other => panic!("expected BinaryOp(N, Gt, 0); got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_where_clause_const_predicate_n_eq_m() {
+    use riven_core::parser::ast::{ExprKind, BinOp, TopLevelItem};
+    let src = r#"
+def pair[const N: USize, const M: USize](x: Int) -> Int
+where N == M
+  x
+end
+"#;
+    let prog = parse(src);
+    let func = prog
+        .items
+        .iter()
+        .find_map(|i| match i {
+            TopLevelItem::Function(f) if f.name == "pair" => Some(f),
+            _ => None,
+        })
+        .expect("no pair function");
+    let wc = func.where_clause.as_ref().expect("where clause present");
+    assert_eq!(wc.const_predicates.len(), 1);
+    match &wc.const_predicates[0].expr.kind {
+        ExprKind::BinaryOp { op, .. } => assert_eq!(*op, BinOp::Eq),
+        other => panic!("expected BinaryOp(_, Eq, _); got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_where_clause_const_predicate_arithmetic_eq() {
+    // `where N + M == 8` — the LHS itself is arithmetic; trigger
+    // peek sees `+` after `N`.  Full expression is captured.
+    use riven_core::parser::ast::{ExprKind, BinOp, TopLevelItem};
+    let src = r#"
+def fixed[const N: USize, const M: USize](x: Int) -> Int
+where N + M == 8
+  x
+end
+"#;
+    let prog = parse(src);
+    let func = prog
+        .items
+        .iter()
+        .find_map(|i| match i {
+            TopLevelItem::Function(f) if f.name == "fixed" => Some(f),
+            _ => None,
+        })
+        .expect("no fixed function");
+    let wc = func.where_clause.as_ref().expect("where clause present");
+    assert_eq!(wc.const_predicates.len(), 1);
+    // Top of the tree should be the comparison.
+    match &wc.const_predicates[0].expr.kind {
+        ExprKind::BinaryOp { left, op, right } => {
+            assert_eq!(*op, BinOp::Eq, "root op must be ==");
+            // LHS itself is N + M
+            match &left.as_ref().kind {
+                ExprKind::BinaryOp { op: inner_op, .. } => {
+                    assert_eq!(*inner_op, BinOp::Add, "inner op must be +");
+                }
+                other => panic!("expected inner BinaryOp(Add); got {:?}", other),
+            }
+            assert!(matches!(right.as_ref().kind, ExprKind::IntLiteral(8, _)));
+        }
+        other => panic!("expected root BinaryOp(_, Eq, _); got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_where_clause_mixed_trait_bound_and_const_predicate() {
+    // `where T: Display, N > 0` — both forms in one clause; each
+    // ends up on the correct list.
+    use riven_core::parser::ast::TopLevelItem;
+    let src = r#"
+def shown[T, const N: USize](x: T) -> Int
+where T: Display, N > 0
+  0
+end
+"#;
+    let prog = parse(src);
+    let func = prog
+        .items
+        .iter()
+        .find_map(|i| match i {
+            TopLevelItem::Function(f) if f.name == "shown" => Some(f),
+            _ => None,
+        })
+        .expect("no shown function");
+    let wc = func.where_clause.as_ref().expect("where clause present");
+    assert_eq!(wc.predicates.len(), 1, "one trait-bound predicate");
+    assert_eq!(wc.const_predicates.len(), 1, "one const predicate");
+}
+
+#[test]
+fn parse_where_clause_trait_bound_alone_still_works() {
+    // No regression on the historic shape: `where T: Trait` produces
+    // a single predicate and zero const_predicates.
+    use riven_core::parser::ast::TopLevelItem;
+    let src = r#"
+def show[T](x: T) -> Int
+where T: Display
+  0
+end
+"#;
+    let prog = parse(src);
+    let func = prog
+        .items
+        .iter()
+        .find_map(|i| match i {
+            TopLevelItem::Function(f) if f.name == "show" => Some(f),
+            _ => None,
+        })
+        .expect("no show function");
+    let wc = func.where_clause.as_ref().expect("where clause present");
+    assert_eq!(wc.predicates.len(), 1);
+    assert!(wc.const_predicates.is_empty());
+}
+
 // ── Stage 1 follow-up: E0705 const-param bad type ───────────────────
 //
 // Spec §B8 (E-CONST-BAD-TYPE / E0705): a `const N: TY` parameter's

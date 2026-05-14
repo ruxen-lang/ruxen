@@ -163,6 +163,12 @@ pub enum GenericParam {
 #[derive(Debug, Clone, PartialEq)]
 pub struct WhereClause {
     pub predicates: Vec<WherePredicate>,
+    /// Tier-2 const generics (T2.02 §B9 / S9 parser cut):
+    /// `where N > 0`, `where N == M`, `where N + M == 8`.
+    /// Parser captures these as full expressions; enforcement (per-
+    /// instantiation eval + `E-CONST-WHERE-FALSE` diagnostic) lands
+    /// with the deeper S7 binding-threading follow-up.
+    pub const_predicates: Vec<ConstPredicate>,
     pub span: Span,
 }
 
@@ -170,6 +176,24 @@ pub struct WhereClause {
 pub struct WherePredicate {
     pub type_expr: TypeExpr,
     pub bounds: Vec<TraitBound>,
+    pub span: Span,
+}
+
+/// Tier-2 const generics (T2.02 §B9 / S9 parser cut): a const-level
+/// predicate in a `where` clause.  Triggered when a where-clause
+/// item starts with `Identifier op …` where the op is a comparison
+/// (`> < >= <= == !=`) or arithmetic (`+ - * /`) — distinct from the
+/// trait-bound form (`Identifier : TraitName`).
+///
+/// The captured expression is the raw parser `Expr`; resolve will
+/// lower the comparison + arithmetic into a HIR predicate (S9 work)
+/// and monomorphization will evaluate it per instantiation.  Today
+/// this is parser-only and is silently dropped by downstream
+/// passes — the AST round-trips correctly so the syntax can be
+/// reviewed in source before the runtime story lands.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConstPredicate {
+    pub expr: Box<Expr>,
     pub span: Span,
 }
 

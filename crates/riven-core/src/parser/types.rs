@@ -543,17 +543,19 @@ impl Parser {
         TraitBound { path, span }
     }
 
-    /// Parse where clause: where T: Trait, U: Trait
+    /// Parse where clause: `where T: Trait, U: Trait`, and (T2.02 S9
+    /// parser cut) const predicates `where N > 0, N == M, N + M == 8`.
     pub(crate) fn parse_where_clause(&mut self) -> WhereClause {
         let start = self.current_span();
         self.expect(TokenKind::Where);
         self.skip_newlines();
 
         let mut predicates = Vec::new();
-        predicates.push(self.parse_where_predicate());
+        let mut const_predicates = Vec::new();
+        self.parse_where_item(&mut predicates, &mut const_predicates);
         while self.eat(TokenKind::Comma) {
             self.skip_newlines();
-            // Stop if we hit something that's not a type
+            // Stop if we hit something that's not a where item
             if self.at(TokenKind::Newline)
                 || self.at(TokenKind::Eof)
                 || self.at(TokenKind::LBrace)
@@ -561,11 +563,58 @@ impl Parser {
             {
                 break;
             }
-            predicates.push(self.parse_where_predicate());
+            self.parse_where_item(&mut predicates, &mut const_predicates);
         }
 
         let span = self.span_from(&start);
-        WhereClause { predicates, span }
+        WhereClause {
+            predicates,
+            const_predicates,
+            span,
+        }
+    }
+
+    /// Decide whether the next where-clause item is a trait bound
+    /// (`T: TraitName`) or a const predicate (`N > 0`, `N + M == 8`).
+    ///
+    /// Heuristic: peek one token past the leading identifier.  If it
+    /// is a comparison op (`> < >= <= == !=`) or an arithmetic op
+    /// (`+ - * /`), parse as a const predicate.  Otherwise fall back
+    /// to the trait-bound path (which expects `:`).  This correctly
+    /// disambiguates every spec §B9 shape without needing to
+    /// speculatively parse a full expression and backtrack.
+    fn parse_where_item(
+        &mut self,
+        predicates: &mut Vec<WherePredicate>,
+        const_predicates: &mut Vec<ConstPredicate>,
+    ) {
+        // Lookahead: the second token must be a comparison or
+        // arithmetic op for this to be a const predicate.  Anything
+        // else (notably `:`) falls through to the trait-bound path.
+        let is_const_pred = matches!(
+            self.peek_at_kind(1),
+            TokenKind::Lt
+                | TokenKind::Gt
+                | TokenKind::LtEq
+                | TokenKind::GtEq
+                | TokenKind::EqEq
+                | TokenKind::NotEq
+                | TokenKind::Plus
+                | TokenKind::Minus
+                | TokenKind::Star
+                | TokenKind::Slash
+        );
+        if is_const_pred {
+            let start = self.current_span();
+            let expr = self.parse_expression();
+            let span = self.span_from(&start);
+            const_predicates.push(ConstPredicate {
+                expr: Box::new(expr),
+                span,
+            });
+        } else {
+            predicates.push(self.parse_where_predicate());
+        }
     }
 
     fn parse_where_predicate(&mut self) -> WherePredicate {

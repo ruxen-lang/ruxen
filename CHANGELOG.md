@@ -8,6 +8,37 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- Phase 3 #07.S9 parser cut: `where`-clause const predicates.  The
+  parser now accepts `where N > 0`, `where N == M`,
+  `where N + M == 8` (and any mix of `> < >= <= == !=` comparisons +
+  `+ - * /` arithmetic) on const-generic functions / types.  Each
+  predicate is captured as a raw parser `Expr` on the new
+  `WhereClause::const_predicates: Vec<ConstPredicate>` field;
+  existing `WhereClause::predicates` (trait bounds) is untouched, so
+  existing consumers see no shape change.
+
+  Disambiguation: a one-token lookahead past the leading identifier
+  picks the path.  If the next token is a comparison or arithmetic
+  op, parse as a const predicate; otherwise fall through to the
+  historic trait-bound parser (which expects `:`).  Mixed clauses
+  (`where T: Display, N > 0`) split correctly into the two lists.
+
+  Spec stage map S9 entry updated to "in flight" with the parser-
+  cut commit; per-instantiation enforcement +
+  `E-CONST-WHERE-FALSE` diagnostic remain pending the deeper S7
+  binding-threading work.
+
+  Pin tests in `const_generics.rs`:
+  `parse_where_clause_const_predicate_n_gt_zero`,
+  `parse_where_clause_const_predicate_n_eq_m`,
+  `parse_where_clause_const_predicate_arithmetic_eq`
+  (`N + M == 8` — verifies the LHS itself is an arithmetic tree),
+  `parse_where_clause_mixed_trait_bound_and_const_predicate`
+  (both forms in one clause split correctly),
+  `parse_where_clause_trait_bound_alone_still_works` (regression
+  gate for the historic shape).
+
+### Added
 - E2E harness supports a `RIVEN_E2E_CASES` env-var case filter for
   selective runs.  Comma-separated case stems (filenames without
   `.rvn`); absent var preserves the existing behaviour (full
