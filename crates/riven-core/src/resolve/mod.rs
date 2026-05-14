@@ -644,11 +644,7 @@ impl Resolver {
             // (`tcp_accept`, `tcp_read`, …) return EINTR / `-1` when
             // the signal lands mid-call so cooperative loops can
             // notice and break.  No SIGTERM / SIGHUP coverage in v1.
-            (
-                "signal_install_sigint",
-                vec![],
-                Ty::Unit,
-            ),
+            ("signal_install_sigint", vec![], Ty::Unit),
             (
                 // Returns Int (0 or 1) for safe codegen — the
                 // underlying C helper returns `int64_t`.  Callers

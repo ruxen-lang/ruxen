@@ -24,6 +24,25 @@ pub fn build(release: bool, locked: bool, bin_name: Option<&str>) -> Result<(), 
     let manifest = Manifest::load(&project_dir)?;
     manifest.validate()?;
 
+    // Advisory: dev-dependencies are parsed + survive `riven add --dev`
+    // / `riven remove`, but `riven build` does not yet compile them
+    // (no test runner consumer exists in v1).  Tell the user up front
+    // so a misspelled dev-dep doesn't fail silently after a
+    // successful build.  v1.next plan: a `riven test` subcommand that
+    // builds dev-deps alongside the project.
+    if !manifest.dev_dependencies.is_empty() {
+        let names: Vec<&str> = manifest
+            .dev_dependencies
+            .keys()
+            .map(|s| s.as_str())
+            .collect();
+        eprintln!(
+            "  warning: [dev-dependencies] ({}) are recorded in Riven.toml but not \
+             compiled by `riven build` — `riven test` (v1.next) will consume them.",
+            names.join(", ")
+        );
+    }
+
     let profile = if release { "release" } else { "debug" };
     let target_dir = project_dir.join("target").join(profile);
     fs::create_dir_all(&target_dir)
@@ -376,6 +395,67 @@ fn gather_sources(project_dir: &Path, tree: &ModuleTree, name: &str) -> Result<S
     Ok(combined)
 }
 
+/// Wrap the rlib object-extraction call with rich diagnostic context.
+///
+/// The underlying I/O / archive errors are technically accurate (`No
+/// such file or directory`, `metadata.json not found in .rlib`, …)
+/// but give the user no path forward.  Surface the dep name and a
+/// concrete fix hint based on the failure shape:
+///
+/// - Missing rlib → dependency was never built.  Most common cause:
+///   user edited `[dependencies]` then ran the binary directly without
+///   `riven build` in between.
+/// - Compiler-version mismatch → dependency was built with a different
+///   rivenc.  Common after upgrading the toolchain.
+/// - Corrupted archive / missing metadata → rlib is truncated or
+///   stale from a build that crashed mid-write.
+fn extract_dep_object_code(name: &str, rlib_path: &Path) -> Result<Vec<u8>, String> {
+    if !rlib_path.exists() {
+        return Err(format!(
+            "dependency `{}` is not built\n  \
+             Expected rlib at: {}\n  \
+             Hint: run `riven build` from this project; if the dep is \
+             a path dependency, ensure its source dir compiles cleanly.",
+            name,
+            rlib_path.display()
+        ));
+    }
+    rlib::extract_object_code(rlib_path).map_err(|e| {
+        let lower = e.to_lowercase();
+        // Pattern-match the underlying error to give an actionable hint.
+        if lower.contains("incompatible") || lower.contains("compiled with rivenc") {
+            format!(
+                "dependency `{}` was built with an incompatible compiler version\n  \
+                 Path: {}\n  \
+                 Cause: {}\n  \
+                 Hint: run `riven clean` then `riven build` to rebuild the dep \
+                 with the current toolchain.",
+                name,
+                rlib_path.display(),
+                e
+            )
+        } else if lower.contains("not found in .rlib") || lower.contains("failed to read") {
+            format!(
+                "dependency `{}` rlib is corrupted or incomplete\n  \
+                 Path: {}\n  \
+                 Cause: {}\n  \
+                 Hint: a previous build may have been interrupted; \
+                 run `riven clean` then `riven build` to regenerate.",
+                name,
+                rlib_path.display(),
+                e
+            )
+        } else {
+            format!(
+                "failed to load dependency `{}`\n  Path: {}\n  Cause: {}",
+                name,
+                rlib_path.display(),
+                e
+            )
+        }
+    })
+}
+
 /// Compile a dependency piece into an .rlib file.
 fn compile_piece(
     source_dir: &Path,
@@ -482,14 +562,22 @@ fn compile_project(
         codegen::Backend::Cranelift
     };
 
-    // Collect link flags from extern libs
+    // Collect link flags from extern libs.  Wrap each rlib extraction
+    // with rich error context — the dep name and a concrete fix hint
+    // are far more useful than the raw "No such file or directory"
+    // that the underlying I/O layer surfaces.
     let mut extra_link_flags: Vec<String> = Vec::new();
-    for (_name, rlib_path) in extern_libs {
-        // Extract object code from the rlib and write it as a temp .o file
-        let obj_bytes = rlib::extract_object_code(rlib_path)?;
+    for (name, rlib_path) in extern_libs {
+        let obj_bytes = extract_dep_object_code(name, rlib_path)?;
         let obj_path = rlib_path.with_extension("o");
-        fs::write(&obj_path, &obj_bytes)
-            .map_err(|e| format!("failed to write dep object file: {}", e))?;
+        fs::write(&obj_path, &obj_bytes).map_err(|e| {
+            format!(
+                "failed to write object file for dependency `{}`\n  Path: {}\n  Cause: {}",
+                name,
+                obj_path.display(),
+                e
+            )
+        })?;
         extra_link_flags.push(obj_path.to_string_lossy().to_string());
     }
 
@@ -626,5 +714,49 @@ fn build_metadata_from_hir(type_result: &typeck::TypeCheckResult) -> TypeMetadat
         name: String::new(),
         version: String::new(),
         exports,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_rlib_produces_actionable_error() {
+        let tmp = std::env::temp_dir().join(format!("riven_rlib_missing_{}", std::process::id()));
+        let bogus = tmp.join("not-built.rlib");
+        let err = extract_dep_object_code("my-dep", &bogus).expect_err("should error");
+        assert!(
+            err.contains("my-dep") && err.contains("not built"),
+            "expected dep name + 'not built' in error, got: {}",
+            err
+        );
+        assert!(
+            err.contains("Hint:") && err.contains("riven build"),
+            "expected actionable hint with `riven build`, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn corrupted_rlib_produces_actionable_error() {
+        // Write an empty file with .rlib extension — passes the exists()
+        // check but `extract_object_code` fails to find the inner .o.
+        let tmp = std::env::temp_dir().join(format!("riven_rlib_corrupt_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&tmp);
+        let rlib = tmp.join("broken.rlib");
+        std::fs::write(&rlib, b"").expect("write empty file");
+        let err = extract_dep_object_code("foo", &rlib).expect_err("should error");
+        assert!(
+            err.contains("foo"),
+            "expected dep name in error; got: {}",
+            err
+        );
+        assert!(
+            err.contains("riven clean") || err.contains("riven build"),
+            "expected recovery hint; got: {}",
+            err
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
