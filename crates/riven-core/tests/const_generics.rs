@@ -1382,6 +1382,215 @@ end
     );
 }
 
+// ── Stage 7 binding-threading: [T; N] field layout per instantiation
+//
+// B7 follow-up: when a const-generic class has a field whose type
+// references a const param (e.g. `data: [Int; N]`), `layout_of`
+// must use the instantiation's const-arg value to size the field.
+// Before this commit the field came out 0-byte at layout time
+// (eval against empty bindings returned Err(Unresolved("N"))).
+
+#[test]
+fn layout_of_class_with_array_field_uses_const_arg_binding() {
+    use riven_core::codegen::layout::layout_of;
+    use riven_core::hir::types::{ConstExpr, Ty};
+
+    // Build the program: a class with a const param and a field
+    // typed `[Int; N]`.  After resolve / typeck, instantiating as
+    // `Buf[4]` should produce a 32-byte (4 * 8) field.
+    let src = r#"
+class Buf[const N: USize]
+  data: [Int; N]
+end
+
+def take_buf(_b: Buf[4])
+end
+"#;
+    let mut lx = riven_core::lexer::Lexer::new(src);
+    let toks = lx.tokenize().expect("lex");
+    let mut p = riven_core::parser::Parser::new(toks);
+    let prog = p.parse().expect("parse");
+    let result = riven_core::typeck::type_check(&prog);
+    let errors: Vec<_> = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.level == riven_core::diagnostics::DiagnosticLevel::Error)
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "expected no typecheck errors; got: {:?}",
+        errors.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+
+    // Find the resolved Ty of the take_buf parameter.
+    use riven_core::hir::nodes::HirItem;
+    let func = result
+        .program
+        .items
+        .iter()
+        .find_map(|i| match i {
+            HirItem::Function(f) if f.name == "take_buf" => Some(f),
+            _ => None,
+        })
+        .expect("no take_buf in HIR");
+    let param_ty = &func.params[0].ty;
+    // Unwrap any ref layers — we only care about the inner Class.
+    let inner = match param_ty {
+        Ty::Ref(t) | Ty::RefMut(t) => t.as_ref(),
+        Ty::RefLifetime(_, t) | Ty::RefMutLifetime(_, t) => t.as_ref(),
+        other => other,
+    };
+
+    // Sanity: the instantiation carries ConstArg(Lit(4)).
+    if let Ty::Class { generic_args, .. } = inner {
+        assert!(
+            matches!(generic_args.get(0), Some(Ty::ConstArg(ConstExpr::Lit(4)))),
+            "expected ConstArg(Lit(4)); got {:?}",
+            generic_args
+        );
+    } else {
+        panic!("expected Ty::Class for Buf, got {:?}", inner);
+    }
+
+    // The class layout for Buf[4] should give the `data: [Int; N]`
+    // field a 32-byte slot (4 * 8 = 32).  Before S7 binding-threading
+    // it would have been 0.
+    let layout = layout_of(inner, &result.symbols);
+    assert_eq!(
+        layout.size, 32,
+        "expected 32-byte layout for class Buf[4] containing [Int; N]; got {:?}",
+        layout
+    );
+    assert_eq!(layout.alignment, 8);
+}
+
+#[test]
+fn layout_of_class_without_const_param_field_unchanged() {
+    // Regression gate: classes without a const-param-referencing
+    // field layout the same way they did before S7.
+    use riven_core::codegen::layout::layout_of;
+    use riven_core::hir::types::Ty;
+    use riven_core::hir::nodes::HirItem;
+
+    let src = r#"
+class Plain
+  value: Int
+end
+
+def take_plain(_p: Plain)
+end
+"#;
+    let mut lx = riven_core::lexer::Lexer::new(src);
+    let toks = lx.tokenize().expect("lex");
+    let mut p = riven_core::parser::Parser::new(toks);
+    let prog = p.parse().expect("parse");
+    let result = riven_core::typeck::type_check(&prog);
+    let func = result
+        .program
+        .items
+        .iter()
+        .find_map(|i| match i {
+            HirItem::Function(f) if f.name == "take_plain" => Some(f),
+            _ => None,
+        })
+        .expect("no take_plain");
+    let param_ty = &func.params[0].ty;
+    let inner = match param_ty {
+        Ty::Ref(t) | Ty::RefMut(t) => t.as_ref(),
+        Ty::RefLifetime(_, t) | Ty::RefMutLifetime(_, t) => t.as_ref(),
+        other => other,
+    };
+    let layout = layout_of(inner, &result.symbols);
+    assert_eq!(layout.size, 8, "Plain has one Int field; size=8");
+    assert_eq!(layout.alignment, 8);
+}
+
+// ── Stage 5: E0701 wrong-const-arg-type ─────────────────────────────
+//
+// B5 follow-up (E0701): when the kind matches (const arg → const
+// slot) but the value can't be represented by the declared type,
+// resolve emits E0701 distinct from E0704's kind-mismatch.  Today
+// the reachable trigger is a Bool slot with an integer literal
+// other than 0 / 1.
+
+#[test]
+fn bool_const_param_with_non_boolean_literal_emits_e0701() {
+    // Type-annotation form triggers `resolve_type_path` where the
+    // kind-check + type-fit pass runs.  Value-expression
+    // instantiation (`Logger[5].new(0)`) is parsed but its const
+    // args are not currently routed through the check — that's a
+    // separate gap tracked alongside S6 per-key MIR.
+    let src = r#"
+class Logger[const VERBOSE: Bool]
+  msg: Int
+
+  def init(@msg: Int)
+  end
+end
+
+def take_logger(_l: Logger[5])
+end
+"#;
+    let codes = typecheck_diag_codes(src);
+    assert!(
+        codes.iter().any(|c| c == "E0701"),
+        "expected E0701 for Bool slot + non-boolean literal; got: {:?}",
+        codes
+    );
+}
+
+#[test]
+fn bool_const_param_with_zero_or_one_typechecks_clean() {
+    // 0 and 1 both fit `Bool` — no E0701.
+    for value in [0, 1] {
+        let src = format!(
+            r#"
+class Logger[const VERBOSE: Bool]
+  msg: Int
+
+  def init(@msg: Int)
+  end
+end
+
+def take_logger(_l: Logger[{}])
+end
+"#,
+            value
+        );
+        let codes = typecheck_diag_codes(&src);
+        assert!(
+            !codes.iter().any(|c| c == "E0701"),
+            "did not expect E0701 for Bool with value {}; got: {:?}",
+            value,
+            codes
+        );
+    }
+}
+
+#[test]
+fn usize_const_param_with_positive_literal_does_not_emit_e0701() {
+    // USize slot accepts any non-negative literal (and the parser
+    // produces only non-negative IntLiterals today, so this is the
+    // common case).
+    let src = r#"
+class Buf[const N: USize]
+  payload: Int
+
+  def init(@payload: Int)
+  end
+end
+
+def take_buf(_b: Buf[42])
+end
+"#;
+    let codes = typecheck_diag_codes(src);
+    assert!(
+        !codes.iter().any(|c| c == "E0701"),
+        "did not expect E0701 for USize + 42; got: {:?}",
+        codes
+    );
+}
+
 // ── Stage 9 parser cut: where-clause const predicates ───────────────
 //
 // B9 (S9 parser-only cut): the parser now accepts const predicates in

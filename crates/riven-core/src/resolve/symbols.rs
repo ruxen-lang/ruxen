@@ -78,6 +78,11 @@ pub struct ClassInfo {
     pub opt_out_sync: bool,
     pub manual_send: bool,
     pub manual_sync: bool,
+    /// T2.02 S9: where-clause const predicates (`where N > 0`,
+    /// `where N + M == 8`).  Evaluated at instantiation time
+    /// against the binding map; failing predicates emit E0706.
+    /// Default empty for backwards compatibility.
+    pub const_predicates: Vec<HirConstPredicate>,
 }
 
 /// Information about a struct definition.
@@ -91,6 +96,37 @@ pub struct StructInfo {
     pub opt_out_sync: bool,
     pub manual_send: bool,
     pub manual_sync: bool,
+    /// T2.02 S9: see `ClassInfo::const_predicates`.
+    pub const_predicates: Vec<HirConstPredicate>,
+}
+
+/// HIR-level lowered where-clause const predicate.
+///
+/// The parser's `ast::ConstPredicate` holds a raw `Expr` tree
+/// (full comparison + arithmetic + identifier surface).  At resolve
+/// time we lower the recognised shape into this compact form so
+/// evaluation at instantiation is a straight binary comparison over
+/// two `ConstExpr` sub-trees.
+///
+/// Unsupported shapes lower to a sentinel that evaluates to false
+/// at every instantiation; users see E0706 with the unsupported
+/// form's span.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirConstPredicate {
+    pub lhs: crate::hir::types::ConstExpr,
+    pub op: ConstPredOp,
+    pub rhs: crate::hir::types::ConstExpr,
+    pub span: crate::lexer::token::Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConstPredOp {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
 }
 
 /// Information about an enum definition.
@@ -103,6 +139,8 @@ pub struct EnumInfo {
     pub opt_out_sync: bool,
     pub manual_send: bool,
     pub manual_sync: bool,
+    /// T2.02 S9: see `ClassInfo::const_predicates`.
+    pub const_predicates: Vec<HirConstPredicate>,
 }
 
 /// Information about a trait definition.
@@ -394,6 +432,7 @@ mod tests {
                     opt_out_sync: false,
                     manual_send: false,
                     manual_sync: false,
+                    const_predicates: vec![],
                 },
             },
             Visibility::Public,
@@ -425,6 +464,7 @@ mod tests {
                 opt_out_sync: false,
                 manual_send: false,
                 manual_sync: false,
+                const_predicates: vec![],
             },
         }
     }

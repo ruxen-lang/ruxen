@@ -141,7 +141,7 @@ pub const REGISTRY: &[CodeInfo] = &[
     // separate registry plumbing.
     CodeInfo {
         code: "E0701",
-        title: "wrong const-arg type (reserved)",
+        title: "const-generic argument does not fit declared type",
     },
     CodeInfo {
         code: "E0702",

@@ -694,6 +694,7 @@ impl Resolver {
                     opt_out_sync: false,
                     manual_send: false,
                     manual_sync: false,
+                    const_predicates: vec![],
                 },
             },
             Visibility::Public,
@@ -761,6 +762,7 @@ impl Resolver {
                     opt_out_sync: false,
                     manual_send: false,
                     manual_sync: false,
+                    const_predicates: vec![],
                 },
             },
             Visibility::Public,
@@ -780,6 +782,7 @@ impl Resolver {
                     opt_out_sync: false,
                     manual_send: false,
                     manual_sync: false,
+                    const_predicates: vec![],
                 },
             },
             Visibility::Public,
@@ -799,6 +802,7 @@ impl Resolver {
                     opt_out_sync: false,
                     manual_send: false,
                     manual_sync: false,
+                    const_predicates: vec![],
                 },
             },
             Visibility::Public,
@@ -826,6 +830,7 @@ impl Resolver {
                     opt_out_sync: false,
                     manual_send: false,
                     manual_sync: false,
+                    const_predicates: vec![],
                 },
             },
             Visibility::Public,
@@ -854,6 +859,7 @@ impl Resolver {
                     opt_out_sync: false,
                     manual_send: false,
                     manual_sync: false,
+                    const_predicates: vec![],
                 },
             },
             Visibility::Public,
@@ -877,6 +883,7 @@ impl Resolver {
                     opt_out_sync: false,
                     manual_send: false,
                     manual_sync: false,
+                    const_predicates: vec![],
                 },
             },
             Visibility::Public,
@@ -897,6 +904,7 @@ impl Resolver {
                     opt_out_sync: false,
                     manual_send: false,
                     manual_sync: false,
+                    const_predicates: vec![],
                 },
             },
             Visibility::Public,
@@ -917,6 +925,7 @@ impl Resolver {
                     opt_out_sync: false,
                     manual_send: false,
                     manual_sync: false,
+                    const_predicates: vec![],
                 },
             },
             Visibility::Public,
@@ -955,6 +964,7 @@ impl Resolver {
                     opt_out_sync: false,
                     manual_send: false,
                     manual_sync: false,
+                    const_predicates: vec![],
                 },
             },
             Visibility::Public,
@@ -982,6 +992,7 @@ impl Resolver {
                     opt_out_sync: false,
                     manual_send: false,
                     manual_sync: false,
+                    const_predicates: vec![],
                 },
             },
             Visibility::Public,
@@ -1005,6 +1016,7 @@ impl Resolver {
                     opt_out_sync: false,
                     manual_send: false,
                     manual_sync: false,
+                    const_predicates: vec![],
                 },
             },
             Visibility::Public,
@@ -1026,6 +1038,7 @@ impl Resolver {
                     opt_out_sync: false,
                     manual_send: false,
                     manual_sync: false,
+                    const_predicates: vec![],
                 },
             },
             Visibility::Public,
@@ -1049,6 +1062,7 @@ impl Resolver {
                     opt_out_sync: false,
                     manual_send: false,
                     manual_sync: false,
+                    const_predicates: vec![],
                 },
             },
             Visibility::Public,
@@ -1070,6 +1084,7 @@ impl Resolver {
                     opt_out_sync: false,
                     manual_send: false,
                     manual_sync: false,
+                    const_predicates: vec![],
                 },
             },
             Visibility::Public,
@@ -1093,6 +1108,7 @@ impl Resolver {
                     opt_out_sync: false,
                     manual_send: false,
                     manual_sync: false,
+                    const_predicates: vec![],
                 },
             },
             Visibility::Public,
@@ -1364,6 +1380,7 @@ impl Resolver {
                     opt_out_sync: false,
                     manual_send: false,
                     manual_sync: false,
+                    const_predicates: vec![],
                 },
             },
             Visibility::Public,
@@ -1428,6 +1445,7 @@ impl Resolver {
                     opt_out_sync: false,
                     manual_send: false,
                     manual_sync: false,
+                    const_predicates: vec![],
                 },
             },
             Visibility::Public,
@@ -1489,6 +1507,7 @@ impl Resolver {
                     opt_out_sync: false,
                     manual_send: false,
                     manual_sync: false,
+                    const_predicates: vec![],
                 },
             },
             Visibility::Public,
@@ -1581,6 +1600,7 @@ impl Resolver {
                             opt_out_sync: false,
                             manual_send: false,
                             manual_sync: false,
+                            const_predicates: vec![],
                         },
                     },
                     Visibility::Public,
@@ -1603,6 +1623,7 @@ impl Resolver {
                             opt_out_sync: false,
                             manual_send: false,
                             manual_sync: false,
+                            const_predicates: vec![],
                         },
                     },
                     Visibility::Public,
@@ -1624,6 +1645,7 @@ impl Resolver {
                             opt_out_sync: false,
                             manual_send: false,
                             manual_sync: false,
+                            const_predicates: vec![],
                         },
                     },
                     Visibility::Public,
@@ -2198,6 +2220,7 @@ impl Resolver {
                     opt_out_sync,
                     manual_send,
                     manual_sync,
+                    const_predicates: vec![],
                 },
             };
         }
@@ -2265,6 +2288,7 @@ impl Resolver {
                     opt_out_sync: false,
                     manual_send: false,
                     manual_sync: false,
+                    const_predicates: vec![],
                 },
             };
         }
@@ -2376,6 +2400,7 @@ impl Resolver {
                     opt_out_sync: false,
                     manual_send: false,
                     manual_sync: false,
+                    const_predicates: vec![],
                 },
             };
         }
@@ -4770,9 +4795,13 @@ impl Resolver {
         // registry; built-in containers (Vec/HashMap/Set/etc.) have
         // no const-param slots, so any ConstLit against them is E0700.
         if let Some(ast_args) = path.generic_args.as_ref() {
-            // Snapshot the declared param kinds.  For built-in
-            // generics every declared slot is a Type param; for user
-            // types we look at the registered info.
+            // Snapshot the declared param kinds + the declared const
+            // type for each Const slot (None for Type slots).  Type slots
+            // → kind-check (E0704); Const slots → value-type-fit check
+            // (E0701).
+            // Snapshot the declared `GenericParamKind` per slot.  The
+            // `Const { ty }` variant carries the declared const-param
+            // type, used downstream for the E0701 type-fit check.
             let declared_kinds: Option<Vec<GenericParamKind>> = self
                 .type_registry
                 .get(&name)
@@ -4835,6 +4864,56 @@ impl Resolver {
                         // (iterator-sum keeps E0700; this is E0704).
                         "E0704",
                     ));
+                } else if let GenericParamKind::Const { ty: declared_ty } = declared_kind {
+                    // E0701 — wrong const-arg type.  Kind matches
+                    // (const → const slot), but the literal value
+                    // doesn't fit the declared type.  Today reachable
+                    // when a Bool const-param is given an int literal
+                    // other than 0 / 1; future overflows on tight
+                    // unsigned widths would land here too once parser
+                    // accepts negative literals or wider arithmetic.
+                    let arg_value: Option<i64> = match arg {
+                        ast::TypeExpr::ConstLit { value, .. } => Some(*value),
+                        ast::TypeExpr::ConstExprArg { expr, .. } => {
+                            // Fold via the same path used for
+                            // resolution, then read the literal value
+                            // if we have one after normalization.
+                            let folded = lower_const_expr_from_expr(expr).normal_form();
+                            folded.as_lit().map(|v| v as i64)
+                        }
+                        _ => None,
+                    };
+                    let arg_span = match arg {
+                        ast::TypeExpr::ConstLit { span, .. } => span.clone(),
+                        ast::TypeExpr::ConstExprArg { span, .. } => span.clone(),
+                        _ => path.span.clone(),
+                    };
+                    if let Some(v) = arg_value {
+                        let fits = match &declared_ty {
+                            Ty::Bool => v == 0 || v == 1,
+                            // Unsigned families: parser produces non-
+                            // negative literals today, but be defensive.
+                            Ty::USize
+                            | Ty::UInt
+                            | Ty::UInt8
+                            | Ty::UInt16
+                            | Ty::UInt32
+                            | Ty::UInt64 => v >= 0,
+                            // Signed / other integer families accept
+                            // every i64 value the parser can produce.
+                            _ => true,
+                        };
+                        if !fits {
+                            self.diagnostics.push(Diagnostic::error_with_code(
+                                format!(
+                                    "const-generic argument `{}` does not fit declared type `{}`",
+                                    v, declared_ty
+                                ),
+                                arg_span,
+                                "E0701",
+                            ));
+                        }
+                    }
                 }
             }
         }

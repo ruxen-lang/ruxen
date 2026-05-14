@@ -157,9 +157,62 @@ fn layout_tagged_union(payload_sizes: &[usize], payload_aligns: &[usize]) -> Typ
     }
 }
 
+/// T2.02 S7 binding-threading: build a `param_name → const_value`
+/// map for a class / struct instantiation by zipping its declared
+/// `generic_params` (which knows each slot's kind) against the
+/// supplied `generic_args`.  Only Const slots contribute entries;
+/// Type-slot args (`Ty::ConstArg`-free entries) are skipped.
+fn bindings_from_generic_args(
+    name: &str,
+    generic_args: &[Ty],
+    symbols: &SymbolTable,
+) -> std::collections::HashMap<String, u64> {
+    use crate::resolve::symbols::GenericParamKind;
+    let mut bindings = std::collections::HashMap::new();
+    let def = symbols.iter().find(|d| {
+        d.name == name && matches!(d.kind, DefKind::Class { .. } | DefKind::Struct { .. })
+    });
+    let declared_params: &[crate::resolve::symbols::GenericParamInfo] = match def {
+        Some(d) => match &d.kind {
+            DefKind::Class { info } => &info.generic_params,
+            DefKind::Struct { info } => &info.generic_params,
+            _ => return bindings,
+        },
+        None => return bindings,
+    };
+    let empty_inner = std::collections::HashMap::new();
+    for (param, arg) in declared_params.iter().zip(generic_args.iter()) {
+        if matches!(param.kind, GenericParamKind::Const { .. }) {
+            if let Ty::ConstArg(ce) = arg {
+                // Inner eval uses an empty map: the const-arg
+                // expression should be self-contained (literal or
+                // already-folded arithmetic over literals).  Param
+                // references in a const-arg position would need a
+                // *parent* instantiation's binding to resolve — out
+                // of scope for v1.
+                if let Ok(v) = ce.eval(&empty_inner) {
+                    bindings.insert(param.name.clone(), v);
+                }
+            }
+        }
+    }
+    bindings
+}
+
 /// Resolve a user-defined class or struct from the symbol table and compute
 /// its layout based on the declared field types (in field-index order).
-fn layout_user_type(name: &str, symbols: &SymbolTable) -> TypeLayout {
+///
+/// T2.02 S7 binding-threading: `bindings` carries the const-param →
+/// const-value map for the current instantiation.  Field types
+/// referencing a const param (e.g. `data: [Int; N]`) consult this map
+/// during the recursive `layout_of_inner` call.  Callers that don't
+/// have bindings (e.g. computing the layout of an erased generic
+/// shape) pass an empty map.
+fn layout_user_type(
+    name: &str,
+    symbols: &SymbolTable,
+    bindings: &std::collections::HashMap<String, u64>,
+) -> TypeLayout {
     // Find the class or struct definition by name.
     let def = symbols.iter().find(|d| {
         d.name == name && matches!(d.kind, DefKind::Class { .. } | DefKind::Struct { .. })
@@ -180,7 +233,7 @@ fn layout_user_type(name: &str, symbols: &SymbolTable) -> TypeLayout {
         .filter_map(|&fid| {
             let fdef = symbols.get(fid)?;
             if let DefKind::Field { ty, index, .. } = &fdef.kind {
-                Some((*index, layout_of(ty, symbols)))
+                Some((*index, layout_of_inner(ty, symbols, bindings)))
             } else {
                 None
             }
@@ -252,6 +305,27 @@ fn layout_user_enum(name: &str, symbols: &SymbolTable) -> TypeLayout {
 /// - `ty` — the type to compute the layout for
 /// - `symbols` — the symbol table (used for user-defined types)
 pub fn layout_of(ty: &Ty, symbols: &SymbolTable) -> TypeLayout {
+    layout_of_inner(ty, symbols, &std::collections::HashMap::new())
+}
+
+/// Internal entry that threads a const-generic binding map through
+/// recursive field-layout calls.
+///
+/// T2.02 S7 binding-threading: when a `Ty::Class` carries const
+/// args, this function extracts a `(param_name → const_value)` map
+/// from the class's declared generic params + the supplied
+/// `generic_args` and recurses into field layouts with that map.
+/// `Ty::Array(_, ConstExpr::Param(N))` then resolves `N` via the
+/// map, so `class Buf[const N: USize] { data: [Int; N] }` instantiated
+/// as `Buf[Int, 4]` lays out `data` as 4 * 8 = 32 bytes.
+///
+/// External callers (test helpers, REPL, …) should use `layout_of`
+/// which seeds an empty binding map.
+fn layout_of_inner(
+    ty: &Ty,
+    symbols: &SymbolTable,
+    bindings: &std::collections::HashMap<String, u64>,
+) -> TypeLayout {
     match ty {
         // ── Primitives ──────────────────────────────────────────────────────
         Ty::Bool | Ty::Int8 | Ty::UInt8 => TypeLayout::primitive(1, 1),
@@ -293,14 +367,14 @@ pub fn layout_of(ty: &Ty, symbols: &SymbolTable) -> TypeLayout {
 
         // ── Option[T] ───────────────────────────────────────────────────────
         Ty::Option(inner) => {
-            let inner_layout = layout_of(inner, symbols);
+            let inner_layout = layout_of_inner(inner, symbols, bindings);
             layout_tagged_union(&[inner_layout.size], &[inner_layout.alignment])
         }
 
         // ── Result[T, E] ────────────────────────────────────────────────────
         Ty::Result(ok, err) => {
-            let ok_layout = layout_of(ok, symbols);
-            let err_layout = layout_of(err, symbols);
+            let ok_layout = layout_of_inner(ok, symbols, bindings);
+            let err_layout = layout_of_inner(err, symbols, bindings);
             layout_tagged_union(
                 &[ok_layout.size, err_layout.size],
                 &[ok_layout.alignment, err_layout.alignment],
@@ -312,24 +386,26 @@ pub fn layout_of(ty: &Ty, symbols: &SymbolTable) -> TypeLayout {
             if elems.is_empty() {
                 return TypeLayout::primitive(0, 1);
             }
-            let field_layouts: Vec<TypeLayout> =
-                elems.iter().map(|e| layout_of(e, symbols)).collect();
+            let field_layouts: Vec<TypeLayout> = elems
+                .iter()
+                .map(|e| layout_of_inner(e, symbols, bindings))
+                .collect();
             layout_struct_fields(&field_layouts)
         }
 
         // ── Array ───────────────────────────────────────────────────────────
         Ty::Array(elem, n) => {
-            let elem_layout = layout_of(elem, symbols);
-            // T2.02 S7+S8.S1: evaluate the const expression with an
-            // empty binding map.  `Lit(N)` resolves to `N`; `Op(...)`
-            // arithmetic folds via the S8.S1 evaluator (checked u64
-            // ops).  `Param(...)` (unbound at this call) and
-            // overflow / div-zero fold to size 0 here — the
-            // monomorphization wrapper that threads per-instantiation
-            // bindings (and surfaces evaluator errors as E0703) is a
-            // follow-up.
-            let bindings: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
-            let count = n.eval(&bindings).unwrap_or(0) as usize;
+            let elem_layout = layout_of_inner(elem, symbols, bindings);
+            // T2.02 S7 binding-threading: `Lit(N)` resolves directly;
+            // `Param(name)` resolves through the supplied bindings;
+            // `Op(...)` arithmetic folds via the S8.S1 evaluator
+            // against the same bindings.  Eval errors (overflow,
+            // div-zero, still-unresolved-param) fall back to size 0
+            // here — overflow / div-zero have already been surfaced
+            // as E0703 at resolve time; an unresolved param at this
+            // call site is an upstream bug (some instantiation didn't
+            // populate its binding map).
+            let count = n.eval(bindings).unwrap_or(0) as usize;
             TypeLayout {
                 size: elem_layout.size * count,
                 alignment: elem_layout.alignment,
@@ -338,12 +414,22 @@ pub fn layout_of(ty: &Ty, symbols: &SymbolTable) -> TypeLayout {
         }
 
         // ── User-defined types ───────────────────────────────────────────────
-        Ty::Class { name, .. } | Ty::Struct { name, .. } => layout_user_type(name, symbols),
+        //
+        // T2.02 S7 binding-threading: when the class type carries
+        // const args, extract a `(param_name → const_value)` map from
+        // the declared `generic_params` + the supplied `generic_args`,
+        // and recurse into the field layout with that map.  Type
+        // args (`Ty::ConstArg`-free entries) are ignored — they only
+        // affect monomorphization mangling, not in-memory layout.
+        Ty::Class { name, generic_args, .. } | Ty::Struct { name, generic_args, .. } => {
+            let class_bindings = bindings_from_generic_args(name, generic_args, symbols);
+            layout_user_type(name, symbols, &class_bindings)
+        }
         Ty::Enum { name, .. } => layout_user_enum(name, symbols),
 
         // ── Transparent wrappers ────────────────────────────────────────────
-        Ty::Alias { target, .. } => layout_of(target, symbols),
-        Ty::Newtype { inner, .. } => layout_of(inner, symbols),
+        Ty::Alias { target, .. } => layout_of_inner(target, symbols, bindings),
+        Ty::Newtype { inner, .. } => layout_of_inner(inner, symbols, bindings),
 
         // ── Function types ──────────────────────────────────────────────────
         // Fn, FnMut, FnOnce are represented as a single function pointer.
