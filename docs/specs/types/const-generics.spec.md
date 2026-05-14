@@ -139,7 +139,7 @@ monomorphization; failing predicate emits E-CONST-WHERE-FALSE.
 | Code  | Meaning                                              | Stage |
 |-------|------------------------------------------------------|-------|
 | E0701 | wrong const-arg type (e.g. `Bool` where `USize` expected) | S5 (reserved) |
-| E0702 | non-const expression in const-arg position           | S2/S3 (reserved) |
+| E0702 | expression is not a valid v1 const expression        | S2/S3 (shipped) |
 | E0703 | const-arg expression overflows during evaluation     | S8 (shipped) |
 | E0704 | kind mismatch on generic arg (passed type where const expected, or vice versa) | S5 (shipped) |
 | E0705 | const-generic parameter type must be integer or `Bool` (E-CONST-BAD-TYPE) | S1 (shipped) |

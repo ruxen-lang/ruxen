@@ -145,7 +145,7 @@ pub const REGISTRY: &[CodeInfo] = &[
     },
     CodeInfo {
         code: "E0702",
-        title: "non-const expression in const-arg position (reserved)",
+        title: "expression is not a valid v1 const expression",
     },
     CodeInfo {
         code: "E0703",

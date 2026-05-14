@@ -1590,7 +1590,9 @@ fn resolve_array_size_unsupported_op_becomes_error() {
     // `+ - * /`).  The resolver folds it into `ConstExpr::Error`
     // rather than silently treating it as another op, so the
     // downstream eval path surfaces a Malformed error rather than
-    // a wrong value.
+    // a wrong value.  The non-const-expr check (E0702 wiring)
+    // additionally surfaces a user-facing diagnostic at the source
+    // span; the Ty shape pinned here is unchanged.
     use riven_core::hir::types::{ConstEvalError, ConstExpr, Ty};
 
     let src = r#"
@@ -1607,4 +1609,76 @@ end
         }
         other => panic!("expected Ty::Array, got {:?}", other),
     }
+}
+
+// ── Stage 8 follow-up: E0702 non-const-expr surfacing ───────────────
+//
+// The lowerer produces `ConstExpr::Error` for AST shapes outside the
+// v1 const language; resolve now surfaces those as **E0702** at the
+// construction-site span.  One diagnostic per site — nested noise
+// stays quiet.
+
+#[test]
+fn array_size_unsupported_op_emits_e0702() {
+    let src = r#"
+struct Buf
+  data: [Int; 5 % 2]
+end
+"#;
+    let codes = typecheck_diag_codes(src);
+    assert!(
+        codes.iter().any(|c| c == "E0702"),
+        "expected E0702 for `5 % 2` in array size; got: {:?}",
+        codes
+    );
+}
+
+#[test]
+fn array_size_comparison_op_emits_e0702() {
+    // `<` is also outside the v1 const language.
+    let src = r#"
+struct Buf
+  data: [Int; 3 < 4]
+end
+"#;
+    let codes = typecheck_diag_codes(src);
+    assert!(
+        codes.iter().any(|c| c == "E0702"),
+        "expected E0702 for comparison in array size; got: {:?}",
+        codes
+    );
+}
+
+#[test]
+fn array_size_clean_arithmetic_does_not_emit_e0702() {
+    // Pin the negative case so a future regression doesn't start
+    // emitting E0702 on every supported `+ - * /` site.
+    let src = r#"
+struct Buf
+  data: [Int; 2 + 3]
+end
+"#;
+    let codes = typecheck_diag_codes(src);
+    assert!(
+        !codes.iter().any(|c| c == "E0702"),
+        "did not expect E0702 for clean arithmetic; got: {:?}",
+        codes
+    );
+}
+
+#[test]
+fn array_size_param_reference_does_not_emit_e0702() {
+    // `N + 1` against an in-scope `const N: USize` is a perfectly
+    // valid v1 const expression — no E0702.
+    let src = r#"
+struct Buf[T, const N: USize]
+  data: [T; N + 1]
+end
+"#;
+    let codes = typecheck_diag_codes(src);
+    assert!(
+        !codes.iter().any(|c| c == "E0702"),
+        "did not expect E0702 for param-reference arithmetic; got: {:?}",
+        codes
+    );
 }

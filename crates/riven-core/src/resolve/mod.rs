@@ -4600,6 +4600,7 @@ impl Resolver {
                     // E0703 here — they're invariant across
                     // instantiations.
                     let n = lower_const_expr_from_expr(size_expr).normal_form();
+                    self.check_const_expr_for_non_const(&n, &size_expr.span);
                     self.check_const_expr_eval_errors(&n, &size_expr.span);
                     Ty::Array(Box::new(elem_ty), n)
                 } else {
@@ -4702,6 +4703,7 @@ impl Resolver {
             // div-zero as E0703 against the source span.
             ast::TypeExpr::ConstExprArg { expr, span } => {
                 let folded = lower_const_expr_from_expr(expr).normal_form();
+                self.check_const_expr_for_non_const(&folded, span);
                 self.check_const_expr_eval_errors(&folded, span);
                 Ty::ConstArg(folded)
             }
@@ -5326,6 +5328,34 @@ impl Resolver {
             }
         }
     }
+
+    /// T2.02 §B8 (E-CONST-NONCONST → E0702): surface
+    /// `ConstExpr::Error` nodes — the marker
+    /// `lower_const_expr_from_expr` produces for AST shapes that
+    /// aren't valid v1 const expressions (unsupported binary ops
+    /// like `%` / `<` / `<<`, function calls, method calls, field
+    /// access, runtime variable references, …).
+    ///
+    /// Walks the tree once.  At most one E0702 is emitted per
+    /// resolve-site span — the first reachable `Error` triggers
+    /// it; nested noise stays quiet so the user sees the source
+    /// location, not a diagnostic for every leaf.
+    fn check_const_expr_for_non_const(
+        &mut self,
+        expr: &crate::hir::types::ConstExpr,
+        span: &Span,
+    ) {
+        if contains_const_expr_error(expr) {
+            self.diagnostics.push(Diagnostic::error_with_code(
+                "expression is not a valid const expression \
+                 (v1 supports integer literals, in-scope const-param references, \
+                 and `+ - * /` arithmetic over those)"
+                    .to_string(),
+                span.clone(),
+                "E0702",
+            ));
+        }
+    }
 }
 
 /// Returns true iff `ty` is a valid HashMap key / HashSet element type
@@ -5374,6 +5404,22 @@ fn lower_const_expr_from_expr(expr: &ast::Expr) -> crate::hir::types::ConstExpr 
             )
         }
         _ => ConstExpr::Error,
+    }
+}
+
+/// T2.02 §B8 (E0702 plumbing): does this `ConstExpr` tree contain
+/// any `Error` marker?  The marker is what
+/// `lower_const_expr_from_expr` emits for AST shapes the v1 const
+/// language doesn't support — a single hit anywhere in the tree is
+/// enough to flag the whole construction site.
+fn contains_const_expr_error(expr: &crate::hir::types::ConstExpr) -> bool {
+    use crate::hir::types::ConstExpr;
+    match expr {
+        ConstExpr::Error => true,
+        ConstExpr::Lit(_) | ConstExpr::Param(_) => false,
+        ConstExpr::Op(a, _, b) => {
+            contains_const_expr_error(a) || contains_const_expr_error(b)
+        }
     }
 }
 

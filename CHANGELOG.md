@@ -8,6 +8,43 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- Phase 3 #07 follow-up: **E0702 non-const-expression diagnostic**
+  (spec §B8 E-CONST-NONCONST).  The lowerer
+  `lower_const_expr_from_expr` already produced a
+  `ConstExpr::Error` marker for AST shapes outside the v1 const
+  language (unsupported binary ops like `%` / `<` / `<<` / `&&`,
+  function calls, method calls, field access, runtime variable
+  references); resolve now walks the lowered tree and surfaces
+  the first `Error` it finds as **E0702** at the construction
+  site's span.  One diagnostic per site — nested markers don't
+  compound.
+
+  Helpers:
+  - New `contains_const_expr_error(&ConstExpr) -> bool` walks the
+    tree.
+  - New `Resolver::check_const_expr_for_non_const(&mut, &Span)`
+    emits the diagnostic; called at the same two sites as
+    `check_const_expr_eval_errors` (array size + const-arg
+    position).
+
+  Registry / docs / spec coordination:
+  - `codes::REGISTRY` title for E0702 dropped its "(reserved)"
+    qualifier and now reads "expression is not a valid v1 const
+    expression".
+  - `docs/errors/E0702.md` rewritten with concrete examples
+    (`%`, comparison, function call), a fix matrix (rewrite, lift
+    to const param, declare a `const`), and notes referencing
+    NG-OQ-3 (no const-arg inference).
+  - Spec §"Error code reservations" updated — E0702 marked
+    shipped; E0701 remains the lone reserved code.
+
+  Pin tests in `const_generics.rs`:
+  `array_size_unsupported_op_emits_e0702` (`5 % 2`),
+  `array_size_comparison_op_emits_e0702` (`3 < 4`),
+  `array_size_clean_arithmetic_does_not_emit_e0702`,
+  `array_size_param_reference_does_not_emit_e0702`.  The existing
+  `resolve_array_size_unsupported_op_becomes_error` (HIR-shape
+  pin) continues to pass — E0702 is additive, not a replacement.
 - Phase 3 #07 follow-up: **E0705 const-generic parameter bad-type
   diagnostic** (spec §B8 `E-CONST-BAD-TYPE`).  `Resolver::
   collect_generic_params` now validates the resolved type of every
