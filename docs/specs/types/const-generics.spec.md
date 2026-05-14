@@ -27,7 +27,7 @@ no recursion or branching at the const level.
 | S3    | Resolver records `DefKind::ConstParam { ty }`; brings `N` into scope inside the type / fn body | shipped (3d2d7ac) |
 | S4    | HIR: `Ty::Array(Box<Ty>, ConstExpr)` + `ConstExpr` enum          | shipped (e2d073b) |
 | S5    | Typeck: const args participate in unification; distinct const args produce distinct types | shipped (afac3fc) |
-| S6    | Monomorphization (M2): one MIR fn per `(type-args, const-args)` key | shipped (a9fcb19 — `Ty::ConstArg` distinguishes instantiations; per-key MIR fn lowering tracked separately) |
+| S6    | Monomorphization (M2): one MIR fn per `(type-args, const-args)` key | shipped (a9fcb19 — `Ty::ConstArg` distinguishes instantiations; runtime construction `Type[N].new(...)` works for bodies that don't reference the const param; per-instantiation MIR lowering for const-using bodies is a v1.next follow-up) |
 | S7    | Codegen layout: arrays evaluate `ConstExpr` to a concrete size; `alloca` honours it | shipped (bc6cca3 — evaluator + `layout_of` integration; per-instantiation binding threading is a follow-up) |
 | S8    | Arithmetic in const exprs (`+ - * /`), normal-form rewriter, overflow + div-zero diagnostics | shipped: S8.S1 evaluator (c0ea652), S8.S2 array-size resolve fold (5fd2c6d), S8.S3 const-arg position parser+resolve (ae22ed5), S8.S4 normal-form rewriter — overflow / div-zero E0703 surfacing is the monomorphization-side follow-up |
 | S9    | `where` clause const predicates (`where N > 0`, `where N == M`)  | pending     |

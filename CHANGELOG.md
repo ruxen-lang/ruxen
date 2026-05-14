@@ -7,6 +7,38 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+### Fixed
+- **Const-generic class instantiation parses correctly at value-
+  expression call sites.**  Before this fix, `Counter[10].new(42)`
+  silently misparsed as `Counter` indexed by `10` followed by
+  `.new(42)`, producing an `<error>` receiver type and a downstream
+  linker failure (`Undefined symbols: _<error>_init`).  Root cause
+  was the `looks_like_type_args` lookahead in `parser/expr.rs`
+  rejecting `IntLiteral` as a potential first token after `[` — it
+  only accepted type-token kinds (`TypeIdentifier`, `SelfType`,
+  `Lifetime`, `Amp`, `AmpMut`).  Adding `TokenKind::IntLiteral(_, _)`
+  to the accepted set lets `Counter[10].new(42)` correctly parse as
+  a const-generic type application followed by a method call.
+
+  Pin test:
+  `parse_const_arg_int_literal_at_call_site_is_type_application`
+  asserts the receiver of `.new(42)` is a `MethodCall`, NOT an
+  `Index` expression (the regression shape).
+
+  E2E fixture:
+  `tests/release-e2e/cases/073_const_generic_class_instantiation.rvn`
+  exercises `Counter[10].new(1)`, `Counter[1000].new(2)`, and
+  `Pair[Int, 7].new(99)` through full compile + run, confirming
+  multi-instantiation and mixed type/const generics all work.
+  Release-e2e harness now runs 223 fixtures (was 222).
+
+  Spec stage map S6 entry updated: runtime construction of
+  const-generic classes whose body doesn't reference the const
+  param is now shipped; per-instantiation MIR lowering for bodies
+  that *do* use the const param (e.g. `class Buf[const N: USize] {
+   data: [Int; N] }`) remains a v1.next follow-up tracked in the
+  S7 follow-up section.
+
 ### Added
 - `tests/release-e2e/cases/072_const_generic_array_arithmetic.rvn`:
   new end-to-end fixture exercising the S8.S2/S8.S4 array-size

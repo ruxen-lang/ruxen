@@ -583,7 +583,13 @@ impl Parser {
         while matches!(self.peek_at_kind(idx), TokenKind::Newline) {
             idx += 1;
         }
-        // First token after `[` should look like a type.
+        // First token after `[` should look like a type or a const-arg.
+        //
+        // T2.02 S8 follow-up: integer literals are accepted as
+        // const-generic arguments at use sites (`Counter[10].new(...)`).
+        // Without this lookahead arm the parser misreads such forms as
+        // an index expression, which downstream produces a `<error>`
+        // receiver and `_<error>_init` link failures.
         let first = self.peek_at_kind(idx);
         if !matches!(
             first,
@@ -592,6 +598,7 @@ impl Parser {
                 | TokenKind::Lifetime(_)
                 | TokenKind::Amp
                 | TokenKind::AmpMut
+                | TokenKind::IntLiteral(_, _)
         ) {
             return false;
         }

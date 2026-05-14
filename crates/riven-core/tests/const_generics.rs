@@ -946,6 +946,57 @@ end
 // Bare literals (`Vector[Int, 4]`) continue to emit `ConstLit`.
 
 #[test]
+fn parse_const_arg_int_literal_at_call_site_is_type_application() {
+    // `Counter[10].new(42)` must parse as a const-generic type
+    // application followed by a method call, not as `Counter`
+    // indexed by `10` followed by `.new(42)`.  Before the fix to
+    // `looks_like_type_args`, the IntLiteral form fell through to
+    // indexing and produced a `<error>` receiver type downstream.
+    use riven_core::parser::ast::{ExprKind, Statement, TopLevelItem};
+    let src = r#"
+class Counter[const N: USize]
+  value: Int
+
+  def init(@value: Int)
+  end
+end
+
+def main
+  let c = Counter[10].new(42)
+end
+"#;
+    let prog = parse(src);
+    let main = prog
+        .items
+        .iter()
+        .find_map(|i| match i {
+            TopLevelItem::Function(f) if f.name == "main" => Some(f),
+            _ => None,
+        })
+        .expect("no main function");
+    // The let-binding RHS should be a MethodCall whose receiver is
+    // NOT an Index expression.  Walk the first statement's
+    // initialiser.
+    let init = match &main.body.statements[0] {
+        Statement::Let(binding) => binding.value.as_ref().expect("let init"),
+        other => panic!("expected let, got {:?}", other),
+    };
+    match &init.kind {
+        ExprKind::MethodCall { method, object, .. } => {
+            assert_eq!(method, "new");
+            // The receiver must NOT be an Index expression — that's
+            // the regression this pin catches.
+            assert!(
+                !matches!(object.kind, ExprKind::Index { .. }),
+                "Counter[10].new(...) must parse as type-application + method call, \
+                 got receiver = Index (pre-fix shape)"
+            );
+        }
+        other => panic!("expected MethodCall, got {:?}", other),
+    }
+}
+
+#[test]
 fn parse_const_arg_arithmetic_emits_const_expr_arg() {
     use riven_core::parser::ast::{Expr, ExprKind, BinOp, TopLevelItem, TypeExpr};
     let src = r#"
