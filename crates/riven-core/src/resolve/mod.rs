@@ -637,6 +637,26 @@ impl Resolver {
                 }],
                 Ty::Unit,
             ),
+            // std::signal — cooperative graceful-shutdown surface for
+            // long-running programs (servers, daemons, REPLs).
+            // `install_sigint` registers a handler that sets an atomic
+            // flag; `received_sigint` polls it.  Blocking syscalls
+            // (`tcp_accept`, `tcp_read`, …) return EINTR / `-1` when
+            // the signal lands mid-call so cooperative loops can
+            // notice and break.  No SIGTERM / SIGHUP coverage in v1.
+            (
+                "signal_install_sigint",
+                vec![],
+                Ty::Unit,
+            ),
+            (
+                // Returns Int (0 or 1) for safe codegen — the
+                // underlying C helper returns `int64_t`.  Callers
+                // pattern this as `if signal_received_sigint != 0`.
+                "signal_received_sigint",
+                vec![],
+                Ty::Int,
+            ),
         ];
 
         let mut builtin_fn_ids = HashMap::new();
@@ -1190,6 +1210,17 @@ impl Resolver {
             Visibility::Public,
             span.clone(),
         );
+        let signal_id = self.symbols.define(
+            "signal".to_string(),
+            DefKind::Module {
+                items: vec![
+                    builtin_fn_ids["signal_install_sigint"],
+                    builtin_fn_ids["signal_received_sigint"],
+                ],
+            },
+            Visibility::Public,
+            span.clone(),
+        );
         let sync_id = self.symbols.define(
             "sync".to_string(),
             DefKind::Module {
@@ -1235,6 +1266,7 @@ impl Resolver {
             DefKind::Module {
                 items: vec![
                     io_id, env_id, fs_id, process_id, time_id, path_id, net_id, sync_id, fmt_id,
+                    signal_id,
                 ],
             },
             Visibility::Public,

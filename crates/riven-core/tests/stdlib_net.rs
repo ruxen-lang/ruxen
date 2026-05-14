@@ -169,3 +169,205 @@ end
         received
     );
 }
+
+/// End-to-end proof that Riven can host a blocking TCP server.
+///
+/// The Riven program plays the **server** role: it binds an ephemeral
+/// port (chosen by Rust + handed off through the `RIVEN_NET_PORT`
+/// env var), installs a SIGINT handler for graceful shutdown, and
+/// loops `accept → read → write-echo → close`.  The test process
+/// plays the client: connects, sends `"ping\n"`, reads the echo,
+/// then signals SIGINT.  The server's blocking `accept()` returns
+/// EINTR, the loop notices `signal_received_sigint() != 0`, the
+/// listening fd is closed, the program prints `"bye"` and exits
+/// cleanly.
+///
+/// What this proves end-to-end:
+///   - `tcp_listen` + `tcp_accept` + `tcp_read` + `tcp_write` +
+///     `tcp_close` work as a coherent surface
+///   - `signal_install_sigint` + `signal_received_sigint` correctly
+///     mediate cooperative shutdown
+///   - A blocking server runs, handles a real connection, and
+///     terminates without leaking on a real signal
+///
+/// User-level `TcpListener` / `TcpStream` class wrappers are
+/// demonstrated inline in the Riven source — making them stdlib
+/// auto-imports is a separate (resolver-level) commit.
+#[test]
+#[cfg_attr(windows, ignore = "POSIX signals + fork-style accept loop")]
+fn blocking_tcp_echo_server_with_graceful_sigint_shutdown() {
+    use std::io::Write;
+
+    // Grab an ephemeral port by binding-and-dropping; the kernel will
+    // not immediately re-issue it, so the Riven server's bind on the
+    // same port wins in practice.  A theoretical race remains but is
+    // negligible in test environments.
+    let probe = TcpListener::bind("127.0.0.1:0").expect("probe bind");
+    let port = probe.local_addr().expect("local_addr").port();
+    drop(probe);
+
+    // The Riven program defines a small `TcpListener` / `TcpStream`
+    // class wrapper at user level — illustrates the pattern users can
+    // copy-paste today.  A future commit will register these as
+    // stdlib auto-imports so users don't have to.
+    let source = r#"
+use std.net.{tcp_listen, tcp_accept, tcp_read, tcp_write, tcp_close}
+use std.env.var
+
+class TcpListener
+  fd: Int
+
+  def init(@fd: Int)
+  end
+
+  pub def bind(addr: &String) -> TcpListener
+    let fd = tcp_listen(addr)
+    TcpListener.new(fd)
+  end
+
+  pub def accept_fd -> Int
+    tcp_accept(self.fd)
+  end
+
+  pub def close -> ()
+    tcp_close(self.fd)
+  end
+end
+
+class TcpStream
+  fd: Int
+
+  def init(@fd: Int)
+  end
+
+  pub def read_string(max: Int) -> String
+    tcp_read(self.fd, max)
+  end
+
+  pub def write_string(data: &String) -> Int
+    tcp_write(self.fd, data)
+  end
+
+  pub def close -> ()
+    tcp_close(self.fd)
+  end
+end
+
+def main
+  let p: String = var("RIVEN_NET_PORT").expect!("port env var")
+  let addr = "127.0.0.1:#{p}"
+
+  signal_install_sigint()
+
+  let listener = TcpListener.bind(&addr)
+
+  loop
+    let client_fd = listener.accept_fd
+
+    # Either a real client connected (fd >= 0) or accept was
+    # interrupted by SIGINT (fd < 0 with errno=EINTR).  In both
+    # cases we check the signal flag on the next loop iteration.
+    if client_fd >= 0
+      let stream = TcpStream.new(client_fd)
+      let msg = stream.read_string(64)
+      let _ = stream.write_string(&msg)
+      stream.close()
+    end
+
+    if signal_received_sigint() != 0
+      break
+    end
+  end
+
+  listener.close()
+  puts "bye"
+end
+"#;
+    let bin_path = compile(source, "stdlib_net_server_sigint");
+
+    let mut child = Command::new(&bin_path)
+        .env("RIVEN_NET_PORT", port.to_string())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn riven server");
+
+    // Wait for the server to bind by polling with short connect
+    // attempts.  Bounded by a 5s deadline so a stuck server fails
+    // the test rather than hanging the suite.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut stream = loop {
+        match std::net::TcpStream::connect(format!("127.0.0.1:{}", port)) {
+            Ok(s) => break s,
+            Err(_) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let out = child.wait_with_output().ok();
+                    let stderr = out
+                        .as_ref()
+                        .map(|o| String::from_utf8_lossy(&o.stderr).to_string())
+                        .unwrap_or_default();
+                    panic!(
+                        "server didn't accept connections within 5s; stderr=[{}]",
+                        stderr
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+        }
+    };
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("set read timeout");
+
+    // Send a ping, read the echo, drop the connection.
+    stream.write_all(b"ping").expect("write ping");
+    let mut buf = [0u8; 64];
+    let n = stream.read(&mut buf).expect("read echo");
+    drop(stream);
+    let received = std::str::from_utf8(&buf[..n]).expect("utf8");
+    assert_eq!(
+        received, "ping",
+        "expected exactly 'ping' echoed back; got [{}]",
+        received
+    );
+
+    // Graceful shutdown: SIGINT lands while the server is back at
+    // accept() waiting for the next client.  The server's loop must
+    // notice the flag and exit with status 0.
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGINT);
+    }
+
+    // Wait for clean exit, bounded.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                assert!(
+                    status.success(),
+                    "server exited non-zero after SIGINT: {:?}",
+                    status
+                );
+                break;
+            }
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    panic!("server did not exit within 5s of SIGINT");
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(e) => panic!("try_wait: {}", e),
+        }
+    }
+
+    // Confirm the server printed its shutdown marker.
+    let out = child.wait_with_output().expect("wait_with_output");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.trim().ends_with("bye"),
+        "expected server stdout to end with 'bye'; got [{}]",
+        stdout
+    );
+}

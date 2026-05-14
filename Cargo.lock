@@ -1633,6 +1633,7 @@ dependencies = [
  "cranelift-native",
  "cranelift-object",
  "inkwell",
+ "libc",
  "proptest",
  "target-lexicon",
 ]

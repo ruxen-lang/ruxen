@@ -97,6 +97,9 @@ pub const RUNTIME_FUNCTIONS: &[&str] = &[
     "riven_tcp_read",
     "riven_tcp_write",
     "riven_tcp_close",
+    // std::signal (graceful-shutdown surface).
+    "riven_signal_install_sigint",
+    "riven_signal_received_sigint",
     "riven_string_contains",
     "riven_string_starts_with",
     "riven_string_ends_with",
@@ -406,6 +409,9 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "tcp_read" => return Ok("riven_tcp_read"),
         "tcp_write" => return Ok("riven_tcp_write"),
         "tcp_close" => return Ok("riven_tcp_close"),
+        // std::signal — graceful-shutdown surface.
+        "signal_install_sigint" => return Ok("riven_signal_install_sigint"),
+        "signal_received_sigint" => return Ok("riven_signal_received_sigint"),
         // Compiler-injected pseudo-calls. These are not method calls; the
         // codegen treats them specially.
         //   - `super` is a parent-init dispatch in a constructor.

@@ -15,6 +15,7 @@ llvm = ["dep:inkwell"]
 
 [dev-dependencies]
 proptest = "1"
+libc = "0.2"
 
 [dependencies]
 cranelift-codegen = "0.130"

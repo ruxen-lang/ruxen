@@ -59,6 +59,19 @@ impl Diagnostic {
             code: None,
         }
     }
+
+    pub fn warning_with_code(
+        message: impl Into<String>,
+        span: Span,
+        code: impl Into<String>,
+    ) -> Self {
+        Self {
+            level: DiagnosticLevel::Warning,
+            message: message.into(),
+            span,
+            code: Some(code.into()),
+        }
+    }
 }
 
 impl fmt::Display for Diagnostic {

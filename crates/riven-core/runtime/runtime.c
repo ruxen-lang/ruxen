@@ -21,6 +21,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <signal.h>
 
 /* Linux-only send() flag that suppresses SIGPIPE on a closed peer.
  * macOS / *BSD don't define it; on those platforms we set the
@@ -975,6 +976,41 @@ void riven_thread_yield(void) {
 }
 
 /* ---------------------------------------------------------------------
+ * Signal handling — minimal cooperative graceful-shutdown surface.
+ *
+ * The v1 model is intentionally simple: install a SIGINT handler that
+ * flips a flag, then let the program poll that flag from its main
+ * loop and shut down cleanly when set.  No SA_RESTART, so a blocking
+ * accept() / read() / write() that's interrupted by SIGINT returns
+ * with errno=EINTR — the loop sees the flag on its next iteration and
+ * exits.  No re-entrant handler, no multi-signal coverage, no signal
+ * masks — server scripts get the basic shape and v2 can layer SIGTERM
+ * / SIGHUP / per-signal handlers on top.
+ * ------------------------------------------------------------------ */
+
+static volatile sig_atomic_t riven_sigint_received = 0;
+
+static void riven_sigint_handler(int signo) {
+    (void)signo;
+    riven_sigint_received = 1;
+}
+
+void riven_signal_install_sigint(void) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = riven_sigint_handler;
+    sigemptyset(&sa.sa_mask);
+    /* Intentionally no SA_RESTART: we want blocking syscalls to
+     * return EINTR so cooperative loops can notice the flag. */
+    sa.sa_flags = 0;
+    sigaction(SIGINT, &sa, NULL);
+}
+
+int64_t riven_signal_received_sigint(void) {
+    return riven_sigint_received ? 1 : 0;
+}
+
+/* ---------------------------------------------------------------------
  * std::time
  *
  * Two clock sources, both returned as nanoseconds in an int64_t.
@@ -1286,10 +1322,13 @@ int64_t riven_tcp_listen(const char *addr) {
 
 int64_t riven_tcp_accept(int64_t fd) {
     if (fd < 0) return -1;
-    int accepted;
-    do {
-        accepted = accept((int)fd, NULL, NULL);
-    } while (accepted < 0 && errno == EINTR);
+    /* EINTR is propagated to the caller as `-1` rather than
+     * auto-retried internally — this lets cooperative shutdown
+     * loops notice a SIGINT and break out of their accept loop.
+     * Callers that want auto-retry can wrap with `while fd < 0
+     * { ... }` in Riven and check `signal_received_sigint()` on
+     * each iteration. */
+    int accepted = accept((int)fd, NULL, NULL);
     if (accepted >= 0) {
         riven_tcp_set_nosigpipe(accepted);
     }
