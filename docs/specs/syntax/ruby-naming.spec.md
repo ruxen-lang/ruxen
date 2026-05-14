@@ -366,27 +366,50 @@ end
 Without a `layout` directive, the compiler may reorder fields for
 size optimization (declaration order is **not** guaranteed).
 
-### 3.6 Derives
+### 3.6 Automatic mixin synthesis
 
-Derived trait impls are declared with `derive` inside the type body:
+There is no derive keyword. The compiler **automatically synthesizes**
+implementations of the following mixins for any class, struct, or
+enum whose fields structurally support them:
+
+| Mixin       | Auto-synth rule                                            |
+|-------------|------------------------------------------------------------|
+| `Debug`     | Always — formats as `TypeName(field=value, ...)`.          |
+| `Clone`     | When every field is `Clone`.                               |
+| `Eq`        | When every field is `Eq`. Field-wise `==`.                 |
+| `PartialEq` | Same as `Eq`, partial.                                     |
+| `Hash`      | When every field is `Hash`. FNV mixer over fields in source order. |
+| `Default`   | When every field has a default value.                      |
+| `Ord`       | When every field is `Ord`. Lexicographic by source order.  |
+| `PartialOrd`| Same as `Ord`, partial.                                    |
+
+`Copy` is the one mixin not driven by a list — it's structural and
+ownership-affecting:
+
+- A `struct` whose every field is `Copy` is itself `Copy`.
+- A `struct` with any non-`Copy` field is not `Copy`.
+- A `class` is never `Copy` (reference semantics).
+
+Override any auto-synthesized method by defining it in the type body.
+The user's definition wins; the compiler does not synthesize a
+duplicate.
 
 ```riven
 struct Point
   x: Int
   y: Int
-  derive Debug, Clone, PartialEq
-end
 
-enum Color
-  Red
-  Green
-  Blue
-  derive Debug, Clone, Eq, Hash
+  def to_debug -> String              # overrides synthesized Debug
+    "(#{self.x}, #{self.y})"
+  end
 end
 ```
 
-The set of derivable mixins is `Debug`, `Clone`, `Copy`, `PartialEq`,
-`Eq`, `Hash`, `Default`, `Ord`, `PartialOrd`.
+If a field's type does not support a mixin (e.g., a struct contains
+a non-`Hash` field), the type does not implement that mixin. The
+error appears at the **use site** (e.g., when the value is used as a
+`Map` key), not at the type declaration. The diagnostic names the
+offending field and the missing mixin.
 
 ### 3.7 FFI
 
@@ -450,27 +473,40 @@ use package.models.User
 (`use` is unchanged from before — it's the same `use` Ruby and
 Swift readers expect for namespace imports.)
 
-### 3.10 Nil
+### 3.10 Nil — the universal absence literal
 
-`nil` is the raw-pointer null literal. Valid only at `*T` / `*mut T`
-types, which themselves only appear in `unsafe` and FFI contexts:
+`nil` is the absence keyword. It is polymorphic across three
+contexts:
 
-```riven
-unsafe
-  let ptr: *mut UInt8 = nil
-  if some_ptr == nil
-    return Err("got null")
-  end
-end
-```
+1. The absence case of `Option[T]`:
+   ```riven
+   def find(id: Int) -> Option[User]
+     if id < 0; return nil; end
+     # ...
+   end
+   ```
+2. The raw-pointer null literal at `*T` / `*mut T` (FFI only):
+   ```riven
+   unsafe
+     let ptr: *mut UInt8 = nil
+     if some_ptr == nil; return Err("got null"); end
+   end
+   ```
+3. Comparisons through `==` / `!=` against an `Option[T]` or pointer.
 
-Using `nil` where a non-pointer type is expected is a type error.
-Riven references (`&T`, `&mut T`) cannot be `nil` — they are always
-valid by construction. For optional values, use `Option[T]` with
-`Some(value)` / `None`; `nil` is **not** an `Option` value.
+The compiler infers the type of `nil` from the surrounding context,
+the same way numeric literals coerce to the expected width.
 
-A `vec!`-style array literal macro for these types is spelled
-`array![...]` (see §4.4).
+`Some(value)` remains the present-case constructor for `Option[T]`.
+The asymmetry is intentional — presence has to wrap a value;
+absence is just `nil`.
+
+Riven references (`&T`, `&mut T`) cannot be `nil` — they are valid
+by construction. If you want a possibly-missing reference, use
+`Option[&T]`.
+
+A `vec!`-style array literal macro is spelled `array![...]` (see
+§4.4).
 
 ### 3.11 Stdlib type names
 
@@ -479,7 +515,7 @@ A `vec!`-style array literal macro for these types is spelled
 | `Array[T]`      | Growable heap-allocated sequence          |
 | `Set[T]`        | Hash-based unique set                     |
 | `Map[K, V]`     | Hash-based key-value map                  |
-| `Option[T]`     | `Some(v)` or `None` — replaces nullability |
+| `Option[T]`     | `Some(v)` or `nil` — replaces nullability  |
 | `Result[T, E]`  | `Ok(v)` or `Err(e)` — replaces exceptions |
 | `Box[T]`        | Owning heap pointer                       |
 | `Shared[T]`     | Reference-counted, single-threaded        |
@@ -535,11 +571,11 @@ in `!`.
 | Functions      | `def`, `init`, `self`, `Self`, `super`, `return`, `yield`                |
 | Modes          | `mut`, `consume`, `inline`                                               |
 | Control flow   | `if`, `elsif`, `else`, `match`, `while`, `for`, `in`, `loop`, `do`, `end`, `break`, `continue` |
-| Type system    | `where`, `as`, `some`, `any`, `derive`, `layout`, `include`, `extension` |
+| Type system    | `where`, `as`, `some`, `any`, `layout`, `include`, `extension`           |
 | Visibility     | `private`, `protected`                                                   |
 | Modules        | `module`, `use`, `package`                                               |
 | Safety         | `unsafe`                                                                 |
-| Literals       | `true`, `false`, `nil`, `None`, `Some`, `Ok`, `Err`                      |
+| Literals       | `true`, `false`, `nil`, `Some`, `Ok`, `Err`                              |
 | FFI            | `lib`                                                                    |
 | Async (reserved) | `async`, `await`, `spawn`, `actor`, `send`, `receive`                  |
 
@@ -654,14 +690,14 @@ def first_match[T, a](haystack: &a Array[T], pred: |&T| -> Bool) -> Option[&a T]
   for item in haystack
     if pred(item); return Some(item); end
   end
-  None
+  nil
 end
 
 let words = array!["alpha", "beta", "gamma"]
 let found = first_match(&words, |w| w.starts_with("b"))
 ```
 
-### 4.5 Derive + layout
+### 4.5 Layout — derives are automatic
 
 ```riven
 struct Header
@@ -670,9 +706,12 @@ struct Header
   version: UInt16
   flags: UInt16
   payload_len: UInt64
-  derive Debug, Clone, Copy
 end
 ```
+
+`Debug`, `Clone`, and `Copy` are auto-synthesized for this struct
+(every field is a primitive integer; primitives satisfy all three).
+No declaration needed.
 
 ---
 
@@ -760,7 +799,7 @@ This is not stable ABI for FFI use. Internal layout only.
 - T-PARSE-06: `include M` inside class body parses.
 - T-PARSE-07: `&some M`, `&any M`, `Box[any M]` parse.
 - T-PARSE-08: `layout c`, `layout packed`, `layout transparent` parse.
-- T-PARSE-09: `derive Debug, Clone` inside type body parses.
+- T-PARSE-09: `derive` keyword is rejected as an unknown identifier.
 - T-PARSE-10: `lib "c", version: "1"` parses with options.
 - T-PARSE-11: `inline def f` and standalone `inline :f` parse.
 - T-PARSE-12: `use package.x.y` parses.
@@ -776,7 +815,7 @@ This is not stable ABI for FFI use. Internal layout only.
   structural match alone is rejected.
 - T-SEM-06: `some Mixin` accepts structural match.
 - T-SEM-07: `layout transparent` on multi-field rejected.
-- T-SEM-08: `derive Hash` on type with non-`Hash` field rejected.
+- T-SEM-08: Using a struct with a non-`Hash` field as a `Map` key is rejected with a use-site error naming the offending field.
 - T-SEM-09: Private method called outside class rejected.
 - T-SEM-10: Protected method callable from subclass.
 - T-SEM-11: Lowercase `a` in `[a]` slot is a lifetime, not a type.
@@ -792,7 +831,7 @@ This is not stable ABI for FFI use. Internal layout only.
   through public `def init`.
 - T-E2E-04: Inline-modifier method behaves identically to non-inline
   under Cranelift (semantic test; LLVM-specific test waits for v2).
-- T-E2E-05: A `derive Clone` struct round-trips through `.clone()`.
+- T-E2E-05: A struct with all-Clone fields auto-synthesizes `Clone` and round-trips through `.clone()` with no declaration.
 
 ---
 
@@ -837,7 +876,9 @@ mention of the prior forms.
 | `&impl T` (param/return type)       | `&some T`                                                 |
 | `&dyn T` (param/return type)        | `&any T`                                                  |
 | `'a` lifetime sigil                 | bare lowercase identifier in `[...]`: `[a]`, `&a T`       |
-| `@[derive(D1, D2)]`                 | `derive D1, D2` in type body (existing form, only form)   |
+| `@[derive(D1, D2)]`                 | DELETE — automatic synthesis (§3.6); user override wins   |
+| `derive D1, D2` in-body             | DELETE — same reason; no `derive` keyword exists          |
+| `None` (`Option` variant constructor) | `nil`                                                   |
 | `@[repr(C)]`                        | `layout c` at top of type body                            |
 | `@[repr(packed)]`                   | `layout packed`                                           |
 | `@[repr(transparent)]`              | `layout transparent`                                      |
