@@ -30,8 +30,8 @@ pub fn ty_to_llvm<'ctx>(ty: &Ty, context: &'ctx Context) -> Option<BasicTypeEnum
         // All pointer/heap-allocated types -> opaque ptr
         Ty::String
         | Ty::Str
-        | Ty::Vec(_)
-        | Ty::HashMap(_, _)
+        | Ty::Array(_)
+        | Ty::Map(_, _)
         | Ty::Set(_)
         | Ty::Ref(_)
         | Ty::RefMut(_)
@@ -49,14 +49,14 @@ pub fn ty_to_llvm<'ctx>(ty: &Ty, context: &'ctx Context) -> Option<BasicTypeEnum
         | Ty::Fn { .. }
         | Ty::FnMut { .. }
         | Ty::FnOnce { .. }
-        | Ty::DynTrait(_)
-        | Ty::ImplTrait(_)
+        | Ty::AnyMixin(_)
+        | Ty::SomeMixin(_)
         | Ty::Alias { .. }
         | Ty::Newtype { .. }
         | Ty::TypeParam { .. }
         | Ty::Infer(_)
         | Ty::Tuple(_)
-        | Ty::Array(_, _) => Some(context.ptr_type(AddressSpace::default()).into()),
+        | Ty::FixedArray(_, _) => Some(context.ptr_type(AddressSpace::default()).into()),
 
         // No runtime representation
         Ty::Unit | Ty::Never | Ty::Error => None,

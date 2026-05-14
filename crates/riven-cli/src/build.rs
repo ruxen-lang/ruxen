@@ -589,7 +589,7 @@ fn compile_project(
 
 /// Build type metadata from the HIR type checking result.
 fn build_metadata_from_hir(type_result: &typeck::TypeCheckResult) -> TypeMetadata {
-    use riven_core::hir::nodes::{HirItem, HirTraitItem};
+    use riven_core::hir::nodes::{HirItem, HirMixinItem};
 
     let mut exports = Exports::default();
 
@@ -661,12 +661,12 @@ fn build_metadata_from_hir(type_result: &typeck::TypeCheckResult) -> TypeMetadat
                     methods: vec![],
                 });
             }
-            HirItem::Trait(t) => {
+            HirItem::Mixin(t) => {
                 let methods = t
                     .items
                     .iter()
                     .filter_map(|item| match item {
-                        HirTraitItem::MethodSig {
+                        HirMixinItem::MethodSig {
                             name,
                             params,
                             return_ty,
@@ -683,7 +683,7 @@ fn build_metadata_from_hir(type_result: &typeck::TypeCheckResult) -> TypeMetadat
                             return_type: format!("{:?}", return_ty),
                             visibility: "public".to_string(),
                         }),
-                        HirTraitItem::DefaultMethod(func) => Some(rlib::ExportedFunction {
+                        HirMixinItem::DefaultMethod(func) => Some(rlib::ExportedFunction {
                             name: func.name.clone(),
                             params: func
                                 .params

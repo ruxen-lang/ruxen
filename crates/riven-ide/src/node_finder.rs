@@ -94,12 +94,12 @@ impl NodeFinder {
                     }
                 }
             }
-            HirItem::Trait(t) => {
+            HirItem::Mixin(t) => {
                 if self.contains(&t.span) {
                     for item in &t.items {
                         match item {
-                            HirTraitItem::DefaultMethod(func) => self.visit_func_def(func),
-                            HirTraitItem::MethodSig { span, .. } => {
+                            HirMixinItem::DefaultMethod(func) => self.visit_func_def(func),
+                            HirMixinItem::MethodSig { span, .. } => {
                                 if self.contains(span) {
                                     // method signature in trait
                                 }

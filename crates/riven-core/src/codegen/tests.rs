@@ -134,7 +134,7 @@ mod tests {
     #[test]
     fn vec_layout() {
         // Vec[Int] = ptr + len + cap → 24 bytes, align 8
-        let layout = layout_of(&Ty::Vec(Box::new(Ty::Int)), &symbols());
+        let layout = layout_of(&Ty::Array(Box::new(Ty::Int)), &symbols());
         assert_eq!(layout.size, 24);
         assert_eq!(layout.alignment, 8);
     }
@@ -142,7 +142,7 @@ mod tests {
     #[test]
     fn hash_layout() {
         let layout = layout_of(
-            &Ty::HashMap(Box::new(Ty::String), Box::new(Ty::Int)),
+            &Ty::Map(Box::new(Ty::String), Box::new(Ty::Int)),
             &symbols(),
         );
         assert_eq!(layout.size, 48);
@@ -200,7 +200,7 @@ mod tests {
     fn array_layout() {
         // [Int; 4] → 8 * 4 = 32 bytes, align 8
         let layout = layout_of(
-            &Ty::Array(Box::new(Ty::Int), crate::hir::types::ConstExpr::Lit(4)),
+            &Ty::FixedArray(Box::new(Ty::Int), crate::hir::types::ConstExpr::Lit(4)),
             &symbols(),
         );
         assert_eq!(layout.size, 32);
@@ -211,7 +211,7 @@ mod tests {
     fn array_zero_size() {
         // [Int; 0] → 0 bytes, align 8
         let layout = layout_of(
-            &Ty::Array(Box::new(Ty::Int), crate::hir::types::ConstExpr::Lit(0)),
+            &Ty::FixedArray(Box::new(Ty::Int), crate::hir::types::ConstExpr::Lit(0)),
             &symbols(),
         );
         assert_eq!(layout.size, 0);
@@ -222,7 +222,7 @@ mod tests {
     fn array_bool() {
         // [Bool; 8] → 8 bytes, align 1
         let layout = layout_of(
-            &Ty::Array(Box::new(Ty::Bool), crate::hir::types::ConstExpr::Lit(8)),
+            &Ty::FixedArray(Box::new(Ty::Bool), crate::hir::types::ConstExpr::Lit(8)),
             &symbols(),
         );
         assert_eq!(layout.size, 8);
@@ -276,7 +276,7 @@ mod tests {
 
     #[test]
     fn dyn_trait_layout() {
-        let layout = layout_of(&Ty::DynTrait(vec![]), &symbols());
+        let layout = layout_of(&Ty::AnyMixin(vec![]), &symbols());
         assert_eq!(layout.size, 16);
         assert_eq!(layout.alignment, 8);
     }

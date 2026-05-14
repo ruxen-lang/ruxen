@@ -30,7 +30,9 @@ pub enum TopLevelItem {
     Class(ClassDef),
     Struct(StructDef),
     Enum(EnumDef),
-    Trait(TraitDef),
+    /// `mixin M ... end` — was `Trait` pre-Ruby-naming migration.
+    /// See docs/specs/syntax/ruby-naming.spec.md.
+    Mixin(MixinDef),
     Impl(ImplBlock),
     Function(FuncDef),
     Use(UseDecl),
@@ -73,12 +75,16 @@ pub enum TypeExpr {
         return_type: Box<TypeExpr>,
         span: Span,
     },
-    ImplTrait {
-        bounds: Vec<TraitBound>,
+    /// `some M` — static-dispatch mixin reference (was `impl Trait`
+    /// pre-Ruby-naming; see docs/specs/syntax/ruby-naming.spec.md).
+    SomeMixin {
+        bounds: Vec<MixinBound>,
         span: Span,
     },
-    DynTrait {
-        bounds: Vec<TraitBound>,
+    /// `any M` — dynamic-dispatch mixin reference (was `dyn Trait`
+    /// pre-Ruby-naming).
+    AnyMixin {
+        bounds: Vec<MixinBound>,
         span: Span,
     },
     Never {
@@ -121,10 +127,12 @@ pub enum TypeExpr {
     },
 }
 
-// ─── Trait Bounds & Generics ─────────────────────────────────────────
+// ─── Mixin Bounds & Generics ─────────────────────────────────────────
+// Was "Trait Bounds" pre-Ruby-naming migration. See
+// docs/specs/syntax/ruby-naming.spec.md.
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct TraitBound {
+pub struct MixinBound {
     pub path: TypePath,
     pub span: Span,
 }
@@ -143,7 +151,7 @@ pub enum GenericParam {
     },
     Type {
         name: String,
-        bounds: Vec<TraitBound>,
+        bounds: Vec<MixinBound>,
         span: Span,
     },
     /// Tier-2 const generics (`const N: USize`).
@@ -175,7 +183,7 @@ pub struct WhereClause {
 #[derive(Debug, Clone, PartialEq)]
 pub struct WherePredicate {
     pub type_expr: TypeExpr,
-    pub bounds: Vec<TraitBound>,
+    pub bounds: Vec<MixinBound>,
     pub span: Span,
 }
 
@@ -730,20 +738,22 @@ pub struct VariantField {
     pub span: Span,
 }
 
-// ─── Trait ───────────────────────────────────────────────────────────
+// ─── Mixin ───────────────────────────────────────────────────────────
+// Was "Trait" pre-Ruby-naming migration. See
+// docs/specs/syntax/ruby-naming.spec.md.
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct TraitDef {
+pub struct MixinDef {
     pub name: String,
     pub generic_params: Option<GenericParams>,
-    pub super_traits: Vec<TraitBound>,
-    pub items: Vec<TraitItem>,
+    pub super_traits: Vec<MixinBound>,
+    pub items: Vec<MixinItem>,
     pub doc_comments: Vec<String>,
     pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum TraitItem {
+pub enum MixinItem {
     AssocType { name: String, span: Span },
     MethodSig(MethodSig),
     DefaultMethod(FuncDef),

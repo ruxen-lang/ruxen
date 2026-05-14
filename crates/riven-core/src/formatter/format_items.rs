@@ -100,7 +100,7 @@ fn classify_item(item: &TopLevelItem) -> ItemKind {
         TopLevelItem::Class(_)
         | TopLevelItem::Struct(_)
         | TopLevelItem::Enum(_)
-        | TopLevelItem::Trait(_)
+        | TopLevelItem::Mixin(_)
         | TopLevelItem::Module(_)
         | TopLevelItem::TypeAlias(_)
         | TopLevelItem::Newtype(_) => ItemKind::TypeDef,
@@ -116,7 +116,7 @@ fn item_span(item: &TopLevelItem) -> &crate::lexer::token::Span {
         TopLevelItem::Class(c) => &c.span,
         TopLevelItem::Struct(s) => &s.span,
         TopLevelItem::Enum(e) => &e.span,
-        TopLevelItem::Trait(t) => &t.span,
+        TopLevelItem::Mixin(t) => &t.span,
         TopLevelItem::Impl(i) => &i.span,
         TopLevelItem::Function(f) => &f.span,
         TopLevelItem::Use(u) => &u.span,
@@ -136,7 +136,7 @@ fn format_top_level_item(item: &TopLevelItem, comments: &CommentMap) -> Doc {
         TopLevelItem::Class(c) => format_class(c, comments),
         TopLevelItem::Struct(s) => format_struct(s, comments),
         TopLevelItem::Enum(e) => format_enum(e, comments),
-        TopLevelItem::Trait(t) => format_trait(t, comments),
+        TopLevelItem::Mixin(t) => format_trait(t, comments),
         TopLevelItem::Impl(i) => format_impl(i, comments),
         TopLevelItem::Function(f) => format_func_def(f, comments),
         TopLevelItem::Use(u) => format_use(u),
@@ -503,7 +503,7 @@ fn format_variant(variant: &Variant, comments: &CommentMap) -> Doc {
 
 // ─── Traits ─────────────────────────────────────────────────────────
 
-fn format_trait(t: &TraitDef, comments: &CommentMap) -> Doc {
+fn format_trait(t: &MixinDef, comments: &CommentMap) -> Doc {
     let mut header = vec![text("trait "), text(t.name.clone())];
 
     if let Some(gp) = &t.generic_params {
@@ -530,11 +530,11 @@ fn format_trait(t: &TraitDef, comments: &CommentMap) -> Doc {
     ])
 }
 
-fn format_trait_item(item: &TraitItem, comments: &CommentMap) -> Doc {
+fn format_trait_item(item: &MixinItem, comments: &CommentMap) -> Doc {
     match item {
-        TraitItem::AssocType { name, .. } => text(format!("type {}", name)),
-        TraitItem::MethodSig(sig) => format_method_sig(sig, comments),
-        TraitItem::DefaultMethod(func) => format_func_def(func, comments),
+        MixinItem::AssocType { name, .. } => text(format!("type {}", name)),
+        MixinItem::MethodSig(sig) => format_method_sig(sig, comments),
+        MixinItem::DefaultMethod(func) => format_func_def(func, comments),
     }
 }
 

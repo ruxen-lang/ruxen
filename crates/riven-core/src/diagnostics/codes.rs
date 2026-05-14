@@ -10,9 +10,9 @@
 //! | Range         | Owner                         |
 //! |---------------|-------------------------------|
 //! | E0001-E0099   | lexer                         |
-//! | E0601-E0618   | tier-1.05 derive macros       |
+//! | E0601-E0618   | implicit-include / auto-synth |
 //! | E0700-E0799   | tier-2 type system            |
-//! | E1011-E1099   | tier-1 trait/impl checking    |
+//! | E1011-E1099   | mixin / include checking      |
 
 /// Metadata for a single compiler error code.
 #[derive(Debug, Clone, Copy)]
@@ -59,70 +59,77 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E0042",
         title: "diagnostic-fixture sentinel (tests only)",
     },
-    // ── Derive macros (E0601-E0618) ──────────────────────────────────
+    // ── Implicit-include / auto-synth (E0601-E0618) ──────────────────
+    // Structural mixins (Debug, Clone, Copy, PartialEq, Eq, Hash,
+    // Default, Ord, PartialOrd) are implicitly included on a type
+    // whose fields satisfy the relevant bound (see ruby-naming
+    // §3.6). When the rule fails, the diagnostic fires at either the
+    // explicit `include` site or the first use site of the relevant
+    // method. The codes below cover those failures.
+    //
     // E0612 and E0614 are intentionally reserved (Copy uses E0602, Eq
     // uses E0604). The reservation is enforced by the test
     // `e0612_and_e0614_remain_reserved_unless_explicitly_unblocked` in
     // `crates/riven-core/tests/implicit_codes_registered.rs`.
     CodeInfo {
         code: "E0601",
-        title: "cannot derive Copy: field has non-Copy type",
+        title: "cannot synthesize Copy: field has non-Copy type",
     },
     CodeInfo {
         code: "E0602",
-        title: "deriving Copy also requires Clone",
+        title: "Copy implies Clone — a Copy type must also support Clone",
     },
     CodeInfo {
         code: "E0603",
-        title: "Copy cannot be derived on a class; use a struct",
+        title: "Copy cannot be auto-synthesized on a class; use a struct",
     },
     CodeInfo {
         code: "E0604",
-        title: "deriving Eq also requires PartialEq",
+        title: "Eq implies PartialEq — a type must satisfy both together",
     },
     CodeInfo {
         code: "E0605",
-        title: "cannot derive Default on enum without a `@[default]` variant",
+        title: "cannot synthesize Default on enum without a `default` variant",
     },
     CodeInfo {
         code: "E0606",
-        title: "deriving Ord also requires Eq and PartialOrd",
+        title: "Ord implies Eq and PartialOrd — synthesize them together",
     },
     CodeInfo {
         code: "E0608",
-        title: "unknown derive trait",
+        title: "unknown mixin requested for auto-synthesis",
     },
     CodeInfo {
         code: "E0609",
-        title: "duplicate derive trait",
+        title: "duplicate include of an auto-synthesized mixin",
     },
     CodeInfo {
         code: "E0610",
-        title: "derive: field type does not satisfy the derived trait's bound",
+        title: "auto-synth: field type does not satisfy the synthesized mixin's bound",
     },
     CodeInfo {
         code: "E0611",
-        title: "derive Clone: unsupported shape (e.g. extern type)",
+        title: "auto-synth Clone: unsupported field shape (e.g. opaque foreign type)",
     },
     CodeInfo {
         code: "E0613",
-        title: "derive PartialEq: field type does not implement PartialEq",
+        title: "auto-synth PartialEq: field type does not satisfy PartialEq",
     },
     CodeInfo {
         code: "E0615",
-        title: "derive Hash: field type is not hashable",
+        title: "auto-synth Hash: field type is not hashable",
     },
     CodeInfo {
         code: "E0616",
-        title: "derive Default: enum's first variant has fields without Default",
+        title: "auto-synth Default: enum's first variant has fields without Default",
     },
     CodeInfo {
         code: "E0617",
-        title: "derive Ord: field type does not implement Ord",
+        title: "auto-synth Ord: field type does not satisfy Ord",
     },
     CodeInfo {
         code: "E0618",
-        title: "derive PartialOrd: field type does not implement PartialOrd",
+        title: "auto-synth PartialOrd: field type does not satisfy PartialOrd",
     },
     // ── Tier-2 type system (E0700-E0799) ─────────────────────────────
     //
@@ -163,7 +170,7 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E0706",
         title: "where-clause const predicate is not satisfied at this instantiation",
     },
-    // ── Borrow checking + trait/impl (E1001-E1099) ───────────────────
+    // ── Borrow checking + mixin/include (E1001-E1099) ────────────────
     // The borrow checker maintains a parallel `ErrorCode` enum in
     // `borrow_check/errors.rs`; titles below mirror its `title()`
     // method. Keep them in sync when adding new codes.
@@ -221,7 +228,7 @@ pub const REGISTRY: &[CodeInfo] = &[
     },
     CodeInfo {
         code: "E1014",
-        title: "invalid `unsafe impl` declaration",
+        title: "invalid `unsafe include` declaration",
     },
 ];
 

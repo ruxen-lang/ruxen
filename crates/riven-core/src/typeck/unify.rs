@@ -82,25 +82,25 @@ pub fn unify(a: &Ty, b: &Ty, ctx: &mut TypeContext, span: &Span) -> Result<Ty, T
         }
 
         // Arrays: same element type and size
-        (Ty::Array(a_elem, a_size), Ty::Array(b_elem, b_size)) => {
+        (Ty::FixedArray(a_elem, a_size), Ty::FixedArray(b_elem, b_size)) => {
             if a_size != b_size {
                 return Err(TypeError::mismatch(&a, &b, span));
             }
             let elem = unify(a_elem, b_elem, ctx, span)?;
-            Ok(Ty::Array(Box::new(elem), a_size.clone()))
+            Ok(Ty::FixedArray(Box::new(elem), a_size.clone()))
         }
 
         // Vec
-        (Ty::Vec(a_elem), Ty::Vec(b_elem)) => {
+        (Ty::Array(a_elem), Ty::Array(b_elem)) => {
             let elem = unify(a_elem, b_elem, ctx, span)?;
-            Ok(Ty::Vec(Box::new(elem)))
+            Ok(Ty::Array(Box::new(elem)))
         }
 
         // HashMap
-        (Ty::HashMap(ak, av), Ty::HashMap(bk, bv)) => {
+        (Ty::Map(ak, av), Ty::Map(bk, bv)) => {
             let k = unify(ak, bk, ctx, span)?;
             let v = unify(av, bv, ctx, span)?;
-            Ok(Ty::HashMap(Box::new(k), Box::new(v)))
+            Ok(Ty::Map(Box::new(k), Box::new(v)))
         }
 
         // Set

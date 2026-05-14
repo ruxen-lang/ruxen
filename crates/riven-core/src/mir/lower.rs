@@ -57,7 +57,7 @@ pub struct Lowerer<'a> {
     /// caller declares `-> Result[_, Outer]`.
     into_impls: HashSet<(String, String)>,
     /// trait_name → map of method_name → default method `HirFuncDef`.
-    /// Populated from every `HirItem::Trait` at the start of lowering so
+    /// Populated from every `HirItem::Mixin` at the start of lowering so
     /// that each `impl Trait for Type` can monomorphize the default body
     /// for `Type` if the impl does not override the method itself.
     trait_default_methods: HashMap<String, HashMap<String, HirFuncDef>>,
@@ -229,10 +229,10 @@ impl<'a> Lowerer<'a> {
     fn collect_trait_default_methods(&mut self, program: &HirProgram) {
         fn visit(item: &HirItem, map: &mut HashMap<String, HashMap<String, HirFuncDef>>) {
             match item {
-                HirItem::Trait(tdef) => {
+                HirItem::Mixin(tdef) => {
                     let entry = map.entry(tdef.name.clone()).or_default();
                     for ti in &tdef.items {
-                        if let HirTraitItem::DefaultMethod(f) = ti {
+                        if let HirMixinItem::DefaultMethod(f) = ti {
                             entry.insert(f.name.clone(), f.clone());
                         }
                     }
@@ -334,7 +334,7 @@ impl<'a> Lowerer<'a> {
     /// For a multi-bound `T: A + B`, compute the intersection of impl
     /// targets across every bound; if the intersection has exactly one
     /// type, dispatch to it.
-    fn unique_bound_impl(&self, bounds: &[crate::hir::types::TraitRef]) -> Option<String> {
+    fn unique_bound_impl(&self, bounds: &[crate::hir::types::MixinRef]) -> Option<String> {
         if bounds.is_empty() {
             return None;
         }
@@ -454,7 +454,7 @@ impl<'a> Lowerer<'a> {
                     let type_name = type_name_from_ty(&impl_block.target_ty);
                     self.lower_impl_block(impl_block, &type_name, &mut mir)?;
                 }
-                HirItem::Trait(_)
+                HirItem::Mixin(_)
                 | HirItem::TypeAlias(_)
                 | HirItem::Newtype(_)
                 | HirItem::Const(_)
@@ -878,8 +878,8 @@ impl<'a> Lowerer<'a> {
                 // allocations even when their elements match. Route
                 // through `riven_vec_eq` for both `==` and `!=`.
                 if matches!(op, BinOp::Eq | BinOp::NotEq)
-                    && matches!(left.ty, Ty::Vec(_))
-                    && matches!(right.ty, Ty::Vec(_))
+                    && matches!(left.ty, Ty::Array(_))
+                    && matches!(right.ty, Ty::Array(_))
                 {
                     let cmp = self.new_temp(Ty::Bool);
                     self.emit(MirInst::Call {
@@ -903,8 +903,8 @@ impl<'a> Lowerer<'a> {
                 // integer compare on the spine pointers is meaningless
                 // across allocations. Route through `riven_hash_eq`.
                 if matches!(op, BinOp::Eq | BinOp::NotEq)
-                    && matches!(left.ty, Ty::HashMap(_, _))
-                    && matches!(right.ty, Ty::HashMap(_, _))
+                    && matches!(left.ty, Ty::Map(_, _))
+                    && matches!(right.ty, Ty::Map(_, _))
                 {
                     let cmp = self.new_temp(Ty::Bool);
                     self.emit(MirInst::Call {
@@ -1370,9 +1370,9 @@ impl<'a> Lowerer<'a> {
                     let iter_id = iter_local.unwrap_or_else(|| self.new_temp(Ty::Int));
                     let dest = self.new_temp(expr.ty.clone());
                     let callee = match &expr.ty {
-                        Ty::Vec(_) => "riven_vec_from_iter",
+                        Ty::Array(_) => "riven_vec_from_iter",
                         Ty::String | Ty::Str => "riven_string_from_iter",
-                        Ty::HashMap(_, _) => "riven_hash_from_iter",
+                        Ty::Map(_, _) => "riven_hash_from_iter",
                         Ty::Set(_) => "riven_set_from_iter",
                         other => {
                             return Err(format!(
@@ -1639,7 +1639,7 @@ impl<'a> Lowerer<'a> {
                 // exists.
                 let resolved_class = match &object.ty {
                     Ty::Class { name, .. } => self.resolve_method_class(name, method_name),
-                    Ty::TypeParam { bounds, .. } | Ty::ImplTrait(bounds) | Ty::DynTrait(bounds) => {
+                    Ty::TypeParam { bounds, .. } | Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds) => {
                         self.unique_bound_impl(bounds)
                             .unwrap_or_else(|| type_name.clone())
                     }
@@ -1648,8 +1648,8 @@ impl<'a> Lowerer<'a> {
                     | Ty::RefLifetime(_, inner)
                     | Ty::RefMutLifetime(_, inner) => match inner.as_ref() {
                         Ty::TypeParam { bounds, .. }
-                        | Ty::ImplTrait(bounds)
-                        | Ty::DynTrait(bounds) => self
+                        | Ty::SomeMixin(bounds)
+                        | Ty::AnyMixin(bounds) => self
                             .unique_bound_impl(bounds)
                             .unwrap_or_else(|| type_name.clone()),
                         _ => type_name.clone(),
@@ -2581,8 +2581,8 @@ impl<'a> Lowerer<'a> {
                     let resolved_class = match dispatch_ty {
                         Ty::Class { name, .. } => self.resolve_method_class(name, field_name),
                         Ty::TypeParam { bounds, .. }
-                        | Ty::ImplTrait(bounds)
-                        | Ty::DynTrait(bounds) => self
+                        | Ty::SomeMixin(bounds)
+                        | Ty::AnyMixin(bounds) => self
                             .unique_bound_impl(bounds)
                             .unwrap_or_else(|| obj_type_name.clone()),
                         _ => obj_type_name.clone(),
@@ -3192,7 +3192,7 @@ impl<'a> Lowerer<'a> {
                 // 8-byte slots (the layout used by Alloc + SetField above).
                 // When the index is a compile-time integer literal we can
                 // lower `a[i]` to a direct `GetField { field_index: i }`.
-                if matches!(object.ty, Ty::Array(_, _)) {
+                if matches!(object.ty, Ty::FixedArray(_, _)) {
                     if let HirExprKind::IntLiteral(n) = &index.kind {
                         let base_local = self.lower_expr(object)?;
                         if let Some(base) = base_local {
@@ -3211,11 +3211,11 @@ impl<'a> Lowerer<'a> {
                 // descriptive message ("index N out of range, len M").
                 // The runtime fn returns the raw 64-bit slot; the
                 // typeck-emitted result type pulls out the element T.
-                if matches!(object.ty, Ty::Vec(_))
+                if matches!(object.ty, Ty::Array(_))
                     || matches!(
                         &object.ty,
                         Ty::Ref(inner) | Ty::RefMut(inner)
-                            if matches!(inner.as_ref(), Ty::Vec(_))
+                            if matches!(inner.as_ref(), Ty::Array(_))
                     )
                 {
                     let base_local = self.lower_expr(object)?;
@@ -3235,11 +3235,11 @@ impl<'a> Lowerer<'a> {
                 // (mirrors `riven_vec_get_or_panic` for Vec). The
                 // surface type is V (set in typeck::infer_index_ty);
                 // runtime returns the raw 64-bit value slot.
-                if matches!(object.ty, Ty::HashMap(_, _))
+                if matches!(object.ty, Ty::Map(_, _))
                     || matches!(
                         &object.ty,
                         Ty::Ref(inner) | Ty::RefMut(inner)
-                            if matches!(inner.as_ref(), Ty::HashMap(_, _))
+                            if matches!(inner.as_ref(), Ty::Map(_, _))
                     )
                 {
                     let base_local = self.lower_expr(object)?;
@@ -6915,7 +6915,7 @@ impl<'a> Lowerer<'a> {
             });
             return dest;
         }
-        if matches!(field_ty, Ty::Vec(_)) {
+        if matches!(field_ty, Ty::Array(_)) {
             let dest = mir_fn.new_temp(field_ty.clone());
             mir_fn.blocks[block].instructions.push(MirInst::Call {
                 dest: Some(dest),
@@ -6924,7 +6924,7 @@ impl<'a> Lowerer<'a> {
             });
             return dest;
         }
-        if matches!(field_ty, Ty::HashMap(_, _)) {
+        if matches!(field_ty, Ty::Map(_, _)) {
             let dest = mir_fn.new_temp(field_ty.clone());
             mir_fn.blocks[block].instructions.push(MirInst::Call {
                 dest: Some(dest),
@@ -7472,7 +7472,7 @@ impl<'a> Lowerer<'a> {
             });
             return dest;
         }
-        if matches!(ty, Ty::Vec(_) | Ty::HashMap(_, _) | Ty::Set(_)) {
+        if matches!(ty, Ty::Array(_) | Ty::Map(_, _) | Ty::Set(_)) {
             let dest = mir_fn.new_temp(ty.clone());
             let type_name = type_name_from_ty(ty);
             let base = type_name.split('[').next().unwrap_or(type_name.as_str());
@@ -7715,7 +7715,7 @@ impl<'a> Lowerer<'a> {
             return true;
         }
         match ty {
-            Ty::TypeParam { bounds, .. } | Ty::ImplTrait(bounds) | Ty::DynTrait(bounds) => {
+            Ty::TypeParam { bounds, .. } | Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds) => {
                 bounds.iter().any(|bound| bound.name == trait_name)
             }
             Ty::Ref(inner)
@@ -8203,7 +8203,7 @@ fn is_collection_method(method_name: &str) -> bool {
 /// like Repository or TaskList).
 fn is_vec_or_iterator_type(ty: &Ty) -> bool {
     match ty {
-        Ty::Vec(_) => true,
+        Ty::Array(_) => true,
         Ty::Ref(inner)
         | Ty::RefMut(inner)
         | Ty::RefLifetime(_, inner)
@@ -8262,7 +8262,7 @@ fn is_builtin_static_method(type_name: &str, method_name: &str) -> bool {
 /// the reference first. Falls back to `Ty::Int` for unrecognized types.
 fn element_type_of(ty: &Ty) -> Ty {
     match ty {
-        Ty::Vec(inner) => *inner.clone(),
+        Ty::Array(inner) => *inner.clone(),
         Ty::Ref(inner)
         | Ty::RefMut(inner)
         | Ty::RefLifetime(_, inner)
@@ -8583,8 +8583,8 @@ fn insert_drops(
                     | Ty::Struct { .. }
                     | Ty::Enum { .. }
                     | Ty::String
-                    | Ty::Vec(_)
-                    | Ty::HashMap(_, _)
+                    | Ty::Array(_)
+                    | Ty::Map(_, _)
                     | Ty::Set(_)
             ) {
                 return false;
@@ -8594,7 +8594,7 @@ fn insert_drops(
             if local.name.starts_with("_t") {
                 let is_builtin_heap = matches!(
                     local.ty,
-                    Ty::String | Ty::Vec(_) | Ty::HashMap(_, _) | Ty::Set(_)
+                    Ty::String | Ty::Array(_) | Ty::Map(_, _) | Ty::Set(_)
                 );
                 return is_builtin_heap && dealloc_safe.contains(&local.id);
             }
@@ -8673,9 +8673,9 @@ fn insert_drops(
                         // the spine-only `riven_vec_free`. The deeper
                         // shapes will land alongside the trait-driven
                         // drop dispatch in #05.
-                        Ty::Vec(elem) => match elem.as_ref() {
+                        Ty::Array(elem) => match elem.as_ref() {
                             Ty::String => "riven_vec_drop_string",
-                            Ty::Vec(_) => "riven_vec_drop_vec",
+                            Ty::Array(_) => "riven_vec_drop_vec",
                             _ => "riven_vec_free",
                         },
                         // Phase 2 stdlib batch 2 (#04): pick the
@@ -8688,10 +8688,10 @@ fn insert_drops(
                         // a follow-up alongside the trait-driven drop
                         // dispatch in #05 and is documented in
                         // CHANGELOG known limitations.
-                        Ty::HashMap(k, v) => {
+                        Ty::Map(k, v) => {
                             let k_string = matches!(k.as_ref(), Ty::String);
                             let v_string = matches!(v.as_ref(), Ty::String);
-                            let v_vec = matches!(v.as_ref(), Ty::Vec(_));
+                            let v_vec = matches!(v.as_ref(), Ty::Array(_));
                             match (k_string, v_string, v_vec) {
                                 (true, true, _) => "riven_hash_drop_string_string",
                                 (true, false, _) => "riven_hash_drop_string_v",
@@ -9661,7 +9661,7 @@ fn rewrite_self_in_ty(ty: &mut Ty, concrete: &Ty) {
                 rewrite_self_in_ty(e, concrete);
             }
         }
-        Ty::Array(inner, _) => rewrite_self_in_ty(inner, concrete),
+        Ty::FixedArray(inner, _) => rewrite_self_in_ty(inner, concrete),
         Ty::Option(inner) => rewrite_self_in_ty(inner, concrete),
         Ty::Result(ok, err) => {
             rewrite_self_in_ty(ok, concrete);

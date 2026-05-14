@@ -46,7 +46,7 @@ pub use manifest::{
 };
 pub use signature::{
     extract as extract_signature, interface_changed, EnumVariantSig, FileSignature, PublicItem,
-    SigField, SigFn, SigParam, TraitItemSig,
+    SigField, SigFn, SigParam, MixinItemSig,
 };
 pub use store::{
     atomic_write, clear_global_cache, global_cache_dir, unix_now_secs, CacheStore,

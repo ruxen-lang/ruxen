@@ -3155,7 +3155,7 @@ void riven_hash_ORIG_FREE(RivenHash *h) {
  *
  * These walk the bucket chains BEFORE the spine free, releasing the
  * heap-owned key (or value, or both) for each entry. The drop
- * selector in `mir/lower.rs::insert_drops` dispatches on `Ty::HashMap(K, V)`
+ * selector in `mir/lower.rs::insert_drops` dispatches on `Ty::Map(K, V)`
  * to pick the right one based on K/V being heap-owning. The
  * `_ORIG_FREE` sentinel naming pattern (see `riven_string_ORIG_FREE`
  * comment ~line 620) keeps the link symbol clean while letting the

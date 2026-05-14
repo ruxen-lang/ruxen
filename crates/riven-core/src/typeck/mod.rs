@@ -17,7 +17,7 @@ use crate::parser::ast;
 use crate::resolve::symbols::SymbolTable;
 use crate::resolve::{ResolveResult, Resolver};
 use infer::InferenceEngine;
-use mixins::TraitResolver;
+use mixins::MixinResolver;
 
 /// The result of full type checking.
 pub struct TypeCheckResult {
@@ -49,7 +49,7 @@ pub fn type_check(program: &ast::Program) -> TypeCheckResult {
         &program, &symbols,
     ));
 
-    let mut trait_resolver = TraitResolver::new();
+    let mut trait_resolver = MixinResolver::new();
     trait_resolver.collect_impls(&program, &symbols);
 
     // Phase 3: Type inference
@@ -132,10 +132,10 @@ fn resolve_item_types(item: &mut crate::hir::nodes::HirItem, ctx: &TypeContext) 
                 }
             }
         }
-        HirItem::Trait(t) => {
+        HirItem::Mixin(t) => {
             for item in &mut t.items {
                 match item {
-                    crate::hir::nodes::HirTraitItem::MethodSig {
+                    crate::hir::nodes::HirMixinItem::MethodSig {
                         return_ty, params, ..
                     } => {
                         *return_ty = ctx.resolve(return_ty);
@@ -143,7 +143,7 @@ fn resolve_item_types(item: &mut crate::hir::nodes::HirItem, ctx: &TypeContext) 
                             p.ty = ctx.resolve(&p.ty);
                         }
                     }
-                    crate::hir::nodes::HirTraitItem::DefaultMethod(m) => {
+                    crate::hir::nodes::HirMixinItem::DefaultMethod(m) => {
                         resolve_func_types(m, ctx);
                     }
                     _ => {}

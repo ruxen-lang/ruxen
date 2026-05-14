@@ -796,7 +796,7 @@ fn get_item_span(item: &TopLevelItem) -> riven_core::lexer::token::Span {
         TopLevelItem::Class(c) => c.span.clone(),
         TopLevelItem::Struct(s) => s.span.clone(),
         TopLevelItem::Enum(e) => e.span.clone(),
-        TopLevelItem::Trait(t) => t.span.clone(),
+        TopLevelItem::Mixin(t) => t.span.clone(),
         TopLevelItem::Impl(i) => i.span.clone(),
         TopLevelItem::Module(m) => m.span.clone(),
         TopLevelItem::Use(u) => u.span.clone(),

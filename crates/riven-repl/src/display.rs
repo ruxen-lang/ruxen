@@ -119,8 +119,8 @@ pub fn format_type(ty: &Ty) -> String {
         Ty::Never => "Never".to_string(),
         Ty::String => "String".to_string(),
         Ty::Str => "&str".to_string(),
-        Ty::Vec(inner) => format!("Vec[{}]", format_type(inner)),
-        Ty::HashMap(k, v) => format!("HashMap[{}, {}]", format_type(k), format_type(v)),
+        Ty::Array(inner) => format!("Vec[{}]", format_type(inner)),
+        Ty::Map(k, v) => format!("HashMap[{}, {}]", format_type(k), format_type(v)),
         Ty::Set(inner) => format!("Set[{}]", format_type(inner)),
         Ty::Option(inner) => format!("Option[{}]", format_type(inner)),
         Ty::Result(ok, err) => format!("Result[{}, {}]", format_type(ok), format_type(err)),
@@ -130,7 +130,7 @@ pub fn format_type(ty: &Ty) -> String {
             let parts: Vec<String> = elems.iter().map(format_type).collect();
             format!("({})", parts.join(", "))
         }
-        Ty::Array(inner, size) => format!("[{}; {}]", format_type(inner), size),
+        Ty::FixedArray(inner, size) => format!("[{}; {}]", format_type(inner), size),
         Ty::Fn { params, ret } => {
             let parts: Vec<String> = params.iter().map(format_type).collect();
             format!("Fn({}) -> {}", parts.join(", "), format_type(ret))
@@ -253,9 +253,9 @@ mod tests {
 
     #[test]
     fn format_type_composite() {
-        assert_eq!(format_type(&Ty::Vec(Box::new(Ty::Int))), "Vec[Int]");
+        assert_eq!(format_type(&Ty::Array(Box::new(Ty::Int))), "Vec[Int]");
         assert_eq!(
-            format_type(&Ty::HashMap(Box::new(Ty::String), Box::new(Ty::Int))),
+            format_type(&Ty::Map(Box::new(Ty::String), Box::new(Ty::Int))),
             "HashMap[String, Int]",
         );
         assert_eq!(format_type(&Ty::Set(Box::new(Ty::Bool))), "Set[Bool]");
@@ -279,7 +279,7 @@ mod tests {
             "(Int, Bool, Char)",
         );
         assert_eq!(
-            format_type(&Ty::Array(
+            format_type(&Ty::FixedArray(
                 Box::new(Ty::Int),
                 riven_core::hir::types::ConstExpr::Lit(4)
             )),
@@ -393,13 +393,13 @@ mod tests {
 
     #[test]
     fn format_value_composite_nil_when_zero() {
-        let ty = Ty::Vec(Box::new(Ty::Int));
+        let ty = Ty::Array(Box::new(Ty::Int));
         assert_eq!(format_value(0, &ty), "nil");
     }
 
     #[test]
     fn format_value_composite_nonzero_shows_pointer() {
-        let ty = Ty::Vec(Box::new(Ty::Int));
+        let ty = Ty::Array(Box::new(Ty::Int));
         let out = format_value(0x1234, &ty);
         assert!(out.contains("Vec[Int]"), "got {:?}", out);
         assert!(out.contains("0x1234"), "got {:?}", out);

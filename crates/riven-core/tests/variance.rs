@@ -125,8 +125,8 @@ fn vec_no_coerce_to_different_inner_type() {
     // `Vec[Int]` must NOT coerce to `Vec[Bool]`. The constructor is
     // invariant — the underlying buffer's element type is fixed.
     let ctx = TypeContext::new();
-    let from = Ty::Vec(Box::new(Ty::Int));
-    let to = Ty::Vec(Box::new(Ty::Bool));
+    let from = Ty::Array(Box::new(Ty::Int));
+    let to = Ty::Array(Box::new(Ty::Bool));
     assert!(
         !can_coerce(&from, &to, &ctx),
         "Vec[Int] must not coerce to Vec[Bool] — Vec is invariant in T",
@@ -140,8 +140,8 @@ fn vec_no_coerce_widening_inner() {
     // Vec would let a writer push Int64 values into a buffer whose
     // memory layout assumes Int8 elements.
     let ctx = TypeContext::new();
-    let from = Ty::Vec(Box::new(Ty::Int8));
-    let to = Ty::Vec(Box::new(Ty::Int64));
+    let from = Ty::Array(Box::new(Ty::Int8));
+    let to = Ty::Array(Box::new(Ty::Int64));
     assert!(
         !can_coerce(&from, &to, &ctx),
         "Vec[Int8] must not coerce to Vec[Int64] — invariance forbids widening through Vec",
@@ -154,8 +154,8 @@ fn vec_no_coerce_through_inheritance() {
     // `&Cat → &Animal` is legal. Vec invariance forbids coercion of
     // its element type through the constructor.
     let ctx = TypeContext::new();
-    let from = Ty::Vec(Box::new(Ty::Ref(Box::new(class("Cat")))));
-    let to = Ty::Vec(Box::new(Ty::Ref(Box::new(class("Animal")))));
+    let from = Ty::Array(Box::new(Ty::Ref(Box::new(class("Cat")))));
+    let to = Ty::Array(Box::new(Ty::Ref(Box::new(class("Animal")))));
     assert!(
         !can_coerce(&from, &to, &ctx),
         "Vec[&Cat] must not coerce to Vec[&Animal] — Vec is invariant in T",
@@ -170,7 +170,7 @@ fn vec_same_type_works() {
     // `137_variance_array_same_type.rvn` covers the same case at the
     // surface-syntax level.
     let ctx = TypeContext::new();
-    let v = Ty::Vec(Box::new(Ty::Int));
+    let v = Ty::Array(Box::new(Ty::Int));
     assert!(
         can_coerce(&v, &v, &ctx),
         "Vec[Int] → Vec[Int] must succeed (identity)",

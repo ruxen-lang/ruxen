@@ -636,8 +636,8 @@ pub fn collect_node_spans(program: &crate::parser::ast::Program) -> Vec<(usize, 
                 }
                 visit_type_expr(spans, return_type);
             }
-            TypeExpr::ImplTrait { span, .. }
-            | TypeExpr::DynTrait { span, .. }
+            TypeExpr::SomeMixin { span, .. }
+            | TypeExpr::AnyMixin { span, .. }
             | TypeExpr::Never { span }
             | TypeExpr::Inferred { span } => add_span(spans, span),
             TypeExpr::RawPointer { span, inner, .. } => {
@@ -910,13 +910,13 @@ pub fn collect_node_spans(program: &crate::parser::ast::Program) -> Vec<(usize, 
                     add_span(spans, &v.span);
                 }
             }
-            TopLevelItem::Trait(t) => {
+            TopLevelItem::Mixin(t) => {
                 add_span(spans, &t.span);
                 for ti in &t.items {
                     match ti {
-                        TraitItem::AssocType { span, .. } => add_span(spans, span),
-                        TraitItem::MethodSig(ms) => add_span(spans, &ms.span),
-                        TraitItem::DefaultMethod(f) => visit_func(spans, f),
+                        MixinItem::AssocType { span, .. } => add_span(spans, span),
+                        MixinItem::MethodSig(ms) => add_span(spans, &ms.span),
+                        MixinItem::DefaultMethod(f) => visit_func(spans, f),
                     }
                 }
             }

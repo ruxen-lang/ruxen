@@ -4,7 +4,7 @@
 //! DefId and a corresponding Definition entry in the symbol table.
 
 use crate::hir::nodes::{DefId, HirSelfMode};
-use crate::hir::types::{TraitRef, Ty};
+use crate::hir::types::{MixinRef, Ty};
 use crate::lexer::token::Span;
 use crate::parser::ast::Visibility;
 
@@ -22,7 +22,7 @@ pub struct FnSignature {
 #[derive(Debug, Clone)]
 pub struct GenericParamInfo {
     pub name: String,
-    pub bounds: Vec<TraitRef>,
+    pub bounds: Vec<MixinRef>,
     /// Tier-2 const generics (T2.02 S5): tracks whether this slot
     /// holds a type parameter or a const parameter.  Default `Type`
     /// keeps every pre-S5 construction site backwards-compatible.
@@ -41,7 +41,7 @@ pub enum GenericParamKind {
 
 impl GenericParamInfo {
     /// Backwards-compatible constructor for type generic params.
-    pub fn type_param(name: String, bounds: Vec<TraitRef>) -> Self {
+    pub fn type_param(name: String, bounds: Vec<MixinRef>) -> Self {
         Self {
             name,
             bounds,
@@ -145,9 +145,9 @@ pub struct EnumInfo {
 
 /// Information about a trait definition.
 #[derive(Debug, Clone)]
-pub struct TraitInfo {
+pub struct MixinInfo {
     pub generic_params: Vec<GenericParamInfo>,
-    pub super_traits: Vec<TraitRef>,
+    pub super_traits: Vec<MixinRef>,
     pub required_methods: Vec<String>,
     pub default_methods: Vec<String>,
     pub assoc_types: Vec<String>,
@@ -178,7 +178,7 @@ pub enum DefKind {
         kind: VariantDefKind,
     },
     Trait {
-        info: TraitInfo,
+        info: MixinInfo,
     },
     TypeAlias {
         target: Ty,
@@ -187,7 +187,7 @@ pub enum DefKind {
         inner: Ty,
     },
     TypeParam {
-        bounds: Vec<TraitRef>,
+        bounds: Vec<MixinRef>,
     },
     /// Tier-2 const generics (T2.02 stage 3).
     ///
@@ -449,7 +449,7 @@ mod tests {
             &Ty::Tuple(vec![point.clone(), Ty::Int]),
             &symbols
         ));
-        assert!(!ty_is_effectively_copy(&Ty::Vec(Box::new(point)), &symbols));
+        assert!(!ty_is_effectively_copy(&Ty::Array(Box::new(point)), &symbols));
     }
 
     fn class_kind() -> DefKind {

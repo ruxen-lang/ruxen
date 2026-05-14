@@ -10,7 +10,7 @@
 //! structural equality check that's stable across compilations.
 
 use riven_core::hir::nodes::{
-    HirFuncDef, HirImplBlock, HirImplItem, HirItem, HirProgram, HirTraitItem,
+    HirFuncDef, HirImplBlock, HirImplItem, HirItem, HirProgram, HirMixinItem,
 };
 use riven_core::parser::ast::Visibility;
 use serde::{Deserialize, Serialize};
@@ -60,7 +60,7 @@ pub enum PublicItem {
     Trait {
         name: String,
         generic_params: Vec<String>,
-        items: Vec<TraitItemSig>,
+        items: Vec<MixinItemSig>,
     },
     TraitImpl {
         trait_name: Option<String>,
@@ -89,7 +89,7 @@ pub struct EnumVariantSig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum TraitItemSig {
+pub enum MixinItemSig {
     AssocType { name: String },
     Method(SigFn),
 }
@@ -185,22 +185,22 @@ fn extract_item(item: &HirItem, out: &mut Vec<PublicItem>) {
                 variants,
             });
         }
-        HirItem::Trait(t) => {
+        HirItem::Mixin(t) => {
             let tis = t
                 .items
                 .iter()
                 .map(|ti| match ti {
-                    HirTraitItem::AssocType { name, .. } => {
-                        TraitItemSig::AssocType { name: name.clone() }
+                    HirMixinItem::AssocType { name, .. } => {
+                        MixinItemSig::AssocType { name: name.clone() }
                     }
-                    HirTraitItem::MethodSig {
+                    HirMixinItem::MethodSig {
                         name,
                         self_mode,
                         is_class_method,
                         params,
                         return_ty,
                         ..
-                    } => TraitItemSig::Method(SigFn {
+                    } => MixinItemSig::Method(SigFn {
                         name: name.clone(),
                         generic_params: Vec::new(),
                         self_mode: self_mode.map(|m| format!("{:?}", m)),
@@ -214,7 +214,7 @@ fn extract_item(item: &HirItem, out: &mut Vec<PublicItem>) {
                             .collect(),
                         return_ty: return_ty.to_string(),
                     }),
-                    HirTraitItem::DefaultMethod(f) => TraitItemSig::Method(fn_sig(f)),
+                    HirMixinItem::DefaultMethod(f) => MixinItemSig::Method(fn_sig(f)),
                 })
                 .collect();
             out.push(PublicItem::Trait {

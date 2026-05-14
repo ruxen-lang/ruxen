@@ -90,9 +90,9 @@ impl<'a> BorrowChecker<'a> {
             HirItem::Enum(_) => {
                 // Enum definitions have no executable code to check.
             }
-            HirItem::Trait(trait_def) => {
+            HirItem::Mixin(trait_def) => {
                 for trait_item in &trait_def.items {
-                    if let HirTraitItem::DefaultMethod(func) = trait_item {
+                    if let HirMixinItem::DefaultMethod(func) = trait_item {
                         self.check_function(func);
                     }
                 }
@@ -505,10 +505,10 @@ impl<'a> BorrowChecker<'a> {
                     code: ErrorCode::E1006,
                     primary: SpanLabel {
                         span: span.clone(),
-                        label: format!("cannot assign to `{}` — variable is not `mut`", name),
+                        label: format!("cannot assign to `{}` — variable is immutable (declared with `let`)", name),
                     },
                     secondary: vec![],
-                    help: vec![format!("consider declaring with `let mut {}`", name)],
+                    help: vec![format!("consider declaring with `var {}`", name)],
                 });
             }
         }
@@ -528,12 +528,12 @@ impl<'a> BorrowChecker<'a> {
                     primary: SpanLabel {
                         span: span.clone(),
                         label: format!(
-                            "cannot borrow `{}` as mutable — it is not declared as `mut`",
+                            "cannot borrow `{}` as mutable — it is immutable (declared with `let`, not `var`)",
                             name
                         ),
                     },
                     secondary: vec![],
-                    help: vec![format!("consider declaring with `let mut {}`", name)],
+                    help: vec![format!("consider declaring with `var {}`", name)],
                 });
             }
 
@@ -1193,7 +1193,7 @@ impl<'a> BorrowChecker<'a> {
 
 fn ty_has_bound(ty: &Ty, bound_name: &str) -> bool {
     match ty {
-        Ty::TypeParam { bounds, .. } | Ty::ImplTrait(bounds) | Ty::DynTrait(bounds) => {
+        Ty::TypeParam { bounds, .. } | Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds) => {
             bounds.iter().any(|bound| bound.name == bound_name)
         }
         _ => false,

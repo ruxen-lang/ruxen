@@ -3,7 +3,7 @@
 #[cfg(test)]
 mod tests {
     use crate::hir::context::TypeContext;
-    use crate::hir::types::{ConstExpr, MoveSemantics, TraitRef, Ty};
+    use crate::hir::types::{ConstExpr, MoveSemantics, MixinRef, Ty};
     use crate::lexer::token::Span;
     use crate::parser::ast::Visibility;
     use crate::resolve::symbols::{DefKind, EnumInfo, StructInfo, SymbolTable, VariantDefKind};
@@ -79,12 +79,12 @@ mod tests {
 
     #[test]
     fn vec_is_move() {
-        assert!(Ty::Vec(Box::new(Ty::Int)).is_move());
+        assert!(Ty::Array(Box::new(Ty::Int)).is_move());
     }
 
     #[test]
     fn hash_is_move() {
-        assert!(Ty::HashMap(Box::new(Ty::String), Box::new(Ty::Int)).is_move());
+        assert!(Ty::Map(Box::new(Ty::String), Box::new(Ty::Int)).is_move());
     }
 
     #[test]
@@ -101,13 +101,13 @@ mod tests {
 
     #[test]
     fn array_of_copy_is_copy() {
-        let array = Ty::Array(Box::new(Ty::Int), ConstExpr::Lit(10));
+        let array = Ty::FixedArray(Box::new(Ty::Int), ConstExpr::Lit(10));
         assert!(array.is_copy());
     }
 
     #[test]
     fn array_of_move_is_move() {
-        let array = Ty::Array(Box::new(Ty::String), ConstExpr::Lit(3));
+        let array = Ty::FixedArray(Box::new(Ty::String), ConstExpr::Lit(3));
         assert!(array.is_move());
     }
 
@@ -171,18 +171,18 @@ mod tests {
 
     #[test]
     fn trait_bounds_gate_trait_objects_and_type_params() {
-        let send_bound = vec![TraitRef {
+        let send_bound = vec![MixinRef {
             name: "Send".to_string(),
             generic_args: vec![],
         }];
-        let sync_bound = vec![TraitRef {
+        let sync_bound = vec![MixinRef {
             name: "Sync".to_string(),
             generic_args: vec![],
         }];
 
-        assert!(Ty::DynTrait(send_bound.clone()).is_send());
-        assert!(!Ty::DynTrait(sync_bound.clone()).is_send());
-        assert!(Ty::ImplTrait(sync_bound.clone()).is_sync());
+        assert!(Ty::AnyMixin(send_bound.clone()).is_send());
+        assert!(!Ty::AnyMixin(sync_bound.clone()).is_send());
+        assert!(Ty::SomeMixin(sync_bound.clone()).is_sync());
         assert!(Ty::TypeParam {
             name: "T".to_string(),
             bounds: send_bound,
@@ -470,10 +470,10 @@ mod tests {
 
     #[test]
     fn display_composite() {
-        assert_eq!(format!("{}", Ty::Vec(Box::new(Ty::Int))), "Vec[Int]");
+        assert_eq!(format!("{}", Ty::Array(Box::new(Ty::Int))), "Array[Int]");
         assert_eq!(
-            format!("{}", Ty::HashMap(Box::new(Ty::String), Box::new(Ty::Int))),
-            "HashMap[String, Int]"
+            format!("{}", Ty::Map(Box::new(Ty::String), Box::new(Ty::Int))),
+            "Map[String, Int]"
         );
         assert_eq!(format!("{}", Ty::Option(Box::new(Ty::Int))), "Option[Int]");
         assert_eq!(
@@ -529,7 +529,7 @@ mod tests {
         let mut ctx = TypeContext::new();
         let _t0 = ctx.fresh_type_var();
         // Trying to bind ?T0 = Vec[?T0] should fail (infinite type)
-        let result = ctx.bind(0, Ty::Vec(Box::new(Ty::Infer(0))));
+        let result = ctx.bind(0, Ty::Array(Box::new(Ty::Infer(0))));
         assert!(result.is_err());
     }
 
@@ -549,8 +549,8 @@ mod tests {
         let mut ctx = TypeContext::new();
         let _t0 = ctx.fresh_type_var();
         ctx.bind(0, Ty::Int).unwrap();
-        let vec_ty = Ty::Vec(Box::new(Ty::Infer(0)));
+        let vec_ty = Ty::Array(Box::new(Ty::Infer(0)));
         let resolved = ctx.resolve(&vec_ty);
-        assert_eq!(resolved, Ty::Vec(Box::new(Ty::Int)));
+        assert_eq!(resolved, Ty::Array(Box::new(Ty::Int)));
     }
 }

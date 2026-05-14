@@ -91,11 +91,11 @@ mod tests {
     #[test]
     fn unify_vec() {
         let mut ctx = TypeContext::new();
-        let a = Ty::Vec(Box::new(Ty::Int));
+        let a = Ty::Array(Box::new(Ty::Int));
         let t = ctx.fresh_type_var();
-        let b = Ty::Vec(Box::new(t));
+        let b = Ty::Array(Box::new(t));
         let result = unify(&a, &b, &mut ctx, &span());
-        assert_eq!(result.unwrap(), Ty::Vec(Box::new(Ty::Int)));
+        assert_eq!(result.unwrap(), Ty::Array(Box::new(Ty::Int)));
     }
 
     #[test]

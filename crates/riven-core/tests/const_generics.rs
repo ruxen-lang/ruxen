@@ -328,7 +328,7 @@ fn const_expr_eval_lit_and_param() {
     assert!(ConstExpr::Error.eval(&empty).is_err());
 }
 
-/// B7: `layout_of(Ty::Array(Int, ConstExpr::Lit(4)))` returns 32
+/// B7: `layout_of(Ty::FixedArray(Int, ConstExpr::Lit(4)))` returns 32
 /// bytes (4 × 8) — the array layout consults the const expression
 /// rather than the pre-S4 `usize` field.
 #[test]
@@ -338,7 +338,7 @@ fn array_layout_evaluates_const_expr_lit() {
     use riven_core::resolve::symbols::SymbolTable;
 
     let symbols = SymbolTable::new();
-    let layout = layout_of(&Ty::Array(Box::new(Ty::Int), ConstExpr::Lit(4)), &symbols);
+    let layout = layout_of(&Ty::FixedArray(Box::new(Ty::Int), ConstExpr::Lit(4)), &symbols);
     assert_eq!(layout.size, 32);
     assert_eq!(layout.alignment, 8);
 }
@@ -519,37 +519,37 @@ end
     );
 }
 
-// ── Stage 4: HIR ConstExpr + Ty::Array carries it ───────────────────
+// ── Stage 4: HIR ConstExpr + Ty::FixedArray carries it ───────────────────
 
-/// B4 (S4 minimal): `Ty::Array` now carries a `ConstExpr` rather
+/// B4 (S4 minimal): `Ty::FixedArray` now carries a `ConstExpr` rather
 /// than a bare `usize`.  Constructing an array type from a literal
 /// integer wraps it as `ConstExpr::Lit(n)`.
 #[test]
 fn ty_array_carries_const_expr_lit() {
     use riven_core::hir::types::{ConstExpr, Ty};
 
-    let ty = Ty::Array(Box::new(Ty::Int), ConstExpr::Lit(4));
+    let ty = Ty::FixedArray(Box::new(Ty::Int), ConstExpr::Lit(4));
     match &ty {
-        Ty::Array(elem, size) => {
+        Ty::FixedArray(elem, size) => {
             assert!(matches!(**elem, Ty::Int));
             assert!(matches!(size, ConstExpr::Lit(4)));
         }
-        other => panic!("expected Ty::Array, got {:?}", other),
+        other => panic!("expected Ty::FixedArray, got {:?}", other),
     }
     // Display fmt should still print `[Int; 4]`.
     assert_eq!(format!("{}", ty), "[Int; 4]");
 }
 
 /// B4: `ConstExpr::Param(name)` represents an unresolved const-param
-/// reference.  Two `Ty::Array`s with the same param name compare
+/// reference.  Two `Ty::FixedArray`s with the same param name compare
 /// equal; with different names they don't.
 #[test]
 fn const_expr_param_equality() {
     use riven_core::hir::types::{ConstExpr, Ty};
 
-    let a = Ty::Array(Box::new(Ty::Int), ConstExpr::Param("N".to_string()));
-    let b = Ty::Array(Box::new(Ty::Int), ConstExpr::Param("N".to_string()));
-    let c = Ty::Array(Box::new(Ty::Int), ConstExpr::Param("M".to_string()));
+    let a = Ty::FixedArray(Box::new(Ty::Int), ConstExpr::Param("N".to_string()));
+    let b = Ty::FixedArray(Box::new(Ty::Int), ConstExpr::Param("N".to_string()));
+    let c = Ty::FixedArray(Box::new(Ty::Int), ConstExpr::Param("M".to_string()));
     assert_eq!(a, b);
     assert_ne!(a, c);
 }
@@ -802,7 +802,7 @@ fn array_layout_evaluates_const_expr_arithmetic() {
         ConstOp::Add,
         Box::new(ConstExpr::Lit(2)),
     );
-    let layout = layout_of(&Ty::Array(Box::new(Ty::Int), arith), &symbols);
+    let layout = layout_of(&Ty::FixedArray(Box::new(Ty::Int), arith), &symbols);
     assert_eq!(layout.size, 32);
     assert_eq!(layout.alignment, 8);
 }
@@ -848,11 +848,11 @@ end
 "#;
     let ty = resolve_first_struct_field_ty(src, "Buf");
     match ty {
-        Ty::Array(elem, size) => {
+        Ty::FixedArray(elem, size) => {
             assert!(matches!(*elem, Ty::Int));
             assert_eq!(size, ConstExpr::Lit(5));
         }
-        other => panic!("expected Ty::Array, got {:?}", other),
+        other => panic!("expected Ty::FixedArray, got {:?}", other),
     }
 }
 
@@ -868,7 +868,7 @@ fn resolve_array_size_lowers_all_four_operators() {
         let src = format!("struct Buf\n  data: [Int; {}]\nend\n", expr_text);
         let ty = resolve_first_struct_field_ty(&src, "Buf");
         match ty {
-            Ty::Array(_, size) => {
+            Ty::FixedArray(_, size) => {
                 assert_eq!(
                     size,
                     ConstExpr::Lit(expected_eval),
@@ -883,7 +883,7 @@ fn resolve_array_size_lowers_all_four_operators() {
                     expr_text
                 );
             }
-            other => panic!("expected Ty::Array for `{}`, got {:?}", expr_text, other),
+            other => panic!("expected Ty::FixedArray for `{}`, got {:?}", expr_text, other),
         }
     }
 }
@@ -909,16 +909,16 @@ end
     let no_parens = resolve_first_struct_field_ty(src, "NoParens");
 
     match with_parens {
-        Ty::Array(_, size) => {
+        Ty::FixedArray(_, size) => {
             assert_eq!(size, ConstExpr::Lit(20));
         }
-        other => panic!("expected Ty::Array, got {:?}", other),
+        other => panic!("expected Ty::FixedArray, got {:?}", other),
     }
     match no_parens {
-        Ty::Array(_, size) => {
+        Ty::FixedArray(_, size) => {
             assert_eq!(size, ConstExpr::Lit(14));
         }
-        other => panic!("expected Ty::Array, got {:?}", other),
+        other => panic!("expected Ty::FixedArray, got {:?}", other),
     }
 }
 
@@ -937,14 +937,14 @@ end
 "#;
     let ty = resolve_first_struct_field_ty(src, "Vector");
     match ty {
-        Ty::Array(_, size) => match size {
+        Ty::FixedArray(_, size) => match size {
             ConstExpr::Op(a, ConstOp::Add, b) => {
                 assert_eq!(*a, ConstExpr::Param("N".to_string()));
                 assert_eq!(*b, ConstExpr::Lit(1));
             }
             other => panic!("expected Op(Param(N), Add, Lit(1)), got {:?}", other),
         },
-        other => panic!("expected Ty::Array, got {:?}", other),
+        other => panic!("expected Ty::FixedArray, got {:?}", other),
     }
 }
 
@@ -1163,7 +1163,7 @@ end
 //
 // B8 (S8.S4): identity-removal rewrites canonicalise `ConstExpr`
 // trees so that `[T; N + 0]` and `[T; N]` produce the same
-// `Ty::Array`.  Constant folding collapses `Lit(a) ⊙ Lit(b)` to a
+// `Ty::FixedArray`.  Constant folding collapses `Lit(a) ⊙ Lit(b)` to a
 // single `Lit(c)` when eval succeeds.  Spec §B8 documents the
 // distributive / commutative cases the rewriter intentionally
 // leaves as distinct forms in v1.
@@ -2156,12 +2156,12 @@ end
 "#;
     let ty = resolve_first_struct_field_ty(src, "Buf");
     match ty {
-        Ty::Array(_, size) => {
+        Ty::FixedArray(_, size) => {
             assert_eq!(size, ConstExpr::Error);
             let bindings = std::collections::HashMap::new();
             assert_eq!(size.eval(&bindings), Err(ConstEvalError::Malformed));
         }
-        other => panic!("expected Ty::Array, got {:?}", other),
+        other => panic!("expected Ty::FixedArray, got {:?}", other),
     }
 }
 

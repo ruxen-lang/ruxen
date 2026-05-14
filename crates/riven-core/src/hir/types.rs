@@ -220,14 +220,17 @@ impl fmt::Display for ConstOp {
     }
 }
 
-/// A reference to a trait, optionally with generic arguments.
+/// A reference to a mixin, optionally with generic arguments.
+///
+/// Was `TraitRef` pre-Ruby-naming migration — see
+/// docs/specs/syntax/ruby-naming.spec.md.
 #[derive(Debug, Clone, PartialEq)]
-pub struct TraitRef {
+pub struct MixinRef {
     pub name: String,
     pub generic_args: Vec<Ty>,
 }
 
-impl fmt::Display for TraitRef {
+impl fmt::Display for MixinRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.name)?;
         if !self.generic_args.is_empty() {
@@ -281,7 +284,10 @@ pub enum Ty {
     Tuple(Vec<Ty>),
     /// `[T; N]` — fixed-size array (N is a `ConstExpr`; was `usize`
     /// before T2.02 stage 4).
-    Array(Box<Ty>, ConstExpr),
+    ///
+    /// Renamed from `Array` so that the user-facing dynamic `Array[T]`
+    /// (formerly `Vec[T]`) can take that name — see ruby-naming.spec.md.
+    FixedArray(Box<Ty>, ConstExpr),
     /// Tier-2 const generics S6: a const-argument slot inside a
     /// `Ty::Class { generic_args }` / `Ty::Struct { generic_args }` /
     /// `Ty::Enum { generic_args }` list.  Distinguishes
@@ -290,10 +296,16 @@ pub enum Ty {
     /// instantiations and monomorphization (S7+) can key on the
     /// pair `(type-args, const-args)`.
     ConstArg(ConstExpr),
-    /// `Vec[T]` — dynamic, heap-allocated
-    Vec(Box<Ty>),
-    /// `HashMap[K, V]` — key-value map
-    HashMap(Box<Ty>, Box<Ty>),
+    /// `Array[T]` — dynamic, heap-allocated growable sequence.
+    ///
+    /// Renamed from `Vec` to match ruby-naming.spec.md (user types
+    /// `Array[T]` in source; the internal type mirrors that).
+    Array(Box<Ty>),
+    /// `Map[K, V]` — key-value map.
+    ///
+    /// Renamed from `HashMap` to match ruby-naming.spec.md (user types
+    /// `Map[K, V]` in source).
+    Map(Box<Ty>, Box<Ty>),
     /// `Set[T]`
     Set(Box<Ty>),
 
@@ -327,11 +339,13 @@ pub enum Ty {
         generic_args: Vec<Ty>,
     },
 
-    // Trait-related
-    /// `impl Trait` — static dispatch, structural satisfaction OK
-    ImplTrait(Vec<TraitRef>),
-    /// `dyn Trait` — dynamic dispatch, requires explicit impl
-    DynTrait(Vec<TraitRef>),
+    // Mixin-related (formerly "trait" — see ruby-naming.spec.md)
+    /// `some M` — static dispatch on a mixin, structural satisfaction OK.
+    /// (Was `impl Trait` / `Ty::ImplTrait` pre-Ruby-naming migration.)
+    SomeMixin(Vec<MixinRef>),
+    /// `any M` — dynamic dispatch on a mixin, requires explicit include.
+    /// (Was `dyn Trait` / `Ty::DynTrait` pre-Ruby-naming migration.)
+    AnyMixin(Vec<MixinRef>),
 
     // Function types
     Fn {
@@ -353,7 +367,7 @@ pub enum Ty {
     /// Generic type parameter: `T`, `T: Bound`
     TypeParam {
         name: std::string::String,
-        bounds: Vec<TraitRef>,
+        bounds: Vec<MixinRef>,
     },
 
     /// Type alias target (transparent)
@@ -439,7 +453,7 @@ impl Ty {
             Ty::Tuple(elems) => elems.iter().all(|e| e.is_copy()),
 
             // Arrays are Copy if element type is Copy
-            Ty::Array(elem, _) => elem.is_copy(),
+            Ty::FixedArray(elem, _) => elem.is_copy(),
 
             // Raw pointers are Copy (like in Rust)
             Ty::RawPtr(_) | Ty::RawPtrMut(_) | Ty::RawPtrVoid | Ty::RawPtrMutVoid => true,
@@ -458,7 +472,7 @@ impl Ty {
         match self {
             _ if self.is_copy() => true,
             Ty::Tuple(elems) => elems.iter().all(|elem| elem.is_copy_with(symbols)),
-            Ty::Array(elem, _) => elem.is_copy_with(symbols),
+            Ty::FixedArray(elem, _) => elem.is_copy_with(symbols),
             Ty::Alias { target, .. } => target.is_copy_with(symbols),
             Ty::Newtype { inner, .. } => inner.is_copy_with(symbols),
             Ty::Struct { .. } | Ty::Class { .. } | Ty::Enum { .. } => {
@@ -496,10 +510,10 @@ impl Ty {
             Ty::Ref(inner) | Ty::RefLifetime(_, inner) => inner.is_sync(),
             Ty::RefMut(inner) | Ty::RefMutLifetime(_, inner) => inner.is_send(),
             Ty::Tuple(elems) => elems.iter().all(|elem| elem.is_send()),
-            Ty::Array(elem, _) | Ty::Vec(elem) | Ty::Set(elem) | Ty::Option(elem) => elem.is_send(),
-            Ty::HashMap(key, value) | Ty::Result(key, value) => key.is_send() && value.is_send(),
+            Ty::FixedArray(elem, _) | Ty::Array(elem) | Ty::Set(elem) | Ty::Option(elem) => elem.is_send(),
+            Ty::Map(key, value) | Ty::Result(key, value) => key.is_send() && value.is_send(),
             Ty::RawPtr(_) | Ty::RawPtrMut(_) | Ty::RawPtrVoid | Ty::RawPtrMutVoid => false,
-            Ty::ImplTrait(bounds) | Ty::DynTrait(bounds) => has_trait_bound(bounds, "Send"),
+            Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds) => has_trait_bound(bounds, "Send"),
             Ty::Fn { .. } | Ty::FnMut { .. } | Ty::FnOnce { .. } => true,
             Ty::TypeParam { bounds, .. } => has_trait_bound(bounds, "Send"),
             Ty::Alias { target, .. } => target.is_send(),
@@ -549,10 +563,10 @@ impl Ty {
             | Ty::RefLifetime(_, inner)
             | Ty::RefMutLifetime(_, inner) => inner.is_sync(),
             Ty::Tuple(elems) => elems.iter().all(|elem| elem.is_sync()),
-            Ty::Array(elem, _) | Ty::Vec(elem) | Ty::Set(elem) | Ty::Option(elem) => elem.is_sync(),
-            Ty::HashMap(key, value) | Ty::Result(key, value) => key.is_sync() && value.is_sync(),
+            Ty::FixedArray(elem, _) | Ty::Array(elem) | Ty::Set(elem) | Ty::Option(elem) => elem.is_sync(),
+            Ty::Map(key, value) | Ty::Result(key, value) => key.is_sync() && value.is_sync(),
             Ty::RawPtr(_) | Ty::RawPtrMut(_) | Ty::RawPtrVoid | Ty::RawPtrMutVoid => false,
-            Ty::ImplTrait(bounds) | Ty::DynTrait(bounds) => has_trait_bound(bounds, "Sync"),
+            Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds) => has_trait_bound(bounds, "Sync"),
             Ty::Fn { .. } | Ty::FnMut { .. } | Ty::FnOnce { .. } => true,
             Ty::TypeParam { bounds, .. } => has_trait_bound(bounds, "Sync"),
             Ty::Alias { target, .. } => target.is_sync(),
@@ -700,7 +714,7 @@ impl Ty {
     }
 }
 
-fn has_trait_bound(bounds: &[TraitRef], trait_name: &str) -> bool {
+fn has_trait_bound(bounds: &[MixinRef], trait_name: &str) -> bool {
     bounds.iter().any(|bound| bound.name == trait_name)
 }
 
@@ -716,10 +730,10 @@ fn is_send_with_inner(ty: &Ty, symbols: &SymbolTable, visiting: &mut HashSet<u32
         Ty::Tuple(elems) => elems
             .iter()
             .all(|elem| is_send_with_inner(elem, symbols, visiting)),
-        Ty::Array(elem, _) | Ty::Vec(elem) | Ty::Set(elem) | Ty::Option(elem) => {
+        Ty::FixedArray(elem, _) | Ty::Array(elem) | Ty::Set(elem) | Ty::Option(elem) => {
             is_send_with_inner(elem, symbols, visiting)
         }
-        Ty::HashMap(key, value) | Ty::Result(key, value) => {
+        Ty::Map(key, value) | Ty::Result(key, value) => {
             is_send_with_inner(key, symbols, visiting)
                 && is_send_with_inner(value, symbols, visiting)
         }
@@ -741,10 +755,10 @@ fn is_sync_with_inner(ty: &Ty, symbols: &SymbolTable, visiting: &mut HashSet<u32
         Ty::Tuple(elems) => elems
             .iter()
             .all(|elem| is_sync_with_inner(elem, symbols, visiting)),
-        Ty::Array(elem, _) | Ty::Vec(elem) | Ty::Set(elem) | Ty::Option(elem) => {
+        Ty::FixedArray(elem, _) | Ty::Array(elem) | Ty::Set(elem) | Ty::Option(elem) => {
             is_sync_with_inner(elem, symbols, visiting)
         }
-        Ty::HashMap(key, value) | Ty::Result(key, value) => {
+        Ty::Map(key, value) | Ty::Result(key, value) => {
             is_sync_with_inner(key, symbols, visiting)
                 && is_sync_with_inner(value, symbols, visiting)
         }
@@ -923,9 +937,9 @@ impl fmt::Display for Ty {
                 }
                 write!(f, ")")
             }
-            Ty::Array(elem, size) => write!(f, "[{}; {}]", elem, size),
-            Ty::Vec(elem) => write!(f, "Vec[{}]", elem),
-            Ty::HashMap(k, v) => write!(f, "HashMap[{}, {}]", k, v),
+            Ty::FixedArray(elem, size) => write!(f, "[{}; {}]", elem, size),
+            Ty::Array(elem) => write!(f, "Array[{}]", elem),
+            Ty::Map(k, v) => write!(f, "Map[{}, {}]", k, v),
             Ty::Set(elem) => write!(f, "Set[{}]", elem),
             Ty::Option(inner) => write!(f, "Option[{}]", inner),
             Ty::Result(ok, err) => write!(f, "Result[{}, {}]", ok, err),
@@ -949,8 +963,8 @@ impl fmt::Display for Ty {
                 }
                 Ok(())
             }
-            Ty::ImplTrait(bounds) => {
-                write!(f, "impl ")?;
+            Ty::SomeMixin(bounds) => {
+                write!(f, "some ")?;
                 for (i, b) in bounds.iter().enumerate() {
                     if i > 0 {
                         write!(f, " + ")?;
@@ -959,8 +973,8 @@ impl fmt::Display for Ty {
                 }
                 Ok(())
             }
-            Ty::DynTrait(bounds) => {
-                write!(f, "dyn ")?;
+            Ty::AnyMixin(bounds) => {
+                write!(f, "any ")?;
                 for (i, b) in bounds.iter().enumerate() {
                     if i > 0 {
                         write!(f, " + ")?;

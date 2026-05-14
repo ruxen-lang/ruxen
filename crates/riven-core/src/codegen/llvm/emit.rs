@@ -1370,8 +1370,8 @@ fn simple_type_size(ty: &Ty) -> usize {
         | Ty::Float64 => 8,
         Ty::String => 24,
         Ty::Str => 16,
-        Ty::Vec(_) => 24,
-        Ty::HashMap(_, _) | Ty::Set(_) => 48,
+        Ty::Array(_) => 24,
+        Ty::Map(_, _) | Ty::Set(_) => 48,
         Ty::Ref(_)
         | Ty::RefMut(_)
         | Ty::RefLifetime(_, _)
@@ -1386,7 +1386,7 @@ fn simple_type_size(ty: &Ty) -> usize {
         Ty::Option(_) => 16,
         Ty::Result(_, _) => 16,
         Ty::Tuple(elems) => elems.len().max(1) * 8,
-        Ty::Array(_, n) => n * 8,
+        Ty::FixedArray(_, n) => n * 8,
         _ => 8,
     }
 }

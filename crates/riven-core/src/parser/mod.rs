@@ -571,7 +571,7 @@ impl Parser {
             TokenKind::Struct => Some(TopLevelItem::Struct(self.parse_struct_def())),
             TokenKind::Enum => Some(TopLevelItem::Enum(self.parse_enum_def())),
             TokenKind::Trait | TokenKind::Mixin => {
-                Some(TopLevelItem::Trait(self.parse_trait_def()))
+                Some(TopLevelItem::Mixin(self.parse_trait_def()))
             }
             TokenKind::Impl | TokenKind::Extension => {
                 Some(TopLevelItem::Impl(self.parse_impl_block(false)))
@@ -646,7 +646,7 @@ impl Parser {
                                 }
                             }
                         }
-                        Some(TopLevelItem::Trait(self.parse_trait_def()))
+                        Some(TopLevelItem::Mixin(self.parse_trait_def()))
                     }
                     TokenKind::Def => {
                         if has_derive_attr {
@@ -756,20 +756,102 @@ impl Parser {
         self.skip_newlines();
 
         let mut items = Vec::new();
+        // ruby-naming.spec.md §3.2: module bodies honour section markers.
+        // Module items inherit `current_vis` only when they expose a
+        // `visibility` field (Function, Const). Nested types
+        // (Class/Struct/Module/...) carry their own visibility model.
+        let mut current_vis = Visibility::Public;
+        let mut name_list_overrides: Vec<(Visibility, Vec<String>)> = Vec::new();
         while !self.at(TokenKind::End) && !self.at(TokenKind::Eof) {
             let __progress = self.pos;
             self.skip_newlines();
             if self.at(TokenKind::End) {
                 break;
             }
+            // Handle bare section markers BEFORE delegating to
+            // `parse_top_level_item`. `parse_top_level_item` doesn't
+            // know about Public/Private as section markers.
+            match self.current_kind().clone() {
+                TokenKind::Public => {
+                    self.advance();
+                    if self.at(TokenKind::Colon) {
+                        let names = self.parse_visibility_name_list();
+                        name_list_overrides.push((Visibility::Public, names));
+                    } else {
+                        current_vis = Visibility::Public;
+                    }
+                    self.skip_newlines();
+                    self.ensure_loop_progress(__progress);
+                    continue;
+                }
+                TokenKind::Private => {
+                    self.advance();
+                    if self.at(TokenKind::Colon) {
+                        let names = self.parse_visibility_name_list();
+                        name_list_overrides.push((Visibility::Private, names));
+                    } else {
+                        current_vis = Visibility::Private;
+                    }
+                    self.skip_newlines();
+                    self.ensure_loop_progress(__progress);
+                    continue;
+                }
+                TokenKind::Protected => {
+                    // Only treat as bare-marker if not followed by a decl.
+                    let next = self.peek_kind();
+                    let bare = !matches!(
+                        next,
+                        TokenKind::Def | TokenKind::Async | TokenKind::Pub
+                    );
+                    if bare {
+                        self.advance();
+                        if self.at(TokenKind::Colon) {
+                            let names = self.parse_visibility_name_list();
+                            name_list_overrides.push((Visibility::Protected, names));
+                        } else {
+                            current_vis = Visibility::Protected;
+                        }
+                        self.skip_newlines();
+                        self.ensure_loop_progress(__progress);
+                        continue;
+                    }
+                    // else: fall through and let parse_top_level_item handle it.
+                }
+                _ => {}
+            }
             if let Some(item) = self.parse_top_level_item() {
-                items.push(item);
+                // Stamp section visibility onto items that did not carry
+                // an explicit prefix. Items without a visibility field
+                // (e.g. nested types) are unaffected here — their own
+                // body parsers apply section markers internally.
+                let stamped = match item {
+                    TopLevelItem::Function(mut f) => {
+                        if f.visibility == Visibility::Private {
+                            f.visibility = current_vis;
+                        }
+                        TopLevelItem::Function(f)
+                    }
+                    other => other,
+                };
+                items.push(stamped);
             } else {
                 self.synchronize();
             }
             self.ensure_loop_progress(__progress);
         }
         self.expect(TokenKind::End);
+        // Apply name-list overrides on functions (top-level methods).
+        for (vis, names) in &name_list_overrides {
+            for n in names {
+                for item in items.iter_mut() {
+                    if let TopLevelItem::Function(f) = item {
+                        if &f.name == n {
+                            f.visibility = *vis;
+                        }
+                    }
+                }
+            }
+        }
         let span = self.span_from(&start);
         ModuleDef { name, items, span }
     }
@@ -1084,6 +1166,8 @@ impl Parser {
 
         let mut fields = Vec::new();
         let mut derive_traits = Vec::new();
+        // ruby-naming.spec.md §3.2: section-marker visibility, public default.
+        let mut current_vis = Visibility::Public;
 
         while !self.at(TokenKind::End) && !self.at(TokenKind::Eof) {
             let __progress = self.pos;
@@ -1093,6 +1177,18 @@ impl Parser {
             }
 
             match self.current_kind().clone() {
+                // ── Section markers (ruby-naming.spec.md §3.2) ──
+                // Structs have no methods, so the Ruby-style
+                // `private :name` name-list form is meaningless here;
+                // accept only the bare-marker section form.
+                TokenKind::Public => {
+                    self.advance();
+                    current_vis = Visibility::Public;
+                }
+                TokenKind::Private => {
+                    self.advance();
+                    current_vis = Visibility::Private;
+                }
                 TokenKind::Derive => {
                     self.advance();
                     // derive Trait1, Trait2, ...
@@ -1103,11 +1199,12 @@ impl Parser {
                     }
                 }
                 TokenKind::Pub | TokenKind::Protected => {
+                    // Explicit prefix overrides section state.
                     let vis = self.parse_visibility();
                     fields.push(self.parse_field_decl_with_vis(vis));
                 }
                 TokenKind::Identifier(_) => {
-                    fields.push(self.parse_field_decl());
+                    fields.push(self.parse_field_decl_with_vis(current_vis));
                 }
                 // Reject — but DON'T loop. Emit a structured error and
                 // consume the offending block so parsing makes progress.
@@ -1176,7 +1273,7 @@ impl Parser {
 
     // ─── Trait ───────────────────────────────────────────────────────
 
-    fn parse_trait_def(&mut self) -> TraitDef {
+    fn parse_trait_def(&mut self) -> MixinDef {
         let doc_comments = self.take_pending_docs();
         let start = self.current_span();
         self.advance(); // consume trait
@@ -1196,6 +1293,15 @@ impl Parser {
         self.skip_newlines();
 
         let mut items = Vec::new();
+        // ruby-naming.spec.md §3.2: mixin (= `trait` token) body honours
+        // section markers. Default is Public. The trait-item parser
+        // (`parse_trait_item`) does not see the section state, so we
+        // overwrite the visibility on default-method items after the
+        // sub-parser returns. MethodSig items in traits are signatures
+        // only; for mixins (no `visibility` field on MethodSig) the
+        // resolver synthesizes visibility from the section as needed.
+        let mut current_vis = Visibility::Public;
+        let mut name_list_overrides: Vec<(Visibility, Vec<String>)> = Vec::new();
         while !self.at(TokenKind::End) && !self.at(TokenKind::Eof) {
             let __progress = self.pos;
             self.skip_newlines();
@@ -1211,13 +1317,76 @@ impl Parser {
             if self.at(TokenKind::End) {
                 break;
             }
-            items.push(self.parse_trait_item());
+            match self.current_kind().clone() {
+                TokenKind::Public => {
+                    self.advance();
+                    if self.at(TokenKind::Colon) {
+                        let names = self.parse_visibility_name_list();
+                        name_list_overrides.push((Visibility::Public, names));
+                    } else {
+                        current_vis = Visibility::Public;
+                    }
+                }
+                TokenKind::Private => {
+                    self.advance();
+                    if self.at(TokenKind::Colon) {
+                        let names = self.parse_visibility_name_list();
+                        name_list_overrides.push((Visibility::Private, names));
+                    } else {
+                        current_vis = Visibility::Private;
+                    }
+                }
+                TokenKind::Protected => {
+                    // Bare-marker section form vs. legacy prefix form.
+                    let next = self.peek_kind();
+                    let prefix_form = matches!(
+                        next,
+                        TokenKind::Def | TokenKind::Async | TokenKind::Pub
+                    );
+                    if prefix_form {
+                        let item = self.parse_trait_item();
+                        items.push(item);
+                    } else {
+                        self.advance();
+                        if self.at(TokenKind::Colon) {
+                            let names = self.parse_visibility_name_list();
+                            name_list_overrides.push((Visibility::Protected, names));
+                        } else {
+                            current_vis = Visibility::Protected;
+                        }
+                    }
+                }
+                _ => {
+                    let mut item = self.parse_trait_item();
+                    // Apply section visibility to default methods that did
+                    // not have an explicit `pub` / `protected` prefix
+                    // (which `parse_visibility` would have set to non-Private).
+                    if let MixinItem::DefaultMethod(func) = &mut item {
+                        if func.visibility == Visibility::Private {
+                            func.visibility = current_vis;
+                        }
+                    }
+                    items.push(item);
+                }
+            }
             self.skip_newlines();
             self.ensure_loop_progress(__progress);
         }
         self.expect(TokenKind::End);
+        // Apply `private :name` name-list overrides on default methods.
+        for (vis, names) in &name_list_overrides {
+            for n in names {
+                for item in items.iter_mut() {
+                    if let MixinItem::DefaultMethod(func) = item {
+                        if &func.name == n {
+                            func.visibility = *vis;
+                        }
+                    }
+                }
+            }
+        }
         let span = self.span_from(&start);
-        TraitDef {
+        MixinDef {
             name,
             generic_params,
             super_traits,
@@ -1227,7 +1396,7 @@ impl Parser {
         }
     }
 
-    fn parse_trait_item(&mut self) -> TraitItem {
+    fn parse_trait_item(&mut self) -> MixinItem {
         // Doc comments accumulated by `parse_trait_def`'s body loop apply to
         // the next inner item. They flow through `take_pending_docs()` to
         // any `FuncDef` we build below.
@@ -1239,7 +1408,7 @@ impl Parser {
             self.advance();
             let name = self.expect_type_identifier();
             let span = self.span_from(&start);
-            return TraitItem::AssocType { name, span };
+            return MixinItem::AssocType { name, span };
         }
 
         // Method signature or default method
@@ -1249,7 +1418,7 @@ impl Parser {
         if !matches!(self.current_kind(), TokenKind::Def | TokenKind::Async) {
             self.error("expected `def` or `type` in trait body");
             self.synchronize();
-            return TraitItem::AssocType {
+            return MixinItem::AssocType {
                 name: "_error".to_string(),
                 span: start,
             };
@@ -1281,7 +1450,7 @@ impl Parser {
                 span: body_span,
             };
             let span = self.span_from(&start);
-            TraitItem::DefaultMethod(FuncDef {
+            MixinItem::DefaultMethod(FuncDef {
                 visibility: sig.vis,
                 is_async: sig.is_async,
                 self_mode: sig.self_mode,
@@ -1300,6 +1469,8 @@ impl Parser {
             TokenKind::Def
                 | TokenKind::Async
                 | TokenKind::Pub
+                | TokenKind::Public
+                | TokenKind::Private
                 | TokenKind::Protected
                 | TokenKind::Type
                 | TokenKind::End
@@ -1307,7 +1478,7 @@ impl Parser {
         ) {
             // Case 3: Next declaration keyword → signature only, no body
             let span = self.span_from(&start);
-            TraitItem::MethodSig(MethodSig {
+            MixinItem::MethodSig(MethodSig {
                 is_async: sig.is_async,
                 self_mode: sig.self_mode,
                 is_class_method: sig.is_class_method,
@@ -1322,7 +1493,7 @@ impl Parser {
             let body = self.parse_body();
             self.expect(TokenKind::End);
             let span = self.span_from(&start);
-            TraitItem::DefaultMethod(FuncDef {
+            MixinItem::DefaultMethod(FuncDef {
                 visibility: sig.vis,
                 is_async: sig.is_async,
                 self_mode: sig.self_mode,
@@ -1529,6 +1700,15 @@ impl Parser {
         let mut methods = Vec::new();
         let mut inner_impls = Vec::new();
         let mut derive_traits = Vec::new();
+        // ruby-naming.spec.md §3.2: `public` / `private` / `protected` are
+        // SECTION MARKERS. Public by default; each bare marker switches the
+        // visibility applied to all subsequent declarations until the next
+        // marker or end of body. An explicit `pub` / `protected` prefix on a
+        // declaration OVERRIDES the section state (the prefix wins).
+        let mut current_vis = Visibility::Public;
+        // `private :method_a, :method_b` re-marks — collected here and
+        // applied as a final pass after the body is parsed.
+        let mut name_list_overrides: Vec<(Visibility, Vec<String>)> = Vec::new();
 
         while !self.at(TokenKind::End) && !self.at(TokenKind::Eof) {
             let __progress = self.pos;
@@ -1547,6 +1727,60 @@ impl Parser {
             }
 
             match self.current_kind().clone() {
+                // ── Section markers (ruby-naming.spec.md §3.2) ──
+                // A bare `public` / `private` / `protected` line followed by
+                // a terminator (newline/semicolon/end) flips `current_vis`.
+                // The Ruby `private :a, :b` form (marker followed by `:ident`)
+                // is captured as a name-list override and applied post-pass.
+                TokenKind::Public => {
+                    self.advance();
+                    if self.at(TokenKind::Colon) {
+                        // Ruby-style name list: `public :a, :b`
+                        let names = self.parse_visibility_name_list();
+                        name_list_overrides.push((Visibility::Public, names));
+                    } else {
+                        current_vis = Visibility::Public;
+                    }
+                }
+                TokenKind::Private => {
+                    self.advance();
+                    if self.at(TokenKind::Colon) {
+                        let names = self.parse_visibility_name_list();
+                        name_list_overrides.push((Visibility::Private, names));
+                    } else {
+                        current_vis = Visibility::Private;
+                    }
+                }
+                TokenKind::Protected => {
+                    // `protected` is also a section marker. Existing
+                    // `parse_visibility` consumes `Protected` as an explicit
+                    // prefix on a single decl; distinguish by lookahead.
+                    let next = self.peek_kind();
+                    let prefix_form = matches!(
+                        next,
+                        TokenKind::Def
+                            | TokenKind::Async
+                            | TokenKind::Identifier(_)
+                            | TokenKind::Pub
+                    );
+                    if prefix_form {
+                        // Treat as legacy explicit prefix on the next decl.
+                        let vis = self.parse_visibility();
+                        if matches!(self.current_kind(), TokenKind::Def | TokenKind::Async) {
+                            methods.push(self.parse_func_def(vis));
+                        } else {
+                            fields.push(self.parse_field_decl_with_vis(vis));
+                        }
+                    } else {
+                        self.advance();
+                        if self.at(TokenKind::Colon) {
+                            let names = self.parse_visibility_name_list();
+                            name_list_overrides.push((Visibility::Protected, names));
+                        } else {
+                            current_vis = Visibility::Protected;
+                        }
+                    }
+                }
                 TokenKind::Impl => {
                     inner_impls.push(self.parse_inner_impl(false));
                 }
@@ -1566,10 +1800,10 @@ impl Parser {
                     inner_impls.push(self.parse_include_directive(true));
                 }
                 TokenKind::Async => {
-                    methods.push(self.parse_func_def(Visibility::Private));
+                    methods.push(self.parse_func_def(current_vis));
                 }
                 TokenKind::Def => {
-                    methods.push(self.parse_func_def(Visibility::Private));
+                    methods.push(self.parse_func_def(current_vis));
                 }
                 TokenKind::Derive => {
                     self.advance();
@@ -1579,7 +1813,8 @@ impl Parser {
                         derive_traits.push(self.expect_type_identifier());
                     }
                 }
-                TokenKind::Pub | TokenKind::Protected => {
+                TokenKind::Pub => {
+                    // Explicit `pub` prefix wins over the section marker.
                     let vis = self.parse_visibility();
                     if matches!(self.current_kind(), TokenKind::Def | TokenKind::Async) {
                         methods.push(self.parse_func_def(vis));
@@ -1589,8 +1824,8 @@ impl Parser {
                     }
                 }
                 TokenKind::Identifier(_) => {
-                    // Field declaration
-                    fields.push(self.parse_field_decl());
+                    // Field declaration — picks up current section visibility.
+                    fields.push(self.parse_field_decl_with_vis(current_vis));
                 }
                 _ => {
                     self.error(&format!(
@@ -1610,6 +1845,16 @@ impl Parser {
             self.ensure_loop_progress(__progress);
         }
         self.expect(TokenKind::End);
+        // Apply `private :a, :b` style name-list overrides as a final pass.
+        // These RE-MARK already-collected methods, overriding any section
+        // marker they were under (ruby-naming.spec.md §3.2 paragraph 3).
+        for (vis, names) in &name_list_overrides {
+            for n in names {
+                if let Some(m) = methods.iter_mut().find(|m| &m.name == n) {
+                    m.visibility = *vis;
+                }
+            }
+        }
         let span = self.span_from(&start);
         ClassDef {
             name,
@@ -1623,6 +1868,51 @@ impl Parser {
             where_clause,
             span,
         }
+    }
+
+    /// Parse the Ruby-style name list that follows a section marker:
+    /// `private :method_a, :method_b`. The leading marker has already
+    /// been consumed; the cursor sits on the first `:`.
+    fn parse_visibility_name_list(&mut self) -> Vec<String> {
+        let mut names = Vec::new();
+        // First name: `: ident`
+        if !self.eat(TokenKind::Colon) {
+            return names;
+        }
+        match self.current_kind().clone() {
+            TokenKind::Identifier(n) => {
+                self.advance();
+                names.push(n);
+            }
+            _ => {
+                self.error(&format!(
+                    "expected method name after `:` in visibility name list, found {:?}",
+                    self.current_kind()
+                ));
+                return names;
+            }
+        }
+        while self.eat(TokenKind::Comma) {
+            self.skip_newlines();
+            if !self.eat(TokenKind::Colon) {
+                self.error("expected `:method_name` after `,` in visibility name list");
+                break;
+            }
+            match self.current_kind().clone() {
+                TokenKind::Identifier(n) => {
+                    self.advance();
+                    names.push(n);
+                }
+                _ => {
+                    self.error(&format!(
+                        "expected method name after `:` in visibility name list, found {:?}",
+                        self.current_kind()
+                    ));
+                    break;
+                }
+            }
+        }
+        names
     }
 
     fn parse_inner_impl(&mut self, is_unsafe: bool) -> InnerImpl {
@@ -1673,11 +1963,6 @@ impl Parser {
     }
 
     // ─── Field Declarations ──────────────────────────────────────────
-
-    fn parse_field_decl(&mut self) -> FieldDecl {
-        let vis = self.parse_visibility();
-        self.parse_field_decl_with_vis(vis)
-    }
 
     fn parse_field_decl_with_vis(&mut self, visibility: Visibility) -> FieldDecl {
         let start = self.current_span();

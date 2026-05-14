@@ -315,7 +315,7 @@ pub fn layout_of(ty: &Ty, symbols: &SymbolTable) -> TypeLayout {
 /// args, this function extracts a `(param_name → const_value)` map
 /// from the class's declared generic params + the supplied
 /// `generic_args` and recurses into field layouts with that map.
-/// `Ty::Array(_, ConstExpr::Param(N))` then resolves `N` via the
+/// `Ty::FixedArray(_, ConstExpr::Param(N))` then resolves `N` via the
 /// map, so `class Buf[const N: USize] { data: [Int; N] }` instantiated
 /// as `Buf[Int, 4]` lays out `data` as 4 * 8 = 32 bytes.
 ///
@@ -361,9 +361,9 @@ fn layout_of_inner(
 
         // ── Collections ─────────────────────────────────────────────────────
         // Vec[T] — (ptr, len, cap) = 24 bytes, align 8
-        Ty::Vec(_) => TypeLayout::primitive(24, 8),
+        Ty::Array(_) => TypeLayout::primitive(24, 8),
         // HashMap[K,V] and Set[T] — 48 bytes (HashMap/HashSet header), align 8
-        Ty::HashMap(_, _) | Ty::Set(_) => TypeLayout::primitive(48, 8),
+        Ty::Map(_, _) | Ty::Set(_) => TypeLayout::primitive(48, 8),
 
         // ── Option[T] ───────────────────────────────────────────────────────
         Ty::Option(inner) => {
@@ -394,7 +394,7 @@ fn layout_of_inner(
         }
 
         // ── Array ───────────────────────────────────────────────────────────
-        Ty::Array(elem, n) => {
+        Ty::FixedArray(elem, n) => {
             let elem_layout = layout_of_inner(elem, symbols, bindings);
             // T2.02 S7 binding-threading: `Lit(N)` resolves directly;
             // `Param(name)` resolves through the supplied bindings;
@@ -442,11 +442,11 @@ fn layout_of_inner(
 
         // ── Trait objects ───────────────────────────────────────────────────
         // dyn Trait = (data_ptr, vtable_ptr) = fat pointer, 16 bytes
-        Ty::DynTrait(_) => TypeLayout::primitive(16, 8),
+        Ty::AnyMixin(_) => TypeLayout::primitive(16, 8),
 
         // ── impl Trait (static dispatch) ────────────────────────────────────
         // The concrete type is erased here; we conservatively return pointer size.
-        Ty::ImplTrait(_) => TypeLayout::primitive(8, 8),
+        Ty::SomeMixin(_) => TypeLayout::primitive(8, 8),
 
         // ── Type parameters and inference variables ─────────────────────────
         // These should be monomorphised / resolved before layout is called.

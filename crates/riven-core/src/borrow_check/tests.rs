@@ -532,7 +532,7 @@ fn detects_immutable_assignment() {
 /// `check_borrow` and detects the conflict with the active shared borrow.
 #[test]
 fn detects_mut_immut_borrow_conflict() {
-    let vec_ty = Ty::Vec(Box::new(Ty::Int));
+    let vec_ty = Ty::Array(Box::new(Ty::Int));
     let ref_vec_ty = Ty::Ref(Box::new(vec_ty.clone()));
 
     let stmts = vec![
@@ -650,7 +650,7 @@ fn detects_mut_immut_borrow_conflict() {
         "v".to_string(),
         DefKind::Variable {
             mutable: true,
-            ty: Ty::Vec(Box::new(Ty::Int)),
+            ty: Ty::Array(Box::new(Ty::Int)),
         },
         Visibility::Private,
         span(1, 9),
@@ -659,7 +659,7 @@ fn detects_mut_immut_borrow_conflict() {
         "r".to_string(),
         DefKind::Variable {
             mutable: false,
-            ty: Ty::Ref(Box::new(Ty::Vec(Box::new(Ty::Int)))),
+            ty: Ty::Ref(Box::new(Ty::Array(Box::new(Ty::Int)))),
         },
         Visibility::Private,
         span(2, 5),
@@ -695,7 +695,7 @@ fn detects_mut_immut_borrow_conflict() {
 /// borrow is expired. The checker therefore correctly accepts this code.
 #[test]
 fn nll_borrow_ends_at_last_use() {
-    let vec_ty = Ty::Vec(Box::new(Ty::Int));
+    let vec_ty = Ty::Array(Box::new(Ty::Int));
     let ref_vec_ty = Ty::Ref(Box::new(vec_ty.clone()));
 
     let stmts = vec![
@@ -807,7 +807,7 @@ fn nll_borrow_ends_at_last_use() {
         "v".to_string(),
         DefKind::Variable {
             mutable: true,
-            ty: Ty::Vec(Box::new(Ty::Int)),
+            ty: Ty::Array(Box::new(Ty::Int)),
         },
         Visibility::Private,
         span(1, 9),
@@ -816,7 +816,7 @@ fn nll_borrow_ends_at_last_use() {
         "first".to_string(),
         DefKind::Variable {
             mutable: false,
-            ty: Ty::Ref(Box::new(Ty::Vec(Box::new(Ty::Int)))),
+            ty: Ty::Ref(Box::new(Ty::Array(Box::new(Ty::Int)))),
         },
         Visibility::Private,
         span(2, 5),
@@ -848,7 +848,7 @@ fn send_required_closure_rejects_borrow_capture() {
         is_class_method: false,
         generic_params: vec![crate::resolve::symbols::GenericParamInfo::type_param(
             "T".to_string(),
-            vec![crate::hir::types::TraitRef {
+            vec![crate::hir::types::MixinRef {
                 name: "Send".to_string(),
                 generic_args: vec![],
             }],
@@ -857,7 +857,7 @@ fn send_required_closure_rejects_borrow_capture() {
             name: "value".to_string(),
             ty: Ty::TypeParam {
                 name: "T".to_string(),
-                bounds: vec![crate::hir::types::TraitRef {
+                bounds: vec![crate::hir::types::MixinRef {
                     name: "Send".to_string(),
                     generic_args: vec![],
                 }],

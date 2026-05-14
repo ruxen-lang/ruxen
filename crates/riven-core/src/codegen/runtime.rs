@@ -487,8 +487,14 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         };
     }
 
-    // HashMap[...] / Hash[...] (alias) methods.
-    if name.starts_with("HashMap[")
+    // Map[...] / HashMap[...] / Hash[...] methods.
+    //
+    // `Map` is the Ruby-naming name (docs/specs/syntax/ruby-naming.spec.md);
+    // `HashMap` / `Hash` are legacy spellings retained as aliases until
+    // sources finish migrating.
+    if name.starts_with("Map[")
+        || name.starts_with("Map_")
+        || name.starts_with("HashMap[")
         || name.starts_with("HashMap_")
         || name.starts_with("Hash[")
         || name.starts_with("Hash_")
@@ -537,8 +543,12 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         };
     }
 
-    // Vec[...] methods.
-    if name.starts_with("Vec") {
+    // Array[...] / Vec[...] methods.
+    //
+    // `Array` is the Ruby-naming name (docs/specs/syntax/ruby-naming.spec.md);
+    // `Vec` is the legacy spelling, kept as an alias until sources finish
+    // migrating.
+    if name.starts_with("Array") || name.starts_with("Vec") {
         return match method {
             "new" => Ok("riven_vec_new"),
             "with_capacity" => Ok("riven_vec_with_capacity"),

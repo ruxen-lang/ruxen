@@ -16,14 +16,14 @@ use crate::parser::ast::{BinOp, UnaryOp, Visibility};
 use crate::resolve::symbols::{DefKind, SymbolTable};
 
 use super::coerce::auto_deref;
-use super::mixins::TraitResolver;
+use super::mixins::MixinResolver;
 use super::unify::{can_coerce, unify, TypeError};
 
 /// The type inference engine — walks HIR and resolves all types.
 pub struct InferenceEngine<'a> {
     pub ctx: &'a mut TypeContext,
     pub symbols: &'a mut SymbolTable,
-    pub traits: &'a TraitResolver,
+    pub traits: &'a MixinResolver,
     pub diagnostics: Vec<Diagnostic>,
     current_return_ty: Option<Ty>,
 }
@@ -32,7 +32,7 @@ impl<'a> InferenceEngine<'a> {
     pub fn new(
         ctx: &'a mut TypeContext,
         symbols: &'a mut SymbolTable,
-        traits: &'a TraitResolver,
+        traits: &'a MixinResolver,
     ) -> Self {
         Self {
             ctx,
@@ -141,13 +141,13 @@ impl<'a> InferenceEngine<'a> {
             HirItem::Class(class) => self.infer_class(class),
             HirItem::Struct(_) => {} // struct fields already have types
             HirItem::Enum(_) => {}   // enum variants already have types
-            HirItem::Trait(t) => {
+            HirItem::Mixin(t) => {
                 // Default method bodies need inference so that expressions
                 // like `self.name` acquire a concrete return type (e.g.
                 // String), otherwise interpolation later falls back to
                 // integer-printing on the raw pointer value.
                 for ti in &mut t.items {
-                    if let HirTraitItem::DefaultMethod(m) = ti {
+                    if let HirMixinItem::DefaultMethod(m) = ti {
                         self.infer_func(m);
                     }
                 }
@@ -521,11 +521,11 @@ impl<'a> InferenceEngine<'a> {
                         }
                         let recv_ty = self.ctx.resolve(&entry_recv.ty);
                         let (_, derefed) = auto_deref(&recv_ty, self.ctx);
-                        if !matches!(&derefed, Ty::HashMap(_, _)) {
+                        if !matches!(&derefed, Ty::Map(_, _)) {
                             self.error(
                                 format!(
                                     "`.entry(K)` is only defined on \
-                                     `HashMap[K,V]`; got `{}`",
+                                     `Map[K, V]`; got `{}`",
                                     derefed
                                 ),
                                 &entry_recv.span,
@@ -549,7 +549,7 @@ impl<'a> InferenceEngine<'a> {
                     // Pin: for `or_insert_with`, the closure body's
                     // inferred type must match V. For `or_insert(v)`,
                     // arg[0]'s type must match V.
-                    if let Some(Ty::HashMap(_, v_ty)) = map_ty.as_ref() {
+                    if let Some(Ty::Map(_, v_ty)) = map_ty.as_ref() {
                         if method_name == "or_insert_with" {
                             if let Some(blk) = block.as_ref() {
                                 if let HirExprKind::Closure { body, .. } = &blk.kind {
@@ -605,7 +605,7 @@ impl<'a> InferenceEngine<'a> {
                         let (_, derefed_pre) = auto_deref(&obj_ty_pre, self.ctx);
                         let elem_ty: Option<Ty> = match &derefed_pre {
                             Ty::Option(inner) => Some((**inner).clone()),
-                            Ty::Vec(inner) => Some((**inner).clone()),
+                            Ty::Array(inner) => Some((**inner).clone()),
                             Ty::Result(ok, _) => Some((**ok).clone()),
                             Ty::Class { name, generic_args } if name.ends_with("Iter") => {
                                 generic_args.first().cloned()
@@ -662,7 +662,7 @@ impl<'a> InferenceEngine<'a> {
                         if let HirExprKind::Closure { body, .. } = &blk.kind {
                             let body_ty = self.ctx.resolve(&body.ty);
                             match &ret_ty {
-                                Ty::Option(inner) | Ty::Vec(inner) | Ty::Result(inner, _) => {
+                                Ty::Option(inner) | Ty::Array(inner) | Ty::Result(inner, _) => {
                                     let _ = unify(inner, &body_ty, self.ctx, &expr.span);
                                 }
                                 Ty::Class { name, generic_args } if name.ends_with("Iter") => {
@@ -1075,7 +1075,7 @@ impl<'a> InferenceEngine<'a> {
                         elem_ty = unified;
                     }
                 }
-                expr.ty = Ty::Vec(Box::new(self.ctx.resolve(&elem_ty)));
+                expr.ty = Ty::Array(Box::new(self.ctx.resolve(&elem_ty)));
             }
 
             HirExprKind::ArrayFill { value, .. } => {
@@ -1171,7 +1171,7 @@ impl<'a> InferenceEngine<'a> {
     fn coerce_array_literal_to_fixed(&mut self, expected: &Ty, val: &mut HirExpr) {
         let expected_resolved = self.ctx.resolve(expected);
         let (elem_ty, expected_len) = match &expected_resolved {
-            Ty::Array(elem, n) => match n.as_lit() {
+            Ty::FixedArray(elem, n) => match n.as_lit() {
                 Some(v) => ((**elem).clone(), v as usize),
                 // Unresolved const-param size — skip the literal-len
                 // check (S5+ will compare structurally instead).
@@ -1192,7 +1192,7 @@ impl<'a> InferenceEngine<'a> {
                 );
                 return;
             }
-            val.ty = Ty::Array(
+            val.ty = Ty::FixedArray(
                 Box::new(elem_ty),
                 crate::hir::types::ConstExpr::Lit(expected_len as u64),
             );
@@ -1203,8 +1203,8 @@ impl<'a> InferenceEngine<'a> {
         let expected = self.ctx.resolve(expected);
         let found = self.ctx.resolve(found);
 
-        let bounds: &[crate::hir::types::TraitRef] = match &expected {
-            Ty::TypeParam { bounds, .. } | Ty::ImplTrait(bounds) | Ty::DynTrait(bounds) => {
+        let bounds: &[crate::hir::types::MixinRef] = match &expected {
+            Ty::TypeParam { bounds, .. } | Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds) => {
                 bounds.as_slice()
             }
             _ => return,
@@ -1376,7 +1376,7 @@ impl<'a> InferenceEngine<'a> {
     fn infer_iter_collect_type(&mut self, obj_ty: &Ty, generic_args: &[Ty], span: &Span) -> Ty {
         if generic_args.len() != 1 {
             self.diagnostics.push(Diagnostic::error_with_code(
-                "`collect` requires exactly one target type: `iter.collect[Vec[T]]`".to_string(),
+                "`collect` requires exactly one target type: `iter.collect[Array[T]]`".to_string(),
                 span.clone(),
                 "E0700",
             ));
@@ -1414,7 +1414,7 @@ impl<'a> InferenceEngine<'a> {
 
     fn collect_target_compatible(&mut self, target: &Ty, item_ty: &Ty, span: &Span) -> bool {
         match target {
-            Ty::Vec(elem) => {
+            Ty::Array(elem) => {
                 let ok = unify(elem.as_ref(), item_ty, self.ctx, span).is_ok();
                 if !ok {
                     self.diagnostics.push(Diagnostic::error_with_code(
@@ -1445,7 +1445,7 @@ impl<'a> InferenceEngine<'a> {
                 }
                 ok
             }
-            Ty::HashMap(k, v) => {
+            Ty::Map(k, v) => {
                 let resolved = self.ctx.resolve(item_ty);
                 let ok = match resolved {
                     Ty::Tuple(ref elems) if elems.len() == 2 => {
@@ -1485,7 +1485,7 @@ impl<'a> InferenceEngine<'a> {
             other => {
                 self.diagnostics.push(Diagnostic::error_with_code(
                     format!(
-                        "`collect[{other}]` is not supported yet; use Vec, String, HashMap, or HashSet"
+                        "`collect[{other}]` is not supported yet; use Array, String, Map, or Set"
                     ),
                     span.clone(),
                     "E0700",
@@ -1499,8 +1499,8 @@ impl<'a> InferenceEngine<'a> {
     /// consult the trait bounds for a method named `name`. Reports an
     /// ambiguity diagnostic when more than one bound declares the method.
     fn lookup_on_type_param_bounds(&mut self, ty: &Ty, name: &str, span: &Span) -> Option<Ty> {
-        let bounds: &[crate::hir::types::TraitRef] = match ty {
-            Ty::TypeParam { bounds, .. } | Ty::ImplTrait(bounds) | Ty::DynTrait(bounds) => {
+        let bounds: &[crate::hir::types::MixinRef] = match ty {
+            Ty::TypeParam { bounds, .. } | Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds) => {
                 bounds.as_slice()
             }
             _ => return None,
@@ -1514,8 +1514,8 @@ impl<'a> InferenceEngine<'a> {
             Err(providers) => {
                 self.error(
                     format!(
-                        "ambiguous method `{}`: provided by multiple trait bounds ({}) — \
-                         disambiguate with `Trait::{}(…)`",
+                        "ambiguous method `{}`: provided by multiple mixin bounds ({}) — \
+                         disambiguate with `Mixin.{}(…)`",
                         name,
                         providers.join(", "),
                         name,
@@ -1543,11 +1543,11 @@ impl<'a> InferenceEngine<'a> {
             (Ty::String, "trim") => Some(Ty::Str),
             (Ty::String, "to_lower") => Some(Ty::String),
             (Ty::String, "to_upper") => Some(Ty::String),
-            (Ty::String, "chars") => Some(Ty::Vec(Box::new(Ty::Char))),
+            (Ty::String, "chars") => Some(Ty::Array(Box::new(Ty::Char))),
             // Phase 2 stdlib batch 2 (#02): split returns owned Vec[String]
             // (per the v1 rule: iterator producers return Vec, not lazy
             // SplitIter, until prompt 05 ships the lazy iterator story).
-            (Ty::String, "split") => Some(Ty::Vec(Box::new(Ty::String))),
+            (Ty::String, "split") => Some(Ty::Array(Box::new(Ty::String))),
             (Ty::String, "push") => Some(Ty::Unit),
             (Ty::String, "as_str") => Some(Ty::Str),
             (Ty::String, "from") => Some(Ty::String),
@@ -1555,17 +1555,17 @@ impl<'a> InferenceEngine<'a> {
             (Ty::String, "starts_with") => Some(Ty::Bool),
             (Ty::String, "ends_with") => Some(Ty::Bool),
             (Ty::String, "repeat") => Some(Ty::String),
-            (Ty::String, "lines") => Some(Ty::Vec(Box::new(Ty::String))),
+            (Ty::String, "lines") => Some(Ty::Array(Box::new(Ty::String))),
             (Ty::String, "replace") => Some(Ty::String),
             // Phase 2 stdlib (#02).
             (Ty::String, "new") => Some(Ty::String),
             (Ty::String, "with_capacity") => Some(Ty::String),
             (Ty::String, "to_string") => Some(Ty::String),
-            (Ty::String, "bytes") => Some(Ty::Vec(Box::new(Ty::UInt8))),
+            (Ty::String, "bytes") => Some(Ty::Array(Box::new(Ty::UInt8))),
             (Ty::String, "trim_start") => Some(Ty::Str),
             (Ty::String, "trim_end") => Some(Ty::Str),
             (Ty::String, "find") => Some(Ty::Option(Box::new(Ty::USize))),
-            (Ty::String, "splitn") => Some(Ty::Vec(Box::new(Ty::String))),
+            (Ty::String, "splitn") => Some(Ty::Array(Box::new(Ty::String))),
             (Ty::String, "clear") => Some(Ty::Unit),
             (Ty::String, "truncate") => Some(Ty::Unit),
             (Ty::String, "insert") => Some(Ty::Unit),
@@ -1579,13 +1579,13 @@ impl<'a> InferenceEngine<'a> {
                 Box::new(Ty::Float),
                 Box::new(Self::class_ty("ParseFloatError", vec![])),
             )),
-            (Ty::String, "into_bytes") => Some(Ty::Vec(Box::new(Ty::UInt8))),
+            (Ty::String, "into_bytes") => Some(Ty::Array(Box::new(Ty::UInt8))),
             (Ty::Str, "len") => Some(Ty::USize),
             (Ty::Str, "is_empty") => Some(Ty::Bool),
             (Ty::Str, "trim") => Some(Ty::Str),
             (Ty::Str, "to_lower") => Some(Ty::Str),
             (Ty::Str, "to_upper") => Some(Ty::Str),
-            (Ty::Str, "chars") => Some(Ty::Vec(Box::new(Ty::Char))),
+            (Ty::Str, "chars") => Some(Ty::Array(Box::new(Ty::Char))),
             (Ty::Str, "split") => Some(Ty::Class {
                 name: "SplitIter".to_string(),
                 generic_args: vec![],
@@ -1595,14 +1595,14 @@ impl<'a> InferenceEngine<'a> {
             (Ty::Str, "contains") => Some(Ty::Bool),
             (Ty::Str, "starts_with") => Some(Ty::Bool),
             (Ty::Str, "ends_with") => Some(Ty::Bool),
-            (Ty::Str, "lines") => Some(Ty::Vec(Box::new(Ty::String))),
+            (Ty::Str, "lines") => Some(Ty::Array(Box::new(Ty::String))),
             (Ty::Str, "replace") => Some(Ty::String),
             (Ty::Str, "to_string") => Some(Ty::String),
-            (Ty::Str, "bytes") => Some(Ty::Vec(Box::new(Ty::UInt8))),
+            (Ty::Str, "bytes") => Some(Ty::Array(Box::new(Ty::UInt8))),
             (Ty::Str, "trim_start") => Some(Ty::Str),
             (Ty::Str, "trim_end") => Some(Ty::Str),
             (Ty::Str, "find") => Some(Ty::Option(Box::new(Ty::USize))),
-            (Ty::Str, "splitn") => Some(Ty::Vec(Box::new(Ty::String))),
+            (Ty::Str, "splitn") => Some(Ty::Array(Box::new(Ty::String))),
             (Ty::Str, "parse_int") => Some(Ty::Result(
                 Box::new(Ty::Int),
                 Box::new(Self::class_ty("ParseIntError", vec![])),
@@ -1619,69 +1619,69 @@ impl<'a> InferenceEngine<'a> {
             }
 
             // Vec methods
-            (Ty::Vec(_), "len") => Some(Ty::USize),
-            (Ty::Vec(_), "is_empty") => Some(Ty::Bool),
-            (Ty::Vec(_), "push") => Some(Ty::Unit),
-            (Ty::Vec(elem), "pop") => Some(Ty::Option(elem.clone())),
-            (Ty::Vec(elem), "get") => Some(Ty::Option(Box::new(Ty::Ref(elem.clone())))),
-            (Ty::Vec(elem), "get_mut") => Some(Ty::Option(Box::new(Ty::RefMut(elem.clone())))),
-            (Ty::Vec(elem), "iter") => Some(Ty::Class {
+            (Ty::Array(_), "len") => Some(Ty::USize),
+            (Ty::Array(_), "is_empty") => Some(Ty::Bool),
+            (Ty::Array(_), "push") => Some(Ty::Unit),
+            (Ty::Array(elem), "pop") => Some(Ty::Option(elem.clone())),
+            (Ty::Array(elem), "get") => Some(Ty::Option(Box::new(Ty::Ref(elem.clone())))),
+            (Ty::Array(elem), "get_mut") => Some(Ty::Option(Box::new(Ty::RefMut(elem.clone())))),
+            (Ty::Array(elem), "iter") => Some(Ty::Class {
                 name: "VecIter".to_string(),
                 generic_args: vec![*elem.clone()],
             }),
-            (Ty::Vec(elem), "into_iter") => Some(Ty::Class {
+            (Ty::Array(elem), "into_iter") => Some(Ty::Class {
                 name: "VecIntoIter".to_string(),
                 generic_args: vec![*elem.clone()],
             }),
-            (Ty::Vec(_), "each") => Some(Ty::Unit),
-            (Ty::Vec(_), "map") => Some(Ty::Vec(Box::new(self.ctx.fresh_type_var()))),
-            (Ty::Vec(elem), "filter") => Some(Ty::Vec(elem.clone())),
-            (Ty::Vec(elem), "find") => Some(Ty::Option(Box::new(Ty::Ref(elem.clone())))),
-            (Ty::Vec(_), "position") => Some(Ty::Option(Box::new(Ty::USize))),
-            (Ty::Vec(_), "to_vec") => Some(ty.clone()),
-            (Ty::Vec(_), "new") => Some(ty.clone()),
-            (Ty::Vec(_), "sum") => Some(Ty::Int),
-            (Ty::Vec(_), "count") => Some(Ty::USize),
-            (Ty::Vec(_), "reverse") => Some(ty.clone()),
-            (Ty::Vec(elem), "first") => Some(Ty::Option(elem.clone())),
-            (Ty::Vec(elem), "last") => Some(Ty::Option(elem.clone())),
-            (Ty::Vec(_), "clone") => Some(ty.clone()),
-            (Ty::Vec(_), "contains") => Some(Ty::Bool),
-            (Ty::Vec(_), "sort") => Some(ty.clone()),
-            (Ty::Vec(_), "join") => Some(Ty::String),
+            (Ty::Array(_), "each") => Some(Ty::Unit),
+            (Ty::Array(_), "map") => Some(Ty::Array(Box::new(self.ctx.fresh_type_var()))),
+            (Ty::Array(elem), "filter") => Some(Ty::Array(elem.clone())),
+            (Ty::Array(elem), "find") => Some(Ty::Option(Box::new(Ty::Ref(elem.clone())))),
+            (Ty::Array(_), "position") => Some(Ty::Option(Box::new(Ty::USize))),
+            (Ty::Array(_), "to_vec") => Some(ty.clone()),
+            (Ty::Array(_), "new") => Some(ty.clone()),
+            (Ty::Array(_), "sum") => Some(Ty::Int),
+            (Ty::Array(_), "count") => Some(Ty::USize),
+            (Ty::Array(_), "reverse") => Some(ty.clone()),
+            (Ty::Array(elem), "first") => Some(Ty::Option(elem.clone())),
+            (Ty::Array(elem), "last") => Some(Ty::Option(elem.clone())),
+            (Ty::Array(_), "clone") => Some(ty.clone()),
+            (Ty::Array(_), "contains") => Some(Ty::Bool),
+            (Ty::Array(_), "sort") => Some(ty.clone()),
+            (Ty::Array(_), "join") => Some(Ty::String),
             // Phase 2 stdlib batch 1 (#03).
-            (Ty::Vec(_), "with_capacity") => Some(ty.clone()),
-            (Ty::Vec(_), "capacity") => Some(Ty::USize),
-            (Ty::Vec(_), "clear") => Some(Ty::Unit),
-            (Ty::Vec(_), "truncate") => Some(Ty::Unit),
-            (Ty::Vec(_), "swap") => Some(Ty::Unit),
-            (Ty::Vec(_), "insert") => Some(Ty::Unit),
-            (Ty::Vec(elem), "remove") => Some(*elem.clone()),
-            (Ty::Vec(_), "extend") => Some(Ty::Unit),
-            (Ty::Vec(_), "iter_mut") => Some(ty.clone()),
-            (Ty::Vec(_), "as_slice") => Some(ty.clone()),
+            (Ty::Array(_), "with_capacity") => Some(ty.clone()),
+            (Ty::Array(_), "capacity") => Some(Ty::USize),
+            (Ty::Array(_), "clear") => Some(Ty::Unit),
+            (Ty::Array(_), "truncate") => Some(Ty::Unit),
+            (Ty::Array(_), "swap") => Some(Ty::Unit),
+            (Ty::Array(_), "insert") => Some(Ty::Unit),
+            (Ty::Array(elem), "remove") => Some(*elem.clone()),
+            (Ty::Array(_), "extend") => Some(Ty::Unit),
+            (Ty::Array(_), "iter_mut") => Some(ty.clone()),
+            (Ty::Array(_), "as_slice") => Some(ty.clone()),
             // Phase 2 stdlib batch 2 (#03).
-            (Ty::Vec(_), "from_iter") => Some(ty.clone()),
-            (Ty::Vec(_), "dedup") => Some(Ty::Unit),
-            (Ty::Vec(_), "sort_by") => Some(Ty::Unit),
-            (Ty::Vec(_), "retain") => Some(Ty::Unit),
+            (Ty::Array(_), "from_iter") => Some(ty.clone()),
+            (Ty::Array(_), "dedup") => Some(Ty::Unit),
+            (Ty::Array(_), "sort_by") => Some(Ty::Unit),
+            (Ty::Array(_), "retain") => Some(Ty::Unit),
             (Ty::String, "from_iter") => Some(Ty::String),
 
             // HashMap methods
-            (Ty::HashMap(_, _), "new") => Some(ty.clone()),
-            (Ty::HashMap(_, _), "from_iter") => Some(ty.clone()),
-            (Ty::HashMap(_, _), "insert") => Some(Ty::Unit),
-            (Ty::HashMap(_, v), "get") => Some(Ty::Option(Box::new(Ty::Ref(v.clone())))),
-            (Ty::HashMap(_, _), "contains_key") => Some(Ty::Bool),
-            (Ty::HashMap(_, _), "len") => Some(Ty::USize),
-            (Ty::HashMap(_, _), "is_empty") => Some(Ty::Bool),
+            (Ty::Map(_, _), "new") => Some(ty.clone()),
+            (Ty::Map(_, _), "from_iter") => Some(ty.clone()),
+            (Ty::Map(_, _), "insert") => Some(Ty::Unit),
+            (Ty::Map(_, v), "get") => Some(Ty::Option(Box::new(Ty::Ref(v.clone())))),
+            (Ty::Map(_, _), "contains_key") => Some(Ty::Bool),
+            (Ty::Map(_, _), "len") => Some(Ty::USize),
+            (Ty::Map(_, _), "is_empty") => Some(Ty::Bool),
             // Phase 2 stdlib (#04): full HashMap[K,V] surface.
-            (Ty::HashMap(_, _), "with_capacity") => Some(ty.clone()),
-            (Ty::HashMap(_, v), "remove") => Some(Ty::Option(v.clone())),
-            (Ty::HashMap(_, _), "clear") => Some(Ty::Unit),
-            (Ty::HashMap(k, _), "keys") => Some(Ty::Vec(Box::new(Ty::Ref(k.clone())))),
-            (Ty::HashMap(_, v), "values") => Some(Ty::Vec(Box::new(Ty::Ref(v.clone())))),
-            (Ty::HashMap(k, _), "iter") => Some(Ty::Vec(Box::new(Ty::Ref(k.clone())))),
+            (Ty::Map(_, _), "with_capacity") => Some(ty.clone()),
+            (Ty::Map(_, v), "remove") => Some(Ty::Option(v.clone())),
+            (Ty::Map(_, _), "clear") => Some(Ty::Unit),
+            (Ty::Map(k, _), "keys") => Some(Ty::Array(Box::new(Ty::Ref(k.clone())))),
+            (Ty::Map(_, v), "values") => Some(Ty::Array(Box::new(Ty::Ref(v.clone())))),
+            (Ty::Map(k, _), "iter") => Some(Ty::Array(Box::new(Ty::Ref(k.clone())))),
 
             // Set methods
             (Ty::Set(_), "new") => Some(ty.clone()),
@@ -1694,7 +1694,7 @@ impl<'a> InferenceEngine<'a> {
             (Ty::Set(_), "with_capacity") => Some(ty.clone()),
             (Ty::Set(_), "remove") => Some(Ty::Bool),
             (Ty::Set(_), "clear") => Some(Ty::Unit),
-            (Ty::Set(t), "iter") => Some(Ty::Vec(Box::new(Ty::Ref(t.clone())))),
+            (Ty::Set(t), "iter") => Some(Ty::Array(Box::new(Ty::Ref(t.clone())))),
             (Ty::Set(_), "union") => Some(ty.clone()),
             (Ty::Set(_), "intersection") => Some(ty.clone()),
             (Ty::Set(_), "difference") => Some(ty.clone()),
@@ -1932,7 +1932,7 @@ impl<'a> InferenceEngine<'a> {
                             .first()
                             .cloned()
                             .unwrap_or_else(|| self.ctx.fresh_type_var()),
-                        Ty::Vec(elem) => *elem,
+                        Ty::Array(elem) => *elem,
                         other => other,
                     },
                     None => self.ctx.fresh_type_var(),
@@ -1947,7 +1947,7 @@ impl<'a> InferenceEngine<'a> {
                     .first()
                     .cloned()
                     .unwrap_or_else(|| self.ctx.fresh_type_var());
-                Some(Ty::Vec(Box::new(elem)))
+                Some(Ty::Array(Box::new(elem)))
             }
             (Ty::Class { name, .. }, "read_line") if name == "Stdin" => Some(Ty::Result(
                 Box::new(Ty::String),
@@ -1969,7 +1969,7 @@ impl<'a> InferenceEngine<'a> {
             // up front (see `riven_stdin_lines` in runtime.c). On
             // read failure the vec holds a single Err element.
             (Ty::Class { name, .. }, "lines") if name == "Stdin" => {
-                Some(Ty::Vec(Box::new(Ty::Result(
+                Some(Ty::Array(Box::new(Ty::Result(
                     Box::new(Ty::String),
                     Box::new(Ty::Enum {
                         name: "IoError".to_string(),
@@ -2015,7 +2015,7 @@ impl<'a> InferenceEngine<'a> {
                 } else {
                     generic_args.first().cloned().unwrap_or(Ty::Error)
                 };
-                Some(Ty::Vec(Box::new(elem)))
+                Some(Ty::Array(Box::new(elem)))
             }
             (Ty::Class { name, .. }, "enumerate")
                 if name.ends_with("Iter") || name.ends_with("IntoIter") =>
@@ -2025,8 +2025,8 @@ impl<'a> InferenceEngine<'a> {
             (Ty::Class { name, generic_args }, "partition") if name.ends_with("Iter") => {
                 let elem = generic_args.first().cloned().unwrap_or(Ty::Error);
                 Some(Ty::Tuple(vec![
-                    Ty::Vec(Box::new(elem.clone())),
-                    Ty::Vec(Box::new(elem)),
+                    Ty::Array(Box::new(elem.clone())),
+                    Ty::Array(Box::new(elem)),
                 ]))
             }
 
@@ -2064,13 +2064,13 @@ impl<'a> InferenceEngine<'a> {
 
     fn infer_index_ty(&self, obj_ty: &Ty) -> Ty {
         match obj_ty {
-            Ty::Vec(elem) => *elem.clone(),
-            Ty::Array(elem, _) => *elem.clone(),
+            Ty::Array(elem) => *elem.clone(),
+            Ty::FixedArray(elem, _) => *elem.clone(),
             // `m[&k]` panics on missing keys (mirrors Rust's `Index for
             // HashMap`); the runtime helper `riven_hash_index` returns the
             // raw value slot rather than an Option, so the surface type is
             // V directly. See lower.rs Index handler for the dispatch.
-            Ty::HashMap(_, v) => *v.clone(),
+            Ty::Map(_, v) => *v.clone(),
             // Reference-to-HashMap also indexable (e.g. `&map[k]`).
             Ty::Ref(inner) | Ty::RefMut(inner) => self.infer_index_ty(inner),
             Ty::Tuple(elems) => {
@@ -2264,7 +2264,7 @@ impl<'a> InferenceEngine<'a> {
             (a, Ty::Ref(b)) | (a, Ty::RefMut(b)) => {
                 Self::collect_typeparam_bindings(a, b, bindings);
             }
-            (Ty::Vec(a), Ty::Vec(b)) => {
+            (Ty::Array(a), Ty::Array(b)) => {
                 Self::collect_typeparam_bindings(a, b, bindings);
             }
             (Ty::Option(a), Ty::Option(b)) => {
@@ -2328,7 +2328,7 @@ impl<'a> InferenceEngine<'a> {
             Ty::Ref(inner) => Ty::Ref(Box::new(Self::subst_ty(inner, subst))),
             Ty::RefMut(inner) => Ty::RefMut(Box::new(Self::subst_ty(inner, subst))),
             Ty::Option(inner) => Ty::Option(Box::new(Self::subst_ty(inner, subst))),
-            Ty::Vec(inner) => Ty::Vec(Box::new(Self::subst_ty(inner, subst))),
+            Ty::Array(inner) => Ty::Array(Box::new(Self::subst_ty(inner, subst))),
             _ => ty.clone(),
         }
     }
@@ -2471,7 +2471,7 @@ fn record_tyvar_binding(
                 .or_insert_with(|| concrete.clone());
         }
         (Ty::Option(a), Ty::Option(b)) => record_tyvar_binding(a, b, subst),
-        (Ty::Vec(a), Ty::Vec(b)) => record_tyvar_binding(a, b, subst),
+        (Ty::Array(a), Ty::Array(b)) => record_tyvar_binding(a, b, subst),
         (Ty::Ref(a), Ty::Ref(b)) => record_tyvar_binding(a, b, subst),
         (Ty::RefMut(a), Ty::RefMut(b)) => record_tyvar_binding(a, b, subst),
         (Ty::Result(a1, a2), Ty::Result(b1, b2)) => {

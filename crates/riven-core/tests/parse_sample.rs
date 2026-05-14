@@ -57,7 +57,7 @@ fn test_sample_contains_expected_items() {
             TopLevelItem::Enum(_) => enums += 1,
             TopLevelItem::Class(_) => classes += 1,
             TopLevelItem::Impl(_) => impls += 1,
-            TopLevelItem::Trait(_) => traits += 1,
+            TopLevelItem::Mixin(_) => traits += 1,
             TopLevelItem::Function(_) => functions += 1,
             _ => {}
         }

@@ -231,7 +231,7 @@ impl Parser {
             }
         }
 
-        TypeExpr::ImplTrait { bounds, span }
+        TypeExpr::SomeMixin { bounds, span }
     }
 
     fn parse_dyn_trait_type(&mut self) -> TypeExpr {
@@ -239,7 +239,7 @@ impl Parser {
         self.advance(); // consume dyn
         let bounds = self.parse_trait_bounds();
         let span = self.span_from(&start);
-        TypeExpr::DynTrait { bounds, span }
+        TypeExpr::AnyMixin { bounds, span }
     }
 
     fn parse_fn_type(&mut self) -> TypeExpr {
@@ -477,7 +477,7 @@ impl Parser {
     }
 
     /// Parse trait bounds: Trait1 + Trait2 + ...
-    pub(crate) fn parse_trait_bounds(&mut self) -> Vec<TraitBound> {
+    pub(crate) fn parse_trait_bounds(&mut self) -> Vec<MixinBound> {
         let mut bounds = Vec::new();
         bounds.push(self.parse_single_trait_bound());
         while self.eat(TokenKind::Plus) {
@@ -487,7 +487,7 @@ impl Parser {
         bounds
     }
 
-    fn parse_single_trait_bound(&mut self) -> TraitBound {
+    fn parse_single_trait_bound(&mut self) -> MixinBound {
         self.skip_newlines();
         let mut path = self.parse_type_path();
 
@@ -540,7 +540,7 @@ impl Parser {
         }
 
         let span = path.span.clone();
-        TraitBound { path, span }
+        MixinBound { path, span }
     }
 
     /// Parse where clause: `where T: Trait, U: Trait`, and (T2.02 S9

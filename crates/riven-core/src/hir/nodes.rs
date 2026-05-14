@@ -6,7 +6,7 @@
 //! - Syntactic sugar is desugared
 //! - Copy/Move annotations on all value transfers
 
-use crate::hir::types::{MoveSemantics, TraitRef, Ty};
+use crate::hir::types::{MoveSemantics, MixinRef, Ty};
 use crate::lexer::token::Span;
 use crate::parser::ast::{BinOp, UnaryOp, Visibility};
 
@@ -30,7 +30,9 @@ pub enum HirItem {
     Class(HirClassDef),
     Struct(HirStructDef),
     Enum(HirEnumDef),
-    Trait(HirTraitDef),
+    /// `mixin M ... end` — was `Trait` pre-Ruby-naming migration.
+    /// See docs/specs/syntax/ruby-naming.spec.md.
+    Mixin(HirMixinDef),
     Impl(HirImplBlock),
     Function(HirFuncDef),
     TypeAlias(HirTypeAlias),
@@ -396,7 +398,7 @@ pub struct HirFuncDef {
 #[derive(Debug, Clone)]
 pub struct HirGenericParam {
     pub name: String,
-    pub bounds: Vec<TraitRef>,
+    pub bounds: Vec<MixinRef>,
     pub span: Span,
 }
 
@@ -477,21 +479,23 @@ pub struct HirVariantField {
     pub span: Span,
 }
 
-// ─── Trait Definition ───────────────────────────────────────────────
+// ─── Mixin Definition ───────────────────────────────────────────────
+// Was "Trait Definition" pre-Ruby-naming migration. See
+// docs/specs/syntax/ruby-naming.spec.md.
 
 #[derive(Debug, Clone)]
-pub struct HirTraitDef {
+pub struct HirMixinDef {
     pub def_id: DefId,
     pub name: String,
     pub generic_params: Vec<HirGenericParam>,
-    pub super_traits: Vec<TraitRef>,
-    pub items: Vec<HirTraitItem>,
+    pub super_traits: Vec<MixinRef>,
+    pub items: Vec<HirMixinItem>,
     pub doc_comments: Vec<String>,
     pub span: Span,
 }
 
 #[derive(Debug, Clone)]
-pub enum HirTraitItem {
+pub enum HirMixinItem {
     AssocType {
         name: String,
         span: Span,
@@ -514,7 +518,7 @@ pub struct HirImplBlock {
     pub generic_params: Vec<HirGenericParam>,
     pub is_unsafe: bool,
     pub negative_trait: bool,
-    pub trait_ref: Option<TraitRef>,
+    pub trait_ref: Option<MixinRef>,
     pub target_ty: Ty,
     pub items: Vec<HirImplItem>,
     pub span: Span,

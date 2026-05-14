@@ -92,12 +92,12 @@ pub fn format_type_expr(ty: &TypeExpr, _comments: &CommentMap) -> Doc {
             ])
         }
 
-        TypeExpr::ImplTrait { bounds, .. } => {
+        TypeExpr::SomeMixin { bounds, .. } => {
             let bound_docs: Vec<Doc> = bounds.iter().map(|b| format_type_path(&b.path)).collect();
             concat(vec![text("impl "), join(text(" + "), bound_docs)])
         }
 
-        TypeExpr::DynTrait { bounds, .. } => {
+        TypeExpr::AnyMixin { bounds, .. } => {
             let bound_docs: Vec<Doc> = bounds.iter().map(|b| format_type_path(&b.path)).collect();
             concat(vec![text("dyn "), join(text(" + "), bound_docs)])
         }
@@ -229,7 +229,7 @@ pub fn format_where_clause(wc: &WhereClause) -> Doc {
     }
 }
 
-pub fn format_trait_bounds(bounds: &[TraitBound]) -> Doc {
+pub fn format_trait_bounds(bounds: &[MixinBound]) -> Doc {
     let docs: Vec<Doc> = bounds.iter().map(|b| format_type_path(&b.path)).collect();
     join(text(" + "), docs)
 }

@@ -1277,8 +1277,8 @@ fn ty_to_cranelift(ty: &Ty) -> Option<Type> {
         Ty::Float | Ty::Float64 => Some(types::F64),
         Ty::String
         | Ty::Str
-        | Ty::Vec(_)
-        | Ty::HashMap(_, _)
+        | Ty::Array(_)
+        | Ty::Map(_, _)
         | Ty::Set(_)
         | Ty::Ref(_)
         | Ty::RefMut(_)
@@ -1296,14 +1296,14 @@ fn ty_to_cranelift(ty: &Ty) -> Option<Type> {
         | Ty::Fn { .. }
         | Ty::FnMut { .. }
         | Ty::FnOnce { .. }
-        | Ty::DynTrait(_)
-        | Ty::ImplTrait(_)
+        | Ty::AnyMixin(_)
+        | Ty::SomeMixin(_)
         | Ty::Alias { .. }
         | Ty::Newtype { .. }
         | Ty::TypeParam { .. }
         | Ty::Infer(_)
         | Ty::Tuple(_)
-        | Ty::Array(_, _) => Some(types::I64),
+        | Ty::FixedArray(_, _) => Some(types::I64),
         Ty::Unit | Ty::Never => None,
         Ty::Error => None,
         Ty::ConstArg(_) => None,
@@ -1356,8 +1356,8 @@ fn simple_type_size(ty: &Ty) -> usize {
         | Ty::Float64 => 8,
         Ty::String => 24,
         Ty::Str => 16,
-        Ty::Vec(_) => 24,
-        Ty::HashMap(_, _) | Ty::Set(_) => 48,
+        Ty::Array(_) => 24,
+        Ty::Map(_, _) | Ty::Set(_) => 48,
         Ty::Ref(_)
         | Ty::RefMut(_)
         | Ty::RefLifetime(_, _)
@@ -1372,7 +1372,7 @@ fn simple_type_size(ty: &Ty) -> usize {
         Ty::Option(_) => 16,
         Ty::Result(_, _) => 16,
         Ty::Tuple(elems) => elems.len().max(1) * 8,
-        Ty::Array(_, n) => n.as_lit().unwrap_or(0) as usize * 8,
+        Ty::FixedArray(_, n) => n.as_lit().unwrap_or(0) as usize * 8,
         _ => 8,
     }
 }

@@ -1,21 +1,25 @@
-//! Trait resolution for the Riven type system.
+//! Mixin resolution for the Riven type system.
 //!
-//! Two modes of trait satisfaction:
+//! (Was "trait" resolution pre-Ruby-naming migration — see
+//! docs/specs/syntax/ruby-naming.spec.md.)
+//!
+//! Two modes of mixin satisfaction:
 //! 1. Structural: type has all required methods with matching signatures
-//! 2. Nominal: explicit `impl Trait for Type` block exists
+//! 2. Nominal: explicit `include M` (or pre-Ruby-naming `impl Trait for Type`)
+//!    block exists
 //!
-//! Static dispatch (impl Trait) accepts structural satisfaction.
-//! Dynamic dispatch (dyn Trait) requires nominal satisfaction.
+//! Static dispatch (`some M`) accepts structural satisfaction.
+//! Dynamic dispatch (`any M`) requires nominal satisfaction.
 
 use std::collections::HashMap;
 
 use crate::hir::nodes::*;
-use crate::hir::types::{TraitRef, Ty};
-use crate::resolve::symbols::{DefKind, FnSignature, SymbolTable, TraitInfo};
+use crate::hir::types::{MixinRef, Ty};
+use crate::resolve::symbols::{DefKind, FnSignature, SymbolTable, MixinInfo};
 
 /// Result of checking whether a type satisfies a trait.
 #[derive(Debug, Clone)]
-pub enum TraitSatisfaction {
+pub enum MixinSatisfaction {
     /// Type satisfies the trait via an explicit impl block.
     Nominal,
     /// Type satisfies the trait structurally (has all required methods).
@@ -26,7 +30,7 @@ pub enum TraitSatisfaction {
 
 /// The trait resolver manages all known impl blocks and performs
 /// structural and nominal trait satisfaction checks.
-pub struct TraitResolver {
+pub struct MixinResolver {
     /// All known impl blocks: (target_type_name, trait_name) → methods
     nominal_impls: HashMap<(String, String), Vec<ImplMethod>>,
     /// Methods defined on types (from class bodies and standalone impls)
@@ -49,7 +53,7 @@ struct TypeMethod {
     signature: FnSignature,
 }
 
-impl TraitResolver {
+impl MixinResolver {
     pub fn new() -> Self {
         Self {
             nominal_impls: HashMap::new(),
@@ -96,10 +100,10 @@ impl TraitResolver {
     pub fn check_satisfaction(
         &self,
         ty: &Ty,
-        trait_ref: &TraitRef,
+        trait_ref: &MixinRef,
         symbols: &SymbolTable,
         require_nominal: bool,
-    ) -> TraitSatisfaction {
+    ) -> MixinSatisfaction {
         if matches!(trait_ref.name.as_str(), "Send" | "Sync") {
             let satisfied = match trait_ref.name.as_str() {
                 "Send" => ty.is_send_with(symbols),
@@ -107,9 +111,9 @@ impl TraitResolver {
                 _ => unreachable!(),
             };
             return if satisfied {
-                TraitSatisfaction::Structural
+                MixinSatisfaction::Structural
             } else {
-                TraitSatisfaction::Unsatisfied {
+                MixinSatisfaction::Unsatisfied {
                     missing_methods: vec![format!(
                         "type `{}` does not satisfy `{}`",
                         ty, trait_ref.name
@@ -123,11 +127,11 @@ impl TraitResolver {
         // Check nominal satisfaction first
         let key = (type_name.clone(), trait_ref.name.clone());
         if self.nominal_impls.contains_key(&key) {
-            return TraitSatisfaction::Nominal;
+            return MixinSatisfaction::Nominal;
         }
 
         if require_nominal {
-            return TraitSatisfaction::Unsatisfied {
+            return MixinSatisfaction::Unsatisfied {
                 missing_methods: vec![format!(
                     "no explicit `impl {} for {}`",
                     trait_ref.name, type_name
@@ -152,15 +156,15 @@ impl TraitResolver {
             }
 
             if missing.is_empty() {
-                TraitSatisfaction::Structural
+                MixinSatisfaction::Structural
             } else {
-                TraitSatisfaction::Unsatisfied {
+                MixinSatisfaction::Unsatisfied {
                     missing_methods: missing,
                 }
             }
         } else {
             // Unknown trait — assume unsatisfied
-            TraitSatisfaction::Unsatisfied {
+            MixinSatisfaction::Unsatisfied {
                 missing_methods: vec![format!("unknown trait `{}`", trait_ref.name)],
             }
         }
@@ -176,7 +180,7 @@ impl TraitResolver {
     ///     traits).
     pub fn lookup_method_on_bounds(
         &self,
-        bounds: &[TraitRef],
+        bounds: &[MixinRef],
         method_name: &str,
     ) -> Result<Option<FnSignature>, Vec<String>> {
         let mut found: Option<FnSignature> = None;
@@ -279,12 +283,12 @@ impl TraitResolver {
 
     fn collect_item_impls(&mut self, item: &HirItem, symbols: &SymbolTable) {
         match item {
-            HirItem::Trait(tdef) => {
+            HirItem::Mixin(tdef) => {
                 use crate::resolve::symbols::ParamInfo;
                 let mut new_entries: Vec<(String, FnSignature)> = Vec::new();
                 for ti in &tdef.items {
                     match ti {
-                        HirTraitItem::MethodSig {
+                        HirMixinItem::MethodSig {
                             name,
                             self_mode,
                             is_class_method,
@@ -309,10 +313,10 @@ impl TraitResolver {
                             };
                             new_entries.push((name.clone(), sig));
                         }
-                        HirTraitItem::DefaultMethod(f) => {
+                        HirMixinItem::DefaultMethod(f) => {
                             new_entries.push((f.name.clone(), self.func_to_sig(f)));
                         }
-                        HirTraitItem::AssocType { .. } => {}
+                        HirMixinItem::AssocType { .. } => {}
                     }
                 }
                 let entry = self.trait_method_sigs.entry(tdef.name.clone()).or_default();
@@ -518,7 +522,7 @@ impl TraitResolver {
         }
     }
 
-    fn find_trait_info<'a>(&self, name: &str, symbols: &'a SymbolTable) -> Option<&'a TraitInfo> {
+    fn find_trait_info<'a>(&self, name: &str, symbols: &'a SymbolTable) -> Option<&'a MixinInfo> {
         for def in symbols.iter() {
             if def.name == name {
                 if let DefKind::Trait { ref info } = def.kind {
@@ -547,7 +551,7 @@ impl TraitResolver {
     }
 }
 
-impl Default for TraitResolver {
+impl Default for MixinResolver {
     fn default() -> Self {
         Self::new()
     }

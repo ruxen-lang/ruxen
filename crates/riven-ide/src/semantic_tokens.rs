@@ -219,9 +219,9 @@ impl<'a> HirTokenWalker<'a> {
             }
             HirItem::Struct(_) => {}
             HirItem::Enum(_) => {}
-            HirItem::Trait(t) => {
+            HirItem::Mixin(t) => {
                 for item in &t.items {
-                    if let HirTraitItem::DefaultMethod(func) = item {
+                    if let HirMixinItem::DefaultMethod(func) = item {
                         self.visit_func(func);
                     }
                 }

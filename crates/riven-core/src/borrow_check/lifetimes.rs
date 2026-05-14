@@ -145,7 +145,7 @@ impl LifetimeChecker {
             | Ty::RefMutLifetime(_, _)
             | Ty::Str => true,
             Ty::Tuple(elems) => elems.iter().any(Self::contains_ref),
-            Ty::Option(inner) | Ty::Vec(inner) => Self::contains_ref(inner),
+            Ty::Option(inner) | Ty::Array(inner) => Self::contains_ref(inner),
             Ty::Result(a, b) => Self::contains_ref(a) || Self::contains_ref(b),
             _ => false,
         }

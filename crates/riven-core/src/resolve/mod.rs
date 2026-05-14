@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use crate::diagnostics::Diagnostic;
 use crate::hir::context::TypeContext;
 use crate::hir::nodes::*;
-use crate::hir::types::{MoveSemantics, TraitRef, Ty};
+use crate::hir::types::{MoveSemantics, MixinRef, Ty};
 use crate::lexer::token::Span;
 use crate::parser::ast::{self, Visibility};
 use scope::{ScopeId, ScopeKind, ScopeStack};
@@ -215,7 +215,7 @@ impl Resolver {
             let id = self.symbols.define(
                 name.to_string(),
                 DefKind::Trait {
-                    info: TraitInfo {
+                    info: MixinInfo {
                         generic_params: vec![],
                         super_traits: vec![],
                         required_methods: methods.iter().map(|m| m.to_string()).collect(),
@@ -236,7 +236,7 @@ impl Resolver {
         let future_trait_id = self.symbols.define(
             "Future".to_string(),
             DefKind::Trait {
-                info: TraitInfo {
+                info: MixinInfo {
                     generic_params: vec![],
                     super_traits: vec![],
                     required_methods: vec!["poll".to_string()],
@@ -339,7 +339,7 @@ impl Resolver {
             ("stdin", vec![], stdin_ty.clone()),
             ("stdout", vec![], stdout_ty.clone()),
             ("stderr", vec![], stderr_ty.clone()),
-            ("args", vec![], Ty::Vec(Box::new(Ty::String))),
+            ("args", vec![], Ty::Array(Box::new(Ty::String))),
             (
                 "var",
                 vec![ParamInfo {
@@ -355,7 +355,7 @@ impl Resolver {
             (
                 "vars",
                 vec![],
-                Ty::HashMap(Box::new(Ty::String), Box::new(Ty::String)),
+                Ty::Map(Box::new(Ty::String), Box::new(Ty::String)),
             ),
             (
                 "current_dir",
@@ -426,7 +426,7 @@ impl Resolver {
                     auto_assign: false,
                 }],
                 Ty::Result(
-                    Box::new(Ty::Vec(Box::new(Ty::String))),
+                    Box::new(Ty::Array(Box::new(Ty::String))),
                     Box::new(io_error_ty.clone()),
                 ),
             ),
@@ -560,7 +560,7 @@ impl Resolver {
                     },
                     ParamInfo {
                         name: "args".into(),
-                        ty: Ty::Vec(Box::new(Ty::String)),
+                        ty: Ty::Array(Box::new(Ty::String)),
                         auto_assign: false,
                     },
                 ],
@@ -979,7 +979,7 @@ impl Resolver {
                 info: ClassInfo {
                     generic_params: vec![GenericParamInfo::type_param(
                         "T".to_string(),
-                        vec![TraitRef {
+                        vec![MixinRef {
                             name: "Send".to_string(),
                             generic_args: vec![],
                         }],
@@ -1049,6 +1049,10 @@ impl Resolver {
         self.type_registry
             .insert("MutexGuard".to_string(), mutex_guard_id);
 
+        // `SharedSync[T]` (was `Arc[T]` pre-Ruby-naming). The Rust-side
+        // class name is preserved as `Arc` for now; the resolve layer
+        // accepts both `SharedSync` and the legacy `Arc` spelling as the
+        // user-facing name.
         let arc_id = self.symbols.define(
             "Arc".to_string(),
             DefKind::Class {
@@ -1070,6 +1074,9 @@ impl Resolver {
         );
         self.scopes.insert_type("Arc".to_string(), arc_id);
         self.type_registry.insert("Arc".to_string(), arc_id);
+        // Ruby-naming alias: `SharedSync` resolves to the same class def.
+        self.scopes.insert_type("SharedSync".to_string(), arc_id);
+        self.type_registry.insert("SharedSync".to_string(), arc_id);
 
         let poison_error_id = self.symbols.define(
             "PoisonError".to_string(),
@@ -1287,18 +1294,43 @@ impl Resolver {
         self.scopes.insert_type("std".to_string(), std_id);
         self.type_registry.insert("std".to_string(), std_id);
 
-        // Register type constructors in the value scope so Vec.new, String.from, etc. resolve
+        // Register type constructors in the value scope so Array.new, String.from, etc. resolve.
+        // Per docs/specs/syntax/ruby-naming.spec.md the user-facing names are
+        // Array / Map / Set / Shared / SharedSync; the legacy names
+        // (Vec, HashMap, HashSet, Rc, Arc) are retained as aliases.
         let type_constructors = [
             (
+                "Array",
+                Ty::Array(Box::new(Ty::TypeParam {
+                    name: "T".to_string(),
+                    bounds: vec![],
+                })),
+            ),
+            // Legacy `Vec[T]` constructor alias — same `Ty::Array` repr.
+            (
                 "Vec",
-                Ty::Vec(Box::new(Ty::TypeParam {
+                Ty::Array(Box::new(Ty::TypeParam {
                     name: "T".to_string(),
                     bounds: vec![],
                 })),
             ),
             (
+                "Map",
+                Ty::Map(
+                    Box::new(Ty::TypeParam {
+                        name: "K".to_string(),
+                        bounds: vec![],
+                    }),
+                    Box::new(Ty::TypeParam {
+                        name: "V".to_string(),
+                        bounds: vec![],
+                    }),
+                ),
+            ),
+            // Legacy `HashMap[K, V]` constructor alias — same `Ty::Map` repr.
+            (
                 "HashMap",
-                Ty::HashMap(
+                Ty::Map(
                     Box::new(Ty::TypeParam {
                         name: "K".to_string(),
                         bounds: vec![],
@@ -1316,9 +1348,9 @@ impl Resolver {
                     bounds: vec![],
                 })),
             ),
-            // `HashSet[T]` alias — same Ty::Set representation. Lets
-            // `HashSet.new` / `HashSet.with_capacity(_)` resolve in the
-            // value scope alongside `Set.new`.
+            // Legacy `HashSet[T]` alias — same `Ty::Set` representation.
+            // Lets `HashSet.new` / `HashSet.with_capacity(_)` resolve in
+            // the value scope alongside `Set.new`.
             (
                 "HashSet",
                 Ty::Set(Box::new(Ty::TypeParam {
@@ -1346,6 +1378,17 @@ impl Resolver {
             ),
             (
                 "Arc",
+                Ty::Class {
+                    name: "Arc".to_string(),
+                    generic_args: vec![Ty::TypeParam {
+                        name: "T".to_string(),
+                        bounds: vec![],
+                    }],
+                },
+            ),
+            // Ruby-naming spelling for `Arc[T]` — same underlying class.
+            (
+                "SharedSync",
                 Ty::Class {
                     name: "Arc".to_string(),
                     generic_args: vec![Ty::TypeParam {
@@ -1658,7 +1701,7 @@ impl Resolver {
                 // variant field types (e.g. `Some(T)` in
                 // `enum MyOpt[T] { Some(T), None }`) can resolve `T` to
                 // a `TypeParam` rather than `Error` during this pre-pass.
-                let enum_generic_names: Vec<(String, Vec<TraitRef>, Span)> = e
+                let enum_generic_names: Vec<(String, Vec<MixinRef>, Span)> = e
                     .generic_params
                     .as_ref()
                     .map(|gps| {
@@ -1666,9 +1709,9 @@ impl Resolver {
                             .iter()
                             .filter_map(|p| match p {
                                 ast::GenericParam::Type { name, bounds, span } => {
-                                    let trait_refs: Vec<TraitRef> = bounds
+                                    let trait_refs: Vec<MixinRef> = bounds
                                         .iter()
-                                        .map(|b| TraitRef {
+                                        .map(|b| MixinRef {
                                             name: b.path.segments.join("."),
                                             generic_args: vec![],
                                         })
@@ -1753,27 +1796,27 @@ impl Resolver {
                     self.scopes.insert(key, vid);
                 }
             }
-            ast::TopLevelItem::Trait(t) => {
+            ast::TopLevelItem::Mixin(t) => {
                 let mut required = vec![];
                 let mut defaults = vec![];
                 let mut assoc = vec![];
                 for ti in &t.items {
                     match ti {
-                        ast::TraitItem::MethodSig(sig) => required.push(sig.name.clone()),
-                        ast::TraitItem::DefaultMethod(f) => defaults.push(f.name.clone()),
-                        ast::TraitItem::AssocType { name, .. } => assoc.push(name.clone()),
+                        ast::MixinItem::MethodSig(sig) => required.push(sig.name.clone()),
+                        ast::MixinItem::DefaultMethod(f) => defaults.push(f.name.clone()),
+                        ast::MixinItem::AssocType { name, .. } => assoc.push(name.clone()),
                     }
                 }
 
                 let id = self.symbols.define(
                     t.name.clone(),
                     DefKind::Trait {
-                        info: TraitInfo {
+                        info: MixinInfo {
                             generic_params: vec![],
                             super_traits: t
                                 .super_traits
                                 .iter()
-                                .map(|b| TraitRef {
+                                .map(|b| MixinRef {
                                     name: b.path.segments.join("."),
                                     generic_args: vec![],
                                 })
@@ -1965,7 +2008,7 @@ impl Resolver {
             ast::TopLevelItem::Class(class) => Some(HirItem::Class(self.resolve_class(class))),
             ast::TopLevelItem::Struct(s) => Some(HirItem::Struct(self.resolve_struct(s))),
             ast::TopLevelItem::Enum(e) => Some(HirItem::Enum(self.resolve_enum(e))),
-            ast::TopLevelItem::Trait(t) => Some(HirItem::Trait(self.resolve_trait(t))),
+            ast::TopLevelItem::Mixin(t) => Some(HirItem::Mixin(self.resolve_trait(t))),
             ast::TopLevelItem::Impl(imp) => Some(HirItem::Impl(self.resolve_impl(imp))),
             ast::TopLevelItem::Function(f) => {
                 Some(HirItem::Function(self.resolve_func_def(f, None)))
@@ -2131,7 +2174,7 @@ impl Resolver {
         // Resolve inner impl blocks
         let mut impl_blocks = Vec::new();
         for inner in &class.inner_impls {
-            let trait_ref = TraitRef {
+            let trait_ref = MixinRef {
                 name: inner.trait_name.segments.join("."),
                 generic_args: inner
                     .trait_name
@@ -2443,7 +2486,7 @@ impl Resolver {
 
     // ─── Trait Resolution ───────────────────────────────────────────
 
-    fn resolve_trait(&mut self, t: &ast::TraitDef) -> HirTraitDef {
+    fn resolve_trait(&mut self, t: &ast::MixinDef) -> HirMixinDef {
         let def_id = self
             .type_registry
             .get(&t.name)
@@ -2456,7 +2499,7 @@ impl Resolver {
         // Register Self as a type alias pointing to a TypeParam with this trait as bound
         let self_ty = Ty::TypeParam {
             name: "Self".to_string(),
-            bounds: vec![TraitRef {
+            bounds: vec![MixinRef {
                 name: t.name.clone(),
                 generic_args: vec![],
             }],
@@ -2478,10 +2521,10 @@ impl Resolver {
         // and typechecker treat it as a valid method-context value.
         let old_self_ty = self.current_self_ty.replace(self_ty);
 
-        let super_traits: Vec<TraitRef> = t
+        let super_traits: Vec<MixinRef> = t
             .super_traits
             .iter()
-            .map(|b| TraitRef {
+            .map(|b| MixinRef {
                 name: b.path.segments.join("."),
                 generic_args: b
                     .path
@@ -2499,7 +2542,7 @@ impl Resolver {
             .items
             .iter()
             .filter_map(|ti| match ti {
-                ast::TraitItem::AssocType { name, .. } => Some(name.clone()),
+                ast::MixinItem::AssocType { name, .. } => Some(name.clone()),
                 _ => None,
             })
             .collect();
@@ -2510,13 +2553,13 @@ impl Resolver {
         let mut items = Vec::new();
         for ti in &t.items {
             match ti {
-                ast::TraitItem::AssocType { name, span } => {
-                    items.push(HirTraitItem::AssocType {
+                ast::MixinItem::AssocType { name, span } => {
+                    items.push(HirMixinItem::AssocType {
                         name: name.clone(),
                         span: span.clone(),
                     });
                 }
-                ast::TraitItem::MethodSig(sig) => {
+                ast::MixinItem::MethodSig(sig) => {
                     let params = self.resolve_params(&sig.params);
                     let return_ty = sig
                         .return_type
@@ -2525,7 +2568,7 @@ impl Resolver {
                         .unwrap_or(Ty::Unit);
                     let self_mode = sig.self_mode.map(|m| self.convert_self_mode(m));
 
-                    items.push(HirTraitItem::MethodSig {
+                    items.push(HirMixinItem::MethodSig {
                         name: sig.name.clone(),
                         self_mode,
                         is_class_method: sig.is_class_method,
@@ -2534,8 +2577,8 @@ impl Resolver {
                         span: sig.span.clone(),
                     });
                 }
-                ast::TraitItem::DefaultMethod(f) => {
-                    items.push(HirTraitItem::DefaultMethod(self.resolve_func_def(f, None)));
+                ast::MixinItem::DefaultMethod(f) => {
+                    items.push(HirMixinItem::DefaultMethod(self.resolve_func_def(f, None)));
                 }
             }
         }
@@ -2544,7 +2587,7 @@ impl Resolver {
         self.current_self_ty = old_self_ty;
         self.scopes.pop();
 
-        HirTraitDef {
+        HirMixinDef {
             def_id,
             name: t.name.clone(),
             generic_params,
@@ -2560,7 +2603,7 @@ impl Resolver {
     fn resolve_impl(&mut self, imp: &ast::ImplBlock) -> HirImplBlock {
         let generic_params = self.resolve_generic_params(&imp.generic_params);
         let target_ty = self.resolve_type_expr(&imp.target_type);
-        let trait_ref = imp.trait_name.as_ref().map(|tp| TraitRef {
+        let trait_ref = imp.trait_name.as_ref().map(|tp| MixinRef {
             name: tp.segments.join("."),
             generic_args: tp
                 .generic_args
@@ -2755,7 +2798,7 @@ impl Resolver {
                         let name = &path.segments[0];
                         if let Some(gp) = generic_params.iter_mut().find(|g| &g.name == name) {
                             for bound in &pred.bounds {
-                                gp.bounds.push(TraitRef {
+                                gp.bounds.push(MixinRef {
                                     name: bound.path.segments.join("."),
                                     generic_args: bound
                                         .path
@@ -3747,7 +3790,7 @@ impl Resolver {
                 } else {
                     elems_hir[0].ty.clone()
                 };
-                let ty = Ty::Vec(Box::new(elem_ty));
+                let ty = Ty::Array(Box::new(elem_ty));
                 HirExpr {
                     kind: HirExprKind::ArrayLiteral(elems_hir),
                     ty,
@@ -3768,7 +3811,7 @@ impl Resolver {
                         value: Box::new(value_hir),
                         count: count_val,
                     },
-                    ty: Ty::Array(
+                    ty: Ty::FixedArray(
                         Box::new(elem_ty),
                         crate::hir::types::ConstExpr::Lit(count_val as u64),
                     ),
@@ -3885,7 +3928,7 @@ impl Resolver {
                         } else {
                             args_hir[0].ty.clone()
                         };
-                        Ty::Vec(Box::new(elem_ty))
+                        Ty::Array(Box::new(elem_ty))
                     }
                     "hash" => {
                         let (k, v) = if args_hir.len() >= 2 {
@@ -3896,7 +3939,7 @@ impl Resolver {
                                 self.type_context.fresh_type_var(),
                             )
                         };
-                        Ty::HashMap(Box::new(k), Box::new(v))
+                        Ty::Map(Box::new(k), Box::new(v))
                     }
                     "set" => {
                         let elem = if args_hir.is_empty() {
@@ -4676,10 +4719,10 @@ impl Resolver {
                     let n = lower_const_expr_from_expr(size_expr).normal_form();
                     self.check_const_expr_for_non_const(&n, &size_expr.span);
                     self.check_const_expr_eval_errors(&n, &size_expr.span);
-                    Ty::Array(Box::new(elem_ty), n)
+                    Ty::FixedArray(Box::new(elem_ty), n)
                 } else {
                     // Slice [T] — treat as Vec for now
-                    Ty::Vec(Box::new(elem_ty))
+                    Ty::Array(Box::new(elem_ty))
                 }
             }
             ast::TypeExpr::Function {
@@ -4690,10 +4733,10 @@ impl Resolver {
                 params: params.iter().map(|p| self.resolve_type_expr(p)).collect(),
                 ret: Box::new(self.resolve_type_expr(return_type)),
             },
-            ast::TypeExpr::ImplTrait { bounds, .. } => Ty::ImplTrait(
+            ast::TypeExpr::SomeMixin { bounds, .. } => Ty::SomeMixin(
                 bounds
                     .iter()
-                    .map(|b| TraitRef {
+                    .map(|b| MixinRef {
                         name: b.path.segments.join("."),
                         generic_args: b
                             .path
@@ -4704,10 +4747,10 @@ impl Resolver {
                     })
                     .collect(),
             ),
-            ast::TypeExpr::DynTrait { bounds, .. } => Ty::DynTrait(
+            ast::TypeExpr::AnyMixin { bounds, .. } => Ty::AnyMixin(
                 bounds
                     .iter()
-                    .map(|b| TraitRef {
+                    .map(|b| MixinRef {
                         name: b.path.segments.join("."),
                         generic_args: b
                             .path
@@ -4798,7 +4841,7 @@ impl Resolver {
                 if names.iter().any(|n| n == assoc) {
                     return Ty::TypeParam {
                         name: format!("Self::{}", assoc),
-                        bounds: vec![TraitRef {
+                        bounds: vec![MixinRef {
                             name: trait_name.clone(),
                             generic_args: vec![],
                         }],
@@ -5005,14 +5048,18 @@ impl Resolver {
 
         // Check built-in generic types
         match name.as_str() {
-            "Vec" => {
+            // `Array[T]` was `Vec[T]` pre-Ruby-naming. The legacy spelling
+            // is kept as an alias so older sources still resolve while
+            // the new vocabulary settles.
+            "Array" | "Vec" => {
                 let elem = generic_args
                     .into_iter()
                     .next()
                     .unwrap_or_else(|| self.type_context.fresh_type_var());
-                return Ty::Vec(Box::new(elem));
+                return Ty::Array(Box::new(elem));
             }
-            "HashMap" => {
+            // `Map[K, V]` was `HashMap[K, V]` pre-Ruby-naming.
+            "Map" | "HashMap" => {
                 let mut iter = generic_args.into_iter();
                 let k = iter
                     .next()
@@ -5021,24 +5068,24 @@ impl Resolver {
                     .next()
                     .unwrap_or_else(|| self.type_context.fresh_type_var());
                 // K must be Hash + Eq. Reject compound containers
-                // (Vec/Set/HashMap) and aggregates that don't derive Hash.
+                // (Array/Set/Map) and aggregates that don't derive Hash.
                 if !ty_is_valid_hash_key(&k, &self.symbols) {
                     self.diagnostics.push(Diagnostic::error_with_code(
                         format!(
-                            "HashMap key type `{}` is not hashable: K must implement Hash + Eq",
+                            "Map key type `{}` is not hashable: K must include Hash + Eq",
                             k
                         ),
                         path.span.clone(),
                         "E0615",
                     ));
                 }
-                return Ty::HashMap(Box::new(k), Box::new(v));
+                return Ty::Map(Box::new(k), Box::new(v));
             }
             "Set" | "HashSet" => {
-                // `HashSet[T]` is an alias for `Set[T]` per the v1 stdlib
-                // surface (prompt #04). Both desugar to the same runtime
-                // representation; method dispatch in
-                // `codegen::runtime::runtime_name` accepts either prefix.
+                // `HashSet[T]` is the legacy spelling for `Set[T]`. Both
+                // desugar to the same runtime representation; method
+                // dispatch in `codegen::runtime::runtime_name` accepts
+                // either prefix.
                 let elem = generic_args
                     .into_iter()
                     .next()
@@ -5046,7 +5093,7 @@ impl Resolver {
                 if !ty_is_valid_hash_key(&elem, &self.symbols) {
                     self.diagnostics.push(Diagnostic::error_with_code(
                         format!(
-                            "HashSet element type `{}` is not hashable: T must implement Hash + Eq",
+                            "Set element type `{}` is not hashable: T must include Hash + Eq",
                             elem
                         ),
                         path.span.clone(),
@@ -5194,9 +5241,9 @@ impl Resolver {
             .iter()
             .filter_map(|p| match p {
                 ast::GenericParam::Type { name, bounds, .. } => {
-                    let trait_refs: Vec<TraitRef> = bounds
+                    let trait_refs: Vec<MixinRef> = bounds
                         .iter()
-                        .map(|b| TraitRef {
+                        .map(|b| MixinRef {
                             name: b.path.segments.join("."),
                             generic_args: vec![],
                         })
@@ -5257,9 +5304,9 @@ impl Resolver {
                     .filter_map(|p| {
                         match p {
                             ast::GenericParam::Type { name, bounds, span } => {
-                                let trait_refs: Vec<TraitRef> = bounds
+                                let trait_refs: Vec<MixinRef> = bounds
                                     .iter()
-                                    .map(|b| TraitRef {
+                                    .map(|b| MixinRef {
                                         name: b.path.segments.join("."),
                                         generic_args: b
                                             .path
@@ -5711,10 +5758,10 @@ fn ty_is_valid_hash_key(ty: &Ty, symbols: &crate::resolve::symbols::SymbolTable)
         // Vec/HashMap/HashSet have interior heap pointers whose hash would
         // not be stable across allocations; v1 chooses not to derive a
         // structural hash for them.
-        Ty::Vec(_) | Ty::Set(_) | Ty::HashMap(_, _) => false,
+        Ty::Array(_) | Ty::Set(_) | Ty::Map(_, _) => false,
         // Tuples / arrays / Option / Result : recurse — Hash if every
         // component is Hash.
-        Ty::Array(inner, _) | Ty::Option(inner) => ty_is_valid_hash_key(inner, symbols),
+        Ty::FixedArray(inner, _) | Ty::Option(inner) => ty_is_valid_hash_key(inner, symbols),
         Ty::Result(a, b) => ty_is_valid_hash_key(a, symbols) && ty_is_valid_hash_key(b, symbols),
         Ty::Tuple(elems) => elems.iter().all(|e| ty_is_valid_hash_key(e, symbols)),
         Ty::Ref(inner)

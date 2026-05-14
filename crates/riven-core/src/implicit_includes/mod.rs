@@ -53,7 +53,7 @@ fn validate_class(class: &HirClassDef, symbols: &SymbolTable, diags: &mut Vec<Di
     if has_derive(&class.derive_traits, "Copy") {
         diags.push(Diagnostic::error_with_code(
             format!(
-                "Copy cannot be derived on class `{}`; use a struct",
+                "Copy cannot be auto-synthesized on class `{}`; use a struct",
                 class.name
             ),
             class.span.clone(),
@@ -138,11 +138,12 @@ fn validate_enum(enm: &HirEnumDef, symbols: &SymbolTable, diags: &mut Vec<Diagno
         if enm.variants.is_empty() {
             // Empty enum: no variant could ever be the default. Pin the
             // dedicated B1-reserved code so consumers can distinguish a
-            // *missing* @[default] (E0605) from a *vacuously impossible*
-            // Default impl on an enum that has zero variants.
+            // *missing* `default` directive (E0605) from a *vacuously
+            // impossible* Default auto-include on an enum that has zero
+            // variants.
             diags.push(Diagnostic::error_with_code(
                 format!(
-                    "cannot derive Default on empty enum `{}` (no variants to pick as default)",
+                    "cannot auto-synthesize Default on empty enum `{}` (no variants to pick as default)",
                     enm.name
                 ),
                 enm.span.clone(),
@@ -151,7 +152,7 @@ fn validate_enum(enm: &HirEnumDef, symbols: &SymbolTable, diags: &mut Vec<Diagno
         } else {
             diags.push(Diagnostic::error_with_code(
                 format!(
-                    "cannot derive Default on enum `{}` without a `@[default]` variant",
+                    "cannot auto-synthesize Default on enum `{}` without a `default` variant",
                     enm.name
                 ),
                 enm.span.clone(),
@@ -162,7 +163,7 @@ fn validate_enum(enm: &HirEnumDef, symbols: &SymbolTable, diags: &mut Vec<Diagno
 
     if has_derive(&enm.derive_traits, "Copy") && !has_derive(&enm.derive_traits, "Clone") {
         diags.push(Diagnostic::error_with_code(
-            "deriving Copy also requires Clone",
+            "Copy implies Clone — a Copy type must also include Clone",
             enm.span.clone(),
             "E0602",
         ));
@@ -179,7 +180,7 @@ fn validate_enum(enm: &HirEnumDef, symbols: &SymbolTable, diags: &mut Vec<Diagno
                                 field.name.clone().unwrap_or_else(|| index.to_string());
                             diags.push(Diagnostic::error_with_code(
                                 format!(
-                                    "cannot derive Copy on enum `{}` because variant `{}.{}` has non-Copy type `{}`",
+                                    "cannot auto-synthesize Copy on enum `{}` because variant `{}.{}` has non-Copy type `{}`",
                                     enm.name, variant.name, field_name, field.ty
                                 ),
                                 field.span.clone(),
@@ -203,7 +204,7 @@ fn validate_enum(enm: &HirEnumDef, symbols: &SymbolTable, diags: &mut Vec<Diagno
                                 field.name.clone().unwrap_or_else(|| index.to_string());
                             diags.push(Diagnostic::error_with_code(
                                 format!(
-                                    "cannot derive Clone on enum `{}` because variant `{}.{}` has type `{}` which does not implement Clone",
+                                    "cannot auto-synthesize Clone on enum `{}` because variant `{}.{}` has type `{}` which is not Clone",
                                     enm.name, variant.name, field_name, field.ty
                                 ),
                                 field.span.clone(),
@@ -228,7 +229,7 @@ fn validate_common_traits(
         if !SUPPORTED_DERIVES.contains(&trait_name.as_str()) {
             diags.push(Diagnostic::error_with_code(
                 format!(
-                    "unknown derive trait `{}` on {} `{}`",
+                    "unknown mixin `{}` requested for auto-synthesis on {} `{}`",
                     trait_name, kind, name
                 ),
                 span.clone(),
@@ -242,7 +243,7 @@ fn validate_common_traits(
         if !seen.insert(trait_name.as_str()) {
             diags.push(Diagnostic::error_with_code(
                 format!(
-                    "duplicate derive trait `{}` on {} `{}`",
+                    "duplicate include of auto-synthesized mixin `{}` on {} `{}`",
                     trait_name, kind, name
                 ),
                 span.clone(),
@@ -253,7 +254,7 @@ fn validate_common_traits(
 
     if has_derive(derive_traits, "Eq") && !has_derive(derive_traits, "PartialEq") {
         diags.push(Diagnostic::error_with_code(
-            "deriving Eq also requires PartialEq",
+            "Eq implies PartialEq — including Eq also requires PartialEq",
             span.clone(),
             "E0604",
         ));
@@ -263,7 +264,7 @@ fn validate_common_traits(
         && !(has_derive(derive_traits, "Eq") && has_derive(derive_traits, "PartialOrd"))
     {
         diags.push(Diagnostic::error_with_code(
-            "deriving Ord also requires Eq and PartialOrd",
+            "Ord implies Eq and PartialOrd — including Ord also requires Eq and PartialOrd",
             span.clone(),
             "E0606",
         ));
@@ -291,7 +292,7 @@ fn validate_copy_requirements<'a>(
 
     if !has_derive(derive_traits, "Clone") {
         diags.push(Diagnostic::error_with_code(
-            "deriving Copy also requires Clone",
+            "Copy implies Clone — a Copy type must also include Clone",
             span.clone(),
             "E0602",
         ));
@@ -301,7 +302,7 @@ fn validate_copy_requirements<'a>(
         if !ty_is_effectively_copy(field_ty, symbols) {
             diags.push(Diagnostic::error_with_code(
                 format!(
-                    "cannot derive Copy on {} `{}` because field `{}` has non-Copy type `{}`",
+                    "cannot auto-synthesize Copy on {} `{}` because field `{}` has non-Copy type `{}`",
                     kind, name, field_name, field_ty
                 ),
                 field_span.clone(),
@@ -335,7 +336,7 @@ fn validate_clone_requirements<'a>(
         if !ty_is_effectively_clone(field_ty, symbols) {
             diags.push(Diagnostic::error_with_code(
                 format!(
-                    "cannot derive Clone on {} `{}` because field `{}` has type `{}` which does not implement Clone",
+                    "cannot auto-synthesize Clone on {} `{}` because field `{}` has type `{}` which is not Clone",
                     kind, name, field_name, field_ty
                 ),
                 field_span.clone(),
@@ -377,10 +378,10 @@ fn ty_is_effectively_clone(ty: &Ty, symbols: &SymbolTable) -> bool {
         return true;
     }
     match ty {
-        Ty::Vec(inner) | Ty::Set(inner) | Ty::Option(inner) | Ty::Array(inner, _) => {
+        Ty::Array(inner) | Ty::Set(inner) | Ty::Option(inner) | Ty::FixedArray(inner, _) => {
             ty_is_effectively_clone(inner, symbols)
         }
-        Ty::HashMap(k, v) | Ty::Result(k, v) => {
+        Ty::Map(k, v) | Ty::Result(k, v) => {
             ty_is_effectively_clone(k, symbols) && ty_is_effectively_clone(v, symbols)
         }
         Ty::Ref(inner)
@@ -434,7 +435,7 @@ fn validate_per_field_traits<'a>(
         if want_partial_eq && !ty_satisfies_named_trait(field_ty, "PartialEq", symbols) {
             diags.push(Diagnostic::error_with_code(
                 format!(
-                    "cannot derive PartialEq on {} `{}` because field `{}` has type `{}` which does not implement PartialEq",
+                    "cannot auto-synthesize PartialEq on {} `{}` because field `{}` has type `{}` which is not PartialEq",
                     kind, name, field_name, field_ty
                 ),
                 field_span.clone(),
@@ -444,7 +445,7 @@ fn validate_per_field_traits<'a>(
         if want_hash && !ty_satisfies_named_trait(field_ty, "Hash", symbols) {
             diags.push(Diagnostic::error_with_code(
                 format!(
-                    "cannot derive Hash on {} `{}` because field `{}` has type `{}` which is not hashable",
+                    "cannot auto-synthesize Hash on {} `{}` because field `{}` has type `{}` which is not hashable",
                     kind, name, field_name, field_ty
                 ),
                 field_span.clone(),
@@ -454,7 +455,7 @@ fn validate_per_field_traits<'a>(
         if want_ord && !ty_satisfies_named_trait(field_ty, "Ord", symbols) {
             diags.push(Diagnostic::error_with_code(
                 format!(
-                    "cannot derive Ord on {} `{}` because field `{}` has type `{}` which does not implement Ord",
+                    "cannot auto-synthesize Ord on {} `{}` because field `{}` has type `{}` which is not Ord",
                     kind, name, field_name, field_ty
                 ),
                 field_span.clone(),
@@ -464,7 +465,7 @@ fn validate_per_field_traits<'a>(
         if want_partial_ord && !ty_satisfies_named_trait(field_ty, "PartialOrd", symbols) {
             diags.push(Diagnostic::error_with_code(
                 format!(
-                    "cannot derive PartialOrd on {} `{}` because field `{}` has type `{}` which does not implement PartialOrd",
+                    "cannot auto-synthesize PartialOrd on {} `{}` because field `{}` has type `{}` which is not PartialOrd",
                     kind, name, field_name, field_ty
                 ),
                 field_span.clone(),
@@ -506,10 +507,10 @@ fn ty_satisfies_named_trait(ty: &Ty, trait_name: &str, symbols: &SymbolTable) ->
     }
 
     match ty {
-        Ty::Vec(inner) | Ty::Set(inner) | Ty::Option(inner) | Ty::Array(inner, _) => {
+        Ty::Array(inner) | Ty::Set(inner) | Ty::Option(inner) | Ty::FixedArray(inner, _) => {
             ty_satisfies_named_trait(inner, canonical, symbols)
         }
-        Ty::HashMap(k, v) | Ty::Result(k, v) => {
+        Ty::Map(k, v) | Ty::Result(k, v) => {
             ty_satisfies_named_trait(k, canonical, symbols)
                 && ty_satisfies_named_trait(v, canonical, symbols)
         }

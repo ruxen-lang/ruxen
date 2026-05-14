@@ -63,7 +63,7 @@ impl PrettyPrinter {
             TopLevelItem::Class(c) => self.print_class(c),
             TopLevelItem::Struct(s) => self.print_struct(s),
             TopLevelItem::Enum(e) => self.print_enum(e),
-            TopLevelItem::Trait(t) => self.print_trait(t),
+            TopLevelItem::Mixin(t) => self.print_trait(t),
             TopLevelItem::Impl(i) => self.print_impl(i),
             TopLevelItem::Function(f) => self.print_func(f),
             TopLevelItem::Use(u) => self.print_use(u),
@@ -170,7 +170,7 @@ impl PrettyPrinter {
 
     // ── trait ────────────────────────────────────────────────────────
 
-    fn print_trait(&mut self, t: &TraitDef) {
+    fn print_trait(&mut self, t: &MixinDef) {
         let generics = format_opt_generic_params(&t.generic_params);
         let supers = if t.super_traits.is_empty() {
             String::new()
@@ -190,15 +190,15 @@ impl PrettyPrinter {
         self.dedent();
     }
 
-    fn print_trait_item(&mut self, item: &TraitItem) {
+    fn print_trait_item(&mut self, item: &MixinItem) {
         match item {
-            TraitItem::AssocType { name, .. } => {
+            MixinItem::AssocType { name, .. } => {
                 self.line(&format!("type {}", name));
             }
-            TraitItem::MethodSig(sig) => {
+            MixinItem::MethodSig(sig) => {
                 self.line(&format!("sig {}", format_method_sig(sig)));
             }
-            TraitItem::DefaultMethod(f) => {
+            MixinItem::DefaultMethod(f) => {
                 self.print_func(f);
             }
         }
@@ -631,11 +631,11 @@ pub fn format_type(t: &TypeExpr) -> String {
             let ps: Vec<String> = params.iter().map(format_type).collect();
             format!("Fn({}) -> {}", ps.join(", "), format_type(return_type))
         }
-        TypeExpr::ImplTrait { bounds, .. } => {
+        TypeExpr::SomeMixin { bounds, .. } => {
             let bs: Vec<String> = bounds.iter().map(|b| format_type_path(&b.path)).collect();
             format!("impl {}", bs.join(" + "))
         }
-        TypeExpr::DynTrait { bounds, .. } => {
+        TypeExpr::AnyMixin { bounds, .. } => {
             let bs: Vec<String> = bounds.iter().map(|b| format_type_path(&b.path)).collect();
             format!("dyn {}", bs.join(" + "))
         }

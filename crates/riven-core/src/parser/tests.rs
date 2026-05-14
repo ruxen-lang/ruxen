@@ -356,6 +356,169 @@ end";
         }
     }
 
+    // ─── Section markers (ruby-naming.spec.md §3.2) ──────────────────
+    //
+    // Inside a `class` / `struct` / `module` / `mixin` body, bare
+    // `public` / `private` / `protected` lines act as section markers
+    // that switch the visibility of every subsequent declaration until
+    // the next marker. Public is the default.
+
+    #[test]
+    fn class_section_markers_set_visibility() {
+        let src = "\
+class Foo
+  pub_field: Int
+
+  def pub_method
+  end
+
+  private
+
+  priv_field: Int
+
+  def priv_method
+  end
+
+  protected
+
+  def proto_method
+  end
+
+  public
+
+  def back_to_pub
+  end
+end";
+        let program = parse(src);
+        let class = match &program.items[0] {
+            TopLevelItem::Class(c) => c,
+            other => panic!("expected class, got {:?}", other),
+        };
+
+        // Fields: pub_field is Public (default), priv_field is Private.
+        let by_field = |name: &str| -> Visibility {
+            class
+                .fields
+                .iter()
+                .find(|f| f.name == name)
+                .unwrap_or_else(|| panic!("missing field {name}"))
+                .visibility
+        };
+        assert_eq!(by_field("pub_field"), Visibility::Public);
+        assert_eq!(by_field("priv_field"), Visibility::Private);
+
+        // Methods: each picks up the section visibility in effect.
+        let by_method = |name: &str| -> Visibility {
+            class
+                .methods
+                .iter()
+                .find(|m| m.name == name)
+                .unwrap_or_else(|| panic!("missing method {name}"))
+                .visibility
+        };
+        assert_eq!(by_method("pub_method"), Visibility::Public);
+        assert_eq!(by_method("priv_method"), Visibility::Private);
+        assert_eq!(by_method("proto_method"), Visibility::Protected);
+        assert_eq!(by_method("back_to_pub"), Visibility::Public);
+    }
+
+    #[test]
+    fn class_explicit_pub_overrides_private_section() {
+        // ruby-naming.spec.md §3.2: an explicit `pub` prefix wins over
+        // the surrounding section marker (migration affordance).
+        let src = "\
+class Bar
+  private
+
+  def helper
+  end
+
+  pub def force_pub
+  end
+end";
+        let program = parse(src);
+        let class = match &program.items[0] {
+            TopLevelItem::Class(c) => c,
+            other => panic!("expected class, got {:?}", other),
+        };
+        let by_method = |name: &str| -> Visibility {
+            class
+                .methods
+                .iter()
+                .find(|m| m.name == name)
+                .unwrap_or_else(|| panic!("missing method {name}"))
+                .visibility
+        };
+        assert_eq!(by_method("helper"), Visibility::Private);
+        assert_eq!(by_method("force_pub"), Visibility::Public);
+    }
+
+    #[test]
+    fn class_private_name_list_overrides_section() {
+        // Ruby-style `private :a, :b` re-marks already-declared methods
+        // after the body is parsed, overriding any section marker they
+        // were under (ruby-naming.spec.md §3.2 trailing paragraph).
+        let src = "\
+class User
+  def helper_a
+  end
+
+  def helper_b
+  end
+
+  def public_thing
+  end
+
+  private :helper_a, :helper_b
+end";
+        let program = parse(src);
+        let class = match &program.items[0] {
+            TopLevelItem::Class(c) => c,
+            other => panic!("expected class, got {:?}", other),
+        };
+        let by_method = |name: &str| -> Visibility {
+            class
+                .methods
+                .iter()
+                .find(|m| m.name == name)
+                .unwrap_or_else(|| panic!("missing method {name}"))
+                .visibility
+        };
+        assert_eq!(by_method("helper_a"), Visibility::Private);
+        assert_eq!(by_method("helper_b"), Visibility::Private);
+        assert_eq!(by_method("public_thing"), Visibility::Public);
+    }
+
+    #[test]
+    fn struct_section_markers_set_field_visibility() {
+        let src = "\
+struct User
+  name: String
+  email: String
+
+  private
+
+  audit_id: Int
+  audit_log: String
+end";
+        let program = parse(src);
+        let s = match &program.items[0] {
+            TopLevelItem::Struct(s) => s,
+            other => panic!("expected struct, got {:?}", other),
+        };
+        let by_field = |name: &str| -> Visibility {
+            s.fields
+                .iter()
+                .find(|f| f.name == name)
+                .unwrap_or_else(|| panic!("missing field {name}"))
+                .visibility
+        };
+        assert_eq!(by_field("name"), Visibility::Public);
+        assert_eq!(by_field("email"), Visibility::Public);
+        assert_eq!(by_field("audit_id"), Visibility::Private);
+        assert_eq!(by_field("audit_log"), Visibility::Private);
+    }
+
     // ═══════════════════════════════════════════════════════════════════
     //  Enums
     // ═══════════════════════════════════════════════════════════════════
@@ -449,13 +612,13 @@ trait Greetable
 end";
         let program = parse(src);
         let tr = match &program.items[0] {
-            TopLevelItem::Trait(t) => t,
-            other => panic!("expected trait, got {:?}", other),
+            TopLevelItem::Mixin(t) => t,
+            other => panic!("expected mixin, got {:?}", other),
         };
         assert_eq!(tr.name, "Greetable");
         assert_eq!(tr.items.len(), 1);
         match &tr.items[0] {
-            TraitItem::MethodSig(sig) => {
+            MixinItem::MethodSig(sig) => {
                 assert_eq!(sig.name, "greet");
                 assert!(sig.return_type.is_some());
             }
