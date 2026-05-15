@@ -2071,6 +2071,19 @@ impl Parser {
                     // Field declaration — picks up current section visibility.
                     fields.push(self.parse_field_decl_with_vis(current_vis));
                 }
+                TokenKind::Type => {
+                    // ruby-naming.spec.md §3.4: a class that includes a
+                    // mixin with `type Item` may bind it via
+                    // `type Item = Concrete`. v1 parses the binding and
+                    // discards it — the class is also expected to
+                    // declare its concrete-return method directly, which
+                    // is what carries the type through codegen.
+                    self.advance();
+                    let _ = self.expect_type_identifier();
+                    self.expect(TokenKind::Eq);
+                    self.skip_newlines();
+                    let _ = self.parse_type();
+                }
                 _ => {
                     self.error(&format!(
                         "expected field, method, or impl in class body, found {:?}",

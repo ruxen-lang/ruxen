@@ -2071,6 +2071,13 @@ impl<'a> InferenceEngine<'a> {
             // is the implicit-include condition).
             (Ty::Enum { .. }, "clone") => Some(ty.clone()),
 
+            // ruby-naming.spec.md §3.6: Default — implicit when every
+            // field has a default value. Spec includes Struct, Class,
+            // and Enum; for enums Default is conservative (no canonical
+            // variant) so we only synthesise it for Struct and Class
+            // here.
+            (Ty::Struct { .. }, "default") | (Ty::Class { .. }, "default") => Some(ty.clone()),
+
             // to_display for any type
             (_, "to_display") => Some(Ty::String),
             (_, "summary") => Some(Ty::String),
