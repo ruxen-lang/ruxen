@@ -2366,11 +2366,25 @@ impl Resolver {
             };
         }
 
+        // ruby-naming.spec.md §3.4a: structs may carry inline methods.
+        let old_self_ty = self.current_self_ty.take();
+        self.current_self_ty = Some(Ty::Struct {
+            name: s.name.clone(),
+            generic_args: vec![],
+        });
+        let methods = s
+            .methods
+            .iter()
+            .map(|m| self.resolve_func_def(m, Some(def_id)))
+            .collect::<Vec<_>>();
+        self.current_self_ty = old_self_ty;
+
         HirStructDef {
             def_id,
             name: s.name.clone(),
             generic_params,
             fields,
+            methods,
             derive_traits: s.derive_traits.clone(),
             repr: s.repr.clone(),
             doc_comments: s.doc_comments.clone(),
@@ -2478,6 +2492,21 @@ impl Resolver {
             };
         }
 
+        // ruby-naming.spec.md §3.4a: enums may carry inline methods.
+        // Resolve them in the enum's scope so `self` and any generic
+        // parameters bound on the enum are visible.
+        let old_self_ty = self.current_self_ty.take();
+        self.current_self_ty = Some(Ty::Enum {
+            name: e.name.clone(),
+            generic_args: vec![],
+        });
+        let methods = e
+            .methods
+            .iter()
+            .map(|m| self.resolve_func_def(m, Some(def_id)))
+            .collect::<Vec<_>>();
+        self.current_self_ty = old_self_ty;
+
         self.scopes.pop();
 
         HirEnumDef {
@@ -2485,6 +2514,7 @@ impl Resolver {
             name: e.name.clone(),
             generic_params,
             variants,
+            methods,
             derive_traits: e.derive_traits.clone(),
             doc_comments: e.doc_comments.clone(),
             span: e.span.clone(),

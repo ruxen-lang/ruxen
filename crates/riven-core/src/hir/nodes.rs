@@ -436,6 +436,9 @@ pub struct HirStructDef {
     pub name: String,
     pub generic_params: Vec<HirGenericParam>,
     pub fields: Vec<HirFieldDef>,
+    /// Inline methods defined in the struct body
+    /// (ruby-naming.spec.md §3.4a).
+    pub methods: Vec<HirFuncDef>,
     pub derive_traits: Vec<String>,
     /// Representation hints from `@[repr(...)]` (e.g. ["C"], ["C", "packed"]).
     pub repr: Vec<String>,
@@ -451,6 +454,9 @@ pub struct HirEnumDef {
     pub name: String,
     pub generic_params: Vec<HirGenericParam>,
     pub variants: Vec<HirVariant>,
+    /// Inline methods defined in the enum body
+    /// (ruby-naming.spec.md §3.4a).
+    pub methods: Vec<HirFuncDef>,
     pub derive_traits: Vec<String>,
     pub doc_comments: Vec<String>,
     pub span: Span,

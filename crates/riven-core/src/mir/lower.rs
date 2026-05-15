@@ -422,6 +422,13 @@ impl<'a> Lowerer<'a> {
                     }
                 }
                 HirItem::Struct(s) => {
+                    // ruby-naming.spec.md §3.4a: lower inline methods
+                    // defined directly inside the struct body.
+                    for method in &s.methods {
+                        let mangled = format!("{}_{}", s.name, method.name);
+                        let mir_fn = self.lower_method(&mangled, method)?;
+                        mir.functions.push(mir_fn);
+                    }
                     // ruby-naming.spec.md §3.6: structural mixins are
                     // implicitly included when every field structurally
                     // supports them. The synthesis gates therefore
@@ -463,6 +470,15 @@ impl<'a> Lowerer<'a> {
                     }
                 }
                 HirItem::Enum(e) => {
+                    // ruby-naming.spec.md §3.4a: enums may carry inline
+                    // methods directly in their body. Lower each with
+                    // the `{EnumName}_{method}` mangling used by method
+                    // dispatch.
+                    for method in &e.methods {
+                        let mangled = format!("{}_{}", e.name, method.name);
+                        let mir_fn = self.lower_method(&mangled, method)?;
+                        mir.functions.push(mir_fn);
+                    }
                     if e.derive_traits.iter().any(|t| t == "Debug") {
                         mir.functions.push(self.synthesize_enum_to_debug(e));
                     }

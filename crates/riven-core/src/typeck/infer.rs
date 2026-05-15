@@ -368,7 +368,7 @@ impl<'a> InferenceEngine<'a> {
                             expr.ty = Ty::Error;
                         }
                     }
-                    Ty::Enum { .. } => {
+                    Ty::Enum { name, .. } => {
                         // Try method resolution as fallback (e.g. .to_display, .weight)
                         if let Some(ret) =
                             self.builtin_method_type(&derefed, field_name, &[], &expr.span)
@@ -379,6 +379,16 @@ impl<'a> InferenceEngine<'a> {
                                 .lookup_method(&derefed, field_name, self.symbols)
                         {
                             expr.ty = self.ctx.resolve(&sig.return_ty);
+                        } else if let Some(ret) =
+                            // ruby-naming.spec.md §3.4a: inline methods in
+                            // the enum body lower with the same mangling
+                            // class methods do, and the resolver registers
+                            // them as `DefKind::Method` with the enum as
+                            // parent — so the class-method lookup also
+                            // finds them.
+                            self.lookup_class_method_return(name, field_name)
+                        {
+                            expr.ty = ret;
                         } else {
                             self.error(
                                 format!(
