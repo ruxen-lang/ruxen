@@ -482,12 +482,21 @@ impl Parser {
                 self.advance();
                 "self".to_string()
             }
-            // ruby-naming.spec.md introduced `var` as a keyword, but
-            // stdlib paths like `std.env.var` still need it to act as
-            // a plain identifier in module paths. Accept it here.
+            // ruby-naming.spec.md introduced `var` / `some` / `any`
+            // as keywords. Path-segment and field/method-name positions
+            // are unambiguous, so accept them as plain identifiers here
+            // — e.g. `std.env.var`, `iter.any { … }`, `iter.some { … }`.
             TokenKind::Var => {
                 self.advance();
                 "var".to_string()
+            }
+            TokenKind::AnyBound => {
+                self.advance();
+                "any".to_string()
+            }
+            TokenKind::SomeBound => {
+                self.advance();
+                "some".to_string()
             }
             _ => {
                 self.error(&format!(

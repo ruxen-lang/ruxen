@@ -1282,8 +1282,22 @@ impl<'a> Lowerer<'a> {
                     .receiver_type_name(object)
                     .unwrap_or_else(|| type_name_from_ty(&object.ty));
 
-                // Handle .new() constructor calls: allocate + call init
-                if method_name == "new" {
+                // Handle .new() / .with_capacity() constructor calls:
+                // dispatch directly to the runtime symbol (no self arg).
+                let is_collection_ctor = method_name == "new"
+                    || (method_name == "with_capacity"
+                        && {
+                            let bt = if let Some(pos) = type_name.find('[') {
+                                &type_name[..pos]
+                            } else {
+                                type_name.as_str()
+                            };
+                            matches!(
+                                bt,
+                                "Vec" | "Array" | "Hash" | "HashMap" | "Map" | "Set" | "HashSet"
+                            )
+                        });
+                if is_collection_ctor {
                     // For built-in types (Vec, Hash, Set), call the runtime
                     // constructor directly instead of Alloc + init.
                     let base_type = if let Some(pos) = type_name.find('[') {
@@ -1317,14 +1331,18 @@ impl<'a> Lowerer<'a> {
                             "Set" => "HashSet",
                             other => other,
                         };
-                        // Emit Call to runtime constructor (e.g., Vec_new).
-                        // Use the base type so the mangled callee elides the
-                        // generic parameter list (`HashMap[K, V]_new` would
-                        // not match a real runtime symbol).
+                        // The same fast path also handles `with_capacity`,
+                        // which takes a single integer arg and lowers to
+                        // e.g. `riven_hash_with_capacity(cap)`.
+                        let mut call_args = Vec::with_capacity(args.len());
+                        for arg in args {
+                            let local = self.lower_expr(arg)?;
+                            call_args.push(local_to_value(local));
+                        }
                         self.emit(MirInst::Call {
                             dest: Some(obj),
-                            callee: format!("{}_new", runtime_base),
-                            args: vec![],
+                            callee: format!("{}_{}", runtime_base, method_name),
+                            args: call_args,
                         });
                         return Ok(Some(obj));
                     }
