@@ -1873,6 +1873,30 @@ impl Parser {
             };
         }
 
+        // ruby-naming.spec.md §3.4a: `extension` bodies may carry
+        // `include Mixin` directives. Accept the bare `include` form
+        // and the `unsafe include` modifier here.
+        if self.at(TokenKind::Include)
+            || (self.at(TokenKind::Unsafe) && self.peek_kind() == TokenKind::Include)
+        {
+            let is_unsafe = if self.at(TokenKind::Unsafe) {
+                self.advance();
+                true
+            } else {
+                false
+            };
+            self.advance(); // consume `include`
+            let negative_trait = self.eat(TokenKind::Bang);
+            let trait_name = self.parse_type_path();
+            let span = self.span_from(&start);
+            return ImplItem::Include {
+                is_unsafe,
+                negative_trait,
+                trait_name,
+                span,
+            };
+        }
+
         let vis = self.parse_visibility();
         let func = self.parse_func_def(vis);
         ImplItem::Method(func)

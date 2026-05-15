@@ -247,6 +247,16 @@ impl PrettyPrinter {
             ImplItem::Method(f) => {
                 self.print_func(f);
             }
+            ImplItem::Include {
+                is_unsafe,
+                negative_trait,
+                trait_name,
+                ..
+            } => {
+                let prefix = if *is_unsafe { "unsafe include " } else { "include " };
+                let bang = if *negative_trait { "!" } else { "" };
+                self.line(&format!("{}{}{}", prefix, bang, format_type_path(trait_name)));
+            }
         }
     }
 

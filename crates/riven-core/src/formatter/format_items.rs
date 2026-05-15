@@ -660,6 +660,23 @@ fn format_impl_item(item: &ImplItem, comments: &CommentMap) -> Doc {
             format_type_expr(type_expr, comments),
         ]),
         ImplItem::Method(func) => format_func_def(func, comments),
+        ImplItem::Include {
+            is_unsafe,
+            negative_trait,
+            trait_name,
+            ..
+        } => {
+            let mut parts = Vec::new();
+            if *is_unsafe {
+                parts.push(text("unsafe "));
+            }
+            parts.push(text("include "));
+            if *negative_trait {
+                parts.push(text("!"));
+            }
+            parts.push(format_type_path(trait_name));
+            concat(parts)
+        }
     }
 }
 

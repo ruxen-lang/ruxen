@@ -2214,6 +2214,13 @@ impl Resolver {
                             span: span.clone(),
                         });
                     }
+                    ast::ImplItem::Include { .. } => {
+                        // ruby-naming.spec.md §3.4a: an `include Mixin`
+                        // directive inside an inner impl block declares
+                        // mixin participation. Lowering is deferred to a
+                        // follow-up — for now the directive is parsed but
+                        // not yet plumbed through resolution.
+                    }
                 }
             }
             self.current_impl_assoc_types = old_assoc;
@@ -2681,6 +2688,13 @@ impl Resolver {
                         ty: self.resolve_type_expr(type_expr),
                         span: span.clone(),
                     });
+                }
+                ast::ImplItem::Include { .. } => {
+                    // ruby-naming.spec.md §3.4a: `include` inside an
+                    // `extension` body declares mixin participation.
+                    // Resolution / lowering of the include is deferred
+                    // — methods on the extension still resolve normally
+                    // and the trait-bound check kicks in at call sites.
                 }
             }
         }

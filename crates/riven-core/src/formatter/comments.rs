@@ -926,6 +926,7 @@ pub fn collect_node_spans(program: &crate::parser::ast::Program) -> Vec<(usize, 
                     match ii {
                         ImplItem::AssocType { span, .. } => add_span(spans, span),
                         ImplItem::Method(f) => visit_func(spans, f),
+                        ImplItem::Include { span, .. } => add_span(spans, span),
                     }
                 }
             }

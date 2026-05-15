@@ -403,9 +403,19 @@ impl<'a> Lowerer<'a> {
                         let mir_fn = self.lower_method(&mangled, method)?;
                         mir.functions.push(mir_fn);
                     }
-                    // Also lower methods from impl blocks nested in the class
+                    // ruby-naming.spec.md §3.4: a class's own `def` wins
+                    // over any default method an included mixin provides.
+                    // Track the names so trait-default synthesis below
+                    // skips already-defined methods.
+                    let outer_methods: HashSet<String> =
+                        class.methods.iter().map(|m| m.name.clone()).collect();
                     for impl_block in &class.impl_blocks {
-                        self.lower_impl_block(impl_block, &class.name, &mut mir)?;
+                        self.lower_impl_block_with_outer_methods(
+                            impl_block,
+                            &class.name,
+                            &mut mir,
+                            &outer_methods,
+                        )?;
                     }
                     if class.derive_traits.iter().any(|t| t == "Clone") {
                         mir.functions.push(self.synthesize_class_clone(class));
@@ -496,9 +506,22 @@ impl<'a> Lowerer<'a> {
         type_name: &str,
         mir: &mut MirProgram,
     ) -> Result<(), String> {
+        self.lower_impl_block_with_outer_methods(impl_block, type_name, mir, &HashSet::new())
+    }
+
+    fn lower_impl_block_with_outer_methods(
+        &mut self,
+        impl_block: &HirImplBlock,
+        type_name: &str,
+        mir: &mut MirProgram,
+        outer_methods: &HashSet<String>,
+    ) -> Result<(), String> {
         // Track which method names the impl defines explicitly so we can
-        // decide which trait defaults to monomorphise.
-        let mut defined_methods: HashSet<String> = HashSet::new();
+        // decide which trait defaults to monomorphise. `outer_methods`
+        // covers the enclosing class/extension body's own `def`s —
+        // critical for ruby-naming.spec.md §3.4a where `include Mixin`
+        // sits beside the methods that satisfy or override it.
+        let mut defined_methods: HashSet<String> = outer_methods.clone();
         for item in &impl_block.items {
             match item {
                 HirImplItem::Method(method) => {

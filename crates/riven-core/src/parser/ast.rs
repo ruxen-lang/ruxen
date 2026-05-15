@@ -793,6 +793,14 @@ pub enum ImplItem {
         span: Span,
     },
     Method(FuncDef),
+    /// `include Mixin` directive inside an `extension` body
+    /// (ruby-naming.spec.md §3.4a).
+    Include {
+        is_unsafe: bool,
+        negative_trait: bool,
+        trait_name: TypePath,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
