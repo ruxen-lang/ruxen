@@ -2066,6 +2066,11 @@ impl<'a> InferenceEngine<'a> {
             (Ty::Struct { .. }, "new") => Some(ty.clone()),
             (Ty::Struct { .. }, "clone") => Some(ty.clone()),
 
+            // ruby-naming.spec.md §3.6: enums get `.clone` whenever
+            // every variant field structurally supports Clone (which
+            // is the implicit-include condition).
+            (Ty::Enum { .. }, "clone") => Some(ty.clone()),
+
             // to_display for any type
             (_, "to_display") => Some(Ty::String),
             (_, "summary") => Some(Ty::String),

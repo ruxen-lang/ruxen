@@ -417,7 +417,23 @@ impl<'a> Lowerer<'a> {
                             &outer_methods,
                         )?;
                     }
-                    if class.derive_traits.iter().any(|t| t == "Clone") {
+                    // ruby-naming.spec.md §3.6: a class never implicitly
+                    // includes `Copy`, but every other structural mixin
+                    // (Clone, Debug, Eq, …) is implicit when its field
+                    // contract is satisfied. Mirror the struct/enum
+                    // branches by routing through `ty_has_derive_trait`.
+                    let class_ty = Ty::Class {
+                        name: class.name.clone(),
+                        generic_args: vec![],
+                    };
+                    let class_has = |trait_name: &str| -> bool {
+                        crate::resolve::symbols::ty_has_derive_trait(
+                            &class_ty,
+                            self.symbols,
+                            trait_name,
+                        )
+                    };
+                    if class_has("Clone") {
                         mir.functions.push(self.synthesize_class_clone(class));
                     }
                 }
@@ -479,10 +495,26 @@ impl<'a> Lowerer<'a> {
                         let mir_fn = self.lower_method(&mangled, method)?;
                         mir.functions.push(mir_fn);
                     }
-                    if e.derive_traits.iter().any(|t| t == "Debug") {
+                    // ruby-naming.spec.md §3.6: structural mixins for
+                    // enums also work implicitly when every variant
+                    // field structurally supports them. Route through
+                    // ty_has_derive_trait, which folds explicit derives
+                    // with the implicit rule.
+                    let enum_ty = Ty::Enum {
+                        name: e.name.clone(),
+                        generic_args: vec![],
+                    };
+                    let has = |trait_name: &str| -> bool {
+                        crate::resolve::symbols::ty_has_derive_trait(
+                            &enum_ty,
+                            self.symbols,
+                            trait_name,
+                        )
+                    };
+                    if has("Debug") {
                         mir.functions.push(self.synthesize_enum_to_debug(e));
                     }
-                    if e.derive_traits.iter().any(|t| t == "Clone") {
+                    if has("Clone") {
                         mir.functions.push(self.synthesize_enum_clone(e));
                     }
                 }

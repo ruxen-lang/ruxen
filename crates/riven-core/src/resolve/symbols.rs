@@ -409,7 +409,19 @@ pub fn ty_has_derive_trait(ty: &Ty, symbols: &SymbolTable, trait_name: &str) -> 
                 }
                 struct_or_class_fields_all_support(symbols, &info.fields, trait_name)
             }
-            DefKind::Enum { info } => info.derive_traits.iter().any(|t| t == trait_name),
+            DefKind::Enum { info } => {
+                if info.derive_traits.iter().any(|t| t == trait_name) {
+                    return true;
+                }
+                // ruby-naming.spec.md §3.6: structural mixins apply to
+                // enums too — Debug always; Clone/Eq/Hash/Ord when
+                // every variant field structurally supports them.
+                // `Copy` on enums follows the same field rule but is
+                // conservative — enums in v1 stay non-Copy unless all
+                // variants are unit-only with primitive payloads, so
+                // we still gate on the field check.
+                enum_variant_fields_all_support(symbols, &info.variants, trait_name)
+            }
             _ => false,
         }
     })
@@ -418,6 +430,31 @@ pub fn ty_has_derive_trait(ty: &Ty, symbols: &SymbolTable, trait_name: &str) -> 
 /// Helper for `ty_has_derive_trait`: returns true when every field's
 /// type structurally supports the requested mixin per the
 /// spec §3.6 implicit-include rule.
+fn enum_variant_fields_all_support(
+    symbols: &SymbolTable,
+    variant_def_ids: &[DefId],
+    trait_name: &str,
+) -> bool {
+    variant_def_ids.iter().all(|vid| {
+        let def = match symbols.get(*vid) {
+            Some(d) => d,
+            None => return false,
+        };
+        match &def.kind {
+            DefKind::EnumVariant { kind, .. } => match kind {
+                VariantDefKind::Unit => true,
+                VariantDefKind::Tuple(types) => types
+                    .iter()
+                    .all(|ty| ty_supports_structural_mixin(ty, symbols, trait_name)),
+                VariantDefKind::Struct(fields) => fields
+                    .iter()
+                    .all(|(_, ty)| ty_supports_structural_mixin(ty, symbols, trait_name)),
+            },
+            _ => false,
+        }
+    })
+}
+
 fn struct_or_class_fields_all_support(
     symbols: &SymbolTable,
     field_def_ids: &[DefId],
