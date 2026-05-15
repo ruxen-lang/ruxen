@@ -162,16 +162,36 @@ impl<'a> Lowerer<'a> {
         ) {
             match item {
                 HirItem::Impl(imp) => {
+                    let target = type_name_from_ty(&imp.target_ty);
                     if let Some(ref trait_ref) = imp.trait_ref {
-                        let target = type_name_from_ty(&imp.target_ty);
                         map.entry(trait_ref.name.clone())
                             .or_default()
                             .push(target.clone());
                         if trait_ref.name == "Into" {
                             if let Some(arg) = trait_ref.generic_args.first() {
                                 let dst = type_name_from_ty(arg);
-                                into_map.insert((target, dst));
+                                into_map.insert((target.clone(), dst));
                             }
+                        }
+                    }
+                    // ruby-naming.spec.md §3.4a: `extension X` body may
+                    // carry `include Mixin` directives. Each include
+                    // declares that target type X implements Mixin —
+                    // semantically equivalent to the legacy
+                    // `impl Mixin for X`.
+                    for item in &imp.items {
+                        if let HirImplItem::Include {
+                            trait_name,
+                            negative_trait,
+                            ..
+                        } = item
+                        {
+                            if *negative_trait {
+                                continue;
+                            }
+                            map.entry(trait_name.clone())
+                                .or_default()
+                                .push(target.clone());
                         }
                     }
                 }
@@ -579,6 +599,14 @@ impl<'a> Lowerer<'a> {
                     mir.functions.push(mir_fn);
                 }
                 HirImplItem::AssocType { .. } => {}
+                HirImplItem::Include { .. } => {
+                    // Include directives are handled at `collect_trait_impls`
+                    // time — no MIR-side action here. The trait's default
+                    // methods are monomorphised below via the regular
+                    // trait_default_methods loop, using `defined_methods`
+                    // (which already includes `outer_methods` if the user
+                    // defined the method beside the include).
+                }
             }
         }
 

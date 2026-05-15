@@ -2214,12 +2214,18 @@ impl Resolver {
                             span: span.clone(),
                         });
                     }
-                    ast::ImplItem::Include { .. } => {
-                        // ruby-naming.spec.md §3.4a: an `include Mixin`
-                        // directive inside an inner impl block declares
-                        // mixin participation. Lowering is deferred to a
-                        // follow-up — for now the directive is parsed but
-                        // not yet plumbed through resolution.
+                    ast::ImplItem::Include {
+                        is_unsafe,
+                        negative_trait,
+                        trait_name,
+                        span,
+                    } => {
+                        items.push(HirImplItem::Include {
+                            is_unsafe: *is_unsafe,
+                            negative_trait: *negative_trait,
+                            trait_name: trait_name.segments.join("."),
+                            span: span.clone(),
+                        });
                     }
                 }
             }
@@ -2719,12 +2725,18 @@ impl Resolver {
                         span: span.clone(),
                     });
                 }
-                ast::ImplItem::Include { .. } => {
-                    // ruby-naming.spec.md §3.4a: `include` inside an
-                    // `extension` body declares mixin participation.
-                    // Resolution / lowering of the include is deferred
-                    // — methods on the extension still resolve normally
-                    // and the trait-bound check kicks in at call sites.
+                ast::ImplItem::Include {
+                    is_unsafe,
+                    negative_trait,
+                    trait_name,
+                    span,
+                } => {
+                    items.push(HirImplItem::Include {
+                        is_unsafe: *is_unsafe,
+                        negative_trait: *negative_trait,
+                        trait_name: trait_name.segments.join("."),
+                        span: span.clone(),
+                    });
                 }
             }
         }

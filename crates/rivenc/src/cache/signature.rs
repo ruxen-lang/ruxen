@@ -277,6 +277,7 @@ fn impl_sig(ib: &HirImplBlock) -> PublicItem {
         .filter_map(|it| match it {
             HirImplItem::Method(m) => Some(fn_sig(m)),
             HirImplItem::AssocType { .. } => None,
+            HirImplItem::Include { .. } => None,
         })
         .collect();
     PublicItem::TraitImpl {

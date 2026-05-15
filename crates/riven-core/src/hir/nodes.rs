@@ -534,6 +534,14 @@ pub struct HirImplBlock {
 pub enum HirImplItem {
     AssocType { name: String, ty: Ty, span: Span },
     Method(HirFuncDef),
+    /// `include Mixin` directive in an extension body
+    /// (ruby-naming.spec.md §3.4a).
+    Include {
+        is_unsafe: bool,
+        negative_trait: bool,
+        trait_name: String,
+        span: Span,
+    },
 }
 
 // ─── Module ─────────────────────────────────────────────────────────
