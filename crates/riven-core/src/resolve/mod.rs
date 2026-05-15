@@ -3922,7 +3922,13 @@ impl Resolver {
             ast::ExprKind::MacroCall { name, args, .. } => {
                 let args_hir: Vec<HirExpr> = args.iter().map(|a| self.resolve_expr(a)).collect();
                 let ty = match name.as_str() {
-                    "vec" => {
+                    // ruby-naming.spec.md §10a:
+                    //   `vec![...]` → `array![...]`
+                    //   `hash!{...}` → `map!{...}`
+                    //   `set!{...}` (unchanged)
+                    // Both old and new macro names produce identical HIR
+                    // while sources transition.
+                    "vec" | "array" => {
                         let elem_ty = if args_hir.is_empty() {
                             self.type_context.fresh_type_var()
                         } else {
@@ -3930,7 +3936,7 @@ impl Resolver {
                         };
                         Ty::Array(Box::new(elem_ty))
                     }
-                    "hash" => {
+                    "hash" | "map" => {
                         let (k, v) = if args_hir.len() >= 2 {
                             (args_hir[0].ty.clone(), args_hir[1].ty.clone())
                         } else {

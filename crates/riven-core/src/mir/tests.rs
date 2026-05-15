@@ -674,12 +674,27 @@ mod lowering_tests {
     fn owned_rebind_lowers_to_move() {
         let mut symbols = SymbolTable::new();
 
+        // ruby-naming.spec.md §3.6 makes Copy implicit when *every* field
+        // is Copy. To keep this fixture firmly in "non-Copy" territory we
+        // register a `String` field on `Pair` — String is owned and not
+        // Copy, so the struct cannot be implicitly Copy.
+        let string_field = symbols.define(
+            "label".to_string(),
+            crate::resolve::symbols::DefKind::Field {
+                parent: 0,
+                ty: Ty::String,
+                index: 0,
+            },
+            Visibility::Public,
+            span(),
+        );
+
         symbols.define(
             "Pair".to_string(),
             crate::resolve::symbols::DefKind::Struct {
                 info: crate::resolve::symbols::StructInfo {
                     generic_params: vec![],
-                    fields: vec![],
+                    fields: vec![string_field],
                     derive_traits: vec![],
                     repr: vec![],
                     opt_out_send: false,

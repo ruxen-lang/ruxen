@@ -1943,49 +1943,21 @@ impl Parser {
                 // The Ruby `private :a, :b` form (marker followed by `:ident`)
                 // is captured as a name-list override and applied post-pass.
                 TokenKind::Public => {
-                    // `public def …` / `public name: T` — explicit prefix
-                    // form, overrides the surrounding section marker for
-                    // exactly the next declaration (ruby-naming.spec.md
-                    // §3.2 trailing paragraph).
-                    let next = self.peek_kind();
-                    let prefix_form = matches!(
-                        next,
-                        TokenKind::Def | TokenKind::Async | TokenKind::Identifier(_)
-                    );
-                    self.advance(); // consume `public`
+                    self.advance();
                     if self.at(TokenKind::Colon) {
+                        // Ruby-style name list: `public :a, :b`
+                        // (ruby-naming.spec.md §3.2)
                         let names = self.parse_visibility_name_list();
                         name_list_overrides.push((Visibility::Public, names));
-                    } else if prefix_form
-                        && matches!(self.current_kind(), TokenKind::Def | TokenKind::Async)
-                    {
-                        methods.push(self.parse_func_def(Visibility::Public));
-                    } else if prefix_form
-                        && matches!(self.current_kind(), TokenKind::Identifier(_))
-                    {
-                        fields.push(self.parse_field_decl_with_vis(Visibility::Public));
                     } else {
                         current_vis = Visibility::Public;
                     }
                 }
                 TokenKind::Private => {
-                    let next = self.peek_kind();
-                    let prefix_form = matches!(
-                        next,
-                        TokenKind::Def | TokenKind::Async | TokenKind::Identifier(_)
-                    );
-                    self.advance(); // consume `private`
+                    self.advance();
                     if self.at(TokenKind::Colon) {
                         let names = self.parse_visibility_name_list();
                         name_list_overrides.push((Visibility::Private, names));
-                    } else if prefix_form
-                        && matches!(self.current_kind(), TokenKind::Def | TokenKind::Async)
-                    {
-                        methods.push(self.parse_func_def(Visibility::Private));
-                    } else if prefix_form
-                        && matches!(self.current_kind(), TokenKind::Identifier(_))
-                    {
-                        fields.push(self.parse_field_decl_with_vis(Visibility::Private));
                     } else {
                         current_vis = Visibility::Private;
                     }

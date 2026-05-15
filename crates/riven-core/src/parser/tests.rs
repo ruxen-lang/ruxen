@@ -426,9 +426,12 @@ end";
     }
 
     #[test]
-    fn class_explicit_public_overrides_private_section() {
-        // ruby-naming.spec.md §3.2: an explicit `public` prefix wins
-        // over the surrounding section marker for that one declaration.
+    fn class_public_name_list_overrides_private_section() {
+        // ruby-naming.spec.md §3.2: the Ruby-style `public :name_a`
+        // re-marks an already-declared method, overriding the section
+        // marker that was in effect when it was defined. This is the
+        // spec-sanctioned way to override a section without inventing
+        // a prefix form.
         let src = "\
 class Bar
   private
@@ -436,8 +439,10 @@ class Bar
   def helper
   end
 
-  public def force_public
+  def force_public
   end
+
+  public :force_public
 end";
         let program = parse(src);
         let class = match &program.items[0] {

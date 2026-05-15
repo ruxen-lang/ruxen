@@ -1127,9 +1127,15 @@ impl<'a> InferenceEngine<'a> {
             }
 
             HirExprKind::NullLiteral => {
-                // Null is a zero-valued pointer; for now typed as UInt64.
-                // Will become a proper pointer type when raw pointers are added.
-                expr.ty = Ty::UInt64;
+                // ruby-naming.spec.md §3.10: `nil` is polymorphic across
+                // three contexts — `Option[T]` absence, raw-pointer null,
+                // and the comparison form `x == nil`. Type it as a fresh
+                // inference variable so the surrounding context (a let
+                // annotation, an argument type, a return type) drives
+                // resolution via unification. If no context fixes it,
+                // the variable resolves to `UInt64` for backwards
+                // compatibility with the legacy raw-pointer behaviour.
+                expr.ty = self.ctx.fresh_type_var();
             }
         }
     }

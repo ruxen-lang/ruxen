@@ -3324,8 +3324,14 @@ impl<'a> Lowerer<'a> {
 
             // ── Macro calls (vec![], hash!{}, etc.) ──────────────────
             HirExprKind::MacroCall { name, args } => {
+                // ruby-naming.spec.md §10a renames the collection macros:
+                //   `vec![…]` → `array![…]`
+                //   `hash!{…}` → `map!{…}`
+                //   `set!{…}` (unchanged)
+                // Both names lower identically; rename happens at the
+                // surface only.
                 match name.as_str() {
-                    "vec" => {
+                    "vec" | "array" => {
                         // Lower `vec![a, b, c]` to:
                         //   let v = Vec.new()
                         //   v.push(a)
@@ -3356,7 +3362,9 @@ impl<'a> Lowerer<'a> {
                     }
                     // Lower `hash!{ k1 => v1, k2 => v2 }` (args flattened to
                     // [k1, v1, k2, v2]) into a Hash.new + repeated inserts.
-                    "hash" => {
+                    // `map!{…}` (post-rename surface form) shares the same
+                    // lowering — see the comment block above.
+                    "hash" | "map" => {
                         let hash_ty = expr.ty.clone();
                         let dest = self.new_temp(hash_ty.clone());
                         let hash_new_name = format!("{}_new", type_name_from_ty(&hash_ty));
@@ -3446,14 +3454,30 @@ impl<'a> Lowerer<'a> {
                 }
             }
 
-            // ── Null literal — zero value (null pointer) ─────────────
+            // ── `nil` literal ─────────────────────────────────────────
+            // ruby-naming.spec.md §3.10: `nil` is polymorphic. Lowering
+            // splits on the resolved type:
+            //   * `Option[T]` → construct the `None` variant (tag 0).
+            //   * Anything else (raw pointer, USize, UInt64) → zero
+            //     value, matching the legacy `null` semantics.
             HirExprKind::NullLiteral => {
-                let dest = self.new_temp(expr.ty.clone());
-                self.emit(MirInst::Assign {
-                    dest,
-                    value: MirValue::Literal(Literal::Int(0)),
-                });
-                Ok(Some(dest))
+                if let Ty::Option(_) = &expr.ty {
+                    let dest = self.new_temp(expr.ty.clone());
+                    self.emit(MirInst::Alloc {
+                        dest,
+                        ty: expr.ty.clone(),
+                        size: self.alloc_size(&expr.ty),
+                    });
+                    self.emit(MirInst::SetTag { dest, tag: 0 });
+                    Ok(Some(dest))
+                } else {
+                    let dest = self.new_temp(expr.ty.clone());
+                    self.emit(MirInst::Assign {
+                        dest,
+                        value: MirValue::Literal(Literal::Int(0)),
+                    });
+                    Ok(Some(dest))
+                }
             }
 
             // ── Catch-all for unhandled expressions ─────────────────

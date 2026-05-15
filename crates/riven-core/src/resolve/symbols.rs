@@ -366,6 +366,13 @@ pub fn ty_is_effectively_copy(ty: &Ty, symbols: &SymbolTable) -> bool {
 
 /// Walk through transparent wrappers and check whether the underlying
 /// user-defined type carries the requested derive trait.
+///
+/// Post ruby-naming.spec.md §3.6: structural mixins (`Copy`, `Clone`,
+/// `Debug`, `Eq`, `Hash`, `PartialEq`, `Default`, `Ord`, `PartialOrd`)
+/// are *implicitly* included when the type's fields structurally
+/// support them. This helper checks the explicit `derive_traits` first
+/// for backwards compatibility, then falls back to the spec's
+/// implicit-include rule when applicable.
 pub fn ty_has_derive_trait(ty: &Ty, symbols: &SymbolTable, trait_name: &str) -> bool {
     let name = match ty {
         Ty::Struct { name, .. } | Ty::Class { name, .. } | Ty::Enum { name, .. } => name,
@@ -383,12 +390,88 @@ pub fn ty_has_derive_trait(ty: &Ty, symbols: &SymbolTable, trait_name: &str) -> 
             return false;
         }
         match &def.kind {
-            DefKind::Class { info } => info.derive_traits.iter().any(|t| t == trait_name),
-            DefKind::Struct { info } => info.derive_traits.iter().any(|t| t == trait_name),
+            DefKind::Class { info } => {
+                if info.derive_traits.iter().any(|t| t == trait_name) {
+                    return true;
+                }
+                // ruby-naming.spec.md §3.6: a `class` never implicitly
+                // includes `Copy` (reference semantics). For all other
+                // structural mixins, treat them as implicitly included
+                // when every field structurally supports them.
+                if trait_name == "Copy" {
+                    return false;
+                }
+                struct_or_class_fields_all_support(symbols, &info.fields, trait_name)
+            }
+            DefKind::Struct { info } => {
+                if info.derive_traits.iter().any(|t| t == trait_name) {
+                    return true;
+                }
+                struct_or_class_fields_all_support(symbols, &info.fields, trait_name)
+            }
             DefKind::Enum { info } => info.derive_traits.iter().any(|t| t == trait_name),
             _ => false,
         }
     })
+}
+
+/// Helper for `ty_has_derive_trait`: returns true when every field's
+/// type structurally supports the requested mixin per the
+/// spec §3.6 implicit-include rule.
+fn struct_or_class_fields_all_support(
+    symbols: &SymbolTable,
+    field_def_ids: &[DefId],
+    trait_name: &str,
+) -> bool {
+    field_def_ids.iter().all(|field_id| {
+        match symbols.get(*field_id).map(|d| &d.kind) {
+            Some(DefKind::Field { ty, .. }) => {
+                ty_supports_structural_mixin(ty, symbols, trait_name)
+            }
+            Some(DefKind::Variable { ty, .. }) => {
+                ty_supports_structural_mixin(ty, symbols, trait_name)
+            }
+            _ => false,
+        }
+    })
+}
+
+/// Returns true when the given type structurally supports the named
+/// structural mixin. Primitives & references satisfy everything; nested
+/// nominal types delegate back to `ty_has_derive_trait`.
+fn ty_supports_structural_mixin(ty: &Ty, symbols: &SymbolTable, trait_name: &str) -> bool {
+    if trait_name == "Copy" {
+        return ty.is_copy_with(symbols);
+    }
+    // For every other structural mixin (Clone, Debug, Eq, Hash, …),
+    // primitives and references satisfy unconditionally; user types
+    // recurse through `ty_has_derive_trait`.
+    match ty {
+        Ty::Struct { .. } | Ty::Class { .. } | Ty::Enum { .. } => {
+            ty_has_derive_trait(ty, symbols, trait_name)
+        }
+        Ty::Ref(inner)
+        | Ty::RefMut(inner)
+        | Ty::RefLifetime(_, inner)
+        | Ty::RefMutLifetime(_, inner) => ty_supports_structural_mixin(inner, symbols, trait_name),
+        Ty::Newtype { inner, .. } | Ty::Alias { target: inner, .. } => {
+            ty_supports_structural_mixin(inner, symbols, trait_name)
+        }
+        Ty::Tuple(elems) => elems
+            .iter()
+            .all(|e| ty_supports_structural_mixin(e, symbols, trait_name)),
+        Ty::FixedArray(elem, _) => ty_supports_structural_mixin(elem, symbols, trait_name),
+        // Array, Map, Set, Option, Result are containers — they
+        // forward the structural mixin to their element type.
+        Ty::Array(elem) | Ty::Set(elem) | Ty::Option(elem) => {
+            ty_supports_structural_mixin(elem, symbols, trait_name)
+        }
+        Ty::Map(k, v) | Ty::Result(k, v) => {
+            ty_supports_structural_mixin(k, symbols, trait_name)
+                && ty_supports_structural_mixin(v, symbols, trait_name)
+        }
+        _ => true,
+    }
 }
 
 #[cfg(test)]
