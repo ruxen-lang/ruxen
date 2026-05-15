@@ -412,33 +412,43 @@ impl<'a> Lowerer<'a> {
                     }
                 }
                 HirItem::Struct(s) => {
-                    // Synthesize `{StructName}_to_debug` when the struct
-                    // declares `derive Debug` so that interpolation of a
-                    // value of this struct prints `Name { field: value, ... }`
-                    // rather than a raw pointer address.
-                    if s.derive_traits.iter().any(|t| t == "Debug") {
+                    // ruby-naming.spec.md §3.6: structural mixins are
+                    // implicitly included when every field structurally
+                    // supports them. The synthesis gates therefore
+                    // consult `ty_has_derive_trait`, which folds the
+                    // explicit `derive_traits` list with the implicit
+                    // rule (see resolve::symbols).
+                    let struct_ty = Ty::Struct {
+                        name: s.name.clone(),
+                        generic_args: vec![],
+                    };
+                    let has = |trait_name: &str| -> bool {
+                        crate::resolve::symbols::ty_has_derive_trait(
+                            &struct_ty,
+                            self.symbols,
+                            trait_name,
+                        )
+                    };
+                    if has("Debug") {
                         let dbg_fn = self.synthesize_struct_to_debug(s);
                         mir.functions.push(dbg_fn);
                     }
-                    if s.derive_traits.iter().any(|t| t == "PartialEq") {
+                    if has("PartialEq") {
                         mir.functions.push(self.synthesize_struct_eq(s));
                     }
-                    if s.derive_traits
-                        .iter()
-                        .any(|t| t == "Hashable" || t == "Hash")
-                    {
+                    if has("Hashable") || has("Hash") {
                         mir.functions.push(self.synthesize_struct_hash_code(s));
                     }
-                    if s.derive_traits.iter().any(|t| t == "Default") {
+                    if has("Default") {
                         mir.functions.push(self.synthesize_struct_default(s));
                     }
-                    if s.derive_traits.iter().any(|t| t == "Ord") {
+                    if has("Ord") {
                         mir.functions.push(self.synthesize_struct_cmp(s, false));
                     }
-                    if s.derive_traits.iter().any(|t| t == "PartialOrd") {
+                    if has("PartialOrd") {
                         mir.functions.push(self.synthesize_struct_cmp(s, true));
                     }
-                    if s.derive_traits.iter().any(|t| t == "Clone") {
+                    if has("Clone") {
                         mir.functions.push(self.synthesize_struct_clone(s));
                     }
                 }
@@ -7789,29 +7799,31 @@ impl<'a> Lowerer<'a> {
     }
 
     fn struct_with_derive_trait(&self, ty: &Ty, trait_name: &str) -> Option<String> {
-        use crate::resolve::symbols::DefKind;
-        let name = match ty {
-            Ty::Struct { name, .. } => name.clone(),
-            Ty::Ref(inner)
-            | Ty::RefMut(inner)
-            | Ty::RefLifetime(_, inner)
-            | Ty::RefMutLifetime(_, inner) => {
-                return self.struct_with_derive_trait(inner, trait_name)
-            }
-            Ty::Alias { target, .. } => return self.struct_with_derive_trait(target, trait_name),
-            Ty::Newtype { inner, .. } => return self.struct_with_derive_trait(inner, trait_name),
-            _ => return None,
-        };
-        for def in self.symbols.iter() {
-            if def.name == name {
-                if let DefKind::Struct { info } = &def.kind {
-                    if info.derive_traits.iter().any(|t| t == trait_name) {
-                        return Some(name);
+        // Peel reference/alias/newtype layers, then consult
+        // `ty_has_derive_trait` so implicit-include structural mixins
+        // (spec §3.6) are honoured alongside explicit `derive_traits`.
+        let mut cur = ty;
+        loop {
+            match cur {
+                Ty::Ref(inner)
+                | Ty::RefMut(inner)
+                | Ty::RefLifetime(_, inner)
+                | Ty::RefMutLifetime(_, inner) => cur = inner,
+                Ty::Alias { target, .. } => cur = target,
+                Ty::Newtype { inner, .. } => cur = inner,
+                Ty::Struct { name, .. } => {
+                    if crate::resolve::symbols::ty_has_derive_trait(
+                        cur,
+                        self.symbols,
+                        trait_name,
+                    ) {
+                        return Some(name.clone());
                     }
+                    return None;
                 }
+                _ => return None,
             }
         }
-        None
     }
 
     /// Set the terminator of the current basic block.
@@ -8460,25 +8472,18 @@ fn binop_to_cmpop(op: BinOp) -> CmpOp {
     }
 }
 
-/// If `ty` (after peeling reference layers) is a struct that derives
-/// `PartialEq`, return the struct's name. Otherwise return `None`.
+/// If `ty` (after peeling reference layers) is a struct that derives —
+/// explicitly or implicitly per ruby-naming.spec.md §3.6 — `PartialEq`,
+/// return the struct's name. Otherwise return `None`.
 fn struct_name_with_partial_eq(ty: &Ty, symbols: &SymbolTable) -> Option<String> {
-    use crate::resolve::symbols::DefKind;
     let mut cur = ty;
     loop {
         match cur {
             Ty::Ref(inner) | Ty::RefMut(inner) => cur = inner,
             Ty::RefLifetime(_, inner) | Ty::RefMutLifetime(_, inner) => cur = inner,
             Ty::Struct { name, .. } => {
-                for def in symbols.iter() {
-                    if def.name == *name {
-                        if let DefKind::Struct { ref info } = def.kind {
-                            if info.derive_traits.iter().any(|t| t == "PartialEq") {
-                                return Some(name.clone());
-                            }
-                        }
-                        return None;
-                    }
+                if crate::resolve::symbols::ty_has_derive_trait(cur, symbols, "PartialEq") {
+                    return Some(name.clone());
                 }
                 return None;
             }
