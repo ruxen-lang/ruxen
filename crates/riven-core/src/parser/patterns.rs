@@ -200,7 +200,11 @@ impl Parser {
                     }
                 }
             }
-            TokenKind::NoneKw => {
+            // `None` (legacy) and `nil` (post Ruby-naming migration) both
+            // bind to `Option::None` in pattern position. The `Nil` token is
+            // also used for raw-pointer null; the resolver disambiguates by
+            // the scrutinee's type.
+            TokenKind::NoneKw | TokenKind::Nil => {
                 let span = self.current_span();
                 self.advance();
                 Pattern::Enum {

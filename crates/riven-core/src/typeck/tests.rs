@@ -387,10 +387,13 @@ end
         );
     }
 
+    // ruby-naming.spec.md §3.4: `mixin` replaces `trait`. Trait impls
+    // are folded into the type body as `include Mixin` directives with
+    // methods scattered alongside (§10a migration mapping).
     #[test]
-    fn trait_and_impl() {
+    fn mixin_and_include() {
         let source = r#"
-trait Greetable
+mixin Greetable
   def greet -> String
 end
 
@@ -399,9 +402,9 @@ class Dog
 
   def init(@name: String)
   end
-end
 
-impl Greetable for Dog
+  include Greetable
+
   def greet -> String
     "woof"
   end
@@ -416,7 +419,7 @@ end
             .collect();
         assert!(
             type_errors.is_empty(),
-            "Trait+impl should type-check: {:?}",
+            "Mixin+include should type-check: {:?}",
             type_errors
         );
     }
@@ -551,14 +554,15 @@ end
     }
 
     #[test]
-    fn sync_bound_rejects_negative_impl_opt_out() {
+    fn sync_bound_rejects_negative_include_opt_out() {
+        // ruby-naming.spec.md §10a: `impl !Sync for T` → in-body
+        // `include !Sync` opt-out directive.
         let source = r#"
 class NotSync
   def init
   end
-end
 
-impl !Sync for NotSync
+  include !Sync
 end
 
 def require_sync[T: Sync](value: T)
@@ -581,23 +585,24 @@ end
     }
 
     #[test]
-    fn unsafe_impl_send_satisfies_send_bound() {
+    fn unsafe_include_send_satisfies_send_bound() {
+        // ruby-naming.spec.md §10a: `unsafe impl Send for T` → in-body
+        // `unsafe include Send` directive; `null` → `nil`.
         let source = r#"
 class FfiHandle
   ptr: *mut Void
 
   def init(@ptr: *mut Void)
   end
-end
 
-unsafe impl Send for FfiHandle
+  unsafe include Send
 end
 
 def require_send[T: Send](value: T)
 end
 
 def test
-  let handle = FfiHandle.new(null)
+  let handle = FfiHandle.new(nil)
   require_send(handle)
 end
 "#;

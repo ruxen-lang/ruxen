@@ -538,7 +538,7 @@ fn token_to_source(token: &crate::lexer::token::Token) -> String {
         TokenKind::SomeKw => "Some".to_string(),
         TokenKind::OkKw => "Ok".to_string(),
         TokenKind::ErrKw => "Err".to_string(),
-        TokenKind::Null => "null".to_string(),
+        TokenKind::Nil => "nil".to_string(),
         TokenKind::As => "as".to_string(),
         _ => format!("{:?}", token.kind),
     }

@@ -220,16 +220,16 @@ class TcpListener
   def init(@fd: Int)
   end
 
-  pub def bind(addr: &String) -> TcpListener
+  def bind(addr: &String) -> TcpListener
     let fd = tcp_listen(addr)
     TcpListener.new(fd)
   end
 
-  pub def accept_fd -> Int
+  def accept_fd -> Int
     tcp_accept(self.fd)
   end
 
-  pub def close -> ()
+  def close -> ()
     tcp_close(self.fd)
   end
 end
@@ -240,15 +240,15 @@ class TcpStream
   def init(@fd: Int)
   end
 
-  pub def read_string(max: Int) -> String
+  def read_string(max: Int) -> String
     tcp_read(self.fd, max)
   end
 
-  pub def write_string(data: &String) -> Int
+  def write_string(data: &String) -> Int
     tcp_write(self.fd, data)
   end
 
-  pub def close -> ()
+  def close -> ()
     tcp_close(self.fd)
   end
 end

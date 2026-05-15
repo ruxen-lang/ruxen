@@ -95,22 +95,23 @@ impl Parser {
         let saved_pos = self.pos;
         let saved_diags = self.diagnostics.len();
 
-        // Try top-level item first (def, class, struct, enum, trait, impl, module, use, const)
+        // Try top-level item first (def, class, struct, enum, mixin, extension,
+        // module, use, const). Legacy `trait`/`impl`/`extern` no longer lex.
         match self.current_kind().clone() {
             TokenKind::Def
             | TokenKind::Async
             | TokenKind::Class
             | TokenKind::Struct
             | TokenKind::Enum
-            | TokenKind::Trait
+            | TokenKind::Mixin
+            | TokenKind::Extension
             | TokenKind::Impl
             | TokenKind::Module
             | TokenKind::Use
             | TokenKind::Const
             | TokenKind::Type
             | TokenKind::Newtype
-            | TokenKind::Lib
-            | TokenKind::Extern => {
+            | TokenKind::Lib => {
                 let result = self.parse_top_level_item();
                 if self.diagnostics.len() > saved_diags {
                     // Check if the errors indicate incomplete input
@@ -216,7 +217,8 @@ impl Parser {
                 | TokenKind::Class
                 | TokenKind::Struct
                 | TokenKind::Enum
-                | TokenKind::Trait
+                | TokenKind::Mixin
+                | TokenKind::Extension
                 | TokenKind::Impl
                 | TokenKind::Module
                 | TokenKind::If
@@ -251,13 +253,21 @@ impl Parser {
             if self.at_eof() {
                 break;
             }
+            let before = self.pos;
             match self.parse_top_level_item() {
                 Some(item) => items.push(item),
                 None => {
-                    // Error recovery: skip to next sync point
+                    // Error recovery: skip to next sync point.
                     self.synchronize();
-                    // If we landed on `end` at top level, skip it to avoid infinite loop
+                    // If we landed on `end` at top level, skip it.
                     if self.at(TokenKind::End) {
+                        self.advance();
+                    }
+                    // `synchronize()` is allowed to stop on any block-opening
+                    // keyword (For, If, While, …). When `parse_top_level_item`
+                    // doesn't accept that keyword either, we'd otherwise spin
+                    // forever on a single token; force one tick of progress.
+                    if self.pos == before && !self.at_eof() {
                         self.advance();
                     }
                 }
@@ -472,6 +482,13 @@ impl Parser {
                 self.advance();
                 "self".to_string()
             }
+            // ruby-naming.spec.md introduced `var` as a keyword, but
+            // stdlib paths like `std.env.var` still need it to act as
+            // a plain identifier in module paths. Accept it here.
+            TokenKind::Var => {
+                self.advance();
+                "var".to_string()
+            }
             _ => {
                 self.error(&format!(
                     "expected identifier, found {:?}",
@@ -528,7 +545,6 @@ impl Parser {
                 | TokenKind::Class
                 | TokenKind::Struct
                 | TokenKind::Enum
-                | TokenKind::Trait
                 | TokenKind::Mixin
                 | TokenKind::Impl
                 | TokenKind::Extension
@@ -544,6 +560,8 @@ impl Parser {
                 | TokenKind::Type
                 | TokenKind::Newtype
                 | TokenKind::Pub
+                | TokenKind::Public
+                | TokenKind::Private
                 | TokenKind::Protected => return,
                 _ => {
                     self.advance();
@@ -570,15 +588,11 @@ impl Parser {
             TokenKind::Class => Some(TopLevelItem::Class(self.parse_class_def())),
             TokenKind::Struct => Some(TopLevelItem::Struct(self.parse_struct_def())),
             TokenKind::Enum => Some(TopLevelItem::Enum(self.parse_enum_def())),
-            TokenKind::Trait | TokenKind::Mixin => {
-                Some(TopLevelItem::Mixin(self.parse_trait_def()))
-            }
-            TokenKind::Impl | TokenKind::Extension => {
+            TokenKind::Mixin => Some(TopLevelItem::Mixin(self.parse_trait_def())),
+            TokenKind::Extension => {
                 Some(TopLevelItem::Impl(self.parse_impl_block(false)))
             }
-            TokenKind::Unsafe
-                if matches!(self.peek_kind(), TokenKind::Impl | TokenKind::Extension) =>
-            {
+            TokenKind::Unsafe if matches!(self.peek_kind(), TokenKind::Extension) => {
                 self.advance(); // consume `unsafe`
                 Some(TopLevelItem::Impl(self.parse_impl_block(true)))
             }
@@ -587,7 +601,6 @@ impl Parser {
             TokenKind::Newtype => Some(TopLevelItem::Newtype(self.parse_newtype_def())),
             TokenKind::Const => Some(TopLevelItem::Const(self.parse_const_def())),
             TokenKind::Lib => Some(TopLevelItem::Lib(self.parse_lib_decl(vec![]))),
-            TokenKind::Extern => Some(TopLevelItem::Extern(self.parse_extern_block())),
             TokenKind::At => {
                 // Parse @[...] attributes, then the item that follows.
                 // Recognised attributes:
@@ -634,12 +647,12 @@ impl Parser {
                         self.apply_enum_attrs(&mut e, &attrs);
                         Some(TopLevelItem::Enum(e))
                     }
-                    TokenKind::Trait => {
+                    TokenKind::Mixin => {
                         if has_derive_attr {
                             for attr in &attrs {
                                 if attr.name == "derive" {
                                     self.error_at_with_code(
-                                        "@[derive] cannot be applied to a trait",
+                                        "@[derive] cannot be applied to a mixin",
                                         attr.span.clone(),
                                         "E0607",
                                     );
@@ -867,9 +880,12 @@ impl Parser {
         path.push(self.expect_any_identifier());
         while self.at(TokenKind::Dot) {
             // Continue while the next token is an identifier segment.
+            // `Var` is whitelisted as a path segment because the stdlib
+            // uses `std.env.var` (ruby-naming.spec.md introduced `var` as
+            // a binding keyword but the path slot is unambiguous).
             if matches!(
                 self.peek_kind(),
-                TokenKind::Identifier(_) | TokenKind::TypeIdentifier(_)
+                TokenKind::Identifier(_) | TokenKind::TypeIdentifier(_) | TokenKind::Var
             ) {
                 self.advance(); // consume .
                 path.push(self.expect_any_identifier());
@@ -1004,33 +1020,164 @@ impl Parser {
         self.skip_newlines();
 
         let mut variants = Vec::new();
+        let mut methods: Vec<FuncDef> = Vec::new();
+        let mut inner_impls: Vec<InnerImpl> = Vec::new();
         let mut derive_traits = Vec::new();
+        // ruby-naming.spec.md §3.2: section-marker visibility for inline
+        // method declarations. Default public, mirrors `parse_class_def`.
+        let mut current_vis = Visibility::Public;
+        let mut name_list_overrides: Vec<(Visibility, Vec<String>)> = Vec::new();
         while !self.at(TokenKind::End) && !self.at(TokenKind::Eof) {
             let __progress = self.pos;
             self.skip_newlines();
             if self.at(TokenKind::End) {
                 break;
             }
-            if self.at(TokenKind::Derive) {
-                self.advance();
-                derive_traits.push(self.expect_type_identifier());
-                while self.eat(TokenKind::Comma) {
-                    self.skip_newlines();
-                    derive_traits.push(self.expect_type_identifier());
-                }
-                self.ensure_loop_progress(__progress);
-                continue;
+            // Capture leading `##` doc comments so the next inner item
+            // (variant / method / inner impl) can pick them up.
+            let docs = self.collect_doc_comments();
+            if !docs.is_empty() {
+                self.pending_doc_comments.extend(docs);
             }
-            variants.push(self.parse_variant());
+            if self.at(TokenKind::End) {
+                break;
+            }
+            match self.current_kind().clone() {
+                // ── derive lines ─────────────────────────────────────
+                TokenKind::Derive => {
+                    self.advance();
+                    derive_traits.push(self.expect_type_identifier());
+                    while self.eat(TokenKind::Comma) {
+                        self.skip_newlines();
+                        derive_traits.push(self.expect_type_identifier());
+                    }
+                }
+                // ── Section markers (ruby-naming.spec.md §3.2) ──
+                TokenKind::Public => {
+                    self.advance();
+                    if self.at(TokenKind::Colon) {
+                        let names = self.parse_visibility_name_list();
+                        name_list_overrides.push((Visibility::Public, names));
+                    } else {
+                        current_vis = Visibility::Public;
+                    }
+                }
+                TokenKind::Private => {
+                    self.advance();
+                    if self.at(TokenKind::Colon) {
+                        let names = self.parse_visibility_name_list();
+                        name_list_overrides.push((Visibility::Private, names));
+                    } else {
+                        current_vis = Visibility::Private;
+                    }
+                }
+                TokenKind::Protected => {
+                    let next = self.peek_kind();
+                    let prefix_form = matches!(
+                        next,
+                        TokenKind::Def | TokenKind::Async | TokenKind::Pub
+                    );
+                    if prefix_form {
+                        let vis = self.parse_visibility();
+                        if matches!(self.current_kind(), TokenKind::Def | TokenKind::Async) {
+                            methods.push(self.parse_func_def(vis));
+                        } else {
+                            // Fall back to error: we don't accept fields on enum bodies.
+                            self.error(&format!(
+                                "expected `def` after explicit visibility in enum body, found {:?}",
+                                self.current_kind()
+                            ));
+                            if !self.at(TokenKind::Eof) {
+                                self.advance();
+                            }
+                            self.synchronize();
+                        }
+                    } else {
+                        self.advance();
+                        if self.at(TokenKind::Colon) {
+                            let names = self.parse_visibility_name_list();
+                            name_list_overrides.push((Visibility::Protected, names));
+                        } else {
+                            current_vis = Visibility::Protected;
+                        }
+                    }
+                }
+                // ── Method definitions ──────────────────────────────
+                TokenKind::Def | TokenKind::Async => {
+                    methods.push(self.parse_func_def(current_vis));
+                }
+                TokenKind::Pub => {
+                    let vis = self.parse_visibility();
+                    if matches!(self.current_kind(), TokenKind::Def | TokenKind::Async) {
+                        methods.push(self.parse_func_def(vis));
+                    } else {
+                        self.error(&format!(
+                            "expected `def` after `pub` in enum body, found {:?}",
+                            self.current_kind()
+                        ));
+                        if !self.at(TokenKind::Eof) {
+                            self.advance();
+                        }
+                        self.synchronize();
+                    }
+                }
+                // ── Inner impl / include directives ─────────────────
+                TokenKind::Impl => {
+                    inner_impls.push(self.parse_inner_impl(false));
+                }
+                TokenKind::Include => {
+                    inner_impls.push(self.parse_include_directive(false));
+                }
+                TokenKind::Unsafe if matches!(self.peek_kind(), TokenKind::Impl) => {
+                    self.advance();
+                    inner_impls.push(self.parse_inner_impl(true));
+                }
+                TokenKind::Unsafe if matches!(self.peek_kind(), TokenKind::Include) => {
+                    self.advance();
+                    inner_impls.push(self.parse_include_directive(true));
+                }
+                TokenKind::Inline => {
+                    // `inline` modifier on a method — consume and require def
+                    // to follow. Parser currently treats `inline` as a hint
+                    // only; codegen ignores it. Mirror class-body behavior.
+                    self.advance();
+                    if matches!(self.current_kind(), TokenKind::Def | TokenKind::Async) {
+                        methods.push(self.parse_func_def(current_vis));
+                    } else {
+                        self.error(&format!(
+                            "expected `def` after `inline` in enum body, found {:?}",
+                            self.current_kind()
+                        ));
+                        if !self.at(TokenKind::Eof) {
+                            self.advance();
+                        }
+                        self.synchronize();
+                    }
+                }
+                // ── Default: variant declaration ────────────────────
+                _ => {
+                    variants.push(self.parse_variant());
+                }
+            }
             self.skip_newlines();
             self.ensure_loop_progress(__progress);
         }
         self.expect(TokenKind::End);
+        // Apply `private :a, :b` style name-list overrides as a final pass.
+        for (vis, names) in &name_list_overrides {
+            for n in names {
+                if let Some(m) = methods.iter_mut().find(|m| &m.name == n) {
+                    m.visibility = *vis;
+                }
+            }
+        }
         let span = self.span_from(&start);
         EnumDef {
             name,
             generic_params,
             variants,
+            methods,
+            inner_impls,
             derive_traits,
             doc_comments,
             where_clause,
@@ -1053,7 +1200,11 @@ impl Parser {
                 self.advance();
                 "Some".to_string()
             }
-            TokenKind::NoneKw => {
+            // Under ruby-naming, the lexer maps `nil` → `TokenKind::Nil`.
+            // The legacy `NoneKw` (from `None`) is no longer produced but the
+            // variant remains for backwards-compat with code that pattern-
+            // matches it. Both lower to a `"None"`-named variant.
+            TokenKind::Nil | TokenKind::NoneKw => {
                 self.advance();
                 "None".to_string()
             }
@@ -1165,9 +1316,12 @@ impl Parser {
         self.skip_newlines();
 
         let mut fields = Vec::new();
+        let mut methods: Vec<FuncDef> = Vec::new();
+        let mut inner_impls: Vec<InnerImpl> = Vec::new();
         let mut derive_traits = Vec::new();
         // ruby-naming.spec.md §3.2: section-marker visibility, public default.
         let mut current_vis = Visibility::Public;
+        let mut name_list_overrides: Vec<(Visibility, Vec<String>)> = Vec::new();
 
         while !self.at(TokenKind::End) && !self.at(TokenKind::Eof) {
             let __progress = self.pos;
@@ -1175,19 +1329,61 @@ impl Parser {
             if self.at(TokenKind::End) {
                 break;
             }
+            // Capture leading `##` doc comments so the next inner item
+            // (field / method / inner impl) can pick them up.
+            let docs = self.collect_doc_comments();
+            if !docs.is_empty() {
+                self.pending_doc_comments.extend(docs);
+            }
+            if self.at(TokenKind::End) {
+                break;
+            }
 
             match self.current_kind().clone() {
                 // ── Section markers (ruby-naming.spec.md §3.2) ──
-                // Structs have no methods, so the Ruby-style
-                // `private :name` name-list form is meaningless here;
-                // accept only the bare-marker section form.
                 TokenKind::Public => {
                     self.advance();
-                    current_vis = Visibility::Public;
+                    if self.at(TokenKind::Colon) {
+                        let names = self.parse_visibility_name_list();
+                        name_list_overrides.push((Visibility::Public, names));
+                    } else {
+                        current_vis = Visibility::Public;
+                    }
                 }
                 TokenKind::Private => {
                     self.advance();
-                    current_vis = Visibility::Private;
+                    if self.at(TokenKind::Colon) {
+                        let names = self.parse_visibility_name_list();
+                        name_list_overrides.push((Visibility::Private, names));
+                    } else {
+                        current_vis = Visibility::Private;
+                    }
+                }
+                TokenKind::Protected => {
+                    let next = self.peek_kind();
+                    let prefix_form = matches!(
+                        next,
+                        TokenKind::Def
+                            | TokenKind::Async
+                            | TokenKind::Identifier(_)
+                            | TokenKind::Pub
+                    );
+                    if prefix_form {
+                        let vis = self.parse_visibility();
+                        if matches!(self.current_kind(), TokenKind::Def | TokenKind::Async) {
+                            methods.push(self.parse_func_def(vis));
+                        } else {
+                            fields.push(self.parse_field_decl_with_vis(vis));
+                        }
+                    } else {
+                        self.advance();
+                        if self.at(TokenKind::Colon) {
+                            let names = self.parse_visibility_name_list();
+                            name_list_overrides.push((Visibility::Protected, names));
+                        } else {
+                            current_vis = Visibility::Protected;
+                        }
+                    }
                 }
                 TokenKind::Derive => {
                     self.advance();
@@ -1198,51 +1394,55 @@ impl Parser {
                         derive_traits.push(self.expect_type_identifier());
                     }
                 }
-                TokenKind::Pub | TokenKind::Protected => {
-                    // Explicit prefix overrides section state.
+                // ── Method definitions (post Ruby-naming migration) ──
+                TokenKind::Def | TokenKind::Async => {
+                    methods.push(self.parse_func_def(current_vis));
+                }
+                TokenKind::Pub => {
+                    // Explicit `pub` prefix wins over section state.
                     let vis = self.parse_visibility();
-                    fields.push(self.parse_field_decl_with_vis(vis));
+                    if matches!(self.current_kind(), TokenKind::Def | TokenKind::Async) {
+                        methods.push(self.parse_func_def(vis));
+                    } else {
+                        fields.push(self.parse_field_decl_with_vis(vis));
+                    }
+                }
+                // ── Inner impl / include directives ─────────────────
+                TokenKind::Impl => {
+                    inner_impls.push(self.parse_inner_impl(false));
+                }
+                TokenKind::Include => {
+                    inner_impls.push(self.parse_include_directive(false));
+                }
+                TokenKind::Unsafe if matches!(self.peek_kind(), TokenKind::Impl) => {
+                    self.advance();
+                    inner_impls.push(self.parse_inner_impl(true));
+                }
+                TokenKind::Unsafe if matches!(self.peek_kind(), TokenKind::Include) => {
+                    self.advance();
+                    inner_impls.push(self.parse_include_directive(true));
+                }
+                TokenKind::Inline => {
+                    self.advance();
+                    if matches!(self.current_kind(), TokenKind::Def | TokenKind::Async) {
+                        methods.push(self.parse_func_def(current_vis));
+                    } else {
+                        self.error(&format!(
+                            "expected `def` after `inline` in struct body, found {:?}",
+                            self.current_kind()
+                        ));
+                        if !self.at(TokenKind::Eof) {
+                            self.advance();
+                        }
+                        self.synchronize();
+                    }
                 }
                 TokenKind::Identifier(_) => {
                     fields.push(self.parse_field_decl_with_vis(current_vis));
                 }
-                // Reject — but DON'T loop. Emit a structured error and
-                // consume the offending block so parsing makes progress.
-                // Without this, `parse_field_decl` would call
-                // `expect_identifier` on (e.g.) `Impl`, which emits a
-                // diagnostic but does NOT advance the cursor; the outer
-                // loop then re-enters with the same token and pushes a
-                // placeholder field forever (OOM at ~1 GiB of empty
-                // FieldDecls). Class bodies allow inline `impl`/`def`
-                // (see `parse_class_body`); structs intentionally do not.
-                TokenKind::Impl => {
-                    self.error(
-                        "`impl` blocks are not allowed inside `struct` bodies; \
-                         write `impl Trait for StructName ... end` outside the struct, \
-                         or use `class` instead of `struct` if you want method bodies inline",
-                    );
-                    // Consume `impl ... end` to keep the cursor moving.
-                    let _ = self.parse_inner_impl(false);
-                }
-                TokenKind::Unsafe if matches!(self.peek_kind(), TokenKind::Impl) => {
-                    self.error(
-                        "`unsafe impl` blocks are not allowed inside `struct` bodies; \
-                         write `unsafe impl Trait for StructName ... end` outside the struct",
-                    );
-                    self.advance(); // consume `unsafe`
-                    let _ = self.parse_inner_impl(true);
-                }
-                TokenKind::Def | TokenKind::Async => {
-                    self.error(
-                        "method definitions are not allowed inside `struct` bodies; \
-                         declare an `impl StructName ... def name ... end ... end` block \
-                         outside the struct, or switch to `class` for inline methods",
-                    );
-                    let _ = self.parse_func_def(Visibility::Private);
-                }
                 _ => {
                     self.error(&format!(
-                        "expected field declaration in struct body, found {:?}",
+                        "expected field, method, or impl in struct body, found {:?}",
                         self.current_kind()
                     ));
                     // Hard-advance one token so we cannot loop on a sync
@@ -1258,11 +1458,21 @@ impl Parser {
             self.ensure_loop_progress(__progress);
         }
         self.expect(TokenKind::End);
+        // Apply `private :a, :b` style name-list overrides on methods.
+        for (vis, names) in &name_list_overrides {
+            for n in names {
+                if let Some(m) = methods.iter_mut().find(|m| &m.name == n) {
+                    m.visibility = *vis;
+                }
+            }
+        }
         let span = self.span_from(&start);
         StructDef {
             name,
             generic_params,
             fields,
+            methods,
+            inner_impls,
             derive_traits,
             repr: Vec::new(),
             doc_comments,
@@ -1733,20 +1943,49 @@ impl Parser {
                 // The Ruby `private :a, :b` form (marker followed by `:ident`)
                 // is captured as a name-list override and applied post-pass.
                 TokenKind::Public => {
-                    self.advance();
+                    // `public def …` / `public name: T` — explicit prefix
+                    // form, overrides the surrounding section marker for
+                    // exactly the next declaration (ruby-naming.spec.md
+                    // §3.2 trailing paragraph).
+                    let next = self.peek_kind();
+                    let prefix_form = matches!(
+                        next,
+                        TokenKind::Def | TokenKind::Async | TokenKind::Identifier(_)
+                    );
+                    self.advance(); // consume `public`
                     if self.at(TokenKind::Colon) {
-                        // Ruby-style name list: `public :a, :b`
                         let names = self.parse_visibility_name_list();
                         name_list_overrides.push((Visibility::Public, names));
+                    } else if prefix_form
+                        && matches!(self.current_kind(), TokenKind::Def | TokenKind::Async)
+                    {
+                        methods.push(self.parse_func_def(Visibility::Public));
+                    } else if prefix_form
+                        && matches!(self.current_kind(), TokenKind::Identifier(_))
+                    {
+                        fields.push(self.parse_field_decl_with_vis(Visibility::Public));
                     } else {
                         current_vis = Visibility::Public;
                     }
                 }
                 TokenKind::Private => {
-                    self.advance();
+                    let next = self.peek_kind();
+                    let prefix_form = matches!(
+                        next,
+                        TokenKind::Def | TokenKind::Async | TokenKind::Identifier(_)
+                    );
+                    self.advance(); // consume `private`
                     if self.at(TokenKind::Colon) {
                         let names = self.parse_visibility_name_list();
                         name_list_overrides.push((Visibility::Private, names));
+                    } else if prefix_form
+                        && matches!(self.current_kind(), TokenKind::Def | TokenKind::Async)
+                    {
+                        methods.push(self.parse_func_def(Visibility::Private));
+                    } else if prefix_form
+                        && matches!(self.current_kind(), TokenKind::Identifier(_))
+                    {
+                        fields.push(self.parse_field_decl_with_vis(Visibility::Private));
                     } else {
                         current_vis = Visibility::Private;
                     }
@@ -2421,16 +2660,48 @@ impl Parser {
         self.advance(); // consume `lib`
         self.skip_newlines();
 
+        // ruby-naming.spec.md §3.7: `lib "name" ... end` takes a string
+        // literal link name. The legacy TypeIdentifier form
+        // (`lib LibM ... end`) is retained for transitional sources.
         let name = match self.current_kind().clone() {
+            TokenKind::StringLiteral(s) => {
+                self.advance();
+                s
+            }
             TokenKind::TypeIdentifier(n) => {
                 self.advance();
                 n
             }
             _ => {
-                self.error("expected lib name (TypeIdentifier)");
+                self.error("expected lib name — a string literal (`lib \"c\"`) or TypeIdentifier");
                 "_Error".to_string()
             }
         };
+
+        // ruby-naming.spec.md §3.7: `lib "x", version: "3", path: "..."`
+        // — options follow as keyword arguments. Accept and discard for
+        // now; the typeck/codegen plumbing for these options lands in a
+        // follow-up.
+        while self.eat(TokenKind::Comma) {
+            self.skip_newlines();
+            if matches!(self.current_kind(), TokenKind::Identifier(_)) {
+                self.advance(); // option name
+                if self.eat(TokenKind::Colon) {
+                    // option value — accept any literal
+                    if matches!(
+                        self.current_kind(),
+                        TokenKind::StringLiteral(_)
+                            | TokenKind::IntLiteral(_, _)
+                            | TokenKind::True
+                            | TokenKind::False
+                    ) {
+                        self.advance();
+                    }
+                }
+            } else {
+                break;
+            }
+        }
 
         self.skip_newlines();
         let mut functions = Vec::new();

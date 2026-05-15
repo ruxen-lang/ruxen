@@ -41,10 +41,10 @@ fn display_trait_and_formatter_are_resolvable() {
 class Money
   cents: Int
 
-  impl Display
-    def fmt(f: &mut Formatter) -> Result[(), FmtError]
-      Ok(())
-    end
+  include Display
+
+  def fmt(f: &mut Formatter) -> Result[(), FmtError]
+    Ok(())
   end
 end
 
@@ -69,10 +69,10 @@ fn debug_trait_is_resolvable_with_fmt_method() {
 class Money
   cents: Int
 
-  impl Debug
-    def fmt(f: &mut Formatter) -> Result[(), FmtError]
-      Ok(())
-    end
+  include Debug
+
+  def fmt(f: &mut Formatter) -> Result[(), FmtError]
+    Ok(())
   end
 end
 
@@ -147,10 +147,10 @@ fn formatter_write_str_returns_result_unit_fmt_error() {
 class Tag
   name: String
 
-  impl Display
-    def fmt(f: &mut Formatter) -> Result[(), FmtError]
-      f.write_str("tag")
-    end
+  include Display
+
+  def fmt(f: &mut Formatter) -> Result[(), FmtError]
+    f.write_str("tag")
   end
 end
 

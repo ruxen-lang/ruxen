@@ -19,7 +19,7 @@ PROC_PATTERN='rivenc|rustc|cargo|ld$|ld-classic|clang|riven-lsp|riven-repl'
 # Also match any process whose executable path includes riven target or test deps
 # (e.g. option_result_runtime-<hash>, installed_binary-<hash>). ps -eo comm
 # shows only the basename, so check arguments too via pgrep -f.
-PATH_PATTERN='target/release/deps|target/release/riven|/crates/.*/tests/|option_result_runtime|installed_binary'
+PATH_PATTERN='target/(debug|release)/deps|target/(debug|release)/riven|/crates/.*/tests/|option_result_runtime|installed_binary|riven_core-|riven_cli-|riven_ide-|riven_lsp-|riven_repl-|rivenc-'
 
 # Directories to scan for bloated output files. RIVEN_WORKSPACE (when set)
 # takes precedence so Linux + macOS share the same script.

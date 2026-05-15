@@ -83,9 +83,9 @@ fn user_impl_display_lowers_t_fmt_function() {
 class Money
   def init(@cents: Int)
   end
-end
 
-impl Display for Money
+  include Display
+
   def fmt(f: &mut Formatter) -> Result[(), FmtError]
     f.write_str("$")
   end

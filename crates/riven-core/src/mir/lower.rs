@@ -1246,16 +1246,35 @@ impl<'a> Lowerer<'a> {
                     // the runtime constructor just like Vec/Hash.
                     if matches!(
                         base_type,
-                        "Vec" | "Hash" | "HashMap" | "Set" | "HashSet" | "Formatter"
+                        "Vec" | "Array"
+                            | "Hash"
+                            | "HashMap"
+                            | "Map"
+                            | "Set"
+                            | "HashSet"
+                            | "Formatter"
                     ) {
                         let obj = self.new_temp(expr.ty.clone());
+                        // ruby-naming.spec.md §3.11 renames stdlib types
+                        // (`Vec` → `Array`, `HashMap` → `Map`, `HashSet` →
+                        // `Set`). The runtime C functions keep their
+                        // legacy names (`Vec_new`, `Hash_new`, …), so map
+                        // the surface base-type back to the runtime
+                        // before mangling.
+                        let runtime_base = match base_type {
+                            "Array" => "Vec",
+                            "Map" => "Hash",
+                            "HashMap" => "Hash",
+                            "Set" => "HashSet",
+                            other => other,
+                        };
                         // Emit Call to runtime constructor (e.g., Vec_new).
                         // Use the base type so the mangled callee elides the
                         // generic parameter list (`HashMap[K, V]_new` would
                         // not match a real runtime symbol).
                         self.emit(MirInst::Call {
                             dest: Some(obj),
-                            callee: format!("{}_new", base_type),
+                            callee: format!("{}_new", runtime_base),
                             args: vec![],
                         });
                         return Ok(Some(obj));
@@ -2470,15 +2489,32 @@ impl<'a> Lowerer<'a> {
                     // the runtime constructor just like Vec/Hash.
                     if matches!(
                         base_type,
-                        "Vec" | "Hash" | "HashMap" | "Set" | "HashSet" | "Formatter"
+                        "Vec" | "Array"
+                            | "Hash"
+                            | "HashMap"
+                            | "Map"
+                            | "Set"
+                            | "HashSet"
+                            | "Formatter"
                     ) {
                         let obj = self.new_temp(expr.ty.clone());
+                        // ruby-naming.spec.md §3.11 renames stdlib types
+                        // (`Vec` → `Array`, `HashMap` → `Map`, `HashSet`
+                        // → `Set`). The runtime C functions keep their
+                        // legacy names, so map back before mangling.
+                        let runtime_base = match base_type {
+                            "Array" => "Vec",
+                            "Map" => "Hash",
+                            "HashMap" => "Hash",
+                            "Set" => "HashSet",
+                            other => other,
+                        };
                         // Use the base type so the mangled callee elides the
                         // generic parameter list (`HashMap[K, V]_new` would
                         // not match a real runtime symbol).
                         self.emit(MirInst::Call {
                             dest: Some(obj),
-                            callee: format!("{}_new", base_type),
+                            callee: format!("{}_new", runtime_base),
                             args: vec![],
                         });
                         return Ok(Some(obj));

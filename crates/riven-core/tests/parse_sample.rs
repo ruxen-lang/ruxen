@@ -47,24 +47,37 @@ fn test_sample_contains_expected_items() {
     let mut parser = Parser::new(tokens);
     let program = parser.parse().expect("parser failed");
 
+    // ruby-naming.spec.md: legacy top-level `impl Trait for Type`
+    // blocks are folded into the surrounding type body via `include`
+    // directives. The sample fixture therefore has no `TopLevelItem::Impl`
+    // entries any more; instead, the count moves to per-class `inner_impls`.
     let mut enums = 0;
     let mut classes = 0;
-    let mut impls = 0;
-    let mut traits = 0;
+    let mut mixins = 0;
     let mut functions = 0;
+    let mut inner_includes = 0;
     for item in &program.items {
         match item {
-            TopLevelItem::Enum(_) => enums += 1,
-            TopLevelItem::Class(_) => classes += 1,
-            TopLevelItem::Impl(_) => impls += 1,
-            TopLevelItem::Mixin(_) => traits += 1,
+            TopLevelItem::Enum(e) => {
+                enums += 1;
+                inner_includes += e.inner_impls.len();
+            }
+            TopLevelItem::Class(c) => {
+                classes += 1;
+                inner_includes += c.inner_impls.len();
+            }
+            TopLevelItem::Mixin(_) => mixins += 1,
             TopLevelItem::Function(_) => functions += 1,
             _ => {}
         }
     }
     assert!(enums >= 3, "expected >= 3 enums, got {}", enums);
-    assert!(traits >= 2, "expected >= 2 traits, got {}", traits);
+    assert!(mixins >= 2, "expected >= 2 mixins, got {}", mixins);
     assert!(classes >= 3, "expected >= 3 classes, got {}", classes);
-    assert!(impls >= 4, "expected >= 4 impl blocks, got {}", impls);
+    assert!(
+        inner_includes >= 4,
+        "expected >= 4 inline include directives across types, got {}",
+        inner_includes
+    );
     assert!(functions >= 4, "expected >= 4 functions, got {}", functions);
 }

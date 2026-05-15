@@ -131,6 +131,12 @@ impl PrettyPrinter {
         for f in &s.fields {
             self.print_field_decl(f);
         }
+        for m in &s.methods {
+            self.print_func(m);
+        }
+        for imp in &s.inner_impls {
+            self.print_inner_impl(imp);
+        }
         self.dedent();
     }
 
@@ -142,6 +148,12 @@ impl PrettyPrinter {
         self.indent();
         for v in &e.variants {
             self.print_variant(v);
+        }
+        for m in &e.methods {
+            self.print_func(m);
+        }
+        for imp in &e.inner_impls {
+            self.print_inner_impl(imp);
         }
         self.dedent();
     }

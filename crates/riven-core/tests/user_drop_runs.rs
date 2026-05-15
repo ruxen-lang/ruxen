@@ -19,10 +19,10 @@ class Holder
     self.tag = t
   end
 
-  impl Drop
-    def drop
-      puts "DROP_RAN_tag=#{self.tag}"
-    end
+  include Drop
+
+  def drop
+    puts "DROP_RAN_tag=#{self.tag}"
   end
 end
 

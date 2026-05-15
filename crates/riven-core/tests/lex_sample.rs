@@ -43,13 +43,13 @@ fn test_sample_program_contains_key_tokens() {
 
     let kinds: Vec<&TokenKind> = tokens.iter().map(|t| &t.kind).collect();
 
-    // Check for various token types that should be present
+    // ruby-naming.spec.md: the sample fixture now uses `mixin`,
+    // `include`, `public` and `extension` instead of `trait`, `impl`,
+    // `pub`. The lexer no longer emits the legacy kinds.
     assert!(kinds.contains(&&TokenKind::Enum));
-    assert!(kinds.contains(&&TokenKind::Impl));
+    assert!(kinds.contains(&&TokenKind::Include));
     assert!(kinds.contains(&&TokenKind::Class));
-    assert!(kinds.contains(&&TokenKind::Trait));
     assert!(kinds.contains(&&TokenKind::Def));
-    assert!(kinds.contains(&&TokenKind::Pub));
     assert!(kinds.contains(&&TokenKind::Let));
     assert!(kinds.contains(&&TokenKind::Mut));
     assert!(kinds.contains(&&TokenKind::Match));
@@ -86,7 +86,9 @@ fn test_sample_program_contains_key_tokens() {
     assert!(kinds.contains(&&TokenKind::OkKw));
     assert!(kinds.contains(&&TokenKind::ErrKw));
     assert!(kinds.contains(&&TokenKind::SomeKw));
-    assert!(kinds.contains(&&TokenKind::NoneKw));
+    // ruby-naming.spec.md: `None` is no longer a keyword — `nil` is the
+    // absence literal. The fixture exercises `nil` instead.
+    assert!(kinds.contains(&&TokenKind::Nil));
 
     // Check that interpolated strings exist
     assert!(kinds

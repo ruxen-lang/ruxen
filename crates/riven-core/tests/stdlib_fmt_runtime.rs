@@ -109,9 +109,9 @@ class Money
 
   def init(@cents: Int)
   end
-end
 
-impl Display for Money
+  include Display
+
   def fmt(f: &mut Formatter) -> Result[(), FmtError]
     let _ = f.write_str("$")
     f.write_str("#{self.cents}")

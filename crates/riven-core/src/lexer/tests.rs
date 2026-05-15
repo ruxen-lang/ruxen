@@ -23,22 +23,31 @@ fn lex_with_errors(input: &str) -> (Vec<Token>, Vec<crate::diagnostics::Diagnost
 
 #[test]
 fn test_all_keywords() {
+    // Post Ruby-naming migration (docs/specs/syntax/ruby-naming.spec.md):
+    // `trait`, `impl`, `pub`, `dyn`, `derive`, `None`, `crate`, `extern`,
+    // and `null` are no longer keywords — they lex as ordinary identifiers
+    // and the lookup_keyword table maps the new replacements (`mixin`,
+    // `include`/`extension`, `public`/`private`, `any`/`some`, …) instead.
     let pairs = vec![
         ("let", TokenKind::Let),
         ("mut", TokenKind::Mut),
         ("move", TokenKind::Move),
         ("ref", TokenKind::Ref),
+        ("var", TokenKind::Var),
         ("class", TokenKind::Class),
         ("struct", TokenKind::Struct),
         ("enum", TokenKind::Enum),
-        ("trait", TokenKind::Trait),
-        ("impl", TokenKind::Impl),
+        ("mixin", TokenKind::Mixin),
+        ("include", TokenKind::Include),
+        ("extension", TokenKind::Extension),
         ("newtype", TokenKind::Newtype),
         ("type", TokenKind::Type),
         ("def", TokenKind::Def),
-        ("pub", TokenKind::Pub),
+        ("public", TokenKind::Public),
+        ("private", TokenKind::Private),
         ("protected", TokenKind::Protected),
         ("consume", TokenKind::Consume),
+        ("inline", TokenKind::Inline),
         ("self", TokenKind::SelfValue),
         ("Self", TokenKind::SelfType),
         ("init", TokenKind::Init),
@@ -61,20 +70,21 @@ fn test_all_keywords() {
         ("continue", TokenKind::Continue),
         ("where", TokenKind::Where),
         ("as", TokenKind::As),
-        ("dyn", TokenKind::Dyn),
-        ("derive", TokenKind::Derive),
+        ("some", TokenKind::SomeBound),
+        ("any", TokenKind::AnyBound),
+        ("layout", TokenKind::Layout),
         ("module", TokenKind::Module),
         ("use", TokenKind::Use),
+        ("package", TokenKind::Package),
         ("unsafe", TokenKind::Unsafe),
         ("true", TokenKind::True),
         ("false", TokenKind::False),
-        ("None", TokenKind::NoneKw),
         ("Some", TokenKind::SomeKw),
         ("Ok", TokenKind::OkKw),
         ("Err", TokenKind::ErrKw),
+        ("nil", TokenKind::Nil),
+        ("lib", TokenKind::Lib),
         ("macro", TokenKind::Macro),
-        ("crate", TokenKind::Crate),
-        ("extern", TokenKind::Extern),
         ("static", TokenKind::Static),
         ("const", TokenKind::Const),
         ("when", TokenKind::When),
@@ -116,6 +126,42 @@ fn test_unreserved_keywords_lex_as_identifiers() {
             name
         );
     }
+}
+
+#[test]
+fn test_ruby_naming_legacy_keywords_lex_as_identifiers() {
+    // ruby-naming.spec.md: the lowercase legacy keywords `trait`, `impl`,
+    // `pub`, `dyn`, `derive`, `crate`, `extern`, `null` are unreserved and
+    // must now lex as ordinary identifiers. Old source using them is
+    // expected to fail later (in the parser) — but at the lexer level it
+    // is a plain identifier, not a TokenKind for the legacy keyword.
+    for name in [
+        "trait", "impl", "pub", "dyn", "derive", "crate", "extern", "null",
+    ] {
+        let kinds = lex_kinds(name);
+        assert_eq!(
+            kinds,
+            vec![TokenKind::Identifier(name.into()), TokenKind::Eof],
+            "legacy keyword '{}' should now lex as an identifier",
+            name
+        );
+    }
+}
+
+#[test]
+fn test_ruby_naming_legacy_none_lexes_as_type_identifier() {
+    // `None` was the only legacy TypeIdentifier-cased keyword. With ruby-
+    // naming it loses its keyword status and falls back to the ordinary
+    // `TypeIdentifier` rule because it begins with an uppercase letter.
+    let kinds = lex_kinds("None");
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::TypeIdentifier("None".into()),
+            TokenKind::Eof,
+        ],
+        "`None` should now lex as TypeIdentifier, not NoneKw"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1166,11 +1212,15 @@ fn test_let_binding() {
 
 #[test]
 fn test_method_definition() {
-    let kinds = lex_kinds("pub def mut assign(name: String)");
+    // ruby-naming: `pub` is no longer reserved; methods are now prefixed
+    // with `public` / `private` / `protected` (or live under a section
+    // marker), so the canonical lex of a public method signature is
+    // `public def mut assign(...)`.
+    let kinds = lex_kinds("public def mut assign(name: String)");
     assert_eq!(
         kinds,
         vec![
-            TokenKind::Pub,
+            TokenKind::Public,
             TokenKind::Def,
             TokenKind::Mut,
             TokenKind::Identifier("assign".into()),

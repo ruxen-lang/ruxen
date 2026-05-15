@@ -880,10 +880,10 @@ mod helper_tests {
 class Money
   cents: Int
 
-  impl Display
-    def fmt(f: &mut Formatter) -> Result[(), FmtError]
-      Ok(())
-    end
+  include Display
+
+  def fmt(f: &mut Formatter) -> Result[(), FmtError]
+    Ok(())
   end
 end
 

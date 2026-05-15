@@ -53,7 +53,7 @@ fn test_simple_function() {
 
 #[test]
 fn test_class_definition() {
-    let source = "class Point\n  x: Int\n  y: Int\n\n  def init(@x: Int, @y: Int) end\n\n  pub def sum -> Int\n    self.x + self.y\n  end\nend\n";
+    let source = "class Point\n  x: Int\n  y: Int\n\n  def init(@x: Int, @y: Int) end\n\n  public def sum -> Int\n    self.x + self.y\n  end\nend\n";
     let result = format(source);
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
     assert!(result.output.contains("class Point"));
@@ -145,24 +145,27 @@ fn test_string_interpolation() {
     assert_idempotent(source);
 }
 
-// ─── Impl Blocks ────────────────────────────────────────────────────
+// ─── Mixin Inclusion (ruby-naming.spec.md §3.4 / §10a) ──────────────
+// Legacy `impl Trait for Type ... end` is folded into the type body
+// as an `include Trait` directive with methods scattered alongside.
 
 #[test]
-fn test_impl_block() {
-    let source = "impl Priority\n  pub def weight -> Int\n    match self\n      Priority.Low -> 1\n      Priority.High -> 3\n    end\n  end\nend\n";
+fn test_class_inherent_methods() {
+    let source = "class Priority\n  def weight -> Int\n    match self\n      Priority.Low -> 1\n      Priority.High -> 3\n    end\n  end\nend\n";
     let result = format(source);
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
-    assert!(result.output.contains("impl Priority"));
+    assert!(result.output.contains("class Priority"));
     assert_idempotent(source);
 }
 
 #[test]
-fn test_trait_impl() {
+fn test_class_with_include_directive() {
     let source =
-        "impl Displayable for Priority\n  def to_display -> String\n    \"hello\"\n  end\nend\n";
+        "class Priority\n  include Displayable\n\n  def to_display -> String\n    \"hello\"\n  end\nend\n";
     let result = format(source);
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
-    assert!(result.output.contains("impl Displayable for Priority"));
+    assert!(result.output.contains("include Displayable"));
+    assert!(result.output.contains("class Priority"));
     assert_idempotent(source);
 }
 
@@ -187,14 +190,14 @@ fn test_enum_with_data() {
     assert_idempotent(source);
 }
 
-// ─── Trait Definitions ──────────────────────────────────────────────
+// ─── Mixin Definitions (ruby-naming.spec.md §3.4) ───────────────────
 
 #[test]
-fn test_trait_definition() {
-    let source = "trait Serializable\n  def serialize -> String\nend\n";
+fn test_mixin_definition() {
+    let source = "mixin Serializable\n  def serialize -> String\nend\n";
     let result = format(source);
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
-    assert!(result.output.contains("trait Serializable"));
+    assert!(result.output.contains("Serializable"));
     assert_idempotent(source);
 }
 

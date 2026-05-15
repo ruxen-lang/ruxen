@@ -686,6 +686,13 @@ pub struct StructDef {
     pub name: String,
     pub generic_params: Option<GenericParams>,
     pub fields: Vec<FieldDecl>,
+    /// Inline method definitions (post Ruby-naming migration). Structs
+    /// now accept `def`s in their body the same way classes do; the
+    /// resolver lowers them through the same per-type method tables.
+    pub methods: Vec<FuncDef>,
+    /// Inline `impl Trait for Self` blocks and bare `include Mixin`
+    /// directives inside the struct body. Mirrors `ClassDef::inner_impls`.
+    pub inner_impls: Vec<InnerImpl>,
     /// Traits declared via `@[derive(...)]` at top level or via an in-body
     /// `derive Trait1, Trait2` line. Does NOT include `@[repr(...)]` args —
     /// those live on `repr`.
@@ -708,6 +715,12 @@ pub struct EnumDef {
     pub name: String,
     pub generic_params: Option<GenericParams>,
     pub variants: Vec<Variant>,
+    /// Inline method definitions (post Ruby-naming migration). Enums
+    /// now accept `def`s in their body the same way classes do.
+    pub methods: Vec<FuncDef>,
+    /// Inline `impl Trait for Self` blocks and bare `include Mixin`
+    /// directives inside the enum body. Mirrors `ClassDef::inner_impls`.
+    pub inner_impls: Vec<InnerImpl>,
     /// Traits declared via `@[derive(...)]` or in-body `derive Trait` line.
     pub derive_traits: Vec<String>,
     /// Captured `##` doc comments preceding the enum (P0.13).

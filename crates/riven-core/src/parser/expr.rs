@@ -462,8 +462,12 @@ impl Parser {
                 }
             }
 
-            // Null literal
-            TokenKind::Null => {
+            // `nil` literal — replaces legacy `null` (raw pointer) and the
+            // `None` constructor under ruby-naming. Lowers to NullLiteral;
+            // the type checker reconciles `nil` against the expected type
+            // (raw pointer types take it as null; `Option[T]` takes it as
+            // `None`).
+            TokenKind::Nil => {
                 self.advance();
                 Expr {
                     kind: ExprKind::NullLiteral,
@@ -1335,7 +1339,7 @@ impl Parser {
                 | TokenKind::Yield
                 | TokenKind::Super
                 | TokenKind::Unsafe
-                | TokenKind::Null
+                | TokenKind::Nil
         )
     }
 

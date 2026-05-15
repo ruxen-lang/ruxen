@@ -17,7 +17,7 @@ fn parse(source: &str) -> Program {
 #[test]
 fn parse_unsafe_block() {
     let source = r#"
-pub def main
+def main
   let x = unsafe
     42
   end
@@ -30,7 +30,7 @@ end
 #[test]
 fn parse_unsafe_block_with_statements() {
     let source = r#"
-pub def main
+def main
   unsafe
     let x = 1
     let y = 2
@@ -46,8 +46,8 @@ end
 #[test]
 fn parse_null_literal() {
     let source = r#"
-pub def main
-  let p = null
+def main
+  let p = nil
 end
 "#;
     let program = parse(source);
@@ -68,7 +68,7 @@ end
 #[test]
 fn parse_raw_pointer_type() {
     let source = r#"
-pub def foo(p: *Int64) -> *Int64
+def foo(p: *Int64) -> *Int64
   p
 end
 "#;
@@ -96,7 +96,7 @@ end
 #[test]
 fn parse_raw_mut_pointer_type() {
     let source = r#"
-pub def bar(p: *mut Int64) -> *mut Int64
+def bar(p: *mut Int64) -> *mut Int64
   p
 end
 "#;
@@ -162,53 +162,59 @@ end
     }
 }
 
+// ruby-naming.spec.md §3.7 / §10a: `extern "X" ... end` blocks are
+// retired; FFI declarations live inside a `lib "X" ... end` block. The
+// AST node these tests previously asserted (`TopLevelItem::Extern`) is
+// no longer produced; the equivalent `TopLevelItem::Lib` carries the
+// same function signatures.
+
 #[test]
-fn parse_extern_block() {
+fn parse_lib_block_replaces_extern() {
     let source = r#"
-extern "C"
+lib "c"
   def getenv(name: *Int8) -> *Int8
 end
 "#;
     let program = parse(source);
     assert!(!program.items.is_empty());
 
-    if let TopLevelItem::Extern(ext) = &program.items[0] {
-        assert_eq!(ext.abi, "C");
-        assert_eq!(ext.functions.len(), 1);
-        assert_eq!(ext.functions[0].name, "getenv");
+    if let TopLevelItem::Lib(lib) = &program.items[0] {
+        assert_eq!(lib.name, "c");
+        assert_eq!(lib.functions.len(), 1);
+        assert_eq!(lib.functions[0].name, "getenv");
     } else {
-        panic!("expected Extern item");
+        panic!("expected Lib item");
     }
 }
 
 #[test]
 fn parse_ffi_void_return() {
     let source = r#"
-extern "C"
+lib "c"
   def free(ptr: *mut Int8)
 end
 "#;
     let program = parse(source);
 
-    if let TopLevelItem::Extern(ext) = &program.items[0] {
-        assert_eq!(ext.functions[0].name, "free");
-        assert!(ext.functions[0].return_type.is_none());
+    if let TopLevelItem::Lib(lib) = &program.items[0] {
+        assert_eq!(lib.functions[0].name, "free");
+        assert!(lib.functions[0].return_type.is_none());
     } else {
-        panic!("expected Extern item");
+        panic!("expected Lib item");
     }
 }
 
 #[test]
 fn parse_ffi_multiple_params() {
     let source = r#"
-extern "C"
+lib "c"
   def memcpy(dest: *mut Int8, src: *Int8, n: UInt64) -> *mut Int8
 end
 "#;
     let program = parse(source);
 
-    if let TopLevelItem::Extern(ext) = &program.items[0] {
-        let f = &ext.functions[0];
+    if let TopLevelItem::Lib(lib) = &program.items[0] {
+        let f = &lib.functions[0];
         assert_eq!(f.name, "memcpy");
         assert_eq!(f.params.len(), 3);
         assert_eq!(f.params[0].name, "dest");
@@ -216,7 +222,7 @@ end
         assert_eq!(f.params[2].name, "n");
         assert!(f.return_type.is_some());
     } else {
-        panic!("expected Extern item");
+        panic!("expected Lib item");
     }
 }
 
@@ -315,17 +321,24 @@ end
 }
 
 #[test]
-fn parse_inbody_derive_on_enum() {
+fn parse_inbody_include_on_enum() {
+    // ruby-naming.spec.md §3.6 / §10a: the in-body `derive D1, D2`
+    // form is replaced by `include D1, D2` (the loud, explicit form
+    // — structural mixins are also implicitly included).
     let source = r#"
 enum Shape
   Circle
   Square
-  derive Debug
+
+  include Debug
 end
 "#;
     let program = parse(source);
     if let TopLevelItem::Enum(e) = &program.items[0] {
-        assert_eq!(e.derive_traits, vec!["Debug".to_string()]);
+        assert_eq!(e.inner_impls.len(), 1);
+        assert_eq!(e.inner_impls[0].trait_name.segments, vec!["Debug"]);
+        let _legacy_derive_traits_still_empty: &Vec<String> = &e.derive_traits;
+        assert_eq!(e.derive_traits, vec![] as Vec<String>);
         assert_eq!(e.variants.len(), 2);
     } else {
         panic!("expected Enum item");
@@ -333,19 +346,25 @@ end
 }
 
 #[test]
-fn parse_inbody_derive_on_class() {
+fn parse_inbody_include_on_class() {
+    // ruby-naming.spec.md §3.6 / §10a: in-body `derive D1, D2` →
+    // `include D1, D2`. Each becomes its own `InnerImpl` entry.
     let source = r#"
 class Counter
   value: Int
-  derive Debug, Clone
+
+  include Debug
+  include Clone
 end
 "#;
     let program = parse(source);
     if let TopLevelItem::Class(c) = &program.items[0] {
-        assert_eq!(
-            c.derive_traits,
-            vec!["Debug".to_string(), "Clone".to_string()]
-        );
+        let traits: Vec<String> = c
+            .inner_impls
+            .iter()
+            .map(|i| i.trait_name.segments.join("."))
+            .collect();
+        assert_eq!(traits, vec!["Debug".to_string(), "Clone".to_string()]);
     } else {
         panic!("expected Class item");
     }

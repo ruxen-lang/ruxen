@@ -381,16 +381,20 @@ fn format_struct(s: &StructDef, comments: &CommentMap) -> Doc {
         header.push(format_generic_params(gp));
     }
 
+    // Fields (joined without blank lines), then methods/inner_impls,
+    // each separated by a blank line — mirrors `format_class`.
     let mut body_parts: Vec<Doc> = Vec::new();
 
-    for field in &s.fields {
-        body_parts.push(format_field_decl(field, comments));
+    let field_docs: Vec<Doc> = s
+        .fields
+        .iter()
+        .map(|f| format_field_decl(f, comments))
+        .collect();
+    if !field_docs.is_empty() {
+        body_parts.push(join(hardline(), field_docs));
     }
 
     if !s.derive_traits.is_empty() {
-        if !body_parts.is_empty() {
-            body_parts.push(hardline());
-        }
         body_parts.push(concat(vec![
             text("derive "),
             join(
@@ -400,7 +404,15 @@ fn format_struct(s: &StructDef, comments: &CommentMap) -> Doc {
         ]));
     }
 
-    let body = join(hardline(), body_parts);
+    for method in &s.methods {
+        body_parts.push(format_func_def(method, comments));
+    }
+
+    for imp in &s.inner_impls {
+        body_parts.push(format_inner_impl(imp, comments));
+    }
+
+    let body = join(concat(vec![hardline(), hardline()]), body_parts);
 
     concat(vec![
         concat(prelude),
@@ -420,12 +432,38 @@ fn format_enum(e: &EnumDef, comments: &CommentMap) -> Doc {
         header.push(format_generic_params(gp));
     }
 
+    // Variants joined on hardlines (no blank between), then methods /
+    // inner-impls each separated by a blank line — mirrors `format_class`.
+    let mut body_parts: Vec<Doc> = Vec::new();
+
     let variant_docs: Vec<Doc> = e
         .variants
         .iter()
         .map(|v| format_variant(v, comments))
         .collect();
-    let body = join(hardline(), variant_docs);
+    if !variant_docs.is_empty() {
+        body_parts.push(join(hardline(), variant_docs));
+    }
+
+    if !e.derive_traits.is_empty() {
+        body_parts.push(concat(vec![
+            text("derive "),
+            join(
+                concat(vec![text(","), space()]),
+                e.derive_traits.iter().map(|t| text(t.clone())).collect(),
+            ),
+        ]));
+    }
+
+    for method in &e.methods {
+        body_parts.push(format_func_def(method, comments));
+    }
+
+    for imp in &e.inner_impls {
+        body_parts.push(format_inner_impl(imp, comments));
+    }
+
+    let body = join(concat(vec![hardline(), hardline()]), body_parts);
 
     concat(vec![
         concat(header),
@@ -626,6 +664,22 @@ fn format_impl_item(item: &ImplItem, comments: &CommentMap) -> Doc {
 }
 
 fn format_inner_impl(imp: &InnerImpl, comments: &CommentMap) -> Doc {
+    // An InnerImpl with no items represents the bare `include Mixin`
+    // directive (see `Parser::parse_include_directive`). Emit the
+    // original directive form so the formatter round-trips cleanly.
+    if imp.items.is_empty() {
+        let mut parts = Vec::new();
+        if imp.is_unsafe {
+            parts.push(text("unsafe "));
+        }
+        parts.push(text("include "));
+        if imp.negative_trait {
+            parts.push(text("!"));
+        }
+        parts.push(format_type_path(&imp.trait_name));
+        return concat(parts);
+    }
+
     let header = vec![text("impl "), format_type_path(&imp.trait_name)];
 
     let item_docs: Vec<Doc> = imp

@@ -275,13 +275,16 @@ mod tests {
     }
 
     #[test]
-    fn pub_async_func_basic() {
-        let program = parse("pub async def fetch\nend");
+    fn async_func_parses() {
+        // ruby-naming.spec.md removes the `pub` prefix; visibility is
+        // controlled via section markers in declaring scopes. The flip
+        // of the top-level default to `Public` lands in a follow-up; for
+        // now this test only asserts that `async def` parses.
+        let program = parse("async def fetch\nend");
         let func = match &program.items[0] {
             TopLevelItem::Function(f) => f,
             other => panic!("expected function, got {:?}", other),
         };
-        assert_eq!(func.visibility, Visibility::Public);
         assert!(func.is_async);
     }
 
@@ -423,9 +426,9 @@ end";
     }
 
     #[test]
-    fn class_explicit_pub_overrides_private_section() {
-        // ruby-naming.spec.md §3.2: an explicit `pub` prefix wins over
-        // the surrounding section marker (migration affordance).
+    fn class_explicit_public_overrides_private_section() {
+        // ruby-naming.spec.md §3.2: an explicit `public` prefix wins
+        // over the surrounding section marker for that one declaration.
         let src = "\
 class Bar
   private
@@ -433,7 +436,7 @@ class Bar
   def helper
   end
 
-  pub def force_pub
+  public def force_public
   end
 end";
         let program = parse(src);
@@ -450,7 +453,7 @@ end";
                 .visibility
         };
         assert_eq!(by_method("helper"), Visibility::Private);
-        assert_eq!(by_method("force_pub"), Visibility::Public);
+        assert_eq!(by_method("force_public"), Visibility::Public);
     }
 
     #[test]
@@ -601,13 +604,13 @@ end";
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    //  Traits
+    //  Mixins (ruby-naming.spec.md §3.4 — `mixin` replaces `trait`)
     // ═══════════════════════════════════════════════════════════════════
 
     #[test]
-    fn trait_with_method_signature() {
+    fn mixin_with_method_signature() {
         let src = "\
-trait Greetable
+mixin Greetable
   def greet -> String
 end";
         let program = parse(src);
@@ -627,80 +630,95 @@ end";
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    //  Impl Blocks
+    //  Mixin Inclusion via `include` (ruby-naming.spec.md §3.4)
+    //
+    //  The legacy top-level `impl Trait for Type ... end` block is gone.
+    //  Spec §10a maps it to an `include Trait` directive inside the
+    //  type's body, with the methods scattered alongside. The class's
+    //  `inner_impls` records the inclusion; the methods live on
+    //  `class.methods` like any other.
     // ═══════════════════════════════════════════════════════════════════
 
     #[test]
-    fn impl_trait_for_type() {
+    fn include_directive_in_class_body() {
         let src = "\
-impl Greetable for Person
+class Person
+  include Greetable
+
   def greet -> String
   end
 end";
         let program = parse(src);
-        let imp = match &program.items[0] {
-            TopLevelItem::Impl(i) => i,
-            other => panic!("expected impl, got {:?}", other),
+        let class = match &program.items[0] {
+            TopLevelItem::Class(c) => c,
+            other => panic!("expected class, got {:?}", other),
         };
-        let trait_name = imp.trait_name.as_ref().expect("expected trait name");
-        assert_eq!(trait_name.segments, vec!["Greetable"]);
-        match &imp.target_type {
-            TypeExpr::Named(path) => assert_eq!(path.segments, vec!["Person"]),
-            other => panic!("expected Named type, got {:?}", other),
-        }
-        assert_eq!(imp.items.len(), 1);
+        assert_eq!(class.inner_impls.len(), 1);
+        let inc = &class.inner_impls[0];
+        assert_eq!(inc.trait_name.segments, vec!["Greetable"]);
+        assert!(!inc.is_unsafe);
+        assert!(!inc.negative_trait);
+        assert_eq!(class.methods.len(), 1);
+        assert_eq!(class.methods[0].name, "greet");
     }
 
     #[test]
-    fn impl_inherent() {
+    fn class_inherent_methods_no_include() {
+        // ruby-naming.spec.md §10a: a legacy `impl Person ... end`
+        // inherent block lowers to methods directly inside the class.
         let src = "\
-impl Person
+class Person
   def hello -> String
   end
 end";
         let program = parse(src);
-        let imp = match &program.items[0] {
-            TopLevelItem::Impl(i) => i,
-            other => panic!("expected impl, got {:?}", other),
+        let class = match &program.items[0] {
+            TopLevelItem::Class(c) => c,
+            other => panic!("expected class, got {:?}", other),
         };
-        assert!(imp.trait_name.is_none());
-        match &imp.target_type {
-            TypeExpr::Named(path) => assert_eq!(path.segments, vec!["Person"]),
-            other => panic!("expected Named type, got {:?}", other),
-        }
-        assert_eq!(imp.items.len(), 1);
+        assert!(class.inner_impls.is_empty());
+        assert_eq!(class.methods.len(), 1);
+        assert_eq!(class.methods[0].name, "hello");
     }
 
     #[test]
-    fn unsafe_impl_trait_for_type() {
+    fn unsafe_include_in_class_body() {
+        // Legacy `unsafe impl Send for Buffer` migrates to an
+        // `unsafe include Send` directive in the type's body.
         let src = "\
-unsafe impl Send for Buffer
+class Buffer
+  unsafe include Send
 end";
         let program = parse(src);
-        let imp = match &program.items[0] {
-            TopLevelItem::Impl(i) => i,
-            other => panic!("expected impl, got {:?}", other),
+        let class = match &program.items[0] {
+            TopLevelItem::Class(c) => c,
+            other => panic!("expected class, got {:?}", other),
         };
-        assert!(imp.is_unsafe);
-        assert!(!imp.negative_trait);
-        let trait_name = imp.trait_name.as_ref().expect("expected trait name");
-        assert_eq!(trait_name.segments, vec!["Send"]);
+        assert_eq!(class.inner_impls.len(), 1);
+        let inc = &class.inner_impls[0];
+        assert!(inc.is_unsafe);
+        assert!(!inc.negative_trait);
+        assert_eq!(inc.trait_name.segments, vec!["Send"]);
     }
 
     #[test]
-    fn negative_impl_trait_for_type() {
+    fn negative_include_in_class_body() {
+        // Legacy `impl !Sync for Buffer` migrates to a `include !Sync`
+        // opt-out directive in the type's body.
         let src = "\
-impl !Sync for Buffer
+class Buffer
+  include !Sync
 end";
         let program = parse(src);
-        let imp = match &program.items[0] {
-            TopLevelItem::Impl(i) => i,
-            other => panic!("expected impl, got {:?}", other),
+        let class = match &program.items[0] {
+            TopLevelItem::Class(c) => c,
+            other => panic!("expected class, got {:?}", other),
         };
-        assert!(!imp.is_unsafe);
-        assert!(imp.negative_trait);
-        let trait_name = imp.trait_name.as_ref().expect("expected trait name");
-        assert_eq!(trait_name.segments, vec!["Sync"]);
+        assert_eq!(class.inner_impls.len(), 1);
+        let inc = &class.inner_impls[0];
+        assert!(!inc.is_unsafe);
+        assert!(inc.negative_trait);
+        assert_eq!(inc.trait_name.segments, vec!["Sync"]);
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -1285,7 +1303,13 @@ end";
     /// Use `class` if you want method bodies inline (Ruby-style); the
     /// `struct` keyword is intentionally fields-only.
     #[test]
-    fn struct_with_impl_inside_errors_without_oom() {
+    fn struct_with_legacy_impl_inside_errors_without_oom() {
+        // ruby-naming.spec.md: `impl` is no longer a keyword (legacy form
+        // — `include Mixin` is the replacement). A legacy `impl Display`
+        // block inside a struct body now lexes `impl` as an identifier and
+        // mis-parses, but the parse must still terminate in bounded time
+        // with diagnostics — never enter the OOM-loop the original guard
+        // was added for.
         let src = "\
 struct Money
   cents: Int
@@ -1299,8 +1323,6 @@ end";
         let mut lexer = Lexer::new(src);
         let tokens = lexer.tokenize().expect("lex");
         let mut parser = Parser::new(tokens);
-        // 50ms is generous — well-formed input parses in <1ms; the
-        // pre-fix bug ran until OOM (multiple seconds + GiBs of RAM).
         let start = std::time::Instant::now();
         let result = parser.parse();
         let elapsed = start.elapsed();
@@ -1310,15 +1332,9 @@ end";
             elapsed
         );
         let diags = result.expect_err("expected parse to fail with diagnostics");
-        let msg = diags
-            .iter()
-            .map(|d| d.message.as_str())
-            .collect::<Vec<_>>()
-            .join(" | ");
         assert!(
-            msg.contains("`impl` blocks are not allowed inside `struct` bodies"),
-            "missing `impl` rejection diagnostic; got: {}",
-            msg
+            !diags.is_empty(),
+            "expected at least one diagnostic from struct-body recovery"
         );
     }
 
@@ -1358,12 +1374,13 @@ end";
         );
     }
 
-    /// Regression: `def` (non-impl) inside a struct body must also
-    /// produce a bounded diagnostic. Same root cause as the
-    /// `impl`-inside-struct case — the outer loop must not blindly
-    /// retry `parse_field_decl` on a non-identifier keyword.
+    /// Post ruby-naming.spec.md §3.4a: `def` IS allowed inside a struct
+    /// body — structs accept inline methods the same way classes do. The
+    /// old "reject + bounded diagnostic" guard now becomes a positive
+    /// test: a struct with a `def` parses, the method is collected onto
+    /// `StructDef::methods`, and parsing terminates promptly.
     #[test]
-    fn struct_with_def_inside_errors_without_oom() {
+    fn struct_with_inline_def_is_accepted() {
         let src = "\
 struct Money
   cents: Int
@@ -1376,24 +1393,19 @@ end";
         let tokens = lexer.tokenize().expect("lex");
         let mut parser = Parser::new(tokens);
         let start = std::time::Instant::now();
-        let result = parser.parse();
+        let program = parser.parse().expect("struct with inline def must parse");
         let elapsed = start.elapsed();
         assert!(
             elapsed < std::time::Duration::from_millis(50),
             "parse took {:?}; expected <50ms — guarding against the OOM-loop regression",
             elapsed
         );
-        let diags = result.expect_err("expected parse to fail with diagnostics");
-        let msg = diags
-            .iter()
-            .map(|d| d.message.as_str())
-            .collect::<Vec<_>>()
-            .join(" | ");
-        assert!(
-            msg.contains("method definitions are not allowed inside `struct` bodies"),
-            "missing `def` rejection diagnostic; got: {}",
-            msg
-        );
+        let s = match &program.items[0] {
+            TopLevelItem::Struct(s) => s,
+            other => panic!("expected struct, got {:?}", other),
+        };
+        assert_eq!(s.methods.len(), 1);
+        assert_eq!(s.methods[0].name, "total");
     }
 
     #[test]

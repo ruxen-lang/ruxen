@@ -118,7 +118,14 @@ pub enum TokenKind {
     Class,
     Struct,
     Enum,
+    // Legacy `Trait` TokenKind retained (unreachable from lexer) while
+    // existing parser code still has dead `TokenKind::Trait` match arms.
+    // The lexer no longer maps `trait` → this variant; the keyword is now
+    // `mixin`. Safe to delete once the parser sweeps those dead arms.
     Trait,
+    // Legacy `Impl` TokenKind retained (unreachable from lexer) while the
+    // other agent finishes migrating `parse_enum_def` / `parse_struct_def`.
+    // Once those references go away this variant can be deleted.
     Impl,
     Mixin,     // `mixin` — replaces `trait`
     Include,   // `include` — replaces `impl Trait for X`
@@ -128,6 +135,9 @@ pub enum TokenKind {
 
     // ── Keywords: Functions & Methods ──
     Def,
+    // Legacy `Pub` TokenKind retained (unreachable from lexer) while the
+    // other agent finishes migrating `parse_struct_def`. Will be deleted
+    // once those references go away.
     Pub,
     Public,    // `public` — section marker; switches subsequent decls to public
     Private,   // `private` — section marker; replaces `pub` prefix model
@@ -160,9 +170,14 @@ pub enum TokenKind {
     // ── Keywords: Type System ──
     Where,
     As,
+    // Legacy `Dyn` TokenKind retained (unreachable from lexer) while
+    // existing parser code still references it. Replaced by `any Mixin`.
     Dyn,
     SomeBound, // lowercase `some` — `some Mixin` type position
     AnyBound,  // lowercase `any`  — `any Mixin` type position
+    // Legacy `Derive` TokenKind retained (unreachable from lexer) while the
+    // other agent finishes migrating `parse_enum_def` / `parse_struct_def`.
+    // Will be deleted once those references go away.
     Derive,
     Layout, // `layout c` / `layout packed` / `layout transparent`
 
@@ -177,20 +192,27 @@ pub enum TokenKind {
     // ── Keywords: Literals ──
     True,
     False,
+    // Legacy `NoneKw` retained (unreachable from lexer; kept because
+    // `parse_enum_def` still references it for the in-body variant name
+    // form). Replaced at lex time by `Nil`.
     NoneKw,
     SomeKw, // `Some` constructor for Option
     OkKw,
     ErrKw,
-    Nil, // `nil` — raw-pointer null literal (replaces `null`)
+    Nil, // `nil` — replaces both `null` (raw pointer) and `None` (Option).
 
     // ── Keywords: FFI & Interop ──
     Lib,
-    Null, // deprecated; will be removed once all sources migrate to `nil`
+    // Legacy `Null` TokenKind retained (unreachable from lexer) while
+    // existing formatter/parser code still references it. Use `nil`.
+    Null,
 
     // ── Keywords: Reserved ──
     Macro,
-    Crate,  // deprecated; will be removed once all sources migrate to `package`
-    Extern, // deprecated; folded into `lib`
+    // Legacy `Extern` TokenKind retained (unreachable from lexer) while
+    // existing parser code still has dead `TokenKind::Extern` match arms.
+    // Folded into `lib`.
+    Extern,
     Static,
     Const,
     When,
@@ -350,8 +372,9 @@ pub fn lookup_keyword(ident: &str) -> Option<TokenKind> {
         "class" => Some(TokenKind::Class),
         "struct" => Some(TokenKind::Struct),
         "enum" => Some(TokenKind::Enum),
-        "trait" => Some(TokenKind::Trait),
-        "impl" => Some(TokenKind::Impl),
+        // `trait` removed — use `mixin`.
+        // `impl` removed — use `include` inside a type body or `extension`
+        // for conditional / external method blocks.
         "mixin" => Some(TokenKind::Mixin),
         "include" => Some(TokenKind::Include),
         "extension" => Some(TokenKind::Extension),
@@ -360,7 +383,7 @@ pub fn lookup_keyword(ident: &str) -> Option<TokenKind> {
 
         // Functions & Methods
         "def" => Some(TokenKind::Def),
-        "pub" => Some(TokenKind::Pub),
+        // `pub` removed — use `public` section marker or `public` prefix.
         "public" => Some(TokenKind::Public),
         "private" => Some(TokenKind::Private),
         "protected" => Some(TokenKind::Protected),
@@ -392,10 +415,10 @@ pub fn lookup_keyword(ident: &str) -> Option<TokenKind> {
         // Type System
         "where" => Some(TokenKind::Where),
         "as" => Some(TokenKind::As),
-        "dyn" => Some(TokenKind::Dyn),
+        // `dyn` removed — use `any Mixin` for dyn-trait positions.
         "some" => Some(TokenKind::SomeBound),
         "any" => Some(TokenKind::AnyBound),
-        "derive" => Some(TokenKind::Derive),
+        // `derive` removed — auto-include replaces it.
         "layout" => Some(TokenKind::Layout),
 
         // Modules
@@ -408,21 +431,21 @@ pub fn lookup_keyword(ident: &str) -> Option<TokenKind> {
 
         // FFI & Interop
         "lib" => Some(TokenKind::Lib),
-        "null" => Some(TokenKind::Null),
+        // `null` removed — use `nil` (raw-pointer null literal).
         "nil" => Some(TokenKind::Nil),
 
         // Literals
         "true" => Some(TokenKind::True),
         "false" => Some(TokenKind::False),
-        "None" => Some(TokenKind::NoneKw),
+        // `None` removed — use `nil` (Option::None literal).
         "Some" => Some(TokenKind::SomeKw),
         "Ok" => Some(TokenKind::OkKw),
         "Err" => Some(TokenKind::ErrKw),
 
         // Reserved
         "macro" => Some(TokenKind::Macro),
-        "crate" => Some(TokenKind::Crate),
-        "extern" => Some(TokenKind::Extern),
+        // `crate` removed — use `package`.
+        // `extern` removed — use `lib`.
         "static" => Some(TokenKind::Static),
         "const" => Some(TokenKind::Const),
         "when" => Some(TokenKind::When),
