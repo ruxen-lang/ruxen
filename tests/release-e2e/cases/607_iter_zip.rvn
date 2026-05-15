@@ -1,6 +1,6 @@
 def main
-  let a = array![1, 2, 3, 4]
-  let b = array![10, 20, 30]
+  let a = [1, 2, 3, 4]
+  let b = [10, 20, 30]
   let n = a.iter.zip(b.iter).count
   puts "n=#{n}"
   let m = b.iter.zip(a.iter).count

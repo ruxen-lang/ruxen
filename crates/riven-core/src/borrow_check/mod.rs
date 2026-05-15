@@ -297,6 +297,13 @@ impl<'a> BorrowChecker<'a> {
                 }
             }
 
+            HirExprKind::MapLiteral(entries) => {
+                for (k, v) in entries {
+                    self.check_expr(k);
+                    self.check_expr(v);
+                }
+            }
+
             HirExprKind::ArrayFill { value, .. } => {
                 self.check_expr(value);
             }
@@ -505,7 +512,10 @@ impl<'a> BorrowChecker<'a> {
                     code: ErrorCode::E1006,
                     primary: SpanLabel {
                         span: span.clone(),
-                        label: format!("cannot assign to `{}` — variable is immutable (declared with `let`)", name),
+                        label: format!(
+                            "cannot assign to `{}` — variable is immutable (declared with `let`)",
+                            name
+                        ),
                     },
                     secondary: vec![],
                     help: vec![format!("consider declaring with `var {}`", name)],

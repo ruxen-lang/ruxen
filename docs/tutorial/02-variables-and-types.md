@@ -125,8 +125,10 @@ let (x, y) = point                   # destructuring
 # Fixed-size arrays — stack-allocated
 let nums: [Int; 3] = [1, 2, 3]
 
-# Growable arrays — heap-allocated
-var v = array![1, 2, 3]
+# Growable arrays — heap-allocated. The bare `[…]` literal builds an
+# `Array[T]`; the fixed-size form is only chosen when the binding has
+# an `[T; N]` annotation.
+var v = [1, 2, 3]
 v.push(4)
 ```
 

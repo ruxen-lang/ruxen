@@ -196,11 +196,12 @@ Today's `!` methods:
 | `panic!(msg)`          | prelude — `riven_panic`              |
 | `expect!(msg)`         | `Option` / `Result`                  |
 | `unwrap!()`            | `Option` / `Result`                  |
-| `array![...]`          | prelude — growable array literal     |
-| `map!{...}`            | prelude — map literal                |
-| `set!{...}`            | prelude — set literal                |
 | `Mutex.lock!()`        | `std.sync` (Phase 4 runtime)         |
 | `JoinHandle.join!()`   | `std.sync` (Phase 4 runtime)         |
+
+Collection literals (`[…]` Array, `{ k => v }` Map) are part of the
+core grammar — see `docs/specs/syntax/ruby-naming.spec.md` §10a.
+There is no Set literal; use `Set.from_iter([…])`.
 
 Don't define your own `!`-suffix methods — the convention is
 reserved for compiler-aware forms.

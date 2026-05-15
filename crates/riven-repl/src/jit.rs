@@ -124,6 +124,12 @@ pub struct JITCodeGen {
     string_data: HashMap<String, cranelift_module::DataId>,
     string_counter: u32,
     declared_fns: HashMap<String, FuncId>,
+    /// Param Cranelift types for every user/synth function the JIT has
+    /// declared. coerce_call_args consults this to know e.g. that
+    /// `Bool_fmt`'s first param is i8 (not the i64 a default widen
+    /// would produce) — without it, calling synthesized primitive
+    /// formatters from the JIT trips Cranelift's verifier.
+    user_fn_param_tys: HashMap<String, Vec<Type>>,
 }
 
 impl JITCodeGen {
@@ -192,6 +198,7 @@ impl JITCodeGen {
             string_data: HashMap::new(),
             string_counter: 0,
             declared_fns: HashMap::new(),
+            user_fn_param_tys: HashMap::new(),
         })
     }
 
@@ -210,6 +217,9 @@ impl JITCodeGen {
                 )
             })?;
 
+        let param_tys: Vec<Type> = sig.params.iter().map(|p| p.value_type).collect();
+        self.user_fn_param_tys
+            .insert(mir_function.name.clone(), param_tys);
         self.declared_fns.insert(mir_function.name.clone(), func_id);
 
         // Define — on failure, drop the declared_fns entry so a retry
@@ -250,6 +260,9 @@ impl JITCodeGen {
             .module
             .declare_function(&mir_function.name, Linkage::Export, &sig)
             .map_err(|e| format!("Failed to declare function '{}': {}", mir_function.name, e))?;
+        let param_tys: Vec<Type> = sig.params.iter().map(|p| p.value_type).collect();
+        self.user_fn_param_tys
+            .insert(mir_function.name.clone(), param_tys);
         self.declared_fns.insert(mir_function.name.clone(), func_id);
         Ok(func_id)
     }
@@ -283,6 +296,7 @@ impl JITCodeGen {
                 declared_fns: &mut self.declared_fns,
                 string_data: &mut self.string_data,
                 string_counter: &mut self.string_counter,
+                user_fn_param_tys: &self.user_fn_param_tys,
             };
 
             // Map MIR blocks → Cranelift blocks
@@ -538,6 +552,7 @@ struct JITTranslationEnv<'a> {
     declared_fns: &'a mut HashMap<String, FuncId>,
     string_data: &'a mut HashMap<String, cranelift_module::DataId>,
     string_counter: &'a mut u32,
+    user_fn_param_tys: &'a HashMap<String, Vec<Type>>,
 }
 
 impl<'a> JITTranslationEnv<'a> {
@@ -849,7 +864,14 @@ fn translate_instruction(
             let actual_name = runtime_name(callee)?;
 
             // Widen narrow-integer args to match callee parameter types.
-            coerce_call_args(&mut arg_vals, args, func, actual_name, builder);
+            coerce_call_args(
+                &mut arg_vals,
+                args,
+                func,
+                actual_name,
+                env.user_fn_param_tys,
+                builder,
+            );
 
             match actual_name {
                 "riven_noop_passthrough" => {
@@ -1177,21 +1199,33 @@ fn coerce_call_args(
     args: &[MirValue],
     func: &MirFunction,
     callee: &str,
+    user_fn_param_tys: &HashMap<String, Vec<Type>>,
     builder: &mut FunctionBuilder,
 ) {
     let known_sig = runtime_signature(callee);
+    let user_sig = user_fn_param_tys.get(callee);
     for (i, arg_val) in arg_vals.iter_mut().enumerate() {
         let val_ty = builder.func.dfg.value_type(*arg_val);
 
         let target_ty = match &known_sig {
             Some((params, _)) if i < params.len() => params[i],
-            _ => {
-                if val_ty.is_int() && val_ty.bits() < 64 {
-                    types::I64
-                } else {
-                    val_ty
+            _ => match user_sig {
+                // ruby-naming.spec.md §3.6: synthesized `Bool_fmt` /
+                // `Char_fmt` / etc. legitimately declare narrow-int
+                // params (i8 for Bool, i32 for Char). Honour the
+                // declared param type instead of blindly widening to
+                // i64 — otherwise Cranelift's verifier rejects the
+                // call. Mirrors `user_fn_param_tys` in the batch
+                // codegen.
+                Some(params) if i < params.len() => params[i],
+                _ => {
+                    if val_ty.is_int() && val_ty.bits() < 64 {
+                        types::I64
+                    } else {
+                        val_ty
+                    }
                 }
-            }
+            },
         };
 
         if val_ty == target_ty {

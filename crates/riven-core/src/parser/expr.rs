@@ -284,14 +284,9 @@ impl Parser {
                 }
             }
 
-            // None, Some, Ok, Err — used as enum constructors
-            TokenKind::NoneKw => {
-                self.advance();
-                Expr {
-                    kind: ExprKind::Identifier("None".to_string()),
-                    span: start,
-                }
-            }
+            // Some, Ok, Err — used as enum constructors. `None` is spelled
+            // `nil` after ruby-naming.spec.md §3.10, lexed as `TokenKind::Nil`
+            // and handled in the nil-literal arm below.
             TokenKind::SomeKw => {
                 self.advance();
                 self.parse_constructor_args("Some", vec![], start)
@@ -387,8 +382,8 @@ impl Parser {
             // Array literal
             TokenKind::LBracket => self.parse_array_literal(),
 
-            // Block expressions (closures)
-            TokenKind::LBrace => self.parse_brace_closure(false, false),
+            // `{ k => v, ... }` Map literal or `{ |x| ... }` brace closure.
+            TokenKind::LBrace => self.parse_brace_map_or_closure(false, false),
 
             // do ... end — either a closure (if `|params|` follow) or a
             // block expression whose value is the last expression.
@@ -649,16 +644,15 @@ impl Parser {
             // and `Type.Variant` parsing.
             let is_variant_kw = matches!(
                 after_dot,
-                TokenKind::SomeKw | TokenKind::NoneKw | TokenKind::OkKw | TokenKind::ErrKw
+                TokenKind::SomeKw | TokenKind::OkKw | TokenKind::ErrKw
             );
             if is_variant_kw {
-                // `Type.Some` / `Type.None` / `Type.Ok` / `Type.Err` —
-                // user-defined generic enums that re-use a stdlib keyword
-                // as a variant name.
+                // `Type.Some` / `Type.Ok` / `Type.Err` — user-defined
+                // generic enums that re-use a stdlib keyword as a variant
+                // name. `Type.None` is spelled `Type.nil` (§3.10).
                 self.advance(); // consume .
                 let variant_name = match self.current_kind() {
                     TokenKind::SomeKw => "Some".to_string(),
-                    TokenKind::NoneKw => "None".to_string(),
                     TokenKind::OkKw => "Ok".to_string(),
                     TokenKind::ErrKw => "Err".to_string(),
                     _ => {
@@ -879,10 +873,12 @@ impl Parser {
                 self.advance();
                 self.skip_newlines();
                 let mut args = Vec::new();
-                // Special handling for `hash!{ k => v, ... }` — parse key/value
-                // pairs and flatten into a [k1, v1, k2, v2, ...] arg list so
-                // downstream HIR/MIR can treat them pair-wise.
-                let is_hash_macro = name == "hash";
+                // ruby-naming.spec.md §10a: the `map!{…}` / `hash!{…}`
+                // macros are retired — Map literals are spelled bare
+                // `{ k => v, … }` directly. Any `name!{ k => v }` form
+                // still reaching the parser is an unrecognised macro and
+                // should not get the special key/value flattening.
+                let is_hash_macro = false;
                 if !self.at(TokenKind::RBrace) {
                     let first = self.parse_expression();
                     if is_hash_macro && self.at(TokenKind::FatArrow) {
@@ -1290,7 +1286,6 @@ impl Parser {
                 | TokenKind::True
                 | TokenKind::False
                 | TokenKind::SomeKw
-                | TokenKind::NoneKw
                 | TokenKind::OkKw
                 | TokenKind::ErrKw
                 | TokenKind::Amp
@@ -1315,7 +1310,6 @@ impl Parser {
                 | TokenKind::SelfValue
                 | TokenKind::SelfType
                 | TokenKind::SomeKw
-                | TokenKind::NoneKw
                 | TokenKind::OkKw
                 | TokenKind::ErrKw
                 | TokenKind::LParen
@@ -1443,6 +1437,111 @@ impl Parser {
     }
 
     // ─── Closures ──────────────────────────────────────────────────────
+
+    /// Dispatch `{ ... }` between a Map literal and a brace closure.
+    /// `|`-led or `||`-led contents always mean a closure; an arrow-free
+    /// body is a closure; otherwise we parse the first key, look for
+    /// `=>`, and if found commit to a Map literal.
+    fn parse_brace_map_or_closure(&mut self, is_async: bool, is_move: bool) -> Expr {
+        // Peek past the `{` and any newlines to decide.
+        let mut look = 1;
+        while matches!(self.peek_at_kind(look), TokenKind::Newline) {
+            look += 1;
+        }
+        let first = self.peek_at_kind(look);
+        if matches!(first, TokenKind::Pipe | TokenKind::PipePipe) {
+            return self.parse_brace_closure(is_async, is_move);
+        }
+        if matches!(first, TokenKind::RBrace) {
+            // `{}` — empty closure (preserves legacy meaning; the empty
+            // Map is spelled `Map.new`).
+            return self.parse_brace_closure(is_async, is_move);
+        }
+        // Not a closure-param marker — scan for a top-level `=>` to decide
+        // between Map literal and brace block / single-expr closure.
+        if self.brace_body_is_map_literal(look) {
+            return self.parse_map_literal();
+        }
+        self.parse_brace_closure(is_async, is_move)
+    }
+
+    /// Look ahead from the first content token inside `{ ... }` and return
+    /// `true` when we find a `=>` at brace-depth zero before the closing
+    /// `}`. Tracks paren / bracket / brace nesting so `{ "x" => f(a => b) }`
+    /// still parses as a Map even though `a => b` appears inside the call.
+    fn brace_body_is_map_literal(&self, mut at: usize) -> bool {
+        let mut depth_paren = 0;
+        let mut depth_bracket = 0;
+        let mut depth_brace = 0;
+        loop {
+            match self.peek_at_kind(at) {
+                TokenKind::FatArrow
+                    if depth_paren == 0 && depth_bracket == 0 && depth_brace == 0 =>
+                {
+                    return true;
+                }
+                TokenKind::LParen => depth_paren += 1,
+                TokenKind::RParen => {
+                    if depth_paren == 0 {
+                        return false;
+                    }
+                    depth_paren -= 1;
+                }
+                TokenKind::LBracket => depth_bracket += 1,
+                TokenKind::RBracket => {
+                    if depth_bracket == 0 {
+                        return false;
+                    }
+                    depth_bracket -= 1;
+                }
+                TokenKind::LBrace => depth_brace += 1,
+                TokenKind::RBrace => {
+                    if depth_brace == 0 {
+                        return false;
+                    }
+                    depth_brace -= 1;
+                }
+                TokenKind::Eof => return false,
+                _ => {}
+            }
+            at += 1;
+        }
+    }
+
+    /// Parse `{ k => v, k => v, ... }` as a `MapLiteral`. Assumes the
+    /// caller has decided this is a Map literal (via lookahead).
+    fn parse_map_literal(&mut self) -> Expr {
+        let start = self.current_span();
+        self.advance(); // {
+        self.skip_newlines();
+        let mut entries = Vec::new();
+        if !self.at(TokenKind::RBrace) {
+            let k = self.parse_expression();
+            self.expect(TokenKind::FatArrow);
+            self.skip_newlines();
+            let v = self.parse_expression();
+            entries.push((k, v));
+            while self.eat(TokenKind::Comma) {
+                self.skip_newlines();
+                if self.at(TokenKind::RBrace) {
+                    break;
+                }
+                let k = self.parse_expression();
+                self.expect(TokenKind::FatArrow);
+                self.skip_newlines();
+                let v = self.parse_expression();
+                entries.push((k, v));
+                self.skip_newlines();
+            }
+        }
+        self.skip_newlines();
+        self.expect(TokenKind::RBrace);
+        let span = self.span_from(&start);
+        Expr {
+            kind: ExprKind::MapLiteral(entries),
+            span,
+        }
+    }
 
     fn parse_brace_closure(&mut self, is_async: bool, is_move: bool) -> Expr {
         let start = self.current_span();

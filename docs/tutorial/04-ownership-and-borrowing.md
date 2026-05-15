@@ -86,7 +86,7 @@ puts greeting                      # "hello!"
 You cannot mix mutable and immutable borrows:
 
 ```riven
-var data = array![1, 2, 3]
+var data = [1, 2, 3]
 let view = &data                   # immutable borrow
 data.push(4)                       # ERROR: mutable borrow while `view` exists
 puts view
@@ -97,7 +97,7 @@ puts view
 Borrows end at their last use, not at the end of the scope:
 
 ```riven
-var data = array![1, 2, 3]
+var data = [1, 2, 3]
 let view = &data
 puts view                          # last use of `view`
 data.push(4)                       # OK — `view` is no longer active

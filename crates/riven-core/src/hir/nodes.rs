@@ -6,7 +6,7 @@
 //! - Syntactic sugar is desugared
 //! - Copy/Move annotations on all value transfers
 
-use crate::hir::types::{MoveSemantics, MixinRef, Ty};
+use crate::hir::types::{MixinRef, MoveSemantics, Ty};
 use crate::lexer::token::Span;
 use crate::parser::ast::{BinOp, UnaryOp, Visibility};
 
@@ -209,6 +209,9 @@ pub enum HirExprKind {
 
     /// Array literal
     ArrayLiteral(Vec<HirExpr>),
+
+    /// Map literal: `{ k => v, k => v, ... }` (ruby-naming.spec.md §10a).
+    MapLiteral(Vec<(HirExpr, HirExpr)>),
 
     /// Array fill: `[value; count]`
     ArrayFill {
@@ -538,7 +541,11 @@ pub struct HirImplBlock {
 
 #[derive(Debug, Clone)]
 pub enum HirImplItem {
-    AssocType { name: String, ty: Ty, span: Span },
+    AssocType {
+        name: String,
+        ty: Ty,
+        span: Span,
+    },
     Method(HirFuncDef),
     /// `include Mixin` directive in an extension body
     /// (ruby-naming.spec.md §3.4a).

@@ -390,7 +390,7 @@ def main
   # ── Create tasks via helper (demonstrates ? operator) ──
   puts "Creating tasks..."
 
-  let results = array![
+  let results = [
     create_task_from_input(&mut list, "Design ownership model", "Define borrow rules", "critical"),
     create_task_from_input(&mut list, "Write parser",           "Implement lexer+parser", "high"),
     create_task_from_input(&mut list, "Add syntax highlighting", "Editor plugin",         "medium"),

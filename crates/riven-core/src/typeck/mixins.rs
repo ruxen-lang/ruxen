@@ -15,7 +15,7 @@ use std::collections::HashMap;
 
 use crate::hir::nodes::*;
 use crate::hir::types::{MixinRef, Ty};
-use crate::resolve::symbols::{DefKind, FnSignature, SymbolTable, MixinInfo};
+use crate::resolve::symbols::{DefKind, FnSignature, MixinInfo, SymbolTable};
 
 /// Result of checking whether a type satisfies a trait.
 #[derive(Debug, Clone)]

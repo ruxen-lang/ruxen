@@ -1,5 +1,5 @@
 def main
-  let h = hash!{ "a" => 1, "b" => 2 }
+  let h = { "a" => 1, "b" => 2 }
   if h.contains_key("a")
     puts "has a"
   else

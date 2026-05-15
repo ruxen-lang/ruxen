@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use crate::diagnostics::Diagnostic;
 use crate::hir::context::TypeContext;
 use crate::hir::nodes::*;
-use crate::hir::types::{MoveSemantics, MixinRef, Ty};
+use crate::hir::types::{MixinRef, MoveSemantics, Ty};
 use crate::lexer::token::Span;
 use crate::parser::ast::{self, Visibility};
 use scope::{ScopeId, ScopeKind, ScopeStack};
@@ -3936,6 +3936,26 @@ impl Resolver {
                 let ty = Ty::Array(Box::new(elem_ty));
                 HirExpr {
                     kind: HirExprKind::ArrayLiteral(elems_hir),
+                    ty,
+                    span,
+                }
+            }
+            ast::ExprKind::MapLiteral(entries) => {
+                let entries_hir: Vec<(HirExpr, HirExpr)> = entries
+                    .iter()
+                    .map(|(k, v)| (self.resolve_expr(k), self.resolve_expr(v)))
+                    .collect();
+                let (k_ty, v_ty) = if let Some((k, v)) = entries_hir.first() {
+                    (k.ty.clone(), v.ty.clone())
+                } else {
+                    (
+                        self.type_context.fresh_type_var(),
+                        self.type_context.fresh_type_var(),
+                    )
+                };
+                let ty = Ty::Map(Box::new(k_ty), Box::new(v_ty));
+                HirExpr {
+                    kind: HirExprKind::MapLiteral(entries_hir),
                     ty,
                     span,
                 }

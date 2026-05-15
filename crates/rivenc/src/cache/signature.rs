@@ -10,7 +10,7 @@
 //! structural equality check that's stable across compilations.
 
 use riven_core::hir::nodes::{
-    HirFuncDef, HirImplBlock, HirImplItem, HirItem, HirProgram, HirMixinItem,
+    HirFuncDef, HirImplBlock, HirImplItem, HirItem, HirMixinItem, HirProgram,
 };
 use riven_core::parser::ast::Visibility;
 use serde::{Deserialize, Serialize};

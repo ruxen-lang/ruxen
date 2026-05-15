@@ -551,8 +551,10 @@ Riven references (`&T`, `&mut T`) cannot be `nil` — they are valid
 by construction. If you want a possibly-missing reference, use
 `Option[&T]`.
 
-A `vec!`-style array literal macro is spelled `array![...]` (see
-§4.4).
+Array literals use bare `[...]` and produce an `Array[T]` (see
+§4.4). Map literals use bare `{ k => v, ... }` and produce a
+`Map[K, V]`. There is no dedicated `Set` literal — use
+`Set.from_iter([…])` since `{…}` is reserved for `Map`.
 
 ### 3.11 Stdlib type names
 
@@ -739,7 +741,7 @@ def first_match[T, a](haystack: &a Array[T], pred: |&T| -> Bool) -> Option[&a T]
   nil
 end
 
-let words = array!["alpha", "beta", "gamma"]
+let words = ["alpha", "beta", "gamma"]
 let found = first_match(&words, |w| w.starts_with("b"))
 ```
 
@@ -944,8 +946,9 @@ mention of the prior forms.
 | `HashSet[T]`                        | `Set[T]`                                                  |
 | `Rc[T]`                             | `Shared[T]`                                               |
 | `Arc[T]`                            | `SharedSync[T]`                                           |
-| `vec![...]` macro                   | `array![...]`                                             |
-| `hash!{...}` macro                  | `map!{...}` (and `set!{...}` for the `Set` analogue)      |
+| `[…]` macro                     | bare `[…]` literal — produces an `Array[T]`               |
+| `{…}` macro                    | bare `{ k => v, … }` literal — produces a `Map[K, V]`     |
+| `set!{…}` macro                     | `Set.from_iter([…])` (stdlib constructor; no dedicated literal — `{…}` is reserved for `Map`) |
 | `::` path separator                 | `.` everywhere (`std.io`, `Color.Red`, `package.utils`)   |
 | `extern "C" ... end` with no link name | `lib "c" ... end`                                      |
 | tutorial language `&self` / `&mut self` | "reading method" / "mutating method"                  |

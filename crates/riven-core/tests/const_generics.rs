@@ -338,7 +338,10 @@ fn array_layout_evaluates_const_expr_lit() {
     use riven_core::resolve::symbols::SymbolTable;
 
     let symbols = SymbolTable::new();
-    let layout = layout_of(&Ty::FixedArray(Box::new(Ty::Int), ConstExpr::Lit(4)), &symbols);
+    let layout = layout_of(
+        &Ty::FixedArray(Box::new(Ty::Int), ConstExpr::Lit(4)),
+        &symbols,
+    );
     assert_eq!(layout.size, 32);
     assert_eq!(layout.alignment, 8);
 }
@@ -883,7 +886,10 @@ fn resolve_array_size_lowers_all_four_operators() {
                     expr_text
                 );
             }
-            other => panic!("expected Ty::FixedArray for `{}`, got {:?}", expr_text, other),
+            other => panic!(
+                "expected Ty::FixedArray for `{}`, got {:?}",
+                expr_text, other
+            ),
         }
     }
 }

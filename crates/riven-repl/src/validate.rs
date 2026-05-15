@@ -49,8 +49,9 @@ impl Validator for RivenValidator {
                 | TokenKind::Class
                 | TokenKind::Struct
                 | TokenKind::Enum
-                | TokenKind::Trait
-                | TokenKind::Impl
+                // ruby-naming.spec.md §3.4 / §3.4a:
+                | TokenKind::Mixin
+                | TokenKind::Extension
                 | TokenKind::Module
                 | TokenKind::If
                 | TokenKind::While

@@ -1,5 +1,5 @@
 def main
-  var v = array![1, 2, 3]
+  var v = [1, 2, 3]
   while let Some(x) = v.pop
     puts "#{x}"
   end

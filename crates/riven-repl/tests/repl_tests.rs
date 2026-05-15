@@ -121,8 +121,6 @@ fn check_balanced(input: &str) -> bool {
             | TokenKind::Class
             | TokenKind::Struct
             | TokenKind::Enum
-            | TokenKind::Trait
-            | TokenKind::Impl
             | TokenKind::Module
             | TokenKind::If
             | TokenKind::While

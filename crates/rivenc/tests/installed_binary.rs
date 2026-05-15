@@ -1643,23 +1643,23 @@ end
 }
 
 #[test]
-fn e2e_104_hash_basic() {
-    // Fixture 104: `hash!{ k => v, ... }` macro literal builds a
-    // `HashMap[String, Int]` and `.get(key)` returns `Option[&Int]`.
+fn e2e_104_map_basic() {
+    // Fixture 104: `{ k => v, ... }` Map literal builds a
+    // `Map[String, Int]` and `.get(key)` returns `Option[&Int]`.
     let (temp, rivenc) = stage_install();
     let out = compile_and_run(
         &rivenc,
         temp.path(),
-        "hash_basic.rvn",
+        "map_basic.rvn",
         r##"def main
-  let h = hash!{ "a" => 1, "b" => 2 }
+  let h = { "a" => 1, "b" => 2 }
   match h.get("a")
     Some(v) -> puts "a=#{v}"
-    None    -> puts "a=missing"
+    nil     -> puts "a=missing"
   end
   match h.get("b")
     Some(v) -> puts "b=#{v}"
-    None    -> puts "b=missing"
+    nil     -> puts "b=missing"
   end
 end
 "##,

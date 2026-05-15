@@ -118,15 +118,6 @@ pub enum TokenKind {
     Class,
     Struct,
     Enum,
-    // Legacy `Trait` TokenKind retained (unreachable from lexer) while
-    // existing parser code still has dead `TokenKind::Trait` match arms.
-    // The lexer no longer maps `trait` → this variant; the keyword is now
-    // `mixin`. Safe to delete once the parser sweeps those dead arms.
-    Trait,
-    // Legacy `Impl` TokenKind retained (unreachable from lexer) while the
-    // other agent finishes migrating `parse_enum_def` / `parse_struct_def`.
-    // Once those references go away this variant can be deleted.
-    Impl,
     Mixin,     // `mixin` — replaces `trait`
     Include,   // `include` — replaces `impl Trait for X`
     Extension, // `extension` — replaces conditional `impl[T: B] C[T]`
@@ -135,10 +126,6 @@ pub enum TokenKind {
 
     // ── Keywords: Functions & Methods ──
     Def,
-    // Legacy `Pub` TokenKind retained (unreachable from lexer) while the
-    // other agent finishes migrating `parse_struct_def`. Will be deleted
-    // once those references go away.
-    Pub,
     Public,    // `public` — section marker; switches subsequent decls to public
     Private,   // `private` — section marker; replaces `pub` prefix model
     Protected, // already a section marker
@@ -170,16 +157,9 @@ pub enum TokenKind {
     // ── Keywords: Type System ──
     Where,
     As,
-    // Legacy `Dyn` TokenKind retained (unreachable from lexer) while
-    // existing parser code still references it. Replaced by `any Mixin`.
-    Dyn,
     SomeBound, // lowercase `some` — `some Mixin` type position
     AnyBound,  // lowercase `any`  — `any Mixin` type position
-    // Legacy `Derive` TokenKind retained (unreachable from lexer) while the
-    // other agent finishes migrating `parse_enum_def` / `parse_struct_def`.
-    // Will be deleted once those references go away.
-    Derive,
-    Layout, // `layout c` / `layout packed` / `layout transparent`
+    Layout,    // `layout c` / `layout packed` / `layout transparent`
 
     // ── Keywords: Modules ──
     Module,
@@ -192,10 +172,6 @@ pub enum TokenKind {
     // ── Keywords: Literals ──
     True,
     False,
-    // Legacy `NoneKw` retained (unreachable from lexer; kept because
-    // `parse_enum_def` still references it for the in-body variant name
-    // form). Replaced at lex time by `Nil`.
-    NoneKw,
     SomeKw, // `Some` constructor for Option
     OkKw,
     ErrKw,
@@ -203,16 +179,9 @@ pub enum TokenKind {
 
     // ── Keywords: FFI & Interop ──
     Lib,
-    // Legacy `Null` TokenKind retained (unreachable from lexer) while
-    // existing formatter/parser code still references it. Use `nil`.
-    Null,
 
     // ── Keywords: Reserved ──
     Macro,
-    // Legacy `Extern` TokenKind retained (unreachable from lexer) while
-    // existing parser code still has dead `TokenKind::Extern` match arms.
-    // Folded into `lib`.
-    Extern,
     Static,
     Const,
     When,

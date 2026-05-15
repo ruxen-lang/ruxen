@@ -1,5 +1,5 @@
 def main
-  let v = array![1, 2, 3, 4, 5]
+  let v = [1, 2, 3, 4, 5]
   match v.iter.find { |n| n > 3 }
     Some(x) -> puts "found #{x}"
     nil     -> puts "none"

@@ -1088,6 +1088,25 @@ impl<'a> InferenceEngine<'a> {
                 expr.ty = Ty::Array(Box::new(self.ctx.resolve(&elem_ty)));
             }
 
+            HirExprKind::MapLiteral(entries) => {
+                let mut k_ty = self.ctx.fresh_type_var();
+                let mut v_ty = self.ctx.fresh_type_var();
+                for (k, v) in entries.iter_mut() {
+                    self.infer_expr(k);
+                    self.infer_expr(v);
+                    if let Ok(uk) = unify(&k_ty, &k.ty, self.ctx, &expr.span) {
+                        k_ty = uk;
+                    }
+                    if let Ok(uv) = unify(&v_ty, &v.ty, self.ctx, &expr.span) {
+                        v_ty = uv;
+                    }
+                }
+                expr.ty = Ty::Map(
+                    Box::new(self.ctx.resolve(&k_ty)),
+                    Box::new(self.ctx.resolve(&v_ty)),
+                );
+            }
+
             HirExprKind::ArrayFill { value, .. } => {
                 self.infer_expr(value);
                 // Keep the Array type set during resolution
@@ -1116,11 +1135,43 @@ impl<'a> InferenceEngine<'a> {
                 expr.ty = Ty::String;
             }
 
-            HirExprKind::MacroCall { name: _, args } => {
+            HirExprKind::MacroCall { name, args } => {
                 for arg in args.iter_mut() {
                     self.infer_expr(arg);
                 }
-                // Macro types set during resolution
+                // ruby-naming.spec.md §10a macros (`array!` / `vec!`,
+                // `map!` / `hash!`, `set!`) compute their result type
+                // at resolve time from `args_hir[0].ty`. That field is
+                // a fresh inference variable at resolve time (the
+                // resolver assigns `Ty::Infer(N)` to method calls,
+                // function calls, etc.), and the typeck reassigns the
+                // CALL expression's `.ty` to the resolved return type
+                // without unifying with the original Infer var. So the
+                // macro's stored element type stays unbound. Re-unify
+                // here against each arg's freshly-inferred type so the
+                // container's element / key / value types resolve.
+                match name.as_str() {
+                    "vec" | "array" | "set" => {
+                        if let Some(elem_ty) = container_elem_ty(&expr.ty) {
+                            for arg in args.iter() {
+                                let arg_ty = self.ctx.resolve(&arg.ty);
+                                let _ = unify(&elem_ty, &arg_ty, self.ctx, &expr.span);
+                            }
+                        }
+                    }
+                    "hash" | "map" => {
+                        if let Some((k_ty, v_ty)) = map_kv_tys(&expr.ty) {
+                            let mut it = args.iter();
+                            while let (Some(k), Some(v)) = (it.next(), it.next()) {
+                                let k_arg = self.ctx.resolve(&k.ty);
+                                let v_arg = self.ctx.resolve(&v.ty);
+                                let _ = unify(&k_ty, &k_arg, self.ctx, &expr.span);
+                                let _ = unify(&v_ty, &v_arg, self.ctx, &expr.span);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
                 expr.ty = self.ctx.resolve(&expr.ty);
             }
 
@@ -2372,6 +2423,24 @@ impl<'a> InferenceEngine<'a> {
 /// `Ty::Infer` and `Ty::Error` pass through — they will be either
 /// pinned to a numeric type by a downstream constraint or already
 /// surfaced as a separate diagnostic. Phase 2 stdlib (#05 batch 3).
+/// Extract the element type from a container type produced by a v1
+/// collection macro: `Array[T]`, `Set[T]`, or `FixedArray[T; N]`.
+fn container_elem_ty(ty: &Ty) -> Option<Ty> {
+    match ty {
+        Ty::Array(elem) | Ty::Set(elem) | Ty::Option(elem) => Some((**elem).clone()),
+        Ty::FixedArray(elem, _) => Some((**elem).clone()),
+        _ => None,
+    }
+}
+
+/// Extract `(K, V)` from a `Map[K, V]` type.
+fn map_kv_tys(ty: &Ty) -> Option<(Ty, Ty)> {
+    match ty {
+        Ty::Map(k, v) => Some(((**k).clone(), (**v).clone())),
+        _ => None,
+    }
+}
+
 fn is_iter_sum_compatible(ty: &Ty) -> bool {
     matches!(
         ty,

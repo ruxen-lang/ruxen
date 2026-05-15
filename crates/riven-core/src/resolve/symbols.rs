@@ -460,8 +460,9 @@ fn struct_or_class_fields_all_support(
     field_def_ids: &[DefId],
     trait_name: &str,
 ) -> bool {
-    field_def_ids.iter().all(|field_id| {
-        match symbols.get(*field_id).map(|d| &d.kind) {
+    field_def_ids
+        .iter()
+        .all(|field_id| match symbols.get(*field_id).map(|d| &d.kind) {
             Some(DefKind::Field { ty, .. }) => {
                 ty_supports_structural_mixin(ty, symbols, trait_name)
             }
@@ -469,8 +470,7 @@ fn struct_or_class_fields_all_support(
                 ty_supports_structural_mixin(ty, symbols, trait_name)
             }
             _ => false,
-        }
-    })
+        })
 }
 
 /// Returns true when the given type structurally supports the named
@@ -569,7 +569,10 @@ mod tests {
             &Ty::Tuple(vec![point.clone(), Ty::Int]),
             &symbols
         ));
-        assert!(!ty_is_effectively_copy(&Ty::Array(Box::new(point)), &symbols));
+        assert!(!ty_is_effectively_copy(
+            &Ty::Array(Box::new(point)),
+            &symbols
+        ));
     }
 
     fn class_kind() -> DefKind {

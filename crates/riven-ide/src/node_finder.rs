@@ -127,6 +127,7 @@ impl NodeFinder {
                 match item {
                     HirImplItem::Method(func) => self.visit_func_def(func),
                     HirImplItem::AssocType { .. } => {}
+                    HirImplItem::Include { .. } => {}
                 }
             }
         }
@@ -292,6 +293,12 @@ impl NodeFinder {
             HirExprKind::Tuple(elems) | HirExprKind::ArrayLiteral(elems) => {
                 for e in elems {
                     self.visit_expr(e);
+                }
+            }
+            HirExprKind::MapLiteral(entries) => {
+                for (k, v) in entries {
+                    self.visit_expr(k);
+                    self.visit_expr(v);
                 }
             }
             HirExprKind::Index { object, index } => {

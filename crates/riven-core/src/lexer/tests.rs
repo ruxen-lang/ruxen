@@ -156,10 +156,7 @@ fn test_ruby_naming_legacy_none_lexes_as_type_identifier() {
     let kinds = lex_kinds("None");
     assert_eq!(
         kinds,
-        vec![
-            TokenKind::TypeIdentifier("None".into()),
-            TokenKind::Eof,
-        ],
+        vec![TokenKind::TypeIdentifier("None".into()), TokenKind::Eof,],
         "`None` should now lex as TypeIdentifier, not NoneKw"
     );
 }

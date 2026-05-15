@@ -111,11 +111,18 @@ fn split_repl_chunks(input: &str) -> Vec<String> {
                     let mut sim_in_type = false;
                     for (i, t) in tokens.iter().enumerate() {
                         match &t.kind {
-                            TokenKind::Trait => sim_stack.push("trait"),
+                            // ruby-naming.spec.md §3.4: `mixin` replaces
+                            // `trait`. Body-only `def`s inside a mixin
+                            // are signatures (no body); the def-sig
+                            // detector below uses the `"trait"` marker.
+                            TokenKind::Mixin => sim_stack.push("trait"),
                             TokenKind::Class => sim_stack.push("class"),
                             TokenKind::Struct => sim_stack.push("struct"),
                             TokenKind::Enum => sim_stack.push("enum"),
-                            TokenKind::Impl if !sim_in_type => sim_stack.push("impl"),
+                            // `extension X` body is structurally an impl
+                            // block: methods have bodies, so we keep
+                            // mirroring the historical impl behaviour.
+                            TokenKind::Extension if !sim_in_type => sim_stack.push("impl"),
                             TokenKind::Def => {
                                 // Only consider signature if directly inside
                                 // a trait at this point.
@@ -142,7 +149,6 @@ fn split_repl_chunks(input: &str) -> Vec<String> {
                                         let is_sig_follower = matches!(
                                             t2.kind,
                                             TokenKind::Def
-                                                | TokenKind::Pub
                                                 | TokenKind::Protected
                                                 | TokenKind::Type
                                                 | TokenKind::End
@@ -206,9 +212,16 @@ fn split_repl_chunks(input: &str) -> Vec<String> {
                     let on_arrow_line =
                         matches!(line_kinds.get(line_idx).copied(), Some(LineKind::HasArrow));
                     match &t.kind {
-                        TokenKind::Trait => {
+                        // ruby-naming.spec.md §3.4: `mixin` replaces `trait`.
+                        TokenKind::Mixin => {
                             block += 1;
-                            opener_stack.push("trait");
+                            opener_stack.push("mixin");
+                            meaningful_tokens += 1;
+                        }
+                        // ruby-naming.spec.md §3.4a: `extension` block.
+                        TokenKind::Extension => {
+                            block += 1;
+                            opener_stack.push("extension");
                             meaningful_tokens += 1;
                         }
                         TokenKind::Class => {
@@ -224,21 +237,6 @@ fn split_repl_chunks(input: &str) -> Vec<String> {
                         TokenKind::Enum => {
                             block += 1;
                             opener_stack.push("enum");
-                            meaningful_tokens += 1;
-                        }
-                        TokenKind::Impl => {
-                            // `impl` in a type position is not a block opener:
-                            //   - preceded by `->` / `:` / `&` / `,` / `(`
-                            //   - or on a line that has an `->` (return type)
-                            let in_type_position =
-                                on_arrow_line || prev_on_line == PrevKind::TypeContext;
-                            if in_type_position {
-                                // Type-position impl, no block.
-                            } else {
-                                block += 1;
-                                opener_stack.push("impl");
-                                impl_header_pending = true;
-                            }
                             meaningful_tokens += 1;
                         }
                         TokenKind::Module => {

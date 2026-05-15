@@ -105,7 +105,6 @@ impl Parser {
             | TokenKind::Enum
             | TokenKind::Mixin
             | TokenKind::Extension
-            | TokenKind::Impl
             | TokenKind::Module
             | TokenKind::Use
             | TokenKind::Const
@@ -148,7 +147,7 @@ impl Parser {
                     }
                 }
             }
-            TokenKind::Pub | TokenKind::Protected => {
+            TokenKind::Protected => {
                 let result = self.parse_top_level_item();
                 if self.diagnostics.len() > saved_diags {
                     let has_eof_error = self.diagnostics[saved_diags..]
@@ -219,7 +218,6 @@ impl Parser {
                 | TokenKind::Enum
                 | TokenKind::Mixin
                 | TokenKind::Extension
-                | TokenKind::Impl
                 | TokenKind::Module
                 | TokenKind::If
                 | TokenKind::While
@@ -555,7 +553,6 @@ impl Parser {
                 | TokenKind::Struct
                 | TokenKind::Enum
                 | TokenKind::Mixin
-                | TokenKind::Impl
                 | TokenKind::Extension
                 | TokenKind::Module
                 | TokenKind::Use
@@ -568,7 +565,6 @@ impl Parser {
                 | TokenKind::Const
                 | TokenKind::Type
                 | TokenKind::Newtype
-                | TokenKind::Pub
                 | TokenKind::Public
                 | TokenKind::Private
                 | TokenKind::Protected => return,
@@ -598,9 +594,7 @@ impl Parser {
             TokenKind::Struct => Some(TopLevelItem::Struct(self.parse_struct_def())),
             TokenKind::Enum => Some(TopLevelItem::Enum(self.parse_enum_def())),
             TokenKind::Mixin => Some(TopLevelItem::Mixin(self.parse_trait_def())),
-            TokenKind::Extension => {
-                Some(TopLevelItem::Impl(self.parse_impl_block(false)))
-            }
+            TokenKind::Extension => Some(TopLevelItem::Impl(self.parse_impl_block(false))),
             TokenKind::Unsafe if matches!(self.peek_kind(), TokenKind::Extension) => {
                 self.advance(); // consume `unsafe`
                 Some(TopLevelItem::Impl(self.parse_impl_block(true)))
@@ -686,7 +680,7 @@ impl Parser {
                             self.parse_func_def(Visibility::Private),
                         ))
                     }
-                    TokenKind::Pub | TokenKind::Protected => {
+                    TokenKind::Protected => {
                         if has_derive_attr {
                             for attr in &attrs {
                                 if attr.name == "derive" {
@@ -721,18 +715,6 @@ impl Parser {
             TokenKind::Def => Some(TopLevelItem::Function(
                 self.parse_func_def(Visibility::Private),
             )),
-            TokenKind::Pub => {
-                let vis = self.parse_visibility();
-                match self.current_kind() {
-                    TokenKind::Def | TokenKind::Async => {
-                        Some(TopLevelItem::Function(self.parse_func_def(vis)))
-                    }
-                    _ => {
-                        self.error("expected `def` after visibility modifier at top level");
-                        None
-                    }
-                }
-            }
             TokenKind::Protected => {
                 let vis = self.parse_visibility();
                 match self.current_kind() {
@@ -757,10 +739,6 @@ impl Parser {
 
     fn parse_visibility(&mut self) -> Visibility {
         match self.current_kind() {
-            TokenKind::Pub => {
-                self.advance();
-                Visibility::Public
-            }
             TokenKind::Protected => {
                 self.advance();
                 Visibility::Protected
@@ -821,10 +799,7 @@ impl Parser {
                 TokenKind::Protected => {
                     // Only treat as bare-marker if not followed by a decl.
                     let next = self.peek_kind();
-                    let bare = !matches!(
-                        next,
-                        TokenKind::Def | TokenKind::Async | TokenKind::Pub
-                    );
+                    let bare = !matches!(next, TokenKind::Def | TokenKind::Async);
                     if bare {
                         self.advance();
                         if self.at(TokenKind::Colon) {
@@ -1052,15 +1027,6 @@ impl Parser {
                 break;
             }
             match self.current_kind().clone() {
-                // ── derive lines ─────────────────────────────────────
-                TokenKind::Derive => {
-                    self.advance();
-                    derive_traits.push(self.expect_type_identifier());
-                    while self.eat(TokenKind::Comma) {
-                        self.skip_newlines();
-                        derive_traits.push(self.expect_type_identifier());
-                    }
-                }
                 // ── Section markers (ruby-naming.spec.md §3.2) ──
                 TokenKind::Public => {
                     self.advance();
@@ -1082,10 +1048,7 @@ impl Parser {
                 }
                 TokenKind::Protected => {
                     let next = self.peek_kind();
-                    let prefix_form = matches!(
-                        next,
-                        TokenKind::Def | TokenKind::Async | TokenKind::Pub
-                    );
+                    let prefix_form = matches!(next, TokenKind::Def | TokenKind::Async);
                     if prefix_form {
                         let vis = self.parse_visibility();
                         if matches!(self.current_kind(), TokenKind::Def | TokenKind::Async) {
@@ -1115,31 +1078,9 @@ impl Parser {
                 TokenKind::Def | TokenKind::Async => {
                     methods.push(self.parse_func_def(current_vis));
                 }
-                TokenKind::Pub => {
-                    let vis = self.parse_visibility();
-                    if matches!(self.current_kind(), TokenKind::Def | TokenKind::Async) {
-                        methods.push(self.parse_func_def(vis));
-                    } else {
-                        self.error(&format!(
-                            "expected `def` after `pub` in enum body, found {:?}",
-                            self.current_kind()
-                        ));
-                        if !self.at(TokenKind::Eof) {
-                            self.advance();
-                        }
-                        self.synchronize();
-                    }
-                }
-                // ── Inner impl / include directives ─────────────────
-                TokenKind::Impl => {
-                    inner_impls.push(self.parse_inner_impl(false));
-                }
+                // ── In-body `include Trait` directives ──────────────
                 TokenKind::Include => {
                     inner_impls.push(self.parse_include_directive(false));
-                }
-                TokenKind::Unsafe if matches!(self.peek_kind(), TokenKind::Impl) => {
-                    self.advance();
-                    inner_impls.push(self.parse_inner_impl(true));
                 }
                 TokenKind::Unsafe if matches!(self.peek_kind(), TokenKind::Include) => {
                     self.advance();
@@ -1209,11 +1150,9 @@ impl Parser {
                 self.advance();
                 "Some".to_string()
             }
-            // Under ruby-naming, the lexer maps `nil` → `TokenKind::Nil`.
-            // The legacy `NoneKw` (from `None`) is no longer produced but the
-            // variant remains for backwards-compat with code that pattern-
-            // matches it. Both lower to a `"None"`-named variant.
-            TokenKind::Nil | TokenKind::NoneKw => {
+            // ruby-naming.spec.md §3.10: the lexer maps `nil` →
+            // `TokenKind::Nil`, which lowers to `Option::None` here.
+            TokenKind::Nil => {
                 self.advance();
                 "None".to_string()
             }
@@ -1372,10 +1311,7 @@ impl Parser {
                     let next = self.peek_kind();
                     let prefix_form = matches!(
                         next,
-                        TokenKind::Def
-                            | TokenKind::Async
-                            | TokenKind::Identifier(_)
-                            | TokenKind::Pub
+                        TokenKind::Def | TokenKind::Async | TokenKind::Identifier(_)
                     );
                     if prefix_form {
                         let vis = self.parse_visibility();
@@ -1394,38 +1330,13 @@ impl Parser {
                         }
                     }
                 }
-                TokenKind::Derive => {
-                    self.advance();
-                    // derive Trait1, Trait2, ...
-                    derive_traits.push(self.expect_type_identifier());
-                    while self.eat(TokenKind::Comma) {
-                        self.skip_newlines();
-                        derive_traits.push(self.expect_type_identifier());
-                    }
-                }
                 // ── Method definitions (post Ruby-naming migration) ──
                 TokenKind::Def | TokenKind::Async => {
                     methods.push(self.parse_func_def(current_vis));
                 }
-                TokenKind::Pub => {
-                    // Explicit `pub` prefix wins over section state.
-                    let vis = self.parse_visibility();
-                    if matches!(self.current_kind(), TokenKind::Def | TokenKind::Async) {
-                        methods.push(self.parse_func_def(vis));
-                    } else {
-                        fields.push(self.parse_field_decl_with_vis(vis));
-                    }
-                }
-                // ── Inner impl / include directives ─────────────────
-                TokenKind::Impl => {
-                    inner_impls.push(self.parse_inner_impl(false));
-                }
+                // ── In-body `include Trait` directives ──────────────
                 TokenKind::Include => {
                     inner_impls.push(self.parse_include_directive(false));
-                }
-                TokenKind::Unsafe if matches!(self.peek_kind(), TokenKind::Impl) => {
-                    self.advance();
-                    inner_impls.push(self.parse_inner_impl(true));
                 }
                 TokenKind::Unsafe if matches!(self.peek_kind(), TokenKind::Include) => {
                     self.advance();
@@ -1556,12 +1467,9 @@ impl Parser {
                     }
                 }
                 TokenKind::Protected => {
-                    // Bare-marker section form vs. legacy prefix form.
+                    // Bare-marker section form vs. prefix form on a `def`.
                     let next = self.peek_kind();
-                    let prefix_form = matches!(
-                        next,
-                        TokenKind::Def | TokenKind::Async | TokenKind::Pub
-                    );
+                    let prefix_form = matches!(next, TokenKind::Def | TokenKind::Async);
                     if prefix_form {
                         let item = self.parse_trait_item();
                         items.push(item);
@@ -1687,7 +1595,6 @@ impl Parser {
             self.current_kind(),
             TokenKind::Def
                 | TokenKind::Async
-                | TokenKind::Pub
                 | TokenKind::Public
                 | TokenKind::Private
                 | TokenKind::Protected
@@ -1996,19 +1903,16 @@ impl Parser {
                     }
                 }
                 TokenKind::Protected => {
-                    // `protected` is also a section marker. Existing
-                    // `parse_visibility` consumes `Protected` as an explicit
-                    // prefix on a single decl; distinguish by lookahead.
+                    // `protected` is also a section marker. `parse_visibility`
+                    // consumes `Protected` as an explicit prefix on a single
+                    // decl; distinguish by lookahead.
                     let next = self.peek_kind();
                     let prefix_form = matches!(
                         next,
-                        TokenKind::Def
-                            | TokenKind::Async
-                            | TokenKind::Identifier(_)
-                            | TokenKind::Pub
+                        TokenKind::Def | TokenKind::Async | TokenKind::Identifier(_)
                     );
                     if prefix_form {
-                        // Treat as legacy explicit prefix on the next decl.
+                        // Treat as explicit prefix on the next decl.
                         let vis = self.parse_visibility();
                         if matches!(self.current_kind(), TokenKind::Def | TokenKind::Async) {
                             methods.push(self.parse_func_def(vis));
@@ -2025,19 +1929,12 @@ impl Parser {
                         }
                     }
                 }
-                TokenKind::Impl => {
-                    inner_impls.push(self.parse_inner_impl(false));
-                }
                 TokenKind::Include => {
                     // `include Mixin` directive — declares mixin participation
                     // without nesting methods. Required methods are provided
                     // by class methods at the same body level; default methods
                     // are synthesized in the resolver.
                     inner_impls.push(self.parse_include_directive(false));
-                }
-                TokenKind::Unsafe if matches!(self.peek_kind(), TokenKind::Impl) => {
-                    self.advance(); // consume `unsafe`
-                    inner_impls.push(self.parse_inner_impl(true));
                 }
                 TokenKind::Unsafe if matches!(self.peek_kind(), TokenKind::Include) => {
                     self.advance(); // consume `unsafe`
@@ -2048,24 +1945,6 @@ impl Parser {
                 }
                 TokenKind::Def => {
                     methods.push(self.parse_func_def(current_vis));
-                }
-                TokenKind::Derive => {
-                    self.advance();
-                    derive_traits.push(self.expect_type_identifier());
-                    while self.eat(TokenKind::Comma) {
-                        self.skip_newlines();
-                        derive_traits.push(self.expect_type_identifier());
-                    }
-                }
-                TokenKind::Pub => {
-                    // Explicit `pub` prefix wins over the section marker.
-                    let vis = self.parse_visibility();
-                    if matches!(self.current_kind(), TokenKind::Def | TokenKind::Async) {
-                        methods.push(self.parse_func_def(vis));
-                    } else {
-                        // Could be a field with visibility
-                        fields.push(self.parse_field_decl_with_vis(vis));
-                    }
                 }
                 TokenKind::Identifier(_) => {
                     // Field declaration — picks up current section visibility.
@@ -2170,35 +2049,6 @@ impl Parser {
             }
         }
         names
-    }
-
-    fn parse_inner_impl(&mut self, is_unsafe: bool) -> InnerImpl {
-        let start = self.current_span();
-        self.advance(); // consume impl
-        let negative_trait = self.eat(TokenKind::Bang);
-        let trait_name = self.parse_type_path();
-        self.skip_newlines();
-
-        let mut items = Vec::new();
-        while !self.at(TokenKind::End) && !self.at(TokenKind::Eof) {
-            let __progress = self.pos;
-            self.skip_newlines();
-            if self.at(TokenKind::End) {
-                break;
-            }
-            items.push(self.parse_impl_item());
-            self.skip_newlines();
-            self.ensure_loop_progress(__progress);
-        }
-        self.expect(TokenKind::End);
-        let span = self.span_from(&start);
-        InnerImpl {
-            is_unsafe,
-            negative_trait,
-            trait_name,
-            items,
-            span,
-        }
     }
 
     /// Parse an `include Mixin` directive inside a class body. Produces an
@@ -2604,15 +2454,7 @@ impl Parser {
             self.expect(TokenKind::LBracket);
             self.skip_newlines();
 
-            // `derive` is a reserved keyword but is also a valid attribute
-            // name (`@[derive(Copy, Clone)]`). Accept it here explicitly so
-            // the tokenizer's keyword status doesn't block the attribute.
-            let name = if self.at(TokenKind::Derive) {
-                self.advance();
-                "derive".to_string()
-            } else {
-                self.expect_any_identifier()
-            };
+            let name = self.expect_any_identifier();
             let mut args = Vec::new();
 
             if self.at(TokenKind::LParen) {
@@ -2750,56 +2592,6 @@ impl Parser {
             name,
             functions,
             link_attrs,
-            span,
-        }
-    }
-
-    /// Parse `extern "C" ... end`
-    fn parse_extern_block(&mut self) -> ExternBlock {
-        let start = self.current_span();
-        self.advance(); // consume `extern`
-        self.skip_newlines();
-
-        // Parse the ABI string
-        let abi = match self.current_kind().clone() {
-            TokenKind::StringLiteral(s) => {
-                self.advance();
-                s
-            }
-            _ => {
-                self.error("expected ABI string after `extern` (e.g., \"C\")");
-                "C".to_string()
-            }
-        };
-
-        self.skip_newlines();
-        let mut functions = Vec::new();
-
-        while !self.at(TokenKind::End) && !self.at(TokenKind::Eof) {
-            let __progress = self.pos;
-            self.skip_newlines();
-            if self.at(TokenKind::End) {
-                break;
-            }
-            if self.at(TokenKind::Def) {
-                functions.push(self.parse_ffi_function());
-            } else {
-                self.error(&format!(
-                    "expected `def` in extern block, found {:?}",
-                    self.current_kind()
-                ));
-                self.advance();
-            }
-            self.expect_terminator();
-            self.ensure_loop_progress(__progress);
-        }
-
-        self.expect(TokenKind::End);
-        let span = self.span_from(&start);
-
-        ExternBlock {
-            abi,
-            functions,
             span,
         }
     }

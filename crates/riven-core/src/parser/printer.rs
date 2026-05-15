@@ -253,9 +253,18 @@ impl PrettyPrinter {
                 trait_name,
                 ..
             } => {
-                let prefix = if *is_unsafe { "unsafe include " } else { "include " };
+                let prefix = if *is_unsafe {
+                    "unsafe include "
+                } else {
+                    "include "
+                };
                 let bang = if *negative_trait { "!" } else { "" };
-                self.line(&format!("{}{}{}", prefix, bang, format_type_path(trait_name)));
+                self.line(&format!(
+                    "{}{}{}",
+                    prefix,
+                    bang,
+                    format_type_path(trait_name)
+                ));
             }
         }
     }
@@ -859,6 +868,17 @@ pub fn format_expr_short(e: &Expr) -> String {
                 format!("[{}]", items.join(", "))
             } else {
                 format!("[...{} items]", elems.len())
+            }
+        }
+        ExprKind::MapLiteral(entries) => {
+            if entries.len() <= 2 {
+                let pairs: Vec<String> = entries
+                    .iter()
+                    .map(|(k, v)| format!("{} => {}", format_expr_short(k), format_expr_short(v)))
+                    .collect();
+                format!("{{{}}}", pairs.join(", "))
+            } else {
+                format!("{{...{} entries}}", entries.len())
             }
         }
         ExprKind::ArrayFill { value, count } => {

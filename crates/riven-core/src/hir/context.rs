@@ -93,7 +93,9 @@ impl TypeContext {
                 }
             }
             Ty::Tuple(elems) => Ty::Tuple(elems.iter().map(|e| self.resolve(e)).collect()),
-            Ty::FixedArray(elem, size) => Ty::FixedArray(Box::new(self.resolve(elem)), size.clone()),
+            Ty::FixedArray(elem, size) => {
+                Ty::FixedArray(Box::new(self.resolve(elem)), size.clone())
+            }
             Ty::Array(elem) => Ty::Array(Box::new(self.resolve(elem))),
             Ty::Map(k, v) => Ty::Map(Box::new(self.resolve(k)), Box::new(self.resolve(v))),
             Ty::Set(elem) => Ty::Set(Box::new(self.resolve(elem))),

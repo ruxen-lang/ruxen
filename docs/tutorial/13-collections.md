@@ -7,7 +7,7 @@ The most common collection — a growable, heap-allocated sequence.
 ```riven
 # Create
 var v = Array.new              # empty
-let v = array![1, 2, 3]        # with initial values
+let v = [1, 2, 3]        # with initial values
 
 # Add elements
 v.push(4)
@@ -24,7 +24,7 @@ v.is_empty                     # true if empty
 ### Iterating
 
 ```riven
-let nums = array![1, 2, 3, 4, 5]
+let nums = [1, 2, 3, 4, 5]
 
 # Iterate
 nums.each { |n| puts n }
@@ -46,7 +46,7 @@ let (evens, odds) = nums.partition { |n| n % 2 == 0 }
 
 ```riven
 var h: Map[String, Int] = Map.new
-let h = map!{ "a" => 1, "b" => 2, "c" => 3 }
+let h = { "a" => 1, "b" => 2, "c" => 3 }
 
 # Insert / update
 h.insert("d", 4)
@@ -100,7 +100,7 @@ greeting.char_count            # Unicode scalar count
 Collections follow ownership rules:
 
 ```riven
-let names = array!["Alice", "Bob", "Charlie"]
+let names = ["Alice", "Bob", "Charlie"]
 
 # Borrowing elements
 for name in &names             # iterate by reference

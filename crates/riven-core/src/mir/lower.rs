@@ -1375,18 +1375,17 @@ impl<'a> Lowerer<'a> {
                 // Handle .new() / .with_capacity() constructor calls:
                 // dispatch directly to the runtime symbol (no self arg).
                 let is_collection_ctor = method_name == "new"
-                    || (method_name == "with_capacity"
-                        && {
-                            let bt = if let Some(pos) = type_name.find('[') {
-                                &type_name[..pos]
-                            } else {
-                                type_name.as_str()
-                            };
-                            matches!(
-                                bt,
-                                "Vec" | "Array" | "Hash" | "HashMap" | "Map" | "Set" | "HashSet"
-                            )
-                        });
+                    || (method_name == "with_capacity" && {
+                        let bt = if let Some(pos) = type_name.find('[') {
+                            &type_name[..pos]
+                        } else {
+                            type_name.as_str()
+                        };
+                        matches!(
+                            bt,
+                            "Vec" | "Array" | "Hash" | "HashMap" | "Map" | "Set" | "HashSet"
+                        )
+                    });
                 if is_collection_ctor {
                     // For built-in types (Vec, Hash, Set), call the runtime
                     // constructor directly instead of Alloc + init.
@@ -1399,7 +1398,8 @@ impl<'a> Lowerer<'a> {
                     // the runtime constructor just like Vec/Hash.
                     if matches!(
                         base_type,
-                        "Vec" | "Array"
+                        "Vec"
+                            | "Array"
                             | "Hash"
                             | "HashMap"
                             | "Map"
@@ -2646,7 +2646,8 @@ impl<'a> Lowerer<'a> {
                     // the runtime constructor just like Vec/Hash.
                     if matches!(
                         base_type,
-                        "Vec" | "Array"
+                        "Vec"
+                            | "Array"
                             | "Hash"
                             | "HashMap"
                             | "Map"
@@ -3460,7 +3461,34 @@ impl<'a> Lowerer<'a> {
             }
 
             // ── Array literal ───────────────────────────────────────
+            // ruby-naming.spec.md §10a: bare `[a, b, c]` is the canonical
+            // `Array[T]` constructor (the `array!` macro is retired). When
+            // the inferred type is `Ty::Array(_)` we lower to
+            // `Array.new` + `Array.push` calls; for `FixedArray[T; N]`
+            // contexts we keep the slot-by-slot Alloc form so stack-
+            // allocated arrays still work.
             HirExprKind::ArrayLiteral(elems) => {
+                if matches!(expr.ty, Ty::Array(_)) {
+                    let arr_ty = expr.ty.clone();
+                    let dest = self.new_temp(arr_ty.clone());
+                    let new_name = format!("{}_new", type_name_from_ty(&arr_ty));
+                    self.emit(MirInst::Call {
+                        dest: Some(dest),
+                        callee: new_name,
+                        args: vec![],
+                    });
+                    let push_name = format!("{}_push", type_name_from_ty(&arr_ty));
+                    for elem in elems {
+                        let val_local = self.lower_expr(elem)?;
+                        let val = local_to_value(val_local);
+                        self.emit(MirInst::Call {
+                            dest: None,
+                            callee: push_name.clone(),
+                            args: vec![MirValue::Use(dest), val],
+                        });
+                    }
+                    return Ok(Some(dest));
+                }
                 let dest = self.new_temp(expr.ty.clone());
                 self.emit(MirInst::Alloc {
                     dest,
@@ -3479,94 +3507,41 @@ impl<'a> Lowerer<'a> {
                 Ok(Some(dest))
             }
 
-            // ── Macro calls (vec![], hash!{}, etc.) ──────────────────
-            HirExprKind::MacroCall { name, args } => {
-                // ruby-naming.spec.md §10a renames the collection macros:
-                //   `vec![…]` → `array![…]`
-                //   `hash!{…}` → `map!{…}`
-                //   `set!{…}` (unchanged)
-                // Both names lower identically; rename happens at the
-                // surface only.
-                match name.as_str() {
-                    "vec" | "array" => {
-                        // Lower `vec![a, b, c]` to:
-                        //   let v = Vec.new()
-                        //   v.push(a)
-                        //   v.push(b)
-                        //   v.push(c)
-                        let vec_ty = expr.ty.clone();
-                        let dest = self.new_temp(vec_ty.clone());
-                        // Determine the mangled Vec.new callee name from
-                        // the result type.
-                        let vec_new_name = format!("{}_new", type_name_from_ty(&vec_ty));
-                        self.emit(MirInst::Call {
-                            dest: Some(dest),
-                            callee: vec_new_name,
-                            args: vec![],
-                        });
+            // ── Map literal ──────────────────────────────────────────
+            // `{ k => v, ... }` lowers like `map!{…}` did pre-spec-§10a:
+            // construct an empty `Map[K, V]` and emit one `insert` call
+            // per entry.
+            HirExprKind::MapLiteral(entries) => {
+                let map_ty = expr.ty.clone();
+                let dest = self.new_temp(map_ty.clone());
+                let new_name = format!("{}_new", type_name_from_ty(&map_ty));
+                self.emit(MirInst::Call {
+                    dest: Some(dest),
+                    callee: new_name,
+                    args: vec![],
+                });
+                let insert_name = format!("{}_insert", type_name_from_ty(&map_ty));
+                for (k_expr, v_expr) in entries {
+                    let k_local = self.lower_expr(k_expr)?;
+                    let v_local = self.lower_expr(v_expr)?;
+                    let k_val = local_to_value(k_local);
+                    let v_val = local_to_value(v_local);
+                    self.emit(MirInst::Call {
+                        dest: None,
+                        callee: insert_name.clone(),
+                        args: vec![MirValue::Use(dest), k_val, v_val],
+                    });
+                }
+                Ok(Some(dest))
+            }
 
-                        let vec_push_name = format!("{}_push", type_name_from_ty(&vec_ty));
-                        for arg_expr in args {
-                            let arg_local = self.lower_expr(arg_expr)?;
-                            let arg_val = local_to_value(arg_local);
-                            self.emit(MirInst::Call {
-                                dest: None,
-                                callee: vec_push_name.clone(),
-                                args: vec![MirValue::Use(dest), arg_val],
-                            });
-                        }
-                        Ok(Some(dest))
-                    }
-                    // Lower `hash!{ k1 => v1, k2 => v2 }` (args flattened to
-                    // [k1, v1, k2, v2]) into a Hash.new + repeated inserts.
-                    // `map!{…}` (post-rename surface form) shares the same
-                    // lowering — see the comment block above.
-                    "hash" | "map" => {
-                        let hash_ty = expr.ty.clone();
-                        let dest = self.new_temp(hash_ty.clone());
-                        let hash_new_name = format!("{}_new", type_name_from_ty(&hash_ty));
-                        self.emit(MirInst::Call {
-                            dest: Some(dest),
-                            callee: hash_new_name,
-                            args: vec![],
-                        });
-                        let hash_insert_name = format!("{}_insert", type_name_from_ty(&hash_ty));
-                        let mut iter = args.iter();
-                        while let (Some(k_expr), Some(v_expr)) = (iter.next(), iter.next()) {
-                            let k_local = self.lower_expr(k_expr)?;
-                            let v_local = self.lower_expr(v_expr)?;
-                            let k_val = local_to_value(k_local);
-                            let v_val = local_to_value(v_local);
-                            self.emit(MirInst::Call {
-                                dest: None,
-                                callee: hash_insert_name.clone(),
-                                args: vec![MirValue::Use(dest), k_val, v_val],
-                            });
-                        }
-                        Ok(Some(dest))
-                    }
-                    // Lower `set!{ a, b, c }` into a Set.new + repeated inserts.
-                    "set" => {
-                        let set_ty = expr.ty.clone();
-                        let dest = self.new_temp(set_ty.clone());
-                        let set_new_name = format!("{}_new", type_name_from_ty(&set_ty));
-                        self.emit(MirInst::Call {
-                            dest: Some(dest),
-                            callee: set_new_name,
-                            args: vec![],
-                        });
-                        let set_insert_name = format!("{}_insert", type_name_from_ty(&set_ty));
-                        for arg_expr in args {
-                            let arg_local = self.lower_expr(arg_expr)?;
-                            let arg_val = local_to_value(arg_local);
-                            self.emit(MirInst::Call {
-                                dest: None,
-                                callee: set_insert_name.clone(),
-                                args: vec![MirValue::Use(dest), arg_val],
-                            });
-                        }
-                        Ok(Some(dest))
-                    }
+            // ── Macro calls (panic!, assert!, …) ─────────────────────
+            HirExprKind::MacroCall { name, args } => {
+                // ruby-naming.spec.md §10a retires the collection macros:
+                // `array!` / `vec!` → `[…]` Array literal, `map!` / `hash!`
+                // → `{ k => v, … }` Map literal, `set!` → `Set.from_iter([…])`.
+                // The remaining macros (panic!, assert!, …) live here.
+                match name.as_str() {
                     // `panic!("msg")` — evaluate the message (which may be
                     // an interpolated string), call `riven_panic(msg)`, and
                     // set the current block's terminator to `Unreachable`
@@ -3595,6 +3570,13 @@ impl<'a> Lowerer<'a> {
                         self.current_block = dead;
                         Ok(None)
                     }
+                    // ruby-naming.spec.md §10a: the collection macros
+                    // are retired. Spell `array!` / `vec!` as `[…]`,
+                    // `map!` / `hash!` as `{ k => v, … }`, and `set!`
+                    // as `Set.from_iter([…])`.
+                    "array" | "vec" | "map" | "hash" | "set" => Err(format!(
+                        "macro `{name}!` is retired — use the literal form per ruby-naming.spec §10a"
+                    )),
                     _ => Ok(None),
                 }
             }
@@ -7959,11 +7941,7 @@ impl<'a> Lowerer<'a> {
                 Ty::Alias { target, .. } => cur = target,
                 Ty::Newtype { inner, .. } => cur = inner,
                 Ty::Struct { name, .. } => {
-                    if crate::resolve::symbols::ty_has_derive_trait(
-                        cur,
-                        self.symbols,
-                        trait_name,
-                    ) {
+                    if crate::resolve::symbols::ty_has_derive_trait(cur, self.symbols, trait_name) {
                         return Some(name.clone());
                     }
                     return None;
@@ -8645,27 +8623,23 @@ fn struct_name_with_partial_eq(ty: &Ty, symbols: &SymbolTable) -> Option<String>
 /// `PartialOrd` *without* `Ord`, in which case the BinaryOp lowering
 /// must dispatch to `<Type>_partial_cmp` rather than `<Type>_cmp`.
 fn struct_name_with_ord(ty: &Ty, symbols: &SymbolTable) -> Option<(String, bool)> {
-    use crate::resolve::symbols::DefKind;
+    // ruby-naming.spec.md §3.6: Ord / PartialOrd are implicitly
+    // included when every field structurally supports them. Route
+    // through `ty_has_derive_trait` so both explicit and implicit
+    // forms surface here. Prefer `Ord` over `PartialOrd` when both
+    // apply (Ord is total — `<Type>_cmp`; PartialOrd is
+    // `<Type>_partial_cmp` which returns `Option[Ordering]`).
     let mut cur = ty;
     loop {
         match cur {
             Ty::Ref(inner) | Ty::RefMut(inner) => cur = inner,
             Ty::RefLifetime(_, inner) | Ty::RefMutLifetime(_, inner) => cur = inner,
             Ty::Struct { name, .. } => {
-                for def in symbols.iter() {
-                    if def.name == *name {
-                        if let DefKind::Struct { ref info } = def.kind {
-                            let has_ord = info.derive_traits.iter().any(|t| t == "Ord");
-                            let has_partial = info.derive_traits.iter().any(|t| t == "PartialOrd");
-                            if has_ord {
-                                return Some((name.clone(), false));
-                            }
-                            if has_partial {
-                                return Some((name.clone(), true));
-                            }
-                        }
-                        return None;
-                    }
+                if crate::resolve::symbols::ty_has_derive_trait(cur, symbols, "Ord") {
+                    return Some((name.clone(), false));
+                }
+                if crate::resolve::symbols::ty_has_derive_trait(cur, symbols, "PartialOrd") {
+                    return Some((name.clone(), true));
                 }
                 return None;
             }

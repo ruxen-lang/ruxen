@@ -1,5 +1,5 @@
 def main
-  let v = array![1, 2, 3]
+  let v = [1, 2, 3]
   let out = v.iter.map { |n| "#{n}" }.collect[String]
   puts out
 end

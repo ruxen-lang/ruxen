@@ -94,12 +94,9 @@ fn classify_token_kind(kind: &TokenKind) -> (Option<u32>, u32) {
         | TokenKind::Class
         | TokenKind::Struct
         | TokenKind::Enum
-        | TokenKind::Trait
-        | TokenKind::Impl
         | TokenKind::Newtype
         | TokenKind::Type
         | TokenKind::Def
-        | TokenKind::Pub
         | TokenKind::Protected
         | TokenKind::Consume
         | TokenKind::SelfValue
@@ -123,16 +120,12 @@ fn classify_token_kind(kind: &TokenKind) -> (Option<u32>, u32) {
         | TokenKind::Continue
         | TokenKind::Where
         | TokenKind::As
-        | TokenKind::Dyn
-        | TokenKind::Derive
         | TokenKind::Module
         | TokenKind::Use
         | TokenKind::Unsafe
         | TokenKind::Lib
-        | TokenKind::Null
         | TokenKind::True
         | TokenKind::False
-        | TokenKind::NoneKw
         | TokenKind::SomeKw
         | TokenKind::OkKw
         | TokenKind::ErrKw => (Some(0), 0), // KEYWORD
@@ -355,6 +348,12 @@ impl<'a> HirTokenWalker<'a> {
             HirExprKind::Tuple(elems) | HirExprKind::ArrayLiteral(elems) => {
                 for e in elems {
                     self.visit_expr(e);
+                }
+            }
+            HirExprKind::MapLiteral(entries) => {
+                for (k, v) in entries {
+                    self.visit_expr(k);
+                    self.visit_expr(v);
                 }
             }
             HirExprKind::Index { object, index } => {

@@ -510,7 +510,9 @@ impl Ty {
             Ty::Ref(inner) | Ty::RefLifetime(_, inner) => inner.is_sync(),
             Ty::RefMut(inner) | Ty::RefMutLifetime(_, inner) => inner.is_send(),
             Ty::Tuple(elems) => elems.iter().all(|elem| elem.is_send()),
-            Ty::FixedArray(elem, _) | Ty::Array(elem) | Ty::Set(elem) | Ty::Option(elem) => elem.is_send(),
+            Ty::FixedArray(elem, _) | Ty::Array(elem) | Ty::Set(elem) | Ty::Option(elem) => {
+                elem.is_send()
+            }
             Ty::Map(key, value) | Ty::Result(key, value) => key.is_send() && value.is_send(),
             Ty::RawPtr(_) | Ty::RawPtrMut(_) | Ty::RawPtrVoid | Ty::RawPtrMutVoid => false,
             Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds) => has_trait_bound(bounds, "Send"),
@@ -563,7 +565,9 @@ impl Ty {
             | Ty::RefLifetime(_, inner)
             | Ty::RefMutLifetime(_, inner) => inner.is_sync(),
             Ty::Tuple(elems) => elems.iter().all(|elem| elem.is_sync()),
-            Ty::FixedArray(elem, _) | Ty::Array(elem) | Ty::Set(elem) | Ty::Option(elem) => elem.is_sync(),
+            Ty::FixedArray(elem, _) | Ty::Array(elem) | Ty::Set(elem) | Ty::Option(elem) => {
+                elem.is_sync()
+            }
             Ty::Map(key, value) | Ty::Result(key, value) => key.is_sync() && value.is_sync(),
             Ty::RawPtr(_) | Ty::RawPtrMut(_) | Ty::RawPtrVoid | Ty::RawPtrMutVoid => false,
             Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds) => has_trait_bound(bounds, "Sync"),

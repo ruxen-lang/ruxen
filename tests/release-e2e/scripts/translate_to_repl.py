@@ -90,8 +90,16 @@ def translate(src: str) -> str:
                     # return `let`). Scanning the whole line catches these.
                     delta = count_openers(b)
                     if delta != 0:
-                        # Inline `{ ... }` one-liners don't open a new scope.
-                        if "{" in bs and bs.endswith("}"):
+                        # Inline `{ ... }` one-liners suppress only when the
+                        # line has no opener keyword. `match v.iter.find { |n|
+                        # n > 3 }` has a real `match` opener and a closure on
+                        # the same line — the closure shouldn't cancel the
+                        # `match`'s +1.
+                        line_no_strings = re.sub(r'"(?:\\.|[^"\\])*"', '""', bs)
+                        has_opener_kw = any(
+                            w in OPENERS for w in KEYWORD_SCAN.findall(line_no_strings)
+                        )
+                        if "{" in bs and bs.endswith("}") and not has_opener_kw:
                             pass
                         else:
                             depth += delta

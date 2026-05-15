@@ -192,6 +192,36 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
             }
         }
 
+        ExprKind::MapLiteral(entries) => {
+            if entries.is_empty() {
+                text("{}")
+            } else {
+                let items: Vec<Doc> = entries
+                    .iter()
+                    .map(|(k, v)| {
+                        concat(vec![
+                            format_expr(k, comments),
+                            text(" => "),
+                            format_expr(v, comments),
+                        ])
+                    })
+                    .collect();
+                group(concat(vec![
+                    text("{"),
+                    nest(
+                        INDENT_WIDTH,
+                        concat(vec![
+                            softline(),
+                            join(concat(vec![text(","), line()]), items),
+                            if_break(text(","), nil()),
+                        ]),
+                    ),
+                    softline(),
+                    text("}"),
+                ]))
+            }
+        }
+
         ExprKind::ArrayFill { value, count } => concat(vec![
             text("["),
             format_expr(value, comments),
@@ -533,8 +563,6 @@ fn token_to_source(token: &crate::lexer::token::Token) -> String {
         TokenKind::End => "end".to_string(),
         TokenKind::Def => "def".to_string(),
         TokenKind::Class => "class".to_string(),
-        TokenKind::Pub => "pub".to_string(),
-        TokenKind::NoneKw => "None".to_string(),
         TokenKind::SomeKw => "Some".to_string(),
         TokenKind::OkKw => "Ok".to_string(),
         TokenKind::ErrKw => "Err".to_string(),

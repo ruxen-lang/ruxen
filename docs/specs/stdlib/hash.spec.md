@@ -162,7 +162,7 @@ use case so a regression test would be a costly noise generator.
   question has a v2 ruling).
 - `&[u8]` / `&[T]` slice hashing — needs slice types as a
   first-class surface, also v2.
-- `map!{...}` macro form — tutorial 13 mentions it; formal macros
+- `{...}` macro form — tutorial 13 mentions it; formal macros
   land later.
 
 ---

@@ -34,7 +34,7 @@ puts add.(3, 4)                    # 7
 Closure parameter types are usually inferred from context:
 
 ```riven
-let nums = array![1, 2, 3]
+let nums = [1, 2, 3]
 
 # `n` is inferred as &Int from Array[Int]
 nums.each { |n| puts n }
@@ -48,7 +48,7 @@ let parse = { |s: &str| s.parse_int }
 Closures power Riven's iterator chain:
 
 ```riven
-let nums = array![1, 2, 3, 4, 5, 6]
+let nums = [1, 2, 3, 4, 5, 6]
 
 let result = nums
   .filter { |n| n % 2 == 0 }

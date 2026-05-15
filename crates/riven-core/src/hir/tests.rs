@@ -3,7 +3,7 @@
 #[cfg(test)]
 mod tests {
     use crate::hir::context::TypeContext;
-    use crate::hir::types::{ConstExpr, MoveSemantics, MixinRef, Ty};
+    use crate::hir::types::{ConstExpr, MixinRef, MoveSemantics, Ty};
     use crate::lexer::token::Span;
     use crate::parser::ast::Visibility;
     use crate::resolve::symbols::{DefKind, EnumInfo, StructInfo, SymbolTable, VariantDefKind};

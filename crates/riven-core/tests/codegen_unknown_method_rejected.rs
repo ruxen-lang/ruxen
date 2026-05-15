@@ -60,8 +60,8 @@ fn runtime_name_rejects_unknown_inferred_method() {
 fn compile_fails_when_calling_unimplemented_iter_flat_map() {
     let source = r##"
 def main
-  let a = vec![1, 2, 3]
-  let _z = a.iter.flat_map { |x| vec![x, x] }
+  let a = [1, 2, 3]
+  let _z = a.iter.flat_map { |x| [x, x] }
 end
 "##;
     let err = try_compile(source)

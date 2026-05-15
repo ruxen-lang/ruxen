@@ -45,10 +45,7 @@ impl Parser {
             TokenKind::LBracket => self.parse_array_type(),
 
             // `some Mixin` — opaque type-position bound.
-            // Legacy `Impl` TokenKind kept in the match (unreachable from
-            // the lexer; remains here to keep code compiling while the
-            // protected parsers still reference it).
-            TokenKind::SomeBound | TokenKind::Impl => self.parse_impl_trait_type(),
+            TokenKind::SomeBound => self.parse_impl_trait_type(),
 
             // `any Mixin` — dynamic (trait-object) type-position bound.
             TokenKind::AnyBound => self.parse_dyn_trait_type(),

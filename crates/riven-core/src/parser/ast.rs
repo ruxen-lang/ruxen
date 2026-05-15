@@ -389,6 +389,8 @@ pub enum ExprKind {
         count: Box<Expr>,
     },
     TupleLiteral(Vec<Expr>),
+    /// `{ k => v, k => v, ... }` — Map literal per ruby-naming.spec.md §10a.
+    MapLiteral(Vec<(Expr, Expr)>),
 
     // Jump expressions
     Return(Option<Box<Expr>>),
