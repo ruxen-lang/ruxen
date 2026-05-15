@@ -1668,6 +1668,7 @@ dependencies = [
  "cranelift-jit",
  "cranelift-module",
  "cranelift-native",
+ "libc",
  "riven-core",
  "rustyline",
  "target-lexicon",

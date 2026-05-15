@@ -2372,17 +2372,20 @@ impl Resolver {
             };
         }
 
-        // ruby-naming.spec.md §3.4a: structs may carry inline methods.
+        // ruby-naming.spec.md §3.4a: structs may carry inline methods
+        // and `include Mixin` directives.
         let old_self_ty = self.current_self_ty.take();
-        self.current_self_ty = Some(Ty::Struct {
+        let self_ty = Ty::Struct {
             name: s.name.clone(),
             generic_args: vec![],
-        });
+        };
+        self.current_self_ty = Some(self_ty.clone());
         let methods = s
             .methods
             .iter()
             .map(|m| self.resolve_func_def(m, Some(def_id)))
             .collect::<Vec<_>>();
+        let impl_blocks = self.lower_inner_impls(&s.inner_impls, &self_ty, Some(def_id));
         self.current_self_ty = old_self_ty;
 
         HirStructDef {
@@ -2391,6 +2394,7 @@ impl Resolver {
             generic_params,
             fields,
             methods,
+            impl_blocks,
             derive_traits: s.derive_traits.clone(),
             repr: s.repr.clone(),
             doc_comments: s.doc_comments.clone(),
@@ -2399,6 +2403,87 @@ impl Resolver {
     }
 
     // ─── Enum Resolution ────────────────────────────────────────────
+
+    /// Lower a list of AST `InnerImpl` directives (collected from a
+    /// struct or enum body under ruby-naming.spec.md §3.4a) into HIR
+    /// `HirImplBlock` records. The same routine the class path uses,
+    /// minus the class-specific `opt_out_*` tracking — struct/enum
+    /// auto-trait flags live on their own info structs.
+    fn lower_inner_impls(
+        &mut self,
+        inner_impls: &[ast::InnerImpl],
+        self_ty: &Ty,
+        parent_def: Option<DefId>,
+    ) -> Vec<HirImplBlock> {
+        let mut impl_blocks = Vec::new();
+        for inner in inner_impls {
+            let trait_ref = MixinRef {
+                name: inner.trait_name.segments.join("."),
+                generic_args: inner
+                    .trait_name
+                    .generic_args
+                    .as_ref()
+                    .map(|args| args.iter().map(|a| self.resolve_type_expr(a)).collect())
+                    .unwrap_or_default(),
+            };
+
+            let old_assoc = std::mem::take(&mut self.current_impl_assoc_types);
+            for ii in &inner.items {
+                if let ast::ImplItem::AssocType {
+                    name, type_expr, ..
+                } = ii
+                {
+                    let ty = self.resolve_type_expr(type_expr);
+                    self.current_impl_assoc_types.insert(name.clone(), ty);
+                }
+            }
+
+            let mut items = Vec::new();
+            for ii in &inner.items {
+                match ii {
+                    ast::ImplItem::Method(f) => {
+                        items.push(HirImplItem::Method(self.resolve_func_def(f, parent_def)));
+                    }
+                    ast::ImplItem::AssocType {
+                        name,
+                        type_expr,
+                        span,
+                    } => {
+                        items.push(HirImplItem::AssocType {
+                            name: name.clone(),
+                            ty: self.resolve_type_expr(type_expr),
+                            span: span.clone(),
+                        });
+                    }
+                    ast::ImplItem::Include {
+                        is_unsafe,
+                        negative_trait,
+                        trait_name,
+                        span,
+                    } => {
+                        items.push(HirImplItem::Include {
+                            is_unsafe: *is_unsafe,
+                            negative_trait: *negative_trait,
+                            trait_name: trait_name.segments.join("."),
+                            span: span.clone(),
+                        });
+                    }
+                }
+            }
+            self.current_impl_assoc_types = old_assoc;
+
+            impl_blocks.push(HirImplBlock {
+                generic_params: vec![],
+                is_unsafe: inner.is_unsafe,
+                negative_trait: inner.negative_trait,
+                trait_ref: Some(trait_ref),
+                target_ty: self_ty.clone(),
+                items,
+                span: inner.span.clone(),
+            });
+        }
+        impl_blocks
+    }
 
     fn resolve_enum(&mut self, e: &ast::EnumDef) -> HirEnumDef {
         let def_id = self
@@ -2498,19 +2583,20 @@ impl Resolver {
             };
         }
 
-        // ruby-naming.spec.md §3.4a: enums may carry inline methods.
-        // Resolve them in the enum's scope so `self` and any generic
-        // parameters bound on the enum are visible.
+        // ruby-naming.spec.md §3.4a: enums may carry inline methods
+        // and `include Mixin` directives.
         let old_self_ty = self.current_self_ty.take();
-        self.current_self_ty = Some(Ty::Enum {
+        let self_ty = Ty::Enum {
             name: e.name.clone(),
             generic_args: vec![],
-        });
+        };
+        self.current_self_ty = Some(self_ty.clone());
         let methods = e
             .methods
             .iter()
             .map(|m| self.resolve_func_def(m, Some(def_id)))
             .collect::<Vec<_>>();
+        let impl_blocks = self.lower_inner_impls(&e.inner_impls, &self_ty, Some(def_id));
         self.current_self_ty = old_self_ty;
 
         self.scopes.pop();
@@ -2521,6 +2607,7 @@ impl Resolver {
             generic_params,
             variants,
             methods,
+            impl_blocks,
             derive_traits: e.derive_traits.clone(),
             doc_comments: e.doc_comments.clone(),
             span: e.span.clone(),

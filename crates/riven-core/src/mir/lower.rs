@@ -221,12 +221,42 @@ impl<'a> Lowerer<'a> {
                             .or_default()
                             .push(strukt.name.clone());
                     }
+                    // ruby-naming.spec.md §3.4a: in-body `include Mixin`
+                    // directives on structs register the same impl edges
+                    // an `impl Mixin for Strukt` block would.
+                    for inner in &strukt.impl_blocks {
+                        if let Some(ref trait_ref) = inner.trait_ref {
+                            map.entry(trait_ref.name.clone())
+                                .or_default()
+                                .push(strukt.name.clone());
+                            if trait_ref.name == "Into" {
+                                if let Some(arg) = trait_ref.generic_args.first() {
+                                    let dst = type_name_from_ty(arg);
+                                    into_map.insert((strukt.name.clone(), dst));
+                                }
+                            }
+                        }
+                    }
                 }
                 HirItem::Enum(enm) => {
                     for derive_trait in &enm.derive_traits {
                         map.entry(derive_trait.clone())
                             .or_default()
                             .push(enm.name.clone());
+                    }
+                    // Same rule as Struct above.
+                    for inner in &enm.impl_blocks {
+                        if let Some(ref trait_ref) = inner.trait_ref {
+                            map.entry(trait_ref.name.clone())
+                                .or_default()
+                                .push(enm.name.clone());
+                            if trait_ref.name == "Into" {
+                                if let Some(arg) = trait_ref.generic_args.first() {
+                                    let dst = type_name_from_ty(arg);
+                                    into_map.insert((enm.name.clone(), dst));
+                                }
+                            }
+                        }
                     }
                 }
                 HirItem::Module(m) => {

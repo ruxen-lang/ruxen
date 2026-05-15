@@ -91,6 +91,29 @@ extern "C" {
     fn riven_noop_passthrough(val: i64) -> i64;
     fn riven_noop_return_null() -> i64;
     fn riven_noop();
+
+    // ruby-naming.spec.md §3.6 / #06.D interp routing: bare `"#{x}"`
+    // for a primitive (Int/Float/Bool/Char) lowers through
+    // `{Type}_fmt(value, formatter)` + `Formatter_buffer(formatter)`
+    // → `riven_fmt_formatter_*` C symbols. Without these registrations
+    // even `1 + 2` panics in the REPL with "can't resolve symbol
+    // riven_fmt_formatter_write_str".
+    fn riven_fmt_formatter_new() -> *mut u8;
+    fn riven_fmt_formatter_new_with_spec(
+        fill: i64,
+        align: i64,
+        sign: i64,
+        alt: i64,
+        zero: i64,
+        width: i64,
+        precision: i64,
+    ) -> *mut u8;
+    fn riven_fmt_formatter_write_str(f: *mut u8, s: *const i8) -> i64;
+    fn riven_fmt_formatter_write_char(f: *mut u8, c: i64) -> i64;
+    fn riven_fmt_formatter_buffer(f: *mut u8) -> *const i8;
+    fn riven_fmt_formatter_len(f: *const u8) -> i64;
+    fn riven_fmt_formatter_free(f: *mut u8);
+    fn riven_fmt_formatter_precision(f: *const u8) -> i64;
 }
 
 /// Cranelift JIT code generation engine for the REPL.
@@ -127,8 +150,37 @@ impl JITCodeGen {
 
         let mut jit_builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
 
-        // Register all C runtime functions as JIT symbols
+        // Register all C runtime functions as JIT symbols. The explicit
+        // registrations below cover the print-family capture shims and
+        // a hand-picked subset for documentation; the dlsym fallback
+        // below picks up everything else statically linked into this
+        // binary (the runtime.c family + libc).
         register_runtime_symbols(&mut jit_builder);
+
+        // Fallback symbol lookup via libc::dlsym. The riven-repl binary
+        // statically links riven-core's C runtime (see build.rs), so
+        // every `riven_*` symbol is present in the process address
+        // space and dlsym can resolve it without an explicit
+        // builder.symbol() entry. This keeps the REPL in sync with new
+        // runtime symbols without per-symbol maintenance.
+        jit_builder.symbol_lookup_fn(Box::new(|name: &str| {
+            // SAFETY: dlsym on a NUL-terminated string returned by
+            // CString::new. RTLD_DEFAULT searches the main program and
+            // dependent dynlibs in the standard order.
+            let c_name = match std::ffi::CString::new(name) {
+                Ok(c) => c,
+                Err(_) => return None,
+            };
+            unsafe {
+                let handle = libc::RTLD_DEFAULT;
+                let sym = libc::dlsym(handle, c_name.as_ptr());
+                if sym.is_null() {
+                    None
+                } else {
+                    Some(sym as *const u8)
+                }
+            }
+        }));
 
         let module = JITModule::new(jit_builder);
         let ctx = module.make_context();
@@ -467,6 +519,16 @@ fn register_runtime_symbols(builder: &mut JITBuilder) {
     reg!(builder, riven_noop_passthrough);
     reg!(builder, riven_noop_return_null);
     reg!(builder, riven_noop);
+    // Formatter family — ruby-naming.spec.md §3.6 / #06.D routes
+    // primitive interpolations through these symbols.
+    reg!(builder, riven_fmt_formatter_new);
+    reg!(builder, riven_fmt_formatter_new_with_spec);
+    reg!(builder, riven_fmt_formatter_write_str);
+    reg!(builder, riven_fmt_formatter_write_char);
+    reg!(builder, riven_fmt_formatter_buffer);
+    reg!(builder, riven_fmt_formatter_len);
+    reg!(builder, riven_fmt_formatter_free);
+    reg!(builder, riven_fmt_formatter_precision);
 }
 
 // ── JIT Translation Environment ────────────────────────────────────

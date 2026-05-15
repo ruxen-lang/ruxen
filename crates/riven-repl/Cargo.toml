@@ -19,6 +19,7 @@ cranelift-native = "0.130"
 cranelift-frontend = "0.130"
 rustyline = "15"
 target-lexicon = "0.13"
+libc = "0.2"
 
 [build-dependencies]
 cc = "1"
