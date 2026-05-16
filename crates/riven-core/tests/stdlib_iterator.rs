@@ -249,10 +249,6 @@ fn string_from_iter_compiles() {
 }
 
 #[test]
-#[ignore = "pre-existing Cranelift verifier error: Map.from_iter(zip(...)) emits a call \
-            with arity 2 against a 1-arg runtime symbol; unrelated to the syntax \
-            migration. Re-enable once the MIR lowering for tuple-iterator \
-            destructuring at runtime-fn call sites is fixed."]
 fn hashmap_from_iter_compiles() {
     let source = rvn("hashmap_from_iter_compiles");
     assert_compiles(&source);

@@ -59,28 +59,36 @@ fn collected_derives(
             continue;
         }
         if let Some(ref tref) = block.trait_ref {
-            // Only structural mixins go through the auto-synthesis
-            // validator. A user-defined mixin (`include Greetable`)
-            // gets satisfied by the user's own method definitions and
-            // must not be flagged "unknown mixin" by E0608. We filter
-            // here so the downstream `validate_common_traits` pass
-            // sees only structural names from SUPPORTED_DERIVES.
-            if SUPPORTED_DERIVES.contains(&tref.name.as_str()) {
-                out.push(tref.name.clone());
-            }
-            let _ = block.items.is_empty(); // touch fields to avoid warning
-            let _ = block.generic_params.len();
-            let _ = &block.target_ty;
-            let _ = block.is_unsafe;
-            let _ = &block.span;
+            out.push(tref.name.clone());
         }
     }
     out
 }
 
+/// True if `name` resolves to a user-visible type/trait in the symbol
+/// table — i.e. an `include <Name>` directive that names a real,
+/// user-defined (or stdlib) mixin/trait/class/struct/enum. Used by
+/// E0608 to distinguish a typo (`include WeirdName`) from a legitimate
+/// non-structural `include` (`include Display`, `include Greetable`).
+fn name_resolves_to_type(symbols: &SymbolTable, name: &str) -> bool {
+    symbols.iter().any(|def| {
+        def.name == name
+            && matches!(
+                def.kind,
+                crate::resolve::symbols::DefKind::Trait { .. }
+                    | crate::resolve::symbols::DefKind::Class { .. }
+                    | crate::resolve::symbols::DefKind::Struct { .. }
+                    | crate::resolve::symbols::DefKind::Enum { .. }
+                    | crate::resolve::symbols::DefKind::Module { .. }
+                    | crate::resolve::symbols::DefKind::TypeAlias { .. }
+                    | crate::resolve::symbols::DefKind::Newtype { .. }
+            )
+    })
+}
+
 fn validate_class(class: &HirClassDef, symbols: &SymbolTable, diags: &mut Vec<Diagnostic>) {
     let derives = collected_derives(&class.derive_traits, &class.impl_blocks);
-    validate_common_traits("class", &class.name, &derives, &class.span, diags);
+    validate_common_traits("class", &class.name, &derives, &class.span, symbols, diags);
 
     if has_derive(&derives, "Copy") {
         diags.push(Diagnostic::error_with_code(
@@ -120,7 +128,7 @@ fn validate_class(class: &HirClassDef, symbols: &SymbolTable, diags: &mut Vec<Di
 
 fn validate_struct(strukt: &HirStructDef, symbols: &SymbolTable, diags: &mut Vec<Diagnostic>) {
     let derives = collected_derives(&strukt.derive_traits, &strukt.impl_blocks);
-    validate_common_traits("struct", &strukt.name, &derives, &strukt.span, diags);
+    validate_common_traits("struct", &strukt.name, &derives, &strukt.span, symbols, diags);
     validate_copy_requirements(
         "struct",
         &strukt.name,
@@ -160,7 +168,7 @@ fn validate_struct(strukt: &HirStructDef, symbols: &SymbolTable, diags: &mut Vec
 
 fn validate_enum(enm: &HirEnumDef, symbols: &SymbolTable, diags: &mut Vec<Diagnostic>) {
     let derives = collected_derives(&enm.derive_traits, &enm.impl_blocks);
-    validate_common_traits("enum", &enm.name, &derives, &enm.span, diags);
+    validate_common_traits("enum", &enm.name, &derives, &enm.span, symbols, diags);
 
     if has_derive(&derives, "Default") {
         if enm.variants.is_empty() {
@@ -251,10 +259,13 @@ fn validate_common_traits(
     name: &str,
     derive_traits: &[String],
     span: &Span,
+    symbols: &SymbolTable,
     diags: &mut Vec<Diagnostic>,
 ) {
     for trait_name in derive_traits {
-        if !SUPPORTED_DERIVES.contains(&trait_name.as_str()) {
+        if !SUPPORTED_DERIVES.contains(&trait_name.as_str())
+            && !name_resolves_to_type(symbols, trait_name)
+        {
             diags.push(Diagnostic::error_with_code(
                 format!(
                     "unknown mixin `{}` requested for auto-synthesis on {} `{}`",
