@@ -71,7 +71,7 @@ mod tests {
 
     #[test]
     fn let_mutable_with_type() {
-        let stmt = parse_stmt("let mut y: Int = 0");
+        let stmt = parse_stmt("var y: Int = 0");
         match stmt {
             Statement::Let(binding) => {
                 assert!(binding.mutable);
@@ -152,7 +152,7 @@ mod tests {
 
     #[test]
     fn func_mutable_self_mode() {
-        let program = parse("def mut set_name(name: String)\nend");
+        let program = parse("def var set_name(name: String)\nend");
         let func = match &program.items[0] {
             TopLevelItem::Function(f) => f,
             other => panic!("expected function, got {:?}", other),

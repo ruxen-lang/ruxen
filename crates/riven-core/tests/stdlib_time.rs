@@ -11,6 +11,13 @@ use riven_core::parser::Parser;
 use riven_core::typeck;
 use std::process::Command;
 
+fn rvn(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/riven")
+        .join(format!("{name}.rvn"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+}
+
 fn workspace_root() -> std::path::PathBuf {
     let crate_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     crate_dir.parent().unwrap().parent().unwrap().to_path_buf()
@@ -53,20 +60,8 @@ fn compile_and_run(source: &str, basename: &str) -> (String, String, bool) {
 /// clock never moves backwards).
 #[test]
 fn time_now_ns_is_monotonic() {
-    let source = r#"
-use std.time.now_ns
-
-def main
-  let a = now_ns()
-  let b = now_ns()
-  if a > 0 && b >= a
-    puts "ok"
-  else
-    puts "fail a=#{a} b=#{b}"
-  end
-end
-"#;
-    let (stdout, stderr, ok) = compile_and_run(source, "stdlib_time_monotonic");
+    let source = rvn("time_now_ns_is_monotonic");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_time_monotonic");
     assert!(
         ok,
         "binary exited non-zero. stdout=[{}] stderr=[{}]",
@@ -84,22 +79,8 @@ end
 /// bound that any modern system clock will exceed).
 #[test]
 fn time_unix_ns_is_post_2020() {
-    let source = r#"
-use std.time.unix_ns
-
-def main
-  let now = unix_ns()
-  # 2020-01-01T00:00:00Z = 1577836800 seconds
-  # 1577836800 * 1_000_000_000 = 1577836800000000000 nanoseconds
-  let threshold: Int = 1577836800000000000
-  if now > threshold
-    puts "ok"
-  else
-    puts "fail now=#{now}"
-  end
-end
-"#;
-    let (stdout, stderr, ok) = compile_and_run(source, "stdlib_time_unix");
+    let source = rvn("time_unix_ns_is_post_2020");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_time_unix");
     assert!(
         ok,
         "binary exited non-zero. stdout=[{}] stderr=[{}]",

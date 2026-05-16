@@ -234,7 +234,7 @@ control. Con: reinvent-the-wheel for dependency tracking; manual
 invalidation is error-prone.
 
 **Option C: Adopt `salsa-macros` minimal subset or similar lightweight
-lib.** Middle ground. Evaluate `dashmap` + a minimal query trait.
+lib.** Middle ground. Evaluate `dashmap` + a minimal query mixin.
 
 **Recommendation: Option B (hand-rolled) for v1.** Riven's query
 graph is small (~8 query types). The invalidation discipline is
@@ -343,7 +343,7 @@ writers for the *same* key. Multiple threads calling `db.typeck(file)`
 on the first read will race to compute; the loser of the race drops
 its result. Acceptable.
 
-`set_source` takes `&mut self`; the LSP guards with its existing
+`set_source` takes `&var self`; the LSP guards with its existing
 `RwLock`.
 
 ### 5.8 Memory management
@@ -406,7 +406,7 @@ layer.
 | 4 | `crates/riven-core/src/borrow_check/mod.rs` | Factor to per-fn |
 | 4 | `crates/riven-core/src/db/queries/borrow_check.rs` *new* | Borrow-check query |
 | 4 | `crates/riven-core/src/db/queries/mir.rs` *new* | MIR query |
-| 5 | `crates/riven-ide/src/analysis.rs:43-88` | Accept optional `&mut Database` |
+| 5 | `crates/riven-ide/src/analysis.rs:43-88` | Accept optional `&var Database` |
 | 5 | `crates/riven-lsp/src/server.rs:17-20` | Hold a `Database` in `ServerState` |
 | 6 | `crates/rivenc/src/main.rs:503-576` | Optionally use `Database` for within-file caching |
 

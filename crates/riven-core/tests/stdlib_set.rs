@@ -7,6 +7,13 @@ use riven_core::lexer::Lexer;
 use riven_core::parser::Parser;
 use riven_core::typeck;
 
+fn rvn(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/riven")
+        .join(format!("{name}.rvn"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+}
+
 fn typecheck_diagnostics(source: &str) -> Vec<Diagnostic> {
     let mut lexer = Lexer::new(source);
     let tokens = lexer
@@ -32,14 +39,8 @@ fn errors(diags: &[Diagnostic]) -> Vec<&Diagnostic> {
 /// `codegen::runtime::runtime_name`.
 #[test]
 fn hashset_alias_constructs_via_either_name() {
-    let source = r##"
-def main
-  let _a: HashSet[Int] = HashSet.new
-  let _b: HashSet[Int] = HashSet.with_capacity(4)
-  let _c: Set[Int] = Set.new
-end
-"##;
-    let diags = typecheck_diagnostics(source);
+    let source = rvn("hashset_alias_constructs_via_either_name");
+    let diags = typecheck_diagnostics(&source);
     let errs = errors(&diags);
     assert!(
         errs.is_empty(),
@@ -57,13 +58,8 @@ end
 /// changing surface.
 #[test]
 fn hashset_insert_typechecks_as_unit_today() {
-    let source = r##"
-def main
-  let mut s: HashSet[Int] = HashSet.new
-  s.insert(1)
-end
-"##;
-    let diags = typecheck_diagnostics(source);
+    let source = rvn("hashset_insert_typechecks_as_unit_today");
+    let diags = typecheck_diagnostics(&source);
     let errs = errors(&diags);
     assert!(
         errs.is_empty(),
@@ -77,15 +73,8 @@ end
 /// `riven_hash_remove` into a Bool via the tag word.
 #[test]
 fn hashset_remove_returns_bool() {
-    let source = r##"
-def main
-  let mut s: HashSet[Int] = HashSet.new
-  s.insert(1)
-  let r: Bool = s.remove(1)
-  puts "#{r}"
-end
-"##;
-    let diags = typecheck_diagnostics(source);
+    let source = rvn("hashset_remove_returns_bool");
+    let diags = typecheck_diagnostics(&source);
     let errs = errors(&diags);
     assert!(
         errs.is_empty(),
@@ -100,18 +89,8 @@ end
 /// the caller's drop frame.
 #[test]
 fn hashset_set_ops_return_fresh_set() {
-    let source = r##"
-def main
-  let mut a: HashSet[Int] = HashSet.new
-  let mut b: HashSet[Int] = HashSet.new
-  a.insert(1)
-  b.insert(2)
-  let _u: HashSet[Int] = a.union(&b)
-  let _i: HashSet[Int] = a.intersection(&b)
-  let _d: HashSet[Int] = a.difference(&b)
-end
-"##;
-    let diags = typecheck_diagnostics(source);
+    let source = rvn("hashset_set_ops_return_fresh_set");
+    let diags = typecheck_diagnostics(&source);
     let errs = errors(&diags);
     assert!(
         errs.is_empty(),
@@ -125,14 +104,8 @@ end
 /// lands in #05.
 #[test]
 fn hashset_iter_returns_vec() {
-    let source = r##"
-def main
-  let mut s: HashSet[Int] = HashSet.new
-  s.insert(1)
-  let _items: Vec[&Int] = s.iter
-end
-"##;
-    let diags = typecheck_diagnostics(source);
+    let source = rvn("hashset_iter_returns_vec");
+    let diags = typecheck_diagnostics(&source);
     let errs = errors(&diags);
     assert!(
         errs.is_empty(),
@@ -145,17 +118,8 @@ end
 /// HashMap binop wiring. Returns Bool.
 #[test]
 fn hashset_equality_yields_bool() {
-    let source = r##"
-def main
-  let mut a: HashSet[Int] = HashSet.new
-  let mut b: HashSet[Int] = HashSet.new
-  a.insert(1)
-  b.insert(1)
-  let c: Bool = a == b
-  puts "#{c}"
-end
-"##;
-    let diags = typecheck_diagnostics(source);
+    let source = rvn("hashset_equality_yields_bool");
+    let diags = typecheck_diagnostics(&source);
     let errs = errors(&diags);
     assert!(
         errs.is_empty(),

@@ -1,0 +1,7 @@
+lib "c"
+  def riven_env_args_count() -> Int64
+end
+
+def main
+  puts "#{riven_env_args_count()}"
+end

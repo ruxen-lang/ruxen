@@ -65,7 +65,7 @@ The types resolve and the methods you'd expect exist:
 | `m.try_lock()`        | `Option[MutexGuard[T]]`                | types ✓ runtime ✗ |
 | `m.into_inner()`      | `Result[T, PoisonError]`               | types ✓ runtime ✗ |
 | `g.deref()`           | `&T`                                   | types ✓ runtime ✗ |
-| `g.deref_mut()`       | `&mut T`                               | types ✓ runtime ✗ |
+| `g.deref_var()`       | `&var T`                               | types ✓ runtime ✗ |
 
 You can write code against this surface today — the typechecker will
 catch shape errors and the program will compile.  Running the binary

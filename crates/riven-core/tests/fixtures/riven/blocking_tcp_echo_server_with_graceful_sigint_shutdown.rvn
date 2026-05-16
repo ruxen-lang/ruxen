@@ -1,0 +1,71 @@
+use std.net.{tcp_listen, tcp_accept, tcp_read, tcp_write, tcp_close}
+use std.env.get
+
+class TcpListener
+  fd: Int
+
+  def init(@fd: Int)
+  end
+
+  def bind(addr: &String) -> TcpListener
+    let fd = tcp_listen(addr)
+    TcpListener.new(fd)
+  end
+
+  def accept_fd -> Int
+    tcp_accept(self.fd)
+  end
+
+  def close -> ()
+    tcp_close(self.fd)
+  end
+end
+
+class TcpStream
+  fd: Int
+
+  def init(@fd: Int)
+  end
+
+  def read_string(max: Int) -> String
+    tcp_read(self.fd, max)
+  end
+
+  def write_string(data: &String) -> Int
+    tcp_write(self.fd, data)
+  end
+
+  def close -> ()
+    tcp_close(self.fd)
+  end
+end
+
+def main
+  let p: String = get("RIVEN_NET_PORT").expect!("port env var")
+  let addr = "127.0.0.1:#{p}"
+
+  signal_install_sigint()
+
+  let listener = TcpListener.bind(&addr)
+
+  loop
+    let client_fd = listener.accept_fd
+
+    # Either a real client connected (fd >= 0) or accept was
+    # interrupted by SIGINT (fd < 0 with errno=EINTR).  In both
+    # cases we check the signal flag on the next loop iteration.
+    if client_fd >= 0
+      let stream = TcpStream.new(client_fd)
+      let msg = stream.read_string(64)
+      let _ = stream.write_string(&msg)
+      stream.close()
+    end
+
+    if signal_received_sigint() != 0
+      break
+    end
+  end
+
+  listener.close()
+  puts "bye"
+end

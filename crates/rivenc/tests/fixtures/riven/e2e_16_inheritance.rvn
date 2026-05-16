@@ -1,0 +1,25 @@
+class Animal
+  name: String
+
+  def init(@name: String)
+  end
+
+  def speak -> String
+    "..."
+  end
+end
+
+class Cat < Animal
+  def init(name: String)
+    super(name)
+  end
+
+  def speak -> String
+    "Meow! I'm #{self.name}"
+  end
+end
+
+def main
+  let c = Cat.new(String.from("Whiskers"))
+  puts c.speak
+end

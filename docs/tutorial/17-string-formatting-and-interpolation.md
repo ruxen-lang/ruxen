@@ -8,8 +8,8 @@ Riven gives you three layers for turning values into strings:
 
 1. **Interpolation** — `"hello #{name}"` inline in any string literal.
 2. **The `Display` mixin** — how *your* types render in interpolation.
-3. **The `Debug` mixin** — `"#{x:?}"` for diagnostic output, usually
-   via `derive Debug`.
+3. **The `Debug` mixin** — `"#{x:?}"` for diagnostic output. `Debug`
+   is implicitly included on every type (§3.6); no declaration needed.
 
 ---
 
@@ -46,9 +46,9 @@ include the `Display` mixin and provide a `fmt` method (see §4).
 
 ## 2. Debug interpolation: `"#{x:?}"`
 
-The `:?` spec routes through `Debug` instead of `Display`.  Any type
-that opts into `derive Debug` gets a compiler-generated `T_to_debug`
-function:
+The `:?` spec routes through `Debug` instead of `Display`.  Every
+type has `Debug` implicitly (§3.6), so a compiler-generated
+`T_to_debug` function exists for it:
 
 ```riven
 struct Point
@@ -227,7 +227,7 @@ class Money
 
   include Display
 
-  def fmt(f: &mut Formatter) -> Result[(), FmtError]
+  def fmt(f: &var Formatter) -> Result[(), FmtError]
     let _ = f.write_str("$")
     f.write_str("#{self.cents}")
   end
@@ -247,7 +247,7 @@ price: $4250
 
 Things to note:
 
-- `fmt` takes `&mut Formatter` explicitly; `self` is the implicit
+- `fmt` takes `&var Formatter` explicitly; `self` is the implicit
   reading receiver, same as elsewhere in Riven.
 - `f.write_str` returns `Result[(), FmtError]`.  Returning that
   result directly from `fmt` is idiomatic; `let _ = ...` discards
@@ -285,8 +285,8 @@ output and let the compiler call `buffer()` at the call site.
 
 ## 6. Common pitfalls
 
-- **`derive Debug` only.** A bare `"#{x}"` for a type that derives
-  `Debug` but does **not** include `Display` falls back to the
+- **`Debug` only.** A bare `"#{x}"` for a type that has `Debug` (auto
+  via §3.6) but does **not** include `Display` falls back to the
   Debug path (so you still see something useful).  Once the type
   includes `Display`, the bare form picks Display automatically.
 - **Width on `:?`.** The Debug path bypasses the Formatter today, so
@@ -304,7 +304,7 @@ The pipeline is:
 ```
 Lexer captures FormatSpec (width / align / fill / precision / debug)
    ↓
-HIR carries it on HirInterpolationPart::Expr { expr, spec }
+HIR carries it on an interpolation Expr part with {expr, spec}
    ↓
 MIR lower_interpolation emits Formatter_new_with_spec(...) + T_fmt + Formatter_buffer
    ↓

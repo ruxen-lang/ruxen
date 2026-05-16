@@ -50,7 +50,7 @@ No `examples/`.
 ### Non-Goals
 
 - A comprehensive standard-library cookbook (that's `docs/tutorial/`).
-- Examples for every language feature (macros for every trait, every pattern). Less is more.
+- Examples for every language feature (macros for every mixin, every pattern). Less is more.
 - Benchmarking examples. Performance is a separate concern.
 - GUI examples. No GUI toolkit exists in Riven's stdlib.
 - A separate `riven-examples` repository (discoverability loss; doc 00 §"Critical questions" answers: in-tree).
@@ -191,16 +191,16 @@ def main
 
   for conn in listener.incoming
     match conn
-      Ok(stream) -> handle(&mut stream)
+      Ok(stream) -> handle(&var stream)
       Err(e)     -> eputs "connection error: #{e}"
     end
   end
 end
 
-def handle(stream: &mut TcpStream)
+def handle(stream: &var TcpStream)
   var buf: Array[UInt8] = Array.with_size(1024)
   loop
-    match stream.read(&mut buf)
+    match stream.read(&var buf)
       Ok(0)  -> break                            # client closed
       Ok(n)  -> stream.write(&buf[0..n]).unwrap!
       Err(_) -> break

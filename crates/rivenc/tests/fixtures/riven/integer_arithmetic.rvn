@@ -1,0 +1,7 @@
+def main
+  puts "#{1 + 2}"
+  puts "#{10 - 3}"
+  puts "#{4 * 6}"
+  puts "#{20 / 4}"
+  puts "#{17 % 5}"
+end

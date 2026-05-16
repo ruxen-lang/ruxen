@@ -6,6 +6,9 @@
 **Status:** shipped Phase 2 #02-#03 (drop elaboration + user `Drop`
 include + leak-tracker).
 
+See §3.4a of the canonical surface-syntax spec for the `include Drop`
++ `def var drop` pattern.
+
 Riven elaborates drop calls on MIR so that every owned heap value
 (`String`, `Array`, `Map`, `Set`, user types that own them) is
 released at scope exit.  The `drop_fixtures.rs` test suite uses a
@@ -16,7 +19,7 @@ specially-rewritten runtime that counts `free` calls so we can assert
 
 ## B1 — User `Drop` include runs at scope exit
 
-**Given** a class `T` with `include Drop` and `def mut drop ... end`
+**Given** a class `T` with `include Drop` and `def var drop ... end`
 **When** `let x = T.new(...)` exits its enclosing scope
 **Then** `T.drop` is invoked on `x` exactly once, before the
 allocation is freed.
@@ -54,11 +57,11 @@ drop calls for any live owned bindings before transferring control.
 argument are still valid afterwards, and no intermediate buffer
 leaks.
 
-## B7 — `String.into_bytes()` transfers ownership
+## B7 — `String.into_bytes` transfers ownership
 
-The receiver becomes invalid after `into_bytes()` (matches B3 in
-borrow-check.spec.md); the returned `Array[UInt8]` owns the bytes; no
-double-free or leak.
+The receiver becomes invalid after `into_bytes` (matches B3 in
+borrow-check.spec.md); the returned `Array[UInt8]` owns the bytes;
+no double-free or leak.
 
 ## B8 — `String + String` frees both operands
 
@@ -90,6 +93,8 @@ For every fixture the suite runs, `allocs == frees` at process exit
 | B5 Array  | `vec_local_is_freed_on_scope_exit` + `vec_of_string_releases_every_element` + `vec_of_vec_int_releases_every_inner_vec` | `drop_fixtures.rs` |
 | B5 Map    | `hashmap_local_is_freed_on_scope_exit` + `p04_hashmap_string_to_int_releases_every_key` + `p04_hashmap_int_to_string_releases_every_value` + `p04_hashmap_string_to_vec_int_releases_every_value` | `drop_fixtures.rs` |
 | B5 Set    | `p04_hashset_string_releases_every_element`           | `drop_fixtures.rs`  |
+
+<!-- TODO(migration): pin-test fn names still mention `vec_*`, `hashmap_*`, `hashset_*` — internal Rust identifiers, rename when in scope. -->
 | B6        | `string_push_does_not_leak`                            | `drop_fixtures.rs`  |
 | B7        | `string_into_bytes_transfers_ownership`                | `drop_fixtures.rs`  |
 | B8        | `string_plus_op_frees_both_operands`                   | `drop_fixtures.rs`  |

@@ -29,13 +29,13 @@ use std.future.{Future, Poll, Waker, Context}
 
 | Type            | Role                                              | Status            |
 |-----------------|---------------------------------------------------|-------------------|
-| `Future[T]`     | Mixin with required `poll(&mut, &mut Context) -> Poll[T]` | types ✓ runtime ✗ |
+| `Future[T]`     | Mixin with required `poll(&var, &var Context) -> Poll[T]` | types ✓ runtime ✗ |
 | `Poll[T]`       | Enum: `Ready(T)` or `Pending`                     | types ✓ runtime ✗ |
 | `Waker`         | Class — wraps a wake callback                     | types ✓ runtime ✗ |
 | `Context`       | Class — wraps a `&Waker` for the poll call        | types ✓ runtime ✗ |
 
 You can name these types, pattern-match on `Poll[T]` variants, and
-write functions that take `&mut Context` as a parameter.
+write functions that take `&var Context` as a parameter.
 
 ---
 

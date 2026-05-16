@@ -1,0 +1,8 @@
+use std.env.current_dir
+
+def main
+  match current_dir()
+    Ok(path)  -> puts "cwd=#{path}"
+    Err(_)    -> puts "err"
+  end
+end

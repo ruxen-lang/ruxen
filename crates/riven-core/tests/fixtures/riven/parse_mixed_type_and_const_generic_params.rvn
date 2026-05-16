@@ -1,0 +1,4 @@
+
+struct Buffer[const CAP: USize, T]
+  len: USize
+end

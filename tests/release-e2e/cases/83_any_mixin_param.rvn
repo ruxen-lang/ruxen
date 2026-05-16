@@ -1,4 +1,4 @@
-mixin Displayable
+mixin Showable
   def to_display -> String
 end
 
@@ -8,18 +8,18 @@ class Tag
   def init(@label: String)
   end
 
-  include Displayable
+  include Showable
 
   def to_display -> String
     self.label.clone
   end
 end
 
-def print_dyn(x: &any Displayable)
+def print_any(x: &any Showable)
   puts "#{x.to_display}"
 end
 
 def main
-  let t = Tag.new(String.from("dyn"))
-  print_dyn(&t)
+  let t = Tag.new(String.from("any"))
+  print_any(&t)
 end

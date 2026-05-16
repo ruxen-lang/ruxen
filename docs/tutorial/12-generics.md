@@ -20,7 +20,7 @@ let s = identity("hello")    # T = &str
 Constrain type parameters with `:`:
 
 ```riven
-def largest[T: Comparable](list: &Array[T]) -> &T
+def largest[T: Ord](list: &Array[T]) -> &T
   var best = &list[0]
   for item in list
     if item > best
@@ -36,8 +36,8 @@ end
 Use `+` for multiple mixin requirements:
 
 ```riven
-def log_and_save[T: Displayable + Serializable](item: &T)
-  puts item.to_display
+def log_and_save[T: Display + Serializable](item: &T)
+  puts "#{item}"
   save(item.serialize)
 end
 ```
@@ -52,11 +52,11 @@ class Stack[T]
     self.items = Array.new
   end
 
-  def mut push(item: T)
+  def var push(item: T)
     self.items.push(item)
   end
 
-  def mut pop -> Option[T]
+  def var pop -> Option[T]
     self.items.pop
   end
 
@@ -100,11 +100,13 @@ end
 
 For complex constraints:
 
+<!-- TODO(migration): canonical spec §3.4a discourages per-method `where` clauses on individual `def`s (re-group into an extension block). Top-level functions with `where` are shown here pending a clarifying spec rule. -->
+
 ```riven
 def merge[A, B, C](left: &A, right: &B) -> C
-  where A: Iterable[Item = Int],
-        B: Iterable[Item = Int],
-        C: FromIterator[Int]
+  where A: Iterator[Item = Int],
+        B: Iterator[Item = Int],
+        C: FromIterator[Item = Int]
   # ...
 end
 ```
@@ -121,11 +123,11 @@ extension Container[T]
   end
 end
 
-# Only Containers of Displayable types get print_all
-extension Container[T] where T: Displayable
+# Only Containers of Display types get print_all
+extension Container[T] where T: Display
   def print_all
     for item in self.items
-      puts item.to_display
+      puts "#{item}"
     end
   end
 end

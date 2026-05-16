@@ -14,7 +14,7 @@ Riven's `Iterator` mixin is the same shape as Rust's `Iterator`:
 ```riven
 mixin Iterator
   type Item
-  def mut next -> Option[Self.Item]
+  def var next -> Option[Self.Item]
 end
 ```
 
@@ -39,7 +39,7 @@ class Counter
 
   type Item = Int
 
-  def mut next -> Option[Int]
+  def var next -> Option[Int]
     if self.current >= self.limit
       return nil
     end
@@ -87,7 +87,7 @@ loop
 end
 ```
 
-So any type with a mutating `next -> Option[Item]` method can drive
+So any type with a writing `next -> Option[Item]` method can drive
 a `for` loop.
 
 ---
@@ -176,8 +176,8 @@ The `.collect[Stats]()` call routes through your `from_iter`.
 
 ## 6. Common pitfalls
 
-- **Forgetting `def mut next`.**  The iterator advances state; the
-  method must be a *mutating* method.  A reading-method signature
+- **Forgetting `def var next`.**  The iterator advances state; the
+  method must be a *writing* method.  A reading-method signature
   won't satisfy the mixin.
 - **Forgetting `type Item = ...`** in the type body.  This is an
   associated type that must be bound where you `include Iterator`.
@@ -212,7 +212,7 @@ class WindowIter[T, a]
 
   type Item = &a T
 
-  def mut next -> Option[&a T]
+  def var next -> Option[&a T]
     if self.pos >= self.source.len
       return nil
     end

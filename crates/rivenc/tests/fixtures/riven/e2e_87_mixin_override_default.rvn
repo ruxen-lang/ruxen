@@ -1,0 +1,28 @@
+mixin Greeter
+  def name -> String
+  def greet -> String
+    "Hello, #{self.name}!"
+  end
+end
+
+class Bot
+  nm: String
+
+  def init(@nm: String)
+  end
+
+  include Greeter
+
+  def name -> String
+    self.nm.clone
+  end
+
+  def greet -> String
+    "Hi, #{self.nm}."
+  end
+end
+
+def main
+  let b = Bot.new(String.from("Riv"))
+  puts "#{b.greet}"
+end

@@ -1,0 +1,14 @@
+
+use std.fs.{create_dir, is_dir}
+
+def main
+  match create_dir("__SUB__")
+    Ok(_)  -> puts "created"
+    Err(_) -> puts "create_fail"
+  end
+  if is_dir("__SUB__")
+    puts "is_dir_yes"
+  else
+    puts "is_dir_no"
+  end
+end

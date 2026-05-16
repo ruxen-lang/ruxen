@@ -1,0 +1,11 @@
+
+class Wrap[const N: USize]
+  data: USize
+
+  def init(@data: USize)
+  end
+end
+
+def use_wrap -> Wrap[7]
+  Wrap.new(0)
+end

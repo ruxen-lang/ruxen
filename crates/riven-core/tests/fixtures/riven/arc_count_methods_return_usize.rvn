@@ -1,0 +1,7 @@
+use std.sync.SharedSync
+
+def main
+  let a: SharedSync[Int] = SharedSync.new(99)
+  let s: USize = a.strong_count()
+  let w: USize = a.weak_count()
+end

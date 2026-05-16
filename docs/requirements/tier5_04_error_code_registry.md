@@ -55,12 +55,12 @@ how to roll out codes across the compiler.
 ```rust
 pub enum ErrorCode {
     E1001, // use after move
-    E1002, // can't mut-borrow while immutably borrowed
-    E1003, // can't immut-borrow while mutably borrowed
+    E1002, // can't writably-borrow while read-only borrowed
+    E1003, // can't read-only-borrow while writably borrowed
     E1004, // can't move out of borrowed reference
     E1005, // borrow outlives owner
-    E1006, // assign to immutable variable
-    E1007, // can't mut-borrow immutable variable
+    E1006, // assign to read-only (let) binding
+    E1007, // can't writably-borrow a let-bound variable
     E1008, // value moved into closure
     E1009, // can't move while borrowed
     E1010, // returned reference outlives local
@@ -95,7 +95,7 @@ impl Diagnostic {
 ```
 
 `BorrowError` is a **separate** struct (not a `Diagnostic`)
-with its own `Display` impl (`borrow_check/errors.rs:64-77`). They
+with its own `Display` extension (`borrow_check/errors.rs:64-77`). They
 render differently. The IDE glue at `crates/riven-ide/src/diagnostics.
 rs:30-60` has two different conversion functions.
 
@@ -163,7 +163,7 @@ Number ranges (repeated from overview §7.2 for convenience):
 | `E0100-E0299` | Parser (syntax) |
 | `E0300-E0499` | Name resolution / imports / visibility |
 | `E0500-E0899` | Type check / inference / coercion |
-| `E0900-E0999` | Trait resolution |
+| `E0900-E0999` | Mixin resolution |
 | `E1000-E1999` | Borrow check / lifetimes / ownership |
 | `E2000-E2999` | Attributes, stability, features, lints |
 | `E3000-E3999` | MIR / const-eval / unreachable |
@@ -379,7 +379,7 @@ puts name
 ### 3. Reinitialize the binding
 
 ```rvn
-let mut name = String.from("Riven")
+var name = String.from("Riven")
 consume(name)
 name = String.from("reused")  # new value in the same variable
 puts name

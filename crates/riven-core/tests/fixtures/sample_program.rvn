@@ -19,7 +19,7 @@ enum Priority
     end
   end
 
-  include Displayable
+  include Showable
 
   def to_display -> String
     match self
@@ -37,7 +37,7 @@ enum Status
   Completed(completed_at: String)
   Cancelled(reason: String)
 
-  include Displayable
+  include Showable
 
   def to_display -> String
     match self
@@ -106,19 +106,19 @@ class Task
     end
   end
 
-  def mut assign(assignee: String)
+  def var assign(assignee: String)
     self.status = Status.InProgress(assignee: assignee)
   end
 
-  def mut complete(date: String)
+  def var complete(date: String)
     self.status = Status.Completed(completed_at: date)
   end
 
-  def mut cancel(reason: String)
+  def var cancel(reason: String)
     self.status = Status.Cancelled(reason: reason)
   end
 
-  include Displayable
+  include Showable
 
   def to_display -> String
     "[##{self.id}] #{self.title} | #{self.priority.to_display} | #{self.status.to_display}"
@@ -188,7 +188,7 @@ class TimedTask < Task
 
   def deadline_ref -> &String { &self.deadline }
 
-  include Displayable
+  include Showable
 
   def to_display -> String
     let base = "[##{self.id}] #{self.title} | #{self.priority.to_display}"
@@ -199,7 +199,7 @@ end
 
 # --- Generic Repository ---
 
-class Repository[T: Displayable]
+class Repository[T: Showable]
   items: Array[T]
   next_id: USize
 
@@ -208,7 +208,7 @@ class Repository[T: Displayable]
     self.next_id = 1
   end
 
-  def mut add(item: T) -> USize
+  def var add(item: T) -> USize
     # item is moved into the Array — caller gives up ownership
     let id = self.next_id
     self.items.push(item)
@@ -224,8 +224,8 @@ class Repository[T: Displayable]
     self.items.get(index)
   end
 
-  def get_mut(index: USize) -> Option[&mut T]
-    self.items.get_mut(index)
+  def get_var(index: USize) -> Option[&var T]
+    self.items.get_var(index)
   end
 
   def all -> &Array[T]
@@ -264,7 +264,7 @@ class TaskList
     self.repo = Repository.new
   end
 
-  def mut add_task(title: String, desc: String, priority: Priority) -> USize
+  def var add_task(title: String, desc: String, priority: Priority) -> USize
     let task = Task.new(self.repo.count, title, desc, priority)
     self.repo.add(task)
   end
@@ -273,12 +273,12 @@ class TaskList
     self.repo.all.iter.find { |t| t.id == id }
   end
 
-  def mut update_status(id: USize, status: Status) -> Result[(), TaskError]
+  def var update_status(id: USize, status: Status) -> Result[(), TaskError]
     let task = self.repo.all.iter
       .position { |t| t.id == id }
       .ok_or(TaskError.NotFound(id: id))?
 
-    match self.repo.get_mut(task)
+    match self.repo.get_var(task)
       Some(t) -> match status
         Status.InProgress(ref assignee) -> t.assign(assignee.clone)
         Status.Completed(ref date)      -> t.complete(date.clone)
@@ -343,7 +343,7 @@ def generate_report(tasks: &Array[&Task]) -> String
 end
 
 # Demonstrates generic function with mixin bounds
-def print_items[T: Displayable + Summarizable](items: &Array[T], label: &str)
+def print_items[T: Showable + Summarizable](items: &Array[T], label: &str)
   puts "--- #{label} ---"
   items.each do |item|
     if item.is_actionable
@@ -361,7 +361,7 @@ end
 
 # Demonstrates error propagation with ?
 def create_task_from_input(
-  list: &mut TaskList,
+  list: &var TaskList,
   title: &str,
   desc: &str,
   priority_str: &str
@@ -391,12 +391,12 @@ def main
   puts "Creating tasks..."
 
   let results = [
-    create_task_from_input(&mut list, "Design ownership model", "Define borrow rules", "critical"),
-    create_task_from_input(&mut list, "Write parser",           "Implement lexer+parser", "high"),
-    create_task_from_input(&mut list, "Add syntax highlighting", "Editor plugin",         "medium"),
-    create_task_from_input(&mut list, "Update README",           "Document new features",  "low"),
-    create_task_from_input(&mut list, "Fix borrow checker bug",  "Edge case in closures",  "critical"),
-    create_task_from_input(&mut list, "",                         "Missing title",          "high"),
+    create_task_from_input(&var list, "Design ownership model", "Define borrow rules", "critical"),
+    create_task_from_input(&var list, "Write parser",           "Implement lexer+parser", "high"),
+    create_task_from_input(&var list, "Add syntax highlighting", "Editor plugin",         "medium"),
+    create_task_from_input(&var list, "Update README",           "Document new features",  "low"),
+    create_task_from_input(&var list, "Fix borrow checker bug",  "Edge case in closures",  "critical"),
+    create_task_from_input(&var list, "",                         "Missing title",          "high"),
   ]
 
   # ── Report creation results (pattern matching) ──
@@ -414,7 +414,7 @@ def main
 
   puts ""
 
-  # ── Update statuses (demonstrates &mut self and pattern matching) ──
+  # ── Update statuses (demonstrates writing methods and pattern matching) ──
   puts "Updating statuses..."
   list.update_status(0, Status.InProgress(assignee: String.from("Alaric")))
     .unwrap_or_else { |e| eputs "  #{e.message}" }

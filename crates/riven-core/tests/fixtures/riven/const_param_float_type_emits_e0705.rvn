@@ -1,0 +1,4 @@
+
+struct Buf[T, const N: Float]
+  data: [T; 4]
+end

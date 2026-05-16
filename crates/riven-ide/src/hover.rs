@@ -63,7 +63,7 @@ pub fn hover_at(result: &AnalysisResult, position: lsp_types::Position) -> Optio
 
 fn format_variable_hover(def: &Definition, ty: &Ty) -> String {
     let prefix = match &def.kind {
-        DefKind::Variable { mutable: true, .. } => "let mut",
+        DefKind::Variable { mutable: true, .. } => "var",
         DefKind::Variable { mutable: false, .. } => "let",
         DefKind::Param { .. } => "param",
         DefKind::SelfValue { .. } => "self",
@@ -82,9 +82,9 @@ fn format_function_hover(def: &Definition) -> String {
                 .collect::<Vec<_>>()
                 .join(", ");
             let vis = match def.visibility {
-                Visibility::Public => "pub ",
+                Visibility::Public => "",
                 Visibility::Protected => "protected ",
-                Visibility::Private => "",
+                Visibility::Private => "private ",
             };
             format!(
                 "```riven\n{}def {}({}) -> {}\n```",
@@ -98,7 +98,7 @@ fn format_function_hover(def: &Definition) -> String {
 fn format_definition_hover(def: &Definition) -> String {
     match &def.kind {
         DefKind::Variable { ty, mutable, .. } => {
-            let prefix = if *mutable { "let mut" } else { "let" };
+            let prefix = if *mutable { "var" } else { "let" };
             format!("```riven\n{} {}: {}\n```", prefix, def.name, ty)
         }
         DefKind::Param { ty, .. } => {
@@ -115,7 +115,7 @@ fn format_definition_hover(def: &Definition) -> String {
             format!("```riven\nenum {}\n```", def.name)
         }
         DefKind::Trait { .. } => {
-            format!("```riven\ntrait {}\n```", def.name)
+            format!("```riven\nmixin {}\n```", def.name)
         }
         DefKind::Field { ty, .. } => {
             format!("```riven\n(field) {}: {}\n```", def.name, ty)
@@ -211,8 +211,9 @@ mod tests {
     }
 
     #[test]
-    fn hover_on_let_mut_binding_shows_mut_prefix() {
-        let src = "def main\n  let mut y = 10\n  y = y + 1\nend\n";
+    fn hover_on_var_binding_shows_var_prefix() {
+        // ruby-naming.spec.md §3.14: `var x = ...` replaces `let mut x = ...`.
+        let src = "def main\n  var y = 10\n  y = y + 1\nend\n";
         let result = analyze(src);
         // The 'y' usage in "y = y + 1"
         let pos = pos_of(src, "y", 1);

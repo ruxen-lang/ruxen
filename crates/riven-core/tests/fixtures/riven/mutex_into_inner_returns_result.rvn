@@ -1,0 +1,6 @@
+use std.sync.{Mutex, PoisonError}
+
+def main
+  let m: Mutex[Int] = Mutex.new(42)
+  let inner: Result[Int, PoisonError] = m.into_inner()
+end

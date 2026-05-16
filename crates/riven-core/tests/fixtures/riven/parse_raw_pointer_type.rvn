@@ -1,0 +1,3 @@
+def foo(p: *Int64) -> *Int64
+  p
+end

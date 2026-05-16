@@ -1,0 +1,3 @@
+def main
+  let _v: Array[Int] = Array.with_capacity(8)
+end

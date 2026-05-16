@@ -12,19 +12,19 @@ the `!` macro suffix convention on method names.
 | `include` | Inside a type body | Adopts a mixin's contract + defaults |
 | `!` suffix | On a method name | Marks the method as macro-aware / can-panic |
 
-The trait methods you'd otherwise hand-list are **synthesized
-automatically** — Riven has no derive directive at all. The four
-sections below walk auto-synthesis, layout, inline, and the `!`
-convention. The `include` directive is covered alongside mixins —
-see [Chapter 8](08-traits.md).
+The mixin methods you'd otherwise hand-list are **synthesized
+automatically** via implicit `include` — Riven has no `derive`
+directive at all. The four sections below walk implicit-include,
+layout, inline, and the `!` convention. The `include` directive is
+covered alongside mixins — see [Chapter 8](08-mixins.md).
 
 ---
 
-## 1. Automatic mixin synthesis
+## 1. Implicit structural mixins
 
-The compiler synthesizes a fixed set of common mixins for any
-class, struct, or enum whose fields structurally support them. No
-declaration is needed:
+The compiler implicitly `include`s a fixed set of common mixins for
+any class, struct, or enum whose fields structurally support them.
+No declaration is needed:
 
 ```riven
 struct Point
@@ -33,22 +33,31 @@ struct Point
 end
 
 let p = Point.new(1, 2)
-puts "#{p}"           # auto-synthesized Debug
-puts p == Point.new(1, 2)   # auto-synthesized PartialEq
-let copy = p          # auto-synthesized Copy (struct with all-Copy fields)
+puts "#{p}"           # implicit Debug
+puts p == Point.new(1, 2)   # implicit PartialEq
+let copy = p          # implicit Copy (struct with all-Copy fields)
 ```
 
-The synthesized set, and the field-level requirement that triggers
-synthesis:
+The implicit-include set, and the field-level requirement that
+triggers inclusion:
 
-| Mixin       | Auto-synth rule                                            |
-|-------------|------------------------------------------------------------|
-| `Debug`     | Always — formats as `TypeName(field=value, ...)`.          |
-| `Clone`     | When every field is `Clone`.                               |
-| `Eq` / `PartialEq` | When every field is `Eq`. Field-wise `==`.          |
-| `Hash`      | When every field is `Hash`. FNV mixer over fields in source order. |
-| `Default`   | When every field has a default value.                      |
-| `Ord` / `PartialOrd` | When every field is `Ord`. Lexicographic by source order. |
+| Mixin       | Implicit when…                                              |
+|-------------|-------------------------------------------------------------|
+| `Debug`     | Always — formats as `TypeName(field=value, ...)`.           |
+| `Clone`     | Every field is `Clone`.                                     |
+| `Eq` / `PartialEq` | Every field is `Eq`. Field-wise `==`.                |
+| `Hashable`  | Every field is `Hashable`. FNV mixer over fields in source order. |
+| `Default`   | Every field has a default value.                            |
+| `Ord` / `PartialOrd` | Every field is `Ord`. Lexicographic by source order. |
+| `Send`      | Every field is `Send`. Auto-mixin — never written by hand.   |
+| `Sync`      | Every field is `Sync`. Auto-mixin — never written by hand.   |
+
+`Send` and `Sync` are **auto-mixins** — explicit `include Send` /
+`include Sync` is not written in ordinary code. Opt out with
+`exclude Send` / `exclude Sync` in the type body. Opt in for an
+inference-incompatible structure (e.g. a hand-rolled lock-free
+queue) with `unsafe include Send` / `unsafe include Sync` — the
+only legal use of `unsafe include`.
 
 `Copy` is the special case — it's structural and ownership-affecting:
 
@@ -56,10 +65,24 @@ synthesis:
 - A `struct` with any non-`Copy` field is not `Copy`.
 - A `class` is never `Copy` (reference semantics).
 
-### Overriding a synthesis
+### Loud form
 
-Define the method yourself. Your definition wins; no auto-synth
-runs for that method.
+For documentation clarity or to fail loudly at the include site if
+the structural rule no longer applies, write the include
+explicitly:
+
+```riven
+struct Point
+  x: Int
+  y: Int
+  include Debug, Clone, Eq, Hashable
+end
+```
+
+### Overriding an implicit-include's default
+
+Define the method yourself. Your definition wins; the implicit
+`include` does not provide a duplicate.
 
 ```riven
 struct Point
@@ -74,15 +97,15 @@ end
 
 ### When a field doesn't support the mixin
 
-If a struct contains a non-`Hash` field, the struct does not
-implement `Hash`. The error appears at the **use site** — for
+If a struct contains a non-`Hashable` field, the struct does not
+include `Hashable`. The error appears at the **use site** — for
 example, when you try to use the value as a `Map` key — and names
 the offending field and the missing mixin:
 
 ```
 error[E-USE-HASH]: cannot use `Point` as a `Map` key
-  `Point.handle: Resource` is not Hash
-help: implement Hash for Point manually, or wrap the offending field
+  `Point.handle: Resource` is not Hashable
+help: implement Hashable for Point manually, or wrap the offending field
 ```
 
 ---
@@ -125,7 +148,7 @@ end
 Removes inter-field padding. Layout is byte-by-byte from the
 declaration order. Useful for binary protocols.
 
-**Caveat:** packed values cannot be borrowed mutably through `&mut`
+**Caveat:** packed values cannot be borrowed writably through `&var`
 in many cases (alignment violation). Read fields by value or copy
 out first.
 
@@ -211,7 +234,7 @@ reserved for compiler-aware forms.
 ## 5. Why in-body directives
 
 The Ruby world settled long ago on putting metadata next to the
-field list: `attr_accessor :name`, `include Comparable`,
+field list: `attr_accessor :name`, `include Ord`,
 `validates :email`, `private`. Riven follows the same pattern.
 Everything that describes a type lives **inside its body**, in
 source order.
@@ -235,11 +258,11 @@ When you see one of these directives in source:
 2. **`inline def ...` / `inline :name`** — inlining hint;
    ignored by Cranelift, mandatory for LLVM in v2.
 3. **`include Mixin`** — adopts the mixin's contract and any
-   default methods. Cross-link: [Chapter 8](08-traits.md).
+   default methods. Cross-link: [Chapter 8](08-mixins.md).
 
-For trait-method synthesis (`to_debug`, `clone`, `==`, etc.) there
-is no directive — the compiler synthesizes from field types
-automatically (§1).
+For mixin-method synthesis (`to_debug`, `clone`, `==`, etc.) there
+is no directive — the compiler implicitly `include`s the mixin
+when every field satisfies it (§1).
 
 ---
 

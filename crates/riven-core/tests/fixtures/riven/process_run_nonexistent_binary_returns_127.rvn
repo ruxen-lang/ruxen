@@ -1,0 +1,12 @@
+use std.process.process_run
+
+def main
+  let cmd = "/no/such/binary/we/hope/exists"
+  let args: Array[String] = Array.new
+  let code = process_run(cmd, args)
+  if code == 127
+    puts "ok"
+  else
+    puts "fail code=#{code}"
+  end
+end

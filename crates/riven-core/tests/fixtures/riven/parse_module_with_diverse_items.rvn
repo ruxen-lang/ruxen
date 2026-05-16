@@ -1,0 +1,24 @@
+module bag
+  struct S
+    n: Int
+  end
+
+  class C
+    n: Int
+  end
+
+  enum E
+    A
+    B
+  end
+
+  mixin T
+    def t -> Int
+  end
+
+  def free -> Int
+    0
+  end
+
+  type Alias = Int
+end

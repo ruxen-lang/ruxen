@@ -1,0 +1,3 @@
+lib "c"
+  def memcpy(dest: *var Int8, src: *Int8, n: UInt64) -> *var Int8
+end

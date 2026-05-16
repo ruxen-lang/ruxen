@@ -1,0 +1,12 @@
+
+struct Vector[T, const N: USize]
+  data: USize
+end
+
+class Matrix[T, const M: USize, const N: USize]
+  rows: USize
+end
+
+def rotate[const K: USize](x: Int) -> Int
+  x
+end

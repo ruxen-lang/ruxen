@@ -1,0 +1,10 @@
+use std.fs.{read_to_string, write, exists}
+
+def main
+  write("{path}", "hello file").expect!("write")
+  if exists("{path}")
+    puts read_to_string("{path}").expect!("read")
+  else
+    puts "missing"
+  end
+end

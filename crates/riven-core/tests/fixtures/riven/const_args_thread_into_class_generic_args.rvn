@@ -1,0 +1,15 @@
+
+class Vector[T, const N: USize]
+  data: USize
+
+  def init(@data: USize)
+  end
+end
+
+def make_three -> Vector[Int, 3]
+  Vector.new(0)
+end
+
+def make_four -> Vector[Int, 4]
+  Vector.new(0)
+end

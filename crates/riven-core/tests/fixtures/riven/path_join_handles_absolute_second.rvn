@@ -1,0 +1,6 @@
+use std.path.path_join
+
+def main
+  # When `b` is absolute, it overrides `a`.
+  puts path_join(&"/etc", &"/usr/bin")
+end

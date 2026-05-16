@@ -11,6 +11,13 @@ use riven_core::mir::nodes::{MirInst, MirProgram};
 use riven_core::parser::Parser;
 use riven_core::typeck;
 
+fn rvn(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/riven")
+        .join(format!("{name}.rvn"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+}
+
 fn lower(src: &str) -> MirProgram {
     let mut lx = Lexer::new(src);
     let toks = lx.tokenize().expect("lex");
@@ -77,25 +84,10 @@ fn synth_primitive_fmt_functions_emitted() {
 /// would mean the impl-block lowering pathway has broken.
 #[test]
 fn user_impl_display_lowers_t_fmt_function() {
-    // Riven syntax: `impl Display for Money` block at top level;
+    // Riven syntax: `include Display` declares the Display contract;
     // `def fmt` has no explicit `self` param — `self` is implicit.
-    let src = r#"
-class Money
-  def init(@cents: Int)
-  end
-
-  include Display
-
-  def fmt(f: &mut Formatter) -> Result[(), FmtError]
-    f.write_str("$")
-  end
-end
-
-def main
-  let _ = Money.new(100)
-end
-    "#;
-    let m = lower(src);
+    let src = rvn("user_impl_display_lowers_t_fmt_function");
+    let m = lower(&src);
     let names: Vec<&str> = m.functions.iter().map(|f| f.name.as_str()).collect();
     assert!(
         names.iter().any(|n| *n == "Money_fmt"),
@@ -118,14 +110,8 @@ end
 /// `riven_int_to_string` internally, so existing fixture output is preserved.
 #[test]
 fn interpolation_primitive_goes_through_display() {
-    let src = r#"
-def main
-  let x: Int = 42
-  let s = "x is #{x}"
-  let _ = s
-end
-    "#;
-    let m = lower(src);
+    let src = rvn("interpolation_primitive_goes_through_display");
+    let m = lower(&src);
     let main = m
         .functions
         .iter()

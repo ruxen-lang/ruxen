@@ -165,7 +165,7 @@ impl MixinResolver {
         } else {
             // Unknown trait — assume unsatisfied
             MixinSatisfaction::Unsatisfied {
-                missing_methods: vec![format!("unknown trait `{}`", trait_ref.name)],
+                missing_methods: vec![format!("unknown mixin `{}`", trait_ref.name)],
             }
         }
     }

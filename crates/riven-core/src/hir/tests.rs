@@ -481,7 +481,7 @@ mod tests {
             "(Int, Bool)"
         );
         assert_eq!(format!("{}", Ty::Ref(Box::new(Ty::Int))), "&Int");
-        assert_eq!(format!("{}", Ty::RefMut(Box::new(Ty::Int))), "&mut Int");
+        assert_eq!(format!("{}", Ty::RefMut(Box::new(Ty::Int))), "&var Int");
     }
 
     #[test]

@@ -1,5 +1,5 @@
 ## Demonstrates auto-synthesised Debug for structs. The compiler
-## generates a printable representation usable in string interpolation.
+## generates a printable representation usable in `:?` interpolation.
 
 struct Point
   x: Int
@@ -15,5 +15,5 @@ def main
   let origin = Point.new(0, 0)
   let target = Point.new(3, 4)
   let segment = Line.new(origin, target)
-  puts "#{segment}"
+  puts "#{segment:?}"
 end

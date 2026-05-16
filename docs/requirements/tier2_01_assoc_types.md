@@ -15,7 +15,7 @@ is `Iterator.Item`:
 ```riven
 mixin Iterator
   type Item
-  def mut next -> Option[Self.Item]
+  def var next -> Option[Self.Item]
 end
 
 class Array[Int]
@@ -23,7 +23,7 @@ class Array[Int]
 
   include Iterator
   type Item = Int
-  def mut next -> Option[Int]
+  def var next -> Option[Int]
     self.pop
   end
 end
@@ -101,7 +101,7 @@ ast::TraitItem::AssocType { name, .. } => assoc.push(name.clone()),
   trait_name, assoc_name }`. Anywhere in a mixin signature where
   `Self.Item` appears, resolve today has to pick something to store;
   it falls back to `Ty::TypeParam { name: "Self.Item", bounds: vec![] }`
-  (via `resolve/mod.rs:2596-2615` taking the `DefKind::Trait` path,
+  (via `resolve/mod.rs:2596-2615` taking the `DefKind::Mixin` path,
   then `TypeParam`). This is *wrong* in two ways: it loses the link to
   `Self`, and it treats the projection as a fresh type parameter of
   the enclosing signature.
@@ -118,7 +118,7 @@ ast::TraitItem::AssocType { name, .. } => assoc.push(name.clone()),
 
 - `docs/tutorial/08-mixins.md:27-33`: `mixin Iterator` with `type Item`,
   return type `Option[Self.Item]`.
-- `docs/tutorial/12-generics.md:105-107`: `where A: Iterable[Item = Int]`
+- `docs/tutorial/12-generics.md:105-107`: `where A: Iterator[Item = Int]`
   — the equality-constraint sugar on a mixin bound. **This form is the
   surface syntax the parser must accept for associated-type bounds.**
 
@@ -136,13 +136,13 @@ pure type-check elaboration.
 
 ### Goals
 
-- **G1.** `mixin Iterator; type Item; def mut next -> Option[Self.Item] end`
+- **G1.** `mixin Iterator; type Item; def var next -> Option[Self.Item] end`
   parses, resolves, type-checks, and is usable in type bodies via
   `include`.
 - **G2.** A `class Array[Int] ... include Iterator; type Item = Int; ... end` block binds
   `Item` and type-checks every use of `Self.Item` inside the type body
   against `Int`.
-- **G3.** At a use site `def iter_sum[I: Iterator](i: &mut I) -> I.Item`
+- **G3.** At a use site `def iter_sum[I: Iterator](i: &var I) -> I.Item`
   (pick one syntax — see §4), the return type projects to the concrete
   associated type for each monomorphization.
 - **G4.** Equality constraints in bounds: `where I: Iterator[Item = Int]`
@@ -176,7 +176,7 @@ pure type-check elaboration.
 ```riven
 mixin Iterator
   type Item
-  def mut next -> Option[Self.Item]
+  def var next -> Option[Self.Item]
 end
 
 mixin FromIterator[T]
@@ -207,7 +207,7 @@ Rules:
 extension Array[Int]
   include Iterator
   type Item = Int
-  def mut next -> Option[Int]
+  def var next -> Option[Int]
     self.pop
   end
 end
@@ -238,7 +238,7 @@ Two forms, equivalent:
 
 ```riven
 # Dot form (Ruby-style, matches tutorial 08:31):
-def sum[I: Iterator[Item = Int]](i: &mut I) -> Int
+def sum[I: Iterator[Item = Int]](i: &var I) -> Int
   var total = 0
   while let Some(x) = i.next
     total = total + x
@@ -247,7 +247,7 @@ def sum[I: Iterator[Item = Int]](i: &mut I) -> Int
 end
 
 # Generic-over-Item form:
-def sum_all[I: Iterator](i: &mut I) -> I.Item
+def sum_all[I: Iterator](i: &var I) -> I.Item
   where I.Item: Add[Output = I.Item] + Default
   var total = I.Item.default
   while let Some(x) = i.next
@@ -274,7 +274,7 @@ Rules:
 ### 4.4 Equality constraints
 
 ```riven
-def process[I: Iterator[Item = Int]](i: &mut I) ...
+def process[I: Iterator[Item = Int]](i: &var I) ...
 def collect_strings[I: Iterator[Item = String]](i: I) -> Array[String] ...
 ```
 
@@ -320,7 +320,7 @@ fn try_project(&self, base_ty: &Ty, assoc_name: &str) -> Option<Ty> {
     // base_ty must be a TypeParam or Self — look at its bounds.
     let bounds = match base_ty {
         Ty::TypeParam { bounds, .. } => bounds,
-        _ => return None,
+        _ => return nil,
     };
     let candidates: Vec<&TraitRef> = bounds.iter().filter(|tr| {
         self.find_trait_info(&tr.name)
@@ -328,7 +328,7 @@ fn try_project(&self, base_ty: &Ty, assoc_name: &str) -> Option<Ty> {
             .unwrap_or(false)
     }).collect();
     match candidates.len() {
-        0 => None, // not an associated type — fall through to normal lookup
+        0 => nil, // not an associated type — fall through to normal lookup
         1 => Some(Ty::Projection {
             base: Box::new(base_ty.clone()),
             trait_name: candidates[0].name.clone(),
@@ -448,8 +448,8 @@ substitution map.
 
 New pass `typeck/check_impls.rs`, runs after `TraitResolver::collect_impls`:
 
-- For every impl, verify every associated type declared on the trait
-  is bound in the impl (else E-ASSOC-MISSING at impl.span).
+- For every extension, verify every associated type declared on the mixin
+  is bound in the extension (else E-ASSOC-MISSING at extension.span).
 - For every bound on an associated-type declaration (§5.3 bounds),
   verify the include's binding satisfies it via normal mixin solving.
   E.g., `type IntoIter: Iterator[Item = Self.Item]` + `type IntoIter = VecIntoIter[T]`
@@ -465,7 +465,7 @@ New pass `typeck/check_impls.rs`, runs after `TraitResolver::collect_impls`:
 | Add `Ty::Projection` | `hir/types.rs:39-166` |
 | Display/Debug for `Ty::Projection` | `hir/types.rs:344-478` |
 | AST `AssocEqConstraint` + `TraitBound.assoc_eq` | `parser/ast.rs:98-104` |
-| Parse `Trait[Assoc = Type]` sugar | `parser/types.rs:400-405` |
+| Parse `Mixin[Assoc = Type]` sugar | `parser/types.rs:400-405` |
 | `TraitInfo.assoc_types: Vec<AssocTypeDecl>` | `resolve/symbols.rs:60-66` |
 | `TraitRef.assoc_eq: Vec<(String, Ty)>` | `hir/types.rs:14-18` |
 | Resolve projection `T.Name` → `Ty::Projection` | new helper in `resolve/mod.rs` near `resolve_type_path` |
@@ -511,7 +511,7 @@ to `Int` at the call site).
 **Phase 01c — stdlib Iterator.** Depends on 01a + 01b + doc 01
 phase 1a of tier-1.
 
-10. Declare `mixin Iterator; type Item; def mut next -> Option[Self.Item]; end`
+10. Declare `mixin Iterator; type Item; def var next -> Option[Self.Item]; end`
     as a *user-level* mixin in the prelude, not a built-in with
     special-case resolution (the current list at `resolve/mod.rs:
     139-151` just carries a name; this is adequate).
@@ -615,7 +615,7 @@ See §6.2. Summary:
   associated types must be declared before they are referenced. This
   matches Rust and avoids circular normalization.
 - **R-1:** the `Ty::Projection` → `Ty::Infer` fallback in the resolver
-  today (via `DefKind::Trait` → `TypeParam`, `resolve/mod.rs:2609-2615`)
+  today (via `DefKind::Mixin` → `TypeParam`, `resolve/mod.rs:2609-2615`)
   must be removed. Any code that currently type-checks only because of
   this fallback will break. Expect test-fixture churn.
 - **R-2:** normalization under Drop check. An `Array[I.Item]` field
@@ -623,7 +623,7 @@ See §6.2. Summary:
   does not. The drop-elaboration pass (tier-1 doc 04 §7) consumes
   the post-monomorphization types, so this just works — but only
   because M2 lands first. Sequencing matters.
-- **R-3:** the existing `DefKind::Trait { info }` path in
+- **R-3:** the existing `DefKind::Mixin { info }` path in
   `resolve_type_path` (`resolve/mod.rs:2609`) turns a bare mixin name
   used as a type into a `Ty::TypeParam`. With projections, bare
   `Iterator` as a type becomes `some Iterator` or `any Iterator`; the
@@ -639,22 +639,22 @@ See §6.2. Summary:
   `i.next` on `Array[Int].iter`; return type is `Option[Int]`.
 - T2: generic function `def sum[I: Iterator[Item = Int]](...)` —
   monomorphizes, type-checks, runs.
-- T3: projection at use site: `def first[I: Iterator](i: &mut I) -> Option[I.Item]`.
+- T3: projection at use site: `def first[I: Iterator](i: &var I) -> Option[I.Item]`.
   Unification of the return at the call site with a concrete iterator
   yields the concrete item type.
 - T4: super-mixin referring to sub-mixin's `Self.Item`:
-  `mixin DoubleEndedIterator: Iterator`; impl verifies `Self.Item`
+  `mixin DoubleEndedIterator: Iterator`; extension verifies `Self.Item`
   matches the parent binding.
 - T5: equality-constraint sugar: `where I: Iterator[Item = String]`
   accepts iterators over `String`, rejects iterators over `&str`.
 - T6: `IntoIterator` with a bound on `IntoIter`: `type IntoIter:
-  Iterator[Item = Self.Item]` — verify the impl's binding satisfies
+  Iterator[Item = Self.Item]` — verify the extension's binding satisfies
   the bound.
 
 ### 10.2 Negative tests
 
-- N1: impl missing `type Item` → E-ASSOC-MISSING.
-- N2: impl binding `type Item = String` but method signature says
+- N1: extension missing `type Item` → E-ASSOC-MISSING.
+- N2: extension binding `type Item = String` but method signature says
   `Option[Int]` → E-ASSOC-METHOD-MISMATCH (reuses existing type error
   wording).
 - N3: `I.Item` where `I` is unconstrained → E-ASSOC-UNBOUND.
@@ -665,7 +665,7 @@ See §6.2. Summary:
 - N6: projection used as a type constructor (`I.Item[U]`) where the
   associated type is not generic → E-ASSOC-NOT-GENERIC.
 - N7: circular: `type Iter: Iterator[Item = Self.Iter]` →
-  E-ASSOC-CYCLE at impl time.
+  E-ASSOC-CYCLE at extension time.
 
 ### 10.3 Fixture additions
 
@@ -674,5 +674,5 @@ See §6.2. Summary:
   `I: Iterator[Item = T]`.
 - `tests/fixtures/assoc_bound_chain.rvn` — IntoIterator with
   `type IntoIter: Iterator[Item = Self.Item]`.
-- `tests/fixtures/assoc_error_missing.rvn` — negative: impl missing
+- `tests/fixtures/assoc_error_missing.rvn` — negative: extension missing
   associated type.

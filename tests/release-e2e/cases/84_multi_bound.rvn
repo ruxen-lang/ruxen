@@ -1,4 +1,4 @@
-mixin Displayable
+mixin Showable
   def to_display -> String
 end
 
@@ -12,7 +12,7 @@ class Item
   def init(@name: String)
   end
 
-  include Displayable
+  include Showable
 
   def to_display -> String
     self.name.clone
@@ -25,7 +25,7 @@ class Item
   end
 end
 
-def show[T: Displayable + Tagged](x: &T)
+def show[T: Showable + Tagged](x: &T)
   puts "#{x.to_display}"
   puts "#{x.tag}"
 end

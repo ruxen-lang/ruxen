@@ -11,26 +11,12 @@ use riven_core::parser::Parser;
 use riven_core::typeck;
 use std::process::Command;
 
-const SOURCE: &str = r#"
-class Holder
-  tag: Int
-
-  def init(t: Int)
-    self.tag = t
-  end
-
-  include Drop
-
-  def drop
-    puts "DROP_RAN_tag=#{self.tag}"
-  end
-end
-
-def main
-  let h = Holder.new(7)
-  puts "before"
-end
-"#;
+fn rvn(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/riven")
+        .join(format!("{name}.rvn"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+}
 
 fn workspace_root() -> std::path::PathBuf {
     let crate_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -44,7 +30,8 @@ fn user_drop_runs_at_scope_exit() {
     let _ = std::fs::create_dir_all(&tmp_dir);
     let bin_path = tmp_dir.join("user_drop_runs.bin");
 
-    let mut lexer = Lexer::new(SOURCE);
+    let source = rvn("user_drop_runs_at_scope_exit");
+    let mut lexer = Lexer::new(&source);
     let tokens = lexer.tokenize().expect("lex");
     let mut parser = Parser::new(tokens);
     let program = parser.parse().expect("parse");

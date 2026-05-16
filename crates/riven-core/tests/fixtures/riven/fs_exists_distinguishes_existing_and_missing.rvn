@@ -1,0 +1,15 @@
+
+use std.fs.exists
+
+def main
+  if exists("__FILE__")
+    puts "yes"
+  else
+    puts "no_existing"
+  end
+  if exists("__MISSING__")
+    puts "missing_yes"
+  else
+    puts "missing_no"
+  end
+end

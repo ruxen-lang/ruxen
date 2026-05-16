@@ -44,7 +44,7 @@ The compiler has *partial* scaffolding for every Tier-2 feature except
 variance and HRTBs. The scaffolding is load-bearing for the design in
 these docs; here is where it lives:
 
-- **Trait `type` items parse into `TraitItem::AssocType`.**
+- **Mixin `type` items parse into `TraitItem::AssocType`.**
   `crates/riven-core/src/parser/mod.rs:908-914`. The HIR variant
   `HirTraitItem::AssocType` exists (`hir/nodes.rs:483-486`) and resolve
   walks the AST into it (`resolve/mod.rs:940-945`). `TraitInfo::

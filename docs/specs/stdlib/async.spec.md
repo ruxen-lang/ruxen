@@ -18,7 +18,7 @@ the type level only.
 ## B1 — `Future` mixin is registered
 
 `Future` is a mixin with required method
-`def mut poll(ctx: &mut Context) -> Poll[T]`.  Resolvable
+`def var poll(ctx: &var Context) -> Poll[T]`.  Resolvable
 via `use std.future.Future`.
 
 ## B2 — `Poll[T]` enum has `Ready(T)` and `Pending` variants

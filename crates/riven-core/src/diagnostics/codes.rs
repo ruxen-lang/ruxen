@@ -180,11 +180,11 @@ pub const REGISTRY: &[CodeInfo] = &[
     },
     CodeInfo {
         code: "E1002",
-        title: "cannot borrow as mutable — already borrowed as immutable",
+        title: "cannot borrow writably — already borrowed read-only",
     },
     CodeInfo {
         code: "E1003",
-        title: "cannot borrow as immutable — already borrowed as mutable",
+        title: "cannot borrow read-only — already borrowed writably",
     },
     CodeInfo {
         code: "E1004",
@@ -196,11 +196,11 @@ pub const REGISTRY: &[CodeInfo] = &[
     },
     CodeInfo {
         code: "E1006",
-        title: "cannot assign to immutable variable",
+        title: "cannot assign to `let` binding",
     },
     CodeInfo {
         code: "E1007",
-        title: "cannot borrow immutable variable as mutable",
+        title: "cannot borrow `let` binding writably",
     },
     CodeInfo {
         code: "E1008",
@@ -224,7 +224,7 @@ pub const REGISTRY: &[CodeInfo] = &[
     },
     CodeInfo {
         code: "E1013",
-        title: "non-`'static` value captured by send-required closure",
+        title: "non-`static` value captured by send-required closure",
     },
     CodeInfo {
         code: "E1014",

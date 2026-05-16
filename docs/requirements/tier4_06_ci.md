@@ -421,7 +421,7 @@ CI flakes erode trust. Standing rules:
 
 1. **No network in tests.** Tests that touch the network are tagged `#[ignore]` and run in a separate job (for `riven-cli/tests/registry_mock.rs`, doc 01).
 2. **No `#[cfg(target_os = "linux")]` assumptions.** Tests must work on both Linux and macOS or be explicitly gated.
-3. **Temp files in `std::env::temp_dir()` with unique names.** Already the pattern (`crates/riven-cli/src/scaffold.rs:225-231`).
+3. **Temp files in `std.env.temp_dir()` with unique names.** Already the pattern (`crates/riven-cli/src/scaffold.rs:225-231`).
 4. **No real git clones from `https://github.com/…` in tests.** Use `file://` local repos (tier 4.01 mock registry).
 5. **Timeouts on all async ops.** If a test hangs, fail fast with `cargo test --timeout 120`.
 

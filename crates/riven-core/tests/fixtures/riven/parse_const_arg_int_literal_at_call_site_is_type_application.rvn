@@ -1,0 +1,11 @@
+
+class Counter[const N: USize]
+  value: Int
+
+  def init(@value: Int)
+  end
+end
+
+def main
+  let c = Counter[10].new(42)
+end

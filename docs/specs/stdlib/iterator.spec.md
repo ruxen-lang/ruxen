@@ -87,6 +87,6 @@ through `611_…`).
 
 - True streaming iterators (don't materialise the source eagerly).
 - `Iterator` as a user-implementable mixin.
-- `iter_mut` / `into_iter` distinctions (v1 is `iter` only).
+- `iter_var` / `into_iter` distinctions (v1 is `iter` only).
 - `Peekable`, `Cycle`, `StepBy`, `Inspect`, `Scan`, `FlatMap`,
   `Flatten` — only the methods listed above are wired.

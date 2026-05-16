@@ -11,6 +11,13 @@ use riven_core::parser::Parser;
 use riven_core::typeck;
 use std::process::Command;
 
+fn rvn(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/riven")
+        .join(format!("{name}.rvn"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+}
+
 fn workspace_root() -> std::path::PathBuf {
     let crate_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     crate_dir.parent().unwrap().parent().unwrap().to_path_buf()
@@ -46,24 +53,8 @@ fn compile_and_run(source: &str, name: &str) -> (String, Option<i32>) {
 
 #[test]
 fn derive_partial_eq_compares_fields_struct() {
-    let source = r#"
-struct P
-  x: Int
-  y: Int
-  derive PartialEq
-end
-
-def main
-  let a = P.new(1, 2)
-  let b = P.new(1, 2)
-  let c = P.new(3, 4)
-  let r1 = a == b
-  let r2 = a == c
-  puts "ab=#{r1}"
-  puts "ac=#{r2}"
-end
-"#;
-    let (stdout, exit) = compile_and_run(source, "derive_partial_eq_basic");
+    let source = rvn("derive_partial_eq_compares_fields_struct");
+    let (stdout, exit) = compile_and_run(&source, "derive_partial_eq_basic");
     assert_eq!(exit, Some(0), "non-zero exit; stdout={}", stdout);
     assert_eq!(
         stdout, "ab=true\nac=false\n",

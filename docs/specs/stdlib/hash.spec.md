@@ -169,7 +169,7 @@ use case so a regression test would be a costly noise generator.
 
 ## Cross-references
 
-- `Map[K, V]` surface: [hashmap.spec.md](hashmap.spec.md).
-- `Set[T]` surface: [hashset.spec.md](hashset.spec.md).
+- `Map[K, V]` surface: [map.spec.md](map.spec.md).
+- `Set[T]` surface: [set.spec.md](set.spec.md).
 - Implicit-include validator that rejects non-Hashable fields: see the
   E0615 entry in `docs/errors/`.

@@ -106,7 +106,7 @@ today. Section 10 discusses whether to repurpose it or deprecate it.
   allocation per suspension.
 - G2. `await` suspends the calling async context until a `Future` resolves.
   Syntax is Riven-native, not a transplant.
-- G3. The borrow checker rejects `&mut` (and `&`) borrows that cross a
+- G3. The borrow checker rejects `&var` (and `&`) borrows that cross a
   suspend point illegally — the guarantee is strictly stronger than "compiles
   in Rust".
 - G4. A minimal built-in single-threaded executor ships with the compiler,
@@ -187,7 +187,7 @@ FuncDef   ::= "async"? "def" ...
 
 `async` is allowed before `def`:
 `async def ...`. It is also allowed on methods in `class`, `extension`, and
-`mixin` bodies. `async` before `init`/`def mut` is **rejected** (an async
+`mixin` bodies. `async` before `init`/`def var` is **rejected** (an async
 constructor makes no semantic sense; an async mutating method is allowed).
 
 `FuncDef` gains a field: `pub is_async: bool`. Printer and formatter must
@@ -259,7 +259,7 @@ PostfixOp     ::= ... | "." "await"                # postfix form
 
 ---
 
-## 6. The `Future` Trait
+## 6. The `Future` Mixin
 
 ### 6.1 Definition (in `core`)
 
@@ -271,7 +271,7 @@ end
 
 mixin Future
   type Output
-  def mut poll(ctx: &mut Context) -> Poll[Self.Output]
+  def var poll(ctx: &var Context) -> Poll[Self.Output]
 end
 
 class Context
@@ -295,11 +295,11 @@ end
 
 ### 6.3 Pin — or why Riven can skip it
 
-Rust needs `Pin<&mut T>` because a self-referential generator, once moved,
+Rust needs `Pin<&var T>` because a self-referential generator, once moved,
 invalidates internal pointers into itself. Riven has two options:
 
 1. **Replicate Pin.** Add `core.pin.Pin[T]`, require `poll` to take
-   `Pin[&mut Self]`, and introduce `Unpin` as an auto-mixin.
+   `Pin[&var Self]`, and introduce `Unpin` as an auto-mixin.
 
 2. **Make all generated futures address-stable by construction.** Pin's
    purpose is runtime enforcement of "don't move this value after
@@ -401,7 +401,7 @@ place.** Rationale:
 7. **Drop handling**: if the future is dropped while in state
    `Suspend_i`, each live local must be dropped. Extend the existing
    drop-elaboration pass to synthesize a `Drop` provision (`include Drop` +
-   `def mut drop`) on `FooFuture` that matches on state and drops in the
+   `def var drop`) on `FooFuture` that matches on state and drops in the
    right order.
 
 ### 7.3 New MIR nodes
@@ -429,7 +429,7 @@ Run on HIR (`borrow_check::borrow_check`, `borrow_check/mod.rs:30`)
 
 - For each async function body, compute "live across await": the set of
   locals whose live range spans at least one `HirExprKind::Await`.
-- If any member of that set is a `&mut T` borrow with conflicting
+- If any member of that set is a `&var T` borrow with conflicting
   accesses after the await resumes, emit `E_async_borrow_across_await`
   (new error code in `borrow_check/errors.rs`). The diagnostic must
   point at the borrow, the await, and the subsequent use.
@@ -437,17 +437,17 @@ Run on HIR (`borrow_check::borrow_check`, `borrow_check/mod.rs:30`)
 Example rejected:
 
 ```riven
-async def bad(v: &mut Array[Int])
-  let r = &mut v[0]        # &mut borrow
+async def bad(v: &var Array[Int])
+  let r = &var v[0]        # &var borrow
   await yield_now()        # suspension
-  *r += 1                  # ERROR: &mut borrow held across await
+  *r += 1                  # ERROR: &var borrow held across await
 end
 ```
 
 Example accepted (borrow released before await):
 
 ```riven
-async def good(v: &mut Array[Int])
+async def good(v: &var Array[Int])
   v[0] += 1
   await yield_now()
   v[0] += 2                # fresh borrow after resume
@@ -634,10 +634,10 @@ Minimum viable surface for Phase 3d:
 ```riven
 # async_io.net
 async def TcpStream.connect(addr: &str) -> Result[TcpStream, IoError]
-async def TcpStream.read(&mut self, buf: &mut [UInt8]) -> Result[USize, IoError]
-async def TcpStream.write(&mut self, buf: &[UInt8]) -> Result[USize, IoError]
+async def TcpStream.read(&var self, buf: &var [UInt8]) -> Result[USize, IoError]
+async def TcpStream.write(&var self, buf: &[UInt8]) -> Result[USize, IoError]
 async def TcpListener.bind(addr: &str) -> Result[TcpListener, IoError]
-async def TcpListener.accept(&mut self) -> Result[(TcpStream, SocketAddr), IoError]
+async def TcpListener.accept(&var self) -> Result[(TcpStream, SocketAddr), IoError]
 
 # async_io.time
 async def sleep(duration: Duration) -> ()

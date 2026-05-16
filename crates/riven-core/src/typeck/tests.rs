@@ -7,6 +7,13 @@ mod tests {
     use crate::lexer::token::Span;
     use crate::typeck::unify::{can_coerce, unify};
 
+    fn rvn(name: &str) -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/riven")
+            .join(format!("{name}.rvn"));
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+    }
+
     fn span() -> Span {
         Span {
             start: 0,
@@ -338,17 +345,8 @@ mod tests {
 
     #[test]
     fn enum_variant_resolution() {
-        let source = r#"
-enum Priority
-  Low
-  High
-end
-
-def test
-  let p = Priority.Low
-end
-"#;
-        let result = parse_and_check(source);
+        let source = rvn("enum_variant_resolution");
+        let result = parse_and_check(&source);
         // Should resolve Priority.Low without errors
         let errors: Vec<_> = result
             .diagnostics
@@ -364,16 +362,8 @@ end
 
     #[test]
     fn class_definition() {
-        let source = r#"
-class Point
-  x: Int
-  y: Int
-
-  def init(@x: Int, @y: Int)
-  end
-end
-"#;
-        let result = parse_and_check(source);
+        let source = rvn("class_definition");
+        let result = parse_and_check(&source);
         let type_errors: Vec<_> = result
             .diagnostics
             .iter()
@@ -392,25 +382,8 @@ end
     // methods scattered alongside (§10a migration mapping).
     #[test]
     fn mixin_and_include() {
-        let source = r#"
-mixin Greetable
-  def greet -> String
-end
-
-class Dog
-  name: String
-
-  def init(@name: String)
-  end
-
-  include Greetable
-
-  def greet -> String
-    "woof"
-  end
-end
-"#;
-        let result = parse_and_check(source);
+        let source = rvn("mixin_and_include");
+        let result = parse_and_check(&source);
         let type_errors: Vec<_> = result
             .diagnostics
             .iter()
@@ -426,20 +399,8 @@ end
 
     #[test]
     fn match_expression() {
-        let source = r#"
-enum Color
-  Red
-  Blue
-end
-
-def describe(c: Color) -> String
-  match c
-    Color.Red -> "red"
-    Color.Blue -> "blue"
-  end
-end
-"#;
-        let result = parse_and_check(source);
+        let source = rvn("match_expression");
+        let result = parse_and_check(&source);
         let type_errors: Vec<_> = result
             .diagnostics
             .iter()
@@ -455,16 +416,8 @@ end
 
     #[test]
     fn if_expression_types() {
-        let source = r#"
-def test(x: Bool) -> Int
-  if x
-    42
-  else
-    0
-  end
-end
-"#;
-        let result = parse_and_check(source);
+        let source = rvn("if_expression_types");
+        let result = parse_and_check(&source);
         let type_errors: Vec<_> = result
             .diagnostics
             .iter()
@@ -502,15 +455,8 @@ end
 
     #[test]
     fn generic_class() {
-        let source = r#"
-class Container[T]
-  value: T
-
-  def init(@value: T)
-  end
-end
-"#;
-        let result = parse_and_check(source);
+        let source = rvn("generic_class");
+        let result = parse_and_check(&source);
         let type_errors: Vec<_> = result
             .diagnostics
             .iter()
@@ -526,23 +472,8 @@ end
 
     #[test]
     fn send_bound_rejects_raw_pointer_payload() {
-        let source = r#"
-class RawBox
-  ptr: *mut Void
-
-  def init(@ptr: *mut Void)
-  end
-end
-
-def require_send[T: Send](value: T)
-end
-
-def test
-  let box = RawBox.new(null)
-  require_send(box)
-end
-"#;
-        let result = parse_and_check(source);
+        let source = rvn("send_bound_rejects_raw_pointer_payload");
+        let result = parse_and_check(&source);
         assert!(
             result
                 .diagnostics
@@ -557,23 +488,8 @@ end
     fn sync_bound_rejects_negative_include_opt_out() {
         // ruby-naming.spec.md §10a: `impl !Sync for T` → in-body
         // `include !Sync` opt-out directive.
-        let source = r#"
-class NotSync
-  def init
-  end
-
-  include !Sync
-end
-
-def require_sync[T: Sync](value: T)
-end
-
-def test
-  let value = NotSync.new()
-  require_sync(value)
-end
-"#;
-        let result = parse_and_check(source);
+        let source = rvn("sync_bound_rejects_negative_include_opt_out");
+        let result = parse_and_check(&source);
         assert!(
             result
                 .diagnostics
@@ -588,25 +504,8 @@ end
     fn unsafe_include_send_satisfies_send_bound() {
         // ruby-naming.spec.md §10a: `unsafe impl Send for T` → in-body
         // `unsafe include Send` directive; `null` → `nil`.
-        let source = r#"
-class FfiHandle
-  ptr: *mut Void
-
-  def init(@ptr: *mut Void)
-  end
-
-  unsafe include Send
-end
-
-def require_send[T: Send](value: T)
-end
-
-def test
-  let handle = FfiHandle.new(nil)
-  require_send(handle)
-end
-"#;
-        let result = parse_and_check(source);
+        let source = rvn("unsafe_include_send_satisfies_send_bound");
+        let result = parse_and_check(&source);
         assert!(
             !result
                 .diagnostics
@@ -619,16 +518,8 @@ end
 
     #[test]
     fn async_function_call_returns_future_and_await_unwraps_output() {
-        let source = r#"
-async def fetch_user(id: Int) -> Int
-  id
-end
-
-async def main -> Int
-  fetch_user(42).await
-end
-"#;
-        let result = parse_and_check(source);
+        let source = rvn("async_function_call_returns_future_and_await_unwraps_output");
+        let result = parse_and_check(&source);
         let errors: Vec<_> = result
             .diagnostics
             .iter()

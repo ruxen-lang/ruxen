@@ -1,0 +1,5 @@
+def main
+  let double = { |x: Int| x * 2 }
+  puts "#{double.(5)}"
+  puts "#{double.(10)}"
+end

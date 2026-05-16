@@ -25,12 +25,12 @@ fn lex_with_errors(input: &str) -> (Vec<Token>, Vec<crate::diagnostics::Diagnost
 fn test_all_keywords() {
     // Post Ruby-naming migration (docs/specs/syntax/ruby-naming.spec.md):
     // `trait`, `impl`, `pub`, `dyn`, `derive`, `None`, `crate`, `extern`,
-    // and `null` are no longer keywords — they lex as ordinary identifiers
-    // and the lookup_keyword table maps the new replacements (`mixin`,
-    // `include`/`extension`, `public`/`private`, `any`/`some`, …) instead.
+    // `null`, and `mut` are no longer keywords — they lex as ordinary
+    // identifiers and the lookup_keyword table maps the new replacements
+    // (`mixin`, `include`/`extension`, `public`/`private`, `any`/`some`,
+    // `var`, …) instead.
     let pairs = vec![
         ("let", TokenKind::Let),
-        ("mut", TokenKind::Mut),
         ("move", TokenKind::Move),
         ("ref", TokenKind::Ref),
         ("var", TokenKind::Var),
@@ -240,28 +240,30 @@ fn test_multi_char_operators() {
 }
 
 #[test]
-fn test_amp_mut() {
-    let kinds = lex_kinds("&mut");
+fn test_amp_var() {
+    // Post Ruby-naming migration: `&var` is the writable-reference
+    // single-token (the AmpMut variant is reused — internal name).
+    let kinds = lex_kinds("&var");
     assert_eq!(kinds, vec![TokenKind::AmpMut, TokenKind::Eof]);
 }
 
 #[test]
-fn test_amp_mut_not_partial() {
-    // &mutable should be & + identifier "mutable"
-    let kinds = lex_kinds("&mutable");
+fn test_amp_var_not_partial() {
+    // &variable should be & + identifier "variable"
+    let kinds = lex_kinds("&variable");
     assert_eq!(
         kinds,
         vec![
             TokenKind::Amp,
-            TokenKind::Identifier("mutable".into()),
+            TokenKind::Identifier("variable".into()),
             TokenKind::Eof
         ]
     );
 }
 
 #[test]
-fn test_amp_mut_with_value() {
-    let kinds = lex_kinds("&mut value");
+fn test_amp_var_with_value() {
+    let kinds = lex_kinds("&var value");
     assert_eq!(
         kinds,
         vec![
@@ -1209,17 +1211,17 @@ fn test_let_binding() {
 
 #[test]
 fn test_method_definition() {
-    // ruby-naming: `pub` is no longer reserved; methods are now prefixed
-    // with `public` / `private` / `protected` (or live under a section
-    // marker), so the canonical lex of a public method signature is
-    // `public def mut assign(...)`.
-    let kinds = lex_kinds("public def mut assign(name: String)");
+    // ruby-naming: `pub` and `mut` are no longer reserved; methods are
+    // prefixed with `public` / `private` / `protected` (or live under a
+    // section marker), and writable receivers use `var`. The canonical
+    // lex of a writing method signature is `public def var assign(...)`.
+    let kinds = lex_kinds("public def var assign(name: String)");
     assert_eq!(
         kinds,
         vec![
             TokenKind::Public,
             TokenKind::Def,
-            TokenKind::Mut,
+            TokenKind::Var,
             TokenKind::Identifier("assign".into()),
             TokenKind::LParen,
             TokenKind::Identifier("name".into()),

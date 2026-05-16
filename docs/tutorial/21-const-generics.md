@@ -206,8 +206,8 @@ folded to `SmallVec[Int]` and silently swapped.
 
 Two follow-ups remain for the v1 const-generics story:
 
-- **S7 binding-threading** — `codegen/layout.rs::layout_of` is
-  called with an empty `HashMap<String, u64>` today, so
+- **S7 binding-threading** — the Rust-side `codegen/layout.rs` →
+  `layout_of` is called with an empty const-binding map today, so
   `struct Buf[T, const N: USize]` with field `data: [T; N]` produces
   a 0-byte field at the layout pass.  The monomorphization wrapper
   needs to thread per-instantiation bindings through.  Once this

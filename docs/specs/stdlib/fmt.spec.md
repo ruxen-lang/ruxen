@@ -17,7 +17,7 @@ one or more Rust integration tests in `crates/riven-core/tests/`.
 ## B1 — `Display` mixin surface
 
 `std.fmt.Display` is resolvable at the type level with method
-signature `def fmt(f: &mut Formatter) -> Result[(), FmtError]`.
+signature `def fmt(f: &var Formatter) -> Result[(), FmtError]`.
 
 **Given** a user type `T` with `include Display` in its body
 **When** `T` is used in an interpolation `"#{t}"`

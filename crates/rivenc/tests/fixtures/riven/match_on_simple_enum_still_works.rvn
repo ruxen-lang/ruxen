@@ -1,0 +1,19 @@
+enum Color
+  Red
+  Green
+  Blue
+end
+
+def describe(c: Color) -> String
+  match c
+    Color.Red   -> "red"
+    Color.Green -> "green"
+    Color.Blue  -> "blue"
+  end
+end
+
+def main
+  puts describe(Color.Red)
+  puts describe(Color.Green)
+  puts describe(Color.Blue)
+end

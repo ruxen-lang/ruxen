@@ -1,0 +1,11 @@
+struct Buffer
+  value: Int
+end
+
+def main
+  var i = 0
+  while i < 3
+    let _b = Buffer.new(i)
+    i = i + 1
+  end
+end

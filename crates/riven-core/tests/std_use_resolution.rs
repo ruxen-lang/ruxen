@@ -5,6 +5,13 @@ use riven_core::{borrow_check, codegen, typeck};
 use std::io::Write;
 use std::process::{Command, Stdio};
 
+fn rvn(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/riven")
+        .join(format!("{name}.rvn"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+}
+
 fn typecheck_source(source: &str) -> Vec<riven_core::diagnostics::Diagnostic> {
     let mut lexer = Lexer::new(source);
     let tokens = lexer.tokenize().expect("lex");
@@ -56,15 +63,8 @@ fn compile_to_exe(source: &str) -> String {
 
 #[test]
 fn use_std_io_typechecks_cleanly() {
-    let source = r#"
-use std.io
-
-def main
-  puts "ok"
-end
-"#;
-
-    let diagnostics = typecheck_source(source);
+    let source = rvn("use_std_io_typechecks_cleanly");
+    let diagnostics = typecheck_source(&source);
     let errors: Vec<_> = diagnostics
         .iter()
         .filter(|d| d.level == DiagnosticLevel::Error)
@@ -79,41 +79,8 @@ end
 
 #[test]
 fn std_sync_concurrency_surface_typechecks_cleanly() {
-    let source = r#"
-use std.sync.{Thread, JoinHandle, ThreadId, Mutex, MutexGuard, Arc, PoisonError, ThreadPanic}
-
-def main
-  let mutex: Mutex[Int] = Mutex.new(41)
-  let guard_result: Result[MutexGuard[Int], PoisonError] = mutex.lock()
-  let guard: MutexGuard[Int] = mutex.lock!()
-  let try_guard: Option[MutexGuard[Int]] = mutex.try_lock()
-  let inner: Result[Int, PoisonError] = mutex.into_inner()
-
-  let shared: Arc[Int] = Arc.new(5)
-  let shared2: Arc[Int] = shared.clone()
-  let strong: USize = shared.strong_count()
-  let weak: USize = shared.weak_count()
-  let shared_ref: &Int = shared.deref()
-  let guard_ref: &Int = guard.deref()
-  let guard_mut_ref: &mut Int = guard.deref_mut()
-
-  let handle: JoinHandle[Int] = Thread.spawn({ || 42 })
-  let joined: Result[Int, ThreadPanic] = handle.join()
-
-  let handle2 = Thread.spawn({ || 7 })
-  let joined2: Int = handle2.join!()
-  let spawned_thread_id: ThreadId = Thread.spawn({ || 1 }).thread_id()
-  let current: Thread = Thread.current()
-  let current_id: ThreadId = current.id()
-  let current_name: Option[String] = current.name()
-  Thread.sleep(0)
-  Thread.yield_now()
-
-  let _ = joined
-end
-"#;
-
-    let diagnostics = typecheck_source(source);
+    let source = rvn("std_sync_concurrency_surface_typechecks_cleanly");
+    let diagnostics = typecheck_source(&source);
     let errors: Vec<_> = diagnostics
         .iter()
         .filter(|d| d.level == DiagnosticLevel::Error)
@@ -128,17 +95,8 @@ end
 
 #[test]
 fn std_sync_thread_sleep_and_yield_round_trip() {
-    let source = r#"
-use std.sync.Thread
-
-def main
-  Thread.sleep(0)
-  Thread.yield_now()
-  puts "thread helpers ok"
-end
-"#;
-
-    let exe = compile_to_exe(source);
+    let source = rvn("std_sync_thread_sleep_and_yield_round_trip");
+    let exe = compile_to_exe(&source);
     let output = Command::new(&exe)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -162,30 +120,8 @@ end
 
 #[test]
 fn std_io_group_imports_and_methods_typecheck_cleanly() {
-    let source = r#"
-use std.io.{read_line, stdin, stdout, stderr, println, eprintln, Stdin, Stdout, Stderr, IoError}
-
-def echo(reader: Stdin, writer: Stdout, err: Stderr) -> Result[String, IoError]
-  writer.flush()
-  err.flush()
-  reader.read_line()
-end
-
-def main
-  let reader = stdin()
-  let writer = stdout()
-  let err = stderr()
-  println("prelude line")
-  eprintln("err line")
-  let line = echo(reader, writer, err).expect!("echo")
-  writer.write_str(line).expect!("write")
-  writer.flush().expect!("flush")
-  let line2 = read_line().expect!("read_line")
-  err.write_str(line2).expect!("stderr")
-end
-"#;
-
-    let diagnostics = typecheck_source(source);
+    let source = rvn("std_io_group_imports_and_methods_typecheck_cleanly");
+    let diagnostics = typecheck_source(&source);
     let errors: Vec<_> = diagnostics
         .iter()
         .filter(|d| d.level == DiagnosticLevel::Error)
@@ -200,16 +136,8 @@ end
 
 #[test]
 fn std_io_println_and_eprintln_round_trip() {
-    let source = r#"
-use std.io.{println, eprintln}
-
-def main
-  println("hello stdout")
-  eprintln("hello stderr")
-end
-"#;
-
-    let exe = compile_to_exe(source);
+    let source = rvn("std_io_println_and_eprintln_round_trip");
+    let exe = compile_to_exe(&source);
     let output = Command::new(&exe)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -230,28 +158,8 @@ end
 
 #[test]
 fn std_io_write_str_result_is_unit_and_round_trips() {
-    let source = r#"
-use std.io.{stdout, stderr, Stdout, Stderr, IoError}
-
-def write_stdout(out: Stdout) -> Result[(), IoError]
-  out.write_str("hello stdout")
-end
-
-def write_stderr(err: Stderr) -> Result[(), IoError]
-  err.write_str("hello stderr")
-end
-
-def main
-  let out = stdout()
-  let err = stderr()
-  write_stdout(out).expect!("stdout write")
-  stdout().flush().expect!("stdout flush")
-  write_stderr(err).expect!("stderr write")
-  stderr().flush().expect!("stderr flush")
-end
-"#;
-
-    let exe = compile_to_exe(source);
+    let source = rvn("std_io_write_str_result_is_unit_and_round_trips");
+    let exe = compile_to_exe(&source);
     let output = Command::new(&exe)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -272,18 +180,8 @@ end
 
 #[test]
 fn std_io_read_line_and_stdout_round_trip() {
-    let source = r#"
-use std.io.{read_line, stdout}
-
-def main
-  let line = read_line().expect!("stdin line")
-  let out = stdout()
-  out.write_str(line).expect!("stdout write")
-  out.flush().expect!("stdout flush")
-end
-"#;
-
-    let exe = compile_to_exe(source);
+    let source = rvn("std_io_read_line_and_stdout_round_trip");
+    let exe = compile_to_exe(&source);
     let mut child = Command::new(&exe)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -316,19 +214,8 @@ end
 
 #[test]
 fn std_io_stdin_read_to_string_round_trip() {
-    let source = r#"
-use std.io.{stdin, stdout}
-
-def main
-  let reader = stdin()
-  let out = stdout()
-  let text = reader.read_to_string().expect!("stdin read_to_string")
-  out.write_str(text).expect!("stdout write")
-  out.flush().expect!("stdout flush")
-end
-"#;
-
-    let exe = compile_to_exe(source);
+    let source = rvn("std_io_stdin_read_to_string_round_trip");
+    let exe = compile_to_exe(&source);
     let mut child = Command::new(&exe)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -361,17 +248,8 @@ end
 
 #[test]
 fn main_shim_initializes_runtime_argv() {
-    let source = r##"
-extern "C"
-  def riven_env_args_count() -> Int64
-end
-
-def main
-  puts "#{riven_env_args_count()}"
-end
-"##;
-
-    let exe = compile_to_exe(source);
+    let source = rvn("main_shim_initializes_runtime_argv");
+    let exe = compile_to_exe(&source);
     let output = Command::new(&exe)
         .arg("alpha")
         .arg("beta")
@@ -393,17 +271,8 @@ end
 
 #[test]
 fn use_std_env_typechecks_cleanly() {
-    let source = r##"
-use std.env.{args, var}
-
-def main
-  let argv = args()
-  puts "#{argv.len()}"
-  puts var("HOME").expect!("home")
-end
-"##;
-
-    let diagnostics = typecheck_source(source);
+    let source = rvn("use_std_env_typechecks_cleanly");
+    let diagnostics = typecheck_source(&source);
     let errors: Vec<_> = diagnostics
         .iter()
         .filter(|d| d.level == DiagnosticLevel::Error)
@@ -418,16 +287,8 @@ end
 
 #[test]
 fn std_env_args_round_trip() {
-    let source = r##"
-use std.env.args
-
-def main
-  let argv = args()
-  puts "#{argv.len()}"
-end
-"##;
-
-    let exe = compile_to_exe(source);
+    let source = rvn("std_env_args_round_trip");
+    let exe = compile_to_exe(&source);
     let output = Command::new(&exe)
         .arg("alpha")
         .arg("beta")
@@ -449,15 +310,8 @@ end
 
 #[test]
 fn std_env_var_round_trip() {
-    let source = r#"
-use std.env.var
-
-def main
-  puts var("RIVEN_STD_ENV_TEST").expect!("env")
-end
-"#;
-
-    let exe = compile_to_exe(source);
+    let source = rvn("std_env_var_round_trip");
+    let exe = compile_to_exe(&source);
     let output = Command::new(&exe)
         .env("RIVEN_STD_ENV_TEST", "env value")
         .stdout(Stdio::piped())
@@ -478,18 +332,8 @@ end
 
 #[test]
 fn use_std_fs_typechecks_cleanly() {
-    let source = r#"
-use std.fs.{read_to_string, write, exists}
-
-def main
-  if exists("fixture.txt")
-    puts read_to_string("fixture.txt").expect!("read")
-  end
-  write("fixture.txt", "hello file").expect!("write")
-end
-"#;
-
-    let diagnostics = typecheck_source(source);
+    let source = rvn("use_std_fs_typechecks_cleanly");
+    let diagnostics = typecheck_source(&source);
     let errors: Vec<_> = diagnostics
         .iter()
         .filter(|d| d.level == DiagnosticLevel::Error)
@@ -513,21 +357,7 @@ fn std_fs_round_trip() {
     let path_str = path.to_string_lossy().replace('\\', "\\\\");
     let _ = std::fs::remove_file(&path);
 
-    let source = format!(
-        r##"
-use std.fs.{{read_to_string, write, exists}}
-
-def main
-  write("{path}", "hello file").expect!("write")
-  if exists("{path}")
-    puts read_to_string("{path}").expect!("read")
-  else
-    puts "missing"
-  end
-end
-"##,
-        path = path_str
-    );
+    let source = rvn("std_fs_round_trip").replace("{path}", &path_str);
 
     let exe = compile_to_exe(&source);
     let output = Command::new(&exe)
@@ -550,15 +380,8 @@ end
 
 #[test]
 fn use_std_process_typechecks_cleanly() {
-    let source = r#"
-use std.process.exit
-
-def main
-  exit(0)
-end
-"#;
-
-    let diagnostics = typecheck_source(source);
+    let source = rvn("use_std_process_typechecks_cleanly");
+    let diagnostics = typecheck_source(&source);
     let errors: Vec<_> = diagnostics
         .iter()
         .filter(|d| d.level == DiagnosticLevel::Error)
@@ -573,15 +396,8 @@ end
 
 #[test]
 fn std_process_exit_round_trip() {
-    let source = r#"
-use std.process.exit
-
-def main
-  exit(23)
-end
-"#;
-
-    let exe = compile_to_exe(source);
+    let source = rvn("std_process_exit_round_trip");
+    let exe = compile_to_exe(&source);
     let output = Command::new(&exe)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -596,17 +412,8 @@ end
 
 #[test]
 fn use_std_fs_mutation_helpers_typecheck_cleanly() {
-    let source = r#"
-use std.fs.{create_dir, rename, remove_file}
-
-def main
-  create_dir("tmp-dir").expect!("mkdir")
-  rename("tmp-dir/a.txt", "tmp-dir/b.txt").expect!("rename")
-  remove_file("tmp-dir/b.txt").expect!("remove")
-end
-"#;
-
-    let diagnostics = typecheck_source(source);
+    let source = rvn("use_std_fs_mutation_helpers_typecheck_cleanly");
+    let diagnostics = typecheck_source(&source);
     let errors: Vec<_> = diagnostics
         .iter()
         .filter(|d| d.level == DiagnosticLevel::Error)
@@ -641,26 +448,10 @@ fn std_fs_mutation_helpers_round_trip() {
     let _ = std::fs::remove_file(&file_b);
     let _ = std::fs::remove_dir(&root);
 
-    let source = format!(
-        r##"
-use std.fs.{{create_dir, write, rename, exists, remove_file}}
-
-def main
-  create_dir("{root}").expect!("create_dir")
-  write("{file_a}", "temp").expect!("write")
-  rename("{file_a}", "{file_b}").expect!("rename")
-  remove_file("{file_b}").expect!("remove_file")
-  if exists("{file_b}")
-    puts "still-there"
-  else
-    puts "gone"
-  end
-end
-"##,
-        root = root_str,
-        file_a = file_a_str,
-        file_b = file_b_str
-    );
+    let source = rvn("std_fs_mutation_helpers_round_trip")
+        .replace("{root}", &root_str)
+        .replace("{file_a}", &file_a_str)
+        .replace("{file_b}", &file_b_str);
 
     let exe = compile_to_exe(&source);
     let output = Command::new(&exe)
@@ -685,15 +476,8 @@ end
 
 #[test]
 fn use_std_fs_create_dir_all_typechecks_cleanly() {
-    let source = r#"
-use std.fs.create_dir_all
-
-def main
-  create_dir_all("tmp/a/b/c").expect!("mkdirs")
-end
-"#;
-
-    let diagnostics = typecheck_source(source);
+    let source = rvn("use_std_fs_create_dir_all_typechecks_cleanly");
+    let diagnostics = typecheck_source(&source);
     let errors: Vec<_> = diagnostics
         .iter()
         .filter(|d| d.level == DiagnosticLevel::Error)
@@ -720,21 +504,7 @@ fn std_fs_create_dir_all_round_trip() {
 
     let _ = std::fs::remove_dir_all(&root);
 
-    let source = format!(
-        r##"
-use std.fs.{{create_dir_all, exists}}
-
-def main
-  create_dir_all("{nested}").expect!("create_dir_all")
-  if exists("{nested}")
-    puts "created"
-  else
-    puts "missing"
-  end
-end
-"##,
-        nested = nested_str
-    );
+    let source = rvn("std_fs_create_dir_all_round_trip").replace("{nested}", &nested_str);
 
     let exe = compile_to_exe(&source);
     let output = Command::new(&exe)

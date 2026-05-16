@@ -11,7 +11,7 @@ pub fn format_pattern(pat: &Pattern, comments: &CommentMap) -> Doc {
 
         Pattern::Identifier { mutable, name, .. } => {
             if *mutable {
-                concat(vec![text("mut "), text(name.clone())])
+                concat(vec![text("var "), text(name.clone())])
             } else {
                 text(name.clone())
             }

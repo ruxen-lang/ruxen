@@ -1269,15 +1269,16 @@ impl<'a> Lexer<'a> {
                 if !self.is_at_end() && self.current() == '&' {
                     self.advance();
                     self.emit(TokenKind::AmpAmp, start_byte, start_line, start_col);
-                } else if !self.is_at_end() && self.current() == 'm' {
-                    // Check for &mut
-                    if self.peek_at(1) == Some('u') && self.peek_at(2) == Some('t') {
-                        // Make sure 'mut' is a complete word
-                        let after_mut = self.peek_at(3);
-                        if after_mut.is_none_or(|c| !c.is_ascii_alphanumeric() && c != '_') {
-                            self.advance(); // m
-                            self.advance(); // u
-                            self.advance(); // t
+                } else if !self.is_at_end() && self.current() == 'v' {
+                    // Check for &var — single-token writable-reference marker
+                    // (variant kept as `AmpMut` internally; surface is `&var`).
+                    if self.peek_at(1) == Some('a') && self.peek_at(2) == Some('r') {
+                        // Make sure 'var' is a complete word
+                        let after_var = self.peek_at(3);
+                        if after_var.is_none_or(|c| !c.is_ascii_alphanumeric() && c != '_') {
+                            self.advance(); // v
+                            self.advance(); // a
+                            self.advance(); // r
                             self.emit(TokenKind::AmpMut, start_byte, start_line, start_col);
                             return;
                         }

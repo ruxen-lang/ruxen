@@ -25,37 +25,37 @@ The bare string is the library name *without* the `lib` prefix or platform exten
 
 ```riven
 lib "sqlite3", version: "3"
-  def sqlite3_open(filename: *UInt8, db: *mut *Void) -> Int32
+  def sqlite3_open(filename: *UInt8, db: *var *Void) -> Int32
   def sqlite3_close(db: *Void) -> Int32
 end
 
 lib "c", path: "/usr/lib"
-  def malloc(n: USize) -> *mut Void
-  def free(p: *mut Void)
+  def malloc(n: USize) -> *var Void
+  def free(p: *var Void)
 end
 ```
 
 ## Raw Pointers and `nil`
 
-FFI uses raw pointers (`*T`, `*mut T`). Pointer operations — including dereference and comparison against `nil` — are `unsafe` (see [Chapter 15](15-unsafe.md)).
+FFI uses raw pointers (`*T`, `*var T`). Pointer operations — including dereference and comparison against `nil` — are `unsafe` (see [Chapter 15](15-unsafe.md)).
 
 ```riven
 lib "c"
-  def malloc(n: USize) -> *mut Void
-  def free(p: *mut Void)
+  def malloc(n: USize) -> *var Void
+  def free(p: *var Void)
 end
 
 unsafe
-  let ptr = malloc(1024) as *mut UInt8
+  let ptr = malloc(1024) as *var UInt8
   if ptr == nil
     return Err("out of memory")
   end
   # ... use ptr ...
-  free(ptr as *mut Void)
+  free(ptr as *var Void)
 end
 ```
 
-`nil` is the raw-pointer literal for an invalid/zero pointer. It is valid only at `*T` / `*mut T` types and only in `unsafe` / FFI contexts; Riven references (`&T`, `&mut T`) cannot be `nil` — they are always valid by construction.
+`nil` is the raw-pointer literal for an invalid/zero pointer. It is valid only at `*T` / `*var T` types and only in `unsafe` / FFI contexts; Riven references (`&T`, `&var T`) cannot be `nil` — they are always valid by construction.
 
 ## Variadic Functions
 
@@ -79,7 +79,7 @@ end
 # Safe wrapper
 def sqrt(x: Float) -> Result[Float, String]
   if x < 0.0
-    Err(String.new("cannot take sqrt of negative number"))
+    Err(String.from("cannot take sqrt of negative number"))
   else
     Ok(unsafe { sqrt(x) })
   end

@@ -8,16 +8,22 @@ use rustyline::Context;
 /// Basic keyword and command completer.
 pub struct RivenCompleter;
 
+// Keywords surfaced by tab-completion. Tracks §3.14 of the surface-syntax
+// spec — retired keywords (`trait`, `impl`, `mut`, `pub`, `None`) are not
+// listed; their replacements (`mixin`, `extension`, `var`, public-default
+// section markers, `nil`) are.
 const KEYWORDS: &[&str] = &[
     "def",
     "end",
     "class",
     "struct",
     "enum",
-    "trait",
-    "impl",
+    "mixin",
+    "extension",
+    "include",
+    "exclude",
     "let",
-    "mut",
+    "var",
     "if",
     "elsif",
     "else",
@@ -32,14 +38,25 @@ const KEYWORDS: &[&str] = &[
     "false",
     "self",
     "Self",
-    "pub",
+    "public",
+    "private",
     "protected",
     "use",
     "module",
+    "package",
+    "some",
+    "any",
+    "where",
+    "as",
+    "lib",
+    "unsafe",
+    "consume",
+    "inline",
+    "layout",
     "break",
     "continue",
     "Some",
-    "None",
+    "nil",
     "Ok",
     "Err",
 ];

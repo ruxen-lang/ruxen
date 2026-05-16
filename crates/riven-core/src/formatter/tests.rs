@@ -161,10 +161,10 @@ fn test_class_inherent_methods() {
 #[test]
 fn test_class_with_include_directive() {
     let source =
-        "class Priority\n  include Displayable\n\n  def to_display -> String\n    \"hello\"\n  end\nend\n";
+        "class Priority\n  include Display\n\n  def to_display -> String\n    \"hello\"\n  end\nend\n";
     let result = format(source);
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
-    assert!(result.output.contains("include Displayable"));
+    assert!(result.output.contains("include Display"));
     assert!(result.output.contains("class Priority"));
     assert_idempotent(source);
 }

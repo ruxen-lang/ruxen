@@ -1,25 +1,25 @@
-# Spec — `HashMap[K, V]`
+# Spec — `Map[K, V]`
 
 **Source docs:**
 [docs/requirements/tier1_01_stdlib.md §5.2](../../requirements/tier1_01_stdlib.md).
 
 **Status:** shipped Phase 2 #04-#05.
 
-`HashMap` is a separate-chaining hash table over keys that satisfy
-`Hash + Eq`.  The runtime uses FNV-style hashing; collisions resolve
+`Map` is a separate-chaining hash table over keys that satisfy
+`Hashable + Eq`.  The runtime uses FNV-style hashing; collisions resolve
 by walking a linked list per bucket.
 
 ---
 
 ## B1 — Constructors typecheck
 
-`HashMap.new()`, `HashMap::new`, and the alias `Hash[K, V]` all
-construct the same type at type-check time.
+`Map.new()` and the bare literal form `{ k => v, ... }` (per §3.22)
+both construct the same type at type-check time.
 
 ## B2 — `insert(k, v)` returns the previous value as `Option[V]`
 
-`insert` is the primary write entry point.  Returns `Option::Some(old)`
-when the key was present, `Option::None` otherwise.
+`insert` is the primary write entry point.  Returns `Option.Some(old)`
+when the key was present, `nil` otherwise.
 
 (v1 simplification: the type system reports `insert` as `Unit` today;
 the runtime returns the old value.  Tracked as a v2 cleanup.)
@@ -40,9 +40,9 @@ Each returns an iterator that yields keys, values, or `(K, V)` pairs.
 
 `map1 == map2` compares pairwise; order does not matter.
 
-## B7 — `entry(k).or_insert(v)` returns `&mut V`
+## B7 — `entry(k).or_insert(v)` returns `&var V`
 
-Entry-API insertion-if-absent.  Returns a mutable reference to the
+Entry-API insertion-if-absent.  Returns a writable reference to the
 entry (existing or freshly inserted).
 
 ## B8 — `entry(k).or_insert_with(|| ...)` lazy variant
@@ -51,20 +51,20 @@ Same as B7 but only evaluates the closure when the key is absent.
 
 ## B9 — Key types: `String` keys + non-hashable rejection
 
-**Given** `HashMap[String, V]` where `V: Hash`
+**Given** `Map[String, V]` where `V: Hashable`
 **Then** construction typechecks.
 
-**Given** `HashMap[T, V]` where `T` is not `Hash` (e.g. nested
-HashMap, plain `Vec`)
-**Then** typeck emits diagnostic `E0615 type does not implement Hash`.
+**Given** `Map[T, V]` where `T` is not `Hashable` (e.g. nested
+Map, plain `Array`)
+**Then** typeck emits diagnostic `E0615 type does not implement Hashable`.
 
-**Given** `HashMap[K, Vec[T]]` (Vec value, hashable key)
-**Then** construction typechecks — only **keys** need `Hash`.
+**Given** `Map[K, Array[T]]` (Array value, hashable key)
+**Then** construction typechecks — only **keys** need `Hashable`.
 
 ## B10 — Entry method receiver constraint
 
 `.or_insert(...)` is only callable on the result of `.entry(k)` — not
-on a plain `HashMap` receiver.  Same for `or_insert_with`.
+on a plain `Map` receiver.  Same for `or_insert_with`.
 
 ## B11 — Entry method shape: must chain through
 

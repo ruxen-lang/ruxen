@@ -1,0 +1,4 @@
+
+struct Holder
+  x: Foo[Int, 8, Bar]
+end

@@ -1,0 +1,5 @@
+class Widget
+  value: Int
+
+  include Debug
+end

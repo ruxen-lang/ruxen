@@ -12,6 +12,13 @@ use riven_core::lexer::Lexer;
 use riven_core::parser::Parser;
 use riven_core::typeck;
 
+fn rvn(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/riven")
+        .join(format!("{name}.rvn"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+}
+
 fn typecheck_diagnostics(source: &str) -> Vec<Diagnostic> {
     let mut lexer = Lexer::new(source);
     let tokens = lexer
@@ -36,13 +43,8 @@ fn errors(diags: &[Diagnostic]) -> Vec<&Diagnostic> {
 /// typecheck cleanly and yield a `HashMap[K,V]`.
 #[test]
 fn hashmap_constructors_typecheck() {
-    let source = r##"
-def main
-  let _a: HashMap[Int, Int] = HashMap.new
-  let _b: HashMap[Int, Int] = HashMap.with_capacity(8)
-end
-"##;
-    let diags = typecheck_diagnostics(source);
+    let source = rvn("hashmap_constructors_typecheck");
+    let diags = typecheck_diagnostics(&source);
     let errs = errors(&diags);
     assert!(
         errs.is_empty(),
@@ -55,17 +57,8 @@ end
 /// `Option[V]` so the pattern-match on `Some(_) / None` arms work.
 #[test]
 fn hashmap_remove_returns_option() {
-    let source = r##"
-def main
-  let mut h: HashMap[Int, Int] = HashMap.new
-  h.insert(1, 10)
-  match h.remove(1)
-    Some(v) -> puts "got=#{v}"
-    None    -> puts "miss"
-  end
-end
-"##;
-    let diags = typecheck_diagnostics(source);
+    let source = rvn("hashmap_remove_returns_option");
+    let diags = typecheck_diagnostics(&source);
     let errs = errors(&diags);
     assert!(
         errs.is_empty(),
@@ -79,16 +72,8 @@ end
 /// bytes), so iteration via `for` over the result Vec works directly.
 #[test]
 fn hashmap_keys_values_iter_typecheck() {
-    let source = r##"
-def main
-  let mut h: HashMap[Int, Int] = HashMap.new
-  h.insert(1, 10)
-  let _ks: Vec[&Int] = h.keys
-  let _vs: Vec[&Int] = h.values
-  let _it: Vec[&Int] = h.iter
-end
-"##;
-    let diags = typecheck_diagnostics(source);
+    let source = rvn("hashmap_keys_values_iter_typecheck");
+    let diags = typecheck_diagnostics(&source);
     let errs = errors(&diags);
     assert!(
         errs.is_empty(),
@@ -100,14 +85,8 @@ end
 /// `HashMap.clear` mutates the receiver in place and returns Unit.
 #[test]
 fn hashmap_clear_typechecks_as_unit() {
-    let source = r##"
-def main
-  let mut h: HashMap[Int, Int] = HashMap.new
-  h.insert(1, 10)
-  h.clear
-end
-"##;
-    let diags = typecheck_diagnostics(source);
+    let source = rvn("hashmap_clear_typechecks_as_unit");
+    let diags = typecheck_diagnostics(&source);
     let errs = errors(&diags);
     assert!(
         errs.is_empty(),
@@ -120,17 +99,8 @@ end
 /// helper at MIR lowering. Pins the typeck contract: returns Bool.
 #[test]
 fn hashmap_equality_yields_bool() {
-    let source = r##"
-def main
-  let mut a: HashMap[Int, Int] = HashMap.new
-  let mut b: HashMap[Int, Int] = HashMap.new
-  a.insert(1, 10)
-  b.insert(1, 10)
-  let c: Bool = a == b
-  puts "#{c}"
-end
-"##;
-    let diags = typecheck_diagnostics(source);
+    let source = rvn("hashmap_equality_yields_bool");
+    let diags = typecheck_diagnostics(&source);
     let errs = errors(&diags);
     assert!(
         errs.is_empty(),
@@ -148,15 +118,8 @@ end
 /// the prompt). Must typecheck cleanly with concrete K=Int, V=Int.
 #[test]
 fn hashmap_entry_or_insert_typechecks() {
-    let source = r##"
-def main
-  let mut m: HashMap[Int, Int] = HashMap.new
-  m.entry(1).or_insert(10)
-  m.entry(1).or_insert(99)
-  puts "#{m.len}"
-end
-"##;
-    let diags = typecheck_diagnostics(source);
+    let source = rvn("hashmap_entry_or_insert_typechecks");
+    let diags = typecheck_diagnostics(&source);
     let errs = errors(&diags);
     assert!(
         errs.is_empty(),
@@ -172,14 +135,8 @@ end
 /// an inline expression).
 #[test]
 fn hashmap_entry_or_insert_with_typechecks() {
-    let source = r##"
-def main
-  let mut m: HashMap[String, Int] = HashMap.new
-  m.entry("a").or_insert_with { || 42 }
-  puts "#{m.len}"
-end
-"##;
-    let diags = typecheck_diagnostics(source);
+    let source = rvn("hashmap_entry_or_insert_with_typechecks");
+    let diags = typecheck_diagnostics(&source);
     let errs = errors(&diags);
     assert!(
         errs.is_empty(),

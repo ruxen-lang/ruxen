@@ -581,7 +581,21 @@ mod lowering_tests {
     }
 
     #[test]
-    fn derive_copy_struct_is_not_dropped() {
+    fn derive_copy_struct_is_dropped_when_heap_allocated() {
+        // Post ruby-naming.spec.md §3.6: `Copy` is implicit for structs
+        // whose every field is Copy. The Copy include changes
+        // copy-on-assign semantics but does NOT change codegen's
+        // heap-allocation strategy — `Point.new(...)` is still lowered
+        // through `MirInst::Alloc`. Therefore drop-elaboration must
+        // still emit `MirInst::Drop` for heap-allocated Copy aggregates
+        // so the matching `riven_dealloc` runs at scope exit (otherwise
+        // the heap leaks). The pre-spec behaviour ("Copy locals are
+        // never dropped") only held while codegen also stack-allocated
+        // such values; that invariant is gone.
+        derive_copy_struct_is_dropped_inner();
+    }
+
+    fn derive_copy_struct_is_dropped_inner() {
         let mut symbols = SymbolTable::new();
 
         let _point_def = symbols.define(
@@ -665,8 +679,9 @@ mod lowering_tests {
             return_block
                 .instructions
                 .iter()
-                .all(|inst| !matches!(inst, MirInst::Drop { .. })),
-            "derive Copy locals should not receive Drop instructions"
+                .any(|inst| matches!(inst, MirInst::Drop { .. })),
+            "heap-allocated Copy struct local must still receive a Drop \
+             instruction so codegen emits the matching `riven_dealloc`"
         );
     }
 
@@ -871,6 +886,13 @@ mod helper_tests {
     use crate::parser::Parser;
     use crate::typeck;
 
+    fn rvn(name: &str) -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/riven")
+            .join(format!("{name}.rvn"));
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+    }
+
     /// Phase 2 #06.D2.S2: direct unit test for `Lowerer::user_has_impl_display`.
     ///
     /// Covers the three observable cases of the helper:
@@ -891,25 +913,11 @@ mod helper_tests {
         // `class Money` declares a single `cents: Int` field and an
         // `impl Display` block whose `def fmt` matches the
         // `fmt(&mut Formatter) -> Result[(), FmtError]` contract.
-        let src = r#"
-class Money
-  cents: Int
-
-  include Display
-
-  def fmt(f: &mut Formatter) -> Result[(), FmtError]
-    Ok(())
-  end
-end
-
-def main
-  let _m = Money.new(100)
-end
-"#;
+        let src = rvn("user_has_impl_display_resolves_class_int_and_ref");
 
         // Drive the real pipeline so `trait_impls` is populated exactly as
         // it would be in compilation.
-        let mut lexer = Lexer::new(src);
+        let mut lexer = Lexer::new(&src);
         let tokens = lexer.tokenize().expect("lex should succeed");
         let mut parser = Parser::new(tokens);
         let program = parser.parse().expect("parse should succeed");

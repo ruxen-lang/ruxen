@@ -1,0 +1,4 @@
+
+struct Buf
+  data: [Int; 3 < 4]
+end

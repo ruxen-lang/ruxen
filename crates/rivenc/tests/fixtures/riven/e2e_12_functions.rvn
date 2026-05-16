@@ -1,0 +1,14 @@
+def add(a: Int, b: Int) -> Int
+  a + b
+end
+
+def mul(a: Int, b: Int) -> Int
+  a * b
+end
+
+def main
+  puts "#{add(2, 3)}"
+  puts "#{add(10, 20)}"
+  puts "#{mul(4, 5)}"
+  puts "#{mul(7, 6)}"
+end

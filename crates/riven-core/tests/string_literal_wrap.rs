@@ -9,18 +9,20 @@ use riven_core::mir::nodes::MirInst;
 use riven_core::parser::Parser;
 use riven_core::typeck;
 
+fn rvn(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/riven")
+        .join(format!("{name}.rvn"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+}
+
 /// Lowering `let s = "hello"` must emit a `Call { callee: "riven_string_from", ... }`
 /// so the local holds an owned heap-allocated `String`, not a pointer into `.rodata`.
 #[test]
 fn string_literal_lowers_through_string_from_wrapper() {
-    let source = r#"
-def main
-  let s = "hello"
-  puts s
-end
-"#;
+    let source = rvn("string_literal_lowers_through_string_from_wrapper");
 
-    let mut lexer = Lexer::new(source);
+    let mut lexer = Lexer::new(&source);
     let tokens = lexer.tokenize().expect("lex");
     let mut parser = Parser::new(tokens);
     let program = parser.parse().expect("parse");

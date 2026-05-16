@@ -7,13 +7,13 @@ Blocks: soundness of `any Mixin + a` subtyping, GAT lifetime projection, anythin
 
 ## 1. Summary & Motivation
 
-**Variance** answers one question: *given `b: a` (read "`b` outlives `a`"), when is `F[b]` a subtype of `F[a]`?* The answer depends on which position the parameter appears in — reference, function argument, function return, interior-mutable cell, `&mut` binding. Rust learned these rules the hard way (soundness holes in early versions of `Cell`, `Fn`-mixins, and `HashMap` iterators); Riven should not re-learn them.
+**Variance** answers one question: *given `b: a` (read "`b` outlives `a`"), when is `F[b]` a subtype of `F[a]`?* The answer depends on which position the parameter appears in — reference, function argument, function return, interior-mutable cell, `&var` binding. Rust learned these rules the hard way (soundness holes in early versions of `Cell`, `Fn`-mixins, and `HashMap` iterators); Riven should not re-learn them.
 
 Today Riven has:
 
 - An explicit lifetime representation (`Ty::RefLifetime(String, Box<Ty>)`, `Ty::RefMutLifetime(String, Box<Ty>)` — `hir/types.rs:93-95`).
 - A lifetime elision checker (`borrow_check/lifetimes.rs:42-98`) implementing Rust's three elision rules and a borrow-outlives-owner check.
-- Ad-hoc coercion rules scattered across `typeck/coerce.rs:84-113` and `typeck/unify.rs:262` that *imply* variance decisions (`Option` covariant, `Result` covariant in both parameters, `Array`/`Map`/`Set` and `&mut T` invariant "per comment"), but no formal variance table, no variance inference for user structs, and no tests that specifically exercise variance.
+- Ad-hoc coercion rules scattered across `typeck/coerce.rs:84-113` and `typeck/unify.rs:262` that *imply* variance decisions (`Option` covariant, `Result` covariant in both parameters, `Array`/`Map`/`Set` and `&var T` invariant "per comment"), but no formal variance table, no variance inference for user structs, and no tests that specifically exercise variance.
 
 What's missing:
 
@@ -30,7 +30,7 @@ Without these, substituting lifetimes in nested types becomes unsound the moment
 
 `Ty` carries both elided references (`Ref(Box<Ty>)`, `RefMut(Box<Ty>)` — no lifetime name) and explicit references (`RefLifetime(String, Box<Ty>)`, `RefMutLifetime(String, Box<Ty>)`) at `hir/types.rs:82-95`. Variance rules must apply to both — meaning an elided lifetime is shorthand for a fresh inference variable, not a "no-lifetime" special case.
 
-The `Display` impl at `hir/types.rs:389-390` prints `&a T` / `&a mut T`, confirming the rendering side is ready.
+The `Display` extension at `hir/types.rs:389-390` prints `&a T` / `&a var T`, confirming the rendering side is ready.
 
 ### 2.2 Coercion already makes variance decisions — informally
 
@@ -39,7 +39,7 @@ From `typeck/coerce.rs`:
 - Line 84-88: `Option[T] → Option[U]` when `T → U` coerces. This is covariance in `T`.
 - Line 90-95: `Result[T, E] → Result[U, F]` when both coerce. Covariant in *both* parameters.
 - Line 97-106: `&Ref[T] → &Ref[U]` via `is_subtype_class` — class-inheritance-aware covariance through shared references.
-- Line 108-109: **Comments assert** `Array`, `Map`, `Set` and `&mut T` are invariant — but the invariance is enforced only by the absence of a coercion rule. There's no test that `&long mut T` fails to coerce to `&short mut T` specifically because of variance (they fall through to the `_ => Err(...)` arm).
+- Line 108-109: **Comments assert** `Array`, `Map`, `Set` and `&var T` are invariant — but the invariance is enforced only by the absence of a coercion rule. There's no test that `&long var T` fails to coerce to `&short var T` specifically because of variance (they fall through to the `_ => Err(...)` arm).
 
 `Ty::Never` (`!`) is documented as a bottom type at `hir/types.rs:60` ("subtype of everything") but there's no code that actually exercises subtyping with `Never` — it's handled via unification only.
 
@@ -105,12 +105,12 @@ struct Handle[T]
   id: Int
   _phantom: PhantomData[T]
 end
-# Compiler infers: T invariant (because PhantomData[T] has a &mut T position internally)
+# Compiler infers: T invariant (because PhantomData[T] has a &var T position internally)
 # Or, depending on which PhantomData variant:
 #   PhantomData[fn(T)]   → contravariant in T
 #   PhantomData[fn() -> T] → covariant in T
 #   PhantomData[&T]      → covariant in T
-#   PhantomData[&mut T]  → invariant in T
+#   PhantomData[&var T]  → invariant in T
 ```
 
 An optional future extension (non-goal for v1): a body-level directive
@@ -154,7 +154,7 @@ Invariant dominates.
 | Type | Variance in parameters |
 |------|-----------------------|
 | `&a T` | covariant in `a`, covariant in `T` |
-| `&a mut T` | covariant in `a`, **invariant** in `T` |
+| `&a var T` | covariant in `a`, **invariant** in `T` |
 | `Box[T]` | covariant in `T` |
 | `Shared[T]`, `SharedSync[T]` (future) | covariant in `T` |
 | `Cell[T]`, `RefCell[T]` (future) | **invariant** in `T` |
@@ -166,16 +166,16 @@ Invariant dominates.
 | `Result[T, E]` | covariant in `T`, covariant in `E` |
 | `(T1, T2, ..., Tn)` tuple | covariant in each `Ti` |
 | `fn(A1, ..., An) -> R` | **contravariant** in each `Ai`, covariant in `R` |
-| `Fn`/`FnMut`/`FnOnce` mixin existentials | same as function types |
+| `Fn`/`FnVar`/`FnOnce` mixin existentials | same as function types |
 | `any Mixin + a` | covariant in `a`; mixin args inherit the mixin's declared variance (future — currently treat as invariant) |
 | `*const T` (raw pointer) | covariant in `T` |
-| `*mut T` (raw pointer) | **invariant** in `T` |
+| `*var T` (raw pointer) | **invariant** in `T` |
 | `PhantomData[T]` | covariant in `T` (use `PhantomData[fn(T)]` etc. for others) |
 
 **Rationale for the non-obvious cases:**
 
-- `&mut T` invariant in `T`: the classic soundness proof. If `&mut T` were covariant in `T` and `Child <: Parent`, then `&mut Child` would be usable as `&mut Parent`, and writing a `Parent` through it would leave an invalid `Child` behind.
-- `Array[T]` and `Map[K, V]` invariant: because `Array` exposes `&mut` to its elements, even though the `Array` value itself is owned.
+- `&var T` invariant in `T`: the classic soundness proof. If `&var T` were covariant in `T` and `Child <: Parent`, then `&var Child` would be usable as `&var Parent`, and writing a `Parent` through it would leave an invalid `Child` behind.
+- `Array[T]` and `Map[K, V]` invariant: because `Array` exposes `&var` to its elements, even though the `Array` value itself is owned.
 - `fn(A) -> R` contravariant in `A`: a function accepting `Parent` can be used wherever a function accepting `Child` is expected, because `Child <: Parent` means every `Child` is a valid `Parent` — so the function will accept it.
 
 ### 5.3 Inference algorithm for user types
@@ -185,20 +185,20 @@ Run after resolve, before the main typeck pass:
 ```
 fn infer_variance(def_id: DefId) -> Map<ParamIdx, Variance> {
   # Start: every parameter is bivariant (top).
-  let mut result = bivariant_map(def_id.generic_params);
+  var result = bivariant_map(def_id.generic_params);
 
   # Fixed-point iteration — needed because user types can be recursive.
   loop {
     let before = result.clone();
     for field in def_id.fields() {
-      visit_ty(&field.ty, Variance::Covariant, &mut result);
+      visit_ty(&field.ty, Variance::Covariant, &var result);
     }
     if result == before { break; }
   }
   result
 }
 
-fn visit_ty(ty: &Ty, current: Variance, acc: &mut Map<ParamIdx, Variance>) {
+fn visit_ty(ty: &Ty, current: Variance, acc: &var Map<ParamIdx, Variance>) {
   match ty {
     Ty::GenericParam(idx) => acc[idx] = acc[idx].join(current),
     Ty::RefLifetime(_, inner) | Ty::Ref(inner) => visit_ty(inner, current, acc),
@@ -282,7 +282,7 @@ Risk: once inference is wired in, changing a private field type can silently cha
 ### Test coverage to add
 
 - Fixture: `fixtures/variance/option_covariant_lifetime.rvn` — `Option[&long T]` flows into `Option[&short T]`.
-- Fixture: `fixtures/variance/refmut_invariant.rvn` — `&long mut T` must *not* coerce to `&short mut T`; expect E0705.
+- Fixture: `fixtures/variance/refmut_invariant.rvn` — `&long var T` must *not* coerce to `&short var T`; expect E0705.
 - Fixture: `fixtures/variance/fn_contravariant_arg.rvn` — `fn(&short T)` coerces to `fn(&long T)` (the function accepting a narrower arg works where a wider one is expected).
 - Unit tests in `typeck/variance.rs` for the inference algorithm using synthetic `DefId`s.
 - Proptest: generate random struct definitions with varying field shapes and assert that the fixed-point iteration converges in O(depth) steps.
@@ -291,7 +291,7 @@ Risk: once inference is wired in, changing a private field type can silently cha
 
 ### 8.1 GATs (doc 05)
 
-`type Iter[a]: Iterator[Item = &a T]` — the associated type's lifetime parameter introduces per-projection variance. The inference algorithm must treat `<Self as Iterable>.Iter[a]` as a type-constructor application and look up the variance of the associated type. Practical effect: the variance table keys on `(DefId, AssocName)` pairs as well as plain `DefId`s.
+`type Iter[a]: Iterator[Item = &a T]` — the associated type's lifetime parameter introduces per-projection variance. The inference algorithm must treat `<Self as Iterator>.Iter[a]` as a type-constructor application and look up the variance of the associated type. Practical effect: the variance table keys on `(DefId, AssocName)` pairs as well as plain `DefId`s.
 
 ### 8.2 Mixin existentials (doc 06)
 
@@ -337,7 +337,7 @@ Total ~6 weeks linear, 3-4 weeks if 7c and the PhantomData work parallelize with
 
 **R2. Silently breaking existing code when the coercion rewrite lands.** Phase 7c replaces the current ad-hoc rules with table-driven logic; if the table doesn't exactly match today's behavior, fixture tests fail. Mitigate by shipping phase 7a's fixtures *before* phase 7c.
 
-**R3. `&mut T` invariance breaking intuitive-looking code.** Many users expect `&mut Child` to coerce to `&mut Parent` because single-value mutation seems safe. It isn't. Ensure `E0705` has a `help:` note explaining the soundness rationale (tier-5 doc 05).
+**R3. `&var T` invariance breaking intuitive-looking code.** Many users expect `&var Child` to coerce to `&var Parent` because single-value mutation seems safe. It isn't. Ensure `E0705` has a `help:` note explaining the soundness rationale (tier-5 doc 05).
 
 **R4. PhantomData ergonomic friction.** Users rarely write zero-sized phantom types in practice, but every FFI wrapper needs them. Keep the W0710 warning actionable: the diagnostic should suggest the exact `PhantomData` variant.
 
@@ -348,8 +348,8 @@ Total ~6 weeks linear, 3-4 weeks if 7c and the PhantomData work parallelize with
 | # | Case | Expected |
 |---|------|----------|
 | V1 | `&long T` → `&short T` where `long: short` | ✅ coerces |
-| V2 | `&long mut T` → `&short mut T` | ❌ E0705 (mut invariant in lifetime is false — mut is covariant in lifetime, invariant in T) |
-| V3 | `&a mut Child` → `&a mut Parent` | ❌ E0705 (invariant in inner `T`) |
+| V2 | `&long var T` → `&short var T` | ❌ E0705 (writable refs are covariant in lifetime, invariant in `T`) |
+| V3 | `&a var Child` → `&a var Parent` | ❌ E0705 (invariant in inner `T`) |
 | V4 | `Option[&long T]` → `Option[&short T]` | ✅ covariance passes through |
 | V5 | `Array[&long T]` → `Array[&short T]` | ❌ E0705 (Array invariant in T) |
 | V6 | `fn(&short T) -> ()` → `fn(&long T) -> ()` | ✅ contravariance of arg |
@@ -361,9 +361,9 @@ Total ~6 weeks linear, 3-4 weeks if 7c and the PhantomData work parallelize with
 | V12 | `Cell[T]` (future) `Cell[Child]` → `Cell[Parent]` | ❌ E0705 (interior mutability → invariant) |
 | V13 | `Box[Child]` → `Box[Parent]` | ✅ covariance |
 | V14 | `any Mixin + long` → `any Mixin + short` | ✅ covariance of lifetime |
-| V15 | `*mut T` vs `*const T` variance | `*mut` invariant in T, `*const` covariant |
+| V15 | `*var T` vs `*const T` variance | `*var` invariant in T, `*const` covariant |
 | V16 | `struct Wrapper[T]; x: T` inferred covariant | ✅ matches phase 7b output |
-| V17 | `struct MutWrapper[T]; x: &mut T` inferred invariant | ✅ |
+| V17 | `struct MutWrapper[T]; x: &var T` inferred invariant | ✅ |
 | V18 | `struct FnWrapper[T]; f: fn(T)` inferred contravariant | ✅ |
 | V19 | `struct Conflict[T]; a: T; b: fn(T)` inferred invariant (cov ⊔ contra = inv) | ✅ |
 | V20 | `struct Unused[T]; id: Int` triggers W0710 | ✅ warning |
@@ -389,7 +389,7 @@ Total ~6 weeks linear, 3-4 weeks if 7c and the PhantomData work parallelize with
 | `crates/riven-core/src/typeck/coerce.rs` | 84-88 | current `Option` covariance |
 | | 90-95 | current `Result` covariance on both params |
 | | 97-106 | `&Ref` subtype via class inheritance |
-| | 108-109 | informal invariance comments for `Vec`/`Hash`/`Set`/`&mut T` |
+| | 108-109 | informal invariance comments for `Vec`/`Hash`/`Set`/`&var T` |
 | | 117-145 | `is_subtype_class` |
 | `crates/riven-core/src/typeck/unify.rs` | 262 | duplicated `Option` covariance |
 | `crates/riven-core/src/borrow_check/lifetimes.rs` | 34-85 | `LifetimeChecker` + three-rule elision |

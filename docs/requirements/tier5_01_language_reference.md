@@ -21,7 +21,7 @@ failure mode:
   nothing in the tutorial echoes it. If we rewrite the parser, nothing
   short of a diff tells us that precedence changed.
 - Compiler contributors cannot know which behaviours are contractual.
-  `typeck/coerce.rs:49-82` encodes specific coercion rules (`&mut T → &T`,
+  `typeck/coerce.rs:49-82` encodes specific coercion rules (`&var T → &T`,
   `&String → &str`, int widening, Option-covariance, class subtyping). Any
   of these could be "stable" or "I tried this and it worked"; there is no
   way to tell today.
@@ -273,7 +273,7 @@ Tools like Ohm, LALRPOP, or PEG generators can emit a grammar doc. We
 don't have such a generator — the parser is hand-written
 (`parser/expr.rs:1` comment calls it "Pratt-style precedence climbing").
 Introducing one would be a rewrite. Additionally, semantic rules (coercions,
-trait resolution order) cannot be generated from code — they'd be hand-
+mixin resolution order) cannot be generated from code — they'd be hand-
 written anyway.
 **Rejected** — requires a parser rewrite for marginal gain.
 
@@ -331,7 +331,7 @@ reachable at `docs/reference/07-editions/01-edition-2026.md`-linked URLs.
 
 For chapters that change between editions, the delta is documented in
 `07-editions/NN-edition-YYYY.md` as a bullet list ("new keyword `foo`",
-"stdlib name `Hash[K, V]` removed, use `Map[K, V]`").
+"stdlib name `Map[K, V]` removed, use `Map[K, V]`").
 
 ### 5.5 Worked examples embedded as fixtures
 

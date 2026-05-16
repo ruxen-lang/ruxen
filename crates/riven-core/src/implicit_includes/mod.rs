@@ -41,16 +41,48 @@ fn validate_item(item: &HirItem, symbols: &SymbolTable, diags: &mut Vec<Diagnost
     }
 }
 
-fn validate_class(class: &HirClassDef, symbols: &SymbolTable, diags: &mut Vec<Diagnostic>) {
-    validate_common_traits(
-        "class",
-        &class.name,
-        &class.derive_traits,
-        &class.span,
-        diags,
-    );
+/// Merge the legacy `derive_traits` field with the new in-body
+/// `include` directives. Post ruby-naming.spec.md §10a the loud form
+/// for opting into a structural mixin is `include <Mixin>` (one per
+/// line) inside the type body; the parser routes those into
+/// `impl_blocks`, leaving `derive_traits` empty. The validator must
+/// see both — under transition some types still carry legacy
+/// `derive_traits` entries from the (also retired) attribute-prefix
+/// path.
+fn collected_derives(
+    legacy: &[String],
+    impl_blocks: &[crate::hir::nodes::HirImplBlock],
+) -> Vec<String> {
+    let mut out: Vec<String> = legacy.to_vec();
+    for block in impl_blocks {
+        if block.negative_trait {
+            continue;
+        }
+        if let Some(ref tref) = block.trait_ref {
+            // Only structural mixins go through the auto-synthesis
+            // validator. A user-defined mixin (`include Greetable`)
+            // gets satisfied by the user's own method definitions and
+            // must not be flagged "unknown mixin" by E0608. We filter
+            // here so the downstream `validate_common_traits` pass
+            // sees only structural names from SUPPORTED_DERIVES.
+            if SUPPORTED_DERIVES.contains(&tref.name.as_str()) {
+                out.push(tref.name.clone());
+            }
+            let _ = block.items.is_empty(); // touch fields to avoid warning
+            let _ = block.generic_params.len();
+            let _ = &block.target_ty;
+            let _ = block.is_unsafe;
+            let _ = &block.span;
+        }
+    }
+    out
+}
 
-    if has_derive(&class.derive_traits, "Copy") {
+fn validate_class(class: &HirClassDef, symbols: &SymbolTable, diags: &mut Vec<Diagnostic>) {
+    let derives = collected_derives(&class.derive_traits, &class.impl_blocks);
+    validate_common_traits("class", &class.name, &derives, &class.span, diags);
+
+    if has_derive(&derives, "Copy") {
         diags.push(Diagnostic::error_with_code(
             format!(
                 "Copy cannot be auto-synthesized on class `{}`; use a struct",
@@ -61,7 +93,7 @@ fn validate_class(class: &HirClassDef, symbols: &SymbolTable, diags: &mut Vec<Di
         ));
     }
 
-    if has_derive(&class.derive_traits, "Clone") {
+    if has_derive(&derives, "Clone") {
         validate_clone_requirements(
             "class",
             &class.name,
@@ -76,7 +108,7 @@ fn validate_class(class: &HirClassDef, symbols: &SymbolTable, diags: &mut Vec<Di
     validate_per_field_traits(
         "class",
         &class.name,
-        &class.derive_traits,
+        &derives,
         class
             .fields
             .iter()
@@ -87,17 +119,12 @@ fn validate_class(class: &HirClassDef, symbols: &SymbolTable, diags: &mut Vec<Di
 }
 
 fn validate_struct(strukt: &HirStructDef, symbols: &SymbolTable, diags: &mut Vec<Diagnostic>) {
-    validate_common_traits(
-        "struct",
-        &strukt.name,
-        &strukt.derive_traits,
-        &strukt.span,
-        diags,
-    );
+    let derives = collected_derives(&strukt.derive_traits, &strukt.impl_blocks);
+    validate_common_traits("struct", &strukt.name, &derives, &strukt.span, diags);
     validate_copy_requirements(
         "struct",
         &strukt.name,
-        &strukt.derive_traits,
+        &derives,
         &strukt.span,
         strukt
             .fields
@@ -106,7 +133,7 @@ fn validate_struct(strukt: &HirStructDef, symbols: &SymbolTable, diags: &mut Vec
         symbols,
         diags,
     );
-    if has_derive(&strukt.derive_traits, "Clone") {
+    if has_derive(&derives, "Clone") {
         validate_clone_requirements(
             "struct",
             &strukt.name,
@@ -121,7 +148,7 @@ fn validate_struct(strukt: &HirStructDef, symbols: &SymbolTable, diags: &mut Vec
     validate_per_field_traits(
         "struct",
         &strukt.name,
-        &strukt.derive_traits,
+        &derives,
         strukt
             .fields
             .iter()
@@ -132,9 +159,10 @@ fn validate_struct(strukt: &HirStructDef, symbols: &SymbolTable, diags: &mut Vec
 }
 
 fn validate_enum(enm: &HirEnumDef, symbols: &SymbolTable, diags: &mut Vec<Diagnostic>) {
-    validate_common_traits("enum", &enm.name, &enm.derive_traits, &enm.span, diags);
+    let derives = collected_derives(&enm.derive_traits, &enm.impl_blocks);
+    validate_common_traits("enum", &enm.name, &derives, &enm.span, diags);
 
-    if has_derive(&enm.derive_traits, "Default") {
+    if has_derive(&derives, "Default") {
         if enm.variants.is_empty() {
             // Empty enum: no variant could ever be the default. Pin the
             // dedicated B1-reserved code so consumers can distinguish a
@@ -161,7 +189,7 @@ fn validate_enum(enm: &HirEnumDef, symbols: &SymbolTable, diags: &mut Vec<Diagno
         }
     }
 
-    if has_derive(&enm.derive_traits, "Copy") && !has_derive(&enm.derive_traits, "Clone") {
+    if has_derive(&derives, "Copy") && !has_derive(&derives, "Clone") {
         diags.push(Diagnostic::error_with_code(
             "Copy implies Clone — a Copy type must also include Clone",
             enm.span.clone(),
@@ -169,7 +197,7 @@ fn validate_enum(enm: &HirEnumDef, symbols: &SymbolTable, diags: &mut Vec<Diagno
         ));
     }
 
-    if has_derive(&enm.derive_traits, "Copy") {
+    if has_derive(&derives, "Copy") {
         for variant in &enm.variants {
             match &variant.kind {
                 HirVariantKind::Unit => {}
@@ -193,7 +221,7 @@ fn validate_enum(enm: &HirEnumDef, symbols: &SymbolTable, diags: &mut Vec<Diagno
         }
     }
 
-    if has_derive(&enm.derive_traits, "Clone") {
+    if has_derive(&derives, "Clone") {
         for variant in &enm.variants {
             match &variant.kind {
                 HirVariantKind::Unit => {}

@@ -7,7 +7,7 @@ class Holder
 
   include Drop
 
-  def mut drop
+  def var drop
     puts "dropped tag=#{self.tag}"
   end
 end

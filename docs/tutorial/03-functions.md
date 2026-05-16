@@ -93,7 +93,7 @@ def identity[T](x: T) -> T
   x
 end
 
-def largest[T: Comparable](list: &Array[T]) -> &T
+def largest[T: Ord](list: &Array[T]) -> &T
   var best = &list[0]
   for item in list
     if item > best
@@ -108,11 +108,13 @@ end
 
 For complex generic bounds:
 
+<!-- TODO(migration): canonical spec §3.4a discourages per-method `where` clauses on individual `def`s (re-group into an extension block). The form below is shown here for top-level functions; the spec is silent on whether top-level `def` accepts `where`. Verify when the parser pins this. -->
+
 ```riven
 def merge[A, B, C](left: &A, right: &B) -> C
-  where A: Iterable[Item = Int],
-        B: Iterable[Item = Int],
-        C: FromIterator[Int]
+  where A: Iterator[Item = Int],
+        B: Iterator[Item = Int],
+        C: FromIterator[Item = Int]
   # ...
 end
 ```
@@ -125,13 +127,13 @@ class User
 
   def init(@name: String) end
 
-  # Reading method — borrows the receiver immutably
+  # Reading method — borrows the receiver read-only
   def display -> String
     "User: #{self.name}"
   end
 
-  # Mutating method — borrows the receiver mutably
-  def mut rename(name: String)
+  # Writing method — borrows the receiver writably
+  def var rename(name: String)
     self.name = name
   end
 
@@ -151,7 +153,7 @@ end
 
 | Declaration | Mode | Meaning |
 |-------------|------|---------|
-| `def method` | reading | Borrows the receiver immutably |
-| `def mut method` | mutating | Borrows the receiver mutably |
+| `def method` | reading | Borrows the receiver read-only |
+| `def var method` | writing | Borrows the receiver writably |
 | `def consume method` | consuming | Takes ownership of the receiver |
 | `def self.method` | class | No receiver — module-style call |

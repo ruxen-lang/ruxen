@@ -1,9 +1,10 @@
 //! Implicit-include diagnostics (E0601-E0609).
 //!
 //! These tests pin the diagnostics emitted by the *auto-synthesis*
-//! pipeline (§3.6) when an `@[derive(...)]` annotation is rejected.
-//! They are the negative counterpart to the green-path release-e2e
-//! fixtures under `tests/release-e2e/cases/20[2-9]_implicit_*.rvn`.
+//! pipeline (§3.6) when an in-body `include ...` directive names a
+//! mixin that cannot be auto-derived against the host type. They are
+//! the negative counterpart to the green-path release-e2e fixtures
+//! under `tests/release-e2e/cases/20[2-9]_implicit_*.rvn`.
 //!
 //! The companion file `implicit_negatives.rs` covers the newer
 //! E0610-E0618 range (per-field validators introduced in P1.05/B1).
@@ -12,29 +13,20 @@
 //! "auto-include of X failed" diagnostics rather than the old
 //! `derive` keyword diagnostics they originally described.
 //!
-//! Every fixture is inlined as a raw string literal so the test file
-//! is self-contained — the previous file-based fixtures under
-//! `tests/fixtures/derive/` were removed when the `derive` keyword was
-//! retired in favour of `@[derive(...)]` annotations and implicit
-//! synthesis.
+//! Every fixture lives in `tests/fixtures/riven/<test-fn-name>.rvn`
+//! and is loaded at runtime via the `rvn(name)` helper below.
 
 use riven_core::diagnostics::{Diagnostic, DiagnosticLevel};
 use riven_core::lexer::Lexer;
 use riven_core::parser::Parser;
 use riven_core::typeck;
 
-/// Lex + parse a Riven source string and return the parser-level
-/// diagnostics. Panics on lex failure (those are harness breaks, not
-/// the regressions this file is pinning).
-fn parse_errors_from_source(source: &str) -> Vec<Diagnostic> {
-    let mut lexer = Lexer::new(source);
-    let tokens = lexer
-        .tokenize()
-        .unwrap_or_else(|e| panic!("lexer failed on negative-test source: {:?}", e));
-    let mut parser = Parser::new(tokens);
-    parser
-        .parse()
-        .expect_err("fixture should fail during parse")
+/// Read a Riven fixture file from `tests/fixtures/riven/<name>.rvn`.
+fn rvn(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/riven")
+        .join(format!("{name}.rvn"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
 }
 
 /// Lex + parse + typecheck a Riven source string and return every
@@ -57,32 +49,14 @@ fn has_code(diags: &[Diagnostic], code: &str) -> bool {
 }
 
 /// Green path: a struct whose every field is `Copy` should auto-derive
-/// Copy + Clone with no diagnostics, even with an explicit
-/// `@[derive(Copy, Clone)]` annotation. This pins the "no false
-/// positives" half of the validator.
-///
-/// Note: this source is wrapped in `r##"..."##` rather than `r#"..."#`
-/// so the `"#` sequence inside Riven string interpolation
-/// (`"#{a.x}"`) does not accidentally close the Rust raw-string
-/// literal.
+/// Copy + Clone with no diagnostics, even with explicit in-body
+/// `include Copy` / `include Clone` directives. This pins the
+/// "no false positives" half of the validator.
 #[test]
 fn derive_copy_clone_on_pod_struct_typechecks_cleanly() {
-    let source = r##"
-@[derive(Copy, Clone)]
-struct Point
-  x: Int
-  y: Int
-end
+    let source = rvn("derive_copy_clone_on_pod_struct_typechecks_cleanly");
 
-def main
-  let a = Point.new(1, 2)
-  let b = a
-  puts "#{a.x} #{a.y}"
-  puts "#{b.x} #{b.y}"
-end
-"##;
-
-    let diags = typecheck_diagnostics_from_source(source);
+    let diags = typecheck_diagnostics_from_source(&source);
     let errors: Vec<&Diagnostic> = diags
         .iter()
         .filter(|d| d.level == DiagnosticLevel::Error)
@@ -98,19 +72,9 @@ end
 /// (here: `String`) must be rejected at the validator.
 #[test]
 fn copy_with_non_copy_field_reports_e0601() {
-    let source = r#"
-@[derive(Copy, Clone)]
-struct Person
-  name: String
-  age: Int
-end
+    let source = rvn("copy_with_non_copy_field_reports_e0601");
 
-def main
-  let _x = 0
-end
-"#;
-
-    let diags = typecheck_diagnostics_from_source(source);
+    let diags = typecheck_diagnostics_from_source(&source);
     assert!(
         has_code(&diags, "E0601"),
         "expected E0601 when deriving Copy on a struct with a non-Copy \
@@ -124,19 +88,9 @@ end
 /// this way; the validator catches it.)
 #[test]
 fn copy_without_clone_reports_e0602() {
-    let source = r#"
-@[derive(Copy)]
-struct Pair
-  x: Int
-  y: Int
-end
+    let source = rvn("copy_without_clone_reports_e0602");
 
-def main
-  let _x = 0
-end
-"#;
-
-    let diags = typecheck_diagnostics_from_source(source);
+    let diags = typecheck_diagnostics_from_source(&source);
     assert!(
         has_code(&diags, "E0602"),
         "expected E0602 when deriving Copy without Clone — got \
@@ -150,18 +104,9 @@ end
 /// bit-copying them would alias ownership.
 #[test]
 fn copy_on_class_reports_e0603() {
-    let source = r#"
-@[derive(Copy, Clone)]
-class Counter
-  value: Int
-end
+    let source = rvn("copy_on_class_reports_e0603");
 
-def main
-  let _x = 0
-end
-"#;
-
-    let diags = typecheck_diagnostics_from_source(source);
+    let diags = typecheck_diagnostics_from_source(&source);
     assert!(
         has_code(&diags, "E0603"),
         "expected E0603 when deriving Copy on a class — got \
@@ -174,18 +119,9 @@ end
 /// type that does not also opt into PartialEq.
 #[test]
 fn eq_without_partial_eq_reports_e0604() {
-    let source = r#"
-@[derive(Eq)]
-struct Id
-  value: Int
-end
+    let source = rvn("eq_without_partial_eq_reports_e0604");
 
-def main
-  let _x = 0
-end
-"#;
-
-    let diags = typecheck_diagnostics_from_source(source);
+    let diags = typecheck_diagnostics_from_source(&source);
     assert!(
         has_code(&diags, "E0604"),
         "expected E0604 when deriving Eq without PartialEq — got \
@@ -200,20 +136,9 @@ end
 /// E0616, covered in `implicit_negatives.rs`.)
 #[test]
 fn default_on_enum_without_default_variant_reports_e0605() {
-    let source = r#"
-@[derive(Default)]
-enum Mode
-  Read
-  Write
-  Append
-end
+    let source = rvn("default_on_enum_without_default_variant_reports_e0605");
 
-def main
-  let _x = 0
-end
-"#;
-
-    let diags = typecheck_diagnostics_from_source(source);
+    let diags = typecheck_diagnostics_from_source(&source);
     assert!(
         has_code(&diags, "E0605"),
         "expected E0605 when deriving Default on an enum without a \
@@ -227,19 +152,9 @@ end
 /// only one of the two prerequisites).
 #[test]
 fn ord_without_eq_and_partial_ord_reports_e0606() {
-    let source = r#"
-@[derive(Ord, PartialEq)]
-struct Version
-  major: Int
-  minor: Int
-end
+    let source = rvn("ord_without_eq_and_partial_ord_reports_e0606");
 
-def main
-  let _x = 0
-end
-"#;
-
-    let diags = typecheck_diagnostics_from_source(source);
+    let diags = typecheck_diagnostics_from_source(&source);
     assert!(
         has_code(&diags, "E0606"),
         "expected E0606 when deriving Ord without Eq + PartialOrd — \
@@ -248,73 +163,40 @@ end
     );
 }
 
-/// E0607: `@[derive(...)]` cannot be applied to a function. The
-/// parser rejects the misplaced attribute, so the diagnostic surfaces
-/// out of `Parser::parse` rather than out of typeck.
-#[test]
-fn derive_on_function_reports_e0607() {
-    let source = r#"
-@[derive(Debug)]
-def helper
-  1
-end
-"#;
-
-    let diags = parse_errors_from_source(source);
-    assert!(
-        has_code(&diags, "E0607"),
-        "expected E0607 when `@[derive(...)]` is applied to a `def` — \
-         got diagnostics {:?}.",
-        diags
-    );
-}
+// E0607 was specifically "`@[derive(...)]` cannot be applied to a
+// function" — a pure attribute-form diagnostic. With the `@[...]`
+// prefix attribute retired (ruby-naming.spec.md §10a), that test
+// premise is obsolete. The diagnostic code is preserved in the
+// registry for backward-compat; the test that exercised it has been
+// removed.
 
 /// E0608: only the auto-synthesisable mixins (Debug, Clone, Copy,
 /// PartialEq, Eq, Hash/Hashable, Default, Ord, PartialOrd) may appear
-/// in `@[derive(...)]`. Anything else must be flagged.
+/// in an in-body `include`. Anything else must be flagged.
 #[test]
 fn unknown_derive_trait_reports_e0608() {
-    let source = r#"
-@[derive(Serializable)]
-struct Config
-  name: String
-end
+    let source = rvn("unknown_derive_trait_reports_e0608");
 
-def main
-  let _x = 0
-end
-"#;
-
-    let diags = typecheck_diagnostics_from_source(source);
+    let diags = typecheck_diagnostics_from_source(&source);
     assert!(
         has_code(&diags, "E0608"),
-        "expected E0608 when `@[derive(...)]` names a non-synthesisable \
+        "expected E0608 when `include` names a non-synthesisable \
          mixin — got diagnostics {:?}.",
         diags
     );
 }
 
-/// E0609: naming the same auto-synthesisable mixin twice in one
-/// `@[derive(...)]` list is almost always a copy-paste mistake and
+/// E0609: naming the same auto-synthesisable mixin twice via in-body
+/// `include` directives is almost always a copy-paste mistake and
 /// must be rejected.
 #[test]
 fn duplicate_derive_trait_reports_e0609() {
-    let source = r#"
-@[derive(Clone, Clone)]
-struct Point
-  x: Int
-  y: Int
-end
+    let source = rvn("duplicate_derive_trait_reports_e0609");
 
-def main
-  let _x = 0
-end
-"#;
-
-    let diags = typecheck_diagnostics_from_source(source);
+    let diags = typecheck_diagnostics_from_source(&source);
     assert!(
         has_code(&diags, "E0609"),
-        "expected E0609 when an `@[derive(...)]` list repeats a trait \
+        "expected E0609 when in-body `include` directives repeat a trait \
          name — got diagnostics {:?}.",
         diags
     );

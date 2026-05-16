@@ -17,6 +17,13 @@ use riven_core::lexer::Lexer;
 use riven_core::parser::Parser;
 use riven_core::typeck;
 
+fn rvn(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/riven")
+        .join(format!("{name}.rvn"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+}
+
 fn type_errors(src: &str) -> Vec<Diagnostic> {
     let mut lexer = Lexer::new(src);
     let tokens = lexer.tokenize().expect("lex");
@@ -30,29 +37,15 @@ fn type_errors(src: &str) -> Vec<Diagnostic> {
         .collect()
 }
 
-/// Phase A1: `Display` resolves as a built-in trait, `Formatter` and
-/// `FmtError` as built-in classes. A user-defined `class T ... impl
-/// Display ... end ... end` parses and typechecks (the trait method
-/// `fmt(&self, &mut Formatter) -> Result[(), FmtError]` is the Phase
+/// Phase A1: `Display` resolves as a built-in mixin, `Formatter` and
+/// `FmtError` as built-in classes. A user-defined `class T ... include
+/// Display ... end` parses and typechecks (the mixin method
+/// `fmt(&self, &var Formatter) -> Result[(), FmtError]` is the Phase
 /// A contract — Phase D wires the canonical interpolation dispatch).
 #[test]
 fn display_trait_and_formatter_are_resolvable() {
-    let src = r##"
-class Money
-  cents: Int
-
-  include Display
-
-  def fmt(f: &mut Formatter) -> Result[(), FmtError]
-    Ok(())
-  end
-end
-
-def main
-  let _m = Money.new(100)
-end
-"##;
-    let errs = type_errors(src);
+    let src = rvn("display_trait_and_formatter_are_resolvable");
+    let errs = type_errors(&src);
     assert!(
         errs.is_empty(),
         "expected no type errors, got: {:#?}",
@@ -60,27 +53,13 @@ end
     );
 }
 
-/// Phase A1: `Debug` resolves as a built-in trait with the same
-/// `fmt(&mut Formatter) -> Result[(), FmtError]` contract as
-/// `Display`. A user-defined `impl Debug` typechecks identically.
+/// Phase A1: `Debug` resolves as a built-in mixin with the same
+/// `fmt(&var Formatter) -> Result[(), FmtError]` contract as
+/// `Display`. A user-defined `include Debug` typechecks identically.
 #[test]
 fn debug_trait_is_resolvable_with_fmt_method() {
-    let src = r##"
-class Money
-  cents: Int
-
-  include Debug
-
-  def fmt(f: &mut Formatter) -> Result[(), FmtError]
-    Ok(())
-  end
-end
-
-def main
-  let _m = Money.new(100)
-end
-"##;
-    let errs = type_errors(src);
+    let src = rvn("debug_trait_is_resolvable_with_fmt_method");
+    let errs = type_errors(&src);
     assert!(
         errs.is_empty(),
         "expected no type errors, got: {:#?}",
@@ -97,20 +76,8 @@ end
 /// the canonical interp path through `Display::fmt`.
 #[test]
 fn debug_interpolation_spec_typechecks() {
-    let src = r##"
-class Point
-  x: Int
-  y: Int
-
-  derive Debug
-end
-
-def main
-  let p = Point.new(1, 2)
-  puts "raw=#{p:?}"
-end
-"##;
-    let errs = type_errors(src);
+    let src = rvn("debug_interpolation_spec_typechecks");
+    let errs = type_errors(&src);
     assert!(
         errs.is_empty(),
         "expected no type errors for `:?` on derive Debug, got: {:#?}",
@@ -123,14 +90,8 @@ end
 /// spec is captured but not yet applied.
 #[test]
 fn width_and_precision_specs_typecheck() {
-    let src = r##"
-def main
-  let n = 42
-  let pi = 3.14159
-  puts "n=#{n:>5} pi=#{pi:.2}"
-end
-"##;
-    let errs = type_errors(src);
+    let src = rvn("width_and_precision_specs_typecheck");
+    let errs = type_errors(&src);
     assert!(
         errs.is_empty(),
         "expected no type errors for width/precision specs, got: {:#?}",
@@ -138,27 +99,13 @@ end
     );
 }
 
-/// Phase A3: `Formatter::write_str(&str) -> Result[(), FmtError]` is
-/// callable from inside an `impl Display`. Locks in the method
+/// Phase A3: `Formatter.write_str(&str) -> Result[(), FmtError]` is
+/// callable from inside an `include Display`. Locks in the method
 /// signature; Phase D wires the runtime semantics.
 #[test]
 fn formatter_write_str_returns_result_unit_fmt_error() {
-    let src = r##"
-class Tag
-  name: String
-
-  include Display
-
-  def fmt(f: &mut Formatter) -> Result[(), FmtError]
-    f.write_str("tag")
-  end
-end
-
-def main
-  let _t = Tag.new("x")
-end
-"##;
-    let errs = type_errors(src);
+    let src = rvn("formatter_write_str_returns_result_unit_fmt_error");
+    let errs = type_errors(&src);
     assert!(
         errs.is_empty(),
         "expected no type errors, got: {:#?}",

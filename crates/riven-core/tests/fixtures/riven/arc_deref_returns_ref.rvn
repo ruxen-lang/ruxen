@@ -1,0 +1,6 @@
+use std.sync.SharedSync
+
+def main
+  let a: SharedSync[Int] = SharedSync.new(7)
+  let r: &Int = a.deref()
+end

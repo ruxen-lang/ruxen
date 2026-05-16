@@ -1,4 +1,4 @@
-## Auto-synthesized Hash mixin works for structs whose fields are all Hash.
+## Auto-synthesized Hashable mixin works for structs whose fields are all Hashable.
 struct KeyA
   v: Int
 end

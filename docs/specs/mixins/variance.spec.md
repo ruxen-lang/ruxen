@@ -11,21 +11,21 @@ This spec lists the rules that have explicit pin tests.
 
 ---
 
-## B1 — `&mut T` is **invariant** in `T`
+## B1 — `&var T` is **invariant** in `T`
 
-`&mut Inner1` does **not** coerce to `&mut Inner2`, even when
+`&var Inner1` does **not** coerce to `&var Inner2`, even when
 `Inner2` is a supertype / wider type.
 
 | Rejection                                              | Reason                       |
 |--------------------------------------------------------|------------------------------|
-| `&mut SubClass` → `&mut BaseClass`                     | unsound: write through alias |
-| `&mut Int8`     → `&mut Int64`                         | width mismatch               |
-| `&mut TypeA`    → `&mut UnrelatedTypeB`                | unrelated types              |
+| `&var SubClass` → `&var BaseClass`                     | unsound: write through alias |
+| `&var Int8`     → `&var Int64`                         | width mismatch               |
+| `&var TypeA`    → `&var UnrelatedTypeB`                | unrelated types              |
 
-## B2 — `&mut T` → `&T` is allowed
+## B2 — `&var T` → `&T` is allowed
 
-The standard "mutable to immutable" reborrow remains legal; a
-`&mut T` automatically demotes to `&T` at coercion sites.
+The standard "writable to read-only" reborrow remains legal; a
+`&var T` automatically demotes to `&T` at coercion sites.
 
 ## B3 — `Array[T]` is **invariant** in `T`
 
@@ -43,7 +43,7 @@ Read-only single-value wrappers admit safe upcasts.
 
 | Coercion accepted                                       | Reason                |
 |---------------------------------------------------------|-----------------------|
-| `Option[&mut T]` → `Option[&T]`                         | demote inner          |
+| `Option[&var T]` → `Option[&T]`                         | demote inner          |
 | `Option[Int8]`   → `Option[Int64]`                      | integer widening      |
 
 `Option[T]` does not coerce when the inner types are incompatible
@@ -67,6 +67,8 @@ module is reachable.
 | B4        | `vec_same_type_works`                                 | `variance.rs` |
 | B5        | `option_covariant_through_mut_to_immut_ref` + `option_covariant_through_integer_widening` + `option_no_coerce_when_inner_incompatible` | `variance.rs` |
 | B6        | `variance_module_is_wired_into_typeck`                | `variance.rs` |
+
+<!-- TODO(migration): pin-test fn names still contain `mut_ref_*` / `vec_*` — internal Rust identifiers, rename when in scope. -->
 
 ---
 

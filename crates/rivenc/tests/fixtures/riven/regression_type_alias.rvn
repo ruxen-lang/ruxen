@@ -1,0 +1,6 @@
+type UserId = Int
+
+def main
+  let id: UserId = 5
+  puts "#{id}"
+end

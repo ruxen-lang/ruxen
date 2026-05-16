@@ -1,0 +1,10 @@
+
+class Vector[T, const N: USize]
+  data: USize
+
+  def init(@data: USize)
+  end
+end
+
+def take_vec(v: Vector[Int, 2 + 3])
+end

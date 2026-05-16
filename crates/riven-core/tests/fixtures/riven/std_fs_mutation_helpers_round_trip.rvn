@@ -1,0 +1,13 @@
+use std.fs.{create_dir, write, rename, exists, remove_file}
+
+def main
+  create_dir("{root}").expect!("create_dir")
+  write("{file_a}", "temp").expect!("write")
+  rename("{file_a}", "{file_b}").expect!("rename")
+  remove_file("{file_b}").expect!("remove_file")
+  if exists("{file_b}")
+    puts "still-there"
+  else
+    puts "gone"
+  end
+end

@@ -1,0 +1,9 @@
+use std.path.path_is_absolute
+
+def main
+  if path_is_absolute(&"/etc") && !path_is_absolute(&"foo/bar")
+    puts "ok"
+  else
+    puts "fail"
+  end
+end

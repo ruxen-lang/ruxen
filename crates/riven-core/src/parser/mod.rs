@@ -605,109 +605,21 @@ impl Parser {
             TokenKind::Const => Some(TopLevelItem::Const(self.parse_const_def())),
             TokenKind::Lib => Some(TopLevelItem::Lib(self.parse_lib_decl(vec![]))),
             TokenKind::At => {
-                // Parse @[...] attributes, then the item that follows.
-                // Recognised attributes:
-                //   @[link("name")]            — applies to `lib`
-                //   @[repr(C)] / @[repr(C, packed)] — applies to `struct`
-                //   @[derive(Trait1, Trait2)]  — applies to struct/class/enum;
-                //                                produces the same HIR as the
-                //                                body-form `derive Trait1, Trait2`
-                let attrs = self.parse_attributes();
-                self.skip_newlines();
-                let has_derive_attr = attrs.iter().any(|attr| attr.name == "derive");
-                match self.current_kind() {
-                    TokenKind::Lib => {
-                        let mut lib = self.parse_lib_decl(vec![]);
-                        for attr in attrs {
-                            if attr.name == "link" {
-                                for arg in &attr.args {
-                                    lib.link_attrs.push(LinkAttr {
-                                        name: arg.as_str().to_string(),
-                                        kind: LinkKind::Dynamic,
-                                    });
-                                }
-                            } else {
-                                self.error(&format!(
-                                    "attribute `{}` is not valid on `lib`",
-                                    attr.name
-                                ));
-                            }
-                        }
-                        Some(TopLevelItem::Lib(lib))
-                    }
-                    TokenKind::Struct => {
-                        let mut s = self.parse_struct_def();
-                        self.apply_struct_attrs(&mut s, &attrs);
-                        Some(TopLevelItem::Struct(s))
-                    }
-                    TokenKind::Class => {
-                        let mut c = self.parse_class_def();
-                        self.apply_class_attrs(&mut c, &attrs);
-                        Some(TopLevelItem::Class(c))
-                    }
-                    TokenKind::Enum => {
-                        let mut e = self.parse_enum_def();
-                        self.apply_enum_attrs(&mut e, &attrs);
-                        Some(TopLevelItem::Enum(e))
-                    }
-                    TokenKind::Mixin => {
-                        if has_derive_attr {
-                            for attr in &attrs {
-                                if attr.name == "derive" {
-                                    self.error_at_with_code(
-                                        "@[derive] cannot be applied to a mixin",
-                                        attr.span.clone(),
-                                        "E0607",
-                                    );
-                                }
-                            }
-                        }
-                        Some(TopLevelItem::Mixin(self.parse_trait_def()))
-                    }
-                    TokenKind::Def => {
-                        if has_derive_attr {
-                            for attr in &attrs {
-                                if attr.name == "derive" {
-                                    self.error_at_with_code(
-                                        "@[derive] cannot be applied to a function",
-                                        attr.span.clone(),
-                                        "E0607",
-                                    );
-                                }
-                            }
-                        }
-                        Some(TopLevelItem::Function(
-                            self.parse_func_def(Visibility::Private),
-                        ))
-                    }
-                    TokenKind::Protected => {
-                        if has_derive_attr {
-                            for attr in &attrs {
-                                if attr.name == "derive" {
-                                    self.error_at_with_code(
-                                        "@[derive] cannot be applied to a function",
-                                        attr.span.clone(),
-                                        "E0607",
-                                    );
-                                }
-                            }
-                        }
-                        let vis = self.parse_visibility();
-                        match self.current_kind() {
-                            TokenKind::Def | TokenKind::Async => {
-                                Some(TopLevelItem::Function(self.parse_func_def(vis)))
-                            }
-                            _ => {
-                                self.error("expected `def` after visibility modifier at top level");
-                                None
-                            }
-                        }
-                    }
-                    _ => {
-                        self.error("expected declaration after attribute");
-                        None
-                    }
-                }
+                // ruby-naming.spec.md §10a: the `@[...]` prefix-attribute
+                // surface is retired. `@[derive(...)]` → in-body `include
+                // X` (or just rely on implicit-include per §3.6);
+                // `@[repr(C)]` → `layout c`; `@[link("X")]` → `lib "X",
+                // ...`; etc. Old fixtures that still use the prefix form
+                // get a hard parser error.
+                self.error_at_with_code(
+                    "the `@[...]` prefix attribute is retired (ruby-naming.spec.md §10a) — \
+                     use the in-body directive form (`include`, `layout`, `lib` options, \
+                     `inline def`, etc.) instead",
+                    self.current_span(),
+                    "E0607",
+                );
+                self.advance(); // consume `@` to make progress; remainder errors normally
+                None
             }
             TokenKind::Async => Some(TopLevelItem::Function(
                 self.parse_func_def(Visibility::Private),
@@ -1267,6 +1179,10 @@ impl Parser {
         let mut methods: Vec<FuncDef> = Vec::new();
         let mut inner_impls: Vec<InnerImpl> = Vec::new();
         let mut derive_traits = Vec::new();
+        // ruby-naming.spec.md §3.5: `layout c` / `layout packed` /
+        // `layout transparent` directives populate this list (replaces
+        // the retired `@[repr(...)]` prefix attribute).
+        let mut repr: Vec<String> = Vec::new();
         // ruby-naming.spec.md §3.2: section-marker visibility, public default.
         let mut current_vis = Visibility::Public;
         let mut name_list_overrides: Vec<(Visibility, Vec<String>)> = Vec::new();
@@ -1342,6 +1258,28 @@ impl Parser {
                     self.advance();
                     inner_impls.push(self.parse_include_directive(true));
                 }
+                // ── `layout <c|packed|transparent>` directive (§3.5) ──
+                // Replaces the retired `@[repr(...)]` prefix attribute.
+                TokenKind::Layout => {
+                    self.advance();
+                    match self.current_kind().clone() {
+                        TokenKind::Identifier(name) => {
+                            self.advance();
+                            let token = if name.eq_ignore_ascii_case("c") {
+                                "C".to_string()
+                            } else {
+                                name.to_string()
+                            };
+                            repr.push(token);
+                        }
+                        other => {
+                            self.error(&format!(
+                                "expected layout kind (`c` / `packed` / `transparent`) after `layout`, found {:?}",
+                                other
+                            ));
+                        }
+                    }
+                }
                 TokenKind::Inline => {
                     self.advance();
                     if matches!(self.current_kind(), TokenKind::Def | TokenKind::Async) {
@@ -1394,7 +1332,7 @@ impl Parser {
             methods,
             inner_impls,
             derive_traits,
-            repr: Vec::new(),
+            repr,
             doc_comments,
             where_clause,
             span,
@@ -1543,7 +1481,7 @@ impl Parser {
         let vis = self.parse_visibility();
         // Should be `def`
         if !matches!(self.current_kind(), TokenKind::Def | TokenKind::Async) {
-            self.error("expected `def` or `type` in trait body");
+            self.error("expected `def` or `type` in mixin body");
             self.synchronize();
             return MixinItem::AssocType {
                 name: "_error".to_string(),
@@ -1642,8 +1580,8 @@ impl Parser {
         let is_async = self.eat(TokenKind::Async);
         self.expect(TokenKind::Def);
 
-        // Self mode: mut or consume
-        let self_mode = if self.at(TokenKind::Mut) {
+        // Self mode: var (writing) or consume
+        let self_mode = if self.at(TokenKind::Var) {
             let peek = self.peek_kind();
             match peek {
                 TokenKind::Identifier(_) | TokenKind::Init | TokenKind::SelfValue => {
@@ -1728,7 +1666,7 @@ impl Parser {
             let trait_path = match first_type {
                 TypeExpr::Named(path) => Some(path),
                 _ => {
-                    self.error("expected trait name before `for`");
+                    self.error("expected mixin name before `for`");
                     None
                 }
             };
@@ -2093,9 +2031,9 @@ impl Parser {
         let is_async = self.eat(TokenKind::Async);
         self.expect(TokenKind::Def);
 
-        // Self mode: mut or consume
-        let self_mode = if self.at(TokenKind::Mut) {
-            // Check if this is `def mut name` (self mode) vs something else
+        // Self mode: var (writing) or consume
+        let self_mode = if self.at(TokenKind::Var) {
+            // Check if this is `def var name` (self mode) vs something else
             // It's a self mode if followed by an identifier or self.ident
             let peek = self.peek_kind();
             match peek {
@@ -2356,12 +2294,12 @@ impl Parser {
 
     fn parse_let_binding(&mut self) -> LetBinding {
         let start = self.current_span();
-        // `var x = ...` is the mutable form; `let x = ...` is immutable
-        // (with `let mut x = ...` accepted only during migration).
+        // `var x = ...` is the mutable form; `let x = ...` is immutable.
+        // (`let mut x = ...` is retired — `mut` is no longer a keyword.)
         let var_form = matches!(self.current_kind(), TokenKind::Var);
         self.advance(); // consume let | var
 
-        let mutable = var_form || self.eat(TokenKind::Mut);
+        let mutable = var_form;
         let pattern = self.parse_pattern();
 
         let type_annotation = if self.eat(TokenKind::Colon) {

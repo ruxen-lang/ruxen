@@ -11,6 +11,13 @@ use riven_core::parser::Parser;
 use riven_core::typeck;
 use std::process::Command;
 
+fn rvn(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/riven")
+        .join(format!("{name}.rvn"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+}
+
 fn workspace_root() -> std::path::PathBuf {
     let crate_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     crate_dir.parent().unwrap().parent().unwrap().to_path_buf()
@@ -52,25 +59,8 @@ fn compile_and_run(source: &str, basename: &str) -> (String, String, bool) {
 /// `Option::None` on an empty vec.
 #[test]
 fn vec_first_returns_first_element() {
-    let source = r##"
-def main
-  let mut v: Vec[Int] = Vec.new
-  v.push(10)
-  v.push(20)
-  v.push(30)
-  match v.first
-    Some(n) -> puts "first=#{n}"
-    None    -> puts "empty"
-  end
-
-  let empty: Vec[Int] = Vec.new
-  match empty.first
-    Some(_) -> puts "should_not"
-    None    -> puts "empty_ok"
-  end
-end
-"##;
-    let (stdout, stderr, ok) = compile_and_run(source, "stdlib_vec_first");
+    let source = rvn("vec_first_returns_first_element");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_vec_first");
     assert!(ok, "stderr: {}", stderr);
     assert!(stdout.contains("first=10"), "first branch: {}", stdout);
     assert!(stdout.contains("empty_ok"), "empty branch: {}", stdout);
@@ -79,19 +69,8 @@ end
 /// `Vec.last()` returns `Option::Some(last)` / `Option::None`.
 #[test]
 fn vec_last_returns_last_element() {
-    let source = r##"
-def main
-  let mut v: Vec[Int] = Vec.new
-  v.push(10)
-  v.push(20)
-  v.push(30)
-  match v.last
-    Some(n) -> puts "last=#{n}"
-    None    -> puts "empty"
-  end
-end
-"##;
-    let (stdout, stderr, ok) = compile_and_run(source, "stdlib_vec_last");
+    let source = rvn("vec_last_returns_last_element");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_vec_last");
     assert!(ok, "stderr: {}", stderr);
     assert!(stdout.contains("last=30"), "got: {}", stdout);
 }
@@ -99,25 +78,8 @@ end
 /// `Vec.contains(&x)` returns Bool.
 #[test]
 fn vec_contains_finds_element() {
-    let source = r##"
-def main
-  let mut v: Vec[Int] = Vec.new
-  v.push(1)
-  v.push(2)
-  v.push(3)
-  if v.contains(&2)
-    puts "has_2"
-  else
-    puts "missing_2"
-  end
-  if v.contains(&99)
-    puts "has_99"
-  else
-    puts "missing_99"
-  end
-end
-"##;
-    let (stdout, stderr, ok) = compile_and_run(source, "stdlib_vec_contains");
+    let source = rvn("vec_contains_finds_element");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_vec_contains");
     assert!(ok, "stderr: {}", stderr);
     assert!(stdout.contains("has_2"), "present: {}", stdout);
     assert!(stdout.contains("missing_99"), "absent: {}", stdout);
@@ -127,19 +89,8 @@ end
 /// not affect the clone.
 #[test]
 fn vec_clone_returns_independent_copy() {
-    let source = r##"
-def main
-  let mut original: Vec[Int] = Vec.new
-  original.push(1)
-  original.push(2)
-  original.push(3)
-  let copy = original.clone
-  original.push(99)
-  puts "orig_len=#{original.len}"
-  puts "copy_len=#{copy.len}"
-end
-"##;
-    let (stdout, stderr, ok) = compile_and_run(source, "stdlib_vec_clone");
+    let source = rvn("vec_clone_returns_independent_copy");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_vec_clone");
     assert!(ok, "stderr: {}", stderr);
     assert!(stdout.contains("orig_len=4"), "orig grew: {}", stdout);
     assert!(stdout.contains("copy_len=3"), "copy unchanged: {}", stdout);
@@ -148,19 +99,8 @@ end
 /// `Vec.reverse()` reverses in place.
 #[test]
 fn vec_reverse_inverts_order() {
-    let source = r##"
-def main
-  let mut v: Vec[Int] = Vec.new
-  v.push(1)
-  v.push(2)
-  v.push(3)
-  v.reverse
-  for n in v
-    puts "n=#{n}"
-  end
-end
-"##;
-    let (stdout, stderr, ok) = compile_and_run(source, "stdlib_vec_reverse");
+    let source = rvn("vec_reverse_inverts_order");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_vec_reverse");
     assert!(ok, "stderr: {}", stderr);
     let lines: Vec<&str> = stdout.lines().collect();
     assert_eq!(lines.first().copied(), Some("n=3"), "first after reverse");

@@ -1,0 +1,16 @@
+
+def unwrap_line(r: Result[String, IoError]) -> String
+  match r
+    Ok(line) -> line
+    Err(_)   -> String.from("ERR")
+  end
+end
+
+def main
+  let stream = stdin()
+  let lines = stream.lines()
+  let out = stdout()
+  for line_result in lines
+    out.println(unwrap_line(line_result))
+  end
+end

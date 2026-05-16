@@ -59,7 +59,7 @@ end
 
 ### Method Self-Modes
 
-Every method has a relationship to its receiver — *reading*, *mutating*, *consuming*, or *class-method* (no receiver).
+Every method has a relationship to its receiver — *reading*, *writing*, *consuming*, or *class-method* (no receiver).
 
 ```riven
 class Account
@@ -67,13 +67,13 @@ class Account
 
   def init(@balance: Int) end
 
-  # Reading method — borrows the receiver immutably
+  # Reading method — borrows the receiver read-only
   def get_balance -> Int
     self.balance
   end
 
-  # Mutating method — borrows the receiver mutably
-  def mut deposit(amount: Int)
+  # Writing method — borrows the receiver writably
+  def var deposit(amount: Int)
     self.balance += amount
   end
 
@@ -116,11 +116,11 @@ end
 
 ### Adopting a Mixin
 
-To adopt a mixin (a contract-and-provision unit — see [Chapter 8](08-traits.md)), use the `include` directive in the class body. The mixin's required methods become obligations; default methods are pulled in as if defined inline.
+To adopt a mixin (a contract-and-provision unit — see [Chapter 8](08-mixins.md)), use the `include` directive in the class body. The mixin's required methods become obligations; default methods are pulled in as if defined inline.
 
 ```riven
-mixin Displayable
-  def to_display -> String
+mixin Display
+  def fmt(f: &var Formatter) -> Result[(), FmtError]
 end
 
 class User
@@ -129,10 +129,10 @@ class User
 
   def init(@name: String, @email: String) end
 
-  include Displayable
+  include Display
 
-  def to_display -> String
-    "#{self.name} <#{self.email}>"
+  def fmt(f: &var Formatter) -> Result[(), FmtError]
+    f.write_str("#{self.name} <#{self.email}>")
   end
 end
 ```
@@ -150,9 +150,9 @@ end
 let p = Point.new(3.0, 4.0)
 ```
 
-### Deriving Mixins
+### Implicit Structural Mixins
 
-Structs can derive `Copy`, `Clone`, and other supported mixins via an in-body `derive` directive:
+Structs automatically include `Debug`, `Clone`, `Eq`, `Hashable`, `Default`, `Ord`, and `PartialOrd` whenever every field supports the mixin — no declaration needed. `Copy` is implicit when every field is `Copy`. See §3.6 of the syntax spec and [Chapter 23](23-attributes.md) for the loud `include D1, D2` form.
 
 ```riven
 struct Color
@@ -162,10 +162,8 @@ struct Color
 end
 
 let red = Color.new(255, 0, 0)
-let also_red = red               # copy, both valid
+let also_red = red               # copy, both valid (every field is Copy)
 ```
-
-See [Chapter 23](23-attributes.md) for the full set of derivable mixins.
 
 ### Structs vs Classes
 
@@ -173,8 +171,8 @@ See [Chapter 23](23-attributes.md) for the full set of derivable mixins.
 |---------|-------|--------|
 | Allocation | Heap | Stack (by default) |
 | Inheritance | Yes (single) | No |
-| Copy | No (unless all fields Copy) | Yes (with `derive Copy`) |
-| Default semantics | Move | Move (Copy if derived) |
+| Copy | No (reference semantics) | Implicit when every field is `Copy` |
+| Default semantics | Move | Move (Copy when all fields are) |
 | Methods | Yes | Yes |
 | Mixin inclusion | Yes | Yes |
 
@@ -187,7 +185,7 @@ newtype UserId(Int)
 newtype Email(String)
 
 let id = UserId(42)
-let email = Email(String.new("user@example.com"))
+let email = Email(String.from("user@example.com"))
 
 # UserId and Int are different types — can't mix them accidentally
 ```
@@ -202,7 +200,7 @@ class Container[T]
     self.items = Array.new
   end
 
-  def mut add(item: T)
+  def var add(item: T)
     self.items.push(item)
   end
 
@@ -212,5 +210,5 @@ class Container[T]
 end
 
 var box = Container[String].new
-box.add(String.new("hello"))
+box.add(String.from("hello"))
 ```

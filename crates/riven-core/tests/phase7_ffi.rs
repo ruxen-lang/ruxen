@@ -12,32 +12,27 @@ fn parse(source: &str) -> Program {
     parser.parse().expect("parser failed")
 }
 
+/// Read a Riven fixture file from `tests/fixtures/riven/<name>.rvn`.
+fn rvn(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/riven")
+        .join(format!("{name}.rvn"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+}
+
 // ── Unsafe Block Parsing ─────────────────────────────────────────────
 
 #[test]
 fn parse_unsafe_block() {
-    let source = r#"
-def main
-  let x = unsafe
-    42
-  end
-end
-"#;
-    let program = parse(source);
+    let source = rvn("parse_unsafe_block");
+    let program = parse(&source);
     assert!(!program.items.is_empty());
 }
 
 #[test]
 fn parse_unsafe_block_with_statements() {
-    let source = r#"
-def main
-  unsafe
-    let x = 1
-    let y = 2
-  end
-end
-"#;
-    let program = parse(source);
+    let source = rvn("parse_unsafe_block_with_statements");
+    let program = parse(&source);
     assert!(!program.items.is_empty());
 }
 
@@ -45,12 +40,8 @@ end
 
 #[test]
 fn parse_null_literal() {
-    let source = r#"
-def main
-  let p = nil
-end
-"#;
-    let program = parse(source);
+    let source = rvn("parse_null_literal");
+    let program = parse(&source);
     assert!(!program.items.is_empty());
 
     if let TopLevelItem::Function(f) = &program.items[0] {
@@ -67,12 +58,8 @@ end
 
 #[test]
 fn parse_raw_pointer_type() {
-    let source = r#"
-def foo(p: *Int64) -> *Int64
-  p
-end
-"#;
-    let program = parse(source);
+    let source = rvn("parse_raw_pointer_type");
+    let program = parse(&source);
     assert!(!program.items.is_empty());
 
     if let TopLevelItem::Function(f) = &program.items[0] {
@@ -94,13 +81,9 @@ end
 }
 
 #[test]
-fn parse_raw_mut_pointer_type() {
-    let source = r#"
-def bar(p: *mut Int64) -> *mut Int64
-  p
-end
-"#;
-    let program = parse(source);
+fn parse_raw_var_pointer_type() {
+    let source = rvn("parse_raw_var_pointer_type");
+    let program = parse(&source);
     assert!(!program.items.is_empty());
 
     if let TopLevelItem::Function(f) = &program.items[0] {
@@ -116,13 +99,8 @@ end
 
 #[test]
 fn parse_lib_block() {
-    let source = r#"
-lib LibM
-  def sin(x: Float64) -> Float64
-  def cos(x: Float64) -> Float64
-end
-"#;
-    let program = parse(source);
+    let source = rvn("parse_lib_block");
+    let program = parse(&source);
     assert!(!program.items.is_empty());
 
     if let TopLevelItem::Lib(lib) = &program.items[0] {
@@ -141,20 +119,15 @@ end
 }
 
 #[test]
-fn parse_lib_block_with_link_attr() {
-    let source = r#"
-@[link("m")]
-lib LibM
-  def sqrt(x: Float64) -> Float64
-end
-"#;
-    let program = parse(source);
+fn parse_lib_block_with_link_name() {
+    // ruby-naming.spec.md §3.7 / §10a: `@[link("m")] lib LibM` is
+    // retired. The link name now lives in the `lib "m"` string itself.
+    let source = rvn("parse_lib_block_with_link_name");
+    let program = parse(&source);
     assert!(!program.items.is_empty());
 
     if let TopLevelItem::Lib(lib) = &program.items[0] {
-        assert_eq!(lib.name, "LibM");
-        assert_eq!(lib.link_attrs.len(), 1);
-        assert_eq!(lib.link_attrs[0].name, "m");
+        assert_eq!(lib.name, "m");
         assert_eq!(lib.functions.len(), 1);
         assert_eq!(lib.functions[0].name, "sqrt");
     } else {
@@ -170,12 +143,8 @@ end
 
 #[test]
 fn parse_lib_block_replaces_extern() {
-    let source = r#"
-lib "c"
-  def getenv(name: *Int8) -> *Int8
-end
-"#;
-    let program = parse(source);
+    let source = rvn("parse_lib_block_replaces_extern");
+    let program = parse(&source);
     assert!(!program.items.is_empty());
 
     if let TopLevelItem::Lib(lib) = &program.items[0] {
@@ -189,12 +158,8 @@ end
 
 #[test]
 fn parse_ffi_void_return() {
-    let source = r#"
-lib "c"
-  def free(ptr: *mut Int8)
-end
-"#;
-    let program = parse(source);
+    let source = rvn("parse_ffi_void_return");
+    let program = parse(&source);
 
     if let TopLevelItem::Lib(lib) = &program.items[0] {
         assert_eq!(lib.functions[0].name, "free");
@@ -206,12 +171,8 @@ end
 
 #[test]
 fn parse_ffi_multiple_params() {
-    let source = r#"
-lib "c"
-  def memcpy(dest: *mut Int8, src: *Int8, n: UInt64) -> *mut Int8
-end
-"#;
-    let program = parse(source);
+    let source = rvn("parse_ffi_multiple_params");
+    let program = parse(&source);
 
     if let TopLevelItem::Lib(lib) = &program.items[0] {
         let f = &lib.functions[0];
@@ -226,30 +187,27 @@ end
     }
 }
 
-// ── @[repr(C)] Struct Parsing ────────────────────────────────────────
+// ── In-body `layout c` Struct Parsing ───────────────────────────────
 
 #[test]
-fn parse_repr_c_struct() {
-    let source = r#"
-@[repr(C)]
-struct Point
-  x: Float64
-  y: Float64
-end
-"#;
-    let program = parse(source);
+fn parse_layout_c_struct() {
+    // ruby-naming.spec.md §3.5 / §10a: `@[repr(C)]` is retired —
+    // `layout c` at the top of the struct body is the new form.
+    let source = rvn("parse_layout_c_struct");
+    let program = parse(&source);
     assert!(!program.items.is_empty());
 
     if let TopLevelItem::Struct(s) = &program.items[0] {
         assert_eq!(s.name, "Point");
         assert_eq!(s.fields.len(), 2);
-        // `@[repr(C)]` is stored on its own `repr` field — not stuffed
-        // into `derive_traits`. The dispatched `@[derive(...)]` form
-        // populates `derive_traits` instead.
-        assert!(s.repr.iter().any(|r| r == "C"));
+        assert!(
+            s.repr.iter().any(|r| r.eq_ignore_ascii_case("C")),
+            "layout c should populate repr, got: {:?}",
+            s.repr
+        );
         assert!(
             s.derive_traits.is_empty(),
-            "repr must not leak into derive_traits: {:?}",
+            "layout must not leak into derive_traits: {:?}",
             s.derive_traits
         );
     } else {
@@ -257,24 +215,25 @@ end
     }
 }
 
-// ── @[derive(...)] parse surface ───────────────────────────────────
+// ── In-body `include` parse surface ─────────────────────────────────
+// ruby-naming.spec.md §3.6 / §10a: `@[derive(D1, D2)]` is retired.
+// In-body `include D1` / `include D2` (loud form) is the new surface
+// for explicit mixin inclusion. Each `include` becomes an `InnerImpl`
+// entry on the type's AST node (`derive_traits` stays empty — the old
+// field is only populated by the retired attribute path).
 
 #[test]
-fn parse_derive_attr_on_struct() {
-    let source = r#"
-@[derive(Copy, Clone)]
-struct Pair
-  x: Int
-  y: Int
-end
-"#;
-    let program = parse(source);
+fn parse_include_on_struct() {
+    let source = rvn("parse_include_on_struct");
+    let program = parse(&source);
     if let TopLevelItem::Struct(s) = &program.items[0] {
         assert_eq!(s.name, "Pair");
-        assert_eq!(
-            s.derive_traits,
-            vec!["Copy".to_string(), "Clone".to_string()]
-        );
+        let traits: Vec<String> = s
+            .inner_impls
+            .iter()
+            .map(|i| i.trait_name.segments.join("."))
+            .collect();
+        assert_eq!(traits, vec!["Copy".to_string(), "Clone".to_string()]);
         assert!(s.repr.is_empty());
     } else {
         panic!("expected Struct item");
@@ -282,64 +241,38 @@ end
 }
 
 #[test]
-fn parse_derive_attr_on_class() {
-    let source = r#"
-@[derive(Debug)]
-class Widget
-  value: Int
-end
-"#;
-    let program = parse(source);
+fn parse_include_on_class() {
+    let source = rvn("parse_include_on_class");
+    let program = parse(&source);
     if let TopLevelItem::Class(c) = &program.items[0] {
         assert_eq!(c.name, "Widget");
-        assert_eq!(c.derive_traits, vec!["Debug".to_string()]);
+        let traits: Vec<String> = c
+            .inner_impls
+            .iter()
+            .map(|i| i.trait_name.segments.join("."))
+            .collect();
+        assert_eq!(traits, vec!["Debug".to_string()]);
     } else {
         panic!("expected Class item");
     }
 }
 
 #[test]
-fn parse_derive_attr_on_enum() {
-    let source = r#"
-@[derive(Debug, Clone)]
-enum Color
-  Red
-  Green
-  Blue
-end
-"#;
-    let program = parse(source);
+fn parse_include_on_enum() {
+    let source = rvn("parse_include_on_enum");
+    let program = parse(&source);
     if let TopLevelItem::Enum(e) = &program.items[0] {
         assert_eq!(e.name, "Color");
-        assert_eq!(
-            e.derive_traits,
-            vec!["Debug".to_string(), "Clone".to_string()]
-        );
-    } else {
-        panic!("expected Enum item");
-    }
-}
-
-#[test]
-fn parse_inbody_include_on_enum() {
-    // ruby-naming.spec.md §3.6 / §10a: the in-body `derive D1, D2`
-    // form is replaced by `include D1, D2` (the loud, explicit form
-    // — structural mixins are also implicitly included).
-    let source = r#"
-enum Shape
-  Circle
-  Square
-
-  include Debug
-end
-"#;
-    let program = parse(source);
-    if let TopLevelItem::Enum(e) = &program.items[0] {
-        assert_eq!(e.inner_impls.len(), 1);
-        assert_eq!(e.inner_impls[0].trait_name.segments, vec!["Debug"]);
-        let _legacy_derive_traits_still_empty: &Vec<String> = &e.derive_traits;
-        assert_eq!(e.derive_traits, vec![] as Vec<String>);
-        assert_eq!(e.variants.len(), 2);
+        let traits: Vec<String> = e
+            .inner_impls
+            .iter()
+            .map(|i| i.trait_name.segments.join("."))
+            .collect();
+        assert_eq!(traits, vec!["Debug".to_string(), "Clone".to_string()]);
+        assert_eq!(e.variants.len(), 3);
+        // Legacy `derive_traits` field stays empty under the new
+        // in-body `include` surface.
+        assert!(e.derive_traits.is_empty());
     } else {
         panic!("expected Enum item");
     }
@@ -349,15 +282,8 @@ end
 fn parse_inbody_include_on_class() {
     // ruby-naming.spec.md §3.6 / §10a: in-body `derive D1, D2` →
     // `include D1, D2`. Each becomes its own `InnerImpl` entry.
-    let source = r#"
-class Counter
-  value: Int
-
-  include Debug
-  include Clone
-end
-"#;
-    let program = parse(source);
+    let source = rvn("parse_inbody_include_on_class");
+    let program = parse(&source);
     if let TopLevelItem::Class(c) = &program.items[0] {
         let traits: Vec<String> = c
             .inner_impls

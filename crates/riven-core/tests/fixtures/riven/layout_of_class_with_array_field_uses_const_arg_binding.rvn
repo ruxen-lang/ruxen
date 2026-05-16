@@ -1,0 +1,7 @@
+
+class Buf[const N: USize]
+  data: [Int; N]
+end
+
+def take_buf(_b: Buf[4])
+end

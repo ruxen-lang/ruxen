@@ -46,7 +46,7 @@ None of this is urgent for a prototype. All of it is the difference between
 | **Tooling** (LSP, formatter, docs generator, `riven fix`) | A machine-readable or stable surface: error codes with categories, suggestion payloads, stable AST shape per edition. |
 | **Users** (debugging errors) | `riven --explain E0308` long-form, hover-docs in LSP, deprecation warnings with upgrade paths. |
 | **Compiler contributors** | Know which rules are normative vs informative; know where to register new error codes; know what an edition gate looks like. |
-| **Library authors** | `@[stable(since = "0.3")]`/`@[deprecated(since = "0.5", note = "use `Foo::new`")]` so they can evolve APIs without breaking downstream. |
+| **Library authors** | in-body `stable since: "0.3"` / `deprecated since: "0.5", note: "use Foo.new"` directives so they can evolve APIs without breaking downstream. |
 
 ---
 
@@ -129,7 +129,7 @@ The fine-grained citations are in the per-doc §2 sections. Top-level status:
 |------------|----------------|
 | 01 Language reference | **All tiers.** Parser (tier 2 if any), typeck, borrow check, stdlib (tier 1). The reference must be updated whenever surface changes. |
 | 02 Editions | **Tier 1** (stdlib — old-edition shims); **Tier 3** (LSP — edition-aware diagnostics); **Tier 4** (`riven-cli` — manifest). |
-| 03 Attributes | **Tier 1** (derive macros — share `@[...]` surface); **Tier 1.05** (stability attrs on every stdlib item); **Tier 3** (LSP — hover shows stability). |
+| 03 Attributes | **Tier 1** (implicit-include for structural mixins — `derive`/`@[...]` retired; see tier1_05); **Tier 1.05** (stability directives on every stdlib item); **Tier 3** (LSP — hover shows stability). |
 | 04 Error codes | **Tier 3** (LSP — `diag.code` already flows through `riven-ide/src/diagnostics.rs:22`); all phases that emit errors. |
 | 05 Suggestions | **Tier 3** (LSP code actions = quick fix); **tier 5 doc 02** (`riven fix` migrator reuses machine-applicable suggestions). |
 
@@ -139,7 +139,7 @@ The fine-grained citations are in the per-doc §2 sections. Top-level status:
 
 **Phase A — attribute framework (1-2 weeks).**
 Doc 03 phase 3a. Widen `ast::Attribute.args` from `Vec<String>` to
-`Vec<AttrArg>`; add `@[deprecated]`, `@[stable]`, `@[unstable]` recognition;
+`Vec<AttrArg>`; add `deprecated`, `stable`, `unstable` recognition;
 add a warning-emission pass that fires on use of `deprecated` items.
 Unblocks tier-1 B2 (derive attribute untangling) and all other Tier-5 docs.
 
@@ -173,7 +173,7 @@ structured suggestions:
 **Phase E — edition infrastructure (2-3 weeks).**
 Doc 02 phases 2a-2b. Wire `package.edition` through the pipeline; introduce
 `EditionCtx`; add the first edition-gated feature (something cheap — e.g.
-rename `Hash[K,V]` to `HashMap[K,V]` on 2027 only, issue deprecation on
+rename `Map[K,V]` to `Map[K,V]` on 2027 only, issue deprecation on
 2026). Implement `riven fix --edition=2027` driver that applies machine-
 applicable suggestions across the whole crate.
 
@@ -205,9 +205,9 @@ the relevant doc §OQ for the full argument.
 1. **Attribute arg grammar.** Today `ast::Attribute.args: Vec<String>`
    stores everything as strings (`parser/ast.rs:789-793`). Must widen to
    `Vec<AttrArg>` where `AttrArg` is `Literal | KeyValue | Nested`. All
-   Tier-5 attributes (`@[deprecated(since = "0.3", note = "use X")]`,
-   `@[stable(feature = "foo", since = "0.5")]`, `@[unstable(feature = "y",
-   issue = "123")]`) need key-value args. See **doc 03 §OQ-1**.
+   Tier-5 in-body directives (`deprecated since: "0.3", note: "use X"`,
+   `stable feature: "foo", since: "0.5"`, `unstable feature: "y", issue: "123"`)
+   need key-value args. See **doc 03 §OQ-1**.
 
 2. **Error-code number space.** `E1001-E1010` already ship
    (`borrow_check/errors.rs:6-16`), and tier-1 docs reserve `E1011-E1016`
@@ -281,12 +281,14 @@ the relevant doc §OQ for the full argument.
 
 Items below survived the docs and need the project lead's call:
 
-- **Attribute naming style: `@[deprecated]` vs `@[deprecated(...)]` vs
-  bare-arg `@[deprecated "since 0.3"]`**. Docs recommend keyword-argument
-  form (`since = "0.3"`, `note = "..."`) matching Rust. See doc 03 §OQ-2.
+- **Attribute naming style: bare `deprecated` directive vs in-body
+  `deprecated since: "0.3"` keyword-args vs `deprecated "since 0.3"`
+  bare-arg form**. Docs recommend keyword-argument form
+  (`since: "0.3"`, `note: "..."`) matching Ruby/Riven directive style.
+  See doc 03 §OQ-2.
 - **Stability track for the stdlib itself.** Tier-1 stdlib ships every
-  function as `@[stable(since = "0.2")]`? Or ships some with
-  `@[unstable(feature = "foo")]` requiring a feature gate? Rust uses
+  function with an in-body `stable since: "0.2"` directive? Or ships
+  some with `unstable feature: "foo"` requiring a feature gate? Rust uses
   nightly for unstable; Riven has no nightly channel today. Doc 03 §OQ-4.
 - **Whether `--explain` should be on `rivenc` or `riven` or both.** Rust
   exposes `rustc --explain` only. We currently have `rivenc` (compiler)
@@ -304,15 +306,15 @@ Items below survived the docs and need the project lead's call:
 Tier 5 is "done" when:
 
 - [ ] `docs/reference/` renders at a stable URL, covers lex/parse/types/
-      ownership/trait-resolution/coercions/editions, and has a test-fixture
+      ownership/mixin-resolution/coercions/editions, and has a test-fixture
       backing every rule.
 - [ ] `riven --explain E1001` prints a paragraph of Markdown-rendered prose
       and an example; same for every other registered code.
 - [ ] Every `Diagnostic::error(...)` call in `riven-core` carries an
       `ErrorCode`.
-- [ ] `@[deprecated]` on a stdlib item causes call sites to produce a
+- [ ] `deprecated` on a stdlib item causes call sites to produce a
       warning diagnostic with the `note` and a suggestion to migrate.
-- [ ] `@[stable(since = "0.2.0")]` and `@[unstable(feature = "foo")]` are
+- [ ] In-body `stable since: "0.2.0"` and `unstable feature: "foo"` directives are
       parsed, stored on items, and queryable from `riven-ide` hovers.
 - [ ] Two editions (`"2026"`, `"2027"`) are live; a crate on `"2026"` can
       be linked against from a crate on `"2027"`; a 2027-only feature is

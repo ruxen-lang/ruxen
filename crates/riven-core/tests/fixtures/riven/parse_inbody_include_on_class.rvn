@@ -1,0 +1,6 @@
+class Counter
+  value: Int
+
+  include Debug
+  include Clone
+end

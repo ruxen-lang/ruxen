@@ -1,0 +1,16 @@
+def main
+  var v: Array[Int] = Array.new
+  v.push(10)
+  v.push(20)
+  v.push(30)
+  match v.first
+    Some(n) -> puts "first=#{n}"
+    nil     -> puts "empty"
+  end
+
+  let empty: Array[Int] = Array.new
+  match empty.first
+    Some(_) -> puts "should_not"
+    nil     -> puts "empty_ok"
+  end
+end

@@ -1,19 +1,19 @@
-# Spec — `HashSet[T]`
+# Spec — `Set[T]`
 
 **Source docs:**
 [docs/requirements/tier1_01_stdlib.md §5.3](../../requirements/tier1_01_stdlib.md).
 
 **Status:** shipped Phase 2 #04-#05.
 
-`HashSet[T]` is a thin layer over `HashMap[T, ()]` — same hashing
-semantics, same `Hash` bound on `T`.
+`Set[T]` is a thin layer over `Map[T, ()]` — same hashing
+semantics, same `Hashable` bound on `T`.
 
 ---
 
-## B1 — `Set[T]` is an alias for `HashSet[T]`
+## B1 — `Set[T]` is the canonical name
 
-Both names construct the same runtime type.  Source code may use
-either; the typechecker normalises to `HashSet`.
+`Set.new()` and `Set.from_iter([...])` (the `{...}` literal is
+reserved for `Map` per §3.22) construct the same runtime type.
 
 ## B2 — `insert(x)` typechecks as `Unit` (v1 simplification)
 
@@ -28,12 +28,12 @@ otherwise.
 ## B4 — Set operations return fresh sets
 
 `union(other)`, `intersection(other)`, `difference(other)`, and
-`symmetric_difference(other)` each return a new `HashSet[T]` —
+`symmetric_difference(other)` each return a new `Set[T]` —
 operands are not modified.
 
-## B5 — `iter()` returns a `Vec[T]`
+## B5 — `iter()` returns an `Array[T]`
 
-v1 simplification: `iter()` materialises the set into a `Vec[T]`.  The
+v1 simplification: `iter()` materialises the set into an `Array[T]`.  The
 runtime guarantees no duplicates; order is unspecified.
 
 ## B6 — Equality (`==`) yields `Bool`
@@ -41,9 +41,9 @@ runtime guarantees no duplicates; order is unspecified.
 `set1 == set2` returns `true` iff the two sets contain the same
 elements (order-independent).
 
-## B7 — Element type must be `Hash`
+## B7 — Element type must be `Hashable`
 
-**Given** `HashSet[HashMap[K, V]]` (set of maps — maps are not
+**Given** `Set[Map[K, V]]` (set of maps — maps are not
 hashable)
 **Then** typeck emits diagnostic `E0615`.
 
@@ -70,4 +70,4 @@ Runtime round-trips covered by E2E fixture `105_set_basic.rvn` and
 
 - `BTreeSet` / ordered variant.
 - Surfacing `insert`'s "newly inserted" bool through typeck.
-- True streaming `iter()` that doesn't materialise a `Vec`.
+- True streaming `iter()` that doesn't materialise an `Array`.

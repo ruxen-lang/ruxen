@@ -1,0 +1,11 @@
+struct Version
+  major: Int
+  minor: Int
+
+  include Ord
+  include PartialEq
+end
+
+def main
+  let _x = 0
+end

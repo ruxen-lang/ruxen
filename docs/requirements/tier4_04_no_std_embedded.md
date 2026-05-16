@@ -141,10 +141,10 @@ end
 
 ```riven
 class MyAllocator
-  def alloc(size: USize, align: USize) -> *mut UInt8
+  def alloc(size: USize, align: USize) -> *var UInt8
     # ... MMIO or user-provided allocator ...
   end
-  def dealloc(ptr: *mut UInt8, size: USize, align: USize)
+  def dealloc(ptr: *var UInt8, size: USize, align: USize)
     # ... ...
   end
 end
@@ -219,12 +219,12 @@ Passed into a `panic_handler`-marked function by value-of-reference. The compile
 
 ```riven
 mixin Allocator
-  def alloc(layout: Layout) -> Result[*mut UInt8, AllocError]
-  def dealloc(ptr: *mut UInt8, layout: Layout)
+  def alloc(layout: Layout) -> Result[*var UInt8, AllocError]
+  def dealloc(ptr: *var UInt8, layout: Layout)
 
   # Optional, with defaults:
-  def alloc_zeroed(layout: Layout) -> Result[*mut UInt8, AllocError]
-  def realloc(ptr: *mut UInt8, old: Layout, new: Layout) -> Result[*mut UInt8, AllocError]
+  def alloc_zeroed(layout: Layout) -> Result[*var UInt8, AllocError]
+  def realloc(ptr: *var UInt8, old: Layout, new: Layout) -> Result[*var UInt8, AllocError]
 end
 
 struct Layout
@@ -280,7 +280,7 @@ Split into:
 
 - Option/Result inspection helpers (line 377-405).
 - `riven_noop_*` fallbacks (line 410-419) — to be removed with tier-1 B4.
-- `riven_panic` → exposes a weak symbol that the user's `panic_handler`-marked function overrides. Default weak impl for hosted builds calls `fprintf(stderr, …) + abort()` from `runtime_std.c`.
+- `riven_panic` → exposes a weak symbol that the user's `panic_handler`-marked function overrides. Default weak extension for hosted builds calls `fprintf(stderr, …) + abort()` from `runtime_std.c`.
 
 **`runtime_alloc.c`** (linked when an allocator is available):
 
@@ -290,7 +290,7 @@ Split into:
 
 **`runtime_std.c`** (linked when `no-std = false`):
 
-- `fprintf(stderr, …)`-based panic impl.
+- `fprintf(stderr, …)`-based panic extension.
 - Printing (29-55), to-string (59-92), libc-backed `String` ops.
 - The default global allocator (wraps `malloc`/`free`).
 

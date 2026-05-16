@@ -46,6 +46,9 @@ the build.
 `runtime.c` reject 32-bit builds.  Riven assumes 64-bit pointers
 throughout the MIR + codegen.
 
+(C tokens `void *` / `int64_t` above are C source — not Riven
+surface syntax — and stay as written.)
+
 ---
 
 ## Pin tests

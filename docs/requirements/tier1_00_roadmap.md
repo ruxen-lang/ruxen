@@ -29,9 +29,9 @@ The five agents independently surfaced issues in code that already exists. None 
 - Classes and enums have no `derive_traits` field at all.
 
 ### B3. `Hash` name collision (flagged by both stdlib and derive docs)
-- `Hash[K,V]` is registered as a collection type constructor (`resolve/mod.rs:200`).
+- `Map[K,V]` is registered as a collection type constructor (`resolve/mod.rs:200`).
 - The conventional `Hash` mixin name can't coexist.
-- Both docs recommend renaming the collection to `Map[K,V]`. This breaks the tutorial and any fixture that uses `Hash[K,V]`.
+- Both docs recommend renaming the collection to `Map[K,V]`. This breaks the tutorial and any fixture that uses `Map[K,V]`.
 
 ### B4. `?T..._method` codegen fallback masks failures
 - `codegen/runtime.rs`'s `runtime_name()` has a fallback that maps unresolved generic method calls to `riven_noop_passthrough`.
@@ -56,7 +56,7 @@ The five agents independently surfaced issues in code that already exists. None 
                              ▼
           ┌───────────────────────────────────────┐
           │ 04: Drop / Copy / Clone               │
-          │   (trait registration + MIR drop      │
+          │   (mixin registration + MIR drop      │
           │    elaboration + real codegen)        │
           └──────────────────┬────────────────────┘
                              │
@@ -92,7 +92,7 @@ The five agents independently surfaced issues in code that already exists. None 
 Key dependencies:
 
 - **Derive ↔ Drop/Copy/Clone are mutually dependent.** Deriving `Copy` is meaningless without `Ty::is_copy_with(&SymbolTable)` consulting derive data; deriving `Clone`/`Debug` is how users avoid hand-writing boilerplate *for stdlib types*. Implement together.
-- **Stdlib needs derive.** Without `derive Debug` every struct hand-writes a `Displayable` `include`. Stdlib phase 1a should ship alongside the first derive set (5a: Debug + Clone).
+- **Stdlib needs derive.** Without `derive Debug` every struct hand-writes a `Display` `include`. Stdlib phase 1a should ship alongside the first derive set (5a: Debug + Clone).
 - **Stdlib depends on working Drop.** Heap-backed types (`String`, `Array`, `Map`, `File`, `TcpStream`) leak without it.
 - **Concurrency's Send/Sync auto-mixins parallel Copy's structural-inference model** (doc 02 §4). Doing Copy first makes Send/Sync cheap to add.
 - **Async depends on concurrency** for the multi-threaded executor path. Single-threaded `block_on` can ship earlier — doc 03 §8 explicitly sequences this.
@@ -102,7 +102,7 @@ Key dependencies:
 
 **Phase 0 — pre-flight (1-2 weeks).** Fix B1-B5. Without these, everything downstream is built on sand.
 
-1. B3: rename `Hash[K,V]` → `Map[K,V]`; update tutorial + fixtures.
+1. B3: rename `Map[K,V]` → `Map[K,V]`; update tutorial + fixtures.
 2. B5: fix string-literal ownership model (retype to `Ty::Str` or wrap).
 3. B4: remove the `?T..._method` no-op fallback; accept that some existing tests will fail and fix them.
 4. B2: thread the body-level `derive` directive end-to-end and separate it from `layout` storage; widen `Vec<String>` to a structured form; add `derive_traits` to classes and enums.
@@ -112,7 +112,7 @@ Key dependencies:
 
 1. Drop/Copy/Clone mixin infrastructure (doc 04 phase 4a).
 2. Derive infrastructure + `derive Debug, Clone` (doc 05 phase 5a).
-3. User-written `include Drop` + `def mut drop` (doc 04 phase 4b).
+3. User-written `include Drop` + `def var drop` (doc 04 phase 4b).
 4. MIR drop elaboration with drop flags + real codegen (doc 04 phase 4c). **Closes B1.**
 5. `derive Copy, PartialEq` + `Ty::is_copy_with` (doc 05 phase 5b + doc 04 phase 4c integration).
 6. Built-in drops for `String`/`Array`/`Option`/`Result` (doc 04 phase 4d).
@@ -132,7 +132,7 @@ Key dependencies:
 - `time`: `Instant`/`Duration`/`SystemTime`.
 - `path`: `Path`/`PathBuf`.
 - `net`: `TcpStream`/`TcpListener`.
-- `hash`: `Hasher` trait + `DefaultHasher`.
+- `hash`: `Hasher` mixin + `DefaultHasher`.
 
 **Phase 4 — concurrency (4-6 weeks).** Doc 02 phases 2a-2d.
 - 2a: `Send`/`Sync` auto-mixins + `ThreadSafetyChecker` module (reuses Copy's inference pattern).

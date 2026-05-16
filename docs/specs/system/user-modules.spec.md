@@ -46,7 +46,8 @@ module produces another `ModuleDef`.
 
 Inside a `module ... end` body, the parser accepts the same items
 the top level accepts: `struct`, `class`, `enum`, `mixin`,
-`extension`, `def`, `use`, `type` alias, `newtype`, `const`, `lib`.
+`extension`, `def`, `use`, `type` alias, `newtype`, `let` (module-
+level constant), `lib`.
 
 ## B4 — Resolver currently rejects `outer.inner` paths for user modules
 

@@ -1,0 +1,18 @@
+enum Color
+  Red(Int)
+  Blue(Int)
+end
+
+def describe(c: Color) -> String
+  match c
+    Color.Red(n) if n > 100   -> "bright red"
+    Color.Red(_)              -> "red"
+    Color.Blue(_)             -> "blue"
+  end
+end
+
+def main
+  puts describe(Color.Red(200))
+  puts describe(Color.Red(50))
+  puts describe(Color.Blue(1))
+end

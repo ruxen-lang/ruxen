@@ -1,5 +1,5 @@
-## Minimal task tracker built on a class with mutable methods.
-## Demonstrates classes, `def mut`, encapsulation, and `Array[T]`.
+## Minimal task tracker built on a class with writing methods.
+## Demonstrates classes, `def var`, encapsulation, and `Array[T]`.
 
 class TaskList
   items: Array[String]
@@ -10,11 +10,11 @@ class TaskList
     self.done = 0
   end
 
-  def mut add(name: &String)
+  def var add(name: &String)
     self.items.push(name.clone)
   end
 
-  def mut complete
+  def var complete
     self.done = self.done + 1
   end
 

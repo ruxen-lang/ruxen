@@ -1,0 +1,5 @@
+def main
+  let t = (10, 20)
+  puts "#{t.0}"
+  puts "#{t.1}"
+end

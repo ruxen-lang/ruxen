@@ -139,7 +139,7 @@ new surface.**
   this slowly; not in tier 2.
 - **NG4.** Const-generic type parameters: `def foo[const T: Type]`.
   That's Scala's type functions, a separate feature.
-- **NG5.** Const-generic specialization. Picking a different impl
+- **NG5.** Const-generic specialization. Picking a different extension
   based on `N == 0`. Out of scope (see doc 04 §9 on specialization
   generally).
 - **NG6.** Default values for const generics. `const N: USize = 4`.
@@ -209,7 +209,7 @@ extension SmallArray[T, const N: USize]
     self.len = 0
   end
 
-  def mut push(item: T) -> Result[Unit, T]
+  def var push(item: T) -> Result[Unit, T]
     if self.len == N
       return Err(item)
     end

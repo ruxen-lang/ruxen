@@ -19,6 +19,13 @@ use riven_core::parser::Parser;
 use riven_core::typeck;
 use std::process::Command;
 
+fn rvn(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/riven")
+        .join(format!("{name}.rvn"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+}
+
 fn workspace_root() -> std::path::PathBuf {
     let crate_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     crate_dir.parent().unwrap().parent().unwrap().to_path_buf()
@@ -81,20 +88,9 @@ where
 /// venue for that fix.
 #[test]
 fn env_vars_snapshots_process_environment() {
-    let source = r##"
-use std.env.vars
-
-def main
-  let m = vars()
-  if m.contains_key("RIVEN_TEST_VARS_KEY")
-    puts "snapshot_has_key"
-  else
-    puts "snapshot_missing_key"
-  end
-end
-"##;
+    let source = rvn("env_vars_snapshots_process_environment");
     let (stdout, stderr, ok) = compile_and_run_with_env(
-        source,
+        &source,
         "stdlib_env_vars_present",
         [("RIVEN_TEST_VARS_KEY", "expected-vars-value")],
     );
@@ -115,20 +111,9 @@ end
 /// PATH-only restore should produce a non-empty map.
 #[test]
 fn env_vars_is_non_empty_when_one_var_set() {
-    let source = r##"
-use std.env.vars
-
-def main
-  let m = vars()
-  if m.len > 0
-    puts "non_empty"
-  else
-    puts "empty"
-  end
-end
-"##;
+    let source = rvn("env_vars_is_non_empty_when_one_var_set");
     let (stdout, _stderr, ok) =
-        compile_and_run_with_env(source, "stdlib_env_vars_non_empty", [("FOO", "bar")]);
+        compile_and_run_with_env(&source, "stdlib_env_vars_non_empty", [("FOO", "bar")]);
     assert!(ok);
     assert!(
         stdout.contains("non_empty"),
@@ -143,18 +128,9 @@ end
 /// happy-path control flow and that the payload is non-empty.
 #[test]
 fn env_current_dir_returns_ok_path() {
-    let source = r##"
-use std.env.current_dir
-
-def main
-  match current_dir()
-    Ok(path)  -> puts "cwd=#{path}"
-    Err(_)    -> puts "err"
-  end
-end
-"##;
+    let source = rvn("env_current_dir_returns_ok_path");
     let (stdout, stderr, ok) = compile_and_run_with_env(
-        source,
+        &source,
         "stdlib_env_current_dir",
         std::iter::empty::<(&str, &str)>(),
     );
@@ -172,18 +148,9 @@ end
 /// Pins the spec's B2 happy path.
 #[test]
 fn env_var_returns_ok_for_set_key() {
-    let source = r##"
-use std.env.var
-
-def main
-  match var("RIVEN_SENTINEL")
-    Ok(v)  -> puts "got=#{v}"
-    Err(_) -> puts "missing"
-  end
-end
-"##;
+    let source = rvn("env_var_returns_ok_for_set_key");
     let (stdout, stderr, ok) =
-        compile_and_run_with_env(source, "stdlib_env_var_set", [("RIVEN_SENTINEL", "hello")]);
+        compile_and_run_with_env(&source, "stdlib_env_var_set", [("RIVEN_SENTINEL", "hello")]);
     assert!(ok, "stderr: {}", stderr);
     assert!(stdout.contains("got=hello"), "stdout: {}", stdout);
 }
@@ -192,18 +159,9 @@ end
 /// spec B2 negative path.
 #[test]
 fn env_var_returns_err_for_missing_key() {
-    let source = r##"
-use std.env.var
-
-def main
-  match var("RIVEN_DEFINITELY_NOT_SET_12345")
-    Ok(v)  -> puts "got=#{v}"
-    Err(_) -> puts "missing"
-  end
-end
-"##;
+    let source = rvn("env_var_returns_err_for_missing_key");
     let (stdout, stderr, ok) = compile_and_run_with_env(
-        source,
+        &source,
         "stdlib_env_var_missing",
         std::iter::empty::<(&str, &str)>(),
     );
@@ -215,20 +173,9 @@ end
 /// Pins the spec's B1 lower-bound guarantee.
 #[test]
 fn env_args_includes_program_name() {
-    let source = r##"
-use std.env.args
-
-def main
-  let a = args()
-  if a.len() > 0
-    puts "ok len=#{a.len()}"
-  else
-    puts "fail empty"
-  end
-end
-"##;
+    let source = rvn("env_args_includes_program_name");
     let (stdout, stderr, ok) = compile_and_run_with_env(
-        source,
+        &source,
         "stdlib_env_args_present",
         std::iter::empty::<(&str, &str)>(),
     );

@@ -1,0 +1,6 @@
+def main
+  let s = "hello"
+  puts "#{s.len}"
+  let upper = "abc".to_upper
+  puts "#{upper}"
+end

@@ -218,7 +218,7 @@ implementation begins:
    `TokenKind::DocComment` (`crates/riven-core/src/lexer/mod.rs:211-226`).
    Doc 04 proposes keeping `##` (Ruby-flavored) rather than adding `///`
    or `/**`. Decide.
-2. **Test directive form.** Prefix attribute `@[test]` is retired. Doc 03
+2. **Test directive form.** Prefix attribute `test` is retired. Doc 03
    uses an in-body directive — a `test` keyword on its own line inside the
    function body. Confirm in-body form is the canonical surface; reject
    any leftover prefix proposals.
@@ -252,4 +252,4 @@ implementation begins:
 - **Tier 1 doc 04 (Drop)** has to land before `riven test` can run tests
   that allocate — otherwise tests that pass today will leak enough memory
   to OOM a CI runner given enough iterations. Drop is delivered via
-  `include Drop` + `def mut drop` in the implementing class body.
+  `include Drop` + `def var drop` in the implementing class body.

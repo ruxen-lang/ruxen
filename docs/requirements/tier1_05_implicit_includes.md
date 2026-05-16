@@ -74,7 +74,7 @@ Grepping `derive_traits` under `crates/riven-core/src/typeck`,
 `.../mir`, `.../codegen`, `.../borrow_check` returns **zero** matches. The
 list is syntactic metadata with no semantic effect.
 
-### 2.3 Trait registration
+### 2.3 Mixin registration
 
 The compiler pre-registers `Copy`, `Clone`, `Debug`, `Drop` as built-in
 traits with empty/minimal method sets
@@ -117,7 +117,7 @@ expanded into desugared AST/HIR. It flows as a first-class construct:
 Implication: **Riven has no precedent for an AST/HIR rewrite pass.** Every
 "expansion" today is a first-class node lowered straight to MIR. The
 derive system is the first feature that genuinely needs either a pre-resolve
-AST synthesis pass or a post-HIR impl-synthesis pass. This doc picks one in
+AST synthesis pass or a post-HIR extension-synthesis pass. This doc picks one in
 §5 and justifies it.
 
 ---
@@ -246,7 +246,7 @@ the built-in mixin list at `resolve/mod.rs:139-151`.
 ### 4.6 `Hash`
 
 **Generates:** an in-body `include Hashable` directive on `T[GP]` with
-`def hash(&self, hasher: &mut Hasher) -> Unit`. For each field emits
+`def hash(&self, hasher: &var Hasher) -> Unit`. For each field emits
 `self.field.hash(hasher)`. For enums, also hashes the variant discriminant
 first.
 
@@ -351,7 +351,7 @@ codegen
 Concretely: `typeck::type_check` at
 `crates/riven-core/src/typeck/mod.rs:37-69` currently runs
 `Resolver::resolve` then `TraitResolver::collect_impls`. Insert a new
-`DeriveExpander::expand(&mut program, &mut symbols)` between those two
+`DeriveExpander::expand(&var program, &var symbols)` between those two
 lines. It **must** run before `TraitResolver::collect_impls` so collected
 impls include the derived ones.
 
@@ -447,7 +447,7 @@ The generated `HirImplBlock.generic_params` replicates the type's
 ### 5.7 Errors surfaced at expansion time
 
 `DeriveExpander` catches **definition-site** errors — the ones listed per
-derive in §4. Trait-bound violations inside a generated body (e.g. Clone
+derive in §4. Mixin-bound violations inside a generated body (e.g. Clone
 derives a body that calls `field.clone()` but the field type doesn't
 implement Clone) are **not** caught by the expander; they surface during
 type-check of the generated HIR. That is correct because: (a) the
@@ -827,12 +827,12 @@ explicitly deferred.
 
 The collection type is `Map[K, V]` (per the syntax spec §3.11). The
 mixin describing "value that can be hashed" is `Hashable` (fits the
-existing `Displayable`, `Comparable` pattern at `resolve/mod.rs:140-143`).
+existing `Display`, `Ord` pattern at `resolve/mod.rs:140-143`).
 `derive Hash` is the body-level derive spelling; expansion produces an
 `include Hashable` provision on `T`.
 
 Document the naming convention in a cross-cutting ADR — all stdlib
-derive-able mixins end in `-able` (`Displayable`, `Hashable`, `Clonable`?)
+derive-able mixins end in `-able` (`Display`, `Hashable`, `Clonable`?)
 or none do. Currently `Debug`, `Clone`, `Copy`, `Eq`, `Ord` are fine by
 both Rust and English. Pick and commit.
 
@@ -858,7 +858,7 @@ foreign type because no mechanism exists for it.
 ### 12.4 Generic bound explosion
 
 `struct Tree[T] { left: Box[Tree[T]], right: Box[Tree[T]], val: T }` with
-`derive Debug` produces an impl with bound `T: Debug`. Rust's
+`derive Debug` produces an extension with bound `T: Debug`. Rust's
 current heuristic adds `T: Debug` for every type parameter that appears
 "anywhere" in a field. Mostly right but over-bounded in phantom-data
 cases — we don't have phantom data in Riven yet, so the simple heuristic

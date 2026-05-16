@@ -7,7 +7,7 @@
 mixin Iterator
   type Item
 
-  def mut next -> Option[Self.Item]
+  def var next -> Option[Self.Item]
 
   def map[U](f: |Self.Item| -> U) -> Self
   def filter(f: |&Self.Item| -> Bool) -> Self

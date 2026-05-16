@@ -673,7 +673,7 @@ fn detects_mut_immut_borrow_conflict() {
     );
     assert!(
         errors.iter().any(|e| e.code == ErrorCode::E1002),
-        "expected at least one E1002 (cannot borrow as mutable — already borrowed as immutable), \
+        "expected at least one E1002 (cannot borrow writably — already borrowed read-only), \
          got: {:?}",
         errors.iter().map(|e| e.code).collect::<Vec<_>>()
     );

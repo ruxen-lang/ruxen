@@ -12,6 +12,13 @@ use riven_core::lexer::Lexer;
 use riven_core::parser::Parser;
 use riven_core::typeck;
 
+fn rvn(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/riven")
+        .join(format!("{name}.rvn"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+}
+
 fn typeck_errors(source: &str) -> Vec<Diagnostic> {
     let mut lx = Lexer::new(source);
     let toks = lx.tokenize().expect("lex");
@@ -37,76 +44,34 @@ fn assert_clean(source: &str) {
 /// `Mutex.try_lock() -> Option[MutexGuard[T]]` typechecks.
 #[test]
 fn mutex_try_lock_returns_option() {
-    assert_clean(
-        r#"
-use std.sync.{Mutex, MutexGuard}
-
-def main
-  let m: Mutex[Int] = Mutex.new(0)
-  let guard: Option[MutexGuard[Int]] = m.try_lock()
-end
-"#,
-    );
+    let source = rvn("mutex_try_lock_returns_option");
+    assert_clean(&source);
 }
 
 /// `Mutex.into_inner() -> Result[T, PoisonError]` typechecks.
 #[test]
 fn mutex_into_inner_returns_result() {
-    assert_clean(
-        r#"
-use std.sync.{Mutex, PoisonError}
-
-def main
-  let m: Mutex[Int] = Mutex.new(42)
-  let inner: Result[Int, PoisonError] = m.into_inner()
-end
-"#,
-    );
+    let source = rvn("mutex_into_inner_returns_result");
+    assert_clean(&source);
 }
 
 /// `MutexGuard.deref_mut() -> &mut T` typechecks.
 #[test]
 fn mutex_guard_deref_mut_returns_mut_ref() {
-    assert_clean(
-        r#"
-use std.sync.{Mutex, MutexGuard}
-
-def main
-  let m: Mutex[Int] = Mutex.new(0)
-  let guard: MutexGuard[Int] = m.lock!()
-  let r: &mut Int = guard.deref_mut()
-end
-"#,
-    );
+    let source = rvn("mutex_guard_deref_mut_returns_mut_ref");
+    assert_clean(&source);
 }
 
 /// `Arc.strong_count()` and `weak_count()` return `USize`.
 #[test]
 fn arc_count_methods_return_usize() {
-    assert_clean(
-        r#"
-use std.sync.Arc
-
-def main
-  let a: Arc[Int] = Arc.new(99)
-  let s: USize = a.strong_count()
-  let w: USize = a.weak_count()
-end
-"#,
-    );
+    let source = rvn("arc_count_methods_return_usize");
+    assert_clean(&source);
 }
 
 /// `Arc.deref()` returns `&T`.
 #[test]
 fn arc_deref_returns_ref() {
-    assert_clean(
-        r#"
-use std.sync.Arc
-
-def main
-  let a: Arc[Int] = Arc.new(7)
-  let r: &Int = a.deref()
-end
-"#,
-    );
+    let source = rvn("arc_deref_returns_ref");
+    assert_clean(&source);
 }

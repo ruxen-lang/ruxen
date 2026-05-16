@@ -280,7 +280,10 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "stderr" => return Ok("riven_stderr"),
         // Top-level env / fs.
         "args" => return Ok("riven_env_args"),
-        "var" => return Ok("riven_env_var"),
+        // ruby-naming.spec.md §3.14: `env.var` renamed to `env.get`
+        // because `var` is a reserved keyword. The internal C symbol
+        // keeps its legacy `riven_env_var` name.
+        "get" => return Ok("riven_env_var"),
         // Phase 2 stdlib (#06): env / fs additions.
         "vars" => return Ok("riven_env_vars"),
         "current_dir" => return Ok("riven_env_current_dir"),
@@ -556,7 +559,7 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
             "pop" => Ok("riven_vec_pop"),
             "len" => Ok("riven_vec_len"),
             "capacity" => Ok("riven_vec_capacity"),
-            "get" | "get_mut" => Ok("riven_vec_get_opt"),
+            "get" | "get_mut" | "get_var" => Ok("riven_vec_get_opt"),
             "is_empty" => Ok("riven_vec_is_empty"),
             "each" => Ok("riven_vec_each"),
             // Iterator producers + the identity collector are
@@ -655,7 +658,7 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
             "is_empty" => Ok("riven_vec_is_empty"),
             "push" => Ok("riven_vec_push"),
             "pop" => Ok("riven_vec_pop"),
-            "get" | "get_mut" => Ok("riven_vec_get_opt"),
+            "get" | "get_mut" | "get_var" => Ok("riven_vec_get_opt"),
             "each" => Ok("riven_vec_each"),
             // User-defined methods commonly used in fixtures — forward
             // to link-time resolution (a missing impl will surface as a

@@ -16,10 +16,10 @@ pub fn format_type_expr(ty: &TypeExpr, _comments: &CommentMap) -> Doc {
         } => {
             let mut parts = vec![text("&")];
             if let Some(lt) = lifetime {
-                parts.push(text(format!("'{} ", lt)));
+                parts.push(text(format!("{} ", lt)));
             }
             if *mutable {
-                parts.push(text("mut "));
+                parts.push(text("var "));
             }
             parts.push(format_type_expr(inner, _comments));
             concat(parts)
@@ -94,12 +94,12 @@ pub fn format_type_expr(ty: &TypeExpr, _comments: &CommentMap) -> Doc {
 
         TypeExpr::SomeMixin { bounds, .. } => {
             let bound_docs: Vec<Doc> = bounds.iter().map(|b| format_type_path(&b.path)).collect();
-            concat(vec![text("impl "), join(text(" + "), bound_docs)])
+            concat(vec![text("some "), join(text(" + "), bound_docs)])
         }
 
         TypeExpr::AnyMixin { bounds, .. } => {
             let bound_docs: Vec<Doc> = bounds.iter().map(|b| format_type_path(&b.path)).collect();
-            concat(vec![text("dyn "), join(text(" + "), bound_docs)])
+            concat(vec![text("any "), join(text(" + "), bound_docs)])
         }
 
         TypeExpr::Never { .. } => text("!"),
@@ -107,7 +107,7 @@ pub fn format_type_expr(ty: &TypeExpr, _comments: &CommentMap) -> Doc {
         TypeExpr::Inferred { .. } => text("_"),
 
         TypeExpr::RawPointer { mutable, inner, .. } => {
-            let prefix = if *mutable { "*mut " } else { "*" };
+            let prefix = if *mutable { "*var " } else { "*" };
             concat(vec![text(prefix), format_type_expr(inner, _comments)])
         }
 
@@ -154,7 +154,7 @@ pub fn format_generic_params(gp: &GenericParams) -> Doc {
         .params
         .iter()
         .map(|p| match p {
-            GenericParam::Lifetime { name, .. } => text(format!("'{}", name)),
+            GenericParam::Lifetime { name, .. } => text(name.clone()),
             GenericParam::Type { name, bounds, .. } => {
                 if bounds.is_empty() {
                     text(name.clone())

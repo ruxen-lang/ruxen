@@ -1,0 +1,3 @@
+lib "c"
+  def free(ptr: *var Int8)
+end

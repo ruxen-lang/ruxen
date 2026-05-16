@@ -1,0 +1,4 @@
+def main
+  let _a: Map[Int, Int] = Map.new
+  let _b: Map[Int, Int] = Map.with_capacity(8)
+end

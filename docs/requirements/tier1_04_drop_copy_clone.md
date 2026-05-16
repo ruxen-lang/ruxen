@@ -226,7 +226,7 @@ otherwise a completely ordinary method.
 
 ```riven
 mixin Drop
-  def mut drop
+  def var drop
 end
 ```
 
@@ -235,7 +235,7 @@ Registered in `resolve/mod.rs`; the entry already exists
 express:
 
 - exactly one required method `drop`,
-- `self_mode: HirSelfMode::RefMut` (the spec calls this a "mutating method", `def mut drop`),
+- `self_mode: HirSelfMode::RefMut` (the spec calls this a "mutating method", `def var drop`),
 - return type `Unit`,
 - no generic parameters.
 
@@ -249,12 +249,12 @@ In the class body:
 
 ```riven
 class File
-  handle: *mut Void
-  def init(@handle: *mut Void) end
+  handle: *var Void
+  def init(@handle: *var Void) end
 
   include Drop
 
-  def mut drop
+  def var drop
     unsafe
       riven_fclose(self.handle)
     end
@@ -268,7 +268,7 @@ Out-of-line via an extension block:
 extension File
   include Drop
 
-  def mut drop
+  def var drop
     unsafe
       riven_fclose(self.handle)
     end
@@ -279,7 +279,7 @@ end
 ### 4.3 Semantics
 
 - **D1** — If `include Drop on T` exists, the compiler invokes the
-  `drop(&mut self)` provision exactly once when a value of type `T` is
+  `drop(&var self)` provision exactly once when a value of type `T` is
   dropped, before the
   recursive drop of `T`'s fields.
 - **D2** — Recursive field drops happen **after** the user-written
@@ -310,11 +310,11 @@ end
   early, users call the built-in free function `drop(value)` from the
   prelude (a generic `def drop[T](x: T) end`), which consumes the value
   and lets the normal end-of-scope mechanism kick in. Same idea as
-  Rust's `std::mem::drop`.
+  Rust's `std.mem.drop`.
 
 ### 4.4 Interaction with the borrow checker
 
-- **D9** — A value being dropped is treated as taking a `&mut` borrow of
+- **D9** — A value being dropped is treated as taking a `&var` borrow of
   itself at the drop point. Therefore **no other borrow of the value
   may be live at its drop point.** This prevents Rust's historical
   drop-check (`#[may_dangle]`) foot-gun in its simplest form. Because
@@ -382,11 +382,11 @@ A type `T` may implement `Copy` iff all of the following hold:
   `include Copy` is processed.
 - **C2** — Every field of `T` is Copy (recursively). Includes tuple
   elements and enum-variant payloads.
-- **C3** — `T` has no mutable reference field (`&mut U`). &mut is not
+- **C3** — `T` has no mutable reference field (`&var U`). &var is not
   Copy. (Immutable `&U` is Copy.)
 - **C4** — `T` is not a builtin heap-allocated type: `String`, `Array`,
   `Map`, `Set`, `Option` (if payload is non-Copy), `Result`,
-  `any Mixin` existential, `Fn`/`FnMut`/`FnOnce` closure types. The
+  `any Mixin` existential, `Fn`/`FnVar`/`FnOnce` closure types. The
   existing `Ty::is_copy` list in `hir/types.rs:189-221` is the source
   of truth; we extend it to consult the mixin-include table for user
   types.
@@ -593,7 +593,7 @@ does **drop elaboration**, analogous to rustc's `drop_elaboration`.
 4. **Lower each Drop to a runtime call.** `MirInst::Drop { local }` is
    lowered in a per-type way:
    - If `typeof(local): T` includes `Drop` nominally → call
-     `T_drop(&mut local)` (the user-written drop method).
+     `T_drop(&var local)` (the user-written drop method).
    - Then, in reverse field order, emit `Drop { field }` for each
      non-Copy field (classes/structs/enums) — this is **drop glue**.
    - For primitives-with-heap-tail types we route to runtime helpers:
@@ -655,7 +655,7 @@ end
 ```
 
 `Drop` is **not** in the implicit-include set. It is always opt-in via
-an explicit `include Drop` directive plus a `def mut drop` body.
+an explicit `include Drop` directive plus a `def var drop` body.
 
 ### 8.2 Parser changes
 
@@ -686,7 +686,7 @@ type-checking. For each user struct/enum/class:
   Copy: Clone constraint).
 
 `Drop` is **never** auto-synthesised. If the user writes `include Drop`,
-they must also write `def mut drop`; the recursive field-drop glue
+they must also write `def var drop`; the recursive field-drop glue
 (§7.2.4) is emitted around the user-written body.
 
 ### 8.5 Interaction with explicit includes
@@ -729,7 +729,7 @@ Rust.
 | Change | File(s) |
 |---|---|
 | `TraitInfo { self_mode, is_marker }` | `resolve/symbols.rs:60-66` |
-| Built-in mixin metadata (Drop `&mut self`, Copy marker/super=Clone, Clone `&self → Self`) | `resolve/mod.rs:138-151` |
+| Built-in mixin metadata (Drop `&var self`, Copy marker/super=Clone, Clone `&self → Self`) | `resolve/mod.rs:138-151` |
 | Marker-mixin satisfaction rule | `typeck/traits.rs:85-133` |
 | `Ty::is_copy(resolver)` consults nominal Copy provisions | `hir/types.rs:189-221` |
 | Copy/Drop mutual exclusion check | new pass in `typeck/` (call it `mixin_consistency`) |
@@ -805,7 +805,7 @@ compiler emits an element-level drop loop *before* calling
 - `codegen/llvm/emit.rs`: same.
 - A new lowering step emits per-type drop-glue functions once per type
   instantiation (class/struct/enum). These are plain MIR functions with
-  `self: &mut T` and a Unit body that calls the user Drop (if any) then
+  `self: &var T` and a Unit body that calls the user Drop (if any) then
   each field's drop.
 
 ### 10.6 Phasing
@@ -884,7 +884,7 @@ phase's module. Minimum coverage:
     E-COPY-NON-COPY-FIELD.
 18. **COPY-REJECTS-EXPLICIT-DROP**: `include Copy` + `include Drop` in
     the same body is E-COPY-HAS-DROP.
-19. **COPY-MUT-REF-FIELD**: struct with `&mut T` field never satisfies
+19. **COPY-MUT-REF-FIELD**: struct with `&var T` field never satisfies
     Copy.
 20. **COPY-GENERIC**: `def needs_copy[T: Copy](t: T) -> T; let _x = t; t end`
     compiles; instantiation with `String` is rejected.
@@ -945,7 +945,7 @@ phase's module. Minimum coverage:
   Needs confirmation; classes.rvn has no Drop example.
 - **OQ-6** — `ManuallyDrop[T]`: not in scope. Plan to add in a future
   phase when unsafe patterns need it.
-- **OQ-7** — Drop for `&mut T` aliasing: the D9 "drop takes `&mut
+- **OQ-7** — Drop for `&var T` aliasing: the D9 "drop takes `&var
   self`" rule means a local being dropped must have no other live
   borrows. The NLL machinery
   (`borrow_check/borrows.rs`/`regions.rs`) already expires borrows

@@ -21,7 +21,7 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
         ExprKind::CharLiteral(c) => text(format!("'{}'", escape_char(*c))),
         ExprKind::BoolLiteral(b) => text(if *b { "true" } else { "false" }),
         ExprKind::UnitLiteral => text("()"),
-        ExprKind::NullLiteral => text("null"),
+        ExprKind::NullLiteral => text("nil"),
 
         // ── Identifiers ──
         ExprKind::Identifier(name) => text(name.clone()),
@@ -34,7 +34,7 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
 
         // ── Borrowing ──
         ExprKind::Borrow(inner) => concat(vec![text("&"), format_expr(inner, comments)]),
-        ExprKind::BorrowMut(inner) => concat(vec![text("&mut "), format_expr(inner, comments)]),
+        ExprKind::BorrowMut(inner) => concat(vec![text("&var "), format_expr(inner, comments)]),
 
         // ── Field/Method access ──
         ExprKind::FieldAccess { object, field } => {
@@ -508,7 +508,8 @@ fn token_to_source(token: &crate::lexer::token::Token) -> String {
         TokenKind::Dot => ".".to_string(),
         TokenKind::Comma => ",".to_string(),
         TokenKind::Colon => ":".to_string(),
-        TokenKind::ColonColon => "::".to_string(),
+        // §3.9: `::` is retired; `.` is the path separator everywhere.
+        TokenKind::ColonColon => ".".to_string(),
         TokenKind::Semicolon => ";".to_string(),
         TokenKind::Plus => "+".to_string(),
         TokenKind::Minus => "-".to_string(),
@@ -536,7 +537,7 @@ fn token_to_source(token: &crate::lexer::token::Token) -> String {
         TokenKind::Question => "?".to_string(),
         TokenKind::QuestionDot => "?.".to_string(),
         TokenKind::At => "@".to_string(),
-        TokenKind::AmpMut => "&mut".to_string(),
+        TokenKind::AmpMut => "&var".to_string(),
         TokenKind::LParen => "(".to_string(),
         TokenKind::RParen => ")".to_string(),
         TokenKind::LBracket => "[".to_string(),
@@ -551,7 +552,7 @@ fn token_to_source(token: &crate::lexer::token::Token) -> String {
         TokenKind::Newline | TokenKind::Eof => String::new(),
         // Keywords
         TokenKind::Let => "let".to_string(),
-        TokenKind::Mut => "mut".to_string(),
+        TokenKind::Mut => "var".to_string(), // legacy variant — never produced by lexer now
         TokenKind::If => "if".to_string(),
         TokenKind::Else => "else".to_string(),
         TokenKind::Match => "match".to_string(),
@@ -961,11 +962,9 @@ pub fn format_statement(stmt: &Statement, comments: &CommentMap) -> Doc {
 }
 
 fn format_let_binding(binding: &LetBinding, comments: &CommentMap) -> Doc {
-    let mut parts = vec![text("let ")];
-
-    if binding.mutable {
-        parts.push(text("mut "));
-    }
+    // §3.1: `var x = ...` is the writable binding form; `let mut x` is retired.
+    let head = if binding.mutable { "var " } else { "let " };
+    let mut parts = vec![text(head)];
 
     parts.push(format_pattern(&binding.pattern, comments));
 

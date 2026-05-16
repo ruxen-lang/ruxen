@@ -1,0 +1,6 @@
+def main
+  let a: Float = 1.5e3
+  let b: Float = 2.0e-3
+  puts "a=#{a}"
+  puts "b=#{b}"
+end

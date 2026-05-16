@@ -1,0 +1,3 @@
+def bar(p: *var Int64) -> *var Int64
+  p
+end

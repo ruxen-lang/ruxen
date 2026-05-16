@@ -593,7 +593,8 @@ mod tests {
 
     #[test]
     fn find_on_method_call_returns_method_call_or_nested() {
-        let src = "class Counter\n  v: Int\n  def init(@v: Int)\n  end\n  pub def inc -> Int\n    self.v + 1\n  end\nend\n\ndef main\n  let c = Counter.new(0)\n  let r = c.inc\nend\n";
+        // ruby-naming.spec.md §3.2: `pub def` is retired (public is default).
+        let src = "class Counter\n  v: Int\n  def init(@v: Int)\n  end\n  def inc -> Int\n    self.v + 1\n  end\nend\n\ndef main\n  let c = Counter.new(0)\n  let r = c.inc\nend\n";
         let result = analyze(src);
         let program = result.program.as_ref().unwrap();
         let offset = byte_offset_of(src, "c.inc", 0);

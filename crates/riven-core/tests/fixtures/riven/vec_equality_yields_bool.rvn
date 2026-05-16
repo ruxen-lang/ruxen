@@ -1,0 +1,8 @@
+def main
+  var a: Array[Int] = Array.new
+  a.push(1)
+  var b: Array[Int] = Array.new
+  b.push(1)
+  let c: Bool = a == b
+  puts "#{c}"
+end

@@ -1,0 +1,9 @@
+def main
+  var a: Set[Int] = Set.new
+  var b: Set[Int] = Set.new
+  a.insert(1)
+  b.insert(2)
+  let _u: Set[Int] = a.union(&b)
+  let _i: Set[Int] = a.intersection(&b)
+  let _d: Set[Int] = a.difference(&b)
+end

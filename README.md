@@ -105,7 +105,7 @@ riven run
 
 For complete runnable projects, see [examples/](examples/README.md).
 
-The first in-tree example is [`examples/01-cli-utility/`](examples/01-cli-utility/README.md), a small CLI that exercises `std::env::args`, `std::fs::read_to_string`, the `?` operator, and `std::process::exit`.
+The first in-tree example is [`examples/01-cli-utility/`](examples/01-cli-utility/README.md), a small CLI that exercises `std.env.args`, `std.fs.read_to_string`, the `?` operator, and `std.process.exit`.
 
 ### Compile a Single File
 
@@ -147,7 +147,7 @@ let name = "Riven"               # immutable
 var counter = 0                  # mutable
 counter += 1
 
-let a = String.new("hello")
+let a = String.from("hello")
 let b = a                        # move — `a` is now invalid
 # puts a                         # COMPILE ERROR: use after move
 ```
@@ -179,8 +179,8 @@ class Dog < Animal
   def speak -> String; "Woof! I'm #{self.name}"; end
 end
 
-mixin Displayable
-  def to_display -> String
+mixin Display
+  def fmt(f: &var Formatter) -> Result[(), FmtError]
 end
 ```
 
@@ -200,7 +200,7 @@ end
 ```riven
 # No exceptions. Result[T, E] and Option[T] only.
 def load_config(path: &str) -> Result[Config, AppError]
-  let text = File.read_string(path)?   # ? propagates errors
+  let text = fs.read_to_string(path)?  # ? propagates errors
   let json = Json.parse(&text)?
   Config.from_json(&json)
 end
@@ -212,7 +212,7 @@ let user = find_user(42).unwrap!        # panics on nil
 ### Closures
 
 ```riven
-let nums = array![1, 2, 3, 4, 5]
+let nums = [1, 2, 3, 4, 5]
 let evens = nums.filter { |n| n % 2 == 0 }
 
 nums.each do |n|
@@ -277,7 +277,7 @@ Two codegen backends:
 | Type Inference | Complete | Bidirectional inference, mixin resolution, coercion |
 | Borrow Checker | Mostly complete | Move/borrow tracking with NLL; lifetime checking infrastructure present, not fully wired |
 | MIR Lowering | Mostly complete | Break/continue and capturing closures have gaps |
-| Cranelift Codegen | Mostly complete | Primary backend; drop is wired (user `def mut drop` runs, heap-owning locals freed at scope exit per type) |
+| Cranelift Codegen | Mostly complete | Primary backend; drop is wired (user `def var drop` runs, heap-owning locals freed at scope exit per type) |
 | LLVM Codegen | Experimental | Feature-gated; less complete than Cranelift; no DWARF debug info yet — gdb/lldb show no source-line mapping for `--backend=llvm` builds |
 | C Runtime | Mostly complete | String, Array, I/O, Option/Result operations; Map/Set stubs |
 | Formatter | Complete | AST-based, zero-config, comment preservation, `fmt: off` support |

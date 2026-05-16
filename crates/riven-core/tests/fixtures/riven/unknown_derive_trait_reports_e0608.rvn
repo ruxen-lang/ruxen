@@ -1,0 +1,9 @@
+struct Config
+  name: String
+
+  include WeirdName
+end
+
+def main
+  let _x = 0
+end

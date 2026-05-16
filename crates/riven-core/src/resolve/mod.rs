@@ -340,8 +340,13 @@ impl Resolver {
             ("stdout", vec![], stdout_ty.clone()),
             ("stderr", vec![], stderr_ty.clone()),
             ("args", vec![], Ty::Array(Box::new(Ty::String))),
+            // ruby-naming.spec.md §3.14: `var` is a reserved keyword
+            // (binding form / writable-reference / writable-pointer /
+            // writing-method marker). Renamed from `env.var` to `env.get`
+            // — `get` is also the canonical collection-lookup verb in
+            // the rest of the stdlib (`Map.get`, `Array.get`).
             (
-                "var",
+                "get",
                 vec![ParamInfo {
                     name: "name".into(),
                     ty: Ty::Ref(Box::new(Ty::String)),
@@ -1074,9 +1079,34 @@ impl Resolver {
         );
         self.scopes.insert_type("Arc".to_string(), arc_id);
         self.type_registry.insert("Arc".to_string(), arc_id);
-        // Ruby-naming alias: `SharedSync` resolves to the same class def.
-        self.scopes.insert_type("SharedSync".to_string(), arc_id);
-        self.type_registry.insert("SharedSync".to_string(), arc_id);
+        // Ruby-naming alias: `SharedSync` is the canonical name (Arc is
+        // retained for backward-compat in scope/registry lookups). The
+        // module-path resolver matches by `def.name`, so we register a
+        // separate symbol named `SharedSync` with the same `ClassInfo`
+        // so `use std.sync.SharedSync` resolves cleanly.
+        let shared_sync_id = self.symbols.define(
+            "SharedSync".to_string(),
+            DefKind::Class {
+                info: ClassInfo {
+                    generic_params: vec![GenericParamInfo::type_param("T".to_string(), vec![])],
+                    parent: None,
+                    fields: vec![],
+                    methods: vec![],
+                    derive_traits: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                    const_predicates: vec![],
+                },
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.scopes
+            .insert_type("SharedSync".to_string(), shared_sync_id);
+        self.type_registry
+            .insert("SharedSync".to_string(), shared_sync_id);
 
         let poison_error_id = self.symbols.define(
             "PoisonError".to_string(),
@@ -1155,7 +1185,7 @@ impl Resolver {
             DefKind::Module {
                 items: vec![
                     builtin_fn_ids["args"],
-                    builtin_fn_ids["var"],
+                    builtin_fn_ids["get"],
                     // Phase 2 stdlib (#06).
                     builtin_fn_ids["vars"],
                     builtin_fn_ids["current_dir"],
@@ -1251,6 +1281,7 @@ impl Resolver {
                     mutex_id,
                     mutex_guard_id,
                     arc_id,
+                    shared_sync_id,
                     poison_error_id,
                     thread_panic_id,
                 ],
@@ -2751,7 +2782,7 @@ impl Resolver {
             );
         } else if imp.is_unsafe {
             self.diagnostics.push(Diagnostic::error_with_code(
-                "`unsafe impl` is only meaningful for trait implementations",
+                "`unsafe include` is only meaningful for mixin inclusions",
                 imp.span.clone(),
                 "E1014",
             ));
@@ -5241,7 +5272,7 @@ impl Resolver {
                 if !ty_is_valid_hash_key(&k, &self.symbols) {
                     self.diagnostics.push(Diagnostic::error_with_code(
                         format!(
-                            "Map key type `{}` is not hashable: K must include Hash + Eq",
+                            "Map key type `{}` is not hashable: K must include Hashable + Eq",
                             k
                         ),
                         path.span.clone(),
@@ -5262,7 +5293,7 @@ impl Resolver {
                 if !ty_is_valid_hash_key(&elem, &self.symbols) {
                     self.diagnostics.push(Diagnostic::error_with_code(
                         format!(
-                            "Set element type `{}` is not hashable: T must include Hash + Eq",
+                            "Set element type `{}` is not hashable: T must include Hashable + Eq",
                             elem
                         ),
                         path.span.clone(),

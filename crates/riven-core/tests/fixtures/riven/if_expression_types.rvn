@@ -1,0 +1,8 @@
+
+def test(x: Bool) -> Int
+  if x
+    42
+  else
+    0
+  end
+end

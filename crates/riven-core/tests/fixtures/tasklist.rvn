@@ -7,7 +7,7 @@ class Counter
     self.count = 0
   end
 
-  def mut increment
+  def var increment
     self.count = self.count + 1
   end
 end

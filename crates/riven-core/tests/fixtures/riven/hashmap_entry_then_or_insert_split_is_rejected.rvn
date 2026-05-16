@@ -1,0 +1,5 @@
+def main
+  var m: Map[Int, Int] = Map.new
+  let e = m.entry(1)
+  e.or_insert(10)
+end

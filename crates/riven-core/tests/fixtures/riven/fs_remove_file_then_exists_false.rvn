@@ -1,0 +1,15 @@
+
+use std.fs.{write, remove_file, exists}
+
+def main
+  let _ = write("__FILE__", "hi")
+  match remove_file("__FILE__")
+    Ok(_)  -> puts "removed"
+    Err(_) -> puts "remove_fail"
+  end
+  if exists("__FILE__")
+    puts "still_there"
+  else
+    puts "gone"
+  end
+end

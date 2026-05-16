@@ -31,15 +31,15 @@ throw at it.*
    user-supplied closure with a lifetime shorter than the function's
    body (`Array.iter.filter(|x| predicate(x))`) needs the closure to
    be polymorphic in the argument lifetime — that's HRTBs.
-2. **Trait-object closures.** `Box[any Fn(&Str) -> Bool]` is
+2. **Mixin-object closures.** `Box[any Fn(&Str) -> Bool]` is
    sugar for `Box[any for[a] Fn(&a Str) -> Bool]`. Without HRTBs
    the elided syntax has no elaboration target.
-3. **Stdlib methods that take an `FnMut` over references.** Every
+3. **Stdlib methods that take an `FnVar` over references.** Every
    iterator combinator that takes `&T` (e.g., `.find`, `.any`, `.all`,
    `.position`) wants HRTB-qualified closure bounds.
 
 **Scope decision for this doc.** HRTBs are orthogonal to associated
-types and GATs. The 80-90% use case is HRTBs on `Fn`/`FnMut`/`FnOnce`
+types and GATs. The 80-90% use case is HRTBs on `Fn`/`FnVar`/`FnOnce`
 bounds. Broader HRTBs (`for[a] Iterator[Item = &a T]`) interact with
 GATs and are discussed there; this doc specifies the closure case
 first and leaves the Iterator case as a 03b phase.
@@ -72,7 +72,7 @@ RefMutLifetime(std::string::String, Box<Ty>),
 ```
 
 Parsed at `parser/types.rs:101-139`. `a` is captured as a
-`std::string::String`. The borrow checker does not use it.
+`std.string.String`. The borrow checker does not use it.
 
 ### 2.3 Elision exists and handles most cases
 
@@ -81,7 +81,7 @@ rules:
 
 - Rule 1: every input ref gets a distinct lifetime (implicit).
 - Rule 2: exactly one input ref → output gets that lifetime.
-- Rule 3: `&self` or `&mut self` → output gets `self`'s lifetime.
+- Rule 3: `&self` or `&var self` → output gets `self`'s lifetime.
 
 **What Riven currently *cannot* express:**
 
@@ -206,9 +206,9 @@ that **explicit HRTBs become rare**. The extensions:
 
 ### 5.1 Closure-arg elision (rule 4)
 
-For function parameters of type `some Fn(...)` / `some FnMut(...)` /
-`some FnOnce(...)` or `Fn(...)`, `FnMut(...)`, `FnOnce(...)`, each `&T` /
-`&mut T` in the closure's signature gets a fresh universal
+For function parameters of type `some Fn(...)` / `some FnVar(...)` /
+`some FnOnce(...)` or `Fn(...)`, `FnVar(...)`, `FnOnce(...)`, each `&T` /
+`&var T` in the closure's signature gets a fresh universal
 lifetime, quantified over the closure. Equivalent to implicitly
 wrapping the bound in `for[...]`.
 
@@ -222,7 +222,7 @@ def each[F: for[a] Fn(&a Str)](items: &Array[String], f: F) ...
 
 This covers the majority of closure bounds in the stdlib.
 
-### 5.2 Trait-object closure elision (rule 5)
+### 5.2 Mixin-object closure elision (rule 5)
 
 `any Fn(&T)` and `Box[any Fn(&T)]` similarly elaborate to HRTBs.
 
@@ -240,7 +240,7 @@ This covers the majority of closure bounds in the stdlib.
 ### 5.4 Lifetime-elision rule 3 extension
 
 Today rule 3 (`borrow_check/lifetimes.rs:63-64`) gives `&self` /
-`&mut self` methods their output lifetime from self. Extend to:
+`&var self` methods their output lifetime from self. Extend to:
 
 - If the method has exactly one input reference of a *user-defined*
   reference type (a struct containing a reference, say), and one
@@ -277,7 +277,7 @@ The M0 work:
 
 - `DefKind::Lifetime { name: String }` in the symbol table.
 - `resolve_generic_params` populates these instead of returning
-  `None`.
+  `nil`.
 - `Ty::RefLifetime(name, ..)` / `Ty::RefMutLifetime(name, ..)`
   continue to be used; the borrow checker's existing `check_outlives`
   (`borrow_check/lifetimes.rs:100-112`) is upgraded to a relation on
@@ -355,7 +355,7 @@ you have named lifetimes.*
 | Resolve propagates quantifier through | `resolve/mod.rs` (mixin-bound walker) |
 | M0 lifetime infrastructure | `resolve/mod.rs:2679-2682`, `resolve/symbols.rs`, `borrow_check/regions.rs` |
 | Closure-arg elision rule 4 | `borrow_check/lifetimes.rs:55-85` |
-| Trait-object closure elision | `borrow_check/lifetimes.rs` + `resolve/mod.rs:2492-2499` |
+| Mixin-object closure elision | `borrow_check/lifetimes.rs` + `resolve/mod.rs:2492-2499` |
 | Skolem scope map | `borrow_check/regions.rs`, `borrow_check/mod.rs` |
 | Closure-arg unification with HRTB | `typeck/unify.rs` |
 | `any for[a] ...` prints/parses round-trip | `hir/types.rs::Display`, formatter |
@@ -409,10 +409,10 @@ GATs + HRTBs is the "streaming iterator" pattern:
 ```riven
 mixin StreamingIterator
   type Item[a]
-  def mut next[a](self: &a mut Self) -> Option[Self.Item[a]]
+  def var next[a](self: &a var Self) -> Option[Self.Item[a]]
 end
 
-def take_three[S: for[a] StreamingIterator](s: &mut S) ...
+def take_three[S: for[a] StreamingIterator](s: &var S) ...
 ```
 
 This is doc 05 §7. The current doc treats it as an open interaction.
@@ -451,7 +451,7 @@ case. Explicit HRTBs on `some Mixin` are legal.
   Recommendation: `for[a]`.
 - **OQ-2: elision for mixins beyond Fn-family.** Could any user
   mixin with a `&T` parameter elide to an HRTB? Rust limits this to
-  `Fn`-family. Recommendation: limit to `Fn`/`FnMut`/`FnOnce` in
+  `Fn`-family. Recommendation: limit to `Fn`/`FnVar`/`FnOnce` in
   phase 03a. A general rule can be added later.
 - **OQ-3: error messaging.** "The closure `|x| x.len` does not live
   long enough to satisfy `for[a] Fn(&a Str) -> USize`" is a

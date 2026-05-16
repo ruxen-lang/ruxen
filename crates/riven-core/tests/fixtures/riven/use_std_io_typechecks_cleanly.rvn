@@ -1,0 +1,5 @@
+use std.io
+
+def main
+  puts "ok"
+end

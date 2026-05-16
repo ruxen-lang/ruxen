@@ -1,0 +1,15 @@
+def grade(n: Int) -> String
+  match n
+    n if n >= 90 -> "A"
+    n if n >= 80 -> "B"
+    n if n >= 70 -> "C"
+    _            -> "F"
+  end
+end
+
+def main
+  puts grade(95)
+  puts grade(82)
+  puts grade(71)
+  puts grade(40)
+end

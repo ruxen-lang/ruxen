@@ -270,7 +270,10 @@ impl PrettyPrinter {
     }
 
     fn print_inner_impl(&mut self, imp: &InnerImpl) {
-        self.line(&format!("impl {}", format_type_path(&imp.trait_name)));
+        // Debug dump uses the new vocabulary — the AST node is named
+        // `InnerImpl` for historical reasons (§8) but the surface form is
+        // an `include` directive carrying scattered methods.
+        self.line(&format!("include {}", format_type_path(&imp.trait_name)));
         self.indent();
         for item in &imp.items {
             self.print_impl_item(item);
@@ -328,11 +331,11 @@ impl PrettyPrinter {
     // ── use ─────────────────────────────────────────────────────────
 
     fn print_use(&mut self, u: &UseDecl) {
-        let path = u.path.join("::");
+        let path = u.path.join(".");
         match &u.kind {
             UseKind::Simple => self.line(&format!("Use {}", path)),
             UseKind::Alias(alias) => self.line(&format!("Use {} as {}", path, alias)),
-            UseKind::Group(names) => self.line(&format!("Use {}::{{{}}}", path, names.join(", "))),
+            UseKind::Group(names) => self.line(&format!("Use {}.{{{}}}", path, names.join(", "))),
         }
     }
 
@@ -390,7 +393,7 @@ impl PrettyPrinter {
     fn print_statement(&mut self, stmt: &Statement) {
         match stmt {
             Statement::Let(binding) => {
-                let mutability = if binding.mutable { "mut " } else { "" };
+                let mutability = if binding.mutable { "var " } else { "" };
                 let pat = format_pattern(&binding.pattern);
                 let ty = binding
                     .type_annotation
@@ -545,18 +548,25 @@ impl PrettyPrinter {
 // ─── Free-standing formatting helpers ───────────────────────────────
 
 fn format_visibility(vis: Visibility) -> &'static str {
+    // §3.2: `public` is the default and the section marker for switching back
+    // to public. We emit "public " only when the AST explicitly recorded it so
+    // the debug dump preserves the distinction between an implicit public item
+    // and one that was tagged public to flip a private section.
     match vis {
-        Visibility::Private => "",
-        Visibility::Public => "pub ",
+        Visibility::Private => "private ",
+        Visibility::Public => "",
         Visibility::Protected => "protected ",
     }
 }
 
 fn format_self_mode(m: SelfMode) -> &'static str {
+    // §3.12: receiver modes are reading (default, no keyword), writing
+    // (`def var m`), and consuming (`def consume m`). The debug dump shows
+    // them in the prefix-on-`self` form for readability.
     match m {
         SelfMode::Immutable => "self",
-        SelfMode::Mutable => "mut self",
-        SelfMode::Consuming => "own self",
+        SelfMode::Mutable => "var self",
+        SelfMode::Consuming => "consume self",
     }
 }
 
@@ -568,7 +578,10 @@ fn format_opt_generic_params(gp: &Option<GenericParams>) -> String {
                 .params
                 .iter()
                 .map(|p| match p {
-                    GenericParam::Lifetime { name, .. } => format!("'{}", name),
+                    // §3.3: lifetime parameters are bare lowercase identifiers,
+                    // no sigil. The lexical position in `[...]` is what marks
+                    // them as lifetimes.
+                    GenericParam::Lifetime { name, .. } => name.clone(),
                     GenericParam::Type { name, bounds, .. } => {
                         if bounds.is_empty() {
                             name.clone()
@@ -641,9 +654,9 @@ pub fn format_type(t: &TypeExpr) -> String {
         } => {
             let lt = lifetime
                 .as_ref()
-                .map(|l| format!("'{} ", l))
+                .map(|l| format!("{} ", l))
                 .unwrap_or_default();
-            let m = if *mutable { "mut " } else { "" };
+            let m = if *mutable { "var " } else { "" };
             format!("&{}{}{}", lt, m, format_type(inner))
         }
         TypeExpr::Tuple { elements, .. } => {
@@ -664,17 +677,17 @@ pub fn format_type(t: &TypeExpr) -> String {
         }
         TypeExpr::SomeMixin { bounds, .. } => {
             let bs: Vec<String> = bounds.iter().map(|b| format_type_path(&b.path)).collect();
-            format!("impl {}", bs.join(" + "))
+            format!("some {}", bs.join(" + "))
         }
         TypeExpr::AnyMixin { bounds, .. } => {
             let bs: Vec<String> = bounds.iter().map(|b| format_type_path(&b.path)).collect();
-            format!("dyn {}", bs.join(" + "))
+            format!("any {}", bs.join(" + "))
         }
         TypeExpr::Never { .. } => "!".to_string(),
         TypeExpr::Inferred { .. } => "_".to_string(),
         TypeExpr::RawPointer { mutable, inner, .. } => {
             if *mutable {
-                format!("*mut {}", format_type(inner))
+                format!("*var {}", format_type(inner))
             } else {
                 format!("*{}", format_type(inner))
             }
@@ -684,9 +697,9 @@ pub fn format_type(t: &TypeExpr) -> String {
     }
 }
 
-/// Format a type path like `std::collections::HashMap[K, V]`.
+/// Format a type path like `std.collections.Map[K, V]`.
 pub fn format_type_path(p: &TypePath) -> String {
-    let base = p.segments.join("::");
+    let base = p.segments.join(".");
     match &p.generic_args {
         None => base,
         Some(args) => {
@@ -756,7 +769,7 @@ pub fn format_expr_short(e: &Expr) -> String {
         }
 
         ExprKind::Borrow(inner) => format!("&{}", format_expr_short(inner)),
-        ExprKind::BorrowMut(inner) => format!("&mut {}", format_expr_short(inner)),
+        ExprKind::BorrowMut(inner) => format!("&var {}", format_expr_short(inner)),
 
         ExprKind::FieldAccess { object, field } => {
             format!("{}.{}", format_expr_short(object), field)
@@ -926,9 +939,9 @@ pub fn format_expr_short(e: &Expr) -> String {
             variant,
             args,
         } => {
-            let path = type_path.join("::");
+            let path = type_path.join(".");
             if args.is_empty() {
-                format!("{}::{}", path, variant)
+                format!("{}.{}", path, variant)
             } else {
                 let a: Vec<String> = args
                     .iter()
@@ -939,12 +952,12 @@ pub fn format_expr_short(e: &Expr) -> String {
                             .unwrap_or_else(|| format_expr_short(&fa.value))
                     })
                     .collect();
-                format!("{}::{}({})", path, variant, a.join(", "))
+                format!("{}.{}({})", path, variant, a.join(", "))
             }
         }
 
         ExprKind::UnsafeBlock(_) => "unsafe ... end".to_string(),
-        ExprKind::NullLiteral => "null".to_string(),
+        ExprKind::NullLiteral => "nil".to_string(),
     }
 }
 
@@ -954,7 +967,7 @@ pub fn format_pattern(p: &Pattern) -> String {
         Pattern::Literal { expr, .. } => format_expr_short(expr),
         Pattern::Identifier { mutable, name, .. } => {
             if *mutable {
-                format!("mut {}", name)
+                format!("var {}", name)
             } else {
                 name.clone()
             }
@@ -973,7 +986,7 @@ pub fn format_pattern(p: &Pattern) -> String {
             let base = if path.is_empty() {
                 variant.clone()
             } else {
-                format!("{}::{}", path.join("::"), variant)
+                format!("{}.{}", path.join("."), variant)
             };
             if fields.is_empty() {
                 base
@@ -985,7 +998,7 @@ pub fn format_pattern(p: &Pattern) -> String {
         Pattern::Struct {
             path, fields, rest, ..
         } => {
-            let base = path.join("::");
+            let base = path.join(".");
             let mut fs: Vec<String> = fields
                 .iter()
                 .map(|f| {

@@ -1,0 +1,7 @@
+def main
+  var m: Map[String, Int] = Map.new
+  m.insert(String.from("alpha"), 1)
+  m.insert(String.from("beta"), 2)
+  m.insert(String.from("gamma"), 3)
+  let _len = m.len
+end

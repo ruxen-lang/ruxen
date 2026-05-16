@@ -143,12 +143,12 @@ struct Handle
   # private state
 end
 
-def handle_new -> *mut Handle
+def handle_new -> *var Handle
   abi "c"
   # ... returns heap-allocated Handle
 end
 
-def handle_free(h: *mut Handle)
+def handle_free(h: *var Handle)
   abi "c"
   # ... frees
 end
@@ -196,7 +196,7 @@ Emitted `mylib.h`:
 #include <stdbool.h>
 
 #ifdef __cplusplus
-extern "C" {
+lib "c" {
 #endif
 
 /* Riven ABI version stamped into the build. */
@@ -242,9 +242,9 @@ Every Riven type that can appear in a public C-ABI signature maps to a single C 
 | `Float64` | `double` | |
 | `Bool` | `bool` | `<stdbool.h>`; C99+ |
 | `Char` | `uint32_t` | Riven Char is 32-bit Unicode scalar |
-| `*T` / `*mut T` | `const T *` / `T *` | Raw pointers only |
+| `*T` / `*var T` | `const T *` / `T *` | Raw pointers only |
 | `&T` | `const T *` | With a **warning**: reference lifetimes don't cross the C ABI |
-| `&mut T` | `T *` | Same warning |
+| `&var T` | `T *` | Same warning |
 | `struct` with `layout c` | `struct Name { ... }` | Layout matches |
 | `enum` with `layout c` (no payload) | `typedef enum Name { ... }` | Field-less |
 | `struct` with `layout opaque` | `typedef struct Name Name;` | Forward decl only |
@@ -400,7 +400,7 @@ A printed contract users can rely on. Recommend shipping this as `docs/c-abi.md`
 ## 7. Interactions with Other Tiers
 
 - **Tier 1 (derive, B2).** Prework. `layout c` and structural-mixin includes must be disentangled.
-- **Tier 1 (drop, B1).** If a user exposes a public `def handle_new -> *mut Handle` with `abi "c"`, the corresponding `handle_free` must properly drop the Handle's fields. B1's Drop-in-codegen fix unblocks this.
+- **Tier 1 (drop, B1).** If a user exposes a public `def handle_new -> *var Handle` with `abi "c"`, the corresponding `handle_free` must properly drop the Handle's fields. B1's Drop-in-codegen fix unblocks this.
 - **Tier 1 (formatting macros).** Irrelevant; cbindgen doesn't touch format output.
 - **Tier 4.01 package manager.** `[package.cbindgen]` lives in `Riven.toml`. `riven publish` should include the generated `.h` in the tarball if `output = "include/…"` is set.
 - **Tier 4.02 cross-compilation.** Layout is target-dependent. Header generated for `aarch64-unknown-linux-gnu` is valid on that triple only. Recommend: emit the triple as a comment in the header (`/* Generated for target: aarch64-unknown-linux-gnu */`) and `#error` if someone #includes it on a mismatched target? Probably overkill. v1: document the triple dependency; users handle it.
@@ -454,7 +454,7 @@ A printed contract users can rely on. Recommend shipping this as `docs/c-abi.md`
 8. **Symbol mangling for `abi "c"` WITHOUT `no_mangle`.** Recommend: also emit unmangled. `abi "c"` without `no_mangle` is meaningless — the linkage is C, but the symbol name is Riven-mangled? Choose: `abi "c"` **implies** `no_mangle`. `no_mangle` alone on a function without `abi "c"` errors "`no_mangle` requires `abi \"c\"`."
 9. **Generics monomorphization.** A generic `def foo[T](x: T)` with `abi "c"` errors: "generic functions cannot have C ABI". Users wrap with a non-generic dispatch. Unchanged.
 10. **C++ support.** `extern "C++"` is a C++-only concept. Not planned. Users wrap manually.
-11. **Opaque pointer + lifetime.** `def handle_new(alloc: &Allocator) -> *mut Handle` with `abi "c"` — the `&Allocator` parameter is a reference with a lifetime. We accept at the surface (reference ≡ non-null pointer in C), but the caller must ensure aliasing rules. Document as a warning in the header comment.
+11. **Opaque pointer + lifetime.** `def handle_new(alloc: &Allocator) -> *var Handle` with `abi "c"` — the `&Allocator` parameter is a reference with a lifetime. We accept at the surface (reference ≡ non-null pointer in C), but the caller must ensure aliasing rules. Document as a warning in the header comment.
 12. **Versioning the header file.** Do we emit `#define RIVEN_MYLIB_VERSION "0.1.0"`? Useful for consumers. Recommend: yes, as `#define <PREFIX>VERSION "0.1.0"` where PREFIX is the `--prefix` config or `RIVEN_<PACKAGE>_`.
 13. **Layout vs ABI across architectures.** x86_64 SysV, aarch64 AAPCS, and wasm32 have different struct layouts for the same source. Recommend: the header is *target-specific*. Emit a `/* Generated for: x86_64-unknown-linux-gnu */` comment. If the user needs multi-target support, they regenerate per target.
 14. **DLL / dylib symbol visibility.** On Windows, `__declspec(dllexport)`. On macOS, default visibility is public; on Linux, `__attribute__((visibility("default")))` for `-fvisibility=hidden` builds. Recommend v1: emit nothing; trust the platform default. Revisit if needed.

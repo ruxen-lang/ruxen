@@ -1,0 +1,14 @@
+struct P
+  x: Int
+  y: Int
+end
+
+def main
+  let a = P.new(1, 2)
+  let b = P.new(1, 2)
+  let c = P.new(3, 4)
+  let r1 = a == b
+  let r2 = a == c
+  puts "ab=#{r1}"
+  puts "ac=#{r2}"
+end

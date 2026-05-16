@@ -95,7 +95,7 @@ puts add_five.(10)                 # 15
 For fine-grained control:
 
 ```riven
-let name = String.new("Riven")
+let name = String.from("Riven")
 let age = 30
 let closure = [&name, move age] { puts "#{name}, #{age}" }
 ```
@@ -120,6 +120,6 @@ end
 
 | Type | Meaning |
 |------|---------|
-| `Fn(Args) -> Ret` | Can be called multiple times, captures by reference |
-| `FnMut(Args) -> Ret` | Can be called multiple times, captures mutably |
+| `Fn(Args) -> Ret` | Can be called multiple times, captures borrowed read-only |
+| `FnVar(Args) -> Ret` | Can be called multiple times, captures borrowed writably |
 | `FnOnce(Args) -> Ret` | Can be called once, may consume captures |

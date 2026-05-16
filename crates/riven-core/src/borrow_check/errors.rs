@@ -4,38 +4,38 @@ use std::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorCode {
     E1001, // use after move
-    E1002, // can't mut-borrow while immutably borrowed
-    E1003, // can't immut-borrow while mutably borrowed
+    E1002, // can't borrow writably while borrowed read-only
+    E1003, // can't borrow read-only while borrowed writably
     E1004, // can't move out of borrowed reference
     E1005, // borrow outlives owner
-    E1006, // assign to immutable variable
-    E1007, // can't mut-borrow immutable variable
+    E1006, // assign to `let` binding
+    E1007, // can't borrow `let` binding writably
     E1008, // value moved into closure
     E1009, // can't move while borrowed
     E1010, // returned reference outlives local
     E1011, // value is not Send
     E1012, // value is not Sync
-    E1013, // non-'static capture in send-required closure
-    E1014, // invalid manual Send/Sync impl form
+    E1013, // non-`static` capture in send-required closure
+    E1014, // invalid manual Send/Sync include form
 }
 
 impl ErrorCode {
     pub fn title(&self) -> &'static str {
         match self {
             ErrorCode::E1001 => "value used after move",
-            ErrorCode::E1002 => "cannot borrow as mutable — already borrowed as immutable",
-            ErrorCode::E1003 => "cannot borrow as immutable — already borrowed as mutable",
+            ErrorCode::E1002 => "cannot borrow writably — already borrowed read-only",
+            ErrorCode::E1003 => "cannot borrow read-only — already borrowed writably",
             ErrorCode::E1004 => "cannot move out of borrowed reference",
             ErrorCode::E1005 => "borrow outlives owner",
-            ErrorCode::E1006 => "cannot assign to immutable variable",
-            ErrorCode::E1007 => "cannot borrow immutable variable as mutable",
+            ErrorCode::E1006 => "cannot assign to `let` binding",
+            ErrorCode::E1007 => "cannot borrow `let` binding writably",
             ErrorCode::E1008 => "value moved into closure, cannot be used outside",
             ErrorCode::E1009 => "cannot move value — currently borrowed",
             ErrorCode::E1010 => "returned reference outlives local value",
             ErrorCode::E1011 => "value is not `Send`",
             ErrorCode::E1012 => "value is not `Sync`",
-            ErrorCode::E1013 => "non-`'static` value captured by send-required closure",
-            ErrorCode::E1014 => "invalid manual `Send` / `Sync` implementation",
+            ErrorCode::E1013 => "non-`static` value captured by send-required closure",
+            ErrorCode::E1014 => "invalid manual `Send` / `Sync` inclusion",
         }
     }
 

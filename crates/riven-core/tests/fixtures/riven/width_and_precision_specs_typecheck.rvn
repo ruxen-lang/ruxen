@@ -1,0 +1,5 @@
+def main
+  let n = 42
+  let pi = 3.14159
+  puts "n=#{n:>5} pi=#{pi:.2}"
+end

@@ -1,0 +1,7 @@
+def main
+  let a = [10, 20]
+  let b = [30, 40]
+  let total = a.iter.chain(b.iter).sum
+  let s = total.to_string
+  puts "total=#{s}"
+end

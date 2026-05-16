@@ -320,7 +320,7 @@ pub fn keyword(ident: &str, edition: Edition) -> Option<TokenKind> {
         // edition-gated:
         "try" if edition >= Edition::E2027 => Some(TokenKind::Try),
         // new reserved word pattern: identifier on 2026, keyword on 2027.
-        _ => None,
+        _ => nil,
     }
 }
 ```
@@ -362,8 +362,8 @@ with the same suggestion.
 
 This is the hardest part.
 
-**Problem.** A library built on `"2026"` exports `Hash[K, V]`. A
-`"2027"` binary wants to call into it. On 2027, `Hash[K, V]` doesn't
+**Problem.** A library built on `"2026"` exports `Map[K, V]`. A
+`"2027"` binary wants to call into it. On 2027, `Map[K, V]` doesn't
 exist — it's `Map`.
 
 **Solution.** At compile time of the library (2026), the compiler emits
@@ -372,7 +372,7 @@ The metadata records **canonical** names — the names used internally
 by the compiler across editions. Consumers see canonical names remapped
 through the consumer's edition.
 
-- `Hash[K, V]` on 2026 → canonical `core.collections.Map[K, V]`.
+- `Map[K, V]` on 2026 → canonical `core.collections.Map[K, V]`.
 - `Map[K, V]` on 2027 → canonical `core.collections.Map[K, V]`.
 - Identical canonical → linkable.
 
@@ -391,7 +391,7 @@ A crate on edition 2027 wants to `use foo.Hash` where `foo` is a 2026
 crate. Options:
 
 - **Canonicalize on import.** The 2027 compiler sees `foo`'s metadata,
-  knows `Hash[K, V]` in 2026 is canonical `Map[K, V]`, and resolves
+  knows `Map[K, V]` in 2026 is canonical `Map[K, V]`, and resolves
   `foo.Hash` to the canonical. Downstream, the 2027 crate prefers
   `Map` but `use foo.Hash as ThatHash` still works.
 - This means **surface names are edition-local; canonical names are
@@ -438,7 +438,7 @@ crate. Options:
 
 - `crates/riven-core/tests/edition_keyword_gating.rs` — `try` is ident
   on 2026, keyword on 2027.
-- `crates/riven-core/tests/edition_rewrites.rs` — `Hash[…]` → `Map[…]`
+- `crates/riven-core/tests/edition_rewrites.rs` — `Map[…]` → `Map[…]`
   suggestion fires on 2026, error on 2027.
 - `crates/riven-cli/tests/fix_migrator.rs` — run the migrator on a small
   fixture, assert the rewritten source compiles on the new edition.
@@ -465,7 +465,7 @@ crate. Options:
 - **Tier 5 doc 04 (error codes):** `E4100-E4199` reserved for
   edition/manifest errors (§5.1 of doc 04 also reserves this range).
 - **Tier 5 doc 01 (reference):** edition-scoped chapters.
-- **Tier 1 (stdlib):** stdlib-wide renames (e.g. `Hash[K, V]` →
+- **Tier 1 (stdlib):** stdlib-wide renames (e.g. `Map[K, V]` →
   `Map[K, V]`) are edition lints. Tier-1 B3 is the first such
   candidate.
 - **Tier 1 concurrency / async:** reserved keywords (`async`, `await`,
@@ -495,7 +495,7 @@ and is observable in `--emit=ast` output. Nothing changes semantically.
 
 Use B3 (Hash→Map) as the canary:
 
-1. Land `Map[K, V]` as an alias of `Hash[K, V]` — tier-1 B3.
+1. Land `Map[K, V]` as an alias of `Map[K, V]` — tier-1 B3.
 2. Register an `EditionLint { from: E2026, to: E2027, ... }` that warns
    on 2026 and errors on 2027.
 3. Add `Edition::E2027` to `KNOWN`. It's not the default.
@@ -608,7 +608,7 @@ this keeps the initial work small.
 
 Mitigation:
 
-- Test harness: every type/trait/fn that has surface-to-canonical
+- Test harness: every type/mixin/fn that has surface-to-canonical
   mapping gets a fixture asserting round-trip through the metadata.
 - Library authors cannot directly write canonical names (they're
   compiler-internal). So the risk is confined to compiler contributors.

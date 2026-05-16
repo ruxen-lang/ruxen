@@ -1,0 +1,23 @@
+class Counter
+  count: Int
+
+  def init
+    self.count = 0
+  end
+
+  def var bump
+    self.count = self.count + 1
+  end
+
+  def value -> Int
+    self.count
+  end
+end
+
+def main
+  var c = Counter.new
+  c.bump
+  c.bump
+  c.bump
+  puts "#{c.value}"
+end

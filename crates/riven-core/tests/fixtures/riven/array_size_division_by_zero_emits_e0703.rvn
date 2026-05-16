@@ -1,0 +1,4 @@
+
+struct Bad
+  data: [Int; 10 / 0]
+end

@@ -1,0 +1,8 @@
+
+class Wrapper
+  x: Int
+end
+
+struct Bag[T, const N: Wrapper]
+  data: [T; 4]
+end

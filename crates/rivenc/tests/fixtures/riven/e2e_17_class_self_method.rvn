@@ -1,0 +1,19 @@
+class Box
+  n: Int
+
+  def init(@n: Int)
+  end
+
+  def doubled -> Int
+    self.n * 2
+  end
+
+  def quadrupled -> Int
+    self.doubled * 2
+  end
+end
+
+def main
+  let b = Box.new(5)
+  puts "#{b.quadrupled}"
+end

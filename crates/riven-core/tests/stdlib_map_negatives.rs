@@ -20,6 +20,13 @@ use riven_core::lexer::Lexer;
 use riven_core::parser::Parser;
 use riven_core::typeck;
 
+fn rvn(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/riven")
+        .join(format!("{name}.rvn"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+}
+
 /// Lex + parse + typecheck a Riven source string and return the full
 /// diagnostic list. Panics on lex/parse failure so the caller never
 /// confuses a harness break with a missing-error regression.
@@ -44,12 +51,8 @@ fn codes(diags: &[Diagnostic]) -> Vec<String> {
 /// The resolver emits E0615 at the type-construction site.
 #[test]
 fn hashmap_with_non_hash_key_emits_e0615() {
-    let source = r#"
-def main
-  let mut h: HashMap[Vec[Int], Int] = HashMap.new
-end
-"#;
-    let diags = typecheck_diagnostics_from_source(source);
+    let source = rvn("hashmap_with_non_hash_key_emits_e0615");
+    let diags = typecheck_diagnostics_from_source(&source);
     let errs: Vec<_> = diags
         .iter()
         .filter(|d| d.level == DiagnosticLevel::Error)
@@ -71,12 +74,8 @@ end
 /// must be Hash + Eq; `Vec` is not.
 #[test]
 fn hashset_with_non_hash_element_emits_e0615() {
-    let source = r#"
-def main
-  let mut s: HashSet[Vec[Int]] = HashSet.new
-end
-"#;
-    let diags = typecheck_diagnostics_from_source(source);
+    let source = rvn("hashset_with_non_hash_element_emits_e0615");
+    let diags = typecheck_diagnostics_from_source(&source);
     let errs: Vec<_> = diags
         .iter()
         .filter(|d| d.level == DiagnosticLevel::Error)
@@ -98,12 +97,8 @@ end
 /// itself a compound container and not Hash.
 #[test]
 fn hashmap_with_nested_compound_key_emits_e0615() {
-    let source = r#"
-def main
-  let mut h: HashMap[HashSet[Int], Int] = HashMap.new
-end
-"#;
-    let diags = typecheck_diagnostics_from_source(source);
+    let source = rvn("hashmap_with_nested_compound_key_emits_e0615");
+    let diags = typecheck_diagnostics_from_source(&source);
     let cs = codes(&diags);
     assert!(
         cs.iter().any(|c| c == "E0615"),
@@ -115,12 +110,8 @@ end
 /// HashSet[HashMap[Int,Int]] — same shape, set of maps.
 #[test]
 fn hashset_of_hashmap_emits_e0615() {
-    let source = r#"
-def main
-  let mut s: HashSet[HashMap[Int, Int]] = HashSet.new
-end
-"#;
-    let diags = typecheck_diagnostics_from_source(source);
+    let source = rvn("hashset_of_hashmap_emits_e0615");
+    let diags = typecheck_diagnostics_from_source(&source);
     let cs = codes(&diags);
     assert!(
         cs.iter().any(|c| c == "E0615"),
@@ -133,12 +124,8 @@ end
 /// constrained. Values may be anything.
 #[test]
 fn hashmap_with_vec_value_is_accepted() {
-    let source = r#"
-def main
-  let mut h: HashMap[Int, Vec[Int]] = HashMap.new
-end
-"#;
-    let diags = typecheck_diagnostics_from_source(source);
+    let source = rvn("hashmap_with_vec_value_is_accepted");
+    let diags = typecheck_diagnostics_from_source(&source);
     let errs: Vec<_> = diags
         .iter()
         .filter(|d| d.level == DiagnosticLevel::Error)
@@ -153,12 +140,8 @@ end
 /// Sanity check: primitive keys are accepted.
 #[test]
 fn hashmap_with_string_key_is_accepted() {
-    let source = r#"
-def main
-  let mut h: HashMap[String, Int] = HashMap.new
-end
-"#;
-    let diags = typecheck_diagnostics_from_source(source);
+    let source = rvn("hashmap_with_string_key_is_accepted");
+    let diags = typecheck_diagnostics_from_source(&source);
     let errs: Vec<_> = diags
         .iter()
         .filter(|d| d.level == DiagnosticLevel::Error)
@@ -181,14 +164,8 @@ end
 /// silently-broken MIR fall-through.
 #[test]
 fn hashmap_entry_then_or_insert_split_is_rejected() {
-    let source = r#"
-def main
-  let mut m: HashMap[Int, Int] = HashMap.new
-  let e = m.entry(1)
-  e.or_insert(10)
-end
-"#;
-    let diags = typecheck_diagnostics_from_source(source);
+    let source = rvn("hashmap_entry_then_or_insert_split_is_rejected");
+    let diags = typecheck_diagnostics_from_source(&source);
     let errs: Vec<_> = diags
         .iter()
         .filter(|d| d.level == DiagnosticLevel::Error)
@@ -206,13 +183,8 @@ end
 /// the v1 builtin method table.
 #[test]
 fn hashmap_or_insert_on_non_entry_receiver_rejected() {
-    let source = r#"
-def main
-  let mut m: HashMap[Int, Int] = HashMap.new
-  m.or_insert(10)
-end
-"#;
-    let diags = typecheck_diagnostics_from_source(source);
+    let source = rvn("hashmap_or_insert_on_non_entry_receiver_rejected");
+    let diags = typecheck_diagnostics_from_source(&source);
     let errs: Vec<_> = diags
         .iter()
         .filter(|d| d.level == DiagnosticLevel::Error)

@@ -1,0 +1,5 @@
+def main
+  var s = String.from("hi")
+  s.push('!')
+  let _len = s.len
+end

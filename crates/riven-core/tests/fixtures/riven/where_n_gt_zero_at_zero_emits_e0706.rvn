@@ -1,0 +1,7 @@
+
+class Buf[const N: USize] where N > 0
+  data: Int
+end
+
+def take_zero(_b: Buf[0])
+end

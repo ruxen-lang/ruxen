@@ -1,0 +1,4 @@
+def main
+  let pi: Float = 3.14159
+  puts "pi=#{pi:.2}"
+end

@@ -126,7 +126,7 @@ fine (literal narrows on assignment).
 
 ## Out of scope (v2)
 
-- Mixin-bound numeric primitives — Rust's `Num`, `One`, `Zero` traits
+- Mixin-bound numeric primitives — Rust's `Num`, `One`, `Zero` mixins
   don't exist in v1; arithmetic is hardwired.
 - 128-bit integers (`Int128`, `UInt128`) and arbitrary-precision
   big-int.

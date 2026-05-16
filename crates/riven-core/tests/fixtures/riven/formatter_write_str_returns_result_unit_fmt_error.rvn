@@ -1,0 +1,13 @@
+class Tag
+  name: String
+
+  include Display
+
+  def fmt(f: &var Formatter) -> Result[(), FmtError]
+    f.write_str("tag")
+  end
+end
+
+def main
+  let _t = Tag.new("x")
+end

@@ -10,12 +10,12 @@ Mixins are how shared behaviour is expressed in Riven.
 ## Defining a Mixin
 
 ```riven
-mixin Displayable
+mixin Renderable
   def to_display -> String
 end
 ```
 
-That mixin declares one required method (a signature with no body). Including types must provide `to_display`.
+That mixin declares one required method (a signature with no body). Including types must provide `to_display`. (`Renderable` here is a tutorial example; the real builtin `Display` uses a different method shape — see [Chapter 17](17-string-formatting-and-interpolation.md).)
 
 ### Default Methods
 
@@ -39,7 +39,7 @@ A mixin can declare types that the including type binds:
 ```riven
 mixin Iterator
   type Item
-  def mut next -> Option[Self.Item]
+  def var next -> Option[Self.Item]
 end
 ```
 
@@ -48,13 +48,13 @@ end
 A mixin can extend another mixin's contract:
 
 ```riven
-mixin Serializable: Displayable
+mixin Serializable: Renderable
   def serialize -> String
   def self.deserialize(data: &str) -> Result[Self, Error]
 end
 ```
 
-A class that includes `Serializable` must satisfy both `Serializable` *and* `Displayable`.
+A class that includes `Serializable` must satisfy both `Serializable` *and* `Renderable`.
 
 ## Including a Mixin
 
@@ -67,7 +67,7 @@ class User
 
   def init(@name: String, @email: String) end
 
-  include Displayable
+  include Renderable
 
   def to_display -> String
     "#{self.name} <#{self.email}>"
@@ -75,7 +75,7 @@ class User
 end
 ```
 
-Multiple `include` directives stack in source order. The class's own definition always wins over any included mixin's default.
+Multiple `include` directives stack in source order. The class's own definition always wins over any included mixin's default. If two included mixins each supply a *default* body for the same method and the class itself has no override, the compiler rejects with `E-MIX-AMBIGUOUS-DEFAULT` — the class must define its own implementation to disambiguate.
 
 ### Overriding a Default
 
@@ -100,11 +100,11 @@ end
 Constrain a type parameter with `:`. Multiple bounds use `+`:
 
 ```riven
-def largest[T: Comparable](list: &Array[T]) -> &T
+def largest[T: Ord](list: &Array[T]) -> &T
   # ...
 end
 
-def process[T: Displayable + Serializable](item: &T)
+def process[T: Renderable + Serializable](item: &T)
   # ...
 end
 ```
@@ -116,7 +116,7 @@ A function parameter or return type may name a mixin in one of two ways.
 **`some Mixin`** — the compiler picks one concrete conforming type per call site. The function body is monomorphized; the receiver type is fixed for any given call but invisible to callers. Zero runtime cost; methods may inline.
 
 ```riven
-def print_it(item: &some Displayable)
+def print_it(item: &some Renderable)
   puts item.to_display
 end
 
@@ -147,25 +147,30 @@ Structural satisfaction is accepted for `some Mixin` only. `any Mixin` requires 
 
 ## Built-in Mixins
 
-| Mixin | Purpose |
-|-------|---------|
-| `Displayable` | Convert to display string |
-| `Debug` | Debug representation |
-| `Comparable` | Ordering (`<`, `>`, `<=`, `>=`) |
-| `Hashable` | Hash computation (for `Map` keys) |
-| `Iterable` | Can produce an iterator |
-| `Iterator` | Can yield successive items |
-| `Copy` | Assignment duplicates the value |
-| `Clone` | Explicit `.clone` deep copy |
-| `Drop` | Custom destructor logic |
-| `Error` | Error type with `.message` |
+| Mixin        | Purpose                                                      |
+|--------------|--------------------------------------------------------------|
+| `Display`    | Convert to display string (via `fmt(f: &var Formatter)`)     |
+| `Debug`      | Debug representation                                         |
+| `Ord`        | Total ordering (`<`, `>`, `<=`, `>=`, `cmp`)                  |
+| `PartialOrd` | Partial ordering                                             |
+| `Eq`         | Equality                                                     |
+| `PartialEq`  | Partial equality                                             |
+| `Hashable`   | Hash computation (for `Map` keys)                            |
+| `Iterator`   | Can yield successive items via `def var next`                |
+| `Copy`       | Assignment duplicates the value                              |
+| `Clone`      | Explicit `.clone` deep copy                                  |
+| `Default`    | Type has a `.default` no-arg constructor                     |
+| `Drop`       | Custom destructor logic                                      |
+| `Error`      | Error type with `.message`                                   |
+
+Note: there is no separate `Iterable` mixin — a type that includes `Iterator` *is* iterable by virtue of providing `def var next`.
 
 ## Conditional Methods
 
 Use an `extension` block to add methods only when a type parameter satisfies a bound:
 
 ```riven
-extension Container[T] where T: Displayable
+extension Container[T] where T: Renderable
   def print_all
     for item in self.items
       puts item.to_display
@@ -176,15 +181,21 @@ end
 
 Without a `where` clause, an `extension` block simply adds methods to the named type unconditionally — useful when extending a foreign type without re-opening its original definition.
 
-## Deriving Mixins
+## Implicit Structural Mixins
 
-A handful of standard mixins can be synthesised by the compiler from the type's fields using the in-body `derive` directive:
+A handful of standard mixins — `Debug`, `Clone`, `Eq`, `PartialEq`, `Hashable`, `Default`, `Ord`, `PartialOrd`, and (on structs) `Copy` — are **implicitly included** when every field supports the mixin. No declaration is required:
 
 ```riven
 struct Point
   x: Float
   y: Float
 end
+
+# Point implicitly includes Debug, Clone, Eq, Hashable, Default, Ord, PartialOrd, Copy.
 ```
 
-See [Chapter 23](23-attributes.md) for the full derive surface and the diagnostics that fire when a derive's preconditions aren't met.
+The loud form `include Debug, Clone, Eq, Hashable` is also accepted when you want a use-site error to fire early if the structural precondition breaks.
+
+`Send` and `Sync` are **auto-mixins** — the compiler infers them per the field rule and you never write `include Send` / `include Sync`. Opt out with `exclude Send` / `exclude Sync`; opt in for an inference-incompatible structure with `unsafe include Send` / `unsafe include Sync`.
+
+See [Chapter 23](23-attributes.md) for the full structural-mixin table and the diagnostics that fire when an implicit-include's preconditions aren't met.

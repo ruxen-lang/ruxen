@@ -5,6 +5,13 @@ use riven_core::parser::Parser;
 use riven_core::typeck;
 use std::process::Command;
 
+fn rvn(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/riven")
+        .join(format!("{name}.rvn"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+}
+
 fn workspace_root() -> std::path::PathBuf {
     let crate_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     crate_dir.parent().unwrap().parent().unwrap().to_path_buf()
@@ -40,52 +47,16 @@ fn compile_and_run(source: &str, name: &str) -> (String, Option<i32>) {
 
 #[test]
 fn derive_ord_and_partial_ord_dispatch_through_trait_bounds() {
-    let source = r##"
-struct Score
-  v: Int
-  derive Ord, Eq, PartialOrd, PartialEq
-end
-
-def cmp_it[T: Ord](a: &T, b: &T) -> Bool
-  a.cmp(b) < 0
-end
-
-def pcmp_it[T: PartialOrd](a: &T, b: &T) -> Bool
-  a.partial_cmp(b) < 0
-end
-
-def main
-  let a = Score.new(1)
-  let b = Score.new(2)
-  puts "#{cmp_it(&a, &b)}"
-  puts "#{pcmp_it(&a, &b)}"
-end
-"##;
-
-    let (stdout, exit) = compile_and_run(source, "derive_ord_partial_ord_dispatch");
+    let source = rvn("derive_ord_and_partial_ord_dispatch_through_trait_bounds");
+    let (stdout, exit) = compile_and_run(&source, "derive_ord_partial_ord_dispatch");
     assert_eq!(exit, Some(0), "non-zero exit; stdout={}", stdout);
     assert_eq!(stdout, "true\ntrue\n");
 }
 
 #[test]
 fn derive_hashable_dispatches_through_trait_bounds() {
-    let source = r##"
-struct Score
-  v: Int
-  derive Hashable
-end
-
-def hash_it[T: Hashable](a: &T) -> Int
-  a.hash_code
-end
-
-def main
-  let a = Score.new(1)
-  puts "#{hash_it(&a)}"
-end
-"##;
-
-    let (stdout, exit) = compile_and_run(source, "derive_hashable_dispatch");
+    let source = rvn("derive_hashable_dispatches_through_trait_bounds");
+    let (stdout, exit) = compile_and_run(&source, "derive_hashable_dispatch");
     assert_eq!(exit, Some(0), "non-zero exit; stdout={}", stdout);
     assert!(
         stdout.trim().parse::<i64>().is_ok(),
@@ -106,37 +77,15 @@ end
 #[test]
 #[ignore = "v2: primitive Hashable monomorphisation not wired (spec §B2 out-of-scope)"]
 fn primitive_int_and_string_dispatch_through_hashable_bound() {
-    let source = r##"
-def hash_it[T: Hashable](a: &T) -> Int
-  a.hash_code
-end
-
-def main
-  let a: Int = 42
-  let s: String = "hello".to_string
-  puts "#{hash_it(&a)}"
-  puts "#{hash_it(&s)}"
-end
-"##;
-    let (stdout, exit) = compile_and_run(source, "primitive_hashable_dispatch");
+    let source = rvn("primitive_int_and_string_dispatch_through_hashable_bound");
+    let (stdout, exit) = compile_and_run(&source, "primitive_hashable_dispatch");
     assert_eq!(exit, Some(0), "non-zero exit; stdout={}", stdout);
 }
 
 #[test]
 fn derive_default_emits_concrete_static_method() {
-    let source = r##"
-struct Score
-  v: Int
-  derive Default
-end
-
-def main
-  let score = Score.default
-  puts "#{score.v}"
-end
-"##;
-
-    let (stdout, exit) = compile_and_run(source, "derive_default_concrete");
+    let source = rvn("derive_default_emits_concrete_static_method");
+    let (stdout, exit) = compile_and_run(&source, "derive_default_concrete");
     assert_eq!(exit, Some(0), "non-zero exit; stdout={}", stdout);
     assert_eq!(stdout, "0\n");
 }

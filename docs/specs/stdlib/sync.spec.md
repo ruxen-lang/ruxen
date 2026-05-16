@@ -58,7 +58,7 @@ The following method signatures resolve cleanly:
 | `m.lock!()`                             | `MutexGuard[T]` (panics on poison) |
 | `m.try_lock()`                          | `Option[MutexGuard[T]]`          |
 | `m.into_inner()`                        | `Result[T, PoisonError]`         |
-| `g.deref()` / `g.deref_mut()`           | `&T` / `&mut T`                  |
+| `g.deref()` / `g.deref_var()`           | `&T` / `&var T`                  |
 
 **Runtime is not yet wired.**  Calling `mutex.lock()` at runtime
 panics with "not implemented" until the Phase 4 mutex helpers land.

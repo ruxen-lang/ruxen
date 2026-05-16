@@ -1,0 +1,4 @@
+
+struct Bag[T, const N: Bogus]
+  data: [T; 4]
+end

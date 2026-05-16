@@ -23,7 +23,7 @@ The research agents independently uncovered broken or aspirational-but-nonfuncti
 | **P0.3** | Correctness | The body-level `derive Mixin` directive is parsed but no pass consumes it. `Ty::is_copy()` ignores `derive_traits`. | `parser/mod.rs:473-511`, `hir/types.rs:189-221` | tier1_05 |
 | **P0.4** | Design | `layout` storage and `derive Mixin` storage share the same `Vec<String>` field. | `parser/mod.rs:499-503` | tier1_05 |
 | **P0.5** | Correctness | `?T..._method` codegen fallback maps unresolved generic method calls to `riven_noop_passthrough`. Some currently-passing tests are no-ops. | `codegen/runtime.rs` | tier1_01 |
-| **P0.6** | Design | `Hash[K,V]` collection name collides with the conventional `Hash` mixin. Both stdlib and derive docs recommend renaming to `Map`. | `resolve/mod.rs:200` | tier1_01 / tier1_05 |
+| **P0.6** | Design | `Map[K,V]` collection name collides with the conventional `Hash` mixin. Both stdlib and derive docs recommend renaming to `Map`. | `resolve/mod.rs:200` | tier1_01 / tier1_05 |
 | **P0.7** | Correctness | String literals flow as `Ty::String`; lowering `String::drop` to `free()` would double-free. | `mir/lower.rs` + runtime | tier1_04 |
 | **P0.8** | UX | Manifest parses registry dependencies (`manifest.rs:51-57`) but `resolve_deps.rs:100-108` hard-rejects them with "not yet supported". | `crates/riven-cli/src/` | tier4_01 |
 | **P0.9** | Policy | `Cargo.toml` workspace root is 4 lines with no `rust-version`. Contributor can land nightly-only Rust. | root | tier4_06 |
@@ -32,7 +32,7 @@ The research agents independently uncovered broken or aspirational-but-nonfuncti
 | **P0.12** | Dead code | `async`/`await`/`spawn`/`actor`/`send`/`receive` reserved in lexer but never consumed by the parser. | `lexer/token.rs:83-85,:127-130` | tier1_02 / tier1_03 |
 | **P0.13** | UX | Doc comments `##` are lexed as `TokenKind::DocComment` but discarded at four parser sites. | `parser/mod.rs:455-458,:884-887,:1112-1115,:1187-1190` | tier3_04 |
 | **P0.14** | Correctness | `DWARF` emission is a 3-line stub. `--backend=llvm` debug builds have no line info. | `codegen/llvm/debug.rs:1-3` | tier3_02 |
-| **P0.15** | Soundness | Variance rules for built-in type constructors (`&mut T` invariant in T, `Array[T]` invariant, `Option[T]` covariant) are encoded as *comments only*. No fixture proves them. | `typeck/coerce.rs:108-109` | tier2_07 |
+| **P0.15** | Soundness | Variance rules for built-in type constructors (`&var T` invariant in T, `Array[T]` invariant, `Option[T]` covariant) are encoded as *comments only*. No fixture proves them. | `typeck/coerce.rs:108-109` | tier2_07 |
 
 ## Cross-tier dependency graph
 
@@ -68,7 +68,7 @@ The research agents independently uncovered broken or aspirational-but-nonfuncti
                                    ▼
                           ┌────────────────────┐
                           │ T1 concurrency     │
-                          │ + T2 variance/dyn  │
+                          │ + T2 variance/any  │
                           └────────┬───────────┘
                                    │
                        ┌───────────┴─────────────┐
@@ -91,7 +91,7 @@ Critical orderings extracted from the individual docs:
 
 - **Drop must work before stdlib ships.** Every heap-backed stdlib type (`String`, `Array`, `Map`, `File`, `TcpStream`) leaks until exit without P0.2 fixed.
 - **Derive must work before stdlib ships.** Users hand-writing a `Debug` `include` for every struct is a non-starter.
-- **Associated types before `Iterator`.** Tier-1 stdlib's `Iterator` trait needs tier-2.01. These land together in practice.
+- **Associated types before `Iterator`.** Tier-1 stdlib's `Iterator` mixin needs tier-2.01. These land together in practice.
 - **Incremental compile before LSP completion.** LSP can ship with debounced full-file re-analysis first (tier-3.01 phase 1), then migrate to the tier-3.06 query layer.
 - **no_std before WASM.** `wasm32-unknown-unknown` is a special case of no_std — tier-4.04 before tier-4.03.
 - **CI before everything else tier-4.** `ci.yml` is a 0.5-week task that catches regressions for every subsequent subsystem.
@@ -108,14 +108,14 @@ Fixes P0.1, P0.3, P0.4, P0.6, P0.9, P0.10, P0.11, P0.13 — anything that's eith
 2. **MSRV** (P0.9): pin `rust-version = "1.78"` at workspace root, add MSRV check to CI.
 3. **CI bootstrap** (tier-4.06 phase 1): ship `ci.yml` running `cargo test` + `cargo clippy` + MSRV check. 0.5 weeks.
 4. **Directive untangle** (P0.3, P0.4): wire body-level `derive` dispatch, widen the storage from `Vec<String>` to a structured form, separate `derive_traits` from `layout` storage, add `derive_traits` to class/enum.
-5. **Hash rename** (P0.6): `Hash[K,V]` → `Map[K,V]`. Update tutorial + fixtures. First `EditionLint` canary once tier-5.02 ships.
+5. **Hash rename** (P0.6): `Map[K,V]` → `Map[K,V]`. Update tutorial + fixtures. First `EditionLint` canary once tier-5.02 ships.
 6. **Doc-comment capture** (P0.13): stop discarding `##` at 4 parser sites; thread into HIR. Unblocks both tier-3.04 (rivendoc) and tier-3.01 hover enrichment.
 7. **Edition removal or wiring** (P0.11): either delete the inert `edition` field from the manifest or gate a single behavior on it as a smoke test.
 8. **Proptest cleanup** (P0.10): either add real properties per tier-3.08, or remove the claim from `CLAUDE.md`.
 
 ### Phase 1 — correctness foundations (4-6 weeks)
 
-Fixes the remaining P0s that are actual semantic bugs, and lands the trait infrastructure stdlib depends on.
+Fixes the remaining P0s that are actual semantic bugs, and lands the mixin infrastructure stdlib depends on.
 
 1. Tier-1.04 Drop infrastructure + MIR drop elaboration + real codegen (P0.2). Closes the heap-leak hole.
 2. Tier-1.04 Copy/Clone mixins + `Ty::is_copy_with(&SymbolTable)`.

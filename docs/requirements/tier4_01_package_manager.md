@@ -375,7 +375,7 @@ This is a *pure* resolver: no backtracking needed because we pick greedily per p
 - `crates/riven-cli/src/workspace.rs` — `Workspace` struct, member discovery, inheritance, shared-target logic.
 - `crates/riven-cli/src/features.rs` — `FeatureResolver`, activation algorithm.
 - `crates/riven-cli/src/cfg.rs` — `cfg(...)` expression parser + evaluator against a target triple + enabled-features set.
-- `crates/riven-cli/src/registry/mod.rs` — registry client trait.
+- `crates/riven-cli/src/registry/mod.rs` — registry client mixin.
 - `crates/riven-cli/src/registry/sparse.rs` — sparse-index HTTP client.
 - `crates/riven-cli/src/registry/index.rs` — index-line parsing (serde-json).
 - `crates/riven-cli/src/publish.rs` — `riven publish` + `riven package`.

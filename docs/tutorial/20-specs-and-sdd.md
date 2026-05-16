@@ -26,7 +26,7 @@ mirror the major surface areas:
 | Subdir         | Covers                                                  |
 |----------------|---------------------------------------------------------|
 | `stdlib/`      | Every shipped stdlib module + collection                |
-| `traits/`      | Mixin system, derive, variance                          |
+| `mixins/`      | Mixin system, implicit-include, variance                |
 | `ownership/`   | Borrow check + Drop                                     |
 | `codegen/`     | Cranelift + LLVM backends, runtime safety, FFI surface  |
 | `types/`       | In-flight type-system features (const generics, …)      |

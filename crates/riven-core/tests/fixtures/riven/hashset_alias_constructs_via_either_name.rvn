@@ -1,0 +1,6 @@
+# TODO(migration): the `HashSet` alias is retired — the dual-name premise is obsolete; consider deleting the matching test or renaming this fixture.
+def main
+  let _a: Set[Int] = Set.new
+  let _b: Set[Int] = Set.with_capacity(4)
+  let _c: Set[Int] = Set.new
+end

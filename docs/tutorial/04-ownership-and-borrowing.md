@@ -6,7 +6,7 @@ Riven has no garbage collector. Instead, every value has a single owner, and the
 
 1. **Every value has exactly one owner** at any time
 2. **Assignment of non-Copy types is a move** — the source becomes invalid
-3. **Borrowing**: a value can have EITHER many immutable borrows (`&T`) OR one mutable borrow (`&mut T`), never both
+3. **Borrowing**: a value can have EITHER many read-only borrows (`&T`) OR one writable borrow (`&var T`), never both
 4. **A borrow must not outlive its owner**
 5. **When the owner goes out of scope**, the value is dropped (destructor runs, memory freed)
 
@@ -15,7 +15,7 @@ Riven has no garbage collector. Instead, every value has a single owner, and the
 When you assign a non-Copy value, ownership transfers:
 
 ```riven
-let greeting = String.new("hello")
+let greeting = String.from("hello")
 let moved = greeting              # ownership moves to `moved`
 puts greeting                     # COMPILE ERROR: `greeting` was moved
 ```
@@ -27,7 +27,7 @@ def consume_string(s: String)
   puts s
 end
 
-let name = String.new("Riven")
+let name = String.from("Riven")
 consume_string(name)              # `name` moved into function
 puts name                         # COMPILE ERROR: `name` was moved
 ```
@@ -43,9 +43,9 @@ puts x           # OK
 puts y           # OK
 ```
 
-Copy types include: all integers, floats, `Bool`, `Char`, `()`, references (`&T`), and user structs that `derive Copy`.
+Copy types include: all integers, floats, `Bool`, `Char`, `()`, references (`&T`), and user structs whose fields are all `Copy` (implicit per §3.6).
 
-## Immutable Borrowing (`&T`)
+## Read-only Borrowing (`&T`)
 
 Borrow a value to read it without taking ownership:
 
@@ -54,41 +54,41 @@ def print_name(name: &String)     # borrows, doesn't own
   puts name
 end
 
-let name = String.new("Riven")
+let name = String.from("Riven")
 print_name(&name)                  # pass a borrow
 puts name                          # still valid
 ```
 
-You can have multiple immutable borrows at the same time:
+You can have multiple read-only borrows at the same time:
 
 ```riven
-let data = String.new("hello")
+let data = String.from("hello")
 let r1 = &data
-let r2 = &data                    # OK — multiple immutable borrows
+let r2 = &data                    # OK — multiple read-only borrows
 puts r1
 puts r2
 ```
 
-## Mutable Borrowing (`&mut T`)
+## Writable Borrowing (`&var T`)
 
-A mutable borrow gives exclusive read-write access:
+A writable borrow gives exclusive read-write access:
 
 ```riven
-def append_bang(s: &mut String)
+def append_bang(s: &var String)
   s.push('!')
 end
 
-var greeting = String.new("hello")
-append_bang(&mut greeting)
+var greeting = String.from("hello")
+append_bang(&var greeting)
 puts greeting                      # "hello!"
 ```
 
-You cannot mix mutable and immutable borrows:
+You cannot mix writable and read-only borrows:
 
 ```riven
 var data = [1, 2, 3]
-let view = &data                   # immutable borrow
-data.push(4)                       # ERROR: mutable borrow while `view` exists
+let view = &data                   # read-only borrow
+data.push(4)                       # ERROR: writable borrow while `view` exists
 puts view
 ```
 
@@ -109,14 +109,14 @@ The compiler prevents returning references to local values:
 
 ```riven
 def dangling -> &String
-  let local = String.new("hello")
+  let local = String.from("hello")
   &local                           # ERROR: `local` dies when function returns
 end
 ```
 
 ## Opting Into Copy
 
-User-defined structs can derive `Copy` if all fields are Copy:
+User-defined structs implicitly include `Copy` when every field is `Copy` (§3.6 — no explicit declaration needed):
 
 ```riven
 struct Point
@@ -133,7 +133,7 @@ let b = a                          # copy, both valid
 For types that aren't Copy, use explicit `.clone` to duplicate:
 
 ```riven
-let original = String.new("hello")
+let original = String.from("hello")
 let copy = original.clone          # explicit deep copy
 puts original                      # still valid
 puts copy

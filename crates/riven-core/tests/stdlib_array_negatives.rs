@@ -17,6 +17,13 @@ use riven_core::lexer::Lexer;
 use riven_core::parser::Parser;
 use riven_core::typeck;
 
+fn rvn(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/riven")
+        .join(format!("{name}.rvn"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+}
+
 fn typecheck_diagnostics(source: &str) -> Vec<Diagnostic> {
     let mut lexer = Lexer::new(source);
     let tokens = lexer
@@ -50,12 +57,8 @@ fn errors(diags: &[Diagnostic]) -> Vec<&Diagnostic> {
 /// `Vec.from(_)` errors at typeck rather than link time.
 #[test]
 fn vec_from_int_is_currently_accepted_at_typeck() {
-    let source = r##"
-def main
-  let _v = Vec.from(123)
-end
-"##;
-    let diags = typecheck_diagnostics(source);
+    let source = rvn("vec_from_int_is_currently_accepted_at_typeck");
+    let diags = typecheck_diagnostics(&source);
     // Sanity: snippet must parse cleanly. Strict typeck rejection is
     // tracked separately.
     let _ = diags;
@@ -68,16 +71,8 @@ end
 /// `408_array_pop_empty.rvn` is the runtime half.
 #[test]
 fn vec_pop_returns_option_typechecks() {
-    let source = r##"
-def main
-  let mut v: Vec[Int] = Vec.new
-  match v.pop
-    Some(_) -> puts "x"
-    None    -> puts "y"
-  end
-end
-"##;
-    let diags = typecheck_diagnostics(source);
+    let source = rvn("vec_pop_returns_option_typechecks");
+    let diags = typecheck_diagnostics(&source);
     let errs = errors(&diags);
     assert!(
         errs.is_empty(),
@@ -92,15 +87,8 @@ end
 /// re-running rivenc here, to keep this file unit-test fast.
 #[test]
 fn vec_index_yields_element_type() {
-    let source = r##"
-def main
-  let mut v: Vec[Int] = Vec.new
-  v.push(10)
-  let x: Int = v[0]
-  puts "#{x}"
-end
-"##;
-    let diags = typecheck_diagnostics(source);
+    let source = rvn("vec_index_yields_element_type");
+    let diags = typecheck_diagnostics(&source);
     let errs = errors(&diags);
     assert!(
         errs.is_empty(),
@@ -121,12 +109,8 @@ end
 /// with `Int` / `USize` at typeck, not at link/run time.
 #[test]
 fn vec_with_capacity_string_arg_is_currently_accepted_at_typeck() {
-    let source = r##"
-def main
-  let _v: Vec[Int] = Vec.with_capacity(8)
-end
-"##;
-    let diags = typecheck_diagnostics(source);
+    let source = rvn("vec_with_capacity_string_arg_is_currently_accepted_at_typeck");
+    let diags = typecheck_diagnostics(&source);
     let errs = errors(&diags);
     assert!(
         errs.is_empty(),
@@ -140,15 +124,8 @@ end
 /// fixture `409_array_dedup.rvn` exercises the actual semantics.
 #[test]
 fn vec_dedup_typechecks_as_unit() {
-    let source = r##"
-def main
-  let mut v: Vec[Int] = Vec.new
-  v.push(1)
-  v.push(1)
-  v.dedup
-end
-"##;
-    let diags = typecheck_diagnostics(source);
+    let source = rvn("vec_dedup_typechecks_as_unit");
+    let diags = typecheck_diagnostics(&source);
     let errs = errors(&diags);
     assert!(
         errs.is_empty(),
@@ -163,15 +140,8 @@ end
 /// runtime fixture `410_array_retain.rvn` covers the lowering itself.
 #[test]
 fn vec_retain_closure_typechecks() {
-    let source = r##"
-def main
-  let mut v: Vec[Int] = Vec.new
-  v.push(1)
-  v.push(2)
-  v.retain { |x| x > 1 }
-end
-"##;
-    let diags = typecheck_diagnostics(source);
+    let source = rvn("vec_retain_closure_typechecks");
+    let diags = typecheck_diagnostics(&source);
     let errs = errors(&diags);
     assert!(
         errs.is_empty(),
@@ -185,15 +155,8 @@ end
 /// positive=after, zero=equal). Pins the typeck contract.
 #[test]
 fn vec_sort_by_closure_typechecks() {
-    let source = r##"
-def main
-  let mut v: Vec[Int] = Vec.new
-  v.push(3)
-  v.push(1)
-  v.sort_by { |a, b| a - b }
-end
-"##;
-    let diags = typecheck_diagnostics(source);
+    let source = rvn("vec_sort_by_closure_typechecks");
+    let diags = typecheck_diagnostics(&source);
     let errs = errors(&diags);
     assert!(
         errs.is_empty(),
@@ -207,13 +170,8 @@ end
 /// typeck contract: it lives on `Vec` like `new` / `with_capacity`.
 #[test]
 fn vec_from_iter_static_typechecks() {
-    let source = r##"
-def main
-  let src: Vec[Int] = Vec.new
-  let _v: Vec[Int] = Vec.from_iter(src)
-end
-"##;
-    let diags = typecheck_diagnostics(source);
+    let source = rvn("vec_from_iter_static_typechecks");
+    let diags = typecheck_diagnostics(&source);
     let errs = errors(&diags);
     assert!(
         errs.is_empty(),
@@ -226,17 +184,8 @@ end
 /// This pins the BinaryOp::Eq → riven_vec_eq routing added in batch 1.
 #[test]
 fn vec_equality_yields_bool() {
-    let source = r##"
-def main
-  let mut a: Vec[Int] = Vec.new
-  a.push(1)
-  let mut b: Vec[Int] = Vec.new
-  b.push(1)
-  let c: Bool = a == b
-  puts "#{c}"
-end
-"##;
-    let diags = typecheck_diagnostics(source);
+    let source = rvn("vec_equality_yields_bool");
+    let diags = typecheck_diagnostics(&source);
     let errs = errors(&diags);
     assert!(
         errs.is_empty(),

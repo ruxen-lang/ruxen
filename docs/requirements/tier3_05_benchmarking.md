@@ -89,7 +89,7 @@ count auto-scaling, mean + stddev, outlier detection via MAD
 
 ```
 ## Measures the cost of allocating an Array of 1000 ints.
-def alloc_vec(ctx: &mut Bencher)
+def alloc_vec(ctx: &var Bencher)
   bench
   ctx.iter do
     var v = Array.new()
@@ -104,7 +104,7 @@ end
 Variants (additional directives on their own lines at the head of the body):
 
 ```
-def x(ctx: &mut Bencher)
+def x(ctx: &var Bencher)
   bench
   ignore                              # discovered but not run
   # OR with reason:
@@ -112,7 +112,7 @@ def x(ctx: &mut Bencher)
   ...
 end
 
-def y(ctx: &mut Bencher)
+def y(ctx: &var Bencher)
   bench
   warmup 100                          # override warmup iterations
   sample_size 1000                    # override sample count
@@ -274,7 +274,7 @@ calls to the `black_box` builtin by emitting:
 - Cranelift: insert a `ir::Opcode::Nop` with a side-effect flag, or
   an explicit volatile load/store of `val`.
 
-Reference: how `std::hint::black_box` works in Rust. Don't reinvent
+Reference: how `std.hint.black_box` works in Rust. Don't reinvent
 the details.
 
 ### 5.6 Sampling algorithm
@@ -448,8 +448,8 @@ Total: ~7 engineer-days after doc 03.
 
 | Case | Assertion |
 |---|---|
-| `def b(ctx: &mut Bencher); bench; ... end` compiles | No parse/type error |
-| `def b; bench; ... end` without ctx param | Compile error: benches need `&mut Bencher` param |
+| `def b(ctx: &var Bencher); bench; ... end` compiles | No parse/type error |
+| `def b; bench; ... end` without ctx param | Compile error: benches need `&var Bencher` param |
 | `riven bench` runs all benches | Exit 0, output lists them |
 | `riven bench --filter=foo` | Only matching benches run |
 | `riven bench --list` | No execution, just names |

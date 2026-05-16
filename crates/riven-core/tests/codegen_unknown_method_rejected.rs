@@ -16,6 +16,13 @@ use riven_core::mir::lower::Lowerer;
 use riven_core::parser::Parser;
 use riven_core::typeck;
 
+fn rvn(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/riven")
+        .join(format!("{name}.rvn"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+}
+
 fn try_compile(source: &str) -> Result<(), String> {
     let mut lexer = Lexer::new(source);
     let tokens = lexer.tokenize().map_err(|e| format!("lex: {e:?}"))?;
@@ -58,13 +65,8 @@ fn runtime_name_rejects_unknown_inferred_method() {
 /// batch 2 which now compiles via `riven_vec_zip`.
 #[test]
 fn compile_fails_when_calling_unimplemented_iter_flat_map() {
-    let source = r##"
-def main
-  let a = [1, 2, 3]
-  let _z = a.iter.flat_map { |x| [x, x] }
-end
-"##;
-    let err = try_compile(source)
+    let source = rvn("compile_fails_when_calling_unimplemented_iter_flat_map");
+    let err = try_compile(&source)
         .expect_err("expected codegen to refuse `.iter.flat_map` (no runtime symbol)");
     assert!(
         err.contains("no runtime symbol"),

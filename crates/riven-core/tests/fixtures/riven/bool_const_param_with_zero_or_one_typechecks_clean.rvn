@@ -1,0 +1,10 @@
+
+class Logger[const VERBOSE: Bool]
+  msg: Int
+
+  def init(@msg: Int)
+  end
+end
+
+def take_logger(_l: Logger[__VALUE__])
+end

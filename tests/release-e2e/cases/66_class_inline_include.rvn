@@ -1,4 +1,4 @@
-mixin Displayable
+mixin Showable
   def to_display -> String
 end
 
@@ -8,7 +8,7 @@ class User
   def init(@name: String)
   end
 
-  include Displayable
+  include Showable
 
   def to_display -> String
     self.name.clone

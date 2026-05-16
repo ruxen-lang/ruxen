@@ -1,0 +1,6 @@
+def main
+  var v: Array[Int] = Array.new
+  v.push(10)
+  let x: Int = v[0]
+  puts "#{x}"
+end

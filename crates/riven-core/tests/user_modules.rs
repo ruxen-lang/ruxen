@@ -5,10 +5,20 @@
 //! `parse_module_def` produces; the negative case (B4) is covered by
 //! a typeck-only test that confirms the resolver still emits a
 //! diagnostic when a user-module type is referenced.
+//!
+//! Riven sources live under `tests/fixtures/riven/<test_name>.rvn`
+//! so future syntax migrations sweep `*.rvn` uniformly.
 
 use riven_core::lexer::Lexer;
 use riven_core::parser::ast::{Program, TopLevelItem};
 use riven_core::parser::Parser;
+
+fn rvn(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/riven")
+        .join(format!("{name}.rvn"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+}
 
 fn parse(src: &str) -> Program {
     let mut lx = Lexer::new(src);
@@ -23,19 +33,8 @@ fn parse(src: &str) -> Program {
 /// B1 — `module foo ... end` parses and contains the inner items.
 #[test]
 fn parse_module_def_basic() {
-    let src = r#"
-module geometry
-  struct Point
-    x: Int
-    y: Int
-  end
-
-  def origin -> Int
-    0
-  end
-end
-"#;
-    let prog = parse(src);
+    let src = rvn("parse_module_def_basic");
+    let prog = parse(&src);
     let module = prog
         .items
         .iter()
@@ -66,16 +65,8 @@ end
 /// B2 — nested modules parse to nested `Module` AST nodes.
 #[test]
 fn parse_nested_modules() {
-    let src = r#"
-module outer
-  module inner
-    def hi -> Int
-      1
-    end
-  end
-end
-"#;
-    let prog = parse(src);
+    let src = rvn("parse_nested_modules");
+    let prog = parse(&src);
     let outer = prog
         .items
         .iter()
@@ -98,35 +89,8 @@ end
 /// B3 — module body accepts every top-level item form (smoke).
 #[test]
 fn parse_module_with_diverse_items() {
-    let src = r#"
-module bag
-  struct S
-    n: Int
-  end
-
-  class C
-    n: Int
-  end
-
-  enum E
-    A
-    B
-  end
-
-  trait T
-    def t -> Int
-  end
-
-  def free -> Int
-    0
-  end
-
-  type Alias = Int
-
-  const ZERO: Int = 0
-end
-"#;
-    let prog = parse(src);
+    let src = rvn("parse_module_with_diverse_items");
+    let prog = parse(&src);
     let module = prog
         .items
         .iter()

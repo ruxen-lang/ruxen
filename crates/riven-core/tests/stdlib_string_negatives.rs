@@ -14,6 +14,13 @@ use riven_core::lexer::Lexer;
 use riven_core::parser::Parser;
 use riven_core::typeck;
 
+fn rvn(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/riven")
+        .join(format!("{name}.rvn"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+}
+
 /// Lex + parse + typecheck a Riven source string and return the full
 /// diagnostic list. Panics with a clear message on lex/parse failure
 /// so the caller never confuses a harness break with a missing-error
@@ -49,12 +56,8 @@ fn errors(diags: &[Diagnostic]) -> Vec<&Diagnostic> {
 /// pin to update.
 #[test]
 fn string_from_with_int_arg_is_handled() {
-    let source = r#"
-def main
-  let _s = String.from(123)
-end
-"#;
-    let diags = typecheck_diagnostics_from_source(source);
+    let source = rvn("string_from_with_int_arg_is_handled");
+    let diags = typecheck_diagnostics_from_source(&source);
     let errs = errors(&diags);
     if errs.is_empty() {
         // v1 known gap: typeck does not yet validate stdlib static-method
@@ -91,18 +94,8 @@ end
 fn use_after_move_on_string_argument_is_rejected() {
     // `take_owned` takes `s: String` by value — the call site moves `s`.
     // Reading `s.len` afterwards must error.
-    let source = r#"
-def take_owned(s: String) -> USize
-  s.len
-end
-
-def main
-  let s = String.from("hello")
-  let _a = take_owned(s)
-  let _b = s.len
-end
-"#;
-    let diags = typecheck_diagnostics_from_source(source);
+    let source = rvn("use_after_move_on_string_argument_is_rejected");
+    let diags = typecheck_diagnostics_from_source(&source);
     let errs = errors(&diags);
     if errs.is_empty() {
         // v1 known gap: the borrow checker does not yet flag move on
@@ -137,14 +130,8 @@ end
 /// same binding afterwards must be rejected by the borrow checker.
 #[test]
 fn use_after_into_bytes_is_rejected() {
-    let source = r#"
-def main
-  let s = String.from("hi")
-  let _bs = s.into_bytes
-  let _len = s.len
-end
-"#;
-    let diags = typecheck_diagnostics_from_source(source);
+    let source = rvn("use_after_into_bytes_is_rejected");
+    let diags = typecheck_diagnostics_from_source(&source);
     let errs = errors(&diags);
     // The current borrow checker may not yet flag method-driven moves
     // on String for v1; we assert at least one error rather than the

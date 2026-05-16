@@ -948,9 +948,9 @@ impl fmt::Display for Ty {
             Ty::Option(inner) => write!(f, "Option[{}]", inner),
             Ty::Result(ok, err) => write!(f, "Result[{}, {}]", ok, err),
             Ty::Ref(inner) => write!(f, "&{}", inner),
-            Ty::RefMut(inner) => write!(f, "&mut {}", inner),
-            Ty::RefLifetime(lt, inner) => write!(f, "&'{} {}", lt, inner),
-            Ty::RefMutLifetime(lt, inner) => write!(f, "&'{} mut {}", lt, inner),
+            Ty::RefMut(inner) => write!(f, "&var {}", inner),
+            Ty::RefLifetime(lt, inner) => write!(f, "&{} {}", lt, inner),
+            Ty::RefMutLifetime(lt, inner) => write!(f, "&{} var {}", lt, inner),
             Ty::Class { name, generic_args }
             | Ty::Struct { name, generic_args }
             | Ty::Enum { name, generic_args } => {
@@ -998,7 +998,7 @@ impl fmt::Display for Ty {
                 write!(f, ") -> {}", ret)
             }
             Ty::FnMut { params, ret } => {
-                write!(f, "FnMut(")?;
+                write!(f, "FnVar(")?;
                 for (i, p) in params.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
@@ -1034,9 +1034,9 @@ impl fmt::Display for Ty {
             Ty::Alias { name, .. } => write!(f, "{}", name),
             Ty::Newtype { name, .. } => write!(f, "{}", name),
             Ty::RawPtr(inner) => write!(f, "*{}", inner),
-            Ty::RawPtrMut(inner) => write!(f, "*mut {}", inner),
+            Ty::RawPtrMut(inner) => write!(f, "*var {}", inner),
             Ty::RawPtrVoid => write!(f, "*Void"),
-            Ty::RawPtrMutVoid => write!(f, "*mut Void"),
+            Ty::RawPtrMutVoid => write!(f, "*var Void"),
             Ty::Error => write!(f, "<error>"),
             Ty::ConstArg(e) => write!(f, "{}", e),
         }

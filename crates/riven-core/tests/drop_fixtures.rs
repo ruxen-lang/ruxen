@@ -27,6 +27,13 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Mutex;
 
+fn rvn(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/riven")
+        .join(format!("{name}.rvn"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+}
+
 /// Serializes the `RIVEN_RUNTIME` env-var window across the parallel
 /// tests in this binary. `cargo test` runs `#[test]` fns on a thread
 /// pool that shares process env, so without this lock two concurrent
@@ -453,24 +460,13 @@ fn run_fixture_inline(name: &str, source: &str) -> LeakReport {
     parse_leak_report(&stderr)
 }
 
-const FIXTURE_SOURCE: &str = r#"
-struct Buffer
-  value: Int
-end
-
-def main
-  let a = Buffer.new(10)
-  let b = Buffer.new(32)
-  let _sum = a.value + b.value
-end
-"#;
-
 /// Regression: the two `Buffer` structs allocated in `main` must be
 /// freed by scope-exit dealloc. Before P0.2 this leaked; afterwards
 /// `outstanding` must be `0`.
 #[test]
 fn runtime_no_leak_fixture_exits_without_tracked_leaks() {
-    let (stdout, stderr, exit) = compile_and_run_with_tracking("runtime_no_leak", FIXTURE_SOURCE);
+    let source = rvn("runtime_no_leak_fixture");
+    let (stdout, stderr, exit) = compile_and_run_with_tracking("runtime_no_leak", &source);
     assert_eq!(exit, Some(0), "fixture exited non-zero. stderr: {}", stderr);
     let (allocs, frees, outstanding) = parse_leak_marker(&stderr);
     assert_eq!(
@@ -485,27 +481,14 @@ fn runtime_no_leak_fixture_exits_without_tracked_leaks() {
     );
 }
 
-const REASSIGNMENT_SOURCE: &str = r#"
-struct Buffer
-  value: Int
-end
-
-def main
-  let mut a = Buffer.new(1)
-  a = Buffer.new(2)
-  a = Buffer.new(3)
-  let _x = a.value
-end
-"#;
-
 /// Re-binding a heap-owned local must free the prior allocation before
 /// the new pointer overwrites it. Three `Buffer.new` calls => three
 /// allocations; all three must be freed (two via injected mid-function
 /// `riven_dealloc`, one via scope-exit drop). (P0.2)
 #[test]
 fn reassignment_does_not_leak_prior_heap_value() {
-    let (_stdout, stderr, exit) =
-        compile_and_run_with_tracking("reassignment_drop", REASSIGNMENT_SOURCE);
+    let source = rvn("reassignment_drop");
+    let (_stdout, stderr, exit) = compile_and_run_with_tracking("reassignment_drop", &source);
     assert_eq!(exit, Some(0), "fixture exited non-zero. stderr: {}", stderr);
     let (allocs, frees, outstanding) = parse_leak_marker(&stderr);
     assert_eq!(
@@ -521,27 +504,13 @@ fn reassignment_does_not_leak_prior_heap_value() {
     assert_eq!(outstanding, 0);
 }
 
-const LOOP_BODY_LOCAL_SOURCE: &str = r#"
-struct Buffer
-  value: Int
-end
-
-def main
-  let mut i = 0
-  while i < 3
-    let _b = Buffer.new(i)
-    i = i + 1
-  end
-end
-"#;
-
 /// A heap-owned local declared inside a `while` body must be freed at
 /// every back-edge so it does not leak across iterations. Three
 /// iterations => three allocations => three frees. (P0.2)
 #[test]
 fn loop_body_local_does_not_leak_across_iterations() {
-    let (_stdout, stderr, exit) =
-        compile_and_run_with_tracking("loop_body_local", LOOP_BODY_LOCAL_SOURCE);
+    let source = rvn("loop_body_local");
+    let (_stdout, stderr, exit) = compile_and_run_with_tracking("loop_body_local", &source);
     assert_eq!(exit, Some(0), "fixture exited non-zero. stderr: {}", stderr);
     let (allocs, frees, outstanding) = parse_leak_marker(&stderr);
     assert_eq!(allocs, 3, "expected 3 allocs, got {}", allocs);
@@ -549,25 +518,12 @@ fn loop_body_local_does_not_leak_across_iterations() {
     assert_eq!(outstanding, 0);
 }
 
-const BREAK_WITH_LOCAL_SOURCE: &str = r#"
-struct Buffer
-  value: Int
-end
-
-def main
-  loop
-    let _b = Buffer.new(1)
-    break
-  end
-end
-"#;
-
 /// `break` inside a loop body must free heap-owned locals declared in
 /// the body before jumping to the exit block. (P0.2)
 #[test]
 fn break_drops_loop_body_local() {
-    let (_stdout, stderr, exit) =
-        compile_and_run_with_tracking("break_with_local", BREAK_WITH_LOCAL_SOURCE);
+    let source = rvn("break_with_local");
+    let (_stdout, stderr, exit) = compile_and_run_with_tracking("break_with_local", &source);
     assert_eq!(exit, Some(0), "fixture exited non-zero. stderr: {}", stderr);
     let (allocs, frees, outstanding) = parse_leak_marker(&stderr);
     assert_eq!(allocs, 1);
@@ -575,27 +531,12 @@ fn break_drops_loop_body_local() {
     assert_eq!(outstanding, 0);
 }
 
-const CONTINUE_WITH_LOCAL_SOURCE: &str = r#"
-struct Buffer
-  value: Int
-end
-
-def main
-  let mut i = 0
-  while i < 3
-    let _b = Buffer.new(i)
-    i = i + 1
-    continue
-  end
-end
-"#;
-
 /// `continue` inside a loop body must free heap-owned locals declared
 /// in the body before jumping to the loop header. (P0.2)
 #[test]
 fn continue_drops_loop_body_local() {
-    let (_stdout, stderr, exit) =
-        compile_and_run_with_tracking("continue_with_local", CONTINUE_WITH_LOCAL_SOURCE);
+    let source = rvn("continue_with_local");
+    let (_stdout, stderr, exit) = compile_and_run_with_tracking("continue_with_local", &source);
     assert_eq!(exit, Some(0), "fixture exited non-zero. stderr: {}", stderr);
     let (allocs, frees, outstanding) = parse_leak_marker(&stderr);
     assert_eq!(allocs, 3);
@@ -615,7 +556,8 @@ fn continue_drops_loop_body_local() {
 /// case (real leak) is guarded by the regression test above.
 #[test]
 fn tracker_reports_balanced_allocs_for_dropped_locals() {
-    let (_stdout, stderr, exit) = compile_and_run_with_tracking("tracker_balanced", FIXTURE_SOURCE);
+    let source = rvn("runtime_no_leak_fixture");
+    let (_stdout, stderr, exit) = compile_and_run_with_tracking("tracker_balanced", &source);
     assert_eq!(exit, Some(0));
     let (allocs, frees, outstanding) = parse_leak_marker(&stderr);
     assert_eq!(allocs, frees, "tracker is itself buggy: {}", stderr);
@@ -639,20 +581,14 @@ fn tracker_reports_balanced_allocs_for_dropped_locals() {
  * Either failure mode is a valid red.
  * ────────────────────────────────────────────────────────────────── */
 
-const STRING_LOCAL_SOURCE: &str = r#"
-def main
-  let s = String.from("hello")
-  let _len = s.len
-end
-"#;
-
 /// A `String` local bound from `String.from(...)` must be freed by
 /// scope-exit drop. Currently the drop-elaboration filter excludes
 /// `Ty::String` so the underlying `malloc` from `riven_string_from`
 /// leaks through to process exit. (P0.7)
 #[test]
 fn string_local_is_freed_on_scope_exit() {
-    let report = run_fixture_inline("p07_string_local_drop", STRING_LOCAL_SOURCE);
+    let source = rvn("p07_string_local_drop_source");
+    let report = run_fixture_inline("p07_string_local_drop", &source);
     assert_eq!(report.outstanding_allocations, 0, "leak: {:#?}", report);
     assert!(
         report.string_frees >= 1,
@@ -661,20 +597,13 @@ fn string_local_is_freed_on_scope_exit() {
     );
 }
 
-const VEC_LOCAL_SOURCE: &str = r#"
-def main
-  let mut v: Vec[Int] = Vec.new
-  v.push(1)
-  let _len = v.len
-end
-"#;
-
-/// A `Vec[_]` local bound from `Vec.new` (with at least one push) must
+/// An `Array[_]` local bound from `Array.new` (with at least one push) must
 /// have both its struct slot and its `data` buffer freed by scope-exit
 /// drop. (P0.7)
 #[test]
 fn vec_local_is_freed_on_scope_exit() {
-    let report = run_fixture_inline("p07_vec_local_drop", VEC_LOCAL_SOURCE);
+    let source = rvn("p07_vec_local_drop_source");
+    let report = run_fixture_inline("p07_vec_local_drop", &source);
     assert_eq!(report.outstanding_allocations, 0, "leak: {:#?}", report);
     assert!(report.vec_frees >= 1, "no vec free observed: {:#?}", report);
     assert!(
@@ -684,20 +613,13 @@ fn vec_local_is_freed_on_scope_exit() {
     );
 }
 
-const HASHMAP_LOCAL_SOURCE: &str = r#"
-def main
-  let mut m: HashMap[Int, Int] = HashMap.new
-  m.insert(1, 2)
-  let _len = m.len
-end
-"#;
-
-/// A `HashMap[_, _]` local bound from `HashMap.new` (with at least one
+/// A `Map[_, _]` local bound from `Map.new` (with at least one
 /// insert) must have both its struct slot and its bucket-chain entries
 /// freed by scope-exit drop. (P0.7)
 #[test]
 fn hashmap_local_is_freed_on_scope_exit() {
-    let report = run_fixture_inline("p07_hashmap_local_drop", HASHMAP_LOCAL_SOURCE);
+    let source = rvn("p07_hashmap_local_drop_source");
+    let report = run_fixture_inline("p07_hashmap_local_drop", &source);
     assert_eq!(report.outstanding_allocations, 0, "leak: {:#?}", report);
     assert!(
         report.hash_frees >= 1,
@@ -726,20 +648,13 @@ fn hashmap_local_is_freed_on_scope_exit() {
  *     end up freed by their owning frame's scope-exit drop.
  * ────────────────────────────────────────────────────────────────── */
 
-const STRING_PUSH_SOURCE: &str = r#"
-def main
-  let mut s = String.from("hi")
-  s.push('!')
-  let _len = s.len
-end
-"#;
-
 /// `String.push(Char)` produces a fresh buffer; the variable rebinds
 /// to it, and at scope exit `riven_string_free` must release the
 /// final buffer. Outstanding heap must be zero.
 #[test]
 fn string_push_does_not_leak() {
-    let report = run_fixture_inline("p02b2_string_push_drop", STRING_PUSH_SOURCE);
+    let source = rvn("p02b2_string_push_drop_source");
+    let report = run_fixture_inline("p02b2_string_push_drop", &source);
     assert_eq!(report.outstanding_allocations, 0, "leak: {:#?}", report);
     assert!(
         report.string_frees >= 1,
@@ -748,21 +663,14 @@ fn string_push_does_not_leak() {
     );
 }
 
-const STRING_INTO_BYTES_SOURCE: &str = r#"
-def main
-  let s = String.from("hi")
-  let bs = s.into_bytes
-  let _len = bs.len
-end
-"#;
-
 /// `into_bytes` transfers ownership: the runtime fn frees the source
 /// `char*` itself, and the MIR analysis taints the receiver so the
 /// drop pass does not also emit `riven_string_free`. Net: no leak,
 /// no double-free.
 #[test]
 fn string_into_bytes_transfers_ownership() {
-    let report = run_fixture_inline("p02b2_string_into_bytes_transfer", STRING_INTO_BYTES_SOURCE);
+    let source = rvn("p02b2_string_into_bytes_transfer_source");
+    let report = run_fixture_inline("p02b2_string_into_bytes_transfer", &source);
     assert_eq!(
         report.outstanding_allocations, 0,
         "leak (or double-free): {:#?}",
@@ -772,15 +680,6 @@ fn string_into_bytes_transfers_ownership() {
     assert!(report.vec_frees >= 1, "no vec free observed: {:#?}", report);
 }
 
-const STRING_PLUS_OP_SOURCE: &str = r#"
-def main
-  let a = String.from("foo")
-  let b = String.from("bar")
-  let c = a + b
-  let _len = c.len
-end
-"#;
-
 /// `+` on owned Strings allocates a fresh concat buffer. All three
 /// owning locals (`a`, `b`, `c`) must be freed by scope-exit drop —
 /// the operator does not consume its operands at the language level
@@ -788,7 +687,8 @@ end
 /// transfer through operators yet), so each retains its own free.
 #[test]
 fn string_plus_op_frees_both_operands() {
-    let report = run_fixture_inline("p02b2_string_plus_op_drop", STRING_PLUS_OP_SOURCE);
+    let source = rvn("p02b2_string_plus_op_drop_source");
+    let report = run_fixture_inline("p02b2_string_plus_op_drop", &source);
     assert_eq!(report.outstanding_allocations, 0, "leak: {:#?}", report);
     assert!(
         report.string_frees >= 3,
@@ -812,22 +712,13 @@ fn string_plus_op_frees_both_operands() {
  * vec drop and double-free.
  * ────────────────────────────────────────────────────────────────── */
 
-const VEC_OF_STRING_SOURCE: &str = r#"
-def main
-  let mut parts: Vec[String] = Vec.new
-  parts.push(String.from("alpha"))
-  parts.push(String.from("beta"))
-  parts.push(String.from("gamma"))
-  let _len = parts.len
-end
-"#;
-
-/// `Vec[String]` with three pushed strings: scope-exit drop must free
+/// `Array[String]` with three pushed strings: scope-exit drop must free
 /// each element (3 string_frees) and the spine (1 vec_free + its
 /// data_buffer_free). No leaks, no double-free.
 #[test]
 fn vec_of_string_releases_every_element() {
-    let report = run_fixture_inline("p03b2_vec_of_string", VEC_OF_STRING_SOURCE);
+    let source = rvn("p03b2_vec_of_string_source");
+    let report = run_fixture_inline("p03b2_vec_of_string", &source);
     assert_eq!(
         report.outstanding_allocations, 0,
         "leak (or double-free): {:#?}",
@@ -845,29 +736,15 @@ fn vec_of_string_releases_every_element() {
     );
 }
 
-const VEC_OF_VEC_INT_SOURCE: &str = r#"
-def main
-  let mut grid: Vec[Vec[Int]] = Vec.new
-  let mut row1: Vec[Int] = Vec.new
-  row1.push(1)
-  row1.push(2)
-  let mut row2: Vec[Int] = Vec.new
-  row2.push(3)
-  row2.push(4)
-  grid.push(row1)
-  grid.push(row2)
-  let _len = grid.len
-end
-"#;
-
-/// `Vec[Vec[Int]]` with two inner Vecs pushed as elements. Scope-exit
-/// drop must walk the outer slots, free each inner Vec spine, then
+/// `Array[Array[Int]]` with two inner Arrays pushed as elements. Scope-exit
+/// drop must walk the outer slots, free each inner Array spine, then
 /// free the outer spine. The element transfer rule prevents the named
 /// locals (`row1`, `row2`) from also being freed independently — they
 /// transferred ownership at push time.
 #[test]
 fn vec_of_vec_int_releases_every_inner_vec() {
-    let report = run_fixture_inline("p03b2_vec_of_vec_int", VEC_OF_VEC_INT_SOURCE);
+    let source = rvn("p03b2_vec_of_vec_int_source");
+    let report = run_fixture_inline("p03b2_vec_of_vec_int", &source);
     assert_eq!(
         report.outstanding_allocations, 0,
         "leak (or double-free): {:#?}",
@@ -894,22 +771,13 @@ fn vec_of_vec_int_releases_every_inner_vec() {
  * and double-free.
  * ────────────────────────────────────────────────────────────────── */
 
-const HASHMAP_STRING_TO_INT_SOURCE: &str = r#"
-def main
-  let mut m: HashMap[String, Int] = HashMap.new
-  m.insert(String.from("alpha"), 1)
-  m.insert(String.from("beta"), 2)
-  m.insert(String.from("gamma"), 3)
-  let _len = m.len
-end
-"#;
-
-/// `HashMap[String, Int]` with three inserted entries: scope-exit drop
+/// `Map[String, Int]` with three inserted entries: scope-exit drop
 /// must free each owned key string (3 string_frees), then free the
 /// hash spine (1 hash_free + 3 entry_frees).
 #[test]
 fn p04_hashmap_string_to_int_releases_every_key() {
-    let report = run_fixture_inline("p04b2_hashmap_string_to_int", HASHMAP_STRING_TO_INT_SOURCE);
+    let source = rvn("p04b2_hashmap_string_to_int_source");
+    let report = run_fixture_inline("p04b2_hashmap_string_to_int", &source);
     assert_eq!(
         report.outstanding_allocations, 0,
         "leak (or double-free): {:#?}",
@@ -927,22 +795,13 @@ fn p04_hashmap_string_to_int_releases_every_key() {
     );
 }
 
-const HASHMAP_INT_TO_STRING_SOURCE: &str = r#"
-def main
-  let mut m: HashMap[Int, String] = HashMap.new
-  m.insert(1, String.from("alpha"))
-  m.insert(2, String.from("beta"))
-  m.insert(3, String.from("gamma"))
-  let _len = m.len
-end
-"#;
-
-/// `HashMap[Int, String]` with three inserted entries: scope-exit drop
+/// `Map[Int, String]` with three inserted entries: scope-exit drop
 /// must free each owned value string (3 string_frees), then free the
 /// hash spine.
 #[test]
 fn p04_hashmap_int_to_string_releases_every_value() {
-    let report = run_fixture_inline("p04b2_hashmap_int_to_string", HASHMAP_INT_TO_STRING_SOURCE);
+    let source = rvn("p04b2_hashmap_int_to_string_source");
+    let report = run_fixture_inline("p04b2_hashmap_int_to_string", &source);
     assert_eq!(
         report.outstanding_allocations, 0,
         "leak (or double-free): {:#?}",
@@ -960,32 +819,15 @@ fn p04_hashmap_int_to_string_releases_every_value() {
     );
 }
 
-const HASHMAP_STRING_TO_VEC_INT_SOURCE: &str = r#"
-def main
-  let mut m: HashMap[Int, Vec[Int]] = HashMap.new
-  let mut row1: Vec[Int] = Vec.new
-  row1.push(1)
-  row1.push(2)
-  let mut row2: Vec[Int] = Vec.new
-  row2.push(3)
-  row2.push(4)
-  m.insert(1, row1)
-  m.insert(2, row2)
-  let _len = m.len
-end
-"#;
-
-/// `HashMap[Int, Vec[Int]]` with two inserted Vecs as values. Scope-
-/// exit drop must walk the bucket chains, free each inner Vec spine
+/// `Map[Int, Array[Int]]` with two inserted Arrays as values. Scope-
+/// exit drop must walk the bucket chains, free each inner Array spine
 /// (2 vec_frees), then free the outer hash spine. The push-time taint
 /// rule prevents the named `row1` / `row2` locals from also being
 /// freed independently.
 #[test]
 fn p04_hashmap_string_to_vec_int_releases_every_value() {
-    let report = run_fixture_inline(
-        "p04b2_hashmap_int_to_vec_int",
-        HASHMAP_STRING_TO_VEC_INT_SOURCE,
-    );
+    let source = rvn("p04b2_hashmap_int_to_vec_int_source");
+    let report = run_fixture_inline("p04b2_hashmap_int_to_vec_int", &source);
     assert_eq!(
         report.outstanding_allocations, 0,
         "leak (or double-free): {:#?}",
@@ -1003,22 +845,13 @@ fn p04_hashmap_string_to_vec_int_releases_every_value() {
     );
 }
 
-const HASHSET_STRING_SOURCE: &str = r#"
-def main
-  let mut s: HashSet[String] = HashSet.new
-  s.insert(String.from("alpha"))
-  s.insert(String.from("beta"))
-  s.insert(String.from("gamma"))
-  let _len = s.len
-end
-"#;
-
-/// `HashSet[String]` with three inserted strings: scope-exit drop must
+/// `Set[String]` with three inserted strings: scope-exit drop must
 /// free each owned element string (3 string_frees), then free the set
 /// spine (1 set_free).
 #[test]
 fn p04_hashset_string_releases_every_element() {
-    let report = run_fixture_inline("p04b2_hashset_string", HASHSET_STRING_SOURCE);
+    let source = rvn("p04b2_hashset_string_source");
+    let report = run_fixture_inline("p04b2_hashset_string", &source);
     assert_eq!(
         report.outstanding_allocations, 0,
         "leak (or double-free): {:#?}",

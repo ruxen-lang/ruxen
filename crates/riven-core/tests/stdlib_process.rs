@@ -15,6 +15,13 @@ use riven_core::parser::Parser;
 use riven_core::typeck;
 use std::process::Command;
 
+fn rvn(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/riven")
+        .join(format!("{name}.rvn"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+}
+
 fn workspace_root() -> std::path::PathBuf {
     let crate_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     crate_dir.parent().unwrap().parent().unwrap().to_path_buf()
@@ -59,21 +66,8 @@ fn compile_and_run(source: &str, basename: &str) -> (String, String, bool) {
 /// so `/usr/bin/true` works there too.
 #[test]
 fn process_run_true_returns_zero() {
-    let source = r##"
-use std.process.process_run
-
-def main
-  let cmd = "/usr/bin/true"
-  let args: Vec[String] = Vec.new
-  let code = process_run(cmd, args)
-  if code == 0
-    puts "ok"
-  else
-    puts "fail code=#{code}"
-  end
-end
-"##;
-    let (stdout, stderr, ok) = compile_and_run(source, "stdlib_process_true");
+    let source = rvn("process_run_true_returns_zero");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_process_true");
     assert!(
         ok,
         "binary exited non-zero. stdout=[{}] stderr=[{}]",
@@ -92,21 +86,8 @@ end
 /// of a sign-extension bug or a misread `WEXITSTATUS`).
 #[test]
 fn process_run_false_returns_one() {
-    let source = r##"
-use std.process.process_run
-
-def main
-  let cmd = "/usr/bin/false"
-  let args: Vec[String] = Vec.new
-  let code = process_run(cmd, args)
-  if code == 1
-    puts "ok"
-  else
-    puts "fail code=#{code}"
-  end
-end
-"##;
-    let (stdout, stderr, ok) = compile_and_run(source, "stdlib_process_false");
+    let source = rvn("process_run_false_returns_one");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_process_false");
     assert!(
         ok,
         "binary exited non-zero. stdout=[{}] stderr=[{}]",
@@ -135,22 +116,8 @@ end
 /// (where `/bin → /usr/bin`).
 #[test]
 fn process_run_echo_with_args_returns_zero() {
-    let source = r##"
-use std.process.process_run
-
-def main
-  let cmd = "/bin/echo"
-  let mut args: Vec[String] = Vec.new
-  args.push("hello")
-  let code = process_run(cmd, args)
-  if code == 0
-    puts "ok"
-  else
-    puts "fail code=#{code}"
-  end
-end
-"##;
-    let (stdout, stderr, ok) = compile_and_run(source, "stdlib_process_echo");
+    let source = rvn("process_run_echo_with_args_returns_zero");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_process_echo");
     assert!(
         ok,
         "binary exited non-zero. stdout=[{}] stderr=[{}]",
@@ -200,45 +167,27 @@ fn compile_and_get_exit_code(source: &str, basename: &str) -> i32 {
 
 #[test]
 fn process_exit_zero_returns_zero() {
-    let source = r##"
-use std.process.exit
-
-def main
-  exit(0)
-end
-"##;
+    let source = rvn("process_exit_zero_returns_zero");
     assert_eq!(
-        compile_and_get_exit_code(source, "stdlib_process_exit_0"),
+        compile_and_get_exit_code(&source, "stdlib_process_exit_0"),
         0
     );
 }
 
 #[test]
 fn process_exit_one_returns_one() {
-    let source = r##"
-use std.process.exit
-
-def main
-  exit(1)
-end
-"##;
+    let source = rvn("process_exit_one_returns_one");
     assert_eq!(
-        compile_and_get_exit_code(source, "stdlib_process_exit_1"),
+        compile_and_get_exit_code(&source, "stdlib_process_exit_1"),
         1
     );
 }
 
 #[test]
 fn process_exit_forty_two_returns_forty_two() {
-    let source = r##"
-use std.process.exit
-
-def main
-  exit(42)
-end
-"##;
+    let source = rvn("process_exit_forty_two_returns_forty_two");
     assert_eq!(
-        compile_and_get_exit_code(source, "stdlib_process_exit_42"),
+        compile_and_get_exit_code(&source, "stdlib_process_exit_42"),
         42
     );
 }
@@ -247,21 +196,8 @@ end
 /// B4 failure-mode encoding.  Pins the execvp-failure branch.
 #[test]
 fn process_run_nonexistent_binary_returns_127() {
-    let source = r##"
-use std.process.process_run
-
-def main
-  let cmd = "/no/such/binary/we/hope/exists"
-  let args: Vec[String] = Vec.new
-  let code = process_run(cmd, args)
-  if code == 127
-    puts "ok"
-  else
-    puts "fail code=#{code}"
-  end
-end
-"##;
-    let (stdout, stderr, ok) = compile_and_run(source, "stdlib_process_run_missing");
+    let source = rvn("process_run_nonexistent_binary_returns_127");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_process_run_missing");
     assert!(ok, "stdout=[{}] stderr=[{}]", stdout, stderr);
     assert!(
         stdout.contains("ok"),

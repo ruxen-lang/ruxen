@@ -17,6 +17,13 @@ use riven_core::typeck;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
+fn rvn(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/riven")
+        .join(format!("{name}.rvn"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+}
+
 fn workspace_root() -> std::path::PathBuf {
     let crate_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     crate_dir.parent().unwrap().parent().unwrap().to_path_buf()
@@ -110,14 +117,8 @@ fn compile_and_run_with_stdin(
 /// Two consecutive `println` calls produce two lines.
 #[test]
 fn stdout_println_emits_text_plus_newline() {
-    let source = r##"
-def main
-  let out = stdout()
-  out.println("first")
-  out.println("second")
-end
-"##;
-    let (stdout, stderr, ok) = compile_and_run(source, "stdlib_io_println");
+    let source = rvn("stdout_println_emits_text_plus_newline");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_io_println");
     assert!(ok, "binary failed. stdout=[{stdout}] stderr=[{stderr}]");
     assert_eq!(
         stdout, "first\nsecond\n",
@@ -135,15 +136,8 @@ end
 /// `print` calls concatenate.
 #[test]
 fn stdout_print_emits_text_without_newline() {
-    let source = r##"
-def main
-  let out = stdout()
-  out.print("alpha")
-  out.print("beta")
-  out.println("")
-end
-"##;
-    let (stdout, _stderr, ok) = compile_and_run(source, "stdlib_io_print");
+    let source = rvn("stdout_print_emits_text_without_newline");
+    let (stdout, _stderr, ok) = compile_and_run(&source, "stdlib_io_print");
     assert!(ok);
     // The closing `println("")` flushes a newline so the test does not
     // depend on stdout buffering across stream close.
@@ -154,13 +148,8 @@ end
 /// Pins the stream-routing contract.
 #[test]
 fn stderr_eprintln_routes_to_stderr_only() {
-    let source = r##"
-def main
-  let err = stderr()
-  err.eprintln("warning")
-end
-"##;
-    let (stdout, stderr, ok) = compile_and_run(source, "stdlib_io_eprintln");
+    let source = rvn("stderr_eprintln_routes_to_stderr_only");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_io_eprintln");
     assert!(ok);
     assert!(
         stdout.is_empty(),
@@ -173,15 +162,8 @@ end
 /// `Stderr.eprint(s)` writes to stderr without a newline.
 #[test]
 fn stderr_eprint_no_newline() {
-    let source = r##"
-def main
-  let err = stderr()
-  err.eprint("a")
-  err.eprint("b")
-  err.eprintln("c")
-end
-"##;
-    let (stdout, stderr, ok) = compile_and_run(source, "stdlib_io_eprint");
+    let source = rvn("stderr_eprint_no_newline");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_io_eprint");
     assert!(ok);
     assert!(stdout.is_empty(), "got stdout: {:?}", stdout);
     assert_eq!(stderr, "abc\n", "got stderr: {:?}", stderr);
@@ -198,17 +180,8 @@ end
 /// reserved type name).
 #[test]
 fn stdout_write_str_emits_exact_bytes() {
-    let source = r##"
-def main
-  let out = stdout()
-  let tag = match out.write_str("hello")
-    Ok(_)  -> String.from("ok")
-    Err(_) -> String.from("err")
-  end
-  out.print(tag)
-end
-"##;
-    let (stdout, _stderr, ok) = compile_and_run(source, "stdlib_io_write_str");
+    let source = rvn("stdout_write_str_emits_exact_bytes");
+    let (stdout, _stderr, ok) = compile_and_run(&source, "stdlib_io_write_str");
     assert!(ok);
     // First token is the literal write, second is the match-arm marker.
     assert_eq!(stdout, "hellook", "got: {:?}", stdout);
@@ -217,18 +190,8 @@ end
 /// `Stdout.flush() -> Result[(), IoError]` returns Ok on a healthy stream.
 #[test]
 fn stdout_flush_returns_ok() {
-    let source = r##"
-def main
-  let out = stdout()
-  out.print("before")
-  let tag = match out.flush()
-    Ok(_)  -> String.from(" flushed")
-    Err(_) -> String.from(" failed")
-  end
-  out.println(tag)
-end
-"##;
-    let (stdout, _stderr, ok) = compile_and_run(source, "stdlib_io_flush");
+    let source = rvn("stdout_flush_returns_ok");
+    let (stdout, _stderr, ok) = compile_and_run(&source, "stdlib_io_flush");
     assert!(ok);
     assert_eq!(stdout, "before flushed\n", "got: {:?}", stdout);
 }
@@ -236,17 +199,8 @@ end
 /// `Stderr.write_str(&str)` routes to stderr and leaves stdout empty.
 #[test]
 fn stderr_write_str_routes_to_stderr() {
-    let source = r##"
-def main
-  let err = stderr()
-  let tag = match err.write_str("oops")
-    Ok(_)  -> String.from("!")
-    Err(_) -> String.from("?")
-  end
-  err.eprint(tag)
-end
-"##;
-    let (stdout, stderr, ok) = compile_and_run(source, "stdlib_io_stderr_write");
+    let source = rvn("stderr_write_str_routes_to_stderr");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_io_stderr_write");
     assert!(ok);
     assert!(
         stdout.is_empty(),
@@ -265,25 +219,9 @@ end
 /// Riven `for` syntax has no `do` keyword (see fixture `26_array_basic.rvn`).
 #[test]
 fn stdin_lines_yields_each_line() {
-    let source = r##"
-def unwrap_line(r: Result[String, IoError]) -> String
-  match r
-    Ok(line) -> line
-    Err(_)   -> String.from("ERR")
-  end
-end
-
-def main
-  let stream = stdin()
-  let lines = stream.lines()
-  let out = stdout()
-  for line_result in lines
-    out.println(unwrap_line(line_result))
-  end
-end
-"##;
+    let source = rvn("stdin_lines_yields_each_line");
     let (stdout, _stderr, ok) =
-        compile_and_run_with_stdin(source, "stdlib_io_lines_basic", b"alpha\nbeta\ngamma\n");
+        compile_and_run_with_stdin(&source, "stdlib_io_lines_basic", b"alpha\nbeta\ngamma\n");
     assert!(ok);
     assert_eq!(stdout, "alpha\nbeta\ngamma\n", "got: {:?}", stdout);
 }
@@ -295,30 +233,11 @@ end
 /// (`.to_string()` on USize is typeck-only — no runtime symbol yet).
 #[test]
 fn stdin_lines_no_trailing_empty_and_partial_final_line() {
-    let source = r##"
-def unwrap_line(r: Result[String, IoError]) -> String
-  match r
-    Ok(line) -> line
-    Err(_)   -> String.from("ERR")
-  end
-end
-
-def main
-  let stream = stdin()
-  let lines = stream.lines()
-  let out = stdout()
-  for line_result in lines
-    out.print("[")
-    out.print(unwrap_line(line_result))
-    out.println("]")
-  end
-  puts "#{lines.len}"
-end
-"##;
+    let source = rvn("stdin_lines_no_trailing_empty_and_partial_final_line");
     // Input has no trailing newline — final partial line "z" should
     // still be emitted, giving 3 elements total.
     let (stdout, _stderr, ok) =
-        compile_and_run_with_stdin(source, "stdlib_io_lines_partial", b"x\ny\nz");
+        compile_and_run_with_stdin(&source, "stdlib_io_lines_partial", b"x\ny\nz");
     assert!(ok);
     assert_eq!(stdout, "[x]\n[y]\n[z]\n3\n", "got: {:?}", stdout);
 }
@@ -326,14 +245,8 @@ end
 /// Empty stdin → empty Vec from `Stdin.lines()`.
 #[test]
 fn stdin_lines_empty_input_yields_empty_vec() {
-    let source = r##"
-def main
-  let stream = stdin()
-  let lines = stream.lines()
-  puts "#{lines.len}"
-end
-"##;
-    let (stdout, _stderr, ok) = compile_and_run_with_stdin(source, "stdlib_io_lines_empty", b"");
+    let source = rvn("stdin_lines_empty_input_yields_empty_vec");
+    let (stdout, _stderr, ok) = compile_and_run_with_stdin(&source, "stdlib_io_lines_empty", b"");
     assert!(ok);
     assert_eq!(stdout, "0\n", "got: {:?}", stdout);
 }
@@ -343,21 +256,8 @@ end
 /// the runtime helper that knows how to render each tag.
 #[test]
 fn io_error_variants_are_constructible_and_message_dispatches() {
-    let source = r##"
-def show(e: IoError) -> String
-  e.message()
-end
-
-def main
-  let nf  = IoError.NotFound
-  let pd  = IoError.PermissionDenied
-  let oth = IoError.Other(message: "boom")
-  puts show(nf)
-  puts show(pd)
-  puts show(oth)
-end
-"##;
-    let (stdout, _stderr, ok) = compile_and_run(source, "stdlib_io_err_construct");
+    let source = rvn("io_error_variants_are_constructible_and_message_dispatches");
+    let (stdout, _stderr, ok) = compile_and_run(&source, "stdlib_io_err_construct");
     assert!(ok);
     assert_eq!(
         stdout, "entity not found\npermission denied\nboom\n",
@@ -380,21 +280,8 @@ end
 /// refactor.
 #[test]
 fn io_error_message_dispatches_per_variant_on_empty_stdin() {
-    let source = r##"
-def describe(e: IoError) -> String
-  e.message()
-end
-
-def main
-  let stream = stdin()
-  let line = stream.read_line()
-  match line
-    Ok(_)  -> puts "ok"
-    Err(e) -> puts describe(e)
-  end
-end
-"##;
-    let (stdout, _stderr, ok) = compile_and_run_with_stdin(source, "stdlib_io_err_message", b"");
+    let source = rvn("io_error_message_dispatches_per_variant_on_empty_stdin");
+    let (stdout, _stderr, ok) = compile_and_run_with_stdin(&source, "stdlib_io_err_message", b"");
     assert!(ok);
     assert_eq!(
         stdout, "unexpected end of file\n",

@@ -1,0 +1,10 @@
+struct Pair
+  x: Int
+  y: Int
+
+  include Copy
+end
+
+def main
+  let _x = 0
+end

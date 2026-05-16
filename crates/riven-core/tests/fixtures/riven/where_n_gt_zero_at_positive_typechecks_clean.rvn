@@ -1,0 +1,10 @@
+
+class Buf[const N: USize] where N > 0
+  data: Int
+end
+
+def take_one(_b: Buf[1])
+end
+
+def take_big(_b: Buf[1024])
+end

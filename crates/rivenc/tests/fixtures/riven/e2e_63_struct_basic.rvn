@@ -1,0 +1,9 @@
+struct Point
+  x: Int
+  y: Int
+end
+
+def main
+  let p = Point.new(3, 4)
+  puts "#{p.x} #{p.y}"
+end

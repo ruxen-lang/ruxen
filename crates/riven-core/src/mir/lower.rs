@@ -5114,7 +5114,7 @@ impl<'a> Lowerer<'a> {
             } if m == "entry" => {
                 let k = entry_args
                     .first()
-                    .ok_or_else(|| "HashMap.entry expects exactly one key argument".to_string())?;
+                    .ok_or_else(|| "Map.entry expects exactly one key argument".to_string())?;
                 (object.as_ref(), k)
             }
             _ => unreachable!("inline_entry_or_insert called without entry chain"),
@@ -5122,11 +5122,11 @@ impl<'a> Lowerer<'a> {
 
         let map_local_opt = self.lower_expr(map_expr)?;
         let map_local =
-            map_local_opt.ok_or_else(|| "HashMap receiver lowered to no value".to_string())?;
+            map_local_opt.ok_or_else(|| "Map receiver lowered to no value".to_string())?;
 
         let k_local_opt = self.lower_expr(k_expr)?;
         let k_local =
-            k_local_opt.ok_or_else(|| "HashMap.entry key arg lowered to no value".to_string())?;
+            k_local_opt.ok_or_else(|| "Map.entry key arg lowered to no value".to_string())?;
 
         // contains_key check.
         let has = self.new_temp(Ty::Bool);
@@ -7868,7 +7868,12 @@ impl<'a> Lowerer<'a> {
     }
 
     fn enum_with_derive_trait(&self, ty: &Ty, trait_name: &str) -> Option<String> {
-        use crate::resolve::symbols::DefKind;
+        // ruby-naming.spec.md §3.6: structural mixins are implicitly
+        // included when the type's fields qualify. Defer to
+        // `ty_has_derive_trait` so the dispatcher honours implicit
+        // Debug / Clone / etc. — without this an enum that hasn't
+        // *explicitly* loud-included Debug falls through the dispatch
+        // table and gets formatted as a raw pointer via `Int_fmt`.
         let name = match ty {
             Ty::Enum { name, .. } => name.clone(),
             Ty::Ref(inner)
@@ -7881,16 +7886,11 @@ impl<'a> Lowerer<'a> {
             Ty::Newtype { inner, .. } => return self.enum_with_derive_trait(inner, trait_name),
             _ => return None,
         };
-        for def in self.symbols.iter() {
-            if def.name == name {
-                if let DefKind::Enum { info } = &def.kind {
-                    if info.derive_traits.iter().any(|t| t == trait_name) {
-                        return Some(name);
-                    }
-                }
-            }
+        if crate::resolve::symbols::ty_has_derive_trait(ty, self.symbols, trait_name) {
+            Some(name)
+        } else {
+            None
         }
-        None
     }
 
     fn receiver_type_name(&self, expr: &HirExpr) -> Option<String> {
@@ -8438,16 +8438,27 @@ fn is_builtin_static_method(type_name: &str, method_name: &str) -> bool {
         // `Vec.new` but takes one Int arg. Phase 2 stdlib batch 1 (#03).
         // `Vec.from_iter(iter)` (#03 batch 2) takes any iterator-producing
         // expression and treats it as a fresh allocation.
-        "Vec" => matches!(method_name, "new" | "with_capacity" | "from_iter"),
+        // ruby-naming.spec.md §10a: `Vec[T]` → `Array[T]`. Both names
+        // route here while the migration shim is in place.
+        "Vec" | "Array" => matches!(method_name, "new" | "with_capacity" | "from_iter"),
         // Phase 2 stdlib (#04): full HashMap[K,V] / HashSet[T] surface.
-        // The `Hash` and `HashMap` aliases both reach here for the
-        // `HashMap.new` / `HashMap.with_capacity(n)` constructors; same
-        // for `Set` / `HashSet`.
-        "Hash" | "HashMap" => matches!(method_name, "new" | "with_capacity" | "from_iter"),
+        // The `Hash`, `HashMap`, and `Map` (ruby-naming.spec.md §10a)
+        // aliases all reach here for the `Map.new` /
+        // `Map.with_capacity(n)` / `Map.from_iter(iter)` constructors;
+        // same for `Set` / `HashSet`. Without `Map` in the alias list
+        // the static-dispatch detector at the method call site
+        // (`is_builtin_static_method`) classifies the call as an
+        // instance method and prepends a phantom `Unit` self arg,
+        // producing a 2-arg call against the 1-arg `riven_hash_from_iter`
+        // runtime symbol — the Cranelift verifier rejects with
+        // "mismatched argument count".
+        "Hash" | "HashMap" | "Map" => {
+            matches!(method_name, "new" | "with_capacity" | "from_iter")
+        }
         "Set" | "HashSet" => matches!(method_name, "new" | "with_capacity" | "from_iter"),
         "Thread" => matches!(method_name, "spawn" | "current" | "sleep" | "yield_now"),
         "Mutex" => matches!(method_name, "new"),
-        "Arc" => matches!(method_name, "new"),
+        "Arc" | "SharedSync" => matches!(method_name, "new"),
         _ => false,
     }
 }
@@ -8739,9 +8750,18 @@ fn insert_drops(
         .locals
         .iter()
         .filter(|local| {
-            // Must be a Move type. Honors `derive Copy` on user-declared
-            // structs/classes/enums by consulting the symbol table.
-            if ty_is_effectively_copy(&local.ty, symbols) {
+            // Must be a Move type. Primitives, references, tuples-of-Copy
+            // etc. never reach MirInst::Alloc, so excluding them here is
+            // safe. User-defined structs/classes/enums are heap-allocated
+            // by codegen even when their fields qualify them for the
+            // implicit `Copy` include (ruby-naming.spec.md §3.6); the
+            // Copy include affects copy-on-assign semantics, not the
+            // heap-allocation strategy. They still need scope-exit drop.
+            let is_user_aggregate = matches!(
+                local.ty,
+                Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
+            );
+            if !is_user_aggregate && ty_is_effectively_copy(&local.ty, symbols) {
                 return false;
             }
             // Must not be a parameter.
@@ -8783,6 +8803,16 @@ fn insert_drops(
                     Ty::String | Ty::Array(_) | Ty::Map(_, _) | Ty::Set(_)
                 );
                 return is_builtin_heap && dealloc_safe.contains(&local.id);
+            }
+            // User-named locals of an implicitly-Copy user aggregate
+            // (struct/class/enum whose fields all qualify for the §3.6
+            // Copy include) only need scope-exit drop when codegen
+            // actually heap-allocated the value, i.e. the local is in
+            // dealloc_safe. Synthetic HIR fixtures that bypass the
+            // alloc path (e.g. `Construct` with no preceding Alloc)
+            // would otherwise leak a Drop the runtime cannot match.
+            if is_user_aggregate && ty_is_effectively_copy(&local.ty, symbols) {
+                return dealloc_safe.contains(&local.id);
             }
             true
         })
@@ -9252,10 +9282,14 @@ fn compute_dealloc_safe_locals(func: &MirFunction) -> std::collections::HashSet<
                         && (callee.starts_with("riven_")
                             || callee.starts_with("Vec_")
                             || callee.starts_with("Vec[")
+                            || callee.starts_with("Array_")
+                            || callee.starts_with("Array[")
                             || callee.starts_with("Hash_")
                             || callee.starts_with("Hash[")
                             || callee.starts_with("HashMap_")
                             || callee.starts_with("HashMap[")
+                            || callee.starts_with("Map_")
+                            || callee.starts_with("Map[")
                             || callee.starts_with("Set_")
                             || callee.starts_with("Set[")
                             || callee.starts_with("HashSet_")
@@ -9309,12 +9343,16 @@ fn compute_dealloc_safe_locals(func: &MirFunction) -> std::collections::HashSet<
                     let transfer_indices: &[usize] = {
                         use crate::codegen::runtime::extract_method_name;
                         let m = extract_method_name(callee.as_str());
-                        let is_vec_method =
-                            callee.starts_with("Vec_") || callee.starts_with("Vec[");
+                        let is_vec_method = callee.starts_with("Vec_")
+                            || callee.starts_with("Vec[")
+                            || callee.starts_with("Array_")
+                            || callee.starts_with("Array[");
                         let is_hash_method = callee.starts_with("Hash_")
                             || callee.starts_with("Hash[")
                             || callee.starts_with("HashMap_")
-                            || callee.starts_with("HashMap[");
+                            || callee.starts_with("HashMap[")
+                            || callee.starts_with("Map_")
+                            || callee.starts_with("Map[");
                         let is_set_method = callee.starts_with("Set_")
                             || callee.starts_with("Set[")
                             || callee.starts_with("HashSet_")

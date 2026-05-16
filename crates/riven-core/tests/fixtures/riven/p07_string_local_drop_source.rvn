@@ -1,0 +1,4 @@
+def main
+  let s = String.from("hello")
+  let _len = s.len
+end

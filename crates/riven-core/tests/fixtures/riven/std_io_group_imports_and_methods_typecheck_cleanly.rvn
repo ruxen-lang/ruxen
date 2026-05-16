@@ -1,0 +1,20 @@
+use std.io.{read_line, stdin, stdout, stderr, println, eprintln, Stdin, Stdout, Stderr, IoError}
+
+def echo(reader: Stdin, writer: Stdout, err: Stderr) -> Result[String, IoError]
+  writer.flush()
+  err.flush()
+  reader.read_line()
+end
+
+def main
+  let reader = stdin()
+  let writer = stdout()
+  let err = stderr()
+  println("prelude line")
+  eprintln("err line")
+  let line = echo(reader, writer, err).expect!("echo")
+  writer.write_str(line).expect!("write")
+  writer.flush().expect!("flush")
+  let line2 = read_line().expect!("read_line")
+  err.write_str(line2).expect!("stderr")
+end

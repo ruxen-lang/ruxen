@@ -58,8 +58,10 @@ dropped / re-bound).
 
 Riven user code may use names like `len`, `push`, `clone`, etc., as
 local bindings or method names without colliding with the runtime
-helpers (`riven_string_len`, `riven_vec_push`, `riven_string_clone`,
+helpers (`riven_string_len`, `riven_array_push`, `riven_string_clone`,
 …).  E2E fixture `135_unreserved_idents.rvn` exercises a long list.
+
+<!-- TODO(migration): runtime helper symbols (`riven_vec_push`, etc.) are internal C symbol names; this spec lists them illustratively. Rename when the runtime symbols themselves are renamed. -->
 
 ---
 

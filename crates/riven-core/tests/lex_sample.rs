@@ -51,7 +51,7 @@ fn test_sample_program_contains_key_tokens() {
     assert!(kinds.contains(&&TokenKind::Class));
     assert!(kinds.contains(&&TokenKind::Def));
     assert!(kinds.contains(&&TokenKind::Let));
-    assert!(kinds.contains(&&TokenKind::Mut));
+    assert!(kinds.contains(&&TokenKind::Var));
     assert!(kinds.contains(&&TokenKind::Match));
     assert!(kinds.contains(&&TokenKind::For));
     assert!(kinds.contains(&&TokenKind::If));

@@ -11,6 +11,13 @@ use riven_core::parser::Parser;
 use riven_core::typeck;
 use std::process::Command;
 
+fn rvn(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/riven")
+        .join(format!("{name}.rvn"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+}
+
 fn workspace_root() -> std::path::PathBuf {
     let crate_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     crate_dir.parent().unwrap().parent().unwrap().to_path_buf()
@@ -53,20 +60,8 @@ fn compile_and_run(source: &str, basename: &str) -> (String, String, bool) {
 /// tab is visible in the diff if it goes wrong.
 #[test]
 fn prim_char_escape_sequences_round_trip() {
-    let source = r##"
-def main
-  let nl: Char    = '\n'
-  let tab: Char   = '\t'
-  let bs: Char    = '\\'
-  let sq: Char    = '\''
-
-  puts "[#{nl}]"     # leading newline → multi-line output
-  puts "[#{tab}]"    # leading tab
-  puts "[#{bs}]"
-  puts "[#{sq}]"
-end
-"##;
-    let (stdout, stderr, ok) = compile_and_run(source, "prim_char_escapes");
+    let source = rvn("prim_char_escape_sequences_round_trip");
+    let (stdout, stderr, ok) = compile_and_run(&source, "prim_char_escapes");
     assert!(ok, "stderr: {}", stderr);
     // `[\n]` lands as `[` then newline then `]` then trailing `\n`.
     assert!(stdout.contains("[\n]"), "newline: {:?}", stdout);
@@ -79,17 +74,8 @@ end
 /// Each codepoint should appear correctly in the interpolated output.
 #[test]
 fn prim_char_unicode_escapes_round_trip() {
-    let source = r##"
-def main
-  let a: Char = '\u{41}'          # 'A'
-  let n: Char = '\u{00F1}'        # ñ
-  let h: Char = '\u{6C34}'        # 水
-  puts "a=#{a}"
-  puts "n=#{n}"
-  puts "h=#{h}"
-end
-"##;
-    let (stdout, stderr, ok) = compile_and_run(source, "prim_char_unicode");
+    let source = rvn("prim_char_unicode_escapes_round_trip");
+    let (stdout, stderr, ok) = compile_and_run(&source, "prim_char_unicode");
     assert!(ok, "stderr: {}", stderr);
     assert!(stdout.contains("a=A"), "ASCII: {:?}", stdout);
     assert!(stdout.contains("n=ñ"), "Latin-1: {:?}", stdout);
@@ -101,29 +87,8 @@ end
 /// wider widths to catch type-widening bugs.
 #[test]
 fn prim_numeric_suffix_int_widths_round_trip() {
-    let source = r##"
-def main
-  let a: UInt8 = 200u8
-  let b: UInt8 = 50u8
-  # a + b would overflow at u8 (wraps to 250 → 250 ok)
-  # add to a wider type after lifting:
-  let sum: UInt32 = 200u32 + 50u32
-  puts "sum=#{sum}"
-
-  let small: Int8 = 7i8
-  puts "small=#{small}"
-
-  let big: Int64 = 1_234_567_890i64
-  puts "big=#{big}"
-
-  let hex: Int = 0x1F
-  puts "hex=#{hex}"
-
-  let bin: Int = 0b1010
-  puts "bin=#{bin}"
-end
-"##;
-    let (stdout, stderr, ok) = compile_and_run(source, "prim_numeric_suffixes");
+    let source = rvn("prim_numeric_suffix_int_widths_round_trip");
+    let (stdout, stderr, ok) = compile_and_run(&source, "prim_numeric_suffixes");
     assert!(ok, "stderr: {}", stderr);
     assert!(stdout.contains("sum=250"), "u32 sum: {}", stdout);
     assert!(stdout.contains("small=7"), "i8: {}", stdout);
@@ -135,15 +100,8 @@ end
 /// B6 — scientific float notation.
 #[test]
 fn prim_float_scientific_notation() {
-    let source = r##"
-def main
-  let a: Float = 1.5e3
-  let b: Float = 2.0e-3
-  puts "a=#{a}"
-  puts "b=#{b}"
-end
-"##;
-    let (stdout, stderr, ok) = compile_and_run(source, "prim_float_sci");
+    let source = rvn("prim_float_scientific_notation");
+    let (stdout, stderr, ok) = compile_and_run(&source, "prim_float_sci");
     assert!(ok, "stderr: {}", stderr);
     assert!(stdout.contains("a=1500"), "1.5e3 = 1500: {}", stdout);
     assert!(stdout.contains("b=0.002"), "2.0e-3 = 0.002: {}", stdout);

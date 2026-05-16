@@ -4,9 +4,9 @@ Riven's safety guarantees are enforced by default (P1 — Implicit Safety, Expli
 
 ## What Requires Unsafe
 
-- Dereferencing raw pointers (`*T`, `*mut T`)
+- Dereferencing raw pointers (`*T`, `*var T`)
 - Calling FFI functions
-- Accessing mutable global state
+- Accessing writable global state
 - Performing unchecked type casts
 
 ## Unsafe Blocks
@@ -38,12 +38,12 @@ The idiomatic approach is to create safe abstractions over unsafe code:
 ```riven
 # Unsafe implementation detail
 class SafeBuffer
-  ptr: *mut UInt8
+  ptr: *var UInt8
   len: Int
 
   def init(size: Int)
     unsafe
-      self.ptr = malloc(size) as *mut UInt8
+      self.ptr = malloc(size) as *var UInt8
       self.len = size
     end
   end
@@ -61,12 +61,12 @@ class SafeBuffer
 
   include Drop
 
-  def mut drop
+  def var drop
     unsafe
-      free(self.ptr as *mut Void)
+      free(self.ptr as *var Void)
     end
   end
 end
 ```
 
-Users of `SafeBuffer` never need to write `unsafe` — the type's API is fully safe. `include Drop` declares the type a `Drop` participant; the mutating `drop` method runs when an instance goes out of scope.
+Users of `SafeBuffer` never need to write `unsafe` — the type's API is fully safe. `include Drop` declares the type a `Drop` participant; the writing `drop` method runs when an instance goes out of scope.

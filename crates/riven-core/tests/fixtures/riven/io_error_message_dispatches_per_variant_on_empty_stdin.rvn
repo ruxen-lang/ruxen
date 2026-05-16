@@ -1,0 +1,13 @@
+
+def describe(e: IoError) -> String
+  e.message()
+end
+
+def main
+  let stream = stdin()
+  let line = stream.read_line()
+  match line
+    Ok(_)  -> puts "ok"
+    Err(e) -> puts describe(e)
+  end
+end

@@ -1,7 +1,7 @@
 # Tier 1 Requirement 02 — Concurrency
 
 **Status:** Draft — design proposal
-**Target phase:** Post-v0.1 (sits on top of the existing borrow checker and trait
+**Target phase:** Post-v0.1 (sits on top of the existing borrow checker and mixin
 system). Prerequisites: stable closure codegen, stable mixin resolution, working
 FFI link-flag plumbing.
 **Related design principles:** P1 (Implicit Safety, Explicit Danger),
@@ -55,13 +55,13 @@ have. Ruby-style surface syntax (`Thread.spawn do ... end`) keeps the ergonomics
 we currently synthesize; no equivalent `is_send()` / `is_sync()` exists.
 
 Smart-pointer types (`SharedSync`, `Shared`) are absent from the `Ty` enum. The only shared
-reference mechanism is `&T` / `&mut T` at lines 88-95, which rely on lexical
+reference mechanism is `&T` / `&var T` at lines 88-95, which rely on lexical
 borrow scopes that cannot cross a thread boundary.
 
 ### 2.2 Mixins (`crates/riven-core/src/resolve/mod.rs`, lines 138–170)
 
-Built-in mixins currently registered: `Displayable`, `Error`, `Comparable`,
-`Hashable`, `Iterable`, `Iterator`, `FromIterator`, `Copy`, `Clone`, `Debug`,
+Built-in mixins currently registered: `Display`, `Error`, `Ord`,
+`Hashable`, `Iterator`, `Iterator`, `FromIterator`, `Copy`, `Clone`, `Debug`,
 `Drop`. **No `Send`. No `Sync`.**
 
 `TraitResolver` (`crates/riven-core/src/typeck/traits.rs`) supports:
@@ -161,8 +161,8 @@ is_send(T) is true iff:
   T is a primitive scalar (Int*, UInt*, Float*, Bool, Char, Unit, Never) → yes
   T is String                                                             → yes
   T is &a U                                                               → is_sync(U)
-  T is &a mut U                                                           → is_send(U)
-  T is *T, *mut T, *Void, *mut Void                                       → no (raw pointers are !Send)
+  T is &a var U                                                           → is_send(U)
+  T is *T, *var T, *Void, *var Void                                       → no (raw pointers are !Send)
   T is [U; N]                                                             → is_send(U)
   T is (U1, ..., Un)                                                      → all is_send(Ui)
   T is Array[U] / Map[K,V] / Set[U] / Option[U] / Result[U,E]            → elementwise is_send
@@ -179,12 +179,12 @@ is_send(T) is true iff:
 `is_sync(T)` follows the same shape with rules:
 
 ```
-  is_sync(T) iff is_send(&'_ T)
+  is_sync(T) iff is_send(&T)   # implicit lifetime, any borrow
 
   Concretely:
   primitives                → yes
   String                    → yes (it's immutable from outside once shared &)
-  &U, &mut U                → is_sync(U)
+  &U, &var U                → is_sync(U)
   raw pointers              → no
   arrays/tuples/Array/...   → elementwise is_sync
   user struct/class         → all fields is_sync AND not opted-out
@@ -264,7 +264,7 @@ diagnostic.
 
 ```riven
 class RawHandle
-  fd: *mut Void
+  fd: *var Void
 
   # explicit opt-out for clarity, though inference would reach !Send anyway
   exclude Send
@@ -277,8 +277,8 @@ end
 ```riven
 # A hand-rolled lock-free queue that the author has verified is thread-safe.
 struct LockFreeQueue[T]
-  head: *mut Node[T]
-  tail: *mut Node[T]
+  head: *var Node[T]
+  tail: *var Node[T]
 
   unsafe include Send where T: Send
   unsafe include Sync where T: Send
@@ -507,7 +507,7 @@ end
 class MutexGuard[T]
   # Drop implementation unlocks the mutex.
   def deref -> &T
-  def deref_mut -> &mut T
+  def deref_var -> &var T
 end
 ```
 
@@ -515,7 +515,7 @@ end
   (note: only `T: Send`, not `T: Sync` — the mutex *provides*
   synchronization).
 - **Borrow-check interaction:** `MutexGuard` is a lifetime-bound wrapper. Its
-  `deref`/`deref_mut` produce borrows whose region is bounded by the guard.
+  `deref`/`deref_var` produce borrows whose region is bounded by the guard.
   The existing `LifetimeChecker` (`borrow_check/lifetimes.rs`) handles this
   the same way it handles any other method returning `&Self::Inner`.
 - **Poisoning:** If a thread panics while holding the lock, the mutex is
@@ -821,7 +821,7 @@ Place in `crates/riven-core/tests/fixtures/concurrency/`:
   `Mutex` → expect E1010 (existing code, exercised for the new guard type).
 - `unsafe_include_without_unsafe.rvn` — `include Send` in a type body that fails
   auto-inference, without the `unsafe` prefix → expect E1014.
-- `sync_raw_pointer_struct.rvn` — struct with `*mut Void` field; call
+- `sync_raw_pointer_struct.rvn` — struct with `*var Void` field; call
   `Thread.spawn` moving it → expect E1011 with field-level diagnostic
   (`SendSyncViolation::FieldNotSend`).
 
@@ -969,7 +969,7 @@ def main
     let h = Thread.spawn do
       for _ in 0..1000
         var guard = c.lock!
-        *guard += 1          # deref_mut
+        *guard += 1          # deref_var
       end
     end
     handles.push(h)
@@ -1040,7 +1040,7 @@ puts total                     # 0+1+...+99 = 4950
 
 ```riven
 class NonSendThing
-  ptr: *mut Void
+  ptr: *var Void
 
   exclude Send                     # explicit — inferred anyway
 end
@@ -1057,7 +1057,7 @@ Diagnostic (rendered via existing `BorrowError::fmt`):
 error[E1011]: value of type `NonSendThing` is not `Send`
   --> src/main.rvn:9:1
    | 9:3 — `NonSendThing` is not Send because it contains a raw pointer
-   | 3:3 — field `ptr: *mut Void` is not Send
+   | 3:3 — field `ptr: *var Void` is not Send
    | 9:1 — captured here by spawned closure
    = help: wrap the field in `SharedSync[Mutex[...]]`, or `unsafe include Send`
            in the body if you've manually verified thread safety
@@ -1096,19 +1096,30 @@ end
 ```riven
 use std.sync.Once
 
-static INIT: Once = Once.new
-static mut LOG_FD: Int = -1
+# Process-global runtime state goes through a library wrapper (SharedSync[Mutex[T]],
+# Once, Atomic*) — per spec §3.14, `static` is only a lifetime keyword in Riven
+# and there is no item-level storage class. The example below shows a writable
+# log-fd guarded by `Once` for initialization; the underlying mutability is
+# expressed through the wrapper, not a `static var` binding.
+let INIT: Once = Once.new
+let LOG_FD: SharedSync[Mutex[Int]] = SharedSync.new(Mutex.new(-1))
 
 def init_logger
   INIT.call_once do
     unsafe
-      LOG_FD = open("app.log")
+      let var guard = LOG_FD.lock
+      guard.set(open("app.log"))
     end
   end
 end
 ```
 
-(`static mut` is a separate Tier 1 requirement — listed as a dependency below.)
+<!-- TODO(migration): the original draft proposed a `static var` (was
+`static mut`) item-level storage class. Spec §3.14 retires this — module-level
+state uses `let` for compile-time-known values and library types
+(`SharedSync[Mutex[T]]`, `Once`, `Atomic*`) for runtime state. Rework the
+dependency tracking below accordingly. -->
+
 
 ---
 
@@ -1118,7 +1129,7 @@ Recommend shipping in four sub-phases. Each is independently testable and
 produces a runnable subset.
 
 ### Phase 2a — Send/Sync as auto-mixins (compile-time only)
-Adds the marker traits, inference, opt-out, manual `unsafe impl`,
+Adds the marker traits, inference, opt-out, manual `unsafe extension`,
 diagnostics. No runtime changes. Validation: the `spawn_capture_*` fixtures
 all compile or reject as expected *even though `Thread.spawn` doesn't exist
 yet* — we use a sentinel `std.mem.require_send[T: Send](x: T)` helper and
@@ -1155,7 +1166,7 @@ actor syntax (separate Tier 2 doc).
 
 ## 12. Open Questions & Risks
 
-1. **Deref ergonomics on `MutexGuard` and `SharedSync`.** Riven has no `Deref` trait
+1. **Deref ergonomics on `MutexGuard` and `SharedSync`.** Riven has no `Deref` mixin
    yet. Three options:
    - (a) Add an `AutoDeref` built-in mixin that the method resolver consults.
    - (b) Make these types "magic" in the method resolver: hard-code
@@ -1220,7 +1231,7 @@ actor syntax (separate Tier 2 doc).
 
 10. **Error-message quality.** E1011 (not `Send`) is notorious for being
     cryptic in Rust. Design the diagnostic to *walk the field path* —
-    "`Foo.bar.baz: *mut Void` is not Send", not just "`Foo` is not Send".
+    "`Foo.bar.baz: *var Void` is not Send", not just "`Foo` is not Send".
     `SendSyncViolation::FieldNotSend` carries enough information to do this;
     make sure the renderer uses it.
 

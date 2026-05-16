@@ -1,9 +1,9 @@
-mixin Displayable
+mixin Showable
   def to_display -> String
 end
 
 extension Int
-  include Displayable
+  include Showable
 
   def to_display -> String
     "#{self}"
@@ -11,8 +11,8 @@ extension Int
 end
 
 def merge[A, B](x: A, y: B) -> String
-  where A: Displayable,
-        B: Displayable
+  where A: Showable,
+        B: Showable
   "#{x.to_display}+#{y.to_display}"
 end
 

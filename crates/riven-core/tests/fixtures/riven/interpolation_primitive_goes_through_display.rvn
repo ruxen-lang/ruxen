@@ -1,0 +1,5 @@
+def main
+  let x: Int = 42
+  let s = "x is #{x}"
+  let _ = s
+end

@@ -117,7 +117,7 @@ end
 
 ```riven
 def load_config(path: &str) -> Result[Config, AppError]
-  let text = File.read_string(path)?     # returns Err if file fails
+  let text = fs.read_to_string(path)?    # returns Err if file fails
   let json = Json.parse(&text)?          # returns Err if parse fails
   Config.from_json(&json)                # returns final Result
 end

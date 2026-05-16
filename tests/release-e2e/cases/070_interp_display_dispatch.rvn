@@ -8,7 +8,7 @@ class Money
 
   include Display
 
-  def fmt(f: &mut Formatter) -> Result[(), FmtError]
+  def fmt(f: &var Formatter) -> Result[(), FmtError]
     let _ = f.write_str("$")
     f.write_str("#{self.cents}")
   end

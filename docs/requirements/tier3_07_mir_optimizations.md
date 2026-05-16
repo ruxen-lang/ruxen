@@ -362,7 +362,7 @@ still eligible.
 | Phase | File | Change |
 |---|---|---|
 | 1 | `crates/riven-core/src/mir/mod.rs:1-4` | Export `pub mod optimize` |
-| 1 | `crates/riven-core/src/mir/optimize/mod.rs` *new* | `PassManager` + `MirPass` trait |
+| 1 | `crates/riven-core/src/mir/optimize/mod.rs` *new* | `PassManager` + `MirPass` mixin |
 | 1 | `crates/riven-core/src/mir/optimize/simplify_cfg.rs` *new* | ~200 lines |
 | 2 | `crates/riven-core/src/mir/optimize/const_fold.rs` *new* | ~150 lines |
 | 2 | `crates/riven-core/src/mir/optimize/dce.rs` *new* | ~150 lines |
@@ -374,7 +374,7 @@ still eligible.
 ### Phase breakdown
 
 **Phase 1 — Pass manager + simplify_cfg (3 days).**
-- Day 1: `PassManager`, `MirPass` trait, integration into
+- Day 1: `PassManager`, `MirPass` mixin, integration into
   `codegen::compile_with_options`.
 - Day 2-3: `simplify_cfg` pass with tests. Run existing compiler tests
   to confirm no regressions.

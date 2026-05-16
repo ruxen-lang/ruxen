@@ -22,7 +22,7 @@ non-empty (at least the program name is present).
 Looks up a single environment variable.
 
 **Given** an environment with `FOO=bar`
-**When** the program calls `env.var("FOO")`
+**When** the program calls `env.get("FOO")`
 **Then** the result is `Result.Ok("bar")`.
 
 **Given** the variable is unset

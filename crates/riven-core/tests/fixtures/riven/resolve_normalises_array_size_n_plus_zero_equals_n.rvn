@@ -1,0 +1,8 @@
+
+struct Buf[T, const N: USize]
+  data: [T; N + 0]
+end
+
+struct BufBare[T, const N: USize]
+  data: [T; N]
+end

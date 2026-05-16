@@ -1,0 +1,11 @@
+enum Mode
+  Read
+  Write
+  Append
+
+  include Default
+end
+
+def main
+  let _x = 0
+end

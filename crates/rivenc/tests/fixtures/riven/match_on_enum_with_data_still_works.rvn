@@ -1,0 +1,18 @@
+enum Shape
+  Circle(radius: Int)
+  Rectangle(width: Int, height: Int)
+end
+
+def area(s: Shape) -> Int
+  match s
+    Shape.Circle(r)           -> r * r * 3
+    Shape.Rectangle(w, h)     -> w * h
+  end
+end
+
+def main
+  let c = Shape.Circle(radius: 5)
+  let r = Shape.Rectangle(width: 4, height: 6)
+  puts "#{area(c)}"
+  puts "#{area(r)}"
+end

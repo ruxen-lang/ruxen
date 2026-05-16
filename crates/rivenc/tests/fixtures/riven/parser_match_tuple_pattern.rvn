@@ -1,0 +1,15 @@
+def describe(p: (Int, Int)) -> String
+  match p
+    (0, 0) -> String.from("origin")
+    (x, 0) -> "on x-axis at #{x}"
+    (0, y) -> "on y-axis at #{y}"
+    (x, y) -> "at (#{x}, #{y})"
+  end
+end
+
+def main
+  puts "#{describe((0, 0))}"
+  puts "#{describe((3, 0))}"
+  puts "#{describe((0, 4))}"
+  puts "#{describe((3, 4))}"
+end

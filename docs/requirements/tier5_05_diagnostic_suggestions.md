@@ -139,7 +139,7 @@ No help field at all. `BorrowError` has help; `Diagnostic` does not.
 /// A span-based, potentially-multi-part replacement.
 ///
 /// One `Suggestion` represents one logical fix. A fix may consist of
-/// multiple edits (e.g. add `mut` in a declaration AND change a caller).
+/// multiple edits (e.g. switch `let` to `var` in a declaration AND change a caller).
 #[derive(Debug, Clone)]
 pub struct Suggestion {
     /// Human-readable description ("consider borrowing here").
@@ -261,9 +261,9 @@ Common patterns become one-liners:
 ```rust
 Diagnostic::error(E1007, primary_label)
     .with_secondary(decl_label)
-    .suggest_insert_after(
+    .suggest_replace(
         let_span,
-        "mut ",
+        "var",
         "consider declaring with `var {name}`",
         Applicability::MachineApplicable,
     )
@@ -380,7 +380,7 @@ New:
 - `crates/riven-core/src/diagnostics/suggestion.rs` — `Suggestion`,
   `SuggestionEdit`, `Applicability`.
 - `crates/riven-core/src/diagnostics/render.rs` — terminal renderer
-  (multi-line, with source context). Moves the `Display` impl off the
+  (multi-line, with source context). Moves the `Display` extension off the
   carrier.
 - `crates/riven-core/src/diagnostics/json.rs` — JSON serialization
   behind a `json-output` feature flag.
@@ -402,11 +402,11 @@ Guidelines for the compiler's own code:
 
 - **MachineApplicable** ONLY when the emitter is confident the
   replacement yields a compiling, semantically-correct program, e.g.:
-  - Adding `mut` to a `let` declaration (`E1007`).
+  - Switching `let` to `var` for a writable binding (`E1007`).
   - Adding `&` before an expression to make a borrow (`E1001` on
     some sites).
   - Renaming a typo to a known candidate with Levenshtein distance ≤ 1.
-  - Edition-migration rewrites (`Hash[K, V]` → `Map[K, V]`).
+  - Edition-migration rewrites (e.g. `Hash[K, V]` → `Map[K, V]`).
 - **MaybeIncorrect** when the replacement compiles but the user's
   intent is ambiguous, e.g.:
   - Suggesting `.clone()` for a move error (the user might have
@@ -423,8 +423,8 @@ Guidelines for the compiler's own code:
 are applied atomically, in order of `span.start`. Overlapping spans
 within a single suggestion are a bug (asserted in debug builds).
 
-A suggestion can cross non-contiguous regions of the file — e.g. add
-a `mut` at the let-binding AND change every `&x` to `&mut x`. This is
+A suggestion can cross non-contiguous regions of the file — e.g. switch
+`let` to `var` at the binding AND change every `&x` to `&var x`. This is
 one user-visible fix; reusing atomic semantics keeps `riven fix`
 simple.
 
@@ -492,7 +492,7 @@ Pick high-value sites first. Concrete targets (each is one PR):
 2. **E1006 assign-to-immutable** — "consider declaring with
    `var`:" `MachineApplicable`. Edit: replace `let` with `var` at
    binding-keyword span.
-3. **E1007 mut-borrow of immutable** — same as E1006.
+3. **E1007 writable-borrow of immutable** — same as E1006.
 4. **Typo / unresolved-name (E0300-ish)** — Levenshtein candidate
    search over symbols in scope. `MachineApplicable` for distance ≤ 1,
    else `MaybeIncorrect`.
@@ -622,7 +622,7 @@ suggestion message should not.
 ### OQ-8. Duplicate/overlapping suggestions across multiple
       diagnostics.
 
-If two diagnostics at different spans both suggest "add `mut` at line
+If two diagnostics at different spans both suggest "switch `let` to `var` at line
 3", `riven fix` applies the edit once (dedup by span+replacement). If
 two suggestions conflict (same span, different replacements), only
 the first `MachineApplicable` wins; the rest log.

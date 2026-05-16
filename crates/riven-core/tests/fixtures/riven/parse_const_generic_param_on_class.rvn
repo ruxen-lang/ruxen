@@ -1,0 +1,4 @@
+
+class SmallVec[T, const N: USize]
+  cap: USize
+end

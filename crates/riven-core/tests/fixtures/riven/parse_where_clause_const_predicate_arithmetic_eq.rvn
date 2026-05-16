@@ -1,0 +1,5 @@
+
+def fixed[const N: USize, const M: USize](x: Int) -> Int
+where N + M == 8
+  x
+end

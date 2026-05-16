@@ -265,7 +265,7 @@ Each Riven `Ty` maps to a DWARF type tag:
 | `Array[T]` | struct with `ptr: *T, len: usize, cap: usize` | ditto |
 | `Option[T]` | `DW_TAG_enumeration_type` with variants `nil, Some(T)` | `create_enumeration_type` |
 | `Result[T, E]` | similar to Option | ditto |
-| `Ref(T)` / `Ref(mut T)` | `DW_TAG_pointer_type` / `DW_TAG_reference_type` | `create_pointer_type` |
+| `&T` / `&var T` | `DW_TAG_pointer_type` / `DW_TAG_reference_type` | `create_pointer_type` |
 | `Class { name }` / `Struct { name }` | `DW_TAG_structure_type` | recurse into fields |
 | `Enum { name }` | `DW_TAG_variant_part` under a structure | see §9 OQ-2 |
 | `Fn { params, ret }` | `DW_TAG_subroutine_type` | `create_subroutine_type` |

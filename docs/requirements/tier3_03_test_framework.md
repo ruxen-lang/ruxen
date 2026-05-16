@@ -489,7 +489,7 @@ Total: 9 engineer-days for a v1 that covers 90% of day-to-day usage.
 
 | Phase | Scope | Days | Prereqs |
 |---|---|---|---|
-| 1 | Directive pipeline | 3 | None |
+| 1 | Directive pipeline | 3 | nil |
 | 2 | `riven test` subcommand | 3 | 1 |
 | 3 | Runner + assertions | 2 | 2 |
 | 4 | Polish + docs | 1 | 3 |

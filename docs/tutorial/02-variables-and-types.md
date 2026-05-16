@@ -83,7 +83,7 @@ Riven has two string types:
 
 ```riven
 let greeting = "hello"               # &str (static, borrowed)
-let owned = String.new("hello")      # String (owned)
+let owned = String.from("hello")      # String (owned)
 let interpolated = "hi #{name}"      # String (interpolation allocates)
 ```
 
@@ -141,7 +141,11 @@ type Callback = Fn(Int) -> Bool
 
 ## Constants
 
+Module-level `let` bindings serve as program-wide constants — there is no separate `const` binding form (the `const` keyword is reserved for the generic-parameter prefix, e.g. `[const N: USize]`). Naming convention is `SCREAMING_SNAKE_CASE`:
+
 ```riven
-const MAX_RETRIES = 3
-const DEFAULT_PORT = 8080
+let MAX_RETRIES = 3
+let DEFAULT_PORT: UInt16 = 8080
 ```
+
+A module-level `let` whose initializer is a const-evaluable expression is usable in type-level positions (const-generic arguments, fixed array sizes). The compiler validates const-evaluability at the use site that requires it.

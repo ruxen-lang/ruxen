@@ -1,16 +1,16 @@
-mixin Comparable
+mixin Greater
   def greater_than(other: &Self) -> Bool
 end
 
 extension Int
-  include Comparable
+  include Greater
 
   def greater_than(other: &Int) -> Bool
     self > *other
   end
 end
 
-def max[T: Comparable](a: T, b: T) -> T
+def max[T: Greater](a: T, b: T) -> T
   if a.greater_than(&b)
     a
   else

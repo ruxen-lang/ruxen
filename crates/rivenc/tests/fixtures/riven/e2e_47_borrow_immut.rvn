@@ -1,0 +1,9 @@
+def print_name(name: &String)
+  puts "#{name}"
+end
+
+def main
+  let s = String.from("Riven")
+  print_name(&s)
+  puts "#{s}"
+end

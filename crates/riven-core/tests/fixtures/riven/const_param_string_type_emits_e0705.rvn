@@ -1,0 +1,4 @@
+
+struct Bag[T, const N: String]
+  data: [T; 4]
+end

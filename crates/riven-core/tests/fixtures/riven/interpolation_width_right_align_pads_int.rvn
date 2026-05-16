@@ -1,0 +1,4 @@
+def main
+  let n: Int = 42
+  puts "[#{n:>5}]"
+end

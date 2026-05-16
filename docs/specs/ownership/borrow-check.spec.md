@@ -1,4 +1,4 @@
-# Spec — Borrow check (move / ref / mut-ref)
+# Spec — Borrow check (move / ref / var-ref)
 
 **Source docs:**
 [docs/requirements/tier1_04_drop_copy_clone.md](../../requirements/tier1_04_drop_copy_clone.md),
@@ -29,16 +29,17 @@ must keep this program accepted.
 a caller `let x = String.from("hi"); f(x); f(x);`
 **Then** the second `f(x)` is rejected as use-after-move.
 
-(Same behaviour applies to any non-`Copy` owned type — `Vec`,
-`HashMap`, etc.)
+(Same behaviour applies to any non-`Copy` owned type — `Array`,
+`Map`, etc.)
 
-## B3 — `into_*` methods consume the receiver
+## B3 — `into_*` (consuming) methods consume the receiver
 
-`String::into_bytes`, `Vec::into_iter`, and any other method whose
-signature takes `self` (not `&self` / `&mut self`) consumes the
-receiver.  Subsequent use of the original binding is rejected.
+`String.into_bytes`, `Array.into_iter`, and any other method whose
+receiver is `consume self` (not a reading or writing method)
+consumes the receiver.  Subsequent use of the original binding is
+rejected.
 
-## B4 — `&mut T` does not coerce in ways that would alias
+## B4 — `&var T` does not coerce in ways that would alias
 
 Covered by [variance.spec.md](../mixins/variance.spec.md) B1 / B3.
 Mentioned here because the borrow checker enforces the rule at

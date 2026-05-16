@@ -16,6 +16,17 @@ Riven's design follows Rust's `min_const_generics` plus simple
 arithmetic on const expressions.  No general `const fn` evaluation;
 no recursion or branching at the const level.
 
+The `const` keyword appears **only** as a generic-parameter prefix
+(see canonical syntax §3.14).  There is no `const NAME = ...`
+binding form for ordinary values — module-level `let NAME = ...`
+is the binding form for constants, and the compiler validates
+const-evaluability at the use site (`E-NOT-CONST-EVAL`).
+
+Identifiers shown inside backticks below that contain `::` (e.g.
+`Ty::Array`, `DefKind::ConstParam`, `ConstExpr::Lit`) refer to
+**internal compiler types in the Rust source**, not Riven surface
+syntax.  Riven user-level paths use `.` (`Color.Red`, `Array.new`).
+
 ---
 
 ## Stage map (top-level)

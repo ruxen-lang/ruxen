@@ -1,37 +1,37 @@
-# Spec — `Vec[T]`
+# Spec — `Array[T]`
 
 **Source docs:**
 [docs/requirements/tier1_01_stdlib.md §5.1](../../requirements/tier1_01_stdlib.md).
 
 **Status:** shipped Phase 2 #04.
 
-`Vec[T]` is a growable contiguous heap array with `O(1)` amortised
+`Array[T]` is a growable contiguous heap array with `O(1)` amortised
 push/pop and `O(1)` index access.  The C runtime stores
 `{ ptr, len, cap }` and grows by doubling.
 
 ---
 
-## B1 — `Vec.from(v: T)` is currently lenient at typeck
+## B1 — `Array.from(v: T)` is currently lenient at typeck
 
-The constructor `Vec.from(...)` accepts any single value at typecheck
+The constructor `Array.from(...)` accepts any single value at typecheck
 time today (v1 simplification — strict `From` impls deferred to v2).
-A v2 cleanup will tighten this so that only `Vec.from(iter)` etc. are
-accepted.  Until then, `Vec.from(1)` typechecks (and the runtime will
+A v2 cleanup will tighten this so that only `Array.from(iter)` etc. are
+accepted.  Until then, `Array.from(1)` typechecks (and the runtime will
 do its best at MIR-lowering time).
 
 ## B2 — `pop() -> Option[T]`
 
-Removes and returns the last element, or `None` when empty.
+Removes and returns the last element, or `nil` when empty.
 
 ## B3 — Indexing yields the element type
 
-**Given** `v: Vec[Int]`
+**Given** `v: Array[Int]`
 **Then** `v[0]` has type `Int` (not `Option[Int]` — bounds checking
 is dynamic; out-of-bounds panics).
 
 ## B4 — `with_capacity(n)` accepts non-Int args today
 
-Like B1, `Vec.with_capacity(...)` is currently lenient — passing a
+Like B1, `Array.with_capacity(...)` is currently lenient — passing a
 `String` typechecks (the runtime coerces).  Tightening to `Int`-only
 is a v2 cleanup.
 
@@ -48,13 +48,13 @@ Filters in-place; the closure receives `&T` and returns `Bool`.
 Stable sort in place.  The closure receives `&T, &T` and returns
 `Int` (Ordering — negative / zero / positive).
 
-## B8 — `Vec.from_iter(iter)` typechecks (static method)
+## B8 — `Array.from_iter(iter)` typechecks (static method)
 
-Constructs a `Vec[T]` by draining the iterator.
+Constructs an `Array[T]` by draining the iterator.
 
 ## B9 — Equality (`==`) yields `Bool`
 
-Pairwise comparison of two vectors at corresponding indices.
+Pairwise comparison of two arrays at corresponding indices.
 
 ---
 
@@ -80,9 +80,9 @@ series.
 
 ## Gaps + v2 cleanups
 
-- B1, B4: tighten `Vec.from(...)` and `Vec.with_capacity(...)` to
+- B1, B4: tighten `Array.from(...)` and `Array.with_capacity(...)` to
   reject obviously wrong arg types.
-- `Vec.first / last / contains / clone / reverse` now have direct
+- `Array.first / last / contains / clone / reverse` now have direct
   runtime pin tests in `stdlib_array_runtime.rs` (added 2026-05):
   `vec_first_returns_first_element`, `vec_last_returns_last_element`,
   `vec_contains_finds_element`, `vec_clone_returns_independent_copy`,
@@ -90,7 +90,7 @@ series.
 
 ## Out of scope (v2)
 
-- `VecDeque` / `LinkedList`.
-- `slice` primitives independent of `Vec`.
+- `Deque` / `LinkedList`.
+- `slice` primitives independent of `Array`.
 - `drain`, `splice`, `chunks`, `windows` — wired piecemeal as
   needed.

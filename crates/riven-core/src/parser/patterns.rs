@@ -46,10 +46,10 @@ impl Parser {
                 Pattern::Rest { span }
             }
 
-            // Ref pattern: ref [mut] name
+            // Ref pattern: ref [var] name
             TokenKind::Ref => {
                 self.advance();
-                let mutable = self.eat(TokenKind::Mut);
+                let mutable = self.eat(TokenKind::Var);
                 let name = self.expect_identifier();
                 let span = self.span_from(&start);
                 Pattern::Ref {
@@ -59,8 +59,8 @@ impl Parser {
                 }
             }
 
-            // mut name (mutable identifier binding)
-            TokenKind::Mut => {
+            // var name (mutable identifier binding pattern)
+            TokenKind::Var => {
                 self.advance();
                 let name = self.expect_identifier();
                 let span = self.span_from(&start);

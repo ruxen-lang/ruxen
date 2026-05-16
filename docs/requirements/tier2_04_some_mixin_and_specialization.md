@@ -20,7 +20,7 @@ This doc bundles two features that are historically tangled:
 
 They are bundled because (a) return-position `some Mixin` historically
 pressured Rust toward specialization for the `include Display on T` case
-(a blanket impl plus a specific override), and (b) both are about
+(a blanket extension plus a specific override), and (b) both are about
 narrowing a generic signature at compile time. But they are *not* the
 same feature and can ship independently.
 
@@ -64,13 +64,13 @@ This is wrong for anything larger than a pointer, and gets us back to
 the int64-slot-erasure problem (overview §Dependency). `some Mixin`
 return position cannot ship until M2 lands.
 
-### 2.3 Trait resolution accepts structural satisfaction
+### 2.3 Mixin resolution accepts structural satisfaction
 
 `typeck/traits.rs:83-125`: for `some Mixin`, structural satisfaction
 is accepted (the type has methods with matching signatures, no
 explicit `include T on U` required). For `any Mixin`, nominal only.
 
-This is the *semantic difference* between `impl` and `dyn` that must
+This is the *semantic difference* between `some` and `any` that must
 be preserved through any refactor. It also means `some Mixin` cannot
 be stored — a structurally-satisfied type has no vtable.
 
@@ -86,7 +86,7 @@ No fixture uses `some Mixin` in return position today.
 
 ### 2.5 Specialization — nothing exists
 
-No `impl` overlap check. `TraitResolver::register_impl`
+No `extension` overlap check. `TraitResolver::register_impl`
 (`typeck/traits.rs:59-79`) uses `HashMap<(String, String), Vec<ImplMethod>>`
 keyed by `(type_name, trait_name)` — there is silently a *single*
 entry per pair. Two `extension Array[Int] ... include Foo ... end` in the same program would
@@ -99,8 +99,8 @@ see §9 risk).
 
 ### Goals
 
-- **G1.** `def foo(x: some Displayable)` — argument-position `some Mixin`
-  is a syntactic sugar for `def foo[T: Displayable](x: T)`. Type-
+- **G1.** `def foo(x: some Display)` — argument-position `some Mixin`
+  is a syntactic sugar for `def foo[T: Display](x: T)`. Type-
   check, monomorphize, run.
 - **G2.** `def iter() -> some Iterator[Item = Int]` — return-position
   `some Mixin` produces an opaque type whose concrete body is the
@@ -115,8 +115,8 @@ see §9 risk).
 - **G5.** `some Mixin` is not storable in a field unless the field's
   type is the same function's return type via a `type` alias — i.e.,
   `type MyIter = some Iterator[Item = Int]` (phase 04c).
-- **G6.** Coherence: multiple `impl` blocks for the same `(trait,
-  type)` pair produce E-IMPL-DUP at impl-register time. Fixes the
+- **G6.** Coherence: multiple `extension` blocks for the same `(mixin,
+  type)` pair produce E-IMPL-DUP at extension-register time. Fixes the
   pre-existing hole in §2.5.
 
 ### Non-goals
@@ -124,7 +124,7 @@ see §9 risk).
 - **NG1.** Specialization. See §9.
 - **NG2.** Mixin alias (`mixin Foo = Iterator + Clone`). Separate
   feature; frequently paired with `some Mixin` but independent.
-- **NG3.** `some Mixin` in trait method signatures (RPITIT). Rust
+- **NG3.** `some Mixin` in mixin method signatures (RPITIT). Rust
   shipped this in 2023; requires careful interaction with associated
   types and sendability. Defer.
 - **NG4.** `some Mixin` in `let` bindings. Rust did not stabilize.
@@ -149,13 +149,13 @@ def print_all[I: Iterator[Item = String]](items: I) ...
 Multiple bounds:
 
 ```riven
-def log(x: some Displayable + Serializable)
+def log(x: some Display + Serializable)
   puts x.to_display
   save(x.serialize)
 end
 ```
 
-`&some Mixin`, `&mut some Mixin` work the usual way.
+`&some Mixin`, `&var some Mixin` work the usual way.
 
 ### 4.2 Return-position `some Mixin`
 
@@ -173,7 +173,7 @@ Rules:
 
 - The concrete return type is inferred from the body.
 - Every `return` in the function must produce the same concrete
-  type (E-IMPL-RET-MISMATCH). Different types with a common trait
+  type (E-IMPL-RET-MISMATCH). Different types with a common mixin
   are not collapsed; the user must go through `Box[any Mixin]` (doc
   06) if they want heterogeneity.
 - The caller sees an opaque type that implements the declared traits.
@@ -279,8 +279,11 @@ New pass `typeck/coherence.rs` runs after all impls are collected:
 - For every `(trait_name, target_ty_skeleton)` pair, count impls.
   > 1 → E-IMPL-DUP.
 - "Skeleton" means: compare structurally, treating generic params as
-  alpha-equivalent. So `impl Foo for Array[T]` and `impl Foo for Array[U]`
-  are duplicates, but `extension Array[Int] ... include Foo ... end` and `impl Foo for Array[T]`
+  alpha-equivalent. <!-- TODO(migration): rewrite these examples to use
+  the spec's `extension C[T] where T: B ... include Foo ... end` form;
+  the old `impl Foo for Array[T]` block syntax is retired. -->
+  So `extension Array[T] ... include Foo ... end` and `extension Array[U] ... include Foo ... end`
+  are duplicates, but `extension Array[Int] ... include Foo ... end` and `extension Array[T] ... include Foo ... end`
   are not — the first is more specific and *would* be a specialization
   case (§9 forbids it today with E-IMPL-OVERLAP instead of resolving
   it).
@@ -288,9 +291,9 @@ New pass `typeck/coherence.rs` runs after all impls are collected:
 ### 5.5 No specialization
 
 All overlapping impls produce E-IMPL-OVERLAP at coherence time. The
-user must refactor to a single impl with a generic bound.
+user must refactor to a single extension with a generic bound.
 
-Reserved syntax: `in-body `specialize` directive` on an impl block. Currently rejected
+Reserved syntax: in-body `specialize` directive on an extension block. Currently rejected
 as "not implemented"; reserving signals intent without shipping.
 
 ## 6. Implementation Plan
@@ -356,7 +359,7 @@ a projection with a bound lifetime.
 ### 7.3 With mixin existentials (doc 06)
 
 `some Mixin` and `any Mixin` are the two ways to "hide a type."
-Static (impl) vs dynamic (dyn). Documentation should make the
+Static (some) vs dynamic (any). Documentation should make the
 difference prominent:
 
 - `some Mixin` — one concrete type, opaque to the caller, zero
@@ -365,9 +368,9 @@ difference prominent:
 
 ### 7.4 With HRTBs (doc 03)
 
-Argument-position `impl for['a] Fn(&'a T) -> U` is legal;
+Argument-position `some for[a] Fn(&a T) -> U` is legal;
 elision covers the common case (doc 03 §5). Return-position
-`impl for['a] Fn(&'a T)` is legal but exotic.
+`some for[a] Fn(&a T)` is legal but exotic.
 
 ### 7.5 With variance (doc 07)
 
@@ -378,7 +381,7 @@ unknown types. Document.
 ### 7.6 With specialization (§9)
 
 If specialization ever ships, return-position `some Mixin` gains a
-new behaviour: `def foo -> impl Display` in a blanket impl could be
+new behaviour: `def foo -> some Display` in a blanket extension could be
 overridden per type. Design for this hook now — `coherence.rs`'s
 rejection of overlapping impls becomes a warning-and-pick-most-
 specific if a `in-body `specialize` directive` attribute is present.
@@ -391,19 +394,21 @@ See §6.2.
 
 ### 9.1 The feature
 
-Specialization lets multiple impls of the same trait overlap, with
+Specialization lets multiple impls of the same mixin overlap, with
 the compiler picking the *most specific* one at each call site:
 
 ```riven
-# Blanket impl:
-impl[T: Clone] Transform for T
-  def transform(self) -> T { self.clone }
+# Blanket extension:
+extension[T] T where T: Clone
+  include Transform
+  def transform(self) -> T; self.clone; end
 end
 
-# Specific impl overrides for Int — picks this one when the concrete
-# type is Int.
-extension Int ... include Transform ... end   # specialised
-  def transform(self) -> Int { self * 2 }
+# Specific extension overrides for Int — picks this one when the
+# concrete type is Int.
+extension Int
+  include Transform
+  def transform(self) -> Int; self * 2; end
 end
 ```
 
@@ -419,17 +424,17 @@ Attractive for:
 
 Specialization is known to be unsound in the presence of:
 
-- **Lifetimes.** A blanket impl holds for every lifetime; a
-  specialised impl holds for some. The "most-specific" rule can pick
-  an impl that is strictly less general, changing well-typed code to
+- **Lifetimes.** A blanket extension holds for every lifetime; a
+  specialised extension holds for some. The "most-specific" rule can pick
+  an extension that is strictly less general, changing well-typed code to
   ill-typed code at monomorphization. Rust solved this with
   `always_applicable` predicates and still has open soundness holes
   (rust-lang/rust#40582, open since 2017).
 - **Associated types.** A blanket `type Item = Array[T]` and a
   specialised `type Item = &'static [T]` — a user who wrote code
   against `Self.Item = Array[T]` now sees a different type at a
-  call site that picked the specialised impl.
-- **Drop.** A specialised impl with a different Drop behaviour
+  call site that picked the specialised extension.
+- **Drop.** A specialised extension with a different Drop behaviour
   changes observable program behaviour silently.
 
 Rust has been trying to stabilize a sound subset (`min_specialization`)
@@ -446,19 +451,19 @@ problem.
 - Reserve `in-body `specialize` directive` as an attribute name so it is free for a
   future release.
 - Document in the tutorial: "To share code between impls, extract a
-  free function or use a helper trait with a `where` bound."
+  free function or use a helper mixin with a `where` bound."
 
 ### 9.4 If specialization eventually ships
 
 Minimum viable spec (future):
 
-- Restrict to "non-lifetime specialization": the specialised impl
-  must not mention more lifetimes than the generic impl. This dodges
+- Restrict to "non-lifetime specialization": the specialised extension
+  must not mention more lifetimes than the generic extension. This dodges
   the lifetime-soundness hole.
 - Restrict to "non-associated-type specialization": associated types
   must be identical across impls.
-- Marker-trait guards: blanket impls must be tagged with
-  `@[specializable]` to opt in.
+- Marker-mixin guards: blanket extensions must carry an in-body
+  `specializable` directive to opt in.
 - Never auto-pick in ambiguous cases — `E-SPEC-AMBIG` if two
   specialised impls both apply.
 
@@ -466,16 +471,16 @@ This is ~4-6 weeks of careful design + coherence work. Deferred.
 
 ## 10. Open Questions & Risks
 
-- **OQ-1: opaque type leak through dataflow.** If `def a -> impl
+- **OQ-1: opaque type leak through dataflow.** If `def a -> some
   Iterator` and `def b -> some Iterator` both exist, can the same
   variable hold either? No — they are different opaque types.
   Document. Error message must say "function `a`'s return type and
   function `b`'s return type are different opaque types, even though
   both implement `Iterator`."
-- **OQ-2: can some Mixin be used in a closure return?** `|| -> impl
+- **OQ-2: can some Mixin be used in a closure return?** `|| -> some
   Fn()` — probably yes, but the opaque identity must be keyed by the
   closure's def_id. Reject in 04b; revisit.
-- **OQ-3: what happens at a recursive call?** `def nested -> impl
+- **OQ-3: what happens at a recursive call?** `def nested -> some
   Iterator { if cond { nested() } else { empty_iter } }` — the opaque
   type's body mentions itself. Accept iff the inferred type agrees
   with the declared bounds (normal recursion).
@@ -483,7 +488,7 @@ This is ~4-6 weeks of careful design + coherence work. Deferred.
   Rust says no — the user can't specify `T` for a synthetic param.
   Riven follows: E-IMPL-ARG-TURBOFISH.
 - **R-1: the current coherence hole.** `TraitResolver::register_impl`
-  silently overwrites duplicate `(type, trait)` keys
+  silently overwrites duplicate `(type, mixin)` keys
   (`typeck/traits.rs:59-79`). Phase 04a introduces E-IMPL-OVERLAP.
   Existing fixtures must be audited; expect at least the builtin
   iterator-class methods to overlap.
@@ -493,7 +498,7 @@ This is ~4-6 weeks of careful design + coherence work. Deferred.
   until body-check. A layout query before body-check either errors
   (correct but noisy) or returns a conservative placeholder
   (unsound). Recommendation: layout is a post-body pass.
-- **R-3: trait inheritance and opaque.** `def f -> some Iterator`
+- **R-3: mixin inheritance and opaque.** `def f -> some Iterator`
   inferred body returns `VecIter[T]` which also implements
   `DoubleEndedIterator`. May the caller call `rev()`? Rust says no —
   only the declared bounds are exposed. Riven follows.
@@ -503,9 +508,9 @@ This is ~4-6 weeks of careful design + coherence work. Deferred.
 ### 11.1 Positive tests (04a)
 
 - T1: `def each(items: some Iterator)` — call with `Array.new.iter`.
-- T2: `def log(x: some Displayable + Serializable)` — multi-bound.
+- T2: `def log(x: some Display + Serializable)` — multi-bound.
 - T3: Method call through `some Mixin`: `def display(x: some
-  Displayable) { x.to_display }`.
+  Display) { x.to_display }`.
 - T4: `def each(items: &some Iterator)` — reference over `some Mixin`.
 
 ### 11.2 Positive tests (04b)
@@ -525,10 +530,10 @@ This is ~4-6 weeks of careful design + coherence work. Deferred.
 - N2: Opaque type leaks across two functions: `fn a -> some Iterator
   { ... } fn b -> some Iterator { ... } let x = a; x = b` →
   E-OPAQUE-NEQ.
-- N3: Two `impl Foo for Int` in the same crate → E-IMPL-DUP.
-- N4: Overlapping blanket: `impl[T: Clone] Foo for T; impl Foo for
-  Int` → E-IMPL-OVERLAP (phase 04a).
-- N5: `some Mixin` used as a field type: `struct S { x: impl
+- N3: Two `extension Int ... include Foo ... end` blocks in the same package → E-IMPL-DUP.
+- N4: Overlapping blanket: `extension[T] T where T: Clone ... include Foo ... end`
+  alongside `extension Int ... include Foo ... end` → E-IMPL-OVERLAP (phase 04a).
+- N5: `some Mixin` used as a field type: `struct S { x: some
   Iterator }` → E-IMPL-NOT-ALLOWED-HERE. (Use a named opaque type.)
 - N6: Turbofish on `some Mixin` param: `each[String](items)` →
   E-IMPL-ARG-TURBOFISH.

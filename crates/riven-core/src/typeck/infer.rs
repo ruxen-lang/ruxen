@@ -1854,7 +1854,7 @@ impl<'a> InferenceEngine<'a> {
                 Some(Self::result_ty(inner, "PoisonError"))
             }
             (Ty::Class { name, generic_args }, "deref")
-                if name == "MutexGuard" || name == "Arc" =>
+                if name == "MutexGuard" || name == "Arc" || name == "SharedSync" =>
             {
                 let inner = generic_args.first().cloned().unwrap_or(Ty::Error);
                 Some(Ty::Ref(Box::new(inner)))
@@ -1863,16 +1863,28 @@ impl<'a> InferenceEngine<'a> {
                 let inner = generic_args.first().cloned().unwrap_or(Ty::Error);
                 Some(Ty::RefMut(Box::new(inner)))
             }
-            (Ty::Class { name, .. }, "new") if name == "Arc" => {
+            // ruby-naming.spec.md §10a: Arc → SharedSync. Internal name
+            // kept as alias; new code uses SharedSync.
+            (Ty::Class { name, generic_args }, "deref_var") if name == "MutexGuard" => {
+                let inner = generic_args.first().cloned().unwrap_or(Ty::Error);
+                Some(Ty::RefMut(Box::new(inner)))
+            }
+            (Ty::Class { name, .. }, "new") if name == "Arc" || name == "SharedSync" => {
                 let inner = args
                     .first()
                     .map(|arg| arg.ty.clone())
                     .unwrap_or_else(|| self.ctx.fresh_type_var());
-                Some(Self::class_ty("Arc", vec![inner]))
+                Some(Self::class_ty(name, vec![inner]))
             }
-            (Ty::Class { name, .. }, "clone") if name == "Arc" => Some(ty.clone()),
-            (Ty::Class { name, .. }, "strong_count") if name == "Arc" => Some(Ty::USize),
-            (Ty::Class { name, .. }, "weak_count") if name == "Arc" => Some(Ty::USize),
+            (Ty::Class { name, .. }, "clone") if name == "Arc" || name == "SharedSync" => {
+                Some(ty.clone())
+            }
+            (Ty::Class { name, .. }, "strong_count") if name == "Arc" || name == "SharedSync" => {
+                Some(Ty::USize)
+            }
+            (Ty::Class { name, .. }, "weak_count") if name == "Arc" || name == "SharedSync" => {
+                Some(Ty::USize)
+            }
 
             // Phase 2 #06.A3: `std::fmt::Formatter` write surface.
             // `write_str(&str)` and `write_char(Char)` both return

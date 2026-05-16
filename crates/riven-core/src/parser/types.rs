@@ -87,7 +87,7 @@ impl Parser {
         let start = self.current_span();
         self.advance(); // consume *
 
-        let mutable = self.eat(TokenKind::Mut);
+        let mutable = self.eat(TokenKind::Var);
         let inner = self.parse_type();
         let span = self.span_from(&start);
 
@@ -118,7 +118,7 @@ impl Parser {
             if let TokenKind::Identifier(ref n) = this.current_kind().clone() {
                 if matches!(
                     this.peek_kind(),
-                    TokenKind::TypeIdentifier(_) | TokenKind::Mut
+                    TokenKind::TypeIdentifier(_) | TokenKind::Var
                 ) {
                     let nm = n.clone();
                     this.advance();
@@ -136,8 +136,8 @@ impl Parser {
         } else {
             // & — check for lifetime
             lifetime = try_take_lifetime(self);
-            // Check for mut after & [lifetime]
-            if self.at(TokenKind::Mut) {
+            // Check for var after & [lifetime] (writable borrow)
+            if self.at(TokenKind::Var) {
                 self.advance();
                 mutable = true;
             } else {

@@ -66,7 +66,7 @@ Only the ones the capabilities above imply, all in `server.rs`:
 
 The analysis state is a `tokio::sync::RwLock<HashMap<Url, DocumentState>>`
 (`server.rs:12-26`) — reasonable for Phase 1. Each `DocumentState` holds
-the source, version, and the last `AnalysisResult` (which may be `None`
+the source, version, and the last `AnalysisResult` (which may be `nil`
 if no analysis has ever completed).
 
 ### 2.3 `riven-ide` semantic surface (`crates/riven-ide/src/`)
@@ -379,7 +379,7 @@ Implementation:
 
 1. `prepare_rename` — return `Some(range)` if the cursor is on a
    `NodeAtPosition::{VarRef, Definition, MethodCall, FnCall}`, else
-   `None`.
+   `nil`.
 2. `rename(new_name)` — resolve the cursor to a `DefId`, look up
    `UseIndex.uses[def_id]`, return a `WorkspaceEdit` with one `TextEdit`
    per use-site, every edit replacing `Span` → `new_name`.
@@ -400,7 +400,7 @@ Phase 1 set (low-hanging):
 - **`add missing semicolon`** — not applicable; Riven is
   newline-terminated.
 - **`wrap in Some(...)` / `Ok(...)`** when the return type expects one.
-- **`add `&`` / `add &mut`** when a borrow-checker error suggests it.
+- **`add `&`` / `add &var`** when a borrow-checker error suggests it.
 
 Each quick-fix reads a `Diagnostic.code` (e.g. `"E0001"`) or a
 `BorrowError.code` and dispatches to a matching fixer. The dispatcher

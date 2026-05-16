@@ -1,0 +1,13 @@
+struct Score
+  v: Int
+  include Hashable
+end
+
+def hash_it[T: Hashable](a: &T) -> Int
+  a.hash_code
+end
+
+def main
+  let a = Score.new(1)
+  puts "#{hash_it(&a)}"
+end

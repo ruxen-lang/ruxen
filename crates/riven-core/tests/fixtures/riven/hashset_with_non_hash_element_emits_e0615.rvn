@@ -1,0 +1,3 @@
+def main
+  var s: Set[Array[Int]] = Set.new
+end

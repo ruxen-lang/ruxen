@@ -1,0 +1,8 @@
+def main
+  var a: Set[Int] = Set.new
+  var b: Set[Int] = Set.new
+  a.insert(1)
+  b.insert(1)
+  let c: Bool = a == b
+  puts "#{c}"
+end

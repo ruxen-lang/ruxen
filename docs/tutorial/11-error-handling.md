@@ -10,7 +10,7 @@ Functions that can fail return `Result`:
 def parse_number(input: &str) -> Result[Int, String]
   match input.trim.parse_int
     Ok(n)  -> Ok(n)
-    Err(_) -> Err(String.new("not a number: #{input}"))
+    Err(_) -> Err(String.from("not a number: #{input}"))
   end
 end
 ```
@@ -134,7 +134,7 @@ end
 
 # Now ? automatically converts IoError to AppError
 def load(path: &str) -> Result[String, AppError]
-  File.read_string(path)?    # IoError converted to AppError
+  fs.read_to_string(path)?    # IoError converted to AppError
 end
 ```
 

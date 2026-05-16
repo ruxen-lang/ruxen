@@ -332,7 +332,7 @@ pub fn lookup_keyword(ident: &str) -> Option<TokenKind> {
     match ident {
         // Variable & Binding
         "let" => Some(TokenKind::Let),
-        "mut" => Some(TokenKind::Mut),
+        // `mut` removed — use `var` for every writable position.
         "move" => Some(TokenKind::Move),
         "ref" => Some(TokenKind::Ref),
         "var" => Some(TokenKind::Var),

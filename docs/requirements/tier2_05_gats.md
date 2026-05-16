@@ -17,7 +17,7 @@ canonical example:
 ```riven
 mixin LendingIterator
   type Item[a]
-  def mut next[a](self: &a mut Self) -> Option[Self.Item[a]]
+  def var next[a](self: &a var Self) -> Option[Self.Item[a]]
 end
 ```
 
@@ -28,7 +28,7 @@ A class body for `WindowIter` over a slice:
 class WindowIter[Int]
   include LendingIterator
   type Item[a] = &a [Int]
-  def mut next[a](self: &a mut Self) -> Option[&a [Int]] ...
+  def var next[a](self: &a var Self) -> Option[&a [Int]] ...
 end
 ```
 
@@ -46,7 +46,7 @@ class body would have to promote items to owned types.
    an input buffer — cannot be expressed as `Iterator[Item = &Str]`
    with a fixed lifetime.
 3. **Cursor-like APIs.** `Array.chunks_mut[N]` returns a lending
-   iterator of `&mut [T; N]`.
+   iterator of `&var [T; N]`.
 4. **Async iteration.** `async fn next` on a stream is an associated
    type generic over the output future (blocks tier-1 async doc 03).
 
@@ -104,7 +104,7 @@ extend every part with a generic-args slot.
 ```riven
 mixin LendingIterator
   type Item[a]
-  def mut next[a](self: &a mut Self) -> Option[Self.Item[a]]
+  def var next[a](self: &a var Self) -> Option[Self.Item[a]]
 end
 
 mixin Collection
@@ -137,7 +137,7 @@ class WindowIter[T]
 
   include LendingIterator
   type Item[a] = &a [T]
-  def mut next[a](self: &a mut Self) -> Option[&a [T]]
+  def var next[a](self: &a var Self) -> Option[&a [T]]
     if self.pos + self.width > self.data.len
       return nil
     end
@@ -159,12 +159,12 @@ Rules:
 ### 4.3 Use-site projection
 
 ```riven
-def first_window[a, T](w: &a mut WindowIter[T]) -> Option[&a [T]]
+def first_window[a, T](w: &a var WindowIter[T]) -> Option[&a [T]]
   w.next()
 end
 
-def print_windows[W: LendingIterator](w: &mut W)
-  where for[a] W.Item[a]: Displayable
+def print_windows[W: LendingIterator](w: &var W)
+  where for[a] W.Item[a]: Display
   while let Some(item) = w.next
     puts item.to_display
   end
@@ -244,9 +244,9 @@ AssocBinding {
 
 - For `Ty::Projection { base, trait_name, assoc_name, generic_args }`:
   - Resolve `base`.
-  - Find the impl.
+  - Find the extension.
   - Look up `assoc_bindings[assoc_name]`.
-  - Substitute the impl's generic args into the binding's `ty`.
+  - Substitute the extension's generic args into the binding's `ty`.
   - *Substitute the projection's `generic_args` into the binding's
     `generic_params`.*
   - Normalize recursively.
@@ -257,9 +257,9 @@ The associated type's lifetime parameter unifies with the function-
 parameter lifetime at the call site. Example:
 
 ```
-w.next                              # W is a &mut WindowIter[Int]
+w.next                              # W is a &var WindowIter[Int]
   ^^^^
-  // self.next[l0](self: &l0 mut W)
+  // self.next[l0](self: &l0 var W)
   // returns Option[W.Item[l0]]
   // which normalizes via the class body to
   // Option[&l0 [Int]]
@@ -300,7 +300,7 @@ compiled body does not "know" the GAT exists.
 1. Parser: accept `[...]` on mixin and class-body `type` items.
 2. Resolver: walk into AssocTypeDecl / AssocBinding with generics.
 3. HIR: extend `Ty::Projection`.
-4. Normalization: substitute both the base impl's generics and the
+4. Normalization: substitute both the base extension's generics and the
    projection's generics.
 
 **Phase 05b — use-site solving (2 weeks, depends on 03b — HRTBs).**
@@ -343,7 +343,7 @@ gibberish. Doc 06 §4 item 5 enforces this.
 ### 7.4 With variance (doc 07)
 
 GAT parameters have variance of their own. `type Item[a] = &a T`
-is covariant in `a`. `type Item[a] = &a mut T` is invariant.
+is covariant in `a`. `type Item[a] = &a var T` is invariant.
 Variance inference (doc 07 §6) treats each GAT parameter as an
 extra column in the variance table.
 

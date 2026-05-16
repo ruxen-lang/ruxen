@@ -182,8 +182,14 @@ pub fn format_func_def(func: &FuncDef, comments: &CommentMap) -> Doc {
     let mut sig_parts = Vec::new();
 
     // Visibility
+    // TODO(migration): per-def `pub`/`protected`/`private` prefixes are not
+    // valid Riven surface syntax (§3.2). Visibility lives in section markers
+    // (`private` / `protected` / `public`) inside the type body. Formatter
+    // needs to be reworked to emit section markers instead of per-method
+    // keywords. For now, emit nothing for Public (which is the default) and
+    // emit the legacy keyword for Protected/Private so we round-trip.
     match func.visibility {
-        Visibility::Public => sig_parts.push(text("pub ")),
+        Visibility::Public => {}
         Visibility::Protected => sig_parts.push(text("protected ")),
         Visibility::Private => {}
     }
@@ -193,7 +199,7 @@ pub fn format_func_def(func: &FuncDef, comments: &CommentMap) -> Doc {
     // Self mode
     if let Some(self_mode) = &func.self_mode {
         match self_mode {
-            SelfMode::Mutable => sig_parts.push(text("mut ")),
+            SelfMode::Mutable => sig_parts.push(text("var ")),
             SelfMode::Consuming => sig_parts.push(text("consume ")),
             SelfMode::Immutable => {}
         }
@@ -542,7 +548,7 @@ fn format_variant(variant: &Variant, comments: &CommentMap) -> Doc {
 // ─── Traits ─────────────────────────────────────────────────────────
 
 fn format_trait(t: &MixinDef, comments: &CommentMap) -> Doc {
-    let mut header = vec![text("trait "), text(t.name.clone())];
+    let mut header = vec![text("mixin "), text(t.name.clone())];
 
     if let Some(gp) = &t.generic_params {
         header.push(format_generic_params(gp));
@@ -582,7 +588,7 @@ fn format_method_sig(sig: &MethodSig, comments: &CommentMap) -> Doc {
     // Self mode
     if let Some(self_mode) = &sig.self_mode {
         match self_mode {
-            SelfMode::Mutable => parts.push(text("mut ")),
+            SelfMode::Mutable => parts.push(text("var ")),
             SelfMode::Consuming => parts.push(text("consume ")),
             SelfMode::Immutable => {}
         }
@@ -618,6 +624,15 @@ fn format_method_sig(sig: &MethodSig, comments: &CommentMap) -> Doc {
 }
 
 // ─── Impl Blocks ────────────────────────────────────────────────────
+//
+// TODO(migration): the `impl Trait for Type ... end` block form is retired
+// (§10a). `impl T for U` should now be expressed as `include T` inside `U`'s
+// body, and `impl[T: B] C[T] ... end` becomes `extension C[T] where T: B`.
+// The AST still uses `ImplBlock`/`InnerImpl` nodes for backward parsing
+// while the migration is in flight; this formatter therefore still emits
+// the legacy `impl ... end` keyword spelling so it round-trips. When the
+// parser stops accepting `impl`, this function should be rewritten to emit
+// `include` / `extension` blocks.
 
 fn format_impl(imp: &ImplBlock, comments: &CommentMap) -> Doc {
     let mut header = vec![text("impl ")];
@@ -837,6 +852,12 @@ fn format_lib(l: &LibDecl, comments: &CommentMap) -> Doc {
     ])
 }
 
+// TODO(migration): the `extern "C" ... end` block is retired (§10a, §3.7).
+// The replacement is `lib "<linkname>" ... end`. The AST still distinguishes
+// `Lib` and `Extern` variants during the transition; once `Extern` parsing is
+// removed, this function and the `ExternBlock` AST node should be deleted.
+// Until then we emit the legacy form so a parse → format → parse round-trip
+// on an `extern` block doesn't silently change semantics.
 fn format_extern(e: &ExternBlock, comments: &CommentMap) -> Doc {
     let mut body_parts: Vec<Doc> = Vec::new();
 

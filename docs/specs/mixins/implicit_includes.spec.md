@@ -1,98 +1,131 @@
-# Spec — `derive <Trait>` (compiler-generated impls)
+# Spec — Implicit includes (structural mixins)
 
 **Source docs:**
-[docs/requirements/tier1_05_implicit_includes.md](../../requirements/tier1_05_implicit_includes.md).
+[docs/requirements/tier1_05_implicit_includes.md](../../requirements/tier1_05_implicit_includes.md),
+canonical surface-syntax §3.6
+([ruby-naming.spec.md](../syntax/ruby-naming.spec.md)).
 
 **Status:** shipped Phase 2 #C1-#C2 (Debug for struct + enum) + extended
-derives Phase 2 #C3-#C4 (Clone, PartialEq, Eq, Hash, Default, Ord,
-PartialOrd, Copy).
+implicit includes Phase 2 #C3-#C4 (Clone, PartialEq, Eq, Hashable,
+Default, Ord, PartialOrd, Copy).
 
-`derive <Trait>` on a `struct`, `class`, or `enum` synthesises a
-compiler-generated trait implementation that mirrors the type's field
-or variant shape.
+For the fixed set of **structural mixins** listed in §3.6 of the
+canonical surface-syntax spec, the compiler treats the `include`
+directive as implicit when the type's fields structurally support
+the mixin.  The user may write `include Debug, Clone, Eq, Hashable`
+explicitly as the "loud form" — implicit and explicit lower to the
+same compiler-generated method body.
+
+`Send` and `Sync` are auto-mixins handled by the same field-rule;
+they are never written explicitly with `include` in ordinary code.
+Users opt out via `exclude Send` / `exclude Sync` in the body, or
+opt in for inference-incompatible structures via
+`unsafe include Send` / `unsafe include Sync` (the only legal use
+of `unsafe include`).
 
 ---
 
-## B1 — `derive Debug` on a struct prints named-field shape
+## B1 — Implicit `Debug` on a struct prints named-field shape
 
-**Given** `struct Point` with fields `x: Int, y: Int` and `derive Debug`
+**Given** `struct Point` with fields `x: Int, y: Int` (no explicit
+`include Debug`)
 **When** the program evaluates `"#{p:?}"` for `p = Point { x: 1, y: 2 }`
 **Then** the result is `"Point { x: 1, y: 2 }"`.
 
-## B2 — `derive Debug` on a unit-variant enum prints variant name
+## B2 — Implicit `Debug` on a unit-variant enum prints variant name
 
-**Given** `enum Color { Red, Green, Blue }` with `derive Debug` and
-`let c = Color::Red`
+**Given** `enum Color` with variants `Red`, `Green`, `Blue` and
+`let c = Color.Red`
 **Then** `"#{c:?}"` yields `"Red"`.
 
-## B3 — `derive Debug` on an enum named-field variant prints braces
+## B3 — Implicit `Debug` on an enum named-field variant prints braces
 
-**Given** an enum variant `Move { x: Int, y: Int }` with `derive Debug`
+**Given** an enum variant `Move { x: Int, y: Int }`
 **Then** the Debug output is `"Move { x: 1, y: 2 }"`.
 
 ## B4 — Explicit `:?` spec dispatches through Debug
 
-**Given** any `derive Debug` type and a spec with `?`
+**Given** any type whose fields support `Debug` (implicit) and a
+format spec with `?`
 **Then** `lower_interpolation` routes through `{Name}_to_debug`
 (rather than the Display path).
 
-## B5 — `derive Clone` synthesises `clone() -> Self`
+## B5 — Implicit `Clone` synthesises `clone() -> Self`
 
 Both primitive-only structs and structs containing `String` /
-nested-derive-Clone fields produce a deep copy.  Class types and
-enums work identically.
+nested-Clone fields produce a deep copy.  Class types and enums
+work identically — when every field is `Clone`, the compiler
+synthesises a `clone` body.
 
-## B6 — `derive PartialEq` synthesises field-wise `==`
+## B6 — Implicit `PartialEq` synthesises field-wise `==`
 
 Two values of the same struct / enum type compare equal iff every
 field / payload is pairwise `==`.
 
-## B7 — `derive Eq` requires `PartialEq` on every field
+## B7 — Implicit `Eq` requires `PartialEq` on every field
 
-Marker trait — no synthesised methods, but typeck rejects an `Eq`
-derive if any field type does not also satisfy `Eq`.
+Marker mixin — no synthesised methods, but typeck rejects an
+explicit `include Eq` if any field type does not also satisfy `Eq`,
+and an implicit `Eq` is suppressed when the rule fails.
 
-## B8 — `derive Hash` synthesises a `Hash` impl
+## B8 — Implicit `Hashable` synthesises a hash body
 
-Allows the type to be used as `HashMap` / `HashSet` key.
+Allows the type to be used as a `Map` / `Set` key.  FNV mixer over
+fields in source order.
 
-## B9 — `derive Default` synthesises `T::default()` static method
+## B9 — Implicit `Default` synthesises `Type.default()` class method
 
 Each field is initialised to its type's `Default`.  Empty enums
-are rejected (`E0616`).
+are rejected (`E0616`) when an explicit `include Default` is
+written; implicit `Default` is simply not synthesised for an
+empty enum.
 
-## B10 — `derive Ord` and `derive PartialOrd` synthesise comparators
+## B10 — Implicit `Ord` and `PartialOrd` synthesise comparators
 
-Field-wise lexicographic ordering matching Rust's derive semantics.
+Field-wise lexicographic ordering in source declaration order.
 
-## B11 — `derive Copy` marker
+## B11 — Implicit `Copy` marker
 
-`derive Copy` (with `Clone`) makes the type bitwise-copyable; the
-borrow checker stops emitting move-out diagnostics.
+A `struct` whose every field is `Copy` implicitly includes `Copy`,
+making the type bitwise-copyable; the borrow checker stops emitting
+move-out diagnostics.  A `class` never implicitly includes `Copy`
+(reference semantics).
 
-## B12 — Derive-validation negative diagnostics
+## B12 — Explicit-include validation negative diagnostics
 
-| Code   | Rejection                                              |
-|--------|--------------------------------------------------------|
-| E0607  | `derive` on an invalid target (e.g. a `def`, `use`)    |
-| E0610  | `derive Clone` on struct with non-Clone field          |
-| E0611  | `derive Clone` on enum with non-Clone payload          |
-| E0613  | `derive PartialEq` on struct with non-Eq field         |
-| E0615  | `derive Hash` on struct with non-Hash field            |
-| E0616  | `derive Default` on empty enum                         |
-| E0617  | `derive Ord` on struct with non-Ord field              |
-| E0618  | `derive PartialOrd` on struct with non-PartialOrd field |
+The validation diagnostics fire at the include site for the explicit
+("loud form") `include D1, D2` directive.  With implicit-only, the
+equivalent diagnostic fires at the use site (later, but still caught
+at compile time).
 
-## B13 — Generated impls dispatch through trait bounds
+| Code   | Rejection                                                |
+|--------|----------------------------------------------------------|
+| E0607  | `include` on an invalid target (e.g. a `def`, `use`)     |
+| E0610  | `include Clone` on struct with non-Clone field           |
+| E0611  | `include Clone` on enum with non-Clone payload           |
+| E0613  | `include PartialEq` on struct with non-Eq field          |
+| E0615  | `include Hashable` on struct with non-Hashable field     |
+| E0616  | `include Default` on empty enum                          |
+| E0617  | `include Ord` on struct with non-Ord field               |
+| E0618  | `include PartialOrd` on struct with non-PartialOrd field |
 
-Generic code constrained by `T: Ord` / `T: Hash` / `T: Clone` /
-`T: PartialEq` etc. resolves correctly when called with a
-derive-generated type.
+## B13 — Generated impls dispatch through mixin bounds
 
-## B14 — `derive Default` emits a concrete static method
+Generic code constrained by `T: Ord` / `T: Hashable` / `T: Clone` /
+`T: PartialEq` etc. resolves correctly when called with a type
+that picks up the mixin implicitly.
 
-`T::default()` is callable directly without trait-object machinery
+## B14 — Implicit `Default` emits a concrete class-level method
+
+`Type.default()` is callable directly without `any`-mixin machinery
 (matches Rust's "associated function" emission).
+
+## B15 — User override wins over implicit body
+
+If the class body defines a method whose name matches an
+implicit-include's synthesised body (e.g. a user-written
+`def to_debug -> String`), the user definition wins; the implicit
+include does not provide a duplicate body.
 
 ---
 
@@ -127,11 +160,13 @@ derive-generated type.
 Error-code registry is itself pin-tested by
 `error_code_registry.rs::e0610_through_e0618_derive_codes_are_registered`.
 
+<!-- TODO(migration): pin-test fn names still mention `derive_*` and the error-code registry constant names still mention `derive_codes`. These are internal Rust identifiers; rename when the spec author confirms it is in scope. -->
+
 ---
 
 ## Out of scope (v2)
 
-- User-extensible `derive` macros (`derive(MyTrait)`).  v1 has a
-  fixed allow-list of built-in derives.
-- `derive Display` (always user-written for now).
-- Multi-line / pretty Debug output (`{:#?}` syntax).
+- User-extensible implicit-include rules.  v1 has the fixed
+  allow-list of structural mixins (§3.6).
+- Implicit `Display` (always user-written for now).
+- Multi-line / pretty Debug output (`"#{value:#?}"` syntax).

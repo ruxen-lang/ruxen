@@ -119,13 +119,13 @@ pub fn format_type(ty: &Ty) -> String {
         Ty::Never => "Never".to_string(),
         Ty::String => "String".to_string(),
         Ty::Str => "&str".to_string(),
-        Ty::Array(inner) => format!("Vec[{}]", format_type(inner)),
-        Ty::Map(k, v) => format!("HashMap[{}, {}]", format_type(k), format_type(v)),
+        Ty::Array(inner) => format!("Array[{}]", format_type(inner)),
+        Ty::Map(k, v) => format!("Map[{}, {}]", format_type(k), format_type(v)),
         Ty::Set(inner) => format!("Set[{}]", format_type(inner)),
         Ty::Option(inner) => format!("Option[{}]", format_type(inner)),
         Ty::Result(ok, err) => format!("Result[{}, {}]", format_type(ok), format_type(err)),
         Ty::Ref(inner) => format!("&{}", format_type(inner)),
-        Ty::RefMut(inner) => format!("&mut {}", format_type(inner)),
+        Ty::RefMut(inner) => format!("&var {}", format_type(inner)),
         Ty::Tuple(elems) => {
             let parts: Vec<String> = elems.iter().map(format_type).collect();
             format!("({})", parts.join(", "))
@@ -253,10 +253,10 @@ mod tests {
 
     #[test]
     fn format_type_composite() {
-        assert_eq!(format_type(&Ty::Array(Box::new(Ty::Int))), "Vec[Int]");
+        assert_eq!(format_type(&Ty::Array(Box::new(Ty::Int))), "Array[Int]");
         assert_eq!(
             format_type(&Ty::Map(Box::new(Ty::String), Box::new(Ty::Int))),
-            "HashMap[String, Int]",
+            "Map[String, Int]",
         );
         assert_eq!(format_type(&Ty::Set(Box::new(Ty::Bool))), "Set[Bool]");
         assert_eq!(format_type(&Ty::Option(Box::new(Ty::Int))), "Option[Int]");
@@ -269,7 +269,7 @@ mod tests {
     #[test]
     fn format_type_references() {
         assert_eq!(format_type(&Ty::Ref(Box::new(Ty::Int))), "&Int");
-        assert_eq!(format_type(&Ty::RefMut(Box::new(Ty::Bool))), "&mut Bool");
+        assert_eq!(format_type(&Ty::RefMut(Box::new(Ty::Bool))), "&var Bool");
     }
 
     #[test]
@@ -399,9 +399,10 @@ mod tests {
 
     #[test]
     fn format_value_composite_nonzero_shows_pointer() {
+        // ruby-naming.spec.md §10a: `Vec[T]` → `Array[T]`.
         let ty = Ty::Array(Box::new(Ty::Int));
         let out = format_value(0x1234, &ty);
-        assert!(out.contains("Vec[Int]"), "got {:?}", out);
+        assert!(out.contains("Array[Int]"), "got {:?}", out);
         assert!(out.contains("0x1234"), "got {:?}", out);
     }
 

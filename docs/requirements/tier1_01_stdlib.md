@@ -42,7 +42,7 @@ The internal `Ty` enum already knows about all the prelude type forms. Today its
 `Resolver::register_builtins` (lines 97-343) registers:
 
 - 18 primitive type aliases (`Int`, `Int8`, ..., `Float`, `Bool`, `Char`, `String`) at 99-118.
-- 10 built-in mixins (`Displayable`, `Error`, `Comparable`, `Hashable`, `Iterable`, `Iterator`, `FromIterator`, `Copy`, `Clone`, `Debug`, `Drop`) at 139-151. All of them have zero generic params in their internal info record and only list required method names as strings — the method signatures are not registered, which is why the typechecker falls back to structural matching in `traits.rs:106-125`.
+- 10 built-in mixins (`Display`, `Error`, `Ord`, `Hashable`, `Iterator`, `Iterator`, `FromIterator`, `Copy`, `Clone`, `Debug`, `Drop`) at 139-151. All of them have zero generic params in their internal info record and only list required method names as strings — the method signatures are not registered, which is why the typechecker falls back to structural matching in `traits.rs:106-125`.
 - 3 built-in top-level functions (`puts`, `eputs`, `print`) at 173-195.
 - 4 built-in type constructors (`Array`, `Map`, `Set`, `String`) at 198-215, registered as `DefKind::Variable` so that `Array.new` resolves.
 - `Option`/`Result` enums with `Some`/`nil`/`Ok`/`Err` variants (221-325).
@@ -123,9 +123,9 @@ class Stdin
 end
 
 class Stdout
-  def write(&mut self, bytes: &[UInt8]) -> Result[USize, IoError]
-  def write_str(&mut self, s: &str)   -> Result[(), IoError]
-  def flush(&mut self)                 -> Result[(), IoError]
+  def write(&var self, bytes: &[UInt8]) -> Result[USize, IoError]
+  def write_str(&var self, s: &str)   -> Result[(), IoError]
+  def flush(&var self)                 -> Result[(), IoError]
 end
 
 class Stderr  # same surface as Stdout
@@ -167,11 +167,11 @@ def read_dir(path: &some AsRef[Path]) -> Result[ReadDir, IoError]   # Iterator[D
 class File
   def self.open(path: &some AsRef[Path])   -> Result[File, IoError]
   def self.create(path: &some AsRef[Path]) -> Result[File, IoError]
-  def read(&mut self, buf: &mut [UInt8])   -> Result[USize, IoError]
-  def read_to_string(&mut self, buf: &mut String) -> Result[USize, IoError]
-  def read_to_end(&mut self, buf: &mut Array[UInt8]) -> Result[USize, IoError]
-  def write(&mut self, bytes: &[UInt8])    -> Result[USize, IoError]
-  def flush(&mut self)                      -> Result[(), IoError]
+  def read(&var self, buf: &var [UInt8])   -> Result[USize, IoError]
+  def read_to_string(&var self, buf: &var String) -> Result[USize, IoError]
+  def read_to_end(&var self, buf: &var Array[UInt8]) -> Result[USize, IoError]
+  def write(&var self, bytes: &[UInt8])    -> Result[USize, IoError]
+  def flush(&var self)                      -> Result[(), IoError]
   def sync(&self)                           -> Result[(), IoError]
   def metadata(&self)                       -> Result[Metadata, IoError]
 end
@@ -193,16 +193,16 @@ use std.net
 
 class TcpStream
   def self.connect(addr: &str) -> Result[TcpStream, IoError]
-  def read(&mut self, buf: &mut [UInt8]) -> Result[USize, IoError]
-  def write(&mut self, buf: &[UInt8])    -> Result[USize, IoError]
+  def read(&var self, buf: &var [UInt8]) -> Result[USize, IoError]
+  def write(&var self, buf: &[UInt8])    -> Result[USize, IoError]
   def shutdown(&self)                     -> Result[(), IoError]
   def peer_addr(&self)                    -> Result[String, IoError]
 end
 
 class TcpListener
   def self.bind(addr: &str)               -> Result[TcpListener, IoError]
-  def accept(&mut self)                    -> Result[TcpStream, IoError]
-  def incoming(&mut self)                  -> Incoming     # Iterator[Result[TcpStream, IoError]]
+  def accept(&var self)                    -> Result[TcpStream, IoError]
+  def incoming(&var self)                  -> Incoming     # Iterator[Result[TcpStream, IoError]]
 end
 ```
 
@@ -308,7 +308,7 @@ end
 
 class Child
   def wait(self) -> Result[ExitStatus, IoError]
-  def kill(&mut self) -> Result[(), IoError]
+  def kill(&var self) -> Result[(), IoError]
   def id(&self) -> UInt32
 end
 ```
@@ -322,16 +322,16 @@ This module is *definitional* — it publishes the traits and types that format 
 ```riven
 module std.fmt
   mixin Display
-    def fmt(&self, f: &mut Formatter) -> Result[(), FmtError]
+    def fmt(&self, f: &var Formatter) -> Result[(), FmtError]
   end
 
   mixin Debug
-    def fmt(&self, f: &mut Formatter) -> Result[(), FmtError]
+    def fmt(&self, f: &var Formatter) -> Result[(), FmtError]
   end
 
   class Formatter
-    def write_str(&mut self, s: &str) -> Result[(), FmtError]
-    def write_char(&mut self, c: Char) -> Result[(), FmtError]
+    def write_str(&var self, s: &str) -> Result[(), FmtError]
+    def write_char(&var self, c: Char) -> Result[(), FmtError]
     # width/precision/fill knobs:
     def width(&self) -> Option[USize]
     def precision(&self) -> Option[USize]
@@ -378,9 +378,9 @@ end
 struct PathBuf       # owned, heap-allocated
   def self.new                 -> PathBuf
   def self.from(s: String)     -> PathBuf
-  def mut push(p: &some AsRef[Path])
-  def mut pop -> Bool
-  def mut set_extension(ext: &str) -> Bool
+  def var push(p: &some AsRef[Path])
+  def var pop -> Bool
+  def var set_extension(ext: &str) -> Bool
   def as_path(&self) -> &Path
 
   include AsRef[Path]
@@ -403,21 +403,21 @@ Defines the `Hashable` *mixin* (for hashable keys) separately from the `Map[K, V
 ```riven
 module std.hash
   mixin Hasher
-    def mut write(bytes: &[UInt8])
-    def mut write_u64(n: UInt64)
+    def var write(bytes: &[UInt8])
+    def var write_u64(n: UInt64)
     def finish(&self) -> UInt64
   end
 
   mixin Hashable
-    def hash[H: Hasher](&self, state: &mut H)
+    def hash[H: Hasher](&self, state: &var H)
   end
 
   class DefaultHasher       # SipHash-1-3 or similar; seeded per-process
     def self.new -> DefaultHasher
 
     include Hasher
-    def mut write(bytes: &[UInt8])   # ...body...
-    def mut write_u64(n: UInt64)     # ...body...
+    def var write(bytes: &[UInt8])   # ...body...
+    def var write_u64(n: UInt64)     # ...body...
     def finish(&self) -> UInt64      # ...body...
   end
 
@@ -452,17 +452,17 @@ This is the "one blend per method" table the project lead asked for. The "Ruby/R
 |---|---|---|---|---|
 | `self.new` | `-> Array[T]` | `Vec::new` | `Array.new` | P3 one obvious constructor |
 | `self.with_capacity` | `(cap: USize) -> Array[T]` | `Vec::with_capacity` | — | perf escape hatch |
-| `push` | `(&mut self, item: T)` | `push` | `push` | identical name both sides |
-| `pop` | `(&mut self) -> Option[T]` | `pop` | `pop` (returns `nil`) | Option is the Riven convention |
+| `push` | `(&var self, item: T)` | `push` | `push` | identical name both sides |
+| `pop` | `(&var self) -> Option[T]` | `pop` | `pop` (returns `nil`) | Option is the Riven convention |
 | `len` | `(&self) -> USize` | `len` | `length`/`size` | Rust wins — shorter; P3 |
 | `is_empty` | `(&self) -> Bool` | `is_empty` | `empty?` | Rust name; `?` is reserved for try (tension 4) |
-| `clear` | `(&mut self)` | `clear` | `clear` | same |
+| `clear` | `(&var self)` | `clear` | `clear` | same |
 | `get` | `(&self, i: USize) -> Option[&T]` | `get` | `[]` (panics) | `.get` always safe; `[i]` panics (P1 loud danger) |
-| `get_mut` | `(&mut self, i: USize) -> Option[&mut T]` | `get_mut` | — | mutability explicit |
+| `get_mut` | `(&var self, i: USize) -> Option[&var T]` | `get_mut` | — | mutability explicit |
 | `first` / `last` | `(&self) -> Option[&T]` | `first`/`last` | `first`/`last` | same |
 | `contains` | `(&self, x: &T) -> Bool` where `T: Eq` | `contains` | `include?` | Rust name |
 | `iter` | `(&self) -> Iter[T]` | `iter` | `each` | `each` is the block form; `iter` returns a value |
-| `iter_mut` | `(&mut self) -> IterMut[T]` | `iter_mut` | — | needed for ownership correctness |
+| `iter_var` | `(&var self) -> IterMut[T]` | `iter_var` | — | needed for ownership correctness |
 | `into_iter` | `(self) -> IntoIter[T]` | `into_iter` | — | moves |
 | `each` | `(&self, f: Fn(&T))` *or* `(&self) do \|x\| … end` | — | `each` | Ruby block form coexists with iter |
 | `map` | `[U](&self, f: Fn(&T) -> U) -> Array[U]` | `iter().map().collect()` | `map` | single call, no `.collect` (P3) |
@@ -476,16 +476,16 @@ This is the "one blend per method" table the project lead asked for. The "Ruby/R
 | `fold` | `[B](&self, init: B, f: Fn(B, &T) -> B) -> B` | `fold` | `inject`/`reduce` | Rust name (tension 4: explicit over implicit) |
 | `sum` | `(&self) -> T` where `T: Add` | `sum` | `sum` | same |
 | `min` / `max` | `(&self) -> Option[&T]` where `T: Ord` | `min`/`max` | `min`/`max` | same |
-| `sort` | `(&mut self)` where `T: Ord` | `sort` | `sort!` | we always mutate Array in place, no copying variant |
-| `sort_by` | `(&mut self, f: Fn(&T, &T) -> Ordering)` | `sort_by` | `sort` with block | same |
-| `reverse` | `(&mut self)` | `reverse` | `reverse!` | in place |
+| `sort` | `(&var self)` where `T: Ord` | `sort` | `sort!` | we always mutate Array in place, no copying variant |
+| `sort_by` | `(&var self, f: Fn(&T, &T) -> Ordering)` | `sort_by` | `sort` with block | same |
+| `reverse` | `(&var self)` | `reverse` | `reverse!` | in place |
 | `join` | `(&self, sep: &str) -> String` where `T: Display` | `join` (on `&[&str]` only) | `join` | Ruby wins — works on any `Display` |
 | `partition` | `(&self, f: Fn(&T) -> Bool) -> (Array[T], Array[T])` | `partition` | `partition` | same |
 | `enumerate` | `(&self) -> Enumerate[Iter[T]]` | `enumerate` | `each_with_index` | Rust wins — shorter |
 | `zip` | `[U](&self, other: &Array[U]) -> Zip` | `zip` | `zip` | same |
 | `chunks` | `(&self, n: USize) -> Chunks[T]` | `chunks` | `each_slice` | Rust wins |
-| `extend` | `[I: IntoIterator[Item=T]](&mut self, xs: I)` | `extend` | `concat` | Rust name |
-| `drain` | `(&mut self) -> Drain[T]` | `drain` | — | ownership-transfer iteration |
+| `extend` | `[I: IntoIterator[Item=T]](&var self, xs: I)` | `extend` | `concat` | Rust name |
+| `drain` | `(&var self) -> Drain[T]` | `drain` | — | ownership-transfer iteration |
 | `clone` | `(&self) -> Array[T]` where `T: Clone` | `clone` | `dup` | Rust name |
 | `to_vec` | `(&self) -> Array[T]` where `T: Clone` | `to_vec` | — | needed for iterator pipelines (already in codegen) |
 
@@ -499,19 +499,19 @@ Requires `K: Hashable + Eq`.
 |---|---|---|
 | `self.new` | `-> Map[K, V]` | ctor |
 | `self.with_capacity` | `(cap: USize) -> Map[K, V]` | perf |
-| `insert` | `(&mut self, k: K, v: V) -> Option[V]` | returns displaced value |
+| `insert` | `(&var self, k: K, v: V) -> Option[V]` | returns displaced value |
 | `get` | `(&self, k: &K) -> Option[&V]` | safe lookup |
-| `get_mut` | `(&mut self, k: &K) -> Option[&mut V]` | mutable lookup |
-| `remove` | `(&mut self, k: &K) -> Option[V]` | returns removed |
+| `get_mut` | `(&var self, k: &K) -> Option[&var V]` | mutable lookup |
+| `remove` | `(&var self, k: &K) -> Option[V]` | returns removed |
 | `contains_key` | `(&self, k: &K) -> Bool` | tutorial 13 uses this spelling |
 | `len` / `is_empty` | as `Array` | |
-| `clear` | `(&mut self)` | |
+| `clear` | `(&var self)` | |
 | `keys` | `(&self) -> Keys[K, V]` | iterator over &K |
 | `values` | `(&self) -> Values[K, V]` | iterator over &V |
-| `values_mut` | `(&mut self) -> ValuesMut[K, V]` | |
+| `values_mut` | `(&var self) -> ValuesMut[K, V]` | |
 | `iter` | `(&self) -> Iter[K, V]` yielding `(&K, &V)` | |
 | `each` | `(&self) do \|k, v\| … end` | Ruby block form |
-| `entry` | `(&mut self, k: K) -> Entry[K, V]` | `or_insert` / `or_insert_with` API |
+| `entry` | `(&var self, k: K) -> Entry[K, V]` | `or_insert` / `or_insert_with` API |
 | `h[k]` | indexing panics if missing (tutorial 13) | P1 |
 
 ### 5.3 `Set[T]`
@@ -519,9 +519,9 @@ Requires `K: Hashable + Eq`.
 | Method | Signature |
 |---|---|
 | `self.new` | `-> Set[T]` |
-| `insert` | `(&mut self, x: T) -> Bool` (true iff newly inserted) |
+| `insert` | `(&var self, x: T) -> Bool` (true iff newly inserted) |
 | `contains` | `(&self, x: &T) -> Bool` |
-| `remove` | `(&mut self, x: &T) -> Bool` |
+| `remove` | `(&var self, x: &T) -> Bool` |
 | `len` / `is_empty` / `clear` | |
 | `iter` | `(&self) -> Iter[T]` |
 | `each` | `(&self) do \|x\| … end` |
@@ -544,9 +544,9 @@ Requires `K: Hashable + Eq`.
 | `ok_or` | `[E](self, err: E) -> Result[T, E]` | |
 | `ok_or_else` | `[E](self, f: Fn() -> E) -> Result[T, E]` | |
 | `as_ref` | `(&self) -> Option[&T]` | |
-| `as_mut` | `(&mut self) -> Option[&mut T]` | |
-| `take` | `(&mut self) -> Option[T]` | leaves `nil` behind |
-| `replace` | `(&mut self, v: T) -> Option[T]` | |
+| `as_mut` | `(&var self) -> Option[&var T]` | |
+| `take` | `(&var self) -> Option[T]` | leaves `nil` behind |
+| `replace` | `(&var self, v: T) -> Option[T]` | |
 | `filter` | `(self, f: Fn(&T) -> Bool) -> Option[T]` | |
 | `try_op` | desugar target for `?` | already wired |
 
@@ -577,14 +577,14 @@ Requires `K: Hashable + Eq`.
 | `self.from(s: &str)` | `-> String` | — | |
 | `len` | `(&self) -> USize` | same | byte length |
 | `is_empty` | `(&self) -> Bool` | same | |
-| `clear` | `(&mut self)` | — | |
-| `push` | `(&mut self, c: Char)` | — | |
-| `push_str` | `(&mut self, s: &str)` | — | |
-| `pop` | `(&mut self) -> Option[Char]` | — | |
-| `insert` | `(&mut self, i: USize, c: Char)` | — | byte index; panics if not on char boundary |
-| `insert_str` | `(&mut self, i: USize, s: &str)` | — | |
-| `remove` | `(&mut self, i: USize) -> Char` | — | |
-| `truncate` | `(&mut self, n: USize)` | — | |
+| `clear` | `(&var self)` | — | |
+| `push` | `(&var self, c: Char)` | — | |
+| `push_str` | `(&var self, s: &str)` | — | |
+| `pop` | `(&var self) -> Option[Char]` | — | |
+| `insert` | `(&var self, i: USize, c: Char)` | — | byte index; panics if not on char boundary |
+| `insert_str` | `(&var self, i: USize, s: &str)` | — | |
+| `remove` | `(&var self, i: USize) -> Char` | — | |
+| `truncate` | `(&var self, n: USize)` | — | |
 | `capacity` | `(&self) -> USize` | — | |
 | `chars` | `(&self) -> Chars` | same | iterator over `Char` — UTF-8 decode (v1 may fall back to byte iteration; see §9) |
 | `bytes` | `(&self) -> Bytes` | same | iterator over `UInt8` |
@@ -636,7 +636,7 @@ Backed by `libm` (already linked via `-lm` in `codegen/object.rs:70`).
 ```riven
 mixin Iterator
   type Item
-  def mut next -> Option[Self.Item]
+  def var next -> Option[Self.Item]
 
   # Default methods — all of §5.1's iterator combinators live here
   def consume map[B](f: Fn(Self.Item) -> B) -> Map[Self, B]   where Self: Sized
@@ -814,7 +814,7 @@ Alternative considered: replacing `runtime.c` with a `libriven_std.a` Rust crate
 
 ### 7.3 Typechecker deltas (`typeck/infer.rs`, `resolve/mod.rs`)
 
-- `builtin_method_type` (lines 813-928) must grow to cover the full §5 tables. This will roughly triple its size; consider extracting to a declarative table (`src/typeck/stdlib_methods.rs`) keyed on `(ty_pattern, method_name)` → `fn(&mut Ctx) -> Ty`.
+- `builtin_method_type` (lines 813-928) must grow to cover the full §5 tables. This will roughly triple its size; consider extracting to a declarative table (`src/typeck/stdlib_methods.rs`) keyed on `(ty_pattern, method_name)` → `fn(&var Ctx) -> Ty`.
 - `register_builtins` must register `std` as a module root, register mixins with full method signatures (not just names), and register prelude macros (`println!`, `format!`, …) — the macros need a new `DefKind::Macro` variant plus support in `parser/expr.rs`'s macro call path (currently at line 294-302).
 - Iterator default methods blow up the constraint solver unless we're careful: each `.map().filter().to_array` is a chain of monomorphized generic calls. Recommendation: implement the mixin's default methods as Riven source (so they get lowered to MIR normally) rather than hard-coding their return types in `builtin_method_type`. This means we do *not* expand `builtin_method_type` to 300+ lines; instead, it keeps the existing ~100 lines for the things that must be compiler-known (`String.split`, `Array[T].iter` returning a specific opaque iterator type) and the rest is resolved via the generic method lookup already in place at `infer.rs:800`.
 
@@ -827,9 +827,9 @@ Alternative considered: replacing `runtime.c` with a `libriven_std.a` Rust crate
 # becomes:
 do
   var __buf = String.new
-  Display.fmt(&name, &mut Formatter.for(&mut __buf)).unwrap!
+  Display.fmt(&name, &var Formatter.for(&var __buf)).unwrap!
   __buf.push_str(", age ")
-  Display.fmt(&age, &mut Formatter.for(&mut __buf)).unwrap!
+  Display.fmt(&age, &var Formatter.for(&var __buf)).unwrap!
   __buf.push('\n')
   std.io.stdout.write_str(&__buf).unwrap!
 end
