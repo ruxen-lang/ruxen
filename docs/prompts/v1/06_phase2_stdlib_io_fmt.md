@@ -70,29 +70,53 @@
 ## Definition of done
 
 - [ ] Every listed function has a positive + negative test.
-      **Partial:** `std.env` (`vars`, `current_dir`) and `std.fs`
-      (`is_file`, `is_dir`, `read_dir`) shipped as a first batch with
-      positive integration tests in `crates/riven-core/tests/stdlib_env.rs`
-      + `stdlib_fs.rs` and a negative test for `read_dir` on a missing
-      path. **`std.io` surface shipped (#06.2):** `Stdin.read_line` /
-      `read_to_string` / `lines` (Array[Result[String, IoError]] —
-      v1 simplification of the line-buffered iterator);
-      `Stdout.write_str`
-      / `flush` / `print` / `println`; `Stderr.write_str` / `flush` /
-      `eprint` / `eprintln`. Tests in `crates/riven-core/tests/stdlib_io.rs`
-      cover positive paths for every method + Stdin.lines edge cases
-      (trailing newline, partial final line, empty input). Still
-      pending: `std.fmt` (`Display` mixin + `Formatter`),
-      `std.process.Command` builder. `fs.metadata` deferred — needs
-      a struct surface to expose size / kind / mtime; the boolean
-      helpers (`is_file`, `is_dir`) plus the existing `exists` cover
-      the v1 minimum. **`IoError` shipped as message-only**
-      (`riven_io_error_message` wraps strerror in `Result.Err`);
-      tagged-variant matching (`NotFound` / `PermissionDenied` /
-      `Interrupted` / `UnexpectedEof` / `Other`) deferred to v2 —
-      requires changing the FFI repr of `Result.Err(IoError)` from
-      `char*` to a heap struct `{u32 tag; char* msg}` and updating
-      27 callsites.
+
+      **SHIPPED:**
+      - `std.env`: `args`, `var`, `vars`, `current_dir` (positive tests
+        in `crates/riven-core/tests/stdlib_env.rs`).
+      - `std.fs`: `read_to_string`, `write`, `read_dir`, `exists`,
+        `is_file`, `is_dir` (`stdlib_fs.rs` — incl. negative for
+        `read_dir` on missing path).
+      - `std.io`: `Stdin.{read_line, read_to_string, lines}`,
+        `Stdout.{write_str, flush, print, println}`,
+        `Stderr.{write_str, flush, eprint, eprintln}` (12 tests in
+        `stdlib_io.rs`, including Stdin.lines edge cases — trailing
+        newline, partial final line, empty input).
+      - `std.fmt`: `Display` mixin canonical dispatch (Char / Int /
+        Float / Bool / String / user-`include Display` types route
+        through `Formatter_new` → `{T}_fmt` → `Formatter_buffer`);
+        width / align / precision / fill applied at runtime via
+        `Formatter_new_with_spec`. `Debug` interpolation `"#{x:?}"`
+        on implicit-Debug structs.
+      - `std.process`: flat `process_run(cmd, args)` + `process_exit`
+        (7 tests in `stdlib_process.rs`).
+      - `IoError`: message-only payload (`riven_io_error_message`
+        wraps strerror in `Result.Err`).
+
+      **REMAINING v1 work:**
+      - `std.process.Command` builder API (`.new/.arg/.args/.env/
+        .current_dir/.status/.output`) plus `Output` and `ExitStatus`
+        structs. Currently only the flat `process_run` shortcut
+        exists.
+      - `fs.metadata(path) -> Result[Metadata, IoError]` returning a
+        flat `Metadata` struct (size / is_file / is_dir / is_symlink /
+        modified). Per the requirements doc the struct must be
+        ABI-stable C-side; `stat` is called inside C and packed
+        without exposing the libc struct directly.
+      - Fill missing negative tests across env/fs/io once the above
+        ship (most negative paths already covered by `read_dir` and
+        IoError construct tests; sweep for any positive-only
+        functions before closing).
+
+      **DEFERRED TO v2:**
+      - Tagged `IoError` variant matching (`NotFound` /
+        `PermissionDenied` / `Interrupted` / `UnexpectedEof` /
+        `Other`) — requires changing FFI repr of
+        `Result.Err(IoError)` from `char*` to heap struct
+        `{u32 tag; char* msg}` and updating 27 callsites.
+      - `Command.spawn -> Child` async-style handle with
+        `.wait` / `.kill` / `.try_wait`. v1 ships `.status` /
+        `.output` (block-and-wait) only.
 - [x] String interpolation routes through `Display.fmt`.
       **Phase D2 (2026-05-13):** `lower_interpolation` emits the
       canonical `Formatter_new` → `{T}_fmt(value, fmt)` →
