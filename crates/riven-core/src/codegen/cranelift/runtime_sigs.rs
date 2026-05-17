@@ -165,6 +165,32 @@ pub(super) fn runtime_signature(name: &str) -> Option<(Vec<Type>, Option<Type>)>
         "riven_string_hash" => Some((vec![types::I64], Some(types::I64))),
         "riven_thread_sleep_ns" => Some((vec![types::I64], None)),
         "riven_thread_yield" => Some((vec![], None)),
+        // Phase 2 stdlib (#06.5 T4): Duration / Instant ABI.
+        //   `from_*` : (i64) -> ptr<RivenDuration>
+        //   `as_*`   : (ptr<RivenDuration>) -> i64
+        //   `add/sub`: (ptr, ptr) -> ptr<RivenDuration>
+        //   `Instant.now`                  : () -> ptr<RivenInstant>
+        //   `Instant.elapsed`              : (ptr<RivenInstant>) -> ptr<RivenDuration>
+        //   `Instant.{duration_since,sub}` : (ptr, ptr) -> ptr<RivenDuration>
+        //   `sleep`                        : (ptr<RivenDuration>) -> void
+        // All pointers surface as I64 per the existing convention.
+        "riven_duration_from_secs"
+        | "riven_duration_from_millis"
+        | "riven_duration_from_micros"
+        | "riven_duration_from_nanos" => Some((vec![types::I64], Some(types::I64))),
+        "riven_duration_as_secs"
+        | "riven_duration_as_millis"
+        | "riven_duration_as_micros"
+        | "riven_duration_as_nanos" => Some((vec![types::I64], Some(types::I64))),
+        "riven_duration_add" | "riven_duration_sub" => {
+            Some((vec![types::I64, types::I64], Some(types::I64)))
+        }
+        "riven_instant_now" => Some((vec![], Some(types::I64))),
+        "riven_instant_elapsed" => Some((vec![types::I64], Some(types::I64))),
+        "riven_instant_duration_since" | "riven_instant_sub" => {
+            Some((vec![types::I64, types::I64], Some(types::I64)))
+        }
+        "riven_thread_sleep_duration" => Some((vec![types::I64], None)),
         "riven_str_split" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "riven_str_parse_uint" => Some((vec![types::I64], Some(types::I64))),
         // Memory

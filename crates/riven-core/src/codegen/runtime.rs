@@ -144,6 +144,27 @@ pub const RUNTIME_FUNCTIONS: &[&str] = &[
     // std::time (Phase 3): monotonic + realtime clocks, nanoseconds.
     "riven_time_now_ns",
     "riven_time_unix_ns",
+    // Phase 2 stdlib (#06.5 T4): Duration / Instant scalar-wrapper
+    // classes + free-function `std.thread.sleep(d)`. Wire layouts
+    // (both 8 bytes) documented in runtime.c at `RivenDuration` /
+    // `RivenInstant`. The `riven_thread_sleep_duration(d)` wrapper
+    // delegates to the existing `riven_thread_sleep_ns(int64)` after
+    // unpacking — keeps the Thread.sleep(int) entry point untouched.
+    "riven_duration_from_secs",
+    "riven_duration_from_millis",
+    "riven_duration_from_micros",
+    "riven_duration_from_nanos",
+    "riven_duration_as_secs",
+    "riven_duration_as_millis",
+    "riven_duration_as_micros",
+    "riven_duration_as_nanos",
+    "riven_duration_add",
+    "riven_duration_sub",
+    "riven_instant_now",
+    "riven_instant_elapsed",
+    "riven_instant_duration_since",
+    "riven_instant_sub",
+    "riven_thread_sleep_duration",
     // std::path (Phase 3): Unix-style path manipulation. Empty-string
     // sentinel for parent/file_name/extension when no value applies.
     "riven_path_join",
@@ -528,6 +549,29 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // std::time top-level functions (resolved before module-prefixing).
         "now_ns" => return Ok("riven_time_now_ns"),
         "unix_ns" => return Ok("riven_time_unix_ns"),
+        // Phase 2 stdlib (#06.5 T4): Duration / Instant scalar-wrapper
+        // classes. `Duration_from_*` and `Instant_now` are static-style
+        // constructors that go through the "collection-ctor fast path"
+        // in mir/lower/expr/method_call.rs (alongside File_open,
+        // Command_new), so they receive no synthetic `self`. The rest
+        // are regular instance methods on the {Type}_{method}
+        // mangling path. `sleep` is the top-level free fn in the new
+        // `std.thread` module.
+        "Duration_from_secs" => return Ok("riven_duration_from_secs"),
+        "Duration_from_millis" => return Ok("riven_duration_from_millis"),
+        "Duration_from_micros" => return Ok("riven_duration_from_micros"),
+        "Duration_from_nanos" => return Ok("riven_duration_from_nanos"),
+        "Duration_as_secs" => return Ok("riven_duration_as_secs"),
+        "Duration_as_millis" => return Ok("riven_duration_as_millis"),
+        "Duration_as_micros" => return Ok("riven_duration_as_micros"),
+        "Duration_as_nanos" => return Ok("riven_duration_as_nanos"),
+        "Duration_add" => return Ok("riven_duration_add"),
+        "Duration_sub" => return Ok("riven_duration_sub"),
+        "Instant_now" => return Ok("riven_instant_now"),
+        "Instant_elapsed" => return Ok("riven_instant_elapsed"),
+        "Instant_duration_since" => return Ok("riven_instant_duration_since"),
+        "Instant_sub" => return Ok("riven_instant_sub"),
+        "sleep" => return Ok("riven_thread_sleep_duration"),
         // std::path top-level functions.
         "path_join" => return Ok("riven_path_join"),
         "path_parent" => return Ok("riven_path_parent"),

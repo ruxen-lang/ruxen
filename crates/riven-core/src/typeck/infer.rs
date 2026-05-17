@@ -1317,6 +1317,44 @@ impl<'a> InferenceEngine<'a> {
                     return Ty::String;
                 }
 
+                // Phase 2 stdlib (#06.5 T4): Duration / Instant operator
+                // overloads. The mir/lower/expr/binops.rs special-case
+                // routes the actual call to `riven_duration_add` /
+                // `riven_duration_sub` / `riven_instant_sub`; here we
+                // only need typeck to assign the right result Ty so
+                // downstream `.as_nanos()` / `.as_secs()` method
+                // resolution can find the Duration instance methods.
+                //
+                // `Duration + Duration` -> Duration
+                // `Duration - Duration` -> Duration (saturating in runtime)
+                // `Instant - Instant`   -> Duration (duration_since semantics)
+                fn class_named(ty: &Ty, target: &str) -> bool {
+                    match ty {
+                        Ty::Class { name, .. } => name == target,
+                        Ty::Ref(inner)
+                        | Ty::RefMut(inner)
+                        | Ty::RefLifetime(_, inner)
+                        | Ty::RefMutLifetime(_, inner) => class_named(inner, target),
+                        _ => false,
+                    }
+                }
+                let duration_ty = || Ty::Class {
+                    name: "Duration".to_string(),
+                    generic_args: vec![],
+                };
+                if matches!(op, BinOp::Add | BinOp::Sub)
+                    && class_named(left, "Duration")
+                    && class_named(right, "Duration")
+                {
+                    return duration_ty();
+                }
+                if op == BinOp::Sub
+                    && class_named(left, "Instant")
+                    && class_named(right, "Instant")
+                {
+                    return duration_ty();
+                }
+
                 if left.is_numeric() && right.is_numeric() {
                     // Unify the two sides
                     match unify(left, right, self.ctx, span) {
@@ -2242,6 +2280,53 @@ impl<'a> InferenceEngine<'a> {
             (Ty::Class { name, .. }, "create") if name == "OpenOptions" => Some(ty.clone()),
             (Ty::Class { name, .. }, "create_new") if name == "OpenOptions" => {
                 Some(ty.clone())
+            }
+            // Phase 2 stdlib (#06.5 T4): Duration static-style
+            // constructors. Receiver type-name resolves to `Duration`
+            // (class identifier promoted to its Ty by the resolver).
+            // Each `from_*` takes `Int` and returns `Duration`.
+            (Ty::Class { name, .. }, "from_secs")
+            | (Ty::Class { name, .. }, "from_millis")
+            | (Ty::Class { name, .. }, "from_micros")
+            | (Ty::Class { name, .. }, "from_nanos")
+                if name == "Duration" =>
+            {
+                Some(Self::class_ty("Duration", vec![]))
+            }
+            // Duration instance accessors — integer division.
+            (Ty::Class { name, .. }, "as_secs")
+            | (Ty::Class { name, .. }, "as_millis")
+            | (Ty::Class { name, .. }, "as_micros")
+            | (Ty::Class { name, .. }, "as_nanos")
+                if name == "Duration" =>
+            {
+                Some(Ty::Int)
+            }
+            // Duration named arithmetic methods. The `+`/`-` operator
+            // path also routes here (see mir/lower/expr/binops.rs);
+            // `.add()` / `.sub()` are the explicit named surface,
+            // load-bearing when the binop site isn't statically
+            // resolvable (e.g. generic over Duration).
+            (Ty::Class { name, .. }, "add") if name == "Duration" => {
+                Some(Self::class_ty("Duration", vec![]))
+            }
+            (Ty::Class { name, .. }, "sub") if name == "Duration" => {
+                Some(Self::class_ty("Duration", vec![]))
+            }
+            // Phase 2 stdlib (#06.5 T4): Instant.now / elapsed /
+            // duration_since. CLOCK_MONOTONIC under the hood.
+            (Ty::Class { name, .. }, "now") if name == "Instant" => {
+                Some(Self::class_ty("Instant", vec![]))
+            }
+            (Ty::Class { name, .. }, "elapsed") if name == "Instant" => {
+                Some(Self::class_ty("Duration", vec![]))
+            }
+            (Ty::Class { name, .. }, "duration_since") if name == "Instant" => {
+                Some(Self::class_ty("Duration", vec![]))
+            }
+            // `.sub()` as the named alias for `Instant - Instant`.
+            (Ty::Class { name, .. }, "sub") if name == "Instant" => {
+                Some(Self::class_ty("Duration", vec![]))
             }
             // Phase 2 #06.5: `IoError` is a tagged enum, not a class.
             // `.message() -> String` dispatches on tag in the runtime

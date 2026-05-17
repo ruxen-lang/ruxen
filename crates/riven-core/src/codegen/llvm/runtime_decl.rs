@@ -172,6 +172,24 @@ pub fn declare_runtime_functions<'ctx>(module: &Module<'ctx>, context: &'ctx Con
     decl!("riven_string_hash", i64_ty, [ptr_ty]);
     decl!("riven_thread_sleep_ns", void, [i64_ty]);
     decl!("riven_thread_yield", void, []);
+    // Phase 2 stdlib (#06.5 T4): Duration / Instant scalar-wrapper ABI.
+    // Pointers carried as ptr_ty; the receiver types are 8-byte heap
+    // structs documented in runtime.c at `RivenDuration` / `RivenInstant`.
+    decl!("riven_duration_from_secs", ptr_ty, [i64_ty]);
+    decl!("riven_duration_from_millis", ptr_ty, [i64_ty]);
+    decl!("riven_duration_from_micros", ptr_ty, [i64_ty]);
+    decl!("riven_duration_from_nanos", ptr_ty, [i64_ty]);
+    decl!("riven_duration_as_secs", i64_ty, [ptr_ty]);
+    decl!("riven_duration_as_millis", i64_ty, [ptr_ty]);
+    decl!("riven_duration_as_micros", i64_ty, [ptr_ty]);
+    decl!("riven_duration_as_nanos", i64_ty, [ptr_ty]);
+    decl!("riven_duration_add", ptr_ty, [ptr_ty, ptr_ty]);
+    decl!("riven_duration_sub", ptr_ty, [ptr_ty, ptr_ty]);
+    decl!("riven_instant_now", ptr_ty, []);
+    decl!("riven_instant_elapsed", ptr_ty, [ptr_ty]);
+    decl!("riven_instant_duration_since", ptr_ty, [ptr_ty, ptr_ty]);
+    decl!("riven_instant_sub", ptr_ty, [ptr_ty, ptr_ty]);
+    decl!("riven_thread_sleep_duration", void, [ptr_ty]);
     decl!("riven_str_split", ptr_ty, [ptr_ty, ptr_ty]);
     decl!("riven_str_parse_uint", ptr_ty, [ptr_ty]);
     decl!("riven_iter_to_vec", ptr_ty, [ptr_ty]);

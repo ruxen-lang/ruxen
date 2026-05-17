@@ -1,0 +1,11 @@
+use std.time.Duration
+
+def main
+  let d = Duration.from_secs(5)
+  let ms = d.as_millis()
+  if ms == 5000
+    puts "ok"
+  else
+    puts "fail ms=#{ms}"
+  end
+end

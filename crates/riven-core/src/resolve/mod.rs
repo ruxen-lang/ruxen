@@ -622,6 +622,24 @@ impl Resolver {
             // `unix_ns` is wall-clock (nanoseconds since 1970-01-01 UTC).
             ("now_ns", vec![], Ty::Int),
             ("unix_ns", vec![], Ty::Int),
+            // std::thread — Phase 2 stdlib (#06.5 T4). Free fn
+            // `sleep(&Duration)` is the Duration-typed wrapper around
+            // the existing `Thread.sleep(int)` static method. Both
+            // surfaces coexist intentionally: `Thread.sleep` is a
+            // bare-int convenience; `std.thread.sleep(Duration.from_*)`
+            // is the typed surface that integrates with `Instant`.
+            (
+                "sleep",
+                vec![ParamInfo {
+                    name: "d".into(),
+                    ty: Ty::Ref(Box::new(Ty::Class {
+                        name: "Duration".to_string(),
+                        generic_args: vec![],
+                    })),
+                    auto_assign: false,
+                }],
+                Ty::Unit,
+            ),
             // std::path — Phase 3. Unix-style separators only. The
             // path_ prefix avoids collision with the `join` method on
             // Vec[String]; Riven-side wrappers can rename later.
@@ -1300,6 +1318,60 @@ impl Resolver {
             }
         }
 
+        // Phase 2 #06.5 T4: `std::time::Duration` — scalar-wrapper class
+        // over `int64_t nanos`. Pure POD with no inner heap, no resource
+        // — the default scope-exit `riven_dealloc` is the entire drop
+        // story (NOT added to `user_drop_classes`). 8-byte wire layout
+        // documented in runtime.c at `RivenDuration`.
+        let duration_id = self.symbols.define(
+            "Duration".to_string(),
+            DefKind::Class {
+                info: ClassInfo {
+                    generic_params: vec![],
+                    parent: None,
+                    fields: vec![],
+                    methods: vec![],
+                    derive_traits: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                    const_predicates: vec![],
+                },
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.scopes
+            .insert_type("Duration".to_string(), duration_id);
+        self.type_registry
+            .insert("Duration".to_string(), duration_id);
+
+        // Phase 2 #06.5 T4: `std::time::Instant` — scalar-wrapper class
+        // over `int64_t monotonic_nanos`. Same drop story as Duration.
+        let instant_id = self.symbols.define(
+            "Instant".to_string(),
+            DefKind::Class {
+                info: ClassInfo {
+                    generic_params: vec![],
+                    parent: None,
+                    fields: vec![],
+                    methods: vec![],
+                    derive_traits: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                    const_predicates: vec![],
+                },
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.scopes.insert_type("Instant".to_string(), instant_id);
+        self.type_registry
+            .insert("Instant".to_string(), instant_id);
+
         // Phase 2 #06.A1/A3: `std::fmt::Formatter` is the buffer that
         // `Display::fmt` / `Debug::fmt` write into. v1 carries width
         // / alignment / precision metadata as opaque internal fields
@@ -1751,7 +1823,28 @@ impl Resolver {
         let time_id = self.symbols.define(
             "time".to_string(),
             DefKind::Module {
-                items: vec![builtin_fn_ids["now_ns"], builtin_fn_ids["unix_ns"]],
+                items: vec![
+                    builtin_fn_ids["now_ns"],
+                    builtin_fn_ids["unix_ns"],
+                    // Phase 2 stdlib (#06.5 T4): Duration / Instant
+                    // imported via `use std.time.{Duration, Instant}`.
+                    duration_id,
+                    instant_id,
+                ],
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        // Phase 2 stdlib (#06.5 T4): the `std.thread` module hosts the
+        // typed free-fn `sleep(&Duration) -> ()`. Intentionally kept
+        // distinct from `std.sync.Thread`: the latter is the spawn /
+        // join surface (class methods), the former is the typed
+        // free-function counterpart to `Thread.sleep(int)`. A future
+        // refactor may consolidate the two namespaces.
+        let thread_module_id = self.symbols.define(
+            "thread".to_string(),
+            DefKind::Module {
+                items: vec![builtin_fn_ids["sleep"]],
             },
             Visibility::Public,
             span.clone(),
@@ -1841,8 +1934,19 @@ impl Resolver {
             "std".to_string(),
             DefKind::Module {
                 items: vec![
-                    io_id, env_id, fs_id, process_id, time_id, path_id, net_id, sync_id, fmt_id,
+                    io_id,
+                    env_id,
+                    fs_id,
+                    process_id,
+                    time_id,
+                    path_id,
+                    net_id,
+                    sync_id,
+                    fmt_id,
                     signal_id,
+                    // Phase 2 stdlib (#06.5 T4): `std.thread` — typed
+                    // `sleep(&Duration)` free fn. Sibling of std.sync.
+                    thread_module_id,
                 ],
             },
             Visibility::Public,
@@ -1920,6 +2024,26 @@ impl Resolver {
                 "Thread",
                 Ty::Class {
                     name: "Thread".to_string(),
+                    generic_args: vec![],
+                },
+            ),
+            // Phase 2 stdlib (#06.5 T4): Duration / Instant value-scope
+            // type constructors. Registering them here lets
+            // `Duration.from_secs(5)` / `Instant.now()` resolve the
+            // receiver as a class identifier (typeck::infer promotes it
+            // to the corresponding class Ty, then the static-ctor fast
+            // path in mir/lower/expr/method_call.rs handles dispatch).
+            (
+                "Duration",
+                Ty::Class {
+                    name: "Duration".to_string(),
+                    generic_args: vec![],
+                },
+            ),
+            (
+                "Instant",
+                Ty::Class {
+                    name: "Instant".to_string(),
                     generic_args: vec![],
                 },
             ),

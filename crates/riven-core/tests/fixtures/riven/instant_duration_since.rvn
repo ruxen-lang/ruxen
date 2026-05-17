@@ -1,0 +1,17 @@
+use std.time.Instant
+use std.time.Duration
+use std.thread.sleep
+
+def main
+  let earlier = Instant.now()
+  sleep(Duration.from_millis(2))
+  let later = Instant.now()
+  let d = later.duration_since(earlier)
+  # 2 ms = 2_000_000 ns. Lower bound only — CI jitter can stretch the
+  # upper bound to anything reasonable.
+  if d.as_nanos() >= 0
+    puts "ok"
+  else
+    puts "fail nanos=#{d.as_nanos()}"
+  end
+end

@@ -92,3 +92,154 @@ fn time_unix_ns_is_post_2020() {
         stdout
     );
 }
+
+// ── Phase 2 stdlib (#06.5 T4): Duration / Instant / sleep ──────────────
+//
+// Each test compiles a small `.rvn` fixture that exercises one slice of
+// the new surface. The fixtures print "ok" or "fail <diagnostic>" so
+// each test can detect both binary-level failure (panic, abort) and
+// assertion-level failure (wrong value) without re-implementing the
+// numeric comparison in Rust.
+
+/// `Duration.from_secs(5).as_millis() == 5000`.
+#[test]
+fn duration_from_secs_as_millis() {
+    let source = rvn("duration_from_secs_as_millis");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_time_dur_secs_ms");
+    assert!(
+        ok,
+        "binary exited non-zero. stdout=[{stdout}] stderr=[{stderr}]"
+    );
+    assert!(stdout.contains("ok"), "expected ok, got: [{stdout}]");
+}
+
+/// `Duration.from_millis(1500).as_secs() == 1` — integer floor.
+#[test]
+fn duration_from_millis_as_secs_floors() {
+    let source = rvn("duration_from_millis_as_secs");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_time_dur_ms_secs");
+    assert!(
+        ok,
+        "binary exited non-zero. stdout=[{stdout}] stderr=[{stderr}]"
+    );
+    assert!(stdout.contains("ok"), "expected ok, got: [{stdout}]");
+}
+
+/// Round-trip every `from_*` × `as_*` combination at 2 seconds.
+#[test]
+fn duration_from_as_round_trip_matrix() {
+    let source = rvn("duration_round_trip_matrix");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_time_dur_matrix");
+    assert!(
+        ok,
+        "binary exited non-zero. stdout=[{stdout}] stderr=[{stderr}]"
+    );
+    assert!(stdout.contains("ok"), "expected ok, got: [{stdout}]");
+}
+
+/// `Duration + Duration` sums nanos via both the binop and named-method
+/// paths (the binop is a hard-coded special-case in mir/lower/expr/
+/// binops.rs; `.add()` is the survives-generic-code fallback).
+#[test]
+fn duration_add_via_binop_and_named() {
+    let source = rvn("duration_add");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_time_dur_add");
+    assert!(
+        ok,
+        "binary exited non-zero. stdout=[{stdout}] stderr=[{stderr}]"
+    );
+    assert!(stdout.contains("ok"), "expected ok, got: [{stdout}]");
+}
+
+/// `Duration - Duration` saturates to zero on underflow — `from_secs(1)
+/// - from_secs(5)` is a zero-Duration.
+#[test]
+fn duration_sub_saturates_to_zero() {
+    let source = rvn("duration_saturating_sub");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_time_dur_sat_sub");
+    assert!(
+        ok,
+        "binary exited non-zero. stdout=[{stdout}] stderr=[{stderr}]"
+    );
+    assert!(stdout.contains("ok"), "expected ok, got: [{stdout}]");
+}
+
+/// `Instant.now()` after a `sleep(from_millis(1))` strictly increases.
+/// Implicitly verifies CLOCK_MONOTONIC ordering — if the kernel ever
+/// returned a non-monotonic sample the subtract would panic and the
+/// binary would exit non-zero.
+#[test]
+fn instant_monotonic_after_sleep() {
+    let source = rvn("instant_monotonic");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_time_inst_mono");
+    assert!(
+        ok,
+        "binary exited non-zero. stdout=[{stdout}] stderr=[{stderr}]"
+    );
+    assert!(stdout.contains("ok"), "expected ok, got: [{stdout}]");
+}
+
+/// `Instant.elapsed()` returns a non-negative Duration even without an
+/// explicit sleep.
+#[test]
+fn instant_elapsed_non_negative() {
+    let source = rvn("instant_elapsed");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_time_inst_elapsed");
+    assert!(
+        ok,
+        "binary exited non-zero. stdout=[{stdout}] stderr=[{stderr}]"
+    );
+    assert!(stdout.contains("ok"), "expected ok, got: [{stdout}]");
+}
+
+/// `Instant.duration_since(earlier)` returns the wall-clock delta. The
+/// fixture only enforces non-negative (tight tolerance is fragile on
+/// CI); cross-checked against `Instant - Instant` (same runtime fn).
+#[test]
+fn instant_duration_since_returns_delta() {
+    let source = rvn("instant_duration_since");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_time_inst_dur_since");
+    assert!(
+        ok,
+        "binary exited non-zero. stdout=[{stdout}] stderr=[{stderr}]"
+    );
+    assert!(stdout.contains("ok"), "expected ok, got: [{stdout}]");
+}
+
+/// `Instant.duration_since(later)` where `later > self` MUST panic.
+/// The fixture deliberately reverses the order and expects the binary
+/// to exit non-zero. If the panic ever stops firing, `stdout` contains
+/// "did_not_panic" and the assertion below catches it.
+#[test]
+fn instant_duration_since_future_panics() {
+    let source = rvn("instant_duration_since_future_panics");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_time_inst_panic");
+    assert!(
+        !ok,
+        "expected panic-driven non-zero exit, but binary succeeded. \
+         stdout=[{stdout}] stderr=[{stderr}]"
+    );
+    assert!(
+        !stdout.contains("did_not_panic"),
+        "panic guard did not fire; reached the println past the panic site: [{stdout}]"
+    );
+    assert!(
+        stderr.contains("earlier is in the future")
+            || stderr.contains("Instant.duration_since"),
+        "expected panic message in stderr, got: [{stderr}]"
+    );
+}
+
+/// `sleep(from_millis(50))` + `Instant.elapsed()` lands in 40–200 ms.
+/// Wide tolerance is deliberate — CI hosts (esp. macOS shared runners)
+/// have unpredictable scheduler granularity.
+#[test]
+fn sleep_duration_elapses_in_tolerance_band() {
+    let source = rvn("sleep_duration_elapses");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_time_sleep_band");
+    assert!(
+        ok,
+        "binary exited non-zero. stdout=[{stdout}] stderr=[{stderr}]"
+    );
+    assert!(stdout.contains("ok"), "expected ok, got: [{stdout}]");
+}

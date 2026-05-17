@@ -1,0 +1,14 @@
+use std.time.Duration
+
+def main
+  let small = Duration.from_secs(1)
+  let big   = Duration.from_secs(5)
+  # `a < b` saturates to zero. The contract: Duration is non-negative.
+  let diff = small - big
+  let diff_named = small.sub(big)
+  if diff.as_nanos() == 0 && diff_named.as_nanos() == 0
+    puts "ok"
+  else
+    puts "fail diff=#{diff.as_nanos()} named=#{diff_named.as_nanos()}"
+  end
+end

@@ -1,0 +1,8 @@
+use std.time.Duration
+
+def main
+  let d = Duration.from_secs(5)
+  puts "ms=#{d.as_millis()}"
+  puts "us=#{d.as_micros()}"
+  puts "ns=#{d.as_nanos()}"
+end

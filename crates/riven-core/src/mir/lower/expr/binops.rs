@@ -143,6 +143,67 @@ impl<'a> Lowerer<'a> {
                     return Ok(Some(dest));
                 }
 
+                // ── Phase 2 stdlib (#06.5 T4): Duration + Duration ──
+                // The language has no general user-side `+`/`-`
+                // overload mechanism. Built-in scalar-wrapper classes
+                // get hard-coded special-cases here, mirroring the
+                // String + String concat above. The named `.add()` /
+                // `.sub()` methods are wired in parallel: the binop
+                // path covers the ergonomic site, the named methods
+                // survive generic code where the operator isn't
+                // statically resolvable.
+                //
+                // `Duration - Duration` saturates to zero in the
+                // runtime helper; `Instant - Instant` panics if the
+                // RHS is later than the LHS.
+                let duration_ty = Ty::Class {
+                    name: "Duration".to_string(),
+                    generic_args: vec![],
+                };
+                fn unwrap_ref(t: &Ty) -> &Ty {
+                    match t {
+                        Ty::Ref(inner)
+                        | Ty::RefMut(inner)
+                        | Ty::RefLifetime(_, inner)
+                        | Ty::RefMutLifetime(_, inner) => unwrap_ref(inner),
+                        _ => t,
+                    }
+                }
+                let lhs_is = |target: &str| -> bool {
+                    matches!(unwrap_ref(&left.ty), Ty::Class { name, .. } if name == target)
+                };
+                let rhs_is = |target: &str| -> bool {
+                    matches!(unwrap_ref(&right.ty), Ty::Class { name, .. } if name == target)
+                };
+                if matches!(op, BinOp::Add | BinOp::Sub)
+                    && lhs_is("Duration")
+                    && rhs_is("Duration")
+                {
+                    let dest = self.new_temp(duration_ty.clone());
+                    let callee = if matches!(op, BinOp::Add) {
+                        "riven_duration_add"
+                    } else {
+                        "riven_duration_sub"
+                    };
+                    self.emit(MirInst::Call {
+                        dest: Some(dest),
+                        callee: callee.to_string(),
+                        args: vec![lhs_val, rhs_val],
+                    });
+                    return Ok(Some(dest));
+                }
+
+                // ── Phase 2 stdlib (#06.5 T4): Instant - Instant ──
+                if matches!(op, BinOp::Sub) && lhs_is("Instant") && rhs_is("Instant") {
+                    let dest = self.new_temp(duration_ty.clone());
+                    self.emit(MirInst::Call {
+                        dest: Some(dest),
+                        callee: "riven_instant_sub".to_string(),
+                        args: vec![lhs_val, rhs_val],
+                    });
+                    return Ok(Some(dest));
+                }
+
                 let dest = self.new_temp(expr.ty.clone());
 
                 if is_comparison(*op) {

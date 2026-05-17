@@ -1,0 +1,16 @@
+use std.time.Instant
+use std.time.Duration
+use std.thread.sleep
+
+def main
+  let a = Instant.now()
+  sleep(Duration.from_millis(1))
+  let b = Instant.now()
+  # Subtract panics if b < a, so reaching the puts means monotonic.
+  let delta = b - a
+  if delta.as_nanos() >= 0
+    puts "ok"
+  else
+    puts "fail"
+  end
+end

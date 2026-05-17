@@ -36,8 +36,25 @@ impl<'a> Lowerer<'a> {
                         method_name.as_str(),
                         "open" | "create" | "append" | "open_options"
                     );
+                // Phase 2 stdlib (#06.5 T4): Duration / Instant
+                // static-style constructors join the same fast path.
+                // `Duration.from_secs(5)` / `Duration.from_millis(ms)`
+                // / `Duration.from_micros(us)` /
+                // `Duration.from_nanos(ns)` and `Instant.now()`
+                // dispatch directly to their runtime symbol with no
+                // synthetic `self`. Same reason as File: the runtime
+                // entry points take 0–1 args, not `self + args`.
+                let is_duration_static_ctor = type_name == "Duration"
+                    && matches!(
+                        method_name.as_str(),
+                        "from_secs" | "from_millis" | "from_micros" | "from_nanos"
+                    );
+                let is_instant_static_ctor =
+                    type_name == "Instant" && method_name == "now";
                 let is_collection_ctor = method_name == "new"
                     || is_file_static_ctor
+                    || is_duration_static_ctor
+                    || is_instant_static_ctor
                     || (method_name == "with_capacity" && {
                         let bt = if let Some(pos) = type_name.find('[') {
                             &type_name[..pos]
@@ -87,6 +104,16 @@ impl<'a> Lowerer<'a> {
                             // runtime fn.
                             | "File"
                             | "OpenOptions"
+                            // Phase 2 stdlib (#06.5 T4): Duration /
+                            // Instant static-style constructors
+                            // dispatch directly to their runtime
+                            // symbol — `Duration_from_secs(s)` →
+                            // `riven_duration_from_secs(s)`,
+                            // `Instant_now()` → `riven_instant_now()`.
+                            // No `_init` path; these classes have no
+                            // user-defined init.
+                            | "Duration"
+                            | "Instant"
                     ) {
                         let obj = self.new_temp(expr.ty.clone());
                         // ruby-naming.spec.md §3.11 renames stdlib types

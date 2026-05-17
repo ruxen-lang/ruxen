@@ -105,6 +105,17 @@ pub(super) fn is_builtin_static_method(type_name: &str, method_name: &str) -> bo
         "Thread" => matches!(method_name, "spawn" | "current" | "sleep" | "yield_now"),
         "Mutex" => matches!(method_name, "new"),
         "Arc" | "SharedSync" => matches!(method_name, "new"),
+        // Phase 2 stdlib (#06.5 T4): Duration / Instant static-style
+        // constructors. `Duration.from_secs(5)` / `Instant.now()` must
+        // classify as static here so the method-call lowerer doesn't
+        // synthesise a phantom `self` arg ahead of the runtime symbol
+        // — `riven_duration_from_secs` takes one i64, `riven_instant_now`
+        // takes none.
+        "Duration" => matches!(
+            method_name,
+            "from_secs" | "from_millis" | "from_micros" | "from_nanos"
+        ),
+        "Instant" => matches!(method_name, "now"),
         _ => false,
     }
 }

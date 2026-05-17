@@ -1,0 +1,22 @@
+use std.time.Duration
+
+# Round-trip every from_* / as_* combination on a known value.
+# Picked 2 seconds = 2_000_000_000 ns so all four `as_*` are non-zero
+# integers and `as_nanos` doesn't overflow.
+def main
+  let from_s   = Duration.from_secs(2)
+  let from_ms  = Duration.from_millis(2000)
+  let from_us  = Duration.from_micros(2000000)
+  let from_ns  = Duration.from_nanos(2000000000)
+
+  let ok_s   = from_s.as_secs()   == 2 && from_s.as_millis()   == 2000 && from_s.as_micros()   == 2000000 && from_s.as_nanos()   == 2000000000
+  let ok_ms  = from_ms.as_secs()  == 2 && from_ms.as_millis()  == 2000 && from_ms.as_micros()  == 2000000 && from_ms.as_nanos()  == 2000000000
+  let ok_us  = from_us.as_secs()  == 2 && from_us.as_millis()  == 2000 && from_us.as_micros()  == 2000000 && from_us.as_nanos()  == 2000000000
+  let ok_ns  = from_ns.as_secs()  == 2 && from_ns.as_millis()  == 2000 && from_ns.as_micros()  == 2000000 && from_ns.as_nanos()  == 2000000000
+
+  if ok_s && ok_ms && ok_us && ok_ns
+    puts "ok"
+  else
+    puts "fail ok_s=#{ok_s} ok_ms=#{ok_ms} ok_us=#{ok_us} ok_ns=#{ok_ns}"
+  end
+end
