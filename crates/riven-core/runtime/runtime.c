@@ -44,6 +44,7 @@ _Static_assert(sizeof(void *) == 8,
 void riven_panic(const char *message);
 char *riven_string_from(const char *s);
 void *riven_alloc(uint64_t size);
+void riven_dealloc(void *ptr);
 char *riven_char_to_string(int64_t codepoint);
 typedef struct RivenVec RivenVec;
 RivenVec *riven_vec_new(void);
@@ -839,6 +840,98 @@ void *riven_fs_read_dir(const char *path) {
         return riven_io_error_from_errno(saved);
     }
     return riven_result_ok_value((int64_t)names);
+}
+
+/* ── Phase 2 stdlib (#06): fs::metadata ────────────────────────────────
+ *
+ * `riven_fs_metadata(path) -> Result[Metadata, IoError]` calls `lstat(2)`
+ * so symlinks are reported as `Symlink` rather than dereferenced. The
+ * returned `Metadata` is a flat heap struct laid out as three int64s:
+ *
+ *     offset  0:  size          (file size in bytes, signed for parity
+ *                                with Riven's `Int`; truncated on
+ *                                pathological >2^63 sizes)
+ *     offset  8:  modified_secs (UNIX timestamp from st_mtime; seconds
+ *                                since 1970-01-01 UTC, ignoring sub-
+ *                                second precision)
+ *     offset 16:  kind          (0=File, 1=Dir, 2=Symlink, 3=Other —
+ *                                covers fifos, sockets, block/char
+ *                                devices; the v1 surface is just the
+ *                                three predicates `is_file` / `is_dir`
+ *                                / `is_symlink`)
+ *
+ * We pack the fields ourselves so the wire format is independent of
+ * libc's `struct stat` ABI (which varies across libc versions and
+ * platforms). Accessor helpers read the int64 slots directly. Drop is
+ * the generic `riven_dealloc` (no inner heap to free), but we also
+ * expose a `riven_metadata_free` alias for symmetry with future
+ * accessor wrappers. */
+#define RIVEN_METADATA_KIND_FILE    0
+#define RIVEN_METADATA_KIND_DIR     1
+#define RIVEN_METADATA_KIND_SYMLINK 2
+#define RIVEN_METADATA_KIND_OTHER   3
+
+void *riven_fs_metadata(const char *path) {
+    if (!path) {
+        return riven_io_error_message("path is null");
+    }
+    struct stat st;
+    /* lstat so a symlink reports as Symlink instead of being followed.
+     * Callers that want follow-semantics can call `read_to_string` or
+     * `is_file` on the path directly, both of which use plain stat. */
+    if (lstat(path, &st) != 0) {
+        return riven_io_error_from_errno(errno);
+    }
+    int64_t *meta = (int64_t *)riven_alloc(24);
+    meta[0] = (int64_t)st.st_size;
+    meta[1] = (int64_t)st.st_mtime;
+    int64_t kind;
+    if (S_ISREG(st.st_mode)) {
+        kind = RIVEN_METADATA_KIND_FILE;
+    } else if (S_ISDIR(st.st_mode)) {
+        kind = RIVEN_METADATA_KIND_DIR;
+    } else if (S_ISLNK(st.st_mode)) {
+        kind = RIVEN_METADATA_KIND_SYMLINK;
+    } else {
+        kind = RIVEN_METADATA_KIND_OTHER;
+    }
+    meta[2] = kind;
+    return riven_result_ok_value((int64_t)meta);
+}
+
+int64_t riven_metadata_len(void *meta) {
+    if (!meta) return 0;
+    return ((int64_t *)meta)[0];
+}
+
+int64_t riven_metadata_modified(void *meta) {
+    if (!meta) return 0;
+    return ((int64_t *)meta)[1];
+}
+
+int64_t riven_metadata_is_file(void *meta) {
+    if (!meta) return 0;
+    return ((int64_t *)meta)[2] == RIVEN_METADATA_KIND_FILE ? 1 : 0;
+}
+
+int64_t riven_metadata_is_dir(void *meta) {
+    if (!meta) return 0;
+    return ((int64_t *)meta)[2] == RIVEN_METADATA_KIND_DIR ? 1 : 0;
+}
+
+int64_t riven_metadata_is_symlink(void *meta) {
+    if (!meta) return 0;
+    return ((int64_t *)meta)[2] == RIVEN_METADATA_KIND_SYMLINK ? 1 : 0;
+}
+
+/* Explicit free helper for symmetry with the other built-in Drop
+ * surfaces (Formatter, Vec, Hash). The Metadata struct holds no inner
+ * heap, so this is just `riven_dealloc` with a typed alias — the
+ * scope-exit drop pass uses `riven_dealloc` directly for Class-typed
+ * locals, so this is currently unused by codegen but exposed for FFI
+ * symmetry and future expansion. */
+void riven_metadata_free(void *meta) {
+    if (meta) riven_dealloc(meta);
 }
 
 void riven_print_int(int64_t n) {

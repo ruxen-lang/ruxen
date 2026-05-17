@@ -1,0 +1,9 @@
+
+use std.fs.metadata
+
+def main
+  match metadata("/no/such/path/we/hope")
+    Ok(_)  -> puts "unexpectedly_ok"
+    Err(_) -> puts "err_ok"
+  end
+end

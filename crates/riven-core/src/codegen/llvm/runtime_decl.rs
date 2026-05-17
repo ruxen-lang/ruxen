@@ -85,6 +85,14 @@ pub fn declare_runtime_functions<'ctx>(module: &Module<'ctx>, context: &'ctx Con
     decl!("riven_fs_create_dir", ptr_ty, [ptr_ty]);
     decl!("riven_fs_create_dir_all", ptr_ty, [ptr_ty]);
     decl!("riven_fs_rename", ptr_ty, [ptr_ty, ptr_ty]);
+    // Phase 2 stdlib (#06): fs::metadata + Metadata accessors.
+    decl!("riven_fs_metadata", ptr_ty, [ptr_ty]);
+    decl!("riven_metadata_len", i64_ty, [ptr_ty]);
+    decl!("riven_metadata_modified", i64_ty, [ptr_ty]);
+    decl!("riven_metadata_is_file", i64_ty, [ptr_ty]);
+    decl!("riven_metadata_is_dir", i64_ty, [ptr_ty]);
+    decl!("riven_metadata_is_symlink", i64_ty, [ptr_ty]);
+    decl!("riven_metadata_free", void, [ptr_ty]);
     decl!("riven_print_int", void, [i64_ty]);
     decl!("riven_print_float", void, [f64_ty]);
 

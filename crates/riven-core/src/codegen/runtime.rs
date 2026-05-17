@@ -53,6 +53,14 @@ pub const RUNTIME_FUNCTIONS: &[&str] = &[
     "riven_fs_is_file",
     "riven_fs_is_dir",
     "riven_fs_read_dir",
+    // Phase 2 stdlib (#06): fs::metadata + Metadata accessor surface.
+    "riven_fs_metadata",
+    "riven_metadata_len",
+    "riven_metadata_modified",
+    "riven_metadata_is_file",
+    "riven_metadata_is_dir",
+    "riven_metadata_is_symlink",
+    "riven_metadata_free",
     "riven_process_exit",
     // std::process::run (Phase 3): fork+execvp a child, inherit stdio,
     // return exit code (or 128+signal on signal termination, 127 on
@@ -290,6 +298,7 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "is_file" => return Ok("riven_fs_is_file"),
         "is_dir" => return Ok("riven_fs_is_dir"),
         "read_dir" => return Ok("riven_fs_read_dir"),
+        "metadata" => return Ok("riven_fs_metadata"),
         "read_to_string" => return Ok("riven_fs_read_to_string"),
         "write" => return Ok("riven_fs_write"),
         "exists" => return Ok("riven_fs_exists"),
@@ -381,6 +390,13 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "Stdout_println" => return Ok("riven_stdout_println"),
         "Stderr_eprint" => return Ok("riven_stderr_eprint"),
         "Stderr_eprintln" => return Ok("riven_stderr_eprintln"),
+        // Phase 2 stdlib (#06): std::fs::Metadata accessor methods.
+        "Metadata_len" => return Ok("riven_metadata_len"),
+        "Metadata_modified" => return Ok("riven_metadata_modified"),
+        "Metadata_is_file" => return Ok("riven_metadata_is_file"),
+        "Metadata_is_dir" => return Ok("riven_metadata_is_dir"),
+        "Metadata_is_symlink" => return Ok("riven_metadata_is_symlink"),
+        "Metadata_free" => return Ok("riven_metadata_free"),
         // Phase 2 stdlib (#06.A3): std::fmt::Formatter methods.
         "Formatter_new" => return Ok("riven_fmt_formatter_new"),
         "Formatter_free" => return Ok("riven_fmt_formatter_free"),

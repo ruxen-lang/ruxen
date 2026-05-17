@@ -283,6 +283,17 @@ impl Resolver {
             name: "Stderr".to_string(),
             generic_args: vec![],
         };
+        // Phase 2 stdlib (#06): `fs::metadata` returns
+        // `Result[Metadata, IoError]`. `Metadata` is a flat heap struct
+        // exposing `len`/`modified`/`is_file`/`is_dir`/`is_symlink`
+        // accessors; see `riven_fs_metadata` in `runtime.c` for the
+        // on-wire layout. Registered as a Class below so it can appear
+        // in Result return annotations and dispatch via the standard
+        // `{Type}_{method}` mangled-name pipeline.
+        let metadata_ty = Ty::Class {
+            name: "Metadata".to_string(),
+            generic_args: vec![],
+        };
         let env_var_error_ty = io_error_ty.clone();
 
         let builtin_fns = [
@@ -434,6 +445,19 @@ impl Resolver {
                     Box::new(Ty::Array(Box::new(Ty::String))),
                     Box::new(io_error_ty.clone()),
                 ),
+            ),
+            // Phase 2 stdlib (#06): fs::metadata. Backed by `lstat(2)`
+            // (symlinks are reported as Symlink, not followed). The
+            // returned Metadata is heap-allocated and freed via the
+            // standard Class scope-exit drop pass.
+            (
+                "metadata",
+                vec![ParamInfo {
+                    name: "path".into(),
+                    ty: Ty::Ref(Box::new(Ty::String)),
+                    auto_assign: false,
+                }],
+                Ty::Result(Box::new(metadata_ty.clone()), Box::new(io_error_ty.clone())),
             ),
             (
                 "remove_file",
@@ -814,6 +838,38 @@ impl Resolver {
             span.clone(),
         );
         self.type_registry.insert("Stderr".to_string(), stderr_id);
+
+        // Phase 2 stdlib (#06): `std::fs::Metadata` is a flat heap
+        // struct returned by `fs::metadata(path)`. Accessor methods
+        // (`len` / `modified` / `is_file` / `is_dir` / `is_symlink`)
+        // are wired in typeck (`infer.rs`) and dispatch through the
+        // standard `Metadata_{method}` mangled-name pipeline; the
+        // runtime helpers live in `runtime.c`. The Class has no
+        // public fields — the wire layout is an opaque
+        // implementation detail of the runtime.
+        let metadata_id = self.symbols.define(
+            "Metadata".to_string(),
+            DefKind::Class {
+                info: ClassInfo {
+                    generic_params: vec![],
+                    parent: None,
+                    fields: vec![],
+                    methods: vec![],
+                    derive_traits: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                    const_predicates: vec![],
+                },
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.scopes
+            .insert_type("Metadata".to_string(), metadata_id);
+        self.type_registry
+            .insert("Metadata".to_string(), metadata_id);
 
         // Phase 2 #06.A1/A3: `std::fmt::Formatter` is the buffer that
         // `Display::fmt` / `Debug::fmt` write into. v1 carries width
@@ -1209,6 +1265,7 @@ impl Resolver {
                     builtin_fn_ids["is_file"],
                     builtin_fn_ids["is_dir"],
                     builtin_fn_ids["read_dir"],
+                    builtin_fn_ids["metadata"],
                 ],
             },
             Visibility::Public,

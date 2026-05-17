@@ -227,6 +227,49 @@ fn fs_create_dir_then_is_dir() {
     assert!(stdout.contains("is_dir_yes"), "is_dir: {}", stdout);
 }
 
+/// `fs::metadata(file)` returns Ok with a positive `len` and the kind
+/// predicates correctly distinguishing a regular file. Pins spec
+/// tier1_01_stdlib §3.6 `metadata`.
+#[test]
+fn fs_metadata_file_returns_len_and_kind() {
+    let dir = unique_tmp_dir("metadata_file");
+    let file = dir.join("payload.txt");
+    std::fs::write(&file, b"hello metadata!").expect("write");
+
+    let source = rvn("fs_metadata_file_returns_len_and_kind")
+        .replace("__FILE__", &file.display().to_string());
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_fs_metadata_file");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(ok, "stderr: {}", stderr);
+    assert!(stdout.contains("len_positive"), "len: {}", stdout);
+    assert!(stdout.contains("is_file_yes"), "is_file: {}", stdout);
+    assert!(stdout.contains("is_dir_no"), "is_dir: {}", stdout);
+    assert!(stdout.contains("is_symlink_no"), "is_symlink: {}", stdout);
+}
+
+/// `fs::metadata(dir)` reports `is_dir = true` and `is_file = false`.
+/// Pins the dir branch of `metadata`.
+#[test]
+fn fs_metadata_dir_reports_is_dir() {
+    let dir = unique_tmp_dir("metadata_dir");
+    let source = rvn("fs_metadata_dir_reports_is_dir").replace("__DIR__", &dir.display().to_string());
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_fs_metadata_dir");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(ok, "stderr: {}", stderr);
+    assert!(stdout.contains("dir_yes"), "is_dir: {}", stdout);
+    assert!(stdout.contains("file_no"), "is_file: {}", stdout);
+}
+
+/// `fs::metadata(missing)` returns `Result::Err(_)` rather than panicking
+/// or returning Ok with zero fields. Pins the negative path.
+#[test]
+fn fs_metadata_missing_returns_err() {
+    let source = rvn("fs_metadata_missing_returns_err");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_fs_metadata_missing");
+    assert!(ok, "stderr: {}", stderr);
+    assert!(stdout.contains("err_ok"), "got: {}", stdout);
+}
+
 /// `fs::write` then `fs::remove_file` then `fs::exists` round-trip.
 /// Pins another half of spec B8.
 #[test]

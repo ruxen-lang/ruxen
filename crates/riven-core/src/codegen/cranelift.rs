@@ -1496,6 +1496,14 @@ fn runtime_signature(name: &str) -> Option<(Vec<Type>, Option<Type>)> {
         "riven_fs_create_dir" => Some((vec![types::I64], Some(types::I64))),
         "riven_fs_create_dir_all" => Some((vec![types::I64], Some(types::I64))),
         "riven_fs_rename" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        // Phase 2 stdlib (#06): fs::metadata + Metadata accessors.
+        "riven_fs_metadata" => Some((vec![types::I64], Some(types::I64))),
+        "riven_metadata_len" => Some((vec![types::I64], Some(types::I64))),
+        "riven_metadata_modified" => Some((vec![types::I64], Some(types::I64))),
+        "riven_metadata_is_file" => Some((vec![types::I64], Some(types::I64))),
+        "riven_metadata_is_dir" => Some((vec![types::I64], Some(types::I64))),
+        "riven_metadata_is_symlink" => Some((vec![types::I64], Some(types::I64))),
+        "riven_metadata_free" => Some((vec![types::I64], None)),
         "riven_print_int" => Some((vec![types::I64], None)),
         // Conversions
         "riven_int_to_string" => Some((vec![types::I64], Some(types::I64))),

@@ -2083,6 +2083,16 @@ impl<'a> InferenceEngine<'a> {
             (Ty::Class { name, .. }, "println") if name == "Stdout" => Some(Ty::Unit),
             (Ty::Class { name, .. }, "eprint") if name == "Stderr" => Some(Ty::Unit),
             (Ty::Class { name, .. }, "eprintln") if name == "Stderr" => Some(Ty::Unit),
+            // Phase 2 stdlib (#06): std::fs::Metadata accessors.
+            // Backed by `riven_metadata_*` runtime fns reading from
+            // the flat 24-byte heap struct produced by
+            // `riven_fs_metadata`. `modified` is a UNIX timestamp in
+            // seconds (Int), matching `std.time.unix_ns / 1_000_000_000`.
+            (Ty::Class { name, .. }, "len") if name == "Metadata" => Some(Ty::Int),
+            (Ty::Class { name, .. }, "modified") if name == "Metadata" => Some(Ty::Int),
+            (Ty::Class { name, .. }, "is_file") if name == "Metadata" => Some(Ty::Bool),
+            (Ty::Class { name, .. }, "is_dir") if name == "Metadata" => Some(Ty::Bool),
+            (Ty::Class { name, .. }, "is_symlink") if name == "Metadata" => Some(Ty::Bool),
             // Phase 2 #06.5: `IoError` is a tagged enum, not a class.
             // `.message() -> String` dispatches on tag in the runtime
             // (see `riven_io_error_get_message` in runtime.c).

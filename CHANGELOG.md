@@ -8,6 +8,17 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- Phase 2 stdlib #06: `std::fs::metadata(path) -> Result[Metadata,
+  IoError]` returning a flat heap-allocated `Metadata` struct with
+  `len` / `modified` / `is_file` / `is_dir` / `is_symlink` accessors.
+  Backed by `lstat(2)` so symlinks are reported as Symlink rather than
+  followed. The on-wire layout (3 × int64: size / modified-secs /
+  kind-tag) is packed by the runtime so the FFI surface is independent
+  of libc's `struct stat`. Pin tests in `stdlib_fs.rs::fs_metadata_*`
+  (positive file, positive dir, negative missing-path); e2e fixture
+  `507_fs_metadata`.
+
+### Added
 - Phase 3 #07.S9 parser cut: `where`-clause const predicates.  The
   parser now accepts `where N > 0`, `where N == M`,
   `where N + M == 8` (and any mix of `> < >= <= == !=` comparisons +

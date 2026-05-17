@@ -98,11 +98,19 @@
         .current_dir/.status/.output`) plus `Output` and `ExitStatus`
         structs. Currently only the flat `process_run` shortcut
         exists.
+
+      **SHIPPED (2026-05-17):**
       - `fs.metadata(path) -> Result[Metadata, IoError]` returning a
-        flat `Metadata` struct (size / is_file / is_dir / is_symlink /
-        modified). Per the requirements doc the struct must be
-        ABI-stable C-side; `stat` is called inside C and packed
-        without exposing the libc struct directly.
+        flat heap-allocated `Metadata` struct (`len` / `modified` /
+        `is_file` / `is_dir` / `is_symlink`).  Backed by `lstat(2)`
+        (so symlinks are reported as Symlink rather than followed).
+        The wire layout (3 × int64: size / modified-secs / kind-tag)
+        is packed by `riven_fs_metadata` in `runtime.c`, independent
+        of libc's `struct stat`.  Pin tests:
+        `stdlib_fs.rs::fs_metadata_file_returns_len_and_kind`,
+        `fs_metadata_dir_reports_is_dir`,
+        `fs_metadata_missing_returns_err`.  E2E fixture
+        `507_fs_metadata`.
       - Fill missing negative tests across env/fs/io once the above
         ship (most negative paths already covered by `read_dir` and
         IoError construct tests; sweep for any positive-only
