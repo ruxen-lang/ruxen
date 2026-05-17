@@ -18,7 +18,7 @@ fn test_sample_program_parses_without_errors() {
 }
 
 #[test]
-fn test_sample_first_item_is_enum_priority() {
+fn test_sample_second_item_is_enum_priority() {
     let source = std::fs::read_to_string("tests/fixtures/sample_program.rvn")
         .expect("failed to read sample program");
     let mut lexer = Lexer::new(&source);
@@ -26,7 +26,7 @@ fn test_sample_first_item_is_enum_priority() {
     let mut parser = Parser::new(tokens);
     let program = parser.parse().expect("parser failed");
 
-    match &program.items[0] {
+    match &program.items[1] {
         TopLevelItem::Enum(e) => {
             assert_eq!(e.name, "Priority");
             assert_eq!(e.variants.len(), 4);

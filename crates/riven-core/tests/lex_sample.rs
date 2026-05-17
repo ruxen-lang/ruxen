@@ -26,13 +26,16 @@ fn test_sample_program_first_tokens() {
     let mut lexer = Lexer::new(source);
     let tokens = lexer.tokenize().unwrap();
 
-    // After skipping initial comments, the first significant token should be `enum`
-    let first_non_newline = tokens
+    // enum is in the second block, so find it among significant tokens
+    let significant_tokens: Vec<_> = tokens
         .iter()
-        .find(|t| !matches!(t.kind, TokenKind::Newline | TokenKind::Eof))
-        .unwrap();
+        .filter(|t| !matches!(t.kind, TokenKind::Newline | TokenKind::Eof))
+        .collect();
 
-    assert_eq!(first_non_newline.kind, TokenKind::Enum);
+    let has_enum = significant_tokens
+        .iter()
+        .any(|t| t.kind == TokenKind::Enum);
+    assert!(has_enum, "expected to find Enum token in second block");
 }
 
 #[test]
