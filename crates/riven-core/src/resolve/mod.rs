@@ -800,9 +800,118 @@ impl Resolver {
         self.scopes.insert("IoError.Other".to_string(), io_other_id);
         io_variant_ids.push(io_other_id);
 
+        // Phase 2 #06.5 T1: 11 additional message-carrying variants
+        // (idx 9..19). Same shape as `Other` — each carries a single
+        // `message: String` field. Tag values must stay in sync with
+        // the `RIVEN_IO_ERROR_*` constants in
+        // crates/riven-core/runtime/runtime.c.
+        let io_struct_variants: &[(&str, usize)] = &[
+            ("ConnectionRefused", 9),
+            ("ConnectionReset", 10),
+            ("ConnectionAborted", 11),
+            ("NotConnected", 12),
+            ("AddrInUse", 13),
+            ("AddrNotAvailable", 14),
+            ("InvalidData", 15),
+            ("TimedOut", 16),
+            ("WriteZero", 17),
+            ("Unsupported", 18),
+            ("OutOfMemory", 19),
+        ];
+        for (vname, idx) in io_struct_variants {
+            let vid = self.symbols.define(
+                (*vname).to_string(),
+                DefKind::EnumVariant {
+                    parent: io_error_id,
+                    variant_idx: *idx,
+                    kind: VariantDefKind::Struct(vec![(
+                        "message".to_string(),
+                        Ty::String,
+                    )]),
+                },
+                Visibility::Public,
+                span.clone(),
+            );
+            self.scopes.insert(format!("IoError.{}", vname), vid);
+            io_variant_ids.push(vid);
+        }
+
         if let Some(def) = self.symbols.get_mut(io_error_id) {
             if let DefKind::Enum { ref mut info } = def.kind {
                 info.variants = io_variant_ids;
+            }
+        }
+
+        // Phase 2 #06.5 T1: `IoErrorKind` is a sibling enum of 20 unit
+        // variants whose tag values match `IoError` 1:1. Returned by
+        // `IoError.kind()`; lets user code branch on the discriminant
+        // without inspecting the payload. The runtime helper
+        // `riven_io_error_kind` (codegen/runtime.rs) allocates a
+        // 16-byte tagged-union value matching this enum's layout.
+        let io_error_kind_id = self.symbols.define(
+            "IoErrorKind".to_string(),
+            DefKind::Enum {
+                info: EnumInfo {
+                    generic_params: vec![],
+                    variants: vec![], // filled below
+                    derive_traits: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                    const_predicates: vec![],
+                },
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.scopes
+            .insert_type("IoErrorKind".to_string(), io_error_kind_id);
+        self.type_registry
+            .insert("IoErrorKind".to_string(), io_error_kind_id);
+
+        let io_error_kind_variants: &[(&str, usize)] = &[
+            ("NotFound", 0),
+            ("PermissionDenied", 1),
+            ("AlreadyExists", 2),
+            ("Interrupted", 3),
+            ("WouldBlock", 4),
+            ("InvalidInput", 5),
+            ("UnexpectedEof", 6),
+            ("BrokenPipe", 7),
+            ("Other", 8),
+            ("ConnectionRefused", 9),
+            ("ConnectionReset", 10),
+            ("ConnectionAborted", 11),
+            ("NotConnected", 12),
+            ("AddrInUse", 13),
+            ("AddrNotAvailable", 14),
+            ("InvalidData", 15),
+            ("TimedOut", 16),
+            ("WriteZero", 17),
+            ("Unsupported", 18),
+            ("OutOfMemory", 19),
+        ];
+        let mut io_error_kind_variant_ids: Vec<DefId> =
+            Vec::with_capacity(io_error_kind_variants.len());
+        for (vname, idx) in io_error_kind_variants {
+            let vid = self.symbols.define(
+                (*vname).to_string(),
+                DefKind::EnumVariant {
+                    parent: io_error_kind_id,
+                    variant_idx: *idx,
+                    kind: VariantDefKind::Unit,
+                },
+                Visibility::Public,
+                span.clone(),
+            );
+            self.scopes
+                .insert(format!("IoErrorKind.{}", vname), vid);
+            io_error_kind_variant_ids.push(vid);
+        }
+        if let Some(def) = self.symbols.get_mut(io_error_kind_id) {
+            if let DefKind::Enum { ref mut info } = def.kind {
+                info.variants = io_error_kind_variant_ids;
             }
         }
         let stdin_id = self.symbols.define(

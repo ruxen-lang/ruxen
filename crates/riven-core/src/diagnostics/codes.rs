@@ -170,6 +170,17 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E0706",
         title: "where-clause const predicate is not satisfied at this instantiation",
     },
+    // Phase 2 #06.5 T1: IoError variant constructor arity. Reserved
+    // for the diagnostic emitted when a user constructs an IoError
+    // variant with the wrong field set (e.g. `IoError.ConnectionRefused()`
+    // with no `message:` arg, or `IoError.NotFound("oops")` on a
+    // unit variant). E0711-E0714 are reserved by later #06.5 tasks
+    // (T2 metadata access, T3 path API, T4 fs ops, T5 net surface)
+    // and intentionally left unregistered here.
+    CodeInfo {
+        code: "E0710",
+        title: "IoError variant constructor wrong arity",
+    },
     // ── Borrow checking + mixin/include (E1001-E1099) ────────────────
     // The borrow checker maintains a parallel `ErrorCode` enum in
     // `borrow_check/errors.rs`; titles below mirror its `title()`

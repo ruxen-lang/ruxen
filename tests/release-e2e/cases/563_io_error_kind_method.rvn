@@ -1,0 +1,16 @@
+def main
+  # Direct .kind() invocation on a constructed variant, matching the
+  # IoErrorKind result. Pins the runtime helper riven_io_error_kind +
+  # the typeck mapping `Ty::Enum("IoError")::kind() -> IoErrorKind`.
+  let e = IoError.AddrInUse(message: "bind: address in use")
+  let k = e.kind()
+  match k
+    IoErrorKind.AddrInUse        -> puts "addr_in_use"
+    IoErrorKind.AddrNotAvailable -> puts "addr_unavail"
+    IoErrorKind.NotFound         -> puts "missing"
+    IoErrorKind.Other            -> puts "other"
+    _                             -> puts "wrong"
+  end
+  # Also confirm the captured message survived the variant.
+  puts e.message()
+end

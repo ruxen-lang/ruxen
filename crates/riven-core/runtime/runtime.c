@@ -127,6 +127,27 @@ static void *riven_result_err_value(int64_t payload) {
  *   6  UnexpectedEof
  *   7  BrokenPipe
  *   8  Other(message: String)
+ *
+ * Phase 2 #06.5 T1 — appended 11 message-carrying variants (idx 9..19)
+ * to widen the classifier's coverage of POSIX errno without renumbering
+ * the existing tags (callers may match on the numeric tag via
+ * `IoError.kind()` and we must not invalidate those matches):
+ *   9  ConnectionRefused(message: String)
+ *  10  ConnectionReset(message: String)
+ *  11  ConnectionAborted(message: String)
+ *  12  NotConnected(message: String)
+ *  13  AddrInUse(message: String)
+ *  14  AddrNotAvailable(message: String)
+ *  15  InvalidData(message: String)
+ *  16  TimedOut(message: String)
+ *  17  WriteZero(message: String)
+ *  18  Unsupported(message: String)
+ *  19  OutOfMemory(message: String)
+ *
+ * `InvalidData` and `WriteZero` have no portable errno mapping; they
+ * exist for direct construction (parsers, serializers, short-write
+ * detection in user code). The other nine are produced by
+ * `riven_io_error_classify_errno` from real errno values.
  */
 #define RIVEN_IO_ERROR_NOT_FOUND          0
 #define RIVEN_IO_ERROR_PERMISSION_DENIED  1
@@ -137,6 +158,17 @@ static void *riven_result_err_value(int64_t payload) {
 #define RIVEN_IO_ERROR_UNEXPECTED_EOF     6
 #define RIVEN_IO_ERROR_BROKEN_PIPE        7
 #define RIVEN_IO_ERROR_OTHER              8
+#define RIVEN_IO_ERROR_CONNECTION_REFUSED 9
+#define RIVEN_IO_ERROR_CONNECTION_RESET   10
+#define RIVEN_IO_ERROR_CONNECTION_ABORTED 11
+#define RIVEN_IO_ERROR_NOT_CONNECTED      12
+#define RIVEN_IO_ERROR_ADDR_IN_USE        13
+#define RIVEN_IO_ERROR_ADDR_NOT_AVAILABLE 14
+#define RIVEN_IO_ERROR_INVALID_DATA       15
+#define RIVEN_IO_ERROR_TIMED_OUT          16
+#define RIVEN_IO_ERROR_WRITE_ZERO         17
+#define RIVEN_IO_ERROR_UNSUPPORTED        18
+#define RIVEN_IO_ERROR_OUT_OF_MEMORY      19
 
 static void *riven_io_error_unit(int32_t tag) {
     int64_t *err = (int64_t *)riven_alloc(16);
@@ -152,19 +184,69 @@ static void *riven_io_error_other(const char *message) {
     return err;
 }
 
+/* Phase 2 #06.5 T1: allocator for the 11 new message-carrying variants
+ * (ConnectionRefused, …, OutOfMemory). Layout is identical to `Other`
+ * — int32 tag, 4 pad, char* payload — only the tag varies. Used by
+ * the errno classifier path. User-side direct construction goes
+ * through the synthesized enum constructor in MIR lowering, which
+ * lays out the same 16-byte struct. */
+static void *riven_io_error_struct(int32_t tag, const char *message) {
+    int64_t *err = (int64_t *)riven_alloc(16);
+    *(int32_t *)err = tag;
+    err[1] = (int64_t)riven_string_from(message ? message : "io error");
+    return err;
+}
+
 static int32_t riven_io_error_classify_errno(int saved_errno) {
     switch (saved_errno) {
-        case ENOENT:  return RIVEN_IO_ERROR_NOT_FOUND;
+        case ENOENT:        return RIVEN_IO_ERROR_NOT_FOUND;
         case EACCES:
-        case EPERM:   return RIVEN_IO_ERROR_PERMISSION_DENIED;
-        case EEXIST:  return RIVEN_IO_ERROR_ALREADY_EXISTS;
-        case EINTR:   return RIVEN_IO_ERROR_INTERRUPTED;
+        case EPERM:         return RIVEN_IO_ERROR_PERMISSION_DENIED;
+        case EEXIST:        return RIVEN_IO_ERROR_ALREADY_EXISTS;
+        case EINTR:         return RIVEN_IO_ERROR_INTERRUPTED;
 #ifdef EAGAIN
-        case EAGAIN:  return RIVEN_IO_ERROR_WOULD_BLOCK;
+        case EAGAIN:        return RIVEN_IO_ERROR_WOULD_BLOCK;
 #endif
-        case EINVAL:  return RIVEN_IO_ERROR_INVALID_INPUT;
-        case EPIPE:   return RIVEN_IO_ERROR_BROKEN_PIPE;
-        default:      return RIVEN_IO_ERROR_OTHER;
+        case EINVAL:        return RIVEN_IO_ERROR_INVALID_INPUT;
+        case EPIPE:         return RIVEN_IO_ERROR_BROKEN_PIPE;
+        /* Phase 2 #06.5 T1 — network + resource-exhaustion classes. */
+#ifdef ECONNREFUSED
+        case ECONNREFUSED:  return RIVEN_IO_ERROR_CONNECTION_REFUSED;
+#endif
+#ifdef ECONNRESET
+        case ECONNRESET:    return RIVEN_IO_ERROR_CONNECTION_RESET;
+#endif
+#ifdef ECONNABORTED
+        case ECONNABORTED:  return RIVEN_IO_ERROR_CONNECTION_ABORTED;
+#endif
+#ifdef ENOTCONN
+        case ENOTCONN:      return RIVEN_IO_ERROR_NOT_CONNECTED;
+#endif
+#ifdef EADDRINUSE
+        case EADDRINUSE:    return RIVEN_IO_ERROR_ADDR_IN_USE;
+#endif
+#ifdef EADDRNOTAVAIL
+        case EADDRNOTAVAIL: return RIVEN_IO_ERROR_ADDR_NOT_AVAILABLE;
+#endif
+#ifdef ETIMEDOUT
+        case ETIMEDOUT:     return RIVEN_IO_ERROR_TIMED_OUT;
+#endif
+#ifdef ENOMEM
+        case ENOMEM:        return RIVEN_IO_ERROR_OUT_OF_MEMORY;
+#endif
+#ifdef ENOSYS
+        case ENOSYS:        return RIVEN_IO_ERROR_UNSUPPORTED;
+#endif
+        /* On Linux EOPNOTSUPP == ENOTSUP, so we guard the second
+         * label to avoid a duplicate-case compile error. macOS keeps
+         * them distinct. */
+#ifdef ENOTSUP
+        case ENOTSUP:       return RIVEN_IO_ERROR_UNSUPPORTED;
+#endif
+#if defined(EOPNOTSUPP) && (!defined(ENOTSUP) || EOPNOTSUPP != ENOTSUP)
+        case EOPNOTSUPP:    return RIVEN_IO_ERROR_UNSUPPORTED;
+#endif
+        default:            return RIVEN_IO_ERROR_OTHER;
     }
 }
 
@@ -173,6 +255,28 @@ static int32_t riven_io_error_classify_errno(int saved_errno) {
  * meaningful errno (EOF, env-var-not-found, …) use this helper. */
 static void *riven_io_error_message(const char *message) {
     return riven_result_err_value((int64_t)riven_io_error_other(message));
+}
+
+/* Returns true when the tag is one of the 11 message-carrying variants
+ * added in #06.5 T1. Lets `from_errno` route the strerror payload into
+ * the variant value rather than collapsing back to `Other`. */
+static int riven_io_error_tag_has_message(int32_t tag) {
+    switch (tag) {
+        case RIVEN_IO_ERROR_CONNECTION_REFUSED:
+        case RIVEN_IO_ERROR_CONNECTION_RESET:
+        case RIVEN_IO_ERROR_CONNECTION_ABORTED:
+        case RIVEN_IO_ERROR_NOT_CONNECTED:
+        case RIVEN_IO_ERROR_ADDR_IN_USE:
+        case RIVEN_IO_ERROR_ADDR_NOT_AVAILABLE:
+        case RIVEN_IO_ERROR_INVALID_DATA:
+        case RIVEN_IO_ERROR_TIMED_OUT:
+        case RIVEN_IO_ERROR_WRITE_ZERO:
+        case RIVEN_IO_ERROR_UNSUPPORTED:
+        case RIVEN_IO_ERROR_OUT_OF_MEMORY:
+            return 1;
+        default:
+            return 0;
+    }
 }
 
 /* Build a Result::Err(IoError) from a captured errno. Maps the errno
@@ -184,13 +288,17 @@ static void *riven_io_error_from_errno(int saved_errno) {
     if (tag == RIVEN_IO_ERROR_OTHER) {
         return riven_io_error_message(strerror(saved_errno));
     }
+    if (riven_io_error_tag_has_message(tag)) {
+        return riven_result_err_value(
+            (int64_t)riven_io_error_struct(tag, strerror(saved_errno)));
+    }
     return riven_result_err_value((int64_t)riven_io_error_unit(tag));
 }
 
 /* `IoError.message() -> String`. Wired in `codegen/runtime.rs`
  * (`"IoError_message" -> "riven_io_error_get_message"`). Returns a
  * heap-allocated String pointer (interned static for unit variants;
- * the captured payload for `Other`). */
+ * the captured payload for variants that carry one). */
 char *riven_io_error_get_message(void *err) {
     if (!err) {
         return riven_string_from("io error");
@@ -213,13 +321,54 @@ char *riven_io_error_get_message(void *err) {
             return riven_string_from("unexpected end of file");
         case RIVEN_IO_ERROR_BROKEN_PIPE:
             return riven_string_from("broken pipe");
-        case RIVEN_IO_ERROR_OTHER: {
+        case RIVEN_IO_ERROR_OTHER:
+        case RIVEN_IO_ERROR_CONNECTION_REFUSED:
+        case RIVEN_IO_ERROR_CONNECTION_RESET:
+        case RIVEN_IO_ERROR_CONNECTION_ABORTED:
+        case RIVEN_IO_ERROR_NOT_CONNECTED:
+        case RIVEN_IO_ERROR_ADDR_IN_USE:
+        case RIVEN_IO_ERROR_ADDR_NOT_AVAILABLE:
+        case RIVEN_IO_ERROR_INVALID_DATA:
+        case RIVEN_IO_ERROR_TIMED_OUT:
+        case RIVEN_IO_ERROR_WRITE_ZERO:
+        case RIVEN_IO_ERROR_UNSUPPORTED:
+        case RIVEN_IO_ERROR_OUT_OF_MEMORY: {
             char *msg = (char *)((int64_t *)err)[1];
-            return msg ? msg : riven_string_from("io error");
+            if (msg) {
+                return msg;
+            }
+            switch (tag) {
+                case RIVEN_IO_ERROR_CONNECTION_REFUSED: return riven_string_from("connection refused");
+                case RIVEN_IO_ERROR_CONNECTION_RESET:   return riven_string_from("connection reset");
+                case RIVEN_IO_ERROR_CONNECTION_ABORTED: return riven_string_from("connection aborted");
+                case RIVEN_IO_ERROR_NOT_CONNECTED:      return riven_string_from("not connected");
+                case RIVEN_IO_ERROR_ADDR_IN_USE:        return riven_string_from("address in use");
+                case RIVEN_IO_ERROR_ADDR_NOT_AVAILABLE: return riven_string_from("address not available");
+                case RIVEN_IO_ERROR_INVALID_DATA:       return riven_string_from("invalid data");
+                case RIVEN_IO_ERROR_TIMED_OUT:          return riven_string_from("operation timed out");
+                case RIVEN_IO_ERROR_WRITE_ZERO:         return riven_string_from("write zero");
+                case RIVEN_IO_ERROR_UNSUPPORTED:        return riven_string_from("unsupported");
+                case RIVEN_IO_ERROR_OUT_OF_MEMORY:      return riven_string_from("out of memory");
+                default:                                return riven_string_from("io error");
+            }
         }
         default:
             return riven_string_from("io error");
     }
+}
+
+/* `IoError.kind() -> IoErrorKind`. Wired in `codegen/runtime.rs`
+ * (`"IoError_kind" -> "riven_io_error_kind"`). `IoErrorKind` is a
+ * 20-unit-variant enum (no payload) whose tag values match IoError
+ * 1:1. The codegen treats every enum value as a 16-byte boxed
+ * pointer, so we keep the wire format uniform with IoError itself
+ * — tag at offset 0, payload slot zeroed. */
+void *riven_io_error_kind(void *err) {
+    int32_t tag = err ? *(int32_t *)err : RIVEN_IO_ERROR_OTHER;
+    int64_t *kind = (int64_t *)riven_alloc(16);
+    *(int32_t *)kind = tag;
+    kind[1] = 0;
+    return kind;
 }
 
 static void *riven_stream_handle(FILE *stream) {

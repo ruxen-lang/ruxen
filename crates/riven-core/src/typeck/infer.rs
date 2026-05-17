@@ -2132,6 +2132,14 @@ impl<'a> InferenceEngine<'a> {
             // `.message() -> String` dispatches on tag in the runtime
             // (see `riven_io_error_get_message` in runtime.c).
             (Ty::Enum { name, .. }, "message") if name == "IoError" => Some(Ty::String),
+            // Phase 2 #06.5 T1: `.kind() -> IoErrorKind` returns the
+            // discriminant as a sibling 20-unit-variant enum. Lets
+            // user code branch on the variant tag without binding the
+            // payload. Wired through `riven_io_error_kind`.
+            (Ty::Enum { name, .. }, "kind") if name == "IoError" => Some(Ty::Enum {
+                name: "IoErrorKind".to_string(),
+                generic_args: vec![],
+            }),
             (Ty::Class { name, generic_args }, "to_vec") if name.ends_with("Iter") => {
                 let elem = if name == "SplitIter" {
                     // SplitIter yields &str segments

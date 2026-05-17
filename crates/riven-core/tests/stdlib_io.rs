@@ -289,3 +289,50 @@ fn io_error_message_dispatches_per_variant_on_empty_stdin() {
         stdout
     );
 }
+
+/// Phase 2 #06.5 T1: the 11 message-carrying variants added on top of
+/// the original 9 are constructible from user code with named-field
+/// syntax — `IoError.ConnectionRefused(message: "...")` — and
+/// `.message()` returns the captured payload (not the default static
+/// description). One Riven program exercises all 11 in a single
+/// binary to keep cargo-test wall time low.
+#[test]
+fn io_error_new_variants_construct_and_message_passes_through() {
+    let source = rvn("io_error_new_variants_construct_and_message");
+    let (stdout, _stderr, ok) =
+        compile_and_run(&source, "stdlib_io_err_new_variants");
+    assert!(ok, "binary failed; stdout=[{stdout}]");
+    let expected = "no listener\nrst\nabort\nno sock\nin use\nunavail\n\
+                    bad bytes\ntimeout\nwrote 0\nnope\nno mem\n";
+    assert_eq!(stdout, expected, "got: {:?}", stdout);
+}
+
+/// Phase 2 #06.5 T1: `IoError.kind() -> IoErrorKind` returns the
+/// discriminant as a sibling enum whose tag values match `IoError`
+/// 1:1. Constructing several variants and matching on their
+/// `.kind()` exercises both the runtime dispatcher
+/// (`riven_io_error_kind`) and the typeck mapping
+/// `Ty::Enum("IoError") :: "kind"` → `Ty::Enum("IoErrorKind")`.
+#[test]
+fn io_error_kind_round_trip_returns_matching_io_error_kind_variant() {
+    let source = rvn("io_error_kind_round_trip");
+    let (stdout, _stderr, ok) =
+        compile_and_run(&source, "stdlib_io_err_kind_round_trip");
+    assert!(ok, "binary failed; stdout=[{stdout}]");
+    let expected = "kind:NotFound\nkind:PermissionDenied\n\
+                    kind:ConnectionRefused\nkind:TimedOut\nkind:OutOfMemory\n";
+    assert_eq!(stdout, expected, "got: {:?}", stdout);
+}
+
+/// Phase 2 #06.5 T1: the compiler must accept a 20-arm match on
+/// `IoError` as exhaustive (no wildcard, no catch-all). This pins
+/// the resolve-side variant list and the typeck exhaustiveness
+/// checker against the runtime constant table.
+#[test]
+fn io_error_exhaustive_20_variant_match_compiles_and_runs() {
+    let source = rvn("io_error_exhaustive_match_all_20_variants");
+    let (stdout, _stderr, ok) =
+        compile_and_run(&source, "stdlib_io_err_exhaustive");
+    assert!(ok, "binary failed; stdout=[{stdout}]");
+    assert_eq!(stdout, "nf\not\ncr\nom\n", "got: {:?}", stdout);
+}

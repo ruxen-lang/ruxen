@@ -396,6 +396,11 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // only while the payload literally was the message string;
         // with proper variants we need a real dispatcher.
         "IoError_message" => return Ok("riven_io_error_get_message"),
+        // Phase 2 #06.5 T1: `.kind() -> IoErrorKind` returns the
+        // discriminant as a sibling 20-unit-variant enum (same wire
+        // format — 16 bytes, tag at offset 0). See
+        // `riven_io_error_kind` in runtime.c.
+        "IoError_kind" => return Ok("riven_io_error_kind"),
         "Stdin_read_line" => return Ok("riven_stdin_read_line"),
         "Stdin_read_to_string" => return Ok("riven_stdin_read_to_string"),
         "Stdin_lines" => return Ok("riven_stdin_lines"),

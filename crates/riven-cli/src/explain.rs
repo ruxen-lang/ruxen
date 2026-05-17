@@ -53,6 +53,8 @@ static EXPLAINS: &[(&str, &str)] = &[
     ("E0704", include_str!("../../../docs/errors/E0704.md")),
     ("E0705", include_str!("../../../docs/errors/E0705.md")),
     ("E0706", include_str!("../../../docs/errors/E0706.md")),
+    // Phase 2 #06.5 T1: IoError variant constructor arity.
+    ("E0710", include_str!("../../../docs/errors/E0710.md")),
     // ── Borrow checker / trait-impl ─────────────────────────────────
     ("E1001", include_str!("../../../docs/errors/E1001.md")),
     ("E1002", include_str!("../../../docs/errors/E1002.md")),

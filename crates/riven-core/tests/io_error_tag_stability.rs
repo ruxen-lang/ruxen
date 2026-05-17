@@ -62,9 +62,56 @@ fn io_error_variant_tags_match_runtime_and_resolver() {
 
     // Collect (Variant, tag) pairs from the resolver table.
     // Scan for lines like `("NotFound", 0),` inside the
-    // `io_unit_variants` array.
+    // `io_unit_variants` / `io_struct_variants` arrays. `Other` is
+    // defined out-of-line (it predates the struct-variants table), so
+    // we pick it up via a `variant_idx: 8` sentinel — but we must
+    // skip the IoErrorKind table (which also contains `Other` at
+    // idx 8) to avoid duplicate entries.
+    //
+    // Phase 2 #06.5 T1: the curated `IoError` variant list grew from
+    // 9 to 20. Resolver scan keeps the KNOWN-list filter so unrelated
+    // numeric tuples elsewhere in resolve/mod.rs don't slip in.
+    const KNOWN: &[&str] = &[
+        "NotFound",
+        "PermissionDenied",
+        "AlreadyExists",
+        "Interrupted",
+        "WouldBlock",
+        "InvalidInput",
+        "UnexpectedEof",
+        "BrokenPipe",
+        "Other",
+        "ConnectionRefused",
+        "ConnectionReset",
+        "ConnectionAborted",
+        "NotConnected",
+        "AddrInUse",
+        "AddrNotAvailable",
+        "InvalidData",
+        "TimedOut",
+        "WriteZero",
+        "Unsupported",
+        "OutOfMemory",
+    ];
     let mut resolver_tags: Vec<(String, usize)> = Vec::new();
+    let mut in_io_error_kind_block = false;
     for line in resolver.lines() {
+        // Crude bracket scan: the IoErrorKind variants table is
+        // introduced by the comment `IoErrorKind` is a sibling enum…
+        // — we toggle on the variable name `io_error_kind_variants`
+        // and off on the closing `];` so its entries don't double-
+        // count as IoError variants.
+        if line.contains("io_error_kind_variants") {
+            in_io_error_kind_block = true;
+        }
+        if in_io_error_kind_block && line.trim() == "];" {
+            in_io_error_kind_block = false;
+            continue;
+        }
+        if in_io_error_kind_block {
+            continue;
+        }
+
         let trimmed = line.trim();
         if let Some(start) = trimmed.find("(\"") {
             let rest = &trimmed[start + 2..];
@@ -77,21 +124,9 @@ fn io_error_variant_tags_match_runtime_and_resolver() {
                         .trim_end_matches(|c: char| !c.is_ascii_digit())
                         .trim();
                     if let Ok(tag) = tag_str.parse::<usize>() {
-                        // Filter to IoError-y names (avoid stray
-                        // (\"name\", number) tuples from unrelated
-                        // code).  Heuristic: all 8 named variants.
-                        const KNOWN: &[&str] = &[
-                            "NotFound",
-                            "PermissionDenied",
-                            "AlreadyExists",
-                            "Interrupted",
-                            "WouldBlock",
-                            "InvalidInput",
-                            "UnexpectedEof",
-                            "BrokenPipe",
-                            "Other",
-                        ];
-                        if KNOWN.contains(&name) && !resolver_tags.iter().any(|(n, _)| n == name) {
+                        if KNOWN.contains(&name)
+                            && !resolver_tags.iter().any(|(n, _)| n == name)
+                        {
                             resolver_tags.push((name.to_string(), tag));
                         }
                     }
@@ -99,8 +134,10 @@ fn io_error_variant_tags_match_runtime_and_resolver() {
             }
         }
     }
-    // The resolver defines `Other` separately (struct variant with
-    // a payload); pick it up via a different sentinel.
+    // `Other` is defined out-of-line in the resolver (struct variant
+    // with a single payload field); pick it up via its `variant_idx`
+    // sentinel since it never appears in the `io_unit_variants` or
+    // `io_struct_variants` tables.
     for line in resolver.lines() {
         if line.contains("variant_idx: 8") && !resolver_tags.iter().any(|(n, _)| n == "Other") {
             resolver_tags.push(("Other".to_string(), 8));
@@ -110,18 +147,17 @@ fn io_error_variant_tags_match_runtime_and_resolver() {
     runtime_tags.sort_by_key(|(_, t)| *t);
     resolver_tags.sort_by_key(|(_, t)| *t);
 
-    // The unit variants must match 1:1.  `Other` is tag 8 on both
-    // sides (struct variant in resolver, OTHER #define in runtime).
+    // The variant set must match 1:1 across runtime + resolver.
     assert_eq!(
         runtime_tags.len(),
-        9,
-        "expected 9 IoError tag #defines in runtime; got {:?}",
+        20,
+        "expected 20 IoError tag #defines in runtime; got {:?}",
         runtime_tags
     );
     assert_eq!(
         resolver_tags.len(),
-        9,
-        "expected 9 IoError variants in resolver; got {:?}",
+        20,
+        "expected 20 IoError variants in resolver; got {:?}",
         resolver_tags
     );
     assert_eq!(
