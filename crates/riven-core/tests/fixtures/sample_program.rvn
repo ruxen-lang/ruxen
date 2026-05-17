@@ -4,6 +4,10 @@
 
 # --- Type Definitions ---
 
+mixin Showable
+  def to_display -> String
+end
+
 enum Priority
   Low
   Medium

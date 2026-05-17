@@ -128,7 +128,14 @@ fn validate_class(class: &HirClassDef, symbols: &SymbolTable, diags: &mut Vec<Di
 
 fn validate_struct(strukt: &HirStructDef, symbols: &SymbolTable, diags: &mut Vec<Diagnostic>) {
     let derives = collected_derives(&strukt.derive_traits, &strukt.impl_blocks);
-    validate_common_traits("struct", &strukt.name, &derives, &strukt.span, symbols, diags);
+    validate_common_traits(
+        "struct",
+        &strukt.name,
+        &derives,
+        &strukt.span,
+        symbols,
+        diags,
+    );
     validate_copy_requirements(
         "struct",
         &strukt.name,
