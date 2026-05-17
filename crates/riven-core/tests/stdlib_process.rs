@@ -206,3 +206,147 @@ fn process_run_nonexistent_binary_returns_127() {
         stderr
     );
 }
+
+// ─── std::process::Command builder API (Phase 2 #06 final gap) ─────────
+//
+// Mirrors the `fs.metadata` "flat heap struct + accessors" pattern
+// (commit 0c62e97). Each test exercises the full builder pipeline
+// from `Command.new` through one of the terminals (`.status` or
+// `.output`) and asserts on the captured stdout. The fixtures all
+// hand-roll the `match Result` branches because Result.unwrap is
+// typeck-only — same pattern as `stdlib_fs.rs::fs_metadata_*`.
+
+/// `/usr/bin/true.status -> Ok(ExitStatus(0))`.  Pins the happy-path
+/// fork+waitpid path through the Command builder.
+#[test]
+fn command_status_true_returns_zero() {
+    let source = rvn("command_status_true_returns_zero");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_command_status_true");
+    assert!(ok, "stdout=[{}] stderr=[{}]", stdout, stderr);
+    assert!(
+        stdout.contains("ok"),
+        "expected exit code 0 from /usr/bin/true via Command, got: stdout=[{}] stderr=[{}]",
+        stdout, stderr
+    );
+}
+
+/// `/usr/bin/false.status -> Ok(ExitStatus(1))`.  Pins non-zero exit
+/// propagation (would catch a sign-extension or WEXITSTATUS bug).
+#[test]
+fn command_status_false_returns_one() {
+    let source = rvn("command_status_false_returns_one");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_command_status_false");
+    assert!(ok, "stdout=[{}] stderr=[{}]", stdout, stderr);
+    assert!(
+        stdout.contains("ok"),
+        "expected exit code 1 from /usr/bin/false via Command, got: stdout=[{}] stderr=[{}]",
+        stdout, stderr
+    );
+}
+
+/// `.arg(...)` propagates a single argv slot.  `/bin/echo hello` exits 0
+/// regardless of what we pass, so this just pins the typecheck +
+/// codegen of the chained builder shape.
+#[test]
+fn command_arg_passes_through() {
+    let source = rvn("command_arg_passes_through");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_command_arg");
+    assert!(ok, "stdout=[{}] stderr=[{}]", stdout, stderr);
+    assert!(
+        stdout.contains("ok"),
+        "expected exit 0 from /bin/echo with arg, got: stdout=[{}] stderr=[{}]",
+        stdout, stderr
+    );
+}
+
+/// `.args(Array[String])` bulk-appends.  Three positional args to
+/// /bin/echo — exit 0 confirms the Vec[String] -> argv plumbing
+/// (each slot read via `args->data[i]` cast back to `char*`).
+#[test]
+fn command_args_bulk() {
+    let source = rvn("command_args_bulk");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_command_args_bulk");
+    assert!(ok, "stdout=[{}] stderr=[{}]", stdout, stderr);
+    assert!(
+        stdout.contains("ok"),
+        "expected exit 0 from /bin/echo with .args bulk, got: stdout=[{}] stderr=[{}]",
+        stdout, stderr
+    );
+}
+
+/// `.env(K, V)` adds an env var that the child can read.  Use
+/// `/usr/bin/env` (prints `KEY=VAL` lines for every env entry) and
+/// capture stdout — the `RIVEN_TEST=1` line must appear.  Pins envp
+/// construction in `riven_command_build_envp`.
+#[test]
+fn command_env_visible_to_child() {
+    let source = rvn("command_env_visible_to_child");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_command_env");
+    assert!(ok, "stdout=[{}] stderr=[{}]", stdout, stderr);
+    assert!(
+        stdout.contains("env_ok"),
+        "expected RIVEN_TEST=1 in captured stdout, got: stdout=[{}] stderr=[{}]",
+        stdout, stderr
+    );
+}
+
+/// `.current_dir(path)` changes the child's cwd.  Use `/bin/pwd`,
+/// capture stdout, assert it contains "/tmp" (macOS may resolve to
+/// "/private/tmp" — contains catches both).  Pins the chdir branch
+/// in the child.
+#[test]
+fn command_current_dir_changes_cwd() {
+    let source = rvn("command_current_dir_changes_cwd");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_command_cwd");
+    assert!(ok, "stdout=[{}] stderr=[{}]", stdout, stderr);
+    assert!(
+        stdout.contains("cwd_ok"),
+        "expected pwd output to contain /tmp, got: stdout=[{}] stderr=[{}]",
+        stdout, stderr
+    );
+}
+
+/// `.output()` captures the child's stdout via a pipe.  `/bin/echo xyz`
+/// → captured stdout contains "xyz".  Pins pipe + dup2 + drain in
+/// `riven_command_output`.
+#[test]
+fn command_output_captures_stdout() {
+    let source = rvn("command_output_captures_stdout");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_command_output_stdout");
+    assert!(ok, "stdout=[{}] stderr=[{}]", stdout, stderr);
+    assert!(
+        stdout.contains("stdout_ok"),
+        "expected captured stdout to contain xyz, got: stdout=[{}] stderr=[{}]",
+        stdout, stderr
+    );
+}
+
+/// `.output()` captures stderr separately.  `/bin/sh -c "echo err 1>&2"`
+/// writes to stderr only — captured stderr must contain "err".
+#[test]
+fn command_output_captures_stderr() {
+    let source = rvn("command_output_captures_stderr");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_command_output_stderr");
+    assert!(ok, "stdout=[{}] stderr=[{}]", stdout, stderr);
+    assert!(
+        stdout.contains("stderr_ok"),
+        "expected captured stderr to contain err, got: stdout=[{}] stderr=[{}]",
+        stdout, stderr
+    );
+}
+
+/// `Command.new("/no/such/path").status` returns Result::Err.  Pins
+/// the pre-flight `access(F_OK)` check that turns a typo'd binary
+/// into a structured error instead of an exec-failure exit code of
+/// 127 indistinguishable from a child that legitimately exited 127.
+#[test]
+fn command_nonexistent_binary_returns_err() {
+    let source = rvn("command_nonexistent_binary_returns_err");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_command_missing");
+    assert!(ok, "stdout=[{}] stderr=[{}]", stdout, stderr);
+    assert!(
+        stdout.contains("err_ok"),
+        "expected Err on missing binary, got: stdout=[{}] stderr=[{}]",
+        stdout, stderr
+    );
+}

@@ -1,0 +1,16 @@
+use std.process.Command
+
+def report(out: Output)
+  if out.stdout.contains("xyz")
+    puts "stdout_ok"
+  else
+    puts "stdout_bad"
+  end
+end
+
+def main
+  match Command.new("/bin/echo").arg("xyz").output
+    Ok(out) -> report(out)
+    Err(_)  -> puts "err"
+  end
+end

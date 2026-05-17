@@ -375,6 +375,18 @@ impl<'a> Lowerer<'a> {
         for item in &program.items {
             visit(item, &mut self.user_drop_classes);
         }
+
+        // Phase 2 stdlib (#06): built-in classes whose runtime side
+        // owns inner heap (Vec spines, env entries, captured stdout/
+        // stderr buffers) need a `Command_drop` / `Output_drop` call
+        // before the generic `riven_dealloc` so the inner allocations
+        // are released. Pre-populate the set so the drop-elaboration
+        // pass treats them like user-defined drop classes — see
+        // `insert_drops`. The runtime fns are mapped via the standard
+        // `{Type}_drop -> riven_<type>_drop` dispatch in
+        // `codegen::runtime::runtime_name`.
+        self.user_drop_classes.insert("Command".to_string());
+        self.user_drop_classes.insert("Output".to_string());
     }
 
     /// Given a generic type parameter's bounds, return the unique concrete
@@ -1396,6 +1408,11 @@ impl<'a> Lowerer<'a> {
                     };
                     // Phase 2 #06.D2.S0: `Formatter.new()` dispatches to
                     // the runtime constructor just like Vec/Hash.
+                    // Phase 2 #06 (Command): `Command.new(prog)` joins
+                    // the same fast path so it dispatches to
+                    // `riven_command_new(prog)` instead of going through
+                    // the `Class_init` path (Command has no user-defined
+                    // init).
                     if matches!(
                         base_type,
                         "Vec"
@@ -1406,6 +1423,7 @@ impl<'a> Lowerer<'a> {
                             | "Set"
                             | "HashSet"
                             | "Formatter"
+                            | "Command"
                     ) {
                         let obj = self.new_temp(expr.ty.clone());
                         // ruby-naming.spec.md §3.11 renames stdlib types
@@ -2644,6 +2662,11 @@ impl<'a> Lowerer<'a> {
                     };
                     // Phase 2 #06.D2.S0: `Formatter.new()` dispatches to
                     // the runtime constructor just like Vec/Hash.
+                    // Phase 2 #06 (Command): `Command.new(prog)` joins
+                    // the same fast path so it dispatches to
+                    // `riven_command_new(prog)` instead of going through
+                    // the `Class_init` path (Command has no user-defined
+                    // init).
                     if matches!(
                         base_type,
                         "Vec"
@@ -2654,6 +2677,7 @@ impl<'a> Lowerer<'a> {
                             | "Set"
                             | "HashSet"
                             | "Formatter"
+                            | "Command"
                     ) {
                         let obj = self.new_temp(expr.ty.clone());
                         // ruby-naming.spec.md §3.11 renames stdlib types
@@ -8797,12 +8821,28 @@ fn insert_drops(
             }
             // Compiler temporaries: only drop heap-owning built-ins
             // whose value is a fresh allocation (see comment above).
+            // Class temps with a registered `def drop` (user_drop_classes
+            // includes the built-in std::process::Command + Output
+            // entries for inner-heap cleanup) also need scope-exit drop
+            // when alloc-rooted — without this, the chained
+            // `Command.new(p).arg(a).status()` pattern would leak the
+            // intermediate Command's args/env spines.
             if local.name.starts_with("_t") {
                 let is_builtin_heap = matches!(
                     local.ty,
                     Ty::String | Ty::Array(_) | Ty::Map(_, _) | Ty::Set(_)
                 );
-                return is_builtin_heap && dealloc_safe.contains(&local.id);
+                if is_builtin_heap && dealloc_safe.contains(&local.id) {
+                    return true;
+                }
+                if let Ty::Class { name, .. } = &local.ty {
+                    if user_drop_classes.contains(name)
+                        && dealloc_safe.contains(&local.id)
+                    {
+                        return true;
+                    }
+                }
+                return false;
             }
             // User-named locals of an implicitly-Copy user aggregate
             // (struct/class/enum whose fields all qualify for the §3.6
@@ -8849,7 +8889,16 @@ fn insert_drops(
                 //    body still sees the live allocation. Skip when we're
                 //    already lowering that class's own drop method to
                 //    avoid infinite self-recursion.
-                if !in_user_drop_method {
+                //
+                //    Gate the drop call on `dealloc_safe` so we don't
+                //    run the destructor on a value whose ownership has
+                //    been transferred (otherwise builder patterns like
+                //    `let cmd = Command.new(p); cmd.arg(a)` would
+                //    double-`Command_drop` — once on the `arg` return
+                //    temp, once on the now-tainted `cmd`). This is also
+                //    semantically correct: dropping a moved-from value
+                //    should be a no-op everywhere.
+                if !in_user_drop_method && dealloc_safe.contains(&local_id) {
                     if let Some(callee) = drop_callees.get(&local_id) {
                         block.instructions.push(MirInst::Call {
                             dest: None,
@@ -9168,6 +9217,62 @@ fn compute_dealloc_safe_locals(func: &MirFunction) -> std::collections::HashSet<
                         // `clone` / `take` / `skip`.
                         "riven_vec_chain",
                         "riven_vec_zip",
+                        // Phase 2 stdlib (#06): std::process::Command
+                        // builder. `Command_new` allocates a fresh
+                        // RivenCommand. The chained builder methods
+                        // (`arg/args/env/current_dir`) mutate-in-place
+                        // and return the same pointer — but the source
+                        // local is tainted on each call (because
+                        // `Command_*` does not match the runtime-
+                        // borrow-helper prefix list below), so a
+                        // chained `let cmd = Command.new("ls").arg("a")`
+                        // ends with `cmd` owning the only live root
+                        // and the prior intermediates already tainted.
+                        // Without these whitelist entries the dest
+                        // local would be default-tainted by the
+                        // generic `Call` rule and the scope-exit drop
+                        // pass would skip the `Command_drop` we need.
+                        //
+                        // `Command_status` / `Command_output` are NOT
+                        // listed here — they consume the Command (free
+                        // it internally) and the dest is a freshly-
+                        // allocated `Result[ExitStatus|Output,
+                        // IoError]` whose Ok payload owns its own
+                        // heap. The Result wrapper is laid out the
+                        // same as every other Result return in the
+                        // runtime, so the standard drop path freeing
+                        // the Result spine + payload applies.
+                        "Command_new",
+                        "riven_command_new",
+                        "Command_arg",
+                        "riven_command_arg",
+                        "Command_args",
+                        "riven_command_args",
+                        "Command_env",
+                        "riven_command_env",
+                        "Command_current_dir",
+                        "riven_command_current_dir",
+                        // Terminals: each returns a fresh Result wrapper
+                        // (Ok payload is a freshly-allocated ExitStatus
+                        // or Output that owns its own inner heap). The
+                        // dest Local must stay alloc-rooted so the
+                        // scope-exit drop frees the Result spine
+                        // through the standard Class drop pipeline.
+                        "Command_status",
+                        "riven_command_status",
+                        "Command_output",
+                        "riven_command_output",
+                        // Output accessors that return fresh heap.
+                        // `Output_status` clones the inner ExitStatus
+                        // (so the Output can be dropped independently);
+                        // `Output_stdout` / `Output_stderr` clone the
+                        // captured Strings for the same reason.
+                        "Output_status",
+                        "riven_output_status",
+                        "Output_stdout",
+                        "riven_output_stdout",
+                        "Output_stderr",
+                        "riven_output_stderr",
                     ];
                     let returns_fresh_alloc = FRESH_ALLOC_CALLEES.contains(&callee.as_str());
                     if let Some(d) = dest {
@@ -9296,6 +9401,40 @@ fn compute_dealloc_safe_locals(func: &MirFunction) -> std::collections::HashSet<
                             || callee.starts_with("HashSet[")
                             || callee.starts_with("String_")
                             || callee.starts_with("&str_"));
+                    // Phase 2 stdlib (#06): std::process::Command terminal
+                    // methods + Output / ExitStatus accessors borrow
+                    // their receiver (the runtime keeps the Command
+                    // alive across `.status` / `.output`; the Output
+                    // accessors return fresh clones). The builder
+                    // methods (`arg/args/env/current_dir`) are NOT in
+                    // this list — they mutate-in-place and return the
+                    // SAME pointer as the receiver, so we need ownership
+                    // to transfer to the dest local to avoid double-
+                    // free in the chained pattern
+                    // `Command.new(p).arg(a).status()`. Tainting the
+                    // receiver on every builder call leaves exactly one
+                    // alloc-rooted Command pointer at any point in the
+                    // chain — that's the one the scope-exit drop will
+                    // free.
+                    let is_command_terminal_or_accessor = matches!(
+                        callee.as_str(),
+                        "Command_status"
+                            | "riven_command_status"
+                            | "Command_output"
+                            | "riven_command_output"
+                            | "Output_status"
+                            | "riven_output_status"
+                            | "Output_stdout"
+                            | "riven_output_stdout"
+                            | "Output_stderr"
+                            | "riven_output_stderr"
+                            | "ExitStatus_code"
+                            | "riven_exit_status_code"
+                            | "ExitStatus_success"
+                            | "riven_exit_status_success"
+                    );
+                    let is_runtime_borrow_helper =
+                        is_runtime_borrow_helper || is_command_terminal_or_accessor;
                     // `riven_store_ptr(p, v)` writes `v` into `*p`,
                     // transferring `v`'s allocation through the pointer
                     // to whatever owns `*p`. The store is the moment

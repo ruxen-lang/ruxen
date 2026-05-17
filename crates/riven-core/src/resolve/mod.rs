@@ -871,6 +871,105 @@ impl Resolver {
         self.type_registry
             .insert("Metadata".to_string(), metadata_id);
 
+        // Phase 2 stdlib (#06): `std::process::Command` builder class.
+        // Constructed via `Command.new(program)`, chained through
+        // `.arg/.args/.env/.current_dir` (mutate-in-place, return self),
+        // terminated by `.status -> Result[ExitStatus, IoError]` or
+        // `.output -> Result[Output, IoError]`. The terminal methods
+        // consume the Command — the runtime frees the inner allocations
+        // and the spine. A bare un-consumed Command also gets cleaned
+        // up via `Command_drop` (registered in `user_drop_classes` —
+        // see mir/lower.rs::collect_user_drop_classes for the special-
+        // cased built-in entry). Wire layout documented at
+        // `riven_command_new` in runtime.c.
+        //
+        // `Command.spawn -> Child` (async-style handle with
+        // `.wait/.kill/.try_wait`) is explicitly DEFERRED to v2 per
+        // `docs/prompts/v1/06_phase2_stdlib_io_fmt.md` — v1 ships the
+        // blocking terminals only.
+        let command_id = self.symbols.define(
+            "Command".to_string(),
+            DefKind::Class {
+                info: ClassInfo {
+                    generic_params: vec![],
+                    parent: None,
+                    fields: vec![],
+                    methods: vec![],
+                    derive_traits: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                    const_predicates: vec![],
+                },
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.scopes.insert_type("Command".to_string(), command_id);
+        self.type_registry
+            .insert("Command".to_string(), command_id);
+
+        // Phase 2 stdlib (#06): `std::process::ExitStatus` wraps the
+        // child's exit code as a single int64 (POSIX-shell convention:
+        // 0..=255 normal exit; 128+signal on signal termination). The
+        // accessor methods are `code -> Int` and `success -> Bool`.
+        // Constructed only by the runtime (callers receive it via
+        // `Result[ExitStatus, IoError]` from `Command.status` or via
+        // `Output.status`); has no user-facing constructor.
+        let exit_status_id = self.symbols.define(
+            "ExitStatus".to_string(),
+            DefKind::Class {
+                info: ClassInfo {
+                    generic_params: vec![],
+                    parent: None,
+                    fields: vec![],
+                    methods: vec![],
+                    derive_traits: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                    const_predicates: vec![],
+                },
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.scopes
+            .insert_type("ExitStatus".to_string(), exit_status_id);
+        self.type_registry
+            .insert("ExitStatus".to_string(), exit_status_id);
+
+        // Phase 2 stdlib (#06): `std::process::Output` carries the
+        // captured stdout/stderr of a finished child plus its exit
+        // status. Accessors:
+        //   `.status -> ExitStatus`  (fresh clone — Output keeps its own)
+        //   `.stdout -> String`      (UTF-8 only in v1; raw bytes v2)
+        //   `.stderr -> String`
+        // Constructed only by the runtime via `Command.output`.
+        let output_id = self.symbols.define(
+            "Output".to_string(),
+            DefKind::Class {
+                info: ClassInfo {
+                    generic_params: vec![],
+                    parent: None,
+                    fields: vec![],
+                    methods: vec![],
+                    derive_traits: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                    const_predicates: vec![],
+                },
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.scopes.insert_type("Output".to_string(), output_id);
+        self.type_registry.insert("Output".to_string(), output_id);
+
         // Phase 2 #06.A1/A3: `std::fmt::Formatter` is the buffer that
         // `Display::fmt` / `Debug::fmt` write into. v1 carries width
         // / alignment / precision metadata as opaque internal fields
@@ -1274,7 +1373,16 @@ impl Resolver {
         let process_id = self.symbols.define(
             "process".to_string(),
             DefKind::Module {
-                items: vec![builtin_fn_ids["exit"], builtin_fn_ids["process_run"]],
+                items: vec![
+                    builtin_fn_ids["exit"],
+                    builtin_fn_ids["process_run"],
+                    // Phase 2 stdlib (#06): Command builder + its
+                    // terminal return types.  Importable via
+                    // `use std.process.{Command, Output, ExitStatus}`.
+                    command_id,
+                    output_id,
+                    exit_status_id,
+                ],
             },
             Visibility::Public,
             span.clone(),
@@ -3497,10 +3605,47 @@ impl Resolver {
                         }
                     }
                     self.record_capture_if_needed(def_id, def_scope_id);
-                    let ty = self
-                        .symbols
-                        .def_ty(def_id)
-                        .unwrap_or_else(|| self.type_context.fresh_type_var());
+                    // Phase 2 stdlib (#06): Class/Struct identifiers
+                    // imported via `use std.process.Command` (or
+                    // otherwise reached through the value-scope
+                    // `lookup` rather than `lookup_type`) must surface
+                    // as their own `Ty::Class { name }` /
+                    // `Ty::Struct { name }` so a subsequent
+                    // `.new(...)` MethodCall sees a concrete receiver
+                    // and dispatches through the collection-ctor fast
+                    // path in mir/lower.rs. Without this branch,
+                    // `def_ty` returns None for Class kinds
+                    // (intentionally — see
+                    // `def_ty_returns_none_for_class` in symbols.rs)
+                    // and the receiver collapses to a fresh inference
+                    // variable, which means `.arg/.status/etc.` would
+                    // never resolve to the right `builtin_method_type`
+                    // arm.
+                    //
+                    // Enum is intentionally NOT promoted here: enum
+                    // identifiers reach this path only as the receiver
+                    // for `EnumName.Variant(...)` constructor calls,
+                    // which are parsed as their own AST shape
+                    // (`ExprKind::EnumVariant`) and reach
+                    // `resolve_expr` through a different arm. Limiting
+                    // the promotion to Class/Struct also keeps the
+                    // 226-fixture e2e baseline stable (only the pre-
+                    // existing `95_error_into_conversion` typecheck
+                    // failure remains; everything else passes).
+                    let ty = match self.symbols.get(def_id).map(|d| &d.kind) {
+                        Some(DefKind::Class { .. }) => Ty::Class {
+                            name: name.clone(),
+                            generic_args: vec![],
+                        },
+                        Some(DefKind::Struct { .. }) => Ty::Struct {
+                            name: name.clone(),
+                            generic_args: vec![],
+                        },
+                        _ => self
+                            .symbols
+                            .def_ty(def_id)
+                            .unwrap_or_else(|| self.type_context.fresh_type_var()),
+                    };
                     HirExpr {
                         kind: HirExprKind::VarRef(def_id),
                         ty,

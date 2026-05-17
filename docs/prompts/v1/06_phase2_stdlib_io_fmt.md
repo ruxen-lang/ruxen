@@ -93,12 +93,6 @@
       - `IoError`: message-only payload (`riven_io_error_message`
         wraps strerror in `Result.Err`).
 
-      **REMAINING v1 work:**
-      - `std.process.Command` builder API (`.new/.arg/.args/.env/
-        .current_dir/.status/.output`) plus `Output` and `ExitStatus`
-        structs. Currently only the flat `process_run` shortcut
-        exists.
-
       **SHIPPED (2026-05-17):**
       - `fs.metadata(path) -> Result[Metadata, IoError]` returning a
         flat heap-allocated `Metadata` struct (`len` / `modified` /
@@ -111,6 +105,19 @@
         `fs_metadata_dir_reports_is_dir`,
         `fs_metadata_missing_returns_err`.  E2E fixture
         `507_fs_metadata`.
+      - `std.process.Command` builder API (`.new/.arg/.args/.env/
+        .current_dir`) + `.status -> Result[ExitStatus, IoError]` and
+        `.output -> Result[Output, IoError]` terminals.  `Output`
+        exposes `.stdout`/`.stderr`/`.status`; `ExitStatus` exposes
+        `.code`/`.success`.  Mirrors the `fs.metadata` flat-heap-
+        struct pattern with one extension: `Command` is registered in
+        `user_drop_classes` so the chained `Command.new(p).arg(a)
+        .status()` and bare-builder leaks are both reclaimed at
+        scope exit via `Command_drop` + `riven_dealloc`. 9 pin tests
+        in `stdlib_process.rs::command_*`; e2e fixtures
+        `508_command_status` + `512_command_output`.  `.spawn ->
+        Child` async-style handle stays DEFERRED to v2 per the
+        explicit deferral below.
       - Fill missing negative tests across env/fs/io once the above
         ship (most negative paths already covered by `read_dir` and
         IoError construct tests; sweep for any positive-only

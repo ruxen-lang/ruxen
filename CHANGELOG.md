@@ -8,6 +8,23 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- Phase 2 stdlib #06: `std::process::Command` builder API closes the
+  last #06 v1 gap. `Command.new(prog).arg("a").args(["b","c"])
+  .env("K","V").current_dir("/tmp").status()` returns
+  `Result[ExitStatus, IoError]`; `.output()` returns
+  `Result[Output, IoError]` with captured stdout/stderr. `Output`
+  exposes `.status` / `.stdout` / `.stderr`; `ExitStatus` exposes
+  `.code` / `.success`. Pre-flight `access(F_OK)` turns typo'd binary
+  paths into `Result::Err(IoError::NotFound)` rather than the
+  indistinguishable `Ok(ExitStatus(127))` that the lower-level
+  `process_run` returns. Mirrors the `fs.metadata` flat-heap-struct
+  pattern with one extension: `Command` is in `user_drop_classes` so
+  builder-pattern temporaries are reclaimed via `Command_drop` +
+  `riven_dealloc` at scope exit. 9 pin tests in
+  `stdlib_process.rs::command_*`; e2e fixtures `508_command_status`
+  and `512_command_output`. `Command.spawn -> Child` (the async-style
+  handle with `.wait/.kill/.try_wait`) is explicitly DEFERRED to v2
+  per the prompt.
 - Phase 2 stdlib #06: `std::fs::metadata(path) -> Result[Metadata,
   IoError]` returning a flat heap-allocated `Metadata` struct with
   `len` / `modified` / `is_file` / `is_dir` / `is_symlink` accessors.

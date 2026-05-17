@@ -93,6 +93,23 @@ pub fn declare_runtime_functions<'ctx>(module: &Module<'ctx>, context: &'ctx Con
     decl!("riven_metadata_is_dir", i64_ty, [ptr_ty]);
     decl!("riven_metadata_is_symlink", i64_ty, [ptr_ty]);
     decl!("riven_metadata_free", void, [ptr_ty]);
+    // Phase 2 stdlib (#06): std::process::Command builder + Output /
+    // ExitStatus accessors.
+    decl!("riven_command_new", ptr_ty, [ptr_ty]);
+    decl!("riven_command_arg", ptr_ty, [ptr_ty, ptr_ty]);
+    decl!("riven_command_args", ptr_ty, [ptr_ty, ptr_ty]);
+    decl!("riven_command_env", ptr_ty, [ptr_ty, ptr_ty, ptr_ty]);
+    decl!("riven_command_current_dir", ptr_ty, [ptr_ty, ptr_ty]);
+    decl!("riven_command_status", ptr_ty, [ptr_ty]);
+    decl!("riven_command_output", ptr_ty, [ptr_ty]);
+    decl!("riven_command_drop", void, [ptr_ty]);
+    decl!("riven_exit_status_code", i64_ty, [ptr_ty]);
+    decl!("riven_exit_status_success", i64_ty, [ptr_ty]);
+    decl!("riven_exit_status_free", void, [ptr_ty]);
+    decl!("riven_output_stdout", ptr_ty, [ptr_ty]);
+    decl!("riven_output_stderr", ptr_ty, [ptr_ty]);
+    decl!("riven_output_status", ptr_ty, [ptr_ty]);
+    decl!("riven_output_drop", void, [ptr_ty]);
     decl!("riven_print_int", void, [i64_ty]);
     decl!("riven_print_float", void, [f64_ty]);
 

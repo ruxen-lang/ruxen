@@ -1,0 +1,45 @@
+use std.process.Command
+
+def show_code(s: ExitStatus, label: &String)
+  puts "#{label}_code=#{s.code}"
+end
+
+def show_success(s: ExitStatus)
+  if s.success
+    puts "success_yes"
+  else
+    puts "success_no"
+  end
+end
+
+def main
+  # /usr/bin/true exits 0
+  match Command.new("/usr/bin/true").status
+    Ok(s)  -> show_code(s, "true")
+    Err(_) -> puts "true_err"
+  end
+
+  # /usr/bin/false exits 1
+  match Command.new("/usr/bin/false").status
+    Ok(s)  -> show_code(s, "false")
+    Err(_) -> puts "false_err"
+  end
+
+  # arg / args propagate to argv
+  match Command.new("/bin/echo").arg("hello").status
+    Ok(s)  -> show_code(s, "echo_arg")
+    Err(_) -> puts "echo_err"
+  end
+
+  # success() helper
+  match Command.new("/usr/bin/true").status
+    Ok(s)  -> show_success(s)
+    Err(_) -> puts "success_err"
+  end
+
+  # nonexistent binary -> Err
+  match Command.new("/no/such/binary/path/here").status
+    Ok(_)  -> puts "unexpected_ok"
+    Err(_) -> puts "missing_err_ok"
+  end
+end

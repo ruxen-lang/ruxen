@@ -1,0 +1,16 @@
+use std.process.Command
+
+def report(out: Output)
+  if out.stderr.contains("err")
+    puts "stderr_ok"
+  else
+    puts "stderr_bad"
+  end
+end
+
+def main
+  match Command.new("/bin/sh").arg("-c").arg("echo err 1>&2").output
+    Ok(out) -> report(out)
+    Err(_)  -> puts "err"
+  end
+end

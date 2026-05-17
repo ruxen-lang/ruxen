@@ -1,0 +1,36 @@
+use std.process.Command
+
+def show_echo(out: Output)
+  puts "echo_status=#{out.status.code}"
+  puts "echo_stdout=#{out.stdout}"
+end
+
+def show_sh(out: Output)
+  puts "sh_status=#{out.status.code}"
+  puts "sh_stderr=#{out.stderr}"
+end
+
+def show_env(out: Output)
+  if out.stdout.contains("RIVEN_TEST=1")
+    puts "env_ok"
+  else
+    puts "env_missing"
+  end
+end
+
+def main
+  match Command.new("/bin/echo").arg("xyz").output
+    Ok(out) -> show_echo(out)
+    Err(_)  -> puts "echo_err"
+  end
+
+  match Command.new("/bin/sh").arg("-c").arg("echo err 1>&2").output
+    Ok(out) -> show_sh(out)
+    Err(_)  -> puts "sh_err"
+  end
+
+  match Command.new("/usr/bin/env").env("RIVEN_TEST", "1").output
+    Ok(out) -> show_env(out)
+    Err(_)  -> puts "env_err"
+  end
+end

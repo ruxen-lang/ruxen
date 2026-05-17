@@ -61,6 +61,24 @@ pub const RUNTIME_FUNCTIONS: &[&str] = &[
     "riven_metadata_is_dir",
     "riven_metadata_is_symlink",
     "riven_metadata_free",
+    // Phase 2 stdlib (#06): std::process::Command builder + Output /
+    // ExitStatus accessor surface. Wire layouts documented in
+    // `runtime.c` at `riven_command_new`.
+    "riven_command_new",
+    "riven_command_arg",
+    "riven_command_args",
+    "riven_command_env",
+    "riven_command_current_dir",
+    "riven_command_status",
+    "riven_command_output",
+    "riven_command_drop",
+    "riven_exit_status_code",
+    "riven_exit_status_success",
+    "riven_exit_status_free",
+    "riven_output_stdout",
+    "riven_output_stderr",
+    "riven_output_status",
+    "riven_output_drop",
     "riven_process_exit",
     // std::process::run (Phase 3): fork+execvp a child, inherit stdio,
     // return exit code (or 128+signal on signal termination, 127 on
@@ -397,6 +415,26 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "Metadata_is_dir" => return Ok("riven_metadata_is_dir"),
         "Metadata_is_symlink" => return Ok("riven_metadata_is_symlink"),
         "Metadata_free" => return Ok("riven_metadata_free"),
+        // Phase 2 stdlib (#06): std::process::Command builder + Output /
+        // ExitStatus accessors. `Command_new` is dispatched via the
+        // collection-ctor fast path in mir/lower.rs (alongside
+        // Vec_new / Hash_new / Formatter_new); the rest go through the
+        // standard `{Type}_{method}` regular method-call path.
+        "Command_new" => return Ok("riven_command_new"),
+        "Command_arg" => return Ok("riven_command_arg"),
+        "Command_args" => return Ok("riven_command_args"),
+        "Command_env" => return Ok("riven_command_env"),
+        "Command_current_dir" => return Ok("riven_command_current_dir"),
+        "Command_status" => return Ok("riven_command_status"),
+        "Command_output" => return Ok("riven_command_output"),
+        "Command_drop" => return Ok("riven_command_drop"),
+        "ExitStatus_code" => return Ok("riven_exit_status_code"),
+        "ExitStatus_success" => return Ok("riven_exit_status_success"),
+        "ExitStatus_free" => return Ok("riven_exit_status_free"),
+        "Output_stdout" => return Ok("riven_output_stdout"),
+        "Output_stderr" => return Ok("riven_output_stderr"),
+        "Output_status" => return Ok("riven_output_status"),
+        "Output_drop" => return Ok("riven_output_drop"),
         // Phase 2 stdlib (#06.A3): std::fmt::Formatter methods.
         "Formatter_new" => return Ok("riven_fmt_formatter_new"),
         "Formatter_free" => return Ok("riven_fmt_formatter_free"),
