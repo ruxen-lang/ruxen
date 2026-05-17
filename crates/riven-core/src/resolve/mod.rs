@@ -252,6 +252,33 @@ impl Resolver {
         self.type_registry
             .insert("Future".to_string(), future_trait_id);
 
+        // `Into[T]` — generic conversion trait used by `?` to coerce
+        // source errors into the outer function's declared error type.
+        // The MIR `try_op` lowering looks up
+        // `into_impls[(Src, Dst)]` (populated from `include Into[Dst]`
+        // blocks in collect.rs) and emits a call to `{Src}_into`. See
+        // docs/tutorial/11-error-handling.md §"Error Conversion".
+        let into_trait_id = self.symbols.define(
+            "Into".to_string(),
+            DefKind::Trait {
+                info: MixinInfo {
+                    generic_params: vec![GenericParamInfo::type_param(
+                        "T".to_string(),
+                        vec![],
+                    )],
+                    super_traits: vec![],
+                    required_methods: vec!["into".to_string()],
+                    default_methods: vec![],
+                    assoc_types: vec![],
+                },
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.scopes.insert_type("Into".to_string(), into_trait_id);
+        self.type_registry
+            .insert("Into".to_string(), into_trait_id);
+
         // Deprecated alias: `Hash` (the trait) → `Hashable`.
         // The collection type `Hash[K,V]` has its own resolution path
         // (see `resolve_type_path` / the `Hash`/`Vec`/`Set` match in
