@@ -1300,7 +1300,7 @@ impl Parser {
                 }
                 _ => {
                     self.error(&format!(
-                        "expected field, method, or impl in struct body, found {:?}",
+                        "expected field, method, or include directive in struct body, found {:?}",
                         self.current_kind()
                     ));
                     // Hard-advance one token so we cannot loop on a sync
@@ -1903,7 +1903,7 @@ impl Parser {
                 }
                 _ => {
                     self.error(&format!(
-                        "expected field, method, or impl in class body, found {:?}",
+                        "expected field, method, or include directive in class body, found {:?}",
                         self.current_kind()
                     ));
                     // Hard-advance one token first; otherwise

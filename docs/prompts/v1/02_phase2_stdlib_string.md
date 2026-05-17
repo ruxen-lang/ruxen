@@ -23,7 +23,7 @@ Drop semantics (P0.7) must be done first.
 - Conversions: `parse[Int]`, `parse[Float]`, `to_string`,
   `into_bytes -> Array[U8]`.
 - Operators: `+` (concat owned), `+=` (push_str), `==`, `!=`, `<`,
-  ordering, `Hash`.
+  ordering, `Hashable`.
 
 `&str`:
 - All `String` inspectors that don't require ownership.

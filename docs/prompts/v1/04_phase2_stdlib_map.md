@@ -1,14 +1,14 @@
 # 04 — Phase 2 stdlib: full `Map[K,V]` + `Set[T]`
 
-**Depends on:** prompt 03. Hash mixin derive (prompt 01B) must be
-available.
+**Depends on:** prompt 03. `Hashable` mixin synthesis (prompt 01B) must
+be available.
 **Reads:** `docs/requirements/tier1_01_stdlib.md` §HashMap
 (requirements doc section header pending separate rename — surface
 vocabulary is `Map` / `Set`).
 
 ## Surface
 
-`Map[K, V]` where `K: Hash + Eq`:
+`Map[K, V]` where `K: Hashable + Eq`:
 - Constructors: `Map.new`, `Map.with_capacity(Int)`.
 - Inspectors: `len`, `is_empty`, `contains_key(&K)`,
   `get(&K) -> Option[&V]`, `keys`, `values`, `iter`.
@@ -16,7 +16,7 @@ vocabulary is `Map` / `Set`).
   `clear`, `entry(K) -> Entry[K,V]` (or_insert / or_insert_with).
 - Operators: `==`, indexing `m[&k]` (panics on missing).
 
-`Set[T]` where `T: Hash + Eq`:
+`Set[T]` where `T: Hashable + Eq`:
 - Constructors: `Set.new`.
 - Inspectors: `len`, `is_empty`, `contains(&T)`, `iter`.
 - Mutators: `insert(T) -> Bool`, `remove(&T) -> Bool`, `clear`.
@@ -38,19 +38,19 @@ vocabulary is `Map` / `Set`).
 
 - Runtime: open-addressing or chaining — implementer's choice. Pick
   the simpler one (chaining via `Array[(K,V)]` per bucket) for v1.
-- `Hash` mixin already derivable post prompt 01B. Use the derived
-  hasher.
+- `Hashable` mixin already implicitly included post prompt 01B. Use
+  the synthesized hasher.
 - Capacity grows by 2x when load factor > 0.75. Document.
-- `Entry` API uses two enum variants `Occupied(&mut V)` /
-  `Vacant(&mut Self, K)` to avoid double lookup.
+- `Entry` API uses two enum variants `Occupied(&var V)` /
+  `Vacant(&var Self, K)` to avoid double lookup.
 - `Map_drop`: walk every (K,V), drop each, then free buckets.
 - Determinism: hasher is `SipHash13` seeded from a per-process
   random seed. Tests must not rely on order.
 
 ## Negative tests
 
-- `Map[Array[Int], V]` — error: `Array` is not `Hash`. Use the
-  derive-validation infra.
+- `Map[Array[Int], V]` — error: `Array` is not `Hashable`. Use the
+  implicit-include validation infra.
 - Mutating during iteration — borrow-check error.
 
 ## Definition of done
@@ -78,7 +78,7 @@ vocabulary is `Map` / `Set`).
       `mir/lower.rs` Index handler; surface type changed from
       `Option[V]` to `V` in `typeck/infer.rs::infer_index_ty`.
       Fixture: `tests/release-e2e/cases/509_map_index_op.rvn`.
-- [x] Negative tests for non-Hash key constraint — batch 3.
+- [x] Negative tests for non-Hashable key constraint — batch 3.
       Resolver now rejects `Map[Array[Int], V]` /
       `Set[Array[Int]]` and every nested-compound variant at the
       type-construction site via `E0615`

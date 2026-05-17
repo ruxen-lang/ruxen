@@ -48,26 +48,26 @@
       "patterns": [
         {
           "name": "keyword.control.riven",
-          "match": "\\b(if|else|elsif|end|match|case|for|in|while|loop|do|break|continue|return|rescue|raise|async|await)\\b"
+          "match": "\\b(if|elsif|else|end|match|for|in|while|loop|do|break|continue|return|yield|async|await)\\b"
         },
         {
           "name": "keyword.declaration.riven",
-          "match": "\\b(let|mut|def|fn|class|struct|enum|trait|impl|module|pub|actor|newtype)\\b"
+          "match": "\\b(let|var|def|init|class|struct|enum|mixin|module|newtype|extension|type|include|exclude|consume|inline|public|private|protected|use|package|unsafe|lib|move|ref|static|const|layout|where|actor|spawn|send|receive)\\b"
         },
         {
           "name": "keyword.operator.word.riven",
-          "match": "\\b(and|or|not|as|self|Self)\\b"
+          "match": "\\b(and|or|not|as|self|Self|super|some|any)\\b"
         }
       ]
     },
     "constants": {
       "patterns": [
-        { "name": "constant.language.riven", "match": "\\b(true|false|None|Some|Ok|Err)\\b" }
+        { "name": "constant.language.riven", "match": "\\b(true|false|nil|Some|Ok|Err)\\b" }
       ]
     },
     "types": {
       "patterns": [
-        { "name": "storage.type.riven", "match": "\\b(Int|Float|Bool|String|Char|Vec|Hash|Set|Option|Result|Box|Rc|Arc)\\b" },
+        { "name": "storage.type.riven", "match": "\\b(Int|Float|Bool|String|Char|Array|Map|Set|Option|Result|Box|Shared|SharedSync)\\b" },
         { "name": "entity.name.type.riven", "match": "\\b[A-Z][A-Za-z0-9_]*\\b" }
       ]
     },
@@ -75,7 +75,7 @@
       "patterns": [
         {
           "name": "meta.function.definition.riven",
-          "match": "\\b(def|fn)\\s+([a-z_][A-Za-z0-9_]*[!?]?)",
+          "match": "\\b(def)\\s+([a-z_][A-Za-z0-9_]*[!?]?)",
           "captures": {
             "1": { "name": "keyword.declaration.riven" },
             "2": { "name": "entity.name.function.riven" }

@@ -133,7 +133,7 @@ impl MixinResolver {
         if require_nominal {
             return MixinSatisfaction::Unsatisfied {
                 missing_methods: vec![format!(
-                    "no explicit `impl {} for {}`",
+                    "no explicit `include {}` in `{}`",
                     trait_ref.name, type_name
                 )],
             };

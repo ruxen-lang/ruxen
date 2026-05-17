@@ -30,7 +30,7 @@ end
 ```
 
 `test`, `ignore`, and `should_panic` are in-body directives — the
-same shape as `derive`, `include`, `inline :name`, `deprecated`,
+same shape as `include`, `inline :name`, `deprecated`,
 `bench`. The directive lives at the top of the function body and
 marks the function for the test runner.
 

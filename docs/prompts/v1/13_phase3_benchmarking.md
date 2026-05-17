@@ -11,7 +11,7 @@ project and reports per-iteration timing.
 ## Surface
 
 ```riven
-def bench_string_concat(b: &mut Bencher)
+def bench_string_concat(b: &var Bencher)
   bench
   b.iter || -> {
     var s = String.new
@@ -23,8 +23,8 @@ def bench_string_concat(b: &mut Bencher)
 end
 ```
 
-`bench` is an in-body directive (same pattern as `derive`,
-`include`, `inline :name`, `deprecated`). When the directive
+`bench` is an in-body directive (same pattern as `include`,
+`inline :name`, `deprecated`). When the directive
 appears in a `def` body, the function is collected by the bench
 runner.
 

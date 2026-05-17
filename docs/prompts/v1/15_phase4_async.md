@@ -22,7 +22,7 @@
 - ```riven
   mixin Future
     type Output
-    def mut poll(self: &mut Self, cx: &mut Context) -> Poll[Self.Output]
+    def var poll(cx: &var Context) -> Poll[Self.Output]
   end
   ```
 - `enum Poll[T] { Ready(T), Pending }`

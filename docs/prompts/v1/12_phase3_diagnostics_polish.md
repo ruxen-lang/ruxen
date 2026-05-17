@@ -9,7 +9,7 @@
 ### Goal
 
 Stability metadata sits in the body of the thing it modifies, the
-same way `derive` / `include` / `inline :name` do. No prefix
+same way `include` / `inline :name` do. No prefix
 annotation syntax — those forms are retired.
 
 ```riven

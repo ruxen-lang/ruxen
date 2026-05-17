@@ -1,9 +1,9 @@
 # Tier 5 — Error-Code Registry + `--explain`
 
 Status: draft
-Depends on: tier5_03 phase 3a (warning-level attribute support — for
-`@[allow(...)]`), tier5_05 (suggestion struct — shares the Diagnostic
-carrier).
+Depends on: tier5_03 phase 3a (warning-level directive support — for
+in-body `allow` directives), tier5_05 (suggestion struct — shares the
+Diagnostic carrier).
 Blocks: credible borrow-check UX. Rust's biggest UX win was `rustc
 --explain E0308`; Riven users will hit borrow-check errors harder than
 Rust users (smaller surface, less Stack Overflow).
@@ -646,7 +646,7 @@ Already planned in tier5_05 §5.6; this phase is the joint deliverable.
 - **Tier 5 doc 02 (editions):** reserved codes `E4100-E4199`. Edition
   deprecations use `W`-prefix codes from range `W2000-W2999`.
 - **Tier 5 doc 03 (attributes):** `W2001` (deprecated use),
-  `E2002` (unstable). Lint-level attributes (`@[allow(W2001)]`) can
+  `E2002` (unstable). Lint-level in-body directives (`allow W2001`) can
   suppress by code too.
 - **Tier 5 doc 05 (suggestions):** `Diagnostic.suggestions` field
   added in phase 4a.
@@ -723,8 +723,8 @@ range, which is semantically correct.
 Rust has unnamed lint-level diagnostics ("warning: unused variable").
 **Recommended:** every warning Riven emits has a code (e.g. `W1000`
 for unused variable). Lints are suppressible by code *or* by name
-(`@[allow(unused)]`). Costs one code per lint; worth it for
-consistency.
+via the in-body `allow` directive (`allow :unused`). Costs one code
+per lint; worth it for consistency.
 
 ### OQ-8. Risk: `UNSPECIFIED` variant sticks around forever.
 

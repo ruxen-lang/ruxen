@@ -124,7 +124,7 @@ impl PrettyPrinter {
         let derives = if s.derive_traits.is_empty() {
             String::new()
         } else {
-            format!(" derive({})", s.derive_traits.join(", "))
+            format!(" include({})", s.derive_traits.join(", "))
         };
         self.line(&format!("Struct {}{}{}", s.name, generics, derives));
         self.indent();
@@ -194,7 +194,7 @@ impl PrettyPrinter {
                 .collect();
             format!(": {}", names.join(" + "))
         };
-        self.line(&format!("Trait {}{}{}", t.name, generics, supers));
+        self.line(&format!("Mixin {}{}{}", t.name, generics, supers));
         self.indent();
         for item in &t.items {
             self.print_trait_item(item);
@@ -222,12 +222,12 @@ impl PrettyPrinter {
         let generics = format_opt_generic_params(&imp.generic_params);
         let header = match &imp.trait_name {
             Some(tr) => format!(
-                "Impl{} {} for {}",
+                "Include{} {} in {}",
                 generics,
                 format_type_path(tr),
                 format_type(&imp.target_type)
             ),
-            None => format!("Impl{} {}", generics, format_type(&imp.target_type)),
+            None => format!("Include{} {}", generics, format_type(&imp.target_type)),
         };
         self.line(&header);
         self.indent();
@@ -1019,7 +1019,7 @@ pub fn format_pattern(p: &Pattern) -> String {
         }
         Pattern::Ref { mutable, name, .. } => {
             if *mutable {
-                format!("ref mut {}", name)
+                format!("ref var {}", name)
             } else {
                 format!("ref {}", name)
             }

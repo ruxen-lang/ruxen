@@ -312,7 +312,7 @@ pub enum HirPattern {
         patterns: Vec<HirPattern>,
         span: Span,
     },
-    /// Reference pattern: `ref x`, `ref mut x`
+    /// Reference pattern: `ref x`, `ref var x`
     Ref {
         mutable: bool,
         name: String,

@@ -2893,13 +2893,13 @@ impl Resolver {
             _ => {
                 if negative_trait {
                     self.diagnostics.push(Diagnostic::error_with_code(
-                        "negative impls are only supported for Send and Sync",
+                        "negative include (`exclude`) is only supported for Send and Sync",
                         span,
                         "E1014",
                     ));
                 } else if is_unsafe {
                     self.diagnostics.push(Diagnostic::error_with_code(
-                        "`unsafe impl` is only required for Send and Sync",
+                        "`unsafe include` is only required for Send and Sync",
                         span,
                         "E1014",
                     ));
@@ -2910,7 +2910,7 @@ impl Resolver {
 
         if !negative_trait && !is_unsafe {
             self.diagnostics.push(Diagnostic::error_with_code(
-                "manual Send/Sync impls must be declared as `unsafe impl`",
+                "manual Send/Sync includes must be declared as `unsafe include`",
                 span,
                 "E1014",
             ));

@@ -429,8 +429,9 @@ def set_request(id: UInt64)
 end
 ```
 
-The `thread_local!` macro (new in the macro set, alongside `array!` and `map!`)
-expands to a `ThreadLocal[T]` static whose accessors wrap `pthread_key_create`
+The `thread_local!` macro (new in the macro set, alongside the native `[…]`
+and `{ k => v, … }` collection literals) expands to a `ThreadLocal[T]` static
+whose accessors wrap `pthread_key_create`
 / `pthread_getspecific` / `pthread_setspecific`. Phase 2b may defer this to 2d
 if schedule pressure requires.
 
@@ -801,7 +802,7 @@ Place in `crates/riven-core/tests/fixtures/concurrency/`:
 **Must compile (positive):**
 
 - `spawn_send_primitive.rvn` — `Thread.spawn do let x = 42; puts x end`.
-- `spawn_move_string.rvn` — `let s = String.new("x"); Thread.spawn do puts s end`.
+- `spawn_move_string.rvn` — `let s = String.from("x"); Thread.spawn do puts s end`.
 - `arc_mutex_counter.rvn` — classic shared counter with `SharedSync[Mutex[Int]]` over
   N threads, joins, asserts total.
 - `channel_ping_pong.rvn` — two threads exchanging `Int` through a bounded
@@ -962,7 +963,7 @@ use std.sync.{SharedSync, Mutex}
 
 def main
   let counter = SharedSync.new(Mutex.new(0))
-  var handles = array![]
+  var handles = []
 
   for _ in 0..8
     let c = counter.clone
@@ -1072,7 +1073,7 @@ use std.thread.Thread
 
 def main
   let counter = SharedSync.new(AtomicI64.new(0))
-  var handles = array![]
+  var handles = []
 
   for _ in 0..4
     let c = counter.clone
@@ -1287,8 +1288,9 @@ Files to modify (Phase 2d):
   intrinsics.
 - Stdlib Riven source: `std.sync.atomic`, `Ordering`, each `AtomicX`,
   `RwLock`, `Barrier`, `Once`, `ThreadBuilder`.
-- `thread_local!` macro handler in the macro dispatcher (wherever `array!` and
-  `map!` are handled today).
+- `thread_local!` macro handler in the macro dispatcher (wherever the native
+  `[…]` array and `{ k => v, … }` map literal lowerings live today — see
+  `mir/lower.rs:1502`).
 
 ---
 

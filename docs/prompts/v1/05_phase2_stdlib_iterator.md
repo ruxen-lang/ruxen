@@ -11,7 +11,7 @@ already wired).
 ```riven
 mixin Iterator
   type Item
-  def mut next -> Option[Self.Item]
+  def var next -> Option[Self.Item]
 
   # Default-method combinators (return new lazy iterators):
   def map[U](f: |Self.Item| -> U) -> Map[Self, U]

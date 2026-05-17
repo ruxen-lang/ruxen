@@ -120,7 +120,7 @@ pub fn format_pattern(pat: &Pattern, comments: &CommentMap) -> Doc {
 
         Pattern::Ref { mutable, name, .. } => {
             if *mutable {
-                concat(vec![text("ref mut "), text(name.clone())])
+                concat(vec![text("ref var "), text(name.clone())])
             } else {
                 concat(vec![text("ref "), text(name.clone())])
             }

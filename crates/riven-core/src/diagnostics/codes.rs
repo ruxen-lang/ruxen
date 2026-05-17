@@ -60,7 +60,7 @@ pub const REGISTRY: &[CodeInfo] = &[
         title: "diagnostic-fixture sentinel (tests only)",
     },
     // ── Implicit-include / auto-synth (E0601-E0618) ──────────────────
-    // Structural mixins (Debug, Clone, Copy, PartialEq, Eq, Hash,
+    // Structural mixins (Debug, Clone, Copy, PartialEq, Eq, Hashable,
     // Default, Ord, PartialOrd) are implicitly included on a type
     // whose fields satisfy the relevant bound (see ruby-naming
     // §3.6). When the rule fails, the diagnostic fires at either the
@@ -117,7 +117,7 @@ pub const REGISTRY: &[CodeInfo] = &[
     },
     CodeInfo {
         code: "E0615",
-        title: "auto-synth Hash: field type is not hashable",
+        title: "auto-synth Hashable: field type is not hashable",
     },
     CodeInfo {
         code: "E0616",

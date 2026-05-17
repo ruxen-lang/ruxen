@@ -25,11 +25,11 @@ chapter coverage of every surface feature.
 10. Generics + bounds + where clauses
 11. Variance
 12. Drop + Copy + Clone
-13. Derive
+13. Structural mixins (implicit-include rules; loud `include D1, D2` form)
 14. Concurrency (Send/Sync, Thread, Mutex, channels, atomics)
 15. Async (Future, .await, executor, async I/O)
 16. Module system + visibility (`private` / `protected` markers)
-17. In-body directives (derive, include, layout, inline, deprecated,
+17. In-body directives (include, layout, inline, deprecated,
     test, bench, etc.)
 18. Macros (deferred — point at v2)
 19. FFI (`lib` blocks, `layout c`, cbindgen)

@@ -1,8 +1,8 @@
 # 01 — Phase 1 remainder
 
 Closes the four leftover items from Phase 0/1: P0.7 string/array drops,
-T1.05 builtin derive generators, T5.04 phase 3 long-form explanations,
-and P0.12 un-reservation of actor tokens.
+T1.05 builtin structural-mixin generators, T5.04 phase 3 long-form
+explanations, and P0.12 un-reservation of actor tokens.
 
 **Depends on:** Phase 0 done (squashed into commits prior to `master@{HEAD}`; verified 2026-05-05 against substantive evidence — LICENSE files, MSRV pin, attr untangle fixtures, doc-comment capture, Drop infra, variance fixtures all present).
 **Reads:** `docs/requirements/tier1_04_drop_copy_clone.md`,
@@ -48,53 +48,57 @@ so heap-owned `String`/`Array`/`Map` locals leak at scope exit.
 
 ---
 
-## B. T1.05 — built-in derive generators
+## B. T1.05 — built-in structural-mixin generators
 
 ### Problem
-`derive Debug`, `derive Clone`, `derive Copy`, `derive PartialEq`,
-`derive Eq`, `derive Hash`, `derive Default`, `derive Ord`,
-`derive PartialOrd` are validated (`implicit_includes/mod.rs`) but no
-include-blocks are synthesized.
+The structural mixins `Debug`, `Clone`, `Copy`, `PartialEq`, `Eq`,
+`Hashable`, `Default`, `Ord`, `PartialOrd` are validated
+(`implicit_includes/mod.rs`) but no include-blocks are synthesized.
+Per §3.6 these mixins are implicitly included whenever the fields
+structurally support them; the compiler still needs to generate the
+method bodies.
 
 ### TDD
-For each derive mixin, add a fixture pair:
+For each structural mixin, add a fixture pair:
 
 ```
-tests/release-e2e/cases/2NN_derive_debug_struct.rvn
-tests/release-e2e/cases/2NN_derive_clone_struct.rvn
-tests/release-e2e/cases/2NN_derive_copy_struct.rvn
+tests/release-e2e/cases/2NN_implicit_debug_struct.rvn
+tests/release-e2e/cases/2NN_implicit_clone_struct.rvn
+tests/release-e2e/cases/2NN_implicit_copy_struct.rvn
 ... etc
 ```
 
-Each fixture exercises the derived behavior on one struct, one enum,
-one nested enum-with-payload. Expected output asserts:
+Each fixture exercises the implicit-include behavior on one struct, one
+enum, one nested enum-with-payload. Expected output asserts:
 
 - `Debug` → exact `"Foo { x: 1, y: 2 }"` shape.
 - `Clone` → independent copy (mutate one, read other unchanged).
 - `Copy` → bit-copy semantics, source still usable.
 - `PartialEq` / `Eq` → `==` comparisons.
-- `Hash` → equal values produce equal hashes (use existing
+- `Hashable` → equal values produce equal hashes (use existing
   Map as proxy).
 - `Default` → field-wise zero/`Default.default()`.
 - `Ord` / `PartialOrd` → field-order tuple semantics.
 
-Add unit tests in `crates/riven-core/src/implicit_includes/` covering the HIR
-synthesis (assert that `derive Debug` on `Point { x: Int, y: Int }`
-produces a `Point_fmt_debug` HIR method with the right shape).
+Add unit tests in `crates/riven-core/src/implicit_includes/` covering
+the HIR synthesis (assert that the implicit `Debug` include on
+`Point { x: Int, y: Int }` produces a `Point_fmt_debug` HIR method
+with the right shape).
 
 ### Implementation
-- Generate HIR include-items in a new pass `derive::synthesize` that
-  runs after `validate_program` and before `lower`.
-- Each derived mixin emits one synthesized include for `<Mixin>` on
-  `<Type>` with method bodies built from field iteration.
+- Generate HIR include-items in a new pass
+  `implicit_includes::synthesize` that runs after `validate_program`
+  and before `lower`.
+- Each structural mixin emits one synthesized include for `<Mixin>`
+  on `<Type>` with method bodies built from field iteration.
 - Reuse runtime helpers where available; for `Debug` use new
   `riven_string_concat` runtime fn (already in `runtime.c`).
-- Reject derive on types whose fields don't themselves satisfy the
-  mixin — emit `E0610-E0618` per the namespace.
+- Reject the implicit include on types whose fields don't themselves
+  satisfy the mixin — emit `E0610-E0618` per the namespace.
 
 ### Definition of done
-- [x] All 9 builtin derives generate working includes.
-- [x] Per-derive fixture pair under `tests/release-e2e/cases/`.
+- [x] All 9 builtin structural mixins generate working includes.
+- [x] Per-mixin fixture pair under `tests/release-e2e/cases/`.
 - [x] Negative tests for "field doesn't satisfy bound" cases.
 - [x] `cargo test --workspace` green.
 - [x] All new error codes in `diagnostics/codes.rs::REGISTRY`.

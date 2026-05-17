@@ -14,7 +14,7 @@
     ["{", "}"], ["[", "]"], ["(", ")"], ["\"", "\""], ["'", "'"]
   ],
   "indentationRules": {
-    "increaseIndentPattern": "^.*\\b(class|def|fn|if|match|do|loop|for|while|trait|impl|module|enum|struct)\\b.*$",
+    "increaseIndentPattern": "^.*\\b(class|def|if|match|do|loop|for|while|mixin|extension|module|enum|struct)\\b.*$",
     "decreaseIndentPattern": "^\\s*(end|else|elsif)\\b.*$"
   }
 }

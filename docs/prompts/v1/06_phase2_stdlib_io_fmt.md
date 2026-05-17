@@ -18,9 +18,9 @@
 
 ### `std.fmt`
 - `mixin Display
-    def fmt(self: &Self, f: &mut Formatter) -> Result[(), fmt.Error]
+    def fmt(f: &var Formatter) -> Result[(), fmt.Error]
   end`.
-- `mixin Debug` (already partially via derive — wire formal mixin).
+- `mixin Debug` (already partially via implicit include — wire formal mixin).
 - `Formatter` carries width, alignment, precision flags.
 - String interpolation `"#{x}"` calls `Display.fmt` (currently
   ad-hoc — make it route through the mixin method).
@@ -102,7 +102,7 @@
       Synth `Char_fmt` / `Int_fmt` / `Float_fmt` / `Bool_fmt` /
       `String_fmt` MIR fns wrap the existing `riven_*_to_string`
       runtime helpers so observable output is byte-identical to the
-      legacy ad-hoc switch. Derive-Debug-only types still fall back
+      legacy ad-hoc switch. Implicit-`Debug`-only types still fall back
       to `{Name}_to_debug` for the bare `"#{x}"` form until users
       provide their own `include Display`. The `Err(e).message()`
       inference gap remains separately tracked. Commits: S0
@@ -119,10 +119,11 @@
       strings — `Int` / `Bool` / `Char` ignore precision per Rust
       semantics.  Out of scope: width-on-`:?` (debug path bypasses
       Formatter); sign / `#` / `0` / radix flags.  Commit: 4491508.
-- [x] `Debug` interpolation `"#{x:?}"` works for any `derive Debug`
-      type. **Phase B + C MVP:** format spec captured at lex time
+- [x] `Debug` interpolation `"#{x:?}"` works for any type with the
+      implicit `Debug` include.
+      **Phase B + C MVP:** format spec captured at lex time
       (FormatSpec.debug = true), threaded through HIR/MIR. Existing
-      `_to_debug` synthesis on derive-Debug structs already produces
+      `_to_debug` synthesis on implicit-`Debug` structs already produces
       the expected output for `"#{x:?}"`; the bare `"#{x}"` form
       currently uses the same path (Phase D will switch bare to
       Display.fmt). Pin tests in `stdlib_fmt.rs::debug_interpolation_spec_typechecks`.

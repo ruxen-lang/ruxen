@@ -26,7 +26,7 @@ use std.actor.{Actor, ActorRef}
 class Counter
   count: Int = 0
 
-  async def handle(self: &mut Self, msg: CounterMsg) -> ()
+  async def var handle(msg: CounterMsg) -> ()
     match msg
       Inc => self.count = self.count + 1
       Get(reply) => reply.send(self.count).await
