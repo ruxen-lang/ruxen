@@ -17,9 +17,10 @@ docs/prompts/
 │   ├── 04_phase2_stdlib_map.md
 │   ├── 05_phase2_stdlib_iterator.md
 │   ├── 06_phase2_stdlib_io_fmt.md
-│   ├── 07_phase3_const_generics.md
-│   ├── 08_phase3_hrtbs_some_mixin.md
-│   ├── 09_phase3_gats_any_mixin.md
+│   ├── 06_5_phase2_sync_io_completeness.md   # File, BufReader/Writer, fs power ops, TCP wrappers, Duration/Instant/sleep, tagged IoError
+│   ├── 07_phase3_const_generics.md           # DEFERRED — finish in-flight only
+│   ├── 08_phase3_hrtbs_some_mixin.md         # DEFERRED — v1.5/v2
+│   ├── 09_phase3_gats_any_mixin.md           # DEFERRED — v1.5/v2
 │   ├── 10_phase3_lsp.md
 │   ├── 11_phase3_incremental.md
 │   ├── 12_phase3_diagnostics_polish.md  # T5.03 + T5.05
@@ -68,8 +69,14 @@ v1 execution order:
 - **#09 — GATs + `any` mixin** — same logic as #08. Powerful but
   esoteric. Move to v1.5.
 
-After Phase 2 stdlib (#02–#06) closes, jump directly to:
+After Phase 2 stdlib (#02–#06) closes, the new path is:
 
+- **#06.5 — Sync I/O completeness** (`File`, `BufReader`/`BufWriter`,
+  fs.copy/rename/create_dir_all/canonicalize, `TcpListener`/`TcpStream`
+  class wrappers, `Duration`/`Instant`/`sleep`, tagged `IoError`
+  variants pulled in from v2). Closes the last 35–40% of "great
+  sync I/O" before the LSP work depends on any of it. See
+  `docs/STRATEGY.md` for rationale.
 - **#10 — LSP** (developer experience — high user-visible value)
 - **#11 — Incremental** (developer experience — fast iteration)
 - **#12 — Diagnostics polish** (error messages that teach)
