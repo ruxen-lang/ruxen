@@ -1,0 +1,27 @@
+use std.fs.{write, remove_file}
+use std.io.File
+
+def describe(m: Metadata)
+  puts "len=#{m.len}"
+  if m.is_file
+    puts "is_file=true"
+  else
+    puts "is_file=false"
+  end
+end
+
+def stat_file(f: File)
+  match f.metadata()
+    Ok(m)  -> describe(m)
+    Err(_) -> puts "meta_fail"
+  end
+end
+
+def main
+  write("/tmp/riven_e2e_516_meta.txt", "0123456789").expect!("write")
+  match File.open("/tmp/riven_e2e_516_meta.txt")
+    Ok(f)  -> stat_file(f)
+    Err(_) -> puts "open_fail"
+  end
+  remove_file("/tmp/riven_e2e_516_meta.txt").expect!("remove")
+end

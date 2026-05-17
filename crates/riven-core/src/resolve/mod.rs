@@ -1106,6 +1106,121 @@ impl Resolver {
         self.scopes.insert_type("Output".to_string(), output_id);
         self.type_registry.insert("Output".to_string(), output_id);
 
+        // Phase 2 #06.5 T2: `std::io::File` — owning wrapper over a
+        // POSIX fd. Constructed via `File.open / .create / .append /
+        // .open_options`; consumed by the standard scope-exit drop
+        // pipeline which emits `File_drop(f) + riven_dealloc(f)` —
+        // see mir/lower/collect.rs::collect_user_drop_classes for the
+        // user_drop_classes registration. Wire layout (8-byte
+        // {fd:i32, closed:i32}) documented in runtime.c at `RivenFile`.
+        let file_id = self.symbols.define(
+            "File".to_string(),
+            DefKind::Class {
+                info: ClassInfo {
+                    generic_params: vec![],
+                    parent: None,
+                    fields: vec![],
+                    methods: vec![],
+                    derive_traits: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                    const_predicates: vec![],
+                },
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.scopes.insert_type("File".to_string(), file_id);
+        self.type_registry.insert("File".to_string(), file_id);
+
+        // Phase 2 #06.5 T2: `std::io::OpenOptions` — builder for
+        // `File.open_options(path, opts)`. POD 8-byte struct (no
+        // inner heap), so the standard `riven_dealloc` at scope exit
+        // is the entire drop story. Builder methods mutate-in-place
+        // and return the same pointer (mirrors Command.arg/...).
+        let open_options_id = self.symbols.define(
+            "OpenOptions".to_string(),
+            DefKind::Class {
+                info: ClassInfo {
+                    generic_params: vec![],
+                    parent: None,
+                    fields: vec![],
+                    methods: vec![],
+                    derive_traits: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                    const_predicates: vec![],
+                },
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.scopes
+            .insert_type("OpenOptions".to_string(), open_options_id);
+        self.type_registry
+            .insert("OpenOptions".to_string(), open_options_id);
+
+        // Phase 2 #06.5 T2: `SeekFrom` — three single-field struct
+        // variants used as the second argument of `File.seek`. Each
+        // carries a single `offset: Int` field; the codegen lays the
+        // value out as a 16-byte tagged enum (`{i32 tag; i32 pad; i64
+        // offset}`) which `riven_file_seek` reads directly. Tag
+        // values are pinned to match `RIVEN_SEEK_FROM_*` in
+        // runtime.c — the `file_class_layout_stability` pin test
+        // cross-checks them.
+        let seek_from_id = self.symbols.define(
+            "SeekFrom".to_string(),
+            DefKind::Enum {
+                info: EnumInfo {
+                    generic_params: vec![],
+                    variants: vec![], // filled below
+                    derive_traits: vec![],
+                    opt_out_send: false,
+                    opt_out_sync: false,
+                    manual_send: false,
+                    manual_sync: false,
+                    const_predicates: vec![],
+                },
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        self.scopes
+            .insert_type("SeekFrom".to_string(), seek_from_id);
+        self.type_registry
+            .insert("SeekFrom".to_string(), seek_from_id);
+        let seek_from_variants: &[(&str, usize)] = &[
+            ("Start", 0),
+            ("End", 1),
+            ("Current", 2),
+        ];
+        let mut seek_from_variant_ids: Vec<DefId> =
+            Vec::with_capacity(seek_from_variants.len());
+        for (vname, idx) in seek_from_variants {
+            let vid = self.symbols.define(
+                (*vname).to_string(),
+                DefKind::EnumVariant {
+                    parent: seek_from_id,
+                    variant_idx: *idx,
+                    kind: VariantDefKind::Struct(vec![("offset".to_string(), Ty::Int)]),
+                },
+                Visibility::Public,
+                span.clone(),
+            );
+            self.scopes
+                .insert(format!("SeekFrom.{}", vname), vid);
+            seek_from_variant_ids.push(vid);
+        }
+        if let Some(def) = self.symbols.get_mut(seek_from_id) {
+            if let DefKind::Enum { ref mut info } = def.kind {
+                info.variants = seek_from_variant_ids;
+            }
+        }
+
         // Phase 2 #06.A1/A3: `std::fmt::Formatter` is the buffer that
         // `Display::fmt` / `Debug::fmt` write into. v1 carries width
         // / alignment / precision metadata as opaque internal fields
@@ -1463,9 +1578,28 @@ impl Resolver {
                     builtin_fn_ids["stdout"],
                     builtin_fn_ids["stderr"],
                     io_error_id,
+                    // T1 follow-up: `IoErrorKind` was registered as a
+                    // type but never added to the `std.io` module's
+                    // items, so `use std.io.IoErrorKind` failed at
+                    // resolve. Wired here as part of T2 because the
+                    // File diagnostic tests are the first consumer of
+                    // the import. Safe additive change — IoErrorKind
+                    // already existed as a `type_registry` entry, this
+                    // just makes module-path resolution find it.
+                    io_error_kind_id,
                     stdin_id,
                     stdout_id,
                     stderr_id,
+                    // Phase 2 #06.5 T2: `File` / `OpenOptions` /
+                    // `SeekFrom` are importable via `use std.io.{...}`.
+                    // `File` is intentionally re-exported from
+                    // `std.fs` below too (Rust ships it as
+                    // `std::fs::File`; we keep both paths so prior
+                    // examples don't break). `OpenOptions` and
+                    // `SeekFrom` live only under `std.io`.
+                    file_id,
+                    open_options_id,
+                    seek_from_id,
                 ],
             },
             Visibility::Public,
@@ -1501,6 +1635,11 @@ impl Resolver {
                     builtin_fn_ids["is_dir"],
                     builtin_fn_ids["read_dir"],
                     builtin_fn_ids["metadata"],
+                    // Phase 2 #06.5 T2: re-export of `File` for Rust-
+                    // style `use std.fs.File` paths. The canonical
+                    // definition is in `std.io` above; this entry just
+                    // makes both import paths work.
+                    file_id,
                 ],
             },
             Visibility::Public,

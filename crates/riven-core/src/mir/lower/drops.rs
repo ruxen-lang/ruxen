@@ -567,6 +567,70 @@ fn compute_dealloc_safe_locals(func: &MirFunction) -> std::collections::HashSet<
                         "riven_output_stdout",
                         "Output_stderr",
                         "riven_output_stderr",
+                        // Phase 2 stdlib (#06.5 T2): File ctors return
+                        // a freshly-allocated Result wrapper whose Ok
+                        // payload is a fresh RivenFile owning the fd.
+                        // The dest local must stay alloc-rooted so the
+                        // scope-exit drop frees the Result spine
+                        // through the standard Class drop pipeline.
+                        // (File itself is in `user_drop_classes`, so
+                        // pattern-bound `f` from `Ok(f) -> ...` is
+                        // separately drop-elaborated by the destructure
+                        // path.)
+                        "File_open",
+                        "riven_file_open",
+                        "File_create",
+                        "riven_file_create",
+                        "File_append",
+                        "riven_file_append",
+                        "File_open_options",
+                        "riven_file_open_options",
+                        // File.metadata returns a fresh Result wrapping
+                        // a freshly-allocated 24-byte RivenMetadata.
+                        "File_metadata",
+                        "riven_file_metadata",
+                        // File.read_all returns Result wrapping a fresh
+                        // RivenVec. read_to_string returns Result
+                        // wrapping a fresh String. write/read return
+                        // Result wrapping an Int (no inner heap on Ok
+                        // — still needs alloc-rooted for the Result
+                        // spine).
+                        "File_read",
+                        "riven_file_read",
+                        "File_read_to_string",
+                        "riven_file_read_to_string",
+                        "File_read_all",
+                        "riven_file_read_all",
+                        "File_write",
+                        "riven_file_write",
+                        "File_write_all",
+                        "riven_file_write_all",
+                        "File_write_str",
+                        "riven_file_write_str",
+                        "File_flush",
+                        "riven_file_flush",
+                        "File_seek",
+                        "riven_file_seek",
+                        "File_close",
+                        "riven_file_close",
+                        // OpenOptions builder. `new` allocates a fresh
+                        // RivenOpenOptions; the chained setters mutate
+                        // in place and return the same pointer (same
+                        // shape as Command builder methods).
+                        "OpenOptions_new",
+                        "riven_open_options_new",
+                        "OpenOptions_read",
+                        "riven_open_options_read",
+                        "OpenOptions_write",
+                        "riven_open_options_write",
+                        "OpenOptions_append",
+                        "riven_open_options_append",
+                        "OpenOptions_truncate",
+                        "riven_open_options_truncate",
+                        "OpenOptions_create",
+                        "riven_open_options_create",
+                        "OpenOptions_create_new",
+                        "riven_open_options_create_new",
                     ];
                     let returns_fresh_alloc = FRESH_ALLOC_CALLEES.contains(&callee.as_str());
                     if let Some(d) = dest {

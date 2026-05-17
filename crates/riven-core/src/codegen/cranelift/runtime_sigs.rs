@@ -84,6 +84,31 @@ pub(super) fn runtime_signature(name: &str) -> Option<(Vec<Type>, Option<Type>)>
         "riven_output_stderr" => Some((vec![types::I64], Some(types::I64))),
         "riven_output_status" => Some((vec![types::I64], Some(types::I64))),
         "riven_output_drop" => Some((vec![types::I64], None)),
+        // Phase 2 stdlib (#06.5 T2): File + OpenOptions surface.
+        "riven_file_open" => Some((vec![types::I64], Some(types::I64))),
+        "riven_file_create" => Some((vec![types::I64], Some(types::I64))),
+        "riven_file_append" => Some((vec![types::I64], Some(types::I64))),
+        "riven_file_open_options" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "riven_file_read" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "riven_file_read_to_string" => Some((vec![types::I64], Some(types::I64))),
+        "riven_file_read_all" => Some((vec![types::I64], Some(types::I64))),
+        "riven_file_write" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "riven_file_write_all" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "riven_file_write_str" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "riven_file_flush" => Some((vec![types::I64], Some(types::I64))),
+        "riven_file_seek" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "riven_file_metadata" => Some((vec![types::I64], Some(types::I64))),
+        "riven_file_close" => Some((vec![types::I64], Some(types::I64))),
+        "riven_file_drop" => Some((vec![types::I64], None)),
+        "riven_open_options_new" => Some((vec![], Some(types::I64))),
+        "riven_open_options_read" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "riven_open_options_write" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "riven_open_options_append" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "riven_open_options_truncate" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "riven_open_options_create" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "riven_open_options_create_new" => {
+            Some((vec![types::I64, types::I64], Some(types::I64)))
+        }
         "riven_print_int" => Some((vec![types::I64], None)),
         // Conversions
         "riven_int_to_string" => Some((vec![types::I64], Some(types::I64))),

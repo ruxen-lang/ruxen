@@ -1,0 +1,15 @@
+use std.io.File
+
+def write_bar(f: File)
+  match f.write_str("bar")
+    Ok(_)  -> puts "wrote_ok"
+    Err(_) -> puts "wrote_fail"
+  end
+end
+
+def main
+  match File.append("__FILE__")
+    Ok(f)  -> write_bar(f)
+    Err(_) -> puts "append_fail"
+  end
+end

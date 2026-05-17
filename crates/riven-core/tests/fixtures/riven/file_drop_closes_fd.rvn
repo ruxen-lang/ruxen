@@ -1,0 +1,28 @@
+use std.io.File
+
+# Open a fresh File handle inside the loop body 1024 times. Each
+# iteration's `_f` goes out of scope at the loop-body brace so the
+# scope-exit drop pass should fire `File_drop(_f) + riven_dealloc(_f)`
+# — the drop closes the fd. Without that wiring this loop would hit
+# EMFILE on most systems (default soft limit 256 on macOS, 1024 on
+# stock Linux).
+#
+# We assert exactly 1024 successful opens to pin both:
+#   1. each `File.open` succeeds (fd released by prior iteration)
+#   2. drop semantics aren't accidentally counted as a failure path
+def open_one() -> Int
+  match File.open("__FILE__")
+    Ok(_)  -> 1
+    Err(_) -> 0
+  end
+end
+
+def main
+  var i = 0
+  var opened = 0
+  while i < 1024
+    opened = opened + open_one()
+    i = i + 1
+  end
+  puts "opened=#{opened}"
+end

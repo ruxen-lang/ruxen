@@ -1,0 +1,15 @@
+use std.io.File
+
+def write_short(f: File)
+  match f.write_str("short")
+    Ok(_)  -> puts "wrote_ok"
+    Err(_) -> puts "wrote_fail"
+  end
+end
+
+def main
+  match File.create("__FILE__")
+    Ok(f)  -> write_short(f)
+    Err(_) -> puts "create_fail"
+  end
+end

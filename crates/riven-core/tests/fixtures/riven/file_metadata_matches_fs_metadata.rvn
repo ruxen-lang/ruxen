@@ -1,0 +1,24 @@
+use std.io.File
+
+def report(m: Metadata)
+  puts "len=#{m.len}"
+  if m.is_file
+    puts "is_file=true"
+  else
+    puts "is_file=false"
+  end
+end
+
+def stat_open_file(f: File)
+  match f.metadata()
+    Ok(m)  -> report(m)
+    Err(_) -> puts "meta_fail"
+  end
+end
+
+def main
+  match File.open("__FILE__")
+    Ok(f)  -> stat_open_file(f)
+    Err(_) -> puts "open_fail"
+  end
+end

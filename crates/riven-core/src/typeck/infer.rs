@@ -2128,6 +2128,121 @@ impl<'a> InferenceEngine<'a> {
             }
             (Ty::Class { name, .. }, "stdout") if name == "Output" => Some(Ty::String),
             (Ty::Class { name, .. }, "stderr") if name == "Output" => Some(Ty::String),
+            // Phase 2 stdlib (#06.5 T2): std::io::File static-style
+            // constructors. Receiver type is `File` (the class identifier
+            // promoted to a type via resolve::IdentifierKind promotion).
+            // All return `Result[File, IoError]`.
+            (Ty::Class { name, .. }, "open") if name == "File" => Some(Ty::Result(
+                Box::new(Self::class_ty("File", vec![])),
+                Box::new(Ty::Enum {
+                    name: "IoError".to_string(),
+                    generic_args: vec![],
+                }),
+            )),
+            (Ty::Class { name, .. }, "create") if name == "File" => Some(Ty::Result(
+                Box::new(Self::class_ty("File", vec![])),
+                Box::new(Ty::Enum {
+                    name: "IoError".to_string(),
+                    generic_args: vec![],
+                }),
+            )),
+            (Ty::Class { name, .. }, "append") if name == "File" => Some(Ty::Result(
+                Box::new(Self::class_ty("File", vec![])),
+                Box::new(Ty::Enum {
+                    name: "IoError".to_string(),
+                    generic_args: vec![],
+                }),
+            )),
+            (Ty::Class { name, .. }, "open_options") if name == "File" => Some(Ty::Result(
+                Box::new(Self::class_ty("File", vec![])),
+                Box::new(Ty::Enum {
+                    name: "IoError".to_string(),
+                    generic_args: vec![],
+                }),
+            )),
+            // Phase 2 stdlib (#06.5 T2): std::io::File instance methods.
+            // Every path that can fail returns `Result[_, IoError]`. The
+            // io_error_ty helper would be cleaner but inferring it here
+            // matches the existing Command-arm style above.
+            (Ty::Class { name, .. }, "read") if name == "File" => Some(Ty::Result(
+                Box::new(Ty::Int),
+                Box::new(Ty::Enum {
+                    name: "IoError".to_string(),
+                    generic_args: vec![],
+                }),
+            )),
+            (Ty::Class { name, .. }, "read_to_string") if name == "File" => Some(Ty::Result(
+                Box::new(Ty::String),
+                Box::new(Ty::Enum {
+                    name: "IoError".to_string(),
+                    generic_args: vec![],
+                }),
+            )),
+            (Ty::Class { name, .. }, "read_all") if name == "File" => Some(Ty::Result(
+                Box::new(Ty::Array(Box::new(Ty::Int))),
+                Box::new(Ty::Enum {
+                    name: "IoError".to_string(),
+                    generic_args: vec![],
+                }),
+            )),
+            (Ty::Class { name, .. }, "write") if name == "File" => Some(Ty::Result(
+                Box::new(Ty::Int),
+                Box::new(Ty::Enum {
+                    name: "IoError".to_string(),
+                    generic_args: vec![],
+                }),
+            )),
+            (Ty::Class { name, .. }, "write_all") if name == "File" => Some(Ty::Result(
+                Box::new(Ty::Unit),
+                Box::new(Ty::Enum {
+                    name: "IoError".to_string(),
+                    generic_args: vec![],
+                }),
+            )),
+            (Ty::Class { name, .. }, "write_str") if name == "File" => Some(Ty::Result(
+                Box::new(Ty::Unit),
+                Box::new(Ty::Enum {
+                    name: "IoError".to_string(),
+                    generic_args: vec![],
+                }),
+            )),
+            (Ty::Class { name, .. }, "flush") if name == "File" => Some(Ty::Result(
+                Box::new(Ty::Unit),
+                Box::new(Ty::Enum {
+                    name: "IoError".to_string(),
+                    generic_args: vec![],
+                }),
+            )),
+            (Ty::Class { name, .. }, "seek") if name == "File" => Some(Ty::Result(
+                Box::new(Ty::Int),
+                Box::new(Ty::Enum {
+                    name: "IoError".to_string(),
+                    generic_args: vec![],
+                }),
+            )),
+            (Ty::Class { name, .. }, "metadata") if name == "File" => Some(Ty::Result(
+                Box::new(Self::class_ty("Metadata", vec![])),
+                Box::new(Ty::Enum {
+                    name: "IoError".to_string(),
+                    generic_args: vec![],
+                }),
+            )),
+            (Ty::Class { name, .. }, "close") if name == "File" => Some(Ty::Result(
+                Box::new(Ty::Unit),
+                Box::new(Ty::Enum {
+                    name: "IoError".to_string(),
+                    generic_args: vec![],
+                }),
+            )),
+            // OpenOptions builder methods — each returns Self.
+            (Ty::Class { name, .. }, "read") if name == "OpenOptions" => Some(ty.clone()),
+            (Ty::Class { name, .. }, "write") if name == "OpenOptions" => Some(ty.clone()),
+            (Ty::Class { name, .. }, "append") if name == "OpenOptions" => Some(ty.clone()),
+            (Ty::Class { name, .. }, "truncate") if name == "OpenOptions" => Some(ty.clone()),
+            (Ty::Class { name, .. }, "create") if name == "OpenOptions" => Some(ty.clone()),
+            (Ty::Class { name, .. }, "create_new") if name == "OpenOptions" => {
+                Some(ty.clone())
+            }
             // Phase 2 #06.5: `IoError` is a tagged enum, not a class.
             // `.message() -> String` dispatches on tag in the runtime
             // (see `riven_io_error_get_message` in runtime.c).

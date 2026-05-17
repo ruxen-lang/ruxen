@@ -110,6 +110,32 @@ pub fn declare_runtime_functions<'ctx>(module: &Module<'ctx>, context: &'ctx Con
     decl!("riven_output_stderr", ptr_ty, [ptr_ty]);
     decl!("riven_output_status", ptr_ty, [ptr_ty]);
     decl!("riven_output_drop", void, [ptr_ty]);
+    // Phase 2 stdlib (#06.5 T2): File + OpenOptions surface. SeekFrom
+    // is a user-level enum value (no runtime constructor) — its tag /
+    // offset are read directly from the value pointer by
+    // `riven_file_seek`.
+    decl!("riven_file_open", ptr_ty, [ptr_ty]);
+    decl!("riven_file_create", ptr_ty, [ptr_ty]);
+    decl!("riven_file_append", ptr_ty, [ptr_ty]);
+    decl!("riven_file_open_options", ptr_ty, [ptr_ty, ptr_ty]);
+    decl!("riven_file_read", ptr_ty, [ptr_ty, ptr_ty]);
+    decl!("riven_file_read_to_string", ptr_ty, [ptr_ty]);
+    decl!("riven_file_read_all", ptr_ty, [ptr_ty]);
+    decl!("riven_file_write", ptr_ty, [ptr_ty, ptr_ty]);
+    decl!("riven_file_write_all", ptr_ty, [ptr_ty, ptr_ty]);
+    decl!("riven_file_write_str", ptr_ty, [ptr_ty, ptr_ty]);
+    decl!("riven_file_flush", ptr_ty, [ptr_ty]);
+    decl!("riven_file_seek", ptr_ty, [ptr_ty, ptr_ty]);
+    decl!("riven_file_metadata", ptr_ty, [ptr_ty]);
+    decl!("riven_file_close", ptr_ty, [ptr_ty]);
+    decl!("riven_file_drop", void, [ptr_ty]);
+    decl!("riven_open_options_new", ptr_ty, []);
+    decl!("riven_open_options_read", ptr_ty, [ptr_ty, i64_ty]);
+    decl!("riven_open_options_write", ptr_ty, [ptr_ty, i64_ty]);
+    decl!("riven_open_options_append", ptr_ty, [ptr_ty, i64_ty]);
+    decl!("riven_open_options_truncate", ptr_ty, [ptr_ty, i64_ty]);
+    decl!("riven_open_options_create", ptr_ty, [ptr_ty, i64_ty]);
+    decl!("riven_open_options_create_new", ptr_ty, [ptr_ty, i64_ty]);
     decl!("riven_print_int", void, [i64_ty]);
     decl!("riven_print_float", void, [f64_ty]);
 

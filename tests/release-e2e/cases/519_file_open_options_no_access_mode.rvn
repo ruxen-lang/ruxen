@@ -1,0 +1,12 @@
+use std.io.File
+use std.io.OpenOptions
+use std.io.IoError
+
+def main
+  let opts = OpenOptions.new().create(true)
+  match File.open_options("/tmp/riven_e2e_519_should_not_create.txt", opts)
+    Ok(_)                       -> puts "unexpected_ok"
+    Err(IoError.InvalidInput)   -> puts "matched_invalid_input"
+    Err(_)                      -> puts "matched_other"
+  end
+end

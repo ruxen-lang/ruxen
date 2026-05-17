@@ -22,6 +22,9 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <signal.h>
+/* Phase 2 #06.5 T2: <fcntl.h> for O_RDONLY/O_WRONLY/O_CREAT/O_APPEND/
+ * O_TRUNC/O_EXCL/SEEK_SET/SEEK_CUR/SEEK_END consumed by the File class. */
+#include <fcntl.h>
 
 /* Linux-only send() flag that suppresses SIGPIPE on a closed peer.
  * macOS / *BSD don't define it; on those platforms we set the
@@ -1695,6 +1698,513 @@ void riven_output_drop(RivenOutput *o) {
         free(o->stderr_buf);
         o->stderr_buf = NULL;
     }
+}
+
+/* ── Phase 2 stdlib (#06.5 T2): File / OpenOptions / SeekFrom ─────────
+ *
+ * The `File` class is a thin owning wrapper over a POSIX fd. Surface:
+ *
+ *     File.open(path)         -> Result[File, IoError]   (O_RDONLY)
+ *     File.create(path)       -> Result[File, IoError]   (O_WRONLY|O_CREAT|O_TRUNC, 0644)
+ *     File.append(path)       -> Result[File, IoError]   (O_WRONLY|O_CREAT|O_APPEND, 0644)
+ *     File.open_options(p, o) -> Result[File, IoError]
+ *
+ *     f.read(buf)             -> Result[Int, IoError]    (bytes read; 0 = EOF)
+ *     f.read_to_string()      -> Result[String, IoError]
+ *     f.read_all()            -> Result[Array[U8], IoError]
+ *     f.write(bytes)          -> Result[Int, IoError]    (bytes written)
+ *     f.write_all(bytes)      -> Result[(), IoError]     (loops on partial)
+ *     f.write_str(s)          -> Result[(), IoError]
+ *     f.flush()               -> Result[(), IoError]     (raw File: no-op)
+ *     f.seek(pos)             -> Result[Int, IoError]    (new file position)
+ *     f.metadata()            -> Result[Metadata, IoError]  (fstat)
+ *     f.close()               -> Result[(), IoError]     (also runs on drop)
+ *
+ * `OpenOptions` is the builder companion for `File.open_options`. The
+ * builder methods mutate-in-place and return the same pointer (mirrors
+ * `Command.arg/.args/...`). One terminal call (`File.open_options(p, o)`)
+ * consumes the configuration; the OpenOptions value itself stays alive
+ * for any further use and is freed by the scope-exit drop pipeline via
+ * the generic `riven_dealloc` (no inner heap — 8-byte POD).
+ *
+ * `SeekFrom` is a tagged enum with three struct-variants, each carrying
+ * a single `offset: Int`. The codegen lays every Riven enum out as a
+ * 16-byte boxed pointer with `{i32 tag; i32 pad; i64 payload}` — for
+ * a single-field struct variant the payload slot IS the field. So
+ * `riven_file_seek` reads tag at +0 and offset at +8 directly.
+ *
+ *     SeekFrom.Start(n)   -> tag 0,  whence SEEK_SET
+ *     SeekFrom.End(n)     -> tag 1,  whence SEEK_END
+ *     SeekFrom.Current(n) -> tag 2,  whence SEEK_CUR
+ *
+ * Drop semantics: `File` participates in the user_drop_classes pipeline
+ * (see mir/lower/collect.rs::collect_user_drop_classes). At scope exit
+ * the MIR emits `File_drop(f) + riven_dealloc(f)`. `riven_file_drop`
+ * closes the fd iff `closed == 0` and then returns; the dealloc that
+ * follows releases the 8-byte spine.
+ *
+ * Wire layouts:
+ *
+ *   RivenFile  (8 bytes)
+ *     +0   int32  fd       — open file descriptor (or -1 once closed)
+ *     +4   int32  closed   — 1 once `close` has been called; idempotent
+ *
+ *   RivenOpenOptions  (8 bytes)
+ *     +0   u8     read
+ *     +1   u8     write
+ *     +2   u8     append
+ *     +3   u8     truncate
+ *     +4   u8     create
+ *     +5   u8     create_new       (maps to O_EXCL alongside O_CREAT)
+ *     +6   u8     _pad[2]          (zeroed; reserved)
+ *     +7   u8
+ */
+
+#define RIVEN_SEEK_FROM_START   0
+#define RIVEN_SEEK_FROM_END     1
+#define RIVEN_SEEK_FROM_CURRENT 2
+
+typedef struct {
+    int32_t fd;
+    int32_t closed;
+} RivenFile;
+
+_Static_assert(sizeof(RivenFile) == 8,
+    "RivenFile wire layout drifted from documented 8-byte form");
+
+typedef struct {
+    uint8_t read;
+    uint8_t write;
+    uint8_t append;
+    uint8_t truncate;
+    uint8_t create;
+    uint8_t create_new;
+    uint8_t _pad[2];
+} RivenOpenOptions;
+
+_Static_assert(sizeof(RivenOpenOptions) == 8,
+    "RivenOpenOptions wire layout drifted from documented 8-byte form");
+
+/* Wrap an existing fd in a Result::Ok(File). */
+static void *riven_file_wrap_ok(int fd) {
+    RivenFile *f = (RivenFile *)riven_alloc(sizeof(RivenFile));
+    f->fd = fd;
+    f->closed = 0;
+    return riven_result_ok_value((int64_t)f);
+}
+
+/* Build a Result::Err(IoError::InvalidInput(<msg>)) for the static
+ * detection paths (E0711/E0712). The runtime InvalidInput variant has
+ * no payload in the current 8-tag layout — message routing for unit
+ * variants happens via `IoError.message()` returning the canonical
+ * static string. We therefore use the runtime helper that allocates a
+ * unit-variant value with the canonical message. */
+static void *riven_file_invalid_input(void) {
+    return riven_result_err_value(
+        (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+}
+
+void *riven_file_open(const char *path) {
+    if (!path) return riven_file_invalid_input();
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        return riven_io_error_from_errno(errno);
+    }
+    return riven_file_wrap_ok(fd);
+}
+
+void *riven_file_create(const char *path) {
+    if (!path) return riven_file_invalid_input();
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        return riven_io_error_from_errno(errno);
+    }
+    return riven_file_wrap_ok(fd);
+}
+
+void *riven_file_append(const char *path) {
+    if (!path) return riven_file_invalid_input();
+    int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd < 0) {
+        return riven_io_error_from_errno(errno);
+    }
+    return riven_file_wrap_ok(fd);
+}
+
+/* Derive `open(2)` flags from an OpenOptions value. E0711:
+ * `OpenOptions requires at least one of read/write/append`. We surface
+ * this as Result::Err(IoError::InvalidInput) at the runtime layer —
+ * static detection is deferred (the OpenOptions builder is a value-
+ * level chain so a single-AST-pass static analysis cannot in general
+ * see the final flag set).
+ *
+ * Flag matrix (mirrors Rust's std::fs::OpenOptions):
+ *   read=1, write=0, append=0           -> O_RDONLY
+ *   read=0, write=1, append=0           -> O_WRONLY
+ *   read=1, write=1, append=0           -> O_RDWR
+ *   read=0/1, write=*, append=1         -> O_WRONLY|O_APPEND (or O_RDWR|O_APPEND)
+ *   truncate=1 (only with write)        -> O_TRUNC
+ *   create=1                            -> O_CREAT (mode 0644)
+ *   create_new=1                        -> O_CREAT|O_EXCL (overrides create)
+ */
+void *riven_file_open_options(const char *path, RivenOpenOptions *opts) {
+    if (!path || !opts) return riven_file_invalid_input();
+    if (!opts->read && !opts->write && !opts->append) {
+        /* E0711 at runtime — see comment above for the deferral note. */
+        return riven_file_invalid_input();
+    }
+    int flags = 0;
+    if (opts->read && (opts->write || opts->append)) {
+        flags |= O_RDWR;
+    } else if (opts->write || opts->append) {
+        flags |= O_WRONLY;
+    } else {
+        flags |= O_RDONLY;
+    }
+    if (opts->append) flags |= O_APPEND;
+    if (opts->truncate && (opts->write || opts->append)) flags |= O_TRUNC;
+    if (opts->create_new) {
+        flags |= O_CREAT | O_EXCL;
+    } else if (opts->create) {
+        flags |= O_CREAT;
+    }
+    int fd;
+    if (flags & O_CREAT) {
+        fd = open(path, flags, 0644);
+    } else {
+        fd = open(path, flags);
+    }
+    if (fd < 0) {
+        return riven_io_error_from_errno(errno);
+    }
+    return riven_file_wrap_ok(fd);
+}
+
+/* `File.read(buf: &mut Array[U8]) -> Result[Int, IoError]`.
+ *
+ * v1 simplification: buf is a `RivenVec` whose element slots are
+ * int64_t (the uniform Vec representation). We read into a stack
+ * staging buffer of `min(remaining_cap, 4096)` bytes and push each
+ * byte as a single int64 slot. This keeps the wire-level contract
+ * identical to other byte-Array surfaces (process Output.stdout
+ * materializes as a String, not a Vec[U8] today — that bridge lands
+ * with the BufReader work in T6).
+ *
+ * Returns Ok(0) on EOF, Ok(n) on n>0 bytes, Err on real failure.
+ * Retries on EINTR. */
+void *riven_file_read(RivenFile *f, RivenVec *buf) {
+    if (!f || f->closed || !buf) return riven_file_invalid_input();
+    unsigned char stage[4096];
+    ssize_t got;
+    do {
+        got = read(f->fd, stage, sizeof(stage));
+    } while (got < 0 && errno == EINTR);
+    if (got < 0) {
+        return riven_io_error_from_errno(errno);
+    }
+    for (ssize_t i = 0; i < got; i++) {
+        riven_vec_push(buf, (int64_t)stage[i]);
+    }
+    return riven_result_ok_value(got);
+}
+
+void *riven_file_read_to_string(RivenFile *f) {
+    if (!f || f->closed) return riven_file_invalid_input();
+    size_t cap = 256;
+    size_t len = 0;
+    char *out = (char *)malloc(cap);
+    if (!out) riven_panic("out of memory");
+    for (;;) {
+        if (len + 1 >= cap) {
+            size_t next_cap = cap * 2;
+            char *next = (char *)realloc(out, next_cap);
+            if (!next) { free(out); riven_panic("out of memory"); }
+            out = next;
+            cap = next_cap;
+        }
+        ssize_t got;
+        do {
+            got = read(f->fd, out + len, cap - 1 - len);
+        } while (got < 0 && errno == EINTR);
+        if (got < 0) {
+            int saved = errno;
+            free(out);
+            return riven_io_error_from_errno(saved);
+        }
+        if (got == 0) break;
+        len += (size_t)got;
+    }
+    out[len] = '\0';
+    /* `riven_string_from` performs the canonical copy into the String
+     * pool; free our staging buffer afterwards. */
+    char *s = riven_string_from(out);
+    free(out);
+    return riven_result_ok_value((int64_t)s);
+}
+
+void *riven_file_read_all(RivenFile *f) {
+    if (!f || f->closed) return riven_file_invalid_input();
+    RivenVec *v = riven_vec_new();
+    unsigned char stage[4096];
+    for (;;) {
+        ssize_t got;
+        do {
+            got = read(f->fd, stage, sizeof(stage));
+        } while (got < 0 && errno == EINTR);
+        if (got < 0) {
+            int saved = errno;
+            /* Caller will not see the partial Vec on error; free it. */
+            riven_dealloc(v);
+            return riven_io_error_from_errno(saved);
+        }
+        if (got == 0) break;
+        for (ssize_t i = 0; i < got; i++) {
+            riven_vec_push(v, (int64_t)stage[i]);
+        }
+    }
+    return riven_result_ok_value((int64_t)v);
+}
+
+/* `File.write(bytes: &Array[U8]) -> Result[Int, IoError]`. Single
+ * `write(2)` call. Partial writes are possible and surface as
+ * Ok(n) where n < bytes.len; the caller chooses how to retry. Use
+ * `write_all` if a loop-until-complete contract is wanted. */
+void *riven_file_write(RivenFile *f, RivenVec *bytes) {
+    if (!f || f->closed || !bytes) return riven_file_invalid_input();
+    /* Stage the int64-slot bytes into a tight buffer for `write(2)`. */
+    size_t n = (size_t)bytes->len;
+    unsigned char *stage = (unsigned char *)malloc(n > 0 ? n : 1);
+    if (!stage) riven_panic("out of memory");
+    for (size_t i = 0; i < n; i++) {
+        stage[i] = (unsigned char)(bytes->data[i] & 0xFF);
+    }
+    ssize_t put;
+    do {
+        put = write(f->fd, stage, n);
+    } while (put < 0 && errno == EINTR);
+    if (put < 0) {
+        int saved = errno;
+        free(stage);
+        return riven_io_error_from_errno(saved);
+    }
+    free(stage);
+    return riven_result_ok_value((int64_t)put);
+}
+
+void *riven_file_write_all(RivenFile *f, RivenVec *bytes) {
+    if (!f || f->closed || !bytes) return riven_file_invalid_input();
+    size_t n = (size_t)bytes->len;
+    unsigned char *stage = (unsigned char *)malloc(n > 0 ? n : 1);
+    if (!stage) riven_panic("out of memory");
+    for (size_t i = 0; i < n; i++) {
+        stage[i] = (unsigned char)(bytes->data[i] & 0xFF);
+    }
+    size_t off = 0;
+    while (off < n) {
+        ssize_t put;
+        do {
+            put = write(f->fd, stage + off, n - off);
+        } while (put < 0 && errno == EINTR);
+        if (put < 0) {
+            int saved = errno;
+            free(stage);
+            return riven_io_error_from_errno(saved);
+        }
+        if (put == 0) {
+            /* WriteZero per std::io contract: write returned 0 with
+             * bytes remaining and no signaled error. */
+            free(stage);
+            return riven_result_err_value(
+                (int64_t)riven_io_error_struct(
+                    RIVEN_IO_ERROR_WRITE_ZERO,
+                    "write returned 0 with bytes remaining"));
+        }
+        off += (size_t)put;
+    }
+    free(stage);
+    return riven_result_ok_value(0);
+}
+
+void *riven_file_write_str(RivenFile *f, const char *s) {
+    if (!f || f->closed) return riven_file_invalid_input();
+    if (!s) s = "";
+    size_t n = strlen(s);
+    size_t off = 0;
+    while (off < n) {
+        ssize_t put;
+        do {
+            put = write(f->fd, s + off, n - off);
+        } while (put < 0 && errno == EINTR);
+        if (put < 0) {
+            return riven_io_error_from_errno(errno);
+        }
+        if (put == 0) {
+            return riven_result_err_value(
+                (int64_t)riven_io_error_struct(
+                    RIVEN_IO_ERROR_WRITE_ZERO,
+                    "write returned 0 with bytes remaining"));
+        }
+        off += (size_t)put;
+    }
+    return riven_result_ok_value(0);
+}
+
+/* `File.flush()` — POSIX `write(2)` has no userspace buffer to flush.
+ * BufWriter (T6) overrides this with the buffer-emit path. For raw
+ * File the contract is just Ok(()). We deliberately do NOT fsync()
+ * here — that would be a much heavier semantic and is what
+ * `fs.write_atomic` covers (durability) when added in T3. */
+void *riven_file_flush(RivenFile *f) {
+    if (!f || f->closed) return riven_file_invalid_input();
+    return riven_result_ok_value(0);
+}
+
+/* `File.seek(pos: SeekFrom) -> Result[Int, IoError]`. `pos` is a
+ * 16-byte tagged enum value (see SeekFrom comment block at the top of
+ * this section). E0712 is "negative offset on SeekFrom::Start" — a
+ * file position before byte 0 is meaningless. We surface it as
+ * Result::Err(IoError::InvalidInput) at runtime, matching the prompt's
+ * "runtime check ok if not statically detectable" fallback. */
+void *riven_file_seek(RivenFile *f, void *pos) {
+    if (!f || f->closed || !pos) return riven_file_invalid_input();
+    int32_t tag = *(int32_t *)pos;
+    int64_t offset = ((int64_t *)pos)[1];
+    int whence;
+    switch (tag) {
+        case RIVEN_SEEK_FROM_START:
+            if (offset < 0) {
+                /* E0712: negative offset on Start. */
+                return riven_file_invalid_input();
+            }
+            whence = SEEK_SET;
+            break;
+        case RIVEN_SEEK_FROM_END:
+            whence = SEEK_END;
+            break;
+        case RIVEN_SEEK_FROM_CURRENT:
+            whence = SEEK_CUR;
+            break;
+        default:
+            return riven_file_invalid_input();
+    }
+    off_t pos_new = lseek(f->fd, (off_t)offset, whence);
+    if (pos_new == (off_t)-1) {
+        return riven_io_error_from_errno(errno);
+    }
+    return riven_result_ok_value((int64_t)pos_new);
+}
+
+/* `File.metadata() -> Result[Metadata, IoError]`. Reuses the
+ * `RivenMetadata` wire format produced by `riven_fs_metadata` — 3
+ * int64s {size, modified_secs, kind}. fstat(2) so we report the
+ * underlying file's identity, not whatever path created the fd. */
+void *riven_file_metadata(RivenFile *f) {
+    if (!f || f->closed) return riven_file_invalid_input();
+    struct stat st;
+    if (fstat(f->fd, &st) != 0) {
+        return riven_io_error_from_errno(errno);
+    }
+    int64_t *meta = (int64_t *)riven_alloc(24);
+    meta[0] = (int64_t)st.st_size;
+    meta[1] = (int64_t)st.st_mtime;
+    int64_t kind;
+    if (S_ISREG(st.st_mode)) {
+        kind = RIVEN_METADATA_KIND_FILE;
+    } else if (S_ISDIR(st.st_mode)) {
+        kind = RIVEN_METADATA_KIND_DIR;
+    } else if (S_ISLNK(st.st_mode)) {
+        kind = RIVEN_METADATA_KIND_SYMLINK;
+    } else {
+        kind = RIVEN_METADATA_KIND_OTHER;
+    }
+    meta[2] = kind;
+    return riven_result_ok_value((int64_t)meta);
+}
+
+/* `File.close()` — idempotent. Returns Ok(()) on first successful
+ * close, Ok(()) on subsequent calls (no-op), Err on close(2) failure
+ * (rare: EBADF, EIO). */
+void *riven_file_close(RivenFile *f) {
+    if (!f) return riven_file_invalid_input();
+    if (f->closed) return riven_result_ok_value(0);
+    int rc;
+    do {
+        rc = close(f->fd);
+    } while (rc < 0 && errno == EINTR);
+    f->closed = 1;
+    f->fd = -1;
+    if (rc < 0) {
+        return riven_io_error_from_errno(errno);
+    }
+    return riven_result_ok_value(0);
+}
+
+/* Drop helper for File — closes the fd if still open. Registered in
+ * `mir/lower/collect.rs::collect_user_drop_classes` so the MIR emits
+ * `File_drop(f) + riven_dealloc(f)` at scope exit. The dealloc that
+ * follows releases the 8-byte spine. */
+void riven_file_drop(RivenFile *f) {
+    if (!f) return;
+    if (!f->closed && f->fd >= 0) {
+        int rc;
+        do {
+            rc = close(f->fd);
+        } while (rc < 0 && errno == EINTR);
+        (void)rc; /* drop swallows errors — there's nobody to surface them to. */
+        f->closed = 1;
+        f->fd = -1;
+    }
+}
+
+/* ── OpenOptions builder ──────────────────────────────────────────── */
+
+RivenOpenOptions *riven_open_options_new(void) {
+    RivenOpenOptions *o = (RivenOpenOptions *)riven_alloc(sizeof(RivenOpenOptions));
+    o->read = 0;
+    o->write = 0;
+    o->append = 0;
+    o->truncate = 0;
+    o->create = 0;
+    o->create_new = 0;
+    o->_pad[0] = 0;
+    o->_pad[1] = 0;
+    return o;
+}
+
+RivenOpenOptions *riven_open_options_read(RivenOpenOptions *o, int64_t v) {
+    if (!o) return o;
+    o->read = v ? 1 : 0;
+    return o;
+}
+
+RivenOpenOptions *riven_open_options_write(RivenOpenOptions *o, int64_t v) {
+    if (!o) return o;
+    o->write = v ? 1 : 0;
+    return o;
+}
+
+RivenOpenOptions *riven_open_options_append(RivenOpenOptions *o, int64_t v) {
+    if (!o) return o;
+    o->append = v ? 1 : 0;
+    return o;
+}
+
+RivenOpenOptions *riven_open_options_truncate(RivenOpenOptions *o, int64_t v) {
+    if (!o) return o;
+    o->truncate = v ? 1 : 0;
+    return o;
+}
+
+RivenOpenOptions *riven_open_options_create(RivenOpenOptions *o, int64_t v) {
+    if (!o) return o;
+    o->create = v ? 1 : 0;
+    return o;
+}
+
+RivenOpenOptions *riven_open_options_create_new(RivenOpenOptions *o, int64_t v) {
+    if (!o) return o;
+    o->create_new = v ? 1 : 0;
+    return o;
 }
 
 void riven_print_int(int64_t n) {
@@ -3892,10 +4402,17 @@ typedef struct RivenHashEntry {
     struct RivenHashEntry *next;
 } RivenHashEntry;
 
-#define RIVEN_HASH_BUCKETS 16u
+#define RIVEN_HASH_INITIAL_BUCKETS 16u
 
 struct RivenHash {
-    RivenHashEntry *buckets[RIVEN_HASH_BUCKETS];
+    /* Heap-allocated bucket array of length `bucket_count`. The
+       count starts at RIVEN_HASH_INITIAL_BUCKETS and doubles when
+       `len` would push the load factor past 0.75 — see
+       `riven_hash_maybe_grow` below. Keeping the count as a power
+       of two preserves a clean `% bucket_count` modulo without
+       biasing the splitmix/FNV hash distribution. */
+    RivenHashEntry **buckets;
+    uint64_t bucket_count;
     uint64_t len;
     /* Flag set to 1 if keys should be compared/hashed as C strings. The
        first inserted key decides: string pointers have the top bit clear
@@ -3979,7 +4496,19 @@ RivenHash *riven_hash_new(void) {
     if (!h) {
         riven_panic("out of memory");
     }
-    for (unsigned i = 0; i < RIVEN_HASH_BUCKETS; i++) {
+    h->bucket_count = RIVEN_HASH_INITIAL_BUCKETS;
+    /* Use malloc + explicit NULL init rather than calloc so the
+       drop_fixtures leak harness (which rewrites `malloc(` →
+       `riven_test_malloc(` and `free(` → `riven_test_free(`) keeps
+       the per-allocation counters balanced. calloc is not rewritten,
+       so a calloc'd buckets array would free-count without an
+       alloc-count and underflow the raw_outstanding counter. */
+    h->buckets = (RivenHashEntry **)malloc(
+        h->bucket_count * sizeof(RivenHashEntry *));
+    if (!h->buckets) {
+        riven_panic("out of memory");
+    }
+    for (uint64_t i = 0; i < h->bucket_count; i++) {
         h->buckets[i] = NULL;
     }
     h->len = 0;
@@ -3995,7 +4524,7 @@ RivenHash *riven_hash_new(void) {
 void riven_hash_ORIG_FREE(RivenHash *h) RIVEN_ASM_LABEL(riven_hash_free);
 void riven_hash_ORIG_FREE(RivenHash *h) {
     if (!h) return;
-    for (unsigned i = 0; i < RIVEN_HASH_BUCKETS; i++) {
+    for (uint64_t i = 0; i < h->bucket_count; i++) {
         RivenHashEntry *e = h->buckets[i];
         while (e) {
             RivenHashEntry *nx = e->next;
@@ -4003,6 +4532,7 @@ void riven_hash_ORIG_FREE(RivenHash *h) {
             e = nx;
         }
     }
+    free(h->buckets);
     free(h);
 }
 
@@ -4021,7 +4551,7 @@ void riven_hash_drop_string_v_ORIG_FREE(RivenHash *h)
     RIVEN_ASM_LABEL(riven_hash_drop_string_v);
 void riven_hash_drop_string_v_ORIG_FREE(RivenHash *h) {
     if (!h) return;
-    for (unsigned i = 0; i < RIVEN_HASH_BUCKETS; i++) {
+    for (uint64_t i = 0; i < h->bucket_count; i++) {
         for (RivenHashEntry *e = h->buckets[i]; e; e = e->next) {
             char *k = (char *)e->key;
             if (k) riven_string_ORIG_FREE(k);
@@ -4035,7 +4565,7 @@ void riven_hash_drop_v_string_ORIG_FREE(RivenHash *h)
     RIVEN_ASM_LABEL(riven_hash_drop_v_string);
 void riven_hash_drop_v_string_ORIG_FREE(RivenHash *h) {
     if (!h) return;
-    for (unsigned i = 0; i < RIVEN_HASH_BUCKETS; i++) {
+    for (uint64_t i = 0; i < h->bucket_count; i++) {
         for (RivenHashEntry *e = h->buckets[i]; e; e = e->next) {
             char *v = (char *)e->value;
             if (v) riven_string_ORIG_FREE(v);
@@ -4049,7 +4579,7 @@ void riven_hash_drop_string_string_ORIG_FREE(RivenHash *h)
     RIVEN_ASM_LABEL(riven_hash_drop_string_string);
 void riven_hash_drop_string_string_ORIG_FREE(RivenHash *h) {
     if (!h) return;
-    for (unsigned i = 0; i < RIVEN_HASH_BUCKETS; i++) {
+    for (uint64_t i = 0; i < h->bucket_count; i++) {
         for (RivenHashEntry *e = h->buckets[i]; e; e = e->next) {
             char *k = (char *)e->key;
             char *v = (char *)e->value;
@@ -4070,7 +4600,7 @@ void riven_hash_drop_v_vec_ORIG_FREE(RivenHash *h)
     RIVEN_ASM_LABEL(riven_hash_drop_v_vec);
 void riven_hash_drop_v_vec_ORIG_FREE(RivenHash *h) {
     if (!h) return;
-    for (unsigned i = 0; i < RIVEN_HASH_BUCKETS; i++) {
+    for (uint64_t i = 0; i < h->bucket_count; i++) {
         for (RivenHashEntry *e = h->buckets[i]; e; e = e->next) {
             RivenVec *v = (RivenVec *)e->value;
             if (v) riven_vec_ORIG_FREE(v);
@@ -4080,12 +4610,53 @@ void riven_hash_drop_v_vec_ORIG_FREE(RivenHash *h) {
     riven_hash_ORIG_FREE(h);
 }
 
+/* Double the bucket array and rehash every entry into the new
+   spine. Called from `riven_hash_insert` when an additional entry
+   would push the load factor past 0.75. We splice the existing
+   RivenHashEntry nodes into the new buckets in place — no
+   per-entry malloc/free, so a rehash costs one buckets-array
+   alloc + one buckets-array free regardless of how many entries
+   we relink. The leak harness counts only `free(` calls, and we
+   add one matched malloc/free pair for the buckets spine, so
+   counters stay balanced. */
+static void riven_hash_maybe_grow(RivenHash *h) {
+    /* Load factor 0.75 — grow when len+1 would exceed
+       bucket_count * 3 / 4. Integer-math equivalent below. */
+    if (h->len + 1 <= (h->bucket_count * 3) / 4) return;
+
+    uint64_t old_n = h->bucket_count;
+    uint64_t new_n = old_n * 2;
+    /* malloc + NULL-init for leak-harness counter parity — see the
+       comment in riven_hash_new. */
+    RivenHashEntry **nb =
+        (RivenHashEntry **)malloc(new_n * sizeof(RivenHashEntry *));
+    if (!nb) {
+        riven_panic("out of memory");
+    }
+    for (uint64_t j = 0; j < new_n; j++) {
+        nb[j] = NULL;
+    }
+    for (uint64_t i = 0; i < old_n; i++) {
+        RivenHashEntry *e = h->buckets[i];
+        while (e) {
+            RivenHashEntry *nx = e->next;
+            uint64_t bj = riven_hash_key_hash(h, e->key) % new_n;
+            e->next = nb[bj];
+            nb[bj] = e;
+            e = nx;
+        }
+    }
+    free(h->buckets);
+    h->buckets = nb;
+    h->bucket_count = new_n;
+}
+
 void riven_hash_insert(RivenHash *h, int64_t key, int64_t value) {
     if (!h) return;
     if (h->string_keys < 0) {
         h->string_keys = riven_hash_looks_like_string(key) ? 1 : 0;
     }
-    uint64_t bucket_idx = riven_hash_key_hash(h, key) % RIVEN_HASH_BUCKETS;
+    uint64_t bucket_idx = riven_hash_key_hash(h, key) % h->bucket_count;
     RivenHashEntry *e = h->buckets[bucket_idx];
     while (e) {
         if (riven_hash_keys_equal(h, e->key, key)) {
@@ -4094,6 +4665,10 @@ void riven_hash_insert(RivenHash *h, int64_t key, int64_t value) {
         }
         e = e->next;
     }
+    /* Grow before linking the new entry. Grow recomputes the bucket
+       index, so we re-read after. */
+    riven_hash_maybe_grow(h);
+    bucket_idx = riven_hash_key_hash(h, key) % h->bucket_count;
     RivenHashEntry *ne = (RivenHashEntry *)malloc(sizeof(RivenHashEntry));
     if (!ne) {
         riven_panic("out of memory");
@@ -4114,7 +4689,7 @@ void *riven_hash_get(RivenHash *h, int64_t key) {
         *(int32_t *)result = 0;
         return result;
     }
-    uint64_t bucket_idx = riven_hash_key_hash(h, key) % RIVEN_HASH_BUCKETS;
+    uint64_t bucket_idx = riven_hash_key_hash(h, key) % h->bucket_count;
     RivenHashEntry *e = h->buckets[bucket_idx];
     while (e) {
         if (riven_hash_keys_equal(h, e->key, key)) {
@@ -4130,7 +4705,7 @@ void *riven_hash_get(RivenHash *h, int64_t key) {
 
 int8_t riven_hash_contains_key(RivenHash *h, int64_t key) {
     if (!h) return 0;
-    uint64_t bucket_idx = riven_hash_key_hash(h, key) % RIVEN_HASH_BUCKETS;
+    uint64_t bucket_idx = riven_hash_key_hash(h, key) % h->bucket_count;
     RivenHashEntry *e = h->buckets[bucket_idx];
     while (e) {
         if (riven_hash_keys_equal(h, e->key, key)) {
@@ -4162,7 +4737,15 @@ RivenSet *riven_set_new(void) {
     if (!s) {
         riven_panic("out of memory");
     }
-    for (unsigned i = 0; i < RIVEN_HASH_BUCKETS; i++) {
+    s->inner.bucket_count = RIVEN_HASH_INITIAL_BUCKETS;
+    /* malloc + NULL-init for leak-harness counter parity with the
+       free() rewrite — see the comment in riven_hash_new. */
+    s->inner.buckets = (RivenHashEntry **)malloc(
+        s->inner.bucket_count * sizeof(RivenHashEntry *));
+    if (!s->inner.buckets) {
+        riven_panic("out of memory");
+    }
+    for (uint64_t i = 0; i < s->inner.bucket_count; i++) {
         s->inner.buckets[i] = NULL;
     }
     s->inner.len = 0;
@@ -4196,7 +4779,7 @@ int8_t riven_set_is_empty(RivenSet *s) {
 void riven_set_ORIG_FREE(RivenSet *s) RIVEN_ASM_LABEL(riven_set_free);
 void riven_set_ORIG_FREE(RivenSet *s) {
     if (!s) return;
-    for (unsigned i = 0; i < RIVEN_HASH_BUCKETS; i++) {
+    for (uint64_t i = 0; i < s->inner.bucket_count; i++) {
         RivenHashEntry *e = s->inner.buckets[i];
         while (e) {
             RivenHashEntry *nx = e->next;
@@ -4204,6 +4787,7 @@ void riven_set_ORIG_FREE(RivenSet *s) {
             e = nx;
         }
     }
+    free(s->inner.buckets);
     free(s);
 }
 
@@ -4214,7 +4798,7 @@ void riven_set_drop_string_ORIG_FREE(RivenSet *s)
     RIVEN_ASM_LABEL(riven_set_drop_string);
 void riven_set_drop_string_ORIG_FREE(RivenSet *s) {
     if (!s) return;
-    for (unsigned i = 0; i < RIVEN_HASH_BUCKETS; i++) {
+    for (uint64_t i = 0; i < s->inner.bucket_count; i++) {
         for (RivenHashEntry *e = s->inner.buckets[i]; e; e = e->next) {
             char *k = (char *)e->key;
             if (k) riven_string_ORIG_FREE(k);
@@ -4248,7 +4832,7 @@ void *riven_hash_remove(RivenHash *h, int64_t key) {
         *(int32_t *)result = 0;
         return result;
     }
-    uint64_t bucket_idx = riven_hash_key_hash(h, key) % RIVEN_HASH_BUCKETS;
+    uint64_t bucket_idx = riven_hash_key_hash(h, key) % h->bucket_count;
     RivenHashEntry *prev = NULL;
     RivenHashEntry *e = h->buckets[bucket_idx];
     while (e) {
@@ -4277,7 +4861,7 @@ void *riven_hash_remove(RivenHash *h, int64_t key) {
    inserted key can re-decide. The spine itself is preserved. */
 void riven_hash_clear(RivenHash *h) {
     if (!h) return;
-    for (unsigned i = 0; i < RIVEN_HASH_BUCKETS; i++) {
+    for (uint64_t i = 0; i < h->bucket_count; i++) {
         RivenHashEntry *e = h->buckets[i];
         while (e) {
             RivenHashEntry *nx = e->next;
@@ -4298,7 +4882,7 @@ void riven_hash_clear(RivenHash *h) {
 RivenVec *riven_hash_keys(RivenHash *h) {
     RivenVec *out = riven_vec_new();
     if (!h) return out;
-    for (unsigned i = 0; i < RIVEN_HASH_BUCKETS; i++) {
+    for (uint64_t i = 0; i < h->bucket_count; i++) {
         for (RivenHashEntry *e = h->buckets[i]; e; e = e->next) {
             riven_vec_push(out, e->key);
         }
@@ -4310,7 +4894,7 @@ RivenVec *riven_hash_keys(RivenHash *h) {
 RivenVec *riven_hash_values(RivenHash *h) {
     RivenVec *out = riven_vec_new();
     if (!h) return out;
-    for (unsigned i = 0; i < RIVEN_HASH_BUCKETS; i++) {
+    for (uint64_t i = 0; i < h->bucket_count; i++) {
         for (RivenHashEntry *e = h->buckets[i]; e; e = e->next) {
             riven_vec_push(out, e->value);
         }
@@ -4337,10 +4921,10 @@ int8_t riven_hash_eq(RivenHash *a, RivenHash *b) {
     if (a == b) return 1;
     if (!a || !b) return 0;
     if (a->len != b->len) return 0;
-    for (unsigned i = 0; i < RIVEN_HASH_BUCKETS; i++) {
+    for (uint64_t i = 0; i < a->bucket_count; i++) {
         for (RivenHashEntry *e = a->buckets[i]; e; e = e->next) {
             if (!riven_hash_contains_key(b, e->key)) return 0;
-            uint64_t bj = riven_hash_key_hash(b, e->key) % RIVEN_HASH_BUCKETS;
+            uint64_t bj = riven_hash_key_hash(b, e->key) % b->bucket_count;
             int matched = 0;
             for (RivenHashEntry *f = b->buckets[bj]; f; f = f->next) {
                 if (riven_hash_keys_equal(b, f->key, e->key)) {
@@ -4363,7 +4947,7 @@ int64_t riven_hash_index(RivenHash *h, int64_t key) {
     if (!h) {
         riven_panic("hashmap index: missing key");
     }
-    uint64_t bucket_idx = riven_hash_key_hash(h, key) % RIVEN_HASH_BUCKETS;
+    uint64_t bucket_idx = riven_hash_key_hash(h, key) % h->bucket_count;
     for (RivenHashEntry *e = h->buckets[bucket_idx]; e; e = e->next) {
         if (riven_hash_keys_equal(h, e->key, key)) {
             return e->value;
@@ -4439,14 +5023,14 @@ RivenSet *riven_set_from_iter(RivenVec *iter) {
 RivenSet *riven_set_union(RivenSet *a, RivenSet *b) {
     RivenSet *out = riven_set_new();
     if (a) {
-        for (unsigned i = 0; i < RIVEN_HASH_BUCKETS; i++) {
+        for (uint64_t i = 0; i < a->inner.bucket_count; i++) {
             for (RivenHashEntry *e = a->inner.buckets[i]; e; e = e->next) {
                 riven_set_insert(out, e->key);
             }
         }
     }
     if (b) {
-        for (unsigned i = 0; i < RIVEN_HASH_BUCKETS; i++) {
+        for (uint64_t i = 0; i < b->inner.bucket_count; i++) {
             for (RivenHashEntry *e = b->inner.buckets[i]; e; e = e->next) {
                 riven_set_insert(out, e->key);
             }
@@ -4459,7 +5043,7 @@ RivenSet *riven_set_union(RivenSet *a, RivenSet *b) {
 RivenSet *riven_set_intersection(RivenSet *a, RivenSet *b) {
     RivenSet *out = riven_set_new();
     if (!a || !b) return out;
-    for (unsigned i = 0; i < RIVEN_HASH_BUCKETS; i++) {
+    for (uint64_t i = 0; i < a->inner.bucket_count; i++) {
         for (RivenHashEntry *e = a->inner.buckets[i]; e; e = e->next) {
             if (riven_set_contains(b, e->key)) {
                 riven_set_insert(out, e->key);
@@ -4473,7 +5057,7 @@ RivenSet *riven_set_intersection(RivenSet *a, RivenSet *b) {
 RivenSet *riven_set_difference(RivenSet *a, RivenSet *b) {
     RivenSet *out = riven_set_new();
     if (!a) return out;
-    for (unsigned i = 0; i < RIVEN_HASH_BUCKETS; i++) {
+    for (uint64_t i = 0; i < a->inner.bucket_count; i++) {
         for (RivenHashEntry *e = a->inner.buckets[i]; e; e = e->next) {
             if (!b || !riven_set_contains(b, e->key)) {
                 riven_set_insert(out, e->key);
@@ -4488,7 +5072,7 @@ int8_t riven_set_eq(RivenSet *a, RivenSet *b) {
     if (a == b) return 1;
     if (!a || !b) return 0;
     if (a->inner.len != b->inner.len) return 0;
-    for (unsigned i = 0; i < RIVEN_HASH_BUCKETS; i++) {
+    for (uint64_t i = 0; i < a->inner.bucket_count; i++) {
         for (RivenHashEntry *e = a->inner.buckets[i]; e; e = e->next) {
             if (!riven_set_contains(b, e->key)) return 0;
         }

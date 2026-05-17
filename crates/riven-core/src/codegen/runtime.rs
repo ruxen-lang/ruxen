@@ -79,6 +79,34 @@ pub const RUNTIME_FUNCTIONS: &[&str] = &[
     "riven_output_stderr",
     "riven_output_status",
     "riven_output_drop",
+    // Phase 2 stdlib (#06.5 T2): std::io::File + OpenOptions builder.
+    // Wire layout documented in `runtime.c` at `RivenFile` /
+    // `RivenOpenOptions`. SeekFrom is a user-level enum (no runtime
+    // ctor) — its 16-byte tagged-value layout is the standard enum
+    // shape; `riven_file_seek` reads tag and offset directly from the
+    // SeekFrom value pointer.
+    "riven_file_open",
+    "riven_file_create",
+    "riven_file_append",
+    "riven_file_open_options",
+    "riven_file_read",
+    "riven_file_read_to_string",
+    "riven_file_read_all",
+    "riven_file_write",
+    "riven_file_write_all",
+    "riven_file_write_str",
+    "riven_file_flush",
+    "riven_file_seek",
+    "riven_file_metadata",
+    "riven_file_close",
+    "riven_file_drop",
+    "riven_open_options_new",
+    "riven_open_options_read",
+    "riven_open_options_write",
+    "riven_open_options_append",
+    "riven_open_options_truncate",
+    "riven_open_options_create",
+    "riven_open_options_create_new",
     "riven_process_exit",
     // std::process::run (Phase 3): fork+execvp a child, inherit stdio,
     // return exit code (or 128+signal on signal termination, 127 on
@@ -440,6 +468,34 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "Output_stderr" => return Ok("riven_output_stderr"),
         "Output_status" => return Ok("riven_output_status"),
         "Output_drop" => return Ok("riven_output_drop"),
+        // Phase 2 stdlib (#06.5 T2): File / OpenOptions surface.
+        // `File_open/create/append/open_options` are static-style
+        // constructors that go through the standard `{Type}_{method}`
+        // mangling path. `File_drop` is registered in the
+        // user_drop_classes set (mir/lower/collect.rs) so the MIR
+        // emits it before the spine dealloc at scope exit.
+        "File_open" => return Ok("riven_file_open"),
+        "File_create" => return Ok("riven_file_create"),
+        "File_append" => return Ok("riven_file_append"),
+        "File_open_options" => return Ok("riven_file_open_options"),
+        "File_read" => return Ok("riven_file_read"),
+        "File_read_to_string" => return Ok("riven_file_read_to_string"),
+        "File_read_all" => return Ok("riven_file_read_all"),
+        "File_write" => return Ok("riven_file_write"),
+        "File_write_all" => return Ok("riven_file_write_all"),
+        "File_write_str" => return Ok("riven_file_write_str"),
+        "File_flush" => return Ok("riven_file_flush"),
+        "File_seek" => return Ok("riven_file_seek"),
+        "File_metadata" => return Ok("riven_file_metadata"),
+        "File_close" => return Ok("riven_file_close"),
+        "File_drop" => return Ok("riven_file_drop"),
+        "OpenOptions_new" => return Ok("riven_open_options_new"),
+        "OpenOptions_read" => return Ok("riven_open_options_read"),
+        "OpenOptions_write" => return Ok("riven_open_options_write"),
+        "OpenOptions_append" => return Ok("riven_open_options_append"),
+        "OpenOptions_truncate" => return Ok("riven_open_options_truncate"),
+        "OpenOptions_create" => return Ok("riven_open_options_create"),
+        "OpenOptions_create_new" => return Ok("riven_open_options_create_new"),
         // Phase 2 stdlib (#06.A3): std::fmt::Formatter methods.
         "Formatter_new" => return Ok("riven_fmt_formatter_new"),
         "Formatter_free" => return Ok("riven_fmt_formatter_free"),

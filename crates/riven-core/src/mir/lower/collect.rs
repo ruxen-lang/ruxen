@@ -237,5 +237,12 @@ impl<'a> Lowerer<'a> {
         // `codegen::runtime::runtime_name`.
         self.user_drop_classes.insert("Command".to_string());
         self.user_drop_classes.insert("Output".to_string());
+        // Phase 2 stdlib (#06.5 T2): `File` owns a POSIX fd. The drop
+        // helper `riven_file_drop` closes the fd if it's still open
+        // (idempotent — `f.close()` flags it `closed=1` first). The
+        // scope-exit drop pass then frees the 8-byte spine via
+        // `riven_dealloc`. Without this entry a `let f = File.open(...)`
+        // that goes out of scope would leak the fd until process exit.
+        self.user_drop_classes.insert("File".to_string());
     }
 }

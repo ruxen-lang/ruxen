@@ -1,0 +1,10 @@
+use std.io.File
+use std.io.IoError
+
+def main
+  match File.open("/no/such/path/ever/exists/here/517")
+    Ok(_)                  -> puts "unexpected_ok"
+    Err(IoError.NotFound)  -> puts "matched_not_found"
+    Err(_)                 -> puts "matched_other"
+  end
+end

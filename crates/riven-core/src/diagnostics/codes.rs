@@ -174,12 +174,32 @@ pub const REGISTRY: &[CodeInfo] = &[
     // for the diagnostic emitted when a user constructs an IoError
     // variant with the wrong field set (e.g. `IoError.ConnectionRefused()`
     // with no `message:` arg, or `IoError.NotFound("oops")` on a
-    // unit variant). E0711-E0714 are reserved by later #06.5 tasks
-    // (T2 metadata access, T3 path API, T4 fs ops, T5 net surface)
-    // and intentionally left unregistered here.
+    // unit variant).
     CodeInfo {
         code: "E0710",
         title: "IoError variant constructor wrong arity",
+    },
+    // Phase 2 #06.5 T2: File / OpenOptions / SeekFrom diagnostics.
+    // E0711 fires at runtime when `OpenOptions` is passed to
+    // `File.open_options(path, opts)` without any of read/write/append
+    // set — the open() syscall would otherwise be ambiguous. We surface
+    // it as Result::Err(IoError::InvalidInput) at the runtime layer;
+    // static detection of the static OpenOptions chain is deferred
+    // until a const-folding pass is wired up (the chain is value-level
+    // so a single-AST-pass static analysis can miss conditional sets).
+    CodeInfo {
+        code: "E0711",
+        title: "OpenOptions requires at least one of read/write/append",
+    },
+    // E0712 fires at runtime when `File.seek(SeekFrom.Start(n))` is
+    // called with n<0 — a position before byte 0 is meaningless. Same
+    // deferral note as E0711: literal-only static detection is doable
+    // but the more common runtime-computed offset case demands a
+    // runtime check, so we ship the runtime check first and let the
+    // static check piggy-back on a future const-folding pass.
+    CodeInfo {
+        code: "E0712",
+        title: "SeekFrom arg out of range (negative offset on Start)",
     },
     // ── Borrow checking + mixin/include (E1001-E1099) ────────────────
     // The borrow checker maintains a parallel `ErrorCode` enum in

@@ -1,0 +1,39 @@
+use std.io.File
+use std.io.IoError
+use std.io.IoErrorKind
+
+def kind_label(k: IoErrorKind) -> String
+  match k
+    IoErrorKind.NotFound          -> "NotFound"
+    IoErrorKind.PermissionDenied  -> "PermissionDenied"
+    IoErrorKind.AlreadyExists     -> "AlreadyExists"
+    IoErrorKind.Interrupted       -> "Interrupted"
+    IoErrorKind.WouldBlock        -> "WouldBlock"
+    IoErrorKind.InvalidInput      -> "InvalidInput"
+    IoErrorKind.UnexpectedEof     -> "UnexpectedEof"
+    IoErrorKind.BrokenPipe        -> "BrokenPipe"
+    IoErrorKind.Other             -> "Other"
+    IoErrorKind.ConnectionRefused -> "ConnectionRefused"
+    IoErrorKind.ConnectionReset   -> "ConnectionReset"
+    IoErrorKind.ConnectionAborted -> "ConnectionAborted"
+    IoErrorKind.NotConnected      -> "NotConnected"
+    IoErrorKind.AddrInUse         -> "AddrInUse"
+    IoErrorKind.AddrNotAvailable  -> "AddrNotAvailable"
+    IoErrorKind.InvalidData       -> "InvalidData"
+    IoErrorKind.TimedOut          -> "TimedOut"
+    IoErrorKind.WriteZero         -> "WriteZero"
+    IoErrorKind.Unsupported       -> "Unsupported"
+    IoErrorKind.OutOfMemory       -> "OutOfMemory"
+  end
+end
+
+def report_err(e: IoError)
+  puts "kind=#{kind_label(e.kind())}"
+end
+
+def main
+  match File.open("__FILE__")
+    Ok(_)  -> puts "unexpected_ok"
+    Err(e) -> report_err(e)
+  end
+end

@@ -1,0 +1,26 @@
+use std.fs.{write, remove_file}
+use std.io.File
+use std.io.SeekFrom
+
+def tail(f: File)
+  match f.read_to_string()
+    Ok(s)  -> puts "tail=#{s}"
+    Err(_) -> puts "read_fail"
+  end
+end
+
+def after_seek(f: File)
+  match f.seek(SeekFrom.Start(offset: 3))
+    Ok(_)  -> tail(f)
+    Err(_) -> puts "seek_fail"
+  end
+end
+
+def main
+  write("/tmp/riven_e2e_514_seek.txt", "0123456789").expect!("write")
+  match File.open("/tmp/riven_e2e_514_seek.txt")
+    Ok(f)  -> after_seek(f)
+    Err(_) -> puts "open_fail"
+  end
+  remove_file("/tmp/riven_e2e_514_seek.txt").expect!("remove")
+end

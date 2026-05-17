@@ -18,7 +18,26 @@ impl<'a> Lowerer<'a> {
 
                 // Handle .new() / .with_capacity() constructor calls:
                 // dispatch directly to the runtime symbol (no self arg).
+                //
+                // Phase 2 stdlib (#06.5 T2): `File.{open,create,append,
+                // open_options}` are *static* constructor-style methods
+                // (no `self` receiver). The receiver type-name resolves
+                // to "File" (the class identifier promoted to its Ty by
+                // resolve/mod.rs), so the regular dispatch path below
+                // would mangle to `File_open(self, path)` and pass the
+                // class-identifier value as a synthetic `self` — the
+                // runtime `riven_file_open(path)` takes one arg, not
+                // two, so the Cranelift verifier rejects the call. We
+                // route these names through the same direct-dispatch
+                // path as `Command.new` instead.
+                let is_file_static_ctor = (type_name == "File"
+                    || type_name.starts_with("File["))
+                    && matches!(
+                        method_name.as_str(),
+                        "open" | "create" | "append" | "open_options"
+                    );
                 let is_collection_ctor = method_name == "new"
+                    || is_file_static_ctor
                     || (method_name == "with_capacity" && {
                         let bt = if let Some(pos) = type_name.find('[') {
                             &type_name[..pos]
@@ -56,6 +75,18 @@ impl<'a> Lowerer<'a> {
                             | "HashSet"
                             | "Formatter"
                             | "Command"
+                            // Phase 2 stdlib (#06.5 T2): `File.open/create/
+                            // append/open_options` and `OpenOptions.new`
+                            // dispatch to the runtime constructor here so
+                            // they bypass the `Class_init(self, args)`
+                            // path (these classes have no user-defined
+                            // init). The dispatch table in
+                            // codegen/runtime.rs then maps the resulting
+                            // `File_open` / `OpenOptions_new` mangled name
+                            // to the `riven_file_*` / `riven_open_options_*`
+                            // runtime fn.
+                            | "File"
+                            | "OpenOptions"
                     ) {
                         let obj = self.new_temp(expr.ty.clone());
                         // ruby-naming.spec.md §3.11 renames stdlib types

@@ -55,6 +55,9 @@ static EXPLAINS: &[(&str, &str)] = &[
     ("E0706", include_str!("../../../docs/errors/E0706.md")),
     // Phase 2 #06.5 T1: IoError variant constructor arity.
     ("E0710", include_str!("../../../docs/errors/E0710.md")),
+    // Phase 2 #06.5 T2: File / OpenOptions / SeekFrom diagnostics.
+    ("E0711", include_str!("../../../docs/errors/E0711.md")),
+    ("E0712", include_str!("../../../docs/errors/E0712.md")),
     // ── Borrow checker / trait-impl ─────────────────────────────────
     ("E1001", include_str!("../../../docs/errors/E1001.md")),
     ("E1002", include_str!("../../../docs/errors/E1002.md")),
