@@ -1,0 +1,10 @@
+use std.fs.copy
+use std.io.IoError
+
+def main
+  match copy("/tmp/riven_e2e_538_does_not_exist.txt", "/tmp/riven_e2e_538_dst.txt")
+    Ok(_)                  -> puts "unexpected_ok"
+    Err(IoError.NotFound)  -> puts "matched_not_found"
+    Err(_)                 -> puts "matched_other"
+  end
+end

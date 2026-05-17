@@ -1,0 +1,12 @@
+use std.fs.create_dir_all
+
+def main
+  match create_dir_all("__PATH__")
+    Ok(_)  -> puts "first_ok"
+    Err(_) -> puts "first_fail"
+  end
+  match create_dir_all("__PATH__")
+    Ok(_)  -> puts "second_ok"
+    Err(_) -> puts "second_fail"
+  end
+end

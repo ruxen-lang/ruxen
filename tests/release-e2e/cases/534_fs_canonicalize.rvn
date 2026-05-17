@@ -1,0 +1,13 @@
+use std.fs.{write, symlink, canonicalize, remove_file}
+use std.path.path_file_name
+
+def main
+  write("/tmp/riven_e2e_534_real.txt", "x").expect!("write")
+  symlink("/tmp/riven_e2e_534_real.txt", "/tmp/riven_e2e_534_link.txt").expect!("symlink")
+  match canonicalize("/tmp/riven_e2e_534_link.txt")
+    Ok(p)  -> puts "name=#{path_file_name(p)}"
+    Err(_) -> puts "canon_fail"
+  end
+  remove_file("/tmp/riven_e2e_534_link.txt").expect!("rm link")
+  remove_file("/tmp/riven_e2e_534_real.txt").expect!("rm real")
+end

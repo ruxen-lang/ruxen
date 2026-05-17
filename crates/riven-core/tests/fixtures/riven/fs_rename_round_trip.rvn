@@ -1,0 +1,19 @@
+use std.fs.{write, rename, read_to_string, exists, remove_file}
+
+def main
+  let _ = write("__SRC__", "renamed content")
+  match rename("__SRC__", "__DST__")
+    Ok(_)  -> puts "renamed"
+    Err(_) -> puts "rename_fail"
+  end
+  if exists("__SRC__")
+    puts "src_still_there"
+  else
+    puts "src_gone"
+  end
+  match read_to_string("__DST__")
+    Ok(s)  -> puts "dst=#{s}"
+    Err(_) -> puts "dst_fail"
+  end
+  let _ = remove_file("__DST__")
+end

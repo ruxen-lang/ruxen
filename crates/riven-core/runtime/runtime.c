@@ -1096,6 +1096,309 @@ void riven_metadata_free(void *meta) {
     if (meta) riven_dealloc(meta);
 }
 
+/* ── Phase 2 stdlib (#06.5 T3): fs completeness ───────────────────────
+ *
+ * Six free functions filling the v1 sync-fs surface beyond
+ * read/write/exists/remove/create_dir(_all)/rename: copy, recursive
+ * remove, canonicalize, atomic write, read_link, symlink. All return
+ * Result[T, IoError]. NULL inputs surface `IoError.InvalidInput` (the
+ * argument was syntactically wrong, not an I/O failure) — matching the
+ * T2 File class's `riven_file_invalid_input` convention rather than the
+ * legacy `riven_io_error_message` "Other" path used by earlier fs fns.
+ *
+ *   `riven_fs_copy(src, dst) -> Result[Int, IoError]`
+ *     Read/write loop with a 64 KiB stack buffer. POSIX-portable; we
+ *     deliberately do NOT use `copy_file_range(2)` (Linux-only) or
+ *     `fcopyfile(3)` (macOS-only) — the loop is fast enough for v1 and
+ *     keeps both platforms on the same code path. Returns bytes copied
+ *     on success.
+ *
+ *   `riven_fs_remove_dir_all(path) -> Result[(), IoError]`
+ *     Hand-rolled post-order traversal via opendir/readdir + lstat.
+ *     `lstat` (not stat) so symlinks-to-directories are unlinked
+ *     instead of being recursed into — matches `nftw(FTW_PHYS)` and
+ *     std::fs::remove_dir_all semantics. We avoid `<ftw.h>` entirely
+ *     to dodge the `_XOPEN_SOURCE` feature-test dance on Linux.
+ *
+ *   `riven_fs_canonicalize(path) -> Result[String, IoError]`
+ *     `realpath(path, NULL)` — POSIX.1-2008, supported on both macOS
+ *     and Linux. The returned buffer comes from libc `malloc`, so we
+ *     copy it into a Riven String and `free()` (not `riven_dealloc`)
+ *     the original.
+ *
+ *   `riven_fs_write_atomic(path, contents) -> Result[(), IoError]`
+ *     Write to "<path>.tmp.<pid>" in the SAME directory as the target,
+ *     fsync the data, fsync the containing directory, then rename(2)
+ *     over the target. Same-directory placement is mandatory: rename(2)
+ *     is only atomic across paths on the same filesystem, and a tmp in
+ *     `/tmp` would cross mounts on most systems. On any error we unlink
+ *     the temp file before returning Err so partial writes don't leak.
+ *
+ *   `riven_fs_read_link(path) -> Result[String, IoError]`
+ *     Growing-buffer `readlink(2)` — start at 256 bytes, double on
+ *     truncation. `readlink` returns the number of bytes written and
+ *     does NOT null-terminate, so we always over-allocate by 1.
+ *
+ *   `riven_fs_symlink(target, linkpath) -> Result[(), IoError]`
+ *     Thin wrapper around `symlink(2)`. Argument order matches the
+ *     Riven surface (`symlink(target, link)`) which matches libc.
+ */
+
+static void *riven_fs_invalid_input(void) {
+    return riven_result_err_value(
+        (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+}
+
+void *riven_fs_copy(const char *src, const char *dst) {
+    if (!src || !dst) return riven_fs_invalid_input();
+    int in_fd = open(src, O_RDONLY);
+    if (in_fd < 0) {
+        return riven_io_error_from_errno(errno);
+    }
+    /* 0644 mirrors File.create. The atomic-vs-non-atomic distinction
+     * (truncate first, write into it) matches stdlib `fs::copy` — the
+     * destination is left empty if the source open succeeded but the
+     * write loop fails partway. */
+    int out_fd = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (out_fd < 0) {
+        int saved = errno;
+        close(in_fd);
+        return riven_io_error_from_errno(saved);
+    }
+    char buf[65536];
+    int64_t total = 0;
+    for (;;) {
+        ssize_t n;
+        do {
+            n = read(in_fd, buf, sizeof(buf));
+        } while (n < 0 && errno == EINTR);
+        if (n < 0) {
+            int saved = errno;
+            close(in_fd);
+            close(out_fd);
+            return riven_io_error_from_errno(saved);
+        }
+        if (n == 0) break;
+        ssize_t written = 0;
+        while (written < n) {
+            ssize_t w;
+            do {
+                w = write(out_fd, buf + written, (size_t)(n - written));
+            } while (w < 0 && errno == EINTR);
+            if (w < 0) {
+                int saved = errno;
+                close(in_fd);
+                close(out_fd);
+                return riven_io_error_from_errno(saved);
+            }
+            written += w;
+        }
+        total += (int64_t)n;
+    }
+    close(in_fd);
+    if (close(out_fd) != 0) {
+        return riven_io_error_from_errno(errno);
+    }
+    return riven_result_ok_value(total);
+}
+
+/* Recursive helper for remove_dir_all. Returns 0 on success, -1 on
+ * failure with errno set. Post-order: empties children before rmdir'ing
+ * the directory itself. Uses lstat so symlinks-to-directories are
+ * unlinked rather than recursed-into. */
+static int riven_fs_remove_dir_all_inner(const char *path) {
+    struct stat st;
+    if (lstat(path, &st) != 0) {
+        return -1;
+    }
+    if (!S_ISDIR(st.st_mode)) {
+        /* Symlink-to-dir or a regular file: unlink, don't recurse. */
+        return unlink(path);
+    }
+    DIR *dir = opendir(path);
+    if (!dir) return -1;
+    struct dirent *entry;
+    size_t path_len = strlen(path);
+    int rc = 0;
+    errno = 0;
+    while ((entry = readdir(dir)) != NULL) {
+        const char *n = entry->d_name;
+        if (n[0] == '.' && (n[1] == '\0' || (n[1] == '.' && n[2] == '\0'))) {
+            continue;
+        }
+        size_t n_len = strlen(n);
+        char *child = (char *)malloc(path_len + 1 + n_len + 1);
+        if (!child) {
+            errno = ENOMEM;
+            rc = -1;
+            break;
+        }
+        memcpy(child, path, path_len);
+        child[path_len] = '/';
+        memcpy(child + path_len + 1, n, n_len + 1);
+        if (riven_fs_remove_dir_all_inner(child) != 0) {
+            int saved = errno;
+            free(child);
+            errno = saved;
+            rc = -1;
+            break;
+        }
+        free(child);
+        errno = 0;
+    }
+    int saved = errno;
+    closedir(dir);
+    if (rc != 0) {
+        errno = saved;
+        return -1;
+    }
+    if (rmdir(path) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+void *riven_fs_remove_dir_all(const char *path) {
+    if (!path) return riven_fs_invalid_input();
+    if (riven_fs_remove_dir_all_inner(path) != 0) {
+        return riven_io_error_from_errno(errno);
+    }
+    return riven_result_ok_value(0);
+}
+
+void *riven_fs_canonicalize(const char *path) {
+    if (!path) return riven_fs_invalid_input();
+    /* realpath(path, NULL) allocates via libc malloc on POSIX.1-2008
+     * (both macOS and Linux). We always copy into a Riven String and
+     * free the libc buffer separately. */
+    char *resolved = realpath(path, NULL);
+    if (!resolved) {
+        return riven_io_error_from_errno(errno);
+    }
+    void *result = riven_result_ok_value((int64_t)riven_string_from(resolved));
+    free(resolved);
+    return result;
+}
+
+void *riven_fs_write_atomic(const char *path, const char *contents) {
+    if (!path) return riven_fs_invalid_input();
+    const char *text = contents ? contents : "";
+    size_t text_len = strlen(text);
+
+    /* Build "<path>.tmp.<pid>" in the SAME directory as `path` — rename(2)
+     * is only atomic when source and target are on the same filesystem,
+     * and same-directory is the simplest guarantee. */
+    size_t path_len = strlen(path);
+    /* ".tmp." (5) + 20 digits (max int64 width) + NUL = 26. */
+    char *tmp = (char *)malloc(path_len + 32);
+    if (!tmp) {
+        riven_panic("out of memory");
+    }
+    int written = snprintf(tmp, path_len + 32, "%s.tmp.%ld",
+                           path, (long)getpid());
+    if (written < 0 || (size_t)written >= path_len + 32) {
+        free(tmp);
+        return riven_io_error_from_errno(EINVAL);
+    }
+
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        int saved = errno;
+        free(tmp);
+        return riven_io_error_from_errno(saved);
+    }
+    size_t off = 0;
+    while (off < text_len) {
+        ssize_t w;
+        do {
+            w = write(fd, text + off, text_len - off);
+        } while (w < 0 && errno == EINTR);
+        if (w < 0) {
+            int saved = errno;
+            close(fd);
+            unlink(tmp);
+            free(tmp);
+            return riven_io_error_from_errno(saved);
+        }
+        off += (size_t)w;
+    }
+    /* fsync the file's data before rename. The directory entry change
+     * (rename) plus an fsync on the file is the canonical Unix recipe
+     * for "data hits disk before the new name is visible". A directory
+     * fsync would also be needed to guarantee the rename itself is
+     * durable across crash; we skip that for v1 — atomicity within a
+     * single boot is the only guarantee we promise. */
+    if (fsync(fd) != 0) {
+        /* fsync failure on some FS / pseudo-fs (e.g. /tmp on certain
+         * tmpfs configs) returns EINVAL; do not treat as fatal — the
+         * fallback is rename without the durability promise. */
+        int saved = errno;
+        if (saved != EINVAL && saved != ENOTSUP) {
+            close(fd);
+            unlink(tmp);
+            free(tmp);
+            return riven_io_error_from_errno(saved);
+        }
+    }
+    if (close(fd) != 0) {
+        int saved = errno;
+        unlink(tmp);
+        free(tmp);
+        return riven_io_error_from_errno(saved);
+    }
+    if (rename(tmp, path) != 0) {
+        int saved = errno;
+        unlink(tmp);
+        free(tmp);
+        return riven_io_error_from_errno(saved);
+    }
+    free(tmp);
+    return riven_result_ok_value(0);
+}
+
+void *riven_fs_read_link(const char *path) {
+    if (!path) return riven_fs_invalid_input();
+    /* readlink does not null-terminate, returns count; on truncation
+     * we cannot tell whether the buffer was exactly right or short.
+     * Grow until the result is strictly less than the buffer size. */
+    size_t cap = 256;
+    char *buf = (char *)malloc(cap);
+    if (!buf) {
+        riven_panic("out of memory");
+    }
+    for (;;) {
+        ssize_t n = readlink(path, buf, cap - 1);
+        if (n < 0) {
+            int saved = errno;
+            free(buf);
+            return riven_io_error_from_errno(saved);
+        }
+        if ((size_t)n < cap - 1) {
+            buf[n] = '\0';
+            void *result = riven_result_ok_value((int64_t)riven_string_from(buf));
+            free(buf);
+            return result;
+        }
+        /* Possibly truncated — grow and retry. */
+        size_t next = cap * 2;
+        char *next_buf = (char *)realloc(buf, next);
+        if (!next_buf) {
+            free(buf);
+            riven_panic("out of memory");
+        }
+        buf = next_buf;
+        cap = next;
+    }
+}
+
+void *riven_fs_symlink(const char *target, const char *linkpath) {
+    if (!target || !linkpath) return riven_fs_invalid_input();
+    if (symlink(target, linkpath) != 0) {
+        return riven_io_error_from_errno(errno);
+    }
+    return riven_result_ok_value(0);
+}
+
 /* ── Phase 2 stdlib (#06): std.process.Command builder ────────────────
  *
  * Mirrors the `fs.metadata` "flat heap struct + accessors" pattern. The

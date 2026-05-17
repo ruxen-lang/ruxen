@@ -1,0 +1,12 @@
+use std.fs.{write, symlink, read_link, remove_file}
+
+def main
+  write("/tmp/riven_e2e_536_target.txt", "x").expect!("write")
+  symlink("/tmp/riven_e2e_536_target.txt", "/tmp/riven_e2e_536_link.txt").expect!("symlink")
+  match read_link("/tmp/riven_e2e_536_link.txt")
+    Ok(t)  -> puts "target=#{t}"
+    Err(_) -> puts "readlink_fail"
+  end
+  remove_file("/tmp/riven_e2e_536_link.txt").expect!("rm link")
+  remove_file("/tmp/riven_e2e_536_target.txt").expect!("rm target")
+end

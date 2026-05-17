@@ -119,6 +119,13 @@ pub const RUNTIME_FUNCTIONS: &[&str] = &[
     "riven_fs_create_dir",
     "riven_fs_create_dir_all",
     "riven_fs_rename",
+    // Phase 2 stdlib (#06.5 T3): fs completeness.
+    "riven_fs_copy",
+    "riven_fs_remove_dir_all",
+    "riven_fs_canonicalize",
+    "riven_fs_write_atomic",
+    "riven_fs_read_link",
+    "riven_fs_symlink",
     "riven_print_int",
     "riven_print_float",
     "riven_int_to_string",
@@ -352,6 +359,13 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "create_dir" => return Ok("riven_fs_create_dir"),
         "create_dir_all" => return Ok("riven_fs_create_dir_all"),
         "rename" => return Ok("riven_fs_rename"),
+        // Phase 2 stdlib (#06.5 T3): fs completeness.
+        "copy" => return Ok("riven_fs_copy"),
+        "remove_dir_all" => return Ok("riven_fs_remove_dir_all"),
+        "canonicalize" => return Ok("riven_fs_canonicalize"),
+        "write_atomic" => return Ok("riven_fs_write_atomic"),
+        "read_link" => return Ok("riven_fs_read_link"),
+        "symlink" => return Ok("riven_fs_symlink"),
         "exit" => return Ok("riven_process_exit"),
         "process_run" => return Ok("riven_process_run"),
         // String methods.

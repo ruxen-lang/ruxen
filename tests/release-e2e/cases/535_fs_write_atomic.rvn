@@ -1,0 +1,21 @@
+use std.fs.{write_atomic, read_to_string, remove_file}
+
+def main
+  match write_atomic("/tmp/riven_e2e_535_atomic.txt", "first")
+    Ok(_)  -> puts "first_ok"
+    Err(_) -> puts "first_fail"
+  end
+  match read_to_string("/tmp/riven_e2e_535_atomic.txt")
+    Ok(s)  -> puts "first=#{s}"
+    Err(_) -> puts "first_read_fail"
+  end
+  match write_atomic("/tmp/riven_e2e_535_atomic.txt", "second")
+    Ok(_)  -> puts "second_ok"
+    Err(_) -> puts "second_fail"
+  end
+  match read_to_string("/tmp/riven_e2e_535_atomic.txt")
+    Ok(s)  -> puts "second=#{s}"
+    Err(_) -> puts "second_read_fail"
+  end
+  remove_file("/tmp/riven_e2e_535_atomic.txt").expect!("rm")
+end

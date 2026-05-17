@@ -285,3 +285,276 @@ fn fs_remove_file_then_exists_false() {
     assert!(stdout.contains("removed"), "remove: {}", stdout);
     assert!(stdout.contains("gone"), "after-remove exists: {}", stdout);
 }
+
+// ─── Phase 2 stdlib (#06.5 T3): fs completeness ────────────────────────
+//
+// Eight free functions: copy / rename / create_dir_all / remove_dir_all /
+// canonicalize / write_atomic / read_link / symlink. `rename` and
+// `create_dir_all` runtime entries were added in T2 (commit d44387f);
+// T3 wires them into the resolver / codegen and adds positive +
+// negative coverage here.
+
+/// `fs::copy(src, dst)` reads the source and writes a fresh dest file,
+/// returning bytes-copied on success. Round-trips against read_to_string.
+#[test]
+fn fs_copy_round_trip() {
+    let dir = unique_tmp_dir("copy");
+    let src = dir.join("src.txt");
+    let dst = dir.join("dst.txt");
+
+    let source = rvn("fs_copy_round_trip")
+        .replace("__SRC__", &src.display().to_string())
+        .replace("__DST__", &dst.display().to_string());
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_fs_copy_round_trip");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(ok, "stderr: {}", stderr);
+    // "hello copy" = 10 bytes.
+    assert!(stdout.contains("copied=10"), "copy bytes: {}", stdout);
+    assert!(stdout.contains("read=hello copy"), "read-back: {}", stdout);
+}
+
+/// `fs::copy` against a missing source surfaces `IoError.NotFound`.
+#[test]
+fn fs_copy_missing_source_returns_not_found() {
+    let dir = unique_tmp_dir("copy_missing");
+    let missing = dir.join("nope.txt");
+    let dst = dir.join("dst.txt");
+
+    let source = rvn("fs_copy_missing_source_returns_not_found")
+        .replace("__MISSING__", &missing.display().to_string())
+        .replace("__DST__", &dst.display().to_string());
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_fs_copy_missing");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(ok, "stderr: {}", stderr);
+    assert!(
+        stdout.contains("matched_not_found"),
+        "expected NotFound variant; got: {}",
+        stdout
+    );
+}
+
+/// `fs::rename` moves the file: source disappears, target has the
+/// original contents.
+#[test]
+fn fs_rename_round_trip() {
+    let dir = unique_tmp_dir("rename");
+    let src = dir.join("from.txt");
+    let dst = dir.join("to.txt");
+
+    let source = rvn("fs_rename_round_trip")
+        .replace("__SRC__", &src.display().to_string())
+        .replace("__DST__", &dst.display().to_string());
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_fs_rename_round_trip");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(ok, "stderr: {}", stderr);
+    assert!(stdout.contains("renamed"), "rename: {}", stdout);
+    assert!(stdout.contains("src_gone"), "source removed: {}", stdout);
+    assert!(
+        stdout.contains("dst=renamed content"),
+        "target contents: {}",
+        stdout
+    );
+}
+
+/// `fs::create_dir_all` builds every missing component of a nested path.
+#[test]
+fn fs_create_dir_all_nested() {
+    let dir = unique_tmp_dir("cdr_all");
+    let a = dir.join("a");
+    let b = a.join("b");
+    let c = b.join("c");
+
+    let source = rvn("fs_create_dir_all_nested")
+        .replace("__NESTED__", &c.display().to_string())
+        .replace("__A__", &a.display().to_string())
+        .replace("__B__", &b.display().to_string())
+        .replace("__C__", &c.display().to_string());
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_fs_create_dir_all_nested");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(ok, "stderr: {}", stderr);
+    assert!(stdout.contains("created"), "create: {}", stdout);
+    assert!(stdout.contains("a_yes"), "a: {}", stdout);
+    assert!(stdout.contains("b_yes"), "b: {}", stdout);
+    assert!(stdout.contains("c_yes"), "c: {}", stdout);
+}
+
+/// `fs::create_dir_all` is idempotent — calling twice on the same path
+/// is Ok both times (EEXIST is swallowed by design).
+#[test]
+fn fs_create_dir_all_idempotent() {
+    let dir = unique_tmp_dir("cdr_idem");
+    let path = dir.join("x").join("y");
+
+    let source = rvn("fs_create_dir_all_idempotent").replace("__PATH__", &path.display().to_string());
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_fs_create_dir_all_idempotent");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(ok, "stderr: {}", stderr);
+    assert!(stdout.contains("first_ok"), "first: {}", stdout);
+    assert!(stdout.contains("second_ok"), "second: {}", stdout);
+}
+
+/// `fs::remove_dir_all` deletes a tree containing files, subdirs, and a
+/// symlink. The symlink must be unlinked (not followed), then the parent
+/// tree is emptied, then the root rmdir'd.
+#[test]
+fn fs_remove_dir_all_tree() {
+    let dir = unique_tmp_dir("rmrf");
+    let root = dir.join("tree");
+    let sub = root.join("sub");
+    std::fs::create_dir_all(&sub).expect("create_dir_all");
+    std::fs::write(root.join("a.txt"), b"hello").expect("write a");
+    std::fs::write(sub.join("b.txt"), b"world").expect("write b");
+    // External target for the symlink; we don't want remove_dir_all to
+    // follow into it.
+    let outside = dir.join("outside.txt");
+    std::fs::write(&outside, b"OUTSIDE - must survive").expect("write outside");
+    std::os::unix::fs::symlink(&outside, root.join("link")).expect("symlink");
+
+    let source =
+        rvn("fs_remove_dir_all_tree").replace("__ROOT__", &root.display().to_string());
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_fs_remove_dir_all_tree");
+    assert!(ok, "stderr: {}", stderr);
+    assert!(stdout.contains("removed"), "remove: {}", stdout);
+    assert!(stdout.contains("gone"), "after-remove: {}", stdout);
+    // The symlink target must still exist — we didn't follow it.
+    assert!(
+        outside.exists(),
+        "symlink target was followed into: {}",
+        outside.display()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `fs::canonicalize` resolves symlinks and returns the target's
+/// absolute path.
+#[test]
+fn fs_canonicalize_resolves_symlink_to_target() {
+    let dir = unique_tmp_dir("canon");
+    // canonicalize the temp dir up front so target/link path comparisons
+    // do not get tripped up by /var → /private/var on macOS.
+    let canon_dir = std::fs::canonicalize(&dir).expect("canon dir");
+    let target = canon_dir.join("real.txt");
+    std::fs::write(&target, b"x").expect("write");
+    let link = canon_dir.join("alias.txt");
+    std::os::unix::fs::symlink(&target, &link).expect("symlink");
+
+    let source =
+        rvn("fs_canonicalize_symlink").replace("__LINK__", &link.display().to_string());
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_fs_canonicalize_symlink");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(ok, "stderr: {}", stderr);
+    let expected = format!("resolved={}", target.display());
+    assert!(
+        stdout.contains(&expected),
+        "expected `{}`; got: {}",
+        expected,
+        stdout
+    );
+}
+
+/// `fs::write_atomic` writes the contents, replaces an existing file,
+/// and leaves no `.tmp.<pid>` siblings behind on success.
+#[test]
+fn fs_write_atomic_replaces_existing_file() {
+    let dir = unique_tmp_dir("write_atomic");
+    let file = dir.join("config.toml");
+
+    let source =
+        rvn("fs_write_atomic_replaces").replace("__FILE__", &file.display().to_string());
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_fs_write_atomic_replaces");
+    assert!(ok, "stderr: {}", stderr);
+    assert!(stdout.contains("first_ok"), "first: {}", stdout);
+    assert!(stdout.contains("first=first contents"), "first read: {}", stdout);
+    assert!(stdout.contains("second_ok"), "second: {}", stdout);
+    assert!(stdout.contains("second=second"), "second read: {}", stdout);
+
+    // No leaked .tmp.* siblings in the same directory.
+    let entries: Vec<_> = std::fs::read_dir(&dir)
+        .expect("read_dir")
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    for name in &entries {
+        assert!(
+            !name.contains(".tmp."),
+            "leaked tmp sibling `{}` in {:?}",
+            name,
+            entries
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `fs::write_atomic` failure (unwritable parent directory): error is
+/// surfaced AND no `.tmp.<pid>` file is left behind.
+#[test]
+fn fs_write_atomic_failure_leaves_no_tmp_file() {
+    let dir = unique_tmp_dir("write_atomic_fail");
+    // Path inside a directory that does not exist. open(O_CREAT) fails
+    // with ENOENT for the missing parent — we want the implementation
+    // to surface Err without creating a stray tmp.
+    let bad_parent = dir.join("does").join("not").join("exist");
+    let bad_path = bad_parent.join("config.toml");
+
+    let source = rvn("fs_write_atomic_unwritable_parent")
+        .replace("__BAD_PATH__", &bad_path.display().to_string());
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_fs_write_atomic_fail");
+    assert!(ok, "stderr: {}", stderr);
+    assert!(stdout.contains("err_ok"), "expected Err branch: {}", stdout);
+    // The bad parent should never have been materialized.
+    assert!(
+        !bad_parent.exists(),
+        "implementation accidentally created parent dir: {}",
+        bad_parent.display()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `fs::read_link` round-trips with `fs::symlink`: create a link, then
+/// read it back and assert the target string matches.
+#[test]
+fn fs_read_link_returns_target_path() {
+    let dir = unique_tmp_dir("read_link");
+    let target = dir.join("target.txt");
+    std::fs::write(&target, b"x").expect("write target");
+    let link = dir.join("link.txt");
+    std::os::unix::fs::symlink(&target, &link).expect("symlink");
+
+    let source = rvn("fs_read_link_round_trip").replace("__LINK__", &link.display().to_string());
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_fs_read_link");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(ok, "stderr: {}", stderr);
+    let expected = format!("target={}", target.display());
+    assert!(
+        stdout.contains(&expected),
+        "expected `{}`; got: {}",
+        expected,
+        stdout
+    );
+}
+
+/// `fs::symlink(target, link)` creates a symlink; `metadata` confirms
+/// `is_symlink=true` (lstat semantics); `read_link` returns the original
+/// target string verbatim (no canonicalization).
+#[test]
+fn fs_symlink_then_metadata_reports_symlink() {
+    let dir = unique_tmp_dir("symlink");
+    let target = dir.join("real.txt");
+    std::fs::write(&target, b"hello symlink").expect("write");
+    let link = dir.join("alias.txt");
+
+    let source = rvn("fs_symlink_then_metadata_and_read_link")
+        .replace("__TARGET__", &target.display().to_string())
+        .replace("__LINK__", &link.display().to_string());
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_fs_symlink_then_metadata");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(ok, "stderr: {}", stderr);
+    assert!(stdout.contains("linked"), "symlink: {}", stdout);
+    assert!(
+        stdout.contains("is_symlink=true"),
+        "metadata is_symlink: {}",
+        stdout
+    );
+    let expected = format!("target={}", target.display());
+    assert!(stdout.contains(&expected), "read_link: {}", stdout);
+}

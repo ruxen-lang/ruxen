@@ -1,0 +1,15 @@
+use std.fs.{write, copy, read_to_string, remove_file}
+
+def main
+  let _ = write("__SRC__", "hello copy")
+  match copy("__SRC__", "__DST__")
+    Ok(n)  -> puts "copied=#{n}"
+    Err(_) -> puts "copy_fail"
+  end
+  match read_to_string("__DST__")
+    Ok(s)  -> puts "read=#{s}"
+    Err(_) -> puts "read_fail"
+  end
+  let _ = remove_file("__SRC__")
+  let _ = remove_file("__DST__")
+end

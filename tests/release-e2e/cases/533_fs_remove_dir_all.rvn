@@ -1,0 +1,16 @@
+use std.fs.{create_dir_all, write, remove_dir_all, exists}
+
+def main
+  create_dir_all("/tmp/riven_e2e_533/sub").expect!("mkdir tree")
+  write("/tmp/riven_e2e_533/top.txt", "x").expect!("write top")
+  write("/tmp/riven_e2e_533/sub/inner.txt", "y").expect!("write inner")
+  match remove_dir_all("/tmp/riven_e2e_533")
+    Ok(_)  -> puts "removed"
+    Err(_) -> puts "remove_fail"
+  end
+  if exists("/tmp/riven_e2e_533")
+    puts "still_there"
+  else
+    puts "gone"
+  end
+end

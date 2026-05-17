@@ -1,0 +1,8 @@
+use std.fs.write_atomic
+
+def main
+  match write_atomic("__BAD_PATH__", "should not stick")
+    Ok(_)  -> puts "unexpected_ok"
+    Err(_) -> puts "err_ok"
+  end
+end

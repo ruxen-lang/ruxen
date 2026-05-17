@@ -529,6 +529,85 @@ impl Resolver {
                 ],
                 Ty::Result(Box::new(Ty::Unit), Box::new(io_error_ty.clone())),
             ),
+            // Phase 2 stdlib (#06.5 T3): fs completeness — copy / recursive
+            // remove / canonicalize / atomic write / symlink helpers. Each
+            // is a thin wrapper over its libc equivalent in `runtime.c`;
+            // null inputs surface IoError.InvalidInput rather than Other.
+            (
+                "copy",
+                vec![
+                    ParamInfo {
+                        name: "src".into(),
+                        ty: Ty::Ref(Box::new(Ty::String)),
+                        auto_assign: false,
+                    },
+                    ParamInfo {
+                        name: "dst".into(),
+                        ty: Ty::Ref(Box::new(Ty::String)),
+                        auto_assign: false,
+                    },
+                ],
+                Ty::Result(Box::new(Ty::Int), Box::new(io_error_ty.clone())),
+            ),
+            (
+                "remove_dir_all",
+                vec![ParamInfo {
+                    name: "path".into(),
+                    ty: Ty::Ref(Box::new(Ty::String)),
+                    auto_assign: false,
+                }],
+                Ty::Result(Box::new(Ty::Unit), Box::new(io_error_ty.clone())),
+            ),
+            (
+                "canonicalize",
+                vec![ParamInfo {
+                    name: "path".into(),
+                    ty: Ty::Ref(Box::new(Ty::String)),
+                    auto_assign: false,
+                }],
+                Ty::Result(Box::new(Ty::String), Box::new(io_error_ty.clone())),
+            ),
+            (
+                "write_atomic",
+                vec![
+                    ParamInfo {
+                        name: "path".into(),
+                        ty: Ty::Ref(Box::new(Ty::String)),
+                        auto_assign: false,
+                    },
+                    ParamInfo {
+                        name: "contents".into(),
+                        ty: Ty::Ref(Box::new(Ty::String)),
+                        auto_assign: false,
+                    },
+                ],
+                Ty::Result(Box::new(Ty::Unit), Box::new(io_error_ty.clone())),
+            ),
+            (
+                "read_link",
+                vec![ParamInfo {
+                    name: "path".into(),
+                    ty: Ty::Ref(Box::new(Ty::String)),
+                    auto_assign: false,
+                }],
+                Ty::Result(Box::new(Ty::String), Box::new(io_error_ty.clone())),
+            ),
+            (
+                "symlink",
+                vec![
+                    ParamInfo {
+                        name: "target".into(),
+                        ty: Ty::Ref(Box::new(Ty::String)),
+                        auto_assign: false,
+                    },
+                    ParamInfo {
+                        name: "link".into(),
+                        ty: Ty::Ref(Box::new(Ty::String)),
+                        auto_assign: false,
+                    },
+                ],
+                Ty::Result(Box::new(Ty::Unit), Box::new(io_error_ty.clone())),
+            ),
             (
                 "exit",
                 vec![ParamInfo {
@@ -1635,6 +1714,13 @@ impl Resolver {
                     builtin_fn_ids["is_dir"],
                     builtin_fn_ids["read_dir"],
                     builtin_fn_ids["metadata"],
+                    // Phase 2 stdlib (#06.5 T3): fs completeness.
+                    builtin_fn_ids["copy"],
+                    builtin_fn_ids["remove_dir_all"],
+                    builtin_fn_ids["canonicalize"],
+                    builtin_fn_ids["write_atomic"],
+                    builtin_fn_ids["read_link"],
+                    builtin_fn_ids["symlink"],
                     // Phase 2 #06.5 T2: re-export of `File` for Rust-
                     // style `use std.fs.File` paths. The canonical
                     // definition is in `std.io` above; this entry just
