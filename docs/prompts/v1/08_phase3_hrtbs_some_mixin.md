@@ -1,5 +1,14 @@
 # 08 — Phase 3: HRTBs (T2.03) + `some Mixin` (T2.04, no specialization)
 
+> **DEFERRED 2026-05-17 → v1.5 or v2**
+>
+> Per `docs/STRATEGY.md`, higher-ranked trait bounds are a pure
+> power-user feature. Crystal shipped 1.0 without HRTBs. Not blocking
+> any flagship app, Ruby-FFI use case, or WASM use case. **Do not
+> work on this prompt during v1.** Skip directly from #07 closure
+> to #10 (LSP). Re-evaluate after a wedge is chosen and one full
+> v1 release ships.
+
 **Depends on:** prompt 07.
 **Reads:** `docs/requirements/tier2_03_hrtbs.md`,
 `docs/requirements/tier2_04_some_mixin_and_specialization.md`.

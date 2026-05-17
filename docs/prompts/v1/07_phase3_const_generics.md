@@ -1,5 +1,17 @@
 # 07 — Phase 3: const generics (T2.02)
 
+> **REPRIORITIZED 2026-05-17 → "finish in-flight, then stop"**
+>
+> Per `docs/STRATEGY.md`, const generics are a nerd feature (Ruby has
+> no equivalent; Crystal shipped 1.0 without anything like it; not
+> blocking any of the three strategic wedges). The S1–S9 work that
+> already landed in commits is fine — close out the DoD on what is
+> ALREADY implemented, then move on. **Do not invest in new
+> const-generic surface beyond what is already typed-checked and
+> monomorphized as of this note.** Push deeper const-generic work
+> (where-clause solving, full layout integration, BitSet-style nested
+> uses) to v1.5 or v2.
+
 **Depends on:** Phase 2 stdlib complete.
 **Reads:** `docs/requirements/tier2_02_const_generics.md`.
 

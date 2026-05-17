@@ -1,5 +1,13 @@
 # 09 — Phase 3: GATs (T2.05) + `any Mixin` (T2.06)
 
+> **DEFERRED 2026-05-17 → v1.5 or v2**
+>
+> Per `docs/STRATEGY.md`, generic associated types are powerful but
+> esoteric. Same logic as #08. Not blocking any of the three strategic
+> wedges. **Do not work on this prompt during v1.** Skip directly
+> from #07 closure to #10 (LSP). Re-evaluate after a wedge is chosen
+> and one full v1 release ships.
+
 **Depends on:** prompts 07-08.
 **Reads:** `docs/requirements/tier2_05_gats.md`,
 `docs/requirements/tier2_06_any_mixin.md`.

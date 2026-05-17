@@ -48,9 +48,38 @@ Strict dependency chain inside v1:
 phase 1 remainder ── phase 2 stdlib ── phase 3 types/DX ── phase 4 concurrency ── phase 4 async ── phase 4 platform ── phase 5 polish ── release
 ```
 
-Each prompt declares its own `Depends on` block. Skip nothing. Do not
-parallelize prompts that share the same crate's lowering or codegen
-files unless the prompt explicitly green-lights it.
+Each prompt declares its own `Depends on` block. Do not parallelize
+prompts that share the same crate's lowering or codegen files unless
+the prompt explicitly green-lights it.
+
+### Reprioritization (2026-05-17)
+
+Per the strategic assessment in `docs/STRATEGY.md`, the following
+prompts are **deferred to v1.5 or v2** and should be SKIPPED in the
+v1 execution order:
+
+- **#07 — Const generics** — finish what is already in flight
+  (S1–S9 commits) to a stable resting point, then STOP. Do not invest
+  in new const-generic surface. Ruby has no equivalent; Rubyists do
+  not ask for it; Crystal shipped 1.0 without it.
+- **#08 — HRTBs + `some` mixin** — pure nerd feature. Crystal shipped
+  1.0 without HRTBs. Not blocking any flagship app, Ruby-FFI use case,
+  or WASM use case.
+- **#09 — GATs + `any` mixin** — same logic as #08. Powerful but
+  esoteric. Move to v1.5.
+
+After Phase 2 stdlib (#02–#06) closes, jump directly to:
+
+- **#10 — LSP** (developer experience — high user-visible value)
+- **#11 — Incremental** (developer experience — fast iteration)
+- **#12 — Diagnostics polish** (error messages that teach)
+- **#13 — Benchmarking** (proves the perf story)
+
+…and then continue into Phase 4 (#14 concurrency, #15 async, etc.).
+
+If a downstream prompt (e.g. #10 LSP) depends on something in #07/#08/
+#09, surface that dependency explicitly and resolve case-by-case
+rather than reopening the whole prompt.
 
 ## How to use
 
