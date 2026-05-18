@@ -670,6 +670,7 @@ pub(super) fn register_all(r: &mut Resolver) {
                     generic_params: vec![],
                     params,
                     return_ty: ret_ty,
+                    c_symbol: None,
                 },
             },
             Visibility::Public,
@@ -2367,6 +2368,7 @@ pub(super) fn register_all(r: &mut Resolver) {
                 generic_params: vec![],
                 params: vec![], // variadic-like; type checker handles it
                 return_ty: Ty::Unit,
+                c_symbol: None,
             },
         },
         Visibility::Public,

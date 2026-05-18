@@ -8,6 +8,8 @@ pub mod bootstrap;
 pub mod scope;
 mod stdlib;
 pub mod symbols;
+mod const_helpers;
+mod yield_scan;
 
 use std::collections::HashMap;
 
@@ -76,6 +78,16 @@ pub struct Resolver {
     /// tracks the flat top-level module scope; nested-scope semantics
     /// arrive with the broader module-system pass.
     tagged_enums_in_scope: HashMap<String, Span>,
+
+    /// #06.8 Phase 2: tracks every C-symbol declared by an FFI def.
+    /// Maps `c_symbol → (signature, declaration_span)`. When a second
+    /// FFI def declares the same C symbol with a non-matching
+    /// signature (param types, return type, or arity differ), the
+    /// resolver emits **E0722** at the duplicate's span. Two decls
+    /// with matching signatures are silently allowed — they're a
+    /// no-op redundancy, not a conflict. The Riven-side name is
+    /// independent of this table; only the C-symbol is the key.
+    extern_symbol_table: HashMap<String, (FnSignature, Span)>,
 }
 
 #[derive(Debug)]
@@ -102,6 +114,7 @@ impl Resolver {
             async_scope_depth: 0,
             closure_stack: Vec::new(),
             tagged_enums_in_scope: HashMap::new(),
+            extern_symbol_table: HashMap::new(),
         }
     }
 
@@ -109,18 +122,25 @@ impl Resolver {
     pub fn resolve(mut self, program: &ast::Program) -> ResolveResult {
         self.register_builtins();
 
+        // Collected FFI library declarations (filled by the
+        // `Lib`/`Extern` arms in `register_top_level_type`). Surfaced
+        // on `HirProgram::ffi_libs` so MIR lowering can populate
+        // `MirProgram::ffi_libs` and rewrite call-site callees to the
+        // declared C symbol.
+        let mut ffi_libs: Vec<HirFfiLib> = Vec::new();
+
         // Two-pass approach:
         // Pass 1: Register all top-level type names (classes, structs, enums, traits)
         //         so that forward references work.
         for item in &program.items {
-            self.register_top_level_type(item);
+            self.register_top_level_type_with_ffi(item, &mut ffi_libs);
         }
 
         // Scan for functions that contain `yield` — these receive a
         // synthetic `__block` parameter, and callers with a trailing block
         // forward it as the last argument.
         for item in &program.items {
-            collect_yield_fns(item, &mut self.yield_fns);
+            yield_scan::collect_yield_fns(item, &mut self.yield_fns);
         }
 
         // Pass 2: Fully resolve all items.
@@ -134,6 +154,7 @@ impl Resolver {
         let hir_program = HirProgram {
             items,
             span: program.span.clone(),
+            ffi_libs,
         };
 
         ResolveResult {
@@ -152,7 +173,11 @@ impl Resolver {
 
     // ─── Pass 1: Forward Declaration of Types ───────────────────────
 
-    fn register_top_level_type(&mut self, item: &ast::TopLevelItem) {
+    fn register_top_level_type_with_ffi(
+        &mut self,
+        item: &ast::TopLevelItem,
+        ffi_libs: &mut Vec<HirFfiLib>,
+    ) {
         let _span_zero = Span {
             start: 0,
             end: 0,
@@ -434,7 +459,7 @@ impl Resolver {
                 self.scopes.insert_type(m.name.clone(), id);
                 self.type_registry.insert(m.name.clone(), id);
                 for sub_item in &m.items {
-                    self.register_top_level_type(sub_item);
+                    self.register_top_level_type_with_ffi(sub_item, ffi_libs);
                 }
             }
             ast::TopLevelItem::Function(f) => {
@@ -489,6 +514,7 @@ impl Resolver {
                             generic_params: fn_generic_param_infos,
                             params,
                             return_ty,
+                            c_symbol: None,
                         },
                     },
                     Visibility::Public,
@@ -522,6 +548,7 @@ impl Resolver {
                                 generic_params: vec![],
                                 params,
                                 return_ty,
+                                c_symbol: None,
                             },
                         },
                         Visibility::Public,
@@ -556,6 +583,7 @@ impl Resolver {
                                 generic_params: vec![],
                                 params,
                                 return_ty,
+                                c_symbol: None,
                             },
                         },
                         Visibility::Public,
@@ -841,7 +869,7 @@ impl Resolver {
             .map(|wc| {
                 wc.const_predicates
                     .iter()
-                    .map(lower_const_predicate)
+                    .map(const_helpers::lower_const_predicate)
                     .collect()
             })
             .unwrap_or_default();
@@ -928,7 +956,7 @@ impl Resolver {
             .map(|wc| {
                 wc.const_predicates
                     .iter()
-                    .map(lower_const_predicate)
+                    .map(const_helpers::lower_const_predicate)
                     .collect()
             })
             .unwrap_or_default();
@@ -1462,7 +1490,7 @@ impl Resolver {
             return;
         }
 
-        let Some(def) = nominal_type_definition_mut(target_ty, &mut self.symbols) else {
+        let Some(def) = const_helpers::nominal_type_definition_mut(target_ty, &mut self.symbols) else {
             return;
         };
 
@@ -1665,6 +1693,7 @@ impl Resolver {
                 })
                 .collect(),
             return_ty: return_ty.clone(),
+            c_symbol: None,
         };
 
         let def_kind = if let Some(parent) = parent {
@@ -3498,7 +3527,7 @@ impl Resolver {
                     // that overflow or divide by zero surface as
                     // E0703 here — they're invariant across
                     // instantiations.
-                    let n = lower_const_expr_from_expr(size_expr).normal_form();
+                    let n = const_helpers::lower_const_expr_from_expr(size_expr).normal_form();
                     self.check_const_expr_for_non_const(&n, &size_expr.span);
                     self.check_const_expr_eval_errors(&n, &size_expr.span);
                     Ty::FixedArray(Box::new(elem_ty), n)
@@ -3601,7 +3630,7 @@ impl Resolver {
             // S8.S4 follow-up: surface pure-literal overflow /
             // div-zero as E0703 against the source span.
             ast::TypeExpr::ConstExprArg { expr, span } => {
-                let folded = lower_const_expr_from_expr(expr).normal_form();
+                let folded = const_helpers::lower_const_expr_from_expr(expr).normal_form();
                 self.check_const_expr_for_non_const(&folded, span);
                 self.check_const_expr_eval_errors(&folded, span);
                 Ty::ConstArg(folded)
@@ -3726,7 +3755,7 @@ impl Resolver {
                             // Fold via the same path used for
                             // resolution, then read the literal value
                             // if we have one after normalization.
-                            let folded = lower_const_expr_from_expr(expr).normal_form();
+                            let folded = const_helpers::lower_const_expr_from_expr(expr).normal_form();
                             folded.as_lit().map(|v| v as i64)
                         }
                         _ => None,
@@ -3814,7 +3843,7 @@ impl Resolver {
                     }
                 }
                 for pred in &predicates {
-                    if let Some(false) = eval_const_predicate(pred, &bindings) {
+                    if let Some(false) = const_helpers::eval_const_predicate(pred, &bindings) {
                         self.diagnostics.push(Diagnostic::error_with_code(
                             format!(
                                 "where-clause predicate is not satisfied at this instantiation of `{}`",
@@ -3851,7 +3880,7 @@ impl Resolver {
                     .unwrap_or_else(|| self.type_context.fresh_type_var());
                 // K must be Hash + Eq. Reject compound containers
                 // (Array/Set/Map) and aggregates that don't derive Hash.
-                if !ty_is_valid_hash_key(&k, &self.symbols) {
+                if !const_helpers::ty_is_valid_hash_key(&k, &self.symbols) {
                     self.diagnostics.push(Diagnostic::error_with_code(
                         format!(
                             "Map key type `{}` is not hashable: K must include Hashable + Eq",
@@ -3872,7 +3901,7 @@ impl Resolver {
                     .into_iter()
                     .next()
                     .unwrap_or_else(|| self.type_context.fresh_type_var());
-                if !ty_is_valid_hash_key(&elem, &self.symbols) {
+                if !const_helpers::ty_is_valid_hash_key(&elem, &self.symbols) {
                     self.diagnostics.push(Diagnostic::error_with_code(
                         format!(
                             "Set element type `{}` is not hashable: T must include Hashable + Eq",
@@ -4059,7 +4088,7 @@ impl Resolver {
                     // NG2 (NaN ≠ NaN breaks the Eq contract const
                     // generics share); String / class / Vec / tuple
                     // const generics are also non-goals (NG3).
-                    if !is_valid_const_param_ty(&resolved_ty) {
+                    if !const_helpers::is_valid_const_param_ty(&resolved_ty) {
                         self.diagnostics.push(Diagnostic::error_with_code(
                             format!(
                                 "const-generic parameter `{}` must be an integer or `Bool`, found `{}`",
@@ -4367,7 +4396,7 @@ impl Resolver {
     /// it; nested noise stays quiet so the user sees the source
     /// location, not a diagnostic for every leaf.
     fn check_const_expr_for_non_const(&mut self, expr: &crate::hir::types::ConstExpr, span: &Span) {
-        if contains_const_expr_error(expr) {
+        if const_helpers::contains_const_expr_error(expr) {
             self.diagnostics.push(Diagnostic::error_with_code(
                 "expression is not a valid const expression \
                  (v1 supports integer literals, in-scope const-param references, \
@@ -4418,337 +4447,9 @@ impl Resolver {
 /// Anything else (top-level non-comparison, etc.) lowers to a
 /// sentinel: `0 == 1` which evaluates to false at every
 /// instantiation, with the original span — so users see a clear
-/// E0706 "predicate cannot be satisfied" rather than a silent
-/// no-op.
-fn lower_const_predicate(pred: &ast::ConstPredicate) -> crate::resolve::symbols::HirConstPredicate {
-    use crate::resolve::symbols::{ConstPredOp, HirConstPredicate};
-    let sentinel = || HirConstPredicate {
-        lhs: crate::hir::types::ConstExpr::Lit(0),
-        op: ConstPredOp::Eq,
-        rhs: crate::hir::types::ConstExpr::Lit(1),
-        span: pred.span.clone(),
-    };
-    match &pred.expr.as_ref().kind {
-        ast::ExprKind::BinaryOp { left, op, right } => {
-            let pred_op = match op {
-                ast::BinOp::Eq => ConstPredOp::Eq,
-                ast::BinOp::NotEq => ConstPredOp::Ne,
-                ast::BinOp::Lt => ConstPredOp::Lt,
-                ast::BinOp::LtEq => ConstPredOp::Le,
-                ast::BinOp::Gt => ConstPredOp::Gt,
-                ast::BinOp::GtEq => ConstPredOp::Ge,
-                _ => return sentinel(),
-            };
-            HirConstPredicate {
-                lhs: lower_const_expr_from_expr(left),
-                op: pred_op,
-                rhs: lower_const_expr_from_expr(right),
-                span: pred.span.clone(),
-            }
-        }
-        _ => sentinel(),
-    }
-}
-
-/// T2.02 S9: evaluate a lowered predicate against a binding map.
-/// Returns `Some(true)` / `Some(false)` when both sides eval cleanly;
-/// `None` when an unresolved param (or other eval failure) means
-/// "we can't tell yet" — caller skips the check in that case.
-fn eval_const_predicate(
-    pred: &crate::resolve::symbols::HirConstPredicate,
-    bindings: &std::collections::HashMap<String, u64>,
-) -> Option<bool> {
-    use crate::resolve::symbols::ConstPredOp;
-    let lhs = pred.lhs.eval(bindings).ok()?;
-    let rhs = pred.rhs.eval(bindings).ok()?;
-    Some(match pred.op {
-        ConstPredOp::Eq => lhs == rhs,
-        ConstPredOp::Ne => lhs != rhs,
-        ConstPredOp::Lt => lhs < rhs,
-        ConstPredOp::Le => lhs <= rhs,
-        ConstPredOp::Gt => lhs > rhs,
-        ConstPredOp::Ge => lhs >= rhs,
-    })
-}
-
-fn lower_const_expr_from_expr(expr: &ast::Expr) -> crate::hir::types::ConstExpr {
-    use crate::hir::types::{ConstExpr, ConstOp};
-    match &expr.kind {
-        ast::ExprKind::IntLiteral(v, _) => ConstExpr::Lit(*v as u64),
-        ast::ExprKind::Identifier(name) => ConstExpr::Param(name.clone()),
-        ast::ExprKind::BinaryOp { left, op, right } => {
-            let const_op = match op {
-                ast::BinOp::Add => ConstOp::Add,
-                ast::BinOp::Sub => ConstOp::Sub,
-                ast::BinOp::Mul => ConstOp::Mul,
-                ast::BinOp::Div => ConstOp::Div,
-                _ => return ConstExpr::Error,
-            };
-            ConstExpr::Op(
-                Box::new(lower_const_expr_from_expr(left)),
-                const_op,
-                Box::new(lower_const_expr_from_expr(right)),
-            )
-        }
-        _ => ConstExpr::Error,
-    }
-}
-
-/// T2.02 §B8 (E0702 plumbing): does this `ConstExpr` tree contain
-/// any `Error` marker?  The marker is what
-/// `lower_const_expr_from_expr` emits for AST shapes the v1 const
-/// language doesn't support — a single hit anywhere in the tree is
-/// enough to flag the whole construction site.
-fn contains_const_expr_error(expr: &crate::hir::types::ConstExpr) -> bool {
-    use crate::hir::types::ConstExpr;
-    match expr {
-        ConstExpr::Error => true,
-        ConstExpr::Lit(_) | ConstExpr::Param(_) => false,
-        ConstExpr::Op(a, _, b) => contains_const_expr_error(a) || contains_const_expr_error(b),
-    }
-}
-
-/// T2.02 §B8 (E0705): valid types for a `const N: TY` parameter.
-///
-/// Accepts every integer width (`Int`, `Int8`..`Int64`, `UInt8`..`UInt64`,
-/// `USize`, `ISize`) and `Bool`.  Rejects floats, strings, chars, units,
-/// references, tuples, arrays, classes, traits, and every other
-/// shape — those are spec non-goals (NG2 / NG3 / OQ-3).
-///
-/// `Ty::Error` is treated as valid so a stand-alone E0705 doesn't fire
-/// on top of whatever earlier diagnostic produced the `Error` placeholder.
-fn is_valid_const_param_ty(ty: &Ty) -> bool {
-    if matches!(ty, Ty::Error) {
-        return true;
-    }
-    ty.is_integer() || matches!(ty, Ty::Bool)
-}
-
-fn ty_is_valid_hash_key(ty: &Ty, symbols: &crate::resolve::symbols::SymbolTable) -> bool {
-    use crate::resolve::symbols::ty_has_derive_trait;
-    if ty.is_integer() || ty.is_float() {
-        return true;
-    }
-    if matches!(
-        ty,
-        Ty::Bool | Ty::Char | Ty::Unit | Ty::String | Ty::Str | Ty::Never
-    ) {
-        return true;
-    }
-    match ty {
-        // Compound containers are NOT Hash even when their elements are.
-        // Vec/HashMap/HashSet have interior heap pointers whose hash would
-        // not be stable across allocations; v1 chooses not to derive a
-        // structural hash for them.
-        Ty::Array(_) | Ty::Set(_) | Ty::Map(_, _) => false,
-        // Tuples / arrays / Option / Result : recurse — Hash if every
-        // component is Hash.
-        Ty::FixedArray(inner, _) | Ty::Option(inner) => ty_is_valid_hash_key(inner, symbols),
-        Ty::Result(a, b) => ty_is_valid_hash_key(a, symbols) && ty_is_valid_hash_key(b, symbols),
-        Ty::Tuple(elems) => elems.iter().all(|e| ty_is_valid_hash_key(e, symbols)),
-        Ty::Ref(inner)
-        | Ty::RefMut(inner)
-        | Ty::RefLifetime(_, inner)
-        | Ty::RefMutLifetime(_, inner) => ty_is_valid_hash_key(inner, symbols),
-        Ty::Alias { target, .. } => ty_is_valid_hash_key(target, symbols),
-        Ty::Newtype { inner, .. } => ty_is_valid_hash_key(inner, symbols),
-        Ty::Struct { .. } | Ty::Class { .. } | Ty::Enum { .. } => {
-            ty_has_derive_trait(ty, symbols, "Hash") || ty_has_derive_trait(ty, symbols, "Hashable")
-        }
-        // Type-vars / param types: assume satisfiable (typeck unifies later).
-        // Returning true here keeps generic code (e.g. `def f[K]`) compiling;
-        // the actual Hash bound check on call sites is enforced via trait
-        // bounds elsewhere.
-        Ty::TypeParam { .. } | Ty::Infer(_) | Ty::Error => true,
-        _ => false,
-    }
-}
-
-fn nominal_type_definition_mut<'a>(
-    target_ty: &Ty,
-    symbols: &'a mut SymbolTable,
-) -> Option<&'a mut Definition> {
-    let name = match target_ty {
-        Ty::Class { name, .. } | Ty::Struct { name, .. } | Ty::Enum { name, .. } => name,
-        _ => return None,
-    };
-
-    let def_id = symbols
-        .iter()
-        .find(|def| {
-            def.name == *name
-                && matches!(
-                    def.kind,
-                    DefKind::Class { .. } | DefKind::Struct { .. } | DefKind::Enum { .. }
-                )
-        })
-        .map(|def| def.id)?;
-
-    symbols.get_mut(def_id)
-}
-
 impl Default for Resolver {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-// ─── Yield Pre-Scan ────────────────────────────────────────────────────
-//
-// `yield VALUE` inside a function body implicitly introduces a trailing
-// `__block: Closure` parameter.  Before the main resolution pass, walk
-// the AST and record every function whose body contains a `yield`, along
-// with the arity of the first `yield` found.  The arity is used to
-// pre-shape the synthetic block's `Ty::Fn` parameter list so that
-// caller-side unification on the trailing closure produces a concrete type.
-
-fn collect_yield_fns(item: &ast::TopLevelItem, out: &mut HashMap<String, usize>) {
-    match item {
-        ast::TopLevelItem::Function(f) => {
-            if let Some(arity) = find_first_yield_arity_in_block(&f.body) {
-                out.insert(f.name.clone(), arity);
-            }
-        }
-        ast::TopLevelItem::Module(m) => {
-            for sub in &m.items {
-                collect_yield_fns(sub, out);
-            }
-        }
-        ast::TopLevelItem::Class(c) => {
-            for m in &c.methods {
-                if let Some(arity) = find_first_yield_arity_in_block(&m.body) {
-                    out.insert(m.name.clone(), arity);
-                }
-            }
-        }
-        ast::TopLevelItem::Impl(b) => {
-            for it in &b.items {
-                if let ast::ImplItem::Method(m) = it {
-                    if let Some(arity) = find_first_yield_arity_in_block(&m.body) {
-                        out.insert(m.name.clone(), arity);
-                    }
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
-fn find_first_yield_arity_in_block(block: &ast::Block) -> Option<usize> {
-    for stmt in &block.statements {
-        if let Some(a) = find_first_yield_arity_in_stmt(stmt) {
-            return Some(a);
-        }
-    }
-    None
-}
-
-fn find_first_yield_arity_in_stmt(stmt: &ast::Statement) -> Option<usize> {
-    match stmt {
-        ast::Statement::Let(b) => b.value.as_deref().and_then(find_first_yield_arity_in_expr),
-        ast::Statement::Expression(e) => find_first_yield_arity_in_expr(e),
-    }
-}
-
-fn find_first_yield_arity_in_expr(expr: &ast::Expr) -> Option<usize> {
-    use ast::ExprKind::*;
-    match &expr.kind {
-        Yield(args) => Some(args.len()),
-        BinaryOp { left, right, .. } => {
-            find_first_yield_arity_in_expr(left).or_else(|| find_first_yield_arity_in_expr(right))
-        }
-        UnaryOp { operand, .. } => find_first_yield_arity_in_expr(operand),
-        Borrow(e) | BorrowMut(e) => find_first_yield_arity_in_expr(e),
-        FieldAccess { object, .. } | SafeNav { object, .. } => {
-            find_first_yield_arity_in_expr(object)
-        }
-        MethodCall {
-            object,
-            args,
-            block,
-            ..
-        } => find_first_yield_arity_in_expr(object)
-            .or_else(|| args.iter().find_map(find_first_yield_arity_in_expr))
-            .or_else(|| block.as_deref().and_then(find_first_yield_arity_in_expr)),
-        SafeNavCall { object, args, .. } => find_first_yield_arity_in_expr(object)
-            .or_else(|| args.iter().find_map(find_first_yield_arity_in_expr)),
-        Call {
-            callee,
-            args,
-            block,
-        } => find_first_yield_arity_in_expr(callee)
-            .or_else(|| args.iter().find_map(find_first_yield_arity_in_expr))
-            .or_else(|| block.as_deref().and_then(find_first_yield_arity_in_expr)),
-        Index { object, index } => {
-            find_first_yield_arity_in_expr(object).or_else(|| find_first_yield_arity_in_expr(index))
-        }
-        ClosureCall { callee, args } => find_first_yield_arity_in_expr(callee)
-            .or_else(|| args.iter().find_map(find_first_yield_arity_in_expr)),
-        Try(e) => find_first_yield_arity_in_expr(e),
-        Assign { target, value } => {
-            find_first_yield_arity_in_expr(target).or_else(|| find_first_yield_arity_in_expr(value))
-        }
-        CompoundAssign { target, value, .. } => {
-            find_first_yield_arity_in_expr(target).or_else(|| find_first_yield_arity_in_expr(value))
-        }
-        If(ife) => find_first_yield_arity_in_expr(&ife.condition)
-            .or_else(|| find_first_yield_arity_in_block(&ife.then_body))
-            .or_else(|| {
-                ife.elsif_clauses.iter().find_map(|c| {
-                    find_first_yield_arity_in_expr(&c.condition)
-                        .or_else(|| find_first_yield_arity_in_block(&c.body))
-                })
-            })
-            .or_else(|| {
-                ife.else_body
-                    .as_ref()
-                    .and_then(find_first_yield_arity_in_block)
-            }),
-        IfLet(ile) => find_first_yield_arity_in_expr(&ile.value)
-            .or_else(|| find_first_yield_arity_in_block(&ile.then_body))
-            .or_else(|| {
-                ile.else_body
-                    .as_ref()
-                    .and_then(find_first_yield_arity_in_block)
-            }),
-        Match(me) => find_first_yield_arity_in_expr(&me.subject).or_else(|| {
-            me.arms.iter().find_map(|a| match &a.body {
-                ast::MatchArmBody::Expr(e) => find_first_yield_arity_in_expr(e),
-                ast::MatchArmBody::Block(b) => find_first_yield_arity_in_block(b),
-            })
-        }),
-        While(we) => find_first_yield_arity_in_expr(&we.condition)
-            .or_else(|| find_first_yield_arity_in_block(&we.body)),
-        WhileLet(wle) => find_first_yield_arity_in_expr(&wle.value)
-            .or_else(|| find_first_yield_arity_in_block(&wle.body)),
-        For(fe) => find_first_yield_arity_in_expr(&fe.iterable)
-            .or_else(|| find_first_yield_arity_in_block(&fe.body)),
-        Loop(le) => find_first_yield_arity_in_block(&le.body),
-        Block(b) | UnsafeBlock(b) => find_first_yield_arity_in_block(b),
-        // A `yield` inside a nested closure does not belong to the
-        // enclosing function for our v1 implicit-block scheme; skipping
-        // avoids double-counting cases like `.filter { |x| yield x }`
-        // where the surrounding method already declares an explicit
-        // block parameter.
-        Closure(_) => None,
-        Range { start, end, .. } => start
-            .as_deref()
-            .and_then(find_first_yield_arity_in_expr)
-            .or_else(|| end.as_deref().and_then(find_first_yield_arity_in_expr)),
-        ArrayLiteral(elems) => elems.iter().find_map(find_first_yield_arity_in_expr),
-        ArrayFill { value, count } => {
-            find_first_yield_arity_in_expr(value).or_else(|| find_first_yield_arity_in_expr(count))
-        }
-        TupleLiteral(elems) => elems.iter().find_map(find_first_yield_arity_in_expr),
-        Return(e) | Break(e) => e.as_deref().and_then(find_first_yield_arity_in_expr),
-        Continue => None,
-        MacroCall { args, .. } => args.iter().find_map(find_first_yield_arity_in_expr),
-        Cast { expr, .. } => find_first_yield_arity_in_expr(expr),
-        EnumVariant { args, .. } => args
-            .iter()
-            .find_map(|fa| find_first_yield_arity_in_expr(&fa.value)),
-        InterpolatedString(_) => None,
-        _ => None,
     }
 }
 

@@ -22,6 +22,41 @@ pub const UNRESOLVED_DEF: DefId = u32::MAX;
 pub struct HirProgram {
     pub items: Vec<HirItem>,
     pub span: Span,
+    /// #06.8 Phase 2: FFI library declarations harvested from top-level
+    /// `lib "X" ... end` and `extern "C" ... end` blocks. Each entry
+    /// carries the link name plus every declared function with its
+    /// Riven-side name AND optional `c_symbol` alias. MIR lowering uses
+    /// this to populate `MirProgram::ffi_libs`, and call-site lowering
+    /// uses it to rewrite a Riven name → its C symbol when an alias is
+    /// present. Top-level `Lib`/`Extern` items themselves do not become
+    /// `HirItem`s (they emit no executable code), so we surface them
+    /// here as a side-channel on the program.
+    pub ffi_libs: Vec<HirFfiLib>,
+}
+
+/// #06.8 Phase 2: a single FFI library declaration carried on `HirProgram`.
+#[derive(Debug, Clone)]
+pub struct HirFfiLib {
+    /// Link name (e.g. `"m"` for `lib "m" ... end`). Empty for anonymous
+    /// `extern "C"` blocks.
+    pub name: String,
+    /// Linker flags collected from `@[link]` attributes on this block.
+    pub link_flags: Vec<String>,
+    pub functions: Vec<HirFfiFunc>,
+}
+
+/// #06.8 Phase 2: a single FFI function declaration carried on `HirFfiLib`.
+#[derive(Debug, Clone)]
+pub struct HirFfiFunc {
+    /// The Riven-side identifier — what callers spell at the call site.
+    pub riven_name: String,
+    /// Optional C-symbol alias. `None` means `riven_name` *is* the linked
+    /// C symbol (historical behaviour). `Some(c)` means the linker
+    /// resolves the call to symbol `c`.
+    pub c_symbol: Option<String>,
+    pub param_types: Vec<crate::hir::types::Ty>,
+    pub return_type: Option<crate::hir::types::Ty>,
+    pub is_variadic: bool,
 }
 
 #[derive(Debug, Clone)]

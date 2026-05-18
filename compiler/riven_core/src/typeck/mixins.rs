@@ -203,6 +203,7 @@ impl MixinResolver {
                         generic_params: vec![],
                         params: vec![],
                         return_ty: Ty::Int,
+                        c_symbol: None,
                     });
                 }
             }
@@ -310,6 +311,7 @@ impl MixinResolver {
                                     })
                                     .collect(),
                                 return_ty: return_ty.clone(),
+                                c_symbol: None,
                             };
                             new_entries.push((name.clone(), sig));
                         }
@@ -418,6 +420,7 @@ impl MixinResolver {
                         generic_params: vec![],
                         params: vec![],
                         return_ty: target_ty.clone(),
+                        c_symbol: None,
                     },
                 )],
                 "PartialEq" => vec![(
@@ -433,6 +436,7 @@ impl MixinResolver {
                             auto_assign: false,
                         }],
                         return_ty: Ty::Bool,
+                        c_symbol: None,
                     },
                 )],
                 "Hashable" | "Hash" => vec![(
@@ -444,6 +448,7 @@ impl MixinResolver {
                         generic_params: vec![],
                         params: vec![],
                         return_ty: Ty::Int,
+                        c_symbol: None,
                     },
                 )],
                 "Default" => vec![(
@@ -455,6 +460,7 @@ impl MixinResolver {
                         generic_params: vec![],
                         params: vec![],
                         return_ty: target_ty.clone(),
+                        c_symbol: None,
                     },
                 )],
                 "Ord" => vec![(
@@ -470,6 +476,7 @@ impl MixinResolver {
                             auto_assign: false,
                         }],
                         return_ty: Ty::Int,
+                        c_symbol: None,
                     },
                 )],
                 "PartialOrd" => vec![(
@@ -485,6 +492,7 @@ impl MixinResolver {
                             auto_assign: false,
                         }],
                         return_ty: Ty::Int,
+                        c_symbol: None,
                     },
                 )],
                 _ => vec![],
@@ -519,6 +527,7 @@ impl MixinResolver {
                 })
                 .collect(),
             return_ty: func.return_ty.clone(),
+            c_symbol: None,
         }
     }
 

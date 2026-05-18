@@ -17,6 +17,12 @@ pub struct FnSignature {
     pub generic_params: Vec<GenericParamInfo>,
     pub params: Vec<ParamInfo>,
     pub return_ty: Ty,
+    /// #06.8 Phase 2: the C-symbol alias declared via
+    /// `lib "X" def name as "<c-symbol>"(...) end`. `Some(c)` means the
+    /// linker will resolve this function to symbol `c`; `None` means the
+    /// Riven name *is* the linked C symbol (the historical default for
+    /// `lib` blocks). Non-FFI functions always carry `None`.
+    pub c_symbol: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -540,6 +546,7 @@ mod tests {
                 generic_params: Vec::new(),
                 params: Vec::new(),
                 return_ty: ret,
+                c_symbol: None,
             },
         }
     }
