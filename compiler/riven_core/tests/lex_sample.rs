@@ -32,9 +32,7 @@ fn test_sample_program_first_tokens() {
         .filter(|t| !matches!(t.kind, TokenKind::Newline | TokenKind::Eof))
         .collect();
 
-    let has_enum = significant_tokens
-        .iter()
-        .any(|t| t.kind == TokenKind::Enum);
+    let has_enum = significant_tokens.iter().any(|t| t.kind == TokenKind::Enum);
     assert!(has_enum, "expected to find Enum token in second block");
 }
 

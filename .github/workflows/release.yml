@@ -62,18 +62,18 @@ jobs:
         run: |
           cargo test --release --target ${{ matrix.target }} \
             -p rivenc   --test installed_binary \
-            -p riven-cli --test installed_pkg_manager \
-            -p riven-repl --test installed_repl
+            -p riven_cli --test installed_pkg_manager \
+            -p riven_repl --test installed_repl
 
       - name: Build release binaries
         shell: bash
         run: |
           if [ "${{ matrix.cross }}" = "true" ]; then
             cross build --release --target ${{ matrix.target }} \
-              -p riven-cli -p rivenc -p riven-lsp -p riven-repl
+              -p riven_cli -p rivenc -p riven_lsp -p riven_repl
           else
             cargo build --release --target ${{ matrix.target }} \
-              -p riven-cli -p rivenc -p riven-lsp -p riven-repl
+              -p riven_cli -p rivenc -p riven_lsp -p riven_repl
           fi
 
       - name: Stage artifacts
@@ -86,7 +86,7 @@ jobs:
           mkdir -p "${STAGE}/bin"
 
           BIN_DIR="target/${TARGET}/release"
-          for bin in riven rivenc riven-lsp riven-repl; do
+          for bin in riven rivenc riven_lsp riven_repl; do
             if [ -f "${BIN_DIR}/${bin}" ]; then
               cp "${BIN_DIR}/${bin}" "${STAGE}/bin/${bin}"
               chmod +x "${STAGE}/bin/${bin}"
@@ -95,9 +95,13 @@ jobs:
 
           cp README.md LICENSE* "${STAGE}/" 2>/dev/null || true
 
-          # Include runtime C file so users with LLVM/Cranelift can link against it.
+          # Include the unity-build runtime tree so users with
+          # LLVM/Cranelift can link against it. Post-#06.75 the
+          # aggregator `runtime.c` `#include`s per-module sources under
+          # `core/`, `io/`, `net/`; install.sh maps the staged `lib/`
+          # tree onto `<install>/lib/` verbatim.
           mkdir -p "${STAGE}/lib"
-          cp crates/riven-core/runtime/runtime.c "${STAGE}/lib/runtime.c"
+          cp -R library/runtime/. "${STAGE}/lib/"
 
           tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"
           (cd dist && shasum -a 256 "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256")

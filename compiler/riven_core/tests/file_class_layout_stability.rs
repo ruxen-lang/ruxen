@@ -38,6 +38,37 @@ fn read(path: &str) -> String {
         .unwrap_or_else(|e| panic!("read {} failed: {}", path, e))
 }
 
+/// Pull every `("Name", N)` tuple out of `line` and append them to `out`.
+/// Used by `seek_from_tag_values_match_runtime_and_resolver` to parse a
+/// `seek_from_variants` table that may have been line-collapsed by
+/// rustfmt onto a single source line.
+fn parse_seek_from_tuples(line: &str, out: &mut Vec<(String, usize)>) {
+    let mut cursor = line;
+    while let Some(open) = cursor.find("(\"") {
+        let rest = &cursor[open + 2..];
+        let Some(end_quote) = rest.find('"') else {
+            break;
+        };
+        let name = &rest[..end_quote];
+        let after = &rest[end_quote + 1..];
+        let Some(comma) = after.find(',') else {
+            break;
+        };
+        // The numeric tag runs from the first digit after the comma up
+        // to the first non-digit character.  Avoid `trim_end_matches`
+        // here: when several tuples sit on one source line the
+        // remainder after the digit contains *more* tuples, not
+        // trailing punctuation, so a global non-digit trim would slurp
+        // up the next tuple's digits.
+        let tail = after[comma + 1..].trim_start();
+        let digits: String = tail.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(tag) = digits.parse::<usize>() {
+            out.push((name.to_string(), tag));
+        }
+        cursor = &after[comma + 1..];
+    }
+}
+
 #[test]
 fn riven_file_static_assert_is_eight_bytes() {
     // The runtime carries the canonical `_Static_assert` — we just
@@ -96,34 +127,33 @@ fn seek_from_tag_values_match_runtime_and_resolver() {
     let mut resolver_tags: Vec<(String, usize)> = Vec::new();
     let mut in_block = false;
     for line in resolver.lines() {
-        if line.contains("seek_from_variants") {
+        // The `seek_from_variants` block can be either multi-line
+        //   ```
+        //   let seek_from_variants: &[(&str, usize)] = &[
+        //       ("Start", 0),
+        //       …
+        //   ];
+        //   ```
+        // …or compacted by rustfmt onto a single line:
+        //   ```
+        //   let seek_from_variants: &[(&str, usize)] = &[("Start", 0), …];
+        //   ```
+        // Treat the trigger line itself as in-block content so the
+        // compacted form parses too.
+        let trigger = line.contains("seek_from_variants");
+        if trigger {
             in_block = true;
-            continue;
         }
-        if in_block && line.trim() == "];" {
+        if in_block && line.trim_end().ends_with("];") {
+            // Parse the entries on this terminating line before exiting.
+            parse_seek_from_tuples(line, &mut resolver_tags);
             in_block = false;
             continue;
         }
         if !in_block {
             continue;
         }
-        let trimmed = line.trim();
-        if let Some(start) = trimmed.find("(\"") {
-            let rest = &trimmed[start + 2..];
-            if let Some(end_quote) = rest.find('"') {
-                let name = &rest[..end_quote];
-                let after = &rest[end_quote + 1..];
-                if let Some(comma) = after.find(',') {
-                    let tag_str = after[comma + 1..]
-                        .trim_start()
-                        .trim_end_matches(|c: char| !c.is_ascii_digit())
-                        .trim();
-                    if let Ok(tag) = tag_str.parse::<usize>() {
-                        resolver_tags.push((name.to_string(), tag));
-                    }
-                }
-            }
-        }
+        parse_seek_from_tuples(line, &mut resolver_tags);
     }
 
     runtime_tags.sort_by_key(|(_, t)| *t);

@@ -31,9 +31,7 @@ use cranelift_object::{ObjectBuilder, ObjectModule};
 
 use crate::mir::nodes::*;
 
-use self::emit::{
-    build_signature, def_local, translate_instruction, translate_terminator,
-};
+use self::emit::{build_signature, def_local, translate_instruction, translate_terminator};
 use self::helpers::{is_string_mir_ty, ty_to_cranelift};
 use self::translation_env::TranslationEnv;
 

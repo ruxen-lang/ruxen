@@ -513,7 +513,6 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
-
     fn lower_or_pattern(
         &mut self,
         scrut_local: Option<LocalId>,

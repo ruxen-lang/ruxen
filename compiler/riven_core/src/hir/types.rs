@@ -130,16 +130,16 @@ impl ConstExpr {
     ///
     /// - `Lit(n)`   → `Ok(n)`.
     /// - `Param(n)` → `Ok(value)` if `n` is bound; `Err(Unresolved)`
-    ///                 otherwise (the caller may treat this as an
-    ///                 "unresolved param" condition rather than an
-    ///                 error, depending on context).
+    ///   otherwise (the caller may treat this as an
+    ///   "unresolved param" condition rather than an
+    ///   error, depending on context).
     /// - `Op(a, ⊙, b)` → recurse on both sides, then apply checked
-    ///                 `u64` arithmetic.  Wrap-around / borrow surface
-    ///                 as `Err(Overflow)`; `_/0` as
-    ///                 `Err(DivisionByZero)`.
+    ///   `u64` arithmetic.  Wrap-around / borrow surface
+    ///   as `Err(Overflow)`; `_/0` as
+    ///   `Err(DivisionByZero)`.
     /// - `Error`    → `Err(Malformed)` — propagated from a parser
-    ///                 recovery path; should not reach a code-gen
-    ///                 layout call.
+    ///   recovery path; should not reach a code-gen
+    ///   layout call.
     pub fn eval(
         &self,
         bindings: &std::collections::HashMap<String, u64>,

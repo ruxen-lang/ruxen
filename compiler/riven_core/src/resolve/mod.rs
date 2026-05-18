@@ -5,8 +5,8 @@
 //! variables are allocated for unresolved types; the type checker fills them in.
 
 pub mod scope;
-pub mod symbols;
 mod stdlib;
+pub mod symbols;
 
 use std::collections::HashMap;
 

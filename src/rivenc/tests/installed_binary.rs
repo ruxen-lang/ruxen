@@ -54,7 +54,7 @@ fn shared_install() -> &'static Path {
             // `#include`s each piece, so a single-file copy is no
             // longer sufficient — the staged install needs the full
             // `library/runtime/` tree at `<install>/lib/`.
-            copy_runtime_tree(&runtime_c_src().parent().unwrap().to_path_buf(), &lib_dir);
+            copy_runtime_tree(runtime_c_src().parent().unwrap(), &lib_dir);
 
             (temp, staged_rivenc)
         })
@@ -308,7 +308,7 @@ fn runtime_env_override() {
     // `#include "core/alloc.c"` lookups still resolve, then point RIVEN_RUNTIME
     // at its aggregator.
     let alt_dir = temp.path().join("alt_runtime");
-    copy_runtime_tree(&runtime_c_src().parent().unwrap().to_path_buf(), &alt_dir);
+    copy_runtime_tree(runtime_c_src().parent().unwrap(), &alt_dir);
     let alt = alt_dir.join("runtime.c");
 
     fs::write(temp.path().join("env_ov.rvn"), rvn("runtime_env_override")).unwrap();

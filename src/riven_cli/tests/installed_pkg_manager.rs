@@ -61,7 +61,7 @@ fn shared_install() -> &'static Path {
             // Post-#06.75 `runtime.c` is a unity-build aggregator that
             // `#include`s per-module files under `core/`, `io/`, `net/`,
             // so a single-file copy is no longer sufficient.
-            copy_runtime_tree(&runtime_c_src().parent().unwrap().to_path_buf(), &lib_dir);
+            copy_runtime_tree(runtime_c_src().parent().unwrap(), &lib_dir);
             (temp, staged)
         })
         .1

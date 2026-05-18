@@ -176,7 +176,7 @@ fn parse_mixed_type_and_const_generic_params() {
 /// Walk a `TypeExpr` down through references / arrays to the first
 /// `Named` path and return a clone — the field-type AST is a
 /// reference type in some fixtures, so we strip wrappers.
-fn into_named<'a>(ty: &'a TypeExpr) -> &'a riven_core::parser::ast::TypePath {
+fn into_named(ty: &TypeExpr) -> &riven_core::parser::ast::TypePath {
     match ty {
         TypeExpr::Named(path) => path,
         other => panic!("expected Named, got {:?}", other),
@@ -518,12 +518,12 @@ fn const_generic_param_registered_in_symbol_table() {
         const_params
     );
     assert!(
-        const_params.iter().any(|n| *n == "N"),
+        const_params.contains(&"N"),
         "missing `N`: {:?}",
         const_params
     );
     assert!(
-        const_params.iter().any(|n| *n == "M"),
+        const_params.contains(&"M"),
         "missing `M`: {:?}",
         const_params
     );
@@ -1295,7 +1295,7 @@ fn layout_of_class_with_array_field_uses_const_arg_binding() {
     // Sanity: the instantiation carries ConstArg(Lit(4)).
     if let Ty::Class { generic_args, .. } = inner {
         assert!(
-            matches!(generic_args.get(0), Some(Ty::ConstArg(ConstExpr::Lit(4)))),
+            matches!(generic_args.first(), Some(Ty::ConstArg(ConstExpr::Lit(4)))),
             "expected ConstArg(Lit(4)); got {:?}",
             generic_args
         );

@@ -23,7 +23,7 @@ use riven_core::lexer::Lexer;
 use riven_core::mir::lower::Lowerer;
 use riven_core::parser::Parser;
 use riven_core::typeck;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 
@@ -62,7 +62,7 @@ fn workspace_root() -> PathBuf {
 /// the same single-string shape from today's aggregator + per-module
 /// source tree without changing the test's downstream replacement
 /// logic.
-fn expand_unity_includes(aggregator: &str, runtime_dir: &PathBuf) -> String {
+fn expand_unity_includes(aggregator: &str, runtime_dir: &Path) -> String {
     let mut out = String::new();
     for line in aggregator.lines() {
         let trimmed = line.trim_start();
@@ -70,9 +70,8 @@ fn expand_unity_includes(aggregator: &str, runtime_dir: &PathBuf) -> String {
             if let Some(rel) = rest.strip_suffix("\"") {
                 // Local quote-include — splice the referenced file in.
                 let inc_path = runtime_dir.join(rel);
-                let body = std::fs::read_to_string(&inc_path).unwrap_or_else(|e| {
-                    panic!("read {}: {}", inc_path.display(), e)
-                });
+                let body = std::fs::read_to_string(&inc_path)
+                    .unwrap_or_else(|e| panic!("read {}: {}", inc_path.display(), e));
                 out.push_str(&body);
                 out.push('\n');
                 continue;

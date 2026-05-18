@@ -37,7 +37,7 @@ jobs:
   # post-merge `push` events only — the in-process harness pushes PR
   # CI past 1h, while the per-fixture diff coverage is most valuable
   # against `master` rather than every feature branch. Re-run locally
-  # with `cargo test -p riven-core --test release_e2e_smoke -- --ignored`.
+  # with `cargo test -p riven_core --test release_e2e_smoke -- --ignored`.
   release-e2e:
     name: Release E2E (${{ matrix.os }})
     if: github.event_name == 'push'
@@ -56,7 +56,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: cargo test (release-e2e fixtures)
-        run: cargo test -p riven-core --test release_e2e_smoke -- --ignored --nocapture
+        run: cargo test -p riven_core --test release_e2e_smoke -- --ignored --nocapture
 
   msrv:
     name: MSRV (1.91)

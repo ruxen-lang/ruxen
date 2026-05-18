@@ -17,7 +17,9 @@ impl<'a> Lexer<'a> {
     /// grouping is open; otherwise it's part of the expression.
     /// Returns the expression tokens plus the parsed `FormatSpec`
     /// (default if no spec was present).
-    pub(super) fn lex_interpolation_expr(&mut self) -> (Vec<Token>, crate::lexer::token::FormatSpec) {
+    pub(super) fn lex_interpolation_expr(
+        &mut self,
+    ) -> (Vec<Token>, crate::lexer::token::FormatSpec) {
         let mut tokens = Vec::new();
         let mut spec = crate::lexer::token::FormatSpec::default();
         let mut brace_depth = 1u32; // we've already consumed #{

@@ -13,25 +13,25 @@ use crate::parser::ast::{BinOp, UnaryOp};
 use crate::resolve::symbols::{ty_is_effectively_copy, SymbolTable};
 
 mod captures;
+mod closure_inline;
 mod collect;
 mod derive;
 mod drops;
 mod emit;
-mod interpolation;
-mod impl_block;
-mod function;
-mod statement;
-mod match_arms;
-mod closure_inline;
 mod expr;
+mod function;
+mod impl_block;
+mod interpolation;
+mod match_arms;
+mod statement;
 mod trait_default;
 mod type_helpers;
 mod util;
-pub use type_helpers::{def_id_name, type_name_from_ty};
 use captures::*;
 use drops::*;
 use trait_default::*;
 use type_helpers::*;
+pub use type_helpers::{def_id_name, type_name_from_ty};
 use util::*;
 
 // ─── Lowerer ────────────────────────────────────────────────────────────────

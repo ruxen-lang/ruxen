@@ -21,7 +21,14 @@ fn unique_suffix() -> String {
 /// distinct path so parallel callers don't race on shared output.
 fn compile_runtime() -> std::path::PathBuf {
     let crate_dir = env!("CARGO_MANIFEST_DIR");
-    let runtime_c = Path::new(crate_dir).parent().unwrap().parent().unwrap().join("library").join("runtime").join("runtime.c");
+    let runtime_c = Path::new(crate_dir)
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("library")
+        .join("runtime")
+        .join("runtime.c");
     let runtime_o = std::env::temp_dir().join(format!("riven_runtime_test_{}.o", unique_suffix()));
 
     let status = Command::new("cc")
@@ -74,7 +81,14 @@ fn runtime_compiles_with_strict_warnings() {
 #[test]
 fn runtime_compiles_with_sanitizers() {
     let crate_dir = env!("CARGO_MANIFEST_DIR");
-    let runtime_c = Path::new(crate_dir).parent().unwrap().parent().unwrap().join("library").join("runtime").join("runtime.c");
+    let runtime_c = Path::new(crate_dir)
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("library")
+        .join("runtime")
+        .join("runtime.c");
     let runtime_o =
         std::env::temp_dir().join(format!("riven_runtime_asan_test_{}.o", unique_suffix()));
 

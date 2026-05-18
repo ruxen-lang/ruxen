@@ -4,6 +4,7 @@ use crate::lexer::token::TokenKind;
 use crate::parser::ast::*;
 use crate::parser::Parser;
 
+#[allow(dead_code)]
 impl Parser {
     /// Route `@[derive(...)]` / `@[repr(...)]` attributes onto a struct.
     /// Unknown attribute names emit a diagnostic.

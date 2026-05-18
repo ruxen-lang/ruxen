@@ -1348,9 +1348,7 @@ impl<'a> InferenceEngine<'a> {
                 {
                     return duration_ty();
                 }
-                if op == BinOp::Sub
-                    && class_named(left, "Instant")
-                    && class_named(right, "Instant")
+                if op == BinOp::Sub && class_named(left, "Instant") && class_named(right, "Instant")
                 {
                     return duration_ty();
                 }

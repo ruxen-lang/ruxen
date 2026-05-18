@@ -1,20 +1,20 @@
 use super::*;
 
-mod literals;
-mod var_ref;
-mod binops;
-mod unaryops;
-mod blocks;
-mod control;
-mod for_loop;
-mod fn_call;
-mod method_call;
 mod assign;
-mod constructors;
-mod field_access;
-mod index;
+mod binops;
+mod blocks;
 mod closure;
+mod constructors;
+mod control;
+mod field_access;
+mod fn_call;
+mod for_loop;
+mod index;
+mod literals;
+mod method_call;
 mod misc;
+mod unaryops;
+mod var_ref;
 
 impl<'a> Lowerer<'a> {
     pub(super) fn lower_expr(&mut self, expr: &HirExpr) -> Result<Option<LocalId>, String> {
@@ -52,7 +52,9 @@ impl<'a> Lowerer<'a> {
             HirExprKind::MethodCall { .. } => self.lower_method_call(expr),
 
             // Assignment
-            HirExprKind::Assign { .. } | HirExprKind::CompoundAssign { .. } => self.lower_assign(expr),
+            HirExprKind::Assign { .. } | HirExprKind::CompoundAssign { .. } => {
+                self.lower_assign(expr)
+            }
 
             // Constructors / aggregates
             HirExprKind::Construct { .. }

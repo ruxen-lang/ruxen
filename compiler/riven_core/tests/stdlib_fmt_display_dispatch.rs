@@ -43,7 +43,7 @@ fn synth_primitive_fmt_functions_emitted() {
     let names: Vec<&str> = m.functions.iter().map(|f| f.name.as_str()).collect();
     for expected in ["Char_fmt", "Int_fmt", "Float_fmt", "Bool_fmt", "String_fmt"] {
         assert!(
-            names.iter().any(|n| *n == expected),
+            names.contains(&expected),
             "expected synth fn `{}` in MIR; got {:?}",
             expected,
             names
@@ -90,7 +90,7 @@ fn user_impl_display_lowers_t_fmt_function() {
     let m = lower(&src);
     let names: Vec<&str> = m.functions.iter().map(|f| f.name.as_str()).collect();
     assert!(
-        names.iter().any(|n| *n == "Money_fmt"),
+        names.contains(&"Money_fmt"),
         "expected user impl-Display to lower as `Money_fmt`; got {:?}",
         names
     );

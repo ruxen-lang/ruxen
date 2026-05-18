@@ -90,5 +90,4 @@ impl<'a> Lowerer<'a> {
         self.current_block = merge_block;
         Ok(Some(Some(result)))
     }
-
 }

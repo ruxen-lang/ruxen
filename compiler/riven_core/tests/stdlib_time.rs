@@ -224,8 +224,7 @@ fn instant_duration_since_future_panics() {
         "panic guard did not fire; reached the println past the panic site: [{stdout}]"
     );
     assert!(
-        stderr.contains("earlier is in the future")
-            || stderr.contains("Instant.duration_since"),
+        stderr.contains("earlier is in the future") || stderr.contains("Instant.duration_since"),
         "expected panic message in stderr, got: [{stderr}]"
     );
 }

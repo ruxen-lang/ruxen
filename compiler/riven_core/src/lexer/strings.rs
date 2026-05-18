@@ -86,7 +86,12 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    pub(super) fn lex_multiline_string(&mut self, start_byte: usize, start_line: u32, start_col: u32) {
+    pub(super) fn lex_multiline_string(
+        &mut self,
+        start_byte: usize,
+        start_line: u32,
+        start_col: u32,
+    ) {
         self.advance(); // "
         self.advance(); // "
         self.advance(); // "

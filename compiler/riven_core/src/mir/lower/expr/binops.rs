@@ -175,9 +175,7 @@ impl<'a> Lowerer<'a> {
                 let rhs_is = |target: &str| -> bool {
                     matches!(unwrap_ref(&right.ty), Ty::Class { name, .. } if name == target)
                 };
-                if matches!(op, BinOp::Add | BinOp::Sub)
-                    && lhs_is("Duration")
-                    && rhs_is("Duration")
+                if matches!(op, BinOp::Add | BinOp::Sub) && lhs_is("Duration") && rhs_is("Duration")
                 {
                     let dest = self.new_temp(duration_ty.clone());
                     let callee = if matches!(op, BinOp::Add) {

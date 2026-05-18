@@ -114,8 +114,9 @@ fn semantic_tokens_produces_output() {
 
 #[test]
 fn analysis_of_sample_program() {
-    let source = std::fs::read_to_string("../../compiler/riven_core/tests/fixtures/sample_program.rvn")
-        .expect("failed to read sample_program.rvn");
+    let source =
+        std::fs::read_to_string("../../compiler/riven_core/tests/fixtures/sample_program.rvn")
+            .expect("failed to read sample_program.rvn");
     let result = analyze(&source);
     assert!(
         result.program.is_some(),

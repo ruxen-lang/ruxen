@@ -127,8 +127,8 @@ fn file_create_truncates_existing() {
     std::fs::write(&file, b"long original contents that should be truncated")
         .expect("stage original");
 
-    let source = rvn("file_create_truncates_existing")
-        .replace("__FILE__", &file.display().to_string());
+    let source =
+        rvn("file_create_truncates_existing").replace("__FILE__", &file.display().to_string());
     let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_file_create_trunc");
     let after = std::fs::read_to_string(&file).expect("read final");
     let _ = std::fs::remove_dir_all(&dir);
@@ -177,8 +177,8 @@ fn file_open_options_rw_create() {
     let dir = unique_tmp_dir("oo_rw_create");
     let file = dir.join("rw.txt");
 
-    let source = rvn("file_open_options_rw_create")
-        .replace("__FILE__", &file.display().to_string());
+    let source =
+        rvn("file_open_options_rw_create").replace("__FILE__", &file.display().to_string());
     let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_file_oo_rw_create");
     let after = std::fs::read_to_string(&file).ok();
     let _ = std::fs::remove_dir_all(&dir);
@@ -224,8 +224,8 @@ fn file_seek_start_skips_prefix() {
     let file = dir.join("digits.txt");
     std::fs::write(&file, b"0123456789").expect("stage digits");
 
-    let source = rvn("file_seek_start_skips_prefix")
-        .replace("__FILE__", &file.display().to_string());
+    let source =
+        rvn("file_seek_start_skips_prefix").replace("__FILE__", &file.display().to_string());
     let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_file_seek_start");
     let _ = std::fs::remove_dir_all(&dir);
     assert!(ok, "stderr: {}", stderr);
@@ -246,8 +246,7 @@ fn file_seek_end_returns_size() {
     let bytes = b"0123456789ABCDEF"; // 16 bytes
     std::fs::write(&file, bytes).expect("stage payload");
 
-    let source = rvn("file_seek_end_returns_size")
-        .replace("__FILE__", &file.display().to_string());
+    let source = rvn("file_seek_end_returns_size").replace("__FILE__", &file.display().to_string());
     let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_file_seek_end");
     let _ = std::fs::remove_dir_all(&dir);
     assert!(ok, "stderr: {}", stderr);
@@ -269,8 +268,8 @@ fn file_metadata_matches_fs_metadata() {
     // "exactly twelve" is 14 bytes — name is a holdover from an
     // earlier draft; the assertion below pins the actual size.
 
-    let source = rvn("file_metadata_matches_fs_metadata")
-        .replace("__FILE__", &file.display().to_string());
+    let source =
+        rvn("file_metadata_matches_fs_metadata").replace("__FILE__", &file.display().to_string());
     let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_file_metadata");
     let _ = std::fs::remove_dir_all(&dir);
     assert!(ok, "stderr: {}", stderr);
@@ -304,8 +303,7 @@ fn file_drop_closes_fd() {
     let file = dir.join("touch.txt");
     std::fs::write(&file, b"x").expect("stage");
 
-    let source =
-        rvn("file_drop_closes_fd").replace("__FILE__", &file.display().to_string());
+    let source = rvn("file_drop_closes_fd").replace("__FILE__", &file.display().to_string());
     let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_file_drop_closes");
     let _ = std::fs::remove_dir_all(&dir);
     assert!(ok, "stderr: {}", stderr);

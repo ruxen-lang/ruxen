@@ -77,9 +77,7 @@ pub(super) fn runtime_signature(name: &str) -> Option<(Vec<Type>, Option<Type>)>
         "riven_command_new" => Some((vec![types::I64], Some(types::I64))),
         "riven_command_arg" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "riven_command_args" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "riven_command_env" => {
-            Some((vec![types::I64, types::I64, types::I64], Some(types::I64)))
-        }
+        "riven_command_env" => Some((vec![types::I64, types::I64, types::I64], Some(types::I64))),
         "riven_command_current_dir" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "riven_command_status" => Some((vec![types::I64], Some(types::I64))),
         "riven_command_output" => Some((vec![types::I64], Some(types::I64))),
@@ -113,9 +111,7 @@ pub(super) fn runtime_signature(name: &str) -> Option<(Vec<Type>, Option<Type>)>
         "riven_open_options_append" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "riven_open_options_truncate" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "riven_open_options_create" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "riven_open_options_create_new" => {
-            Some((vec![types::I64, types::I64], Some(types::I64)))
-        }
+        "riven_open_options_create_new" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "riven_print_int" => Some((vec![types::I64], None)),
         // Conversions
         "riven_int_to_string" => Some((vec![types::I64], Some(types::I64))),

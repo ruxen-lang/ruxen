@@ -226,7 +226,8 @@ fn command_status_true_returns_zero() {
     assert!(
         stdout.contains("ok"),
         "expected exit code 0 from /usr/bin/true via Command, got: stdout=[{}] stderr=[{}]",
-        stdout, stderr
+        stdout,
+        stderr
     );
 }
 
@@ -240,7 +241,8 @@ fn command_status_false_returns_one() {
     assert!(
         stdout.contains("ok"),
         "expected exit code 1 from /usr/bin/false via Command, got: stdout=[{}] stderr=[{}]",
-        stdout, stderr
+        stdout,
+        stderr
     );
 }
 
@@ -255,7 +257,8 @@ fn command_arg_passes_through() {
     assert!(
         stdout.contains("ok"),
         "expected exit 0 from /bin/echo with arg, got: stdout=[{}] stderr=[{}]",
-        stdout, stderr
+        stdout,
+        stderr
     );
 }
 
@@ -270,7 +273,8 @@ fn command_args_bulk() {
     assert!(
         stdout.contains("ok"),
         "expected exit 0 from /bin/echo with .args bulk, got: stdout=[{}] stderr=[{}]",
-        stdout, stderr
+        stdout,
+        stderr
     );
 }
 
@@ -286,7 +290,8 @@ fn command_env_visible_to_child() {
     assert!(
         stdout.contains("env_ok"),
         "expected RIVEN_TEST=1 in captured stdout, got: stdout=[{}] stderr=[{}]",
-        stdout, stderr
+        stdout,
+        stderr
     );
 }
 
@@ -302,7 +307,8 @@ fn command_current_dir_changes_cwd() {
     assert!(
         stdout.contains("cwd_ok"),
         "expected pwd output to contain /tmp, got: stdout=[{}] stderr=[{}]",
-        stdout, stderr
+        stdout,
+        stderr
     );
 }
 
@@ -317,7 +323,8 @@ fn command_output_captures_stdout() {
     assert!(
         stdout.contains("stdout_ok"),
         "expected captured stdout to contain xyz, got: stdout=[{}] stderr=[{}]",
-        stdout, stderr
+        stdout,
+        stderr
     );
 }
 
@@ -331,7 +338,8 @@ fn command_output_captures_stderr() {
     assert!(
         stdout.contains("stderr_ok"),
         "expected captured stderr to contain err, got: stdout=[{}] stderr=[{}]",
-        stdout, stderr
+        stdout,
+        stderr
     );
 }
 
@@ -347,6 +355,7 @@ fn command_nonexistent_binary_returns_err() {
     assert!(
         stdout.contains("err_ok"),
         "expected Err on missing binary, got: stdout=[{}] stderr=[{}]",
-        stdout, stderr
+        stdout,
+        stderr
     );
 }

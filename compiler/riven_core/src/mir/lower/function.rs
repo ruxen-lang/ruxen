@@ -7,7 +7,11 @@ impl<'a> Lowerer<'a> {
         self.lower_method(&func.name, func)
     }
 
-    pub(super) fn lower_method(&mut self, name: &str, func: &HirFuncDef) -> Result<MirFunction, String> {
+    pub(super) fn lower_method(
+        &mut self,
+        name: &str,
+        func: &HirFuncDef,
+    ) -> Result<MirFunction, String> {
         // Reset per-function state.
         self.def_to_local.clear();
         self.cell_promoted.clear();

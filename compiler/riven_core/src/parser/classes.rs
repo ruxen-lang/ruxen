@@ -31,7 +31,7 @@ impl Parser {
         let mut variants = Vec::new();
         let mut methods: Vec<FuncDef> = Vec::new();
         let mut inner_impls: Vec<InnerImpl> = Vec::new();
-        let mut derive_traits = Vec::new();
+        let derive_traits = Vec::new();
         // ruby-naming.spec.md §3.2: section-marker visibility for inline
         // method declarations. Default public, mirrors `parse_class_def`.
         let mut current_vis = Visibility::Public;
@@ -291,7 +291,7 @@ impl Parser {
         let mut fields = Vec::new();
         let mut methods: Vec<FuncDef> = Vec::new();
         let mut inner_impls: Vec<InnerImpl> = Vec::new();
-        let mut derive_traits = Vec::new();
+        let derive_traits = Vec::new();
         // ruby-naming.spec.md §3.5: `layout c` / `layout packed` /
         // `layout transparent` directives populate this list (replaces
         // the retired `@[repr(...)]` prefix attribute).
@@ -833,7 +833,7 @@ impl Parser {
         let mut fields = Vec::new();
         let mut methods = Vec::new();
         let mut inner_impls = Vec::new();
-        let mut derive_traits = Vec::new();
+        let derive_traits = Vec::new();
         // ruby-naming.spec.md §3.2: `public` / `private` / `protected` are
         // SECTION MARKERS. Public by default; each bare marker switches the
         // visibility applied to all subsequent declarations until the next

@@ -30,8 +30,7 @@ impl<'a> Lowerer<'a> {
                 // two, so the Cranelift verifier rejects the call. We
                 // route these names through the same direct-dispatch
                 // path as `Command.new` instead.
-                let is_file_static_ctor = (type_name == "File"
-                    || type_name.starts_with("File["))
+                let is_file_static_ctor = (type_name == "File" || type_name.starts_with("File["))
                     && matches!(
                         method_name.as_str(),
                         "open" | "create" | "append" | "open_options"
@@ -49,8 +48,7 @@ impl<'a> Lowerer<'a> {
                         method_name.as_str(),
                         "from_secs" | "from_millis" | "from_micros" | "from_nanos"
                     );
-                let is_instant_static_ctor =
-                    type_name == "Instant" && method_name == "now";
+                let is_instant_static_ctor = type_name == "Instant" && method_name == "now";
                 let is_collection_ctor = method_name == "new"
                     || is_file_static_ctor
                     || is_duration_static_ctor

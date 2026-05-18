@@ -322,7 +322,12 @@ impl<'a> BorrowChecker<'a> {
 
     // ─── If ────────────────────────────────────────────────────────
 
-    pub(super) fn check_if(&mut self, cond: &HirExpr, then_branch: &HirExpr, else_branch: Option<&HirExpr>) {
+    pub(super) fn check_if(
+        &mut self,
+        cond: &HirExpr,
+        then_branch: &HirExpr,
+        else_branch: Option<&HirExpr>,
+    ) {
         self.check_expr(cond);
 
         // Snapshot state before branches

@@ -130,9 +130,7 @@ pub(super) fn insert_drops(
                     return true;
                 }
                 if let Ty::Class { name, .. } = &local.ty {
-                    if user_drop_classes.contains(name)
-                        && dealloc_safe.contains(&local.id)
-                    {
+                    if user_drop_classes.contains(name) && dealloc_safe.contains(&local.id) {
                         return true;
                     }
                 }

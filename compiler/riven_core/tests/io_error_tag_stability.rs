@@ -124,9 +124,7 @@ fn io_error_variant_tags_match_runtime_and_resolver() {
                         .trim_end_matches(|c: char| !c.is_ascii_digit())
                         .trim();
                     if let Ok(tag) = tag_str.parse::<usize>() {
-                        if KNOWN.contains(&name)
-                            && !resolver_tags.iter().any(|(n, _)| n == name)
-                        {
+                        if KNOWN.contains(&name) && !resolver_tags.iter().any(|(n, _)| n == name) {
                             resolver_tags.push((name.to_string(), tag));
                         }
                     }

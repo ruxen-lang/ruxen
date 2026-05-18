@@ -102,7 +102,7 @@ impl Parser {
         let start = self.current_span();
         self.advance(); // consume & or &mut
 
-        let mut lifetime = None;
+        let lifetime;
         let mutable;
 
         // ruby-naming.spec.md §3.3: lifetime names in type position are

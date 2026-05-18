@@ -109,7 +109,12 @@ impl<'a> BorrowChecker<'a> {
 
     // ─── Assign ────────────────────────────────────────────────────
 
-    pub(super) fn check_assign(&mut self, target: &HirExpr, value: &HirExpr, semantics: MoveSemantics) {
+    pub(super) fn check_assign(
+        &mut self,
+        target: &HirExpr,
+        value: &HirExpr,
+        semantics: MoveSemantics,
+    ) {
         // Check the value first
         self.check_expr(value);
 
@@ -286,7 +291,11 @@ impl<'a> BorrowChecker<'a> {
         self.borrows.kill_after_checkpoint(checkpoint);
     }
 
-    pub(super) fn lookup_send_required_params(&self, callee_name: &str, arg_len: usize) -> Vec<bool> {
+    pub(super) fn lookup_send_required_params(
+        &self,
+        callee_name: &str,
+        arg_len: usize,
+    ) -> Vec<bool> {
         let mut required = vec![false; arg_len];
         let Some(def) = self.symbols.iter().find(|def| {
             def.name == callee_name
@@ -304,7 +313,12 @@ impl<'a> BorrowChecker<'a> {
         required
     }
 
-    pub(super) fn check_send_required_closure(&mut self, captures: &[Capture], is_move: bool, span: &Span) {
+    pub(super) fn check_send_required_closure(
+        &mut self,
+        captures: &[Capture],
+        is_move: bool,
+        span: &Span,
+    ) {
         for cap in captures {
             if cap.by_move || is_move {
                 if !cap.ty.is_send_with(self.symbols) {

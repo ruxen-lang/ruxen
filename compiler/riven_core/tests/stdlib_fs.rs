@@ -252,7 +252,8 @@ fn fs_metadata_file_returns_len_and_kind() {
 #[test]
 fn fs_metadata_dir_reports_is_dir() {
     let dir = unique_tmp_dir("metadata_dir");
-    let source = rvn("fs_metadata_dir_reports_is_dir").replace("__DIR__", &dir.display().to_string());
+    let source =
+        rvn("fs_metadata_dir_reports_is_dir").replace("__DIR__", &dir.display().to_string());
     let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_fs_metadata_dir");
     let _ = std::fs::remove_dir_all(&dir);
     assert!(ok, "stderr: {}", stderr);
@@ -385,7 +386,8 @@ fn fs_create_dir_all_idempotent() {
     let dir = unique_tmp_dir("cdr_idem");
     let path = dir.join("x").join("y");
 
-    let source = rvn("fs_create_dir_all_idempotent").replace("__PATH__", &path.display().to_string());
+    let source =
+        rvn("fs_create_dir_all_idempotent").replace("__PATH__", &path.display().to_string());
     let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_fs_create_dir_all_idempotent");
     let _ = std::fs::remove_dir_all(&dir);
     assert!(ok, "stderr: {}", stderr);
@@ -410,8 +412,7 @@ fn fs_remove_dir_all_tree() {
     std::fs::write(&outside, b"OUTSIDE - must survive").expect("write outside");
     std::os::unix::fs::symlink(&outside, root.join("link")).expect("symlink");
 
-    let source =
-        rvn("fs_remove_dir_all_tree").replace("__ROOT__", &root.display().to_string());
+    let source = rvn("fs_remove_dir_all_tree").replace("__ROOT__", &root.display().to_string());
     let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_fs_remove_dir_all_tree");
     assert!(ok, "stderr: {}", stderr);
     assert!(stdout.contains("removed"), "remove: {}", stdout);
@@ -438,8 +439,7 @@ fn fs_canonicalize_resolves_symlink_to_target() {
     let link = canon_dir.join("alias.txt");
     std::os::unix::fs::symlink(&target, &link).expect("symlink");
 
-    let source =
-        rvn("fs_canonicalize_symlink").replace("__LINK__", &link.display().to_string());
+    let source = rvn("fs_canonicalize_symlink").replace("__LINK__", &link.display().to_string());
     let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_fs_canonicalize_symlink");
     let _ = std::fs::remove_dir_all(&dir);
     assert!(ok, "stderr: {}", stderr);
@@ -459,12 +459,15 @@ fn fs_write_atomic_replaces_existing_file() {
     let dir = unique_tmp_dir("write_atomic");
     let file = dir.join("config.toml");
 
-    let source =
-        rvn("fs_write_atomic_replaces").replace("__FILE__", &file.display().to_string());
+    let source = rvn("fs_write_atomic_replaces").replace("__FILE__", &file.display().to_string());
     let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_fs_write_atomic_replaces");
     assert!(ok, "stderr: {}", stderr);
     assert!(stdout.contains("first_ok"), "first: {}", stdout);
-    assert!(stdout.contains("first=first contents"), "first read: {}", stdout);
+    assert!(
+        stdout.contains("first=first contents"),
+        "first read: {}",
+        stdout
+    );
     assert!(stdout.contains("second_ok"), "second: {}", stdout);
     assert!(stdout.contains("second=second"), "second read: {}", stdout);
 

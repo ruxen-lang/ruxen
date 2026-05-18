@@ -1,18 +1,18 @@
 use super::*;
 
-mod retain;
-mod sort_by;
-mod entry_or_insert;
+mod all_any;
 mod each;
+mod entry_or_insert;
 mod filter;
 mod find;
-mod position;
-mod map;
-mod partition;
 mod fold;
-mod all_any;
+mod map;
 mod option_map;
+mod partition;
+mod position;
 mod result_map;
+mod retain;
+mod sort_by;
 mod unwrap_or_else;
 
 impl<'a> Lowerer<'a> {

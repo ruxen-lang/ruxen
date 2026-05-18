@@ -299,8 +299,7 @@ fn io_error_message_dispatches_per_variant_on_empty_stdin() {
 #[test]
 fn io_error_new_variants_construct_and_message_passes_through() {
     let source = rvn("io_error_new_variants_construct_and_message");
-    let (stdout, _stderr, ok) =
-        compile_and_run(&source, "stdlib_io_err_new_variants");
+    let (stdout, _stderr, ok) = compile_and_run(&source, "stdlib_io_err_new_variants");
     assert!(ok, "binary failed; stdout=[{stdout}]");
     let expected = "no listener\nrst\nabort\nno sock\nin use\nunavail\n\
                     bad bytes\ntimeout\nwrote 0\nnope\nno mem\n";
@@ -316,8 +315,7 @@ fn io_error_new_variants_construct_and_message_passes_through() {
 #[test]
 fn io_error_kind_round_trip_returns_matching_io_error_kind_variant() {
     let source = rvn("io_error_kind_round_trip");
-    let (stdout, _stderr, ok) =
-        compile_and_run(&source, "stdlib_io_err_kind_round_trip");
+    let (stdout, _stderr, ok) = compile_and_run(&source, "stdlib_io_err_kind_round_trip");
     assert!(ok, "binary failed; stdout=[{stdout}]");
     let expected = "kind:NotFound\nkind:PermissionDenied\n\
                     kind:ConnectionRefused\nkind:TimedOut\nkind:OutOfMemory\n";
@@ -331,8 +329,7 @@ fn io_error_kind_round_trip_returns_matching_io_error_kind_variant() {
 #[test]
 fn io_error_exhaustive_20_variant_match_compiles_and_runs() {
     let source = rvn("io_error_exhaustive_match_all_20_variants");
-    let (stdout, _stderr, ok) =
-        compile_and_run(&source, "stdlib_io_err_exhaustive");
+    let (stdout, _stderr, ok) = compile_and_run(&source, "stdlib_io_err_exhaustive");
     assert!(ok, "binary failed; stdout=[{stdout}]");
     assert_eq!(stdout, "nf\not\ncr\nom\n", "got: {:?}", stdout);
 }

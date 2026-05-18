@@ -108,7 +108,7 @@ fn parse_module_with_diverse_items() {
         module
             .items
             .iter()
-            .map(|i| std::mem::discriminant(i))
+            .map(std::mem::discriminant)
             .collect::<Vec<_>>()
     );
 }
