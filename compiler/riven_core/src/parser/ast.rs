@@ -890,6 +890,15 @@ pub struct ExternBlock {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FfiFunction {
     pub name: String,
+    /// Optional C-symbol alias declared via `def name as "<c-symbol>"(...)`.
+    /// When `None`, the Riven-side name (`name`) is the linked C symbol —
+    /// the historical behaviour of `lib "X" ... end` blocks. When `Some`,
+    /// the Riven name and the C symbol differ; this is the per-decl
+    /// rename surface used by stdlib self-hosting (#06.8) so that a
+    /// Riven method like `File.open` can bind to `riven_file_open`.
+    /// Resolver/MIR/codegen wiring is deferred to a follow-up commit;
+    /// today this field is parsed and stored but not yet consumed.
+    pub c_symbol: Option<String>,
     pub params: Vec<FfiParam>,
     pub return_type: Option<TypeExpr>,
     pub is_variadic: bool,

@@ -1,0 +1,5 @@
+lib "riven_runtime"
+  def add_one as "riven_test_add_one"(x: I32) -> I32
+  def double(x: I32) -> I32
+  def sub as "riven_test_sub"(a: I32, b: I32) -> I32
+end

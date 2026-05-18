@@ -87,13 +87,46 @@ impl Parser {
         }
     }
 
-    /// Parse a single FFI function declaration: `def name(params) -> RetType`
+    /// Parse a single FFI function declaration: `def name(params) -> RetType`,
+    /// optionally with an explicit C-symbol alias: `def name as "<sym>"(params) -> RetType`.
+    ///
+    /// When the `as "..."` clause is present, the Riven-side name (`name`)
+    /// is the user-facing identifier — what call sites and `use` statements
+    /// reference — while the string literal is the verbatim C symbol that
+    /// the linker resolves against `library/runtime/*.c`. This is the
+    /// per-decl rename surface that stdlib self-hosting (#06.8) needs so
+    /// that a Riven method like `File.open` can bind to `riven_file_open`
+    /// without forcing the Riven identifier to be `riven_file_open` too.
     fn parse_ffi_function(&mut self) -> FfiFunction {
         let start = self.current_span();
         self.advance(); // consume `def`
         self.skip_newlines();
 
         let name = self.expect_any_identifier();
+
+        // Optional `as "<c-symbol>"` rename clause. The C symbol is taken
+        // verbatim — no mangling, no namespacing — same contract as
+        // Rust's `#[link_name = "..."]`. If the link symbol does not
+        // exist at link time, the linker fails (the correct failure
+        // mode for an explicit FFI binding).
+        let c_symbol = if self.eat(TokenKind::As) {
+            self.skip_newlines();
+            match self.current_kind().clone() {
+                TokenKind::StringLiteral(s) => {
+                    self.advance();
+                    Some(s)
+                }
+                _ => {
+                    self.error(
+                        "expected a string literal after `as` in FFI def — \
+                         `def name as \"riven_c_symbol\"(...)`",
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         let mut params = Vec::new();
         let mut is_variadic = false;
@@ -147,6 +180,7 @@ impl Parser {
         let span = self.span_from(&start);
         FfiFunction {
             name,
+            c_symbol,
             params,
             return_type,
             is_variadic,

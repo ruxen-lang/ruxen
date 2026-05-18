@@ -890,6 +890,13 @@ fn format_ffi_function(func: &FfiFunction, comments: &CommentMap) -> Doc {
 
     let mut parts = vec![text("def "), text(func.name.clone())];
 
+    // Preserve the `as "<c-symbol>"` rename clause when present so the
+    // formatter round-trips per-decl C-symbol aliases (#06.8).
+    if let Some(sym) = &func.c_symbol {
+        parts.push(text(" as "));
+        parts.push(text(format!("\"{}\"", sym)));
+    }
+
     if !param_docs.is_empty() || func.is_variadic {
         let mut all_params = param_docs;
         if func.is_variadic {
