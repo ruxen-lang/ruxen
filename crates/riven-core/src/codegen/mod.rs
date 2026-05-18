@@ -6,6 +6,7 @@ pub mod cranelift;
 pub mod layout;
 pub mod object;
 pub mod runtime;
+mod runtime_table;
 
 #[cfg(feature = "llvm")]
 pub mod llvm;
