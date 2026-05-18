@@ -7,6 +7,15 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+### Added
+- **#06.5 Phase 2 sync I/O completeness.** TcpListener/TcpStream
+  classes (incl. binary-safe read + socket timeouts), BufReader[R] /
+  BufWriter[W] over the closed inner set {File, TcpStream}, std.rand
+  (kernel CSPRNG), Command + Instant promotion to the canonical
+  surface (legacy `process_run` / `now_ns` free-fns retired).
+  Mixin/trait-driven Read/Write surface is deferred to v1.5; closed-set
+  inner check at typeck (E0714) keeps the runtime kind-tag honest.
+
 ### Fixed
 - **compiler: `any Fn(...)` closures are now dispatchable via
   indirect call (#06.9).** Works in let-binding, array storage,

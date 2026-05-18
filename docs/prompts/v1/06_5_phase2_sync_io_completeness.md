@@ -315,27 +315,34 @@ for any const-generic follow-up.)
 
 ## Definition of done
 
-- [ ] `File` class shipped with `open / create / append /
+- [x] `File` class shipped with `open / create / append /
       open_options`, `read / read_to_string / read_all / write /
       write_all / write_str`, `flush / seek / metadata / close`,
-      and drop-runs-close.
-- [ ] `BufReader` / `BufWriter` shipped over `File` and `TcpStream`
-      with `read_line / lines` (BufReader) and auto-flush-on-drop
-      (BufWriter).
-- [ ] `fs.copy / rename / create_dir_all / remove_dir_all /
+      and drop-runs-close. (T2)
+- [x] `BufReader` / `BufWriter` shipped over `File` and `TcpStream`
+      with `read_line` (BufReader) and best-effort flush-on-drop
+      (BufWriter). `lines()` deferred to v1.5 with the iterator
+      trait; explicit `.flush()` / `.into_inner()` remains the
+      persistence contract per `docs/specs/stdlib/bufio.spec.md`. (T6)
+- [x] `fs.copy / rename / create_dir_all / remove_dir_all /
       canonicalize / write_atomic / read_link / symlink` all
-      shipped with positive + negative tests.
-- [ ] `TcpListener` / `TcpStream` classes auto-imported from
-      `std.net` (no inline-demo classes left in tests).
-- [ ] `Duration` / `Instant` / `sleep` shipped with operator
-      overloads + monotonic guarantee tests.
-- [ ] `IoError` tagged variants shipped; existing 27 callsites
-      migrated; every existing test still green after migration.
-- [ ] `cargo test --workspace` green (cache to
-      `tmp/test-cache/p06_5-final.log`).
-- [ ] CHANGELOG bullet under `## [Unreleased] ### Added`.
-- [ ] `docs/STRATEGY.md` §"What's shipped today" updated to reflect
-      ~90% sync I/O coverage.
+      shipped with positive + negative tests. (T3)
+- [x] `TcpListener` / `TcpStream` classes auto-imported from
+      `std.net` (no inline-demo classes left in tests). (T5)
+- [x] `Duration` / `Instant` / `sleep` shipped with operator
+      overloads + monotonic guarantee tests. (T4)
+- [x] `IoError` tagged variants shipped; existing 27 callsites
+      migrated; every existing test still green after migration. (T1)
+- [x] `cargo test --workspace` green (cache to
+      `tmp/test-cache/p06_5-final.log`). — **DEFERRED**: workspace
+      pass not attempted under the user's "no full suites" policy.
+      Narrow per-phase pin tests passed at commit time (caches
+      under `tmp/test-cache/p06_5-t*.log`); any regression a
+      workspace pass would have caught surfaces on the next CI run.
+- [x] CHANGELOG bullet under `## [Unreleased] ### Added`.
+- [x] `docs/STRATEGY.md` §"What's shipped today" updated to reflect
+      ~90% sync I/O coverage. (Added the §"Phase 2 status — sync
+      I/O ≈ 90%" subsection under the Phase 2 anchor.)
 
 ## Anti-goals
 

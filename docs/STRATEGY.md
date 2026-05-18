@@ -119,6 +119,18 @@ Why this works:
   templates.
 - WASI compatibility for the stdlib's fs/process layers.
 
+#### Phase 2 status — sync I/O ≈ 90% (post-#06.5)
+
+`fs.*` + `File` + `OpenOptions` + `SeekFrom`, `Command` + `Output` +
+`ExitStatus`, `TcpListener` + `TcpStream` (incl. binary-safe read and
+socket timeouts), `BufReader[R]` + `BufWriter[W]` over the closed
+`{File, TcpStream}` inner set, `Instant` + `Duration` + `sleep`, and
+`std.rand` (kernel CSPRNG) are all shipped. The 10% gap is mostly
+`BufReader.lines()` (deferred to v1.5 with the iterator trait), a
+formal `Read`/`Write` mixin (also v1.5), `Stdin/Stdout/Stderr` BufReader
+flavour, and the `IntoInnerError` recovery type Rust ships on
+`BufWriter`.
+
 ### Wedge #3 — "A flagship app" (slowest but most defensible)
 
 Rails made Ruby. Phoenix made Elixir. TensorFlow made Python ML.
