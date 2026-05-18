@@ -1,0 +1,34 @@
+use std.fs.{read_to_string, remove_file}
+use std.io.File
+use std.io.BufWriter
+
+def write_payload(bw: BufWriter[File], bytes: &Array[Int])
+  match bw.write_all(bytes)
+    Ok(_)  -> puts "write_all=ok"
+    Err(_) -> puts "write_all=err"
+  end
+  match bw.flush()
+    Ok(_)  -> puts "flush=ok"
+    Err(_) -> puts "flush=err"
+  end
+end
+
+def write_into(f: File)
+  let bw = BufWriter.new(f)
+  var bytes: Array[Int] = Array.new
+  bytes.push(104) # h
+  bytes.push(105) # i
+  write_payload(bw, &bytes)
+end
+
+def main
+  match File.create("/tmp/riven_e2e_574_bufwrite.txt")
+    Ok(f)  -> write_into(f)
+    Err(_) -> puts "create_fail"
+  end
+  match read_to_string("/tmp/riven_e2e_574_bufwrite.txt")
+    Ok(s)  -> puts "back=#{s}"
+    Err(_) -> puts "read_fail"
+  end
+  remove_file("/tmp/riven_e2e_574_bufwrite.txt").expect!("remove")
+end

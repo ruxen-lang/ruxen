@@ -1,0 +1,37 @@
+use std.io.File
+use std.io.BufReader
+
+def show_first(line: String)
+  puts "first=#{line}"
+end
+
+def report_first(opt: Option[String])
+  match opt
+    Some(line) -> show_first(line)
+    None       -> puts "eof"
+  end
+end
+
+def read_first(br: &var BufReader[File])
+  match br.read_line()
+    Ok(opt) -> report_first(opt)
+    Err(_)  -> puts "read_fail"
+  end
+end
+
+def exercise(f: File)
+  var br = BufReader.new(f)
+  read_first(&var br)
+  let inner = br.into_inner()
+  match inner.read_to_string()
+    Ok(s)  -> puts "rest_len=#{s.len}"
+    Err(_) -> puts "rest_fail"
+  end
+end
+
+def main
+  match File.open("__FILE__")
+    Ok(f) -> exercise(f)
+    Err(_) -> puts "open_fail"
+  end
+end

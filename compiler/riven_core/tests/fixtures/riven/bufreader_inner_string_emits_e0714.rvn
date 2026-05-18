@@ -1,0 +1,7 @@
+use std.io.BufReader
+
+def main
+  let s = "not-a-file-handle"
+  # error[E0714]: BufReader/BufWriter inner type must be File or TcpStream (v1)
+  let _br = BufReader.new(s)
+end

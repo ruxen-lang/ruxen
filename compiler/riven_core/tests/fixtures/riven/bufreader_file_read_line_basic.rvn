@@ -1,0 +1,31 @@
+use std.io.File
+use std.io.BufReader
+
+def handle(opt: Option[String]) -> Bool
+  match opt
+    Some(line) -> handle_some(line)
+    None       -> true
+  end
+end
+
+def handle_some(line: String) -> Bool
+  puts "line=#{line}"
+  false
+end
+
+def drain(br: BufReader[File])
+  var done = false
+  while !done
+    match br.read_line()
+      Ok(opt) -> done = handle(opt)
+      Err(_)  -> done = true
+    end
+  end
+end
+
+def main
+  match File.open("__FILE__")
+    Ok(f)  -> drain(BufReader.new(f))
+    Err(_) -> puts "open_fail"
+  end
+end

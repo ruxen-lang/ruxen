@@ -1,0 +1,23 @@
+use std.net.TcpStream
+use std.io.BufReader
+
+# E2E single-side smoke: BufReader over TcpStream must compile + lower.
+# A real read-line round-trip requires a listening peer (covered by the
+# stdlib_bufio.rs pin test once it gains two-sided host coordination).
+# Here we only prove the connect-error path lifts through BufReader and
+# we never construct one — that's enough to exercise the typeck/lowering
+# arms specific to the TCP suffix.
+def try_read(s: TcpStream)
+  let br = BufReader.new(s)
+  match br.read_line()
+    Ok(_)  -> puts "bufread=ok"
+    Err(_) -> puts "bufread=err"
+  end
+end
+
+def main
+  match TcpStream.connect(&"127.0.0.1:1")
+    Ok(s)  -> try_read(s)
+    Err(_) -> puts "connect=err"
+  end
+end
