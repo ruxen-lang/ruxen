@@ -1,0 +1,8 @@
+def main() -> Int
+  let result = bootstrap_smoke_add_one(41)
+  if result == 42
+    0
+  else
+    1
+  end
+end

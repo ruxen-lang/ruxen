@@ -1,0 +1,8 @@
+def main() -> Int
+  let v = foo(41)
+  if v == 42
+    0
+  else
+    1
+  end
+end

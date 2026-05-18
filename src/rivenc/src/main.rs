@@ -5,8 +5,10 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 use riven_core::borrow_check;
+use riven_core::diagnostics::Diagnostic;
 use riven_core::lexer::Lexer;
 use riven_core::parser::Parser;
+use riven_core::resolve::bootstrap as stdlib_bootstrap;
 use riven_core::typeck;
 
 use rivenc::cache;
@@ -497,6 +499,28 @@ fn report_statuses(statuses: &std::collections::HashMap<String, FileStatus>, ver
     }
 }
 
+/// Run the stdlib bootstrap loader and, on any diagnostic, print every
+/// one with a clear `stdlib bootstrap failed:` header and exit
+/// non-zero. The compiler cannot make progress without a clean prelude
+/// — a missing or broken stdlib file is a fatal install/build issue,
+/// not a recoverable user-source error.
+///
+/// Wave 1.5: returns the parsed `_bootstrap_smoke.rvn` (or whatever
+/// [`stdlib_bootstrap::BOOTSTRAP_FILES`] lists). Wave 2+ will return
+/// the full self-hosted stdlib prelude.
+fn load_bootstrap_or_exit() -> Vec<riven_core::parser::ast::Program> {
+    let mut bootstrap_diags: Vec<Diagnostic> = Vec::new();
+    let programs = stdlib_bootstrap::run_bootstrap(&mut bootstrap_diags);
+    if !bootstrap_diags.is_empty() {
+        eprintln!("stdlib bootstrap failed:");
+        for d in &bootstrap_diags {
+            eprintln!("  {}", d);
+        }
+        process::exit(1);
+    }
+    programs
+}
+
 /// Compile one source string into its object bytes plus a public signature.
 ///
 /// Returns an error string containing all diagnostics on pipeline failure. The
@@ -509,6 +533,12 @@ fn compile_to_object(
     backend_override: Option<&str>,
     opt_level_override: Option<&str>,
 ) -> Result<CompileOutput, String> {
+    // Stdlib bootstrap is loaded BEFORE user lex/parse so the resolver
+    // can merge the prelude in front of the user program. A broken
+    // stdlib aborts the process immediately — see
+    // [`load_bootstrap_or_exit`].
+    let bootstrap_programs = load_bootstrap_or_exit();
+
     let mut lexer = Lexer::new(source);
     let tokens = lexer.tokenize().map_err(|ds| {
         ds.iter()
@@ -525,7 +555,7 @@ fn compile_to_object(
             .join("\n")
     })?;
 
-    let type_result = typeck::type_check(&program);
+    let type_result = typeck::type_check_with_bootstrap(&program, &bootstrap_programs);
     let has_errors = type_result
         .diagnostics
         .iter()
@@ -594,6 +624,12 @@ fn run_compile_direct(
     backend_override: Option<&str>,
     opt_level_override: Option<&str>,
 ) {
+    // Bootstrap the stdlib prelude before touching user source so the
+    // emit modes downstream (hir / mir / object) see the prelude-merged
+    // resolver state. A broken stdlib aborts via
+    // [`load_bootstrap_or_exit`] — same policy as the cached path.
+    let bootstrap_programs = load_bootstrap_or_exit();
+
     let mut lexer = Lexer::new(source);
     let tokens = match lexer.tokenize() {
         Ok(tokens) => tokens,
@@ -629,7 +665,7 @@ fn run_compile_direct(
         return;
     }
 
-    let type_result = typeck::type_check(&program);
+    let type_result = typeck::type_check_with_bootstrap(&program, &bootstrap_programs);
     let has_type_errors = type_result
         .diagnostics
         .iter()

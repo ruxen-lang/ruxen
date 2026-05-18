@@ -58,32 +58,42 @@ impl Drop for TempDir {
 }
 
 #[test]
-fn bootstrap_files_list_is_empty_in_wave_1() {
-    // Wave 1 deliverable: the loader exists, but the production
-    // bootstrap list is empty. Wave 2 will add `iter.rvn` and
-    // `net.rvn` first (per the prompt's Wave 2 plan); guarding the
-    // empty list here makes accidental Wave-2 work in Wave-1
-    // commits fail loudly.
-    assert!(
-        BOOTSTRAP_FILES.is_empty(),
-        "BOOTSTRAP_FILES must stay empty in Wave 1 — got {:?}",
+fn bootstrap_files_list_holds_wave_1_5_smoke_only() {
+    // Wave 1.5 (#06.8 Phase 3): the bootstrap list ships exactly one
+    // proof-of-life file (`_bootstrap_smoke.rvn`). Pinning the contents
+    // here makes any accidental Wave-2 addition surface as a test
+    // delta — the Wave-2 brief is allowed to grow this list, but a
+    // drive-by additive change should not.
+    assert_eq!(
+        BOOTSTRAP_FILES,
+        &["_bootstrap_smoke.rvn"],
+        "BOOTSTRAP_FILES drifted from the Wave-1.5 baseline — got {:?}",
         BOOTSTRAP_FILES
     );
 }
 
 #[test]
-fn run_bootstrap_with_empty_list_is_a_noop() {
+fn run_bootstrap_parses_wave_1_5_smoke_file_clean() {
+    // Production `run_bootstrap` should parse the Wave-1.5 smoke file
+    // without emitting any diagnostics. If this fails, the
+    // `library/std/src/_bootstrap_smoke.rvn` file is missing or
+    // doesn't parse — both fatal for the driver.
     let mut diags = Vec::<Diagnostic>::new();
     let programs = run_bootstrap(&mut diags);
     assert!(
         diags.is_empty(),
-        "production run_bootstrap should emit zero diagnostics in Wave 1; got: {:?}",
+        "production run_bootstrap should emit zero diagnostics; got: {:?}",
         diags
     );
-    assert!(
-        programs.is_empty(),
-        "production run_bootstrap should return zero programs in Wave 1; got len {}",
+    assert_eq!(
+        programs.len(),
+        1,
+        "expected the single Wave-1.5 smoke program; got {}",
         programs.len()
+    );
+    assert!(
+        !programs[0].items.is_empty(),
+        "parsed smoke program should contain at least the lib block"
     );
 }
 

@@ -36,14 +36,31 @@ pub struct TypeCheckResult {
 /// 3. Type inference (resolve all Infer types)
 /// 4. Final validation (check no unresolved types remain)
 pub fn type_check(program: &ast::Program) -> TypeCheckResult {
-    // Phase 1: Name resolution
+    type_check_with_bootstrap(program, &[])
+}
+
+/// Type-check a parsed user `program` with stdlib `bootstrap_programs`
+/// merged into the resolver scope before user-code resolution. The
+/// driver (`rivenc`) calls this with the output of
+/// `riven_core::resolve::bootstrap::run_bootstrap`; callers that don't
+/// want the prelude (today: most tests) keep using
+/// [`type_check`](type_check) and get an empty-bootstrap shortcut for
+/// free.
+///
+/// The pipeline is identical to `type_check` once name resolution is
+/// done — bootstrap programs only contribute to Phase 1.
+pub fn type_check_with_bootstrap(
+    program: &ast::Program,
+    bootstrap_programs: &[ast::Program],
+) -> TypeCheckResult {
+    // Phase 1: Name resolution (with bootstrap prelude merged in)
     let resolver = Resolver::new();
     let ResolveResult {
         mut program,
         mut symbols,
         mut type_context,
         mut diagnostics,
-    } = resolver.resolve(program);
+    } = resolver.resolve_with_bootstrap(program, bootstrap_programs);
 
     // Phase 2: Validate derive usage and collect all trait impls
     diagnostics.extend(crate::implicit_includes::validate_program(

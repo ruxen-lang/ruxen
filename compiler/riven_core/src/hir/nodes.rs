@@ -54,6 +54,13 @@ pub struct HirFfiFunc {
     /// C symbol (historical behaviour). `Some(c)` means the linker
     /// resolves the call to symbol `c`.
     pub c_symbol: Option<String>,
+    /// #06.8 Phase 3b: optional parent class / mixin name. When `Some`,
+    /// this FFI decl was authored inside a class- or mixin-body `lib`
+    /// block and the MIR bridge must register a `ParentName_riven_name`
+    /// alias-map entry so `MethodCall` dispatch (which mangles to
+    /// `ClassName_method`) routes to the C symbol. `None` is the
+    /// historical top-level `lib`/`extern` case.
+    pub parent_type: Option<String>,
     pub param_types: Vec<crate::hir::types::Ty>,
     pub return_type: Option<crate::hir::types::Ty>,
     pub is_variadic: bool,

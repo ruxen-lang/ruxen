@@ -119,15 +119,56 @@ impl Resolver {
     }
 
     /// Run name resolution on a parsed program.
-    pub fn resolve(mut self, program: &ast::Program) -> ResolveResult {
+    ///
+    /// Equivalent to [`resolve_with_bootstrap`](Self::resolve_with_bootstrap)
+    /// with an empty bootstrap list — kept as the legacy entry point so
+    /// existing callers (tests, REPL, etc.) compile unchanged.
+    pub fn resolve(self, program: &ast::Program) -> ResolveResult {
+        self.resolve_with_bootstrap(program, &[])
+    }
+
+    /// Run name resolution with stdlib bootstrap programs merged into
+    /// the prelude. `bootstrap_programs` are typically the output of
+    /// [`crate::resolve::bootstrap::run_bootstrap`] — each one is a
+    /// parsed `.rvn` file from `library/std/src/`.
+    ///
+    /// Bootstrap programs are dispatched through the same Pass-1
+    /// forward-declaration logic as user code (see
+    /// [`merge_bootstrap_programs`](Self::merge_bootstrap_programs))
+    /// AFTER `register_builtins` and BEFORE the user's program. They
+    /// share the user's `ffi_libs` vector, so any `lib`/`extern` blocks
+    /// inside a stdlib file land on `HirProgram.ffi_libs` exactly like
+    /// user-side decls do — the MIR lowerer and linker do not need to
+    /// know whether a given C-symbol alias came from user code or from
+    /// the bootstrap prelude.
+    ///
+    /// Pass 2 (full resolution / body lowering) only runs on the user
+    /// program. Bootstrap items are forward-declared into the resolver
+    /// scope but their bodies are not lowered here — Wave 1.5 stdlib
+    /// files are signature-only (FFI aliases), so there are no bodies
+    /// to lower. Wave 2 will revisit this when the first stdlib file
+    /// with actual Riven function bodies arrives.
+    pub fn resolve_with_bootstrap(
+        mut self,
+        program: &ast::Program,
+        bootstrap_programs: &[ast::Program],
+    ) -> ResolveResult {
         self.register_builtins();
 
         // Collected FFI library declarations (filled by the
         // `Lib`/`Extern` arms in `register_top_level_type`). Surfaced
         // on `HirProgram::ffi_libs` so MIR lowering can populate
         // `MirProgram::ffi_libs` and rewrite call-site callees to the
-        // declared C symbol.
+        // declared C symbol. The bootstrap merge below contributes to
+        // the SAME vector as user code — there is one ffi_libs list
+        // per compilation, period.
         let mut ffi_libs: Vec<HirFfiLib> = Vec::new();
+
+        // Merge stdlib bootstrap programs BEFORE the user's pass 1 so
+        // forward references from user code into stdlib symbols (e.g.
+        // a user `def main()` calling a bootstrap-loaded `bootstrap_smoke_add_one(...)`)
+        // resolve cleanly.
+        self.merge_bootstrap_programs(bootstrap_programs, &mut ffi_libs);
 
         // Two-pass approach:
         // Pass 1: Register all top-level type names (classes, structs, enums, traits)
@@ -163,6 +204,61 @@ impl Resolver {
             type_context: self.type_context,
             diagnostics: self.diagnostics,
         }
+    }
+
+    /// Merge parsed stdlib `Program`s into the resolver scope.
+    ///
+    /// Called by [`resolve_with_bootstrap`](Self::resolve_with_bootstrap)
+    /// between `register_builtins()` and the user's pass-1 forward-decl
+    /// loop. Each stdlib program's top-level items are dispatched
+    /// through the same registration path that user code uses
+    /// (`register_top_level_type_with_ffi`) — there is no separate
+    /// stdlib grammar, no separate resolver path, no special-casing.
+    ///
+    /// Wave 1.5 only supports the variants needed by today's bootstrap
+    /// content (`Lib`, `Extern`, `Function`, `Class`, `Struct`, `Enum`,
+    /// `Const`). `Mixin`/`Impl`/`Module`/`Use`/`TypeAlias`/`Newtype`
+    /// inside a stdlib file are silently skipped for now — they will
+    /// land in Wave 2 when the first stdlib module that uses them
+    /// migrates. The conservative skip keeps the Phase 3 surface
+    /// minimal; adding them later is purely additive.
+    pub fn merge_bootstrap_programs(
+        &mut self,
+        programs: &[ast::Program],
+        ffi_libs: &mut Vec<HirFfiLib>,
+    ) {
+        for program in programs {
+            for item in &program.items {
+                if Self::is_bootstrap_supported_item(item) {
+                    self.register_top_level_type_with_ffi(item, ffi_libs);
+                }
+            }
+            // Bootstrap files are part of the prelude, so yield scanning
+            // applies to them too — a stdlib helper that uses `yield`
+            // needs its `__block` parameter wired up the same way a
+            // user function does.
+            for item in &program.items {
+                if Self::is_bootstrap_supported_item(item) {
+                    yield_scan::collect_yield_fns(item, &mut self.yield_fns);
+                }
+            }
+        }
+    }
+
+    /// Whitelist of `TopLevelItem` variants the Wave 1.5 bootstrap
+    /// merge path handles. See [`merge_bootstrap_programs`] for the
+    /// rationale on what is deferred.
+    fn is_bootstrap_supported_item(item: &ast::TopLevelItem) -> bool {
+        matches!(
+            item,
+            ast::TopLevelItem::Lib(_)
+                | ast::TopLevelItem::Extern(_)
+                | ast::TopLevelItem::Function(_)
+                | ast::TopLevelItem::Class(_)
+                | ast::TopLevelItem::Struct(_)
+                | ast::TopLevelItem::Enum(_)
+                | ast::TopLevelItem::Const(_)
+        )
     }
 
     // ─── Builtin Registration ───────────────────────────────────────
@@ -627,6 +723,7 @@ impl Resolver {
                     hir_fns.push(HirFfiFunc {
                         riven_name: ffi_fn.name.clone(),
                         c_symbol: ffi_fn.c_symbol.clone(),
+                        parent_type: None,
                         param_types: param_tys,
                         return_type: return_ty_for_hir,
                         is_variadic: ffi_fn.is_variadic,
@@ -703,6 +800,7 @@ impl Resolver {
                     hir_fns.push(HirFfiFunc {
                         riven_name: ffi_fn.name.clone(),
                         c_symbol: ffi_fn.c_symbol.clone(),
+                        parent_type: None,
                         param_types: param_tys,
                         return_type: return_ty_for_hir,
                         is_variadic: ffi_fn.is_variadic,
