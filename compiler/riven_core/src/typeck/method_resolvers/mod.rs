@@ -16,7 +16,7 @@ use crate::hir::nodes::*;
 use crate::hir::types::Ty;
 use crate::lexer::token::Span;
 
-use super::infer::{is_iter_sum_compatible, InferenceEngine};
+use super::infer::{is_bufio_inner_supported, is_iter_sum_compatible, InferenceEngine};
 
 pub(super) fn builtin_method_type(
     eng: &mut InferenceEngine<'_>,
@@ -814,6 +814,144 @@ pub(super) fn builtin_method_type(
                 generic_args: vec![],
             }),
         )),
+        // Phase 2 #06.5 T6: `std::io::BufReader[R]` / `BufWriter[W]`
+        // surface. Static-style constructors (`new` / `with_capacity`)
+        // are dispatched through the collection-ctor fast path in
+        // mir/lower/expr/method_call.rs alongside File / TcpStream.
+        // The inner type R / W is restricted to the closed set
+        // {File, TcpStream} — anything else is E0714 here.
+        //
+        // For `with_capacity(cap: Int, inner: R)` the inner is args[1],
+        // for `new(inner: R)` it's args[0]. We pick the right slot
+        // below.
+        (Ty::Class { name, .. }, "new") if name == "BufReader" => {
+            let inner = args
+                .first()
+                .map(|arg| eng.ctx.resolve(&arg.ty))
+                .unwrap_or_else(|| eng.ctx.fresh_type_var());
+            if !is_bufio_inner_supported(&inner) {
+                eng.diagnostics.push(Diagnostic::error_with_code(
+                    format!(
+                        "`BufReader.new` requires inner type to be `File` or `TcpStream`; got `{inner}`"
+                    ),
+                    span.clone(),
+                    "E0714",
+                ));
+                return Some(Ty::Error);
+            }
+            Some(InferenceEngine::class_ty("BufReader", vec![inner]))
+        }
+        (Ty::Class { name, .. }, "with_capacity") if name == "BufReader" => {
+            let inner = args
+                .get(1)
+                .map(|arg| eng.ctx.resolve(&arg.ty))
+                .unwrap_or_else(|| eng.ctx.fresh_type_var());
+            if !is_bufio_inner_supported(&inner) {
+                eng.diagnostics.push(Diagnostic::error_with_code(
+                    format!(
+                        "`BufReader.with_capacity` requires inner type to be `File` or `TcpStream`; got `{inner}`"
+                    ),
+                    span.clone(),
+                    "E0714",
+                ));
+                return Some(Ty::Error);
+            }
+            Some(InferenceEngine::class_ty("BufReader", vec![inner]))
+        }
+        (Ty::Class { name, generic_args }, "read_line") if name == "BufReader" => {
+            let _ = generic_args; // shape-only; runtime ignores type param
+            Some(Ty::Result(
+                Box::new(InferenceEngine::option_ty(Ty::String)),
+                Box::new(Ty::Enum {
+                    name: "IoError".to_string(),
+                    generic_args: vec![],
+                }),
+            ))
+        }
+        (Ty::Class { name, .. }, "read") if name == "BufReader" => Some(Ty::Result(
+            Box::new(Ty::Int),
+            Box::new(Ty::Enum {
+                name: "IoError".to_string(),
+                generic_args: vec![],
+            }),
+        )),
+        (Ty::Class { name, generic_args }, "into_inner") if name == "BufReader" => {
+            // Surrender the inner — return R directly (not wrapped).
+            Some(generic_args.first().cloned().unwrap_or(Ty::Error))
+        }
+        (Ty::Class { name, .. }, "new") if name == "BufWriter" => {
+            let inner = args
+                .first()
+                .map(|arg| eng.ctx.resolve(&arg.ty))
+                .unwrap_or_else(|| eng.ctx.fresh_type_var());
+            if !is_bufio_inner_supported(&inner) {
+                eng.diagnostics.push(Diagnostic::error_with_code(
+                    format!(
+                        "`BufWriter.new` requires inner type to be `File` or `TcpStream`; got `{inner}`"
+                    ),
+                    span.clone(),
+                    "E0714",
+                ));
+                return Some(Ty::Error);
+            }
+            Some(InferenceEngine::class_ty("BufWriter", vec![inner]))
+        }
+        (Ty::Class { name, .. }, "with_capacity") if name == "BufWriter" => {
+            let inner = args
+                .get(1)
+                .map(|arg| eng.ctx.resolve(&arg.ty))
+                .unwrap_or_else(|| eng.ctx.fresh_type_var());
+            if !is_bufio_inner_supported(&inner) {
+                eng.diagnostics.push(Diagnostic::error_with_code(
+                    format!(
+                        "`BufWriter.with_capacity` requires inner type to be `File` or `TcpStream`; got `{inner}`"
+                    ),
+                    span.clone(),
+                    "E0714",
+                ));
+                return Some(Ty::Error);
+            }
+            Some(InferenceEngine::class_ty("BufWriter", vec![inner]))
+        }
+        (Ty::Class { name, .. }, "write") if name == "BufWriter" => Some(Ty::Result(
+            Box::new(Ty::Int),
+            Box::new(Ty::Enum {
+                name: "IoError".to_string(),
+                generic_args: vec![],
+            }),
+        )),
+        (Ty::Class { name, .. }, "write_all") if name == "BufWriter" => Some(Ty::Result(
+            Box::new(Ty::Unit),
+            Box::new(Ty::Enum {
+                name: "IoError".to_string(),
+                generic_args: vec![],
+            }),
+        )),
+        (Ty::Class { name, .. }, "write_str") if name == "BufWriter" => Some(Ty::Result(
+            Box::new(Ty::Unit),
+            Box::new(Ty::Enum {
+                name: "IoError".to_string(),
+                generic_args: vec![],
+            }),
+        )),
+        (Ty::Class { name, .. }, "flush") if name == "BufWriter" => Some(Ty::Result(
+            Box::new(Ty::Unit),
+            Box::new(Ty::Enum {
+                name: "IoError".to_string(),
+                generic_args: vec![],
+            }),
+        )),
+        (Ty::Class { name, generic_args }, "into_inner") if name == "BufWriter" => {
+            // Result[W, IoError] — flush failure surfaces here.
+            let inner = generic_args.first().cloned().unwrap_or(Ty::Error);
+            Some(Ty::Result(
+                Box::new(inner),
+                Box::new(Ty::Enum {
+                    name: "IoError".to_string(),
+                    generic_args: vec![],
+                }),
+            ))
+        }
         // Phase 2 #06.5: `IoError` is a tagged enum, not a class.
         // `.message() -> String` dispatches on tag in the runtime
         // (see `riven_io_error_get_message` in runtime.c).

@@ -44,6 +44,13 @@ impl<'a> Lowerer<'a> {
                     type_name == "TcpListener" && method_name == "bind";
                 let is_tcp_stream_static_ctor =
                     type_name == "TcpStream" && method_name == "connect";
+                // Phase 2 #06.5 T6: BufReader / BufWriter static ctors.
+                // `.new(inner)` and `.with_capacity(cap, inner)` both
+                // dispatch through the fast path. The runtime callee
+                // is suffix-picked (`_new_file` vs `_new_tcp`) below
+                // from the inner argument's type.
+                let is_bufio_static_ctor = matches!(type_name.as_str(), "BufReader" | "BufWriter")
+                    && matches!(method_name.as_str(), "new" | "with_capacity");
                 // Phase 2 stdlib (#06.5 T4): Duration / Instant
                 // static-style constructors join the same fast path.
                 // `Duration.from_secs(5)` / `Duration.from_millis(ms)`
@@ -64,6 +71,7 @@ impl<'a> Lowerer<'a> {
                     || is_instant_static_ctor
                     || is_tcp_listener_static_ctor
                     || is_tcp_stream_static_ctor
+                    || is_bufio_static_ctor
                     || (method_name == "with_capacity" && {
                         let bt = if let Some(pos) = type_name.find('[') {
                             &type_name[..pos]
@@ -131,6 +139,13 @@ impl<'a> Lowerer<'a> {
                             // `riven_tcp_listener_bind`, etc.
                             | "TcpListener"
                             | "TcpStream"
+                            // Phase 2 #06.5 T6: BufReader[R] /
+                            // BufWriter[W] — generic buffered wrappers.
+                            // The suffix-pick below (`_new_file` vs
+                            // `_new_tcp`) routes to the right runtime
+                            // entry based on the inner argument's type.
+                            | "BufReader"
+                            | "BufWriter"
                     ) {
                         let obj = self.new_temp(expr.ty.clone());
                         // ruby-naming.spec.md §3.11 renames stdlib types
@@ -150,13 +165,52 @@ impl<'a> Lowerer<'a> {
                         // which takes a single integer arg and lowers to
                         // e.g. `riven_hash_with_capacity(cap)`.
                         let mut call_args = Vec::with_capacity(args.len());
+                        // Phase 2 #06.5 T6: BufReader[R] / BufWriter[W]
+                        // pick `_new_file` vs `_new_tcp` (and similarly
+                        // `_with_capacity_file` / `_with_capacity_tcp`)
+                        // by peeking at the inner argument's type.
+                        // For `new(inner)` inner is args[0]; for
+                        // `with_capacity(cap, inner)` it's args[1]. The
+                        // typeck E0714 check above already rejects any
+                        // other inner type, so this match is exhaustive
+                        // (the fallback to "file" is defensive — if we
+                        // hit it the runtime dispatch table will fail
+                        // to find a symbol and the link step errors
+                        // out cleanly).
+                        let bufio_suffix: Option<&'static str> = if matches!(
+                            base_type, "BufReader" | "BufWriter"
+                        ) {
+                            let inner_idx = if method_name == "with_capacity" { 1 } else { 0 };
+                            let inner_name = args
+                                .get(inner_idx)
+                                .map(|a| type_name_from_ty(&a.ty))
+                                .unwrap_or_default();
+                            // Peel leading reference if any (defensive —
+                            // the spec passes inner by value).
+                            let inner_name = inner_name
+                                .strip_prefix('&')
+                                .map(str::trim_start)
+                                .unwrap_or(&inner_name);
+                            match inner_name {
+                                "TcpStream" => Some("tcp"),
+                                "File" => Some("file"),
+                                _ => Some("file"),
+                            }
+                        } else {
+                            None
+                        };
                         for arg in args {
                             let local = self.lower_expr(arg)?;
                             call_args.push(local_to_value(local));
                         }
+                        let callee = if let Some(suffix) = bufio_suffix {
+                            format!("{}_{}_{}", runtime_base, method_name, suffix)
+                        } else {
+                            format!("{}_{}", runtime_base, method_name)
+                        };
                         self.emit(MirInst::Call {
                             dest: Some(obj),
-                            callee: format!("{}_{}", runtime_base, method_name),
+                            callee,
                             args: call_args,
                         });
                         return Ok(Some(obj));
@@ -557,7 +611,51 @@ impl<'a> Lowerer<'a> {
                     },
                     _ => type_name.clone(),
                 };
-                let mangled = format!("{}_{}", resolved_class, method_name);
+                // Phase 2 #06.5 T6: BufReader / BufWriter instance
+                // methods that need kind-suffix routing (`into_inner`
+                // returns the inner File or TcpStream — the runtime
+                // exports `_into_inner_file` / `_into_inner_tcp` so
+                // the LLVM/Cranelift return ABI is honest about the
+                // concrete inner type). The closed-set typeck check
+                // at construction time means generic_args[0] is one
+                // of File / TcpStream here.
+                let bufio_instance_suffix: Option<&'static str> = if matches!(
+                    resolved_class.as_str(),
+                    "BufReader" | "BufWriter"
+                ) && method_name == "into_inner"
+                {
+                    let inner_name = match &object.ty {
+                        Ty::Class { generic_args, .. } => generic_args
+                            .first()
+                            .map(type_name_from_ty)
+                            .unwrap_or_default(),
+                        Ty::Ref(inner)
+                        | Ty::RefMut(inner)
+                        | Ty::RefLifetime(_, inner)
+                        | Ty::RefMutLifetime(_, inner) => {
+                            if let Ty::Class { generic_args, .. } = inner.as_ref() {
+                                generic_args
+                                    .first()
+                                    .map(type_name_from_ty)
+                                    .unwrap_or_default()
+                            } else {
+                                String::new()
+                            }
+                        }
+                        _ => String::new(),
+                    };
+                    match inner_name.as_str() {
+                        "TcpStream" => Some("tcp"),
+                        _ => Some("file"),
+                    }
+                } else {
+                    None
+                };
+                let mangled = if let Some(suffix) = bufio_instance_suffix {
+                    format!("{}_{}_{}", resolved_class, method_name, suffix)
+                } else {
+                    format!("{}_{}", resolved_class, method_name)
+                };
 
                 // `&mut String` detection: when the receiver is a local
                 // of type `&mut String` (i.e. the caller passed `&mut s`

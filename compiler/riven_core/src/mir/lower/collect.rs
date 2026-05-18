@@ -251,5 +251,14 @@ impl<'a> Lowerer<'a> {
         // scope-exit pass frees the 8-byte spine via `riven_dealloc`.
         self.user_drop_classes.insert("TcpListener".to_string());
         self.user_drop_classes.insert("TcpStream".to_string());
+        // Phase 2 stdlib (#06.5 T6): BufReader[R] / BufWriter[W] own
+        // a 32-byte spine plus a heap byte-buffer. `riven_bufreader_drop`
+        // frees the byte-buffer (the inner File/TcpStream has its OWN
+        // drop helper that runs in the same scope-exit pass — bufio's
+        // drop intentionally does NOT close the inner). `riven_bufwriter_drop`
+        // does a best-effort flush before freeing the buffer so a
+        // dropped BufWriter doesn't silently lose buffered bytes.
+        self.user_drop_classes.insert("BufReader".to_string());
+        self.user_drop_classes.insert("BufWriter".to_string());
     }
 }

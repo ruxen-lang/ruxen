@@ -171,6 +171,11 @@ static void *riven_result_err_value(int64_t payload) {
  * a RivenDuration pointer (defined in time.c). */
 #include "time.c"
 #include "net/tcp.c"
+/* Phase 2 #06.5 T6: BufReader[R] / BufWriter[W] over File + TcpStream.
+ * Must come AFTER io/file.c and net/tcp.c — bufio.c dereferences
+ * RivenFile and RivenTcpStream layouts directly when its fill/emit
+ * branch on kind. */
+#include "io/bufio.c"
 #include "signal.c"
 #include "process.c"
 #include "fmt.c"

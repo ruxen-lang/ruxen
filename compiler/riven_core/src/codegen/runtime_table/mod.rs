@@ -277,6 +277,34 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "TcpStream_drop" => return Ok("riven_tcp_stream_drop"),
         "TcpStream_set_read_timeout" => return Ok("riven_tcp_stream_set_read_timeout"),
         "TcpStream_set_write_timeout" => return Ok("riven_tcp_stream_set_write_timeout"),
+        // Phase 2 stdlib (#06.5 T6): std::io::BufReader[R] /
+        // BufWriter[W] over the closed set {File, TcpStream}. The
+        // static ctors (`new`, `with_capacity`) carry a `_file` /
+        // `_tcp` suffix picked at MIR lowering from args[0|1].ty;
+        // the `into_inner` instance method does the same on the
+        // receiver's generic_args[0]. Other instance methods
+        // (`read_line`, `read`, `write*`, `flush`) branch on the
+        // 1-byte `kind` tag inside the runtime spine.
+        "BufReader_new_file" => return Ok("riven_bufreader_new_file"),
+        "BufReader_new_tcp" => return Ok("riven_bufreader_new_tcp"),
+        "BufReader_with_capacity_file" => return Ok("riven_bufreader_with_capacity_file"),
+        "BufReader_with_capacity_tcp" => return Ok("riven_bufreader_with_capacity_tcp"),
+        "BufReader_read_line" => return Ok("riven_bufreader_read_line"),
+        "BufReader_read" => return Ok("riven_bufreader_read"),
+        "BufReader_into_inner_file" => return Ok("riven_bufreader_into_inner_file"),
+        "BufReader_into_inner_tcp" => return Ok("riven_bufreader_into_inner_tcp"),
+        "BufReader_drop" => return Ok("riven_bufreader_drop"),
+        "BufWriter_new_file" => return Ok("riven_bufwriter_new_file"),
+        "BufWriter_new_tcp" => return Ok("riven_bufwriter_new_tcp"),
+        "BufWriter_with_capacity_file" => return Ok("riven_bufwriter_with_capacity_file"),
+        "BufWriter_with_capacity_tcp" => return Ok("riven_bufwriter_with_capacity_tcp"),
+        "BufWriter_write" => return Ok("riven_bufwriter_write"),
+        "BufWriter_write_all" => return Ok("riven_bufwriter_write_all"),
+        "BufWriter_write_str" => return Ok("riven_bufwriter_write_str"),
+        "BufWriter_flush" => return Ok("riven_bufwriter_flush"),
+        "BufWriter_into_inner_file" => return Ok("riven_bufwriter_into_inner_file"),
+        "BufWriter_into_inner_tcp" => return Ok("riven_bufwriter_into_inner_tcp"),
+        "BufWriter_drop" => return Ok("riven_bufwriter_drop"),
         // std::signal — graceful-shutdown surface.
         "signal_install_sigint" => return Ok("riven_signal_install_sigint"),
         "signal_received_sigint" => return Ok("riven_signal_received_sigint"),

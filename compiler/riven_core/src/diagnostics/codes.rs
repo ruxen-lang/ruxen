@@ -201,6 +201,15 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E0712",
         title: "SeekFrom arg out of range (negative offset on Start)",
     },
+    // Phase 2 #06.5 T6: BufReader[R] / BufWriter[W] v1 restrict the
+    // inner type to the closed set {File, TcpStream}. The full
+    // Read/Write trait/mixin story is deferred to v1.5 with the
+    // iterator-trait work; until then any other R/W is rejected at
+    // typeck with E0714 (see typeck::method_resolvers::builtin_method_type).
+    CodeInfo {
+        code: "E0714",
+        title: "BufReader/BufWriter inner type must be File or TcpStream (v1)",
+    },
     // ── Borrow checking + mixin/include (E1001-E1099) ────────────────
     // The borrow checker maintains a parallel `ErrorCode` enum in
     // `borrow_check/errors.rs`; titles below mirror its `title()`

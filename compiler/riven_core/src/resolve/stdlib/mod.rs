@@ -1259,6 +1259,62 @@ pub(super) fn register_all(r: &mut Resolver) {
     r.type_registry
         .insert("TcpStream".to_string(), tcp_stream_id);
 
+    // Phase 2 #06.5 T6: `BufReader[R]` / `BufWriter[W]` — generic
+    // buffered wrappers parameterized over the closed set {File,
+    // TcpStream}. The class registration carries a single type
+    // parameter; the static-ctor fast path in
+    // `mir/lower/expr/method_call.rs` peeks at the inner argument's
+    // type at call-site to pick `_new_file` vs `_new_tcp` runtime
+    // symbol. typeck rejects any other R via E0714. Drop pipeline
+    // (collect.rs::collect_user_drop_classes) emits `BufReader_drop +
+    // riven_dealloc` at scope exit, freeing the 32-byte spine and
+    // (for BufWriter) auto-flushing before close.
+    let buf_reader_id = r.symbols.define(
+        "BufReader".to_string(),
+        DefKind::Class {
+            info: ClassInfo {
+                generic_params: vec![GenericParamInfo::type_param("R".to_string(), vec![])],
+                parent: None,
+                fields: vec![],
+                methods: vec![],
+                derive_traits: vec![],
+                opt_out_send: false,
+                opt_out_sync: false,
+                manual_send: false,
+                manual_sync: false,
+                const_predicates: vec![],
+            },
+        },
+        Visibility::Public,
+        span.clone(),
+    );
+    r.scopes.insert_type("BufReader".to_string(), buf_reader_id);
+    r.type_registry
+        .insert("BufReader".to_string(), buf_reader_id);
+
+    let buf_writer_id = r.symbols.define(
+        "BufWriter".to_string(),
+        DefKind::Class {
+            info: ClassInfo {
+                generic_params: vec![GenericParamInfo::type_param("W".to_string(), vec![])],
+                parent: None,
+                fields: vec![],
+                methods: vec![],
+                derive_traits: vec![],
+                opt_out_send: false,
+                opt_out_sync: false,
+                manual_send: false,
+                manual_sync: false,
+                const_predicates: vec![],
+            },
+        },
+        Visibility::Public,
+        span.clone(),
+    );
+    r.scopes.insert_type("BufWriter".to_string(), buf_writer_id);
+    r.type_registry
+        .insert("BufWriter".to_string(), buf_writer_id);
+
     // Phase 2 #06.5 T5: `Shutdown` — three unit variants used as the
     // argument of `TcpStream.shutdown`. Tag values are pinned to match
     // `RIVEN_SHUTDOWN_*` in library/runtime/net/tcp.c — the
@@ -1678,6 +1734,12 @@ pub(super) fn register_all(r: &mut Resolver) {
                 file_id,
                 open_options_id,
                 seek_from_id,
+                // Phase 2 #06.5 T6: BufReader[R] / BufWriter[W] —
+                // generic buffered wrappers over File + TcpStream.
+                // Importable via `use std.io.BufReader` /
+                // `use std.io.BufWriter`.
+                buf_reader_id,
+                buf_writer_id,
             ],
         },
         Visibility::Public,
@@ -2010,6 +2072,33 @@ pub(super) fn register_all(r: &mut Resolver) {
             Ty::Class {
                 name: "TcpStream".to_string(),
                 generic_args: vec![],
+            },
+        ),
+        // Phase 2 #06.5 T6: BufReader[R] / BufWriter[W] value-scope
+        // type constructors. Registering them here lets
+        // `BufReader.new(f)` resolve the receiver to the class Ty
+        // (with a fresh inference variable for R, pinned by the inner
+        // arg's type at typeck). The static-ctor fast path in
+        // mir/lower/expr/method_call.rs picks `_new_file` vs
+        // `_new_tcp` from args[0].ty.
+        (
+            "BufReader",
+            Ty::Class {
+                name: "BufReader".to_string(),
+                generic_args: vec![Ty::TypeParam {
+                    name: "R".to_string(),
+                    bounds: vec![],
+                }],
+            },
+        ),
+        (
+            "BufWriter",
+            Ty::Class {
+                name: "BufWriter".to_string(),
+                generic_args: vec![Ty::TypeParam {
+                    name: "W".to_string(),
+                    bounds: vec![],
+                }],
             },
         ),
         (

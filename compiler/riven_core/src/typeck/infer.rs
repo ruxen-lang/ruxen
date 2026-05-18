@@ -1939,6 +1939,36 @@ fn map_kv_tys(ty: &Ty) -> Option<(Ty, Ty)> {
     }
 }
 
+/// Phase 2 #06.5 T6: BufReader[R] / BufWriter[W] restrict R/W to the
+/// closed set {File, TcpStream}. v1 deliberately ships no formal
+/// Read/Write trait (deferred to v1.5 with the Iterator mixin); the
+/// runtime branches on a 1-byte `kind` tag baked into the spine. Any
+/// other inner type at typeck → E0714. `Ty::Infer` and `Ty::Error`
+/// pass through so we don't double-report when the inner is already a
+/// type-error.
+pub(super) fn is_bufio_inner_supported(ty: &Ty) -> bool {
+    let peeled = peel_refs(ty);
+    matches!(
+        peeled,
+        Ty::Class { name, .. } if name == "File" || name == "TcpStream"
+    ) || matches!(peeled, Ty::Infer(_) | Ty::Error)
+}
+
+/// Strip outer reference layers (`&T`, `&var T`) so the wrapped type
+/// can be matched directly. Returns the inner Ty by reference.
+fn peel_refs(ty: &Ty) -> &Ty {
+    let mut cur = ty;
+    loop {
+        match cur {
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => cur = inner,
+            _ => return cur,
+        }
+    }
+}
+
 pub(super) fn is_iter_sum_compatible(ty: &Ty) -> bool {
     matches!(
         ty,
