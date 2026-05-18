@@ -4,6 +4,7 @@
 //! in the symbol table, and produces a partially-lowered HIR. Type inference
 //! variables are allocated for unresolved types; the type checker fills them in.
 
+pub mod bootstrap;
 pub mod scope;
 mod stdlib;
 pub mod symbols;

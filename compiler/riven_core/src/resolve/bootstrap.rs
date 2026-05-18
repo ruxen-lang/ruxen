@@ -1,0 +1,204 @@
+//! Stdlib bootstrap loader (#06.8 Wave 1 Task 0b).
+//!
+//! Reads stdlib `.rvn` files at compiler startup, BEFORE user code is
+//! parsed, and routes them through the SAME parser that user code uses
+//! — no second grammar, no second resolver path. The parsed programs
+//! that come back are the future home of every stdlib class once
+//! self-hosting migrations (Waves 2–5) move them from
+//! `resolve/stdlib/mod.rs` registrations into Riven source.
+//!
+//! For Wave 1 the loader is a **parse-only gate**: `BOOTSTRAP_FILES`
+//! is intentionally empty, so [`run_bootstrap`] is a no-op in
+//! production. The infrastructure exists, can be exercised through
+//! the test-only [`run_bootstrap_with_files`] shim, and reports
+//! parse failures with file:line cite (the [E0725] diagnostic) — but
+//! it does NOT yet inject anything into the prelude. That hookup
+//! lands with the first stdlib `.rvn` migration (Wave 2 — `iter.rvn`
+//! / `net.rvn` which already exist as aspirational docs).
+//!
+//! ## Path resolution
+//!
+//! 1. **`RIVEN_STDLIB_PATH` env var** — explicit override, same role
+//!    as Rust's `RUST_SYSROOT`. Honoured by tests so they can point
+//!    at a tempdir without touching the installed sysroot.
+//! 2. **Workspace `library/std/src/`** — the development fallback.
+//!    Detected by walking up from `CARGO_MANIFEST_DIR` until a
+//!    `library/std/src/` directory is found. Matches how
+//!    `error_code_registry.rs` finds `docs/errors/`.
+//! 3. **Exe-adjacent install layout** — when running an installed
+//!    `rivenc`, `<exe>/../library/std/src/` is the conventional
+//!    sysroot location. Not exercised in tests today but reserved.
+//!
+//! Failures at any stage emit `E0725` with the resolved file path so a
+//! contributor can navigate to the offending stdlib source directly.
+
+use crate::diagnostics::Diagnostic;
+use crate::lexer::token::Span;
+use crate::lexer::Lexer;
+use crate::parser::ast::Program;
+use crate::parser::Parser;
+use std::path::{Path, PathBuf};
+
+/// The stdlib bootstrap file list. Empty in Wave 1 — Wave 2 will add
+/// `iter.rvn` and `net.rvn` first (they already exist as aspirational
+/// docs), then leaf modules, then I/O, then collections.
+///
+/// Paths are relative to `<sysroot>/library/std/src/`.
+pub const BOOTSTRAP_FILES: &[&str] = &[];
+
+/// Production entry point: parse every stdlib file in
+/// [`BOOTSTRAP_FILES`] and return the resulting [`Program`] AST list.
+/// Parse failures are reported via the `diagnostics` out-parameter
+/// as fatal E0725 errors; the caller decides whether to abort.
+///
+/// Wave 1: no-op (empty list). Wave 2+: this is how the prelude
+/// gains its self-hosted stdlib types.
+pub fn run_bootstrap(diagnostics: &mut Vec<Diagnostic>) -> Vec<Program> {
+    run_bootstrap_with_files(BOOTSTRAP_FILES, None, diagnostics)
+}
+
+/// Test-friendly variant of [`run_bootstrap`] that takes an explicit
+/// file list and an optional path override. The override pins the
+/// sysroot to a specific directory (a tempdir, typically) so tests
+/// can exercise the loader without depending on the workspace layout.
+///
+/// When `path_override` is `None`, the same resolution as
+/// [`resolve_stdlib_root`] applies (env var → workspace → exe).
+pub fn run_bootstrap_with_files(
+    files: &[&str],
+    path_override: Option<&Path>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<Program> {
+    if files.is_empty() {
+        return Vec::new();
+    }
+
+    let root = match path_override.map(PathBuf::from).or_else(resolve_stdlib_root) {
+        Some(r) => r,
+        None => {
+            diagnostics.push(Diagnostic::error_with_code(
+                "stdlib bootstrap failed: could not locate `library/std/src/` — \
+                 set RIVEN_STDLIB_PATH or run from a workspace checkout",
+                Span::new(0, 0, 0, 0),
+                "E0725",
+            ));
+            return Vec::new();
+        }
+    };
+
+    let mut out = Vec::with_capacity(files.len());
+    for rel in files {
+        match load_stdlib_file(&root, rel) {
+            Ok(program) => out.push(program),
+            Err(diag) => diagnostics.push(diag),
+        }
+    }
+    out
+}
+
+/// Resolve the stdlib source root, in order:
+///   1. `$RIVEN_STDLIB_PATH`
+///   2. workspace `library/std/src/` (walk up from `CARGO_MANIFEST_DIR`)
+///   3. `<exe-dir>/../library/std/src/`
+///
+/// Returns `None` only when every option fails — at which point the
+/// caller emits an E0725 against an empty span (there is no source
+/// file to anchor against).
+pub fn resolve_stdlib_root() -> Option<PathBuf> {
+    if let Ok(env_path) = std::env::var("RIVEN_STDLIB_PATH") {
+        let p = PathBuf::from(env_path);
+        if p.is_dir() {
+            return Some(p);
+        }
+    }
+
+    // Workspace fallback: walk up from CARGO_MANIFEST_DIR until we find
+    // a sibling `library/std/src/`. `riven_core` lives at
+    // `compiler/riven_core/`, so two parents up should hit the
+    // repo root that has `library/std/src/` alongside `compiler/`.
+    if let Some(manifest_dir) = std::env::var_os("CARGO_MANIFEST_DIR") {
+        let mut cur = PathBuf::from(manifest_dir);
+        for _ in 0..5 {
+            let candidate = cur.join("library/std/src");
+            if candidate.is_dir() {
+                return Some(candidate);
+            }
+            if !cur.pop() {
+                break;
+            }
+        }
+    }
+
+    // Exe-adjacent install layout: <exe>/../library/std/src/. Only
+    // exercised once `rivenc` is shipped via a real install rather
+    // than `cargo run`. Reserved.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            let candidate = exe_dir.join("../library/std/src");
+            if candidate.is_dir() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
+}
+
+/// Read, lex, and parse one stdlib file relative to the resolved
+/// sysroot root. Returns the parsed [`Program`] on success, or an
+/// E0725 diagnostic that names the file and the first parser/lexer
+/// error's line on failure.
+fn load_stdlib_file(root: &Path, rel: &str) -> Result<Program, Diagnostic> {
+    let full = root.join(rel);
+    let source = std::fs::read_to_string(&full).map_err(|io_err| {
+        Diagnostic::error_with_code(
+            format!(
+                "stdlib bootstrap failed at library/std/src/{}: cannot read file: {}",
+                rel, io_err
+            ),
+            Span::new(0, 0, 0, 0),
+            "E0725",
+        )
+    })?;
+
+    let mut lexer = Lexer::new(&source);
+    let tokens = match lexer.tokenize() {
+        Ok(t) => t,
+        Err(diags) => {
+            let (line, msg) = first_error_line(&diags);
+            return Err(Diagnostic::error_with_code(
+                format!(
+                    "stdlib bootstrap failed at library/std/src/{}:{}: lexer: {}",
+                    rel, line, msg
+                ),
+                Span::new(0, 0, line, 0),
+                "E0725",
+            ));
+        }
+    };
+
+    let mut parser = Parser::new(tokens);
+    parser.parse().map_err(|diags| {
+        let (line, msg) = first_error_line(&diags);
+        Diagnostic::error_with_code(
+            format!(
+                "stdlib bootstrap failed at library/std/src/{}:{}: parser: {}",
+                rel, line, msg
+            ),
+            Span::new(0, 0, line, 0),
+            "E0725",
+        )
+    })
+}
+
+/// Pick the first error-level diagnostic's line and message. Falls
+/// back to (0, "unknown error") if the diag list is empty — should
+/// never happen but keeps the function total.
+fn first_error_line(diags: &[Diagnostic]) -> (u32, String) {
+    diags
+        .iter()
+        .find(|d| matches!(d.level, crate::diagnostics::DiagnosticLevel::Error))
+        .or_else(|| diags.first())
+        .map(|d| (d.span.line, d.message.clone()))
+        .unwrap_or((0, "unknown error".to_string()))
+}

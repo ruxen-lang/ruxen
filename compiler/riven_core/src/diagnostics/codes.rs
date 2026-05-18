@@ -210,6 +210,14 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E0714",
         title: "BufReader/BufWriter inner type must be File or TcpStream (v1)",
     },
+    // #06.8 Wave 1 Task 0b: stdlib bootstrap loader. Every error path
+    // through `resolve::bootstrap` carries this code so a contributor
+    // diagnosing a broken stdlib `.rvn` file lands on the same docs
+    // page regardless of whether the failure is io, lexer, or parser.
+    CodeInfo {
+        code: "E0725",
+        title: "stdlib bootstrap failed (file missing / lex / parse error)",
+    },
     // ── Borrow checking + mixin/include (E1001-E1099) ────────────────
     // The borrow checker maintains a parallel `ErrorCode` enum in
     // `borrow_check/errors.rs`; titles below mirror its `title()`
