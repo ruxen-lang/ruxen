@@ -1,0 +1,20 @@
+use std.net.TcpListener
+
+def close_it(l: TcpListener)
+  match l.close()
+    Ok(_)  -> puts "close=ok"
+    Err(_) -> puts "close=err"
+  end
+end
+
+def bind_then_close(l: TcpListener)
+  puts "bind=ok"
+  close_it(l)
+end
+
+def main
+  match TcpListener.bind(&"127.0.0.1:0")
+    Ok(l)  -> bind_then_close(l)
+    Err(_) -> puts "bind=err"
+  end
+end

@@ -1,0 +1,54 @@
+use std.net.TcpListener
+use std.io.IoErrorKind
+use std.io.IoError
+
+def kind_label(k: IoErrorKind) -> String
+  match k
+    IoErrorKind.WouldBlock        -> "WouldBlock"
+    IoErrorKind.Interrupted       -> "Interrupted"
+    IoErrorKind.InvalidInput      -> "InvalidInput"
+    IoErrorKind.NotFound          -> "NotFound"
+    IoErrorKind.PermissionDenied  -> "PermissionDenied"
+    IoErrorKind.AlreadyExists     -> "AlreadyExists"
+    IoErrorKind.UnexpectedEof     -> "UnexpectedEof"
+    IoErrorKind.BrokenPipe        -> "BrokenPipe"
+    IoErrorKind.Other             -> "Other"
+    IoErrorKind.ConnectionRefused -> "ConnectionRefused"
+    IoErrorKind.ConnectionReset   -> "ConnectionReset"
+    IoErrorKind.ConnectionAborted -> "ConnectionAborted"
+    IoErrorKind.NotConnected      -> "NotConnected"
+    IoErrorKind.AddrInUse         -> "AddrInUse"
+    IoErrorKind.AddrNotAvailable  -> "AddrNotAvailable"
+    IoErrorKind.InvalidData       -> "InvalidData"
+    IoErrorKind.TimedOut          -> "TimedOut"
+    IoErrorKind.WriteZero         -> "WriteZero"
+    IoErrorKind.Unsupported       -> "Unsupported"
+    IoErrorKind.OutOfMemory       -> "OutOfMemory"
+  end
+end
+
+def report_err(e: IoError)
+  puts "kind=#{kind_label(e.kind())}"
+end
+
+def try_accept(l: TcpListener)
+  match l.accept()
+    Ok(_)  -> puts "kind=UnexpectedOk"
+    Err(e) -> report_err(e)
+  end
+end
+
+def go_nonblocking(l: TcpListener)
+  match l.set_nonblocking(true)
+    Ok(_)  -> ()
+    Err(_) -> puts "set_nonblocking=err"
+  end
+  try_accept(l)
+end
+
+def main
+  match TcpListener.bind(&"127.0.0.1:0")
+    Ok(l)  -> go_nonblocking(l)
+    Err(_) -> puts "bind=err"
+  end
+end
