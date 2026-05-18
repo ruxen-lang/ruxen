@@ -492,7 +492,7 @@ hover docs, find-references all light up for stdlib for free.
 Slotting #06.8 before #10 means LSP work doesn't need a "stdlib
 navigation" follow-up.
 
-## Estimated scope
+## Estimated scope (sequential)
 
 - Phase 0 (extern path + bootstrap loader): 3-4 days
 - Phase 1 (leaf modules: rand → fmt): 5-6 days (one per day)
@@ -501,6 +501,151 @@ navigation" follow-up.
 - Phase 4 (collections): 6-8 days
 - Cleanup + final workspace pass + docs: 1-2 days
 
-Total: ~3 weeks of focused work. Can parallelize: Phase 1 modules
-are independent of each other; Phase 4 collections are
-independent of each other.
+Total sequential: ~3 weeks.
+
+## Parallel execution playbook (target: 5-6 days)
+
+Most of this work parallelizes if dispatched as independent
+principal-rust-engineer agents on isolated branches that converge
+on the same trunk. The merge cost is dominated by `resolve/stdlib/mod.rs`
+edits, which are mostly *deletions* of disjoint blocks — git
+handles them with no conflict.
+
+**Strict rule: dispatch principal-rust-engineer, not general-purpose,
+for every agent in this plan.** Riven is a 26 KLOC Rust compiler;
+this is principal-rust-engineer territory by design.
+
+### Wave 1 — Phase 0 (no parallelism possible — foundation)
+
+One agent. Must land before anything else.
+
+- Task 0a: parser + resolver + typeck + codegen for `extern "C-symbol"
+  def …`. Pin tests in `extern_c_binding.rs`. ~1 day.
+- Task 0b: bootstrap loader — compiler reads `library/std/src/*.rvn`
+  at startup, parses with the same parser, errors cite stdlib
+  file:line. ~0.5 day.
+- Task 0c: `#[repr(tagged)]` / `#[repr(flat_heap_struct)]` attributes
+  with layout-stability checks. ~0.5 day.
+
+Wall-clock: ~1 day end-to-end with a single competent agent.
+
+### Wave 2 — iter.rvn + net.rvn (free wins; do FIRST)
+
+These two files exist as docs today. Migration is "strip the
+disclaimer banner, add extern bindings, delete the Rust
+registrations, run the pre-existing pin tests." Dispatch as 2
+parallel agents:
+
+- Agent W2-A: iter.rvn migration
+- Agent W2-B: net.rvn migration
+
+Wall-clock: ~0.5 day (both finish in parallel; each is ~3-4 hours).
+
+### Wave 3 — Phase 1 leaf modules (fully parallel)
+
+6 modules, 0 cross-dependencies. Dispatch 6 parallel agents:
+
+- Agent W3-A: rand.rvn
+- Agent W3-B: path.rvn
+- Agent W3-C: hash.rvn
+- Agent W3-D: env.rvn
+- Agent W3-E: time.rvn
+- Agent W3-F: fmt.rvn
+
+Each agent's brief MUST specify: "only touch your own module's
+section of `resolve/stdlib/mod.rs`; rebase against the latest
+trunk before each commit to absorb the other agents' deletions."
+
+Wall-clock: ~1 day. The slowest agent (probably `time.rvn` —
+Duration + Instant + sleep is bigger than the others) sets the pace.
+
+### Wave 4 — Phase 2 I/O cluster (mostly parallel)
+
+3 modules with one shared dependency (IoError, which is in io.rvn).
+Serialize io.rvn first; then fs + process in parallel:
+
+- Agent W4-A: io.rvn (IoError + Stdin/Stdout/Stderr + File +
+  BufReader + BufWriter). ~1 day. Largest single migration.
+- Agent W4-B and W4-C dispatched in parallel ONLY after W4-A lands:
+  - W4-B: fs.rvn
+  - W4-C: process.rvn
+
+Wall-clock: ~1.5 days (W4-A serially, then W4-B + W4-C parallel).
+
+### Wave 5 — Phase 4 collections (fully parallel)
+
+5 modules, no cross-dependencies (each is its own type).
+
+- Agent W5-A: string.rvn
+- Agent W5-B: array.rvn
+- Agent W5-C: map.rvn
+- Agent W5-D: set.rvn
+- Agent W5-E: result_option.rvn
+
+Wall-clock: ~1.5 days. string and array are biggest (~30-40 method
+migrations each); others finish faster.
+
+### Wave 6 — Cleanup + workspace test + docs
+
+One agent, single closing commit:
+
+- Delete `compiler/riven_core/src/codegen/runtime_table/` entirely.
+- Verify `resolve/stdlib/mod.rs` is under ~400 lines.
+- Single workspace test pass: `gtimeout 1200 cargo test --workspace`.
+- CHANGELOG + STRATEGY.md updates.
+- Strip remaining "declarative documentation" banners.
+
+Wall-clock: ~0.5 day.
+
+### Total parallel timeline
+
+| Wave | Wall-clock | Cumulative |
+|------|------------|------------|
+| 1 (foundation) | 1 day | 1 day |
+| 2 (iter + net freebies) | 0.5 day | 1.5 days |
+| 3 (leaf modules ×6) | 1 day | 2.5 days |
+| 4 (I/O cluster) | 1.5 days | 4 days |
+| 5 (collections ×5) | 1.5 days | 5.5 days |
+| 6 (cleanup) | 0.5 day | 6 days |
+
+**Target: 6 days** (vs 3 weeks sequential).
+
+### Dispatching constraint — applies to every agent in every wave
+
+- Use `principal-rust-engineer`, never `general-purpose`.
+- Test discipline: NEVER full-file runs, NEVER full e2e runs,
+  NEVER `cargo test --workspace` except in Wave 6.
+- Always filter by exact test name or unique substring positional
+  filter. Always set `RIVEN_E2E_CASES=<your-stems>` for e2e.
+- Every cargo invocation wrapped in `gtimeout`.
+- 8 GiB cap on rivenc.
+- No `git push`, no `Co-Authored-By:` trailers.
+- Ship minimum viable; skip polish.
+- Each wave's agents brief includes the previous wave's commit
+  SHAs and explicit "rebase before committing" instruction.
+
+### Coordination overhead
+
+The orchestrator (the Claude Code session running the new
+`riven-stdlib-migration` worktree) does ~10 min of dispatch work
+per wave: writing the brief, watching for completion, dispatching
+the next wave. That's ~1 hour of orchestrator work across the 6
+days. The remaining time is agent execution + your review of the
+diffs at wave boundaries.
+
+### Review gates (recommended, not mandatory)
+
+Between waves, the orchestrator (you) should look at the diff
+landed by the previous wave before dispatching the next. Three
+review points are worth doing:
+
+- After Wave 1 — confirm `extern "C"` actually works against the
+  test C symbol before any real migration begins.
+- After Wave 3 — confirm 6 parallel agents didn't introduce
+  inconsistent patterns. If they did, pick the cleanest one and
+  rewrite the others' .rvn files to match before Wave 4.
+- After Wave 5 — confirm `resolve/stdlib/mod.rs` is genuinely
+  under ~400 lines before Wave 6's cleanup.
+
+Each review is ~20 minutes of human + Claude reading. Skip if
+you're racing.

@@ -51,6 +51,11 @@ fn main() {
         // symbol table where dlsym(RTLD_DEFAULT) can see them.
         println!("cargo:rustc-link-arg=-Wl,-force_load,{out_dir}/librivenrt.a");
         println!("cargo:rustc-link-arg=-Wl,-export_dynamic");
+        // std.rand on macOS uses SecRandomCopyBytes from the Security
+        // framework (see library/runtime/io/rand.c). The full-program
+        // codegen path emits this in compiler/riven_core/src/codegen/object.rs;
+        // the REPL's librivenrt.a link needs the same flag.
+        println!("cargo:rustc-link-lib=framework=Security");
     } else {
         // GNU ld / lld: `+whole-archive` modifier on the link-lib
         // directive expands to `--whole-archive -lrivenrt --no-whole-archive`
