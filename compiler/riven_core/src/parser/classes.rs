@@ -506,6 +506,9 @@ impl Parser {
         self.skip_newlines();
 
         let mut items = Vec::new();
+        // #06.8 follow-up: in-body `lib "X" ... end` blocks in mixin bodies
+        // mirror the class-body form. Parser-only plumbing.
+        let mut lib_decls: Vec<LibDecl> = Vec::new();
         // ruby-naming.spec.md §3.2: mixin (= `trait` token) body honours
         // section markers. Default is Public. The trait-item parser
         // (`parse_trait_item`) does not see the section state, so we
@@ -566,6 +569,11 @@ impl Parser {
                         }
                     }
                 }
+                // ── #06.8 follow-up: in-body `lib "X" ... end` block ──
+                // Mirrors the class-body arm. Reuses `parse_lib_decl`.
+                TokenKind::Lib => {
+                    lib_decls.push(self.parse_lib_decl(vec![]));
+                }
                 _ => {
                     let mut item = self.parse_trait_item();
                     // Apply section visibility to default methods that did
@@ -601,6 +609,7 @@ impl Parser {
             generic_params,
             super_traits,
             items,
+            lib_decls,
             doc_comments,
             span,
         }
@@ -684,6 +693,10 @@ impl Parser {
                 | TokenKind::Type
                 | TokenKind::End
                 | TokenKind::Eof
+                // #06.8 follow-up: a `lib "X" ... end` block following an
+                // unbodied method signature inside a mixin body must
+                // close the signature, not be consumed as its body.
+                | TokenKind::Lib
         ) {
             // Case 3: Next declaration keyword → signature only, no body
             let span = self.span_from(&start);
@@ -866,6 +879,10 @@ impl Parser {
         let mut methods = Vec::new();
         let mut inner_impls = Vec::new();
         let derive_traits = Vec::new();
+        // #06.8 follow-up: in-body `lib "X" ... end` FFI blocks. Each
+        // block's `FfiFunction`s are scoped to this class (e.g. `File.open`).
+        // Reuses `parse_lib_decl` verbatim — no fork.
+        let mut lib_decls: Vec<LibDecl> = Vec::new();
         // #06.8 T0c: in-body `layout <kind>` directive. The only kind
         // currently accepted on a class body is `flat_heap_struct`,
         // which marks the class as following the runtime flat-heap-
@@ -969,6 +986,17 @@ impl Parser {
                 TokenKind::Def => {
                     methods.push(self.parse_func_def(current_vis));
                 }
+                // ── #06.8 follow-up: in-body `lib "X" ... end` block ──
+                // Stdlib self-hosting needs class-scoped FFI bindings so
+                // e.g. `library/std/src/io.rvn` can write
+                // `class File ... lib "riven_runtime" def open as "..." end end`.
+                // The block reuses the top-level `parse_lib_decl`; the
+                // resolver wiring that surfaces each `FfiFunction` as
+                // `<ClassName>.<riven_name>` lands in the follow-up
+                // commit, not here.
+                TokenKind::Lib => {
+                    lib_decls.push(self.parse_lib_decl(vec![]));
+                }
                 TokenKind::Identifier(_) => {
                     // Field declaration — picks up current section visibility.
                     fields.push(self.parse_field_decl_with_vis(current_vis));
@@ -1052,6 +1080,7 @@ impl Parser {
             inner_impls,
             derive_traits,
             layout,
+            lib_decls,
             doc_comments,
             where_clause,
             span,

@@ -677,6 +677,13 @@ pub struct ClassDef {
     /// layout (`RivenFile`, `RivenTcpStream` pattern). Other tokens are
     /// accepted by the lexer but rejected by the parser arm.
     pub layout: Vec<String>,
+    /// In-body `lib "X" ... end` FFI blocks (#06.8 follow-up). Each block
+    /// binds C library functions whose Riven-side names are scoped to
+    /// this class — e.g. `class File ... lib "rt" def open as "..." end end`
+    /// exposes `File.open` as a class method. Parser-only plumbing for
+    /// now; resolver wiring (registering each `FfiFunction` as a class
+    /// method) lands in the follow-up commit.
+    pub lib_decls: Vec<LibDecl>,
     /// Captured `##` doc comments preceding the class (P0.13).
     pub doc_comments: Vec<String>,
     /// T2.02 S9: where-clause predicates (`where T: Display, N > 0`).
@@ -776,6 +783,9 @@ pub struct MixinDef {
     pub generic_params: Option<GenericParams>,
     pub super_traits: Vec<MixinBound>,
     pub items: Vec<MixinItem>,
+    /// In-body `lib "X" ... end` FFI blocks (#06.8 follow-up). Mirrors
+    /// `ClassDef::lib_decls`. Parser-only plumbing for now.
+    pub lib_decls: Vec<LibDecl>,
     pub doc_comments: Vec<String>,
     pub span: Span,
 }

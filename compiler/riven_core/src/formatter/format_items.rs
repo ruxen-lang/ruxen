@@ -349,6 +349,13 @@ fn format_class(class: &ClassDef, comments: &CommentMap) -> Doc {
         body_parts.push(format_inner_impl(imp, comments));
     }
 
+    // In-body `lib "X" ... end` FFI blocks (#06.8 follow-up). Reuses
+    // `format_lib` so a class-scoped FFI block round-trips identically
+    // to a top-level one.
+    for lib in &class.lib_decls {
+        body_parts.push(format_lib(lib, comments));
+    }
+
     // Join sections with blank lines (hardline + hardline = one blank line)
     let body = join(concat(vec![hardline(), hardline()]), body_parts);
 
@@ -562,12 +569,19 @@ fn format_trait(t: &MixinDef, comments: &CommentMap) -> Doc {
         header.push(format_trait_bounds(&t.super_traits));
     }
 
-    let item_docs: Vec<Doc> = t
+    let mut body_parts: Vec<Doc> = t
         .items
         .iter()
         .map(|ti| format_trait_item(ti, comments))
         .collect();
-    let body = join(hardline(), item_docs);
+
+    // In-body `lib "X" ... end` FFI blocks (#06.8 follow-up). Mirrors
+    // the class-body emission so a mixin-scoped FFI block round-trips.
+    for lib in &t.lib_decls {
+        body_parts.push(format_lib(lib, comments));
+    }
+
+    let body = join(hardline(), body_parts);
 
     concat(vec![
         concat(header),
