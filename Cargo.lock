@@ -1610,7 +1610,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "riven-cli"
+name = "riven_cli"
 version = "0.1.0"
 dependencies = [
  "ar",
@@ -1621,42 +1621,6 @@ dependencies = [
  "sha2",
  "tempfile",
  "toml",
-]
-
-[[package]]
-name = "riven-ide"
-version = "0.1.0"
-dependencies = [
- "lsp-types",
- "riven_core",
-]
-
-[[package]]
-name = "riven-lsp"
-version = "0.1.0"
-dependencies = [
- "lsp-types",
- "riven-ide",
- "serde",
- "serde_json",
- "tokio",
- "tower-lsp",
-]
-
-[[package]]
-name = "riven-repl"
-version = "0.1.0"
-dependencies = [
- "cc",
- "cranelift-codegen",
- "cranelift-frontend",
- "cranelift-jit",
- "cranelift-module",
- "cranelift-native",
- "libc",
- "riven_core",
- "rustyline",
- "target-lexicon",
 ]
 
 [[package]]
@@ -1679,6 +1643,42 @@ name = "riven_driver"
 version = "0.1.0"
 dependencies = [
  "riven_core",
+]
+
+[[package]]
+name = "riven_ide"
+version = "0.1.0"
+dependencies = [
+ "lsp-types",
+ "riven_core",
+]
+
+[[package]]
+name = "riven_lsp"
+version = "0.1.0"
+dependencies = [
+ "lsp-types",
+ "riven_ide",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-lsp",
+]
+
+[[package]]
+name = "riven_repl"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "cranelift-codegen",
+ "cranelift-frontend",
+ "cranelift-jit",
+ "cranelift-module",
+ "cranelift-native",
+ "libc",
+ "riven_core",
+ "rustyline",
+ "target-lexicon",
 ]
 
 [[package]]
