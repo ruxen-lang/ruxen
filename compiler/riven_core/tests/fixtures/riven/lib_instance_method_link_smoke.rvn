@@ -1,0 +1,24 @@
+class Counter
+  value: Int
+
+  def init(@value: Int)
+  end
+
+  lib "riven_runtime"
+    # Instance method: receiver is passed as the first arg to the C
+    # symbol. `c.tick(41)` lowers to a call equivalent to
+    # `riven_test_extern_instance_passthrough(c, 41)`. The C side
+    # ignores `c` and returns `41 + 1 = 42`.
+    def tick as "riven_test_extern_instance_passthrough"(self, x: Int) -> Int
+  end
+end
+
+def main() -> Int
+  let c = Counter.new(7)
+  let result = c.tick(41)
+  if result == 42
+    0
+  else
+    1
+  end
+end

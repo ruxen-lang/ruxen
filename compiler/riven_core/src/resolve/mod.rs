@@ -378,10 +378,30 @@ impl Resolver {
         // `format!("{}_{}", class_name, method_name)`. With the alias
         // map populated under that key, the existing Phase 2 rewrite
         // path picks up class-body FFI calls for free.
+        // Instance methods receive `self` as the first arg at the C
+        // ABI level — the MIR method-call lowering prepends the
+        // receiver to arg_values for any non-static method, so the
+        // FfiFuncDecl's `param_types` (which drives cranelift's
+        // `Linkage::Import` signature) must include the class type
+        // at index 0. Without this prepend the linker-side signature
+        // would be off-by-one and cranelift would refuse the call
+        // with "mismatched argument count".
+        let final_param_tys = if ffi_fn.is_class_method {
+            param_tys
+        } else {
+            let receiver_ty = Ty::Class {
+                name: parent_name.to_string(),
+                generic_args: vec![],
+            };
+            let mut tys = Vec::with_capacity(param_tys.len() + 1);
+            tys.push(receiver_ty);
+            tys.extend(param_tys);
+            tys
+        };
         hir_fns.push(HirFfiFunc {
             riven_name: mangled,
             c_symbol: ffi_fn.c_symbol.clone(),
-            param_types: param_tys,
+            param_types: final_param_tys,
             return_type: return_ty_for_hir,
             is_variadic: ffi_fn.is_variadic,
             // The class/mixin name is encoded in the mangled riven_name

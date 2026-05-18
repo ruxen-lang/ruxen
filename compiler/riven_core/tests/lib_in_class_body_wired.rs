@@ -141,6 +141,40 @@ fn class_lib_method_mir_callee_is_c_symbol() {
 }
 
 #[test]
+fn instance_lib_method_end_to_end_link_smoke() {
+    // Instance-method counterpart to the class-method link smoke
+    // below. Verifies that `def NAME(self, ...)` inside a class-body
+    // `lib` block correctly registers as an instance method, that
+    // `obj.method(args)` lowers with `self` prepended as the first
+    // arg, and that the linked C symbol receives the receiver.
+    let program = parse_fixture("lib_instance_method_link_smoke");
+    let result = typeck::type_check(&program);
+    let errors: Vec<_> = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.level == DiagnosticLevel::Error)
+        .collect();
+    assert!(errors.is_empty(), "typecheck errors: {:?}", errors);
+
+    let mut lowerer = Lowerer::new(&result.symbols);
+    let mir = lowerer
+        .lower_program(&result.program)
+        .expect("MIR lowering");
+
+    let bin_path = workspace_root().join("tmp/lib_instance_method_link_smoke.bin");
+    let _ = std::fs::create_dir_all(bin_path.parent().unwrap());
+    codegen::compile(&mir, bin_path.to_str().unwrap()).expect("codegen");
+
+    let output = Command::new(&bin_path).output().expect("run binary");
+    assert!(
+        output.status.success(),
+        "binary should exit 0 (c.tick(41) == 42); got status {:?} stderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn class_lib_method_end_to_end_link_smoke() {
     let program = parse_fixture("lib_class_method_link_smoke");
     let result = typeck::type_check(&program);

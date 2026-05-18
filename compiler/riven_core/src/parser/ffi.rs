@@ -164,6 +164,26 @@ impl Parser {
                     break;
                 }
 
+                // `self` as the first param of an FFI def explicitly
+                // marks an instance method (ruby-naming.spec.md §3.4a):
+                // `def name(self, x: Int)`. The token is purely a sugar
+                // marker — the receiver type is determined by the
+                // enclosing class/mixin, and the resolver prepends it
+                // to the FfiFuncDecl's `param_types` so the C symbol's
+                // declared cranelift signature matches the call shape
+                // (which prepends `self` to arg_values for any non-
+                // static method). We consume the token here without
+                // pushing a synthetic param so the parser doesn't have
+                // to invent a `Self` type that resolve cannot bind.
+                if params.is_empty() && self.at(TokenKind::SelfValue) {
+                    self.advance(); // consume `self`
+                    if !self.eat(TokenKind::Comma) {
+                        break;
+                    }
+                    self.skip_newlines();
+                    continue;
+                }
+
                 let param_start = self.current_span();
                 let param_name = self.expect_any_identifier();
                 self.expect(TokenKind::Colon);
