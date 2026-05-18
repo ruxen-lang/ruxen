@@ -79,9 +79,9 @@ cross-link rather than duplicate.
 - [std.env](stdlib/env.spec.md) — args, var, vars, current_dir.
 - [std.fs](stdlib/fs.spec.md) — read_to_string, write, read_dir,
   predicates.
-- [std.process](stdlib/process.spec.md) — exit, process_run.
+- [std.process](stdlib/process.spec.md) — exit, Command builder.
 - [std.path](stdlib/path.spec.md) — POSIX path manipulation.
-- [std.time](stdlib/time.spec.md) — `now_ns`, `unix_ns`.
+- [std.time](stdlib/time.spec.md) — `unix_ns`, Instant, Duration.
 - [std.net](stdlib/net.spec.md) — minimal TCP surface.
 - [std.iter (Iterator)](stdlib/iterator.spec.md) — pipeline +
   collect surface.

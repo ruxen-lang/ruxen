@@ -122,25 +122,28 @@ Read-only in v1: no `set_var` / `remove_var`.
 [Spec](../specs/stdlib/process.spec.md)
 
 ```riven
-use std.process.{exit, process_run}
+use std.process.{exit, Command}
 
 def main
-  var args: Array[String] = Array.new
-  args.push("hello")
-  let code = process_run("/bin/echo", args)
-  if code != 0
-    exit(code)
+  match Command.new("/bin/echo").arg("hello").status
+    Ok(s)  -> if s.code != 0 then exit(s.code) end
+    Err(e) -> eputs "spawn failed: #{e.message}"; exit(1)
   end
 end
 ```
 
 - `exit(code: Int) -> !` — never returns; OS exit code is `code` mod 256.
-- `process_run(cmd, args) -> Int` — fork+execvp, inherit stdio, return
-  the child's exit code.  Special codes: `128+signal` on signal
-  termination, `127` on fork/exec failure.
+- `Command.new(cmd: &str) -> Command` — builder; chain `.arg`,
+  `.args`, `.env`, `.current_dir` to configure the child.
+- `.status -> Result[ExitStatus, IoError]` — fork+execvp, inherit
+  stdio, wait, return the exit status (`128+signal` on signal
+  termination).  Missing-binary returns `Err(IoError.NotFound(_))`.
+- `.output -> Result[Output, IoError]` — same, but stdout / stderr
+  are captured into `Array[UInt8]` instead of inherited.
 
-For now, `process_run` is the only spawn primitive.  The full
-`Command` builder (`.env`, `.stdin`, `.output`) is deferred to v2.
+The flat `process_run(cmd, args) -> Int` shortcut shipped in earlier
+previews was removed once `Command.{status, output}` covered every
+use case — see `docs/specs/stdlib/process.spec.md`.
 
 ---
 
@@ -197,35 +200,40 @@ end
 
 ---
 
-## `std.time` — nanosecond clocks
+## `std.time` — clocks, `Instant`, `Duration`
 
 [Spec](../specs/stdlib/time.spec.md)
 
 ```riven
-use std.time.{now_ns, unix_ns}
+use std.time.{Instant, Duration, unix_ns}
 
 def main
-  let start = now_ns()
+  let start = Instant.now
   do_work()
-  let elapsed = now_ns() - start
-  puts "took #{elapsed} ns"
+  let elapsed = start.elapsed       # Duration
+  puts "took #{elapsed.as_millis} ms"
 
   let wall = unix_ns()
   puts "epoch+#{wall}"
 end
 ```
 
-Two clocks:
+Two surfaces:
 
-- `now_ns()` — monotonic; origin unspecified.  Use for measuring
-  durations.
-- `unix_ns()` — wall-clock nanoseconds since 1970-01-01T00:00:00Z.
-  Use for timestamps.
+- **`Instant` + `Duration`** — typed monotonic-clock wrappers.
+  `Instant.now` returns an opaque point on the monotonic clock;
+  `instant.elapsed` and `later.duration_since(earlier)` return a
+  `Duration`.  Use for measuring elapsed time.
+- **`unix_ns() -> Int`** — wall-clock nanoseconds since
+  1970-01-01T00:00:00Z.  Use for timestamps.
 
-Don't mix them: `now_ns()` is not a wall-clock value, and `unix_ns()`
-can jump backwards under NTP correction.
+Don't confuse the two: `Instant` is not a wall-clock value (its origin
+is unspecified), and `unix_ns()` can jump backwards under NTP
+correction.
 
-Typed `Duration` / `Instant` wrappers are v2.
+The flat `now_ns() -> Int` shortcut shipped in earlier previews was
+removed once `Instant.now` covered every use case — see
+`docs/specs/stdlib/time.spec.md`.
 
 ---
 

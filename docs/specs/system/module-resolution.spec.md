@@ -25,7 +25,7 @@ more symbols typechecks cleanly with **zero** diagnostics:
 | `std.io`      | `use std.io.{stdin, stdout, stderr}` (lowercase helpers) |
 | `std.env`     | `use std.env.{args, var, vars, current_dir}`           |
 | `std.fs`      | `use std.fs.{read_to_string, write, exists, …}`        |
-| `std.process` | `use std.process.{exit, process_run}`                  |
+| `std.process` | `use std.process.{exit, Command}`                      |
 | `std.sync`    | `use std.sync.{Thread, Mutex, SharedSync, JoinHandle, …}` |
 
 ## B2 — Group imports

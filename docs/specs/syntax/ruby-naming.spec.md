@@ -1069,9 +1069,9 @@ trailing-block argument:
 
 ```riven
 def with_timing
-  let start = now_ns()
+  let start = Instant.now
   yield
-  puts "took #{now_ns() - start} ns"
+  puts "took #{start.elapsed.as_nanos} ns"
 end
 ```
 
