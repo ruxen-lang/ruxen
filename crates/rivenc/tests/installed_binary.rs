@@ -67,8 +67,7 @@ fn workspace_root() -> PathBuf {
 /// The path to runtime.c in the source tree.
 fn runtime_c_src() -> PathBuf {
     workspace_root()
-        .join("crates")
-        .join("riven-core")
+        .join("library")
         .join("runtime")
         .join("runtime.c")
 }

@@ -23,7 +23,7 @@ use crate::mir::nodes::MirProgram;
 /// 1. `RIVEN_RUNTIME` env var — explicit override (path to runtime.c)
 /// 2. `<exe_dir>/../lib/runtime.c` — installed toolchain layout (~/.riven/lib)
 /// 3. `<exe_dir>/../share/riven/runtime.c` — alternate system layout
-/// 4. `CARGO_MANIFEST_DIR/runtime/runtime.c` — dev/workspace builds
+/// 4. `<workspace_root>/library/runtime/runtime.c` — dev/workspace builds
 pub fn find_runtime_c() -> Result<PathBuf, String> {
     if let Ok(p) = std::env::var("RIVEN_RUNTIME") {
         let path = PathBuf::from(p);
@@ -46,7 +46,11 @@ pub fn find_runtime_c() -> Result<PathBuf, String> {
     }
 
     // Dev fallback — only valid when running from the workspace.
+    // After #06.75 Phase B, the runtime lives at <workspace>/library/runtime/runtime.c.
     let dev_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("library")
         .join("runtime")
         .join("runtime.c");
     if dev_path.exists() {

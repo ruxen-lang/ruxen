@@ -4,9 +4,11 @@ use std::path::PathBuf;
 fn main() {
     let crate_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let runtime_c = PathBuf::from(&crate_dir)
-        .parent()
+        .parent() // crates/
         .unwrap()
-        .join("riven-core")
+        .parent() // workspace root
+        .unwrap()
+        .join("library")
         .join("runtime")
         .join("runtime.c");
 
