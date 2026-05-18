@@ -32,6 +32,10 @@ impl Parser {
         let mut methods: Vec<FuncDef> = Vec::new();
         let mut inner_impls: Vec<InnerImpl> = Vec::new();
         let derive_traits = Vec::new();
+        // #06.8 T0c: in-body `layout <kind>` directive. The only kind
+        // currently accepted on an enum body is `tagged`, which pins
+        // variant declaration order as the runtime tag assignment.
+        let mut layout: Vec<String> = Vec::new();
         // ruby-naming.spec.md §3.2: section-marker visibility for inline
         // method declarations. Default public, mirrors `parse_class_def`.
         let mut current_vis = Visibility::Public;
@@ -129,6 +133,33 @@ impl Parser {
                         self.synchronize();
                     }
                 }
+                // ── #06.8 T0c: `layout tagged` directive ────────────
+                // The only kind accepted on an enum body. Pins variant
+                // declaration order as the runtime tag assignment;
+                // resolver enforces uniqueness in scope and emits E0723
+                // on a duplicate. Other kinds are a parser-level error.
+                TokenKind::Layout => {
+                    self.advance();
+                    match self.current_kind().clone() {
+                        TokenKind::Identifier(name) => {
+                            self.advance();
+                            if name == "tagged" {
+                                layout.push("tagged".to_string());
+                            } else {
+                                self.error(&format!(
+                                    "expected `tagged` after `layout` in enum body, found `{}`",
+                                    name
+                                ));
+                            }
+                        }
+                        other => {
+                            self.error(&format!(
+                                "expected `tagged` after `layout` in enum body, found {:?}",
+                                other
+                            ));
+                        }
+                    }
+                }
                 // ── Default: variant declaration ────────────────────
                 _ => {
                     variants.push(self.parse_variant());
@@ -154,6 +185,7 @@ impl Parser {
             methods,
             inner_impls,
             derive_traits,
+            layout,
             doc_comments,
             where_clause,
             span,
@@ -295,7 +327,7 @@ impl Parser {
         // ruby-naming.spec.md §3.5: `layout c` / `layout packed` /
         // `layout transparent` directives populate this list (replaces
         // the retired `@[repr(...)]` prefix attribute).
-        let mut repr: Vec<String> = Vec::new();
+        let mut layout: Vec<String> = Vec::new();
         // ruby-naming.spec.md §3.2: section-marker visibility, public default.
         let mut current_vis = Visibility::Public;
         let mut name_list_overrides: Vec<(Visibility, Vec<String>)> = Vec::new();
@@ -383,7 +415,7 @@ impl Parser {
                             } else {
                                 name.to_string()
                             };
-                            repr.push(token);
+                            layout.push(token);
                         }
                         other => {
                             self.error(&format!(
@@ -445,7 +477,7 @@ impl Parser {
             methods,
             inner_impls,
             derive_traits,
-            repr,
+            layout,
             doc_comments,
             where_clause,
             span,
@@ -834,6 +866,13 @@ impl Parser {
         let mut methods = Vec::new();
         let mut inner_impls = Vec::new();
         let derive_traits = Vec::new();
+        // #06.8 T0c: in-body `layout <kind>` directive. The only kind
+        // currently accepted on a class body is `flat_heap_struct`,
+        // which marks the class as following the runtime flat-heap-
+        // struct C layout (`RivenFile`, `RivenTcpStream` pattern). The
+        // link-time layout-mismatch check (E0724) is reserved but not
+        // yet emitted; this is the Wave 1 marker plumbing only.
+        let mut layout: Vec<String> = Vec::new();
         // ruby-naming.spec.md §3.2: `public` / `private` / `protected` are
         // SECTION MARKERS. Public by default; each bare marker switches the
         // visibility applied to all subsequent declarations until the next
@@ -934,6 +973,34 @@ impl Parser {
                     // Field declaration — picks up current section visibility.
                     fields.push(self.parse_field_decl_with_vis(current_vis));
                 }
+                // ── #06.8 T0c: `layout flat_heap_struct` directive ──
+                // Marks the class as a flat heap struct (matches the
+                // `RivenFile` / `RivenTcpStream` runtime pattern). Wave 1
+                // is the parser+resolver marker only; the link-time
+                // layout-mismatch check (E0724) is intentionally
+                // unwired until a real stdlib class consumes it.
+                TokenKind::Layout => {
+                    self.advance();
+                    match self.current_kind().clone() {
+                        TokenKind::Identifier(name) => {
+                            self.advance();
+                            if name == "flat_heap_struct" {
+                                layout.push("flat_heap_struct".to_string());
+                            } else {
+                                self.error(&format!(
+                                    "expected `flat_heap_struct` after `layout` in class body, found `{}`",
+                                    name
+                                ));
+                            }
+                        }
+                        other => {
+                            self.error(&format!(
+                                "expected `flat_heap_struct` after `layout` in class body, found {:?}",
+                                other
+                            ));
+                        }
+                    }
+                }
                 TokenKind::Type => {
                     // ruby-naming.spec.md §3.4: a class that includes a
                     // mixin with `type Item` may bind it via
@@ -984,6 +1051,7 @@ impl Parser {
             methods,
             inner_impls,
             derive_traits,
+            layout,
             doc_comments,
             where_clause,
             span,

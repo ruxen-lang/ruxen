@@ -67,6 +67,15 @@ pub struct Resolver {
 
     /// Active closure stack used to record free-variable captures.
     closure_stack: Vec<ClosureCaptureContext>,
+
+    /// #06.8 T0c: tracks enums declared with an in-body `layout tagged`
+    /// directive during pass 1, keyed by name. On a second insertion
+    /// with the same name (i.e. two `layout tagged` enums with the
+    /// same identifier in the same module scope) the resolver emits
+    /// **E0723** at the duplicate's span. Wave 1 implementation only
+    /// tracks the flat top-level module scope; nested-scope semantics
+    /// arrive with the broader module-system pass.
+    tagged_enums_in_scope: HashMap<String, Span>,
 }
 
 #[derive(Debug)]
@@ -92,6 +101,7 @@ impl Resolver {
             yield_fns: HashMap::new(),
             async_scope_depth: 0,
             closure_stack: Vec::new(),
+            tagged_enums_in_scope: HashMap::new(),
         }
     }
 
@@ -158,6 +168,13 @@ impl Resolver {
                 // class) see the right param kinds.  Without this,
                 // const params would still register as `Type` kind.
                 let class_gp = self.collect_generic_param_infos(&class.generic_params);
+                // #06.8 T0c: capture the `layout flat_heap_struct`
+                // marker at forward-declaration time so any pre-pass
+                // user (e.g. forward-referenced fn sigs) sees it.
+                let flat_heap_struct = class
+                    .layout
+                    .iter()
+                    .any(|s| s == "flat_heap_struct");
                 let id = self.symbols.define(
                     class.name.clone(),
                     DefKind::Class {
@@ -172,6 +189,7 @@ impl Resolver {
                             manual_send: false,
                             manual_sync: false,
                             const_predicates: vec![],
+                            flat_heap_struct,
                         },
                     },
                     Visibility::Public,
@@ -189,7 +207,7 @@ impl Resolver {
                             generic_params: struct_gp,
                             fields: vec![],
                             derive_traits: s.derive_traits.clone(),
-                            repr: s.repr.clone(),
+                            layout: s.layout.clone(),
                             opt_out_send: false,
                             opt_out_sync: false,
                             manual_send: false,
@@ -204,6 +222,29 @@ impl Resolver {
                 self.type_registry.insert(s.name.clone(), id);
             }
             ast::TopLevelItem::Enum(e) => {
+                // #06.8 T0c: duplicate `layout tagged` enum names in
+                // the same scope are E0723. Detection happens here at
+                // forward-declaration time so the diagnostic lands on
+                // the second declaration's span (the first remains the
+                // accepted one — matching the "tags are append-only"
+                // invariant). The tracker is a flat HashMap keyed by
+                // name, which matches the current top-level-only
+                // scoping; nested-module semantics are deferred.
+                if e.layout.iter().any(|s| s == "tagged") {
+                    if let Some(_first_span) = self.tagged_enums_in_scope.get(&e.name).cloned() {
+                        self.diagnostics.push(Diagnostic::error_with_code(
+                            format!(
+                                "duplicate `layout tagged` enum `{}` in scope",
+                                e.name
+                            ),
+                            e.span.clone(),
+                            "E0723",
+                        ));
+                    } else {
+                        self.tagged_enums_in_scope
+                            .insert(e.name.clone(), e.span.clone());
+                    }
+                }
                 let enum_gp = self.collect_generic_param_infos(&e.generic_params);
                 let id = self.symbols.define(
                     e.name.clone(),
@@ -804,6 +845,12 @@ impl Resolver {
                     .collect()
             })
             .unwrap_or_default();
+        // #06.8 T0c: preserve the `layout flat_heap_struct` marker
+        // captured in pass 1 across the pass-2 rewrite.
+        let flat_heap_struct = class
+            .layout
+            .iter()
+            .any(|s| s == "flat_heap_struct");
         if let Some(def) = self.symbols.get_mut(def_id) {
             def.kind = DefKind::Class {
                 info: ClassInfo {
@@ -817,6 +864,7 @@ impl Resolver {
                     manual_send,
                     manual_sync,
                     const_predicates,
+                    flat_heap_struct,
                 },
             };
         }
@@ -890,7 +938,7 @@ impl Resolver {
                     generic_params: struct_generic_param_infos,
                     fields: field_def_ids,
                     derive_traits: s.derive_traits.clone(),
-                    repr: s.repr.clone(),
+                    layout: s.layout.clone(),
                     opt_out_send: false,
                     opt_out_sync: false,
                     manual_send: false,
@@ -924,7 +972,7 @@ impl Resolver {
             methods,
             impl_blocks,
             derive_traits: s.derive_traits.clone(),
-            repr: s.repr.clone(),
+            layout: s.layout.clone(),
             doc_comments: s.doc_comments.clone(),
             span: s.span.clone(),
         }

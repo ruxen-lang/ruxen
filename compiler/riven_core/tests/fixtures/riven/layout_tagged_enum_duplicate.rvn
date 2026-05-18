@@ -1,0 +1,11 @@
+enum E
+  layout tagged
+  A
+  B
+end
+
+enum E
+  layout tagged
+  X
+  Y
+end

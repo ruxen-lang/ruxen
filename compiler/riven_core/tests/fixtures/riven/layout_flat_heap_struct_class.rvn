@@ -1,0 +1,4 @@
+class FlatHeapStructDemo
+  layout flat_heap_struct
+  fd: I32
+end

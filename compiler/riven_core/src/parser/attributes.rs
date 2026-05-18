@@ -17,8 +17,13 @@ impl Parser {
                     }
                 }
                 "repr" => {
+                    // Dead branch: top-level `@[repr(...)]` is retired
+                    // (E0607). Kept for the path where future tooling
+                    // routes attributes through this function, mapped
+                    // onto the renamed `.layout` field per
+                    // ruby-naming.spec.md §3.5.
                     for arg in &attr.args {
-                        s.repr.push(arg.as_str().to_string());
+                        s.layout.push(arg.as_str().to_string());
                     }
                 }
                 other => {

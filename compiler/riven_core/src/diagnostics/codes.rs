@@ -210,6 +210,23 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E0714",
         title: "BufReader/BufWriter inner type must be File or TcpStream (v1)",
     },
+    // #06.8 Wave 1 Task 0c: in-body `layout tagged` directive on an
+    // enum pins variant declaration order as the runtime tag
+    // assignment. The resolver tracks tagged-enum names per scope at
+    // forward-declaration time and emits this code on the second
+    // declaration of the same name. E0724 is intentionally reserved
+    // (link-time `flat_heap_struct` layout-mismatch check) but is NOT
+    // registered yet — the runtime `riven_<class>_layout_check`
+    // symbol that gates it does not exist until a real stdlib class
+    // adopts the marker.
+    CodeInfo {
+        code: "E0723",
+        title: "duplicate `layout tagged` enum in scope",
+    },
+    // E0724 reserved for `#[repr(flat_heap_struct)]` /
+    // `layout flat_heap_struct` link-time layout-mismatch — see the
+    // note on E0723 above. Intentionally absent from REGISTRY until
+    // a real consumer is wired.
     // #06.8 Wave 1 Task 0b: stdlib bootstrap loader. Every error path
     // through `resolve::bootstrap` carries this code so a contributor
     // diagnosing a broken stdlib `.rvn` file lands on the same docs

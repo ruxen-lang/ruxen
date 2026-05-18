@@ -671,6 +671,12 @@ pub struct ClassDef {
     /// expander (pillar 05 phase 5a+). Empty for v1 classes that do not
     /// opt in.
     pub derive_traits: Vec<String>,
+    /// In-body `layout <kind>` directive args captured at parse time.
+    /// Wave 1 (#06.8 T0c) recognises `flat_heap_struct` here, marking a
+    /// class whose runtime instances follow the flat-heap-struct C
+    /// layout (`RivenFile`, `RivenTcpStream` pattern). Other tokens are
+    /// accepted by the lexer but rejected by the parser arm.
+    pub layout: Vec<String>,
     /// Captured `##` doc comments preceding the class (P0.13).
     pub doc_comments: Vec<String>,
     /// T2.02 S9: where-clause predicates (`where T: Display, N > 0`).
@@ -696,13 +702,14 @@ pub struct StructDef {
     /// directives inside the struct body. Mirrors `ClassDef::inner_impls`.
     pub inner_impls: Vec<InnerImpl>,
     /// Traits declared via `@[derive(...)]` at top level or via an in-body
-    /// `derive Trait1, Trait2` line. Does NOT include `@[repr(...)]` args —
-    /// those live on `repr`.
+    /// `derive Trait1, Trait2` line. Does NOT include `layout` args —
+    /// those live on `layout`.
     pub derive_traits: Vec<String>,
-    /// Representation hints from `@[repr(...)]` (e.g. `C`, `packed`). Kept
-    /// as raw argument strings for v1; a real `Repr` enum arrives with the
-    /// tier-4 stable-ABI/cbindgen work.
-    pub repr: Vec<String>,
+    /// In-body `layout <kind>` directive args (ruby-naming.spec.md §3.5):
+    /// `c`, `packed`, `transparent`. Kept as raw argument strings for v1;
+    /// a real `Layout` enum arrives with the tier-4 stable-ABI / cbindgen
+    /// work.
+    pub layout: Vec<String>,
     /// Captured `##` doc comments preceding the struct (P0.13).
     pub doc_comments: Vec<String>,
     /// T2.02 S9: see `ClassDef::where_clause`.
@@ -725,6 +732,12 @@ pub struct EnumDef {
     pub inner_impls: Vec<InnerImpl>,
     /// Traits declared via `@[derive(...)]` or in-body `derive Trait` line.
     pub derive_traits: Vec<String>,
+    /// In-body `layout <kind>` directive args captured at parse time.
+    /// Wave 1 (#06.8 T0c) recognises `tagged` here, which pins variant
+    /// declaration order as the runtime tag assignment (the pattern
+    /// `IoError`/`IoErrorKind` already follow). Other tokens are
+    /// rejected at the parser arm.
+    pub layout: Vec<String>,
     /// Captured `##` doc comments preceding the enum (P0.13).
     pub doc_comments: Vec<String>,
     /// T2.02 S9: see `ClassDef::where_clause`.

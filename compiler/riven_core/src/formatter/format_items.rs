@@ -377,7 +377,10 @@ fn format_field_decl(field: &FieldDecl, comments: &CommentMap) -> Doc {
 
 fn format_struct(s: &StructDef, comments: &CommentMap) -> Doc {
     let mut prelude: Vec<Doc> = Vec::new();
-    for arg in &s.repr {
+    // Pre-existing formatter output uses the retired `@[repr(...)]` syntax;
+    // a separate follow-up will migrate it to in-body `layout <kind>` per
+    // ruby-naming.spec.md §3.5. For now only the field access changes name.
+    for arg in &s.layout {
         prelude.push(concat(vec![text(format!("@[repr({})]", arg)), hardline()]));
     }
 

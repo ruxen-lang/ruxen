@@ -1,5 +1,5 @@
 //! Phase 7 integration tests: unsafe blocks, raw pointer types, FFI lib blocks,
-//! null literal, and @[repr(C)] attributes.
+//! null literal, and @[layout(C)] attributes.
 
 use riven_core::lexer::Lexer;
 use riven_core::parser::ast::*;
@@ -191,7 +191,7 @@ fn parse_ffi_multiple_params() {
 
 #[test]
 fn parse_layout_c_struct() {
-    // ruby-naming.spec.md §3.5 / §10a: `@[repr(C)]` is retired —
+    // ruby-naming.spec.md §3.5 / §10a: `@[layout(C)]` is retired —
     // `layout c` at the top of the struct body is the new form.
     let source = rvn("parse_layout_c_struct");
     let program = parse(&source);
@@ -201,9 +201,9 @@ fn parse_layout_c_struct() {
         assert_eq!(s.name, "Point");
         assert_eq!(s.fields.len(), 2);
         assert!(
-            s.repr.iter().any(|r| r.eq_ignore_ascii_case("C")),
-            "layout c should populate repr, got: {:?}",
-            s.repr
+            s.layout.iter().any(|r| r.eq_ignore_ascii_case("C")),
+            "layout c should populate layout, got: {:?}",
+            s.layout
         );
         assert!(
             s.derive_traits.is_empty(),
@@ -234,7 +234,7 @@ fn parse_include_on_struct() {
             .map(|i| i.trait_name.segments.join("."))
             .collect();
         assert_eq!(traits, vec!["Copy".to_string(), "Clone".to_string()]);
-        assert!(s.repr.is_empty());
+        assert!(s.layout.is_empty());
     } else {
         panic!("expected Struct item");
     }

@@ -446,8 +446,9 @@ pub struct HirStructDef {
     /// (ruby-naming.spec.md §3.4a).
     pub impl_blocks: Vec<HirImplBlock>,
     pub derive_traits: Vec<String>,
-    /// Representation hints from `@[repr(...)]` (e.g. ["C"], ["C", "packed"]).
-    pub repr: Vec<String>,
+    /// In-body `layout <kind>` directive args (ruby-naming.spec.md §3.5),
+    /// e.g. `["c"]`, `["packed"]`, `["transparent"]`.
+    pub layout: Vec<String>,
     pub doc_comments: Vec<String>,
     pub span: Span,
 }

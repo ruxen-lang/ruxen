@@ -83,6 +83,13 @@ pub struct ClassInfo {
     /// against the binding map; failing predicates emit E0706.
     /// Default empty for backwards compatibility.
     pub const_predicates: Vec<HirConstPredicate>,
+    /// #06.8 T0c: set when the class body carried a
+    /// `layout flat_heap_struct` directive. Marker only in Wave 1 —
+    /// the link-time layout-mismatch check (E0724) is reserved but
+    /// not yet emitted. Will be consumed by the runtime-ABI pin
+    /// check once a real stdlib class is migrated to user-source
+    /// `.rvn` and gates a `riven_<class>_layout_check` symbol.
+    pub flat_heap_struct: bool,
 }
 
 /// Information about a struct definition.
@@ -91,7 +98,7 @@ pub struct StructInfo {
     pub generic_params: Vec<GenericParamInfo>,
     pub fields: Vec<DefId>,
     pub derive_traits: Vec<String>,
-    pub repr: Vec<String>,
+    pub layout: Vec<String>,
     pub opt_out_send: bool,
     pub opt_out_sync: bool,
     pub manual_send: bool,
@@ -547,7 +554,7 @@ mod tests {
                     generic_params: Vec::new(),
                     fields: Vec::new(),
                     derive_traits: vec!["Copy".to_string(), "Clone".to_string()],
-                    repr: Vec::new(),
+                    layout: Vec::new(),
                     opt_out_send: false,
                     opt_out_sync: false,
                     manual_send: false,
@@ -588,6 +595,7 @@ mod tests {
                 manual_send: false,
                 manual_sync: false,
                 const_predicates: vec![],
+                flat_heap_struct: false,
             },
         }
     }
