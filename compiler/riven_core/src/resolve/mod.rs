@@ -230,6 +230,22 @@ impl Resolver {
     /// land in Wave 2 when the first stdlib module that uses them
     /// migrates. The conservative skip keeps the Phase 3 surface
     /// minimal; adding them later is purely additive.
+    /// # Double-registration policy
+    ///
+    /// `register_builtins` (the Rust-side `resolve/stdlib/mod.rs`)
+    /// runs BEFORE this method. If `register_builtins` already
+    /// defined a name (e.g. `class File`) that a bootstrap `.rvn`
+    /// also defines, the bootstrap version takes precedence —
+    /// scope insertions use `HashMap::insert`, which is last-wins.
+    /// The old Rust-side `DefId` remains in the symbol table but
+    /// becomes unreachable through name resolution.
+    ///
+    /// This is intentional: it's the migration runway. As stdlib
+    /// classes move from Rust registrations to `.rvn` files, the
+    /// `.rvn` version naturally wins without flag-day coordination.
+    /// Once a class's full surface is migrated, the corresponding
+    /// `register_builtins` block can be deleted; the `.rvn` version
+    /// has been canonical since it landed.
     pub fn merge_bootstrap_programs(
         &mut self,
         programs: &[ast::Program],

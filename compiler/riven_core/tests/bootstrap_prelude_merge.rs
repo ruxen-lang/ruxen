@@ -247,6 +247,59 @@ fn bootstrap_smoke_e2e_via_runtime_file() {
     );
 }
 
+// ─── Test 2b: bootstrap-loaded CLASS with class-method FFI ──────────────
+
+#[test]
+fn bootstrap_class_method_e2e_via_runtime_file() {
+    // Phase 4 proof-of-life: a class declared inside the bootstrap
+    // `.rvn` file with class-method FFI bindings is callable from user
+    // code with no extra wiring. This is the load-bearing test for
+    // "stdlib self-hosting works" — the architecture that's needed
+    // for Wave 2+ migrations of real stdlib classes.
+    let stdlib_root = workspace_root().join("library/std/src");
+    let mut diags = Vec::<Diagnostic>::new();
+    let bootstrap_programs = run_bootstrap_with_files(
+        &["_bootstrap_smoke.rvn"],
+        Some(&stdlib_root),
+        &mut diags,
+    );
+    assert!(diags.is_empty(), "bootstrap parse: {:?}", diags);
+
+    let user_program = parse_fixture("bootstrap_class_method_caller");
+    let type_result =
+        typeck::type_check_with_bootstrap(&user_program, &bootstrap_programs);
+    let errors: Vec<&Diagnostic> = type_result
+        .diagnostics
+        .iter()
+        .filter(|d| d.level == DiagnosticLevel::Error)
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "typecheck errors calling bootstrap class methods: {:?}",
+        errors
+    );
+
+    let mut lowerer = Lowerer::new(&type_result.symbols);
+    let mir = lowerer
+        .lower_program(&type_result.program)
+        .expect("MIR lowering");
+
+    let bin_path = workspace_root().join("tmp/bootstrap_class_method_e2e.bin");
+    let _ = std::fs::create_dir_all(bin_path.parent().unwrap());
+    codegen::compile(&mir, bin_path.to_str().unwrap()).expect("codegen");
+
+    let output = Command::new(&bin_path)
+        .output()
+        .expect("run bootstrap-class-method binary");
+    assert!(
+        output.status.success(),
+        "binary should exit 0 (BootstrapSmokeClass.add_one(41) == 42 AND \
+         BootstrapSmokeClass.double(20) == 40); status={:?} stderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 // ─── Test 3: broken stdlib file aborts via E0725 ───────────────────────
 
 #[test]
