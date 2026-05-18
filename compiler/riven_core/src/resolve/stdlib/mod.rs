@@ -505,10 +505,15 @@ pub(super) fn register_all(r: &mut Resolver) {
             }],
             Ty::Never,
         ),
-        // std::time — Phase 3. Both clocks return nanoseconds in Int.
-        // `now_ns` is monotonic (only differences are meaningful);
-        // `unix_ns` is wall-clock (nanoseconds since 1970-01-01 UTC).
-        ("now_ns", vec![], Ty::Int),
+        // std::time — Phase 3 / #06.5. `unix_ns` is wall-clock
+        // (nanoseconds since 1970-01-01 UTC) and stays exposed as a
+        // bare Int-returning free-fn until a `SystemTime` class lands.
+        // The previously-exposed monotonic `now_ns()` free-fn was
+        // removed in #06.5 T5.5 once `Instant.now` + `Instant.elapsed`
+        // covered every use case. The C symbol `riven_time_now_ns` is
+        // still linked from the runtime (it is the implementation
+        // behind `riven_instant_now`); it just is not reachable from
+        // Riven user code.
         ("unix_ns", vec![], Ty::Int),
         // std::thread — Phase 2 stdlib (#06.5 T4). Free fn
         // `sleep(&Duration)` is the Duration-typed wrapper around
@@ -586,27 +591,13 @@ pub(super) fn register_all(r: &mut Resolver) {
             }],
             Ty::Bool,
         ),
-        // std::process::run — Phase 3. Fork+execvp a child process,
-        // inheriting stdin/stdout/stderr from the parent, and return
-        // the exit code. Output capture is a follow-up; for v1 the
-        // return type is just Int (128+signal on signal termination,
-        // 127 on fork/exec failure — matches POSIX shell convention).
-        (
-            "process_run",
-            vec![
-                ParamInfo {
-                    name: "cmd".into(),
-                    ty: Ty::Ref(Box::new(Ty::String)),
-                    auto_assign: false,
-                },
-                ParamInfo {
-                    name: "args".into(),
-                    ty: Ty::Array(Box::new(Ty::String)),
-                    auto_assign: false,
-                },
-            ],
-            Ty::Int,
-        ),
+        // std::process — the flat `process_run(cmd, args) -> Int`
+        // free-fn previously exposed here was removed in #06.5 T5.5
+        // once `Command.new(cmd).args(args).status` covered every use
+        // case. The C symbol `riven_process_run` is still linked from
+        // the runtime (it is the implementation behind
+        // `riven_command_status`); it just is not reachable from
+        // Riven user code. See docs/specs/stdlib/process.spec.md.
         // std::net — Phase 2 #06.5 T5: class-only surface. The flat
         // tcp_* free fns previously exposed here (tcp_connect/listen/
         // accept/read/write/close) were removed when the typed
@@ -632,6 +623,38 @@ pub(super) fn register_all(r: &mut Resolver) {
             "signal_received_sigint",
             vec![],
             Ty::Int,
+        ),
+        // std::rand — Phase 2 #06.5 T8: kernel CSPRNG-backed free fns.
+        // The byte-array carrier is `Array[Int]` (matching File.read_all
+        // / TcpStream.read), even though the user-facing spec spelling
+        // is `Array[U8]`. The CSPRNG backend is compile-time `#if`-
+        // selected (Linux getrandom, macOS SecRandomCopyBytes, fallback
+        // /dev/urandom) — see docs/specs/stdlib/rand.spec.md.
+        (
+            "random_bytes",
+            vec![ParamInfo {
+                name: "n".into(),
+                ty: Ty::Int,
+                auto_assign: false,
+            }],
+            Ty::Result(
+                Box::new(Ty::Array(Box::new(Ty::Int))),
+                Box::new(io_error_ty.clone()),
+            ),
+        ),
+        // `random_u64` returns the 64 random bits as an Int carrier
+        // — same convention as `now_ns` / `unix_ns`. Hard CSPRNG
+        // failure panics inside the runtime; the call site stays a
+        // bare expression rather than a Result match.
+        ("random_u64", vec![], Ty::Int),
+        (
+            "random_fill",
+            vec![ParamInfo {
+                name: "buf".into(),
+                ty: Ty::RefMut(Box::new(Ty::Array(Box::new(Ty::Int)))),
+                auto_assign: false,
+            }],
+            Ty::Result(Box::new(Ty::Unit), Box::new(io_error_ty.clone())),
         ),
     ];
 
@@ -1712,10 +1735,11 @@ pub(super) fn register_all(r: &mut Resolver) {
         DefKind::Module {
             items: vec![
                 builtin_fn_ids["exit"],
-                builtin_fn_ids["process_run"],
                 // Phase 2 stdlib (#06): Command builder + its
                 // terminal return types.  Importable via
                 // `use std.process.{Command, Output, ExitStatus}`.
+                // The flat `process_run` free-fn was removed in
+                // #06.5 T5.5 — see process.spec.md "Removed".
                 command_id,
                 output_id,
                 exit_status_id,
@@ -1728,10 +1752,11 @@ pub(super) fn register_all(r: &mut Resolver) {
         "time".to_string(),
         DefKind::Module {
             items: vec![
-                builtin_fn_ids["now_ns"],
                 builtin_fn_ids["unix_ns"],
                 // Phase 2 stdlib (#06.5 T4): Duration / Instant
                 // imported via `use std.time.{Duration, Instant}`.
+                // The flat `now_ns` free-fn was removed in
+                // #06.5 T5.5 — see time.spec.md "Removed".
                 duration_id,
                 instant_id,
             ],
@@ -1784,6 +1809,22 @@ pub(super) fn register_all(r: &mut Resolver) {
             items: vec![
                 builtin_fn_ids["signal_install_sigint"],
                 builtin_fn_ids["signal_received_sigint"],
+            ],
+        },
+        Visibility::Public,
+        span.clone(),
+    );
+    // Phase 2 #06.5 T8: std::rand — three free fns over the kernel
+    // CSPRNG. Importable via `use std.rand.{random_bytes, random_u64,
+    // random_fill}`. Class wrapping is intentionally absent — see
+    // docs/specs/stdlib/rand.spec.md "Out of scope".
+    let rand_id = r.symbols.define(
+        "rand".to_string(),
+        DefKind::Module {
+            items: vec![
+                builtin_fn_ids["random_bytes"],
+                builtin_fn_ids["random_u64"],
+                builtin_fn_ids["random_fill"],
             ],
         },
         Visibility::Public,
@@ -1847,6 +1888,9 @@ pub(super) fn register_all(r: &mut Resolver) {
                 // Phase 2 stdlib (#06.5 T4): `std.thread` — typed
                 // `sleep(&Duration)` free fn. Sibling of std.sync.
                 thread_module_id,
+                // Phase 2 stdlib (#06.5 T8): `std.rand` — CSPRNG-
+                // backed random_bytes / random_u64 / random_fill.
+                rand_id,
             ],
         },
         Visibility::Public,

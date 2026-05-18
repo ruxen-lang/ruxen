@@ -57,7 +57,11 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "read_link" => return Ok("riven_fs_read_link"),
         "symlink" => return Ok("riven_fs_symlink"),
         "exit" => return Ok("riven_process_exit"),
-        "process_run" => return Ok("riven_process_run"),
+        // `process_run` removed in #06.5 T5.5 — superseded by
+        // `Command_{status,output}`. The C symbol `riven_process_run`
+        // is still linked (it is the implementation behind
+        // `riven_command_status`); the resolver-visible Riven name
+        // is gone. See docs/specs/stdlib/process.spec.md.
         // String methods.
         "String_from" => return Ok("riven_string_from"),
         "String_push_str" => return Ok("riven_string_push_str"),
@@ -216,7 +220,10 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "Thread_sleep" => return Ok("riven_thread_sleep_ns"),
         "Thread_yield_now" => return Ok("riven_thread_yield"),
         // std::time top-level functions (resolved before module-prefixing).
-        "now_ns" => return Ok("riven_time_now_ns"),
+        // `now_ns` removed in #06.5 T5.5 — superseded by `Instant.now`.
+        // The C symbol `riven_time_now_ns` is still linked (it is the
+        // implementation behind `riven_instant_now`); the resolver-
+        // visible Riven name is gone. See docs/specs/stdlib/time.spec.md.
         "unix_ns" => return Ok("riven_time_unix_ns"),
         // Phase 2 stdlib (#06.5 T4): Duration / Instant scalar-wrapper
         // classes. `Duration_from_*` and `Instant_now` are static-style
@@ -273,6 +280,13 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // std::signal — graceful-shutdown surface.
         "signal_install_sigint" => return Ok("riven_signal_install_sigint"),
         "signal_received_sigint" => return Ok("riven_signal_received_sigint"),
+        // Phase 2 stdlib (#06.5 T8): std::rand — kernel CSPRNG-backed
+        // free fns. Backend selection (Linux getrandom / macOS
+        // SecRandomCopyBytes / fallback /dev/urandom) happens in
+        // library/runtime/io/rand.c under compile-time `#if`.
+        "random_bytes" => return Ok("riven_rand_random_bytes"),
+        "random_u64" => return Ok("riven_rand_random_u64"),
+        "random_fill" => return Ok("riven_rand_random_fill"),
         // Compiler-injected pseudo-calls. These are not method calls; the
         // codegen treats them specially.
         //   - `super` is a parent-init dispatch in a constructor.

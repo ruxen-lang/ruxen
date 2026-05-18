@@ -1,8 +1,11 @@
-//! Integration test for Phase 3 `std::time` module.
+//! Integration test for `std::time`.
 //!
-//! Verifies that `time.now_ns()` and `time.unix_ns()` are reachable
-//! through the resolver, lower to the right runtime calls, and produce
-//! sensible monotonic values at runtime.
+//! Covers `unix_ns()` (wall-clock free-fn) and the typed
+//! `Duration` / `Instant` surface shipped in #06.5 T4. The flat
+//! `now_ns() -> Int` free-fn that shipped in earlier previews was
+//! removed in #06.5 T5.5 once `Instant.now` + `Instant.elapsed`
+//! covered every monotonic-clock use case — its pin test moved to
+//! `instant_monotonic_after_sleep`.
 
 use riven_core::codegen;
 use riven_core::lexer::Lexer;
@@ -53,25 +56,6 @@ fn compile_and_run(source: &str, basename: &str) -> (String, String, bool) {
         String::from_utf8_lossy(&output.stderr).to_string(),
         output.status.success(),
     )
-}
-
-/// `time.now_ns()` returns positive monotonic nanoseconds and a second
-/// call returns a value greater than or equal to the first (monotonic
-/// clock never moves backwards).
-#[test]
-fn time_now_ns_is_monotonic() {
-    let source = rvn("time_now_ns_is_monotonic");
-    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_time_monotonic");
-    assert!(
-        ok,
-        "binary exited non-zero. stdout=[{}] stderr=[{}]",
-        stdout, stderr
-    );
-    assert!(
-        stdout.contains("ok"),
-        "expected monotonic ordering, got: [{}]",
-        stdout
-    );
 }
 
 /// `time.unix_ns()` returns nanoseconds since the Unix epoch — sanity

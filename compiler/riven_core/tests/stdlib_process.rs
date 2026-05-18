@@ -1,12 +1,11 @@
-//! Integration test for Phase 3 `std::process::process_run`.
+//! Integration test for `std::process`.
 //!
-//! Verifies that `process_run(cmd, args)` is reachable through the
-//! resolver, lowers to the right runtime call, and returns the child's
-//! exit code from a real fork+execvp roundtrip.
-//!
-//! Output capture is intentionally out of scope for v1 — these tests
-//! only verify exit codes (and that stdio is inherited, which is what
-//! /bin/echo writing to the test's stdout demonstrates implicitly).
+//! Covers `process.exit(code)` and the full `Command` builder pipeline
+//! (`Command.new(cmd).arg(_).args(_).env(_,_).current_dir(_).{status,
+//! output}`). The flat `process_run(cmd, args) -> Int` free-fn that
+//! shipped in earlier previews was removed in #06.5 T5.5 once
+//! `Command.{status, output}` covered every use case — its pin tests
+//! moved to the `command_*` family below.
 
 use riven_core::codegen;
 use riven_core::lexer::Lexer;
@@ -57,78 +56,6 @@ fn compile_and_run(source: &str, basename: &str) -> (String, String, bool) {
         String::from_utf8_lossy(&output.stderr).to_string(),
         output.status.success(),
     )
-}
-
-/// `/usr/bin/true` — POSIX no-op that exits 0. The simplest possible
-/// fork+execvp success path. Use `/usr/bin/`, not `/bin/`: macOS keeps
-/// only a fixed minimal set in `/bin/` and `true`/`false` live in
-/// `/usr/bin/` only. On most modern Linux distros `/bin → /usr/bin`,
-/// so `/usr/bin/true` works there too.
-#[test]
-fn process_run_true_returns_zero() {
-    let source = rvn("process_run_true_returns_zero");
-    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_process_true");
-    assert!(
-        ok,
-        "binary exited non-zero. stdout=[{}] stderr=[{}]",
-        stdout, stderr
-    );
-    assert!(
-        stdout.contains("ok"),
-        "expected exit code 0 from /usr/bin/true, got: stdout=[{}] stderr=[{}]",
-        stdout,
-        stderr
-    );
-}
-
-/// `/usr/bin/false` — POSIX no-op that exits 1. Verifies that we faithfully
-/// surface non-zero exit codes (and don't, e.g., always return 0 because
-/// of a sign-extension bug or a misread `WEXITSTATUS`).
-#[test]
-fn process_run_false_returns_one() {
-    let source = rvn("process_run_false_returns_one");
-    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_process_false");
-    assert!(
-        ok,
-        "binary exited non-zero. stdout=[{}] stderr=[{}]",
-        stdout, stderr
-    );
-    assert!(
-        stdout.contains("ok"),
-        "expected exit code 1 from /usr/bin/false, got: stdout=[{}] stderr=[{}]",
-        stdout,
-        stderr
-    );
-}
-
-/// `/bin/echo hello` — verifies that args propagate from a Riven
-/// `Vec[String]` into the child's argv. Exit code is 0; we don't
-/// capture stdout (out of scope for v1) but the child inherits the
-/// parent's stdout, so "hello" lands in the test process's captured
-/// stdout. We assert exit-code success only — output checking is a
-/// nicety and would be brittle on systems where echo behaves
-/// slightly differently.
-///
-/// Path note: unlike `true`/`false`, `echo` IS in macOS's `/bin/`.
-/// `/usr/bin/echo` is missing on the GitHub `macos-14` runner image —
-/// CI surfaced this via the runtime's execvp diagnostic. So we use
-/// `/bin/echo`, which exists on both macOS and modern Linux distros
-/// (where `/bin → /usr/bin`).
-#[test]
-fn process_run_echo_with_args_returns_zero() {
-    let source = rvn("process_run_echo_with_args_returns_zero");
-    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_process_echo");
-    assert!(
-        ok,
-        "binary exited non-zero. stdout=[{}] stderr=[{}]",
-        stdout, stderr
-    );
-    assert!(
-        stdout.contains("ok"),
-        "expected exit code 0 from /bin/echo, got: stdout=[{}] stderr=[{}]",
-        stdout,
-        stderr
-    );
 }
 
 // ─── process spec B1 direct exit-code pins (gap fill 2026-05) ──────────
@@ -189,21 +116,6 @@ fn process_exit_forty_two_returns_forty_two() {
     assert_eq!(
         compile_and_get_exit_code(&source, "stdlib_process_exit_42"),
         42
-    );
-}
-
-/// `process_run` of a nonexistent binary returns `127` per the spec's
-/// B4 failure-mode encoding.  Pins the execvp-failure branch.
-#[test]
-fn process_run_nonexistent_binary_returns_127() {
-    let source = rvn("process_run_nonexistent_binary_returns_127");
-    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_process_run_missing");
-    assert!(ok, "stdout=[{}] stderr=[{}]", stdout, stderr);
-    assert!(
-        stdout.contains("ok"),
-        "expected 127 from missing binary, got: stdout=[{}] stderr=[{}]",
-        stdout,
-        stderr
     );
 }
 
