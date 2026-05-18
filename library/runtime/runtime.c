@@ -128,8 +128,11 @@ static void *riven_result_err_value(int64_t payload) {
  *   6. io/stdio.c       Printing + Stdout/Stderr convenience.
  *   7. io/file.c        File / OpenOptions / SeekFrom.
  *   8. fs.c             Filesystem operations.
- *   9. net/tcp.c        std::net (Phase 3).
- *  10. time.c           Duration / Instant / thread sleep.
+ *   9. time.c           Duration / Instant / thread sleep.
+ *  10. net/tcp.c        std::net — TcpListener / TcpStream / Shutdown.
+ *                       Must come AFTER time.c because
+ *                       TcpStream.set_{read,write}_timeout
+ *                       dereferences a RivenDuration pointer.
  *  11. signal.c         SIGINT handler.
  *  12. process.c        Command builder + ExitStatus + Output.
  *  13. fmt.c            RivenFormatter.
@@ -147,8 +150,11 @@ static void *riven_result_err_value(int64_t payload) {
 #include "io/stdio.c"
 #include "fs.c"
 #include "io/file.c"
-#include "net/tcp.c"
+/* time.c must precede net/tcp.c — Phase 2 #06.5 T5 added
+ * TcpStream.set_read_timeout / set_write_timeout, which dereference
+ * a RivenDuration pointer (defined in time.c). */
 #include "time.c"
+#include "net/tcp.c"
 #include "signal.c"
 #include "process.c"
 #include "fmt.c"

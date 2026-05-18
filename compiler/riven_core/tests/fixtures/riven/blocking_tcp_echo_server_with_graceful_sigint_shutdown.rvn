@@ -1,42 +1,55 @@
-use std.net.{tcp_listen, tcp_accept, tcp_read, tcp_write, tcp_close}
+use std.net.{TcpListener, TcpStream}
 use std.env.get
 
-class TcpListener
-  fd: Int
+# Phase 2 #06.5 T5: this fixture used to define inline `TcpListener`
+# and `TcpStream` shim classes wrapping the flat `tcp_*` free fns.
+# The stdlib now ships those classes as auto-imported stdlib types so
+# the demo is just a straight import + match-on-Result.
 
-  def init(@fd: Int)
-  end
-
-  def bind(addr: &String) -> TcpListener
-    let fd = tcp_listen(addr)
-    TcpListener.new(fd)
-  end
-
-  def accept_fd -> Int
-    tcp_accept(self.fd)
-  end
-
-  def close -> ()
-    tcp_close(self.fd)
+def echo_back(s: TcpStream, bytes: &Array[Int])
+  match s.write(bytes)
+    Ok(_)  -> ()
+    Err(_) -> ()
   end
 end
 
-class TcpStream
-  fd: Int
-
-  def init(@fd: Int)
+def close_stream(s: TcpStream)
+  match s.close()
+    Ok(_)  -> ()
+    Err(_) -> ()
   end
+end
 
-  def read_string(max: Int) -> String
-    tcp_read(self.fd, max)
+def handle_client(s: TcpStream)
+  var buf: Array[Int] = Array.new
+  match s.read(&var buf)
+    Ok(_n) -> echo_back(s, &buf)
+    Err(_) -> ()
   end
+  close_stream(s)
+end
 
-  def write_string(data: &String) -> Int
-    tcp_write(self.fd, data)
+def accept_one(l: TcpListener)
+  match l.accept()
+    Ok(stream) -> handle_client(stream)
+    # accept() returns Err(IoError.Interrupted) when SIGINT lands
+    # during the blocking call — we don't need to inspect the
+    # variant; the signal-flag check in the caller decides whether
+    # to break out of the loop.
+    Err(_) -> ()
   end
+end
 
-  def close -> ()
-    tcp_close(self.fd)
+def serve(l: TcpListener)
+  loop
+    accept_one(l)
+    if signal_received_sigint() != 0
+      break
+    end
+  end
+  match l.close()
+    Ok(_)  -> ()
+    Err(_) -> ()
   end
 end
 
@@ -46,26 +59,10 @@ def main
 
   signal_install_sigint()
 
-  let listener = TcpListener.bind(&addr)
-
-  loop
-    let client_fd = listener.accept_fd
-
-    # Either a real client connected (fd >= 0) or accept was
-    # interrupted by SIGINT (fd < 0 with errno=EINTR).  In both
-    # cases we check the signal flag on the next loop iteration.
-    if client_fd >= 0
-      let stream = TcpStream.new(client_fd)
-      let msg = stream.read_string(64)
-      let _ = stream.write_string(&msg)
-      stream.close()
-    end
-
-    if signal_received_sigint() != 0
-      break
-    end
+  match TcpListener.bind(&addr)
+    Ok(listener) -> serve(listener)
+    Err(_)       -> eputs "bind failed"
   end
 
-  listener.close()
   puts "bye"
 end

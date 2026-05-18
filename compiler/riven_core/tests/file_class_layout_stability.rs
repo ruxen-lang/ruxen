@@ -140,7 +140,16 @@ fn seek_from_tag_values_match_runtime_and_resolver() {
         //   ```
         // Treat the trigger line itself as in-block content so the
         // compacted form parses too.
-        let trigger = line.contains("seek_from_variants");
+        // Trigger on the table DECLARATION only — `let
+        // seek_from_variants: ...`. Earlier this matched any
+        // mention of `seek_from_variants`, including the
+        // subsequent `seek_from_variants.len()` and `for ... in
+        // seek_from_variants {` lines, which would leave `in_block`
+        // toggled true through to the next `];` in the file — and
+        // since Phase 2 #06.5 T5 added a sibling `shutdown_variants`
+        // table, that next `];` then surfaced as extra Shutdown
+        // tuples in the resolver_tags Vec.
+        let trigger = line.contains("let seek_from_variants");
         if trigger {
             in_block = true;
         }

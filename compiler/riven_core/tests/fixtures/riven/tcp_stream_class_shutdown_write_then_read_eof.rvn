@@ -1,0 +1,22 @@
+use std.net.{TcpStream, Shutdown}
+use std.env.get
+use std.time.Duration
+use std.thread.sleep
+
+def half_close(s: TcpStream)
+  match s.shutdown(Shutdown.Write)
+    Ok(_)  -> puts "shutdown=ok"
+    Err(_) -> puts "shutdown=err"
+  end
+  # Give the host a moment to observe EOF before we drop the stream.
+  sleep(&Duration.from_millis(200))
+end
+
+def main
+  let p: String = get("RIVEN_NET_TEST_PORT").expect!("port")
+  let addr = "127.0.0.1:#{p}"
+  match TcpStream.connect(&addr)
+    Ok(s)  -> half_close(s)
+    Err(_) -> eputs "connect failed"
+  end
+end

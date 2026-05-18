@@ -1,0 +1,33 @@
+use std.net.{TcpListener, TcpStream}
+
+def close_stream_twice(s: TcpStream)
+  match s.close()
+    Ok(_)  -> puts "close1=ok"
+    Err(_) -> puts "close1=err"
+  end
+  match s.close()
+    Ok(_)  -> puts "close2=ok"
+    Err(_) -> puts "close2=err"
+  end
+end
+
+def connect_and_close(addr: &String)
+  match TcpStream.connect(addr)
+    Ok(s)  -> close_stream_twice(s)
+    Err(_) -> puts "connect=err"
+  end
+end
+
+def with_addr(l: TcpListener)
+  match l.local_addr()
+    Ok(addr) -> connect_and_close(&addr)
+    Err(_)   -> puts "local_addr=err"
+  end
+end
+
+def main
+  match TcpListener.bind(&"127.0.0.1:0")
+    Ok(l)  -> with_addr(l)
+    Err(_) -> puts "bind=err"
+  end
+end

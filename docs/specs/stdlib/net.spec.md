@@ -35,10 +35,12 @@ end
 
 class TcpStream
   def self.connect(addr: &String) -> Result[TcpStream, IoError]
-  def read(self, buf: &mut Array[U8]) -> Result[Int, IoError]
+  def read(self, buf: &var Array[U8]) -> Result[Int, IoError]
   def write(self, bytes: &Array[U8]) -> Result[Int, IoError]
   def peer_addr(self) -> Result[String, IoError]
   def shutdown(self, how: Shutdown) -> Result[(), IoError]
+  def set_read_timeout(self, d: &Duration) -> Result[(), IoError]
+  def set_write_timeout(self, d: &Duration) -> Result[(), IoError]
   def close(self) -> Result[(), IoError]                # also on drop
 end
 
@@ -107,11 +109,21 @@ Single `send(2)` call. Returns `Ok(n)` where `n` may be less than
 `write_all`. Returns `Err(IoError.BrokenPipe)` if the peer closed
 mid-write.
 
-### C9 — `TcpStream.read(buf: &mut Array[U8]) -> Result[Int, IoError]`
+### C9 — `TcpStream.read(buf: &var Array[U8]) -> Result[Int, IoError]`
 
 Single `recv(2)` call. Returns `Ok(0)` on clean EOF, `Ok(n>0)`
 otherwise. Bytes are appended to `buf` (one int64 slot per byte,
 matching `File.read`'s Vec[U8] convention).
+
+**Binary-safety:** the read path is genuinely binary-safe — embedded
+`0x00` bytes round-trip via `Array[U8]`. The implementation routes
+through the new `riven_tcp_read_bytes(fd, buf, max)` runtime helper
+which writes each received byte into a fresh int64 slot, never
+treating the staging buffer as a C string. The legacy
+`riven_tcp_read(fd, max) -> char*` helper (which DID truncate on
+embedded NULs) is kept linked but no longer reachable from Riven —
+the flat-fn surface that exposed it was removed alongside the rest
+of the Phase-3 free fns.
 
 ### C10 — `TcpStream.peer_addr() -> Result[String, IoError]`
 
@@ -155,6 +167,33 @@ against the runtime `RIVEN_SHUTDOWN_*` defines in
 declarations live in `library/std/src/net.rvn` (declarative doc —
 executable behavior is wired in resolve/typeck/codegen).
 
+### C17 — `TcpStream.set_read_timeout(d: &Duration) -> Result[(), IoError]`
+
+Sets the `SO_RCVTIMEO` socket option to the given Duration. Once the
+timeout fires a subsequent blocking `.read(...)` returns
+`Err(IoError.WouldBlock)` instead of blocking forever. Passing a
+Duration with `nanos == 0` clears the timeout (matches Rust's
+`set_read_timeout(None)` semantic). Sub-microsecond non-zero
+Durations round up to 1µs so a "set as short as possible" intent
+isn't accidentally interpreted as "clear".
+
+### C18 — `TcpStream.set_write_timeout(d: &Duration) -> Result[(), IoError]`
+
+Sets the `SO_SNDTIMEO` socket option. Same semantics as
+`set_read_timeout` but applied to writes — a `.write(...)` that
+can't drain to the kernel buffer within the budget returns
+`Err(IoError.WouldBlock)`.
+
+### C19 — Binary-safe read round-trip
+
+A byte sequence containing `0x00` (e.g. `[0xFF, 0x00, 0x41, 0x00, 0x42]`)
+sent via `TcpStream.write(&bytes)` and read back via `TcpStream.read(
+&var buf)` round-trips with all bytes intact — no truncation at the
+embedded NUL. Pinned by `tcp_stream_class_read_is_binary_safe` and
+e2e case `541_tcp_stream_connect_write_read` (which exercises a
+clean roundtrip; the binary-safety guarantee piggy-backs on the
+same `riven_tcp_read_bytes` path).
+
 ### C16 — Flat `tcp_*` free fns are no longer exposed
 
 A Riven program that writes `use std.net.tcp_connect` must fail at
@@ -185,6 +224,9 @@ they are simply no longer reachable from Riven user code.
 | C14       | `shutdown_tag_values_match_runtime_and_resolver`   | `shutdown_tag_stability.rs`    |
 | C15       | `tcp_class_prelude_auto_import_resolves`           | `stdlib_net.rs`                |
 | C16       | `flat_tcp_free_fns_removed_from_resolver`          | `stdlib_net.rs`                |
+| C17       | `tcp_stream_class_set_read_timeout_would_block`    | `stdlib_net.rs`                |
+| C18       | `tcp_stream_class_set_write_timeout_resolves`      | `stdlib_net.rs`                |
+| C19       | `tcp_stream_class_read_is_binary_safe`             | `stdlib_net.rs`                |
 
 The original Phase-3 flat-fn roundtrip / SIGINT-echo-server pin
 tests have been migrated to use `TcpListener` / `TcpStream` and now

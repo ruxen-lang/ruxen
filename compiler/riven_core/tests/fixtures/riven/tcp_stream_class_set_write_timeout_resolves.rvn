@@ -1,0 +1,20 @@
+use std.net.TcpStream
+use std.env.get
+use std.time.Duration
+
+def set_write_timeout_to(s: TcpStream)
+  let t = Duration.from_millis(50)
+  match s.set_write_timeout(&t)
+    Ok(_)  -> puts "set_write_timeout=ok"
+    Err(_) -> puts "set_write_timeout=err"
+  end
+end
+
+def main
+  let p: String = get("RIVEN_NET_TEST_PORT").expect!("port")
+  let addr = "127.0.0.1:#{p}"
+  match TcpStream.connect(&addr)
+    Ok(s)  -> set_write_timeout_to(s)
+    Err(_) -> puts "connect=err"
+  end
+end

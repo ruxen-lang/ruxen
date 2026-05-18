@@ -1,0 +1,23 @@
+use std.net.TcpListener
+
+def close_twice(l: TcpListener)
+  match l.close()
+    Ok(_)  -> puts "close1=ok"
+    Err(_) -> puts "close1=err"
+  end
+  match l.close()
+    Ok(_)  -> puts "close2=ok"
+    Err(_) -> puts "close2=err"
+  end
+  match l.local_addr()
+    Ok(_)  -> puts "local_addr_after_close=ok"
+    Err(_) -> puts "local_addr_after_close=err"
+  end
+end
+
+def main
+  match TcpListener.bind(&"127.0.0.1:0")
+    Ok(l)  -> close_twice(l)
+    Err(_) -> puts "bind=err"
+  end
+end

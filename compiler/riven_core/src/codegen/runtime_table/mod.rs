@@ -268,6 +268,8 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "TcpStream_shutdown" => return Ok("riven_tcp_stream_shutdown"),
         "TcpStream_close" => return Ok("riven_tcp_stream_close"),
         "TcpStream_drop" => return Ok("riven_tcp_stream_drop"),
+        "TcpStream_set_read_timeout" => return Ok("riven_tcp_stream_set_read_timeout"),
+        "TcpStream_set_write_timeout" => return Ok("riven_tcp_stream_set_write_timeout"),
         // std::signal — graceful-shutdown surface.
         "signal_install_sigint" => return Ok("riven_signal_install_sigint"),
         "signal_received_sigint" => return Ok("riven_signal_received_sigint"),

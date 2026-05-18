@@ -1,0 +1,8 @@
+use std.net.TcpListener
+
+def main
+  match TcpListener.bind(&"127.0.0.1:0")
+    Ok(_l) -> puts "bind=ok"
+    Err(_) -> puts "bind=err"
+  end
+end

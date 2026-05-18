@@ -200,6 +200,12 @@ pub const RUNTIME_FUNCTIONS: &[&str] = &[
     "riven_tcp_stream_shutdown",
     "riven_tcp_stream_close",
     "riven_tcp_stream_drop",
+    // #06.5 T5 additions: binary-safe read + socket timeouts.
+    "riven_tcp_read_bytes",
+    "riven_tcp_set_read_timeout_ns",
+    "riven_tcp_set_write_timeout_ns",
+    "riven_tcp_stream_set_read_timeout",
+    "riven_tcp_stream_set_write_timeout",
     // std::signal (graceful-shutdown surface).
     "riven_signal_install_sigint",
     "riven_signal_received_sigint",

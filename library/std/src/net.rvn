@@ -20,10 +20,12 @@ end
 
 class TcpStream
   def self.connect(addr: &String) -> Result[TcpStream, IoError]
-  def read(self, buf: &mut Array[U8]) -> Result[Int, IoError]
+  def read(self, buf: &var Array[U8]) -> Result[Int, IoError]
   def write(self, bytes: &Array[U8]) -> Result[Int, IoError]
   def peer_addr(self) -> Result[String, IoError]
   def shutdown(self, how: Shutdown) -> Result[(), IoError]
+  def set_read_timeout(self, d: &Duration) -> Result[(), IoError]
+  def set_write_timeout(self, d: &Duration) -> Result[(), IoError]
   def close(self) -> Result[(), IoError]
 end
 

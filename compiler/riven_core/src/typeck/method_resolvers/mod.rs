@@ -798,6 +798,22 @@ pub(super) fn builtin_method_type(
                 generic_args: vec![],
             }),
         )),
+        // Phase 2 #06.5 T5 additions: socket read/write timeouts.
+        // Both take a `&Duration` and return Result[(), IoError].
+        (Ty::Class { name, .. }, "set_read_timeout") if name == "TcpStream" => Some(Ty::Result(
+            Box::new(Ty::Unit),
+            Box::new(Ty::Enum {
+                name: "IoError".to_string(),
+                generic_args: vec![],
+            }),
+        )),
+        (Ty::Class { name, .. }, "set_write_timeout") if name == "TcpStream" => Some(Ty::Result(
+            Box::new(Ty::Unit),
+            Box::new(Ty::Enum {
+                name: "IoError".to_string(),
+                generic_args: vec![],
+            }),
+        )),
         // Phase 2 #06.5: `IoError` is a tagged enum, not a class.
         // `.message() -> String` dispatches on tag in the runtime
         // (see `riven_io_error_get_message` in runtime.c).

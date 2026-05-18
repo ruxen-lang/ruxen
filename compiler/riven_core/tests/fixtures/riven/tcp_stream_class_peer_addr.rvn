@@ -1,0 +1,18 @@
+use std.net.TcpStream
+use std.env.get
+
+def show_peer(s: TcpStream)
+  match s.peer_addr()
+    Ok(a)  -> puts "peer=#{a}"
+    Err(_) -> puts "peer=err"
+  end
+end
+
+def main
+  let p: String = get("RIVEN_NET_TEST_PORT").expect!("port")
+  let addr = "127.0.0.1:#{p}"
+  match TcpStream.connect(&addr)
+    Ok(s)  -> show_peer(s)
+    Err(_) -> puts "connect=err"
+  end
+end

@@ -1,0 +1,15 @@
+use std.net.TcpListener
+
+def show_addr(l: TcpListener)
+  match l.local_addr()
+    Ok(s)  -> puts "addr=#{s}"
+    Err(_) -> puts "addr=err"
+  end
+end
+
+def main
+  match TcpListener.bind(&"127.0.0.1:0")
+    Ok(l)  -> show_addr(l)
+    Err(_) -> puts "bind=err"
+  end
+end
