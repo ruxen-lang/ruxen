@@ -585,14 +585,8 @@ fn tcp_stream_class_drop_closes_fd() {
 /// at typeck without errors.
 #[test]
 fn tcp_class_prelude_auto_import_resolves() {
-    let source = r#"
-use std.net.{TcpListener, TcpStream, Shutdown}
-
-def main
-  let _h = Shutdown.Both
-end
-"#;
-    let mut lexer = Lexer::new(source);
+    let source = rvn("tcp_class_prelude_auto_import_resolves");
+    let mut lexer = Lexer::new(&source);
     let tokens = lexer.tokenize().expect("lex");
     let mut parser = Parser::new(tokens);
     let program = parser.parse().expect("parse");
@@ -613,14 +607,8 @@ end
 /// user code; importing them must produce a resolve-time error.
 #[test]
 fn flat_tcp_free_fns_removed_from_resolver() {
-    let source = r#"
-use std.net.tcp_connect
-
-def main
-  let _fd = tcp_connect(&"127.0.0.1:1")
-end
-"#;
-    let errors = compile_expecting_resolve_error(source);
+    let source = rvn("flat_tcp_free_fns_removed_from_resolver");
+    let errors = compile_expecting_resolve_error(&source);
     assert!(
         !errors.is_empty(),
         "expected a resolve error for `use std.net.tcp_connect` (#06.5 T5 removed the flat fns); \

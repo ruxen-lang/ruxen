@@ -17,6 +17,13 @@ use riven_core::parser::Parser;
 use riven_core::typeck;
 use std::process::Command;
 
+fn rvn(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/riven")
+        .join(format!("{name}.rvn"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+}
+
 fn workspace_root() -> std::path::PathBuf {
     let crate_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     crate_dir.parent().unwrap().parent().unwrap().to_path_buf()
@@ -62,39 +69,8 @@ fn compile_and_run(source: &str, basename: &str) -> (String, String, bool) {
 /// implementation would produce — worth catching.)
 #[test]
 fn rand_random_bytes_length() {
-    let source = r#"
-use std.rand.random_bytes
-
-def check(buf: &Array[Int])
-  if buf.len != 32
-    puts "fail length=#{buf.len}"
-  else
-    let first = buf.get(0).unwrap_or(0)
-    var distinct = false
-    var i = 1
-    while i < 32
-      let b = buf.get(i).unwrap_or(0)
-      if b != first
-        distinct = true
-      end
-      i = i + 1
-    end
-    if distinct
-      puts "ok"
-    else
-      puts "fail all_same"
-    end
-  end
-end
-
-def main
-  match random_bytes(32)
-    Ok(buf) -> check(&buf)
-    Err(_)  -> puts "fail err"
-  end
-end
-"#;
-    let (stdout, stderr, ok) = compile_and_run(source, "stdlib_rand_bytes_len");
+    let source = rvn("rand_random_bytes_length");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_rand_bytes_len");
     assert!(
         ok,
         "binary exited non-zero. stdout=[{stdout}] stderr=[{stderr}]"
@@ -106,22 +82,8 @@ end
 /// without invoking the kernel.
 #[test]
 fn rand_random_bytes_zero_returns_empty() {
-    let source = r#"
-use std.rand.random_bytes
-
-def main
-  match random_bytes(0)
-    Ok(buf) ->
-      if buf.len == 0
-        puts "ok"
-      else
-        puts "fail len=#{buf.len}"
-      end
-    Err(_) -> puts "fail err"
-  end
-end
-"#;
-    let (stdout, stderr, ok) = compile_and_run(source, "stdlib_rand_bytes_zero");
+    let source = rvn("rand_random_bytes_zero_returns_empty");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_rand_bytes_zero");
     assert!(
         ok,
         "binary exited non-zero. stdout=[{stdout}] stderr=[{stderr}]"
@@ -137,17 +99,8 @@ end
 /// and adds nothing to what's already pinned elsewhere).
 #[test]
 fn rand_random_bytes_negative_returns_err() {
-    let source = r#"
-use std.rand.random_bytes
-
-def main
-  match random_bytes(-1)
-    Ok(_)  -> puts "fail ok_on_neg"
-    Err(_) -> puts "ok"
-  end
-end
-"#;
-    let (stdout, stderr, ok) = compile_and_run(source, "stdlib_rand_bytes_neg");
+    let source = rvn("rand_random_bytes_negative_returns_err");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_rand_bytes_neg");
     assert!(
         ok,
         "binary exited non-zero. stdout=[{stdout}] stderr=[{stderr}]"
@@ -160,20 +113,8 @@ end
 /// false-negative budget.
 #[test]
 fn rand_random_u64_changes() {
-    let source = r#"
-use std.rand.random_u64
-
-def main
-  let a = random_u64()
-  let b = random_u64()
-  if a != b
-    puts "ok"
-  else
-    puts "fail equal"
-  end
-end
-"#;
-    let (stdout, stderr, ok) = compile_and_run(source, "stdlib_rand_u64_changes");
+    let source = rvn("rand_random_u64_changes");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_rand_u64_changes");
     assert!(
         ok,
         "binary exited non-zero. stdout=[{stdout}] stderr=[{stderr}]"
@@ -187,41 +128,8 @@ end
 /// length test above.
 #[test]
 fn rand_random_fill_overwrites() {
-    let source = r#"
-use std.rand.random_fill
-
-def main
-  var buf: Array[Int] = Array.new
-  var i = 0
-  while i < 16
-    buf.push(170)
-    i = i + 1
-  end
-  match random_fill(&var buf)
-    Ok(_) ->
-      if buf.len != 16
-        puts "fail len=#{buf.len}"
-      else
-        var any_diff = false
-        var j = 0
-        while j < 16
-          let b = buf.get(j).unwrap_or(0)
-          if b != 170
-            any_diff = true
-          end
-          j = j + 1
-        end
-        if any_diff
-          puts "ok"
-        else
-          puts "fail unchanged"
-        end
-      end
-    Err(_) -> puts "fail err"
-  end
-end
-"#;
-    let (stdout, stderr, ok) = compile_and_run(source, "stdlib_rand_fill");
+    let source = rvn("rand_random_fill_overwrites");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_rand_fill");
     assert!(
         ok,
         "binary exited non-zero. stdout=[{stdout}] stderr=[{stderr}]"
@@ -279,24 +187,8 @@ fn rand_e2e_fixture_593_fill_matches_expected() {
 /// behaviour change.
 #[test]
 fn rand_module_is_importable_via_std_rand() {
-    let source = r#"
-use std.rand.{random_bytes, random_u64, random_fill}
-
-def main
-  let _u = random_u64()
-  match random_bytes(1)
-    Ok(_)  -> ()
-    Err(_) -> ()
-  end
-  var buf: Array[Int] = Array.new
-  buf.push(0)
-  match random_fill(&var buf)
-    Ok(_)  -> puts "ok"
-    Err(_) -> puts "fail"
-  end
-end
-"#;
-    let (stdout, stderr, ok) = compile_and_run(source, "stdlib_rand_imports");
+    let source = rvn("rand_module_is_importable_via_std_rand");
+    let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_rand_imports");
     assert!(
         ok,
         "binary exited non-zero. stdout=[{stdout}] stderr=[{stderr}]"

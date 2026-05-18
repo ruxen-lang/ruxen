@@ -1,0 +1,12 @@
+
+use std.rand.random_u64
+
+def main
+  let a = random_u64()
+  let b = random_u64()
+  if a != b
+    puts "ok"
+  else
+    puts "fail equal"
+  end
+end

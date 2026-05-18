@@ -1,0 +1,6 @@
+
+use std.net.{TcpListener, TcpStream, Shutdown}
+
+def main
+  let _h = Shutdown.Both
+end

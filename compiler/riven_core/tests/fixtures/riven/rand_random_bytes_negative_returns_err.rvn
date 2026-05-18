@@ -1,0 +1,9 @@
+
+use std.rand.random_bytes
+
+def main
+  match random_bytes(-1)
+    Ok(_)  -> puts "fail ok_on_neg"
+    Err(_) -> puts "ok"
+  end
+end

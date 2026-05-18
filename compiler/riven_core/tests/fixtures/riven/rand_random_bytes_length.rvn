@@ -1,0 +1,31 @@
+
+use std.rand.random_bytes
+
+def check(buf: &Array[Int])
+  if buf.len != 32
+    puts "fail length=#{buf.len}"
+  else
+    let first = buf.get(0).unwrap_or(0)
+    var distinct = false
+    var i = 1
+    while i < 32
+      let b = buf.get(i).unwrap_or(0)
+      if b != first
+        distinct = true
+      end
+      i = i + 1
+    end
+    if distinct
+      puts "ok"
+    else
+      puts "fail all_same"
+    end
+  end
+end
+
+def main
+  match random_bytes(32)
+    Ok(buf) -> check(&buf)
+    Err(_)  -> puts "fail err"
+  end
+end
