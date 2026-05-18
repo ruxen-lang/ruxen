@@ -1615,7 +1615,7 @@ version = "0.1.0"
 dependencies = [
  "ar",
  "clap",
- "riven-core",
+ "riven_core",
  "serde",
  "serde_json",
  "sha2",
@@ -1624,26 +1624,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "riven-core"
-version = "0.1.0"
-dependencies = [
- "cranelift-codegen",
- "cranelift-frontend",
- "cranelift-module",
- "cranelift-native",
- "cranelift-object",
- "inkwell",
- "libc",
- "proptest",
- "target-lexicon",
-]
-
-[[package]]
 name = "riven-ide"
 version = "0.1.0"
 dependencies = [
  "lsp-types",
- "riven-core",
+ "riven_core",
 ]
 
 [[package]]
@@ -1669,9 +1654,31 @@ dependencies = [
  "cranelift-module",
  "cranelift-native",
  "libc",
- "riven-core",
+ "riven_core",
  "rustyline",
  "target-lexicon",
+]
+
+[[package]]
+name = "riven_core"
+version = "0.1.0"
+dependencies = [
+ "cranelift-codegen",
+ "cranelift-frontend",
+ "cranelift-module",
+ "cranelift-native",
+ "cranelift-object",
+ "inkwell",
+ "libc",
+ "proptest",
+ "target-lexicon",
+]
+
+[[package]]
+name = "riven_driver"
+version = "0.1.0"
+dependencies = [
+ "riven_core",
 ]
 
 [[package]]
@@ -1681,7 +1688,7 @@ dependencies = [
  "criterion",
  "postcard",
  "rayon",
- "riven-core",
+ "riven_core",
  "serde",
  "sha2",
  "tempfile",

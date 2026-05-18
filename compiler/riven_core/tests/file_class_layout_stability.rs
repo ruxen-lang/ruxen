@@ -44,7 +44,7 @@ fn riven_file_static_assert_is_eight_bytes() {
     // grep for it here so deleting the static_assert is caught as a
     // contract regression, not a "well, the C compiler still built
     // somehow" silent change.
-    let runtime = read("crates/riven-core/runtime/runtime.c");
+    let runtime = read("library/runtime/runtime.c");
     assert!(
         runtime.contains("_Static_assert(sizeof(RivenFile) == 8"),
         "expected `_Static_assert(sizeof(RivenFile) == 8 ...)` in runtime.c — \
@@ -55,7 +55,7 @@ fn riven_file_static_assert_is_eight_bytes() {
 
 #[test]
 fn riven_open_options_static_assert_is_eight_bytes() {
-    let runtime = read("crates/riven-core/runtime/runtime.c");
+    let runtime = read("library/runtime/runtime.c");
     assert!(
         runtime.contains("_Static_assert(sizeof(RivenOpenOptions) == 8"),
         "expected `_Static_assert(sizeof(RivenOpenOptions) == 8 ...)` in runtime.c"
@@ -64,8 +64,8 @@ fn riven_open_options_static_assert_is_eight_bytes() {
 
 #[test]
 fn seek_from_tag_values_match_runtime_and_resolver() {
-    let runtime = read("crates/riven-core/runtime/runtime.c");
-    let resolver = read("crates/riven-core/src/resolve/mod.rs");
+    let runtime = read("library/runtime/runtime.c");
+    let resolver = read("compiler/riven_core/src/resolve/mod.rs");
 
     // Runtime side: scan for `#define RIVEN_SEEK_FROM_<NAME>  <tag>`.
     let mut runtime_tags: Vec<(String, usize)> = Vec::new();

@@ -15,10 +15,10 @@ name = "riven"
 path = "src/main.rs"
 
 [features]
-llvm = ["riven-core/llvm"]
+llvm = ["riven_core/llvm"]
 
 [dependencies]
-riven-core = { path = "../riven-core" }
+riven_core = { path = "../../compiler/riven_core" }
 clap = { version = "4", features = ["derive"] }
 toml = "0.8"
 serde = { version = "1", features = ["derive"] }
@@ -27,7 +27,7 @@ sha2 = "0.10"
 ar = "0.9"
 
 [dev-dependencies]
-riven-core = { path = "../riven-core" }
+riven_core = { path = "../../compiler/riven_core" }
 tempfile = "3"
 
 [lints]

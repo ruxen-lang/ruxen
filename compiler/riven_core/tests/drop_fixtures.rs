@@ -57,7 +57,7 @@ fn workspace_root() -> PathBuf {
 /// them so the rest of the runtime (riven_panic, riven_string_*, …)
 /// keeps using the tracked allocator.
 fn write_tracking_runtime(target: &PathBuf) {
-    let runtime_c = workspace_root().join("crates/riven-core/runtime/runtime.c");
+    let runtime_c = workspace_root().join("library/runtime/runtime.c");
     let original = std::fs::read_to_string(&runtime_c)
         .unwrap_or_else(|e| panic!("read {}: {}", runtime_c.display(), e));
 

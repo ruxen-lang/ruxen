@@ -252,7 +252,7 @@ fn sample_program_fixture_compiles_and_runs() {
     // matching together.
     let (temp, rivenc) = stage_install();
     let src = fs::read_to_string(
-        workspace_root().join("crates/riven-core/tests/fixtures/sample_program.rvn"),
+        workspace_root().join("compiler/riven_core/tests/fixtures/sample_program.rvn"),
     )
     .expect("sample_program.rvn fixture exists");
 

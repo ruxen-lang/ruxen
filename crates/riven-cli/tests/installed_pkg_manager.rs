@@ -23,7 +23,7 @@ fn workspace_root() -> PathBuf {
 }
 
 fn runtime_c_src() -> PathBuf {
-    workspace_root().join("crates/riven-core/runtime/runtime.c")
+    workspace_root().join("library/runtime/runtime.c")
 }
 
 fn riven_exe() -> PathBuf {

@@ -11,10 +11,10 @@ name = "rivenc"
 path = "src/main.rs"
 
 [features]
-llvm = ["riven-core/llvm"]
+llvm = ["riven_core/llvm"]
 
 [dependencies]
-riven-core = { path = "../riven-core" }
+riven_core = { path = "../../compiler/riven_core" }
 sha2 = "0.10"
 postcard = { version = "1.1", features = ["alloc"] }
 serde = { version = "1", features = ["derive"] }

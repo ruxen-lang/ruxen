@@ -11,7 +11,7 @@ name = "riven-repl"
 path = "src/main.rs"
 
 [dependencies]
-riven-core = { path = "../riven-core" }
+riven_core = { path = "../../compiler/riven_core" }
 cranelift-jit = { version = "0.130", features = ["selinux-fix"] }
 cranelift-module = "0.130"
 cranelift-codegen = "0.130"

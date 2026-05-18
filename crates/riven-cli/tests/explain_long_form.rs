@@ -31,7 +31,7 @@ fn errors_dir() -> PathBuf {
 /// otherwise need it (the CLI already depends on riven-core, but
 /// integration tests run as a separate binary).
 fn registered_codes() -> Vec<String> {
-    let path = workspace_root().join("crates/riven-core/src/diagnostics/codes.rs");
+    let path = workspace_root().join("compiler/riven_core/src/diagnostics/codes.rs");
     let source = std::fs::read_to_string(&path).expect("read codes.rs");
     let mut codes = Vec::new();
     for line in source.lines() {
