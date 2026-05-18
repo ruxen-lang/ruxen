@@ -209,6 +209,13 @@ pub const RUNTIME_FUNCTIONS: &[&str] = &[
     // std::signal (graceful-shutdown surface).
     "riven_signal_install_sigint",
     "riven_signal_received_sigint",
+    // std::rand (Phase 2 #06.5 T8): kernel CSPRNG-backed random_bytes /
+    // random_u64 / random_fill. Per-platform backend (Linux getrandom,
+    // macOS SecRandomCopyBytes, fallback /dev/urandom) — see
+    // library/runtime/io/rand.c.
+    "riven_rand_random_bytes",
+    "riven_rand_random_u64",
+    "riven_rand_random_fill",
     "riven_string_contains",
     "riven_string_starts_with",
     "riven_string_ends_with",

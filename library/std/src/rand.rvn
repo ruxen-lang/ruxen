@@ -1,0 +1,15 @@
+## std::rand — CSPRNG-backed random_bytes / random_u64 / random_fill
+## (Phase 2 #06.5 T8).
+##
+## This file is declarative documentation for the intended stdlib source
+## layout. v1 still models the executable behavior through built-in
+## resolver/codegen hooks rather than loading `.rvn` stdlib modules.
+##
+## Per-platform CSPRNG backend (compile-time `#if` in
+## library/runtime/io/rand.c): Linux getrandom, macOS
+## SecRandomCopyBytes (`-framework Security` at link), fallback
+## /dev/urandom.
+
+def random_bytes(n: Int) -> Result[Array[U8], IoError]
+def random_u64() -> Int                            ## carries 64 random bits
+def random_fill(buf: &var Array[U8]) -> Result[(), IoError]

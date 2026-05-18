@@ -9,6 +9,14 @@ fn linker_args(sanitize: bool, extra_link_flags: &[String]) -> Vec<String> {
         "-lm".to_string(),
         "-lpthread".to_string(),
     ];
+    // Phase 2 #06.5 T8: std::rand on macOS uses SecRandomCopyBytes from
+    // the Security framework. The runtime's `#include <Security/...>`
+    // covers the header side; the linker still needs the framework
+    // flag to resolve the symbol at link time.
+    if cfg!(target_os = "macos") {
+        args.push("-framework".to_string());
+        args.push("Security".to_string());
+    }
     if sanitize {
         args.push("-fsanitize=address,undefined".to_string());
     }
@@ -109,5 +117,22 @@ mod tests {
         assert!(args.iter().any(|arg| arg == "-fsanitize=address,undefined"));
         assert!(args.iter().any(|arg| arg == "-lssl"));
         assert!(args.iter().any(|arg| arg == "-lcrypto"));
+    }
+
+    /// Phase 2 #06.5 T8: macOS link must include `-framework Security`
+    /// so SecRandomCopyBytes (used by std::rand) resolves at link
+    /// time. The flag is `cfg!(target_os = "macos")`-gated; this test
+    /// only enforces the contract on macOS hosts.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn linker_args_include_security_framework_on_macos() {
+        let args = linker_args(false, &[]);
+        let security_pair = args
+            .windows(2)
+            .any(|w| w[0] == "-framework" && w[1] == "Security");
+        assert!(
+            security_pair,
+            "macOS linker_args must emit `-framework Security` as a pair; got {args:?}"
+        );
     }
 }

@@ -26,6 +26,17 @@
  * O_TRUNC/O_EXCL/SEEK_SET/SEEK_CUR/SEEK_END consumed by the File class. */
 #include <fcntl.h>
 
+/* Phase 2 #06.5 T8: per-platform CSPRNG headers for std::rand. The
+ * unity build pulls these in at the top so the inner io/rand.c carve-
+ * out can call the syscalls without redeclaring them. macOS additionally
+ * needs `-framework Security` at link time (added in
+ * codegen/object.rs::linker_args under cfg!(target_os = "macos")). */
+#if defined(__linux__)
+#  include <sys/random.h>
+#elif defined(__APPLE__)
+#  include <Security/Security.h>
+#endif
+
 /* Linux-only send() flag that suppresses SIGPIPE on a closed peer.
  * macOS / *BSD don't define it; on those platforms we set the
  * per-socket SO_NOSIGPIPE option after creating the fd, so the flag
@@ -150,6 +161,11 @@ static void *riven_result_err_value(int64_t payload) {
 #include "io/stdio.c"
 #include "fs.c"
 #include "io/file.c"
+/* Phase 2 #06.5 T8: std::rand — CSPRNG-backed random_bytes /
+ * random_u64 / random_fill. Placed after io/file.c since it reuses
+ * the same RivenVec / IoError plumbing; no Duration dependency, so
+ * it can sit before time.c. */
+#include "io/rand.c"
 /* time.c must precede net/tcp.c — Phase 2 #06.5 T5 added
  * TcpStream.set_read_timeout / set_write_timeout, which dereference
  * a RivenDuration pointer (defined in time.c). */
