@@ -1,7 +1,7 @@
 //! Pin test for the `IoError` variant-tag stability contract.
 //!
 //! The runtime (`library/runtime/runtime.c`) and the
-//! resolver (`compiler/riven_core/src/resolve/mod.rs`) co-document the
+//! resolver (`compiler/riven_core/src/resolve/stdlib/mod.rs`) co-document the
 //! tag indices for each `IoError` variant.  If they drift, runtime-
 //! returned errors will be misinterpreted at the typeck layer and
 //! `match` arms will silently miss.  This test grep-extracts the
@@ -41,8 +41,8 @@ fn to_camel(s: &str) -> String {
 
 #[test]
 fn io_error_variant_tags_match_runtime_and_resolver() {
-    let runtime = read("library/runtime/runtime.c");
-    let resolver = read("compiler/riven_core/src/resolve/mod.rs");
+    let runtime = read("library/runtime/io/io_error.c");
+    let resolver = read("compiler/riven_core/src/resolve/stdlib/mod.rs");
 
     // Collect (Variant, tag) pairs from the runtime #defines.
     let mut runtime_tags: Vec<(String, usize)> = Vec::new();

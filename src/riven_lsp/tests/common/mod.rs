@@ -1,4 +1,4 @@
-//! Shared test helpers for driving the `riven-lsp` server over JSON-RPC stdio.
+//! Shared test helpers for driving the `riven_lsp` server over JSON-RPC stdio.
 //!
 //! The harness spawns the server binary, frames requests per LSP
 //! (`Content-Length: N\r\n\r\n<body>`), and reads framed replies back off
@@ -42,14 +42,14 @@ pub enum Incoming {
     },
 }
 
-/// Path to the built `riven-lsp` binary. Uses `CARGO_BIN_EXE_riven-lsp` which
+/// Path to the built `riven_lsp` binary. Uses `CARGO_BIN_EXE_riven_lsp` which
 /// cargo injects at test-compile time and already points at the correct
 /// profile (release when tests are built with `--release`).
 pub fn lsp_binary() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_riven-lsp"))
+    PathBuf::from(env!("CARGO_BIN_EXE_riven_lsp"))
 }
 
-/// Handle to a running `riven-lsp` child process with framed IO plumbing.
+/// Handle to a running `riven_lsp` child process with framed IO plumbing.
 ///
 /// Drop or explicit `shutdown_and_exit` cleans up; the background reader
 /// thread joins when the child's stdout closes.

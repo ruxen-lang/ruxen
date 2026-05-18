@@ -57,10 +57,28 @@ fn shared_install() -> &'static Path {
                 fs::set_permissions(&staged, perms).unwrap();
             }
 
-            fs::copy(runtime_c_src(), lib_dir.join("runtime.c")).unwrap();
+            // Mirror the full `library/runtime/` tree into `<install>/lib/`.
+            // Post-#06.75 `runtime.c` is a unity-build aggregator that
+            // `#include`s per-module files under `core/`, `io/`, `net/`,
+            // so a single-file copy is no longer sufficient.
+            copy_runtime_tree(&runtime_c_src().parent().unwrap().to_path_buf(), &lib_dir);
             (temp, staged)
         })
         .1
+}
+
+fn copy_runtime_tree(src: &Path, dst: &Path) {
+    fs::create_dir_all(dst).unwrap();
+    for entry in fs::read_dir(src).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        let dest = dst.join(entry.file_name());
+        if path.is_dir() {
+            copy_runtime_tree(&path, &dest);
+        } else {
+            fs::copy(&path, &dest).expect("copy runtime file");
+        }
+    }
 }
 
 /// Return a fresh per-test tempdir for project files and the path to the

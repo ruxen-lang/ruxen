@@ -7,6 +7,46 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+### Changed
+- **Repo restructured to rust-lang-style layout (#06.75).** The
+  single `crates/riven-core` crate (≈26 KLOC, owning lexer / parser /
+  hir / resolve / typeck / mir / borrow_check / codegen / formatter /
+  the C runtime / every stdlib registration) is unpacked into a
+  `compiler/` + `library/` + `src/` + `tests/` top-level tree:
+
+  - `library/runtime/` — the C runtime, carved per module
+    (`core/{alloc,vec,string,hash}.c`, `io/{io_error,stdio,file}.c`,
+    `fs.c`, `net/tcp.c`, `time.c`, `signal.c`, `process.c`, `fmt.c`,
+    `env.c`).  Top-level `library/runtime/runtime.c` `#include`s each
+    module so the build product is still a single translation unit
+    with identical link symbols.
+  - `library/std/src/` — the `.rvn`-source side of the stdlib
+    (currently just `iter.rvn` as declarative documentation).
+  - `compiler/riven_core/` — the (still-single) compiler crate,
+    relocated from `crates/`.  Internal stdlib registrations now live
+    under `compiler/riven_core/src/resolve/stdlib/` (carved out of the
+    7 153-LOC `resolve/mod.rs`), method resolvers under
+    `compiler/riven_core/src/typeck/method_resolvers/` (carved out of
+    `typeck/infer.rs`), and the runtime-name table under
+    `compiler/riven_core/src/codegen/runtime_table/` (carved out of
+    `codegen/runtime.rs`).
+  - `compiler/riven_driver/` — a thin `pub use riven_core::*` shim,
+    placeholder for the future per-phase crate split (`riven_lexer`,
+    `riven_parser`, `riven_resolve`, `riven_typeck`, …) which is
+    deferred to a follow-up prompt.
+  - `src/` — every driver crate (`rivenc`, `riven_cli`, `riven_lsp`,
+    `riven_ide`, `riven_repl`), relocated from `crates/`.
+    Kebab-case package names switched to snake_case to match their
+    lib names — `use riven_core::…` import sites unchanged.
+  - `tests/` — workspace-level integration root (currently houses
+    `release-e2e/`; per-crate Cargo integration tests stay under
+    `compiler/riven_core/tests/` since Cargo's integration-test
+    convention is per-crate).
+
+  Workspace `members` is now `["compiler/*", "src/*"]`.  C-side symbol
+  names are byte-identical; no language surface changes; no behavior
+  changes.  Architecture overview: `docs/architecture/repo-layout.md`.
+
 ### Added
 - Phase 2 stdlib #06: `std::process::Command` builder API closes the
   last #06 v1 gap. `Command.new(prog).arg("a").args(["b","c"])

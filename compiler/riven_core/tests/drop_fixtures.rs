@@ -56,10 +56,40 @@ fn workspace_root() -> PathBuf {
 /// We replace the function bodies in place rather than re-declaring
 /// them so the rest of the runtime (riven_panic, riven_string_*, …)
 /// keeps using the tracked allocator.
+/// Inline-expand `#include "X"` directives in a Phase-B unity-build
+/// runtime.c.  The string surgery below was written against the
+/// pre-#06.75 5800-LOC single-file runtime; this expansion gives us
+/// the same single-string shape from today's aggregator + per-module
+/// source tree without changing the test's downstream replacement
+/// logic.
+fn expand_unity_includes(aggregator: &str, runtime_dir: &PathBuf) -> String {
+    let mut out = String::new();
+    for line in aggregator.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("#include \"") {
+            if let Some(rel) = rest.strip_suffix("\"") {
+                // Local quote-include — splice the referenced file in.
+                let inc_path = runtime_dir.join(rel);
+                let body = std::fs::read_to_string(&inc_path).unwrap_or_else(|e| {
+                    panic!("read {}: {}", inc_path.display(), e)
+                });
+                out.push_str(&body);
+                out.push('\n');
+                continue;
+            }
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
 fn write_tracking_runtime(target: &PathBuf) {
-    let runtime_c = workspace_root().join("library/runtime/runtime.c");
-    let original = std::fs::read_to_string(&runtime_c)
+    let runtime_dir = workspace_root().join("library/runtime");
+    let runtime_c = runtime_dir.join("runtime.c");
+    let aggregator = std::fs::read_to_string(&runtime_c)
         .unwrap_or_else(|e| panic!("read {}: {}", runtime_c.display(), e));
+    let original = expand_unity_includes(&aggregator, &runtime_dir);
 
     // Replace the allocator and deallocator. We keep the original size
     // / overflow checks by simply shadowing the body with tracked

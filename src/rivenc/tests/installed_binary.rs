@@ -47,11 +47,36 @@ fn shared_install() -> &'static Path {
                 fs::set_permissions(&staged_rivenc, perms).unwrap();
             }
 
-            fs::copy(runtime_c_src(), lib_dir.join("runtime.c")).expect("copy runtime.c");
+            // Stage the unity-build runtime: the aggregator `runtime.c`
+            // plus every per-module `#include`d file underneath.
+            // Post-#06.75 the C runtime lives in
+            // `library/runtime/{core,io,net,…}/` and `runtime.c`
+            // `#include`s each piece, so a single-file copy is no
+            // longer sufficient — the staged install needs the full
+            // `library/runtime/` tree at `<install>/lib/`.
+            copy_runtime_tree(&runtime_c_src().parent().unwrap().to_path_buf(), &lib_dir);
 
             (temp, staged_rivenc)
         })
         .1
+}
+
+/// Recursively copy `library/runtime/` (the source layout) into the
+/// staged `<install>/lib/` (the destination layout).  Mirrors what
+/// `install.sh` does with `cp -R "$SRC/lib/." "$RIVEN_HOME/lib/"` on a
+/// real release archive.
+fn copy_runtime_tree(src: &Path, dst: &Path) {
+    fs::create_dir_all(dst).unwrap();
+    for entry in fs::read_dir(src).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        let dest = dst.join(entry.file_name());
+        if path.is_dir() {
+            copy_runtime_tree(&path, &dest);
+        } else {
+            fs::copy(&path, &dest).expect("copy runtime file");
+        }
+    }
 }
 
 /// Resolve the workspace root by walking up from this crate's manifest dir.
@@ -279,8 +304,12 @@ fn runtime_env_override() {
     // lookup. We stage a normal install and then point RIVEN_RUNTIME at a
     // secondary copy of runtime.c — compilation must still succeed.
     let (temp, rivenc) = stage_install();
-    let alt = temp.path().join("alt_runtime.c");
-    fs::copy(runtime_c_src(), &alt).unwrap();
+    // Stage a secondary copy of the whole runtime tree so the unity-build
+    // `#include "core/alloc.c"` lookups still resolve, then point RIVEN_RUNTIME
+    // at its aggregator.
+    let alt_dir = temp.path().join("alt_runtime");
+    copy_runtime_tree(&runtime_c_src().parent().unwrap().to_path_buf(), &alt_dir);
+    let alt = alt_dir.join("runtime.c");
 
     fs::write(temp.path().join("env_ov.rvn"), rvn("runtime_env_override")).unwrap();
 
