@@ -251,6 +251,43 @@ pub fn unify(a: &Ty, b: &Ty, ctx: &mut TypeContext, span: &Span) -> Result<Ty, T
         (Ty::TypeParam { .. }, _) => Ok(b),
         (_, Ty::TypeParam { .. }) => Ok(a),
 
+        // Phase 2 #06.9: closure-literal → dyn-Fn coercion at unification
+        // time. A `Ty::Fn { params, ret }` (the static type of every
+        // closure literal and named function value) unifies with the
+        // dyn-erased `Ty::AnyMixin([MixinRef { name: "Fn",
+        // generic_args: [Ty::Fn { params, ret }] }])` when the inner
+        // signature unifies. The AnyMixin shape wins (the dyn-erased
+        // type is the more abstract target). This is what lets
+        //
+        //   let h: any Fn(Int) -> Int = { |n: Int| n + 1 }
+        //   var hs: Array[any Fn(Int) -> Int] = Array.new
+        //   hs.push({ |n: Int| n + 10 })
+        //   def make_adder(n: Int) -> any Fn(Int) -> Int = …
+        //
+        // typecheck. The layout invariant is documented in
+        // `compiler/riven_core/tests/closures_dyn_dispatch.rs`: both
+        // sides are physically a 16-byte `(fn_ptr, captures_ptr)`
+        // pair, so the runtime representation is identical and the
+        // method-call lowerer can emit the same indirect call against
+        // slot 0 / slot 1. See `mir/lower/expr/method_call.rs`
+        // `is_fn_call` for the matching dispatch-side change.
+        (Ty::Fn { .. }, Ty::AnyMixin(bounds)) => {
+            if let Some(inner) = fn_bound_signature(bounds) {
+                let _ = unify(&a, &inner, ctx, span)?;
+                Ok(b)
+            } else {
+                Err(TypeError::mismatch(&a, &b, span))
+            }
+        }
+        (Ty::AnyMixin(bounds), Ty::Fn { .. }) => {
+            if let Some(inner) = fn_bound_signature(bounds) {
+                let _ = unify(&inner, &b, ctx, span)?;
+                Ok(a)
+            } else {
+                Err(TypeError::mismatch(&a, &b, span))
+            }
+        }
+
         // Reference coercion: &T can unify with T (auto-deref) and
         // T can unify with &T (auto-ref). This handles cases like
         // Vec[&&T] vs Vec[&T] or Vec[&T] vs Vec[T].
@@ -265,6 +302,34 @@ pub fn unify(a: &Ty, b: &Ty, ctx: &mut TypeContext, span: &Span) -> Result<Ty, T
 
         // No match
         _ => Err(TypeError::mismatch(&a, &b, span)),
+    }
+}
+
+/// If `bounds` looks like the dyn-erased spelling of a single `Fn` /
+/// `FnMut` / `FnOnce` trait object — i.e. `[MixinRef { name: "Fn"|…,
+/// generic_args: [Ty::Fn { … }] }]` — return that inner function
+/// type. Otherwise None.
+///
+/// The parser stashes the closure signature as a single
+/// `TypeExpr::Function` inside the bound's `generic_args` (see
+/// `parser/types.rs::parse_single_trait_bound` Fn-trait sugar arm), so
+/// the inner shape is exactly `Ty::Fn { params, ret }`.
+///
+/// Used by the unification cases above so a concrete closure /
+/// function value flows into a `any Fn(...)` slot without the
+/// caller having to write an explicit conversion.
+fn fn_bound_signature(bounds: &[crate::hir::types::MixinRef]) -> Option<Ty> {
+    if bounds.len() != 1 {
+        return None;
+    }
+    let b = &bounds[0];
+    if !matches!(b.name.as_str(), "Fn" | "FnMut" | "FnOnce") {
+        return None;
+    }
+    let inner = b.generic_args.first()?;
+    match inner {
+        Ty::Fn { .. } | Ty::FnMut { .. } | Ty::FnOnce { .. } => Some(inner.clone()),
+        _ => None,
     }
 }
 

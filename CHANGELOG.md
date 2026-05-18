@@ -7,6 +7,22 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+### Fixed
+- **compiler: `any Fn(...)` closures are now dispatchable via
+  indirect call (#06.9).** Works in let-binding, array storage,
+  class field, and return-position contexts. Unblocks Router /
+  event-bus / observer-pattern code. Three sites changed
+  (`typeck/unify.rs` lifts the closure → dyn-Fn coercion out of
+  arg-only position; `mir/lower/expr/method_call.rs` recognises
+  `Ty::AnyMixin([Fn])` receivers, falls back to the local's MIR
+  type when typeck left the for-loop binding as `Ty::Infer`, and
+  emits the same indirect-call shape the concrete-`Fn` path
+  already uses; `codegen/runtime_table/mod.rs` adds a
+  belt-and-suspenders fast-path for `any Fn[...]_call` and `?T*_call`
+  manglings). 5 pin tests in
+  `compiler/riven_core/tests/closures_dyn_dispatch.rs`; e2e
+  fixture `tests/release-e2e/cases/600_closure_handler_dispatch.rvn`.
+
 ### Changed
 - **Repo restructured to rust-lang-style layout (#06.75).** The
   single `crates/riven-core` crate (≈26 KLOC, owning lexer / parser /

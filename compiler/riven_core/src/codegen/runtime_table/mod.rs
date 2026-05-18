@@ -308,6 +308,24 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         return Ok("riven_noop_passthrough");
     }
 
+    // Phase 2 #06.9: belt-and-suspenders for dyn-erased closure
+    // dispatch. The MIR lowerer (see `mir/lower/expr/method_call.rs`
+    // `is_fn_call`) recognises `any Fn(...)` / `?T*` receivers and
+    // emits an indirect call, so this arm should never fire in normal
+    // operation. It exists so a missed lowering path produces a
+    // deterministic noop-passthrough instead of a hard codegen error
+    // — easier to root-cause when a regression slips in. The `?T*`
+    // form is the `Ty::Infer(N)` Display mangling: an unresolved
+    // type variable leaking into a `.call(...)` site.
+    if name.starts_with("any Fn(")
+        || name.starts_with("any Fn[")
+        || name.starts_with("&any Fn(")
+        || name.starts_with("&any Fn[")
+        || (name.starts_with("?T") && name.ends_with("_call"))
+    {
+        return Ok("riven_noop_passthrough");
+    }
+
     // VecIter_, VecIntoIter_, SplitIter_ — iterator combinators.
     // Historically every method here silently no-opped. Only forward
     // user-defined-style names (which downstream link checks will reject

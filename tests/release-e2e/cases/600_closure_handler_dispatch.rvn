@@ -1,0 +1,10 @@
+def main
+  var hs: Array[any Fn(Int) -> Int] = Array.new
+  hs.push({ |n: Int| n + 10 })
+  hs.push({ |n: Int| n * 3 })
+  var acc: Int = 0
+  for h in hs.iter
+    acc = acc + h.(5)
+  end
+  puts "#{acc}"
+end

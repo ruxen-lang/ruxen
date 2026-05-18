@@ -852,12 +852,73 @@ impl<'a> Lowerer<'a> {
                     Ty::Ref(inner) | Ty::RefMut(inner)
                     if matches!(inner.as_ref(), Ty::Fn { .. } | Ty::FnMut { .. } | Ty::FnOnce { .. })
                 );
+                // Phase 2 #06.9: dyn-erased `any Fn(...)` receivers
+                // dispatch through the same indirect-call path. The
+                // physical representation is identical — a closure
+                // value is a 16-byte `(fn_ptr, captures_ptr)` heap
+                // pair (see `closure.rs`), and `Ty::AnyMixin` lays out
+                // as a 16-byte primitive (see `codegen/layout.rs:445`),
+                // so slot 0 / slot 1 line up without a vtable. The
+                // typeck-side unification in `typeck/unify.rs` is what
+                // gets the closure literal into the dyn slot in the
+                // first place.
+                fn bounds_contain_fn(bounds: &[crate::hir::types::MixinRef]) -> bool {
+                    bounds
+                        .iter()
+                        .any(|b| matches!(b.name.as_str(), "Fn" | "FnMut" | "FnOnce"))
+                }
+                fn ty_is_fn_like(ty: &Ty) -> bool {
+                    match ty {
+                        Ty::Fn { .. } | Ty::FnMut { .. } | Ty::FnOnce { .. } => true,
+                        Ty::AnyMixin(bounds) | Ty::SomeMixin(bounds) => bounds_contain_fn(bounds),
+                        Ty::Ref(inner)
+                        | Ty::RefMut(inner)
+                        | Ty::RefLifetime(_, inner)
+                        | Ty::RefMutLifetime(_, inner) => ty_is_fn_like(inner),
+                        _ => false,
+                    }
+                }
+                let is_any_fn_type = matches!(
+                    &object.ty,
+                    Ty::AnyMixin(bounds) if bounds_contain_fn(bounds)
+                );
+                let is_ref_any_fn_type = matches!(&object.ty,
+                    Ty::Ref(inner) | Ty::RefMut(inner)
+                    if matches!(inner.as_ref(), Ty::AnyMixin(bounds) if bounds_contain_fn(bounds))
+                );
+                // For-loop bindings (and any other receiver whose HIR
+                // expression type was left as `Ty::Infer` by typeck —
+                // see `typeck/infer.rs::HirExprKind::For` which never
+                // unifies the binding with the iterable's element
+                // type) carry their real shape in the MIR local's
+                // declared `ty`. Peek there as a fallback so a
+                // dyn-erased closure dispatched through `for h in
+                // hs.iter` reaches the indirect-call path instead of
+                // falling through to a named call against a
+                // non-existent `?T*_call` symbol.
+                let local_ty_is_fn = matches!(&object.ty, Ty::Infer(_))
+                    && obj_local
+                        .map(|id| {
+                            let func = self.fn_mut();
+                            func.locals
+                                .get(id as usize)
+                                .map(|l| ty_is_fn_like(&l.ty))
+                                .unwrap_or(false)
+                        })
+                        .unwrap_or(false);
                 let is_fn_call = is_fn_type
                     || is_ref_fn_type
+                    || is_any_fn_type
+                    || is_ref_any_fn_type
+                    || local_ty_is_fn
                     || type_name.starts_with("Fn(")
                     || type_name.starts_with("Fn[")
                     || type_name.starts_with("&Fn(")
-                    || type_name.starts_with("&Fn[");
+                    || type_name.starts_with("&Fn[")
+                    || type_name.starts_with("any Fn(")
+                    || type_name.starts_with("any Fn[")
+                    || type_name.starts_with("&any Fn(")
+                    || type_name.starts_with("&any Fn[");
 
                 if is_fn_call {
                     // The closure value is a heap pair {fn_ptr, captures_ptr}.

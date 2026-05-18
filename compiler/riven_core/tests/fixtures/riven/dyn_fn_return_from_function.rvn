@@ -1,0 +1,9 @@
+def make_adder(n: Int) -> any Fn(Int) -> Int
+  let f = { |x: Int| x + n }
+  f
+end
+
+def main
+  let g = make_adder(3)
+  puts "#{g.(4)}"
+end

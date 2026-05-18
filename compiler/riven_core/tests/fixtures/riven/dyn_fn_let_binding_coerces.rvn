@@ -1,0 +1,4 @@
+def main
+  let h: any Fn(Int) -> Int = { |n: Int| n + 1 }
+  puts "#{h.(5)}"
+end
