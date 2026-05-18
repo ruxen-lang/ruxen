@@ -1051,9 +1051,21 @@ impl<'a> Lowerer<'a> {
                         args: indirect_args,
                     });
                 } else {
+                    // #06.8 Phase 3b: rewrite the mangled `ClassName_method`
+                    // callee to the linked C symbol when this method came
+                    // from a class-body `lib` block (the alias map was
+                    // populated by `register_class_lib_method` keyed on
+                    // the same mangled shape). Non-FFI class methods hit
+                    // the unwrap_or branch and use the mangled name
+                    // unchanged.
+                    let callee = self
+                        .ffi_alias_map
+                        .get(&mangled)
+                        .cloned()
+                        .unwrap_or(mangled);
                     self.emit(MirInst::Call {
                         dest,
-                        callee: mangled,
+                        callee,
                         args: arg_values,
                     });
                 }

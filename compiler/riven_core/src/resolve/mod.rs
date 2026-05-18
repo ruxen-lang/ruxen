@@ -88,6 +88,13 @@ pub struct Resolver {
     /// no-op redundancy, not a conflict. The Riven-side name is
     /// independent of this table; only the C-symbol is the key.
     extern_symbol_table: HashMap<String, (FnSignature, Span)>,
+
+    /// #06.8 Phase 3b: DefIds of class-body `lib` FFI methods registered
+    /// in pass-1, keyed by the parent class's `DefId`. Pass-2's
+    /// `resolve_class` reads this map and appends these DefIds to the
+    /// final `ClassInfo.methods` list, so `File.open(...)` resolves to
+    /// the lib-declared method alongside any in-body `def`s.
+    pass1_class_lib_methods: HashMap<DefId, Vec<DefId>>,
 }
 
 #[derive(Debug)]
@@ -115,6 +122,7 @@ impl Resolver {
             closure_stack: Vec::new(),
             tagged_enums_in_scope: HashMap::new(),
             extern_symbol_table: HashMap::new(),
+            pass1_class_lib_methods: HashMap::new(),
         }
     }
 
@@ -267,6 +275,123 @@ impl Resolver {
         stdlib::register_all(self);
     }
 
+    /// #06.8 Phase 3b: register a single FFI decl from inside a class
+    /// (or mixin) body's `lib "X" ... end` block as a CLASS METHOD on
+    /// that parent.
+    ///
+    /// The lib-block syntax is identical inside or outside a class — a
+    /// plain `def NAME(params) -> Type` (no `self.` prefix, no body).
+    /// What makes it a class method is the parent context: there is no
+    /// implicit `self` on FFI calls (they bind to a verbatim C symbol),
+    /// so `is_class_method` is always true and `self_mode` always None.
+    /// Call sites spell `ClassName.method(...)` — the same surface as
+    /// `def self.method(...)`.
+    ///
+    /// Pushes the `HirFfiFunc` onto `ffi_libs` keyed by the MANGLED
+    /// `ClassName_method` so the MIR `ffi_alias_map` (which is keyed
+    /// the same way `lower_method_call` builds the callee) can rewrite
+    /// the call to the C symbol at lowering time.
+    fn register_class_lib_method(
+        &mut self,
+        parent: DefId,
+        parent_name: &str,
+        ffi_fn: &ast::FfiFunction,
+        hir_fns: &mut Vec<HirFfiFunc>,
+    ) {
+        let param_tys: Vec<Ty> = ffi_fn
+            .params
+            .iter()
+            .map(|p| self.resolve_type_expr(&p.type_expr))
+            .collect();
+        let params: Vec<ParamInfo> = ffi_fn
+            .params
+            .iter()
+            .zip(param_tys.iter().cloned())
+            .map(|(p, ty)| ParamInfo {
+                name: p.name.clone(),
+                ty,
+                auto_assign: false,
+            })
+            .collect();
+        let return_ty = ffi_fn
+            .return_type
+            .as_ref()
+            .map(|t| self.resolve_type_expr(t))
+            .unwrap_or(Ty::Unit);
+        let return_ty_for_hir = if ffi_fn.return_type.is_some() {
+            Some(return_ty.clone())
+        } else {
+            None
+        };
+        // The class-method vs instance-method distinction is carried on
+        // the AST FfiFunction (set by the parser based on whether the
+        // decl was `def self.NAME` or plain `def NAME`). Riven's
+        // ruby-naming.spec.md §3.4a uses the same convention everywhere
+        // — FFI decls are no exception. Instance-method FFI decls take
+        // an implicit `self` receiver as their first arg to the C
+        // symbol; class methods do not.
+        let signature = FnSignature {
+            self_mode: if ffi_fn.is_class_method {
+                None
+            } else {
+                Some(crate::hir::nodes::HirSelfMode::Ref)
+            },
+            is_class_method: ffi_fn.is_class_method,
+            is_async: false,
+            generic_params: vec![],
+            params,
+            return_ty,
+            c_symbol: ffi_fn.c_symbol.clone(),
+        };
+        let link_symbol = ffi_fn
+            .c_symbol
+            .clone()
+            .unwrap_or_else(|| ffi_fn.name.clone());
+        self.check_ffi_signature_conflict(&link_symbol, &signature, &ffi_fn.span);
+        let mangled = format!("{}_{}", parent_name, ffi_fn.name);
+        // Register under the PLAIN method name so MIR's
+        // `is_user_static_method(class, method)` lookup — which scans
+        // for a `DefKind::Method` whose `def.name == method_name` and
+        // whose parent matches the class — finds this method.
+        // Registering under the mangled name would hide it from that
+        // scan and make method-call lowering prepend `self` (which is
+        // wrong for class methods).
+        let method_def_id = self.symbols.define(
+            ffi_fn.name.clone(),
+            DefKind::Method {
+                parent,
+                signature: signature.clone(),
+            },
+            Visibility::Public,
+            ffi_fn.span.clone(),
+        );
+        self.extern_symbol_table
+            .entry(link_symbol)
+            .or_insert_with(|| (signature, ffi_fn.span.clone()));
+        self.pass1_class_lib_methods
+            .entry(parent)
+            .or_default()
+            .push(method_def_id);
+        // Push onto ffi_libs with the MANGLED riven_name so the MIR
+        // lowering's `ffi_alias_map` is keyed in the same shape that
+        // `lower_method_call` builds the `MirInst::Call::callee` —
+        // `format!("{}_{}", class_name, method_name)`. With the alias
+        // map populated under that key, the existing Phase 2 rewrite
+        // path picks up class-body FFI calls for free.
+        hir_fns.push(HirFfiFunc {
+            riven_name: mangled,
+            c_symbol: ffi_fn.c_symbol.clone(),
+            param_types: param_tys,
+            return_type: return_ty_for_hir,
+            is_variadic: ffi_fn.is_variadic,
+            // The class/mixin name is encoded in the mangled riven_name
+            // (`ClassName_method`) so any downstream consumer that wants
+            // the parent type can split there. Setting it explicitly
+            // here makes that intent visible.
+            parent_type: Some(parent_name.to_string()),
+        });
+    }
+
     /// #06.8 Phase 2: emit **E0722** when a Riven `lib`/`extern` block
     /// declares the same C symbol that an earlier block already
     /// declared with an incompatible signature (arity, param types, or
@@ -357,6 +482,38 @@ impl Resolver {
                 );
                 self.scopes.insert_type(class.name.clone(), id);
                 self.type_registry.insert(class.name.clone(), id);
+
+                // #06.8 Phase 3b: register class-body `lib` FFI decls as
+                // class methods on this class. The lib-block syntax is
+                // identical inside or outside a class; the parent
+                // context is what flips `is_class_method` to true and
+                // routes calls through `ClassName.method(...)`.
+                if !class.lib_decls.is_empty() {
+                    let mut hir_fns: Vec<HirFfiFunc> = Vec::new();
+                    let mut link_flags: Vec<String> = Vec::new();
+                    for lib in &class.lib_decls {
+                        for flag in lib.link_attrs.iter().map(|a| format!("-l{}", a.name)) {
+                            if !link_flags.contains(&flag) {
+                                link_flags.push(flag);
+                            }
+                        }
+                        for ffi_fn in &lib.functions {
+                            self.register_class_lib_method(
+                                id,
+                                &class.name,
+                                ffi_fn,
+                                &mut hir_fns,
+                            );
+                        }
+                    }
+                    if !hir_fns.is_empty() {
+                        ffi_libs.push(HirFfiLib {
+                            name: class.name.clone(),
+                            link_flags,
+                            functions: hir_fns,
+                        });
+                    }
+                }
             }
             ast::TopLevelItem::Struct(s) => {
                 let struct_gp = self.collect_generic_param_infos(&s.generic_params);
@@ -560,6 +717,37 @@ impl Resolver {
                 );
                 self.scopes.insert_type(t.name.clone(), id);
                 self.type_registry.insert(t.name.clone(), id);
+
+                // #06.8 Phase 3b: register mixin-body `lib` FFI decls as
+                // class methods on the mixin (parallel to class-body lib
+                // handling above). Same semantics: no implicit `self`,
+                // `ClassName.method(...)` call surface.
+                if !t.lib_decls.is_empty() {
+                    let mut hir_fns: Vec<HirFfiFunc> = Vec::new();
+                    let mut link_flags: Vec<String> = Vec::new();
+                    for lib in &t.lib_decls {
+                        for flag in lib.link_attrs.iter().map(|a| format!("-l{}", a.name)) {
+                            if !link_flags.contains(&flag) {
+                                link_flags.push(flag);
+                            }
+                        }
+                        for ffi_fn in &lib.functions {
+                            self.register_class_lib_method(
+                                id,
+                                &t.name,
+                                ffi_fn,
+                                &mut hir_fns,
+                            );
+                        }
+                    }
+                    if !hir_fns.is_empty() {
+                        ffi_libs.push(HirFfiLib {
+                            name: t.name.clone(),
+                            link_flags,
+                            functions: hir_fns,
+                        });
+                    }
+                }
             }
             ast::TopLevelItem::TypeAlias(ta) => {
                 let target = self.resolve_type_expr(&ta.type_expr);
@@ -1099,6 +1287,14 @@ impl Resolver {
             .layout
             .iter()
             .any(|s| s == "flat_heap_struct");
+        // #06.8 Phase 3b: append the class-body `lib` FFI methods that
+        // pass-1 registered onto the side-map. They were registered as
+        // `DefKind::Method` with `parent = def_id` and need to appear
+        // in `ClassInfo.methods` so name lookups (`Foo.bar`) find them
+        // alongside the in-body `def`s above.
+        if let Some(lib_method_ids) = self.pass1_class_lib_methods.get(&def_id) {
+            method_def_ids.extend(lib_method_ids.iter().copied());
+        }
         if let Some(def) = self.symbols.get_mut(def_id) {
             def.kind = DefKind::Class {
                 info: ClassInfo {

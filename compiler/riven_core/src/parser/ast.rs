@@ -913,6 +913,13 @@ pub struct ExternBlock {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FfiFunction {
     pub name: String,
+    /// `true` when the decl was spelled `def self.NAME(...)` — the Riven
+    /// convention for class methods (no implicit `self` parameter). `false`
+    /// means `def NAME(...)`, which is the instance-method form. For FFI
+    /// decls inside a class/mixin body, the resolver uses this flag to
+    /// flip `FnSignature.is_class_method`. Top-level FFI decls are always
+    /// `false` here — they're free functions, not methods on a type.
+    pub is_class_method: bool,
     /// Optional C-symbol alias declared via `def name as "<c-symbol>"(...)`.
     /// When `None`, the Riven-side name (`name`) is the linked C symbol —
     /// the historical behaviour of `lib "X" ... end` blocks. When `Some`,

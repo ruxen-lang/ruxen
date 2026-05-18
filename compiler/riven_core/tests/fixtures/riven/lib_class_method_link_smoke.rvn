@@ -1,0 +1,14 @@
+class Foo
+  lib "riven_runtime"
+    def self.bar as "riven_test_extern_add_one"(x: Int) -> Int
+  end
+end
+
+def main() -> Int
+  let result = Foo.bar(41)
+  if result == 42
+    0
+  else
+    1
+  end
+end

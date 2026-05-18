@@ -102,6 +102,23 @@ impl Parser {
         self.advance(); // consume `def`
         self.skip_newlines();
 
+        // Riven convention (ruby-naming.spec.md §3.4a): `def NAME(...)` is
+        // an instance method, `def self.NAME(...)` is a class method. The
+        // same convention applies inside FFI lib blocks — a `def self.foo`
+        // FFI decl is a class method bound to a C symbol; `def foo` is an
+        // instance method that passes its receiver as the first arg to
+        // the C symbol. The flag lives on the AST so the resolver can
+        // propagate it to FnSignature.is_class_method.
+        let is_class_method = if matches!(self.current_kind(), TokenKind::SelfValue)
+            && matches!(self.peek_kind(), TokenKind::Dot)
+        {
+            self.advance(); // consume `self`
+            self.advance(); // consume `.`
+            true
+        } else {
+            false
+        };
+
         let name = self.expect_any_identifier();
 
         // Optional `as "<c-symbol>"` rename clause. The C symbol is taken
@@ -180,6 +197,7 @@ impl Parser {
         let span = self.span_from(&start);
         FfiFunction {
             name,
+            is_class_method,
             c_symbol,
             params,
             return_type,

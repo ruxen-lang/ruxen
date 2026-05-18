@@ -1,0 +1,9 @@
+class Foo
+  lib "riven_runtime"
+    def self.bar as "riven_test_extern_add_one"(x: Int) -> Int
+  end
+end
+
+def main() -> Int
+  Foo.bar(41)
+end
