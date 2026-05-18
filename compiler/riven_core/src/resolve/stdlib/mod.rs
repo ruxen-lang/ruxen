@@ -607,77 +607,16 @@ pub(super) fn register_all(r: &mut Resolver) {
             ],
             Ty::Int,
         ),
-        // std::net — Phase 3. Minimum-viable TCP. fds surfaced as
-        // Int with -1 on failure (POSIX-style). Class wrappers
-        // (TcpStream/TcpListener) are a follow-up.
-        (
-            "tcp_connect",
-            vec![ParamInfo {
-                name: "addr".into(),
-                ty: Ty::Ref(Box::new(Ty::String)),
-                auto_assign: false,
-            }],
-            Ty::Int,
-        ),
-        (
-            "tcp_listen",
-            vec![ParamInfo {
-                name: "addr".into(),
-                ty: Ty::Ref(Box::new(Ty::String)),
-                auto_assign: false,
-            }],
-            Ty::Int,
-        ),
-        (
-            "tcp_accept",
-            vec![ParamInfo {
-                name: "fd".into(),
-                ty: Ty::Int,
-                auto_assign: false,
-            }],
-            Ty::Int,
-        ),
-        (
-            "tcp_read",
-            vec![
-                ParamInfo {
-                    name: "fd".into(),
-                    ty: Ty::Int,
-                    auto_assign: false,
-                },
-                ParamInfo {
-                    name: "max".into(),
-                    ty: Ty::Int,
-                    auto_assign: false,
-                },
-            ],
-            Ty::String,
-        ),
-        (
-            "tcp_write",
-            vec![
-                ParamInfo {
-                    name: "fd".into(),
-                    ty: Ty::Int,
-                    auto_assign: false,
-                },
-                ParamInfo {
-                    name: "data".into(),
-                    ty: Ty::Ref(Box::new(Ty::String)),
-                    auto_assign: false,
-                },
-            ],
-            Ty::Int,
-        ),
-        (
-            "tcp_close",
-            vec![ParamInfo {
-                name: "fd".into(),
-                ty: Ty::Int,
-                auto_assign: false,
-            }],
-            Ty::Unit,
-        ),
+        // std::net — Phase 2 #06.5 T5: class-only surface. The flat
+        // tcp_* free fns previously exposed here (tcp_connect/listen/
+        // accept/read/write/close) were removed when the typed
+        // TcpListener / TcpStream wrappers shipped — see
+        // docs/specs/stdlib/net.spec.md C16 for the rationale and the
+        // `flat_tcp_free_fns_removed_from_resolver` pin test that
+        // guards this surface against a regression. The C runtime
+        // symbols (riven_tcp_connect/...) are still linked and reused
+        // internally by the class methods; they just aren't reachable
+        // from Riven user code.
         // std::signal — cooperative graceful-shutdown surface for
         // long-running programs (servers, daemons, REPLs).
         // `install_sigint` registers a handler that sets an atomic
@@ -1241,6 +1180,108 @@ pub(super) fn register_all(r: &mut Resolver) {
     r.scopes.insert_type("Instant".to_string(), instant_id);
     r.type_registry.insert("Instant".to_string(), instant_id);
 
+    // Phase 2 #06.5 T5: `std::net::TcpListener` — owning wrapper over
+    // a POSIX listening socket fd. Constructed via `TcpListener.bind`;
+    // consumed by the standard scope-exit drop pipeline which emits
+    // `TcpListener_drop(l) + riven_dealloc(l)` — see
+    // mir/lower/collect.rs::collect_user_drop_classes. Wire layout
+    // (8-byte {fd:i32, closed:i32}) documented at `RivenTcpListener`
+    // in library/runtime/net/tcp.c.
+    let tcp_listener_id = r.symbols.define(
+        "TcpListener".to_string(),
+        DefKind::Class {
+            info: ClassInfo {
+                generic_params: vec![],
+                parent: None,
+                fields: vec![],
+                methods: vec![],
+                derive_traits: vec![],
+                opt_out_send: false,
+                opt_out_sync: false,
+                manual_send: false,
+                manual_sync: false,
+                const_predicates: vec![],
+            },
+        },
+        Visibility::Public,
+        span.clone(),
+    );
+    r.scopes
+        .insert_type("TcpListener".to_string(), tcp_listener_id);
+    r.type_registry
+        .insert("TcpListener".to_string(), tcp_listener_id);
+
+    // Phase 2 #06.5 T5: `std::net::TcpStream` — owning wrapper over a
+    // connected POSIX socket fd. Same drop story as TcpListener.
+    let tcp_stream_id = r.symbols.define(
+        "TcpStream".to_string(),
+        DefKind::Class {
+            info: ClassInfo {
+                generic_params: vec![],
+                parent: None,
+                fields: vec![],
+                methods: vec![],
+                derive_traits: vec![],
+                opt_out_send: false,
+                opt_out_sync: false,
+                manual_send: false,
+                manual_sync: false,
+                const_predicates: vec![],
+            },
+        },
+        Visibility::Public,
+        span.clone(),
+    );
+    r.scopes.insert_type("TcpStream".to_string(), tcp_stream_id);
+    r.type_registry
+        .insert("TcpStream".to_string(), tcp_stream_id);
+
+    // Phase 2 #06.5 T5: `Shutdown` — three unit variants used as the
+    // argument of `TcpStream.shutdown`. Tag values are pinned to match
+    // `RIVEN_SHUTDOWN_*` in library/runtime/net/tcp.c — the
+    // `shutdown_tag_stability` pin test cross-checks them.
+    let shutdown_id = r.symbols.define(
+        "Shutdown".to_string(),
+        DefKind::Enum {
+            info: EnumInfo {
+                generic_params: vec![],
+                variants: vec![], // filled below
+                derive_traits: vec![],
+                opt_out_send: false,
+                opt_out_sync: false,
+                manual_send: false,
+                manual_sync: false,
+                const_predicates: vec![],
+            },
+        },
+        Visibility::Public,
+        span.clone(),
+    );
+    r.scopes.insert_type("Shutdown".to_string(), shutdown_id);
+    r.type_registry
+        .insert("Shutdown".to_string(), shutdown_id);
+    let shutdown_variants: &[(&str, usize)] = &[("Read", 0), ("Write", 1), ("Both", 2)];
+    let mut shutdown_variant_ids: Vec<DefId> = Vec::with_capacity(shutdown_variants.len());
+    for (vname, idx) in shutdown_variants {
+        let vid = r.symbols.define(
+            (*vname).to_string(),
+            DefKind::EnumVariant {
+                parent: shutdown_id,
+                variant_idx: *idx,
+                kind: VariantDefKind::Unit,
+            },
+            Visibility::Public,
+            span.clone(),
+        );
+        r.scopes.insert(format!("Shutdown.{}", vname), vid);
+        shutdown_variant_ids.push(vid);
+    }
+    if let Some(def) = r.symbols.get_mut(shutdown_id) {
+        if let DefKind::Enum { ref mut info } = def.kind {
+            info.variants = shutdown_variant_ids;
+        }
+    }
+
     // Phase 2 #06.A1/A3: `std::fmt::Formatter` is the buffer that
     // `Display::fmt` / `Debug::fmt` write into. v1 carries width
     // / alignment / precision metadata as opaque internal fields
@@ -1726,17 +1767,13 @@ pub(super) fn register_all(r: &mut Resolver) {
         Visibility::Public,
         span.clone(),
     );
+    // Phase 2 #06.5 T5: std.net is class-only — TcpListener /
+    // TcpStream / Shutdown. The flat tcp_* free fns are gone; the C
+    // runtime symbols remain linked and back the class methods.
     let net_id = r.symbols.define(
         "net".to_string(),
         DefKind::Module {
-            items: vec![
-                builtin_fn_ids["tcp_connect"],
-                builtin_fn_ids["tcp_listen"],
-                builtin_fn_ids["tcp_accept"],
-                builtin_fn_ids["tcp_read"],
-                builtin_fn_ids["tcp_write"],
-                builtin_fn_ids["tcp_close"],
-            ],
+            items: vec![tcp_listener_id, tcp_stream_id, shutdown_id],
         },
         Visibility::Public,
         span.clone(),
@@ -1907,6 +1944,27 @@ pub(super) fn register_all(r: &mut Resolver) {
             "Instant",
             Ty::Class {
                 name: "Instant".to_string(),
+                generic_args: vec![],
+            },
+        ),
+        // Phase 2 #06.5 T5: TcpListener / TcpStream value-scope type
+        // constructors. Registering them here lets `TcpListener.bind(
+        // &addr)` / `TcpStream.connect(&addr)` resolve the receiver as
+        // a class identifier (typeck::infer promotes it to the
+        // corresponding class Ty, then the static-ctor fast path in
+        // mir/lower/expr/method_call.rs dispatches to
+        // `TcpListener_bind` / `TcpStream_connect`).
+        (
+            "TcpListener",
+            Ty::Class {
+                name: "TcpListener".to_string(),
+                generic_args: vec![],
+            },
+        ),
+        (
+            "TcpStream",
+            Ty::Class {
+                name: "TcpStream".to_string(),
                 generic_args: vec![],
             },
         ),

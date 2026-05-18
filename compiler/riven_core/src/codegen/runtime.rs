@@ -172,13 +172,34 @@ pub const RUNTIME_FUNCTIONS: &[&str] = &[
     "riven_path_file_name",
     "riven_path_extension",
     "riven_path_is_absolute",
-    // std::net (Phase 3): minimum-viable TCP. fds surfaced as Int.
+    // std::net (Phase 2 #06.5 T5): class-only surface. The flat
+    // `riven_tcp_connect / listen / accept / read / write / close`
+    // helpers below stay declared so the C runtime still exposes
+    // them — TcpListener.bind / TcpStream.connect link against
+    // socket(2)/connect(2) directly, but `riven_tcp_close` is the
+    // best-effort fd-close used by other surfaces that want to
+    // release a raw fd (none today, but the symbol is cheap to keep
+    // and removing it would force a runtime relink dance).
     "riven_tcp_connect",
     "riven_tcp_listen",
     "riven_tcp_accept",
     "riven_tcp_read",
     "riven_tcp_write",
     "riven_tcp_close",
+    // Class surface (#06.5 T5) — TcpListener / TcpStream wrappers.
+    "riven_tcp_listener_bind",
+    "riven_tcp_listener_accept",
+    "riven_tcp_listener_local_addr",
+    "riven_tcp_listener_set_nonblocking",
+    "riven_tcp_listener_close",
+    "riven_tcp_listener_drop",
+    "riven_tcp_stream_connect",
+    "riven_tcp_stream_read",
+    "riven_tcp_stream_write",
+    "riven_tcp_stream_peer_addr",
+    "riven_tcp_stream_shutdown",
+    "riven_tcp_stream_close",
+    "riven_tcp_stream_drop",
     // std::signal (graceful-shutdown surface).
     "riven_signal_install_sigint",
     "riven_signal_received_sigint",

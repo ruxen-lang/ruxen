@@ -244,5 +244,12 @@ impl<'a> Lowerer<'a> {
         // `riven_dealloc`. Without this entry a `let f = File.open(...)`
         // that goes out of scope would leak the fd until process exit.
         self.user_drop_classes.insert("File".to_string());
+        // Phase 2 stdlib (#06.5 T5): `TcpListener` and `TcpStream`
+        // each own a POSIX fd. Same drop story as File — the helper
+        // `riven_tcp_<type>_drop` closes the fd if it's still open
+        // (idempotent — explicit `.close()` flags it first), then the
+        // scope-exit pass frees the 8-byte spine via `riven_dealloc`.
+        self.user_drop_classes.insert("TcpListener".to_string());
+        self.user_drop_classes.insert("TcpStream".to_string());
     }
 }

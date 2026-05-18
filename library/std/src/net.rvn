@@ -1,0 +1,34 @@
+## TcpListener / TcpStream / Shutdown stdlib surface for Phase 2 prompt 06.5 T5.
+##
+## This file is declarative documentation for the intended stdlib source
+## layout. v1 still models the executable behavior through built-in
+## resolver/typeck/MIR hooks rather than loading `.rvn` stdlib modules.
+##
+## All public methods return `Result[_, IoError]`. The class wrappers
+## own a POSIX fd and `close` it on drop via the user_drop_classes
+## scope-exit pipeline — see library/runtime/net/tcp.c for the runtime
+## side, and compiler/riven_core/src/mir/lower/collect.rs for the drop
+## registration.
+
+class TcpListener
+  def self.bind(addr: &String) -> Result[TcpListener, IoError]
+  def accept(self) -> Result[TcpStream, IoError]
+  def local_addr(self) -> Result[String, IoError]
+  def set_nonblocking(self, v: Bool) -> Result[(), IoError]
+  def close(self) -> Result[(), IoError]
+end
+
+class TcpStream
+  def self.connect(addr: &String) -> Result[TcpStream, IoError]
+  def read(self, buf: &mut Array[U8]) -> Result[Int, IoError]
+  def write(self, bytes: &Array[U8]) -> Result[Int, IoError]
+  def peer_addr(self) -> Result[String, IoError]
+  def shutdown(self, how: Shutdown) -> Result[(), IoError]
+  def close(self) -> Result[(), IoError]
+end
+
+enum Shutdown
+  Read
+  Write
+  Both
+end

@@ -205,3 +205,389 @@ void riven_tcp_close(int64_t fd) {
     (void)close((int)fd);
 }
 
+/* ── Phase 2 #06.5 T5: TcpListener / TcpStream class wrappers ─────────
+ *
+ * The class surface owns a POSIX fd inside a flat 8-byte heap struct
+ * `{ int32 fd; int32 closed }` mirroring `RivenFile`. Both classes
+ * participate in the MIR drop pipeline: scope-exit emits
+ * `<Type>_drop(p) + riven_dealloc(p)` so the fd is released even when
+ * the user doesn't call `.close()` explicitly.
+ *
+ * All public methods return `Result[_, IoError]` so failures route
+ * through the same `IoError` enum as `File` / `fs.*`. The runtime
+ * helpers `riven_io_error_from_errno` / `riven_io_error_unit` /
+ * `riven_io_error_struct` (in `io/io_error.c`) construct the variants.
+ *
+ * Shutdown enum tag mapping (pinned in `shutdown_tag_stability.rs`):
+ *
+ *   Shutdown.Read  = 0  -> SHUT_RD
+ *   Shutdown.Write = 1  -> SHUT_WR
+ *   Shutdown.Both  = 2  -> SHUT_RDWR
+ */
+
+#define RIVEN_SHUTDOWN_READ  0
+#define RIVEN_SHUTDOWN_WRITE 1
+#define RIVEN_SHUTDOWN_BOTH  2
+
+typedef struct {
+    int32_t fd;
+    int32_t closed;
+} RivenTcpListener;
+
+_Static_assert(sizeof(RivenTcpListener) == 8,
+    "RivenTcpListener wire layout drifted from documented 8-byte form");
+
+typedef struct {
+    int32_t fd;
+    int32_t closed;
+} RivenTcpStream;
+
+_Static_assert(sizeof(RivenTcpStream) == 8,
+    "RivenTcpStream wire layout drifted from documented 8-byte form");
+
+/* Build Result::Err(IoError::InvalidInput) for the class methods'
+ * "operates on closed / null receiver" guard paths. Mirrors
+ * `riven_file_invalid_input` in `io/file.c`. */
+static void *riven_tcp_invalid_input(void) {
+    return riven_result_err_value(
+        (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+}
+
+/* ── TcpListener ─────────────────────────────────────────────────── */
+
+/* `TcpListener.bind(addr) -> Result[TcpListener, IoError]`. Reuses the
+ * existing flat `riven_tcp_listen` for the actual socket() + bind() +
+ * listen() flow; on -1 we map errno (captured immediately after the
+ * call) to an `IoError` variant. On success we allocate the 8-byte
+ * spine and wrap the fd. */
+void *riven_tcp_listener_bind(const char *addr) {
+    if (!addr) return riven_tcp_invalid_input();
+    /* Replicate the bind path inline so we can capture errno on each
+     * failure point rather than getting a meaningless ENOTSOCK / 0
+     * after the flat helper. */
+    char host[256];
+    char port[16];
+    if (riven_tcp_split_addr(addr, host, sizeof host, port, sizeof port) != 0) {
+        return riven_tcp_invalid_input();
+    }
+    int port_num = atoi(port);
+    if (port_num < 0 || port_num > 65535) {
+        return riven_tcp_invalid_input();
+    }
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
+        return riven_io_error_from_errno(errno);
+    }
+    riven_tcp_set_nosigpipe(fd);
+    int one = 1;
+    (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+
+    struct sockaddr_in sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons((uint16_t)port_num);
+
+    if (host[0] == '\0' || strcmp(host, "0.0.0.0") == 0) {
+        sa.sin_addr.s_addr = htonl(INADDR_ANY);
+    } else if (inet_pton(AF_INET, host, &sa.sin_addr) != 1) {
+        struct addrinfo hints, *res = NULL;
+        memset(&hints, 0, sizeof hints);
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        if (getaddrinfo(host, NULL, &hints, &res) != 0 || !res) {
+            close(fd);
+            return riven_tcp_invalid_input();
+        }
+        sa.sin_addr = ((struct sockaddr_in *)res->ai_addr)->sin_addr;
+        freeaddrinfo(res);
+    }
+    if (bind(fd, (struct sockaddr *)&sa, sizeof sa) != 0) {
+        int saved = errno;
+        close(fd);
+        return riven_io_error_from_errno(saved);
+    }
+    if (listen(fd, 128) != 0) {
+        int saved = errno;
+        close(fd);
+        return riven_io_error_from_errno(saved);
+    }
+    RivenTcpListener *l = (RivenTcpListener *)riven_alloc(sizeof(RivenTcpListener));
+    l->fd = fd;
+    l->closed = 0;
+    return riven_result_ok_value((int64_t)l);
+}
+
+/* `TcpListener.accept() -> Result[TcpStream, IoError]`. Blocking by
+ * default; if the user called `set_nonblocking(true)` the kernel
+ * surfaces EAGAIN/EWOULDBLOCK which we map to IoError.WouldBlock.
+ * EINTR is propagated as IoError.Interrupted so cooperative SIGINT
+ * loops can break out (no internal retry). */
+void *riven_tcp_listener_accept(RivenTcpListener *l) {
+    if (!l || l->closed) return riven_tcp_invalid_input();
+    int accepted = accept(l->fd, NULL, NULL);
+    if (accepted < 0) {
+        return riven_io_error_from_errno(errno);
+    }
+    riven_tcp_set_nosigpipe(accepted);
+    RivenTcpStream *s = (RivenTcpStream *)riven_alloc(sizeof(RivenTcpStream));
+    s->fd = accepted;
+    s->closed = 0;
+    return riven_result_ok_value((int64_t)s);
+}
+
+/* `TcpListener.local_addr() -> Result[String, IoError]`. IPv4-only
+ * formatter: "<dotted-quad>:<port>". Closed listener → InvalidInput. */
+static void *riven_tcp_sockaddr_to_string(struct sockaddr_in *sa) {
+    char buf[INET_ADDRSTRLEN];
+    if (!inet_ntop(AF_INET, &sa->sin_addr, buf, sizeof buf)) {
+        return riven_io_error_from_errno(errno);
+    }
+    char out[INET_ADDRSTRLEN + 8];
+    int n = snprintf(out, sizeof out, "%s:%u", buf, (unsigned)ntohs(sa->sin_port));
+    if (n < 0 || (size_t)n >= sizeof out) {
+        return riven_tcp_invalid_input();
+    }
+    return riven_result_ok_value((int64_t)riven_string_from(out));
+}
+
+void *riven_tcp_listener_local_addr(RivenTcpListener *l) {
+    if (!l || l->closed) return riven_tcp_invalid_input();
+    struct sockaddr_in sa;
+    socklen_t len = sizeof sa;
+    memset(&sa, 0, sizeof sa);
+    if (getsockname(l->fd, (struct sockaddr *)&sa, &len) != 0) {
+        return riven_io_error_from_errno(errno);
+    }
+    return riven_tcp_sockaddr_to_string(&sa);
+}
+
+/* `TcpListener.set_nonblocking(v: Bool) -> Result[(), IoError]`.
+ * Flips O_NONBLOCK via fcntl. Bool comes through as an i64 (0 / 1)
+ * — anything non-zero is treated as `true`. */
+void *riven_tcp_listener_set_nonblocking(RivenTcpListener *l, int64_t v) {
+    if (!l || l->closed) return riven_tcp_invalid_input();
+    int flags = fcntl(l->fd, F_GETFL, 0);
+    if (flags < 0) {
+        return riven_io_error_from_errno(errno);
+    }
+    if (v) {
+        flags |= O_NONBLOCK;
+    } else {
+        flags &= ~O_NONBLOCK;
+    }
+    if (fcntl(l->fd, F_SETFL, flags) < 0) {
+        return riven_io_error_from_errno(errno);
+    }
+    return riven_result_ok_value(0);
+}
+
+/* `TcpListener.close()` — idempotent. */
+void *riven_tcp_listener_close(RivenTcpListener *l) {
+    if (!l) return riven_tcp_invalid_input();
+    if (l->closed) return riven_result_ok_value(0);
+    int rc;
+    do {
+        rc = close(l->fd);
+    } while (rc < 0 && errno == EINTR);
+    l->closed = 1;
+    l->fd = -1;
+    if (rc < 0) {
+        return riven_io_error_from_errno(errno);
+    }
+    return riven_result_ok_value(0);
+}
+
+/* Drop helper — closes the fd if still open. Registered in
+ * `collect_user_drop_classes` (mir/lower/collect.rs) so the MIR emits
+ * `TcpListener_drop(l) + riven_dealloc(l)` at scope exit. */
+void riven_tcp_listener_drop(RivenTcpListener *l) {
+    if (!l) return;
+    if (!l->closed && l->fd >= 0) {
+        int rc;
+        do {
+            rc = close(l->fd);
+        } while (rc < 0 && errno == EINTR);
+        (void)rc;
+        l->closed = 1;
+        l->fd = -1;
+    }
+}
+
+/* ── TcpStream ───────────────────────────────────────────────────── */
+
+/* `TcpStream.connect(addr) -> Result[TcpStream, IoError]`. Same as
+ * the flat `riven_tcp_connect` but we capture errno at each failure
+ * point so we can return a typed IoError variant instead of -1. */
+void *riven_tcp_stream_connect(const char *addr) {
+    if (!addr) return riven_tcp_invalid_input();
+    char host[256];
+    char port[16];
+    if (riven_tcp_split_addr(addr, host, sizeof host, port, sizeof port) != 0) {
+        return riven_tcp_invalid_input();
+    }
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    struct addrinfo *res = NULL;
+    const char *node = (host[0] == '\0') ? "127.0.0.1" : host;
+    int gai = getaddrinfo(node, port, &hints, &res);
+    if (gai != 0 || !res) {
+        /* getaddrinfo's error space doesn't map to errno; surface as
+         * InvalidInput for malformed addresses or generic Other for
+         * resolution failures. Keep it simple: InvalidInput. */
+        return riven_tcp_invalid_input();
+    }
+    int fd = -1;
+    int last_errno = 0;
+    for (struct addrinfo *ai = res; ai; ai = ai->ai_next) {
+        fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (fd < 0) {
+            last_errno = errno;
+            continue;
+        }
+        riven_tcp_set_nosigpipe(fd);
+        if (connect(fd, ai->ai_addr, ai->ai_addrlen) == 0) {
+            break;
+        }
+        last_errno = errno;
+        close(fd);
+        fd = -1;
+    }
+    freeaddrinfo(res);
+    if (fd < 0) {
+        if (last_errno == 0) last_errno = ECONNREFUSED;
+        return riven_io_error_from_errno(last_errno);
+    }
+    RivenTcpStream *s = (RivenTcpStream *)riven_alloc(sizeof(RivenTcpStream));
+    s->fd = fd;
+    s->closed = 0;
+    return riven_result_ok_value((int64_t)s);
+}
+
+/* `TcpStream.read(buf: &mut Array[U8]) -> Result[Int, IoError]`.
+ * Single recv() into a 4096-byte stage buffer, then push each byte as
+ * an int64 slot onto the user-supplied Vec — mirrors `riven_file_read`.
+ * Returns Ok(0) on clean EOF. */
+void *riven_tcp_stream_read(RivenTcpStream *s, RivenVec *buf) {
+    if (!s || s->closed || !buf) return riven_tcp_invalid_input();
+    unsigned char stage[4096];
+    ssize_t got;
+    do {
+        got = recv(s->fd, stage, sizeof stage, 0);
+    } while (got < 0 && errno == EINTR);
+    if (got < 0) {
+        return riven_io_error_from_errno(errno);
+    }
+    for (ssize_t i = 0; i < got; i++) {
+        riven_vec_push(buf, (int64_t)stage[i]);
+    }
+    return riven_result_ok_value(got);
+}
+
+/* `TcpStream.write(bytes: &Array[U8]) -> Result[Int, IoError]`.
+ * Single send() — partial writes surface as Ok(n<len); caller may
+ * loop. EPIPE → IoError.BrokenPipe (the per-socket SO_NOSIGPIPE /
+ * MSG_NOSIGNAL machinery from the flat helpers keeps a write to a
+ * dead peer from killing us). */
+void *riven_tcp_stream_write(RivenTcpStream *s, RivenVec *bytes) {
+    if (!s || s->closed || !bytes) return riven_tcp_invalid_input();
+    size_t n = (size_t)bytes->len;
+    unsigned char *stage = (unsigned char *)malloc(n > 0 ? n : 1);
+    if (!stage) riven_panic("out of memory");
+    for (size_t i = 0; i < n; i++) {
+        stage[i] = (unsigned char)(bytes->data[i] & 0xFF);
+    }
+    ssize_t put;
+    do {
+        put = send(s->fd, stage, n, MSG_NOSIGNAL);
+    } while (put < 0 && errno == EINTR);
+    if (put < 0) {
+        int saved = errno;
+        free(stage);
+        return riven_io_error_from_errno(saved);
+    }
+    free(stage);
+    return riven_result_ok_value((int64_t)put);
+}
+
+/* `TcpStream.peer_addr() -> Result[String, IoError]`. getpeername(2)
+ * → "<dotted-quad>:<port>". Closed stream → InvalidInput. */
+void *riven_tcp_stream_peer_addr(RivenTcpStream *s) {
+    if (!s || s->closed) return riven_tcp_invalid_input();
+    struct sockaddr_in sa;
+    socklen_t len = sizeof sa;
+    memset(&sa, 0, sizeof sa);
+    if (getpeername(s->fd, (struct sockaddr *)&sa, &len) != 0) {
+        return riven_io_error_from_errno(errno);
+    }
+    return riven_tcp_sockaddr_to_string(&sa);
+}
+
+/* `TcpStream.shutdown(how: Shutdown) -> Result[(), IoError]`. The
+ * Shutdown enum is a 3-variant tagged value at the typeck layer — its
+ * runtime representation is a heap pointer whose first 4 bytes hold
+ * the tag (the variant-payload slot is unused for unit variants).
+ * Tag mapping (pinned in shutdown_tag_stability.rs):
+ *
+ *   0 -> SHUT_RD   1 -> SHUT_WR   2 -> SHUT_RDWR
+ *
+ * Any other tag is E0713 ("Shutdown variant unknown") surfaced as
+ * Err(IoError.InvalidInput) with the canonical message. */
+void *riven_tcp_stream_shutdown(RivenTcpStream *s, void *how) {
+    if (!s || s->closed || !how) return riven_tcp_invalid_input();
+    int32_t tag = *(int32_t *)how;
+    int posix_how;
+    switch (tag) {
+        case RIVEN_SHUTDOWN_READ:  posix_how = SHUT_RD;   break;
+        case RIVEN_SHUTDOWN_WRITE: posix_how = SHUT_WR;   break;
+        case RIVEN_SHUTDOWN_BOTH:  posix_how = SHUT_RDWR; break;
+        default:
+            /* E0713: tag outside 0..=2. The typeck layer should keep
+             * this unreachable for compiled-from-source Riven code, so
+             * hitting this arm means either (a) the Shutdown enum's
+             * tagged-value layout drifted from the pin test, or (b) a
+             * raw memory smash. Either way, surface as InvalidInput
+             * with the canonical E0713 message rather than crashing. */
+            return riven_result_err_value(
+                (int64_t)riven_io_error_struct(
+                    RIVEN_IO_ERROR_INVALID_INPUT,
+                    "E0713 Shutdown variant unknown"));
+    }
+    if (shutdown(s->fd, posix_how) != 0) {
+        return riven_io_error_from_errno(errno);
+    }
+    return riven_result_ok_value(0);
+}
+
+/* `TcpStream.close()` — idempotent. */
+void *riven_tcp_stream_close(RivenTcpStream *s) {
+    if (!s) return riven_tcp_invalid_input();
+    if (s->closed) return riven_result_ok_value(0);
+    int rc;
+    do {
+        rc = close(s->fd);
+    } while (rc < 0 && errno == EINTR);
+    s->closed = 1;
+    s->fd = -1;
+    if (rc < 0) {
+        return riven_io_error_from_errno(errno);
+    }
+    return riven_result_ok_value(0);
+}
+
+/* Drop helper — closes the fd if still open. Registered in
+ * `collect_user_drop_classes`. */
+void riven_tcp_stream_drop(RivenTcpStream *s) {
+    if (!s) return;
+    if (!s->closed && s->fd >= 0) {
+        int rc;
+        do {
+            rc = close(s->fd);
+        } while (rc < 0 && errno == EINTR);
+        (void)rc;
+        s->closed = 1;
+        s->fd = -1;
+    }
+}
+

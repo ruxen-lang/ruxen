@@ -247,13 +247,27 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "path_file_name" => return Ok("riven_path_file_name"),
         "path_extension" => return Ok("riven_path_extension"),
         "path_is_absolute" => return Ok("riven_path_is_absolute"),
-        // std::net top-level functions.
-        "tcp_connect" => return Ok("riven_tcp_connect"),
-        "tcp_listen" => return Ok("riven_tcp_listen"),
-        "tcp_accept" => return Ok("riven_tcp_accept"),
-        "tcp_read" => return Ok("riven_tcp_read"),
-        "tcp_write" => return Ok("riven_tcp_write"),
-        "tcp_close" => return Ok("riven_tcp_close"),
+        // Phase 2 stdlib (#06.5 T5): std::net::TcpListener /
+        // TcpStream class surface. Static-style constructors
+        // (`TcpListener_bind`, `TcpStream_connect`) are routed
+        // through the collection-ctor fast path in
+        // mir/lower/expr/method_call.rs (alongside File_open / ...).
+        // Instance methods go through the standard `{Type}_{method}`
+        // mangling. `*_drop` are emitted by the user_drop_classes
+        // scope-exit pass — see mir/lower/collect.rs.
+        "TcpListener_bind" => return Ok("riven_tcp_listener_bind"),
+        "TcpListener_accept" => return Ok("riven_tcp_listener_accept"),
+        "TcpListener_local_addr" => return Ok("riven_tcp_listener_local_addr"),
+        "TcpListener_set_nonblocking" => return Ok("riven_tcp_listener_set_nonblocking"),
+        "TcpListener_close" => return Ok("riven_tcp_listener_close"),
+        "TcpListener_drop" => return Ok("riven_tcp_listener_drop"),
+        "TcpStream_connect" => return Ok("riven_tcp_stream_connect"),
+        "TcpStream_read" => return Ok("riven_tcp_stream_read"),
+        "TcpStream_write" => return Ok("riven_tcp_stream_write"),
+        "TcpStream_peer_addr" => return Ok("riven_tcp_stream_peer_addr"),
+        "TcpStream_shutdown" => return Ok("riven_tcp_stream_shutdown"),
+        "TcpStream_close" => return Ok("riven_tcp_stream_close"),
+        "TcpStream_drop" => return Ok("riven_tcp_stream_drop"),
         // std::signal — graceful-shutdown surface.
         "signal_install_sigint" => return Ok("riven_signal_install_sigint"),
         "signal_received_sigint" => return Ok("riven_signal_received_sigint"),

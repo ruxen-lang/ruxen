@@ -116,6 +116,14 @@ pub(super) fn is_builtin_static_method(type_name: &str, method_name: &str) -> bo
             "from_secs" | "from_millis" | "from_micros" | "from_nanos"
         ),
         "Instant" => matches!(method_name, "now"),
+        // Phase 2 #06.5 T5: TcpListener / TcpStream class-static
+        // constructors. `TcpListener.bind(&addr)` /
+        // `TcpStream.connect(&addr)` dispatch directly to their
+        // runtime symbol with no synthetic `self`. The runtime entries
+        // (`riven_tcp_listener_bind`, `riven_tcp_stream_connect`) take
+        // one `const char*`, not `self + char*`.
+        "TcpListener" => matches!(method_name, "bind"),
+        "TcpStream" => matches!(method_name, "connect"),
         _ => false,
     }
 }

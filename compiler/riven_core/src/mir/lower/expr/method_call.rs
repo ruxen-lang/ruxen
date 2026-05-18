@@ -35,6 +35,15 @@ impl<'a> Lowerer<'a> {
                         method_name.as_str(),
                         "open" | "create" | "append" | "open_options"
                     );
+                // Phase 2 #06.5 T5: TcpListener.bind / TcpStream.connect
+                // are static-style constructors — runtime entries
+                // (`riven_tcp_listener_bind`, `riven_tcp_stream_connect`)
+                // take a single `const char*` and return Result. Same
+                // fast-path reasoning as File.open / File.create.
+                let is_tcp_listener_static_ctor =
+                    type_name == "TcpListener" && method_name == "bind";
+                let is_tcp_stream_static_ctor =
+                    type_name == "TcpStream" && method_name == "connect";
                 // Phase 2 stdlib (#06.5 T4): Duration / Instant
                 // static-style constructors join the same fast path.
                 // `Duration.from_secs(5)` / `Duration.from_millis(ms)`
@@ -53,6 +62,8 @@ impl<'a> Lowerer<'a> {
                     || is_file_static_ctor
                     || is_duration_static_ctor
                     || is_instant_static_ctor
+                    || is_tcp_listener_static_ctor
+                    || is_tcp_stream_static_ctor
                     || (method_name == "with_capacity" && {
                         let bt = if let Some(pos) = type_name.find('[') {
                             &type_name[..pos]
@@ -112,6 +123,14 @@ impl<'a> Lowerer<'a> {
                             // user-defined init.
                             | "Duration"
                             | "Instant"
+                            // Phase 2 #06.5 T5: TcpListener.bind /
+                            // TcpStream.connect — class-static
+                            // constructors that take only `&String`.
+                            // The dispatch table in codegen/
+                            // runtime_table maps `TcpListener_bind` →
+                            // `riven_tcp_listener_bind`, etc.
+                            | "TcpListener"
+                            | "TcpStream"
                     ) {
                         let obj = self.new_temp(expr.ty.clone());
                         // ruby-naming.spec.md §3.11 renames stdlib types

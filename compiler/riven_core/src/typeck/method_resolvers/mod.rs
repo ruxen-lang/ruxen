@@ -715,6 +715,89 @@ pub(super) fn builtin_method_type(
         (Ty::Class { name, .. }, "sub") if name == "Instant" => {
             Some(InferenceEngine::class_ty("Duration", vec![]))
         }
+        // Phase 2 stdlib (#06.5 T5): std::net::TcpListener surface.
+        // Every fallible op returns `Result[_, IoError]`. Static
+        // constructor `bind` (Ty::Class receiver promoted from the
+        // class identifier by the resolver) returns
+        // `Result[TcpListener, IoError]`.
+        (Ty::Class { name, .. }, "bind") if name == "TcpListener" => Some(Ty::Result(
+            Box::new(InferenceEngine::class_ty("TcpListener", vec![])),
+            Box::new(Ty::Enum {
+                name: "IoError".to_string(),
+                generic_args: vec![],
+            }),
+        )),
+        (Ty::Class { name, .. }, "accept") if name == "TcpListener" => Some(Ty::Result(
+            Box::new(InferenceEngine::class_ty("TcpStream", vec![])),
+            Box::new(Ty::Enum {
+                name: "IoError".to_string(),
+                generic_args: vec![],
+            }),
+        )),
+        (Ty::Class { name, .. }, "local_addr") if name == "TcpListener" => Some(Ty::Result(
+            Box::new(Ty::String),
+            Box::new(Ty::Enum {
+                name: "IoError".to_string(),
+                generic_args: vec![],
+            }),
+        )),
+        (Ty::Class { name, .. }, "set_nonblocking") if name == "TcpListener" => Some(Ty::Result(
+            Box::new(Ty::Unit),
+            Box::new(Ty::Enum {
+                name: "IoError".to_string(),
+                generic_args: vec![],
+            }),
+        )),
+        (Ty::Class { name, .. }, "close") if name == "TcpListener" => Some(Ty::Result(
+            Box::new(Ty::Unit),
+            Box::new(Ty::Enum {
+                name: "IoError".to_string(),
+                generic_args: vec![],
+            }),
+        )),
+        // Phase 2 stdlib (#06.5 T5): std::net::TcpStream surface.
+        (Ty::Class { name, .. }, "connect") if name == "TcpStream" => Some(Ty::Result(
+            Box::new(InferenceEngine::class_ty("TcpStream", vec![])),
+            Box::new(Ty::Enum {
+                name: "IoError".to_string(),
+                generic_args: vec![],
+            }),
+        )),
+        (Ty::Class { name, .. }, "read") if name == "TcpStream" => Some(Ty::Result(
+            Box::new(Ty::Int),
+            Box::new(Ty::Enum {
+                name: "IoError".to_string(),
+                generic_args: vec![],
+            }),
+        )),
+        (Ty::Class { name, .. }, "write") if name == "TcpStream" => Some(Ty::Result(
+            Box::new(Ty::Int),
+            Box::new(Ty::Enum {
+                name: "IoError".to_string(),
+                generic_args: vec![],
+            }),
+        )),
+        (Ty::Class { name, .. }, "peer_addr") if name == "TcpStream" => Some(Ty::Result(
+            Box::new(Ty::String),
+            Box::new(Ty::Enum {
+                name: "IoError".to_string(),
+                generic_args: vec![],
+            }),
+        )),
+        (Ty::Class { name, .. }, "shutdown") if name == "TcpStream" => Some(Ty::Result(
+            Box::new(Ty::Unit),
+            Box::new(Ty::Enum {
+                name: "IoError".to_string(),
+                generic_args: vec![],
+            }),
+        )),
+        (Ty::Class { name, .. }, "close") if name == "TcpStream" => Some(Ty::Result(
+            Box::new(Ty::Unit),
+            Box::new(Ty::Enum {
+                name: "IoError".to_string(),
+                generic_args: vec![],
+            }),
+        )),
         // Phase 2 #06.5: `IoError` is a tagged enum, not a class.
         // `.message() -> String` dispatches on tag in the runtime
         // (see `riven_io_error_get_message` in runtime.c).
