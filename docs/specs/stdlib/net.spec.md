@@ -4,58 +4,20 @@
 [docs/requirements/tier1_01_stdlib.md §4.4](../../requirements/tier1_01_stdlib.md),
 [docs/prompts/v1/06_5_phase2_stdlib_io_completeness.md §4](../../prompts/v1/06_5_phase2_stdlib_io_completeness.md).
 
-**Status:** shipped Phase 3 (minimal TCP surface) — Phase 2 #06.5 T5
-adds typed `TcpListener` / `TcpStream` class wrappers + a `Shutdown`
-enum on top.
+**Status:** shipped Phase 2 #06.5 T5 — class-only TCP surface.
 
-`std.net` provides a minimal blocking TCP socket surface.  Addresses
-are passed as `"host:port"` strings; the typed class wrappers own a
-POSIX fd and `close` it on drop.
-
----
-
-## Free-function surface (Phase 3)
-
-### B1 — `tcp_connect(addr) -> Int`
-
-Opens a TCP connection to `addr` and returns the connected file
-descriptor on success.
-
-**Given** `addr = "127.0.0.1:<unused-port>"` (no listener)
-**When** the program calls `tcp_connect(&addr)`
-**Then** the returned `Int` is **negative** (`< 0`) — by convention
-`-1` for ECONNREFUSED / permission errors.
-
-**Given** a peer is listening at `addr`
-**Then** the returned `Int` is a **non-negative** file descriptor.
-
-## B2 — `tcp_write(fd, bytes) -> Int`
-
-Writes `bytes` to the connected socket; returns the number of bytes
-written, or a negative value on error.  Partial writes are possible —
-the caller must loop if it needs to write everything.
-
-## B3 — `tcp_close(fd)` releases the socket
-
-Closes the file descriptor.  Subsequent `tcp_read` / `tcp_write` on
-the same fd return errors.  Idempotent at the runtime layer (closing
-twice is safe).
-
-## B4 — Round-trip: connect → write → close lands bytes at peer
-
-**Given** a peer accepts on `127.0.0.1:<port>` and the Riven program
-calls `connect → write("hello world") → close`
-**Then** the peer reads exactly `"hello world"` from the stream.
-
-## B5 — `tcp_listen` / `tcp_accept` / `tcp_read` surface
-
-These are present in the runtime + resolver but only partially
-pin-tested (the roundtrip test exercises connect+write+close from
-the Riven side and connect+accept+read from the host side).
+`std.net` provides a minimal blocking TCP socket surface. Addresses
+are passed as `"host:port"` strings; the class wrappers own a POSIX
+fd and `close` it on drop. The flat fd-based `tcp_*` free functions
+from the prompt-#06.5-T5 predecessor (Phase 3) have been **removed**
+from the user-facing surface — the underlying C runtime symbols
+(`riven_tcp_connect`, `riven_tcp_listen`, …) are still linked and
+reused internally by `TcpListener` / `TcpStream`, but they are no
+longer Riven-callable.
 
 ---
 
-## Typed class surface (Phase 2 #06.5 T5)
+## Typed class surface
 
 `TcpListener` and `TcpStream` are flat 8-byte heap structs
 `{ int32 fd; int32 closed }` mirroring `RivenFile`. Both participate
@@ -94,9 +56,8 @@ end
 **Then** the result is `Ok(listener)` and the listener owns the
 underlying fd.
 
-**Given** `addr = "0.0.0.0:1"` (privileged port, EACCES on most boxes)
-**Then** the result is `Err(IoError.PermissionDenied | AddrInUse | …)`
-with the corresponding errno-mapped kind.
+**Given** a malformed `addr` (no colon, junk port, …)
+**Then** the result is `Err(IoError.InvalidInput)`.
 
 ### C2 — `TcpListener.close()` releases the fd
 
@@ -194,29 +155,42 @@ against the runtime `RIVEN_SHUTDOWN_*` defines in
 declarations live in `library/std/src/net.rvn` (declarative doc —
 executable behavior is wired in resolve/typeck/codegen).
 
+### C16 — Flat `tcp_*` free fns are no longer exposed
+
+A Riven program that writes `use std.net.tcp_connect` must fail at
+resolve time with "name not found in std.net". The 6 C runtime
+symbols (`riven_tcp_connect`, `riven_tcp_listen`,
+`riven_tcp_accept`, `riven_tcp_read`, `riven_tcp_write`,
+`riven_tcp_close`) remain linked and reused by the class wrappers;
+they are simply no longer reachable from Riven user code.
+
 ---
 
 ## Pin tests
 
-| Behaviour | Test fn                                          | File                           |
-|-----------|--------------------------------------------------|--------------------------------|
-| B1 (err)  | `tcp_connect_unreachable_returns_negative_one`   | `stdlib_net.rs`                |
-| B1 (ok), B2, B3, B4 | `tcp_loopback_roundtrip`               | `stdlib_net.rs`                |
-| B5        | covered indirectly by `blocking_tcp_echo_server_with_graceful_sigint_shutdown` | `stdlib_net.rs` |
-| C1 (ok)   | `tcp_listener_class_bind_ok`                     | `stdlib_net.rs`                |
-| C1 (err)  | `tcp_listener_class_bind_privileged_returns_err` | `stdlib_net.rs`                |
-| C2        | `tcp_listener_class_close_idempotent`            | `stdlib_net.rs`                |
-| C3        | `tcp_listener_class_drop_closes_fd`              | `stdlib_net.rs`                |
-| C4        | `tcp_listener_class_local_addr`                  | `stdlib_net.rs`                |
-| C5        | `tcp_listener_class_set_nonblocking_would_block` | `stdlib_net.rs`                |
-| C6, C7 (ok), C8, C9 | `tcp_class_roundtrip`                  | `stdlib_net.rs`                |
-| C7 (err)  | `tcp_stream_class_connect_unreachable_returns_err` | `stdlib_net.rs`              |
-| C10       | `tcp_stream_class_peer_addr`                     | `stdlib_net.rs`                |
-| C11       | `tcp_stream_class_shutdown_write_then_read_eof`  | `stdlib_net.rs`                |
-| C12       | `tcp_stream_class_close_idempotent`              | `stdlib_net.rs`                |
-| C13       | `tcp_stream_class_drop_closes_fd`                | `stdlib_net.rs`                |
-| C14       | `shutdown_tag_values_match_runtime_and_resolver` | `shutdown_tag_stability.rs`    |
-| C15       | `tcp_class_prelude_auto_import_resolves`         | `stdlib_net.rs`                |
+| Behaviour | Test fn                                            | File                           |
+|-----------|----------------------------------------------------|--------------------------------|
+| C1 (ok)   | `tcp_listener_class_bind_ok`                       | `stdlib_net.rs`                |
+| C1 (err)  | `tcp_listener_class_bind_malformed_returns_err`    | `stdlib_net.rs`                |
+| C2        | `tcp_listener_class_close_idempotent`              | `stdlib_net.rs`                |
+| C3        | `tcp_listener_class_drop_closes_fd`                | `stdlib_net.rs`                |
+| C4        | `tcp_listener_class_local_addr`                    | `stdlib_net.rs`                |
+| C5        | `tcp_listener_class_set_nonblocking_would_block`   | `stdlib_net.rs`                |
+| C6, C7 (ok), C8, C9 | `tcp_class_loopback_roundtrip`           | `stdlib_net.rs`                |
+| C7 (err)  | `tcp_stream_class_connect_unreachable_returns_err` | `stdlib_net.rs`                |
+| C10       | `tcp_stream_class_peer_addr`                       | `stdlib_net.rs`                |
+| C11       | `tcp_stream_class_shutdown_write_then_read_eof`    | `stdlib_net.rs`                |
+| C12       | `tcp_stream_class_close_idempotent`                | `stdlib_net.rs`                |
+| C13       | `tcp_stream_class_drop_closes_fd`                  | `stdlib_net.rs`                |
+| C14       | `shutdown_tag_values_match_runtime_and_resolver`   | `shutdown_tag_stability.rs`    |
+| C15       | `tcp_class_prelude_auto_import_resolves`           | `stdlib_net.rs`                |
+| C16       | `flat_tcp_free_fns_removed_from_resolver`          | `stdlib_net.rs`                |
+
+The original Phase-3 flat-fn roundtrip / SIGINT-echo-server pin
+tests have been migrated to use `TcpListener` / `TcpStream` and now
+live in `stdlib_net.rs` under the names above (the SIGINT echo
+server fixture also moved to the class surface — same scenario, new
+types).
 
 ---
 

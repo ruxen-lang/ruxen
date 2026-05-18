@@ -149,23 +149,25 @@ For now, `process_run` is the only spawn primitive.  The full
 [Spec](../specs/stdlib/net.spec.md)
 
 ```riven
-use std.net.{tcp_connect, tcp_write, tcp_close}
+use std.net.{TcpStream}
 
 def main
-  let fd = tcp_connect(&"127.0.0.1:8080")
-  if fd < 0
-    puts "connect failed"
-    return
+  match TcpStream.connect(&"127.0.0.1:8080")
+    Ok(stream) ->
+      let req = "GET / HTTP/1.0\r\n\r\n".bytes()
+      let _ = stream.write(&req)
+      stream.close()
+    Err(e) -> eputs "connect failed: #{e.message()}"
   end
-  let _ = tcp_write(fd, &"GET / HTTP/1.0\r\n\r\n")
-  tcp_close(fd)
 end
 ```
 
-Sockets are raw file descriptors (`Int`); negative values signal
-errors.  Blocking I/O only.  No TLS, UDP, or async — those are
-post-v1.  Typed wrappers (`TcpStream`, `TcpListener`) that own the
-fd and `drop` automatically are also v2.
+The class wrappers (`TcpListener`, `TcpStream`) own the underlying
+fd and `close` it automatically on drop. Both return
+`Result[_, IoError]` from every operation. Blocking I/O only — no
+TLS, UDP, or async (those are post-v1). The raw fd-based free
+functions (`tcp_connect`, `tcp_listen`, …) that existed in earlier
+previews have been removed from the user-facing surface.
 
 ---
 
