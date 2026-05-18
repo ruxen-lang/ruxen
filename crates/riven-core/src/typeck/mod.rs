@@ -5,6 +5,7 @@
 
 pub mod coerce;
 pub mod infer;
+mod method_resolvers;
 pub mod mixins;
 #[cfg(test)]
 mod tests;
