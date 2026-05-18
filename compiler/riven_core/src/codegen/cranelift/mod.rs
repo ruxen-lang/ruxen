@@ -124,9 +124,20 @@ impl CodeGen {
                     .map_err(|e| {
                         format!("Failed to declare FFI function '{}': {}", ffi_fn.name, e)
                     })?;
+                // Register the FFI under BOTH names so call sites resolve no
+                // matter which one MIR Call carries: `ffi_fn.name` is the
+                // linked C symbol (post `as "<sym>"` rewrite), `ffi_fn.riven_name`
+                // is the Riven-side identifier. They differ exactly when the
+                // `lib` block carried `def NAME as "<c-symbol>"(...)`.
                 self.declared_fns.insert(ffi_fn.name.clone(), func_id);
                 self.user_fn_param_tys
                     .insert(ffi_fn.name.clone(), param_tys.clone());
+                if ffi_fn.riven_name != ffi_fn.name {
+                    self.declared_fns
+                        .insert(ffi_fn.riven_name.clone(), func_id);
+                    self.user_fn_param_tys
+                        .insert(ffi_fn.riven_name.clone(), param_tys.clone());
+                }
 
                 // Also register with the lib-qualified name (e.g., "LibM.sin")
                 if !lib.name.is_empty() {

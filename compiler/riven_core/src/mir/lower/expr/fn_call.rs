@@ -47,9 +47,20 @@ impl<'a> Lowerer<'a> {
                     None
                 };
 
+                // #06.8 Phase 2: rewrite the callee to the C symbol when
+                // this call resolves to an FFI fn declared via
+                // `lib "X" def NAME as "<c-symbol>"(...)`. The Riven-side
+                // call site still spells `NAME`; the linker resolves
+                // `<c-symbol>`. Non-FFI calls hit the unwrap_or branch
+                // and use the Riven name unchanged.
+                let callee = self
+                    .ffi_alias_map
+                    .get(callee_name)
+                    .cloned()
+                    .unwrap_or_else(|| callee_name.clone());
                 self.emit(MirInst::Call {
                     dest,
-                    callee: callee_name.clone(),
+                    callee,
                     args: arg_values,
                 });
                 Ok(dest)

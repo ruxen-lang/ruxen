@@ -105,6 +105,15 @@ pub struct Lowerer<'a> {
     /// local frees the prior allocation before the new pointer overwrites
     /// it. Cleared per function in `lower_method` and closure entry.
     initialized_heap_locals: HashSet<LocalId>,
+    /// #06.8 Phase 2: map from Riven-side FFI fn name → linked C symbol,
+    /// populated at the start of `lower_program` from `HirProgram::ffi_libs`.
+    /// Consulted by `lower_fn_call` so that calling a Riven name like
+    /// `add_one` whose `lib` block declared `def add_one as
+    /// "riven_test_add_one"(...)` emits `MirInst::Call { callee:
+    /// "riven_test_add_one", ... }` instead of `add_one`. Without this
+    /// rewrite the linker would resolve the call to the wrong symbol
+    /// (or fail outright if no `add_one` C symbol exists).
+    ffi_alias_map: HashMap<String, String>,
 }
 
 /// A captured variable's storage inside the captures struct.
@@ -170,6 +179,7 @@ impl<'a> Lowerer<'a> {
             capture_map: HashMap::new(),
             captures_ptr_local: None,
             initialized_heap_locals: HashSet::new(),
+            ffi_alias_map: HashMap::new(),
         }
     }
 
@@ -233,6 +243,38 @@ impl<'a> Lowerer<'a> {
         // drop-elaboration emits a call to `{ClassName}_drop` before
         // the no-op `MirInst::Drop` cleanup at scope exit.
         self.collect_user_drop_classes(program);
+
+        // #06.8 Phase 2: bridge `HirProgram::ffi_libs` → `MirProgram::ffi_libs`.
+        // Each FFI decl becomes a codegen `FfiFuncDecl` whose `name` field is
+        // the linked C symbol (alias if present, Riven name otherwise) and
+        // whose `riven_name` is the call-site identifier. We also build the
+        // `ffi_alias_map` so call-site lowering can rewrite a Riven-named
+        // FFI call into a call to the actual C symbol.
+        for hir_lib in &program.ffi_libs {
+            let mut funcs = Vec::with_capacity(hir_lib.functions.len());
+            for hir_fn in &hir_lib.functions {
+                let c_name = hir_fn
+                    .c_symbol
+                    .clone()
+                    .unwrap_or_else(|| hir_fn.riven_name.clone());
+                if hir_fn.c_symbol.is_some() {
+                    self.ffi_alias_map
+                        .insert(hir_fn.riven_name.clone(), c_name.clone());
+                }
+                funcs.push(crate::mir::nodes::FfiFuncDecl {
+                    name: c_name,
+                    riven_name: hir_fn.riven_name.clone(),
+                    param_types: hir_fn.param_types.clone(),
+                    return_type: hir_fn.return_type.clone(),
+                    is_variadic: hir_fn.is_variadic,
+                });
+            }
+            mir.ffi_libs.push(crate::mir::nodes::FfiLib {
+                name: hir_lib.name.clone(),
+                link_flags: hir_lib.link_flags.clone(),
+                functions: funcs,
+            });
+        }
 
         for item in &program.items {
             match item {

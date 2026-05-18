@@ -171,6 +171,45 @@ impl Resolver {
         stdlib::register_all(self);
     }
 
+    /// #06.8 Phase 2: emit **E0722** when a Riven `lib`/`extern` block
+    /// declares the same C symbol that an earlier block already
+    /// declared with an incompatible signature (arity, param types, or
+    /// return type differ). The first decl wins; subsequent matching
+    /// decls are silently allowed (a redundant restatement is a no-op,
+    /// not an error). The check is keyed on the LINKED symbol so two
+    /// Riven names that alias the same C symbol must agree on its
+    /// type — otherwise codegen would produce a mis-typed call.
+    fn check_ffi_signature_conflict(
+        &mut self,
+        link_symbol: &str,
+        new_sig: &FnSignature,
+        new_span: &Span,
+    ) {
+        if let Some((existing_sig, _existing_span)) =
+            self.extern_symbol_table.get(link_symbol)
+        {
+            let arity_ok = existing_sig.params.len() == new_sig.params.len();
+            let params_ok = arity_ok
+                && existing_sig
+                    .params
+                    .iter()
+                    .zip(new_sig.params.iter())
+                    .all(|(a, b)| a.ty == b.ty);
+            let return_ok = existing_sig.return_ty == new_sig.return_ty;
+            if !(params_ok && return_ok) {
+                self.diagnostics.push(Diagnostic::error_with_code(
+                    format!(
+                        "conflicting FFI declarations for the same C symbol `{}` — \
+                         the earlier declaration's signature does not match this one",
+                        link_symbol
+                    ),
+                    new_span.clone(),
+                    "E0722",
+                ));
+            }
+        }
+    }
+
     // ─── Pass 1: Forward Declaration of Types ───────────────────────
 
     fn register_top_level_type_with_ffi(
@@ -523,13 +562,20 @@ impl Resolver {
                 self.scopes.insert(f.name.clone(), id);
             }
             ast::TopLevelItem::Lib(lib) => {
+                let mut hir_fns: Vec<HirFfiFunc> = Vec::with_capacity(lib.functions.len());
                 for ffi_fn in &lib.functions {
+                    let param_tys: Vec<Ty> = ffi_fn
+                        .params
+                        .iter()
+                        .map(|p| self.resolve_type_expr(&p.type_expr))
+                        .collect();
                     let params: Vec<ParamInfo> = ffi_fn
                         .params
                         .iter()
-                        .map(|p| ParamInfo {
+                        .zip(param_tys.iter().cloned())
+                        .map(|(p, ty)| ParamInfo {
                             name: p.name.clone(),
-                            ty: self.resolve_type_expr(&p.type_expr),
+                            ty,
                             auto_assign: false,
                         })
                         .collect();
@@ -538,33 +584,79 @@ impl Resolver {
                         .as_ref()
                         .map(|t| self.resolve_type_expr(t))
                         .unwrap_or(Ty::Unit);
+                    let return_ty_for_hir = if ffi_fn.return_type.is_some() {
+                        Some(return_ty.clone())
+                    } else {
+                        None
+                    };
+                    let signature = FnSignature {
+                        self_mode: None,
+                        is_class_method: false,
+                        is_async: false,
+                        generic_params: vec![],
+                        params,
+                        return_ty,
+                        c_symbol: ffi_fn.c_symbol.clone(),
+                    };
+                    // #06.8 Phase 2: E0722 cross-decl conflict check. Keyed
+                    // on the LINKED C symbol (alias if present, Riven name
+                    // otherwise) so two decls that route to the same linker
+                    // symbol with incompatible signatures are caught before
+                    // codegen produces a mis-typed call.
+                    let link_symbol = ffi_fn
+                        .c_symbol
+                        .clone()
+                        .unwrap_or_else(|| ffi_fn.name.clone());
+                    self.check_ffi_signature_conflict(
+                        &link_symbol,
+                        &signature,
+                        &ffi_fn.span,
+                    );
                     let id = self.symbols.define(
                         ffi_fn.name.clone(),
                         DefKind::Function {
-                            signature: FnSignature {
-                                self_mode: None,
-                                is_class_method: false,
-                                is_async: false,
-                                generic_params: vec![],
-                                params,
-                                return_ty,
-                                c_symbol: None,
-                            },
+                            signature: signature.clone(),
                         },
                         Visibility::Public,
                         ffi_fn.span.clone(),
                     );
+                    self.extern_symbol_table
+                        .entry(link_symbol)
+                        .or_insert_with(|| (signature, ffi_fn.span.clone()));
                     self.scopes.insert(ffi_fn.name.clone(), id);
+                    hir_fns.push(HirFfiFunc {
+                        riven_name: ffi_fn.name.clone(),
+                        c_symbol: ffi_fn.c_symbol.clone(),
+                        param_types: param_tys,
+                        return_type: return_ty_for_hir,
+                        is_variadic: ffi_fn.is_variadic,
+                    });
                 }
+                ffi_libs.push(HirFfiLib {
+                    name: lib.name.clone(),
+                    link_flags: lib
+                        .link_attrs
+                        .iter()
+                        .map(|a| format!("-l{}", a.name))
+                        .collect(),
+                    functions: hir_fns,
+                });
             }
             ast::TopLevelItem::Extern(ext) => {
+                let mut hir_fns: Vec<HirFfiFunc> = Vec::with_capacity(ext.functions.len());
                 for ffi_fn in &ext.functions {
+                    let param_tys: Vec<Ty> = ffi_fn
+                        .params
+                        .iter()
+                        .map(|p| self.resolve_type_expr(&p.type_expr))
+                        .collect();
                     let params: Vec<ParamInfo> = ffi_fn
                         .params
                         .iter()
-                        .map(|p| ParamInfo {
+                        .zip(param_tys.iter().cloned())
+                        .map(|(p, ty)| ParamInfo {
                             name: p.name.clone(),
-                            ty: self.resolve_type_expr(&p.type_expr),
+                            ty,
                             auto_assign: false,
                         })
                         .collect();
@@ -573,24 +665,54 @@ impl Resolver {
                         .as_ref()
                         .map(|t| self.resolve_type_expr(t))
                         .unwrap_or(Ty::Unit);
+                    let return_ty_for_hir = if ffi_fn.return_type.is_some() {
+                        Some(return_ty.clone())
+                    } else {
+                        None
+                    };
+                    let signature = FnSignature {
+                        self_mode: None,
+                        is_class_method: false,
+                        is_async: false,
+                        generic_params: vec![],
+                        params,
+                        return_ty,
+                        c_symbol: ffi_fn.c_symbol.clone(),
+                    };
+                    let link_symbol = ffi_fn
+                        .c_symbol
+                        .clone()
+                        .unwrap_or_else(|| ffi_fn.name.clone());
+                    self.check_ffi_signature_conflict(
+                        &link_symbol,
+                        &signature,
+                        &ffi_fn.span,
+                    );
                     let id = self.symbols.define(
                         ffi_fn.name.clone(),
                         DefKind::Function {
-                            signature: FnSignature {
-                                self_mode: None,
-                                is_class_method: false,
-                                is_async: false,
-                                generic_params: vec![],
-                                params,
-                                return_ty,
-                                c_symbol: None,
-                            },
+                            signature: signature.clone(),
                         },
                         Visibility::Public,
                         ffi_fn.span.clone(),
                     );
+                    self.extern_symbol_table
+                        .entry(link_symbol)
+                        .or_insert_with(|| (signature, ffi_fn.span.clone()));
                     self.scopes.insert(ffi_fn.name.clone(), id);
+                    hir_fns.push(HirFfiFunc {
+                        riven_name: ffi_fn.name.clone(),
+                        c_symbol: ffi_fn.c_symbol.clone(),
+                        param_types: param_tys,
+                        return_type: return_ty_for_hir,
+                        is_variadic: ffi_fn.is_variadic,
+                    });
                 }
+                ffi_libs.push(HirFfiLib {
+                    name: ext.abi.clone(),
+                    link_flags: vec![],
+                    functions: hir_fns,
+                });
             }
             _ => {
                 // Use, Const — resolved in pass 2

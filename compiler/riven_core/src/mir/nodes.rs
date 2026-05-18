@@ -39,8 +39,16 @@ pub struct FfiLib {
 /// A single FFI function declaration for codegen.
 #[derive(Debug, Clone)]
 pub struct FfiFuncDecl {
-    /// The C function name (e.g., "sin", "printf").
+    /// The actual C symbol the linker resolves — what cranelift / LLVM
+    /// declares as `Linkage::Import`. When a Riven `lib` block carried
+    /// `def NAME as "<c-symbol>"(...)`, this is `"<c-symbol>"`; when no
+    /// alias was given, it is the Riven name (historical default).
     pub name: String,
+    /// The Riven-side identifier — what call sites spell. Equals `name`
+    /// when no alias was given. Used to wire `declared_fns` under BOTH
+    /// keys so a MIR `Call { callee: <riven-name> }` and a MIR `Call {
+    /// callee: <c-symbol> }` (after rewrite at lower time) both resolve.
+    pub riven_name: String,
     /// Parameter types.
     pub param_types: Vec<crate::hir::types::Ty>,
     /// Return type (None for void).

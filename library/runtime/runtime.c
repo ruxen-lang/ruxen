@@ -180,3 +180,6 @@ static void *riven_result_err_value(int64_t payload) {
 #include "process.c"
 #include "fmt.c"
 #include "env.c"
+// #06.8 Phase 2: tiny C symbol used by FFI link-smoke pin tests
+// (compiler/riven_core/tests/ffi_c_symbol_wired.rs).
+#include "test_extern.c"

@@ -210,6 +210,15 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E0714",
         title: "BufReader/BufWriter inner type must be File or TcpStream (v1)",
     },
+    // #06.8 Phase 2: cross-decl FFI signature conflict — two
+    // `lib`/`extern` declarations target the same C symbol with
+    // incompatible signatures. Keyed on the LINKED symbol (alias if
+    // present, Riven name otherwise) so an alias mismatch trips this
+    // before codegen can produce a mis-typed call.
+    CodeInfo {
+        code: "E0722",
+        title: "conflicting FFI declarations for the same C symbol",
+    },
     // #06.8 Wave 1 Task 0c: in-body `layout tagged` directive on an
     // enum pins variant declaration order as the runtime tag
     // assignment. The resolver tracks tagged-enum names per scope at
