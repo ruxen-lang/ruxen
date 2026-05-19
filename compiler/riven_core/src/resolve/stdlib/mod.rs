@@ -273,178 +273,50 @@ pub(super) fn register_all(r: &mut Resolver) {
     // a TYPE (`let x: ThreadId = ...`) — no sentinel-value usage
     // remains in tree.
 
-    // Register a minimal builtin std module tree so `use std.io`
-    // resolves before the fuller Tier-1 stdlib lands.
-    // Wave 2 (#06.8): 9 io free fns + 7 io class shells (Stdin,
-    // Stdout, Stderr, File, OpenOptions, BufReader, BufWriter) moved
-    // to library/std/io/src/lib.rvn. IoError / IoErrorKind / SeekFrom
-    // stay in Rust for now (each is a tagged enum with a pinned
-    // tag-stability contract — separate migration commit).
-    // io_id starts with empty items; fixup_bootstrapped_stdlib_modules
-    // populates them.
-    let io_id = r.symbols.define(
-        "io".to_string(),
-        DefKind::Module { items: vec![] },
-        Visibility::Public,
-        span.clone(),
-    );
-    // Wave 2 (#06.8): see rand_id / path_id above for the empty-items
-    // pattern. The four env free fns are populated by
-    // [`Resolver::fixup_bootstrapped_stdlib_modules`] after the
-    // bootstrap merge loads `library/std/env/src/lib.rvn`.
-    let env_id = r.symbols.define(
-        "env".to_string(),
-        DefKind::Module { items: vec![] },
-        Visibility::Public,
-        span.clone(),
-    );
-    // Wave 2 (#06.8): all seventeen fs free fns + Metadata moved to
-    // library/std/fs/src/lib.rvn. fs_id starts with empty items;
-    // fixup_bootstrapped_stdlib_modules populates them. The `File`
-    // re-export entry (for `use std.fs.File`) is preserved via the
-    // FIXUPS row — "File" looks up in the type scope at fixup time
-    // (Rust-registered today via the unmigrated io section; .rvn
-    // once io migrates).
-    let fs_id = r.symbols.define(
-        "fs".to_string(),
-        DefKind::Module { items: vec![] },
-        Visibility::Public,
-        span.clone(),
-    );
-    // Wave 2 (#06.8): exit + Command + Output + ExitStatus all moved
-    // to library/std/process/src/lib.rvn. process_id starts with empty
-    // items; fixup_bootstrapped_stdlib_modules populates them.
-    let process_id = r.symbols.define(
-        "process".to_string(),
-        DefKind::Module { items: vec![] },
-        Visibility::Public,
-        span.clone(),
-    );
-    // Wave 2 (#06.8): unix_ns + Duration + Instant all moved to
-    // library/std/time/src/lib.rvn. time_id starts with empty items;
-    // fixup_bootstrapped_stdlib_modules populates them.
-    let time_id = r.symbols.define(
-        "time".to_string(),
-        DefKind::Module { items: vec![] },
-        Visibility::Public,
-        span.clone(),
-    );
-    // Phase 2 stdlib (#06.5 T4): the `std.thread` module hosts the
-    // typed free-fn `sleep(&Duration) -> ()`. Intentionally kept
-    // distinct from `std.sync.Thread`: the latter is the spawn /
-    // join surface (class methods), the former is the typed
-    // free-function counterpart to `Thread.sleep(int)`. A future
-    // refactor may consolidate the two namespaces.
-    // Phase D of #06.95: `sleep` moved to library/std/sync/src/lib.rvn
-    // (both as `Thread.sleep` class method and a bare-fn transition
-    // shim). thread_module_id starts with empty items; the resolver's
-    // module-population path picks up the bootstrap-loaded DefId for
-    // `sleep` from the prelude scope.
-    let thread_module_id = r.symbols.define(
-        "thread".to_string(),
-        DefKind::Module { items: vec![] },
-        Visibility::Public,
-        span.clone(),
-    );
-    // Wave 2 (#06.8): see rand_id above for the empty-items pattern.
-    // The five `path_*` fn DefIds are populated by
-    // [`Resolver::fixup_bootstrapped_stdlib_modules`] after the
-    // bootstrap merge loads `library/std/path/src/lib.rvn`.
-    let path_id = r.symbols.define(
-        "path".to_string(),
-        DefKind::Module { items: vec![] },
-        Visibility::Public,
-        span.clone(),
-    );
-    // Phase 2 #06.5 T5: std.net is class-only — TcpListener /
-    // TcpStream / Shutdown. The flat tcp_* free fns are gone; the C
-    // runtime symbols remain linked and back the class methods.
-    // Wave 2 (#06.8): TcpListener / TcpStream / Shutdown moved to
-    // library/std/net/src/lib.rvn. net_id starts with empty items;
-    // fixup_bootstrapped_stdlib_modules populates them via type-scope
-    // lookup after the bootstrap merge.
-    let net_id = r.symbols.define(
-        "net".to_string(),
-        DefKind::Module { items: vec![] },
-        Visibility::Public,
-        span.clone(),
-    );
-    // Phase D of #06.95: signal_install_sigint / signal_received_sigint
-    // moved to library/std/sync/src/lib.rvn (both as `Signal.*` class
-    // methods and bare-fn transition shims). signal_id starts with
-    // empty items.
-    let signal_id = r.symbols.define(
-        "signal".to_string(),
-        DefKind::Module { items: vec![] },
-        Visibility::Public,
-        span.clone(),
-    );
-    // Phase 2 #06.5 T8: std::rand — three free fns over the kernel
-    // CSPRNG. Importable via `use std.rand.{random_bytes, random_u64,
-    // random_fill}`. Class wrapping is intentionally absent — see
-    // docs/specs/stdlib/rand.spec.md "Out of scope".
+    // Phase D-4 of #06.95: register the `std.<pkg>` submodules from a
+    // single static list rather than 12 hand-written
+    // `r.symbols.define(...)` blocks. Each entry here results in an
+    // empty `DefKind::Module` — `auto_populate_std_submodules_from_packages`
+    // fills the items list from the matching
+    // `library/std/<pkg>/src/lib.rvn` after the bootstrap merge.
     //
-    // Wave 2 (#06.8): the three fns moved to library/std/rand/src/lib.rvn.
-    // We still register the `rand` Module namespace here (with empty
-    // items) so `std_id` can include it at construction time and
-    // `use std.rand.<fn>` keeps tokenising. The items vector is
-    // populated by [`Resolver::fixup_bootstrapped_stdlib_modules`]
-    // AFTER the bootstrap merge has inserted the FFI fn DefIds into
-    // the resolver scope.
-    let rand_id = r.symbols.define(
-        "rand".to_string(),
-        DefKind::Module { items: vec![] },
-        Visibility::Public,
-        span.clone(),
-    );
-    // Phase D-2 of #06.95: Arc + ThreadId moved to sync.rvn /
-    // deleted; sync_id now starts with empty items, populated by
-    // `auto_populate_std_submodules_from_packages` from the
-    // bootstrap-loaded `library/std/sync/src/lib.rvn`.
-    let sync_id = r.symbols.define(
-        "sync".to_string(),
-        DefKind::Module { items: vec![] },
-        Visibility::Public,
-        span.clone(),
-    );
-    // Phase 2 #06.A1: `std::fmt` module — Display/Debug traits +
-    // Formatter/FmtError types. Lookups via `use std.fmt.{...}`.
-    // Display + Debug are registered as builtin traits above; we
-    // re-export their DefIds here so module-path resolution
-    // (`std.fmt.Display`) works.
-    // Wave 2 (#06.8): Display, Debug, Formatter, FmtError all moved
-    // to library/std/fmt/src/lib.rvn. fmt_id Module starts with empty
-    // items; fixup_bootstrapped_stdlib_modules populates the four
-    // DefIds via type-scope lookup after the bootstrap merge.
-    let fmt_id = r.symbols.define(
-        "fmt".to_string(),
-        DefKind::Module { items: vec![] },
-        Visibility::Public,
-        span.clone(),
-    );
-
+    // Two entries (`thread`, `signal`) don't have a same-named
+    // package — they're synthetic namespaces that re-export
+    // sync.rvn's bare-fn shims (`sleep`, `signal_install_sigint`,
+    // `signal_received_sigint`) under the legacy import paths
+    // `use std.thread.sleep` / `use std.signal.*`. The resolver's
+    // auto-population skips them silently (no `library/std/thread/`
+    // exists) and they stay empty modules — fine for namespace
+    // tokenisation; callers go through the global-prelude entries
+    // for the actual fn resolution.
+    const STD_SUBMODULES: &[&str] = &[
+        "io",
+        "env",
+        "fs",
+        "process",
+        "time",
+        "path",
+        "net",
+        "sync",
+        "fmt",
+        "signal",
+        "thread",
+        "rand",
+    ];
+    let std_items: Vec<_> = STD_SUBMODULES
+        .iter()
+        .map(|name| {
+            r.symbols.define(
+                name.to_string(),
+                DefKind::Module { items: vec![] },
+                Visibility::Public,
+                span.clone(),
+            )
+        })
+        .collect();
     let std_id = r.symbols.define(
         "std".to_string(),
-        DefKind::Module {
-            items: vec![
-                io_id,
-                env_id,
-                fs_id,
-                process_id,
-                time_id,
-                path_id,
-                net_id,
-                sync_id,
-                fmt_id,
-                signal_id,
-                // Phase 2 stdlib (#06.5 T4): `std.thread` — typed
-                // `sleep(&Duration)` free fn. Sibling of std.sync.
-                thread_module_id,
-                // Phase 2 stdlib (#06.5 T8): `std.rand` — CSPRNG-
-                // backed random_bytes / random_u64 / random_fill.
-                rand_id,
-            ],
-        },
+        DefKind::Module { items: std_items },
         Visibility::Public,
         span.clone(),
     );
