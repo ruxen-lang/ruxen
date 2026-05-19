@@ -115,6 +115,25 @@ impl Resolver {
         // per compilation, period.
         let mut ffi_libs: Vec<HirFfiLib> = Vec::new();
 
+        // #06.95 Phase A pre-flight: snapshot every mixin's lib_decls
+        // BEFORE the bootstrap merge so the Class arm can re-register
+        // them under any class that `include`s the mixin, regardless
+        // of source order between class and mixin. Walks both
+        // bootstrap and user programs so a user class can include a
+        // stdlib mixin (and vice versa).
+        //
+        // Phase E.E of #06.95: this MUST run BEFORE
+        // `merge_bootstrap_programs` — the merge processes nested
+        // module bodies (e.g. `module BufReader { class File ...
+        // include Reader }`), and the include-propagation lookup
+        // depends on `mixin_lib_decls` already containing the
+        // qualified-name key `"BufReader.Reader"`. The previous
+        // ordering ran the merge first, finding an empty map, so
+        // every `include Mixin` inside a module silently failed to
+        // propagate lib decls — culminating in linker errors like
+        // `_BufReader_File_read_line undefined`.
+        self.collect_mixin_lib_decls(bootstrap_programs.iter().chain(std::iter::once(program)));
+
         // Merge stdlib bootstrap programs BEFORE the user's pass 1 so
         // forward references from user code into stdlib symbols (e.g.
         // a user `def main()` calling a bootstrap-loaded `bootstrap_smoke_add_one(...)`)
@@ -129,14 +148,6 @@ impl Resolver {
         // the bootstrap-loaded functions through the Module item walk
         // in `resolve_child_in_def`.
         self.fixup_bootstrapped_stdlib_modules();
-
-        // #06.95 Phase A pre-flight: snapshot every mixin's lib_decls
-        // BEFORE Pass 1 so the Class arm can re-register them under
-        // any class that `include`s the mixin, regardless of source
-        // order between class and mixin. Walks both bootstrap and
-        // user programs so a user class can include a stdlib mixin
-        // (and vice versa).
-        self.collect_mixin_lib_decls(bootstrap_programs.iter().chain(std::iter::once(program)));
 
         // Two-pass approach:
         // Pass 1: Register all top-level type names (classes, structs, enums, traits)
@@ -388,6 +399,14 @@ impl Resolver {
                 | ast::TopLevelItem::Enum(_)
                 | ast::TopLevelItem::Const(_)
                 | ast::TopLevelItem::Mixin(_)
+                // Phase E.E of #06.95: `module Foo { class A; class B }`
+                // shape (used by BufReader / BufWriter to express the
+                // closed-set inner-type dispatch) needs Module bodies
+                // visited at bootstrap-merge time so the nested classes
+                // get registered under their qualified names. Without
+                // this gate, the merger would silently skip every
+                // module item in the stdlib.
+                | ast::TopLevelItem::Module(_)
         )
     }
 

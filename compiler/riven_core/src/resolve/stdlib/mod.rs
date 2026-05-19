@@ -297,6 +297,7 @@ pub(super) fn register_all(r: &mut Resolver) {
         "time",
         "path",
         "net",
+        "bufio",
         "sync",
         "fmt",
         "signal",

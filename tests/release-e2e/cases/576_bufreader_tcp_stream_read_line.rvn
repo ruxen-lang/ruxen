@@ -1,5 +1,5 @@
 use std.net.TcpStream
-use std.io.BufReader
+use std.bufio.BufReader
 
 # E2E single-side smoke: BufReader over TcpStream must compile + lower.
 # A real read-line round-trip requires a listening peer (covered by the
@@ -8,7 +8,7 @@ use std.io.BufReader
 # we never construct one — that's enough to exercise the typeck/lowering
 # arms specific to the TCP suffix.
 def try_read(s: TcpStream)
-  let br = BufReader.new(s)
+  let br = BufReader.Tcp.new(s)
   match br.read_line()
     Ok(_)  -> puts "bufread=ok"
     Err(_) -> puts "bufread=err"

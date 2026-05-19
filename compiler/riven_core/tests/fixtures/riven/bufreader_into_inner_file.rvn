@@ -1,5 +1,5 @@
 use std.io.File
-use std.io.BufReader
+use std.bufio.BufReader
 
 def show_first(line: String)
   puts "first=#{line}"
@@ -12,7 +12,7 @@ def report_first(opt: Option[String])
   end
 end
 
-def read_first(br: &var BufReader[File])
+def read_first(br: &var BufReader.File)
   match br.read_line()
     Ok(opt) -> report_first(opt)
     Err(_)  -> puts "read_fail"
@@ -20,7 +20,7 @@ def read_first(br: &var BufReader[File])
 end
 
 def exercise(f: File)
-  var br = BufReader.new(f)
+  var br = BufReader.File.new(f)
   read_first(&var br)
   let inner = br.into_inner()
   match inner.read_to_string()

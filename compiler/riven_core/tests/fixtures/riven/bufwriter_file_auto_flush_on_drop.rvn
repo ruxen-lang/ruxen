@@ -1,8 +1,8 @@
 use std.io.File
-use std.io.BufWriter
+use std.bufio.BufWriter
 
 def buffer(f: File)
-  let bw = BufWriter.new(f)
+  let bw = BufWriter.File.new(f)
   match bw.write_str(&"persisted-via-drop")
     Ok(_)  -> puts "write_str=ok"
     Err(_) -> puts "write_str=err"

@@ -149,23 +149,12 @@ end
 class OpenOptions
 end
 
-## std::io::BufReader / BufWriter — buffered IO over File / TcpStream.
-## The `def drop` lib decl drives user_drop_classes auto-detect.
-## `riven_bufreader_drop` frees the heap byte-buffer; the inner
-## File/TcpStream has its own drop helper that runs in the same
-## scope-exit pass. `riven_bufwriter_drop` flushes pending bytes
-## before freeing the buffer.
-class BufReader[R]
-  lib "runtime/bufio.c"
-    def drop as "riven_bufreader_drop"(self) -> ()
-  end
-end
-
-class BufWriter[W]
-  lib "runtime/bufio.c"
-    def drop as "riven_bufwriter_drop"(self) -> ()
-  end
-end
+## BufReader / BufWriter classes moved to `library/std/bufio/src/lib.rvn`
+## in Phase E.E of #06.95 — reshaped as `module BufReader { class File;
+## class Tcp }` / `module BufWriter { class File; class Tcp }` to
+## eliminate the MIR inner-arg-type sniff. The bufio package depends
+## on both io (for File / IoError) and net (for TcpStream), so its
+## .rvn loads after both in BOOTSTRAP_FILES.
 
 ## std::io kernel-level free fns — `puts` / `print` / `println` /
 ## `eputs` / `eprintln` / `read_line` / `stdin` / `stdout` / `stderr`

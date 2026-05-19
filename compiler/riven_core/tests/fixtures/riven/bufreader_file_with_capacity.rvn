@@ -1,5 +1,5 @@
 use std.io.File
-use std.io.BufReader
+use std.bufio.BufReader
 
 def show(line: String)
   puts "line=#{line}"
@@ -12,7 +12,7 @@ def report(opt: Option[String])
   end
 end
 
-def read_one(br: BufReader[File])
+def read_one(br: BufReader.File)
   match br.read_line()
     Ok(opt) -> report(opt)
     Err(_)  -> puts "read_fail"
@@ -21,7 +21,7 @@ end
 
 def main
   match File.open("__FILE__")
-    Ok(f)  -> read_one(BufReader.with_capacity(16, f))
+    Ok(f)  -> read_one(BufReader.File.with_capacity(16, f))
     Err(_) -> puts "open_fail"
   end
 end

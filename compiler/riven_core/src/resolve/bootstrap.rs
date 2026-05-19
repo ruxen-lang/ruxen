@@ -74,7 +74,7 @@ use std::path::{Path, PathBuf};
 /// keep working.
 pub const BOOTSTRAP_FILES: &[&str] = &[
     "bootstrap_smoke/src/lib.rvn",
-    // io ships IoError + IoErrorKind which rand/env/fs reference.
+    // io ships IoError + IoErrorKind which rand/env/fs/net reference.
     "io/src/lib.rvn",
     "rand/src/lib.rvn",
     "path/src/lib.rvn",
@@ -83,6 +83,10 @@ pub const BOOTSTRAP_FILES: &[&str] = &[
     "hash/src/lib.rvn",
     "fmt/src/lib.rvn",
     "net/src/lib.rvn",
+    // bufio depends on BOTH io (File / IoError) and net (TcpStream).
+    // Loaded AFTER both to resolve the cross-package references in
+    // the `module BufReader { class File; class Tcp }` declarations.
+    "bufio/src/lib.rvn",
     "process/src/lib.rvn",
     "time/src/lib.rvn",
     "fs/src/lib.rvn",

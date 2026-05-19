@@ -1,0 +1,9 @@
+[package]
+name = "std-bufio"
+version = "0.1.0"
+description = "Buffered IO over File and TcpStream — module+mixin closed-set dispatch"
+
+[dependencies]
+std-core = "= 0.1.0"
+std-io = "= 0.1.0"
+std-net = "= 0.1.0"

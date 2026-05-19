@@ -1,8 +1,8 @@
 use std.fs.{read_to_string, remove_file}
 use std.io.File
-use std.io.BufWriter
+use std.bufio.BufWriter
 
-def write_payload(bw: BufWriter[File], bytes: &Array[Int])
+def write_payload(bw: BufWriter.File, bytes: &Array[Int])
   match bw.write_all(bytes)
     Ok(_)  -> puts "write_all=ok"
     Err(_) -> puts "write_all=err"
@@ -14,7 +14,7 @@ def write_payload(bw: BufWriter[File], bytes: &Array[Int])
 end
 
 def write_into(f: File)
-  let bw = BufWriter.new(f)
+  let bw = BufWriter.File.new(f)
   var bytes: Array[Int] = Array.new
   bytes.push(104) # h
   bytes.push(105) # i

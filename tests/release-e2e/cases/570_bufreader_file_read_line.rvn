@@ -1,6 +1,6 @@
 use std.fs.{write, remove_file}
 use std.io.File
-use std.io.BufReader
+use std.bufio.BufReader
 
 def show_line(line: String) -> Bool
   puts "line=#{line}"
@@ -14,7 +14,7 @@ def handle(opt: Option[String]) -> Bool
   end
 end
 
-def drain(br: BufReader[File])
+def drain(br: BufReader.File)
   var done = false
   while !done
     match br.read_line()
@@ -27,7 +27,7 @@ end
 def main
   write("/tmp/riven_e2e_570_bufread.txt", "alpha\nbeta\ngamma").expect!("write")
   match File.open("/tmp/riven_e2e_570_bufread.txt")
-    Ok(f)  -> drain(BufReader.new(f))
+    Ok(f)  -> drain(BufReader.File.new(f))
     Err(_) -> puts "open_fail"
   end
   remove_file("/tmp/riven_e2e_570_bufread.txt").expect!("remove")

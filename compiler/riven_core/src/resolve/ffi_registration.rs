@@ -314,8 +314,29 @@ impl Resolver {
                     class.name.as_str(),
                     "Array" | "Vec" | "Map" | "HashMap" | "Set" | "HashSet"
                 );
+                // Phase E.E of #06.95: when the class is declared
+                // INSIDE a module (`module BufReader { class File }`),
+                // anchor-mode must look up the QUALIFIED name in
+                // `type_registry`, not the unqualified name in scope.
+                // Without this, a `class File` nested in `module
+                // BufReader` collides with the unrelated top-level
+                // `class File` in io.rvn and gets anchored onto the
+                // wrong DefId — `type_registry` then never receives
+                // `"BufReader.File"`, breaking every `BufReader.File`
+                // reference downstream. For top-level classes
+                // (`module_path` empty), the historical unqualified
+                // scope lookup is preserved.
                 let anchor_id: Option<DefId> = if self.merging_bootstrap {
-                    self.scopes.lookup_type(&class.name)
+                    if module_path.is_empty() {
+                        self.scopes.lookup_type(&class.name)
+                    } else {
+                        let qualified = format!(
+                            "{}.{}",
+                            module_path.join("."),
+                            class.name
+                        );
+                        self.type_registry.get(&qualified).copied()
+                    }
                 } else {
                     None
                 };

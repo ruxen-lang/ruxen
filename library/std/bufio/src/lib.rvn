@@ -1,0 +1,88 @@
+## std::bufio — buffered IO over File and TcpStream.
+##
+## Phase E.E of #06.95 reshaped BufReader[R] / BufWriter[W] from
+## generic class shells (with MIR-side inner-arg-type sniffing) into
+## the module+mixin closed-set pattern documented in the plan's
+## "Module + mixin pattern" section. The single C runtime
+## (`library/std/io/runtime/bufio.c`) carries a `kind` byte in the
+## spine and branches on it for every fill / flush; both inner
+## variants share identical 32-byte struct layouts so the runtime's
+## type-erased `_drop` works for either.
+##
+## Usage:
+##   BufReader.File.new(file)              # was BufReader.new(file)
+##   BufReader.Tcp.new(tcp_stream)         # was BufReader.new(tcp_stream)
+##   br.read_line()                        # shared via mixin Reader
+##   br.into_inner()                       # returns File or TcpStream
+
+module BufReader
+  ## Shared instance-method surface for both File and Tcp variants.
+  ## The C runtime dispatches on the spine's `kind` byte, so a single
+  ## C symbol handles both inner types — no per-variant lookup.
+  mixin Reader
+    lib "../io/runtime/bufio.c"
+      def read_line as "riven_bufreader_read_line"(self) -> Result[Option[String], IoError]
+      def read as "riven_bufreader_read"(self, buf: &var Array[Int]) -> Result[Int, IoError]
+    end
+  end
+
+  ## BufReader.File — buffered reader over a File. `def drop` drives
+  ## the user_drop_classes auto-detect (Phase D-6) so scope-exit
+  ## emits `BufReader.File_drop` → riven_bufreader_drop, which frees
+  ## the heap byte-buffer (the inner File has its own drop running
+  ## in the same pass).
+  class File
+    include Reader
+    lib "../io/runtime/bufio.c"
+      def self.new as "riven_bufreader_new_file"(inner: File) -> BufReader.File
+      def self.with_capacity as "riven_bufreader_with_capacity_file"(cap: Int, inner: File) -> BufReader.File
+      def into_inner as "riven_bufreader_into_inner_file"(self) -> ::File
+      def drop as "riven_bufreader_drop"(self) -> ()
+    end
+  end
+
+  ## BufReader.Tcp — buffered reader over a TcpStream.
+  class Tcp
+    include Reader
+    lib "../io/runtime/bufio.c"
+      def self.new as "riven_bufreader_new_tcp"(inner: TcpStream) -> BufReader.Tcp
+      def self.with_capacity as "riven_bufreader_with_capacity_tcp"(cap: Int, inner: TcpStream) -> BufReader.Tcp
+      def into_inner as "riven_bufreader_into_inner_tcp"(self) -> TcpStream
+      def drop as "riven_bufreader_drop"(self) -> ()
+    end
+  end
+end
+
+module BufWriter
+  ## Shared instance-method surface for both File and Tcp variants.
+  ## `riven_bufwriter_drop` does a best-effort flush before freeing
+  ## so a dropped BufWriter doesn't silently lose buffered bytes.
+  mixin Writer
+    lib "../io/runtime/bufio.c"
+      def write as "riven_bufwriter_write"(self, buf: &Array[Int]) -> Result[Int, IoError]
+      def write_all as "riven_bufwriter_write_all"(self, buf: &Array[Int]) -> Result[(), IoError]
+      def write_str as "riven_bufwriter_write_str"(self, s: &String) -> Result[(), IoError]
+      def flush as "riven_bufwriter_flush"(self) -> Result[(), IoError]
+    end
+  end
+
+  class File
+    include Writer
+    lib "../io/runtime/bufio.c"
+      def self.new as "riven_bufwriter_new_file"(inner: File) -> BufWriter.File
+      def self.with_capacity as "riven_bufwriter_with_capacity_file"(cap: Int, inner: File) -> BufWriter.File
+      def into_inner as "riven_bufwriter_into_inner_file"(self) -> File
+      def drop as "riven_bufwriter_drop"(self) -> ()
+    end
+  end
+
+  class Tcp
+    include Writer
+    lib "../io/runtime/bufio.c"
+      def self.new as "riven_bufwriter_new_tcp"(inner: TcpStream) -> BufWriter.Tcp
+      def self.with_capacity as "riven_bufwriter_with_capacity_tcp"(cap: Int, inner: TcpStream) -> BufWriter.Tcp
+      def into_inner as "riven_bufwriter_into_inner_tcp"(self) -> TcpStream
+      def drop as "riven_bufwriter_drop"(self) -> ()
+    end
+  end
+end

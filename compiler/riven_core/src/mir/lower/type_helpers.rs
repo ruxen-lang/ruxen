@@ -49,9 +49,15 @@ impl<'a> Lowerer<'a> {
         };
         let def = self.symbols.get(def_id)?;
         match &def.kind {
-            DefKind::Class { .. } | DefKind::Struct { .. } | DefKind::Enum { .. } => {
-                Some(def.name.clone())
-            }
+            // Phase E.E of #06.95: for Class/Struct/Enum DefIds,
+            // return None so the caller falls back to
+            // `type_name_from_ty(&object.ty)`. The Ty carries the
+            // QUALIFIED name (`BufReader.File`) for module-nested
+            // classes, while the symbol-table `def.name` is just the
+            // unqualified leaf (`File`) — using `def.name` for the
+            // mangle key would produce `File_new` and miss the FFI
+            // alias `BufReader_File_new → riven_bufreader_new_file`.
+            DefKind::Class { .. } | DefKind::Struct { .. } | DefKind::Enum { .. } => None,
             DefKind::TypeAlias { target } => Some(type_name_from_ty(target)),
             _ => None,
         }

@@ -98,7 +98,21 @@ impl<'a> Lowerer<'a> {
                     // `riven_command_new(prog)` instead of going through
                     // the `Class_init` path (Command has no user-defined
                     // init).
-                    if matches!(
+                    // Phase E.E of #06.95: any class with a dotted
+                    // name (`BufReader.File`, `BufWriter.Tcp`, …) was
+                    // declared inside a `module` block. Module-nested
+                    // classes are necessarily new (they didn't exist
+                    // before the module+mixin reshape), they have no
+                    // user-defined `_init`, and their `def self.NAME`
+                    // lib decls already register the right FFI alias.
+                    // Treat them like the listed top-level classes —
+                    // route through the static-ctor fast path, mangle
+                    // with dot → underscore, and let
+                    // `resolve_ffi_alias_callee` rewrite to the C
+                    // symbol.
+                    let is_module_nested_class = base_type.contains('.');
+                    if is_module_nested_class
+                        || matches!(
                         base_type,
                         "Vec"
                             | "Array"
@@ -140,10 +154,13 @@ impl<'a> Lowerer<'a> {
                             | "TcpListener"
                             | "TcpStream"
                             // Phase 2 #06.5 T6: BufReader[R] /
-                            // BufWriter[W] — generic buffered wrappers.
-                            // The suffix-pick below (`_new_file` vs
-                            // `_new_tcp`) routes to the right runtime
-                            // entry based on the inner argument's type.
+                            // BufWriter[W] LEGACY entries — superseded
+                            // by the `is_module_nested_class` check
+                            // above once callers migrate to
+                            // BufReader.File / BufReader.Tcp. Remove
+                            // after the BOOTSTRAP_FILES migration
+                            // sweep deletes the last bare BufReader
+                            // usage.
                             | "BufReader"
                             | "BufWriter"
                     ) {
@@ -202,10 +219,17 @@ impl<'a> Lowerer<'a> {
                             let local = self.lower_expr(arg)?;
                             call_args.push(local_to_value(local));
                         }
+                        // Phase E.E of #06.95: module-nested classes
+                        // carry dotted names (`BufReader.File`). C
+                        // symbols can't contain `.`, so normalise to
+                        // `_` when building the mangled callee — same
+                        // shape `register_class_lib_method_in` uses
+                        // for the FFI alias map key.
+                        let runtime_base_cs = runtime_base.replace('.', "_");
                         let raw_callee = if let Some(suffix) = bufio_suffix {
-                            format!("{}_{}_{}", runtime_base, method_name, suffix)
+                            format!("{}_{}_{}", runtime_base_cs, method_name, suffix)
                         } else {
-                            format!("{}_{}", runtime_base, method_name)
+                            format!("{}_{}", runtime_base_cs, method_name)
                         };
                         // #06.8 T#14: the static-ctor fast path
                         // historically emitted `Vec_new` / `Hash_new`
