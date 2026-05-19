@@ -38,36 +38,11 @@ fn read(path: &str) -> String {
         .unwrap_or_else(|e| panic!("read {} failed: {}", path, e))
 }
 
-/// Pull every `("Name", N)` tuple out of `line` and append them to `out`.
-/// Used by `seek_from_tag_values_match_runtime_and_resolver` to parse a
-/// `seek_from_variants` table that may have been line-collapsed by
-/// rustfmt onto a single source line.
-fn parse_seek_from_tuples(line: &str, out: &mut Vec<(String, usize)>) {
-    let mut cursor = line;
-    while let Some(open) = cursor.find("(\"") {
-        let rest = &cursor[open + 2..];
-        let Some(end_quote) = rest.find('"') else {
-            break;
-        };
-        let name = &rest[..end_quote];
-        let after = &rest[end_quote + 1..];
-        let Some(comma) = after.find(',') else {
-            break;
-        };
-        // The numeric tag runs from the first digit after the comma up
-        // to the first non-digit character.  Avoid `trim_end_matches`
-        // here: when several tuples sit on one source line the
-        // remainder after the digit contains *more* tuples, not
-        // trailing punctuation, so a global non-digit trim would slurp
-        // up the next tuple's digits.
-        let tail = after[comma + 1..].trim_start();
-        let digits: String = tail.chars().take_while(|c| c.is_ascii_digit()).collect();
-        if let Ok(tag) = digits.parse::<usize>() {
-            out.push((name.to_string(), tag));
-        }
-        cursor = &after[comma + 1..];
-    }
-}
+// `parse_seek_from_tuples` helper was here — used by the
+// pre-migration scan of the `seek_from_variants` rustfmt-collapsible
+// Rust table. Wave 2 (#06.8) moved SeekFrom to
+// library/std/src/io.rvn; the pin test now scans .rvn declaration
+// order directly, so the tuple parser is no longer needed.
 
 #[test]
 fn riven_file_static_assert_is_eight_bytes() {
@@ -94,9 +69,14 @@ fn riven_open_options_static_assert_is_eight_bytes() {
 }
 
 #[test]
-fn seek_from_tag_values_match_runtime_and_resolver() {
+fn seek_from_tag_values_match_runtime_and_stdlib_source() {
+    // Wave 2 (#06.8) moved the SeekFrom enum from
+    // `compiler/riven_core/src/resolve/stdlib/mod.rs` into
+    // `library/std/src/io.rvn`. The resolver-side scan target moved
+    // with it; the runtime side (`#define RIVEN_SEEK_FROM_*` in
+    // library/runtime/io/file.c) is unchanged.
     let runtime = read("library/runtime/io/file.c");
-    let resolver = read("compiler/riven_core/src/resolve/stdlib/mod.rs");
+    let stdlib_source = read("library/std/src/io.rvn");
 
     // Runtime side: scan for `#define RIVEN_SEEK_FROM_<NAME>  <tag>`.
     let mut runtime_tags: Vec<(String, usize)> = Vec::new();
@@ -120,52 +100,44 @@ fn seek_from_tag_values_match_runtime_and_resolver() {
         }
     }
 
-    // Resolver side: scan for the explicit `seek_from_variants` table.
-    // The table appears as `("Start", 0), ("End", 1), ("Current", 2),`
-    // so we look for the surrounding identifier to avoid matching
-    // unrelated `("Start", n)` tuples elsewhere.
-    let mut resolver_tags: Vec<(String, usize)> = Vec::new();
+    // Stdlib-source side: walk the `enum SeekFrom ... end` body and
+    // assign each non-comment, non-blank line its zero-based position
+    // as the tag. Variants are `Name(offset: Int)`; we strip from the
+    // first `(` to get the name.
+    let mut stdlib_tags: Vec<(String, usize)> = Vec::new();
     let mut in_block = false;
-    for line in resolver.lines() {
-        // The `seek_from_variants` block can be either multi-line
-        //   ```
-        //   let seek_from_variants: &[(&str, usize)] = &[
-        //       ("Start", 0),
-        //       …
-        //   ];
-        //   ```
-        // …or compacted by rustfmt onto a single line:
-        //   ```
-        //   let seek_from_variants: &[(&str, usize)] = &[("Start", 0), …];
-        //   ```
-        // Treat the trigger line itself as in-block content so the
-        // compacted form parses too.
-        // Trigger on the table DECLARATION only — `let
-        // seek_from_variants: ...`. Earlier this matched any
-        // mention of `seek_from_variants`, including the
-        // subsequent `seek_from_variants.len()` and `for ... in
-        // seek_from_variants {` lines, which would leave `in_block`
-        // toggled true through to the next `];` in the file — and
-        // since Phase 2 #06.5 T5 added a sibling `shutdown_variants`
-        // table, that next `];` then surfaced as extra Shutdown
-        // tuples in the resolver_tags Vec.
-        let trigger = line.contains("let seek_from_variants");
-        if trigger {
+    let mut next_tag: usize = 0;
+    for line in stdlib_source.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("enum SeekFrom") {
             in_block = true;
-        }
-        if in_block && line.trim_end().ends_with("];") {
-            // Parse the entries on this terminating line before exiting.
-            parse_seek_from_tuples(line, &mut resolver_tags);
-            in_block = false;
+            next_tag = 0;
             continue;
         }
         if !in_block {
             continue;
         }
-        parse_seek_from_tuples(line, &mut resolver_tags);
+        if trimmed == "end" {
+            in_block = false;
+            break;
+        }
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let name: &str = trimmed
+            .split(|c: char| c == '(' || c == '{' || c.is_whitespace())
+            .next()
+            .unwrap_or("");
+        assert!(
+            name.chars().next().map_or(false, |c| c.is_ascii_uppercase()),
+            "unexpected line inside `enum SeekFrom` body: {:?}",
+            line
+        );
+        stdlib_tags.push((name.to_string(), next_tag));
+        next_tag += 1;
     }
-
     runtime_tags.sort_by_key(|(_, t)| *t);
+    let mut resolver_tags = stdlib_tags;
     resolver_tags.sort_by_key(|(_, t)| *t);
 
     assert_eq!(

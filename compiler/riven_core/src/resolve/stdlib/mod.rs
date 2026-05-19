@@ -393,54 +393,12 @@ pub(super) fn register_all(r: &mut Resolver) {
     // moved both to library/std/src/io.rvn. Methods still flow
     // through the static-ctor + runtime_table dispatch until T#20.
 
-    // Phase 2 #06.5 T2: `SeekFrom` — three single-field struct
-    // variants used as the second argument of `File.seek`. Each
-    // carries a single `offset: Int` field; the codegen lays the
-    // value out as a 16-byte tagged enum (`{i32 tag; i32 pad; i64
-    // offset}`) which `riven_file_seek` reads directly. Tag
-    // values are pinned to match `RIVEN_SEEK_FROM_*` in
-    // runtime.c — the `file_class_layout_stability` pin test
-    // cross-checks them.
-    let seek_from_id = r.symbols.define(
-        "SeekFrom".to_string(),
-        DefKind::Enum {
-            info: EnumInfo {
-                generic_params: vec![],
-                variants: vec![], // filled below
-                derive_traits: vec![],
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
-                const_predicates: vec![],
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.scopes.insert_type("SeekFrom".to_string(), seek_from_id);
-    r.type_registry.insert("SeekFrom".to_string(), seek_from_id);
-    let seek_from_variants: &[(&str, usize)] = &[("Start", 0), ("End", 1), ("Current", 2)];
-    let mut seek_from_variant_ids: Vec<DefId> = Vec::with_capacity(seek_from_variants.len());
-    for (vname, idx) in seek_from_variants {
-        let vid = r.symbols.define(
-            (*vname).to_string(),
-            DefKind::EnumVariant {
-                parent: seek_from_id,
-                variant_idx: *idx,
-                kind: VariantDefKind::Struct(vec![("offset".to_string(), Ty::Int)]),
-            },
-            Visibility::Public,
-            span.clone(),
-        );
-        r.scopes.insert(format!("SeekFrom.{}", vname), vid);
-        seek_from_variant_ids.push(vid);
-    }
-    if let Some(def) = r.symbols.get_mut(seek_from_id) {
-        if let DefKind::Enum { ref mut info } = def.kind {
-            info.variants = seek_from_variant_ids;
-        }
-    }
+    // SeekFrom enum was here. Wave 2 (#06.8) migrated to
+    // library/std/src/io.rvn (`enum SeekFrom { Start(offset: Int),
+    // End(offset: Int), Current(offset: Int) }`). The variant order
+    // contract against RIVEN_SEEK_FROM_* in library/runtime/io/file.c
+    // is now pinned by file_class_layout_stability scanning the
+    // .rvn enum body.
 
     // Duration / Instant class shells were here. Wave 2 (#06.8) moved
     // both to library/std/src/time.rvn as bare `class Foo end` bodies.

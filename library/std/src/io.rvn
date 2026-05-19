@@ -8,13 +8,11 @@
 ##   methods still flow through the static-ctor + runtime_table
 ##   dispatch until T#20 / T#21 land.
 ##
-## IoError + IoErrorKind: migrated in Wave 2 (#06.8) followup commit.
-## Their variant-tag stability is pinned by io_error_tag_stability,
-## which now scans this file for the declaration order (each variant's
-## tag = its zero-based position in the enum body).
-##
-## Intentionally still in Rust (`compiler/riven_core/src/resolve/stdlib/mod.rs`):
-## - SeekFrom struct-variant enum (pinned by file_class_layout_stability).
+## IoError + IoErrorKind + SeekFrom: all migrated in Wave 2 (#06.8)
+## followup commits. Their variant-tag stability contracts are pinned
+## by io_error_tag_stability and file_class_layout_stability
+## respectively — both scan this file for declaration order (each
+## variant's tag = its zero-based position in the enum body).
 ##
 ## println shares the riven_puts C symbol with puts (same trailing-
 ## newline behaviour); eprintln shares riven_eputs with eputs. The
@@ -67,6 +65,19 @@ enum IoError
   WriteZero(message: String)
   Unsupported(message: String)
   OutOfMemory(message: String)
+end
+
+## SeekFrom — three struct variants used as the second argument of
+## `File.seek`. Each carries a single `offset: Int` field; the codegen
+## lays the value out as a 16-byte tagged enum
+## (`{i32 tag; i32 pad; i64 offset}`) which `riven_file_seek` reads
+## directly. Tag values match `RIVEN_SEEK_FROM_*` in
+## library/runtime/io/file.c — pinned by file_class_layout_stability,
+## which scans this enum's declaration order.
+enum SeekFrom
+  Start(offset: Int)
+  End(offset: Int)
+  Current(offset: Int)
 end
 
 ## IoErrorKind — sibling enum of 20 unit variants whose tag values
