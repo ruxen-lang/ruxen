@@ -47,7 +47,7 @@ use std::path::{Path, PathBuf};
 /// than in the Rust `resolve/stdlib/mod.rs` registrations.
 ///
 /// Paths are relative to `<sysroot>/library/std/src/`.
-pub const BOOTSTRAP_FILES: &[&str] = &["_bootstrap_smoke.rvn", "rand.rvn"];
+pub const BOOTSTRAP_FILES: &[&str] = &["_bootstrap_smoke.rvn", "rand.rvn", "path.rvn"];
 
 /// Production entry point: parse every stdlib file in
 /// [`BOOTSTRAP_FILES`] and return the resulting [`Program`] AST list.

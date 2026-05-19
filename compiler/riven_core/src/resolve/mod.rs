@@ -319,6 +319,17 @@ impl Resolver {
         const FIXUPS: &[(&str, &[&str])] = &[
             // Wave 2 — library/std/src/rand.rvn
             ("rand", &["random_bytes", "random_u64", "random_fill"]),
+            // Wave 2 — library/std/src/path.rvn
+            (
+                "path",
+                &[
+                    "path_join",
+                    "path_parent",
+                    "path_file_name",
+                    "path_extension",
+                    "path_is_absolute",
+                ],
+            ),
         ];
 
         let Some(std_id) = self.scopes.lookup_type("std") else {

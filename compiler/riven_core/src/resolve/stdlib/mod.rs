@@ -533,64 +533,15 @@ pub(super) fn register_all(r: &mut Resolver) {
             }],
             Ty::Unit,
         ),
-        // std::path — Phase 3. Unix-style separators only. The
-        // path_ prefix avoids collision with the `join` method on
-        // Vec[String]; Riven-side wrappers can rename later.
-        // parent/file_name/extension return "" when the value is
-        // absent (no Option[String] tagged-union runtime helper for
-        // heap payloads yet — promote when one lands).
-        (
-            "path_join",
-            vec![
-                ParamInfo {
-                    name: "a".into(),
-                    ty: Ty::Ref(Box::new(Ty::String)),
-                    auto_assign: false,
-                },
-                ParamInfo {
-                    name: "b".into(),
-                    ty: Ty::Ref(Box::new(Ty::String)),
-                    auto_assign: false,
-                },
-            ],
-            Ty::String,
-        ),
-        (
-            "path_parent",
-            vec![ParamInfo {
-                name: "path".into(),
-                ty: Ty::Ref(Box::new(Ty::String)),
-                auto_assign: false,
-            }],
-            Ty::String,
-        ),
-        (
-            "path_file_name",
-            vec![ParamInfo {
-                name: "path".into(),
-                ty: Ty::Ref(Box::new(Ty::String)),
-                auto_assign: false,
-            }],
-            Ty::String,
-        ),
-        (
-            "path_extension",
-            vec![ParamInfo {
-                name: "path".into(),
-                ty: Ty::Ref(Box::new(Ty::String)),
-                auto_assign: false,
-            }],
-            Ty::String,
-        ),
-        (
-            "path_is_absolute",
-            vec![ParamInfo {
-                name: "path".into(),
-                ty: Ty::Ref(Box::new(Ty::String)),
-                auto_assign: false,
-            }],
-            Ty::Bool,
-        ),
+        // std::path — Phase 3 was here.
+        //
+        // Wave 2 (#06.8): migrated to `library/std/src/path.rvn`.
+        // The five `path_*` free fns + their `riven_path_*` aliases
+        // now live in the .rvn file as a `lib "riven_runtime"` block.
+        // The `std.path` module namespace is still assembled below
+        // (with empty items) and populated by
+        // `fixup_bootstrapped_stdlib_modules` after the bootstrap
+        // merge so `use std.path.{...}` keeps tokenising.
         // std::process — the flat `process_run(cmd, args) -> Int`
         // free-fn previously exposed here was removed in #06.5 T5.5
         // once `Command.new(cmd).args(args).status` covered every use
@@ -1849,17 +1800,13 @@ pub(super) fn register_all(r: &mut Resolver) {
         Visibility::Public,
         span.clone(),
     );
+    // Wave 2 (#06.8): see rand_id above for the empty-items pattern.
+    // The five `path_*` fn DefIds are populated by
+    // [`Resolver::fixup_bootstrapped_stdlib_modules`] after the
+    // bootstrap merge loads `library/std/src/path.rvn`.
     let path_id = r.symbols.define(
         "path".to_string(),
-        DefKind::Module {
-            items: vec![
-                builtin_fn_ids["path_join"],
-                builtin_fn_ids["path_parent"],
-                builtin_fn_ids["path_file_name"],
-                builtin_fn_ids["path_extension"],
-                builtin_fn_ids["path_is_absolute"],
-            ],
-        },
+        DefKind::Module { items: vec![] },
         Visibility::Public,
         span.clone(),
     );

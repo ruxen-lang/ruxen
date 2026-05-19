@@ -248,12 +248,10 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "Instant_duration_since" => return Ok("riven_instant_duration_since"),
         "Instant_sub" => return Ok("riven_instant_sub"),
         "sleep" => return Ok("riven_thread_sleep_duration"),
-        // std::path top-level functions.
-        "path_join" => return Ok("riven_path_join"),
-        "path_parent" => return Ok("riven_path_parent"),
-        "path_file_name" => return Ok("riven_path_file_name"),
-        "path_extension" => return Ok("riven_path_extension"),
-        "path_is_absolute" => return Ok("riven_path_is_absolute"),
+        // std::path entries were here — Wave 2 (#06.8) migration moved
+        // the C-symbol bindings to library/std/src/path.rvn. See the
+        // std::rand comment below for the FFI alias rewrite path that
+        // makes the runtime_table lookup unnecessary.
         // Phase 2 stdlib (#06.5 T5): std::net::TcpListener /
         // TcpStream class surface. Static-style constructors
         // (`TcpListener_bind`, `TcpStream_connect`) are routed
