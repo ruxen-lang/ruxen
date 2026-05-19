@@ -17,27 +17,14 @@
 ## println shares the riven_puts C symbol with puts (same trailing-
 ## newline behaviour); eprintln shares riven_eputs with eputs. The
 ## aliases here mirror that runtime_table convention.
-
-class Stdin
-end
-
-class Stdout
-end
-
-class Stderr
-end
-
-class File
-end
-
-class OpenOptions
-end
-
-class BufReader[R]
-end
-
-class BufWriter[W]
-end
+##
+## #06.95 Phase E Slice B.2 declares Stdin / Stdout / Stderr class
+## methods (Result-typed reads and writes) via class-body lib decls.
+## Those decls need `IoError` to be in scope at registration time,
+## so the enum block precedes the class shells in this file. The
+## io_error_tag_stability and file_class_layout_stability pin tests
+## scan the enum bodies themselves — they are insensitive to the
+## enum-vs-class ordering at the file level.
 
 ## IoError variants — variant order IS the load-bearing contract
 ## against `RIVEN_IO_ERROR_*` in library/runtime/io/io_error.c.
@@ -104,6 +91,61 @@ enum IoErrorKind
   WriteZero
   Unsupported
   OutOfMemory
+end
+
+## std::io::Stdin — handle returned by the free fn `stdin()`. Wire
+## shape is an opaque `void *` handle pointer. All read methods are
+## Result-typed because the underlying read can fail.
+##
+## Migrated in #06.95 Phase E Slice B.2 from runtime_table.
+class Stdin
+  lib "runtime/stdio.c"
+    def read_line as "riven_stdin_read_line"(self) -> Result[String, IoError]
+    def read_to_string as "riven_stdin_read_to_string"(self) -> Result[String, IoError]
+    def lines as "riven_stdin_lines"(self) -> Array[Result[String, IoError]]
+  end
+end
+
+## std::io::Stdout — handle returned by `stdout()`. The Result-
+## returning methods (`write_str`, `flush`) report a `WriteZero` /
+## `Other` IoError on partial / failed writes; the `print` / `println`
+## convenience pair swallow errors and return `()` — mirroring Rust's
+## `print!` / `println!` macros at method-shape level.
+##
+## Migrated in #06.95 Phase E Slice B.2 from runtime_table.
+class Stdout
+  lib "runtime/stdio.c"
+    def write_str as "riven_stdout_write_str"(self, s: &String) -> Result[(), IoError]
+    def flush as "riven_stdout_flush"(self) -> Result[(), IoError]
+    def print as "riven_stdout_print"(self, s: &String) -> ()
+    def println as "riven_stdout_println"(self, s: &String) -> ()
+  end
+end
+
+## std::io::Stderr — handle returned by `stderr()`. Same shape as
+## Stdout: Result-typed `write_str` / `flush` plus error-swallowing
+## `eprint` / `eprintln`.
+##
+## Migrated in #06.95 Phase E Slice B.2 from runtime_table.
+class Stderr
+  lib "runtime/stdio.c"
+    def write_str as "riven_stderr_write_str"(self, s: &String) -> Result[(), IoError]
+    def flush as "riven_stderr_flush"(self) -> Result[(), IoError]
+    def eprint as "riven_stderr_eprint"(self, s: &String) -> ()
+    def eprintln as "riven_stderr_eprintln"(self, s: &String) -> ()
+  end
+end
+
+class File
+end
+
+class OpenOptions
+end
+
+class BufReader[R]
+end
+
+class BufWriter[W]
 end
 
 ## std::io kernel-level free fns — `puts` / `print` / `println` /

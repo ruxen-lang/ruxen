@@ -105,18 +105,11 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // format — 16 bytes, tag at offset 0). See
         // `riven_io_error_kind` in runtime.c.
         "IoError_kind" => return Ok("riven_io_error_kind"),
-        "Stdin_read_line" => return Ok("riven_stdin_read_line"),
-        "Stdin_read_to_string" => return Ok("riven_stdin_read_to_string"),
-        "Stdin_lines" => return Ok("riven_stdin_lines"),
-        "Stdout_write_str" => return Ok("riven_stdout_write_str"),
-        "Stdout_flush" => return Ok("riven_stdout_flush"),
-        "Stderr_write_str" => return Ok("riven_stderr_write_str"),
-        "Stderr_flush" => return Ok("riven_stderr_flush"),
-        // Phase 2 stdlib (#06.1): no-Result print convenience methods.
-        "Stdout_print" => return Ok("riven_stdout_print"),
-        "Stdout_println" => return Ok("riven_stdout_println"),
-        "Stderr_eprint" => return Ok("riven_stderr_eprint"),
-        "Stderr_eprintln" => return Ok("riven_stderr_eprintln"),
+        // Stdin / Stdout / Stderr methods migrated to
+        // library/std/io/src/lib.rvn `class Stdin/Stdout/Stderr do lib
+        // "runtime/stdio.c" ... end end` in #06.95 Phase E Slice B.2.
+        // The FFI alias map rewrites `Std{in,out,err}_<m>` callees
+        // at MIR-lowering time before codegen consults this table.
         // Metadata accessor methods migrated to
         // library/std/fs/src/lib.rvn `class Metadata do lib
         // "runtime/fs.c" ... end end` in #06.95 Phase E Slice B.1.

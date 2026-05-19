@@ -684,19 +684,34 @@ mod tests {
                  a `riven_*` mapping here would mask the alias path"
             );
         }
-        // Stdin/Stdout/Stderr CLASS METHODS still live in
-        // runtime_table — their .rvn class shells were migrated
-        // without class-body lib decls, deferred to the static-ctor
-        // carve-out removal task T#20.
-        assert_eq!(
-            runtime_name("Stdin_read_line").unwrap(),
-            "riven_stdin_read_line"
-        );
-        assert_eq!(
-            runtime_name("Stdout_write_str").unwrap(),
-            "riven_stdout_write_str"
-        );
-        assert_eq!(runtime_name("Stderr_flush").unwrap(), "riven_stderr_flush");
+        // #06.95 Phase E Slice B.2 migrated the Stdin / Stdout /
+        // Stderr CLASS METHODS into class-body `lib "runtime/stdio.c"`
+        // blocks on the matching shells in `library/std/io/src/lib.rvn`.
+        // The FFI alias map rewrites the mangled callee
+        // (`Stdin_read_line` → `riven_stdin_read_line`) at MIR-lowering
+        // time, so runtime_table now falls through to the unmangled
+        // `Ok(name)` arm in `lang_intrinsics`. A specific mapping
+        // returning here would mask the alias path.
+        for name in [
+            "Stdin_read_line",
+            "Stdin_read_to_string",
+            "Stdin_lines",
+            "Stdout_write_str",
+            "Stdout_flush",
+            "Stdout_print",
+            "Stdout_println",
+            "Stderr_write_str",
+            "Stderr_flush",
+            "Stderr_eprint",
+            "Stderr_eprintln",
+        ] {
+            assert_eq!(
+                runtime_name(name).unwrap(),
+                name,
+                "post-Slice-B.2 `{name}` must fall through runtime_table; \
+                 a `riven_*` mapping here would mask the alias path"
+            );
+        }
     }
 
     #[test]
