@@ -14,6 +14,19 @@
 ## TcpStream.read), even though the user-facing spec spelling is
 ## `Array[U8]`. See docs/specs/stdlib/rand.spec.md.
 
+## std::rand namespace class — 3 static methods. Phase C of #06.95.
+## The bare lib block below is the transition shim keeping
+## `random_bytes(n)` / `random_u64()` / `random_fill(buf)` resolving
+## while existing callers migrate to `Rand.random_bytes(n)` / …
+class Rand
+  lib "runtime/rand.c"
+    def self.random_bytes as "riven_rand_random_bytes"(n: Int) -> Result[Array[Int], IoError]
+    def self.random_u64 as "riven_rand_random_u64"() -> Int
+    def self.random_fill as "riven_rand_random_fill"(buf: &var Array[Int]) -> Result[(), IoError]
+  end
+end
+
+# Phase C transition shim — see comment on `class Rand` above.
 lib "runtime/rand.c"
   def random_bytes as "riven_rand_random_bytes"(n: Int) -> Result[Array[Int], IoError]
   def random_u64 as "riven_rand_random_u64"() -> Int

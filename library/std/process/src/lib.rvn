@@ -14,6 +14,21 @@
 ## docs/prompts/v1/06_phase2_stdlib_io_fmt.md — v1 ships the blocking
 ## terminals (.status, .output) only.
 
+## std::process namespace class — folds the `exit` free fn into
+## `Process.exit`. Phase C of #06.95. Command / ExitStatus / Output
+## remain separate classes (they're builder/result types, not
+## namespace anchors). The bare `exit` lib block below is the
+## transition shim — Ruby keeps a global `exit` too (Kernel#exit),
+## so this shim is permanent, not strictly transitional.
+class Process
+  lib "runtime/process.c"
+    def self.exit as "riven_process_exit"(code: Int) -> Never
+  end
+end
+
+# Kernel-level `exit` (also available as Process.exit). Mirrors Ruby
+# semantics — `exit` is global, Process.exit is the explicit
+# namespaced spelling.
 lib "runtime/process.c"
   def exit as "riven_process_exit"(code: Int) -> Never
 end

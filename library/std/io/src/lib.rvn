@@ -106,6 +106,13 @@ enum IoErrorKind
   OutOfMemory
 end
 
+## std::io kernel-level free fns — `puts` / `print` / `println` /
+## `eputs` / `eprintln` / `read_line` / `stdin` / `stdout` / `stderr`
+## stay GLOBAL like Ruby's Kernel#puts. Class-prefixing IO operations
+## (`IO.puts(...)`) is non-idiomatic for a Ruby-flavored language and
+## was rolled back in Phase C — only operation namespaces that don't
+## have a Ruby-Kernel counterpart get class-prefixed (FS, Env, Path,
+## Rand, Process, Time, Thread, Signal).
 lib "runtime/stdio.c"
   def puts as "riven_puts"(value: &String) -> ()
   def eputs as "riven_eputs"(value: &String) -> ()

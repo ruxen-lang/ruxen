@@ -52,6 +52,17 @@ class Instant
   end
 end
 
+## std::time namespace class — Time.unix_ns wall-clock surface.
+## Phase C of #06.95. Duration / Instant remain separate classes
+## (they're value types, not namespace anchors). The bare `unix_ns`
+## lib block below is the transition shim while callers migrate.
+class Time
+  lib "runtime/time.c"
+    def self.unix_ns as "riven_time_unix_ns"() -> Int
+  end
+end
+
+# Phase C transition shim — see comment on `class Time` above.
 lib "runtime/time.c"
   def unix_ns as "riven_time_unix_ns"() -> Int
 end
