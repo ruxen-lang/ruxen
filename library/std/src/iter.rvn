@@ -1,30 +1,24 @@
-## Iterator and FromIterator stdlib surface for Phase 2 prompt 05.
+## std::iter — Iterator and FromIterator mixins.
 ##
-## This file is declarative documentation for the intended stdlib source
-## layout. v1 still models the executable behavior through built-in
-## resolver/typeck/MIR hooks rather than loading `.rvn` stdlib modules.
+## Wave 2 (#06.8) — migrated from resolve/stdlib/mod.rs Rust
+## registrations into self-hosted library/std/src/iter.rvn. The
+## minimum-faithful version below preserves the EXACT required-method
+## list that the Rust registration carried (`["next"]` for Iterator,
+## `["from_iter"]` for FromIterator); the aspirational broader surface
+## from the pre-migration version (map / filter / collect / fold / …)
+## is intentionally left out — those methods are not enforced today,
+## and adding them as `required_methods` would break every user impl
+## that only provides `next` / `from_iter`. They will move in once
+## default-implementation lowering for mixins is wired.
+##
+## Iterator and FromIterator are registered into the prelude type
+## scope (not under a `std.iter` namespace), matching the behaviour of
+## the pre-migration registration.
 
 mixin Iterator
-  type Item
-
-  def var next -> Option[Self.Item]
-
-  def map[U](f: |Self.Item| -> U) -> Self
-  def filter(f: |&Self.Item| -> Bool) -> Self
-  def take(n: Int) -> Self
-  def skip(n: Int) -> Self
-  def chain[I](other: I) -> Self
-  def zip[I](other: I) -> Self
-  def enumerate -> Self
-
-  def collect[C: FromIterator[Self.Item]] -> C
-  def fold[B](init: B, f: |B, Self.Item| -> B) -> B
-  def count -> Int
-  def sum -> Self.Item
-  def all(f: |&Self.Item| -> Bool) -> Bool
-  def any(f: |&Self.Item| -> Bool) -> Bool
+  def next
 end
 
-mixin FromIterator[T]
-  def from_iter[I: Iterator](iter: I) -> Self
+mixin FromIterator
+  def from_iter
 end

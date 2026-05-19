@@ -373,9 +373,22 @@ impl Resolver {
         }
     }
 
-    /// Whitelist of `TopLevelItem` variants the Wave 1.5 bootstrap
-    /// merge path handles. See [`merge_bootstrap_programs`] for the
-    /// rationale on what is deferred.
+    /// Whitelist of `TopLevelItem` variants the bootstrap merge path
+    /// handles. See [`merge_bootstrap_programs`] for the rationale on
+    /// what is deferred.
+    ///
+    /// Wave 2 (#06.8): `Mixin` added to unblock `iter.rvn` (Iterator /
+    /// FromIterator), `hash.rvn` (Hashable), and `fmt.rvn`
+    /// (Display / Debug). The same Mixin arm in
+    /// `register_top_level_type_with_ffi` that handles user code
+    /// already does the right thing — it registers the mixin as a
+    /// `DefKind::Trait` and inserts into the type scope — so no new
+    /// resolver logic is needed, only the whitelist gate.
+    ///
+    /// `Impl` remains deferred: top-level `impl X for Y` blocks in
+    /// stdlib files would require Pass-2 resolution (associated-type
+    /// bindings, method bodies) at bootstrap time, and no stdlib
+    /// module needs that surface in v1.
     fn is_bootstrap_supported_item(item: &ast::TopLevelItem) -> bool {
         matches!(
             item,
@@ -386,6 +399,7 @@ impl Resolver {
                 | ast::TopLevelItem::Struct(_)
                 | ast::TopLevelItem::Enum(_)
                 | ast::TopLevelItem::Const(_)
+                | ast::TopLevelItem::Mixin(_)
         )
     }
 

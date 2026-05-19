@@ -52,6 +52,7 @@ pub const BOOTSTRAP_FILES: &[&str] = &[
     "rand.rvn",
     "path.rvn",
     "env.rvn",
+    "iter.rvn",
 ];
 
 /// Production entry point: parse every stdlib file in

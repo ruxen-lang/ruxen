@@ -78,8 +78,8 @@ pub(super) fn register_all(r: &mut Resolver) {
         ("Comparable", vec!["compare"]),
         ("Hashable", vec!["hash_code"]),
         ("Iterable", vec![]),
-        ("Iterator", vec!["next"]),
-        ("FromIterator", vec!["from_iter"]),
+        // ("Iterator", vec!["next"]) — migrated to library/std/src/iter.rvn (#06.8 Wave 2).
+        // ("FromIterator", vec!["from_iter"]) — migrated to library/std/src/iter.rvn (#06.8 Wave 2).
         ("Copy", vec![]),
         ("Clone", vec!["clone"]),
         ("Send", vec![]),
@@ -209,7 +209,11 @@ pub(super) fn register_all(r: &mut Resolver) {
         name: "Metadata".to_string(),
         generic_args: vec![],
     };
-    let env_var_error_ty = io_error_ty.clone();
+    // `env_var_error_ty = io_error_ty.clone()` was here — used by the
+    // pre-migration `("get", ..., Result[String, EnvVarError])` entry.
+    // Wave 2 (#06.8) moved env.get to library/std/src/env.rvn so the
+    // alias is no longer needed; the .rvn signature spells the Result
+    // out as `Result[String, IoError]` directly.
 
     let builtin_fns = [
         (

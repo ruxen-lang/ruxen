@@ -29,6 +29,7 @@ use riven_core::mir::nodes::MirInst;
 use riven_core::parser::ast::Program;
 use riven_core::parser::Parser;
 use riven_core::resolve::bootstrap::run_bootstrap_with_files;
+use riven_core::resolve::symbols::DefKind;
 use riven_core::resolve::Resolver;
 use riven_core::typeck;
 use std::path::{Path, PathBuf};
@@ -339,5 +340,57 @@ fn bootstrap_failure_aborts_driver() {
             .any(|d| d.message.contains("library/std/src/broken.rvn")),
         "diagnostic should cite the broken stdlib file path; got: {:?}",
         diags.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+}
+
+// ─── Test 4: bootstrap merge accepts `mixin` items (#06.8 T#19) ────────
+
+#[test]
+fn bootstrap_program_with_mixin_registers_trait_in_prelude() {
+    // Wave 2 (#06.8 T#19) expanded `is_bootstrap_supported_item` to
+    // include `Mixin`. This pin test asserts that a `mixin Foo ... end`
+    // block inside a bootstrap-loaded `.rvn` file lands in the
+    // resolver's symbol table as a `DefKind::Trait` — the same shape a
+    // user-code mixin produces. Without this gate the migration of
+    // iter.rvn / hash.rvn / fmt.rvn cannot proceed because their
+    // surfaces are mixin-shaped (`mixin Iterator`, `mixin Hashable`,
+    // `mixin Display`).
+    let mut lexer = Lexer::new(
+        "mixin BootstrapPinMixin\n  def pin_method -> Int\nend\n",
+    );
+    let tokens = lexer.tokenize().expect("lex");
+    let mut parser = Parser::new(tokens);
+    let bootstrap_program = parser.parse().expect("parse");
+
+    // Minimal user program — bootstrap merge runs regardless of
+    // whether user code references the mixin; we just need ANY parsable
+    // user input.
+    let mut user_lexer = Lexer::new("def main\nend\n");
+    let user_tokens = user_lexer.tokenize().expect("lex user");
+    let mut user_parser = Parser::new(user_tokens);
+    let user_program = user_parser.parse().expect("parse user");
+
+    let resolver = Resolver::new();
+    let result = resolver.resolve_with_bootstrap(&user_program, &[bootstrap_program]);
+    let errors: Vec<&Diagnostic> = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.level == DiagnosticLevel::Error)
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "bootstrap merge of a mixin-only program should not produce errors; got {:?}",
+        errors
+    );
+
+    let mixin = result
+        .symbols
+        .iter()
+        .find(|d| d.name == "BootstrapPinMixin")
+        .expect("BootstrapPinMixin should be in the symbol table");
+    assert!(
+        matches!(mixin.kind, DefKind::Trait { .. }),
+        "expected DefKind::Trait for bootstrap-loaded mixin; got {:?}",
+        mixin.kind
     );
 }
