@@ -513,8 +513,28 @@ impl Parser {
                             }
                         }
 
-                        // Check for constructor args
-                        if self.at(TokenKind::LParen) {
+                        // #06.93 Phase 3: detect the qualified-type-with-
+                        // method-call shape. If after `Outer.Inner` we are
+                        // sitting on `.<lowercase>`, the user wrote
+                        // `Outer.Inner.method(args)` — a static method
+                        // call on a module-qualified class, NOT an enum
+                        // variant. Push `variant_name` onto the path and
+                        // emit a dotted-Identifier so the postfix layer
+                        // picks up `.method(args)` as a MethodCall on the
+                        // qualified receiver. The resolver recognises
+                        // dotted identifiers as qualified type
+                        // references (see `resolve_expr`'s MethodCall
+                        // arm).
+                        let next_is_lower_method = self.at(TokenKind::Dot)
+                            && matches!(self.peek_kind(), TokenKind::Identifier(_));
+                        if next_is_lower_method {
+                            path.push(variant_name);
+                            let span = self.span_from(&start);
+                            Expr {
+                                kind: ExprKind::Identifier(path.join(".")),
+                                span,
+                            }
+                        } else if self.at(TokenKind::LParen) {
                             let args = self.parse_field_args();
                             let span = self.span_from(&start);
                             Expr {

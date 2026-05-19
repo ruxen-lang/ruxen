@@ -1,0 +1,33 @@
+# #06.93 Phase 3: nested-module class method dispatch.
+#
+# `module A { module B { class C { def self.f as "..." } } }` is
+# the deepest legal nesting today (three segments → mangled
+# `A_B_C_f`). User code calls `A.B.C.f(21)`; the runtime helper
+# `riven_test_extern_double` returns x*2. Expect 42.
+#
+# Verifies (a) Phase 1's qualified-name registration threads
+# through three levels, (b) Phase 3's parser routes a 3+ segment
+# dotted prefix followed by a lowercase method as
+# `Identifier("A.B.C") + MethodCall`, (c) MIR mangles the callee
+# with `_` join, and (d) the FFI alias map registration in
+# `register_class_lib_method_in` builds the matching key under
+# the qualified mangled form.
+
+module A
+  module B
+    class C
+      lib "riven_runtime"
+        def self.f as "riven_test_extern_double"(x: Int) -> Int
+      end
+    end
+  end
+end
+
+def main() -> Int
+  let r = A.B.C.f(21)
+  if r == 42
+    0
+  else
+    1
+  end
+end

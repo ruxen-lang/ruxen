@@ -680,10 +680,17 @@ impl<'a> Lowerer<'a> {
                     } else {
                         None
                     };
+                // #06.93 Phase 3: module-qualified class names carry a
+                // dotted form (`Outer.Inner`). C symbol names can't
+                // contain `.`, so normalise to `_` when building the
+                // mangled callee — `Outer.Inner_make` becomes
+                // `Outer_Inner_make`. The FFI alias map is keyed in
+                // the same shape by `register_class_lib_method`.
+                let resolved_class_cs = resolved_class.replace('.', "_");
                 let mangled = if let Some(suffix) = bufio_instance_suffix {
-                    format!("{}_{}_{}", resolved_class, method_name, suffix)
+                    format!("{}_{}_{}", resolved_class_cs, method_name, suffix)
                 } else {
-                    format!("{}_{}", resolved_class, method_name)
+                    format!("{}_{}", resolved_class_cs, method_name)
                 };
 
                 // `&mut String` detection: when the receiver is a local

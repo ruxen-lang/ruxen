@@ -185,6 +185,48 @@ impl Resolver {
                         ty,
                         span,
                     }
+                } else if name.contains('.') {
+                    // #06.93 Phase 3: dotted identifier produced by the
+                    // parser for `Outer.Inner.method(args)` shape — the
+                    // parser emits `Identifier("Outer.Inner")` and
+                    // postfix builds a MethodCall on top. Look up the
+                    // qualified name in `type_registry` (populated by
+                    // Phase 1's nested-module registration). If found
+                    // as a Class/Struct/Enum, emit a Class-typed
+                    // expression so the trailing `.method(args)`
+                    // dispatches as a regular class-method call.
+                    if let Some(&def_id) = self.type_registry.get(name) {
+                        let ty = match self.symbols.get(def_id).map(|d| &d.kind) {
+                            Some(DefKind::Class { .. }) => Ty::Class {
+                                name: name.clone(),
+                                generic_args: vec![],
+                            },
+                            Some(DefKind::Struct { .. }) => Ty::Struct {
+                                name: name.clone(),
+                                generic_args: vec![],
+                            },
+                            Some(DefKind::Enum { .. }) => Ty::Enum {
+                                name: name.clone(),
+                                generic_args: vec![],
+                            },
+                            _ => self.type_context.fresh_type_var(),
+                        };
+                        HirExpr {
+                            kind: HirExprKind::VarRef(def_id),
+                            ty,
+                            span,
+                        }
+                    } else {
+                        self.error(
+                            format!("undefined qualified type `{}`", name),
+                            &span,
+                        );
+                        HirExpr {
+                            kind: HirExprKind::Error,
+                            ty: Ty::Error,
+                            span,
+                        }
+                    }
                 } else {
                     self.error(format!("undefined variable `{}`", name), &span);
                     HirExpr {

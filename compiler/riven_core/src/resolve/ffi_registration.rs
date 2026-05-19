@@ -35,12 +35,21 @@ impl Resolver {
     /// `ClassName_method` so the MIR `ffi_alias_map` (which is keyed
     /// the same way `lower_method_call` builds the callee) can rewrite
     /// the call to the C symbol at lowering time.
-    pub(super) fn register_class_lib_method(
+    /// #06.93 Phase 3: when a class is nested inside one or more
+    /// modules, the FFI alias map's mangled riven_name uses the
+    /// qualified form (`Outer_Inner_method`) so the MIR call-site
+    /// callee, which is also built from the qualified
+    /// `Ty::Class { name: "Outer.Inner" }` (normalised dot → `_`),
+    /// matches. Top-level classes (empty `module_path`) keep the
+    /// existing `Class_method` shape. The C symbol stays whatever
+    /// the user declared via `as "..."`.
+    pub(super) fn register_class_lib_method_in(
         &mut self,
         parent: DefId,
         parent_name: &str,
         ffi_fn: &ast::FfiFunction,
         hir_fns: &mut Vec<HirFfiFunc>,
+        module_path: &[String],
     ) {
         let param_tys: Vec<Ty> = ffi_fn
             .params
@@ -92,7 +101,23 @@ impl Resolver {
             .clone()
             .unwrap_or_else(|| ffi_fn.name.clone());
         self.check_ffi_signature_conflict(&link_symbol, &signature, &ffi_fn.span);
-        let mangled = format!("{}_{}", parent_name, ffi_fn.name);
+        // #06.93 Phase 3: when `parent_name` is a class inside one or
+        // more enclosing modules, prefix the mangled riven_name with
+        // the underscored module path. The MIR call site builds the
+        // same shape (`Outer_Inner_method`) by normalising the
+        // dotted `Ty::Class { name: "Outer.Inner" }` at lowering
+        // time. Top-level classes (empty module_path) keep the
+        // existing `Class_method` shape.
+        let mangled = if module_path.is_empty() {
+            format!("{}_{}", parent_name, ffi_fn.name)
+        } else {
+            format!(
+                "{}_{}_{}",
+                module_path.join("_"),
+                parent_name,
+                ffi_fn.name
+            )
+        };
         // Register under the PLAIN method name so MIR's
         // `is_user_static_method(class, method)` lookup — which scans
         // for a `DefKind::Method` whose `def.name == method_name` and
@@ -355,7 +380,13 @@ impl Resolver {
                             }
                         }
                         for ffi_fn in &lib.functions {
-                            self.register_class_lib_method(id, &class.name, ffi_fn, &mut hir_fns);
+                            self.register_class_lib_method_in(
+                                id,
+                                &class.name,
+                                ffi_fn,
+                                &mut hir_fns,
+                                module_path,
+                            );
                         }
                     }
                     if !hir_fns.is_empty() {
@@ -398,7 +429,13 @@ impl Resolver {
                 if !included_lib_fns.is_empty() {
                     let mut hir_fns: Vec<HirFfiFunc> = Vec::new();
                     for ffi_fn in &included_lib_fns {
-                        self.register_class_lib_method(id, &class.name, ffi_fn, &mut hir_fns);
+                        self.register_class_lib_method_in(
+                            id,
+                            &class.name,
+                            ffi_fn,
+                            &mut hir_fns,
+                            module_path,
+                        );
                     }
                     if !hir_fns.is_empty() {
                         ffi_libs.push(HirFfiLib {
@@ -620,7 +657,13 @@ impl Resolver {
                             }
                         }
                         for ffi_fn in &lib.functions {
-                            self.register_class_lib_method(id, &t.name, ffi_fn, &mut hir_fns);
+                            self.register_class_lib_method_in(
+                                id,
+                                &t.name,
+                                ffi_fn,
+                                &mut hir_fns,
+                                module_path,
+                            );
                         }
                     }
                     if !hir_fns.is_empty() {
