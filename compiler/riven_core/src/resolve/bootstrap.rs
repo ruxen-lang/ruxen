@@ -39,15 +39,15 @@ use crate::parser::ast::Program;
 use crate::parser::Parser;
 use std::path::{Path, PathBuf};
 
-/// The stdlib bootstrap file list. Wave 1.5 (#06.8 Phase 3) ships one
+/// The stdlib bootstrap file list. Wave 1.5 (#06.8 Phase 3) shipped one
 /// proof-of-life file — `_bootstrap_smoke.rvn` — that declares a single
 /// FFI alias against the runtime test symbol `riven_test_extern_add_one`.
-/// Its sole job is to exercise the bootstrap → resolver → MIR → link
-/// pipeline end-to-end with a tiny payload before real stdlib modules
-/// (`iter.rvn`, `net.rvn`, …) migrate in Wave 2+.
+/// Wave 2 (#06.8) starts the actual stdlib migration; `rand.rvn` is the
+/// first module whose surface lives entirely in the .rvn source rather
+/// than in the Rust `resolve/stdlib/mod.rs` registrations.
 ///
 /// Paths are relative to `<sysroot>/library/std/src/`.
-pub const BOOTSTRAP_FILES: &[&str] = &["_bootstrap_smoke.rvn"];
+pub const BOOTSTRAP_FILES: &[&str] = &["_bootstrap_smoke.rvn", "rand.rvn"];
 
 /// Production entry point: parse every stdlib file in
 /// [`BOOTSTRAP_FILES`] and return the resulting [`Program`] AST list.

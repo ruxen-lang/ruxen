@@ -178,6 +178,15 @@ impl Resolver {
         // resolve cleanly.
         self.merge_bootstrap_programs(bootstrap_programs, &mut ffi_libs);
 
+        // Wave 2 (#06.8): re-bind stdlib module items to bootstrap-loaded
+        // FFI fn DefIds. `register_builtins` ran BEFORE the bootstrap
+        // merge and pre-registered modules like `std.rand` with empty
+        // `items` because the fn DefIds didn't exist yet; we patch them
+        // up now so `use std.rand.{random_bytes, …}` resolution finds
+        // the bootstrap-loaded functions through the Module item walk
+        // in `resolve_child_in_def`.
+        self.fixup_bootstrapped_stdlib_modules();
+
         // Two-pass approach:
         // Pass 1: Register all top-level type names (classes, structs, enums, traits)
         //         so that forward references work.
@@ -264,6 +273,88 @@ impl Resolver {
             for item in &program.items {
                 if Self::is_bootstrap_supported_item(item) {
                     yield_scan::collect_yield_fns(item, &mut self.yield_fns);
+                }
+            }
+        }
+    }
+
+    /// Wave 2 (#06.8): re-bind stdlib module item lists to the FFI fn
+    /// DefIds that the bootstrap loader just inserted into the prelude
+    /// scope. This is the bridge between two facts of life:
+    ///
+    /// 1. `register_builtins` (`resolve/stdlib/mod.rs`) runs FIRST and
+    ///    assembles the `std.{io,fs,net,time,rand,…}` module tree.
+    ///    When it constructs `std.rand`, the random_* fn DefIds don't
+    ///    exist yet because the bootstrap merge hasn't run — so the
+    ///    pre-registered Module's `items` vector starts empty.
+    /// 2. `use std.rand.random_bytes` resolution
+    ///    (`resolve_child_in_def`) walks the Module's `items` list.
+    ///    Empty list ⇒ "'random_bytes' not found in module 'rand'".
+    ///
+    /// This function closes the gap by walking a small mapping of
+    /// `(module-name, &[fn-name…])` tuples; for each entry it looks
+    /// up the module DefId in `scopes.lookup_type` and each fn DefId
+    /// in `scopes.lookup`, then mutates the Module's items via
+    /// `symbols.get_mut`.
+    ///
+    /// The mapping is intentionally a static array rather than scanned
+    /// from the .rvn files themselves: every migration commit
+    /// (`stdlib(<module>): migrate from Rust registrations to Riven
+    /// source`) appends one row and deletes the corresponding builtin_fn
+    /// entries. When the migration epic completes the array AND this
+    /// function vanish along with `resolve/stdlib/mod.rs`'s module
+    /// assembly — a `.rvn`-defined `module rand … end` (or the
+    /// bootstrap-merge-auto-wraps-each-file behaviour landing later in
+    /// the epic) becomes the only registration site.
+    fn fixup_bootstrapped_stdlib_modules(&mut self) {
+        // (stdlib-module-name, &[fn-names-the-.rvn-defines])
+        //
+        // `register_builtins` inserts the outer `std` module into the
+        // type scope (so `std.X` resolution works) but does NOT
+        // insert submodules (`std.rand`, `std.io`, …) into any scope —
+        // they are only reachable by walking `std`'s `items` list.
+        // The fixup therefore looks each `module_name` up by walking
+        // `std`'s items rather than calling `scopes.lookup_type`
+        // directly.
+        const FIXUPS: &[(&str, &[&str])] = &[
+            // Wave 2 — library/std/src/rand.rvn
+            ("rand", &["random_bytes", "random_u64", "random_fill"]),
+        ];
+
+        let Some(std_id) = self.scopes.lookup_type("std") else {
+            return;
+        };
+        // Snapshot std's items so we don't hold an immutable borrow of
+        // `self.symbols` across the mutable `get_mut` calls below.
+        let std_items: Vec<DefId> = match self.symbols.get(std_id).map(|d| &d.kind) {
+            Some(DefKind::Module { items }) => items.clone(),
+            _ => return,
+        };
+
+        for (module_name, fn_names) in FIXUPS {
+            // Find the submodule DefId by name inside std's items.
+            let Some(&module_id) = std_items.iter().find(|&&id| {
+                self.symbols
+                    .get(id)
+                    .map(|d| d.name == *module_name && matches!(d.kind, DefKind::Module { .. }))
+                    .unwrap_or(false)
+            }) else {
+                continue;
+            };
+            let mut fn_ids: Vec<DefId> = Vec::with_capacity(fn_names.len());
+            for fn_name in *fn_names {
+                if let Some(fn_id) = self.scopes.lookup(fn_name) {
+                    fn_ids.push(fn_id);
+                }
+            }
+            if let Some(def) = self.symbols.get_mut(module_id) {
+                if let DefKind::Module { items } = &mut def.kind {
+                    // Last-wins: overwrite any pre-registered items
+                    // (today they are always empty per the comment
+                    // in `resolve/stdlib/mod.rs` rand_id construction,
+                    // but the overwrite makes the fixup re-runnable
+                    // safely).
+                    *items = fn_ids;
                 }
             }
         }

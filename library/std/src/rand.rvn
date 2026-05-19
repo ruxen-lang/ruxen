@@ -1,15 +1,21 @@
-## std::rand — CSPRNG-backed random_bytes / random_u64 / random_fill
-## (Phase 2 #06.5 T8).
+## std::rand — CSPRNG-backed random_bytes / random_u64 / random_fill.
 ##
-## This file is declarative documentation for the intended stdlib source
-## layout. v1 still models the executable behavior through built-in
-## resolver/codegen hooks rather than loading `.rvn` stdlib modules.
+## Wave 2 (#06.8) — first stdlib module fully migrated from
+## resolve/stdlib/mod.rs Rust registrations into a self-hosted
+## library/std/src/*.rvn file. The signatures here ARE the source
+## of truth that the resolver, typeck, MIR, and codegen consult.
 ##
 ## Per-platform CSPRNG backend (compile-time `#if` in
-## library/runtime/io/rand.c): Linux getrandom, macOS
-## SecRandomCopyBytes (`-framework Security` at link), fallback
+## library/runtime/io/rand.c): Linux `getrandom`, macOS
+## `SecRandomCopyBytes` (`-framework Security` at link), fallback
 ## /dev/urandom.
+##
+## The byte-array carrier is `Array[Int]` (matching File.read_all /
+## TcpStream.read), even though the user-facing spec spelling is
+## `Array[U8]`. See docs/specs/stdlib/rand.spec.md.
 
-def random_bytes(n: Int) -> Result[Array[U8], IoError]
-def random_u64() -> Int                            ## carries 64 random bits
-def random_fill(buf: &var Array[U8]) -> Result[(), IoError]
+lib "riven_runtime"
+  def random_bytes as "riven_rand_random_bytes"(n: Int) -> Result[Array[Int], IoError]
+  def random_u64 as "riven_rand_random_u64"() -> Int
+  def random_fill as "riven_rand_random_fill"(buf: &var Array[Int]) -> Result[(), IoError]
+end

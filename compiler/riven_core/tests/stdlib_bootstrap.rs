@@ -58,26 +58,35 @@ impl Drop for TempDir {
 }
 
 #[test]
-fn bootstrap_files_list_holds_wave_1_5_smoke_only() {
-    // Wave 1.5 (#06.8 Phase 3): the bootstrap list ships exactly one
-    // proof-of-life file (`_bootstrap_smoke.rvn`). Pinning the contents
-    // here makes any accidental Wave-2 addition surface as a test
-    // delta — the Wave-2 brief is allowed to grow this list, but a
-    // drive-by additive change should not.
-    assert_eq!(
-        BOOTSTRAP_FILES,
-        &["_bootstrap_smoke.rvn"],
-        "BOOTSTRAP_FILES drifted from the Wave-1.5 baseline — got {:?}",
+fn bootstrap_files_list_includes_smoke_and_wave_2_migrations() {
+    // Wave 1.5 (#06.8 Phase 3) shipped a proof-of-life
+    // `_bootstrap_smoke.rvn`. Wave 2 starts the actual stdlib
+    // migration; `rand.rvn` is the first module to live in `.rvn`
+    // form. The smoke file MUST stay first (the bootstrap_smoke_*
+    // E2E tests depend on its `BootstrapSmokeClass.add_one` /
+    // `bootstrap_smoke_add_one` FFI aliases) and the migrated
+    // modules append after it. Pinning the contents here surfaces
+    // any drive-by additive change.
+    assert!(
+        BOOTSTRAP_FILES.first() == Some(&"_bootstrap_smoke.rvn"),
+        "BOOTSTRAP_FILES must start with the Wave-1.5 proof-of-life \
+         file (E2E tests depend on it); got {:?}",
+        BOOTSTRAP_FILES
+    );
+    assert!(
+        BOOTSTRAP_FILES.contains(&"rand.rvn"),
+        "BOOTSTRAP_FILES must include the Wave-2 migrated rand.rvn; \
+         got {:?}",
         BOOTSTRAP_FILES
     );
 }
 
 #[test]
-fn run_bootstrap_parses_wave_1_5_smoke_file_clean() {
-    // Production `run_bootstrap` should parse the Wave-1.5 smoke file
-    // without emitting any diagnostics. If this fails, the
-    // `library/std/src/_bootstrap_smoke.rvn` file is missing or
-    // doesn't parse — both fatal for the driver.
+fn run_bootstrap_parses_all_listed_files_clean() {
+    // Production `run_bootstrap` should parse every file in
+    // BOOTSTRAP_FILES without emitting any diagnostics. If this
+    // fails, a `library/std/src/*.rvn` file is missing or doesn't
+    // parse — both fatal for the driver.
     let mut diags = Vec::<Diagnostic>::new();
     let programs = run_bootstrap(&mut diags);
     assert!(
@@ -87,14 +96,19 @@ fn run_bootstrap_parses_wave_1_5_smoke_file_clean() {
     );
     assert_eq!(
         programs.len(),
-        1,
-        "expected the single Wave-1.5 smoke program; got {}",
-        programs.len()
+        BOOTSTRAP_FILES.len(),
+        "expected one parsed program per BOOTSTRAP_FILES entry; got \
+         {} programs for {} files",
+        programs.len(),
+        BOOTSTRAP_FILES.len()
     );
-    assert!(
-        !programs[0].items.is_empty(),
-        "parsed smoke program should contain at least the lib block"
-    );
+    for (rel, program) in BOOTSTRAP_FILES.iter().zip(programs.iter()) {
+        assert!(
+            !program.items.is_empty(),
+            "parsed stdlib file `{}` should contain at least one top-level item",
+            rel
+        );
+    }
 }
 
 #[test]

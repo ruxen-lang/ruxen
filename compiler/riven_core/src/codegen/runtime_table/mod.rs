@@ -308,13 +308,13 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // std::signal — graceful-shutdown surface.
         "signal_install_sigint" => return Ok("riven_signal_install_sigint"),
         "signal_received_sigint" => return Ok("riven_signal_received_sigint"),
-        // Phase 2 stdlib (#06.5 T8): std::rand — kernel CSPRNG-backed
-        // free fns. Backend selection (Linux getrandom / macOS
-        // SecRandomCopyBytes / fallback /dev/urandom) happens in
-        // library/runtime/io/rand.c under compile-time `#if`.
-        "random_bytes" => return Ok("riven_rand_random_bytes"),
-        "random_u64" => return Ok("riven_rand_random_u64"),
-        "random_fill" => return Ok("riven_rand_random_fill"),
+        // std::rand entries were here — Wave 2 (#06.8) migration moved
+        // the C-symbol binding to `lib "riven_runtime" def random_bytes
+        // as "riven_rand_random_bytes" …` in library/std/src/rand.rvn.
+        // The FFI alias map populated during MIR lowering rewrites
+        // call-site callees from the Riven name to the C symbol BEFORE
+        // codegen consults this table, so the table entries became
+        // dead code.
         // Compiler-injected pseudo-calls. These are not method calls; the
         // codegen treats them specially.
         //   - `super` is a parent-init dispatch in a constructor.

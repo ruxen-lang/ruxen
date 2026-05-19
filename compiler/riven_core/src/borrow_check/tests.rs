@@ -33,6 +33,7 @@ fn make_program(body_stmts: Vec<HirStatement>) -> (HirProgram, SymbolTable) {
     let program = HirProgram {
         items: vec![HirItem::Function(func)],
         span: span(1, 1),
+        ffi_libs: vec![],
     };
     (program, symbols)
 }
@@ -866,6 +867,7 @@ fn send_required_closure_rejects_borrow_capture() {
         }],
         return_ty: Ty::Unit,
         is_async: false,
+        c_symbol: None,
     };
 
     let stmts = vec![

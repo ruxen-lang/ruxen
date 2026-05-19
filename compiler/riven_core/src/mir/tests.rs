@@ -76,6 +76,7 @@ mod lowering_tests {
         HirProgram {
             items: vec![HirItem::Function(func)],
             span: span(),
+            ffi_libs: vec![],
         }
     }
 
@@ -177,6 +178,7 @@ mod lowering_tests {
                     generic_params: vec![],
                     params: vec![],
                     return_ty: Ty::Unit,
+                    c_symbol: None,
                 },
             },
             Visibility::Public,
@@ -288,6 +290,7 @@ mod lowering_tests {
                         },
                     ],
                     return_ty: Ty::Int,
+                    c_symbol: None,
                 },
             },
             Visibility::Public,
@@ -467,6 +470,7 @@ mod lowering_tests {
                     generic_params: vec![],
                     params: vec![],
                     return_ty: Ty::Unit,
+                    c_symbol: None,
                 },
             },
             Visibility::Public,

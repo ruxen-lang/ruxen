@@ -31,12 +31,31 @@ pub struct TypeCheckResult {
 /// Run the full type checking pipeline on a parsed AST program.
 ///
 /// Pipeline:
-/// 1. Name resolution (AST → HIR with DefIds, unresolved types)
-/// 2. Trait/impl collection
-/// 3. Type inference (resolve all Infer types)
-/// 4. Final validation (check no unresolved types remain)
+/// 1. Stdlib bootstrap load (parses `library/std/src/*.rvn` once per call)
+/// 2. Name resolution (AST → HIR with DefIds, unresolved types)
+/// 3. Trait/impl collection
+/// 4. Type inference (resolve all Infer types)
+/// 5. Final validation (check no unresolved types remain)
+///
+/// Wave 2 (#06.8): stdlib modules like `std.rand` now live in `.rvn`
+/// files loaded by [`crate::resolve::bootstrap::run_bootstrap`]. Test
+/// harnesses that call this function pick up the prelude automatically;
+/// callers that *don't* want the prelude (rare — pure compiler-internal
+/// tests) should use [`type_check_with_bootstrap`] with an explicit
+/// empty slice instead.
 pub fn type_check(program: &ast::Program) -> TypeCheckResult {
-    type_check_with_bootstrap(program, &[])
+    let mut bootstrap_diagnostics: Vec<crate::diagnostics::Diagnostic> = Vec::new();
+    let bootstrap_programs =
+        crate::resolve::bootstrap::run_bootstrap(&mut bootstrap_diagnostics);
+    // Bootstrap failures are surfaced as E0725 diagnostics on the
+    // returned TypeCheckResult so the caller can route them through
+    // the usual error-reporting pipeline (same as any other
+    // resolver error). They are appended AFTER the user-code
+    // diagnostics so file-line-citing-stdlib-source errors land at
+    // the end of the diag list where the contributor expects them.
+    let mut result = type_check_with_bootstrap(program, &bootstrap_programs);
+    result.diagnostics.extend(bootstrap_diagnostics);
+    result
 }
 
 /// Type-check a parsed user `program` with stdlib `bootstrap_programs`

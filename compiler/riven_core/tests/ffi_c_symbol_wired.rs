@@ -138,18 +138,19 @@ fn mir_call_to_aliased_ffi_uses_c_symbol() {
     );
 
     // MirProgram::ffi_libs is now populated (was dead-loaded before
-    // Phase 2).
-    assert_eq!(
-        mir.ffi_libs.len(),
-        1,
-        "expected one MirFfiLib populated by the lowering bridge"
-    );
-    let mir_lib = &mir.ffi_libs[0];
-    let mir_fn = mir_lib
-        .functions
+    // Phase 2). With the Wave-2 (#06.8) bootstrap loader running by
+    // default the list also contains the stdlib's own FFI libs
+    // (`riven_runtime` from `library/std/src/rand.rvn`, the
+    // `_bootstrap_smoke.rvn` proof-of-life libs, …) — so this test
+    // asserts that the user's `add_one` ↔ `riven_test_extern_add_one`
+    // entry is PRESENT, rather than that the list has exactly one
+    // entry.
+    let mir_fn = mir
+        .ffi_libs
         .iter()
+        .flat_map(|lib| lib.functions.iter())
         .find(|f| f.riven_name == "add_one")
-        .expect("FfiFuncDecl for add_one");
+        .expect("FfiFuncDecl for add_one in some MirFfiLib");
     assert_eq!(mir_fn.name, "riven_test_extern_add_one");
 }
 

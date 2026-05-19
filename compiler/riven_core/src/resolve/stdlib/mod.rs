@@ -624,38 +624,18 @@ pub(super) fn register_all(r: &mut Resolver) {
             vec![],
             Ty::Int,
         ),
-        // std::rand — Phase 2 #06.5 T8: kernel CSPRNG-backed free fns.
-        // The byte-array carrier is `Array[Int]` (matching File.read_all
-        // / TcpStream.read), even though the user-facing spec spelling
-        // is `Array[U8]`. The CSPRNG backend is compile-time `#if`-
-        // selected (Linux getrandom, macOS SecRandomCopyBytes, fallback
-        // /dev/urandom) — see docs/specs/stdlib/rand.spec.md.
-        (
-            "random_bytes",
-            vec![ParamInfo {
-                name: "n".into(),
-                ty: Ty::Int,
-                auto_assign: false,
-            }],
-            Ty::Result(
-                Box::new(Ty::Array(Box::new(Ty::Int))),
-                Box::new(io_error_ty.clone()),
-            ),
-        ),
-        // `random_u64` returns the 64 random bits as an Int carrier
-        // — same convention as `now_ns` / `unix_ns`. Hard CSPRNG
-        // failure panics inside the runtime; the call site stays a
-        // bare expression rather than a Result match.
-        ("random_u64", vec![], Ty::Int),
-        (
-            "random_fill",
-            vec![ParamInfo {
-                name: "buf".into(),
-                ty: Ty::RefMut(Box::new(Ty::Array(Box::new(Ty::Int)))),
-                auto_assign: false,
-            }],
-            Ty::Result(Box::new(Ty::Unit), Box::new(io_error_ty.clone())),
-        ),
+        // std::rand — Phase 2 #06.5 T8 was here.
+        //
+        // Wave 2 (#06.8): migrated to `library/std/src/rand.rvn`. The
+        // `random_bytes` / `random_u64` / `random_fill` signatures and
+        // their `c_symbol` aliases (`riven_rand_random_bytes`, …) now
+        // live in the .rvn file as `lib "riven_runtime" def NAME as
+        // "C-SYMBOL"(…) -> …` decls, processed by the bootstrap loader
+        // before the user's program is resolved. The `std.rand` module
+        // namespace is still assembled below (with empty items) and
+        // populated by [`Resolver::fixup_bootstrapped_stdlib_modules`]
+        // after the bootstrap merge so `use std.rand.{random_bytes, …}`
+        // keeps working without flag-day coordination.
     ];
 
     let mut builtin_fn_ids = HashMap::new();
@@ -1909,15 +1889,17 @@ pub(super) fn register_all(r: &mut Resolver) {
     // CSPRNG. Importable via `use std.rand.{random_bytes, random_u64,
     // random_fill}`. Class wrapping is intentionally absent — see
     // docs/specs/stdlib/rand.spec.md "Out of scope".
+    //
+    // Wave 2 (#06.8): the three fns moved to library/std/src/rand.rvn.
+    // We still register the `rand` Module namespace here (with empty
+    // items) so `std_id` can include it at construction time and
+    // `use std.rand.<fn>` keeps tokenising. The items vector is
+    // populated by [`Resolver::fixup_bootstrapped_stdlib_modules`]
+    // AFTER the bootstrap merge has inserted the FFI fn DefIds into
+    // the resolver scope.
     let rand_id = r.symbols.define(
         "rand".to_string(),
-        DefKind::Module {
-            items: vec![
-                builtin_fn_ids["random_bytes"],
-                builtin_fn_ids["random_u64"],
-                builtin_fn_ids["random_fill"],
-            ],
-        },
+        DefKind::Module { items: vec![] },
         Visibility::Public,
         span.clone(),
     );
