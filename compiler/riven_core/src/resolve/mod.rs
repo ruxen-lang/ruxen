@@ -95,6 +95,21 @@ pub struct Resolver {
     /// final `ClassInfo.methods` list, so `File.open(...)` resolves to
     /// the lib-declared method alongside any in-body `def`s.
     pass1_class_lib_methods: HashMap<DefId, Vec<DefId>>,
+
+    /// #06.8 T#21: set to `true` while `merge_bootstrap_programs` is
+    /// processing a stdlib `.rvn` file. When set, the `Class` arm of
+    /// `register_top_level_type_with_ffi` treats a `class Foo do lib ...
+    /// end end` whose name already exists in the type scope as a
+    /// **namespace anchor** rather than a redefinition: it reuses the
+    /// existing DefId (TypeAlias for `String`, Enum for `Option` /
+    /// `Result`, etc.) as the parent for class-body lib FFI decls, so
+    /// the methods land on the canonical type without overwriting its
+    /// type-scope binding (which would change `Ty::String` to
+    /// `Ty::Class { name: "String", … }` for the whole compilation —
+    /// catastrophic for codegen). User-side `class Foo` blocks keep
+    /// last-wins redefinition semantics; only bootstrap is treated as
+    /// anchoring.
+    merging_bootstrap: bool,
 }
 
 #[derive(Debug)]
@@ -123,6 +138,7 @@ impl Resolver {
             tagged_enums_in_scope: HashMap::new(),
             extern_symbol_table: HashMap::new(),
             pass1_class_lib_methods: HashMap::new(),
+            merging_bootstrap: false,
         }
     }
 
@@ -260,6 +276,10 @@ impl Resolver {
         programs: &[ast::Program],
         ffi_libs: &mut Vec<HirFfiLib>,
     ) {
+        // #06.8 T#21: while this flag is set the Class arm of
+        // `register_top_level_type_with_ffi` switches to namespace-anchor
+        // mode for already-known builtin type names (see field doc).
+        self.merging_bootstrap = true;
         for program in programs {
             for item in &program.items {
                 if Self::is_bootstrap_supported_item(item) {
@@ -276,6 +296,7 @@ impl Resolver {
                 }
             }
         }
+        self.merging_bootstrap = false;
     }
 
     /// Wave 2 (#06.8): re-bind stdlib module item lists to the FFI fn
@@ -745,28 +766,51 @@ impl Resolver {
                     .layout
                     .iter()
                     .any(|s| s == "flat_heap_struct");
-                let id = self.symbols.define(
-                    class.name.clone(),
-                    DefKind::Class {
-                        info: ClassInfo {
-                            generic_params: class_gp,
-                            parent: None,
-                            fields: vec![],
-                            methods: vec![],
-                            derive_traits: class.derive_traits.clone(),
-                            opt_out_send: false,
-                            opt_out_sync: false,
-                            manual_send: false,
-                            manual_sync: false,
-                            const_predicates: vec![],
-                            flat_heap_struct,
+
+                // #06.8 T#21: namespace-anchor mode. When the bootstrap
+                // is merging a `class Foo` whose name already has a
+                // type-scope DefId (e.g. `String` → TypeAlias to
+                // Ty::String, `Option`/`Result` → Enum), DO NOT
+                // replace the binding. Instead reuse the existing
+                // DefId as the parent for class-body `lib` decls.
+                // This is the only way to attach FFI methods to a
+                // builtin type without changing its `Ty` representation
+                // for the whole compilation — see the field doc for
+                // `merging_bootstrap` for the catastrophic-failure
+                // mode this guards against.
+                let anchor_id: Option<DefId> = if self.merging_bootstrap {
+                    self.scopes.lookup_type(&class.name)
+                } else {
+                    None
+                };
+
+                let id = if let Some(existing) = anchor_id {
+                    existing
+                } else {
+                    let new_id = self.symbols.define(
+                        class.name.clone(),
+                        DefKind::Class {
+                            info: ClassInfo {
+                                generic_params: class_gp,
+                                parent: None,
+                                fields: vec![],
+                                methods: vec![],
+                                derive_traits: class.derive_traits.clone(),
+                                opt_out_send: false,
+                                opt_out_sync: false,
+                                manual_send: false,
+                                manual_sync: false,
+                                const_predicates: vec![],
+                                flat_heap_struct,
+                            },
                         },
-                    },
-                    Visibility::Public,
-                    class.span.clone(),
-                );
-                self.scopes.insert_type(class.name.clone(), id);
-                self.type_registry.insert(class.name.clone(), id);
+                        Visibility::Public,
+                        class.span.clone(),
+                    );
+                    self.scopes.insert_type(class.name.clone(), new_id);
+                    self.type_registry.insert(class.name.clone(), new_id);
+                    new_id
+                };
 
                 // #06.8 Phase 3b: register class-body `lib` FFI decls as
                 // class methods on this class. The lib-block syntax is
