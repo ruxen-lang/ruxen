@@ -79,6 +79,12 @@ pub const BOOTSTRAP_FILES: &[&str] = &[
     // `Option` / `Result` DefKind::Enum bindings from
     // `register_builtins`.
     "option_result.rvn",
+    // T#14: Array (Vec) methods. `Array` is NOT in type-scope
+    // (`resolve_type_expr` builds `Ty::Array` from a hardcoded match
+    // arm); the anchor branch in `register_top_level_type_with_ffi`
+    // creates a parent DefId for FFI bookkeeping without touching
+    // type-scope.
+    "array.rvn",
 ];
 
 /// Production entry point: parse every stdlib file in

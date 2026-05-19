@@ -91,13 +91,30 @@ impl<'a> Lowerer<'a> {
                 if matches!(expr.ty, Ty::Array(_)) {
                     let arr_ty = expr.ty.clone();
                     let dest = self.new_temp(arr_ty.clone());
-                    let new_name = format!("{}_new", type_name_from_ty(&arr_ty));
+                    // #06.8 T#14: route both `_new` and `_push` callees
+                    // through the FFI alias map so the migrated
+                    // `class Array do lib ... end end` entries reach
+                    // their C symbols. The naive mangled forms here
+                    // carry the surface generic args (`Array[Int]_new`,
+                    // `Array[Int]_push`); `resolve_ffi_alias_callee`
+                    // strips the `[...]` segment and falls back to the
+                    // parent-name-keyed alias (`Array_new`,
+                    // `Array_push`). Without this rewrite the array
+                    // literal emits the raw mangled callee and the
+                    // linker fails to find `_Array[Int]_new`.
+                    let new_name = self.resolve_ffi_alias_callee(format!(
+                        "{}_new",
+                        type_name_from_ty(&arr_ty)
+                    ));
                     self.emit(MirInst::Call {
                         dest: Some(dest),
                         callee: new_name,
                         args: vec![],
                     });
-                    let push_name = format!("{}_push", type_name_from_ty(&arr_ty));
+                    let push_name = self.resolve_ffi_alias_callee(format!(
+                        "{}_push",
+                        type_name_from_ty(&arr_ty)
+                    ));
                     for elem in elems {
                         let val_local = self.lower_expr(elem)?;
                         let val = local_to_value(val_local);

@@ -435,43 +435,37 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
     // `Array` is the Ruby-naming name (docs/specs/syntax/ruby-naming.spec.md);
     // `Vec` is the legacy spelling, kept as an alias until sources finish
     // migrating.
+    //
+    // #06.8 T#14 migrated ~28 methods into library/std/src/array.rvn
+    // as a `class Array do lib "riven_runtime" ... end end` shell.
+    // The anchor branch in `register_top_level_type_with_ffi` creates
+    // a parent DefId for FFI bookkeeping but does NOT insert
+    // `Array` into type-scope — `resolve_type_expr`'s hardcoded
+    // match arm remains authoritative for `Ty::Array(_)`. MIR's
+    // generic-stripping fallback (added in T#17) lets the call-site
+    // mangle `Vec[Int]_push` reach the alias-map key `Array_push`
+    // and rewrite to the C symbol.
+    //
+    // Two aliased clusters stay below as runtime_table fallbacks
+    // because they share a C symbol with a migrated entry and the
+    // E0722 check rejects duplicate aliases for the same `c_symbol`
+    // with different wire shapes:
+    //
+    //   * `get_mut`, `get_var` → `riven_vec_get_opt` (canonical
+    //     spelling `get` is in array.rvn)
+    //   * `into_iter`, `iter_mut`, `to_vec`, `enumerate`, `as_slice`
+    //     → `riven_iter_to_vec` (canonical spelling `iter` is in
+    //     array.rvn)
     if name.starts_with("Array") || name.starts_with("Vec") {
         return match method {
-            "new" => Ok("riven_vec_new"),
-            "with_capacity" => Ok("riven_vec_with_capacity"),
-            "push" => Ok("riven_vec_push"),
-            "pop" => Ok("riven_vec_pop"),
-            "len" => Ok("riven_vec_len"),
-            "capacity" => Ok("riven_vec_capacity"),
-            "get" | "get_mut" | "get_var" => Ok("riven_vec_get_opt"),
-            "is_empty" => Ok("riven_vec_is_empty"),
-            "each" => Ok("riven_vec_each"),
+            "get_mut" | "get_var" => Ok("riven_vec_get_opt"),
             // Iterator producers + the identity collector are
             // passthroughs — every iterator in the v1 runtime is
-            // already represented by a `RivenVec *`, so `vec.iter`,
-            // `vec.into_iter`, and `iter.to_vec` are all no-ops.
-            "iter" | "into_iter" | "iter_mut" | "to_vec" | "enumerate" | "as_slice" => {
+            // already represented by a `RivenVec *`, so
+            // `vec.into_iter`, `iter.to_vec`, etc. are all no-ops.
+            "into_iter" | "iter_mut" | "to_vec" | "enumerate" | "as_slice" => {
                 Ok("riven_iter_to_vec")
             }
-            "sum" => Ok("riven_vec_sum"),
-            "count" => Ok("riven_vec_count"),
-            "reverse" => Ok("riven_vec_reverse"),
-            "first" => Ok("riven_vec_first"),
-            "last" => Ok("riven_vec_last"),
-            "clone" => Ok("riven_vec_clone"),
-            "contains" => Ok("riven_vec_contains_int"),
-            "sort" => Ok("riven_vec_sort"),
-            "join" => Ok("riven_vec_join"),
-            // Phase 2 stdlib batch 1 (#03): mutators, conversions.
-            "clear" => Ok("riven_vec_clear"),
-            "truncate" => Ok("riven_vec_truncate"),
-            "swap" => Ok("riven_vec_swap"),
-            "insert" => Ok("riven_vec_insert"),
-            "remove" => Ok("riven_vec_remove"),
-            "extend" => Ok("riven_vec_extend"),
-            // Phase 2 stdlib batch 2 (#03): from_iter, dedup.
-            "from_iter" => Ok("riven_vec_from_iter"),
-            "dedup" => Ok("riven_vec_dedup"),
             // Known unimplemented Vec methods — historically no-opped.
             "map" | "filter" | "fold" | "min" | "max" | "any" | "all" | "collect" | "find"
             | "position" | "partition" | "reduce" | "zip" | "take" | "skip" | "chain"

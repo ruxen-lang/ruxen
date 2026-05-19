@@ -203,10 +203,41 @@ impl<'a> Lowerer<'a> {
                             let local = self.lower_expr(arg)?;
                             call_args.push(local_to_value(local));
                         }
-                        let callee = if let Some(suffix) = bufio_suffix {
+                        let raw_callee = if let Some(suffix) = bufio_suffix {
                             format!("{}_{}_{}", runtime_base, method_name, suffix)
                         } else {
                             format!("{}_{}", runtime_base, method_name)
+                        };
+                        // #06.8 T#14: the static-ctor fast path
+                        // historically emitted `Vec_new` / `Hash_new`
+                        // / `Set_new` directly and let runtime_table
+                        // do the runtime-symbol rewrite. With the
+                        // migration moving those constructors into
+                        // .rvn class-body lib decls, route through
+                        // the alias map first — try both the
+                        // `runtime_base` (legacy `Vec_new`) and the
+                        // surface `base_type` (canonical `Array_new`)
+                        // shapes, since the bootstrap `class` shell
+                        // is keyed on the canonical name. Falls
+                        // through to the raw mangled callee when
+                        // neither lookup hits, preserving
+                        // backward-compat for any base/method whose
+                        // entry still lives in runtime_table.
+                        let callee = {
+                            let aliased = self.resolve_ffi_alias_callee(raw_callee.clone());
+                            if aliased != raw_callee {
+                                aliased
+                            } else if let Some(suffix) = bufio_suffix {
+                                self.resolve_ffi_alias_callee(format!(
+                                    "{}_{}_{}",
+                                    base_type, method_name, suffix
+                                ))
+                            } else {
+                                self.resolve_ffi_alias_callee(format!(
+                                    "{}_{}",
+                                    base_type, method_name
+                                ))
+                            }
                         };
                         self.emit(MirInst::Call {
                             dest: Some(obj),
@@ -1067,26 +1098,7 @@ impl<'a> Lowerer<'a> {
                     // After the exact-key lookup misses, peel the `[...]` segment
                     // from `mangled` and retry — that's the generic-stripped
                     // shape the alias map carries.
-                    let callee = if let Some(direct) = self.ffi_alias_map.get(&mangled).cloned() {
-                        direct
-                    } else if let Some(bracket_pos) = mangled.find('[') {
-                        let close = mangled[bracket_pos..].find(']').map(|i| bracket_pos + i + 1);
-                        if let Some(close_pos) = close {
-                            let stripped = format!(
-                                "{}{}",
-                                &mangled[..bracket_pos],
-                                &mangled[close_pos..]
-                            );
-                            self.ffi_alias_map
-                                .get(&stripped)
-                                .cloned()
-                                .unwrap_or(mangled)
-                        } else {
-                            mangled
-                        }
-                    } else {
-                        mangled
-                    };
+                    let callee = self.resolve_ffi_alias_callee(mangled);
                     self.emit(MirInst::Call {
                         dest,
                         callee,

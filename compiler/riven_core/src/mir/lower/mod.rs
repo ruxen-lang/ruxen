@@ -598,6 +598,43 @@ impl<'a> Lowerer<'a> {
         false
     }
 
+    /// #06.8 T#17 / T#14: rewrite a mangled builtin-method callee
+    /// through `ffi_alias_map`, falling back to a generic-stripped
+    /// lookup so call sites that carry surface generic args
+    /// (`Array[Int]_push`, `Option[String]_unwrap_or`, ...) reach
+    /// the parent-name-keyed alias entries (`Array_push`,
+    /// `Option_unwrap_or`) that bootstrap class shells register.
+    /// When neither lookup hits, returns the unchanged mangled name —
+    /// the same fallback path that lets user-defined non-FFI methods
+    /// through unmolested.
+    ///
+    /// Used by both the general method-call dispatch in
+    /// `lower_method_call` and by direct emission sites that bypass
+    /// it (array literal `[a, b, c]` lowering in `constructors.rs`,
+    /// the static-ctor fast path's `Array.new` / `Hash.new` /
+    /// `Set.new` emissions). Every site that emits a builtin-method
+    /// `MirInst::Call` callee should route through here so the
+    /// migration story is uniform.
+    pub(super) fn resolve_ffi_alias_callee(&self, mangled: String) -> String {
+        if let Some(direct) = self.ffi_alias_map.get(&mangled).cloned() {
+            return direct;
+        }
+        if let Some(bracket_pos) = mangled.find('[') {
+            if let Some(rel) = mangled[bracket_pos..].find(']') {
+                let close_pos = bracket_pos + rel + 1;
+                let stripped = format!(
+                    "{}{}",
+                    &mangled[..bracket_pos],
+                    &mangled[close_pos..]
+                );
+                if let Some(c) = self.ffi_alias_map.get(&stripped).cloned() {
+                    return c;
+                }
+            }
+        }
+        mangled
+    }
+
     /// Returns `true` if the named method on `class_name` is a static/class
     /// method (declared as `def self.foo`). Checks both inherent methods and
     /// methods defined in impl blocks, then recurses into the parent class.

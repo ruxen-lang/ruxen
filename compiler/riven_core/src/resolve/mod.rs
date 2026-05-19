@@ -778,6 +778,26 @@ impl Resolver {
                 // for the whole compilation — see the field doc for
                 // `merging_bootstrap` for the catastrophic-failure
                 // mode this guards against.
+                //
+                // #06.8 T#14: extend anchor mode to also cover the
+                // collection-type names (`Array`/`Vec`/`Map`/`HashMap`/
+                // `Set`/`HashSet`) which are NOT registered in the
+                // type scope by `register_builtins` — their type
+                // resolution comes from a hardcoded `match name`
+                // arm in `resolve_type_expr` that builds
+                // `Ty::Array(_)` / `Ty::Map(_,_)` / `Ty::Set(_)`
+                // directly. Inserting a fresh `DefKind::Class` for
+                // those names would mean `let x: Array[Int]`
+                // resolves `Array` via type-scope BEFORE the
+                // hardcoded arm runs, producing `Ty::Class { name:
+                // "Array", ... }` instead of `Ty::Array(Int)` and
+                // breaking the entire collection ABI. The list
+                // mirrors the arms in `resolve_type_expr` lines
+                // ~4605-4659 1:1.
+                let is_anchor_only_builtin = matches!(
+                    class.name.as_str(),
+                    "Array" | "Vec" | "Map" | "HashMap" | "Set" | "HashSet"
+                );
                 let anchor_id: Option<DefId> = if self.merging_bootstrap {
                     self.scopes.lookup_type(&class.name)
                 } else {
@@ -786,6 +806,31 @@ impl Resolver {
 
                 let id = if let Some(existing) = anchor_id {
                     existing
+                } else if self.merging_bootstrap && is_anchor_only_builtin {
+                    // Create a parent DefId for `pass1_class_lib_methods`
+                    // / `ffi_libs` bookkeeping but DO NOT insert into
+                    // type-scope. The hardcoded arm in `resolve_type_expr`
+                    // remains authoritative for the type representation.
+                    self.symbols.define(
+                        class.name.clone(),
+                        DefKind::Class {
+                            info: ClassInfo {
+                                generic_params: class_gp,
+                                parent: None,
+                                fields: vec![],
+                                methods: vec![],
+                                derive_traits: class.derive_traits.clone(),
+                                opt_out_send: false,
+                                opt_out_sync: false,
+                                manual_send: false,
+                                manual_sync: false,
+                                const_predicates: vec![],
+                                flat_heap_struct,
+                            },
+                        },
+                        Visibility::Public,
+                        class.span.clone(),
+                    )
                 } else {
                     let new_id = self.symbols.define(
                         class.name.clone(),

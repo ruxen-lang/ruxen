@@ -421,15 +421,59 @@ mod tests {
     }
 
     #[test]
-    fn implemented_vec_combinators_resolve() {
-        assert_eq!(runtime_name("Vec[Int]_sum").unwrap(), "riven_vec_sum");
-        assert_eq!(runtime_name("Vec[Int]_count").unwrap(), "riven_vec_count");
+    fn migrated_vec_combinators_fall_through_runtime_table() {
+        // #06.8 T#14: every `Vec[T]_<m>` / `Array[T]_<m>` entry that
+        // had a real `riven_vec_*` mapping was moved to a class-body
+        // `lib` decl in `library/std/src/array.rvn`. MIR's
+        // ffi_alias_map carries the generic-stripped key
+        // (`Array_sum`); the lookup site in
+        // `mir/lower/expr/method_call.rs` (and the array-literal /
+        // field-access lowerers in `constructors.rs` /
+        // `field_access.rs`) strip the `[Int]` segment and route the
+        // call through the alias path before codegen would consult
+        // runtime_table. The pin set below covers a representative
+        // sample of the migrated surface; a `riven_*` mapping
+        // reappearing here for any of them would silently mask the
+        // alias path.
+        for m in [
+            "Vec[Int]_sum",
+            "Vec[Int]_count",
+            "Vec[Int]_reverse",
+            "Vec[Int]_first",
+            "Vec[Int]_last",
+            "Vec[Int]_push",
+            "Vec[Int]_pop",
+            "Vec[Int]_len",
+            "Vec[Int]_is_empty",
+            "Vec[Int]_get",
+            "Vec[Int]_clear",
+            "Vec[Int]_extend",
+            "Array[Int]_clone",
+        ] {
+            assert_eq!(
+                runtime_name(m).unwrap(),
+                m,
+                "migrated method `{m}` must fall through runtime_table to its \
+                 unmapped form; the alias-map fallback in MIR carries the \
+                 generic-stripped `Array_<m>` key"
+            );
+        }
+        // Aliased clusters that share a C symbol with a migrated
+        // entry survive in runtime_table — `register_class_lib_method`'s
+        // E0722 check rejects duplicate aliases for the same `c_symbol`
+        // with different wire shapes.
         assert_eq!(
-            runtime_name("Vec[Int]_reverse").unwrap(),
-            "riven_vec_reverse"
+            runtime_name("Vec[Int]_get_mut").unwrap(),
+            "riven_vec_get_opt"
         );
-        assert_eq!(runtime_name("Vec[Int]_first").unwrap(), "riven_vec_first");
-        assert_eq!(runtime_name("Vec[Int]_last").unwrap(), "riven_vec_last");
+        assert_eq!(
+            runtime_name("Vec[Int]_into_iter").unwrap(),
+            "riven_iter_to_vec"
+        );
+        assert_eq!(
+            runtime_name("Vec[Int]_to_vec").unwrap(),
+            "riven_iter_to_vec"
+        );
     }
 
     #[test]
@@ -490,9 +534,13 @@ mod tests {
 
     #[test]
     fn iterator_passthrough_collectors_resolve() {
-        // `iter`, `into_iter`, and `to_vec` are identity passthroughs in
-        // the v1 runtime — they all map to `riven_iter_to_vec`.
-        assert_eq!(runtime_name("Vec[Int]_iter").unwrap(), "riven_iter_to_vec",);
+        // The non-migrated identity passthroughs (`into_iter`,
+        // `iter_mut`, `to_vec`, `enumerate`, `as_slice`) all share
+        // the `riven_iter_to_vec` C symbol with the migrated `iter`.
+        // E0722 keeps us from declaring all five in
+        // `library/std/src/array.rvn`, so the runtime_table arm is
+        // still the source of truth for the aliases. `iter` ALONE
+        // moved to the alias map.
         assert_eq!(
             runtime_name("Vec[Int]_into_iter").unwrap(),
             "riven_iter_to_vec",
@@ -505,6 +553,8 @@ mod tests {
             runtime_name("SplitIter_to_vec").unwrap(),
             "riven_iter_to_vec",
         );
+        // `Vec[Int]_iter` itself now falls through (migrated).
+        assert_eq!(runtime_name("Vec[Int]_iter").unwrap(), "Vec[Int]_iter");
     }
 
     #[test]
@@ -565,13 +615,11 @@ mod tests {
     fn known_runtime_symbols_resolve() {
         // `puts` migrated to library/std/src/io.rvn as a `lib
         // "riven_runtime" def puts as "riven_puts"(...)` decl in
-        // #06.8 Wave 2. Calls reach the C symbol through the
-        // ffi_alias_map; runtime_table no longer carries the
-        // mapping. Pinning Vec/Hash collection methods (still
-        // runtime_table-resident — they migrate in T#14/T#15) keeps
-        // the rest of the lookup surface honest.
-        assert_eq!(runtime_name("Vec[Int]_push").unwrap(), "riven_vec_push");
-        assert_eq!(runtime_name("Vec[Int]_len").unwrap(), "riven_vec_len");
+        // #06.8 Wave 2. `Vec[Int]_push` / `Vec[Int]_len` migrated to
+        // library/std/src/array.rvn in T#14. All three reach the C
+        // symbol through the ffi_alias_map; runtime_table no longer
+        // carries the mapping. Hash/HashMap methods are still
+        // runtime_table-resident — they migrate in T#15.
         assert_eq!(runtime_name("Hash[Int,Int]_get").unwrap(), "riven_hash_get");
         assert_eq!(
             runtime_name("HashMap[Int,Int]_get").unwrap(),

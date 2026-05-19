@@ -108,9 +108,12 @@ impl<'a> Lowerer<'a> {
                         _ => Ty::Int,
                     };
                     let method_result = self.new_temp(inner_result_ty);
+                    // #06.8 T#14: route through alias map (see other
+                    // sites in this file).
+                    let callee = self.resolve_ffi_alias_callee(mangled);
                     self.emit(MirInst::Call {
                         dest: Some(method_result),
-                        callee: mangled,
+                        callee,
                         args: vec![MirValue::Use(payload)],
                     });
 
@@ -182,9 +185,28 @@ impl<'a> Lowerer<'a> {
                         // Use the base type so the mangled callee elides the
                         // generic parameter list (`HashMap[K, V]_new` would
                         // not match a real runtime symbol).
+                        //
+                        // #06.8 T#14: `Array.new` / `Hash.new` / etc.
+                        // (no-paren form) lowers HERE rather than
+                        // through `lower_method_call`. Route through
+                        // `resolve_ffi_alias_callee` so the migrated
+                        // `class Array do lib def self.new ... end end`
+                        // entries in `library/std/src/array.rvn` reach
+                        // their C symbols. Try the legacy
+                        // `runtime_base` first (`Vec_new` for
+                        // backward-compat with any sources still in
+                        // runtime_table), then the surface `base_type`
+                        // (`Array_new` — where the .rvn anchor lives).
+                        let raw_callee = format!("{}_new", runtime_base);
+                        let aliased = self.resolve_ffi_alias_callee(raw_callee.clone());
+                        let callee = if aliased != raw_callee {
+                            aliased
+                        } else {
+                            self.resolve_ffi_alias_callee(format!("{}_new", base_type))
+                        };
                         self.emit(MirInst::Call {
                             dest: Some(obj),
-                            callee: format!("{}_new", runtime_base),
+                            callee,
                             args: vec![],
                         });
                         return Ok(Some(obj));
@@ -301,9 +323,17 @@ impl<'a> Lowerer<'a> {
                         None
                     };
 
+                    // #06.8 T#14: field-access shorthand (`a.len`,
+                    // `s.is_empty`) lowers HERE rather than through
+                    // `lower_method_call`. Route the mangled callee
+                    // through `resolve_ffi_alias_callee` so migrated
+                    // builtin methods reach their C symbol via the
+                    // alias map (with the generic-stripping fallback
+                    // for `Array[Int]_<m>` → `Array_<m>`).
+                    let callee = self.resolve_ffi_alias_callee(mangled);
                     self.emit(MirInst::Call {
                         dest,
-                        callee: mangled,
+                        callee,
                         args: arg_values,
                     });
                     return Ok(dest);
