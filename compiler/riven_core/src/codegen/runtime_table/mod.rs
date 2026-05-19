@@ -223,7 +223,9 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // The C symbol `riven_time_now_ns` is still linked (it is the
         // implementation behind `riven_instant_now`); the resolver-
         // visible Riven name is gone. See docs/specs/stdlib/time.spec.md.
-        "unix_ns" => return Ok("riven_time_unix_ns"),
+        // `unix_ns` was here — Wave 2 (#06.8) moved the C-symbol
+        // binding to `lib "riven_runtime" def unix_ns as
+        // "riven_time_unix_ns"` in library/std/src/time.rvn.
         // Phase 2 stdlib (#06.5 T4): Duration / Instant scalar-wrapper
         // classes. `Duration_from_*` and `Instant_now` are static-style
         // constructors that go through the "collection-ctor fast path"

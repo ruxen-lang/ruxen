@@ -349,6 +349,10 @@ impl Resolver {
             // Command / Output / ExitStatus class shells; class methods
             // still go through static-ctor + runtime_table until T#20).
             ("process", &["exit", "Command", "Output", "ExitStatus"]),
+            // Wave 2 — library/std/src/time.rvn (`unix_ns` free fn +
+            // Duration / Instant class shells; class methods still go
+            // through static-ctor + runtime_table until T#20).
+            ("time", &["unix_ns", "Duration", "Instant"]),
         ];
 
         let Some(std_id) = self.scopes.lookup_type("std") else {

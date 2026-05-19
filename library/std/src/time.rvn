@@ -1,0 +1,26 @@
+## std::time — Duration + Instant class shells + unix_ns free fn.
+##
+## Wave 2 (#06.8) — partial migration. Same shape as net / process:
+## - `unix_ns() -> Int` fully migrates (lib block with c_symbol alias).
+## - `class Duration end` / `class Instant end` are class shells; their
+##   static-style constructors (`Duration.from_secs`, `Instant.now`, …)
+##   still flow through the static-ctor fast path in
+##   `mir/lower/expr/method_call.rs` and the runtime_table mangled-name
+##   lookup until T#20 removes Duration / Instant from the carve-out.
+##
+## `unix_ns` is wall-clock (nanoseconds since 1970-01-01 UTC) and stays
+## a bare Int-returning free fn until a `SystemTime` class lands. The
+## monotonic `now_ns` free fn previously exposed here was removed in
+## #06.5 T5.5 once `Instant.now` + `Instant.elapsed` covered every use
+## case — the riven_time_now_ns C symbol is still linked (it backs
+## `riven_instant_now`); it just is not reachable from Riven user code.
+
+class Duration
+end
+
+class Instant
+end
+
+lib "riven_runtime"
+  def unix_ns as "riven_time_unix_ns"() -> Int
+end

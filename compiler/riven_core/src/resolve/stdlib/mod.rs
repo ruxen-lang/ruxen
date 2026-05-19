@@ -483,7 +483,9 @@ pub(super) fn register_all(r: &mut Resolver) {
         // still linked from the runtime (it is the implementation
         // behind `riven_instant_now`); it just is not reachable from
         // Riven user code.
-        ("unix_ns", vec![], Ty::Int),
+        // `unix_ns` was here — Wave 2 (#06.8) migrated to
+        // library/std/src/time.rvn (lib block with c_symbol alias
+        // to riven_time_unix_ns).
         // std::thread — Phase 2 stdlib (#06.5 T4). Free fn
         // `sleep(&Duration)` is the Duration-typed wrapper around
         // the existing `Thread.sleep(int)` static method. Both
@@ -984,58 +986,10 @@ pub(super) fn register_all(r: &mut Resolver) {
         }
     }
 
-    // Phase 2 #06.5 T4: `std::time::Duration` — scalar-wrapper class
-    // over `int64_t nanos`. Pure POD with no inner heap, no resource
-    // — the default scope-exit `riven_dealloc` is the entire drop
-    // story (NOT added to `user_drop_classes`). 8-byte wire layout
-    // documented in runtime.c at `RivenDuration`.
-    let duration_id = r.symbols.define(
-        "Duration".to_string(),
-        DefKind::Class {
-            info: ClassInfo {
-                generic_params: vec![],
-                parent: None,
-                fields: vec![],
-                methods: vec![],
-                derive_traits: vec![],
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
-                const_predicates: vec![],
-                flat_heap_struct: false,
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.scopes.insert_type("Duration".to_string(), duration_id);
-    r.type_registry.insert("Duration".to_string(), duration_id);
-
-    // Phase 2 #06.5 T4: `std::time::Instant` — scalar-wrapper class
-    // over `int64_t monotonic_nanos`. Same drop story as Duration.
-    let instant_id = r.symbols.define(
-        "Instant".to_string(),
-        DefKind::Class {
-            info: ClassInfo {
-                generic_params: vec![],
-                parent: None,
-                fields: vec![],
-                methods: vec![],
-                derive_traits: vec![],
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
-                const_predicates: vec![],
-                flat_heap_struct: false,
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.scopes.insert_type("Instant".to_string(), instant_id);
-    r.type_registry.insert("Instant".to_string(), instant_id);
+    // Duration / Instant class shells were here. Wave 2 (#06.8) moved
+    // both to library/std/src/time.rvn as bare `class Foo end` bodies.
+    // Methods (Duration.from_secs, Instant.now, …) still flow through
+    // the static-ctor + runtime_table dispatch until T#20 lands.
 
     // TcpListener / TcpStream class shells were here. Wave 2 (#06.8)
     // moved both to library/std/src/net.rvn as bare `class Foo end`
@@ -1515,19 +1469,12 @@ pub(super) fn register_all(r: &mut Resolver) {
         Visibility::Public,
         span.clone(),
     );
+    // Wave 2 (#06.8): unix_ns + Duration + Instant all moved to
+    // library/std/src/time.rvn. time_id starts with empty items;
+    // fixup_bootstrapped_stdlib_modules populates them.
     let time_id = r.symbols.define(
         "time".to_string(),
-        DefKind::Module {
-            items: vec![
-                builtin_fn_ids["unix_ns"],
-                // Phase 2 stdlib (#06.5 T4): Duration / Instant
-                // imported via `use std.time.{Duration, Instant}`.
-                // The flat `now_ns` free-fn was removed in
-                // #06.5 T5.5 — see time.spec.md "Removed".
-                duration_id,
-                instant_id,
-            ],
-        },
+        DefKind::Module { items: vec![] },
         Visibility::Public,
         span.clone(),
     );
