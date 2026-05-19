@@ -1,0 +1,36 @@
+## std::fmt — Display + Debug formal mixins, plus the placeholder
+## Formatter / FmtError types.
+##
+## Wave 2 (#06.8) — migrated from resolve/stdlib/mod.rs Rust
+## registrations into self-hosted library/std/src/fmt.rvn.
+##
+## Display is the canonical interpolation mixin (`"#{x}"` lowers
+## through Display::fmt). Debug is the `"#{x:?}"` and `derive Debug`
+## target. Both share the `fmt(&self, &mut Formatter) ->
+## Result[(), FmtError]` signature, but the Rust registration only
+## carried the method NAME (`["fmt"]`) — typeck checks
+## `impl Display for T` / `impl Debug for T` provides `fmt` against
+## that name. The minimum-faithful mixin definitions below preserve
+## that contract; the broader generic-signature work lands when
+## mixin default-method lowering does.
+##
+## Formatter and FmtError are placeholder classes (no fields, no
+## methods registered through DefKind::Method yet). The runtime
+## `riven_fmt_*` helpers in library/runtime/fmt.c back the
+## constructor + dispatch wired by Phase D's lower_interpolation.
+## v1 deliberately keeps the public surface empty — see
+## docs/specs/stdlib/fmt.spec.md.
+
+mixin Display
+  def fmt
+end
+
+mixin Debug
+  def fmt
+end
+
+class Formatter
+end
+
+class FmtError
+end

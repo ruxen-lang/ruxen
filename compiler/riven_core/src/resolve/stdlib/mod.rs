@@ -87,16 +87,10 @@ pub(super) fn register_all(r: &mut Resolver) {
         ("Clone", vec!["clone"]),
         ("Send", vec![]),
         ("Sync", vec![]),
-        // Phase 2 #06.A1: `Display` and `Debug` formal traits.
-        // Both share the `fmt(&self, &mut Formatter) -> Result[(), FmtError]`
-        // signature. `Display` is the canonical interpolation
-        // trait (Phase D will route `"#{x}"` through
-        // `Display::fmt`); `Debug` is the `"#{x:?}"` (and existing
-        // `derive Debug` synthesis) target. Required-methods list
-        // is `["fmt"]` for both — typeck checks user `impl
-        // Display for T` / `impl Debug for T` provides `fmt`.
-        ("Display", vec!["fmt"]),
-        ("Debug", vec!["fmt"]),
+        // Display / Debug were here. Wave 2 (#06.8) moved both to
+        // library/std/src/fmt.rvn. The fmt_id Module's items list
+        // (formerly [display_trait_id, debug_trait_id, ...]) is
+        // populated by fixup_bootstrapped_stdlib_modules instead.
         ("PartialEq", vec!["eq"]),
         ("Eq", vec![]),
         ("Hash", vec!["hash"]),
@@ -1294,57 +1288,14 @@ pub(super) fn register_all(r: &mut Resolver) {
     // backing buffer at the runtime layer (`riven_fmt_*` helpers
     // in `runtime.c`). Phase D wires the constructor + dispatch
     // into `lower_interpolation`.
-    let formatter_id = r.symbols.define(
-        "Formatter".to_string(),
-        DefKind::Class {
-            info: ClassInfo {
-                generic_params: vec![],
-                parent: None,
-                fields: vec![],
-                methods: vec![],
-                derive_traits: vec![],
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
-                const_predicates: vec![],
-                flat_heap_struct: false,
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.scopes.insert_type("Formatter".to_string(), formatter_id);
-    r.type_registry
-        .insert("Formatter".to_string(), formatter_id);
-
-    // Phase 2 #06.A4: `std::fmt::FmtError` is a unit struct
-    // returned by `Formatter::write_str/write_char`. v1 has no
-    // variant payload (matches Rust's `std::fmt::Error`) — it's
-    // just a sentinel type. Registered as a class so it can
-    // appear in `Result[(), FmtError]` return annotations.
-    let fmt_error_id = r.symbols.define(
-        "FmtError".to_string(),
-        DefKind::Class {
-            info: ClassInfo {
-                generic_params: vec![],
-                parent: None,
-                fields: vec![],
-                methods: vec![],
-                derive_traits: vec![],
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
-                const_predicates: vec![],
-                flat_heap_struct: false,
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.scopes.insert_type("FmtError".to_string(), fmt_error_id);
-    r.type_registry.insert("FmtError".to_string(), fmt_error_id);
+    // Formatter / FmtError placeholder class registrations were here.
+    // Wave 2 (#06.8) moved both to library/std/src/fmt.rvn as bare
+    // `class Foo end` bodies (no fields, no methods — same surface
+    // the Rust registrations had). The bootstrap merge handles
+    // `r.scopes.insert_type` and `r.type_registry.insert` for class
+    // items symmetrically with user code, so no extra plumbing is
+    // needed here beyond the FIXUPS entry that re-adds the four
+    // bootstrap-loaded DefIds to the fmt module's items list.
 
     let context_id = r.symbols.define(
         "Context".to_string(),
@@ -1849,19 +1800,13 @@ pub(super) fn register_all(r: &mut Resolver) {
     // Display + Debug are registered as builtin traits above; we
     // re-export their DefIds here so module-path resolution
     // (`std.fmt.Display`) works.
-    let display_trait_id = *r
-        .type_registry
-        .get("Display")
-        .expect("Display trait registered above");
-    let debug_trait_id = *r
-        .type_registry
-        .get("Debug")
-        .expect("Debug trait registered above");
+    // Wave 2 (#06.8): Display, Debug, Formatter, FmtError all moved
+    // to library/std/src/fmt.rvn. fmt_id Module starts with empty
+    // items; fixup_bootstrapped_stdlib_modules populates the four
+    // DefIds via type-scope lookup after the bootstrap merge.
     let fmt_id = r.symbols.define(
         "fmt".to_string(),
-        DefKind::Module {
-            items: vec![display_trait_id, debug_trait_id, formatter_id, fmt_error_id],
-        },
+        DefKind::Module { items: vec![] },
         Visibility::Public,
         span.clone(),
     );

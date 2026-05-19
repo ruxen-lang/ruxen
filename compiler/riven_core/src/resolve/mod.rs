@@ -307,7 +307,7 @@ impl Resolver {
     /// bootstrap-merge-auto-wraps-each-file behaviour landing later in
     /// the epic) becomes the only registration site.
     fn fixup_bootstrapped_stdlib_modules(&mut self) {
-        // (stdlib-module-name, &[fn-names-the-.rvn-defines])
+        // (stdlib-module-name, &[item-names-the-.rvn-defines])
         //
         // `register_builtins` inserts the outer `std` module into the
         // type scope (so `std.X` resolution works) but does NOT
@@ -316,6 +316,12 @@ impl Resolver {
         // The fixup therefore looks each `module_name` up by walking
         // `std`'s items rather than calling `scopes.lookup_type`
         // directly.
+        //
+        // For each item name in a fixup row we try the value scope
+        // first (free fns from a `lib` block — rand/path/env case)
+        // and fall back to the type scope (mixins / classes / enums —
+        // fmt case). This keeps a single table covering both shapes
+        // without doubling the data structure.
         const FIXUPS: &[(&str, &[&str])] = &[
             // Wave 2 — library/std/src/rand.rvn
             ("rand", &["random_bytes", "random_u64", "random_fill"]),
@@ -332,6 +338,9 @@ impl Resolver {
             ),
             // Wave 2 — library/std/src/env.rvn
             ("env", &["args", "get", "vars", "current_dir"]),
+            // Wave 2 — library/std/src/fmt.rvn (mixed mixins + classes —
+            // each name resolves through the type-scope fallback).
+            ("fmt", &["Display", "Debug", "Formatter", "FmtError"]),
         ];
 
         let Some(std_id) = self.scopes.lookup_type("std") else {
@@ -379,8 +388,14 @@ impl Resolver {
             };
             let mut fn_ids: Vec<DefId> = Vec::with_capacity(fn_names.len());
             for fn_name in *fn_names {
-                if let Some(fn_id) = self.scopes.lookup(fn_name) {
-                    fn_ids.push(fn_id);
+                // Value scope first (free fns), type scope as fallback
+                // (mixins / classes / enums).
+                let item_id = self
+                    .scopes
+                    .lookup(fn_name)
+                    .or_else(|| self.scopes.lookup_type(fn_name));
+                if let Some(id) = item_id {
+                    fn_ids.push(id);
                 }
             }
             if let Some(def) = self.symbols.get_mut(module_id) {
