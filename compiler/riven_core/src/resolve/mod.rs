@@ -353,6 +353,33 @@ impl Resolver {
             // Duration / Instant class shells; class methods still go
             // through static-ctor + runtime_table until T#20).
             ("time", &["unix_ns", "Duration", "Instant"]),
+            // Wave 2 — library/std/src/fs.rvn (17 fs free fns +
+            // Metadata class shell; also re-exports File for the
+            // `use std.fs.File` import alias).
+            (
+                "fs",
+                &[
+                    "read_to_string",
+                    "write",
+                    "exists",
+                    "is_file",
+                    "is_dir",
+                    "read_dir",
+                    "metadata",
+                    "remove_file",
+                    "create_dir",
+                    "create_dir_all",
+                    "rename",
+                    "copy",
+                    "remove_dir_all",
+                    "canonicalize",
+                    "write_atomic",
+                    "read_link",
+                    "symlink",
+                    "Metadata",
+                    "File",
+                ],
+            ),
         ];
 
         let Some(std_id) = self.scopes.lookup_type("std") else {

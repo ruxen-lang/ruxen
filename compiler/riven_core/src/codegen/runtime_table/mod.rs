@@ -32,25 +32,11 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // Top-level env entries were here — Wave 2 (#06.8) moved
         // args / get / vars / current_dir to library/std/src/env.rvn
         // as `lib "riven_runtime" def NAME as "riven_env_..."` aliases.
-        // Top-level fs entries follow.
-        "is_file" => return Ok("riven_fs_is_file"),
-        "is_dir" => return Ok("riven_fs_is_dir"),
-        "read_dir" => return Ok("riven_fs_read_dir"),
-        "metadata" => return Ok("riven_fs_metadata"),
-        "read_to_string" => return Ok("riven_fs_read_to_string"),
-        "write" => return Ok("riven_fs_write"),
-        "exists" => return Ok("riven_fs_exists"),
-        "remove_file" => return Ok("riven_fs_remove_file"),
-        "create_dir" => return Ok("riven_fs_create_dir"),
-        "create_dir_all" => return Ok("riven_fs_create_dir_all"),
-        "rename" => return Ok("riven_fs_rename"),
-        // Phase 2 stdlib (#06.5 T3): fs completeness.
-        "copy" => return Ok("riven_fs_copy"),
-        "remove_dir_all" => return Ok("riven_fs_remove_dir_all"),
-        "canonicalize" => return Ok("riven_fs_canonicalize"),
-        "write_atomic" => return Ok("riven_fs_write_atomic"),
-        "read_link" => return Ok("riven_fs_read_link"),
-        "symlink" => return Ok("riven_fs_symlink"),
+        // Top-level fs entries were here. Wave 2 (#06.8) moved all
+        // seventeen to library/std/src/fs.rvn as a `lib "riven_runtime"`
+        // block with `def NAME as "riven_fs_NAME"` aliases. The FFI
+        // alias map rewrites callees at MIR-lowering time before
+        // codegen consults this table.
         // `exit` was here — Wave 2 (#06.8) moved the C-symbol binding
         // to `lib "riven_runtime" def exit as "riven_process_exit"`
         // in library/std/src/process.rvn. The FFI alias map rewrites

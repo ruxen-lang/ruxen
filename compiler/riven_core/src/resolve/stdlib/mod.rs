@@ -195,10 +195,10 @@ pub(super) fn register_all(r: &mut Resolver) {
     // on-wire layout. Registered as a Class below so it can appear
     // in Result return annotations and dispatch via the standard
     // `{Type}_{method}` mangled-name pipeline.
-    let metadata_ty = Ty::Class {
-        name: "Metadata".to_string(),
-        generic_args: vec![],
-    };
+    // `metadata_ty` was here — used by the pre-migration `("metadata",
+    // ..., Result[Metadata, IoError])` builtin_fn entry. Wave 2 (#06.8)
+    // moved fs.metadata to library/std/src/fs.rvn where the signature
+    // is spelled directly; the alias is no longer needed.
     // `env_var_error_ty = io_error_ty.clone()` was here — used by the
     // pre-migration `("get", ..., Result[String, EnvVarError])` entry.
     // Wave 2 (#06.8) moved env.get to library/std/src/env.rvn so the
@@ -266,209 +266,13 @@ pub(super) fn register_all(r: &mut Resolver) {
         // (with empty items) and populated by
         // `fixup_bootstrapped_stdlib_modules` after the bootstrap
         // merge so `use std.env.{...}` keeps tokenising.
-        (
-            "read_to_string",
-            vec![ParamInfo {
-                name: "path".into(),
-                ty: Ty::Ref(Box::new(Ty::String)),
-                auto_assign: false,
-            }],
-            Ty::Result(Box::new(Ty::String), Box::new(io_error_ty.clone())),
-        ),
-        (
-            "write",
-            vec![
-                ParamInfo {
-                    name: "path".into(),
-                    ty: Ty::Ref(Box::new(Ty::String)),
-                    auto_assign: false,
-                },
-                ParamInfo {
-                    name: "contents".into(),
-                    ty: Ty::Ref(Box::new(Ty::String)),
-                    auto_assign: false,
-                },
-            ],
-            Ty::Result(Box::new(Ty::Unit), Box::new(io_error_ty.clone())),
-        ),
-        (
-            "exists",
-            vec![ParamInfo {
-                name: "path".into(),
-                ty: Ty::Ref(Box::new(Ty::String)),
-                auto_assign: false,
-            }],
-            Ty::Bool,
-        ),
-        // Phase 2 stdlib (#06): fs::is_file / fs::is_dir / fs::read_dir.
-        // is_file / is_dir mirror exists' Bool-on-error convention so
-        // they slot into `if` predicates without `?`. read_dir wraps
-        // the entry list in Result so the IO error is surfaced.
-        (
-            "is_file",
-            vec![ParamInfo {
-                name: "path".into(),
-                ty: Ty::Ref(Box::new(Ty::String)),
-                auto_assign: false,
-            }],
-            Ty::Bool,
-        ),
-        (
-            "is_dir",
-            vec![ParamInfo {
-                name: "path".into(),
-                ty: Ty::Ref(Box::new(Ty::String)),
-                auto_assign: false,
-            }],
-            Ty::Bool,
-        ),
-        (
-            "read_dir",
-            vec![ParamInfo {
-                name: "path".into(),
-                ty: Ty::Ref(Box::new(Ty::String)),
-                auto_assign: false,
-            }],
-            Ty::Result(
-                Box::new(Ty::Array(Box::new(Ty::String))),
-                Box::new(io_error_ty.clone()),
-            ),
-        ),
-        // Phase 2 stdlib (#06): fs::metadata. Backed by `lstat(2)`
-        // (symlinks are reported as Symlink, not followed). The
-        // returned Metadata is heap-allocated and freed via the
-        // standard Class scope-exit drop pass.
-        (
-            "metadata",
-            vec![ParamInfo {
-                name: "path".into(),
-                ty: Ty::Ref(Box::new(Ty::String)),
-                auto_assign: false,
-            }],
-            Ty::Result(Box::new(metadata_ty.clone()), Box::new(io_error_ty.clone())),
-        ),
-        (
-            "remove_file",
-            vec![ParamInfo {
-                name: "path".into(),
-                ty: Ty::Ref(Box::new(Ty::String)),
-                auto_assign: false,
-            }],
-            Ty::Result(Box::new(Ty::Unit), Box::new(io_error_ty.clone())),
-        ),
-        (
-            "create_dir",
-            vec![ParamInfo {
-                name: "path".into(),
-                ty: Ty::Ref(Box::new(Ty::String)),
-                auto_assign: false,
-            }],
-            Ty::Result(Box::new(Ty::Unit), Box::new(io_error_ty.clone())),
-        ),
-        (
-            "create_dir_all",
-            vec![ParamInfo {
-                name: "path".into(),
-                ty: Ty::Ref(Box::new(Ty::String)),
-                auto_assign: false,
-            }],
-            Ty::Result(Box::new(Ty::Unit), Box::new(io_error_ty.clone())),
-        ),
-        (
-            "rename",
-            vec![
-                ParamInfo {
-                    name: "from".into(),
-                    ty: Ty::Ref(Box::new(Ty::String)),
-                    auto_assign: false,
-                },
-                ParamInfo {
-                    name: "to".into(),
-                    ty: Ty::Ref(Box::new(Ty::String)),
-                    auto_assign: false,
-                },
-            ],
-            Ty::Result(Box::new(Ty::Unit), Box::new(io_error_ty.clone())),
-        ),
-        // Phase 2 stdlib (#06.5 T3): fs completeness — copy / recursive
-        // remove / canonicalize / atomic write / symlink helpers. Each
-        // is a thin wrapper over its libc equivalent in `runtime.c`;
-        // null inputs surface IoError.InvalidInput rather than Other.
-        (
-            "copy",
-            vec![
-                ParamInfo {
-                    name: "src".into(),
-                    ty: Ty::Ref(Box::new(Ty::String)),
-                    auto_assign: false,
-                },
-                ParamInfo {
-                    name: "dst".into(),
-                    ty: Ty::Ref(Box::new(Ty::String)),
-                    auto_assign: false,
-                },
-            ],
-            Ty::Result(Box::new(Ty::Int), Box::new(io_error_ty.clone())),
-        ),
-        (
-            "remove_dir_all",
-            vec![ParamInfo {
-                name: "path".into(),
-                ty: Ty::Ref(Box::new(Ty::String)),
-                auto_assign: false,
-            }],
-            Ty::Result(Box::new(Ty::Unit), Box::new(io_error_ty.clone())),
-        ),
-        (
-            "canonicalize",
-            vec![ParamInfo {
-                name: "path".into(),
-                ty: Ty::Ref(Box::new(Ty::String)),
-                auto_assign: false,
-            }],
-            Ty::Result(Box::new(Ty::String), Box::new(io_error_ty.clone())),
-        ),
-        (
-            "write_atomic",
-            vec![
-                ParamInfo {
-                    name: "path".into(),
-                    ty: Ty::Ref(Box::new(Ty::String)),
-                    auto_assign: false,
-                },
-                ParamInfo {
-                    name: "contents".into(),
-                    ty: Ty::Ref(Box::new(Ty::String)),
-                    auto_assign: false,
-                },
-            ],
-            Ty::Result(Box::new(Ty::Unit), Box::new(io_error_ty.clone())),
-        ),
-        (
-            "read_link",
-            vec![ParamInfo {
-                name: "path".into(),
-                ty: Ty::Ref(Box::new(Ty::String)),
-                auto_assign: false,
-            }],
-            Ty::Result(Box::new(Ty::String), Box::new(io_error_ty.clone())),
-        ),
-        (
-            "symlink",
-            vec![
-                ParamInfo {
-                    name: "target".into(),
-                    ty: Ty::Ref(Box::new(Ty::String)),
-                    auto_assign: false,
-                },
-                ParamInfo {
-                    name: "link".into(),
-                    ty: Ty::Ref(Box::new(Ty::String)),
-                    auto_assign: false,
-                },
-            ],
-            Ty::Result(Box::new(Ty::Unit), Box::new(io_error_ty.clone())),
-        ),
+        // std::fs free fns (read_to_string, write, exists, is_file,
+        // is_dir, read_dir, metadata, remove_file, create_dir,
+        // create_dir_all, rename, copy, remove_dir_all, canonicalize,
+        // write_atomic, read_link, symlink) were here. Wave 2 (#06.8)
+        // migrated all seventeen to library/std/src/fs.rvn as a
+        // `lib "riven_runtime"` block. The C symbols (`riven_fs_*`)
+        // are unchanged.
         // `exit(code) -> Never` was here. Wave 2 (#06.8) migrated to
         // library/std/src/process.rvn (`lib "riven_runtime" def exit
         // as "riven_process_exit"(code: Int) -> Never`). The FFI alias
@@ -831,28 +635,10 @@ pub(super) fn register_all(r: &mut Resolver) {
     // runtime helpers live in `runtime.c`. The Class has no
     // public fields — the wire layout is an opaque
     // implementation detail of the runtime.
-    let metadata_id = r.symbols.define(
-        "Metadata".to_string(),
-        DefKind::Class {
-            info: ClassInfo {
-                generic_params: vec![],
-                parent: None,
-                fields: vec![],
-                methods: vec![],
-                derive_traits: vec![],
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
-                const_predicates: vec![],
-                flat_heap_struct: false,
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.scopes.insert_type("Metadata".to_string(), metadata_id);
-    r.type_registry.insert("Metadata".to_string(), metadata_id);
+    // Metadata class shell was here. Wave 2 (#06.8) moved it to
+    // library/std/src/fs.rvn as `class Metadata end`. Accessor
+    // methods still flow through runtime_table mangled-name dispatch
+    // until T#21 lands.
 
     // Phase 2 stdlib (#06): `std::process::Command` builder class.
     // Constructed via `Command.new(program)`, chained through
@@ -1427,36 +1213,16 @@ pub(super) fn register_all(r: &mut Resolver) {
         Visibility::Public,
         span.clone(),
     );
+    // Wave 2 (#06.8): all seventeen fs free fns + Metadata moved to
+    // library/std/src/fs.rvn. fs_id starts with empty items;
+    // fixup_bootstrapped_stdlib_modules populates them. The `File`
+    // re-export entry (for `use std.fs.File`) is preserved via the
+    // FIXUPS row — "File" looks up in the type scope at fixup time
+    // (Rust-registered today via the unmigrated io section; .rvn
+    // once io migrates).
     let fs_id = r.symbols.define(
         "fs".to_string(),
-        DefKind::Module {
-            items: vec![
-                builtin_fn_ids["read_to_string"],
-                builtin_fn_ids["write"],
-                builtin_fn_ids["exists"],
-                builtin_fn_ids["remove_file"],
-                builtin_fn_ids["create_dir"],
-                builtin_fn_ids["create_dir_all"],
-                builtin_fn_ids["rename"],
-                // Phase 2 stdlib (#06).
-                builtin_fn_ids["is_file"],
-                builtin_fn_ids["is_dir"],
-                builtin_fn_ids["read_dir"],
-                builtin_fn_ids["metadata"],
-                // Phase 2 stdlib (#06.5 T3): fs completeness.
-                builtin_fn_ids["copy"],
-                builtin_fn_ids["remove_dir_all"],
-                builtin_fn_ids["canonicalize"],
-                builtin_fn_ids["write_atomic"],
-                builtin_fn_ids["read_link"],
-                builtin_fn_ids["symlink"],
-                // Phase 2 #06.5 T2: re-export of `File` for Rust-
-                // style `use std.fs.File` paths. The canonical
-                // definition is in `std.io` above; this entry just
-                // makes both import paths work.
-                file_id,
-            ],
-        },
+        DefKind::Module { items: vec![] },
         Visibility::Public,
         span.clone(),
     );
