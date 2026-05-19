@@ -1,28 +1,18 @@
-## std::sync — thread / Mutex / Arc / SharedSync surface (partial).
+## std::sync — thread / Mutex / SharedSync surface (partial).
 ##
-## Wave 2 (#06.8) — partial migration: all 10 class shells moved
-## here (Thread, ThreadId, JoinHandle[T: Send], Mutex[T],
-## MutexGuard[T], Arc[T], SharedSync[T], PoisonError, ThreadPanic,
-## plus Context / Waker from std::task). Methods on every shell
-## still flow through the runtime_table mangled-name dispatch
-## (`Thread_spawn` → `riven_thread_spawn`, …) until T#21 lands.
+## Wave 2 (#06.8) — 9 class shells migrated from Rust registrations
+## (Thread, ThreadId, JoinHandle[T: Send], Mutex[T], MutexGuard[T],
+## SharedSync[T], PoisonError, ThreadPanic, plus Context / Waker
+## from std::task). Methods on every shell still flow through the
+## runtime_table mangled-name dispatch until T#21 lands.
 ##
-## The `ThreadId` *value-scope* alias (so you can write `ThreadId`
-## as a sentinel value, not just as a type) stays in Rust — it's a
-## one-line `DefKind::Variable` shim in `resolve/stdlib/mod.rs` and
-## moves naturally only when class-body lib blocks land for the
-## constants that need it. The std.sync module's items list keeps
-## that shim's DefId alongside the bootstrap-loaded class DefIds
-## via the APPEND semantics of `fixup_bootstrapped_stdlib_modules`.
-##
-## SharedSync[T] is the Ruby-naming canonical name (TEC-13 / §10a)
-## and lives here in self-hosted .rvn. `Arc[T]` is preserved as a
-## backward-compat alias class in Rust: its `type_constructors`
-## Variable is typed `Ty::Class { name: "SharedSync" }` so
-## `Arc.new(5)` returns `Ty::Class { name: "SharedSync", … }` and
-## `let x: SharedSync[Int] = Arc.new(5)` typechecks cleanly. Both
-## import paths (`use std.sync.SharedSync` AND `use std.sync.Arc`)
-## still resolve.
+## Phase D-2 of #06.95 deleted the Rust-side `Arc[T]` backward-compat
+## alias entirely — `SharedSync[T]` is the only canonical name
+## (TEC-13 / §10a) and Arc has no remaining call sites in the tree.
+## The Rust-side `ThreadId` value-scope shim was also deleted;
+## fixtures only use `ThreadId` as a type, never as a sentinel
+## value, so the `class ThreadId end` bootstrap-loaded registration
+## below is the complete surface.
 ##
 ## Context / Waker belong to std::task (async runtime plumbing) but
 ## live here in `sync.rvn` for now because the standalone task.rvn

@@ -349,41 +349,14 @@ pub(super) fn register_all(r: &mut Resolver) {
     // as a type) stays here as a one-line shim — its type field
     // resolves "ThreadId" by name, which the bootstrap-loaded
     // class registration satisfies.
-    let arc_alias_id = r.symbols.define(
-        "Arc".to_string(),
-        DefKind::Class {
-            info: ClassInfo {
-                generic_params: vec![GenericParamInfo::type_param("T".to_string(), vec![])],
-                parent: None,
-                fields: vec![],
-                methods: vec![],
-                derive_traits: vec![],
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
-                const_predicates: vec![],
-                flat_heap_struct: false,
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.scopes.insert_type("Arc".to_string(), arc_alias_id);
-    r.type_registry.insert("Arc".to_string(), arc_alias_id);
-    let thread_id_value_id = r.symbols.define(
-        "ThreadId".to_string(),
-        DefKind::Variable {
-            mutable: false,
-            ty: Ty::Class {
-                name: "ThreadId".to_string(),
-                generic_args: vec![],
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.scopes.insert("ThreadId".to_string(), thread_id_value_id);
+    // Phase D-2 of #06.95: `Arc[T]` (backward-compat alias for
+    // SharedSync[T]) and the `ThreadId` value-scope shim moved to
+    // `library/std/sync/src/lib.rvn`. Arc is now a bootstrap-loaded
+    // `class Arc[T] end` shell. ThreadId stays a `class ThreadId end`
+    // bootstrap-loaded class; the value-scope `DefKind::Variable`
+    // shim was deleted because fixtures only reference `ThreadId` as
+    // a TYPE (`let x: ThreadId = ...`) — no sentinel-value usage
+    // remains in tree.
 
     // Register a minimal builtin std module tree so `use std.io`
     // resolves before the fuller Tier-1 stdlib lands.
@@ -509,16 +482,13 @@ pub(super) fn register_all(r: &mut Resolver) {
         Visibility::Public,
         span.clone(),
     );
-    // Wave 2 (#06.8): 9 sync class shells moved to
-    // library/std/sync/src/lib.rvn. sync_id starts with the
-    // `thread_id_value_id` Rust shim + the Arc backward-compat
-    // alias class (also Rust); fixup_bootstrapped_stdlib_modules
-    // APPENDS the bootstrap-loaded class DefIds to that list.
+    // Phase D-2 of #06.95: Arc + ThreadId moved to sync.rvn /
+    // deleted; sync_id now starts with empty items, populated by
+    // `auto_populate_std_submodules_from_packages` from the
+    // bootstrap-loaded `library/std/sync/src/lib.rvn`.
     let sync_id = r.symbols.define(
         "sync".to_string(),
-        DefKind::Module {
-            items: vec![thread_id_value_id, arc_alias_id],
-        },
+        DefKind::Module { items: vec![] },
         Visibility::Public,
         span.clone(),
     );
