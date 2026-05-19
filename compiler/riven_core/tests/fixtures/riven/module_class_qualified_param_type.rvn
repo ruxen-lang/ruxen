@@ -1,0 +1,18 @@
+# #06.93 Phase 1: an inner class declared inside `module Outer`
+# must be reachable at type position via the qualified path
+# `Outer.Inner`. Without Phase 1's qualified-key insertion into
+# `type_registry`, the parameter type `Outer.Inner` below emits
+# `unknown type` and resolution fails.
+#
+# Param-type pattern (rather than a return-type with `panic`) keeps
+# the fixture's body trivial so the test exercises the type-position
+# resolver path and nothing else.
+
+module Outer
+  class Inner
+  end
+end
+
+def take_inner(_x: Outer.Inner) -> Int
+  0
+end

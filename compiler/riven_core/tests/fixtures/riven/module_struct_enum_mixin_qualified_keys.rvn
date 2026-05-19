@@ -1,0 +1,35 @@
+# #06.93 Phase 1: every type-level DefKind (Class, Struct, Enum,
+# Mixin) inside a module gets a qualified key, not just classes.
+# Mixin is exercised here even though it's not directly usable in
+# a function signature — the lookup site that matters is
+# `resolve_type_path` joining segments and consulting
+# `type_registry`, which works the same for every type-level kind.
+
+module Stuff
+  class Klass
+  end
+
+  struct Sct
+    x: Int
+  end
+
+  enum En
+    A
+    B
+  end
+
+  mixin Mix
+  end
+end
+
+def take_klass(_k: Stuff.Klass) -> Int
+  0
+end
+
+def take_sct(_s: Stuff.Sct) -> Int
+  0
+end
+
+def take_en(_e: Stuff.En) -> Int
+  0
+end

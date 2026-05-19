@@ -1,0 +1,23 @@
+# #06.93 Phase 1: additive guarantee. Today, `class Inner` inside
+# `module Outer` ALSO inserts the un-qualified `Inner` key into the
+# top-level type scope (existing behaviour). Phase 1 adds the
+# qualified `Outer.Inner` key on top — it does NOT remove the
+# un-qualified one. So at the top level, BOTH `Inner` and
+# `Outer.Inner` resolve to the same DefId.
+#
+# Phase 4 will change this to inner-first shadowing semantics, but
+# until then we pin the additive behaviour so a regression catches
+# accidental removal of either entry.
+
+module Outer
+  class Inner
+  end
+end
+
+def take_inner_unqualified(_x: Inner) -> Int
+  0
+end
+
+def take_inner_qualified(_x: Outer.Inner) -> Int
+  0
+end

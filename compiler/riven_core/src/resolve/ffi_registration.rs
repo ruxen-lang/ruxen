@@ -195,10 +195,41 @@ impl Resolver {
 
     // ─── Pass 1: Forward Declaration of Types ───────────────────────
 
+    /// #06.93 Phase 1: register a type's name into the un-qualified
+    /// type scope (un-changed behaviour) AND, when nested inside one
+    /// or more `module` blocks, into `type_registry` under the
+    /// dotted qualified key (e.g. `Outer.Inner` for `module Outer {
+    /// class Inner }`). The qualified entry enables type-position
+    /// lookups like `let x: Outer.Inner = ...` to resolve. Both
+    /// entries point at the same `DefId`. Inner-first scope
+    /// shadowing is Phase 4's job; Phase 1 is purely additive.
+    fn insert_type_qualified(&mut self, name: &str, id: DefId, module_path: &[String]) {
+        self.scopes.insert_type(name.to_string(), id);
+        self.type_registry.insert(name.to_string(), id);
+        if !module_path.is_empty() {
+            let qualified = format!("{}.{}", module_path.join("."), name);
+            self.type_registry.insert(qualified, id);
+        }
+    }
+
+    /// Public entry into Pass 1 type registration. Top-level call
+    /// sites in the bootstrap merge and the user-program driver pass
+    /// through here with an empty module path; the internal
+    /// `_in` variant carries the accumulated module-path stack for
+    /// nested `module Outer { module Inner { ... } }` registration.
     pub(super) fn register_top_level_type_with_ffi(
         &mut self,
         item: &ast::TopLevelItem,
         ffi_libs: &mut Vec<HirFfiLib>,
+    ) {
+        self.register_top_level_type_with_ffi_in(item, ffi_libs, &[]);
+    }
+
+    pub(super) fn register_top_level_type_with_ffi_in(
+        &mut self,
+        item: &ast::TopLevelItem,
+        ffi_libs: &mut Vec<HirFfiLib>,
+        module_path: &[String],
     ) {
         let _span_zero = Span {
             start: 0,
@@ -305,8 +336,7 @@ impl Resolver {
                         Visibility::Public,
                         class.span.clone(),
                     );
-                    self.scopes.insert_type(class.name.clone(), new_id);
-                    self.type_registry.insert(class.name.clone(), new_id);
+                    self.insert_type_qualified(&class.name, new_id, module_path);
                     new_id
                 };
 
@@ -399,8 +429,7 @@ impl Resolver {
                     Visibility::Public,
                     s.span.clone(),
                 );
-                self.scopes.insert_type(s.name.clone(), id);
-                self.type_registry.insert(s.name.clone(), id);
+                self.insert_type_qualified(&s.name, id, module_path);
             }
             ast::TopLevelItem::Enum(e) => {
                 // #06.8 T0c: duplicate `layout tagged` enum names in
@@ -441,8 +470,7 @@ impl Resolver {
                     Visibility::Public,
                     e.span.clone(),
                 );
-                self.scopes.insert_type(e.name.clone(), id);
-                self.type_registry.insert(e.name.clone(), id);
+                self.insert_type_qualified(&e.name, id, module_path);
 
                 // Push a scope for the enum's own generic params so that
                 // variant field types (e.g. `Some(T)` in
@@ -576,8 +604,7 @@ impl Resolver {
                     Visibility::Public,
                     t.span.clone(),
                 );
-                self.scopes.insert_type(t.name.clone(), id);
-                self.type_registry.insert(t.name.clone(), id);
+                self.insert_type_qualified(&t.name, id, module_path);
 
                 // #06.8 Phase 3b: register mixin-body `lib` FFI decls as
                 // class methods on the mixin (parallel to class-body lib
@@ -613,8 +640,7 @@ impl Resolver {
                     Visibility::Public,
                     ta.span.clone(),
                 );
-                self.scopes.insert_type(ta.name.clone(), id);
-                self.type_registry.insert(ta.name.clone(), id);
+                self.insert_type_qualified(&ta.name, id, module_path);
             }
             ast::TopLevelItem::Newtype(nt) => {
                 let inner = self.resolve_type_expr(&nt.inner_type);
@@ -624,21 +650,26 @@ impl Resolver {
                     Visibility::Public,
                     nt.span.clone(),
                 );
-                self.scopes.insert_type(nt.name.clone(), id);
-                self.type_registry.insert(nt.name.clone(), id);
+                self.insert_type_qualified(&nt.name, id, module_path);
             }
             ast::TopLevelItem::Module(m) => {
-                // Register module type name, then recurse
+                // Register module type name, then recurse with an
+                // extended module-path stack so the sub-items'
+                // qualified-key registration sees the full prefix
+                // (e.g. `module A { module B { class C } }` →
+                // type_registry["A.B.C"] = C's DefId).
                 let id = self.symbols.define(
                     m.name.clone(),
                     DefKind::Module { items: vec![] },
                     Visibility::Public,
                     m.span.clone(),
                 );
-                self.scopes.insert_type(m.name.clone(), id);
-                self.type_registry.insert(m.name.clone(), id);
+                self.insert_type_qualified(&m.name, id, module_path);
+
+                let mut nested_path: Vec<String> = module_path.to_vec();
+                nested_path.push(m.name.clone());
                 for sub_item in &m.items {
-                    self.register_top_level_type_with_ffi(sub_item, ffi_libs);
+                    self.register_top_level_type_with_ffi_in(sub_item, ffi_libs, &nested_path);
                 }
             }
             ast::TopLevelItem::Function(f) => {
