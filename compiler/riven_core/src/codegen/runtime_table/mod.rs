@@ -19,16 +19,12 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
     // constructs (closure invocation, super-call, &str/&str identity)
     // rather than method calls that pretend to do work.
     match name {
-        // Top-level I/O / printing.
-        "puts" => return Ok("riven_puts"),
-        "eputs" => return Ok("riven_eputs"),
-        "print" => return Ok("riven_print"),
-        "println" => return Ok("riven_puts"),
-        "eprintln" => return Ok("riven_eputs"),
-        "read_line" => return Ok("riven_read_line"),
-        "stdin" => return Ok("riven_stdin"),
-        "stdout" => return Ok("riven_stdout"),
-        "stderr" => return Ok("riven_stderr"),
+        // Top-level I/O / printing entries were here. Wave 2 (#06.8)
+        // moved puts / eputs / print / println / eprintln / read_line
+        // / stdin / stdout / stderr to library/std/src/io.rvn as a
+        // `lib "riven_runtime"` block. The println / eprintln aliases
+        // (sharing the riven_puts / riven_eputs C symbols) are
+        // preserved verbatim in the .rvn lib block.
         // Top-level env entries were here — Wave 2 (#06.8) moved
         // args / get / vars / current_dir to library/std/src/env.rvn
         // as `lib "riven_runtime" def NAME as "riven_env_..."` aliases.

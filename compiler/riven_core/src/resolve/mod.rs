@@ -380,6 +380,34 @@ impl Resolver {
                     "File",
                 ],
             ),
+            // Wave 2 — library/std/src/io.rvn (9 free fns + 7 class
+            // shells; IoError / IoErrorKind / SeekFrom stay in Rust
+            // for now — they have tag-stability pin tests that need
+            // retargeting, separate commit).
+            (
+                "io",
+                &[
+                    "puts",
+                    "eputs",
+                    "print",
+                    "println",
+                    "eprintln",
+                    "read_line",
+                    "stdin",
+                    "stdout",
+                    "stderr",
+                    "IoError",
+                    "IoErrorKind",
+                    "Stdin",
+                    "Stdout",
+                    "Stderr",
+                    "File",
+                    "OpenOptions",
+                    "SeekFrom",
+                    "BufReader",
+                    "BufWriter",
+                ],
+            ),
         ];
 
         let Some(std_id) = self.scopes.lookup_type("std") else {

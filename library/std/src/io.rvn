@@ -1,0 +1,53 @@
+## std::io — stdio + File + buffered IO surface (partial migration).
+##
+## Wave 2 (#06.8) — partial migration:
+## - 9 free fns (puts, eputs, print, println, eprintln, read_line,
+##   stdin, stdout, stderr) fully migrated via the lib block below.
+## - 7 class shells (Stdin, Stdout, Stderr, File, OpenOptions,
+##   BufReader, BufWriter) migrated as bare `class Foo end` bodies;
+##   methods still flow through the static-ctor + runtime_table
+##   dispatch until T#20 / T#21 land.
+##
+## Intentionally still in Rust (`compiler/riven_core/src/resolve/stdlib/mod.rs`):
+## - IoError tagged enum + IoErrorKind sibling enum (their variant-
+##   tag stability is pinned by io_error_tag_stability — migrating
+##   these requires retargeting the pin test, same as the Shutdown
+##   move from net's migration).
+## - SeekFrom struct-variant enum (pinned by file_class_layout_stability).
+##
+## println shares the riven_puts C symbol with puts (same trailing-
+## newline behaviour); eprintln shares riven_eputs with eputs. The
+## aliases here mirror that runtime_table convention.
+
+class Stdin
+end
+
+class Stdout
+end
+
+class Stderr
+end
+
+class File
+end
+
+class OpenOptions
+end
+
+class BufReader[R]
+end
+
+class BufWriter[W]
+end
+
+lib "riven_runtime"
+  def puts as "riven_puts"(value: &String) -> ()
+  def eputs as "riven_eputs"(value: &String) -> ()
+  def print as "riven_print"(value: &String) -> ()
+  def println as "riven_puts"(value: &String) -> ()
+  def eprintln as "riven_eputs"(value: &String) -> ()
+  def read_line as "riven_read_line"() -> Result[String, IoError]
+  def stdin as "riven_stdin"() -> Stdin
+  def stdout as "riven_stdout"() -> Stdout
+  def stderr as "riven_stderr"() -> Stderr
+end

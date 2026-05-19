@@ -172,22 +172,17 @@ pub(super) fn register_all(r: &mut Resolver) {
     // in sync. Mismatching the two (Ty::Class vs DefKind::Enum)
     // breaks `enum_with_derive_trait` lookups and the codegen
     // enum-tag dispatch.
-    let io_error_ty = Ty::Enum {
-        name: "IoError".to_string(),
-        generic_args: vec![],
-    };
-    let stdin_ty = Ty::Class {
-        name: "Stdin".to_string(),
-        generic_args: vec![],
-    };
-    let stdout_ty = Ty::Class {
-        name: "Stdout".to_string(),
-        generic_args: vec![],
-    };
-    let stderr_ty = Ty::Class {
-        name: "Stderr".to_string(),
-        generic_args: vec![],
-    };
+    // `io_error_ty` alias was here — used by the pre-migration io /
+    // env / fs / process / rand / time builtin_fn entries that
+    // returned `Result[_, IoError]`. Wave 2 (#06.8) moved all those
+    // entries into their respective .rvn files where the type is
+    // spelled directly. The alias is gone; IoError stays a Ty::Enum
+    // through the type registry like every other enum.
+    // stdin_ty / stdout_ty / stderr_ty aliases were here — used by
+    // the pre-migration `("stdin", ..., Stdin)` etc. builtin_fn
+    // entries. Wave 2 (#06.8) moved the stdin / stdout / stderr free
+    // fns to library/std/src/io.rvn where the return types are spelled
+    // directly; the aliases are no longer needed.
     // Phase 2 stdlib (#06): `fs::metadata` returns
     // `Result[Metadata, IoError]`. `Metadata` is a flat heap struct
     // exposing `len`/`modified`/`is_file`/`is_dir`/`is_symlink`
@@ -206,59 +201,12 @@ pub(super) fn register_all(r: &mut Resolver) {
     // out as `Result[String, IoError]` directly.
 
     let builtin_fns = [
-        (
-            "puts",
-            vec![ParamInfo {
-                name: "value".into(),
-                ty: Ty::Ref(Box::new(Ty::String)),
-                auto_assign: false,
-            }],
-            Ty::Unit,
-        ),
-        (
-            "eputs",
-            vec![ParamInfo {
-                name: "value".into(),
-                ty: Ty::Ref(Box::new(Ty::String)),
-                auto_assign: false,
-            }],
-            Ty::Unit,
-        ),
-        (
-            "print",
-            vec![ParamInfo {
-                name: "value".into(),
-                ty: Ty::Ref(Box::new(Ty::String)),
-                auto_assign: false,
-            }],
-            Ty::Unit,
-        ),
-        (
-            "println",
-            vec![ParamInfo {
-                name: "value".into(),
-                ty: Ty::Ref(Box::new(Ty::String)),
-                auto_assign: false,
-            }],
-            Ty::Unit,
-        ),
-        (
-            "eprintln",
-            vec![ParamInfo {
-                name: "value".into(),
-                ty: Ty::Ref(Box::new(Ty::String)),
-                auto_assign: false,
-            }],
-            Ty::Unit,
-        ),
-        (
-            "read_line",
-            vec![],
-            Ty::Result(Box::new(Ty::String), Box::new(io_error_ty.clone())),
-        ),
-        ("stdin", vec![], stdin_ty.clone()),
-        ("stdout", vec![], stdout_ty.clone()),
-        ("stderr", vec![], stderr_ty.clone()),
+        // std::io free fns (puts, eputs, print, println, eprintln,
+        // read_line, stdin, stdout, stderr) were here. Wave 2 (#06.8)
+        // migrated all nine to library/std/src/io.rvn as a
+        // `lib "riven_runtime"` block. The println / eprintln aliases
+        // (sharing the riven_puts / riven_eputs C symbols with
+        // puts / eputs) are preserved verbatim in the .rvn lib block.
         // std::env entries (args, get, vars, current_dir) were here.
         //
         // Wave 2 (#06.8): migrated to `library/std/src/env.rvn`.
@@ -563,69 +511,11 @@ pub(super) fn register_all(r: &mut Resolver) {
             info.variants = io_error_kind_variant_ids;
         }
     }
-    let stdin_id = r.symbols.define(
-        "Stdin".to_string(),
-        DefKind::Class {
-            info: ClassInfo {
-                generic_params: vec![],
-                parent: None,
-                fields: vec![],
-                methods: vec![],
-                derive_traits: vec![],
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
-                const_predicates: vec![],
-                flat_heap_struct: false,
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.type_registry.insert("Stdin".to_string(), stdin_id);
-    let stdout_id = r.symbols.define(
-        "Stdout".to_string(),
-        DefKind::Class {
-            info: ClassInfo {
-                generic_params: vec![],
-                parent: None,
-                fields: vec![],
-                methods: vec![],
-                derive_traits: vec![],
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
-                const_predicates: vec![],
-                flat_heap_struct: false,
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.type_registry.insert("Stdout".to_string(), stdout_id);
-    let stderr_id = r.symbols.define(
-        "Stderr".to_string(),
-        DefKind::Class {
-            info: ClassInfo {
-                generic_params: vec![],
-                parent: None,
-                fields: vec![],
-                methods: vec![],
-                derive_traits: vec![],
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
-                const_predicates: vec![],
-                flat_heap_struct: false,
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.type_registry.insert("Stderr".to_string(), stderr_id);
+    // Stdin / Stdout / Stderr class shells were here. Wave 2 (#06.8)
+    // moved them to library/std/src/io.rvn. The bootstrap merge
+    // inserts each into both the type scope and type registry, which
+    // is permissively MORE than the pre-migration registrations did
+    // (those only inserted into type_registry).
 
     // Phase 2 stdlib (#06): `std::fs::Metadata` is a flat heap
     // struct returned by `fs::metadata(path)`. Accessor methods
@@ -670,58 +560,9 @@ pub(super) fn register_all(r: &mut Resolver) {
     // see mir/lower/collect.rs::collect_user_drop_classes for the
     // user_drop_classes registration. Wire layout (8-byte
     // {fd:i32, closed:i32}) documented in runtime.c at `RivenFile`.
-    let file_id = r.symbols.define(
-        "File".to_string(),
-        DefKind::Class {
-            info: ClassInfo {
-                generic_params: vec![],
-                parent: None,
-                fields: vec![],
-                methods: vec![],
-                derive_traits: vec![],
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
-                const_predicates: vec![],
-                flat_heap_struct: false,
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.scopes.insert_type("File".to_string(), file_id);
-    r.type_registry.insert("File".to_string(), file_id);
-
-    // Phase 2 #06.5 T2: `std::io::OpenOptions` — builder for
-    // `File.open_options(path, opts)`. POD 8-byte struct (no
-    // inner heap), so the standard `riven_dealloc` at scope exit
-    // is the entire drop story. Builder methods mutate-in-place
-    // and return the same pointer (mirrors Command.arg/...).
-    let open_options_id = r.symbols.define(
-        "OpenOptions".to_string(),
-        DefKind::Class {
-            info: ClassInfo {
-                generic_params: vec![],
-                parent: None,
-                fields: vec![],
-                methods: vec![],
-                derive_traits: vec![],
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
-                const_predicates: vec![],
-                flat_heap_struct: false,
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.scopes
-        .insert_type("OpenOptions".to_string(), open_options_id);
-    r.type_registry
-        .insert("OpenOptions".to_string(), open_options_id);
+    // File and OpenOptions class shells were here. Wave 2 (#06.8)
+    // moved both to library/std/src/io.rvn. Methods still flow
+    // through the static-ctor + runtime_table dispatch until T#20.
 
     // Phase 2 #06.5 T2: `SeekFrom` — three single-field struct
     // variants used as the second argument of `File.seek`. Each
@@ -795,53 +636,13 @@ pub(super) fn register_all(r: &mut Resolver) {
     // (collect.rs::collect_user_drop_classes) emits `BufReader_drop +
     // riven_dealloc` at scope exit, freeing the 32-byte spine and
     // (for BufWriter) auto-flushing before close.
-    let buf_reader_id = r.symbols.define(
-        "BufReader".to_string(),
-        DefKind::Class {
-            info: ClassInfo {
-                generic_params: vec![GenericParamInfo::type_param("R".to_string(), vec![])],
-                parent: None,
-                fields: vec![],
-                methods: vec![],
-                derive_traits: vec![],
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
-                const_predicates: vec![],
-                flat_heap_struct: false,
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.scopes.insert_type("BufReader".to_string(), buf_reader_id);
-    r.type_registry
-        .insert("BufReader".to_string(), buf_reader_id);
-
-    let buf_writer_id = r.symbols.define(
-        "BufWriter".to_string(),
-        DefKind::Class {
-            info: ClassInfo {
-                generic_params: vec![GenericParamInfo::type_param("W".to_string(), vec![])],
-                parent: None,
-                fields: vec![],
-                methods: vec![],
-                derive_traits: vec![],
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
-                const_predicates: vec![],
-                flat_heap_struct: false,
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.scopes.insert_type("BufWriter".to_string(), buf_writer_id);
-    r.type_registry
-        .insert("BufWriter".to_string(), buf_writer_id);
+    // BufReader[R] / BufWriter[W] class shells were here. Wave 2
+    // (#06.8) moved both to library/std/src/io.rvn as
+    // `class BufReader[R] end` / `class BufWriter[W] end`. The
+    // static-ctor fast path's inner-type suffix-pick
+    // (`_new_file` vs `_new_tcp`) still fires from
+    // mir/lower/expr/method_call.rs — that part of the dispatch will
+    // move when T#20 + T#21 land.
 
     // Shutdown enum was here (Read=0, Write=1, Both=2) — Wave 2
     // (#06.8) migrated to library/std/src/net.rvn. The variant order
@@ -1156,50 +957,16 @@ pub(super) fn register_all(r: &mut Resolver) {
 
     // Register a minimal builtin std module tree so `use std.io`
     // resolves before the fuller Tier-1 stdlib lands.
+    // Wave 2 (#06.8): 9 io free fns + 7 io class shells (Stdin,
+    // Stdout, Stderr, File, OpenOptions, BufReader, BufWriter) moved
+    // to library/std/src/io.rvn. IoError / IoErrorKind / SeekFrom
+    // stay in Rust for now (each is a tagged enum with a pinned
+    // tag-stability contract — separate migration commit).
+    // io_id starts with empty items; fixup_bootstrapped_stdlib_modules
+    // populates them.
     let io_id = r.symbols.define(
         "io".to_string(),
-        DefKind::Module {
-            items: vec![
-                builtin_fn_ids["puts"],
-                builtin_fn_ids["eputs"],
-                builtin_fn_ids["print"],
-                builtin_fn_ids["println"],
-                builtin_fn_ids["eprintln"],
-                builtin_fn_ids["read_line"],
-                builtin_fn_ids["stdin"],
-                builtin_fn_ids["stdout"],
-                builtin_fn_ids["stderr"],
-                io_error_id,
-                // T1 follow-up: `IoErrorKind` was registered as a
-                // type but never added to the `std.io` module's
-                // items, so `use std.io.IoErrorKind` failed at
-                // resolve. Wired here as part of T2 because the
-                // File diagnostic tests are the first consumer of
-                // the import. Safe additive change — IoErrorKind
-                // already existed as a `type_registry` entry, this
-                // just makes module-path resolution find it.
-                io_error_kind_id,
-                stdin_id,
-                stdout_id,
-                stderr_id,
-                // Phase 2 #06.5 T2: `File` / `OpenOptions` /
-                // `SeekFrom` are importable via `use std.io.{...}`.
-                // `File` is intentionally re-exported from
-                // `std.fs` below too (Rust ships it as
-                // `std::fs::File`; we keep both paths so prior
-                // examples don't break). `OpenOptions` and
-                // `SeekFrom` live only under `std.io`.
-                file_id,
-                open_options_id,
-                seek_from_id,
-                // Phase 2 #06.5 T6: BufReader[R] / BufWriter[W] —
-                // generic buffered wrappers over File + TcpStream.
-                // Importable via `use std.io.BufReader` /
-                // `use std.io.BufWriter`.
-                buf_reader_id,
-                buf_writer_id,
-            ],
-        },
+        DefKind::Module { items: vec![] },
         Visibility::Public,
         span.clone(),
     );
