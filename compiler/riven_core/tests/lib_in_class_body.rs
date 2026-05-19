@@ -2,7 +2,7 @@
 //! and mixin bodies (previously top-level only).
 //!
 //! Stdlib self-hosting needs the class-body form so e.g.
-//! `library/std/src/io.rvn` can write:
+//! `library/std/io/src/lib.rvn` can write:
 //!
 //! ```riven
 //! class File

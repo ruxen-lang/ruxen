@@ -1,0 +1,4 @@
+[package]
+name = "std-core"
+version = "0.1.0"
+description = "Riven stdlib core — primitive trait surface + low-level C runtime"

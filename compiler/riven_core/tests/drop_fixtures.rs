@@ -84,7 +84,7 @@ fn expand_unity_includes(aggregator: &str, runtime_dir: &Path) -> String {
 }
 
 fn write_tracking_runtime(target: &PathBuf) {
-    let runtime_dir = workspace_root().join("library/runtime");
+    let runtime_dir = workspace_root().join("library/std/core/runtime");
     let runtime_c = runtime_dir.join("runtime.c");
     let aggregator = std::fs::read_to_string(&runtime_c)
         .unwrap_or_else(|e| panic!("read {}: {}", runtime_c.display(), e));

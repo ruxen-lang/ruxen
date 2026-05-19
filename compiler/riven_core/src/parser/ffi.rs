@@ -93,7 +93,7 @@ impl Parser {
     /// When the `as "..."` clause is present, the Riven-side name (`name`)
     /// is the user-facing identifier — what call sites and `use` statements
     /// reference — while the string literal is the verbatim C symbol that
-    /// the linker resolves against `library/runtime/*.c`. This is the
+    /// the linker resolves against `library/std/<pkg>/runtime/*.c`. This is the
     /// per-decl rename surface that stdlib self-hosting (#06.8) needs so
     /// that a Riven method like `File.open` can bind to `riven_file_open`
     /// without forcing the Riven identifier to be `riven_file_open` too.

@@ -31,7 +31,7 @@ pub struct TypeCheckResult {
 /// Run the full type checking pipeline on a parsed AST program.
 ///
 /// Pipeline:
-/// 1. Stdlib bootstrap load (parses `library/std/src/*.rvn` once per call)
+/// 1. Stdlib bootstrap load (parses `library/std/<pkg>/src/lib.rvn` once per call)
 /// 2. Name resolution (AST → HIR with DefIds, unresolved types)
 /// 3. Trait/impl collection
 /// 4. Type inference (resolve all Infer types)

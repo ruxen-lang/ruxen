@@ -1,7 +1,7 @@
 //! Pin test for the `Shutdown` enum variant-tag stability contract
 //! introduced in Phase 2 #06.5 T5.
 //!
-//! The runtime (`library/runtime/net/tcp.c`) and the resolver
+//! The runtime (`library/std/net/runtime/tcp.c`) and the resolver
 //! (`compiler/riven_core/src/resolve/stdlib/mod.rs`) co-document the
 //! tag indices for each `Shutdown` variant. `riven_tcp_stream_shutdown`
 //! reads the tag at offset 0 of the value pointer and switches on it
@@ -28,12 +28,12 @@ fn read(path: &str) -> String {
 fn shutdown_tag_values_match_runtime_and_stdlib_source() {
     // Wave 2 (#06.8) moved the Shutdown enum from
     // `compiler/riven_core/src/resolve/stdlib/mod.rs` to the
-    // self-hosted `library/std/src/net.rvn`. The variant-tag
+    // self-hosted `library/std/net/src/lib.rvn`. The variant-tag
     // contract against `RIVEN_SHUTDOWN_*` in
-    // `library/runtime/net/tcp.c` is unchanged — only the
+    // `library/std/net/runtime/tcp.c` is unchanged — only the
     // *resolver-side scan target* moved.
-    let runtime = read("library/runtime/net/tcp.c");
-    let stdlib_source = read("library/std/src/net.rvn");
+    let runtime = read("library/std/net/runtime/tcp.c");
+    let stdlib_source = read("library/std/net/src/lib.rvn");
 
     // Runtime side: scan for `#define RIVEN_SHUTDOWN_<NAME>  <tag>`.
     let mut runtime_tags: Vec<(String, usize)> = Vec::new();
@@ -57,7 +57,7 @@ fn shutdown_tag_values_match_runtime_and_stdlib_source() {
     }
 
     // Stdlib-source side: enum variants are listed in declaration
-    // order under `enum Shutdown ... end` in net.rvn. The variant's
+    // order under `enum Shutdown ... end` in net/src/lib.rvn. The variant's
     // tag is its zero-based position in that list — Riven's
     // VariantKind::Unit enum lowering preserves source order. We
     // pull each non-comment, non-blank line between the header and
@@ -106,7 +106,7 @@ fn shutdown_tag_values_match_runtime_and_stdlib_source() {
     assert_eq!(
         stdlib_tags.len(),
         3,
-        "expected 3 Shutdown variants in library/std/src/net.rvn; got {:?}",
+        "expected 3 Shutdown variants in library/std/net/src/lib.rvn; got {:?}",
         stdlib_tags
     );
     assert_eq!(
@@ -124,7 +124,7 @@ fn shutdown_tag_values_match_runtime_and_stdlib_source() {
 
 #[test]
 fn riven_tcp_listener_static_assert_is_eight_bytes() {
-    let runtime = read("library/runtime/net/tcp.c");
+    let runtime = read("library/std/net/runtime/tcp.c");
     assert!(
         runtime.contains("_Static_assert(sizeof(RivenTcpListener) == 8"),
         "expected `_Static_assert(sizeof(RivenTcpListener) == 8 ...)` in tcp.c — \
@@ -135,7 +135,7 @@ fn riven_tcp_listener_static_assert_is_eight_bytes() {
 
 #[test]
 fn riven_tcp_stream_static_assert_is_eight_bytes() {
-    let runtime = read("library/runtime/net/tcp.c");
+    let runtime = read("library/std/net/runtime/tcp.c");
     assert!(
         runtime.contains("_Static_assert(sizeof(RivenTcpStream) == 8"),
         "expected `_Static_assert(sizeof(RivenTcpStream) == 8 ...)` in tcp.c"

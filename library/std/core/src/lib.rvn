@@ -1,0 +1,3 @@
+# core: primitive mixin declarations shared by every stdlib package.
+# Phase B: empty surface — primitive types still live in resolve/builtins.
+# Phase D moves Displayable/Error/Comparable mixin declarations here.

@@ -22,7 +22,7 @@ impl Resolver {
     /// Run name resolution with stdlib bootstrap programs merged into
     /// the prelude. `bootstrap_programs` are typically the output of
     /// [`crate::resolve::bootstrap::run_bootstrap`] — each one is a
-    /// parsed `.rvn` file from `library/std/src/`.
+    /// parsed `.rvn` file from `library/std/<pkg>/src/lib.rvn`.
     ///
     /// Bootstrap programs are dispatched through the same Pass-1
     /// forward-declaration logic as user code (see
@@ -220,9 +220,9 @@ impl Resolver {
         // fmt case). This keeps a single table covering both shapes
         // without doubling the data structure.
         const FIXUPS: &[(&str, &[&str])] = &[
-            // Wave 2 — library/std/src/rand.rvn
+            // Wave 2 — library/std/rand/src/lib.rvn
             ("rand", &["random_bytes", "random_u64", "random_fill"]),
-            // Wave 2 — library/std/src/path.rvn
+            // Wave 2 — library/std/path/src/lib.rvn
             (
                 "path",
                 &[
@@ -233,24 +233,24 @@ impl Resolver {
                     "path_is_absolute",
                 ],
             ),
-            // Wave 2 — library/std/src/env.rvn
+            // Wave 2 — library/std/env/src/lib.rvn
             ("env", &["args", "get", "vars", "current_dir"]),
-            // Wave 2 — library/std/src/fmt.rvn (mixed mixins + classes —
+            // Wave 2 — library/std/fmt/src/lib.rvn (mixed mixins + classes —
             // each name resolves through the type-scope fallback).
             ("fmt", &["Display", "Debug", "Formatter", "FmtError"]),
-            // Wave 2 — library/std/src/net.rvn (class shells +
+            // Wave 2 — library/std/net/src/lib.rvn (class shells +
             // Shutdown enum; methods still flow through the static-ctor
             // + runtime_table dispatch until T#20 lands).
             ("net", &["TcpListener", "TcpStream", "Shutdown"]),
-            // Wave 2 — library/std/src/process.rvn (`exit` free fn +
+            // Wave 2 — library/std/process/src/lib.rvn (`exit` free fn +
             // Command / Output / ExitStatus class shells; class methods
             // still go through static-ctor + runtime_table until T#20).
             ("process", &["exit", "Command", "Output", "ExitStatus"]),
-            // Wave 2 — library/std/src/time.rvn (`unix_ns` free fn +
+            // Wave 2 — library/std/time/src/lib.rvn (`unix_ns` free fn +
             // Duration / Instant class shells; class methods still go
             // through static-ctor + runtime_table until T#20).
             ("time", &["unix_ns", "Duration", "Instant"]),
-            // Wave 2 — library/std/src/fs.rvn (17 fs free fns +
+            // Wave 2 — library/std/fs/src/lib.rvn (17 fs free fns +
             // Metadata class shell; also re-exports File for the
             // `use std.fs.File` import alias).
             (
@@ -277,7 +277,7 @@ impl Resolver {
                     "File",
                 ],
             ),
-            // Wave 2 — library/std/src/io.rvn (9 free fns + 7 class
+            // Wave 2 — library/std/io/src/lib.rvn (9 free fns + 7 class
             // shells + IoError / IoErrorKind / SeekFrom enums).
             (
                 "io",
@@ -303,7 +303,7 @@ impl Resolver {
                     "BufWriter",
                 ],
             ),
-            // Wave 2 — library/std/src/sync.rvn (9 class shells:
+            // Wave 2 — library/std/sync/src/lib.rvn (9 class shells:
             // Thread, ThreadId, JoinHandle, Mutex, MutexGuard,
             // SharedSync, PoisonError, ThreadPanic + Context /
             // Waker from std::task). `SharedSync` is the Ruby-

@@ -988,7 +988,7 @@ impl Parser {
                 }
                 // ── #06.8 follow-up: in-body `lib "X" ... end` block ──
                 // Stdlib self-hosting needs class-scoped FFI bindings so
-                // e.g. `library/std/src/io.rvn` can write
+                // e.g. `library/std/io/src/lib.rvn` can write
                 // `class File ... lib "riven_runtime" def open as "..." end end`.
                 // The block reuses the top-level `parse_lib_decl`; the
                 // resolver wiring that surfaces each `FfiFunction` as

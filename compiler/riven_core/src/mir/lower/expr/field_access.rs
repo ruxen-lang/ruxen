@@ -191,7 +191,7 @@ impl<'a> Lowerer<'a> {
                         // through `lower_method_call`. Route through
                         // `resolve_ffi_alias_callee` so the migrated
                         // `class Array do lib def self.new ... end end`
-                        // entries in `library/std/src/array.rvn` reach
+                        // entries in `library/std/array/src/lib.rvn` reach
                         // their C symbols. Try the legacy
                         // `runtime_base` first (`Vec_new` for
                         // backward-compat with any sources still in

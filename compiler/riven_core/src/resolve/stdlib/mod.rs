@@ -75,19 +75,19 @@ pub(super) fn register_all(r: &mut Resolver) {
         ("Displayable", vec!["to_display"]),
         ("Error", vec!["message"]),
         ("Comparable", vec!["compare"]),
-        // ("Hashable", vec!["hash_code"]) — migrated to library/std/src/hash.rvn (#06.8 Wave 2).
+        // ("Hashable", vec!["hash_code"]) — migrated to library/std/hash/src/lib.rvn (#06.8 Wave 2).
         // The `Hash → Hashable` deprecation alias is re-established
         // by Resolver::fixup_bootstrapped_stdlib_modules after the
         // bootstrap merge.
         ("Iterable", vec![]),
-        // ("Iterator", vec!["next"]) — migrated to library/std/src/iter.rvn (#06.8 Wave 2).
-        // ("FromIterator", vec!["from_iter"]) — migrated to library/std/src/iter.rvn (#06.8 Wave 2).
+        // ("Iterator", vec!["next"]) — migrated to library/std/iter/src/lib.rvn (#06.8 Wave 2).
+        // ("FromIterator", vec!["from_iter"]) — migrated to library/std/iter/src/lib.rvn (#06.8 Wave 2).
         ("Copy", vec![]),
         ("Clone", vec!["clone"]),
         ("Send", vec![]),
         ("Sync", vec![]),
         // Display / Debug were here. Wave 2 (#06.8) moved both to
-        // library/std/src/fmt.rvn. The fmt_id Module's items list
+        // library/std/fmt/src/lib.rvn. The fmt_id Module's items list
         // (formerly [display_trait_id, debug_trait_id, ...]) is
         // populated by fixup_bootstrapped_stdlib_modules instead.
         ("PartialEq", vec!["eq"]),
@@ -160,7 +160,7 @@ pub(super) fn register_all(r: &mut Resolver) {
     r.type_registry.insert("Into".to_string(), into_trait_id);
 
     // Deprecated alias `Hash → Hashable` was here. Wave 2 (#06.8)
-    // moved Hashable to library/std/src/hash.rvn, so the alias is
+    // moved Hashable to library/std/hash/src/lib.rvn, so the alias is
     // re-established by Resolver::fixup_bootstrapped_stdlib_modules
     // once the bootstrap merge has inserted Hashable into the prelude
     // type scope.
@@ -180,7 +180,7 @@ pub(super) fn register_all(r: &mut Resolver) {
     // stdin_ty / stdout_ty / stderr_ty aliases were here — used by
     // the pre-migration `("stdin", ..., Stdin)` etc. builtin_fn
     // entries. Wave 2 (#06.8) moved the stdin / stdout / stderr free
-    // fns to library/std/src/io.rvn where the return types are spelled
+    // fns to library/std/io/src/lib.rvn where the return types are spelled
     // directly; the aliases are no longer needed.
     // Phase 2 stdlib (#06): `fs::metadata` returns
     // `Result[Metadata, IoError]`. `Metadata` is a flat heap struct
@@ -191,24 +191,24 @@ pub(super) fn register_all(r: &mut Resolver) {
     // `{Type}_{method}` mangled-name pipeline.
     // `metadata_ty` was here — used by the pre-migration `("metadata",
     // ..., Result[Metadata, IoError])` builtin_fn entry. Wave 2 (#06.8)
-    // moved fs.metadata to library/std/src/fs.rvn where the signature
+    // moved fs.metadata to library/std/fs/src/lib.rvn where the signature
     // is spelled directly; the alias is no longer needed.
     // `env_var_error_ty = io_error_ty.clone()` was here — used by the
     // pre-migration `("get", ..., Result[String, EnvVarError])` entry.
-    // Wave 2 (#06.8) moved env.get to library/std/src/env.rvn so the
+    // Wave 2 (#06.8) moved env.get to library/std/env/src/lib.rvn so the
     // alias is no longer needed; the .rvn signature spells the Result
     // out as `Result[String, IoError]` directly.
 
     let builtin_fns = [
         // std::io free fns (puts, eputs, print, println, eprintln,
         // read_line, stdin, stdout, stderr) were here. Wave 2 (#06.8)
-        // migrated all nine to library/std/src/io.rvn as a
+        // migrated all nine to library/std/io/src/lib.rvn as a
         // `lib "riven_runtime"` block. The println / eprintln aliases
         // (sharing the riven_puts / riven_eputs C symbols with
         // puts / eputs) are preserved verbatim in the .rvn lib block.
         // std::env entries (args, get, vars, current_dir) were here.
         //
-        // Wave 2 (#06.8): migrated to `library/std/src/env.rvn`.
+        // Wave 2 (#06.8): migrated to `library/std/env/src/lib.rvn`.
         // The `std.env` module namespace is still assembled below
         // (with empty items) and populated by
         // `fixup_bootstrapped_stdlib_modules` after the bootstrap
@@ -217,11 +217,11 @@ pub(super) fn register_all(r: &mut Resolver) {
         // is_dir, read_dir, metadata, remove_file, create_dir,
         // create_dir_all, rename, copy, remove_dir_all, canonicalize,
         // write_atomic, read_link, symlink) were here. Wave 2 (#06.8)
-        // migrated all seventeen to library/std/src/fs.rvn as a
+        // migrated all seventeen to library/std/fs/src/lib.rvn as a
         // `lib "riven_runtime"` block. The C symbols (`riven_fs_*`)
         // are unchanged.
         // `exit(code) -> Never` was here. Wave 2 (#06.8) migrated to
-        // library/std/src/process.rvn (`lib "riven_runtime" def exit
+        // library/std/process/src/lib.rvn (`lib "riven_runtime" def exit
         // as "riven_process_exit"(code: Int) -> Never`). The FFI alias
         // map populated during MIR lowering rewrites the callee to the
         // C symbol BEFORE codegen consults runtime_table.
@@ -235,7 +235,7 @@ pub(super) fn register_all(r: &mut Resolver) {
         // behind `riven_instant_now`); it just is not reachable from
         // Riven user code.
         // `unix_ns` was here — Wave 2 (#06.8) migrated to
-        // library/std/src/time.rvn (lib block with c_symbol alias
+        // library/std/time/src/lib.rvn (lib block with c_symbol alias
         // to riven_time_unix_ns).
         // std::thread — Phase 2 stdlib (#06.5 T4). Free fn
         // `sleep(&Duration)` is the Duration-typed wrapper around
@@ -257,7 +257,7 @@ pub(super) fn register_all(r: &mut Resolver) {
         ),
         // std::path — Phase 3 was here.
         //
-        // Wave 2 (#06.8): migrated to `library/std/src/path.rvn`.
+        // Wave 2 (#06.8): migrated to `library/std/path/src/lib.rvn`.
         // The five `path_*` free fns + their `riven_path_*` aliases
         // now live in the .rvn file as a `lib "riven_runtime"` block.
         // The `std.path` module namespace is still assembled below
@@ -299,7 +299,7 @@ pub(super) fn register_all(r: &mut Resolver) {
         ),
         // std::rand — Phase 2 #06.5 T8 was here.
         //
-        // Wave 2 (#06.8): migrated to `library/std/src/rand.rvn`. The
+        // Wave 2 (#06.8): migrated to `library/std/rand/src/lib.rvn`. The
         // `random_bytes` / `random_u64` / `random_fill` signatures and
         // their `c_symbol` aliases (`riven_rand_random_bytes`, …) now
         // live in the .rvn file as `lib "riven_runtime" def NAME as
@@ -334,13 +334,13 @@ pub(super) fn register_all(r: &mut Resolver) {
     }
 
     // IoError tagged enum + IoErrorKind sibling enum were here.
-    // Wave 2 (#06.8) followup moved BOTH to library/std/src/io.rvn.
+    // Wave 2 (#06.8) followup moved BOTH to library/std/io/src/lib.rvn.
     // The variant-tag stability contract against
-    // `RIVEN_IO_ERROR_*` in library/runtime/io/io_error.c is now
+    // `RIVEN_IO_ERROR_*` in library/std/io/runtime/io_error.c is now
     // pinned by io_error_tag_stability scanning the .rvn enum body
     // (each variant's tag = its zero-based position).
     // Stdin / Stdout / Stderr class shells were here. Wave 2 (#06.8)
-    // moved them to library/std/src/io.rvn. The bootstrap merge
+    // moved them to library/std/io/src/lib.rvn. The bootstrap merge
     // inserts each into both the type scope and type registry, which
     // is permissively MORE than the pre-migration registrations did
     // (those only inserted into type_registry).
@@ -354,7 +354,7 @@ pub(super) fn register_all(r: &mut Resolver) {
     // public fields — the wire layout is an opaque
     // implementation detail of the runtime.
     // Metadata class shell was here. Wave 2 (#06.8) moved it to
-    // library/std/src/fs.rvn as `class Metadata end`. Accessor
+    // library/std/fs/src/lib.rvn as `class Metadata end`. Accessor
     // methods still flow through runtime_table mangled-name dispatch
     // until T#21 lands.
 
@@ -375,7 +375,7 @@ pub(super) fn register_all(r: &mut Resolver) {
     // `docs/prompts/v1/06_phase2_stdlib_io_fmt.md` — v1 ships the
     // blocking terminals only.
     // Command / ExitStatus / Output class shells were here. Wave 2
-    // (#06.8) moved all three to library/std/src/process.rvn as bare
+    // (#06.8) moved all three to library/std/process/src/lib.rvn as bare
     // `class Foo end` bodies. Methods still flow through the
     // static-ctor + runtime_table dispatch until T#20 lands. The
     // bootstrap merge handles `insert_type` / `type_registry.insert`
@@ -389,23 +389,23 @@ pub(super) fn register_all(r: &mut Resolver) {
     // user_drop_classes registration. Wire layout (8-byte
     // {fd:i32, closed:i32}) documented in runtime.c at `RivenFile`.
     // File and OpenOptions class shells were here. Wave 2 (#06.8)
-    // moved both to library/std/src/io.rvn. Methods still flow
+    // moved both to library/std/io/src/lib.rvn. Methods still flow
     // through the static-ctor + runtime_table dispatch until T#20.
 
     // SeekFrom enum was here. Wave 2 (#06.8) migrated to
-    // library/std/src/io.rvn (`enum SeekFrom { Start(offset: Int),
+    // library/std/io/src/lib.rvn (`enum SeekFrom { Start(offset: Int),
     // End(offset: Int), Current(offset: Int) }`). The variant order
-    // contract against RIVEN_SEEK_FROM_* in library/runtime/io/file.c
+    // contract against RIVEN_SEEK_FROM_* in library/std/io/runtime/file.c
     // is now pinned by file_class_layout_stability scanning the
     // .rvn enum body.
 
     // Duration / Instant class shells were here. Wave 2 (#06.8) moved
-    // both to library/std/src/time.rvn as bare `class Foo end` bodies.
+    // both to library/std/time/src/lib.rvn as bare `class Foo end` bodies.
     // Methods (Duration.from_secs, Instant.now, …) still flow through
     // the static-ctor + runtime_table dispatch until T#20 lands.
 
     // TcpListener / TcpStream class shells were here. Wave 2 (#06.8)
-    // moved both to library/std/src/net.rvn as bare `class Foo end`
+    // moved both to library/std/net/src/lib.rvn as bare `class Foo end`
     // bodies — the bootstrap merge handles `insert_type` and
     // `type_registry.insert` symmetrically with user code, so no
     // explicit re-registration is needed on the Rust side. Methods
@@ -423,7 +423,7 @@ pub(super) fn register_all(r: &mut Resolver) {
     // riven_dealloc` at scope exit, freeing the 32-byte spine and
     // (for BufWriter) auto-flushing before close.
     // BufReader[R] / BufWriter[W] class shells were here. Wave 2
-    // (#06.8) moved both to library/std/src/io.rvn as
+    // (#06.8) moved both to library/std/io/src/lib.rvn as
     // `class BufReader[R] end` / `class BufWriter[W] end`. The
     // static-ctor fast path's inner-type suffix-pick
     // (`_new_file` vs `_new_tcp`) still fires from
@@ -431,9 +431,9 @@ pub(super) fn register_all(r: &mut Resolver) {
     // move when T#20 + T#21 land.
 
     // Shutdown enum was here (Read=0, Write=1, Both=2) — Wave 2
-    // (#06.8) migrated to library/std/src/net.rvn. The variant order
+    // (#06.8) migrated to library/std/net/src/lib.rvn. The variant order
     // remains the load-bearing contract against
-    // `RIVEN_SHUTDOWN_{READ,WRITE,BOTH}` in library/runtime/net/tcp.c;
+    // `RIVEN_SHUTDOWN_{READ,WRITE,BOTH}` in library/std/net/runtime/tcp.c;
     // the `shutdown_tag_stability` pin test scans the .rvn file now.
 
     // Phase 2 #06.A1/A3: `std::fmt::Formatter` is the buffer that
@@ -444,7 +444,7 @@ pub(super) fn register_all(r: &mut Resolver) {
     // in `runtime.c`). Phase D wires the constructor + dispatch
     // into `lower_interpolation`.
     // Formatter / FmtError placeholder class registrations were here.
-    // Wave 2 (#06.8) moved both to library/std/src/fmt.rvn as bare
+    // Wave 2 (#06.8) moved both to library/std/fmt/src/lib.rvn as bare
     // `class Foo end` bodies (no fields, no methods — same surface
     // the Rust registrations had). The bootstrap merge handles
     // `r.scopes.insert_type` and `r.type_registry.insert` for class
@@ -455,14 +455,14 @@ pub(super) fn register_all(r: &mut Resolver) {
     // 9 std.sync class shells (Context, Waker, ThreadId, Thread,
     // JoinHandle[T: Send], Mutex[T], MutexGuard[T], Arc[T],
     // PoisonError, ThreadPanic) were here. Wave 2 (#06.8) moved
-    // all of them to library/std/src/sync.rvn as bare
+    // all of them to library/std/sync/src/lib.rvn as bare
     // `class Foo end` / `class Foo[T] end` bodies preserving the
     // generic-parameter shapes (JoinHandle keeps the `T: Send`
     // bound). Methods still flow through the runtime_table
     // mangled-name dispatch until T#21 lands.
     //
     // Ruby-naming (TEC-13 / §10a): `SharedSync` is the canonical
-    // name and lives in library/std/src/sync.rvn. `Arc[T]` is
+    // name and lives in library/std/sync/src/lib.rvn. `Arc[T]` is
     // preserved here as a backward-compat alias class whose
     // type_constructors Variable below is typed
     // `Ty::Class { name: "SharedSync" }` so `Arc.new(5)` returns
@@ -514,7 +514,7 @@ pub(super) fn register_all(r: &mut Resolver) {
     // resolves before the fuller Tier-1 stdlib lands.
     // Wave 2 (#06.8): 9 io free fns + 7 io class shells (Stdin,
     // Stdout, Stderr, File, OpenOptions, BufReader, BufWriter) moved
-    // to library/std/src/io.rvn. IoError / IoErrorKind / SeekFrom
+    // to library/std/io/src/lib.rvn. IoError / IoErrorKind / SeekFrom
     // stay in Rust for now (each is a tagged enum with a pinned
     // tag-stability contract — separate migration commit).
     // io_id starts with empty items; fixup_bootstrapped_stdlib_modules
@@ -528,7 +528,7 @@ pub(super) fn register_all(r: &mut Resolver) {
     // Wave 2 (#06.8): see rand_id / path_id above for the empty-items
     // pattern. The four env free fns are populated by
     // [`Resolver::fixup_bootstrapped_stdlib_modules`] after the
-    // bootstrap merge loads `library/std/src/env.rvn`.
+    // bootstrap merge loads `library/std/env/src/lib.rvn`.
     let env_id = r.symbols.define(
         "env".to_string(),
         DefKind::Module { items: vec![] },
@@ -536,7 +536,7 @@ pub(super) fn register_all(r: &mut Resolver) {
         span.clone(),
     );
     // Wave 2 (#06.8): all seventeen fs free fns + Metadata moved to
-    // library/std/src/fs.rvn. fs_id starts with empty items;
+    // library/std/fs/src/lib.rvn. fs_id starts with empty items;
     // fixup_bootstrapped_stdlib_modules populates them. The `File`
     // re-export entry (for `use std.fs.File`) is preserved via the
     // FIXUPS row — "File" looks up in the type scope at fixup time
@@ -549,7 +549,7 @@ pub(super) fn register_all(r: &mut Resolver) {
         span.clone(),
     );
     // Wave 2 (#06.8): exit + Command + Output + ExitStatus all moved
-    // to library/std/src/process.rvn. process_id starts with empty
+    // to library/std/process/src/lib.rvn. process_id starts with empty
     // items; fixup_bootstrapped_stdlib_modules populates them.
     let process_id = r.symbols.define(
         "process".to_string(),
@@ -558,7 +558,7 @@ pub(super) fn register_all(r: &mut Resolver) {
         span.clone(),
     );
     // Wave 2 (#06.8): unix_ns + Duration + Instant all moved to
-    // library/std/src/time.rvn. time_id starts with empty items;
+    // library/std/time/src/lib.rvn. time_id starts with empty items;
     // fixup_bootstrapped_stdlib_modules populates them.
     let time_id = r.symbols.define(
         "time".to_string(),
@@ -583,7 +583,7 @@ pub(super) fn register_all(r: &mut Resolver) {
     // Wave 2 (#06.8): see rand_id above for the empty-items pattern.
     // The five `path_*` fn DefIds are populated by
     // [`Resolver::fixup_bootstrapped_stdlib_modules`] after the
-    // bootstrap merge loads `library/std/src/path.rvn`.
+    // bootstrap merge loads `library/std/path/src/lib.rvn`.
     let path_id = r.symbols.define(
         "path".to_string(),
         DefKind::Module { items: vec![] },
@@ -594,7 +594,7 @@ pub(super) fn register_all(r: &mut Resolver) {
     // TcpStream / Shutdown. The flat tcp_* free fns are gone; the C
     // runtime symbols remain linked and back the class methods.
     // Wave 2 (#06.8): TcpListener / TcpStream / Shutdown moved to
-    // library/std/src/net.rvn. net_id starts with empty items;
+    // library/std/net/src/lib.rvn. net_id starts with empty items;
     // fixup_bootstrapped_stdlib_modules populates them via type-scope
     // lookup after the bootstrap merge.
     let net_id = r.symbols.define(
@@ -619,7 +619,7 @@ pub(super) fn register_all(r: &mut Resolver) {
     // random_fill}`. Class wrapping is intentionally absent — see
     // docs/specs/stdlib/rand.spec.md "Out of scope".
     //
-    // Wave 2 (#06.8): the three fns moved to library/std/src/rand.rvn.
+    // Wave 2 (#06.8): the three fns moved to library/std/rand/src/lib.rvn.
     // We still register the `rand` Module namespace here (with empty
     // items) so `std_id` can include it at construction time and
     // `use std.rand.<fn>` keeps tokenising. The items vector is
@@ -633,7 +633,7 @@ pub(super) fn register_all(r: &mut Resolver) {
         span.clone(),
     );
     // Wave 2 (#06.8): 9 sync class shells moved to
-    // library/std/src/sync.rvn. sync_id starts with the
+    // library/std/sync/src/lib.rvn. sync_id starts with the
     // `thread_id_value_id` Rust shim + the Arc backward-compat
     // alias class (also Rust); fixup_bootstrapped_stdlib_modules
     // APPENDS the bootstrap-loaded class DefIds to that list.
@@ -651,7 +651,7 @@ pub(super) fn register_all(r: &mut Resolver) {
     // re-export their DefIds here so module-path resolution
     // (`std.fmt.Display`) works.
     // Wave 2 (#06.8): Display, Debug, Formatter, FmtError all moved
-    // to library/std/src/fmt.rvn. fmt_id Module starts with empty
+    // to library/std/fmt/src/lib.rvn. fmt_id Module starts with empty
     // items; fixup_bootstrapped_stdlib_modules populates the four
     // DefIds via type-scope lookup after the bootstrap merge.
     let fmt_id = r.symbols.define(

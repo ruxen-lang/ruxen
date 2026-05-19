@@ -27,6 +27,8 @@ fn compile_runtime() -> std::path::PathBuf {
         .parent()
         .unwrap()
         .join("library")
+        .join("std")
+        .join("core")
         .join("runtime")
         .join("runtime.c");
     let runtime_o = std::env::temp_dir().join(format!("riven_runtime_test_{}.o", unique_suffix()));
@@ -59,7 +61,7 @@ fn compile_c_harness(name: &str, source: &str) -> PathBuf {
 
     std::fs::write(&harness_c, source).expect("write harness");
 
-    // On macOS the runtime's CSPRNG (`library/runtime/io/rand.c`)
+    // On macOS the runtime's CSPRNG (`library/std/rand/runtime/rand.c`)
     // pulls in `SecRandomCopyBytes` + `kSecRandomDefault` from
     // `Security.framework`. Without the framework flag the link
     // step fails with "_SecRandomCopyBytes referenced from ...".
@@ -96,6 +98,8 @@ fn runtime_compiles_with_sanitizers() {
         .parent()
         .unwrap()
         .join("library")
+        .join("std")
+        .join("core")
         .join("runtime")
         .join("runtime.c");
     let runtime_o =

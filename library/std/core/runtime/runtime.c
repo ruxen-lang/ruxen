@@ -153,33 +153,33 @@ static void *riven_result_err_value(int64_t payload) {
  * consistent with its callers' positions above.
  * --------------------------------------------------------------------- */
 
-#include "core/alloc.c"
-#include "core/string.c"
-#include "core/vec.c"
-#include "core/hash.c"
-#include "io/io_error.c"
-#include "io/stdio.c"
-#include "fs.c"
-#include "io/file.c"
+#include "alloc.c"
+#include "../../string/runtime/string.c"
+#include "../../array/runtime/vec.c"
+#include "../../hash/runtime/hash.c"
+#include "../../io/runtime/io_error.c"
+#include "../../io/runtime/stdio.c"
+#include "../../fs/runtime/fs.c"
+#include "../../io/runtime/file.c"
 /* Phase 2 #06.5 T8: std::rand — CSPRNG-backed random_bytes /
  * random_u64 / random_fill. Placed after io/file.c since it reuses
  * the same RivenVec / IoError plumbing; no Duration dependency, so
  * it can sit before time.c. */
-#include "io/rand.c"
+#include "../../rand/runtime/rand.c"
 /* time.c must precede net/tcp.c — Phase 2 #06.5 T5 added
  * TcpStream.set_read_timeout / set_write_timeout, which dereference
  * a RivenDuration pointer (defined in time.c). */
-#include "time.c"
-#include "net/tcp.c"
+#include "../../time/runtime/time.c"
+#include "../../net/runtime/tcp.c"
 /* Phase 2 #06.5 T6: BufReader[R] / BufWriter[W] over File + TcpStream.
  * Must come AFTER io/file.c and net/tcp.c — bufio.c dereferences
  * RivenFile and RivenTcpStream layouts directly when its fill/emit
  * branch on kind. */
-#include "io/bufio.c"
-#include "signal.c"
-#include "process.c"
-#include "fmt.c"
-#include "env.c"
+#include "../../io/runtime/bufio.c"
+#include "../../sync/runtime/signal.c"
+#include "../../process/runtime/process.c"
+#include "../../fmt/runtime/fmt.c"
+#include "../../env/runtime/env.c"
 // #06.8 Phase 2: tiny C symbol used by FFI link-smoke pin tests
 // (compiler/riven_core/tests/ffi_c_symbol_wired.rs).
 #include "test_extern.c"

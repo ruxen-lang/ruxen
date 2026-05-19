@@ -1,0 +1,7 @@
+[package]
+name = "std-bootstrap-smoke"
+version = "0.1.0"
+description = "Proof-of-life smoke fixture for the bootstrap loader"
+
+[dependencies]
+std-core = "= 0.1.0"

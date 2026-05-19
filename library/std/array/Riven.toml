@@ -1,0 +1,7 @@
+[package]
+name = "std-array"
+version = "0.1.0"
+description = "Array (Vec) class + iterator support"
+
+[dependencies]
+std-iter = "= 0.1.0"

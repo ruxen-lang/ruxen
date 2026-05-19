@@ -23,7 +23,11 @@ fn workspace_root() -> PathBuf {
 }
 
 fn runtime_c_src() -> PathBuf {
-    workspace_root().join("library/runtime/runtime.c")
+    workspace_root().join("library/std/core/runtime/runtime.c")
+}
+
+fn stdlib_root_src() -> PathBuf {
+    workspace_root().join("library/std")
 }
 
 fn riven_exe() -> PathBuf {
@@ -57,11 +61,15 @@ fn shared_install() -> &'static Path {
                 fs::set_permissions(&staged, perms).unwrap();
             }
 
-            // Mirror the full `library/runtime/` tree into `<install>/lib/`.
-            // Post-#06.75 `runtime.c` is a unity-build aggregator that
-            // `#include`s per-module files under `core/`, `io/`, `net/`,
-            // so a single-file copy is no longer sufficient.
-            copy_runtime_tree(runtime_c_src().parent().unwrap(), &lib_dir);
+            // Mirror the full `library/std/` tree into `<install>/lib/std/`.
+            // After #06.95 Phase B, each stdlib package owns its own
+            // `runtime/` subdirectory; runtime.c (still a unity build for
+            // the install layout) `#include`s sibling packages via
+            // `../../<pkg>/runtime/<file>.c`, so the whole `std/` tree
+            // must be present at the destination to preserve the relative
+            // include paths.
+            let lib_std_dir = lib_dir.join("std");
+            copy_runtime_tree(&stdlib_root_src(), &lib_std_dir);
             (temp, staged)
         })
         .1

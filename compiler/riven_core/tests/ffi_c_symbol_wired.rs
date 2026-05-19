@@ -5,7 +5,7 @@
 //! declared `def add_one as "riven_test_extern_add_one"(...)` must
 //! emit a direct call to `riven_test_extern_add_one`, and the linked
 //! binary must run the actual C function (this fixture's runtime
-//! symbol is in `library/runtime/test_extern.c`).
+//! symbol is in `library/std/core/runtime/test_extern.c`).
 
 use riven_core::codegen;
 use riven_core::diagnostics::DiagnosticLevel;
@@ -135,8 +135,8 @@ fn mir_call_to_aliased_ffi_uses_c_symbol() {
     // MirProgram::ffi_libs is now populated (was dead-loaded before
     // Phase 2). With the Wave-2 (#06.8) bootstrap loader running by
     // default the list also contains the stdlib's own FFI libs
-    // (`riven_runtime` from `library/std/src/rand.rvn`, the
-    // `_bootstrap_smoke.rvn` proof-of-life libs, …) — so this test
+    // (`riven_runtime` from `library/std/rand/src/lib.rvn`, the
+    // `bootstrap_smoke/src/lib.rvn` proof-of-life libs, …) — so this test
     // asserts that the user's `add_one` ↔ `riven_test_extern_add_one`
     // entry is PRESENT, rather than that the list has exactly one
     // entry.
@@ -177,7 +177,7 @@ fn end_to_end_link_smoke() {
     // Compile + link + run a Riven program that calls an FFI-aliased
     // function. The exit code is 0 iff `riven_test_extern_add_one(41)`
     // returned 42 (i.e. the linker resolved the call to the actual C
-    // function in `library/runtime/test_extern.c`, NOT to the Riven
+    // function in `library/std/core/runtime/test_extern.c`, NOT to the Riven
     // name `add_one` which doesn't exist as a runtime symbol).
     let program = parse_fixture("ffi_c_symbol_link_smoke");
     let result = typeck::type_check(&program);

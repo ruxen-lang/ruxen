@@ -1,7 +1,7 @@
 //! Pin test for the `IoError` variant-tag stability contract.
 //!
-//! The runtime (`library/runtime/io/io_error.c`) and the self-hosted
-//! stdlib source (`library/std/src/io.rvn`) co-document the tag
+//! The runtime (`library/std/io/runtime/io_error.c`) and the self-hosted
+//! stdlib source (`library/std/io/src/lib.rvn`) co-document the tag
 //! indices for each `IoError` variant. If they drift, runtime-
 //! returned errors will be misinterpreted at the typeck layer and
 //! `match` arms will silently miss. This test grep-extracts the
@@ -47,8 +47,8 @@ fn to_camel(s: &str) -> String {
 
 #[test]
 fn io_error_variant_tags_match_runtime_and_stdlib_source() {
-    let runtime = read("library/runtime/io/io_error.c");
-    let stdlib_source = read("library/std/src/io.rvn");
+    let runtime = read("library/std/io/runtime/io_error.c");
+    let stdlib_source = read("library/std/io/src/lib.rvn");
 
     // Collect (Variant, tag) pairs from the runtime #defines.
     let mut runtime_tags: Vec<(String, usize)> = Vec::new();
@@ -117,7 +117,7 @@ fn io_error_variant_tags_match_runtime_and_stdlib_source() {
     assert_eq!(
         stdlib_tags.len(),
         20,
-        "expected 20 IoError variants in library/std/src/io.rvn; got {:?}",
+        "expected 20 IoError variants in library/std/io/src/lib.rvn; got {:?}",
         stdlib_tags
     );
     assert_eq!(

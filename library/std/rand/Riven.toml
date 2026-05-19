@@ -1,0 +1,7 @@
+[package]
+name = "std-rand"
+version = "0.1.0"
+description = "CSPRNG-backed random bytes"
+
+[dependencies]
+std-io = "= 0.1.0"

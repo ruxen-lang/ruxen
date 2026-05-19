@@ -1,0 +1,7 @@
+[package]
+name = "std-hash"
+version = "0.1.0"
+description = "Hashable trait + hash-map runtime"
+
+[dependencies]
+std-core = "= 0.1.0"

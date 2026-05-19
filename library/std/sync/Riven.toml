@@ -1,0 +1,8 @@
+[package]
+name = "std-sync"
+version = "0.1.0"
+description = "Thread + Signal + Mutex"
+
+[dependencies]
+std-time = "= 0.1.0"
+std-core = "= 0.1.0"

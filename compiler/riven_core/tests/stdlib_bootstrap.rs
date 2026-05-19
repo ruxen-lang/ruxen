@@ -65,14 +65,14 @@ fn bootstrap_files_list_includes_smoke_and_wave_2_migrations() {
     // modules append after it. Pinning the contents here surfaces
     // any drive-by additive change.
     assert!(
-        BOOTSTRAP_FILES.first() == Some(&"_bootstrap_smoke.rvn"),
+        BOOTSTRAP_FILES.first() == Some(&"bootstrap_smoke/src/lib.rvn"),
         "BOOTSTRAP_FILES must start with the Wave-1.5 proof-of-life \
          file (E2E tests depend on it); got {:?}",
         BOOTSTRAP_FILES
     );
     assert!(
-        BOOTSTRAP_FILES.contains(&"rand.rvn"),
-        "BOOTSTRAP_FILES must include the Wave-2 migrated rand.rvn; \
+        BOOTSTRAP_FILES.contains(&"rand/src/lib.rvn"),
+        "BOOTSTRAP_FILES must include the Wave-2 migrated rand package; \
          got {:?}",
         BOOTSTRAP_FILES
     );
@@ -82,7 +82,7 @@ fn bootstrap_files_list_includes_smoke_and_wave_2_migrations() {
 fn run_bootstrap_parses_all_listed_files_clean() {
     // Production `run_bootstrap` should parse every file in
     // BOOTSTRAP_FILES without emitting any diagnostics. If this
-    // fails, a `library/std/_legacy/src/*.rvn` file is missing or doesn't
+    // fails, a `library/std/*.rvn` file is missing or doesn't
     // parse — both fatal for the driver.
     let mut diags = Vec::<Diagnostic>::new();
     let programs = run_bootstrap(&mut diags);
@@ -137,7 +137,7 @@ fn bootstrap_failure_in_stdlib_file_has_file_line() {
         first.code
     );
     assert!(
-        first.message.contains("library/std/_legacy/src/broken.rvn"),
+        first.message.contains("library/std/broken.rvn"),
         "diagnostic should cite the stdlib file path; got: {}",
         first.message
     );
@@ -167,7 +167,7 @@ fn bootstrap_missing_file_reports_e0725() {
     assert!(
         diags
             .iter()
-            .any(|d| d.message.contains("library/std/_legacy/src/nope.rvn")),
+            .any(|d| d.message.contains("library/std/nope.rvn")),
         "diagnostic should cite the missing file path; got: {:?}",
         diags.iter().map(|d| &d.message).collect::<Vec<_>>()
     );

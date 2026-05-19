@@ -41,7 +41,7 @@ fn read(path: &str) -> String {
 // `parse_seek_from_tuples` helper was here — used by the
 // pre-migration scan of the `seek_from_variants` rustfmt-collapsible
 // Rust table. Wave 2 (#06.8) moved SeekFrom to
-// library/std/src/io.rvn; the pin test now scans .rvn declaration
+// library/std/io/src/lib.rvn; the pin test now scans .rvn declaration
 // order directly, so the tuple parser is no longer needed.
 
 #[test]
@@ -50,7 +50,7 @@ fn riven_file_static_assert_is_eight_bytes() {
     // grep for it here so deleting the static_assert is caught as a
     // contract regression, not a "well, the C compiler still built
     // somehow" silent change.
-    let runtime = read("library/runtime/io/file.c");
+    let runtime = read("library/std/io/runtime/file.c");
     assert!(
         runtime.contains("_Static_assert(sizeof(RivenFile) == 8"),
         "expected `_Static_assert(sizeof(RivenFile) == 8 ...)` in runtime.c — \
@@ -61,7 +61,7 @@ fn riven_file_static_assert_is_eight_bytes() {
 
 #[test]
 fn riven_open_options_static_assert_is_eight_bytes() {
-    let runtime = read("library/runtime/io/file.c");
+    let runtime = read("library/std/io/runtime/file.c");
     assert!(
         runtime.contains("_Static_assert(sizeof(RivenOpenOptions) == 8"),
         "expected `_Static_assert(sizeof(RivenOpenOptions) == 8 ...)` in runtime.c"
@@ -72,11 +72,11 @@ fn riven_open_options_static_assert_is_eight_bytes() {
 fn seek_from_tag_values_match_runtime_and_stdlib_source() {
     // Wave 2 (#06.8) moved the SeekFrom enum from
     // `compiler/riven_core/src/resolve/stdlib/mod.rs` into
-    // `library/std/src/io.rvn`. The resolver-side scan target moved
+    // `library/std/io/src/lib.rvn`. The resolver-side scan target moved
     // with it; the runtime side (`#define RIVEN_SEEK_FROM_*` in
-    // library/runtime/io/file.c) is unchanged.
-    let runtime = read("library/runtime/io/file.c");
-    let stdlib_source = read("library/std/src/io.rvn");
+    // library/std/io/runtime/file.c) is unchanged.
+    let runtime = read("library/std/io/runtime/file.c");
+    let stdlib_source = read("library/std/io/src/lib.rvn");
 
     // Runtime side: scan for `#define RIVEN_SEEK_FROM_<NAME>  <tag>`.
     let mut runtime_tags: Vec<(String, usize)> = Vec::new();

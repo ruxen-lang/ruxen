@@ -212,7 +212,7 @@ pub const RUNTIME_FUNCTIONS: &[&str] = &[
     // std::rand (Phase 2 #06.5 T8): kernel CSPRNG-backed random_bytes /
     // random_u64 / random_fill. Per-platform backend (Linux getrandom,
     // macOS SecRandomCopyBytes, fallback /dev/urandom) — see
-    // library/runtime/io/rand.c.
+    // library/std/rand/runtime/rand.c.
     "riven_rand_random_bytes",
     "riven_rand_random_u64",
     "riven_rand_random_fill",
@@ -424,7 +424,7 @@ mod tests {
     fn migrated_vec_combinators_fall_through_runtime_table() {
         // #06.8 T#14: every `Vec[T]_<m>` / `Array[T]_<m>` entry that
         // had a real `riven_vec_*` mapping was moved to a class-body
-        // `lib` decl in `library/std/src/array.rvn`. MIR's
+        // `lib` decl in `library/std/array/src/lib.rvn`. MIR's
         // ffi_alias_map carries the generic-stripped key
         // (`Array_sum`); the lookup site in
         // `mir/lower/expr/method_call.rs` (and the array-literal /
@@ -480,7 +480,7 @@ mod tests {
     fn migrated_string_methods_fall_through_runtime_table() {
         // #06.8 T#13: every `String_<m>` entry that previously lived in
         // `runtime_table/mod.rs` moved to a class-body `lib` decl in
-        // `library/std/src/string.rvn`. Method calls now reach the C
+        // `library/std/string/src/lib.rvn`. Method calls now reach the C
         // symbol through MIR's `ffi_alias_map` rewrite BEFORE codegen
         // would consult `runtime_name`. The runtime_table lookup
         // therefore falls through to the bottom-of-fn `Ok(name)` arm
@@ -538,7 +538,7 @@ mod tests {
         // `iter_mut`, `to_vec`, `enumerate`, `as_slice`) all share
         // the `riven_iter_to_vec` C symbol with the migrated `iter`.
         // E0722 keeps us from declaring all five in
-        // `library/std/src/array.rvn`, so the runtime_table arm is
+        // `library/std/array/src/lib.rvn`, so the runtime_table arm is
         // still the source of truth for the aliases. `iter` ALONE
         // moved to the alias map.
         assert_eq!(
@@ -572,7 +572,7 @@ mod tests {
     fn migrated_option_result_combinators_fall_through_runtime_table() {
         // #06.8 T#17 moved `Option_{unwrap_or, is_some, is_none,
         // ok_or}` and `Result_{unwrap_or, is_ok, is_err, ok, err}`
-        // into library/std/src/option_result.rvn. The lookup site in
+        // into library/std/option_result/src/lib.rvn. The lookup site in
         // `mir/lower/expr/method_call.rs` peels the surface
         // `[Int,Err]` generic args and consults `ffi_alias_map` with
         // the generic-stripped key, so the alias rewrite reaches the
@@ -615,7 +615,7 @@ mod tests {
     fn migrated_collection_methods_fall_through_runtime_table() {
         // After the Wave 2 self-hosting sequence, every collection-
         // method mapping that used to live in runtime_table has
-        // moved to a class-body lib decl in library/std/src/*.rvn.
+        // moved to a class-body lib decl in library/std/<pkg>/src/lib.rvn.
         // This test pins that runtime_table no longer carries a
         // `riven_*` mapping for any of them — falling through to
         // the bottom `Ok(name)` arm is the contract that prevents
@@ -671,7 +671,7 @@ mod tests {
     fn stdio_top_level_fall_through_after_io_migration() {
         // #06.8 Wave 2 (io.rvn): the top-level stdio fns `read_line`
         // / `stdin` / `stdout` / `stderr` moved to a `lib
-        // "riven_runtime"` block in `library/std/src/io.rvn`. Their
+        // "riven_runtime"` block in `library/std/io/src/lib.rvn`. Their
         // runtime_table entries were deleted at the same time, so
         // method calls now reach the C symbols through MIR's
         // ffi_alias_map; runtime_table falls through to the

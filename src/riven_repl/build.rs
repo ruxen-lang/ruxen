@@ -3,12 +3,16 @@ use std::path::PathBuf;
 
 fn main() {
     let crate_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+    // #06.95 Phase B: runtime.c relocated under std-core's package
+    // directory. The unity-build entry still lives — it just moved.
     let runtime_c = PathBuf::from(&crate_dir)
         .parent() // crates/
         .unwrap()
         .parent() // workspace root
         .unwrap()
         .join("library")
+        .join("std")
+        .join("core")
         .join("runtime")
         .join("runtime.c");
 
@@ -52,7 +56,7 @@ fn main() {
         println!("cargo:rustc-link-arg=-Wl,-force_load,{out_dir}/librivenrt.a");
         println!("cargo:rustc-link-arg=-Wl,-export_dynamic");
         // std.rand on macOS uses SecRandomCopyBytes from the Security
-        // framework (see library/runtime/io/rand.c). The full-program
+        // framework (see library/std/rand/runtime/rand.c). The full-program
         // codegen path emits this in compiler/riven_core/src/codegen/object.rs;
         // the REPL's librivenrt.a link needs the same flag.
         println!("cargo:rustc-link-lib=framework=Security");

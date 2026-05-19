@@ -1,0 +1,7 @@
+[package]
+name = "std-map"
+version = "0.1.0"
+description = "Map (HashMap) class"
+
+[dependencies]
+std-hash = "= 0.1.0"

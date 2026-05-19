@@ -113,7 +113,7 @@ mod tests {
         // `resolve/stdlib/mod.rs` with a synthetic `Span::new(0,0,0,0)`
         // and goto-def correctly returned `None` (no source to land
         // on). Wave 2 (#06.8) moved `puts` to a `lib "riven_runtime"`
-        // decl in `library/std/src/io.rvn`. The LSP `analyze` entry
+        // decl in `library/std/io/src/lib.rvn`. The LSP `analyze` entry
         // point doesn't track the source file the bootstrap loader
         // pulled the decl from, so goto-def lands on the placeholder
         // URI with the line number from io.rvn — neither cleanly

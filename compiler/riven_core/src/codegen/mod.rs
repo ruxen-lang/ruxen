@@ -24,7 +24,7 @@ use crate::mir::nodes::MirProgram;
 /// 1. `RIVEN_RUNTIME` env var — explicit override (path to runtime.c)
 /// 2. `<exe_dir>/../lib/runtime.c` — installed toolchain layout (~/.riven/lib)
 /// 3. `<exe_dir>/../share/riven/runtime.c` — alternate system layout
-/// 4. `<workspace_root>/library/runtime/runtime.c` — dev/workspace builds
+/// 4. `<workspace_root>/library/std/core/runtime/runtime.c` — dev/workspace builds
 pub fn find_runtime_c() -> Result<PathBuf, String> {
     if let Ok(p) = std::env::var("RIVEN_RUNTIME") {
         let path = PathBuf::from(p);
@@ -36,7 +36,16 @@ pub fn find_runtime_c() -> Result<PathBuf, String> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(bin_dir) = exe.parent() {
             if let Some(install_root) = bin_dir.parent() {
-                for rel in &["lib/runtime.c", "share/riven/runtime.c"] {
+                // #06.95 Phase B: installed layout mirrors the workspace
+                // `library/std/` tree under `<install>/lib/std/` so the
+                // unity-build runtime.c can find its sibling per-package
+                // `.c` files via the same relative include paths it uses
+                // in the workspace.
+                for rel in &[
+                    "lib/std/core/runtime/runtime.c",
+                    "lib/runtime.c",
+                    "share/riven/runtime.c",
+                ] {
                     let candidate = install_root.join(rel);
                     if candidate.exists() {
                         return Ok(candidate);
@@ -47,15 +56,29 @@ pub fn find_runtime_c() -> Result<PathBuf, String> {
     }
 
     // Dev fallback — only valid when running from the workspace.
-    // After #06.75 Phase B, the runtime lives at <workspace>/library/runtime/runtime.c.
+    // After #06.95 Phase B, the runtime lives at
+    // <workspace>/library/std/core/runtime/runtime.c.
     let dev_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("library")
+        .join("std")
+        .join("core")
+        .join("runtime")
+        .join("runtime.c");
+    if dev_path.exists() {
+        return Ok(dev_path);
+    }
+    // Backward-compatibility fallback for older checkouts still on
+    // the #06.75 layout. Removed once Phase B is fully integrated.
+    let legacy_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
         .join("library")
         .join("runtime")
         .join("runtime.c");
-    if dev_path.exists() {
-        return Ok(dev_path);
+    if legacy_path.exists() {
+        return Ok(legacy_path);
     }
 
     Err(format!(

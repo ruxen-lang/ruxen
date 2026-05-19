@@ -286,7 +286,7 @@ mod tests {
 
     /// #06.8 Wave 2 helper: build a `Resolver` whose symbol table is
     /// populated by BOTH `register_builtins` (Rust-side) AND the
-    /// bootstrap merge (self-hosted `library/std/src/*.rvn`). Tests
+    /// bootstrap merge (self-hosted `library/std/<pkg>/src/lib.rvn`). Tests
     /// that inspect the registered class / enum / trait surface
     /// need both halves because the migration moved several
     /// previously-Rust-registered names (Context, Waker, Thread,
@@ -333,7 +333,7 @@ mod tests {
         };
         assert_eq!(info.variants.len(), 2, "expected Ready/Pending variants");
 
-        // Context / Waker migrated to library/std/src/sync.rvn in
+        // Context / Waker migrated to library/std/sync/src/lib.rvn in
         // Wave 2; the bootstrap merge above loads them.
         assert!(
             resolver
@@ -356,7 +356,7 @@ mod tests {
         let resolver = resolver_with_bootstrap_for_tests();
 
         // Thread / JoinHandle / Mutex / MutexGuard / PoisonError /
-        // ThreadPanic migrated to library/std/src/sync.rvn in Wave 2.
+        // ThreadPanic migrated to library/std/sync/src/lib.rvn in Wave 2.
         // `Arc` remains a Rust-side `DefKind::Class` shim — see
         // resolve/stdlib/mod.rs `arc_alias_id` (it's the backward-compat
         // alias that types as `Ty::Class { name: "SharedSync" }` so

@@ -47,43 +47,37 @@ fn shared_install() -> &'static Path {
                 fs::set_permissions(&staged_rivenc, perms).unwrap();
             }
 
-            // Stage the unity-build runtime: the aggregator `runtime.c`
-            // plus every per-module `#include`d file underneath.
-            // Post-#06.75 the C runtime lives in
-            // `library/runtime/{core,io,net,…}/` and `runtime.c`
-            // `#include`s each piece, so a single-file copy is no
-            // longer sufficient — the staged install needs the full
-            // `library/runtime/` tree at `<install>/lib/`.
-            copy_runtime_tree(runtime_c_src().parent().unwrap(), &lib_dir);
+            // #06.95 Phase B reorganized the C runtime into per-package
+            // subdirectories under `library/std/<pkg>/runtime/`, with
+            // the aggregator `runtime.c` living at
+            // `library/std/core/runtime/runtime.c`. The aggregator
+            // `#include`s siblings via relative `../../<pkg>/runtime/*.c`
+            // paths, so the entire `library/std/` tree must be staged
+            // with its directory structure intact for the includes to
+            // resolve at build time. Stage it under `<install>/lib/std/`
+            // and point `RIVEN_RUNTIME` at the staged `runtime.c`.
+            let staged_std_root = lib_dir.join("std");
+            copy_runtime_tree(&workspace_root().join("library/std"), &staged_std_root);
 
-            // #06.8 Wave 2 stdlib self-hosting: rivenc now reads
-            // `library/std/src/*.rvn` at startup via the bootstrap
-            // loader. `resolve_stdlib_root` walks
+            // #06.8 Wave 2 stdlib self-hosting: rivenc reads
+            // `library/std/<pkg>/src/lib.rvn` at startup via the
+            // bootstrap loader. `resolve_stdlib_root` walks
             //   1. $RIVEN_STDLIB_PATH
             //   2. workspace-relative (CARGO_MANIFEST_DIR walk)
-            //   3. `<exe>/../library/std/src/`
-            // For installed-binary tests the staged binary lives at
-            // `{tempdir}/bin/rivenc`, so option 3 lands on
-            // `{tempdir}/library/std/src/`. Stage the .rvn source
-            // tree there to match the install.sh layout.
-            let stdlib_dir = temp.path().join("library").join("std").join("src");
-            fs::create_dir_all(&stdlib_dir).unwrap();
-            let workspace_stdlib = workspace_root().join("library/std/src");
-            for entry in fs::read_dir(&workspace_stdlib).expect("read workspace stdlib") {
-                let entry = entry.unwrap();
-                let p = entry.path();
-                if p.is_file() {
-                    fs::copy(&p, stdlib_dir.join(entry.file_name())).expect("copy stdlib file");
-                }
-            }
+            //   3. `<exe>/../library/std/`
+            // The full `library/std/` tree is already staged at
+            // `<install>/lib/std/` above (it contains both the runtime
+            // and the .rvn sources side-by-side per #06.95 Phase B), so
+            // no additional copy is needed for the .rvn sources — the
+            // staged_stdlib_dir() helper returns this same root.
 
             (temp, staged_rivenc)
         })
         .1
 }
 
-/// Recursively copy `library/runtime/` (the source layout) into the
-/// staged `<install>/lib/` (the destination layout).  Mirrors what
+/// Recursively copy a workspace directory tree (e.g. `library/std/`)
+/// into the staged install layout, preserving structure. Mirrors what
 /// `install.sh` does with `cp -R "$SRC/lib/." "$RIVEN_HOME/lib/"` on a
 /// real release archive.
 fn copy_runtime_tree(src: &Path, dst: &Path) {
@@ -110,10 +104,15 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// The path to runtime.c in the source tree.
+/// The path to the aggregator `runtime.c` in the source tree.
+/// Post-#06.95 Phase B the runtime aggregator lives at
+/// `library/std/core/runtime/runtime.c` and `#include`s siblings via
+/// `../../<pkg>/runtime/*.c` relative paths.
 fn runtime_c_src() -> PathBuf {
     workspace_root()
         .join("library")
+        .join("std")
+        .join("core")
         .join("runtime")
         .join("runtime.c")
 }
@@ -123,21 +122,38 @@ fn rivenc_exe() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_rivenc"))
 }
 
-/// Path to the staged `library/std/src/` tree alongside the shared
-/// install. Spawned rivenc subprocesses need this via
+/// Path to the staged `library/std/` package-root tree alongside the
+/// shared install. Spawned rivenc subprocesses need this via
 /// `RIVEN_STDLIB_PATH` because the bootstrap loader's CARGO_MANIFEST_DIR
 /// fallback resolves to `src/rivenc` (this crate, not the workspace)
 /// when cargo runs the test binary; walking up from there does NOT
-/// find a sibling `library/std/src/` because we're already two levels
+/// find a sibling `library/std/` because we're already two levels
 /// deep under `src/`. Exe-adjacent resolution would land on the
 /// staged copy, but only if rivenc is invoked through the staged
 /// binary path — the env var is the deterministic fix.
+///
+/// Post-#06.95 Phase B the staged stdlib lives under `<install>/lib/std/`
+/// (per-package layout with both `src/lib.rvn` and `runtime/*.c` for
+/// each module).
 fn staged_stdlib_dir() -> PathBuf {
     shared_install()
         .parent()
         .and_then(|bin| bin.parent())
-        .map(|root| root.join("library").join("std").join("src"))
+        .map(|root| root.join("lib").join("std"))
         .expect("staged install layout")
+}
+
+/// Path to the staged aggregator `runtime.c`. The C runtime tree is
+/// staged with its `library/std/` directory structure intact so that
+/// `runtime.c`'s `#include "../../<pkg>/runtime/*.c"` directives
+/// resolve. Subprocess `rivenc` invocations need this via
+/// `RIVEN_RUNTIME` because `find_runtime_c`'s `<exe>/../lib/runtime.c`
+/// fallback no longer matches the per-package layout.
+fn staged_runtime_c() -> PathBuf {
+    staged_stdlib_dir()
+        .join("core")
+        .join("runtime")
+        .join("runtime.c")
 }
 
 /// Read a `.rvn` fixture from `tests/fixtures/riven/<name>.rvn`.
@@ -178,6 +194,7 @@ fn compile_and_run(rivenc: &Path, dir: &Path, source_name: &str, source: &str) -
         .arg(out_name)
         .current_dir(dir)
         .env("RIVEN_STDLIB_PATH", staged_stdlib_dir())
+        .env("RIVEN_RUNTIME", staged_runtime_c())
         .output()
         .expect("spawn rivenc");
 
@@ -343,12 +360,12 @@ fn runtime_env_override() {
     // lookup. We stage a normal install and then point RIVEN_RUNTIME at a
     // secondary copy of runtime.c — compilation must still succeed.
     let (temp, rivenc) = stage_install();
-    // Stage a secondary copy of the whole runtime tree so the unity-build
-    // `#include "core/alloc.c"` lookups still resolve, then point RIVEN_RUNTIME
-    // at its aggregator.
-    let alt_dir = temp.path().join("alt_runtime");
-    copy_runtime_tree(runtime_c_src().parent().unwrap(), &alt_dir);
-    let alt = alt_dir.join("runtime.c");
+    // Stage a secondary copy of the whole `library/std/` tree so the
+    // unity-build `#include "../../<pkg>/runtime/*.c"` lookups still
+    // resolve, then point RIVEN_RUNTIME at the aggregator inside.
+    let alt_std_root = temp.path().join("alt_std");
+    copy_runtime_tree(&workspace_root().join("library/std"), &alt_std_root);
+    let alt = alt_std_root.join("core").join("runtime").join("runtime.c");
 
     fs::write(temp.path().join("env_ov.rvn"), rvn("runtime_env_override")).unwrap();
 
@@ -738,6 +755,7 @@ fn e2e_96_panic_basic() {
         .arg(out_name)
         .current_dir(temp.path())
         .env("RIVEN_STDLIB_PATH", staged_stdlib_dir())
+        .env("RIVEN_RUNTIME", staged_runtime_c())
         .output()
         .expect("spawn rivenc");
     assert!(

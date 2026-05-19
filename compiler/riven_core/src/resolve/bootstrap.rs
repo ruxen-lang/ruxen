@@ -21,13 +21,16 @@
 //! 1. **`RIVEN_STDLIB_PATH` env var** — explicit override, same role
 //!    as Rust's `RUST_SYSROOT`. Honoured by tests so they can point
 //!    at a tempdir without touching the installed sysroot.
-//! 2. **Workspace `library/std/src/`** — the development fallback.
+//! 2. **Workspace `library/std/`** — the development fallback.
 //!    Detected by walking up from `CARGO_MANIFEST_DIR` until a
-//!    `library/std/src/` directory is found. Matches how
-//!    `error_code_registry.rs` finds `docs/errors/`.
+//!    `library/std/` directory containing the per-package layout
+//!    (e.g. `io/src/lib.rvn`) is found. Matches how
+//!    `error_code_registry.rs` finds `docs/errors/`. The pre-#06.95
+//!    `library/std/_legacy/src/` and `library/std/src/` flat layouts
+//!    remain as transitional fallbacks.
 //! 3. **Exe-adjacent install layout** — when running an installed
-//!    `rivenc`, `<exe>/../library/std/src/` is the conventional
-//!    sysroot location. Not exercised in tests today but reserved.
+//!    `rivenc`, `<exe>/../library/std/` is the conventional sysroot
+//!    location.
 //!
 //! Failures at any stage emit `E0725` with the resolved file path so a
 //! contributor can navigate to the offending stdlib source directly.
@@ -46,7 +49,7 @@ use std::path::{Path, PathBuf};
 /// first module whose surface lives entirely in the .rvn source rather
 /// than in the Rust `resolve/stdlib/mod.rs` registrations.
 ///
-/// Paths are relative to `<sysroot>/library/std/src/`.
+/// Paths are relative to `<sysroot>/library/std/`.
 /// Files are loaded in the order listed. Cross-file type dependencies
 /// must be respected: a `.rvn` that references `IoError` in a lib
 /// block (e.g. `def foo(...) -> Result[T, IoError]`) needs `io.rvn`
@@ -54,44 +57,41 @@ use std::path::{Path, PathBuf};
 /// bootstrap merge processes each file with Pass-1 forward-decl AND
 /// full lib-type resolution in the same loop, so within-list order
 /// matters.
+/// Paths are interpreted relative to the resolved stdlib root.
+///
+/// #06.95 Phase B: the stdlib lives in per-module packages under
+/// `library/std/<pkg>/src/lib.rvn`. Within-list order still matters
+/// because the bootstrap merge runs Pass-1 forward-decl AND full
+/// lib-type resolution in the same loop — a `.rvn` that references a
+/// type owned by another package needs that package's `lib.rvn` to come
+/// earlier. The ordering mirrors the topological layering described in
+/// `docs/prompts/v1/06_95_stdlib_packagization.md` (Layer 0 first, then
+/// Layer 1, …).
+///
+/// During the transition the legacy fallback path
+/// (`library/std/_legacy/src/<file>.rvn`) is preserved at the loader
+/// level via `resolve_stdlib_root` — checkouts still on the flat layout
+/// keep working.
 pub const BOOTSTRAP_FILES: &[&str] = &[
-    "_bootstrap_smoke.rvn",
-    // io.rvn ships IoError + IoErrorKind which rand/env/fs reference.
-    "io.rvn",
-    "rand.rvn",
-    "path.rvn",
-    "env.rvn",
-    "iter.rvn",
-    "hash.rvn",
-    "fmt.rvn",
-    "net.rvn",
-    "process.rvn",
-    "time.rvn",
-    "fs.rvn",
-    "sync.rvn",
-    // T#13: String method shims as a `class String` namespace anchor.
-    // Listed AFTER `io.rvn` (which owns `IoError`) and the other
-    // class-shell migrations because nothing here depends on those —
-    // only on T#21's anchor mode to avoid replacing the builtin
-    // `String → DefKind::TypeAlias { target: Ty::String }` binding.
-    "string.rvn",
-    // T#17: Option / Result helper methods anchored on the existing
-    // `Option` / `Result` DefKind::Enum bindings from
-    // `register_builtins`.
-    "option_result.rvn",
-    // T#14: Array (Vec) methods. `Array` is NOT in type-scope
-    // (`resolve_type_expr` builds `Ty::Array` from a hardcoded match
-    // arm); the anchor branch in `register_top_level_type_with_ffi`
-    // creates a parent DefId for FFI bookkeeping without touching
-    // type-scope.
-    "array.rvn",
-    // T#15 / T#16: Map (Hash) and Set (HashSet) methods. Same
-    // anchor-only shape as `Array` — neither name is in type-scope.
-    // Surface spellings are `Map[K,V]` / `Set[T]`; runtime C
-    // symbols still carry the legacy `riven_hash_*` / `riven_set_*`
-    // prefix, bridged by the alias-callee resolver in MIR.
-    "map.rvn",
-    "set.rvn",
+    "bootstrap_smoke/src/lib.rvn",
+    // io ships IoError + IoErrorKind which rand/env/fs reference.
+    "io/src/lib.rvn",
+    "rand/src/lib.rvn",
+    "path/src/lib.rvn",
+    "env/src/lib.rvn",
+    "iter/src/lib.rvn",
+    "hash/src/lib.rvn",
+    "fmt/src/lib.rvn",
+    "net/src/lib.rvn",
+    "process/src/lib.rvn",
+    "time/src/lib.rvn",
+    "fs/src/lib.rvn",
+    "sync/src/lib.rvn",
+    "string/src/lib.rvn",
+    "option_result/src/lib.rvn",
+    "array/src/lib.rvn",
+    "map/src/lib.rvn",
+    "set/src/lib.rvn",
 ];
 
 /// Production entry point: parse every stdlib file in
@@ -128,7 +128,7 @@ pub fn run_bootstrap_with_files(
         Some(r) => r,
         None => {
             diagnostics.push(Diagnostic::error_with_code(
-                "stdlib bootstrap failed: could not locate `library/std/src/` — \
+                "stdlib bootstrap failed: could not locate `library/std/` — \
                  set RIVEN_STDLIB_PATH or run from a workspace checkout",
                 Span::new(0, 0, 0, 0),
                 "E0725",
@@ -163,19 +163,20 @@ pub fn resolve_stdlib_root() -> Option<PathBuf> {
         }
     }
 
-    // #06.95 Phase A: the stdlib layout shifted from a flat
-    // `library/std/src/` to a per-package directory
-    // (`library/std/<pkg>/src/`). During the transition, all
-    // pre-existing content lives under `library/std/_legacy/src/`
-    // (one wrapper package). The workspace fallback now walks up
-    // looking for `library/std/_legacy/src/` instead of the
-    // original flat location. Backward compatibility for an older
-    // checkout where `library/std/src/` still exists is preserved
-    // as a second fallback so external tooling pointing at the
-    // old path keeps working through the transition.
+    // #06.95 Phase B: the stdlib layout is per-package — each module
+    // owns its own directory under `library/std/` with a `Riven.toml`
+    // manifest, a `src/lib.rvn` surface, and a `runtime/` C-source
+    // tree. The bootstrap root is `library/std/` itself; the loader
+    // walks that directory looking for sub-package manifests. The
+    // legacy `_legacy/src/` and `src/` paths are kept as fallbacks
+    // during the transition.
     if let Some(manifest_dir) = std::env::var_os("CARGO_MANIFEST_DIR") {
         let mut cur = PathBuf::from(manifest_dir);
         for _ in 0..5 {
+            let pkg_root = cur.join("library/std");
+            if pkg_root.join("io/src/lib.rvn").is_file() {
+                return Some(pkg_root);
+            }
             let legacy = cur.join("library/std/_legacy/src");
             if legacy.is_dir() {
                 return Some(legacy);
@@ -190,9 +191,13 @@ pub fn resolve_stdlib_root() -> Option<PathBuf> {
         }
     }
 
-    // Exe-adjacent install layout: <exe>/../library/std/{_legacy,}/src/.
+    // Exe-adjacent install layout: <exe>/../library/std/.
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
+            let pkg_root = exe_dir.join("../library/std");
+            if pkg_root.join("io/src/lib.rvn").is_file() {
+                return Some(pkg_root);
+            }
             let legacy = exe_dir.join("../library/std/_legacy/src");
             if legacy.is_dir() {
                 return Some(legacy);
@@ -216,7 +221,7 @@ fn load_stdlib_file(root: &Path, rel: &str) -> Result<Program, Diagnostic> {
     let source = std::fs::read_to_string(&full).map_err(|io_err| {
         Diagnostic::error_with_code(
             format!(
-                "stdlib bootstrap failed at library/std/_legacy/src/{}: cannot read file: {}",
+                "stdlib bootstrap failed at library/std/{}: cannot read file: {}",
                 rel, io_err
             ),
             Span::new(0, 0, 0, 0),
@@ -231,7 +236,7 @@ fn load_stdlib_file(root: &Path, rel: &str) -> Result<Program, Diagnostic> {
             let (line, msg) = first_error_line(&diags);
             return Err(Diagnostic::error_with_code(
                 format!(
-                    "stdlib bootstrap failed at library/std/_legacy/src/{}:{}: lexer: {}",
+                    "stdlib bootstrap failed at library/std/{}:{}: lexer: {}",
                     rel, line, msg
                 ),
                 Span::new(0, 0, line, 0),
@@ -245,7 +250,7 @@ fn load_stdlib_file(root: &Path, rel: &str) -> Result<Program, Diagnostic> {
         let (line, msg) = first_error_line(&diags);
         Diagnostic::error_with_code(
             format!(
-                "stdlib bootstrap failed at library/std/_legacy/src/{}:{}: parser: {}",
+                "stdlib bootstrap failed at library/std/{}:{}: parser: {}",
                 rel, line, msg
             ),
             Span::new(0, 0, line, 0),

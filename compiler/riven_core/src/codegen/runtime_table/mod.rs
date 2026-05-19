@@ -21,21 +21,21 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
     match name {
         // Top-level I/O / printing entries were here. Wave 2 (#06.8)
         // moved puts / eputs / print / println / eprintln / read_line
-        // / stdin / stdout / stderr to library/std/src/io.rvn as a
+        // / stdin / stdout / stderr to library/std/io/src/lib.rvn as a
         // `lib "riven_runtime"` block. The println / eprintln aliases
         // (sharing the riven_puts / riven_eputs C symbols) are
         // preserved verbatim in the .rvn lib block.
         // Top-level env entries were here — Wave 2 (#06.8) moved
-        // args / get / vars / current_dir to library/std/src/env.rvn
+        // args / get / vars / current_dir to library/std/env/src/lib.rvn
         // as `lib "riven_runtime" def NAME as "riven_env_..."` aliases.
         // Top-level fs entries were here. Wave 2 (#06.8) moved all
-        // seventeen to library/std/src/fs.rvn as a `lib "riven_runtime"`
+        // seventeen to library/std/fs/src/lib.rvn as a `lib "riven_runtime"`
         // block with `def NAME as "riven_fs_NAME"` aliases. The FFI
         // alias map rewrites callees at MIR-lowering time before
         // codegen consults this table.
         // `exit` was here — Wave 2 (#06.8) moved the C-symbol binding
         // to `lib "riven_runtime" def exit as "riven_process_exit"`
-        // in library/std/src/process.rvn. The FFI alias map rewrites
+        // in library/std/process/src/lib.rvn. The FFI alias map rewrites
         // the callee at MIR-lowering time before codegen consults
         // this table.
         // `process_run` removed in #06.5 T5.5 — superseded by
@@ -46,7 +46,7 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // String methods.
         //
         // #06.8 T#13 migrated the bulk of these into
-        // library/std/src/string.rvn as a `class String do lib
+        // library/std/string/src/lib.rvn as a `class String do lib
         // "riven_runtime" ... end end` block. MIR's ffi_alias_map is
         // populated from the bootstrap merge BEFORE codegen consults
         // this table, so any callee that has a matching .rvn lib
@@ -192,7 +192,7 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // visible Riven name is gone. See docs/specs/stdlib/time.spec.md.
         // `unix_ns` was here — Wave 2 (#06.8) moved the C-symbol
         // binding to `lib "riven_runtime" def unix_ns as
-        // "riven_time_unix_ns"` in library/std/src/time.rvn.
+        // "riven_time_unix_ns"` in library/std/time/src/lib.rvn.
         // Phase 2 stdlib (#06.5 T4): Duration / Instant scalar-wrapper
         // classes. `Duration_from_*` and `Instant_now` are static-style
         // constructors that go through the "collection-ctor fast path"
@@ -202,7 +202,7 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // mangling path. `sleep` is the top-level free fn in the new
         // `std.thread` module.
         // Duration / Instant methods migrated to
-        // library/std/src/time.rvn (#06.8 T#20 follow-through). MIR's
+        // library/std/time/src/lib.rvn (#06.8 T#20 follow-through). MIR's
         // ffi_alias_map carries the parent-name-keyed entries; the
         // static-ctor fast path's alias-map lookup (T#14) rewrites
         // the `Duration_from_secs` / `Instant_now` callees before
@@ -211,7 +211,7 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // ArrayLiteral) is uniform across all sites.
         "sleep" => return Ok("riven_thread_sleep_duration"),
         // std::path entries were here — Wave 2 (#06.8) migration moved
-        // the C-symbol bindings to library/std/src/path.rvn. See the
+        // the C-symbol bindings to library/std/path/src/lib.rvn. See the
         // std::rand comment below for the FFI alias rewrite path that
         // makes the runtime_table lookup unnecessary.
         // Phase 2 stdlib (#06.5 T5): std::net::TcpListener /
@@ -270,7 +270,7 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "signal_received_sigint" => return Ok("riven_signal_received_sigint"),
         // std::rand entries were here — Wave 2 (#06.8) migration moved
         // the C-symbol binding to `lib "riven_runtime" def random_bytes
-        // as "riven_rand_random_bytes" …` in library/std/src/rand.rvn.
+        // as "riven_rand_random_bytes" …` in library/std/rand/src/lib.rvn.
         // The FFI alias map populated during MIR lowering rewrites
         // call-site callees from the Riven name to the C symbol BEFORE
         // codegen consults this table, so the table entries became
@@ -369,14 +369,14 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
     }
 
     // Map / HashMap / Hash methods — fully migrated to
-    // library/std/src/map.rvn (#06.8 T#15). No runtime_table arm:
+    // library/std/map/src/lib.rvn (#06.8 T#15). No runtime_table arm:
     // the alias-map key `Map_<m>` (registered by the bootstrap
     // `class Map` shell) wins through `resolve_ffi_alias_callee`'s
     // generic-stripping fallback, and the bottom-of-fn `Ok(name)`
     // arm catches anything that escapes.
     //
     // Set / HashSet methods — fully migrated to
-    // library/std/src/set.rvn (#06.8 T#16). Same shape as Map.
+    // library/std/set/src/lib.rvn (#06.8 T#16). Same shape as Map.
 
     // Array[...] / Vec[...] methods.
     //
@@ -384,7 +384,7 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
     // `Vec` is the legacy spelling, kept as an alias until sources finish
     // migrating.
     //
-    // #06.8 T#14 migrated ~28 methods into library/std/src/array.rvn
+    // #06.8 T#14 migrated ~28 methods into library/std/array/src/lib.rvn
     // as a `class Array do lib "riven_runtime" ... end end` shell.
     // The anchor branch in `register_top_level_type_with_ffi` creates
     // a parent DefId for FFI bookkeeping but does NOT insert
@@ -427,7 +427,7 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
     // which is itself a bug worth surfacing.
     //
     // #06.8 T#17 migrated `unwrap_or`, `is_some`, `is_none`, `ok_or`
-    // into library/std/src/option_result.rvn as a `class Option do
+    // into library/std/option_result/src/lib.rvn as a `class Option do
     // lib "riven_runtime" ... end end` shell. MIR mangles the call
     // site with the surface generic args (`Option[Int]_unwrap_or`)
     // and the ffi_alias_map carries the generic-stripped key
