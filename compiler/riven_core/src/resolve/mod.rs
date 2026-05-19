@@ -344,6 +344,29 @@ impl Resolver {
             _ => return,
         };
 
+        // Wave 2 (#06.8): re-establish stdlib type aliases whose target
+        // moved from a Rust registration to a bootstrap-loaded `.rvn`
+        // file. Today this is just `Hash → Hashable` (the TEC-13
+        // deprecation alias), but the table is the obvious place to
+        // add new aliases as other migrations land.
+        //
+        // The `Hash[K, V]` collection type has its OWN type-position
+        // resolver path (see `resolve_type_path`'s explicit `Hash` /
+        // `Vec` / `Set` arms) and is unaffected by this alias.
+        const TYPE_ALIASES: &[(&str, &str)] = &[("Hash", "Hashable")];
+        for (alias, target) in TYPE_ALIASES {
+            if let Some(target_id) = self.scopes.lookup_type(target) {
+                // Only insert when missing — never overwrite a real
+                // scope entry. (Today `Hash` is unbound after the
+                // Hashable migration; tomorrow it might be a real
+                // mixin in its own right.)
+                if self.scopes.lookup_type(alias).is_none() {
+                    self.scopes.insert_type(alias.to_string(), target_id);
+                    self.type_registry.insert(alias.to_string(), target_id);
+                }
+            }
+        }
+
         for (module_name, fn_names) in FIXUPS {
             // Find the submodule DefId by name inside std's items.
             let Some(&module_id) = std_items.iter().find(|&&id| {

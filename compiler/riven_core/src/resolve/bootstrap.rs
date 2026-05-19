@@ -53,6 +53,7 @@ pub const BOOTSTRAP_FILES: &[&str] = &[
     "path.rvn",
     "env.rvn",
     "iter.rvn",
+    "hash.rvn",
 ];
 
 /// Production entry point: parse every stdlib file in

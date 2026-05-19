@@ -76,7 +76,10 @@ pub(super) fn register_all(r: &mut Resolver) {
         ("Displayable", vec!["to_display"]),
         ("Error", vec!["message"]),
         ("Comparable", vec!["compare"]),
-        ("Hashable", vec!["hash_code"]),
+        // ("Hashable", vec!["hash_code"]) — migrated to library/std/src/hash.rvn (#06.8 Wave 2).
+        // The `Hash → Hashable` deprecation alias is re-established
+        // by Resolver::fixup_bootstrapped_stdlib_modules after the
+        // bootstrap merge.
         ("Iterable", vec![]),
         // ("Iterator", vec!["next"]) — migrated to library/std/src/iter.rvn (#06.8 Wave 2).
         // ("FromIterator", vec!["from_iter"]) — migrated to library/std/src/iter.rvn (#06.8 Wave 2).
@@ -103,7 +106,6 @@ pub(super) fn register_all(r: &mut Resolver) {
         ("Drop", vec!["drop"]),
     ];
 
-    let mut hashable_id: Option<DefId> = None;
     for (name, methods) in builtin_traits {
         let id = r.symbols.define(
             name.to_string(),
@@ -121,9 +123,6 @@ pub(super) fn register_all(r: &mut Resolver) {
         );
         r.scopes.insert_type(name.to_string(), id);
         r.type_registry.insert(name.to_string(), id);
-        if name == "Hashable" {
-            hashable_id = Some(id);
-        }
     }
 
     let future_trait_id = r.symbols.define(
@@ -167,14 +166,11 @@ pub(super) fn register_all(r: &mut Resolver) {
     r.scopes.insert_type("Into".to_string(), into_trait_id);
     r.type_registry.insert("Into".to_string(), into_trait_id);
 
-    // Deprecated alias: `Hash` (the trait) → `Hashable`.
-    // The collection type `Hash[K,V]` has its own resolution path
-    // (see `resolve_type_path` / the `Hash`/`Vec`/`Set` match in
-    // type-position) and is unaffected by this alias.
-    if let Some(id) = hashable_id {
-        r.scopes.insert_type("Hash".to_string(), id);
-        r.type_registry.insert("Hash".to_string(), id);
-    }
+    // Deprecated alias `Hash → Hashable` was here. Wave 2 (#06.8)
+    // moved Hashable to library/std/src/hash.rvn, so the alias is
+    // re-established by Resolver::fixup_bootstrapped_stdlib_modules
+    // once the bootstrap merge has inserted Hashable into the prelude
+    // type scope.
 
     // Register built-in functions. `IoError` is registered below
     // as `DefKind::Enum`, so the type reference here uses
