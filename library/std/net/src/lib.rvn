@@ -28,10 +28,22 @@
 ## library/runtime/net/tcp.c. The `shutdown_tag_stability` pin test
 ## scans this file instead of stdlib/mod.rs.
 
+## std::net::TcpListener — owning wrapper around a listening POSIX
+## fd. The `def drop` lib decl drives user_drop_classes auto-detect —
+## scope exit closes the fd if still open, then `riven_dealloc`
+## frees the 8-byte spine.
 class TcpListener
+  lib "runtime/tcp.c"
+    def drop as "riven_tcp_listener_drop"(self) -> ()
+  end
 end
 
+## std::net::TcpStream — owning wrapper around a connected POSIX fd.
+## Same drop story as TcpListener.
 class TcpStream
+  lib "runtime/tcp.c"
+    def drop as "riven_tcp_stream_drop"(self) -> ()
+  end
 end
 
 enum Shutdown

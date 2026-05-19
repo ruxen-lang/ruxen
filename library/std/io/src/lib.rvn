@@ -136,16 +136,35 @@ class Stderr
   end
 end
 
+## std::io::File — owning wrapper around a POSIX fd. The `def drop`
+## lib decl drives the user_drop_classes auto-detect — `let f =
+## File.open(...)` going out of scope emits `File_drop` → closes the
+## fd if still open, then `riven_dealloc` frees the 8-byte spine.
 class File
+  lib "runtime/file.c"
+    def drop as "riven_file_drop"(self) -> ()
+  end
 end
 
 class OpenOptions
 end
 
+## std::io::BufReader / BufWriter — buffered IO over File / TcpStream.
+## The `def drop` lib decl drives user_drop_classes auto-detect.
+## `riven_bufreader_drop` frees the heap byte-buffer; the inner
+## File/TcpStream has its own drop helper that runs in the same
+## scope-exit pass. `riven_bufwriter_drop` flushes pending bytes
+## before freeing the buffer.
 class BufReader[R]
+  lib "runtime/bufio.c"
+    def drop as "riven_bufreader_drop"(self) -> ()
+  end
 end
 
 class BufWriter[W]
+  lib "runtime/bufio.c"
+    def drop as "riven_bufwriter_drop"(self) -> ()
+  end
 end
 
 ## std::io kernel-level free fns — `puts` / `print` / `println` /

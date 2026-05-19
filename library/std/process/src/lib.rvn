@@ -1,13 +1,16 @@
 ## std::process — Command builder, ExitStatus, Output, exit().
 ##
-## Wave 2 (#06.8) — partial migration. Same shape as net.rvn:
-## - `exit(code) -> Never` is fully migrated (free fn via lib block;
-##   c_symbol alias replaces the runtime_table entry).
-## - `class Command end` / `class ExitStatus end` / `class Output end`
-##   are class shells; their methods still flow through the
-##   static-ctor + runtime_table dispatch in
-##   mir/lower/expr/method_call.rs and codegen/runtime_table/mod.rs
-##   until T#20 lands.
+## Phase D-6 of #06.95: Command and Output gained their `def drop` lib
+## decls and now drive the `user_drop_classes` auto-detect through the
+## generic class-method walk in
+## `mir/lower/collect.rs::collect_user_drop_classes` — no hardcoded
+## compiler-side list entries required.
+##
+## Declaration order is load-bearing: `ExitStatus` and `Output` are
+## declared BEFORE `Command` so the `Command.status -> Result[
+## ExitStatus, IoError]` / `Command.output -> Result[Output, IoError]`
+## return types resolve at bootstrap-merge time (forward-reference
+## resolution isn't supported for lib-decl return types).
 ##
 ## `Command.spawn -> Child` (async-style handle with .wait / .kill /
 ## .try_wait) is explicitly DEFERRED to v2 per
@@ -15,46 +18,23 @@
 ## terminals (.status, .output) only.
 
 ## std::process namespace class — folds the `exit` free fn into
-## `Process.exit`. Phase C of #06.95. Command / ExitStatus / Output
-## remain separate classes (they're builder/result types, not
-## namespace anchors). The bare `exit` lib block below is the
-## transition shim — Ruby keeps a global `exit` too (Kernel#exit),
-## so this shim is permanent, not strictly transitional.
+## `Process.exit`. Ruby keeps a global `exit` too (Kernel#exit), so
+## the bare `exit` lib block below is permanent, not transitional.
 class Process
   lib "runtime/process.c"
     def self.exit as "riven_process_exit"(code: Int) -> Never
   end
 end
 
-# Kernel-level `exit` (also available as Process.exit). Mirrors Ruby
-# semantics — `exit` is global, Process.exit is the explicit
-# namespaced spelling.
+# Kernel-level `exit` (also available as Process.exit).
 lib "runtime/process.c"
   def exit as "riven_process_exit"(code: Int) -> Never
 end
 
-class Command
-end
-
 ## std::process::ExitStatus — flat-spine class wrapping a packed
-## exit-code int (see `riven_exit_status_alloc` in
-## library/std/process/runtime/process.c). Accessors read fixed
-## offsets off the spine.
-##
-## Migrated in #06.95 Phase E Slice B.3 from runtime_table.
-## ExitStatus is NOT in `user_drop_classes` (see
-## mir/lower/collect.rs) — its scope-exit cleanup goes through
-## the generic `riven_dealloc` path, NOT a `def drop` dispatch.
-## The `free` method below is a user-callable explicit release;
-## Output.status() returns a cloned ExitStatus that owns its own
-## spine, so callers may want to release one early.
-##
-## Command / Output stay as bare class shells for now — adding
-## class-body `def drop` decls to them triggered double-free /
-## SIGABRT in stdlib_process fixtures (Slice B.3 first attempt,
-## reverted). The interaction between a `def drop` lib decl and
-## the `user_drop_classes` scope-exit pass needs a follow-up
-## investigation before Command / Output can migrate.
+## exit-code int. ExitStatus is NOT a drop class (no `def drop`); the
+## generic `riven_dealloc` path handles spine cleanup. `free` is a
+## user-callable explicit release.
 class ExitStatus
   lib "runtime/process.c"
     def code as "riven_exit_status_code"(self) -> Int
@@ -63,5 +43,31 @@ class ExitStatus
   end
 end
 
+## std::process::Output — captured stdout / stderr / status triple
+## returned by `Command.output()`. The `def drop` lib decl drives the
+## user_drop_classes auto-detect.
 class Output
+  lib "runtime/process.c"
+    def stdout as "riven_output_stdout"(self) -> String
+    def stderr as "riven_output_stderr"(self) -> String
+    def status as "riven_output_status"(self) -> ExitStatus
+    def drop as "riven_output_drop"(self) -> ()
+  end
+end
+
+## std::process::Command — process-spawning builder. The terminal
+## methods (`status`, `output`) consume self and return `Result`.
+## Builder methods (`arg`, `args`, `env`, `current_dir`) mutate in
+## place and return Self for chaining.
+class Command
+  lib "runtime/process.c"
+    def self.new as "riven_command_new"(program: &String) -> Command
+    def arg as "riven_command_arg"(self, arg: &String) -> Command
+    def args as "riven_command_args"(self, args: &Array[String]) -> Command
+    def env as "riven_command_env"(self, key: &String, value: &String) -> Command
+    def current_dir as "riven_command_current_dir"(self, path: &String) -> Command
+    def status as "riven_command_status"(self) -> Result[ExitStatus, IoError]
+    def output as "riven_command_output"(self) -> Result[Output, IoError]
+    def drop as "riven_command_drop"(self) -> ()
+  end
 end

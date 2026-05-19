@@ -132,7 +132,6 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "Command_current_dir" => return Ok("riven_command_current_dir"),
         "Command_status" => return Ok("riven_command_status"),
         "Command_output" => return Ok("riven_command_output"),
-        "Command_drop" => return Ok("riven_command_drop"),
         // ExitStatus accessors migrated to library/std/process/src/lib.rvn
         // `class ExitStatus do lib "runtime/process.c" ... end end`
         // in #06.95 Phase E Slice B.3. The FFI alias map rewrites
@@ -143,7 +142,6 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "Output_stdout" => return Ok("riven_output_stdout"),
         "Output_stderr" => return Ok("riven_output_stderr"),
         "Output_status" => return Ok("riven_output_status"),
-        "Output_drop" => return Ok("riven_output_drop"),
         // Phase 2 stdlib (#06.5 T2): File / OpenOptions surface.
         // `File_open/create/append/open_options` are static-style
         // constructors that go through the standard `{Type}_{method}`
@@ -164,7 +162,6 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "File_seek" => return Ok("riven_file_seek"),
         "File_metadata" => return Ok("riven_file_metadata"),
         "File_close" => return Ok("riven_file_close"),
-        "File_drop" => return Ok("riven_file_drop"),
         "OpenOptions_new" => return Ok("riven_open_options_new"),
         "OpenOptions_read" => return Ok("riven_open_options_read"),
         "OpenOptions_write" => return Ok("riven_open_options_write"),
@@ -240,14 +237,12 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "TcpListener_local_addr" => return Ok("riven_tcp_listener_local_addr"),
         "TcpListener_set_nonblocking" => return Ok("riven_tcp_listener_set_nonblocking"),
         "TcpListener_close" => return Ok("riven_tcp_listener_close"),
-        "TcpListener_drop" => return Ok("riven_tcp_listener_drop"),
         "TcpStream_connect" => return Ok("riven_tcp_stream_connect"),
         "TcpStream_read" => return Ok("riven_tcp_stream_read"),
         "TcpStream_write" => return Ok("riven_tcp_stream_write"),
         "TcpStream_peer_addr" => return Ok("riven_tcp_stream_peer_addr"),
         "TcpStream_shutdown" => return Ok("riven_tcp_stream_shutdown"),
         "TcpStream_close" => return Ok("riven_tcp_stream_close"),
-        "TcpStream_drop" => return Ok("riven_tcp_stream_drop"),
         "TcpStream_set_read_timeout" => return Ok("riven_tcp_stream_set_read_timeout"),
         "TcpStream_set_write_timeout" => return Ok("riven_tcp_stream_set_write_timeout"),
         // Phase 2 stdlib (#06.5 T6): std::io::BufReader[R] /
@@ -266,7 +261,6 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "BufReader_read" => return Ok("riven_bufreader_read"),
         "BufReader_into_inner_file" => return Ok("riven_bufreader_into_inner_file"),
         "BufReader_into_inner_tcp" => return Ok("riven_bufreader_into_inner_tcp"),
-        "BufReader_drop" => return Ok("riven_bufreader_drop"),
         "BufWriter_new_file" => return Ok("riven_bufwriter_new_file"),
         "BufWriter_new_tcp" => return Ok("riven_bufwriter_new_tcp"),
         "BufWriter_with_capacity_file" => return Ok("riven_bufwriter_with_capacity_file"),
@@ -277,7 +271,6 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "BufWriter_flush" => return Ok("riven_bufwriter_flush"),
         "BufWriter_into_inner_file" => return Ok("riven_bufwriter_into_inner_file"),
         "BufWriter_into_inner_tcp" => return Ok("riven_bufwriter_into_inner_tcp"),
-        "BufWriter_drop" => return Ok("riven_bufwriter_drop"),
         // std::signal — graceful-shutdown surface.
         "signal_install_sigint" => return Ok("riven_signal_install_sigint"),
         "signal_received_sigint" => return Ok("riven_signal_received_sigint"),

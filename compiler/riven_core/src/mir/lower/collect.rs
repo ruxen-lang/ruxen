@@ -1,4 +1,5 @@
 use super::*;
+use crate::resolve::symbols::DefKind;
 
 impl<'a> Lowerer<'a> {
     /// Record every (trait → concrete-impl-target) mapping in the program.
@@ -177,7 +178,28 @@ impl<'a> Lowerer<'a> {
     /// drop-elaboration pass to emit a call to `{ClassName}_drop` before
     /// the no-op `MirInst::Drop` cleanup at scope exit.
     pub(super) fn collect_user_drop_classes(&mut self, program: &HirProgram) {
-        fn class_has_drop_method(class: &HirClassDef) -> bool {
+        // A class qualifies as a "drop class" when ANY of these holds:
+        //   1. Its HIR body declares `def drop` (user-side `class X ...
+        //      def drop(self) ... end end`).
+        //   2. An `impl Drop for X` block declares `def drop`.
+        //   3. Its class-body `lib` block declares `def drop as
+        //      "riven_X_drop"` — the stdlib pattern post-Phase-D-6.
+        //
+        // The third check walks the SymbolTable's `ClassInfo.methods`
+        // because lib-decl methods are registered there (as DefIds
+        // appended by `pass1_class_lib_methods`) but do NOT appear in
+        // `HirClassDef.methods` (which only holds user-body `def`s).
+        //
+        // Phase D-6 of #06.95 made this fully GENERIC — no hardcoded
+        // class-name list. Adding `def drop as "riven_..."` to a class
+        // in its .rvn lib block is the SINGLE mechanism that opts it
+        // into user_drop_classes. This also fixes the historical
+        // double-free pattern observed in #06.95 Phase E.B.3 first
+        // attempt: the prior code path inserted hardcoded names AND
+        // detected lib-decl methods, so a class with both registrations
+        // got two drop emissions at scope exit.
+        let symbols = self.symbols;
+        let class_has_drop_method = |class: &HirClassDef| -> bool {
             if class.methods.iter().any(|m| m.name == "drop") {
                 return true;
             }
@@ -190,14 +212,35 @@ impl<'a> Lowerer<'a> {
                     }
                 }
             }
+            if let Some(def) = symbols.get(class.def_id) {
+                if let DefKind::Class { info } = &def.kind {
+                    for method_id in &info.methods {
+                        if let Some(m_def) = symbols.get(*method_id) {
+                            if m_def.name == "drop" {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
             false
-        }
+        };
 
-        fn visit(item: &HirItem, set: &mut HashSet<String>) {
+        fn visit(
+            item: &HirItem,
+            set: &mut HashSet<String>,
+            module_path: &[String],
+            class_has_drop_method: &dyn Fn(&HirClassDef) -> bool,
+        ) {
             match item {
                 HirItem::Class(class) => {
                     if class_has_drop_method(class) {
-                        set.insert(class.name.clone());
+                        let qualified = if module_path.is_empty() {
+                            class.name.clone()
+                        } else {
+                            format!("{}.{}", module_path.join("."), class.name)
+                        };
+                        set.insert(qualified);
                     }
                 }
                 HirItem::Impl(impl_block) => {
@@ -214,8 +257,10 @@ impl<'a> Lowerer<'a> {
                     }
                 }
                 HirItem::Module(m) => {
+                    let mut child_path: Vec<String> = module_path.to_vec();
+                    child_path.push(m.name.clone());
                     for sub in &m.items {
-                        visit(sub, set);
+                        visit(sub, set, &child_path, class_has_drop_method);
                     }
                 }
                 _ => {}
@@ -223,42 +268,12 @@ impl<'a> Lowerer<'a> {
         }
 
         for item in &program.items {
-            visit(item, &mut self.user_drop_classes);
+            visit(
+                item,
+                &mut self.user_drop_classes,
+                &[],
+                &class_has_drop_method,
+            );
         }
-
-        // Phase 2 stdlib (#06): built-in classes whose runtime side
-        // owns inner heap (Vec spines, env entries, captured stdout/
-        // stderr buffers) need a `Command_drop` / `Output_drop` call
-        // before the generic `riven_dealloc` so the inner allocations
-        // are released. Pre-populate the set so the drop-elaboration
-        // pass treats them like user-defined drop classes — see
-        // `insert_drops`. The runtime fns are mapped via the standard
-        // `{Type}_drop -> riven_<type>_drop` dispatch in
-        // `codegen::runtime::runtime_name`.
-        self.user_drop_classes.insert("Command".to_string());
-        self.user_drop_classes.insert("Output".to_string());
-        // Phase 2 stdlib (#06.5 T2): `File` owns a POSIX fd. The drop
-        // helper `riven_file_drop` closes the fd if it's still open
-        // (idempotent — `f.close()` flags it `closed=1` first). The
-        // scope-exit drop pass then frees the 8-byte spine via
-        // `riven_dealloc`. Without this entry a `let f = File.open(...)`
-        // that goes out of scope would leak the fd until process exit.
-        self.user_drop_classes.insert("File".to_string());
-        // Phase 2 stdlib (#06.5 T5): `TcpListener` and `TcpStream`
-        // each own a POSIX fd. Same drop story as File — the helper
-        // `riven_tcp_<type>_drop` closes the fd if it's still open
-        // (idempotent — explicit `.close()` flags it first), then the
-        // scope-exit pass frees the 8-byte spine via `riven_dealloc`.
-        self.user_drop_classes.insert("TcpListener".to_string());
-        self.user_drop_classes.insert("TcpStream".to_string());
-        // Phase 2 stdlib (#06.5 T6): BufReader[R] / BufWriter[W] own
-        // a 32-byte spine plus a heap byte-buffer. `riven_bufreader_drop`
-        // frees the byte-buffer (the inner File/TcpStream has its OWN
-        // drop helper that runs in the same scope-exit pass — bufio's
-        // drop intentionally does NOT close the inner). `riven_bufwriter_drop`
-        // does a best-effort flush before freeing the buffer so a
-        // dropped BufWriter doesn't silently lose buffered bytes.
-        self.user_drop_classes.insert("BufReader".to_string());
-        self.user_drop_classes.insert("BufWriter".to_string());
     }
 }
