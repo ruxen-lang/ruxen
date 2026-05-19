@@ -105,6 +105,26 @@ pub fn run_bootstrap(diagnostics: &mut Vec<Diagnostic>) -> Vec<Program> {
     run_bootstrap_with_files(BOOTSTRAP_FILES, None, diagnostics)
 }
 
+/// Variant of [`run_bootstrap`] that returns each parsed program
+/// alongside the package name derived from its relative path
+/// (e.g. `"io/src/lib.rvn"` → `"io"`). Callers that need to
+/// associate items with their owning package (e.g. for
+/// auto-populating `std.<pkg>` submodules) use this surface.
+pub fn run_bootstrap_with_package_names(
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<(String, Program)> {
+    let programs = run_bootstrap(diagnostics);
+    BOOTSTRAP_FILES
+        .iter()
+        .zip(programs.into_iter())
+        .filter_map(|(rel, p)| {
+            // First path segment is the package name.
+            let pkg = rel.split('/').next()?.to_string();
+            Some((pkg, p))
+        })
+        .collect()
+}
+
 /// Test-friendly variant of [`run_bootstrap`] that takes an explicit
 /// file list and an optional path override. The override pins the
 /// sysroot to a specific directory (a tempdir, typically) so tests

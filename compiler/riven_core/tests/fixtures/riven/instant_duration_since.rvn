@@ -1,6 +1,6 @@
 use std.time.Instant
 use std.time.Duration
-use std.thread.sleep
+use std.sync.sleep
 
 def main
   let earlier = Instant.now()

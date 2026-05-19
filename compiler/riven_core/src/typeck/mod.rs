@@ -45,16 +45,55 @@ pub struct TypeCheckResult {
 /// empty slice instead.
 pub fn type_check(program: &ast::Program) -> TypeCheckResult {
     let mut bootstrap_diagnostics: Vec<crate::diagnostics::Diagnostic> = Vec::new();
-    let bootstrap_programs = crate::resolve::bootstrap::run_bootstrap(&mut bootstrap_diagnostics);
-    // Bootstrap failures are surfaced as E0725 diagnostics on the
-    // returned TypeCheckResult so the caller can route them through
-    // the usual error-reporting pipeline (same as any other
-    // resolver error). They are appended AFTER the user-code
-    // diagnostics so file-line-citing-stdlib-source errors land at
-    // the end of the diag list where the contributor expects them.
-    let mut result = type_check_with_bootstrap(program, &bootstrap_programs);
+    // Phase D of #06.95: drive bootstrap through the package-aware
+    // path so each `std.<pkg>` submodule's `items` list is
+    // auto-populated from the matching `library/std/<pkg>/src/lib.rvn`
+    // — no hand-maintained FIXUPS row required per package.
+    let bootstrap_packages =
+        crate::resolve::bootstrap::run_bootstrap_with_package_names(&mut bootstrap_diagnostics);
+    let mut result = type_check_with_bootstrap_packages(program, &bootstrap_packages);
     result.diagnostics.extend(bootstrap_diagnostics);
     result
+}
+
+/// Package-aware variant of [`type_check_with_bootstrap`]. Each
+/// element of `bootstrap_packages` carries the package name (e.g.
+/// `"io"`) alongside its parsed `Program`, so the resolver can
+/// auto-populate each `std.<pkg>` submodule from the matching
+/// `library/std/<pkg>/src/lib.rvn` — the table-driven fixup is no
+/// longer required for the per-package bulk case.
+pub fn type_check_with_bootstrap_packages(
+    program: &ast::Program,
+    bootstrap_packages: &[(String, ast::Program)],
+) -> TypeCheckResult {
+    let resolver = Resolver::new();
+    let ResolveResult {
+        mut program,
+        mut symbols,
+        mut type_context,
+        mut diagnostics,
+    } = resolver.resolve_with_bootstrap_packages(program, bootstrap_packages);
+
+    diagnostics.extend(crate::implicit_includes::validate_program(
+        &program, &symbols,
+    ));
+
+    let mut trait_resolver = MixinResolver::new();
+    trait_resolver.collect_impls(&program, &symbols);
+
+    let mut engine = InferenceEngine::new(&mut type_context, &mut symbols, &trait_resolver);
+    engine.infer_program(&mut program);
+    diagnostics.extend(engine.diagnostics);
+
+    resolve_all_types(&mut program, &type_context);
+    diagnostics.extend(validate(&program, &symbols, &type_context));
+
+    TypeCheckResult {
+        program,
+        symbols,
+        type_context,
+        diagnostics,
+    }
 }
 
 /// Type-check a parsed user `program` with stdlib `bootstrap_programs`

@@ -138,6 +138,16 @@ pub struct Resolver {
     /// _Thing_add_one". Re-registering under `class.name` adds
     /// the parallel `Thing_add_one → <c-symbol>` entry.
     pub(super) mixin_lib_decls: HashMap<String, Vec<ast::LibDecl>>,
+
+    /// Phase D of #06.95: when a package-aware bootstrap (via
+    /// [`resolve_with_bootstrap_packages`](Self::resolve_with_bootstrap_packages))
+    /// is driving the resolution, this carries `(pkg_name,
+    /// item_names_declared)` pairs. The post-merge fixup walks this
+    /// list and appends each item's DefId to the matching
+    /// `std.<pkg>` submodule's `items` list, replacing the
+    /// hand-maintained `FIXUPS` table for bulk per-package
+    /// population.
+    pub(super) bootstrap_auto_packages: Vec<(String, Vec<String>)>,
 }
 
 #[derive(Debug)]
@@ -168,6 +178,7 @@ impl Resolver {
             pass1_class_lib_methods: HashMap::new(),
             merging_bootstrap: false,
             mixin_lib_decls: HashMap::new(),
+            bootstrap_auto_packages: Vec::new(),
         }
     }
 

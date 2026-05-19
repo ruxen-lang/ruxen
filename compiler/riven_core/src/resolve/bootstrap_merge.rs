@@ -40,6 +40,65 @@ impl Resolver {
     /// files are signature-only (FFI aliases), so there are no bodies
     /// to lower. Wave 2 will revisit this when the first stdlib file
     /// with actual Riven function bodies arrives.
+    /// Package-aware variant of [`resolve_with_bootstrap`]. Pairs each
+    /// bootstrap program with its package name (e.g. `"io"`,
+    /// `"fs"`), so the resolver can auto-populate each `std.<pkg>`
+    /// submodule's `items` list from the program's top-level
+    /// declarations. Production callers (`typeck::type_check`) use
+    /// this path; tests with synthetic programs keep the legacy
+    /// `resolve_with_bootstrap` and rely on the static FIXUPS table.
+    pub fn resolve_with_bootstrap_packages(
+        self,
+        program: &ast::Program,
+        bootstrap_packages: &[(String, ast::Program)],
+    ) -> ResolveResult {
+        // Extract just the programs for the existing merge path…
+        let bootstrap_programs: Vec<ast::Program> = bootstrap_packages
+            .iter()
+            .map(|(_, p)| p.clone())
+            .collect();
+        // …and remember the (pkg_name, item_names) pairs so the
+        // post-merge fixup can auto-populate each std.<pkg> submodule.
+        let auto_pkgs: Vec<(String, Vec<String>)> = bootstrap_packages
+            .iter()
+            .map(|(name, prog)| {
+                let items = Self::top_level_item_names(prog);
+                (name.clone(), items)
+            })
+            .collect();
+        let mut resolver = self;
+        resolver.bootstrap_auto_packages = auto_pkgs;
+        resolver.resolve_with_bootstrap(program, &bootstrap_programs)
+    }
+
+    /// Collect the names of every top-level item the program declares
+    /// (free fns, classes, enums, traits, mixins, modules). Used by
+    /// the package-aware fixup to find DefIds that should populate the
+    /// matching `std.<pkg>` submodule.
+    fn top_level_item_names(program: &ast::Program) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        for item in &program.items {
+            match item {
+                ast::TopLevelItem::Function(f) => names.push(f.name.clone()),
+                ast::TopLevelItem::Class(c) => names.push(c.name.clone()),
+                ast::TopLevelItem::Struct(s) => names.push(s.name.clone()),
+                ast::TopLevelItem::Enum(e) => names.push(e.name.clone()),
+                ast::TopLevelItem::Mixin(m) => names.push(m.name.clone()),
+                ast::TopLevelItem::Module(m) => names.push(m.name.clone()),
+                ast::TopLevelItem::TypeAlias(a) => names.push(a.name.clone()),
+                ast::TopLevelItem::Newtype(n) => names.push(n.name.clone()),
+                ast::TopLevelItem::Const(c) => names.push(c.name.clone()),
+                ast::TopLevelItem::Lib(lib) => {
+                    for f in &lib.functions {
+                        names.push(f.name.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+        names
+    }
+
     pub fn resolve_with_bootstrap(
         mut self,
         program: &ast::Program,
@@ -203,7 +262,67 @@ impl Resolver {
     /// assembly — a `.rvn`-defined `module rand … end` (or the
     /// bootstrap-merge-auto-wraps-each-file behaviour landing later in
     /// the epic) becomes the only registration site.
+    /// Phase D of #06.95: walk `bootstrap_auto_packages` and, for each
+    /// `(pkg_name, item_names)` pair, append every item's DefId to
+    /// the matching `std.<pkg>` submodule's `items` list. Replaces
+    /// the bulk per-package entries in the legacy FIXUPS table —
+    /// adding a new stdlib package no longer requires touching the
+    /// fixup code.
+    fn auto_populate_std_submodules_from_packages(&mut self) {
+        if self.bootstrap_auto_packages.is_empty() {
+            return;
+        }
+        let Some(std_id) = self.scopes.lookup_type("std") else {
+            return;
+        };
+        let std_items: Vec<DefId> = match self.symbols.get(std_id).map(|d| &d.kind) {
+            Some(DefKind::Module { items }) => items.clone(),
+            _ => return,
+        };
+
+        // Snapshot the package list to release the immutable borrow on
+        // `self.bootstrap_auto_packages` before we take mutable refs
+        // through `self.symbols.get_mut` below.
+        let pkgs = std::mem::take(&mut self.bootstrap_auto_packages);
+
+        for (pkg_name, item_names) in pkgs.iter() {
+            let Some(&module_id) = std_items.iter().find(|&&id| {
+                self.symbols
+                    .get(id)
+                    .map(|d| &d.name == pkg_name && matches!(d.kind, DefKind::Module { .. }))
+                    .unwrap_or(false)
+            }) else {
+                continue;
+            };
+            let mut item_ids: Vec<DefId> = Vec::with_capacity(item_names.len());
+            for name in item_names {
+                let id = self
+                    .scopes
+                    .lookup(name)
+                    .or_else(|| self.scopes.lookup_type(name));
+                if let Some(id) = id {
+                    if !item_ids.contains(&id) {
+                        item_ids.push(id);
+                    }
+                }
+            }
+            if let Some(def) = self.symbols.get_mut(module_id) {
+                if let DefKind::Module { items } = &mut def.kind {
+                    for id in item_ids {
+                        if !items.contains(&id) {
+                            items.push(id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub(super) fn fixup_bootstrapped_stdlib_modules(&mut self) {
+        // Generic per-package auto-population first; cross-package
+        // FIXUPS (below) only handle re-exports that span packages.
+        self.auto_populate_std_submodules_from_packages();
+
         // (stdlib-module-name, &[item-names-the-.rvn-defines])
         //
         // `register_builtins` inserts the outer `std` module into the
@@ -214,147 +333,17 @@ impl Resolver {
         // `std`'s items rather than calling `scopes.lookup_type`
         // directly.
         //
-        // For each item name in a fixup row we try the value scope
-        // first (free fns from a `lib` block — rand/path/env case)
-        // and fall back to the type scope (mixins / classes / enums —
-        // fmt case). This keeps a single table covering both shapes
-        // without doubling the data structure.
-        const FIXUPS: &[(&str, &[&str])] = &[
-            // Wave 2 — library/std/rand/src/lib.rvn
-            ("rand", &["random_bytes", "random_u64", "random_fill"]),
-            // Wave 2 — library/std/path/src/lib.rvn
-            (
-                "path",
-                &[
-                    "path_join",
-                    "path_parent",
-                    "path_file_name",
-                    "path_extension",
-                    "path_is_absolute",
-                ],
-            ),
-            // Wave 2 — library/std/env/src/lib.rvn
-            ("env", &["args", "get", "vars", "current_dir"]),
-            // Wave 2 — library/std/fmt/src/lib.rvn (mixed mixins + classes —
-            // each name resolves through the type-scope fallback).
-            ("fmt", &["Display", "Debug", "Formatter", "FmtError"]),
-            // Wave 2 — library/std/net/src/lib.rvn (class shells +
-            // Shutdown enum; methods still flow through the static-ctor
-            // + runtime_table dispatch until T#20 lands).
-            ("net", &["TcpListener", "TcpStream", "Shutdown"]),
-            // Wave 2 — library/std/process/src/lib.rvn (`exit` free fn +
-            // Command / Output / ExitStatus class shells; class methods
-            // still go through static-ctor + runtime_table until T#20).
-            ("process", &["exit", "Command", "Output", "ExitStatus"]),
-            // Wave 2 — library/std/time/src/lib.rvn (`unix_ns` free fn +
-            // Duration / Instant class shells; class methods still go
-            // through static-ctor + runtime_table until T#20).
-            ("time", &["unix_ns", "Duration", "Instant"]),
-            // Wave 2 — library/std/fs/src/lib.rvn (17 fs free fns +
-            // Metadata class shell; also re-exports File for the
-            // `use std.fs.File` import alias).
-            (
-                "fs",
-                &[
-                    "read_to_string",
-                    "write",
-                    "exists",
-                    "is_file",
-                    "is_dir",
-                    "read_dir",
-                    "metadata",
-                    "remove_file",
-                    "create_dir",
-                    "create_dir_all",
-                    "rename",
-                    "copy",
-                    "remove_dir_all",
-                    "canonicalize",
-                    "write_atomic",
-                    "read_link",
-                    "symlink",
-                    "Metadata",
-                    "File",
-                ],
-            ),
-            // Wave 2 — library/std/io/src/lib.rvn (9 free fns + 7 class
-            // shells + IoError / IoErrorKind / SeekFrom enums).
-            (
-                "io",
-                &[
-                    "puts",
-                    "eputs",
-                    "print",
-                    "println",
-                    "eprintln",
-                    "read_line",
-                    "stdin",
-                    "stdout",
-                    "stderr",
-                    "IoError",
-                    "IoErrorKind",
-                    "Stdin",
-                    "Stdout",
-                    "Stderr",
-                    "File",
-                    "OpenOptions",
-                    "SeekFrom",
-                    "BufReader",
-                    "BufWriter",
-                ],
-            ),
-            // Wave 2 — library/std/sync/src/lib.rvn (9 class shells:
-            // Thread, ThreadId, JoinHandle, Mutex, MutexGuard,
-            // SharedSync, PoisonError, ThreadPanic + Context /
-            // Waker from std::task). `SharedSync` is the Ruby-
-            // naming canonical name (TEC-13 / §10a); `Arc` stays
-            // Rust-registered as a backward-compat alias class
-            // whose type_constructors Variable produces
-            // `Ty::Class { name: "SharedSync" }`. Methods still
-            // flow through runtime_table mangled-name dispatch
-            // until T#21.
-            (
-                "sync",
-                &[
-                    "Thread",
-                    "ThreadId",
-                    "JoinHandle",
-                    "Mutex",
-                    "MutexGuard",
-                    "SharedSync",
-                    "PoisonError",
-                    "ThreadPanic",
-                    "Context",
-                    "Waker",
-                ],
-            ),
-            // Phase D — `sleep` lives in library/std/sync/src/lib.rvn
-            // as both a `Thread.sleep` class method and a bare-fn
-            // transition shim. The std.thread submodule re-exports
-            // the bare shim so `use std.thread.sleep` keeps working.
-            ("thread", &["sleep"]),
-            // Phase D — `signal_install_sigint` /
-            // `signal_received_sigint` live in
-            // library/std/sync/src/lib.rvn as both `Signal.*` class
-            // methods and bare-fn transition shims.
-            ("signal", &["signal_install_sigint", "signal_received_sigint"]),
-        ];
-
-        let Some(std_id) = self.scopes.lookup_type("std") else {
-            return;
-        };
-        // Snapshot std's items so we don't hold an immutable borrow of
-        // `self.symbols` across the mutable `get_mut` calls below.
-        let std_items: Vec<DefId> = match self.symbols.get(std_id).map(|d| &d.kind) {
-            Some(DefKind::Module { items }) => items.clone(),
-            _ => return,
-        };
+        // Phase D of #06.95: the bulk per-package FIXUPS table is
+        // gone. `auto_populate_std_submodules_from_packages` above
+        // derives each `std.<pkg>` submodule's `items` from the
+        // matching `library/std/<pkg>/src/lib.rvn`. The only
+        // remaining responsibility here is the small TYPE_ALIASES
+        // table below.
 
         // Wave 2 (#06.8): re-establish stdlib type aliases whose target
         // moved from a Rust registration to a bootstrap-loaded `.rvn`
         // file. Today this is just `Hash → Hashable` (the TEC-13
-        // deprecation alias), but the table is the obvious place to
-        // add new aliases as other migrations land.
+        // deprecation alias).
         //
         // The `Hash[K, V]` collection type has its OWN type-position
         // resolver path (see `resolve_type_path`'s explicit `Hash` /
@@ -363,49 +352,10 @@ impl Resolver {
         for (alias, target) in TYPE_ALIASES {
             if let Some(target_id) = self.scopes.lookup_type(target) {
                 // Only insert when missing — never overwrite a real
-                // scope entry. (Today `Hash` is unbound after the
-                // Hashable migration; tomorrow it might be a real
-                // mixin in its own right.)
+                // scope entry.
                 if self.scopes.lookup_type(alias).is_none() {
                     self.scopes.insert_type(alias.to_string(), target_id);
                     self.type_registry.insert(alias.to_string(), target_id);
-                }
-            }
-        }
-
-        for (module_name, fn_names) in FIXUPS {
-            // Find the submodule DefId by name inside std's items.
-            let Some(&module_id) = std_items.iter().find(|&&id| {
-                self.symbols
-                    .get(id)
-                    .map(|d| d.name == *module_name && matches!(d.kind, DefKind::Module { .. }))
-                    .unwrap_or(false)
-            }) else {
-                continue;
-            };
-            let mut fn_ids: Vec<DefId> = Vec::with_capacity(fn_names.len());
-            for fn_name in *fn_names {
-                // Value scope first (free fns), type scope as fallback
-                // (mixins / classes / enums).
-                let item_id = self
-                    .scopes
-                    .lookup(fn_name)
-                    .or_else(|| self.scopes.lookup_type(fn_name));
-                if let Some(id) = item_id {
-                    fn_ids.push(id);
-                }
-            }
-            if let Some(def) = self.symbols.get_mut(module_id) {
-                if let DefKind::Module { items } = &mut def.kind {
-                    // APPEND the looked-up DefIds rather than
-                    // overwriting. Most stdlib modules start with
-                    // empty items so append == replace for them, but
-                    // a few (e.g. std.sync) keep one-off Rust shims
-                    // like the ThreadId value-scope Variable that
-                    // need to coexist with bootstrap-loaded class
-                    // DefIds. Append keeps both working without a
-                    // second fixup mechanism.
-                    items.extend(fn_ids);
                 }
             }
         }

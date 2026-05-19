@@ -1,6 +1,6 @@
 use std.time.Instant
 use std.time.Duration
-use std.thread.sleep
+use std.sync.sleep
 
 # Negative test: `self.duration_since(earlier)` where earlier > self
 # must panic. The runtime calls riven_panic("Instant.duration_since:
