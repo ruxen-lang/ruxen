@@ -1,24 +1,55 @@
 ## std::time — Duration + Instant class shells + unix_ns free fn.
 ##
-## Wave 2 (#06.8) — partial migration. Same shape as net / process:
-## - `unix_ns() -> Int` fully migrates (lib block with c_symbol alias).
-## - `class Duration end` / `class Instant end` are class shells; their
-##   static-style constructors (`Duration.from_secs`, `Instant.now`, …)
-##   still flow through the static-ctor fast path in
-##   `mir/lower/expr/method_call.rs` and the runtime_table mangled-name
-##   lookup until T#20 removes Duration / Instant from the carve-out.
+## #06.8 T#20 follow-through: Duration and Instant now carry
+## class-body `lib "riven_runtime"` blocks for every method that
+## previously lived in `codegen/runtime_table/mod.rs`. The
+## static-ctor fast path in `mir/lower/expr/method_call.rs` still
+## fires for `Duration.from_secs(5)` / `Instant.now()` — those keep
+## the existing 0-arg / 1-arg fast path semantics (no synthetic
+## self prepend) — but the callee resolution now goes through the
+## ffi_alias_map rewrite (added in T#14) rather than the
+## runtime_table lookup. Instance methods (`d.as_secs()`,
+## `i.elapsed()`) flow through the general method dispatch with
+## the same alias-map rewrite.
 ##
-## `unix_ns` is wall-clock (nanoseconds since 1970-01-01 UTC) and stays
-## a bare Int-returning free fn until a `SystemTime` class lands. The
-## monotonic `now_ns` free fn previously exposed here was removed in
-## #06.5 T5.5 once `Instant.now` + `Instant.elapsed` covered every use
-## case — the riven_time_now_ns C symbol is still linked (it backs
-## `riven_instant_now`); it just is not reachable from Riven user code.
+## `unix_ns` is wall-clock (nanoseconds since 1970-01-01 UTC) and
+## stays a bare Int-returning free fn until a `SystemTime` class
+## lands. The monotonic `now_ns` free fn previously exposed here
+## was removed in #06.5 T5.5 once `Instant.now` + `Instant.elapsed`
+## covered every use case — the `riven_time_now_ns` C symbol is
+## still linked (it backs `riven_instant_now`); it just is not
+## reachable from Riven user code.
 
 class Duration
+  lib "riven_runtime"
+    # Constructors (no `self`).
+    def self.from_secs as "riven_duration_from_secs"(secs: Int) -> Int
+    def self.from_millis as "riven_duration_from_millis"(ms: Int) -> Int
+    def self.from_micros as "riven_duration_from_micros"(us: Int) -> Int
+    def self.from_nanos as "riven_duration_from_nanos"(ns: Int) -> Int
+
+    # Accessors.
+    def as_secs as "riven_duration_as_secs"(self) -> Int
+    def as_millis as "riven_duration_as_millis"(self) -> Int
+    def as_micros as "riven_duration_as_micros"(self) -> Int
+    def as_nanos as "riven_duration_as_nanos"(self) -> Int
+
+    # Arithmetic.
+    def add as "riven_duration_add"(self, other: Int) -> Int
+    def sub as "riven_duration_sub"(self, other: Int) -> Int
+  end
 end
 
 class Instant
+  lib "riven_runtime"
+    # Constructor (no `self`).
+    def self.now as "riven_instant_now"() -> Int
+
+    # Accessors.
+    def elapsed as "riven_instant_elapsed"(self) -> Int
+    def duration_since as "riven_instant_duration_since"(self, earlier: Int) -> Int
+    def sub as "riven_instant_sub"(self, other: Int) -> Int
+  end
 end
 
 lib "riven_runtime"

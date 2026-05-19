@@ -1,23 +1,32 @@
 ## std::net — TcpListener / TcpStream class shells + Shutdown enum.
 ##
-## Wave 2 (#06.8) — partial migration. The class identities and the
-## Shutdown enum (with its tag-stability contract) now live here in
-## self-hosted Riven source.
+## Wave 2 (#06.8) — class identities + Shutdown enum live here in
+## self-hosted Riven source. Methods still flow through the
+## static-ctor fast path + runtime_table mangled-name lookup
+## (`TcpStream_read` → `riven_tcp_stream_read`, …). A trial
+## migration during T#20 attempted to declare these as class-body
+## `lib "riven_runtime"` decls with `-> Int` returns (matching the
+## void*-boxed Result wire shape), but typeck consults the
+## hardcoded method-resolver table in `typeck/method_resolvers/mod.rs`
+## that says `bind` → `Result[TcpListener, IoError]`. Declaring
+## the lib-decl return type as `Int` caused the user-side
+## `match TcpListener.bind(...)` to compile (the user-method
+## lookup hit the lib decl first) but produce no output at runtime
+## because the Ok/Err arms never matched. The clean fix needs
+## either the lib-decl grammar to accept `Result[T, E]` return
+## types end-to-end through cranelift's import sig (the void*
+## ABI is wire-compatible — only typeck sees the rich form), or
+## the lib-decl-vs-typeck-table precedence to flip. Both are
+## bigger lifts than the static-ctor carve-out removal; the
+## migration is deferred until that lands. Duration / Instant
+## (whose `Result`-typed methods are limited) migrated cleanly
+## under the same T#20 follow-through; TcpListener / TcpStream /
+## File / BufReader stay on the runtime_table path for now.
 ##
-## Methods on TcpListener / TcpStream are NOT yet migrated — they
-## still flow through the static-ctor fast path in
-## `mir/lower/expr/method_call.rs` and the runtime_table mangled-name
-## lookup (`TcpStream_read` → `riven_tcp_stream_read`, …). Migrating
-## the methods to a class-body `lib "riven_runtime"` block requires
-## removing TcpListener / TcpStream from the static-ctor carve-out
-## (T#20) so the standard method-call lowering — which already honours
-## c_symbol via the ffi_alias_map — can pick them up. That work is
-## tracked separately.
-##
-## The Shutdown variant order is the load-bearing contract: tag indices
-## must match `RIVEN_SHUTDOWN_{READ,WRITE,BOTH}` in
+## The Shutdown variant order is the load-bearing contract: tag
+## indices must match `RIVEN_SHUTDOWN_{READ,WRITE,BOTH}` in
 ## library/runtime/net/tcp.c. The `shutdown_tag_stability` pin test
-## scans this file (after Wave 2 migration) instead of stdlib/mod.rs.
+## scans this file instead of stdlib/mod.rs.
 
 class TcpListener
 end

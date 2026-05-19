@@ -201,20 +201,14 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // are regular instance methods on the {Type}_{method}
         // mangling path. `sleep` is the top-level free fn in the new
         // `std.thread` module.
-        "Duration_from_secs" => return Ok("riven_duration_from_secs"),
-        "Duration_from_millis" => return Ok("riven_duration_from_millis"),
-        "Duration_from_micros" => return Ok("riven_duration_from_micros"),
-        "Duration_from_nanos" => return Ok("riven_duration_from_nanos"),
-        "Duration_as_secs" => return Ok("riven_duration_as_secs"),
-        "Duration_as_millis" => return Ok("riven_duration_as_millis"),
-        "Duration_as_micros" => return Ok("riven_duration_as_micros"),
-        "Duration_as_nanos" => return Ok("riven_duration_as_nanos"),
-        "Duration_add" => return Ok("riven_duration_add"),
-        "Duration_sub" => return Ok("riven_duration_sub"),
-        "Instant_now" => return Ok("riven_instant_now"),
-        "Instant_elapsed" => return Ok("riven_instant_elapsed"),
-        "Instant_duration_since" => return Ok("riven_instant_duration_since"),
-        "Instant_sub" => return Ok("riven_instant_sub"),
+        // Duration / Instant methods migrated to
+        // library/std/src/time.rvn (#06.8 T#20 follow-through). MIR's
+        // ffi_alias_map carries the parent-name-keyed entries; the
+        // static-ctor fast path's alias-map lookup (T#14) rewrites
+        // the `Duration_from_secs` / `Instant_now` callees before
+        // codegen consults runtime_table. The 4-layer routing
+        // (static-ctor / field-access / general method dispatch /
+        // ArrayLiteral) is uniform across all sites.
         "sleep" => return Ok("riven_thread_sleep_duration"),
         // std::path entries were here — Wave 2 (#06.8) migration moved
         // the C-symbol bindings to library/std/src/path.rvn. See the
