@@ -5,10 +5,10 @@
 //! variables are allocated for unresolved types; the type checker fills them in.
 
 pub mod bootstrap;
+mod const_helpers;
 pub mod scope;
 mod stdlib;
 pub mod symbols;
-mod const_helpers;
 mod yield_scan;
 
 use std::collections::HashMap;
@@ -712,9 +712,7 @@ impl Resolver {
         new_sig: &FnSignature,
         new_span: &Span,
     ) {
-        if let Some((existing_sig, _existing_span)) =
-            self.extern_symbol_table.get(link_symbol)
-        {
+        if let Some((existing_sig, _existing_span)) = self.extern_symbol_table.get(link_symbol) {
             let arity_ok = existing_sig.params.len() == new_sig.params.len();
             let params_ok = arity_ok
                 && existing_sig
@@ -762,10 +760,7 @@ impl Resolver {
                 // #06.8 T0c: capture the `layout flat_heap_struct`
                 // marker at forward-declaration time so any pre-pass
                 // user (e.g. forward-referenced fn sigs) sees it.
-                let flat_heap_struct = class
-                    .layout
-                    .iter()
-                    .any(|s| s == "flat_heap_struct");
+                let flat_heap_struct = class.layout.iter().any(|s| s == "flat_heap_struct");
 
                 // #06.8 T#21: namespace-anchor mode. When the bootstrap
                 // is merging a `class Foo` whose name already has a
@@ -872,12 +867,7 @@ impl Resolver {
                             }
                         }
                         for ffi_fn in &lib.functions {
-                            self.register_class_lib_method(
-                                id,
-                                &class.name,
-                                ffi_fn,
-                                &mut hir_fns,
-                            );
+                            self.register_class_lib_method(id, &class.name, ffi_fn, &mut hir_fns);
                         }
                     }
                     if !hir_fns.is_empty() {
@@ -924,10 +914,7 @@ impl Resolver {
                 if e.layout.iter().any(|s| s == "tagged") {
                     if let Some(_first_span) = self.tagged_enums_in_scope.get(&e.name).cloned() {
                         self.diagnostics.push(Diagnostic::error_with_code(
-                            format!(
-                                "duplicate `layout tagged` enum `{}` in scope",
-                                e.name
-                            ),
+                            format!("duplicate `layout tagged` enum `{}` in scope", e.name),
                             e.span.clone(),
                             "E0723",
                         ));
@@ -1106,12 +1093,7 @@ impl Resolver {
                             }
                         }
                         for ffi_fn in &lib.functions {
-                            self.register_class_lib_method(
-                                id,
-                                &t.name,
-                                ffi_fn,
-                                &mut hir_fns,
-                            );
+                            self.register_class_lib_method(id, &t.name, ffi_fn, &mut hir_fns);
                         }
                     }
                     if !hir_fns.is_empty() {
@@ -1265,11 +1247,7 @@ impl Resolver {
                         .c_symbol
                         .clone()
                         .unwrap_or_else(|| ffi_fn.name.clone());
-                    self.check_ffi_signature_conflict(
-                        &link_symbol,
-                        &signature,
-                        &ffi_fn.span,
-                    );
+                    self.check_ffi_signature_conflict(&link_symbol, &signature, &ffi_fn.span);
                     let id = self.symbols.define(
                         ffi_fn.name.clone(),
                         DefKind::Function {
@@ -1342,11 +1320,7 @@ impl Resolver {
                         .c_symbol
                         .clone()
                         .unwrap_or_else(|| ffi_fn.name.clone());
-                    self.check_ffi_signature_conflict(
-                        &link_symbol,
-                        &signature,
-                        &ffi_fn.span,
-                    );
+                    self.check_ffi_signature_conflict(&link_symbol, &signature, &ffi_fn.span);
                     let id = self.symbols.define(
                         ffi_fn.name.clone(),
                         DefKind::Function {
@@ -1657,10 +1631,7 @@ impl Resolver {
             .unwrap_or_default();
         // #06.8 T0c: preserve the `layout flat_heap_struct` marker
         // captured in pass 1 across the pass-2 rewrite.
-        let flat_heap_struct = class
-            .layout
-            .iter()
-            .any(|s| s == "flat_heap_struct");
+        let flat_heap_struct = class.layout.iter().any(|s| s == "flat_heap_struct");
         // #06.8 Phase 3b: append the class-body `lib` FFI methods that
         // pass-1 registered onto the side-map. They were registered as
         // `DefKind::Method` with `parent = def_id` and need to appear
@@ -2280,7 +2251,8 @@ impl Resolver {
             return;
         }
 
-        let Some(def) = const_helpers::nominal_type_definition_mut(target_ty, &mut self.symbols) else {
+        let Some(def) = const_helpers::nominal_type_definition_mut(target_ty, &mut self.symbols)
+        else {
             return;
         };
 
@@ -4545,7 +4517,8 @@ impl Resolver {
                             // Fold via the same path used for
                             // resolution, then read the literal value
                             // if we have one after normalization.
-                            let folded = const_helpers::lower_const_expr_from_expr(expr).normal_form();
+                            let folded =
+                                const_helpers::lower_const_expr_from_expr(expr).normal_form();
                             folded.as_lit().map(|v| v as i64)
                         }
                         _ => None,
@@ -5297,10 +5270,33 @@ mod tests {
         assert!(has_sync, "expected builtins to include Sync");
     }
 
-    #[test]
-    fn register_builtins_includes_async_core_symbols() {
+    /// #06.8 Wave 2 helper: build a `Resolver` whose symbol table is
+    /// populated by BOTH `register_builtins` (Rust-side) AND the
+    /// bootstrap merge (self-hosted `library/std/src/*.rvn`). Tests
+    /// that inspect the registered class / enum / trait surface
+    /// need both halves because the migration moved several
+    /// previously-Rust-registered names (Context, Waker, Thread,
+    /// JoinHandle, Mutex, MutexGuard, Arc, PoisonError, ThreadPanic,
+    /// ...) into .rvn class shells.
+    fn resolver_with_bootstrap_for_tests() -> Resolver {
         let mut resolver = Resolver::new();
         resolver.register_builtins();
+        let mut diags: Vec<crate::diagnostics::Diagnostic> = Vec::new();
+        let programs = crate::resolve::bootstrap::run_bootstrap(&mut diags);
+        assert!(diags.is_empty(), "bootstrap parse errors: {:?}", diags);
+        let mut ffi_libs = Vec::new();
+        resolver.merge_bootstrap_programs(&programs, &mut ffi_libs);
+        // `fixup_bootstrapped_stdlib_modules` is what re-populates
+        // each stdlib submodule's `items` list with the
+        // bootstrap-loaded DefIds. Without it, the `std.sync` /
+        // `std.io` / etc. `DefKind::Module` items vectors are empty.
+        resolver.fixup_bootstrapped_stdlib_modules();
+        resolver
+    }
+
+    #[test]
+    fn register_builtins_includes_async_core_symbols() {
+        let resolver = resolver_with_bootstrap_for_tests();
 
         let future_trait = resolver
             .symbols
@@ -5323,6 +5319,8 @@ mod tests {
         };
         assert_eq!(info.variants.len(), 2, "expected Ready/Pending variants");
 
+        // Context / Waker migrated to library/std/src/sync.rvn in
+        // Wave 2; the bootstrap merge above loads them.
         assert!(
             resolver
                 .symbols
@@ -5341,9 +5339,20 @@ mod tests {
 
     #[test]
     fn register_builtins_includes_concurrency_core_symbols() {
-        let mut resolver = Resolver::new();
-        resolver.register_builtins();
+        let resolver = resolver_with_bootstrap_for_tests();
 
+        // Thread / JoinHandle / Mutex / MutexGuard / PoisonError /
+        // ThreadPanic migrated to library/std/src/sync.rvn in Wave 2.
+        // `Arc` remains a Rust-side `DefKind::Class` shim — see
+        // resolve/stdlib/mod.rs `arc_alias_id` (it's the backward-compat
+        // alias that types as `Ty::Class { name: "SharedSync" }` so
+        // `Arc.new(...)` returns a SharedSync-typed value). `ThreadId`
+        // ALSO exists in sync.rvn as a class; the Rust shim is a
+        // `DefKind::Variable` for the value-scope sentinel — the
+        // symbol table thus carries TWO `ThreadId` entries (one Class
+        // from sync.rvn, one Variable from the Rust shim), so this
+        // test's `any(name == "ThreadId" && Class)` predicate still
+        // matches via the .rvn-loaded one.
         for name in [
             "Thread",
             "JoinHandle",

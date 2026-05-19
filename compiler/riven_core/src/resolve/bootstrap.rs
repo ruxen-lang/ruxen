@@ -121,7 +121,10 @@ pub fn run_bootstrap_with_files(
         return Vec::new();
     }
 
-    let root = match path_override.map(PathBuf::from).or_else(resolve_stdlib_root) {
+    let root = match path_override
+        .map(PathBuf::from)
+        .or_else(resolve_stdlib_root)
+    {
         Some(r) => r,
         None => {
             diagnostics.push(Diagnostic::error_with_code(

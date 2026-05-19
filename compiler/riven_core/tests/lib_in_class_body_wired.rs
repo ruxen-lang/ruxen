@@ -26,8 +26,7 @@ fn parse_fixture(name: &str) -> riven_core::parser::ast::Program {
         workspace_root().display(),
         name
     );
-    let source = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {}", path, e));
+    let source = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path, e));
     let mut lexer = Lexer::new(&source);
     let tokens = lexer.tokenize().expect("lex");
     let mut parser = Parser::new(tokens);
@@ -44,7 +43,11 @@ fn class_lib_method_registered_as_class_method() {
         .iter()
         .filter(|d| d.level == DiagnosticLevel::Error)
         .collect();
-    assert!(errors.is_empty(), "unexpected resolver errors: {:?}", errors);
+    assert!(
+        errors.is_empty(),
+        "unexpected resolver errors: {:?}",
+        errors
+    );
 
     // The FFI method was registered under the PLAIN method name `bar`
     // (matching the convention `def self.bar(...)` would use) as a
@@ -53,13 +56,13 @@ fn class_lib_method_registered_as_class_method() {
     let foo_bar = result
         .symbols
         .iter()
-        .find(|d| {
-            d.name == "bar"
-                && matches!(&d.kind, DefKind::Method { .. })
-        })
+        .find(|d| d.name == "bar" && matches!(&d.kind, DefKind::Method { .. }))
         .expect("bar method should be in the symbol table");
     match &foo_bar.kind {
-        DefKind::Method { parent: _, signature } => {
+        DefKind::Method {
+            parent: _,
+            signature,
+        } => {
             assert!(
                 signature.is_class_method,
                 "class-body lib decl must register with is_class_method=true"

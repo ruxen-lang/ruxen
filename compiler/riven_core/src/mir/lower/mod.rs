@@ -619,14 +619,29 @@ impl<'a> Lowerer<'a> {
         if let Some(direct) = self.ffi_alias_map.get(&mangled).cloned() {
             return direct;
         }
+        // Generic stripping needs BALANCED bracket matching, not the
+        // naive `find('[')` + `find(']')` pair, because nested generics
+        // like `Array[any Fn[Fn(Int) -> Int]]_iter` would otherwise
+        // peel only the inner `]` and leave a stray `]_iter` tail.
         if let Some(bracket_pos) = mangled.find('[') {
-            if let Some(rel) = mangled[bracket_pos..].find(']') {
-                let close_pos = bracket_pos + rel + 1;
-                let stripped = format!(
-                    "{}{}",
-                    &mangled[..bracket_pos],
-                    &mangled[close_pos..]
-                );
+            let bytes = mangled.as_bytes();
+            let mut depth: i32 = 0;
+            let mut close_pos: Option<usize> = None;
+            for (i, &b) in bytes.iter().enumerate().skip(bracket_pos) {
+                match b {
+                    b'[' => depth += 1,
+                    b']' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            close_pos = Some(i + 1);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(close_pos) = close_pos {
+                let stripped = format!("{}{}", &mangled[..bracket_pos], &mangled[close_pos..]);
                 if let Some(c) = self.ffi_alias_map.get(&stripped).cloned() {
                     return c;
                 }

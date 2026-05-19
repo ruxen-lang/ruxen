@@ -15,11 +15,13 @@
 
 use crate::hir::types::Ty;
 use crate::parser::ast;
-use crate::resolve::symbols::{Definition, DefKind, SymbolTable};
+use crate::resolve::symbols::{DefKind, Definition, SymbolTable};
 
 /// E0706 "predicate cannot be satisfied" rather than a silent
 /// no-op.
-pub(super) fn lower_const_predicate(pred: &ast::ConstPredicate) -> crate::resolve::symbols::HirConstPredicate {
+pub(super) fn lower_const_predicate(
+    pred: &ast::ConstPredicate,
+) -> crate::resolve::symbols::HirConstPredicate {
     use crate::resolve::symbols::{ConstPredOp, HirConstPredicate};
     let sentinel = || HirConstPredicate {
         lhs: crate::hir::types::ConstExpr::Lit(0),
@@ -123,7 +125,10 @@ pub(super) fn is_valid_const_param_ty(ty: &Ty) -> bool {
     ty.is_integer() || matches!(ty, Ty::Bool)
 }
 
-pub(super) fn ty_is_valid_hash_key(ty: &Ty, symbols: &crate::resolve::symbols::SymbolTable) -> bool {
+pub(super) fn ty_is_valid_hash_key(
+    ty: &Ty,
+    symbols: &crate::resolve::symbols::SymbolTable,
+) -> bool {
     use crate::resolve::symbols::ty_has_derive_trait;
     if ty.is_integer() || ty.is_float() {
         return true;

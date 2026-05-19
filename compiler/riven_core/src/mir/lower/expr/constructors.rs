@@ -102,19 +102,15 @@ impl<'a> Lowerer<'a> {
                     // `Array_push`). Without this rewrite the array
                     // literal emits the raw mangled callee and the
                     // linker fails to find `_Array[Int]_new`.
-                    let new_name = self.resolve_ffi_alias_callee(format!(
-                        "{}_new",
-                        type_name_from_ty(&arr_ty)
-                    ));
+                    let new_name = self
+                        .resolve_ffi_alias_callee(format!("{}_new", type_name_from_ty(&arr_ty)));
                     self.emit(MirInst::Call {
                         dest: Some(dest),
                         callee: new_name,
                         args: vec![],
                     });
-                    let push_name = self.resolve_ffi_alias_callee(format!(
-                        "{}_push",
-                        type_name_from_ty(&arr_ty)
-                    ));
+                    let push_name = self
+                        .resolve_ffi_alias_callee(format!("{}_push", type_name_from_ty(&arr_ty)));
                     for elem in elems {
                         let val_local = self.lower_expr(elem)?;
                         let val = local_to_value(val_local);
@@ -151,13 +147,22 @@ impl<'a> Lowerer<'a> {
             HirExprKind::MapLiteral(entries) => {
                 let map_ty = expr.ty.clone();
                 let dest = self.new_temp(map_ty.clone());
-                let new_name = format!("{}_new", type_name_from_ty(&map_ty));
+                // #06.8 T#15: route `_new` and `_insert` callees
+                // through the FFI alias map (same as ArrayLiteral).
+                // The mangled forms carry the surface generic
+                // (`Map[&str, Int]_new`); `resolve_ffi_alias_callee`
+                // strips the balanced `[...]` segment to match the
+                // parent-name key `Map_new` registered by the
+                // bootstrap `class Map` shell.
+                let new_name =
+                    self.resolve_ffi_alias_callee(format!("{}_new", type_name_from_ty(&map_ty)));
                 self.emit(MirInst::Call {
                     dest: Some(dest),
                     callee: new_name,
                     args: vec![],
                 });
-                let insert_name = format!("{}_insert", type_name_from_ty(&map_ty));
+                let insert_name =
+                    self.resolve_ffi_alias_callee(format!("{}_insert", type_name_from_ty(&map_ty)));
                 for (k_expr, v_expr) in entries {
                     let k_local = self.lower_expr(k_expr)?;
                     let v_local = self.lower_expr(v_expr)?;

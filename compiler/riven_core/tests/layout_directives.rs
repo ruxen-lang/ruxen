@@ -57,7 +57,12 @@ fn enum_with_layout_tagged_parses() {
             _ => None,
         })
         .collect();
-    assert_eq!(enums.len(), 1, "expected exactly one enum, got {}", enums.len());
+    assert_eq!(
+        enums.len(),
+        1,
+        "expected exactly one enum, got {}",
+        enums.len()
+    );
     let e = enums[0];
     assert_eq!(e.name, "E");
     assert!(
@@ -89,7 +94,12 @@ fn class_with_layout_flat_heap_struct_parses() {
             _ => None,
         })
         .collect();
-    assert_eq!(classes.len(), 1, "expected exactly one class, got {}", classes.len());
+    assert_eq!(
+        classes.len(),
+        1,
+        "expected exactly one class, got {}",
+        classes.len()
+    );
     let c = classes[0];
     // Class name intentionally does NOT collide with any stdlib
     // built-in (e.g. `File` / `Stdin`) so the `symbols.iter()` lookup

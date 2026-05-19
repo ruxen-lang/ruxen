@@ -56,6 +56,27 @@ fn shared_install() -> &'static Path {
             // `library/runtime/` tree at `<install>/lib/`.
             copy_runtime_tree(runtime_c_src().parent().unwrap(), &lib_dir);
 
+            // #06.8 Wave 2 stdlib self-hosting: rivenc now reads
+            // `library/std/src/*.rvn` at startup via the bootstrap
+            // loader. `resolve_stdlib_root` walks
+            //   1. $RIVEN_STDLIB_PATH
+            //   2. workspace-relative (CARGO_MANIFEST_DIR walk)
+            //   3. `<exe>/../library/std/src/`
+            // For installed-binary tests the staged binary lives at
+            // `{tempdir}/bin/rivenc`, so option 3 lands on
+            // `{tempdir}/library/std/src/`. Stage the .rvn source
+            // tree there to match the install.sh layout.
+            let stdlib_dir = temp.path().join("library").join("std").join("src");
+            fs::create_dir_all(&stdlib_dir).unwrap();
+            let workspace_stdlib = workspace_root().join("library/std/src");
+            for entry in fs::read_dir(&workspace_stdlib).expect("read workspace stdlib") {
+                let entry = entry.unwrap();
+                let p = entry.path();
+                if p.is_file() {
+                    fs::copy(&p, stdlib_dir.join(entry.file_name())).expect("copy stdlib file");
+                }
+            }
+
             (temp, staged_rivenc)
         })
         .1
@@ -102,6 +123,23 @@ fn rivenc_exe() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_rivenc"))
 }
 
+/// Path to the staged `library/std/src/` tree alongside the shared
+/// install. Spawned rivenc subprocesses need this via
+/// `RIVEN_STDLIB_PATH` because the bootstrap loader's CARGO_MANIFEST_DIR
+/// fallback resolves to `src/rivenc` (this crate, not the workspace)
+/// when cargo runs the test binary; walking up from there does NOT
+/// find a sibling `library/std/src/` because we're already two levels
+/// deep under `src/`. Exe-adjacent resolution would land on the
+/// staged copy, but only if rivenc is invoked through the staged
+/// binary path — the env var is the deterministic fix.
+fn staged_stdlib_dir() -> PathBuf {
+    shared_install()
+        .parent()
+        .and_then(|bin| bin.parent())
+        .map(|root| root.join("library").join("std").join("src"))
+        .expect("staged install layout")
+}
+
 /// Read a `.rvn` fixture from `tests/fixtures/riven/<name>.rvn`.
 ///
 /// Riven source for these tests lives in standalone `.rvn` files so that
@@ -139,6 +177,7 @@ fn compile_and_run(rivenc: &Path, dir: &Path, source_name: &str, source: &str) -
         .arg("-o")
         .arg(out_name)
         .current_dir(dir)
+        .env("RIVEN_STDLIB_PATH", staged_stdlib_dir())
         .output()
         .expect("spawn rivenc");
 
@@ -318,6 +357,7 @@ fn runtime_env_override() {
         .arg("-o")
         .arg("env_ov")
         .env("RIVEN_RUNTIME", &alt)
+        .env("RIVEN_STDLIB_PATH", staged_stdlib_dir())
         .current_dir(temp.path())
         .output()
         .unwrap();
@@ -353,11 +393,18 @@ fn missing_runtime_gives_clear_error() {
 
     // Deliberately do NOT create lib/runtime.c. Also clear RIVEN_RUNTIME
     // and CARGO_MANIFEST_DIR so the dev fallback can't accidentally save us.
+    //
+    // We DO need stdlib bootstrap to succeed (else its E0725 fires
+    // first and obscures the runtime-missing error). Point
+    // RIVEN_STDLIB_PATH at the staged copy alongside the shared
+    // install so bootstrap finds .rvn files without falling back
+    // through CARGO_MANIFEST_DIR.
     let out = Command::new(&rivenc)
         .arg("x.rvn")
         .current_dir(temp.path())
         .env_remove("RIVEN_RUNTIME")
         .env("CARGO_MANIFEST_DIR", "/nonexistent/riven-fake")
+        .env("RIVEN_STDLIB_PATH", staged_stdlib_dir())
         .output()
         .unwrap();
 
@@ -690,6 +737,7 @@ fn e2e_96_panic_basic() {
         .arg("-o")
         .arg(out_name)
         .current_dir(temp.path())
+        .env("RIVEN_STDLIB_PATH", staged_stdlib_dir())
         .output()
         .expect("spawn rivenc");
     assert!(

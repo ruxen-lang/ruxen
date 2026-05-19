@@ -58,6 +58,13 @@ static EXPLAINS: &[(&str, &str)] = &[
     // Phase 2 #06.5 T2: File / OpenOptions / SeekFrom diagnostics.
     ("E0711", include_str!("../../../docs/errors/E0711.md")),
     ("E0712", include_str!("../../../docs/errors/E0712.md")),
+    // Phase 2 #06.5 T6: BufReader/BufWriter inner-type validation.
+    ("E0714", include_str!("../../../docs/errors/E0714.md")),
+    // Phase 2 #06.8: stdlib self-hosting (FFI conflict, tagged-enum
+    // duplicate, bootstrap parse failure).
+    ("E0722", include_str!("../../../docs/errors/E0722.md")),
+    ("E0723", include_str!("../../../docs/errors/E0723.md")),
+    ("E0725", include_str!("../../../docs/errors/E0725.md")),
     // ── Borrow checker / trait-impl ─────────────────────────────────
     ("E1001", include_str!("../../../docs/errors/E1001.md")),
     ("E1002", include_str!("../../../docs/errors/E1002.md")),

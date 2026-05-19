@@ -112,20 +112,36 @@ fn every_markdown_file_contains_required_sections() {
         let path = dir.join(format!("{code}.md"));
         let body = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("read {}: {}", path.display(), e));
-        for header in ["## Why", "## Example", "## Fix"] {
-            assert!(
-                body.contains(header),
-                "{} missing section {}",
-                path.display(),
-                header
-            );
-        }
-        // Title line is `# <code>: <title>`
-        let first_line = body.lines().next().unwrap_or("");
+        // Two doc-template generations coexist:
+        // - Original (E0001-E0712, E10*): `## Why` / `## Example` / `## Fix`
+        // - #06.5+ (E0714, E0722-E0725): `## Summary` /
+        //   `## Common causes` / `## How to fix`
+        // Either set of three section headers satisfies the contract.
+        let original = ["## Why", "## Example", "## Fix"]
+            .iter()
+            .all(|h| body.contains(h));
+        let modern = ["## Summary", "## Common causes", "## How to fix"]
+            .iter()
+            .all(|h| body.contains(h));
         assert!(
-            first_line.starts_with(&format!("# {code}:")),
-            "{} first line should be '# {}: ...', got: {:?}",
+            original || modern,
+            "{} missing required section triad — needs either \
+             '## Why' / '## Example' / '## Fix' (original template) \
+             or '## Summary' / '## Common causes' / '## How to fix' \
+             (#06.5+ template)",
             path.display(),
+        );
+        // Title line is `# <code>: <title>` (original template) or
+        // `# <code> — <title>` (#06.5+ template).
+        let first_line = body.lines().next().unwrap_or("");
+        let title_ok = first_line.starts_with(&format!("# {code}:"))
+            || first_line.starts_with(&format!("# {code} —"))
+            || first_line.starts_with(&format!("# {code} -"));
+        assert!(
+            title_ok,
+            "{} first line should be '# {}: ...' or '# {} — ...', got: {:?}",
+            path.display(),
+            code,
             code,
             first_line
         );

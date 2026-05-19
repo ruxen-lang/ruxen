@@ -86,7 +86,6 @@ fn io_error_variant_tags_match_runtime_and_stdlib_source() {
             continue;
         }
         if trimmed == "end" {
-            in_block = false;
             break;
         }
         if trimmed.is_empty() || trimmed.starts_with('#') {
@@ -97,7 +96,7 @@ fn io_error_variant_tags_match_runtime_and_stdlib_source() {
             .next()
             .unwrap_or("");
         assert!(
-            name.chars().next().map_or(false, |c| c.is_ascii_uppercase()),
+            name.chars().next().is_some_and(|c| c.is_ascii_uppercase()),
             "unexpected line inside `enum IoError` body: {:?}",
             line
         );

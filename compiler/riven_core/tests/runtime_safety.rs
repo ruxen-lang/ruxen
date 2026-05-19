@@ -59,13 +59,22 @@ fn compile_c_harness(name: &str, source: &str) -> PathBuf {
 
     std::fs::write(&harness_c, source).expect("write harness");
 
-    let status = Command::new("cc")
-        .arg(&harness_c)
+    // On macOS the runtime's CSPRNG (`library/runtime/io/rand.c`)
+    // pulls in `SecRandomCopyBytes` + `kSecRandomDefault` from
+    // `Security.framework`. Without the framework flag the link
+    // step fails with "_SecRandomCopyBytes referenced from ...".
+    // On Linux the equivalents are statically resolved via libc /
+    // getentropy(3) — no extra flag needed.
+    let mut cmd = Command::new("cc");
+    cmd.arg(&harness_c)
         .arg(&runtime_o)
         .arg("-o")
-        .arg(&harness_exe)
-        .status()
-        .expect("failed to invoke cc for harness");
+        .arg(&harness_exe);
+    #[cfg(target_os = "macos")]
+    {
+        cmd.arg("-framework").arg("Security");
+    }
+    let status = cmd.status().expect("failed to invoke cc for harness");
 
     let _ = std::fs::remove_file(&harness_c);
     let _ = std::fs::remove_file(&runtime_o);

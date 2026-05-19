@@ -133,8 +133,7 @@ impl CodeGen {
                 self.user_fn_param_tys
                     .insert(ffi_fn.name.clone(), param_tys.clone());
                 if ffi_fn.riven_name != ffi_fn.name {
-                    self.declared_fns
-                        .insert(ffi_fn.riven_name.clone(), func_id);
+                    self.declared_fns.insert(ffi_fn.riven_name.clone(), func_id);
                     self.user_fn_param_tys
                         .insert(ffi_fn.riven_name.clone(), param_tys.clone());
                 }

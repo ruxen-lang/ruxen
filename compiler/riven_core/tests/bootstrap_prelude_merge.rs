@@ -48,8 +48,7 @@ fn parse_fixture(name: &str) -> Program {
         workspace_root().display(),
         name
     );
-    let source =
-        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path, e));
+    let source = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path, e));
     let mut lexer = Lexer::new(&source);
     let tokens = lexer.tokenize().expect("lex");
     let mut parser = Parser::new(tokens);
@@ -70,8 +69,7 @@ impl TempDir {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        static COUNTER: std::sync::atomic::AtomicU64 =
-            std::sync::atomic::AtomicU64::new(0);
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         base.push(format!("riven-bootstrap-prelude-{pid}-{nanos}-{n}"));
         std::fs::create_dir_all(&base).expect("create tempdir");
@@ -112,7 +110,8 @@ fn bootstrap_program_injects_def_into_user_scope() {
     // Resolver path: no "undefined function" error on `foo`, and the
     // HirProgram carries the FFI lib coming from the bootstrap program.
     let resolver = Resolver::new();
-    let result = resolver.resolve_with_bootstrap(&user_program, &[bootstrap_program.clone()]);
+    let result =
+        resolver.resolve_with_bootstrap(&user_program, std::slice::from_ref(&bootstrap_program));
     let errors: Vec<&Diagnostic> = result
         .diagnostics
         .iter()
@@ -137,8 +136,7 @@ fn bootstrap_program_injects_def_into_user_scope() {
     assert_eq!(foo.c_symbol.as_deref(), Some("riven_test_extern_add_one"));
 
     // MIR path: the call to `foo(41)` rewrites to the C symbol.
-    let type_result =
-        typeck::type_check_with_bootstrap(&user_program, &[bootstrap_program]);
+    let type_result = typeck::type_check_with_bootstrap(&user_program, &[bootstrap_program]);
     let type_errors: Vec<&Diagnostic> = type_result
         .diagnostics
         .iter()
@@ -198,11 +196,8 @@ fn bootstrap_smoke_e2e_via_runtime_file() {
     // proven for Wave 1.5.
     let stdlib_root = workspace_root().join("library/std/src");
     let mut diags = Vec::<Diagnostic>::new();
-    let bootstrap_programs = run_bootstrap_with_files(
-        &["_bootstrap_smoke.rvn"],
-        Some(&stdlib_root),
-        &mut diags,
-    );
+    let bootstrap_programs =
+        run_bootstrap_with_files(&["_bootstrap_smoke.rvn"], Some(&stdlib_root), &mut diags);
     assert!(
         diags.is_empty(),
         "_bootstrap_smoke.rvn must parse cleanly; got: {:?}",
@@ -215,8 +210,7 @@ fn bootstrap_smoke_e2e_via_runtime_file() {
     );
 
     let user_program = parse_fixture("bootstrap_smoke_caller");
-    let type_result =
-        typeck::type_check_with_bootstrap(&user_program, &bootstrap_programs);
+    let type_result = typeck::type_check_with_bootstrap(&user_program, &bootstrap_programs);
     let errors: Vec<&Diagnostic> = type_result
         .diagnostics
         .iter()
@@ -259,16 +253,12 @@ fn bootstrap_class_method_e2e_via_runtime_file() {
     // for Wave 2+ migrations of real stdlib classes.
     let stdlib_root = workspace_root().join("library/std/src");
     let mut diags = Vec::<Diagnostic>::new();
-    let bootstrap_programs = run_bootstrap_with_files(
-        &["_bootstrap_smoke.rvn"],
-        Some(&stdlib_root),
-        &mut diags,
-    );
+    let bootstrap_programs =
+        run_bootstrap_with_files(&["_bootstrap_smoke.rvn"], Some(&stdlib_root), &mut diags);
     assert!(diags.is_empty(), "bootstrap parse: {:?}", diags);
 
     let user_program = parse_fixture("bootstrap_class_method_caller");
-    let type_result =
-        typeck::type_check_with_bootstrap(&user_program, &bootstrap_programs);
+    let type_result = typeck::type_check_with_bootstrap(&user_program, &bootstrap_programs);
     let errors: Vec<&Diagnostic> = type_result
         .diagnostics
         .iter()
@@ -318,8 +308,7 @@ fn bootstrap_failure_aborts_driver() {
     );
 
     let mut diags = Vec::<Diagnostic>::new();
-    let programs =
-        run_bootstrap_with_files(&["broken.rvn"], Some(tmp.path()), &mut diags);
+    let programs = run_bootstrap_with_files(&["broken.rvn"], Some(tmp.path()), &mut diags);
 
     // The loader returns no parsed programs for the broken file…
     assert!(
@@ -355,9 +344,7 @@ fn bootstrap_program_with_mixin_registers_trait_in_prelude() {
     // iter.rvn / hash.rvn / fmt.rvn cannot proceed because their
     // surfaces are mixin-shaped (`mixin Iterator`, `mixin Hashable`,
     // `mixin Display`).
-    let mut lexer = Lexer::new(
-        "mixin BootstrapPinMixin\n  def pin_method -> Int\nend\n",
-    );
+    let mut lexer = Lexer::new("mixin BootstrapPinMixin\n  def pin_method -> Int\nend\n");
     let tokens = lexer.tokenize().expect("lex");
     let mut parser = Parser::new(tokens);
     let bootstrap_program = parser.parse().expect("parse");

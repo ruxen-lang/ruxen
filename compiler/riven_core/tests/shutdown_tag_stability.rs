@@ -24,30 +24,6 @@ fn read(path: &str) -> String {
         .unwrap_or_else(|e| panic!("read {} failed: {}", path, e))
 }
 
-/// Pull every `("Name", N)` tuple out of `line` and append them to
-/// `out`. Mirrors the helper in `file_class_layout_stability.rs` so a
-/// rustfmt-collapsed `shutdown_variants` table still parses.
-fn parse_tuples(line: &str, out: &mut Vec<(String, usize)>) {
-    let mut cursor = line;
-    while let Some(open) = cursor.find("(\"") {
-        let rest = &cursor[open + 2..];
-        let Some(end_quote) = rest.find('"') else {
-            break;
-        };
-        let name = &rest[..end_quote];
-        let after = &rest[end_quote + 1..];
-        let Some(comma) = after.find(',') else {
-            break;
-        };
-        let tail = after[comma + 1..].trim_start();
-        let digits: String = tail.chars().take_while(|c| c.is_ascii_digit()).collect();
-        if let Ok(tag) = digits.parse::<usize>() {
-            out.push((name.to_string(), tag));
-        }
-        cursor = &after[comma + 1..];
-    }
-}
-
 #[test]
 fn shutdown_tag_values_match_runtime_and_stdlib_source() {
     // Wave 2 (#06.8) moved the Shutdown enum from
@@ -100,7 +76,6 @@ fn shutdown_tag_values_match_runtime_and_stdlib_source() {
             continue;
         }
         if trimmed == "end" {
-            in_block = false;
             break;
         }
         if trimmed.is_empty() || trimmed.starts_with('#') {
@@ -111,7 +86,7 @@ fn shutdown_tag_values_match_runtime_and_stdlib_source() {
         // variants. Defensive: stop on anything that doesn't match.
         let name = trimmed.split_whitespace().next().unwrap_or("");
         assert!(
-            name.chars().next().map_or(false, |c| c.is_ascii_uppercase()),
+            name.chars().next().is_some_and(|c| c.is_ascii_uppercase()),
             "unexpected line inside `enum Shutdown` body: {:?}",
             line
         );

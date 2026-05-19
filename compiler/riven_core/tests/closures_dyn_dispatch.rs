@@ -131,8 +131,8 @@ fn dyn_fn_return_from_function() {
 #[test]
 fn dyn_fn_e2e_600_handler_dispatch() {
     let path = workspace_root().join("tests/release-e2e/cases/600_closure_handler_dispatch.rvn");
-    let source = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {}", path.display(), e));
+    let source =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e));
     let (stdout, stderr, ok) = compile_and_run(&source, "dyn_fn_e2e_600_handler_dispatch");
     assert!(ok, "non-zero exit; stderr: {}", stderr);
 

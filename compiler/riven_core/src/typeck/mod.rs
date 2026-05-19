@@ -45,8 +45,7 @@ pub struct TypeCheckResult {
 /// empty slice instead.
 pub fn type_check(program: &ast::Program) -> TypeCheckResult {
     let mut bootstrap_diagnostics: Vec<crate::diagnostics::Diagnostic> = Vec::new();
-    let bootstrap_programs =
-        crate::resolve::bootstrap::run_bootstrap(&mut bootstrap_diagnostics);
+    let bootstrap_programs = crate::resolve::bootstrap::run_bootstrap(&mut bootstrap_diagnostics);
     // Bootstrap failures are surfaced as E0725 diagnostics on the
     // returned TypeCheckResult so the caller can route them through
     // the usual error-reporting pipeline (same as any other

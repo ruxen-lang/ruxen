@@ -120,8 +120,8 @@ fn bufreader_file_read_line_basic() {
     let file = dir.join("multi.txt");
     std::fs::write(&file, b"alpha\nbeta\ngamma").expect("stage file");
 
-    let source = rvn("bufreader_file_read_line_basic")
-        .replace("__FILE__", &file.display().to_string());
+    let source =
+        rvn("bufreader_file_read_line_basic").replace("__FILE__", &file.display().to_string());
     let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_bufio_read_line");
     let _ = std::fs::remove_dir_all(&dir);
     assert!(ok, "stderr: {}", stderr);
@@ -138,13 +138,10 @@ fn bufreader_file_with_capacity_small_still_returns_full_line() {
     let dir = unique_tmp_dir("with_cap");
     let file = dir.join("long.txt");
     // Line is longer than the 16-byte cap to force a refill.
-    std::fs::write(
-        &file,
-        b"this-line-is-longer-than-sixteen-bytes\nshort\n",
-    )
-    .expect("stage file");
+    std::fs::write(&file, b"this-line-is-longer-than-sixteen-bytes\nshort\n").expect("stage file");
 
-    let source = rvn("bufreader_file_with_capacity").replace("__FILE__", &file.display().to_string());
+    let source =
+        rvn("bufreader_file_with_capacity").replace("__FILE__", &file.display().to_string());
     let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_bufio_with_capacity");
     let _ = std::fs::remove_dir_all(&dir);
     assert!(ok, "stderr: {}", stderr);
@@ -162,8 +159,8 @@ fn bufwriter_file_write_all_then_flush_persists_bytes() {
     let dir = unique_tmp_dir("write_all");
     let file = dir.join("payload.bin");
 
-    let source = rvn("bufwriter_file_write_all_flush")
-        .replace("__FILE__", &file.display().to_string());
+    let source =
+        rvn("bufwriter_file_write_all_flush").replace("__FILE__", &file.display().to_string());
     let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_bufio_write_all");
     let after = std::fs::read(&file).expect("read final");
     let _ = std::fs::remove_dir_all(&dir);
@@ -184,8 +181,8 @@ fn bufwriter_file_explicit_flush_persists_bytes() {
     let dir = unique_tmp_dir("explicit_flush");
     let file = dir.join("persisted.txt");
 
-    let source = rvn("bufwriter_file_auto_flush_on_drop")
-        .replace("__FILE__", &file.display().to_string());
+    let source =
+        rvn("bufwriter_file_auto_flush_on_drop").replace("__FILE__", &file.display().to_string());
     let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_bufio_drop_flush");
     let _ = std::fs::remove_dir_all(&dir);
     assert!(ok, "stderr: {}", stderr);
@@ -207,8 +204,7 @@ fn bufreader_into_inner_returns_usable_file() {
     let file = dir.join("two_lines.txt");
     std::fs::write(&file, b"first-line\nsecond-line-and-tail").expect("stage file");
 
-    let source =
-        rvn("bufreader_into_inner_file").replace("__FILE__", &file.display().to_string());
+    let source = rvn("bufreader_into_inner_file").replace("__FILE__", &file.display().to_string());
     let (stdout, stderr, ok) = compile_and_run(&source, "stdlib_bufio_into_inner_file");
     let _ = std::fs::remove_dir_all(&dir);
     assert!(ok, "stderr: {}", stderr);
@@ -231,8 +227,7 @@ fn bufreader_inner_non_file_or_tcp_emits_e0714() {
         .filter(|d| d.level == DiagnosticLevel::Error)
         .collect();
     assert!(
-        errs.iter()
-            .any(|d| d.code.as_deref() == Some("E0714")),
+        errs.iter().any(|d| d.code.as_deref() == Some("E0714")),
         "expected E0714; got: {:#?}",
         errs
     );
@@ -256,32 +251,20 @@ fn assert_e2e_mirror(stem: &str, basename: &str) {
 
 #[test]
 fn e2e_mirror_570_bufreader_file_read_line() {
-    assert_e2e_mirror(
-        "570_bufreader_file_read_line",
-        "stdlib_bufio_e2e_570",
-    );
+    assert_e2e_mirror("570_bufreader_file_read_line", "stdlib_bufio_e2e_570");
 }
 
 #[test]
 fn e2e_mirror_574_bufwriter_file_write_all_flush() {
-    assert_e2e_mirror(
-        "574_bufwriter_file_write_all_flush",
-        "stdlib_bufio_e2e_574",
-    );
+    assert_e2e_mirror("574_bufwriter_file_write_all_flush", "stdlib_bufio_e2e_574");
 }
 
 #[test]
 fn e2e_mirror_576_bufreader_tcp_stream_read_line() {
-    assert_e2e_mirror(
-        "576_bufreader_tcp_stream_read_line",
-        "stdlib_bufio_e2e_576",
-    );
+    assert_e2e_mirror("576_bufreader_tcp_stream_read_line", "stdlib_bufio_e2e_576");
 }
 
 #[test]
 fn e2e_mirror_577_bufwriter_tcp_stream_write_all() {
-    assert_e2e_mirror(
-        "577_bufwriter_tcp_stream_write_all",
-        "stdlib_bufio_e2e_577",
-    );
+    assert_e2e_mirror("577_bufwriter_tcp_stream_write_all", "stdlib_bufio_e2e_577");
 }

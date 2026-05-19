@@ -43,8 +43,7 @@ fn parse_fixture(name: &str) -> Program {
         workspace_root().display(),
         name
     );
-    let source =
-        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path, e));
+    let source = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path, e));
     let mut lexer = Lexer::new(&source);
     let tokens = lexer.tokenize().expect("lex");
     let mut parser = Parser::new(tokens);
@@ -57,8 +56,7 @@ fn anchor_mode_preserves_type_alias_for_string() {
     let user_program = parse_fixture("builtin_anchor_string_caller");
 
     let resolver = Resolver::new();
-    let result =
-        resolver.resolve_with_bootstrap(&user_program, &[bootstrap_program]);
+    let result = resolver.resolve_with_bootstrap(&user_program, &[bootstrap_program]);
 
     let errors: Vec<&Diagnostic> = result
         .diagnostics
@@ -94,7 +92,10 @@ fn anchor_mode_preserves_type_alias_for_string() {
         "expected at least one `String` DefKind::TypeAlias in symbol table; got defs = {:?}",
         string_defs
             .iter()
-            .map(|(i, d)| (*i, format!("{:?}", d.kind).chars().take(40).collect::<String>()))
+            .map(|(i, d)| (
+                *i,
+                format!("{:?}", d.kind).chars().take(40).collect::<String>()
+            ))
             .collect::<Vec<_>>()
     );
     assert_eq!(
@@ -111,8 +112,7 @@ fn anchor_mode_routes_class_body_lib_decl_into_ffi_libs() {
     let user_program = parse_fixture("builtin_anchor_string_caller");
 
     let resolver = Resolver::new();
-    let result =
-        resolver.resolve_with_bootstrap(&user_program, &[bootstrap_program]);
+    let result = resolver.resolve_with_bootstrap(&user_program, &[bootstrap_program]);
 
     // Invariant 2: the lib decl flows through `register_class_lib_method`
     // even though we reused the existing TypeAlias DefId as parent.

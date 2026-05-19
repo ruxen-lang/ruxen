@@ -7,9 +7,7 @@
 //! Wave 2 will hook through to load `iter.rvn` and `net.rvn` first.
 
 use riven_core::diagnostics::Diagnostic;
-use riven_core::resolve::bootstrap::{
-    run_bootstrap, run_bootstrap_with_files, BOOTSTRAP_FILES,
-};
+use riven_core::resolve::bootstrap::{run_bootstrap, run_bootstrap_with_files, BOOTSTRAP_FILES};
 
 fn write_fixture(dir: &std::path::Path, rel: &str, contents: &str) {
     let full = dir.join(rel);
@@ -38,8 +36,7 @@ impl TempDir {
         // Append a per-call counter so two tests running in parallel
         // (the rust test harness threads them by default) never
         // collide on the same path.
-        static COUNTER: std::sync::atomic::AtomicU64 =
-            std::sync::atomic::AtomicU64::new(0);
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         base.push(format!("riven-stdlib-bootstrap-{pid}-{nanos}-{n}"));
         std::fs::create_dir_all(&base).expect("create tempdir");
@@ -160,8 +157,7 @@ fn bootstrap_missing_file_reports_e0725() {
     let tmp = TempDir::new();
 
     let mut diags = Vec::<Diagnostic>::new();
-    let _ =
-        run_bootstrap_with_files(&["nope.rvn"], Some(tmp.path()), &mut diags);
+    let _ = run_bootstrap_with_files(&["nope.rvn"], Some(tmp.path()), &mut diags);
 
     assert!(
         diags.iter().any(|d| d.code.as_deref() == Some("E0725")),
@@ -191,8 +187,7 @@ fn bootstrap_clean_stdlib_file_returns_program() {
     );
 
     let mut diags = Vec::<Diagnostic>::new();
-    let programs =
-        run_bootstrap_with_files(&["ok.rvn"], Some(tmp.path()), &mut diags);
+    let programs = run_bootstrap_with_files(&["ok.rvn"], Some(tmp.path()), &mut diags);
     assert!(
         diags.is_empty(),
         "clean stdlib file should not produce diagnostics; got: {:?}",

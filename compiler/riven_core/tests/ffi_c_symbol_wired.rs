@@ -30,8 +30,7 @@ fn parse_fixture(name: &str) -> riven_core::parser::ast::Program {
         workspace_root().display(),
         name
     );
-    let source = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {}", path, e));
+    let source = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path, e));
     let mut lexer = Lexer::new(&source);
     let tokens = lexer.tokenize().expect("lex");
     let mut parser = Parser::new(tokens);
@@ -93,11 +92,7 @@ fn mir_call_to_aliased_ffi_uses_c_symbol() {
         .iter()
         .filter(|d| d.level == DiagnosticLevel::Error)
         .collect();
-    assert!(
-        errors.is_empty(),
-        "typecheck errors: {:?}",
-        errors
-    );
+    assert!(errors.is_empty(), "typecheck errors: {:?}", errors);
 
     let mut lowerer = Lowerer::new(&result.symbols);
     let mir = lowerer
@@ -165,7 +160,8 @@ fn conflicting_c_symbol_decls_emit_e0722() {
         .filter(|d| d.code.as_deref() == Some("E0722"))
         .count();
     assert_eq!(
-        e0722_count, 1,
+        e0722_count,
+        1,
         "expected exactly one E0722 diagnostic; got {} diags: {:?}",
         result.diagnostics.len(),
         result
@@ -190,11 +186,7 @@ fn end_to_end_link_smoke() {
         .iter()
         .filter(|d| d.level == DiagnosticLevel::Error)
         .collect();
-    assert!(
-        errors.is_empty(),
-        "typecheck errors: {:?}",
-        errors
-    );
+    assert!(errors.is_empty(), "typecheck errors: {:?}", errors);
 
     let mut lowerer = Lowerer::new(&result.symbols);
     let mir = lowerer

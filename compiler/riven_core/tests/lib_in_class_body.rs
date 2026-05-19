@@ -146,8 +146,8 @@ fn multiple_lib_blocks_in_class_body_parse() {
 
 #[test]
 fn lib_block_in_mixin_body_parses() {
-    let program = parse_fixture("tests/fixtures/riven/lib_in_mixin_body.rvn")
-        .expect("fixture should parse");
+    let program =
+        parse_fixture("tests/fixtures/riven/lib_in_mixin_body.rvn").expect("fixture should parse");
     let mixin = only_mixin(&program);
     assert_eq!(mixin.name, "Read");
     assert_eq!(

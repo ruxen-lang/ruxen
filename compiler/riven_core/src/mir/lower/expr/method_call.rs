@@ -177,28 +177,27 @@ impl<'a> Lowerer<'a> {
                         // hit it the runtime dispatch table will fail
                         // to find a symbol and the link step errors
                         // out cleanly).
-                        let bufio_suffix: Option<&'static str> = if matches!(
-                            base_type, "BufReader" | "BufWriter"
-                        ) {
-                            let inner_idx = if method_name == "with_capacity" { 1 } else { 0 };
-                            let inner_name = args
-                                .get(inner_idx)
-                                .map(|a| type_name_from_ty(&a.ty))
-                                .unwrap_or_default();
-                            // Peel leading reference if any (defensive —
-                            // the spec passes inner by value).
-                            let inner_name = inner_name
-                                .strip_prefix('&')
-                                .map(str::trim_start)
-                                .unwrap_or(&inner_name);
-                            match inner_name {
-                                "TcpStream" => Some("tcp"),
-                                "File" => Some("file"),
-                                _ => Some("file"),
-                            }
-                        } else {
-                            None
-                        };
+                        let bufio_suffix: Option<&'static str> =
+                            if matches!(base_type, "BufReader" | "BufWriter") {
+                                let inner_idx = if method_name == "with_capacity" { 1 } else { 0 };
+                                let inner_name = args
+                                    .get(inner_idx)
+                                    .map(|a| type_name_from_ty(&a.ty))
+                                    .unwrap_or_default();
+                                // Peel leading reference if any (defensive —
+                                // the spec passes inner by value).
+                                let inner_name = inner_name
+                                    .strip_prefix('&')
+                                    .map(str::trim_start)
+                                    .unwrap_or(&inner_name);
+                                match inner_name {
+                                    "TcpStream" => Some("tcp"),
+                                    "File" => Some("file"),
+                                    _ => Some("file"),
+                                }
+                            } else {
+                                None
+                            };
                         for arg in args {
                             let local = self.lower_expr(arg)?;
                             call_args.push(local_to_value(local));
@@ -650,38 +649,37 @@ impl<'a> Lowerer<'a> {
                 // concrete inner type). The closed-set typeck check
                 // at construction time means generic_args[0] is one
                 // of File / TcpStream here.
-                let bufio_instance_suffix: Option<&'static str> = if matches!(
-                    resolved_class.as_str(),
-                    "BufReader" | "BufWriter"
-                ) && method_name == "into_inner"
-                {
-                    let inner_name = match &object.ty {
-                        Ty::Class { generic_args, .. } => generic_args
-                            .first()
-                            .map(type_name_from_ty)
-                            .unwrap_or_default(),
-                        Ty::Ref(inner)
-                        | Ty::RefMut(inner)
-                        | Ty::RefLifetime(_, inner)
-                        | Ty::RefMutLifetime(_, inner) => {
-                            if let Ty::Class { generic_args, .. } = inner.as_ref() {
-                                generic_args
-                                    .first()
-                                    .map(type_name_from_ty)
-                                    .unwrap_or_default()
-                            } else {
-                                String::new()
+                let bufio_instance_suffix: Option<&'static str> =
+                    if matches!(resolved_class.as_str(), "BufReader" | "BufWriter")
+                        && method_name == "into_inner"
+                    {
+                        let inner_name = match &object.ty {
+                            Ty::Class { generic_args, .. } => generic_args
+                                .first()
+                                .map(type_name_from_ty)
+                                .unwrap_or_default(),
+                            Ty::Ref(inner)
+                            | Ty::RefMut(inner)
+                            | Ty::RefLifetime(_, inner)
+                            | Ty::RefMutLifetime(_, inner) => {
+                                if let Ty::Class { generic_args, .. } = inner.as_ref() {
+                                    generic_args
+                                        .first()
+                                        .map(type_name_from_ty)
+                                        .unwrap_or_default()
+                                } else {
+                                    String::new()
+                                }
                             }
+                            _ => String::new(),
+                        };
+                        match inner_name.as_str() {
+                            "TcpStream" => Some("tcp"),
+                            _ => Some("file"),
                         }
-                        _ => String::new(),
+                    } else {
+                        None
                     };
-                    match inner_name.as_str() {
-                        "TcpStream" => Some("tcp"),
-                        _ => Some("file"),
-                    }
-                } else {
-                    None
-                };
                 let mangled = if let Some(suffix) = bufio_instance_suffix {
                     format!("{}_{}_{}", resolved_class, method_name, suffix)
                 } else {
