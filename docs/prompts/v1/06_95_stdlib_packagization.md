@@ -188,20 +188,85 @@ println/print".
 
 ## End-state architecture
 
+Each stdlib package is **self-contained** — the Riven surface
+(`src/lib.rvn`) and the C runtime implementation (`runtime/*.c`)
+live in the same directory and ship together. The compiler reads
+the package's `Riven.toml` for both the Riven dependency graph
+and the per-package C link unit. Today the C runtime is split
+across `library/runtime/{io,net,core,*.c}` separately from
+`library/std/src/*.rvn`; the migration moves each `.c` file into
+its owning package's `runtime/` subdirectory.
+
+Mapping of today's `library/runtime/*.c` → new package home:
+
+| Current path                     | Lives in package          |
+| -------------------------------- | ------------------------- |
+| `library/runtime/runtime.c`      | `std-core/runtime/`       |
+| `library/runtime/core/alloc.c`   | `std-core/runtime/`       |
+| `library/runtime/core/hash.c`    | `std-hash/runtime/`       |
+| `library/runtime/core/string.c`  | `std-string/runtime/`     |
+| `library/runtime/core/vec.c`     | `std-array/runtime/`      |
+| `library/runtime/io/bufio.c`     | `std-io/runtime/`         |
+| `library/runtime/io/file.c`      | `std-io/runtime/`         |
+| `library/runtime/io/io_error.c`  | `std-io/runtime/`         |
+| `library/runtime/io/rand.c`      | `std-rand/runtime/`       |
+| `library/runtime/io/stdio.c`     | `std-io/runtime/`         |
+| `library/runtime/net/tcp.c`      | `std-net/runtime/`        |
+| `library/runtime/process.c`      | `std-process/runtime/`    |
+| `library/runtime/fs.c`           | `std-fs/runtime/`         |
+| `library/runtime/env.c`          | `std-env/runtime/`        |
+| `library/runtime/time.c`         | `std-time/runtime/`       |
+| `library/runtime/signal.c`       | `std-sync/runtime/`       |
+| `library/runtime/test_extern.c`  | `std-core/runtime/`       |
+| `library/runtime/fmt.c`          | `std-fmt/runtime/`        |
+
+`std-map` and `std-set` may end up sharing `std-hash/runtime/`'s
+helpers depending on how the runtime is currently split; resolve
+at Phase B time. `library/runtime/` ceases to exist after Phase B
+— the directory is fully partitioned across the 19 packages.
+
+`Riven.toml` per package declares a `[runtime]` section listing
+its C sources so the compiler driver can emit them as a per-package
+link unit:
+
+```toml
+name = "std-io"
+version = "0.1.0"
+
+[dependencies]
+std-core = "= 0.1.0"
+
+[runtime]
+# Compiler reads this when building any binary that depends on
+# std-io. Each `.c` is compiled once per build and linked into
+# the final executable. The order follows source-tree order.
+sources = ["runtime/bufio.c", "runtime/file.c", "runtime/io_error.c", "runtime/stdio.c"]
+# Optional cc flags scoped to this package's compilation unit.
+cflags = ["-Wall", "-Wno-unused-parameter"]
+```
+
 ```
 library/
   std/
-    core/              # primitive trait declarations, no FFI
-      Riven.toml       # name="std-core", no deps
+    core/              # primitive trait declarations + low-level C runtime
+      Riven.toml       # name="std-core", no deps,
+                       # [runtime] sources=["runtime/alloc.c", "runtime/hash.c",
+                       #   "runtime/runtime.c", "runtime/test_extern.c"]
       src/lib.rvn      # Displayable, Error, Comparable, Hashable*
+      runtime/         # alloc.c, hash.c, runtime.c, test_extern.c
     io/
-      Riven.toml       # name="std-io", deps={std-core="0.1"}
+      Riven.toml       # name="std-io", deps={std-core="0.1"},
+                       # [runtime] sources=["runtime/bufio.c", "runtime/file.c",
+                       #   "runtime/io_error.c", "runtime/stdio.c"]
       src/lib.rvn      # class IO + Stdin/Stdout/Stderr/File/OpenOptions/
                        #   BufReader/BufWriter/SeekFrom/IoError/IoErrorKind
                        # + `lib "riven_runtime"` block inside each class
+      runtime/         # bufio.c, file.c, io_error.c, stdio.c
     fs/
-      Riven.toml       # deps={std-io="0.1", std-core="0.1"}
+      Riven.toml       # deps={std-io="0.1", std-core="0.1"},
+                       # [runtime] sources=["runtime/fs.c"]
       src/lib.rvn      # class FS + Metadata
+      runtime/         # fs.c
     env/
       Riven.toml       # deps={std-io="0.1"}
       src/lib.rvn      # class Env
@@ -336,12 +401,28 @@ single directory rename. Verification: existing
 pass; the new loader test passes; **only those tests run**, not the
 workspace.
 
-### Phase B — Split `_legacy` into 19 packages (still free-fn surface)
+### Phase B — Split `_legacy` into 19 packages + colocate C runtime
 
 **Goal:** rehome each `.rvn` file under a real package directory,
-declare cross-package deps in `Riven.toml`, but DO NOT yet change
-free-fn → class-method shape. This isolates the directory churn from
-the surface churn.
+declare cross-package deps in `Riven.toml`, **move each C runtime
+file from `library/runtime/` into its owning package's
+`runtime/` subdirectory**, but DO NOT yet change free-fn →
+class-method shape. This isolates the directory churn from the
+surface churn.
+
+The C-runtime co-location is the user-ratified end-state shape
+(2026-05-19): each stdlib package is self-contained — Riven
+surface + C implementation ship together. See the "End-state
+architecture" section above for the file-by-file mapping from
+today's `library/runtime/{io,net,core,*.c}` to the new
+`library/std/<pkg>/runtime/*.c` homes.
+
+The compiler driver needs a small extension to read each
+package's `[runtime] sources = [...]` list and compile/link the
+listed `.c` files into the final binary; see
+`src/riven_cli/src/build.rs`. Phase A's loader laid the
+single-`Riven.toml` foundation; Phase B teaches the toml parser
++ build driver to honour `[runtime]`.
 
 Tasks (one commit per package or grouped by dep layer):
 1. **Layer 0 (no deps):** `core`, `path`, `time`, `iter`, `hash`.
@@ -352,17 +433,24 @@ Tasks (one commit per package or grouped by dep layer):
 4. **Layer 3:** `sync` (depends on time + core).
 
 Each move:
-- Create `library/std/<name>/Riven.toml` with `name`, `version="0.1.0"`,
-  `[dependencies]`.
+- Create `library/std/<name>/Riven.toml` with `name`,
+  `version="0.1.0"`, `[dependencies]`, and `[runtime] sources = [...]`.
 - Move `library/std/_legacy/src/<name>.rvn` → `library/std/<name>/src/lib.rvn`.
+- `git mv` each owning `library/runtime/*.c` file into
+  `library/std/<name>/runtime/` per the mapping table above.
 - Update any cross-file forward references that crossed file boundaries
   in the legacy flat layout (rare — `io.rvn`'s `IoError` is the only
   cross-package reference today).
 - Per-package pin test: `tests/stdlib_pkg_<name>_loads.rs` parses the
   package in isolation under a fresh `RIVEN_STDLIB_PATH` tempdir and
-  asserts the expected exports are in scope.
+  asserts the expected exports are in scope AND the `[runtime]`
+  sources resolve to actual files on disk.
+- Update `src/riven_cli/src/build.rs` to scan each loaded package's
+  `[runtime]` and emit its `.c` files as a compile unit before
+  linking the final binary.
 
-After all 19 packages exist, delete `library/std/_legacy/`.
+After all 19 packages exist, delete `library/std/_legacy/` AND
+`library/runtime/`. The package directories own everything.
 
 Diff size: directory moves + 19 small TOMLs + 19 small pin tests.
 Verification: each per-package pin test plus the workspace test runs
