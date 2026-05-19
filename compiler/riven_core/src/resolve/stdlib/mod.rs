@@ -15,8 +15,7 @@
 
 use std::collections::HashMap;
 
-use crate::hir::nodes::*;
-use crate::hir::types::{MixinRef, Ty};
+use crate::hir::types::Ty;
 use crate::lexer::token::Span;
 use crate::parser::ast::Visibility;
 
@@ -453,220 +452,27 @@ pub(super) fn register_all(r: &mut Resolver) {
     // needed here beyond the FIXUPS entry that re-adds the four
     // bootstrap-loaded DefIds to the fmt module's items list.
 
-    let context_id = r.symbols.define(
-        "Context".to_string(),
-        DefKind::Class {
-            info: ClassInfo {
-                generic_params: vec![],
-                parent: None,
-                fields: vec![],
-                methods: vec![],
-                derive_traits: vec![],
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
-                const_predicates: vec![],
-                flat_heap_struct: false,
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.scopes.insert_type("Context".to_string(), context_id);
-    r.type_registry.insert("Context".to_string(), context_id);
-    let waker_id = r.symbols.define(
-        "Waker".to_string(),
-        DefKind::Class {
-            info: ClassInfo {
-                generic_params: vec![],
-                parent: None,
-                fields: vec![],
-                methods: vec![],
-                derive_traits: vec![],
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
-                const_predicates: vec![],
-                flat_heap_struct: false,
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.scopes.insert_type("Waker".to_string(), waker_id);
-    r.type_registry.insert("Waker".to_string(), waker_id);
-    let thread_id_id = r.symbols.define(
-        "ThreadId".to_string(),
-        DefKind::Class {
-            info: ClassInfo {
-                generic_params: vec![],
-                parent: None,
-                fields: vec![],
-                methods: vec![],
-                derive_traits: vec![],
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
-                const_predicates: vec![],
-                flat_heap_struct: false,
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.scopes.insert_type("ThreadId".to_string(), thread_id_id);
-    r.type_registry.insert("ThreadId".to_string(), thread_id_id);
-    let thread_id_ty = Ty::Class {
-        name: "ThreadId".to_string(),
-        generic_args: vec![],
-    };
-    let thread_id_value_id = r.symbols.define(
-        "ThreadId".to_string(),
-        DefKind::Variable {
-            mutable: false,
-            ty: thread_id_ty.clone(),
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.scopes.insert("ThreadId".to_string(), thread_id_value_id);
-
-    let thread_id = r.symbols.define(
-        "Thread".to_string(),
-        DefKind::Class {
-            info: ClassInfo {
-                generic_params: vec![],
-                parent: None,
-                fields: vec![],
-                methods: vec![],
-                derive_traits: vec![],
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
-                const_predicates: vec![],
-                flat_heap_struct: false,
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.scopes.insert_type("Thread".to_string(), thread_id);
-    r.type_registry.insert("Thread".to_string(), thread_id);
-
-    let join_handle_id = r.symbols.define(
-        "JoinHandle".to_string(),
-        DefKind::Class {
-            info: ClassInfo {
-                generic_params: vec![GenericParamInfo::type_param(
-                    "T".to_string(),
-                    vec![MixinRef {
-                        name: "Send".to_string(),
-                        generic_args: vec![],
-                    }],
-                )],
-                parent: None,
-                fields: vec![],
-                methods: vec![],
-                derive_traits: vec![],
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
-                const_predicates: vec![],
-                flat_heap_struct: false,
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.scopes
-        .insert_type("JoinHandle".to_string(), join_handle_id);
-    r.type_registry
-        .insert("JoinHandle".to_string(), join_handle_id);
-
-    let mutex_id = r.symbols.define(
-        "Mutex".to_string(),
-        DefKind::Class {
-            info: ClassInfo {
-                generic_params: vec![GenericParamInfo::type_param("T".to_string(), vec![])],
-                parent: None,
-                fields: vec![],
-                methods: vec![],
-                derive_traits: vec![],
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
-                const_predicates: vec![],
-                flat_heap_struct: false,
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.scopes.insert_type("Mutex".to_string(), mutex_id);
-    r.type_registry.insert("Mutex".to_string(), mutex_id);
-
-    let mutex_guard_id = r.symbols.define(
-        "MutexGuard".to_string(),
-        DefKind::Class {
-            info: ClassInfo {
-                generic_params: vec![GenericParamInfo::type_param("T".to_string(), vec![])],
-                parent: None,
-                fields: vec![],
-                methods: vec![],
-                derive_traits: vec![],
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
-                const_predicates: vec![],
-                flat_heap_struct: false,
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.scopes
-        .insert_type("MutexGuard".to_string(), mutex_guard_id);
-    r.type_registry
-        .insert("MutexGuard".to_string(), mutex_guard_id);
-
-    // `SharedSync[T]` (was `Arc[T]` pre-Ruby-naming). The Rust-side
-    // class name is preserved as `Arc` for now; the resolve layer
-    // accepts both `SharedSync` and the legacy `Arc` spelling as the
-    // user-facing name.
-    let arc_id = r.symbols.define(
-        "Arc".to_string(),
-        DefKind::Class {
-            info: ClassInfo {
-                generic_params: vec![GenericParamInfo::type_param("T".to_string(), vec![])],
-                parent: None,
-                fields: vec![],
-                methods: vec![],
-                derive_traits: vec![],
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
-                const_predicates: vec![],
-                flat_heap_struct: false,
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.scopes.insert_type("Arc".to_string(), arc_id);
-    r.type_registry.insert("Arc".to_string(), arc_id);
-    // Ruby-naming alias: `SharedSync` is the canonical name (Arc is
-    // retained for backward-compat in scope/registry lookups). The
-    // module-path resolver matches by `def.name`, so we register a
-    // separate symbol named `SharedSync` with the same `ClassInfo`
-    // so `use std.sync.SharedSync` resolves cleanly.
+    // 9 std.sync class shells (Context, Waker, ThreadId, Thread,
+    // JoinHandle[T: Send], Mutex[T], MutexGuard[T], Arc[T],
+    // PoisonError, ThreadPanic) were here. Wave 2 (#06.8) moved
+    // all of them to library/std/src/sync.rvn as bare
+    // `class Foo end` / `class Foo[T] end` bodies preserving the
+    // generic-parameter shapes (JoinHandle keeps the `T: Send`
+    // bound). Methods still flow through the runtime_table
+    // mangled-name dispatch until T#21 lands.
+    //
+    // `SharedSync` stays as a Rust-registered SHELL CLASS (below)
+    // because its identity is non-trivially tied to Arc via the
+    // `type_constructors` Variable alias (Ty::Class { name: "Arc" })
+    // — migrating SharedSync to its own .rvn class would give it a
+    // distinct DefId and break the `SharedSync[T] == Arc[T]` type
+    // equivalence that user code (notably
+    // std_sync_concurrency_surface_typechecks_cleanly) relies on.
+    // The `ThreadId` value-scope alias (a `DefKind::Variable` that
+    // lets `ThreadId` itself appear as a sentinel value, not just
+    // as a type) stays here as a one-line shim — its type field
+    // resolves "ThreadId" by name, which the bootstrap-loaded
+    // class registration satisfies.
     let shared_sync_id = r.symbols.define(
         "SharedSync".to_string(),
         DefKind::Class {
@@ -691,56 +497,19 @@ pub(super) fn register_all(r: &mut Resolver) {
         .insert_type("SharedSync".to_string(), shared_sync_id);
     r.type_registry
         .insert("SharedSync".to_string(), shared_sync_id);
-
-    let poison_error_id = r.symbols.define(
-        "PoisonError".to_string(),
-        DefKind::Class {
-            info: ClassInfo {
-                generic_params: vec![],
-                parent: None,
-                fields: vec![],
-                methods: vec![],
-                derive_traits: vec![],
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
-                const_predicates: vec![],
-                flat_heap_struct: false,
+    let thread_id_value_id = r.symbols.define(
+        "ThreadId".to_string(),
+        DefKind::Variable {
+            mutable: false,
+            ty: Ty::Class {
+                name: "ThreadId".to_string(),
+                generic_args: vec![],
             },
         },
         Visibility::Public,
         span.clone(),
     );
-    r.scopes
-        .insert_type("PoisonError".to_string(), poison_error_id);
-    r.type_registry
-        .insert("PoisonError".to_string(), poison_error_id);
-
-    let thread_panic_id = r.symbols.define(
-        "ThreadPanic".to_string(),
-        DefKind::Class {
-            info: ClassInfo {
-                generic_params: vec![],
-                parent: None,
-                fields: vec![],
-                methods: vec![],
-                derive_traits: vec![],
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
-                const_predicates: vec![],
-                flat_heap_struct: false,
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.scopes
-        .insert_type("ThreadPanic".to_string(), thread_panic_id);
-    r.type_registry
-        .insert("ThreadPanic".to_string(), thread_panic_id);
+    r.scopes.insert("ThreadId".to_string(), thread_id_value_id);
 
     // Register a minimal builtin std module tree so `use std.io`
     // resolves before the fuller Tier-1 stdlib lands.
@@ -864,21 +633,15 @@ pub(super) fn register_all(r: &mut Resolver) {
         Visibility::Public,
         span.clone(),
     );
+    // Wave 2 (#06.8): 9 sync class shells moved to
+    // library/std/src/sync.rvn. sync_id starts with the
+    // `thread_id_value_id` Rust shim + the SharedSync alias class
+    // (also Rust); fixup_bootstrapped_stdlib_modules APPENDS the
+    // bootstrap-loaded class DefIds to that list.
     let sync_id = r.symbols.define(
         "sync".to_string(),
         DefKind::Module {
-            items: vec![
-                thread_id,
-                thread_id_value_id,
-                join_handle_id,
-                thread_id_id,
-                mutex_id,
-                mutex_guard_id,
-                arc_id,
-                shared_sync_id,
-                poison_error_id,
-                thread_panic_id,
-            ],
+            items: vec![thread_id_value_id, shared_sync_id],
         },
         Visibility::Public,
         span.clone(),

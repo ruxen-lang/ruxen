@@ -381,9 +381,7 @@ impl Resolver {
                 ],
             ),
             // Wave 2 — library/std/src/io.rvn (9 free fns + 7 class
-            // shells; IoError / IoErrorKind / SeekFrom stay in Rust
-            // for now — they have tag-stability pin tests that need
-            // retargeting, separate commit).
+            // shells + IoError / IoErrorKind / SeekFrom enums).
             (
                 "io",
                 &[
@@ -406,6 +404,28 @@ impl Resolver {
                     "SeekFrom",
                     "BufReader",
                     "BufWriter",
+                ],
+            ),
+            // Wave 2 — library/std/src/sync.rvn (9 class shells:
+            // Thread, ThreadId, JoinHandle, Mutex, MutexGuard, Arc,
+            // PoisonError, ThreadPanic + Context / Waker from
+            // std::task). SharedSync stays Rust-registered (its
+            // identity is tied to Arc via the type_constructors
+            // Variable alias). Methods still flow through
+            // runtime_table mangled-name dispatch until T#21.
+            (
+                "sync",
+                &[
+                    "Thread",
+                    "ThreadId",
+                    "JoinHandle",
+                    "Mutex",
+                    "MutexGuard",
+                    "Arc",
+                    "PoisonError",
+                    "ThreadPanic",
+                    "Context",
+                    "Waker",
                 ],
             ),
         ];
@@ -467,12 +487,15 @@ impl Resolver {
             }
             if let Some(def) = self.symbols.get_mut(module_id) {
                 if let DefKind::Module { items } = &mut def.kind {
-                    // Last-wins: overwrite any pre-registered items
-                    // (today they are always empty per the comment
-                    // in `resolve/stdlib/mod.rs` rand_id construction,
-                    // but the overwrite makes the fixup re-runnable
-                    // safely).
-                    *items = fn_ids;
+                    // APPEND the looked-up DefIds rather than
+                    // overwriting. Most stdlib modules start with
+                    // empty items so append == replace for them, but
+                    // a few (e.g. std.sync) keep one-off Rust shims
+                    // like the ThreadId value-scope Variable that
+                    // need to coexist with bootstrap-loaded class
+                    // DefIds. Append keeps both working without a
+                    // second fixup mechanism.
+                    items.extend(fn_ids);
                 }
             }
         }

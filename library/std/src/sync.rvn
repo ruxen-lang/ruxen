@@ -1,0 +1,61 @@
+## std::sync — thread / Mutex / Arc / SharedSync surface (partial).
+##
+## Wave 2 (#06.8) — partial migration: all 10 class shells moved
+## here (Thread, ThreadId, JoinHandle[T: Send], Mutex[T],
+## MutexGuard[T], Arc[T], SharedSync[T], PoisonError, ThreadPanic,
+## plus Context / Waker from std::task). Methods on every shell
+## still flow through the runtime_table mangled-name dispatch
+## (`Thread_spawn` → `riven_thread_spawn`, …) until T#21 lands.
+##
+## The `ThreadId` *value-scope* alias (so you can write `ThreadId`
+## as a sentinel value, not just as a type) stays in Rust — it's a
+## one-line `DefKind::Variable` shim in `resolve/stdlib/mod.rs` and
+## moves naturally only when class-body lib blocks land for the
+## constants that need it. The std.sync module's items list keeps
+## that shim's DefId alongside the bootstrap-loaded class DefIds
+## via the APPEND semantics of `fixup_bootstrapped_stdlib_modules`.
+##
+## Arc[T] migrates here; SharedSync[T] (the Ruby-naming canonical
+## name for Arc) stays in Rust as a `type_constructors` Variable
+## that aliases `SharedSync` to `Ty::Class { name: "Arc" }`. The
+## alias lets `let x: SharedSync[Int] = SharedSync.new(5)` resolve
+## to `Ty::Class { name: "Arc", generic_args: [Int] }` (matching the
+## constructor's return) — migrating SharedSync to its own .rvn
+## class would break that type-equivalence. T#21 cleans this up
+## when method dispatch for built-in classes moves to the FFI alias
+## path.
+##
+## Context / Waker belong to std::task (async runtime plumbing) but
+## live here in `sync.rvn` for now because the standalone task.rvn
+## module hasn't been split out — they are still indexed under
+## `std.sync.{Context, Waker}` per the legacy registration.
+
+class Context
+end
+
+class Waker
+end
+
+class Thread
+end
+
+class ThreadId
+end
+
+class JoinHandle[T: Send]
+end
+
+class Mutex[T]
+end
+
+class MutexGuard[T]
+end
+
+class Arc[T]
+end
+
+class PoisonError
+end
+
+class ThreadPanic
+end
