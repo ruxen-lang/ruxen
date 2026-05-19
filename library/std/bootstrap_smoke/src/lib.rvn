@@ -11,7 +11,7 @@
 # DO NOT rely on `bootstrap_smoke_add_one` outside of bootstrap tests.
 # Wave 2 will replace this file with real stdlib modules.
 
-lib "riven_runtime"
+lib "../core/runtime/test_extern.c"
   def bootstrap_smoke_add_one as "riven_test_extern_add_one"(x: Int) -> Int
 end
 
@@ -22,7 +22,7 @@ end
 # the underlying `riven_test_extern_add_one` C symbol from
 # `library/runtime/test_extern.c`.
 class BootstrapSmokeClass
-  lib "riven_runtime"
+  lib "../core/runtime/test_extern.c"
     def self.add_one as "riven_test_extern_add_one"(x: Int) -> Int
     def self.double as "riven_test_extern_double"(x: Int) -> Int
   end

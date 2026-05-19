@@ -24,16 +24,23 @@ fn linker_args(sanitize: bool, extra_link_flags: &[String]) -> Vec<String> {
     args
 }
 
-/// Compile the C runtime to an object file, returning its path.
+/// Compile a single C runtime source to an object file.
 ///
-/// When `sanitize` is true, the runtime is compiled with AddressSanitizer
-/// and UndefinedBehaviorSanitizer instrumentation for testing.
+/// When `sanitize` is true, the file is compiled with AddressSanitizer
+/// and UndefinedBehaviorSanitizer instrumentation. Kept as the primitive
+/// shared by both the singleton path (legacy unity-build callers via
+/// [`compile_runtime`]) and the multi-source path
+/// ([`compile_runtime_sources`]) introduced in #06.95 Phase B-2.
 pub fn compile_runtime(runtime_c_path: &Path, sanitize: bool) -> Result<PathBuf, String> {
-    // Use a unique temp file per invocation to avoid race conditions in parallel tests
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let stem = runtime_c_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("runtime");
     let runtime_o = std::env::temp_dir().join(format!(
-        "riven_runtime_{}_{}.o",
+        "riven_{}_{}_{}.o",
+        stem,
         std::process::id(),
         COUNTER.fetch_add(1, Ordering::Relaxed),
     ));
@@ -51,13 +58,41 @@ pub fn compile_runtime(runtime_c_path: &Path, sanitize: bool) -> Result<PathBuf,
 
     let status = cmd
         .status()
-        .map_err(|e| format!("Failed to invoke cc for runtime: {}", e))?;
+        .map_err(|e| format!("Failed to invoke cc for {}: {}", runtime_c_path.display(), e))?;
 
     if !status.success() {
-        return Err("Failed to compile runtime.c".to_string());
+        return Err(format!("Failed to compile {}", runtime_c_path.display()));
     }
 
     Ok(runtime_o)
+}
+
+/// Compile every per-package C runtime source to its own object file.
+///
+/// After #06.95 Phase B-2, each stdlib package's `.c` files are
+/// standalone translation units (they `#include` the shared
+/// `library/std/core/runtime/runtime.h` for cross-package type and
+/// function declarations). This walks the source list, compiles each
+/// to a uniquely named `.o`, and returns the full set for the linker.
+///
+/// On failure, any objects already produced are best-effort removed.
+pub fn compile_runtime_sources(
+    sources: &[PathBuf],
+    sanitize: bool,
+) -> Result<Vec<PathBuf>, String> {
+    let mut objects: Vec<PathBuf> = Vec::with_capacity(sources.len());
+    for src in sources {
+        match compile_runtime(src, sanitize) {
+            Ok(o) => objects.push(o),
+            Err(e) => {
+                for partial in &objects {
+                    let _ = std::fs::remove_file(partial);
+                }
+                return Err(e);
+            }
+        }
+    }
+    Ok(objects)
 }
 
 /// Write object bytes to a file and link with the runtime into an executable.
@@ -69,7 +104,7 @@ pub fn compile_runtime(runtime_c_path: &Path, sanitize: bool) -> Result<PathBuf,
 /// `@[link("foo")]` FFI attributes).
 pub fn emit_executable(
     object_bytes: &[u8],
-    runtime_o: &Path,
+    runtime_objects: &[PathBuf],
     output_path: &str,
     sanitize: bool,
     extra_link_flags: &[String],
@@ -80,7 +115,11 @@ pub fn emit_executable(
         .map_err(|e| format!("Failed to write object file: {}", e))?;
 
     let mut cmd = Command::new("cc");
-    cmd.arg(&obj_path).arg(runtime_o).arg("-o").arg(output_path);
+    cmd.arg(&obj_path);
+    for runtime_o in runtime_objects {
+        cmd.arg(runtime_o);
+    }
+    cmd.arg("-o").arg(output_path);
 
     for arg in linker_args(sanitize, extra_link_flags) {
         cmd.arg(arg);
@@ -95,7 +134,9 @@ pub fn emit_executable(
     }
 
     let _ = std::fs::remove_file(&obj_path);
-    let _ = std::fs::remove_file(runtime_o);
+    for runtime_o in runtime_objects {
+        let _ = std::fs::remove_file(runtime_o);
+    }
 
     Ok(())
 }

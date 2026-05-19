@@ -47,7 +47,11 @@ fn to_camel(s: &str) -> String {
 
 #[test]
 fn io_error_variant_tags_match_runtime_and_stdlib_source() {
-    let runtime = read("library/std/io/runtime/io_error.c");
+    // #06.95 Phase B-2: the RIVEN_IO_ERROR_* tag macros moved from
+    // io_error.c into the shared `library/std/core/runtime/runtime.h`
+    // so cross-package `.c` files (fs, net, rand, file, …) can
+    // reference them without depending on the unity build.
+    let runtime = read("library/std/core/runtime/runtime.h");
     let stdlib_source = read("library/std/io/src/lib.rvn");
 
     // Collect (Variant, tag) pairs from the runtime #defines.

@@ -41,7 +41,7 @@
 ## aliases — same shape as the `String_clone` outlier from T#13.
 
 class Array
-  lib "riven_runtime"
+  lib "runtime/vec.c"
     # ── Constructors (no `self`) ──────────────────────────────────
     def self.new as "riven_vec_new"() -> Int
     def self.with_capacity as "riven_vec_with_capacity"(cap: Int) -> Int

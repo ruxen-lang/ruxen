@@ -14,7 +14,7 @@
 ## docs/prompts/v1/06_phase2_stdlib_io_fmt.md — v1 ships the blocking
 ## terminals (.status, .output) only.
 
-lib "riven_runtime"
+lib "runtime/process.c"
   def exit as "riven_process_exit"(code: Int) -> Never
 end
 

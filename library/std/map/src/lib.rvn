@@ -24,7 +24,7 @@
 ## here.
 
 class Map
-  lib "riven_runtime"
+  lib "../hash/runtime/hash.c"
     # ── Constructors (no `self`) ──────────────────────────────────
     def self.new as "riven_hash_new"() -> Int
     def self.with_capacity as "riven_hash_with_capacity"(cap: Int) -> Int

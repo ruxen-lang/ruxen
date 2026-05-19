@@ -5,7 +5,7 @@
 ## static-ctor fast path + runtime_table mangled-name lookup
 ## (`TcpStream_read` → `riven_tcp_stream_read`, …). A trial
 ## migration during T#20 attempted to declare these as class-body
-## `lib "riven_runtime"` decls with `-> Int` returns (matching the
+## `lib "runtime/tcp.c"` decls with `-> Int` returns (matching the
 ## void*-boxed Result wire shape), but typeck consults the
 ## hardcoded method-resolver table in `typeck/method_resolvers/mod.rs`
 ## that says `bind` → `Result[TcpListener, IoError]`. Declaring

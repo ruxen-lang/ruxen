@@ -1,7 +1,7 @@
 ## std::time — Duration + Instant class shells + unix_ns free fn.
 ##
 ## #06.8 T#20 follow-through: Duration and Instant now carry
-## class-body `lib "riven_runtime"` blocks for every method that
+## class-body `lib "runtime/time.c"` blocks for every method that
 ## previously lived in `codegen/runtime_table/mod.rs`. The
 ## static-ctor fast path in `mir/lower/expr/method_call.rs` still
 ## fires for `Duration.from_secs(5)` / `Instant.now()` — those keep
@@ -21,7 +21,7 @@
 ## reachable from Riven user code.
 
 class Duration
-  lib "riven_runtime"
+  lib "runtime/time.c"
     # Constructors (no `self`).
     def self.from_secs as "riven_duration_from_secs"(secs: Int) -> Int
     def self.from_millis as "riven_duration_from_millis"(ms: Int) -> Int
@@ -41,7 +41,7 @@ class Duration
 end
 
 class Instant
-  lib "riven_runtime"
+  lib "runtime/time.c"
     # Constructor (no `self`).
     def self.now as "riven_instant_now"() -> Int
 
@@ -52,6 +52,6 @@ class Instant
   end
 end
 
-lib "riven_runtime"
+lib "runtime/time.c"
   def unix_ns as "riven_time_unix_ns"() -> Int
 end

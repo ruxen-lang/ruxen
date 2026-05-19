@@ -1,3 +1,5 @@
+#include "runtime.h"
+
 // Tiny C symbol used by #06.8 Phase 2 link-smoke tests
 // (compiler/riven_core/tests/ffi_c_symbol_wired.rs).
 //

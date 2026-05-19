@@ -11,7 +11,7 @@
 ## `vars` snapshots the process environment at call time; mutations
 ## after the call do not propagate into the returned map.
 
-lib "riven_runtime"
+lib "runtime/env.c"
   def args as "riven_env_args"() -> Array[String]
   def get as "riven_env_var"(name: &String) -> Result[String, IoError]
   def vars as "riven_env_vars"() -> Map[String, String]

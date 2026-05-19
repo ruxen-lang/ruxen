@@ -56,39 +56,75 @@ fn workspace_root() -> PathBuf {
 /// We replace the function bodies in place rather than re-declaring
 /// them so the rest of the runtime (riven_panic, riven_string_*, …)
 /// keeps using the tracked allocator.
-/// Inline-expand `#include "X"` directives in a Phase-B unity-build
-/// runtime.c.  The string surgery below was written against the
-/// pre-#06.75 5800-LOC single-file runtime; this expansion gives us
-/// the same single-string shape from today's aggregator + per-module
-/// source tree without changing the test's downstream replacement
-/// logic.
-fn expand_unity_includes(aggregator: &str, runtime_dir: &Path) -> String {
+/// Strip each per-package .c file's `#include "...runtime.h"` line,
+/// which becomes spurious once the bodies are concatenated into a
+/// single tracked TU (the synthesized unity has the header inlined
+/// at the top).
+fn strip_runtime_h_include(src: &str) -> String {
+    src.lines()
+        .filter(|line| {
+            let trimmed = line.trim_start();
+            !(trimmed.starts_with("#include \"runtime.h\"")
+                || trimmed.starts_with("#include \"../../core/runtime/runtime.h\""))
+        })
+        .map(|line| {
+            let mut owned = String::from(line);
+            owned.push('\n');
+            owned
+        })
+        .collect()
+}
+
+/// Build the equivalent of the pre-#06.95 Phase B-2 unity-build
+/// `runtime.c` by reading every per-package `runtime/*.c` and
+/// prepending the shared `runtime.h`. The string surgery below was
+/// written against the historical single-TU runtime; this synthesis
+/// preserves the same single-string shape for drop_fixtures' textual
+/// rewrites without resurrecting the unity build in production.
+fn synthesize_unity_runtime() -> String {
+    let std_root = workspace_root().join("library/std");
+    let header = std::fs::read_to_string(std_root.join("core/runtime/runtime.h"))
+        .expect("read runtime.h");
     let mut out = String::new();
-    for line in aggregator.lines() {
-        let trimmed = line.trim_start();
-        if let Some(rest) = trimmed.strip_prefix("#include \"") {
-            if let Some(rel) = rest.strip_suffix("\"") {
-                // Local quote-include — splice the referenced file in.
-                let inc_path = runtime_dir.join(rel);
-                let body = std::fs::read_to_string(&inc_path)
-                    .unwrap_or_else(|e| panic!("read {}: {}", inc_path.display(), e));
-                out.push_str(&body);
-                out.push('\n');
-                continue;
-            }
+    out.push_str(&header);
+    out.push('\n');
+
+    // Order is load-bearing for some textual splices that key off
+    // `riven_alloc` / `riven_dealloc` appearing exactly once — so we
+    // walk core first, then the rest alphabetically.
+    let mut pkg_dirs: Vec<PathBuf> = std::fs::read_dir(&std_root)
+        .expect("read library/std")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_dir() && p.join("runtime").is_dir())
+        .collect();
+    pkg_dirs.sort_by_key(|p| {
+        let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
+        // core first, then alphabetical
+        (name != "core", name)
+    });
+
+    for pkg in pkg_dirs {
+        let runtime_dir = pkg.join("runtime");
+        let mut c_files: Vec<PathBuf> = std::fs::read_dir(&runtime_dir)
+            .expect("read pkg runtime/")
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("c"))
+            .collect();
+        c_files.sort();
+        for c in c_files {
+            let body = std::fs::read_to_string(&c)
+                .unwrap_or_else(|e| panic!("read {}: {}", c.display(), e));
+            out.push_str(&strip_runtime_h_include(&body));
+            out.push('\n');
         }
-        out.push_str(line);
-        out.push('\n');
     }
     out
 }
 
 fn write_tracking_runtime(target: &PathBuf) {
-    let runtime_dir = workspace_root().join("library/std/core/runtime");
-    let runtime_c = runtime_dir.join("runtime.c");
-    let aggregator = std::fs::read_to_string(&runtime_c)
-        .unwrap_or_else(|e| panic!("read {}: {}", runtime_c.display(), e));
-    let original = expand_unity_includes(&aggregator, &runtime_dir);
+    let original = synthesize_unity_runtime();
 
     // Replace the allocator and deallocator. We keep the original size
     // / overflow checks by simply shadowing the body with tracked

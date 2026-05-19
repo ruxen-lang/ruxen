@@ -18,17 +18,20 @@ use std::path::{Path, PathBuf};
 
 use crate::mir::nodes::MirProgram;
 
-/// Locate `runtime.c` for the compiler at runtime.
+/// Locate the stdlib package root containing per-package `runtime/*.c`
+/// trees. After #06.95 Phase B-2 each stdlib package owns its own
+/// `runtime/` directory; the unity-build `runtime.c` aggregator is
+/// gone, replaced by per-file compilation driven from this root.
 ///
 /// Resolution order:
-/// 1. `RIVEN_RUNTIME` env var — explicit override (path to runtime.c)
-/// 2. `<exe_dir>/../lib/runtime.c` — installed toolchain layout (~/.riven/lib)
-/// 3. `<exe_dir>/../share/riven/runtime.c` — alternate system layout
-/// 4. `<workspace_root>/library/std/core/runtime/runtime.c` — dev/workspace builds
-pub fn find_runtime_c() -> Result<PathBuf, String> {
-    if let Ok(p) = std::env::var("RIVEN_RUNTIME") {
+/// 1. `RIVEN_STDLIB_ROOT` env var — explicit override (path to `library/std/`)
+/// 2. `<exe_dir>/../lib/std/` — installed toolchain layout
+/// 3. `<exe_dir>/../share/riven/std/` — alternate system layout
+/// 4. `<workspace_root>/library/std/` — dev/workspace builds
+fn find_stdlib_root() -> Result<PathBuf, String> {
+    if let Ok(p) = std::env::var("RIVEN_STDLIB_ROOT") {
         let path = PathBuf::from(p);
-        if path.exists() {
+        if path.is_dir() {
             return Ok(path);
         }
     }
@@ -36,18 +39,9 @@ pub fn find_runtime_c() -> Result<PathBuf, String> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(bin_dir) = exe.parent() {
             if let Some(install_root) = bin_dir.parent() {
-                // #06.95 Phase B: installed layout mirrors the workspace
-                // `library/std/` tree under `<install>/lib/std/` so the
-                // unity-build runtime.c can find its sibling per-package
-                // `.c` files via the same relative include paths it uses
-                // in the workspace.
-                for rel in &[
-                    "lib/std/core/runtime/runtime.c",
-                    "lib/runtime.c",
-                    "share/riven/runtime.c",
-                ] {
+                for rel in &["lib/std", "share/riven/std"] {
                     let candidate = install_root.join(rel);
-                    if candidate.exists() {
+                    if candidate.join("core/runtime").is_dir() {
                         return Ok(candidate);
                     }
                 }
@@ -55,41 +49,104 @@ pub fn find_runtime_c() -> Result<PathBuf, String> {
         }
     }
 
-    // Dev fallback — only valid when running from the workspace.
-    // After #06.95 Phase B, the runtime lives at
-    // <workspace>/library/std/core/runtime/runtime.c.
     let dev_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
         .join("library")
-        .join("std")
-        .join("core")
-        .join("runtime")
-        .join("runtime.c");
-    if dev_path.exists() {
+        .join("std");
+    if dev_path.join("core/runtime").is_dir() {
         return Ok(dev_path);
-    }
-    // Backward-compatibility fallback for older checkouts still on
-    // the #06.75 layout. Removed once Phase B is fully integrated.
-    let legacy_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("library")
-        .join("runtime")
-        .join("runtime.c");
-    if legacy_path.exists() {
-        return Ok(legacy_path);
     }
 
     Err(format!(
-        "runtime.c not found. Looked in:\n\
-         - $RIVEN_RUNTIME\n\
-         - <exe>/../lib/runtime.c\n\
-         - <exe>/../share/riven/runtime.c\n\
+        "library/std/ not found. Looked in:\n\
+         - $RIVEN_STDLIB_ROOT\n\
+         - <exe>/../lib/std\n\
+         - <exe>/../share/riven/std\n\
          - {}\n\
-         Set RIVEN_RUNTIME to override.",
+         Set RIVEN_STDLIB_ROOT to override.",
         dev_path.display()
     ))
+}
+
+/// Locate every `library/std/<pkg>/runtime/*.c` source file the build
+/// driver must compile and link into the final binary.
+///
+/// After #06.95 Phase B-2, each stdlib package's C runtime ships in its
+/// own `runtime/` directory. Each `.c` is a standalone translation unit
+/// (it `#include`s `library/std/core/runtime/runtime.h` for the shared
+/// type/decl surface); the compiler invokes `cc -c` per file and links
+/// the resulting `.o`s into the executable. There is no unity build.
+pub fn find_runtime_sources() -> Result<Vec<PathBuf>, String> {
+    // `RIVEN_RUNTIME` is the legacy single-file override (one
+    // synthesized unity-build `.c`). Tests like
+    // `compiler/riven_core/tests/drop_fixtures.rs` write a tracked
+    // unity into a tempfile, point this env var at it, and expect
+    // the compile to use ONLY that file. Honoured for backward
+    // compatibility; the modern per-package path uses
+    // `RIVEN_STDLIB_ROOT`.
+    if let Ok(p) = std::env::var("RIVEN_RUNTIME") {
+        let path = PathBuf::from(p);
+        if path.is_file() {
+            return Ok(vec![path]);
+        }
+    }
+
+    let std_root = find_stdlib_root()?;
+    let mut sources: Vec<PathBuf> = Vec::new();
+
+    let pkg_iter = std::fs::read_dir(&std_root)
+        .map_err(|e| format!("read_dir({}): {}", std_root.display(), e))?;
+    for pkg_entry in pkg_iter {
+        let pkg_entry = match pkg_entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let pkg_path = pkg_entry.path();
+        if !pkg_path.is_dir() {
+            continue;
+        }
+        let runtime_dir = pkg_path.join("runtime");
+        if !runtime_dir.is_dir() {
+            continue;
+        }
+        let file_iter = match std::fs::read_dir(&runtime_dir) {
+            Ok(it) => it,
+            Err(_) => continue,
+        };
+        for file_entry in file_iter {
+            let file_entry = match file_entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            let file_path = file_entry.path();
+            if file_path.extension().and_then(|s| s.to_str()) == Some("c") {
+                sources.push(file_path);
+            }
+        }
+    }
+
+    if sources.is_empty() {
+        return Err(format!(
+            "no `runtime/*.c` files found under {}",
+            std_root.display()
+        ));
+    }
+
+    // Stable order for reproducible builds.
+    sources.sort();
+    Ok(sources)
+}
+
+/// Backward-compatibility shim — returns the first stdlib runtime
+/// source as a single path. Pre-B-2 callers that expected a single
+/// `runtime.c` should migrate to [`find_runtime_sources`].
+#[deprecated(note = "use find_runtime_sources — per-package compilation replaces the unity build")]
+pub fn find_runtime_c() -> Result<PathBuf, String> {
+    find_runtime_sources()?
+        .into_iter()
+        .next()
+        .ok_or_else(|| "no runtime sources".to_string())
 }
 
 /// Which code-generation backend to use.
@@ -135,9 +192,12 @@ pub fn compile_with_options(
         }
     };
 
-    // Step 2: Compile the C runtime
-    let runtime_c = find_runtime_c()?;
-    let runtime_o = object::compile_runtime(&runtime_c, sanitize)?;
+    // Step 2: Compile every stdlib package's C runtime sources. After
+    // #06.95 Phase B-2 each `.c` is a standalone translation unit; we
+    // compile each to its own `.o` and link them all into the final
+    // binary.
+    let runtime_sources = find_runtime_sources()?;
+    let runtime_objects = object::compile_runtime_sources(&runtime_sources, sanitize)?;
 
     // Step 3: Collect FFI link flags from the program
     let mut all_link_flags: Vec<String> = extra_link_flags.to_vec();
@@ -152,14 +212,16 @@ pub fn compile_with_options(
     // Step 4: Link into executable
     object::emit_executable(
         &object_bytes,
-        &runtime_o,
+        &runtime_objects,
         output_path,
         sanitize,
         &all_link_flags,
     )?;
 
-    // Clean up runtime object
-    let _ = std::fs::remove_file(&runtime_o);
+    // Clean up runtime objects
+    for o in &runtime_objects {
+        let _ = std::fs::remove_file(o);
+    }
 
     Ok(())
 }

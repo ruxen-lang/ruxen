@@ -32,7 +32,7 @@
 ## returns) and let typeck's own rules drive what the user sees.
 
 class String
-  lib "riven_runtime"
+  lib "runtime/string.c"
     # ── Constructors (no `self`) ──────────────────────────────────
     def self.from as "riven_string_from"(s: &String) -> String
     def self.new as "riven_string_new"() -> String
@@ -105,13 +105,13 @@ end
 ## shared `riven_parse_error_message` runtime symbol.
 
 class ParseIntError
-  lib "riven_runtime"
+  lib "runtime/string.c"
     def message as "riven_parse_error_message"(self) -> String
   end
 end
 
 class ParseFloatError
-  lib "riven_runtime"
+  lib "runtime/string.c"
     def message as "riven_parse_error_message"(self) -> String
   end
 end

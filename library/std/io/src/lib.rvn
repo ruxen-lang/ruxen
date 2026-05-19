@@ -106,7 +106,7 @@ enum IoErrorKind
   OutOfMemory
 end
 
-lib "riven_runtime"
+lib "runtime/stdio.c"
   def puts as "riven_puts"(value: &String) -> ()
   def eputs as "riven_eputs"(value: &String) -> ()
   def print as "riven_print"(value: &String) -> ()

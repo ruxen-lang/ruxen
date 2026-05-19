@@ -9,7 +9,7 @@
 ## with the fs surface — same translation unit, no separate
 ## `path.c`).
 
-lib "riven_runtime"
+lib "../string/runtime/string.c"
   def path_join as "riven_path_join"(a: &String, b: &String) -> String
   def path_parent as "riven_path_parent"(path: &String) -> String
   def path_file_name as "riven_path_file_name"(path: &String) -> String

@@ -1,23 +1,53 @@
 use std::env;
 use std::path::PathBuf;
 
+fn collect_runtime_sources(std_root: &std::path::Path) -> Vec<PathBuf> {
+    let mut sources: Vec<PathBuf> = Vec::new();
+    for pkg in std::fs::read_dir(std_root).expect("read library/std") {
+        let pkg = match pkg {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let runtime_dir = pkg.path().join("runtime");
+        if !runtime_dir.is_dir() {
+            continue;
+        }
+        for f in std::fs::read_dir(&runtime_dir).expect("read runtime dir") {
+            let f = match f {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            let p = f.path();
+            if p.extension().and_then(|s| s.to_str()) == Some("c") {
+                sources.push(p);
+            }
+        }
+    }
+    sources.sort();
+    sources
+}
+
 fn main() {
     let crate_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-    // #06.95 Phase B: runtime.c relocated under std-core's package
-    // directory. The unity-build entry still lives — it just moved.
-    let runtime_c = PathBuf::from(&crate_dir)
-        .parent() // crates/
+    // #06.95 Phase B-2: per-package C runtime. Each stdlib package's
+    // `runtime/*.c` files are standalone translation units that
+    // `#include` the shared header at
+    // `library/std/core/runtime/runtime.h`. The cc::Build below
+    // compiles every one of them into the librivenrt archive that the
+    // REPL's cranelift-jit links against.
+    let workspace = PathBuf::from(&crate_dir)
+        .parent()
         .unwrap()
-        .parent() // workspace root
+        .parent()
         .unwrap()
-        .join("library")
-        .join("std")
-        .join("core")
-        .join("runtime")
-        .join("runtime.c");
-
-    if !runtime_c.exists() {
-        panic!("Runtime source not found at {:?}", runtime_c);
+        .to_path_buf();
+    let std_root = workspace.join("library").join("std");
+    let runtime_sources = collect_runtime_sources(&std_root);
+    if runtime_sources.is_empty() {
+        panic!(
+            "no `runtime/*.c` sources found under {}",
+            std_root.display()
+        );
     }
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
@@ -29,22 +59,25 @@ fn main() {
     // unused helpers (Hash_*, Set_*, Option_*, Path_*, …) and the REPL
     // panics the moment user code touches one of them.
     //
-    // Strategy: let cc compile `runtime.c` into `librivenrt.a` (with
-    // its cargo-metadata emission suppressed so we control the link
-    // directive ourselves), then emit a `+whole-archive` modifier-form
-    // `rustc-link-lib` so the linker pulls in every object.  Without
-    // the cargo_metadata suppression cc emits a plain
-    // `cargo:rustc-link-lib=static=rivenrt` and our modifier-form
-    // directive becomes a *second* link directive for the same
-    // archive — on Linux that surfaces as "multiple definition of
-    // riven_env_var" because the runtime translation unit ends up in
-    // the link twice.
-    cc::Build::new()
-        .file(&runtime_c)
+    // Strategy: let cc compile every per-package `.c` into the
+    // `librivenrt.a` archive (with cargo-metadata emission suppressed
+    // so we control the link directive ourselves), then emit a
+    // `+whole-archive` modifier-form `rustc-link-lib` so the linker
+    // pulls in every object.  Without the cargo_metadata suppression
+    // cc emits a plain `cargo:rustc-link-lib=static=rivenrt` and our
+    // modifier-form directive becomes a *second* link directive for
+    // the same archive — on Linux that surfaces as "multiple
+    // definition" errors because the archive ends up in the link
+    // twice.
+    let mut build = cc::Build::new();
+    build
         .opt_level(2)
         .warnings(true)
-        .cargo_metadata(false)
-        .compile("rivenrt");
+        .cargo_metadata(false);
+    for src in &runtime_sources {
+        build.file(src);
+    }
+    build.compile("rivenrt");
 
     println!("cargo:rustc-link-search=native={out_dir}");
 
@@ -71,5 +104,8 @@ fn main() {
         }
     }
 
-    println!("cargo:rerun-if-changed={}", runtime_c.display());
+    for src in &runtime_sources {
+        println!("cargo:rerun-if-changed={}", src.display());
+    }
+    println!("cargo:rerun-if-changed={}", std_root.display());
 }

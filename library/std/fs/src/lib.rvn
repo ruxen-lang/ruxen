@@ -19,7 +19,7 @@
 class Metadata
 end
 
-lib "riven_runtime"
+lib "runtime/fs.c"
   def read_to_string as "riven_fs_read_to_string"(path: &String) -> Result[String, IoError]
   def write as "riven_fs_write"(path: &String, contents: &String) -> Result[(), IoError]
   def exists as "riven_fs_exists"(path: &String) -> Bool

@@ -19,41 +19,75 @@ fn unique_suffix() -> String {
 
 /// Compile the C runtime to a fresh `.o` file. Each call produces a
 /// distinct path so parallel callers don't race on shared output.
-fn compile_runtime() -> std::path::PathBuf {
+/// Walk `library/std/<pkg>/runtime/*.c` to collect every per-package
+/// C source. After #06.95 Phase B-2 each `.c` is a standalone TU; the
+/// runtime is no longer a single file.
+fn collect_runtime_sources() -> Vec<std::path::PathBuf> {
     let crate_dir = env!("CARGO_MANIFEST_DIR");
-    let runtime_c = Path::new(crate_dir)
+    let std_root = Path::new(crate_dir)
         .parent()
         .unwrap()
         .parent()
         .unwrap()
         .join("library")
-        .join("std")
-        .join("core")
-        .join("runtime")
-        .join("runtime.c");
-    let runtime_o = std::env::temp_dir().join(format!("riven_runtime_test_{}.o", unique_suffix()));
+        .join("std");
+    let mut sources: Vec<std::path::PathBuf> = Vec::new();
+    for pkg in std::fs::read_dir(&std_root).expect("read library/std") {
+        let pkg = match pkg {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let runtime_dir = pkg.path().join("runtime");
+        if !runtime_dir.is_dir() {
+            continue;
+        }
+        for f in std::fs::read_dir(&runtime_dir).expect("read pkg runtime") {
+            let f = match f {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            let p = f.path();
+            if p.extension().and_then(|s| s.to_str()) == Some("c") {
+                sources.push(p);
+            }
+        }
+    }
+    sources.sort();
+    sources
+}
 
-    let status = Command::new("cc")
-        .arg("-c")
-        .arg(&runtime_c)
-        .arg("-o")
-        .arg(&runtime_o)
-        .arg("-O2")
-        .arg("-Wall")
-        .arg("-Wextra")
-        .arg("-Werror")
-        .status()
-        .expect("failed to invoke cc");
-
-    assert!(
-        status.success(),
-        "runtime.c failed to compile with -Wall -Wextra -Werror"
-    );
-    runtime_o
+/// Compile every per-package `.c` to its own `.o`, returning the
+/// list. Caller is responsible for cleanup (best-effort
+/// `remove_file` on each).
+fn compile_runtime_objects(extra_flags: &[&str]) -> Vec<std::path::PathBuf> {
+    let sources = collect_runtime_sources();
+    let mut objects: Vec<std::path::PathBuf> = Vec::with_capacity(sources.len());
+    for src in &sources {
+        let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("rt");
+        let obj = std::env::temp_dir().join(format!(
+            "riven_{}_{}.o",
+            stem,
+            unique_suffix()
+        ));
+        let mut cmd = Command::new("cc");
+        cmd.arg("-c").arg(src).arg("-o").arg(&obj);
+        for f in extra_flags {
+            cmd.arg(f);
+        }
+        let status = cmd.status().expect("failed to invoke cc");
+        assert!(
+            status.success(),
+            "failed to compile {} with flags {:?}",
+            src.display(),
+            extra_flags
+        );
+        objects.push(obj);
+    }
+    objects
 }
 
 fn compile_c_harness(name: &str, source: &str) -> PathBuf {
-    let runtime_o = compile_runtime();
+    let runtime_objects = compile_runtime_objects(&["-O2"]);
     let temp_dir = std::env::temp_dir();
     let suffix = unique_suffix();
     let harness_c = temp_dir.join(format!("{name}_{suffix}.c"));
@@ -68,10 +102,11 @@ fn compile_c_harness(name: &str, source: &str) -> PathBuf {
     // On Linux the equivalents are statically resolved via libc /
     // getentropy(3) — no extra flag needed.
     let mut cmd = Command::new("cc");
-    cmd.arg(&harness_c)
-        .arg(&runtime_o)
-        .arg("-o")
-        .arg(&harness_exe);
+    cmd.arg(&harness_c);
+    for o in &runtime_objects {
+        cmd.arg(o);
+    }
+    cmd.arg("-o").arg(&harness_exe);
     #[cfg(target_os = "macos")]
     {
         cmd.arg("-framework").arg("Security");
@@ -79,48 +114,28 @@ fn compile_c_harness(name: &str, source: &str) -> PathBuf {
     let status = cmd.status().expect("failed to invoke cc for harness");
 
     let _ = std::fs::remove_file(&harness_c);
-    let _ = std::fs::remove_file(&runtime_o);
+    for o in &runtime_objects {
+        let _ = std::fs::remove_file(o);
+    }
     assert!(status.success(), "failed to compile C harness {name}");
     harness_exe
 }
 
 #[test]
 fn runtime_compiles_with_strict_warnings() {
-    compile_runtime();
+    let objects = compile_runtime_objects(&["-O2", "-Wall", "-Wextra", "-Werror"]);
+    for o in &objects {
+        let _ = std::fs::remove_file(o);
+    }
 }
 
 #[test]
 fn runtime_compiles_with_sanitizers() {
-    let crate_dir = env!("CARGO_MANIFEST_DIR");
-    let runtime_c = Path::new(crate_dir)
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("library")
-        .join("std")
-        .join("core")
-        .join("runtime")
-        .join("runtime.c");
-    let runtime_o =
-        std::env::temp_dir().join(format!("riven_runtime_asan_test_{}.o", unique_suffix()));
-
-    let status = Command::new("cc")
-        .arg("-c")
-        .arg(&runtime_c)
-        .arg("-o")
-        .arg(&runtime_o)
-        .arg("-fsanitize=address,undefined")
-        .arg("-g")
-        .arg("-fno-omit-frame-pointer")
-        .status()
-        .expect("failed to invoke cc");
-
-    assert!(
-        status.success(),
-        "runtime.c failed to compile with sanitizers"
-    );
-    let _ = std::fs::remove_file(&runtime_o);
+    let objects =
+        compile_runtime_objects(&["-fsanitize=address,undefined", "-g", "-fno-omit-frame-pointer"]);
+    for o in &objects {
+        let _ = std::fs::remove_file(o);
+    }
 }
 
 #[test]

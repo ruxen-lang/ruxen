@@ -15,7 +15,7 @@
 ## form misses.
 
 class Set
-  lib "riven_runtime"
+  lib "../hash/runtime/hash.c"
     # ── Constructors (no `self`) ──────────────────────────────────
     def self.new as "riven_set_new"() -> Int
     def self.with_capacity as "riven_set_with_capacity"(cap: Int) -> Int

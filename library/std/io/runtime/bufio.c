@@ -1,3 +1,5 @@
+#include "../../core/runtime/runtime.h"
+
 /* Phase 2 #06.5 T6: BufReader[R] / BufWriter[W] over File + TcpStream.
  *
  * v1 simplification (per docs/prompts/v1/06_5_phase2_sync_io_completeness.md §2):

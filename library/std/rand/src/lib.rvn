@@ -14,7 +14,7 @@
 ## TcpStream.read), even though the user-facing spec spelling is
 ## `Array[U8]`. See docs/specs/stdlib/rand.spec.md.
 
-lib "riven_runtime"
+lib "runtime/rand.c"
   def random_bytes as "riven_rand_random_bytes"(n: Int) -> Result[Array[Int], IoError]
   def random_u64 as "riven_rand_random_u64"() -> Int
   def random_fill as "riven_rand_random_fill"(buf: &var Array[Int]) -> Result[(), IoError]

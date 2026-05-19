@@ -448,33 +448,38 @@ fn run_compile(args: &[String]) {
         }
     };
 
-    let runtime_c = match riven_core::codegen::find_runtime_c() {
+    let runtime_sources = match riven_core::codegen::find_runtime_sources() {
         Ok(p) => p,
         Err(e) => {
             eprintln!("{}", e);
             process::exit(1);
         }
     };
-    let runtime_o = match riven_core::codegen::object::compile_runtime(&runtime_c, false) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("Failed to compile runtime: {}", e);
-            process::exit(1);
-        }
-    };
+    let runtime_objects =
+        match riven_core::codegen::object::compile_runtime_sources(&runtime_sources, false) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("Failed to compile runtime: {}", e);
+                process::exit(1);
+            }
+        };
 
     if let Err(e) = riven_core::codegen::object::emit_executable(
         &object_bytes,
-        &runtime_o,
+        &runtime_objects,
         &output_path,
         false,
         &[],
     ) {
-        let _ = fs::remove_file(&runtime_o);
+        for o in &runtime_objects {
+            let _ = fs::remove_file(o);
+        }
         eprintln!("Linking failed: {}", e);
         process::exit(1);
     }
-    let _ = fs::remove_file(&runtime_o);
+    for o in &runtime_objects {
+        let _ = fs::remove_file(o);
+    }
 
     println!("Compiled {} → {}", path, output_path);
     report_statuses(&result.statuses, verbose);
