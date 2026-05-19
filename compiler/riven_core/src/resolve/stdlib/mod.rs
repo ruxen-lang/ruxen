@@ -469,15 +469,11 @@ pub(super) fn register_all(r: &mut Resolver) {
             ],
             Ty::Result(Box::new(Ty::Unit), Box::new(io_error_ty.clone())),
         ),
-        (
-            "exit",
-            vec![ParamInfo {
-                name: "code".into(),
-                ty: Ty::Int,
-                auto_assign: false,
-            }],
-            Ty::Never,
-        ),
+        // `exit(code) -> Never` was here. Wave 2 (#06.8) migrated to
+        // library/std/src/process.rvn (`lib "riven_runtime" def exit
+        // as "riven_process_exit"(code: Int) -> Never`). The FFI alias
+        // map populated during MIR lowering rewrites the callee to the
+        // C symbol BEFORE codegen consults runtime_table.
         // std::time — Phase 3 / #06.5. `unix_ns` is wall-clock
         // (nanoseconds since 1970-01-01 UTC) and stays exposed as a
         // bare Int-returning free-fn until a `SystemTime` class lands.
@@ -872,90 +868,12 @@ pub(super) fn register_all(r: &mut Resolver) {
     // `.wait/.kill/.try_wait`) is explicitly DEFERRED to v2 per
     // `docs/prompts/v1/06_phase2_stdlib_io_fmt.md` — v1 ships the
     // blocking terminals only.
-    let command_id = r.symbols.define(
-        "Command".to_string(),
-        DefKind::Class {
-            info: ClassInfo {
-                generic_params: vec![],
-                parent: None,
-                fields: vec![],
-                methods: vec![],
-                derive_traits: vec![],
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
-                const_predicates: vec![],
-                flat_heap_struct: false,
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.scopes.insert_type("Command".to_string(), command_id);
-    r.type_registry.insert("Command".to_string(), command_id);
-
-    // Phase 2 stdlib (#06): `std::process::ExitStatus` wraps the
-    // child's exit code as a single int64 (POSIX-shell convention:
-    // 0..=255 normal exit; 128+signal on signal termination). The
-    // accessor methods are `code -> Int` and `success -> Bool`.
-    // Constructed only by the runtime (callers receive it via
-    // `Result[ExitStatus, IoError]` from `Command.status` or via
-    // `Output.status`); has no user-facing constructor.
-    let exit_status_id = r.symbols.define(
-        "ExitStatus".to_string(),
-        DefKind::Class {
-            info: ClassInfo {
-                generic_params: vec![],
-                parent: None,
-                fields: vec![],
-                methods: vec![],
-                derive_traits: vec![],
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
-                const_predicates: vec![],
-                flat_heap_struct: false,
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.scopes
-        .insert_type("ExitStatus".to_string(), exit_status_id);
-    r.type_registry
-        .insert("ExitStatus".to_string(), exit_status_id);
-
-    // Phase 2 stdlib (#06): `std::process::Output` carries the
-    // captured stdout/stderr of a finished child plus its exit
-    // status. Accessors:
-    //   `.status -> ExitStatus`  (fresh clone — Output keeps its own)
-    //   `.stdout -> String`      (UTF-8 only in v1; raw bytes v2)
-    //   `.stderr -> String`
-    // Constructed only by the runtime via `Command.output`.
-    let output_id = r.symbols.define(
-        "Output".to_string(),
-        DefKind::Class {
-            info: ClassInfo {
-                generic_params: vec![],
-                parent: None,
-                fields: vec![],
-                methods: vec![],
-                derive_traits: vec![],
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
-                const_predicates: vec![],
-                flat_heap_struct: false,
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.scopes.insert_type("Output".to_string(), output_id);
-    r.type_registry.insert("Output".to_string(), output_id);
+    // Command / ExitStatus / Output class shells were here. Wave 2
+    // (#06.8) moved all three to library/std/src/process.rvn as bare
+    // `class Foo end` bodies. Methods still flow through the
+    // static-ctor + runtime_table dispatch until T#20 lands. The
+    // bootstrap merge handles `insert_type` / `type_registry.insert`
+    // symmetrically with user code.
 
     // Phase 2 #06.5 T2: `std::io::File` — owning wrapper over a
     // POSIX fd. Constructed via `File.open / .create / .append /
@@ -1588,21 +1506,12 @@ pub(super) fn register_all(r: &mut Resolver) {
         Visibility::Public,
         span.clone(),
     );
+    // Wave 2 (#06.8): exit + Command + Output + ExitStatus all moved
+    // to library/std/src/process.rvn. process_id starts with empty
+    // items; fixup_bootstrapped_stdlib_modules populates them.
     let process_id = r.symbols.define(
         "process".to_string(),
-        DefKind::Module {
-            items: vec![
-                builtin_fn_ids["exit"],
-                // Phase 2 stdlib (#06): Command builder + its
-                // terminal return types.  Importable via
-                // `use std.process.{Command, Output, ExitStatus}`.
-                // The flat `process_run` free-fn was removed in
-                // #06.5 T5.5 — see process.spec.md "Removed".
-                command_id,
-                output_id,
-                exit_status_id,
-            ],
-        },
+        DefKind::Module { items: vec![] },
         Visibility::Public,
         span.clone(),
     );

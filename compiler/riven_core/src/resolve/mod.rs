@@ -345,6 +345,10 @@ impl Resolver {
             // Shutdown enum; methods still flow through the static-ctor
             // + runtime_table dispatch until T#20 lands).
             ("net", &["TcpListener", "TcpStream", "Shutdown"]),
+            // Wave 2 — library/std/src/process.rvn (`exit` free fn +
+            // Command / Output / ExitStatus class shells; class methods
+            // still go through static-ctor + runtime_table until T#20).
+            ("process", &["exit", "Command", "Output", "ExitStatus"]),
         ];
 
         let Some(std_id) = self.scopes.lookup_type("std") else {

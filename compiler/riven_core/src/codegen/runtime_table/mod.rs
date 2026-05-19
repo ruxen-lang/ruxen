@@ -51,7 +51,11 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "write_atomic" => return Ok("riven_fs_write_atomic"),
         "read_link" => return Ok("riven_fs_read_link"),
         "symlink" => return Ok("riven_fs_symlink"),
-        "exit" => return Ok("riven_process_exit"),
+        // `exit` was here — Wave 2 (#06.8) moved the C-symbol binding
+        // to `lib "riven_runtime" def exit as "riven_process_exit"`
+        // in library/std/src/process.rvn. The FFI alias map rewrites
+        // the callee at MIR-lowering time before codegen consults
+        // this table.
         // `process_run` removed in #06.5 T5.5 — superseded by
         // `Command_{status,output}`. The C symbol `riven_process_run`
         // is still linked (it is the implementation behind

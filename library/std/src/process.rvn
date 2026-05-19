@@ -1,0 +1,28 @@
+## std::process — Command builder, ExitStatus, Output, exit().
+##
+## Wave 2 (#06.8) — partial migration. Same shape as net.rvn:
+## - `exit(code) -> Never` is fully migrated (free fn via lib block;
+##   c_symbol alias replaces the runtime_table entry).
+## - `class Command end` / `class ExitStatus end` / `class Output end`
+##   are class shells; their methods still flow through the
+##   static-ctor + runtime_table dispatch in
+##   mir/lower/expr/method_call.rs and codegen/runtime_table/mod.rs
+##   until T#20 lands.
+##
+## `Command.spawn -> Child` (async-style handle with .wait / .kill /
+## .try_wait) is explicitly DEFERRED to v2 per
+## docs/prompts/v1/06_phase2_stdlib_io_fmt.md — v1 ships the blocking
+## terminals (.status, .output) only.
+
+lib "riven_runtime"
+  def exit as "riven_process_exit"(code: Int) -> Never
+end
+
+class Command
+end
+
+class ExitStatus
+end
+
+class Output
+end
