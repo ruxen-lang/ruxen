@@ -163,16 +163,26 @@ pub fn resolve_stdlib_root() -> Option<PathBuf> {
         }
     }
 
-    // Workspace fallback: walk up from CARGO_MANIFEST_DIR until we find
-    // a sibling `library/std/src/`. `riven_core` lives at
-    // `compiler/riven_core/`, so two parents up should hit the
-    // repo root that has `library/std/src/` alongside `compiler/`.
+    // #06.95 Phase A: the stdlib layout shifted from a flat
+    // `library/std/src/` to a per-package directory
+    // (`library/std/<pkg>/src/`). During the transition, all
+    // pre-existing content lives under `library/std/_legacy/src/`
+    // (one wrapper package). The workspace fallback now walks up
+    // looking for `library/std/_legacy/src/` instead of the
+    // original flat location. Backward compatibility for an older
+    // checkout where `library/std/src/` still exists is preserved
+    // as a second fallback so external tooling pointing at the
+    // old path keeps working through the transition.
     if let Some(manifest_dir) = std::env::var_os("CARGO_MANIFEST_DIR") {
         let mut cur = PathBuf::from(manifest_dir);
         for _ in 0..5 {
-            let candidate = cur.join("library/std/src");
-            if candidate.is_dir() {
-                return Some(candidate);
+            let legacy = cur.join("library/std/_legacy/src");
+            if legacy.is_dir() {
+                return Some(legacy);
+            }
+            let flat = cur.join("library/std/src");
+            if flat.is_dir() {
+                return Some(flat);
             }
             if !cur.pop() {
                 break;
@@ -180,14 +190,16 @@ pub fn resolve_stdlib_root() -> Option<PathBuf> {
         }
     }
 
-    // Exe-adjacent install layout: <exe>/../library/std/src/. Only
-    // exercised once `rivenc` is shipped via a real install rather
-    // than `cargo run`. Reserved.
+    // Exe-adjacent install layout: <exe>/../library/std/{_legacy,}/src/.
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
-            let candidate = exe_dir.join("../library/std/src");
-            if candidate.is_dir() {
-                return Some(candidate);
+            let legacy = exe_dir.join("../library/std/_legacy/src");
+            if legacy.is_dir() {
+                return Some(legacy);
+            }
+            let flat = exe_dir.join("../library/std/src");
+            if flat.is_dir() {
+                return Some(flat);
             }
         }
     }
@@ -204,7 +216,7 @@ fn load_stdlib_file(root: &Path, rel: &str) -> Result<Program, Diagnostic> {
     let source = std::fs::read_to_string(&full).map_err(|io_err| {
         Diagnostic::error_with_code(
             format!(
-                "stdlib bootstrap failed at library/std/src/{}: cannot read file: {}",
+                "stdlib bootstrap failed at library/std/_legacy/src/{}: cannot read file: {}",
                 rel, io_err
             ),
             Span::new(0, 0, 0, 0),
@@ -219,7 +231,7 @@ fn load_stdlib_file(root: &Path, rel: &str) -> Result<Program, Diagnostic> {
             let (line, msg) = first_error_line(&diags);
             return Err(Diagnostic::error_with_code(
                 format!(
-                    "stdlib bootstrap failed at library/std/src/{}:{}: lexer: {}",
+                    "stdlib bootstrap failed at library/std/_legacy/src/{}:{}: lexer: {}",
                     rel, line, msg
                 ),
                 Span::new(0, 0, line, 0),
@@ -233,7 +245,7 @@ fn load_stdlib_file(root: &Path, rel: &str) -> Result<Program, Diagnostic> {
         let (line, msg) = first_error_line(&diags);
         Diagnostic::error_with_code(
             format!(
-                "stdlib bootstrap failed at library/std/src/{}:{}: parser: {}",
+                "stdlib bootstrap failed at library/std/_legacy/src/{}:{}: parser: {}",
                 rel, line, msg
             ),
             Span::new(0, 0, line, 0),

@@ -4,7 +4,7 @@
 //! `run_bootstrap` loader to the resolver via
 //! `Resolver::merge_bootstrap_programs` (and the typeck convenience
 //! wrapper `type_check_with_bootstrap`), and ships one proof-of-life
-//! stdlib file — `library/std/src/_bootstrap_smoke.rvn` — that
+//! stdlib file — `library/std/_legacy/src/_bootstrap_smoke.rvn` — that
 //! declares `bootstrap_smoke_add_one` aliased to the runtime test
 //! symbol `riven_test_extern_add_one`.
 //!
@@ -189,12 +189,12 @@ fn bootstrap_program_injects_def_into_user_scope() {
 fn bootstrap_smoke_e2e_via_runtime_file() {
     // Drive the loader directly against the production stdlib root so
     // this test exercises EXACTLY the path the driver takes (parse
-    // `library/std/src/_bootstrap_smoke.rvn`, merge into resolver,
+    // `library/std/_legacy/src/_bootstrap_smoke.rvn`, merge into resolver,
     // compile a user .rvn that calls `bootstrap_smoke_add_one`, link
     // against the runtime, run the binary, expect exit 0). If this
     // test passes, the whole "stdlib self-hosting" architecture is
     // proven for Wave 1.5.
-    let stdlib_root = workspace_root().join("library/std/src");
+    let stdlib_root = workspace_root().join("library/std/_legacy/src");
     let mut diags = Vec::<Diagnostic>::new();
     let bootstrap_programs =
         run_bootstrap_with_files(&["_bootstrap_smoke.rvn"], Some(&stdlib_root), &mut diags);
@@ -251,7 +251,7 @@ fn bootstrap_class_method_e2e_via_runtime_file() {
     // code with no extra wiring. This is the load-bearing test for
     // "stdlib self-hosting works" — the architecture that's needed
     // for Wave 2+ migrations of real stdlib classes.
-    let stdlib_root = workspace_root().join("library/std/src");
+    let stdlib_root = workspace_root().join("library/std/_legacy/src");
     let mut diags = Vec::<Diagnostic>::new();
     let bootstrap_programs =
         run_bootstrap_with_files(&["_bootstrap_smoke.rvn"], Some(&stdlib_root), &mut diags);
@@ -326,7 +326,7 @@ fn bootstrap_failure_aborts_driver() {
     assert!(
         diags
             .iter()
-            .any(|d| d.message.contains("library/std/src/broken.rvn")),
+            .any(|d| d.message.contains("library/std/_legacy/src/broken.rvn")),
         "diagnostic should cite the broken stdlib file path; got: {:?}",
         diags.iter().map(|d| &d.message).collect::<Vec<_>>()
     );
