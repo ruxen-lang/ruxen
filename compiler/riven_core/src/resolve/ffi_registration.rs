@@ -424,12 +424,33 @@ impl Resolver {
                     .inner_impls
                     .iter()
                     .flat_map(|inner| {
-                        let mixin_name = inner.trait_name.segments.join(".");
-                        self.mixin_lib_decls
-                            .get(&mixin_name)
+                        // #06.93 Phase 5: resolve the included mixin's
+                        // lookup key. The user wrote some path
+                        // (`Reader` or `M.Reader`); we prefer the
+                        // class's enclosing-module-qualified form,
+                        // falling back to the literal path. Order:
+                        //   1. If the user wrote a multi-segment
+                        //      path (`M.Reader`), use it as-is.
+                        //   2. Else if the class is inside a module,
+                        //      try `<class.module_path>.<written>`
+                        //      first (the same-module case — common
+                        //      for the module + mixin pattern).
+                        //   3. Else fall back to the literal name
+                        //      (top-level mixin case).
+                        let written = inner.trait_name.segments.join(".");
+                        let try_keys: Vec<String> =
+                            if inner.trait_name.segments.len() > 1 {
+                                vec![written.clone()]
+                            } else if !module_path.is_empty() {
+                                vec![format!("{}.{}", module_path.join("."), written), written.clone()]
+                            } else {
+                                vec![written.clone()]
+                            };
+                        try_keys
                             .into_iter()
-                            .flat_map(|libs| libs.iter().flat_map(|lib| lib.functions.iter()))
-                            .cloned()
+                            .find_map(|k| self.mixin_lib_decls.get(&k).cloned())
+                            .into_iter()
+                            .flat_map(|libs| libs.into_iter().flat_map(|lib| lib.functions.into_iter()))
                             .collect::<Vec<_>>()
                     })
                     .collect();

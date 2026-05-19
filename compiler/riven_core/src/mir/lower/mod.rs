@@ -661,22 +661,53 @@ impl<'a> Lowerer<'a> {
         } else {
             class_name
         };
-        // Find the class def.
-        let mut class_def_id: Option<DefId> = None;
-        let mut parent_name: Option<String> = None;
+        // #06.93 Phase 5: a class inside a module is registered in
+        // the symbol table under its un-qualified last segment
+        // (`File`) but the receiver's `Ty::Class` carries the
+        // qualified name (`BufferedThings.File`). Use the LAST
+        // dotted segment for the symbol-table scan, and when
+        // multiple defs share that base name (the top-level stdlib
+        // `class File` + a module-nested `class File`), pick the
+        // one that ACTUALLY has the queried method registered
+        // under its DefId. Same approach scales to any future
+        // collision.
+        let lookup_name = if let Some(pos) = base.rfind('.') {
+            &base[pos + 1..]
+        } else {
+            base
+        };
+        // Collect every Class def matching the base name.
+        let mut candidates: Vec<(DefId, Option<DefId>)> = Vec::new();
         for def in self.symbols.iter() {
-            if def.name == base {
+            if def.name == lookup_name {
                 if let DefKind::Class { ref info } = def.kind {
-                    class_def_id = Some(def.id);
-                    if let Some(parent_id) = info.parent {
-                        if let Some(p) = self.symbols.get(parent_id) {
-                            parent_name = Some(p.name.clone());
-                        }
-                    }
-                    break;
+                    candidates.push((def.id, info.parent));
                 }
             }
         }
+        // Pick the candidate that owns the queried method. If none
+        // do, fall back to the first candidate (preserves old
+        // behaviour for non-method lookups).
+        let (class_def_id, parent_id) = if candidates.is_empty() {
+            return false;
+        } else if candidates.len() == 1 {
+            candidates[0]
+        } else {
+            candidates
+                .iter()
+                .copied()
+                .find(|(class_id, _)| {
+                    self.symbols.iter().any(|m| {
+                        m.name == method_name
+                            && matches!(&m.kind, DefKind::Method { parent, .. } if parent == class_id)
+                    })
+                })
+                .unwrap_or(candidates[0])
+        };
+        let parent_name: Option<String> = parent_id.and_then(|pid| {
+            self.symbols.get(pid).map(|p| p.name.clone())
+        });
+        let class_def_id = Some(class_def_id);
         let class_def_id = match class_def_id {
             Some(id) => id,
             None => return false,

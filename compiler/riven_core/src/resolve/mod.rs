@@ -185,25 +185,38 @@ impl Resolver {
         I: IntoIterator<Item = &'a ast::Program>,
     {
         for program in programs {
-            Self::walk_items_for_mixins(&program.items, &mut self.mixin_lib_decls);
+            Self::walk_items_for_mixins(&program.items, &[], &mut self.mixin_lib_decls);
         }
     }
 
+    /// #06.93 Phase 5 update: mixins declared inside a `module`
+    /// register under their QUALIFIED name (e.g. `BufReader.Reader`)
+    /// so an `include` directive can disambiguate between two
+    /// mixins of the same un-qualified name in different modules.
+    /// Top-level mixins keep their un-qualified key.
     fn walk_items_for_mixins(
         items: &[ast::TopLevelItem],
+        module_path: &[String],
         out: &mut HashMap<String, Vec<ast::LibDecl>>,
     ) {
         for item in items {
             match item {
                 ast::TopLevelItem::Mixin(m) => {
                     if !m.lib_decls.is_empty() {
-                        out.entry(m.name.clone())
+                        let key = if module_path.is_empty() {
+                            m.name.clone()
+                        } else {
+                            format!("{}.{}", module_path.join("."), m.name)
+                        };
+                        out.entry(key)
                             .or_default()
                             .extend(m.lib_decls.iter().cloned());
                     }
                 }
                 ast::TopLevelItem::Module(md) => {
-                    Self::walk_items_for_mixins(&md.items, out);
+                    let mut nested = module_path.to_vec();
+                    nested.push(md.name.clone());
+                    Self::walk_items_for_mixins(&md.items, &nested, out);
                 }
                 _ => {}
             }
