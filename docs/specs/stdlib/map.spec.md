@@ -3,7 +3,8 @@
 **Source docs:**
 [docs/requirements/tier1_01_stdlib.md §5.2](../../requirements/tier1_01_stdlib.md).
 
-**Status:** shipped Phase 2 #04-#05.
+**Status:** shipped Phase 2 #04-#05; method surface self-hosted in
+`library/std/src/map.rvn` since #06.8 T#15.
 
 `Map` is a separate-chaining hash table over keys that satisfy
 `Hashable + Eq`.  The runtime uses FNV-style hashing; collisions resolve

@@ -3,7 +3,8 @@
 **Source docs:**
 [docs/requirements/tier1_01_stdlib.md §5.1](../../requirements/tier1_01_stdlib.md).
 
-**Status:** shipped Phase 2 #04.
+**Status:** shipped Phase 2 #04; method surface self-hosted in
+`library/std/src/array.rvn` since #06.8 T#14.
 
 `Array[T]` is a growable contiguous heap array with `O(1)` amortised
 push/pop and `O(1)` index access.  The C runtime stores

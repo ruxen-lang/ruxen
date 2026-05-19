@@ -8,6 +8,27 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **#06.8 stdlib self-hosting — Waves 1.5–2 + collection migrations
+  (T#13/14/15/16/17/21).** Every named stdlib module and every
+  collection-method dispatch table that previously lived as Rust
+  registrations in `compiler/riven_core/src/resolve/stdlib/mod.rs`
+  and `codegen/runtime_table/mod.rs` now lives in `library/std/src/
+  *.rvn`. The bootstrap loader (`resolve/bootstrap.rs`) parses
+  these files at compiler startup before user code, the resolver's
+  **namespace-anchor mode** reuses the existing type-scope bindings
+  for builtin names (so `Ty::String` / `Ty::Array(_)` etc. stay
+  canonical for codegen), and MIR's **FFI alias map** rewrites the
+  mangled call-site callee (`Array[Int]_push`, `Option[String]_unwrap_or`,
+  ...) to the verbatim C symbol BEFORE codegen consults
+  `runtime_table`. A generic-stripping fallback peels surface
+  `[...]` args so the parent-name-keyed alias entries
+  (`Array_push`, `Option_unwrap_or`) match every call site. 94
+  collection methods migrated across String / Option / Result /
+  Array / Map / Set; ~12 self-hosted .rvn modules under
+  `library/std/src/`. Two outliers retained in `runtime_table` for
+  documented architectural reasons (`String_clone` aliases a C
+  symbol with a different wire shape and trips E0722; `String_from_iter`
+  has no surface method to attach to).
 - **#06.5 Phase 2 sync I/O completeness.** TcpListener/TcpStream
   classes (incl. binary-safe read + socket timeouts), BufReader[R] /
   BufWriter[W] over the closed inner set {File, TcpStream}, std.rand

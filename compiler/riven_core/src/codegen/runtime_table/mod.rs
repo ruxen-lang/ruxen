@@ -374,54 +374,15 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         };
     }
 
-    // Map[...] / HashMap[...] / Hash[...] methods.
+    // Map / HashMap / Hash methods — fully migrated to
+    // library/std/src/map.rvn (#06.8 T#15). No runtime_table arm:
+    // the alias-map key `Map_<m>` (registered by the bootstrap
+    // `class Map` shell) wins through `resolve_ffi_alias_callee`'s
+    // generic-stripping fallback, and the bottom-of-fn `Ok(name)`
+    // arm catches anything that escapes.
     //
-    // `Map` is the Ruby-naming name (docs/specs/syntax/ruby-naming.spec.md);
-    // `HashMap` / `Hash` are legacy spellings retained as aliases until
-    // sources finish migrating.
-    if name.starts_with("Map[")
-        || name.starts_with("Map_")
-        || name.starts_with("HashMap[")
-        || name.starts_with("HashMap_")
-        || name.starts_with("Hash[")
-        || name.starts_with("Hash_")
-    {
-        // #06.8 T#15 migrated every entry in this arm to
-        // library/std/src/map.rvn as a `class Map do lib
-        // "riven_runtime" ... end end` shell. The anchor branch in
-        // `register_top_level_type_with_ffi` creates a parent
-        // DefId without touching type-scope (so `resolve_type_expr`'s
-        // hardcoded `Ty::Map(_,_)` arm stays authoritative). MIR's
-        // generic-stripping fallback + the surface-base retry in the
-        // static-ctor + field-access lowerers route every Map / Hash
-        // / HashMap call site through the alias map.
-        //
-        // No outliers — none of the Map methods share a C symbol
-        // with another method's wire shape, so the E0722 conflict
-        // check is silent and the migration is complete.
-        return match method {
-            _ => Ok(name),
-        };
-    }
-
-    // Set[...] / HashSet[...] (alias) methods.
-    if name.starts_with("Set[")
-        || name.starts_with("Set_")
-        || name.starts_with("HashSet[")
-        || name.starts_with("HashSet_")
-    {
-        // #06.8 T#16 migrated every entry in this arm to
-        // library/std/src/set.rvn as a `class Set do lib
-        // "riven_runtime" ... end end` shell. Same anchor pattern
-        // as T#15 (Map) — `Set` isn't in type-scope, the hardcoded
-        // `Ty::Set(_)` arm in `resolve_type_expr` stays
-        // authoritative, and the MIR alias-callee resolver routes
-        // the surface generic mangle through the parent-keyed alias
-        // entries.
-        return match method {
-            _ => Ok(name),
-        };
-    }
+    // Set / HashSet methods — fully migrated to
+    // library/std/src/set.rvn (#06.8 T#16). Same shape as Map.
 
     // Array[...] / Vec[...] methods.
     //

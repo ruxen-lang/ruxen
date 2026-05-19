@@ -3,7 +3,8 @@
 **Source docs:**
 [docs/requirements/tier1_01_stdlib.md §5.3](../../requirements/tier1_01_stdlib.md).
 
-**Status:** shipped Phase 2 #04-#05.
+**Status:** shipped Phase 2 #04-#05; method surface self-hosted in
+`library/std/src/set.rvn` since #06.8 T#16.
 
 `Set[T]` is a thin layer over `Map[T, ()]` — same hashing
 semantics, same `Hashable` bound on `T`.

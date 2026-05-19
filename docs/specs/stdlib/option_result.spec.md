@@ -3,7 +3,9 @@
 **Source docs:**
 [docs/requirements/tier1_01_stdlib.md §5.4–5.5](../../requirements/tier1_01_stdlib.md).
 
-**Status:** shipped Phase 2 #02-#03; integration via `option_result_runtime.rs`.
+**Status:** shipped Phase 2 #02-#03; integration via
+`option_result_runtime.rs`; helper-method surface self-hosted in
+`library/std/src/option_result.rvn` since #06.8 T#17.
 
 Riven's `Option` and `Result` mirror Rust's modulo a few v1
 simplifications.  Both are tagged enums whose payload reaches the
