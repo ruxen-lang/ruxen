@@ -85,6 +85,13 @@ pub const BOOTSTRAP_FILES: &[&str] = &[
     // creates a parent DefId for FFI bookkeeping without touching
     // type-scope.
     "array.rvn",
+    // T#15 / T#16: Map (Hash) and Set (HashSet) methods. Same
+    // anchor-only shape as `Array` — neither name is in type-scope.
+    // Surface spellings are `Map[K,V]` / `Set[T]`; runtime C
+    // symbols still carry the legacy `riven_hash_*` / `riven_set_*`
+    // prefix, bridged by the alias-callee resolver in MIR.
+    "map.rvn",
+    "set.rvn",
 ];
 
 /// Production entry point: parse every stdlib file in

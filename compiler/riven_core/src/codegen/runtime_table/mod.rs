@@ -386,21 +386,20 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         || name.starts_with("Hash[")
         || name.starts_with("Hash_")
     {
+        // #06.8 T#15 migrated every entry in this arm to
+        // library/std/src/map.rvn as a `class Map do lib
+        // "riven_runtime" ... end end` shell. The anchor branch in
+        // `register_top_level_type_with_ffi` creates a parent
+        // DefId without touching type-scope (so `resolve_type_expr`'s
+        // hardcoded `Ty::Map(_,_)` arm stays authoritative). MIR's
+        // generic-stripping fallback + the surface-base retry in the
+        // static-ctor + field-access lowerers route every Map / Hash
+        // / HashMap call site through the alias map.
+        //
+        // No outliers — none of the Map methods share a C symbol
+        // with another method's wire shape, so the E0722 conflict
+        // check is silent and the migration is complete.
         return match method {
-            "new" => Ok("riven_hash_new"),
-            "from_iter" => Ok("riven_hash_from_iter"),
-            // Phase 2 stdlib (#04): full HashMap surface.
-            "with_capacity" => Ok("riven_hash_with_capacity"),
-            "insert" => Ok("riven_hash_insert"),
-            "get" => Ok("riven_hash_get"),
-            "remove" => Ok("riven_hash_remove"),
-            "clear" => Ok("riven_hash_clear"),
-            "keys" => Ok("riven_hash_keys"),
-            "values" => Ok("riven_hash_values"),
-            "iter" => Ok("riven_hash_iter"),
-            "contains_key" => Ok("riven_hash_contains_key"),
-            "len" => Ok("riven_hash_len"),
-            "is_empty" => Ok("riven_hash_is_empty"),
             _ => Ok(name),
         };
     }
@@ -411,21 +410,15 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         || name.starts_with("HashSet[")
         || name.starts_with("HashSet_")
     {
+        // #06.8 T#16 migrated every entry in this arm to
+        // library/std/src/set.rvn as a `class Set do lib
+        // "riven_runtime" ... end end` shell. Same anchor pattern
+        // as T#15 (Map) — `Set` isn't in type-scope, the hardcoded
+        // `Ty::Set(_)` arm in `resolve_type_expr` stays
+        // authoritative, and the MIR alias-callee resolver routes
+        // the surface generic mangle through the parent-keyed alias
+        // entries.
         return match method {
-            "new" => Ok("riven_set_new"),
-            "from_iter" => Ok("riven_set_from_iter"),
-            // Phase 2 stdlib (#04): full HashSet surface.
-            "with_capacity" => Ok("riven_set_with_capacity"),
-            "insert" => Ok("riven_set_insert"),
-            "remove" => Ok("riven_set_remove"),
-            "clear" => Ok("riven_set_clear"),
-            "iter" => Ok("riven_set_iter"),
-            "contains" => Ok("riven_set_contains"),
-            "len" => Ok("riven_set_len"),
-            "is_empty" => Ok("riven_set_is_empty"),
-            "union" => Ok("riven_set_union"),
-            "intersection" => Ok("riven_set_intersection"),
-            "difference" => Ok("riven_set_difference"),
             _ => Ok(name),
         };
     }

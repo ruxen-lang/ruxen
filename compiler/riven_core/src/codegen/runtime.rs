@@ -612,19 +612,41 @@ mod tests {
     }
 
     #[test]
-    fn known_runtime_symbols_resolve() {
-        // `puts` migrated to library/std/src/io.rvn as a `lib
-        // "riven_runtime" def puts as "riven_puts"(...)` decl in
-        // #06.8 Wave 2. `Vec[Int]_push` / `Vec[Int]_len` migrated to
-        // library/std/src/array.rvn in T#14. All three reach the C
-        // symbol through the ffi_alias_map; runtime_table no longer
-        // carries the mapping. Hash/HashMap methods are still
-        // runtime_table-resident — they migrate in T#15.
-        assert_eq!(runtime_name("Hash[Int,Int]_get").unwrap(), "riven_hash_get");
-        assert_eq!(
-            runtime_name("HashMap[Int,Int]_get").unwrap(),
-            "riven_hash_get"
-        );
+    fn migrated_collection_methods_fall_through_runtime_table() {
+        // After the Wave 2 self-hosting sequence, every collection-
+        // method mapping that used to live in runtime_table has
+        // moved to a class-body lib decl in library/std/src/*.rvn.
+        // This test pins that runtime_table no longer carries a
+        // `riven_*` mapping for any of them — falling through to
+        // the bottom `Ok(name)` arm is the contract that prevents
+        // a stale entry from masking the alias path.
+        //
+        // | Surface mangle              | Migration |
+        // |-----------------------------|-----------|
+        // | puts                        | io.rvn (Wave 2)   |
+        // | Vec[Int]_push / _len        | array.rvn (T#14)  |
+        // | Hash[K,V]_get / Map[..]_get | map.rvn (T#15)    |
+        // | HashMap[..]_get             | map.rvn (T#15)    |
+        // | Set[..]_insert / contains   | set.rvn (T#16)    |
+        // | HashSet[..]_insert          | set.rvn (T#16)    |
+        for name in [
+            "puts",
+            "Vec[Int]_push",
+            "Vec[Int]_len",
+            "Hash[Int,Int]_get",
+            "Map[Int,Int]_get",
+            "HashMap[Int,Int]_get",
+            "Set[Int]_insert",
+            "Set[Int]_contains",
+            "HashSet[Int]_insert",
+        ] {
+            assert_eq!(
+                runtime_name(name).unwrap(),
+                name,
+                "post-migration `{name}` must fall through runtime_table; \
+                 a `riven_*` mapping here would mask the alias-map path"
+            );
+        }
     }
 
     #[test]
