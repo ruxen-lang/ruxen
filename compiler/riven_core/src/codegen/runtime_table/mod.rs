@@ -117,13 +117,11 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "Stdout_println" => return Ok("riven_stdout_println"),
         "Stderr_eprint" => return Ok("riven_stderr_eprint"),
         "Stderr_eprintln" => return Ok("riven_stderr_eprintln"),
-        // Phase 2 stdlib (#06): std::fs::Metadata accessor methods.
-        "Metadata_len" => return Ok("riven_metadata_len"),
-        "Metadata_modified" => return Ok("riven_metadata_modified"),
-        "Metadata_is_file" => return Ok("riven_metadata_is_file"),
-        "Metadata_is_dir" => return Ok("riven_metadata_is_dir"),
-        "Metadata_is_symlink" => return Ok("riven_metadata_is_symlink"),
-        "Metadata_free" => return Ok("riven_metadata_free"),
+        // Metadata accessor methods migrated to
+        // library/std/fs/src/lib.rvn `class Metadata do lib
+        // "runtime/fs.c" ... end end` in #06.95 Phase E Slice B.1.
+        // The FFI alias map rewrites `Metadata_<m>` callees at
+        // MIR-lowering time before codegen consults this table.
         // Phase 2 stdlib (#06): std::process::Command builder + Output /
         // ExitStatus accessors. `Command_new` is dispatched via the
         // collection-ctor fast path in mir/lower.rs (alongside
