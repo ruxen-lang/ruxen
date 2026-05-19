@@ -2,7 +2,9 @@
 
 **Depends on:** #06.8 (Wave 2 surface migration of `.rvn` files into
 `library/std/src/`), #06.9 (closure dispatch — so `Fn[…]_call` mangling
-has a stable home before we delete `runtime_table`).
+has a stable home before we delete `runtime_table`), **#06.93
+(module-qualified class resolution — gating Phase C; see
+`docs/prompts/v1/06_93_module_qualified_class_resolution.md`)**.
 **Reads:**
 `compiler/riven_core/src/resolve/stdlib/mod.rs` (1082 LOC of Rust-side
 registrations that this prompt deletes),
@@ -694,9 +696,13 @@ mixin / include / bootstrap pin tests (14 total across
 `lib_in_class_body`, `bootstrap_prelude_merge`,
 `stdlib_bootstrap`) all green.
 
-### Check 2 — `::Name` root anchor at type position
+### Check 2 — `::Name` root anchor at type position AND module-qualified class resolution
 
-**Status:** does NOT parse.
+**Status:** the root anchor *and* the whole module-with-inner-classes
+shape need real language work. Tracked as **#06.93** (see
+`docs/prompts/v1/06_93_module_qualified_class_resolution.md`).
+
+The first sub-probe (`::Name` parser support) failed:
 
 `compiler/riven_core/src/parser/types.rs:305-340`'s
 `parse_type_path` requires the first segment to be a
@@ -754,6 +760,25 @@ Recommendation: **(a) for the 06.95 plan.** Defer `::Name` to a
 separate language-feature prompt where it can be designed
 holistically (it also affects expression paths, use paths,
 turbofish, etc.).
+
+**Outcome (2026-05-19):** during the pre-flight, a follow-up
+probe (`tests/fixtures/riven/module_class_qualified_type.rvn` +
+`tests/module_class_qualified_type.rs`, currently `#[ignore]`)
+discovered that the module + class shape itself isn't supported
+by the resolver — classes inside modules don't get registered
+under their qualified name, and call sites like
+`Outer.Inner.method(...)` get misresolved as enum variant
+patterns. This is much bigger than the (a) renaming workaround
+can mask, and it's load-bearing for Decision #3 (BufReader /
+BufWriter module + mixin shape) and Decision #4 (broader scope
+to Shutdown / SeekFrom / IoError).
+
+**Resolution:** picked option (b) — build the language feature
+as its own prompt **#06.93** before 06.95 Phase C. The renaming
+sidestep (a) is no longer needed; once 06.93 lands, BufReader
+can use `class File` / `class Tcp` with `::File` to refer to the
+top-level OS handle. Phase C of 06.95 cannot start until
+06.93's success-criterion test passes.
 
 ### Check 3 — Turbofish-like type args at call sites
 
