@@ -180,8 +180,15 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "Formatter_precision" => return Ok("riven_fmt_formatter_precision"),
         "Float_to_string_prec" => return Ok("riven_float_to_string_prec"),
         "String_truncate_chars" => return Ok("riven_string_truncate_chars"),
+        // `Thread_sleep -> riven_thread_sleep_ns` is the bare-int
+        // convenience overload (`Thread.sleep(0)`). Stays in
+        // runtime_table — see the comment on `class Thread` in
+        // library/std/sync/src/lib.rvn for why the Duration and Int
+        // overloads can't both ride the alias map yet.
         "Thread_sleep" => return Ok("riven_thread_sleep_ns"),
-        "Thread_yield_now" => return Ok("riven_thread_yield"),
+        // `Thread_yield_now` migrated to library/std/sync/src/lib.rvn
+        // `class Thread do lib "runtime/time.c" ... end end` in
+        // #06.95 Phase E Slice B.4.
         // std::time top-level functions (resolved before module-prefixing).
         // `now_ns` removed in #06.5 T5.5 — superseded by `Instant.now`.
         // The C symbol `riven_time_now_ns` is still linked (it is the

@@ -716,13 +716,24 @@ mod tests {
 
     #[test]
     fn thread_runtime_methods_resolve() {
+        // `Thread.sleep(Int)` — bare-int convenience overload — stays
+        // in runtime_table. typeck reports `Ty::Unit` for both the
+        // Int and Duration overloads, so the lib-decl in
+        // library/std/sync/src/lib.rvn can carry only ONE of them
+        // (the Duration form). The Int form's `Thread_sleep`
+        // mangled key reaches the C symbol through this arm.
         assert_eq!(
             runtime_name("Thread_sleep").unwrap(),
             "riven_thread_sleep_ns"
         );
+        // `Thread.yield_now` migrated to library/std/sync/src/lib.rvn
+        // in #06.95 Phase E Slice B.4 — the alias map rewrites
+        // `Thread_yield_now` before codegen consults runtime_table,
+        // so the lookup here falls through to the unmangled identity
+        // arm.
         assert_eq!(
             runtime_name("Thread_yield_now").unwrap(),
-            "riven_thread_yield"
+            "Thread_yield_now"
         );
     }
 }
