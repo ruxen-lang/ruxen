@@ -128,9 +128,13 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "Command_status" => return Ok("riven_command_status"),
         "Command_output" => return Ok("riven_command_output"),
         "Command_drop" => return Ok("riven_command_drop"),
-        "ExitStatus_code" => return Ok("riven_exit_status_code"),
-        "ExitStatus_success" => return Ok("riven_exit_status_success"),
-        "ExitStatus_free" => return Ok("riven_exit_status_free"),
+        // ExitStatus accessors migrated to library/std/process/src/lib.rvn
+        // `class ExitStatus do lib "runtime/process.c" ... end end`
+        // in #06.95 Phase E Slice B.3. The FFI alias map rewrites
+        // `ExitStatus_<m>` callees at MIR-lowering time.
+        // Command / Output stay here (not in user_drop_classes
+        // would have been safe but the broader migration triggered
+        // double-free; see Slice B.3 first-attempt revert).
         "Output_stdout" => return Ok("riven_output_stdout"),
         "Output_stderr" => return Ok("riven_output_stderr"),
         "Output_status" => return Ok("riven_output_status"),

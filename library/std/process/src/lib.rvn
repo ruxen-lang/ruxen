@@ -36,7 +36,31 @@ end
 class Command
 end
 
+## std::process::ExitStatus — flat-spine class wrapping a packed
+## exit-code int (see `riven_exit_status_alloc` in
+## library/std/process/runtime/process.c). Accessors read fixed
+## offsets off the spine.
+##
+## Migrated in #06.95 Phase E Slice B.3 from runtime_table.
+## ExitStatus is NOT in `user_drop_classes` (see
+## mir/lower/collect.rs) — its scope-exit cleanup goes through
+## the generic `riven_dealloc` path, NOT a `def drop` dispatch.
+## The `free` method below is a user-callable explicit release;
+## Output.status() returns a cloned ExitStatus that owns its own
+## spine, so callers may want to release one early.
+##
+## Command / Output stay as bare class shells for now — adding
+## class-body `def drop` decls to them triggered double-free /
+## SIGABRT in stdlib_process fixtures (Slice B.3 first attempt,
+## reverted). The interaction between a `def drop` lib decl and
+## the `user_drop_classes` scope-exit pass needs a follow-up
+## investigation before Command / Output can migrate.
 class ExitStatus
+  lib "runtime/process.c"
+    def code as "riven_exit_status_code"(self) -> Int
+    def success as "riven_exit_status_success"(self) -> Bool
+    def free as "riven_exit_status_free"(self) -> ()
+  end
 end
 
 class Output
