@@ -1119,63 +1119,13 @@ pub(super) fn register_all(r: &mut Resolver) {
     r.scopes.insert_type("Instant".to_string(), instant_id);
     r.type_registry.insert("Instant".to_string(), instant_id);
 
-    // Phase 2 #06.5 T5: `std::net::TcpListener` — owning wrapper over
-    // a POSIX listening socket fd. Constructed via `TcpListener.bind`;
-    // consumed by the standard scope-exit drop pipeline which emits
-    // `TcpListener_drop(l) + riven_dealloc(l)` — see
-    // mir/lower/collect.rs::collect_user_drop_classes. Wire layout
-    // (8-byte {fd:i32, closed:i32}) documented at `RivenTcpListener`
-    // in library/runtime/net/tcp.c.
-    let tcp_listener_id = r.symbols.define(
-        "TcpListener".to_string(),
-        DefKind::Class {
-            info: ClassInfo {
-                generic_params: vec![],
-                parent: None,
-                fields: vec![],
-                methods: vec![],
-                derive_traits: vec![],
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
-                const_predicates: vec![],
-                flat_heap_struct: false,
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.scopes
-        .insert_type("TcpListener".to_string(), tcp_listener_id);
-    r.type_registry
-        .insert("TcpListener".to_string(), tcp_listener_id);
-
-    // Phase 2 #06.5 T5: `std::net::TcpStream` — owning wrapper over a
-    // connected POSIX socket fd. Same drop story as TcpListener.
-    let tcp_stream_id = r.symbols.define(
-        "TcpStream".to_string(),
-        DefKind::Class {
-            info: ClassInfo {
-                generic_params: vec![],
-                parent: None,
-                fields: vec![],
-                methods: vec![],
-                derive_traits: vec![],
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
-                const_predicates: vec![],
-                flat_heap_struct: false,
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.scopes.insert_type("TcpStream".to_string(), tcp_stream_id);
-    r.type_registry
-        .insert("TcpStream".to_string(), tcp_stream_id);
+    // TcpListener / TcpStream class shells were here. Wave 2 (#06.8)
+    // moved both to library/std/src/net.rvn as bare `class Foo end`
+    // bodies — the bootstrap merge handles `insert_type` and
+    // `type_registry.insert` symmetrically with user code, so no
+    // explicit re-registration is needed on the Rust side. Methods
+    // still flow through the static-ctor + runtime_table dispatch
+    // (T#20 will move them through the FFI alias path).
 
     // Phase 2 #06.5 T6: `BufReader[R]` / `BufWriter[W]` — generic
     // buffered wrappers parameterized over the closed set {File,
@@ -1235,51 +1185,11 @@ pub(super) fn register_all(r: &mut Resolver) {
     r.type_registry
         .insert("BufWriter".to_string(), buf_writer_id);
 
-    // Phase 2 #06.5 T5: `Shutdown` — three unit variants used as the
-    // argument of `TcpStream.shutdown`. Tag values are pinned to match
-    // `RIVEN_SHUTDOWN_*` in library/runtime/net/tcp.c — the
-    // `shutdown_tag_stability` pin test cross-checks them.
-    let shutdown_id = r.symbols.define(
-        "Shutdown".to_string(),
-        DefKind::Enum {
-            info: EnumInfo {
-                generic_params: vec![],
-                variants: vec![], // filled below
-                derive_traits: vec![],
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
-                const_predicates: vec![],
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.scopes.insert_type("Shutdown".to_string(), shutdown_id);
-    r.type_registry
-        .insert("Shutdown".to_string(), shutdown_id);
-    let shutdown_variants: &[(&str, usize)] = &[("Read", 0), ("Write", 1), ("Both", 2)];
-    let mut shutdown_variant_ids: Vec<DefId> = Vec::with_capacity(shutdown_variants.len());
-    for (vname, idx) in shutdown_variants {
-        let vid = r.symbols.define(
-            (*vname).to_string(),
-            DefKind::EnumVariant {
-                parent: shutdown_id,
-                variant_idx: *idx,
-                kind: VariantDefKind::Unit,
-            },
-            Visibility::Public,
-            span.clone(),
-        );
-        r.scopes.insert(format!("Shutdown.{}", vname), vid);
-        shutdown_variant_ids.push(vid);
-    }
-    if let Some(def) = r.symbols.get_mut(shutdown_id) {
-        if let DefKind::Enum { ref mut info } = def.kind {
-            info.variants = shutdown_variant_ids;
-        }
-    }
+    // Shutdown enum was here (Read=0, Write=1, Both=2) — Wave 2
+    // (#06.8) migrated to library/std/src/net.rvn. The variant order
+    // remains the load-bearing contract against
+    // `RIVEN_SHUTDOWN_{READ,WRITE,BOTH}` in library/runtime/net/tcp.c;
+    // the `shutdown_tag_stability` pin test scans the .rvn file now.
 
     // Phase 2 #06.A1/A3: `std::fmt::Formatter` is the buffer that
     // `Display::fmt` / `Debug::fmt` write into. v1 carries width
@@ -1739,11 +1649,13 @@ pub(super) fn register_all(r: &mut Resolver) {
     // Phase 2 #06.5 T5: std.net is class-only — TcpListener /
     // TcpStream / Shutdown. The flat tcp_* free fns are gone; the C
     // runtime symbols remain linked and back the class methods.
+    // Wave 2 (#06.8): TcpListener / TcpStream / Shutdown moved to
+    // library/std/src/net.rvn. net_id starts with empty items;
+    // fixup_bootstrapped_stdlib_modules populates them via type-scope
+    // lookup after the bootstrap merge.
     let net_id = r.symbols.define(
         "net".to_string(),
-        DefKind::Module {
-            items: vec![tcp_listener_id, tcp_stream_id, shutdown_id],
-        },
+        DefKind::Module { items: vec![] },
         Visibility::Public,
         span.clone(),
     );

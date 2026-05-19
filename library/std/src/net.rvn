@@ -1,32 +1,28 @@
-## TcpListener / TcpStream / Shutdown stdlib surface for Phase 2 prompt 06.5 T5.
+## std::net — TcpListener / TcpStream class shells + Shutdown enum.
 ##
-## This file is declarative documentation for the intended stdlib source
-## layout. v1 still models the executable behavior through built-in
-## resolver/typeck/MIR hooks rather than loading `.rvn` stdlib modules.
+## Wave 2 (#06.8) — partial migration. The class identities and the
+## Shutdown enum (with its tag-stability contract) now live here in
+## self-hosted Riven source.
 ##
-## All public methods return `Result[_, IoError]`. The class wrappers
-## own a POSIX fd and `close` it on drop via the user_drop_classes
-## scope-exit pipeline — see library/runtime/net/tcp.c for the runtime
-## side, and compiler/riven_core/src/mir/lower/collect.rs for the drop
-## registration.
+## Methods on TcpListener / TcpStream are NOT yet migrated — they
+## still flow through the static-ctor fast path in
+## `mir/lower/expr/method_call.rs` and the runtime_table mangled-name
+## lookup (`TcpStream_read` → `riven_tcp_stream_read`, …). Migrating
+## the methods to a class-body `lib "riven_runtime"` block requires
+## removing TcpListener / TcpStream from the static-ctor carve-out
+## (T#20) so the standard method-call lowering — which already honours
+## c_symbol via the ffi_alias_map — can pick them up. That work is
+## tracked separately.
+##
+## The Shutdown variant order is the load-bearing contract: tag indices
+## must match `RIVEN_SHUTDOWN_{READ,WRITE,BOTH}` in
+## library/runtime/net/tcp.c. The `shutdown_tag_stability` pin test
+## scans this file (after Wave 2 migration) instead of stdlib/mod.rs.
 
 class TcpListener
-  def self.bind(addr: &String) -> Result[TcpListener, IoError]
-  def accept(self) -> Result[TcpStream, IoError]
-  def local_addr(self) -> Result[String, IoError]
-  def set_nonblocking(self, v: Bool) -> Result[(), IoError]
-  def close(self) -> Result[(), IoError]
 end
 
 class TcpStream
-  def self.connect(addr: &String) -> Result[TcpStream, IoError]
-  def read(self, buf: &var Array[U8]) -> Result[Int, IoError]
-  def write(self, bytes: &Array[U8]) -> Result[Int, IoError]
-  def peer_addr(self) -> Result[String, IoError]
-  def shutdown(self, how: Shutdown) -> Result[(), IoError]
-  def set_read_timeout(self, d: &Duration) -> Result[(), IoError]
-  def set_write_timeout(self, d: &Duration) -> Result[(), IoError]
-  def close(self) -> Result[(), IoError]
 end
 
 enum Shutdown

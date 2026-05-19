@@ -49,9 +49,15 @@ fn parse_tuples(line: &str, out: &mut Vec<(String, usize)>) {
 }
 
 #[test]
-fn shutdown_tag_values_match_runtime_and_resolver() {
+fn shutdown_tag_values_match_runtime_and_stdlib_source() {
+    // Wave 2 (#06.8) moved the Shutdown enum from
+    // `compiler/riven_core/src/resolve/stdlib/mod.rs` to the
+    // self-hosted `library/std/src/net.rvn`. The variant-tag
+    // contract against `RIVEN_SHUTDOWN_*` in
+    // `library/runtime/net/tcp.c` is unchanged — only the
+    // *resolver-side scan target* moved.
     let runtime = read("library/runtime/net/tcp.c");
-    let resolver = read("compiler/riven_core/src/resolve/stdlib/mod.rs");
+    let stdlib_source = read("library/std/src/net.rvn");
 
     // Runtime side: scan for `#define RIVEN_SHUTDOWN_<NAME>  <tag>`.
     let mut runtime_tags: Vec<(String, usize)> = Vec::new();
@@ -74,31 +80,47 @@ fn shutdown_tag_values_match_runtime_and_resolver() {
         }
     }
 
-    // Resolver side: scan for the `shutdown_variants` table. May be
-    // multi-line or rustfmt-collapsed onto a single line.
-    let mut resolver_tags: Vec<(String, usize)> = Vec::new();
+    // Stdlib-source side: enum variants are listed in declaration
+    // order under `enum Shutdown ... end` in net.rvn. The variant's
+    // tag is its zero-based position in that list — Riven's
+    // VariantKind::Unit enum lowering preserves source order. We
+    // pull each non-comment, non-blank line between the header and
+    // `end` as a variant name.
+    let mut stdlib_tags: Vec<(String, usize)> = Vec::new();
     let mut in_block = false;
-    for line in resolver.lines() {
-        // Trigger on the table DECLARATION only — see the matching
-        // comment in `file_class_layout_stability::
-        // seek_from_tag_values_match_runtime_and_resolver` for the
-        // failure mode this avoids.
-        if line.contains("let shutdown_variants") {
+    let mut next_tag: usize = 0;
+    for line in stdlib_source.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("enum Shutdown") {
             in_block = true;
-        }
-        if in_block && line.trim_end().ends_with("];") {
-            parse_tuples(line, &mut resolver_tags);
-            in_block = false;
+            next_tag = 0;
             continue;
         }
         if !in_block {
             continue;
         }
-        parse_tuples(line, &mut resolver_tags);
+        if trimmed == "end" {
+            in_block = false;
+            break;
+        }
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        // A bare variant line is the identifier on its own — no `(...)`
+        // payload, no struct fields — for Shutdown's three unit
+        // variants. Defensive: stop on anything that doesn't match.
+        let name = trimmed.split_whitespace().next().unwrap_or("");
+        assert!(
+            name.chars().next().map_or(false, |c| c.is_ascii_uppercase()),
+            "unexpected line inside `enum Shutdown` body: {:?}",
+            line
+        );
+        stdlib_tags.push((name.to_string(), next_tag));
+        next_tag += 1;
     }
 
     runtime_tags.sort_by_key(|(_, t)| *t);
-    resolver_tags.sort_by_key(|(_, t)| *t);
+    stdlib_tags.sort_by_key(|(_, t)| *t);
 
     assert_eq!(
         runtime_tags.len(),
@@ -107,14 +129,14 @@ fn shutdown_tag_values_match_runtime_and_resolver() {
         runtime_tags
     );
     assert_eq!(
-        resolver_tags.len(),
+        stdlib_tags.len(),
         3,
-        "expected 3 Shutdown variants in resolver; got {:?}",
-        resolver_tags
+        "expected 3 Shutdown variants in library/std/src/net.rvn; got {:?}",
+        stdlib_tags
     );
     assert_eq!(
-        runtime_tags, resolver_tags,
-        "Shutdown variant ↔ tag mapping drifted between runtime and resolver"
+        runtime_tags, stdlib_tags,
+        "Shutdown variant ↔ tag mapping drifted between runtime and stdlib source"
     );
 
     // Canonical mapping — pin so a simultaneous re-order on both

@@ -341,6 +341,10 @@ impl Resolver {
             // Wave 2 — library/std/src/fmt.rvn (mixed mixins + classes —
             // each name resolves through the type-scope fallback).
             ("fmt", &["Display", "Debug", "Formatter", "FmtError"]),
+            // Wave 2 — library/std/src/net.rvn (class shells +
+            // Shutdown enum; methods still flow through the static-ctor
+            // + runtime_table dispatch until T#20 lands).
+            ("net", &["TcpListener", "TcpStream", "Shutdown"]),
         ];
 
         let Some(std_id) = self.scopes.lookup_type("std") else {
