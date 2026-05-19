@@ -72,6 +72,7 @@ pub fn type_check_with_bootstrap_packages(
         mut symbols,
         mut type_context,
         mut diagnostics,
+        type_registry,
     } = resolver.resolve_with_bootstrap_packages(program, bootstrap_packages);
 
     diagnostics.extend(crate::implicit_includes::validate_program(
@@ -80,6 +81,13 @@ pub fn type_check_with_bootstrap_packages(
 
     let mut trait_resolver = MixinResolver::new();
     trait_resolver.collect_impls(&program, &symbols);
+    // Phase E.E of #06.95: also walk the type_registry so module-
+    // nested bootstrap classes (e.g. `BufReader.File`) get their
+    // methods registered under their qualified type name. The
+    // user-program walk above only sees HIR items lowered from the
+    // user's AST; bootstrap items live in the symbol table but not
+    // in `program.items`, so they'd otherwise be invisible.
+    trait_resolver.register_classes_from_registry(&type_registry, &symbols);
 
     let mut engine = InferenceEngine::new(&mut type_context, &mut symbols, &trait_resolver);
     engine.infer_program(&mut program);
@@ -117,6 +125,7 @@ pub fn type_check_with_bootstrap(
         mut symbols,
         mut type_context,
         mut diagnostics,
+        type_registry,
     } = resolver.resolve_with_bootstrap(program, bootstrap_programs);
 
     // Phase 2: Validate derive usage and collect all trait impls
@@ -126,6 +135,7 @@ pub fn type_check_with_bootstrap(
 
     let mut trait_resolver = MixinResolver::new();
     trait_resolver.collect_impls(&program, &symbols);
+    trait_resolver.register_classes_from_registry(&type_registry, &symbols);
 
     // Phase 3: Type inference
     let mut engine = InferenceEngine::new(&mut type_context, &mut symbols, &trait_resolver);

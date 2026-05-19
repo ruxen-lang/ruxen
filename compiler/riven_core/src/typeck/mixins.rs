@@ -15,6 +15,7 @@ use std::collections::HashMap;
 
 use crate::hir::nodes::*;
 use crate::hir::types::{MixinRef, Ty};
+use crate::hir::nodes::DefId;
 use crate::resolve::symbols::{DefKind, FnSignature, MixinInfo, SymbolTable};
 
 /// Result of checking whether a type satisfies a trait.
@@ -278,11 +279,78 @@ impl MixinResolver {
     /// Collect all impl blocks for the HIR program.
     pub fn collect_impls(&mut self, program: &HirProgram, symbols: &SymbolTable) {
         for item in &program.items {
-            self.collect_item_impls(item, symbols);
+            self.collect_item_impls(item, symbols, &[]);
         }
     }
 
-    fn collect_item_impls(&mut self, item: &HirItem, symbols: &SymbolTable) {
+    /// Phase E.E of #06.95: register every class found in the
+    /// `type_registry` under its qualified key. Bootstrap-loaded
+    /// classes (especially module-nested ones like `BufReader.File`)
+    /// don't appear in the user program's HirProgram items, so the
+    /// `collect_impls` walk above misses them entirely. Walking the
+    /// registry directly catches every Class definition the resolver
+    /// produced — including the qualified-name entries
+    /// `insert_type_qualified` populates for module-nested classes.
+    ///
+    /// For each class, registers ALL methods (user-body via
+    /// `HirClassDef.methods`-equivalent walk, plus lib-decl methods
+    /// appended onto `ClassInfo.methods` by `pass1_class_lib_methods`)
+    /// under the registry key. The lookup at method-call time then
+    /// hits the qualified name when the receiver carries one
+    /// (`Ty::Class { name: "BufReader.File" }`).
+    pub fn register_classes_from_registry(
+        &mut self,
+        type_registry: &HashMap<String, DefId>,
+        symbols: &SymbolTable,
+    ) {
+        for (qualified, &def_id) in type_registry {
+            let Some(def) = symbols.get(def_id) else {
+                continue;
+            };
+            let DefKind::Class { info } = &def.kind else {
+                continue;
+            };
+            let mut methods: Vec<(String, FnSignature)> = Vec::new();
+            // Read methods from `ClassInfo.methods` first (user-side
+            // classes that went through Pass 2 have their lib-decl
+            // entries already merged in here).
+            for method_id in &info.methods {
+                if let Some(m_def) = symbols.get(*method_id) {
+                    if let DefKind::Method { signature, .. } = &m_def.kind {
+                        if !methods.iter().any(|(n, _)| n == &m_def.name) {
+                            methods.push((m_def.name.clone(), signature.clone()));
+                        }
+                    }
+                }
+            }
+            // Bootstrap-loaded classes never go through Pass 2, so
+            // `ClassInfo.methods` stays empty even when lib decls were
+            // registered in Pass 1 via `pass1_class_lib_methods`. Scan
+            // the symbol table for `DefKind::Method { parent: def_id }`
+            // to find them.
+            if methods.is_empty() {
+                for m_def in symbols.iter() {
+                    if let DefKind::Method { parent, signature } = &m_def.kind {
+                        if *parent == def_id
+                            && !methods.iter().any(|(n, _)| n == &m_def.name)
+                        {
+                            methods.push((m_def.name.clone(), signature.clone()));
+                        }
+                    }
+                }
+            }
+            if !methods.is_empty() {
+                self.register_impl(qualified, None, methods);
+            }
+        }
+    }
+
+    fn collect_item_impls(
+        &mut self,
+        item: &HirItem,
+        symbols: &SymbolTable,
+        module_path: &[String],
+    ) {
         match item {
             HirItem::Mixin(tdef) => {
                 use crate::resolve::symbols::ParamInfo;
@@ -327,13 +395,39 @@ impl MixinResolver {
                 }
             }
             HirItem::Class(class) => {
-                let type_name = class.name.clone();
-                // Register class methods
-                let methods: Vec<(String, FnSignature)> = class
+                // Phase E.E of #06.95: module-nested classes need the
+                // QUALIFIED name (e.g. `BufReader.File`) so the typeck
+                // lookup keys match the receiver's `Ty::Class.name`.
+                let type_name = if module_path.is_empty() {
+                    class.name.clone()
+                } else {
+                    format!("{}.{}", module_path.join("."), class.name)
+                };
+                // Register user-body class methods
+                let mut methods: Vec<(String, FnSignature)> = class
                     .methods
                     .iter()
                     .map(|m| (m.name.clone(), self.func_to_sig(m)))
                     .collect();
+                // Phase E.E: also include lib-decl methods that the
+                // resolver appended onto `ClassInfo.methods` via
+                // `pass1_class_lib_methods`. These live in the symbol
+                // table as `DefKind::Method` entries — not in
+                // `HirClassDef.methods` — so the historical walk
+                // missed them entirely.
+                if let Some(def) = symbols.get(class.def_id) {
+                    if let DefKind::Class { info } = &def.kind {
+                        for method_id in &info.methods {
+                            if let Some(m_def) = symbols.get(*method_id) {
+                                if let DefKind::Method { signature, .. } = &m_def.kind {
+                                    if !methods.iter().any(|(n, _)| n == &m_def.name) {
+                                        methods.push((m_def.name.clone(), signature.clone()));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 self.register_impl(&type_name, None, methods);
                 self.register_derived_impls(
                     &type_name,
@@ -395,8 +489,10 @@ impl MixinResolver {
                 self.register_impl(&type_name, trait_name, methods);
             }
             HirItem::Module(m) => {
+                let mut child_path: Vec<String> = module_path.to_vec();
+                child_path.push(m.name.clone());
                 for sub_item in &m.items {
-                    self.collect_item_impls(sub_item, symbols);
+                    self.collect_item_impls(sub_item, symbols, &child_path);
                 }
             }
             _ => {}
@@ -544,6 +640,14 @@ impl MixinResolver {
 
     fn type_name(ty: &Ty) -> String {
         match ty {
+            // Phase E.E of #06.95: peel reference layers so a
+            // method call on `&var BufReader.File` looks up under
+            // `"BufReader.File"`, not `"&mut BufReader.File"` — the
+            // type_methods map is keyed by the underlying class name.
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => Self::type_name(inner),
             Ty::Class { name, .. } => name.clone(),
             Ty::Struct { name, .. } => name.clone(),
             Ty::Enum { name, .. } => name.clone(),

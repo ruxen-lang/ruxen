@@ -182,6 +182,7 @@ impl Resolver {
             symbols: self.symbols,
             type_context: self.type_context,
             diagnostics: self.diagnostics,
+            type_registry: self.type_registry,
         }
     }
 

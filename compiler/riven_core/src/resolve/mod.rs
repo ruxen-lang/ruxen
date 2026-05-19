@@ -38,6 +38,13 @@ pub struct ResolveResult {
     pub symbols: SymbolTable,
     pub type_context: TypeContext,
     pub diagnostics: Vec<Diagnostic>,
+    /// Phase E.E of #06.95: surfaced to typeck so its `collect_impls`
+    /// pass can register module-nested class methods under their
+    /// QUALIFIED names (e.g. `BufReader.File` rather than the
+    /// unqualified `File`). Without this, instance-method lookups on
+    /// receivers typed `BufReader.File` fall through to the fresh-
+    /// inference-var fallback (the `?T37_read_to_string` symptom).
+    pub type_registry: HashMap<String, DefId>,
 }
 
 /// The name resolver walks the AST and produces HIR with resolved names.
