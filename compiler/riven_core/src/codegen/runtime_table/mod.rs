@@ -29,15 +29,10 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "stdin" => return Ok("riven_stdin"),
         "stdout" => return Ok("riven_stdout"),
         "stderr" => return Ok("riven_stderr"),
-        // Top-level env / fs.
-        "args" => return Ok("riven_env_args"),
-        // ruby-naming.spec.md §3.14: `env.var` renamed to `env.get`
-        // because `var` is a reserved keyword. The internal C symbol
-        // keeps its legacy `riven_env_var` name.
-        "get" => return Ok("riven_env_var"),
-        // Phase 2 stdlib (#06): env / fs additions.
-        "vars" => return Ok("riven_env_vars"),
-        "current_dir" => return Ok("riven_env_current_dir"),
+        // Top-level env entries were here — Wave 2 (#06.8) moved
+        // args / get / vars / current_dir to library/std/src/env.rvn
+        // as `lib "riven_runtime" def NAME as "riven_env_..."` aliases.
+        // Top-level fs entries follow.
         "is_file" => return Ok("riven_fs_is_file"),
         "is_dir" => return Ok("riven_fs_is_dir"),
         "read_dir" => return Ok("riven_fs_read_dir"),

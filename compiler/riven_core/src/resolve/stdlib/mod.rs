@@ -265,34 +265,13 @@ pub(super) fn register_all(r: &mut Resolver) {
         ("stdin", vec![], stdin_ty.clone()),
         ("stdout", vec![], stdout_ty.clone()),
         ("stderr", vec![], stderr_ty.clone()),
-        ("args", vec![], Ty::Array(Box::new(Ty::String))),
-        // ruby-naming.spec.md §3.14: `var` is a reserved keyword
-        // (binding form / writable-reference / writable-pointer /
-        // writing-method marker). Renamed from `env.var` to `env.get`
-        // — `get` is also the canonical collection-lookup verb in
-        // the rest of the stdlib (`Map.get`, `Array.get`).
-        (
-            "get",
-            vec![ParamInfo {
-                name: "name".into(),
-                ty: Ty::Ref(Box::new(Ty::String)),
-                auto_assign: false,
-            }],
-            Ty::Result(Box::new(Ty::String), Box::new(env_var_error_ty)),
-        ),
-        // Phase 2 stdlib (#06): env::vars / env::current_dir.
-        // `vars` snapshots the process environment; mutations to
-        // it after the call do not propagate to the returned map.
-        (
-            "vars",
-            vec![],
-            Ty::Map(Box::new(Ty::String), Box::new(Ty::String)),
-        ),
-        (
-            "current_dir",
-            vec![],
-            Ty::Result(Box::new(Ty::String), Box::new(io_error_ty.clone())),
-        ),
+        // std::env entries (args, get, vars, current_dir) were here.
+        //
+        // Wave 2 (#06.8): migrated to `library/std/src/env.rvn`.
+        // The `std.env` module namespace is still assembled below
+        // (with empty items) and populated by
+        // `fixup_bootstrapped_stdlib_modules` after the bootstrap
+        // merge so `use std.env.{...}` keeps tokenising.
         (
             "read_to_string",
             vec![ParamInfo {
@@ -1705,17 +1684,13 @@ pub(super) fn register_all(r: &mut Resolver) {
         Visibility::Public,
         span.clone(),
     );
+    // Wave 2 (#06.8): see rand_id / path_id above for the empty-items
+    // pattern. The four env free fns are populated by
+    // [`Resolver::fixup_bootstrapped_stdlib_modules`] after the
+    // bootstrap merge loads `library/std/src/env.rvn`.
     let env_id = r.symbols.define(
         "env".to_string(),
-        DefKind::Module {
-            items: vec![
-                builtin_fn_ids["args"],
-                builtin_fn_ids["get"],
-                // Phase 2 stdlib (#06).
-                builtin_fn_ids["vars"],
-                builtin_fn_ids["current_dir"],
-            ],
-        },
+        DefKind::Module { items: vec![] },
         Visibility::Public,
         span.clone(),
     );

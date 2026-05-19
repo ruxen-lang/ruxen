@@ -330,6 +330,8 @@ impl Resolver {
                     "path_is_absolute",
                 ],
             ),
+            // Wave 2 — library/std/src/env.rvn
+            ("env", &["args", "get", "vars", "current_dir"]),
         ];
 
         let Some(std_id) = self.scopes.lookup_type("std") else {
