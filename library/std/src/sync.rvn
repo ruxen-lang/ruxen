@@ -15,15 +15,14 @@
 ## that shim's DefId alongside the bootstrap-loaded class DefIds
 ## via the APPEND semantics of `fixup_bootstrapped_stdlib_modules`.
 ##
-## Arc[T] migrates here; SharedSync[T] (the Ruby-naming canonical
-## name for Arc) stays in Rust as a `type_constructors` Variable
-## that aliases `SharedSync` to `Ty::Class { name: "Arc" }`. The
-## alias lets `let x: SharedSync[Int] = SharedSync.new(5)` resolve
-## to `Ty::Class { name: "Arc", generic_args: [Int] }` (matching the
-## constructor's return) — migrating SharedSync to its own .rvn
-## class would break that type-equivalence. T#21 cleans this up
-## when method dispatch for built-in classes moves to the FFI alias
-## path.
+## SharedSync[T] is the Ruby-naming canonical name (TEC-13 / §10a)
+## and lives here in self-hosted .rvn. `Arc[T]` is preserved as a
+## backward-compat alias class in Rust: its `type_constructors`
+## Variable is typed `Ty::Class { name: "SharedSync" }` so
+## `Arc.new(5)` returns `Ty::Class { name: "SharedSync", … }` and
+## `let x: SharedSync[Int] = Arc.new(5)` typechecks cleanly. Both
+## import paths (`use std.sync.SharedSync` AND `use std.sync.Arc`)
+## still resolve.
 ##
 ## Context / Waker belong to std::task (async runtime plumbing) but
 ## live here in `sync.rvn` for now because the standalone task.rvn
@@ -51,7 +50,7 @@ end
 class MutexGuard[T]
 end
 
-class Arc[T]
+class SharedSync[T]
 end
 
 class PoisonError

@@ -461,20 +461,21 @@ pub(super) fn register_all(r: &mut Resolver) {
     // bound). Methods still flow through the runtime_table
     // mangled-name dispatch until T#21 lands.
     //
-    // `SharedSync` stays as a Rust-registered SHELL CLASS (below)
-    // because its identity is non-trivially tied to Arc via the
-    // `type_constructors` Variable alias (Ty::Class { name: "Arc" })
-    // — migrating SharedSync to its own .rvn class would give it a
-    // distinct DefId and break the `SharedSync[T] == Arc[T]` type
-    // equivalence that user code (notably
-    // std_sync_concurrency_surface_typechecks_cleanly) relies on.
+    // Ruby-naming (TEC-13 / §10a): `SharedSync` is the canonical
+    // name and lives in library/std/src/sync.rvn. `Arc[T]` is
+    // preserved here as a backward-compat alias class whose
+    // type_constructors Variable below is typed
+    // `Ty::Class { name: "SharedSync" }` so `Arc.new(5)` returns
+    // a SharedSync-typed value and downstream `SharedSync[Int]`
+    // annotations match.
+    //
     // The `ThreadId` value-scope alias (a `DefKind::Variable` that
     // lets `ThreadId` itself appear as a sentinel value, not just
     // as a type) stays here as a one-line shim — its type field
     // resolves "ThreadId" by name, which the bootstrap-loaded
     // class registration satisfies.
-    let shared_sync_id = r.symbols.define(
-        "SharedSync".to_string(),
+    let arc_alias_id = r.symbols.define(
+        "Arc".to_string(),
         DefKind::Class {
             info: ClassInfo {
                 generic_params: vec![GenericParamInfo::type_param("T".to_string(), vec![])],
@@ -493,10 +494,8 @@ pub(super) fn register_all(r: &mut Resolver) {
         Visibility::Public,
         span.clone(),
     );
-    r.scopes
-        .insert_type("SharedSync".to_string(), shared_sync_id);
-    r.type_registry
-        .insert("SharedSync".to_string(), shared_sync_id);
+    r.scopes.insert_type("Arc".to_string(), arc_alias_id);
+    r.type_registry.insert("Arc".to_string(), arc_alias_id);
     let thread_id_value_id = r.symbols.define(
         "ThreadId".to_string(),
         DefKind::Variable {
@@ -635,13 +634,13 @@ pub(super) fn register_all(r: &mut Resolver) {
     );
     // Wave 2 (#06.8): 9 sync class shells moved to
     // library/std/src/sync.rvn. sync_id starts with the
-    // `thread_id_value_id` Rust shim + the SharedSync alias class
-    // (also Rust); fixup_bootstrapped_stdlib_modules APPENDS the
-    // bootstrap-loaded class DefIds to that list.
+    // `thread_id_value_id` Rust shim + the Arc backward-compat
+    // alias class (also Rust); fixup_bootstrapped_stdlib_modules
+    // APPENDS the bootstrap-loaded class DefIds to that list.
     let sync_id = r.symbols.define(
         "sync".to_string(),
         DefKind::Module {
-            items: vec![thread_id_value_id, shared_sync_id],
+            items: vec![thread_id_value_id, arc_alias_id],
         },
         Visibility::Public,
         span.clone(),
@@ -840,21 +839,26 @@ pub(super) fn register_all(r: &mut Resolver) {
                 }],
             },
         ),
+        // Ruby-naming (TEC-13 / §10a): `SharedSync` is canonical.
+        // `Arc` is the backward-compat alias — both type_constructor
+        // Variables produce `Ty::Class { name: "SharedSync" }` so
+        // `Arc.new(5)` and `SharedSync.new(5)` both return the same
+        // type, and downstream `let x: SharedSync[Int] = …`
+        // annotations match either constructor.
         (
-            "Arc",
+            "SharedSync",
             Ty::Class {
-                name: "Arc".to_string(),
+                name: "SharedSync".to_string(),
                 generic_args: vec![Ty::TypeParam {
                     name: "T".to_string(),
                     bounds: vec![],
                 }],
             },
         ),
-        // Ruby-naming spelling for `Arc[T]` — same underlying class.
         (
-            "SharedSync",
+            "Arc",
             Ty::Class {
-                name: "Arc".to_string(),
+                name: "SharedSync".to_string(),
                 generic_args: vec![Ty::TypeParam {
                     name: "T".to_string(),
                     bounds: vec![],

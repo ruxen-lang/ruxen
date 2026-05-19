@@ -407,12 +407,15 @@ impl Resolver {
                 ],
             ),
             // Wave 2 — library/std/src/sync.rvn (9 class shells:
-            // Thread, ThreadId, JoinHandle, Mutex, MutexGuard, Arc,
-            // PoisonError, ThreadPanic + Context / Waker from
-            // std::task). SharedSync stays Rust-registered (its
-            // identity is tied to Arc via the type_constructors
-            // Variable alias). Methods still flow through
-            // runtime_table mangled-name dispatch until T#21.
+            // Thread, ThreadId, JoinHandle, Mutex, MutexGuard,
+            // SharedSync, PoisonError, ThreadPanic + Context /
+            // Waker from std::task). `SharedSync` is the Ruby-
+            // naming canonical name (TEC-13 / §10a); `Arc` stays
+            // Rust-registered as a backward-compat alias class
+            // whose type_constructors Variable produces
+            // `Ty::Class { name: "SharedSync" }`. Methods still
+            // flow through runtime_table mangled-name dispatch
+            // until T#21.
             (
                 "sync",
                 &[
@@ -421,7 +424,7 @@ impl Resolver {
                     "JoinHandle",
                     "Mutex",
                     "MutexGuard",
-                    "Arc",
+                    "SharedSync",
                     "PoisonError",
                     "ThreadPanic",
                     "Context",
