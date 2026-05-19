@@ -1,0 +1,41 @@
+# #06.93 Phase 2: `::Foo` resolves to the GLOBAL `Foo`, not to a
+# module-inner `Foo` of the same name.
+#
+# Setup: a top-level `class Foo` AND a `module M { class Foo end }`.
+# Three helper functions exercise each lookup variant. All three
+# must resolve clean at typeck:
+#
+#   1. take_global_via_root_anchor — `::Foo` is unambiguously the
+#      top-level Foo.
+#   2. take_module_qualified       — `M.Foo` is unambiguously the
+#      inner Foo (relies on Phase 1's qualified-key registration).
+#   3. take_unqualified            — bare `Foo`. Phase 1 keeps the
+#      un-qualified entry at top-level, so this also resolves.
+#      Phase 4 will change this behaviour to inner-first inside
+#      module bodies; the top-level reference here remains valid.
+#
+# The fact that all three resolve in Phase 2 is the pin. The
+# discriminating bit — that `::Foo` and `M.Foo` resolve to DIFFERENT
+# DefIds — only becomes user-observable once Phase 3's method
+# dispatch lands; for Phase 2 we pin the type-position parser +
+# resolver plumbing.
+
+class Foo
+end
+
+module M
+  class Foo
+  end
+end
+
+def take_global_via_root_anchor(_x: ::Foo) -> Int
+  0
+end
+
+def take_module_qualified(_x: M.Foo) -> Int
+  0
+end
+
+def take_unqualified(_x: Foo) -> Int
+  0
+end

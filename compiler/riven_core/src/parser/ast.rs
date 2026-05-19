@@ -50,6 +50,16 @@ pub struct TypePath {
     pub segments: Vec<String>,
     pub generic_args: Option<Vec<TypeExpr>>,
     pub span: Span,
+    /// `true` if the type path was written with a leading `::` —
+    /// e.g. `::Foo` or `::Outer.Inner`.  Set by the parser
+    /// (`parse_type_path`) when the first token is `ColonColon`.
+    /// Consumed by the resolver to bypass inner module scopes and
+    /// look the name up in the global `type_registry` directly
+    /// (#06.93 Phase 2 — root anchor).
+    ///
+    /// Default `false`; expression-position `::` is not in scope
+    /// for #06.93.
+    pub rooted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

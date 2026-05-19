@@ -532,20 +532,30 @@ impl Resolver {
             }
         }
 
-        // Check if it's a generic type parameter or type alias in scope
-        if let Some(def_id) = self.scopes.lookup_type(&name) {
-            if let Some(def) = self.symbols.get(def_id) {
-                match &def.kind {
-                    DefKind::TypeParam { bounds } => {
-                        return Ty::TypeParam {
-                            name,
-                            bounds: bounds.clone(),
-                        };
+        // Check if it's a generic type parameter or type alias in scope.
+        // #06.93 Phase 2: root-anchored paths (`::Name`) bypass this
+        // scope walk by design — `::Name` means "resolve from the
+        // global type registry" so a generic param `T` shadowed at
+        // some inner scope is NOT what `::T` means. Phase 1 + global
+        // `type_registry` lookups above already handled the rooted
+        // case for class / struct / enum / mixin DefKinds; only the
+        // generic-param + type-alias scope fallback below is
+        // shadowing-sensitive, and it's the one we must skip.
+        if !path.rooted {
+            if let Some(def_id) = self.scopes.lookup_type(&name) {
+                if let Some(def) = self.symbols.get(def_id) {
+                    match &def.kind {
+                        DefKind::TypeParam { bounds } => {
+                            return Ty::TypeParam {
+                                name,
+                                bounds: bounds.clone(),
+                            };
+                        }
+                        DefKind::TypeAlias { target } => {
+                            return target.clone();
+                        }
+                        _ => {}
                     }
-                    DefKind::TypeAlias { target } => {
-                        return target.clone();
-                    }
-                    _ => {}
                 }
             }
         }

@@ -61,7 +61,13 @@ impl Parser {
             }
 
             // Named type: Path[GenericArgs]
-            TokenKind::TypeIdentifier(_) | TokenKind::SelfType => self.parse_named_type(),
+            // `::Name` root-anchored named type (#06.93 Phase 2):
+            // route to `parse_named_type` which calls
+            // `parse_type_path`, which consumes the leading `::`
+            // and sets `TypePath.rooted = true`.
+            TokenKind::TypeIdentifier(_) | TokenKind::SelfType | TokenKind::ColonColon => {
+                self.parse_named_type()
+            }
 
             // Lifetime in a type position (e.g., in trait bounds)
             TokenKind::Lifetime(_) => {
@@ -306,6 +312,19 @@ impl Parser {
         let start = self.current_span();
         let mut segments = Vec::new();
 
+        // #06.93 Phase 2: optional leading `::` makes this a
+        // root-anchored path — resolution bypasses enclosing module
+        // scopes and looks up directly in the global type registry.
+        // `::Self.X` is grammatically reachable but semantically
+        // nonsensical; the resolver will simply fail to find `Self`
+        // in the global registry.
+        let rooted = if self.at(TokenKind::ColonColon) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+
         // First segment
         match self.current_kind().clone() {
             TokenKind::TypeIdentifier(name) => {
@@ -322,6 +341,7 @@ impl Parser {
                     segments: vec!["_Error".to_string()],
                     generic_args: None,
                     span: start,
+                    rooted,
                 };
             }
         }
@@ -351,6 +371,7 @@ impl Parser {
             segments,
             generic_args,
             span,
+            rooted,
         }
     }
 
@@ -680,6 +701,7 @@ impl Parser {
             segments: vec![name],
             generic_args,
             span,
+            rooted: false,
         })
     }
 }
