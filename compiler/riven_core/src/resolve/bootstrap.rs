@@ -69,6 +69,12 @@ pub const BOOTSTRAP_FILES: &[&str] = &[
     "time.rvn",
     "fs.rvn",
     "sync.rvn",
+    // T#13: String method shims as a `class String` namespace anchor.
+    // Listed AFTER `io.rvn` (which owns `IoError`) and the other
+    // class-shell migrations because nothing here depends on those —
+    // only on T#21's anchor mode to avoid replacing the builtin
+    // `String → DefKind::TypeAlias { target: Ty::String }` binding.
+    "string.rvn",
 ];
 
 /// Production entry point: parse every stdlib file in

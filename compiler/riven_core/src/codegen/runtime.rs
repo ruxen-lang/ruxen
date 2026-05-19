@@ -433,22 +433,58 @@ mod tests {
     }
 
     #[test]
-    fn implemented_string_predicates_resolve() {
+    fn migrated_string_methods_fall_through_runtime_table() {
+        // #06.8 T#13: every `String_<m>` entry that previously lived in
+        // `runtime_table/mod.rs` moved to a class-body `lib` decl in
+        // `library/std/src/string.rvn`. Method calls now reach the C
+        // symbol through MIR's `ffi_alias_map` rewrite BEFORE codegen
+        // would consult `runtime_name`. The runtime_table lookup
+        // therefore falls through to the bottom-of-fn `Ok(name)` arm
+        // (the same arm that lets user-defined methods through
+        // unmolested) — it must NOT return the legacy `riven_string_*`
+        // mapping for migrated names, otherwise a stale entry could
+        // mask the alias path and silently keep the old dispatch alive
+        // across future refactors.
+        //
+        // `String_clone` is the only outlier: it aliases the SAME C
+        // symbol as `String.from` (`riven_string_from`) but with an
+        // instance-method receiver shape, which trips E0722 in
+        // `register_class_lib_method`. Until that check is relaxed
+        // to compare at the wire level, it stays as an explicit
+        // runtime_table entry — pinned below alongside the migrated
+        // set.
+        for m in [
+            "String_contains",
+            "String_starts_with",
+            "String_ends_with",
+            "String_repeat",
+            "String_trim",
+            "String_len",
+            "String_from",
+            "String_push_str",
+            "String_to_lower",
+            "String_to_upper",
+            "String_chars",
+            "String_split",
+            "String_new",
+            "String_find",
+            "String_remove",
+            "String_parse_int",
+            "ParseIntError_message",
+            "ParseFloatError_message",
+        ] {
+            assert_eq!(
+                runtime_name(m).unwrap(),
+                m,
+                "migrated method `{m}` must fall through runtime_table to its \
+                 unmapped form (the alias-map rewrites it earlier in MIR); \
+                 a specific `riven_*` mapping here would mask the alias path"
+            );
+        }
         assert_eq!(
-            runtime_name("String_contains").unwrap(),
-            "riven_string_contains"
-        );
-        assert_eq!(
-            runtime_name("String_starts_with").unwrap(),
-            "riven_string_starts_with"
-        );
-        assert_eq!(
-            runtime_name("String_ends_with").unwrap(),
-            "riven_string_ends_with"
-        );
-        assert_eq!(
-            runtime_name("String_repeat").unwrap(),
-            "riven_string_repeat"
+            runtime_name("String_clone").unwrap(),
+            "riven_string_from",
+            "String_clone must remain in runtime_table — see test comment"
         );
     }
 
@@ -496,7 +532,13 @@ mod tests {
 
     #[test]
     fn known_runtime_symbols_resolve() {
-        assert_eq!(runtime_name("puts").unwrap(), "riven_puts");
+        // `puts` migrated to library/std/src/io.rvn as a `lib
+        // "riven_runtime" def puts as "riven_puts"(...)` decl in
+        // #06.8 Wave 2. Calls reach the C symbol through the
+        // ffi_alias_map; runtime_table no longer carries the
+        // mapping. Pinning Vec/Hash collection methods (still
+        // runtime_table-resident — they migrate in T#14/T#15) keeps
+        // the rest of the lookup surface honest.
         assert_eq!(runtime_name("Vec[Int]_push").unwrap(), "riven_vec_push");
         assert_eq!(runtime_name("Vec[Int]_len").unwrap(), "riven_vec_len");
         assert_eq!(runtime_name("Hash[Int,Int]_get").unwrap(), "riven_hash_get");
@@ -525,13 +567,26 @@ mod tests {
     }
 
     #[test]
-    fn stdio_top_level_and_methods_resolve() {
-        // Top-level fns added in `13d34a6 fixing v1`.
-        assert_eq!(runtime_name("read_line").unwrap(), "riven_read_line");
-        assert_eq!(runtime_name("stdin").unwrap(), "riven_stdin");
-        assert_eq!(runtime_name("stdout").unwrap(), "riven_stdout");
-        assert_eq!(runtime_name("stderr").unwrap(), "riven_stderr");
-        // Stdin/Stdout/Stderr methods.
+    fn stdio_top_level_fall_through_after_io_migration() {
+        // #06.8 Wave 2 (io.rvn): the top-level stdio fns `read_line`
+        // / `stdin` / `stdout` / `stderr` moved to a `lib
+        // "riven_runtime"` block in `library/std/src/io.rvn`. Their
+        // runtime_table entries were deleted at the same time, so
+        // method calls now reach the C symbols through MIR's
+        // ffi_alias_map; runtime_table falls through to the
+        // bottom-of-fn `Ok(name)` arm.
+        for name in ["read_line", "stdin", "stdout", "stderr"] {
+            assert_eq!(
+                runtime_name(name).unwrap(),
+                name,
+                "post-io-migration `{name}` must fall through runtime_table; \
+                 a `riven_*` mapping here would mask the alias path"
+            );
+        }
+        // Stdin/Stdout/Stderr CLASS METHODS still live in
+        // runtime_table — their .rvn class shells were migrated
+        // without class-body lib decls, deferred to the static-ctor
+        // carve-out removal task T#20.
         assert_eq!(
             runtime_name("Stdin_read_line").unwrap(),
             "riven_stdin_read_line"

@@ -44,44 +44,29 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // `riven_command_status`); the resolver-visible Riven name
         // is gone. See docs/specs/stdlib/process.spec.md.
         // String methods.
-        "String_from" => return Ok("riven_string_from"),
-        "String_push_str" => return Ok("riven_string_push_str"),
-        "String_len" => return Ok("riven_string_len"),
-        "String_is_empty" => return Ok("riven_string_is_empty"),
-        "String_trim" => return Ok("riven_string_trim"),
-        "String_to_lower" => return Ok("riven_string_to_lower"),
-        "String_to_upper" => return Ok("riven_string_to_upper"),
-        "String_chars" => return Ok("riven_string_chars"),
+        //
+        // #06.8 T#13 migrated the bulk of these into
+        // library/std/src/string.rvn as a `class String do lib
+        // "riven_runtime" ... end end` block. MIR's ffi_alias_map is
+        // populated from the bootstrap merge BEFORE codegen consults
+        // this table, so any callee that has a matching .rvn lib
+        // decl never reaches the arms below — the entries would be
+        // dead. Two String entries remain because they don't fit
+        // the FFI-alias mold:
+        //
+        // * `String_clone` aliases the SAME C symbol as `String.from`
+        //   (`riven_string_from`) but with an instance-method
+        //   receiver shape. Two FFI decls aliasing the same C symbol
+        //   with different wire shapes trip the E0722 conflict check
+        //   in `register_class_lib_method`. Until that check is
+        //   relaxed to compare at the wire level
+        //   (post-instance-self-prepend), this stays as a
+        //   runtime_table fallback.
+        // * `String_from_iter` is consumed by the
+        //   `iter.collect[String]()` lowering, not by a surface
+        //   `.from_iter(...)` method call — there's no `.rvn`
+        //   class-body decl to attach it to.
         "String_clone" => return Ok("riven_string_from"),
-        "String_contains" => return Ok("riven_string_contains"),
-        "String_starts_with" => return Ok("riven_string_starts_with"),
-        "String_ends_with" => return Ok("riven_string_ends_with"),
-        "String_repeat" => return Ok("riven_string_repeat"),
-        "String_lines" => return Ok("riven_string_lines"),
-        "String_replace" => return Ok("riven_string_replace"),
-        // Phase 2 stdlib additions (#02).
-        "String_new" => return Ok("riven_string_new"),
-        "String_with_capacity" => return Ok("riven_string_with_capacity"),
-        "String_as_str" => return Ok("riven_string_as_str"),
-        "String_to_string" => return Ok("riven_string_to_string"),
-        "String_bytes" => return Ok("riven_string_bytes"),
-        "String_trim_start" => return Ok("riven_string_trim_start"),
-        "String_trim_end" => return Ok("riven_string_trim_end"),
-        "String_find" => return Ok("riven_string_find"),
-        "String_splitn" => return Ok("riven_string_splitn"),
-        "String_clear" => return Ok("riven_string_clear"),
-        "String_truncate" => return Ok("riven_string_truncate"),
-        "String_insert" => return Ok("riven_string_insert"),
-        "String_insert_str" => return Ok("riven_string_insert_str"),
-        "String_remove" => return Ok("riven_string_remove"),
-        "String_parse_int" => return Ok("riven_string_parse_int"),
-        "String_parse_float" => return Ok("riven_string_parse_float"),
-        "ParseIntError_message" => return Ok("riven_parse_error_message"),
-        "ParseFloatError_message" => return Ok("riven_parse_error_message"),
-        // Phase 2 stdlib batch 2 (#02).
-        "String_split" => return Ok("riven_string_split"),
-        "String_push" => return Ok("riven_string_push"),
-        "String_into_bytes" => return Ok("riven_string_into_bytes"),
         "String_from_iter" => return Ok("riven_string_from_iter"),
         // &str methods.
         "&str_split" => return Ok("riven_str_split"),

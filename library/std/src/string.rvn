@@ -1,0 +1,117 @@
+## std::string — String / Str method surface, routed through FFI alias.
+##
+## #06.8 T#13: every method here was a `String_<m>` entry in
+## `compiler/riven_core/src/codegen/runtime_table/mod.rs` until T#21's
+## namespace-anchor mechanism made it possible to attach FFI alias
+## decls directly to the builtin `Ty::String`. Bootstrap merge reuses
+## the existing TypeAlias DefId for `String` (so `Ty::String` stays
+## canonical for codegen) and pumps the class-body `lib` decls into
+## `HirProgram.ffi_libs`. MIR's `ffi_alias_map` then rewrites the
+## mangled `String_<m>` callee to the C symbol BEFORE codegen would
+## ever consult `runtime_table`.
+##
+## ## ABI notes
+##
+## The runtime C entrypoints in `library/runtime/core/string.c` take
+## a `const char *` (the RivenString buffer pointer) and return
+## `char *` / `int64_t` / `void *` etc. — all pointer-or-i64 sized,
+## so they wire-match the Riven sigs declared below regardless of
+## whether the receiver is declared as `Ty::Class { name: "String" }`
+## (what `register_class_lib_method` prepends for instance methods) or
+## the canonical `Ty::String`. The cranelift import sig and the call
+## site agree at the wire level.
+##
+## ## Return type semantics
+##
+## Several methods have richer typeck return types than the wire C
+## sig (`find` → `Option[USize]`, `parse_int` → `Result[Int,
+## ParseIntError]`). The lib-decl return type controls cranelift's
+## import signature; typeck still consults the hardcoded table in
+## `typeck/method_resolvers` for the surface-visible Ty. We declare
+## these as the simpler wire-compatible types (`Int` for void* boxed
+## returns) and let typeck's own rules drive what the user sees.
+
+class String
+  lib "riven_runtime"
+    # ── Constructors (no `self`) ──────────────────────────────────
+    def self.from as "riven_string_from"(s: &String) -> String
+    def self.new as "riven_string_new"() -> String
+    def self.with_capacity as "riven_string_with_capacity"(cap: Int) -> String
+
+    # ── Read-only queries ─────────────────────────────────────────
+    def len as "riven_string_len"(self) -> Int
+    def is_empty as "riven_string_is_empty"(self) -> Bool
+    def contains as "riven_string_contains"(self, needle: &String) -> Bool
+    def starts_with as "riven_string_starts_with"(self, needle: &String) -> Bool
+    def ends_with as "riven_string_ends_with"(self, needle: &String) -> Bool
+    # `find` is typeck'd as `Option[USize]` but the runtime returns a
+    # void* tagged Option box. Declaring `Int` keeps the cranelift
+    # import signature wire-compatible (8 bytes either way); the MIR
+    # decoder reads the boxed tag.
+    def find as "riven_string_find"(self, needle: &String) -> Int
+
+    # ── Pure transforms (return new String) ───────────────────────
+    # `clone` is intentionally NOT migrated: it aliases the SAME C
+    # symbol as `String.from` (`riven_string_from`) but with an
+    # instance-method receiver shape. Two FFI decls aliasing the same
+    # C symbol with different wire shapes trip E0722 by design. Until
+    # the E0722 check is taught to compare at the wire level
+    # (post-instance-self-prepend), `String_clone => riven_string_from`
+    # stays in `codegen/runtime_table/mod.rs`. The runtime_table miss
+    # path is the fallback when ffi_alias_map doesn't carry the
+    # mangled callee, so leaving the entry there is a clean no-op.
+    def trim as "riven_string_trim"(self) -> String
+    def trim_start as "riven_string_trim_start"(self) -> String
+    def trim_end as "riven_string_trim_end"(self) -> String
+    def to_lower as "riven_string_to_lower"(self) -> String
+    def to_upper as "riven_string_to_upper"(self) -> String
+    def repeat as "riven_string_repeat"(self, n: Int) -> String
+    def replace as "riven_string_replace"(self, from: &String, to: &String) -> String
+    def as_str as "riven_string_as_str"(self) -> String
+    def to_string as "riven_string_to_string"(self) -> String
+
+    # ── Splitters / iterators ─────────────────────────────────────
+    def chars as "riven_string_chars"(self) -> Array[Char]
+    def lines as "riven_string_lines"(self) -> Array[String]
+    def split as "riven_string_split"(self, delimiter: &String) -> Array[String]
+    def splitn as "riven_string_splitn"(self, n: Int, delimiter: &String) -> Array[String]
+    def bytes as "riven_string_bytes"(self) -> Array[Int]
+    def into_bytes as "riven_string_into_bytes"(self) -> Array[Int]
+
+    # ── Parsers (return tagged Result boxes — Int wire-compatible) ─
+    def parse_int as "riven_string_parse_int"(self) -> Int
+    def parse_float as "riven_string_parse_float"(self) -> Int
+
+    # ── Mutating ops — MIR special-cases these for &mut String ────
+    def push_str as "riven_string_push_str"(self, other: &String) -> String
+    def push as "riven_string_push"(self, c: Char) -> String
+    def clear as "riven_string_clear"(self)
+    def truncate as "riven_string_truncate"(self, n: Int)
+    def insert as "riven_string_insert"(self, i: Int, codepoint: Int) -> String
+    def insert_str as "riven_string_insert_str"(self, i: Int, part: &String) -> String
+    # `remove` returns a 16-byte {removed: Char, new_buffer: ptr} struct;
+    # MIR reads field 0 for the returned Char and field 1 to update the
+    # local. Declared as `Int` so the cranelift sig is one i64 register.
+    def remove as "riven_string_remove"(self, i: Int) -> Int
+  end
+end
+
+## ParseIntError / ParseFloatError — error classes returned by the
+## `String#parse_int` / `String#parse_float` Result. The class shells
+## are NOT in `register_builtins` (typeck constructs `Ty::Class { name:
+## "ParseIntError" }` on the fly), so anchor mode does not apply here —
+## these `class` decls register fresh DefKind::Class entries the
+## ordinary way. The single `message` method on each maps to the same
+## shared `riven_parse_error_message` runtime symbol.
+
+class ParseIntError
+  lib "riven_runtime"
+    def message as "riven_parse_error_message"(self) -> String
+  end
+end
+
+class ParseFloatError
+  lib "riven_runtime"
+    def message as "riven_parse_error_message"(self) -> String
+  end
+end
