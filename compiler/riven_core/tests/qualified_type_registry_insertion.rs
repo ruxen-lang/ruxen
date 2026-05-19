@@ -86,12 +86,10 @@ fn top_level_class_unaffected_by_phase_1() {
     );
 }
 
-#[test]
-fn unqualified_inner_name_still_works_phase_1_additive() {
-    let errors = resolve_errors("unqualified_inner_phase_1_additive");
-    assert!(
-        errors.is_empty(),
-        "both qualified and un-qualified should resolve in Phase 1: {:?}",
-        errors
-    );
-}
+// The `unqualified_inner_name_still_works_phase_1_additive` test
+// previously pinned a TEMPORARY behaviour of Phase 1 — that
+// `type_registry` carried both the un-qualified `Inner` and the
+// qualified `Outer.Inner` keys for a module-nested type. Phase 4
+// (inner-first scope shadowing) removed the un-qualified
+// top-level entry. The new behaviour is pinned by
+// `inner_first_shadowing.rs` and `module_inner_invisible_outside.rs`.

@@ -220,18 +220,25 @@ impl Resolver {
 
     // ─── Pass 1: Forward Declaration of Types ───────────────────────
 
-    /// #06.93 Phase 1: register a type's name into the un-qualified
-    /// type scope (un-changed behaviour) AND, when nested inside one
-    /// or more `module` blocks, into `type_registry` under the
-    /// dotted qualified key (e.g. `Outer.Inner` for `module Outer {
-    /// class Inner }`). The qualified entry enables type-position
-    /// lookups like `let x: Outer.Inner = ...` to resolve. Both
-    /// entries point at the same `DefId`. Inner-first scope
-    /// shadowing is Phase 4's job; Phase 1 is purely additive.
+    /// #06.93 Phase 1 + Phase 4: register a type's name.
+    ///
+    /// At the TOP LEVEL (`module_path` empty), insert the
+    /// un-qualified name into both the current type scope and the
+    /// global `type_registry` (un-changed behaviour).
+    ///
+    /// INSIDE a module body (`module_path` non-empty), insert the
+    /// un-qualified name into the current type scope ONLY — which,
+    /// after Phase 4's module-scope push, is the module's own
+    /// frame, not the global scope. This means `let x: Inner` at
+    /// top level no longer resolves to a module-nested `Inner`.
+    /// Insert the dotted qualified key (e.g. `Outer.Inner`) into
+    /// the global `type_registry` so external code can still
+    /// reference the type via the qualified path.
     fn insert_type_qualified(&mut self, name: &str, id: DefId, module_path: &[String]) {
         self.scopes.insert_type(name.to_string(), id);
-        self.type_registry.insert(name.to_string(), id);
-        if !module_path.is_empty() {
+        if module_path.is_empty() {
+            self.type_registry.insert(name.to_string(), id);
+        } else {
             let qualified = format!("{}.{}", module_path.join("."), name);
             self.type_registry.insert(qualified, id);
         }
@@ -696,11 +703,16 @@ impl Resolver {
                 self.insert_type_qualified(&nt.name, id, module_path);
             }
             ast::TopLevelItem::Module(m) => {
-                // Register module type name, then recurse with an
-                // extended module-path stack so the sub-items'
-                // qualified-key registration sees the full prefix
-                // (e.g. `module A { module B { class C } }` →
-                // type_registry["A.B.C"] = C's DefId).
+                // Register module type name in the OUTER scope (so
+                // `module M { ... }` is reachable from siblings),
+                // then push a fresh scope frame for the module's
+                // body and recurse. Types declared inside the
+                // module land in that frame, NOT the global scope —
+                // implementing inner-first shadowing (#06.93 Phase
+                // 4). The qualified `type_registry` entry from
+                // Phase 1 is still added by `insert_type_qualified`
+                // so external code (`use M.Foo`, `let x: M.Foo`)
+                // resolves via the global registry.
                 let id = self.symbols.define(
                     m.name.clone(),
                     DefKind::Module { items: vec![] },
@@ -711,9 +723,18 @@ impl Resolver {
 
                 let mut nested_path: Vec<String> = module_path.to_vec();
                 nested_path.push(m.name.clone());
+                // Phase 4: push a module-body scope. The recursive
+                // `insert_type_qualified` calls below will insert
+                // their un-qualified names into THIS frame, not the
+                // global scope. From outside this module body, those
+                // un-qualified names are invisible; only the
+                // qualified `M.Inner` (in type_registry) remains
+                // reachable.
+                self.scopes.push(ScopeKind::Module);
                 for sub_item in &m.items {
                     self.register_top_level_type_with_ffi_in(sub_item, ffi_libs, &nested_path);
                 }
+                self.scopes.pop();
             }
             ast::TopLevelItem::Function(f) => {
                 // Forward-declare top-level functions so they can be referenced
