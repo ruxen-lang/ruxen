@@ -519,14 +519,45 @@ mod tests {
     }
 
     #[test]
-    fn implemented_option_result_combinators_resolve() {
+    fn migrated_option_result_combinators_fall_through_runtime_table() {
+        // #06.8 T#17 moved `Option_{unwrap_or, is_some, is_none,
+        // ok_or}` and `Result_{unwrap_or, is_ok, is_err, ok, err}`
+        // into library/std/src/option_result.rvn. The lookup site in
+        // `mir/lower/expr/method_call.rs` peels the surface
+        // `[Int,Err]` generic args and consults `ffi_alias_map` with
+        // the generic-stripped key, so the alias rewrite reaches the
+        // C symbol BEFORE codegen consults `runtime_name`. The
+        // runtime_table lookup therefore falls through to the bottom
+        // `Ok(name)` arm — a `riven_*` mapping at this layer would
+        // mask the alias path.
+        for m in [
+            "Result[Int,Err]_unwrap_or",
+            "Option[Int]_ok_or",
+            "Option[String]_is_some",
+            "Option[String]_is_none",
+            "Result[Int,IoError]_is_ok",
+            "Result[Int,IoError]_is_err",
+            "Result[Int,IoError]_ok",
+            "Result[Int,IoError]_err",
+        ] {
+            assert_eq!(
+                runtime_name(m).unwrap(),
+                m,
+                "migrated method `{m}` must fall through runtime_table to its \
+                 unmapped form; the alias-map fallback in MIR carries the \
+                 generic-stripped `Option_<m>` / `Result_<m>` key"
+            );
+        }
+        // Surviving bang variants — the `!` is part of the surface
+        // method name but isn't yet accepted inside a `def NAME as`
+        // lib decl, so these still need the runtime_table entry.
         assert_eq!(
-            runtime_name("Result[Int,Err]_unwrap_or").unwrap(),
-            "riven_result_unwrap_or",
+            runtime_name("Option[Int]_unwrap!").unwrap(),
+            "riven_option_unwrap"
         );
         assert_eq!(
-            runtime_name("Option[Int]_ok_or").unwrap(),
-            "riven_option_ok_or",
+            runtime_name("Result[Int,IoError]_unwrap!").unwrap(),
+            "riven_result_unwrap"
         );
     }
 

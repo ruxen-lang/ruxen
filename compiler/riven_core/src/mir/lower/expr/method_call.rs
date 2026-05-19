@@ -1058,11 +1058,35 @@ impl<'a> Lowerer<'a> {
                     // the same mangled shape). Non-FFI class methods hit
                     // the unwrap_or branch and use the mangled name
                     // unchanged.
-                    let callee = self
-                        .ffi_alias_map
-                        .get(&mangled)
-                        .cloned()
-                        .unwrap_or(mangled);
+                    //
+                    // #06.8 T#17: for generic builtin receivers (`Ty::Option(Inner)`,
+                    // `Ty::Result(Ok,Err)`, ...) the call-site mangle carries the
+                    // surface generic args — `Option[Int]_unwrap_or`. The
+                    // alias-map entry from a `class Option do lib ... end end`
+                    // bootstrap shell is keyed without args: `Option_unwrap_or`.
+                    // After the exact-key lookup misses, peel the `[...]` segment
+                    // from `mangled` and retry — that's the generic-stripped
+                    // shape the alias map carries.
+                    let callee = if let Some(direct) = self.ffi_alias_map.get(&mangled).cloned() {
+                        direct
+                    } else if let Some(bracket_pos) = mangled.find('[') {
+                        let close = mangled[bracket_pos..].find(']').map(|i| bracket_pos + i + 1);
+                        if let Some(close_pos) = close {
+                            let stripped = format!(
+                                "{}{}",
+                                &mangled[..bracket_pos],
+                                &mangled[close_pos..]
+                            );
+                            self.ffi_alias_map
+                                .get(&stripped)
+                                .cloned()
+                                .unwrap_or(mangled)
+                        } else {
+                            mangled
+                        }
+                    } else {
+                        mangled
+                    };
                     self.emit(MirInst::Call {
                         dest,
                         callee,

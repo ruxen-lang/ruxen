@@ -75,6 +75,10 @@ pub const BOOTSTRAP_FILES: &[&str] = &[
     // only on T#21's anchor mode to avoid replacing the builtin
     // `String → DefKind::TypeAlias { target: Ty::String }` binding.
     "string.rvn",
+    // T#17: Option / Result helper methods anchored on the existing
+    // `Option` / `Result` DefKind::Enum bindings from
+    // `register_builtins`.
+    "option_result.rvn",
 ];
 
 /// Production entry point: parse every stdlib file in

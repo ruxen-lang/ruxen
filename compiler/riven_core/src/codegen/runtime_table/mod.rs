@@ -483,14 +483,25 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
     // Option[...] methods. `.map` is inlined at the MIR layer (see
     // `inline_option_map`); reaching here means the inliner missed it,
     // which is itself a bug worth surfacing.
+    //
+    // #06.8 T#17 migrated `unwrap_or`, `is_some`, `is_none`, `ok_or`
+    // into library/std/src/option_result.rvn as a `class Option do
+    // lib "riven_runtime" ... end end` shell. MIR mangles the call
+    // site with the surface generic args (`Option[Int]_unwrap_or`)
+    // and the ffi_alias_map carries the generic-stripped key
+    // (`Option_unwrap_or`); the lookup site in
+    // `mir/lower/expr/method_call.rs` peels the `[...]` segment and
+    // retries when the exact-shape key misses, so the migrated
+    // entries reach the C symbol via the alias path BEFORE codegen
+    // consults the arms below. The bang variants (`unwrap!`,
+    // `expect!`) can't ride the alias map yet — the `!` is part of
+    // the method-name surface but the parser doesn't accept it
+    // inside a `def NAME as ...` lib decl. Those stay here as
+    // explicit fallbacks.
     if name.starts_with("Option") || name.contains("Option[") {
         return match method {
-            "unwrap_or" => Ok("riven_option_unwrap_or"),
             "expect!" => Ok("riven_option_expect"),
             "unwrap!" => Ok("riven_option_unwrap"),
-            "is_some" => Ok("riven_option_is_some"),
-            "is_none" => Ok("riven_option_is_none"),
-            "ok_or" => Ok("riven_option_ok_or"),
             // Known unimplemented Option combinators. `map` and
             // `unwrap_or_else` are closure-inlined at MIR level.
             "and_then" | "or" | "or_else" | "ok_or_else" | "filter" | "take" | "replace" => {
@@ -504,16 +515,16 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
     // closure-inlined at MIR level (`inline_result_map` /
     // `inline_unwrap_or_else`); reaching here for them indicates the
     // call site lacked a closure — that's a real bug worth surfacing.
+    //
+    // #06.8 T#17 migrated `unwrap_or`, `is_ok`, `is_err`, `ok`,
+    // `err` into the same option_result.rvn lib block. The remaining
+    // arms below are non-aliasable (bang surface names, `try_op`
+    // which is also a MIR-special) and stay here.
     if name.starts_with("Result") || name.contains("Result[") {
         return match method {
             "try_op" => Ok("riven_result_try_op"),
             "expect!" => Ok("riven_result_expect"),
             "unwrap!" => Ok("riven_result_unwrap"),
-            "is_ok" => Ok("riven_result_is_ok"),
-            "is_err" => Ok("riven_result_is_err"),
-            "ok" => Ok("riven_result_ok"),
-            "err" => Ok("riven_result_err"),
-            "unwrap_or" => Ok("riven_result_unwrap_or"),
             // Known unimplemented Result combinators.
             "and_then" | "or" | "or_else" | "ok_or" => Err(unresolved_method_error(name, "Result")),
             _ => Ok(name),
