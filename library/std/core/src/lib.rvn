@@ -1,3 +1,86 @@
-# core: primitive mixin declarations shared by every stdlib package.
-# Phase B: empty surface — primitive types still live in resolve/builtins.
-# Phase D moves Displayable/Error/Comparable mixin declarations here.
+## std::core — primitive trait declarations shared by every stdlib
+## package. Phase D-3 of #06.95 moved these from Rust registrations
+## in resolve/stdlib/mod.rs into self-hosted .rvn.
+##
+## Each declaration preserves the EXACT required-method list the
+## Rust registration carried; aspirational broader surfaces are
+## intentionally left out — adding required methods today would
+## break every user impl that doesn't provide them. They'll
+## expand once default-method lowering for mixins ships.
+
+mixin Displayable
+  def to_display
+end
+
+mixin Error
+  def message
+end
+
+mixin Comparable
+  def compare
+end
+
+# Marker mixins (no required methods).
+mixin Iterable
+end
+
+mixin Copy
+end
+
+mixin Send
+end
+
+mixin Sync
+end
+
+mixin Clone
+  def clone
+end
+
+mixin PartialEq
+  def eq
+end
+
+mixin Eq
+end
+
+# `Hash` here is the historic trait NAME (one method `hash`). The
+# Ruby-naming canonical name is `Hashable` (in library/std/hash/);
+# the `Hash → Hashable` alias is re-established by the resolver's
+# TYPE_ALIASES table after bootstrap merge.
+mixin Hash
+  def hash
+end
+
+mixin Default
+  def default
+end
+
+mixin Ord
+  def cmp
+end
+
+mixin PartialOrd
+  def partial_cmp
+end
+
+mixin Drop
+  def drop
+end
+
+# Future — async-runtime polling surface. The Rust registration
+# carried `assoc_types: ["Output"]` but the bare mixin syntax doesn't
+# yet support associated types inside the mixin body; for now the
+# `Output` placeholder lives in the typeck async-resolution path.
+mixin Future
+  def poll
+end
+
+# Into[T] — generic conversion mixin used by `?` to coerce source
+# errors into the outer function's declared error type. The MIR
+# `try_op` lowering looks up `into_impls[(Src, Dst)]` (populated by
+# `include Into[Dst]` blocks in `collect.rs`) and emits a call to
+# `{Src}_into`. See docs/tutorial/11-error-handling.md.
+mixin Into[T]
+  def into
+end

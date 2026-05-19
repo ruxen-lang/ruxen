@@ -1,17 +1,19 @@
-//! Method-name → runtime-symbol-name mapping table.
+//! Method-name → runtime-symbol-name mapping table — DEPRECATED, being
+//! dissolved by #06.95 Phase E.
 //!
-//! Phase E of #06.75 carved this out of `codegen/runtime.rs` (where it
-//! lived as the 515-LOC `runtime_name` function).  This `match name { … }`
-//! is the source of truth for which user-facing method calls
-//! (`File_open`, `Command_status`, `HashMap_insert`, …) bind to which
-//! `riven_*` C symbol.
+//! Phase E of #06.95 is in the process of dissolving this module.
+//! Slice A moved the trailing dispatcher logic (closure-call
+//! passthroughs, VecIter / Array / Option / Result combinator
+//! routing, `?T` inferred-type fallback, generic-T forwarding,
+//! defensive `Ok(name)`) to `codegen::lang_intrinsics`. The
+//! remaining plain-alias arms below are migrating per-package into
+//! `library/std/<pkg>/src/lib.rvn` `class Foo do lib "runtime/X.c"
+//! ... end end` shells, one slice at a time. When the match below is
+//! down to just the inner-type-discriminator entries
+//! (`BufReader_new_file`, `BufWriter_into_inner_tcp`, …), those move
+//! to `lang_intrinsics` too and this file goes away.
 //!
-//! Future follow-up (tracked separately): split this single
-//! `runtime_name` function into per-namespace files (`io.rs`, `fs.rs`,
-//! `net.rs`, `time.rs`, `process.rs`, `collections.rs`).  The arm
-//! groupings below already mark the cut lines.
-
-use super::runtime::{extract_method_name, unresolved_method_error};
+//! See plan in `docs/prompts/v1/06_phase2_stdlib_io_fmt.md` Phase E.
 
 pub fn runtime_name(name: &str) -> Result<&str, String> {
     // Direct, well-known symbols. These are the only call names that can

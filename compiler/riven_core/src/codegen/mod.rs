@@ -3,6 +3,7 @@
 //! Translates MIR to native object files and links executables.
 
 pub mod cranelift;
+pub mod lang_intrinsics;
 pub mod layout;
 pub mod object;
 pub mod runtime;

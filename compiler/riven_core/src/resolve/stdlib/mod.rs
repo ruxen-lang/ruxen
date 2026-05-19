@@ -65,103 +65,18 @@ pub(super) fn register_all(r: &mut Resolver) {
         r.type_registry.insert(name.to_string(), id);
     }
 
-    // Register built-in traits: Displayable, Error, Serializable, etc.
-    // Per TEC-13, the trait formerly known as `Hash` is `Hashable`.
-    // `Hash` remains a deprecated alias for one transition release —
-    // see the alias-registration block below.
-    let builtin_traits = [
-        ("Displayable", vec!["to_display"]),
-        ("Error", vec!["message"]),
-        ("Comparable", vec!["compare"]),
-        // ("Hashable", vec!["hash_code"]) — migrated to library/std/hash/src/lib.rvn (#06.8 Wave 2).
-        // The `Hash → Hashable` deprecation alias is re-established
-        // by Resolver::fixup_bootstrapped_stdlib_modules after the
-        // bootstrap merge.
-        ("Iterable", vec![]),
-        // ("Iterator", vec!["next"]) — migrated to library/std/iter/src/lib.rvn (#06.8 Wave 2).
-        // ("FromIterator", vec!["from_iter"]) — migrated to library/std/iter/src/lib.rvn (#06.8 Wave 2).
-        ("Copy", vec![]),
-        ("Clone", vec!["clone"]),
-        ("Send", vec![]),
-        ("Sync", vec![]),
-        // Display / Debug were here. Wave 2 (#06.8) moved both to
-        // library/std/fmt/src/lib.rvn. The fmt_id Module's items list
-        // (formerly [display_trait_id, debug_trait_id, ...]) is
-        // populated by fixup_bootstrapped_stdlib_modules instead.
-        ("PartialEq", vec!["eq"]),
-        ("Eq", vec![]),
-        ("Hash", vec!["hash"]),
-        ("Default", vec!["default"]),
-        ("Ord", vec!["cmp"]),
-        ("PartialOrd", vec!["partial_cmp"]),
-        ("Drop", vec!["drop"]),
-    ];
-
-    for (name, methods) in builtin_traits {
-        let id = r.symbols.define(
-            name.to_string(),
-            DefKind::Trait {
-                info: MixinInfo {
-                    generic_params: vec![],
-                    super_traits: vec![],
-                    required_methods: methods.iter().map(|m| m.to_string()).collect(),
-                    default_methods: vec![],
-                    assoc_types: vec![],
-                },
-            },
-            Visibility::Public,
-            span.clone(),
-        );
-        r.scopes.insert_type(name.to_string(), id);
-        r.type_registry.insert(name.to_string(), id);
-    }
-
-    let future_trait_id = r.symbols.define(
-        "Future".to_string(),
-        DefKind::Trait {
-            info: MixinInfo {
-                generic_params: vec![],
-                super_traits: vec![],
-                required_methods: vec!["poll".to_string()],
-                default_methods: vec![],
-                assoc_types: vec!["Output".to_string()],
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.scopes.insert_type("Future".to_string(), future_trait_id);
-    r.type_registry
-        .insert("Future".to_string(), future_trait_id);
-
-    // `Into[T]` — generic conversion trait used by `?` to coerce
-    // source errors into the outer function's declared error type.
-    // The MIR `try_op` lowering looks up
-    // `into_impls[(Src, Dst)]` (populated from `include Into[Dst]`
-    // blocks in collect.rs) and emits a call to `{Src}_into`. See
-    // docs/tutorial/11-error-handling.md §"Error Conversion".
-    let into_trait_id = r.symbols.define(
-        "Into".to_string(),
-        DefKind::Trait {
-            info: MixinInfo {
-                generic_params: vec![GenericParamInfo::type_param("T".to_string(), vec![])],
-                super_traits: vec![],
-                required_methods: vec!["into".to_string()],
-                default_methods: vec![],
-                assoc_types: vec![],
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.scopes.insert_type("Into".to_string(), into_trait_id);
-    r.type_registry.insert("Into".to_string(), into_trait_id);
-
-    // Deprecated alias `Hash → Hashable` was here. Wave 2 (#06.8)
-    // moved Hashable to library/std/hash/src/lib.rvn, so the alias is
-    // re-established by Resolver::fixup_bootstrapped_stdlib_modules
-    // once the bootstrap merge has inserted Hashable into the prelude
-    // type scope.
+    // Phase D-3 of #06.95: the 16 builtin mixins (Displayable / Error
+    // / Comparable / Iterable / Copy / Clone / Send / Sync / PartialEq
+    // / Eq / Hash / Default / Ord / PartialOrd / Drop / Future /
+    // Into[T]) moved to `library/std/core/src/lib.rvn` as self-hosted
+    // `mixin Foo` declarations. The bootstrap merge picks them up as
+    // `DefKind::Trait` entries — same shape the Rust registrations
+    // produced, just with `core.rvn` as the source of truth.
+    //
+    // The `Hash → Hashable` deprecation alias is re-established by
+    // `fixup_bootstrapped_stdlib_modules` via its TYPE_ALIASES table
+    // (Hash is also a TRAIT name; Hashable is the Ruby-naming
+    // canonical mixin in library/std/hash/src/lib.rvn).
 
     // Register built-in functions. `IoError` is registered below
     // as `DefKind::Enum`, so the type reference here uses
