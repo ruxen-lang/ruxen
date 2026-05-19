@@ -55,6 +55,21 @@ class Signal
   end
 end
 
+# Phase D transition shims for the three Rust-side free fns deleted
+# from `compiler/riven_core/src/resolve/stdlib/mod.rs`. Existing
+# fixtures call `sleep(d)` / `signal_install_sigint()` /
+# `signal_received_sigint()` via `use std.thread.sleep` etc.; these
+# bare entries keep them resolving until a follow-up sweep migrates
+# call sites to `Thread.sleep` / `Signal.install_sigint` / …
+lib "runtime/time.c"
+  def sleep as "riven_thread_sleep_duration"(d: &Duration) -> ()
+end
+
+lib "runtime/signal.c"
+  def signal_install_sigint as "riven_signal_install_sigint"() -> ()
+  def signal_received_sigint as "riven_signal_received_sigint"() -> Int
+end
+
 class ThreadId
 end
 

@@ -13,8 +13,6 @@
 //! `result.rs`).  The internal section banners below already mark the cut
 //! lines.
 
-use std::collections::HashMap;
-
 use crate::hir::types::Ty;
 use crate::lexer::token::Span;
 use crate::parser::ast::Visibility;
@@ -199,139 +197,16 @@ pub(super) fn register_all(r: &mut Resolver) {
     // alias is no longer needed; the .rvn signature spells the Result
     // out as `Result[String, IoError]` directly.
 
-    let builtin_fns = [
-        // std::io free fns (puts, eputs, print, println, eprintln,
-        // read_line, stdin, stdout, stderr) were here. Wave 2 (#06.8)
-        // migrated all nine to library/std/io/src/lib.rvn as a
-        // `lib "riven_runtime"` block. The println / eprintln aliases
-        // (sharing the riven_puts / riven_eputs C symbols with
-        // puts / eputs) are preserved verbatim in the .rvn lib block.
-        // std::env entries (args, get, vars, current_dir) were here.
-        //
-        // Wave 2 (#06.8): migrated to `library/std/env/src/lib.rvn`.
-        // The `std.env` module namespace is still assembled below
-        // (with empty items) and populated by
-        // `fixup_bootstrapped_stdlib_modules` after the bootstrap
-        // merge so `use std.env.{...}` keeps tokenising.
-        // std::fs free fns (read_to_string, write, exists, is_file,
-        // is_dir, read_dir, metadata, remove_file, create_dir,
-        // create_dir_all, rename, copy, remove_dir_all, canonicalize,
-        // write_atomic, read_link, symlink) were here. Wave 2 (#06.8)
-        // migrated all seventeen to library/std/fs/src/lib.rvn as a
-        // `lib "riven_runtime"` block. The C symbols (`riven_fs_*`)
-        // are unchanged.
-        // `exit(code) -> Never` was here. Wave 2 (#06.8) migrated to
-        // library/std/process/src/lib.rvn (`lib "riven_runtime" def exit
-        // as "riven_process_exit"(code: Int) -> Never`). The FFI alias
-        // map populated during MIR lowering rewrites the callee to the
-        // C symbol BEFORE codegen consults runtime_table.
-        // std::time — Phase 3 / #06.5. `unix_ns` is wall-clock
-        // (nanoseconds since 1970-01-01 UTC) and stays exposed as a
-        // bare Int-returning free-fn until a `SystemTime` class lands.
-        // The previously-exposed monotonic `now_ns()` free-fn was
-        // removed in #06.5 T5.5 once `Instant.now` + `Instant.elapsed`
-        // covered every use case. The C symbol `riven_time_now_ns` is
-        // still linked from the runtime (it is the implementation
-        // behind `riven_instant_now`); it just is not reachable from
-        // Riven user code.
-        // `unix_ns` was here — Wave 2 (#06.8) migrated to
-        // library/std/time/src/lib.rvn (lib block with c_symbol alias
-        // to riven_time_unix_ns).
-        // std::thread — Phase 2 stdlib (#06.5 T4). Free fn
-        // `sleep(&Duration)` is the Duration-typed wrapper around
-        // the existing `Thread.sleep(int)` static method. Both
-        // surfaces coexist intentionally: `Thread.sleep` is a
-        // bare-int convenience; `std.thread.sleep(Duration.from_*)`
-        // is the typed surface that integrates with `Instant`.
-        (
-            "sleep",
-            vec![ParamInfo {
-                name: "d".into(),
-                ty: Ty::Ref(Box::new(Ty::Class {
-                    name: "Duration".to_string(),
-                    generic_args: vec![],
-                })),
-                auto_assign: false,
-            }],
-            Ty::Unit,
-        ),
-        // std::path — Phase 3 was here.
-        //
-        // Wave 2 (#06.8): migrated to `library/std/path/src/lib.rvn`.
-        // The five `path_*` free fns + their `riven_path_*` aliases
-        // now live in the .rvn file as a `lib "riven_runtime"` block.
-        // The `std.path` module namespace is still assembled below
-        // (with empty items) and populated by
-        // `fixup_bootstrapped_stdlib_modules` after the bootstrap
-        // merge so `use std.path.{...}` keeps tokenising.
-        // std::process — the flat `process_run(cmd, args) -> Int`
-        // free-fn previously exposed here was removed in #06.5 T5.5
-        // once `Command.new(cmd).args(args).status` covered every use
-        // case. The C symbol `riven_process_run` is still linked from
-        // the runtime (it is the implementation behind
-        // `riven_command_status`); it just is not reachable from
-        // Riven user code. See docs/specs/stdlib/process.spec.md.
-        // std::net — Phase 2 #06.5 T5: class-only surface. The flat
-        // tcp_* free fns previously exposed here (tcp_connect/listen/
-        // accept/read/write/close) were removed when the typed
-        // TcpListener / TcpStream wrappers shipped — see
-        // docs/specs/stdlib/net.spec.md C16 for the rationale and the
-        // `flat_tcp_free_fns_removed_from_resolver` pin test that
-        // guards this surface against a regression. The C runtime
-        // symbols (riven_tcp_connect/...) are still linked and reused
-        // internally by the class methods; they just aren't reachable
-        // from Riven user code.
-        // std::signal — cooperative graceful-shutdown surface for
-        // long-running programs (servers, daemons, REPLs).
-        // `install_sigint` registers a handler that sets an atomic
-        // flag; `received_sigint` polls it.  Blocking syscalls
-        // (`tcp_accept`, `tcp_read`, …) return EINTR / `-1` when
-        // the signal lands mid-call so cooperative loops can
-        // notice and break.  No SIGTERM / SIGHUP coverage in v1.
-        ("signal_install_sigint", vec![], Ty::Unit),
-        (
-            // Returns Int (0 or 1) for safe codegen — the
-            // underlying C helper returns `int64_t`.  Callers
-            // pattern this as `if signal_received_sigint != 0`.
-            "signal_received_sigint",
-            vec![],
-            Ty::Int,
-        ),
-        // std::rand — Phase 2 #06.5 T8 was here.
-        //
-        // Wave 2 (#06.8): migrated to `library/std/rand/src/lib.rvn`. The
-        // `random_bytes` / `random_u64` / `random_fill` signatures and
-        // their `c_symbol` aliases (`riven_rand_random_bytes`, …) now
-        // live in the .rvn file as `lib "riven_runtime" def NAME as
-        // "C-SYMBOL"(…) -> …` decls, processed by the bootstrap loader
-        // before the user's program is resolved. The `std.rand` module
-        // namespace is still assembled below (with empty items) and
-        // populated by [`Resolver::fixup_bootstrapped_stdlib_modules`]
-        // after the bootstrap merge so `use std.rand.{random_bytes, …}`
-        // keeps working without flag-day coordination.
-    ];
-
-    let mut builtin_fn_ids = HashMap::new();
-    for (name, params, ret_ty) in builtin_fns {
-        let id = r.symbols.define(
-            name.to_string(),
-            DefKind::Function {
-                signature: FnSignature {
-                    self_mode: None,
-                    is_class_method: false,
-                    is_async: false,
-                    generic_params: vec![],
-                    params,
-                    return_ty: ret_ty,
-                    c_symbol: None,
-                },
-            },
-            Visibility::Public,
-            span.clone(),
-        );
-        r.scopes.insert(name.to_string(), id);
-        builtin_fn_ids.insert(name.to_string(), id);
-    }
+    // Phase D of #06.95 deleted the last three Rust-side builtin
+    // free fns (`sleep`, `signal_install_sigint`,
+    // `signal_received_sigint`). Their .rvn equivalents live in
+    // `library/std/sync/src/lib.rvn` — `Thread.sleep` / `Signal.*`
+    // class methods plus bare-fn transition shims for back-compat.
+    // Every other historical builtin (io / env / fs / process /
+    // time / path / rand entries) migrated during Wave 2 (#06.8).
+    // The `builtin_fn_ids` map is gone; modules below start with
+    // empty `items` and `fixup_bootstrapped_stdlib_modules`
+    // populates them from the bootstrap-loaded prelude scope.
 
     // IoError tagged enum + IoErrorKind sibling enum were here.
     // Wave 2 (#06.8) followup moved BOTH to library/std/io/src/lib.rvn.
@@ -572,11 +447,14 @@ pub(super) fn register_all(r: &mut Resolver) {
     // join surface (class methods), the former is the typed
     // free-function counterpart to `Thread.sleep(int)`. A future
     // refactor may consolidate the two namespaces.
+    // Phase D of #06.95: `sleep` moved to library/std/sync/src/lib.rvn
+    // (both as `Thread.sleep` class method and a bare-fn transition
+    // shim). thread_module_id starts with empty items; the resolver's
+    // module-population path picks up the bootstrap-loaded DefId for
+    // `sleep` from the prelude scope.
     let thread_module_id = r.symbols.define(
         "thread".to_string(),
-        DefKind::Module {
-            items: vec![builtin_fn_ids["sleep"]],
-        },
+        DefKind::Module { items: vec![] },
         Visibility::Public,
         span.clone(),
     );
@@ -603,14 +481,13 @@ pub(super) fn register_all(r: &mut Resolver) {
         Visibility::Public,
         span.clone(),
     );
+    // Phase D of #06.95: signal_install_sigint / signal_received_sigint
+    // moved to library/std/sync/src/lib.rvn (both as `Signal.*` class
+    // methods and bare-fn transition shims). signal_id starts with
+    // empty items.
     let signal_id = r.symbols.define(
         "signal".to_string(),
-        DefKind::Module {
-            items: vec![
-                builtin_fn_ids["signal_install_sigint"],
-                builtin_fn_ids["signal_received_sigint"],
-            ],
-        },
+        DefKind::Module { items: vec![] },
         Visibility::Public,
         span.clone(),
     );

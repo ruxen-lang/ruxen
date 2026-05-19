@@ -328,6 +328,16 @@ impl Resolver {
                     "Waker",
                 ],
             ),
+            // Phase D — `sleep` lives in library/std/sync/src/lib.rvn
+            // as both a `Thread.sleep` class method and a bare-fn
+            // transition shim. The std.thread submodule re-exports
+            // the bare shim so `use std.thread.sleep` keeps working.
+            ("thread", &["sleep"]),
+            // Phase D — `signal_install_sigint` /
+            // `signal_received_sigint` live in
+            // library/std/sync/src/lib.rvn as both `Signal.*` class
+            // methods and bare-fn transition shims.
+            ("signal", &["signal_install_sigint", "signal_received_sigint"]),
         ];
 
         let Some(std_id) = self.scopes.lookup_type("std") else {
