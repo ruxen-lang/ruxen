@@ -323,183 +323,87 @@ pub(super) fn register_all(r: &mut Resolver) {
     r.scopes.insert_type("std".to_string(), std_id);
     r.type_registry.insert("std".to_string(), std_id);
 
-    // Register type constructors in the value scope so Array.new, String.from, etc. resolve.
-    // Per docs/specs/syntax/ruby-naming.spec.md the user-facing names are
-    // Array / Map / Set / Shared / SharedSync; the legacy names
-    // (Vec, HashMap, HashSet, Rc, Arc) are retained as aliases.
-    let type_constructors = [
-        (
-            "Array",
-            Ty::Array(Box::new(Ty::TypeParam {
-                name: "T".to_string(),
-                bounds: vec![],
-            })),
-        ),
-        // Legacy `Vec[T]` constructor alias — same `Ty::Array` repr.
-        (
-            "Vec",
-            Ty::Array(Box::new(Ty::TypeParam {
-                name: "T".to_string(),
-                bounds: vec![],
-            })),
-        ),
-        (
-            "Map",
-            Ty::Map(
-                Box::new(Ty::TypeParam {
-                    name: "K".to_string(),
-                    bounds: vec![],
-                }),
-                Box::new(Ty::TypeParam {
-                    name: "V".to_string(),
-                    bounds: vec![],
-                }),
-            ),
-        ),
-        // Legacy `HashMap[K, V]` constructor alias — same `Ty::Map` repr.
-        (
-            "HashMap",
-            Ty::Map(
-                Box::new(Ty::TypeParam {
-                    name: "K".to_string(),
-                    bounds: vec![],
-                }),
-                Box::new(Ty::TypeParam {
-                    name: "V".to_string(),
-                    bounds: vec![],
-                }),
-            ),
-        ),
-        (
-            "Set",
-            Ty::Set(Box::new(Ty::TypeParam {
-                name: "T".to_string(),
-                bounds: vec![],
-            })),
-        ),
-        // Legacy `HashSet[T]` alias — same `Ty::Set` representation.
-        // Lets `HashSet.new` / `HashSet.with_capacity(_)` resolve in
-        // the value scope alongside `Set.new`.
-        (
-            "HashSet",
-            Ty::Set(Box::new(Ty::TypeParam {
-                name: "T".to_string(),
-                bounds: vec![],
-            })),
-        ),
-        ("String", Ty::String),
-        (
-            "Thread",
-            Ty::Class {
-                name: "Thread".to_string(),
-                generic_args: vec![],
-            },
-        ),
-        // Phase 2 stdlib (#06.5 T4): Duration / Instant value-scope
-        // type constructors. Registering them here lets
-        // `Duration.from_secs(5)` / `Instant.now()` resolve the
-        // receiver as a class identifier (typeck::infer promotes it
-        // to the corresponding class Ty, then the static-ctor fast
-        // path in mir/lower/expr/method_call.rs handles dispatch).
-        (
-            "Duration",
-            Ty::Class {
-                name: "Duration".to_string(),
-                generic_args: vec![],
-            },
-        ),
-        (
-            "Instant",
-            Ty::Class {
-                name: "Instant".to_string(),
-                generic_args: vec![],
-            },
-        ),
-        // Phase 2 #06.5 T5: TcpListener / TcpStream value-scope type
-        // constructors. Registering them here lets `TcpListener.bind(
-        // &addr)` / `TcpStream.connect(&addr)` resolve the receiver as
-        // a class identifier (typeck::infer promotes it to the
-        // corresponding class Ty, then the static-ctor fast path in
-        // mir/lower/expr/method_call.rs dispatches to
-        // `TcpListener_bind` / `TcpStream_connect`).
-        (
-            "TcpListener",
-            Ty::Class {
-                name: "TcpListener".to_string(),
-                generic_args: vec![],
-            },
-        ),
-        (
-            "TcpStream",
-            Ty::Class {
-                name: "TcpStream".to_string(),
-                generic_args: vec![],
-            },
-        ),
-        // Phase 2 #06.5 T6: BufReader[R] / BufWriter[W] value-scope
-        // type constructors. Registering them here lets
-        // `BufReader.new(f)` resolve the receiver to the class Ty
-        // (with a fresh inference variable for R, pinned by the inner
-        // arg's type at typeck). The static-ctor fast path in
-        // mir/lower/expr/method_call.rs picks `_new_file` vs
-        // `_new_tcp` from args[0].ty.
-        (
-            "BufReader",
-            Ty::Class {
-                name: "BufReader".to_string(),
-                generic_args: vec![Ty::TypeParam {
-                    name: "R".to_string(),
-                    bounds: vec![],
-                }],
-            },
-        ),
-        (
-            "BufWriter",
-            Ty::Class {
-                name: "BufWriter".to_string(),
-                generic_args: vec![Ty::TypeParam {
-                    name: "W".to_string(),
-                    bounds: vec![],
-                }],
-            },
-        ),
-        (
-            "Mutex",
-            Ty::Class {
-                name: "Mutex".to_string(),
-                generic_args: vec![Ty::TypeParam {
-                    name: "T".to_string(),
-                    bounds: vec![],
-                }],
-            },
-        ),
-        // Ruby-naming (TEC-13 / §10a): `SharedSync` is canonical.
-        // `Arc` is the backward-compat alias — both type_constructor
-        // Variables produce `Ty::Class { name: "SharedSync" }` so
-        // `Arc.new(5)` and `SharedSync.new(5)` both return the same
-        // type, and downstream `let x: SharedSync[Int] = …`
-        // annotations match either constructor.
-        (
-            "SharedSync",
-            Ty::Class {
-                name: "SharedSync".to_string(),
-                generic_args: vec![Ty::TypeParam {
-                    name: "T".to_string(),
-                    bounds: vec![],
-                }],
-            },
-        ),
-        (
-            "Arc",
-            Ty::Class {
-                name: "SharedSync".to_string(),
-                generic_args: vec![Ty::TypeParam {
-                    name: "T".to_string(),
-                    bounds: vec![],
-                }],
-            },
-        ),
+    // Phase D-5 of #06.95: collapse the previously hand-spelled
+    // type_constructors table (~175 LOC, one tuple per type) into a
+    // small data-driven structure. The table registers each type
+    // NAME in the value scope as a `DefKind::Variable` so call sites
+    // like `Array.new(...)` / `String.from(...)` / `Command.new(...)`
+    // resolve the receiver to a class-id-like sentinel value. The
+    // typeck path then promotes the Variable to the corresponding
+    // `Ty::Class` / `Ty::Array` / … and the static-ctor fast path in
+    // `mir/lower/expr/method_call.rs` handles dispatch.
+    //
+    // Three shape categories:
+    //   - Container builtins (`Array`/`Vec`, `Map`/`HashMap`,
+    //     `Set`/`HashSet`) carry a primitive Ty.
+    //   - `String` carries `Ty::String`.
+    //   - Every other class name carries `Ty::Class { name, ... }`
+    //     with one or zero generic_args.
+    //
+    // Future cleanup (separate prompt): teach
+    // `register_top_level_type_with_ffi`'s Class arm to insert into
+    // the value scope alongside the type scope, eliminating the
+    // need for the SIMPLE_CLASS_CTORS list entirely (the class .rvn
+    // declaration would self-register both bindings).
+    let array_ty = Ty::Array(Box::new(Ty::TypeParam {
+        name: "T".to_string(),
+        bounds: vec![],
+    }));
+    let map_ty = Ty::Map(
+        Box::new(Ty::TypeParam {
+            name: "K".to_string(),
+            bounds: vec![],
+        }),
+        Box::new(Ty::TypeParam {
+            name: "V".to_string(),
+            bounds: vec![],
+        }),
+    );
+    let set_ty = Ty::Set(Box::new(Ty::TypeParam {
+        name: "T".to_string(),
+        bounds: vec![],
+    }));
+    // (name, generic_param_names) — classes with optional one-arg
+    // generics. `Arc` is an alias for `SharedSync`, so its
+    // value-scope Variable carries the SharedSync type identity.
+    const SIMPLE_CLASS_CTORS: &[(&str, &[&str])] = &[
+        ("Thread", &[]),
+        ("Duration", &[]),
+        ("Instant", &[]),
+        ("TcpListener", &[]),
+        ("TcpStream", &[]),
+        ("BufReader", &["R"]),
+        ("BufWriter", &["W"]),
+        ("Mutex", &["T"]),
+        ("SharedSync", &["T"]),
     ];
+    fn class_ty(name: &str, gens: &[&str]) -> Ty {
+        Ty::Class {
+            name: name.to_string(),
+            generic_args: gens
+                .iter()
+                .map(|g| Ty::TypeParam {
+                    name: g.to_string(),
+                    bounds: vec![],
+                })
+                .collect(),
+        }
+    }
+    let type_constructors: Vec<(&str, Ty)> = {
+        let mut v: Vec<(&str, Ty)> = vec![
+            ("Array", array_ty.clone()),
+            ("Vec", array_ty),
+            ("Map", map_ty.clone()),
+            ("HashMap", map_ty),
+            ("Set", set_ty.clone()),
+            ("HashSet", set_ty),
+            ("String", Ty::String),
+        ];
+        for (name, gens) in SIMPLE_CLASS_CTORS {
+            v.push((name, class_ty(name, gens)));
+        }
+        v
+    };
     for (name, ty) in type_constructors {
         let id = r.symbols.define(
             name.to_string(),
