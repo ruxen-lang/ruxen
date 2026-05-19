@@ -528,7 +528,8 @@ mod tests {
         assert_eq!(
             runtime_name("String_clone").unwrap(),
             "riven_string_from",
-            "String_clone must remain in runtime_table — see test comment"
+            "String_clone must stay in lang_intrinsics — E0722 keeps it \
+             out of string.rvn (see lang_intrinsics doc comment)"
         );
     }
 

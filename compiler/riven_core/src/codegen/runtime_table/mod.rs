@@ -68,8 +68,12 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         //   `iter.collect[String]()` lowering, not by a surface
         //   `.from_iter(...)` method call — there's no `.rvn`
         //   class-body decl to attach it to.
-        "String_clone" => return Ok("riven_string_from"),
-        "String_from_iter" => return Ok("riven_string_from_iter"),
+        // `String_clone` + `String_from_iter` moved to
+        // `codegen::lang_intrinsics` in #06.95 Phase E Slice B.5 —
+        // both are compiler-internal mangled names (one is the
+        // E0722-locked alias for `String.from`, one is the
+        // MIR-synthesised `iter.collect[String]()` callee) that
+        // have no surface method to attach to in string.rvn.
         // &str methods.
         "&str_split" => return Ok("riven_str_split"),
         "&str_parse_uint" => return Ok("riven_str_parse_uint"),
@@ -92,8 +96,9 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "&str_parse_int" => return Ok("riven_string_parse_int"),
         "&str_parse_float" => return Ok("riven_string_parse_float"),
         "&str_to_string" => return Ok("riven_string_to_string"),
-        // `&str → &str` is a true semantic identity, not a stub.
-        "&str_as_str" => return Ok("riven_noop_passthrough"),
+        // `&str_as_str` moved to `codegen::lang_intrinsics` in Slice A
+        // (it's an identity passthrough, not a `&str` method); the
+        // delegation at the bottom of this fn handles it now.
         // I/O type methods (Stdin/Stdout/Stderr/IoError).
         // Phase 2 #06.5: `IoError` is a tagged enum (see runtime.c
         // for the wire format). The previous noop-passthrough worked
@@ -178,8 +183,12 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // accessor + per-type precision helpers.
         "Formatter_new_with_spec" => return Ok("riven_fmt_formatter_new_with_spec"),
         "Formatter_precision" => return Ok("riven_fmt_formatter_precision"),
-        "Float_to_string_prec" => return Ok("riven_float_to_string_prec"),
-        "String_truncate_chars" => return Ok("riven_string_truncate_chars"),
+        // `Float_to_string_prec` and `String_truncate_chars` moved
+        // to `codegen::lang_intrinsics` in #06.95 Phase E Slice B.5
+        // — they are MIR-synthesised callees from
+        // `mir/lower/derive.rs:85-106` (the `:.<n>` precision format
+        // path), not surface methods. No .rvn class shell can attach
+        // to them. The lang_intrinsics arms now own the mapping.
         // `Thread_sleep -> riven_thread_sleep_ns` is the bare-int
         // convenience overload (`Thread.sleep(0)`). Stays in
         // runtime_table — see the comment on `class Thread` in

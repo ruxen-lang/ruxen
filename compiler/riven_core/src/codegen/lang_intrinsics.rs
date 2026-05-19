@@ -64,6 +64,34 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "yield" => return Ok("riven_noop_passthrough"),
         // `&str → &str` is a true semantic identity, not a stub.
         "&str_as_str" => return Ok("riven_noop_passthrough"),
+        // Compiler-internal MIR-synthesised callees emitted by the
+        // derive-Display lowering in `mir/lower/derive.rs:85-106`.
+        // These are NOT surface methods — they are precision /
+        // truncation helpers the `:.<n>` format spec compiler
+        // path inserts into the generated `_fmt` body. The user
+        // never types `Float.to_string_prec(...)` directly, so
+        // there's no place in a .rvn class shell to attach them.
+        // They belong with the other compiler-internal mangled
+        // names (Fn(...)_call, super, yield) rather than in any
+        // package's lib block.
+        "Float_to_string_prec" => return Ok("riven_float_to_string_prec"),
+        "String_truncate_chars" => return Ok("riven_string_truncate_chars"),
+        // `String_from_iter` is consumed by the
+        // `iter.collect[String]()` MIR lowering, not a surface
+        // `.from_iter(...)` method call — same MIR-synthesised
+        // category as the precision helpers above. No .rvn
+        // class-body decl can attach to it (it has no surface
+        // method name on `String`).
+        "String_from_iter" => return Ok("riven_string_from_iter"),
+        // `String_clone` aliases the SAME C symbol as `String.from`
+        // (`riven_string_from`) but with an instance-method
+        // receiver shape. Two FFI decls aliasing the same C symbol
+        // with different wire shapes trip the E0722 conflict check
+        // in `register_class_lib_method`. Until that check is
+        // relaxed to compare at the wire level
+        // (post-instance-self-prepend), this stays as an explicit
+        // lang_intrinsics arm.
+        "String_clone" => return Ok("riven_string_from"),
         _ => {}
     }
 
