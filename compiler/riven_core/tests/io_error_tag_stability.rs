@@ -1,13 +1,19 @@
 //! Pin test for the `IoError` variant-tag stability contract.
 //!
-//! The runtime (`library/runtime/runtime.c`) and the
-//! resolver (`compiler/riven_core/src/resolve/stdlib/mod.rs`) co-document the
-//! tag indices for each `IoError` variant.  If they drift, runtime-
+//! The runtime (`library/runtime/io/io_error.c`) and the self-hosted
+//! stdlib source (`library/std/src/io.rvn`) co-document the tag
+//! indices for each `IoError` variant. If they drift, runtime-
 //! returned errors will be misinterpreted at the typeck layer and
-//! `match` arms will silently miss.  This test grep-extracts the
+//! `match` arms will silently miss. This test grep-extracts the
 //! `RIVEN_IO_ERROR_*` defines from the C source and the
-//! `io_unit_variants` table from the resolver, then asserts each
-//! variant has the same numeric tag in both places.
+//! declaration order from the `enum IoError ... end` block in the
+//! .rvn (each variant's tag = its zero-based position), then
+//! asserts each variant has the same numeric tag in both places.
+//!
+//! Wave 2 (#06.8) moved the IoError + IoErrorKind enums from
+//! `compiler/riven_core/src/resolve/stdlib/mod.rs` into `io.rvn` —
+//! the resolver-side scan target moved with them. The runtime side
+//! is unchanged.
 
 use std::fs;
 use std::path::PathBuf;
@@ -40,9 +46,9 @@ fn to_camel(s: &str) -> String {
 }
 
 #[test]
-fn io_error_variant_tags_match_runtime_and_resolver() {
+fn io_error_variant_tags_match_runtime_and_stdlib_source() {
     let runtime = read("library/runtime/io/io_error.c");
-    let resolver = read("compiler/riven_core/src/resolve/stdlib/mod.rs");
+    let stdlib_source = read("library/std/src/io.rvn");
 
     // Collect (Variant, tag) pairs from the runtime #defines.
     let mut runtime_tags: Vec<(String, usize)> = Vec::new();
@@ -60,92 +66,49 @@ fn io_error_variant_tags_match_runtime_and_resolver() {
         }
     }
 
-    // Collect (Variant, tag) pairs from the resolver table.
-    // Scan for lines like `("NotFound", 0),` inside the
-    // `io_unit_variants` / `io_struct_variants` arrays. `Other` is
-    // defined out-of-line (it predates the struct-variants table), so
-    // we pick it up via a `variant_idx: 8` sentinel — but we must
-    // skip the IoErrorKind table (which also contains `Other` at
-    // idx 8) to avoid duplicate entries.
-    //
-    // Phase 2 #06.5 T1: the curated `IoError` variant list grew from
-    // 9 to 20. Resolver scan keeps the KNOWN-list filter so unrelated
-    // numeric tuples elsewhere in resolve/mod.rs don't slip in.
-    const KNOWN: &[&str] = &[
-        "NotFound",
-        "PermissionDenied",
-        "AlreadyExists",
-        "Interrupted",
-        "WouldBlock",
-        "InvalidInput",
-        "UnexpectedEof",
-        "BrokenPipe",
-        "Other",
-        "ConnectionRefused",
-        "ConnectionReset",
-        "ConnectionAborted",
-        "NotConnected",
-        "AddrInUse",
-        "AddrNotAvailable",
-        "InvalidData",
-        "TimedOut",
-        "WriteZero",
-        "Unsupported",
-        "OutOfMemory",
-    ];
-    let mut resolver_tags: Vec<(String, usize)> = Vec::new();
-    let mut in_io_error_kind_block = false;
-    for line in resolver.lines() {
-        // Crude bracket scan: the IoErrorKind variants table is
-        // introduced by the comment `IoErrorKind` is a sibling enum…
-        // — we toggle on the variable name `io_error_kind_variants`
-        // and off on the closing `];` so its entries don't double-
-        // count as IoError variants.
-        if line.contains("io_error_kind_variants") {
-            in_io_error_kind_block = true;
-        }
-        if in_io_error_kind_block && line.trim() == "];" {
-            in_io_error_kind_block = false;
-            continue;
-        }
-        if in_io_error_kind_block {
-            continue;
-        }
-
+    // Stdlib-source side: walk the `enum IoError ... end` block in
+    // io.rvn and assign each non-comment, non-blank line its
+    // zero-based position as the tag. Variant lines may be bare
+    // identifiers (unit variants) or `Name(payload)` /
+    // `Name { payload }` (struct/tuple variants); we strip everything
+    // from the first `(` / `{` / whitespace to get the variant name.
+    let mut stdlib_tags: Vec<(String, usize)> = Vec::new();
+    let mut in_block = false;
+    let mut next_tag: usize = 0;
+    for line in stdlib_source.lines() {
         let trimmed = line.trim();
-        if let Some(start) = trimmed.find("(\"") {
-            let rest = &trimmed[start + 2..];
-            if let Some(end_quote) = rest.find('"') {
-                let name = &rest[..end_quote];
-                let after = &rest[end_quote + 1..];
-                if let Some(comma) = after.find(',') {
-                    let tag_str = after[comma + 1..]
-                        .trim_start()
-                        .trim_end_matches(|c: char| !c.is_ascii_digit())
-                        .trim();
-                    if let Ok(tag) = tag_str.parse::<usize>() {
-                        if KNOWN.contains(&name) && !resolver_tags.iter().any(|(n, _)| n == name) {
-                            resolver_tags.push((name.to_string(), tag));
-                        }
-                    }
-                }
-            }
+        if trimmed.starts_with("enum IoError") {
+            in_block = true;
+            next_tag = 0;
+            continue;
         }
-    }
-    // `Other` is defined out-of-line in the resolver (struct variant
-    // with a single payload field); pick it up via its `variant_idx`
-    // sentinel since it never appears in the `io_unit_variants` or
-    // `io_struct_variants` tables.
-    for line in resolver.lines() {
-        if line.contains("variant_idx: 8") && !resolver_tags.iter().any(|(n, _)| n == "Other") {
-            resolver_tags.push(("Other".to_string(), 8));
+        if !in_block {
+            continue;
         }
+        if trimmed == "end" {
+            in_block = false;
+            break;
+        }
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let name: &str = trimmed
+            .split(|c: char| c == '(' || c == '{' || c.is_whitespace())
+            .next()
+            .unwrap_or("");
+        assert!(
+            name.chars().next().map_or(false, |c| c.is_ascii_uppercase()),
+            "unexpected line inside `enum IoError` body: {:?}",
+            line
+        );
+        stdlib_tags.push((name.to_string(), next_tag));
+        next_tag += 1;
     }
 
     runtime_tags.sort_by_key(|(_, t)| *t);
-    resolver_tags.sort_by_key(|(_, t)| *t);
+    stdlib_tags.sort_by_key(|(_, t)| *t);
 
-    // The variant set must match 1:1 across runtime + resolver.
+    // The variant set must match 1:1 across runtime + stdlib source.
     assert_eq!(
         runtime_tags.len(),
         20,
@@ -153,13 +116,13 @@ fn io_error_variant_tags_match_runtime_and_resolver() {
         runtime_tags
     );
     assert_eq!(
-        resolver_tags.len(),
+        stdlib_tags.len(),
         20,
-        "expected 20 IoError variants in resolver; got {:?}",
-        resolver_tags
+        "expected 20 IoError variants in library/std/src/io.rvn; got {:?}",
+        stdlib_tags
     );
     assert_eq!(
-        runtime_tags, resolver_tags,
-        "IoError variant ↔ tag mapping drifted between runtime and resolver"
+        runtime_tags, stdlib_tags,
+        "IoError variant ↔ tag mapping drifted between runtime and stdlib source"
     );
 }

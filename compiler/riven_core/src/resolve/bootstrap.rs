@@ -47,8 +47,17 @@ use std::path::{Path, PathBuf};
 /// than in the Rust `resolve/stdlib/mod.rs` registrations.
 ///
 /// Paths are relative to `<sysroot>/library/std/src/`.
+/// Files are loaded in the order listed. Cross-file type dependencies
+/// must be respected: a `.rvn` that references `IoError` in a lib
+/// block (e.g. `def foo(...) -> Result[T, IoError]`) needs `io.rvn`
+/// — which owns the enum — to come earlier in the list. The
+/// bootstrap merge processes each file with Pass-1 forward-decl AND
+/// full lib-type resolution in the same loop, so within-list order
+/// matters.
 pub const BOOTSTRAP_FILES: &[&str] = &[
     "_bootstrap_smoke.rvn",
+    // io.rvn ships IoError + IoErrorKind which rand/env/fs reference.
+    "io.rvn",
     "rand.rvn",
     "path.rvn",
     "env.rvn",
@@ -59,7 +68,6 @@ pub const BOOTSTRAP_FILES: &[&str] = &[
     "process.rvn",
     "time.rvn",
     "fs.rvn",
-    "io.rvn",
 ];
 
 /// Production entry point: parse every stdlib file in

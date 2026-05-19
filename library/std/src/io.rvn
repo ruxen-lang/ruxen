@@ -8,11 +8,12 @@
 ##   methods still flow through the static-ctor + runtime_table
 ##   dispatch until T#20 / T#21 land.
 ##
+## IoError + IoErrorKind: migrated in Wave 2 (#06.8) followup commit.
+## Their variant-tag stability is pinned by io_error_tag_stability,
+## which now scans this file for the declaration order (each variant's
+## tag = its zero-based position in the enum body).
+##
 ## Intentionally still in Rust (`compiler/riven_core/src/resolve/stdlib/mod.rs`):
-## - IoError tagged enum + IoErrorKind sibling enum (their variant-
-##   tag stability is pinned by io_error_tag_stability — migrating
-##   these requires retargeting the pin test, same as the Shutdown
-##   move from net's migration).
 ## - SeekFrom struct-variant enum (pinned by file_class_layout_stability).
 ##
 ## println shares the riven_puts C symbol with puts (same trailing-
@@ -38,6 +39,60 @@ class BufReader[R]
 end
 
 class BufWriter[W]
+end
+
+## IoError variants — variant order IS the load-bearing contract
+## against `RIVEN_IO_ERROR_*` in library/runtime/io/io_error.c.
+## DO NOT reorder. Append new variants at the END only. The
+## `io_error_tag_stability` pin test scans this enum's declaration
+## order (each variant's tag = its zero-based position).
+enum IoError
+  NotFound
+  PermissionDenied
+  AlreadyExists
+  Interrupted
+  WouldBlock
+  InvalidInput
+  UnexpectedEof
+  BrokenPipe
+  Other(message: String)
+  ConnectionRefused(message: String)
+  ConnectionReset(message: String)
+  ConnectionAborted(message: String)
+  NotConnected(message: String)
+  AddrInUse(message: String)
+  AddrNotAvailable(message: String)
+  InvalidData(message: String)
+  TimedOut(message: String)
+  WriteZero(message: String)
+  Unsupported(message: String)
+  OutOfMemory(message: String)
+end
+
+## IoErrorKind — sibling enum of 20 unit variants whose tag values
+## match IoError 1:1. Returned by `IoError.kind()`; lets user code
+## branch on the discriminant without inspecting the payload.
+enum IoErrorKind
+  NotFound
+  PermissionDenied
+  AlreadyExists
+  Interrupted
+  WouldBlock
+  InvalidInput
+  UnexpectedEof
+  BrokenPipe
+  Other
+  ConnectionRefused
+  ConnectionReset
+  ConnectionAborted
+  NotConnected
+  AddrInUse
+  AddrNotAvailable
+  InvalidData
+  TimedOut
+  WriteZero
+  Unsupported
+  OutOfMemory
 end
 
 lib "riven_runtime"
