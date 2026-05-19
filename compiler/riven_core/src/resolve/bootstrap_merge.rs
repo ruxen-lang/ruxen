@@ -71,6 +71,14 @@ impl Resolver {
         // in `resolve_child_in_def`.
         self.fixup_bootstrapped_stdlib_modules();
 
+        // #06.95 Phase A pre-flight: snapshot every mixin's lib_decls
+        // BEFORE Pass 1 so the Class arm can re-register them under
+        // any class that `include`s the mixin, regardless of source
+        // order between class and mixin. Walks both bootstrap and
+        // user programs so a user class can include a stdlib mixin
+        // (and vice versa).
+        self.collect_mixin_lib_decls(bootstrap_programs.iter().chain(std::iter::once(program)));
+
         // Two-pass approach:
         // Pass 1: Register all top-level type names (classes, structs, enums, traits)
         //         so that forward references work.

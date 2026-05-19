@@ -120,6 +120,24 @@ pub struct Resolver {
     /// last-wins redefinition semantics; only bootstrap is treated as
     /// anchoring.
     pub(super) merging_bootstrap: bool,
+
+    /// #06.95 Phase A pre-flight: snapshot of every mixin's
+    /// `lib_decls` keyed by mixin name. Populated by
+    /// [`collect_mixin_lib_decls`](Self::collect_mixin_lib_decls)
+    /// BEFORE Pass 1's per-item registration loop runs.
+    ///
+    /// Used by the `Class` arm of `register_top_level_type_with_ffi`
+    /// to re-register a mixin's FFI lib functions under the
+    /// INCLUDING CLASS's name. Without this, `class Thing; include
+    /// Adder; end` resolves `Thing.add_one(...)` at typeck (the
+    /// mixin's method surface is visible through include
+    /// propagation) but MIR's `ffi_alias_map` only carries
+    /// `Adder_add_one → <c-symbol>`. The call site builds
+    /// `Thing_add_one` from the receiver's class, the lookup
+    /// misses, and the linker fails with "undefined symbol
+    /// _Thing_add_one". Re-registering under `class.name` adds
+    /// the parallel `Thing_add_one → <c-symbol>` entry.
+    pub(super) mixin_lib_decls: HashMap<String, Vec<ast::LibDecl>>,
 }
 
 #[derive(Debug)]
@@ -149,6 +167,46 @@ impl Resolver {
             extern_symbol_table: HashMap::new(),
             pass1_class_lib_methods: HashMap::new(),
             merging_bootstrap: false,
+            mixin_lib_decls: HashMap::new(),
+        }
+    }
+
+    /// #06.95 Phase A pre-flight: walk every top-level item in
+    /// `programs` and snapshot each mixin's `lib_decls` into
+    /// `self.mixin_lib_decls`. Walks `Module` items recursively so
+    /// mixins declared inside a `module Foo ... end` are picked up.
+    ///
+    /// MUST run BEFORE Pass 1's registration loop so the `Class` arm
+    /// can re-register a mixin's lib decls under any class that
+    /// `include`s it, regardless of source-order between class and
+    /// mixin.
+    pub(super) fn collect_mixin_lib_decls<'a, I>(&mut self, programs: I)
+    where
+        I: IntoIterator<Item = &'a ast::Program>,
+    {
+        for program in programs {
+            Self::walk_items_for_mixins(&program.items, &mut self.mixin_lib_decls);
+        }
+    }
+
+    fn walk_items_for_mixins(
+        items: &[ast::TopLevelItem],
+        out: &mut HashMap<String, Vec<ast::LibDecl>>,
+    ) {
+        for item in items {
+            match item {
+                ast::TopLevelItem::Mixin(m) => {
+                    if !m.lib_decls.is_empty() {
+                        out.entry(m.name.clone())
+                            .or_default()
+                            .extend(m.lib_decls.iter().cloned());
+                    }
+                }
+                ast::TopLevelItem::Module(md) => {
+                    Self::walk_items_for_mixins(&md.items, out);
+                }
+                _ => {}
+            }
         }
     }
 }

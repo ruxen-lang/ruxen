@@ -336,6 +336,48 @@ impl Resolver {
                         });
                     }
                 }
+
+                // #06.95 Phase A pre-flight: for every `include Mixin`
+                // in this class's body, re-register the mixin's
+                // lib_decls under THIS class's name. The mixin's own
+                // registration (in the Mixin arm below) keys
+                // `Mixin_method → c-symbol` in ffi_alias_map. The MIR
+                // call site for `ThisClass.method(...)` builds the
+                // callee as `ThisClass_method`, so without a parallel
+                // entry the FFI alias rewrite misses and codegen
+                // emits a call to the unmangled name — link error
+                // at codegen time.
+                //
+                // The pre-pass at resolve_with_bootstrap start
+                // populated `self.mixin_lib_decls` with every mixin
+                // in scope (user + bootstrap), so this lookup is
+                // O(1) regardless of source order.
+                let included_lib_fns: Vec<ast::FfiFunction> = class
+                    .inner_impls
+                    .iter()
+                    .flat_map(|inner| {
+                        let mixin_name = inner.trait_name.segments.join(".");
+                        self.mixin_lib_decls
+                            .get(&mixin_name)
+                            .into_iter()
+                            .flat_map(|libs| libs.iter().flat_map(|lib| lib.functions.iter()))
+                            .cloned()
+                            .collect::<Vec<_>>()
+                    })
+                    .collect();
+                if !included_lib_fns.is_empty() {
+                    let mut hir_fns: Vec<HirFfiFunc> = Vec::new();
+                    for ffi_fn in &included_lib_fns {
+                        self.register_class_lib_method(id, &class.name, ffi_fn, &mut hir_fns);
+                    }
+                    if !hir_fns.is_empty() {
+                        ffi_libs.push(HirFfiLib {
+                            name: class.name.clone(),
+                            link_flags: Vec::new(),
+                            functions: hir_fns,
+                        });
+                    }
+                }
             }
             ast::TopLevelItem::Struct(s) => {
                 let struct_gp = self.collect_generic_param_infos(&s.generic_params);
