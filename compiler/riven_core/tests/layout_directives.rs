@@ -140,6 +140,50 @@ fn class_with_layout_flat_heap_struct_parses() {
 }
 
 #[test]
+fn class_with_layout_c_parses_and_resolves() {
+    // Task #27: `layout c` extended from struct bodies to class
+    // bodies. Parser captures `"C"` on ClassDef.layout (case-
+    // normalized per the struct-body convention at parser/classes.rs
+    // ~line 413). Resolver accepts cleanly — codegen wiring (flat
+    // repr-C layout for instances) lands in follow-up commits.
+    let program = parse_fixture("layout_c_class");
+    let classes: Vec<_> = program
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            TopLevelItem::Class(c) => Some(c),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(classes.len(), 1, "expected exactly one class");
+    let c = classes[0];
+    assert_eq!(c.name, "CLayoutDemo");
+    assert!(
+        c.layout.iter().any(|s| s == "C"),
+        "expected `C` in ClassDef.layout (case-normalized from `c`); got {:?}",
+        c.layout
+    );
+    assert_eq!(c.fields.len(), 2, "expected len + cap fields");
+
+    let result = Resolver::new().resolve(&program);
+    let errors: Vec<_> = result
+        .diagnostics
+        .iter()
+        .filter(|d| {
+            matches!(
+                d.level,
+                riven_core::diagnostics::DiagnosticLevel::Error
+            )
+        })
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "resolver should accept `class Foo layout c ... end` cleanly; got {:?}",
+        errors
+    );
+}
+
+#[test]
 fn duplicate_layout_tagged_enum_in_scope_emits_e0723() {
     // Two `enum E` declarations both carrying `layout tagged` in the
     // same module scope: the SECOND one is the rejected duplicate.

@@ -498,6 +498,23 @@ impl Parser {
             None
         };
 
+        // Spec — `docs/specs/types/mixin_vtables.spec.md` §B1.
+        // Optional `dispatch runtime` modifier. `dispatch` and `runtime`
+        // are NOT keywords — they lex as plain `Identifier`s. Recognise
+        // them contextually here: after the mixin's name + optional
+        // generics, before the (optional) `:` bounds list. The only legal
+        // tokens at this position otherwise are `Colon` / newline / `End`,
+        // so peeking for the identifier pair is unambiguous.
+        let dispatch_mode = if matches!(self.current_kind(), TokenKind::Identifier(n) if n == "dispatch")
+            && matches!(self.peek_kind(), TokenKind::Identifier(ref m) if m == "runtime")
+        {
+            self.advance(); // consume `dispatch`
+            self.advance(); // consume `runtime`
+            DispatchMode::Runtime
+        } else {
+            DispatchMode::Static
+        };
+
         let super_traits = if self.eat(TokenKind::Colon) {
             self.parse_trait_bounds()
         } else {
@@ -611,6 +628,7 @@ impl Parser {
             items,
             lib_decls,
             doc_comments,
+            dispatch_mode,
             span,
         }
     }
@@ -1001,12 +1019,30 @@ impl Parser {
                     // Field declaration — picks up current section visibility.
                     fields.push(self.parse_field_decl_with_vis(current_vis));
                 }
-                // ── #06.8 T0c: `layout flat_heap_struct` directive ──
-                // Marks the class as a flat heap struct (matches the
-                // `RivenFile` / `RivenTcpStream` runtime pattern). Wave 1
-                // is the parser+resolver marker only; the link-time
-                // layout-mismatch check (E0724) is intentionally
-                // unwired until a real stdlib class consumes it.
+                // ── `layout <kind>` directive (class-level) ──
+                //
+                // Two kinds today:
+                //
+                //   * `layout flat_heap_struct` — #06.8 T0c. Marks the
+                //     class as a flat heap struct (matches the
+                //     `RivenFile` / `RivenTcpStream` runtime pattern).
+                //     Wave 1 parser+resolver marker only; the link-time
+                //     layout-mismatch check (E0724) is reserved but
+                //     unwired.
+                //
+                //   * `layout c` — task #27 (extends `layout c` from
+                //     struct bodies, per ffi.spec.md §B8, to class
+                //     bodies). Same C-compatible-layout guarantee:
+                //     fields in declaration order, native alignment,
+                //     no reordering. Once codegen is wired, instances
+                //     of such classes are emitted as flat repr-C structs
+                //     (NOT opaque heap handles), so Riven method bodies
+                //     can read `self.<field>` directly from the same
+                //     wire layout C functions manipulate. Unlocks #19
+                //     (porting trivial C accessors to inline Riven).
+                //
+                // `packed` and `transparent` aren't (yet) meaningful on
+                // class bodies — defer until a class needs them.
                 TokenKind::Layout => {
                     self.advance();
                     match self.current_kind().clone() {
@@ -1014,16 +1050,18 @@ impl Parser {
                             self.advance();
                             if name == "flat_heap_struct" {
                                 layout.push("flat_heap_struct".to_string());
+                            } else if name.eq_ignore_ascii_case("c") {
+                                layout.push("C".to_string());
                             } else {
                                 self.error(&format!(
-                                    "expected `flat_heap_struct` after `layout` in class body, found `{}`",
+                                    "expected `flat_heap_struct` or `c` after `layout` in class body, found `{}`",
                                     name
                                 ));
                             }
                         }
                         other => {
                             self.error(&format!(
-                                "expected `flat_heap_struct` after `layout` in class body, found {:?}",
+                                "expected `flat_heap_struct` or `c` after `layout` in class body, found {:?}",
                                 other
                             ));
                         }
