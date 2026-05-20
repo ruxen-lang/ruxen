@@ -1,0 +1,28 @@
+## Two String-typed parameters compared via `==`. Before the fix in
+## task #22, both `s` and `needle` were typed `Ty::Class { name:
+## "String" }` (the resolve-pass anchored the user-side `class String`
+## onto the same DefId as the primitive `Ty::String` TypeAlias and then
+## stomped the kind to `DefKind::Class`). The codegen
+## `is_string_mir_ty` helper only recognised the canonical `Ty::String`
+## / `Ty::Str` forms, so the `Compare` emitter fell back to integer
+## pointer-eq for `s == needle`. Two byte-identical heap Strings then
+## compared unequal silently.
+
+def check_strings(s: String, needle: String) -> Int
+  if s == needle
+    1
+  else
+    0
+  end
+end
+
+def main
+  let a = String.from("hello")
+  let b = String.from("hello")
+  let r = check_strings(a, b)
+  if r == 1
+    puts "match"
+  else
+    puts "fail"
+  end
+end

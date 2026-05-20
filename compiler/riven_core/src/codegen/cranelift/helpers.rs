@@ -104,9 +104,33 @@ pub(super) fn is_string_typed_value(val: &MirValue, func: &MirFunction) -> bool 
 }
 
 /// Check if a MIR type is a string-like type.
+///
+/// Recognises the canonical primitive forms `Ty::String` / `Ty::Str` AND the
+/// bootstrap-class form `Ty::Class { name: "String", .. }` that the resolve
+/// pass produces for function parameters / fields whose annotation is
+/// `String`.
+///
+/// Why the second form exists: `register_builtins` (`resolve/stdlib/mod.rs`)
+/// inserts `String` as `DefKind::TypeAlias { target: Ty::String }`. The
+/// bootstrap merge then anchors the user-side `class String` declaration
+/// (`library/std/string/src/lib.rvn`) onto the same DefId so FFI methods
+/// (`String.from`, `String.new`, …) hang off it. The class-resolution pass
+/// in `resolve/items.rs::resolve_class` rewrites that DefId's `DefKind` from
+/// `TypeAlias` to `Class`, after which `resolve_type_expr` returns the
+/// `Ty::Class { name: "String", .. }` form for any `s: String` annotation.
+/// Inferred locals (`let x = String.from(...)`) still get `Ty::String` from
+/// the inference rules; only the annotation path hits the Class form.
+///
+/// This helper is the codegen-side normalisation: any consumer asking "is
+/// this value a string?" gets the right answer regardless of which form the
+/// resolve pass produced. Without it, the `Compare` emitter falls back to
+/// pointer-equality on `def check(s: String, needle: String)` style code —
+/// byte-identical strings compare unequal, silently breaking every URL
+/// match / header lookup / response comparison in real server code.
 pub(super) fn is_string_mir_ty(ty: &Ty) -> bool {
     match ty {
         Ty::String | Ty::Str => true,
+        Ty::Class { name, .. } if name == "String" => true,
         Ty::Ref(inner)
         | Ty::RefMut(inner)
         | Ty::RefLifetime(_, inner)

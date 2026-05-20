@@ -384,9 +384,17 @@ pub(super) fn is_string_typed_value(val: &MirValue, func: &MirFunction) -> bool 
 }
 
 /// Check if a MIR type is a string-like type.
+///
+/// Mirrors `codegen::cranelift::helpers::is_string_mir_ty` — see that
+/// definition for the full rationale on why `Ty::Class { name: "String", .. }`
+/// must be treated equivalently to `Ty::String`. Both backends must stay
+/// in sync; without this the LLVM `Compare` emitter falls back to
+/// pointer-eq on `def f(s: String, t: String) -> Bool s == t end` style
+/// code.
 fn is_string_mir_ty(ty: &Ty) -> bool {
     match ty {
         Ty::String | Ty::Str => true,
+        Ty::Class { name, .. } if name == "String" => true,
         Ty::Ref(inner)
         | Ty::RefMut(inner)
         | Ty::RefLifetime(_, inner)
