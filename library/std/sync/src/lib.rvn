@@ -98,39 +98,53 @@ end
 class ThreadId
 end
 
+## Typed FFI return surface (docs/specs/types/typed_ffi_returns.spec.md).
+## `join_raw` reports the closure's actual `T` return type. The
+## codegen still treats the value as i64 at the C ABI; only the
+## typeck-reported surface type changes.
 class JoinHandle[T: Send]
   lib "runtime/thread.c"
-    def join_raw as "riven_thread_join"(self) -> Int
+    def join_raw as "riven_thread_join"(self) -> T
     def __drop as "riven_thread_join_handle_drop"(self) -> ()
   end
 end
 
+## Typed FFI return surface (docs/specs/types/typed_ffi_returns.spec.md).
+## `def self.new` declares `-> Mutex[T]`; the codegen still treats the
+## return value as i64 at the C ABI (see `ty_to_cranelift`), so
+## `riven_mutex_new(int64_t initial)` is called unchanged. Per B1+B3
+## of the spec, T is bound from the constructor's first arg type;
+## `Mutex.new(7)` reports `Mutex[Int]` at the let-binding site.
 class Mutex[T]
   lib "runtime/mutex.c"
-    def self.new as "riven_mutex_new"(initial: Int) -> Int
-    def lock_raw as "riven_mutex_lock"(self) -> Int
-    def try_lock_raw as "riven_mutex_try_lock"(self) -> Int
+    def self.new as "riven_mutex_new"(initial: T) -> Mutex[T]
+    def lock_raw as "riven_mutex_lock"(self) -> MutexGuard[T]
+    def try_lock_raw as "riven_mutex_try_lock"(self) -> MutexGuard[T]
     def is_poisoned as "riven_mutex_is_poisoned"(self) -> Int
     def clear_poison as "riven_mutex_clear_poison"(self) -> ()
-    def into_inner_raw as "riven_mutex_into_inner"(self) -> Int
+    def into_inner_raw as "riven_mutex_into_inner"(self) -> T
     def __drop as "riven_mutex_drop"(self) -> ()
   end
 end
 
 class MutexGuard[T]
   lib "runtime/mutex.c"
-    def get as "riven_mutex_guard_get"(self) -> Int
-    def set as "riven_mutex_guard_set"(self, value: Int) -> ()
+    def get as "riven_mutex_guard_get"(self) -> T
+    def set as "riven_mutex_guard_set"(self, value: T) -> ()
     def __drop as "riven_mutex_guard_drop"(self) -> ()
   end
 end
 
+## Typed FFI return surface (docs/specs/types/typed_ffi_returns.spec.md).
+## All non-Int-shaped returns lifted: `.new` -> SharedSync[T] with T
+## inferred from the constructor's first arg (B1+B3); `.clone` ->
+## SharedSync[T] (B5: Self in return); `.get` -> T (B4).
 class SharedSync[T]
   lib "runtime/sharedsync.c"
-    def self.new as "riven_sharedsync_new"(initial: Int) -> Int
-    def clone as "riven_sharedsync_clone"(self) -> Int
+    def self.new as "riven_sharedsync_new"(initial: T) -> SharedSync[T]
+    def clone as "riven_sharedsync_clone"(self) -> SharedSync[T]
     def strong_count as "riven_sharedsync_strong_count"(self) -> Int
-    def get as "riven_sharedsync_get"(self) -> Int
+    def get as "riven_sharedsync_get"(self) -> T
     def __drop as "riven_sharedsync_drop"(self) -> ()
   end
 end
@@ -142,9 +156,18 @@ class ThreadPanic
 end
 
 ## Atomic primitives — sequentially consistent.
+##
+## Typed FFI return surface (docs/specs/types/typed_ffi_returns.spec.md).
+## These classes are non-generic, so spec B10 says their `.new` does NOT
+## auto-lift. We declare each constructor's return type explicitly so
+## the chain `AtomicI64.new(0).load` typechecks (without the explicit
+## declaration, `.new` would report `Int` per the lib decl and `.load`
+## would error with "no field on Int"). The `load`/`fetch_*` methods
+## are declared raw `Int` because the underlying value is i64 — there
+## is no `T` to recover.
 class AtomicI64
   lib "runtime/atomic.c"
-    def self.new as "riven_atomic_i64_new"(initial: Int) -> Int
+    def self.new as "riven_atomic_i64_new"(initial: Int) -> AtomicI64
     def load as "riven_atomic_i64_load"(self) -> Int
     def store as "riven_atomic_i64_store"(self, value: Int) -> ()
     def fetch_add as "riven_atomic_i64_fetch_add"(self, delta: Int) -> Int
@@ -154,9 +177,13 @@ class AtomicI64
   end
 end
 
+## Param/return types kept as Int to preserve the existing wire
+## ABI (riven_atomic_bool_* takes/returns int64_t). Only `.new`'s
+## return is lifted so the chain `AtomicBool.new(0).load` reports
+## a sensible class type at the let-binding.
 class AtomicBool
   lib "runtime/atomic.c"
-    def self.new as "riven_atomic_bool_new"(initial: Int) -> Int
+    def self.new as "riven_atomic_bool_new"(initial: Int) -> AtomicBool
     def load as "riven_atomic_bool_load"(self) -> Int
     def store as "riven_atomic_bool_store"(self, value: Int) -> ()
     def fetch_and as "riven_atomic_bool_fetch_and"(self, value: Int) -> Int
@@ -168,7 +195,7 @@ end
 
 class AtomicUsize
   lib "runtime/atomic.c"
-    def self.new as "riven_atomic_usize_new"(initial: Int) -> Int
+    def self.new as "riven_atomic_usize_new"(initial: Int) -> AtomicUsize
     def load as "riven_atomic_usize_load"(self) -> Int
     def store as "riven_atomic_usize_store"(self, value: Int) -> ()
     def fetch_add as "riven_atomic_usize_fetch_add"(self, delta: Int) -> Int
@@ -179,18 +206,23 @@ class AtomicUsize
 end
 
 ## MPSC channel — multi-producer single-consumer unbounded queue.
+##
+## Typed FFI return surface (docs/specs/types/typed_ffi_returns.spec.md).
+## `Sender[T].clone` reports `Sender[T]` (B5); `Receiver[T].recv_raw`
+## reports `T` (B4 — the item type). `send_raw`'s return stays raw
+## `Int` because it carries a success/error code, not a typed value.
 class Sender[T: Send]
   lib "runtime/channel.c"
-    def send_raw as "riven_channel_send"(self, value: Int) -> Int
-    def clone as "riven_channel_sender_clone"(self) -> Int
+    def send_raw as "riven_channel_send"(self, value: T) -> Int
+    def clone as "riven_channel_sender_clone"(self) -> Sender[T]
     def __drop as "riven_channel_sender_drop"(self) -> ()
   end
 end
 
 class Receiver[T: Send]
   lib "runtime/channel.c"
-    def recv_raw as "riven_channel_recv"(self) -> Int
-    def try_recv_raw as "riven_channel_try_recv"(self) -> Int
+    def recv_raw as "riven_channel_recv"(self) -> T
+    def try_recv_raw as "riven_channel_try_recv"(self) -> T
     def __drop as "riven_channel_receiver_drop"(self) -> ()
   end
 end

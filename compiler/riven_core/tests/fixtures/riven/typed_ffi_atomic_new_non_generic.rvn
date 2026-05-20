@@ -1,0 +1,11 @@
+## Pin: B10 — non-generic classes (AtomicI64) keep their `.new -> Int`
+## by default; the lift fires only when the lib decl declares an
+## explicit structured return. AtomicI64's lib decl was changed to
+## return `AtomicI64`, so this typechecks. The negative half is
+## checked indirectly: if a Plain class were declared with `-> Int`
+## and no structured override, typeck would report Int (no field).
+def main
+  let a = AtomicI64.new(0)
+  let _prev = a.fetch_add(5)
+  let _cur = a.load
+end

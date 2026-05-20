@@ -218,6 +218,123 @@ impl Resolver {
         }
     }
 
+    /// Typed FFI returns (docs/specs/types/typed_ffi_returns.spec.md):
+    /// register all `lib "..."` FFI decls inside a class body, after
+    /// pushing the class's generic params + a `Self` alias into a
+    /// fresh class scope so structured return types (`-> Mutex[T]`,
+    /// `-> MutexGuard[T]`, `-> T`, `-> Self`) resolve.
+    pub(super) fn register_class_body_lib_decls(
+        &mut self,
+        class: &ast::ClassDef,
+        id: DefId,
+        ffi_libs: &mut Vec<HirFfiLib>,
+        module_path: &[String],
+    ) {
+        if class.lib_decls.is_empty() {
+            return;
+        }
+        self.scopes.push(ScopeKind::Class);
+        let mut self_generic_args: Vec<Ty> = Vec::new();
+        if let Some(gps) = class.generic_params.as_ref() {
+            for p in &gps.params {
+                if let ast::GenericParam::Type { name, bounds, span } = p {
+                    let bound_refs: Vec<MixinRef> = bounds
+                        .iter()
+                        .map(|b| MixinRef {
+                            name: b.path.segments.join("."),
+                            generic_args: vec![],
+                        })
+                        .collect();
+                    let gp_def = self.symbols.define(
+                        name.clone(),
+                        DefKind::TypeParam {
+                            bounds: bound_refs.clone(),
+                        },
+                        Visibility::Private,
+                        span.clone(),
+                    );
+                    self.scopes.insert_type(name.clone(), gp_def);
+                    self_generic_args.push(Ty::TypeParam {
+                        name: name.clone(),
+                        bounds: bound_refs,
+                    });
+                }
+            }
+        }
+        let self_ty = Ty::Class {
+            name: class.name.clone(),
+            generic_args: self_generic_args,
+        };
+        let self_def = self.symbols.define(
+            "Self".to_string(),
+            DefKind::TypeAlias { target: self_ty },
+            Visibility::Private,
+            class.span.clone(),
+        );
+        self.scopes.insert_type("Self".to_string(), self_def);
+
+        let mut hir_fns: Vec<HirFfiFunc> = Vec::new();
+        let mut link_flags: Vec<String> = Vec::new();
+        for lib in &class.lib_decls {
+            for flag in lib.link_attrs.iter().map(|a| format!("-l{}", a.name)) {
+                if !link_flags.contains(&flag) {
+                    link_flags.push(flag);
+                }
+            }
+            for ffi_fn in &lib.functions {
+                self.register_class_lib_method_in(
+                    id,
+                    &class.name,
+                    ffi_fn,
+                    &mut hir_fns,
+                    module_path,
+                );
+            }
+        }
+        self.scopes.pop();
+        if !hir_fns.is_empty() {
+            ffi_libs.push(HirFfiLib {
+                name: class.name.clone(),
+                link_flags,
+                functions: hir_fns,
+            });
+        }
+    }
+
+    /// Second-walk driver for typed FFI returns: recurse into
+    /// `Module` items and call `register_class_body_lib_decls` for
+    /// every `Class` whose lib decls were skipped on the first walk.
+    /// The class's DefId is looked up from the type registry using
+    /// the same qualified-key shape that `insert_type_qualified`
+    /// produced during the first walk.
+    pub(super) fn process_deferred_class_lib_decls(
+        &mut self,
+        item: &ast::TopLevelItem,
+        ffi_libs: &mut Vec<HirFfiLib>,
+        module_path: &[String],
+    ) {
+        match item {
+            ast::TopLevelItem::Class(class) => {
+                let lookup_key = if module_path.is_empty() {
+                    class.name.clone()
+                } else {
+                    format!("{}.{}", module_path.join("."), class.name)
+                };
+                if let Some(&id) = self.type_registry.get(&lookup_key) {
+                    self.register_class_body_lib_decls(class, id, ffi_libs, module_path);
+                }
+            }
+            ast::TopLevelItem::Module(m) => {
+                let mut nested = module_path.to_vec();
+                nested.push(m.name.clone());
+                for sub_item in &m.items {
+                    self.process_deferred_class_lib_decls(sub_item, ffi_libs, &nested);
+                }
+            }
+            _ => {}
+        }
+    }
+
     // ─── Pass 1: Forward Declaration of Types ───────────────────────
 
     /// #06.93 Phase 1 + Phase 4: register a type's name.
@@ -398,32 +515,17 @@ impl Resolver {
                 // identical inside or outside a class; the parent
                 // context is what flips `is_class_method` to true and
                 // routes calls through `ClassName.method(...)`.
-                if !class.lib_decls.is_empty() {
-                    let mut hir_fns: Vec<HirFfiFunc> = Vec::new();
-                    let mut link_flags: Vec<String> = Vec::new();
-                    for lib in &class.lib_decls {
-                        for flag in lib.link_attrs.iter().map(|a| format!("-l{}", a.name)) {
-                            if !link_flags.contains(&flag) {
-                                link_flags.push(flag);
-                            }
-                        }
-                        for ffi_fn in &lib.functions {
-                            self.register_class_lib_method_in(
-                                id,
-                                &class.name,
-                                ffi_fn,
-                                &mut hir_fns,
-                                module_path,
-                            );
-                        }
-                    }
-                    if !hir_fns.is_empty() {
-                        ffi_libs.push(HirFfiLib {
-                            name: class.name.clone(),
-                            link_flags,
-                            functions: hir_fns,
-                        });
-                    }
+                //
+                // Typed FFI returns (docs/specs/types/typed_ffi_returns.spec.md):
+                // when `defer_class_lib_decls` is set, the bootstrap
+                // merge has chosen to run lib-decl processing in a
+                // second walk after every class TYPE has been
+                // forward-declared. This lets a class's lib decl
+                // reference sibling classes declared later in the
+                // same file (`def lock_raw -> MutexGuard[T]` inside
+                // `class Mutex[T]` where `MutexGuard` follows).
+                if !self.defer_class_lib_decls {
+                    self.register_class_body_lib_decls(class, id, ffi_libs, module_path);
                 }
 
                 // #06.95 Phase A pre-flight: for every `include Mixin`

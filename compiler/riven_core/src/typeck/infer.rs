@@ -1906,6 +1906,42 @@ impl<'a> InferenceEngine<'a> {
             Ty::RefMut(inner) => Ty::RefMut(Box::new(Self::subst_ty(inner, subst))),
             Ty::Option(inner) => Ty::Option(Box::new(Self::subst_ty(inner, subst))),
             Ty::Array(inner) => Ty::Array(Box::new(Self::subst_ty(inner, subst))),
+            // Typed FFI returns (docs/specs/types/typed_ffi_returns.spec.md):
+            // recurse into nominal types so `MutexGuard[T]` substitutes to
+            // `MutexGuard[Int]` when T is bound to Int from the receiver
+            // (`m: Mutex[Int]; m.lock_raw -> MutexGuard[T]`). Without
+            // this recursion, generic args inside `Ty::Class` /
+            // `Ty::Struct` / `Ty::Enum` / `Ty::Result` / `Ty::Tuple`
+            // pass through verbatim and the chain `g.get` reports
+            // `T` instead of `Int`.
+            Ty::Class { name, generic_args } => Ty::Class {
+                name: name.clone(),
+                generic_args: generic_args
+                    .iter()
+                    .map(|a| Self::subst_ty(a, subst))
+                    .collect(),
+            },
+            Ty::Struct { name, generic_args } => Ty::Struct {
+                name: name.clone(),
+                generic_args: generic_args
+                    .iter()
+                    .map(|a| Self::subst_ty(a, subst))
+                    .collect(),
+            },
+            Ty::Enum { name, generic_args } => Ty::Enum {
+                name: name.clone(),
+                generic_args: generic_args
+                    .iter()
+                    .map(|a| Self::subst_ty(a, subst))
+                    .collect(),
+            },
+            Ty::Result(ok, err) => Ty::Result(
+                Box::new(Self::subst_ty(ok, subst)),
+                Box::new(Self::subst_ty(err, subst)),
+            ),
+            Ty::Tuple(elems) => Ty::Tuple(
+                elems.iter().map(|e| Self::subst_ty(e, subst)).collect(),
+            ),
             _ => ty.clone(),
         }
     }

@@ -227,6 +227,14 @@ impl Resolver {
         // `register_top_level_type_with_ffi` switches to namespace-anchor
         // mode for already-known builtin type names (see field doc).
         self.merging_bootstrap = true;
+        // Typed FFI returns (docs/specs/types/typed_ffi_returns.spec.md):
+        // a class's lib-decl return types may name OTHER classes declared
+        // later in the same file (e.g. `class Mutex[T]; def lock_raw ->
+        // MutexGuard[T]` ahead of `class MutexGuard[T]`). To make those
+        // forward references resolve cleanly, we suppress lib-decl
+        // processing on the first walk and run a follow-up walk that
+        // processes only lib decls once every class name is registered.
+        self.defer_class_lib_decls = true;
         for program in programs {
             for item in &program.items {
                 if Self::is_bootstrap_supported_item(item) {
@@ -240,6 +248,18 @@ impl Resolver {
             for item in &program.items {
                 if Self::is_bootstrap_supported_item(item) {
                     super::yield_scan::collect_yield_fns(item, &mut self.yield_fns);
+                }
+            }
+        }
+        // Second walk: now that every class name in every bootstrap
+        // program has been forward-declared in `type_registry`, process
+        // the lib decls. Cross-class typed returns (`-> MutexGuard[T]`
+        // declared inside `class Mutex[T]`) resolve here.
+        self.defer_class_lib_decls = false;
+        for program in programs {
+            for item in &program.items {
+                if Self::is_bootstrap_supported_item(item) {
+                    self.process_deferred_class_lib_decls(item, ffi_libs, &[]);
                 }
             }
         }

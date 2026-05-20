@@ -1,0 +1,10 @@
+## Pin: B1+B3 — `Mutex.new(7)` reports `Mutex[Int]`, and the chained
+## `m.lock_raw.get` reports `Int`. If subst_ty regresses or the
+## lib decl loses its structured return type, this stops typechecking
+## with "no field `get` on type `Int`" or "no field `to_s` on type `T`".
+def main
+  let m = Mutex.new(7)
+  let g = m.lock_raw
+  let v = g.get
+  let _doubled = v + 1
+end

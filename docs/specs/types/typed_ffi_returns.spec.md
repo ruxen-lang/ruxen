@@ -126,25 +126,45 @@ stdlib classes get the lift automatically via the mechanism in B9
 
 ## B9 — Mechanism
 
-Two places in the compiler change:
+Implemented via the **lib decl is the source of truth** path (B2
+generalised). Two places in the compiler change:
 
-1. **`resolve/items.rs`** — when a class has a lib decl
-   `def self.new as "..."(...) -> Int`, record an entry in
-   `class_constructor_returns_self` for that class. The
-   pre-existing `is_collection_ctor` fast path in
-   `mir/lower/expr/method_call.rs` already routes through
-   `ffi_alias_map` (per the 2026-05-20 fix `8d5f10a`); the lift
-   piggybacks on that lookup.
+1. **`resolve/ffi_registration.rs`** — when a class body's `lib` block
+   is being processed, push the class's generic-param names + a
+   `Self` alias into a fresh class scope so the resolver can spell
+   structured return types (`-> Mutex[T]`, `-> MutexGuard[T]`,
+   `-> T`, `-> Self`) inside the lib decls. Without this scope push,
+   the type resolver sees `T` as an undefined identifier and emits
+   E0700.
 
-2. **`typeck/method_resolver.rs`** — when resolving a method call
-   `Foo.new(args)`, if `Foo` is in the registered set AND the lib
-   decl's declared return is `Int`, substitute the return type with
-   `Foo[T]` (with T inferred from args via the constructor's
-   first arg). For all other declared returns (including `MutexGuard[T]`,
-   `T`, `Bar[T]`, etc.), use the declared return verbatim.
+2. **`resolve/bootstrap_merge.rs`** — when merging bootstrap programs,
+   process class lib decls in a SECOND walk after every class type
+   in every bootstrap program is registered in `type_registry`. This
+   lets `class Mutex[T]; def lock_raw -> MutexGuard[T]` resolve
+   `MutexGuard[T]` even when `class MutexGuard[T]` appears later in
+   the same file. The first walk now only registers class TYPES;
+   the second walk processes lib decls.
 
-The lift is opt-in implicitly: a class with `def self.new` gets
-it; a class with no `.new` doesn't.
+3. **`typeck/infer.rs::subst_ty`** — recurse into `Ty::Class /
+   Struct / Enum / Result / Tuple` so `MutexGuard[T]` substitutes to
+   `MutexGuard[Int]` when T is bound to Int from the receiver
+   (`m: Mutex[Int]; m.lock_raw -> MutexGuard[T]`). The pre-existing
+   substitution helper only walked `Ref / Option / Array` arms.
+
+The lift is opt-in EXPLICITLY at the lib decl: authors declare the
+typed return they want (`-> Mutex[T]`, `-> T`, `-> Self`, etc.) and
+the compiler reports that surface type at every call site. The
+codegen still treats the return as i64 at the C ABI per
+`ty_to_cranelift` (which maps every pointer-shape / class / type
+param to I64) — B11. The automatic `def self.new -> Int` → `Self[T]`
+lift described in earlier drafts of this spec is **not implemented**:
+all `def self.new` decls in the stdlib that should lift now declare
+their structured return explicitly. The existing hardcoded
+constructor-lift arms (`Mutex.new`, `Arc.new`, `SharedSync.new`)
+in `typeck/method_resolvers/mod.rs` remain as a safety net for any
+external code path that calls `.new` through `resolve_method_call`
+without the lib decl's structured return — they're idempotent with
+the lib decl now declaring the same type.
 
 ## B10 — Negative: lift does NOT apply to non-generic class
 constructors returning `-> Int`

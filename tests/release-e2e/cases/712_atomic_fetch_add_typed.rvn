@@ -1,0 +1,21 @@
+## Typed FFI returns — Atomic surface.
+##
+## Source: docs/specs/types/typed_ffi_returns.spec.md (B8 row for Atomic*).
+##
+## AtomicI64 is non-generic, so per spec B10 its `.new -> Int` does NOT
+## auto-lift. The lib-decl in `library/std/sync/src/lib.rvn` declares
+## `def self.new ... -> AtomicI64` EXPLICITLY (the structured return is
+## the source of truth — spec B2). Without that explicit declaration,
+## `AtomicI64.new(0).fetch_add(5)` would error at typeck because the
+## `.fetch_add` resolution would lookup methods on `Int`.
+
+def main
+  let a = AtomicI64.new(0)
+  let prev = a.fetch_add(5)
+  let cur = a.load
+  if prev == 0 && cur == 5
+    puts "ok"
+  else
+    puts "fail"
+  end
+end

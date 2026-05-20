@@ -128,6 +128,17 @@ pub struct Resolver {
     /// anchoring.
     pub(super) merging_bootstrap: bool,
 
+    /// Typed FFI returns (docs/specs/types/typed_ffi_returns.spec.md):
+    /// when set, the `Class` arm of `register_top_level_type_with_ffi`
+    /// registers the class TYPE but defers its lib-decl processing.
+    /// A follow-up walk (driven by `merge_bootstrap_programs`) runs
+    /// after every class name in every bootstrap program is in the
+    /// `type_registry`, so a class's lib decl can name later-declared
+    /// sibling classes in its return types (`def lock_raw ->
+    /// MutexGuard[T]` inside `class Mutex[T]` even when `class
+    /// MutexGuard` appears later in the same file).
+    pub(super) defer_class_lib_decls: bool,
+
     /// #06.95 Phase A pre-flight: snapshot of every mixin's
     /// `lib_decls` keyed by mixin name. Populated by
     /// [`collect_mixin_lib_decls`](Self::collect_mixin_lib_decls)
@@ -184,6 +195,7 @@ impl Resolver {
             extern_symbol_table: HashMap::new(),
             pass1_class_lib_methods: HashMap::new(),
             merging_bootstrap: false,
+            defer_class_lib_decls: false,
             mixin_lib_decls: HashMap::new(),
             bootstrap_auto_packages: Vec::new(),
         }
