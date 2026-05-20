@@ -51,7 +51,14 @@ pub fn type_check(program: &ast::Program) -> TypeCheckResult {
     // — no hand-maintained FIXUPS row required per package.
     let bootstrap_packages =
         crate::resolve::bootstrap::run_bootstrap_with_package_names(&mut bootstrap_diagnostics);
-    let mut result = type_check_with_bootstrap_packages(program, &bootstrap_packages);
+    // Async lowering — Milestone 2A (docs/specs/syntax/async_lowering.spec.md
+    // B1–B6). Synthesises a Future state-machine class per top-level
+    // `async def` and rewrites the original fn to construct it. Runs
+    // BEFORE the resolver so the generated class lifts through the
+    // normal resolve/typeck/MIR pipeline as if it were user-written.
+    let mut lowered = program.clone();
+    crate::async_lowering::lower_async_defs(&mut lowered);
+    let mut result = type_check_with_bootstrap_packages(&lowered, &bootstrap_packages);
     result.diagnostics.extend(bootstrap_diagnostics);
     result
 }
@@ -118,6 +125,11 @@ pub fn type_check_with_bootstrap(
     program: &ast::Program,
     bootstrap_programs: &[ast::Program],
 ) -> TypeCheckResult {
+    // Async lowering — see `type_check` for context. Identical
+    // injection point in this non-package-aware variant.
+    let mut lowered_user = program.clone();
+    crate::async_lowering::lower_async_defs(&mut lowered_user);
+
     // Phase 1: Name resolution (with bootstrap prelude merged in)
     let resolver = Resolver::new();
     let ResolveResult {
@@ -126,7 +138,7 @@ pub fn type_check_with_bootstrap(
         mut type_context,
         mut diagnostics,
         type_registry,
-    } = resolver.resolve_with_bootstrap(program, bootstrap_programs);
+    } = resolver.resolve_with_bootstrap(&lowered_user, bootstrap_programs);
 
     // Phase 2: Validate derive usage and collect all trait impls
     diagnostics.extend(crate::implicit_includes::validate_program(

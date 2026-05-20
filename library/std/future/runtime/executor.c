@@ -26,6 +26,38 @@ void *riven_context_waker(void *cx) {
     return (void *)0; /* unreachable; quiets the compiler */
 }
 
+/* Test-only Context constructor (async_lowering.spec.md B6 —
+ * Milestone 2A). The state-machine pin tests need a Context value
+ * they can pass into `(&var fut).poll(&var ctx)` without
+ * panicking. The real executor pairs Context with the wake queue +
+ * task table; for the test dummy we just hand back a malloced
+ * sentinel pointer — the no-await Milestone 2A poll never inspects
+ * the cx, so the sentinel's contents are irrelevant. Sub-phase 3
+ * will replace this with a real executor-owned Context.
+ *
+ * The pointer is intentionally leaked (no matching free): Riven
+ * doesn't yet have a Drop impl on Context, and the test programs
+ * are short-lived so the OS reclaims at exit. Sub-phase 3 wires
+ * the lifecycle correctly. */
+#include <stdlib.h>
+
+void *riven_context_test_dummy(void) {
+    void *p = malloc(8);
+    /* Zero-fill so any (mis-)deref by buggy poll code lands at a
+     * stable NULL-page-ish value rather than uninitialised garbage. */
+    if (p) {
+        *(long *)p = 0;
+    }
+    return p;
+}
+
+/* No-op waker for the test-dummy context. NOT wired up to
+ * `riven_context_waker` yet — that still panics. Sub-phase 3
+ * replaces both. */
+void riven_waker_test_noop(void *waker) {
+    (void)waker;
+}
+
 void riven_waker_wake(void *waker) {
     (void)waker;
     riven_panic("executor not yet implemented; lands in async sub-phase 3");

@@ -53,9 +53,16 @@ end
 ## `cx.waker` to obtain the wake handle. Sub-phase 3 wires the real
 ## executor; for now `waker` panics with "executor not yet
 ## implemented".
+##
+## Context.test_dummy: a hand-rolled no-op context used by the
+## async-lowering pin tests (async_lowering.spec.md B6 — Milestone
+## 2A). Returns a Context whose waker is a no-op symbol; safe to
+## call into `(&var fut).poll(&var ctx)` without panicking. The real
+## executor lands in sub-phase 3.
 class Context
   lib "runtime/executor.c"
     def waker as "riven_context_waker"(self) -> &Waker
+    def self.test_dummy as "riven_context_test_dummy"() -> Context
   end
 end
 

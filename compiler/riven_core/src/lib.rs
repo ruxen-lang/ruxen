@@ -1,3 +1,4 @@
+pub mod async_lowering;
 pub mod borrow_check;
 pub mod codegen;
 pub mod diagnostics;

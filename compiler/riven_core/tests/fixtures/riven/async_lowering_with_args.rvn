@@ -1,0 +1,12 @@
+async def add(a: Int, b: Int) -> Int
+  a + b
+end
+
+def main
+  var fut = add(7, 35)
+  var ctx = Context.test_dummy
+  match (&var fut).poll(&var ctx)
+    Poll.Ready(v) -> puts "#{v}"
+    Poll.Pending -> puts "pending"
+  end
+end

@@ -1,0 +1,12 @@
+async def make_int() -> Int
+  42
+end
+
+def main
+  var fut = make_int()
+  var ctx = Context.test_dummy
+  match (&var fut).poll(&var ctx)
+    Poll.Ready(v) -> puts "#{v}"
+    Poll.Pending -> puts "pending"
+  end
+end
