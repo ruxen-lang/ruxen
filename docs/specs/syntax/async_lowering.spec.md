@@ -218,7 +218,18 @@ The B7 example with two `.await` calls. State machine has 3 states
 "return Ready" rather than stored). Verify by inspecting the
 generated MIR.
 
-### B11 — `.await` inside `if` / `match` / `while` works
+### B11 — `.await` inside `if` / `match` / `while` works (DEFERRED in v1)
+
+> **Deferred to follow-up.** Milestone 2B v1 supports only straight-
+> line `.await` (each `.await` is the RHS of a top-level
+> `let x = call().await` statement in an async fn body). Each
+> per-branch continuation needing its own state-id allocation, and
+> the live-set analysis for locals introduced inside a branch but
+> used after the merge, is its own slice. The test
+> `await_in_if_match_branches_lower` in `tests/async_lowering.rs`
+> is `#[ignore]`d with a reason pointer.
+
+
 
 ```rvn
 async def conditional() -> Int
@@ -259,7 +270,18 @@ The check fires at every `.await` site whose enclosing scope is not
 marked `is_async`. Closures are checked individually — an `async { }`
 closure provides an async context for its body.
 
-### B13 — Borrow check across suspend points
+### B13 — Borrow check across suspend points (DEFERRED in v1)
+
+> **Deferred to follow-up.** The existing borrow checker runs
+> post-lowering on HIR; teaching it to treat suspend points as
+> borrow-invalidating boundaries is its own slice — the obvious
+> wiring (mark every `.await` site as a borrow flush) interacts
+> with the multi-arm `match` shape the lowering emits and needs a
+> bespoke pin-test surface. The test
+> `borrow_across_suspend_rejected_e1010` in `tests/async_lowering.rs`
+> is `#[ignore]`d with a reason pointer.
+
+
 
 A `&` or `&var` borrow that crosses a `.await` suspend point must
 be flagged. The borrowed value sits on the caller's stack but the
@@ -280,7 +302,21 @@ site with a note pointing at the suspend.
 
 Captures by move that cross suspends are fine (they become fields).
 
-### B14 — Drop of state-machine fields on drop / cancellation
+### B14 — Drop of state-machine fields on drop / cancellation (DEFERRED in v1)
+
+> **Deferred to follow-up.** v1's lowering eagerly constructs every
+> `__sub_N` in `init` and placeholder-initialises every hoisted
+> local with a primitive-typed default (Int/Bool/Float). With no
+> per-state ownership transitions in the generated code, a "drop
+> all fields unconditionally" lowering can't double-drop — nothing
+> has been *consumed* at any state boundary. The smart-drop
+> optimisation lands when sub-future construction moves from `init`
+> to per-state (which is also a prerequisite for lazy-arg sub-
+> futures, and for hoisting non-primitive locals across suspends).
+> The test `state_machine_drop_only_active_fields` in
+> `tests/async_lowering.rs` is `#[ignore]`d with a reason pointer.
+
+
 
 When a state machine is dropped before completion (e.g. caller
 gives up on the future), its in-flight `__sub_*` field's Drop runs,
@@ -316,6 +352,42 @@ Pin test: a state machine in state 1 holds `__sub_0` Ready and
 | B7-B14 e2e| `cases/722_async_def_chained_await_handpoll.rvn`       | release-e2e                   |
 
 ---
+
+## Milestone 2B v1 scope reductions (shipped 2026-05-20)
+
+The v1 cut of 2B supports a canonical straight-line `.await` shape:
+
+```rvn
+async def f(args...) -> R
+  let x_1 = g_1(<args from outer / consts>).await
+  let x_2 = g_2(<args from outer / consts>).await
+  ...
+  <straight-line tail>
+end
+```
+
+with these constraints:
+
+* Each `.await` must be the outermost suffix of a `let x = … .await`
+  statement (no `.await` deeper in a complex expression, no bare
+  `expr.await` as a statement).
+* The awaitee must be a direct `name(args)` call to another top-
+  level `async def` whose return type the pass already knows.
+* The awaitee's arguments must be expressible from outer-fn args
+  and constants only — they cannot depend on prior await results
+  (sub-futures are eagerly constructed in `init`).
+* Hoisted-local field types must be Int/Bool/Float (so the
+  placeholder default in `init` is safe). Other types require the
+  `Option[T]`-wrapping lift, deferred.
+* `.await` inside `if`/`match`/`while`/`for` is NOT supported.
+  Loop-body `.await` gets E1115; arm-body `.await` is rejected by
+  the lowering falling back to "leave the fn alone" and the
+  resolver/typeck producing whatever error first surfaces.
+
+B11, B13, B14 are explicitly DEFERRED (each section above carries
+its own deferral block). Their pin tests in
+`compiler/riven_core/tests/async_lowering.rs` are `#[ignore]`d with
+reason strings pointing back here.
 
 ## Out of scope (sub-phase 3+)
 

@@ -1,0 +1,11 @@
+## Spec B12 (docs/specs/syntax/async_lowering.spec.md): a `.await`
+## whose enclosing function is NOT `async` must be rejected with
+## E1110 at name-resolution time.
+
+async def fetch() -> Int
+  42
+end
+
+def main
+  fetch().await
+end

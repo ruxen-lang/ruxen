@@ -794,9 +794,9 @@ impl Resolver {
             ast::ExprKind::Await(inner) => {
                 if self.async_scope_depth == 0 {
                     self.diagnostics.push(Diagnostic::error_with_code(
-                        "cannot `await` outside an `async` function or closure",
+                        "`.await` is only valid inside `async def` or `async { }`",
                         span.clone(),
-                        "E_await_outside_async",
+                        "E1110",
                     ));
                 }
                 let inner_hir = self.resolve_expr(inner);

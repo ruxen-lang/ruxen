@@ -327,6 +327,22 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E1102",
         title: "SharedSync requires Send payload",
     },
+    // Async lowering — sub-phase 2 (docs/specs/syntax/async_lowering.spec.md).
+    // E1110 fires at every `.await` site whose enclosing function or
+    // closure is not marked `async`. Detected during name resolution
+    // (`resolve/exprs.rs`).
+    CodeInfo {
+        code: "E1110",
+        title: "`.await` outside `async` function or closure",
+    },
+    // E1115 fires when `.await` appears inside the body of a `while` /
+    // `for` loop. v1 lowering does not handle loop suspension; the
+    // shape requires a state per iteration. Deferred to v2 per the
+    // async-lowering spec's "out of scope" list.
+    CodeInfo {
+        code: "E1115",
+        title: "`.await` inside `while` / `for` body not yet supported",
+    },
 ];
 
 /// Look up an error code's metadata. Returns `None` if the code is not

@@ -191,6 +191,196 @@ fn poll_after_ready_returns_pending() {
     );
 }
 
+// ─── B7+B9 — single `.await` lowers to poll-match ───────────────────
+
+/// Spec B7+B9 (Milestone 2B): an async fn with one `.await` lowers
+/// to a two-state machine. The synth'd class carries a `__sub_0`
+/// field whose type is the awaited fn's synth'd Future class, plus
+/// a hoisted-local field for the let-binding (`x: Int`).
+#[test]
+fn await_desugars_to_poll_match_pending_return() {
+    let result = typeck_result(&rvn("async_lowering_single_await"));
+    let errors = error_messages(&result.diagnostics);
+    assert!(
+        errors.is_empty(),
+        "single-await fixture must typecheck: {:?}",
+        errors
+    );
+
+    let sm_class = result
+        .program
+        .items
+        .iter()
+        .find_map(|item| match item {
+            HirItem::Class(c) if c.name == "__FFuture" => Some(c),
+            _ => None,
+        })
+        .expect("expected generated `__FFuture` class for the single-await fn");
+
+    let field_names: Vec<&str> = sm_class.fields.iter().map(|f| f.name.as_str()).collect();
+    assert!(
+        field_names.contains(&"__state"),
+        "expected `__state` field, got: {:?}",
+        field_names
+    );
+    assert!(
+        field_names.contains(&"__sub_0"),
+        "expected `__sub_0` sub-future field, got: {:?}",
+        field_names
+    );
+    assert!(
+        field_names.contains(&"x"),
+        "expected `x` hoisted-local field, got: {:?}",
+        field_names
+    );
+
+    let poll = sm_class
+        .methods
+        .iter()
+        .find(|m| m.name == "poll")
+        .expect("expected synthesised `poll` method");
+    use riven_core::hir::nodes::HirExprKind;
+    let has_dispatch_shape = matches!(
+        &poll.body.kind,
+        HirExprKind::If { .. } | HirExprKind::Block(_, _)
+    );
+    assert!(
+        has_dispatch_shape,
+        "expected poll body to be an if/block (state dispatch)"
+    );
+}
+
+// ─── B8 — local crossing suspend hoisted to field ───────────────────
+
+/// Spec B8 (Milestone 2B): a local bound to a `.await` result is
+/// hoisted to a state-machine field so it survives the suspend. The
+/// chained-await fixture exercises both `a` (alive across the second
+/// suspend) and `b` (defined in state 2's continuation). v1's simple
+/// lowering hoists ALL await-bindings unconditionally — the live-set
+/// analysis is a v2 polish.
+#[test]
+fn local_live_across_await_promoted_to_field() {
+    let result = typeck_result(&rvn("async_lowering_chained_await"));
+    let errors = error_messages(&result.diagnostics);
+    assert!(
+        errors.is_empty(),
+        "chained-await fixture must typecheck: {:?}",
+        errors
+    );
+
+    let sm_class = result
+        .program
+        .items
+        .iter()
+        .find_map(|item| match item {
+            HirItem::Class(c) if c.name == "__ChainFuture" => Some(c),
+            _ => None,
+        })
+        .expect("expected generated `__ChainFuture` class");
+
+    let field_names: Vec<&str> = sm_class.fields.iter().map(|f| f.name.as_str()).collect();
+    for needed in ["__state", "__sub_0", "__sub_1", "a", "b"] {
+        assert!(
+            field_names.contains(&needed),
+            "expected field `{}` on __ChainFuture, got: {:?}",
+            needed,
+            field_names
+        );
+    }
+}
+
+// ─── B10 — N awaits → N+1 states ────────────────────────────────────
+
+/// Spec B10 (Milestone 2B): two `.await` calls generate THREE states.
+/// State 2 is the terminal Ready arm (folded into "return Ready(tail)"
+/// inside state 1's Ready continuation, so we don't allocate an
+/// explicit state-2 arm — verify by checking the poll body has an
+/// if-with-1-elsif shape).
+#[test]
+fn chained_awaits_generate_n_plus_1_states() {
+    let result = typeck_result(&rvn("async_lowering_chained_await"));
+    let errors = error_messages(&result.diagnostics);
+    assert!(errors.is_empty(), "fixture must typecheck: {:?}", errors);
+
+    let sm_class = result
+        .program
+        .items
+        .iter()
+        .find_map(|item| match item {
+            HirItem::Class(c) if c.name == "__ChainFuture" => Some(c),
+            _ => None,
+        })
+        .expect("expected `__ChainFuture` class");
+
+    // Two __sub_N fields → two await sites → state machine has two
+    // dispatched arms (states 0 and 1) plus the implicit terminal
+    // Ready fold. We pin the field count as the stable proxy for
+    // "N+1 states" since the if/elsif shape is an implementation
+    // detail of the multi-state dispatch.
+    let sub_fields = sm_class
+        .fields
+        .iter()
+        .filter(|f| f.name.starts_with("__sub_"))
+        .count();
+    assert_eq!(
+        sub_fields, 2,
+        "expected 2 __sub_N fields for 2 awaits, got {}: fields = {:?}",
+        sub_fields,
+        sm_class
+            .fields
+            .iter()
+            .map(|f| &f.name)
+            .collect::<Vec<_>>()
+    );
+}
+
+// ─── B11 — `.await` inside if/match branches (DEFERRED) ─────────────
+
+/// Spec B11 (Milestone 2B): `.await` inside `if` / `match` branches
+/// should lower with each branch's continuation getting its own
+/// state. v1's lowering only supports straight-line `.await` —
+/// branched-await is deferred to a follow-up because each branch
+/// needs an independent post-suspend state, and the per-branch
+/// state-id allocation interacts with the locals-crossing analysis
+/// in non-trivial ways. The fixture exists so the eventual
+/// implementer can drop `#[ignore]` and pin the contract.
+#[test]
+#[ignore = "B11 (`.await` in if/match arms) deferred to follow-up — see async_lowering.spec.md"]
+fn await_in_if_match_branches_lower() {
+    // No fixture yet — the deferral note is the entire pin.
+}
+
+// ─── B13 — borrow across suspend (DEFERRED) ─────────────────────────
+
+/// Spec B13 (Milestone 2B): a `&` / `&var` borrow that crosses a
+/// `.await` site must be rejected (reusing E1010). The existing
+/// borrow checker runs post-lowering on HIR; wiring suspension
+/// points as borrow-invalidating boundaries is its own slice. The
+/// pin test stays ignored until the borrow checker grows the
+/// suspend-point awareness.
+#[test]
+#[ignore = "B13 (borrow-across-suspend, reuse E1010) deferred — borrow checker needs suspend-aware analysis"]
+fn borrow_across_suspend_rejected_e1010() {
+    // No fixture yet — see deferral note.
+}
+
+// ─── B14 — smart drop only active state's fields (DEFERRED) ─────────
+
+/// Spec B14 (Milestone 2B): when a state machine is dropped mid-
+/// execution, only the fields the current state has CONSTRUCTED
+/// should be dropped. v1's lowering eagerly initialises all
+/// __sub_N fields in `init` and uses primitive-typed placeholder
+/// values for hoisted locals, so a "drop everything" approach is
+/// safe today — no double-drop because nothing has been "consumed"
+/// yet at any state boundary. The smart-drop optimisation lands
+/// when we move sub-future construction from `init` to per-state
+/// (which is also a prerequisite for lazy-arg sub-futures).
+#[test]
+#[ignore = "B14 (smart drop per active state) deferred — v1 ships eager-init + primitive-only locals so no double-drop"]
+fn state_machine_drop_only_active_fields() {
+    // No fixture yet — see deferral note.
+}
+
 // ─── B6 — Context.test_dummy constructs ─────────────────────────────
 
 /// Spec B6: `Context.test_dummy` returns a Context the hand-driven

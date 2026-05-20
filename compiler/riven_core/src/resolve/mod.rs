@@ -457,8 +457,8 @@ mod tests {
             result
                 .diagnostics
                 .iter()
-                .any(|diag| diag.code.as_deref() == Some("E_await_outside_async")),
-            "expected E_await_outside_async, got {:?}",
+                .any(|diag| diag.code.as_deref() == Some("E1110")),
+            "expected E1110, got {:?}",
             result.diagnostics
         );
     }
@@ -473,7 +473,7 @@ mod tests {
             result
                 .diagnostics
                 .iter()
-                .all(|diag| diag.code.as_deref() != Some("E_await_outside_async")),
+                .all(|diag| diag.code.as_deref() != Some("E1110")),
             "unexpected async-scope diagnostic: {:?}",
             result.diagnostics
         );
@@ -510,7 +510,7 @@ mod tests {
             result
                 .diagnostics
                 .iter()
-                .all(|diag| diag.code.as_deref() != Some("E_await_outside_async")),
+                .all(|diag| diag.code.as_deref() != Some("E1110")),
             "unexpected async-scope diagnostic: {:?}",
             result.diagnostics
         );

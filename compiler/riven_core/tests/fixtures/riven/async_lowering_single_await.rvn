@@ -1,0 +1,14 @@
+## Spec B7+B9 (docs/specs/syntax/async_lowering.spec.md Milestone 2B):
+## a single `.await` site lowers to a two-state machine. State 0
+## polls the sub-future; on Ready it bumps to state 1 and returns
+## Poll.Ready(<post-await tail>). Sub-future is eagerly constructed
+## in init.
+
+async def make_int() -> Int
+  42
+end
+
+async def f() -> Int
+  let x = make_int().await
+  x + 1
+end

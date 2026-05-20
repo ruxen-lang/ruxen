@@ -75,6 +75,28 @@ fn include_future_without_output_rejected() {
     );
 }
 
+// ─── B12 — `.await` outside async context (E1110) ───────────────────
+
+/// Spec B12 (Milestone 2B): `.await` is only valid inside `async def`
+/// or `async { ... }`. A bare `.await` inside a synchronous function
+/// must be rejected at resolve time with code E1110. The check is
+/// `async_scope_depth == 0` in `resolve/exprs.rs`.
+#[test]
+fn await_outside_async_context_rejected_e1110() {
+    let source = rvn("async_negative_await_outside_async");
+    let errors = typeck_errors(&source);
+    assert!(
+        errors
+            .iter()
+            .any(|d| d.code.as_deref() == Some("E1110")),
+        "expected E1110 for `.await` outside async fn, got: {:?}",
+        errors
+            .iter()
+            .map(|d| (d.code.clone(), d.message.clone()))
+            .collect::<Vec<_>>()
+    );
+}
+
 // ─── B6 — `poll` with wrong signature rejected ──────────────────────
 
 /// Spec B6: a class that overrides `poll` with the wrong return type
