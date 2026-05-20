@@ -209,7 +209,6 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // codegen consults runtime_table. The 4-layer routing
         // (static-ctor / field-access / general method dispatch /
         // ArrayLiteral) is uniform across all sites.
-        "sleep" => return Ok("riven_thread_sleep_duration"),
         // std::path entries were here — Wave 2 (#06.8) migration moved
         // the C-symbol bindings to library/std/path/src/lib.rvn. See the
         // std::rand comment below for the FFI alias rewrite path that
@@ -244,8 +243,6 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // (`read_line`, `read`, `write*`, `flush`) branch on the
         // 1-byte `kind` tag inside the runtime spine.
         // std::signal — graceful-shutdown surface.
-        "signal_install_sigint" => return Ok("riven_signal_install_sigint"),
-        "signal_received_sigint" => return Ok("riven_signal_received_sigint"),
         // std::rand entries were here — Wave 2 (#06.8) migration moved
         // the C-symbol binding to `lib "riven_runtime" def random_bytes
         // as "riven_rand_random_bytes" …` in library/std/rand/src/lib.rvn.
