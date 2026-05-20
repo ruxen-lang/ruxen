@@ -147,12 +147,6 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "OpenOptions_create" => return Ok("riven_open_options_create"),
         "OpenOptions_create_new" => return Ok("riven_open_options_create_new"),
         // Phase 2 stdlib (#06.A3): std::fmt::Formatter methods.
-        "Formatter_new" => return Ok("riven_fmt_formatter_new"),
-        "Formatter_free" => return Ok("riven_fmt_formatter_free"),
-        "Formatter_write_str" => return Ok("riven_fmt_formatter_write_str"),
-        "Formatter_write_char" => return Ok("riven_fmt_formatter_write_char"),
-        "Formatter_buffer" => return Ok("riven_fmt_formatter_buffer"),
-        "Formatter_len" => return Ok("riven_fmt_formatter_len"),
         // Phase 2 stdlib (#06.D4): spec-aware constructor + precision
         // accessor + per-type precision helpers.
         "Formatter_new_with_spec" => return Ok("riven_fmt_formatter_new_with_spec"),
