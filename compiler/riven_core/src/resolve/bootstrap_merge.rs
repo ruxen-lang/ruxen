@@ -152,8 +152,9 @@ impl Resolver {
         // Two-pass approach:
         // Pass 1: Register all top-level type names (classes, structs, enums, traits)
         //         so that forward references work.
+        let user_ctx = super::ffi_registration::RegistrationCtx::user_program();
         for item in &program.items {
-            self.register_top_level_type_with_ffi(item, &mut ffi_libs);
+            self.register_top_level_type_with_ffi(item, &mut ffi_libs, user_ctx);
         }
 
         // Scan for functions that contain `yield` — these receive a
@@ -256,22 +257,19 @@ impl Resolver {
         programs: &[ast::Program],
         ffi_libs: &mut Vec<HirFfiLib>,
     ) {
-        // #06.8 T#21: while this flag is set the Class arm of
-        // `register_top_level_type_with_ffi` switches to namespace-anchor
-        // mode for already-known builtin type names (see field doc).
-        self.merging_bootstrap = true;
-        // Typed FFI returns (docs/specs/types/typed_ffi_returns.spec.md):
-        // a class's lib-decl return types may name OTHER classes declared
-        // later in the same file (e.g. `class Mutex[T]; def lock_raw ->
-        // MutexGuard[T]` ahead of `class MutexGuard[T]`). To make those
-        // forward references resolve cleanly, we suppress lib-decl
-        // processing on the first walk and run a follow-up walk that
-        // processes only lib decls once every class name is registered.
-        self.defer_class_lib_decls = true;
+        // First walk: namespace-anchor mode on, class-body lib decls
+        // deferred. The deferral handles cross-class typed returns
+        // (docs/specs/types/typed_ffi_returns.spec.md) — a class's
+        // lib-decl return types may name OTHER classes declared later
+        // in the same file (e.g. `class Mutex[T]; def lock_raw ->
+        // MutexGuard[T]` ahead of `class MutexGuard[T]`). Suppressing
+        // lib-decl processing on the first walk lets the second walk
+        // resolve those once every class name is registered.
+        let first_walk_ctx = super::ffi_registration::RegistrationCtx::bootstrap_first_walk();
         for program in programs {
             for item in &program.items {
                 if Self::is_bootstrap_supported_item(item) {
-                    self.register_top_level_type_with_ffi(item, ffi_libs);
+                    self.register_top_level_type_with_ffi(item, ffi_libs, first_walk_ctx);
                 }
             }
             // Bootstrap files are part of the prelude, so yield scanning
@@ -284,11 +282,9 @@ impl Resolver {
                 }
             }
         }
-        // Second walk: now that every class name in every bootstrap
-        // program has been forward-declared in `type_registry`, process
-        // the lib decls. Cross-class typed returns (`-> MutexGuard[T]`
-        // declared inside `class Mutex[T]`) resolve here.
-        self.defer_class_lib_decls = false;
+        // Second walk: every class name in every bootstrap program is
+        // now forward-declared in `type_registry`, so the deferred
+        // class-body lib decls can resolve cross-class return types.
         for program in programs {
             for item in &program.items {
                 if Self::is_bootstrap_supported_item(item) {
@@ -296,7 +292,6 @@ impl Resolver {
                 }
             }
         }
-        self.merging_bootstrap = false;
     }
 
     /// Wave 2 (#06.8): re-bind stdlib module item lists to the FFI fn

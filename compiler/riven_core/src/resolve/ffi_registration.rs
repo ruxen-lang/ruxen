@@ -14,6 +14,62 @@ use super::scope::{ScopeId, ScopeKind, ScopeStack};
 use super::symbols::*;
 use super::{ClosureCaptureContext, ResolveResult, Resolver};
 
+/// Caller-identity arguments threaded into Pass 1 type registration.
+///
+/// SINGLE ENTRY POINT context for
+/// `Resolver::register_top_level_type_with_ffi_in`. Carries the two
+/// behaviour-modifying flags that historically lived as side-channel
+/// fields on `Resolver` (`merging_bootstrap`, `defer_class_lib_decls`)
+/// and were flipped before/after a phase. Making them explicit
+/// parameters means call sites declare their intent at the point of
+/// invocation, eliminating internal `if self.merging_bootstrap`
+/// branching driven by hidden state.
+///
+/// Per
+/// `docs/specs/system/compiler_consolidation.spec.md` §B3 stop
+/// condition: the registration body MAY branch on these — namespace-
+/// anchor mode for builtin type names is a real semantic difference —
+/// but the branching is on EXPLICIT arguments rather than caller-
+/// identity inferred from a resolver field.
+#[derive(Copy, Clone, Debug)]
+pub(super) struct RegistrationCtx {
+    /// True iff this call is part of the bootstrap merge (stdlib
+    /// `.rvn` programs being folded into the prelude). When set, the
+    /// `Class` arm enters "namespace-anchor mode" for already-known
+    /// builtin type names (String, Option, Result) and the collection
+    /// names (Array, Vec, Map, HashMap, Set, HashSet) — it reuses the
+    /// existing DefId / hardcoded-arm dispatch instead of replacing
+    /// the type-scope binding.
+    pub merging_bootstrap: bool,
+    /// True iff class-body lib decls should be skipped on this pass.
+    /// The bootstrap merge sets this on the first walk so cross-class
+    /// typed returns (`def lock_raw -> MutexGuard[T]` declared inside
+    /// `class Mutex[T]` before MutexGuard is registered) can be
+    /// resolved on a second walk after every class type is
+    /// forward-declared. Always false on the user-program path.
+    pub defer_class_lib_decls: bool,
+}
+
+impl RegistrationCtx {
+    /// Context for the user-program Pass 1 walk: no bootstrap
+    /// anchoring, no deferral.
+    pub(super) const fn user_program() -> Self {
+        Self {
+            merging_bootstrap: false,
+            defer_class_lib_decls: false,
+        }
+    }
+
+    /// Context for the bootstrap merge's FIRST walk: anchor mode on,
+    /// class-body lib decls deferred to the second walk.
+    pub(super) const fn bootstrap_first_walk() -> Self {
+        Self {
+            merging_bootstrap: true,
+            defer_class_lib_decls: true,
+        }
+    }
+}
+
 impl Resolver {
     pub(super) fn register_builtins(&mut self) {
         super::stdlib::register_all(self);
@@ -366,12 +422,23 @@ impl Resolver {
     /// through here with an empty module path; the internal
     /// `_in` variant carries the accumulated module-path stack for
     /// nested `module Outer { module Inner { ... } }` registration.
+    /// SINGLE ENTRY POINT for Pass 1 type registration. Both call
+    /// sites (the bootstrap merge and the user-program driver) pass
+    /// through here with an empty module path; the internal `_in`
+    /// variant carries the accumulated module-path stack for nested
+    /// `module Outer { module Inner { ... } }` registration.
+    ///
+    /// `ctx` declares caller intent (bootstrap merge vs user program,
+    /// deferred-lib-decls vs not). The body branches on `ctx`, NOT on
+    /// a side-channel resolver field — see
+    /// `docs/specs/system/compiler_consolidation.spec.md` §B3.
     pub(super) fn register_top_level_type_with_ffi(
         &mut self,
         item: &ast::TopLevelItem,
         ffi_libs: &mut Vec<HirFfiLib>,
+        ctx: RegistrationCtx,
     ) {
-        self.register_top_level_type_with_ffi_in(item, ffi_libs, &[]);
+        self.register_top_level_type_with_ffi_in(item, ffi_libs, &[], ctx);
     }
 
     pub(super) fn register_top_level_type_with_ffi_in(
@@ -379,6 +446,7 @@ impl Resolver {
         item: &ast::TopLevelItem,
         ffi_libs: &mut Vec<HirFfiLib>,
         module_path: &[String],
+        ctx: RegistrationCtx,
     ) {
         let _span_zero = Span {
             start: 0,
@@ -443,7 +511,7 @@ impl Resolver {
                 // reference downstream. For top-level classes
                 // (`module_path` empty), the historical unqualified
                 // scope lookup is preserved.
-                let anchor_id: Option<DefId> = if self.merging_bootstrap {
+                let anchor_id: Option<DefId> = if ctx.merging_bootstrap {
                     if module_path.is_empty() {
                         self.scopes.lookup_type(&class.name)
                     } else {
@@ -460,7 +528,7 @@ impl Resolver {
 
                 let id = if let Some(existing) = anchor_id {
                     existing
-                } else if self.merging_bootstrap && is_anchor_only_builtin {
+                } else if ctx.merging_bootstrap && is_anchor_only_builtin {
                     // Create a parent DefId for `pass1_class_lib_methods`
                     // / `ffi_libs` bookkeeping but DO NOT insert into
                     // type-scope. The hardcoded arm in `resolve_type_expr`
@@ -524,7 +592,7 @@ impl Resolver {
                 // reference sibling classes declared later in the
                 // same file (`def lock_raw -> MutexGuard[T]` inside
                 // `class Mutex[T]` where `MutexGuard` follows).
-                if !self.defer_class_lib_decls {
+                if !ctx.defer_class_lib_decls {
                     self.register_class_body_lib_decls(class, id, ffi_libs, module_path);
                 }
 
@@ -899,7 +967,7 @@ impl Resolver {
                 // reachable.
                 self.scopes.push(ScopeKind::Module);
                 for sub_item in &m.items {
-                    self.register_top_level_type_with_ffi_in(sub_item, ffi_libs, &nested_path);
+                    self.register_top_level_type_with_ffi_in(sub_item, ffi_libs, &nested_path, ctx);
                 }
                 self.scopes.pop();
             }
