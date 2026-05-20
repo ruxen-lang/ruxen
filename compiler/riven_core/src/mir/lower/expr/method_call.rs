@@ -91,6 +91,36 @@ impl<'a> Lowerer<'a> {
                     } else {
                         type_name.as_str()
                     };
+
+                    // Bug-fix (v1-missing-features 2026-05-20):
+                    // ANY class that has a `def self.{method_name} as "<c-symbol>"`
+                    // lib decl registered — including generic classes like
+                    // `Mutex[T]`, `SharedSync[T]`, `AtomicI64`, `Sender[T: Send]`,
+                    // etc. — must route directly to the FFI symbol with NO
+                    // synthetic `self` prepended and NO `Class_init` fallback.
+                    // The hardcoded class lists below only cover legacy
+                    // builtins; without this generic check, calls like
+                    // `Mutex.new(7)` synthesize `Mutex_init(self, 7)` and the
+                    // linker fails with "undefined symbol _Mutex_init".
+                    // The dotted-name normalisation matches
+                    // `register_class_lib_method_in`'s mangling shape.
+                    let alias_key_cs = base_type.replace('.', "_");
+                    let alias_key = format!("{}_{}", alias_key_cs, method_name);
+                    if self.ffi_alias_map.contains_key(&alias_key) {
+                        let obj = self.new_temp(expr.ty.clone());
+                        let mut call_args = Vec::with_capacity(args.len());
+                        for arg in args {
+                            let local = self.lower_expr(arg)?;
+                            call_args.push(local_to_value(local));
+                        }
+                        let callee = self.resolve_ffi_alias_callee(alias_key);
+                        self.emit(MirInst::Call {
+                            dest: Some(obj),
+                            callee,
+                            args: call_args,
+                        });
+                        return Ok(Some(obj));
+                    }
                     // Phase 2 #06.D2.S0: `Formatter.new()` dispatches to
                     // the runtime constructor just like Vec/Hash.
                     // Phase 2 #06 (Command): `Command.new(prog)` joins
@@ -612,15 +642,34 @@ impl<'a> Lowerer<'a> {
                 // Check if this is a static/class method call (no `self`
                 // argument needed). Covers built-in static methods as well
                 // as user-defined `def self.method` forms on classes.
+                //
+                // Bug-fix (v1-missing-features 2026-05-20):
+                // A `Type.method(arg)` call where `Type` is a class
+                // identifier (HirExprKind::VarRef → DefKind::Class) MUST
+                // be treated as static-style dispatch even if `method` is
+                // declared as an instance method (`def method as "..."(self)`
+                // in a class lib block). The instance-method FFI registration
+                // already prepends the receiver type to `param_types` at
+                // registration time (see `register_class_lib_method_in`),
+                // so the C symbol's cranelift signature expects exactly
+                // (self, user_args...). When the user writes the call in
+                // static style — `JoinHandle.join_raw(handle)` — their
+                // first explicit arg IS the self handle, and we must not
+                // additionally prepend a phantom `Unit` (zero) at the
+                // call site. Without this guard the verifier rejects
+                // the resulting `riven_thread_join(0, handle)` as
+                // "got 2, expected 1".
                 let static_dispatch_ty = if matches!(&object.ty, Ty::Infer(_)) {
                     &expr.ty
                 } else {
                     &object.ty
                 };
+                let receiver_is_class_identifier = self.is_class_identifier(object);
                 let is_static = is_builtin_static_method(&type_name, method_name)
                     || self.is_user_static_method(&type_name, method_name)
                     || (method_name == "default"
-                        && self.type_supports_trait(static_dispatch_ty, "Default"));
+                        && self.type_supports_trait(static_dispatch_ty, "Default"))
+                    || receiver_is_class_identifier;
 
                 // Regular method call: object becomes the first argument (self).
                 let obj_local = self.lower_expr(object)?;

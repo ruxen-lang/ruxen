@@ -63,6 +63,30 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// Returns true when `expr` is a bare type identifier used as the
+    /// "receiver" of a `Type.method(arg)` call — i.e. a `VarRef` whose
+    /// DefId is a class, struct, or enum. In that case the user wrote
+    /// the call in *static-style* even if `method` is declared as an
+    /// instance method (`def method(self, ...) as "c_sym"` inside a
+    /// class lib block). The call-site MUST NOT prepend a phantom
+    /// `Unit` (zero) as the self argument — the user's first explicit
+    /// arg IS the self handle, and the FFI signature already has the
+    /// receiver type prepended at registration time (see
+    /// `register_class_lib_method_in` in `resolve/ffi_registration.rs`).
+    pub(super) fn is_class_identifier(&self, expr: &HirExpr) -> bool {
+        use crate::resolve::symbols::DefKind;
+        let HirExprKind::VarRef(def_id) = expr.kind else {
+            return false;
+        };
+        let Some(def) = self.symbols.get(def_id) else {
+            return false;
+        };
+        matches!(
+            def.kind,
+            DefKind::Class { .. } | DefKind::Struct { .. } | DefKind::Enum { .. }
+        )
+    }
+
     pub(super) fn type_supports_trait(&self, ty: &Ty, trait_name: &str) -> bool {
         if self.struct_with_derive_trait(ty, trait_name).is_some() {
             return true;

@@ -1,0 +1,27 @@
+## Generic-class lib-decl `.new` dispatch.
+##
+## Regression probe: a `def self.new as "<c-symbol>"(...)` lib decl on
+## a GENERIC class (`Mutex[T]`, `SharedSync[T]`, `AtomicI64`, …) must
+## route directly to the C symbol — not synthesise a phantom
+## `Class_init(self, ...)` callee. Before the v1-missing-features
+## 2026-05-20 fix, `Mutex.new(7)` produced an undefined symbol
+## `_Mutex_init` linker error because the `is_collection_ctor` fast
+## path in `mir/lower/expr/method_call.rs` only recognised a
+## hardcoded list of legacy builtin classes (Vec / Hash / Set / File
+## / Duration / Instant / etc.) and fell through to the
+## `Class_init` synthesis for any other class — silently ignoring
+## the lib-decl FFI alias for generic classes.
+##
+## The fix adds a generic `ffi_alias_map.contains_key("Class_new")`
+## check at the start of the fast path so any class with a registered
+## `def self.NAME as "..."` lib decl dispatches directly to its FFI
+## symbol with no `self` prepended.
+
+def main
+  let m = Mutex.new(7)
+  if m == 0
+    puts "null"
+  else
+    puts "ok"
+  end
+end
