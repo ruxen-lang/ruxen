@@ -46,6 +46,24 @@ class Thread
     def self.sleep as "riven_thread_sleep_duration"(d: &Duration) -> ()
     def self.yield_now as "riven_thread_yield"() -> ()
   end
+
+  ## Multithreading round — Thread.spawn / current_id runtime.
+  ## Both surfaces declared at the i64 ABI; the Riven-level type
+  ## wrappers (`Thread.spawn` returning `JoinHandle[T]`) are layered
+  ## on top via the same generic-stripping pattern that Array uses
+  ## (see library/std/array/src/lib.rvn).
+  lib "runtime/thread.c"
+    def self.current_id as "riven_thread_current_id"() -> Int
+  end
+end
+
+## Thread.spawn free-fn shim. Declared at module scope (not inside
+## the class) because static-method dispatch through `Thread.spawn`
+## was prepending an implicit self arg, breaking the FFI signature.
+## JoinHandle's `join_raw` and `__drop` live on the class (instance
+## dispatch works correctly).
+lib "runtime/thread.c"
+  def thread_spawn_raw as "riven_thread_spawn"(closure: Int) -> Int
 end
 
 ## Signal namespace class — absorbs the Rust-side
@@ -78,19 +96,104 @@ class ThreadId
 end
 
 class JoinHandle[T: Send]
+  lib "runtime/thread.c"
+    def join_raw as "riven_thread_join"(self) -> Int
+    def __drop as "riven_thread_join_handle_drop"(self) -> ()
+  end
 end
 
 class Mutex[T]
+  lib "runtime/mutex.c"
+    def self.new as "riven_mutex_new"(initial: Int) -> Int
+    def lock_raw as "riven_mutex_lock"(self) -> Int
+    def try_lock_raw as "riven_mutex_try_lock"(self) -> Int
+    def is_poisoned as "riven_mutex_is_poisoned"(self) -> Int
+    def clear_poison as "riven_mutex_clear_poison"(self) -> ()
+    def into_inner_raw as "riven_mutex_into_inner"(self) -> Int
+    def __drop as "riven_mutex_drop"(self) -> ()
+  end
 end
 
 class MutexGuard[T]
+  lib "runtime/mutex.c"
+    def get as "riven_mutex_guard_get"(self) -> Int
+    def set as "riven_mutex_guard_set"(self, value: Int) -> ()
+    def __drop as "riven_mutex_guard_drop"(self) -> ()
+  end
 end
 
 class SharedSync[T]
+  lib "runtime/sharedsync.c"
+    def self.new as "riven_sharedsync_new"(initial: Int) -> Int
+    def clone as "riven_sharedsync_clone"(self) -> Int
+    def strong_count as "riven_sharedsync_strong_count"(self) -> Int
+    def get as "riven_sharedsync_get"(self) -> Int
+    def __drop as "riven_sharedsync_drop"(self) -> ()
+  end
 end
 
 class PoisonError
 end
 
 class ThreadPanic
+end
+
+## Atomic primitives — sequentially consistent.
+class AtomicI64
+  lib "runtime/atomic.c"
+    def self.new as "riven_atomic_i64_new"(initial: Int) -> Int
+    def load as "riven_atomic_i64_load"(self) -> Int
+    def store as "riven_atomic_i64_store"(self, value: Int) -> ()
+    def fetch_add as "riven_atomic_i64_fetch_add"(self, delta: Int) -> Int
+    def fetch_sub as "riven_atomic_i64_fetch_sub"(self, delta: Int) -> Int
+    def compare_and_swap as "riven_atomic_i64_compare_and_swap"(self, current: Int, new_val: Int) -> Int
+    def __drop as "riven_atomic_i64_drop"(self) -> ()
+  end
+end
+
+class AtomicBool
+  lib "runtime/atomic.c"
+    def self.new as "riven_atomic_bool_new"(initial: Int) -> Int
+    def load as "riven_atomic_bool_load"(self) -> Int
+    def store as "riven_atomic_bool_store"(self, value: Int) -> ()
+    def fetch_and as "riven_atomic_bool_fetch_and"(self, value: Int) -> Int
+    def fetch_or as "riven_atomic_bool_fetch_or"(self, value: Int) -> Int
+    def compare_and_swap as "riven_atomic_bool_compare_and_swap"(self, current: Int, new_val: Int) -> Int
+    def __drop as "riven_atomic_bool_drop"(self) -> ()
+  end
+end
+
+class AtomicUsize
+  lib "runtime/atomic.c"
+    def self.new as "riven_atomic_usize_new"(initial: Int) -> Int
+    def load as "riven_atomic_usize_load"(self) -> Int
+    def store as "riven_atomic_usize_store"(self, value: Int) -> ()
+    def fetch_add as "riven_atomic_usize_fetch_add"(self, delta: Int) -> Int
+    def fetch_sub as "riven_atomic_usize_fetch_sub"(self, delta: Int) -> Int
+    def compare_and_swap as "riven_atomic_usize_compare_and_swap"(self, current: Int, new_val: Int) -> Int
+    def __drop as "riven_atomic_usize_drop"(self) -> ()
+  end
+end
+
+## MPSC channel — multi-producer single-consumer unbounded queue.
+class Sender[T: Send]
+  lib "runtime/channel.c"
+    def send_raw as "riven_channel_send"(self, value: Int) -> Int
+    def clone as "riven_channel_sender_clone"(self) -> Int
+    def __drop as "riven_channel_sender_drop"(self) -> ()
+  end
+end
+
+class Receiver[T: Send]
+  lib "runtime/channel.c"
+    def recv_raw as "riven_channel_recv"(self) -> Int
+    def try_recv_raw as "riven_channel_try_recv"(self) -> Int
+    def __drop as "riven_channel_receiver_drop"(self) -> ()
+  end
+end
+
+class SendError
+end
+
+class RecvError
 end

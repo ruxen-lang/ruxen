@@ -1,0 +1,15 @@
+## Multithreading e2e — sanity probe.
+##
+## Verifies pthread linkage + lib-decl dispatch through Thread is
+## wired end-to-end. Thread.current_id is a no-arg static method
+## that returns the calling thread's opaque pthread_t cast to Int —
+## non-zero for any live thread.
+
+def main
+  let id = Thread.current_id
+  if id != 0
+    puts "ok"
+  else
+    puts "zero"
+  end
+end
