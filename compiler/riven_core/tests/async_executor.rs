@@ -84,6 +84,30 @@ fn block_on_runs_subphase2b_chained_future_to_ready() {
     );
 }
 
+// ─── Task #20 — block_on preserves the future's Output type ─────────
+
+/// Task #20 fix: the prior lowering shape emitted
+/// `var __block_on_res_N = 0` which pinned every block_on result to
+/// Int and silently erased typed Outputs (Result, String, classes).
+/// The new shape uses `break v` from the Poll.Ready arm and lets
+/// typeck infer the loop type from the break value — the future's
+/// actual Output. This test pins the typed-Output behaviour by
+/// destructuring a `Result[Int, Int]` returned from block_on; if
+/// the result-var pin regressed, the `Ok(v) -> v + 1` arm would
+/// either fail typeck or silently bind `v` to the wrong type.
+#[test]
+fn block_on_preserves_typed_result_output() {
+    let result = typeck_result(&rvn("async_executor_block_on_typed_result"));
+    let errors = error_messages(&result.diagnostics);
+    assert!(
+        errors.is_empty(),
+        "block_on over a Result-returning future should typecheck \
+         and the Ok payload must be Int (the future's Output type), \
+         not erased to whatever the result-var was pinned to: {:?}",
+        errors
+    );
+}
+
 // ─── B3 — Waker.wake / wake_by_ref are surface-callable (no panic) ──
 
 /// Spec B3: the Waker.wake / wake_by_ref methods are no-ops in

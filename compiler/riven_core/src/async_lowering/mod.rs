@@ -2014,27 +2014,38 @@ fn collect_e1112_in_expr(
 // At every `block_on(EXPR)` call site, rewrite to a block of the form:
 //
 //   {
-//     var __block_on_fut_N  = EXPR
-//     var __block_on_ctx_N  = Context.executor
-//     var __block_on_res_N  = 0
+//     var __block_on_fut_N = EXPR
+//     var __block_on_ctx_N = Context.executor
 //     loop
 //       match (&var __block_on_fut_N).poll(&var __block_on_ctx_N)
-//         Poll.Ready(__block_on_v_N) ->
-//           __block_on_res_N = __block_on_v_N
-//           break
+//         Poll.Ready(__block_on_v_N) -> break __block_on_v_N
 //         Poll.Pending -> Thread.yield_now
 //       end
 //     end
-//     __block_on_res_N
 //   }
 //
-// The `__block_on_v_N` payload variable carries the Ready value out
-// of the match arm into the surrounding scope via `__block_on_res_N`,
-// which is the block's trailing expression. Using a named local
-// instead of `break VALUE` avoids the `break v end` shape (which
-// would require break-with-value to thread cleanly through MIR drop
-// elaboration in v1; the explicit res-var keeps the lowering in
-// straight-line territory).
+// The trailing expression of the block is the `loop`. The loop's
+// type is inferred by typeck from the `break __block_on_v_N` value
+// (see `typeck::infer.rs::HirExprKind::Loop` — it walks the body
+// collecting break-value types and unifies them). The break value
+// IS the Poll.Ready payload, i.e. the future's Output, so the whole
+// block evaluates to `Output`.
+//
+// Task #20 (2026-05-21): this is a fix for the prior "result-var
+// hardcoded to Int(0)" shape, which pinned the block's type to Int
+// and erased the future's typed Output. Any future whose Output was
+// `Result[T, E]`, `String`, or a user class lost its payload through
+// block_on. The fix moves typing into typeck's existing break-value
+// loop inference rather than synthesising a typed local at AST time
+// — the latter requires a "zero value for arbitrary T" Riven doesn't
+// have, while the former needs no new infrastructure.
+//
+// Why break-with-value is safe here: MIR's
+// `lower_expr/control.rs::HirExprKind::Break` assigns the break value
+// into the loop's `result_local` BEFORE running
+// `emit_dealloc_loop_locals`, so move semantics for non-Copy payloads
+// are preserved. Fixture `tests/release-e2e/cases/54_loop_break_value.rvn`
+// exercises this end-to-end.
 //
 // Counter `N` is per-function so repeated block_on calls in the same
 // scope get distinct names — guards against shadowing if MIR
@@ -2280,10 +2291,21 @@ fn rewrite_block_on_in_expr(expr: &mut Expr, counter: &mut u32) {
 
 /// Build the inline poll-loop block for a `block_on(future_expr)`
 /// call. `n` is a fresh counter used to name the introduced locals.
+///
+/// Shape (task #20 — typed-output via break-with-value):
+///   {
+///     var __block_on_fut_N = future_expr
+///     var __block_on_ctx_N = Context.executor
+///     loop
+///       match (&var __block_on_fut_N).poll(&var __block_on_ctx_N)
+///         Poll.Ready(__block_on_v_N) -> break __block_on_v_N
+///         Poll.Pending -> Thread.yield_now
+///       end
+///     end
+///   }
 fn build_block_on_loop(future_expr: Expr, n: u32, span: &Span) -> Expr {
     let fut_name = format!("__block_on_fut_{n}");
     let ctx_name = format!("__block_on_ctx_{n}");
-    let res_name = format!("__block_on_res_{n}");
     let v_name = format!("__block_on_v_{n}");
 
     // var __block_on_fut_N = EXPR
@@ -2328,26 +2350,6 @@ fn build_block_on_loop(future_expr: Expr, n: u32, span: &Span) -> Expr {
         span: span.clone(),
     });
 
-    // var __block_on_res_N = 0
-    //
-    // The result-carrying local. Declared at the outer block scope
-    // so the match arm can write into it and the trailing
-    // expression can read it after the loop exits.
-    let let_res = Statement::Let(LetBinding {
-        mutable: true,
-        pattern: Pattern::Identifier {
-            mutable: true,
-            name: res_name.clone(),
-            span: span.clone(),
-        },
-        type_annotation: None,
-        value: Some(Box::new(Expr {
-            kind: ExprKind::IntLiteral(0, None),
-            span: span.clone(),
-        })),
-        span: span.clone(),
-    });
-
     // (&var __block_on_fut_N).poll(&var __block_on_ctx_N)
     let poll_call = Expr {
         kind: ExprKind::MethodCall {
@@ -2372,7 +2374,15 @@ fn build_block_on_loop(future_expr: Expr, n: u32, span: &Span) -> Expr {
         span: span.clone(),
     };
 
-    // Match arm: Poll.Ready(__block_on_v_N) -> { __block_on_res_N = __block_on_v_N; break }
+    // Match arm: Poll.Ready(__block_on_v_N) -> break __block_on_v_N
+    //
+    // The break value IS the future's Output (the Poll.Ready payload).
+    // Typeck infers the loop expression's type from the union of
+    // break-value types (see typeck::infer.rs::HirExprKind::Loop), so
+    // the surrounding block evaluates to the correct Output type —
+    // Result[T,E], String, a user class, whatever the future declared.
+    // This replaces the prior "var __block_on_res_N = 0" shape which
+    // pinned the result to Int and silently erased non-Int outputs.
     let ready_pattern = Pattern::Enum {
         path: vec!["Poll".to_string()],
         variant: "Ready".to_string(),
@@ -2383,33 +2393,17 @@ fn build_block_on_loop(future_expr: Expr, n: u32, span: &Span) -> Expr {
         }],
         span: span.clone(),
     };
-    let assign_res = Expr {
-        kind: ExprKind::Assign {
-            target: Box::new(Expr {
-                kind: ExprKind::Identifier(res_name.clone()),
-                span: span.clone(),
-            }),
-            value: Box::new(Expr {
-                kind: ExprKind::Identifier(v_name.clone()),
-                span: span.clone(),
-            }),
-        },
-        span: span.clone(),
-    };
-    let break_expr = Expr {
-        kind: ExprKind::Break(None),
+    let break_with_value = Expr {
+        kind: ExprKind::Break(Some(Box::new(Expr {
+            kind: ExprKind::Identifier(v_name.clone()),
+            span: span.clone(),
+        }))),
         span: span.clone(),
     };
     let ready_arm = MatchArm {
         pattern: ready_pattern,
         guard: None,
-        body: MatchArmBody::Block(Block {
-            statements: vec![
-                Statement::Expression(assign_res),
-                Statement::Expression(break_expr),
-            ],
-            span: span.clone(),
-        }),
+        body: MatchArmBody::Expr(break_with_value),
         span: span.clone(),
     };
 
@@ -2467,18 +2461,16 @@ fn build_block_on_loop(future_expr: Expr, n: u32, span: &Span) -> Expr {
         span: span.clone(),
     };
 
-    // Final outer block: let_fut, let_ctx, let_res, loop, res
+    // Final outer block: let_fut, let_ctx, loop (trailing expression).
+    //
+    // The loop is the block's trailing expression — typeck infers its
+    // type from break-with-value, so the block evaluates to the
+    // future's Output type.
     let outer_block = Block {
         statements: vec![
             let_fut,
             let_ctx,
-            let_res,
             Statement::Expression(loop_expr),
-            // Trailing expression: read the result back out.
-            Statement::Expression(Expr {
-                kind: ExprKind::Identifier(res_name.clone()),
-                span: span.clone(),
-            }),
         ],
         span: span.clone(),
     };
