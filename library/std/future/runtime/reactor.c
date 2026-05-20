@@ -82,9 +82,28 @@
  * loops update.
  */
 
+/* Fd-readiness slot — used by Milestone 4B AsyncFile futures and (when
+ * 4C lands) AsyncTcpStream futures. A slot ties together (user-fd,
+ * read-or-write, fired-bit) so deregister can EPOLL_CTL_DEL / EV_DELETE
+ * the right filter WITHOUT closing the user's fd (the future itself
+ * owns the fd lifecycle).
+ *
+ * Handle encoding: handles for fd registrations are `-(slot_index + 1)`
+ * so they live in the negative half of int64 — disjoint from timer
+ * handles which are either positive timerfds (Linux) or positive
+ * ident counters (macOS). `check_fired` / `deregister` route on sign. */
+typedef struct RivenReactorFdSlot {
+    int fd;        /* 0 = free slot; -1 also free (we use >0 to mean live) */
+    int mode;      /* 0 = read, 1 = write */
+    int fired;     /* set by park_current when the OS reports readiness */
+} RivenReactorFdSlot;
+
 typedef struct RivenReactor {
     int fd;
     int registered_count;
+    int fd_slots_len;
+    int fd_slots_cap;
+    RivenReactorFdSlot *fd_slots;
 #if defined(__APPLE__)
     int64_t next_ident;
     int slots_len;
@@ -137,6 +156,10 @@ static void riven_reactor_free_struct(RivenReactor *r) {
     if (r->fd >= 0) {
         close(r->fd);
         r->fd = -1;
+    }
+    if (r->fd_slots) {
+        free(r->fd_slots);
+        r->fd_slots = NULL;
     }
 #if defined(__APPLE__)
     if (r->slots) {
@@ -210,6 +233,118 @@ static int riven_reactor_find_slot(RivenReactor *r, int64_t ident) {
     return -1;
 }
 #endif
+
+/* ── Fd-readiness slot allocator (Milestone 4B) ──────────────────────
+ *
+ * Allocates a slot for fd-readiness tracking. Returns the slot index
+ * (>= 0) or -1 on allocation failure (which never happens in practice —
+ * malloc-failure here would have panicked already). Same growth shape
+ * as the macOS timer slots array. */
+static int riven_reactor_alloc_fd_slot(RivenReactor *r) {
+    for (int i = 0; i < r->fd_slots_len; i++) {
+        if (r->fd_slots[i].fd == 0) {
+            return i;
+        }
+    }
+    if (r->fd_slots_len == r->fd_slots_cap) {
+        int new_cap = r->fd_slots_cap == 0 ? 8 : r->fd_slots_cap * 2;
+        void *next = realloc(r->fd_slots,
+                             (size_t)new_cap * sizeof(*r->fd_slots));
+        if (!next) {
+            riven_panic("riven_reactor: realloc(fd_slots) failed");
+            return -1;
+        }
+        r->fd_slots = (RivenReactorFdSlot *)next;
+        memset(&r->fd_slots[r->fd_slots_cap], 0,
+               (size_t)(new_cap - r->fd_slots_cap) * sizeof(*r->fd_slots));
+        r->fd_slots_cap = new_cap;
+    }
+    return r->fd_slots_len++;
+}
+
+/* Map a handle (negative-encoded slot index) back to a slot pointer.
+ * Returns NULL if the handle is non-negative (= timer handle, not ours)
+ * or out of range. */
+static RivenReactorFdSlot *riven_reactor_find_fd_slot(RivenReactor *r,
+                                                     int64_t handle) {
+    if (handle >= 0) {
+        return NULL;
+    }
+    int idx = (int)(-(handle + 1));
+    if (idx < 0 || idx >= r->fd_slots_len) {
+        return NULL;
+    }
+    if (r->fd_slots[idx].fd <= 0) {
+        return NULL;
+    }
+    return &r->fd_slots[idx];
+}
+
+/* Register an fd for read- or write-readiness. `mode`: 0 = read,
+ * 1 = write. Returns a negative-encoded slot handle (always < 0) that
+ * `check_fired` / `deregister` accept. The user's fd is NOT closed by
+ * deregister — only the OS-level registration is torn down.
+ *
+ * Linux: EPOLL_CTL_ADD with EPOLLIN or EPOLLOUT, level-triggered
+ * (default). `data.ptr` points at the slot so park_current can flip
+ * `fired` directly.
+ *
+ * macOS: EVFILT_READ or EVFILT_WRITE with EV_ADD, no EV_CLEAR
+ * (level-triggered analog). `udata` points at the slot. */
+static int64_t riven_reactor_register_fd_internal(int64_t reactor_handle,
+                                                  int64_t fd_in,
+                                                  int mode) {
+    RivenReactor *r;
+    if (reactor_handle == 0) {
+        r = riven_reactor_acquire();
+    } else {
+        r = (RivenReactor *)(uintptr_t)reactor_handle;
+    }
+    int user_fd = (int)fd_in;
+    if (user_fd < 0) {
+        return 0;
+    }
+
+    int slot = riven_reactor_alloc_fd_slot(r);
+    if (slot < 0) {
+        return 0;
+    }
+    r->fd_slots[slot].fd = user_fd;
+    r->fd_slots[slot].mode = mode;
+    r->fd_slots[slot].fired = 0;
+
+#if defined(__APPLE__)
+    struct kevent ev;
+    short filter = mode == 1 ? EVFILT_WRITE : EVFILT_READ;
+    EV_SET(&ev, (uintptr_t)user_fd, filter,
+           EV_ADD | EV_ENABLE,
+           0, 0, &r->fd_slots[slot]);
+    if (kevent(r->fd, &ev, 1, NULL, 0, NULL) < 0) {
+        r->fd_slots[slot].fd = 0;
+        return 0;
+    }
+#elif defined(__linux__)
+    struct epoll_event ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.events = mode == 1 ? EPOLLOUT : EPOLLIN;
+    ev.data.ptr = &r->fd_slots[slot];
+    if (epoll_ctl(r->fd, EPOLL_CTL_ADD, user_fd, &ev) < 0) {
+        r->fd_slots[slot].fd = 0;
+        return 0;
+    }
+#endif
+
+    r->registered_count++;
+    return (int64_t)(-(slot + 1));
+}
+
+int64_t riven_reactor_register_fd_read(int64_t reactor_handle, int64_t fd) {
+    return riven_reactor_register_fd_internal(reactor_handle, fd, 0);
+}
+
+int64_t riven_reactor_register_fd_write(int64_t reactor_handle, int64_t fd) {
+    return riven_reactor_register_fd_internal(reactor_handle, fd, 1);
+}
 
 /* Register a one-shot timer. Returns an opaque i64 handle that
  * `check_fired` and `deregister` accept. `reactor` is the i64-cast
@@ -287,6 +422,24 @@ int64_t riven_reactor_check_fired(int64_t reactor_handle, int64_t handle) {
     }
     RivenReactor *r = (RivenReactor *)(uintptr_t)reactor_handle;
 
+    /* Fd-readiness slots use negative-encoded handles; route on sign so
+     * 4B's AsyncFile / 4C's AsyncTcpStream futures share `check_fired`
+     * with TimeSleepFuture without an explicit kind argument. */
+    if (handle < 0) {
+        RivenReactorFdSlot *slot = riven_reactor_find_fd_slot(r, handle);
+        if (!slot) {
+            return 0;
+        }
+        if (slot->fired) {
+            /* Re-arm: clear the fired bit so the next poll cycle that
+             * re-encounters EAGAIN can park again. The OS-level
+             * registration remains in place (level-triggered). */
+            slot->fired = 0;
+            return 1;
+        }
+        return 0;
+    }
+
 #if defined(__APPLE__)
     int slot = riven_reactor_find_slot(r, handle);
     if (slot < 0) {
@@ -309,6 +462,32 @@ void riven_reactor_deregister(int64_t reactor_handle, int64_t handle) {
         return;
     }
     RivenReactor *r = (RivenReactor *)(uintptr_t)reactor_handle;
+
+    /* Fd-readiness slots: negative-encoded handle. Tear down the OS
+     * registration but do NOT close the user fd — the future owns the
+     * fd lifecycle and closes it in its own drop hook. */
+    if (handle < 0) {
+        RivenReactorFdSlot *slot = riven_reactor_find_fd_slot(r, handle);
+        if (!slot) {
+            return;
+        }
+        int user_fd = slot->fd;
+#if defined(__APPLE__)
+        struct kevent ev;
+        short filter = slot->mode == 1 ? EVFILT_WRITE : EVFILT_READ;
+        EV_SET(&ev, (uintptr_t)user_fd, filter, EV_DELETE, 0, 0, NULL);
+        (void)kevent(r->fd, &ev, 1, NULL, 0, NULL);
+#elif defined(__linux__)
+        (void)epoll_ctl(r->fd, EPOLL_CTL_DEL, user_fd, NULL);
+#endif
+        slot->fd = 0;
+        slot->mode = 0;
+        slot->fired = 0;
+        if (r->registered_count > 0) {
+            r->registered_count--;
+        }
+        return;
+    }
 
 #if defined(__APPLE__)
     int slot = riven_reactor_find_slot(r, handle);
@@ -365,6 +544,16 @@ void riven_reactor_park_current(void) {
         return;
     }
     for (int i = 0; i < n; i++) {
+        /* Sub-phase 4B: fd-readiness events carry the fd_slot pointer
+         * in udata (see register_fd_internal). Timer events have a
+         * NULL udata and use ident-lookup. Branch on udata. */
+        if (events[i].udata != NULL) {
+            ((RivenReactorFdSlot *)events[i].udata)->fired = 1;
+            /* Don't decrement registered_count for fd events — the
+             * registration persists across multiple wake/poll cycles
+             * until the future calls deregister. */
+            continue;
+        }
         int64_t ident = (int64_t)events[i].ident;
         int slot = riven_reactor_find_slot(r, ident);
         if (slot >= 0) {
@@ -380,8 +569,29 @@ void riven_reactor_park_current(void) {
     if (n < 0) {
         return;
     }
-    /* Linux fired-ness is observed via the timerfd's read() in
-     * check_fired; nothing to update here. */
-    (void)events;
+    /* Sub-phase 4B: fd-readiness events carry the fd_slot pointer in
+     * data.ptr (set by register_fd_internal). Timer events use
+     * data.fd = timerfd and are observed via the timerfd's read() in
+     * check_fired — no slot to mark here. We distinguish by checking
+     * whether the pointer lies inside this reactor's fd_slots array. */
+    for (int i = 0; i < n; i++) {
+        void *p = events[i].data.ptr;
+        if (!p || !r->fd_slots) {
+            continue;
+        }
+        /* Pointer-range check: is `p` a slot in our table? */
+        uintptr_t base = (uintptr_t)r->fd_slots;
+        uintptr_t end = base + (uintptr_t)r->fd_slots_cap *
+                                   sizeof(*r->fd_slots);
+        uintptr_t pp = (uintptr_t)p;
+        if (pp >= base && pp < end) {
+            ((RivenReactorFdSlot *)p)->fired = 1;
+        }
+        /* Else: this is a timer event (data.fd encoded as data.ptr —
+         * the timerfd path uses data.fd via ev.data.fd = tfd, which on
+         * a fresh epoll_event also clobbers data.ptr; the pointer-range
+         * test above filters out those.) check_fired handles timers via
+         * read(timerfd, …). */
+    }
 #endif
 }

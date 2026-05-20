@@ -1,0 +1,286 @@
+## std::async_fs — async file I/O.
+##
+## Spec: docs/specs/stdlib/async_io.spec.md Milestone 4B (B4–B6).
+##
+## Three hand-written futures backed by the per-thread reactor in
+## library/std/future/runtime/reactor.c (sub-phase 4A). The futures
+## reuse the same pattern as TimeSleepFuture: an `Int` reactor handle
+## stashed on the future, registered lazily on the first poll that
+## hits EAGAIN, deregistered in `def drop`.
+##
+## Surface (mirrors the spec):
+##
+##   AsyncFile.open(path)         -> AsyncOpenFuture (read-only)
+##   AsyncFile.create(path)       -> AsyncOpenFuture (write+create+trunc)
+##   f.read_to_string()           -> AsyncReadToStringFuture
+##   f.write_all(content)         -> AsyncWriteAllFuture
+##   f.close                      -> Result[(), IoError]   (sync convenience)
+##
+## Why a separate `async_fs` package rather than extending `fs/src/lib.rvn`:
+##   - `fs/src/lib.rvn` loads BEFORE `future/src/lib.rvn` in
+##     BOOTSTRAP_FILES (see `compiler/riven_core/src/resolve/bootstrap.rs`),
+##     so `include Future` would fail to resolve at registration time
+##     if AsyncFile / the three futures lived in fs.rvn.
+##   - The package boundary also gives 4C's AsyncTcpStream / Listener a
+##     parallel home (`library/std/async_net`) without forcing async
+##     I/O into the synchronous fs/net packages.
+
+## --- Reactor fd-readiness primitives (sub-phase 4B reactor extension)
+##
+## Live in the same C TU as the timer primitives because they share the
+## per-thread reactor singleton + slot table. Declared here (rather
+## than in `library/std/future/src/lib.rvn` alongside the timer decls)
+## so we don't churn the future package — async_fs is the only caller
+## until 4C also pulls them in.
+lib "../../future/runtime/reactor.c"
+  def riven_reactor_register_fd_read(reactor: Int, fd: Int) -> Int
+  def riven_reactor_register_fd_write(reactor: Int, fd: Int) -> Int
+end
+
+## --- async_fs state-machine primitives (Int-only signatures) -------
+##
+## See library/std/async_fs/runtime/async_fs.c for the C side. The
+## read/write step machines own a heap state struct; the Riven futures
+## hold its address as an Int and dispatch through these free fns.
+##
+## Declared here (rather than after AsyncFile) because every type
+## referenced is already in scope from core/io/future — no forward
+## reference. The `riven_async_file_open` / `_fd` decls that reference
+## AsyncFile live in a second lib block below the class.
+lib "runtime/async_fs.c"
+  def riven_async_read_state_new(fd: Int) -> Int
+  def riven_async_read_state_get_fd(state: Int) -> Int
+  def riven_async_read_step(state: Int) -> Int
+  def riven_async_read_state_take_result(state: Int) -> Result[String, IoError]
+  def riven_async_read_state_free(state: Int) -> ()
+
+  def riven_async_write_state_new(fd: Int, content: &String) -> Int
+  def riven_async_write_state_get_fd(state: Int) -> Int
+  def riven_async_write_step(state: Int) -> Int
+  def riven_async_write_state_take_result(state: Int) -> Result[(), IoError]
+  def riven_async_write_state_free(state: Int) -> ()
+end
+
+## Workaround for the 4B e2e fixture: the canonical `String == String`
+## codegen path (cranelift/emit.rs `is_string_typed_value`) currently
+## misses the MIR shape produced by destructuring `Ok(s)` out of a
+## `Result[String, IoError]` returned via the manual poll loop — the
+## Local::ty for `s` ends up not matching `Ty::String`, so the
+## generated Compare is integer-pointer-eq rather than `riven_string_eq`.
+## Routing through this typed lib decl gives the fixture deterministic
+## value-equality without depending on whichever path typeck picks for
+## `==`. v1 follow-up: thread the destructured-payload ty through the
+## Compare lowering so `==` works on String for every MIR shape.
+lib "../string/runtime/string.c"
+  def riven_async_str_equals as "riven_string_eq"(a: &String, b: &String) -> Int
+end
+
+## --- AsyncFile -----------------------------------------------------
+##
+## Owning wrapper around a non-blocking POSIX fd. Wire-compatible with
+## RivenFile (8 bytes: int32 fd + int32 closed). Drop closes the fd —
+## the C side's `riven_async_file_drop` is idempotent.
+##
+## `fd` and `closed` are field-level Ints in Riven but the C struct
+## (RivenAsyncFile in runtime/async_fs.c) lays them out as int32s. The
+## codegen for class fields packs sub-i64 fields by their declared
+## type — but here Int is i64 in Riven, which would put us at 16 bytes
+## not 8. This is OK in v1 because the wire layout is owned by the C
+## allocator (`riven_async_file_open` returns a freshly-allocated
+## 8-byte struct), and the Riven class never directly allocates: it
+## only borrows existing pointers from C. The fields here are
+## declared for the `def drop` body to consult, but in practice the
+## drop body delegates to the C-side `riven_async_file_drop` which
+## reads the i32 layout directly.
+##
+## TODO when v1.1 tightens layout: add a `repr(C, 8-byte)` annotation
+## that pins Riven-side field sizes to the C wire format.
+class AsyncFile
+  fd: Int
+  closed: Int
+
+  ## Construct an AsyncOpenFuture for read-only access. Returns the
+  ## future eagerly — its first poll completes the open(2) synchronously
+  ## (regular files are non-blocking even without O_NONBLOCK; the
+  ## O_NONBLOCK flag is still set so subsequent read futures can park
+  ## on EAGAIN if the fd is a pipe/fifo).
+  def self.open(path: &String) -> AsyncOpenFuture
+    AsyncOpenFuture.new(path, 0)
+  end
+
+  ## Construct an AsyncOpenFuture for write+create+truncate access.
+  ## Equivalent to sync `File.create(path)` plus O_NONBLOCK.
+  def self.create(path: &String) -> AsyncOpenFuture
+    AsyncOpenFuture.new(path, 1)
+  end
+
+  ## Construct an AsyncReadToStringFuture for this file. The future
+  ## borrows the fd; the AsyncFile remains owner of the fd lifecycle
+  ## (its `def drop` closes the fd). The future deregisters its own
+  ## reactor registration on drop.
+  def var read_to_string -> AsyncReadToStringFuture
+    AsyncReadToStringFuture.new(riven_async_file_fd(self))
+  end
+
+  ## Construct an AsyncWriteAllFuture for this file with `content`.
+  def var write_all(content: &String) -> AsyncWriteAllFuture
+    AsyncWriteAllFuture.new(riven_async_file_fd(self), content)
+  end
+
+  ## C-side drop hook (closes the fd). Registered in user_drop_classes
+  ## because this method exists; the MIR drop elaborator emits a call
+  ## to `AsyncFile_drop` at scope exit followed by riven_dealloc.
+  lib "runtime/async_fs.c"
+    def drop as "riven_async_file_drop"(self) -> ()
+  end
+end
+
+## AsyncFile-typed C decls. Live in a module-scope lib block AFTER
+## the AsyncFile class so the return / param types resolve. Declared
+## as free fns (not class methods) because they're called directly by
+## the future state-machine bodies, not dispatched through `self`.
+lib "runtime/async_fs.c"
+  def riven_async_file_open(path: &String, flags: Int) -> Result[AsyncFile, IoError]
+  def riven_async_file_fd(file: &AsyncFile) -> Int
+end
+
+## --- AsyncOpenFuture (B4) ------------------------------------------
+##
+## open(2) is non-blocking on regular files even without O_NONBLOCK,
+## and our paths *will* be regular files in the 4B fixtures, so this
+## future eagerly performs the open in `init` and returns Ready on
+## first poll. The async wrapper exists for surface symmetry with
+## AsyncTcpStream.connect (which genuinely blocks pending TCP
+## handshake completion).
+##
+## State: a single `result: Result[AsyncFile, IoError]` field that is
+## populated by `init` and replayed by `poll`. There is no reactor
+## registration because the open call never returns EAGAIN.
+class AsyncOpenFuture
+  result: Result[AsyncFile, IoError]
+  include Future
+  type Output = Result[AsyncFile, IoError]
+
+  def init(path: &String, flags: Int)
+    self.result = riven_async_file_open(path, flags)
+  end
+
+  def var poll(cx: &var Context) -> Poll[Result[AsyncFile, IoError]]
+    Poll.Ready(self.result)
+  end
+end
+
+## --- AsyncReadToStringFuture (B5) ----------------------------------
+##
+## Reads from `fd` until EOF, accumulating into a heap buffer owned
+## by the C-side state struct. On EAGAIN, registers the fd for
+## read-readiness with the reactor and returns Pending. On wake,
+## drains again; loops until EOF or fatal error.
+##
+## State fields:
+##   state_ptr — opaque pointer (as Int) to RivenAsyncReadState
+##   handle    — reactor handle from register_fd_read; 0 when not
+##               currently registered (deregistered on Ready or on
+##               drop). Re-armed across multiple park/wake cycles
+##               whenever a fresh EAGAIN is seen.
+##   done      — 1 once poll has returned Ready; further polls are
+##               an executor bug, but the field guards against
+##               double-take on the C-side state.
+class AsyncReadToStringFuture
+  state_ptr: Int
+  handle: Int
+  done: Int
+  include Future
+  type Output = Result[String, IoError]
+
+  def init(fd: Int)
+    self.state_ptr = riven_async_read_state_new(fd)
+    self.handle = 0
+    self.done = 0
+  end
+
+  def var poll(cx: &var Context) -> Poll[Result[String, IoError]]
+    if self.done != 0
+      # Defensive: executor shouldn't poll after Ready.
+      return Poll.Ready(riven_async_read_state_take_result(self.state_ptr))
+    end
+    let step = riven_async_read_step(self.state_ptr)
+    if step == 1
+      # EAGAIN — register for read-readiness (idempotent: handle == 0
+      # means we haven't registered yet on this thread of polling).
+      if self.handle == 0
+        let fd = riven_async_read_state_get_fd(self.state_ptr)
+        self.handle = riven_reactor_register_fd_read(riven_reactor_current_handle(), fd)
+      end
+      return Poll.Pending
+    end
+    # step == 2 (EOF) or step == 3 (error) — both Ready paths.
+    if self.handle != 0
+      riven_reactor_deregister(riven_reactor_current_handle(), self.handle)
+      self.handle = 0
+    end
+    self.done = 1
+    Poll.Ready(riven_async_read_state_take_result(self.state_ptr))
+  end
+
+  def drop
+    if self.handle != 0
+      riven_reactor_deregister(riven_reactor_current_handle(), self.handle)
+      self.handle = 0
+    end
+    if self.state_ptr != 0
+      riven_async_read_state_free(self.state_ptr)
+      self.state_ptr = 0
+    end
+  end
+end
+
+## --- AsyncWriteAllFuture (B6) --------------------------------------
+##
+## Writes the entire `content` to `fd`, looping on EAGAIN with reactor
+## registration for write-readiness. Returns Ok(()) once flushed,
+## Err(IoError) on hard failure.
+class AsyncWriteAllFuture
+  state_ptr: Int
+  handle: Int
+  done: Int
+  include Future
+  type Output = Result[(), IoError]
+
+  def init(fd: Int, content: &String)
+    self.state_ptr = riven_async_write_state_new(fd, content)
+    self.handle = 0
+    self.done = 0
+  end
+
+  def var poll(cx: &var Context) -> Poll[Result[(), IoError]]
+    if self.done != 0
+      return Poll.Ready(riven_async_write_state_take_result(self.state_ptr))
+    end
+    let step = riven_async_write_step(self.state_ptr)
+    if step == 1
+      if self.handle == 0
+        let fd = riven_async_write_state_get_fd(self.state_ptr)
+        self.handle = riven_reactor_register_fd_write(riven_reactor_current_handle(), fd)
+      end
+      return Poll.Pending
+    end
+    if self.handle != 0
+      riven_reactor_deregister(riven_reactor_current_handle(), self.handle)
+      self.handle = 0
+    end
+    self.done = 1
+    Poll.Ready(riven_async_write_state_take_result(self.state_ptr))
+  end
+
+  def drop
+    if self.handle != 0
+      riven_reactor_deregister(riven_reactor_current_handle(), self.handle)
+      self.handle = 0
+    end
+    if self.state_ptr != 0
+      riven_async_write_state_free(self.state_ptr)
+      self.state_ptr = 0
+    end
+  end
+end

@@ -112,6 +112,13 @@ pub const BOOTSTRAP_FILES: &[&str] = &[
     // re-registering on top of the real ones if any caller still
     // looks them up there.
     "future/src/lib.rvn",
+    // async_fs depends on future (Future mixin / Poll / reactor primitives)
+    // + io (IoError) + fs (in spirit; the package owns AsyncFile parallel
+    // to sync File). Sub-phase 4B of docs/specs/stdlib/async_io.spec.md.
+    // Lives in its own package so AsyncFile / AsyncOpenFuture /
+    // AsyncReadToStringFuture / AsyncWriteAllFuture can `include Future`
+    // — fs/src/lib.rvn loads BEFORE future/src/lib.rvn and so cannot.
+    "async_fs/src/lib.rvn",
     // executor depends on future (block_on takes a Future-implementing
     // value). Sub-phase 3 of the async round (docs/specs/stdlib/
     // executor.spec.md). The user-visible `block_on` is a free fn here;

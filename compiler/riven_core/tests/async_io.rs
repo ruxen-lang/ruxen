@@ -284,3 +284,38 @@ fn time_sleep_round_trip_via_block_on() {
         wall_elapsed
     );
 }
+
+// ─── B4-B6 e2e — AsyncFile round-trip via block_on ─────────────────
+
+/// Sub-phase 4B B4+B5+B6 end-to-end: open-for-write, write contents,
+/// open-for-read, read_to_string, assert equality. Drives all three
+/// async file futures through the per-thread reactor (though on a
+/// regular file the reads don't actually EAGAIN — they complete in
+/// one syscall — so this is a smoke test for the surface assembly
+/// rather than a stress test for reactor wake-on-readable. The
+/// reactor-wake path is covered by tests/725 for timers and by 4C
+/// fixtures for sockets where EAGAIN is the common case).
+///
+/// Expected output: `write_ok\nok\n`. Drives the same fixture as
+/// `tests/release-e2e/cases/726_async_file_round_trip.rvn`.
+#[test]
+fn async_file_round_trip_via_block_on() {
+    let root = workspace_root();
+    let fixture_path = root.join("tests/release-e2e/cases/726_async_file_round_trip.rvn");
+    let source = std::fs::read_to_string(&fixture_path)
+        .unwrap_or_else(|e| panic!("read {}: {}", fixture_path.display(), e));
+
+    let (stdout, stderr, ok) = compile_and_run(&source, "async_io_async_file_round_trip");
+    assert!(
+        ok,
+        "binary exited non-zero. stdout=[{}] stderr=[{}]",
+        stdout, stderr
+    );
+    assert_eq!(
+        stdout.trim(),
+        "write_ok\nok",
+        "expected 'write_ok\\nok'; got stdout=[{}] stderr=[{}]",
+        stdout,
+        stderr
+    );
+}

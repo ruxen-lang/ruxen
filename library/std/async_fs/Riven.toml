@@ -1,0 +1,12 @@
+[package]
+name = "std-async_fs"
+version = "0.1.0"
+description = "Async file I/O (AsyncFile.open / read_to_string / write_all) backed by the per-thread reactor."
+
+[dependencies]
+std-core = "= 0.1.0"
+std-io = "= 0.1.0"
+std-future = "= 0.1.0"
+
+[system_libs]
+libs = []
