@@ -140,6 +140,26 @@ pub const BOOTSTRAP_FILES: &[&str] = &[
     "foobar/src/lib.rvn",
 ];
 
+/// Derive the ordered list of package names from [`BOOTSTRAP_FILES`].
+/// The first path segment of each entry is the package name (e.g.
+/// `"io/src/lib.rvn"` → `"io"`), matching the per-package layout
+/// `library/std/<pkg>/src/lib.rvn`. Duplicates in BOOTSTRAP_FILES are
+/// preserved (none expected; would indicate a bug in the file list).
+///
+/// Task #17: this is the single source of truth for std-submodule
+/// namespaces. `register_builtins` consumes it (plus a small static
+/// list of synthetic namespaces — `thread` / `signal` — that re-export
+/// sync.rvn shims under legacy import paths) to assemble the `std`
+/// module's items at resolver-init time. Adding a new stdlib package
+/// is therefore a one-line BOOTSTRAP_FILES edit: `std.<new>.X`
+/// resolution comes along automatically.
+pub fn bootstrap_package_names() -> Vec<&'static str> {
+    BOOTSTRAP_FILES
+        .iter()
+        .filter_map(|rel| rel.split('/').next())
+        .collect()
+}
+
 /// Production entry point: parse every stdlib file in
 /// [`BOOTSTRAP_FILES`] and return the resulting [`Program`] AST list.
 /// Parse failures are reported via the `diagnostics` out-parameter

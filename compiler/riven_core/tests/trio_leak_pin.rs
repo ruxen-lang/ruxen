@@ -53,6 +53,13 @@ fn parse_source(src: &str) -> Program {
     parser.parse().expect("parse")
 }
 
+fn rvn(name: &str) -> String {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/riven")
+        .join(format!("{name}.rvn"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+}
+
 #[test]
 fn foobar_class_resolves_and_typechecks() {
     // Tiny user program that exercises every FooBar surface.
@@ -120,6 +127,33 @@ def main\n  let f = FooBar.new(7)\n  let _ = f.get\nend\n";
     assert!(
         foobar_int.is_sync_with(&result.symbols),
         "FooBar[Int] must be Sync (`include Sync` in class body + Int: Sync)"
+    );
+}
+
+/// Task #17 — `std.foobar.FooBar` must resolve through the std-namespace
+/// path. Every other stdlib type is reachable via `std.<pkg>.<Type>`
+/// (`std.io.File`, `std.fs.OpenOptions`, `std.net.TcpStream`) because
+/// the hand-maintained STD_SUBMODULES list in `resolve/stdlib/mod.rs`
+/// names them. The trio-leak claim is that adding `library/std/<pkg>/`
+/// requires ONLY a one-line BOOTSTRAP_FILES entry — so the std-namespace
+/// path must come along automatically. Task #17 derives STD_SUBMODULES
+/// from BOOTSTRAP_FILES basenames; this pin asserts the auto-derive
+/// landed.
+#[test]
+fn foobar_resolves_through_std_namespace() {
+    let src = rvn("foobar_via_std_namespace");
+    let program = parse_source(&src);
+    let result = typeck::type_check(&program);
+    let errors: Vec<&Diagnostic> = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.level == DiagnosticLevel::Error)
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "`use std.foobar.FooBar` must resolve through the std namespace \
+         (Task #17 — STD_SUBMODULES derived from BOOTSTRAP_FILES); got: {:?}",
+        errors
     );
 }
 

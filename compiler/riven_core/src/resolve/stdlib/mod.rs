@@ -273,42 +273,48 @@ pub(super) fn register_all(r: &mut Resolver) {
     // a TYPE (`let x: ThreadId = ...`) — no sentinel-value usage
     // remains in tree.
 
-    // Phase D-4 of #06.95: register the `std.<pkg>` submodules from a
-    // single static list rather than 12 hand-written
-    // `r.symbols.define(...)` blocks. Each entry here results in an
-    // empty `DefKind::Module` — `auto_populate_std_submodules_from_packages`
-    // fills the items list from the matching
-    // `library/std/<pkg>/src/lib.rvn` after the bootstrap merge.
+    // Task #17 (Phase D-4 of #06.95 — auto-derived): the std-submodule
+    // list is now derived from `bootstrap::BOOTSTRAP_FILES` rather than
+    // hand-maintained here. Each package entry in BOOTSTRAP_FILES
+    // (basename of `<pkg>/src/lib.rvn`) becomes one `std.<pkg>` empty
+    // `DefKind::Module`; `auto_populate_std_submodules_from_packages`
+    // then fills the items list from the matching package after the
+    // bootstrap merge. Adding a new stdlib package = one line in
+    // BOOTSTRAP_FILES; `use std.<new>.X` resolves automatically.
     //
-    // Two entries (`thread`, `signal`) don't have a same-named
-    // package — they're synthetic namespaces that re-export
+    // SYNTHETIC_STD_SUBMODULES carries the namespaces that do NOT have
+    // a same-named bootstrap package — `thread` and `signal` re-export
     // sync.rvn's bare-fn shims (`sleep`, `signal_install_sigint`,
     // `signal_received_sigint`) under the legacy import paths
     // `use std.thread.sleep` / `use std.signal.*`. The resolver's
-    // auto-population skips them silently (no `library/std/thread/`
-    // exists) and they stay empty modules — fine for namespace
-    // tokenisation; callers go through the global-prelude entries
-    // for the actual fn resolution.
-    const STD_SUBMODULES: &[&str] = &[
-        "io",
-        "env",
-        "fs",
-        "process",
-        "time",
-        "path",
-        "net",
-        "bufio",
-        "sync",
-        "fmt",
-        "signal",
-        "thread",
-        "rand",
-    ];
-    let std_items: Vec<_> = STD_SUBMODULES
+    // auto-population skips them silently (no matching package in
+    // `bootstrap_auto_packages`) and they stay empty modules — fine
+    // for namespace tokenisation; callers go through the global-prelude
+    // entries for the actual fn resolution.
+    //
+    // Ordering: bootstrap-package basenames first (in BOOTSTRAP_FILES
+    // order), then synthetic. Duplicates between the two sets are
+    // dropped (the synthetic list wins only if the name is unique).
+    const SYNTHETIC_STD_SUBMODULES: &[&str] = &["thread", "signal"];
+    let bootstrap_pkg_names = crate::resolve::bootstrap::bootstrap_package_names();
+    let mut submodule_names: Vec<&str> = Vec::with_capacity(
+        bootstrap_pkg_names.len() + SYNTHETIC_STD_SUBMODULES.len(),
+    );
+    for name in &bootstrap_pkg_names {
+        if !submodule_names.contains(name) {
+            submodule_names.push(*name);
+        }
+    }
+    for name in SYNTHETIC_STD_SUBMODULES {
+        if !submodule_names.contains(name) {
+            submodule_names.push(*name);
+        }
+    }
+    let std_items: Vec<_> = submodule_names
         .iter()
         .map(|name| {
             r.symbols.define(
-                name.to_string(),
+                (*name).to_string(),
                 DefKind::Module { items: vec![] },
                 Visibility::Public,
                 span.clone(),
