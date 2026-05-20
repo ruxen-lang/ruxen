@@ -67,26 +67,3 @@ lib "runtime/time.c"
   def unix_ns as "riven_time_unix_ns"() -> Int
 end
 
-## --- Sub-phase 4A: reactor free-fn lib decls -----------------------
-##
-## Spec: docs/specs/stdlib/async_io.spec.md Milestone 4A.
-##
-## The four reactor primitives in C (library/std/future/runtime/
-## reactor.c) get declared here as free-fn lib decls so user-side
-## code (and the future `TimeSleepFuture` hand-written future) can
-## reach them through the FFI alias map.
-##
-## Status: 4A landed the C reactor + per-thread reactor lifecycle
-## hooked into `Context.executor` / `Context.drop` + the
-## `Thread.yield_now` → `riven_reactor_park_current` indirection in
-## time.c. The user-side `time.sleep(d) -> TimeSleepFuture` future
-## that wraps these primitives is BLOCKED on a separate gap in the
-## bootstrap merge — see the report-back accompanying the 4A commit.
-## Until that lands, these lib decls exist as the wire surface only;
-## no Riven-level caller is shipped in this commit.
-lib "../../future/runtime/reactor.c"
-  def riven_reactor_current_handle() -> Int
-  def riven_reactor_register_timer(reactor: Int, nanos: Int) -> Int
-  def riven_reactor_check_fired(reactor: Int, handle: Int) -> Int
-  def riven_reactor_deregister(reactor: Int, handle: Int) -> ()
-end

@@ -1,0 +1,15 @@
+## Sub-phase 4A B1: hand-written future from std.time must
+## typecheck end-to-end — class registration + Future mixin +
+## Output = () + def var poll + def init + def drop.
+##
+## Constructs a TimeSleepFuture but never polls it; the surface
+## check here is enough to assert the bootstrap pass-2 pickup
+## (task #14 fix, commit b74546d) is wired through. The runtime
+## path is covered by the e2e fixture 725_time_sleep_block_on.rvn.
+
+use std.time.Duration
+
+def main
+  let _f = Async.sleep(Duration.from_millis(10))
+  puts "compiled"
+end
