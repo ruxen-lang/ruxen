@@ -126,7 +126,24 @@ flushed. Yields `Pending` when `write()` returns `EAGAIN`.
 
 ---
 
-## Milestone 4C — AsyncTcpStream
+## Milestone 4C — AsyncTcpStream + AsyncTcpListener
+
+Server work needs both sides. `AsyncTcpListener` ships in the same
+milestone as `AsyncTcpStream`; they share the reactor registration
+pattern (fd + EPOLLIN/EVFILT_READ) and read/write Drop discipline.
+
+### B6.5 — `AsyncTcpListener.bind(addr: &str) -> some Future[Output = Result[AsyncTcpListener, IoError]]`
+
+Wraps `socket(2)` + `bind(2)` + `listen(2)` with `O_NONBLOCK`. The
+future resolves Ready immediately on success (bind doesn't block);
+the async return is for surface symmetry with `AsyncTcpStream.connect`.
+
+### B6.6 — `AsyncTcpListener.accept(&var self) -> some Future[Output = Result[(AsyncTcpStream, String), IoError]]`
+
+Returns `(stream, peer_addr)` on success. Yields Pending when
+`accept(2)` returns EAGAIN; reactor wakes on EPOLLIN. The accepted
+stream is already non-blocking (inherits via `accept4(2)` on Linux,
+explicit `fcntl(F_SETFL, O_NONBLOCK)` on macOS).
 
 ### B7 — `AsyncTcpStream.connect(addr: &str) -> some Future[Output = Result[AsyncTcpStream, IoError]]`
 
@@ -153,18 +170,19 @@ Writes up to content.len bytes. Returns count written.
 Shuts down the fd cleanly (`shutdown(SHUT_RDWR)` + `close`). The
 `self` is consumed by-move.
 
-### B11 — TCP echo e2e
+### B11 — TCP echo e2e (full server + client round-trip)
 
-E2E fixture: spawn a listener that accepts one connection and echoes
-back what it reads, then connect a client that writes "hello" and
-reads it back. Asserts round-trip in under 1s. Single-threaded —
-the listener and client run in the same `block_on` via
-sequential `.await`s (no task.spawn yet — that's sub-phase 5).
+E2E fixture: bind an `AsyncTcpListener`, accept one connection,
+echo what's read, then a client connects, writes "hello", reads it
+back, asserts equality. Round-trip in under 1s.
 
-Practical limit: the listener uses `Thread.spawn` (sync) to run the
-accept side in a separate thread for the duration of the test —
+Practical setup: the listener side uses `Thread.spawn` (sync) to run
+the accept loop in a separate thread for the test's duration —
 single-threaded async can't do listener + client in the same
-process without spawn. Document this as the v1 test setup.
+`block_on` without `task.spawn`, which doesn't ship until
+sub-phase 5. Once sub-phase 5 lands, an e2e refactor moves the
+listener + client into one `block_on` with two `task.spawn` calls;
+4C ships the thread-bridged version.
 
 ### B12 — TCP echo drop / cleanup
 
