@@ -138,20 +138,7 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // mangling path. `File_drop` is registered in the
         // user_drop_classes set (mir/lower/collect.rs) so the MIR
         // emits it before the spine dealloc at scope exit.
-        "File_open" => return Ok("riven_file_open"),
-        "File_create" => return Ok("riven_file_create"),
-        "File_append" => return Ok("riven_file_append"),
-        "File_open_options" => return Ok("riven_file_open_options"),
-        "File_read" => return Ok("riven_file_read"),
-        "File_read_to_string" => return Ok("riven_file_read_to_string"),
-        "File_read_all" => return Ok("riven_file_read_all"),
-        "File_write" => return Ok("riven_file_write"),
-        "File_write_all" => return Ok("riven_file_write_all"),
-        "File_write_str" => return Ok("riven_file_write_str"),
-        "File_flush" => return Ok("riven_file_flush"),
-        "File_seek" => return Ok("riven_file_seek"),
         "File_metadata" => return Ok("riven_file_metadata"),
-        "File_close" => return Ok("riven_file_close"),
         "OpenOptions_new" => return Ok("riven_open_options_new"),
         "OpenOptions_read" => return Ok("riven_open_options_read"),
         "OpenOptions_write" => return Ok("riven_open_options_write"),

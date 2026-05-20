@@ -136,17 +136,51 @@ class Stderr
   end
 end
 
-## std::io::File — owning wrapper around a POSIX fd. The `def drop`
-## lib decl drives the user_drop_classes auto-detect — `let f =
-## File.open(...)` going out of scope emits `File_drop` → closes the
-## fd if still open, then `riven_dealloc` frees the 8-byte spine.
-class File
-  lib "runtime/file.c"
-    def drop as "riven_file_drop"(self) -> ()
-  end
+## std::io::OpenOptions — fluent builder for `File.open_options`.
+## Declared BEFORE File so File's `open_options` lib decl can
+## reference it as a param type without a forward-reference miss.
+##
+## OpenOptions methods stay on the runtime_table dispatch path for
+## now — the C runtime takes `int8_t` for the setter Bool args
+## (`riven_open_options_read(opts, int8_t)`), and the cranelift
+## verifier rejects the Riven Bool → C int8_t coercion when the
+## FFI lib decl carries a typed signature. A follow-up needs to
+## either widen the param to Int at the .rvn surface or fix the
+## Bool→int8_t coercion at the codegen side.
+class OpenOptions
 end
 
-class OpenOptions
+## std::io::File — owning wrapper around a POSIX fd. The class-body
+## lib block carries the static-ctor surface (`File.open` /
+## `.create` / `.append` / `.open_options`) and the instance method
+## surface (`read` / `write` / `seek` / `flush` / `close` / `drop`).
+## Phase E-rest 1 of #06.95 moved these from `runtime_table` arms —
+## the FFI alias map populated from `as "..."` clauses rewrites the
+## MIR-mangled callee (`File_open` → `riven_file_open`) BEFORE
+## codegen consults runtime_table.
+##
+## `File.metadata -> Result[Metadata, IoError]` stays on the
+## runtime_table dispatch path because `Metadata` is declared in
+## `library/std/fs/src/lib.rvn` which loads AFTER io.rvn — the
+## forward reference would fail to resolve here. Migrating that one
+## method needs Metadata to land in io.rvn (or fs to load earlier).
+class File
+  lib "runtime/file.c"
+    def self.open as "riven_file_open"(path: &String) -> Result[File, IoError]
+    def self.create as "riven_file_create"(path: &String) -> Result[File, IoError]
+    def self.append as "riven_file_append"(path: &String) -> Result[File, IoError]
+    def self.open_options as "riven_file_open_options"(path: &String, opts: &OpenOptions) -> Result[File, IoError]
+    def read as "riven_file_read"(self, buf: &var Array[Int]) -> Result[Int, IoError]
+    def read_to_string as "riven_file_read_to_string"(self) -> Result[String, IoError]
+    def read_all as "riven_file_read_all"(self) -> Result[Array[Int], IoError]
+    def write as "riven_file_write"(self, bytes: &Array[Int]) -> Result[Int, IoError]
+    def write_all as "riven_file_write_all"(self, bytes: &Array[Int]) -> Result[(), IoError]
+    def write_str as "riven_file_write_str"(self, s: &String) -> Result[(), IoError]
+    def flush as "riven_file_flush"(self) -> Result[(), IoError]
+    def seek as "riven_file_seek"(self, from: SeekFrom) -> Result[Int, IoError]
+    def close as "riven_file_close"(self) -> Result[(), IoError]
+    def drop as "riven_file_drop"(self) -> ()
+  end
 end
 
 ## BufReader / BufWriter classes moved to `library/std/bufio/src/lib.rvn`
