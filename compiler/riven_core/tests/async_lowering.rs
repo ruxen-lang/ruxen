@@ -413,3 +413,61 @@ fn context_test_dummy_constructs() {
         "expected `Context.test_dummy` static method to be registered"
     );
 }
+
+// ─── Task #21 — class-static-method-call .await ─────────────────────
+
+/// Task #21 / docs/specs/syntax/async_lowering.spec.md B9 extension:
+/// `Class.method(args).await` is a valid awaitee shape when `method`
+/// is a static method declared in source and its return type is a
+/// named Future class (a class with `def var poll(...) -> Poll[T]`).
+/// The hoisted `__sub_0` field's type must be the Future class
+/// returned by the method (NOT a `__<FnName>Future` synth — there is
+/// no synth class for non-async-fn awaitees). The hoisted binding's
+/// type must be the Future's Output (`T` in `Poll[T]`).
+///
+/// Pin shape: see `tests/fixtures/riven/async_lowering_class_static_await.rvn`
+/// for the fixture. Verify:
+///   - the async fn lowers (no diagnostics, synth class exists)
+///   - `__sub_0` field is typed as `FakeReady` (the awaitee's Future class)
+///   - the hoisted binding `v` field is typed as `Int` (Output of FakeReady)
+#[test]
+fn class_static_method_call_await_lowers() {
+    let result = typeck_result(&rvn("async_lowering_class_static_await"));
+    let errors = error_messages(&result.diagnostics);
+    assert!(
+        errors.is_empty(),
+        "class-static-call .await fixture must typecheck: {:?}",
+        errors
+    );
+
+    let sm_class = result
+        .program
+        .items
+        .iter()
+        .find_map(|item| match item {
+            HirItem::Class(c) if c.name == "__CallStaticFuture" => Some(c),
+            _ => None,
+        })
+        .expect("expected synth state machine `__CallStaticFuture`");
+
+    // __sub_0 must exist and be the awaitee's Future class
+    // (`FakeReady` here — NOT a `__SomethingFuture` synth class).
+    let sub_field = sm_class
+        .fields
+        .iter()
+        .find(|f| f.name == "__sub_0")
+        .expect("expected `__sub_0` sub-future field on __CallStaticFuture");
+    let sub_ty_name = format!("{:?}", sub_field.ty);
+    assert!(
+        sub_ty_name.contains("FakeReady"),
+        "expected __sub_0 field type to reference FakeReady; got: {:?}",
+        sub_field.ty
+    );
+
+    // Hoisted binding `v` must exist (the Output of the awaited future).
+    assert!(
+        sm_class.fields.iter().any(|f| f.name == "v"),
+        "expected hoisted `v` field on __CallStaticFuture (Output = Int from FakeReady's Poll[Int]); fields: {:?}",
+        sm_class.fields.iter().map(|f| &f.name).collect::<Vec<_>>()
+    );
+}

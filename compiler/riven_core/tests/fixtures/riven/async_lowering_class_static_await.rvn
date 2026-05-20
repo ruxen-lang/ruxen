@@ -1,0 +1,39 @@
+## Task #21 (this fixture):
+## class-static-method call `.await` shape — `Class.action(args).await`.
+## Exercises the extended `describe_await` pattern that recognises a
+## `MethodCall { object: Identifier(Class), method, args }` awaitee
+## (in addition to the original direct free-fn call).
+##
+## The fixture declares its OWN Future class and its OWN namespace
+## class with a static factory so the lowering can be exercised in
+## isolation — no dependency on stdlib `Async`/`TimeSleepFuture`
+## ordering.
+
+class FakeReady
+  remaining: Int
+  include Future
+  type Output = Int
+
+  def init(@remaining: Int)
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    if self.remaining == 0
+      Poll.Ready(7)
+    else
+      self.remaining = self.remaining - 1
+      Poll.Pending
+    end
+  end
+end
+
+class FakeNs
+  def self.make(n: Int) -> FakeReady
+    FakeReady.new(n)
+  end
+end
+
+async def call_static() -> Int
+  let v = FakeNs.make(0).await
+  v + 1
+end

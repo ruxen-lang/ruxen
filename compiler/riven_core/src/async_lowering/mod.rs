@@ -60,6 +60,26 @@ pub fn lower_async_defs(program: &mut Program) {
         }
     }
 
+    // Task #21: class-static-method-call awaitee support
+    // (`Class.method(args).await`). We collect two AST-time tables:
+    //
+    //   1. class_static_returns: (ClassName, MethodName) -> declared return type.
+    //      Populated by walking each top-level class's `methods` and
+    //      `lib_decls`. Filters to STATIC (class-level) methods only
+    //      — instance methods are not supported as awaitee receivers
+    //      in this milestone (the receiver's class is not known at
+    //      AST-rewrite time without typeck).
+    //
+    //   2. future_outputs: FutureClassName -> Output type. Populated
+    //      by walking each class's `methods` for a `poll(cx) -> Poll[T]`
+    //      method (which is the canonical Future-mixin marker). The
+    //      `T` is the future's Output. Used to type the hoisted
+    //      `<binding>` field for method-call awaitees.
+    //
+    // Both maps live for the duration of the lowering pass.
+    let class_static_returns = collect_class_static_returns(program);
+    let future_outputs = collect_future_outputs(program);
+
     let mut new_classes: Vec<TopLevelItem> = Vec::new();
 
     for item in program.items.iter_mut() {
@@ -78,9 +98,12 @@ pub fn lower_async_defs(program: &mut Program) {
                 // (E1115 for `.await` in loops; the dedicated
                 // diagnostic for if/match arms is deferred). Future
                 // work will broaden the supported shape.
-                if let Some((rewritten, sm_class)) =
-                    lower_one_async_fn_with_await(func, &async_fn_returns)
-                {
+                if let Some((rewritten, sm_class)) = lower_one_async_fn_with_await(
+                    func,
+                    &async_fn_returns,
+                    &class_static_returns,
+                    &future_outputs,
+                ) {
                     *func = rewritten;
                     new_classes.push(TopLevelItem::Class(sm_class));
                 }
@@ -120,6 +143,105 @@ pub fn lower_async_defs(program: &mut Program) {
     // version permits it (or if E1112 is deferred) the rewriter
     // produces a working poll loop either way.
     rewrite_block_on_calls(program);
+}
+
+/// Build the `(ClassName, MethodName) -> ReturnType` map for every
+/// top-level class's STATIC methods (`def self.X` form). Covers both
+/// hand-written `methods` and `lib_decls` (FFI shells). Used by
+/// `describe_await` to recognise `Class.method(args).await` awaitees
+/// — task #21.
+///
+/// Instance methods are intentionally NOT collected here: the awaitee
+/// receiver for an instance call is a value expression whose static
+/// type is unknown at this pre-resolve AST pass. Supporting
+/// `obj.method().await` requires either deferring .await desugar to
+/// post-typeck or annotating the receiver — deferred to a follow-up.
+fn collect_class_static_returns(program: &Program) -> HashMap<(String, String), TypeExpr> {
+    let mut out: HashMap<(String, String), TypeExpr> = HashMap::new();
+    for item in &program.items {
+        let class = match item {
+            TopLevelItem::Class(c) => c,
+            _ => continue,
+        };
+        // Hand-written class methods declared as `def self.X(...) -> T`.
+        for m in &class.methods {
+            if !m.is_class_method {
+                continue;
+            }
+            if let Some(ret) = &m.return_type {
+                out.insert((class.name.clone(), m.name.clone()), ret.clone());
+            }
+        }
+        // FFI shells declared inside `lib "..." ... end` blocks in the
+        // class body. `def self.X as "..."(...) -> T` has
+        // `FfiFunction.is_class_method == true`.
+        for lib in &class.lib_decls {
+            for f in &lib.functions {
+                if !f.is_class_method {
+                    continue;
+                }
+                if let Some(ret) = &f.return_type {
+                    out.insert((class.name.clone(), f.name.clone()), ret.clone());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Build the `FutureClassName -> OutputType` map.
+///
+/// A class is a Future when it includes the `Future` mixin and
+/// declares a `def var poll(cx: &var Context) -> Poll[T]` method.
+/// The Output is the `T` parameter in `Poll[T]`. We scan the class's
+/// `methods` for `poll` and extract the single generic argument from
+/// its return type.
+///
+/// Note: this misses classes that declare `type Output = X` at the
+/// top-level class body (the parser currently discards that
+/// declaration — see `parser/classes.rs::parse_class_def`'s
+/// `TokenKind::Type` arm) AND don't have an explicit `poll` body in
+/// the same file. In practice every Future class today declares poll
+/// with a concrete `Poll[T]` return so this is sufficient for v1.
+fn collect_future_outputs(program: &Program) -> HashMap<String, TypeExpr> {
+    let mut out: HashMap<String, TypeExpr> = HashMap::new();
+    for item in &program.items {
+        let class = match item {
+            TopLevelItem::Class(c) => c,
+            _ => continue,
+        };
+        for m in &class.methods {
+            if m.name != "poll" || m.is_class_method {
+                continue;
+            }
+            let ret = match &m.return_type {
+                Some(r) => r,
+                None => continue,
+            };
+            // Extract T from Poll[T].
+            if let Some(inner) = extract_poll_output(ret) {
+                out.insert(class.name.clone(), inner);
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// If `ty` is `Poll[T]`, return `T`. Otherwise return `None`.
+fn extract_poll_output(ty: &TypeExpr) -> Option<TypeExpr> {
+    let path = match ty {
+        TypeExpr::Named(p) => p,
+        _ => return None,
+    };
+    if path.segments.len() != 1 || path.segments[0] != "Poll" {
+        return None;
+    }
+    let args = path.generic_args.as_ref()?;
+    if args.len() != 1 {
+        return None;
+    }
+    Some(args[0].clone())
 }
 
 /// Lower a single top-level `async def` into a (rewritten sync fn,
@@ -407,6 +529,8 @@ fn lower_one_async_fn(func: &FuncDef) -> Option<(FuncDef, ClassDef)> {
 fn lower_one_async_fn_with_await(
     func: &FuncDef,
     async_fn_returns: &HashMap<String, (String, TypeExpr)>,
+    class_static_returns: &HashMap<(String, String), TypeExpr>,
+    future_outputs: &HashMap<String, TypeExpr>,
 ) -> Option<(FuncDef, ClassDef)> {
     let span = func.span.clone();
     let class_name = mangle_future_class_name(&func.name);
@@ -431,7 +555,13 @@ fn lower_one_async_fn_with_await(
     let outer_arg_names: Vec<String> = func.params.iter().map(|p| p.name.clone()).collect();
     let mut subs: Vec<AwaitSub> = Vec::new();
     for al in &await_lets {
-        let sub = describe_await(al, async_fn_returns, &outer_arg_names)?;
+        let sub = describe_await(
+            al,
+            async_fn_returns,
+            class_static_returns,
+            future_outputs,
+            &outer_arg_names,
+        )?;
         subs.push(sub);
     }
 
@@ -495,34 +625,19 @@ fn lower_one_async_fn_with_await(
 
     let mut init_body_stmts: Vec<Statement> = Vec::new();
     for (i, sub) in subs.iter().enumerate() {
-        // self.__sub_i = <SubFutureClass>.new(0, <args rewritten as self.arg>)
-        let mut ctor_args: Vec<Expr> = Vec::new();
-        ctor_args.push(Expr {
-            kind: ExprKind::IntLiteral(0, None),
-            span: span.clone(),
-        });
-        for a in &sub.awaitee_args {
-            let mut rewritten = a.clone();
-            rewrite_arg_refs_in_expr(&mut rewritten, &outer_arg_names);
-            ctor_args.push(rewritten);
-        }
-        let ctor = Expr {
-            kind: ExprKind::MethodCall {
-                object: Box::new(Expr {
-                    kind: ExprKind::Identifier(sub.sub_class_name.clone()),
-                    span: span.clone(),
-                }),
-                method: "new".to_string(),
-                generic_args: Vec::new(),
-                args: ctor_args,
-                block: None,
-            },
-            span: span.clone(),
-        };
+        // self.__sub_i = <awaitee_ctor>
+        //
+        // `awaitee_ctor` is the pre-built constructor expression for
+        // the sub-future. For a free-fn awaitee `g(args).await` it is
+        // `__GFuture.new(0, args_rewritten...)` (synthesised in
+        // `describe_await`). For a class-static-method-call awaitee
+        // `Class.method(args).await` it is the original
+        // `Class.method(args_rewritten...)` expression (the user-written
+        // method already returns the Future class).
         init_body_stmts.push(Statement::Expression(Expr {
             kind: ExprKind::Assign {
                 target: Box::new(self_field(&format!("__sub_{i}"), &span)),
-                value: Box::new(ctor),
+                value: Box::new(sub.awaitee_ctor.clone()),
             },
             span: span.clone(),
         }));
@@ -671,19 +786,32 @@ fn lower_one_async_fn_with_await(
 struct AwaitSub {
     /// `x` in `let x = g(args).await`. Becomes a field on the sm class.
     binding_name: String,
-    /// Awaited fn name (e.g. `g`).
-    #[allow(dead_code)]
-    awaitee_fn_name: String,
-    /// Args passed to the awaitee fn at the await site (e.g. `[]` for
-    /// `g().await`, `[a]` for `g(a).await`). Args may reference outer
-    /// async-fn args via bare `Identifier`; they're rewritten to
-    /// `self.<name>` when emitted into the synth class's init body.
-    awaitee_args: Vec<Expr>,
-    /// `__GFuture` — the synth state-machine class for the awaitee.
+    /// Pre-built constructor expression for the sub-future. The init
+    /// body emits `self.__sub_i = <awaitee_ctor>` literally — outer
+    /// async-fn arg refs have already been rewritten to `self.<arg>`
+    /// in `describe_await`.
+    ///
+    /// For a free-fn awaitee `g(args).await`, this is
+    /// `__GFuture.new(0, args_rewritten...)` — built by `describe_await`
+    /// to bypass `g`'s wrapper (`g` post-lowering returns a fresh
+    /// `__GFuture` too, but the direct `.new(0, …)` avoids the extra
+    /// call).
+    ///
+    /// For a class-static-method-call awaitee `Class.method(args).await`,
+    /// this is the user-written `Class.method(args_rewritten...)`
+    /// expression preserved verbatim. The method itself constructs the
+    /// future class (e.g. `Async.sleep(d)` returns `TimeSleepFuture.new(d)`).
+    awaitee_ctor: Expr,
+    /// Future class name (`__GFuture` for free-fn awaitees;
+    /// `TimeSleepFuture`, `AsyncReadToStringFuture`, etc. for
+    /// class-static-method-call awaitees). Used to type the
+    /// `__sub_i` field.
     sub_class_name: String,
-    /// User-declared return type of the awaited fn (`Int` for
-    /// `async def g() -> Int`). The awaited local's field type is
-    /// this type after `Poll.Ready(v)` unwraps.
+    /// Future's Output type — the value bound by the await. For a
+    /// free-fn awaitee `async def g() -> T`, this is `T`. For a
+    /// class-static awaitee whose method returns `<FutClass>`, this
+    /// is the Output associated with `<FutClass>` (read from its
+    /// `poll(...) -> Poll[T]` method signature).
     result_type: TypeExpr,
 }
 
@@ -779,11 +907,42 @@ fn segment_body(body: &Block) -> Option<(Vec<LetBinding>, Vec<Statement>)> {
     Some((await_lets, tail))
 }
 
-/// Describe a single `let x = g(args).await` await site.
+/// Describe a single `let x = <awaitee>.await` await site.
+///
+/// Supported awaitee shapes:
+///
+///   1. `name(args)` — direct call of a known top-level async free fn.
+///      The compiler has already lowered `name` into a sync wrapper
+///      that returns `__NameFuture`; this branch bypasses the wrapper
+///      and emits `__NameFuture.new(0, args)` directly. Output type
+///      comes from the user's declared return on `name`.
+///
+///   2. `Class.method(args)` — class-static-method call where
+///      `Class` is the AST identifier of a class declared in this
+///      translation unit, `method` is one of its `def self.X` /
+///      `def self.X as "..."` decls, and `method`'s declared return
+///      type is a named Future class (i.e., a class with a
+///      `poll(cx) -> Poll[T]` method) — Task #21. The awaitee
+///      expression is preserved verbatim as the init-body
+///      constructor; Output type comes from the Future class's
+///      `Poll[T]`.
+///
+/// Instance-method-call awaitees (`obj.method().await`) are NOT
+/// supported in this milestone — the receiver's static type is not
+/// known at this pre-resolve pass. Deferred to a follow-up that
+/// either annotates the receiver or re-runs the awaitee classification
+/// after typeck.
+///
+/// Returns `None` if the awaitee shape doesn't match either supported
+/// pattern. Downstream `lower_one_async_fn_with_await` returns `None`
+/// for the whole function in that case, and the resolver/typeck pass
+/// surfaces a follow-up diagnostic.
 fn describe_await(
     lb: &LetBinding,
     async_fn_returns: &HashMap<String, (String, TypeExpr)>,
-    _outer_arg_names: &[String],
+    class_static_returns: &HashMap<(String, String), TypeExpr>,
+    future_outputs: &HashMap<String, TypeExpr>,
+    outer_arg_names: &[String],
 ) -> Option<AwaitSub> {
     let binding_name = match &lb.pattern {
         Pattern::Identifier { name, .. } => name.clone(),
@@ -794,23 +953,114 @@ fn describe_await(
         ExprKind::Await(inner) => inner,
         _ => return None,
     };
-    // Awaitee must be a direct `name(args)` call on a known top-level
-    // async fn.
-    let (callee_name, args) = match &inner.kind {
-        ExprKind::Call { callee, args, .. } => match &callee.kind {
-            ExprKind::Identifier(n) => (n.clone(), args.clone()),
+    let span = inner.span.clone();
+
+    // Shape 1 — free-fn call: `name(args)`.
+    if let ExprKind::Call { callee, args, .. } = &inner.kind {
+        if let ExprKind::Identifier(callee_name) = &callee.kind {
+            if let Some((sub_class_name, result_type)) = async_fn_returns.get(callee_name).cloned()
+            {
+                let mut ctor_args: Vec<Expr> = Vec::with_capacity(args.len() + 1);
+                ctor_args.push(Expr {
+                    kind: ExprKind::IntLiteral(0, None),
+                    span: span.clone(),
+                });
+                for a in args {
+                    let mut rewritten = a.clone();
+                    rewrite_arg_refs_in_expr(&mut rewritten, outer_arg_names);
+                    ctor_args.push(rewritten);
+                }
+                let awaitee_ctor = Expr {
+                    kind: ExprKind::MethodCall {
+                        object: Box::new(Expr {
+                            kind: ExprKind::Identifier(sub_class_name.clone()),
+                            span: span.clone(),
+                        }),
+                        method: "new".to_string(),
+                        generic_args: Vec::new(),
+                        args: ctor_args,
+                        block: None,
+                    },
+                    span: span.clone(),
+                };
+                return Some(AwaitSub {
+                    binding_name,
+                    awaitee_ctor,
+                    sub_class_name,
+                    result_type,
+                });
+            }
+            return None;
+        }
+        return None;
+    }
+
+    // Shape 2 — class-static-method call: `Class.method(args)`.
+    //
+    // The parser folds `Class.method(args)` into
+    // `ExprKind::MethodCall { object: Identifier("Class"), method, args }`.
+    // We accept it as an awaitee when:
+    //   - the receiver is a bare Identifier
+    //   - `(Identifier, method)` resolves to a static-method return type
+    //     in `class_static_returns`
+    //   - the return type is `TypeExpr::Named(SimpleName)` whose name
+    //     is a known Future class in `future_outputs`
+    //
+    // Generic args on the receiver or on the method are not supported
+    // in this milestone — the awaitee resolution is name-based.
+    if let ExprKind::MethodCall {
+        object,
+        method,
+        generic_args,
+        args,
+        block,
+    } = &inner.kind
+    {
+        if !generic_args.is_empty() || block.is_some() {
+            return None;
+        }
+        let class_name = match &object.kind {
+            ExprKind::Identifier(n) => n.clone(),
             _ => return None,
-        },
-        _ => return None,
-    };
-    let (sub_class_name, result_type) = async_fn_returns.get(&callee_name)?.clone();
-    Some(AwaitSub {
-        binding_name,
-        awaitee_fn_name: callee_name,
-        awaitee_args: args,
-        sub_class_name,
-        result_type,
-    })
+        };
+        let ret_ty = class_static_returns.get(&(class_name.clone(), method.clone()))?;
+        let future_class_name = match ret_ty {
+            TypeExpr::Named(path) if path.segments.len() == 1 => path.segments[0].clone(),
+            _ => return None,
+        };
+        let output_ty = future_outputs.get(&future_class_name)?.clone();
+
+        // Preserve the original `Class.method(args)` expression as the
+        // sub-future constructor; just rewrite outer arg refs inside
+        // the args to `self.<arg>` references.
+        let mut rewritten_args: Vec<Expr> = Vec::with_capacity(args.len());
+        for a in args {
+            let mut rewritten = a.clone();
+            rewrite_arg_refs_in_expr(&mut rewritten, outer_arg_names);
+            rewritten_args.push(rewritten);
+        }
+        let awaitee_ctor = Expr {
+            kind: ExprKind::MethodCall {
+                object: Box::new(Expr {
+                    kind: ExprKind::Identifier(class_name.clone()),
+                    span: span.clone(),
+                }),
+                method: method.clone(),
+                generic_args: Vec::new(),
+                args: rewritten_args,
+                block: None,
+            },
+            span: span.clone(),
+        };
+        return Some(AwaitSub {
+            binding_name,
+            awaitee_ctor,
+            sub_class_name: future_class_name,
+            result_type: output_ty,
+        });
+    }
+
+    None
 }
 
 /// Build the multi-state poll body for a 2B lowering.
@@ -1068,6 +1318,18 @@ fn build_multi_state_poll_body(
 /// bail (the user's await-result type must support a placeholder
 /// today — the proper fix is `Option[T]`-wrapping in v2).
 fn default_value_for_type(ty: &TypeExpr, span: &Span) -> Option<Expr> {
+    // Unit type — `()` written as a tuple of zero elements, OR as the
+    // bare named type `Unit`. Task #21: enables awaitees whose Future
+    // Output is `()` (e.g. TimeSleepFuture, AsyncWriteAllFuture's
+    // analogues) to participate in `.await` lowering.
+    if let TypeExpr::Tuple { elements, .. } = ty {
+        if elements.is_empty() {
+            return Some(Expr {
+                kind: ExprKind::UnitLiteral,
+                span: span.clone(),
+            });
+        }
+    }
     if let TypeExpr::Named(path) = ty {
         if path.segments.len() == 1 {
             return match path.segments[0].as_str() {
@@ -1082,6 +1344,10 @@ fn default_value_for_type(ty: &TypeExpr, span: &Span) -> Option<Expr> {
                 }),
                 "Float" | "F32" | "F64" => Some(Expr {
                     kind: ExprKind::FloatLiteral(0.0, None),
+                    span: span.clone(),
+                }),
+                "Unit" => Some(Expr {
+                    kind: ExprKind::UnitLiteral,
                     span: span.clone(),
                 }),
                 _ => None,
