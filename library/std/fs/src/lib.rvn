@@ -15,28 +15,11 @@
 ## See docs/specs/stdlib/fs.spec.md for the behavioural contract. The
 ## C runtime symbols live in library/std/fs/runtime/fs.c.
 
-## std::fs::Metadata — flat-heap-struct accessor surface returned by
-## `fs.metadata(path)` / `file.metadata()`. Every accessor reads a
-## single field off the heap struct laid out by `riven_fs_metadata`
-## (see library/std/fs/runtime/fs.c). The `Bool`-returning accessors
-## are wire-compatible with `Int` (the C runtime returns `int64_t` 0/1)
-## and the lib-decl return type chooses the typeck-visible surface.
-class Metadata
-  lib "runtime/fs.c"
-    def len as "riven_metadata_len"(self) -> Int
-    def modified as "riven_metadata_modified"(self) -> Int
-    def is_file as "riven_metadata_is_file"(self) -> Bool
-    def is_dir as "riven_metadata_is_dir"(self) -> Bool
-    def is_symlink as "riven_metadata_is_symlink"(self) -> Bool
-    # `free` is a user-callable explicit release. Metadata is NOT in
-    # the user_drop_classes set (mir/lower/collect.rs) because its
-    # spine carries no inner heap — the flat-struct accessors above
-    # read fixed offsets and there is nothing the drop pass needs to
-    # cascade. Keeping `free` on the surface lets callers release the
-    # struct early when they hold a long-lived reference.
-    def free as "riven_metadata_free"(self) -> ()
-  end
-end
+## Metadata moved to `library/std/io/src/lib.rvn` in Phase E-rest 1b
+## of #06.95 so `File.metadata -> Result[Metadata, IoError]` lib
+## decl in io.rvn can resolve Metadata as a return type at parse
+## time. fs.metadata's `Result[Metadata, IoError]` resolves here
+## because fs.rvn loads after io.rvn — Metadata is in scope by then.
 
 ## std::fs namespace class — 17 static methods wrapping the C-runtime
 ## filesystem surface. Phase C of #06.95. The bare lib block below is

@@ -42,6 +42,17 @@ class TcpStream
     def write as "riven_tcp_stream_write"(self, bytes: &Array[Int]) -> Result[Int, IoError]
     def peer_addr as "riven_tcp_stream_peer_addr"(self) -> Result[String, IoError]
     def shutdown as "riven_tcp_stream_shutdown"(self, how: Shutdown) -> Result[(), IoError]
+    # `set_read_timeout` / `set_write_timeout` declare their second
+    # param as `Int` (the int64 nanosecond count) rather than the
+    # surface `&Duration` type because Duration is in time.rvn which
+    # loads AFTER net.rvn — forward-referencing it here would fail
+    # at parse time. The C runtime takes a `RivenDuration*` (just a
+    # single-field {int64 nanos} struct); the lib decl's Int matches
+    # the wire shape one level deep. Typeck callers pass via
+    # `&duration_obj` which lowers as the address of the int64 field
+    # at the ABI level, matching the C signature in practice.
+    def set_read_timeout as "riven_tcp_stream_set_read_timeout"(self, d: Int) -> Result[(), IoError]
+    def set_write_timeout as "riven_tcp_stream_set_write_timeout"(self, d: Int) -> Result[(), IoError]
     def close as "riven_tcp_stream_close"(self) -> Result[(), IoError]
     def drop as "riven_tcp_stream_drop"(self) -> ()
   end
@@ -54,6 +65,11 @@ class TcpListener
     def self.bind as "riven_tcp_listener_bind"(addr: &String) -> Result[TcpListener, IoError]
     def accept as "riven_tcp_listener_accept"(self) -> Result[TcpStream, IoError]
     def local_addr as "riven_tcp_listener_local_addr"(self) -> Result[String, IoError]
+    # `set_nonblocking(value: Int)` — Int (not Bool) for the same
+    # ABI reason as OpenOptions setters: Riven Bool literals lower
+    # to i64 at the call site; declaring Bool here makes the
+    # cranelift verifier reject the signature mismatch.
+    def set_nonblocking as "riven_tcp_listener_set_nonblocking"(self, value: Int) -> Result[(), IoError]
     def close as "riven_tcp_listener_close"(self) -> Result[(), IoError]
     def drop as "riven_tcp_listener_drop"(self) -> ()
   end

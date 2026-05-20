@@ -136,18 +136,49 @@ class Stderr
   end
 end
 
+## std::io::Metadata — flat-heap-struct accessor surface returned by
+## `File.metadata()` / `fs.metadata(path)`. Declared in io (rather
+## than fs) so File.metadata's lib decl can reference Metadata as a
+## return type at parse time (fs.rvn loads AFTER io.rvn in
+## BOOTSTRAP_FILES). The C runtime lives in fs.c so the lib path is
+## cross-package (`../fs/runtime/fs.c`).
+##
+## Metadata is NOT in user_drop_classes — its spine carries no inner
+## heap; the flat-struct accessors below read fixed offsets and
+## scope-exit cleanup goes through the generic `riven_dealloc` path.
+## `free` is a user-callable explicit release for callers holding a
+## long-lived reference.
+class Metadata
+  lib "../fs/runtime/fs.c"
+    def len as "riven_metadata_len"(self) -> Int
+    def modified as "riven_metadata_modified"(self) -> Int
+    def is_file as "riven_metadata_is_file"(self) -> Bool
+    def is_dir as "riven_metadata_is_dir"(self) -> Bool
+    def is_symlink as "riven_metadata_is_symlink"(self) -> Bool
+    def free as "riven_metadata_free"(self) -> ()
+  end
+end
+
 ## std::io::OpenOptions — fluent builder for `File.open_options`.
 ## Declared BEFORE File so File's `open_options` lib decl can
 ## reference it as a param type without a forward-reference miss.
 ##
-## OpenOptions methods stay on the runtime_table dispatch path for
-## now — the C runtime takes `int8_t` for the setter Bool args
-## (`riven_open_options_read(opts, int8_t)`), and the cranelift
-## verifier rejects the Riven Bool → C int8_t coercion when the
-## FFI lib decl carries a typed signature. A follow-up needs to
-## either widen the param to Int at the .rvn surface or fix the
-## Bool→int8_t coercion at the codegen side.
+## Setter `value` params declared as Int (not Bool) — the C runtime
+## takes int8_t per setter, but Riven Bool emits as i64 at the
+## call site (literal `true` is `i64 1`); declaring the lib decl
+## param as Bool caused the cranelift verifier to reject the
+## mismatched signature. Int matches the call ABI and the C side
+## silently truncates the bottom byte (0 or 1).
 class OpenOptions
+  lib "runtime/file.c"
+    def self.new as "riven_open_options_new"() -> OpenOptions
+    def read as "riven_open_options_read"(self, value: Int) -> OpenOptions
+    def write as "riven_open_options_write"(self, value: Int) -> OpenOptions
+    def append as "riven_open_options_append"(self, value: Int) -> OpenOptions
+    def truncate as "riven_open_options_truncate"(self, value: Int) -> OpenOptions
+    def create as "riven_open_options_create"(self, value: Int) -> OpenOptions
+    def create_new as "riven_open_options_create_new"(self, value: Int) -> OpenOptions
+  end
 end
 
 ## std::io::File — owning wrapper around a POSIX fd. The class-body
@@ -178,6 +209,7 @@ class File
     def write_str as "riven_file_write_str"(self, s: &String) -> Result[(), IoError]
     def flush as "riven_file_flush"(self) -> Result[(), IoError]
     def seek as "riven_file_seek"(self, from: SeekFrom) -> Result[Int, IoError]
+    def metadata as "riven_file_metadata"(self) -> Result[Metadata, IoError]
     def close as "riven_file_close"(self) -> Result[(), IoError]
     def drop as "riven_file_drop"(self) -> ()
   end

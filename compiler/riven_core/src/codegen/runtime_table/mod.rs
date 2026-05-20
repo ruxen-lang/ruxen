@@ -138,14 +138,6 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // mangling path. `File_drop` is registered in the
         // user_drop_classes set (mir/lower/collect.rs) so the MIR
         // emits it before the spine dealloc at scope exit.
-        "File_metadata" => return Ok("riven_file_metadata"),
-        "OpenOptions_new" => return Ok("riven_open_options_new"),
-        "OpenOptions_read" => return Ok("riven_open_options_read"),
-        "OpenOptions_write" => return Ok("riven_open_options_write"),
-        "OpenOptions_append" => return Ok("riven_open_options_append"),
-        "OpenOptions_truncate" => return Ok("riven_open_options_truncate"),
-        "OpenOptions_create" => return Ok("riven_open_options_create"),
-        "OpenOptions_create_new" => return Ok("riven_open_options_create_new"),
         // Phase 2 stdlib (#06.A3): std::fmt::Formatter methods.
         // Phase 2 stdlib (#06.D4): spec-aware constructor + precision
         // accessor + per-type precision helpers.
@@ -162,7 +154,6 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // runtime_table — see the comment on `class Thread` in
         // library/std/sync/src/lib.rvn for why the Duration and Int
         // overloads can't both ride the alias map yet.
-        "Thread_sleep" => return Ok("riven_thread_sleep_ns"),
         // `Thread_yield_now` migrated to library/std/sync/src/lib.rvn
         // `class Thread do lib "runtime/time.c" ... end end` in
         // #06.95 Phase E Slice B.4.
@@ -202,9 +193,6 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // Instance methods go through the standard `{Type}_{method}`
         // mangling. `*_drop` are emitted by the user_drop_classes
         // scope-exit pass — see mir/lower/collect.rs.
-        "TcpListener_set_nonblocking" => return Ok("riven_tcp_listener_set_nonblocking"),
-        "TcpStream_set_read_timeout" => return Ok("riven_tcp_stream_set_read_timeout"),
-        "TcpStream_set_write_timeout" => return Ok("riven_tcp_stream_set_write_timeout"),
         // Phase 2 stdlib (#06.5 T6): std::io::BufReader[R] /
         // BufWriter[W] over the closed set {File, TcpStream}. The
         // static ctors (`new`, `with_capacity`) carry a `_file` /
