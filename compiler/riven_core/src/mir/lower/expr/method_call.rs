@@ -1,3 +1,63 @@
+//! Method call lowering — `expr.method(args)` and `Class.method(args)`.
+//!
+//! ## Dispatch structure
+//!
+//! Lowering walks three logical branches in order:
+//!
+//! 1. **Static-ctor fast path** (`is_collection_ctor`, ~lines 33-365).
+//!    Fires when the call is `.new` / `.with_capacity` / specific
+//!    builtin static names. The branch FIRST consults
+//!    `lookup_ffi_alias` (the §B1 single-entry alias lookup) — if a
+//!    `<Base>_<method>` alias is registered, it dispatches directly
+//!    with the user's explicit args, no synthetic `self`. Falls back
+//!    to a hardcoded class-name list with specialised remapping
+//!    (Vec→Hash legacy names, BufReader suffix routing), then
+//!    String/Struct special cases, and finally the
+//!    `{ClassName}_init(self, args)` synthesis for any user class
+//!    with a `def init` body.
+//! 2. **`is_static` decision** (~line 667). For non-`.new` calls the
+//!    receiver type drives "static vs instance" via four signals:
+//!    builtin static methods, user-defined `def self.X`, the
+//!    `default` constant for `T: Default`, and "receiver is a class
+//!    identifier" (e.g. `JoinHandle.join_raw(handle)` written in
+//!    static style). The decision controls whether `self` is
+//!    prepended to `arg_values`.
+//! 3. **Final-callee resolution** (~line 1179). Builds the mangled
+//!    `ResolvedClass_method` name (with the bufio `_file`/`_tcp`
+//!    suffix when applicable) and routes it through
+//!    `resolve_ffi_alias_callee` — the wrapper that turns an alias
+//!    hit into the C symbol and a miss into the unchanged mangled
+//!    name (which the linker then resolves against a user-defined
+//!    method).
+//!
+//! ## §B1 consolidation scope
+//!
+//! Spec `docs/specs/system/compiler_consolidation.spec.md` §B1
+//! proposed collapsing the three branches into one
+//! `lower_method_call_via_ffi_alias` entry. The §B1 stop condition
+//! was triggered: the static-ctor fast path's `Class_init` synthesis
+//! (the `format!("{}_init", type_name)` emit at the bottom of
+//! Branch 1), the bufio kind-suffix routing, and the receiver-is-
+//! class-identifier signal each have semantics that don't cleanly
+//! fold into a generic helper without either preserving the existing
+//! complexity (no consolidation win) or losing specialised behaviour
+//! (regression).
+//!
+//! What §B1 DID consolidate:
+//!
+//! - The "is there an FFI alias for this name?" check now flows
+//!   through `lookup_ffi_alias` (mir/lower/mod.rs) — the single
+//!   entry. The `self.ffi_alias_map.contains_key(...)` direct probe
+//!   that lived at Branch 1's top is gone; the symmetric direct
+//!   probe in `fn_call.rs` is also gone.
+//! - `resolve_ffi_alias_callee` is now a thin wrapper around
+//!   `lookup_ffi_alias` (miss → unchanged-mangled), preserving the
+//!   pre-§B1 caller surface.
+//!
+//! The pin test `compiler/riven_core/tests/ffi_alias_single_entry.rs`
+//! locks in: no caller outside `mir/lower/mod.rs` accesses
+//! `ffi_alias_map` directly.
+
 use super::super::*;
 
 impl<'a> Lowerer<'a> {
@@ -104,16 +164,18 @@ impl<'a> Lowerer<'a> {
                     // linker fails with "undefined symbol _Mutex_init".
                     // The dotted-name normalisation matches
                     // `register_class_lib_method_in`'s mangling shape.
+                    //
+                    // §B1 — every "is there an FFI alias?" check routes
+                    // through `lookup_ffi_alias` (the single entry).
                     let alias_key_cs = base_type.replace('.', "_");
                     let alias_key = format!("{}_{}", alias_key_cs, method_name);
-                    if self.ffi_alias_map.contains_key(&alias_key) {
+                    if let Some(callee) = self.lookup_ffi_alias(&alias_key) {
                         let obj = self.new_temp(expr.ty.clone());
                         let mut call_args = Vec::with_capacity(args.len());
                         for arg in args {
                             let local = self.lower_expr(arg)?;
                             call_args.push(local_to_value(local));
                         }
-                        let callee = self.resolve_ffi_alias_callee(alias_key);
                         self.emit(MirInst::Call {
                             dest: Some(obj),
                             callee,

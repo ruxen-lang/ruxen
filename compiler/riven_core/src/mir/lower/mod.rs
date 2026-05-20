@@ -598,26 +598,17 @@ impl<'a> Lowerer<'a> {
         false
     }
 
-    /// #06.8 T#17 / T#14: rewrite a mangled builtin-method callee
-    /// through `ffi_alias_map`, falling back to a generic-stripped
-    /// lookup so call sites that carry surface generic args
-    /// (`Array[Int]_push`, `Option[String]_unwrap_or`, ...) reach
-    /// the parent-name-keyed alias entries (`Array_push`,
-    /// `Option_unwrap_or`) that bootstrap class shells register.
-    /// When neither lookup hits, returns the unchanged mangled name —
-    /// the same fallback path that lets user-defined non-FFI methods
-    /// through unmolested.
-    ///
-    /// Used by both the general method-call dispatch in
-    /// `lower_method_call` and by direct emission sites that bypass
-    /// it (array literal `[a, b, c]` lowering in `constructors.rs`,
-    /// the static-ctor fast path's `Array.new` / `Hash.new` /
-    /// `Set.new` emissions). Every site that emits a builtin-method
-    /// `MirInst::Call` callee should route through here so the
-    /// migration story is uniform.
-    pub(super) fn resolve_ffi_alias_callee(&self, mangled: String) -> String {
-        if let Some(direct) = self.ffi_alias_map.get(&mangled).cloned() {
-            return direct;
+    /// SINGLE ENTRY POINT for FFI alias-map LOOKUP. Returns `Some(c_symbol)`
+    /// when the mangled riven-side name has a registered alias (with
+    /// the same generic-stripped fallback as
+    /// `resolve_ffi_alias_callee`), `None` when no alias exists. Adding
+    /// a new call site that needs to know "is this method dispatched
+    /// through an FFI symbol?" means calling this function — never
+    /// access `self.ffi_alias_map` directly. Spec
+    /// `docs/specs/system/compiler_consolidation.spec.md` §B1.
+    pub(super) fn lookup_ffi_alias(&self, mangled: &str) -> Option<String> {
+        if let Some(direct) = self.ffi_alias_map.get(mangled).cloned() {
+            return Some(direct);
         }
         // Generic stripping needs BALANCED bracket matching, not the
         // naive `find('[')` + `find(']')` pair, because nested generics
@@ -643,11 +634,28 @@ impl<'a> Lowerer<'a> {
             if let Some(close_pos) = close_pos {
                 let stripped = format!("{}{}", &mangled[..bracket_pos], &mangled[close_pos..]);
                 if let Some(c) = self.ffi_alias_map.get(&stripped).cloned() {
-                    return c;
+                    return Some(c);
                 }
             }
         }
-        mangled
+        None
+    }
+
+    /// #06.8 T#17 / T#14: rewrite a mangled builtin-method callee
+    /// through `ffi_alias_map`, falling back to a generic-stripped
+    /// lookup so call sites that carry surface generic args
+    /// (`Array[Int]_push`, `Option[String]_unwrap_or`, ...) reach
+    /// the parent-name-keyed alias entries (`Array_push`,
+    /// `Option_unwrap_or`) that bootstrap class shells register.
+    /// When neither lookup hits, returns the unchanged mangled name —
+    /// the same fallback path that lets user-defined non-FFI methods
+    /// through unmolested.
+    ///
+    /// Routes through `lookup_ffi_alias` (the spec-§B1 SINGLE ENTRY
+    /// POINT for the lookup). This wrapper preserves the historical
+    /// "miss → unchanged-mangled-name" caller surface.
+    pub(super) fn resolve_ffi_alias_callee(&self, mangled: String) -> String {
+        self.lookup_ffi_alias(&mangled).unwrap_or(mangled)
     }
 
     /// Returns `true` if the named method on `class_name` is a static/class

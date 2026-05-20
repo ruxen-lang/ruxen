@@ -53,10 +53,12 @@ impl<'a> Lowerer<'a> {
                 // call site still spells `NAME`; the linker resolves
                 // `<c-symbol>`. Non-FFI calls hit the unwrap_or branch
                 // and use the Riven name unchanged.
+                //
+                // §B1 — every FFI-alias lookup routes through the
+                // single entry `lookup_ffi_alias` (see
+                // `mir/lower/mod.rs::lookup_ffi_alias`).
                 let callee = self
-                    .ffi_alias_map
-                    .get(callee_name)
-                    .cloned()
+                    .lookup_ffi_alias(callee_name)
                     .unwrap_or_else(|| callee_name.clone());
                 self.emit(MirInst::Call {
                     dest,
