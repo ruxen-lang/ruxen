@@ -172,32 +172,52 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// SINGLE ENTRY POINT for user-Drop class registration. Adding
+    /// new sources from which `def drop` can be discovered means
+    /// changing only the `class_has_drop_method` closure below — never
+    /// fork the walk into a sibling collector. The downstream
+    /// drop-elaboration pass in `mir/lower/drops.rs` consults exactly
+    /// the resulting `user_drop_classes` set; there is no second
+    /// registry.
+    ///
     /// Walk the program and record every class that defines its own
-    /// `def drop` method (typically inside an `impl Drop` block, but we
-    /// also accept a top-level `def drop` on the class). This drives the
-    /// drop-elaboration pass to emit a call to `{ClassName}_drop` before
-    /// the no-op `MirInst::Drop` cleanup at scope exit.
+    /// `def drop` method. This drives the drop-elaboration pass to
+    /// emit a call to `{ClassName}_drop` before the no-op
+    /// `MirInst::Drop` cleanup at scope exit.
+    ///
+    /// A class qualifies as a "drop class" when ANY of these holds:
+    ///   1. Its HIR body declares `def drop` (user-side `class X ...
+    ///      def drop(self) ... end end`).
+    ///   2. An `impl Drop for X` block declares `def drop`.
+    ///   3. Its class-body `lib` block declares `def drop as
+    ///      "riven_X_drop"` — the stdlib pattern post-Phase-D-6.
+    ///
+    /// The third check walks the SymbolTable's `ClassInfo.methods`
+    /// because lib-decl methods are registered there (as DefIds
+    /// appended by `pass1_class_lib_methods`) but do NOT appear in
+    /// `HirClassDef.methods` (which only holds user-body `def`s).
+    ///
+    /// Phase D-6 of #06.95 made this fully GENERIC — no hardcoded
+    /// class-name list. Adding `def drop as "riven_..."` to a class
+    /// in its .rvn lib block is the SINGLE mechanism that opts it
+    /// into user_drop_classes. This also fixes the historical
+    /// double-free pattern observed in #06.95 Phase E.B.3 first
+    /// attempt: the prior code path inserted hardcoded names AND
+    /// detected lib-decl methods, so a class with both registrations
+    /// got two drop emissions at scope exit.
+    ///
+    /// Relationship to `mixin Drop` (from
+    /// `library/std/core/src/lib.rvn`): `include Drop` is currently a
+    /// no-op marker — the actual registration trigger is `def drop`.
+    /// Spec
+    /// `docs/specs/system/compiler_consolidation.spec.md` §B4 proposes
+    /// to flip this so `include Drop` becomes the required contract
+    /// (with `def drop` as the implementation). That is a behavioural
+    /// change requiring touching ~16 stdlib files to add `include
+    /// Drop` plus a new error code; deferred from this consolidation
+    /// commit because the spec stop condition warns against silently
+    /// flipping semantics — see the B4 report at commit time.
     pub(super) fn collect_user_drop_classes(&mut self, program: &HirProgram) {
-        // A class qualifies as a "drop class" when ANY of these holds:
-        //   1. Its HIR body declares `def drop` (user-side `class X ...
-        //      def drop(self) ... end end`).
-        //   2. An `impl Drop for X` block declares `def drop`.
-        //   3. Its class-body `lib` block declares `def drop as
-        //      "riven_X_drop"` — the stdlib pattern post-Phase-D-6.
-        //
-        // The third check walks the SymbolTable's `ClassInfo.methods`
-        // because lib-decl methods are registered there (as DefIds
-        // appended by `pass1_class_lib_methods`) but do NOT appear in
-        // `HirClassDef.methods` (which only holds user-body `def`s).
-        //
-        // Phase D-6 of #06.95 made this fully GENERIC — no hardcoded
-        // class-name list. Adding `def drop as "riven_..."` to a class
-        // in its .rvn lib block is the SINGLE mechanism that opts it
-        // into user_drop_classes. This also fixes the historical
-        // double-free pattern observed in #06.95 Phase E.B.3 first
-        // attempt: the prior code path inserted hardcoded names AND
-        // detected lib-decl methods, so a class with both registrations
-        // got two drop emissions at scope exit.
         let symbols = self.symbols;
         let class_has_drop_method = |class: &HirClassDef| -> bool {
             if class.methods.iter().any(|m| m.name == "drop") {
