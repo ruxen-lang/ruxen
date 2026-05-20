@@ -1,0 +1,30 @@
+# Phase A of docs/specs/types/mixin_vtables.spec.md §B7.
+# `&Mixin` / `&var Mixin` parameter types parse and typecheck when the
+# referenced mixin is `dispatch runtime`. Phase A models the dyn-shape
+# as `Ty::Ref(Ty::AnyMixin([MixinRef]))` so the existing dyn-mixin
+# satisfaction path applies.
+
+mixin Sized dispatch runtime
+  def size -> Int
+end
+
+class Square
+  side: Int
+
+  def init(@side: Int)
+  end
+
+  include Sized
+
+  def size -> Int
+    self.side
+  end
+end
+
+def describe(d: &Sized) -> Int
+  d.size
+end
+
+def mutate(d: &var Sized) -> Int
+  d.size
+end

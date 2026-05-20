@@ -446,6 +446,7 @@ fn validate_item(
                     }
                 }
             }
+            validate_runtime_dispatch_includes(class, symbols, diags);
         }
         HirItem::Impl(imp) => {
             for ii in &imp.items {
@@ -460,6 +461,100 @@ fn validate_item(
             }
         }
         _ => {}
+    }
+}
+
+/// Mixin vtables spec §B1 / Phase A — enforce that classes including
+/// a `dispatch runtime` mixin actually implement all of its required
+/// methods. Statically-dispatched mixins keep today's permissive
+/// structural-satisfaction behaviour (the existing code paths handle
+/// them); only runtime-dispatch mixins require a complete method
+/// table because the vtable (Phase B/C) cannot dispatch missing
+/// methods at runtime.
+///
+/// Emits **E1117** with the list of missing methods.
+fn validate_runtime_dispatch_includes(
+    class: &crate::hir::nodes::HirClassDef,
+    symbols: &SymbolTable,
+    diags: &mut Vec<Diagnostic>,
+) {
+    use crate::resolve::symbols::DefKind;
+
+    // Collect the names of every method available on this class —
+    // user-body methods (already in `class.methods`) plus any
+    // `DefKind::Method` whose parent is this class's def_id (covers
+    // lib-decl-registered methods, derive-synthesised methods, etc.).
+    let mut have: std::collections::HashSet<String> = class
+        .methods
+        .iter()
+        .map(|m| m.name.clone())
+        .collect();
+    for def in symbols.iter() {
+        if let DefKind::Method { parent, .. } = &def.kind {
+            if *parent == class.def_id {
+                have.insert(def.name.clone());
+            }
+        }
+    }
+    // Inner impl-block methods carry their own method names — count
+    // those as "provided" as well so `include M; def m() ... end` in
+    // an inline impl-block satisfies the requirement.
+    for imp in &class.impl_blocks {
+        for ii in &imp.items {
+            if let crate::hir::nodes::HirImplItem::Method(m) = ii {
+                have.insert(m.name.clone());
+            }
+        }
+    }
+
+    for imp in &class.impl_blocks {
+        let Some(trait_ref) = &imp.trait_ref else {
+            continue;
+        };
+        // Look up the mixin def to find its dispatch mode + required
+        // methods. Skip if the name doesn't resolve (an earlier pass
+        // already emitted an "unknown mixin" diagnostic).
+        let mut info_opt = None;
+        for def in symbols.iter() {
+            if def.name == trait_ref.name {
+                if let DefKind::Trait { info } = &def.kind {
+                    info_opt = Some(info);
+                    break;
+                }
+            }
+        }
+        let Some(info) = info_opt else {
+            continue;
+        };
+        if !matches!(info.dispatch_mode, ast::DispatchMode::Runtime) {
+            continue;
+        }
+
+        // Default-method names count as "provided" — the mixin body
+        // already supplied them.
+        let mut effectively_have = have.clone();
+        for d in &info.default_methods {
+            effectively_have.insert(d.clone());
+        }
+
+        let missing: Vec<&str> = info
+            .required_methods
+            .iter()
+            .filter(|m| !effectively_have.contains(m.as_str()))
+            .map(|m| m.as_str())
+            .collect();
+        if missing.is_empty() {
+            continue;
+        }
+        let list = missing.join("`, `");
+        diags.push(Diagnostic::error_with_code(
+            format!(
+                "class `{}` includes runtime-dispatch mixin `{}` but is missing required method(s): `{}`",
+                class.name, trait_ref.name, list
+            ),
+            imp.span.clone(),
+            "E1117",
+        ));
     }
 }
 

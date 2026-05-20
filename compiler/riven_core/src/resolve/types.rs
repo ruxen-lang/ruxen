@@ -22,8 +22,26 @@ impl Resolver {
                 lifetime,
                 mutable,
                 inner,
-                ..
+                span: ref_span,
             } => {
+                // Mixin vtables Phase A — `&Mixin` / `&var Mixin`.
+                // When `inner` is a bare name that resolves to a mixin
+                // (DefKind::Trait), this is a dyn-shape reference. The
+                // mixin must have `dispatch runtime`; otherwise emit
+                // E1118 (no vtable to dispatch through). When valid,
+                // model it as `Ty::Ref(Ty::AnyMixin([MixinRef]))` so
+                // downstream typeck reuses the existing dyn-mixin
+                // satisfaction path. Codegen of the actual vtable is
+                // Phase B/C.
+                if let Some(mixin_ty) = self.try_resolve_dyn_mixin_ref(inner, ref_span) {
+                    return match (lifetime, mutable) {
+                        (Some(lt), true) => Ty::RefMutLifetime(lt.clone(), Box::new(mixin_ty)),
+                        (Some(lt), false) => Ty::RefLifetime(lt.clone(), Box::new(mixin_ty)),
+                        (None, true) => Ty::RefMut(Box::new(mixin_ty)),
+                        (None, false) => Ty::Ref(Box::new(mixin_ty)),
+                    };
+                }
+
                 let inner_ty = self.resolve_type_expr(inner);
                 match (lifetime, mutable) {
                     (Some(lt), true) => Ty::RefMutLifetime(lt.clone(), Box::new(inner_ty)),
@@ -569,4 +587,87 @@ impl Resolver {
         Ty::Error
     }
 
+    /// Phase A of the mixin-vtables spec
+    /// (`docs/specs/types/mixin_vtables.spec.md` §B7).
+    ///
+    /// When a `&Mixin` / `&var Mixin` reference is parsed, the inner
+    /// AST is a single-segment `TypeExpr::Named` whose path resolves
+    /// to a `DefKind::Trait`. This helper detects that shape and:
+    ///
+    /// * Returns `Some(Ty::AnyMixin(...))` when the mixin is marked
+    ///   `dispatch runtime` (the dyn-shape reference is valid).
+    /// * Emits **E1118** and returns `Some(Ty::Error)` when the mixin
+    ///   is statically-dispatched (the reference has no vtable to
+    ///   dispatch through).
+    /// * Returns `None` when the inner is not a mixin — caller falls
+    ///   back to the ordinary `&T` resolution.
+    ///
+    /// Returning a non-`None` value short-circuits the caller's
+    /// `resolve_type_expr` on the inner, which is desired: a plain
+    /// `Ty::TypeParam { bounds: [] }` (the current behaviour when a
+    /// mixin name is used as a type) would silently drop the
+    /// mixin identity at this position.
+    fn try_resolve_dyn_mixin_ref(
+        &mut self,
+        inner: &ast::TypeExpr,
+        ref_span: &Span,
+    ) -> Option<Ty> {
+        let path = match inner {
+            ast::TypeExpr::Named(p) => p,
+            _ => return None,
+        };
+        // Only bare single-segment names. Module-qualified mixin
+        // references go through `resolve_type_path` and would need
+        // separate plumbing; Phase A keeps the surface tight.
+        if path.segments.len() != 1 {
+            return None;
+        }
+        let name = &path.segments[0];
+        let def_id = *self.type_registry.get(name)?;
+        let def = self.symbols.get(def_id)?;
+        let DefKind::Trait { info } = &def.kind else {
+            return None;
+        };
+        match info.dispatch_mode {
+            ast::DispatchMode::Runtime => {
+                // Build a single-bound MixinRef. Phase A models the
+                // dyn-shape via the existing `Ty::AnyMixin` so the
+                // satisfaction machinery doesn't need a new branch.
+                let generic_args = path
+                    .generic_args
+                    .as_ref()
+                    .map(|args| {
+                        args.iter()
+                            .map(|a| self.resolve_type_expr(a))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                Some(Ty::AnyMixin(vec![MixinRef {
+                    name: name.clone(),
+                    generic_args,
+                }]))
+            }
+            ast::DispatchMode::Static => {
+                // Dedupe: forward-declaration registration and the
+                // pass-2 walk both call `resolve_type_expr` on the
+                // same parameter type, so without a per-span guard
+                // the diagnostic would fire twice for one source
+                // occurrence.
+                let key = (ref_span.start, ref_span.end);
+                if self.emitted_e1118_spans.insert(key) {
+                    self.diagnostics.push(Diagnostic::error_with_code(
+                        format!(
+                            "`&{0}` references mixin `{0}`, which does not use runtime dispatch; \
+                             add `dispatch runtime` to `mixin {0}` to enable `&{0}` / `&var {0}` \
+                             parameter types",
+                            name
+                        ),
+                        ref_span.clone(),
+                        "E1118",
+                    ));
+                }
+                Some(Ty::Error)
+            }
+        }
+    }
 }

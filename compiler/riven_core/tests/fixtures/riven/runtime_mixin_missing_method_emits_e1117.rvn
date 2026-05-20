@@ -1,0 +1,18 @@
+# Phase A of docs/specs/types/mixin_vtables.spec.md §B1.
+# A class that includes a `dispatch runtime` mixin but omits a
+# required method must emit E1117. Runtime-dispatch mixins have no
+# compile-time fallback path.
+
+mixin Sized dispatch runtime
+  def size -> Int
+end
+
+class Triangle
+  base: Int
+
+  def init(@base: Int)
+  end
+
+  include Sized
+  # missing: def size -> Int
+end

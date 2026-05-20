@@ -564,6 +564,13 @@ fn format_trait(t: &MixinDef, comments: &CommentMap) -> Doc {
         header.push(format_generic_params(gp));
     }
 
+    // Mixin vtables spec §B1: `dispatch runtime` modifier sits after the
+    // mixin name + generics, before any `: Super` bounds. Skipped when
+    // dispatch_mode is the (default) Static.
+    if matches!(t.dispatch_mode, DispatchMode::Runtime) {
+        header.push(text(" dispatch runtime"));
+    }
+
     if !t.super_traits.is_empty() {
         header.push(text(": "));
         header.push(format_trait_bounds(&t.super_traits));

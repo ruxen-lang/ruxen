@@ -878,6 +878,7 @@ impl Resolver {
                             required_methods: required,
                             default_methods: defaults,
                             assoc_types: assoc,
+                            dispatch_mode: t.dispatch_mode,
                         },
                     },
                     Visibility::Public,

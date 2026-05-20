@@ -1,0 +1,22 @@
+# Phase A of docs/specs/types/mixin_vtables.spec.md.
+# `dispatch runtime` opt-in modifier parses and propagates through HIR.
+# A class that includes the mixin and implements its required method
+# typechecks clean — Phase A treats runtime-dispatch mixins exactly
+# like statically-dispatched ones at codegen level (no vtable yet).
+
+mixin Sized dispatch runtime
+  def size -> Int
+end
+
+class Circle
+  radius: Int
+
+  def init(@radius: Int)
+  end
+
+  include Sized
+
+  def size -> Int
+    self.radius
+  end
+end

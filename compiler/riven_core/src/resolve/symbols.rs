@@ -164,6 +164,11 @@ pub struct MixinInfo {
     pub required_methods: Vec<String>,
     pub default_methods: Vec<String>,
     pub assoc_types: Vec<String>,
+    /// Mixin vtables spec §B1 — `Static` for ordinary mixins
+    /// (default), `Runtime` for `mixin Foo dispatch runtime`. Typeck
+    /// keys off this flag when validating `&Mixin` / `&var Mixin`
+    /// references (E1118) and runtime-dispatch satisfaction (E1117).
+    pub dispatch_mode: crate::parser::ast::DispatchMode,
 }
 
 /// The kind of definition — what this name refers to.

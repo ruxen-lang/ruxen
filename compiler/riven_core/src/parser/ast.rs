@@ -797,7 +797,28 @@ pub struct MixinDef {
     /// `ClassDef::lib_decls`. Parser-only plumbing for now.
     pub lib_decls: Vec<LibDecl>,
     pub doc_comments: Vec<String>,
+    /// Spec — `docs/specs/types/mixin_vtables.spec.md` §B1. `Static` is
+    /// the default; `Runtime` opts the mixin into per-implementor
+    /// vtable dispatch and unlocks `&Mixin` / `&var Mixin` parameter
+    /// types. Source surface: `mixin Foo dispatch runtime ... end`.
+    /// Phase A wires the field through parser → HIR → resolve →
+    /// typeck; codegen is unchanged (Phase B).
+    pub dispatch_mode: DispatchMode,
     pub span: Span,
+}
+
+/// Mixin dispatch policy. `Static` (default) means every method call
+/// resolves at the call site from the receiver's concrete class.
+/// `Runtime` means the compiler will (Phase B) emit a per-implementor
+/// vtable and route `&Mixin` / `&var Mixin` calls through it.
+///
+/// Spec: `docs/specs/types/mixin_vtables.spec.md` §B1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DispatchMode {
+    /// Default: static dispatch only. No runtime overhead.
+    Static,
+    /// `mixin Foo dispatch runtime` — opt in to runtime dispatch.
+    Runtime,
 }
 
 #[derive(Debug, Clone, PartialEq)]

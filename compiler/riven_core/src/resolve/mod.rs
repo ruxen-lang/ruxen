@@ -163,6 +163,15 @@ pub struct Resolver {
     /// after each program's first walk and consumed in
     /// [`auto_populate_std_submodules_from_packages`](Self::auto_populate_std_submodules_from_packages).
     pub(super) bootstrap_package_item_ids: HashMap<String, HashMap<String, DefId>>,
+
+    /// Mixin vtables Phase A — set of (span.start, span.end) tuples
+    /// for `&Mixin` / `&var Mixin` references that already produced
+    /// an **E1118**. Used to dedupe the diagnostic, which would
+    /// otherwise fire once per pass that runs `resolve_type_expr` on
+    /// the same parameter type (forward-declaration in
+    /// `register_top_level_type_with_ffi_in` + the main pass-2
+    /// `resolve_func_def` walk).
+    pub(super) emitted_e1118_spans: std::collections::HashSet<(usize, usize)>,
 }
 
 #[derive(Debug)]
@@ -194,6 +203,7 @@ impl Resolver {
             mixin_lib_decls: HashMap::new(),
             bootstrap_auto_packages: Vec::new(),
             bootstrap_package_item_ids: HashMap::new(),
+            emitted_e1118_spans: std::collections::HashSet::new(),
         }
     }
 

@@ -355,6 +355,25 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E1115",
         title: "`.await` inside `while` / `for` body not yet supported",
     },
+    // Mixin vtables (`docs/specs/types/mixin_vtables.spec.md`). Phase A
+    // surfaces the codes; codegen of the actual vtables is Phase B/C.
+    // E1117 fires when a class `include`s a mixin marked
+    // `dispatch runtime` but does not implement all of its required
+    // methods. Distinct from the existing structural-satisfaction
+    // diagnostic because runtime-dispatch mixins MUST have a complete
+    // method table — there is no compile-time fallback path.
+    CodeInfo {
+        code: "E1117",
+        title: "class includes a `dispatch runtime` mixin but is missing required methods",
+    },
+    // E1118 fires when a `&Mixin` / `&var Mixin` parameter or field
+    // type references a mixin that does NOT have `dispatch runtime`.
+    // The `&Mixin` shape requires a vtable at runtime; only mixins
+    // that opt in carry one.
+    CodeInfo {
+        code: "E1118",
+        title: "`&Mixin` references a non-`dispatch runtime` mixin",
+    },
 ];
 
 /// Look up an error code's metadata. Returns `None` if the code is not

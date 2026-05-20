@@ -549,6 +549,11 @@ pub struct HirMixinDef {
     pub super_traits: Vec<MixinRef>,
     pub items: Vec<HirMixinItem>,
     pub doc_comments: Vec<String>,
+    /// Mixin vtables spec §B1 — `Static` for ordinary mixins,
+    /// `Runtime` for `mixin Foo dispatch runtime`. The HIR mirrors the
+    /// AST flag verbatim; downstream (typeck, MIR, codegen) keys off
+    /// this and the `MixinInfo.dispatch_mode` copy.
+    pub dispatch_mode: crate::parser::ast::DispatchMode,
     pub span: Span,
 }
 

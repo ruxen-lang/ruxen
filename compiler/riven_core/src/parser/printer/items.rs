@@ -146,7 +146,14 @@ impl PrettyPrinter {
                 .collect();
             format!(": {}", names.join(" + "))
         };
-        self.line(&format!("Mixin {}{}{}", t.name, generics, supers));
+        let dispatch = match t.dispatch_mode {
+            DispatchMode::Static => "",
+            DispatchMode::Runtime => " dispatch runtime",
+        };
+        self.line(&format!(
+            "Mixin {}{}{}{}",
+            t.name, generics, dispatch, supers
+        ));
         self.indent();
         for item in &t.items {
             self.print_trait_item(item);

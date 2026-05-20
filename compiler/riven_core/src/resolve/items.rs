@@ -752,6 +752,7 @@ impl Resolver {
             super_traits,
             items,
             doc_comments: t.doc_comments.clone(),
+            dispatch_mode: t.dispatch_mode,
             span: t.span.clone(),
         }
     }

@@ -1,0 +1,11 @@
+# Phase A of docs/specs/types/mixin_vtables.spec.md.
+# `&Mixin` requires `dispatch runtime`. Referencing a statically-
+# dispatched mixin must emit E1118.
+
+mixin Sized
+  def size -> Int
+end
+
+def render(d: &Sized) -> Int
+  d.size
+end
