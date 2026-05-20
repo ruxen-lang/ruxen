@@ -827,14 +827,21 @@ fn is_send_strict_with_inner(
                 visiting.remove(&def.id);
                 return false;
             }
-            // 2. Every field type must be Send. Stdlib opaque-handle
-            // classes have `info.fields = []` so this is vacuous.
+            // 2. Every field type must be Send under the substitution
+            // from generic params → generic args. Stdlib opaque-handle
+            // classes have `info.fields = []` so this is vacuous; user
+            // classes (FooBar[T] with `payload: T`) get T substituted
+            // to the concrete arg before the recursive check.
             let fields_ok = match &def.kind {
-                crate::resolve::symbols::DefKind::Class { info } => info.fields.iter().all(|fid| {
-                    symbols
-                        .def_ty(*fid)
-                        .is_some_and(|fty| is_send_strict_with_inner(&fty, symbols, visiting))
-                }),
+                crate::resolve::symbols::DefKind::Class { info } => {
+                    let subst = build_generic_subst(&info.generic_params, generic_args);
+                    info.fields.iter().all(|fid| {
+                        symbols.def_ty(*fid).is_some_and(|fty| {
+                            let substituted = subst_type_params(&fty, &subst);
+                            is_send_strict_with_inner(&substituted, symbols, visiting)
+                        })
+                    })
+                }
                 _ => true,
             };
             visiting.remove(&def.id);
@@ -1012,6 +1019,95 @@ fn nominal_type_has_negative_auto_trait(
             }
         }
         _ => false,
+    }
+}
+
+/// Build a generic-param-name → concrete-Ty substitution map for use
+/// during the Send/Sync field walk. Used by
+/// [`is_send_strict_with_inner`] (B2) so that a class declared `class
+/// FooBar[T]; payload: T; include Send` evaluates `payload: T`
+/// against the concrete arg from the use site (`FooBar[Int]` → T=Int)
+/// instead of the abstract type-parameter, which carries no `Send`
+/// bound and would always fail the check.
+///
+/// `const` generic params (Tier-2) are not type params — they're
+/// skipped in the substitution since they never appear as a field
+/// type that could affect Send/Sync.
+fn build_generic_subst(
+    params: &[crate::resolve::symbols::GenericParamInfo],
+    args: &[Ty],
+) -> std::collections::HashMap<String, Ty> {
+    use crate::resolve::symbols::GenericParamKind;
+    let mut map = std::collections::HashMap::new();
+    for (param, arg) in params.iter().zip(args.iter()) {
+        if matches!(param.kind, GenericParamKind::Type) {
+            map.insert(param.name.clone(), arg.clone());
+        }
+    }
+    map
+}
+
+/// Recursive type-parameter substitution. Mirrors
+/// `typeck::infer::InferenceEngine::subst_ty`'s shape but is decoupled
+/// from the inference engine — `hir/types.rs` runs outside of typeck
+/// during Send/Sync queries from MIR call-site validators (E1100 /
+/// E1101 / E1102).
+fn subst_type_params(ty: &Ty, subst: &std::collections::HashMap<String, Ty>) -> Ty {
+    match ty {
+        Ty::TypeParam { name, .. } => subst.get(name).cloned().unwrap_or_else(|| ty.clone()),
+        Ty::Ref(inner) => Ty::Ref(Box::new(subst_type_params(inner, subst))),
+        Ty::RefMut(inner) => Ty::RefMut(Box::new(subst_type_params(inner, subst))),
+        Ty::RefLifetime(lt, inner) => {
+            Ty::RefLifetime(lt.clone(), Box::new(subst_type_params(inner, subst)))
+        }
+        Ty::RefMutLifetime(lt, inner) => {
+            Ty::RefMutLifetime(lt.clone(), Box::new(subst_type_params(inner, subst)))
+        }
+        Ty::Option(inner) => Ty::Option(Box::new(subst_type_params(inner, subst))),
+        Ty::Array(inner) => Ty::Array(Box::new(subst_type_params(inner, subst))),
+        Ty::Set(inner) => Ty::Set(Box::new(subst_type_params(inner, subst))),
+        Ty::FixedArray(inner, n) => {
+            Ty::FixedArray(Box::new(subst_type_params(inner, subst)), n.clone())
+        }
+        Ty::Map(k, v) => Ty::Map(
+            Box::new(subst_type_params(k, subst)),
+            Box::new(subst_type_params(v, subst)),
+        ),
+        Ty::Result(ok, err) => Ty::Result(
+            Box::new(subst_type_params(ok, subst)),
+            Box::new(subst_type_params(err, subst)),
+        ),
+        Ty::Tuple(elems) => Ty::Tuple(elems.iter().map(|e| subst_type_params(e, subst)).collect()),
+        Ty::Class { name, generic_args } => Ty::Class {
+            name: name.clone(),
+            generic_args: generic_args
+                .iter()
+                .map(|a| subst_type_params(a, subst))
+                .collect(),
+        },
+        Ty::Struct { name, generic_args } => Ty::Struct {
+            name: name.clone(),
+            generic_args: generic_args
+                .iter()
+                .map(|a| subst_type_params(a, subst))
+                .collect(),
+        },
+        Ty::Enum { name, generic_args } => Ty::Enum {
+            name: name.clone(),
+            generic_args: generic_args
+                .iter()
+                .map(|a| subst_type_params(a, subst))
+                .collect(),
+        },
+        Ty::Alias { name, target } => Ty::Alias {
+            name: name.clone(),
+            target: Box::new(subst_type_params(target, subst)),
+        },
+        Ty::Newtype { name, inner } => Ty::Newtype {
+            name: name.clone(),
+            inner: Box::new(subst_type_params(inner, subst)),
+        },
+        _ => ty.clone(),
     }
 }
 

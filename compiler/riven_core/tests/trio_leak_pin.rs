@@ -124,17 +124,16 @@ def main\n  let f = FooBar.new(7)\n  let _ = f.get\nend\n";
 }
 
 /// Structural trio-leak assertion. Fails if the commit that added
-/// `library/std/foobar/` (HEAD when bisecting backwards from the
-/// `bootstrap.rs` BOOTSTRAP_FILES change that points at foobar)
-/// touches anything in `compiler/riven_core/src/` other than the
-/// BOOTSTRAP_FILES const itself.
+/// `library/std/foobar/` touches anything in `compiler/riven_core/src/`
+/// other than the `BOOTSTRAP_FILES` const itself.
 ///
-/// `#[ignore]`d until B2 (auto-derive walker — removes
-/// `hir/types.rs` carve-outs) and B3 (`[system_libs]` —
-/// removes `codegen/object.rs` carve-outs) land. After both,
-/// removing the `#[ignore]` makes this the load-bearing pin.
+/// Goes live AFTER B2 (auto-derive walker — removes `hir/types.rs`
+/// carve-outs) and B3 (`[system_libs]` — removes
+/// `codegen/object.rs` carve-outs) land. This is the load-bearing
+/// pin: any future stdlib package addition that touches `compiler/`
+/// outside the BOOTSTRAP_FILES const is a fresh auto-connect gap,
+/// not a normal compiler change.
 #[test]
-#[ignore]
 fn foobar_addition_touches_only_bootstrap_files() {
     let repo_root = workspace_root();
     // Find the commit that introduced the foobar package by searching
