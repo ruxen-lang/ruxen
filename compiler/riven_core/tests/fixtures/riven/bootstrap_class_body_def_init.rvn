@@ -1,0 +1,17 @@
+## B1 pin fixture — bootstrap-loaded class with a user-body `def init`
+## method. Pre-B1 the resolver only registered the class TYPE and any
+## lib-decl FFI methods; user-body methods were silently dropped during
+## bootstrap merge. This fixture exercises the new pass-2 walk over
+## bootstrap programs introduced by B1.
+
+class BootstrapBodied
+  value: Int
+
+  def init(v: Int)
+    self.value = v
+  end
+
+  def get -> Int
+    self.value
+  end
+end

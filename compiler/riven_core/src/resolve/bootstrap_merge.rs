@@ -158,13 +158,46 @@ impl Resolver {
 
         // Scan for functions that contain `yield` — these receive a
         // synthetic `__block` parameter, and callers with a trailing block
-        // forward it as the last argument.
+        // forward it as the last argument. (Bootstrap programs were
+        // already scanned by `merge_bootstrap_programs` above.)
         for item in &program.items {
             super::yield_scan::collect_yield_fns(item, &mut self.yield_fns);
         }
 
+        // B1 of `docs/specs/system/zero_rust_stdlib_classes.spec.md`:
+        // resolve bootstrap class bodies / free-fn bodies so user-side
+        // methods (`def init`, `def poll`, `def drop`) declared on a
+        // stdlib `.rvn` class actually execute. Pre-B1 the merge only
+        // registered class TYPES + lib-decl FFI methods; method bodies
+        // were silently dropped because `resolve_item` ran exclusively
+        // over the user program.
+        //
+        // Ordering: walk in `bootstrap_programs` load order. Each
+        // bootstrap program's bodies resolve against the cumulative
+        // bootstrap symbol table (already populated above by
+        // `merge_bootstrap_programs`) PLUS the user's pass-1 forward
+        // decls — bootstrap bodies must not reference user types, but
+        // we run after user pass-1 to keep the symbol table monotonic.
+        //
+        // The resulting HirItems are prepended to the user's items so
+        // MIR-lowerer walks them through the same `program.items`
+        // pathway as user code — `collect_user_drop_classes` discovers
+        // stdlib class drop methods, and codegen lowers any user-body
+        // method (e.g. `def var poll` on a hand-written future).
+        let mut bootstrap_items: Vec<HirItem> = Vec::new();
+        for bs_program in bootstrap_programs {
+            for item in &bs_program.items {
+                if !Self::is_bootstrap_supported_item(item) {
+                    continue;
+                }
+                if let Some(hir_item) = self.resolve_item(item) {
+                    bootstrap_items.push(hir_item);
+                }
+            }
+        }
+
         // Pass 2: Fully resolve all items.
-        let mut items = Vec::new();
+        let mut items = bootstrap_items;
         for item in &program.items {
             if let Some(hir_item) = self.resolve_item(item) {
                 items.push(hir_item);
