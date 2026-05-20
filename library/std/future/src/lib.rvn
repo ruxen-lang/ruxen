@@ -68,11 +68,21 @@ end
 ## allocated context whose waker is the same singleton no-op as
 ## test_dummy. v1 sub-phase 3 has no per-task wake state, so a
 ## single shared instance per call is fine.
+## Context — the executor-supplied polling context. Sub-phase 4A
+## (docs/specs/stdlib/async_io.spec.md B3) wires the per-thread
+## reactor through `Context.executor` (which allocates and installs
+## the reactor on the current thread) and `Context.drop` (which
+## tears it down at Context scope exit). The reactor itself is
+## thread-local in the C runtime — see
+## library/std/future/runtime/reactor.c — so the AST-level block_on
+## rewriter's existing `Thread.yield_now` call in the Pending arm
+## now drives the reactor's wait point without any compiler change.
 class Context
   lib "runtime/executor.c"
     def waker as "riven_context_waker"(self) -> &Waker
     def self.test_dummy as "riven_context_test_dummy"() -> Context
     def self.executor as "riven_executor_make_context"() -> Context
+    def drop as "riven_executor_context_drop"(self) -> ()
   end
 end
 

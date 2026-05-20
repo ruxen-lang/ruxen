@@ -16,8 +16,18 @@ void riven_thread_sleep_ns(int64_t ns) {
     }
 }
 
+/* Forward decl into library/std/future/runtime/reactor.c. Sub-phase
+ * 4A: `Thread.yield_now` now drives the per-thread reactor's wait
+ * point when registrations are pending (block_on's Pending arm
+ * routes here unchanged via the existing AST emission in
+ * async_lowering::build_block_on_loop). If no reactor is installed
+ * on the current thread, or the reactor has no registrations, the
+ * call falls back to sched_yield — matches pre-4A behaviour for any
+ * non-async-I/O caller of Thread.yield_now. */
+void riven_reactor_park_current(void);
+
 void riven_thread_yield(void) {
-    sched_yield();
+    riven_reactor_park_current();
 }
 /* ---------------------------------------------------------------------
  * std::time

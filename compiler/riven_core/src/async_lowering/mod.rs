@@ -2148,6 +2148,15 @@ fn build_block_on_loop(future_expr: Expr, n: u32, span: &Span) -> Expr {
     };
 
     // Match arm: Poll.Pending -> Thread.yield_now
+    //
+    // Sub-phase 4A (docs/specs/stdlib/async_io.spec.md B2) replaces
+    // the sched_yield-spin inside `Thread.yield_now` itself with a
+    // park-on-reactor in `library/std/sync/runtime/thread.c`. The
+    // AST emitted here is unchanged — the C-side `riven_thread_yield`
+    // now blocks on the per-thread reactor's wait point when any
+    // I/O registration is live, and falls back to `sched_yield`
+    // when there is nothing to wait on (matches pre-4A behaviour
+    // for the trivial 2A / 2B futures that never touch the reactor).
     let pending_pattern = Pattern::Enum {
         path: vec!["Poll".to_string()],
         variant: "Pending".to_string(),

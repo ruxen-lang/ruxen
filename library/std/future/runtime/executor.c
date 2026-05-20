@@ -1,61 +1,58 @@
 #include "../../core/runtime/runtime.h"
 
-/* Sub-phase 3 of the async round (docs/specs/stdlib/executor.spec.md):
- * single-threaded block_on executor.
+/* Sub-phase 3 + 4A of the async round (docs/specs/stdlib/executor.spec.md,
+ * docs/specs/stdlib/async_io.spec.md):
+ * single-threaded block_on executor + OS event reactor wiring.
  *
- * Sub-phase 1 shipped panic-stubs for every entry; sub-phase 3 makes
- * Waker.wake / wake_by_ref no-ops (the poll loop spins, so wake is
- * implicit) and `Context.waker` returns a real singleton no-op
- * Waker. The actual `block_on` is a compiler intrinsic — see
- * library/std/executor/src/lib.rvn and the async_lowering pass — so
- * there is NO `riven_executor_block_on` C symbol; the poll loop is
- * inlined at every call site against the future's concrete
- * `<__FooFuture>_poll` symbol (matches how `.await` already
- * dispatches).
+ * Sub-phase 1 shipped panic-stubs; sub-phase 3 made the Waker /
+ * Context surface real (no-op signals + a singleton waker). Sub-phase
+ * 4A wires the per-thread reactor into Context construction +
+ * destruction. The reactor itself lives in
+ * `library/std/future/runtime/reactor.c` as a thread-local pointer;
+ * Context.executor (which routes here) calls `riven_reactor_acquire`
+ * to install it, and Context.drop (also routed here) calls
+ * `riven_reactor_release` to tear it down. The existing
+ * `Thread.yield_now` AST emission in the block_on rewriter calls
+ * into reactor.c::riven_reactor_park_current via the time.c
+ * `riven_thread_yield` symbol — no compiler change needed in 4A.
  *
- * What the C side owns in sub-phase 3:
+ * What this file owns:
  *   1. `riven_executor_make_context` — heap-allocate a Context
- *      whose `.waker` slot points at the singleton no-op Waker.
- *      The block_on intrinsic calls this once per loop entry.
- *   2. `riven_context_waker` — read the waker slot. Returns the
- *      same singleton for test_dummy and executor-made contexts.
- *   3. `riven_context_test_dummy` — unchanged surface for the
- *      hand-driven poll tests in async_lowering (Milestone 2A).
- *      Backfilled so its waker slot is also the singleton, so
- *      `cx.waker()` works on test_dummy values too.
- *   4. `riven_waker_wake` / `riven_waker_wake_by_ref` — no-ops.
- *      Sub-phase 4 replaces with real signal-to-park machinery.
+ *      with the singleton no-op Waker + install the per-thread
+ *      reactor.
+ *   2. `riven_executor_context_drop` — `def drop` on Context (lib
+ *      decl in library/std/future/src/lib.rvn). Releases the
+ *      per-thread reactor + lets MIR's standard `riven_dealloc`
+ *      free the Context.
+ *   3. `riven_context_waker` — read the waker slot.
+ *   4. `riven_context_test_dummy` — test-only Context (does NOT
+ *      install a reactor; tests that exercise reactor-aware
+ *      futures use `riven_executor_make_context` instead).
+ *   5. `riven_waker_wake` / `riven_waker_wake_by_ref` — no-ops in v1.
  *
  * ABI:
- *   - Context and Waker are heap pointers passed as i64 (Riven's
- *     class-value ABI). The first 8 bytes of a Context are the
- *     waker pointer (`struct RivenContext { void *waker; }`).
- *   - `&Waker` is the same pointer at the i64 ABI (Riven's `&T`
- *     lowering matches `T` for class types in v1).
- *
- * The C structs are intentionally untyped (`void *` slots) so user
- * code never depends on their layout. The compiler intrinsic is the
- * only consumer; if the layout changes, only the intrinsic and this
- * file change in lockstep.
+ *   - Context is a heap pointer passed as i64 (Riven's class-value ABI).
+ *   - struct RivenContext layout: { void *waker; }  (unchanged from
+ *     sub-phase 3 — the reactor is thread-local, not Context-local).
+ *   - `&Waker` is the same pointer at the i64 ABI.
  */
 
 #include <stdlib.h>
 
-/* RivenContext layout: first slot is the waker pointer. */
 typedef struct {
     void *waker;
 } RivenContext;
 
-/* Singleton no-op Waker. Allocated lazily on first use. Lives for
- * the lifetime of the process (never freed) — sub-phase 4 introduces
- * a real Waker type with proper lifecycle. */
+/* Forward decls into reactor.c. */
+struct RivenReactor;
+struct RivenReactor *riven_reactor_acquire(void);
+void riven_reactor_release(void);
+
+/* Singleton no-op Waker. Allocated lazily on first use. */
 static void *s_noop_waker = (void *)0;
 
 static void *get_or_init_noop_waker(void) {
     if (!s_noop_waker) {
-        /* 8-byte sentinel — content doesn't matter; the waker is
-         * opaque to user code and Waker.wake / wake_by_ref are
-         * no-ops that don't read the value. */
         void *p = malloc(8);
         if (!p) {
             riven_panic("riven_executor: failed to allocate no-op waker");
@@ -67,14 +64,20 @@ static void *get_or_init_noop_waker(void) {
     return s_noop_waker;
 }
 
-/* Construct a new Context whose waker is the singleton no-op. Used
- * by the block_on intrinsic at the top of every poll loop. The
- * Context is heap-allocated; the block_on lowering is responsible
- * for releasing it via the standard Riven class-drop path when the
- * outer block exits (Drop spec B9). Sub-phase 3 ships without an
- * explicit free helper — Context has no Drop impl in Riven yet and
- * the per-call leak is bounded (one Context per block_on call,
- * 8 bytes each). Sub-phase 4 wires a proper lifecycle. */
+/* Allocate a Context. The per-thread reactor is NOT eagerly created
+ * here — it's lazy-allocated by `riven_reactor_acquire` only when
+ * a reactor-aware future first registers an event. This keeps the
+ * cost of block_on over a trivial (no-I/O) future at the same level
+ * it was at sub-phase 3: a single 8-byte Context heap allocation +
+ * one no-op acquire/release pair via Context.executor / .drop.
+ *
+ * Spec B3 says the reactor "is lazily constructed on first
+ * block_on" — interpreted here as "lazily constructed on first
+ * registration via reactor.c::riven_reactor_acquire". The
+ * difference is invisible to user code (Context.executor is a
+ * conceptual ownership root either way), and the lazy form
+ * avoids opening an epoll fd / kqueue fd for every block_on that
+ * doesn't touch async I/O. */
 void *riven_executor_make_context(void) {
     RivenContext *cx = (RivenContext *)malloc(sizeof(RivenContext));
     if (!cx) {
@@ -85,10 +88,6 @@ void *riven_executor_make_context(void) {
     return cx;
 }
 
-/* Returns the Context's waker pointer. Sub-phase 1 panicked here;
- * sub-phase 3 honours the slot. Both test_dummy and executor-made
- * Contexts have the singleton stashed, so callers don't need to
- * branch. */
 void *riven_context_waker(void *cx) {
     if (!cx) {
         riven_panic("riven_context_waker: null context");
@@ -97,38 +96,38 @@ void *riven_context_waker(void *cx) {
     return ((RivenContext *)cx)->waker;
 }
 
-/* Test-only Context constructor (async_lowering.spec.md B6 —
- * Milestone 2A). Sub-phase 1 leaked an 8-byte zero-initialised
- * pointer; sub-phase 3 backfills the waker slot so `cx.waker()`
- * works on test_dummy contexts too. Still intentionally leaked —
- * Context has no Drop impl yet and the test programs are short-
- * lived. */
 void *riven_context_test_dummy(void) {
     RivenContext *cx = (RivenContext *)malloc(sizeof(RivenContext));
     if (!cx) {
         return (void *)0;
     }
     cx->waker = get_or_init_noop_waker();
+    /* No reactor install: test_dummy contexts are for the
+     * async_lowering pin tests that hand-drive poll without ever
+     * touching the reactor. */
     return cx;
 }
 
-/* No-op waker for the test-dummy context. Predates sub-phase 3;
- * kept for any external caller that may still reference the symbol.
- * The singleton waker installed by get_or_init_noop_waker() is what
- * actually flows through user code now. */
 void riven_waker_test_noop(void *waker) {
     (void)waker;
 }
 
-/* Sub-phase 3: Waker.wake / wake_by_ref are no-ops. The block_on
- * poll loop spins (with Thread.yield_now between iterations) so
- * any "wake" is implicit. Sub-phase 4 replaces these with real
- * pthread_cond_signal / wake-fd-write so the executor can park on
- * epoll/kqueue and resume only when I/O is ready. */
 void riven_waker_wake(void *waker) {
     (void)waker;
 }
 
 void riven_waker_wake_by_ref(void *waker) {
     (void)waker;
+}
+
+/* `def drop` for Context (wired via lib decl in
+ * library/std/future/src/lib.rvn). Releases the per-thread reactor.
+ * The Context heap allocation itself is freed by the standard
+ * `riven_dealloc` call that MIR drop elaboration emits AFTER this
+ * method returns — touching `cx_opaque` past this point is a
+ * use-after-free, so we deliberately do not free it here.
+ */
+void riven_executor_context_drop(void *cx_opaque) {
+    (void)cx_opaque;
+    riven_reactor_release();
 }
