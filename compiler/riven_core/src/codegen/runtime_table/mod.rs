@@ -125,13 +125,6 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // collection-ctor fast path in mir/lower.rs (alongside
         // Vec_new / Hash_new / Formatter_new); the rest go through the
         // standard `{Type}_{method}` regular method-call path.
-        "Command_new" => return Ok("riven_command_new"),
-        "Command_arg" => return Ok("riven_command_arg"),
-        "Command_args" => return Ok("riven_command_args"),
-        "Command_env" => return Ok("riven_command_env"),
-        "Command_current_dir" => return Ok("riven_command_current_dir"),
-        "Command_status" => return Ok("riven_command_status"),
-        "Command_output" => return Ok("riven_command_output"),
         // ExitStatus accessors migrated to library/std/process/src/lib.rvn
         // `class ExitStatus do lib "runtime/process.c" ... end end`
         // in #06.95 Phase E Slice B.3. The FFI alias map rewrites
@@ -139,9 +132,6 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // Command / Output stay here (not in user_drop_classes
         // would have been safe but the broader migration triggered
         // double-free; see Slice B.3 first-attempt revert).
-        "Output_stdout" => return Ok("riven_output_stdout"),
-        "Output_stderr" => return Ok("riven_output_stderr"),
-        "Output_status" => return Ok("riven_output_status"),
         // Phase 2 stdlib (#06.5 T2): File / OpenOptions surface.
         // `File_open/create/append/open_options` are static-style
         // constructors that go through the standard `{Type}_{method}`
@@ -253,24 +243,6 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // receiver's generic_args[0]. Other instance methods
         // (`read_line`, `read`, `write*`, `flush`) branch on the
         // 1-byte `kind` tag inside the runtime spine.
-        "BufReader_new_file" => return Ok("riven_bufreader_new_file"),
-        "BufReader_new_tcp" => return Ok("riven_bufreader_new_tcp"),
-        "BufReader_with_capacity_file" => return Ok("riven_bufreader_with_capacity_file"),
-        "BufReader_with_capacity_tcp" => return Ok("riven_bufreader_with_capacity_tcp"),
-        "BufReader_read_line" => return Ok("riven_bufreader_read_line"),
-        "BufReader_read" => return Ok("riven_bufreader_read"),
-        "BufReader_into_inner_file" => return Ok("riven_bufreader_into_inner_file"),
-        "BufReader_into_inner_tcp" => return Ok("riven_bufreader_into_inner_tcp"),
-        "BufWriter_new_file" => return Ok("riven_bufwriter_new_file"),
-        "BufWriter_new_tcp" => return Ok("riven_bufwriter_new_tcp"),
-        "BufWriter_with_capacity_file" => return Ok("riven_bufwriter_with_capacity_file"),
-        "BufWriter_with_capacity_tcp" => return Ok("riven_bufwriter_with_capacity_tcp"),
-        "BufWriter_write" => return Ok("riven_bufwriter_write"),
-        "BufWriter_write_all" => return Ok("riven_bufwriter_write_all"),
-        "BufWriter_write_str" => return Ok("riven_bufwriter_write_str"),
-        "BufWriter_flush" => return Ok("riven_bufwriter_flush"),
-        "BufWriter_into_inner_file" => return Ok("riven_bufwriter_into_inner_file"),
-        "BufWriter_into_inner_tcp" => return Ok("riven_bufwriter_into_inner_tcp"),
         // std::signal — graceful-shutdown surface.
         "signal_install_sigint" => return Ok("riven_signal_install_sigint"),
         "signal_received_sigint" => return Ok("riven_signal_received_sigint"),
