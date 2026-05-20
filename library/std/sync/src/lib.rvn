@@ -54,14 +54,17 @@ class Thread
   ## (see library/std/array/src/lib.rvn).
   lib "runtime/thread.c"
     def self.current_id as "riven_thread_current_id"() -> Int
+    def self.spawn_raw as "riven_thread_spawn"(closure: Int) -> Int
   end
 end
 
 ## Thread.spawn free-fn shim. Declared at module scope (not inside
-## the class) because static-method dispatch through `Thread.spawn`
-## was prepending an implicit self arg, breaking the FFI signature.
-## JoinHandle's `join_raw` and `__drop` live on the class (instance
-## dispatch works correctly).
+## the class) historically because static-method dispatch through
+## `Thread.spawn` was prepending an implicit self arg, breaking the
+## FFI signature. That bug has since been fixed (see commit
+## 153e5c9 — module+mixin reshape touched the same dispatch path).
+## Kept here for backward-compat with existing callers; new code
+## should prefer `Thread.spawn_raw(closure)`.
 lib "runtime/thread.c"
   def thread_spawn_raw as "riven_thread_spawn"(closure: Int) -> Int
 end
