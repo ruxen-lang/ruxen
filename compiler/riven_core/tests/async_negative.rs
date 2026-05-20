@@ -116,3 +116,27 @@ fn poll_signature_mismatch_rejected() {
         errors.iter().map(|d| &d.message).collect::<Vec<_>>()
     );
 }
+
+// ─── B6 (executor.spec.md) — block_on inside async (E1112) ──────────
+
+/// Spec B6 (sub-phase 3): `block_on` is rejected inside any async
+/// context with code E1112. Symmetric to E1110 — the resolver tracks
+/// `async_scope_depth`; if it's > 0 at a `block_on(...)` call site,
+/// the call is flagged. The async_lowering rewriter intentionally
+/// SKIPS bodies of async functions/closures so the raw Call survives
+/// to resolve.
+#[test]
+fn block_on_inside_async_rejected_e1112() {
+    let source = rvn("async_negative_block_on_inside_async");
+    let errors = typeck_errors(&source);
+    assert!(
+        errors
+            .iter()
+            .any(|d| d.code.as_deref() == Some("E1112")),
+        "expected E1112 for block_on inside async fn, got: {:?}",
+        errors
+            .iter()
+            .map(|d| (d.code.clone(), d.message.clone()))
+            .collect::<Vec<_>>()
+    );
+}

@@ -370,6 +370,16 @@ impl Resolver {
                     args.iter().map(|a| self.resolve_expr(a)).collect();
                 let mut block_hir = block.as_ref().map(|b| Box::new(self.resolve_expr(b)));
 
+                // E1112 (docs/specs/stdlib/executor.spec.md B6) is
+                // detected in `async_lowering::collect_block_on_in_async_diagnostics`,
+                // which runs BEFORE the async-fn rewrite while the
+                // original `block_on(...)` call is still attached to
+                // its async parent. By the time the resolver runs,
+                // the call has either been erased by the block_on
+                // rewriter (sync scopes) or pushed inside a
+                // synthesised state-machine `poll` method (async
+                // scopes), making async_scope_depth here unreliable.
+
                 // Try to resolve the callee
                 match &callee.kind {
                     ast::ExprKind::Identifier(name) => {

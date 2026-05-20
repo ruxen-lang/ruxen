@@ -110,6 +110,16 @@ pub fn lower_async_defs(program: &mut Program) {
         combined.append(&mut program.items);
         program.items = combined;
     }
+
+    // Sub-phase 3 (docs/specs/stdlib/executor.spec.md): rewrite every
+    // `block_on(EXPR)` call site into an inline poll loop. The
+    // rewriter runs AFTER the async-fn rewrite above so block_on
+    // calls inside the original async fn bodies (now sync wrappers
+    // returning their state-machine class) are still visible —
+    // E1112 forbids that case at resolve time, but if a future
+    // version permits it (or if E1112 is deferred) the rewriter
+    // produces a working poll loop either way.
+    rewrite_block_on_calls(program);
 }
 
 /// Lower a single top-level `async def` into a (rewritten sync fn,
@@ -1488,6 +1498,720 @@ fn mangle_future_class_name(fn_name: &str) -> String {
         }
     }
     format!("__{}Future", camel)
+}
+
+// ─── E1112 pre-check (block_on inside async) ──────────────────────
+//
+// This MUST run BEFORE `lower_async_defs` rewrites async fn bodies
+// into synthesised state-machine classes — once the async-fn rewrite
+// fires, the original `block_on(...)` call ends up inside the
+// generated `poll` method (which is itself NOT marked async), so
+// the resolver's async_scope_depth check would not find it.
+//
+// Implementation: walk every top-level `async def` and every
+// `async def` method on a class. For each `block_on(...)` call site
+// inside the body, emit an E1112 diagnostic. Recursion mirrors the
+// rewriter's walker shape.
+
+/// Walk `program` BEFORE `lower_async_defs` runs and collect a
+/// diagnostic for every `block_on(...)` call found inside an async
+/// function or async closure. Returns the diagnostics; the caller is
+/// responsible for surfacing them via the type-check result.
+///
+/// Spec: docs/specs/stdlib/executor.spec.md B6.
+/// Error doc: docs/errors/E1112.md.
+pub fn collect_block_on_in_async_diagnostics(
+    program: &Program,
+) -> Vec<crate::diagnostics::Diagnostic> {
+    let mut diags = Vec::new();
+    for item in &program.items {
+        collect_e1112_in_item(item, /*in_async=*/ false, &mut diags);
+    }
+    diags
+}
+
+fn collect_e1112_in_item(
+    item: &TopLevelItem,
+    in_async: bool,
+    diags: &mut Vec<crate::diagnostics::Diagnostic>,
+) {
+    match item {
+        TopLevelItem::Function(func) => {
+            let scope_async = in_async || func.is_async;
+            collect_e1112_in_block(&func.body, scope_async, diags);
+        }
+        TopLevelItem::Class(class) => {
+            for m in class.methods.iter() {
+                let scope_async = in_async || m.is_async;
+                collect_e1112_in_block(&m.body, scope_async, diags);
+            }
+            for inner_impl in class.inner_impls.iter() {
+                for inner in inner_impl.items.iter() {
+                    if let crate::parser::ast::ImplItem::Method(m) = inner {
+                        let scope_async = in_async || m.is_async;
+                        collect_e1112_in_block(&m.body, scope_async, diags);
+                    }
+                }
+            }
+        }
+        TopLevelItem::Impl(impl_block) => {
+            for inner in impl_block.items.iter() {
+                if let crate::parser::ast::ImplItem::Method(m) = inner {
+                    let scope_async = in_async || m.is_async;
+                    collect_e1112_in_block(&m.body, scope_async, diags);
+                }
+            }
+        }
+        TopLevelItem::Module(module) => {
+            for nested in module.items.iter() {
+                collect_e1112_in_item(nested, in_async, diags);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_e1112_in_block(
+    block: &Block,
+    in_async: bool,
+    diags: &mut Vec<crate::diagnostics::Diagnostic>,
+) {
+    for stmt in &block.statements {
+        match stmt {
+            Statement::Let(let_binding) => {
+                if let Some(v) = &let_binding.value {
+                    collect_e1112_in_expr(v, in_async, diags);
+                }
+            }
+            Statement::Expression(e) => collect_e1112_in_expr(e, in_async, diags),
+        }
+    }
+}
+
+fn collect_e1112_in_expr(
+    expr: &Expr,
+    in_async: bool,
+    diags: &mut Vec<crate::diagnostics::Diagnostic>,
+) {
+    // Flag this node if it is `block_on(_)` and we're in an async
+    // scope. We don't gate on arg count — even malformed
+    // `block_on()` calls should produce E1112 rather than a
+    // confusing arity error first.
+    if in_async {
+        if let ExprKind::Call { callee, .. } = &expr.kind {
+            if let ExprKind::Identifier(name) = &callee.kind {
+                if name == "block_on" {
+                    diags.push(crate::diagnostics::Diagnostic::error_with_code(
+                        "`block_on` cannot be called inside an `async` function or closure — use `.await` to await a future in an async context",
+                        expr.span.clone(),
+                        "E1112",
+                    ));
+                }
+            }
+        }
+    }
+
+    // Recurse — descending into nested closures may CHANGE the
+    // async scope (sync closure inside async fn → inner scope is
+    // sync; async closure inside sync fn → inner scope is async).
+    match &expr.kind {
+        ExprKind::BinaryOp { left, right, .. } => {
+            collect_e1112_in_expr(left, in_async, diags);
+            collect_e1112_in_expr(right, in_async, diags);
+        }
+        ExprKind::UnaryOp { operand, .. } => collect_e1112_in_expr(operand, in_async, diags),
+        ExprKind::Borrow(inner) | ExprKind::BorrowMut(inner) => {
+            collect_e1112_in_expr(inner, in_async, diags);
+        }
+        ExprKind::FieldAccess { object, .. } => collect_e1112_in_expr(object, in_async, diags),
+        ExprKind::MethodCall { object, args, .. } => {
+            collect_e1112_in_expr(object, in_async, diags);
+            for a in args.iter() {
+                collect_e1112_in_expr(a, in_async, diags);
+            }
+        }
+        ExprKind::Call { callee, args, .. } => {
+            collect_e1112_in_expr(callee, in_async, diags);
+            for a in args.iter() {
+                collect_e1112_in_expr(a, in_async, diags);
+            }
+        }
+        ExprKind::Index { object, index } => {
+            collect_e1112_in_expr(object, in_async, diags);
+            collect_e1112_in_expr(index, in_async, diags);
+        }
+        ExprKind::ClosureCall { callee, args } => {
+            collect_e1112_in_expr(callee, in_async, diags);
+            for a in args.iter() {
+                collect_e1112_in_expr(a, in_async, diags);
+            }
+        }
+        ExprKind::Try(inner) | ExprKind::Await(inner) => {
+            collect_e1112_in_expr(inner, in_async, diags);
+        }
+        ExprKind::Assign { target, value }
+        | ExprKind::CompoundAssign { target, value, .. } => {
+            collect_e1112_in_expr(target, in_async, diags);
+            collect_e1112_in_expr(value, in_async, diags);
+        }
+        ExprKind::If(IfExpr {
+            condition,
+            then_body,
+            elsif_clauses,
+            else_body,
+            ..
+        }) => {
+            collect_e1112_in_expr(condition, in_async, diags);
+            collect_e1112_in_block(then_body, in_async, diags);
+            for el in elsif_clauses.iter() {
+                collect_e1112_in_expr(&el.condition, in_async, diags);
+                collect_e1112_in_block(&el.body, in_async, diags);
+            }
+            if let Some(b) = else_body {
+                collect_e1112_in_block(b, in_async, diags);
+            }
+        }
+        ExprKind::Match(MatchExpr { subject, arms, .. }) => {
+            collect_e1112_in_expr(subject, in_async, diags);
+            for a in arms.iter() {
+                if let Some(g) = &a.guard {
+                    collect_e1112_in_expr(g, in_async, diags);
+                }
+                match &a.body {
+                    MatchArmBody::Expr(e) => collect_e1112_in_expr(e, in_async, diags),
+                    MatchArmBody::Block(b) => collect_e1112_in_block(b, in_async, diags),
+                }
+            }
+        }
+        ExprKind::Block(b) => collect_e1112_in_block(b, in_async, diags),
+        ExprKind::Loop(loop_expr) => collect_e1112_in_block(&loop_expr.body, in_async, diags),
+        ExprKind::While(while_expr) => {
+            collect_e1112_in_expr(&while_expr.condition, in_async, diags);
+            collect_e1112_in_block(&while_expr.body, in_async, diags);
+        }
+        ExprKind::For(for_expr) => {
+            collect_e1112_in_expr(&for_expr.iterable, in_async, diags);
+            collect_e1112_in_block(&for_expr.body, in_async, diags);
+        }
+        ExprKind::Return(Some(inner)) | ExprKind::Break(Some(inner)) => {
+            collect_e1112_in_expr(inner, in_async, diags);
+        }
+        ExprKind::ArrayLiteral(items) | ExprKind::TupleLiteral(items) => {
+            for it in items.iter() {
+                collect_e1112_in_expr(it, in_async, diags);
+            }
+        }
+        ExprKind::ArrayFill { value, count } => {
+            collect_e1112_in_expr(value, in_async, diags);
+            collect_e1112_in_expr(count, in_async, diags);
+        }
+        ExprKind::MapLiteral(pairs) => {
+            for (k, v) in pairs.iter() {
+                collect_e1112_in_expr(k, in_async, diags);
+                collect_e1112_in_expr(v, in_async, diags);
+            }
+        }
+        ExprKind::Range { start, end, .. } => {
+            if let Some(s) = start {
+                collect_e1112_in_expr(s, in_async, diags);
+            }
+            if let Some(e) = end {
+                collect_e1112_in_expr(e, in_async, diags);
+            }
+        }
+        ExprKind::Cast { expr: inner, .. } => collect_e1112_in_expr(inner, in_async, diags),
+        ExprKind::Closure(c) => {
+            // The closure's async-ness OVERRIDES the surrounding
+            // scope. Async closure inside sync fn → its body IS
+            // async; sync closure inside async fn → its body is
+            // NOT async (the .await ban applies to it, and
+            // symmetrically block_on inside it is fine).
+            let inner_async = c.is_async;
+            match &c.body {
+                ClosureBody::Expr(e) => collect_e1112_in_expr(e, inner_async, diags),
+                ClosureBody::Block(b) => collect_e1112_in_block(b, inner_async, diags),
+            }
+        }
+        ExprKind::UnsafeBlock(b) => collect_e1112_in_block(b, in_async, diags),
+        ExprKind::EnumVariant { args, .. } => {
+            for fa in args.iter() {
+                collect_e1112_in_expr(&fa.value, in_async, diags);
+            }
+        }
+        _ => {}
+    }
+}
+
+// ─── block_on intrinsic rewriter ───────────────────────────────────
+//
+// Sub-phase 3 of the async round (docs/specs/stdlib/executor.spec.md).
+// At every `block_on(EXPR)` call site, rewrite to a block of the form:
+//
+//   {
+//     var __block_on_fut_N  = EXPR
+//     var __block_on_ctx_N  = Context.executor
+//     var __block_on_res_N  = 0
+//     loop
+//       match (&var __block_on_fut_N).poll(&var __block_on_ctx_N)
+//         Poll.Ready(__block_on_v_N) ->
+//           __block_on_res_N = __block_on_v_N
+//           break
+//         Poll.Pending -> Thread.yield_now
+//       end
+//     end
+//     __block_on_res_N
+//   }
+//
+// The `__block_on_v_N` payload variable carries the Ready value out
+// of the match arm into the surrounding scope via `__block_on_res_N`,
+// which is the block's trailing expression. Using a named local
+// instead of `break VALUE` avoids the `break v end` shape (which
+// would require break-with-value to thread cleanly through MIR drop
+// elaboration in v1; the explicit res-var keeps the lowering in
+// straight-line territory).
+//
+// Counter `N` is per-function so repeated block_on calls in the same
+// scope get distinct names — guards against shadowing if MIR
+// scope-tracking is conservative.
+//
+// Why AST-level and not MIR-level: the poll-match is a sequence of
+// constructs (let, loop, match on Poll, method call) all of which
+// already lower cleanly. AST rewriting reuses existing infrastructure
+// — no new MIR instruction, no new typeck path. The MIR-level
+// alternative was rejected as duplicating concerns already handled
+// by Riven's standard pipeline (see plan doc for the design choice).
+
+fn rewrite_block_on_calls(program: &mut Program) {
+    let mut counter: u32 = 0;
+    for item in program.items.iter_mut() {
+        rewrite_block_on_in_item(item, &mut counter);
+    }
+}
+
+fn rewrite_block_on_in_item(item: &mut TopLevelItem, counter: &mut u32) {
+    match item {
+        TopLevelItem::Function(func) => {
+            // Skip async functions: block_on inside async would
+            // deadlock at runtime (E1112). Leaving the call un-
+            // rewritten lets the resolver flag it (see
+            // resolve/exprs.rs:Call site) before the typeck
+            // signature mismatch noise would mask the real issue.
+            if func.is_async {
+                return;
+            }
+            rewrite_block_on_in_block(&mut func.body, counter);
+        }
+        TopLevelItem::Class(class) => {
+            for m in class.methods.iter_mut() {
+                if m.is_async {
+                    continue;
+                }
+                rewrite_block_on_in_block(&mut m.body, counter);
+            }
+            // Methods declared via in-body `impl Mixin do ... end`
+            // blocks live in inner_impls, not the top-level methods
+            // vec — walk them too.
+            for inner_impl in class.inner_impls.iter_mut() {
+                for inner in inner_impl.items.iter_mut() {
+                    if let crate::parser::ast::ImplItem::Method(m) = inner {
+                        if m.is_async {
+                            continue;
+                        }
+                        rewrite_block_on_in_block(&mut m.body, counter);
+                    }
+                }
+            }
+        }
+        TopLevelItem::Impl(impl_block) => {
+            for inner in impl_block.items.iter_mut() {
+                if let crate::parser::ast::ImplItem::Method(m) = inner {
+                    if m.is_async {
+                        continue;
+                    }
+                    rewrite_block_on_in_block(&mut m.body, counter);
+                }
+            }
+        }
+        TopLevelItem::Module(module) => {
+            for nested in module.items.iter_mut() {
+                rewrite_block_on_in_item(nested, counter);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn rewrite_block_on_in_block(block: &mut Block, counter: &mut u32) {
+    for stmt in block.statements.iter_mut() {
+        match stmt {
+            Statement::Let(let_binding) => {
+                if let Some(v) = &mut let_binding.value {
+                    rewrite_block_on_in_expr(v, counter);
+                }
+            }
+            Statement::Expression(e) => rewrite_block_on_in_expr(e, counter),
+        }
+    }
+}
+
+fn rewrite_block_on_in_expr(expr: &mut Expr, counter: &mut u32) {
+    // Recurse into children FIRST so nested block_on calls
+    // (`block_on(block_on(x))` — pathological but legal at parse
+    // time) get rewritten innermost-out.
+    match &mut expr.kind {
+        ExprKind::BinaryOp { left, right, .. } => {
+            rewrite_block_on_in_expr(left, counter);
+            rewrite_block_on_in_expr(right, counter);
+        }
+        ExprKind::UnaryOp { operand, .. } => rewrite_block_on_in_expr(operand, counter),
+        ExprKind::Borrow(inner) | ExprKind::BorrowMut(inner) => {
+            rewrite_block_on_in_expr(inner, counter);
+        }
+        ExprKind::FieldAccess { object, .. } => rewrite_block_on_in_expr(object, counter),
+        ExprKind::MethodCall { object, args, .. } => {
+            rewrite_block_on_in_expr(object, counter);
+            for a in args.iter_mut() {
+                rewrite_block_on_in_expr(a, counter);
+            }
+        }
+        ExprKind::Call { callee, args, .. } => {
+            rewrite_block_on_in_expr(callee, counter);
+            for a in args.iter_mut() {
+                rewrite_block_on_in_expr(a, counter);
+            }
+        }
+        ExprKind::Index { object, index } => {
+            rewrite_block_on_in_expr(object, counter);
+            rewrite_block_on_in_expr(index, counter);
+        }
+        ExprKind::ClosureCall { callee, args } => {
+            rewrite_block_on_in_expr(callee, counter);
+            for a in args.iter_mut() {
+                rewrite_block_on_in_expr(a, counter);
+            }
+        }
+        ExprKind::Try(inner) | ExprKind::Await(inner) => {
+            rewrite_block_on_in_expr(inner, counter);
+        }
+        ExprKind::Assign { target, value }
+        | ExprKind::CompoundAssign { target, value, .. } => {
+            rewrite_block_on_in_expr(target, counter);
+            rewrite_block_on_in_expr(value, counter);
+        }
+        ExprKind::If(IfExpr {
+            condition,
+            then_body,
+            elsif_clauses,
+            else_body,
+            ..
+        }) => {
+            rewrite_block_on_in_expr(condition, counter);
+            rewrite_block_on_in_block(then_body, counter);
+            for el in elsif_clauses.iter_mut() {
+                rewrite_block_on_in_expr(&mut el.condition, counter);
+                rewrite_block_on_in_block(&mut el.body, counter);
+            }
+            if let Some(b) = else_body {
+                rewrite_block_on_in_block(b, counter);
+            }
+        }
+        ExprKind::Match(MatchExpr { subject, arms, .. }) => {
+            rewrite_block_on_in_expr(subject, counter);
+            for a in arms.iter_mut() {
+                if let Some(g) = &mut a.guard {
+                    rewrite_block_on_in_expr(g, counter);
+                }
+                match &mut a.body {
+                    MatchArmBody::Expr(e) => rewrite_block_on_in_expr(e, counter),
+                    MatchArmBody::Block(b) => rewrite_block_on_in_block(b, counter),
+                }
+            }
+        }
+        ExprKind::Block(b) => rewrite_block_on_in_block(b, counter),
+        ExprKind::Loop(loop_expr) => rewrite_block_on_in_block(&mut loop_expr.body, counter),
+        ExprKind::While(while_expr) => {
+            rewrite_block_on_in_expr(&mut while_expr.condition, counter);
+            rewrite_block_on_in_block(&mut while_expr.body, counter);
+        }
+        ExprKind::For(for_expr) => {
+            rewrite_block_on_in_expr(&mut for_expr.iterable, counter);
+            rewrite_block_on_in_block(&mut for_expr.body, counter);
+        }
+        ExprKind::Return(Some(inner)) | ExprKind::Break(Some(inner)) => {
+            rewrite_block_on_in_expr(inner, counter);
+        }
+        ExprKind::ArrayLiteral(items) | ExprKind::TupleLiteral(items) => {
+            for it in items.iter_mut() {
+                rewrite_block_on_in_expr(it, counter);
+            }
+        }
+        ExprKind::ArrayFill { value, count } => {
+            rewrite_block_on_in_expr(value, counter);
+            rewrite_block_on_in_expr(count, counter);
+        }
+        ExprKind::MapLiteral(pairs) => {
+            for (k, v) in pairs.iter_mut() {
+                rewrite_block_on_in_expr(k, counter);
+                rewrite_block_on_in_expr(v, counter);
+            }
+        }
+        ExprKind::Range { start, end, .. } => {
+            if let Some(s) = start {
+                rewrite_block_on_in_expr(s, counter);
+            }
+            if let Some(e) = end {
+                rewrite_block_on_in_expr(e, counter);
+            }
+        }
+        ExprKind::Cast { expr: inner, .. } => rewrite_block_on_in_expr(inner, counter),
+        ExprKind::Closure(c) => {
+            // Skip async closures — same reasoning as async fns
+            // (see rewrite_block_on_in_item).
+            if !c.is_async {
+                match &mut c.body {
+                    ClosureBody::Expr(e) => rewrite_block_on_in_expr(e, counter),
+                    ClosureBody::Block(b) => rewrite_block_on_in_block(b, counter),
+                }
+            }
+        }
+        ExprKind::UnsafeBlock(b) => rewrite_block_on_in_block(b, counter),
+        ExprKind::EnumVariant { args, .. } => {
+            for fa in args.iter_mut() {
+                rewrite_block_on_in_expr(&mut fa.value, counter);
+            }
+        }
+        _ => {}
+    }
+
+    // Now check this node itself. If it's `block_on(EXPR)` with
+    // exactly one argument, replace it with the inline poll-loop
+    // block expression.
+    let rewrite_target = matches!(
+        &expr.kind,
+        ExprKind::Call { callee, args, block: None }
+            if matches!(&callee.kind, ExprKind::Identifier(name) if name == "block_on")
+                && args.len() == 1
+    );
+    if rewrite_target {
+        // Steal the future expression out of the Call.
+        let span = expr.span.clone();
+        let mut owned = std::mem::replace(
+            expr,
+            Expr {
+                kind: ExprKind::NullLiteral,
+                span: span.clone(),
+            },
+        );
+        let future_expr = match &mut owned.kind {
+            ExprKind::Call { args, .. } => args.remove(0),
+            _ => unreachable!("guarded above"),
+        };
+        *counter += 1;
+        let n = *counter;
+        *expr = build_block_on_loop(future_expr, n, &span);
+    }
+}
+
+/// Build the inline poll-loop block for a `block_on(future_expr)`
+/// call. `n` is a fresh counter used to name the introduced locals.
+fn build_block_on_loop(future_expr: Expr, n: u32, span: &Span) -> Expr {
+    let fut_name = format!("__block_on_fut_{n}");
+    let ctx_name = format!("__block_on_ctx_{n}");
+    let res_name = format!("__block_on_res_{n}");
+    let v_name = format!("__block_on_v_{n}");
+
+    // var __block_on_fut_N = EXPR
+    let let_fut = Statement::Let(LetBinding {
+        mutable: true,
+        pattern: Pattern::Identifier {
+            mutable: true,
+            name: fut_name.clone(),
+            span: span.clone(),
+        },
+        type_annotation: None,
+        value: Some(Box::new(future_expr)),
+        span: span.clone(),
+    });
+
+    // var __block_on_ctx_N = Context.executor
+    //
+    // `Context.executor` is a no-arg static method declared in
+    // library/std/future/src/lib.rvn. Riven's parser treats
+    // `Foo.bar` as a FieldAccess when there are no parens; the
+    // resolver lifts static-method-without-parens to a static call
+    // (same pattern as `Thread.current_id` in fixture 700).
+    let ctx_factory = Expr {
+        kind: ExprKind::FieldAccess {
+            object: Box::new(Expr {
+                kind: ExprKind::Identifier("Context".to_string()),
+                span: span.clone(),
+            }),
+            field: "executor".to_string(),
+        },
+        span: span.clone(),
+    };
+    let let_ctx = Statement::Let(LetBinding {
+        mutable: true,
+        pattern: Pattern::Identifier {
+            mutable: true,
+            name: ctx_name.clone(),
+            span: span.clone(),
+        },
+        type_annotation: None,
+        value: Some(Box::new(ctx_factory)),
+        span: span.clone(),
+    });
+
+    // var __block_on_res_N = 0
+    //
+    // The result-carrying local. Declared at the outer block scope
+    // so the match arm can write into it and the trailing
+    // expression can read it after the loop exits.
+    let let_res = Statement::Let(LetBinding {
+        mutable: true,
+        pattern: Pattern::Identifier {
+            mutable: true,
+            name: res_name.clone(),
+            span: span.clone(),
+        },
+        type_annotation: None,
+        value: Some(Box::new(Expr {
+            kind: ExprKind::IntLiteral(0, None),
+            span: span.clone(),
+        })),
+        span: span.clone(),
+    });
+
+    // (&var __block_on_fut_N).poll(&var __block_on_ctx_N)
+    let poll_call = Expr {
+        kind: ExprKind::MethodCall {
+            object: Box::new(Expr {
+                kind: ExprKind::BorrowMut(Box::new(Expr {
+                    kind: ExprKind::Identifier(fut_name.clone()),
+                    span: span.clone(),
+                })),
+                span: span.clone(),
+            }),
+            method: "poll".to_string(),
+            generic_args: Vec::new(),
+            args: vec![Expr {
+                kind: ExprKind::BorrowMut(Box::new(Expr {
+                    kind: ExprKind::Identifier(ctx_name.clone()),
+                    span: span.clone(),
+                })),
+                span: span.clone(),
+            }],
+            block: None,
+        },
+        span: span.clone(),
+    };
+
+    // Match arm: Poll.Ready(__block_on_v_N) -> { __block_on_res_N = __block_on_v_N; break }
+    let ready_pattern = Pattern::Enum {
+        path: vec!["Poll".to_string()],
+        variant: "Ready".to_string(),
+        fields: vec![Pattern::Identifier {
+            mutable: false,
+            name: v_name.clone(),
+            span: span.clone(),
+        }],
+        span: span.clone(),
+    };
+    let assign_res = Expr {
+        kind: ExprKind::Assign {
+            target: Box::new(Expr {
+                kind: ExprKind::Identifier(res_name.clone()),
+                span: span.clone(),
+            }),
+            value: Box::new(Expr {
+                kind: ExprKind::Identifier(v_name.clone()),
+                span: span.clone(),
+            }),
+        },
+        span: span.clone(),
+    };
+    let break_expr = Expr {
+        kind: ExprKind::Break(None),
+        span: span.clone(),
+    };
+    let ready_arm = MatchArm {
+        pattern: ready_pattern,
+        guard: None,
+        body: MatchArmBody::Block(Block {
+            statements: vec![
+                Statement::Expression(assign_res),
+                Statement::Expression(break_expr),
+            ],
+            span: span.clone(),
+        }),
+        span: span.clone(),
+    };
+
+    // Match arm: Poll.Pending -> Thread.yield_now
+    let pending_pattern = Pattern::Enum {
+        path: vec!["Poll".to_string()],
+        variant: "Pending".to_string(),
+        fields: Vec::new(),
+        span: span.clone(),
+    };
+    let yield_call = Expr {
+        kind: ExprKind::FieldAccess {
+            object: Box::new(Expr {
+                kind: ExprKind::Identifier("Thread".to_string()),
+                span: span.clone(),
+            }),
+            field: "yield_now".to_string(),
+        },
+        span: span.clone(),
+    };
+    let pending_arm = MatchArm {
+        pattern: pending_pattern,
+        guard: None,
+        body: MatchArmBody::Expr(yield_call),
+        span: span.clone(),
+    };
+
+    let match_expr = Expr {
+        kind: ExprKind::Match(MatchExpr {
+            subject: Box::new(poll_call),
+            arms: vec![ready_arm, pending_arm],
+            span: span.clone(),
+        }),
+        span: span.clone(),
+    };
+
+    // loop ... end
+    let loop_expr = Expr {
+        kind: ExprKind::Loop(LoopExpr {
+            body: Block {
+                statements: vec![Statement::Expression(match_expr)],
+                span: span.clone(),
+            },
+            span: span.clone(),
+        }),
+        span: span.clone(),
+    };
+
+    // Final outer block: let_fut, let_ctx, let_res, loop, res
+    let outer_block = Block {
+        statements: vec![
+            let_fut,
+            let_ctx,
+            let_res,
+            Statement::Expression(loop_expr),
+            // Trailing expression: read the result back out.
+            Statement::Expression(Expr {
+                kind: ExprKind::Identifier(res_name.clone()),
+                span: span.clone(),
+            }),
+        ],
+        span: span.clone(),
+    };
+
+    Expr {
+        kind: ExprKind::Block(outer_block),
+        span: span.clone(),
+    }
 }
 
 #[cfg(test)]

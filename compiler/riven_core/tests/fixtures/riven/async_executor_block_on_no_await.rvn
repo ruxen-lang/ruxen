@@ -1,0 +1,30 @@
+## Spec B1 + B7 (docs/specs/stdlib/executor.spec.md): block_on
+## drives a sub-phase-2A future (no `.await`) to completion.
+##
+## The async_lowering rewriter erases `block_on(make_int())` at AST
+## time and replaces it with an inline poll loop. After lowering the
+## body of main looks roughly like:
+##
+##   {
+##     var __block_on_fut_1 = make_int()
+##     var __block_on_ctx_1 = Context.executor
+##     var __block_on_res_1 = 0
+##     loop
+##       match (&var __block_on_fut_1).poll(&var __block_on_ctx_1)
+##         Poll.Ready(__block_on_v_1) ->
+##           __block_on_res_1 = __block_on_v_1
+##           break
+##         Poll.Pending -> Thread.yield_now
+##       end
+##     end
+##     __block_on_res_1
+##   }
+
+async def make_int() -> Int
+  42
+end
+
+def main
+  let result = block_on(make_int())
+  puts "#{result}"
+end

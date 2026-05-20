@@ -335,6 +335,18 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E1110",
         title: "`.await` outside `async` function or closure",
     },
+    // E1112 fires at every `block_on(...)` call site whose enclosing
+    // function or closure IS marked `async`. Symmetric to E1110 —
+    // calling block_on from inside an async context would deadlock
+    // the single-threaded executor (the outer block_on waits for the
+    // inner future, but the inner future can never make progress
+    // because the outer call holds the only thread). Detected during
+    // name resolution (`resolve/exprs.rs`). Async sub-phase 3
+    // (docs/specs/stdlib/executor.spec.md B6).
+    CodeInfo {
+        code: "E1112",
+        title: "`block_on` called inside `async` context (would deadlock)",
+    },
     // E1115 fires when `.await` appears inside the body of a `while` /
     // `for` loop. v1 lowering does not handle loop suspension; the
     // shape requires a state per iteration. Deferred to v2 per the

@@ -50,25 +50,41 @@ end
 
 ## Context — the executor-supplied polling context. Holds an opaque
 ## pointer the executor maintains; user code only ever calls
-## `cx.waker` to obtain the wake handle. Sub-phase 3 wires the real
-## executor; for now `waker` panics with "executor not yet
-## implemented".
+## `cx.waker` to obtain the wake handle.
+##
+## Sub-phase 3 of the async round (executor.spec.md B4) wired
+## `cx.waker` to return a real singleton no-op Waker (no longer
+## panics). The mechanical "wake" channel is inert until sub-phase
+## 4 introduces genuine park points (async I/O on epoll/kqueue).
 ##
 ## Context.test_dummy: a hand-rolled no-op context used by the
 ## async-lowering pin tests (async_lowering.spec.md B6 — Milestone
-## 2A). Returns a Context whose waker is a no-op symbol; safe to
-## call into `(&var fut).poll(&var ctx)` without panicking. The real
-## executor lands in sub-phase 3.
+## 2A). The dummy and the executor-made context are wire-compatible
+## — both carry the singleton no-op waker, so `cx.waker()` works on
+## either kind.
+##
+## Context.executor: factory used by the compiler intrinsic
+## `block_on` rewriter (executor.spec.md B1, B4). Returns a heap-
+## allocated context whose waker is the same singleton no-op as
+## test_dummy. v1 sub-phase 3 has no per-task wake state, so a
+## single shared instance per call is fine.
 class Context
   lib "runtime/executor.c"
     def waker as "riven_context_waker"(self) -> &Waker
     def self.test_dummy as "riven_context_test_dummy"() -> Context
+    def self.executor as "riven_executor_make_context"() -> Context
   end
 end
 
 ## Waker — handle a Future stashes to notify the executor when it
 ## becomes pollable again. Two methods: `wake` (consumes the waker)
-## and `wake_by_ref` (borrowed). Both panic in sub-phase 1.
+## and `wake_by_ref` (borrowed).
+##
+## Sub-phase 3 of the async round (executor.spec.md B3): both
+## methods are no-ops. The poll loop in block_on spins
+## continuously (with Thread.yield_now between iterations), so any
+## "wake" is implicit. Sub-phase 4 wires real signaling when async
+## I/O introduces genuine blocking park points.
 class Waker
   lib "runtime/executor.c"
     def wake as "riven_waker_wake"(self) -> ()

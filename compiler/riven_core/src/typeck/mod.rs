@@ -57,9 +57,17 @@ pub fn type_check(program: &ast::Program) -> TypeCheckResult {
     // BEFORE the resolver so the generated class lifts through the
     // normal resolve/typeck/MIR pipeline as if it were user-written.
     let mut lowered = program.clone();
+    // E1112 pre-check (docs/specs/stdlib/executor.spec.md B6):
+    // detect `block_on(...)` calls inside async function/closure
+    // bodies BEFORE the async-fn rewrite collapses them into a
+    // synth state-machine class. Once the rewrite fires the call
+    // would live inside the (non-async) generated `poll` method,
+    // making the async-scope check at resolve time unreachable.
+    let e1112_diags = crate::async_lowering::collect_block_on_in_async_diagnostics(&lowered);
     crate::async_lowering::lower_async_defs(&mut lowered);
     let mut result = type_check_with_bootstrap_packages(&lowered, &bootstrap_packages);
     result.diagnostics.extend(bootstrap_diagnostics);
+    result.diagnostics.extend(e1112_diags);
     result
 }
 
@@ -128,6 +136,9 @@ pub fn type_check_with_bootstrap(
     // Async lowering — see `type_check` for context. Identical
     // injection point in this non-package-aware variant.
     let mut lowered_user = program.clone();
+    // E1112 pre-check (docs/specs/stdlib/executor.spec.md B6) —
+    // mirrors `type_check`'s injection.
+    let e1112_diags = crate::async_lowering::collect_block_on_in_async_diagnostics(&lowered_user);
     crate::async_lowering::lower_async_defs(&mut lowered_user);
 
     // Phase 1: Name resolution (with bootstrap prelude merged in)
@@ -139,6 +150,7 @@ pub fn type_check_with_bootstrap(
         mut diagnostics,
         type_registry,
     } = resolver.resolve_with_bootstrap(&lowered_user, bootstrap_programs);
+    diagnostics.extend(e1112_diags);
 
     // Phase 2: Validate derive usage and collect all trait impls
     diagnostics.extend(crate::implicit_includes::validate_program(

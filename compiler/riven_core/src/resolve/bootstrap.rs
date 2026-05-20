@@ -100,6 +100,14 @@ pub const BOOTSTRAP_FILES: &[&str] = &[
     // re-registering on top of the real ones if any caller still
     // looks them up there.
     "future/src/lib.rvn",
+    // executor depends on future (block_on takes a Future-implementing
+    // value). Sub-phase 3 of the async round (docs/specs/stdlib/
+    // executor.spec.md). The user-visible `block_on` is a free fn here;
+    // the compiler intrinsic rewriter in async_lowering replaces every
+    // call site with an inline poll loop at AST time, so this
+    // declaration only carries the signature surface — the body never
+    // actually runs.
+    "executor/src/lib.rvn",
     "string/src/lib.rvn",
     "option_result/src/lib.rvn",
     "array/src/lib.rvn",
