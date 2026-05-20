@@ -1,53 +1,60 @@
-## std::net — TcpListener / TcpStream class shells + Shutdown enum.
+## std::net — TcpListener / TcpStream class lib-decl surface + Shutdown enum.
 ##
-## Wave 2 (#06.8) — class identities + Shutdown enum live here in
-## self-hosted Riven source. Methods still flow through the
-## static-ctor fast path + runtime_table mangled-name lookup
-## (`TcpStream_read` → `riven_tcp_stream_read`, …). A trial
-## migration during T#20 attempted to declare these as class-body
-## `lib "runtime/tcp.c"` decls with `-> Int` returns (matching the
-## void*-boxed Result wire shape), but typeck consults the
-## hardcoded method-resolver table in `typeck/method_resolvers/mod.rs`
-## that says `bind` → `Result[TcpListener, IoError]`. Declaring
-## the lib-decl return type as `Int` caused the user-side
-## `match TcpListener.bind(...)` to compile (the user-method
-## lookup hit the lib decl first) but produce no output at runtime
-## because the Ok/Err arms never matched. The clean fix needs
-## either the lib-decl grammar to accept `Result[T, E]` return
-## types end-to-end through cranelift's import sig (the void*
-## ABI is wire-compatible — only typeck sees the rich form), or
-## the lib-decl-vs-typeck-table precedence to flip. Both are
-## bigger lifts than the static-ctor carve-out removal; the
-## migration is deferred until that lands. Duration / Instant
-## (whose `Result`-typed methods are limited) migrated cleanly
-## under the same T#20 follow-through; TcpListener / TcpStream /
-## File / BufReader stay on the runtime_table path for now.
+## Phase E-rest 2 of #06.95 migrated most TcpListener / TcpStream
+## methods from `codegen/runtime_table/mod.rs` arms into class-body
+## lib decls. The FFI alias map populated by `as "..."` clauses
+## rewrites the MIR-mangled callee (`TcpListener_bind` →
+## `riven_tcp_listener_bind`) BEFORE codegen consults runtime_table.
+##
+## Three method surfaces stay on runtime_table dispatch for now:
+##   - `TcpStream.set_read_timeout(&Duration)` /
+##     `.set_write_timeout(&Duration)` — Duration is declared in
+##     `library/std/time/src/lib.rvn`, which loads AFTER net.rvn in
+##     BOOTSTRAP_FILES. Forward-referencing Duration here fails at
+##     net.rvn parse time. Migrating needs Duration to land in a
+##     package that loads before net, or net to load after time
+##     (which would break time-uses-no-net).
+##   - `TcpListener.set_nonblocking(Bool)` — the C runtime takes
+##     `int8_t` for the Bool arg; the cranelift verifier rejects
+##     the typed Bool→int8_t coercion through the FFI alias path.
+##     Same OpenOptions setter ABI mismatch.
 ##
 ## The Shutdown variant order is the load-bearing contract: tag
 ## indices must match `RIVEN_SHUTDOWN_{READ,WRITE,BOTH}` in
-## library/runtime/net/tcp.c. The `shutdown_tag_stability` pin test
-## scans this file instead of stdlib/mod.rs.
+## `library/std/net/runtime/tcp.c`. The `shutdown_tag_stability`
+## pin test scans this file.
 
-## std::net::TcpListener — owning wrapper around a listening POSIX
-## fd. The `def drop` lib decl drives user_drop_classes auto-detect —
-## scope exit closes the fd if still open, then `riven_dealloc`
-## frees the 8-byte spine.
-class TcpListener
-  lib "runtime/tcp.c"
-    def drop as "riven_tcp_listener_drop"(self) -> ()
-  end
-end
-
-## std::net::TcpStream — owning wrapper around a connected POSIX fd.
-## Same drop story as TcpListener.
-class TcpStream
-  lib "runtime/tcp.c"
-    def drop as "riven_tcp_stream_drop"(self) -> ()
-  end
-end
-
+# Shutdown declared FIRST so TcpStream.shutdown's `how: Shutdown`
+# param type resolves at net.rvn parse time.
 enum Shutdown
   Read
   Write
   Both
+end
+
+## std::net::TcpStream — owning wrapper around a connected POSIX fd.
+## Declared BEFORE TcpListener so TcpListener.accept's `-> Result[
+## TcpStream, IoError]` return type resolves at parse time.
+class TcpStream
+  lib "runtime/tcp.c"
+    def self.connect as "riven_tcp_stream_connect"(addr: &String) -> Result[TcpStream, IoError]
+    def read as "riven_tcp_stream_read"(self, buf: &var Array[Int]) -> Result[Int, IoError]
+    def write as "riven_tcp_stream_write"(self, bytes: &Array[Int]) -> Result[Int, IoError]
+    def peer_addr as "riven_tcp_stream_peer_addr"(self) -> Result[String, IoError]
+    def shutdown as "riven_tcp_stream_shutdown"(self, how: Shutdown) -> Result[(), IoError]
+    def close as "riven_tcp_stream_close"(self) -> Result[(), IoError]
+    def drop as "riven_tcp_stream_drop"(self) -> ()
+  end
+end
+
+## std::net::TcpListener — owning wrapper around a listening POSIX
+## fd. The `def drop` lib decl drives user_drop_classes auto-detect.
+class TcpListener
+  lib "runtime/tcp.c"
+    def self.bind as "riven_tcp_listener_bind"(addr: &String) -> Result[TcpListener, IoError]
+    def accept as "riven_tcp_listener_accept"(self) -> Result[TcpStream, IoError]
+    def local_addr as "riven_tcp_listener_local_addr"(self) -> Result[String, IoError]
+    def close as "riven_tcp_listener_close"(self) -> Result[(), IoError]
+    def drop as "riven_tcp_listener_drop"(self) -> ()
+  end
 end

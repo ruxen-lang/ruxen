@@ -208,17 +208,7 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // Instance methods go through the standard `{Type}_{method}`
         // mangling. `*_drop` are emitted by the user_drop_classes
         // scope-exit pass — see mir/lower/collect.rs.
-        "TcpListener_bind" => return Ok("riven_tcp_listener_bind"),
-        "TcpListener_accept" => return Ok("riven_tcp_listener_accept"),
-        "TcpListener_local_addr" => return Ok("riven_tcp_listener_local_addr"),
         "TcpListener_set_nonblocking" => return Ok("riven_tcp_listener_set_nonblocking"),
-        "TcpListener_close" => return Ok("riven_tcp_listener_close"),
-        "TcpStream_connect" => return Ok("riven_tcp_stream_connect"),
-        "TcpStream_read" => return Ok("riven_tcp_stream_read"),
-        "TcpStream_write" => return Ok("riven_tcp_stream_write"),
-        "TcpStream_peer_addr" => return Ok("riven_tcp_stream_peer_addr"),
-        "TcpStream_shutdown" => return Ok("riven_tcp_stream_shutdown"),
-        "TcpStream_close" => return Ok("riven_tcp_stream_close"),
         "TcpStream_set_read_timeout" => return Ok("riven_tcp_stream_set_read_timeout"),
         "TcpStream_set_write_timeout" => return Ok("riven_tcp_stream_set_write_timeout"),
         // Phase 2 stdlib (#06.5 T6): std::io::BufReader[R] /
