@@ -199,20 +199,29 @@ A new package created during sub-phase 1:
   `riven_waker_wake_by_ref` — each `riven_panic("executor not
   implemented")` for now. Sub-phase 3 fills them in.
 
-## B11 — Register Poll as built-in enum
+## B11 — Declare Poll as an .rvn enum (not register_builtins)
 
-`compiler/riven_core/src/resolve/builtins.rs` (or wherever the
-existing `Option[T]` / `Result[T, E]` registrations live) adds:
+`Poll[T]` lives in `library/std/future/src/lib.rvn` as a plain
+Riven enum:
 
-```rust
-register_builtin_enum("Poll", vec![
-    ("Ready", vec![Ty::TypeParam("T", 0)]),
-    ("Pending", vec![]),
-]);
+```rvn
+enum Poll[T]
+  Ready(T)
+  Pending
+end
 ```
 
-Tag indices follow declaration order (0 = Ready, 1 = Pending).
-Pin test confirms layout stability.
+This matches the existing pattern for `IoError` / `SeekFrom` /
+`IoErrorKind` / `Shutdown` — every other recently-added stdlib enum
+is in pure Riven, not in `register_builtins`. The bootstrap merge
+picks it up. Tag indices follow declaration order (0 = Ready, 1 =
+Pending). Pin test (`poll_tag_layout_stability`) reads the .rvn
+source and asserts the order — same shape as
+`io_error_tag_stability` and `shutdown_tag_stability`.
+
+This is consistent with the project directive: keep the surface in
+Riven wherever feasible; Rust handles only what cannot be expressed
+in Riven (lowering passes, codegen, FFI registration).
 
 ---
 
