@@ -249,11 +249,15 @@ impl Resolver {
                 inner.is_unsafe,
                 inner.span.clone(),
             );
+            // Spec B10 (send_sync_enforcement.spec.md): plain
+            // `include Send` is a user opt-in marker — equivalent to
+            // `unsafe include Send` (B12) for v1, since user classes
+            // have no auto-derive to suppress.
             match trait_ref.name.as_str() {
                 "Send" if inner.negative_trait => opt_out_send = true,
                 "Sync" if inner.negative_trait => opt_out_sync = true,
-                "Send" if inner.is_unsafe => manual_send = true,
-                "Sync" if inner.is_unsafe => manual_sync = true,
+                "Send" => manual_send = true,
+                "Sync" => manual_sync = true,
                 _ => {}
             }
 
@@ -901,14 +905,16 @@ impl Resolver {
             }
         };
 
-        if !negative_trait && !is_unsafe {
-            self.diagnostics.push(Diagnostic::error_with_code(
-                "manual Send/Sync includes must be declared as `unsafe include`",
-                span,
-                "E1014",
-            ));
-            return;
-        }
+        // Spec B10 (send_sync_enforcement.spec.md): plain `include Send`
+        // / `include Sync` is a user opt-in marker for v1. `unsafe
+        // include Send` (B12) is the explicit-safety-assertion variant
+        // for classes that wrap raw pointers / non-Send containers.
+        // Both forms set `manual_send` / `manual_sync` — v1 has no
+        // user-class auto-derive, so the two are equivalent here.
+        // Negative include (`include !Send`) sets `opt_out_send` (B11).
+        // E1014 stays reserved (was previously raised here when neither
+        // form was present, but the spec promoted the bare marker form).
+        let _ = is_unsafe; // accepted but not differentiated for v1
 
         let Some(def) = const_helpers::nominal_type_definition_mut(target_ty, &mut self.symbols)
         else {

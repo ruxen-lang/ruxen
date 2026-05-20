@@ -1,0 +1,18 @@
+## Pin: B8 — multiple captures: the Send capture passes, only the
+## non-Send capture trips E1100.
+## See docs/specs/ownership/send_sync_enforcement.spec.md §B8.
+
+class Foo
+  def init
+  end
+end
+
+def main
+  let good = 42
+  let bad = Foo.new
+  let _h = Thread.spawn({ || good + bad_value(bad) })
+end
+
+def bad_value(_f: Foo) -> Int
+  0
+end

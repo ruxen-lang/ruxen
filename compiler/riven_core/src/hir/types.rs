@@ -535,6 +535,28 @@ impl Ty {
         is_send_with_inner(self, symbols, &mut visiting)
     }
 
+    /// Like `is_send_with`, but does NOT auto-derive Send for user
+    /// classes by walking their fields — only an explicit
+    /// `include Send` (or `include unsafe Send`) makes the class Send.
+    ///
+    /// Used by the thread-boundary construction-site checks (E1100 /
+    /// E1101 / E1102 — see
+    /// docs/specs/ownership/send_sync_enforcement.spec.md §B10):
+    ///
+    /// > User classes are NOT auto-derived. A class wrapping only
+    /// > `Send` fields is still not `Send` until the user writes
+    /// > `include Send`.
+    ///
+    /// Built-in containers (`Array[T]`, `Option[T]`, `Map[K, V]`, …)
+    /// remain transitive — they ARE auto-derived per spec B2.
+    /// Structs and enums keep their field-walking behaviour (no
+    /// explicit user demand to change them in v1; the existing
+    /// `is_send_with` semantics are preserved for non-class types).
+    pub fn is_send_strict_with(&self, symbols: &SymbolTable) -> bool {
+        let mut visiting = HashSet::new();
+        is_send_strict_with_inner(self, symbols, &mut visiting)
+    }
+
     /// Returns true if this type is Sync without consulting nominal field
     /// metadata from the symbol table.
     pub fn is_sync(&self) -> bool {
@@ -743,6 +765,94 @@ fn is_send_with_inner(ty: &Ty, symbols: &SymbolTable, visiting: &mut HashSet<u32
         }
         Ty::Alias { target, .. } => is_send_with_inner(target, symbols, visiting),
         Ty::Newtype { inner, .. } => is_send_with_inner(inner, symbols, visiting),
+        _ => ty.is_send(),
+    }
+}
+
+/// Strict-Send check — see [`Ty::is_send_strict_with`] for the rule.
+///
+/// The only difference from `is_send_with_inner` is the `Ty::Class`
+/// arm: rather than walking the class's fields, this check requires
+/// `manual_send` to be set (i.e. the class explicitly declared
+/// `include Send` or `include unsafe Send`). Structs and enums fall
+/// through to the field-walking behaviour; built-in containers
+/// (`Array`, `Map`, `Option`, …) recurse with the strict rule so the
+/// auto-derive transitivity from spec B2 applies.
+fn is_send_strict_with_inner(
+    ty: &Ty,
+    symbols: &SymbolTable,
+    visiting: &mut HashSet<u32>,
+) -> bool {
+    match ty {
+        Ty::Class { name, generic_args } => {
+            // Built-in stdlib classes that are Send iff their type
+            // params are Send (spec B2 — Mutex / SharedSync / JoinHandle
+            // / Sender / Receiver / Box). Each has its own
+            // construction-site check elsewhere, but when these types
+            // appear as a NESTED payload (e.g.
+            // `Mutex.new(SharedSync.new(7))`) the outer construction
+            // must still see them as Send. The bare `JoinHandle` /
+            // `Sender` / `Receiver` classes are always Send by spec
+            // (their generic param is already Send-bounded), so we
+            // recurse on the args.
+            match name.as_str() {
+                // Pure markers — Send iff payload is Send.
+                "Mutex" | "SharedSync" | "Box" | "JoinHandle" | "Sender" | "Receiver" => {
+                    return generic_args
+                        .iter()
+                        .all(|t| is_send_strict_with_inner(t, symbols, visiting));
+                }
+                // Atomic primitives are Send by definition.
+                "AtomicI64" | "AtomicBool" | "AtomicUsize" => return true,
+                // Guards are NEVER Send.
+                "MutexGuard" | "ReadGuard" | "WriteGuard" => return false,
+                _ => {}
+            }
+            // User class — must explicitly opt in via `include Send`
+            // (or `include unsafe Send`). NO field-walk auto-derive.
+            let Some(def) = nominal_definition(ty, symbols) else {
+                // Unknown class — treat as not-Send (conservative).
+                return false;
+            };
+            if nominal_type_has_negative_auto_trait(def, true) {
+                return false;
+            }
+            nominal_type_has_manual_auto_trait(def, true)
+        }
+        // Structs / enums keep field-walking behaviour (same as
+        // `is_send_with_inner`). v1 doesn't restructure those.
+        Ty::Struct { .. } | Ty::Enum { .. } => {
+            nominal_members_are_thread_safe(
+                ty,
+                symbols,
+                visiting,
+                is_send_strict_with_inner,
+                true,
+            )
+        }
+        Ty::Ref(inner) | Ty::RefLifetime(_, inner) => {
+            // &T: Send iff T: Sync (spec B7). For the strict check we
+            // still need a Sync judgement on the inner type; reuse the
+            // existing sync walker (it auto-derives for classes by
+            // field-walk, but spec B7 is about the closure capture
+            // check which surfaces this at a different site).
+            is_sync_with_inner(inner, symbols, visiting)
+        }
+        Ty::RefMut(inner) | Ty::RefMutLifetime(_, inner) => {
+            is_send_strict_with_inner(inner, symbols, visiting)
+        }
+        Ty::Tuple(elems) => elems
+            .iter()
+            .all(|elem| is_send_strict_with_inner(elem, symbols, visiting)),
+        Ty::FixedArray(elem, _) | Ty::Array(elem) | Ty::Set(elem) | Ty::Option(elem) => {
+            is_send_strict_with_inner(elem, symbols, visiting)
+        }
+        Ty::Map(key, value) | Ty::Result(key, value) => {
+            is_send_strict_with_inner(key, symbols, visiting)
+                && is_send_strict_with_inner(value, symbols, visiting)
+        }
+        Ty::Alias { target, .. } => is_send_strict_with_inner(target, symbols, visiting),
+        Ty::Newtype { inner, .. } => is_send_strict_with_inner(inner, symbols, visiting),
         _ => ty.is_send(),
     }
 }

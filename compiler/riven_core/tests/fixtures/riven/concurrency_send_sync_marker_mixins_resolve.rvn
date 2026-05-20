@@ -1,0 +1,15 @@
+## Pin: B1 — `Send` and `Sync` are pre-registered as built-in marker
+## mixins; classes can `include` them without declaring methods.
+## See docs/specs/ownership/send_sync_enforcement.spec.md §B1.
+
+class Marked
+  include Send
+  include Sync
+
+  def init
+  end
+end
+
+def main
+  let _m = Marked.new
+end

@@ -223,6 +223,80 @@ pub(super) fn builtin_method_type(
             generic_args.first().cloned()
         }
         (Ty::Class { name, .. }, "spawn") if name == "Thread" => {
+            // Spec B6 (send_sync_enforcement.spec.md) — `Thread.spawn`
+            // rejects closures whose captures don't satisfy Send (or
+            // Sync, for by-ref captures per B7). The check fires only
+            // at this construction site; closures used in
+            // `Array.each` / `Array.map` / … are unaffected.
+            if let Some(arg) = args.first() {
+                if let HirExprKind::Closure {
+                    captures, is_move, ..
+                } = &arg.kind
+                {
+                    for cap in captures {
+                        // The capture's stored `ty` is recorded at
+                        // resolve time (control_flow.rs:323) — for
+                        // un-annotated `let` bindings that's
+                        // `Ty::Infer(_)`. Re-fetch the variable's
+                        // current type from the symbol table; typeck
+                        // updates it in-place when inferring `let`
+                        // bindings (see `update_ty` in
+                        // resolve/symbols.rs). Fall back to the
+                        // capture's stored ty if no def is registered.
+                        let cap_ty = eng
+                            .symbols
+                            .def_ty(cap.def_id)
+                            .map(|t| eng.ctx.resolve(&t))
+                            .unwrap_or_else(|| eng.ctx.resolve(&cap.ty));
+                        // Class-typed values are moved by default at
+                        // the Riven level (no `&` was written), even
+                        // if the recorded `by_move` flag is false (the
+                        // resolver only sets it when an explicit `move`
+                        // keyword precedes the closure body). Treat
+                        // a non-Copy class capture as by-move for the
+                        // Send check; primitives are Copy and Send so
+                        // the branch doesn't matter for them.
+                        let by_move = cap.by_move
+                            || *is_move
+                            || matches!(
+                                cap_ty,
+                                Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
+                            );
+                        let satisfied = if by_move {
+                            cap_ty.is_send_strict_with(eng.symbols)
+                        } else {
+                            // B7 — by-ref capture requires `&T: Send`,
+                            // which means `T: Sync`. The Sync auto-derive
+                            // walks fields, so a user class without
+                            // `include Sync` is still rejected when its
+                            // field set isn't all Sync. We use the
+                            // existing `is_sync_with` here (the strict
+                            // rule on Sync is left as v2 polish).
+                            cap_ty.is_sync_with(eng.symbols)
+                        };
+                        if !satisfied {
+                            let note = if by_move {
+                                format!(
+                                    "captured value `{}` of type `{}` is not `Send`. \
+                                     Add `include Send` to the type if it is safe to share across threads.",
+                                    cap.name, cap_ty
+                                )
+                            } else {
+                                format!(
+                                    "captured value `{}` is held by reference; the closure \
+                                     requires `&{}: Send`, which means `{}` must implement `Sync`.",
+                                    cap.name, cap_ty, cap_ty
+                                )
+                            };
+                            eng.diagnostics.push(Diagnostic::error_with_code(
+                                note,
+                                arg.span.clone(),
+                                "E1100",
+                            ));
+                        }
+                    }
+                }
+            }
             let output = args
                 .first()
                 .and_then(|arg| InferenceEngine::callable_return_ty(&arg.ty))
@@ -256,6 +330,25 @@ pub(super) fn builtin_method_type(
                 .first()
                 .map(|arg| arg.ty.clone())
                 .unwrap_or_else(|| eng.ctx.fresh_type_var());
+            // Spec B3 (send_sync_enforcement.spec.md) — Mutex.new
+            // requires the payload to be Send. `Mutex[T]` itself is
+            // declared without a `T: Send` bound (sync.rvn line 118)
+            // so the regular bound-checker can't catch this; the check
+            // fires at the construction site.
+            let inner_resolved = eng.ctx.resolve(&inner);
+            if let Some(arg) = args.first() {
+                if !inner_resolved.is_send_strict_with(eng.symbols) {
+                    eng.diagnostics.push(Diagnostic::error_with_code(
+                        format!(
+                            "cannot construct `Mutex[{}]` — payload type `{}` is not `Send`. \
+                             Add `include Send` to the class if it is safe to share across threads.",
+                            inner_resolved, inner_resolved
+                        ),
+                        arg.span.clone(),
+                        "E1101",
+                    ));
+                }
+            }
             Some(InferenceEngine::class_ty("Mutex", vec![inner]))
         }
         (Ty::Class { name, generic_args }, "lock") if name == "Mutex" => {
@@ -301,6 +394,26 @@ pub(super) fn builtin_method_type(
                 .first()
                 .map(|arg| arg.ty.clone())
                 .unwrap_or_else(|| eng.ctx.fresh_type_var());
+            // Spec B4 (send_sync_enforcement.spec.md) — SharedSync.new
+            // requires the payload to be Send (the wrapper itself
+            // doesn't permit mutable sharing, so Sync isn't required of
+            // T; only the cross-thread move). `SharedSync[T]` is
+            // declared without a `T: Send` bound (sync.rvn line 142)
+            // so the regular bound-checker can't catch this.
+            let inner_resolved = eng.ctx.resolve(&inner);
+            if let Some(arg) = args.first() {
+                if !inner_resolved.is_send_strict_with(eng.symbols) {
+                    eng.diagnostics.push(Diagnostic::error_with_code(
+                        format!(
+                            "cannot construct `{}[{}]` — payload type `{}` is not `Send`. \
+                             Add `include Send` to the class if it is safe to share across threads.",
+                            name, inner_resolved, inner_resolved
+                        ),
+                        arg.span.clone(),
+                        "E1102",
+                    ));
+                }
+            }
             Some(InferenceEngine::class_ty(name, vec![inner]))
         }
         (Ty::Class { name, .. }, "clone") if name == "Arc" || name == "SharedSync" => {

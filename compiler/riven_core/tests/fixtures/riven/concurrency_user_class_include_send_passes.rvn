@@ -1,0 +1,18 @@
+## Pin: B10 — user class with `include Send` typechecks across
+## `Mutex.new` (E1101) and `Thread.spawn` (E1100).
+## See docs/specs/ownership/send_sync_enforcement.spec.md §B10.
+
+class MyData
+  include Send
+
+  def init
+  end
+end
+
+def main
+  let d = MyData.new
+  let _m = Mutex.new(d)
+
+  let d2 = MyData.new
+  let _h = Thread.spawn({ || d2 })
+end

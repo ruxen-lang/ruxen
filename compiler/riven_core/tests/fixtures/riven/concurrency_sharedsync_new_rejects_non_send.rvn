@@ -1,0 +1,12 @@
+## Pin: B4 — `SharedSync.new(value)` rejects non-Send T with E1102.
+## See docs/specs/ownership/send_sync_enforcement.spec.md §B4.
+
+class Foo
+  def init
+  end
+end
+
+def main
+  let f = Foo.new
+  let _s = SharedSync.new(f)
+end

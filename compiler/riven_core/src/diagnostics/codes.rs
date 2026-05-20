@@ -304,6 +304,29 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E1014",
         title: "invalid `unsafe include` declaration",
     },
+    // Send/Sync enforcement at thread-boundary construction sites
+    // (docs/specs/ownership/send_sync_enforcement.spec.md). E1011 / E1012
+    // (above) fire when a Send/Sync-bounded generic param sees a
+    // non-satisfying type. E1100–E1102 fire at construction sites where
+    // the safety boundary is implicit in the class semantics rather
+    // than declared as a generic bound:
+    //
+    // * E1100 — `Thread.spawn` closure capture is not Send.
+    // * E1101 — `Mutex.new(value)` / `Sender[T]` / `Receiver[T]` /
+    //   `channel[T]()` constructed with non-Send T.
+    // * E1102 — `SharedSync.new(value)` constructed with non-Send T.
+    CodeInfo {
+        code: "E1100",
+        title: "captured value across thread boundary is not Send",
+    },
+    CodeInfo {
+        code: "E1101",
+        title: "Mutex / Sender / Receiver requires Send payload",
+    },
+    CodeInfo {
+        code: "E1102",
+        title: "SharedSync requires Send payload",
+    },
 ];
 
 /// Look up an error code's metadata. Returns `None` if the code is not

@@ -1,0 +1,13 @@
+## Pin: B6 — `Thread.spawn` rejects a closure that moves a non-Send
+## capture across the thread boundary with E1100.
+## See docs/specs/ownership/send_sync_enforcement.spec.md §B6.
+
+class Foo
+  def init
+  end
+end
+
+def main
+  let f = Foo.new
+  let _h = Thread.spawn({ || f })
+end
