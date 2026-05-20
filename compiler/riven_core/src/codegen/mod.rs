@@ -154,6 +154,121 @@ pub fn find_runtime_c() -> Result<PathBuf, String> {
         .ok_or_else(|| "no runtime sources".to_string())
 }
 
+/// Walk every `library/std/<pkg>/Riven.toml`, extract the
+/// `[system_libs] libs = [...]` entries, and return the deduplicated
+/// union as `-l<name>` linker flags in stable order.
+///
+/// B3 of `docs/specs/system/zero_rust_stdlib_classes.spec.md`. Pre-B3
+/// the linker pulled in `-lc -lm -lpthread` unconditionally via
+/// `object::linker_args`; adding a new stdlib package needing
+/// (say) `-lssl` required editing that Rust function. Post-B3 each
+/// package declares its link needs in its own toml, and the
+/// aggregation here gives the final `-l` flag set. Sanitizer flags
+/// stay in code (they're not package-specific).
+///
+/// Schema (intentionally minimal):
+/// ```toml
+/// [system_libs]
+/// libs = ["pthread", "c", "m"]
+/// ```
+/// Other tables / lines are ignored. The reader is a tiny line scanner
+/// rather than a full TOML parser — adding the `toml` crate as a
+/// dependency just for this surface would not pull its weight (every
+/// existing `Riven.toml` in the workspace fits the same trivial
+/// `key = value` / `key = ["str", ...]` shape).
+pub fn collect_system_lib_flags() -> Result<Vec<String>, String> {
+    let std_root = find_stdlib_root()?;
+    let mut seen: Vec<String> = Vec::new();
+
+    let mut pkg_paths: Vec<PathBuf> = Vec::new();
+    let pkg_iter = std::fs::read_dir(&std_root)
+        .map_err(|e| format!("read_dir({}): {}", std_root.display(), e))?;
+    for entry in pkg_iter.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let toml_path = path.join("Riven.toml");
+        if toml_path.is_file() {
+            pkg_paths.push(toml_path);
+        }
+    }
+    // Stable order for reproducible link command lines.
+    pkg_paths.sort();
+
+    for toml_path in &pkg_paths {
+        let contents = match std::fs::read_to_string(toml_path) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        for lib in parse_system_libs(&contents) {
+            if !seen.contains(&lib) {
+                seen.push(lib);
+            }
+        }
+    }
+
+    Ok(seen.into_iter().map(|l| format!("-l{}", l)).collect())
+}
+
+/// Extract the value of `libs = [...]` inside the `[system_libs]`
+/// section of a Riven.toml string. Returns an empty Vec when the
+/// section is absent or the array is empty. Tolerant of `# ...`
+/// comments, whitespace, and string quoting (single or double).
+///
+/// This is the minimum-faithful parser for the B3 schema. It is not
+/// a general TOML parser — it does not handle multi-line arrays, key
+/// shorthand collisions, or dotted-key forms. If a future schema
+/// extension requires more, expand here (do NOT pull in `toml` for
+/// what is currently a 30-line surface).
+pub fn parse_system_libs(toml_contents: &str) -> Vec<String> {
+    let mut in_section = false;
+    let mut out: Vec<String> = Vec::new();
+
+    for raw_line in toml_contents.lines() {
+        // Strip comment tail.
+        let line = match raw_line.find('#') {
+            Some(idx) => &raw_line[..idx],
+            None => raw_line,
+        };
+        let trimmed = line.trim();
+
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            in_section = trimmed == "[system_libs]";
+            continue;
+        }
+        if !in_section {
+            continue;
+        }
+        // Look for `libs = [ ... ]`.
+        let Some(rest) = trimmed.strip_prefix("libs") else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let Some(rest) = rest.strip_prefix('=') else {
+            continue;
+        };
+        let rest = rest.trim();
+        if !rest.starts_with('[') {
+            continue;
+        }
+        // Strip leading `[` and trailing `]` (with anything after).
+        let inner = &rest[1..];
+        let inner = match inner.rfind(']') {
+            Some(idx) => &inner[..idx],
+            None => continue,
+        };
+        for raw in inner.split(',') {
+            let entry = raw.trim().trim_matches(|c| c == '"' || c == '\'');
+            if !entry.is_empty() {
+                out.push(entry.to_string());
+            }
+        }
+    }
+
+    out
+}
+
 /// Which code-generation backend to use.
 pub enum Backend {
     Cranelift,
@@ -204,8 +319,21 @@ pub fn compile_with_options(
     let runtime_sources = find_runtime_sources()?;
     let runtime_objects = object::compile_runtime_sources(&runtime_sources, sanitize)?;
 
-    // Step 3: Collect FFI link flags from the program
+    // Step 3: Collect FFI link flags from the program AND from every
+    // stdlib package's `[system_libs]` table. B3 of
+    // `docs/specs/system/zero_rust_stdlib_classes.spec.md` moved the
+    // historically hardcoded `-lc / -lm / -lpthread` set into per-
+    // package Riven.toml `[system_libs] libs = [...]` entries so a
+    // new stdlib package needing (say) `-lssl` declares it in its
+    // own toml without compiler edits.
     let mut all_link_flags: Vec<String> = extra_link_flags.to_vec();
+    if let Ok(system_flags) = collect_system_lib_flags() {
+        for flag in system_flags {
+            if !all_link_flags.contains(&flag) {
+                all_link_flags.push(flag);
+            }
+        }
+    }
     for lib in &program.ffi_libs {
         for flag in &lib.link_flags {
             if !all_link_flags.contains(flag) {

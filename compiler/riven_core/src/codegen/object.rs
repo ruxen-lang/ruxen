@@ -4,11 +4,16 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn linker_args(sanitize: bool, extra_link_flags: &[String]) -> Vec<String> {
-    let mut args = vec![
-        "-lc".to_string(),
-        "-lm".to_string(),
-        "-lpthread".to_string(),
-    ];
+    // B3 of `docs/specs/system/zero_rust_stdlib_classes.spec.md`:
+    // `-lc / -lm / -lpthread` are now declared in per-package
+    // `Riven.toml` `[system_libs]` tables (`library/std/core/Riven.toml`,
+    // `library/std/sync/Riven.toml`). `codegen::compile_with_options`
+    // aggregates them into `extra_link_flags` BEFORE calling this
+    // function, so they arrive here in the caller-supplied slice
+    // alongside FFI-attribute flags from `@[link("...")]`. Only
+    // sanitizer + macOS framework flags remain compiler-resident
+    // because they are not package-specific.
+    let mut args: Vec<String> = Vec::new();
     // Phase 2 #06.5 T8: std::rand on macOS uses SecRandomCopyBytes from
     // the Security framework. The runtime's `#include <Security/...>`
     // covers the header side; the linker still needs the framework
@@ -145,15 +150,33 @@ pub fn emit_executable(
 mod tests {
     use super::linker_args;
 
+    // B3 of docs/specs/system/zero_rust_stdlib_classes.spec.md moved
+    // `-lc / -lm / -lpthread` out of `linker_args` into per-package
+    // Riven.toml `[system_libs]` tables. The aggregation now happens
+    // upstream in `codegen::compile_with_options` and arrives here
+    // through the `extra_link_flags` argument — so `linker_args(_,
+    // &["-lpthread", "-lc", "-lm"])` is now the right contract to
+    // assert. See `compiler/riven_core/tests/linker_system_libs.rs`
+    // for the package-walk pin.
     #[test]
-    fn linker_args_always_include_pthread() {
-        let args = linker_args(false, &[]);
-        assert!(args.iter().any(|arg| arg == "-lpthread"));
+    fn linker_args_propagate_pthread_through_extra_flags() {
+        let args = linker_args(false, &[String::from("-lpthread")]);
+        assert!(
+            args.iter().any(|arg| arg == "-lpthread"),
+            "extra_link_flags must reach the final arg list; got {args:?}"
+        );
     }
 
     #[test]
     fn linker_args_preserve_sanitizers_and_extra_flags() {
-        let args = linker_args(true, &[String::from("-lssl"), String::from("-lcrypto")]);
+        let args = linker_args(
+            true,
+            &[
+                String::from("-lpthread"),
+                String::from("-lssl"),
+                String::from("-lcrypto"),
+            ],
+        );
         assert!(args.iter().any(|arg| arg == "-lpthread"));
         assert!(args.iter().any(|arg| arg == "-fsanitize=address,undefined"));
         assert!(args.iter().any(|arg| arg == "-lssl"));
