@@ -103,7 +103,7 @@ end
 class JoinHandle[T: Send]
   lib "runtime/thread.c"
     def join_raw as "riven_thread_join"(self) -> T
-    def __drop as "riven_thread_join_handle_drop"(self) -> ()
+    def drop as "riven_thread_join_handle_drop"(self) -> ()
   end
 end
 
@@ -121,7 +121,7 @@ class Mutex[T]
     def is_poisoned as "riven_mutex_is_poisoned"(self) -> Int
     def clear_poison as "riven_mutex_clear_poison"(self) -> ()
     def into_inner_raw as "riven_mutex_into_inner"(self) -> T
-    def __drop as "riven_mutex_drop"(self) -> ()
+    def drop as "riven_mutex_drop"(self) -> ()
   end
 end
 
@@ -129,7 +129,7 @@ class MutexGuard[T]
   lib "runtime/mutex.c"
     def get as "riven_mutex_guard_get"(self) -> T
     def set as "riven_mutex_guard_set"(self, value: T) -> ()
-    def __drop as "riven_mutex_guard_drop"(self) -> ()
+    def drop as "riven_mutex_guard_drop"(self) -> ()
   end
 end
 
@@ -143,7 +143,7 @@ class SharedSync[T]
     def clone as "riven_sharedsync_clone"(self) -> SharedSync[T]
     def strong_count as "riven_sharedsync_strong_count"(self) -> Int
     def get as "riven_sharedsync_get"(self) -> T
-    def __drop as "riven_sharedsync_drop"(self) -> ()
+    def drop as "riven_sharedsync_drop"(self) -> ()
   end
 end
 
@@ -171,7 +171,7 @@ class AtomicI64
     def fetch_add as "riven_atomic_i64_fetch_add"(self, delta: Int) -> Int
     def fetch_sub as "riven_atomic_i64_fetch_sub"(self, delta: Int) -> Int
     def compare_and_swap as "riven_atomic_i64_compare_and_swap"(self, current: Int, new_val: Int) -> Int
-    def __drop as "riven_atomic_i64_drop"(self) -> ()
+    def drop as "riven_atomic_i64_drop"(self) -> ()
   end
 end
 
@@ -187,7 +187,7 @@ class AtomicBool
     def fetch_and as "riven_atomic_bool_fetch_and"(self, value: Int) -> Int
     def fetch_or as "riven_atomic_bool_fetch_or"(self, value: Int) -> Int
     def compare_and_swap as "riven_atomic_bool_compare_and_swap"(self, current: Int, new_val: Int) -> Int
-    def __drop as "riven_atomic_bool_drop"(self) -> ()
+    def drop as "riven_atomic_bool_drop"(self) -> ()
   end
 end
 
@@ -199,7 +199,7 @@ class AtomicUsize
     def fetch_add as "riven_atomic_usize_fetch_add"(self, delta: Int) -> Int
     def fetch_sub as "riven_atomic_usize_fetch_sub"(self, delta: Int) -> Int
     def compare_and_swap as "riven_atomic_usize_compare_and_swap"(self, current: Int, new_val: Int) -> Int
-    def __drop as "riven_atomic_usize_drop"(self) -> ()
+    def drop as "riven_atomic_usize_drop"(self) -> ()
   end
 end
 
@@ -213,7 +213,7 @@ class Sender[T: Send]
   lib "runtime/channel.c"
     def send_raw as "riven_channel_send"(self, value: T) -> Int
     def clone as "riven_channel_sender_clone"(self) -> Sender[T]
-    def __drop as "riven_channel_sender_drop"(self) -> ()
+    def drop as "riven_channel_sender_drop"(self) -> ()
   end
 end
 
@@ -221,7 +221,7 @@ class Receiver[T: Send]
   lib "runtime/channel.c"
     def recv_raw as "riven_channel_recv"(self) -> T
     def try_recv_raw as "riven_channel_try_recv"(self) -> T
-    def __drop as "riven_channel_receiver_drop"(self) -> ()
+    def drop as "riven_channel_receiver_drop"(self) -> ()
   end
 end
 
