@@ -14,16 +14,14 @@
 ## value, so the `class ThreadId end` bootstrap-loaded registration
 ## below is the complete surface.
 ##
-## Context / Waker belong to std::task (async runtime plumbing) but
-## live here in `sync.rvn` for now because the standalone task.rvn
-## module hasn't been split out — they are still indexed under
-## `std.sync.{Context, Waker}` per the legacy registration.
-
-class Context
-end
-
-class Waker
-end
+## Context / Waker historically lived here as empty shells indexed
+## under `std.sync.{Context, Waker}`. The async sub-phase 1 (see
+## docs/specs/stdlib/async.spec.md B3 + B10) moved them into the
+## dedicated `library/std/future/` package alongside the Future
+## mixin and Poll enum — that's where their real lib decls /
+## runtime/executor.c land. No call sites referenced the old empty
+## shells (they were aspirational), so no transition shim is
+## needed.
 
 class Thread
   ## Phase C of #06.95 absorbed the Rust-side `sleep(&Duration)` free

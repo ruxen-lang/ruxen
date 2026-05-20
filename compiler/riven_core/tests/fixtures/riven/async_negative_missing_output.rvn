@@ -1,0 +1,19 @@
+## Spec B5 (docs/specs/stdlib/async.spec.md): a class that
+## `include`s `Future` but omits the required `type Output = T`
+## binding should be rejected by the typeck. The validation pass
+## that enforces this does not yet exist (sub-phase 1 ships the
+## surface only); the pin test using this fixture is `#[ignore]`d
+## until the validator lands.
+
+class BadFuture
+  include Future
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    Poll.Ready(0)
+  end
+end
+
+def main
+  let _f = BadFuture.new
+  puts "should-not-compile"
+end

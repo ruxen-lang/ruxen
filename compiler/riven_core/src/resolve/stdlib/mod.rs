@@ -546,59 +546,12 @@ pub(super) fn register_all(r: &mut Resolver) {
         }
     }
 
-    let poll_id = r.symbols.define(
-        "Poll".to_string(),
-        DefKind::Enum {
-            info: EnumInfo {
-                generic_params: vec![GenericParamInfo::type_param("T".to_string(), vec![])],
-                variants: vec![],
-                derive_traits: vec![],
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
-                const_predicates: vec![],
-            },
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.scopes.insert_type("Poll".to_string(), poll_id);
-    r.type_registry.insert("Poll".to_string(), poll_id);
-
-    let ready_id = r.symbols.define(
-        "Ready".to_string(),
-        DefKind::EnumVariant {
-            parent: poll_id,
-            variant_idx: 0,
-            kind: VariantDefKind::Tuple(vec![Ty::TypeParam {
-                name: "T".to_string(),
-                bounds: vec![],
-            }]),
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    let pending_id = r.symbols.define(
-        "Pending".to_string(),
-        DefKind::EnumVariant {
-            parent: poll_id,
-            variant_idx: 1,
-            kind: VariantDefKind::Unit,
-        },
-        Visibility::Public,
-        span.clone(),
-    );
-    r.scopes.insert("Poll.Ready".to_string(), ready_id);
-    r.scopes.insert("Poll.Pending".to_string(), pending_id);
-    r.scopes.insert("Ready".to_string(), ready_id);
-    r.scopes.insert("Pending".to_string(), pending_id);
-
-    if let Some(poll_def) = r.symbols.get_mut(poll_id) {
-        if let DefKind::Enum { ref mut info } = poll_def.kind {
-            info.variants = vec![ready_id, pending_id];
-        }
-    }
+    // Poll[T] migrated to library/std/future/src/lib.rvn by the async
+    // sub-phase 1 (docs/specs/stdlib/async.spec.md B2 + B11). The
+    // bootstrap merge picks it up as a `DefKind::Enum` with the
+    // same Ready / Pending variant order this Rust block historically
+    // produced. Tag layout (Ready = 0, Pending = 1) is pinned by
+    // `poll_tag_layout_stability` in tests/async_surface.rs.
 
     // Register super as a built-in function (for parent class constructor calls)
     let super_id = r.symbols.define(

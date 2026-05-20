@@ -1,0 +1,96 @@
+//! Negative pin tests for the async sub-phase 1 surface
+//! (`docs/specs/stdlib/async.spec.md` B5 + B6).
+//!
+//! These document the REJECTION cases the spec demands. Sub-phase 1
+//! ships the surface (Future mixin / Poll enum / Context+Waker), but
+//! the validation pass that would actually reject the offending
+//! includes does NOT yet exist:
+//!
+//!   * No `include`-time check that every `assoc_types` entry on the
+//!     included mixin has a matching `type Output = T` binding in
+//!     the includer's body (B5).
+//!   * No structural check that an implementor's method signature
+//!     (`def var poll(cx: &var Context) -> X`) matches the mixin's
+//!     declared signature (B6).
+//!
+//! `MixinResolver::check_satisfaction` (compiler/riven_core/src/
+//! typeck/mixins.rs) has the bones for the method-name check but is
+//! never called against `include` sites today. Both validations
+//! belong to a later slice — flagging them here as `#[ignore]`
+//! pinned tests keeps the spec contract visible, the fixtures ready,
+//! and a `cargo test` run noiseless until the validator lands.
+//!
+//! When the validator arrives:
+//!   1. Drop the `#[ignore]` attribute.
+//!   2. Wire the expected diagnostic code through the assertion
+//!      (the spec names E0612 / E0613; if those numbers are taken
+//!      by the time the validator lands, pick the next free
+//!      `Async-include` slot in `diagnostics/codes.rs`).
+
+use riven_core::diagnostics::{Diagnostic, DiagnosticLevel};
+use riven_core::lexer::Lexer;
+use riven_core::parser::Parser;
+use riven_core::typeck;
+
+fn typeck_errors(source: &str) -> Vec<Diagnostic> {
+    let mut lx = Lexer::new(source);
+    let toks = lx.tokenize().expect("lex");
+    let mut p = Parser::new(toks);
+    let prog = p.parse().expect("parse");
+    let result = typeck::type_check(&prog);
+    result
+        .diagnostics
+        .into_iter()
+        .filter(|d| d.level == DiagnosticLevel::Error)
+        .collect()
+}
+
+/// Reads a fixture file from `tests/fixtures/riven/` per the team's
+/// no-inline-rvn-source-in-pin-tests rule.
+fn rvn(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/riven")
+        .join(format!("{name}.rvn"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+}
+
+// ─── B5 — `include Future` without `type Output` rejected ───────────
+
+/// Spec B5: a class that `include Future` but omits the
+/// `type Output = T` binding must be rejected. Today the resolver
+/// happily accepts the bare include and downstream code falls over
+/// later with a confusing inference error — sub-phase 2's mixin
+/// validator is the proper fix. Tracked separately from this prompt.
+#[test]
+#[ignore = "validation pass not yet implemented; see test file header"]
+fn include_future_without_output_rejected() {
+    let source = rvn("async_negative_missing_output");
+    let errors = typeck_errors(&source);
+    assert!(
+        errors
+            .iter()
+            .any(|d| d.message.contains("Output") || d.message.contains("associated type")),
+        "expected an error about a missing `type Output` binding, got: {:?}",
+        errors.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+}
+
+// ─── B6 — `poll` with wrong signature rejected ──────────────────────
+
+/// Spec B6: a class that overrides `poll` with the wrong return type
+/// (e.g. `-> Int` instead of `-> Poll[Self.Output]`) must be
+/// rejected by the mixin-signature checker. Same gap as B5 — the
+/// signature comparison logic doesn't run against include sites yet.
+#[test]
+#[ignore = "validation pass not yet implemented; see test file header"]
+fn poll_signature_mismatch_rejected() {
+    let source = rvn("async_negative_poll_wrong_return");
+    let errors = typeck_errors(&source);
+    assert!(
+        errors
+            .iter()
+            .any(|d| d.message.contains("poll") && d.message.contains("Poll")),
+        "expected an error about the poll signature, got: {:?}",
+        errors.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+}

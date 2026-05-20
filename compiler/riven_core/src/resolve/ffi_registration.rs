@@ -754,6 +754,29 @@ impl Resolver {
                     self.scopes.pop();
                 }
 
+                // Async sub-phase 1 (docs/specs/stdlib/async.spec.md B2):
+                // bootstrap-loaded generic enums like `Poll[T]` need their
+                // EnumInfo.variants populated so typeck's
+                // `infer_user_enum_generic_args` (infer.rs ~ line 2064)
+                // can walk the variant payload tys and bind `T -> Int`
+                // for `Poll.Ready(0)`. The Rust-registered Option/Result
+                // historically did this via direct `info.variants =
+                // vec![...]` assignments in resolve/stdlib/mod.rs; for
+                // every other bootstrap-loaded enum that lifted earlier
+                // (IoError, IoErrorKind, SeekFrom, Shutdown) the variants
+                // happen to be non-generic, so the empty-`variants` gap
+                // went unnoticed. Poll is the first generic enum loaded
+                // through this path.
+                let variant_ids: Vec<DefId> = pending_registrations
+                    .iter()
+                    .map(|(_, vid)| *vid)
+                    .collect();
+                if let Some(enum_def) = self.symbols.get_mut(id) {
+                    if let DefKind::Enum { ref mut info } = enum_def.kind {
+                        info.variants = variant_ids;
+                    }
+                }
+
                 // Register Type.Variant lookup entries on the outer scope.
                 for (key, vid) in pending_registrations {
                     self.scopes.insert(key, vid);

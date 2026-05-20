@@ -968,6 +968,76 @@ end";
     }
 
     // ═══════════════════════════════════════════════════════════════════
+    //  Async sub-phase 1 (docs/specs/stdlib/async.spec.md B7–B9)
+    //  — surface parses; no lowering yet.
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// B7: `async def foo` parses with `is_async` set. Sub-phase 1 does
+    /// NOT lower the body to a state machine — the function still
+    /// type-checks as if it were synchronous, only the `is_async`
+    /// flag is recorded. Sub-phase 2 lifts the return to `some Future`.
+    #[test]
+    fn async_def_parses_subphase1_no_lowering() {
+        let program = parse(
+            "async def fetch(url: Int) -> Int\n  url\nend",
+        );
+        let func = match &program.items[0] {
+            TopLevelItem::Function(f) => f,
+            other => panic!("expected function, got {:?}", other),
+        };
+        assert!(
+            func.is_async,
+            "is_async flag must be set on the FuncDef"
+        );
+        assert_eq!(func.name, "fetch");
+        // Sub-phase 1: return type is preserved AS WRITTEN; no
+        // `some Future` lift, no state-machine return shape.
+        match &func.return_type {
+            Some(TypeExpr::Named(path)) => assert_eq!(path.segments, vec!["Int"]),
+            other => panic!("expected named return type `Int`, got {:?}", other),
+        }
+    }
+
+    /// B8: `async { 42 }` parses as an async (closure) block. The
+    /// async block lowers to an empty-param-list async closure
+    /// expression; sub-phase 1 records `is_async` on the closure but
+    /// otherwise leaves the body untouched (it executes synchronously
+    /// at runtime). Sub-phase 2 lifts this to a `some Future`.
+    #[test]
+    fn async_block_parses_subphase1_no_lowering() {
+        let expr = parse_expr("async { 42 }");
+        match expr.kind {
+            ExprKind::Closure(c) => {
+                assert!(c.is_async, "is_async must be set on the closure");
+                assert!(
+                    c.params.is_empty(),
+                    "async block has no explicit params; got {:?}",
+                    c.params
+                );
+            }
+            other => panic!("expected closure, got {:?}", other),
+        }
+    }
+
+    /// B9: `expr.await` parses as a postfix `Await` AST node. In
+    /// sub-phase 1 the lowering elides — the resolver wires it
+    /// through as a method call against the expression's type
+    /// (effectively a no-op for the synchronous bridge). Sub-phase 2
+    /// rewrites the desugaring into a `match self.poll(cx) { Ready(v)
+    /// -> v, Pending -> return Pending }` suspension point.
+    #[test]
+    fn dot_await_parses_subphase1_elides_to_value() {
+        let expr = parse_expr("some_future.await");
+        match expr.kind {
+            ExprKind::Await(inner) => match inner.kind {
+                ExprKind::Identifier(ref name) => assert_eq!(name, "some_future"),
+                other => panic!("expected identifier under .await, got {:?}", other),
+            },
+            other => panic!("expected Await AST node, got {:?}", other),
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
     //  Expressions — Range
     // ═══════════════════════════════════════════════════════════════════
 

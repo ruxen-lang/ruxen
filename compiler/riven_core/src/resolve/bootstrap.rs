@@ -91,6 +91,15 @@ pub const BOOTSTRAP_FILES: &[&str] = &[
     "time/src/lib.rvn",
     "fs/src/lib.rvn",
     "sync/src/lib.rvn",
+    // future depends on std-core only and ships the async sub-phase 1
+    // surface: `Future` mixin, `Poll[T]` enum, `Context` / `Waker`
+    // class shells with lib decls pointing at the stubbed
+    // `runtime/executor.c` (every entry panics until sub-phase 3).
+    // Loaded AFTER sync purely so the deprecated empty Context /
+    // Waker shells in sync.rvn (deleted in this commit) don't risk
+    // re-registering on top of the real ones if any caller still
+    // looks them up there.
+    "future/src/lib.rvn",
     "string/src/lib.rvn",
     "option_result/src/lib.rvn",
     "array/src/lib.rvn",

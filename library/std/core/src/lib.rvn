@@ -68,13 +68,13 @@ mixin Drop
   def drop
 end
 
-# Future — async-runtime polling surface. The Rust registration
-# carried `assoc_types: ["Output"]` but the bare mixin syntax doesn't
-# yet support associated types inside the mixin body; for now the
-# `Output` placeholder lives in the typeck async-resolution path.
-mixin Future
-  def poll
-end
+# Future — async-runtime polling surface. Moved to
+# `library/std/future/src/lib.rvn` by async sub-phase 1 (see
+# docs/specs/stdlib/async.spec.md B1 + B10), along with the
+# associated `Poll[T]` enum and `Context` / `Waker` class shells.
+# Co-locating the four keeps the cross-references between
+# Future's `def poll(cx: &var Context) -> Poll[Self.Output]`
+# signature and Context/Poll inside a single bootstrap file.
 
 # Into[T] — generic conversion mixin used by `?` to coerce source
 # errors into the outer function's declared error type. The MIR
