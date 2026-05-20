@@ -73,6 +73,18 @@ use std::path::{Path, PathBuf};
 /// level via `resolve_stdlib_root` — checkouts still on the flat layout
 /// keep working.
 pub const BOOTSTRAP_FILES: &[&str] = &[
+    // std-core ships the 16 builtin mixins (Send / Sync / Clone / Copy /
+    // Displayable / Comparable / PartialEq / Eq / Hash / Default / Ord /
+    // PartialOrd / Drop / Into[T] / Iterable / Error). Every other
+    // bootstrap file plus user code references them through `include
+    // Send` / `T: Sync` / etc., so core MUST load first. Previously
+    // `register_builtins` was meant to register these in Rust before
+    // bootstrap ran (see `resolve/stdlib/mod.rs` Phase D-3 comment),
+    // but the actual move from Rust registrations to .rvn left the
+    // file off the load list — `include Send` on a user class was
+    // surfacing E0608 until B5 of
+    // docs/specs/system/zero_rust_stdlib_classes.spec.md tracked it down.
+    "core/src/lib.rvn",
     "bootstrap_smoke/src/lib.rvn",
     // io ships IoError + IoErrorKind which rand/env/fs/net reference.
     "io/src/lib.rvn",
@@ -113,6 +125,12 @@ pub const BOOTSTRAP_FILES: &[&str] = &[
     "array/src/lib.rvn",
     "map/src/lib.rvn",
     "set/src/lib.rvn",
+    // foobar — trio-leak pin fixture (B5 of
+    // docs/specs/system/zero_rust_stdlib_classes.spec.md). Adding a
+    // stdlib class via a fresh package MUST require ONLY this entry
+    // in `compiler/riven_core/src/`. Anything else is an auto-connect
+    // gap to fix in the bootstrap pipeline, not in this list.
+    "foobar/src/lib.rvn",
 ];
 
 /// Production entry point: parse every stdlib file in

@@ -1,0 +1,10 @@
+[package]
+name = "std-foobar"
+version = "0.1.0"
+description = "Trio-leak pin fixture — proves adding a stdlib class needs zero edits to compiler/riven_core/src/ beyond a single BOOTSTRAP_FILES entry"
+
+[dependencies]
+std-core = "= 0.1.0"
+
+[system_libs]
+libs = []
