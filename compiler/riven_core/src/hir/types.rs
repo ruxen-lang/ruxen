@@ -528,33 +528,42 @@ impl Ty {
         }
     }
 
-    /// Returns true if this type is Send after consulting nominal field
-    /// metadata from the symbol table.
+    /// SINGLE ENTRY POINT for Send classification with symbol-table
+    /// metadata. Adding new Send-checking call sites means calling this
+    /// function — never duplicate the walk.
+    ///
+    /// Rules (spec
+    /// `docs/specs/ownership/send_sync_enforcement.spec.md` §B10 +
+    /// `docs/specs/system/zero_rust_stdlib_classes.spec.md` §B2):
+    ///
+    /// 1. `include !Send` → false (escape hatch).
+    /// 2. `include Send` (or `include unsafe Send`) → Send iff every
+    ///    generic type argument is Send. The user's `include Send`
+    ///    is the assertion about the class shell; transitivity flows
+    ///    through the generic args (e.g. `Mutex[RawPtr]` rejects).
+    ///    Per-field walk is NOT performed — the v1 simplification at
+    ///    `resolve/items.rs` treats `include Send` and
+    ///    `unsafe include Send` as identical markers since the symbol
+    ///    table doesn't distinguish them. A future v2 may add an
+    ///    `unsafe_send` flag on `ClassInfo` and reinstate field-walk
+    ///    for the non-unsafe variant.
+    /// 3. No include directive on a Class → false. User classes do
+    ///    NOT auto-derive Send by field walk — they must opt in
+    ///    explicitly.
+    ///
+    /// Structs and enums keep field-walking auto-derive (no explicit
+    /// user demand to change them in v1).
+    ///
+    /// Pre-consolidation history: this function used to ship in two
+    /// variants — `is_send_with` (loose: classes auto-derived by field
+    /// walk) and `is_send_strict_with` (strict: classes required
+    /// `include Send`). Spec
+    /// `docs/specs/system/compiler_consolidation.spec.md` §B2 collapsed
+    /// them to this single strict entry; the loose variant was never
+    /// supposed to exist per spec §B10.
     pub fn is_send_with(&self, symbols: &SymbolTable) -> bool {
         let mut visiting = HashSet::new();
         is_send_with_inner(self, symbols, &mut visiting)
-    }
-
-    /// Like `is_send_with`, but does NOT auto-derive Send for user
-    /// classes by walking their fields — only an explicit
-    /// `include Send` (or `include unsafe Send`) makes the class Send.
-    ///
-    /// Used by the thread-boundary construction-site checks (E1100 /
-    /// E1101 / E1102 — see
-    /// docs/specs/ownership/send_sync_enforcement.spec.md §B10):
-    ///
-    /// > User classes are NOT auto-derived. A class wrapping only
-    /// > `Send` fields is still not `Send` until the user writes
-    /// > `include Send`.
-    ///
-    /// Built-in containers (`Array[T]`, `Option[T]`, `Map[K, V]`, …)
-    /// remain transitive — they ARE auto-derived per spec B2.
-    /// Structs and enums keep their field-walking behaviour (no
-    /// explicit user demand to change them in v1; the existing
-    /// `is_send_with` semantics are preserved for non-class types).
-    pub fn is_send_strict_with(&self, symbols: &SymbolTable) -> bool {
-        let mut visiting = HashSet::new();
-        is_send_strict_with_inner(self, symbols, &mut visiting)
     }
 
     /// Returns true if this type is Sync without consulting nominal field
@@ -603,8 +612,21 @@ impl Ty {
         }
     }
 
-    /// Returns true if this type is Sync after consulting nominal field
-    /// metadata from the symbol table.
+    /// SINGLE ENTRY POINT for Sync classification with symbol-table
+    /// metadata. Adding new Sync-checking call sites means calling this
+    /// function — never duplicate the walk.
+    ///
+    /// Current v1 semantics: classes auto-derive Sync by field walk
+    /// (loose mode) unless they declare `include !Sync`
+    /// (`opt_out_sync`) or `include Sync` (`manual_sync`). The strict
+    /// rule for Sync (matching Send's "user classes must opt in") is
+    /// deferred to v2 — see the comment at
+    /// `typeck/method_resolvers/mod.rs` near the by-ref capture check
+    /// (B7 — `&T: Send` requires `T: Sync`).
+    ///
+    /// Pre-consolidation history: only one Sync variant ever shipped;
+    /// `docs/specs/system/compiler_consolidation.spec.md` §B2 confirms
+    /// this is the single canonical entry.
     pub fn is_sync_with(&self, symbols: &SymbolTable) -> bool {
         let mut visiting = HashSet::new();
         is_sync_with_inner(self, symbols, &mut visiting)
@@ -744,12 +766,84 @@ fn has_trait_bound(bounds: &[MixinRef], trait_name: &str) -> bool {
     bounds.iter().any(|bound| bound.name == trait_name)
 }
 
-fn is_send_with_inner(ty: &Ty, symbols: &SymbolTable, visiting: &mut HashSet<u32>) -> bool {
+fn is_send_with_inner(
+    ty: &Ty,
+    symbols: &SymbolTable,
+    visiting: &mut HashSet<u32>,
+) -> bool {
     match ty {
-        Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. } => {
-            nominal_members_are_thread_safe(ty, symbols, visiting, is_send_with_inner, true)
+        Ty::Class { generic_args, .. } => {
+            // Rules (spec
+            // `docs/specs/ownership/send_sync_enforcement.spec.md` §B10
+            // + `docs/specs/system/zero_rust_stdlib_classes.spec.md`
+            // §B2, reconciled with the v1 simplification at
+            // `resolve/items.rs:252` — "plain `include Send` is a user
+            // opt-in marker equivalent to `unsafe include Send` for
+            // v1"):
+            //
+            // 1. `include !Send` (opt_out_send) → false (escape hatch).
+            // 2. No `include Send` (no manual_send) → false. User
+            //    classes do NOT auto-derive Send — they must opt in
+            //    explicitly. This is the strict-mode rule from §B10.
+            // 3. `include Send` (manual_send=true) → Send iff every
+            //    generic type argument is Send. The user's `include`
+            //    is an assertion about the class shell; transitivity
+            //    is checked through the generic args so that e.g.
+            //    `Mutex[RawPtr]` correctly rejects.
+            //
+            // FIELDS are NOT walked. The v1 simplification treats
+            // `include Send` as the author's assertion — a class
+            // wrapping a raw pointer with `unsafe include Send`
+            // typechecks (see `unsafe_include_send_satisfies_send_bound`
+            // fixture). If a v2 wants per-field transitive auto-derive
+            // for plain (non-unsafe) `include Send`, that requires
+            // tracking the `unsafe` flag on `ClassInfo`, which the
+            // symbol table currently doesn't carry. See spec B2 stop
+            // condition for the deferred direction.
+            let Some(def) = nominal_definition(ty, symbols) else {
+                // Unknown class — conservative `false` to preserve
+                // pre-B2 behaviour for any name that doesn't resolve.
+                return false;
+            };
+            if nominal_type_has_negative_auto_trait(def, true) {
+                return false;
+            }
+            if !nominal_type_has_manual_auto_trait(def, true) {
+                return false;
+            }
+            // Cycle guard — revisit returns true (Send is a default
+            // self-affirming for the recursion, the rest of the
+            // fixpoint determines the final answer).
+            if !visiting.insert(def.id) {
+                return true;
+            }
+            // Every generic argument must be Send. This catches
+            // `Mutex[RawPtr]` / `SharedSync[T]` where T isn't Send.
+            let args_ok = generic_args
+                .iter()
+                .all(|t| is_send_with_inner(t, symbols, visiting));
+            visiting.remove(&def.id);
+            args_ok
         }
-        Ty::Ref(inner) | Ty::RefLifetime(_, inner) => is_sync_with_inner(inner, symbols, visiting),
+        // Structs / enums keep field-walking behaviour (same as
+        // `is_send_with_inner`). v1 doesn't restructure those.
+        Ty::Struct { .. } | Ty::Enum { .. } => {
+            nominal_members_are_thread_safe(
+                ty,
+                symbols,
+                visiting,
+                is_send_with_inner,
+                true,
+            )
+        }
+        Ty::Ref(inner) | Ty::RefLifetime(_, inner) => {
+            // &T: Send iff T: Sync (spec B7). For the strict check we
+            // still need a Sync judgement on the inner type; reuse the
+            // existing sync walker (it auto-derives for classes by
+            // field-walk, but spec B7 is about the closure capture
+            // check which surfaces this at a different site).
+            is_sync_with_inner(inner, symbols, visiting)
+        }
         Ty::RefMut(inner) | Ty::RefMutLifetime(_, inner) => {
             is_send_with_inner(inner, symbols, visiting)
         }
@@ -765,122 +859,6 @@ fn is_send_with_inner(ty: &Ty, symbols: &SymbolTable, visiting: &mut HashSet<u32
         }
         Ty::Alias { target, .. } => is_send_with_inner(target, symbols, visiting),
         Ty::Newtype { inner, .. } => is_send_with_inner(inner, symbols, visiting),
-        _ => ty.is_send(),
-    }
-}
-
-/// Strict-Send check — see [`Ty::is_send_strict_with`] for the rule.
-///
-/// The only difference from `is_send_with_inner` is the `Ty::Class`
-/// arm: rather than walking the class's fields, this check requires
-/// `manual_send` to be set (i.e. the class explicitly declared
-/// `include Send` or `include unsafe Send`). Structs and enums fall
-/// through to the field-walking behaviour; built-in containers
-/// (`Array`, `Map`, `Option`, …) recurse with the strict rule so the
-/// auto-derive transitivity from spec B2 applies.
-fn is_send_strict_with_inner(
-    ty: &Ty,
-    symbols: &SymbolTable,
-    visiting: &mut HashSet<u32>,
-) -> bool {
-    match ty {
-        Ty::Class { generic_args, .. } => {
-            // B2 of docs/specs/system/zero_rust_stdlib_classes.spec.md:
-            // generic walker, no hardcoded class-name carve-outs.
-            //
-            // Rules:
-            // 1. `include !Send` (opt_out_send) → false. Escape hatch.
-            // 2. `include Send` (manual_send) → Send iff every
-            //    generic type argument is Send AND every field type
-            //    is Send. (Transitive auto-derive.)
-            // 3. No `include Send` → false. User classes do NOT
-            //    auto-derive by field walk — must explicitly opt in.
-            //
-            // Stdlib classes (Mutex / SharedSync / JoinHandle / Sender
-            // / Receiver / AtomicI64 / AtomicBool / AtomicUsize)
-            // declare `include Send` in `library/std/sync/src/lib.rvn`
-            // so they flow through rule 2. MutexGuard declares
-            // `include !Send` to enforce its locking-thread carve-out
-            // via rule 1.
-            let Some(def) = nominal_definition(ty, symbols) else {
-                // Unknown class — conservative `false` to preserve
-                // pre-B2 behaviour for any name that doesn't resolve.
-                return false;
-            };
-            if nominal_type_has_negative_auto_trait(def, true) {
-                return false;
-            }
-            if !nominal_type_has_manual_auto_trait(def, true) {
-                return false;
-            }
-            // Cycle guard — return true on revisit (Send is a default
-            // self-affirming for the recursion, the field walk over
-            // the rest of the fixpoint determines the final answer).
-            if !visiting.insert(def.id) {
-                return true;
-            }
-            // 1. Every generic argument must be Send.
-            if !generic_args
-                .iter()
-                .all(|t| is_send_strict_with_inner(t, symbols, visiting))
-            {
-                visiting.remove(&def.id);
-                return false;
-            }
-            // 2. Every field type must be Send under the substitution
-            // from generic params → generic args. Stdlib opaque-handle
-            // classes have `info.fields = []` so this is vacuous; user
-            // classes (FooBar[T] with `payload: T`) get T substituted
-            // to the concrete arg before the recursive check.
-            let fields_ok = match &def.kind {
-                crate::resolve::symbols::DefKind::Class { info } => {
-                    let subst = build_generic_subst(&info.generic_params, generic_args);
-                    info.fields.iter().all(|fid| {
-                        symbols.def_ty(*fid).is_some_and(|fty| {
-                            let substituted = subst_type_params(&fty, &subst);
-                            is_send_strict_with_inner(&substituted, symbols, visiting)
-                        })
-                    })
-                }
-                _ => true,
-            };
-            visiting.remove(&def.id);
-            fields_ok
-        }
-        // Structs / enums keep field-walking behaviour (same as
-        // `is_send_with_inner`). v1 doesn't restructure those.
-        Ty::Struct { .. } | Ty::Enum { .. } => {
-            nominal_members_are_thread_safe(
-                ty,
-                symbols,
-                visiting,
-                is_send_strict_with_inner,
-                true,
-            )
-        }
-        Ty::Ref(inner) | Ty::RefLifetime(_, inner) => {
-            // &T: Send iff T: Sync (spec B7). For the strict check we
-            // still need a Sync judgement on the inner type; reuse the
-            // existing sync walker (it auto-derives for classes by
-            // field-walk, but spec B7 is about the closure capture
-            // check which surfaces this at a different site).
-            is_sync_with_inner(inner, symbols, visiting)
-        }
-        Ty::RefMut(inner) | Ty::RefMutLifetime(_, inner) => {
-            is_send_strict_with_inner(inner, symbols, visiting)
-        }
-        Ty::Tuple(elems) => elems
-            .iter()
-            .all(|elem| is_send_strict_with_inner(elem, symbols, visiting)),
-        Ty::FixedArray(elem, _) | Ty::Array(elem) | Ty::Set(elem) | Ty::Option(elem) => {
-            is_send_strict_with_inner(elem, symbols, visiting)
-        }
-        Ty::Map(key, value) | Ty::Result(key, value) => {
-            is_send_strict_with_inner(key, symbols, visiting)
-                && is_send_strict_with_inner(value, symbols, visiting)
-        }
-        Ty::Alias { target, .. } => is_send_strict_with_inner(target, symbols, visiting),
-        Ty::Newtype { inner, .. } => is_send_strict_with_inner(inner, symbols, visiting),
         _ => ty.is_send(),
     }
 }
@@ -1019,95 +997,6 @@ fn nominal_type_has_negative_auto_trait(
             }
         }
         _ => false,
-    }
-}
-
-/// Build a generic-param-name → concrete-Ty substitution map for use
-/// during the Send/Sync field walk. Used by
-/// [`is_send_strict_with_inner`] (B2) so that a class declared `class
-/// FooBar[T]; payload: T; include Send` evaluates `payload: T`
-/// against the concrete arg from the use site (`FooBar[Int]` → T=Int)
-/// instead of the abstract type-parameter, which carries no `Send`
-/// bound and would always fail the check.
-///
-/// `const` generic params (Tier-2) are not type params — they're
-/// skipped in the substitution since they never appear as a field
-/// type that could affect Send/Sync.
-fn build_generic_subst(
-    params: &[crate::resolve::symbols::GenericParamInfo],
-    args: &[Ty],
-) -> std::collections::HashMap<String, Ty> {
-    use crate::resolve::symbols::GenericParamKind;
-    let mut map = std::collections::HashMap::new();
-    for (param, arg) in params.iter().zip(args.iter()) {
-        if matches!(param.kind, GenericParamKind::Type) {
-            map.insert(param.name.clone(), arg.clone());
-        }
-    }
-    map
-}
-
-/// Recursive type-parameter substitution. Mirrors
-/// `typeck::infer::InferenceEngine::subst_ty`'s shape but is decoupled
-/// from the inference engine — `hir/types.rs` runs outside of typeck
-/// during Send/Sync queries from MIR call-site validators (E1100 /
-/// E1101 / E1102).
-fn subst_type_params(ty: &Ty, subst: &std::collections::HashMap<String, Ty>) -> Ty {
-    match ty {
-        Ty::TypeParam { name, .. } => subst.get(name).cloned().unwrap_or_else(|| ty.clone()),
-        Ty::Ref(inner) => Ty::Ref(Box::new(subst_type_params(inner, subst))),
-        Ty::RefMut(inner) => Ty::RefMut(Box::new(subst_type_params(inner, subst))),
-        Ty::RefLifetime(lt, inner) => {
-            Ty::RefLifetime(lt.clone(), Box::new(subst_type_params(inner, subst)))
-        }
-        Ty::RefMutLifetime(lt, inner) => {
-            Ty::RefMutLifetime(lt.clone(), Box::new(subst_type_params(inner, subst)))
-        }
-        Ty::Option(inner) => Ty::Option(Box::new(subst_type_params(inner, subst))),
-        Ty::Array(inner) => Ty::Array(Box::new(subst_type_params(inner, subst))),
-        Ty::Set(inner) => Ty::Set(Box::new(subst_type_params(inner, subst))),
-        Ty::FixedArray(inner, n) => {
-            Ty::FixedArray(Box::new(subst_type_params(inner, subst)), n.clone())
-        }
-        Ty::Map(k, v) => Ty::Map(
-            Box::new(subst_type_params(k, subst)),
-            Box::new(subst_type_params(v, subst)),
-        ),
-        Ty::Result(ok, err) => Ty::Result(
-            Box::new(subst_type_params(ok, subst)),
-            Box::new(subst_type_params(err, subst)),
-        ),
-        Ty::Tuple(elems) => Ty::Tuple(elems.iter().map(|e| subst_type_params(e, subst)).collect()),
-        Ty::Class { name, generic_args } => Ty::Class {
-            name: name.clone(),
-            generic_args: generic_args
-                .iter()
-                .map(|a| subst_type_params(a, subst))
-                .collect(),
-        },
-        Ty::Struct { name, generic_args } => Ty::Struct {
-            name: name.clone(),
-            generic_args: generic_args
-                .iter()
-                .map(|a| subst_type_params(a, subst))
-                .collect(),
-        },
-        Ty::Enum { name, generic_args } => Ty::Enum {
-            name: name.clone(),
-            generic_args: generic_args
-                .iter()
-                .map(|a| subst_type_params(a, subst))
-                .collect(),
-        },
-        Ty::Alias { name, target } => Ty::Alias {
-            name: name.clone(),
-            target: Box::new(subst_type_params(target, subst)),
-        },
-        Ty::Newtype { name, inner } => Ty::Newtype {
-            name: name.clone(),
-            inner: Box::new(subst_type_params(inner, subst)),
-        },
-        _ => ty.clone(),
     }
 }
 

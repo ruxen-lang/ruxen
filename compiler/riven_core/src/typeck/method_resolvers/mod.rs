@@ -263,7 +263,7 @@ pub(super) fn builtin_method_type(
                                 Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
                             );
                         let satisfied = if by_move {
-                            cap_ty.is_send_strict_with(eng.symbols)
+                            cap_ty.is_send_with(eng.symbols)
                         } else {
                             // B7 — by-ref capture requires `&T: Send`,
                             // which means `T: Sync`. The Sync auto-derive
@@ -337,7 +337,7 @@ pub(super) fn builtin_method_type(
             // fires at the construction site.
             let inner_resolved = eng.ctx.resolve(&inner);
             if let Some(arg) = args.first() {
-                if !inner_resolved.is_send_strict_with(eng.symbols) {
+                if !inner_resolved.is_send_with(eng.symbols) {
                     eng.diagnostics.push(Diagnostic::error_with_code(
                         format!(
                             "cannot construct `Mutex[{}]` — payload type `{}` is not `Send`. \
@@ -402,7 +402,7 @@ pub(super) fn builtin_method_type(
             // so the regular bound-checker can't catch this.
             let inner_resolved = eng.ctx.resolve(&inner);
             if let Some(arg) = args.first() {
-                if !inner_resolved.is_send_strict_with(eng.symbols) {
+                if !inner_resolved.is_send_with(eng.symbols) {
                     eng.diagnostics.push(Diagnostic::error_with_code(
                         format!(
                             "cannot construct `{}[{}]` — payload type `{}` is not `Send`. \

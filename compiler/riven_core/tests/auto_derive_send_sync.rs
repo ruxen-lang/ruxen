@@ -1,7 +1,7 @@
 //! B2 pin tests for `docs/specs/system/zero_rust_stdlib_classes.spec.md`
 //! — transitive Send / Sync auto-derive walker.
 //!
-//! Pre-B2, `hir/types.rs::is_send_strict_with_inner` hardcoded match
+//! Pre-B2, `hir/types.rs::is_send_with_inner` hardcoded match
 //! arms for `Mutex` / `SharedSync` / `Box` / `JoinHandle` / `Sender`
 //! / `Receiver` / `AtomicI64` / `AtomicBool` / `AtomicUsize` /
 //! `MutexGuard` / `ReadGuard` / `WriteGuard`. Every new generic
@@ -57,7 +57,7 @@ fn transitive_send_iff_all_generic_params_send() {
         generic_args: vec![Ty::Int],
     };
     assert!(
-        mutex_int.is_send_strict_with(&result.symbols),
+        mutex_int.is_send_with(&result.symbols),
         "Mutex[Int] must be Send"
     );
 
@@ -67,7 +67,7 @@ fn transitive_send_iff_all_generic_params_send() {
         generic_args: vec![Ty::Int],
     };
     assert!(
-        arc_int.is_send_strict_with(&result.symbols),
+        arc_int.is_send_with(&result.symbols),
         "SharedSync[Int] must be Send"
     );
 
@@ -77,7 +77,7 @@ fn transitive_send_iff_all_generic_params_send() {
         generic_args: vec![Ty::Int],
     };
     assert!(
-        jh_int.is_send_strict_with(&result.symbols),
+        jh_int.is_send_with(&result.symbols),
         "JoinHandle[Int] must be Send"
     );
 
@@ -87,7 +87,7 @@ fn transitive_send_iff_all_generic_params_send() {
         generic_args: vec![Ty::Int],
     };
     assert!(
-        sender_int.is_send_strict_with(&result.symbols),
+        sender_int.is_send_with(&result.symbols),
         "Sender[Int] must be Send"
     );
     let receiver_int = Ty::Class {
@@ -95,7 +95,7 @@ fn transitive_send_iff_all_generic_params_send() {
         generic_args: vec![Ty::Int],
     };
     assert!(
-        receiver_int.is_send_strict_with(&result.symbols),
+        receiver_int.is_send_with(&result.symbols),
         "Receiver[Int] must be Send"
     );
 
@@ -106,7 +106,7 @@ fn transitive_send_iff_all_generic_params_send() {
             generic_args: vec![],
         };
         assert!(
-            atom.is_send_strict_with(&result.symbols),
+            atom.is_send_with(&result.symbols),
             "{} must be Send",
             atomic
         );
@@ -156,7 +156,7 @@ fn include_negative_send_overrides_transitive() {
         generic_args: vec![Ty::Int],
     };
     assert!(
-        !guard_int.is_send_strict_with(&result.symbols),
+        !guard_int.is_send_with(&result.symbols),
         "MutexGuard[Int] must NOT be Send (`include !Send` carve-out)"
     );
 }
@@ -187,7 +187,7 @@ class Foo\n  x: Int\n  def init(v: Int)\n    self.x = v\n  end\nend\n\ndef main\
         generic_args: vec![],
     };
     assert!(
-        !foo.is_send_strict_with(&result.symbols),
+        !foo.is_send_with(&result.symbols),
         "Foo without `include Send` must NOT be Send under strict-mode rules"
     );
 }

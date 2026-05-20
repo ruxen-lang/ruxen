@@ -114,7 +114,7 @@ def main\n  let f = FooBar.new(7)\n  let _ = f.get\nend\n";
         generic_args: vec![Ty::Int],
     };
     assert!(
-        foobar_int.is_send_strict_with(&result.symbols),
+        foobar_int.is_send_with(&result.symbols),
         "FooBar[Int] must be Send (`include Send` in class body + Int: Send)"
     );
     assert!(
