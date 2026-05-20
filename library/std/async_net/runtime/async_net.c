@@ -1,0 +1,723 @@
+/*
+ * std::async_net runtime — backs AsyncTcpListener / AsyncTcpStream +
+ * five hand-written futures (bind / accept / connect / read / write /
+ * close) declared in library/std/async_net/src/lib.rvn.
+ *
+ * Spec: docs/specs/stdlib/async_io.spec.md Milestone 4C (B6.5–B12).
+ *
+ * Design mirrors async_fs.c:
+ *   - Two thin wrapper classes (RivenAsyncTcpListener / Stream) with
+ *     identical 8-byte (int32 fd + int32 closed) wire shape as
+ *     RivenAsyncFile so future BufReader / cross-package work can cast
+ *     across without an adapter.
+ *   - Each blocking operation has an opaque C state struct held on the
+ *     Riven future class as an Int pointer. State `step` calls return
+ *     {0 progress, 1 EAGAIN, 2 done, 3 error}. The Riven side caches
+ *     a reactor handle (negative-encoded slot index from
+ *     riven_reactor_register_fd_{read,write}) and re-parks across
+ *     wake cycles.
+ *
+ * Reactor coupling: NO reactor.c extensions. The five futures all use
+ * the existing fd-readiness primitives shipped in sub-phase 4B:
+ *   riven_reactor_register_fd_read(reactor, fd) -> handle
+ *   riven_reactor_register_fd_write(reactor, fd) -> handle
+ *   riven_reactor_check_fired(reactor, handle) -> 0/1 (declared in
+ *     library/std/time/src/lib.rvn from 4A; reused here)
+ *   riven_reactor_deregister(reactor, handle) -> () (same)
+ *
+ * Surface deviation from spec B8: the v1 read surface is
+ *   read(max_bytes: Int) -> Result[String, IoError]
+ * rather than the spec's
+ *   read(&var Array[Int]) -> Result[Int, IoError].
+ * The spec's exact buf-parameter shape would require Array[Int]
+ * wire-format plumbing across the FFI boundary that v1 doesn't
+ * have yet. The simpler "one read returns whatever's available
+ * (up to max_bytes), as a String" surface exercises the same
+ * reactor-park-wake-retry mechanism end to end and matches the
+ * existing read_to_string shape from AsyncFile. Tracked as a
+ * v1-follow-up in the lib.rvn header.
+ *
+ * Platform support: macOS (Darwin) + Linux. Both kqueue and epoll
+ * cases are routed through the per-thread reactor's existing
+ * fd-readiness slot table — no platform-specific code in this TU
+ * beyond accept4 (Linux) vs accept+fcntl (macOS) and the
+ * SO_REUSEADDR / O_NONBLOCK socket-setup boilerplate.
+ */
+
+#include "../../core/runtime/runtime.h"
+
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+/* Wire layout — identical to RivenAsyncFile / RivenFile for cross-
+ * package compatibility. The Riven-side class fields (fd: Int,
+ * closed: Int) are Int (i64) but the on-heap layout is two int32s
+ * because the C allocator owns construction (`*_bind` / `*_connect`
+ * return freshly-malloc'd 8-byte structs); the Riven class never
+ * directly allocates these.
+ */
+typedef struct {
+    int32_t fd;
+    int32_t closed;
+} RivenAsyncTcpListener;
+
+typedef struct {
+    int32_t fd;
+    int32_t closed;
+} RivenAsyncTcpStream;
+
+_Static_assert(sizeof(RivenAsyncTcpListener) == 8,
+    "RivenAsyncTcpListener wire layout drifted from documented 8-byte form");
+_Static_assert(sizeof(RivenAsyncTcpStream) == 8,
+    "RivenAsyncTcpStream wire layout drifted from documented 8-byte form");
+
+/* ── socket helpers ────────────────────────────────────────────────── */
+
+/* Parse "host:port" into a sockaddr_in. Returns 0 on success, non-0
+ * on failure. Supports IPv4 literals (e.g. "127.0.0.1:9000") and host
+ * names resolved via getaddrinfo. v1 sync DNS — async DNS is a v2
+ * follow-up. */
+static int riven_async_net_parse_addr(const char *addr,
+                                      struct sockaddr_in *out) {
+    if (!addr) return -1;
+    const char *colon = strrchr(addr, ':');
+    if (!colon) return -1;
+    size_t host_len = (size_t)(colon - addr);
+    if (host_len >= 256) return -1;
+
+    char host_buf[256];
+    memcpy(host_buf, addr, host_len);
+    host_buf[host_len] = '\0';
+    const char *host = host_buf[0] == '\0' ? "0.0.0.0" : host_buf;
+
+    const char *port_str = colon + 1;
+    if (!*port_str) return -1;
+
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;
+
+    struct addrinfo *res = NULL;
+    int rc = getaddrinfo(host, port_str, &hints, &res);
+    if (rc != 0 || !res) {
+        if (res) freeaddrinfo(res);
+        return -1;
+    }
+    memcpy(out, res->ai_addr, sizeof(*out));
+    freeaddrinfo(res);
+    return 0;
+}
+
+static int riven_async_net_set_nonblock(int fd) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) return -1;
+    return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
+
+/* Map errno -> IoError tag for socket operations. Covers the codes
+ * connect / accept / read / write can produce post-EAGAIN. */
+static int riven_async_net_io_error_tag(int err) {
+    switch (err) {
+        case ECONNREFUSED: return RIVEN_IO_ERROR_CONNECTION_REFUSED;
+        case ECONNRESET:   return RIVEN_IO_ERROR_CONNECTION_RESET;
+        case ECONNABORTED: return RIVEN_IO_ERROR_CONNECTION_ABORTED;
+        case ENOTCONN:     return RIVEN_IO_ERROR_NOT_CONNECTED;
+        case EADDRINUSE:   return RIVEN_IO_ERROR_ADDR_IN_USE;
+        case EADDRNOTAVAIL:return RIVEN_IO_ERROR_ADDR_NOT_AVAILABLE;
+        case EPIPE:        return RIVEN_IO_ERROR_BROKEN_PIPE;
+        case EACCES:
+        case EPERM:        return RIVEN_IO_ERROR_PERMISSION_DENIED;
+        case EBADF:
+        case EINVAL:       return RIVEN_IO_ERROR_INVALID_INPUT;
+        case ETIMEDOUT:    return RIVEN_IO_ERROR_TIMED_OUT;
+        default:           return RIVEN_IO_ERROR_OTHER;
+    }
+}
+
+/* ── AsyncTcpListener.bind (B6.5) ──────────────────────────────────── */
+/* Eager bind+listen. No state machine — the syscalls don't block on a
+ * fresh socket. The future is single-shot Ready on first poll for
+ * surface symmetry with AsyncTcpStream.connect. */
+
+void *riven_async_tcp_listener_bind(const char *addr) {
+    if (!addr) {
+        return riven_result_err_value(
+            (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+    }
+    struct sockaddr_in sa;
+    if (riven_async_net_parse_addr(addr, &sa) != 0) {
+        return riven_result_err_value(
+            (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+    }
+
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
+        return riven_result_err_value(
+            (int64_t)riven_io_error_unit(
+                riven_async_net_io_error_tag(errno)));
+    }
+    int one = 1;
+    /* SO_REUSEADDR so the e2e fixture can pick a port and not get
+     * TIME_WAIT'd across re-runs. */
+    (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+
+    if (riven_async_net_set_nonblock(fd) != 0) {
+        int saved = errno;
+        close(fd);
+        return riven_result_err_value(
+            (int64_t)riven_io_error_unit(
+                riven_async_net_io_error_tag(saved)));
+    }
+
+    if (bind(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
+        int saved = errno;
+        close(fd);
+        return riven_result_err_value(
+            (int64_t)riven_io_error_unit(
+                riven_async_net_io_error_tag(saved)));
+    }
+
+    if (listen(fd, 128) != 0) {
+        int saved = errno;
+        close(fd);
+        return riven_result_err_value(
+            (int64_t)riven_io_error_unit(
+                riven_async_net_io_error_tag(saved)));
+    }
+
+    RivenAsyncTcpListener *l =
+        (RivenAsyncTcpListener *)riven_alloc(sizeof(RivenAsyncTcpListener));
+    l->fd = fd;
+    l->closed = 0;
+    return riven_result_ok_value((int64_t)l);
+}
+
+int64_t riven_async_tcp_listener_fd(void *self) {
+    if (!self) return -1;
+    RivenAsyncTcpListener *l = (RivenAsyncTcpListener *)self;
+    if (l->closed) return -1;
+    return (int64_t)l->fd;
+}
+
+void riven_async_tcp_listener_drop(void *self) {
+    if (!self) return;
+    RivenAsyncTcpListener *l = (RivenAsyncTcpListener *)self;
+    if (!l->closed && l->fd >= 0) {
+        int rc;
+        do { rc = close(l->fd); } while (rc < 0 && errno == EINTR);
+        (void)rc;
+        l->closed = 1;
+        l->fd = -1;
+    }
+}
+
+/* ── AsyncTcpListener.accept state machine (B6.6) ──────────────────── */
+
+typedef struct {
+    int listener_fd;     /* borrowed from the listener */
+    int accepted_fd;     /* set once accept returns a stream fd */
+    char peer_buf[64];   /* "<ip>:<port>" peer address */
+    int err_tag;
+    int err_set;
+    int done;
+    int result_taken;
+} RivenAsyncAcceptState;
+
+void *riven_async_accept_state_new(int64_t listener_fd) {
+    RivenAsyncAcceptState *s =
+        (RivenAsyncAcceptState *)riven_alloc(sizeof(RivenAsyncAcceptState));
+    s->listener_fd = (int)listener_fd;
+    s->accepted_fd = -1;
+    s->peer_buf[0] = '\0';
+    s->err_tag = 0;
+    s->err_set = 0;
+    s->done = 0;
+    s->result_taken = 0;
+    return s;
+}
+
+int64_t riven_async_accept_state_get_fd(void *state) {
+    if (!state) return -1;
+    return (int64_t)((RivenAsyncAcceptState *)state)->listener_fd;
+}
+
+int64_t riven_async_accept_step(void *state) {
+    if (!state) return 3;
+    RivenAsyncAcceptState *s = (RivenAsyncAcceptState *)state;
+    if (s->done) return 2;
+    if (s->err_set) return 3;
+
+    for (;;) {
+        struct sockaddr_in peer;
+        socklen_t plen = sizeof(peer);
+        int new_fd = accept(s->listener_fd, (struct sockaddr *)&peer, &plen);
+        if (new_fd < 0) {
+            if (errno == EINTR) continue;
+            if (errno == EAGAIN
+#if defined(EWOULDBLOCK) && (EWOULDBLOCK != EAGAIN)
+                || errno == EWOULDBLOCK
+#endif
+            ) {
+                return 1;
+            }
+            s->err_set = 1;
+            s->err_tag = riven_async_net_io_error_tag(errno);
+            return 3;
+        }
+        if (riven_async_net_set_nonblock(new_fd) != 0) {
+            int saved = errno;
+            close(new_fd);
+            s->err_set = 1;
+            s->err_tag = riven_async_net_io_error_tag(saved);
+            return 3;
+        }
+        char ip[INET_ADDRSTRLEN];
+        if (!inet_ntop(AF_INET, &peer.sin_addr, ip, sizeof(ip))) {
+            ip[0] = '?'; ip[1] = '\0';
+        }
+        snprintf(s->peer_buf, sizeof(s->peer_buf), "%s:%u",
+                 ip, (unsigned)ntohs(peer.sin_port));
+        s->accepted_fd = new_fd;
+        s->done = 1;
+        return 2;
+    }
+}
+
+/* Result payload is a tuple (AsyncTcpStream, String). The C side
+ * doesn't know how to construct tuples generically; the Riven future
+ * pulls fd + peer separately and assembles the tuple in surface code.
+ * These three takers return the components individually. */
+int64_t riven_async_accept_state_take_fd(void *state) {
+    if (!state) return -1;
+    RivenAsyncAcceptState *s = (RivenAsyncAcceptState *)state;
+    if (s->result_taken || s->err_set) return -1;
+    return (int64_t)s->accepted_fd;
+}
+
+void *riven_async_accept_state_take_peer(void *state) {
+    if (!state) return riven_string_from("");
+    RivenAsyncAcceptState *s = (RivenAsyncAcceptState *)state;
+    if (s->result_taken || s->err_set) return riven_string_from("");
+    return riven_string_from(s->peer_buf);
+}
+
+int64_t riven_async_accept_state_get_err(void *state) {
+    if (!state) return -1;
+    RivenAsyncAcceptState *s = (RivenAsyncAcceptState *)state;
+    if (!s->err_set) return -1;
+    return (int64_t)s->err_tag;
+}
+
+void riven_async_accept_state_mark_taken(void *state) {
+    if (!state) return;
+    ((RivenAsyncAcceptState *)state)->result_taken = 1;
+}
+
+void riven_async_accept_state_free(void *state) {
+    if (!state) return;
+    RivenAsyncAcceptState *s = (RivenAsyncAcceptState *)state;
+    /* If the user dropped the future without consuming the accepted
+     * fd, close it here so we don't leak. */
+    if (s->accepted_fd >= 0 && !s->result_taken) {
+        close(s->accepted_fd);
+        s->accepted_fd = -1;
+    }
+    free(s);
+}
+
+/* Wrap an accepted fd in a freshly-allocated AsyncTcpStream. Called by
+ * the Riven AsyncAcceptFuture once `step` returns 2 (done). */
+void *riven_async_tcp_stream_from_fd(int64_t fd) {
+    RivenAsyncTcpStream *s =
+        (RivenAsyncTcpStream *)riven_alloc(sizeof(RivenAsyncTcpStream));
+    s->fd = (int)fd;
+    s->closed = 0;
+    return s;
+}
+
+/* ── AsyncTcpStream.connect state machine (B7) ─────────────────────── */
+
+typedef struct {
+    int fd;
+    int started;       /* 1 once socket() + connect() has been called */
+    int completed;     /* 1 once getsockopt(SO_ERROR) returned success */
+    char addr[256];    /* copy of the parsed address — owned by the state */
+    struct sockaddr_in sa;
+    int err_tag;
+    int err_set;
+    int done;
+    int result_taken;
+} RivenAsyncConnectState;
+
+void *riven_async_connect_state_new(const char *addr) {
+    RivenAsyncConnectState *s =
+        (RivenAsyncConnectState *)riven_alloc(sizeof(RivenAsyncConnectState));
+    s->fd = -1;
+    s->started = 0;
+    s->completed = 0;
+    s->err_tag = 0;
+    s->err_set = 0;
+    s->done = 0;
+    s->result_taken = 0;
+    memset(&s->sa, 0, sizeof(s->sa));
+    if (addr) {
+        size_t n = strnlen(addr, sizeof(s->addr) - 1);
+        memcpy(s->addr, addr, n);
+        s->addr[n] = '\0';
+    } else {
+        s->addr[0] = '\0';
+    }
+    return s;
+}
+
+int64_t riven_async_connect_state_get_fd(void *state) {
+    if (!state) return -1;
+    return (int64_t)((RivenAsyncConnectState *)state)->fd;
+}
+
+int64_t riven_async_connect_step(void *state) {
+    if (!state) return 3;
+    RivenAsyncConnectState *s = (RivenAsyncConnectState *)state;
+    if (s->done) return 2;
+    if (s->err_set) return 3;
+
+    if (!s->started) {
+        if (riven_async_net_parse_addr(s->addr, &s->sa) != 0) {
+            s->err_set = 1;
+            s->err_tag = RIVEN_IO_ERROR_INVALID_INPUT;
+            return 3;
+        }
+        int fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (fd < 0) {
+            s->err_set = 1;
+            s->err_tag = riven_async_net_io_error_tag(errno);
+            return 3;
+        }
+        if (riven_async_net_set_nonblock(fd) != 0) {
+            int saved = errno;
+            close(fd);
+            s->err_set = 1;
+            s->err_tag = riven_async_net_io_error_tag(saved);
+            return 3;
+        }
+        s->fd = fd;
+        s->started = 1;
+
+        int rc = connect(fd, (struct sockaddr *)&s->sa, sizeof(s->sa));
+        if (rc == 0) {
+            s->completed = 1;
+            s->done = 1;
+            return 2;
+        }
+        if (errno == EINPROGRESS) {
+            return 1;
+        }
+        s->err_set = 1;
+        s->err_tag = riven_async_net_io_error_tag(errno);
+        return 3;
+    }
+
+    /* Reactor woke us — check SO_ERROR to see if connect completed. */
+    int soerr = 0;
+    socklen_t slen = sizeof(soerr);
+    if (getsockopt(s->fd, SOL_SOCKET, SO_ERROR, &soerr, &slen) != 0) {
+        s->err_set = 1;
+        s->err_tag = riven_async_net_io_error_tag(errno);
+        return 3;
+    }
+    if (soerr == 0) {
+        s->completed = 1;
+        s->done = 1;
+        return 2;
+    }
+    if (soerr == EINPROGRESS) {
+        return 1;
+    }
+    s->err_set = 1;
+    s->err_tag = riven_async_net_io_error_tag(soerr);
+    return 3;
+}
+
+int64_t riven_async_connect_state_take_fd(void *state) {
+    if (!state) return -1;
+    RivenAsyncConnectState *s = (RivenAsyncConnectState *)state;
+    if (s->result_taken || s->err_set || !s->completed) return -1;
+    return (int64_t)s->fd;
+}
+
+int64_t riven_async_connect_state_get_err(void *state) {
+    if (!state) return -1;
+    RivenAsyncConnectState *s = (RivenAsyncConnectState *)state;
+    if (!s->err_set) return -1;
+    return (int64_t)s->err_tag;
+}
+
+void riven_async_connect_state_mark_taken(void *state) {
+    if (!state) return;
+    ((RivenAsyncConnectState *)state)->result_taken = 1;
+}
+
+void riven_async_connect_state_free(void *state) {
+    if (!state) return;
+    RivenAsyncConnectState *s = (RivenAsyncConnectState *)state;
+    /* If the user dropped the connect future without consuming the
+     * fd (failed connect, or half-resolved connect that was
+     * cancelled), close it here. The reactor deregister happens on
+     * the Riven side via the future's def drop. */
+    if (s->fd >= 0 && !s->result_taken) {
+        close(s->fd);
+        s->fd = -1;
+    }
+    free(s);
+}
+
+/* ── AsyncTcpStream.read state machine (B8) ────────────────────────── */
+/* Surface deviation from spec: returns Result[String, IoError] of
+ * whatever was read on a single ready cycle, capped at `max_bytes`.
+ * Not buf-fill semantics — "give me the next chunk".
+ *
+ * Step states:
+ *   1 EAGAIN — register fd for read-readiness
+ *   2 done   — out_str populated (possibly empty for clean EOF)
+ *   3 error  — err_tag set */
+
+typedef struct {
+    int fd;            /* borrowed from the stream */
+    size_t max_bytes;
+    char *buf;         /* scratch buffer sized to max_bytes */
+    size_t len;
+    char *out_str;     /* canonical-pool String pointer once done */
+    int err_tag;
+    int err_set;
+    int done;
+    int result_taken;
+} RivenAsyncTcpReadState;
+
+void *riven_async_tcp_read_state_new(int64_t fd, int64_t max_bytes) {
+    RivenAsyncTcpReadState *s =
+        (RivenAsyncTcpReadState *)riven_alloc(sizeof(RivenAsyncTcpReadState));
+    s->fd = (int)fd;
+    /* Cap at 64 KiB per call — keeps the scratch allocation bounded
+     * even if a buggy caller passes a huge max. The Riven surface can
+     * always loop. */
+    if (max_bytes <= 0) max_bytes = 1;
+    if (max_bytes > 65536) max_bytes = 65536;
+    s->max_bytes = (size_t)max_bytes;
+    s->buf = (char *)malloc(s->max_bytes + 1);
+    if (!s->buf) riven_panic("riven_async_tcp_read_state_new: malloc failed");
+    s->len = 0;
+    s->out_str = NULL;
+    s->err_tag = 0;
+    s->err_set = 0;
+    s->done = 0;
+    s->result_taken = 0;
+    return s;
+}
+
+int64_t riven_async_tcp_read_state_get_fd(void *state) {
+    if (!state) return -1;
+    return (int64_t)((RivenAsyncTcpReadState *)state)->fd;
+}
+
+int64_t riven_async_tcp_read_step(void *state) {
+    if (!state) return 3;
+    RivenAsyncTcpReadState *s = (RivenAsyncTcpReadState *)state;
+    if (s->done) return 2;
+    if (s->err_set) return 3;
+
+    for (;;) {
+        ssize_t got = read(s->fd, s->buf, s->max_bytes);
+        if (got < 0) {
+            if (errno == EINTR) continue;
+            if (errno == EAGAIN
+#if defined(EWOULDBLOCK) && (EWOULDBLOCK != EAGAIN)
+                || errno == EWOULDBLOCK
+#endif
+            ) {
+                return 1;
+            }
+            s->err_set = 1;
+            s->err_tag = riven_async_net_io_error_tag(errno);
+            return 3;
+        }
+        /* got == 0 → clean EOF; got > 0 → at least one byte read.
+         * Either way, finalize the String with the bytes we have
+         * (zero-length on EOF). The caller distinguishes EOF from
+         * partial-read by inspecting the returned String length. */
+        s->len = (size_t)got;
+        s->buf[s->len] = '\0';
+        s->out_str = riven_string_from(s->buf);
+        s->done = 1;
+        return 2;
+    }
+}
+
+void *riven_async_tcp_read_state_take_result(void *state) {
+    if (!state) {
+        return riven_result_err_value(
+            (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+    }
+    RivenAsyncTcpReadState *s = (RivenAsyncTcpReadState *)state;
+    if (s->result_taken) {
+        return riven_result_err_value(
+            (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+    }
+    s->result_taken = 1;
+    if (s->buf) {
+        free(s->buf);
+        s->buf = NULL;
+    }
+    if (s->err_set) {
+        return riven_result_err_value(
+            (int64_t)riven_io_error_unit(s->err_tag));
+    }
+    return riven_result_ok_value((int64_t)s->out_str);
+}
+
+void riven_async_tcp_read_state_free(void *state) {
+    if (!state) return;
+    RivenAsyncTcpReadState *s = (RivenAsyncTcpReadState *)state;
+    if (s->buf) {
+        free(s->buf);
+        s->buf = NULL;
+    }
+    free(s);
+}
+
+/* ── AsyncTcpStream.write state machine (B9) ───────────────────────── */
+/* Writes the entire `content` (matches spec phrasing "writes up to
+ * content.len bytes" but in practice loops until EOF on the writer or
+ * full content is flushed — same shape as AsyncWriteAllFuture from 4B). */
+
+typedef struct {
+    int fd;
+    const char *content;
+    size_t total;
+    size_t written;
+    int err_tag;
+    int err_set;
+    int done;
+    int result_taken;
+} RivenAsyncTcpWriteState;
+
+void *riven_async_tcp_write_state_new(int64_t fd, const char *content) {
+    RivenAsyncTcpWriteState *s =
+        (RivenAsyncTcpWriteState *)riven_alloc(sizeof(RivenAsyncTcpWriteState));
+    s->fd = (int)fd;
+    s->content = content ? content : "";
+    s->total = strlen(s->content);
+    s->written = 0;
+    s->err_tag = 0;
+    s->err_set = 0;
+    s->done = s->total == 0 ? 1 : 0;
+    s->result_taken = 0;
+    return s;
+}
+
+int64_t riven_async_tcp_write_state_get_fd(void *state) {
+    if (!state) return -1;
+    return (int64_t)((RivenAsyncTcpWriteState *)state)->fd;
+}
+
+int64_t riven_async_tcp_write_step(void *state) {
+    if (!state) return 3;
+    RivenAsyncTcpWriteState *s = (RivenAsyncTcpWriteState *)state;
+    if (s->done) return 2;
+    if (s->err_set) return 3;
+
+    while (s->written < s->total) {
+        ssize_t put = write(s->fd, s->content + s->written,
+                            s->total - s->written);
+        if (put < 0) {
+            if (errno == EINTR) continue;
+            if (errno == EAGAIN
+#if defined(EWOULDBLOCK) && (EWOULDBLOCK != EAGAIN)
+                || errno == EWOULDBLOCK
+#endif
+            ) {
+                return 1;
+            }
+            s->err_set = 1;
+            s->err_tag = riven_async_net_io_error_tag(errno);
+            return 3;
+        }
+        if (put == 0) {
+            s->err_set = 1;
+            s->err_tag = RIVEN_IO_ERROR_WRITE_ZERO;
+            return 3;
+        }
+        s->written += (size_t)put;
+    }
+    s->done = 1;
+    return 2;
+}
+
+void *riven_async_tcp_write_state_take_result(void *state) {
+    if (!state) {
+        return riven_result_err_value(
+            (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+    }
+    RivenAsyncTcpWriteState *s = (RivenAsyncTcpWriteState *)state;
+    if (s->result_taken) {
+        return riven_result_err_value(
+            (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+    }
+    s->result_taken = 1;
+    if (s->err_set) {
+        return riven_result_err_value(
+            (int64_t)riven_io_error_unit(s->err_tag));
+    }
+    /* Return the count written as the Ok payload (matches spec B9). */
+    return riven_result_ok_value((int64_t)s->written);
+}
+
+void riven_async_tcp_write_state_free(void *state) {
+    if (!state) return;
+    free(state);
+}
+
+/* ── AsyncTcpStream — fd accessor + drop (B10's stream side) ───────── */
+
+int64_t riven_async_tcp_stream_fd(void *self) {
+    if (!self) return -1;
+    RivenAsyncTcpStream *s = (RivenAsyncTcpStream *)self;
+    if (s->closed) return -1;
+    return (int64_t)s->fd;
+}
+
+void riven_async_tcp_stream_drop(void *self) {
+    if (!self) return;
+    RivenAsyncTcpStream *s = (RivenAsyncTcpStream *)self;
+    if (!s->closed && s->fd >= 0) {
+        int rc;
+        do { rc = close(s->fd); } while (rc < 0 && errno == EINTR);
+        (void)rc;
+        s->closed = 1;
+        s->fd = -1;
+    }
+}
+
+/* AsyncCloseFuture (B10) performs `shutdown(SHUT_RDWR)` + `close` and
+ * resolves Ready(()) immediately. The future owns the stream by-move
+ * (per spec: `def close(self) -> AsyncCloseFuture`), so the stream's
+ * own drop hook is what actually closes the fd; this helper exists
+ * purely to flush a graceful shutdown before scope-exit drop. */
+void riven_async_tcp_stream_shutdown(void *self) {
+    if (!self) return;
+    RivenAsyncTcpStream *s = (RivenAsyncTcpStream *)self;
+    if (!s->closed && s->fd >= 0) {
+        (void)shutdown(s->fd, SHUT_RDWR);
+    }
+}

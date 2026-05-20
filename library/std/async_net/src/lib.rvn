@@ -1,0 +1,436 @@
+## std::async_net — async TCP I/O.
+##
+## Spec: docs/specs/stdlib/async_io.spec.md Milestone 4C (B6.5–B12).
+##
+## Five hand-written futures backed by the per-thread reactor:
+##
+##   AsyncTcpListener.bind(addr)  -> AsyncBindFuture
+##   listener.accept              -> AsyncAcceptFuture
+##   AsyncTcpStream.connect(addr) -> AsyncConnectFuture
+##   stream.read(max_bytes)       -> AsyncReadFuture
+##   stream.write(content)        -> AsyncWriteFuture
+##   async_tcp_stream_close_of(s) -> AsyncCloseFuture   (free fn — see below)
+##
+## Each future follows the 4B pattern (see library/std/async_fs/src/lib.rvn):
+##   * `state_ptr: Int` — opaque pointer to a C state struct
+##   * `handle: Int`    — reactor registration; 0 when not registered
+##   * `done: Int`      — 1 once Ready has been returned
+##   * On first poll: call `step(state)`; if it returns 1 (EAGAIN),
+##     register fd via riven_reactor_register_fd_{read,write} and
+##     return Pending. If 2 (done) or 3 (error), deregister and
+##     return Ready.
+##   * On drop: if registered, deregister; free the C state struct.
+##
+## Why a separate `async_net` package rather than extending net.rvn:
+##   * net/src/lib.rvn loads BEFORE future/src/lib.rvn — the futures
+##     here `include Future`, which would fail to resolve at
+##     registration time if they lived in net.rvn.
+##
+## Surface deviation from spec B8: the v1 read surface is
+##   read(max_bytes: Int) -> AsyncReadFuture (Output = Result[String, IoError])
+## rather than the spec's
+##   read(&var Array[Int]) -> Result[Int, IoError]
+## (buf-fill semantics). Returning a String matches the AsyncFile
+## read_to_string shape and avoids Array[Int]-passing across the
+## FFI boundary. v1-follow-up: tighten back to buf-fill semantics
+## once Array wire-format passes through `lib` decls cleanly.
+##
+## Surface deviation from spec B10: close is a free fn
+##   async_tcp_stream_close_of(stream: AsyncTcpStream) -> AsyncCloseFuture
+## rather than a method `stream.close`. The parser today rejects
+## `def close(self) -> ...` outside lib-decl blocks (the explicit
+## `(self)` consume form is only legal inside `lib "..." { ... }`),
+## and a parameter-less method body has no way to take the stream
+## by-move. v1-follow-up: lift to a method once user-body methods
+## can declare by-move self.
+
+## --- Reactor fd-readiness primitives -------------------------------
+##
+## async_fs.rvn already declares `register_fd_read` / `_write`; the
+## per-package import boundary requires this TU to declare them too
+## (bootstrap pass-2 walks each package's lib decls in isolation).
+## `check_fired` + `deregister` are declared in time/src/lib.rvn from
+## sub-phase 4A and are visible across packages.
+lib "../../future/runtime/reactor.c"
+  def riven_reactor_register_fd_read(reactor: Int, fd: Int) -> Int
+  def riven_reactor_register_fd_write(reactor: Int, fd: Int) -> Int
+end
+
+## --- async_net state-machine primitives (Int-shaped signatures) ----
+##
+## Connect / accept / read / write each own a heap state struct in C;
+## the Riven futures hold its address as an Int and dispatch through
+## these free fns. `Listener.bind` is eager (no state machine) — it
+## returns Result[AsyncTcpListener, IoError] directly via the C-side
+## `riven_async_tcp_listener_bind` declared further down (after the
+## AsyncTcpListener class so its return type resolves).
+lib "runtime/async_net.c"
+  def riven_async_accept_state_new(listener_fd: Int) -> Int
+  def riven_async_accept_state_get_fd(state: Int) -> Int
+  def riven_async_accept_step(state: Int) -> Int
+  def riven_async_accept_state_take_fd(state: Int) -> Int
+  def riven_async_accept_state_take_peer(state: Int) -> String
+  def riven_async_accept_state_get_err(state: Int) -> Int
+  def riven_async_accept_state_mark_taken(state: Int) -> ()
+  def riven_async_accept_state_free(state: Int) -> ()
+
+  def riven_async_connect_state_new(addr: &String) -> Int
+  def riven_async_connect_state_get_fd(state: Int) -> Int
+  def riven_async_connect_step(state: Int) -> Int
+  def riven_async_connect_state_take_fd(state: Int) -> Int
+  def riven_async_connect_state_get_err(state: Int) -> Int
+  def riven_async_connect_state_mark_taken(state: Int) -> ()
+  def riven_async_connect_state_free(state: Int) -> ()
+
+  def riven_async_tcp_read_state_new(fd: Int, max_bytes: Int) -> Int
+  def riven_async_tcp_read_state_get_fd(state: Int) -> Int
+  def riven_async_tcp_read_step(state: Int) -> Int
+  def riven_async_tcp_read_state_take_result(state: Int) -> Result[String, IoError]
+  def riven_async_tcp_read_state_free(state: Int) -> ()
+
+  def riven_async_tcp_write_state_new(fd: Int, content: &String) -> Int
+  def riven_async_tcp_write_state_get_fd(state: Int) -> Int
+  def riven_async_tcp_write_step(state: Int) -> Int
+  def riven_async_tcp_write_state_take_result(state: Int) -> Result[Int, IoError]
+  def riven_async_tcp_write_state_free(state: Int) -> ()
+end
+
+## --- AsyncTcpStream ------------------------------------------------
+##
+## Declared FIRST (before any future) so AsyncAcceptFuture's Output
+## tuple `(AsyncTcpStream, String)` resolves at typeck time. Method
+## bodies reference future classes declared later — forward refs
+## between class signatures resolve through bootstrap pass-2, but free
+## fns (like `accept_state_to_result` below) require their parameter
+## and return types to be already-declared classes.
+##
+## Owning wrapper around a non-blocking connected socket fd. 8-byte
+## wire shape (int32 fd + int32 closed) identical to RivenAsyncFile.
+class AsyncTcpStream
+  fd: Int
+  closed: Int
+
+  def self.connect(addr: &String) -> AsyncConnectFuture
+    AsyncConnectFuture.new(addr)
+  end
+
+  def var read(max_bytes: Int) -> AsyncReadFuture
+    AsyncReadFuture.new(riven_async_tcp_stream_fd(self), max_bytes)
+  end
+
+  def var write(content: &String) -> AsyncWriteFuture
+    AsyncWriteFuture.new(riven_async_tcp_stream_fd(self), content)
+  end
+
+  lib "runtime/async_net.c"
+    def drop as "riven_async_tcp_stream_drop"(self) -> ()
+  end
+end
+
+lib "runtime/async_net.c"
+  def riven_async_tcp_stream_fd(stream: &AsyncTcpStream) -> Int
+  def riven_async_tcp_stream_from_fd(fd: Int) -> AsyncTcpStream
+  def riven_async_tcp_stream_shutdown(stream: &AsyncTcpStream) -> ()
+end
+
+## --- AsyncTcpListener ----------------------------------------------
+class AsyncTcpListener
+  fd: Int
+  closed: Int
+
+  def self.bind(addr: &String) -> AsyncBindFuture
+    AsyncBindFuture.new(addr)
+  end
+
+  def var accept -> AsyncAcceptFuture
+    AsyncAcceptFuture.new(riven_async_tcp_listener_fd(self))
+  end
+
+  lib "runtime/async_net.c"
+    def drop as "riven_async_tcp_listener_drop"(self) -> ()
+  end
+end
+
+lib "runtime/async_net.c"
+  def riven_async_tcp_listener_bind(addr: &String) -> Result[AsyncTcpListener, IoError]
+  def riven_async_tcp_listener_fd(listener: &AsyncTcpListener) -> Int
+end
+
+## --- AsyncBindFuture (B6.5) ----------------------------------------
+class AsyncBindFuture
+  result: Result[AsyncTcpListener, IoError]
+  include Future
+  type Output = Result[AsyncTcpListener, IoError]
+
+  def init(addr: &String)
+    self.result = riven_async_tcp_listener_bind(addr)
+  end
+
+  def var poll(cx: &var Context) -> Poll[Result[AsyncTcpListener, IoError]]
+    Poll.Ready(self.result)
+  end
+end
+
+## --- AsyncAcceptFuture (B6.6) --------------------------------------
+class AsyncAcceptFuture
+  state_ptr: Int
+  handle: Int
+  done: Int
+  include Future
+  type Output = Result[(AsyncTcpStream, String), IoError]
+
+  def init(listener_fd: Int)
+    self.state_ptr = riven_async_accept_state_new(listener_fd)
+    self.handle = 0
+    self.done = 0
+  end
+
+  def var poll(cx: &var Context) -> Poll[Result[(AsyncTcpStream, String), IoError]]
+    if self.done != 0
+      return Poll.Ready(accept_state_to_result(self.state_ptr))
+    end
+    let step = riven_async_accept_step(self.state_ptr)
+    if step == 1
+      if self.handle == 0
+        let lfd = riven_async_accept_state_get_fd(self.state_ptr)
+        self.handle = riven_reactor_register_fd_read(riven_reactor_current_handle(), lfd)
+      end
+      return Poll.Pending
+    end
+    if self.handle != 0
+      riven_reactor_deregister(riven_reactor_current_handle(), self.handle)
+      self.handle = 0
+    end
+    self.done = 1
+    Poll.Ready(accept_state_to_result(self.state_ptr))
+  end
+
+  def drop
+    if self.handle != 0
+      riven_reactor_deregister(riven_reactor_current_handle(), self.handle)
+      self.handle = 0
+    end
+    if self.state_ptr != 0
+      riven_async_accept_state_free(self.state_ptr)
+      self.state_ptr = 0
+    end
+  end
+end
+
+## --- AsyncConnectFuture (B7) ---------------------------------------
+class AsyncConnectFuture
+  state_ptr: Int
+  handle: Int
+  done: Int
+  include Future
+  type Output = Result[AsyncTcpStream, IoError]
+
+  def init(addr: &String)
+    self.state_ptr = riven_async_connect_state_new(addr)
+    self.handle = 0
+    self.done = 0
+  end
+
+  def var poll(cx: &var Context) -> Poll[Result[AsyncTcpStream, IoError]]
+    if self.done != 0
+      return Poll.Ready(connect_state_to_result(self.state_ptr))
+    end
+    let step = riven_async_connect_step(self.state_ptr)
+    if step == 1
+      if self.handle == 0
+        let sfd = riven_async_connect_state_get_fd(self.state_ptr)
+        self.handle = riven_reactor_register_fd_write(riven_reactor_current_handle(), sfd)
+      end
+      return Poll.Pending
+    end
+    if self.handle != 0
+      riven_reactor_deregister(riven_reactor_current_handle(), self.handle)
+      self.handle = 0
+    end
+    self.done = 1
+    Poll.Ready(connect_state_to_result(self.state_ptr))
+  end
+
+  def drop
+    if self.handle != 0
+      riven_reactor_deregister(riven_reactor_current_handle(), self.handle)
+      self.handle = 0
+    end
+    if self.state_ptr != 0
+      riven_async_connect_state_free(self.state_ptr)
+      self.state_ptr = 0
+    end
+  end
+end
+
+## --- AsyncReadFuture (B8) ------------------------------------------
+class AsyncReadFuture
+  state_ptr: Int
+  handle: Int
+  done: Int
+  include Future
+  type Output = Result[String, IoError]
+
+  def init(fd: Int, max_bytes: Int)
+    self.state_ptr = riven_async_tcp_read_state_new(fd, max_bytes)
+    self.handle = 0
+    self.done = 0
+  end
+
+  def var poll(cx: &var Context) -> Poll[Result[String, IoError]]
+    if self.done != 0
+      return Poll.Ready(riven_async_tcp_read_state_take_result(self.state_ptr))
+    end
+    let step = riven_async_tcp_read_step(self.state_ptr)
+    if step == 1
+      if self.handle == 0
+        let fd = riven_async_tcp_read_state_get_fd(self.state_ptr)
+        self.handle = riven_reactor_register_fd_read(riven_reactor_current_handle(), fd)
+      end
+      return Poll.Pending
+    end
+    if self.handle != 0
+      riven_reactor_deregister(riven_reactor_current_handle(), self.handle)
+      self.handle = 0
+    end
+    self.done = 1
+    Poll.Ready(riven_async_tcp_read_state_take_result(self.state_ptr))
+  end
+
+  def drop
+    if self.handle != 0
+      riven_reactor_deregister(riven_reactor_current_handle(), self.handle)
+      self.handle = 0
+    end
+    if self.state_ptr != 0
+      riven_async_tcp_read_state_free(self.state_ptr)
+      self.state_ptr = 0
+    end
+  end
+end
+
+## --- AsyncWriteFuture (B9) -----------------------------------------
+class AsyncWriteFuture
+  state_ptr: Int
+  handle: Int
+  done: Int
+  include Future
+  type Output = Result[Int, IoError]
+
+  def init(fd: Int, content: &String)
+    self.state_ptr = riven_async_tcp_write_state_new(fd, content)
+    self.handle = 0
+    self.done = 0
+  end
+
+  def var poll(cx: &var Context) -> Poll[Result[Int, IoError]]
+    if self.done != 0
+      return Poll.Ready(riven_async_tcp_write_state_take_result(self.state_ptr))
+    end
+    let step = riven_async_tcp_write_step(self.state_ptr)
+    if step == 1
+      if self.handle == 0
+        let fd = riven_async_tcp_write_state_get_fd(self.state_ptr)
+        self.handle = riven_reactor_register_fd_write(riven_reactor_current_handle(), fd)
+      end
+      return Poll.Pending
+    end
+    if self.handle != 0
+      riven_reactor_deregister(riven_reactor_current_handle(), self.handle)
+      self.handle = 0
+    end
+    self.done = 1
+    Poll.Ready(riven_async_tcp_write_state_take_result(self.state_ptr))
+  end
+
+  def drop
+    if self.handle != 0
+      riven_reactor_deregister(riven_reactor_current_handle(), self.handle)
+      self.handle = 0
+    end
+    if self.state_ptr != 0
+      riven_async_tcp_write_state_free(self.state_ptr)
+      self.state_ptr = 0
+    end
+  end
+end
+
+## --- AsyncCloseFuture (B10) ----------------------------------------
+##
+## Owns the stream by-move (consumed at the surface via the
+## `async_tcp_stream_close_of` free fn). On first poll, issues
+## `shutdown(SHUT_RDWR)` so the peer sees a clean half-close; the
+## stream's own def drop (on the by-move self going out of scope at
+## this future's drop) closes the fd. Always resolves Ready(()) on
+## first poll — no kernel-level "wait for close to finish" that
+## requires reactor parking in v1.
+class AsyncCloseFuture
+  stream: AsyncTcpStream
+  done: Int
+  include Future
+  type Output = ()
+
+  def init(stream: AsyncTcpStream)
+    self.stream = stream
+    self.done = 0
+  end
+
+  def var poll(cx: &var Context) -> Poll[()]
+    if self.done == 0
+      riven_async_tcp_stream_shutdown(&self.stream)
+      self.done = 1
+    end
+    Poll.Ready(())
+  end
+end
+
+## --- helpers (declared AFTER all classes so types resolve) ---------
+
+## Construct AsyncCloseFuture by-move from a stream — surface deviation
+## from spec B10 (see the file-level header comment). Call site:
+##
+##   let cf = async_tcp_stream_close_of(stream)
+##   block_on(cf)
+def async_tcp_stream_close_of(stream: AsyncTcpStream) -> AsyncCloseFuture
+  AsyncCloseFuture.new(stream)
+end
+
+## Build a Result[(AsyncTcpStream, String), IoError] from a state ptr.
+## Free fn rather than method because the result type's tuple shape is
+## awkward to type as a method return.
+def accept_state_to_result(state_ptr: Int) -> Result[(AsyncTcpStream, String), IoError]
+  let err_tag = riven_async_accept_state_get_err(state_ptr)
+  if err_tag >= 0
+    riven_async_accept_state_mark_taken(state_ptr)
+    return Result.Err(io_error_from_tag(err_tag))
+  end
+  let stream_fd = riven_async_accept_state_take_fd(state_ptr)
+  let peer = riven_async_accept_state_take_peer(state_ptr)
+  riven_async_accept_state_mark_taken(state_ptr)
+  let stream = riven_async_tcp_stream_from_fd(stream_fd)
+  Result.Ok((stream, peer))
+end
+
+def connect_state_to_result(state_ptr: Int) -> Result[AsyncTcpStream, IoError]
+  let err_tag = riven_async_connect_state_get_err(state_ptr)
+  if err_tag >= 0
+    riven_async_connect_state_mark_taken(state_ptr)
+    return Result.Err(io_error_from_tag(err_tag))
+  end
+  let stream_fd = riven_async_connect_state_take_fd(state_ptr)
+  riven_async_connect_state_mark_taken(state_ptr)
+  let stream = riven_async_tcp_stream_from_fd(stream_fd)
+  Result.Ok(stream)
+end
+
+## Map an IoError tag (returned as an Int from the C state takers) into
+## an IoError struct. The state takers expose the tag as an Int rather
+## than constructing the IoError themselves so the Riven side controls
+## the typed value the Result.Err arm carries.
+def io_error_from_tag(tag: Int) -> IoError
+  riven_io_error_from_tag(tag)
+end
+
+lib "../io/runtime/io_error.c"
+  def riven_io_error_from_tag as "riven_io_error_unit"(tag: Int) -> IoError
+end

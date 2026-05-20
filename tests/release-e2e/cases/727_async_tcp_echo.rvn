@@ -1,0 +1,133 @@
+## Spec docs/specs/stdlib/async_io.spec.md Milestone 4C (B6.5–B12):
+## AsyncTcpListener + AsyncTcpStream end-to-end.
+##
+## Shape (per spec B11): single-threaded async can't host listener +
+## client in one block_on without task.spawn (sub-phase 5), so we
+## bridge with a sync `Thread.spawn_raw` — the closure body runs
+## `server_loop`, which drives `bind`, `accept`, `read`, and `write`
+## futures via `block_on(...)` (one future per call). The main
+## thread sleeps briefly (to let the listener actually start) and
+## then runs `client_flow`, which drives `connect`, `write`, and
+## `read` futures the same way.
+##
+## Why `block_on(method_call())` instead of `.await`: per async-
+## lowering's current `describe_await`, only top-level free-fn
+## awaitees desugar. `listener.accept.await` (method-call awaitee)
+## falls off the desugar path today (task #21 partial). Driving each
+## future via `block_on(method_call())` matches the 4B fixture's
+## pattern and keeps the same surface valid once .await fully ships.
+
+use std.time.Duration
+
+## Listener-thread entry. Returns 1 if the echo round-trip completes
+## on the server side, 0 otherwise. The actual signal "did the round
+## trip work?" is conveyed through the TCP roundtrip itself; the
+## return value is read by the main thread via JoinHandle.join_raw
+## (also a usable sanity check).
+def server_loop -> Int
+  let addr = String.from("127.0.0.1:31729")
+  let bound = block_on(AsyncTcpListener.bind(addr))
+  match bound
+    Ok(listener) -> server_run(listener)
+    Err(_)       -> 0
+  end
+end
+
+def server_run(listener: AsyncTcpListener) -> Int
+  var l = listener
+  let accepted = block_on(l.accept)
+  match accepted
+    Ok(pair) -> server_handle_pair(pair)
+    Err(_)   -> 0
+  end
+end
+
+## Destructure the (stream, peer) tuple and read+echo one chunk.
+def server_handle_pair(pair: (AsyncTcpStream, String)) -> Int
+  let stream = pair.0
+  server_echo_once(stream)
+end
+
+def server_echo_once(stream: AsyncTcpStream) -> Int
+  var s = stream
+  let read_result = block_on(s.read(64))
+  match read_result
+    Ok(payload) -> server_write_back(s, payload)
+    Err(_)      -> 0
+  end
+end
+
+def server_write_back(stream: AsyncTcpStream, payload: String) -> Int
+  var s = stream
+  let write_result = block_on(s.write(payload))
+  match write_result
+    Ok(_)  -> 1
+    Err(_) -> 0
+  end
+end
+
+## Client-thread entry — runs on the main thread.
+def client_flow -> Int
+  let addr = String.from("127.0.0.1:31729")
+  let connected = block_on(AsyncTcpStream.connect(addr))
+  match connected
+    Ok(stream) -> client_run(stream)
+    Err(_)     -> 0
+  end
+end
+
+def client_run(stream: AsyncTcpStream) -> Int
+  var s = stream
+  let payload = String.from("hello")
+  let wrote = block_on(s.write(payload))
+  match wrote
+    Ok(_)  -> client_read_echo(s, payload)
+    Err(_) -> 0
+  end
+end
+
+def client_read_echo(stream: AsyncTcpStream, expected: String) -> Int
+  var s = stream
+  let echoed = block_on(s.read(64))
+  match echoed
+    Ok(got) -> client_compare(got, expected)
+    Err(_)  -> 0
+  end
+end
+
+def client_compare(got: String, expected: String) -> Int
+  if got == expected
+    1
+  else
+    0
+  end
+end
+
+def main
+  # Spawn the listener thread. Closure body explicitly calls
+  # `server_loop()` (parens required — bare `server_loop` would
+  # parse as a function-reference rather than a call).
+  let server_closure = { || server_loop() }
+  let handle = Thread.spawn_raw(server_closure)
+  if handle == 0
+    puts "spawn_fail"
+    return
+  end
+
+  # Give the server a beat to bind+listen before we connect. 50ms
+  # is far longer than bind/listen take in practice; the connect's
+  # EAGAIN/EINPROGRESS retry path on the client side would also
+  # cover a slower start.
+  Thread.sleep(Duration.from_millis(50))
+
+  let ok = client_flow()
+  if ok == 1
+    puts "echo_ok"
+  else
+    puts "echo_fail"
+  end
+
+  # Join the listener thread so its accept/read/write completes
+  # before the process exits.
+  let _ = JoinHandle.join_raw(handle)
+end

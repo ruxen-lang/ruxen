@@ -119,6 +119,11 @@ pub const BOOTSTRAP_FILES: &[&str] = &[
     // AsyncReadToStringFuture / AsyncWriteAllFuture can `include Future`
     // — fs/src/lib.rvn loads BEFORE future/src/lib.rvn and so cannot.
     "async_fs/src/lib.rvn",
+    // async_net depends on future (Future mixin / Poll / reactor primitives)
+    // + io (IoError) + net (in spirit; the package owns AsyncTcpListener /
+    // AsyncTcpStream parallel to sync net). Sub-phase 4C of
+    // docs/specs/stdlib/async_io.spec.md.
+    "async_net/src/lib.rvn",
     // executor depends on future (block_on takes a Future-implementing
     // value). Sub-phase 3 of the async round (docs/specs/stdlib/
     // executor.spec.md). The user-visible `block_on` is a free fn here;
