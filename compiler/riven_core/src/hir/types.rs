@@ -784,40 +784,61 @@ fn is_send_strict_with_inner(
     visiting: &mut HashSet<u32>,
 ) -> bool {
     match ty {
-        Ty::Class { name, generic_args } => {
-            // Built-in stdlib classes that are Send iff their type
-            // params are Send (spec B2 — Mutex / SharedSync / JoinHandle
-            // / Sender / Receiver / Box). Each has its own
-            // construction-site check elsewhere, but when these types
-            // appear as a NESTED payload (e.g.
-            // `Mutex.new(SharedSync.new(7))`) the outer construction
-            // must still see them as Send. The bare `JoinHandle` /
-            // `Sender` / `Receiver` classes are always Send by spec
-            // (their generic param is already Send-bounded), so we
-            // recurse on the args.
-            match name.as_str() {
-                // Pure markers — Send iff payload is Send.
-                "Mutex" | "SharedSync" | "Box" | "JoinHandle" | "Sender" | "Receiver" => {
-                    return generic_args
-                        .iter()
-                        .all(|t| is_send_strict_with_inner(t, symbols, visiting));
-                }
-                // Atomic primitives are Send by definition.
-                "AtomicI64" | "AtomicBool" | "AtomicUsize" => return true,
-                // Guards are NEVER Send.
-                "MutexGuard" | "ReadGuard" | "WriteGuard" => return false,
-                _ => {}
-            }
-            // User class — must explicitly opt in via `include Send`
-            // (or `include unsafe Send`). NO field-walk auto-derive.
+        Ty::Class { generic_args, .. } => {
+            // B2 of docs/specs/system/zero_rust_stdlib_classes.spec.md:
+            // generic walker, no hardcoded class-name carve-outs.
+            //
+            // Rules:
+            // 1. `include !Send` (opt_out_send) → false. Escape hatch.
+            // 2. `include Send` (manual_send) → Send iff every
+            //    generic type argument is Send AND every field type
+            //    is Send. (Transitive auto-derive.)
+            // 3. No `include Send` → false. User classes do NOT
+            //    auto-derive by field walk — must explicitly opt in.
+            //
+            // Stdlib classes (Mutex / SharedSync / JoinHandle / Sender
+            // / Receiver / AtomicI64 / AtomicBool / AtomicUsize)
+            // declare `include Send` in `library/std/sync/src/lib.rvn`
+            // so they flow through rule 2. MutexGuard declares
+            // `include !Send` to enforce its locking-thread carve-out
+            // via rule 1.
             let Some(def) = nominal_definition(ty, symbols) else {
-                // Unknown class — treat as not-Send (conservative).
+                // Unknown class — conservative `false` to preserve
+                // pre-B2 behaviour for any name that doesn't resolve.
                 return false;
             };
             if nominal_type_has_negative_auto_trait(def, true) {
                 return false;
             }
-            nominal_type_has_manual_auto_trait(def, true)
+            if !nominal_type_has_manual_auto_trait(def, true) {
+                return false;
+            }
+            // Cycle guard — return true on revisit (Send is a default
+            // self-affirming for the recursion, the field walk over
+            // the rest of the fixpoint determines the final answer).
+            if !visiting.insert(def.id) {
+                return true;
+            }
+            // 1. Every generic argument must be Send.
+            if !generic_args
+                .iter()
+                .all(|t| is_send_strict_with_inner(t, symbols, visiting))
+            {
+                visiting.remove(&def.id);
+                return false;
+            }
+            // 2. Every field type must be Send. Stdlib opaque-handle
+            // classes have `info.fields = []` so this is vacuous.
+            let fields_ok = match &def.kind {
+                crate::resolve::symbols::DefKind::Class { info } => info.fields.iter().all(|fid| {
+                    symbols
+                        .def_ty(*fid)
+                        .is_some_and(|fty| is_send_strict_with_inner(&fty, symbols, visiting))
+                }),
+                _ => true,
+            };
+            visiting.remove(&def.id);
+            fields_ok
         }
         // Structs / enums keep field-walking behaviour (same as
         // `is_send_with_inner`). v1 doesn't restructure those.
