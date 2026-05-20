@@ -140,6 +140,29 @@ pub struct Resolver {
     /// hand-maintained `FIXUPS` table for bulk per-package
     /// population.
     pub(super) bootstrap_auto_packages: Vec<(String, Vec<String>)>,
+
+    /// Per-package snapshot of each declared item's resolved DefId,
+    /// captured at the moment that package's bootstrap program
+    /// finished its first-walk registration. Keyed by package name
+    /// (e.g. `"time"`, `"sync"`); inner map is `item_name → DefId`.
+    ///
+    /// The fallback path is `scopes.lookup(name) or
+    /// scopes.lookup_type(name)`, but that path is last-wins across
+    /// the entire bootstrap merge — when two packages declare the
+    /// same name (e.g. `def sleep` in both `library/std/time/src/lib.rvn`
+    /// and `library/std/sync/src/lib.rvn`'s back-compat shim), the
+    /// last-loaded package wins the lookup. The `std.<pkg>` submodule
+    /// items list MUST contain the DefId of the item declared in
+    /// `library/std/<pkg>/src/lib.rvn`, not whoever-came-last — otherwise
+    /// `use std.time.sleep` resolves to a different function than the
+    /// one declared in `time/lib.rvn`, and the signature mismatch
+    /// silently propagates to typeck (manifests as `time.sleep`
+    /// returning `()` instead of `TimeSleepFuture`).
+    ///
+    /// Snapshot is taken in [`merge_bootstrap_programs`](Self::merge_bootstrap_programs)
+    /// after each program's first walk and consumed in
+    /// [`auto_populate_std_submodules_from_packages`](Self::auto_populate_std_submodules_from_packages).
+    pub(super) bootstrap_package_item_ids: HashMap<String, HashMap<String, DefId>>,
 }
 
 #[derive(Debug)]
@@ -170,6 +193,7 @@ impl Resolver {
             pass1_class_lib_methods: HashMap::new(),
             mixin_lib_decls: HashMap::new(),
             bootstrap_auto_packages: Vec::new(),
+            bootstrap_package_item_ids: HashMap::new(),
         }
     }
 

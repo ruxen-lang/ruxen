@@ -266,7 +266,7 @@ impl Resolver {
         // lib-decl processing on the first walk lets the second walk
         // resolve those once every class name is registered.
         let first_walk_ctx = super::ffi_registration::RegistrationCtx::bootstrap_first_walk();
-        for program in programs {
+        for (idx, program) in programs.iter().enumerate() {
             for item in &program.items {
                 if Self::is_bootstrap_supported_item(item) {
                     self.register_top_level_type_with_ffi(item, ffi_libs, first_walk_ctx);
@@ -279,6 +279,48 @@ impl Resolver {
             for item in &program.items {
                 if Self::is_bootstrap_supported_item(item) {
                     super::yield_scan::collect_yield_fns(item, &mut self.yield_fns);
+                }
+            }
+
+            // Snapshot per-package DefIds while THIS program's
+            // registrations are still the most recent in scope.
+            // Without this, a later bootstrap program that re-declares
+            // an item with the same name (e.g. `def sleep` in
+            // `library/std/sync/src/lib.rvn`'s back-compat shim
+            // overwriting the typed `def sleep(d: &Duration) ->
+            // TimeSleepFuture` from `library/std/time/src/lib.rvn`)
+            // wins the `scopes.lookup` at fixup time and
+            // `std.time.items` ends up pointing at the wrong DefId —
+            // `use std.time.sleep` then resolves to the shim with
+            // `return_ty: Ty::Unit`, and `block_on(sleep(d))` builds
+            // a `(&var ()).poll(...)` call that mangles to `()_poll`
+            // at link time. See the field doc on
+            // `bootstrap_package_item_ids`.
+            //
+            // `bootstrap_auto_packages` is populated in
+            // `resolve_with_bootstrap_packages` and is index-aligned
+            // with `programs`. Empty when the legacy
+            // `resolve_with_bootstrap` path is in use (test harness
+            // with synthetic programs); in that case the snapshot is
+            // a no-op and the fixup falls back to `scopes.lookup`.
+            if let Some((pkg_name, item_names)) = self.bootstrap_auto_packages.get(idx) {
+                let pkg_name = pkg_name.clone();
+                let item_names = item_names.clone();
+                let mut name_to_id: HashMap<String, DefId> = HashMap::new();
+                for name in &item_names {
+                    if let Some(id) = self
+                        .scopes
+                        .lookup(name)
+                        .or_else(|| self.scopes.lookup_type(name))
+                    {
+                        name_to_id.insert(name.clone(), id);
+                    }
+                }
+                if !name_to_id.is_empty() {
+                    self.bootstrap_package_item_ids
+                        .entry(pkg_name)
+                        .or_default()
+                        .extend(name_to_id);
                 }
             }
         }
@@ -354,11 +396,18 @@ impl Resolver {
             }) else {
                 continue;
             };
+            // Prefer the per-package snapshot captured at merge time:
+            // when two bootstrap packages declare items with the same
+            // name (`def sleep` in both time.rvn and sync.rvn), the
+            // snapshot has THIS package's DefId, while `scopes.lookup`
+            // would return whoever last overwrote the global binding.
+            // See `bootstrap_package_item_ids` doc on `Resolver`.
+            let pkg_snapshot = self.bootstrap_package_item_ids.get(pkg_name);
             let mut item_ids: Vec<DefId> = Vec::with_capacity(item_names.len());
             for name in item_names {
-                let id = self
-                    .scopes
-                    .lookup(name)
+                let id = pkg_snapshot
+                    .and_then(|m| m.get(name).copied())
+                    .or_else(|| self.scopes.lookup(name))
                     .or_else(|| self.scopes.lookup_type(name));
                 if let Some(id) = id {
                     if !item_ids.contains(&id) {
