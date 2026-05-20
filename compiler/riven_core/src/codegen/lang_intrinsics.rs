@@ -76,6 +76,17 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // package's lib block.
         "Float_to_string_prec" => return Ok("riven_float_to_string_prec"),
         "String_truncate_chars" => return Ok("riven_string_truncate_chars"),
+        // Phase E-rest 3 of #06.95: MIR-synthesised Formatter callees
+        // from `mir/lower/interpolation.rs::emit_display_dispatch`.
+        // `Formatter_new_with_spec(width, precision, align, fill)`
+        // constructs a Formatter with the encoded format spec; the
+        // synth `_fmt` body calls `Formatter_precision()` to read
+        // the precision sentinel (`-1` = unset). Users never type
+        // these — they're inserted by the `:.<n>` lowering path.
+        // Same category as Float_to_string_prec; no class-body decl
+        // attaches.
+        "Formatter_new_with_spec" => return Ok("riven_fmt_formatter_new_with_spec"),
+        "Formatter_precision" => return Ok("riven_fmt_formatter_precision"),
         // `String_from_iter` is consumed by the
         // `iter.collect[String]()` MIR lowering, not a surface
         // `.from_iter(...)` method call — same MIR-synthesised
@@ -92,6 +103,34 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // (post-instance-self-prepend), this stays as an explicit
         // lang_intrinsics arm.
         "String_clone" => return Ok("riven_string_from"),
+        // Phase E-rest 5 of #06.95: `&str_*` instance-method aliases.
+        // The `&str` type is a Riven primitive (not a class shell),
+        // so there's no .rvn surface for these — the C runtime
+        // shares the `riven_string_*` byte-string helpers, and the
+        // MIR call-site mangling for `&str` receivers emits keys
+        // with a literal `&str_` prefix. Same compiler-internal
+        // category as the `String_*` MIR-synthesised callees above.
+        "&str_split" => return Ok("riven_str_split"),
+        "&str_parse_uint" => return Ok("riven_str_parse_uint"),
+        "&str_len" => return Ok("riven_string_len"),
+        "&str_is_empty" => return Ok("riven_string_is_empty"),
+        "&str_trim" => return Ok("riven_string_trim"),
+        "&str_to_lower" => return Ok("riven_string_to_lower"),
+        "&str_to_upper" => return Ok("riven_string_to_upper"),
+        "&str_chars" => return Ok("riven_string_chars"),
+        "&str_contains" => return Ok("riven_string_contains"),
+        "&str_starts_with" => return Ok("riven_string_starts_with"),
+        "&str_ends_with" => return Ok("riven_string_ends_with"),
+        "&str_lines" => return Ok("riven_string_lines"),
+        "&str_replace" => return Ok("riven_string_replace"),
+        "&str_bytes" => return Ok("riven_string_bytes"),
+        "&str_trim_start" => return Ok("riven_string_trim_start"),
+        "&str_trim_end" => return Ok("riven_string_trim_end"),
+        "&str_find" => return Ok("riven_string_find"),
+        "&str_splitn" => return Ok("riven_string_splitn"),
+        "&str_parse_int" => return Ok("riven_string_parse_int"),
+        "&str_parse_float" => return Ok("riven_string_parse_float"),
+        "&str_to_string" => return Ok("riven_string_to_string"),
         _ => {}
     }
 

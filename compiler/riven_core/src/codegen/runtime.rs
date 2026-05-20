@@ -379,7 +379,7 @@ pub(super) fn unresolved_method_error(callee: &str, type_label: &str) -> String 
 /// (`.fold`, `.sum`, `.collect`, `.map_err`, `.contains`, ...) behind a
 /// no-op that happened to produce the expected output for some fixtures.
 pub fn runtime_name(name: &str) -> Result<&str, String> {
-    super::runtime_table::runtime_name(name)
+    super::lang_intrinsics::runtime_name(name)
 }
 
 #[cfg(test)]
@@ -717,16 +717,15 @@ mod tests {
 
     #[test]
     fn thread_runtime_methods_resolve() {
-        // `Thread.sleep(Int)` — bare-int convenience overload — stays
-        // in runtime_table. typeck reports `Ty::Unit` for both the
-        // Int and Duration overloads, so the lib-decl in
-        // library/std/sync/src/lib.rvn can carry only ONE of them
-        // (the Duration form). The Int form's `Thread_sleep`
-        // mangled key reaches the C symbol through this arm.
-        assert_eq!(
-            runtime_name("Thread_sleep").unwrap(),
-            "riven_thread_sleep_ns"
-        );
+        // Phase E-rest 4b of #06.95: `Thread_sleep` now falls through
+        // because `library/std/sync/src/lib.rvn` carries the only
+        // `def self.sleep as "riven_thread_sleep_duration"` lib decl.
+        // The alias map rewrites `Thread_sleep` to that C symbol
+        // before codegen consults `runtime_name`, so the lookup here
+        // returns the unmangled identity. (The bare-int overload
+        // `Thread.sleep(0)` still works because the C runtime null-
+        // checks the Duration pointer — see commit 6e36eb8.)
+        assert_eq!(runtime_name("Thread_sleep").unwrap(), "Thread_sleep");
         // `Thread.yield_now` migrated to library/std/sync/src/lib.rvn
         // in #06.95 Phase E Slice B.4 — the alias map rewrites
         // `Thread_yield_now` before codegen consults runtime_table,

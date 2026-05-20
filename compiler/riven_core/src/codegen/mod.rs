@@ -7,7 +7,11 @@ pub mod lang_intrinsics;
 pub mod layout;
 pub mod object;
 pub mod runtime;
-mod runtime_table;
+// `runtime_table` deleted in #06.95 Phase E-rest FINAL — every
+// dispatch arm migrated to either per-package .rvn class lib decls
+// (the FFI alias map handles them) or to
+// `lang_intrinsics::runtime_name` (compiler-internal mangled
+// callees like `Fn(...)_call`, `Float_to_string_prec`, `&str_*`).
 
 #[cfg(feature = "llvm")]
 pub mod llvm;
