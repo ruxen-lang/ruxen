@@ -1,15 +1,21 @@
 # 10 — Phase 3: LSP server (T3.01) — basic completion + diagnostics
 
-> **Status: 🟡 Partial** (audited 2026-05-21). LSP server in
-> `src/riven_lsp/{src,tests}/` with diagnostics, hover, goto-def
-> (single-file), semantic_tokens, **and now completion**
-> (`completion_provider` capability with `.` trigger; word-start
-> over visible symbols + after-dot for class methods/fields, see
-> `src/riven_ide/src/completion.rs` + 10 fixture tests). Spec phases
-> still pending: signature_help, document_symbols, workspace_symbols,
-> references / rename (need UseIndex reverse-index first),
-> document_highlight, code_actions, inlay_hints, folding_ranges,
-> document_formatting, type_definition.
+> **Status: ✅ Mostly shipped** (audited 2026-05-21). Wave 1
+> completed via 8 parallel principal-rust-engineer agents
+> coordinated through flukebase memory block
+> `riven-lsp-wave1-coordination`. **Capabilities shipped in tree:**
+> diagnostics, hover, goto_def, goto_type_definition,
+> semantic_tokens_full, completion, signature_help, document_symbol,
+> workspace_symbol (`symbol`), inlay_hint, folding_range,
+> document_formatting, range_formatting, code_action. Plus the
+> `UseIndex` reverse-index infrastructure
+> (`AnalysisResult.use_index`) populated in `analyze()`. **187
+> passing test cases** across 11 capability modules. **Wave 2
+> pending:** textDocument/references, textDocument/documentHighlight,
+> textDocument/rename — all read `UseIndex` and can ship in
+> parallel. One pre-existing failure
+> (`analysis_of_sample_program` — UTF-8 char-boundary bug in
+> `line_index.rs:36`) is unrelated and was present before Wave 1.
 
 **Depends on:** Phase 2 stdlib stable.
 **Reads:** `docs/requirements/tier3_01_lsp.md`,

@@ -52,6 +52,7 @@ impl LanguageServer for RivenLsp {
                 )),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 definition_provider: Some(OneOf::Left(true)),
+                type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
                 completion_provider: Some(CompletionOptions {
                     // Both ctrl-space (no trigger) and post-`.`
                     // requests are accepted. `.` is the only
@@ -62,6 +63,18 @@ impl LanguageServer for RivenLsp {
                     resolve_provider: Some(false),
                     ..Default::default()
                 }),
+                signature_help_provider: Some(SignatureHelpOptions {
+                    trigger_characters: Some(vec!["(".to_string(), ",".to_string()]),
+                    retrigger_characters: Some(vec![",".to_string()]),
+                    work_done_progress_options: Default::default(),
+                }),
+                document_symbol_provider: Some(OneOf::Left(true)),
+                workspace_symbol_provider: Some(OneOf::Left(true)),
+                inlay_hint_provider: Some(OneOf::Left(true)),
+                folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+                document_formatting_provider: Some(OneOf::Left(true)),
+                document_range_formatting_provider: Some(OneOf::Left(true)),
+                code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
                 semantic_tokens_provider: Some(
                     SemanticTokensServerCapabilities::SemanticTokensOptions(
                         SemanticTokensOptions {
@@ -250,6 +263,145 @@ impl LanguageServer for RivenLsp {
             return Ok(None);
         }
         Ok(Some(CompletionResponse::Array(items)))
+    }
+
+    // === wave1: agent-A signature_help ===
+    async fn signature_help(
+        &self,
+        params: SignatureHelpParams,
+    ) -> Result<Option<SignatureHelp>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+        let state = self.state.read().await;
+        let Some(doc) = state.documents.get(&uri) else { return Ok(None); };
+        let Some(analysis) = &doc.analysis else { return Ok(None); };
+        Ok(riven_ide::signature_help::signature_help(analysis, position))
+    }
+
+    // === wave1: agent-B document_symbols ===
+    async fn document_symbol(
+        &self,
+        params: DocumentSymbolParams,
+    ) -> Result<Option<DocumentSymbolResponse>> {
+        let uri = params.text_document.uri;
+        let state = self.state.read().await;
+        let Some(doc) = state.documents.get(&uri) else { return Ok(None); };
+        let Some(analysis) = &doc.analysis else { return Ok(None); };
+        let symbols = riven_ide::document_symbols::document_symbols(analysis);
+        if symbols.is_empty() { return Ok(None); }
+        Ok(Some(DocumentSymbolResponse::Nested(symbols)))
+    }
+
+    // === wave1: agent-B workspace_symbols ===
+    async fn symbol(
+        &self,
+        params: WorkspaceSymbolParams,
+    ) -> Result<Option<Vec<SymbolInformation>>> {
+        let query = params.query;
+        let state = self.state.read().await;
+        let docs: Vec<(Url, &AnalysisResult)> = state
+            .documents
+            .iter()
+            .filter_map(|(uri, doc)| doc.analysis.as_ref().map(|a| (uri.clone(), a)))
+            .collect();
+        let results = riven_ide::workspace_symbols::workspace_symbols(&docs, &query);
+        if results.is_empty() { return Ok(None); }
+        Ok(Some(results))
+    }
+
+    // === wave1: agent-C inlay_hints ===
+    async fn inlay_hint(
+        &self,
+        params: InlayHintParams,
+    ) -> Result<Option<Vec<InlayHint>>> {
+        let uri = params.text_document.uri;
+        let range = params.range;
+        let state = self.state.read().await;
+        let Some(doc) = state.documents.get(&uri) else { return Ok(Some(Vec::new())); };
+        let Some(analysis) = &doc.analysis else { return Ok(Some(Vec::new())); };
+        let cfg = riven_ide::inlay_hints::InlayHintConfig::default();
+        let hints = riven_ide::inlay_hints::inlay_hints(analysis, range, &cfg);
+        Ok(Some(hints))
+    }
+
+    // === wave1: agent-D folding_ranges ===
+    async fn folding_range(
+        &self,
+        params: FoldingRangeParams,
+    ) -> Result<Option<Vec<FoldingRange>>> {
+        let uri = params.text_document.uri;
+        let state = self.state.read().await;
+        let Some(doc) = state.documents.get(&uri) else { return Ok(None); };
+        let Some(analysis) = &doc.analysis else { return Ok(None); };
+        let ranges = riven_ide::folding::folding_ranges(analysis);
+        Ok(Some(ranges))
+    }
+
+    // === wave1: agent-E document_formatting ===
+    async fn formatting(
+        &self,
+        params: DocumentFormattingParams,
+    ) -> Result<Option<Vec<TextEdit>>> {
+        let uri = params.text_document.uri;
+        let source = {
+            let state = self.state.read().await;
+            match state.documents.get(&uri) {
+                Some(doc) => doc.source.clone(),
+                None => return Ok(None),
+            }
+        };
+        Ok(riven_ide::format::format_document(&source))
+    }
+
+    async fn range_formatting(
+        &self,
+        params: DocumentRangeFormattingParams,
+    ) -> Result<Option<Vec<TextEdit>>> {
+        let uri = params.text_document.uri;
+        let range = params.range;
+        let source = {
+            let state = self.state.read().await;
+            match state.documents.get(&uri) {
+                Some(doc) => doc.source.clone(),
+                None => return Ok(None),
+            }
+        };
+        Ok(riven_ide::format::format_range(&source, range))
+    }
+
+    // === wave1: agent-F type_definition ===
+    async fn goto_type_definition(
+        &self,
+        params: request::GotoTypeDefinitionParams,
+    ) -> Result<Option<request::GotoTypeDefinitionResponse>> {
+        let uri = params.text_document_position_params.text_document.uri.clone();
+        let position = params.text_document_position_params.position;
+        let state = self.state.read().await;
+        let Some(doc) = state.documents.get(&uri) else { return Ok(None); };
+        let Some(analysis) = &doc.analysis else { return Ok(None); };
+        let Some(mut location) = riven_ide::type_def::type_definition(analysis, position) else {
+            return Ok(None);
+        };
+        location.uri = uri;
+        Ok(Some(request::GotoTypeDefinitionResponse::Scalar(location)))
+    }
+
+    // === wave1: agent-G code_actions ===
+    async fn code_action(
+        &self,
+        params: CodeActionParams,
+    ) -> Result<Option<CodeActionResponse>> {
+        let uri = params.text_document.uri.clone();
+        let state = self.state.read().await;
+        let Some(doc) = state.documents.get(&uri) else { return Ok(Some(Vec::new())); };
+        let Some(analysis) = &doc.analysis else { return Ok(Some(Vec::new())); };
+        let actions = riven_ide::code_actions::code_actions(
+            analysis,
+            params.range,
+            &params.context,
+            &uri,
+        );
+        Ok(Some(actions))
     }
 
     async fn semantic_tokens_full(
