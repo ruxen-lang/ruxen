@@ -1,0 +1,7 @@
+def hdouble_anchor_qzx(hinput_anchor_qzx: Int) -> Int
+  hinput_anchor_qzx + hinput_anchor_qzx
+end
+
+def main
+  let r = hdouble_anchor_qzx(3)
+end

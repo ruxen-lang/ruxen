@@ -1,0 +1,8 @@
+def hfn_anchor_qzx -> Int
+  42
+end
+
+def main
+  let a = hfn_anchor_qzx
+  let b = hfn_anchor_qzx
+end

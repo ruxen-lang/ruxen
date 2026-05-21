@@ -1,0 +1,16 @@
+class HCounter
+  count: Int
+
+  def init(@count: Int)
+  end
+
+  def hbump_anchor_qzx(extra: Int) -> Int
+    self.count + extra
+  end
+end
+
+def main
+  let c = HCounter.new(5)
+  let r = c.hbump_anchor_qzx(3)
+  let s = c.hbump_anchor_qzx(4)
+end
