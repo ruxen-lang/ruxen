@@ -495,7 +495,58 @@ fn run_bench(args: &[String]) {
     ];
     run_compile(&compile_args);
 
-    let output = match process::Command::new(&bin_path).output() {
+    // Safety timeout — a stuck bench (e.g. a fixture that locks
+    // without unlocking due to a drop-elaboration regression) would
+    // otherwise hang `rivenc bench` indefinitely. Auto-scale within
+    // `Bencher.iter` already caps total wall time at ≥ 100 ms per
+    // bench, so even a slow real bench finishes in a few seconds;
+    // anything past `bench_timeout` is treated as a deadlock or
+    // pathological auto-scale path and killed. Override via env
+    // `RIVENC_BENCH_TIMEOUT_SECS` (default 60). 0 disables.
+    let bench_timeout: u64 = std::env::var("RIVENC_BENCH_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(60);
+
+    let output = if bench_timeout == 0 {
+        process::Command::new(&bin_path).output()
+    } else {
+        let mut child = match process::Command::new(&bin_path)
+            .stdout(process::Stdio::piped())
+            .stderr(process::Stdio::piped())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("rivenc bench: failed to spawn {}: {}", bin_path.display(), e);
+                process::exit(1);
+            }
+        };
+        let pid = child.id();
+        let start = std::time::Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break child.wait_with_output(),
+                Ok(None) => {
+                    if start.elapsed().as_secs() >= bench_timeout {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        eprintln!(
+                            "rivenc bench: bench process pid={} exceeded RIVENC_BENCH_TIMEOUT_SECS={}s and was killed. \
+                             A common cause is a drop-elaboration bug that leaves a resource (mutex / fd / refcount) \
+                             held across iterations — re-run the fixture standalone to bisect.",
+                            pid, bench_timeout
+                        );
+                        process::exit(124);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                Err(e) => break Err(e),
+            }
+        }
+    };
+
+    let output = match output {
         Ok(o) => o,
         Err(e) => {
             eprintln!("rivenc bench: failed to run {}: {}", bin_path.display(), e);

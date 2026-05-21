@@ -634,6 +634,21 @@ fn compute_dealloc_safe_locals(func: &MirFunction) -> std::collections::HashSet<
                         "riven_open_options_create",
                         "OpenOptions_create_new",
                         "riven_open_options_create_new",
+                        // std::sync — guard handles allocated by lock /
+                        // try_lock. The C side malloc's a fresh
+                        // `RivenMutexGuard { parent }` (see
+                        // `library/std/sync/runtime/mutex.c::riven_mutex_lock`)
+                        // — without this whitelist entry the guard local
+                        // would be tainted on the call, scope-exit drop
+                        // would skip `MutexGuard_drop`, and the pthread
+                        // mutex would stay locked forever (second lock
+                        // attempt deadlocks). The Mutex's own pointer
+                        // (the receiver) is unaffected — the guard is a
+                        // separate heap object that wraps a back-pointer.
+                        "Mutex_lock_raw",
+                        "Mutex_try_lock_raw",
+                        "riven_mutex_lock",
+                        "riven_mutex_try_lock",
                     ];
                     let returns_fresh_alloc = FRESH_ALLOC_CALLEES.contains(&callee.as_str());
                     if let Some(d) = dest {

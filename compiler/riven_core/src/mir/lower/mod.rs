@@ -428,8 +428,26 @@ impl<'a> Lowerer<'a> {
             mir.functions.push(f);
         }
 
-        // Append any closure functions generated during lowering.
-        mir.functions.append(&mut self.pending_closures);
+        // Append any closure functions generated during lowering,
+        // running drop-elaboration on each one. Without this, locals
+        // declared inside a `do || ... end` body — particularly
+        // user-drop classes like `MutexGuard` — never get their
+        // scope-exit drop emitted, and the underlying resource (a
+        // pthread mutex, an fd, a refcount) leaks per call. The
+        // closure body returns either a tail-expr value or unit; the
+        // closure_inline path already sets up Return terminators
+        // before pushing into `pending_closures`, so insert_drops
+        // sees the same shape it sees for top-level methods.
+        for mut closure_fn in std::mem::take(&mut self.pending_closures) {
+            let return_locals = self.find_return_locals(&closure_fn);
+            crate::mir::lower::drops::insert_drops(
+                &mut closure_fn,
+                &return_locals,
+                self.symbols,
+                &self.user_drop_classes,
+            );
+            mir.functions.push(closure_fn);
+        }
 
         // Mixin vtables Phase B-2/B-3: emit vtable + class_info metadata
         // for every class that includes any `dispatch runtime` mixin.

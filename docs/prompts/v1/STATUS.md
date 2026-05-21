@@ -27,7 +27,7 @@ in git history (`git log -- docs/prompts/v1/<name>.md` to recover).
 | 07 | const generics | Tier-2 surface in `parser/ast.rs`; pin tests in `const_generics.rs`; e2e fixtures `072_*` and `073_*` |
 | 10 | LSP | All 17 spec §5 capabilities + UseIndex reverse-index. ~230 capability tests + 12 LSP integration tests. Wave 1 (8 agents) + Wave 2 (3 agents) |
 | 13 | benchmarking | `library/std/bench/` pure-Riven `Bencher` + `rivenc bench` subcommand + 5 criterion compile-pipeline benches. JSON/baseline/MAD deferred to v1.5 |
-| 14 | concurrency | Thread, Mutex, MutexGuard, SharedSync, Atomic*, Sender/Receiver, JoinHandle. Riven-level Mutex bench fixture blocked on v1.1 owning-vs-guard drop gap |
+| 14 | concurrency | Thread, Mutex, MutexGuard, SharedSync, Atomic*, Sender/Receiver, JoinHandle. Riven-level Mutex bench at `tests/benches/sync_mutex.rvn` runs at **15 ns/iter** — 70× under the 1 µs/op DoD budget (100k ops in 1.5 ms vs the 100 ms target) |
 | 15 | async | Future/Poll/Context/Waker + async def/.await + block_on + reactor + AsyncFile/TcpStream/TcpListener + Task.spawn/join/yield_now + AsyncStdin (`library/std/async_io/`). AsyncStdout/Stderr deferred to v1.1 |
 
 ## Remaining prompts (in tree)
@@ -62,4 +62,4 @@ in git history (`git log -- docs/prompts/v1/<name>.md` to recover).
 2. Finish 06.75 (split `typeck/infer.rs` and `codegen/runtime.rs`) and 06.8 (slim `resolve/stdlib/mod.rs`) — pure cleanup, mechanical
 3. **12 diagnostics polish** — error codes are exhaustive but hints/suggestions need engine work
 4. **22 pkg manager workspace/resolver** — turns stdlib's per-package model into something user packages can opt into
-5. **v1.1 follow-ups identified this session**: (a) split `user_drop_classes` owning vs guard-of so MutexGuard-style drops fire at scope exit without `dealloc_safe` gating; (b) AsyncStdout/Stderr if a demand actually shows up; (c) UTF-8 char-boundary bug in `line_index.rs:36` that crashes `analysis_of_sample_program`
+5. **v1.1 follow-ups identified this session**: (a) AsyncStdout/Stderr if a demand actually shows up; (b) UTF-8 char-boundary bug in `line_index.rs:36` that crashes `analysis_of_sample_program`

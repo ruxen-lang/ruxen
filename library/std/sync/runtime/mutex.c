@@ -146,12 +146,16 @@ void riven_mutex_guard_set(int64_t guard_ptr, int64_t value) {
     g->parent->payload = value;
 }
 
-/* MutexGuard drop — release the lock + free the guard struct. */
+/* MutexGuard drop — release the lock ONLY. The malloc'd
+ * RivenMutexGuard spine is freed by the MIR scope-exit pass via
+ * `riven_dealloc` once `Mutex_lock_raw` is whitelisted as a fresh-
+ * alloc callee (see `compiler/riven_core/src/mir/lower/drops.rs`
+ * FRESH_ALLOC_CALLEES). Doing the free here too would double-free
+ * the spine; the C side strictly handles the pthread side effect. */
 void riven_mutex_guard_drop(int64_t guard_ptr) {
     RivenMutexGuard *g = (RivenMutexGuard *)guard_ptr;
     if (!g) return;
     if (g->parent) {
         pthread_mutex_unlock(&g->parent->mu);
     }
-    free(g);
 }
