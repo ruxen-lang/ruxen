@@ -1,0 +1,10 @@
+def fmt_anchor_blank_lines_xyz
+
+
+
+  let x = 1
+
+
+
+  x
+end

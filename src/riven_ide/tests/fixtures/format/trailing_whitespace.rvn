@@ -1,0 +1,4 @@
+def fmt_anchor_trailing_ws_xyz   
+  let x = 42  
+  x
+end

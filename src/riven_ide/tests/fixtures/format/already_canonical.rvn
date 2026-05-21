@@ -1,0 +1,6 @@
+def fmt_anchor_clean_xyz(a: Int, b: Int) -> Int { a + b }
+
+def main
+  let r = fmt_anchor_clean_xyz(2, 3)
+  puts(r)
+end
