@@ -203,10 +203,115 @@ end
 ## Why a class rather than a free fn: class-static-method dispatch
 ## is unambiguous about the async runtime surface (cf. discussion
 ## around naming — sync stays on `Thread.sleep`, async lives on
-## `Async.*`). Future additions land here as more class-statics:
-## `Async.yield_now`, etc. when sub-phase 5 ships task.spawn.
+## `Async.*`). Future additions land here as more class-statics.
 class Async
   def self.sleep(d: &Duration) -> TimeSleepFuture
     TimeSleepFuture.new(d)
+  end
+end
+
+## --- Sub-phase 5: task scheduler (commit 1) ------------------------
+##
+## Spec: docs/specs/stdlib/task_spawn.spec.md.
+##
+## Commit 1 ships the queue + spawn + yield_now + raw handle
+## accessors. Commit 2 layers `task_join(h).await` over this surface
+## via the existing free-fn `.await` desugar. The TaskHandle is held
+## as an opaque `Int` at the Riven surface, mirroring the convention
+## established by `JoinHandle.join_raw(handle: Int)` in library/std/
+## sync/src/lib.rvn (an OS-thread join handle).
+##
+## Trade-off documented in the brief: a typed `class TaskHandle[T]`
+## value-class would need lib-decl support for `&var Future` /
+## `self` ↔ `Int` cast at the call boundary. v1 ships at the raw
+## Int level (same as Thread.spawn_raw). Commit 2 introduces a typed
+## __TaskJoinFuture[T] that recovers T at the join site.
+
+## Class Task — surface for Task.spawn / Task.yield_now.
+##
+## `Task.spawn_raw(future_ptr: Int) -> Int` enqueues a Riven future
+## (the i64 heap pointer of a class that `include Future dispatch
+## runtime`) and returns the C-side TaskHandle pointer as i64. The
+## helper does NOT poll the future — that happens later, during the
+## pump call the block_on inline loop emits between iterations.
+##
+## v1 type laxness: callers pass a future-typed value where `Int` is
+## declared. Riven's existing FFI codegen treats both at i64 (same
+## pattern as `Thread.spawn_raw(closure: Int)` — the closure value
+## flows in as a pointer). Type-safety improvement (typed
+## `Task.spawn(fut: &var Future) -> TaskHandle[T]`) lands in commit 2
+## once lib-decl grammar can express dyn-mixin params.
+##
+## `Task.yield_now -> TaskYieldFuture` is a static constructor.
+class Task
+  lib "runtime/scheduler.c"
+    def self.spawn_raw as "riven_executor_spawn"(future_ptr: Int) -> Int
+  end
+
+  def self.yield_now -> TaskYieldFuture
+    TaskYieldFuture.new()
+  end
+end
+
+## TaskHandle namespace class for static-method handle ops. Same
+## pattern as `JoinHandle` in library/std/sync — handle is held as
+## `Int` at the user surface; ops are static methods that take the
+## raw handle. v1 surface:
+##   TaskHandle.is_done(h)  -> Int (1 if ready, 0 if pending)
+##   TaskHandle.result(h)   -> Int (valid only when is_done returns 1)
+##   TaskHandle.drop_handle(h) -> ()  (releases caller-side refcount)
+##
+## `drop_handle` is named explicitly (not `drop`) because Riven's
+## `def drop` discipline reserves that name for class-instance drop
+## hooks. Here we're acting on a raw Int handle — closer to a free
+## function in spirit. Match the JoinHandle.join_raw shape.
+class TaskHandle
+  lib "runtime/scheduler.c"
+    def self.is_done as "riven_task_handle_is_done"(h: Int) -> Int
+    def self.result as "riven_task_handle_result"(h: Int) -> Int
+    def self.drop_handle as "riven_task_handle_drop"(h: Int) -> ()
+  end
+end
+
+## Scheduler internal entries. These exist as module-level lib decls
+## so the AST-level block_on rewriter can synthesise calls to them
+## via a plain `Identifier(...)` reference (matches how Thread.yield_now
+## gets emitted from the Pending arm today).
+##
+## `riven_executor_pump_tasks` is called by the block_on inline loop
+## once per iteration when the queue is non-empty (cheap: a single
+## thread-local pointer compare via `riven_executor_queue_nonempty`).
+## `riven_executor_drain_remaining` would be called by Context.drop —
+## but plumbing through Context.drop requires a follow-up commit; v1
+## ships with the leak-on-block_on-exit behaviour acknowledged in
+## scheduler.c's header. Tasks that complete cleanly via the pump
+## free themselves; only abandoned tasks leak.
+lib "runtime/scheduler.c"
+  def riven_executor_pump_tasks() -> Int
+  def riven_executor_queue_nonempty() -> Int
+  def riven_executor_drain_remaining() -> ()
+end
+
+## TaskYieldFuture — cooperative yield. First poll returns Pending,
+## second poll returns Ready. Holds a single "did I yield yet?" bit.
+##
+## Same one-field shape as TimeSleepFuture (no generic, single-state
+## bookkeeping). Construction is zero-arg.
+class TaskYieldFuture
+  polled: Int
+  include Future
+  type Output = ()
+
+  def init
+    self.polled = 0
+  end
+
+  def var poll(cx: &var Context) -> Poll[()]
+    if self.polled == 0
+      self.polled = 1
+      Poll.Pending
+    else
+      Poll.Ready(())
+    end
   end
 end

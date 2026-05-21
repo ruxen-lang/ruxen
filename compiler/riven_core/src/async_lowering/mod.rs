@@ -2008,6 +2008,245 @@ fn collect_e1112_in_expr(
     }
 }
 
+// ─── E1116 pre-check (Task.spawn outside async) ────────────────────
+//
+// Spec: docs/specs/stdlib/task_spawn.spec.md §B7.
+//
+// `Task.spawn(fut)` (today reached via `Task.spawn_raw(...)`) only
+// makes sense inside a Riven executor — i.e., inside an `async def`
+// or `async { ... }` closure. Calling it from plain sync code means
+// there's no executor to enqueue into.
+//
+// Polarity is inverted vs. E1112: flag the call when in_async ==
+// false. The walker reuses the same scope-tracking shape (toggling
+// in_async on async function/closure bodies) so a Task.spawn inside
+// a sync closure inside an async fn correctly fires (the inner sync
+// closure has its own non-async scope, so the call there has no
+// executor either).
+//
+// Surface match: matches both `Task.spawn(...)` (MethodCall with
+// receiver `Task`) and `Task.spawn_raw(...)` (same shape). The
+// future-typed wrapper that ships in commit 2 (`Task.spawn` with a
+// `&var Future` parameter) routes through the same MethodCall AST,
+// so this check catches it without additional wiring.
+//
+// Error doc: docs/errors/E1116.md.
+pub fn collect_task_spawn_outside_async_diagnostics(
+    program: &Program,
+) -> Vec<crate::diagnostics::Diagnostic> {
+    let mut diags = Vec::new();
+    for item in &program.items {
+        collect_e1116_in_item(item, /*in_async=*/ false, &mut diags);
+    }
+    diags
+}
+
+fn collect_e1116_in_item(
+    item: &TopLevelItem,
+    in_async: bool,
+    diags: &mut Vec<crate::diagnostics::Diagnostic>,
+) {
+    match item {
+        TopLevelItem::Function(func) => {
+            let scope_async = in_async || func.is_async;
+            collect_e1116_in_block(&func.body, scope_async, diags);
+        }
+        TopLevelItem::Class(class) => {
+            for m in class.methods.iter() {
+                let scope_async = in_async || m.is_async;
+                collect_e1116_in_block(&m.body, scope_async, diags);
+            }
+            for inner_impl in class.inner_impls.iter() {
+                for inner in inner_impl.items.iter() {
+                    if let crate::parser::ast::ImplItem::Method(m) = inner {
+                        let scope_async = in_async || m.is_async;
+                        collect_e1116_in_block(&m.body, scope_async, diags);
+                    }
+                }
+            }
+        }
+        TopLevelItem::Impl(impl_block) => {
+            for inner in impl_block.items.iter() {
+                if let crate::parser::ast::ImplItem::Method(m) = inner {
+                    let scope_async = in_async || m.is_async;
+                    collect_e1116_in_block(&m.body, scope_async, diags);
+                }
+            }
+        }
+        TopLevelItem::Module(module) => {
+            for nested in module.items.iter() {
+                collect_e1116_in_item(nested, in_async, diags);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_e1116_in_block(
+    block: &Block,
+    in_async: bool,
+    diags: &mut Vec<crate::diagnostics::Diagnostic>,
+) {
+    for stmt in &block.statements {
+        match stmt {
+            Statement::Let(let_binding) => {
+                if let Some(v) = &let_binding.value {
+                    collect_e1116_in_expr(v, in_async, diags);
+                }
+            }
+            Statement::Expression(e) => collect_e1116_in_expr(e, in_async, diags),
+        }
+    }
+}
+
+fn collect_e1116_in_expr(
+    expr: &Expr,
+    in_async: bool,
+    diags: &mut Vec<crate::diagnostics::Diagnostic>,
+) {
+    // Flag this node if it is `Task.spawn(...)` or `Task.spawn_raw(...)`
+    // and we're NOT in an async scope. The parser folds
+    // `Task.spawn(x)` into MethodCall { object: Identifier("Task"),
+    // method: "spawn", args }.
+    if !in_async {
+        if let ExprKind::MethodCall { object, method, .. } = &expr.kind {
+            if let ExprKind::Identifier(name) = &object.kind {
+                if name == "Task" && (method == "spawn" || method == "spawn_raw") {
+                    diags.push(crate::diagnostics::Diagnostic::error_with_code(
+                        "`Task.spawn` can only be called inside an `async` function or closure — there is no executor to enqueue into in sync context",
+                        expr.span.clone(),
+                        "E1116",
+                    ));
+                }
+            }
+        }
+    }
+
+    // Recurse — descending into nested closures CHANGES the async
+    // scope (matches E1112's recursion shape).
+    match &expr.kind {
+        ExprKind::BinaryOp { left, right, .. } => {
+            collect_e1116_in_expr(left, in_async, diags);
+            collect_e1116_in_expr(right, in_async, diags);
+        }
+        ExprKind::UnaryOp { operand, .. } => collect_e1116_in_expr(operand, in_async, diags),
+        ExprKind::Borrow(inner) | ExprKind::BorrowMut(inner) => {
+            collect_e1116_in_expr(inner, in_async, diags);
+        }
+        ExprKind::FieldAccess { object, .. } => collect_e1116_in_expr(object, in_async, diags),
+        ExprKind::MethodCall { object, args, .. } => {
+            collect_e1116_in_expr(object, in_async, diags);
+            for a in args.iter() {
+                collect_e1116_in_expr(a, in_async, diags);
+            }
+        }
+        ExprKind::Call { callee, args, .. } => {
+            collect_e1116_in_expr(callee, in_async, diags);
+            for a in args.iter() {
+                collect_e1116_in_expr(a, in_async, diags);
+            }
+        }
+        ExprKind::Index { object, index } => {
+            collect_e1116_in_expr(object, in_async, diags);
+            collect_e1116_in_expr(index, in_async, diags);
+        }
+        ExprKind::ClosureCall { callee, args } => {
+            collect_e1116_in_expr(callee, in_async, diags);
+            for a in args.iter() {
+                collect_e1116_in_expr(a, in_async, diags);
+            }
+        }
+        ExprKind::Try(inner) | ExprKind::Await(inner) => {
+            collect_e1116_in_expr(inner, in_async, diags);
+        }
+        ExprKind::Assign { target, value }
+        | ExprKind::CompoundAssign { target, value, .. } => {
+            collect_e1116_in_expr(target, in_async, diags);
+            collect_e1116_in_expr(value, in_async, diags);
+        }
+        ExprKind::If(IfExpr {
+            condition,
+            then_body,
+            elsif_clauses,
+            else_body,
+            ..
+        }) => {
+            collect_e1116_in_expr(condition, in_async, diags);
+            collect_e1116_in_block(then_body, in_async, diags);
+            for el in elsif_clauses.iter() {
+                collect_e1116_in_expr(&el.condition, in_async, diags);
+                collect_e1116_in_block(&el.body, in_async, diags);
+            }
+            if let Some(b) = else_body {
+                collect_e1116_in_block(b, in_async, diags);
+            }
+        }
+        ExprKind::Match(MatchExpr { subject, arms, .. }) => {
+            collect_e1116_in_expr(subject, in_async, diags);
+            for a in arms.iter() {
+                if let Some(g) = &a.guard {
+                    collect_e1116_in_expr(g, in_async, diags);
+                }
+                match &a.body {
+                    MatchArmBody::Expr(e) => collect_e1116_in_expr(e, in_async, diags),
+                    MatchArmBody::Block(b) => collect_e1116_in_block(b, in_async, diags),
+                }
+            }
+        }
+        ExprKind::Block(b) => collect_e1116_in_block(b, in_async, diags),
+        ExprKind::Loop(loop_expr) => collect_e1116_in_block(&loop_expr.body, in_async, diags),
+        ExprKind::While(while_expr) => {
+            collect_e1116_in_expr(&while_expr.condition, in_async, diags);
+            collect_e1116_in_block(&while_expr.body, in_async, diags);
+        }
+        ExprKind::For(for_expr) => {
+            collect_e1116_in_expr(&for_expr.iterable, in_async, diags);
+            collect_e1116_in_block(&for_expr.body, in_async, diags);
+        }
+        ExprKind::Return(Some(inner)) | ExprKind::Break(Some(inner)) => {
+            collect_e1116_in_expr(inner, in_async, diags);
+        }
+        ExprKind::ArrayLiteral(items) | ExprKind::TupleLiteral(items) => {
+            for it in items.iter() {
+                collect_e1116_in_expr(it, in_async, diags);
+            }
+        }
+        ExprKind::ArrayFill { value, count } => {
+            collect_e1116_in_expr(value, in_async, diags);
+            collect_e1116_in_expr(count, in_async, diags);
+        }
+        ExprKind::MapLiteral(pairs) => {
+            for (k, v) in pairs.iter() {
+                collect_e1116_in_expr(k, in_async, diags);
+                collect_e1116_in_expr(v, in_async, diags);
+            }
+        }
+        ExprKind::Range { start, end, .. } => {
+            if let Some(s) = start {
+                collect_e1116_in_expr(s, in_async, diags);
+            }
+            if let Some(e) = end {
+                collect_e1116_in_expr(e, in_async, diags);
+            }
+        }
+        ExprKind::Cast { expr: inner, .. } => collect_e1116_in_expr(inner, in_async, diags),
+        ExprKind::Closure(c) => {
+            let inner_async = c.is_async;
+            match &c.body {
+                ClosureBody::Expr(e) => collect_e1116_in_expr(e, inner_async, diags),
+                ClosureBody::Block(b) => collect_e1116_in_block(b, inner_async, diags),
+            }
+        }
+        ExprKind::UnsafeBlock(b) => collect_e1116_in_block(b, in_async, diags),
+        ExprKind::EnumVariant { args, .. } => {
+            for fa in args.iter() {
+                collect_e1116_in_expr(&fa.value, in_async, diags);
+            }
+        }
+        _ => {}
+    }
+}
+
 // ─── block_on intrinsic rewriter ───────────────────────────────────
 //
 // Sub-phase 3 of the async round (docs/specs/stdlib/executor.spec.md).
@@ -2449,11 +2688,38 @@ fn build_block_on_loop(future_expr: Expr, n: u32, span: &Span) -> Expr {
         span: span.clone(),
     };
 
-    // loop ... end
+    // Sub-phase 5 (docs/specs/stdlib/task_spawn.spec.md §B3):
+    // pump the spawned-task queue once per iteration. The helper
+    // short-circuits via a thread-local null-pointer check when no
+    // tasks were ever spawned, so block_on calls that never use
+    // Task.spawn pay one extra C call per iteration (a single
+    // load + compare + return) — negligible vs. the existing
+    // Thread.yield_now / reactor-park cost.
+    //
+    // Emitted as `riven_executor_pump_tasks()` (free-fn lib decl in
+    // library/std/future/src/lib.rvn). Same mechanism as the
+    // Pending arm's `Thread.yield_now` call — identifier-callee
+    // synthesis with no implicit self.
+    let pump_call = Expr {
+        kind: ExprKind::Call {
+            callee: Box::new(Expr {
+                kind: ExprKind::Identifier("riven_executor_pump_tasks".to_string()),
+                span: span.clone(),
+            }),
+            args: Vec::new(),
+            block: None,
+        },
+        span: span.clone(),
+    };
+
+    // loop ... end — pump first, then poll the top-level future.
     let loop_expr = Expr {
         kind: ExprKind::Loop(LoopExpr {
             body: Block {
-                statements: vec![Statement::Expression(match_expr)],
+                statements: vec![
+                    Statement::Expression(pump_call),
+                    Statement::Expression(match_expr),
+                ],
                 span: span.clone(),
             },
             span: span.clone(),

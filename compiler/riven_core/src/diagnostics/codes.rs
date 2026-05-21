@@ -355,6 +355,18 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E1115",
         title: "`.await` inside `while` / `for` body not yet supported",
     },
+    // Task scheduler (`docs/specs/stdlib/task_spawn.spec.md`).
+    // E1116 fires when `Task.spawn(...)` (or its raw form
+    // `Task.spawn_raw(...)`) appears in a sync scope. There is no
+    // executor to enqueue into outside an `async def` / `async`
+    // closure body. Polarity-inverted twin of E1112: E1112 = block_on
+    // inside async; E1116 = Task.spawn outside async. Detected during
+    // the same async-lowering pre-pass (`collect_task_spawn_outside_
+    // async_diagnostics`).
+    CodeInfo {
+        code: "E1116",
+        title: "`Task.spawn` called outside `async` context",
+    },
     // Mixin vtables (`docs/specs/types/mixin_vtables.spec.md`). Phase A
     // surfaces the codes; codegen of the actual vtables is Phase B/C.
     // E1117 fires when a class `include`s a mixin marked

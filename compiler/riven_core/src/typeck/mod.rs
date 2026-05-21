@@ -64,10 +64,18 @@ pub fn type_check(program: &ast::Program) -> TypeCheckResult {
     // would live inside the (non-async) generated `poll` method,
     // making the async-scope check at resolve time unreachable.
     let e1112_diags = crate::async_lowering::collect_block_on_in_async_diagnostics(&lowered);
+    // E1116 pre-check (docs/specs/stdlib/task_spawn.spec.md §B7):
+    // detect `Task.spawn(...)` / `Task.spawn_raw(...)` calls in
+    // sync scope BEFORE the async-fn rewrite collapses async bodies
+    // into a synth state-machine class. Once the rewrite fires, the
+    // call would live inside the (non-async) generated `poll`
+    // method, making the check unreachable.
+    let e1116_diags = crate::async_lowering::collect_task_spawn_outside_async_diagnostics(&lowered);
     crate::async_lowering::lower_async_defs(&mut lowered);
     let mut result = type_check_with_bootstrap_packages(&lowered, &bootstrap_packages);
     result.diagnostics.extend(bootstrap_diagnostics);
     result.diagnostics.extend(e1112_diags);
+    result.diagnostics.extend(e1116_diags);
     result
 }
 
@@ -139,6 +147,9 @@ pub fn type_check_with_bootstrap(
     // E1112 pre-check (docs/specs/stdlib/executor.spec.md B6) —
     // mirrors `type_check`'s injection.
     let e1112_diags = crate::async_lowering::collect_block_on_in_async_diagnostics(&lowered_user);
+    // E1116 pre-check — see `type_check`'s mirror.
+    let e1116_diags =
+        crate::async_lowering::collect_task_spawn_outside_async_diagnostics(&lowered_user);
     crate::async_lowering::lower_async_defs(&mut lowered_user);
 
     // Phase 1: Name resolution (with bootstrap prelude merged in)
@@ -151,6 +162,7 @@ pub fn type_check_with_bootstrap(
         type_registry,
     } = resolver.resolve_with_bootstrap(&lowered_user, bootstrap_programs);
     diagnostics.extend(e1112_diags);
+    diagnostics.extend(e1116_diags);
 
     // Phase 2: Validate derive usage and collect all trait impls
     diagnostics.extend(crate::implicit_includes::validate_program(

@@ -158,7 +158,18 @@ impl CodeGen {
         // ── Pass 1: declare ──────────────────────────────────────────────
         for func in &program.functions {
             let sig = build_signature(&self.module, func);
-            let linkage = if func.name == "main" {
+            // `main` and any `<Mixin>_dynamic_<method>` helper get
+            // exported linkage. The mixin dispatch helpers
+            // (docs/specs/types/mixin_vtables.spec.md §B5) are
+            // synthesised explicitly to be called from C-side
+            // runtime code — e.g. the sub-phase 5 task scheduler in
+            // library/std/future/runtime/scheduler.c invokes
+            // `Future_dynamic_poll` per queued task. Without
+            // exported linkage the C side fails to link with an
+            // "undefined symbol" error at the host linker.
+            let linkage = if func.name == "main"
+                || is_dynamic_dispatch_helper(&func.name)
+            {
                 Linkage::Export
             } else {
                 Linkage::Local
@@ -478,6 +489,32 @@ impl CodeGen {
         self.module.clear_context(&mut self.ctx);
         Ok(())
     }
+}
+
+/// Recognises the synthesised mixin-dispatch helper naming pattern
+/// `<Mixin>_dynamic_<method>` (e.g. `Future_dynamic_poll`).
+///
+/// Spec: docs/specs/types/mixin_vtables.spec.md §B5. The helpers are
+/// produced by `mir::lower::build_dynamic_dispatch_helper`. They get
+/// `Linkage::Export` so C-side runtime code (e.g. the sub-phase 5
+/// scheduler in `library/std/future/runtime/scheduler.c`) can call
+/// them by symbol.
+///
+/// Pattern: identifier starts with an ASCII uppercase letter, contains
+/// `_dynamic_` once, and has at least one char on either side. This is
+/// stricter than `contains("_dynamic_")` — minimises the chance a
+/// user-named function happens to match.
+pub(crate) fn is_dynamic_dispatch_helper(name: &str) -> bool {
+    if !name.chars().next().map(|c| c.is_ascii_uppercase()).unwrap_or(false) {
+        return false;
+    }
+    let Some(idx) = name.find("_dynamic_") else {
+        return false;
+    };
+    // Must have at least one char before "_dynamic_" (the uppercase
+    // check above guarantees this, but kept explicit) and at least
+    // one char after — the method name.
+    idx > 0 && idx + "_dynamic_".len() < name.len()
 }
 
 // Re-export the `Module` trait usage that callers need; the original

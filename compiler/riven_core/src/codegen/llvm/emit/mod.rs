@@ -51,7 +51,15 @@ pub fn compile_program<'ctx>(
     // Pass 1: declare all user functions
     for func in &program.functions {
         let fn_type = super::types::build_function_type(func, context);
-        let linkage = if func.name == "main" {
+        // `main` + every `<Mixin>_dynamic_<method>` helper exports
+        // External linkage so C-side runtime code (e.g.
+        // library/std/future/runtime/scheduler.c, sub-phase 5) can
+        // dispatch through the helper by symbol. Mirrors the cranelift
+        // backend's logic — see codegen/cranelift/mod.rs::
+        // is_dynamic_dispatch_helper for the naming pattern.
+        let linkage = if func.name == "main"
+            || super::super::cranelift::is_dynamic_dispatch_helper(&func.name)
+        {
             Some(inkwell::module::Linkage::External)
         } else {
             Some(inkwell::module::Linkage::Internal)

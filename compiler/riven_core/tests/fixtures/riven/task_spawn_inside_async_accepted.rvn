@@ -1,0 +1,31 @@
+## Spec docs/specs/stdlib/task_spawn.spec.md §B7: `Task.spawn` inside
+## an async context is accepted (no E1116). Sanity-check pair for the
+## negative fixture above.
+class CountdownFuture
+  remaining: Int
+  include Future
+  type Output = Int
+
+  def init(n: Int)
+    self.remaining = n
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    if self.remaining == 0
+      Poll.Ready(7)
+    else
+      self.remaining = self.remaining - 1
+      Poll.Pending
+    end
+  end
+end
+
+async def driver -> Int
+  let fut = CountdownFuture.new(0)
+  let h = Task.spawn_raw(fut)
+  0
+end
+
+def main
+  let _ = block_on(driver())
+end
