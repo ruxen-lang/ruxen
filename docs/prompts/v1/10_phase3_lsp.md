@@ -1,9 +1,15 @@
 # 10 — Phase 3: LSP server (T3.01) — basic completion + diagnostics
 
 > **Status: 🟡 Partial** (audited 2026-05-21). LSP server in
-> `src/riven_lsp/{src,tests}/` — diagnostics + integration tests
-> shipped. Full coverage of hover, goto-def, completions,
-> code-actions needs audit against `tier3_01_lsp.md`.
+> `src/riven_lsp/{src,tests}/` with diagnostics, hover, goto-def
+> (single-file), semantic_tokens, **and now completion**
+> (`completion_provider` capability with `.` trigger; word-start
+> over visible symbols + after-dot for class methods/fields, see
+> `src/riven_ide/src/completion.rs` + 10 fixture tests). Spec phases
+> still pending: signature_help, document_symbols, workspace_symbols,
+> references / rename (need UseIndex reverse-index first),
+> document_highlight, code_actions, inlay_hints, folding_ranges,
+> document_formatting, type_definition.
 
 **Depends on:** Phase 2 stdlib stable.
 **Reads:** `docs/requirements/tier3_01_lsp.md`,

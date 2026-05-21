@@ -1,0 +1,19 @@
+## Completion fixture — prefix filtering. The cursor anchor sits in
+## the function body; the test puts the cursor one byte past the
+## leading letter so the typed prefix is a single character.
+
+def alpha
+  1
+end
+
+def beta
+  2
+end
+
+def gamma
+  3
+end
+
+def main
+  b_cursor_anchor
+end

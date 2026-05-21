@@ -1,0 +1,8 @@
+## Completion fixture — receiver doesn't resolve to anything. The
+## completion call should return an empty list rather than guess
+## methods from some unrelated type. The cursor anchor marks the
+## position right after the `.`.
+
+def main
+  unknown_var.unique_member_anchor
+end

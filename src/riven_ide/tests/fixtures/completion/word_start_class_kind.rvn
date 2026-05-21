@@ -1,0 +1,11 @@
+## Completion fixture — verify class-shaped defs surface with
+## `CompletionItemKind::CLASS`. Anchor in the function body is
+## uppercase to match PascalCase class names.
+
+class Counter
+  value: Int
+end
+
+def main
+  Co_cursor_anchor
+end

@@ -34,7 +34,7 @@ in git history (`git log -- docs/prompts/v1/<name>.md` to recover).
 | 06.8 | stdlib self-hosting | 🟡 Mostly shipped | All stdlib in Riven; `resolve/stdlib/mod.rs` is 580 LOC (target 400); pin tests scattered rather than in `extern_c_binding.rs` |
 | 08 | HRTBs / `some Mixin` | 🟡 Partial | `some Mixin` shipped; `for<'a>` HRTBs deferred to v1.5/v2 per original prompt |
 | 09 | GATs / `any Mixin` | 🟡 Partial | `any Mixin` + mixin vtables Phase A/B/C shipped; GATs themselves deferred to v1.5/v2 |
-| 10 | LSP | 🟡 Partial | Server + integration tests in `src/riven_lsp/`; full hover/goto-def/completion audit needed |
+| 10 | LSP | 🟡 Partial | Server + integration tests in `src/riven_lsp/`; diagnostics, hover, goto-def, semantic_tokens, completion (phase 1B word-start + after-dot) shipped; signature_help / document_symbols / references / rename / inlay_hints / code_actions / folding pending |
 | 11 | incremental | 🟡 Partial | rivenc cache + `--force` + `clean` subcommand work; formal query-layer design TODO |
 | 14 | concurrency | ✅ All primitives | Thread, Mutex, MutexGuard, SharedSync, Atomic*, Sender/Receiver, JoinHandle shipped; bench pending on prompt 13 |
 | 15 | async | ✅ Sub-phases 1–5 | Future/Poll/Context/Waker, async def + .await, block_on, reactor, AsyncFile/AsyncTcpStream/AsyncTcpListener, Task.spawn/join/yield_now; AsyncStdin variants not shipped |

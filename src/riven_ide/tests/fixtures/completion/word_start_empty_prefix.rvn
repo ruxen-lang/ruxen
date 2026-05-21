@@ -1,0 +1,16 @@
+## Completion fixture — ctrl-space at the start of an expression
+## slot. The cursor anchor is an underscore-prefixed identifier the
+## test locates; the test puts the cursor at the START of the anchor
+## so the prefix is empty.
+
+def alpha
+  1
+end
+
+def beta
+  2
+end
+
+def main
+  _empty_cursor_anchor
+end

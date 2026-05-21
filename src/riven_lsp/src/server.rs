@@ -52,6 +52,16 @@ impl LanguageServer for RivenLsp {
                 )),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 definition_provider: Some(OneOf::Left(true)),
+                completion_provider: Some(CompletionOptions {
+                    // Both ctrl-space (no trigger) and post-`.`
+                    // requests are accepted. `.` is the only
+                    // structural trigger; `:` is reserved for the
+                    // (not-yet-implemented) `Self::method` form and
+                    // module qualification.
+                    trigger_characters: Some(vec![".".to_string()]),
+                    resolve_provider: Some(false),
+                    ..Default::default()
+                }),
                 semantic_tokens_provider: Some(
                     SemanticTokensServerCapabilities::SemanticTokensOptions(
                         SemanticTokensOptions {
@@ -211,6 +221,35 @@ impl LanguageServer for RivenLsp {
             loc.uri = uri;
             GotoDefinitionResponse::Scalar(loc)
         }))
+    }
+
+    async fn completion(
+        &self,
+        params: CompletionParams,
+    ) -> Result<Option<CompletionResponse>> {
+        let uri = params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+        let trigger = params
+            .context
+            .as_ref()
+            .and_then(|c| c.trigger_character.as_deref())
+            .and_then(|s| s.chars().next());
+
+        let state = self.state.read().await;
+        let doc = match state.documents.get(&uri) {
+            Some(doc) => doc,
+            None => return Ok(None),
+        };
+        let analysis = match &doc.analysis {
+            Some(a) => a,
+            None => return Ok(None),
+        };
+
+        let items = riven_ide::completion::completions(analysis, position, trigger);
+        if items.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(CompletionResponse::Array(items)))
     }
 
     async fn semantic_tokens_full(
