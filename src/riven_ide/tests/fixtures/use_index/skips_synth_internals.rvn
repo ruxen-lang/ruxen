@@ -1,0 +1,4 @@
+def main
+  let visible_anchor_qzx = 1
+  let r = visible_anchor_qzx
+end

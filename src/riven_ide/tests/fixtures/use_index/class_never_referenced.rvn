@@ -1,0 +1,10 @@
+class LonelyAnchorQzx
+  n: Int
+
+  def init(@n: Int)
+  end
+end
+
+def main
+  let x = 1
+end

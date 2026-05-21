@@ -1,0 +1,7 @@
+def double_anchor_qzx(input_anchor_qzx: Int) -> Int
+  input_anchor_qzx + input_anchor_qzx
+end
+
+def main
+  let r = double_anchor_qzx(3)
+end

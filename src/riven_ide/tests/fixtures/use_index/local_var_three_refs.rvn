@@ -1,0 +1,5 @@
+def main
+  let var_anchor_qzx = 1
+  let a = var_anchor_qzx + var_anchor_qzx
+  let b = var_anchor_qzx
+end

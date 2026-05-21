@@ -9,6 +9,7 @@ use riven_core::resolve::symbols::SymbolTable;
 use riven_core::typeck;
 
 use crate::line_index::LineIndex;
+use crate::use_index::{build_use_index, UseIndex};
 
 pub struct AnalysisResult {
     pub program: Option<HirProgram>,
@@ -18,6 +19,11 @@ pub struct AnalysisResult {
     pub borrow_errors: Vec<BorrowError>,
     pub source: String,
     pub line_index: LineIndex,
+    /// Reverse-index from `DefId` to every span referencing it.
+    /// `None` when the analysis stopped before typeck succeeded (lex /
+    /// parse error). See `use_index` module for the contract.
+    /// Wave 2 capabilities (references / highlight / rename) read this.
+    pub use_index: Option<UseIndex>,
 }
 
 impl AnalysisResult {
@@ -30,6 +36,7 @@ impl AnalysisResult {
             borrow_errors: Vec::new(),
             source: source.to_string(),
             line_index: LineIndex::new(source),
+            use_index: None,
         }
     }
 }
@@ -76,6 +83,12 @@ pub fn analyze(source: &str) -> AnalysisResult {
         borrow_check::borrow_check(&type_result.program, &type_result.symbols)
     };
 
+    // Phase 5: Build the LSP reverse use-index. Runs whenever typeck
+    // produced a HIR + symbols pair, regardless of type errors — Wave
+    // 2 features (references / highlight / rename) are still useful
+    // in a file with a downstream error, and the walker is read-only.
+    let use_index = Some(build_use_index(&type_result.program, &type_result.symbols));
+
     AnalysisResult {
         program: Some(type_result.program),
         symbols: Some(type_result.symbols),
@@ -84,6 +97,7 @@ pub fn analyze(source: &str) -> AnalysisResult {
         borrow_errors,
         source: source.to_string(),
         line_index: LineIndex::new(source),
+        use_index,
     }
 }
 
@@ -221,6 +235,7 @@ mod tests {
         assert!(result.symbols.is_none());
         assert!(result.type_context.is_none());
         assert!(result.borrow_errors.is_empty());
+        assert!(result.use_index.is_none());
         assert_eq!(result.source, "source");
     }
 }
