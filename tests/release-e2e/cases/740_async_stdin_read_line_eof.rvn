@@ -1,0 +1,76 @@
+## Spec: docs/prompts/v1/15_phase4_async.md DoD bullet 4 — AsyncStdin
+## variant. Exercises AsyncStdin.read_line() driven through block_on.
+##
+## Under the cargo-test harness (compiler/riven_core/tests/release_e2e_smoke.rs)
+## the child process is spawned via Command::output() without piping
+## stdin, so the child inherits cargo's stdin — which is closed/empty
+## during `cargo test`. read_line therefore observes immediate EOF and
+## returns Ok("") on the first poll.
+##
+## What this fixture verifies end-to-end:
+##   - AsyncStdin / AsyncReadLineFuture parse + typeck + lower cleanly
+##     (i.e. the surface compiles).
+##   - The state machine runs without crashing: state alloc, step,
+##     take_result, drop ordering all OK.
+##   - The EOF path returns Ok with an empty payload (not an error).
+##
+## What this fixture cannot verify in the harness:
+##   - The EAGAIN-park-then-wake cycle. That requires piping data into
+##     the child after a delay, which the in-process harness
+##     (Command::output) does not support. The reactor integration is
+##     identical to AsyncReadToStringFuture's, which IS exercised on
+##     pipe fds by the wider async_fs tests, so we get transitive
+##     coverage of the parking machinery.
+##
+## Drives through block_on rather than `.await` for the same reason as
+## fixture 726: block_on's AST-rewrite local is currently typed Int,
+## which would erase the Result[String, IoError] payload type when
+## flowed through an `async def`. The hand-driven poll loop preserves
+## typing.
+
+def read_check(expected_empty: &String) -> Int
+  var fut = AsyncStdin.read_line
+  var ctx = Context.executor
+  var matched = 0
+  var done = 0
+  while done == 0
+    matched = poll_once_check(&var fut, &var ctx, expected_empty)
+    if matched >= 0
+      done = 1
+    end
+  end
+  matched
+end
+
+def poll_once_check(fut: &var AsyncReadLineFuture, ctx: &var Context, expected_empty: &String) -> Int
+  match fut.poll(ctx)
+    Poll.Ready(r) -> read_result_to_int(r, expected_empty)
+    Poll.Pending  -> yield_and_neg1
+  end
+end
+
+def yield_and_neg1 -> Int
+  Thread.yield_now
+  0 - 1
+end
+
+def read_result_to_int(r: Result[String, IoError], expected_empty: &String) -> Int
+  match r
+    Ok(s)  -> compare_strings(s, expected_empty)
+    Err(_) -> 0
+  end
+end
+
+def compare_strings(a: String, b: String) -> Int
+  riven_async_str_equals(a, b)
+end
+
+def main
+  let expected_empty = String.from("")
+  let matched = read_check(expected_empty)
+  if matched == 1
+    puts "eof_ok"
+  else
+    puts "eof_fail"
+  end
+end

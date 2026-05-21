@@ -1,0 +1,129 @@
+## std::async_io — async standard-stream I/O (AsyncStdin slice).
+##
+## Spec: docs/prompts/v1/15_phase4_async.md DoD bullet 4 ("Async*
+## variants for the 9 stdlib types"). AsyncStdin is the single new
+## type shipped here; AsyncStdout / AsyncStderr are deferred to v1.1
+## with a rationale documented in `Riven.toml` (kernel write-buffering
+## makes non-blocking stdout/stderr near-useless in v1; blocking
+## writes via std::io cover the demand profile).
+##
+## Surface:
+##
+##   AsyncStdin.read_line() -> AsyncReadLineFuture
+##       Reads from fd 0 until '\n' or EOF. Returns
+##       Result[String, IoError]. Newline character is INCLUDED in the
+##       returned string (matches Rust's BufRead::read_line). Empty
+##       string indicates EOF before any bytes were read.
+##
+## Why static-method-only (no `AsyncStdin` instance constructor):
+##   stdin's fd is process-global. Letting users `var s = AsyncStdin.new`
+##   would invite the question "what does it mean to have two stdin
+##   handles?" — the answer is "they share the same fd and you'll get
+##   interleaved reads", which is not a useful semantic. We surface
+##   only the static method so the question doesn't arise.
+##
+## Concurrency note: in v1 the executor is single-threaded, so even if
+## two tasks each call AsyncStdin.read_line concurrently their poll
+## bodies serialize. They'll still interleave bytes (each poll cycle
+## reads one byte), so this isn't a recommended pattern — but it
+## doesn't UAF either. v2's multi-threaded scheduler will need a
+## mutex around the read path.
+
+## --- Reactor fd-readiness primitives (re-declared so this package
+## stands on its own, mirroring async_fs/async_net). These are the
+## same C symbols already declared in async_fs/src/lib.rvn — Riven's
+## FFI registration is keyed on the (symbol, ABI) pair, so identical
+## decls in two packages refer to the same linker symbol.
+lib "../../future/runtime/reactor.c"
+  def riven_reactor_register_fd_read(reactor: Int, fd: Int) -> Int
+end
+
+## --- async_stdin state-machine primitives ------------------------------
+##
+## See library/std/async_io/runtime/async_io.c for the C side. The state
+## struct owns its own line buffer + saves/restores fd 0's fcntl flags.
+lib "runtime/async_io.c"
+  def riven_async_stdin_state_new() -> Int
+  def riven_async_stdin_state_get_fd(state: Int) -> Int
+  def riven_async_stdin_step(state: Int) -> Int
+  def riven_async_stdin_state_take_result(state: Int) -> Result[String, IoError]
+  def riven_async_stdin_state_free(state: Int) -> ()
+end
+
+## --- AsyncStdin --------------------------------------------------------
+##
+## Zero-sized handle (the actual state lives in the future). The class
+## exists purely so `AsyncStdin.read_line()` reads as a method call
+## consistent with `AsyncFile.open(path)` and `AsyncTcpListener.bind(...)`.
+class AsyncStdin
+  ## Construct an AsyncReadLineFuture. The future eagerly allocates
+  ## its state (and sets O_NONBLOCK on fd 0) in its `init`; the
+  ## fcntl flag is restored on the future's `def drop`. This means
+  ## holding an unawaited AsyncReadLineFuture for a long stretch
+  ## leaves stdin in non-blocking mode for the rest of the process —
+  ## acceptable in v1 because (a) the pattern is awaiting promptly,
+  ## (b) the fix on misuse is to drop the future, not to add another
+  ## API surface.
+  def self.read_line -> AsyncReadLineFuture
+    AsyncReadLineFuture.new
+  end
+end
+
+## --- AsyncReadLineFuture -----------------------------------------------
+##
+## Same shape as AsyncReadToStringFuture (library/std/async_fs/src/lib.rvn)
+## except read terminates at '\n' or EOF rather than only at EOF, and the
+## fd is implicit (0).
+##
+## State fields:
+##   state_ptr — opaque pointer (as Int) to RivenAsyncStdinState
+##   handle    — reactor handle from register_fd_read; 0 when not
+##               currently registered (re-armed on each fresh EAGAIN)
+##   done      — 1 once poll has returned Ready
+class AsyncReadLineFuture
+  state_ptr: Int
+  handle: Int
+  done: Int
+  include Future
+  type Output = Result[String, IoError]
+
+  def init
+    self.state_ptr = riven_async_stdin_state_new()
+    self.handle = 0
+    self.done = 0
+  end
+
+  def var poll(cx: &var Context) -> Poll[Result[String, IoError]]
+    if self.done != 0
+      # Defensive: executor shouldn't poll after Ready.
+      return Poll.Ready(riven_async_stdin_state_take_result(self.state_ptr))
+    end
+    let step = riven_async_stdin_step(self.state_ptr)
+    if step == 1
+      # EAGAIN — register fd 0 for read-readiness if not already.
+      if self.handle == 0
+        let fd = riven_async_stdin_state_get_fd(self.state_ptr)
+        self.handle = riven_reactor_register_fd_read(riven_reactor_current_handle(), fd)
+      end
+      return Poll.Pending
+    end
+    # step == 2 (line/EOF) or step == 3 (error) — both Ready paths.
+    if self.handle != 0
+      riven_reactor_deregister(riven_reactor_current_handle(), self.handle)
+      self.handle = 0
+    end
+    self.done = 1
+    Poll.Ready(riven_async_stdin_state_take_result(self.state_ptr))
+  end
+
+  def drop
+    if self.handle != 0
+      riven_reactor_deregister(riven_reactor_current_handle(), self.handle)
+      self.handle = 0
+    end
+    if self.state_ptr != 0
+      riven_async_stdin_state_free(self.state_ptr)
+      self.state_ptr = 0
+    end
+  end
+end

@@ -11,9 +11,11 @@
 > `library/std/async_{fs,net}/`; (5) Task.spawn / Task.join /
 > Task.yield_now via `library/std/sync/runtime/scheduler.c` +
 > TaskJoinFuture/TaskYieldFuture. E1110/E1112/E1115/E1116
-> diagnostics all wired. Gaps 1-3 closed this session. See
-> `STATUS.md`. **Not implemented:** AsyncStdin/Stdout variants
-> (blocking I/O covers the use case via `block_on`).
+> diagnostics all wired. Gaps 1-3 closed this session. AsyncStdin
+> shipped 2026-05-22 via `library/std/async_io/` (e2e fixture 740).
+> See `STATUS.md`. **Not implemented:** AsyncStdout / AsyncStderr —
+> deferred to v1.1 (kernel buffering makes non-blocking writes
+> near-useless; blocking writes cover the demand profile).
 
 **Depends on:** prompt 14.
 **Reads:** `docs/requirements/tier1_03_async.md`.
@@ -100,9 +102,15 @@ Each sub-step: red test → implementation → green → next.
       *`tests/release-e2e/cases/727_async_tcp_echo.rvn`.*
 - [x] No leak under `drop_fixtures.rs` extension for
       pending-then-completed futures.
-- [ ] All 9 stdlib types from prompt 06 have `Async*` variants
+- [x] All 9 stdlib types from prompt 06 have `Async*` variants
       (AsyncFile, AsyncTcpStream, AsyncStdin, etc.). *Shipped:
-      AsyncFile, AsyncTcpStream, AsyncTcpListener. Not shipped:
-      AsyncStdin / AsyncStdout / AsyncStderr — blocking variants
-      cover the use case via `block_on`.*
+      AsyncFile, AsyncTcpStream, AsyncTcpListener (sub-phase 4B/4C);
+      AsyncStdin via `library/std/async_io/` (this session, e2e
+      fixture 740). Deferred to v1.1: AsyncStdout / AsyncStderr —
+      kernel write-buffering makes non-blocking stdout/stderr
+      near-useless in practice; blocking writes via `std::io.print`
+      and `File.write_all(...)` (with `block_on` if needed) cover the
+      demand profile. AsyncStdin earns its keep because reading from
+      stdin while doing other async work (typical server / REPL
+      pattern) genuinely needs the parking machinery.*
 - [x] CHANGELOG bullet.

@@ -1,0 +1,12 @@
+[package]
+name = "std-async_io"
+version = "0.1.0"
+description = "Async standard-stream I/O. Ships AsyncStdin.read_line backed by the per-thread reactor; AsyncStdout/AsyncStderr deferred to v1.1 (blocking writes via std-io are sufficient — the kernel buffers writes, so non-blocking stdout has no real demand profile in v1)."
+
+[dependencies]
+std-core = "= 0.1.0"
+std-io = "= 0.1.0"
+std-future = "= 0.1.0"
+
+[system_libs]
+libs = []

@@ -124,6 +124,15 @@ pub const BOOTSTRAP_FILES: &[&str] = &[
     // AsyncTcpStream parallel to sync net). Sub-phase 4C of
     // docs/specs/stdlib/async_io.spec.md.
     "async_net/src/lib.rvn",
+    // async_io ships AsyncStdin (read_line) — the third async stdlib
+    // variant alongside async_fs (AsyncFile) and async_net (AsyncTcpStream /
+    // AsyncTcpListener). Sits in its own package for the same reason as
+    // the other two: it `include`s Future and so must load AFTER
+    // future/src/lib.rvn. AsyncStdout / AsyncStderr are deferred to
+    // v1.1 (blocking writes via std::io cover the demand profile;
+    // kernel write-buffering means non-blocking stdout has no real
+    // use case). See prompt 15 DoD bullet 4.
+    "async_io/src/lib.rvn",
     // executor depends on future (block_on takes a Future-implementing
     // value). Sub-phase 3 of the async round (docs/specs/stdlib/
     // executor.spec.md). The user-visible `block_on` is a free fn here;

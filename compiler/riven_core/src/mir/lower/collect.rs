@@ -243,6 +243,25 @@ impl<'a> Lowerer<'a> {
                     }
                 }
             }
+            // Lib-decl methods (e.g. `lib "..." def drop as
+            // "riven_mutex_guard_drop"(self) end`) are registered as
+            // `DefKind::Method { parent: class.def_id, .. }` in the
+            // symbol table but are NOT necessarily mirrored into
+            // `info.methods` (the resolver's body-method list).
+            // Without this scan, MutexGuard / Sender / Receiver /
+            // every other class whose drop is declared via a lib
+            // block silently skipped the user-drop pathway and the
+            // pthread mutex (or refcount, or fd) leaked or
+            // deadlocked at scope exit. Sweep the symbol table for
+            // any `DefKind::Method` whose parent matches and whose
+            // name is "drop".
+            for def in symbols.iter() {
+                if let DefKind::Method { parent, .. } = &def.kind {
+                    if *parent == class.def_id && def.name == "drop" {
+                        return true;
+                    }
+                }
+            }
             false
         };
 
