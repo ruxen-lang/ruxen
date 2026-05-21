@@ -1,0 +1,11 @@
+## Signature help fixture — cursor is on a let binding outside any
+## call's argument list. signature_help must return None rather than
+## guess at a containing function definition.
+
+def helper(x: Int) -> Int
+  x + 1
+end
+
+def main
+  let cursor_outside_anchor = 42
+end
