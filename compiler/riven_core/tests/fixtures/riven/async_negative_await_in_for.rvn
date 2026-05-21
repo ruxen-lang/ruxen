@@ -1,0 +1,23 @@
+## Spec docs/errors/E1115.md: `.await` inside a `for ... in ...`
+## loop body is the same v2-deferred shape as `loop { ...await }`.
+## The iterable is evaluated once outside the loop, so a `.await`
+## in the iterable expression is fine — only the body's `.await`
+## is rejected.
+
+async def fetch() -> Int
+  42
+end
+
+async def handler() -> Int
+  let var sum = 0
+  for _i in 0..3
+    let v = fetch().await
+    sum = sum + v
+  end
+  sum
+end
+
+def main
+  let r = block_on(handler())
+  puts "#{r}"
+end

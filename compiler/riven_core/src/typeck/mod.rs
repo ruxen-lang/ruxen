@@ -71,6 +71,13 @@ pub fn type_check(program: &ast::Program) -> TypeCheckResult {
     // call would live inside the (non-async) generated `poll`
     // method, making the check unreachable.
     let e1116_diags = crate::async_lowering::collect_task_spawn_outside_async_diagnostics(&lowered);
+    // E1115 pre-check: detect `.await` inside `loop` / `while` /
+    // `for` bodies BEFORE the async-fn rewrite either lowers the
+    // body to a state machine (which would silently drop the
+    // diagnostic — the segmenter just bails) or wraps it via the
+    // no-await path (which leaves the `.await` inside a sync
+    // `poll` body, producing a misleading E1110 at resolve time).
+    let e1115_diags = crate::async_lowering::collect_await_in_loop_diagnostics(&lowered);
     // Pass bootstrap programs through so the .await desugar's
     // awaitee classifier can see stdlib Future classes (e.g.
     // `TimeSleepFuture`, `TaskJoinFuture`). Without this,
@@ -85,6 +92,7 @@ pub fn type_check(program: &ast::Program) -> TypeCheckResult {
     result.diagnostics.extend(bootstrap_diagnostics);
     result.diagnostics.extend(e1112_diags);
     result.diagnostics.extend(e1116_diags);
+    result.diagnostics.extend(e1115_diags);
     result
 }
 
@@ -159,6 +167,8 @@ pub fn type_check_with_bootstrap(
     // E1116 pre-check — see `type_check`'s mirror.
     let e1116_diags =
         crate::async_lowering::collect_task_spawn_outside_async_diagnostics(&lowered_user);
+    // E1115 pre-check — see `type_check`'s mirror.
+    let e1115_diags = crate::async_lowering::collect_await_in_loop_diagnostics(&lowered_user);
     // Mirror of the bootstrap-aware lowering in `type_check`. See
     // commentary there.
     let bootstrap_refs: Vec<&ast::Program> = bootstrap_programs.iter().collect();
@@ -175,6 +185,7 @@ pub fn type_check_with_bootstrap(
     } = resolver.resolve_with_bootstrap(&lowered_user, bootstrap_programs);
     diagnostics.extend(e1112_diags);
     diagnostics.extend(e1116_diags);
+    diagnostics.extend(e1115_diags);
 
     // Phase 2: Validate derive usage and collect all trait impls
     diagnostics.extend(crate::implicit_includes::validate_program(

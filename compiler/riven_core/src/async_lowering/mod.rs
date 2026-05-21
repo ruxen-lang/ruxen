@@ -2069,7 +2069,274 @@ fn expr_contains_await(expr: &Expr) -> bool {
             // opaque for the await-scan.
             ClosureBody::Expr(_) | ClosureBody::Block(_) => false,
         },
+        // Loop bodies count: an `.await` inside `loop { ... }`,
+        // `while cond { ... }`, `while let pat = expr { ... }`, or
+        // `for pat in iter { ... }` is still an await in this fn
+        // and must trigger the await-aware lowering path. The
+        // segmenter will bail on the actual loop shape (v1 doesn't
+        // build per-iteration state machines), but the dedicated
+        // E1115 pre-pass below surfaces a clean diagnostic — without
+        // this branch, the scan would skip the loop body and the
+        // function would fall into `lower_one_async_fn` (no-await
+        // path) instead, which wraps the body in a single-state
+        // Poll.Ready and leaves the `.await` inside it — producing
+        // a misleading E1110 ("`.await` only valid inside async
+        // def") downstream rather than the correct E1115.
+        ExprKind::Loop(LoopExpr { body, .. }) => block_contains_await(body),
+        ExprKind::While(WhileExpr { condition, body, .. }) => {
+            expr_contains_await(condition) || block_contains_await(body)
+        }
+        ExprKind::WhileLet(WhileLetExpr { value, body, .. }) => {
+            expr_contains_await(value) || block_contains_await(body)
+        }
+        ExprKind::For(ForExpr { iterable, body, .. }) => {
+            expr_contains_await(iterable) || block_contains_await(body)
+        }
         _ => false,
+    }
+}
+
+/// Pre-pass E1115 (`.await` inside a loop body): walks every async
+/// fn / async closure body and emits a diagnostic at each `.await`
+/// site whose enclosing context is a `loop` / `while` / `while let` /
+/// `for` body. v1 lowering doesn't build per-iteration state
+/// machines (loop suspension requires re-constructing the awaitee
+/// future on each iteration and re-entering the right state on
+/// resume), so the shape is rejected.
+///
+/// Without this pre-pass the failure mode is opaque: the segmenter
+/// bails (since a `loop` body isn't a valid `[await_let]* tail`
+/// shape), the function stays un-lowered with `is_async = true`, and
+/// the resolver eventually surfaces E1110 ("`.await` only valid
+/// inside `async def` or `async { }`") even though we ARE inside an
+/// async def — the misleading code blamed scope when the real cause
+/// was an unsupported loop shape.
+///
+/// Spec: docs/errors/E1115.md. Deferred-to-v2 listing:
+/// `docs/specs/types/async_lowering.spec.md` "Out of scope".
+pub fn collect_await_in_loop_diagnostics(
+    program: &Program,
+) -> Vec<crate::diagnostics::Diagnostic> {
+    let mut diags = Vec::new();
+    for item in &program.items {
+        collect_e1115_in_item(item, /*in_async=*/ false, /*in_loop=*/ false, &mut diags);
+    }
+    diags
+}
+
+fn collect_e1115_in_item(
+    item: &TopLevelItem,
+    in_async: bool,
+    in_loop: bool,
+    diags: &mut Vec<crate::diagnostics::Diagnostic>,
+) {
+    match item {
+        TopLevelItem::Function(func) => {
+            let scope_async = in_async || func.is_async;
+            // Crossing a fn boundary resets the loop context — a
+            // closure-free nested async fn doesn't inherit loops
+            // from its lexical surroundings (and at this point there
+            // are no nested async fn defs anyway, only methods).
+            collect_e1115_in_block(&func.body, scope_async, /*in_loop=*/ false, diags);
+        }
+        TopLevelItem::Class(class) => {
+            for m in class.methods.iter() {
+                let scope_async = in_async || m.is_async;
+                collect_e1115_in_block(&m.body, scope_async, false, diags);
+            }
+            for inner_impl in class.inner_impls.iter() {
+                for inner in inner_impl.items.iter() {
+                    if let crate::parser::ast::ImplItem::Method(m) = inner {
+                        let scope_async = in_async || m.is_async;
+                        collect_e1115_in_block(&m.body, scope_async, false, diags);
+                    }
+                }
+            }
+        }
+        TopLevelItem::Impl(impl_block) => {
+            for inner in impl_block.items.iter() {
+                if let crate::parser::ast::ImplItem::Method(m) = inner {
+                    let scope_async = in_async || m.is_async;
+                    collect_e1115_in_block(&m.body, scope_async, false, diags);
+                }
+            }
+        }
+        TopLevelItem::Module(module) => {
+            for nested in module.items.iter() {
+                collect_e1115_in_item(nested, in_async, in_loop, diags);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_e1115_in_block(
+    block: &Block,
+    in_async: bool,
+    in_loop: bool,
+    diags: &mut Vec<crate::diagnostics::Diagnostic>,
+) {
+    for stmt in &block.statements {
+        match stmt {
+            Statement::Let(let_binding) => {
+                if let Some(v) = &let_binding.value {
+                    collect_e1115_in_expr(v, in_async, in_loop, diags);
+                }
+            }
+            Statement::Expression(e) => collect_e1115_in_expr(e, in_async, in_loop, diags),
+        }
+    }
+}
+
+fn collect_e1115_in_expr(
+    expr: &Expr,
+    in_async: bool,
+    in_loop: bool,
+    diags: &mut Vec<crate::diagnostics::Diagnostic>,
+) {
+    if let ExprKind::Await(_) = &expr.kind {
+        if in_async && in_loop {
+            diags.push(crate::diagnostics::Diagnostic::error_with_code(
+                "`.await` inside a `loop` / `while` / `for` body is not yet \
+                 supported; v1 lowering does not build per-iteration state \
+                 machines. Hand-poll the future with `match fut.poll(&var cx)` \
+                 inside the loop instead, or restructure to chained `.await`s \
+                 outside the loop.",
+                expr.span.clone(),
+                "E1115",
+            ));
+            // Continue walking — multiple awaits in the same loop
+            // each get their own diagnostic so the user sees them
+            // all in one pass.
+        }
+    }
+
+    match &expr.kind {
+        ExprKind::BinaryOp { left, right, .. } => {
+            collect_e1115_in_expr(left, in_async, in_loop, diags);
+            collect_e1115_in_expr(right, in_async, in_loop, diags);
+        }
+        ExprKind::UnaryOp { operand, .. } => {
+            collect_e1115_in_expr(operand, in_async, in_loop, diags)
+        }
+        ExprKind::Borrow(inner) | ExprKind::BorrowMut(inner) | ExprKind::Try(inner) => {
+            collect_e1115_in_expr(inner, in_async, in_loop, diags)
+        }
+        ExprKind::Await(inner) => collect_e1115_in_expr(inner, in_async, in_loop, diags),
+        ExprKind::FieldAccess { object, .. } => {
+            collect_e1115_in_expr(object, in_async, in_loop, diags)
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            collect_e1115_in_expr(object, in_async, in_loop, diags);
+            for a in args {
+                collect_e1115_in_expr(a, in_async, in_loop, diags);
+            }
+        }
+        ExprKind::Call { callee, args, .. } | ExprKind::ClosureCall { callee, args } => {
+            collect_e1115_in_expr(callee, in_async, in_loop, diags);
+            for a in args {
+                collect_e1115_in_expr(a, in_async, in_loop, diags);
+            }
+        }
+        ExprKind::Assign { target, value } | ExprKind::CompoundAssign { target, value, .. } => {
+            collect_e1115_in_expr(target, in_async, in_loop, diags);
+            collect_e1115_in_expr(value, in_async, in_loop, diags);
+        }
+        ExprKind::If(IfExpr {
+            condition,
+            then_body,
+            elsif_clauses,
+            else_body,
+            ..
+        }) => {
+            collect_e1115_in_expr(condition, in_async, in_loop, diags);
+            collect_e1115_in_block(then_body, in_async, in_loop, diags);
+            for el in elsif_clauses {
+                collect_e1115_in_expr(&el.condition, in_async, in_loop, diags);
+                collect_e1115_in_block(&el.body, in_async, in_loop, diags);
+            }
+            if let Some(b) = else_body {
+                collect_e1115_in_block(b, in_async, in_loop, diags);
+            }
+        }
+        ExprKind::Match(MatchExpr { subject, arms, .. }) => {
+            collect_e1115_in_expr(subject, in_async, in_loop, diags);
+            for a in arms {
+                if let Some(g) = &a.guard {
+                    collect_e1115_in_expr(g, in_async, in_loop, diags);
+                }
+                match &a.body {
+                    MatchArmBody::Expr(e) => collect_e1115_in_expr(e, in_async, in_loop, diags),
+                    MatchArmBody::Block(b) => collect_e1115_in_block(b, in_async, in_loop, diags),
+                }
+            }
+        }
+        ExprKind::Block(b) => collect_e1115_in_block(b, in_async, in_loop, diags),
+        ExprKind::Loop(LoopExpr { body, .. }) => {
+            // Entering a loop body sets in_loop=true for everything
+            // nested inside (including nested if/match/etc.).
+            collect_e1115_in_block(body, in_async, /*in_loop=*/ true, diags);
+        }
+        ExprKind::While(WhileExpr {
+            condition, body, ..
+        }) => {
+            // The condition runs once per iteration but isn't itself
+            // a loop body — an `.await` in the condition would still
+            // be a per-iteration suspend point, so still in_loop.
+            collect_e1115_in_expr(condition, in_async, /*in_loop=*/ true, diags);
+            collect_e1115_in_block(body, in_async, true, diags);
+        }
+        ExprKind::WhileLet(WhileLetExpr { value, body, .. }) => {
+            collect_e1115_in_expr(value, in_async, /*in_loop=*/ true, diags);
+            collect_e1115_in_block(body, in_async, true, diags);
+        }
+        ExprKind::For(ForExpr { iterable, body, .. }) => {
+            // The iterable is evaluated once OUTSIDE the loop, so
+            // `.await` in iterable is NOT in_loop — it's a normal
+            // pre-loop suspend that the segmenter can handle.
+            collect_e1115_in_expr(iterable, in_async, in_loop, diags);
+            collect_e1115_in_block(body, in_async, /*in_loop=*/ true, diags);
+        }
+        ExprKind::Return(Some(inner)) | ExprKind::Break(Some(inner)) => {
+            collect_e1115_in_expr(inner, in_async, in_loop, diags)
+        }
+        ExprKind::ArrayLiteral(items) | ExprKind::TupleLiteral(items) => {
+            for e in items {
+                collect_e1115_in_expr(e, in_async, in_loop, diags);
+            }
+        }
+        ExprKind::ArrayFill { value, count } => {
+            collect_e1115_in_expr(value, in_async, in_loop, diags);
+            collect_e1115_in_expr(count, in_async, in_loop, diags);
+        }
+        ExprKind::MapLiteral(pairs) => {
+            for (k, v) in pairs {
+                collect_e1115_in_expr(k, in_async, in_loop, diags);
+                collect_e1115_in_expr(v, in_async, in_loop, diags);
+            }
+        }
+        ExprKind::Index { object, index } => {
+            collect_e1115_in_expr(object, in_async, in_loop, diags);
+            collect_e1115_in_expr(index, in_async, in_loop, diags);
+        }
+        ExprKind::Range { start, end, .. } => {
+            if let Some(s) = start {
+                collect_e1115_in_expr(s, in_async, in_loop, diags);
+            }
+            if let Some(e) = end {
+                collect_e1115_in_expr(e, in_async, in_loop, diags);
+            }
+        }
+        ExprKind::Cast { expr: inner, .. } => {
+            collect_e1115_in_expr(inner, in_async, in_loop, diags)
+        }
+        ExprKind::Closure(_) => {
+            // A nested closure has its own loop / async scope. Don't
+            // propagate the outer `in_loop` / `in_async` flags into
+            // it — its `.await`s are scoped to the closure body and
+            // handled as part of the lowering for THAT body.
+        }
+        _ => {}
     }
 }
 

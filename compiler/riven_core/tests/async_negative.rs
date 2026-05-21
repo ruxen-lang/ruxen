@@ -140,3 +140,68 @@ fn block_on_inside_async_rejected_e1112() {
             .collect::<Vec<_>>()
     );
 }
+
+// ─── E1115 — `.await` inside loop/while/for body rejected ───────────
+
+/// `.await` inside a `loop { ... }` body is rejected with E1115.
+/// Before the dedicated pre-pass, this shape produced a misleading
+/// E1110 ("`.await` only valid inside async def") even though the
+/// enclosing function WAS async — because the segmenter bailed,
+/// `lower_one_async_fn` (no-await path) wrapped the body, and the
+/// `.await` ended up inside a sync `poll` method. The pre-pass
+/// surfaces the correct E1115 ahead of the rewrite.
+#[test]
+fn await_in_loop_body_rejected_e1115() {
+    let source = rvn("async_negative_await_in_loop");
+    let errors = typeck_errors(&source);
+    assert!(
+        errors.iter().any(|d| d.code.as_deref() == Some("E1115")),
+        "expected E1115 for `.await` inside `loop` body, got: {:?}",
+        errors
+            .iter()
+            .map(|d| (d.code.clone(), d.message.clone()))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !errors.iter().any(|d| d.code.as_deref() == Some("E1110")),
+        "must NOT also emit E1110 (would have been the old misleading code), got: {:?}",
+        errors
+            .iter()
+            .map(|d| (d.code.clone(), d.message.clone()))
+            .collect::<Vec<_>>()
+    );
+}
+
+/// `.await` inside a `while cond { ... }` body — same v2 deferral.
+#[test]
+fn await_in_while_body_rejected_e1115() {
+    let source = rvn("async_negative_await_in_while");
+    let errors = typeck_errors(&source);
+    assert!(
+        errors.iter().any(|d| d.code.as_deref() == Some("E1115")),
+        "expected E1115 for `.await` inside `while` body, got: {:?}",
+        errors
+            .iter()
+            .map(|d| (d.code.clone(), d.message.clone()))
+            .collect::<Vec<_>>()
+    );
+}
+
+/// `.await` inside a `for pat in iter { ... }` body — same v2 deferral.
+/// The iterable expression itself is evaluated ONCE before the loop,
+/// so a `.await` in the iterable position is fine (and lowers via
+/// the normal pre-await path); only awaits in the body suspend per
+/// iteration.
+#[test]
+fn await_in_for_body_rejected_e1115() {
+    let source = rvn("async_negative_await_in_for");
+    let errors = typeck_errors(&source);
+    assert!(
+        errors.iter().any(|d| d.code.as_deref() == Some("E1115")),
+        "expected E1115 for `.await` inside `for` body, got: {:?}",
+        errors
+            .iter()
+            .map(|d| (d.code.clone(), d.message.clone()))
+            .collect::<Vec<_>>()
+    );
+}
