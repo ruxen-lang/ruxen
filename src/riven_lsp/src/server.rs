@@ -75,6 +75,12 @@ impl LanguageServer for RivenLsp {
                 document_formatting_provider: Some(OneOf::Left(true)),
                 document_range_formatting_provider: Some(OneOf::Left(true)),
                 code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+                references_provider: Some(OneOf::Left(true)),
+                document_highlight_provider: Some(OneOf::Left(true)),
+                rename_provider: Some(OneOf::Right(RenameOptions {
+                    prepare_provider: Some(true),
+                    work_done_progress_options: Default::default(),
+                })),
                 semantic_tokens_provider: Some(
                     SemanticTokensServerCapabilities::SemanticTokensOptions(
                         SemanticTokensOptions {
@@ -402,6 +408,66 @@ impl LanguageServer for RivenLsp {
             &uri,
         );
         Ok(Some(actions))
+    }
+
+    // === wave2: agent-I references ===
+    async fn references(
+        &self,
+        params: ReferenceParams,
+    ) -> Result<Option<Vec<Location>>> {
+        let uri = params.text_document_position.text_document.uri.clone();
+        let position = params.text_document_position.position;
+        let include_decl = params.context.include_declaration;
+        let state = self.state.read().await;
+        let Some(doc) = state.documents.get(&uri) else { return Ok(None); };
+        let Some(analysis) = &doc.analysis else { return Ok(None); };
+        let mut locs = riven_ide::references::references(analysis, position, include_decl);
+        for loc in locs.iter_mut() { loc.uri = uri.clone(); }
+        Ok(Some(locs))
+    }
+
+    // === wave2: agent-J document_highlight ===
+    async fn document_highlight(
+        &self,
+        params: DocumentHighlightParams,
+    ) -> Result<Option<Vec<DocumentHighlight>>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+        let state = self.state.read().await;
+        let Some(doc) = state.documents.get(&uri) else { return Ok(None); };
+        let Some(analysis) = &doc.analysis else { return Ok(None); };
+        let highlights = riven_ide::highlight::document_highlights(analysis, position);
+        if highlights.is_empty() { return Ok(None); }
+        Ok(Some(highlights))
+    }
+
+    // === wave2: agent-K prepare_rename + rename ===
+    async fn prepare_rename(
+        &self,
+        params: TextDocumentPositionParams,
+    ) -> Result<Option<PrepareRenameResponse>> {
+        let uri = params.text_document.uri;
+        let position = params.position;
+        let state = self.state.read().await;
+        let Some(doc) = state.documents.get(&uri) else { return Ok(None); };
+        let Some(analysis) = &doc.analysis else { return Ok(None); };
+        let Some(range) = riven_ide::rename::prepare_rename(analysis, position) else {
+            return Ok(None);
+        };
+        Ok(Some(PrepareRenameResponse::Range(range)))
+    }
+
+    async fn rename(
+        &self,
+        params: RenameParams,
+    ) -> Result<Option<WorkspaceEdit>> {
+        let uri = params.text_document_position.text_document.uri.clone();
+        let position = params.text_document_position.position;
+        let new_name = params.new_name;
+        let state = self.state.read().await;
+        let Some(doc) = state.documents.get(&uri) else { return Ok(None); };
+        let Some(analysis) = &doc.analysis else { return Ok(None); };
+        Ok(riven_ide::rename::rename(analysis, &uri, position, &new_name))
     }
 
     async fn semantic_tokens_full(
