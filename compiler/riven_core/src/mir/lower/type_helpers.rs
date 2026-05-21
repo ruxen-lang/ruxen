@@ -290,6 +290,42 @@ impl<'a> Lowerer<'a> {
     /// **not** applied to struct fields, tuple slots, Option/Result
     /// payloads, range fields, or any built-in 2-slot shape — those
     /// do NOT carry a class_info header.
+    /// Recover the owning class name from a mangled MIR fn name like
+    /// `ClassName_methodName`. Mangling is one-way (`format!("{C}_{m}")`),
+    /// and both halves can carry underscores — class names like
+    /// `__HandlerFuture` (synth async state-machine), method names like
+    /// `do_something` (snake_case). So neither `split('_').next()` nor
+    /// `rsplit_once('_')` is correct in general.
+    ///
+    /// Strategy: walk underscore positions right-to-left and return the
+    /// longest prefix that matches a class/struct/enum in the symbol
+    /// table. For `__HandlerFuture_init` this yields `__HandlerFuture`;
+    /// for `Foo_do_something` it yields `Foo`.
+    ///
+    /// Returns `None` for top-level functions (no underscore, or no
+    /// matching type), letting callers fall back to a non-class-method
+    /// shape (e.g. `Ty::Unit` self placeholder, empty shift).
+    pub(super) fn class_name_from_mangled<'b>(&self, mangled: &'b str) -> Option<&'b str> {
+        use crate::resolve::symbols::DefKind;
+        let mut end = mangled.len();
+        while let Some(pos) = mangled[..end].rfind('_') {
+            let candidate = &mangled[..pos];
+            if !candidate.is_empty()
+                && self.symbols.iter().any(|d| {
+                    d.name == candidate
+                        && matches!(
+                            &d.kind,
+                            DefKind::Class { .. } | DefKind::Struct { .. } | DefKind::Enum { .. }
+                        )
+                })
+            {
+                return Some(candidate);
+            }
+            end = pos;
+        }
+        None
+    }
+
     pub(super) fn class_field_index_shift(&self, class_name: &str) -> usize {
         use crate::resolve::symbols::DefKind;
         for def in self.symbols.iter() {

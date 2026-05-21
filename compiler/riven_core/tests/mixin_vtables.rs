@@ -525,6 +525,89 @@ fn static_mixin_class_field_index_unshifted() {
     }
 }
 
+/// Phase B-4 follow-up: synthesised async state-machine classes
+/// (`__<FnName>Future`) `include Future` which is `dispatch runtime`,
+/// so the same +1 header shift must apply to their auto-assigned
+/// init params. The MIR-side bug fixed alongside this test was that
+/// `name.split('_').next()` (the old strategy for recovering the
+/// owning class name from `__HandlerFuture_init`) returned `""` for
+/// any `__`-prefixed name, leaving the auto-assigns at slot 0/1 even
+/// when the class layout reserved slot 0 for class_info_ptr. Result:
+/// state-machine init clobbered the header AND wrote outer args one
+/// slot too low, while body field reads correctly used slot 1/2+ —
+/// so any pre-await `self.<arg>` read in the init body returned the
+/// wrong value (or a zero-init garbage cell), and any dynamic
+/// dispatch on the future via the Future mixin chased a NULL
+/// class_info_ptr.
+#[test]
+fn async_state_machine_init_auto_assigns_use_header_shift() {
+    let mir = lower_fixture("segmenter_awaitee_pre_await_local");
+
+    let init_fn = mir
+        .functions
+        .iter()
+        .find(|f| f.name == "__HandlerFuture_init")
+        .expect("__HandlerFuture_init MIR fn must exist");
+
+    // Collect SetField slots for the AUTO-ASSIGN prologue only. The
+    // init body also emits SetFields (for `self.__sub_0` and the
+    // award-binding default), so we restrict to the leading run that
+    // assigns from a param-source `Use(_)` value. Since the auto-
+    // assign block is emitted FIRST in `lower_method`, the auto-
+    // assign SetFields appear at the top of the entry block in order.
+    let entry = init_fn
+        .blocks
+        .first()
+        .expect("__HandlerFuture_init must have an entry block");
+    let mut auto_assign_slots: Vec<usize> = Vec::new();
+    for inst in &entry.instructions {
+        match inst {
+            riven_core::mir::nodes::MirInst::SetField { field_index, .. } => {
+                auto_assign_slots.push(*field_index);
+                // Stop once we leave the leading SetField prologue (a
+                // GetField or non-SetField follows the auto-assigns).
+                if auto_assign_slots.len() >= 2 {
+                    break;
+                }
+            }
+            _ => break,
+        }
+    }
+
+    // Two outer params (@__state, @req) → declared idx 0, 1 →
+    // post-shift slot 1, 2. Slot 0 stays the class_info_ptr header
+    // written at the caller's `Alloc + DataAddr + SetField{0}` site.
+    assert_eq!(
+        auto_assign_slots,
+        vec![1, 2],
+        "__HandlerFuture_init auto-assigns must land at slot 1 (state) and \
+         slot 2 (req) after class_info_ptr header shift, not at slot 0/1 \
+         (which would clobber the header). Got: {:?}",
+        auto_assign_slots
+    );
+
+    // And: the init body's `let parsed = self.req * 2` reads
+    // `self.req` from slot 2 (declared idx 1 + shift 1). The earlier
+    // bug left auto-assigns unshifted while body reads stayed
+    // shifted, so `self.req` returned the zero-init slot 2 value
+    // instead of the @req param value.
+    let req_reads: Vec<usize> = init_fn
+        .blocks
+        .iter()
+        .flat_map(|b| b.instructions.iter())
+        .filter_map(|i| match i {
+            riven_core::mir::nodes::MirInst::GetField { field_index, .. } => Some(*field_index),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        req_reads.contains(&2),
+        "__HandlerFuture_init body must GetField `self.req` at slot 2 (declared \
+         idx 1 + class_info_ptr header shift = 2), got slots: {:?}",
+        req_reads
+    );
+}
+
 // ─── Phase B-5 — class_info_ptr init-time write ────────────────────
 
 /// Phase B-5: every alloc site for a runtime-dispatch class emits a

@@ -22,15 +22,26 @@ impl<'a> Lowerer<'a> {
 
         // If this method has a self_mode, add self as the first parameter.
         if func.self_mode.is_some() {
-            // Derive the self type from the mangled method name (ClassName_method)
-            let self_ty = if let Some(class_name) = name.split('_').next() {
-                Ty::Class {
+            // Derive the self type from the mangled method name (ClassName_method).
+            //
+            // Mangling is `format!("{ClassName}_{methodName}")`. Recovering
+            // the class half is non-trivial because:
+            //   * class names like `__HandlerFuture` start with `_`, so
+            //     `split('_').next()` returns `""` (the empty prefix), and
+            //   * method names like `do_something` carry their own
+            //     underscores, so `splitn(2, '_')` would pick up `Foo` from
+            //     `Foo_do_something` correctly but fail symmetrically on
+            //     `__HandlerFuture_init`.
+            // Resolve by walking underscore positions right-to-left and
+            // accepting the longest prefix that actually names a class
+            // (or struct/enum, for methods on those) in the symbol table.
+            let self_ty = self
+                .class_name_from_mangled(name)
+                .map(|class_name| Ty::Class {
                     name: class_name.to_string(),
                     generic_args: vec![],
-                }
-            } else {
-                Ty::Unit
-            };
+                })
+                .unwrap_or(Ty::Unit);
             let local = self.fn_mut().new_local("self", self_ty, true);
             self.fn_mut().params.push(local);
             // Register all SelfValue DefIds in the symbol table so self.field works
@@ -60,8 +71,13 @@ impl<'a> Lowerer<'a> {
         if func.name == "init" && func.self_mode.is_some() {
             // Find the self local (should be local 0 if self_mode is set)
             let self_local = self.def_to_local.values().copied().min().unwrap_or(0);
-            // Get class field names from the class name (derived from mangled method name)
-            let class_name = name.split('_').next().unwrap_or("");
+            // Recover the owning class name from the mangled method name
+            // (see the symmetric note above on why `split('_').next()`
+            // doesn't work for `__`-prefixed synth classes — that bug
+            // caused auto-assigns on async state-machine classes to write
+            // to slot 0/1 instead of slot 1/2, clobbering the
+            // class_info_ptr header at slot 0).
+            let class_name = self.class_name_from_mangled(name).unwrap_or("");
             let class_fields = self.get_class_field_names(class_name);
             // Phase B-4: shift past class_info_ptr header for
             // runtime-dispatch classes — declared field idx 0 maps
