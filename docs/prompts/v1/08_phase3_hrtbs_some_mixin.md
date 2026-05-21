@@ -1,5 +1,12 @@
 # 08 — Phase 3: HRTBs (T2.03) + `some Mixin` (T2.04, no specialization)
 
+> **Status: 🟡 Partial / deferred** (audited 2026-05-21). `some Mixin`
+> token + parser + typeck path present (`SomeBound` lexer token,
+> `parser/types.rs:47`, `Ty::SomeMixin(bounds)`). Used in
+> `async def foo() -> some Future[Output=T]` lowering paths.
+> Full HRTB semantics (`for<'a>` quantified bounds) NOT shipped —
+> deferred to v1.5/v2 per the original prompt header below.
+
 > **DEFERRED 2026-05-17 → v1.5 or v2**
 >
 > Per `docs/STRATEGY.md`, higher-ranked trait bounds are a pure

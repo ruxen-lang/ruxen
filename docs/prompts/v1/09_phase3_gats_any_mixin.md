@@ -1,5 +1,15 @@
 # 09 — Phase 3: GATs (T2.05) + `any Mixin` (T2.06)
 
+> **Status: 🟡 Partial / deferred** (audited 2026-05-21). `any Mixin`
+> shipped: `Ty::AnyMixin(bounds)`, `&Mixin` / `&var Mixin` reference
+> shapes, mixin vtables Phase A (parser `dispatch runtime` modifier
+> + typeck E1117/E1118), Phase B (per-implementor vtable + class_info_ptr
+> header — including this session's off-by-one fix), Phase C
+> (dispatch helper synthesis). Used end-to-end in async lowering
+> for heterogeneous Future types. **GATs themselves** (generic
+> associated types in mixin/trait definitions) NOT shipped —
+> deferred to v1.5/v2 per the original prompt header below.
+
 > **DEFERRED 2026-05-17 → v1.5 or v2**
 >
 > Per `docs/STRATEGY.md`, generic associated types are powerful but
@@ -82,7 +92,7 @@ end
 ## Definition of done
 
 - [ ] GATs parse, typecheck, monomorphize.
-- [ ] `any Mixin` works with `Box`, `&`, `&mut`.
+- [ ] `any Mixin` works with `Box`, `&`, `&var`.
 - [ ] Object-safety errors trigger E0707 with the `E-ANY-*`
       message family.
 - [ ] Array of `any Mixin` objects iterates correctly.

@@ -1,5 +1,11 @@
 # 11 — Phase 3: incremental compilation (T3.06)
 
+> **Status: 🟡 Partial** (audited 2026-05-21). rivenc has working
+> incremental cache: `[cache]` log lines visible, files written to
+> `~/.cache/riven/incremental/`, `--force` bypass flag, `rivenc
+> clean` subcommand. Formal query-layer / salsa-style invalidation
+> design not landed; current cache is content-hash-based per-file.
+
 **Depends on:** prompt 10 (LSP needs the query layer to scale).
 **Reads:** `docs/requirements/tier3_06_incremental_compile.md`.
 

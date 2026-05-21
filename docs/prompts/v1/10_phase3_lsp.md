@@ -1,8 +1,13 @@
 # 10 — Phase 3: LSP server (T3.01) — basic completion + diagnostics
 
+> **Status: 🟡 Partial** (audited 2026-05-21). LSP server in
+> `src/riven_lsp/{src,tests}/` — diagnostics + integration tests
+> shipped. Full coverage of hover, goto-def, completions,
+> code-actions needs audit against `tier3_01_lsp.md`.
+
 **Depends on:** Phase 2 stdlib stable.
 **Reads:** `docs/requirements/tier3_01_lsp.md`,
-`crates/riven-lsp/` (currently empty shell).
+`src/riven_lsp/` (no longer the empty shell — server + tests in tree).
 
 ## Phase 1 scope (this prompt)
 

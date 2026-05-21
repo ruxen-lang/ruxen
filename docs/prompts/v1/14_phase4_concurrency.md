@@ -1,5 +1,16 @@
 # 14 — Phase 4: concurrency (T1.02)
 
+> **Status: ✅ Shipped** (audited 2026-05-21). Thread, JoinHandle,
+> Mutex, MutexGuard, SharedSync (canonical Arc replacement),
+> AtomicI64/Bool/Usize, Sender/Receiver (mpsc channel),
+> PoisonError, ThreadPanic — all in `library/std/sync/`. Send/Sync
+> auto-derive + opt-out + unsafe opt-in shipped (`auto_derive_send_sync`,
+> `concurrency_markers` pin tests). pthread_mutex_t / pthread_create
+> wiring in `sync/runtime/{thread,mutex,channel,atomic,sharedsync}.c`.
+> See `STATUS.md`. **Not done:** RwLock, Once / OnceLock (these
+> were listed but never shipped in v1 — usable via Mutex +
+> SharedSync for now).
+
 **Depends on:** Phase 3 done.
 **Reads:** `docs/requirements/tier1_02_concurrency.md`.
 
@@ -66,8 +77,12 @@ For each primitive:
 
 ## Definition of done
 
-- [ ] Every primitive has unit + stress + negative tests.
-- [ ] Bench: 100k Mutex acquisitions/release < 100ms.
-- [ ] Drop semantics correct: leaks proven absent under
+- [x] Every primitive has unit + stress + negative tests. *Coverage
+      in `task_scheduler.rs`, `concurrency_markers.rs`,
+      `concurrency_negative.rs`, `sync_extras_typeck.rs`,
+      `auto_derive_send_sync.rs`, plus `stdlib_*` tests.*
+- [ ] Bench: 100k Mutex acquisitions/release < 100ms. *No bench
+      framework yet (prompt 13).*
+- [x] Drop semantics correct: leaks proven absent under
       `drop_fixtures.rs` extensions for Mutex / SharedSync / Channel.
-- [ ] CHANGELOG bullet.
+- [x] CHANGELOG bullet.

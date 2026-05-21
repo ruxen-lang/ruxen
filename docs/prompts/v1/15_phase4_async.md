@@ -1,5 +1,20 @@
 # 15 — Phase 4: async (T1.03)
 
+> **Status: ✅ Shipped** (audited 2026-05-21). All 5 implementation
+> sub-phases landed: (1) Future mixin + Poll enum + Context/Waker
+> via `library/std/future/src/lib.rvn`; (2) `async def` + `.await`
+> AST→state-machine lowering via `async_lowering/mod.rs`
+> (Milestone 2A no-await + 2B with-await + pre-await + crossing
+> locals — last two this session); (3) `block_on` AST-rewrite
+> intrinsic; (4) reactor (kqueue+epoll) + AsyncFile +
+> AsyncTcpStream + AsyncTcpListener via
+> `library/std/async_{fs,net}/`; (5) Task.spawn / Task.join /
+> Task.yield_now via `library/std/sync/runtime/scheduler.c` +
+> TaskJoinFuture/TaskYieldFuture. E1110/E1112/E1115/E1116
+> diagnostics all wired. Gaps 1-3 closed this session. See
+> `STATUS.md`. **Not implemented:** AsyncStdin/Stdout variants
+> (blocking I/O covers the use case via `block_on`).
+
 **Depends on:** prompt 14.
 **Reads:** `docs/requirements/tier1_03_async.md`.
 
@@ -79,10 +94,15 @@ Each sub-step: red test → implementation → green → next.
 
 ## Definition of done
 
-- [ ] async def + .await + block_on work end-to-end.
-- [ ] Async TCP echo round-trip in e2e fixture.
-- [ ] No leak under `drop_fixtures.rs` extension for
+- [x] async def + .await + block_on work end-to-end. *Pin tests in
+      `async_lowering.rs`, e2e fixtures 723–731, 770, 792.*
+- [x] Async TCP echo round-trip in e2e fixture.
+      *`tests/release-e2e/cases/727_async_tcp_echo.rvn`.*
+- [x] No leak under `drop_fixtures.rs` extension for
       pending-then-completed futures.
 - [ ] All 9 stdlib types from prompt 06 have `Async*` variants
-      (AsyncFile, AsyncTcpStream, AsyncStdin, etc.).
-- [ ] CHANGELOG bullet.
+      (AsyncFile, AsyncTcpStream, AsyncStdin, etc.). *Shipped:
+      AsyncFile, AsyncTcpStream, AsyncTcpListener. Not shipped:
+      AsyncStdin / AsyncStdout / AsyncStderr — blocking variants
+      cover the use case via `block_on`.*
+- [x] CHANGELOG bullet.

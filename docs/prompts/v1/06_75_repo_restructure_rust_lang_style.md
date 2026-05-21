@@ -1,5 +1,15 @@
 # 06.75 — Repo restructure to rust-lang/rust-style layout
 
+> **Status: 🟡 Mostly shipped** (audited 2026-05-21). Layout
+> restructure done: `compiler/{riven_core,riven_driver}/` +
+> `src/{rivenc,riven_lsp}/` + `library/std/<pkg>/{src,runtime}/` in
+> tree; no `crates/` directory. Per-module C lives under each
+> package's `runtime/` dir; `library/std/core/runtime/runtime.h`
+> is the cross-package header. `resolve/mod.rs` is 649 LOC (under
+> the 1200 cap). **Pending:** `typeck/infer.rs` is 2279 LOC (cap was
+> 1200) and `codegen/runtime.rs` is 739 LOC (cap was 300) — these
+> two splits never happened. See `STATUS.md`.
+
 **Depends on:** #06.5 (sync I/O completeness) must fully close — T1–T7
 all merged. Doing this mid-#06.5 generates merge conflicts on every
 in-flight File/fs/Duration/TCP/BufReader branch.
@@ -378,26 +388,29 @@ update the test).
 
 ## Definition of done
 
-- [ ] Repo tree matches the "Target layout" §, with every old crate
+- [x] Repo tree matches the "Target layout" §, with every old crate
       either renamed or merged into its destination.
-- [ ] No file remains under `crates/riven-core/`. The crate is
+- [x] No file remains under `crates/riven-core/`. The crate is
       either renamed (likely deleted, replaced by `compiler/*`) or
       its inhabitants are redistributed.
-- [ ] `runtime.c` is the unity-build aggregator under
+- [x] `runtime.c` is the unity-build aggregator under
       `library/runtime/`; every C symbol lives in a per-module
       file under `library/runtime/{core,io,net,…}/`.
-- [ ] `resolve/mod.rs` ≤ 1 200 LOC (scope/import only); stdlib
+- [x] `resolve/mod.rs` ≤ 1 200 LOC (scope/import only); stdlib
       registrations live under `compiler/riven_resolve/src/stdlib/`.
+      *Audited: 649 LOC.*
 - [ ] `typeck/infer.rs` ≤ 1 200 LOC; method resolvers live under
-      `compiler/riven_typeck/src/method_resolvers/`.
+      `compiler/riven_typeck/src/method_resolvers/`. *Audited:
+      2279 LOC — pending split.*
 - [ ] `codegen/runtime.rs` ≤ 300 LOC; runtime-name tables live
       under `compiler/riven_codegen_shared/src/runtime_table/`.
-- [ ] `cargo test --workspace` cached to
+      *Audited: 739 LOC — pending split.*
+- [x] `cargo test --workspace` cached to
       `tmp/test-cache/p06_75-final.log` is byte-for-byte identical
       in pass/fail/ignored counts to the baseline cached on Phase A.
-- [ ] `docs/STRATEGY.md` "Repo layout" section updated.
-- [ ] CHANGELOG bullet under `## [Unreleased] ### Changed`.
-- [ ] `tests/release-e2e/` still passes via `cargo test -p rivenc
+- [x] `docs/STRATEGY.md` "Repo layout" section updated.
+- [x] CHANGELOG bullet under `## [Unreleased] ### Changed`.
+- [x] `tests/release-e2e/` still passes via `cargo test -p rivenc
       --test p05_e2e_check -- --ignored` with identical PASS count.
 
 ## Why this comes before #07 (const generics)

@@ -1,5 +1,18 @@
 # 06.8 — stdlib self-hosting: migrate all stdlib classes from Rust registrations to Riven source
 
+> **Status: ✅ Shipped** (audited 2026-05-21). All stdlib classes
+> migrated to `library/std/<pkg>/src/lib.rvn`: Send, Sync, Clone,
+> Copy, Comparable, PartialEq, Eq, Hashable, Default, Ord,
+> PartialOrd, Drop, Into, Iterable, Error, Context, Waker, Thread,
+> JoinHandle, ThreadId, Mutex, MutexGuard, SharedSync, PoisonError,
+> ThreadPanic, Future, Poll, plus every concrete I/O class. Loader
+> reads `BOOTSTRAP_FILES` at startup, emits E0725 on parse/resolve
+> failure. `layout c` syntax shipped (used by Duration / ExitStatus
+> / Metadata). **Partial:** `resolve/stdlib/mod.rs` is 580 LOC
+> (target was ~400); `runtime_table/` directory deleted; pin tests
+> live in scattered places rather than `extern_c_binding.rs`. See
+> `STATUS.md`.
+
 **Depends on:** #06.5 (sync I/O completeness must land first — File /
 BufReader / TcpStream are part of the migration set, and migrating
 them mid-design would force two passes).
@@ -423,36 +436,44 @@ safety net.
 
 ## Definition of done
 
-- [ ] `extern "C-symbol" def …` parses, resolves, typechecks, and
-      codegens to a direct C call.
-- [ ] `#[repr(tagged)]` on enums pins variant order with a
-      compile-time check.
-- [ ] `#[repr(flat_heap_struct)]` on classes documents (and ideally
-      verifies at link time) the C layout.
-- [ ] Stdlib bootstrap loader reads every `library/std/src/*.rvn`
+- [x] `extern "C-symbol" def …` parses, resolves, typechecks, and
+      codegens to a direct C call. *Shipped as `lib "..." def foo
+      as "c_sym"(...)` block syntax — equivalent surface.*
+- [x] `#[repr(tagged)]` on enums pins variant order with a
+      compile-time check. *Shipped as `layout` directive on enums;
+      IoError exercises it.*
+- [x] `#[repr(flat_heap_struct)]` on classes documents (and ideally
+      verifies at link time) the C layout. *Shipped as `layout
+      flat_heap_struct` / `layout c` directives.*
+- [x] Stdlib bootstrap loader reads every `library/std/src/*.rvn`
       at compiler startup, with file:line errors on failure.
-- [ ] All stdlib modules in the "Authored in" table above flipped
+      *`run_bootstrap_with_files(BOOTSTRAP_FILES)` + E0725.*
+- [x] All stdlib modules in the "Authored in" table above flipped
       from ❌ Rust to ✅ Riven (including iter.rvn and net.rvn,
       whose existing "declarative documentation" banners are
       stripped because the files are now genuinely loaded).
 - [ ] `compiler/riven_core/src/resolve/stdlib/mod.rs` is under
       ~400 lines (only primitives, prelude wiring, compiler magic).
-- [ ] `compiler/riven_core/src/codegen/runtime_table/` is deleted.
-- [ ] All pre-existing stdlib pin tests still green (regression
+      *Audited: 580 LOC — over budget by ~180.*
+- [x] `compiler/riven_core/src/codegen/runtime_table/` is deleted.
+- [x] All pre-existing stdlib pin tests still green (regression
       gate).
-- [ ] All pre-existing release-e2e fixtures still green
+- [x] All pre-existing release-e2e fixtures still green
       (user-visible regression gate).
-- [ ] New `extern_c_binding.rs` pin tests green.
-- [ ] `cargo test --workspace` green (cache to
+- [ ] New `extern_c_binding.rs` pin tests green. *Not present;
+      coverage lives in scattered `ffi_c_symbol_wired.rs` /
+      `lib_in_class_body_wired.rs` / `ffi_alias_single_entry.rs`
+      pin tests instead.*
+- [x] `cargo test --workspace` green (cache to
       `tmp/test-cache/p06_8-final.log`).
-- [ ] CHANGELOG bullet under `## [Unreleased] ### Changed`:
+- [x] CHANGELOG bullet under `## [Unreleased] ### Changed`:
       "stdlib: migrated from Rust registrations to self-hosted
       Riven source. `extern \"C-symbol\"` syntax now binds C
       runtime symbols from `.rvn` files. `library/std/src/` is the
       authoritative source of every stdlib class."
-- [ ] `docs/STRATEGY.md` updated to reflect that the stdlib is
+- [x] `docs/STRATEGY.md` updated to reflect that the stdlib is
       self-hosted.
-- [ ] `docs/specs/stdlib/*.spec.md` "shipped in" lines updated to
+- [x] `docs/specs/stdlib/*.spec.md` "shipped in" lines updated to
       point at the `.rvn` file instead of `resolve/stdlib/mod.rs`.
 
 ## Anti-goals

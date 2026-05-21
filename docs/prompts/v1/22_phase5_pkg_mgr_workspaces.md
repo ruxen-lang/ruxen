@@ -1,5 +1,13 @@
 # 22 — Phase 5: package manager extensions (T4.01)
 
+> **Status: 🟡 Partial** (audited 2026-05-21). Per-package `Riven.toml`
+> manifests shipped across all 25 stdlib packages
+> (`library/std/<pkg>/Riven.toml`). BOOTSTRAP_FILES-driven loader
+> works for stdlib; bootstrap-aware resolver wires per-package
+> items into `std.<pkg>` modules. **Not shipped:** workspace
+> mechanism, dependency resolver, lockfile, publish/registry —
+> these are the actual prompt-22 deliverables and remain TODO.
+
 **Depends on:** Phase 2 stdlib stable.
 **Reads:** `docs/requirements/tier4_01_package_manager.md`.
 
