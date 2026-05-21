@@ -163,33 +163,10 @@ RivenDuration *riven_duration_from_nanos(int64_t ns) {
     return riven_duration_alloc(ns);
 }
 
-int64_t riven_duration_as_secs(RivenDuration *d) {
-    if (!d) {
-        riven_panic("Duration.as_secs on null receiver");
-    }
-    return d->nanos / RIVEN_NS_PER_SEC;
-}
-
-int64_t riven_duration_as_millis(RivenDuration *d) {
-    if (!d) {
-        riven_panic("Duration.as_millis on null receiver");
-    }
-    return d->nanos / RIVEN_NS_PER_MILLI;
-}
-
-int64_t riven_duration_as_micros(RivenDuration *d) {
-    if (!d) {
-        riven_panic("Duration.as_micros on null receiver");
-    }
-    return d->nanos / RIVEN_NS_PER_MICRO;
-}
-
-int64_t riven_duration_as_nanos(RivenDuration *d) {
-    if (!d) {
-        riven_panic("Duration.as_nanos on null receiver");
-    }
-    return d->nanos;
-}
+/* riven_duration_as_{secs,millis,micros,nanos} deleted in task #27 /
+ * #19: Duration is now `layout c; nanos: Int` on the Riven side, so
+ * `def as_nanos -> Int; self.nanos; end` reads the field directly.
+ * See library/std/time/src/lib.rvn. */
 
 /* Checked sum: panic on int64 overflow. Mirrors Rust's
  * `Duration::checked_add` returning None — we don't ship Option-of-

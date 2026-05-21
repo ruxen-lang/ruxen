@@ -21,22 +21,43 @@
 ## reachable from Riven user code.
 
 class Duration
+  layout c
+  nanos: Int
+
   lib "runtime/time.c"
-    # Constructors (no `self`).
+    # Constructors (no `self`). Each C function malloc's a
+    # RivenDuration { int64_t nanos } and returns the pointer.
     def self.from_secs as "riven_duration_from_secs"(secs: Int) -> Int
     def self.from_millis as "riven_duration_from_millis"(ms: Int) -> Int
     def self.from_micros as "riven_duration_from_micros"(us: Int) -> Int
     def self.from_nanos as "riven_duration_from_nanos"(ns: Int) -> Int
 
-    # Accessors.
-    def as_secs as "riven_duration_as_secs"(self) -> Int
-    def as_millis as "riven_duration_as_millis"(self) -> Int
-    def as_micros as "riven_duration_as_micros"(self) -> Int
-    def as_nanos as "riven_duration_as_nanos"(self) -> Int
-
-    # Arithmetic.
+    # Arithmetic (still C-side for boxed-result allocation).
     def add as "riven_duration_add"(self, other: Int) -> Int
     def sub as "riven_duration_sub"(self, other: Int) -> Int
+  end
+
+  # Accessors — ported to pure Riven, task #27 enabling #19.
+  # `layout c` + `nanos: Int` field declaration matches the C
+  # `RivenDuration { int64_t nanos }` wire layout, so self.nanos
+  # reads directly from the same struct riven_duration_* functions
+  # manipulate. Replaces riven_duration_as_{secs,millis,micros,nanos}
+  # in runtime/time.c.
+
+  def as_nanos -> Int
+    self.nanos
+  end
+
+  def as_micros -> Int
+    self.nanos / 1000
+  end
+
+  def as_millis -> Int
+    self.nanos / 1000000
+  end
+
+  def as_secs -> Int
+    self.nanos / 1000000000
   end
 end
 
