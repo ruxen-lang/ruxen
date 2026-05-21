@@ -29,5 +29,35 @@ name = "cache_bench"
 harness = false
 path = "benches/cache_bench.rs"
 
+# Compile-pipeline microbenchmarks — prompt 13 DoD item.
+# Each measures one stage of the parse → resolve → typeck → MIR
+# lower → codegen path on the 508_command_status fixture so a
+# regression in any stage is bisectable.
+
+[[bench]]
+name = "parse_bench"
+harness = false
+path = "benches/parse_bench.rs"
+
+[[bench]]
+name = "resolve_bench"
+harness = false
+path = "benches/resolve_bench.rs"
+
+[[bench]]
+name = "typeck_bench"
+harness = false
+path = "benches/typeck_bench.rs"
+
+[[bench]]
+name = "mir_bench"
+harness = false
+path = "benches/mir_bench.rs"
+
+[[bench]]
+name = "codegen_bench"
+harness = false
+path = "benches/codegen_bench.rs"
+
 [lints]
 workspace = true

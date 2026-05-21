@@ -143,6 +143,11 @@ pub const BOOTSTRAP_FILES: &[&str] = &[
     // in `compiler/riven_core/src/`. Anything else is an auto-connect
     // gap to fix in the bootstrap pipeline, not in this list.
     "foobar/src/lib.rvn",
+    // bench — prompt 13 microbenchmark harness. `Bencher` class
+    // with auto-scaling `iter` + Int-typed `black_box` opaque
+    // barrier (C shim). Depends on `time` (Instant.now /
+    // .elapsed.as_nanos), already loaded above.
+    "bench/src/lib.rvn",
 ];
 
 /// Derive the ordered list of package names from [`BOOTSTRAP_FILES`].

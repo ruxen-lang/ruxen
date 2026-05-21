@@ -28,6 +28,7 @@ fn main() {
     match args[1].as_str() {
         "fmt" => run_fmt(&args[2..]),
         "clean" => run_clean(&args[2..]),
+        "bench" => run_bench(&args[2..]),
         "--version" | "-V" => {
             println!("rivenc {}", env!("CARGO_PKG_VERSION"));
         }
@@ -66,6 +67,14 @@ fn print_usage() {
     eprintln!("Clean options:");
     eprintln!("  clean                   Delete target/riven/incremental/ for this project");
     eprintln!("  clean --global          Delete the global ~/.cache/riven/ cache");
+    eprintln!();
+    eprintln!("Bench options:");
+    eprintln!("  bench <file.rvn>        Run every `def bench_*(b: &var Bencher)` in the file");
+    eprintln!("  bench <file.rvn> --filter <pat>");
+    eprintln!("                          Only run benches whose name contains <pat>");
+    eprintln!("  bench <file.rvn> --iter-hint <N>");
+    eprintln!("                          Initial iteration count (default 100, auto-scales");
+    eprintln!("                          until total wall time ≥ 100ms)");
 }
 
 // ─── Formatter CLI ──────────────────────────────────────────────────
@@ -293,6 +302,214 @@ fn run_clean(args: &[String]) {
             eprintln!("Failed to clean cache: {}", e);
             process::exit(1);
         }
+    }
+}
+
+// ─── Bench CLI ──────────────────────────────────────────────────────
+//
+// `rivenc bench <file.rvn>` finds every `def bench_*(b: &var Bencher)`
+// in the file, appends a synthesised `def main` that runs each one
+// against a fresh `Bencher`, and compiles+runs the result. Pure-Riven
+// harness — see `library/std/bench/src/lib.rvn`. No compiler-side
+// parser/keyword work; bench fns are identified by name convention
+// (`bench_*`) per feedback_pure_riven_first.md.
+
+fn run_bench(args: &[String]) {
+    if args.is_empty() {
+        eprintln!("Usage: rivenc bench <file.rvn> [--filter <pat>] [--iter-hint <N>]");
+        process::exit(2);
+    }
+
+    let mut path: Option<String> = None;
+    let mut filter: Option<String> = None;
+    let mut iter_hint: i64 = 100;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--filter" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("--filter requires a value");
+                    process::exit(2);
+                }
+                filter = Some(args[i].clone());
+            }
+            "--iter-hint" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("--iter-hint requires a value");
+                    process::exit(2);
+                }
+                iter_hint = args[i].parse().unwrap_or_else(|_| {
+                    eprintln!("--iter-hint must be a positive integer");
+                    process::exit(2);
+                });
+            }
+            s if s.starts_with("--") => {
+                eprintln!("Unknown bench option: {}", s);
+                process::exit(2);
+            }
+            _ => {
+                if path.is_some() {
+                    eprintln!("Unexpected positional arg: {}", args[i]);
+                    process::exit(2);
+                }
+                path = Some(args[i].clone());
+            }
+        }
+        i += 1;
+    }
+
+    let Some(path) = path else {
+        eprintln!("rivenc bench: missing <file.rvn>");
+        process::exit(2);
+    };
+
+    if !path.ends_with(".rvn") {
+        eprintln!("rivenc bench: expected a .rvn file, got: {}", path);
+        process::exit(2);
+    }
+
+    let source = match fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("rivenc bench: cannot read {}: {}", path, e);
+            process::exit(1);
+        }
+    };
+
+    // Parse just to collect bench-fn names. Diagnostics here are pure
+    // syntax / item-shape — full typeck happens on the synthesised
+    // file below, so a typo in a bench body will surface there with
+    // the normal codepath.
+    let mut lexer = Lexer::new(&source);
+    let tokens = match lexer.tokenize() {
+        Ok(t) => t,
+        Err(ds) => {
+            for d in ds {
+                eprintln!("{}", d);
+            }
+            process::exit(1);
+        }
+    };
+    let mut parser = Parser::new(tokens);
+    let program = match parser.parse() {
+        Ok(p) => p,
+        Err(ds) => {
+            for d in ds {
+                eprintln!("{}", d);
+            }
+            process::exit(1);
+        }
+    };
+
+    // Collect bench fns: name convention `bench_*`, exactly one
+    // parameter. The Bencher-receiver type-check happens at the
+    // real typeck pass — we filter coarsely here so a fn with the
+    // wrong signature still surfaces a meaningful error from the
+    // synthesised main's call site instead of being silently dropped.
+    use riven_core::parser::ast::TopLevelItem;
+    let mut bench_names: Vec<String> = Vec::new();
+    let mut has_main = false;
+    for item in &program.items {
+        if let TopLevelItem::Function(f) = item {
+            if f.name == "main" {
+                has_main = true;
+            }
+            if f.name.starts_with("bench_") && f.params.len() == 1 {
+                if let Some(pat) = &filter {
+                    if !f.name.contains(pat.as_str()) {
+                        continue;
+                    }
+                }
+                bench_names.push(f.name.clone());
+            }
+        }
+    }
+
+    if has_main {
+        eprintln!(
+            "rivenc bench: {} declares `def main` — bench files must let the runner provide main. \
+             Remove or rename the existing main and re-run.",
+            path
+        );
+        process::exit(1);
+    }
+
+    if bench_names.is_empty() {
+        eprintln!(
+            "rivenc bench: no `def bench_*(b: &var Bencher)` functions found{}.",
+            filter
+                .as_ref()
+                .map(|p| format!(" matching `{}`", p))
+                .unwrap_or_default()
+        );
+        process::exit(1);
+    }
+
+    // Synthesise a `def main` that walks each collected bench fn
+    // against a fresh `Bencher`. Appended at the end of the source
+    // so resolve/typeck sees all bench-fn definitions before the
+    // call sites.
+    let mut synth = source.clone();
+    if !synth.ends_with('\n') {
+        synth.push('\n');
+    }
+    synth.push_str(
+        "\n# ── rivenc bench: synthesised runner main ────────────────────\n",
+    );
+    synth.push_str("def main\n");
+    synth.push_str(&format!("  var bencher = Bencher.new({})\n", iter_hint));
+    for name in &bench_names {
+        synth.push_str(&format!("  {}(&var bencher)\n", name));
+    }
+    synth.push_str("end\n");
+
+    // Write synth to a tmp file alongside the original so error
+    // messages cite a stable path; compile + run through the normal
+    // pipeline.
+    let tmp_dir = std::env::temp_dir().join("rivenc-bench");
+    if let Err(e) = fs::create_dir_all(&tmp_dir) {
+        eprintln!("rivenc bench: cannot create {}: {}", tmp_dir.display(), e);
+        process::exit(1);
+    }
+    let stem = Path::new(&path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("bench");
+    let synth_path = tmp_dir.join(format!("{}.bench.rvn", stem));
+    let bin_path = tmp_dir.join(format!("{}.bench", stem));
+    if let Err(e) = fs::write(&synth_path, &synth) {
+        eprintln!("rivenc bench: cannot write {}: {}", synth_path.display(), e);
+        process::exit(1);
+    }
+
+    // Forward to the normal compile path, then exec the binary.
+    let compile_args = vec![
+        "rivenc".to_string(),
+        synth_path.to_string_lossy().into_owned(),
+        "-o".to_string(),
+        bin_path.to_string_lossy().into_owned(),
+        "--force".to_string(),
+    ];
+    run_compile(&compile_args);
+
+    let output = match process::Command::new(&bin_path).output() {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("rivenc bench: failed to run {}: {}", bin_path.display(), e);
+            process::exit(1);
+        }
+    };
+    if !output.stdout.is_empty() {
+        print!("{}", String::from_utf8_lossy(&output.stdout));
+    }
+    if !output.stderr.is_empty() {
+        eprint!("{}", String::from_utf8_lossy(&output.stderr));
+    }
+    if !output.status.success() {
+        process::exit(output.status.code().unwrap_or(1));
     }
 }
 

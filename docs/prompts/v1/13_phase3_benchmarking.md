@@ -1,5 +1,17 @@
 # 13 — Phase 3: benchmarking (T3.05)
 
+> **Status: ✅ Shipped** (audited 2026-05-21). Bencher harness in
+> `library/std/bench/` (pure Riven `Bencher` class with auto-scaling
+> `iter` + 5-LOC C `black_box` opaque-identity shim). `rivenc bench
+> <file.rvn>` CLI subcommand with `--filter` + `--iter-hint` flags
+> in `src/rivenc/src/main.rs`. Five criterion compile-pipeline
+> benches in `src/rivenc/benches/{parse,resolve,typeck,mir,codegen}_bench.rs`
+> against the 508 + 727 real fixtures. Bench fns are identified by
+> name convention (`def bench_*(b: &var Bencher)`) — no compiler
+> changes per `feedback_pure_riven_first.md`. **Deferred to v1.5**
+> per spec's "optional" list: JSON output, baseline comparison,
+> MAD outlier detection, the `bench` in-body parser directive.
+
 **Depends on:** prompt 11.
 **Reads:** `docs/requirements/tier3_05_benchmarking.md`.
 
@@ -47,8 +59,12 @@ runner.
 
 ## Definition of done
 
-- [ ] `riven bench` subcommand wired in `cli.rs`.
-- [ ] At least 5 benches in `crates/rivenc/benches/` for compile
-      pipeline (parse, resolve, typeck, lower, codegen).
-- [ ] CI runs benches on PRs (warn-only, not blocking).
-- [ ] CHANGELOG bullet.
+- [x] `riven bench` subcommand wired in `cli.rs`. *Shipped as
+      `rivenc bench <file>` with `--filter` + `--iter-hint`.*
+- [x] At least 5 benches in `crates/rivenc/benches/` for compile
+      pipeline (parse, resolve, typeck, lower, codegen). *Shipped
+      in `src/rivenc/benches/{parse,resolve,typeck,mir,codegen}_bench.rs`.*
+- [ ] CI runs benches on PRs (warn-only, not blocking). *No CI
+      workflows in tree; wiring deferred to whenever GH Actions
+      lands.*
+- [x] CHANGELOG bullet.

@@ -1,0 +1,109 @@
+## std::bench — microbenchmark harness.
+##
+## ## Why this package exists
+##
+## Pure-Riven implementation of the prompt-13 bench surface. The
+## `Bencher` class auto-scales iterations until total wall time
+## crosses 100 ms, then reports `iters | total ns | ns/iter`. No
+## compiler changes required: bench fns are identified by NAME
+## convention (`def bench_*(b: &var Bencher)`) — same pattern as
+## Go's `func TestX` / `func BenchmarkX`.
+##
+## ## Surface
+##
+##   def bench_string_concat(b: &var Bencher)
+##     b.iter("string_concat", { ||
+##       var s = String.new
+##       for _i in 0..100
+##         s.push_str("xx")
+##       end
+##       s.len
+##     })
+##   end
+##
+##   def main
+##     let b = Bencher.new(1000)
+##     bench_string_concat(&var b)
+##   end
+##
+## The user passes a closure returning `Int`; the harness invokes
+## it `iters` times and feeds each return value through
+## `Bencher.black_box` so the compiler can't constant-fold the
+## work away. Heap-returning closures (`String`, `Array`, ...)
+## stay opaque to the optimizer through pointer indirection, so the
+## Int specialisation is enough for v1 — a generic
+## `black_box[T](T) -> T` is a post-v1 ergonomic.
+##
+## ## What's NOT here (deferred to v1.5 / v2)
+##
+## - JSON output, baseline comparison, MAD outlier detection — the
+##   prompt 13 spec calls these out as optional.
+## - The `bench` in-body directive — convention beat keyword
+##   per `feedback_pure_riven_first.md`; we save ~50 LOC of
+##   parser/lexer/resolver work and the user-facing surface is
+##   identical.
+## - Generic `black_box[T]` — needs typeck generic-monomorphisation
+##   over the C-symbol path; the Int specialisation covers every
+##   heap-typed payload through opaque pointer indirection.
+
+use std.time.Instant
+
+## `layout c` pins the two int64 fields to the wire layout the
+## constructor allocates. The `Bencher` is purely a value carrier
+## — `init` sets the initial iteration target, `iter` mutates
+## `iterations` and `total_ns` as it auto-scales.
+class Bencher
+  layout c
+  iterations: Int
+  total_ns: Int
+
+  def init(iters: Int)
+    self.iterations = iters
+    self.total_ns = 0
+  end
+
+  ## Run `f` repeatedly, auto-scaling the iteration count until
+  ## total wall time ≥ 100 ms (criterion-style minimum-sample
+  ## window). Reports `bench <name>: <iters> iters, <total> ns
+  ## total, <per> ns/iter` to stdout, mirroring the format the
+  ## `rivenc bench` subcommand parses for JSON / CI output.
+  ##
+  ## The closure must return `Int` — the harness pushes each
+  ## return through `Bencher.black_box` so a zero-side-effect
+  ## body still measures the actual work instead of being
+  ## constant-folded to nothing.
+  def iter(name: &String, f: any Fn() -> Int) -> ()
+    var iters: Int = self.iterations
+    var total: Int = 0
+    var stop: Int = 0
+    while stop == 0
+      let start = Instant.now()
+      for _i in 0..iters
+        let v = f.()
+        let _ = Bencher.black_box(v)
+      end
+      total = start.elapsed.as_nanos
+      if total >= 100000000
+        stop = 1
+      elsif iters >= 1000000000
+        stop = 1
+      else
+        iters = iters * 2
+      end
+    end
+    self.iterations = iters
+    self.total_ns = total
+    let per_iter = total / iters
+    puts "bench #{name}: #{iters} iters, #{total} ns total, #{per_iter} ns/iter"
+  end
+
+  ## Opaque-identity barrier. Backed by a C `__attribute__((noinline))`
+  ## fn with an `asm volatile` constraint on the value — see
+  ## `library/std/bench/runtime/bench.c`. A pure-Riven version
+  ## (`def self.black_box(v: Int) -> Int; v; end`) would be
+  ## inlined and the value's producer eliminated; routing
+  ## through the C call site prevents both.
+  lib "runtime/bench.c"
+    def self.black_box as "riven_bench_black_box"(v: Int) -> Int
+  end
+end

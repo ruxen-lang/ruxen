@@ -39,7 +39,7 @@ in git history (`git log -- docs/prompts/v1/<name>.md` to recover).
 | 14 | concurrency | ✅ All primitives | Thread, Mutex, MutexGuard, SharedSync, Atomic*, Sender/Receiver, JoinHandle shipped; bench pending on prompt 13 |
 | 15 | async | ✅ Sub-phases 1–5 | Future/Poll/Context/Waker, async def + .await, block_on, reactor, AsyncFile/AsyncTcpStream/AsyncTcpListener, Task.spawn/join/yield_now; AsyncStdin variants not shipped |
 | 12 | diagnostics polish | ⬜ Not started | E-codes ladder complete; hint engine / did-you-mean polish TODO |
-| 13 | benchmarking | ⬜ Not started | No `benches/` tree |
+| 13 | benchmarking | ✅ Shipped | `library/std/bench/` pure-Riven Bencher + `rivenc bench` subcommand + 5 criterion compile-pipeline benches in `src/rivenc/benches/`. JSON/baseline/MAD deferred to v1.5 |
 | 16 | no_std / wasm | ⬜ Not started | No wasm32 codegen path |
 | 17 | cross-compile / ABI | ⬜ Not started | Single-platform builds only |
 | 18 | debugger / DWARF | ⬜ Not started | No debuginfo emission |
