@@ -1,0 +1,14 @@
+class FoldAnchorBox
+  value: Int
+
+  def init(@value: Int)
+  end
+
+  def get_value -> Int
+    self.value
+  end
+
+  def add(other: Int) -> Int
+    self.value + other
+  end
+end

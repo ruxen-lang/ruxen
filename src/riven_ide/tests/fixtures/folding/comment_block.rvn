@@ -1,0 +1,7 @@
+# first explanatory line of the header
+# second explanatory line, still part of the block
+# third explanatory line, also part of the same block
+def fold_anchor_after_comments
+  let x = 1
+  x
+end
