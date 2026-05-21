@@ -439,6 +439,16 @@ impl<'a> Lowerer<'a> {
         // (mixin-include declaration order on the class).
         self.collect_mixin_vtables(&mut mir);
 
+        // Mixin vtables Phase C: synthesize one `<Mixin>_dynamic_<method>`
+        // helper per required method of every `dispatch runtime` mixin
+        // that has at least one implementor. The helper does:
+        //   class_info = self[0]            // class_info_ptr at slot 0
+        //   vtable = class_info[mixin_slot] // v1: mixin_slot is always 0
+        //   method_ptr = vtable[method_idx] // slot of this method in vtable
+        //   result = method_ptr(self, args...)
+        //   return result
+        self.synthesize_dynamic_dispatch_helpers(&mut mir);
+
         Ok(mir)
     }
 
@@ -499,6 +509,200 @@ impl<'a> Lowerer<'a> {
                 vtable_symbols: class_vtable_syms,
             });
         }
+    }
+
+    /// Phase C: synthesize one `<Mixin>_dynamic_<method>` helper per
+    /// required method on every runtime-dispatch mixin that has at
+    /// least one implementor class in this program.
+    ///
+    /// Each helper does three loads (class_info_ptr, vtable_ptr,
+    /// method_ptr) and one indirect call. The mixin's slot within
+    /// class_info is fixed at 0 for v1: the spec ships single-mixin
+    /// runtime dispatch (Future is the only opt-in), and every
+    /// runtime-dispatch class's class_info therefore has exactly one
+    /// slot — the mixin's vtable pointer. Multi-mixin runtime
+    /// dispatch is v2 (spec "Out of scope").
+    ///
+    /// Helper signature mirrors the mixin's required method signature
+    /// (1:1 param types + return type), so call sites can lower to a
+    /// plain `Call <Mixin>_dynamic_<method>(self, args...)` without
+    /// type adaptation. The signature is read from the mixin
+    /// method's `DefKind::Method` entry in the symbol table.
+    fn synthesize_dynamic_dispatch_helpers(&self, mir: &mut MirProgram) {
+        use crate::resolve::symbols::DefKind;
+
+        // Collect (mixin_name, mixin_def_id) for every runtime-dispatch
+        // mixin that has at least one implementor.
+        let mut mixins_to_synth: std::collections::BTreeMap<String, DefId> =
+            std::collections::BTreeMap::new();
+        for vt in &mir.vtables {
+            // `vt.mixin_name` is unique per mixin; look up its DefId.
+            if mixins_to_synth.contains_key(&vt.mixin_name) {
+                continue;
+            }
+            for def in self.symbols.iter() {
+                if def.name == vt.mixin_name {
+                    if matches!(&def.kind, DefKind::Trait { info } if matches!(
+                        info.dispatch_mode,
+                        crate::parser::ast::DispatchMode::Runtime
+                    )) {
+                        mixins_to_synth.insert(vt.mixin_name.clone(), def.id);
+                        break;
+                    }
+                }
+            }
+        }
+
+        for (mixin_name, mixin_def_id) in mixins_to_synth {
+            // Look up the mixin's required-methods (in declaration
+            // order) — same list that drives vtable layout in
+            // `collect_mixin_vtables`.
+            let mixin_info = match self.symbols.get(mixin_def_id) {
+                Some(d) => match &d.kind {
+                    DefKind::Trait { info } => info.clone(),
+                    _ => continue,
+                },
+                None => continue,
+            };
+            for (method_idx, method_name) in mixin_info.required_methods.iter().enumerate() {
+                // Mixin method signatures live in HirMixinDef.items as
+                // HirMixinItem::MethodSig, NOT in the symbol table as
+                // `DefKind::Method`. The symbol-table-registered
+                // methods are class-side implementations (`Circle.size`
+                // → `DefKind::Method { parent: Circle, .. }`). Pick
+                // any implementor's method as the signature source —
+                // E1117 has guaranteed every implementor's signature
+                // matches the mixin's contract, so any concrete impl
+                // is a valid source.
+                let sig = self.symbols.iter().find_map(|d| match &d.kind {
+                    DefKind::Method { parent, signature } if d.name == *method_name => {
+                        // Verify the parent class actually includes
+                        // this mixin (otherwise a same-named method
+                        // on an unrelated class would mismatch).
+                        let parent_includes_mixin = self
+                            .symbols
+                            .get(*parent)
+                            .map(|p| match &p.kind {
+                                DefKind::Class { info } => {
+                                    info.runtime_dispatch_includes.contains(&mixin_def_id)
+                                }
+                                _ => false,
+                            })
+                            .unwrap_or(false);
+                        if parent_includes_mixin {
+                            Some(signature.clone())
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                });
+                let Some(sig) = sig else {
+                    // No implementor of the mixin in this program —
+                    // skip helper synthesis (an unreachable helper
+                    // would add link-time weight for no benefit).
+                    continue;
+                };
+
+                let helper = self.build_dynamic_dispatch_helper(
+                    &mixin_name,
+                    method_name,
+                    method_idx,
+                    &sig,
+                );
+                mir.functions.push(helper);
+            }
+        }
+    }
+
+    /// Build one `<Mixin>_dynamic_<method>` MIR function. See spec §B5.
+    fn build_dynamic_dispatch_helper(
+        &self,
+        mixin_name: &str,
+        method_name: &str,
+        method_idx: usize,
+        sig: &crate::resolve::symbols::FnSignature,
+    ) -> MirFunction {
+        let fn_name = format!("{}_dynamic_{}", mixin_name, method_name);
+
+        let return_ty = sig.return_ty.clone();
+        let mut mir_fn = MirFunction::new(&fn_name, return_ty.clone());
+
+        // Parameter 0: `self` (i64 pointer to a heap object whose
+        // slot 0 is the class_info_ptr).
+        let self_local = mir_fn.new_local(
+            "self",
+            Ty::Class {
+                name: "__dyn_self".to_string(),
+                generic_args: vec![],
+            },
+            false,
+        );
+        mir_fn.params.push(self_local);
+
+        // Remaining parameters mirror the mixin method's declared
+        // params (excluding self — the mixin signature carries
+        // explicit params after self_mode).
+        for p in &sig.params {
+            let local = mir_fn.new_local(&p.name, p.ty.clone(), false);
+            mir_fn.params.push(local);
+        }
+
+        let entry = mir_fn.entry_block;
+
+        // class_info = self[0]
+        let class_info = mir_fn.new_temp(Ty::Int);
+        mir_fn.blocks[entry].instructions.push(MirInst::GetField {
+            dest: class_info,
+            base: self_local,
+            field_index: 0,
+        });
+
+        // vtable = class_info[mixin_slot]  — v1: mixin_slot is 0 (single-mixin)
+        let vtable = mir_fn.new_temp(Ty::Int);
+        mir_fn.blocks[entry].instructions.push(MirInst::GetField {
+            dest: vtable,
+            base: class_info,
+            field_index: 0,
+        });
+
+        // method_ptr = vtable[method_idx]
+        let method_ptr = mir_fn.new_temp(Ty::Int);
+        mir_fn.blocks[entry].instructions.push(MirInst::GetField {
+            dest: method_ptr,
+            base: vtable,
+            field_index: method_idx,
+        });
+
+        // Build call args: self followed by the remaining params (all
+        // already locals on mir_fn).
+        let args: Vec<MirValue> = mir_fn
+            .params
+            .iter()
+            .map(|&id| MirValue::Use(id))
+            .collect();
+
+        // Indirect call.
+        let has_return = !matches!(return_ty, Ty::Unit);
+        let dest = if has_return {
+            Some(mir_fn.new_temp(return_ty.clone()))
+        } else {
+            None
+        };
+        mir_fn.blocks[entry]
+            .instructions
+            .push(MirInst::CallIndirect {
+                dest,
+                callee: method_ptr,
+                args,
+            });
+
+        mir_fn.blocks[entry].terminator = match dest {
+            Some(d) => Terminator::Return(Some(MirValue::Use(d))),
+            None => Terminator::Return(None),
+        };
+
+        mir_fn
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────

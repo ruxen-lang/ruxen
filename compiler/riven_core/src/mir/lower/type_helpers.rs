@@ -324,4 +324,54 @@ impl<'a> Lowerer<'a> {
             }
         }
     }
+
+    /// Phase C: if `ty` is a reference to a single-bound
+    /// runtime-dispatch mixin (e.g. `&Future`, `&var Future`),
+    /// return the mixin's name. Otherwise return None — the receiver
+    /// either isn't a `&Mixin` shape or the mixin isn't
+    /// `dispatch runtime` (E1118 would have flagged that at typeck).
+    ///
+    /// Carries Ref / RefMut / RefLifetime / RefMutLifetime peels.
+    /// `Ty::AnyMixin(bounds)` with multiple bounds (`&Send + Sync`)
+    /// can't be dispatched dynamically because no single vtable
+    /// exists — return None. v1 only supports single-mixin dyn
+    /// references; multi-bound trait objects are out of scope per
+    /// spec "Out of scope (v2)".
+    pub(super) fn dyn_mixin_receiver_name(&self, ty: &Ty) -> Option<String> {
+        use crate::resolve::symbols::DefKind;
+        let mut cur = ty;
+        loop {
+            match cur {
+                Ty::Ref(inner) | Ty::RefMut(inner) => cur = inner,
+                Ty::RefLifetime(_, inner) | Ty::RefMutLifetime(_, inner) => cur = inner,
+                Ty::Alias { target, .. } => cur = target,
+                Ty::Newtype { inner, .. } => cur = inner,
+                Ty::AnyMixin(bounds) => {
+                    if bounds.len() != 1 {
+                        return None;
+                    }
+                    let name = &bounds[0].name;
+                    // Verify the mixin is registered as
+                    // dispatch_mode = Runtime; ordinary mixins would
+                    // already have produced E1118 at typeck.
+                    for def in self.symbols.iter() {
+                        if def.name == *name {
+                            if matches!(
+                                &def.kind,
+                                DefKind::Trait { info } if matches!(
+                                    info.dispatch_mode,
+                                    crate::parser::ast::DispatchMode::Runtime
+                                )
+                            ) {
+                                return Some(name.clone());
+                            }
+                            return None;
+                        }
+                    }
+                    return None;
+                }
+                _ => return None,
+            }
+        }
+    }
 }

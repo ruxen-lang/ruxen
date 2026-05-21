@@ -1,0 +1,45 @@
+# Phase C pin test: `&Mixin.method()` lowers to the dynamic dispatch
+# helper instead of static `<Class>_<method>`. Spec §B5/§B6.
+
+mixin Sized dispatch runtime
+  def size -> Int
+end
+
+class Circle
+  radius: Int
+
+  def init(@radius: Int)
+  end
+
+  include Sized
+
+  def size -> Int
+    self.radius
+  end
+end
+
+class Square
+  side: Int
+
+  def init(@side: Int)
+  end
+
+  include Sized
+
+  def size -> Int
+    self.side
+  end
+end
+
+# `c: &Sized` — heterogeneous dispatch. The MIR for `report` must call
+# `Sized_dynamic_size(c)`, not `Circle_size` or `Square_size`.
+def report(c: &Sized) -> Int
+  c.size
+end
+
+# A second function that statically dispatches: receiver is the
+# concrete class, so the call must lower to `Circle_size(c)` directly
+# (the static-dispatch regression check).
+def report_circle(c: Circle) -> Int
+  c.size
+end

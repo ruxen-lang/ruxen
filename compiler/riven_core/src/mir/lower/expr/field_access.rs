@@ -281,6 +281,29 @@ impl<'a> Lowerer<'a> {
                 };
 
                 if !is_field && !obj_type_name.is_empty() {
+                    // Phase C: if the receiver type is `&Mixin` (a
+                    // runtime-dispatch single-bound reference), route
+                    // through the dispatch helper instead of mangling
+                    // a static `<Class>_<method>`. Spec §B5/§B6.
+                    if let Some(mixin_name) = self.dyn_mixin_receiver_name(&object.ty) {
+                        let obj_local = self.lower_expr(object)?;
+                        let mut arg_vals: Vec<MirValue> = Vec::new();
+                        if let Some(s) = obj_local {
+                            arg_vals.push(MirValue::Use(s));
+                        }
+                        let dest = if expr.ty != Ty::Unit && expr.ty != Ty::Never {
+                            Some(self.new_temp(expr.ty.clone()))
+                        } else {
+                            None
+                        };
+                        self.emit(MirInst::Call {
+                            dest,
+                            callee: format!("{}_dynamic_{}", mixin_name, field_name),
+                            args: arg_vals,
+                        });
+                        return Ok(dest);
+                    }
+
                     // This is a no-arg method call, not a field access.
                     // For static/class methods (`def self.foo`), the callee
                     // takes no `self` parameter, so omit the receiver.

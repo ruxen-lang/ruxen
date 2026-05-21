@@ -76,6 +76,37 @@ impl<'a> Lowerer<'a> {
                     .receiver_type_name(object)
                     .unwrap_or_else(|| type_name_from_ty(&object.ty));
 
+                // ── Phase C: dynamic dispatch on `&Mixin` / `&var Mixin` ─
+                // When the receiver is statically typed as a
+                // runtime-dispatch mixin reference (e.g. `f: &Future`),
+                // call the per-mixin-method helper instead of mangling
+                // a static `<Class>_<method>`. The helper reads
+                // class_info_ptr from slot 0 of self, looks up the
+                // mixin's vtable, and indirect-calls the concrete
+                // method. Spec docs/specs/types/mixin_vtables.spec.md §B5/§B6.
+                if let Some(mixin_name) = self.dyn_mixin_receiver_name(&object.ty) {
+                    let mut arg_vals = Vec::with_capacity(args.len() + 1);
+                    let self_local = self.lower_expr(object)?;
+                    if let Some(s) = self_local {
+                        arg_vals.push(MirValue::Use(s));
+                    }
+                    for a in args {
+                        let l = self.lower_expr(a)?;
+                        arg_vals.push(local_to_value(l));
+                    }
+                    let dest = if expr.ty != Ty::Unit && expr.ty != Ty::Never {
+                        Some(self.new_temp(expr.ty.clone()))
+                    } else {
+                        None
+                    };
+                    self.emit(MirInst::Call {
+                        dest,
+                        callee: format!("{}_dynamic_{}", mixin_name, method_name),
+                        args: arg_vals,
+                    });
+                    return Ok(dest);
+                }
+
                 // Handle .new() / .with_capacity() constructor calls:
                 // dispatch directly to the runtime symbol (no self arg).
                 //

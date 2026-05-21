@@ -21,6 +21,9 @@
 //! | B-4       | `runtime_dispatch_class_field_index_shifted_by_one`        | §B2  |
 //! | B-4       | `static_mixin_class_field_index_unshifted`                 | §B11 |
 //! | B-5       | `class_init_writes_class_info_ptr_at_slot_zero`            | §B4/§B5 |
+//! | C         | `dyn_mixin_call_lowers_to_dynamic_helper`                  | §B5/§B6 |
+//! | C         | `concrete_class_call_stays_static_dispatch`                | §B6  |
+//! | C         | `dynamic_dispatch_helper_synthesized_per_mixin_method`      | §B5  |
 //!
 //! Discipline: all Riven source goes through `.rvn` fixtures
 //! (`feedback_no_inline_rvn_in_pin_tests`).
@@ -562,5 +565,119 @@ fn class_init_writes_class_info_ptr_at_slot_zero() {
         found,
         "make_one must emit `DataAddr __rvn_classinfo_Circle` → `SetField slot 0` pair \
          to install the class_info_ptr header at the Circle.new alloc site (Phase B-5)",
+    );
+}
+
+// ─── Phase C — dynamic dispatch helper + call-site lowering ───────
+
+/// Helper for Phase C tests: extract every `Call { callee }` from a
+/// MIR function's blocks.
+fn callees_in(f: &riven_core::mir::nodes::MirFunction) -> Vec<String> {
+    f.blocks
+        .iter()
+        .flat_map(|b| b.instructions.iter())
+        .filter_map(|i| match i {
+            riven_core::mir::nodes::MirInst::Call { callee, .. } => Some(callee.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Phase C: when the receiver is typed as `&Sized` (a single-bound
+/// reference to a runtime-dispatch mixin), the method call lowers to
+/// `Sized_dynamic_size(c)`, NOT `Circle_size(c)` or any other
+/// concrete-class mangling.
+#[test]
+fn dyn_mixin_call_lowers_to_dynamic_helper() {
+    let mir = lower_fixture("mixin_vtables_dyn_dispatch");
+    let report = mir
+        .functions
+        .iter()
+        .find(|f| f.name == "report")
+        .expect("report MIR fn must exist");
+    let calls = callees_in(report);
+    assert!(
+        calls.iter().any(|c| c == "Sized_dynamic_size"),
+        "report's body must call the dispatch helper `Sized_dynamic_size`, got calls: {:?}",
+        calls
+    );
+    assert!(
+        !calls.iter().any(|c| c == "Circle_size" || c == "Square_size"),
+        "report must NOT statically dispatch on a concrete class — the receiver \
+         is `&Sized`, calls: {:?}",
+        calls
+    );
+}
+
+/// Phase C (regression): when the receiver is typed as the concrete
+/// class `Circle` (NOT `&Sized`), the static-dispatch path stays
+/// intact and emits `Circle_size(c)`. Without this, every method
+/// call on a class type would accidentally route through the
+/// dynamic helper.
+#[test]
+fn concrete_class_call_stays_static_dispatch() {
+    let mir = lower_fixture("mixin_vtables_dyn_dispatch");
+    let report_circle = mir
+        .functions
+        .iter()
+        .find(|f| f.name == "report_circle")
+        .expect("report_circle MIR fn must exist");
+    let calls = callees_in(report_circle);
+    assert!(
+        calls.iter().any(|c| c == "Circle_size"),
+        "report_circle's body must statically dispatch `c.size` to `Circle_size`, \
+         got calls: {:?}",
+        calls
+    );
+    assert!(
+        !calls.iter().any(|c| c == "Sized_dynamic_size"),
+        "report_circle must NOT call the dynamic helper — the receiver is `Circle`, \
+         calls: {:?}",
+        calls
+    );
+}
+
+/// Phase C: for every (mixin, method) pair where the mixin is
+/// `dispatch runtime` AND has at least one implementor in the
+/// program, MIR carries a synthesized `<Mixin>_dynamic_<method>`
+/// function. The helper's body is the three-load indirect call.
+#[test]
+fn dynamic_dispatch_helper_synthesized_per_mixin_method() {
+    let mir = lower_fixture("mixin_vtables_dyn_dispatch");
+    let helper = mir
+        .functions
+        .iter()
+        .find(|f| f.name == "Sized_dynamic_size")
+        .expect("Sized_dynamic_size helper must be synthesized");
+
+    // The body must contain (in order in some block): a GetField
+    // at slot 0 (class_info), a GetField at slot 0 (vtable), a
+    // GetField at slot 0 (method_ptr — `size` is method index 0),
+    // and a CallIndirect.
+    let mut get_field_slots: Vec<usize> = vec![];
+    let mut saw_call_indirect = false;
+    for block in &helper.blocks {
+        for inst in &block.instructions {
+            match inst {
+                riven_core::mir::nodes::MirInst::GetField { field_index, .. } => {
+                    get_field_slots.push(*field_index);
+                }
+                riven_core::mir::nodes::MirInst::CallIndirect { .. } => {
+                    saw_call_indirect = true;
+                }
+                _ => {}
+            }
+        }
+    }
+    assert_eq!(
+        get_field_slots,
+        vec![0, 0, 0],
+        "helper body must have three GetField loads at slots [0,0,0] \
+         (class_info, vtable, method[0]=size), got: {:?}",
+        get_field_slots
+    );
+    assert!(
+        saw_call_indirect,
+        "helper must emit a CallIndirect on the method pointer",
     );
 }
