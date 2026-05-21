@@ -586,12 +586,20 @@ fn lower_one_async_fn_with_await(
 
     let return_type = func.return_type.clone()?;
 
-    // ── Phase 1 — segment the body into `(let x = g().await)*  tail`.
+    // ── Phase 1 — segment the body into `pre_await | [let x = g().await]* | tail`.
     //
-    // We require EVERY non-tail statement to be a let-binding whose
-    // value is `<call>.await`. The final element is the tail
-    // expression. Statements outside that shape cause us to bail.
-    let (await_lets, tail_stmts) = segment_body(&func.body)?;
+    // The segmenter accepts side-effect-free pre-await statements
+    // (Milestone-2B extension — closes the gap noted in
+    // `project_riven_milestone_2b_segmenter_constraints.md`). Each
+    // pre-await Statement::Let either becomes a pure init-local (if
+    // it's never read after the first `.await`) or a state-machine
+    // field (if it IS read in `tail`).
+    let segments = segment_body(&func.body)?;
+    let Segments {
+        pre_await: pre_await_stmts,
+        await_lets,
+        tail: tail_stmts,
+    } = segments;
     if await_lets.is_empty() {
         // `block_contains_await` saw an await but the segmenter
         // didn't — the await sits in an unsupported shape (e.g.
@@ -600,8 +608,47 @@ fn lower_one_async_fn_with_await(
         return None;
     }
 
+    // ── Phase 1b — classify pre-await locals (crossing vs non-crossing).
+    //
+    // A pre-await `let <name> = ...` becomes a state-machine field IFF
+    // `<name>` is read in `tail_stmts` (i.e., AFTER the last await).
+    // Such locals must carry an explicit type annotation so the
+    // lowering can declare the field type without typeck integration;
+    // we bail on un-annotated crossing locals (the user can either
+    // annotate the let or restructure the body — the resolver-side
+    // diagnostic for the un-lowered body will surface).
+    //
+    // Non-crossing locals stay as plain `Statement::Let`s inside the
+    // `init` body; the awaitee constructor in `describe_await` runs
+    // BEFORE the suspend (eager-init), so any awaitee args that
+    // reference them resolve to the in-scope init-local without
+    // hoisting.
+    let pre_await_let_names = collect_let_names(&pre_await_stmts);
+    let mut crossing_locals: Vec<(String, TypeExpr)> = Vec::new();
+    for s in &pre_await_stmts {
+        if let Statement::Let(lb) = s {
+            if let Pattern::Identifier { name, .. } = &lb.pattern {
+                if stmts_reference_name(&tail_stmts, name) {
+                    let ty = lb.type_annotation.clone()?;
+                    crossing_locals.push((name.clone(), ty));
+                }
+            }
+        }
+    }
+    let crossing_names: Vec<String> = crossing_locals.iter().map(|(n, _)| n.clone()).collect();
+
     // ── Phase 2 — for each await, locate the awaited fn's synth class.
+    //
+    // The `outer_field_names` set drives `describe_await`'s arg-ref
+    // rewrite: bare references to these names inside awaitee args get
+    // promoted to `self.<name>`. The set unions outer fn params with
+    // crossing pre-await locals (both end up as `self.*` fields), but
+    // NOT non-crossing pre-await locals (those stay init-locals and
+    // resolve naturally inside the init scope where the awaitee ctor
+    // is later assigned via `self.__sub_i = <ctor>`).
     let outer_arg_names: Vec<String> = func.params.iter().map(|p| p.name.clone()).collect();
+    let mut outer_field_names: Vec<String> = outer_arg_names.clone();
+    outer_field_names.extend(crossing_names.iter().cloned());
     let mut subs: Vec<AwaitSub> = Vec::new();
     for al in &await_lets {
         let sub = describe_await(
@@ -609,7 +656,7 @@ fn lower_one_async_fn_with_await(
             async_fn_returns,
             class_static_returns,
             future_outputs,
-            &outer_arg_names,
+            &outer_field_names,
         )?;
         subs.push(sub);
     }
@@ -633,6 +680,17 @@ fn lower_one_async_fn_with_await(
             span: p.span.clone(),
         });
     }
+    // Hoisted pre-await locals (those referenced in tail). Field name
+    // matches the source `let` so the tail-block rewrite picks them up
+    // via the `outer_field_names + binding_names` union pass.
+    for (name, ty) in &crossing_locals {
+        fields.push(FieldDecl {
+            visibility: Visibility::Public,
+            name: name.clone(),
+            type_expr: ty.clone(),
+            span: span.clone(),
+        });
+    }
     for (i, sub) in subs.iter().enumerate() {
         fields.push(FieldDecl {
             visibility: Visibility::Public,
@@ -652,10 +710,23 @@ fn lower_one_async_fn_with_await(
 
     // ── Phase 4 — init params + body ────────────────────────────────
     //
-    // Init takes `@__state` + each outer arg. Inside the body we
-    // eagerly construct each sub-future from outer args/constants
-    // (the constraint enforced by `describe_await`), and assign each
-    // hoisted local to a default of its declared type.
+    // Init takes `@__state` + each outer arg. Inside the body we:
+    //   1. Run the user's pre-await statements verbatim, with outer-
+    //      arg refs rewritten to `self.<arg>`. Statement::Let bindings
+    //      defined here are init-scope locals. Side-effecting RHS
+    //      (function calls, allocations) runs eagerly as part of
+    //      construction — see B5 future work for moving sub-future
+    //      construction to per-state.
+    //   2. For each crossing local, copy the init-local into the
+    //      state-machine field (`self.<name> = <name>`) so the tail's
+    //      `self.<name>` reads have a value.
+    //   3. Construct each sub-future eagerly. Awaitee args referencing
+    //      crossing locals or outer args are already rewritten to
+    //      `self.*` by `describe_await`; awaitee args referencing
+    //      non-crossing pre-await locals resolve to those init-locals
+    //      directly.
+    //   4. Default-initialise each await-binding field so the type
+    //      checker sees a value at every read site.
     let mut init_params: Vec<Param> = Vec::new();
     init_params.push(Param {
         auto_assign: true,
@@ -673,16 +744,37 @@ fn lower_one_async_fn_with_await(
     }
 
     let mut init_body_stmts: Vec<Statement> = Vec::new();
+    // (1) Pre-await statements (with arg refs → self.<arg>).
+    for s in &pre_await_stmts {
+        let mut rewritten = s.clone();
+        match &mut rewritten {
+            Statement::Let(lb) => {
+                if let Some(v) = lb.value.as_mut() {
+                    rewrite_arg_refs_in_expr(v, &outer_arg_names);
+                }
+            }
+            Statement::Expression(e) => {
+                rewrite_arg_refs_in_expr(e, &outer_arg_names);
+            }
+        }
+        init_body_stmts.push(rewritten);
+    }
+    // (2) Copy crossing locals into their state-machine fields.
+    for name in &crossing_names {
+        init_body_stmts.push(Statement::Expression(Expr {
+            kind: ExprKind::Assign {
+                target: Box::new(self_field(name, &span)),
+                value: Box::new(Expr {
+                    kind: ExprKind::Identifier(name.clone()),
+                    span: span.clone(),
+                }),
+            },
+            span: span.clone(),
+        }));
+    }
+    // (3) Sub-future eager construction.
+    let _ = pre_await_let_names; // reserved for future shadow-checking
     for (i, sub) in subs.iter().enumerate() {
-        // self.__sub_i = <awaitee_ctor>
-        //
-        // `awaitee_ctor` is the pre-built constructor expression for
-        // the sub-future. For a free-fn awaitee `g(args).await` it is
-        // `__GFuture.new(0, args_rewritten...)` (synthesised in
-        // `describe_await`). For a class-static-method-call awaitee
-        // `Class.method(args).await` it is the original
-        // `Class.method(args_rewritten...)` expression (the user-written
-        // method already returns the Future class).
         init_body_stmts.push(Statement::Expression(Expr {
             kind: ExprKind::Assign {
                 target: Box::new(self_field(&format!("__sub_{i}"), &span)),
@@ -691,8 +783,8 @@ fn lower_one_async_fn_with_await(
             span: span.clone(),
         }));
     }
+    // (4) Default values for await bindings.
     for sub in &subs {
-        // self.<binding> = <default of declared type>
         let default = default_value_for_type(&sub.result_type, &span)?;
         init_body_stmts.push(Statement::Expression(Expr {
             kind: ExprKind::Assign {
@@ -722,8 +814,16 @@ fn lower_one_async_fn_with_await(
     };
 
     // ── Phase 5 — poll body (chained if/elsif/else over __state) ────
+    //
+    // Pass `outer_field_names` (outer params ∪ crossing pre-await
+    // locals) so the tail-block rewrite promotes references to either
+    // category into `self.<name>` reads. Non-crossing pre-await
+    // locals are not in the set — they never appear in the tail by
+    // definition (that's the "crossing" criterion), so leaving them
+    // out is correct and avoids accidentally rewriting unrelated
+    // shadowed identifiers.
     let poll_body =
-        build_multi_state_poll_body(&subs, &tail_stmts, &outer_arg_names, &return_type, &span);
+        build_multi_state_poll_body(&subs, &tail_stmts, &outer_field_names, &return_type, &span);
 
     let cx_param = Param {
         auto_assign: false,
@@ -864,13 +964,59 @@ struct AwaitSub {
     result_type: TypeExpr,
 }
 
-/// Split an async fn body into `[await let-binding]*  tail-statements`.
-/// Returns `None` if the body uses an unsupported shape (e.g. a let
-/// without an await on the RHS, an await deeper in an expression, or
-/// a statement before the first await that isn't itself `let x = g().await`).
-fn segment_body(body: &Block) -> Option<(Vec<LetBinding>, Vec<Statement>)> {
+/// Output of [`segment_body`] — a Milestone-2B-shaped async-fn body
+/// split into three sequential regions:
+///
+///   * `pre_await` — straight-line statements that execute BEFORE the
+///     first `.await`. None of them may contain a nested `.await`.
+///     These run inside the state-machine's `init` body verbatim
+///     (with outer-arg refs rewritten to `self.<arg>`); any local
+///     declared here that is read after the first `.await` (i.e.,
+///     referenced in `tail`) is additionally hoisted to a field by
+///     [`lower_one_async_fn_with_await`].
+///   * `await_lets` — one entry per `.await` suspension point, in
+///     source order. Each is a `let <binding> = <awaitee>.await`.
+///     Bindings ALWAYS become state-machine fields (existing 2B
+///     behaviour — every await result survives the next suspend).
+///   * `tail` — the post-last-await statements. References to outer
+///     args, await-bindings, and crossing pre-await locals are
+///     rewritten to `self.<name>` by the caller.
+struct Segments {
+    pre_await: Vec<Statement>,
+    await_lets: Vec<LetBinding>,
+    tail: Vec<Statement>,
+}
+
+/// Split an async fn body into `pre_await | [await let-binding]* | tail`.
+///
+/// Returns `None` if the body uses an unsupported shape:
+///   * a pre-await statement whose RHS contains a nested `.await`
+///     (the body must reach the first suspend through straight-line
+///     statements only — branched/looped `.await`s are E1115 / B11),
+///   * an await-let whose RHS isn't a bare `<expr>.await` (await
+///     nested deeper in an expression),
+///   * an await-let whose pattern isn't a plain `Identifier`
+///     (destructuring on await results is deferred),
+///   * a bare `expr.await` statement at the top level (only let-
+///     bound awaits are supported in v1).
+///
+/// Milestone-2B (commit f899788) accepted ONLY the
+/// `[await let-binding]* tail` shape — no pre-await statements at all.
+/// This extension lifts that restriction so the natural server-handler
+/// shape (`let parsed = parse(req); let r = service.call(parsed).await; reply(r)`)
+/// lowers without a workaround.
+fn segment_body(body: &Block) -> Option<Segments> {
+    let mut pre_await: Vec<Statement> = Vec::new();
     let mut await_lets: Vec<LetBinding> = Vec::new();
     let mut tail: Vec<Statement> = Vec::new();
+    // Phase tracking: 0 = collecting pre-await prefix, 1 = collecting
+    // await-let chain, 2 = collecting post-last-await tail.
+    //
+    // The transitions are one-way: once we see the first `.await` we
+    // can no longer accept pre-await statements; once we see a non-
+    // await statement after an await-let we move to the tail and
+    // forbid further awaits.
+    let mut seen_first_await = false;
     let mut in_tail = false;
 
     for stmt in &body.statements {
@@ -894,9 +1040,6 @@ fn segment_body(body: &Block) -> Option<(Vec<LetBinding>, Vec<Statement>)> {
 
         match stmt {
             Statement::Let(lb) => {
-                // Check if the let RHS is `<expr>.await` — recognise
-                // ONLY the outermost-await shape. Anything else (await
-                // nested deeper in arithmetic, etc.) bails.
                 let value = lb.value.as_ref()?;
                 if let ExprKind::Await(_) = &value.kind {
                     // OK — this is `let x = <expr>.await`. Pattern
@@ -906,15 +1049,21 @@ fn segment_body(body: &Block) -> Option<(Vec<LetBinding>, Vec<Statement>)> {
                         return None;
                     }
                     await_lets.push(lb.clone());
+                    seen_first_await = true;
                 } else if expr_contains_await(value) {
                     // Await nested inside a complex expression — bail.
                     return None;
+                } else if !seen_first_await {
+                    // Pre-await straight-line let. Side-effecting RHS
+                    // is fine (it runs in `init`); the type system
+                    // and effects checker handle whatever safety
+                    // story applies post-resolve.
+                    pre_await.push(stmt.clone());
                 } else {
-                    // Pre-await straight-line let. v1 doesn't allow
-                    // statements before the first await (locals
-                    // would need crossing-suspend analysis to know
-                    // whether to hoist). Defer.
-                    return None;
+                    // First non-await statement AFTER at least one
+                    // await marks the start of the tail.
+                    in_tail = true;
+                    tail.push(stmt.clone());
                 }
             }
             Statement::Expression(e) => {
@@ -924,10 +1073,16 @@ fn segment_body(body: &Block) -> Option<(Vec<LetBinding>, Vec<Statement>)> {
                     // accepts the let-bound form. Bail.
                     return None;
                 }
-                // First non-await statement marks the start of the
-                // tail.
-                in_tail = true;
-                tail.push(stmt.clone());
+                if !seen_first_await {
+                    // Pre-await expression statement (e.g. a side-
+                    // effecting setup call). Runs in `init` verbatim.
+                    pre_await.push(stmt.clone());
+                } else {
+                    // First non-await statement marks the start of
+                    // the tail.
+                    in_tail = true;
+                    tail.push(stmt.clone());
+                }
             }
         }
     }
@@ -953,7 +1108,133 @@ fn segment_body(body: &Block) -> Option<(Vec<LetBinding>, Vec<Statement>)> {
         }
     }
 
-    Some((await_lets, tail))
+    Some(Segments {
+        pre_await,
+        await_lets,
+        tail,
+    })
+}
+
+/// Names introduced by `let <pat> = ...` statements in `stmts`,
+/// considering only plain `Pattern::Identifier` bindings (the
+/// segmenter rejects destructuring on the await branch but pre-await
+/// lets COULD destructure — for those we leave the name set empty so
+/// the caller treats them as pure init-locals with no field hoisting).
+fn collect_let_names(stmts: &[Statement]) -> Vec<String> {
+    let mut names = Vec::new();
+    for s in stmts {
+        if let Statement::Let(lb) = s {
+            if let Pattern::Identifier { name, .. } = &lb.pattern {
+                names.push(name.clone());
+            }
+        }
+    }
+    names
+}
+
+/// Returns `true` if any subtree of `expr` reads the bare identifier
+/// `name`. Conservative: doesn't follow shadowing inside nested blocks
+/// (matches the segmenter's name-set rewrites, which already assume
+/// shadow-free name usage at this AST pass). Closures' bodies are
+/// scanned because a captured pre-await local would still need to be
+/// readable when the closure runs — same conservatism as the existing
+/// `rewrite_arg_refs_in_expr`.
+fn expr_references_name(expr: &Expr, name: &str) -> bool {
+    if let ExprKind::Identifier(n) = &expr.kind {
+        return n == name;
+    }
+    match &expr.kind {
+        ExprKind::BinaryOp { left, right, .. } => {
+            expr_references_name(left, name) || expr_references_name(right, name)
+        }
+        ExprKind::UnaryOp { operand, .. } => expr_references_name(operand, name),
+        ExprKind::Borrow(inner)
+        | ExprKind::BorrowMut(inner)
+        | ExprKind::Try(inner)
+        | ExprKind::Await(inner) => expr_references_name(inner, name),
+        ExprKind::FieldAccess { object, .. } => expr_references_name(object, name),
+        ExprKind::MethodCall { object, args, .. } => {
+            expr_references_name(object, name) || args.iter().any(|a| expr_references_name(a, name))
+        }
+        ExprKind::Call { callee, args, .. } | ExprKind::ClosureCall { callee, args } => {
+            expr_references_name(callee, name) || args.iter().any(|a| expr_references_name(a, name))
+        }
+        ExprKind::Index { object, index } => {
+            expr_references_name(object, name) || expr_references_name(index, name)
+        }
+        ExprKind::Assign { target, value }
+        | ExprKind::CompoundAssign { target, value, .. } => {
+            expr_references_name(target, name) || expr_references_name(value, name)
+        }
+        ExprKind::If(IfExpr {
+            condition,
+            then_body,
+            elsif_clauses,
+            else_body,
+            ..
+        }) => {
+            expr_references_name(condition, name)
+                || block_references_name(then_body, name)
+                || elsif_clauses.iter().any(|el| {
+                    expr_references_name(&el.condition, name)
+                        || block_references_name(&el.body, name)
+                })
+                || else_body
+                    .as_ref()
+                    .is_some_and(|b| block_references_name(b, name))
+        }
+        ExprKind::Match(MatchExpr { subject, arms, .. }) => {
+            expr_references_name(subject, name)
+                || arms.iter().any(|a| {
+                    a.guard
+                        .as_ref()
+                        .is_some_and(|g| expr_references_name(g, name))
+                        || match &a.body {
+                            MatchArmBody::Expr(e) => expr_references_name(e, name),
+                            MatchArmBody::Block(b) => block_references_name(b, name),
+                        }
+                })
+        }
+        ExprKind::Block(b) => block_references_name(b, name),
+        ExprKind::Return(Some(inner)) | ExprKind::Break(Some(inner)) => {
+            expr_references_name(inner, name)
+        }
+        ExprKind::ArrayLiteral(items) | ExprKind::TupleLiteral(items) => {
+            items.iter().any(|e| expr_references_name(e, name))
+        }
+        ExprKind::ArrayFill { value, count } => {
+            expr_references_name(value, name) || expr_references_name(count, name)
+        }
+        ExprKind::MapLiteral(pairs) => pairs
+            .iter()
+            .any(|(k, v)| expr_references_name(k, name) || expr_references_name(v, name)),
+        ExprKind::Range { start, end, .. } => {
+            start
+                .as_ref()
+                .is_some_and(|s| expr_references_name(s, name))
+                || end.as_ref().is_some_and(|e| expr_references_name(e, name))
+        }
+        ExprKind::Cast { expr: inner, .. } => expr_references_name(inner, name),
+        ExprKind::Closure(c) => match &c.body {
+            ClosureBody::Expr(e) => expr_references_name(e, name),
+            ClosureBody::Block(b) => block_references_name(b, name),
+        },
+        _ => false,
+    }
+}
+
+fn block_references_name(block: &Block, name: &str) -> bool {
+    block.statements.iter().any(|s| match s {
+        Statement::Let(lb) => lb.value.as_ref().is_some_and(|v| expr_references_name(v, name)),
+        Statement::Expression(e) => expr_references_name(e, name),
+    })
+}
+
+fn stmts_reference_name(stmts: &[Statement], name: &str) -> bool {
+    stmts.iter().any(|s| match s {
+        Statement::Let(lb) => lb.value.as_ref().is_some_and(|v| expr_references_name(v, name)),
+        Statement::Expression(e) => expr_references_name(e, name),
+    })
 }
 
 /// Describe a single `let x = <awaitee>.await` await site.

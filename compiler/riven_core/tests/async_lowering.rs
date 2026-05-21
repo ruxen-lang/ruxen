@@ -471,3 +471,126 @@ fn class_static_method_call_await_lowers() {
         sm_class.fields.iter().map(|f| &f.name).collect::<Vec<_>>()
     );
 }
+
+// ─── Milestone 2B extension — pre-await prefix + locals-as-awaitee-args ──
+
+/// A pre-await statement (`let setup = 3`) that is never referenced
+/// after the first `.await` lowers as part of the state-machine
+/// `init` body's prefix. It stays a plain init-local — no field is
+/// created for it. The fixture's async fn must typecheck cleanly and
+/// the synth class must NOT carry a `setup` field.
+#[test]
+fn pre_await_statement_lowers_to_segment_0_prefix() {
+    let result = typeck_result(&rvn("segmenter_pre_await_statement"));
+    let errors = error_messages(&result.diagnostics);
+    assert!(
+        errors.is_empty(),
+        "pre-await statement fixture must typecheck: {:?}",
+        errors
+    );
+
+    let sm_class = result
+        .program
+        .items
+        .iter()
+        .find_map(|item| match item {
+            HirItem::Class(c) if c.name == "__HandlerFuture" => Some(c),
+            _ => None,
+        })
+        .expect("expected generated `__HandlerFuture` class");
+
+    let field_names: Vec<&str> = sm_class.fields.iter().map(|f| f.name.as_str()).collect();
+    // The `result` await-binding is hoisted (it's the await-let), but
+    // `setup` is a non-crossing pre-await local — must stay off the class.
+    assert!(
+        field_names.contains(&"result"),
+        "expected await-binding `result` field, got: {:?}",
+        field_names
+    );
+    assert!(
+        !field_names.contains(&"setup"),
+        "`setup` is a non-crossing pre-await local; it must NOT be a field. Got fields: {:?}",
+        field_names
+    );
+}
+
+/// A pre-await local fed into the next awaitee's constructor args
+/// (`let n = req * 2; let r = add_one(n).await`). `n` is consumed in
+/// init when the sub-future is built; it doesn't survive to the tail,
+/// so it stays a plain init-local. The fixture must typecheck.
+#[test]
+fn awaitee_arg_referencing_pre_await_local_captures_to_state() {
+    let result = typeck_result(&rvn("segmenter_awaitee_pre_await_local"));
+    let errors = error_messages(&result.diagnostics);
+    assert!(
+        errors.is_empty(),
+        "awaitee-arg-from-pre-await-local fixture must typecheck: {:?}",
+        errors
+    );
+
+    let sm_class = result
+        .program
+        .items
+        .iter()
+        .find_map(|item| match item {
+            HirItem::Class(c) if c.name == "__HandlerFuture" => Some(c),
+            _ => None,
+        })
+        .expect("expected generated `__HandlerFuture` class");
+
+    let field_names: Vec<&str> = sm_class.fields.iter().map(|f| f.name.as_str()).collect();
+    assert!(
+        field_names.contains(&"req"),
+        "expected outer arg `req` as a field, got: {:?}",
+        field_names
+    );
+    assert!(
+        field_names.contains(&"__sub_0"),
+        "expected `__sub_0` field for the add_one(...) awaitee, got: {:?}",
+        field_names
+    );
+    // `n` is a non-crossing pre-await local — must not be a field.
+    assert!(
+        !field_names.contains(&"n"),
+        "`n` is consumed in init and not read post-await; must NOT be a field. Got: {:?}",
+        field_names
+    );
+}
+
+/// A pre-await local referenced in the tail expression
+/// (`let x: Int = req * 2; let r = b().await; x + r`) crosses the
+/// suspend point and must be hoisted to a state-machine field. The
+/// fixture's `let x: Int = ...` carries the explicit type annotation
+/// the lowering uses to declare the field type without typeck.
+#[test]
+fn tail_referencing_pre_await_local_works() {
+    let result = typeck_result(&rvn("segmenter_tail_pre_await_local"));
+    let errors = error_messages(&result.diagnostics);
+    assert!(
+        errors.is_empty(),
+        "tail-referencing-pre-await-local fixture must typecheck: {:?}",
+        errors
+    );
+
+    let sm_class = result
+        .program
+        .items
+        .iter()
+        .find_map(|item| match item {
+            HirItem::Class(c) if c.name == "__HandlerFuture" => Some(c),
+            _ => None,
+        })
+        .expect("expected generated `__HandlerFuture` class");
+
+    let field_names: Vec<&str> = sm_class.fields.iter().map(|f| f.name.as_str()).collect();
+    assert!(
+        field_names.contains(&"x"),
+        "expected hoisted pre-await local `x` as a field (read in tail), got: {:?}",
+        field_names
+    );
+    assert!(
+        field_names.contains(&"r"),
+        "expected await-binding `r` field, got: {:?}",
+        field_names
+    );
+}

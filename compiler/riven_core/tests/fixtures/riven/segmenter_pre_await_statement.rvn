@@ -1,0 +1,16 @@
+## Segmenter pin (Milestone 2B extension):
+## a pre-await statement that doesn't cross the suspend point lowers
+## as part of the init prefix and the awaited fn is the only await
+## state. The pre-await local `setup` is used only in the awaitee
+## constructor, never in the tail — so it stays a plain init-local,
+## no field hoisting needed.
+
+async def pure_compute() -> Int
+  7
+end
+
+async def handler() -> Int
+  let setup = 3
+  let result = pure_compute().await
+  result + 1
+end
