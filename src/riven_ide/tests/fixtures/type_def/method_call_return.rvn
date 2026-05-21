@@ -1,0 +1,18 @@
+## type_def fixture — cursor on the result expression of a function
+## call should jump to the *return type's* class declaration.
+
+class WidgetReturnAnchor
+  v: Int
+
+  def get_v -> Int
+    self.v
+  end
+end
+
+def make_widget_anchor_fn(seed: Int) -> WidgetReturnAnchor
+  WidgetReturnAnchor.new(seed)
+end
+
+def main
+  let _ = make_widget_anchor_fn(3)
+end

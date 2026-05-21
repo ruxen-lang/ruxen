@@ -1,0 +1,15 @@
+## type_def fixture — cursor on a local bound to a class instance
+## should jump to the class declaration.
+
+class CounterTypeDefAnchor
+  value: Int
+
+  def get_value -> Int
+    self.value
+  end
+end
+
+def main
+  let cdef_anchor_local = CounterTypeDefAnchor.new(7)
+  let _ = cdef_anchor_local
+end

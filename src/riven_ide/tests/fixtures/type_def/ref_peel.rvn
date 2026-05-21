@@ -1,0 +1,15 @@
+## type_def fixture — cursor on a parameter declared as &T should
+## peel the reference and jump to T's class declaration.
+
+class BorrowTargetAnchor
+  v: Int
+end
+
+def borrow_consumer(bparam_anchor: &BorrowTargetAnchor) -> Int
+  0
+end
+
+def main
+  let b = BorrowTargetAnchor.new(1)
+  let _ = borrow_consumer(&b)
+end

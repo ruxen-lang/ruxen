@@ -1,0 +1,12 @@
+## type_def fixture — cursor on a local typed as `Holder[Int]` should
+## land on the user-defined `class Holder` declaration. Built-in
+## `Array[T]` would have no source span, so we use a user class.
+
+class GenericHolderAnchor[T]
+  v: T
+end
+
+def main
+  let gen_anchor_local = GenericHolderAnchor.new(7)
+  let _ = gen_anchor_local
+end

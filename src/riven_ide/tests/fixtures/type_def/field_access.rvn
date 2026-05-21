@@ -1,0 +1,15 @@
+## type_def fixture — cursor on a field-access expression should
+## jump to the field-type's declaration (not the field's own decl).
+
+class FaInnerAnchor
+  n: Int
+end
+
+class FaOuterAnchor
+  fa_field_anchor: FaInnerAnchor
+end
+
+def main
+  let fa_outer_anchor_var = FaOuterAnchor.new(FaInnerAnchor.new(7))
+  let _ = fa_outer_anchor_var.fa_field_anchor
+end

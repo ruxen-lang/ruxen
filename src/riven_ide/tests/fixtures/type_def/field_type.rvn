@@ -1,0 +1,14 @@
+## type_def fixture — cursor on a struct/class field whose type is
+## another class should jump to that class declaration.
+
+class InnerHolderAnchor
+  n: Int
+end
+
+class OuterHolderAnchor
+  field_anchor_inside: InnerHolderAnchor
+end
+
+def main
+  let _ = 0
+end
