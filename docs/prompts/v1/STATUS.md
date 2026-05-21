@@ -29,13 +29,13 @@ in git history (`git log -- docs/prompts/v1/<name>.md` to recover).
 | 13 | benchmarking | `library/std/bench/` pure-Riven `Bencher` + `rivenc bench` subcommand + 5 criterion compile-pipeline benches. JSON/baseline/MAD deferred to v1.5 |
 | 14 | concurrency | Thread, Mutex, MutexGuard, SharedSync, Atomic*, Sender/Receiver, JoinHandle. Riven-level Mutex bench at `tests/benches/sync_mutex.rvn` runs at **15 ns/iter** — 70× under the 1 µs/op DoD budget (100k ops in 1.5 ms vs the 100 ms target) |
 | 15 | async | Future/Poll/Context/Waker + async def/.await + block_on + reactor + AsyncFile/TcpStream/TcpListener + Task.spawn/join/yield_now + AsyncStdin (`library/std/async_io/`). AsyncStdout/Stderr deferred to v1.1 |
+| 06.75 | repo restructure | Layout done + `typeck/infer.rs` 2279→5-file split (mod 399 / expr 948 / collect 550 / helpers 345 / ops 171) + `codegen/runtime.rs` 739→runtime/ tree (mod 55 / 4 symbol files + 2 test files, each ≤ 273) — all under the spec's per-file caps |
+| 06.8 | stdlib self-hosting | `resolve/stdlib/mod.rs` 580→91 LOC + 5 per-namespace files (primitives, modules, type_constructors, option, result, each ≤ 112) |
 
 ## Remaining prompts (in tree)
 
 | # | Title | Status | One-line summary |
 |---|---|---|---|
-| 06.75 | repo restructure | 🟡 Mostly shipped | Layout done; `typeck/infer.rs` (2279 LOC) + `codegen/runtime.rs` (739 LOC) still over budget |
-| 06.8 | stdlib self-hosting | 🟡 Mostly shipped | All stdlib in Riven; `resolve/stdlib/mod.rs` is 580 LOC (target 400); pin tests scattered rather than in `extern_c_binding.rs` |
 | 08 | HRTBs / `some Mixin` | 🟡 Partial | `some Mixin` shipped; `for<'a>` HRTBs deferred to v1.5/v2 per original prompt |
 | 09 | GATs / `any Mixin` | 🟡 Partial | `any Mixin` + mixin vtables Phase A/B/C shipped; GATs themselves deferred to v1.5/v2 |
 | 11 | incremental | 🟡 Partial | rivenc cache + `--force` + `clean` subcommand work; formal query-layer design TODO |
@@ -53,13 +53,12 @@ in git history (`git log -- docs/prompts/v1/<name>.md` to recover).
 
 ## Wave-front
 
-- ✅ **Done**: phase 1, phase 2 stdlib, phase 3 (07 const generics + 10 LSP + 13 benchmarking), phase 4 (14 concurrency + 15 async)
-- 🟡 **Partial**: language polish (08 HRTBs / 09 GATs / 11 incremental), repo cleanup tails (06.75 / 06.8), package manifests (22)
+- ✅ **Done**: phase 1, phase 2 stdlib, phase 2.5 repo + self-hosting cleanup (06.75 / 06.8), phase 3 (07 const generics + 10 LSP + 13 benchmarking), phase 4 (14 concurrency + 15 async)
+- 🟡 **Partial**: language polish (08 HRTBs / 09 GATs / 11 incremental), package manifests (22)
 - ⬜ **Genuinely TODO**: 12 diagnostics polish, 16 no_std/wasm, 17 cross-compile, 18 debugger/DWARF, 19 test framework, 20 rivendoc, 21 MIR optimizer, 23 language reference, 24 editions, 25 release checklist
 
 **Closest-to-shipping next chunks:**
 1. **19 test framework** — biggest user-facing v1 gap; unlocks user-side `def test_*` runner. Same pattern as prompt 13's `rivenc bench` (pure Riven harness + tiny Rust CLI wrapper)
-2. Finish 06.75 (split `typeck/infer.rs` and `codegen/runtime.rs`) and 06.8 (slim `resolve/stdlib/mod.rs`) — pure cleanup, mechanical
 3. **12 diagnostics polish** — error codes are exhaustive but hints/suggestions need engine work
 4. **22 pkg manager workspace/resolver** — turns stdlib's per-package model into something user packages can opt into
 5. **v1.1 follow-ups identified this session**: (a) AsyncStdout/Stderr if a demand actually shows up; (b) UTF-8 char-boundary bug in `line_index.rs:36` that crashes `analysis_of_sample_program`
