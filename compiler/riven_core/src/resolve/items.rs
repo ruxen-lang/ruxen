@@ -150,6 +150,9 @@ impl Resolver {
         let mut opt_out_sync = false;
         let mut manual_send = false;
         let mut manual_sync = false;
+        // Mixin vtables Phase B-1: collected during the inner_impls loop
+        // below, sealed onto ClassInfo at construction time.
+        let mut runtime_dispatch_includes: Vec<crate::hir::nodes::DefId> = Vec::new();
         for (idx, field) in class.fields.iter().enumerate() {
             let ty = self.resolve_type_expr(&field.type_expr);
             let fid = self.symbols.define(
@@ -261,6 +264,29 @@ impl Resolver {
                 _ => {}
             }
 
+            // Mixin vtables Phase B-1: if the included mixin has
+            // `dispatch_mode = Runtime`, record its DefId on the class so
+            // codegen can emit a class_info_ptr header + per-mixin vtable.
+            // Negative includes (`include !Foo`) don't trigger this — the
+            // class explicitly opts out of the mixin contract.
+            if !inner.negative_trait {
+                if let Some(mixin_def) =
+                    self.symbols.iter().find(|d| d.name == trait_ref.name)
+                {
+                    let is_runtime_dispatch = matches!(
+                        &mixin_def.kind,
+                        DefKind::Trait { info }
+                            if matches!(
+                                info.dispatch_mode,
+                                crate::parser::ast::DispatchMode::Runtime
+                            )
+                    );
+                    if is_runtime_dispatch {
+                        runtime_dispatch_includes.push(mixin_def.id);
+                    }
+                }
+            }
+
             impl_blocks.push(HirImplBlock {
                 generic_params: vec![],
                 is_unsafe: inner.is_unsafe,
@@ -317,6 +343,7 @@ impl Resolver {
                     manual_sync,
                     const_predicates,
                     flat_heap_struct,
+                    runtime_dispatch_includes,
                 },
             };
         }

@@ -1,8 +1,10 @@
-//! Phase A pin tests for `docs/specs/types/mixin_vtables.spec.md`.
+//! Phase A + Phase B-1 pin tests for `docs/specs/types/mixin_vtables.spec.md`.
 //!
-//! Phase A scope: parser surface + typeck validation. Codegen of the
-//! per-implementor vtable, class-info struct, and dynamic dispatch
-//! helper is Phase B / C. The pin tests below cover:
+//! Phase A scope: parser surface + typeck validation. Phase B-1 scope:
+//! `ClassInfo.runtime_dispatch_includes` tracks each runtime-dispatch
+//! mixin a class includes (DefId list). Phases B-2..B-6 (vtable +
+//! class-info struct emission, header alloc, init-time write) and
+//! Phase C/D follow.
 //!
 //! | Behaviour | Test                                                | Spec |
 //! |-----------|-----------------------------------------------------|------|
@@ -10,6 +12,7 @@
 //! | B7 syntax | `dyn_mixin_param_type_parses_and_typechecks`        | §B7  |
 //! | E1118     | `amp_mixin_to_static_mixin_emits_e1118`             | §B7  |
 //! | E1117     | `runtime_dispatch_mixin_missing_method_emits_e1117` | §B1  |
+//! | B1 bookkeeping | `class_includes_runtime_mixin_is_tracked_on_classinfo` | §B-1 |
 //!
 //! Discipline: all Riven source goes through `.rvn` fixtures
 //! (`feedback_no_inline_rvn_in_pin_tests`).
@@ -162,5 +165,105 @@ fn runtime_dispatch_mixin_missing_method_emits_e1117() {
         msg.contains("size"),
         "E1117 message should name the missing method `size`, got: {}",
         msg
+    );
+}
+
+// ─── Phase B-1 — runtime_dispatch_includes bookkeeping ────────────
+
+/// A class that `include`s a `dispatch runtime` mixin must carry
+/// the mixin's DefId on `ClassInfo.runtime_dispatch_includes`.
+/// Phases B-2..B-5 consume this list to emit per-mixin vtables,
+/// per-class class_info structs, and to inject a class_info_ptr
+/// header at allocation time. Without this bookkeeping, codegen
+/// can't tell which classes need the header.
+#[test]
+fn class_includes_runtime_mixin_is_tracked_on_classinfo() {
+    let source = rvn("mixin_dispatch_runtime_modifier_parses");
+    let mut lx = Lexer::new(&source);
+    let toks = lx.tokenize().expect("lex");
+    let mut p = Parser::new(toks);
+    let prog = p.parse().expect("parse");
+    let result = typeck::type_check(&prog);
+
+    // Fixture has `mixin Sized dispatch runtime` + `class Circle;
+    // include Sized; ...`. The runtime-dispatch include should land
+    // on Circle's ClassInfo.runtime_dispatch_includes.
+    let sized_def_id = result
+        .symbols
+        .iter()
+        .find(|d| {
+            d.name == "Sized"
+                && matches!(
+                    &d.kind,
+                    riven_core::resolve::symbols::DefKind::Trait { info }
+                        if matches!(info.dispatch_mode, DispatchMode::Runtime)
+                )
+        })
+        .map(|d| d.id)
+        .expect("mixin `Sized dispatch runtime` should be registered");
+
+    let circle_info = result
+        .symbols
+        .iter()
+        .find(|d| d.name == "Circle")
+        .map(|d| match &d.kind {
+            riven_core::resolve::symbols::DefKind::Class { info } => info.clone(),
+            _ => panic!("Circle is not a class"),
+        })
+        .expect("class `Circle` should be registered");
+
+    assert!(
+        circle_info.runtime_dispatch_includes.contains(&sized_def_id),
+        "Circle.runtime_dispatch_includes should contain Sized's DefId; got {:?}",
+        circle_info.runtime_dispatch_includes
+    );
+    // No other includes in this fixture, so list length is 1.
+    assert_eq!(
+        circle_info.runtime_dispatch_includes.len(),
+        1,
+        "expected exactly one runtime-dispatch include on Circle, got {:?}",
+        circle_info.runtime_dispatch_includes
+    );
+}
+
+/// Negative: a class that includes only STATIC mixins (`include Foo`
+/// where Foo has no `dispatch runtime`) gets an empty list — the
+/// existing static-dispatch path is untouched. No vtable header,
+/// no class_info struct emission.
+#[test]
+fn class_with_only_static_mixin_has_empty_runtime_dispatch_list() {
+    let source = "
+        mixin Plain
+          def speak -> Int
+        end
+
+        class Bob
+          include Plain
+
+          def speak -> Int
+            1
+          end
+        end
+    ";
+    let mut lx = Lexer::new(source);
+    let toks = lx.tokenize().expect("lex");
+    let mut p = Parser::new(toks);
+    let prog = p.parse().expect("parse");
+    let result = typeck::type_check(&prog);
+
+    let bob_info = result
+        .symbols
+        .iter()
+        .find(|d| d.name == "Bob")
+        .map(|d| match &d.kind {
+            riven_core::resolve::symbols::DefKind::Class { info } => info.clone(),
+            _ => panic!(),
+        })
+        .expect("class `Bob` should be registered");
+
+    assert!(
+        bob_info.runtime_dispatch_includes.is_empty(),
+        "static-only mixin includes should produce empty runtime_dispatch_includes, got {:?}",
+        bob_info.runtime_dispatch_includes
     );
 }

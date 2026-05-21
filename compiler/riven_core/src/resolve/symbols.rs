@@ -96,6 +96,17 @@ pub struct ClassInfo {
     /// check once a real stdlib class is migrated to user-source
     /// `.rvn` and gates a `riven_<class>_layout_check` symbol.
     pub flat_heap_struct: bool,
+    /// Mixin vtables Phase B-1: DefIds of mixins this class
+    /// `include`s that are marked `dispatch runtime`. Populated by
+    /// `resolve_class_def` after looking up each include's mixin
+    /// def. Consumed by Phase B-2/B-3 (vtable + class_info struct
+    /// emission) and Phase B-4/B-5 (header allocation + init-time
+    /// write). Spec: docs/specs/types/mixin_vtables.spec.md.
+    ///
+    /// Empty for any class that doesn't include a `dispatch runtime`
+    /// mixin — those classes keep their existing flat layout with no
+    /// class_info_ptr header.
+    pub runtime_dispatch_includes: Vec<DefId>,
 }
 
 /// Information about a struct definition.
@@ -608,6 +619,7 @@ mod tests {
                 manual_sync: false,
                 const_predicates: vec![],
                 flat_heap_struct: false,
+                runtime_dispatch_includes: Vec::new(),
             },
         }
     }
