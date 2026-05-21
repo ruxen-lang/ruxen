@@ -554,15 +554,11 @@ void *riven_command_output(RivenCommand *c) {
 
 /* ── ExitStatus accessors ────────────────────────────────────────────── */
 
-int64_t riven_exit_status_code(RivenExitStatus *st) {
-    if (!st) return 127;
-    return st->code;
-}
-
-int64_t riven_exit_status_success(RivenExitStatus *st) {
-    if (!st) return 0;
-    return st->code == 0 ? 1 : 0;
-}
+/* `riven_exit_status_code` / `riven_exit_status_success` ported to
+ * pure Riven via `layout c` (see `library/std/process/src/lib.rvn`).
+ * `self.exit_code` reads directly from the same `int64_t code` field
+ * this file allocates, so the C accessor functions are no longer
+ * needed. */
 
 void riven_exit_status_free(RivenExitStatus *st) {
     if (st) riven_dealloc(st);

@@ -161,14 +161,44 @@ end
 ## scope-exit cleanup goes through the generic `riven_dealloc` path.
 ## `free` is a user-callable explicit release for callers holding a
 ## long-lived reference.
+## `layout c` pins the Riven-side struct to the 3-int64 wire layout
+## that `riven_fs_metadata` / `riven_file_metadata` fill via lstat(2) /
+## fstat(2) (see `library/std/fs/runtime/fs.c`). Field order matches
+## the C side's `meta[0]=size, meta[1]=modified, meta[2]=kind`. The
+## `kind` field uses these tag values (mirroring RIVEN_METADATA_KIND_*
+## in `library/std/core/runtime/runtime.h`):
+##   0 = File, 1 = Dir, 2 = Symlink, 3 = Other
+## All five accessors are pure-Riven field reads; the matching C
+## `riven_metadata_{len,modified,is_file,is_dir,is_symlink}` were
+## deleted in the same pass.
 class Metadata
+  layout c
+  size: Int
+  modified_secs: Int
+  kind: Int
+
   lib "../fs/runtime/fs.c"
-    def len as "riven_metadata_len"(self) -> Int
-    def modified as "riven_metadata_modified"(self) -> Int
-    def is_file as "riven_metadata_is_file"(self) -> Bool
-    def is_dir as "riven_metadata_is_dir"(self) -> Bool
-    def is_symlink as "riven_metadata_is_symlink"(self) -> Bool
     def free as "riven_metadata_free"(self) -> ()
+  end
+
+  def len -> Int
+    self.size
+  end
+
+  def modified -> Int
+    self.modified_secs
+  end
+
+  def is_file -> Bool
+    self.kind == 0
+  end
+
+  def is_dir -> Bool
+    self.kind == 1
+  end
+
+  def is_symlink -> Bool
+    self.kind == 2
   end
 end
 

@@ -230,30 +230,12 @@ void *riven_fs_metadata(const char *path) {
     return riven_result_ok_value((int64_t)meta);
 }
 
-int64_t riven_metadata_len(void *meta) {
-    if (!meta) return 0;
-    return ((int64_t *)meta)[0];
-}
-
-int64_t riven_metadata_modified(void *meta) {
-    if (!meta) return 0;
-    return ((int64_t *)meta)[1];
-}
-
-int64_t riven_metadata_is_file(void *meta) {
-    if (!meta) return 0;
-    return ((int64_t *)meta)[2] == RIVEN_METADATA_KIND_FILE ? 1 : 0;
-}
-
-int64_t riven_metadata_is_dir(void *meta) {
-    if (!meta) return 0;
-    return ((int64_t *)meta)[2] == RIVEN_METADATA_KIND_DIR ? 1 : 0;
-}
-
-int64_t riven_metadata_is_symlink(void *meta) {
-    if (!meta) return 0;
-    return ((int64_t *)meta)[2] == RIVEN_METADATA_KIND_SYMLINK ? 1 : 0;
-}
+/* `riven_metadata_{len,modified,is_file,is_dir,is_symlink}` ported
+ * to pure Riven via `layout c` (see `library/std/io/src/lib.rvn`'s
+ * `class Metadata`). The Riven-side field declarations
+ * (`size: Int`, `modified_secs: Int`, `kind: Int`) pin to the same
+ * 3-int64 wire layout filled by `riven_fs_metadata` /
+ * `riven_file_metadata` above. */
 
 /* Explicit free helper for symmetry with the other built-in Drop
  * surfaces (Formatter, Vec, Hash). The Metadata struct holds no inner

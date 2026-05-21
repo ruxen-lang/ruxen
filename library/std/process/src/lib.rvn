@@ -35,11 +35,30 @@ end
 ## exit-code int. ExitStatus is NOT a drop class (no `def drop`); the
 ## generic `riven_dealloc` path handles spine cleanup. `free` is a
 ## user-callable explicit release.
+##
+## `layout c` + `exit_code: Int` field pins the Riven-side layout to
+## the `RivenExitStatus { int64_t code }` C struct (see
+## `library/std/process/runtime/process.c`). The C side still
+## allocates and returns these pointers from `Command.status()` /
+## `Command.output()`; the accessor reads below replace the trivial
+## `riven_exit_status_code` / `riven_exit_status_success` getters
+## that previously lived in C. The C field name `code` vs Riven field
+## `exit_code` lets the method names stay `code` / `success` without
+## shadowing.
 class ExitStatus
+  layout c
+  exit_code: Int
+
   lib "runtime/process.c"
-    def code as "riven_exit_status_code"(self) -> Int
-    def success as "riven_exit_status_success"(self) -> Bool
     def free as "riven_exit_status_free"(self) -> ()
+  end
+
+  def code -> Int
+    self.exit_code
+  end
+
+  def success -> Bool
+    self.exit_code == 0
   end
 end
 
