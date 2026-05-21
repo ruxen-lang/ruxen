@@ -1,0 +1,9 @@
+def configure(host: String, port: Int) -> Int
+  port
+end
+
+def main
+  let host = "localhost"
+  let port = 8080
+  let _r = configure(host, port)
+end

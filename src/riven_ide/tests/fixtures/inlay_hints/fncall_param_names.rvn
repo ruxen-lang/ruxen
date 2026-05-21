@@ -1,0 +1,7 @@
+def greet(name: String, count: Int) -> Int
+  count
+end
+
+def main
+  let _r = greet("alice", 3)
+end
