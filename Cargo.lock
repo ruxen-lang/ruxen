@@ -1616,6 +1616,7 @@ dependencies = [
  "ar",
  "clap",
  "riven_core",
+ "rivenc",
  "serde",
  "serde_json",
  "sha2",

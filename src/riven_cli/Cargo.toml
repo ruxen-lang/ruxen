@@ -19,6 +19,7 @@ llvm = ["riven_core/llvm"]
 
 [dependencies]
 riven_core = { path = "../../compiler/riven_core" }
+rivenc = { path = "../rivenc" }
 clap = { version = "4", features = ["derive"] }
 toml = "0.8"
 serde = { version = "1", features = ["derive"] }

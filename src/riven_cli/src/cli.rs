@@ -117,4 +117,55 @@ pub enum Command {
         /// Error code to look up (e.g. `E0001`)
         code: String,
     },
+
+    /// Compile a single .rvn file directly (low-level driver — like rustc).
+    /// For project-level builds use `riven build`.
+    Compile {
+        /// Path to a .rvn file
+        file: String,
+        /// Output binary path
+        #[arg(short)]
+        output: Option<String>,
+        /// Forwarded flags (--emit=ast/hir/mir/tokens, --release,
+        /// --backend=..., --opt-level=..., --force, --verbose)
+        #[arg(allow_hyphen_values = true, trailing_var_arg = true)]
+        extra: Vec<String>,
+    },
+
+    /// Format .rvn files in-place. Mirrors `rivenc fmt`.
+    Fmt {
+        /// Files to format (default: all .rvn files recursively)
+        files: Vec<String>,
+        /// Exit 1 if any file would change (CI mode)
+        #[arg(long)]
+        check: bool,
+        /// Show diff of what would change
+        #[arg(long)]
+        diff: bool,
+        /// Read stdin, write formatted to stdout
+        #[arg(long)]
+        stdin: bool,
+        /// Logical filepath when using --stdin
+        #[arg(long)]
+        filepath: Option<String>,
+    },
+
+    /// Run microbenchmarks defined as `def bench_*(b: &var Bencher)` in a file.
+    Bench {
+        /// The .rvn file containing bench fns
+        file: String,
+        /// Substring filter on bench names
+        #[arg(long)]
+        filter: Option<String>,
+        /// Initial iteration count (default 100, auto-scales)
+        #[arg(long = "iter-hint")]
+        iter_hint: Option<i64>,
+    },
+
+    /// Test framework — placeholder. See docs/prompts/v1/19_phase5_test_framework.md.
+    Test {
+        /// Substring filter on test names
+        #[arg(long)]
+        filter: Option<String>,
+    },
 }
