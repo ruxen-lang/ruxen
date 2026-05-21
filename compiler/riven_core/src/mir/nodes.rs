@@ -23,6 +23,68 @@ pub struct MirProgram {
     pub entry: Option<String>,
     /// FFI library declarations collected from `lib` and `extern "C"` blocks.
     pub ffi_libs: Vec<FfiLib>,
+    /// Mixin vtables Phase B-2: one per `(class, mixin)` pair where the
+    /// class includes a `dispatch runtime` mixin. Codegen emits one
+    /// static data section per entry, populated with function-pointer
+    /// addresses for each of the mixin's required methods, pointing at
+    /// the class's `<ClassName>_<methodname>` symbols. Empty when no
+    /// runtime-dispatch mixins are included anywhere in the program —
+    /// the existing static-dispatch path stays untouched.
+    /// Spec: docs/specs/types/mixin_vtables.spec.md §B3.
+    pub vtables: Vec<MirVtable>,
+    /// Mixin vtables Phase B-3: one per class that includes any
+    /// `dispatch runtime` mixin. Holds an ordered list of vtable
+    /// symbol names (one per runtime-dispatch mixin the class
+    /// includes), each pointing at one of `MirProgram::vtables`'s
+    /// emitted symbols. Codegen emits a static data section
+    /// (`__rvn_classinfo_<ClassName>`) holding those pointers in order.
+    /// The class's allocation header (Phase B-4/B-5) writes a pointer
+    /// to this struct at offset 0 of every instance.
+    /// Spec: §B8.
+    pub class_infos: Vec<MirClassInfo>,
+}
+
+/// Phase B-2: one static vtable struct per `(class, mixin)` pair.
+/// Spec §B3.
+#[derive(Debug, Clone)]
+pub struct MirVtable {
+    /// Name of the runtime-dispatch mixin (e.g., "Future").
+    pub mixin_name: String,
+    /// Name of the implementing class (e.g., "TimeSleepFuture").
+    pub class_name: String,
+    /// Function symbols for each of the mixin's required methods, in
+    /// declaration order. Each is the mangled `<ClassName>_<method>`
+    /// symbol that codegen has already declared.
+    pub method_symbols: Vec<String>,
+}
+
+impl MirVtable {
+    /// The static symbol name codegen exports for this vtable.
+    /// `__rvn_vtable_<MixinName>_for_<ClassName>` per spec §B3 example.
+    pub fn symbol(&self) -> String {
+        format!("__rvn_vtable_{}_for_{}", self.mixin_name, self.class_name)
+    }
+}
+
+/// Phase B-3: one class_info struct per class with any runtime-dispatch
+/// mixin includes. Spec §B8.
+#[derive(Debug, Clone)]
+pub struct MirClassInfo {
+    /// Name of the implementing class.
+    pub class_name: String,
+    /// Vtable symbol names — one entry per runtime-dispatch mixin the
+    /// class includes, in mixin-inclusion order (matching
+    /// `ClassInfo.runtime_dispatch_includes`). Each is the symbol
+    /// returned by `MirVtable::symbol()` for the matching `(class,
+    /// mixin)` pair.
+    pub vtable_symbols: Vec<String>,
+}
+
+impl MirClassInfo {
+    /// The static symbol name codegen exports for this class-info.
+    pub fn symbol(&self) -> String {
+        format!("__rvn_classinfo_{}", self.class_name)
+    }
 }
 
 /// An FFI library declaration for codegen.
@@ -63,6 +125,8 @@ impl MirProgram {
             functions: Vec::new(),
             entry: None,
             ffi_libs: Vec::new(),
+            vtables: Vec::new(),
+            class_infos: Vec::new(),
         }
     }
 }

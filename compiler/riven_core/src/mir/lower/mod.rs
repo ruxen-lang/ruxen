@@ -431,7 +431,74 @@ impl<'a> Lowerer<'a> {
         // Append any closure functions generated during lowering.
         mir.functions.append(&mut self.pending_closures);
 
+        // Mixin vtables Phase B-2/B-3: emit vtable + class_info metadata
+        // for every class that includes any `dispatch runtime` mixin.
+        // Codegen reads these vectors and emits one data section per
+        // vtable + one per class_info. Order is: per (class, mixin)
+        // pair, with mixin slots in `runtime_dispatch_includes` order
+        // (mixin-include declaration order on the class).
+        self.collect_mixin_vtables(&mut mir);
+
         Ok(mir)
+    }
+
+    /// Phase B-2/B-3: enumerate every class that includes a
+    /// `dispatch runtime` mixin and emit a `MirVtable` per `(class,
+    /// mixin)` pair plus a single `MirClassInfo` per class.
+    ///
+    /// The class's `runtime_dispatch_includes` list (populated at
+    /// resolve time per spec §B1) is the authoritative ordering. For
+    /// each mixin DefId we collect its `MixinInfo.required_methods`
+    /// (in declaration order) and emit one `MirVtable` whose
+    /// `method_symbols` are the mangled `<ClassName>_<method>` symbols
+    /// codegen has already declared.
+    ///
+    /// Missing-method errors are caught earlier as E1117 in typeck;
+    /// reaching here means every required method has a class-side
+    /// implementation. If a method symbol is somehow absent, the
+    /// linker will surface it; the MIR layer doesn't second-guess.
+    fn collect_mixin_vtables(&self, mir: &mut MirProgram) {
+        use crate::resolve::symbols::DefKind;
+
+        // Iterate over classes. We need a stable order: walk the
+        // symbol table.
+        for def in self.symbols.iter() {
+            let info = match &def.kind {
+                DefKind::Class { info } if !info.runtime_dispatch_includes.is_empty() => info,
+                _ => continue,
+            };
+            let class_name = def.name.clone();
+            let mut class_vtable_syms: Vec<String> = Vec::new();
+
+            for &mixin_def_id in &info.runtime_dispatch_includes {
+                let mixin_def = match self.symbols.get(mixin_def_id) {
+                    Some(d) => d,
+                    None => continue, // shouldn't happen; defensive
+                };
+                let mixin_info = match &mixin_def.kind {
+                    DefKind::Trait { info } => info,
+                    _ => continue,
+                };
+                let mixin_name = mixin_def.name.clone();
+                let method_symbols: Vec<String> = mixin_info
+                    .required_methods
+                    .iter()
+                    .map(|m| format!("{}_{}", class_name, m))
+                    .collect();
+                let vt = crate::mir::nodes::MirVtable {
+                    mixin_name,
+                    class_name: class_name.clone(),
+                    method_symbols,
+                };
+                class_vtable_syms.push(vt.symbol());
+                mir.vtables.push(vt);
+            }
+
+            mir.class_infos.push(crate::mir::nodes::MirClassInfo {
+                class_name,
+                vtable_symbols: class_vtable_syms,
+            });
+        }
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────

@@ -63,6 +63,22 @@ impl CodeGen {
         // Compile MIR → LLVM IR
         emit::compile_program(program, &module, &self.context)?;
 
+        // TODO(mixin-vtables): emit `program.vtables` and
+        // `program.class_infos` as LLVM global variables with
+        // function-pointer / global-pointer initializers. The Cranelift
+        // backend handles them in `cranelift::mod::emit_mixin_vtables`
+        // — until this LLVM path matches, runtime-dispatch dispatch
+        // (`&Mixin.method()`) only works with the Cranelift backend.
+        // Spec: docs/specs/types/mixin_vtables.spec.md §B2-B3.
+        if !program.vtables.is_empty() || !program.class_infos.is_empty() {
+            return Err(
+                "mixin-vtables: LLVM backend does not yet emit vtable / class_info \
+                 data sections — use the Cranelift backend (default) for code that \
+                 includes a `dispatch runtime` mixin. Spec §B2-B3."
+                    .to_string(),
+            );
+        }
+
         // Run optimization passes
         if self.opt_level > 0 {
             optimize::run_optimization(&module, &target_machine, self.opt_level)?;

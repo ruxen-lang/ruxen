@@ -1,18 +1,23 @@
-//! Phase A + Phase B-1 pin tests for `docs/specs/types/mixin_vtables.spec.md`.
+//! Phase A + Phase B-1/B-2/B-3 pin tests for
+//! `docs/specs/types/mixin_vtables.spec.md`.
 //!
 //! Phase A scope: parser surface + typeck validation. Phase B-1 scope:
 //! `ClassInfo.runtime_dispatch_includes` tracks each runtime-dispatch
-//! mixin a class includes (DefId list). Phases B-2..B-6 (vtable +
-//! class-info struct emission, header alloc, init-time write) and
-//! Phase C/D follow.
+//! mixin a class includes (DefId list). Phase B-2/B-3: MIR carries
+//! `MirVtable`/`MirClassInfo` metadata that codegen emits as static
+//! data sections. Phases B-4..B-6 (header alloc, init-time write,
+//! pin tests for B-4/B-5) and Phase C/D follow.
 //!
-//! | Behaviour | Test                                                | Spec |
-//! |-----------|-----------------------------------------------------|------|
-//! | B1        | `mixin_dispatch_runtime_modifier_parses`            | §B1  |
-//! | B7 syntax | `dyn_mixin_param_type_parses_and_typechecks`        | §B7  |
-//! | E1118     | `amp_mixin_to_static_mixin_emits_e1118`             | §B7  |
-//! | E1117     | `runtime_dispatch_mixin_missing_method_emits_e1117` | §B1  |
-//! | B1 bookkeeping | `class_includes_runtime_mixin_is_tracked_on_classinfo` | §B-1 |
+//! | Behaviour | Test                                                       | Spec |
+//! |-----------|------------------------------------------------------------|------|
+//! | B1        | `mixin_dispatch_runtime_modifier_parses`                   | §B1  |
+//! | B7 syntax | `dyn_mixin_param_type_parses_and_typechecks`               | §B7  |
+//! | E1118     | `amp_mixin_to_static_mixin_emits_e1118`                    | §B7  |
+//! | E1117     | `runtime_dispatch_mixin_missing_method_emits_e1117`        | §B1  |
+//! | B1        | `class_includes_runtime_mixin_is_tracked_on_classinfo`     | §B-1 |
+//! | B-2       | `vtable_struct_emitted_per_implementor`                    | §B3  |
+//! | B-3       | `class_info_struct_emitted_per_runtime_dispatch_class`     | §B8  |
+//! | B-2/B-3   | `static_mixin_class_produces_no_vtable_or_classinfo`       | §B11 |
 //!
 //! Discipline: all Riven source goes through `.rvn` fixtures
 //! (`feedback_no_inline_rvn_in_pin_tests`).
@@ -265,5 +270,119 @@ fn class_with_only_static_mixin_has_empty_runtime_dispatch_list() {
         bob_info.runtime_dispatch_includes.is_empty(),
         "static-only mixin includes should produce empty runtime_dispatch_includes, got {:?}",
         bob_info.runtime_dispatch_includes
+    );
+}
+
+// ─── Phase B-2/B-3 — MIR vtable + class_info metadata ─────────────
+
+/// Helper: parse, typecheck, and MIR-lower a fixture, asserting clean
+/// typecheck. Returns the lowered `MirProgram`.
+fn lower_fixture(name: &str) -> riven_core::mir::nodes::MirProgram {
+    let source = rvn(name);
+    let prog = parse(&source);
+    let result = typeck::type_check(&prog);
+    let errs: Vec<_> = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.level == DiagnosticLevel::Error)
+        .collect();
+    assert!(errs.is_empty(), "fixture {} typecheck errors: {:?}", name, errs);
+    let mut lowerer = riven_core::mir::lower::Lowerer::new(&result.symbols);
+    lowerer
+        .lower_program(&result.program)
+        .expect("MIR lowering failed")
+}
+
+/// Phase B-2: every class that `include`s a `dispatch runtime` mixin
+/// gets exactly one `MirVtable` per `(class, mixin)` pair. The
+/// vtable's `method_symbols` are the mangled `<Class>_<method>`
+/// callees, ordered by the mixin's `required_methods` declaration.
+#[test]
+fn vtable_struct_emitted_per_implementor() {
+    let mir = lower_fixture("mixin_dispatch_runtime_modifier_parses");
+
+    // Fixture: `mixin Sized dispatch runtime do def size -> Int end`
+    // + `class Circle do include Sized; def size -> Int ... end end`.
+    // Expect exactly one vtable for (Circle, Sized) holding [Circle_size].
+    let circle_sized: Vec<_> = mir
+        .vtables
+        .iter()
+        .filter(|v| v.class_name == "Circle" && v.mixin_name == "Sized")
+        .collect();
+    assert_eq!(
+        circle_sized.len(),
+        1,
+        "expected exactly one vtable for (Circle, Sized), got: {:?}",
+        mir.vtables
+            .iter()
+            .map(|v| (&v.class_name, &v.mixin_name))
+            .collect::<Vec<_>>()
+    );
+    let vt = circle_sized[0];
+    assert_eq!(
+        vt.method_symbols,
+        vec!["Circle_size".to_string()],
+        "vtable method_symbols should be the mangled <Class>_<method> list",
+    );
+    assert_eq!(
+        vt.symbol(),
+        "__rvn_vtable_Sized_for_Circle",
+        "vtable symbol name follows spec §B3 convention",
+    );
+}
+
+/// Phase B-3: every class with non-empty `runtime_dispatch_includes`
+/// produces exactly one `MirClassInfo` whose `vtable_symbols` are
+/// listed in mixin-inclusion order. For the single-mixin fixture, the
+/// info has one slot pointing at the one vtable.
+#[test]
+fn class_info_struct_emitted_per_runtime_dispatch_class() {
+    let mir = lower_fixture("mixin_dispatch_runtime_modifier_parses");
+
+    let circle_ci: Vec<_> = mir
+        .class_infos
+        .iter()
+        .filter(|c| c.class_name == "Circle")
+        .collect();
+    assert_eq!(
+        circle_ci.len(),
+        1,
+        "expected exactly one class_info for Circle, got {}",
+        circle_ci.len()
+    );
+    let ci = circle_ci[0];
+    assert_eq!(
+        ci.vtable_symbols,
+        vec!["__rvn_vtable_Sized_for_Circle".to_string()],
+        "class_info should point at the (Circle, Sized) vtable",
+    );
+    assert_eq!(
+        ci.symbol(),
+        "__rvn_classinfo_Circle",
+        "class_info symbol name follows spec §B8 convention",
+    );
+}
+
+/// Negative: a class that only includes statically-dispatched mixins
+/// (no `dispatch runtime`) produces ZERO vtable and ZERO class_info
+/// entries — its layout stays flat, no header is added, and codegen
+/// emits no extra data sections. Spec §B11: the layout change only
+/// affects classes that opt in.
+#[test]
+fn static_mixin_class_produces_no_vtable_or_classinfo() {
+    // Single static-mixin class — no `dispatch runtime` anywhere.
+    let mir = lower_fixture("static_mixin_no_vtable_emission");
+    assert!(
+        mir.vtables.is_empty(),
+        "static-only-mixin program should emit no vtables, got: {:?}",
+        mir.vtables.iter().map(|v| v.symbol()).collect::<Vec<_>>()
+    );
+    assert!(
+        mir.class_infos.is_empty(),
+        "static-only-mixin program should emit no class_infos, got: {:?}",
+        mir.class_infos
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<Vec<_>>()
     );
 }

@@ -176,6 +176,92 @@ impl CodeGen {
             self.compile_function(func)?;
         }
 
+        // ── Pass 3: emit mixin vtables + class_info data sections ────────
+        // Spec: docs/specs/types/mixin_vtables.spec.md §B2-B3.
+        // Each vtable is a sequence of function-pointer relocations
+        // (one per required method). Each class_info is a sequence of
+        // data-pointer relocations (one per vtable). All function
+        // symbols MUST already be declared by Pass 1 (the
+        // `<ClassName>_<method>` symbol is a regular MIR function);
+        // method symbols missing from `declared_fns` indicate an
+        // upstream E1117 escape — surface as a hard codegen error.
+        self.emit_mixin_vtables(program)?;
+
+        Ok(())
+    }
+
+    /// Emit one `__rvn_vtable_<Mixin>_for_<Class>` data section per
+    /// MIR vtable, then one `__rvn_classinfo_<Class>` per MIR
+    /// class_info. Spec §B2-B3.
+    fn emit_mixin_vtables(&mut self, program: &MirProgram) -> Result<(), String> {
+        const PTR_SIZE: u32 = 8;
+
+        // Phase B-2: per-vtable data section. Each slot is a
+        // function-pointer relocation; total size = ptr_size * methods.
+        let mut vtable_data_ids: HashMap<String, cranelift_module::DataId> = HashMap::new();
+        for vt in &program.vtables {
+            let sym = vt.symbol();
+            let size = (vt.method_symbols.len() as u32) * PTR_SIZE;
+            let data_id = self
+                .module
+                .declare_data(&sym, Linkage::Local, /*writable*/ false, /*tls*/ false)
+                .map_err(|e| format!("declare vtable data '{}': {}", sym, e))?;
+
+            let mut desc = cranelift_module::DataDescription::new();
+            // Allocate zeroed bytes; relocations will be applied by the
+            // linker at each function-pointer offset.
+            desc.define_zeroinit(size as usize);
+            desc.set_align(PTR_SIZE as u64);
+
+            for (i, method_sym) in vt.method_symbols.iter().enumerate() {
+                let func_id = *self.declared_fns.get(method_sym).ok_or_else(|| {
+                    format!(
+                        "mixin-vtables: method symbol '{}' for vtable '{}' not declared \
+                         — required-method check (E1117) should have caught this",
+                        method_sym, sym
+                    )
+                })?;
+                let func_ref = self.module.declare_func_in_data(func_id, &mut desc);
+                desc.write_function_addr((i as u32) * PTR_SIZE, func_ref);
+            }
+
+            self.module
+                .define_data(data_id, &desc)
+                .map_err(|e| format!("define vtable data '{}': {}", sym, e))?;
+
+            vtable_data_ids.insert(sym, data_id);
+        }
+
+        // Phase B-3: per-class class_info. Each slot is a
+        // data-pointer relocation pointing at one of the vtables above.
+        for ci in &program.class_infos {
+            let sym = ci.symbol();
+            let size = (ci.vtable_symbols.len() as u32) * PTR_SIZE;
+            let data_id = self
+                .module
+                .declare_data(&sym, Linkage::Local, /*writable*/ false, /*tls*/ false)
+                .map_err(|e| format!("declare class_info data '{}': {}", sym, e))?;
+
+            let mut desc = cranelift_module::DataDescription::new();
+            desc.define_zeroinit(size as usize);
+            desc.set_align(PTR_SIZE as u64);
+
+            for (i, vt_sym) in ci.vtable_symbols.iter().enumerate() {
+                let vt_data_id = *vtable_data_ids.get(vt_sym).ok_or_else(|| {
+                    format!(
+                        "mixin-vtables: class_info '{}' references unknown vtable '{}'",
+                        sym, vt_sym
+                    )
+                })?;
+                let gv = self.module.declare_data_in_data(vt_data_id, &mut desc);
+                desc.write_data_addr((i as u32) * PTR_SIZE, gv, 0);
+            }
+
+            self.module
+                .define_data(data_id, &desc)
+                .map_err(|e| format!("define class_info data '{}': {}", sym, e))?;
+        }
+
         Ok(())
     }
 
