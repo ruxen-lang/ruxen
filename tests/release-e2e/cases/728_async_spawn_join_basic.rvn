@@ -1,48 +1,35 @@
 ## Spec docs/specs/stdlib/task_spawn.spec.md §B1 / §B3 / §B4 e2e.
 ##
-## Two CountdownFutures spawned via `Task.spawn_raw`, each polled
-## by the scheduler's pump call inside `block_on`'s inline loop.
-## Driver async-fn hand-polls Task.join(handle) on both until both
-## complete, returns the sum of their payloads.
+## Two CountdownFutures spawned via `Task.spawn_raw`, then each
+## joined via `Task.join(h).await`. The driver suspends back through
+## `block_on`'s outer pump loop on every await, so the spawned tasks
+## advance round-robin against the scheduler queue without any
+## hand-pumping inside the driver.
 ##
-## Why hand-poll instead of `Task.join(h).await`: the awaitee
-## desugar now sees stdlib classes (closes
-## project_riven_async_compiler_gaps.md #2, see fixture 731),
-## but lifting spawn into its own async fn so its handle can be
-## passed as an outer param to the await-driver hits a separate
-## Riven semantics gap — `Task.spawn_raw` is documented as taking
-## ownership of the future heap block (scheduler.c L150-152), but
-## Riven's drop elaboration still treats the local binding for
-## the future as droppable. When the spawn fn returns before its
-## spawned task completes, drop frees the heap block and the
-## pump dereferences freed memory.
-##
-## Per-fn-lifetime futures work in this fixture because spawn +
-## join + final result all live in a single long-running driver
-## async fn — the locals outlive the entire run. Migrating to
-## `.await` would require either implementing spawn's move
-## semantics in Riven OR loosening Milestone-2B's
-## "no statements before first await" segmenter so the spawn
-## can live in the same fn as the await.
+## This is the post-Gap-1, post-Gap-2 shape — what the original
+## hand-pump variant was deferring until the v1 missing-features
+## work landed:
+##   * Gap 1 (commit f899788): `Task.spawn_raw(fut)` is now
+##     recognised as a move-by-FFI handoff by drop elaboration —
+##     the local `f1` / `f2` bindings DON'T get a scope-exit drop
+##     emitted that would `riven_dealloc` the heap block out from
+##     under the scheduler.
+##   * Gap 2 (commit 7fc8a1e + 447e280): the Milestone-2B segmenter
+##     accepts pre-await statements (`let f1 = ...; let h1 =
+##     Task.spawn_raw(f1)`) before the first `.await`, and the
+##     MIR class-name parser for synth state-machine classes
+##     emits the correct class_info_ptr header shift so outer
+##     args read back correctly inside `init`.
 ##
 ## What this proves end-to-end:
 ##   - Task.spawn_raw enqueues a future without polling it.
 ##   - The block_on inline loop's pump call drives every queued
-##     task forward in round-robin order (no starvation).
-##   - TaskHandle.is_done flips when the task completes; result()
-##     returns the i64 payload.
-##   - Task.join(handle) hand-polled in the orchestrator yields
-##     Pending until done, Ready(result) when complete.
+##     task forward in round-robin order (no starvation), even
+##     across multiple `.await` suspends in the driver.
+##   - Task.join(handle).await yields the i64 payload after the
+##     spawned task transitions to Ready.
 ##   - Two tasks completing both their N-step countdowns sum
 ##     correctly: 11 + 22 == 33.
-##
-## Why not the full TCP echo (727 single-block_on shape): the
-## reactor's level-triggered fd-readiness slots haven't been
-## stress-tested under multi-task round-robin polling on a single
-## block_on thread. Shipping a timer-pair (or here, count-down)
-## variant first de-risks the queue + handle plumbing before the
-## reactor adds another dimension. The full TCP shape lands as a
-## follow-up once the simpler 728 is stable.
 
 class CountdownFuture
   remaining: Int
@@ -65,54 +52,19 @@ class CountdownFuture
   end
 end
 
-## Driver: spawn two countdowns, hand-poll both joins until done,
-## return their sum. async def so Task.spawn doesn't trip E1116;
-## body is Milestone 2A shape (no `.await`, single-state future).
+## Driver: spawn two countdowns, chain `Task.join(h).await` on both,
+## return their sum. Both spawn locals live in the pre-await prefix
+## (Gap 2 segmenter); the move-by-FFI handoff (Gap 1) keeps drop
+## elaboration from freeing the spawned futures while the scheduler
+## still owns them.
 async def driver -> Int
   let f1 = CountdownFuture.new(3, 11)
   let f2 = CountdownFuture.new(5, 22)
   let h1 = Task.spawn_raw(f1)
   let h2 = Task.spawn_raw(f2)
-  let var j1 = Task.join(h1)
-  let var j2 = Task.join(h2)
-  let var cx = Context.test_dummy()
-  let var r1 = 0
-  let var r2 = 0
-  let var done1 = 0
-  let var done2 = 0
-  # The orchestrator's body executes inside driver's own poll().
-  # Once we enter this loop, control never returns to block_on's
-  # outer pump call until we break — so we MUST pump the queue
-  # ourselves between join-poll attempts, otherwise the spawned
-  # tasks never advance.
-  #
-  # Future ergonomic: when `Task.join(h).await` lands (deferred
-  # gap above), each `.await` site suspends back through
-  # block_on's outer pump, removing the manual pump call here.
-  loop
-    let _pumped = riven_executor_pump_tasks()
-    if done1 == 0
-      match (&var j1).poll(&var cx)
-        Poll.Ready(v) -> do
-          r1 = v
-          done1 = 1
-        end
-        Poll.Pending -> ()
-      end
-    end
-    if done2 == 0
-      match (&var j2).poll(&var cx)
-        Poll.Ready(v) -> do
-          r2 = v
-          done2 = 1
-        end
-        Poll.Pending -> ()
-      end
-    end
-    if done1 == 1 && done2 == 1
-      break r1 + r2
-    end
-  end
+  let v1 = Task.join(h1).await
+  let v2 = Task.join(h2).await
+  v1 + v2
 end
 
 def main
