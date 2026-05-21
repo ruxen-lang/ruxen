@@ -1,0 +1,25 @@
+# Phase B-5 pin test: a runtime-dispatch class allocated at a real
+# call site must emit a class_info_ptr write at slot 0 immediately
+# after the heap allocation. Spec §B5.
+
+mixin Sized dispatch runtime
+  def size -> Int
+end
+
+class Circle
+  radius: Int
+
+  def init(@radius: Int)
+  end
+
+  include Sized
+
+  def size -> Int
+    self.radius
+  end
+end
+
+def make_one -> Int
+  let c = Circle.new(5)
+  c.size
+end

@@ -457,6 +457,23 @@ pub(super) fn translate_instruction(
             def_local(var_map, stack_slots, builder, *dest, addr);
         }
 
+        MirInst::DataAddr { dest, data_sym } => {
+            // Phase B-5: look up the pre-declared data symbol (vtable
+            // or class_info) by name. The data ID is registered in
+            // Pass 1.5 of `compile_program` before any function body
+            // is lowered.
+            let data_id = *env.vtable_data.get(data_sym).ok_or_else(|| {
+                format!(
+                    "mixin-vtables: DataAddr for unknown data symbol '{}' — \
+                     `__rvn_vtable_*` / `__rvn_classinfo_*` should have been declared in Pass 1.5",
+                    data_sym
+                )
+            })?;
+            let gv = env.module.declare_data_in_func(data_id, builder.func);
+            let addr = builder.ins().symbol_value(types::I64, gv);
+            def_local(var_map, stack_slots, builder, *dest, addr);
+        }
+
         MirInst::CallIndirect { dest, callee, args } => {
             let callee_val = use_local(var_map, stack_slots, builder, *callee);
             let mut arg_vals = Vec::with_capacity(args.len());

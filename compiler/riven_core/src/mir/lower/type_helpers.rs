@@ -272,3 +272,56 @@ pub(super) fn struct_field_layout(name: &str, symbols: &SymbolTable) -> Option<V
     }
     None
 }
+
+impl<'a> Lowerer<'a> {
+    /// Phase B-4: number of header slots prepended to a class's
+    /// allocation. One slot per runtime-dispatch mixin include — for
+    /// v1, every runtime-dispatch class has exactly one class_info_ptr
+    /// header at slot 0 (the class_info struct itself carries one
+    /// pointer per mixin), so this function returns 0 or 1. Spec
+    /// §B2/§B8: single class_info_ptr at offset 0.
+    ///
+    /// `class_name` is the resolved class identifier (NOT
+    /// `Class[GenericArgs]` mangling — caller strips generics).
+    /// Returns 0 for any name that isn't a runtime-dispatch class.
+    ///
+    /// Callers: every MIR lowering site that computes a `field_index`
+    /// for `GetField` / `SetField` on a class receiver. The shift is
+    /// **not** applied to struct fields, tuple slots, Option/Result
+    /// payloads, range fields, or any built-in 2-slot shape — those
+    /// do NOT carry a class_info header.
+    pub(super) fn class_field_index_shift(&self, class_name: &str) -> usize {
+        use crate::resolve::symbols::DefKind;
+        for def in self.symbols.iter() {
+            if def.name == class_name {
+                if let DefKind::Class { info } = &def.kind {
+                    if !info.runtime_dispatch_includes.is_empty() {
+                        // v1 ships a single class_info_ptr header at
+                        // slot 0; class_info itself widens for >1
+                        // mixin includes.
+                        return 1;
+                    }
+                    return 0;
+                }
+            }
+        }
+        0
+    }
+
+    /// Phase B-4 convenience: extract the class name from a Ty and
+    /// look up its header shift. Peels Ref/RefMut/Alias/Newtype.
+    /// Returns 0 for non-class types (structs, tuples, primitives).
+    pub(super) fn class_field_shift_for_ty(&self, ty: &Ty) -> usize {
+        let mut cur = ty;
+        loop {
+            match cur {
+                Ty::Ref(inner) | Ty::RefMut(inner) => cur = inner,
+                Ty::RefLifetime(_, inner) | Ty::RefMutLifetime(_, inner) => cur = inner,
+                Ty::Alias { target, .. } => cur = target,
+                Ty::Newtype { inner, .. } => cur = inner,
+                Ty::Class { name, .. } => return self.class_field_index_shift(name),
+                _ => return 0,
+            }
+        }
+    }
+}

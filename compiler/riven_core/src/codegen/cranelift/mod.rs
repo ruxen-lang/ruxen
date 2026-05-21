@@ -46,6 +46,13 @@ pub struct CodeGen {
     string_data: HashMap<String, cranelift_module::DataId>,
     string_counter: u32,
     declared_fns: HashMap<String, FuncId>,
+    /// Mixin vtables Phase B-5: data sections for `__rvn_vtable_*` and
+    /// `__rvn_classinfo_*` symbols. Declared early (before function
+    /// definitions) so MIR `DataAddr { data_sym }` lowering can take
+    /// their address from inside function bodies. Defined with their
+    /// function-pointer / data-pointer relocations after function
+    /// definitions complete (`emit_mixin_vtables`).
+    vtable_data: HashMap<String, cranelift_module::DataId>,
     /// Cranelift parameter types for every function declared in this
     /// module (FFI + user MIR fns).  Used by `coerce_call_args` to apply
     /// the *correct* narrow-int signature when the callee is a known
@@ -91,6 +98,7 @@ impl CodeGen {
             string_data: HashMap::new(),
             string_counter: 0,
             declared_fns: HashMap::new(),
+            vtable_data: HashMap::new(),
             user_fn_param_tys: HashMap::new(),
         })
     }
@@ -171,6 +179,14 @@ impl CodeGen {
             self.declared_fns.insert(func.name.clone(), func_id);
         }
 
+        // ── Pass 1.5: declare mixin-vtable + class_info data symbols ─────
+        // These must exist as DataIds BEFORE function bodies are
+        // emitted so that MIR `DataAddr { data_sym }` lowering can
+        // resolve them inside function bodies (Phase B-5 init-time
+        // write). They get defined (with their relocations) after all
+        // functions are emitted, in Pass 3.
+        self.declare_mixin_vtable_data(program)?;
+
         // ── Pass 2: define ───────────────────────────────────────────────
         for func in &program.functions {
             self.compile_function(func)?;
@@ -185,34 +201,51 @@ impl CodeGen {
         // `<ClassName>_<method>` symbol is a regular MIR function);
         // method symbols missing from `declared_fns` indicate an
         // upstream E1117 escape — surface as a hard codegen error.
-        self.emit_mixin_vtables(program)?;
+        self.define_mixin_vtable_data(program)?;
 
         Ok(())
     }
 
-    /// Emit one `__rvn_vtable_<Mixin>_for_<Class>` data section per
-    /// MIR vtable, then one `__rvn_classinfo_<Class>` per MIR
-    /// class_info. Spec §B2-B3.
-    fn emit_mixin_vtables(&mut self, program: &MirProgram) -> Result<(), String> {
-        const PTR_SIZE: u32 = 8;
-
-        // Phase B-2: per-vtable data section. Each slot is a
-        // function-pointer relocation; total size = ptr_size * methods.
-        let mut vtable_data_ids: HashMap<String, cranelift_module::DataId> = HashMap::new();
+    /// Declare data symbols for every vtable + class_info up-front so
+    /// MIR `DataAddr` lowering inside function bodies can look them up
+    /// by `DataId`. Definitions (with relocations) happen later in
+    /// `define_mixin_vtable_data` after all functions are emitted.
+    fn declare_mixin_vtable_data(&mut self, program: &MirProgram) -> Result<(), String> {
         for vt in &program.vtables {
             let sym = vt.symbol();
-            let size = (vt.method_symbols.len() as u32) * PTR_SIZE;
             let data_id = self
                 .module
                 .declare_data(&sym, Linkage::Local, /*writable*/ false, /*tls*/ false)
                 .map_err(|e| format!("declare vtable data '{}': {}", sym, e))?;
+            self.vtable_data.insert(sym, data_id);
+        }
+        for ci in &program.class_infos {
+            let sym = ci.symbol();
+            let data_id = self
+                .module
+                .declare_data(&sym, Linkage::Local, /*writable*/ false, /*tls*/ false)
+                .map_err(|e| format!("declare class_info data '{}': {}", sym, e))?;
+            self.vtable_data.insert(sym, data_id);
+        }
+        Ok(())
+    }
 
+    /// Define the relocations for every previously-declared vtable +
+    /// class_info data symbol. Spec §B2-B3.
+    fn define_mixin_vtable_data(&mut self, program: &MirProgram) -> Result<(), String> {
+        const PTR_SIZE: u32 = 8;
+
+        // Phase B-2: vtable function-pointer relocations.
+        for vt in &program.vtables {
+            let sym = vt.symbol();
+            let data_id = *self
+                .vtable_data
+                .get(&sym)
+                .ok_or_else(|| format!("vtable data '{}' was not declared", sym))?;
+            let size = (vt.method_symbols.len() as u32) * PTR_SIZE;
             let mut desc = cranelift_module::DataDescription::new();
-            // Allocate zeroed bytes; relocations will be applied by the
-            // linker at each function-pointer offset.
             desc.define_zeroinit(size as usize);
             desc.set_align(PTR_SIZE as u64);
-
             for (i, method_sym) in vt.method_symbols.iter().enumerate() {
                 let func_id = *self.declared_fns.get(method_sym).ok_or_else(|| {
                     format!(
@@ -224,30 +257,25 @@ impl CodeGen {
                 let func_ref = self.module.declare_func_in_data(func_id, &mut desc);
                 desc.write_function_addr((i as u32) * PTR_SIZE, func_ref);
             }
-
             self.module
                 .define_data(data_id, &desc)
                 .map_err(|e| format!("define vtable data '{}': {}", sym, e))?;
-
-            vtable_data_ids.insert(sym, data_id);
         }
 
-        // Phase B-3: per-class class_info. Each slot is a
-        // data-pointer relocation pointing at one of the vtables above.
+        // Phase B-3: class_info data-pointer relocations (pointing at
+        // the vtables above).
         for ci in &program.class_infos {
             let sym = ci.symbol();
+            let data_id = *self
+                .vtable_data
+                .get(&sym)
+                .ok_or_else(|| format!("class_info data '{}' was not declared", sym))?;
             let size = (ci.vtable_symbols.len() as u32) * PTR_SIZE;
-            let data_id = self
-                .module
-                .declare_data(&sym, Linkage::Local, /*writable*/ false, /*tls*/ false)
-                .map_err(|e| format!("declare class_info data '{}': {}", sym, e))?;
-
             let mut desc = cranelift_module::DataDescription::new();
             desc.define_zeroinit(size as usize);
             desc.set_align(PTR_SIZE as u64);
-
             for (i, vt_sym) in ci.vtable_symbols.iter().enumerate() {
-                let vt_data_id = *vtable_data_ids.get(vt_sym).ok_or_else(|| {
+                let vt_data_id = *self.vtable_data.get(vt_sym).ok_or_else(|| {
                     format!(
                         "mixin-vtables: class_info '{}' references unknown vtable '{}'",
                         sym, vt_sym
@@ -256,12 +284,10 @@ impl CodeGen {
                 let gv = self.module.declare_data_in_data(vt_data_id, &mut desc);
                 desc.write_data_addr((i as u32) * PTR_SIZE, gv, 0);
             }
-
             self.module
                 .define_data(data_id, &desc)
                 .map_err(|e| format!("define class_info data '{}': {}", sym, e))?;
         }
-
         Ok(())
     }
 
@@ -291,6 +317,7 @@ impl CodeGen {
                 string_data: &mut self.string_data,
                 string_counter: &mut self.string_counter,
                 user_fn_param_tys: &self.user_fn_param_tys,
+                vtable_data: &self.vtable_data,
             };
 
             // ── Map MIR blocks → Cranelift blocks ────────────────────────

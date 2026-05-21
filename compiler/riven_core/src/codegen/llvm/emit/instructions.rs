@@ -504,6 +504,22 @@ pub(super) fn translate_instruction<'ctx>(
                 .map_err(|e| format!("Failed to store func addr: {:?}", e))?;
         }
 
+        MirInst::DataAddr { dest: _, data_sym } => {
+            // TODO(mixin-vtables): LLVM backend doesn't yet emit
+            // `__rvn_vtable_*` / `__rvn_classinfo_*` data sections —
+            // see the early-out in `codegen/llvm/mod.rs::compile_program`
+            // that errors when `program.vtables`/`class_infos` is
+            // non-empty. Reaching `DataAddr` here would mean MIR
+            // referenced such a symbol despite that guard, which
+            // shouldn't happen. Spec §B5.
+            return Err(format!(
+                "mixin-vtables: LLVM backend cannot lower DataAddr {{ data_sym: '{}' }} \
+                 — use the Cranelift backend (default) for code that includes a \
+                 `dispatch runtime` mixin.",
+                data_sym
+            ));
+        }
+
         MirInst::CallIndirect { dest, callee, args } => {
             let callee_ptr = builder
                 .build_load(

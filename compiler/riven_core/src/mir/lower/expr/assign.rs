@@ -69,9 +69,12 @@ impl<'a> Lowerer<'a> {
                     } => {
                         let base_local = self.lower_expr(object)?;
                         if let Some(base) = base_local {
+                            // Phase B-4: shift past class_info_ptr
+                            // header for runtime-dispatch classes.
+                            let shift = self.class_field_shift_for_ty(&object.ty);
                             self.emit(MirInst::SetField {
                                 base,
-                                field_index: *field_idx,
+                                field_index: *field_idx + shift,
                                 value: val,
                             });
                         }
@@ -223,12 +226,18 @@ impl<'a> Lowerer<'a> {
                     } => {
                         let base_local = self.lower_expr(object)?;
                         if let Some(base) = base_local {
+                            // Phase B-4: shift past class_info_ptr
+                            // header. Use the same shifted index for
+                            // both the load (cur) and the store (back)
+                            // — both ops target the same slot.
+                            let shift = self.class_field_shift_for_ty(&object.ty);
+                            let shifted_idx = *field_idx + shift;
                             // Load the current field value.
                             let cur = self.new_temp(target.ty.clone());
                             self.emit(MirInst::GetField {
                                 dest: cur,
                                 base,
-                                field_index: *field_idx,
+                                field_index: shifted_idx,
                             });
                             // Perform the operation.
                             let tmp = self.new_temp(target.ty.clone());
@@ -250,7 +259,7 @@ impl<'a> Lowerer<'a> {
                             // Store the result back.
                             self.emit(MirInst::SetField {
                                 base,
-                                field_index: *field_idx,
+                                field_index: shifted_idx,
                                 value: MirValue::Use(tmp),
                             });
                         }

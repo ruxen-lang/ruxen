@@ -139,6 +139,11 @@ impl<'a> Lowerer<'a> {
     /// N declared fields needs at least `N * 8` bytes regardless of the
     /// C layout size — a 3xUInt8 struct has layout.size == 3 but we still
     /// write UInt8s at offsets 0, 8, 16 when setting its fields.
+    ///
+    /// Phase B-4: runtime-dispatch classes prepend a class_info_ptr
+    /// header slot (8 bytes per runtime-dispatch mixin; v1 ships with
+    /// a single class_info_ptr at offset 0). The allocation size
+    /// grows by `header_slots * 8` to accommodate the header.
     pub(super) fn alloc_size(&self, ty: &Ty) -> usize {
         use crate::resolve::symbols::DefKind;
         let layout = crate::codegen::layout::layout_of(ty, self.symbols);
@@ -166,8 +171,42 @@ impl<'a> Lowerer<'a> {
                     }
                 }
             }
-            return base.max(total_fields * 8).max(8);
+            // Phase B-4: add header slots for runtime-dispatch classes.
+            let header = self.class_field_shift_for_ty(ty);
+            let needed = (total_fields + header) * 8;
+            return base.max(needed).max(8);
         }
         base
+    }
+
+    /// Phase B-5: emit a `SetField` at slot 0 of `dest` writing the
+    /// address of `__rvn_classinfo_<ClassName>` — runs immediately
+    /// after every `Alloc` of a runtime-dispatch class. No-op for
+    /// classes whose `runtime_dispatch_includes` is empty (and for
+    /// non-class types).
+    ///
+    /// Spec: docs/specs/types/mixin_vtables.spec.md §B5.
+    pub(super) fn emit_class_info_init(&mut self, ty: &Ty, dest: LocalId) {
+        let class_name = match ty {
+            Ty::Class { name, .. } => name.clone(),
+            _ => return,
+        };
+        // Only emit for runtime-dispatch classes.
+        if self.class_field_index_shift(&class_name) == 0 {
+            return;
+        }
+        // Materialize the class_info symbol address into a fresh
+        // temporary, then store at slot 0 of the alloc.
+        let addr_local = self.new_temp(Ty::Int);
+        let sym = format!("__rvn_classinfo_{}", class_name);
+        self.emit(MirInst::DataAddr {
+            dest: addr_local,
+            data_sym: sym,
+        });
+        self.emit(MirInst::SetField {
+            base: dest,
+            field_index: 0,
+            value: MirValue::Use(addr_local),
+        });
     }
 }

@@ -342,10 +342,14 @@ impl<'a> Lowerer<'a> {
                 let base_local = self.lower_expr(object)?;
                 if let Some(base) = base_local {
                     let dest = self.new_temp(expr.ty.clone());
+                    // Phase B-4: shift field index past class_info_ptr
+                    // header for runtime-dispatch classes. Returns 0
+                    // for structs / static-only-mixin classes.
+                    let shift = self.class_field_shift_for_ty(&object.ty);
                     self.emit(MirInst::GetField {
                         dest,
                         base,
-                        field_index: *field_idx,
+                        field_index: *field_idx + shift,
                     });
                     Ok(Some(dest))
                 } else {

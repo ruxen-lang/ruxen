@@ -410,6 +410,11 @@ impl<'a> Lowerer<'a> {
                         ty: expr.ty.clone(),
                         size: self.alloc_size(&expr.ty),
                     });
+                    // Phase B-5: write class_info_ptr at slot 0 before
+                    // `ClassName_init` runs (init body may already
+                    // try to dispatch a `dyn Mixin` method on
+                    // `self`).
+                    self.emit_class_info_init(&expr.ty, obj);
 
                     // Call ClassName_init(self, args...)
                     let mut arg_values = vec![MirValue::Use(obj)];

@@ -26,6 +26,12 @@ pub(super) struct TranslationEnv<'a> {
     /// `coerce_call_args` can apply the *real* narrow-int signature of
     /// known user fns instead of the default widen-to-i64 fallback.
     pub(super) user_fn_param_tys: &'a HashMap<String, Vec<Type>>,
+    /// Mixin vtables Phase B-5: pre-declared data symbol IDs for
+    /// `__rvn_vtable_*` and `__rvn_classinfo_*`. Read-only —
+    /// instruction lowering never declares new entries here. Used by
+    /// `MirInst::DataAddr` lowering to take the address of a vtable
+    /// / class_info inside a function body.
+    pub(super) vtable_data: &'a HashMap<String, cranelift_module::DataId>,
 }
 
 impl<'a> TranslationEnv<'a> {

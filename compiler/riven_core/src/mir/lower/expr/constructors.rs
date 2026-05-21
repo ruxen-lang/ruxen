@@ -11,12 +11,22 @@ impl<'a> Lowerer<'a> {
                     ty: expr.ty.clone(),
                     size: self.alloc_size(&expr.ty),
                 });
+                // Phase B-5: write the class_info_ptr header at slot 0
+                // for classes that include any `dispatch runtime`
+                // mixin. No-op for static-only-mixin classes and for
+                // structs. See spec §B2/§B8.
+                self.emit_class_info_init(&expr.ty, dest);
+                // Phase B-4: shift declared field indices by the
+                // class's header slot count so SetField writes land
+                // past the class_info_ptr header. Returns 0 for
+                // structs/static-only classes — existing flat layout.
+                let shift = self.class_field_shift_for_ty(&expr.ty);
                 for (idx, (_name, field_expr)) in fields.iter().enumerate() {
                     let val_local = self.lower_expr(field_expr)?;
                     let val = local_to_value(val_local);
                     self.emit(MirInst::SetField {
                         base: dest,
-                        field_index: idx,
+                        field_index: idx + shift,
                         value: val,
                     });
                 }

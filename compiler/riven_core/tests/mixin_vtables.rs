@@ -18,6 +18,9 @@
 //! | B-2       | `vtable_struct_emitted_per_implementor`                    | §B3  |
 //! | B-3       | `class_info_struct_emitted_per_runtime_dispatch_class`     | §B8  |
 //! | B-2/B-3   | `static_mixin_class_produces_no_vtable_or_classinfo`       | §B11 |
+//! | B-4       | `runtime_dispatch_class_field_index_shifted_by_one`        | §B2  |
+//! | B-4       | `static_mixin_class_field_index_unshifted`                 | §B11 |
+//! | B-5       | `class_init_writes_class_info_ptr_at_slot_zero`            | §B4/§B5 |
 //!
 //! Discipline: all Riven source goes through `.rvn` fixtures
 //! (`feedback_no_inline_rvn_in_pin_tests`).
@@ -384,5 +387,180 @@ fn static_mixin_class_produces_no_vtable_or_classinfo() {
             .iter()
             .map(|c| c.symbol())
             .collect::<Vec<_>>()
+    );
+}
+
+// ─── Phase B-4 — class_info_ptr layout header shift ──────────────
+
+/// Phase B-4: a runtime-dispatch class's user-declared field `radius`
+/// (declared index 0) lowers to a `SetField { field_index: 1 }` /
+/// `GetField { field_index: 1 }` because slot 0 is reserved for the
+/// class_info_ptr header. Without the +1 shift, init writes would
+/// overwrite the header (slot 0) and any subsequent dynamic dispatch
+/// would chase a corrupted pointer.
+#[test]
+fn runtime_dispatch_class_field_index_shifted_by_one() {
+    let mir = lower_fixture("mixin_dispatch_runtime_modifier_parses");
+
+    // Fixture defines `Circle.init(@radius: Int)` and a method
+    // `Circle.size` that reads `self.radius`. The Circle_init MIR
+    // body should `SetField` radius at slot 1 (after class_info_ptr);
+    // Circle_size should `GetField` radius at slot 1 too.
+
+    let init_fn = mir
+        .functions
+        .iter()
+        .find(|f| f.name == "Circle_init")
+        .expect("Circle_init MIR fn must exist");
+
+    let radius_set_slots: Vec<usize> = init_fn
+        .blocks
+        .iter()
+        .flat_map(|b| b.instructions.iter())
+        .filter_map(|i| match i {
+            riven_core::mir::nodes::MirInst::SetField { field_index, .. } => Some(*field_index),
+            _ => None,
+        })
+        .collect();
+    // The init body auto-assigns the @radius param to self.radius;
+    // with B-4's +1 header shift it must land at slot 1 (declared
+    // idx 0 + 1 header slot for class_info_ptr). The slot-0 write
+    // (class_info_ptr) happens in the caller at the alloc site
+    // (`Circle.new(...)`), not in init.
+    assert_eq!(
+        radius_set_slots,
+        vec![1],
+        "Circle_init must SetField the declared field `radius` at slot 1 \
+         (declared idx 0 + class_info_ptr header shift = 1), got slots: {:?}",
+        radius_set_slots
+    );
+
+    let size_fn = mir
+        .functions
+        .iter()
+        .find(|f| f.name == "Circle_size")
+        .expect("Circle_size MIR fn must exist");
+
+    let radius_get_slots: Vec<usize> = size_fn
+        .blocks
+        .iter()
+        .flat_map(|b| b.instructions.iter())
+        .filter_map(|i| match i {
+            riven_core::mir::nodes::MirInst::GetField { field_index, .. } => Some(*field_index),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        radius_get_slots.iter().any(|&s| s == 1),
+        "Circle_size must GetField `radius` at slot 1, got slots: {:?}",
+        radius_get_slots
+    );
+    assert!(
+        !radius_get_slots.iter().any(|&s| s == 0),
+        "Circle_size must NOT GetField at slot 0 (that's the class_info_ptr header), \
+         got slots: {:?}",
+        radius_get_slots
+    );
+}
+
+/// Phase B-4 (negative): a class that only includes a static-dispatch
+/// mixin (or none at all) does NOT get a header shift — declared
+/// field index 0 stays at MIR slot 0. Without this guarantee, every
+/// existing class in the stdlib would silently shift +1 and the
+/// codegen-side `field_index * 8` stride would corrupt every existing
+/// field access.
+#[test]
+fn static_mixin_class_field_index_unshifted() {
+    let mir = lower_fixture("static_mixin_no_vtable_emission");
+
+    // Fixture: `class Bob do include Plain (static); def speak ... 1 end end`.
+    // Bob has no declared fields, but Bob_speak doesn't GetField at all;
+    // the test that matters is that NO class_info_ptr SetField
+    // is emitted at slot 0 in any Bob method (no `__rvn_classinfo_Bob`
+    // exists, so emitting one would be a hard codegen error).
+    let bob_methods: Vec<&riven_core::mir::nodes::MirFunction> = mir
+        .functions
+        .iter()
+        .filter(|f| f.name.starts_with("Bob_"))
+        .collect();
+    assert!(
+        !bob_methods.is_empty(),
+        "expected at least one Bob_* method in MIR",
+    );
+    for f in &bob_methods {
+        let dataaddrs: Vec<&str> = f
+            .blocks
+            .iter()
+            .flat_map(|b| b.instructions.iter())
+            .filter_map(|i| match i {
+                riven_core::mir::nodes::MirInst::DataAddr { data_sym, .. } => {
+                    Some(data_sym.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(
+            dataaddrs.is_empty(),
+            "{}: static-mixin class must NOT emit any DataAddr (class_info_ptr) \
+             instructions, found: {:?}",
+            f.name,
+            dataaddrs
+        );
+    }
+}
+
+// ─── Phase B-5 — class_info_ptr init-time write ────────────────────
+
+/// Phase B-5: every alloc site for a runtime-dispatch class emits a
+/// `DataAddr { data_sym: "__rvn_classinfo_<Class>" }` followed by a
+/// `SetField { field_index: 0 }` writing the address into the
+/// header. The exact pairing is enforced: every DataAddr for a
+/// classinfo symbol must be followed by a SetField at slot 0 with
+/// that local as its value.
+///
+/// The alloc site lives in the CALLER (the user code that writes
+/// `Circle.new(5)`), not in `Circle_init` — `Circle_init` mutates an
+/// already-allocated object passed as `self`. The fixture `make_one`
+/// allocates a Circle and reads its size, so the pair lives in
+/// `make_one`'s MIR body.
+#[test]
+fn class_init_writes_class_info_ptr_at_slot_zero() {
+    let mir = lower_fixture("mixin_vtables_alloc_site");
+    let make_one = mir
+        .functions
+        .iter()
+        .find(|f| f.name == "make_one")
+        .expect("make_one MIR fn must exist");
+
+    // Scan instructions in order, looking for a DataAddr →
+    // SetField(slot=0) pair where the SetField's value is the
+    // DataAddr's dest.
+    let mut found = false;
+    for block in &make_one.blocks {
+        let mut last_data_addr: Option<(riven_core::mir::nodes::LocalId, String)> = None;
+        for inst in &block.instructions {
+            match inst {
+                riven_core::mir::nodes::MirInst::DataAddr { dest, data_sym } => {
+                    last_data_addr = Some((*dest, data_sym.clone()));
+                }
+                riven_core::mir::nodes::MirInst::SetField {
+                    field_index: 0,
+                    value: riven_core::mir::nodes::MirValue::Use(v_local),
+                    ..
+                } => {
+                    if let Some((da_dest, da_sym)) = &last_data_addr {
+                        if *v_local == *da_dest && da_sym == "__rvn_classinfo_Circle" {
+                            found = true;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    assert!(
+        found,
+        "make_one must emit `DataAddr __rvn_classinfo_Circle` → `SetField slot 0` pair \
+         to install the class_info_ptr header at the Circle.new alloc site (Phase B-5)",
     );
 }

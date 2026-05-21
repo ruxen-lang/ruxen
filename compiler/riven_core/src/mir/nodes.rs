@@ -323,6 +323,14 @@ pub enum MirInst {
     StringLiteral { dest: LocalId, value: String },
     /// `dest = &func_name` — get address of a named function as a pointer
     FuncAddr { dest: LocalId, func_name: String },
+    /// `dest = &data_sym` — get address of a static read-only data
+    /// section as an i64 pointer. Phase B-5: used to write a class's
+    /// `__rvn_classinfo_<Class>` symbol into the class_info_ptr header
+    /// slot at every allocation site of a runtime-dispatch class. The
+    /// data symbol must already be defined elsewhere in the MIR (today
+    /// only mixin-vtables emit such sections — `__rvn_vtable_*` and
+    /// `__rvn_classinfo_*`). Spec: docs/specs/types/mixin_vtables.spec.md §B5.
+    DataAddr { dest: LocalId, data_sym: String },
     /// `dest = call_indirect(callee_ptr, args...)` — indirect function call
     CallIndirect {
         dest: Option<LocalId>,

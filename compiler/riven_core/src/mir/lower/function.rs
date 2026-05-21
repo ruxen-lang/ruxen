@@ -63,6 +63,10 @@ impl<'a> Lowerer<'a> {
             // Get class field names from the class name (derived from mangled method name)
             let class_name = name.split('_').next().unwrap_or("");
             let class_fields = self.get_class_field_names(class_name);
+            // Phase B-4: shift past class_info_ptr header for
+            // runtime-dispatch classes — declared field idx 0 maps
+            // to MIR slot 1, etc. Computed once per init body.
+            let shift = self.class_field_index_shift(class_name);
             for param in func.params.iter() {
                 if param.auto_assign {
                     if let Some(&param_local) = self.def_to_local.get(&param.def_id) {
@@ -79,7 +83,7 @@ impl<'a> Lowerer<'a> {
                             });
                         self.emit(MirInst::SetField {
                             base: self_local,
-                            field_index,
+                            field_index: field_index + shift,
                             value: MirValue::Use(param_local),
                         });
                     }
