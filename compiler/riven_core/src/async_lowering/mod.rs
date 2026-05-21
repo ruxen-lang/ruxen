@@ -40,12 +40,45 @@ use crate::parser::ast::*;
 /// Milestone 2A/2B — they require generic captures over `self` that
 /// the state-machine class doesn't model yet. Async methods keep
 /// their sub-phase-1 bridge-mode semantics today.
+///
+/// Convenience wrapper for callers that have no bootstrap context
+/// (today: a handful of unit tests). Production callers in
+/// [`crate::typeck`] use [`lower_async_defs_with_bootstrap`] so
+/// `Class.method(args).await` shapes can resolve awaitee classes
+/// declared in `library/std/*` (e.g. `TimeSleepFuture`,
+/// `TaskJoinFuture`).
 pub fn lower_async_defs(program: &mut Program) {
+    lower_async_defs_with_bootstrap(program, &[]);
+}
+
+/// Bootstrap-aware variant of [`lower_async_defs`]. The lowering's
+/// awaitee classifier (`describe_await`) walks `program` plus every
+/// `bootstrap_programs` entry to populate its `class_static_returns`
+/// / `future_outputs` tables. Without this, every
+/// `<StdlibClass>.method(args).await` form fails to desugar — the
+/// stdlib classes live in separately-parsed bootstrap `Program`s,
+/// not in `program.items`.
+///
+/// Closes the gap documented in
+/// `project_riven_async_compiler_gaps.md` (#2) and unblocks the two
+/// deferred pins (731_class_static_call_await, task_join_await).
+pub fn lower_async_defs_with_bootstrap(
+    program: &mut Program,
+    bootstrap_programs: &[&Program],
+) {
     // Build a map of `fn_name -> (synth_class_name, declared_return_type)` so
     // a 2B await on `g()` can name the sub-future field type as
     // `__GFuture` and the post-Ready local's type as the user's
     // declared return on `g`. The map covers only top-level async
     // free fns (which is all 2B supports — async methods deferred).
+    //
+    // The async-fn-returns map is intentionally USER-PROGRAM-ONLY:
+    // bootstrap stdlib defines no async free fns today (the stdlib
+    // ships explicit Future classes instead), and even if it did, a
+    // user-program `let x = stdlib_async_fn().await` site would still
+    // resolve via shape 2 (class-static-method call returning the
+    // synth Future class) once the stdlib's async-fn-wrapper was
+    // already lowered in its own translation unit.
     let mut async_fn_returns: HashMap<String, (String, TypeExpr)> = HashMap::new();
     for item in &program.items {
         if let TopLevelItem::Function(func) = item {
@@ -60,25 +93,33 @@ pub fn lower_async_defs(program: &mut Program) {
         }
     }
 
-    // Task #21: class-static-method-call awaitee support
+    // Task #21 + follow-up: class-static-method-call awaitee support
     // (`Class.method(args).await`). We collect two AST-time tables:
     //
     //   1. class_static_returns: (ClassName, MethodName) -> declared return type.
-    //      Populated by walking each top-level class's `methods` and
-    //      `lib_decls`. Filters to STATIC (class-level) methods only
-    //      — instance methods are not supported as awaitee receivers
-    //      in this milestone (the receiver's class is not known at
+    //      Walks each top-level class's `methods` and `lib_decls`.
+    //      Filters to STATIC (class-level) methods only — instance
+    //      methods are not supported as awaitee receivers in this
+    //      milestone (the receiver's class is not known at
     //      AST-rewrite time without typeck).
     //
-    //   2. future_outputs: FutureClassName -> Output type. Populated
-    //      by walking each class's `methods` for a `poll(cx) -> Poll[T]`
-    //      method (which is the canonical Future-mixin marker). The
-    //      `T` is the future's Output. Used to type the hoisted
+    //   2. future_outputs: FutureClassName -> Output type. Walks each
+    //      class's `methods` for a `poll(cx) -> Poll[T]` method
+    //      (which is the canonical Future-mixin marker). The `T` is
+    //      the future's Output. Used to type the hoisted
     //      `<binding>` field for method-call awaitees.
     //
-    // Both maps live for the duration of the lowering pass.
-    let class_static_returns = collect_class_static_returns(program);
-    let future_outputs = collect_future_outputs(program);
+    // Both walks visit the user program AND each bootstrap stdlib
+    // program so e.g. `Async.sleep(d).await` resolves to
+    // `TimeSleepFuture` (library/std/future/src/lib.rvn).
+    let mut class_static_returns: HashMap<(String, String), TypeExpr> = HashMap::new();
+    let mut future_outputs: HashMap<String, TypeExpr> = HashMap::new();
+    collect_class_static_returns_into(program, &mut class_static_returns);
+    collect_future_outputs_into(program, &mut future_outputs);
+    for bp in bootstrap_programs {
+        collect_class_static_returns_into(bp, &mut class_static_returns);
+        collect_future_outputs_into(bp, &mut future_outputs);
+    }
 
     let mut new_classes: Vec<TopLevelItem> = Vec::new();
 
@@ -145,19 +186,26 @@ pub fn lower_async_defs(program: &mut Program) {
     rewrite_block_on_calls(program);
 }
 
-/// Build the `(ClassName, MethodName) -> ReturnType` map for every
-/// top-level class's STATIC methods (`def self.X` form). Covers both
-/// hand-written `methods` and `lib_decls` (FFI shells). Used by
-/// `describe_await` to recognise `Class.method(args).await` awaitees
-/// — task #21.
+/// Populate the `(ClassName, MethodName) -> ReturnType` map with
+/// every top-level class's STATIC methods (`def self.X` form) from
+/// `program`. Covers both hand-written `methods` and `lib_decls`
+/// (FFI shells). Used by `describe_await` to recognise
+/// `Class.method(args).await` awaitees — task #21.
 ///
 /// Instance methods are intentionally NOT collected here: the awaitee
 /// receiver for an instance call is a value expression whose static
 /// type is unknown at this pre-resolve AST pass. Supporting
 /// `obj.method().await` requires either deferring .await desugar to
 /// post-typeck or annotating the receiver — deferred to a follow-up.
-fn collect_class_static_returns(program: &Program) -> HashMap<(String, String), TypeExpr> {
-    let mut out: HashMap<(String, String), TypeExpr> = HashMap::new();
+///
+/// `into` is appended to (not replaced) so the caller can union the
+/// user program with bootstrap-loaded stdlib programs in a single
+/// table. Last write wins on a key collision — order callers from
+/// least- to most-authoritative.
+fn collect_class_static_returns_into(
+    program: &Program,
+    into: &mut HashMap<(String, String), TypeExpr>,
+) {
     for item in &program.items {
         let class = match item {
             TopLevelItem::Class(c) => c,
@@ -169,7 +217,7 @@ fn collect_class_static_returns(program: &Program) -> HashMap<(String, String), 
                 continue;
             }
             if let Some(ret) = &m.return_type {
-                out.insert((class.name.clone(), m.name.clone()), ret.clone());
+                into.insert((class.name.clone(), m.name.clone()), ret.clone());
             }
         }
         // FFI shells declared inside `lib "..." ... end` blocks in the
@@ -181,15 +229,14 @@ fn collect_class_static_returns(program: &Program) -> HashMap<(String, String), 
                     continue;
                 }
                 if let Some(ret) = &f.return_type {
-                    out.insert((class.name.clone(), f.name.clone()), ret.clone());
+                    into.insert((class.name.clone(), f.name.clone()), ret.clone());
                 }
             }
         }
     }
-    out
 }
 
-/// Build the `FutureClassName -> OutputType` map.
+/// Populate the `FutureClassName -> OutputType` map from `program`.
 ///
 /// A class is a Future when it includes the `Future` mixin and
 /// declares a `def var poll(cx: &var Context) -> Poll[T]` method.
@@ -201,10 +248,13 @@ fn collect_class_static_returns(program: &Program) -> HashMap<(String, String), 
 /// top-level class body (the parser currently discards that
 /// declaration — see `parser/classes.rs::parse_class_def`'s
 /// `TokenKind::Type` arm) AND don't have an explicit `poll` body in
-/// the same file. In practice every Future class today declares poll
-/// with a concrete `Poll[T]` return so this is sufficient for v1.
-fn collect_future_outputs(program: &Program) -> HashMap<String, TypeExpr> {
-    let mut out: HashMap<String, TypeExpr> = HashMap::new();
+/// the same file. In practice every Future class today (user and
+/// stdlib) declares poll with a concrete `Poll[T]` return so this is
+/// sufficient for v1.
+///
+/// `into` is appended to — see `collect_class_static_returns_into`
+/// for the union-walk rationale.
+fn collect_future_outputs_into(program: &Program, into: &mut HashMap<String, TypeExpr>) {
     for item in &program.items {
         let class = match item {
             TopLevelItem::Class(c) => c,
@@ -220,12 +270,11 @@ fn collect_future_outputs(program: &Program) -> HashMap<String, TypeExpr> {
             };
             // Extract T from Poll[T].
             if let Some(inner) = extract_poll_output(ret) {
-                out.insert(class.name.clone(), inner);
+                into.insert(class.name.clone(), inner);
                 break;
             }
         }
     }
-    out
 }
 
 /// If `ty` is `Poll[T]`, return `T`. Otherwise return `None`.

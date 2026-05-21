@@ -71,7 +71,16 @@ pub fn type_check(program: &ast::Program) -> TypeCheckResult {
     // call would live inside the (non-async) generated `poll`
     // method, making the check unreachable.
     let e1116_diags = crate::async_lowering::collect_task_spawn_outside_async_diagnostics(&lowered);
-    crate::async_lowering::lower_async_defs(&mut lowered);
+    // Pass bootstrap programs through so the .await desugar's
+    // awaitee classifier can see stdlib Future classes (e.g.
+    // `TimeSleepFuture`, `TaskJoinFuture`). Without this,
+    // `Async.sleep(d).await` / `Task.join(h).await` fall off the
+    // desugar path and codegen emits unresolved `Future_await` link
+    // symbols. See `async_lowering::lower_async_defs_with_bootstrap`
+    // and `project_riven_async_compiler_gaps.md` (#2).
+    let bootstrap_refs: Vec<&ast::Program> =
+        bootstrap_packages.iter().map(|(_, p)| p).collect();
+    crate::async_lowering::lower_async_defs_with_bootstrap(&mut lowered, &bootstrap_refs);
     let mut result = type_check_with_bootstrap_packages(&lowered, &bootstrap_packages);
     result.diagnostics.extend(bootstrap_diagnostics);
     result.diagnostics.extend(e1112_diags);
@@ -150,7 +159,10 @@ pub fn type_check_with_bootstrap(
     // E1116 pre-check — see `type_check`'s mirror.
     let e1116_diags =
         crate::async_lowering::collect_task_spawn_outside_async_diagnostics(&lowered_user);
-    crate::async_lowering::lower_async_defs(&mut lowered_user);
+    // Mirror of the bootstrap-aware lowering in `type_check`. See
+    // commentary there.
+    let bootstrap_refs: Vec<&ast::Program> = bootstrap_programs.iter().collect();
+    crate::async_lowering::lower_async_defs_with_bootstrap(&mut lowered_user, &bootstrap_refs);
 
     // Phase 1: Name resolution (with bootstrap prelude merged in)
     let resolver = Resolver::new();

@@ -1,0 +1,58 @@
+## Pin fixture for `Task.join(h).await` — the class-static-method
+## awaitee desugar shape, applied to a bootstrap-loaded stdlib
+## Future class (`TaskJoinFuture` in library/std/future/src/lib.rvn).
+##
+## Shape constraint: async-lowering Milestone 2B requires every
+## awaitee's args to come from outer fn params / constants (no
+## dependence on a prior await or pre-await local). We therefore
+## pass the spawned task handle into `driver` as a parameter and
+## do the spawn at the sync `main` site — this lets `Task.join(h)`
+## reference `h` cleanly from the synth state machine's field.
+##
+## When async-lowering 2B drops the pre-await-statement-free
+## constraint, the fixture can be inlined back into a single
+## driver that does spawn + join itself.
+class CountdownFuture
+  remaining: Int
+  include Future
+  type Output = Int
+
+  def init(n: Int)
+    self.remaining = n
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    if self.remaining == 0
+      Poll.Ready(42)
+    else
+      self.remaining = self.remaining - 1
+      Poll.Pending
+    end
+  end
+end
+
+## `driver(h)` is the await site — straight-line, single await
+## whose arg comes from an outer fn param (the Milestone-2B
+## constraint: no statements before the first await; awaitee
+## args drawn from outer params / constants only). The synth
+## state machine carries `__sub_0: TaskJoinFuture` as a field.
+async def driver(h: Int) -> Int
+  let v = Task.join(h).await
+  v
+end
+
+## E1116 forbids `Task.spawn_raw` outside async scope, so the
+## spawn lives in its own async wrapper. Milestone-2A lowers
+## both `spawn_outer` and `driver`'s sync entry-point wrapper to
+## constructor calls; `block_on(...)` over each is what runs the
+## state machine. This fixture is exercised by typecheck assertions
+## only — runtime end-to-end coverage lives in fixture 728.
+async def spawn_outer -> Int
+  let fut = CountdownFuture.new(0)
+  Task.spawn_raw(fut)
+end
+
+def main
+  let h = block_on(spawn_outer())
+  let _r = block_on(driver(h))
+end

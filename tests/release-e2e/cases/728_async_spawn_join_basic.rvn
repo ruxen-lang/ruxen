@@ -5,13 +5,25 @@
 ## Driver async-fn hand-polls Task.join(handle) on both until both
 ## complete, returns the sum of their payloads.
 ##
-## Why hand-poll instead of `.await`: TaskJoinFuture lives in
-## bootstrap-loaded stdlib (library/std/future/src/lib.rvn) and
-## async-lowering's class-static-method awaitee desugar walks
-## only user-program AST. Same gap defers
-## tests/release-e2e/cases/731_class_static_call_await.rvn.deferred.
-## When the architectural fix lands, this fixture migrates to
-## `Task.join(h).await` with no other changes.
+## Why hand-poll instead of `Task.join(h).await`: the awaitee
+## desugar now sees stdlib classes (closes
+## project_riven_async_compiler_gaps.md #2, see fixture 731),
+## but lifting spawn into its own async fn so its handle can be
+## passed as an outer param to the await-driver hits a separate
+## Riven semantics gap — `Task.spawn_raw` is documented as taking
+## ownership of the future heap block (scheduler.c L150-152), but
+## Riven's drop elaboration still treats the local binding for
+## the future as droppable. When the spawn fn returns before its
+## spawned task completes, drop frees the heap block and the
+## pump dereferences freed memory.
+##
+## Per-fn-lifetime futures work in this fixture because spawn +
+## join + final result all live in a single long-running driver
+## async fn — the locals outlive the entire run. Migrating to
+## `.await` would require either implementing spawn's move
+## semantics in Riven OR loosening Milestone-2B's
+## "no statements before first await" segmenter so the spawn
+## can live in the same fn as the await.
 ##
 ## What this proves end-to-end:
 ##   - Task.spawn_raw enqueues a future without polling it.

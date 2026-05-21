@@ -12,7 +12,7 @@
 //! | B2        | `task_yield_now_constructs_taskyieldfuture`                | §B2        |
 //! | B3        | `block_on_inline_loop_pumps_task_queue`                    | §B3        |
 //! | B4 (c2)   | `task_join_constructs_and_typechecks`                      | §B4        |
-//! | B4 await  | `task_join_await_via_method_call_is_deferred` (`#[ignore]`)| §B4        |
+//! | B4 await  | `task_join_await_via_method_call_lowers`                   | §B4        |
 //! | B7 (E1116)| `task_spawn_outside_async_rejected_e1116`                  | §B7        |
 //! | E1116 reg | `e1116_registered_in_diagnostic_codes`                     | §B7        |
 //!
@@ -278,30 +278,41 @@ fn task_join_constructs_and_typechecks() {
     );
 }
 
-/// Deferred pin — `Task.join(h).await` requires async-lowering to
-/// see bootstrap-loaded stdlib classes. TaskJoinFuture lives in
-/// `library/std/future/src/lib.rvn`, invisible to the user-program
-/// AST walkers `collect_class_static_returns` /
-/// `collect_future_outputs`.
+/// `Task.join(h).await` desugars through the class-static-method
+/// awaitee shape (`describe_await` shape 2) now that async-lowering
+/// walks bootstrap stdlib programs. TaskJoinFuture lives in
+/// `library/std/future/src/lib.rvn`; before the bootstrap-aware
+/// lowering landed, the user-program walkers
+/// `collect_class_static_returns_into` /
+/// `collect_future_outputs_into` couldn't see it.
 ///
-/// Same architectural gap defers `tests/release-e2e/cases/
-/// 731_class_static_call_await.rvn.deferred` (the Async.sleep()
-/// .await case). When the desugar learns to walk bootstrap
-/// programs too:
-///   1. Drop the `#[ignore]` here.
-///   2. Verify the synth state-machine class for `driver` carries
-///      a `__sub_0: TaskJoinFuture` field.
-///   3. Drop the `.deferred` suffix on 731.
+/// Same architectural change unblocks
+/// `tests/release-e2e/cases/731_class_static_call_await.rvn`
+/// (the Async.sleep().await case).
+///
+/// Assertions:
+///   1. The synth state-machine class for `driver` carries a
+///      `__sub_0: TaskJoinFuture` field, proving the awaitee was
+///      classified against the stdlib's TaskJoinFuture, not left
+///      un-rewritten.
+///   2. The fixture typechecks clean end-to-end (via the production
+///      `type_check` path, which is bootstrap-aware).
 #[test]
-#[ignore = "Task.join(h).await needs async-lowering to see bootstrap stdlib classes; same gap as 731_class_static_call_await.rvn.deferred"]
-fn task_join_await_via_method_call_is_deferred() {
-    let source = rvn("task_join_await_deferred");
+fn task_join_await_via_method_call_lowers() {
+    let source = rvn("task_join_await_via_method_call");
     let mut lx = Lexer::new(&source);
     let toks = lx.tokenize().expect("lex");
     let mut p = Parser::new(toks);
     let mut prog = p.parse().expect("parse");
 
-    riven_core::async_lowering::lower_async_defs(&mut prog);
+    // Mirror the production lowering — pass bootstrap stdlib
+    // programs in so `Task.join` / `TaskJoinFuture` are visible to
+    // the awaitee classifier.
+    let mut diags = Vec::new();
+    let bootstrap_programs = riven_core::resolve::bootstrap::run_bootstrap(&mut diags);
+    let bootstrap_refs: Vec<&riven_core::parser::ast::Program> =
+        bootstrap_programs.iter().collect();
+    riven_core::async_lowering::lower_async_defs_with_bootstrap(&mut prog, &bootstrap_refs);
 
     let synth_class = prog
         .items
@@ -312,9 +323,7 @@ fn task_join_await_via_method_call_is_deferred() {
             }
             _ => None,
         })
-        .expect(
-            "WHEN UNIGNORED: expected a synth state-machine class for `driver` after lowering",
-        );
+        .expect("expected a synth state-machine class for `driver` after lowering");
 
     let has_taskjoin_sub = synth_class.fields.iter().any(|f| {
         f.name.starts_with("__sub_")
@@ -326,7 +335,7 @@ fn task_join_await_via_method_call_is_deferred() {
     });
     assert!(
         has_taskjoin_sub,
-        "WHEN UNIGNORED: expected `__sub_*: TaskJoinFuture` field, got fields: {:?}",
+        "expected `__sub_*: TaskJoinFuture` field, got fields: {:?}",
         synth_class
             .fields
             .iter()
@@ -338,7 +347,7 @@ fn task_join_await_via_method_call_is_deferred() {
     let errs = errors(&result.diagnostics);
     assert!(
         errs.is_empty(),
-        "WHEN UNIGNORED: Task.join(h).await fixture should typecheck clean, got: {:?}",
+        "Task.join(h).await fixture should typecheck clean, got: {:?}",
         errs
     );
 }

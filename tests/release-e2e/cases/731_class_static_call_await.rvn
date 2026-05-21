@@ -1,24 +1,15 @@
-## DEFERRED — DO NOT RUN AS PART OF NARROW REGRESSION SETS.
+## End-to-end exercise of `Class.static_method(args).await` —
+## the class-static-method-call awaitee shape in `describe_await`
+## (`async_lowering/mod.rs`). Unblocks the deferred slice from
+## task #21.
 ##
-## Task #21 partial: the AST recognition for `Class.method(args).await`
-## is wired (pin test `class_static_method_call_await_lowers` green),
-## but the lowering's body rewrite leaves a residual `.await`
-## method-call shape that codegen treats as a method-call on the
-## awaitee's Future class — producing link errors
-## `_TimeSleepFuture_await` and `_Future_poll`.
-##
-## Root cause is structural: connecting describe_await's recognition
-## to the body-rewrite path requires type info that isn't available
-## at this pre-resolve AST pass. The two viable real fixes are
-## (a) defer the .await desugar to post-typeck, or (b) annotate
-## the awaitee receiver's type so the AST pass can dispatch
-## correctly. Both are larger compiler-integration slices than the
-## #21 budget. Tracked separately as a follow-up.
-##
-## Original intent (KEPT FOR THE FOLLOW-UP):
-## end-to-end exercise of `Class.static_method(args).await` —
-## the class-static-method-call awaitee shape extension to
-## `describe_await` in `async_lowering/mod.rs`.
+## What changed to unblock this: `lower_async_defs` now walks
+## bootstrap stdlib programs when populating its awaitee tables
+## (`collect_class_static_returns_into` /
+## `collect_future_outputs_into`). `Async` and `TimeSleepFuture`
+## live in library/std/future/src/lib.rvn, invisible to the
+## previous user-program-only walks. See
+## `project_riven_async_compiler_gaps.md` (#2).
 ##
 ## Shape:
 ##   async def doit() -> ()
