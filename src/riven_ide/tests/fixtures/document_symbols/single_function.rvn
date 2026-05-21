@@ -1,0 +1,6 @@
+## Document-symbols fixture — a single top-level function. Should
+## produce one FUNCTION leaf at the outline root.
+
+def greet(name: String) -> String
+  "hello"
+end

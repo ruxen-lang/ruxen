@@ -1,0 +1,14 @@
+## Workspace-symbols fixture A. Defines a class `UserSession` and a
+## free function `lookup_user`. Both should be findable by substring
+## queries like `user` / `USER` / `lookup`.
+
+class UserSession
+  id: Int
+
+  def init(@id: Int)
+  end
+end
+
+def lookup_user(id: Int) -> Int
+  id
+end
