@@ -1,8 +1,17 @@
 pub mod analysis;
+pub mod code_actions;
 pub mod completion;
 pub mod diagnostics;
+pub mod document_symbols;
+pub mod folding;
+pub mod format;
 pub mod goto_def;
 pub mod hover;
+pub mod inlay_hints;
 pub mod line_index;
 pub mod node_finder;
 pub mod semantic_tokens;
+pub mod signature_help;
+pub mod type_def;
+pub mod use_index;
+pub mod workspace_symbols;
