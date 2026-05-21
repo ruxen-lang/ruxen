@@ -348,6 +348,8 @@ mod tests {
             )],
             entry: Some("main".to_string()),
             ffi_libs: vec![],
+            vtables: Vec::new(),
+            class_infos: Vec::new(),
         }
     }
 

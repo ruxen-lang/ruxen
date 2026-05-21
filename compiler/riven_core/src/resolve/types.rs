@@ -518,6 +518,33 @@ impl Resolver {
                 match &def.kind {
                     DefKind::TypeAlias { target } => return target.clone(),
                     DefKind::Class { .. } => {
+                        // Root-cause normalisation for the
+                        // String-builtin-anchored-onto-stdlib-class case:
+                        // `register_builtins` registers `String` as
+                        // `DefKind::TypeAlias { target: Ty::String }`. The
+                        // bootstrap merge then anchors
+                        // `class String` (in `library/std/string/src/lib.rvn`)
+                        // onto the same `DefId` so FFI methods attach.
+                        // `resolve_class` later stomps the `DefKind` to
+                        // `Class { name: "String", .. }`. Without this
+                        // fast-path, every `String` annotation downstream
+                        // resolves to `Ty::Class { "String" }` and every
+                        // typeck consumer pattern-matching on the
+                        // canonical `Ty::String` silently misses it (see
+                        // `project_riven_resolve_class_stomps_typealias`
+                        // memory). Normalising at the resolve layer keeps
+                        // the typeck representation aligned with the
+                        // builtin primitive while leaving the class
+                        // surface intact for `String.from(...)`-style
+                        // class-method dispatch (those go through the
+                        // AST path / type-registry lookup, not the
+                        // returned `Ty`). Method dispatch on receivers
+                        // typed `Ty::String` already resolves through
+                        // `typeck/method_resolvers` and the FFI alias
+                        // map keyed on the class name.
+                        if name == "String" && generic_args.is_empty() {
+                            return Ty::String;
+                        }
                         return Ty::Class { name, generic_args };
                     }
                     DefKind::Struct { .. } => {
