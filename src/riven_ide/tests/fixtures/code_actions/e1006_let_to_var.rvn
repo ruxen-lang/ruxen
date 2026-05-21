@@ -1,0 +1,4 @@
+def main
+  let counter_qf = 0
+  counter_qf = 1
+end

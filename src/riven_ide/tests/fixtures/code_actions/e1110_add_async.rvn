@@ -1,0 +1,4 @@
+def needs_async_qf
+  let f = some_future()
+  f.await
+end
