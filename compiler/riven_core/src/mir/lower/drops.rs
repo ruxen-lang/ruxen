@@ -744,7 +744,36 @@ fn compute_dealloc_safe_locals(func: &MirFunction) -> std::collections::HashSet<
                             | "riven_vec_from_iter"
                             | "Vec_from_iter"
                     );
+                    // Move-by-FFI callees: runtime symbols that take
+                    // ownership of one or more pointer arguments and
+                    // either transfer them to a long-lived structure
+                    // (e.g. the executor's task queue) or otherwise
+                    // free them internally. They start with the
+                    // `riven_` prefix and would therefore be matched
+                    // by `is_runtime_borrow_helper` below — we must
+                    // exclude them so the default-taint path on the
+                    // per-arg loop runs and the caller's local is
+                    // dropped from `alloc_rooted`. Without this, the
+                    // scope-exit drop pass would emit a free on a
+                    // pointer the executor still references and the
+                    // next pump would deref freed memory.
+                    //
+                    // Spec: `docs/specs/stdlib/task_spawn.spec.md`
+                    // §B10 documents the move semantics. The C-side
+                    // contract lives in
+                    // `library/std/future/runtime/scheduler.c:150-152`.
+                    //
+                    // Additions to this list MUST update the matching
+                    // `Task.spawn` ownership-gap pin test
+                    // (`compiler/riven_core/tests/task_spawn_ownership.rs`)
+                    // and any analogous fixtures so the move semantics
+                    // are exercised end-to-end.
+                    let is_move_by_ffi_callee = matches!(
+                        callee.as_str(),
+                        "riven_executor_spawn" | "Task_spawn_raw"
+                    );
                     let is_runtime_borrow_helper = !is_runtime_consume_helper
+                        && !is_move_by_ffi_callee
                         && (callee.starts_with("riven_")
                             || callee.starts_with("Vec_")
                             || callee.starts_with("Vec[")
