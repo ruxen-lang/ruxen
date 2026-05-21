@@ -304,8 +304,12 @@ mod tests {
 
     #[test]
     fn register_builtins_includes_send_and_sync_traits() {
-        let mut resolver = Resolver::new();
-        resolver.register_builtins();
+        // Send / Sync migrated from Rust-side `register_builtins` to
+        // `library/std/core/src/lib.rvn` (`mixin Send` / `mixin Sync`)
+        // — see B5 of docs/specs/system/zero_rust_stdlib_classes.spec.md.
+        // The test now exercises the FULL Rust + bootstrap surface so
+        // bootstrap-loaded mixins are visible to the assertion.
+        let resolver = resolver_with_bootstrap_for_tests();
 
         let has_send = resolver
             .symbols
@@ -332,8 +336,58 @@ mod tests {
         let mut resolver = Resolver::new();
         resolver.register_builtins();
         let mut diags: Vec<crate::diagnostics::Diagnostic> = Vec::new();
-        let programs = crate::resolve::bootstrap::run_bootstrap(&mut diags);
+        // Use the PACKAGE-AWARE bootstrap loader so each
+        // `(pkg_name, Program)` pair flows into `bootstrap_auto_packages`
+        // — that field is what `auto_populate_std_submodules_from_packages`
+        // reads to populate each `std.<pkg>` module's items list. Using
+        // the bare `run_bootstrap` here left the field empty, the
+        // auto-populate became a no-op, and `std.sync.items` stayed
+        // empty even after the fixup pass — tripping the std-module
+        // expose-checks below.
+        let bootstrap_packages =
+            crate::resolve::bootstrap::run_bootstrap_with_package_names(&mut diags);
         assert!(diags.is_empty(), "bootstrap parse errors: {:?}", diags);
+        // Mirror the population done inside `resolve_with_bootstrap_packages`
+        // — record (pkg_name, item_names) so the fixup walk can
+        // auto-populate each `std.<pkg>` submodule.
+        // Inline the package's top-level item-name walk (Resolver's
+        // own `top_level_item_names` is module-private to
+        // bootstrap_merge.rs; replicating its surface here keeps the
+        // tests self-contained without weakening the prod helper's
+        // visibility).
+        let collect_names = |prog: &crate::parser::ast::Program| -> Vec<String> {
+            use crate::parser::ast::TopLevelItem;
+            let mut names: Vec<String> = Vec::new();
+            for item in &prog.items {
+                match item {
+                    TopLevelItem::Function(f) => names.push(f.name.clone()),
+                    TopLevelItem::Class(c) => names.push(c.name.clone()),
+                    TopLevelItem::Struct(s) => names.push(s.name.clone()),
+                    TopLevelItem::Enum(e) => names.push(e.name.clone()),
+                    TopLevelItem::Mixin(m) => names.push(m.name.clone()),
+                    TopLevelItem::Module(m) => names.push(m.name.clone()),
+                    TopLevelItem::TypeAlias(a) => names.push(a.name.clone()),
+                    TopLevelItem::Newtype(n) => names.push(n.name.clone()),
+                    TopLevelItem::Const(c) => names.push(c.name.clone()),
+                    TopLevelItem::Lib(lib) => {
+                        for f in &lib.functions {
+                            names.push(f.name.clone());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            names
+        };
+        let auto_pkgs: Vec<(String, Vec<String>)> = bootstrap_packages
+            .iter()
+            .map(|(name, prog)| (name.clone(), collect_names(prog)))
+            .collect();
+        resolver.bootstrap_auto_packages = auto_pkgs;
+        let programs: Vec<crate::parser::ast::Program> = bootstrap_packages
+            .into_iter()
+            .map(|(_, p)| p)
+            .collect();
         let mut ffi_libs = Vec::new();
         resolver.merge_bootstrap_programs(&programs, &mut ffi_libs);
         // `fixup_bootstrapped_stdlib_modules` is what re-populates
@@ -392,24 +446,21 @@ mod tests {
         let resolver = resolver_with_bootstrap_for_tests();
 
         // Thread / JoinHandle / Mutex / MutexGuard / PoisonError /
-        // ThreadPanic migrated to library/std/sync/src/lib.rvn in Wave 2.
-        // `Arc` remains a Rust-side `DefKind::Class` shim — see
-        // resolve/stdlib/mod.rs `arc_alias_id` (it's the backward-compat
-        // alias that types as `Ty::Class { name: "SharedSync" }` so
-        // `Arc.new(...)` returns a SharedSync-typed value). `ThreadId`
-        // ALSO exists in sync.rvn as a class; the Rust shim is a
-        // `DefKind::Variable` for the value-scope sentinel — the
-        // symbol table thus carries TWO `ThreadId` entries (one Class
-        // from sync.rvn, one Variable from the Rust shim), so this
-        // test's `any(name == "ThreadId" && Class)` predicate still
-        // matches via the .rvn-loaded one.
+        // ThreadPanic / ThreadId all migrated to
+        // `library/std/sync/src/lib.rvn` (Wave 2, #06.8). The
+        // backward-compat `Arc` Rust-side shim was deleted in Phase
+        // D-2 of #06.95 in favour of the canonical `SharedSync` name
+        // per ruby-naming.spec.md §10a; downstream callers that still
+        // type `Arc.new(...)` resolve through type-alias machinery in
+        // sync.rvn, not through a Class entry in the symbol table.
+        // The list below reflects the current canonical surface.
         for name in [
             "Thread",
             "JoinHandle",
             "ThreadId",
             "Mutex",
             "MutexGuard",
-            "Arc",
+            "SharedSync",
             "PoisonError",
             "ThreadPanic",
         ] {
@@ -448,8 +499,8 @@ mod tests {
             items.iter().any(|id| resolver
                 .symbols
                 .get(*id)
-                .is_some_and(|def| def.name == "Arc")),
-            "expected std.sync to expose Arc"
+                .is_some_and(|def| def.name == "SharedSync")),
+            "expected std.sync to expose SharedSync (canonical Arc replacement)"
         );
     }
 

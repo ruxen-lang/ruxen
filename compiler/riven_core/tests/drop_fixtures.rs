@@ -275,9 +275,20 @@ fn write_tracking_runtime(target: &PathBuf) {
 
     // 1) Rewrite every `malloc(` / `free(` / `realloc(` call site in
     //    runtime.c to flow through the test-only wrappers.
-    tracked = tracked.replace("malloc(", "riven_test_malloc(");
-    tracked = tracked.replace("free(", "riven_test_free(");
-    tracked = tracked.replace("realloc(", "riven_test_realloc(");
+    //
+    //    Word-boundary-aware: only rewrite when the preceding character
+    //    is NOT part of an identifier. Without this guard, a plain
+    //    `tracked.replace("free(", "riven_test_free(")` mangles
+    //    `riven_async_read_state_free(` → `riven_async_read_state_riven_test_free(`,
+    //    which then no longer matches the C symbol declared in
+    //    `library/std/async_fs/runtime/async_fs.c` (`riven_async_read_state_free`)
+    //    and every stdlib `def drop` that calls one of those state-free
+    //    helpers fails to link. This bit the whole drop_fixtures
+    //    suite when the bootstrap merge started resolving stdlib class
+    //    drop methods into MIR (zero-rust-stdlib-classes B1).
+    tracked = replace_call_at_word_boundary(&tracked, "malloc(", "riven_test_malloc(");
+    tracked = replace_call_at_word_boundary(&tracked, "free(", "riven_test_free(");
+    tracked = replace_call_at_word_boundary(&tracked, "realloc(", "riven_test_realloc(");
     // 2) Restore the wrapper *definitions'* libc-call sentinels back to
     //    raw libc names so the wrappers don't recurse into themselves.
     tracked = tracked.replace("ORIG_MALLOC(", "malloc(");
@@ -326,6 +337,40 @@ fn write_tracking_runtime(target: &PathBuf) {
     );
 
     std::fs::write(target, tracked).unwrap_or_else(|e| panic!("write {}: {}", target.display(), e));
+}
+
+/// Replace `pat` with `replacement` in `src`, but ONLY when the match
+/// is at a word boundary — i.e. the character preceding the match is
+/// not part of an identifier (alphanumeric or `_`). Used to rewrite
+/// bare libc call sites (`free(`, `malloc(`, `realloc(`) without
+/// mangling longer identifiers that happen to end in the same suffix
+/// (`riven_async_read_state_free`, `riven_set_free`, …).
+fn replace_call_at_word_boundary(src: &str, pat: &str, replacement: &str) -> String {
+    if pat.is_empty() {
+        return src.to_string();
+    }
+    let bytes = src.as_bytes();
+    let pat_bytes = pat.as_bytes();
+    let mut out = String::with_capacity(src.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if i + pat_bytes.len() <= bytes.len() && &bytes[i..i + pat_bytes.len()] == pat_bytes {
+            let prev_ok = if i == 0 {
+                true
+            } else {
+                let prev = bytes[i - 1] as char;
+                !(prev.is_ascii_alphanumeric() || prev == '_')
+            };
+            if prev_ok {
+                out.push_str(replacement);
+                i += pat_bytes.len();
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
 }
 
 /// Replace `header_old` with `header_new` if present. Used to inject

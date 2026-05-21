@@ -533,7 +533,23 @@ impl Resolver {
                     // / `ffi_libs` bookkeeping but DO NOT insert into
                     // type-scope. The hardcoded arm in `resolve_type_expr`
                     // remains authoritative for the type representation.
-                    self.symbols.define(
+                    //
+                    // BUT: still register in `type_registry` so the
+                    // bootstrap's deferred lib-decl walk
+                    // (`process_deferred_class_lib_decls`) can resolve
+                    // this DefId by class name. Without that entry the
+                    // second walk's `type_registry.get(class.name)`
+                    // misses, the class's own `lib` block never gets
+                    // processed, and `Array_new` / `Array_push` /
+                    // `Map_insert` / `Set_contains` / etc. all stay
+                    // unregistered in `ffi_alias_map` — every call site
+                    // emits the bare mangled name and the linker fails
+                    // with `_Array[Int]_push undefined`. `type_registry`
+                    // is a separate map from `scopes.insert_type`
+                    // (which is what would actually re-anchor the
+                    // type-scope arm and break `let x: Array[Int]`);
+                    // we keep `scopes.insert_type` off the path here.
+                    let new_id = self.symbols.define(
                         class.name.clone(),
                         DefKind::Class {
                             info: ClassInfo {
@@ -553,7 +569,15 @@ impl Resolver {
                         },
                         Visibility::Public,
                         class.span.clone(),
-                    )
+                    );
+                    // Top-level anchor-only builtins: register the bare
+                    // class name in `type_registry`. The list is closed
+                    // (Array/Vec/Map/HashMap/Set/HashSet — none of
+                    // which can appear nested inside a `module` block),
+                    // so the module-path branch in
+                    // `insert_type_qualified` doesn't apply.
+                    self.type_registry.insert(class.name.clone(), new_id);
+                    new_id
                 } else {
                     let new_id = self.symbols.define(
                         class.name.clone(),
