@@ -1,0 +1,10 @@
+class WidgetAnchorKzx
+  count: Int
+
+  def init(@count: Int)
+  end
+end
+
+def main
+  let w = WidgetAnchorKzx.new(5)
+end
