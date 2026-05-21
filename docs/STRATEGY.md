@@ -305,13 +305,108 @@ actually contains.
 
 ## 10. Open questions for the founder
 
-- Which wedge resonates? #1 (Ruby FFI), #2 (WASM), #3 (flagship)?
+- ~~Which wedge resonates? #1 (Ruby FFI), #2 (WASM), #3 (flagship)?~~
+  **Resolved 2026-05-22 — see §11.**
 - Is there a fourth wedge specific to your network / industry
   exposure that I'm missing?
 - What's the realistic time budget per week — solo, or with the
   approved 3 hires onboarded?
 - Is there an opinionated "what I want my Ruby app to look like in
   10 years" sketch somewhere? If yes, that's the flagship app.
+
+---
+
+## 11. Wedge sequencing — locked 2026-05-22
+
+After the 2026-05-22 strategy session (held mid-CLI-consolidation),
+the three wedges are sequenced rather than mutually-exclusive:
+
+| Phase | Wedge | Start | Notes |
+|---|---|---|---|
+| **A** | #1 — Ruby FFI | First | Highest probability of success per §3. Smallest commitment to validate (~2-3 months to MVP). Distribution is free via RubyGems. Failure mode is recoverable. |
+| **B** | #2 — WASM | In parallel with A once A's basic ABI surface is in tree | The codegen / MIR work for Wedge #1 retargets cleanly to wasm32 — backend swap + WASI stdlib retarget, not a from-scratch rewrite. Heavier (4-6 months MVP) but the parallel start banks the leverage. |
+| **C** | #3 — Flagship app | Same start as Wedge #2 | Picked from one of the candidate shapes in §3 (CLI tool framework / static site generator / test runner). Slowest payback but compounds for years if it ships. Doesn't gate the language — language work proceeds; flagship is a parallel investment. |
+
+### Framing correction (Wedge #1)
+
+The "nokogiri-rv is 10× faster than C" pitch in §3 is unwinnable
+and is dropped. Riven won't beat hand-tuned C extensions (oj,
+nokogiri, mysql2). Realistic Riven perf vs hand-tuned C is **1.5-3×
+slower** for the same workload.
+
+The actual Wedge #1 bet:
+
+> **"Riven extensions are *almost-as-fast-as-C* but written in 10×
+> less developer time, with memory safety guarantees, by people who
+> already know Ruby."**
+
+The 10× perf claim is **only vs pure-Ruby implementations** — and
+there are thousands of pure-Ruby gems in the long tail where this
+claim is trivially true. The dev-productivity claim (10× faster to
+write than C, vs Rust+magnus which needs 3-6 months for a Rubyist
+to become productive in) is the actual moat.
+
+Targets:
+
+- Pure-Ruby gems with known perf complaints (templating, parsing,
+  format conversion, crypto helpers, image-shellout replacements)
+- Abandoned C extensions where the maintainer wants a memory-safe
+  rewrite
+- New-extension space (the next ten years of gems)
+
+NOT targets:
+
+- oj, nokogiri, mysql2 (you'll lose; don't ship the comparison)
+- Numeric tight loops competing against NumPy-shaped libraries
+  (numerical-perf is a separate fight, deferred indefinitely)
+
+### Canonical demo gem — TBD
+
+Not yet picked. Candidates by ease-of-win:
+
+1. **CSV / TSV parser** — Ruby stdlib CSV is pure Ruby; SmarterCSV
+   is pure Ruby. Easy 30-50× win.
+2. **Mustache / Liquid template engine** — pure-Ruby implementations
+   with active perf complaints on large templates.
+3. **Markdown parser** targeting kramdown's audience (NOT redcarpet's).
+4. **Small primitives**: fast base32/64, fast URL encoding, fast HTML
+   entity escaping. Each ships in a week.
+
+Pick one as the canonical demo when Phase A formally starts.
+
+### Phase A entry criteria (what triggers Wedge #1 start)
+
+v1.0 of the language shipped (per `docs/prompts/v1/STATUS.md` — most
+items already closed, remaining tail is mostly Phase 4/5 platform +
+tooling that doesn't gate FFI work).
+
+### Phase B entry criteria
+
+Wedge #1's basic FFI ABI working (one example gem builds + loads
+into MRI Ruby + a simple round-trip works). The codegen layer at
+this point is wedge-agnostic; retargeting to wasm32 is a backend
+swap.
+
+### Phase C entry criteria
+
+Same as Phase B. Flagship app development is mostly Riven-the-language
+work (writing the framework code), so the only requirement is the
+language being stable enough for serious app development — which it
+is today.
+
+### What this changes about v1.0
+
+Not much. v1.0 ships as planned (release checklist per prompt 25).
+The wedges are the v1.x / v2.0 trajectory, not gating v1.0.
+
+What DOES change:
+
+- Prompt 16 (no_std / wasm) is now Phase-B work — promote out of "Not
+  started" once Phase A lands.
+- A new prompt-set for "Ruby FFI" needs writing (currently no
+  v1 prompt covers this — `extern "ruby"` is greenfield).
+- Prompt 19 (test framework) decisions are already locked from the
+  2026-05-22 CLI session; implementation stays on the v1.x trajectory.
 
 ---
 
