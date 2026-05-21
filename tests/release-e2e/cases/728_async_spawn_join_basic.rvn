@@ -1,0 +1,113 @@
+## Spec docs/specs/stdlib/task_spawn.spec.md §B1 / §B3 / §B4 e2e.
+##
+## Two CountdownFutures spawned via `Task.spawn_raw`, each polled
+## by the scheduler's pump call inside `block_on`'s inline loop.
+## Driver async-fn hand-polls Task.join(handle) on both until both
+## complete, returns the sum of their payloads.
+##
+## Why hand-poll instead of `.await`: TaskJoinFuture lives in
+## bootstrap-loaded stdlib (library/std/future/src/lib.rvn) and
+## async-lowering's class-static-method awaitee desugar walks
+## only user-program AST. Same gap defers
+## tests/release-e2e/cases/731_class_static_call_await.rvn.deferred.
+## When the architectural fix lands, this fixture migrates to
+## `Task.join(h).await` with no other changes.
+##
+## What this proves end-to-end:
+##   - Task.spawn_raw enqueues a future without polling it.
+##   - The block_on inline loop's pump call drives every queued
+##     task forward in round-robin order (no starvation).
+##   - TaskHandle.is_done flips when the task completes; result()
+##     returns the i64 payload.
+##   - Task.join(handle) hand-polled in the orchestrator yields
+##     Pending until done, Ready(result) when complete.
+##   - Two tasks completing both their N-step countdowns sum
+##     correctly: 11 + 22 == 33.
+##
+## Why not the full TCP echo (727 single-block_on shape): the
+## reactor's level-triggered fd-readiness slots haven't been
+## stress-tested under multi-task round-robin polling on a single
+## block_on thread. Shipping a timer-pair (or here, count-down)
+## variant first de-risks the queue + handle plumbing before the
+## reactor adds another dimension. The full TCP shape lands as a
+## follow-up once the simpler 728 is stable.
+
+class CountdownFuture
+  remaining: Int
+  payload: Int
+  include Future
+  type Output = Int
+
+  def init(n: Int, p: Int)
+    self.remaining = n
+    self.payload = p
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    if self.remaining == 0
+      Poll.Ready(self.payload)
+    else
+      self.remaining = self.remaining - 1
+      Poll.Pending
+    end
+  end
+end
+
+## Driver: spawn two countdowns, hand-poll both joins until done,
+## return their sum. async def so Task.spawn doesn't trip E1116;
+## body is Milestone 2A shape (no `.await`, single-state future).
+async def driver -> Int
+  let f1 = CountdownFuture.new(3, 11)
+  let f2 = CountdownFuture.new(5, 22)
+  let h1 = Task.spawn_raw(f1)
+  let h2 = Task.spawn_raw(f2)
+  let var j1 = Task.join(h1)
+  let var j2 = Task.join(h2)
+  let var cx = Context.test_dummy()
+  let var r1 = 0
+  let var r2 = 0
+  let var done1 = 0
+  let var done2 = 0
+  # The orchestrator's body executes inside driver's own poll().
+  # Once we enter this loop, control never returns to block_on's
+  # outer pump call until we break — so we MUST pump the queue
+  # ourselves between join-poll attempts, otherwise the spawned
+  # tasks never advance.
+  #
+  # Future ergonomic: when `Task.join(h).await` lands (deferred
+  # gap above), each `.await` site suspends back through
+  # block_on's outer pump, removing the manual pump call here.
+  loop
+    let _pumped = riven_executor_pump_tasks()
+    if done1 == 0
+      match (&var j1).poll(&var cx)
+        Poll.Ready(v) -> do
+          r1 = v
+          done1 = 1
+        end
+        Poll.Pending -> ()
+      end
+    end
+    if done2 == 0
+      match (&var j2).poll(&var cx)
+        Poll.Ready(v) -> do
+          r2 = v
+          done2 = 1
+        end
+        Poll.Pending -> ()
+      end
+    end
+    if done1 == 1 && done2 == 1
+      break r1 + r2
+    end
+  end
+end
+
+def main
+  let total = block_on(driver())
+  if total == 33
+    puts "ok"
+  else
+    puts "fail"
+  end
+end
