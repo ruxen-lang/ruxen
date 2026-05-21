@@ -244,7 +244,11 @@ impl CodeGen {
                 .ok_or_else(|| format!("vtable data '{}' was not declared", sym))?;
             let size = (vt.method_symbols.len() as u32) * PTR_SIZE;
             let mut desc = cranelift_module::DataDescription::new();
-            desc.define_zeroinit(size as usize);
+            // ld64 on macOS rejects relocations against BSS
+            // (`define_zeroinit`) — segfaults at link time. Use
+            // explicit zero bytes so the data lands in __const, where
+            // relocations are legal.
+            desc.define(vec![0u8; size as usize].into_boxed_slice());
             desc.set_align(PTR_SIZE as u64);
             for (i, method_sym) in vt.method_symbols.iter().enumerate() {
                 let func_id = *self.declared_fns.get(method_sym).ok_or_else(|| {
@@ -272,7 +276,11 @@ impl CodeGen {
                 .ok_or_else(|| format!("class_info data '{}' was not declared", sym))?;
             let size = (ci.vtable_symbols.len() as u32) * PTR_SIZE;
             let mut desc = cranelift_module::DataDescription::new();
-            desc.define_zeroinit(size as usize);
+            // ld64 on macOS rejects relocations against BSS
+            // (`define_zeroinit`) — segfaults at link time. Use
+            // explicit zero bytes so the data lands in __const, where
+            // relocations are legal.
+            desc.define(vec![0u8; size as usize].into_boxed_slice());
             desc.set_align(PTR_SIZE as u64);
             for (i, vt_sym) in ci.vtable_symbols.iter().enumerate() {
                 let vt_data_id = *self.vtable_data.get(vt_sym).ok_or_else(|| {

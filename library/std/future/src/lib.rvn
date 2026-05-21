@@ -43,7 +43,14 @@ end
 ##       end
 ##     end
 ##   end
-mixin Future
+## `dispatch runtime` — see docs/specs/types/mixin_vtables.spec.md.
+## Future is the v1 reference case for vtable-based runtime dispatch:
+## the executor / scheduler queues heterogeneous futures and polls
+## each via `Future_dynamic_poll(self, cx)` rather than a static
+## `<ConcreteClass>_poll`. Every class that includes Future gets an
+## 8-byte `class_info_ptr` header at heap offset 0, populated at
+## construction time with the class's `__rvn_classinfo_<Class>`.
+mixin Future dispatch runtime
   type Output
   def var poll(cx: &var Context) -> Poll[Self.Output]
 end

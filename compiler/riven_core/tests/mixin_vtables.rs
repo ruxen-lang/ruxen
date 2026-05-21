@@ -369,27 +369,40 @@ fn class_info_struct_emitted_per_runtime_dispatch_class() {
     );
 }
 
-/// Negative: a class that only includes statically-dispatched mixins
-/// (no `dispatch runtime`) produces ZERO vtable and ZERO class_info
-/// entries — its layout stays flat, no header is added, and codegen
-/// emits no extra data sections. Spec §B11: the layout change only
-/// affects classes that opt in.
+/// Negative: a fixture-defined class that includes only
+/// statically-dispatched mixins (no `dispatch runtime`) gets ZERO
+/// vtable and ZERO class_info entries FOR THAT CLASS — its layout
+/// stays flat, no header is added. Spec §B11.
+///
+/// Note: the bootstrap stdlib prelude declares `mixin Future
+/// dispatch runtime` (Phase D) and several Future implementors
+/// (`TimeSleepFuture`, `AsyncReadFuture`, etc.), so the program-
+/// level vtable lists are non-empty for any fixture that loads the
+/// prelude. This test scopes to the fixture's `Bob` class — Bob
+/// must NOT appear in any vtable or class_info symbol.
 #[test]
 fn static_mixin_class_produces_no_vtable_or_classinfo() {
     // Single static-mixin class — no `dispatch runtime` anywhere.
     let mir = lower_fixture("static_mixin_no_vtable_emission");
+    let bob_vtables: Vec<_> = mir
+        .vtables
+        .iter()
+        .filter(|v| v.class_name == "Bob")
+        .collect();
     assert!(
-        mir.vtables.is_empty(),
-        "static-only-mixin program should emit no vtables, got: {:?}",
-        mir.vtables.iter().map(|v| v.symbol()).collect::<Vec<_>>()
+        bob_vtables.is_empty(),
+        "static-only-mixin class Bob should emit no vtable, got: {:?}",
+        bob_vtables.iter().map(|v| v.symbol()).collect::<Vec<_>>()
     );
+    let bob_class_infos: Vec<_> = mir
+        .class_infos
+        .iter()
+        .filter(|c| c.class_name == "Bob")
+        .collect();
     assert!(
-        mir.class_infos.is_empty(),
-        "static-only-mixin program should emit no class_infos, got: {:?}",
-        mir.class_infos
-            .iter()
-            .map(|c| c.symbol())
-            .collect::<Vec<_>>()
+        bob_class_infos.is_empty(),
+        "static-only-mixin class Bob should emit no class_info, got: {:?}",
+        bob_class_infos.iter().map(|c| c.symbol()).collect::<Vec<_>>()
     );
 }
 

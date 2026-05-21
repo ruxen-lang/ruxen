@@ -1,0 +1,80 @@
+## Spec docs/specs/types/mixin_vtables.spec.md §B7 e2e:
+## Two hand-written `Future` classes are dispatched through a
+## single `&var Future` reference, and each returns its own
+## concrete `poll` result. This proves that:
+##   * The class_info_ptr header is written at construction time.
+##   * The `Future_dynamic_poll` helper reads each future's
+##     class_info, finds the right vtable, and indirect-calls
+##     the concrete poll fn.
+##   * Two implementors with different return values both work
+##     through the same dyn-shape receiver — no monomorphisation
+##     fallback into a single static dispatch.
+##
+## Without runtime dispatch (Phase D not landed), this fixture
+## either picks one concrete `poll` for both branches or fails
+## to typecheck `&var Future` entirely.
+
+use std.future.Context
+use std.future.Poll
+
+class CountdownFutureA
+  remaining: Int
+  include Future
+  type Output = Int
+
+  def init(n: Int)
+    self.remaining = n
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    if self.remaining == 0
+      Poll.Ready(11)
+    else
+      self.remaining = self.remaining - 1
+      Poll.Pending
+    end
+  end
+end
+
+class CountdownFutureB
+  remaining: Int
+  include Future
+  type Output = Int
+
+  def init(n: Int)
+    self.remaining = n
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    if self.remaining == 0
+      Poll.Ready(22)
+    else
+      self.remaining = self.remaining - 1
+      Poll.Pending
+    end
+  end
+end
+
+## Polls `f` once and returns the Ready value (or 0 if pending).
+## The receiver type is `&var Future` — a dyn-shape reference.
+## Both A.poll and B.poll must reach this site via the dispatch
+## helper, not a static `CountdownFutureA_poll`.
+def drive_once(f: &var Future) -> Int
+  let var cx = Context.test_dummy()
+  match f.poll(&var cx)
+    Poll.Ready(v) -> v
+    Poll.Pending -> 0
+  end
+end
+
+def main
+  let var a = CountdownFutureA.new(0)
+  let var b = CountdownFutureB.new(0)
+  let va = drive_once(&var a)
+  let vb = drive_once(&var b)
+  if va == 11 && vb == 22
+    puts "ok"
+  else
+    puts "mismatch"
+  end
+end
