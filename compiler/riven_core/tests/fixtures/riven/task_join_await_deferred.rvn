@@ -1,0 +1,42 @@
+## Deferred: `Task.join(h).await` requires async-lowering to see
+## bootstrap-loaded stdlib classes (TaskJoinFuture lives in
+## library/std/future/src/lib.rvn). Same architectural gap defers
+## 731_class_static_call_await.rvn. This fixture is the analogous
+## pin — the test that exercises it is `#[ignore]`d until the
+## desugar fix lands.
+##
+## When the fix lands:
+##   1. Drop the `#[ignore]` on the pin test.
+##   2. Verify the synth state-machine class for `driver` carries
+##      a `__sub_0: TaskJoinFuture` field.
+##   3. Drop the .deferred suffix from the analogous 731 fixture
+##      (separate cleanup).
+class CountdownFuture
+  remaining: Int
+  include Future
+  type Output = Int
+
+  def init(n: Int)
+    self.remaining = n
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    if self.remaining == 0
+      Poll.Ready(42)
+    else
+      self.remaining = self.remaining - 1
+      Poll.Pending
+    end
+  end
+end
+
+async def driver -> Int
+  let fut = CountdownFuture.new(0)
+  let h = Task.spawn_raw(fut)
+  let v = Task.join(h).await
+  v
+end
+
+def main
+  let _r = block_on(driver())
+end

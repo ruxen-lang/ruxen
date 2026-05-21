@@ -11,6 +11,8 @@
 //! | B1        | `task_spawn_inside_async_typechecks_clean`                 | §B1        |
 //! | B2        | `task_yield_now_constructs_taskyieldfuture`                | §B2        |
 //! | B3        | `block_on_inline_loop_pumps_task_queue`                    | §B3        |
+//! | B4 (c2)   | `task_join_constructs_and_typechecks`                      | §B4        |
+//! | B4 await  | `task_join_await_via_method_call_is_deferred` (`#[ignore]`)| §B4        |
 //! | B7 (E1116)| `task_spawn_outside_async_rejected_e1116`                  | §B7        |
 //! | E1116 reg | `e1116_registered_in_diagnostic_codes`                     | §B7        |
 //!
@@ -247,6 +249,97 @@ fn task_spawn_outside_async_rejected_e1116() {
         "expected E1116 for Task.spawn_raw in sync scope, got codes: {:?} (messages: {:?})",
         codes,
         errors(&result.diagnostics),
+    );
+}
+
+// ─── B4 (commit 2) — Task.join + TaskJoinFuture hand-poll surface ───
+
+/// Spec B4 (commit 2 surface): `Task.join(handle)` typechecks and
+/// returns a `TaskJoinFuture` value the caller can hand-poll via
+/// `(&var join).poll(&var cx)`. v1 user surface — the `.await`
+/// sugar is gated on the deferred async-lowering fix (see
+/// `task_join_await_via_method_call_is_deferred` below).
+///
+/// The fixture exercises:
+///   1. `Task.join(h)` constructs cleanly inside an `async def`.
+///   2. The returned value satisfies the Future mixin (has a
+///      `.poll(&var Context) -> Poll[Int]` method).
+///   3. The match arms on `Poll.Ready(v)` / `Poll.Pending`
+///      typecheck against `Poll[Int]` — proving TaskJoinFuture's
+///      `type Output = Int` is wired through correctly.
+#[test]
+fn task_join_constructs_and_typechecks() {
+    let result = typeck_result(&rvn("task_join_constructs"));
+    let errs = errors(&result.diagnostics);
+    assert!(
+        errs.is_empty(),
+        "Task.join(h) construction + hand-poll should typecheck clean, got: {:?}",
+        errs
+    );
+}
+
+/// Deferred pin — `Task.join(h).await` requires async-lowering to
+/// see bootstrap-loaded stdlib classes. TaskJoinFuture lives in
+/// `library/std/future/src/lib.rvn`, invisible to the user-program
+/// AST walkers `collect_class_static_returns` /
+/// `collect_future_outputs`.
+///
+/// Same architectural gap defers `tests/release-e2e/cases/
+/// 731_class_static_call_await.rvn.deferred` (the Async.sleep()
+/// .await case). When the desugar learns to walk bootstrap
+/// programs too:
+///   1. Drop the `#[ignore]` here.
+///   2. Verify the synth state-machine class for `driver` carries
+///      a `__sub_0: TaskJoinFuture` field.
+///   3. Drop the `.deferred` suffix on 731.
+#[test]
+#[ignore = "Task.join(h).await needs async-lowering to see bootstrap stdlib classes; same gap as 731_class_static_call_await.rvn.deferred"]
+fn task_join_await_via_method_call_is_deferred() {
+    let source = rvn("task_join_await_deferred");
+    let mut lx = Lexer::new(&source);
+    let toks = lx.tokenize().expect("lex");
+    let mut p = Parser::new(toks);
+    let mut prog = p.parse().expect("parse");
+
+    riven_core::async_lowering::lower_async_defs(&mut prog);
+
+    let synth_class = prog
+        .items
+        .iter()
+        .find_map(|i| match i {
+            TopLevelItem::Class(c) if c.name.contains("Driver") && c.name.starts_with("__") => {
+                Some(c)
+            }
+            _ => None,
+        })
+        .expect(
+            "WHEN UNIGNORED: expected a synth state-machine class for `driver` after lowering",
+        );
+
+    let has_taskjoin_sub = synth_class.fields.iter().any(|f| {
+        f.name.starts_with("__sub_")
+            && matches!(
+                &f.type_expr,
+                riven_core::parser::ast::TypeExpr::Named(path)
+                    if path.segments.last().map(|s| s.as_str()) == Some("TaskJoinFuture")
+            )
+    });
+    assert!(
+        has_taskjoin_sub,
+        "WHEN UNIGNORED: expected `__sub_*: TaskJoinFuture` field, got fields: {:?}",
+        synth_class
+            .fields
+            .iter()
+            .map(|f| (&f.name, &f.type_expr))
+            .collect::<Vec<_>>()
+    );
+
+    let result = typeck_result(&source);
+    let errs = errors(&result.diagnostics);
+    assert!(
+        errs.is_empty(),
+        "WHEN UNIGNORED: Task.join(h).await fixture should typecheck clean, got: {:?}",
+        errs
     );
 }
 
