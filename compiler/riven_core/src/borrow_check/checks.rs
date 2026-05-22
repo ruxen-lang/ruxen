@@ -320,15 +320,20 @@ impl<'a> BorrowChecker<'a> {
         span: &Span,
     ) {
         for cap in captures {
+            // `cap.ty` is a resolve-time snapshot (often Ty::Infer for
+            // values whose type wasn't pinned yet); refetch from the
+            // symbol table to get the post-typeck type. See
+            // `Capture::current_ty` docs.
+            let live_ty = cap.current_ty(self.symbols);
             if cap.by_move || is_move {
-                if !cap.ty.is_send_with(self.symbols) {
+                if !live_ty.is_send_with(self.symbols) {
                     self.errors.push(BorrowError {
                         code: ErrorCode::E1011,
                         primary: SpanLabel {
                             span: span.clone(),
                             label: format!(
                                 "captured value `{}` of type `{}` is not `Send`",
-                                cap.name, cap.ty
+                                cap.name, live_ty
                             ),
                         },
                         secondary: vec![],

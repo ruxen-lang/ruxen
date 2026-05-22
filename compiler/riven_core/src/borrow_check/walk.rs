@@ -455,15 +455,19 @@ impl<'a> BorrowChecker<'a> {
         is_move: bool,
         span: &Span,
     ) {
-        // Process captures
+        // Process captures. `cap.ty` is a resolve-time snapshot; the
+        // post-typeck type lives in the symbol table and is what every
+        // Copy/Send/mut-ref decision below MUST consult.
+        // See `Capture::current_ty` docs.
         for cap in captures {
+            let live_ty = cap.current_ty(self.symbols);
             if cap.by_move || is_move {
                 // Move capture invalidates the outer binding
-                if !self.ty_is_effectively_copy(&cap.ty) {
+                if !self.ty_is_effectively_copy(&live_ty) {
                     self.moves.process_call_move(
                         cap.def_id,
                         "closure".to_string(),
-                        &cap.ty,
+                        &live_ty,
                         span.clone(),
                     );
                     self.ownership.record_move_into_call(
@@ -475,7 +479,7 @@ impl<'a> BorrowChecker<'a> {
             } else {
                 // Borrow capture: create a borrow
                 let scope = self.scopes.current();
-                let kind = if cap.ty.is_mut_ref() {
+                let kind = if live_ty.is_mut_ref() {
                     BorrowKind::Mutable
                 } else {
                     BorrowKind::Shared

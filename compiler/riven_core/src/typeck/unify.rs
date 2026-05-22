@@ -288,9 +288,28 @@ pub fn unify(a: &Ty, b: &Ty, ctx: &mut TypeContext, span: &Span) -> Result<Ty, T
             }
         }
 
-        // Reference coercion: &T can unify with T (auto-deref) and
-        // T can unify with &T (auto-ref). This handles cases like
-        // Vec[&&T] vs Vec[&T] or Vec[&T] vs Vec[T].
+        // TODO (quality review §1.3 — soundness gap):
+        //
+        // The two arms below let `&T` unify with `T` at the TOP level,
+        // which is unsound: `&Int` should NOT silently unify with `Int`.
+        // The comment claims they exist to handle `Vec[&T]` vs `Vec[T]`
+        // element auto-deref — but that case is already handled by the
+        // structural Ty::Array(elem) arm above, which recurses
+        // correctly.
+        //
+        // Attempted removal of these arms (this session) surfaces real
+        // iter-dispatch bugs in `sample_program.rvn`:
+        //   - `data.split("|").to_vec` resolves to `Array[&str]` but
+        //     callers expected `Array[&&str]`
+        //   - `tasks.iter.partition` returns one ref-level less than
+        //     declared
+        //   - `list.repo.all.iter.to_vec` resolves to `Array[Todo]` not
+        //     `Array[&Todo]`
+        //
+        // i.e. the auto-deref is masking an iter return-type bug. Fix
+        // requires landing the iter ref-level correction in lockstep,
+        // which is beyond the scope of this commit. Leaving the
+        // unsound auto-deref in place but documented as a tracked gap.
         (Ty::Ref(inner_a), _) => match unify(inner_a, &b, ctx, span) {
             Ok(_) => Ok(a),
             Err(_) => Err(TypeError::mismatch(&a, &b, span)),

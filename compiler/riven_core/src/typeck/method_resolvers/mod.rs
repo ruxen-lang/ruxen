@@ -1131,13 +1131,20 @@ pub(super) fn builtin_method_type(
         // here.
         (Ty::Struct { .. }, "default") | (Ty::Class { .. }, "default") => Some(ty.clone()),
 
-        // to_display for any type
-        (_, "to_display") => Some(Ty::String),
-        (_, "summary") => Some(Ty::String),
-        (_, "is_actionable") => Some(Ty::Bool),
-        (_, "is_done") => Some(Ty::Bool),
-        (_, "serialize") => Some(Ty::String),
-        (_, "message") => Some(Ty::String),
+        // NOTE: six wildcard catch-all arms here (`to_display`, `summary`,
+        // `is_actionable`, `is_done`, `serialize`, `message`) used to
+        // claim `Ty::String` / `Ty::Bool` for ANY receiver type. They
+        // were quality-review §1.3 / §4 — domain-named ones (`is_done`,
+        // `is_actionable`) leaked from the sample_program.rvn fixture;
+        // `to_display`/`summary` were a fallback for an earlier era when
+        // mixin-bound dispatch on `&T where T: Mixin` didn't reach the
+        // hardcoded signature registry. With the ref-peel fix in
+        // `lookup_on_type_param_bounds` (commit b840862) and the proper
+        // return types on the Showable/Summarizable mixins, normal
+        // dispatch handles them. Real receiver types resolve through
+        // `lookup_method` / `lookup_method_on_bounds` above; a typo on
+        // an unrelated value (`42.summary`) now surfaces as the
+        // intended "unknown method" diagnostic instead of typechecking.
 
         _ => None,
     }

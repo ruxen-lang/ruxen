@@ -402,12 +402,38 @@ pub struct HirClosureParam {
 }
 
 /// Describes what a closure captures from its environment.
+/// A value captured by a closure.
+///
+/// `ty` is a SNAPSHOT taken at closure-resolve time. For captures of
+/// values whose type wasn't pinned yet (typeck runs AFTER resolve, so
+/// loop-bound or shadowed locals routinely have `Ty::Infer(_)` at
+/// capture time), this field stays stale forever — re-running typeck
+/// against `def_id` updates the symbol table but not this field.
+/// Memory: `project_riven_closure_capture_ty_stale.md`.
+///
+/// Consumers that need the current ty (borrow-check Send/Copy/mut-ref
+/// queries, method-resolver dispatch) MUST use [`Self::current_ty`]
+/// instead of reading `ty` directly — the helper re-fetches from the
+/// symbol table and falls back to the snapshot only when the def has
+/// no live entry.
 #[derive(Debug, Clone)]
 pub struct Capture {
     pub def_id: DefId,
     pub name: String,
     pub by_move: bool,
     pub ty: Ty,
+}
+
+impl Capture {
+    /// Re-fetch the capture's type from the symbol table. Consumers
+    /// that run AFTER typeck should always call this rather than read
+    /// `self.ty` (which is the resolve-time snapshot — see struct
+    /// docs).
+    pub fn current_ty(&self, symbols: &crate::resolve::symbols::SymbolTable) -> Ty {
+        symbols
+            .def_ty(self.def_id)
+            .unwrap_or_else(|| self.ty.clone())
+    }
 }
 
 // ─── Self Mode ──────────────────────────────────────────────────────

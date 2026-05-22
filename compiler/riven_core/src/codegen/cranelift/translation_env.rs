@@ -79,18 +79,26 @@ impl<'a> TranslationEnv<'a> {
             return Ok(func_ref);
         }
 
+        // TODO (quality review §1.3): the two suffix-fallback paths
+        // below ("shortest-name wins") are unsound — any class whose
+        // mangled name ends with the same suffix wins by chance for an
+        // unresolved generic-typed callee. The proper fix is to
+        // monomorphise generic methods at MIR time so the callee name
+        // is concrete by codegen entry.
+        //
+        // Removing the fallback now breaks the sample fixture's
+        // `Repository[T: Showable].display_all`'s `item.to_display`
+        // call (MIR emits `?T625_to_display`), because mixin-bound
+        // generics aren't monomorphised yet. Leaving the suffix
+        // fallback in place but tracked.
+        //
         // For inferred-type method calls (?T..._method), search for a
-        // declared function whose name ends with _method. This resolves
-        // calls like ?T260_message to TaskError_message.
+        // declared function whose name ends with _method.
         // Prefer the shortest match to avoid picking e.g.
         // TaskList_find_by_id when we want Task_id.
         if name.starts_with("?") {
             let method = extract_method_name(name);
             let suffix = format!("_{}", method);
-            // Prefer exact "TypeName_method" form: the suffix should appear
-            // right after the type name, with only one underscore-delimited
-            // segment before the method name.  If multiple candidates match,
-            // pick the shortest (most specific).
             let match_name = self
                 .declared_fns
                 .keys()
