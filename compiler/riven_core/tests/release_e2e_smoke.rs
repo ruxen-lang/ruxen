@@ -72,10 +72,15 @@ fn compile_and_run(case_name: &str) -> CaseOutcome {
         .filter(|d| d.level == riven_core::diagnostics::DiagnosticLevel::Error)
         .collect();
     if !errors.is_empty() {
+        let msgs: Vec<String> = errors
+            .iter()
+            .take(5)
+            .map(|d| format!("{}", d.message))
+            .collect();
         return CaseOutcome {
             name: case_name.to_string(),
             ok: false,
-            detail: format!("typecheck: {} errors", errors.len()),
+            detail: format!("typecheck: {} errors: {}", errors.len(), msgs.join(" | ")),
         };
     }
 

@@ -1,0 +1,2 @@
+Circle { radius: 1.5 }
+Rect { w: 3, h: 4 }

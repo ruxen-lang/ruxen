@@ -326,6 +326,28 @@ impl<'a> Lowerer<'a> {
         None
     }
 
+    /// Recover the receiver type for `<Primitive>_method` mangled names —
+    /// the fallback for `extension Int { def to_display }` and friends.
+    /// `class_name_from_mangled` only matches user-defined Class/Struct/Enum
+    /// entries in the symbol table; primitive types don't live there, so an
+    /// extension on a primitive yields a `None` lookup and the caller
+    /// previously fell back to `Ty::Unit`, silently dropping the self
+    /// parameter from the Cranelift signature.
+    ///
+    /// Walks prefixes right-to-left (same shape as `class_name_from_mangled`)
+    /// and returns the primitive `Ty` for the first match.
+    pub(super) fn primitive_self_ty_from_mangled(&self, mangled: &str) -> Option<Ty> {
+        let mut end = mangled.len();
+        while let Some(pos) = mangled[..end].rfind('_') {
+            let candidate = &mangled[..pos];
+            if let Some(ty) = primitive_ty_by_name(candidate) {
+                return Some(ty);
+            }
+            end = pos;
+        }
+        None
+    }
+
     pub(super) fn class_field_index_shift(&self, class_name: &str) -> usize {
         use crate::resolve::symbols::DefKind;
         for def in self.symbols.iter() {
@@ -410,4 +432,32 @@ impl<'a> Lowerer<'a> {
             }
         }
     }
+}
+
+/// Map a primitive type name to its `Ty` variant.
+///
+/// Used by `primitive_self_ty_from_mangled` to recover the receiver type
+/// for extension methods on primitives (`extension Int { def to_display }`).
+/// Returns `None` for any name that isn't a primitive built-in.
+pub(super) fn primitive_ty_by_name(name: &str) -> Option<Ty> {
+    Some(match name {
+        "Int" => Ty::Int,
+        "Int8" => Ty::Int8,
+        "Int16" => Ty::Int16,
+        "Int32" => Ty::Int32,
+        "Int64" => Ty::Int64,
+        "UInt" => Ty::UInt,
+        "UInt8" => Ty::UInt8,
+        "UInt16" => Ty::UInt16,
+        "UInt32" => Ty::UInt32,
+        "UInt64" => Ty::UInt64,
+        "ISize" => Ty::ISize,
+        "USize" => Ty::USize,
+        "Float" => Ty::Float,
+        "Float32" => Ty::Float32,
+        "Float64" => Ty::Float64,
+        "Bool" => Ty::Bool,
+        "Char" => Ty::Char,
+        _ => return None,
+    })
 }

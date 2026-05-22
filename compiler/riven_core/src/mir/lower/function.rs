@@ -41,6 +41,7 @@ impl<'a> Lowerer<'a> {
                     name: class_name.to_string(),
                     generic_args: vec![],
                 })
+                .or_else(|| self.primitive_self_ty_from_mangled(name))
                 .unwrap_or(Ty::Unit);
             let local = self.fn_mut().new_local("self", self_ty, true);
             self.fn_mut().params.push(local);
