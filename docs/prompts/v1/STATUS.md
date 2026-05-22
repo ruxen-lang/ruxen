@@ -1,10 +1,68 @@
 # v1 prompts — actual progress status
 
-Last audited: 2026-05-21. Status reflects in-tree code state, not
+Last audited: 2026-05-22. Status reflects in-tree code state, not
 just doc checkboxes (which were not maintained as work landed).
 
 Each remaining `*.md` file in this directory carries its own status
 header summarising current state + evidence pointers.
+
+## Session 2026-05-22 — CI + correctness sweep
+
+Six commits landed (`b6abe74 … 79be087`). None of the remaining v1
+prompts moved out of their bucket; the work was greening the suite and
+shoring up correctness gaps surfaced by the
+[`docs/quality_review.md`](../../quality_review.md).
+
+| Area | Pre-session | Post-session |
+|---|---|---|
+| `release_e2e_smoke -- --ignored` | 287 / 291 (4 failing) | **291 / 291** |
+| `cargo test -p riven_core --tests` (macOS) | 9 failing | **1066 / 1066** |
+| `cargo test --workspace` (linux, gcc) | red on build + 2 test failures | **1643 / 1643** |
+| `cargo build --workspace --all-targets` | red (`riven_repl` non-exhaustive match + `Future_dynamic_poll` link miss) | **green** |
+| `cargo +1.91 build --workspace` (MSRV) | red (same chain) | **green** |
+| `cargo fmt --all -- --check` | 205 diffs in 74 files | **green** |
+
+Compiler fixes shipped this session (each unblocks a documented
+soundness or correctness pin):
+
+- `mir/lower/function.rs` — primitive-receiver `self` type for
+  `extension Int { … }` (Cranelift was dropping the zero-sized
+  param while callers still passed it; `100_where_clause` +
+  `103_generic_constraint` were stuck).
+- `resolve/items.rs:332` — `resolve_class` now preserves
+  `DefKind::TypeAlias` instead of stomping it for `String`. Closes
+  `project_riven_resolve_class_stomps_typealias.md` at the write
+  site; the read-side patches in `resolve/types.rs:516-548` are now
+  redundant (left in for defence-in-depth).
+- `typeck/infer/collect.rs` — `lookup_on_type_param_bounds` peels
+  `Ref/RefMut/RefLifetime` so `def f[T: Mixin](a: &T)` dispatches.
+- `library/std/{core,hash}/src/lib.rvn` — `Hashable.hash_code`,
+  `Ord.cmp`, `PartialOrd.partial_cmp` now carry their real return
+  types (`-> Int`) instead of defaulting to `Unit`.
+- `mir/lower/drops.rs` — Command builder receiver is force-tainted on
+  `arg/args/env/current_dir`, ending the SIGABRT-on-exit double-free
+  that affected every `Command.new(…).arg(…).status` chain.
+- `library/std/sync/runtime/atomic.c` — bool `fetch_and/or` rewritten
+  as compare-exchange loops (gcc rejects the Clang-only
+  `atomic_fetch_and(&_Atomic _Bool, …)` extension).
+- `riven_repl/src/jit.rs` — `MirInst::DataAddr` arm added; non-
+  exhaustive match was breaking `cargo build --workspace --all-targets`.
+- `riven_repl/{build.rs,runtime_stubs.c}` — weak
+  `Future_dynamic_poll` stub satisfies the librivenrt link without
+  changing AOT codegen behaviour.
+- `riven_ide/src/line_index.rs` — UTF-8 char-boundary safety via a
+  stable `floor_char_boundary` helper. Closes the v1.1 follow-up
+  noted in the previous audit (`analysis_of_sample_program` was
+  panicking on the `─` banner chars in `sample_program.rvn`).
+
+Two stale-test sweeps:
+
+- `Task` → `Todo` rename across `compiler/riven_core/tests/fixtures/{class_methods,mini_sample,sample_program}.rvn`
+  (collided with the stdlib's async `class Task`).
+- E1100 / E1101 / E1102 / E1110 / E1112 / E1115 / E1116 / E1117 /
+  E1118 added to the `EXPLAINS` table in `riven_cli/src/explain.rs`
+  (the `.md` files already existed; the table was just out of sync
+  with the central registry).
 
 ## Cleanup pass (2026-05-21)
 
@@ -59,6 +117,11 @@ in git history (`git log -- docs/prompts/v1/<name>.md` to recover).
 
 **Closest-to-shipping next chunks:**
 1. **19 test framework** — biggest user-facing v1 gap; unlocks user-side `def test_*` runner. Same pattern as prompt 13's `rivenc bench` (pure Riven harness + tiny Rust CLI wrapper)
+2. **The four real soundness bugs from `docs/quality_review.md` §1.3** — tuple-float-roundtrip (`parser/expr/calls.rs:72-96`), `def __drop` collector (`mir/lower/collect.rs:223+`), `derive Clone` parent-field walk (`mir/lower/derive.rs:757-793`), `unify` Ref auto-deref (`typeck/unify.rs:294-301`). Each is localised and pin-testable.
 3. **12 diagnostics polish** — error codes are exhaustive but hints/suggestions need engine work
 4. **22 pkg manager workspace/resolver** — turns stdlib's per-package model into something user packages can opt into
-5. **v1.1 follow-ups identified this session**: (a) AsyncStdout/Stderr if a demand actually shows up; (b) UTF-8 char-boundary bug in `line_index.rs:36` that crashes `analysis_of_sample_program`
+
+**v1.1 follow-ups still open:**
+- AsyncStdout/Stderr — wait for demand
+- ~~UTF-8 char-boundary bug in `line_index.rs:36`~~ — **fixed 2026-05-22** in commit `79be087` (stable `floor_char_boundary` helper)
+- Quality review Wave 2 (security): four CVE-class holes in `src/riven_cli/src/resolve_deps.rs` (argument injection on `git clone`, path-dep traversal, `dlsym(RTLD_DEFAULT)` open allowlist). Pre-1.0 is the right time.

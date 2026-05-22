@@ -1,20 +1,55 @@
 # Riven — Whole-Project Quality Review
 
-**Date**: 2026-05-22
+**Date**: 2026-05-22 (original review)
+**Re-audited**: 2026-05-22 evening (after the CI-greening + correctness sweep landed)
 **Scope**: Full workspace (7 crates, ~26K LOC Rust) reviewed in 8 parallel passes
-**Status overall**: **FAIL** — three classes of issue need landing before any v1 freeze: (1) the security boundary in `resolve_deps`+`bench`, (2) the structural correctness gaps that hardcoded string allowlists keep producing, (3) the build-break in `riven_repl`.
+**Status overall after fixes**: **WARN** (was FAIL). The Wave 1 build/format/lint chunk is shipped; the Wave 2 security boundary in `resolve_deps`+`bench` and most of the Wave 3 soundness gaps remain.
 
-## Status table
+## Status table (updated 2026-05-22 evening)
 
-| Category | Status | Issues |
+| Category | Status | Notes |
 |---|---|---|
-| Formatting | **FAIL** | 3 files in `rivenc` need `cargo fmt` |
-| Build | **FAIL** | `riven_repl` test target does not compile (non-exhaustive `MirInst` match) |
-| Clippy | WARN | ~15 lints across `riven_core` + `riven_ide` (5 auto-fixable in `riven_ide`) |
-| Security | **FAIL** | 4 supply-chain / sandbox-escape holes |
-| Performance | WARN | ~30 hot-path findings; one O(N²) per-keystroke in LSP |
-| Architecture | WARN | 9 god files >1000 LOC; 3 known design debts still load-bearing |
-| Correctness | **FAIL** | 12 CRITICAL findings across slices |
+| Formatting | ✅ GREEN | `cargo fmt --all` sweep (74 files) committed in `ae20296`. |
+| Build | ✅ GREEN | `riven_repl` `MirInst::DataAddr` arm added; `Future_dynamic_poll` weak stub satisfies the librivenrt link (`ae20296`). gcc-on-linux `atomic_fetch_and(&atomic_bool, …)` rejection fixed with CAS loops (`79be087`). Workspace + MSRV both green on macOS aarch64 and ubuntu/gcc (verified via docker `rust:1.94-bookworm`). |
+| Clippy | WARN | 5 `riven_ide` lints auto-fixed (`79be087`); 4 `riven_core` lints + ~8 across the rest of the workspace remain. CI lint job stays `continue-on-error: true`. |
+| Security | **FAIL** | All 4 `resolve_deps.rs` / `bench.rs` holes still open. Listed in Wave 2 below. |
+| Performance | WARN | Unchanged from original review. |
+| Architecture | WARN | Unchanged. |
+| Correctness | **FAIL** → WARN | 5 of the original 12 CRITICAL findings now closed (see "Findings closed" below); 7 still open. |
+
+## Findings closed this session
+
+Map from review section → commit / file:
+
+| Review § | Finding | Fix landed in |
+|---|---|---|
+| §1.1 | `riven_repl/src/jit.rs:731` non-exhaustive `MirInst` match | `ae20296` |
+| §1.3 | `resolve/types.rs:516-548` String DefKind-stomp workaround | **Real fix** in `6fbf5d9` — `resolve/items.rs:332` now preserves `DefKind::TypeAlias` instead of overwriting it. Read-side patches in `types.rs` left for defence-in-depth. |
+| §10 | `project_riven_resolve_class_stomps_typealias.md` | Same as above — memory marked resolved at the write site. |
+| Wave 1 #1 | `MirInst::DataAddr` arm | `ae20296` |
+| Wave 1 #2 | `cargo fmt` sweep | `ae20296` |
+| Wave 1 #3 | Dead `runtime_c_src` helpers | `79be087` |
+| Wave 1 #4 | `cargo clippy --fix -p riven_ide` (5 auto-fixable) | `79be087` |
+| §8 (line_index UTF-8 char-boundary crash, also v1 STATUS.md follow-up) | `riven_ide/src/line_index.rs` | `79be087` — added stable `floor_char_boundary` helper, routed both bounds through it. Unblocks `analysis_of_sample_program`. |
+| §7 (E1100-E1118 missing markdown — surfaced on linux) | `src/riven_cli/src/explain.rs` | `79be087` — 9 `include_str!` lines added. |
+| Cross-cutting | gcc rejects `atomic_fetch_and/or` on `atomic_bool` (C11 only defines those for integer atomics; Clang accepts it as an extension) | `79be087` — CAS-loop rewrite. |
+| §5 / §1.3 derivative | Command builder `riven_command_arg/args/env/current_dir` double-free at scope exit (intermediate and dest both alloc-rooted, both drop+dealloc) | `a398f72` — force-taint receiver in `mir/lower/drops.rs::compute_dealloc_safe_locals`. |
+| §4 / §1.3 | `lookup_method_on_bounds` not reachable through `Ref(TypeParam)` receiver | `b840862` — `typeck/infer/collect.rs::lookup_on_type_param_bounds` peels references. |
+| §4 / §1.3 | Hashable/Ord/PartialOrd mixin sigs default to `Unit` return | `b840862` — stamped `-> Int` return types in `library/std/core/src/lib.rvn` + `library/std/hash/src/lib.rvn`. |
+| §2 (extension on primitive) | `extension Int { def to_display }` lowered `self: Ty::Unit` because `class_name_from_mangled` only matched user-defined Class/Struct/Enum | `b6abe74` — `primitive_self_ty_from_mangled` fallback in `mir/lower/type_helpers.rs`. |
+
+## Findings still open (priority order)
+
+1. **Wave 2 security boundary** (`src/riven_cli/src/resolve_deps.rs` lines 256/269/187, `src/rivenc/src/bench.rs:142-150`, `src/riven_repl/src/jit.rs:178-188`) — argument-injection on `git clone <url>` / `git checkout <ref>`, path-dep traversal, identifier-splice into synthesised `def main`, open `dlsym(RTLD_DEFAULT)` allowlist. All four CVE-class.
+2. **Wave 3 soundness gaps** — see the original §1.3 list, minus the entries marked closed above. The four highest-value remaining items:
+   - Tuple-field roundtrip through `f64` in `parser/expr/calls.rs:72-96` (`t.0.10` indexes field 1, not 10).
+   - `def __drop` never fires in `mir/lower/collect.rs:223+` (`sync.rvn` leaks). Memory `project_riven_drop_name_mismatch.md`.
+   - `mir/lower/derive.rs::synthesize_class_clone` ignores parent-class fields (inherited fields zero-init).
+   - `typeck/unify.rs:294-301` Ref auto-deref unsoundness (`&Int` unifies with `Int`).
+3. **Open allowlists** — `FRESH_ALLOC_CALLEES` in `mir/lower/drops.rs:412-652` and the ownership-transfer allowlist at `:786-789`. Make them attribute-driven from FFI decls.
+4. **Wave 5 architecture splits** — five god files >1000 LOC (`async_lowering/mod.rs`, `mir/lower/{derive,expr/method_call,mod}.rs`, `resolve/ffi_registration.rs`). None affect correctness; all gate maintenance velocity.
+
+The full original report follows.
 
 ---
 
