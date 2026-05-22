@@ -119,15 +119,25 @@ fn mutex_drop_emitted_on_typed_scope_exit() {
         .filter(|d| d.level == DiagnosticLevel::Error)
         .collect();
     assert!(errors.is_empty(), "typeck errors: {:?}", errors);
-    // The Mutex class has a __drop lib decl in library/std/sync/src/lib.rvn.
-    // Confirm it's registered in the symbol table as a method on Mutex.
-    let drop_method = result
-        .symbols
-        .iter()
-        .find(|d| d.name == "__drop" && matches!(&d.kind, DefKind::Method { .. }));
+    // The Mutex class has a `def drop` lib decl in
+    // library/std/sync/src/lib.rvn. Confirm it's registered in the
+    // symbol table as a method (the `__drop` legacy name was retired
+    // during the sync.rvn rename — see
+    // `project_riven_drop_name_mismatch.md`).
+    let drop_method = result.symbols.iter().find(|d| {
+        d.name == "drop"
+            && match &d.kind {
+                DefKind::Method { parent, .. } => result
+                    .symbols
+                    .get(*parent)
+                    .map(|p| p.name == "Mutex")
+                    .unwrap_or(false),
+                _ => false,
+            }
+    });
     assert!(
         drop_method.is_some(),
-        "Mutex.__drop should be registered as a method via its lib decl"
+        "Mutex.drop should be registered as a method via its lib decl"
     );
 }
 

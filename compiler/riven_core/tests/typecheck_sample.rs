@@ -96,11 +96,11 @@ fn sample_program_resolves_enums() {
     // Check that Priority, Status, TaskError enums are registered
     let has_priority = result.symbols.iter().any(|d| d.name == "Priority");
     let has_status = result.symbols.iter().any(|d| d.name == "Status");
-    let has_task_error = result.symbols.iter().any(|d| d.name == "TaskError");
+    let has_task_error = result.symbols.iter().any(|d| d.name == "TodoError");
 
     assert!(has_priority, "Priority enum should be registered");
     assert!(has_status, "Status enum should be registered");
-    assert!(has_task_error, "TaskError enum should be registered");
+    assert!(has_task_error, "TodoError enum should be registered");
 }
 
 #[test]
@@ -113,15 +113,15 @@ fn sample_program_resolves_classes() {
 
     let result = typeck::type_check(&program);
 
-    let has_task = result.symbols.iter().any(|d| d.name == "Task");
-    let has_timed_task = result.symbols.iter().any(|d| d.name == "TimedTask");
+    let has_task = result.symbols.iter().any(|d| d.name == "Todo");
+    let has_timed_task = result.symbols.iter().any(|d| d.name == "TimedTodo");
     let has_repository = result.symbols.iter().any(|d| d.name == "Repository");
-    let has_task_list = result.symbols.iter().any(|d| d.name == "TaskList");
+    let has_task_list = result.symbols.iter().any(|d| d.name == "TodoList");
 
-    assert!(has_task, "Task class should be registered");
-    assert!(has_timed_task, "TimedTask class should be registered");
+    assert!(has_task, "Todo class should be registered");
+    assert!(has_timed_task, "TimedTodo class should be registered");
     assert!(has_repository, "Repository class should be registered");
-    assert!(has_task_list, "TaskList class should be registered");
+    assert!(has_task_list, "TodoList class should be registered");
 }
 
 #[test]

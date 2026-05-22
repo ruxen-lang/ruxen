@@ -840,6 +840,35 @@ fn compute_dealloc_safe_locals(func: &MirFunction) -> std::collections::HashSet<
                     );
                     let is_runtime_borrow_helper =
                         is_runtime_borrow_helper || is_command_terminal_or_accessor;
+                    // Phase 2 stdlib (#06): `Command` builder methods
+                    // (`arg/args/env/current_dir`) return the SAME pointer
+                    // as the receiver — they mutate `c` in place. The
+                    // prefix-based `is_runtime_borrow_helper` rule above
+                    // wrongly bundles them in (they start with `riven_`),
+                    // which leaves the receiver local alloc-rooted
+                    // alongside the dest. Both then attract a full
+                    // `Command_drop + riven_dealloc` at scope exit and
+                    // we double-free the same RivenCommand allocation
+                    // (manifests as SIGABRT after `puts` prints
+                    // successfully — pin tests
+                    // `stdlib_process::command_arg_passes_through`,
+                    // `…args_bulk`, `…current_dir_changes_cwd`,
+                    // `…output_captures_stdout`, `…stderr`,
+                    // `…env_visible_to_child`). Force-taint the
+                    // receiver so the dest local is the sole alloc root.
+                    let is_command_builder_method = matches!(
+                        callee.as_str(),
+                        "Command_arg"
+                            | "riven_command_arg"
+                            | "Command_args"
+                            | "riven_command_args"
+                            | "Command_env"
+                            | "riven_command_env"
+                            | "Command_current_dir"
+                            | "riven_command_current_dir"
+                    );
+                    let is_runtime_borrow_helper =
+                        is_runtime_borrow_helper && !is_command_builder_method;
                     // `riven_store_ptr(p, v)` writes `v` into `*p`,
                     // transferring `v`'s allocation through the pointer
                     // to whatever owns `*p`. The store is the moment
