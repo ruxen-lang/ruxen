@@ -467,6 +467,14 @@ impl<'a> Lowerer<'a> {
         //   return result
         self.synthesize_dynamic_dispatch_helpers(&mut mir);
 
+        // Post-lowering fixup: elide the `riven_dealloc(R)` that
+        // `lower_assign` emits before `Assign { dest: R, value: Use(X) }`
+        // when `X` came from a call whose callee returns `self`. The
+        // dealloc-then-rebind pattern is a use-after-free whenever
+        // the call returns its receiver. See `drops::elide_returns_self_realloc`
+        // for the detection details and the minimum reproducer.
+        crate::mir::lower::drops::elide_returns_self_realloc(&mut mir);
+
         Ok(mir)
     }
 

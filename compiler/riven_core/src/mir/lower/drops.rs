@@ -9,6 +9,153 @@ use super::*;
 /// - Parameters (owned by the caller)
 /// - Any local that appears as the value of a `Return` terminator
 ///   (returning the value, not dropping it).
+/// Post-lowering fixup that elides use-after-free deallocs caused by
+/// the `lower_assign` "pre-reassign drop" path emitting
+/// `riven_dealloc(R)` before `Assign { dest: R, value: Use(X) }` —
+/// when the call that produced `X` was an instance method that
+/// returns `self` (i.e. `X` aliases `R`), the dealloc frees the very
+/// heap object the assign then re-reads.
+///
+/// Reproducer:
+///
+/// ```text
+///   def var with_status(c: Int) -> Reply
+///     self.status = c
+///     self
+///   end
+///   …
+///   var r = Reply.new
+///   r = r.with_status(201)   // ← UAF: dealloc(r) before re-assign of r
+/// ```
+///
+/// MIR pattern (consecutive instructions in one block):
+///
+/// ```text
+///   Call { dest: Some(X), callee: F, args: [Use(R), …] }
+///   Call { dest: None,    callee: "riven_dealloc", args: [Use(R)] }
+///   Assign { dest: R, value: Use(X) }
+/// ```
+///
+/// where `F` is a function whose final terminator is
+/// `Return(Some(Use(params[0])))` — i.e. it returns its self
+/// argument. Action: remove the middle `riven_dealloc` instruction.
+///
+/// We can't fix this in `lower_assign` itself because the callee's
+/// "returns self" property isn't known until that callee's body has
+/// been lowered, and lowering order is per-function. Running this
+/// as a post-pass over the whole `MirProgram` sidesteps the ordering.
+pub fn elide_returns_self_realloc(mir: &mut crate::mir::nodes::MirProgram) {
+    use crate::mir::nodes::{MirInst, MirValue, Terminator};
+
+    // Step 1: collect the names of functions that return their first
+    // parameter (i.e. instance methods that yield `self`).
+    let mut returns_self: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    for func in &mir.functions {
+        let Some(&self_id) = func.params.first() else {
+            continue;
+        };
+        // Any block ending in `Return(Some(Use(self_id)))` counts. If
+        // there's at least one such block AND every non-trivial return
+        // returns self, the function unconditionally returns self —
+        // but for the dealloc-elide we only need to know the return
+        // ALIASES self on at least one tail. To be conservative we
+        // require ALL returning blocks to yield self.
+        let mut saw_return = false;
+        let mut all_return_self = true;
+        for block in &func.blocks {
+            if let Terminator::Return(Some(MirValue::Use(local))) = &block.terminator {
+                saw_return = true;
+                if *local != self_id {
+                    all_return_self = false;
+                    break;
+                }
+            }
+        }
+        if saw_return && all_return_self {
+            returns_self.insert(func.name.clone());
+        }
+    }
+
+    if returns_self.is_empty() {
+        return;
+    }
+
+    // Step 2: walk every function's blocks, locate the bad triple,
+    // and delete the middle (riven_dealloc) instruction.
+    for func in &mut mir.functions {
+        for block in &mut func.blocks {
+            // Track the most-recent Call that wrote each local: maps
+            // `dest` → `(callee_name, first_arg_local)` so we can
+            // recognise the "X came from F(R, …)" antecedent.
+            let mut last_call: std::collections::HashMap<
+                crate::mir::nodes::LocalId,
+                (String, crate::mir::nodes::LocalId),
+            > = std::collections::HashMap::new();
+
+            let mut to_remove: Vec<usize> = Vec::new();
+            for (i, inst) in block.instructions.iter().enumerate() {
+                match inst {
+                    MirInst::Call { dest, callee, args } => {
+                        // Record the call's writeback target so later
+                        // sites can trace `X`'s provenance.
+                        if let Some(d) = dest {
+                            // First-arg local (the receiver). Skip if
+                            // the call has no args or arg[0] isn't a
+                            // simple Use.
+                            if let Some(MirValue::Use(first)) = args.first() {
+                                last_call.insert(*d, (callee.clone(), *first));
+                            }
+                        }
+                        // Detect the buggy triple: a riven_dealloc on
+                        // local R that's immediately followed by
+                        // Assign { dest: R, value: Use(X) } where X
+                        // traces back to a returns-self callee taking
+                        // R as its first arg.
+                        if callee == "riven_dealloc" && args.len() == 1 {
+                            if let MirValue::Use(r) = &args[0] {
+                                if let Some(MirInst::Assign {
+                                    dest: a_dest,
+                                    value: MirValue::Use(x),
+                                }) = block.instructions.get(i + 1)
+                                {
+                                    if a_dest == r {
+                                        if let Some((callee_name, first_arg)) =
+                                            last_call.get(x)
+                                        {
+                                            if first_arg == r
+                                                && returns_self.contains(callee_name)
+                                            {
+                                                to_remove.push(i);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    MirInst::Assign { dest, value: MirValue::Use(src) } => {
+                        // Propagate provenance through simple aliases:
+                        // if `dest = X` and `X` was the result of a
+                        // Call we tracked, dest now also denotes that
+                        // result for any later use. (Niche, but keeps
+                        // the analysis tight if codegen ever inserts
+                        // a copy between the call and the dealloc.)
+                        if let Some(entry) = last_call.get(src).cloned() {
+                            last_call.insert(*dest, entry);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            // Remove in reverse so earlier indices stay valid.
+            for &i in to_remove.iter().rev() {
+                block.instructions.remove(i);
+            }
+        }
+    }
+}
+
 pub(super) fn insert_drops(
     func: &mut MirFunction,
     return_locals: &HashSet<LocalId>,
