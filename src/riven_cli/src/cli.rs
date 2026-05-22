@@ -100,10 +100,19 @@ pub enum Command {
         piece: String,
     },
 
-    /// Update dependencies (all or specific)
+    /// Update dependencies (all or specific), or rebuild the
+    /// toolchain itself from a local source checkout via
+    /// `--from-source <path>`.
     Update {
         /// Specific piece to update
         piece: Option<String>,
+
+        /// Rebuild + reinstall the riven toolchain from a local
+        /// source checkout. Pass `.` for the current directory.
+        /// When set, the `[piece]` argument is ignored — this is a
+        /// self-update flow, not a dependency update.
+        #[arg(long, value_name = "PATH")]
+        from_source: Option<String>,
     },
 
     /// Display dependency tree

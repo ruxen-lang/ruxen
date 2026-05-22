@@ -8,4 +8,5 @@ pub mod module_discovery;
 pub mod resolve_deps;
 pub mod rlib;
 pub mod scaffold;
+pub mod self_update;
 pub mod version;

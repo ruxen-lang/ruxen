@@ -1,5 +1,5 @@
 use clap::Parser;
-use riven_cli::{build, cli, deps, explain, scaffold};
+use riven_cli::{build, cli, deps, explain, scaffold, self_update};
 
 fn main() {
     let args = cli::Cli::parse();
@@ -39,7 +39,19 @@ fn main() {
             rev.as_deref(),
         ),
         cli::Command::Remove { piece } => deps::remove(&piece),
-        cli::Command::Update { piece } => deps::update(piece.as_deref()),
+        cli::Command::Update { piece, from_source } => {
+            if let Some(src) = from_source {
+                if piece.is_some() {
+                    eprintln!(
+                        "  warning: ignoring `<piece>` argument — \
+                         `--from-source` is a toolchain self-update"
+                    );
+                }
+                self_update::from_source(&src)
+            } else {
+                deps::update(piece.as_deref())
+            }
+        }
         cli::Command::Tree => deps::tree(),
         cli::Command::Verify => deps::verify(),
         cli::Command::Explain { code } => explain::explain(&code),
