@@ -120,7 +120,26 @@ impl<'a> Lexer<'a> {
         }
 
         // Check for float: must be '.' followed by a digit (NOT '..' which is range)
-        let is_float = !self.is_at_end()
+        // AND we must NOT be in a tuple-field-access context.
+        //
+        // Background: for `t.0.10`, the lexer historically fused `0.10`
+        // into `FloatLiteral(0.1_f64)` because f64 round-trip drops the
+        // trailing zero. The parser then `format!("{}", 0.1)`-split that
+        // back into `["0", "1"]` and accessed field 1 instead of field
+        // 10 — silent miscompile (parser/expr/calls.rs:72-96).
+        //
+        // The clean fix is to refuse the float fusion entirely when the
+        // PREVIOUS emitted token is `Dot`: in that context the user is
+        // chaining tuple-field accesses, so emit the integer alone and
+        // leave the trailing `.<digit>` for the next lex iteration to
+        // produce as a separate `Dot` + `IntLiteral` pair. Pin test:
+        // tuple-field roundtrip preserves multi-digit indices.
+        let prev_was_dot = self
+            .tokens
+            .last()
+            .is_some_and(|t| matches!(t.kind, TokenKind::Dot));
+        let is_float = !prev_was_dot
+            && !self.is_at_end()
             && self.current() == '.'
             && self.peek_at(1).is_some_and(|c| c.is_ascii_digit());
 

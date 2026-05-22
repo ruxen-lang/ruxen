@@ -106,6 +106,19 @@ pub fn run(args: &[String]) -> Result<(), String> {
                         continue;
                     }
                 }
+                // Defence-in-depth: the parser already restricts function
+                // identifiers to `[A-Za-z_][A-Za-z0-9_]*`, but the bench
+                // synthesiser below text-splices `f.name` straight into a
+                // generated `def main` body. A future parser bug that let
+                // a non-identifier through would become arbitrary Riven
+                // injection. Re-validate at the trust boundary.
+                if !is_valid_riven_identifier(&f.name) {
+                    return Err(format!(
+                        "bench: function name `{}` is not a valid Riven identifier; \
+                         refusing to splice into synthesised runner main",
+                        f.name
+                    ));
+                }
                 bench_names.push(f.name.clone());
             }
         }
@@ -230,4 +243,20 @@ pub fn run(args: &[String]) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// Conservative identifier check: `[A-Za-z_][A-Za-z0-9_]*`. Matches the
+/// lexer's own definition of a bare identifier; refusing anything else
+/// keeps the bench synthesiser's text-splice safe under any future
+/// parser bug.
+fn is_valid_riven_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    let first = match chars.next() {
+        Some(c) => c,
+        None => return false,
+    };
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }

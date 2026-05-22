@@ -792,10 +792,15 @@ impl<'a> Lowerer<'a> {
     fn current_parent_class(&self) -> Option<String> {
         use crate::resolve::symbols::DefKind;
         let fn_name = self.current_fn.as_ref().map(|f| f.name.clone())?;
-        let class_name = fn_name.split('_').next().unwrap_or("");
-        if class_name.is_empty() {
-            return None;
-        }
+        // `split('_').next()` is wrong for synth `__`-prefixed classes
+        // (returns `""` — the empty prefix) and for class names that
+        // themselves carry underscores. `class_name_from_mangled` walks
+        // underscore positions right-to-left and returns the longest
+        // prefix that names an actual class/struct/enum in the symbol
+        // table — the same routine that backs `synthesize_struct_*` /
+        // self-typing across the lowerer. Pin:
+        // `project_riven_mir_mangled_method_name_parsing.md`.
+        let class_name = self.class_name_from_mangled(&fn_name)?;
         for def in self.symbols.iter() {
             if def.name == class_name {
                 if let DefKind::Class { ref info } = def.kind {

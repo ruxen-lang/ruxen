@@ -481,15 +481,28 @@ pub(super) fn translate_instruction(
                 arg_vals.push(gen_value(arg, func, var_map, stack_slots, builder)?);
             }
 
-            // Build signature: all args are I64, return is I64 if dest exists.
+            // Build signature: param types come from the arg values
+            // (which already carry their MIR-declared Cranelift types).
+            // The return type was historically hardcoded to I64 — that
+            // produces wrong codegen when the indirect call's real
+            // return is `I8` (Bool), `I32` (Char), or `F64`: Cranelift
+            // either rejects the verifier or reads garbage upper bits.
+            // Source-of-truth for the return is the DESTINATION local's
+            // MIR type (set at MIR-lowering time by the call site);
+            // mirror it into the imported signature.
             let call_conv = env.module.isa().default_call_conv();
             let mut sig = Signature::new(call_conv);
             for val in &arg_vals {
                 let ty = builder.func.dfg.value_type(*val);
                 sig.params.push(AbiParam::new(ty));
             }
-            if dest.is_some() {
-                sig.returns.push(AbiParam::new(types::I64));
+            let dest_cl_ty: Option<Type> = dest.and_then(|d| {
+                func.locals
+                    .get(d as usize)
+                    .and_then(|l| ty_to_cranelift(&l.ty))
+            });
+            if let Some(t) = dest_cl_ty {
+                sig.returns.push(AbiParam::new(t));
             }
             let sig_ref = builder.import_signature(sig);
             let call = builder.ins().call_indirect(sig_ref, callee_val, &arg_vals);
@@ -497,11 +510,7 @@ pub(super) fn translate_instruction(
             if let Some(dest_id) = dest {
                 let results = builder.inst_results(call);
                 if !results.is_empty() {
-                    let dest_ty = func
-                        .locals
-                        .get(*dest_id as usize)
-                        .and_then(|l| ty_to_cranelift(&l.ty))
-                        .unwrap_or(types::I64);
+                    let dest_ty = dest_cl_ty.unwrap_or(types::I64);
                     let result = coerce_value(results[0], dest_ty, builder);
                     def_local(var_map, stack_slots, builder, *dest_id, result);
                 }

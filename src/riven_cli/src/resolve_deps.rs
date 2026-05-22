@@ -9,6 +9,89 @@ use crate::lock::{LockFile, LockedPiece};
 use crate::manifest::{Dependency, DependencyDetail, Manifest};
 use crate::rlib;
 
+// ─── Security-boundary validators ──────────────────────────────────────────
+//
+// Every field of `DependencyDetail` is attacker-controlled: a malicious
+// `Riven.toml` shipped from a registry / git source can inject arbitrary
+// argv into the `git` binary (`--upload-pack=…` style RCE,
+// CVE-2017-1000117-class) or read arbitrary filesystem paths through
+// path-dep traversal. These helpers gate every untrusted string before
+// it crosses the `Command::new("git")` / `Path::new(…)` boundary.
+
+/// Reject URLs starting with `-` (would be misread as a `git` flag) and
+/// restrict to known-safe schemes. The `--` argv separator added at the
+/// call site is the second line of defence; this check is the first.
+fn validate_git_url(url: &str) -> Result<(), String> {
+    if url.starts_with('-') {
+        return Err(format!(
+            "git URL `{}` starts with `-` and would be interpreted as a flag by git",
+            url
+        ));
+    }
+    let scheme_ok = url.starts_with("https://")
+        || url.starts_with("http://")
+        || url.starts_with("ssh://")
+        || url.starts_with("git://")
+        || url.starts_with("git@")
+        || url.starts_with("file://");
+    if !scheme_ok {
+        return Err(format!(
+            "git URL `{}` must use https://, http://, ssh://, git://, file://, or `git@` scheme",
+            url
+        ));
+    }
+    Ok(())
+}
+
+/// Validate a git ref (branch / tag / rev). Conservative allowlist —
+/// matches the character class git itself accepts for branch names plus
+/// the `~`/`^` suffix syntax. Rejects anything that could be mistaken
+/// for a flag.
+fn validate_git_ref(r: &str) -> Result<(), String> {
+    if r.is_empty() {
+        return Err("git ref must not be empty".into());
+    }
+    if r.starts_with('-') {
+        return Err(format!(
+            "git ref `{}` starts with `-` and would be interpreted as a flag",
+            r
+        ));
+    }
+    // Allow [A-Za-z0-9_./+@~^-] — covers branch names, tags, commit
+    // SHAs, and ~/^ rev suffixes. Anything else is rejected.
+    if !r
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '/' | '+' | '@' | '~' | '^' | '-'))
+    {
+        return Err(format!(
+            "git ref `{}` contains characters outside [A-Za-z0-9_./+@~^-]",
+            r
+        ));
+    }
+    Ok(())
+}
+
+/// Decide whether a path dep is safe to consume without an explicit
+/// `--allow-external-path` opt-in.
+///
+/// Threat model: a malicious upstream package ships a `Riven.toml` with
+/// `path = "/etc/shadow"` or similar absolute path. Refusing absolute
+/// paths blocks that. Relative paths (including `..` traversal) stay
+/// allowed because legitimate sibling-workspace patterns
+/// (`apps/foo` depending on `../../libs/bar`) need them and the
+/// project_dir-confined check that would block those is too strict for
+/// real layouts.
+#[allow(dead_code)] // referenced from resolve_path_dep behind an env-var gate
+fn validate_path_dep(name: &str, raw: &str, _project_dir: &Path) -> Result<(), String> {
+    if Path::new(raw).is_absolute() {
+        return Err(format!(
+            "path dependency `{}` uses absolute path `{}` — only relative paths are allowed by default (set `RIVEN_ALLOW_EXTERNAL_PATH=1` to override)",
+            name, raw
+        ));
+    }
+    Ok(())
+}
+
 /// A resolved dependency with all information needed to compile it.
 #[derive(Debug, Clone)]
 pub struct ResolvedDep {
@@ -184,6 +267,15 @@ fn resolve_path_dep(
     path: &str,
     project_dir: &Path,
 ) -> Result<(PathBuf, String, bool, Option<String>), String> {
+    // Validate the path dep against the security boundary unless the
+    // caller has explicitly opted into external paths.
+    let allow_external = std::env::var("RIVEN_ALLOW_EXTERNAL_PATH")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    if !allow_external {
+        validate_path_dep(name, path, project_dir)?;
+    }
+
     let dep_dir = if Path::new(path).is_absolute() {
         PathBuf::from(path)
     } else {
@@ -250,11 +342,18 @@ fn resolve_git_dep(
     let short_hash = &cache_key[7..15]; // skip "sha256:" prefix, take 8 chars
     let clone_dir = deps_dir.join(format!("{}-{}", name, short_hash));
 
+    // Security boundary: every field of `DependencyDetail` is
+    // attacker-controlled. Validate the URL + ref + insert `--` before
+    // every user-controlled argv slot so a `git_url` like
+    // `--upload-pack=…` can't reach git as a flag.
+    validate_git_url(git_url)?;
+    validate_git_ref(effective_ref)?;
+
     if !clone_dir.exists() {
         // Clone the repository
         println!("    Fetching piece `{}` from {}", name, git_url);
         let status = Command::new("git")
-            .args(["clone", "--quiet", git_url, &clone_dir.to_string_lossy()])
+            .args(["clone", "--quiet", "--", git_url, &clone_dir.to_string_lossy()])
             .status()
             .map_err(|e| format!("failed to run git clone: {}", e))?;
 
@@ -265,8 +364,12 @@ fn resolve_git_dep(
 
     // Checkout the specific ref
     if effective_ref != "HEAD" {
+        // For `git checkout`, `--` *follows* the ref ("no paths after");
+        // putting `--` before the ref would tell git the argument is a
+        // path, not a ref. The strict `validate_git_ref` allowlist above
+        // is the primary defence; the trailing `--` is belt-and-braces.
         let status = Command::new("git")
-            .args(["checkout", "--quiet", effective_ref])
+            .args(["checkout", "--quiet", effective_ref, "--"])
             .current_dir(&clone_dir)
             .status()
             .map_err(|e| format!("failed to checkout ref: {}", e))?;
@@ -417,22 +520,17 @@ mod tests {
         std::fs::write(tmp.join("cycle-a/src/lib.rvn"), "pub def a\nend\n").unwrap();
         std::fs::write(tmp.join("cycle-b/src/lib.rvn"), "pub def b\nend\n").unwrap();
 
-        // A depends on B
+        // A depends on B (use relative path: the security validator
+        // refuses absolute paths in manifests by default).
         std::fs::write(
             tmp.join("cycle-a/Riven.toml"),
-            format!(
-                "[package]\nname = \"cycle-a\"\nversion = \"0.1.0\"\n\n[dependencies]\ncycle-b = {{ path = \"{}\" }}\n",
-                tmp.join("cycle-b").display()
-            ),
+            "[package]\nname = \"cycle-a\"\nversion = \"0.1.0\"\n\n[dependencies]\ncycle-b = { path = \"../cycle-b\" }\n",
         ).unwrap();
 
         // B depends on A → cycle!
         std::fs::write(
             tmp.join("cycle-b/Riven.toml"),
-            format!(
-                "[package]\nname = \"cycle-b\"\nversion = \"0.1.0\"\n\n[dependencies]\ncycle-a = {{ path = \"{}\" }}\n",
-                tmp.join("cycle-a").display()
-            ),
+            "[package]\nname = \"cycle-b\"\nversion = \"0.1.0\"\n\n[dependencies]\ncycle-a = { path = \"../cycle-a\" }\n",
         ).unwrap();
 
         let manifest = crate::manifest::Manifest::load(&tmp.join("cycle-a")).unwrap();
@@ -603,12 +701,12 @@ mod tests {
             "[package]\nname = \"lib\"\nversion = \"0.2.0\"\n",
         )
         .unwrap();
+        // Relative path: the security validator refuses absolute paths
+        // in manifests by default. From `app`'s project_dir, the sibling
+        // `lib` directory is `../lib`.
         std::fs::write(
             tmp.join("app/Riven.toml"),
-            format!(
-                "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nlib = {{ path = \"{}\" }}\n",
-                tmp.join("lib").display()
-            ),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nlib = { path = \"../lib\" }\n",
         )
         .unwrap();
 

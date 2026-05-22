@@ -773,7 +773,16 @@ impl<'a> Lowerer<'a> {
             size: self.alloc_size(&self_ty),
         });
 
-        for (idx, field) in c.fields.iter().enumerate() {
+        // Walk the full class chain (parent fields first, in declaration
+        // order — same order `alloc_size` budgets and `Construct` lowers
+        // for). Iterating `c.fields` alone silently zero-init's every
+        // inherited slot; for a `class TimedTodo < Todo` whose parent
+        // owns `id: Int`, a clone of TimedTodo would emit `id = 0`.
+        // The `class_field_index_shift` accounts for the runtime-
+        // dispatch class_info header slot.
+        let header = self.class_field_shift_for_ty(&self_ty);
+        let mut idx = header;
+        for field in self.collect_all_class_fields(c) {
             let field_local = mir_fn.new_temp(field.ty.clone());
             mir_fn.blocks[entry].instructions.push(MirInst::GetField {
                 dest: field_local,
@@ -786,10 +795,62 @@ impl<'a> Lowerer<'a> {
                 field_index: idx,
                 value: MirValue::Use(cloned),
             });
+            idx += 1;
         }
 
         mir_fn.blocks[entry].terminator = Terminator::Return(Some(MirValue::Use(dest)));
         mir_fn
+    }
+
+    /// Return the flattened field list a `_clone` (or any whole-class
+    /// walker) needs to visit: parent fields first (oldest parent at
+    /// slot 0 after the optional class_info header), then the class's
+    /// own fields in declaration order. Matches the layout
+    /// `alloc_size`'s parent walk budgets.
+    fn collect_all_class_fields(&self, c: &HirClassDef) -> Vec<HirFieldDef> {
+        use crate::resolve::symbols::DefKind;
+        // Walk parent chain to find the inheritance order: oldest first.
+        let mut chain: Vec<DefId> = vec![c.def_id];
+        let mut cur = c.def_id;
+        loop {
+            let parent_id = self
+                .symbols
+                .get(cur)
+                .and_then(|d| match &d.kind {
+                    DefKind::Class { info } => info.parent,
+                    _ => None,
+                });
+            match parent_id {
+                Some(p) => {
+                    chain.push(p);
+                    cur = p;
+                }
+                None => break,
+            }
+        }
+        chain.reverse(); // oldest ancestor first
+        let mut out: Vec<HirFieldDef> = Vec::new();
+        for cls_id in chain {
+            if let Some(def) = self.symbols.get(cls_id) {
+                if let DefKind::Class { info } = &def.kind {
+                    for fid in &info.fields {
+                        if let Some(fdef) = self.symbols.get(*fid) {
+                            if let DefKind::Field { ty, index, .. } = &fdef.kind {
+                                out.push(HirFieldDef {
+                                    def_id: *fid,
+                                    name: fdef.name.clone(),
+                                    ty: ty.clone(),
+                                    visibility: fdef.visibility,
+                                    index: *index,
+                                    span: fdef.span.clone(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// Synthesise `{EnumName}_clone(self) -> EnumName` for an enum

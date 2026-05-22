@@ -439,7 +439,15 @@ pub(super) fn simple_type_size(ty: &Ty) -> usize {
         | Ty::RawPtrMutVoid => 8,
         Ty::Unit | Ty::Never => 0,
         Ty::Enum { .. } => 32,
-        Ty::Class { .. } | Ty::Struct { .. } => 64,
+        // See cranelift/helpers.rs::simple_type_size for rationale —
+        // Class/Struct MUST have their alloc size precomputed at MIR
+        // lowering time, not estimated here.
+        Ty::Class { name, .. } | Ty::Struct { name, .. } => panic!(
+            "llvm simple_type_size: class/struct `{}` reached the fallback estimator. \
+             MIR Alloc.size must be precomputed by Lowerer::alloc_size; the historical \
+             64-byte fallback silently truncated classes with >8 fields.",
+            name
+        ),
         Ty::Option(_) => 16,
         Ty::Result(_, _) => 16,
         Ty::Tuple(elems) => elems.len().max(1) * 8,

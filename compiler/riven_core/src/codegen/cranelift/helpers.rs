@@ -174,10 +174,25 @@ pub(super) fn simple_type_size(ty: &Ty) -> usize {
         // Enums: tag (8 bytes aligned) + payload (conservatively 8 bytes per field,
         // with space for the largest variant's payload).
         Ty::Enum { .. } => 32, // tag + up to 3 payload fields
-        // Classes and structs: allocate generously.
-        // A more precise calculation would require the symbol table,
-        // but 64 bytes covers most cases (up to 8 fields).
-        Ty::Class { .. } | Ty::Struct { .. } => 64,
+        // Classes and structs MUST carry their precomputed size on the
+        // `MirInst::Alloc.size` field — `Lowerer::alloc_size` (in
+        // `mir/lower/emit.rs`) walks the parent chain to budget every
+        // inherited field correctly. A class allocation that hits this
+        // size-estimator fallback indicates a missing call site in the
+        // MIR lowerer — surface it loudly rather than silently
+        // truncating to 64 bytes (which is wrong for any class with
+        // >8 fields and triggers heap corruption at runtime).
+        Ty::Class { name, .. } | Ty::Struct { name, .. } => {
+            panic!(
+                "simple_type_size: class/struct `{}` reached the codegen \
+                 size-estimator fallback. MIR Alloc.size MUST be set by \
+                 `Lowerer::alloc_size`; the 64-byte fallback was always \
+                 a defence-in-depth backstop that silently truncated \
+                 classes with >8 fields. Fix the missing precompute at \
+                 the MIR lowering site.",
+                name
+            )
+        }
         // Option: tag + payload
         Ty::Option(_) => 16,
         // Result: tag + payload

@@ -357,22 +357,17 @@ fn test_cycle_detection() {
     fs::write(tmp.join("cycle-a/src/lib.rvn"), "pub def a\nend\n").unwrap();
     fs::write(tmp.join("cycle-b/src/lib.rvn"), "pub def b\nend\n").unwrap();
 
-    // A depends on B
+    // A depends on B (use a relative path: the security validator
+    // refuses absolute paths in manifests by default).
     fs::write(
         tmp.join("cycle-a/Riven.toml"),
-        format!(
-            "[package]\nname = \"cycle-a\"\nversion = \"0.1.0\"\n\n[dependencies]\ncycle-b = {{ path = \"{}\" }}\n",
-            tmp.join("cycle-b").display()
-        ),
+        "[package]\nname = \"cycle-a\"\nversion = \"0.1.0\"\n\n[dependencies]\ncycle-b = { path = \"../cycle-b\" }\n",
     ).unwrap();
 
     // B depends on A → cycle!
     fs::write(
         tmp.join("cycle-b/Riven.toml"),
-        format!(
-            "[package]\nname = \"cycle-b\"\nversion = \"0.1.0\"\n\n[dependencies]\ncycle-a = {{ path = \"{}\" }}\n",
-            tmp.join("cycle-a").display()
-        ),
+        "[package]\nname = \"cycle-b\"\nversion = \"0.1.0\"\n\n[dependencies]\ncycle-a = { path = \"../cycle-a\" }\n",
     ).unwrap();
 
     let manifest = Manifest::load(&tmp.join("cycle-a")).unwrap();
