@@ -214,7 +214,25 @@ impl<'a> InferenceEngine<'a> {
         name: &str,
         span: &Span,
     ) -> Option<Ty> {
-        let bounds: &[crate::hir::types::MixinRef] = match ty {
+        // Peel reference layers — a method call on `&T` / `&mut T` / `&'a T`
+        // where `T: Mixin` must consult the same bound list as a direct
+        // `T.method(...)` call. Without the peel, generic fns shaped like
+        // `def foo[T: Hashable](a: &T) -> Int { a.hash_code }` fall through
+        // every lookup branch and the body's return type stays a fresh var
+        // (which unifies to `Unit` eventually), producing a misleading
+        // "expected Int, found ()" against the declared signature. Pin:
+        // `derive_hashable_dispatches_through_trait_bounds`.
+        let mut cur = ty;
+        loop {
+            match cur {
+                Ty::Ref(inner)
+                | Ty::RefMut(inner)
+                | Ty::RefLifetime(_, inner)
+                | Ty::RefMutLifetime(_, inner) => cur = inner.as_ref(),
+                _ => break,
+            }
+        }
+        let bounds: &[crate::hir::types::MixinRef] = match cur {
             Ty::TypeParam { bounds, .. } | Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds) => {
                 bounds.as_slice()
             }

@@ -1,7 +1,6 @@
 use std.net.{TcpStream, Shutdown}
 use std.env.get
 use std.time.Duration
-use std.sync.sleep
 
 def half_close(s: TcpStream)
   match s.shutdown(Shutdown.Write)
@@ -9,7 +8,7 @@ def half_close(s: TcpStream)
     Err(_) -> puts "shutdown=err"
   end
   # Give the host a moment to observe EOF before we drop the stream.
-  sleep(&Duration.from_millis(200))
+  Thread.sleep(Duration.from_millis(200))
 end
 
 def main

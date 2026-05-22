@@ -59,15 +59,23 @@ fn bootstrap_files_list_includes_smoke_and_wave_2_migrations() {
     // Wave 1.5 (#06.8 Phase 3) shipped a proof-of-life
     // `_bootstrap_smoke.rvn`. Wave 2 starts the actual stdlib
     // migration; `rand.rvn` is the first module to live in `.rvn`
-    // form. The smoke file MUST stay first (the bootstrap_smoke_*
-    // E2E tests depend on its `BootstrapSmokeClass.add_one` /
-    // `bootstrap_smoke_add_one` FFI aliases) and the migrated
-    // modules append after it. Pinning the contents here surfaces
-    // any drive-by additive change.
-    assert!(
-        BOOTSTRAP_FILES.first() == Some(&"bootstrap_smoke/src/lib.rvn"),
-        "BOOTSTRAP_FILES must start with the Wave-1.5 proof-of-life \
-         file (E2E tests depend on it); got {:?}",
+    // form. The smoke file must load early — but `core/src/lib.rvn`
+    // (which carries the 16 builtin mixins every other file
+    // references) reclaimed the absolute-first slot after B5 of
+    // `docs/specs/system/zero_rust_stdlib_classes.spec.md`. Pin
+    // ordering as: `core` MUST be first, the smoke file MUST come
+    // immediately after, and `rand` MUST be present.
+    assert_eq!(
+        BOOTSTRAP_FILES.first(),
+        Some(&"core/src/lib.rvn"),
+        "BOOTSTRAP_FILES must start with core/src/lib.rvn (16 builtin mixins); got {:?}",
+        BOOTSTRAP_FILES
+    );
+    assert_eq!(
+        BOOTSTRAP_FILES.get(1),
+        Some(&"bootstrap_smoke/src/lib.rvn"),
+        "BOOTSTRAP_FILES must place the Wave-1.5 proof-of-life file \
+         right after core (E2E tests depend on it); got {:?}",
         BOOTSTRAP_FILES
     );
     assert!(

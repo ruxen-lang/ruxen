@@ -1,13 +1,12 @@
 use std.time.Instant
 use std.time.Duration
-use std.sync.sleep
 
 # Negative test: `self.duration_since(earlier)` where earlier > self
 # must panic. The runtime calls riven_panic("Instant.duration_since:
 # earlier is in the future") which aborts with non-zero exit.
 def main
   let later_first = Instant.now()
-  sleep(Duration.from_millis(1))
+  Thread.sleep(Duration.from_millis(1))
   let now = Instant.now()
   # `now.duration_since(later_first)` is fine; reverse panics.
   # Run the reverse so the binary aborts.

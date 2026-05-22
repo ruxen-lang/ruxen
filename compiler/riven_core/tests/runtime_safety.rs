@@ -93,7 +93,19 @@ fn compile_c_harness(name: &str, source: &str) -> PathBuf {
     let harness_c = temp_dir.join(format!("{name}_{suffix}.c"));
     let harness_exe = temp_dir.join(format!("{name}_{suffix}"));
 
-    std::fs::write(&harness_c, source).expect("write harness");
+    // `library/std/future/runtime/scheduler.c` forward-declares
+    // `Future_dynamic_poll` — the symbol Riven codegen synthesises for
+    // every class that includes `Future dispatch runtime` (see
+    // `synthesize_dynamic_dispatch_helpers`). Pure-C harnesses don't go
+    // through codegen, so the link step fails with "undefined symbol".
+    // Inject a weak stub that's overridden when Riven *does* define
+    // the symbol (i.e. for the normal compile path).
+    let stub_prelude = "\
+__attribute__((weak)) long long Future_dynamic_poll(long long self, long long ctx) { \
+    (void)self; (void)ctx; return 0; \
+}\n";
+    let harness_source = format!("{}{}", stub_prelude, source);
+    std::fs::write(&harness_c, harness_source).expect("write harness");
 
     // On macOS the runtime's CSPRNG (`library/std/rand/runtime/rand.c`)
     // pulls in `SecRandomCopyBytes` + `kSecRandomDefault` from

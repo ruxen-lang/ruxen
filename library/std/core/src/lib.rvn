@@ -57,11 +57,11 @@ mixin Default
 end
 
 mixin Ord
-  def cmp
+  def cmp(other: &Self) -> Int
 end
 
 mixin PartialOrd
-  def partial_cmp
+  def partial_cmp(other: &Self) -> Int
 end
 
 mixin Drop

@@ -1,7 +1,6 @@
 use std.net.TcpStream
 use std.env.get
 use std.time.Duration
-use std.sync.sleep
 
 # Read up to `cap` bytes from `s` and push them into `out`.
 # Loops a bounded number of times because a single read may return
@@ -44,7 +43,7 @@ def receive(s: TcpStream)
   end
   # Brief pause so the host has filled the buffer before our first
   # recv — keeps the test deterministic on slow CI.
-  sleep(&Duration.from_millis(50))
+  Thread.sleep(Duration.from_millis(50))
   var buf: Array[Int] = Array.new
   drain_up_to(s, &var buf)
   report(&var buf)

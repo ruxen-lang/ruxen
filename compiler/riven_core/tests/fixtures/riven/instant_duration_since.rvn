@@ -1,10 +1,9 @@
 use std.time.Instant
 use std.time.Duration
-use std.sync.sleep
 
 def main
   let earlier = Instant.now()
-  sleep(Duration.from_millis(2))
+  Thread.sleep(Duration.from_millis(2))
   let later = Instant.now()
   let d = later.duration_since(earlier)
   # 2 ms = 2_000_000 ns. Lower bound only — CI jitter can stretch the
