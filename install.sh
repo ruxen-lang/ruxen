@@ -21,6 +21,10 @@ RIVEN_REPO="${RIVEN_REPO:-sherazp995/riven}"
 RIVEN_HOME="${RIVEN_HOME:-$HOME/.riven}"
 RIVEN_VERSION="${RIVEN_VERSION:-latest}"
 NO_MODIFY_PATH="${RIVEN_NO_MODIFY_PATH:-0}"
+# Set to a riven source checkout path to skip GitHub releases and
+# build + install from that working tree instead. Cargo on PATH is
+# required when this is non-empty.
+FROM_SOURCE="${RIVEN_FROM_SOURCE:-}"
 
 # ── ANSI colors (if stdout is a tty) ──────────────────────────────────
 if [ -t 1 ]; then
@@ -43,22 +47,32 @@ err()     { echo "${RED}${BOLD} ✗${RESET} $*" >&2; exit 1; }
 # ── Argument parsing ──────────────────────────────────────────────────
 while [ $# -gt 0 ]; do
   case "$1" in
-    --version)   RIVEN_VERSION="$2"; shift 2 ;;
-    --prefix)    RIVEN_HOME="$2"; shift 2 ;;
-    --repo)      RIVEN_REPO="$2"; shift 2 ;;
+    --version)     RIVEN_VERSION="$2"; shift 2 ;;
+    --prefix)      RIVEN_HOME="$2"; shift 2 ;;
+    --repo)        RIVEN_REPO="$2"; shift 2 ;;
+    --from-source) FROM_SOURCE="${2:-.}"; shift 2 ;;
     --no-modify-path) NO_MODIFY_PATH=1; shift ;;
     -h|--help)
       cat <<EOF
 Riven installer.
 
-Usage: install.sh [--version <tag>] [--prefix <dir>] [--no-modify-path]
+Usage: install.sh [options]
 
 Options:
-  --version <tag>     Release tag to install (default: latest)
-  --prefix <dir>      Install root (default: \$HOME/.riven)
-  --repo <owner/repo> GitHub repo (default: sherazp995/riven)
-  --no-modify-path    Do not edit shell rc files
-  -h, --help          Show this help
+  --version <tag>       Release tag to install (default: latest)
+  --prefix <dir>        Install root (default: \$HOME/.riven)
+  --repo <owner/repo>   GitHub repo (default: sherazp995/riven)
+  --from-source <path>  Build + install from a local riven checkout
+                        instead of downloading a release. Pass "." for
+                        the current directory. Requires \`cargo\` on PATH.
+  --no-modify-path      Do not edit shell rc files
+  -h, --help            Show this help
+
+Examples:
+  install.sh                              # install latest release
+  install.sh --version v0.2.0             # install a pinned release
+  install.sh --from-source .              # build + install from CWD
+  install.sh --from-source ~/.projects/riven --prefix ~/.riven-dev
 EOF
       exit 0
       ;;
@@ -103,8 +117,49 @@ esac
 TARGET="${ARCH_TAG}-${OS_TAG}"
 info "Detected platform: ${BOLD}${TARGET}${RESET}"
 
-# ── Resolve release tag ───────────────────────────────────────────────
-if [ "$RIVEN_VERSION" = "latest" ]; then
+# ── Branch: local source build vs GitHub release ──────────────────────
+# When --from-source is set we build the four binaries from a working
+# tree and install them directly. Stdlib `.rvn` is embedded into the
+# riven binary via `include_str!`, so no `library/` copy is needed —
+# the resulting install at $RIVEN_HOME is fully self-contained.
+if [ -n "$FROM_SOURCE" ]; then
+  need cargo
+
+  # Resolve to an absolute path so cd-by-the-user later doesn't break us.
+  case "$FROM_SOURCE" in
+    /*) ABS_SRC="$FROM_SOURCE" ;;
+    *)  ABS_SRC="$(cd "$FROM_SOURCE" 2>/dev/null && pwd)" || \
+        err "--from-source path not found: $FROM_SOURCE" ;;
+  esac
+  [ -f "$ABS_SRC/Cargo.toml" ] || \
+    err "--from-source path is not a riven checkout (no Cargo.toml at $ABS_SRC)"
+  [ -d "$ABS_SRC/compiler/riven_core" ] || \
+    err "--from-source path doesn't look like riven (missing compiler/riven_core/)"
+
+  # Tag the install with a local-build marker so `riven --version` and
+  # the on-disk version file disambiguate from a release install.
+  if command -v git >/dev/null 2>&1 && git -C "$ABS_SRC" rev-parse HEAD >/dev/null 2>&1; then
+    TAG="local-$(git -C "$ABS_SRC" rev-parse --short HEAD)"
+  else
+    TAG="local"
+  fi
+  ok "Building Riven ${BOLD}${TAG}${RESET} from ${DIM}${ABS_SRC}${RESET}"
+
+  # One build command, four binaries. Cargo bin targets carry the
+  # underscore form (riven_lsp / riven_repl); the install loop below
+  # checks both spellings when sourcing from $BIN_SRC_DIR so the on-
+  # disk install ends up with the hyphenated release-tarball names.
+  ( cd "$ABS_SRC" && \
+    cargo build --release \
+      --bin riven --bin rivenc --bin riven_lsp --bin riven_repl ) \
+    || err "cargo build failed in $ABS_SRC"
+
+  # Point the install loop at cargo's output dir.
+  BIN_SRC_DIR="$ABS_SRC/target/release"
+  EXTRA_SRC=""  # no lib/share/include payload — stdlib is embedded
+else
+  # ── Resolve release tag ─────────────────────────────────────────────
+  if [ "$RIVEN_VERSION" = "latest" ]; then
   info "Resolving latest release..."
   API_URL="https://api.github.com/repos/${RIVEN_REPO}/releases/latest"
   TAG="$($FETCH "$API_URL" 2>/dev/null \
@@ -144,28 +199,45 @@ else
   SRC="$(find "$TMP" -maxdepth 2 -type d -name bin | head -n1 | xargs -I{} dirname {})"
   [ -n "$SRC" ] || err "archive does not contain a bin/ directory"
 fi
+  BIN_SRC_DIR="$SRC/bin"
+  EXTRA_SRC="$SRC"
+fi
 
 # ── Install ───────────────────────────────────────────────────────────
 mkdir -p "$RIVEN_HOME/bin"
 info "Installing binaries to ${BOLD}${RIVEN_HOME}/bin${RESET}"
 for bin in riven rivenc riven-lsp riven-repl; do
-  if [ -f "$SRC/bin/$bin" ]; then
-    mv -f "$SRC/bin/$bin" "$RIVEN_HOME/bin/$bin"
-    chmod +x "$RIVEN_HOME/bin/$bin"
-    ok "Installed ${BOLD}$bin${RESET}"
+  # Accept either spelling at the source: release tarballs ship the
+  # hyphen form (`riven-lsp`); cargo build emits the underscore form
+  # (`riven_lsp`). The installed name is always the hyphen form so
+  # `riven-lsp` works on PATH regardless of install path.
+  src_hyphen="$BIN_SRC_DIR/$bin"
+  src_underscore="$BIN_SRC_DIR/${bin//-/_}"
+  if [ -f "$src_hyphen" ]; then
+    src="$src_hyphen"
+  elif [ -f "$src_underscore" ]; then
+    src="$src_underscore"
   else
-    warn "missing from archive: $bin"
+    warn "missing from build/archive: $bin"
+    continue
   fi
+  cp -f "$src" "$RIVEN_HOME/bin/$bin"
+  chmod +x "$RIVEN_HOME/bin/$bin"
+  ok "Installed ${BOLD}$bin${RESET}"
 done
 
-# Copy any supporting files (stdlib, runtime headers, etc.)
-for dir in lib share include; do
-  if [ -d "$SRC/$dir" ]; then
-    mkdir -p "$RIVEN_HOME/$dir"
-    cp -R "$SRC/$dir/." "$RIVEN_HOME/$dir/"
-    ok "Installed ${BOLD}$dir${RESET}"
-  fi
-done
+# Copy any supporting files (stdlib, runtime headers, etc.) — only
+# applies to the release-tarball install path. Local builds embed
+# stdlib into the binary so this loop is a no-op there.
+if [ -n "$EXTRA_SRC" ]; then
+  for dir in lib share include; do
+    if [ -d "$EXTRA_SRC/$dir" ]; then
+      mkdir -p "$RIVEN_HOME/$dir"
+      cp -R "$EXTRA_SRC/$dir/." "$RIVEN_HOME/$dir/"
+      ok "Installed ${BOLD}$dir${RESET}"
+    fi
+  done
+fi
 
 echo "$TAG" > "$RIVEN_HOME/version"
 
