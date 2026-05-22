@@ -123,7 +123,18 @@ pub fn build(release: bool, locked: bool, bin_name: Option<&str>) -> Result<(), 
         // Binary: produce an executable
         let output_name = bin_name.unwrap_or(&manifest.package.name);
         let output_path = target_dir.join(output_name);
-        compile_project(&project_dir, &manifest, &output_path, release, &extern_libs)?;
+        let dep_source_dirs: Vec<PathBuf> = resolved
+            .as_ref()
+            .map(|r| r.deps.iter().map(|d| d.source_dir.clone()).collect())
+            .unwrap_or_default();
+        compile_project(
+            &project_dir,
+            &manifest,
+            &output_path,
+            release,
+            &extern_libs,
+            &dep_source_dirs,
+        )?;
     }
 
     let elapsed = start.elapsed();
@@ -490,6 +501,7 @@ fn compile_project(
     output_path: &Path,
     release: bool,
     extern_libs: &[(String, PathBuf)],
+    dep_source_dirs: &[PathBuf],
 ) -> Result<(), String> {
     let entry = project_dir.join(manifest.entry_point());
     if !entry.exists() {
@@ -497,7 +509,25 @@ fn compile_project(
     }
 
     let tree = ModuleTree::discover(project_dir)?;
-    let source = gather_sources(project_dir, &tree, &manifest.package.name)?;
+    let user_source = gather_sources(project_dir, &tree, &manifest.package.name)?;
+
+    // Flat-merge dep sources ahead of user source so the resolver sees
+    // their declarations during typecheck. v0.1: symbols are flat
+    // (no `use <pkg>.X` namespacing yet); a future change will wrap
+    // each dep in a module DefId so `use rondo.Rondo` resolves.
+    let mut combined = String::new();
+    for dep_dir in dep_source_dirs {
+        let dep_tree = ModuleTree::discover(dep_dir)?;
+        let dep_name = dep_dir
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("dep");
+        let dep_source = gather_sources(dep_dir, &dep_tree, dep_name)?;
+        combined.push_str(&dep_source);
+        combined.push('\n');
+    }
+    combined.push_str(&user_source);
+    let source = combined;
 
     // Phase 1: Lex
     let mut lexer = Lexer::new(&source);
@@ -566,7 +596,17 @@ fn compile_project(
     // with rich error context — the dep name and a concrete fix hint
     // are far more useful than the raw "No such file or directory"
     // that the underlying I/O layer surfaces.
+    //
+    // v0.1 flat-merge: when dep sources are already prepended to the
+    // user source, the dep object would duplicate every symbol the
+    // user object now also emits (mixin dispatch helpers, etc.).
+    // Skip extern-lib linking in that case — the dep is inlined.
     let mut extra_link_flags: Vec<String> = Vec::new();
+    let extern_libs: &[(String, PathBuf)] = if dep_source_dirs.is_empty() {
+        extern_libs
+    } else {
+        &[]
+    };
     for (name, rlib_path) in extern_libs {
         let obj_bytes = extract_dep_object_code(name, rlib_path)?;
         let obj_path = rlib_path.with_extension("o");

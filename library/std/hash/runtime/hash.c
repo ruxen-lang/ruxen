@@ -130,6 +130,27 @@ RivenHash *riven_hash_new(void) {
     return h;
 }
 
+/* Hash::clone — shallow copy: a new Hash with the same (key, value)
+   pairs. Mirrors the v1 contract of `riven_vec_clone` (vec.c:301-311):
+   the entry slots are heap-owned i64 pointers; cloning shares storage
+   with the source. Suitable for `derive Clone` on user classes whose
+   fields include `Map[K, V]` — without this symbol the MIR-synthesised
+   `<Class>_clone` references an undefined helper and the link fails
+   ("Undefined symbols: _riven_hash_clone, referenced from _Foo_clone").
+   Pin: the compiler's `synthesize_clone_field` (mir/lower/derive.rs:647)
+   names this symbol. */
+RivenHash *riven_hash_clone(RivenHash *h) {
+    RivenHash *out = riven_hash_new();
+    if (!h) return out;
+    out->string_keys = h->string_keys;
+    for (uint64_t i = 0; i < h->bucket_count; i++) {
+        for (RivenHashEntry *e = h->buckets[i]; e; e = e->next) {
+            riven_hash_insert(out, e->key, e->value);
+        }
+    }
+    return out;
+}
+
 /* Hash drop — see the "Heap-owned built-in drops" comment in the
    memory-management section above for the dual-name pattern. The
    spine-only variant frees the bucket chains and the struct itself;
@@ -371,6 +392,22 @@ void riven_set_insert(RivenSet *s, int64_t item) {
     if (!s) return;
     /* Reuse hash insert for dedup semantics; value is 1 (unused). */
     riven_hash_insert(&s->inner, item, 1);
+}
+
+/* Set::clone — shallow copy. Mirrors `riven_hash_clone` (same v1
+   contract: heap-owned element slots are shared between source and
+   clone). Required for `derive Clone` on user classes with `Set[T]`
+   fields — pin: `synthesize_clone_field` in mir/lower/derive.rs. */
+RivenSet *riven_set_clone(RivenSet *s) {
+    RivenSet *out = riven_set_new();
+    if (!s) return out;
+    out->inner.string_keys = s->inner.string_keys;
+    for (uint64_t i = 0; i < s->inner.bucket_count; i++) {
+        for (RivenHashEntry *e = s->inner.buckets[i]; e; e = e->next) {
+            riven_hash_insert(&out->inner, e->key, e->value);
+        }
+    }
+    return out;
 }
 
 int8_t riven_set_contains(RivenSet *s, int64_t item) {
