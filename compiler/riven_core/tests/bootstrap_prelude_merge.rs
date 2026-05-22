@@ -28,7 +28,7 @@ use riven_core::mir::lower::Lowerer;
 use riven_core::mir::nodes::MirInst;
 use riven_core::parser::ast::Program;
 use riven_core::parser::Parser;
-use riven_core::resolve::bootstrap::run_bootstrap_with_files;
+use riven_core::resolve::bootstrap::{run_bootstrap_with_files, BOOTSTRAP_FILES};
 use riven_core::resolve::symbols::DefKind;
 use riven_core::resolve::Resolver;
 use riven_core::typeck;
@@ -196,17 +196,28 @@ fn bootstrap_smoke_e2e_via_runtime_file() {
     // proven for Wave 1.5.
     let stdlib_root = workspace_root().join("library/std");
     let mut diags = Vec::<Diagnostic>::new();
+    // Load the full BOOTSTRAP_FILES list (not just bootstrap_smoke) so the
+    // resulting binary can link against fmt's `Formatter_write_str` and
+    // future's `Future_dynamic_poll` — both referenced by codegen-synthesised
+    // helpers (primitive `_fmt` shells, executor pump) that are emitted
+    // unconditionally regardless of whether user code reaches them. Loading
+    // only the smoke file was viable before those symbols got promoted to
+    // package-owned FFI bindings; the test still proves the same invariant
+    // because `bootstrap_smoke_add_one` (defined in the smoke file) must be
+    // callable from user code with no extra wiring.
     let bootstrap_programs =
-        run_bootstrap_with_files(&["bootstrap_smoke/src/lib.rvn"], Some(&stdlib_root), &mut diags);
+        run_bootstrap_with_files(BOOTSTRAP_FILES, Some(&stdlib_root), &mut diags);
     assert!(
         diags.is_empty(),
-        "bootstrap_smoke/src/lib.rvn must parse cleanly; got: {:?}",
+        "BOOTSTRAP_FILES must parse cleanly; got: {:?}",
         diags
     );
-    assert_eq!(
-        bootstrap_programs.len(),
-        1,
-        "expected one parsed bootstrap program"
+    assert!(
+        bootstrap_programs
+            .len()
+            .checked_sub(BOOTSTRAP_FILES.len())
+            .is_some(),
+        "expected one parsed program per bootstrap file"
     );
 
     let user_program = parse_fixture("bootstrap_smoke_caller");
@@ -253,8 +264,12 @@ fn bootstrap_class_method_e2e_via_runtime_file() {
     // for Wave 2+ migrations of real stdlib classes.
     let stdlib_root = workspace_root().join("library/std");
     let mut diags = Vec::<Diagnostic>::new();
+    // See sibling test for why the full BOOTSTRAP_FILES list is required:
+    // codegen-synthesised primitive `_fmt` shells + executor pump reference
+    // package-owned FFI symbols (`Formatter_write_str`, `Future_dynamic_poll`)
+    // that don't exist until their respective stdlib packages are loaded.
     let bootstrap_programs =
-        run_bootstrap_with_files(&["bootstrap_smoke/src/lib.rvn"], Some(&stdlib_root), &mut diags);
+        run_bootstrap_with_files(BOOTSTRAP_FILES, Some(&stdlib_root), &mut diags);
     assert!(diags.is_empty(), "bootstrap parse: {:?}", diags);
 
     let user_program = parse_fixture("bootstrap_class_method_caller");

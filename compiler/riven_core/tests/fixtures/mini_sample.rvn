@@ -16,11 +16,11 @@ enum Priority
   end
 end
 
-enum TaskError
+enum TodoError
   MissingField(name: String)
 end
 
-class Task
+class Todo
   id: Int
   title: String
   priority: Priority
@@ -31,16 +31,16 @@ class Task
   def id -> Int { self.id }
 end
 
-def parse_priority(input: &str) -> Result[Priority, TaskError]
+def parse_priority(input: &str) -> Result[Priority, TodoError]
   Ok(Priority.High)
 end
 
 def create_task_from_input(
   title: &str,
   priority_str: &str
-) -> Result[Int, TaskError]
+) -> Result[Int, TodoError]
   if title == ""
-    return Err(TaskError.MissingField(name: String.from("title")))
+    return Err(TodoError.MissingField(name: String.from("title")))
   end
   let id = 1
   Ok(id)

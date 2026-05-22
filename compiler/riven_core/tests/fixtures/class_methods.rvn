@@ -11,7 +11,7 @@ enum Priority
   end
 end
 
-class Task
+class Todo
   id: Int
   priority: Priority
 
@@ -28,7 +28,7 @@ end
 
 def main
   puts "Starting..."
-  let t = Task.new(1, Priority.High)
+  let t = Todo.new(1, Priority.High)
   puts "Created task"
   if t.is_high
     puts "high priority"

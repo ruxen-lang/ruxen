@@ -1,5 +1,5 @@
 # ============================================================================
-# Task Manager — Riven Language Showcase
+# Todo Manager — Riven Language Showcase
 # ============================================================================
 
 # --- Type Definitions ---
@@ -53,7 +53,7 @@ enum Status
   end
 end
 
-enum TaskError
+enum TodoError
   InvalidPriority(value: String)
   MissingField(name: String)
   ParseFailed(message: String)
@@ -63,10 +63,10 @@ enum TaskError
 
   def message -> String
     match self
-      TaskError.InvalidPriority(v)  -> "Invalid priority: '#{v}'"
-      TaskError.MissingField(name)  -> "Missing required field: #{name}"
-      TaskError.ParseFailed(msg)    -> "Parse error: #{msg}"
-      TaskError.NotFound(id)        -> "Task ##{id} not found"
+      TodoError.InvalidPriority(v)  -> "Invalid priority: '#{v}'"
+      TodoError.MissingField(name)  -> "Missing required field: #{name}"
+      TodoError.ParseFailed(msg)    -> "Parse error: #{msg}"
+      TodoError.NotFound(id)        -> "Todo ##{id} not found"
     end
   end
 end
@@ -75,7 +75,7 @@ end
 
 mixin Serializable
   def serialize -> String
-  def self.deserialize(data: &str) -> Result[Self, TaskError]
+  def self.deserialize(data: &str) -> Result[Self, TodoError]
 end
 
 mixin Summarizable
@@ -85,7 +85,7 @@ end
 
 # --- Classes ---
 
-class Task
+class Todo
   id: USize
   title: String
   description: String
@@ -148,20 +148,20 @@ class Task
     "#{self.id}|#{self.title}|#{self.description}|#{self.priority.to_display}"
   end
 
-  def self.deserialize(data: &str) -> Result[Task, TaskError]
+  def self.deserialize(data: &str) -> Result[Todo, TodoError]
     let parts: Array[&str] = data.split("|").to_vec
     if parts.len < 4
-      return Err(TaskError.ParseFailed(
+      return Err(TodoError.ParseFailed(
         message: String.from("expected 4 fields, got #{parts.len}")
       ))
     end
 
     let id = parts[0].parse_uint
-      .map_err { |_| TaskError.ParseFailed(message: String.from("invalid id")) }?
+      .map_err { |_| TodoError.ParseFailed(message: String.from("invalid id")) }?
 
     let priority = parse_priority(parts[3])?
 
-    Ok(Task.new(
+    Ok(Todo.new(
       id,
       String.from(parts[1]),
       String.from(parts[2]),
@@ -170,7 +170,7 @@ class Task
   end
 end
 
-class TimedTask < Task
+class TimedTodo < Todo
   deadline: String
   estimated_hours: Float
 
@@ -259,28 +259,28 @@ class Repository[T: Showable]
   end
 end
 
-# --- TaskList (domain-specific wrapper) ---
+# --- TodoList (domain-specific wrapper) ---
 
-class TaskList
-  repo: Repository[Task]
+class TodoList
+  repo: Repository[Todo]
 
   def init
     self.repo = Repository.new
   end
 
   def var add_task(title: String, desc: String, priority: Priority) -> USize
-    let task = Task.new(self.repo.count, title, desc, priority)
+    let task = Todo.new(self.repo.count, title, desc, priority)
     self.repo.add(task)
   end
 
-  def find_by_id(id: USize) -> Option[&Task]
+  def find_by_id(id: USize) -> Option[&Todo]
     self.repo.all.iter.find { |t| t.id == id }
   end
 
-  def var update_status(id: USize, status: Status) -> Result[(), TaskError]
+  def var update_status(id: USize, status: Status) -> Result[(), TodoError]
     let task = self.repo.all.iter
       .position { |t| t.id == id }
-      .ok_or(TaskError.NotFound(id: id))?
+      .ok_or(TodoError.NotFound(id: id))?
 
     match self.repo.get_var(task)
       Some(t) -> match status
@@ -289,17 +289,17 @@ class TaskList
         Status.Cancelled(ref reason)    -> t.cancel(reason.clone)
         Status.Pending                  -> t.status = Status.Pending
       end
-      nil -> return Err(TaskError.NotFound(id: id))
+      nil -> return Err(TodoError.NotFound(id: id))
     end
 
     Ok(())
   end
 
-  def high_priority_tasks -> Array[&Task]
+  def high_priority_tasks -> Array[&Todo]
     self.repo.where_matching { |t| t.priority_ref.weight >= 3 }
   end
 
-  def actionable_tasks -> Array[&Task]
+  def actionable_tasks -> Array[&Todo]
     self.repo.where_matching { |t| t.is_actionable }
   end
 
@@ -308,29 +308,29 @@ class TaskList
     self.repo.display_all
   end
 
-  # Consumes the TaskList, returns only completed tasks
-  def consume into_completed -> Array[Task]
+  # Consumes the TodoList, returns only completed tasks
+  def consume into_completed -> Array[Todo]
     self.repo.into_filtered({ |t| t.is_done })
   end
 end
 
 # --- Helper Functions ---
 
-def parse_priority(input: &str) -> Result[Priority, TaskError]
+def parse_priority(input: &str) -> Result[Priority, TodoError]
   match input.trim.to_lower.as_str
     "low"      -> Ok(Priority.Low)
     "medium"   -> Ok(Priority.Medium)
     "high"     -> Ok(Priority.High)
     "critical" -> Ok(Priority.Critical)
-    other      -> Err(TaskError.InvalidPriority(value: String.from(other)))
+    other      -> Err(TodoError.InvalidPriority(value: String.from(other)))
   end
 end
 
 # Accepts borrowed tasks, returns a formatted report — no ownership taken
-def generate_report(tasks: &Array[&Task]) -> String
-  var report = String.from("=== Task Report ===\n")
+def generate_report(tasks: &Array[&Todo]) -> String
+  var report = String.from("=== Todo Report ===\n")
 
-  let (done, active): (Array[&&Task], Array[&&Task]) = tasks.iter
+  let (done, active): (Array[&&Todo], Array[&&Todo]) = tasks.iter
     .partition { |t| t.is_done }
 
   report.push_str("Active: #{active.len}\n")
@@ -365,19 +365,19 @@ end
 
 # Demonstrates error propagation with ?
 def create_task_from_input(
-  list: &var TaskList,
+  list: &var TodoList,
   title: &str,
   desc: &str,
   priority_str: &str
-) -> Result[USize, TaskError]
+) -> Result[USize, TodoError]
   if title.is_empty
-    return Err(TaskError.MissingField(name: String.from("title")))
+    return Err(TodoError.MissingField(name: String.from("title")))
   end
   if desc.is_empty
-    return Err(TaskError.MissingField(name: String.from("description")))
+    return Err(TodoError.MissingField(name: String.from("description")))
   end
 
-  let priority = parse_priority(priority_str)?  # ? propagates TaskError
+  let priority = parse_priority(priority_str)?  # ? propagates TodoError
   let id = list.add_task(
     String.from(title),
     String.from(desc),
@@ -389,7 +389,7 @@ end
 # --- Main ---
 
 def main
-  var list = TaskList.new
+  var list = TodoList.new
 
   # ── Create tasks via helper (demonstrates ? operator) ──
   puts "Creating tasks..."
@@ -432,7 +432,7 @@ def main
   # Try updating a non-existent task (demonstrates error handling)
   match list.update_status(99, Status.Pending)
     Ok(()) -> puts "  Updated"
-    Err(TaskError.NotFound(id)) -> puts "  Task ##{id} doesn't exist (expected)"
+    Err(TodoError.NotFound(id)) -> puts "  Todo ##{id} doesn't exist (expected)"
     Err(e) -> puts "  Unexpected: #{e.message}"
   end
 
@@ -448,7 +448,7 @@ def main
   puts ""
 
   # Closure stored in a variable and passed to a function
-  let is_pending = { |t: &&Task|
+  let is_pending = { |t: &&Todo|
     match &t.status
       Status.Pending -> true
       _ -> false
@@ -464,7 +464,7 @@ def main
   let task_name = list.find_by_id(1)
     .map { |t| t.title_ref.clone }
     .unwrap_or(String.from("Unknown"))
-  puts "Task #1: #{task_name}"
+  puts "Todo #1: #{task_name}"
 
   # Safe navigation chain
   let deadline_info = list.find_by_id(0)
@@ -476,7 +476,7 @@ def main
   puts ""
 
   # ── Generate report (demonstrates borrowing — list is NOT consumed) ──
-  let all_refs: Array[&Task] = list.repo.all.iter.to_vec
+  let all_refs: Array[&Todo] = list.repo.all.iter.to_vec
   let report = generate_report(&all_refs)
   puts report
 

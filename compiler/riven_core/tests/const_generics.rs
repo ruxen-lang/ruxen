@@ -358,28 +358,28 @@ fn const_args_thread_into_class_generic_args() {
     let prog = p.parse().expect("parse");
     let result = riven_core::typeck::type_check(&prog);
 
-    let return_tys: Vec<Ty> = result
-        .program
-        .items
-        .iter()
-        .filter_map(|item| match item {
-            riven_core::hir::nodes::HirItem::Function(f) => Some(f.return_ty.clone()),
+    // Filter by name: the user program defines `make_three` and
+    // `make_four`, but `program.items` after bootstrap/async lowering
+    // also carries synthesised stdlib fns (AsyncTcpStream open futures,
+    // IoError converters, etc.). The invariant under test is about THESE
+    // two specific functions' return-type const args, not the total fn
+    // count in the merged program.
+    let by_name = |target: &str| -> Option<Ty> {
+        result.program.items.iter().find_map(|item| match item {
+            riven_core::hir::nodes::HirItem::Function(f) if f.name == target => {
+                Some(f.return_ty.clone())
+            }
             _ => None,
         })
-        .collect();
-    assert_eq!(
-        return_tys.len(),
-        2,
-        "expected two fns, got: {:?}",
-        return_tys
-    );
+    };
+    let make_three_ret = by_name("make_three").expect("make_three should resolve");
+    let make_four_ret = by_name("make_four").expect("make_four should resolve");
     assert_ne!(
-        return_tys[0], return_tys[1],
+        make_three_ret, make_four_ret,
         "make_three and make_four must return distinct types: {:?} vs {:?}",
-        return_tys[0], return_tys[1]
+        make_three_ret, make_four_ret
     );
-    // And specifically the const args differ.
-    let arg_three = match &return_tys[0] {
+    let arg_three = match &make_three_ret {
         Ty::Class { generic_args, .. } => generic_args.get(1).cloned(),
         _ => None,
     };
@@ -387,7 +387,7 @@ fn const_args_thread_into_class_generic_args() {
         arg_three,
         Some(Ty::ConstArg(ConstExpr::Lit(3))),
         "make_three should carry ConstArg(Lit(3)) at slot 1; got {:?}",
-        return_tys[0]
+        make_three_ret
     );
 }
 
