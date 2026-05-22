@@ -22,10 +22,6 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-fn runtime_c_src() -> PathBuf {
-    workspace_root().join("library/std/core/runtime/runtime.c")
-}
-
 fn stdlib_root_src() -> PathBuf {
     workspace_root().join("library/std")
 }

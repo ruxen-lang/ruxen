@@ -83,7 +83,7 @@ fn item_in_source(item: &HirItem, source_len: usize) -> bool {
 }
 
 fn span_within(span: &Span, source_len: usize) -> bool {
-    (span.end as usize) <= source_len
+    span.end <= source_len
 }
 
 fn item_top_span(item: &HirItem) -> &Span {

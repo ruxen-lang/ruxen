@@ -76,16 +76,33 @@ void riven_atomic_bool_store(int64_t ptr, int64_t v) {
     atomic_store(&a->v, v != 0);
 }
 
+/* C11 stdatomic.h defines `atomic_fetch_and` / `atomic_fetch_or` only
+ * on INTEGER atomic types (atomic_int, atomic_long, …) — not on
+ * `atomic_bool`. Clang on macOS accepts the bool form as an extension;
+ * GCC on Linux rejects it ("operand type `_Atomic _Bool *` is
+ * incompatible with argument 1 of `__atomic_fetch_and`"), breaking
+ * the ubuntu CI build. Implement bool fetch_and/or via a portable
+ * compare-exchange loop instead — same semantics, both compilers happy.
+ */
 int64_t riven_atomic_bool_fetch_and(int64_t ptr, int64_t v) {
     RivenAtomicBool *a = (RivenAtomicBool *)ptr;
-    bool prev = atomic_fetch_and(&a->v, v != 0);
-    return prev ? 1 : 0;
+    bool desired_mask = (v != 0);
+    bool expected = atomic_load(&a->v);
+    while (!atomic_compare_exchange_weak(&a->v, &expected, expected && desired_mask)) {
+        /* `expected` was updated to the current value by the failed CAS;
+         * retry with the new observed value. */
+    }
+    return expected ? 1 : 0;
 }
 
 int64_t riven_atomic_bool_fetch_or(int64_t ptr, int64_t v) {
     RivenAtomicBool *a = (RivenAtomicBool *)ptr;
-    bool prev = atomic_fetch_or(&a->v, v != 0);
-    return prev ? 1 : 0;
+    bool desired_mask = (v != 0);
+    bool expected = atomic_load(&a->v);
+    while (!atomic_compare_exchange_weak(&a->v, &expected, expected || desired_mask)) {
+        /* see fetch_and above */
+    }
+    return expected ? 1 : 0;
 }
 
 int64_t riven_atomic_bool_compare_and_swap(int64_t ptr, int64_t current, int64_t new_val) {

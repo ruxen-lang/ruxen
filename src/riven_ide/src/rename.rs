@@ -386,7 +386,7 @@ fn is_renamable_def(def_id: DefId, name: &str, span: &Span, source: &str) -> boo
     // aren't in our current source buffer. Rename would either no-op
     // (offsets > source.len()) or produce an edit at an unrelated
     // location. Refuse.
-    if span.end as usize > source.len() {
+    if span.end > source.len() {
         return false;
     }
     true
@@ -473,8 +473,8 @@ fn find_def_by_word(symbols: &SymbolTable, word: &str, byte_offset: usize) -> Op
             first_real = Some(def.id);
         }
         let span = &def.span;
-        if (span.start as usize) <= byte_offset && byte_offset < span.end as usize {
-            let width = (span.end - span.start) as usize;
+        if span.start <= byte_offset && byte_offset < span.end {
+            let width = span.end - span.start;
             match best {
                 None => best = Some((def.id, width)),
                 Some((_, prev_w)) if width < prev_w => best = Some((def.id, width)),

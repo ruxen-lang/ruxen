@@ -1,5 +1,19 @@
 use riven_core::lexer::token::Span;
 
+/// Stable equivalent of the unstable `str::floor_char_boundary`. Walks
+/// backwards from `index` until landing on a UTF-8 char boundary
+/// (clamping `index` to the source length first). Used to keep
+/// `&source[..i]` slices panic-safe when callers hand us byte offsets
+/// that don't necessarily land on char boundaries (e.g. lexer spans for
+/// sources containing `─`, `…`, emoji).
+fn floor_char_boundary(s: &str, index: usize) -> usize {
+    let mut i = index.min(s.len());
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
 /// Stores the byte offset of each line start for fast position lookups.
 pub struct LineIndex {
     /// line_starts[i] = byte offset where line i begins (0-indexed)
@@ -31,9 +45,17 @@ impl LineIndex {
             .saturating_sub(1);
         let line_start = self.line_starts[line] as usize;
 
-        // Convert byte column to UTF-16 column
-        let end = byte_offset.min(self.source.len());
-        let line_text = &self.source[line_start..end];
+        // Convert byte column to UTF-16 column. The slice
+        // `&self.source[line_start..end]` panics if either bound lands
+        // inside a multi-byte UTF-8 character — which happens in
+        // practice when callers pass spans coming from the lexer for
+        // sources that contain `─` / `…` / emoji (the v1 sample program
+        // hit this on every analyse — pin
+        // `analysis_of_sample_program`). Round both bounds down to the
+        // nearest char boundary before slicing.
+        let end = floor_char_boundary(&self.source, byte_offset);
+        let line_start_safe = floor_char_boundary(&self.source, line_start);
+        let line_text = &self.source[line_start_safe..end];
         let utf16_col = line_text.encode_utf16().count();
 
         lsp_types::Position {
@@ -55,7 +77,10 @@ impl LineIndex {
             .get(line + 1)
             .map(|&s| s as usize)
             .unwrap_or(self.source.len());
-        let line_text = &self.source[line_start..line_end];
+        // Same char-boundary safety as `position_of` — see comment there.
+        let line_start_safe = floor_char_boundary(&self.source, line_start);
+        let line_end_safe = floor_char_boundary(&self.source, line_end);
+        let line_text = &self.source[line_start_safe..line_end_safe];
 
         let mut utf16_count = 0u32;
         let mut byte_offset = line_start;

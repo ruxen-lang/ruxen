@@ -104,19 +104,6 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// The path to the aggregator `runtime.c` in the source tree.
-/// Post-#06.95 Phase B the runtime aggregator lives at
-/// `library/std/core/runtime/runtime.c` and `#include`s siblings via
-/// `../../<pkg>/runtime/*.c` relative paths.
-fn runtime_c_src() -> PathBuf {
-    workspace_root()
-        .join("library")
-        .join("std")
-        .join("core")
-        .join("runtime")
-        .join("runtime.c")
-}
-
 /// Path to the `rivenc` binary under test (cargo populates this env var).
 fn rivenc_exe() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_rivenc"))

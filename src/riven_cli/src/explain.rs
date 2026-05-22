@@ -80,6 +80,17 @@ static EXPLAINS: &[(&str, &str)] = &[
     ("E1012", include_str!("../../../docs/errors/E1012.md")),
     ("E1013", include_str!("../../../docs/errors/E1013.md")),
     ("E1014", include_str!("../../../docs/errors/E1014.md")),
+    // Concurrency / Send-bound diagnostics (E1100-E1102).
+    ("E1100", include_str!("../../../docs/errors/E1100.md")),
+    ("E1101", include_str!("../../../docs/errors/E1101.md")),
+    ("E1102", include_str!("../../../docs/errors/E1102.md")),
+    // Async (E1110-E1118).
+    ("E1110", include_str!("../../../docs/errors/E1110.md")),
+    ("E1112", include_str!("../../../docs/errors/E1112.md")),
+    ("E1115", include_str!("../../../docs/errors/E1115.md")),
+    ("E1116", include_str!("../../../docs/errors/E1116.md")),
+    ("E1117", include_str!("../../../docs/errors/E1117.md")),
+    ("E1118", include_str!("../../../docs/errors/E1118.md")),
 ];
 
 /// Look up the embedded markdown explanation for `code`. Returns
