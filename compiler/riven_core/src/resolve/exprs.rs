@@ -217,10 +217,7 @@ impl Resolver {
                             span,
                         }
                     } else {
-                        self.error(
-                            format!("undefined qualified type `{}`", name),
-                            &span,
-                        );
+                        self.error(format!("undefined qualified type `{}`", name), &span);
                         HirExpr {
                             kind: HirExprKind::Error,
                             ty: Ty::Error,
@@ -1111,5 +1108,4 @@ impl Resolver {
     }
 
     // ─── Block Resolution ───────────────────────────────────────────
-
 }

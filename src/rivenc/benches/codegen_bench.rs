@@ -34,9 +34,7 @@ fn bench_codegen(c: &mut Criterion) {
     let out_str = out_path.to_string_lossy().into_owned();
 
     c.bench_function("codegen/508_command_status", |b| {
-        b.iter(|| {
-            codegen::compile(black_box(&mir), black_box(&out_str)).expect("codegen")
-        })
+        b.iter(|| codegen::compile(black_box(&mir), black_box(&out_str)).expect("codegen"))
     });
 }
 

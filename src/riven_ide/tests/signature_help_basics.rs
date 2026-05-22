@@ -20,8 +20,7 @@ fn load(stem: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/signature_help")
         .join(format!("{}.rvn", stem));
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
 }
 
 /// Find the byte offset of the anchor; cursor lives at the start of it.
@@ -53,7 +52,10 @@ fn fn_call_first_arg_returns_signature_with_active_param_zero() {
         "label should describe `add` — got {:?}",
         sig.label
     );
-    assert!(sig.label.contains("-> Int"), "label should include return type");
+    assert!(
+        sig.label.contains("-> Int"),
+        "label should include return type"
+    );
     assert_eq!(
         sig.active_parameter,
         Some(0),
@@ -150,8 +152,7 @@ fn nested_call_returns_innermost_signature() {
 #[test]
 fn parameter_label_offsets_point_inside_signature_label() {
     let source = load("fn_first_arg");
-    let help = help_at_anchor(&source, "cursor_first_arg_anchor")
-        .expect("expected SignatureHelp");
+    let help = help_at_anchor(&source, "cursor_first_arg_anchor").expect("expected SignatureHelp");
     let sig = &help.signatures[0];
     let label = &sig.label;
     let params = sig.parameters.as_ref().expect("parameters present");
@@ -177,7 +178,10 @@ fn parameter_label_offsets_point_inside_signature_label() {
                 );
             }
             ParameterLabel::Simple(text) => {
-                panic!("expected LabelOffsets for param {}, got Simple({:?})", i, text);
+                panic!(
+                    "expected LabelOffsets for param {}, got Simple({:?})",
+                    i, text
+                );
             }
         }
     }

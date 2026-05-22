@@ -53,10 +53,8 @@ impl Resolver {
         bootstrap_packages: &[(String, ast::Program)],
     ) -> ResolveResult {
         // Extract just the programs for the existing merge path…
-        let bootstrap_programs: Vec<ast::Program> = bootstrap_packages
-            .iter()
-            .map(|(_, p)| p.clone())
-            .collect();
+        let bootstrap_programs: Vec<ast::Program> =
+            bootstrap_packages.iter().map(|(_, p)| p.clone()).collect();
         // …and remember the (pkg_name, item_names) pairs so the
         // post-merge fixup can auto-populate each std.<pkg> submodule.
         let auto_pkgs: Vec<(String, Vec<String>)> = bootstrap_packages
@@ -509,5 +507,4 @@ impl Resolver {
     }
 
     // ─── Builtin Registration ───────────────────────────────────────
-
 }

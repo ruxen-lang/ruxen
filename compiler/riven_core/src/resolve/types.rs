@@ -634,11 +634,7 @@ impl Resolver {
     /// `Ty::TypeParam { bounds: [] }` (the current behaviour when a
     /// mixin name is used as a type) would silently drop the
     /// mixin identity at this position.
-    fn try_resolve_dyn_mixin_ref(
-        &mut self,
-        inner: &ast::TypeExpr,
-        ref_span: &Span,
-    ) -> Option<Ty> {
+    fn try_resolve_dyn_mixin_ref(&mut self, inner: &ast::TypeExpr, ref_span: &Span) -> Option<Ty> {
         let path = match inner {
             ast::TypeExpr::Named(p) => p,
             _ => return None,

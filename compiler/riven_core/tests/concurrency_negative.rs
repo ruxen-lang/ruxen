@@ -36,7 +36,9 @@ fn typeck_errors(source: &str) -> Vec<Diagnostic> {
 }
 
 fn count_with_code(errs: &[Diagnostic], code: &str) -> usize {
-    errs.iter().filter(|d| d.code.as_deref() == Some(code)).count()
+    errs.iter()
+        .filter(|d| d.code.as_deref() == Some(code))
+        .count()
 }
 
 // ─── B3 — `Mutex.new(non_send)` → E1101 ─────────────────────────────
@@ -47,7 +49,9 @@ fn mutex_new_rejects_non_send_t_e1101() {
     assert!(
         count_with_code(&errs, "E1101") >= 1,
         "expected E1101 for Mutex.new(Foo) where Foo is not Send, got: {:?}",
-        errs.iter().map(|d| (&d.code, &d.message)).collect::<Vec<_>>()
+        errs.iter()
+            .map(|d| (&d.code, &d.message))
+            .collect::<Vec<_>>()
     );
 }
 
@@ -59,7 +63,9 @@ fn sharedsync_new_rejects_non_send_t_e1102() {
     assert!(
         count_with_code(&errs, "E1102") >= 1,
         "expected E1102 for SharedSync.new(Foo) where Foo is not Send, got: {:?}",
-        errs.iter().map(|d| (&d.code, &d.message)).collect::<Vec<_>>()
+        errs.iter()
+            .map(|d| (&d.code, &d.message))
+            .collect::<Vec<_>>()
     );
 }
 
@@ -85,7 +91,9 @@ fn thread_spawn_rejects_non_send_capture_e1100() {
     assert!(
         count_with_code(&errs, "E1100") >= 1,
         "expected E1100 for Thread.spawn capturing non-Send Foo, got: {:?}",
-        errs.iter().map(|d| (&d.code, &d.message)).collect::<Vec<_>>()
+        errs.iter()
+            .map(|d| (&d.code, &d.message))
+            .collect::<Vec<_>>()
     );
 }
 
@@ -113,16 +121,20 @@ fn thread_spawn_emits_one_diagnostic_per_bad_capture() {
     assert!(
         bad_count >= 1,
         "expected at least one E1100 for the non-Send capture, got: {:?}",
-        errs.iter().map(|d| (&d.code, &d.message)).collect::<Vec<_>>()
+        errs.iter()
+            .map(|d| (&d.code, &d.message))
+            .collect::<Vec<_>>()
     );
     // The Send capture must not generate spurious diagnostics.
-    let int_msg_present = errs.iter().any(|d| {
-        d.code.as_deref() == Some("E1100") && d.message.contains("Int")
-    });
+    let int_msg_present = errs
+        .iter()
+        .any(|d| d.code.as_deref() == Some("E1100") && d.message.contains("Int"));
     assert!(
         !int_msg_present,
         "E1100 fired on the Int capture, which is Send: {:?}",
-        errs.iter().map(|d| (&d.code, &d.message)).collect::<Vec<_>>()
+        errs.iter()
+            .map(|d| (&d.code, &d.message))
+            .collect::<Vec<_>>()
     );
 }
 
@@ -137,6 +149,8 @@ fn negative_include_send_rejects_thread_spawn() {
     assert!(
         count_with_code(&errs, "E1101") >= 1,
         "expected E1101 for Mutex.new(NotSend) where NotSend has `include !Send`, got: {:?}",
-        errs.iter().map(|d| (&d.code, &d.message)).collect::<Vec<_>>()
+        errs.iter()
+            .map(|d| (&d.code, &d.message))
+            .collect::<Vec<_>>()
     );
 }

@@ -11,8 +11,7 @@ fn load(stem: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/workspace_symbols")
         .join(format!("{}.rvn", stem));
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
 }
 
 fn fake_url(stem: &str) -> Url {
@@ -80,13 +79,13 @@ fn empty_query_returns_all_named_symbols() {
     let hits = workspace_symbols(&docs, "");
     let names: Vec<&str> = hits.iter().map(|h| h.name.as_str()).collect();
     // Should at minimum contain everything we defined across both files.
-    for expected in [
-        "UserSession",
-        "lookup_user",
-        "WidgetKind",
-        "render_widget",
-    ] {
-        assert!(names.contains(&expected), "missing {} in {:?}", expected, names);
+    for expected in ["UserSession", "lookup_user", "WidgetKind", "render_widget"] {
+        assert!(
+            names.contains(&expected),
+            "missing {} in {:?}",
+            expected,
+            names
+        );
     }
 }
 

@@ -94,8 +94,7 @@ fn compile_and_run(source: &str, basename: &str) -> (String, String, Option<i32>
 #[test]
 fn task_spawn_raw_transfers_ownership_to_executor() {
     let source = rvn("task_spawn_move_by_ffi");
-    let (stdout, stderr, exit_code) =
-        compile_and_run(&source, "task_spawn_move_by_ffi");
+    let (stdout, stderr, exit_code) = compile_and_run(&source, "task_spawn_move_by_ffi");
 
     // Specifically assert exit 0 (not just "not crashed"). Exit
     // 139 (SIGSEGV) was the precise pre-fix failure mode; making

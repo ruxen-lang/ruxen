@@ -270,9 +270,7 @@ impl Resolver {
             // Negative includes (`include !Foo`) don't trigger this — the
             // class explicitly opts out of the mixin contract.
             if !inner.negative_trait {
-                if let Some(mixin_def) =
-                    self.symbols.iter().find(|d| d.name == trait_ref.name)
-                {
+                if let Some(mixin_def) = self.symbols.iter().find(|d| d.name == trait_ref.name) {
                     let is_runtime_dispatch = matches!(
                         &mixin_def.kind,
                         DefKind::Trait { info }
@@ -1001,5 +999,4 @@ impl Resolver {
     }
 
     // ─── Function Resolution ────────────────────────────────────────
-
 }

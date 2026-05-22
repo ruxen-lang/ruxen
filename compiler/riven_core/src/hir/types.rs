@@ -766,11 +766,7 @@ fn has_trait_bound(bounds: &[MixinRef], trait_name: &str) -> bool {
     bounds.iter().any(|bound| bound.name == trait_name)
 }
 
-fn is_send_with_inner(
-    ty: &Ty,
-    symbols: &SymbolTable,
-    visiting: &mut HashSet<u32>,
-) -> bool {
+fn is_send_with_inner(ty: &Ty, symbols: &SymbolTable, visiting: &mut HashSet<u32>) -> bool {
     match ty {
         Ty::Class { generic_args, .. } => {
             // Rules (spec
@@ -828,13 +824,7 @@ fn is_send_with_inner(
         // Structs / enums keep field-walking behaviour (same as
         // `is_send_with_inner`). v1 doesn't restructure those.
         Ty::Struct { .. } | Ty::Enum { .. } => {
-            nominal_members_are_thread_safe(
-                ty,
-                symbols,
-                visiting,
-                is_send_with_inner,
-                true,
-            )
+            nominal_members_are_thread_safe(ty, symbols, visiting, is_send_with_inner, true)
         }
         Ty::Ref(inner) | Ty::RefLifetime(_, inner) => {
             // &T: Send iff T: Sync (spec B7). For the strict check we

@@ -384,10 +384,8 @@ mod tests {
             .map(|(name, prog)| (name.clone(), collect_names(prog)))
             .collect();
         resolver.bootstrap_auto_packages = auto_pkgs;
-        let programs: Vec<crate::parser::ast::Program> = bootstrap_packages
-            .into_iter()
-            .map(|(_, p)| p)
-            .collect();
+        let programs: Vec<crate::parser::ast::Program> =
+            bootstrap_packages.into_iter().map(|(_, p)| p).collect();
         let mut ffi_libs = Vec::new();
         resolver.merge_bootstrap_programs(&programs, &mut ffi_libs);
         // `fixup_bootstrapped_stdlib_modules` is what re-populates

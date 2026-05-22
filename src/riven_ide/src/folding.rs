@@ -75,9 +75,7 @@ impl<'a> HirWalker<'a> {
             HirItem::Mixin(m) => self.walk_mixin(m),
             HirItem::Impl(i) => self.walk_impl(i),
             HirItem::Function(f) => self.walk_func(f),
-            HirItem::TypeAlias(_)
-            | HirItem::Newtype(_)
-            | HirItem::Const(_) => {}
+            HirItem::TypeAlias(_) | HirItem::Newtype(_) | HirItem::Const(_) => {}
         }
     }
 
@@ -223,9 +221,7 @@ impl<'a> HirWalker<'a> {
                 self.walk_expr(condition);
                 self.walk_func_body(body);
             }
-            HirExprKind::For {
-                iterable, body, ..
-            } => {
+            HirExprKind::For { iterable, body, .. } => {
                 self.push_region(&expr.span);
                 self.walk_expr(iterable);
                 self.walk_func_body(body);
@@ -248,7 +244,10 @@ impl<'a> HirWalker<'a> {
             // Recurse through subexpressions.
             HirExprKind::FieldAccess { object, .. } => self.walk_expr(object),
             HirExprKind::MethodCall {
-                object, args, block, ..
+                object,
+                args,
+                block,
+                ..
             } => {
                 self.walk_expr(object);
                 for a in args {
@@ -282,8 +281,7 @@ impl<'a> HirWalker<'a> {
                     self.walk_expr(e);
                 }
             }
-            HirExprKind::Construct { fields, .. }
-            | HirExprKind::EnumVariant { fields, .. } => {
+            HirExprKind::Construct { fields, .. } | HirExprKind::EnumVariant { fields, .. } => {
                 for (_, e) in fields {
                     self.walk_expr(e);
                 }

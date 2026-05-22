@@ -294,11 +294,7 @@ impl<'a> InferenceEngine<'a> {
         }
     }
 
-    pub(super) fn lookup_field(
-        &self,
-        type_name: &str,
-        field_name: &str,
-    ) -> Option<(Ty, usize)> {
+    pub(super) fn lookup_field(&self, type_name: &str, field_name: &str) -> Option<(Ty, usize)> {
         for def in self.symbols.iter() {
             if def.name == field_name {
                 if let DefKind::Field { parent, ty, index } = &def.kind {
@@ -559,9 +555,7 @@ impl<'a> InferenceEngine<'a> {
                 Box::new(Self::subst_ty(ok, subst)),
                 Box::new(Self::subst_ty(err, subst)),
             ),
-            Ty::Tuple(elems) => Ty::Tuple(
-                elems.iter().map(|e| Self::subst_ty(e, subst)).collect(),
-            ),
+            Ty::Tuple(elems) => Ty::Tuple(elems.iter().map(|e| Self::subst_ty(e, subst)).collect()),
             _ => ty.clone(),
         }
     }

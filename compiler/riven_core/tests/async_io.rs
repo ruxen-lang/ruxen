@@ -136,8 +136,7 @@ fn context_has_drop_lib_decl_after_subphase4a() {
         .expect("Context class must be registered by bootstrap");
 
     let has_drop = result.symbols.iter().any(|d| {
-        d.name == "drop"
-            && matches!(&d.kind, DefKind::Method { parent, .. } if *parent == ctx_id)
+        d.name == "drop" && matches!(&d.kind, DefKind::Method { parent, .. } if *parent == ctx_id)
     });
     assert!(
         has_drop,

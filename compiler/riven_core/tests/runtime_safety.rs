@@ -64,11 +64,7 @@ fn compile_runtime_objects(extra_flags: &[&str]) -> Vec<std::path::PathBuf> {
     let mut objects: Vec<std::path::PathBuf> = Vec::with_capacity(sources.len());
     for src in &sources {
         let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("rt");
-        let obj = std::env::temp_dir().join(format!(
-            "riven_{}_{}.o",
-            stem,
-            unique_suffix()
-        ));
+        let obj = std::env::temp_dir().join(format!("riven_{}_{}.o", stem, unique_suffix()));
         let mut cmd = Command::new("cc");
         cmd.arg("-c").arg(src).arg("-o").arg(&obj);
         for f in extra_flags {
@@ -143,8 +139,11 @@ fn runtime_compiles_with_strict_warnings() {
 
 #[test]
 fn runtime_compiles_with_sanitizers() {
-    let objects =
-        compile_runtime_objects(&["-fsanitize=address,undefined", "-g", "-fno-omit-frame-pointer"]);
+    let objects = compile_runtime_objects(&[
+        "-fsanitize=address,undefined",
+        "-g",
+        "-fno-omit-frame-pointer",
+    ]);
     for o in &objects {
         let _ = std::fs::remove_file(o);
     }

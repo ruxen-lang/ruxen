@@ -323,14 +323,11 @@ fn chained_awaits_generate_n_plus_1_states() {
         .filter(|f| f.name.starts_with("__sub_"))
         .count();
     assert_eq!(
-        sub_fields, 2,
+        sub_fields,
+        2,
         "expected 2 __sub_N fields for 2 awaits, got {}: fields = {:?}",
         sub_fields,
-        sm_class
-            .fields
-            .iter()
-            .map(|f| &f.name)
-            .collect::<Vec<_>>()
+        sm_class.fields.iter().map(|f| &f.name).collect::<Vec<_>>()
     );
 }
 
@@ -404,10 +401,10 @@ fn context_test_dummy_constructs() {
         .iter()
         .find(|d| d.name == "Context" && matches!(d.kind, DefKind::Class { .. }))
         .expect("expected `Context` class from library/std/future/src/lib.rvn");
-    let has_test_dummy = result
-        .symbols
-        .iter()
-        .any(|d| d.name == "test_dummy" && matches!(&d.kind, DefKind::Method { parent, .. } if *parent == ctx.id));
+    let has_test_dummy = result.symbols.iter().any(|d| {
+        d.name == "test_dummy"
+            && matches!(&d.kind, DefKind::Method { parent, .. } if *parent == ctx.id)
+    });
     assert!(
         has_test_dummy,
         "expected `Context.test_dummy` static method to be registered"

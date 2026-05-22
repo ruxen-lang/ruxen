@@ -83,8 +83,8 @@ fn strip_runtime_h_include(src: &str) -> String {
 /// rewrites without resurrecting the unity build in production.
 fn synthesize_unity_runtime() -> String {
     let std_root = workspace_root().join("library/std");
-    let header = std::fs::read_to_string(std_root.join("core/runtime/runtime.h"))
-        .expect("read runtime.h");
+    let header =
+        std::fs::read_to_string(std_root.join("core/runtime/runtime.h")).expect("read runtime.h");
     let mut out = String::new();
     out.push_str(&header);
     out.push('\n');
@@ -99,7 +99,11 @@ fn synthesize_unity_runtime() -> String {
         .filter(|p| p.is_dir() && p.join("runtime").is_dir())
         .collect();
     pkg_dirs.sort_by_key(|p| {
-        let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
+        let name = p
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
         // core first, then alphabetical
         (name != "core", name)
     });

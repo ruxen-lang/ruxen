@@ -64,10 +64,7 @@ impl UseIndex {
     /// All recorded spans for `def_id` (def-site + uses), or `&[]` if
     /// the def is unknown / synthetic / skipped.
     pub fn spans_for(&self, def_id: DefId) -> &[Span] {
-        self.uses
-            .get(&def_id)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[])
+        self.uses.get(&def_id).map(|v| v.as_slice()).unwrap_or(&[])
     }
 
     /// Number of recorded spans for `def_id` (decl + uses).
@@ -289,7 +286,10 @@ impl<'a> Builder<'a> {
         match p {
             HirPattern::Binding { .. } | HirPattern::Wildcard { .. } | HirPattern::Rest { .. } => {}
             HirPattern::Literal { expr, .. } => self.visit_expr(expr),
-            HirPattern::Tuple { elements, .. } | HirPattern::Or { patterns: elements, .. } => {
+            HirPattern::Tuple { elements, .. }
+            | HirPattern::Or {
+                patterns: elements, ..
+            } => {
                 for el in elements {
                     self.visit_pattern(el);
                 }
@@ -424,9 +424,7 @@ impl<'a> Builder<'a> {
                 self.visit_expr(condition);
                 self.visit_expr(body);
             }
-            HirExprKind::For {
-                iterable, body, ..
-            } => {
+            HirExprKind::For { iterable, body, .. } => {
                 // The For binding's def-site is recorded via the
                 // pre-pass over `symbols`. The For node itself
                 // doesn't re-use the binding, so we only descend.
@@ -558,7 +556,11 @@ impl<'a> Builder<'a> {
                     self.visit_ty(ga, host_span);
                 }
             }
-            Ty::Newtype { name, inner } | Ty::Alias { name, target: inner } => {
+            Ty::Newtype { name, inner }
+            | Ty::Alias {
+                name,
+                target: inner,
+            } => {
                 if let Some(def_id) = lookup_named_type(self.symbols, name) {
                     self.record(def_id, host_span.clone());
                 }
@@ -656,10 +658,12 @@ fn resolve_field_def(
     } else {
         // Fallback name scan within this class's fields, in case
         // field_idx drifted from the resolved type's layout.
-        fields
-            .iter()
-            .copied()
-            .find(|id| symbols.get(*id).map(|d| d.name == field_name).unwrap_or(false))
+        fields.iter().copied().find(|id| {
+            symbols
+                .get(*id)
+                .map(|d| d.name == field_name)
+                .unwrap_or(false)
+        })
     }
 }
 
@@ -691,13 +695,17 @@ fn resolve_method_def(symbols: &SymbolTable, receiver_ty: &Ty, method_name: &str
     let type_def_id = lookup_named_type(symbols, type_name)?;
     let methods = match &symbols.get(type_def_id)?.kind {
         DefKind::Class { info } => &info.methods,
-        DefKind::Struct { info } => return resolve_struct_method(symbols, &info.fields, method_name),
+        DefKind::Struct { info } => {
+            return resolve_struct_method(symbols, &info.fields, method_name)
+        }
         _ => return None,
     };
-    methods
-        .iter()
-        .copied()
-        .find(|id| symbols.get(*id).map(|d| d.name == method_name).unwrap_or(false))
+    methods.iter().copied().find(|id| {
+        symbols
+            .get(*id)
+            .map(|d| d.name == method_name)
+            .unwrap_or(false)
+    })
 }
 
 /// Structs don't carry a `methods: Vec<DefId>` list — they stash

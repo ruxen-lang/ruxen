@@ -167,12 +167,7 @@ impl Resolver {
         let mangled = if module_path.is_empty() {
             format!("{}_{}", parent_name, ffi_fn.name)
         } else {
-            format!(
-                "{}_{}_{}",
-                module_path.join("_"),
-                parent_name,
-                ffi_fn.name
-            )
+            format!("{}_{}_{}", module_path.join("_"), parent_name, ffi_fn.name)
         };
         // Register under the PLAIN method name so MIR's
         // `is_user_static_method(class, method)` lookup — which scans
@@ -515,11 +510,7 @@ impl Resolver {
                     if module_path.is_empty() {
                         self.scopes.lookup_type(&class.name)
                     } else {
-                        let qualified = format!(
-                            "{}.{}",
-                            module_path.join("."),
-                            class.name
-                        );
+                        let qualified = format!("{}.{}", module_path.join("."), class.name);
                         self.type_registry.get(&qualified).copied()
                     }
                 } else {
@@ -655,19 +646,23 @@ impl Resolver {
                         //   3. Else fall back to the literal name
                         //      (top-level mixin case).
                         let written = inner.trait_name.segments.join(".");
-                        let try_keys: Vec<String> =
-                            if inner.trait_name.segments.len() > 1 {
-                                vec![written.clone()]
-                            } else if !module_path.is_empty() {
-                                vec![format!("{}.{}", module_path.join("."), written), written.clone()]
-                            } else {
-                                vec![written.clone()]
-                            };
+                        let try_keys: Vec<String> = if inner.trait_name.segments.len() > 1 {
+                            vec![written.clone()]
+                        } else if !module_path.is_empty() {
+                            vec![
+                                format!("{}.{}", module_path.join("."), written),
+                                written.clone(),
+                            ]
+                        } else {
+                            vec![written.clone()]
+                        };
                         try_keys
                             .into_iter()
                             .find_map(|k| self.mixin_lib_decls.get(&k).cloned())
                             .into_iter()
-                            .flat_map(|libs| libs.into_iter().flat_map(|lib| lib.functions.into_iter()))
+                            .flat_map(|libs| {
+                                libs.into_iter().flat_map(|lib| lib.functions.into_iter())
+                            })
                             .collect::<Vec<_>>()
                     })
                     .collect();
@@ -861,10 +856,8 @@ impl Resolver {
                 // happen to be non-generic, so the empty-`variants` gap
                 // went unnoticed. Poll is the first generic enum loaded
                 // through this path.
-                let variant_ids: Vec<DefId> = pending_registrations
-                    .iter()
-                    .map(|(_, vid)| *vid)
-                    .collect();
+                let variant_ids: Vec<DefId> =
+                    pending_registrations.iter().map(|(_, vid)| *vid).collect();
                 if let Some(enum_def) = self.symbols.get_mut(id) {
                     if let DefKind::Enum { ref mut info } = enum_def.kind {
                         info.variants = variant_ids;
@@ -1212,5 +1205,4 @@ impl Resolver {
     }
 
     // ─── Pass 2: Full Resolution ────────────────────────────────────
-
 }

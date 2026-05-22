@@ -622,12 +622,8 @@ impl<'a> Lowerer<'a> {
                     continue;
                 };
 
-                let helper = self.build_dynamic_dispatch_helper(
-                    &mixin_name,
-                    method_name,
-                    method_idx,
-                    &sig,
-                );
+                let helper =
+                    self.build_dynamic_dispatch_helper(&mixin_name, method_name, method_idx, &sig);
                 mir.functions.push(helper);
             }
         }
@@ -694,11 +690,7 @@ impl<'a> Lowerer<'a> {
 
         // Build call args: self followed by the remaining params (all
         // already locals on mir_fn).
-        let args: Vec<MirValue> = mir_fn
-            .params
-            .iter()
-            .map(|&id| MirValue::Use(id))
-            .collect();
+        let args: Vec<MirValue> = mir_fn.params.iter().map(|&id| MirValue::Use(id)).collect();
 
         // Indirect call.
         let has_return = !matches!(return_ty, Ty::Unit);
@@ -1001,9 +993,8 @@ impl<'a> Lowerer<'a> {
                 })
                 .unwrap_or(candidates[0])
         };
-        let parent_name: Option<String> = parent_id.and_then(|pid| {
-            self.symbols.get(pid).map(|p| p.name.clone())
-        });
+        let parent_name: Option<String> =
+            parent_id.and_then(|pid| self.symbols.get(pid).map(|p| p.name.clone()));
         let class_def_id = Some(class_def_id);
         let class_def_id = match class_def_id {
             Some(id) => id,

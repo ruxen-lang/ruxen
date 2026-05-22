@@ -40,9 +40,8 @@ pub(super) fn register_modules(r: &mut Resolver) {
     };
 
     let bootstrap_pkg_names = crate::resolve::bootstrap::bootstrap_package_names();
-    let mut submodule_names: Vec<&str> = Vec::with_capacity(
-        bootstrap_pkg_names.len() + SYNTHETIC_STD_SUBMODULES.len(),
-    );
+    let mut submodule_names: Vec<&str> =
+        Vec::with_capacity(bootstrap_pkg_names.len() + SYNTHETIC_STD_SUBMODULES.len());
     for name in &bootstrap_pkg_names {
         if !submodule_names.contains(name) {
             submodule_names.push(*name);

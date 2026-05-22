@@ -7,9 +7,9 @@
 mod symbols;
 
 #[cfg(test)]
-mod tests_resolve;
-#[cfg(test)]
 mod tests_migrated;
+#[cfg(test)]
+mod tests_resolve;
 
 /// Path to the C runtime source file, relative to the rivenc crate root.
 pub const RUNTIME_C_SOURCE: &str = "runtime/runtime.c";

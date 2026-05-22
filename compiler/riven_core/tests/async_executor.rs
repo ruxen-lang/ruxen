@@ -121,7 +121,11 @@ fn waker_wake_is_noop_in_subphase3() {
     // populated symbol table.
     let result = typeck_result("def main\n  puts \"ok\"\nend\n");
     let errors = error_messages(&result.diagnostics);
-    assert!(errors.is_empty(), "trivial program must typecheck: {:?}", errors);
+    assert!(
+        errors.is_empty(),
+        "trivial program must typecheck: {:?}",
+        errors
+    );
 
     // Find the Waker class and confirm both methods are present.
     let waker_id = result
@@ -132,8 +136,7 @@ fn waker_wake_is_noop_in_subphase3() {
         .expect("Waker class must be registered by bootstrap");
 
     let has_wake = result.symbols.iter().any(|d| {
-        d.name == "wake"
-            && matches!(&d.kind, DefKind::Method { parent, .. } if *parent == waker_id)
+        d.name == "wake" && matches!(&d.kind, DefKind::Method { parent, .. } if *parent == waker_id)
     });
     let has_wake_by_ref = result.symbols.iter().any(|d| {
         d.name == "wake_by_ref"
@@ -157,7 +160,11 @@ fn waker_wake_is_noop_in_subphase3() {
 fn context_waker_returns_real_waker_after_subphase3() {
     let result = typeck_result("def main\n  puts \"ok\"\nend\n");
     let errors = error_messages(&result.diagnostics);
-    assert!(errors.is_empty(), "trivial program must typecheck: {:?}", errors);
+    assert!(
+        errors.is_empty(),
+        "trivial program must typecheck: {:?}",
+        errors
+    );
 
     let ctx_id = result
         .symbols
@@ -167,8 +174,7 @@ fn context_waker_returns_real_waker_after_subphase3() {
         .expect("Context class must be registered by bootstrap");
 
     let has_waker = result.symbols.iter().any(|d| {
-        d.name == "waker"
-            && matches!(&d.kind, DefKind::Method { parent, .. } if *parent == ctx_id)
+        d.name == "waker" && matches!(&d.kind, DefKind::Method { parent, .. } if *parent == ctx_id)
     });
     let has_executor = result.symbols.iter().any(|d| {
         d.name == "executor"
@@ -193,7 +199,11 @@ fn context_waker_returns_real_waker_after_subphase3() {
 fn context_test_dummy_still_works() {
     let result = typeck_result("def main\n  puts \"ok\"\nend\n");
     let errors = error_messages(&result.diagnostics);
-    assert!(errors.is_empty(), "trivial program must typecheck: {:?}", errors);
+    assert!(
+        errors.is_empty(),
+        "trivial program must typecheck: {:?}",
+        errors
+    );
 
     let ctx_id = result
         .symbols

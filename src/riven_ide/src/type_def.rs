@@ -65,7 +65,11 @@ pub fn type_definition(
     let definition = symbols.get(def_id)?;
 
     // Skip synthetic built-in spans.
-    if is_synthetic_span(definition.span.line, definition.span.start, definition.span.end) {
+    if is_synthetic_span(
+        definition.span.line,
+        definition.span.start,
+        definition.span.end,
+    ) {
         return None;
     }
 

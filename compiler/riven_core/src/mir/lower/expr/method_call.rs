@@ -236,8 +236,8 @@ impl<'a> Lowerer<'a> {
                     let is_module_nested_class = base_type.contains('.');
                     if is_module_nested_class
                         || matches!(
-                        base_type,
-                        "Vec"
+                            base_type,
+                            "Vec"
                             | "Array"
                             | "Hash"
                             | "HashMap"
@@ -286,7 +286,8 @@ impl<'a> Lowerer<'a> {
                             // usage.
                             | "BufReader"
                             | "BufWriter"
-                    ) {
+                        )
+                    {
                         let obj = self.new_temp(expr.ty.clone());
                         // ruby-naming.spec.md §3.11 renames stdlib types
                         // (`Vec` → `Array`, `HashMap` → `Map`, `HashSet` →

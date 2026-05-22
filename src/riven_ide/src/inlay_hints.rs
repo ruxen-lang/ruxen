@@ -44,13 +44,8 @@ impl Default for InlayHintConfig {
 }
 
 /// Compute inlay hints for the program, filtered to the given range.
-pub fn inlay_hints(
-    result: &AnalysisResult,
-    range: Range,
-    cfg: &InlayHintConfig,
-) -> Vec<InlayHint> {
-    let (Some(program), Some(symbols)) = (result.program.as_ref(), result.symbols.as_ref())
-    else {
+pub fn inlay_hints(result: &AnalysisResult, range: Range, cfg: &InlayHintConfig) -> Vec<InlayHint> {
+    let (Some(program), Some(symbols)) = (result.program.as_ref(), result.symbols.as_ref()) else {
         return Vec::new();
     };
 
@@ -245,9 +240,8 @@ fn walk_expr(ctx: &Ctx<'_>, expr: &HirExpr, out: &mut Vec<InlayHint>) {
                 // `TypeContext`, not back on the HIR field). Fall back
                 // to resolving by `(object.ty, method_name)` against the
                 // symbol table when the direct lookup fails.
-                let sig = sig_of(ctx.symbols, *method).or_else(|| {
-                    resolve_method_via_receiver(ctx.symbols, &object.ty, method_name)
-                });
+                let sig = sig_of(ctx.symbols, *method)
+                    .or_else(|| resolve_method_via_receiver(ctx.symbols, &object.ty, method_name));
                 if let Some(sig) = sig {
                     emit_param_hints(ctx, sig, args, out);
                 }
@@ -428,12 +422,7 @@ fn emit_type_hint(
     });
 }
 
-fn emit_param_hints(
-    ctx: &Ctx<'_>,
-    sig: &FnSignature,
-    args: &[HirExpr],
-    out: &mut Vec<InlayHint>,
-) {
+fn emit_param_hints(ctx: &Ctx<'_>, sig: &FnSignature, args: &[HirExpr], out: &mut Vec<InlayHint>) {
     // Zip param-by-param. The signature may carry an implicit `self`
     // for methods — `ParamInfo` only covers the explicit params, so the
     // zip naturally lines up. Skip variadic tails we don't know about.

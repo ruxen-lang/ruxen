@@ -14,8 +14,7 @@ fn load(stem: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/folding")
         .join(format!("{}.rvn", stem));
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
 }
 
 fn ranges_of(stem: &str) -> Vec<FoldingRange> {
@@ -26,9 +25,7 @@ fn ranges_of(stem: &str) -> Vec<FoldingRange> {
 
 fn has_region(ranges: &[FoldingRange], start: u32, end: u32) -> bool {
     ranges.iter().any(|r| {
-        r.start_line == start
-            && r.end_line == end
-            && r.kind == Some(FoldingRangeKind::Region)
+        r.start_line == start && r.end_line == end && r.kind == Some(FoldingRangeKind::Region)
     })
 }
 

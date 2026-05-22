@@ -70,13 +70,18 @@ fn main() {
     // definition" errors because the archive ends up in the link
     // twice.
     let mut build = cc::Build::new();
-    build
-        .opt_level(2)
-        .warnings(true)
-        .cargo_metadata(false);
+    build.opt_level(2).warnings(true).cargo_metadata(false);
     for src in &runtime_sources {
         build.file(src);
     }
+    // The future runtime's scheduler.c forward-declares
+    // `Future_dynamic_poll` — the symbol Riven's AOT Cranelift backend
+    // synthesises for any class that opts into `dispatch runtime` (see
+    // `synthesize_dynamic_dispatch_helpers`). The REPL doesn't go
+    // through that codegen path, so include a weak stub in the
+    // archive so the link succeeds. The stub is overridden whenever a
+    // real definition lands at link time.
+    build.file(PathBuf::from(&crate_dir).join("runtime_stubs.c"));
     build.compile("rivenrt");
 
     println!("cargo:rustc-link-search=native={out_dir}");

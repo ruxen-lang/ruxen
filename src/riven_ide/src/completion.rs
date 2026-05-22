@@ -311,11 +311,7 @@ fn after_dot_completions(
 /// resolved against the same symbol table the rest of the analysis
 /// used — so `(foo)` parens, `obj.field.field`, method-call chains,
 /// etc. all resolve through the regular type-inference path.
-fn receiver_type_ending_at(
-    program: &HirProgram,
-    symbols: &SymbolTable,
-    end: usize,
-) -> Option<Ty> {
+fn receiver_type_ending_at(program: &HirProgram, symbols: &SymbolTable, end: usize) -> Option<Ty> {
     let mut finder = ReceiverFinder {
         target: end,
         best: None,
@@ -487,9 +483,9 @@ fn detail_for(def: &Definition, symbols: &SymbolTable) -> Option<String> {
         DefKind::Newtype { inner } => Some(format!("newtype {}({})", def.name, inner)),
         DefKind::Module { .. } => Some(format!("module {}", def.name)),
         DefKind::Field { ty, .. } => Some(format!("{}: {}", def.name, ty)),
-        DefKind::EnumVariant { parent, .. } => {
-            symbols.get(*parent).map(|p| format!("{}.{}", p.name, def.name))
-        }
+        DefKind::EnumVariant { parent, .. } => symbols
+            .get(*parent)
+            .map(|p| format!("{}.{}", p.name, def.name)),
         DefKind::TypeParam { .. } => Some(format!("typeparam {}", def.name)),
     }
 }
@@ -536,7 +532,10 @@ fn sort_text(name: &str, prefix: &str) -> String {
     }
     if name.starts_with(prefix) {
         format!("a{}", name)
-    } else if name.to_ascii_lowercase().starts_with(&prefix.to_ascii_lowercase()) {
+    } else if name
+        .to_ascii_lowercase()
+        .starts_with(&prefix.to_ascii_lowercase())
+    {
         format!("b{}", name)
     } else {
         format!("m{}", name)
@@ -546,9 +545,7 @@ fn sort_text(name: &str, prefix: &str) -> String {
 // ─── Built-in keywords (spec §5.4 lowest-rank fallback) ────────────
 
 const KEYWORDS: &[&str] = &[
-    "def", "class", "struct", "enum", "mixin", "module", "lib",
-    "if", "elsif", "else", "end", "do", "loop", "while", "for",
-    "in", "return", "break", "continue", "match", "let", "var",
-    "include", "use", "as", "async", "await", "self", "Self",
-    "true", "false", "and", "or", "not", "yield",
+    "def", "class", "struct", "enum", "mixin", "module", "lib", "if", "elsif", "else", "end", "do",
+    "loop", "while", "for", "in", "return", "break", "continue", "match", "let", "var", "include",
+    "use", "as", "async", "await", "self", "Self", "true", "false", "and", "or", "not", "yield",
 ];

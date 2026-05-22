@@ -16,8 +16,7 @@ fn load(stem: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/use_index")
         .join(format!("{}.rvn", stem));
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
 }
 
 /// Run `analyze` and return the populated index, panicking with a
@@ -61,8 +60,6 @@ fn def_by_name(result: &AnalysisResult, name: &str) -> DefId {
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────
-
-
 
 #[test]
 fn local_variable_collects_decl_plus_three_uses() {

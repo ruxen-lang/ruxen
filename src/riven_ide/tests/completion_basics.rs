@@ -20,12 +20,14 @@ fn load(stem: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/completion")
         .join(format!("{}.rvn", stem));
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
 }
 
 /// Run analysis + completion at a cursor offset, returning the items.
-fn complete_at(source: &str, byte_offset: usize) -> (AnalysisResult, Vec<lsp_types::CompletionItem>) {
+fn complete_at(
+    source: &str,
+    byte_offset: usize,
+) -> (AnalysisResult, Vec<lsp_types::CompletionItem>) {
     let result = analyze(source);
     let position = result.line_index.position_of(byte_offset);
     let items = completions(&result, position, None);
@@ -58,7 +60,11 @@ fn word_start_offers_top_level_function_names() {
     let (_, items) = complete_at(&source, cursor);
     let names = labels(&items);
     assert!(names.contains(&"greet"), "expected `greet` in {:?}", names);
-    assert!(names.contains(&"goodbye"), "expected `goodbye` in {:?}", names);
+    assert!(
+        names.contains(&"goodbye"),
+        "expected `goodbye` in {:?}",
+        names
+    );
 }
 
 #[test]

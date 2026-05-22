@@ -175,7 +175,12 @@ impl Resolver {
         }
     }
 
-    pub(super) fn register_pattern_bindings(&mut self, pattern: &ast::Pattern, mutable: bool, span: &Span) {
+    pub(super) fn register_pattern_bindings(
+        &mut self,
+        pattern: &ast::Pattern,
+        mutable: bool,
+        span: &Span,
+    ) {
         match pattern {
             ast::Pattern::Identifier { name, .. } => {
                 // Already handled in resolve_pattern_with_type for let-bindings,
@@ -231,5 +236,4 @@ impl Resolver {
     }
 
     // ─── Type Expression Resolution ─────────────────────────────────
-
 }

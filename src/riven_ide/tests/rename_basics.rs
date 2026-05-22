@@ -17,8 +17,7 @@ fn load(stem: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/rename")
         .join(format!("{}.rvn", stem));
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
 }
 
 fn fake_uri() -> Url {
@@ -66,14 +65,18 @@ fn prepare_rename_on_var_ref_returns_identifier_range() {
     // Cursor inside the second `tally_anchor_kzx` (the first ref on
     // the `let a = …` line).
     let pos = pos_inside(&src, "tally_anchor_kzx", 1);
-    let range = prepare_rename(&result, pos)
-        .expect("prepare_rename should return Some range on a VarRef");
+    let range =
+        prepare_rename(&result, pos).expect("prepare_rename should return Some range on a VarRef");
     // Range should be a single token width — the identifier is 16 chars
     // and entirely on line 2 (0-indexed).
-    assert_eq!(range.start.line, range.end.line, "range spans a single line");
+    assert_eq!(
+        range.start.line, range.end.line,
+        "range spans a single line"
+    );
     let width = range.end.character - range.start.character;
     assert_eq!(
-        width, "tally_anchor_kzx".len() as u32,
+        width,
+        "tally_anchor_kzx".len() as u32,
         "range width should equal identifier length, got {}",
         width
     );
@@ -89,7 +92,8 @@ fn prepare_rename_on_def_name_returns_identifier_range() {
         .expect("prepare_rename should return Some range on a def name");
     let width = range.end.character - range.start.character;
     assert_eq!(
-        width, "helper_anchor_kzx".len() as u32,
+        width,
+        "helper_anchor_kzx".len() as u32,
         "range width should equal def name length"
     );
 }
@@ -118,8 +122,8 @@ fn rename_local_variable_produces_text_edit_per_use() {
     let result = analyze(&src);
     // Cursor on the second `tally_anchor_kzx` (a use in `let a = …`)
     let pos = pos_inside(&src, "tally_anchor_kzx", 1);
-    let edit = rename(&result, &fake_uri(), pos, "renamed_kzx")
-        .expect("rename should succeed on a local");
+    let edit =
+        rename(&result, &fake_uri(), pos, "renamed_kzx").expect("rename should succeed on a local");
     let changes = edit.changes.expect("WorkspaceEdit must have `changes`");
     let edits = changes.get(&fake_uri()).expect("edits for the fixture URI");
     // 1 decl + 3 use sites = 4 textual occurrences. Each TextEdit

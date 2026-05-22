@@ -17,19 +17,26 @@ fn load(stem: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/format")
         .join(format!("{}.rvn", stem));
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
 }
 
 /// Apply a single full-document `TextEdit` to `source` and return the
 /// resulting string. Panics if the edit's start isn't (0,0) — the
 /// whole-document contract is what this LSP capability promises.
 fn apply_whole_document_edit(source: &str, edits: &[TextEdit]) -> String {
-    assert_eq!(edits.len(), 1, "expected exactly one edit, got {}", edits.len());
+    assert_eq!(
+        edits.len(),
+        1,
+        "expected exactly one edit, got {}",
+        edits.len()
+    );
     let edit = &edits[0];
     assert_eq!(
         edit.range.start,
-        Position { line: 0, character: 0 },
+        Position {
+            line: 0,
+            character: 0
+        },
         "edit must start at (0,0): {:?}",
         edit.range
     );
@@ -61,7 +68,13 @@ fn misformatted_source_emits_one_whole_document_edit() {
     assert_eq!(edits.len(), 1, "expected a single whole-document edit");
 
     let edit = &edits[0];
-    assert_eq!(edit.range.start, Position { line: 0, character: 0 });
+    assert_eq!(
+        edit.range.start,
+        Position {
+            line: 0,
+            character: 0
+        }
+    );
 
     // The formatter compresses 3+ blank lines to 2, so the new text
     // must differ from the original AND must itself be already
@@ -93,7 +106,9 @@ fn trailing_whitespace_is_stripped() {
     assert_eq!(edits.len(), 1);
     let formatted = apply_whole_document_edit(&source, &edits);
     assert!(
-        formatted.lines().all(|l| !l.ends_with(' ') && !l.ends_with('\t')),
+        formatted
+            .lines()
+            .all(|l| !l.ends_with(' ') && !l.ends_with('\t')),
         "formatted output should have no trailing whitespace:\n{:?}",
         formatted
     );
@@ -171,8 +186,14 @@ fn range_formatting_on_a_single_block_replaces_whole_document() {
     // Pick a range that covers only the inner function's body —
     // realistic IDE "format this selection" gesture.
     let range = Range {
-        start: Position { line: 1, character: 0 },
-        end: Position { line: 4, character: 3 },
+        start: Position {
+            line: 1,
+            character: 0,
+        },
+        end: Position {
+            line: 4,
+            character: 3,
+        },
     };
     let edits = format_range(&source, range).expect("parses fine");
 
@@ -183,7 +204,13 @@ fn range_formatting_on_a_single_block_replaces_whole_document() {
     match edits.as_slice() {
         [] => {}
         [edit] => {
-            assert_eq!(edit.range.start, Position { line: 0, character: 0 });
+            assert_eq!(
+                edit.range.start,
+                Position {
+                    line: 0,
+                    character: 0
+                }
+            );
         }
         more => panic!("expected 0 or 1 edits, got {}: {:?}", more.len(), more),
     }
@@ -193,8 +220,14 @@ fn range_formatting_on_a_single_block_replaces_whole_document() {
 fn range_formatting_propagates_parse_error_as_none() {
     let source = load("parse_error");
     let range = Range {
-        start: Position { line: 0, character: 0 },
-        end: Position { line: 2, character: 0 },
+        start: Position {
+            line: 0,
+            character: 0,
+        },
+        end: Position {
+            line: 2,
+            character: 0,
+        },
     };
     assert!(format_range(&source, range).is_none());
 }

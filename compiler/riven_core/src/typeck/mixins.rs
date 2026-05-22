@@ -13,9 +13,9 @@
 
 use std::collections::HashMap;
 
+use crate::hir::nodes::DefId;
 use crate::hir::nodes::*;
 use crate::hir::types::{MixinRef, Ty};
-use crate::hir::nodes::DefId;
 use crate::resolve::symbols::{DefKind, FnSignature, MixinInfo, SymbolTable};
 
 /// Result of checking whether a type satisfies a trait.
@@ -331,9 +331,7 @@ impl MixinResolver {
             if methods.is_empty() {
                 for m_def in symbols.iter() {
                     if let DefKind::Method { parent, signature } = &m_def.kind {
-                        if *parent == def_id
-                            && !methods.iter().any(|(n, _)| n == &m_def.name)
-                        {
+                        if *parent == def_id && !methods.iter().any(|(n, _)| n == &m_def.name) {
                             methods.push((m_def.name.clone(), signature.clone()));
                         }
                     }

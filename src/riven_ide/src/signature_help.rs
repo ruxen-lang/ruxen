@@ -24,9 +24,7 @@ use lsp_types::{
     Documentation, ParameterInformation, ParameterLabel, Position, SignatureHelp,
     SignatureInformation,
 };
-use riven_core::hir::nodes::{
-    DefId, HirExpr, HirExprKind, HirItem, HirProgram, HirStatement,
-};
+use riven_core::hir::nodes::{DefId, HirExpr, HirExprKind, HirItem, HirProgram, HirStatement};
 use riven_core::resolve::symbols::{DefKind, FnSignature, SymbolTable};
 
 use crate::analysis::AnalysisResult;
@@ -467,8 +465,7 @@ impl CallFinder {
             }
             HirExprKind::Interpolation { parts } => {
                 for part in parts {
-                    if let riven_core::hir::nodes::HirInterpolationPart::Expr { expr: e, .. } =
-                        part
+                    if let riven_core::hir::nodes::HirInterpolationPart::Expr { expr: e, .. } = part
                     {
                         self.visit_expr(e);
                     }

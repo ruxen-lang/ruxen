@@ -169,12 +169,7 @@ fn class_with_layout_c_parses_and_resolves() {
     let errors: Vec<_> = result
         .diagnostics
         .iter()
-        .filter(|d| {
-            matches!(
-                d.level,
-                riven_core::diagnostics::DiagnosticLevel::Error
-            )
-        })
+        .filter(|d| matches!(d.level, riven_core::diagnostics::DiagnosticLevel::Error))
         .collect();
     assert!(
         errors.is_empty(),

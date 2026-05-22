@@ -13,8 +13,7 @@ fn load(stem: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/inlay_hints")
         .join(format!("{}.rvn", stem));
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
 }
 
 fn full_range() -> Range {
@@ -58,11 +57,7 @@ fn unannotated_let_gets_a_type_hint() {
         "type hint label should start with ': ', got {:?}",
         lbl
     );
-    assert!(
-        lbl.contains("Int"),
-        "expected Int in hint, got {:?}",
-        lbl
-    );
+    assert!(lbl.contains("Int"), "expected Int in hint, got {:?}", lbl);
 }
 
 #[test]
@@ -195,9 +190,7 @@ fn show_type_hints_false_suppresses_type_hints() {
     };
     let hints = inlay_hints(&result, full_range(), &cfg);
     assert!(
-        hints
-            .iter()
-            .all(|h| h.kind != Some(InlayHintKind::TYPE)),
+        hints.iter().all(|h| h.kind != Some(InlayHintKind::TYPE)),
         "show_type_hints=false should suppress type hints, got {:?}",
         hints.iter().map(label).collect::<Vec<_>>()
     );
@@ -220,4 +213,3 @@ fn show_param_hints_false_suppresses_param_hints() {
         hints.iter().map(label).collect::<Vec<_>>()
     );
 }
-

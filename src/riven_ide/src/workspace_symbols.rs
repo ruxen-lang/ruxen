@@ -17,9 +17,7 @@ use riven_core::hir::nodes::{
 use riven_core::lexer::token::Span;
 
 use crate::analysis::AnalysisResult;
-use crate::document_symbols::{
-    is_synthetic_name, item_belongs_to_source, span_belongs_to_source,
-};
+use crate::document_symbols::{is_synthetic_name, item_belongs_to_source, span_belongs_to_source};
 use crate::line_index::LineIndex;
 
 /// Search every document in `results` for symbols whose name contains

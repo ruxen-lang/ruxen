@@ -85,8 +85,7 @@ pub fn type_check(program: &ast::Program) -> TypeCheckResult {
     // desugar path and codegen emits unresolved `Future_await` link
     // symbols. See `async_lowering::lower_async_defs_with_bootstrap`
     // and `project_riven_async_compiler_gaps.md` (#2).
-    let bootstrap_refs: Vec<&ast::Program> =
-        bootstrap_packages.iter().map(|(_, p)| p).collect();
+    let bootstrap_refs: Vec<&ast::Program> = bootstrap_packages.iter().map(|(_, p)| p).collect();
     crate::async_lowering::lower_async_defs_with_bootstrap(&mut lowered, &bootstrap_refs);
     let mut result = type_check_with_bootstrap_packages(&lowered, &bootstrap_packages);
     result.diagnostics.extend(bootstrap_diagnostics);
@@ -519,11 +518,8 @@ fn validate_runtime_dispatch_includes(
     // user-body methods (already in `class.methods`) plus any
     // `DefKind::Method` whose parent is this class's def_id (covers
     // lib-decl-registered methods, derive-synthesised methods, etc.).
-    let mut have: std::collections::HashSet<String> = class
-        .methods
-        .iter()
-        .map(|m| m.name.clone())
-        .collect();
+    let mut have: std::collections::HashSet<String> =
+        class.methods.iter().map(|m| m.name.clone()).collect();
     for def in symbols.iter() {
         if let DefKind::Method { parent, .. } = &def.kind {
             if *parent == class.def_id {

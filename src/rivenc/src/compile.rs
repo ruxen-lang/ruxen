@@ -73,8 +73,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
 
     let output_path = output_path.unwrap_or_else(|| path.replace(".rvn", ""));
 
-    let source = fs::read_to_string(path)
-        .map_err(|e| format!("Error reading '{}': {}", path, e))?;
+    let source =
+        fs::read_to_string(path).map_err(|e| format!("Error reading '{}': {}", path, e))?;
 
     // Emit modes short-circuit the cache: they don't produce a binary, so
     // caching them is meaningless and would add complexity. Run the

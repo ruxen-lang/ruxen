@@ -15,7 +15,11 @@ use super::symbols::*;
 use super::{ClosureCaptureContext, ResolveResult, Resolver};
 
 impl Resolver {
-    pub(super) fn resolve_func_def(&mut self, f: &ast::FuncDef, parent: Option<DefId>) -> HirFuncDef {
+    pub(super) fn resolve_func_def(
+        &mut self,
+        f: &ast::FuncDef,
+        parent: Option<DefId>,
+    ) -> HirFuncDef {
         let mut generic_params = self.resolve_generic_params(&f.generic_params);
         // Merge `where T: Bound, ...` predicates into the matching generic
         // parameter's bounds. Predicates whose left-hand side is not a
@@ -396,5 +400,4 @@ impl Resolver {
     }
 
     // ─── Expression Resolution ──────────────────────────────────────
-
 }

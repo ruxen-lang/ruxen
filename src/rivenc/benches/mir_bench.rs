@@ -28,7 +28,9 @@ fn bench_mir(c: &mut Criterion) {
     c.bench_function("mir_lower/508_command_status", |b| {
         b.iter(|| {
             let mut lowerer = Lowerer::new(black_box(&result.symbols));
-            lowerer.lower_program(black_box(&result.program)).expect("lower")
+            lowerer
+                .lower_program(black_box(&result.program))
+                .expect("lower")
         })
     });
 }

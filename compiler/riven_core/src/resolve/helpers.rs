@@ -50,7 +50,10 @@ impl Resolver {
             .collect()
     }
 
-    pub(super) fn resolve_generic_params(&mut self, gp: &Option<ast::GenericParams>) -> Vec<HirGenericParam> {
+    pub(super) fn resolve_generic_params(
+        &mut self,
+        gp: &Option<ast::GenericParams>,
+    ) -> Vec<HirGenericParam> {
         // Stage 3 of const generics: first pass registers every
         // `GenericParam::Const` as a `DefKind::ConstParam` in the
         // symbol table so future passes (S4 HIR ConstExpr, S5
@@ -192,7 +195,10 @@ impl Resolver {
         }
     }
 
-    pub(super) fn int_literal_type(&self, suffix: Option<crate::lexer::token::NumericSuffix>) -> Ty {
+    pub(super) fn int_literal_type(
+        &self,
+        suffix: Option<crate::lexer::token::NumericSuffix>,
+    ) -> Ty {
         use crate::lexer::token::NumericSuffix;
         match suffix {
             None => Ty::Int,
@@ -212,7 +218,10 @@ impl Resolver {
         }
     }
 
-    pub(super) fn float_literal_type(&self, suffix: Option<crate::lexer::token::NumericSuffix>) -> Ty {
+    pub(super) fn float_literal_type(
+        &self,
+        suffix: Option<crate::lexer::token::NumericSuffix>,
+    ) -> Ty {
         use crate::lexer::token::NumericSuffix;
         match suffix {
             None => Ty::Float,
@@ -340,7 +349,11 @@ impl Resolver {
     /// instantiation eval surfacing pass that's still pending).
     /// `Err(Malformed)` (parser recovery) is also skipped — the
     /// parser already emitted its own diagnostic upstream.
-    pub(super) fn check_const_expr_eval_errors(&mut self, expr: &crate::hir::types::ConstExpr, span: &Span) {
+    pub(super) fn check_const_expr_eval_errors(
+        &mut self,
+        expr: &crate::hir::types::ConstExpr,
+        span: &Span,
+    ) {
         use crate::hir::types::ConstEvalError;
         let bindings = std::collections::HashMap::new();
         match expr.eval(&bindings) {
@@ -375,7 +388,11 @@ impl Resolver {
     /// resolve-site span — the first reachable `Error` triggers
     /// it; nested noise stays quiet so the user sees the source
     /// location, not a diagnostic for every leaf.
-    pub(super) fn check_const_expr_for_non_const(&mut self, expr: &crate::hir::types::ConstExpr, span: &Span) {
+    pub(super) fn check_const_expr_for_non_const(
+        &mut self,
+        expr: &crate::hir::types::ConstExpr,
+        span: &Span,
+    ) {
         if const_helpers::contains_const_expr_error(expr) {
             self.diagnostics.push(Diagnostic::error_with_code(
                 "expression is not a valid const expression \

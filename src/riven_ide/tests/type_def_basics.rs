@@ -15,8 +15,7 @@ fn load(stem: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/type_def")
         .join(format!("{}.rvn", stem));
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
 }
 
 /// Compute the cursor byte offset at the first occurrence of `anchor`.
@@ -27,10 +26,7 @@ fn cursor_at(source: &str, anchor: &str, within: usize) -> usize {
     start + within
 }
 
-fn type_def_at(
-    source: &str,
-    byte_offset: usize,
-) -> (AnalysisResult, Option<lsp_types::Location>) {
+fn type_def_at(source: &str, byte_offset: usize) -> (AnalysisResult, Option<lsp_types::Location>) {
     let result = analyze(source);
     let position = result.line_index.position_of(byte_offset);
     let loc = type_definition(&result, position);

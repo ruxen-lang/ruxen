@@ -96,7 +96,9 @@ fn mixin_dispatch_runtime_modifier_parses() {
     assert!(
         errs.is_empty(),
         "expected no diagnostics, got: {:?}",
-        errs.iter().map(|d| (&d.code, &d.message)).collect::<Vec<_>>()
+        errs.iter()
+            .map(|d| (&d.code, &d.message))
+            .collect::<Vec<_>>()
     );
 }
 
@@ -128,7 +130,9 @@ fn dyn_mixin_param_type_parses_and_typechecks() {
     assert!(
         errs.is_empty(),
         "expected typecheck to accept `&Drawable` / `&var Drawable`, got: {:?}",
-        errs.iter().map(|d| (&d.code, &d.message)).collect::<Vec<_>>()
+        errs.iter()
+            .map(|d| (&d.code, &d.message))
+            .collect::<Vec<_>>()
     );
 }
 
@@ -143,10 +147,13 @@ fn amp_mixin_to_static_mixin_emits_e1118() {
         .filter(|d| d.code.as_deref() == Some("E1118"))
         .count();
     assert_eq!(
-        count, 1,
+        count,
+        1,
         "expected exactly one E1118 for `&Drawable` against a statically-dispatched mixin, \
          got: {:?}",
-        errs.iter().map(|d| (&d.code, &d.message)).collect::<Vec<_>>()
+        errs.iter()
+            .map(|d| (&d.code, &d.message))
+            .collect::<Vec<_>>()
     );
 }
 
@@ -161,9 +168,12 @@ fn runtime_dispatch_mixin_missing_method_emits_e1117() {
         .filter(|d| d.code.as_deref() == Some("E1117"))
         .count();
     assert_eq!(
-        count, 1,
+        count,
+        1,
         "expected exactly one E1117 for missing `draw` on Triangle, got: {:?}",
-        errs.iter().map(|d| (&d.code, &d.message)).collect::<Vec<_>>()
+        errs.iter()
+            .map(|d| (&d.code, &d.message))
+            .collect::<Vec<_>>()
     );
     // And the message should name the missing method so the user can
     // act on it.
@@ -224,7 +234,9 @@ fn class_includes_runtime_mixin_is_tracked_on_classinfo() {
         .expect("class `Circle` should be registered");
 
     assert!(
-        circle_info.runtime_dispatch_includes.contains(&sized_def_id),
+        circle_info
+            .runtime_dispatch_includes
+            .contains(&sized_def_id),
         "Circle.runtime_dispatch_includes should contain Sized's DefId; got {:?}",
         circle_info.runtime_dispatch_includes
     );
@@ -292,7 +304,12 @@ fn lower_fixture(name: &str) -> riven_core::mir::nodes::MirProgram {
         .iter()
         .filter(|d| d.level == DiagnosticLevel::Error)
         .collect();
-    assert!(errs.is_empty(), "fixture {} typecheck errors: {:?}", name, errs);
+    assert!(
+        errs.is_empty(),
+        "fixture {} typecheck errors: {:?}",
+        name,
+        errs
+    );
     let mut lowerer = riven_core::mir::lower::Lowerer::new(&result.symbols);
     lowerer
         .lower_program(&result.program)
@@ -402,7 +419,10 @@ fn static_mixin_class_produces_no_vtable_or_classinfo() {
     assert!(
         bob_class_infos.is_empty(),
         "static-only-mixin class Bob should emit no class_info, got: {:?}",
-        bob_class_infos.iter().map(|c| c.symbol()).collect::<Vec<_>>()
+        bob_class_infos
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<Vec<_>>()
     );
 }
 
@@ -698,7 +718,9 @@ fn dyn_mixin_call_lowers_to_dynamic_helper() {
         calls
     );
     assert!(
-        !calls.iter().any(|c| c == "Circle_size" || c == "Square_size"),
+        !calls
+            .iter()
+            .any(|c| c == "Circle_size" || c == "Square_size"),
         "report must NOT statically dispatch on a concrete class — the receiver \
          is `&Sized`, calls: {:?}",
         calls

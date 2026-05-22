@@ -783,10 +783,8 @@ fn compute_dealloc_safe_locals(func: &MirFunction) -> std::collections::HashSet<
                     // (`compiler/riven_core/tests/task_spawn_ownership.rs`)
                     // and any analogous fixtures so the move semantics
                     // are exercised end-to-end.
-                    let is_move_by_ffi_callee = matches!(
-                        callee.as_str(),
-                        "riven_executor_spawn" | "Task_spawn_raw"
-                    );
+                    let is_move_by_ffi_callee =
+                        matches!(callee.as_str(), "riven_executor_spawn" | "Task_spawn_raw");
                     let is_runtime_borrow_helper = !is_runtime_consume_helper
                         && !is_move_by_ffi_callee
                         && (callee.starts_with("riven_")

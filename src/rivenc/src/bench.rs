@@ -20,9 +20,7 @@ use riven_core::parser::Parser;
 
 pub fn run(args: &[String]) -> Result<(), String> {
     if args.is_empty() {
-        return Err(
-            "Usage: bench <file.rvn> [--filter <pat>] [--iter-hint <N>]".into(),
-        );
+        return Err("Usage: bench <file.rvn> [--filter <pat>] [--iter-hint <N>]".into());
     }
 
     let mut path: Option<String> = None;
@@ -67,8 +65,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
         return Err(format!("bench: expected a .rvn file, got: {}", path));
     }
 
-    let source = fs::read_to_string(&path)
-        .map_err(|e| format!("bench: cannot read {}: {}", path, e))?;
+    let source =
+        fs::read_to_string(&path).map_err(|e| format!("bench: cannot read {}: {}", path, e))?;
 
     // Parse just to collect bench-fn names. Diagnostics here are pure
     // syntax / item-shape — full typeck happens on the synthesised
@@ -139,9 +137,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     if !synth.ends_with('\n') {
         synth.push('\n');
     }
-    synth.push_str(
-        "\n# ── rivenc bench: synthesised runner main ────────────────────\n",
-    );
+    synth.push_str("\n# ── rivenc bench: synthesised runner main ────────────────────\n");
     synth.push_str("def main\n");
     synth.push_str(&format!("  var bencher = Bencher.new({})\n", iter_hint));
     for name in &bench_names {
@@ -219,8 +215,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
         }
     };
 
-    let output = output
-        .map_err(|e| format!("bench: failed to run {}: {}", bin_path.display(), e))?;
+    let output =
+        output.map_err(|e| format!("bench: failed to run {}: {}", bin_path.display(), e))?;
     if !output.stdout.is_empty() {
         print!("{}", String::from_utf8_lossy(&output.stdout));
     }

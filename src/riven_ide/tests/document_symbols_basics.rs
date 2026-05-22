@@ -12,8 +12,7 @@ fn load(stem: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/document_symbols")
         .join(format!("{}.rvn", stem));
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
 }
 
 #[test]
@@ -80,7 +79,12 @@ fn enum_surfaces_with_variants_as_enum_members() {
     assert!(names.contains(&"Green"), "variants: {:?}", names);
     assert!(names.contains(&"Blue"), "variants: {:?}", names);
     for c in children {
-        assert_eq!(c.kind, SymbolKind::ENUM_MEMBER, "{} should be ENUM_MEMBER", c.name);
+        assert_eq!(
+            c.kind,
+            SymbolKind::ENUM_MEMBER,
+            "{} should be ENUM_MEMBER",
+            c.name
+        );
     }
 }
 

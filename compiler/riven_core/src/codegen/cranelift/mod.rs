@@ -167,9 +167,7 @@ impl CodeGen {
             // `Future_dynamic_poll` per queued task. Without
             // exported linkage the C side fails to link with an
             // "undefined symbol" error at the host linker.
-            let linkage = if func.name == "main"
-                || is_dynamic_dispatch_helper(&func.name)
-            {
+            let linkage = if func.name == "main" || is_dynamic_dispatch_helper(&func.name) {
                 Linkage::Export
             } else {
                 Linkage::Local
@@ -226,7 +224,12 @@ impl CodeGen {
             let sym = vt.symbol();
             let data_id = self
                 .module
-                .declare_data(&sym, Linkage::Local, /*writable*/ false, /*tls*/ false)
+                .declare_data(
+                    &sym,
+                    Linkage::Local,
+                    /*writable*/ false,
+                    /*tls*/ false,
+                )
                 .map_err(|e| format!("declare vtable data '{}': {}", sym, e))?;
             self.vtable_data.insert(sym, data_id);
         }
@@ -234,7 +237,12 @@ impl CodeGen {
             let sym = ci.symbol();
             let data_id = self
                 .module
-                .declare_data(&sym, Linkage::Local, /*writable*/ false, /*tls*/ false)
+                .declare_data(
+                    &sym,
+                    Linkage::Local,
+                    /*writable*/ false,
+                    /*tls*/ false,
+                )
                 .map_err(|e| format!("declare class_info data '{}': {}", sym, e))?;
             self.vtable_data.insert(sym, data_id);
         }
@@ -505,7 +513,12 @@ impl CodeGen {
 /// stricter than `contains("_dynamic_")` — minimises the chance a
 /// user-named function happens to match.
 pub(crate) fn is_dynamic_dispatch_helper(name: &str) -> bool {
-    if !name.chars().next().map(|c| c.is_ascii_uppercase()).unwrap_or(false) {
+    if !name
+        .chars()
+        .next()
+        .map(|c| c.is_ascii_uppercase())
+        .unwrap_or(false)
+    {
         return false;
     }
     let Some(idx) = name.find("_dynamic_") else {

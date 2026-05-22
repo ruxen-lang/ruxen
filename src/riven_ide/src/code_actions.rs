@@ -85,11 +85,7 @@ fn pos_lt(a: Position, b: Position) -> bool {
 
 // ─── E1006 — let → var ───────────────────────────────────────────────
 
-fn quick_fix_e1006(
-    result: &AnalysisResult,
-    diag: &LspDiagnostic,
-    uri: &Url,
-) -> Option<CodeAction> {
+fn quick_fix_e1006(result: &AnalysisResult, diag: &LspDiagnostic, uri: &Url) -> Option<CodeAction> {
     // The diagnostic is anchored at the assignment LHS (e.g. `x` in
     // `x = 43`). We extract the variable name from the message —
     // the LSP-side message has the borrow-error title prepended
@@ -202,11 +198,7 @@ fn is_word_boundary(s: &str, start: usize, len: usize) -> bool {
 
 // ─── E1110 — prepend `async ` to enclosing def ───────────────────────
 
-fn quick_fix_e1110(
-    result: &AnalysisResult,
-    diag: &LspDiagnostic,
-    uri: &Url,
-) -> Option<CodeAction> {
+fn quick_fix_e1110(result: &AnalysisResult, diag: &LspDiagnostic, uri: &Url) -> Option<CodeAction> {
     let await_byte = result.line_index.byte_offset_of(diag.range.start);
     let (def_kw_start, fn_name) = find_enclosing_def(&result.source, await_byte)?;
 
@@ -220,7 +212,10 @@ fn quick_fix_e1110(
     };
 
     Some(make_action(
-        format!("Add \u{2018}async\u{2019} to \u{2018}def {}\u{2019}", fn_name),
+        format!(
+            "Add \u{2018}async\u{2019} to \u{2018}def {}\u{2019}",
+            fn_name
+        ),
         edit,
         diag.clone(),
         uri,

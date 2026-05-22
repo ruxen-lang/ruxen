@@ -106,9 +106,7 @@ fn poll_enum_registered_with_ready_pending_variants() {
     );
 
     // Both variants must be reachable as DefIds and tagged correctly.
-    let ready = symbols
-        .get(info.variants[0])
-        .expect("Ready DefId resolves");
+    let ready = symbols.get(info.variants[0]).expect("Ready DefId resolves");
     assert_eq!(ready.name, "Ready");
     let pending = symbols
         .get(info.variants[1])
@@ -134,8 +132,8 @@ fn poll_tag_layout_stability() {
         .parent()
         .unwrap()
         .join("library/std/future/src/lib.rvn");
-    let source = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {}", path.display(), e));
+    let source =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e));
 
     // Scan the `enum Poll[T] ... end` block and collect variant names
     // in declaration order. Mirrors `io_error_tag_stability.rs`.

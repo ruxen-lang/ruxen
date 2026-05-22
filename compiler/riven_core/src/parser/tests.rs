@@ -978,17 +978,12 @@ end";
     /// flag is recorded. Sub-phase 2 lifts the return to `some Future`.
     #[test]
     fn async_def_parses_subphase1_no_lowering() {
-        let program = parse(
-            "async def fetch(url: Int) -> Int\n  url\nend",
-        );
+        let program = parse("async def fetch(url: Int) -> Int\n  url\nend");
         let func = match &program.items[0] {
             TopLevelItem::Function(f) => f,
             other => panic!("expected function, got {:?}", other),
         };
-        assert!(
-            func.is_async,
-            "is_async flag must be set on the FuncDef"
-        );
+        assert!(func.is_async, "is_async flag must be set on the FuncDef");
         assert_eq!(func.name, "fetch");
         // Sub-phase 1: return type is preserved AS WRITTEN; no
         // `some Future` lift, no state-machine return shape.

@@ -22,8 +22,7 @@ fn load(stem: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/code_actions")
         .join(format!("{}.rvn", stem));
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
 }
 
 fn fake_uri() -> Url {
@@ -85,7 +84,12 @@ fn e1006_quick_fix_replaces_let_with_var() {
     let ctx = ctx_from(&lsp_diags);
     let actions = code_actions(&result, whole_doc_range(&source), &ctx, &uri);
 
-    assert_eq!(actions.len(), 1, "expected one quick-fix, got {:?}", actions);
+    assert_eq!(
+        actions.len(),
+        1,
+        "expected one quick-fix, got {:?}",
+        actions
+    );
 
     let action = match &actions[0] {
         CodeActionOrCommand::CodeAction(a) => a,
@@ -299,11 +303,7 @@ fn multiple_diagnostics_yield_multiple_actions() {
     if has_e1110 {
         assert!(e1110_fixed, "expected an E1110 quick-fix in {:?}", actions);
     }
-    assert!(
-        actions.len() >= 1,
-        "expected ≥1 actions, got {:?}",
-        actions
-    );
+    assert!(actions.len() >= 1, "expected ≥1 actions, got {:?}", actions);
 }
 
 // ─── E1112 has no quick-fix ──────────────────────────────────────────

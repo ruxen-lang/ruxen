@@ -27,8 +27,7 @@ fn parse_fixture(name: &str) -> Program {
         workspace_root().display(),
         name
     );
-    let source =
-        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path, e));
+    let source = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path, e));
     let mut lexer = Lexer::new(&source);
     let tokens = lexer.tokenize().expect("lex");
     let mut parser = Parser::new(tokens);

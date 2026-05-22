@@ -15,8 +15,7 @@ fn load(stem: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/references")
         .join(format!("{}.rvn", stem));
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
 }
 
 /// Return the `Position` (line, character) of the start of the `skip`th
@@ -217,7 +216,11 @@ fn cursor_past_end_of_file_returns_empty() {
         character: 0,
     };
     let locs = references(&result, cursor, true);
-    assert!(locs.is_empty(), "expected empty Vec past EOF, got {:?}", locs);
+    assert!(
+        locs.is_empty(),
+        "expected empty Vec past EOF, got {:?}",
+        locs
+    );
 }
 
 #[test]

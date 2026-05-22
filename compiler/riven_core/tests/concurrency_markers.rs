@@ -48,7 +48,10 @@ fn assert_no_concurrency_diagnostic(name: &str) {
     assert!(
         concurrency.is_empty(),
         "expected {name} to be clean of Send/Sync diagnostics, got: {:?}",
-        concurrency.iter().map(|d| (&d.code, &d.message)).collect::<Vec<_>>()
+        concurrency
+            .iter()
+            .map(|d| (&d.code, &d.message))
+            .collect::<Vec<_>>()
     );
 }
 

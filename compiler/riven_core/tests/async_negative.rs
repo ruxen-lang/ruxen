@@ -86,9 +86,7 @@ fn await_outside_async_context_rejected_e1110() {
     let source = rvn("async_negative_await_outside_async");
     let errors = typeck_errors(&source);
     assert!(
-        errors
-            .iter()
-            .any(|d| d.code.as_deref() == Some("E1110")),
+        errors.iter().any(|d| d.code.as_deref() == Some("E1110")),
         "expected E1110 for `.await` outside async fn, got: {:?}",
         errors
             .iter()
@@ -130,9 +128,7 @@ fn block_on_inside_async_rejected_e1112() {
     let source = rvn("async_negative_block_on_inside_async");
     let errors = typeck_errors(&source);
     assert!(
-        errors
-            .iter()
-            .any(|d| d.code.as_deref() == Some("E1112")),
+        errors.iter().any(|d| d.code.as_deref() == Some("E1112")),
         "expected E1112 for block_on inside async fn, got: {:?}",
         errors
             .iter()

@@ -1089,6 +1089,22 @@ fn translate_instruction(
                 }
             }
         }
+
+        // `MirInst::DataAddr` materialises the address of a static data
+        // symbol (mixin vtables, class_info headers — see
+        // `synthesize_dynamic_dispatch_helpers` and the Pass 1.5
+        // `declare_mixin_vtable_data` in the AOT Cranelift backend).
+        // The REPL JIT compiles one expression at a time and doesn't
+        // model those statics, so any program reaching this arm tried
+        // to invoke runtime-dispatch mixin machinery in the REPL —
+        // surface it loudly rather than silently failing.
+        MirInst::DataAddr { data_sym, .. } => {
+            return Err(format!(
+                "REPL JIT cannot resolve data symbol `{}` — runtime-dispatch \
+                 mixins and class_info statics are AOT-only",
+                data_sym
+            ));
+        }
     }
 
     Ok(())

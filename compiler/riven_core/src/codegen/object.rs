@@ -61,9 +61,13 @@ pub fn compile_runtime(runtime_c_path: &Path, sanitize: bool) -> Result<PathBuf,
         cmd.arg("-O2");
     }
 
-    let status = cmd
-        .status()
-        .map_err(|e| format!("Failed to invoke cc for {}: {}", runtime_c_path.display(), e))?;
+    let status = cmd.status().map_err(|e| {
+        format!(
+            "Failed to invoke cc for {}: {}",
+            runtime_c_path.display(),
+            e
+        )
+    })?;
 
     if !status.success() {
         return Err(format!("Failed to compile {}", runtime_c_path.display()));

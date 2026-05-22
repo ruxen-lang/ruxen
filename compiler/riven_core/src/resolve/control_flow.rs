@@ -329,5 +329,4 @@ impl Resolver {
     }
 
     // ─── Pattern Resolution ─────────────────────────────────────────
-
 }

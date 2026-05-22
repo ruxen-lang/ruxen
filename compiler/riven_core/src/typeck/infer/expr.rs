@@ -10,7 +10,9 @@ use crate::resolve::symbols::DefKind;
 
 use super::super::coerce::auto_deref;
 use super::super::unify::unify;
-use super::helpers::{collect_break_types, container_elem_ty, infer_user_enum_generic_args, map_kv_tys};
+use super::helpers::{
+    collect_break_types, container_elem_ty, infer_user_enum_generic_args, map_kv_tys,
+};
 use super::InferenceEngine;
 
 impl<'a> InferenceEngine<'a> {

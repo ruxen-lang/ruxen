@@ -33,11 +33,11 @@
 
 use riven_core::diagnostics::{Diagnostic, DiagnosticLevel};
 use riven_core::hir::types::Ty;
-use riven_core::resolve::symbols::DefKind;
-use riven_core::typeck;
 use riven_core::lexer::Lexer;
 use riven_core::parser::ast::Program;
 use riven_core::parser::Parser;
+use riven_core::resolve::symbols::DefKind;
+use riven_core::typeck;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -87,9 +87,10 @@ def main\n  let f = FooBar.new(7)\n  let v = f.get\n  let d = foobar_double_plus
         .any(|d| d.name == "FooBar" && matches!(d.kind, DefKind::Class { .. }));
     assert!(has_class, "FooBar class missing from symbol table");
 
-    let has_module_fn = result.symbols.iter().any(|d| {
-        d.name == "foobar_runtime_double" && matches!(d.kind, DefKind::Function { .. })
-    });
+    let has_module_fn = result
+        .symbols
+        .iter()
+        .any(|d| d.name == "foobar_runtime_double" && matches!(d.kind, DefKind::Function { .. }));
     assert!(
         has_module_fn,
         "module-scope `foobar_runtime_double` lib decl missing from symbol table"
@@ -174,12 +175,7 @@ fn foobar_addition_touches_only_bootstrap_files() {
     // recent commits for the path. This is robust against rebase/squash
     // because the commit hash isn't hardcoded.
     let log_out = Command::new("git")
-        .args([
-            "log",
-            "--format=%H",
-            "--",
-            "library/std/foobar/Riven.toml",
-        ])
+        .args(["log", "--format=%H", "--", "library/std/foobar/Riven.toml"])
         .current_dir(&repo_root)
         .output()
         .expect("git log failed");

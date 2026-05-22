@@ -242,10 +242,7 @@ impl LanguageServer for RivenLsp {
         }))
     }
 
-    async fn completion(
-        &self,
-        params: CompletionParams,
-    ) -> Result<Option<CompletionResponse>> {
+    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
         let trigger = params
@@ -272,16 +269,19 @@ impl LanguageServer for RivenLsp {
     }
 
     // === wave1: agent-A signature_help ===
-    async fn signature_help(
-        &self,
-        params: SignatureHelpParams,
-    ) -> Result<Option<SignatureHelp>> {
+    async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
         let state = self.state.read().await;
-        let Some(doc) = state.documents.get(&uri) else { return Ok(None); };
-        let Some(analysis) = &doc.analysis else { return Ok(None); };
-        Ok(riven_ide::signature_help::signature_help(analysis, position))
+        let Some(doc) = state.documents.get(&uri) else {
+            return Ok(None);
+        };
+        let Some(analysis) = &doc.analysis else {
+            return Ok(None);
+        };
+        Ok(riven_ide::signature_help::signature_help(
+            analysis, position,
+        ))
     }
 
     // === wave1: agent-B document_symbols ===
@@ -291,10 +291,16 @@ impl LanguageServer for RivenLsp {
     ) -> Result<Option<DocumentSymbolResponse>> {
         let uri = params.text_document.uri;
         let state = self.state.read().await;
-        let Some(doc) = state.documents.get(&uri) else { return Ok(None); };
-        let Some(analysis) = &doc.analysis else { return Ok(None); };
+        let Some(doc) = state.documents.get(&uri) else {
+            return Ok(None);
+        };
+        let Some(analysis) = &doc.analysis else {
+            return Ok(None);
+        };
         let symbols = riven_ide::document_symbols::document_symbols(analysis);
-        if symbols.is_empty() { return Ok(None); }
+        if symbols.is_empty() {
+            return Ok(None);
+        }
         Ok(Some(DocumentSymbolResponse::Nested(symbols)))
     }
 
@@ -311,43 +317,44 @@ impl LanguageServer for RivenLsp {
             .filter_map(|(uri, doc)| doc.analysis.as_ref().map(|a| (uri.clone(), a)))
             .collect();
         let results = riven_ide::workspace_symbols::workspace_symbols(&docs, &query);
-        if results.is_empty() { return Ok(None); }
+        if results.is_empty() {
+            return Ok(None);
+        }
         Ok(Some(results))
     }
 
     // === wave1: agent-C inlay_hints ===
-    async fn inlay_hint(
-        &self,
-        params: InlayHintParams,
-    ) -> Result<Option<Vec<InlayHint>>> {
+    async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
         let uri = params.text_document.uri;
         let range = params.range;
         let state = self.state.read().await;
-        let Some(doc) = state.documents.get(&uri) else { return Ok(Some(Vec::new())); };
-        let Some(analysis) = &doc.analysis else { return Ok(Some(Vec::new())); };
+        let Some(doc) = state.documents.get(&uri) else {
+            return Ok(Some(Vec::new()));
+        };
+        let Some(analysis) = &doc.analysis else {
+            return Ok(Some(Vec::new()));
+        };
         let cfg = riven_ide::inlay_hints::InlayHintConfig::default();
         let hints = riven_ide::inlay_hints::inlay_hints(analysis, range, &cfg);
         Ok(Some(hints))
     }
 
     // === wave1: agent-D folding_ranges ===
-    async fn folding_range(
-        &self,
-        params: FoldingRangeParams,
-    ) -> Result<Option<Vec<FoldingRange>>> {
+    async fn folding_range(&self, params: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
         let uri = params.text_document.uri;
         let state = self.state.read().await;
-        let Some(doc) = state.documents.get(&uri) else { return Ok(None); };
-        let Some(analysis) = &doc.analysis else { return Ok(None); };
+        let Some(doc) = state.documents.get(&uri) else {
+            return Ok(None);
+        };
+        let Some(analysis) = &doc.analysis else {
+            return Ok(None);
+        };
         let ranges = riven_ide::folding::folding_ranges(analysis);
         Ok(Some(ranges))
     }
 
     // === wave1: agent-E document_formatting ===
-    async fn formatting(
-        &self,
-        params: DocumentFormattingParams,
-    ) -> Result<Option<Vec<TextEdit>>> {
+    async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
         let uri = params.text_document.uri;
         let source = {
             let state = self.state.read().await;
@@ -380,11 +387,19 @@ impl LanguageServer for RivenLsp {
         &self,
         params: request::GotoTypeDefinitionParams,
     ) -> Result<Option<request::GotoTypeDefinitionResponse>> {
-        let uri = params.text_document_position_params.text_document.uri.clone();
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone();
         let position = params.text_document_position_params.position;
         let state = self.state.read().await;
-        let Some(doc) = state.documents.get(&uri) else { return Ok(None); };
-        let Some(analysis) = &doc.analysis else { return Ok(None); };
+        let Some(doc) = state.documents.get(&uri) else {
+            return Ok(None);
+        };
+        let Some(analysis) = &doc.analysis else {
+            return Ok(None);
+        };
         let Some(mut location) = riven_ide::type_def::type_definition(analysis, position) else {
             return Ok(None);
         };
@@ -393,36 +408,36 @@ impl LanguageServer for RivenLsp {
     }
 
     // === wave1: agent-G code_actions ===
-    async fn code_action(
-        &self,
-        params: CodeActionParams,
-    ) -> Result<Option<CodeActionResponse>> {
+    async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
         let uri = params.text_document.uri.clone();
         let state = self.state.read().await;
-        let Some(doc) = state.documents.get(&uri) else { return Ok(Some(Vec::new())); };
-        let Some(analysis) = &doc.analysis else { return Ok(Some(Vec::new())); };
-        let actions = riven_ide::code_actions::code_actions(
-            analysis,
-            params.range,
-            &params.context,
-            &uri,
-        );
+        let Some(doc) = state.documents.get(&uri) else {
+            return Ok(Some(Vec::new()));
+        };
+        let Some(analysis) = &doc.analysis else {
+            return Ok(Some(Vec::new()));
+        };
+        let actions =
+            riven_ide::code_actions::code_actions(analysis, params.range, &params.context, &uri);
         Ok(Some(actions))
     }
 
     // === wave2: agent-I references ===
-    async fn references(
-        &self,
-        params: ReferenceParams,
-    ) -> Result<Option<Vec<Location>>> {
+    async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
         let uri = params.text_document_position.text_document.uri.clone();
         let position = params.text_document_position.position;
         let include_decl = params.context.include_declaration;
         let state = self.state.read().await;
-        let Some(doc) = state.documents.get(&uri) else { return Ok(None); };
-        let Some(analysis) = &doc.analysis else { return Ok(None); };
+        let Some(doc) = state.documents.get(&uri) else {
+            return Ok(None);
+        };
+        let Some(analysis) = &doc.analysis else {
+            return Ok(None);
+        };
         let mut locs = riven_ide::references::references(analysis, position, include_decl);
-        for loc in locs.iter_mut() { loc.uri = uri.clone(); }
+        for loc in locs.iter_mut() {
+            loc.uri = uri.clone();
+        }
         Ok(Some(locs))
     }
 
@@ -434,10 +449,16 @@ impl LanguageServer for RivenLsp {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
         let state = self.state.read().await;
-        let Some(doc) = state.documents.get(&uri) else { return Ok(None); };
-        let Some(analysis) = &doc.analysis else { return Ok(None); };
+        let Some(doc) = state.documents.get(&uri) else {
+            return Ok(None);
+        };
+        let Some(analysis) = &doc.analysis else {
+            return Ok(None);
+        };
         let highlights = riven_ide::highlight::document_highlights(analysis, position);
-        if highlights.is_empty() { return Ok(None); }
+        if highlights.is_empty() {
+            return Ok(None);
+        }
         Ok(Some(highlights))
     }
 
@@ -449,25 +470,32 @@ impl LanguageServer for RivenLsp {
         let uri = params.text_document.uri;
         let position = params.position;
         let state = self.state.read().await;
-        let Some(doc) = state.documents.get(&uri) else { return Ok(None); };
-        let Some(analysis) = &doc.analysis else { return Ok(None); };
+        let Some(doc) = state.documents.get(&uri) else {
+            return Ok(None);
+        };
+        let Some(analysis) = &doc.analysis else {
+            return Ok(None);
+        };
         let Some(range) = riven_ide::rename::prepare_rename(analysis, position) else {
             return Ok(None);
         };
         Ok(Some(PrepareRenameResponse::Range(range)))
     }
 
-    async fn rename(
-        &self,
-        params: RenameParams,
-    ) -> Result<Option<WorkspaceEdit>> {
+    async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
         let uri = params.text_document_position.text_document.uri.clone();
         let position = params.text_document_position.position;
         let new_name = params.new_name;
         let state = self.state.read().await;
-        let Some(doc) = state.documents.get(&uri) else { return Ok(None); };
-        let Some(analysis) = &doc.analysis else { return Ok(None); };
-        Ok(riven_ide::rename::rename(analysis, &uri, position, &new_name))
+        let Some(doc) = state.documents.get(&uri) else {
+            return Ok(None);
+        };
+        let Some(analysis) = &doc.analysis else {
+            return Ok(None);
+        };
+        Ok(riven_ide::rename::rename(
+            analysis, &uri, position, &new_name,
+        ))
     }
 
     async fn semantic_tokens_full(

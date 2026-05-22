@@ -62,10 +62,7 @@ pub fn lower_async_defs(program: &mut Program) {
 /// Closes the gap documented in
 /// `project_riven_async_compiler_gaps.md` (#2) and unblocks the two
 /// deferred pins (731_class_static_call_await, task_join_await).
-pub fn lower_async_defs_with_bootstrap(
-    program: &mut Program,
-    bootstrap_programs: &[&Program],
-) {
+pub fn lower_async_defs_with_bootstrap(program: &mut Program, bootstrap_programs: &[&Program]) {
     // Build a map of `fn_name -> (synth_class_name, declared_return_type)` so
     // a 2B await on `g()` can name the sub-future field type as
     // `__GFuture` and the post-Ready local's type as the user's
@@ -1162,8 +1159,7 @@ fn expr_references_name(expr: &Expr, name: &str) -> bool {
         ExprKind::Index { object, index } => {
             expr_references_name(object, name) || expr_references_name(index, name)
         }
-        ExprKind::Assign { target, value }
-        | ExprKind::CompoundAssign { target, value, .. } => {
+        ExprKind::Assign { target, value } | ExprKind::CompoundAssign { target, value, .. } => {
             expr_references_name(target, name) || expr_references_name(value, name)
         }
         ExprKind::If(IfExpr {
@@ -1225,14 +1221,20 @@ fn expr_references_name(expr: &Expr, name: &str) -> bool {
 
 fn block_references_name(block: &Block, name: &str) -> bool {
     block.statements.iter().any(|s| match s {
-        Statement::Let(lb) => lb.value.as_ref().is_some_and(|v| expr_references_name(v, name)),
+        Statement::Let(lb) => lb
+            .value
+            .as_ref()
+            .is_some_and(|v| expr_references_name(v, name)),
         Statement::Expression(e) => expr_references_name(e, name),
     })
 }
 
 fn stmts_reference_name(stmts: &[Statement], name: &str) -> bool {
     stmts.iter().any(|s| match s {
-        Statement::Let(lb) => lb.value.as_ref().is_some_and(|v| expr_references_name(v, name)),
+        Statement::Let(lb) => lb
+            .value
+            .as_ref()
+            .is_some_and(|v| expr_references_name(v, name)),
         Statement::Expression(e) => expr_references_name(e, name),
     })
 }
@@ -1699,12 +1701,7 @@ fn default_value_for_type(ty: &TypeExpr, span: &Span) -> Option<Expr> {
 /// The `<rewritten body>` substitutes references to function args
 /// (`a`, `b`, …) with `self.a`, `self.b`, … so they read from the
 /// captured fields.
-fn build_poll_body(
-    user_body: &Block,
-    _return_ty: &TypeExpr,
-    args: &[Param],
-    span: &Span,
-) -> Block {
+fn build_poll_body(user_body: &Block, _return_ty: &TypeExpr, args: &[Param], span: &Span) -> Block {
     // Walk the body and rewrite Identifier(arg_name) → self.arg_name.
     let arg_names: Vec<String> = args.iter().map(|p| p.name.clone()).collect();
     let mut rewritten_body = user_body.clone();
@@ -1883,11 +1880,8 @@ fn rewrite_arg_refs_in_expr(expr: &mut Expr, arg_names: &[String]) {
                 rewrite_arg_refs_in_expr(a, arg_names);
             }
         }
-        ExprKind::Try(inner) | ExprKind::Await(inner) => {
-            rewrite_arg_refs_in_expr(inner, arg_names)
-        }
-        ExprKind::Assign { target, value }
-        | ExprKind::CompoundAssign { target, value, .. } => {
+        ExprKind::Try(inner) | ExprKind::Await(inner) => rewrite_arg_refs_in_expr(inner, arg_names),
+        ExprKind::Assign { target, value } | ExprKind::CompoundAssign { target, value, .. } => {
             rewrite_arg_refs_in_expr(target, arg_names);
             rewrite_arg_refs_in_expr(value, arg_names);
         }
@@ -1948,12 +1942,10 @@ fn rewrite_arg_refs_in_expr(expr: &mut Expr, arg_names: &[String]) {
             }
         }
         ExprKind::Cast { expr: inner, .. } => rewrite_arg_refs_in_expr(inner, arg_names),
-        ExprKind::Closure(c) => {
-            match &mut c.body {
-                ClosureBody::Expr(e) => rewrite_arg_refs_in_expr(e, arg_names),
-                ClosureBody::Block(b) => rewrite_arg_refs_in_block(b, arg_names),
-            }
-        }
+        ExprKind::Closure(c) => match &mut c.body {
+            ClosureBody::Expr(e) => rewrite_arg_refs_in_expr(e, arg_names),
+            ClosureBody::Block(b) => rewrite_arg_refs_in_block(b, arg_names),
+        },
         // Leaf / no inner exprs to rewrite.
         _ => {}
     }
@@ -2039,9 +2031,9 @@ fn expr_contains_await(expr: &Expr) -> bool {
         }) => {
             expr_contains_await(condition)
                 || block_contains_await(then_body)
-                || elsif_clauses.iter().any(|el| {
-                    expr_contains_await(&el.condition) || block_contains_await(&el.body)
-                })
+                || elsif_clauses
+                    .iter()
+                    .any(|el| expr_contains_await(&el.condition) || block_contains_await(&el.body))
                 || else_body.as_ref().is_some_and(block_contains_await)
         }
         ExprKind::Match(MatchExpr { subject, arms, .. }) => {
@@ -2052,9 +2044,7 @@ fn expr_contains_await(expr: &Expr) -> bool {
                 })
         }
         ExprKind::Block(b) => block_contains_await(b),
-        ExprKind::Return(Some(inner)) | ExprKind::Break(Some(inner)) => {
-            expr_contains_await(inner)
-        }
+        ExprKind::Return(Some(inner)) | ExprKind::Break(Some(inner)) => expr_contains_await(inner),
         ExprKind::ArrayLiteral(items) | ExprKind::TupleLiteral(items) => {
             items.iter().any(expr_contains_await)
         }
@@ -2083,9 +2073,9 @@ fn expr_contains_await(expr: &Expr) -> bool {
         // a misleading E1110 ("`.await` only valid inside async
         // def") downstream rather than the correct E1115.
         ExprKind::Loop(LoopExpr { body, .. }) => block_contains_await(body),
-        ExprKind::While(WhileExpr { condition, body, .. }) => {
-            expr_contains_await(condition) || block_contains_await(body)
-        }
+        ExprKind::While(WhileExpr {
+            condition, body, ..
+        }) => expr_contains_await(condition) || block_contains_await(body),
         ExprKind::WhileLet(WhileLetExpr { value, body, .. }) => {
             expr_contains_await(value) || block_contains_await(body)
         }
@@ -2114,12 +2104,12 @@ fn expr_contains_await(expr: &Expr) -> bool {
 ///
 /// Spec: docs/errors/E1115.md. Deferred-to-v2 listing:
 /// `docs/specs/types/async_lowering.spec.md` "Out of scope".
-pub fn collect_await_in_loop_diagnostics(
-    program: &Program,
-) -> Vec<crate::diagnostics::Diagnostic> {
+pub fn collect_await_in_loop_diagnostics(program: &Program) -> Vec<crate::diagnostics::Diagnostic> {
     let mut diags = Vec::new();
     for item in &program.items {
-        collect_e1115_in_item(item, /*in_async=*/ false, /*in_loop=*/ false, &mut diags);
+        collect_e1115_in_item(
+            item, /*in_async=*/ false, /*in_loop=*/ false, &mut diags,
+        );
     }
     diags
 }
@@ -2512,8 +2502,7 @@ fn collect_e1112_in_expr(
         ExprKind::Try(inner) | ExprKind::Await(inner) => {
             collect_e1112_in_expr(inner, in_async, diags);
         }
-        ExprKind::Assign { target, value }
-        | ExprKind::CompoundAssign { target, value, .. } => {
+        ExprKind::Assign { target, value } | ExprKind::CompoundAssign { target, value, .. } => {
             collect_e1112_in_expr(target, in_async, diags);
             collect_e1112_in_expr(value, in_async, diags);
         }
@@ -2756,8 +2745,7 @@ fn collect_e1116_in_expr(
         ExprKind::Try(inner) | ExprKind::Await(inner) => {
             collect_e1116_in_expr(inner, in_async, diags);
         }
-        ExprKind::Assign { target, value }
-        | ExprKind::CompoundAssign { target, value, .. } => {
+        ExprKind::Assign { target, value } | ExprKind::CompoundAssign { target, value, .. } => {
             collect_e1116_in_expr(target, in_async, diags);
             collect_e1116_in_expr(value, in_async, diags);
         }
@@ -3006,8 +2994,7 @@ fn rewrite_block_on_in_expr(expr: &mut Expr, counter: &mut u32) {
         ExprKind::Try(inner) | ExprKind::Await(inner) => {
             rewrite_block_on_in_expr(inner, counter);
         }
-        ExprKind::Assign { target, value }
-        | ExprKind::CompoundAssign { target, value, .. } => {
+        ExprKind::Assign { target, value } | ExprKind::CompoundAssign { target, value, .. } => {
             rewrite_block_on_in_expr(target, counter);
             rewrite_block_on_in_expr(value, counter);
         }
@@ -3330,11 +3317,7 @@ fn build_block_on_loop(future_expr: Expr, n: u32, span: &Span) -> Expr {
     // type from break-with-value, so the block evaluates to the
     // future's Output type.
     let outer_block = Block {
-        statements: vec![
-            let_fut,
-            let_ctx,
-            Statement::Expression(loop_expr),
-        ],
+        statements: vec![let_fut, let_ctx, Statement::Expression(loop_expr)],
         span: span.clone(),
     };
 

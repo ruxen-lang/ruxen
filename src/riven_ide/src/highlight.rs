@@ -47,10 +47,7 @@ use crate::node_finder::{node_at_position, NodeAtPosition};
 /// - The cursor doesn't resolve to any HIR node.
 /// - The resolved node references no real def (e.g. a literal, an
 ///   `UNRESOLVED_DEF` method call we can't recover by name).
-pub fn document_highlights(
-    result: &AnalysisResult,
-    position: Position,
-) -> Vec<DocumentHighlight> {
+pub fn document_highlights(result: &AnalysisResult, position: Position) -> Vec<DocumentHighlight> {
     let Some(program) = result.program.as_ref() else {
         return Vec::new();
     };
@@ -166,10 +163,7 @@ fn is_synthetic(span: &Span) -> bool {
 /// Find the innermost `MethodCall` whose span contains `byte_offset`
 /// and return its receiver `Ty` + textual method name. Returns `None`
 /// when no method call contains the cursor.
-fn find_method_call_at(
-    program: &HirProgram,
-    byte_offset: usize,
-) -> Option<(Ty, String)> {
+fn find_method_call_at(program: &HirProgram, byte_offset: usize) -> Option<(Ty, String)> {
     let mut finder = MethodCallFinder {
         target: byte_offset,
         result: None,
@@ -406,11 +400,7 @@ impl MethodCallFinder {
 /// mirrors `use_index::resolve_method_def`. Walks past refs / aliases
 /// / newtypes to find a concrete class or struct, then scans its
 /// method list by name.
-fn resolve_method_def(
-    symbols: &SymbolTable,
-    receiver_ty: &Ty,
-    method_name: &str,
-) -> Option<DefId> {
+fn resolve_method_def(symbols: &SymbolTable, receiver_ty: &Ty, method_name: &str) -> Option<DefId> {
     let ty = peel_ty(receiver_ty);
     let type_name = match ty {
         Ty::Class { name, .. } | Ty::Struct { name, .. } => name.as_str(),
@@ -424,21 +414,19 @@ fn resolve_method_def(
         // highlight list, which is honest.
         _ => return None,
     };
-    methods
-        .iter()
-        .copied()
-        .find(|id| symbols.get(*id).map(|d| d.name == method_name).unwrap_or(false))
+    methods.iter().copied().find(|id| {
+        symbols
+            .get(*id)
+            .map(|d| d.name == method_name)
+            .unwrap_or(false)
+    })
 }
 
 /// Resolve a field DefId from the receiver type + field name.
 /// Mirrors `use_index::resolve_field_def` but doesn't need a
 /// `field_idx` — the `NodeAtPosition::FieldAccess` carries only the
 /// name, so we name-scan the class/struct fields directly.
-fn resolve_field_def(
-    symbols: &SymbolTable,
-    object_ty: &Ty,
-    field_name: &str,
-) -> Option<DefId> {
+fn resolve_field_def(symbols: &SymbolTable, object_ty: &Ty, field_name: &str) -> Option<DefId> {
     let ty = peel_ty(object_ty);
     let type_name = match ty {
         Ty::Class { name, .. } | Ty::Struct { name, .. } => name.as_str(),
@@ -450,10 +438,12 @@ fn resolve_field_def(
         DefKind::Struct { info } => &info.fields,
         _ => return None,
     };
-    fields
-        .iter()
-        .copied()
-        .find(|id| symbols.get(*id).map(|d| d.name == field_name).unwrap_or(false))
+    fields.iter().copied().find(|id| {
+        symbols
+            .get(*id)
+            .map(|d| d.name == field_name)
+            .unwrap_or(false)
+    })
 }
 
 /// Peel reference / alias / newtype wrappers to expose the underlying

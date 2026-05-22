@@ -718,11 +718,7 @@ impl MethodCallFinder {
 
 /// Resolve a method DefId from receiver type + method name. Mirrors
 /// `highlight.rs::resolve_method_def` + `use_index::resolve_method_def`.
-fn resolve_method_def(
-    symbols: &SymbolTable,
-    receiver_ty: &Ty,
-    method_name: &str,
-) -> Option<DefId> {
+fn resolve_method_def(symbols: &SymbolTable, receiver_ty: &Ty, method_name: &str) -> Option<DefId> {
     let ty = peel_ty(receiver_ty);
     let type_name = match ty {
         Ty::Class { name, .. } | Ty::Struct { name, .. } => name.as_str(),
@@ -733,10 +729,12 @@ fn resolve_method_def(
         DefKind::Class { info } => &info.methods,
         _ => return None,
     };
-    methods
-        .iter()
-        .copied()
-        .find(|id| symbols.get(*id).map(|d| d.name == method_name).unwrap_or(false))
+    methods.iter().copied().find(|id| {
+        symbols
+            .get(*id)
+            .map(|d| d.name == method_name)
+            .unwrap_or(false)
+    })
 }
 
 fn peel_ty(ty: &Ty) -> &Ty {
@@ -813,8 +811,8 @@ fn narrow_to_identifier(source: &str, host_span: &Span, name: &str) -> Option<Sp
     while i + name_bytes.len() <= bytes.len() {
         if &bytes[i..i + name_bytes.len()] == name_bytes {
             let before_ok = i == 0 || !is_ident_byte(bytes[i - 1]);
-            let after_ok = i + name_bytes.len() == bytes.len()
-                || !is_ident_byte(bytes[i + name_bytes.len()]);
+            let after_ok =
+                i + name_bytes.len() == bytes.len() || !is_ident_byte(bytes[i + name_bytes.len()]);
             if before_ok && after_ok {
                 let abs_start = start + i;
                 let abs_end = abs_start + name_bytes.len();

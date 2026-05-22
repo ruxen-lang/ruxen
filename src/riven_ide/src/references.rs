@@ -322,9 +322,7 @@ impl MethodCallFinder {
                 self.visit_expr(condition);
                 self.visit_expr(body);
             }
-            HirExprKind::For {
-                iterable, body, ..
-            } => {
+            HirExprKind::For { iterable, body, .. } => {
                 self.visit_expr(iterable);
                 self.visit_expr(body);
             }
@@ -386,7 +384,10 @@ impl MethodCallFinder {
         use riven_core::hir::nodes::HirPattern;
         match pattern {
             HirPattern::Literal { expr, .. } => self.visit_expr(expr),
-            HirPattern::Tuple { elements, .. } | HirPattern::Or { patterns: elements, .. } => {
+            HirPattern::Tuple { elements, .. }
+            | HirPattern::Or {
+                patterns: elements, ..
+            } => {
                 for el in elements {
                     self.visit_pattern(el);
                 }
