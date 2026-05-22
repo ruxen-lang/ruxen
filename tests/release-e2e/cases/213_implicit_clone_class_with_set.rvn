@@ -1,0 +1,35 @@
+## Pin: a class with a `Set[T]` field can be cloned via the
+## auto-synthesised `<Class>_clone`. Companion to fixture 211 —
+## regression check for `riven_set_clone` runtime helper (added
+## 2026-05-22).
+
+class Tags
+  ids: Set[Int]
+
+  def init
+    self.ids = Set.new
+  end
+end
+
+def main
+  var t1 = Tags.new
+  t1.ids.insert(7)
+  t1.ids.insert(42)
+  t1.ids.insert(99)
+
+  let t2 = t1.clone
+
+  puts "clone_len=#{t2.ids.len}"
+  if t2.ids.contains(7)
+    puts "has_7"
+  end
+  if t2.ids.contains(42)
+    puts "has_42"
+  end
+  if t2.ids.contains(99)
+    puts "has_99"
+  end
+  if t2.ids.contains(123)
+    puts "BUG_has_123"
+  end
+end
