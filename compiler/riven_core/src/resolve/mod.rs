@@ -8,6 +8,7 @@ pub mod bootstrap;
 mod const_helpers;
 pub mod scope;
 mod stdlib;
+pub mod stdlib_embedded;
 pub mod symbols;
 mod yield_scan;
 

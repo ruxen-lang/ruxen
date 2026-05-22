@@ -40,6 +40,7 @@ use crate::lexer::token::Span;
 use crate::lexer::Lexer;
 use crate::parser::ast::Program;
 use crate::parser::Parser;
+use crate::resolve::stdlib_embedded;
 use std::path::{Path, PathBuf};
 
 /// The stdlib bootstrap file list. Wave 1.5 (#06.8 Phase 3) shipped one
@@ -226,30 +227,66 @@ pub fn run_bootstrap_with_files(
         return Vec::new();
     }
 
-    let root = match path_override
-        .map(PathBuf::from)
-        .or_else(resolve_stdlib_root)
-    {
-        Some(r) => r,
-        None => {
-            diagnostics.push(Diagnostic::error_with_code(
-                "stdlib bootstrap failed: could not locate `library/std/` — \
-                 set RIVEN_STDLIB_PATH or run from a workspace checkout",
-                Span::new(0, 0, 0, 0),
-                "E0725",
-            ));
-            return Vec::new();
-        }
-    };
+    // Resolution order:
+    //   1. `path_override` argument (tests pin via tempdir)
+    //   2. `RIVEN_STDLIB_PATH` env (dev override — edit .rvn without
+    //      recompiling the compiler)
+    //   3. Embedded sources baked in by `include_str!` (default path
+    //      for any released binary)
+    //   4. Legacy filesystem walks (workspace `library/std/`,
+    //      `<exe-dir>/../library/std/`) — retained so a Cargo
+    //      `cargo run` from the workspace still works without
+    //      regenerating the embedded table
+    let fs_root: Option<PathBuf> = path_override.map(PathBuf::from).or_else(|| {
+        std::env::var("RIVEN_STDLIB_PATH")
+            .ok()
+            .map(PathBuf::from)
+            .filter(|p| p.is_dir())
+    });
+
+    // If the caller forced a filesystem root, honour it. Otherwise
+    // try embedded first, then fall back to the legacy filesystem
+    // discovery so existing workflows aren't broken.
+    let prefer_embedded = fs_root.is_none();
 
     let mut out = Vec::with_capacity(files.len());
     for rel in files {
-        match load_stdlib_file(&root, rel) {
+        let loaded = if prefer_embedded {
+            match stdlib_embedded::embedded_source(rel) {
+                Some(src) => parse_stdlib_source(src, rel),
+                None => {
+                    // Embedded table is missing this file — fall back to
+                    // the legacy filesystem walk for this one entry.
+                    match resolve_stdlib_root() {
+                        Some(root) => load_stdlib_file(&root, rel),
+                        None => Err(missing_stdlib_diagnostic(rel)),
+                    }
+                }
+            }
+        } else {
+            load_stdlib_file(fs_root.as_ref().unwrap(), rel)
+        };
+
+        match loaded {
             Ok(program) => out.push(program),
             Err(diag) => diagnostics.push(diag),
         }
     }
     out
+}
+
+fn missing_stdlib_diagnostic(rel: &str) -> Diagnostic {
+    Diagnostic::error_with_code(
+        format!(
+            "stdlib bootstrap failed at library/std/{}: not present in \
+             embedded table and no filesystem fallback found. Rebuild \
+             the riven binary, or set `RIVEN_STDLIB_PATH` to a workspace \
+             checkout.",
+            rel
+        ),
+        Span::new(0, 0, 0, 0),
+        "E0725",
+    )
 }
 
 /// Resolve the stdlib source root, in order:
@@ -333,8 +370,14 @@ fn load_stdlib_file(root: &Path, rel: &str) -> Result<Program, Diagnostic> {
             "E0725",
         )
     })?;
+    parse_stdlib_source(&source, rel)
+}
 
-    let mut lexer = Lexer::new(&source);
+/// Lex + parse one stdlib source string. Shared between the
+/// filesystem loader and the embedded-table loader so the
+/// diagnostic shape is identical in both paths.
+fn parse_stdlib_source(source: &str, rel: &str) -> Result<Program, Diagnostic> {
+    let mut lexer = Lexer::new(source);
     let tokens = match lexer.tokenize() {
         Ok(t) => t,
         Err(diags) => {
