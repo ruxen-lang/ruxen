@@ -142,10 +142,15 @@ impl<'a> Lowerer<'a> {
                 } = &arm.pattern
                 {
                     if !fields.is_empty() {
-                        // For Option/Result, derive field types from the scrutinee type
-                        // since the variant definitions use TypeParam placeholders.
+                        // For Option/Result, derive field types from the
+                        // scrutinee type since the variant definitions use
+                        // TypeParam placeholders.
+                        //
+                        // Variant indices (defined in resolve/stdlib/{option,result}.rs):
+                        //   Option: None=0, Some=1
+                        //   Result: Ok=0,   Err=1
                         let variant_field_types = match &scrutinee.ty {
-                            Ty::Option(inner) if *variant_idx == 0 => {
+                            Ty::Option(inner) if *variant_idx == 1 => {
                                 // Some(T) — the field type is the inner type
                                 vec![*inner.clone()]
                             }
