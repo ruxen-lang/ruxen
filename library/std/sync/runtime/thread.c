@@ -6,22 +6,24 @@
 
 /* Default thread stack size for Thread.spawn.
  *
- * macOS's default (512KB) is small enough that pthread_create still
- * does significant per-call bookkeeping. Linux glibc's default (8MB)
- * is huge but cheap to set up (overcommit + lazy pages). For server
- * workloads that spawn many short-lived threads, halving the stack
- * meaningfully cuts pthread_create cost on macOS, and on Linux the
- * smaller upper bound just costs less per thread without changing
- * any actual page footprint until you use it.
+ * Match macOS's pthread default (512 KB) so user FFI handlers don't
+ * SIGSEGV on the deeper stacks LLVM-generated code can want. The
+ * earlier 256 KB shaved a small amount off pthread_create cost but
+ * was below the OS default — risky once any non-trivial user code
+ * is on the spawned stack (large structs on the stack, deep
+ * recursive parsers, LLVM intrinsics with high stack usage).
  *
- * 256KB is 16× PTHREAD_STACK_MIN on macOS (which is 16KB) so deep
- * recursion still has headroom. Userland that needs more can override
- * via RIVEN_THREAD_STACK_KB at process start.
+ * On Linux glibc's default is 8 MB. Capping at 512 KB is still a
+ * meaningful reduction there; the actual page footprint is lazy
+ * via overcommit so the smaller upper bound costs nothing per
+ * thread that doesn't use it.
  *
- * Set to 0 (RIVEN_THREAD_STACK_KB=0) to fall back to the OS default
- * — useful when debugging stack-overflow suspicions in user code.
+ * Userland that needs more can override via RIVEN_THREAD_STACK_KB
+ * at process start. Setting RIVEN_THREAD_STACK_KB=0 falls back to
+ * the OS default — useful when debugging stack-overflow suspicions
+ * in user code on Linux (where the OS default is 8 MB).
  */
-#define RIVEN_DEFAULT_THREAD_STACK_BYTES (256u * 1024u)
+#define RIVEN_DEFAULT_THREAD_STACK_BYTES (512u * 1024u)
 
 static size_t riven_thread_stack_size(void) {
     static size_t cached = 0;

@@ -668,6 +668,25 @@ void *riven_tcp_stream_set_write_timeout(RivenTcpStream *s, RivenDuration *d) {
     return riven_tcp_set_write_timeout_ns((int64_t)s->fd, d->nanos);
 }
 
+/* `TcpStream.set_read_timeout_ns(ns: Int)` — plain-Int variant of
+ * `set_read_timeout`. The `&Duration` form above can't be reached
+ * from Riven user code today because the lib decl for std.net
+ * loads BEFORE std.time (where `Duration` lives), so the Duration
+ * pointer's `&duration_obj` lowering can't be expressed across
+ * the package boundary. Until that's untangled, the `_ns` variants
+ * are the only working surface. Callers pass nanoseconds directly:
+ *
+ *   s.set_read_timeout_ns(60_000_000_000)   # 60s idle timeout */
+void *riven_tcp_stream_set_read_timeout_ns(RivenTcpStream *s, int64_t ns) {
+    if (!s || s->closed) return riven_tcp_invalid_input();
+    return riven_tcp_set_read_timeout_ns((int64_t)s->fd, ns);
+}
+
+void *riven_tcp_stream_set_write_timeout_ns(RivenTcpStream *s, int64_t ns) {
+    if (!s || s->closed) return riven_tcp_invalid_input();
+    return riven_tcp_set_write_timeout_ns((int64_t)s->fd, ns);
+}
+
 /* `TcpStream.close()` — idempotent. */
 void *riven_tcp_stream_close(RivenTcpStream *s) {
     if (!s) return riven_tcp_invalid_input();

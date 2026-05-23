@@ -65,6 +65,12 @@ class TcpStream
     # at the ABI level, matching the C signature in practice.
     def set_read_timeout as "riven_tcp_stream_set_read_timeout"(self, d: Int) -> Result[(), IoError]
     def set_write_timeout as "riven_tcp_stream_set_write_timeout"(self, d: Int) -> Result[(), IoError]
+    # `_ns` variants take a plain int64 nanosecond count. Use these
+    # when you don't have a `Duration` value handy (e.g. when calling
+    # from a package that loads before std.time). 0 clears the
+    # timeout; sub-microsecond rounds up to 1 µs.
+    def set_read_timeout_ns as "riven_tcp_stream_set_read_timeout_ns"(self, ns: Int) -> Result[(), IoError]
+    def set_write_timeout_ns as "riven_tcp_stream_set_write_timeout_ns"(self, ns: Int) -> Result[(), IoError]
     def close as "riven_tcp_stream_close"(self) -> Result[(), IoError]
     def drop as "riven_tcp_stream_drop"(self) -> ()
   end
