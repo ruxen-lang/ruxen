@@ -45,6 +45,31 @@ impl<'a> InferenceEngine<'a> {
                 }
                 return self.ctx.resolve(ret);
             }
+            // Dyn-erased closure receivers — `any Fn(T) -> U` shows up
+            // as `Ty::AnyMixin([MixinRef{name:"Fn", generic_args:[Fn{...}]}])`
+            // (and likewise `some Fn(...)` → `Ty::SomeMixin`). Peel the
+            // single `Fn` / `FnMut` / `FnOnce` bound's first generic
+            // arg, which carries the underlying `Ty::Fn { params, ret }`,
+            // and treat the call like a direct Fn dispatch above.
+            // Without this, `let r = closure.(arg)` on a dyn-typed
+            // receiver leaves `r`'s type at `Ty::Infer`, blowing up
+            // every subsequent `r.field` / `r.method` at codegen with
+            // an unresolved `?T_<m>` symbol.
+            if let Ty::AnyMixin(bounds) | Ty::SomeMixin(bounds) = derefed {
+                for bound in bounds {
+                    if matches!(bound.name.as_str(), "Fn" | "FnMut" | "FnOnce") {
+                        if let Some(Ty::Fn { params, ret })
+                        | Some(Ty::FnMut { params, ret })
+                        | Some(Ty::FnOnce { params, ret }) = bound.generic_args.first()
+                        {
+                            for (arg, param_ty) in args.iter().zip(params.iter()) {
+                                let _ = unify(&arg.ty, param_ty, self.ctx, span);
+                            }
+                            return self.ctx.resolve(ret);
+                        }
+                    }
+                }
+            }
         }
 
         // Handle built-in methods on known types
