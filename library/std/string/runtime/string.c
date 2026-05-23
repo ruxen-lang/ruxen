@@ -276,6 +276,27 @@ char *riven_string_from(const char *s) {
     return result;
 }
 
+/* Build a heap-allocated null-terminated String from a Vec[Int]
+ * whose entries are byte values (0–255). Each i64 slot's low byte
+ * becomes one output byte — matches the wire shape of
+ * `TcpStream.read` / `BufReader.read` which push raw bytes as
+ * widened int64s. Surface: `String.from_bytes(&Array[Int]) -> String`.
+ *
+ * The caller retains ownership of the source Vec; we copy out. */
+char *riven_string_from_bytes(const RivenVec *v) {
+    if (!v) return riven_string_from("");
+    uint64_t n = v->len;
+    char *result = (char *)malloc(n + 1);
+    if (!result) {
+        riven_panic("out of memory");
+    }
+    for (uint64_t i = 0; i < n; i++) {
+        result[i] = (char)(v->data[i] & 0xff);
+    }
+    result[n] = '\0';
+    return result;
+}
+
 /* Phase 2 #06.D4: return a fresh string truncated to at most `max_chars`
  * UTF-8 codepoints.  `max_chars < 0` returns a copy of the input
  * unchanged (used when the precision spec is unset).  Truncation

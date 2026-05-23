@@ -79,7 +79,10 @@ pub(super) fn is_builtin_static_method(type_name: &str, method_name: &str) -> bo
         type_name
     };
     match base_type {
-        "String" => matches!(method_name, "from" | "new" | "with_capacity" | "from_iter"),
+        "String" => matches!(
+            method_name,
+            "from" | "new" | "with_capacity" | "from_iter" | "from_bytes"
+        ),
         // `Vec.with_capacity(n)` is a stateless static constructor — like
         // `Vec.new` but takes one Int arg. Phase 2 stdlib batch 1 (#03).
         // `Vec.from_iter(iter)` (#03 batch 2) takes any iterator-producing

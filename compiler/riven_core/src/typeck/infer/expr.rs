@@ -583,6 +583,15 @@ impl<'a> InferenceEngine<'a> {
             HirExprKind::Match { scrutinee, arms } => {
                 self.infer_expr(scrutinee);
                 let scrutinee_ty = self.ctx.resolve(&scrutinee.ty);
+                // Write the resolved type back onto the scrutinee's
+                // HIR node — MIR's match-arm lowering reads
+                // `scrutinee.ty` directly when deriving binding
+                // types for `Some(x)` / `Ok(v)` / etc.  Without this
+                // writeback, the binding's MIR local is allocated
+                // with the unresolved `Ty::Option(Ty::Infer(_))`,
+                // which lowers to `Ty::Int` and surfaces as
+                // pointer-printed garbage at interpolation sites.
+                scrutinee.ty = scrutinee_ty.clone();
                 let mut result_ty: Option<Ty> = None;
 
                 for arm in arms.iter_mut() {

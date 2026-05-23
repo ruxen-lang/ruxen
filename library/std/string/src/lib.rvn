@@ -37,6 +37,12 @@ class String
     def self.from as "riven_string_from"(s: &String) -> String
     def self.new as "riven_string_new"() -> String
     def self.with_capacity as "riven_string_with_capacity"(cap: Int) -> String
+    # `from_bytes` reads each i64 slot's low byte and concatenates
+    # them into a fresh String. Used by IO callers that pull raw
+    # bytes (`TcpStream.read` / `BufReader.read`) and need a
+    # String back — e.g. an HTTP request body that arrives as
+    # `Content-Length` bytes after the header block.
+    def self.from_bytes as "riven_string_from_bytes"(bytes: &Array[Int]) -> String
 
     # ── Read-only queries ─────────────────────────────────────────
     def len as "riven_string_len"(self) -> Int
