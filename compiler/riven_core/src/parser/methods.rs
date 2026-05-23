@@ -404,6 +404,20 @@ impl Parser {
 
     /// Parse a body (sequence of statements) up to `end`, `else`, `elsif`, `end`.
     pub(crate) fn parse_body(&mut self) -> Block {
+        self.parse_body_with_options(false)
+    }
+
+    /// Variant of `parse_body` for match-arm bodies. Same as
+    /// `parse_body` except it also stops when the upcoming tokens
+    /// look like a sibling arm header (`<pattern> -> ...`).
+    /// Without this signal, a multi-statement arm body greedily
+    /// consumes the next sibling's pattern as a statement, blowing
+    /// up later with "expected expression, found Arrow".
+    pub(crate) fn parse_match_arm_body(&mut self) -> Block {
+        self.parse_body_with_options(true)
+    }
+
+    fn parse_body_with_options(&mut self, in_match_arm: bool) -> Block {
         let start = self.current_span();
         let mut statements = Vec::new();
 
@@ -412,6 +426,9 @@ impl Parser {
             match self.current_kind() {
                 TokenKind::End | TokenKind::Else | TokenKind::Elsif | TokenKind::Eof => break,
                 _ => {
+                    if in_match_arm && self.looks_like_sibling_match_arm() {
+                        break;
+                    }
                     let before = self.pos;
                     statements.push(self.parse_statement());
                     self.expect_terminator();
@@ -425,6 +442,59 @@ impl Parser {
 
         let span = self.span_from(&start);
         Block { statements, span }
+    }
+
+    /// Heuristic lookahead: are we at the start of a sibling match
+    /// arm header?
+    ///
+    /// An arm header is a short pattern token sequence followed by
+    /// `->`. So we scan forward at the current bracket depth and
+    /// return true only if we hit `->` BEFORE any token that
+    /// disqualifies the prefix as a pattern (statement-starting
+    /// keyword, operator that can't appear in a pattern, newline at
+    /// depth 0 — patterns don't span newlines outside of brackets).
+    ///
+    /// Used by `parse_match_arm_body` to terminate a multi-statement
+    /// arm body before it eats the next arm's pattern.
+    fn looks_like_sibling_match_arm(&self) -> bool {
+        let mut i = self.pos;
+        let end = (i + 16).min(self.tokens.len());
+        let mut depth: i32 = 0;
+        while i < end {
+            match &self.tokens[i].kind {
+                TokenKind::Arrow if depth == 0 => return true,
+                TokenKind::LParen | TokenKind::LBracket | TokenKind::LBrace => depth += 1,
+                TokenKind::RParen | TokenKind::RBracket | TokenKind::RBrace => {
+                    if depth == 0 {
+                        return false;
+                    }
+                    depth -= 1;
+                }
+                // Hard stops at depth 0: a real statement starts
+                // here, not a pattern. The keyword check rules out
+                // `let z = ...` being mis-detected as a pattern just
+                // because there's an Arrow at the next sibling arm.
+                TokenKind::End
+                | TokenKind::Eof
+                | TokenKind::Let
+                | TokenKind::Var
+                | TokenKind::If
+                | TokenKind::While
+                | TokenKind::For
+                | TokenKind::Match
+                | TokenKind::Return
+                | TokenKind::Break
+                | TokenKind::Continue
+                | TokenKind::Newline
+                    if depth == 0 =>
+                {
+                    return false;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        false
     }
 
     pub(crate) fn parse_statement(&mut self) -> Statement {

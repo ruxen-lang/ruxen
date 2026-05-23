@@ -50,12 +50,19 @@ impl Parser {
         self.expect(TokenKind::Arrow);
         self.skip_newlines();
 
-        // Arm body: single expression or block (multiple statements until next arm / end)
+        // Arm body: single expression or block (multiple statements
+        // until the next sibling arm, the closing `end`, or EOF).
+        // We use `parse_match_arm_body` (not `parse_body`) so the
+        // body terminates when the upcoming tokens look like a
+        // sibling arm header — otherwise a multi-statement body
+        // greedily consumes the next sibling's pattern as a
+        // statement and trips a downstream "expected expression,
+        // found Arrow".
         let body = if self.is_expression_start() {
             let expr = self.parse_expression();
             MatchArmBody::Expr(expr)
         } else {
-            let block = self.parse_body();
+            let block = self.parse_match_arm_body();
             MatchArmBody::Block(block)
         };
 
