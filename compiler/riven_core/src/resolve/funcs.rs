@@ -283,6 +283,47 @@ impl Resolver {
                 // module-wrap exposes a nested-class user-body method
                 // MIR-naming bug — see B12 in
                 // `docs/rondo_v1_blockers.md`).
+                //
+                // Multi-segment case: `use rondo.Rondo.Router` for a
+                // dep that wraps its types in `module Rondo`. The
+                // package prefix flat-merges so `Rondo` is in scope
+                // as a top-level Module — walk from there through
+                // the remaining segments via `resolve_use_path_from`
+                // (the same helper the happy path uses).
+                if path.len() >= 2 {
+                    if let Some(mid) = self
+                        .scopes
+                        .lookup_type(&path[1])
+                        .or_else(|| self.scopes.lookup(&path[1]))
+                    {
+                        if let Some(final_id) =
+                            self.resolve_use_path_from(mid, &path[2..], use_decl)
+                        {
+                            match &use_decl.kind {
+                                ast::UseKind::Simple => {
+                                    let import_name = path.last().unwrap().clone();
+                                    self.scopes.insert(import_name.clone(), final_id);
+                                    self.scopes.insert_type(import_name, final_id);
+                                }
+                                ast::UseKind::Alias(alias) => {
+                                    self.scopes.insert(alias.clone(), final_id);
+                                    self.scopes.insert_type(alias.clone(), final_id);
+                                }
+                                ast::UseKind::Group(names) => {
+                                    for name in names {
+                                        if let Some(cid) =
+                                            self.resolve_child_in_def(final_id, name, use_decl)
+                                        {
+                                            self.scopes.insert(name.clone(), cid);
+                                            self.scopes.insert_type(name.clone(), cid);
+                                        }
+                                    }
+                                }
+                            }
+                            return;
+                        }
+                    }
+                }
                 let last = path.last().unwrap();
                 let fallback = self
                     .scopes
@@ -372,6 +413,17 @@ impl Resolver {
                                     return Some(item_id);
                                 }
                             }
+                        }
+                        // Fallback: pass-1 doesn't populate Module.items
+                        // for nested classes/structs declared inside the
+                        // module body — only the QUALIFIED type_registry
+                        // entry (`<module>.<child>`) gets the DefId. Look
+                        // there so `use rondo.Rondo.Router` walks the
+                        // last hop via the qualified key.
+                        // Pin: `docs/rondo_v1_blockers.md` B12 follow-up.
+                        let qualified = format!("{}.{}", def.name, name);
+                        if let Some(id) = self.type_registry.get(&qualified).copied() {
+                            return Some(id);
                         }
                         self.diagnostics.push(Diagnostic::error(
                             format!("'{}' not found in module '{}'", name, def.name),
