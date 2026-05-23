@@ -21,7 +21,7 @@ module BufReader
   ## C symbol handles both inner types — no per-variant lookup.
   mixin Reader
     lib "../io/runtime/bufio.c"
-      def read_line as "riven_bufreader_read_line"(self) -> Result[Option[String], IoError]
+      def read_line as "riven_bufreader_read_line"(self) -> Result[String?, IoError]
       def read as "riven_bufreader_read"(self, buf: &var Array[Int]) -> Result[Int, IoError]
     end
   end

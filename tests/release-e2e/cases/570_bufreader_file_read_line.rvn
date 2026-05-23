@@ -7,7 +7,7 @@ def show_line(line: String) -> Bool
   false
 end
 
-def handle(opt: Option[String]) -> Bool
+def handle(opt: String?) -> Bool
   match opt
     Some(line) -> show_line(line)
     None       -> true

@@ -1,5 +1,5 @@
 def main
-  let a: Option[Int] = Some(7)
+  let a: Int? = 7
   let v = a.expect!("must be present")
   puts "#{v}"
 end

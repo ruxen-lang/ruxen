@@ -1,6 +1,6 @@
-def find(n: Int) -> Option[Int]
+def find(n: Int) -> Int?
   if n > 0
-    Some(n * 10)
+    n * 10
   else
     nil
   end

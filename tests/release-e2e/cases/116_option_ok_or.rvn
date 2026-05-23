@@ -1,6 +1,6 @@
 def main
-  let some_v: Option[Int] = Some(5)
-  let none_v: Option[Int] = nil
+  let some_v: Int? = 5
+  let none_v: Int? = nil
 
   let r1: Result[Int, String] = some_v.ok_or(String.from("missing"))
   let r2: Result[Int, String] = none_v.ok_or(String.from("missing"))
