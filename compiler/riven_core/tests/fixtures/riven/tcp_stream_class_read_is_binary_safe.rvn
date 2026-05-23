@@ -38,7 +38,7 @@ end
 def receive(s: TcpStream)
   let t = Duration.from_secs(5)
   match s.set_read_timeout(&t)
-    Ok(_)  -> ()
+    Ok(_)  -> nil
     Err(_) -> puts "set_read_timeout=err"
   end
   # Brief pause so the host has filled the buffer before our first

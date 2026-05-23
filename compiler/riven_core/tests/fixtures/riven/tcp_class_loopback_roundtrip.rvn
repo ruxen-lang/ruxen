@@ -4,11 +4,11 @@ use std.env.get
 def send_hello(s: TcpStream)
   let bytes = "hello world".bytes()
   match s.write(&bytes)
-    Ok(_)  -> ()
+    Ok(_)  -> nil
     Err(_) -> eputs "write failed"
   end
   match s.close()
-    Ok(_)  -> ()
+    Ok(_)  -> nil
     Err(_) -> eputs "close failed"
   end
 end

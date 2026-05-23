@@ -756,12 +756,25 @@ impl Parser {
         self.advance(); // consume (
         self.skip_newlines();
 
-        // Unit literal: ()
+        // Per ruby-naming.spec.md: Riven is Ruby-faithful, not Rust-
+        // shaped. The Rust unit literal `()` is NOT part of the user
+        // surface — Ruby uses `nil` or an empty block in every
+        // position a Rustacean would write `()`. Refuse `()` at parse
+        // time with a hint pointing at the canonical Ruby spelling.
+        // The internal `ExprKind::UnitLiteral` variant stays for
+        // synthesised expressions (empty closure body, async-lowering
+        // fillers); only the user-written form is removed.
         if self.at(TokenKind::RParen) {
+            let span = self.span_from(&start);
+            self.error_at(
+                "`()` is not valid Riven syntax (Ruby uses `nil` or an empty block — \
+                 use `nil` here)",
+                span.clone(),
+            );
             self.advance();
             return Expr {
-                kind: ExprKind::UnitLiteral,
-                span: self.span_from(&start),
+                kind: ExprKind::NullLiteral,
+                span,
             };
         }
 

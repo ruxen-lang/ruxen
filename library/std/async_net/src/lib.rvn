@@ -380,7 +380,7 @@ class AsyncCloseFuture
       riven_async_tcp_stream_shutdown(&self.stream)
       self.done = 1
     end
-    Poll.Ready(())
+    Poll.Ready(nil)
   end
 end
 

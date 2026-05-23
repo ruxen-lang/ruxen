@@ -40,7 +40,7 @@ end
 
 def go_nonblocking(l: TcpListener)
   match l.set_nonblocking(true)
-    Ok(_)  -> ()
+    Ok(_)  -> nil
     Err(_) -> puts "set_nonblocking=err"
   end
   try_accept(l)

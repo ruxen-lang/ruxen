@@ -292,7 +292,7 @@ class TodoList
       nil -> return Err(TodoError.NotFound(id: id))
     end
 
-    Ok(())
+    Ok(nil)
   end
 
   def high_priority_tasks -> Array[&Todo]
@@ -431,7 +431,7 @@ def main
 
   # Try updating a non-existent task (demonstrates error handling)
   match list.update_status(99, Status.Pending)
-    Ok(()) -> puts "  Updated"
+    Ok(nil) -> puts "  Updated"
     Err(TodoError.NotFound(id)) -> puts "  Todo ##{id} doesn't exist (expected)"
     Err(e) -> puts "  Unexpected: #{e.message}"
   end

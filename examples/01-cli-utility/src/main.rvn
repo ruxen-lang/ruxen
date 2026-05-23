@@ -6,7 +6,7 @@ use std.process.exit
 def print_file(path: &String) -> Result[(), IoError]
   let text = read_to_string(path)?
   puts text
-  Ok(())
+  Ok(nil)
 end
 
 def main

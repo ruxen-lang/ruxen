@@ -44,7 +44,7 @@ end
 def set_timeout_and_read(s: TcpStream)
   let t = Duration.from_millis(50)
   match s.set_read_timeout(&t)
-    Ok(_)  -> ()
+    Ok(_)  -> nil
     Err(_) -> puts "set_read_timeout=err"
   end
   try_read(s)

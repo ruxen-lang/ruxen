@@ -4,7 +4,6 @@
 //! skipping to synchronization points and recording diagnostics.
 
 pub mod ast;
-pub mod attributes;
 pub mod classes;
 pub mod expr;
 pub mod ffi;

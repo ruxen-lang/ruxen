@@ -1,8 +1,0 @@
-def do_nothing -> ()
-  ()
-end
-
-def main
-  let u = do_nothing()
-  puts "ok"
-end

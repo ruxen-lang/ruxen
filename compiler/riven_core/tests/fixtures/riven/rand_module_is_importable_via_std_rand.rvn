@@ -4,8 +4,8 @@ use std.rand.{random_bytes, random_u64, random_fill}
 def main
   let _u = random_u64()
   match random_bytes(1)
-    Ok(_)  -> ()
-    Err(_) -> ()
+    Ok(_)  -> nil
+    Err(_) -> nil
   end
   var buf: Array[Int] = Array.new
   buf.push(0)

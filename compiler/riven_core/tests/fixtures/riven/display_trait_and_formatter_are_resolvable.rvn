@@ -4,7 +4,7 @@ class Money
   include Display
 
   def fmt(f: &var Formatter) -> Result[(), FmtError]
-    Ok(())
+    Ok(nil)
   end
 end
 

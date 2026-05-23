@@ -8,15 +8,15 @@ use std.env.get
 
 def echo_back(s: TcpStream, bytes: &Array[Int])
   match s.write(bytes)
-    Ok(_)  -> ()
-    Err(_) -> ()
+    Ok(_)  -> nil
+    Err(_) -> nil
   end
 end
 
 def close_stream(s: TcpStream)
   match s.close()
-    Ok(_)  -> ()
-    Err(_) -> ()
+    Ok(_)  -> nil
+    Err(_) -> nil
   end
 end
 
@@ -24,7 +24,7 @@ def handle_client(s: TcpStream)
   var buf: Array[Int] = Array.new
   match s.read(&var buf)
     Ok(_n) -> echo_back(s, &buf)
-    Err(_) -> ()
+    Err(_) -> nil
   end
   close_stream(s)
 end
@@ -36,7 +36,7 @@ def accept_one(l: TcpListener)
     # during the blocking call — we don't need to inspect the
     # variant; the signal-flag check in the caller decides whether
     # to break out of the loop.
-    Err(_) -> ()
+    Err(_) -> nil
   end
 end
 
@@ -48,8 +48,8 @@ def serve(l: TcpListener)
     end
   end
   match l.close()
-    Ok(_)  -> ()
-    Err(_) -> ()
+    Ok(_)  -> nil
+    Err(_) -> nil
   end
 end
 
