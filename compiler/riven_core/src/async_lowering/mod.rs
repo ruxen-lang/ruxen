@@ -110,11 +110,14 @@ pub fn lower_async_defs_with_bootstrap(program: &mut Program, bootstrap_programs
     // program so e.g. `Async.sleep(d).await` resolves to
     // `TimeSleepFuture` (library/std/future/src/lib.rvn).
     let mut class_static_returns: HashMap<(String, String), TypeExpr> = HashMap::new();
+    let mut class_instance_returns: HashMap<(String, String), TypeExpr> = HashMap::new();
     let mut future_outputs: HashMap<String, TypeExpr> = HashMap::new();
     collect_class_static_returns_into(program, &mut class_static_returns);
+    collect_class_instance_returns_into(program, &mut class_instance_returns);
     collect_future_outputs_into(program, &mut future_outputs);
     for bp in bootstrap_programs {
         collect_class_static_returns_into(bp, &mut class_static_returns);
+        collect_class_instance_returns_into(bp, &mut class_instance_returns);
         collect_future_outputs_into(bp, &mut future_outputs);
     }
 
@@ -140,6 +143,7 @@ pub fn lower_async_defs_with_bootstrap(program: &mut Program, bootstrap_programs
                     func,
                     &async_fn_returns,
                     &class_static_returns,
+                    &class_instance_returns,
                     &future_outputs,
                 ) {
                     *func = rewritten;
@@ -223,6 +227,57 @@ fn collect_class_static_returns_into(
         for lib in &class.lib_decls {
             for f in &lib.functions {
                 if !f.is_class_method {
+                    continue;
+                }
+                if let Some(ret) = &f.return_type {
+                    into.insert((class.name.clone(), f.name.clone()), ret.clone());
+                }
+            }
+        }
+    }
+}
+
+/// Twin of [`collect_class_static_returns_into`] for INSTANCE methods —
+/// `def X(...) -> T` (no `self.` prefix). Drives Shape 3 in
+/// `describe_await`: `<obj>.<method>(args).await` where the receiver's
+/// class is known from a `(receiver_name → class_name)` map built by
+/// the caller (`lower_one_async_fn_with_await`).
+///
+/// The receiver-type map is the missing piece — it's built from the
+/// outer fn's param annotations + simple let-binding chains, which is
+/// enough to cover the canonical server shape:
+///
+///   def handle(stream: AsyncTcpStream)
+///     let n = stream.read(buf).await   # Shape 3 — works
+///   end
+///
+/// Cases that fall outside (`Result.Ok(x)` pattern-bound x, x coming
+/// from another async fn's Output, etc.) still need
+/// `block_on(method())`. Closing those is a separate task.
+fn collect_class_instance_returns_into(
+    program: &Program,
+    into: &mut HashMap<(String, String), TypeExpr>,
+) {
+    for item in &program.items {
+        let class = match item {
+            TopLevelItem::Class(c) => c,
+            _ => continue,
+        };
+        // Hand-written instance methods — `def name(self, ...) -> T`.
+        for m in &class.methods {
+            if m.is_class_method {
+                continue;
+            }
+            if let Some(ret) = &m.return_type {
+                into.insert((class.name.clone(), m.name.clone()), ret.clone());
+            }
+        }
+        // FFI shells inside `lib "..." ... end` declared as instance
+        // methods (`def name as "..."(self, ...) -> T`). The stdlib's
+        // AsyncTcpStream / AsyncTcpListener instance API lives here.
+        for lib in &class.lib_decls {
+            for f in &lib.functions {
+                if f.is_class_method {
                     continue;
                 }
                 if let Some(ret) = &f.return_type {
@@ -576,6 +631,7 @@ fn lower_one_async_fn_with_await(
     func: &FuncDef,
     async_fn_returns: &HashMap<String, (String, TypeExpr)>,
     class_static_returns: &HashMap<(String, String), TypeExpr>,
+    class_instance_returns: &HashMap<(String, String), TypeExpr>,
     future_outputs: &HashMap<String, TypeExpr>,
 ) -> Option<(FuncDef, ClassDef)> {
     let span = func.span.clone();
@@ -646,14 +702,52 @@ fn lower_one_async_fn_with_await(
     let outer_arg_names: Vec<String> = func.params.iter().map(|p| p.name.clone()).collect();
     let mut outer_field_names: Vec<String> = outer_arg_names.clone();
     outer_field_names.extend(crossing_names.iter().cloned());
+
+    // Receiver-type map for Shape-3 (instance-method awaitee) lookup.
+    // Sources, walked in order so later entries shadow earlier:
+    //   1. Outer fn params — `def handle(s: AsyncTcpStream)` → `s` →
+    //      "AsyncTcpStream". The canonical case.
+    //   2. Pre-await `let x: Class = ...` annotated locals — covers
+    //      the user-pre-binds-then-awaits shape.
+    //   3. Pre-await `var x = ident` / `let x = ident` rebinds —
+    //      `var s = stream` propagates the type from `stream` (in the
+    //      map) to `s`. Mirrors the 4C server fixture pattern.
+    let mut receiver_types: HashMap<String, String> = HashMap::new();
+    for p in &func.params {
+        if let Some(name) = single_named_class(&p.type_expr) {
+            receiver_types.insert(p.name.clone(), name);
+        }
+    }
+    for s in &pre_await_stmts {
+        if let Statement::Let(lb) = s {
+            if let Pattern::Identifier { name, .. } = &lb.pattern {
+                if let Some(ann) = &lb.type_annotation {
+                    if let Some(cls) = single_named_class(ann) {
+                        receiver_types.insert(name.clone(), cls);
+                        continue;
+                    }
+                }
+                if let Some(val) = &lb.value {
+                    if let ExprKind::Identifier(src) = &val.kind {
+                        if let Some(src_ty) = receiver_types.get(src).cloned() {
+                            receiver_types.insert(name.clone(), src_ty);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let mut subs: Vec<AwaitSub> = Vec::new();
     for al in &await_lets {
         let sub = describe_await(
             al,
             async_fn_returns,
             class_static_returns,
+            class_instance_returns,
             future_outputs,
             &outer_field_names,
+            &receiver_types,
         )?;
         subs.push(sub);
     }
@@ -781,15 +875,24 @@ fn lower_one_async_fn_with_await(
         }));
     }
     // (4) Default values for await bindings.
+    //
+    // Skip rather than bail when a binding's result_type has no
+    // synthesisable default — for class / complex generic types
+    // (`Result[String, IoError]`, `(AsyncTcpStream, String)`, …) the
+    // alloc-zeroed field stays zero-initialised until the poll Ready
+    // arm overwrites it. The earlier "must default" rule prevented
+    // every B2b instance-method await on the stdlib IO futures from
+    // lowering. Pin: docs/rondo_v1_blockers.md B2b.
     for sub in &subs {
-        let default = default_value_for_type(&sub.result_type, &span)?;
-        init_body_stmts.push(Statement::Expression(Expr {
-            kind: ExprKind::Assign {
-                target: Box::new(self_field(&sub.binding_name, &span)),
-                value: Box::new(default),
-            },
-            span: span.clone(),
-        }));
+        if let Some(default) = default_value_for_type(&sub.result_type, &span) {
+            init_body_stmts.push(Statement::Expression(Expr {
+                kind: ExprKind::Assign {
+                    target: Box::new(self_field(&sub.binding_name, &span)),
+                    value: Box::new(default),
+                },
+                span: span.clone(),
+            }));
+        }
     }
 
     let init_method = FuncDef {
@@ -1269,12 +1372,27 @@ fn stmts_reference_name(stmts: &[Statement], name: &str) -> bool {
 /// pattern. Downstream `lower_one_async_fn_with_await` returns `None`
 /// for the whole function in that case, and the resolver/typeck pass
 /// surfaces a follow-up diagnostic.
+/// Extract a single-segment class name from a `TypeExpr::Named` path
+/// (e.g. `AsyncTcpStream`). Returns `None` for generics, tuples,
+/// references, or multi-segment paths — Shape-3 dispatch only handles
+/// bare class identifiers.
+fn single_named_class(ty: &TypeExpr) -> Option<String> {
+    if let TypeExpr::Named(path) = ty {
+        if path.segments.len() == 1 {
+            return Some(path.segments[0].clone());
+        }
+    }
+    None
+}
+
 fn describe_await(
     lb: &LetBinding,
     async_fn_returns: &HashMap<String, (String, TypeExpr)>,
     class_static_returns: &HashMap<(String, String), TypeExpr>,
+    class_instance_returns: &HashMap<(String, String), TypeExpr>,
     future_outputs: &HashMap<String, TypeExpr>,
     outer_arg_names: &[String],
+    receiver_types: &HashMap<String, String>,
 ) -> Option<AwaitSub> {
     let binding_name = match &lb.pattern {
         Pattern::Identifier { name, .. } => name.clone(),
@@ -1351,20 +1469,58 @@ fn describe_await(
         if !generic_args.is_empty() || block.is_some() {
             return None;
         }
-        let class_name = match &object.kind {
+        let receiver_ident = match &object.kind {
             ExprKind::Identifier(n) => n.clone(),
             _ => return None,
         };
-        let ret_ty = class_static_returns.get(&(class_name.clone(), method.clone()))?;
-        let future_class_name = match ret_ty {
+
+        // First try Shape 2 (static method on a class name). Then fall
+        // through to Shape 3 (instance method on a typed receiver) if
+        // the static lookup misses.
+        let (ret_ty, awaitee_receiver, is_static): (TypeExpr, ExprKind, bool) =
+            if let Some(rt) = class_static_returns
+                .get(&(receiver_ident.clone(), method.clone()))
+                .cloned()
+            {
+                (
+                    rt,
+                    ExprKind::Identifier(receiver_ident.clone()),
+                    true,
+                )
+            } else if let Some(class_name) = receiver_types.get(&receiver_ident) {
+                let rt = class_instance_returns
+                    .get(&(class_name.clone(), method.clone()))
+                    .cloned()?;
+                // For Shape 3 the awaitee receiver stays as the original
+                // identifier; the outer-arg-rewrite below promotes it to
+                // `self.<name>` when needed.
+                (
+                    rt,
+                    ExprKind::Identifier(receiver_ident.clone()),
+                    false,
+                )
+            } else {
+                return None;
+            };
+        let _ = is_static; // reserved for future divergence in lowering shapes
+
+        let future_class_name = match &ret_ty {
             TypeExpr::Named(path) if path.segments.len() == 1 => path.segments[0].clone(),
             _ => return None,
         };
         let output_ty = future_outputs.get(&future_class_name)?.clone();
 
-        // Preserve the original `Class.method(args)` expression as the
-        // sub-future constructor; just rewrite outer arg refs inside
-        // the args to `self.<arg>` references.
+        // Preserve the original `<receiver>.method(args)` expression as
+        // the sub-future constructor. Both Shape-2 and Shape-3 receivers
+        // pass through `rewrite_arg_refs_in_expr` so any outer-field
+        // name on the receiver itself (Shape 3) becomes `self.<name>`,
+        // matching how state-machine fields are stored.
+        let mut rewritten_receiver = Expr {
+            kind: awaitee_receiver,
+            span: span.clone(),
+        };
+        rewrite_arg_refs_in_expr(&mut rewritten_receiver, outer_arg_names);
+
         let mut rewritten_args: Vec<Expr> = Vec::with_capacity(args.len());
         for a in args {
             let mut rewritten = a.clone();
@@ -1373,10 +1529,7 @@ fn describe_await(
         }
         let awaitee_ctor = Expr {
             kind: ExprKind::MethodCall {
-                object: Box::new(Expr {
-                    kind: ExprKind::Identifier(class_name.clone()),
-                    span: span.clone(),
-                }),
+                object: Box::new(rewritten_receiver),
                 method: method.clone(),
                 generic_args: Vec::new(),
                 args: rewritten_args,
@@ -1664,7 +1817,7 @@ fn default_value_for_type(ty: &TypeExpr, span: &Span) -> Option<Expr> {
     }
     if let TypeExpr::Named(path) = ty {
         if path.segments.len() == 1 {
-            return match path.segments[0].as_str() {
+            let scalar = match path.segments[0].as_str() {
                 "Int" | "I8" | "I16" | "I32" | "I64" | "U8" | "U16" | "U32" | "U64" | "USize"
                 | "ISize" => Some(Expr {
                     kind: ExprKind::IntLiteral(0, None),
@@ -1684,6 +1837,70 @@ fn default_value_for_type(ty: &TypeExpr, span: &Span) -> Option<Expr> {
                 }),
                 _ => None,
             };
+            if scalar.is_some() {
+                return scalar;
+            }
+            // Generic-wrapped defaults for the canonical Future Output
+            // shapes — Option[T] and Result[T, E]. Without these, B2b
+            // Shape-3 awaits bail at the (4) default-value step in
+            // `lower_one_async_fn_with_await` whenever the awaited
+            // future's Output is generic (every IO-style future).
+            //
+            // Defaults chosen by safety not by semantic meaning: the
+            // poll-Ready arm overwrites the binding field with the
+            // actual value before any user code reads it. We need a
+            // well-typed placeholder, not the "right" value.
+            //   - Option[T] → Option.None (no payload to default).
+            //   - Result[T, E] → Result.Err(default(E)) IF E defaults,
+            //     else Result.Ok(default(T)) IF T defaults. Falls
+            //     through to None when neither side defaults (rare —
+            //     future Outputs almost always wrap a scalar payload).
+            if path.segments[0].as_str() == "Option" {
+                return Some(Expr {
+                    kind: ExprKind::EnumVariant {
+                        type_path: vec!["Option".to_string()],
+                        variant: "None".to_string(),
+                        args: Vec::new(),
+                    },
+                    span: span.clone(),
+                });
+            }
+            if path.segments[0].as_str() == "Result" {
+                if let Some(args) = &path.generic_args {
+                    if args.len() == 2 {
+                        if let Some(default_err) = default_value_for_type(&args[1], span) {
+                            return Some(Expr {
+                                kind: ExprKind::EnumVariant {
+                                    type_path: vec!["Result".to_string()],
+                                    variant: "Err".to_string(),
+                                    args: vec![FieldArg {
+                                        name: None,
+                                        value: default_err,
+                                        span: span.clone(),
+                                    }],
+                                },
+                                span: span.clone(),
+                            });
+                        }
+                        if let Some(default_ok) = default_value_for_type(&args[0], span) {
+                            return Some(Expr {
+                                kind: ExprKind::EnumVariant {
+                                    type_path: vec!["Result".to_string()],
+                                    variant: "Ok".to_string(),
+                                    args: vec![FieldArg {
+                                        name: None,
+                                        value: default_ok,
+                                        span: span.clone(),
+                                    }],
+                                },
+                                span: span.clone(),
+                            });
+                        }
+                    }
+                }
+                return None;
+            }
+            return None;
         }
     }
     None
