@@ -88,6 +88,13 @@ lib "runtime/async_net.c"
   def riven_async_tcp_read_state_take_result(state: Int) -> Result[String, IoError]
   def riven_async_tcp_read_state_free(state: Int) -> ()
 
+  # Helper for AsyncReadWithTimeoutFuture — builds a
+  # Result::Err(IoError.TimedOut("read timed out")) without touching
+  # the read-state struct. The unit-tag form used internally by
+  # take_result can't carry the TimedOut payload, so we mint the
+  # tagged-with-message variant directly in C.
+  def riven_async_net_make_timeout_result() -> Result[String, IoError]
+
   def riven_async_tcp_write_state_new(fd: Int, content: &String) -> Int
   def riven_async_tcp_write_state_get_fd(state: Int) -> Int
   def riven_async_tcp_write_step(state: Int) -> Int

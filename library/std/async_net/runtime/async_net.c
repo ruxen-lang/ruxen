@@ -710,6 +710,22 @@ void riven_async_tcp_read_state_free(void *state) {
     free(s);
 }
 
+/* Build a Result::Err(IoError.TimedOut("read timed out")) without
+ * touching a read-state struct. Used by AsyncReadWithTimeoutFuture
+ * when the deadline timer fires before the kernel reports any
+ * readiness on the fd. We bypass riven_async_tcp_read_state_take_result
+ * deliberately — that helper consumes / frees the buffer and would
+ * collapse the variant to the *unit* tag form (no payload), but
+ * IoError.TimedOut is a message-carrying variant (#06.5 T1).
+ *
+ * The state struct is NOT freed here; the future's drop calls
+ * riven_async_tcp_read_state_free for that. */
+void *riven_async_net_make_timeout_result(void) {
+    return riven_result_err_value(
+        (int64_t)riven_io_error_struct(RIVEN_IO_ERROR_TIMED_OUT,
+                                       "read timed out"));
+}
+
 /* ── AsyncTcpStream.write state machine (B9) ───────────────────────── */
 /* Writes the entire `content` (matches spec phrasing "writes up to
  * content.len bytes" but in practice loops until EOF on the writer or

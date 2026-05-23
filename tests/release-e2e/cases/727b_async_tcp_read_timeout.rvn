@@ -1,0 +1,107 @@
+## v1-missing-features: AsyncTcpStream.read_with_timeout idle-timeout
+## semantics. A listener accepts a connection but never writes;
+## the client calls `read_with_timeout(64, 100_000_000)` (100ms) and
+## must observe Err(IoError.TimedOut(_)) within a sane wall-clock
+## bound (we accept up to 500ms to absorb CI jitter).
+##
+## Shape mirrors 727_async_tcp_echo: a synchronous Thread.spawn_raw
+## hosts the listener so the main thread's block_on owns the timeout
+## under test. Single block_on per future call (no .await desugaring
+## on method-call awaitees today).
+
+use std.time.Duration
+
+def server_loop -> Int
+  let addr = String.from("127.0.0.1:31730")
+  let bound = block_on(AsyncTcpListener.bind(addr))
+  match bound
+    Ok(listener) -> server_run(listener)
+    Err(_)       -> 0
+  end
+end
+
+## Accept once and then sleep — the client's read_with_timeout MUST
+## fire its timer because the server deliberately writes nothing.
+## Sleep is longer than the client timeout so the stream stays alive
+## for the duration of the test.
+def server_run(listener: AsyncTcpListener) -> Int
+  var l = listener
+  let accepted = block_on(l.accept)
+  match accepted
+    Ok(pair) -> server_hold(pair)
+    Err(_)   -> 0
+  end
+end
+
+def server_hold(pair: (AsyncTcpStream, String)) -> Int
+  # Keep the stream alive (silent peer) for 500ms — covers the
+  # client's 100ms read timeout plus jitter headroom.
+  Thread.sleep(Duration.from_millis(500))
+  1
+end
+
+def client_flow -> Int
+  let addr = String.from("127.0.0.1:31730")
+  let connected = block_on(AsyncTcpStream.connect(addr))
+  match connected
+    Ok(stream) -> client_read_timeout(stream)
+    Err(_)     -> 0
+  end
+end
+
+## Drive read_with_timeout and assert:
+##   * result is Err(_) (not Ok — we wrote nothing on the server)
+##   * the IoError kind is TimedOut
+##   * wall-clock elapsed is within [50ms, 500ms] — looser than the
+##     timer's 100ms target so CI jitter doesn't trip us
+def client_read_timeout(stream: AsyncTcpStream) -> Int
+  var s = stream
+  let start = Instant.now()
+  let result = block_on(s.read_with_timeout(64, 100000000))
+  let elapsed_dur = start.elapsed()
+  let elapsed_ms = elapsed_dur.as_millis()
+  match result
+    Ok(_)    -> 0
+    Err(err) -> check_timeout_err(err, elapsed_ms)
+  end
+end
+
+def check_timeout_err(err: IoError, elapsed_ms: Int) -> Int
+  let kind = err.kind()
+  match kind
+    IoErrorKind.TimedOut -> within_bounds(elapsed_ms)
+    _                    -> 0
+  end
+end
+
+## 50ms lower bound rules out an instant-return bug (the timer must
+## actually have elapsed). 500ms upper bound rules out hanging-for-
+## the-full-server-sleep behaviour.
+def within_bounds(elapsed_ms: Int) -> Int
+  if elapsed_ms < 50
+    return 0
+  end
+  if elapsed_ms > 500
+    return 0
+  end
+  1
+end
+
+def main
+  let server_closure = { || server_loop() }
+  let handle = Thread.spawn_raw(server_closure)
+  if handle == 0
+    puts "spawn_fail"
+    return
+  end
+  Thread.sleep(Duration.from_millis(50))
+
+  let ok = client_flow()
+  if ok == 1
+    puts "timeout_ok"
+  else
+    puts "timeout_fail"
+  end
+
+  let _ = JoinHandle.join_raw(handle)
+end

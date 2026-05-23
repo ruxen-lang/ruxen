@@ -21,6 +21,24 @@ class AsyncTcpStream
     AsyncReadFuture.new(riven_async_tcp_stream_fd(self), max_bytes)
   end
 
+  ## Idle-timeout variant of read. Resolves to
+  ## Err(IoError.TimedOut(...)) if `timeout_ns` nanoseconds elapse
+  ## without the kernel reporting read-readiness on this stream's fd.
+  ##
+  ## Implementation note: the persistent read-readiness registration
+  ## owned by the stream (see riven_async_tcp_stream_read_handle) is
+  ## still what wakes park_current on real bytes arriving; the
+  ## additional per-call timer registration races against it. The
+  ## stream's persistent handle is NOT touched on this future's drop —
+  ## the stream owns its own lifecycle.
+  def var read_with_timeout(max_bytes: Int, timeout_ns: Int) -> AsyncReadWithTimeoutFuture
+    AsyncReadWithTimeoutFuture.new(
+      riven_async_tcp_stream_fd(self),
+      max_bytes,
+      timeout_ns
+    )
+  end
+
   def var write(content: &String) -> AsyncWriteFuture
     AsyncWriteFuture.new(riven_async_tcp_stream_fd(self), content)
   end
@@ -34,4 +52,5 @@ lib "runtime/async_net.c"
   def riven_async_tcp_stream_fd(stream: &AsyncTcpStream) -> Int
   def riven_async_tcp_stream_from_fd(fd: Int) -> AsyncTcpStream
   def riven_async_tcp_stream_shutdown(stream: &AsyncTcpStream) -> ()
+  def riven_async_tcp_stream_read_handle(stream: &AsyncTcpStream) -> Int
 end

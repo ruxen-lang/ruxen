@@ -181,6 +181,10 @@ pub const BOOTSTRAP_EMBEDDED_SIBLINGS: &[(&str, &[(&str, &str)])] = &[
                 include_str!("../../../../library/std/async_net/src/async_read_future.rvn"),
             ),
             (
+                "async_read_with_timeout_future.rvn",
+                include_str!("../../../../library/std/async_net/src/async_read_with_timeout_future.rvn"),
+            ),
+            (
                 "async_write_future.rvn",
                 include_str!("../../../../library/std/async_net/src/async_write_future.rvn"),
             ),
