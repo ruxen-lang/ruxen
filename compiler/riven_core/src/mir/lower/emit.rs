@@ -18,6 +18,49 @@ impl<'a> Lowerer<'a> {
     /// later iteration that bypasses the `let` will dealloc NULL.
     pub(super) fn emit_dealloc_loop_locals(&mut self, locals: &[LocalId]) {
         for &local in locals {
+            // If the local is a class with a user-declared `def drop`,
+            // call that destructor FIRST so it sees the live allocation
+            // (e.g. JoinHandle's drop needs to read tid + closure fields
+            // to detach the spawned thread before the memory is freed).
+            // Without this, a `let _h = Thread.spawn({...})` inside a
+            // while loop body would dealloc the JoinHandle at the
+            // back-edge before the spawned thread had a chance to read
+            // its closure.fn_ptr — see rondo's docs/riven-issues.md
+            // §W15.
+            let drop_callee = self
+                .fn_ref()
+                .locals
+                .iter()
+                .find(|l| l.id == local)
+                .and_then(|l| match &l.ty {
+                    Ty::Class { name, .. } => {
+                        let bare = self.user_drop_classes.contains(name);
+                        let suffix = format!(".{}", name);
+                        let qualified = self
+                            .user_drop_classes
+                            .iter()
+                            .any(|q| q.ends_with(&suffix));
+                        if bare || qualified {
+                            let mangled = format!("{}_drop", name);
+                            Some(
+                                self.ffi_alias_map
+                                    .get(&mangled)
+                                    .cloned()
+                                    .unwrap_or(mangled),
+                            )
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                });
+            if let Some(callee) = drop_callee {
+                self.emit(MirInst::Call {
+                    dest: None,
+                    callee,
+                    args: vec![MirValue::Use(local)],
+                });
+            }
             self.emit(MirInst::Call {
                 dest: None,
                 callee: "riven_dealloc".to_string(),

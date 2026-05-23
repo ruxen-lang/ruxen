@@ -186,6 +186,7 @@ pub(super) fn insert_drops(
     return_locals: &HashSet<LocalId>,
     symbols: &SymbolTable,
     user_drop_classes: &HashSet<String>,
+    ffi_alias_map: &HashMap<String, String>,
 ) {
     // Avoid recursing into a class's own `drop` method: if `Holder_drop`
     // takes `self: Holder`, drop-elaboration on `self` would emit a call
@@ -302,7 +303,14 @@ pub(super) fn insert_drops(
                     return true;
                 }
                 if let Ty::Class { name, .. } = &local.ty {
-                    if user_drop_classes.contains(name) && dealloc_safe.contains(&local.id) {
+                    // Match bare name OR any module-qualified entry
+                    // ending in ".<name>" — user_drop_classes uses
+                    // qualified names for stdlib classes (see W15 fix
+                    // in drop_callees builder below).
+                    let suffix = format!(".{}", name);
+                    let user_drop_match = user_drop_classes.contains(name)
+                        || user_drop_classes.iter().any(|q| q.ends_with(&suffix));
+                    if user_drop_match && dealloc_safe.contains(&local.id) {
                         return true;
                     }
                 }
@@ -330,13 +338,30 @@ pub(super) fn insert_drops(
     // Pre-compute, for each drop-eligible local, the user-drop class name
     // so we can emit `{ClassName}_drop(self)` immediately before the
     // dealloc + no-op cleanup. Indexed for cheap lookup inside the loop.
+    // Build the drop-callee map. For each drop-eligible local, look
+    // up its class name in user_drop_classes (bare or qualified) and
+    // record the synthesized `{ClassName}_drop` callee. Resolve that
+    // callee through `ffi_alias_map` so lib-decl `def drop as
+    // "riven_..."` aliases reach the right C symbol — without this
+    // last step, emitted MirInst::Call would point at an undefined
+    // `JoinHandle_drop`-style symbol and the user destructor would
+    // silently fail to run while `riven_dealloc` still freed memory.
+    // That was the failure mode behind rondo's
+    // docs/riven-issues.md §W15: Thread.spawn JoinHandle was getting
+    // bare-dealloc'd, freeing the struct out from under the spawned
+    // thread.
     let drop_callees: HashMap<LocalId, String> = drop_locals
         .iter()
         .filter_map(|&id| {
             let local = func.locals.iter().find(|l| l.id == id)?;
             if let Ty::Class { name, .. } = &local.ty {
-                if user_drop_classes.contains(name) {
-                    return Some((id, format!("{}_drop", name)));
+                let bare_match = user_drop_classes.contains(name);
+                let suffix = format!(".{}", name);
+                let suffix_match = user_drop_classes.iter().any(|q| q.ends_with(&suffix));
+                if bare_match || suffix_match {
+                    let mangled = format!("{}_drop", name);
+                    let callee = ffi_alias_map.get(&mangled).cloned().unwrap_or(mangled);
+                    return Some((id, callee));
                 }
             }
             None

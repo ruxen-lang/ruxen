@@ -137,6 +137,7 @@ impl<'a> Lowerer<'a> {
             &return_locals,
             self.symbols,
             &self.user_drop_classes,
+            &self.ffi_alias_map,
         );
 
         Ok(mir_fn)

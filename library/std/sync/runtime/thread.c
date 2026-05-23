@@ -1,5 +1,7 @@
 #include "../../core/runtime/runtime.h"
 #include <pthread.h>
+#include <stdatomic.h>
+#include <string.h>
 
 /* std.sync.Thread / JoinHandle runtime.
  *
@@ -26,19 +28,46 @@ typedef struct {
     int64_t captures_ptr;
 } RivenClosure;
 
+/* W15 fix: the spawned thread reads from a SEPARATE allocation
+ * (`RivenSpawnCtx`) that lives independently of the caller's
+ * JoinHandle. The caller's MIR drop-elab is free to call
+ * `JoinHandle_drop` + `riven_dealloc` on `jh` at any time — the
+ * thread keeps running because it never touches `jh` again after
+ * trampoline entry. The spawn ctx is freed by the trampoline
+ * itself after the closure body returns. The result slot lives in
+ * the ctx (not jh) so join can read it without racing against the
+ * caller's free. */
+typedef struct {
+    int64_t fn_ptr;
+    int64_t captures_ptr;
+    /* Result is published here by the trampoline. join_raw reads
+     * it via the back-link held in the JoinHandle. */
+    int64_t result;
+    /* refcount: one ref for the spawned thread (trampoline releases
+     * it after body), one for the caller's JoinHandle (drop / join
+     * releases). Whoever takes the count to zero frees ctx. */
+    atomic_int refcount;
+} RivenSpawnCtx;
+
 typedef struct {
     pthread_t tid;
-    int64_t result;       /* set by trampoline before exit */
-    int joined;           /* 0/1; flipped by riven_join */
-    int panicked;         /* 0/1; reserved for unwind support */
-    char panic_msg[256];  /* reserved */
-    RivenClosure closure; /* held by the spawned thread */
+    int joined;             /* 0/1; flipped by riven_join */
+    int panicked;           /* 0/1; reserved for unwind support */
+    char panic_msg[256];    /* reserved */
+    RivenSpawnCtx *ctx;     /* points to the independently-owned ctx */
 } RivenJoinHandle;
 
+static void riven_spawn_ctx_release(RivenSpawnCtx *ctx) {
+    if (atomic_fetch_sub_explicit(&ctx->refcount, 1, memory_order_acq_rel) == 1) {
+        free(ctx);
+    }
+}
+
 static void *riven_thread_trampoline(void *arg) {
-    RivenJoinHandle *jh = (RivenJoinHandle *)arg;
-    riven_closure_fn0 f = (riven_closure_fn0)jh->closure.fn_ptr;
-    jh->result = f(jh->closure.captures_ptr);
+    RivenSpawnCtx *ctx = (RivenSpawnCtx *)arg;
+    riven_closure_fn0 f = (riven_closure_fn0)(uintptr_t)ctx->fn_ptr;
+    ctx->result = f(ctx->captures_ptr);
+    riven_spawn_ctx_release(ctx);
     return NULL;
 }
 
@@ -52,20 +81,29 @@ int64_t riven_thread_spawn(int64_t closure_ptr) {
     if (!closure_ptr) {
         riven_panic("Thread.spawn: null closure");
     }
+    RivenClosure *src = (RivenClosure *)(uintptr_t)closure_ptr;
+    /* Independent spawn ctx (survives caller's JoinHandle drop). */
+    RivenSpawnCtx *ctx = (RivenSpawnCtx *)malloc(sizeof(RivenSpawnCtx));
+    if (!ctx) riven_panic("Thread.spawn: out of memory (ctx)");
+    ctx->fn_ptr = src->fn_ptr;
+    ctx->captures_ptr = src->captures_ptr;
+    ctx->result = 0;
+    atomic_store_explicit(&ctx->refcount, 2, memory_order_relaxed);
+
     RivenJoinHandle *jh = (RivenJoinHandle *)malloc(sizeof(RivenJoinHandle));
-    if (!jh) riven_panic("Thread.spawn: out of memory");
-    jh->result = 0;
+    if (!jh) {
+        free(ctx);
+        riven_panic("Thread.spawn: out of memory (jh)");
+    }
     jh->joined = 0;
     jh->panicked = 0;
     jh->panic_msg[0] = '\0';
-    /* Copy the closure struct so the caller's copy can move freely. */
-    RivenClosure *src = (RivenClosure *)closure_ptr;
-    jh->closure.fn_ptr = src->fn_ptr;
-    jh->closure.captures_ptr = src->captures_ptr;
+    jh->ctx = ctx;
 
-    int rc = pthread_create(&jh->tid, NULL, riven_thread_trampoline, jh);
+    int rc = pthread_create(&jh->tid, NULL, riven_thread_trampoline, ctx);
     if (rc != 0) {
         free(jh);
+        free(ctx);
         riven_panic("Thread.spawn: pthread_create failed");
     }
     return (int64_t)jh;
@@ -78,30 +116,36 @@ int64_t riven_thread_spawn(int64_t closure_ptr) {
  * propagation is deferred until unwind support lands.
  */
 int64_t riven_thread_join(int64_t handle_ptr) {
-    RivenJoinHandle *jh = (RivenJoinHandle *)handle_ptr;
+    RivenJoinHandle *jh = (RivenJoinHandle *)(uintptr_t)handle_ptr;
     if (!jh) riven_panic("JoinHandle.join: null handle");
     if (jh->joined) riven_panic("JoinHandle.join: handle already joined");
     void *retval = NULL;
     int rc = pthread_join(jh->tid, &retval);
     if (rc != 0) riven_panic("JoinHandle.join: pthread_join failed");
     jh->joined = 1;
-    int64_t result = jh->result;
-    free(jh);
+    int64_t result = jh->ctx->result;
+    /* W15: release the caller's ref on the spawn ctx. Trampoline
+     * already released its own ref when it returned, so this is
+     * the last ref and the ctx is freed here. The JoinHandle
+     * struct itself is freed by MIR-emitted riven_dealloc — we
+     * just let that happen. */
+    riven_spawn_ctx_release(jh->ctx);
     return result;
 }
 
-/* JoinHandle drop — free without joining (detaches the thread).
- *
- * If the user drops a handle without joining, we currently leak the
- * spawned thread (pthread_detach lets it run to completion). The
- * MVP cut prioritises correctness on the join path; detach behaviour
- * is a deliberate v1 limitation.
+/* JoinHandle drop — detach the thread, drop the caller's ref on
+ * the spawn ctx. The JoinHandle struct itself is freed by the
+ * MIR-emitted riven_dealloc that follows; we just need to make
+ * sure the SPAWN CTX outlives us, which the refcount handles.
  */
 void riven_thread_join_handle_drop(int64_t handle_ptr) {
-    RivenJoinHandle *jh = (RivenJoinHandle *)handle_ptr;
+    RivenJoinHandle *jh = (RivenJoinHandle *)(uintptr_t)handle_ptr;
     if (!jh || jh->joined) return;
     pthread_detach(jh->tid);
-    free(jh);
+    /* Spawn ctx might already have been released by the trampoline
+     * if the thread finished before us — atomic refcount handles
+     * the race. */
+    riven_spawn_ctx_release(jh->ctx);
 }
 
 /* Thread.current_id() -> i64 (opaque ThreadId).
