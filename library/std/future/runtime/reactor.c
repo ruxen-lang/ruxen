@@ -62,6 +62,7 @@
 #elif defined(__linux__)
 #  include <sys/epoll.h>
 #  include <sys/timerfd.h>
+#  include <sys/eventfd.h>
 #else
 #  error "riven reactor: unsupported platform (only Linux + macOS in v1; see async_io.spec.md B-Y)"
 #endif
@@ -104,6 +105,18 @@ typedef struct RivenReactor {
     int fd_slots_len;
     int fd_slots_cap;
     RivenReactorFdSlot *fd_slots;
+    /* Wake fd: a single registration used by Waker.wake to unpark the
+     * thread when no I/O event is in flight. Created at reactor alloc
+     * time, persists for the reactor's lifetime. Linux: eventfd. macOS:
+     * EVFILT_USER ident = (uintptr_t)&wake_fd_sentinel.
+     *
+     * Deliberately NOT counted in `registered_count`. The
+     * sched_yield-fast-path in park_current still triggers when the
+     * only "registration" is the wake fd — block_on of a trivial
+     * non-I/O future (e.g. CountdownFuture from fixture 728) keeps the
+     * sched_yield behaviour rather than parking on epoll/kevent. */
+    int wake_fd;
+    int wake_fd_sentinel; /* address used as udata to identify wake events */
 #if defined(__APPLE__)
     int64_t next_ident;
     int slots_len;
@@ -129,6 +142,7 @@ static RivenReactor *riven_reactor_alloc_struct(void) {
         return NULL;
     }
     memset(r, 0, sizeof(*r));
+    r->wake_fd = -1;
 
 #if defined(__APPLE__)
     r->fd = kqueue();
@@ -138,12 +152,64 @@ static RivenReactor *riven_reactor_alloc_struct(void) {
         return NULL;
     }
     r->next_ident = 1;
+    /* Wake fd: EVFILT_USER, ident = (uintptr_t)&r->wake_fd_sentinel.
+     * EV_CLEAR auto-resets the trigger on each delivery, so park_current
+     * needs no drain syscall. We use the sentinel address as a stable,
+     * reactor-unique ident — distinct from timer idents (counter-based,
+     * starting at 1) and fd idents (raw fd numbers, all > 0 and small).
+     *
+     * NOTE: we do NOT bump registered_count. The wake fd is "background
+     * infrastructure" — park_current's sched_yield-when-no-real-
+     * registrations fast path must still fire for block_on of a
+     * non-I/O future (cf. fixture 728). */
+    {
+        struct kevent ev;
+        EV_SET(&ev, (uintptr_t)&r->wake_fd_sentinel, EVFILT_USER,
+               EV_ADD | EV_ENABLE | EV_CLEAR,
+               0, 0, &r->wake_fd_sentinel);
+        if (kevent(r->fd, &ev, 1, NULL, 0, NULL) < 0) {
+            close(r->fd);
+            free(r);
+            riven_panic("riven_reactor: kevent EVFILT_USER ADD failed");
+            return NULL;
+        }
+        /* wake_fd is unused on macOS (no fd backing for EVFILT_USER), but
+         * leaving it at -1 is the sentinel "no fd to close" for the
+         * free-struct path. */
+    }
 #elif defined(__linux__)
     r->fd = epoll_create1(EPOLL_CLOEXEC);
     if (r->fd < 0) {
         free(r);
         riven_panic("riven_reactor: epoll_create1() failed");
         return NULL;
+    }
+    /* Wake fd: eventfd registered with EPOLLIN, level-triggered. We use
+     * the sentinel address as data.ptr so park_current can distinguish
+     * wake events from fd-readiness events and timer events. Reading
+     * the eventfd in park_current drains the counter to 0 — subsequent
+     * wakes re-arm by writing 1. Eventfd_write is async-signal-safe
+     * (single 8-byte counter add), so cross-thread wake from a future
+     * stored on another thread is sound. */
+    r->wake_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    if (r->wake_fd < 0) {
+        close(r->fd);
+        free(r);
+        riven_panic("riven_reactor: eventfd() failed");
+        return NULL;
+    }
+    {
+        struct epoll_event ev;
+        memset(&ev, 0, sizeof(ev));
+        ev.events = EPOLLIN;
+        ev.data.ptr = &r->wake_fd_sentinel;
+        if (epoll_ctl(r->fd, EPOLL_CTL_ADD, r->wake_fd, &ev) < 0) {
+            close(r->wake_fd);
+            close(r->fd);
+            free(r);
+            riven_panic("riven_reactor: epoll_ctl(wake_fd) failed");
+            return NULL;
+        }
     }
 #endif
     return r;
@@ -152,6 +218,10 @@ static RivenReactor *riven_reactor_alloc_struct(void) {
 static void riven_reactor_free_struct(RivenReactor *r) {
     if (!r) {
         return;
+    }
+    if (r->wake_fd >= 0) {
+        close(r->wake_fd);
+        r->wake_fd = -1;
     }
     if (r->fd >= 0) {
         close(r->fd);
@@ -590,6 +660,46 @@ void riven_reactor_deregister(int64_t reactor_handle, int64_t handle) {
 #endif
 }
 
+/* Wake the reactor identified by `reactor_handle` (the same i64 the
+ * waker holds). Safe to call from any thread — eventfd_write /
+ * kevent NOTE_TRIGGER are atomic kernel-side operations.
+ *
+ * This is the bottom-half of the real-waker pipeline: when a Future
+ * stashes its `cx.waker` somewhere reachable from another thread (a
+ * channel, a signal handler, an OS callback), that consumer calls
+ * `Waker.wake()`, which routes here. The parked block_on thread
+ * returns from epoll_wait/kevent on the wake fd and the pump
+ * re-polls every queued task (wake-all in v1; selective per-task
+ * routing is a v2 follow-up).
+ *
+ * Idempotent: writing 1 to an eventfd accumulates the counter (we
+ * drain in park_current); EVFILT_USER NOTE_TRIGGER coalesces to a
+ * single delivery between waits. Either way "multiple wakes between
+ * parks → one unpark" is the correct semantic. */
+void riven_reactor_wake(int64_t reactor_handle) {
+    if (reactor_handle == 0) {
+        return;
+    }
+    RivenReactor *r = (RivenReactor *)(uintptr_t)reactor_handle;
+#if defined(__APPLE__)
+    struct kevent ev;
+    EV_SET(&ev, (uintptr_t)&r->wake_fd_sentinel, EVFILT_USER,
+           0, NOTE_TRIGGER, 0, &r->wake_fd_sentinel);
+    (void)kevent(r->fd, &ev, 1, NULL, 0, NULL);
+#elif defined(__linux__)
+    if (r->wake_fd < 0) {
+        return;
+    }
+    uint64_t one = 1;
+    /* write(2) on an eventfd is async-signal-safe and never short-writes
+     * — either 8 bytes or -1. EAGAIN is not possible on the writer side
+     * unless the counter is at UINT64_MAX-1, which would require
+     * 2^64 unanswered wakes. Ignore the result; on failure the parked
+     * thread will eventually time out via the next real I/O event. */
+    (void)write(r->wake_fd, &one, sizeof(one));
+#endif
+}
+
 /* Park the current thread on the current-thread reactor's wait point.
  * Called by `riven_thread_yield` in time.c — the existing
  * `Thread.yield_now` AST emission in the block_on rewriter routes
@@ -622,6 +732,13 @@ void riven_reactor_park_current(void) {
         return;
     }
     for (int i = 0; i < n; i++) {
+        /* Wake fd? Identified by udata == &r->wake_fd_sentinel. EV_CLEAR
+         * already reset the trigger; nothing further to do. The unpark
+         * itself IS the side-effect — the pump in the block_on loop
+         * will re-poll every task on return. */
+        if (events[i].udata == (void *)&r->wake_fd_sentinel) {
+            continue;
+        }
         /* Sub-phase 4B: fd-readiness events carry the fd_slot pointer
          * in udata (see register_fd_internal). Timer events have a
          * NULL udata and use ident-lookup. Branch on udata. */
@@ -654,7 +771,18 @@ void riven_reactor_park_current(void) {
      * whether the pointer lies inside this reactor's fd_slots array. */
     for (int i = 0; i < n; i++) {
         void *p = events[i].data.ptr;
-        if (!p || !r->fd_slots) {
+        if (!p) {
+            continue;
+        }
+        /* Wake fd? Identified by data.ptr == &r->wake_fd_sentinel.
+         * Drain the eventfd counter so we don't re-fire on the next
+         * park if no further wakes arrive. */
+        if (p == (void *)&r->wake_fd_sentinel) {
+            uint64_t drain;
+            (void)read(r->wake_fd, &drain, sizeof(drain));
+            continue;
+        }
+        if (!r->fd_slots) {
             continue;
         }
         /* Pointer-range check: is `p` a slot in our table? */
