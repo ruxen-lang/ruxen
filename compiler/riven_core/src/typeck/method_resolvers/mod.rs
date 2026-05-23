@@ -77,10 +77,15 @@ pub(super) fn builtin_method_type(
         (Ty::Str, "to_lower") => Some(Ty::Str),
         (Ty::Str, "to_upper") => Some(Ty::Str),
         (Ty::Str, "chars") => Some(Ty::Array(Box::new(Ty::Char))),
-        (Ty::Str, "split") => Some(Ty::Class {
-            name: "SplitIter".to_string(),
-            generic_args: vec![],
-        }),
+        // String#split returns Array<String> in Ruby — always. Both
+        // owned-`String` and borrowed-`&str` receivers should produce
+        // the same surface type. The historical `SplitIter` class
+        // shape on the `&str` arm was a Rust-style lazy iterator that
+        // didn't expose `.get(i)` / `.len()`, leaving callers stuck
+        // (every multipart/header parser hits this). Unifying to
+        // Array<String> matches Ruby and removes the footgun. Pin:
+        // `docs/rondo_v1_blockers.md` B13.
+        (Ty::Str, "split") => Some(Ty::Array(Box::new(Ty::String))),
         (Ty::Str, "parse_uint") => Some(Ty::Result(Box::new(Ty::USize), Box::new(Ty::Error))),
         (Ty::Str, "as_str") => Some(Ty::Str),
         (Ty::Str, "contains") => Some(Ty::Bool),

@@ -511,10 +511,15 @@ fn compile_project(
     let tree = ModuleTree::discover(project_dir)?;
     let user_source = gather_sources(project_dir, &tree, &manifest.package.name)?;
 
-    // Flat-merge dep sources ahead of user source so the resolver sees
-    // their declarations during typecheck. v0.1: symbols are flat
-    // (no `use <pkg>.X` namespacing yet); a future change will wrap
-    // each dep in a module DefId so `use rondo.Rondo` resolves.
+    // Flat-merge dep sources ahead of user source so the resolver
+    // sees their declarations during typecheck. v1: symbols are flat
+    // (no `use <pkg>.X` namespacing). The proper module-wrap
+    // (`module <pkg> ... end`) was attempted but exposes a deeper
+    // resolver gap: classes nested inside a `module` block don't
+    // propagate their field DefIds into method-body scope, so any
+    // dep with `self.<field>` access in its methods fails to
+    // typecheck. Until that's fixed, `use rondo.Foo` desugars to
+    // top-level `Foo`. Pin: `docs/rondo_v1_blockers.md` B12.
     let mut combined = String::new();
     for dep_dir in dep_source_dirs {
         let dep_tree = ModuleTree::discover(dep_dir)?;

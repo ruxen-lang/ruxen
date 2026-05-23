@@ -107,18 +107,24 @@ impl<'a> InferenceEngine<'a> {
                     }
                 }
                 // TODO (rondo_v1_blockers.md B14): `Option[A]` /
-                // `Result[A, E]` payload coercion. The typeck side of
-                // this is one structural retry per container variant
-                // (Option(inner) ↔ Option(inner), Result(ok,err) ↔
-                // Result(ok,err) → `unify_or_coerce` on each inner).
-                // But without an HIR-level expression rewrite at the
-                // value site, MIR still sees the raw `&str` pointer
-                // where a `String` is expected — runtime segfaults at
-                // the first scope-exit `riven_string_free`. The proper
-                // landing requires the same path that makes plain
-                // `let s: String = "lit"` work, surfaced into the
-                // container payload position. Tracking; the typeck-
-                // only patch was attempted + reverted in this session.
+                // `Result[A, E]` payload coercion. A typeck-only retry
+                // (Option(inner) ↔ Option(inner) → unify_or_coerce)
+                // lands the surface acceptance for `Some("ada")` into
+                // `Option[String]`, but the HIR sub-expression's
+                // `.ty` field remains `Ty::Str` — MIR then emits
+                // `Alloc { ty: Option(Str), size: 24 }` with payload
+                // slot zero set to a heap String pointer. The mismatch
+                // between the storage type (Str) and the actual payload
+                // type (String) causes the SCOPE-EXIT drop on the
+                // outer `Option` to interpret slot zero as `&str`
+                // (no free) while the CALLER reads it as `String`
+                // (frees twice / wrong path). The proper landing
+                // requires rewriting field_expr.ty during coercion
+                // OR threading the coerced container type into MIR
+                // lowering so `Alloc` uses the post-coercion shape.
+                // Both attempted this session, both surface a tangled
+                // drop interaction. Workaround for users: write
+                // `Some(String.from(&"ada"))` explicitly.
                 // General coercion check
                 if can_coerce(&fnd, &exp, self.ctx) {
                     return Ok(exp);

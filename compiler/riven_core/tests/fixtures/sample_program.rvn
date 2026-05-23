@@ -149,17 +149,20 @@ class Todo
   end
 
   def self.deserialize(data: &str) -> Result[Todo, TodoError]
-    let parts: Array[&str] = data.split("|").to_vec
+    let parts: Array[String] = data.split("|").to_vec
     if parts.len < 4
       return Err(TodoError.ParseFailed(
         message: String.from("expected 4 fields, got #{parts.len}")
       ))
     end
 
-    let id = parts[0].parse_uint
+    # parts is now Array[String] (split returns Array[String] for both
+    # &str and String receivers — pin B13). Convert each element back
+    # to &str at the call boundary.
+    let id = parts[0].as_str.parse_uint
       .map_err { |_| TodoError.ParseFailed(message: String.from("invalid id")) }?
 
-    let priority = parse_priority(parts[3])?
+    let priority = parse_priority(parts[3].as_str)?
 
     Ok(Todo.new(
       id,

@@ -354,13 +354,71 @@ pub fn resolve_stdlib_root() -> Option<PathBuf> {
     None
 }
 
-/// Read, lex, and parse one stdlib file relative to the resolved
-/// sysroot root. Returns the parsed [`Program`] on success, or an
-/// E0725 diagnostic that names the file and the first parser/lexer
-/// error's line on failure.
+/// Read, lex, and parse one stdlib package entry relative to the
+/// resolved sysroot root. The `rel` path points at a `lib.rvn` (e.g.
+/// `"io/src/lib.rvn"`) — the loader reads `lib.rvn` PLUS every other
+/// `.rvn` file alongside it (sibling files in the same `src/` dir)
+/// and concatenates them into one parse input. This is what lets a
+/// stdlib package grow past a single file:
+///
+///   library/std/io/src/
+///     lib.rvn        ← entry point, listed in BOOTSTRAP_FILES
+///     reader.rvn     ← sibling, auto-included
+///     writer.rvn     ← sibling, auto-included
+///
+/// Non-`lib.rvn` entries are loaded verbatim (no sibling scan) for
+/// callers that explicitly point at a single source. Returns the
+/// parsed [`Program`] on success, or an E0725 diagnostic that names
+/// the file and the first parser/lexer error's line on failure.
 fn load_stdlib_file(root: &Path, rel: &str) -> Result<Program, Diagnostic> {
     let full = root.join(rel);
-    let source = std::fs::read_to_string(&full).map_err(|io_err| {
+    let entry_name = full
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or("");
+    if entry_name != "lib.rvn" {
+        let source = std::fs::read_to_string(&full).map_err(|io_err| {
+            Diagnostic::error_with_code(
+                format!(
+                    "stdlib bootstrap failed at library/std/{}: cannot read file: {}",
+                    rel, io_err
+                ),
+                Span::new(0, 0, 0, 0),
+                "E0725",
+            )
+        })?;
+        return parse_stdlib_source(&source, rel);
+    }
+    // lib.rvn — collect every sibling `.rvn` in the same dir and
+    // concatenate. `lib.rvn` always loads first so any forward-
+    // referenced types declared at the top of lib.rvn (the historical
+    // single-file shape) keep resolving cleanly; siblings are loaded
+    // in deterministic (sorted-by-filename) order after that.
+    let pkg_src_dir = full.parent().ok_or_else(|| {
+        Diagnostic::error_with_code(
+            format!(
+                "stdlib bootstrap failed at library/std/{}: cannot resolve parent dir",
+                rel
+            ),
+            Span::new(0, 0, 0, 0),
+            "E0725",
+        )
+    })?;
+    let mut sibling_paths: Vec<PathBuf> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(pkg_src_dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.extension().and_then(|e| e.to_str()) != Some("rvn") {
+                continue;
+            }
+            if p.file_name().and_then(|f| f.to_str()) == Some("lib.rvn") {
+                continue;
+            }
+            sibling_paths.push(p);
+        }
+    }
+    sibling_paths.sort();
+    let lib_src = std::fs::read_to_string(&full).map_err(|io_err| {
         Diagnostic::error_with_code(
             format!(
                 "stdlib bootstrap failed at library/std/{}: cannot read file: {}",
@@ -370,7 +428,32 @@ fn load_stdlib_file(root: &Path, rel: &str) -> Result<Program, Diagnostic> {
             "E0725",
         )
     })?;
-    parse_stdlib_source(&source, rel)
+    if sibling_paths.is_empty() {
+        // Common case: package is a single file. Parse + return as
+        // before so the historical single-file shape stays unchanged.
+        return parse_stdlib_source(&lib_src, rel);
+    }
+    // Multi-file package: concatenate lib.rvn + siblings into one
+    // parse input separated by newlines so spans don't bleed across
+    // file boundaries inside an item.
+    let mut combined = String::with_capacity(lib_src.len() + sibling_paths.len() * 256);
+    combined.push_str(&lib_src);
+    for sib in &sibling_paths {
+        let src = std::fs::read_to_string(sib).map_err(|io_err| {
+            Diagnostic::error_with_code(
+                format!(
+                    "stdlib bootstrap failed at {}: cannot read sibling: {}",
+                    sib.display(),
+                    io_err
+                ),
+                Span::new(0, 0, 0, 0),
+                "E0725",
+            )
+        })?;
+        combined.push('\n');
+        combined.push_str(&src);
+    }
+    parse_stdlib_source(&combined, rel)
 }
 
 /// Lex + parse one stdlib source string. Shared between the

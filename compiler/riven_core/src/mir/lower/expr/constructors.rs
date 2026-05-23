@@ -59,6 +59,13 @@ impl<'a> Lowerer<'a> {
                         src: dest,
                         ty: expr.ty.clone(),
                     });
+                    // Note: string-literal payloads are already promoted
+                    // from `&str` to heap `String` by `lower_expr` ->
+                    // `emit_owned_string_literal` (mir/lower/emit.rs:90),
+                    // so the typeck-side payload coercion for
+                    // `Option[String]` / `Result[String, _]` is
+                    // sufficient at MIR time — no explicit wrap here.
+                    // Pin: `docs/rondo_v1_blockers.md` B14.
                     for (idx, (_name, field_expr)) in fields.iter().enumerate() {
                         let val_local = self.lower_expr(field_expr)?;
                         let val = local_to_value(val_local);
