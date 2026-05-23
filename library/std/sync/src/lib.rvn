@@ -53,6 +53,22 @@ class Thread
   lib "runtime/thread.c"
     def self.current_id as "riven_thread_current_id"() -> Int
     def self.spawn_raw as "riven_thread_spawn"(closure: Int) -> Int
+    # `Thread.spawn(closure)` — the high-level surface a Rubyist
+    # reaches for first. Same runtime entry point as `spawn_raw`;
+    # both take a closure pointer at the i64 ABI and return the
+    # JoinHandle as an Int. The typed JoinHandle[T] lift is layered
+    # through the typed-FFI return mechanism
+    # (docs/specs/types/typed_ffi_returns.spec.md); callers who
+    # want the typed handle explicitly can use `.join_raw` on it.
+    # Accept-loop shape:
+    #
+    #   loop
+    #     match listener.accept
+    #       Ok(stream) -> Thread.spawn({ || handle(stream) })
+    #       Err(_)     -> break
+    #     end
+    #   end
+    def self.spawn as "riven_thread_spawn"(closure: Int) -> Int
   end
 end
 

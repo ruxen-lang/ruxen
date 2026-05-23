@@ -50,19 +50,41 @@ impl Parser {
         self.expect(TokenKind::Arrow);
         self.skip_newlines();
 
-        // Arm body: single expression or block (multiple statements
-        // until the next sibling arm, the closing `end`, or EOF).
-        // We use `parse_match_arm_body` (not `parse_body`) so the
-        // body terminates when the upcoming tokens look like a
-        // sibling arm header — otherwise a multi-statement body
-        // greedily consumes the next sibling's pattern as a
-        // statement and trips a downstream "expected expression,
-        // found Arrow".
-        let body = if self.is_expression_start() {
-            let expr = self.parse_expression();
-            MatchArmBody::Expr(expr)
+        // Arm body: always go through `parse_match_arm_body`, which
+        // collects statements until the next sibling arm header,
+        // closing `end`, or EOF (using the `looks_like_sibling_match_arm`
+        // lookahead to avoid greedily consuming the next arm's
+        // pattern). A single-expression arm naturally produces a
+        // one-statement block; multi-statement arms also parse
+        // correctly without needing a leading `let`/`var` to flip
+        // the parser into block mode.
+        //
+        // Pre-fix: this branched on `is_expression_start` and called
+        // `parse_expression` for the common single-expr case. That
+        // worked for `Some(x) -> x` but silently dropped subsequent
+        // statements in shapes like
+        //   Some(stream) ->
+        //     Thread.spawn({ || handle(stream) })
+        //     count = count + 1
+        // because `parse_expression` returned after `Thread.spawn(...)`
+        // and the trailing `count = count + 1` was misread as a
+        // sibling arm header (failing on the next pattern's arrow).
+        // Pin: `docs/rondo_v1_blockers.md` B10.
+        let block = self.parse_match_arm_body();
+        let body = if block.statements.len() == 1 {
+            // Single-statement arms keep the historical
+            // `MatchArmBody::Expr` shape so the formatter / pretty-
+            // printer don't switch to block-style indentation on
+            // every `Some(x) -> x` arm in existing fixtures.
+            let mut stmts = block.statements;
+            match stmts.pop().unwrap() {
+                Statement::Expression(e) => MatchArmBody::Expr(e),
+                other => MatchArmBody::Block(Block {
+                    statements: vec![other],
+                    span: block.span,
+                }),
+            }
         } else {
-            let block = self.parse_match_arm_body();
             MatchArmBody::Block(block)
         };
 

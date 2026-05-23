@@ -955,8 +955,27 @@ fn compute_dealloc_safe_locals(func: &MirFunction) -> std::collections::HashSet<
                     // (`compiler/riven_core/tests/task_spawn_ownership.rs`)
                     // and any analogous fixtures so the move semantics
                     // are exercised end-to-end.
-                    let is_move_by_ffi_callee =
-                        matches!(callee.as_str(), "riven_executor_spawn" | "Task_spawn_raw");
+                    let is_move_by_ffi_callee = matches!(
+                        callee.as_str(),
+                        "riven_executor_spawn"
+                            | "Task_spawn_raw"
+                            // `Thread.spawn(closure)` and `Thread.spawn_raw(closure)`
+                            // hand the closure-capture struct to a new
+                            // pthread; the captured locals (including
+                            // any moved-in TcpStream / handle) outlive
+                            // the spawning scope by definition. Without
+                            // marking these as move-by-FFI the
+                            // accept-loop's scope-exit drop emits a
+                            // free on the closure capture (and its
+                            // owned fd) while the worker thread is
+                            // still reading from it — SIGSEGV on the
+                            // first per-connection-thread test.
+                            // Mirror of the Task.spawn fix
+                            // (`project_riven_task_spawn_ownership_gap.md`).
+                            | "riven_thread_spawn"
+                            | "Thread_spawn"
+                            | "Thread_spawn_raw"
+                    );
                     let is_runtime_borrow_helper = !is_runtime_consume_helper
                         && !is_move_by_ffi_callee
                         && (callee.starts_with("riven_")

@@ -35,7 +35,19 @@ end
 ## std::net::TcpStream — owning wrapper around a connected POSIX fd.
 ## Declared BEFORE TcpListener so TcpListener.accept's `-> Result[
 ## TcpStream, IoError]` return type resolves at parse time.
+##
+## A POSIX fd is safe to move between threads — the kernel handles
+## any concurrent-use race the user might create. Mark `Send` so the
+## standard per-connection threading shape compiles:
+##
+##   loop
+##     match listener.accept
+##       Ok(stream) -> Thread.spawn({ || handle(stream) })
+##       Err(_)     -> break
+##     end
+##   end
 class TcpStream
+  include Send
   lib "runtime/tcp.c"
     def self.connect as "riven_tcp_stream_connect"(addr: &String) -> Result[TcpStream, IoError]
     def read as "riven_tcp_stream_read"(self, buf: &var Array[Int]) -> Result[Int, IoError]
@@ -60,7 +72,12 @@ end
 
 ## std::net::TcpListener — owning wrapper around a listening POSIX
 ## fd. The `def drop` lib decl drives user_drop_classes auto-detect.
+##
+## Send for the same reason as TcpStream — POSIX fd is thread-safe
+## to move; this lets users park the listener on a dedicated
+## accept-loop thread.
 class TcpListener
+  include Send
   lib "runtime/tcp.c"
     def self.bind as "riven_tcp_listener_bind"(addr: &String) -> Result[TcpListener, IoError]
     def accept as "riven_tcp_listener_accept"(self) -> Result[TcpStream, IoError]
