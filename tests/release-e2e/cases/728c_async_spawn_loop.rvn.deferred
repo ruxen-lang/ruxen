@@ -1,0 +1,72 @@
+## Spec docs/specs/syntax/async_lowering.spec.md B11 (while-extension
+## landed) + docs/specs/stdlib/task_spawn.spec.md §B3 e2e.
+##
+## Single `.await` inside a `while` body. Lowers to a 3-state
+## machine (loop_head, await_suspend, after_loop) with the back-edge
+## `await_suspend.Ready → loop_head` re-driving the condition each
+## iteration. This is the missing piece that lets Rondo's accept-
+## spawn pattern compile — every per-connection accept becomes one
+## `.await` inside a `while keep`, and each Ready spawns a worker
+## task and re-enters the cond.
+##
+## What this proves end-to-end:
+##   - `var sum = 0`, `var i = 0` pre-loop locals are hoisted to
+##     state-machine fields (the lowering's "crossing local" path
+##     handles the var-with-literal-initialiser shape).
+##   - The `while i < n` cond reads `self.i` / `self.n` after
+##     rewriting.
+##   - Each iteration lazily constructs a fresh `CountdownFuture`,
+##     spawns it via `Task.spawn_raw`, and suspends on
+##     `Task.join(h).await`. Because the await runs inside the
+##     loop body, the value of `h` is freshly bound on each turn.
+##   - The Ready arm writes `self.v` and runs the back-edge
+##     `self.__state = 0` before returning Pending — the next pump
+##     cycle re-enters the cond and either iterates or exits.
+##   - The tail `sum` reads `self.sum` after rewriting.
+##
+## 1+2+3+4+5 = 15.
+
+class CountdownFuture
+  remaining: Int
+  payload: Int
+  include Future
+  type Output = Int
+
+  def init(n: Int, p: Int)
+    self.remaining = n
+    self.payload = p
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    if self.remaining == 0
+      Poll.Ready(self.payload)
+    else
+      self.remaining = self.remaining - 1
+      Poll.Pending
+    end
+  end
+end
+
+async def loop_driver(n: Int) -> Int
+  var i: Int = 0
+  var sum: Int = 0
+  while i < n
+    let f = CountdownFuture.new(2, i + 1)
+    let h = Task.spawn_raw(f)
+    let v = Task.join(h).await
+    sum = sum + v
+    i = i + 1
+  end
+  sum
+end
+
+def main
+  puts "main: start"
+  let total = block_on(loop_driver(5))
+  puts "main: block_on returned #{total}"
+  if total == 15
+    puts "ok"
+  else
+    puts "fail"
+  end
+end
