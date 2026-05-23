@@ -1,0 +1,12 @@
+[package]
+name = "std-test"
+version = "0.1.0"
+description = "Pure-Riven test framework: Tester DSL (describe/context/it/before/after) + matchers + fork-per-test runner. The riven test CLI subcommand drives it. See docs/superpowers/specs/2026-05-23-test-framework-design.md."
+
+[dependencies]
+std-core = "= 0.1.0"
+std-string = "= 0.1.0"
+std-array = "= 0.1.0"
+std-option_result = "= 0.1.0"
+std-fmt = "= 0.1.0"
+std-sync = "= 0.1.0"
