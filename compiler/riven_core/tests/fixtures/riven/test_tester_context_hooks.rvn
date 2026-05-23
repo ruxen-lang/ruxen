@@ -1,0 +1,31 @@
+use std.test.Tester
+use std.test.Runner
+
+def main
+  let r = Runner.new("fixture.context_hooks")
+  Runner.set_current(r.handle_addr)
+
+  Tester.describe("Outer") do |t: &var Tester|
+    t.before do
+      puts "outer_before"
+    end
+    t.after do
+      puts "outer_after"
+    end
+
+    t.it("outer-case") do
+      puts "outer_case_body"
+    end
+
+    t.context("Inner") do |t: &var Tester|
+      t.before do
+        puts "inner_before"
+      end
+      t.it("inner-case") do
+        puts "inner_case_body"
+      end
+    end
+  end
+
+  r.execute
+end

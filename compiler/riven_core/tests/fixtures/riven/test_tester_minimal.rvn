@@ -1,0 +1,12 @@
+use std.test.Tester
+use std.test.Runner
+
+def main
+  var tester = Tester.new("test", 0)
+  let m = tester.expect(1 + 2)
+  if m.to_eq(3) == false
+    puts "FAIL"
+  else
+    puts "PASS"
+  end
+end

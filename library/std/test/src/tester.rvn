@@ -1,0 +1,87 @@
+## std.test.Tester — one group in the spec tree.
+##
+## A Tester is created by `Tester.describe` and passed (by mutable
+## reference) to the user's block. Nested `context` calls create child
+## Testers inheriting the parent's before-hook chain. Cases (`it`) execute
+## immediately during the block traversal — no deferred tree is built,
+## avoiding self-referential `Array[Tester]` type cycles. Pass/fail/pending
+## counts are accumulated on the active Runner via the C-static slot.
+
+class Tester
+  name: String
+  hooks_before: Array[any Fn() -> ()]
+  hooks_after: Array[any Fn() -> ()]
+
+  def init(name: &String)
+    self.name = name.clone
+    self.hooks_before = Array.new
+    self.hooks_after = Array.new
+  end
+
+  ## Class entry point: build a root group, run its block body to populate
+  ## and execute its cases, then discard the Tester (execution is immediate).
+  def self.describe(name: &String, body: any Fn(&var Tester) -> ()) -> ()
+    var root = Tester.new(name)
+    body.(&var root)
+  end
+
+  ## Nested group. Inherits parent's before-hooks so they fire for inner
+  ## cases too (outer → inner order). After-hooks from the parent are
+  ## NOT inherited in v1 — the Task 4.2 assertions only require before
+  ## ordering. Phase 5 can add full after-chain inheritance if needed.
+  def context(name: &String, body: any Fn(&var Tester) -> ()) -> ()
+    var child = Tester.new(name)
+    for h in &self.hooks_before
+      child.hooks_before.push(h)
+    end
+    body.(&var child)
+  end
+
+  ## Register a before-hook. Fires before every `it` case in this group
+  ## (and in nested `context` groups that inherit this Tester's before chain).
+  def before(hook: any Fn() -> ()) -> ()
+    self.hooks_before.push(hook)
+  end
+
+  ## Register an after-hook. Fires after every `it` case in this group.
+  def after(hook: any Fn() -> ()) -> ()
+    self.hooks_after.push(hook)
+  end
+
+  ## Define and immediately execute one test case.
+  def it(name: &String, body: any Fn() -> ()) -> ()
+    let runner_addr = Runner.get_current
+    if runner_addr == 0
+      return
+    end
+    Runner.case_reset
+    for hook in &self.hooks_before
+      hook.()
+    end
+    body.()
+    for hook in &self.hooks_after
+      hook.()
+    end
+    let r = Runner.from_handle(runner_addr)
+    if Runner.case_get_failed == 0
+      r.passed = r.passed + 1
+    else
+      r.failed = r.failed + 1
+    end
+  end
+
+  ## Pending test case — body is never run; just increments pending count.
+  def xit(name: &String, body: any Fn() -> ()) -> ()
+    let runner_addr = Runner.get_current
+    if runner_addr == 0
+      return
+    end
+    let r = Runner.from_handle(runner_addr)
+    r.pending = r.pending + 1
+  end
+
+  ## Create a Matcher wrapping the actual value for assertions.
+  def expect[T](actual: T) -> Matcher[T]
+    Matcher.new(actual)
+  end
+end
