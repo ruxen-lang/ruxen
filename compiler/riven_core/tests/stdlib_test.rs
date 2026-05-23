@@ -83,3 +83,12 @@ fn matcher_truthy_falsy_and_nil() {
         assert!(stdout.contains(token), "missing {token}: {}", stdout);
     }
 }
+
+#[test]
+fn matcher_to_include_array_and_string() {
+    let (stdout, stderr, ok) =
+        compile_and_run(&rvn("test_matcher_include"), "stdlib_test_matcher_include");
+    assert!(ok, "stderr: {}", stderr);
+    assert!(stdout.contains("array_include_pass"), "got: {}", stdout);
+    assert!(stdout.contains("string_include_pass"), "got: {}", stdout);
+}

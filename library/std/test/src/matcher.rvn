@@ -71,3 +71,38 @@ class OptionMatcher
     self.is_some
   end
 end
+
+## Element-membership matcher for Array[T]. Loops with `each` rather
+## than `contains?` because the v1 Array surface may not expose contains?
+## uniformly across T (PartialEq required).
+class ArrayMatcher[T] where T: PartialEq
+  actual_ref: &Array[T]
+
+  def init(actual: &Array[T])
+    self.actual_ref = actual
+  end
+
+  def to_include(needle: T) -> Bool
+    var found = false
+    self.actual_ref.each do |item|
+      if item == needle
+        found = true
+      end
+    end
+    found
+  end
+end
+
+## Substring matcher for String. Uses the v1 `contains` method exposed
+## by std.string (verify name; if absent, port `String#contains` first).
+class StringMatcher
+  actual_ref: &String
+
+  def init(actual: &String)
+    self.actual_ref = actual
+  end
+
+  def to_include(needle: &String) -> Bool
+    self.actual_ref.contains(needle)
+  end
+end
