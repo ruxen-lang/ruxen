@@ -21,15 +21,6 @@ class Matcher[T] where T: PartialEq
   def not_to_eq(expected: T) -> Bool
     self.actual != expected
   end
-
-  def to_be_truthy -> Bool
-    # Generic to_be_truthy is awkward without a Truthy mixin; v1
-    # routes Bool callers to BoolMatcher.new explicitly. This stub
-    # exists so the Tester layer can call .to_be_truthy uniformly
-    # when the typeck pass has already narrowed T to Bool — currently
-    # unused; remove after Tester is wired.
-    false
-  end
 end
 
 ## Boolean-valued matcher path. Decoupled from the generic Matcher[T]
@@ -48,7 +39,7 @@ class BoolMatcher
   end
 
   def to_be_falsy -> Bool
-    self.actual == false
+    !self.actual
   end
 end
 
@@ -93,8 +84,7 @@ class ArrayMatcher[T] where T: PartialEq
   end
 end
 
-## Substring matcher for String. Uses the v1 `contains` method exposed
-## by std.string (verify name; if absent, port `String#contains` first).
+## Substring matcher for String. Delegates to `String#contains`.
 class StringMatcher
   actual_ref: &String
 
