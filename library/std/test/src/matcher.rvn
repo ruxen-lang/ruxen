@@ -82,13 +82,23 @@ class ArrayMatcher[T] where T: PartialEq
   end
 
   def to_include(needle: T) -> Bool
-    var found = false
-    self.actual_ref.each do |item|
-      if item == needle
-        found = true
+    # Early-return on first hit. Indexed loop instead of
+    # `.each do |item|` because the closure form would capture
+    # the result var mutably and Riven's borrow checker holds
+    # that borrow live across the inner assignment.
+    let n: Int = self.actual_ref.len() as Int
+    var i: Int = 0
+    while i < n
+      match self.actual_ref.get(i)
+        Some(item) ->
+          if item == needle
+            return true
+          end
+        None -> 0
       end
+      i = i + 1
     end
-    found
+    false
   end
 end
 
