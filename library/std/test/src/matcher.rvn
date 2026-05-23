@@ -21,4 +21,53 @@ class Matcher[T] where T: PartialEq
   def not_to_eq(expected: T) -> Bool
     self.actual != expected
   end
+
+  def to_be_truthy -> Bool
+    # Generic to_be_truthy is awkward without a Truthy mixin; v1
+    # routes Bool callers to BoolMatcher.new explicitly. This stub
+    # exists so the Tester layer can call .to_be_truthy uniformly
+    # when the typeck pass has already narrowed T to Bool — currently
+    # unused; remove after Tester is wired.
+    false
+  end
+end
+
+## Boolean-valued matcher path. Decoupled from the generic Matcher[T]
+## constraint because `to_be_truthy`/`to_be_falsy` don't need equality
+## and the call site shouldn't be forced to satisfy PartialEq for a
+## boolean assertion.
+class BoolMatcher
+  actual: Bool
+
+  def init(actual: Bool)
+    self.actual = actual
+  end
+
+  def to_be_truthy -> Bool
+    self.actual
+  end
+
+  def to_be_falsy -> Bool
+    self.actual == false
+  end
+end
+
+## Nilness check for any Option-typed value. We accept the value as
+## Bool (is_some) at the v1 surface because the test framework only
+## inspects "is present?" — the inner type is irrelevant. The Tester#expect
+## overload (Tester#expect_opt) routes Option-typed arguments here.
+class OptionMatcher
+  is_some: Bool
+
+  def init(present: Bool)
+    self.is_some = present
+  end
+
+  def to_be_nil -> Bool
+    self.is_some == false
+  end
+
+  def not_to_be_nil -> Bool
+    self.is_some
+  end
 end

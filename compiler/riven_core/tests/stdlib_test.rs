@@ -73,3 +73,13 @@ fn matcher_to_eq_and_not_to_eq() {
     assert!(stdout.contains("to_eq_pass"), "got: {}", stdout);
     assert!(stdout.contains("not_to_eq_pass"), "got: {}", stdout);
 }
+
+#[test]
+fn matcher_truthy_falsy_and_nil() {
+    let (stdout, stderr, ok) =
+        compile_and_run(&rvn("test_matcher_truthy_nil"), "stdlib_test_matcher_truthy_nil");
+    assert!(ok, "stderr: {}", stderr);
+    for token in ["truthy_pass", "falsy_pass", "not_nil_pass", "nil_pass"] {
+        assert!(stdout.contains(token), "missing {token}: {}", stdout);
+    }
+}
