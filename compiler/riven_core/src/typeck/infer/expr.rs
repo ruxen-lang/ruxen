@@ -582,9 +582,20 @@ impl<'a> InferenceEngine<'a> {
 
             HirExprKind::Match { scrutinee, arms } => {
                 self.infer_expr(scrutinee);
+                let scrutinee_ty = self.ctx.resolve(&scrutinee.ty);
                 let mut result_ty: Option<Ty> = None;
 
                 for arm in arms.iter_mut() {
+                    // Propagate the scrutinee type into the arm's
+                    // pattern bindings BEFORE inferring the body —
+                    // otherwise `Some(t) -> t.describe` reads `t` as
+                    // `Ty::Infer` and codegen emits `?T_describe`.
+                    super::helpers::propagate_pattern_types(
+                        &arm.pattern,
+                        &scrutinee_ty,
+                        self.symbols,
+                    );
+
                     // Type check guard if present
                     if let Some(ref mut guard) = arm.guard {
                         self.infer_expr(guard);

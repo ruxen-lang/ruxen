@@ -8,9 +8,272 @@
 use crate::hir::nodes::{DefId, *};
 use crate::hir::types::Ty;
 use crate::lexer::token::Span;
+use crate::resolve::symbols::{DefKind, SymbolTable, VariantDefKind};
 
 use super::super::unify::unify;
 use super::InferenceEngine;
+
+/// Propagate `scrutinee_ty` into each `Binding`'s DefId inside `pattern`.
+///
+/// Match-arm patterns and `let <pat> = e` destructurings allocate
+/// DefIds at resolve time but never get their types updated by the
+/// inference engine. The result is every inner pattern binding ending
+/// up with `Ty::Infer`, which surfaces at codegen as `?T<id>_<method>`
+/// symbols the runtime can't resolve — e.g. `Some(t) -> t.describe`
+/// mangles `t.describe` to `?T518_describe`.
+///
+/// This walker structurally matches the pattern against the
+/// scrutinee's resolved type and writes each binding's concrete
+/// type back into the symbol table before the arm body is inferred.
+pub(super) fn propagate_pattern_types(
+    pattern: &HirPattern,
+    scrutinee_ty: &Ty,
+    symbols: &mut SymbolTable,
+) {
+    match pattern {
+        HirPattern::Wildcard { .. } | HirPattern::Rest { .. } | HirPattern::Literal { .. } => {}
+        HirPattern::Binding { def_id, .. } => {
+            symbols.update_ty(*def_id, scrutinee_ty.clone());
+        }
+        HirPattern::Ref {
+            def_id, mutable, ..
+        } => {
+            let ref_ty = if *mutable {
+                Ty::RefMut(Box::new(scrutinee_ty.clone()))
+            } else {
+                Ty::Ref(Box::new(scrutinee_ty.clone()))
+            };
+            symbols.update_ty(*def_id, ref_ty);
+        }
+        HirPattern::Tuple { elements, .. } => {
+            if let Ty::Tuple(slots) = scrutinee_ty {
+                for (elem, slot_ty) in elements.iter().zip(slots.iter()) {
+                    propagate_pattern_types(elem, slot_ty, symbols);
+                }
+            }
+        }
+        HirPattern::Or { patterns, .. } => {
+            for p in patterns {
+                propagate_pattern_types(p, scrutinee_ty, symbols);
+            }
+        }
+        HirPattern::Struct {
+            type_def, fields, ..
+        } => {
+            let struct_def = match symbols.get(*type_def).cloned() {
+                Some(d) => d,
+                None => return,
+            };
+            let generic_args = scrutinee_class_generic_args(scrutinee_ty);
+            let (field_def_ids, generic_params): (Vec<DefId>, Vec<String>) = match &struct_def.kind
+            {
+                DefKind::Class { info } => (
+                    info.fields.clone(),
+                    info.generic_params.iter().map(|gp| gp.name.clone()).collect(),
+                ),
+                DefKind::Struct { info } => (
+                    info.fields.clone(),
+                    info.generic_params.iter().map(|gp| gp.name.clone()).collect(),
+                ),
+                _ => return,
+            };
+            let mut field_tys: std::collections::HashMap<String, Ty> =
+                std::collections::HashMap::new();
+            for fid in &field_def_ids {
+                if let Some(fdef) = symbols.get(*fid) {
+                    if let DefKind::Field { ty, .. } = &fdef.kind {
+                        let subst_ty =
+                            substitute_generic_params(ty, &generic_params, &generic_args);
+                        field_tys.insert(fdef.name.clone(), subst_ty);
+                    }
+                }
+            }
+            for (name, inner_pat) in fields {
+                if let Some(t) = field_tys.get(name).cloned() {
+                    propagate_pattern_types(inner_pat, &t, symbols);
+                }
+            }
+        }
+        HirPattern::Enum {
+            variant_name,
+            fields,
+            type_def,
+            ..
+        } => {
+            // Built-in `Option[T]` / `Result[T, E]` are modelled as
+            // dedicated `Ty::Option` / `Ty::Result` variants — peel
+            // payload types directly instead of walking the symbol
+            // table.
+            match scrutinee_ty {
+                Ty::Option(inner) => {
+                    if variant_name == "Some" {
+                        if let Some(field) = fields.first() {
+                            propagate_pattern_types(field, inner, symbols);
+                        }
+                    }
+                    return;
+                }
+                Ty::Result(ok, err) => {
+                    let payload = if variant_name == "Ok" {
+                        Some(ok.as_ref())
+                    } else if variant_name == "Err" {
+                        Some(err.as_ref())
+                    } else {
+                        None
+                    };
+                    if let Some(p) = payload {
+                        if let Some(field) = fields.first() {
+                            propagate_pattern_types(field, p, symbols);
+                        }
+                    }
+                    return;
+                }
+                _ => {}
+            }
+
+            // User-defined enum: resolve `type_def` to its `EnumInfo`,
+            // pull the variant's DefId by index, then read the
+            // payload's declared types from that variant's
+            // `VariantDefKind`. Substitute generic params from the
+            // scrutinee's generic args before binding each field.
+            let enum_def = match symbols.get(*type_def).cloned() {
+                Some(d) => d,
+                None => return,
+            };
+            let enum_info = match &enum_def.kind {
+                DefKind::Enum { info } => info.clone(),
+                _ => return,
+            };
+            // The HirPattern carries `variant_idx`; rebind it here to
+            // make the index lookup unambiguous.
+            let variant_idx = match pattern {
+                HirPattern::Enum { variant_idx, .. } => *variant_idx,
+                _ => return,
+            };
+            let variant_def_id = match enum_info.variants.get(variant_idx) {
+                Some(id) => *id,
+                None => return,
+            };
+            let variant_def = match symbols.get(variant_def_id).cloned() {
+                Some(d) => d,
+                None => return,
+            };
+            let payload_tys: Vec<Ty> = match &variant_def.kind {
+                DefKind::EnumVariant { kind, .. } => match kind {
+                    VariantDefKind::Unit => return,
+                    VariantDefKind::Tuple(tys) => tys.clone(),
+                    VariantDefKind::Struct(named) => named.iter().map(|(_, t)| t.clone()).collect(),
+                },
+                _ => return,
+            };
+            let generic_args = scrutinee_class_generic_args(scrutinee_ty);
+            let generic_param_names: Vec<String> = enum_info
+                .generic_params
+                .iter()
+                .map(|gp| gp.name.clone())
+                .collect();
+            for (field_pat, declared_ty) in fields.iter().zip(payload_tys.iter()) {
+                let subst_ty =
+                    substitute_generic_params(declared_ty, &generic_param_names, &generic_args);
+                propagate_pattern_types(field_pat, &subst_ty, symbols);
+            }
+        }
+    }
+}
+
+/// Extract the generic-argument list from a class/enum/struct type.
+fn scrutinee_class_generic_args(ty: &Ty) -> Vec<Ty> {
+    match ty {
+        Ty::Class { generic_args, .. }
+        | Ty::Enum { generic_args, .. }
+        | Ty::Struct { generic_args, .. } => generic_args.clone(),
+        _ => Vec::new(),
+    }
+}
+
+/// Walk `ty` replacing every `Ty::Param(name, _)` with the matching
+/// argument from `(generic_params, generic_args)`. When the lookup
+/// fails the param is left in place — typeck will surface the
+/// mismatch via the downstream unify.
+fn substitute_generic_params(ty: &Ty, generic_params: &[String], generic_args: &[Ty]) -> Ty {
+    match ty {
+        Ty::TypeParam { name, .. } => generic_params
+            .iter()
+            .position(|p| p == name)
+            .and_then(|i| generic_args.get(i).cloned())
+            .unwrap_or_else(|| ty.clone()),
+        Ty::Ref(inner) => Ty::Ref(Box::new(substitute_generic_params(
+            inner,
+            generic_params,
+            generic_args,
+        ))),
+        Ty::RefMut(inner) => Ty::RefMut(Box::new(substitute_generic_params(
+            inner,
+            generic_params,
+            generic_args,
+        ))),
+        Ty::Option(inner) => Ty::Option(Box::new(substitute_generic_params(
+            inner,
+            generic_params,
+            generic_args,
+        ))),
+        Ty::Result(ok, err) => Ty::Result(
+            Box::new(substitute_generic_params(ok, generic_params, generic_args)),
+            Box::new(substitute_generic_params(err, generic_params, generic_args)),
+        ),
+        Ty::Array(elem) => Ty::Array(Box::new(substitute_generic_params(
+            elem,
+            generic_params,
+            generic_args,
+        ))),
+        Ty::Set(elem) => Ty::Set(Box::new(substitute_generic_params(
+            elem,
+            generic_params,
+            generic_args,
+        ))),
+        Ty::Map(k, v) => Ty::Map(
+            Box::new(substitute_generic_params(k, generic_params, generic_args)),
+            Box::new(substitute_generic_params(v, generic_params, generic_args)),
+        ),
+        Ty::Tuple(slots) => Ty::Tuple(
+            slots
+                .iter()
+                .map(|s| substitute_generic_params(s, generic_params, generic_args))
+                .collect(),
+        ),
+        Ty::Class {
+            name,
+            generic_args: ga,
+        } => Ty::Class {
+            name: name.clone(),
+            generic_args: ga
+                .iter()
+                .map(|g| substitute_generic_params(g, generic_params, generic_args))
+                .collect(),
+        },
+        Ty::Enum {
+            name,
+            generic_args: ga,
+        } => Ty::Enum {
+            name: name.clone(),
+            generic_args: ga
+                .iter()
+                .map(|g| substitute_generic_params(g, generic_params, generic_args))
+                .collect(),
+        },
+        Ty::Struct {
+            name,
+            generic_args: ga,
+        } => Ty::Struct {
+            name: name.clone(),
+            generic_args: ga
+                .iter()
+                .map(|g| substitute_generic_params(g, generic_params, generic_args))
+                .collect(),
+        },
+        other => other.clone(),
+    }
+}
 
 /// Whether `*Iter[T].sum` should be accepted at typeck.
 ///
