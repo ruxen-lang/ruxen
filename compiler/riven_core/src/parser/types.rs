@@ -1,12 +1,43 @@
 //! Type expression parsing for the Riven language.
 
-use crate::lexer::token::TokenKind;
+use crate::lexer::token::{Span, TokenKind};
 use crate::parser::ast::*;
 use crate::parser::Parser;
 
 impl Parser {
-    /// Parse a type expression.
+    /// Parse a type expression, including the optional `?` nilable
+    /// suffix. `T?` desugars to `Option[T]` at the AST level — the
+    /// rest of the compiler still sees `TypeExpr::Named("Option",
+    /// [T])`. Mirrors Sorbet / Crystal nilable shorthand; the Ruby-
+    /// idiomatic Riven type for "T or nil" is `T?`, not
+    /// `Option[T]`. Pin: docs/rondo_v1_blockers.md "drop Some".
     pub(crate) fn parse_type(&mut self) -> TypeExpr {
+        let base = self.parse_type_atom();
+        if self.at(TokenKind::Question) {
+            let q_span = self.current_span();
+            self.advance(); // consume `?`
+            let outer_span = match &base {
+                TypeExpr::Named(p) => Span {
+                    start: p.span.start,
+                    end: q_span.end,
+                    line: p.span.line,
+                    column: p.span.column,
+                },
+                _ => q_span.clone(),
+            };
+            return TypeExpr::Named(TypePath {
+                segments: vec!["Option".to_string()],
+                generic_args: Some(vec![base]),
+                span: outer_span,
+                rooted: false,
+            });
+        }
+        base
+    }
+
+    /// Inner type parser — same body as the historical `parse_type`,
+    /// minus the `?` suffix handling that now lives in `parse_type`.
+    fn parse_type_atom(&mut self) -> TypeExpr {
         self.skip_newlines();
         let start = self.current_span();
 

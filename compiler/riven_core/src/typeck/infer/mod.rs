@@ -281,6 +281,12 @@ impl<'a> InferenceEngine<'a> {
         let old_return_ty = self.current_return_ty.replace(func.return_ty.clone());
         self.infer_expr(&mut func.body);
 
+        // "Drop Some" sugar: when the declared return type is `T?`
+        // (= `Option[T]`) but the body's tail expression is a bare
+        // `T`, wrap the tail in `Option::Some` automatically. Same
+        // hook as let-binding RHS auto-wrap — see infer_statement.
+        self.auto_wrap_option_some(&func.return_ty, &mut func.body);
+
         // Check function body type against declared return type (with coercion)
         let body_ty = self.ctx.resolve(&func.body.ty);
         // Auto-ref for fluent/builder methods: a body whose tail expression
@@ -336,6 +342,11 @@ impl<'a> InferenceEngine<'a> {
                     // binding has an explicit `[T; N]` annotation. The element
                     // count must match the annotation.
                     self.coerce_array_literal_to_fixed(ty, val);
+                    // "Drop Some" sugar: when the binding type is `T?`
+                    // (= `Option[T]`) but the RHS is a bare `T`, wrap
+                    // the RHS in `Option::Some` automatically. Pin:
+                    // docs/specs/syntax/option-no-some.spec.md.
+                    self.auto_wrap_option_some(ty, val);
                     let val_ty = self.ctx.resolve(&val.ty);
                     if let Err(e) = self.unify_or_coerce(ty, &val_ty, &val.span) {
                         self.type_error(e);
@@ -387,6 +398,108 @@ impl<'a> InferenceEngine<'a> {
                 crate::hir::types::ConstExpr::Lit(expected_len as u64),
             );
         }
+    }
+
+    /// "Drop Some" sugar: when an Option-typed slot receives a bare
+    /// value of the inner type, rewrite the HIR expression in place
+    /// from `<expr>` to `Option::Some(<expr>)`. Mirrors how Crystal /
+    /// Sorbet treat `T?` — the user never writes `Some(...)` again
+    /// for construction. `nil` keeps its existing polymorphic
+    /// behaviour (MIR's NullLiteral arm already lowers it to a
+    /// tagged-None enum when the slot is `Option[T]`).
+    ///
+    /// Touched by: let-binding RHS, function-body tail expression.
+    /// Function arguments are NOT yet rewritten here — callers
+    /// should write `Some(x)` explicitly at call sites for now;
+    /// sweep planned.
+    pub(super) fn auto_wrap_option_some(&mut self, expected: &Ty, val: &mut HirExpr) {
+        let expected_resolved = self.ctx.resolve(expected);
+        let inner = match &expected_resolved {
+            Ty::Option(inner) => self.ctx.resolve(inner),
+            _ => return,
+        };
+        // Recurse into structural expressions whose tail values
+        // are what end up assigned to the Option slot: if/else
+        // branches, blocks, and match arms. Without this descent,
+        // an `if x then nil else id * 2` wraps as a WHOLE — the
+        // `nil` branch then evaluates to Int 0 (via NullLiteral's
+        // non-Option fallback) and gets wrapped as `Some(0)`, not
+        // `None`. Descending lets each branch see the Option
+        // context separately so `nil → None` and `Int → Some(Int)`
+        // each fire in their own arm.
+        match &mut val.kind {
+            HirExprKind::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                self.auto_wrap_option_some(&expected_resolved, then_branch);
+                if let Some(e) = else_branch {
+                    self.auto_wrap_option_some(&expected_resolved, e);
+                }
+                val.ty = expected_resolved.clone();
+                return;
+            }
+            HirExprKind::Block(_, Some(tail)) => {
+                self.auto_wrap_option_some(&expected_resolved, tail);
+                val.ty = expected_resolved.clone();
+                return;
+            }
+            HirExprKind::Match { arms, .. } => {
+                for arm in arms.iter_mut() {
+                    self.auto_wrap_option_some(&expected_resolved, &mut arm.body);
+                }
+                val.ty = expected_resolved.clone();
+                return;
+            }
+            _ => {}
+        }
+        let found = self.ctx.resolve(&val.ty);
+        if matches!(found, Ty::Option(_)) {
+            return;
+        }
+        if matches!(val.kind, HirExprKind::NullLiteral) {
+            // `nil` already lowers to a tagged-None enum in MIR when
+            // val.ty is Option; just pin the type so downstream sees
+            // Option, not the original Infer var.
+            val.ty = expected_resolved;
+            return;
+        }
+        if !crate::typeck::unify::can_coerce(&found, &inner, self.ctx) {
+            return;
+        }
+        let option_def_id = match self.find_option_enum_def_id() {
+            Some(id) => id,
+            None => return,
+        };
+        let original_kind = std::mem::replace(&mut val.kind, HirExprKind::UnitLiteral);
+        let original_ty = std::mem::replace(&mut val.ty, Ty::Unit);
+        let inner_expr = HirExpr {
+            kind: original_kind,
+            ty: original_ty,
+            span: val.span.clone(),
+        };
+        val.kind = HirExprKind::EnumVariant {
+            type_def: option_def_id,
+            type_name: "Option".to_string(),
+            variant_name: "Some".to_string(),
+            variant_idx: 1,
+            fields: vec![("0".to_string(), inner_expr)],
+        };
+        val.ty = Ty::Option(Box::new(inner));
+    }
+
+    fn find_option_enum_def_id(&self) -> Option<crate::hir::nodes::DefId> {
+        // Bootstrap merge's namespace-anchor mode re-attaches class-body
+        // lib decls onto the Option Enum DefId originally registered by
+        // `register_option`. In some bootstrap orderings the kind in
+        // the symbol table ends up `Class` (anchor mutation), not
+        // `Enum`. We don't care which — we just need the DefId so MIR
+        // can dispatch EnumVariant lowering by type_name + variant_idx.
+        self.symbols
+            .iter()
+            .find(|d| d.name == "Option")
+            .map(|d| d.id)
     }
 
     pub(super) fn error(&mut self, message: String, span: &Span) {
