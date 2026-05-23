@@ -3481,8 +3481,16 @@ fn build_multi_phase_loop_poll_body(
         span: span.clone(),
     });
 
-    // Build phase blocks
-    let mut phase_block_stmts: Vec<Statement> = Vec::new();
+    // Build phase blocks as an if/elsif chain over `__phase` so
+    // each inner-while iteration runs AT MOST ONE phase body.
+    // This keeps `cx` from being moved-into-poll in two
+    // independent if-branches in one poll call (Riven's borrow
+    // analysis doesn't see that __phase is mutually exclusive
+    // across independent ifs). The trade-off: each phase
+    // advance costs an extra inner-while iteration; harmless on
+    // hot paths because the next-phase poll runs in the same
+    // outer block_on iteration (no extra reactor park needed).
+    let mut phase_bodies: Vec<Block> = Vec::new();
     for (i, (phase, sub)) in phases.iter().zip(subs.iter()).enumerate() {
         let is_last = i + 1 == phases.len();
 
@@ -3720,63 +3728,54 @@ fn build_multi_phase_loop_poll_body(
             span: span.clone(),
         };
 
-        // Phase guard: if __phase == i && pending_exit == false
-        let phase_eq = Expr {
-            kind: ExprKind::BinaryOp {
-                op: BinOp::Eq,
-                left: Box::new(self_field("__phase", span)),
-                right: Box::new(Expr {
-                    kind: ExprKind::IntLiteral(i as i64, None),
-                    span: span.clone(),
-                }),
-            },
+        // Collect this phase's body block (sub_init_if + poll +
+        // match). We'll thread it into the if/elsif chain below.
+        phase_bodies.push(Block {
+            statements: vec![
+                Statement::Expression(sub_init_if),
+                poll_let,
+                Statement::Expression(match_expr),
+            ],
             span: span.clone(),
-        };
-        let not_pending = Expr {
-            kind: ExprKind::BinaryOp {
-                op: BinOp::Eq,
-                left: Box::new(Expr {
-                    kind: ExprKind::Identifier("pending_exit".to_string()),
-                    span: span.clone(),
-                }),
-                right: Box::new(Expr {
-                    kind: ExprKind::BoolLiteral(false),
-                    span: span.clone(),
-                }),
-            },
-            span: span.clone(),
-        };
-        let phase_guard = Expr {
-            kind: ExprKind::BinaryOp {
-                op: BinOp::And,
-                left: Box::new(phase_eq),
-                right: Box::new(not_pending),
-            },
-            span: span.clone(),
-        };
-        let phase_if = Expr {
-            kind: ExprKind::If(IfExpr {
-                condition: Box::new(phase_guard),
-                then_body: Block {
-                    statements: vec![
-                        Statement::Expression(sub_init_if),
-                        poll_let,
-                        Statement::Expression(match_expr),
-                    ],
-                    span: span.clone(),
-                },
-                elsif_clauses: Vec::new(),
-                else_body: None,
-                span: span.clone(),
-            }),
-            span: span.clone(),
-        };
-        phase_block_stmts.push(Statement::Expression(phase_if));
+        });
     }
 
-    // cond_true: all phase blocks
+    // Assemble: if __phase == 0 { phase_bodies[0] }
+    //           elsif __phase == 1 { phase_bodies[1] }
+    //           ...
+    let phase_eq_for = |i: usize, span: &Span| Expr {
+        kind: ExprKind::BinaryOp {
+            op: BinOp::Eq,
+            left: Box::new(self_field("__phase", span)),
+            right: Box::new(Expr {
+                kind: ExprKind::IntLiteral(i as i64, None),
+                span: span.clone(),
+            }),
+        },
+        span: span.clone(),
+    };
+    let mut elsif_clauses: Vec<ElsifClause> = Vec::new();
+    for i in 1..phase_bodies.len() {
+        elsif_clauses.push(ElsifClause {
+            condition: Box::new(phase_eq_for(i, span)),
+            body: phase_bodies[i].clone(),
+            span: span.clone(),
+        });
+    }
+    let phase_chain = Expr {
+        kind: ExprKind::If(IfExpr {
+            condition: Box::new(phase_eq_for(0, span)),
+            then_body: phase_bodies[0].clone(),
+            elsif_clauses,
+            else_body: None,
+            span: span.clone(),
+        }),
+        span: span.clone(),
+    };
+
+    // cond_true wraps the phase chain
     let cond_true = Block {
-        statements: phase_block_stmts,
+        statements: vec![Statement::Expression(phase_chain)],
         span: span.clone(),
     };
 

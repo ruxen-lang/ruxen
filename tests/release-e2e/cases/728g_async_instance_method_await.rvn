@@ -1,0 +1,42 @@
+## Tests Shape 3 of describe_await — `<obj>.method(args).await`
+## where the receiver's class is known.
+
+class Holder
+  ticks: Int
+  payload: Int
+  include Future
+  type Output = Int
+
+  def init(ticks: Int, payload: Int)
+    self.ticks = ticks
+    self.payload = payload
+  end
+
+  def var make_inner(extra: Int) -> Holder
+    Holder.new(1, self.payload + extra)
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    if self.ticks == 0
+      Poll.Ready(self.payload)
+    else
+      self.ticks = self.ticks - 1
+      Poll.Pending
+    end
+  end
+end
+
+async def call_method_await(h: Holder) -> Int
+  let v = h.make_inner(5).await
+  v
+end
+
+def main
+  let h = Holder.new(0, 100)
+  let r = block_on(call_method_await(h))
+  if r == 105
+    puts "ok"
+  else
+    puts "fail: #{r}"
+  end
+end
