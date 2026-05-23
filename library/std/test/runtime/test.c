@@ -14,8 +14,6 @@
 
 #include <stdint.h>
 
-#include "../../core/runtime/runtime.h"
-
 static int64_t riven_test_current_runner = 0;
 
 int64_t riven_test_current_set(int64_t handle) {
