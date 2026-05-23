@@ -101,7 +101,19 @@ impl<'a> Lowerer<'a> {
                         }
                         _ => inner_type_name.clone(),
                     };
-                    let mangled = format!("{}_{}", resolved_class, field_name);
+                    // #06.93 Phase 3 (parity with method_call.rs:861):
+                    // module-qualified class names carry a dotted form
+                    // (`Outer.Inner`). C symbol names can't contain `.`,
+                    // so normalise to `_` when building the mangled
+                    // callee. The FFI alias map is keyed in the same
+                    // underscore-separated shape by
+                    // `register_class_lib_method_in`. Without this,
+                    // paren-less method calls like `br.read_line` on a
+                    // `BufReader.File` receiver emit `BufReader.File_read_line`
+                    // (literal dot in symbol) and link-fail because the
+                    // alias map only carries `BufReader_File_read_line`.
+                    let resolved_class_cs = resolved_class.replace('.', "_");
+                    let mangled = format!("{}_{}", resolved_class_cs, field_name);
                     // Use the inner type of the result Option for the method result.
                     let inner_result_ty = match &expr.ty {
                         Ty::Option(inner) => inner.as_ref().clone(),
@@ -338,7 +350,19 @@ impl<'a> Lowerer<'a> {
                             .unwrap_or_else(|| obj_type_name.clone()),
                         _ => obj_type_name.clone(),
                     };
-                    let mangled = format!("{}_{}", resolved_class, field_name);
+                    // #06.93 Phase 3 (parity with method_call.rs:861):
+                    // module-qualified class names carry a dotted form
+                    // (`Outer.Inner`). C symbol names can't contain `.`,
+                    // so normalise to `_` when building the mangled
+                    // callee. The FFI alias map is keyed in the same
+                    // underscore-separated shape by
+                    // `register_class_lib_method_in`. Without this,
+                    // paren-less method calls like `br.read_line` on a
+                    // `BufReader.File` receiver emit `BufReader.File_read_line`
+                    // (literal dot in symbol) and link-fail because the
+                    // alias map only carries `BufReader_File_read_line`.
+                    let resolved_class_cs = resolved_class.replace('.', "_");
+                    let mangled = format!("{}_{}", resolved_class_cs, field_name);
 
                     let dest = if expr.ty != Ty::Unit && expr.ty != Ty::Never {
                         Some(self.new_temp(expr.ty.clone()))
