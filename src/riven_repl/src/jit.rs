@@ -1593,9 +1593,7 @@ pub(super) fn is_repl_symbol_allowed(name: &str) -> bool {
     // Accept anything starting with an ASCII uppercase letter that's
     // a plausible Rust-style identifier (no shell metacharacters).
     if name.starts_with(|c: char| c.is_ascii_uppercase())
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
         && name.contains('_')
     {
         return true;

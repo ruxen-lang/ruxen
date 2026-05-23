@@ -182,7 +182,9 @@ pub const BOOTSTRAP_EMBEDDED_SIBLINGS: &[(&str, &[(&str, &str)])] = &[
             ),
             (
                 "async_read_with_timeout_future.rvn",
-                include_str!("../../../../library/std/async_net/src/async_read_with_timeout_future.rvn"),
+                include_str!(
+                    "../../../../library/std/async_net/src/async_read_with_timeout_future.rvn"
+                ),
             ),
             (
                 "async_write_future.rvn",
@@ -244,7 +246,9 @@ pub const BOOTSTRAP_EMBEDDED_SIBLINGS: &[(&str, &[(&str, &str)])] = &[
             ),
             (
                 "async_read_to_string_future.rvn",
-                include_str!("../../../../library/std/async_fs/src/async_read_to_string_future.rvn"),
+                include_str!(
+                    "../../../../library/std/async_fs/src/async_read_to_string_future.rvn"
+                ),
             ),
             (
                 "async_write_all_future.rvn",

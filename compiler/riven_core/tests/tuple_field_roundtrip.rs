@@ -13,11 +13,21 @@ fn tuple_field_multi_digit_index_preserves_value() {
     let tokens = Lexer::new(source).tokenize().expect("lex");
     let prog = Parser::new(tokens).parse().expect("parse");
     // Find the let value: should be FieldAccess(FieldAccess(t, "0"), "10").
-    let main = prog.items.iter().find_map(|item| {
-        if let riven_core::parser::ast::TopLevelItem::Function(f) = item {
-            if f.name == "main" { Some(f) } else { None }
-        } else { None }
-    }).expect("main fn");
+    let main = prog
+        .items
+        .iter()
+        .find_map(|item| {
+            if let riven_core::parser::ast::TopLevelItem::Function(f) = item {
+                if f.name == "main" {
+                    Some(f)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .expect("main fn");
     let body = &main.body;
     let stmt = body.statements.first().expect("a statement");
     let value = match stmt {

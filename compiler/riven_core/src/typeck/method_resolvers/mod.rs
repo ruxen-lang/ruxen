@@ -1152,7 +1152,6 @@ pub(super) fn builtin_method_type(
         // `lookup_method` / `lookup_method_on_bounds` above; a typo on
         // an unrelated value (`42.summary`) now surfaces as the
         // intended "unknown method" diagnostic instead of typechecking.
-
         _ => None,
     }
 }

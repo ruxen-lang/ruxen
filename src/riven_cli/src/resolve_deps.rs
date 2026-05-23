@@ -59,10 +59,9 @@ fn validate_git_ref(r: &str) -> Result<(), String> {
     }
     // Allow [A-Za-z0-9_./+@~^-] — covers branch names, tags, commit
     // SHAs, and ~/^ rev suffixes. Anything else is rejected.
-    if !r
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '/' | '+' | '@' | '~' | '^' | '-'))
-    {
+    if !r.chars().all(|c| {
+        c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '/' | '+' | '@' | '~' | '^' | '-')
+    }) {
         return Err(format!(
             "git ref `{}` contains characters outside [A-Za-z0-9_./+@~^-]",
             r
@@ -353,7 +352,13 @@ fn resolve_git_dep(
         // Clone the repository
         println!("    Fetching piece `{}` from {}", name, git_url);
         let status = Command::new("git")
-            .args(["clone", "--quiet", "--", git_url, &clone_dir.to_string_lossy()])
+            .args([
+                "clone",
+                "--quiet",
+                "--",
+                git_url,
+                &clone_dir.to_string_lossy(),
+            ])
             .status()
             .map_err(|e| format!("failed to run git clone: {}", e))?;
 

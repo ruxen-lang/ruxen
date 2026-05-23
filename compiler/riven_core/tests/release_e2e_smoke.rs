@@ -36,8 +36,7 @@ fn type_check_with_shared_bootstrap(
     bootstrap_packages: &[(String, Program)],
 ) -> typeck::TypeCheckResult {
     let mut lowered = program.clone();
-    let e1112_diags =
-        riven_core::async_lowering::collect_block_on_in_async_diagnostics(&lowered);
+    let e1112_diags = riven_core::async_lowering::collect_block_on_in_async_diagnostics(&lowered);
     let e1116_diags =
         riven_core::async_lowering::collect_task_spawn_outside_async_diagnostics(&lowered);
     let e1115_diags = riven_core::async_lowering::collect_await_in_loop_diagnostics(&lowered);
@@ -253,10 +252,9 @@ fn release_e2e_all_fixtures() {
     // re-parse the entire stdlib (~27 files) for every fixture — a
     // ~6-minute fixed cost on the 291-fixture sweep.
     let mut bootstrap_diagnostics: Vec<Diagnostic> = Vec::new();
-    let bootstrap_packages =
-        riven_core::resolve::bootstrap::run_bootstrap_with_package_names(
-            &mut bootstrap_diagnostics,
-        );
+    let bootstrap_packages = riven_core::resolve::bootstrap::run_bootstrap_with_package_names(
+        &mut bootstrap_diagnostics,
+    );
     if !bootstrap_diagnostics.is_empty() {
         panic!(
             "release-e2e: stdlib bootstrap emitted diagnostics during \

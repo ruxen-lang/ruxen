@@ -36,18 +36,10 @@ impl<'a> Lowerer<'a> {
                     Ty::Class { name, .. } => {
                         let bare = self.user_drop_classes.contains(name);
                         let suffix = format!(".{}", name);
-                        let qualified = self
-                            .user_drop_classes
-                            .iter()
-                            .any(|q| q.ends_with(&suffix));
+                        let qualified = self.user_drop_classes.iter().any(|q| q.ends_with(&suffix));
                         if bare || qualified {
                             let mangled = format!("{}_drop", name);
-                            Some(
-                                self.ffi_alias_map
-                                    .get(&mangled)
-                                    .cloned()
-                                    .unwrap_or(mangled),
-                            )
+                            Some(self.ffi_alias_map.get(&mangled).cloned().unwrap_or(mangled))
                         } else {
                             None
                         }

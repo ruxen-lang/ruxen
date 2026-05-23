@@ -813,13 +813,10 @@ impl<'a> Lowerer<'a> {
         let mut chain: Vec<DefId> = vec![c.def_id];
         let mut cur = c.def_id;
         loop {
-            let parent_id = self
-                .symbols
-                .get(cur)
-                .and_then(|d| match &d.kind {
-                    DefKind::Class { info } => info.parent,
-                    _ => None,
-                });
+            let parent_id = self.symbols.get(cur).and_then(|d| match &d.kind {
+                DefKind::Class { info } => info.parent,
+                _ => None,
+            });
             match parent_id {
                 Some(p) => {
                     chain.push(p);

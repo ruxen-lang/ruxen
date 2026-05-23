@@ -49,8 +49,7 @@ pub fn elide_returns_self_realloc(mir: &mut crate::mir::nodes::MirProgram) {
 
     // Step 1: collect the names of functions that return their first
     // parameter (i.e. instance methods that yield `self`).
-    let mut returns_self: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
+    let mut returns_self: std::collections::HashSet<String> = std::collections::HashSet::new();
     for func in &mir.functions {
         let Some(&self_id) = func.params.first() else {
             continue;
@@ -125,9 +124,7 @@ pub fn elide_returns_self_realloc(mir: &mut crate::mir::nodes::MirProgram) {
                                 }) = block.instructions.get(i + 1)
                                 {
                                     if a_dest == r {
-                                        if let Some((callee_name, candidates)) =
-                                            last_call.get(x)
-                                        {
+                                        if let Some((callee_name, candidates)) = last_call.get(x) {
                                             let aliases = candidates.contains(r);
                                             let could_return_self = returns_self
                                                 .contains(callee_name)
@@ -159,13 +156,13 @@ pub fn elide_returns_self_realloc(mir: &mut crate::mir::nodes::MirProgram) {
                                     _ => None,
                                 })
                                 .collect();
-                            last_call.insert(
-                                *d,
-                                (INDIRECT_SENTINEL.to_string(), candidates),
-                            );
+                            last_call.insert(*d, (INDIRECT_SENTINEL.to_string(), candidates));
                         }
                     }
-                    MirInst::Assign { dest, value: MirValue::Use(src) } => {
+                    MirInst::Assign {
+                        dest,
+                        value: MirValue::Use(src),
+                    } => {
                         if let Some(entry) = last_call.get(src).cloned() {
                             last_call.insert(*dest, entry);
                         }

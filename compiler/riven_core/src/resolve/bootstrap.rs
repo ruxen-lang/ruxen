@@ -387,10 +387,7 @@ pub fn resolve_stdlib_root() -> Option<PathBuf> {
 /// the file and the first parser/lexer error's line on failure.
 fn load_stdlib_file(root: &Path, rel: &str) -> Result<Program, Diagnostic> {
     let full = root.join(rel);
-    let entry_name = full
-        .file_name()
-        .and_then(|f| f.to_str())
-        .unwrap_or("");
+    let entry_name = full.file_name().and_then(|f| f.to_str()).unwrap_or("");
     if entry_name != "lib.rvn" {
         let source = std::fs::read_to_string(&full).map_err(|io_err| {
             Diagnostic::error_with_code(
@@ -524,8 +521,7 @@ fn load_embedded_multi_file(
         let b_has = source_has_top_level_class(b.1);
         b_has.cmp(&a_has).then_with(|| a.0.cmp(b.0))
     });
-    let total: usize =
-        lib_entry.1.len() + siblings.iter().map(|s| s.1.len() + 1).sum::<usize>();
+    let total: usize = lib_entry.1.len() + siblings.iter().map(|s| s.1.len() + 1).sum::<usize>();
     let mut combined = String::with_capacity(total);
     combined.push_str(lib_entry.1);
     for (_, src) in &siblings {

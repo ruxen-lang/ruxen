@@ -76,8 +76,10 @@ fn matcher_to_eq_and_not_to_eq() {
 
 #[test]
 fn matcher_truthy_falsy_and_nil() {
-    let (stdout, stderr, ok) =
-        compile_and_run(&rvn("test_matcher_truthy_nil"), "stdlib_test_matcher_truthy_nil");
+    let (stdout, stderr, ok) = compile_and_run(
+        &rvn("test_matcher_truthy_nil"),
+        "stdlib_test_matcher_truthy_nil",
+    );
     assert!(ok, "stderr: {}", stderr);
     for token in ["truthy_pass", "falsy_pass", "not_nil_pass", "nil_pass"] {
         assert!(stdout.contains(token), "missing {token}: {}", stdout);
@@ -119,7 +121,11 @@ fn tester_describe_it_expect_to_eq_pass_path() {
     );
     assert!(ok, "stderr: {}", stderr);
     // No ASSERT_FAIL_* lines should appear (both assertions pass).
-    assert!(!stdout.contains("ASSERT_FAIL"), "unexpected fail: {}", stdout);
+    assert!(
+        !stdout.contains("ASSERT_FAIL"),
+        "unexpected fail: {}",
+        stdout
+    );
     // Runner.execute should report 2 passing cases.
     assert!(stdout.contains("2 passed"), "got: {}", stdout);
 }
@@ -133,16 +139,26 @@ fn tester_context_inherits_parent_hooks() {
     assert!(ok, "stderr: {}", stderr);
     // outer case sees only outer hooks (in order):
     let outer_idx = stdout.find("outer_case_body").expect("outer body");
-    let outer_before = stdout[..outer_idx].find("outer_before").expect("outer_before before body");
+    let outer_before = stdout[..outer_idx]
+        .find("outer_before")
+        .expect("outer_before before body");
     assert!(outer_before < outer_idx);
     // inner case sees outer_before THEN inner_before, then body, then outer_after:
     let inner_body_idx = stdout.find("inner_case_body").expect("inner body");
-    let inner_outer_before = stdout[..inner_body_idx].rfind("outer_before").expect("outer_before for inner case");
-    let inner_inner_before = stdout[..inner_body_idx].rfind("inner_before").expect("inner_before for inner case");
+    let inner_outer_before = stdout[..inner_body_idx]
+        .rfind("outer_before")
+        .expect("outer_before for inner case");
+    let inner_inner_before = stdout[..inner_body_idx]
+        .rfind("inner_before")
+        .expect("inner_before for inner case");
     assert!(inner_outer_before < inner_inner_before);
     assert!(inner_inner_before < inner_body_idx);
     // 2 passing, 0 failing, 0 pending
-    assert!(stdout.contains("2 passed, 0 failed, 0 pending"), "got: {}", stdout);
+    assert!(
+        stdout.contains("2 passed, 0 failed, 0 pending"),
+        "got: {}",
+        stdout
+    );
 }
 
 #[test]
@@ -152,6 +168,10 @@ fn tester_summary_counts_pass_fail_pending() {
         "stdlib_test_tester_xit_and_fail",
     );
     // Binary may exit non-zero because one test failed — that's expected.
-    assert!(stdout.contains("1 passed, 1 failed, 1 pending"),
-            "got stdout={} stderr={}", stdout, stderr);
+    assert!(
+        stdout.contains("1 passed, 1 failed, 1 pending"),
+        "got stdout={} stderr={}",
+        stdout,
+        stderr
+    );
 }

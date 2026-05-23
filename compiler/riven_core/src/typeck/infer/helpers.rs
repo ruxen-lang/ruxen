@@ -69,11 +69,17 @@ pub(super) fn propagate_pattern_types(
             {
                 DefKind::Class { info } => (
                     info.fields.clone(),
-                    info.generic_params.iter().map(|gp| gp.name.clone()).collect(),
+                    info.generic_params
+                        .iter()
+                        .map(|gp| gp.name.clone())
+                        .collect(),
                 ),
                 DefKind::Struct { info } => (
                     info.fields.clone(),
-                    info.generic_params.iter().map(|gp| gp.name.clone()).collect(),
+                    info.generic_params
+                        .iter()
+                        .map(|gp| gp.name.clone())
+                        .collect(),
                 ),
                 _ => return,
             };

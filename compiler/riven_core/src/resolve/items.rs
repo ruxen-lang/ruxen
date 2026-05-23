@@ -100,11 +100,7 @@ impl Resolver {
         let qualified_key = if self.current_module_path.is_empty() {
             class.name.clone()
         } else {
-            format!(
-                "{}.{}",
-                self.current_module_path.join("."),
-                class.name
-            )
+            format!("{}.{}", self.current_module_path.join("."), class.name)
         };
         let def_id = self
             .type_registry
