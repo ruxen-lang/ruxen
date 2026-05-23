@@ -1,17 +1,22 @@
-use std.test.Matcher
+use std.test.Tester
+use std.test.Runner
 
 def main
-  let m = Matcher.new(1 + 2)
-  if m.to_eq(3)
-    puts "to_eq_pass"
-  else
-    puts "to_eq_fail"
+  let r = Runner.new("fixture.matcher_to_eq")
+  Runner.set_current(r.handle_addr)
+
+  Tester.describe("Matcher") do |t: &var Tester|
+    t.it("to_eq passes on equal values") do
+      t.expect(1 + 2).to_eq(3)
+    end
+    t.it("not_to_eq passes on unequal values") do
+      t.expect(1 + 2).not_to_eq(4)
+    end
   end
 
-  let n = Matcher.new(1 + 2)
-  if n.not_to_eq(4)
+  r.execute
+  if r.passed == 2
+    puts "to_eq_pass"
     puts "not_to_eq_pass"
-  else
-    puts "not_to_eq_fail"
   end
 end

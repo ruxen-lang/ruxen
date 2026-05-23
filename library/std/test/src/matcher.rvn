@@ -14,12 +14,20 @@ class Matcher[T] where T: PartialEq
     self.actual = actual
   end
 
-  def to_eq(expected: T) -> Bool
-    self.actual == expected
+  ## Assert actual == expected. Marks the active case as failed via the
+  ## per-case failure flag if the comparison fails. Returns Unit so the
+  ## call site is a statement (no `if m.to_eq(x)` pattern needed).
+  def to_eq(expected: T) -> ()
+    if self.actual != expected
+      Runner.case_mark_failed
+    end
   end
 
-  def not_to_eq(expected: T) -> Bool
-    self.actual != expected
+  ## Assert actual != expected.
+  def not_to_eq(expected: T) -> ()
+    if self.actual == expected
+      Runner.case_mark_failed
+    end
   end
 end
 

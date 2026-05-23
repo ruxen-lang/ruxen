@@ -1,5 +1,4 @@
 use std.test.Tester
-use std.test.Matcher
 use std.test.Runner
 
 def main
@@ -8,16 +7,10 @@ def main
 
   Tester.describe("Calculator") do |t: &var Tester|
     t.it("adds two numbers") do
-      let m = Matcher.new(1 + 2)
-      if m.to_eq(3) == false
-        puts "ASSERT_FAIL_1+2_should_be_3"
-      end
+      t.expect(1 + 2).to_eq(3)
     end
     t.it("subtracts") do
-      let m = Matcher.new(5 - 2)
-      if m.to_eq(3) == false
-        puts "ASSERT_FAIL_5-2_should_be_3"
-      end
+      t.expect(5 - 2).to_eq(3)
     end
   end
 

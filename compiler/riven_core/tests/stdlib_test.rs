@@ -144,3 +144,14 @@ fn tester_context_inherits_parent_hooks() {
     // 2 passing, 0 failing, 0 pending
     assert!(stdout.contains("2 passed, 0 failed, 0 pending"), "got: {}", stdout);
 }
+
+#[test]
+fn tester_summary_counts_pass_fail_pending() {
+    let (stdout, stderr, _ok) = compile_and_run(
+        &rvn("test_tester_xit_and_fail"),
+        "stdlib_test_tester_xit_and_fail",
+    );
+    // Binary may exit non-zero because one test failed — that's expected.
+    assert!(stdout.contains("1 passed, 1 failed, 1 pending"),
+            "got stdout={} stderr={}", stdout, stderr);
+}

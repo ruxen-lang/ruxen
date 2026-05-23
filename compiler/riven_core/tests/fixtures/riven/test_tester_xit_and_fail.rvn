@@ -1,0 +1,21 @@
+use std.test.Tester
+use std.test.Runner
+
+def main
+  let r = Runner.new("fixture.xit_and_fail")
+  Runner.set_current(r.handle_addr)
+
+  Tester.describe("Mixed") do |t: &var Tester|
+    t.it("passes") do
+      t.expect(1).to_eq(1)
+    end
+    t.it("fails") do
+      t.expect(1).to_eq(2)
+    end
+    t.xit("pending") do
+      t.expect(1).to_eq(99)
+    end
+  end
+
+  r.execute
+end
