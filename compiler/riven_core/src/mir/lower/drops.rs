@@ -85,33 +85,38 @@ pub fn elide_returns_self_realloc(mir: &mut crate::mir::nodes::MirProgram) {
     // and delete the middle (riven_dealloc) instruction.
     for func in &mut mir.functions {
         for block in &mut func.blocks {
-            // Track the most-recent Call that wrote each local: maps
-            // `dest` → `(callee_name, first_arg_local)` so we can
-            // recognise the "X came from F(R, …)" antecedent.
+            // Track each local's provenance: the name of the last
+            // callee that wrote it (or `<indirect>` for closure /
+            // fn-pointer dispatch), alongside the set of LocalIds
+            // that could alias the return value (i.e. any arg the
+            // callee might have returned). For named calls we use
+            // `returns_self` to decide; for indirect calls we
+            // conservatively assume the callee might return any of
+            // its user-visible args.
+            const INDIRECT_SENTINEL: &str = "<indirect>";
+            // Map dest_local → (callee_name, candidate_alias_args).
             let mut last_call: std::collections::HashMap<
                 crate::mir::nodes::LocalId,
-                (String, crate::mir::nodes::LocalId),
+                (String, Vec<crate::mir::nodes::LocalId>),
             > = std::collections::HashMap::new();
 
             let mut to_remove: Vec<usize> = Vec::new();
             for (i, inst) in block.instructions.iter().enumerate() {
                 match inst {
                     MirInst::Call { dest, callee, args } => {
-                        // Record the call's writeback target so later
-                        // sites can trace `X`'s provenance.
                         if let Some(d) = dest {
-                            // First-arg local (the receiver). Skip if
-                            // the call has no args or arg[0] isn't a
-                            // simple Use.
-                            if let Some(MirValue::Use(first)) = args.first() {
-                                last_call.insert(*d, (callee.clone(), *first));
-                            }
+                            let candidates: Vec<crate::mir::nodes::LocalId> = args
+                                .iter()
+                                .filter_map(|a| match a {
+                                    MirValue::Use(l) => Some(*l),
+                                    _ => None,
+                                })
+                                .collect();
+                            last_call.insert(*d, (callee.clone(), candidates));
                         }
-                        // Detect the buggy triple: a riven_dealloc on
-                        // local R that's immediately followed by
-                        // Assign { dest: R, value: Use(X) } where X
-                        // traces back to a returns-self callee taking
-                        // R as its first arg.
+                        // Detect: riven_dealloc(R) followed by
+                        // Assign R = X where X came from a callee
+                        // that aliases R via one of its args.
                         if callee == "riven_dealloc" && args.len() == 1 {
                             if let MirValue::Use(r) = &args[0] {
                                 if let Some(MirInst::Assign {
@@ -120,12 +125,14 @@ pub fn elide_returns_self_realloc(mir: &mut crate::mir::nodes::MirProgram) {
                                 }) = block.instructions.get(i + 1)
                                 {
                                     if a_dest == r {
-                                        if let Some((callee_name, first_arg)) =
+                                        if let Some((callee_name, candidates)) =
                                             last_call.get(x)
                                         {
-                                            if first_arg == r
-                                                && returns_self.contains(callee_name)
-                                            {
+                                            let aliases = candidates.contains(r);
+                                            let could_return_self = returns_self
+                                                .contains(callee_name)
+                                                || callee_name == INDIRECT_SENTINEL;
+                                            if aliases && could_return_self {
                                                 to_remove.push(i);
                                             }
                                         }
@@ -134,13 +141,31 @@ pub fn elide_returns_self_realloc(mir: &mut crate::mir::nodes::MirProgram) {
                             }
                         }
                     }
+                    MirInst::CallIndirect { dest, args, .. } => {
+                        // Indirect call through a closure / fn pointer.
+                        // ABI: args[0] is the captures_ptr the closure
+                        // lowering prepends; args[1..] are the user's
+                        // visible arguments. We can't know which (if
+                        // any) the closure returns, so mark every
+                        // user arg as a potential alias and tag with
+                        // INDIRECT_SENTINEL — worst case is a bounded
+                        // one-time leak, not a use-after-free.
+                        if let Some(d) = dest {
+                            let candidates: Vec<crate::mir::nodes::LocalId> = args
+                                .iter()
+                                .skip(1) // skip captures_ptr
+                                .filter_map(|a| match a {
+                                    MirValue::Use(l) => Some(*l),
+                                    _ => None,
+                                })
+                                .collect();
+                            last_call.insert(
+                                *d,
+                                (INDIRECT_SENTINEL.to_string(), candidates),
+                            );
+                        }
+                    }
                     MirInst::Assign { dest, value: MirValue::Use(src) } => {
-                        // Propagate provenance through simple aliases:
-                        // if `dest = X` and `X` was the result of a
-                        // Call we tracked, dest now also denotes that
-                        // result for any later use. (Niche, but keeps
-                        // the analysis tight if codegen ever inserts
-                        // a copy between the call and the dealloc.)
                         if let Some(entry) = last_call.get(src).cloned() {
                             last_call.insert(*dest, entry);
                         }
