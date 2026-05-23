@@ -1,14 +1,18 @@
 ## --- AsyncWriteFuture (B9) -----------------------------------------
+##
+## Persistent-fd-registration model: see AsyncReadFuture header for
+## the full rationale. The AsyncTcpStream owns the edge-triggered
+## write-readiness registration; this future just drives the step
+## machine which loops until EAGAIN (drain-to-empty invariant required
+## by edge-triggered).
 class AsyncWriteFuture
   state_ptr: Int
-  handle: Int
   done: Int
   include Future
   type Output = Result[Int, IoError]
 
   def init(fd: Int, content: &String)
     self.state_ptr = riven_async_tcp_write_state_new(fd, content)
-    self.handle = 0
     self.done = 0
   end
 
@@ -18,25 +22,13 @@ class AsyncWriteFuture
     end
     let step = riven_async_tcp_write_step(self.state_ptr)
     if step == 1
-      if self.handle == 0
-        let fd = riven_async_tcp_write_state_get_fd(self.state_ptr)
-        self.handle = riven_reactor_register_fd_write(riven_reactor_current_handle(), fd)
-      end
       return Poll.Pending
-    end
-    if self.handle != 0
-      riven_reactor_deregister(riven_reactor_current_handle(), self.handle)
-      self.handle = 0
     end
     self.done = 1
     Poll.Ready(riven_async_tcp_write_state_take_result(self.state_ptr))
   end
 
   def drop
-    if self.handle != 0
-      riven_reactor_deregister(riven_reactor_current_handle(), self.handle)
-      self.handle = 0
-    end
     if self.state_ptr != 0
       riven_async_tcp_write_state_free(self.state_ptr)
       self.state_ptr = 0

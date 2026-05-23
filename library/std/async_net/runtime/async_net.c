@@ -60,27 +60,43 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-/* Wire layout — identical to RivenAsyncFile / RivenFile for cross-
- * package compatibility. The Riven-side class fields (fd: Int,
- * closed: Int) are Int (i64) but the on-heap layout is two int32s
- * because the C allocator owns construction (`*_bind` / `*_connect`
- * return freshly-malloc'd 8-byte structs); the Riven class never
- * directly allocates these.
+/* Wire layout — C-owned. The Riven-side class fields (`fd: Int`,
+ * `closed: Int`) are unused on the access path: the Riven side only
+ * touches these structs through FFI accessors, and `*_bind` / `*_from_fd`
+ * are the only allocators. Growing the struct to add the persistent
+ * reactor handles is safe because Riven never directly indexes fields.
+ *
+ * Layout note: handles are negative-encoded int64 slot indices returned
+ * by riven_reactor_register_fd_*_persistent (0 = not registered).
+ * They're per-(reactor, fd, mode) and must be deregistered on the SAME
+ * thread that registered them — see the drop functions below.
  */
 typedef struct {
     int32_t fd;
     int32_t closed;
+    int64_t accept_handle;  /* persistent read-readiness registration */
 } RivenAsyncTcpListener;
 
 typedef struct {
     int32_t fd;
     int32_t closed;
+    int64_t read_handle;    /* persistent read-readiness registration */
+    int64_t write_handle;   /* persistent write-readiness registration */
 } RivenAsyncTcpStream;
 
-_Static_assert(sizeof(RivenAsyncTcpListener) == 8,
-    "RivenAsyncTcpListener wire layout drifted from documented 8-byte form");
-_Static_assert(sizeof(RivenAsyncTcpStream) == 8,
-    "RivenAsyncTcpStream wire layout drifted from documented 8-byte form");
+_Static_assert(sizeof(RivenAsyncTcpListener) == 16,
+    "RivenAsyncTcpListener wire layout drifted from documented 16-byte form "
+    "(grew from 8 in v1-missing-features to add accept_handle)");
+_Static_assert(sizeof(RivenAsyncTcpStream) == 24,
+    "RivenAsyncTcpStream wire layout drifted from documented 24-byte form "
+    "(grew from 8 in v1-missing-features to add read_handle + write_handle)");
+
+/* Reactor FFI — declared here so we can register persistently at
+ * stream/listener construction without going through the Riven side.
+ * The persistent variants live in library/std/future/runtime/reactor.c. */
+extern int64_t riven_reactor_register_fd_read_persistent(int64_t reactor, int64_t fd);
+extern int64_t riven_reactor_register_fd_write_persistent(int64_t reactor, int64_t fd);
+extern void    riven_reactor_deregister(int64_t reactor, int64_t handle);
 
 /* ── socket helpers ────────────────────────────────────────────────── */
 
@@ -229,6 +245,12 @@ void *riven_async_tcp_listener_bind(const char *addr) {
         (RivenAsyncTcpListener *)riven_alloc(sizeof(RivenAsyncTcpListener));
     l->fd = fd;
     l->closed = 0;
+    /* Register the listener fd for read-readiness ONCE, edge-triggered,
+     * on the constructing thread's reactor. AsyncAcceptFuture then just
+     * calls accept_step (which loops until EAGAIN) — no per-poll
+     * register/deregister syscalls. 0 = "use current-thread reactor",
+     * lazy-acquires if needed. */
+    l->accept_handle = riven_reactor_register_fd_read_persistent(0, (int64_t)fd);
     return riven_result_ok_value((int64_t)l);
 }
 
@@ -239,9 +261,26 @@ int64_t riven_async_tcp_listener_fd(void *self) {
     return (int64_t)l->fd;
 }
 
+/* Persistent accept-readiness handle. AsyncAcceptFuture reads this
+ * from the listener at construction time so it doesn't have to register
+ * per-poll. Returns 0 if not registered (defensive — bind always
+ * registers, so this only happens for a corrupted listener). */
+int64_t riven_async_tcp_listener_accept_handle(void *self) {
+    if (!self) return 0;
+    return ((RivenAsyncTcpListener *)self)->accept_handle;
+}
+
 void riven_async_tcp_listener_drop(void *self) {
     if (!self) return;
     RivenAsyncTcpListener *l = (RivenAsyncTcpListener *)self;
+    /* Deregister BEFORE close — kqueue EV_DELETE / epoll EPOLL_CTL_DEL
+     * need the fd to still be valid; closing an fd implicitly removes
+     * it from kqueue but NOT epoll, and even on kqueue the slot
+     * bookkeeping in reactor.c needs the fd to look up the filter. */
+    if (l->accept_handle != 0) {
+        riven_reactor_deregister(0, l->accept_handle);
+        l->accept_handle = 0;
+    }
     if (!l->closed && l->fd >= 0) {
         int rc;
         do { rc = close(l->fd); } while (rc < 0 && errno == EINTR);
@@ -390,13 +429,34 @@ void riven_async_accept_state_free(void *state) {
     free(s);
 }
 
-/* Wrap an accepted fd in a freshly-allocated AsyncTcpStream. Called by
- * the Riven AsyncAcceptFuture once `step` returns 2 (done). */
+/* Wrap an accepted (or connected) fd in a freshly-allocated
+ * AsyncTcpStream. Called by AsyncAcceptFuture once `accept_step`
+ * returns 2 (done), and by `connect_state_to_result` after
+ * AsyncConnectFuture resolves.
+ *
+ * Registers the fd ONCE with the current-thread reactor for BOTH
+ * read- and write-readiness, edge-triggered. The handles live on the
+ * stream and are deregistered on drop. AsyncReadFuture / AsyncWriteFuture
+ * read these handles via the accessors below; they no longer touch the
+ * reactor themselves. */
 void *riven_async_tcp_stream_from_fd(int64_t fd) {
     RivenAsyncTcpStream *s =
         (RivenAsyncTcpStream *)riven_alloc(sizeof(RivenAsyncTcpStream));
     s->fd = (int)fd;
     s->closed = 0;
+    /* 0 = use current-thread reactor (lazy-acquired). Stream construction
+     * happens on the same worker thread that called block_on(accept) or
+     * block_on(connect), and that thread already has a reactor since
+     * block_on installed one. Read/write futures will be polled on the
+     * SAME thread, so the per-thread reactor identity is consistent.
+     *
+     * Registering both r+w upfront wastes one kevent on streams that
+     * are read-only (or write-only), but the alternative — lazy
+     * registration on first EAGAIN — reintroduces the per-poll syscall
+     * we're trying to eliminate. Two kevents at construction (one per
+     * filter) is dwarfed by the savings on the hot path. */
+    s->read_handle  = riven_reactor_register_fd_read_persistent(0, fd);
+    s->write_handle = riven_reactor_register_fd_write_persistent(0, fd);
     return s;
 }
 
@@ -751,9 +811,40 @@ int64_t riven_async_tcp_stream_fd(void *self) {
     return (int64_t)s->fd;
 }
 
+/* Persistent r/w handles. AsyncReadFuture / AsyncWriteFuture grab these
+ * at construction time so they don't have to register per-poll. */
+int64_t riven_async_tcp_stream_read_handle(void *self) {
+    if (!self) return 0;
+    return ((RivenAsyncTcpStream *)self)->read_handle;
+}
+
+int64_t riven_async_tcp_stream_write_handle(void *self) {
+    if (!self) return 0;
+    return ((RivenAsyncTcpStream *)self)->write_handle;
+}
+
+/* Internal helper: tear down both r+w persistent registrations. Idempotent.
+ * Called from both drop and shutdown — close() also implicitly
+ * removes the fd from kqueue, but our slot table still owns bookkeeping
+ * for `fired` / `registered_count`, and Linux epoll does NOT auto-remove
+ * on close (only on the last fd dup closes). Always deregister
+ * explicitly. */
+static void riven_async_tcp_stream_unregister(RivenAsyncTcpStream *s) {
+    if (s->read_handle != 0) {
+        riven_reactor_deregister(0, s->read_handle);
+        s->read_handle = 0;
+    }
+    if (s->write_handle != 0) {
+        riven_reactor_deregister(0, s->write_handle);
+        s->write_handle = 0;
+    }
+}
+
 void riven_async_tcp_stream_drop(void *self) {
     if (!self) return;
     RivenAsyncTcpStream *s = (RivenAsyncTcpStream *)self;
+    /* Deregister BEFORE close — see listener_drop note. */
+    riven_async_tcp_stream_unregister(s);
     if (!s->closed && s->fd >= 0) {
         int rc;
         do { rc = close(s->fd); } while (rc < 0 && errno == EINTR);
@@ -784,6 +875,11 @@ void riven_async_tcp_stream_drop(void *self) {
 void riven_async_tcp_stream_shutdown(void *self) {
     if (!self) return;
     RivenAsyncTcpStream *s = (RivenAsyncTcpStream *)self;
+    /* Deregister r+w handles BEFORE close so the reactor's slot table
+     * and registered_count stay consistent (see drop note). The Riven
+     * stream's own def-drop will run after this and find handles == 0
+     * + closed == 1, making it a no-op. */
+    riven_async_tcp_stream_unregister(s);
     if (!s->closed && s->fd >= 0) {
         (void)shutdown(s->fd, SHUT_RDWR);
         int rc;

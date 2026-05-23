@@ -346,6 +346,84 @@ int64_t riven_reactor_register_fd_write(int64_t reactor_handle, int64_t fd) {
     return riven_reactor_register_fd_internal(reactor_handle, fd, 1);
 }
 
+/* ── Persistent edge-triggered fd registration ─────────────────────────
+ *
+ * Variant of register_fd_{read,write} that uses EV_CLEAR (kqueue) /
+ * EPOLLET (epoll) so the OS only signals on r/w-readiness EDGES, not on
+ * every park cycle. The intended caller registers ONCE at fd
+ * construction (AsyncTcpStream / AsyncTcpListener `_from_fd` / `_bind`)
+ * and keeps the handle alive until the owning stream drops, so the
+ * per-poll register + deregister pair the futures used to emit becomes
+ * zero syscalls on the hot path (-6 syscalls per HTTP request on the
+ * rondo bench).
+ *
+ * Edge-triggered correctness contract for callers: the future's step
+ * machine MUST drain the syscall until EAGAIN before returning Pending,
+ * otherwise it will miss the next edge and deadlock. All three
+ * async_net step machines (read/write/accept) loop until EAGAIN today,
+ * so they satisfy this. async_fs / async_io callers still use the
+ * level-triggered helpers above — they register per-poll and don't
+ * need persistence.
+ *
+ * Both kqueue's EV_ADD|EV_CLEAR and epoll's EPOLLET emit one initial
+ * "readiness" event if data is already buffered at registration time,
+ * so a freshly-accepted fd with bytes in flight will wake the first
+ * poll exactly once — no missed-initial-edge hazard. */
+static int64_t riven_reactor_register_fd_persistent_internal(int64_t reactor_handle,
+                                                             int64_t fd_in,
+                                                             int mode) {
+    RivenReactor *r;
+    if (reactor_handle == 0) {
+        r = riven_reactor_acquire();
+    } else {
+        r = (RivenReactor *)(uintptr_t)reactor_handle;
+    }
+    int user_fd = (int)fd_in;
+    if (user_fd < 0) {
+        return 0;
+    }
+
+    int slot = riven_reactor_alloc_fd_slot(r);
+    if (slot < 0) {
+        return 0;
+    }
+    r->fd_slots[slot].fd = user_fd;
+    r->fd_slots[slot].mode = mode;
+    r->fd_slots[slot].fired = 0;
+
+#if defined(__APPLE__)
+    struct kevent ev;
+    short filter = mode == 1 ? EVFILT_WRITE : EVFILT_READ;
+    EV_SET(&ev, (uintptr_t)user_fd, filter,
+           EV_ADD | EV_ENABLE | EV_CLEAR,
+           0, 0, &r->fd_slots[slot]);
+    if (kevent(r->fd, &ev, 1, NULL, 0, NULL) < 0) {
+        r->fd_slots[slot].fd = 0;
+        return 0;
+    }
+#elif defined(__linux__)
+    struct epoll_event ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.events = (mode == 1 ? EPOLLOUT : EPOLLIN) | EPOLLET;
+    ev.data.ptr = &r->fd_slots[slot];
+    if (epoll_ctl(r->fd, EPOLL_CTL_ADD, user_fd, &ev) < 0) {
+        r->fd_slots[slot].fd = 0;
+        return 0;
+    }
+#endif
+
+    r->registered_count++;
+    return (int64_t)(-(slot + 1));
+}
+
+int64_t riven_reactor_register_fd_read_persistent(int64_t reactor_handle, int64_t fd) {
+    return riven_reactor_register_fd_persistent_internal(reactor_handle, fd, 0);
+}
+
+int64_t riven_reactor_register_fd_write_persistent(int64_t reactor_handle, int64_t fd) {
+    return riven_reactor_register_fd_persistent_internal(reactor_handle, fd, 1);
+}
+
 /* Register a one-shot timer. Returns an opaque i64 handle that
  * `check_fired` and `deregister` accept. `reactor` is the i64-cast
  * pointer returned by `riven_reactor_current_handle`; if 0 is
