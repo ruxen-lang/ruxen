@@ -972,15 +972,43 @@ impl Parser {
         };
         self.skip_newlines();
 
-        // Single expression closure: { |x| expr } or multi-statement
-        // If we see a newline after params and more than one statement, it's a block
-        // Otherwise single expr
+        // Closure body has three shapes:
+        //   1. Empty: `{ || }` / `{ |x| }`
+        //   2. Single expression: `{ |x| x + 1 }`
+        //   3. Multi-statement block: `{ |x| let y = ...; ... ; tail_expr }`
+        //
+        // Shape 3 is detected when the first token after the param
+        // header is a statement-starting keyword (`let`/`var`/`if`/
+        // `while`/`for`/`match`/`return`/`break`/`continue`).
+        // `parse_expression` doesn't know how to start with those, so
+        // we'd otherwise fail with "expected expression, found Let".
+        // For non-keyword starts (expression-start), we still try
+        // single-expression first and fall through to block mode if
+        // additional statements follow before `}`.
         let body = if self.at(TokenKind::RBrace) {
             // Empty closure
             ClosureBody::Expr(Box::new(Expr {
                 kind: ExprKind::UnitLiteral,
                 span: self.current_span(),
             }))
+        } else if self.is_statement_keyword_start() {
+            // Multi-statement block — body opens with `let`/`var`/etc.
+            // Parse statements until the closing brace.
+            let mut stmts = Vec::new();
+            while !self.at(TokenKind::RBrace) && !self.at(TokenKind::Eof) {
+                let __progress = self.pos;
+                self.skip_newlines();
+                if self.at(TokenKind::RBrace) {
+                    break;
+                }
+                stmts.push(self.parse_statement());
+                self.skip_newlines();
+                self.ensure_loop_progress(__progress);
+            }
+            ClosureBody::Block(Block {
+                statements: stmts,
+                span: self.current_span(),
+            })
         } else {
             // Try to parse as single expression, but may have newlines
             let expr = self.parse_expression();

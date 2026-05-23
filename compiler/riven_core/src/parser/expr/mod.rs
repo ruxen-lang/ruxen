@@ -226,6 +226,17 @@ impl Parser {
         }
     }
 
+    /// Check if the current token starts a statement that is NOT
+    /// also a valid expression starter (`let` / `var`). Used by the
+    /// closure-body parser to switch directly to block mode when
+    /// the body opens with a let-binding — `parse_expression` can't
+    /// handle a leading `let`, so without this gate we'd fail with
+    /// "expected expression, found Let" on every multi-statement
+    /// closure that declares a local on its first line.
+    pub(crate) fn is_statement_keyword_start(&self) -> bool {
+        matches!(self.current_kind(), TokenKind::Let | TokenKind::Var)
+    }
+
     /// Check if current token could start an expression.
     pub(crate) fn is_expression_start(&self) -> bool {
         matches!(
