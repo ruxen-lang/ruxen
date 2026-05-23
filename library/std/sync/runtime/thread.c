@@ -1,7 +1,49 @@
 #include "../../core/runtime/runtime.h"
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdlib.h>
 #include <string.h>
+
+/* Default thread stack size for Thread.spawn.
+ *
+ * macOS's default (512KB) is small enough that pthread_create still
+ * does significant per-call bookkeeping. Linux glibc's default (8MB)
+ * is huge but cheap to set up (overcommit + lazy pages). For server
+ * workloads that spawn many short-lived threads, halving the stack
+ * meaningfully cuts pthread_create cost on macOS, and on Linux the
+ * smaller upper bound just costs less per thread without changing
+ * any actual page footprint until you use it.
+ *
+ * 256KB is 16× PTHREAD_STACK_MIN on macOS (which is 16KB) so deep
+ * recursion still has headroom. Userland that needs more can override
+ * via RIVEN_THREAD_STACK_KB at process start.
+ *
+ * Set to 0 (RIVEN_THREAD_STACK_KB=0) to fall back to the OS default
+ * — useful when debugging stack-overflow suspicions in user code.
+ */
+#define RIVEN_DEFAULT_THREAD_STACK_BYTES (256u * 1024u)
+
+static size_t riven_thread_stack_size(void) {
+    static size_t cached = 0;
+    static int loaded = 0;
+    if (loaded) return cached;
+    /* Race-tolerant: worst case two threads compute the same value
+     * before publishing. The value is a deterministic function of
+     * env vars, so the store order doesn't matter. */
+    const char *env = getenv("RIVEN_THREAD_STACK_KB");
+    if (env && *env) {
+        char *endp = NULL;
+        long kb = strtol(env, &endp, 10);
+        if (endp != env && kb >= 0) {
+            cached = (size_t)kb * 1024u;
+            loaded = 1;
+            return cached;
+        }
+    }
+    cached = RIVEN_DEFAULT_THREAD_STACK_BYTES;
+    loaded = 1;
+    return cached;
+}
 
 /* std.sync.Thread / JoinHandle runtime.
  *
@@ -100,7 +142,22 @@ int64_t riven_thread_spawn(int64_t closure_ptr) {
     jh->panic_msg[0] = '\0';
     jh->ctx = ctx;
 
-    int rc = pthread_create(&jh->tid, NULL, riven_thread_trampoline, ctx);
+    pthread_attr_t attr;
+    pthread_attr_t *attrp = NULL;
+    size_t stack_bytes = riven_thread_stack_size();
+    if (stack_bytes > 0 && pthread_attr_init(&attr) == 0) {
+        /* Quietly skip the stack-size hint if libc rejects it (e.g.
+         * value below PTHREAD_STACK_MIN on a platform with a larger
+         * minimum than we expect). pthread_create with the unmodified
+         * attr is still a no-op vs. NULL on that path. */
+        if (pthread_attr_setstacksize(&attr, stack_bytes) == 0) {
+            attrp = &attr;
+        } else {
+            pthread_attr_destroy(&attr);
+        }
+    }
+    int rc = pthread_create(&jh->tid, attrp, riven_thread_trampoline, ctx);
+    if (attrp) pthread_attr_destroy(attrp);
     if (rc != 0) {
         free(jh);
         free(ctx);

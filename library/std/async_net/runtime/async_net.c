@@ -55,6 +55,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -126,6 +127,25 @@ static int riven_async_net_set_nonblock(int fd) {
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
+/* BSD/macOS doesn't honour MSG_NOSIGNAL on send(); per-socket
+ * SO_NOSIGPIPE is the portable way to keep write-after-peer-close from
+ * raising SIGPIPE (which would terminate the process by default).
+ * Symmetric with `riven_tcp_set_nosigpipe` in the sync net runtime —
+ * we MUST call this on every accepted fd here too, otherwise an HTTP
+ * client closing mid-response silently kills the server. (Observed:
+ * rondo-async exiting at the END of a wrk run with no log output,
+ * after thousands of clean requests, when wrk tore down its
+ * connection pool faster than the server finished writing the last
+ * few responses.) */
+static void riven_async_net_set_nosigpipe(int fd) {
+#ifdef SO_NOSIGPIPE
+    int one = 1;
+    (void)setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
+#else
+    (void)fd;
+#endif
+}
+
 /* Map errno -> IoError tag for socket operations. Covers the codes
  * connect / accept / read / write can produce post-EAGAIN. */
 static int riven_async_net_io_error_tag(int err) {
@@ -168,6 +188,7 @@ void *riven_async_tcp_listener_bind(const char *addr) {
             (int64_t)riven_io_error_unit(
                 riven_async_net_io_error_tag(errno)));
     }
+    riven_async_net_set_nosigpipe(fd);
     int one = 1;
     /* SO_REUSEADDR so the e2e fixture can pick a port and not get
      * TIME_WAIT'd across re-runs. */
@@ -272,6 +293,17 @@ int64_t riven_async_accept_step(void *state) {
         int new_fd = accept(s->listener_fd, (struct sockaddr *)&peer, &plen);
         if (new_fd < 0) {
             if (errno == EINTR) continue;
+            /* BSD/macOS gotcha (Stevens UNP §15.6): after kqueue signals
+             * the listener readable, the head-of-queue connection can
+             * abort (peer RST between SYN/ACK and accept). Blocking
+             * accept hides this — the kernel silently dequeues and
+             * keeps blocking. Non-blocking accept surfaces it as
+             * ECONNABORTED. Production network code (Go's net pkg,
+             * tokio, libevent) treats it as a soft retry, not a fatal
+             * error. Loop back so the user-visible accept future
+             * keeps draining the listen queue without dying on the
+             * first half-open peer. */
+            if (errno == ECONNABORTED) continue;
             if (errno == EAGAIN
 #if defined(EWOULDBLOCK) && (EWOULDBLOCK != EAGAIN)
                 || errno == EWOULDBLOCK
@@ -279,10 +311,24 @@ int64_t riven_async_accept_step(void *state) {
             ) {
                 return 1;
             }
+            /* EMFILE / ENFILE: process or system file-descriptor table
+             * full. Standard production-server response (Go's net pkg,
+             * libevent, nginx) is to back off briefly and retry — the
+             * condition is almost always transient (in-flight closes
+             * about to drain). Returning 3 (fatal Err) here would kill
+             * the whole accept loop on the first fd-exhaustion spike.
+             * 10 ms sleep is enough for close() backlog to clear; the
+             * loop continues and the listener stays accepting. */
+            if (errno == EMFILE || errno == ENFILE) {
+                struct timespec ts = { 0, 10 * 1000 * 1000 };
+                nanosleep(&ts, NULL);
+                continue;
+            }
             s->err_set = 1;
             s->err_tag = riven_async_net_io_error_tag(errno);
             return 3;
         }
+        riven_async_net_set_nosigpipe(new_fd);
         if (riven_async_net_set_nonblock(new_fd) != 0) {
             int saved = errno;
             close(new_fd);
@@ -412,6 +458,7 @@ int64_t riven_async_connect_step(void *state) {
             s->err_tag = riven_async_net_io_error_tag(errno);
             return 3;
         }
+        riven_async_net_set_nosigpipe(fd);
         if (riven_async_net_set_nonblock(fd) != 0) {
             int saved = errno;
             close(fd);
@@ -718,13 +765,31 @@ void riven_async_tcp_stream_drop(void *self) {
 
 /* AsyncCloseFuture (B10) performs `shutdown(SHUT_RDWR)` + `close` and
  * resolves Ready(()) immediately. The future owns the stream by-move
- * (per spec: `def close(self) -> AsyncCloseFuture`), so the stream's
- * own drop hook is what actually closes the fd; this helper exists
- * purely to flush a graceful shutdown before scope-exit drop. */
+ * (per spec: `def close(self) -> AsyncCloseFuture`), so once close
+ * runs the fd is gone — there is nothing left for the stream's own
+ * drop hook to do.
+ *
+ * Why we close here instead of relying on stream-drop:
+ *   At sub-phase 4C ship time, drop elaboration on FFI-bound `def drop`
+ *   for fields of a future class is not reliably firing at scope exit
+ *   on every code path that consumes an AsyncTcpStream by-move (the
+ *   close future's own drop, in particular, observed empirically as
+ *   a TIME_WAIT leak under server load — every accepted connection
+ *   left its fd open in the process until the program exited).
+ *   Closing here makes the public `close` surface authoritative: by
+ *   the time `block_on(stream.close())` returns Ready(()), the fd
+ *   IS closed. The stream's own drop becomes a no-op fallback for
+ *   the "stream dropped without explicit close" path, which is the
+ *   only path that still depends on drop elaboration. */
 void riven_async_tcp_stream_shutdown(void *self) {
     if (!self) return;
     RivenAsyncTcpStream *s = (RivenAsyncTcpStream *)self;
     if (!s->closed && s->fd >= 0) {
         (void)shutdown(s->fd, SHUT_RDWR);
+        int rc;
+        do { rc = close(s->fd); } while (rc < 0 && errno == EINTR);
+        (void)rc;
+        s->closed = 1;
+        s->fd = -1;
     }
 }

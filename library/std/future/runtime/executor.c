@@ -129,5 +129,27 @@ void riven_waker_wake_by_ref(void *waker) {
  */
 void riven_executor_context_drop(void *cx_opaque) {
     (void)cx_opaque;
-    riven_reactor_release();
+    /* INTENTIONALLY does NOT call riven_reactor_release().
+     *
+     * The reactor is a per-thread resource — its kqueue/epoll fd is
+     * meant to live for the lifetime of the worker thread, not for
+     * the lifetime of one Context. Releasing on every Context.drop
+     * caused a kqueue() open+close pair per `block_on` call. Under
+     * load that was ~3 block_on per HTTP request (read/write/close)
+     * × N RPS per worker, e.g. ~18,000 kqueue create+destroy per
+     * second per worker at 6k RPS. On macOS that fd churn eventually
+     * trips `kqueue()` into returning -1 (transient EMFILE-style
+     * exhaustion as the kernel reaps closed kqueues lazily), which
+     * panicked rondo's async-multi server mid-bench.
+     *
+     * Cost of NOT releasing: any thread that calls `block_on(...)`
+     * once and never again leaks one kqueue (or epoll) fd until
+     * thread exit. For server workers that loop forever this is a
+     * no-op; for a script doing one block_on at startup it's a
+     * single-fd leak for the program's lifetime. Net benefit
+     * dwarfs net cost. Proper thread-exit cleanup would use
+     * pthread_key_create + a destructor; deferred until we hit
+     * a workload that actually needs it (long-lived programs
+     * spawning many short-lived threads each calling block_on
+     * once). */
 }

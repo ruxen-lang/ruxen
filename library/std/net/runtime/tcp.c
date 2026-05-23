@@ -412,7 +412,19 @@ void *riven_tcp_listener_bind(const char *addr) {
  * loops can break out (no internal retry). */
 void *riven_tcp_listener_accept(RivenTcpListener *l) {
     if (!l || l->closed) return riven_tcp_invalid_input();
-    int accepted = accept(l->fd, NULL, NULL);
+    int accepted;
+    /* ECONNABORTED is the Stevens-UNP-§15.6 gotcha the async path
+     * handles in riven_async_accept_step: a head-of-queue conn that
+     * aborted before accept picked it up. Blocking accept rarely
+     * surfaces it (kernel usually retries internally) but on macOS
+     * it can leak through under churn. Retry in-place so callers
+     * don't have to wrap every accept in a recover-and-loop. EINTR
+     * deliberately NOT retried here — see header comment: callers
+     * use it as a cooperative SIGINT signal to break their accept
+     * loop. */
+    do {
+        accepted = accept(l->fd, NULL, NULL);
+    } while (accepted < 0 && errno == ECONNABORTED);
     if (accepted < 0) {
         return riven_io_error_from_errno(errno);
     }
