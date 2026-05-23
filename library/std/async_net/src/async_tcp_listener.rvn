@@ -1,0 +1,22 @@
+## --- AsyncTcpListener ----------------------------------------------
+class AsyncTcpListener
+  fd: Int
+  closed: Int
+
+  def self.bind(addr: &String) -> AsyncBindFuture
+    AsyncBindFuture.new(addr)
+  end
+
+  def var accept -> AsyncAcceptFuture
+    AsyncAcceptFuture.new(riven_async_tcp_listener_fd(self))
+  end
+
+  lib "runtime/async_net.c"
+    def drop as "riven_async_tcp_listener_drop"(self) -> ()
+  end
+end
+
+lib "runtime/async_net.c"
+  def riven_async_tcp_listener_bind(addr: &String) -> Result[AsyncTcpListener, IoError]
+  def riven_async_tcp_listener_fd(listener: &AsyncTcpListener) -> Int
+end

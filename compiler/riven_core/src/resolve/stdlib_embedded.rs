@@ -139,6 +139,72 @@ pub fn embedded_source(rel: &str) -> Option<&'static str> {
         .map(|(_, src)| *src)
 }
 
+/// Sibling `.rvn` files baked in for multi-file stdlib packages.
+/// Keyed by the package's `lib.rvn` relative path. The slice value
+/// holds `(filename, source)` pairs for every sibling, lib.rvn
+/// itself is fetched via [`embedded_source`].
+///
+/// Adding a new sibling: append a `(name, include_str!(…))` entry
+/// here. The pin test `multi_file_pkg_lib_present_when_siblings_listed`
+/// at the bottom of this file catches drift between this table and
+/// the actual filesystem contents.
+pub const BOOTSTRAP_EMBEDDED_SIBLINGS: &[(&str, &[(&str, &str)])] = &[
+    (
+        "async_net/src/lib.rvn",
+        &[
+            (
+                "async_tcp_stream.rvn",
+                include_str!("../../../../library/std/async_net/src/async_tcp_stream.rvn"),
+            ),
+            (
+                "async_tcp_listener.rvn",
+                include_str!("../../../../library/std/async_net/src/async_tcp_listener.rvn"),
+            ),
+            (
+                "async_accept_future.rvn",
+                include_str!("../../../../library/std/async_net/src/async_accept_future.rvn"),
+            ),
+            (
+                "async_bind_future.rvn",
+                include_str!("../../../../library/std/async_net/src/async_bind_future.rvn"),
+            ),
+            (
+                "async_connect_future.rvn",
+                include_str!("../../../../library/std/async_net/src/async_connect_future.rvn"),
+            ),
+            (
+                "async_read_future.rvn",
+                include_str!("../../../../library/std/async_net/src/async_read_future.rvn"),
+            ),
+            (
+                "async_write_future.rvn",
+                include_str!("../../../../library/std/async_net/src/async_write_future.rvn"),
+            ),
+            (
+                "async_close_future.rvn",
+                include_str!("../../../../library/std/async_net/src/async_close_future.rvn"),
+            ),
+        ],
+    ),
+];
+
+/// Multi-file package lookup. When the package has sibling files in
+/// [`BOOTSTRAP_EMBEDDED_SIBLINGS`], returns the lib.rvn source plus
+/// every sibling so the caller can concatenate them the same way the
+/// filesystem loader does. Returns `None` for single-file packages —
+/// callers fall back to [`embedded_source`].
+pub fn embedded_pkg_sources(rel: &str) -> Option<Vec<(&'static str, &'static str)>> {
+    let siblings = BOOTSTRAP_EMBEDDED_SIBLINGS
+        .iter()
+        .find(|(p, _)| *p == rel)
+        .map(|(_, s)| *s)?;
+    let lib_src = embedded_source(rel)?;
+    let mut out: Vec<(&'static str, &'static str)> = Vec::with_capacity(siblings.len() + 1);
+    out.push(("lib.rvn", lib_src));
+    out.extend_from_slice(siblings);
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

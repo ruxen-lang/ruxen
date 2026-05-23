@@ -1,0 +1,79 @@
+## --- AsyncCloseFuture (B10) ----------------------------------------
+##
+## Owns the stream by-move (consumed at the surface via the
+## `async_tcp_stream_close_of` free fn). On first poll, issues
+## `shutdown(SHUT_RDWR)` so the peer sees a clean half-close; the
+## stream's own def drop (on the by-move self going out of scope at
+## this future's drop) closes the fd. Always resolves Ready(()) on
+## first poll — no kernel-level "wait for close to finish" that
+## requires reactor parking in v1.
+class AsyncCloseFuture
+  stream: AsyncTcpStream
+  done: Int
+  include Future
+  type Output = ()
+
+  def init(stream: AsyncTcpStream)
+    self.stream = stream
+    self.done = 0
+  end
+
+  def var poll(cx: &var Context) -> Poll[()]
+    if self.done == 0
+      riven_async_tcp_stream_shutdown(&self.stream)
+      self.done = 1
+    end
+    Poll.Ready(nil)
+  end
+end
+
+## --- helpers (declared AFTER all classes so types resolve) ---------
+
+## Construct AsyncCloseFuture by-move from a stream — surface deviation
+## from spec B10 (see the file-level header comment). Call site:
+##
+##   let cf = async_tcp_stream_close_of(stream)
+##   block_on(cf)
+def async_tcp_stream_close_of(stream: AsyncTcpStream) -> AsyncCloseFuture
+  AsyncCloseFuture.new(stream)
+end
+
+## Build a Result[(AsyncTcpStream, String), IoError] from a state ptr.
+## Free fn rather than method because the result type's tuple shape is
+## awkward to type as a method return.
+def accept_state_to_result(state_ptr: Int) -> Result[(AsyncTcpStream, String), IoError]
+  let err_tag = riven_async_accept_state_get_err(state_ptr)
+  if err_tag >= 0
+    riven_async_accept_state_mark_taken(state_ptr)
+    return Result.Err(io_error_from_tag(err_tag))
+  end
+  let stream_fd = riven_async_accept_state_take_fd(state_ptr)
+  let peer = riven_async_accept_state_take_peer(state_ptr)
+  riven_async_accept_state_mark_taken(state_ptr)
+  let stream = riven_async_tcp_stream_from_fd(stream_fd)
+  Result.Ok((stream, peer))
+end
+
+def connect_state_to_result(state_ptr: Int) -> Result[AsyncTcpStream, IoError]
+  let err_tag = riven_async_connect_state_get_err(state_ptr)
+  if err_tag >= 0
+    riven_async_connect_state_mark_taken(state_ptr)
+    return Result.Err(io_error_from_tag(err_tag))
+  end
+  let stream_fd = riven_async_connect_state_take_fd(state_ptr)
+  riven_async_connect_state_mark_taken(state_ptr)
+  let stream = riven_async_tcp_stream_from_fd(stream_fd)
+  Result.Ok(stream)
+end
+
+## Map an IoError tag (returned as an Int from the C state takers) into
+## an IoError struct. The state takers expose the tag as an Int rather
+## than constructing the IoError themselves so the Riven side controls
+## the typed value the Result.Err arm carries.
+def io_error_from_tag(tag: Int) -> IoError
+  riven_io_error_from_tag(tag)
+end
+
+lib "../io/runtime/io_error.c"
+  def riven_io_error_from_tag as "riven_io_error_unit"(tag: Int) -> IoError
+end

@@ -1,0 +1,14 @@
+## --- AsyncBindFuture (B6.5) ----------------------------------------
+class AsyncBindFuture
+  result: Result[AsyncTcpListener, IoError]
+  include Future
+  type Output = Result[AsyncTcpListener, IoError]
+
+  def init(addr: &String)
+    self.result = riven_async_tcp_listener_bind(addr)
+  end
+
+  def var poll(cx: &var Context) -> Poll[Result[AsyncTcpListener, IoError]]
+    Poll.Ready(self.result)
+  end
+end

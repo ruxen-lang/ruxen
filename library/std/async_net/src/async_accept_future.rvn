@@ -1,0 +1,45 @@
+## --- AsyncAcceptFuture (B6.6) --------------------------------------
+class AsyncAcceptFuture
+  state_ptr: Int
+  handle: Int
+  done: Int
+  include Future
+  type Output = Result[(AsyncTcpStream, String), IoError]
+
+  def init(listener_fd: Int)
+    self.state_ptr = riven_async_accept_state_new(listener_fd)
+    self.handle = 0
+    self.done = 0
+  end
+
+  def var poll(cx: &var Context) -> Poll[Result[(AsyncTcpStream, String), IoError]]
+    if self.done != 0
+      return Poll.Ready(accept_state_to_result(self.state_ptr))
+    end
+    let step = riven_async_accept_step(self.state_ptr)
+    if step == 1
+      if self.handle == 0
+        let lfd = riven_async_accept_state_get_fd(self.state_ptr)
+        self.handle = riven_reactor_register_fd_read(riven_reactor_current_handle(), lfd)
+      end
+      return Poll.Pending
+    end
+    if self.handle != 0
+      riven_reactor_deregister(riven_reactor_current_handle(), self.handle)
+      self.handle = 0
+    end
+    self.done = 1
+    Poll.Ready(accept_state_to_result(self.state_ptr))
+  end
+
+  def drop
+    if self.handle != 0
+      riven_reactor_deregister(riven_reactor_current_handle(), self.handle)
+      self.handle = 0
+    end
+    if self.state_ptr != 0
+      riven_async_accept_state_free(self.state_ptr)
+      self.state_ptr = 0
+    end
+  end
+end

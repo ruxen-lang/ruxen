@@ -1,0 +1,37 @@
+## --- AsyncTcpStream ------------------------------------------------
+##
+## Declared FIRST (before any future) so AsyncAcceptFuture's Output
+## tuple `(AsyncTcpStream, String)` resolves at typeck time. Method
+## bodies reference future classes declared later — forward refs
+## between class signatures resolve through bootstrap pass-2, but free
+## fns (like `accept_state_to_result` below) require their parameter
+## and return types to be already-declared classes.
+##
+## Owning wrapper around a non-blocking connected socket fd. 8-byte
+## wire shape (int32 fd + int32 closed) identical to RivenAsyncFile.
+class AsyncTcpStream
+  fd: Int
+  closed: Int
+
+  def self.connect(addr: &String) -> AsyncConnectFuture
+    AsyncConnectFuture.new(addr)
+  end
+
+  def var read(max_bytes: Int) -> AsyncReadFuture
+    AsyncReadFuture.new(riven_async_tcp_stream_fd(self), max_bytes)
+  end
+
+  def var write(content: &String) -> AsyncWriteFuture
+    AsyncWriteFuture.new(riven_async_tcp_stream_fd(self), content)
+  end
+
+  lib "runtime/async_net.c"
+    def drop as "riven_async_tcp_stream_drop"(self) -> ()
+  end
+end
+
+lib "runtime/async_net.c"
+  def riven_async_tcp_stream_fd(stream: &AsyncTcpStream) -> Int
+  def riven_async_tcp_stream_from_fd(fd: Int) -> AsyncTcpStream
+  def riven_async_tcp_stream_shutdown(stream: &AsyncTcpStream) -> ()
+end

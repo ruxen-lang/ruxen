@@ -38,6 +38,7 @@
 use crate::diagnostics::Diagnostic;
 use crate::lexer::token::Span;
 use crate::lexer::Lexer;
+use crate::parser::ast;
 use crate::parser::ast::Program;
 use crate::parser::Parser;
 use crate::resolve::stdlib_embedded;
@@ -252,14 +253,22 @@ pub fn run_bootstrap_with_files(
     let mut out = Vec::with_capacity(files.len());
     for rel in files {
         let loaded = if prefer_embedded {
-            match stdlib_embedded::embedded_source(rel) {
-                Some(src) => parse_stdlib_source(src, rel),
-                None => {
-                    // Embedded table is missing this file — fall back to
-                    // the legacy filesystem walk for this one entry.
-                    match resolve_stdlib_root() {
-                        Some(root) => load_stdlib_file(&root, rel),
-                        None => Err(missing_stdlib_diagnostic(rel)),
+            // Multi-file packages: prefer the sibling-aware loader so
+            // the embedded path matches what the filesystem path
+            // produces (lib.rvn + every sibling concatenated, items
+            // reordered so types come before functions).
+            if let Some(sources) = stdlib_embedded::embedded_pkg_sources(rel) {
+                load_embedded_multi_file(rel, sources)
+            } else {
+                match stdlib_embedded::embedded_source(rel) {
+                    Some(src) => parse_stdlib_source(src, rel),
+                    None => {
+                        // Embedded table is missing this file — fall back to
+                        // the legacy filesystem walk for this one entry.
+                        match resolve_stdlib_root() {
+                            Some(root) => load_stdlib_file(&root, rel),
+                            None => Err(missing_stdlib_diagnostic(rel)),
+                        }
                     }
                 }
             }
@@ -436,10 +445,17 @@ fn load_stdlib_file(root: &Path, rel: &str) -> Result<Program, Diagnostic> {
     // Multi-file package: concatenate lib.rvn + siblings into one
     // parse input separated by newlines so spans don't bleed across
     // file boundaries inside an item.
-    let mut combined = String::with_capacity(lib_src.len() + sibling_paths.len() * 256);
-    combined.push_str(&lib_src);
-    for sib in &sibling_paths {
-        let src = std::fs::read_to_string(sib).map_err(|io_err| {
+    //
+    // Ordering matters: resolver pass-1 resolves free-function signatures
+    // eagerly (no separate forward-declare pass for fn params/returns).
+    // If `async_close_future.rvn` defines `def of(s: AsyncTcpStream)` and
+    // sorts alphabetically BEFORE `async_tcp_stream.rvn`, the param type
+    // can't resolve. Read each sibling once and emit files containing
+    // top-level class declarations first (alphabetical within group),
+    // then function-only files. lib.rvn always leads.
+    let mut sibling_sources: Vec<(PathBuf, String)> = Vec::with_capacity(sibling_paths.len());
+    for sib in sibling_paths {
+        let src = std::fs::read_to_string(&sib).map_err(|io_err| {
             Diagnostic::error_with_code(
                 format!(
                     "stdlib bootstrap failed at {}: cannot read sibling: {}",
@@ -450,10 +466,113 @@ fn load_stdlib_file(root: &Path, rel: &str) -> Result<Program, Diagnostic> {
                 "E0725",
             )
         })?;
-        combined.push('\n');
-        combined.push_str(&src);
+        sibling_sources.push((sib, src));
     }
-    parse_stdlib_source(&combined, rel)
+    sibling_sources.sort_by(|(a_path, a_src), (b_path, b_src)| {
+        let a_has = source_has_top_level_class(a_src);
+        let b_has = source_has_top_level_class(b_src);
+        b_has.cmp(&a_has).then_with(|| a_path.cmp(b_path))
+    });
+    let total_extra: usize = sibling_sources.iter().map(|(_, s)| s.len() + 1).sum();
+    let mut combined = String::with_capacity(lib_src.len() + total_extra);
+    combined.push_str(&lib_src);
+    for (_, src) in &sibling_sources {
+        combined.push('\n');
+        combined.push_str(src);
+    }
+    let mut program = parse_stdlib_source(&combined, rel)?;
+    // Reorder top-level items so type declarations precede functions
+    // and lib decls. Resolver pass-1 resolves free-function signatures
+    // eagerly — `def f(x: AsyncTcpStream)` in `async_close_future.rvn`
+    // can be parsed BEFORE `class AsyncTcpStream` in
+    // `async_tcp_stream.rvn` even after class-bearing files are sorted
+    // first by filename, because the same file mixes a class and a
+    // free function. Stable sort by item-category keeps siblings'
+    // intra-file order intact while floating Function/Lib items to
+    // the back. Use/Const/Extern stay at the front to match historical
+    // single-file layout. See multi-file package loader above.
+    program.items.sort_by_key(item_load_priority);
+    Ok(program)
+}
+
+/// Embedded twin of the multi-file branch in [`load_stdlib_file`].
+/// Concatenates `lib.rvn` + every sibling source in the same order
+/// the filesystem loader would emit, then reorders top-level items
+/// by [`item_load_priority`] so type declarations precede function /
+/// lib decls. Keeps the embedded path indistinguishable from the
+/// filesystem path for downstream resolve.
+fn load_embedded_multi_file(
+    rel: &str,
+    sources: Vec<(&'static str, &'static str)>,
+) -> Result<Program, Diagnostic> {
+    // Index 0 is always `lib.rvn`; the rest are siblings. Sort the
+    // sibling tail by (class-bearing-first, filename) so any later
+    // free-fn signature referencing a sibling class sees the class
+    // declared earlier in the combined source.
+    let (lib_entry, rest) = sources
+        .split_first()
+        .expect("embedded_pkg_sources returns lib.rvn + ≥1 sibling");
+    let mut siblings: Vec<&(&'static str, &'static str)> = rest.iter().collect();
+    siblings.sort_by(|a, b| {
+        let a_has = source_has_top_level_class(a.1);
+        let b_has = source_has_top_level_class(b.1);
+        b_has.cmp(&a_has).then_with(|| a.0.cmp(b.0))
+    });
+    let total: usize =
+        lib_entry.1.len() + siblings.iter().map(|s| s.1.len() + 1).sum::<usize>();
+    let mut combined = String::with_capacity(total);
+    combined.push_str(lib_entry.1);
+    for (_, src) in &siblings {
+        combined.push('\n');
+        combined.push_str(src);
+    }
+    let mut program = parse_stdlib_source(&combined, rel)?;
+    program.items.sort_by_key(item_load_priority);
+    Ok(program)
+}
+
+/// Priority key for stable-sorting top-level items in a multi-file
+/// bootstrap package. Lower comes first.
+///   0 — Use (must precede any use-of-imports)
+///   1 — Module/Class/Struct/Enum/Mixin/TypeAlias/Newtype (types and
+///       namespaces — register names so later signatures resolve)
+///   2 — Impl (extension of an already-registered class)
+///   3 — Function/Lib/Extern/Const (consume types in their signatures)
+fn item_load_priority(item: &ast::TopLevelItem) -> u8 {
+    match item {
+        ast::TopLevelItem::Use(_) => 0,
+        ast::TopLevelItem::Module(_)
+        | ast::TopLevelItem::Class(_)
+        | ast::TopLevelItem::Struct(_)
+        | ast::TopLevelItem::Enum(_)
+        | ast::TopLevelItem::Mixin(_)
+        | ast::TopLevelItem::TypeAlias(_)
+        | ast::TopLevelItem::Newtype(_) => 1,
+        ast::TopLevelItem::Impl(_) => 2,
+        ast::TopLevelItem::Function(_)
+        | ast::TopLevelItem::Lib(_)
+        | ast::TopLevelItem::Extern(_)
+        | ast::TopLevelItem::Const(_) => 3,
+    }
+}
+
+/// Cheap textual probe: does the source contain a top-level `class `
+/// declaration? Used by the multi-file loader to emit class-bearing
+/// files before function-only files so forward-referenced class types
+/// in free-fn signatures resolve during pass-1.
+///
+/// Conservatively scans for the literal `class ` at the start of a
+/// line (after optional whitespace). False positives from comments
+/// that happen to start with `class ` are tolerable — they just push
+/// the file earlier in the concatenation, which never breaks resolve.
+fn source_has_top_level_class(src: &str) -> bool {
+    for line in src.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("class ") {
+            return true;
+        }
+    }
+    false
 }
 
 /// Lex + parse one stdlib source string. Shared between the
