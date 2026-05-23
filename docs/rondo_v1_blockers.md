@@ -217,61 +217,26 @@ request body; extract `name → "bar"` and `file → "<contents of foo.txt>"`.
 
 ---
 
-## P2 — ergonomic gaps from rondo's `docs/riven-issues.md`
+## Items considered and dropped
 
-These don't block any feature — they make rondo's source code
-verbose. Each one closed makes both rondo AND every other
-external project shorter.
+A first draft also listed these as P2 "ergonomic gaps." I
+went through each against two filters — (1) does Rondo today
+have a working workaround, and (2) does Sinatra/Ruby actually
+have the feature being requested — and dropped every one of
+them:
 
-### B8. `derive Clone` keyword silently ignored
+| Item | Why dropped |
+|---|---|
+| `derive Clone` keyword | Ruby has `Object#dup` / `#clone` as universal methods (not a derive macro). Rondo doesn't need it today — `&Request` hook signatures sidestep clone entirely. If a class ever needs a copy, write `def clone -> Foo; var r = Foo.new; r.field = self.field; r end` by hand, same as Ruby's `def dup`. |
+| Forward refs in helper signatures | Workaround in place (helpers live at the end of `lib.rvn`). Ruby is dynamic so the question doesn't arise the same way. |
+| Multi-stmt match arm needs leading `let` | Workaround in place (`let _captured = params`). Ruby's `case`/`when` is a different shape entirely, so there's no Ruby parity argument. |
+| `()` as no-op match arm | Rust-style ask. Ruby has `nil` for the same role; Rondo uses `None -> 0` which works fine. |
+| Path-dep modules (`use rondo.X`) | Flat-merge works today. Ruby has `require` + `Rondo::Class`, but Rondo doesn't NEED the namespacing — names don't collide. |
+| `String.split` returns SplitIter on `Str` | Rondo never hits this — every split receiver is an owned `String`. Ruby's `String#split` is consistent (always Array), so this is a real Riven inconsistency, but it doesn't block Rondo. |
+| `Some("ada")` coerce to `Option[String]` | Rust-style ask (Ruby has no Option type). Rondo writes `Some(String.from(&"..."))` and moves on. |
 
-**Status:** `parser/classes.rs` initialises `derive_traits` to
-`Vec::new()` and never populates it — the parser swallows
-the `derive Foo` clause without error. Rondo's `Request`
-class would be much cleaner if it could derive Clone instead
-of routing every hook through `&Request`.
-
-### B9. Forward references in helper signatures fail
-
-A free `def foo(x: &Request)` declared before `class Request`
-errors "undefined type Request". Forward refs work in fn
-BODIES but not parameter / return-type positions. Rondo
-works around this by parking every user-type-touching helper
-at the end of `lib.rvn`.
-
-### B10. Multi-statement match arm bodies need a leading `let`
-
-Rondo's `dispatch` opens its Some arm with `let _captured =
-params` solely to force block-parsing. The match-arm parser
-should detect any multi-statement body (not just one that
-starts with `let`/`var`) and switch modes. Same root as the
-closure-body fix in commit 6e12d48.
-
-### B11. `()` doesn't reliably parse as a no-op match arm
-
-`None -> ()` works in some positions but not others. Rondo
-uses `None -> 0` (Int) consistently as a workaround. A real
-Unit literal should parse anywhere an expression does.
-
-### B12. Path-dep symbols flat-merged, no `use rondo.X`
-
-Today rondo-smoke gets `Rondo`/`Request`/`Response` at the top
-level (flat-merge from commit 5663a05). The proper fix wraps
-each dep's program in a module DefId during resolve so
-`use rondo.X` resolves through `Module(rondo) → Class(X)`.
-
-### B13. `String.split("/")` returns SplitIter on Str receivers
-
-`(Ty::String, "split")` returns `Array[String]`; `(Ty::Str,
-"split")` returns `Ty::Class { name: "SplitIter" }` and
-`SplitIter` doesn't expose `.get(i)` or `.len()`. Rondo
-makes sure every split-target is an owned String, but the
-inconsistency is a footgun for users.
-
-### B14. `Some("ada")` doesn't coerce into declared `Option[String]`
-
-The `&str` payload doesn't auto-coerce to `String` in payload
-position. Rondo writes `Some(String.from(&"ada"))` everywhere.
+Anything listed above is fair game to fix later if it bites
+another project — but they're not Rondo blockers.
 
 ---
 
