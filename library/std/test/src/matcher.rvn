@@ -1,0 +1,24 @@
+## std.test.Matcher[T] — value wrapper returned by `Tester#expect(x)`.
+##
+## v1 matchers are pure-boolean: `to_eq` / `not_to_eq` etc. return Bool;
+## the Tester layer turns a `false` into a `riven_panic` with a
+## structured message the Runner parent decodes.
+##
+## Equality matchers require `T: PartialEq`. Non-PartialEq types fail
+## typeck at the call site (correct — surfaces the constraint early).
+
+class Matcher[T] where T: PartialEq
+  actual: T
+
+  def init(actual: T)
+    self.actual = actual
+  end
+
+  def to_eq(expected: T) -> Bool
+    self.actual == expected
+  end
+
+  def not_to_eq(expected: T) -> Bool
+    self.actual != expected
+  end
+end

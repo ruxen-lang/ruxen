@@ -64,3 +64,12 @@ fn test_case_construct_name_and_pending_default_false() {
     assert!(stdout.contains("name=adds two numbers"), "got: {}", stdout);
     assert!(stdout.contains("pending=false"), "got: {}", stdout);
 }
+
+#[test]
+fn matcher_to_eq_and_not_to_eq() {
+    let (stdout, stderr, ok) =
+        compile_and_run(&rvn("test_matcher_to_eq"), "stdlib_test_matcher_to_eq");
+    assert!(ok, "stderr: {}", stderr);
+    assert!(stdout.contains("to_eq_pass"), "got: {}", stdout);
+    assert!(stdout.contains("not_to_eq_pass"), "got: {}", stdout);
+}

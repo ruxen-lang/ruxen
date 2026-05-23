@@ -1,0 +1,17 @@
+use std.test.Matcher
+
+def main
+  let m = Matcher.new(1 + 2)
+  if m.to_eq(3)
+    puts "to_eq_pass"
+  else
+    puts "to_eq_fail"
+  end
+
+  let n = Matcher.new(1 + 2)
+  if n.not_to_eq(4)
+    puts "not_to_eq_pass"
+  else
+    puts "not_to_eq_fail"
+  end
+end
