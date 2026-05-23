@@ -195,6 +195,7 @@ pub(super) fn builtin_method_type(
 
         // Option methods
         (Ty::Option(inner), "unwrap") => Some(*inner.clone()),
+        (Ty::Option(inner), "expect") => Some(*inner.clone()),
         (Ty::Option(inner), "unwrap_or") => Some(*inner.clone()),
         (Ty::Option(inner), "unwrap_or_else") => Some(*inner.clone()),
         (Ty::Option(_), "map") => Some(Ty::Option(Box::new(eng.ctx.fresh_type_var()))),
@@ -207,6 +208,7 @@ pub(super) fn builtin_method_type(
 
         // Result methods
         (Ty::Result(ok, _), "unwrap") => Some(*ok.clone()),
+        (Ty::Result(ok, _), "expect") => Some(*ok.clone()),
         (Ty::Result(ok, _), "unwrap_or") => Some(*ok.clone()),
         (Ty::Result(ok, _), "unwrap_or_else") => Some(*ok.clone()),
         (Ty::Result(_, _), "map") => Some(Ty::Result(
