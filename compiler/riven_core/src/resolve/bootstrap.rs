@@ -159,6 +159,12 @@ pub const BOOTSTRAP_FILES: &[&str] = &[
     // barrier (C shim). Depends on `time` (Instant.now /
     // .elapsed.as_nanos), already loaded above.
     "bench/src/lib.rvn",
+    // test — pure-Riven test framework (Tester DSL + Matcher + Runner).
+    // Depends on string/array/option_result/fmt/sync — all already loaded
+    // above. Discovery + synthesis live in Rust (rivenc::test_runner);
+    // this entry registers the runtime classes the synthesised `def main`
+    // references via `use std.test.Tester` / `use std.test.Runner`.
+    "test/src/lib.rvn",
 ];
 
 /// Derive the ordered list of package names from [`BOOTSTRAP_FILES`].
