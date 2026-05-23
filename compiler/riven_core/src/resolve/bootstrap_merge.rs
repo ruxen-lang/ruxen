@@ -151,7 +151,22 @@ impl Resolver {
         // Pass 1: Register all top-level type names (classes, structs, enums, traits)
         //         so that forward references work.
         let user_ctx = super::ffi_registration::RegistrationCtx::user_program();
+        // Pass 1a: types first (Class/Struct/Enum/Mixin/Module/Lib/Const/
+        // TypeAlias/Newtype/Use). Functions deferred to 1b so their
+        // signatures can reference forward-declared types — without
+        // this split, `def describe(r: &Request)` before `class Request`
+        // fails resolution with "undefined type Request". Pin:
+        // `docs/rondo_v1_blockers.md` B9.
+        let mut deferred_funcs: Vec<&ast::TopLevelItem> = Vec::new();
         for item in &program.items {
+            if matches!(item, ast::TopLevelItem::Function(_)) {
+                deferred_funcs.push(item);
+            } else {
+                self.register_top_level_type_with_ffi(item, &mut ffi_libs, user_ctx);
+            }
+        }
+        // Pass 1b: function signatures, now seeing every type registered above.
+        for item in deferred_funcs {
             self.register_top_level_type_with_ffi(item, &mut ffi_libs, user_ctx);
         }
 

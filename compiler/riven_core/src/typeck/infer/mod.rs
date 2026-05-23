@@ -106,6 +106,19 @@ impl<'a> InferenceEngine<'a> {
                         return Ok(exp);
                     }
                 }
+                // TODO (rondo_v1_blockers.md B14): `Option[A]` /
+                // `Result[A, E]` payload coercion. The typeck side of
+                // this is one structural retry per container variant
+                // (Option(inner) ↔ Option(inner), Result(ok,err) ↔
+                // Result(ok,err) → `unify_or_coerce` on each inner).
+                // But without an HIR-level expression rewrite at the
+                // value site, MIR still sees the raw `&str` pointer
+                // where a `String` is expected — runtime segfaults at
+                // the first scope-exit `riven_string_free`. The proper
+                // landing requires the same path that makes plain
+                // `let s: String = "lit"` work, surfaced into the
+                // container payload position. Tracking; the typeck-
+                // only patch was attempted + reverted in this session.
                 // General coercion check
                 if can_coerce(&fnd, &exp, self.ctx) {
                     return Ok(exp);
