@@ -1,0 +1,7 @@
+use std.test.TestCase
+
+def main
+  let tc = TestCase.new("adds two numbers", { || puts "ran" })
+  puts "name=#{tc.name}"
+  puts "pending=#{tc.pending}"
+end

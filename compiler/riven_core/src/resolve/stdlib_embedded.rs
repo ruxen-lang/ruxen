@@ -127,6 +127,10 @@ pub const BOOTSTRAP_EMBEDDED: &[(&str, &str)] = &[
         "bench/src/lib.rvn",
         include_str!("../../../../library/std/bench/src/lib.rvn"),
     ),
+    (
+        "test/src/lib.rvn",
+        include_str!("../../../../library/std/test/src/lib.rvn"),
+    ),
 ];
 
 /// Look up an embedded stdlib source by its relative path. Returns
@@ -369,6 +373,15 @@ pub const BOOTSTRAP_EMBEDDED_SIBLINGS: &[(&str, &[(&str, &str)])] = &[
             (
                 "parse_float_error.rvn",
                 include_str!("../../../../library/std/string/src/parse_float_error.rvn"),
+            ),
+        ],
+    ),
+    (
+        "test/src/lib.rvn",
+        &[
+            (
+                "test_case.rvn",
+                include_str!("../../../../library/std/test/src/test_case.rvn"),
             ),
         ],
     ),
