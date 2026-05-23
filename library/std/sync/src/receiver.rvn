@@ -1,0 +1,9 @@
+class Receiver[T: Send]
+  include Send
+
+  lib "runtime/channel.c"
+    def recv_raw as "riven_channel_recv"(self) -> T
+    def try_recv_raw as "riven_channel_try_recv"(self) -> T
+    def drop as "riven_channel_receiver_drop"(self) -> ()
+  end
+end

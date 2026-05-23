@@ -1,0 +1,57 @@
+## --- TimeSleepFuture (Milestone 4A B1) -----------------------------
+##
+## Pure-Riven hand-written future. Resolves after `d` has elapsed.
+## Drives the reactor's wait point indirectly: returning Pending
+## from `poll` parks the block_on loop on `Thread.yield_now`, whose
+## C body (`riven_thread_yield` in library/std/time/runtime/time.c)
+## delegates to `riven_reactor_park_current` when the reactor has
+## registered timers. When the timer fires, the parked thread wakes,
+## the executor re-polls, and `riven_reactor_check_fired` flips the
+## handle's "fired" bit and lets the future return Ready.
+##
+## Why two fields (deadline + handle): `init` runs eagerly at
+## `Async.sleep(d)` call time, before `poll` first runs. The reactor
+## is per-block_on and may not exist yet at construction time. We
+## compute the absolute deadline at init — a wall-clock-independent
+## monotonic point — and defer reactor registration until first poll,
+## when a reactor is guaranteed to exist (Context.executor has
+## already installed it on the current thread). `handle == 0` is the
+## sentinel for "not yet registered".
+class TimeSleepFuture
+  deadline_nanos: Int
+  handle: Int
+  include Future
+  type Output = ()
+
+  def init(d: &Duration)
+    self.deadline_nanos = riven_time_now_ns() + d.as_nanos()
+    self.handle = 0
+  end
+
+  def var poll(cx: &var Context) -> Poll[()]
+    # First poll: compute remaining and register with the reactor.
+    if self.handle == 0
+      let remaining = self.deadline_nanos - riven_time_now_ns()
+      if remaining <= 0
+        return Poll.Ready(nil)
+      end
+      self.handle = riven_reactor_register_timer(riven_reactor_current_handle(), remaining)
+      return Poll.Pending
+    end
+    # Subsequent polls: ask the reactor whether the timer fired.
+    if riven_reactor_check_fired(riven_reactor_current_handle(), self.handle) != 0
+      Poll.Ready(nil)
+    else
+      Poll.Pending
+    end
+  end
+
+  def drop
+    # Idempotent cleanup. `deregister` is safe with handle == 0 (no
+    # slot match → no-op), but we gate it anyway to avoid the
+    # find-slot walk on the common drop-before-register path.
+    if self.handle != 0
+      riven_reactor_deregister(riven_reactor_current_handle(), self.handle)
+    end
+  end
+end

@@ -1,0 +1,14 @@
+class MutexGuard[T]
+  ## MutexGuard is bound to its locking thread by the C-side
+  ## pthread mutex; sending it across threads would unlock from the
+  ## wrong thread on drop. `include !Send` enforces the carve-out
+  ## structurally rather than via a hardcoded class-name match in
+  ## `hir/types.rs::is_send_strict_with_inner`.
+  include !Send
+
+  lib "runtime/mutex.c"
+    def get as "riven_mutex_guard_get"(self) -> T
+    def set as "riven_mutex_guard_set"(self, value: T) -> ()
+    def drop as "riven_mutex_guard_drop"(self) -> ()
+  end
+end

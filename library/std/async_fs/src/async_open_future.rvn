@@ -1,0 +1,25 @@
+## --- AsyncOpenFuture (B4) ------------------------------------------
+##
+## open(2) is non-blocking on regular files even without O_NONBLOCK,
+## and our paths *will* be regular files in the 4B fixtures, so this
+## future eagerly performs the open in `init` and returns Ready on
+## first poll. The async wrapper exists for surface symmetry with
+## AsyncTcpStream.connect (which genuinely blocks pending TCP
+## handshake completion).
+##
+## State: a single `result: Result[AsyncFile, IoError]` field that is
+## populated by `init` and replayed by `poll`. There is no reactor
+## registration because the open call never returns EAGAIN.
+class AsyncOpenFuture
+  result: Result[AsyncFile, IoError]
+  include Future
+  type Output = Result[AsyncFile, IoError]
+
+  def init(path: &String, flags: Int)
+    self.result = riven_async_file_open(path, flags)
+  end
+
+  def var poll(cx: &var Context) -> Poll[Result[AsyncFile, IoError]]
+    Poll.Ready(self.result)
+  end
+end

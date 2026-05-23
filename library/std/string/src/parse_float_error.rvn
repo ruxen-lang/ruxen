@@ -1,0 +1,5 @@
+class ParseFloatError
+  lib "runtime/string.c"
+    def message as "riven_parse_error_message"(self) -> String
+  end
+end

@@ -1,0 +1,64 @@
+## --- AsyncReadToStringFuture (B5) ----------------------------------
+##
+## Reads from `fd` until EOF, accumulating into a heap buffer owned
+## by the C-side state struct. On EAGAIN, registers the fd for
+## read-readiness with the reactor and returns Pending. On wake,
+## drains again; loops until EOF or fatal error.
+##
+## State fields:
+##   state_ptr — opaque pointer (as Int) to RivenAsyncReadState
+##   handle    — reactor handle from register_fd_read; 0 when not
+##               currently registered (deregistered on Ready or on
+##               drop). Re-armed across multiple park/wake cycles
+##               whenever a fresh EAGAIN is seen.
+##   done      — 1 once poll has returned Ready; further polls are
+##               an executor bug, but the field guards against
+##               double-take on the C-side state.
+class AsyncReadToStringFuture
+  state_ptr: Int
+  handle: Int
+  done: Int
+  include Future
+  type Output = Result[String, IoError]
+
+  def init(fd: Int)
+    self.state_ptr = riven_async_read_state_new(fd)
+    self.handle = 0
+    self.done = 0
+  end
+
+  def var poll(cx: &var Context) -> Poll[Result[String, IoError]]
+    if self.done != 0
+      # Defensive: executor shouldn't poll after Ready.
+      return Poll.Ready(riven_async_read_state_take_result(self.state_ptr))
+    end
+    let step = riven_async_read_step(self.state_ptr)
+    if step == 1
+      # EAGAIN — register for read-readiness (idempotent: handle == 0
+      # means we haven't registered yet on this thread of polling).
+      if self.handle == 0
+        let fd = riven_async_read_state_get_fd(self.state_ptr)
+        self.handle = riven_reactor_register_fd_read(riven_reactor_current_handle(), fd)
+      end
+      return Poll.Pending
+    end
+    # step == 2 (EOF) or step == 3 (error) — both Ready paths.
+    if self.handle != 0
+      riven_reactor_deregister(riven_reactor_current_handle(), self.handle)
+      self.handle = 0
+    end
+    self.done = 1
+    Poll.Ready(riven_async_read_state_take_result(self.state_ptr))
+  end
+
+  def drop
+    if self.handle != 0
+      riven_reactor_deregister(riven_reactor_current_handle(), self.handle)
+      self.handle = 0
+    end
+    if self.state_ptr != 0
+      riven_async_read_state_free(self.state_ptr)
+      self.state_ptr = 0
+    end
+  end
+end

@@ -1,0 +1,14 @@
+class AtomicUsize
+  include Send
+  include Sync
+
+  lib "runtime/atomic.c"
+    def self.new as "riven_atomic_usize_new"(initial: Int) -> AtomicUsize
+    def load as "riven_atomic_usize_load"(self) -> Int
+    def store as "riven_atomic_usize_store"(self, value: Int) -> ()
+    def fetch_add as "riven_atomic_usize_fetch_add"(self, delta: Int) -> Int
+    def fetch_sub as "riven_atomic_usize_fetch_sub"(self, delta: Int) -> Int
+    def compare_and_swap as "riven_atomic_usize_compare_and_swap"(self, current: Int, new_val: Int) -> Int
+    def drop as "riven_atomic_usize_drop"(self) -> ()
+  end
+end
