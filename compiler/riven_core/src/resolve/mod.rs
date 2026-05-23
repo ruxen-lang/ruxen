@@ -76,6 +76,16 @@ pub struct Resolver {
     /// to a placeholder TypeParam bound by that trait.
     pub(super) current_trait_context: Option<(String, Vec<String>)>,
 
+    /// Module-path stack: pushed by `resolve_module`, popped on exit.
+    /// `resolve_class` / `resolve_struct` / `resolve_enum` consult this
+    /// when looking up their forward-declared `DefId` in
+    /// `type_registry` — pass-1 registers nested types under their
+    /// fully-qualified name (e.g. `BufReader.File`), so the pass-2
+    /// resolver MUST use the same key or it gets `UNRESOLVED_DEF` and
+    /// the class's fields/methods land on a dangling DefId.
+    /// Pin: `docs/rondo_v1_blockers.md` B12.
+    pub(super) current_module_path: Vec<String>,
+
     /// Functions whose body contains `yield` — these take a synthetic
     /// `__block: Closure` trailing parameter.  Maps function name to the
     /// arity of the first observed `yield` (used to pre-shape the block's
@@ -195,6 +205,7 @@ impl Resolver {
             current_return_ty: None,
             current_impl_assoc_types: HashMap::new(),
             current_trait_context: None,
+            current_module_path: Vec::new(),
             yield_fns: HashMap::new(),
             async_scope_depth: 0,
             closure_stack: Vec::new(),

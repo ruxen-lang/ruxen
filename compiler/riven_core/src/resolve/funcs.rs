@@ -271,6 +271,61 @@ impl Resolver {
                 }
             }
             None => {
+                // Flat-merge path-deps (build.rs) don't register the
+                // package name as a module — every type the dep exports
+                // already lives at top-level. So `use rondo.Rondo`
+                // can't find `rondo` as a module, but `Rondo` IS in
+                // scope. Honour the use statement by checking whether
+                // the final segment resolves at top-level; if so,
+                // treat it as a no-op (the symbol is already imported
+                // by the flat merge). This is the workaround until
+                // module-wrapped path-deps work end-to-end (the
+                // module-wrap exposes a nested-class user-body method
+                // MIR-naming bug — see B12 in
+                // `docs/rondo_v1_blockers.md`).
+                let last = path.last().unwrap();
+                let fallback = self
+                    .scopes
+                    .lookup_type(last)
+                    .or_else(|| self.scopes.lookup(last));
+                if fallback.is_some() {
+                    // Symbol already in scope via flat-merge. Re-bind
+                    // under the requested name (Simple/Alias/Group)
+                    // so the explicit `use` still produces a usable
+                    // local alias.
+                    let final_id = fallback.unwrap();
+                    match &use_decl.kind {
+                        ast::UseKind::Simple => {
+                            let import_name = last.clone();
+                            self.scopes.insert(import_name.clone(), final_id);
+                            self.scopes.insert_type(import_name, final_id);
+                        }
+                        ast::UseKind::Alias(alias) => {
+                            self.scopes.insert(alias.clone(), final_id);
+                            self.scopes.insert_type(alias.clone(), final_id);
+                        }
+                        ast::UseKind::Group(_) => {
+                            // For grouped `use rondo.{Rondo, Request}`,
+                            // each name must already be top-level. Walk
+                            // and bind any that resolve; silently skip
+                            // those that don't (matches the existing
+                            // module-walk semantics).
+                            if let ast::UseKind::Group(names) = &use_decl.kind {
+                                for name in names {
+                                    let id = self
+                                        .scopes
+                                        .lookup_type(name)
+                                        .or_else(|| self.scopes.lookup(name));
+                                    if let Some(cid) = id {
+                                        self.scopes.insert(name.clone(), cid);
+                                        self.scopes.insert_type(name.clone(), cid);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    return;
+                }
                 self.diagnostics.push(Diagnostic::error(
                     format!(
                         "unknown module '{}'. Did you forget to add it to [dependencies]?",
@@ -381,6 +436,14 @@ impl Resolver {
             .unwrap_or(UNRESOLVED_DEF);
 
         self.scopes.push(ScopeKind::Module);
+        // Track the module path so nested class/struct/enum resolution
+        // can build qualified `type_registry` keys (pass-1 registers
+        // a nested `class Bar` under `"foo.Bar"`, so pass-2's
+        // resolve_class needs the same qualified key — without this
+        // it gets `UNRESOLVED_DEF` and the class's fields/methods
+        // land on a dangling DefId, surfacing as "no field x on type
+        // Bar" inside method bodies). Pin: `rondo_v1_blockers.md` B12.
+        self.current_module_path.push(m.name.clone());
 
         let mut items = Vec::new();
         for item in &m.items {
@@ -389,6 +452,7 @@ impl Resolver {
             }
         }
 
+        self.current_module_path.pop();
         self.scopes.pop();
 
         HirModule {

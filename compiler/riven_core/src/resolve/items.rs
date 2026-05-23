@@ -89,9 +89,27 @@ impl Resolver {
     // ─── Class Resolution ───────────────────────────────────────────
 
     pub(super) fn resolve_class(&mut self, class: &ast::ClassDef) -> HirClassDef {
+        // When this class is nested inside one or more `module` blocks,
+        // pass-1 registered the type under its qualified name (e.g.
+        // `"foo.Bar"`). Look up using the same key first, falling back
+        // to the bare name for top-level classes (or for cases where
+        // pass-1 only registered the unqualified spelling). Without
+        // this, nested classes resolve to `UNRESOLVED_DEF` and their
+        // methods can't see their own fields ("no field x on type
+        // Bar"). Pin: `docs/rondo_v1_blockers.md` B12.
+        let qualified_key = if self.current_module_path.is_empty() {
+            class.name.clone()
+        } else {
+            format!(
+                "{}.{}",
+                self.current_module_path.join("."),
+                class.name
+            )
+        };
         let def_id = self
             .type_registry
-            .get(&class.name)
+            .get(&qualified_key)
+            .or_else(|| self.type_registry.get(&class.name))
             .copied()
             .unwrap_or(UNRESOLVED_DEF);
 
