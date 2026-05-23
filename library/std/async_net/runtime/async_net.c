@@ -172,6 +172,13 @@ void *riven_async_tcp_listener_bind(const char *addr) {
     /* SO_REUSEADDR so the e2e fixture can pick a port and not get
      * TIME_WAIT'd across re-runs. */
     (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    /* SO_REUSEPORT so multiple async workers can bind the same
+     * port and let the kernel load-balance accept calls across
+     * them (Rondo's multi-core serving model — docs/rondo_v1_blockers.md
+     * §B5). Best-effort: SO_REUSEPORT is Linux 3.9+ / macOS / BSD
+     * but absent on some older targets; ignoring failure keeps
+     * the single-listener path working unchanged. */
+    (void)setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one));
 
     if (riven_async_net_set_nonblock(fd) != 0) {
         int saved = errno;
