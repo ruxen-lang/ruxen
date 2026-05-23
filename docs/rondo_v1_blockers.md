@@ -273,13 +273,6 @@ inconsistency is a footgun for users.
 The `&str` payload doesn't auto-coerce to `String` in payload
 position. Rondo writes `Some(String.from(&"ada"))` everywhere.
 
-### B15. `pub` keyword not supported
-
-Visibility is implicit; the parser rejects `pub class` /
-`pub def`. Rondo just omits `pub` and lives with everything
-being public. A real visibility model would help library
-authors hide internals.
-
 ---
 
 ## Tracking
