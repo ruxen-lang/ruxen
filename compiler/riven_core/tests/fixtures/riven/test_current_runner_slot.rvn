@@ -1,0 +1,7 @@
+use std.test.Runner
+
+def main
+  Runner.set_current(42)
+  let h = Runner.get_current
+  puts "slot=#{h}"
+end

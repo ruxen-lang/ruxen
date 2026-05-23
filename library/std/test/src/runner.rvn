@@ -1,0 +1,22 @@
+## std.test.Runner — owns the group tree for one test FILE.
+##
+## Constructed by the synthesised `def main` (see riven test in
+## `src/rivenc/src/test_runner.rs`); the file body's `Tester.describe`
+## calls attach root groups to the Runner via the process-static
+## current-runner slot in runtime/test.c.
+
+class Runner
+  layout c
+  handle: Int   # opaque future use — Runner is heap-resident, this is self-ptr
+  name: String
+
+  def init(test_path: &String)
+    self.handle = 0
+    self.name = test_path.clone
+  end
+
+  lib "runtime/test.c"
+    def self.set_current as "riven_test_current_set"(handle: Int) -> Int
+    def self.get_current as "riven_test_current_get"() -> Int
+  end
+end

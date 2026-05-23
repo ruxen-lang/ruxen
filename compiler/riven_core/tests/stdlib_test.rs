@@ -92,3 +92,11 @@ fn matcher_to_include_array_and_string() {
     assert!(stdout.contains("array_include_pass"), "got: {}", stdout);
     assert!(stdout.contains("string_include_pass"), "got: {}", stdout);
 }
+
+#[test]
+fn runner_current_slot_roundtrip() {
+    let (stdout, stderr, ok) =
+        compile_and_run(&rvn("test_current_runner_slot"), "stdlib_test_current_slot");
+    assert!(ok, "stderr: {}", stderr);
+    assert!(stdout.contains("slot=42"), "got: {}", stdout);
+}

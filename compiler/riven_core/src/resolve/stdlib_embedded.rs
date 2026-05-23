@@ -387,6 +387,10 @@ pub const BOOTSTRAP_EMBEDDED_SIBLINGS: &[(&str, &[(&str, &str)])] = &[
                 "matcher.rvn",
                 include_str!("../../../../library/std/test/src/matcher.rvn"),
             ),
+            (
+                "runner.rvn",
+                include_str!("../../../../library/std/test/src/runner.rvn"),
+            ),
         ],
     ),
 ];
