@@ -23,7 +23,7 @@ use riven_core::lexer::Lexer;
 use riven_core::mir::lower::Lowerer;
 use riven_core::parser::Parser;
 use riven_core::typeck;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Mutex;
 

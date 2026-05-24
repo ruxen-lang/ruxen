@@ -10,6 +10,9 @@
    For string keys (char*), hashing walks the bytes. For integer keys,
    the raw bits are hashed. Chained collisions handled via next pointer. */
 
+#ifndef RIVEN_HASH_RUNTIME_STRUCTS
+#define RIVEN_HASH_RUNTIME_STRUCTS
+
 typedef struct RivenHashEntry {
     int64_t key;
     int64_t value;
@@ -44,6 +47,8 @@ struct RivenHash {
        common case where the same string constant pointer is reused. */
     int8_t string_keys;
 };
+
+#endif
 
 static uint64_t riven_hash_bits(int64_t k) {
     /* splitmix64-ish finalizer for decent distribution on raw int bits. */
@@ -730,4 +735,3 @@ int8_t riven_set_eq(RivenSet *a, RivenSet *b) {
     }
     return 1;
 }
-

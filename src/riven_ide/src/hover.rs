@@ -105,6 +105,13 @@ fn format_definition_hover(def: &Definition) -> String {
             format!("```riven\nparam {}: {}\n```", def.name, ty)
         }
         DefKind::Function { .. } | DefKind::Method { .. } => format_function_hover(def),
+        DefKind::OverloadSet { candidates } => {
+            format!(
+                "```riven\n{} overloads for {}\n```",
+                candidates.len(),
+                def.name
+            )
+        }
         DefKind::Class { .. } => {
             format!("```riven\nclass {}\n```", def.name)
         }

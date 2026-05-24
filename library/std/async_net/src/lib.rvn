@@ -65,6 +65,10 @@ end
 ## `riven_async_tcp_listener_bind` declared further down (after the
 ## AsyncTcpListener class so its return type resolves).
 lib "runtime/async_net.c"
+  def riven_async_bind_state_new(addr: &String) -> Int
+  def riven_async_bind_state_to_result(state: Int) -> Result[AsyncTcpListener, IoError]
+  def riven_async_bind_state_free(state: Int) -> ()
+
   def riven_async_accept_state_new(listener_fd: Int) -> Int
   def riven_async_accept_state_get_fd(state: Int) -> Int
   def riven_async_accept_step(state: Int) -> Int

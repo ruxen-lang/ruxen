@@ -429,10 +429,16 @@ impl<'a> InferenceEngine<'a> {
             .zip(signature.params.iter())
             .all(|(arg, param)| {
                 let arg_ty = self.ctx.resolve(&arg.ty);
+                let param_ty = self.ctx.resolve(&param.ty);
                 arg_ty.is_infer()
                     || arg_ty.is_error()
-                    || arg_ty == param.ty
-                    || matches!((&arg_ty, &param.ty), (Ty::Str, Ty::String))
+                    || arg_ty == param_ty
+                    || matches!((&arg_ty, &param_ty), (Ty::Str, Ty::String))
+                    || matches!(
+                        (&arg_ty, &param_ty),
+                        (Ty::Ref(a), Ty::Ref(b)) if matches!((&**a, &**b), (Ty::Str, Ty::String))
+                    )
+                    || matches!(&param_ty, Ty::Ref(inner) | Ty::RefMut(inner) if **inner == arg_ty)
             })
     }
 
@@ -495,6 +501,12 @@ impl<'a> InferenceEngine<'a> {
                     .iter()
                     .copied()
                     .find(|candidate| self.method_accepts_args(*candidate, args))
+            })
+            .or_else(|| {
+                candidates
+                    .iter()
+                    .copied()
+                    .find(|candidate| self.method_accepts_arg_count(*candidate, args.len()))
             })
     }
 

@@ -39,7 +39,7 @@ impl<'a> Lowerer<'a> {
                         let qualified = self.user_drop_classes.iter().any(|q| q.ends_with(&suffix));
                         if bare || qualified {
                             let mangled = format!("{}_drop", name);
-                            Some(self.ffi_alias_map.get(&mangled).cloned().unwrap_or(mangled))
+                            Some(self.resolve_ffi_alias_callee(mangled))
                         } else {
                             None
                         }

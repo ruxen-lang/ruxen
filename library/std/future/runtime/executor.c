@@ -55,10 +55,13 @@
  * Test contexts allocate the same layout with NULL payload fields, so
  * `wake` becomes a no-op without a separate "is this a test waker?"
  * branch. */
+#ifndef RIVEN_WAKER_CELL_DEFINED
+#define RIVEN_WAKER_CELL_DEFINED
 typedef struct {
     void *reactor;
     void *task;
 } RivenWakerCell;
+#endif
 
 typedef struct {
     void *waker;

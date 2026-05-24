@@ -485,7 +485,6 @@ impl Parser {
                 | TokenKind::Eof
                 | TokenKind::Let
                 | TokenKind::Var
-                | TokenKind::If
                 | TokenKind::While
                 | TokenKind::For
                 | TokenKind::Match
@@ -496,6 +495,13 @@ impl Parser {
                     if depth == 0 =>
                 {
                     return false;
+                }
+                TokenKind::If if depth == 0 => {
+                    // `if` at the current position starts a statement
+                    // body, but `pat if guard ->` is a sibling match arm.
+                    if i == self.pos {
+                        return false;
+                    }
                 }
                 _ => {}
             }

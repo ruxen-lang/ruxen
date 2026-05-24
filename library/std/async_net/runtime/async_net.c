@@ -187,6 +187,29 @@ static int riven_async_net_io_error_tag(int err) {
  * fresh socket. The future is single-shot Ready on first poll for
  * surface symmetry with AsyncTcpStream.connect. */
 
+typedef struct {
+    char addr[256];
+    void *result;
+    int done;
+    int result_taken;
+} RivenAsyncBindState;
+
+void *riven_async_bind_state_new(const char *addr) {
+    RivenAsyncBindState *s =
+        (RivenAsyncBindState *)riven_alloc(sizeof(RivenAsyncBindState));
+    s->result = NULL;
+    s->done = 0;
+    s->result_taken = 0;
+    if (addr) {
+        size_t n = strnlen(addr, sizeof(s->addr) - 1);
+        memcpy(s->addr, addr, n);
+        s->addr[n] = '\0';
+    } else {
+        s->addr[0] = '\0';
+    }
+    return s;
+}
+
 void *riven_async_tcp_listener_bind(const char *addr) {
     if (!addr) {
         return riven_result_err_value(
@@ -252,6 +275,29 @@ void *riven_async_tcp_listener_bind(const char *addr) {
      * lazy-acquires if needed. */
     l->accept_handle = riven_reactor_register_fd_read_persistent(0, (int64_t)fd);
     return riven_result_ok_value((int64_t)l);
+}
+
+void *riven_async_bind_state_to_result(void *state) {
+    if (!state) {
+        return riven_result_err_value(
+            (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+    }
+    RivenAsyncBindState *s = (RivenAsyncBindState *)state;
+    if (!s->done) {
+        s->result = riven_async_tcp_listener_bind(s->addr);
+        s->done = 1;
+    }
+    if (s->result_taken) {
+        return riven_result_err_value(
+            (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+    }
+    s->result_taken = 1;
+    return s->result;
+}
+
+void riven_async_bind_state_free(void *state) {
+    if (!state) return;
+    free(state);
 }
 
 int64_t riven_async_tcp_listener_fd(void *self) {
@@ -456,7 +502,7 @@ void *riven_async_tcp_stream_from_fd(int64_t fd) {
      * we're trying to eliminate. Two kevents at construction (one per
      * filter) is dwarfed by the savings on the hot path. */
     s->read_handle  = riven_reactor_register_fd_read_persistent(0, fd);
-    s->write_handle = 0;
+    s->write_handle = riven_reactor_register_fd_write_persistent(0, fd);
     return s;
 }
 

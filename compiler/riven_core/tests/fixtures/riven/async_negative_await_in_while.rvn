@@ -10,8 +10,12 @@ end
 async def handler() -> Int
   let var sum = 0
   while sum < 100
-    let v = fetch().await
-    sum = sum + v
+    if sum < 50
+      let v = fetch().await
+      sum = sum + v
+    else
+      sum = sum + 1
+    end
   end
   sum
 end

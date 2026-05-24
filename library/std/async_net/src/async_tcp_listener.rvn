@@ -8,6 +8,10 @@ class AsyncTcpListener
     AsyncBindFuture.new(addr)
   end
 
+  def self.bind_now(addr: &String) -> Result[AsyncTcpListener, IoError]
+    riven_async_tcp_listener_bind(addr)
+  end
+
   def var accept -> AsyncAcceptFuture
     AsyncAcceptFuture.new(
       riven_async_tcp_listener_fd(self),

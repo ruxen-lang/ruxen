@@ -183,7 +183,7 @@ pub(super) fn insert_drops(
     return_locals: &HashSet<LocalId>,
     symbols: &SymbolTable,
     user_drop_classes: &HashSet<String>,
-    ffi_alias_map: &HashMap<String, String>,
+    resolve_ffi_alias_callee: &dyn Fn(String) -> String,
 ) {
     // Avoid recursing into a class's own `drop` method: if `Holder_drop`
     // takes `self: Holder`, drop-elaboration on `self` would emit a call
@@ -392,7 +392,7 @@ pub(super) fn insert_drops(
                 let suffix_match = user_drop_classes.iter().any(|q| q.ends_with(&suffix));
                 if bare_match || suffix_match {
                     let mangled = format!("{}_drop", name);
-                    let callee = ffi_alias_map.get(&mangled).cloned().unwrap_or(mangled);
+                    let callee = resolve_ffi_alias_callee(mangled);
                     return Some((id, callee));
                 }
             }

@@ -874,8 +874,11 @@ impl<'a> Lowerer<'a> {
                 // `Outer_Inner_make`. The FFI alias map is keyed in
                 // the same shape by `register_class_lib_method`.
                 let resolved_class_cs = resolved_class.replace('.', "_");
-                let selected_method_name;
-                let lowered_method_name = if *method != UNRESOLVED_DEF {
+                let selected_method_name =
+                    self.select_method_symbol_name(&resolved_class, method_name, args);
+                let lowered_method_name = if let Some(selected) = selected_method_name.as_deref() {
+                    selected
+                } else if *method != UNRESOLVED_DEF {
                     self.symbols
                         .get(*method)
                         .and_then(|def| match &def.kind {
@@ -886,11 +889,7 @@ impl<'a> Lowerer<'a> {
                         })
                         .unwrap_or(method_name.as_str())
                 } else {
-                    selected_method_name =
-                        self.select_method_symbol_name(&resolved_class, method_name, args);
-                    selected_method_name
-                        .as_deref()
-                        .unwrap_or(method_name.as_str())
+                    method_name.as_str()
                 };
                 let mangled = if let Some(suffix) = bufio_instance_suffix {
                     format!("{}_{}_{}", resolved_class_cs, lowered_method_name, suffix)

@@ -27,18 +27,23 @@
 
 #define RIVEN_JSON_MAX_DEPTH 512
 
-typedef struct JsonHashEntry {
+#ifndef RIVEN_HASH_RUNTIME_STRUCTS
+#define RIVEN_HASH_RUNTIME_STRUCTS
+
+typedef struct RivenHashEntry {
     int64_t key;
     int64_t value;
-    struct JsonHashEntry *next;
-} JsonHashEntry;
+    struct RivenHashEntry *next;
+} RivenHashEntry;
 
 struct RivenHash {
-    JsonHashEntry **buckets;
+    RivenHashEntry **buckets;
     uint64_t bucket_count;
     uint64_t len;
     int8_t string_keys;
 };
+
+#endif
 
 typedef struct {
     const char *cur;
@@ -664,7 +669,7 @@ static void stringify_object(JsonOut *out, RivenHash *h, int depth) {
     int first = 1;
     if (h) {
         for (uint64_t i = 0; i < h->bucket_count; i++) {
-            for (JsonHashEntry *e = h->buckets[i]; e; e = e->next) {
+            for (RivenHashEntry *e = h->buckets[i]; e; e = e->next) {
                 if (!first) out_byte(out, ',');
                 first = 0;
                 out_newline_indent(out, depth + 1);
@@ -848,10 +853,10 @@ void *riven_json_object_len(void *value) {
     return option_some(obj ? (int64_t)obj->len : 0);
 }
 
-static JsonHashEntry *json_object_find(RivenHash *obj, const char *key) {
+static RivenHashEntry *json_object_find(RivenHash *obj, const char *key) {
     if (!obj || !key || obj->bucket_count == 0) return NULL;
     uint64_t bucket_idx = riven_hash_str(key) % obj->bucket_count;
-    for (JsonHashEntry *e = obj->buckets[bucket_idx]; e; e = e->next) {
+    for (RivenHashEntry *e = obj->buckets[bucket_idx]; e; e = e->next) {
         const char *entry_key = (const char *)e->key;
         if (entry_key && strcmp(entry_key, key) == 0) return e;
     }
@@ -865,7 +870,7 @@ int8_t riven_json_object_has(void *value, const char *key) {
 
 void *riven_json_object_get(void *value, const char *key) {
     if (!riven_json_is_object(value)) return option_none();
-    JsonHashEntry *entry = json_object_find((RivenHash *)json_payload(value), key);
+    RivenHashEntry *entry = json_object_find((RivenHash *)json_payload(value), key);
     if (!entry) return option_none();
     return option_some(entry->value);
 }

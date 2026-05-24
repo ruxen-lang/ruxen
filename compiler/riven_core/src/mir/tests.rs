@@ -282,11 +282,13 @@ mod lowering_tests {
                             name: "a".to_string(),
                             ty: Ty::Int,
                             auto_assign: false,
+                            default: None,
                         },
                         crate::resolve::symbols::ParamInfo {
                             name: "b".to_string(),
                             ty: Ty::Int,
                             auto_assign: false,
+                            default: None,
                         },
                     ],
                     return_ty: Ty::Int,
@@ -341,6 +343,7 @@ mod lowering_tests {
                 name: "a".to_string(),
                 ty: Ty::Int,
                 auto_assign: false,
+                default: None,
                 span: span(),
             },
             HirParam {
@@ -348,6 +351,7 @@ mod lowering_tests {
                 name: "b".to_string(),
                 ty: Ty::Int,
                 auto_assign: false,
+                default: None,
                 span: span(),
             },
         ];

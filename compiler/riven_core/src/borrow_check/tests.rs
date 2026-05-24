@@ -864,6 +864,7 @@ fn send_required_closure_rejects_borrow_capture() {
                 }],
             },
             auto_assign: false,
+            default: None,
         }],
         return_ty: Ty::Unit,
         is_async: false,

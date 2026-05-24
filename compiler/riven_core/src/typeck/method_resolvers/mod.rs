@@ -483,6 +483,16 @@ pub(super) fn builtin_method_type(
             name: name.clone(),
             generic_args: vec![eng.ctx.fresh_type_var()],
         }),
+        (Ty::Class { name, generic_args }, "find") if name.ends_with("Iter") => {
+            let elem = generic_args
+                .first()
+                .cloned()
+                .unwrap_or_else(|| eng.ctx.fresh_type_var());
+            Some(Ty::Option(Box::new(Ty::Ref(Box::new(elem)))))
+        }
+        (Ty::Class { name, .. }, "position") if name.ends_with("Iter") => {
+            Some(Ty::Option(Box::new(Ty::USize)))
+        }
         (Ty::Class { name, generic_args }, "sum") if name.ends_with("Iter") => {
             // Sum returns the element type for numeric Items. The
             // runtime path is `riven_vec_sum` which integer-sums

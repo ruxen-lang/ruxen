@@ -148,7 +148,7 @@ impl<'a> Lowerer<'a> {
             &return_locals,
             self.symbols,
             &self.user_drop_classes,
-            &self.ffi_alias_map,
+            &|mangled| self.resolve_ffi_alias_callee(mangled),
         );
 
         Ok(mir_fn)

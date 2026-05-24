@@ -447,7 +447,7 @@ impl ReceiverFinder {
 
 fn item_kind_for(kind: &DefKind) -> CompletionItemKind {
     match kind {
-        DefKind::Function { .. } => CompletionItemKind::FUNCTION,
+        DefKind::Function { .. } | DefKind::OverloadSet { .. } => CompletionItemKind::FUNCTION,
         DefKind::Method { .. } => CompletionItemKind::METHOD,
         DefKind::Class { .. } => CompletionItemKind::CLASS,
         DefKind::Struct { .. } => CompletionItemKind::STRUCT,
@@ -471,6 +471,7 @@ fn detail_for(def: &Definition, symbols: &SymbolTable) -> Option<String> {
         DefKind::Function { signature } | DefKind::Method { signature, .. } => {
             Some(format_signature(&def.name, signature))
         }
+        DefKind::OverloadSet { candidates } => Some(format!("{} overloads", candidates.len())),
         DefKind::Variable { ty, .. } | DefKind::Param { ty, .. } | DefKind::SelfValue { ty } => {
             Some(format!("{}: {}", def.name, ty))
         }

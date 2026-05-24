@@ -47,7 +47,11 @@ class AsyncTcpStream
   end
 
   def var write(content: &String) -> AsyncWriteFuture
-    AsyncWriteFuture.new(riven_async_tcp_stream_fd(self), content)
+    AsyncWriteFuture.new(
+      riven_async_tcp_stream_fd(self),
+      content,
+      riven_async_tcp_stream_write_handle(self)
+    )
   end
 
   lib "runtime/async_net.c"
@@ -60,4 +64,5 @@ lib "runtime/async_net.c"
   def riven_async_tcp_stream_from_fd(fd: Int) -> AsyncTcpStream
   def riven_async_tcp_stream_shutdown(stream: &AsyncTcpStream) -> ()
   def riven_async_tcp_stream_read_handle(stream: &AsyncTcpStream) -> Int
+  def riven_async_tcp_stream_write_handle(stream: &AsyncTcpStream) -> Int
 end

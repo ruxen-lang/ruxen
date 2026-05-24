@@ -108,10 +108,13 @@ typedef struct RivenReactorTimerSlot {
     void *task;
 } RivenReactorTimerSlot;
 
+#ifndef RIVEN_WAKER_CELL_DEFINED
+#define RIVEN_WAKER_CELL_DEFINED
 typedef struct RivenWakerCell {
     void *reactor;
     void *task;
 } RivenWakerCell;
+#endif
 
 typedef struct RivenReactor {
     int fd;

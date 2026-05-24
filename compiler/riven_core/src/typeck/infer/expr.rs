@@ -16,6 +16,30 @@ use super::helpers::{
 use super::InferenceEngine;
 
 impl<'a> InferenceEngine<'a> {
+    fn seed_closure_param_types(arg: &mut HirExpr, expected_ty: &Ty) {
+        let HirExprKind::Closure { params, .. } = &mut arg.kind else {
+            return;
+        };
+        let expected_params = match expected_ty {
+            Ty::Fn { params, .. } | Ty::FnMut { params, .. } | Ty::FnOnce { params, .. } => params,
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => match inner.as_ref() {
+                Ty::Fn { params, .. } | Ty::FnMut { params, .. } | Ty::FnOnce { params, .. } => {
+                    params
+                }
+                _ => return,
+            },
+            _ => return,
+        };
+        for (param, expected) in params.iter_mut().zip(expected_params.iter()) {
+            if param.ty.is_infer() {
+                param.ty = expected.clone();
+            }
+        }
+    }
+
     /// Infer and resolve the type of an expression (synthesis mode).
     pub fn infer_expr(&mut self, expr: &mut HirExpr) {
         match &mut expr.kind {
@@ -357,7 +381,10 @@ impl<'a> InferenceEngine<'a> {
                 // would start emitting literal "T: Displayable_method"
                 // symbols the linker cannot resolve.
                 if let Some(ref mut blk) = block {
-                    if method_name == "map" || method_name == "filter" {
+                    if matches!(
+                        method_name.as_str(),
+                        "map" | "filter" | "find" | "all" | "any"
+                    ) {
                         let obj_ty_pre = self.ctx.resolve(&object.ty);
                         let (_, derefed_pre) = auto_deref(&obj_ty_pre, self.ctx);
                         let elem_ty: Option<Ty> = match &derefed_pre {
@@ -373,7 +400,12 @@ impl<'a> InferenceEngine<'a> {
                             (elem_ty, &blk.kind)
                         {
                             if let Some(param) = params.first() {
-                                let _ = unify(&param.ty, &elem_ty, self.ctx, &expr.span);
+                                let expected = if method_name == "find" {
+                                    Ty::Ref(Box::new(elem_ty))
+                                } else {
+                                    elem_ty
+                                };
+                                let _ = unify(&param.ty, &expected, self.ctx, &expr.span);
                             }
                         }
                     }
@@ -392,8 +424,20 @@ impl<'a> InferenceEngine<'a> {
                 };
                 if let Some(selected) = selected_method {
                     self.append_method_default_args(selected, args);
-                    for arg in args.iter_mut() {
-                        self.infer_expr(arg);
+                    let signature = self.symbols.get(selected).and_then(|def| match &def.kind {
+                        DefKind::Method { signature, .. } => Some(signature.clone()),
+                        _ => None,
+                    });
+                    if let Some(signature) = &signature {
+                        for (arg, param) in args.iter_mut().zip(&signature.params) {
+                            let param_ty = self.substitute_generics_in_return(&derefed, &param.ty);
+                            Self::seed_closure_param_types(arg, &param_ty);
+                            self.infer_expr(arg);
+                        }
+                    } else {
+                        for arg in args.iter_mut() {
+                            self.infer_expr(arg);
+                        }
                     }
                 }
 
@@ -431,10 +475,12 @@ impl<'a> InferenceEngine<'a> {
                     });
                     if let Some(signature) = sig_opt {
                         for (arg, param) in args.iter().zip(&signature.params) {
-                            let _ = unify(&arg.ty, &param.ty, self.ctx, &expr.span);
-                            self.check_concurrency_bounds(&param.ty, &arg.ty, &arg.span);
+                            let param_ty = self.substitute_generics_in_return(&derefed, &param.ty);
+                            let _ = unify(&arg.ty, &param_ty, self.ctx, &expr.span);
+                            self.check_concurrency_bounds(&param_ty, &arg.ty, &arg.span);
                         }
-                        self.wrap_async_return(&signature)
+                        let ret = self.wrap_async_return(&signature);
+                        self.substitute_generics_in_return(&derefed, &ret)
                     } else {
                         self.ctx.fresh_type_var()
                     }

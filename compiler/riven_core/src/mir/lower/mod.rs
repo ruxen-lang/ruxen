@@ -272,6 +272,10 @@ impl<'a> Lowerer<'a> {
                     || arg.ty.is_error()
                     || arg.ty == param.ty
                     || matches!((&arg.ty, &param.ty), (Ty::Str, Ty::String))
+                    || matches!(
+                        (&arg.ty, &param.ty),
+                        (Ty::Ref(a), Ty::Ref(b)) if matches!((&**a, &**b), (Ty::Str, Ty::String))
+                    )
             })
     }
 
@@ -305,6 +309,12 @@ impl<'a> Lowerer<'a> {
                 candidates
                     .iter()
                     .find(|(_, sig)| self.method_signature_accepts_args(sig, args))
+            })
+            .or_else(|| {
+                candidates.iter().find(|(_, sig)| {
+                    let required = sig.params.iter().filter(|p| p.default.is_none()).count();
+                    args.len() >= required && args.len() <= sig.params.len()
+                })
             })
             .map(|(name, _)| name.clone())
     }
@@ -534,7 +544,7 @@ impl<'a> Lowerer<'a> {
                 &return_locals,
                 self.symbols,
                 &self.user_drop_classes,
-                &self.ffi_alias_map,
+                &|mangled| self.resolve_ffi_alias_callee(mangled),
             );
             mir.functions.push(closure_fn);
         }

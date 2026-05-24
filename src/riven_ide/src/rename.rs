@@ -255,6 +255,7 @@ fn classify_def_kind(kind: &DefKind) -> NameClass {
         | DefKind::Const { .. }
         | DefKind::ConstParam { .. }
         | DefKind::Module { .. }
+        | DefKind::OverloadSet { .. }
         | DefKind::SelfValue { .. } => NameClass::Value,
     }
 }
