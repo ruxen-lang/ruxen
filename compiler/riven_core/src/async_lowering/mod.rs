@@ -4941,14 +4941,15 @@ fn collect_e1112_in_expr(
     }
 }
 
-// ─── E1116 pre-check (Task.spawn outside async) ────────────────────
+// ─── E1116 pre-check (Task.spawn outside executor context) ─────────
 //
 // Spec: docs/specs/stdlib/task_spawn.spec.md §B7.
 //
-// `Task.spawn(fut)` (today reached via `Task.spawn_raw(...)`) only
-// makes sense inside a Riven executor — i.e., inside an `async def`
-// or `async { ... }` closure. Calling it from plain sync code means
-// there's no executor to enqueue into.
+// `Task.spawn(fut)` only makes sense inside a Riven executor — i.e.,
+// inside an `async def` or `async { ... }` closure. `Task.spawn_raw`
+// is the lower-level escape hatch used by runtimes that establish an
+// executor by driving `block_on` themselves (Rondo's accept loop is
+// the canonical case).
 //
 // Polarity is inverted vs. E1112: flag the call when in_async ==
 // false. The walker reuses the same scope-tracking shape (toggling
@@ -4957,11 +4958,10 @@ fn collect_e1112_in_expr(
 // closure has its own non-async scope, so the call there has no
 // executor either).
 //
-// Surface match: matches both `Task.spawn(...)` (MethodCall with
-// receiver `Task`) and `Task.spawn_raw(...)` (same shape). The
-// future-typed wrapper that ships in commit 2 (`Task.spawn` with a
-// `&var Future` parameter) routes through the same MethodCall AST,
-// so this check catches it without additional wiring.
+// Surface match: this only rejects `Task.spawn(...)` (MethodCall with
+// receiver `Task`). `Task.spawn_raw(...)` remains available in sync
+// runtime code; drop elaboration still treats it as a move-by-FFI
+// handoff to the scheduler.
 //
 // Error doc: docs/errors/E1116.md.
 pub fn collect_task_spawn_outside_async_diagnostics(
@@ -5037,14 +5037,14 @@ fn collect_e1116_in_expr(
     in_async: bool,
     diags: &mut Vec<crate::diagnostics::Diagnostic>,
 ) {
-    // Flag this node if it is `Task.spawn(...)` or `Task.spawn_raw(...)`
-    // and we're NOT in an async scope. The parser folds
+    // Flag this node if it is `Task.spawn(...)` and we're NOT in an
+    // async scope. The parser folds
     // `Task.spawn(x)` into MethodCall { object: Identifier("Task"),
     // method: "spawn", args }.
     if !in_async {
         if let ExprKind::MethodCall { object, method, .. } = &expr.kind {
             if let ExprKind::Identifier(name) = &object.kind {
-                if name == "Task" && (method == "spawn" || method == "spawn_raw") {
+                if name == "Task" && method == "spawn" {
                     diags.push(crate::diagnostics::Diagnostic::error_with_code(
                         "`Task.spawn` can only be called inside an `async` function or closure — there is no executor to enqueue into in sync context",
                         expr.span.clone(),

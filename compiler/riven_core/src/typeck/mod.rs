@@ -65,8 +65,8 @@ pub fn type_check(program: &ast::Program) -> TypeCheckResult {
     // making the async-scope check at resolve time unreachable.
     let e1112_diags = crate::async_lowering::collect_block_on_in_async_diagnostics(&lowered);
     // E1116 pre-check (docs/specs/stdlib/task_spawn.spec.md §B7):
-    // detect `Task.spawn(...)` / `Task.spawn_raw(...)` calls in
-    // sync scope BEFORE the async-fn rewrite collapses async bodies
+    // detect high-level `Task.spawn(...)` calls in sync scope BEFORE
+    // the async-fn rewrite collapses async bodies
     // into a synth state-machine class. Once the rewrite fires, the
     // call would live inside the (non-async) generated `poll`
     // method, making the check unreachable.

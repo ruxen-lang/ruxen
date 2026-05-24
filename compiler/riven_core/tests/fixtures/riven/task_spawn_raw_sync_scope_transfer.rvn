@@ -1,0 +1,50 @@
+## Pin: `Task.spawn_raw` from sync runtime code transfers ownership.
+##
+## Rondo's accept loop is synchronous runtime code that owns an
+## executor by repeatedly driving `block_on(accept)`. It creates a
+## Future in a short-lived scope, calls `Task.spawn_raw(fut)`, then
+## the next `block_on` pump polls the queued task after that scope
+## has ended. Drop elaboration must not free `fut` at the spawning
+## scope exit.
+
+class PayloadFuture
+  remaining: Int
+  payload: Int
+  include Future
+  type Output = Int
+
+  def init(n: Int, p: Int)
+    self.remaining = n
+    self.payload = p
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    if self.remaining == 0
+      Poll.Ready(self.payload)
+    else
+      self.remaining = self.remaining - 1
+      Poll.Pending
+    end
+  end
+end
+
+def spawn_one -> Int
+  let fut = PayloadFuture.new(1, 42)
+  Task.spawn_raw(fut)
+end
+
+def main
+  let h = spawn_one()
+  let _p1 = riven_executor_pump_tasks()
+  let _p2 = riven_executor_pump_tasks()
+  if TaskHandle.is_done(h) == 1
+    let r = TaskHandle.result(h)
+    if r == 42
+      puts "ok"
+    else
+      puts "fail"
+    end
+  else
+    puts "pending"
+  end
+end

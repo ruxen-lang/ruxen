@@ -207,6 +207,36 @@ pub(super) fn insert_drops(
     // owned-string copy of itself.
     let dealloc_safe = compute_dealloc_safe_locals(func);
 
+    // Locals handed to FFI calls that take ownership must not be
+    // dropped at scope exit even when they are constructor temps rather
+    // than user `let` bindings. Rondo's accept loop exercises this:
+    // `Task.spawn_raw(RondoConnectionTask.new(...))` lowers to a temp
+    // allocation passed to `riven_executor_spawn`; the scheduler owns
+    // that Future after the call.
+    let mut moved_to_ffi: HashSet<LocalId> = HashSet::new();
+    for block in &func.blocks {
+        for inst in &block.instructions {
+            if let MirInst::Call { callee, args, .. } = inst {
+                let moves_args = matches!(
+                    callee.as_str(),
+                    "riven_executor_spawn"
+                        | "Task_spawn_raw"
+                        | "Task.spawn_raw"
+                        | "riven_thread_spawn"
+                        | "Thread_spawn"
+                        | "Thread_spawn_raw"
+                );
+                if moves_args {
+                    for arg in args {
+                        if let MirValue::Use(local) = arg {
+                            moved_to_ffi.insert(*local);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Locals whose pointer transitively flows into a `Return` value via
     // `Assign`/`Copy`/`Move`. The dealloc-safety analysis processes blocks
     // in linear order, so a forward edge such as `block 4: Assign 2 = 5`
@@ -258,6 +288,11 @@ pub(super) fn insert_drops(
             }
             // Must not be the return value (any block) or alias to one.
             if return_locals.contains(&local.id) || return_alias_chain.contains(&local.id) {
+                return false;
+            }
+            // Must not be an allocation whose ownership moved into an
+            // FFI-owned runtime structure, such as the task scheduler.
+            if moved_to_ffi.contains(&local.id) {
                 return false;
             }
             // Drop types that own heap memory:
@@ -313,14 +348,14 @@ pub(super) fn insert_drops(
                 }
                 return false;
             }
-            // User-named locals of an implicitly-Copy user aggregate
-            // (struct/class/enum whose fields all qualify for the §3.6
-            // Copy include) only need scope-exit drop when codegen
-            // actually heap-allocated the value, i.e. the local is in
-            // dealloc_safe. Synthetic HIR fixtures that bypass the
-            // alloc path (e.g. `Construct` with no preceding Alloc)
-            // would otherwise leak a Drop the runtime cannot match.
-            if is_user_aggregate && ty_is_effectively_copy(&local.ty, symbols) {
+            // User-named aggregate locals only need scope-exit drop when
+            // ownership analysis says this frame still owns the heap
+            // allocation. This is not just a synthetic-HIR concern:
+            // move-by-FFI calls such as `Task.spawn_raw(fut)` remove
+            // `fut` from dealloc_safe because the executor now owns the
+            // allocation. Dropping solely because the local has a class
+            // type frees the queued Future before the scheduler polls it.
+            if is_user_aggregate {
                 return dealloc_safe.contains(&local.id);
             }
             true

@@ -356,12 +356,12 @@ pub const REGISTRY: &[CodeInfo] = &[
         title: "`.await` inside `while` / `for` body not yet supported",
     },
     // Task scheduler (`docs/specs/stdlib/task_spawn.spec.md`).
-    // E1116 fires when `Task.spawn(...)` (or its raw form
-    // `Task.spawn_raw(...)`) appears in a sync scope. There is no
-    // executor to enqueue into outside an `async def` / `async`
-    // closure body. Polarity-inverted twin of E1112: E1112 = block_on
-    // inside async; E1116 = Task.spawn outside async. Detected during
-    // the same async-lowering pre-pass (`collect_task_spawn_outside_
+    // E1116 fires when high-level `Task.spawn(...)` appears in a sync
+    // scope. Runtime-level `Task.spawn_raw(...)` is allowed for code
+    // that establishes an executor by driving `block_on` itself.
+    // Polarity-inverted twin of E1112: E1112 = block_on inside async;
+    // E1116 = Task.spawn outside async. Detected during the same
+    // async-lowering pre-pass (`collect_task_spawn_outside_
     // async_diagnostics`).
     CodeInfo {
         code: "E1116",

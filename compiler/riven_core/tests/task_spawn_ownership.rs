@@ -112,3 +112,23 @@ fn task_spawn_raw_transfers_ownership_to_executor() {
         "expected payload 42 round-trip; stdout={stdout:?} stderr={stderr:?}"
     );
 }
+
+/// Sync runtime code can establish an executor by driving `block_on`
+/// itself, then hand futures to the scheduler with raw spawn. The
+/// spawned future must survive the spawning helper's scope exit.
+#[test]
+fn task_spawn_raw_sync_scope_transfers_ownership_to_executor() {
+    let source = rvn("task_spawn_raw_sync_scope_transfer");
+    let (stdout, stderr, exit_code) =
+        compile_and_run(&source, "task_spawn_raw_sync_scope_transfer");
+
+    assert_eq!(
+        exit_code,
+        Some(0),
+        "binary must exit cleanly; stdout={stdout:?} stderr={stderr:?}"
+    );
+    assert!(
+        stdout.contains("ok"),
+        "expected payload 42 round-trip; stdout={stdout:?} stderr={stderr:?}"
+    );
+}

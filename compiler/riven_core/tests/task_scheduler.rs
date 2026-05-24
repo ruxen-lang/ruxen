@@ -419,7 +419,7 @@ fn block_contains_thread_yield_now(block: &riven_core::parser::ast::Block) -> bo
 
 // ─── B7 — Task.spawn outside async rejected with E1116 ──────────────
 
-/// Spec B7: `Task.spawn_raw(...)` from a sync `def main` body must
+/// Spec B7: `Task.spawn(...)` from a sync `def main` body must
 /// be rejected with code E1116. Symmetric to E1112 (block_on inside
 /// async).
 #[test]
@@ -433,7 +433,7 @@ fn task_spawn_outside_async_rejected_e1116() {
         .collect();
     assert!(
         codes.iter().any(|c| c == "E1116"),
-        "expected E1116 for Task.spawn_raw in sync scope, got codes: {:?} (messages: {:?})",
+        "expected E1116 for Task.spawn in sync scope, got codes: {:?} (messages: {:?})",
         codes,
         errors(&result.diagnostics),
     );

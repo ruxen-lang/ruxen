@@ -87,6 +87,48 @@ impl<'a> Lowerer<'a> {
 
     /// Push an instruction onto the current basic block.
     pub(super) fn emit(&mut self, inst: MirInst) {
+        if let MirInst::Call { callee, args, .. } = &inst {
+            let moves_args = matches!(
+                callee.as_str(),
+                "riven_executor_spawn"
+                    | "Task_spawn_raw"
+                    | "Task.spawn_raw"
+                    | "riven_thread_spawn"
+                    | "Thread_spawn"
+                    | "Thread_spawn_raw"
+            );
+            let init_moves_non_self_args = callee.ends_with("_init");
+            if moves_args || init_moves_non_self_args {
+                for (idx, arg) in args.iter().enumerate() {
+                    if init_moves_non_self_args && idx == 0 {
+                        continue;
+                    }
+                    if let MirValue::Use(local) = arg {
+                        if init_moves_non_self_args {
+                            let is_aggregate = self
+                                .fn_ref()
+                                .locals
+                                .iter()
+                                .find(|candidate| candidate.id == *local)
+                                .map(|candidate| {
+                                    matches!(
+                                        candidate.ty,
+                                        Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
+                                    )
+                                })
+                                .unwrap_or(false);
+                            if !is_aggregate {
+                                continue;
+                            }
+                        }
+                        self.initialized_heap_locals.remove(local);
+                        for frame in &mut self.loop_stack {
+                            frame.body_locals.retain(|candidate| candidate != local);
+                        }
+                    }
+                }
+            }
+        }
         let block_id = self.current_block;
         let func = self.current_fn.as_mut().expect("no current function");
         func.blocks[block_id].instructions.push(inst);
