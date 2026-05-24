@@ -1,0 +1,74 @@
+use std.json.JSON
+use std.json.Json
+
+def main
+  let n = JSON.null_value()
+  let b = JSON.bool(true)
+  let i = JSON.int(7)
+  let f = JSON.float(1.5)
+  let s = JSON.string("hi")
+
+  puts "null=#{JSON.is_null(&n)}"
+  match JSON.as_bool(&b)
+    Some(v) -> puts "bool=#{v}"
+    None -> puts "bool=missing"
+  end
+  match JSON.as_int(&i)
+    Some(v) -> puts "int=#{v}"
+    None -> puts "int=missing"
+  end
+  match JSON.as_float(&f)
+    Some(v) -> puts "float=#{v}"
+    None -> puts "float=missing"
+  end
+  match JSON.as_string(&s)
+    Some(v) -> puts "string=#{v}"
+    None -> puts "string=missing"
+  end
+
+  var items: Array[Json] = Array.new
+  items.push(i)
+  items.push(b)
+  let arr = JSON.array(items)
+  match JSON.array_len(&arr)
+    Some(v) -> puts "array-len=#{v}"
+    None -> puts "array-len=missing"
+  end
+  match JSON.stringify(&arr)
+    Ok(v) -> puts "array-json=#{v}"
+    Err(_) -> puts "array-json=err"
+  end
+  match JSON.stringify_pretty(&arr, 2)
+    Ok(v) -> puts "pretty=#{v}"
+    Err(_) -> puts "pretty=err"
+  end
+
+  var fields: Map[String, Json] = Map.new
+  fields.insert(String.from("title"), s)
+  fields.insert(String.from("items"), arr)
+  let obj = JSON.object(fields)
+  puts "object=#{JSON.is_object(&obj)}"
+  match JSON.object_len(&obj)
+    Some(v) -> puts "object-len=#{v}"
+    None -> puts "object-len=missing"
+  end
+  match JSON.object_get(&obj, "title")
+    Some(title) ->
+      match JSON.as_string(&title)
+        Some(v) -> puts "title=#{v}"
+        None -> puts "title=missing"
+      end
+    None -> puts "title=missing"
+  end
+
+  let empty_a = JSON.empty_array()
+  let empty_o = JSON.empty_object()
+  match JSON.stringify(&empty_a)
+    Ok(v) -> puts "empty-array=#{v}"
+    Err(_) -> puts "empty-array=err"
+  end
+  match JSON.stringify(&empty_o)
+    Ok(v) -> puts "empty-object=#{v}"
+    Err(_) -> puts "empty-object=err"
+  end
+end

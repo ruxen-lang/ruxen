@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use riven_core::borrow_check;
 use riven_core::diagnostics::Diagnostic;
 use riven_core::lexer::Lexer;
+use riven_core::parser::ast::Program;
 use riven_core::parser::Parser;
 use riven_core::resolve::bootstrap as stdlib_bootstrap;
 use riven_core::typeck;
@@ -207,9 +208,9 @@ fn report_statuses(statuses: &std::collections::HashMap<String, FileStatus>, ver
 /// clear `stdlib bootstrap failed:` header. The compiler cannot make progress
 /// without a clean prelude — a missing or broken stdlib is a fatal install/
 /// build issue, not a recoverable user-source error.
-fn load_bootstrap_or_err() -> Result<Vec<riven_core::parser::ast::Program>, String> {
+fn load_bootstrap_or_err() -> Result<Vec<(String, Program)>, String> {
     let mut bootstrap_diags: Vec<Diagnostic> = Vec::new();
-    let programs = stdlib_bootstrap::run_bootstrap(&mut bootstrap_diags);
+    let programs = stdlib_bootstrap::run_bootstrap_with_package_names(&mut bootstrap_diags);
     if !bootstrap_diags.is_empty() {
         let mut msg = String::from("stdlib bootstrap failed:");
         for d in &bootstrap_diags {
@@ -219,6 +220,25 @@ fn load_bootstrap_or_err() -> Result<Vec<riven_core::parser::ast::Program>, Stri
         return Err(msg);
     }
     Ok(programs)
+}
+
+fn type_check_with_package_bootstrap(
+    program: &Program,
+    bootstrap_packages: &[(String, Program)],
+) -> typeck::TypeCheckResult {
+    let mut lowered = program.clone();
+    let e1112_diags = riven_core::async_lowering::collect_block_on_in_async_diagnostics(&lowered);
+    let e1116_diags =
+        riven_core::async_lowering::collect_task_spawn_outside_async_diagnostics(&lowered);
+    let e1115_diags = riven_core::async_lowering::collect_await_in_loop_diagnostics(&lowered);
+    let bootstrap_refs: Vec<&Program> = bootstrap_packages.iter().map(|(_, p)| p).collect();
+    riven_core::async_lowering::lower_async_defs_with_bootstrap(&mut lowered, &bootstrap_refs);
+
+    let mut result = typeck::type_check_with_bootstrap_packages(&lowered, bootstrap_packages);
+    result.diagnostics.extend(e1112_diags);
+    result.diagnostics.extend(e1116_diags);
+    result.diagnostics.extend(e1115_diags);
+    result
 }
 
 /// Compile one source string into its object bytes plus a public signature.
@@ -255,7 +275,7 @@ fn compile_to_object(
             .join("\n")
     })?;
 
-    let type_result = typeck::type_check_with_bootstrap(&program, &bootstrap_programs);
+    let type_result = type_check_with_package_bootstrap(&program, &bootstrap_programs);
     let has_errors = type_result
         .diagnostics
         .iter()
@@ -358,7 +378,7 @@ fn run_compile_direct(
         return Ok(());
     }
 
-    let type_result = typeck::type_check_with_bootstrap(&program, &bootstrap_programs);
+    let type_result = type_check_with_package_bootstrap(&program, &bootstrap_programs);
     let has_type_errors = type_result
         .diagnostics
         .iter()

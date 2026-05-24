@@ -120,6 +120,10 @@ pub const BOOTSTRAP_EMBEDDED: &[(&str, &str)] = &[
         include_str!("../../../../library/std/set/src/lib.rvn"),
     ),
     (
+        "json/src/lib.rvn",
+        include_str!("../../../../library/std/json/src/lib.rvn"),
+    ),
+    (
         "foobar/src/lib.rvn",
         include_str!("../../../../library/std/foobar/src/lib.rvn"),
     ),

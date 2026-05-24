@@ -1,0 +1,70 @@
+## std::json — JSON value tree, parser, builders, and stringifier.
+##
+## Native C runtime that parses JSON into opaque heap JSON nodes. Arrays and
+## objects can be explicitly built from `Array[Json]` and `Map[String, Json]`;
+## callers inspect nodes through `JsonKind` and shallow accessor helpers.
+##
+## `JSON.parse` accepts comments and trailing commas for config-file
+## ergonomics. `JSON.parse_strict` keeps the RFC-style surface: no
+## comments, no trailing commas, no NaN/Infinity, and bounded nesting.
+
+class Json
+end
+
+enum JsonError
+  Syntax(message: String)
+  DepthLimit
+  InvalidUtf8
+  NumberOutOfRange
+end
+
+enum JsonKind
+  Null
+  Bool
+  Int
+  Float
+  String
+  Array
+  Object
+end
+
+class JSON
+  lib "runtime/json.c"
+    def self.parse as "riven_json_parse"(input: &String) -> Result[Json, JsonError]
+    def self.parse_strict as "riven_json_parse_strict"(input: &String) -> Result[Json, JsonError]
+    def self.stringify as "riven_json_stringify"(value: &Json) -> Result[String, JsonError]
+    def self.stringify_pretty as "riven_json_stringify_pretty"(value: &Json, indent: Int) -> Result[String, JsonError]
+    def self.null_value as "riven_json_make_null"() -> Json
+    def self.bool as "riven_json_make_bool"(value: Bool) -> Json
+    def self.int as "riven_json_make_int"(value: Int) -> Json
+    def self.float as "riven_json_make_float"(value: Float) -> Json
+    def self.string as "riven_json_make_string"(value: &String) -> Json
+    def self.array as "riven_json_make_array"(items: Array[Json]) -> Json
+    def self.object as "riven_json_make_object"(fields: Map[String, Json]) -> Json
+    def self.empty_array as "riven_json_make_empty_array"() -> Json
+    def self.empty_object as "riven_json_make_empty_object"() -> Json
+    def self.kind as "riven_json_kind"(value: &Json) -> JsonKind
+    def self.is_null as "riven_json_is_null"(value: &Json) -> Bool
+    def self.is_bool as "riven_json_is_bool"(value: &Json) -> Bool
+    def self.is_int as "riven_json_is_int"(value: &Json) -> Bool
+    def self.is_float as "riven_json_is_float"(value: &Json) -> Bool
+    def self.is_string as "riven_json_is_string"(value: &Json) -> Bool
+    def self.is_array as "riven_json_is_array"(value: &Json) -> Bool
+    def self.is_object as "riven_json_is_object"(value: &Json) -> Bool
+    def self.as_bool as "riven_json_as_bool"(value: &Json) -> Option[Bool]
+    def self.as_int as "riven_json_as_int"(value: &Json) -> Option[Int]
+    def self.as_float as "riven_json_as_float"(value: &Json) -> Option[Float]
+    def self.as_string as "riven_json_as_string"(value: &Json) -> Option[String]
+    def self.array_len as "riven_json_array_len"(value: &Json) -> Option[Int]
+    def self.object_len as "riven_json_object_len"(value: &Json) -> Option[Int]
+    def self.object_has as "riven_json_object_has"(value: &Json, key: &String) -> Bool
+    def self.object_get as "riven_json_object_get"(value: &Json, key: &String) -> Option[Json]
+  end
+end
+
+lib "runtime/json.c"
+  def parse_json as "riven_json_parse"(input: &String) -> Result[Json, JsonError]
+  def parse_json_strict as "riven_json_parse_strict"(input: &String) -> Result[Json, JsonError]
+  def stringify_json as "riven_json_stringify"(value: &Json) -> Result[String, JsonError]
+  def stringify_json_pretty as "riven_json_stringify_pretty"(value: &Json, indent: Int) -> Result[String, JsonError]
+end

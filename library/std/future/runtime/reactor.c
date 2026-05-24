@@ -118,7 +118,7 @@ typedef struct RivenReactor {
     int registered_count;
     int fd_slots_len;
     int fd_slots_cap;
-    RivenReactorFdSlot *fd_slots;
+    RivenReactorFdSlot **fd_slots;
     /* Wake fd: a single registration used by Waker.wake to unpark the
      * thread when no I/O event is in flight. Created at reactor alloc
      * time, persists for the reactor's lifetime. Linux: eventfd. macOS:
@@ -237,6 +237,9 @@ static void riven_reactor_free_struct(RivenReactor *r) {
         r->fd = -1;
     }
     if (r->fd_slots) {
+        for (int i = 0; i < r->fd_slots_len; i++) {
+            free(r->fd_slots[i]);
+        }
         free(r->fd_slots);
         r->fd_slots = NULL;
     }
@@ -317,7 +320,14 @@ static int riven_reactor_find_slot(RivenReactor *r, int64_t ident) {
  * as the macOS timer slots array. */
 static int riven_reactor_alloc_fd_slot(RivenReactor *r) {
     for (int i = 0; i < r->fd_slots_len; i++) {
-        if (r->fd_slots[i].fd == 0) {
+        if (!r->fd_slots[i] || r->fd_slots[i]->fd == 0) {
+            if (!r->fd_slots[i]) {
+                r->fd_slots[i] = (RivenReactorFdSlot *)calloc(1, sizeof(*r->fd_slots[i]));
+                if (!r->fd_slots[i]) {
+                    riven_panic("riven_reactor: calloc(fd_slot) failed");
+                    return -1;
+                }
+            }
             return i;
         }
     }
@@ -329,13 +339,32 @@ static int riven_reactor_alloc_fd_slot(RivenReactor *r) {
             riven_panic("riven_reactor: realloc(fd_slots) failed");
             return -1;
         }
-        r->fd_slots = (RivenReactorFdSlot *)next;
+        r->fd_slots = (RivenReactorFdSlot **)next;
         memset(&r->fd_slots[r->fd_slots_cap], 0,
                (size_t)(new_cap - r->fd_slots_cap) * sizeof(*r->fd_slots));
         r->fd_slots_cap = new_cap;
     }
+    r->fd_slots[r->fd_slots_len] = (RivenReactorFdSlot *)calloc(1, sizeof(*r->fd_slots[r->fd_slots_len]));
+    if (!r->fd_slots[r->fd_slots_len]) {
+        riven_panic("riven_reactor: calloc(fd_slot) failed");
+        return -1;
+    }
     return r->fd_slots_len++;
 }
+
+#if defined(__linux__)
+static int riven_reactor_owns_fd_slot(RivenReactor *r, void *p) {
+    if (!p || !r->fd_slots) {
+        return 0;
+    }
+    for (int i = 0; i < r->fd_slots_len; i++) {
+        if ((void *)r->fd_slots[i] == p) {
+            return 1;
+        }
+    }
+    return 0;
+}
+#endif
 
 /* Map a handle (negative-encoded slot index) back to a slot pointer.
  * Returns NULL if the handle is non-negative (= timer handle, not ours)
@@ -349,10 +378,10 @@ static RivenReactorFdSlot *riven_reactor_find_fd_slot(RivenReactor *r,
     if (idx < 0 || idx >= r->fd_slots_len) {
         return NULL;
     }
-    if (r->fd_slots[idx].fd <= 0) {
+    if (!r->fd_slots[idx] || r->fd_slots[idx]->fd <= 0) {
         return NULL;
     }
-    return &r->fd_slots[idx];
+    return r->fd_slots[idx];
 }
 
 void riven_reactor_set_waker(int64_t reactor_handle, int64_t handle, void *waker) {
@@ -415,28 +444,29 @@ static int64_t riven_reactor_register_fd_internal(int64_t reactor_handle,
     if (slot < 0) {
         return 0;
     }
-    r->fd_slots[slot].fd = user_fd;
-    r->fd_slots[slot].mode = mode;
-    r->fd_slots[slot].fired = 0;
-    r->fd_slots[slot].task = NULL;
+    RivenReactorFdSlot *fd_slot = r->fd_slots[slot];
+    fd_slot->fd = user_fd;
+    fd_slot->mode = mode;
+    fd_slot->fired = 0;
+    fd_slot->task = NULL;
 
 #if defined(__APPLE__)
     struct kevent ev;
     short filter = mode == 1 ? EVFILT_WRITE : EVFILT_READ;
     EV_SET(&ev, (uintptr_t)user_fd, filter,
            EV_ADD | EV_ENABLE,
-           0, 0, &r->fd_slots[slot]);
+           0, 0, fd_slot);
     if (kevent(r->fd, &ev, 1, NULL, 0, NULL) < 0) {
-        r->fd_slots[slot].fd = 0;
+        fd_slot->fd = 0;
         return 0;
     }
 #elif defined(__linux__)
     struct epoll_event ev;
     memset(&ev, 0, sizeof(ev));
     ev.events = mode == 1 ? EPOLLOUT : EPOLLIN;
-    ev.data.ptr = &r->fd_slots[slot];
+    ev.data.ptr = fd_slot;
     if (epoll_ctl(r->fd, EPOLL_CTL_ADD, user_fd, &ev) < 0) {
-        r->fd_slots[slot].fd = 0;
+        fd_slot->fd = 0;
         return 0;
     }
 #endif
@@ -487,28 +517,29 @@ static int64_t riven_reactor_register_fd_persistent_internal(int64_t reactor_han
     if (slot < 0) {
         return 0;
     }
-    r->fd_slots[slot].fd = user_fd;
-    r->fd_slots[slot].mode = mode;
-    r->fd_slots[slot].fired = 0;
-    r->fd_slots[slot].task = NULL;
+    RivenReactorFdSlot *fd_slot = r->fd_slots[slot];
+    fd_slot->fd = user_fd;
+    fd_slot->mode = mode;
+    fd_slot->fired = 0;
+    fd_slot->task = NULL;
 
 #if defined(__APPLE__)
     struct kevent ev;
     short filter = mode == 1 ? EVFILT_WRITE : EVFILT_READ;
     EV_SET(&ev, (uintptr_t)user_fd, filter,
            EV_ADD | EV_ENABLE,
-           0, 0, &r->fd_slots[slot]);
+           0, 0, fd_slot);
     if (kevent(r->fd, &ev, 1, NULL, 0, NULL) < 0) {
-        r->fd_slots[slot].fd = 0;
+        fd_slot->fd = 0;
         return 0;
     }
 #elif defined(__linux__)
     struct epoll_event ev;
     memset(&ev, 0, sizeof(ev));
     ev.events = mode == 1 ? EPOLLOUT : EPOLLIN;
-    ev.data.ptr = &r->fd_slots[slot];
+    ev.data.ptr = fd_slot;
     if (epoll_ctl(r->fd, EPOLL_CTL_ADD, user_fd, &ev) < 0) {
-        r->fd_slots[slot].fd = 0;
+        fd_slot->fd = 0;
         return 0;
     }
 #endif
@@ -845,12 +876,7 @@ void riven_reactor_park_current(void) {
         if (!r->fd_slots) {
             continue;
         }
-        /* Pointer-range check: is `p` a slot in our table? */
-        uintptr_t base = (uintptr_t)r->fd_slots;
-        uintptr_t end = base + (uintptr_t)r->fd_slots_cap *
-                                   sizeof(*r->fd_slots);
-        uintptr_t pp = (uintptr_t)p;
-        if (pp >= base && pp < end) {
+        if (riven_reactor_owns_fd_slot(r, p)) {
             RivenReactorFdSlot *fd_slot = (RivenReactorFdSlot *)p;
             fd_slot->fired = 1;
             if (fd_slot->task) {

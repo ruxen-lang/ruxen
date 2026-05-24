@@ -1,0 +1,15 @@
+root-object=true
+root-kind-object=true
+has-name=true
+has-missing=false
+object-len=3
+answer=42
+name=riven
+items-array=true
+items-len=2
+root-null=false
+root-bool=false
+root-int=false
+root-float=false
+root-string=false
+strict=err
