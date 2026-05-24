@@ -444,6 +444,7 @@ fn lower_one_async_fn(func: &FuncDef) -> Option<(FuncDef, ClassDef)> {
         auto_assign: true,
         name: "__state".to_string(),
         type_expr: int_type(&span),
+        default: None,
         span: span.clone(),
     });
     for p in &func.params {
@@ -451,6 +452,7 @@ fn lower_one_async_fn(func: &FuncDef) -> Option<(FuncDef, ClassDef)> {
             auto_assign: true,
             name: p.name.clone(),
             type_expr: p.type_expr.clone(),
+            default: None,
             span: p.span.clone(),
         });
     }
@@ -493,6 +495,7 @@ fn lower_one_async_fn(func: &FuncDef) -> Option<(FuncDef, ClassDef)> {
             inner: Box::new(named_type("Context", &span)),
             span: span.clone(),
         },
+        default: None,
         span: span.clone(),
     };
 
@@ -862,6 +865,7 @@ fn lower_one_async_fn_with_await(
         auto_assign: true,
         name: "__state".to_string(),
         type_expr: int_type(&span),
+        default: None,
         span: span.clone(),
     });
     for p in &func.params {
@@ -869,6 +873,7 @@ fn lower_one_async_fn_with_await(
             auto_assign: true,
             name: p.name.clone(),
             type_expr: p.type_expr.clone(),
+            default: None,
             span: p.span.clone(),
         });
     }
@@ -973,6 +978,7 @@ fn lower_one_async_fn_with_await(
             inner: Box::new(named_type("Context", &span)),
             span: span.clone(),
         },
+        default: None,
         span: span.clone(),
     };
     let poll_method = FuncDef {
@@ -1204,6 +1210,7 @@ fn lower_async_fn_while_single_await(
         auto_assign: true,
         name: "__state".to_string(),
         type_expr: int_type(&span),
+        default: None,
         span: span.clone(),
     });
     for p in &func.params {
@@ -1211,6 +1218,7 @@ fn lower_async_fn_while_single_await(
             auto_assign: true,
             name: p.name.clone(),
             type_expr: p.type_expr.clone(),
+            default: None,
             span: p.span.clone(),
         });
     }
@@ -1321,6 +1329,7 @@ fn lower_async_fn_while_single_await(
             inner: Box::new(named_type("Context", &span)),
             span: span.clone(),
         },
+        default: None,
         span: span.clone(),
     };
     let poll_method = FuncDef {
@@ -1548,6 +1557,7 @@ fn lower_async_fn_while_multi_await(
         auto_assign: true,
         name: "__state".to_string(),
         type_expr: int_type(&span),
+        default: None,
         span: span.clone(),
     });
     for p in &func.params {
@@ -1555,6 +1565,7 @@ fn lower_async_fn_while_multi_await(
             auto_assign: true,
             name: p.name.clone(),
             type_expr: p.type_expr.clone(),
+            default: None,
             span: p.span.clone(),
         });
     }
@@ -1672,6 +1683,7 @@ fn lower_async_fn_while_multi_await(
             inner: Box::new(named_type("Context", &span)),
             span: span.clone(),
         },
+        default: None,
         span: span.clone(),
     };
     let poll_method = FuncDef {

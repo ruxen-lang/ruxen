@@ -651,6 +651,7 @@ pub struct Param {
     pub auto_assign: bool,
     pub name: String,
     pub type_expr: TypeExpr,
+    pub default: Option<Box<Expr>>,
     pub span: Span,
 }
 

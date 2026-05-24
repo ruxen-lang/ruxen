@@ -155,6 +155,7 @@ impl Resolver {
                     name: p.name.clone(),
                     ty,
                     auto_assign: p.auto_assign,
+                    default: p.default.as_deref().cloned(),
                     span: p.span.clone(),
                 }
             })
@@ -181,6 +182,7 @@ impl Resolver {
                     name: p.name.clone(),
                     ty,
                     auto_assign: p.auto_assign,
+                    default: p.default.as_deref().cloned(),
                     span: p.span.clone(),
                 }
             })

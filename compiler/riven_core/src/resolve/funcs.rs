@@ -15,6 +15,175 @@ use super::symbols::*;
 use super::{ClosureCaptureContext, ResolveResult, Resolver};
 
 impl Resolver {
+    fn overload_accepts_arg_count(&self, def_id: DefId, arg_count: usize) -> bool {
+        let Some(def) = self.symbols.get(def_id) else {
+            return false;
+        };
+        let signature = match &def.kind {
+            DefKind::Function { signature } | DefKind::Method { signature, .. } => signature,
+            _ => return false,
+        };
+        let required = signature
+            .params
+            .iter()
+            .filter(|p| p.default.is_none())
+            .count();
+        arg_count >= required && arg_count <= signature.params.len()
+    }
+
+    fn overload_accepts_args(&self, def_id: DefId, args: &[HirExpr]) -> bool {
+        let Some(def) = self.symbols.get(def_id) else {
+            return false;
+        };
+        let signature = match &def.kind {
+            DefKind::Function { signature } | DefKind::Method { signature, .. } => signature,
+            _ => return false,
+        };
+        if !self.overload_accepts_arg_count(def_id, args.len()) {
+            return false;
+        }
+        args.iter()
+            .zip(signature.params.iter())
+            .all(|(arg, param)| {
+                arg.ty.is_infer()
+                    || arg.ty.is_error()
+                    || arg.ty == param.ty
+                    || matches!((&arg.ty, &param.ty), (Ty::Str, Ty::String))
+            })
+    }
+
+    pub(super) fn select_overload_by_args(&self, def_id: DefId, args: &[HirExpr]) -> DefId {
+        let Some(def) = self.symbols.get(def_id) else {
+            return def_id;
+        };
+        let DefKind::OverloadSet { candidates } = &def.kind else {
+            return def_id;
+        };
+        candidates
+            .iter()
+            .copied()
+            .filter(|candidate| self.overload_accepts_args(*candidate, args))
+            .find(|candidate| {
+                self.symbols
+                    .get(*candidate)
+                    .and_then(|def| match &def.kind {
+                        DefKind::Function { signature } | DefKind::Method { signature, .. } => {
+                            Some(signature.params.len() == args.len())
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or(false)
+            })
+            .or_else(|| {
+                candidates
+                    .iter()
+                    .copied()
+                    .find(|candidate| self.overload_accepts_args(*candidate, args))
+            })
+            .or_else(|| {
+                candidates
+                    .iter()
+                    .copied()
+                    .find(|candidate| self.overload_accepts_arg_count(*candidate, args.len()))
+            })
+            .unwrap_or(def_id)
+    }
+
+    pub(super) fn append_default_args(&mut self, def_id: DefId, args: &mut Vec<HirExpr>) {
+        let defaults: Vec<crate::parser::ast::Expr> = self
+            .symbols
+            .get(def_id)
+            .and_then(|def| match &def.kind {
+                DefKind::Function { signature } | DefKind::Method { signature, .. } => {
+                    Some(signature)
+                }
+                _ => None,
+            })
+            .map(|signature| {
+                signature
+                    .params
+                    .iter()
+                    .skip(args.len())
+                    .filter_map(|p| p.default.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for default in defaults {
+            args.push(self.resolve_expr(&default));
+        }
+    }
+
+    fn bind_callable_name(&mut self, source_name: &str, def_id: DefId, span: Span) -> String {
+        let mut final_name = source_name.to_string();
+        let existing = self
+            .scopes
+            .lookup_with_scope(source_name)
+            .and_then(|(id, scope)| {
+                if scope == self.scopes.current_id() {
+                    Some(id)
+                } else {
+                    None
+                }
+            });
+        match existing.and_then(|id| self.symbols.get(id).map(|d| (id, d.kind.clone()))) {
+            Some((prev_id, DefKind::Function { .. }))
+                if self
+                    .symbols
+                    .get(prev_id)
+                    .map(|d| d.span == span)
+                    .unwrap_or(false) =>
+            {
+                self.scopes.insert(source_name.to_string(), def_id);
+            }
+            Some((set_id, DefKind::OverloadSet { mut candidates })) => {
+                if let Some(slot) = candidates.iter_mut().find(|candidate| {
+                    self.symbols
+                        .get(**candidate)
+                        .map(|d| d.span == span)
+                        .unwrap_or(false)
+                }) {
+                    final_name = self
+                        .symbols
+                        .get(*slot)
+                        .map(|d| d.name.clone())
+                        .unwrap_or_else(|| source_name.to_string());
+                    if let Some(def) = self.symbols.get_mut(def_id) {
+                        def.name = final_name.clone();
+                    }
+                    *slot = def_id;
+                } else {
+                    final_name = format!("{}__overload{}", source_name, def_id);
+                    if let Some(def) = self.symbols.get_mut(def_id) {
+                        def.name = final_name.clone();
+                    }
+                    candidates.push(def_id);
+                }
+                if let Some(def) = self.symbols.get_mut(set_id) {
+                    def.kind = DefKind::OverloadSet { candidates };
+                }
+            }
+            Some((prev_id, DefKind::Function { .. })) | Some((prev_id, DefKind::Method { .. })) => {
+                final_name = format!("{}__overload{}", source_name, def_id);
+                if let Some(def) = self.symbols.get_mut(def_id) {
+                    def.name = final_name.clone();
+                }
+                let set_id = self.symbols.define(
+                    source_name.to_string(),
+                    DefKind::OverloadSet {
+                        candidates: vec![prev_id, def_id],
+                    },
+                    Visibility::Public,
+                    span,
+                );
+                self.scopes.insert(source_name.to_string(), set_id);
+            }
+            _ => {
+                self.scopes.insert(source_name.to_string(), def_id);
+            }
+        }
+        final_name
+    }
+
     pub(super) fn resolve_func_def(
         &mut self,
         f: &ast::FuncDef,
@@ -129,6 +298,7 @@ impl Resolver {
                 name: "__block".to_string(),
                 ty: block_ty,
                 auto_assign: false,
+                default: None,
                 span: f.span.clone(),
             });
         }
@@ -178,6 +348,7 @@ impl Resolver {
                     name: p.name.clone(),
                     ty: p.ty.clone(),
                     auto_assign: p.auto_assign,
+                    default: p.default.clone(),
                 })
                 .collect(),
             return_ty: return_ty.clone(),
@@ -197,12 +368,17 @@ impl Resolver {
             .symbols
             .define(f.name.clone(), def_kind, f.visibility, f.span.clone());
 
-        // Register the function name in the enclosing scope (not the function scope we just popped)
-        self.scopes.insert(f.name.clone(), def_id);
+        // Register the function name in the enclosing scope (not the function scope we just popped).
+        let actual_name = if parent.is_none() {
+            self.bind_callable_name(&f.name, def_id, f.span.clone())
+        } else {
+            self.scopes.insert(f.name.clone(), def_id);
+            f.name.clone()
+        };
 
         HirFuncDef {
             def_id,
-            name: f.name.clone(),
+            name: actual_name,
             visibility: f.visibility,
             is_async: f.is_async,
             self_mode,

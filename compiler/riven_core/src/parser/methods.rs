@@ -335,6 +335,7 @@ impl Parser {
                         auto_assign: false,
                         name: format!("&{}", name),
                         type_expr,
+                        default: None,
                         span,
                     };
                 }
@@ -344,11 +345,17 @@ impl Parser {
         let name = self.expect_identifier();
         self.expect(TokenKind::Colon);
         let type_expr = self.parse_type();
+        let default = if self.eat(TokenKind::Eq) {
+            Some(Box::new(self.parse_expression()))
+        } else {
+            None
+        };
         let span = self.span_from(&start);
         Param {
             auto_assign,
             name,
             type_expr,
+            default,
             span,
         }
     }

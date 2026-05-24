@@ -391,11 +391,18 @@ impl Resolver {
                                 args_hir.push(*blk);
                             }
                             if let Some(def_id) = self.scopes.lookup(name) {
+                                let def_id = self.select_overload_by_args(def_id, &args_hir);
+                                self.append_default_args(def_id, &mut args_hir);
+                                let callee_name = self
+                                    .symbols
+                                    .get(def_id)
+                                    .map(|d| d.name.clone())
+                                    .unwrap_or_else(|| name.clone());
                                 let ty = self.type_context.fresh_type_var();
                                 return HirExpr {
                                     kind: HirExprKind::FnCall {
                                         callee: def_id,
-                                        callee_name: name.clone(),
+                                        callee_name,
                                         args: args_hir,
                                     },
                                     ty,
@@ -404,6 +411,13 @@ impl Resolver {
                             }
                         }
                         if let Some(def_id) = self.scopes.lookup(name) {
+                            let def_id = self.select_overload_by_args(def_id, &args_hir);
+                            self.append_default_args(def_id, &mut args_hir);
+                            let resolved_callee_name = self
+                                .symbols
+                                .get(def_id)
+                                .map(|d| d.name.clone())
+                                .unwrap_or_else(|| name.clone());
                             let ty = self.type_context.fresh_type_var();
                             // Check if this is a function or a closure call
                             let kind = match block_hir {
@@ -421,7 +435,7 @@ impl Resolver {
                                 },
                                 None => HirExprKind::FnCall {
                                     callee: def_id,
-                                    callee_name: name.clone(),
+                                    callee_name: resolved_callee_name,
                                     args: args_hir,
                                 },
                             };

@@ -474,6 +474,14 @@ impl<'a> InferenceEngine<'a> {
                         DefKind::Function { signature } | DefKind::Method { signature, .. } => {
                             Some(signature.clone())
                         }
+                        DefKind::OverloadSet { candidates } => candidates
+                            .iter()
+                            .find_map(|id| self.symbols.get(*id))
+                            .and_then(|def| match &def.kind {
+                                DefKind::Function { signature }
+                                | DefKind::Method { signature, .. } => Some(signature.clone()),
+                                _ => None,
+                            }),
                         _ => None,
                     });
                     if let Some(signature) = sig_opt {

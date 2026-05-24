@@ -70,6 +70,7 @@ pub struct ParamInfo {
     pub name: String,
     pub ty: Ty,
     pub auto_assign: bool,
+    pub default: Option<crate::parser::ast::Expr>,
 }
 
 /// Information about a class definition.
@@ -191,6 +192,9 @@ pub enum DefKind {
     },
     Function {
         signature: FnSignature,
+    },
+    OverloadSet {
+        candidates: Vec<DefId>,
     },
     Class {
         info: ClassInfo,
@@ -365,6 +369,9 @@ impl SymbolTable {
                     signature.return_ty.clone()
                 }),
             }),
+            DefKind::OverloadSet { candidates } => {
+                candidates.first().and_then(|id| self.def_ty(*id))
+            }
             DefKind::Method { signature, .. } => Some(Ty::Fn {
                 params: signature.params.iter().map(|p| p.ty.clone()).collect(),
                 ret: Box::new(if signature.is_async {

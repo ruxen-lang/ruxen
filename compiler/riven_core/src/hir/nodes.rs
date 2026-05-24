@@ -390,6 +390,7 @@ pub struct HirParam {
     pub name: String,
     pub ty: Ty,
     pub auto_assign: bool,
+    pub default: Option<crate::parser::ast::Expr>,
     pub span: Span,
 }
 

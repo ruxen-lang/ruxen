@@ -1,0 +1,17 @@
+def classify(value: Int) -> String
+  "int"
+end
+
+def classify(value: String) -> String
+  "string"
+end
+
+def classify(value: Bool) -> String
+  "bool"
+end
+
+def main
+  puts classify(7)
+  puts classify("seven")
+  puts classify(true)
+end

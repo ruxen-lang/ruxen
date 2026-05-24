@@ -120,6 +120,7 @@ impl Resolver {
                 name: p.name.clone(),
                 ty,
                 auto_assign: false,
+                default: None,
             })
             .collect();
         let return_ty = ffi_fn
@@ -1028,6 +1029,7 @@ impl Resolver {
                             name: p.name.clone(),
                             ty,
                             auto_assign: p.auto_assign,
+                            default: p.default.as_deref().cloned(),
                         }
                     })
                     .collect();
@@ -1067,6 +1069,7 @@ impl Resolver {
                             name: p.name.clone(),
                             ty,
                             auto_assign: false,
+                            default: None,
                         })
                         .collect();
                     let return_ty = ffi_fn
@@ -1145,6 +1148,7 @@ impl Resolver {
                             name: p.name.clone(),
                             ty,
                             auto_assign: false,
+                            default: None,
                         })
                         .collect();
                     let return_ty = ffi_fn
