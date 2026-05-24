@@ -29,6 +29,7 @@ end
 lib "runtime/reactor.c"
   def riven_reactor_current_handle() -> Int
   def riven_reactor_register_timer(reactor: Int, nanos: Int) -> Int
+  def riven_reactor_set_waker(reactor: Int, handle: Int, waker: &Waker) -> ()
   def riven_reactor_check_fired(reactor: Int, handle: Int) -> Int
   def riven_reactor_deregister(reactor: Int, handle: Int) -> ()
 end

@@ -16,12 +16,14 @@
 ## the contract.
 class AsyncReadFuture
   state_ptr: Int
+  handle: Int
   done: Int
   include Future
   type Output = Result[String, IoError]
 
-  def init(fd: Int, max_bytes: Int)
+  def init(fd: Int, max_bytes: Int, handle: Int)
     self.state_ptr = riven_async_tcp_read_state_new(fd, max_bytes)
+    self.handle = handle
     self.done = 0
   end
 
@@ -31,6 +33,8 @@ class AsyncReadFuture
     end
     let step = riven_async_tcp_read_step(self.state_ptr)
     if step == 1
+      let w = cx.waker
+      riven_reactor_set_waker(riven_reactor_current_handle(), self.handle, w)
       return Poll.Pending
     end
     self.done = 1

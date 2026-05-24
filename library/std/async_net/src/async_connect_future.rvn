@@ -22,6 +22,8 @@ class AsyncConnectFuture
         let sfd = riven_async_connect_state_get_fd(self.state_ptr)
         self.handle = riven_reactor_register_fd_write(riven_reactor_current_handle(), sfd)
       end
+      let w = cx.waker
+      riven_reactor_set_waker(riven_reactor_current_handle(), self.handle, w)
       return Poll.Pending
     end
     if self.handle != 0

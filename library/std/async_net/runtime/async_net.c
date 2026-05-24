@@ -456,7 +456,7 @@ void *riven_async_tcp_stream_from_fd(int64_t fd) {
      * we're trying to eliminate. Two kevents at construction (one per
      * filter) is dwarfed by the savings on the hot path. */
     s->read_handle  = riven_reactor_register_fd_read_persistent(0, fd);
-    s->write_handle = riven_reactor_register_fd_write_persistent(0, fd);
+    s->write_handle = 0;
     return s;
 }
 

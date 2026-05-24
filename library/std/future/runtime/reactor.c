@@ -55,7 +55,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-void riven_executor_wake_all_tasks(void);
+void riven_executor_wake_task(void *task_entry);
 
 #if defined(__APPLE__)
 #  include <sys/event.h>
@@ -99,7 +99,19 @@ typedef struct RivenReactorFdSlot {
     int fd;        /* 0 = free slot; -1 also free (we use >0 to mean live) */
     int mode;      /* 0 = read, 1 = write */
     int fired;     /* set by park_current when the OS reports readiness */
+    void *task;    /* scheduler task to mark ready when this fd fires */
 } RivenReactorFdSlot;
+
+typedef struct RivenReactorTimerSlot {
+    int64_t ident; /* macOS: synthetic ident; Linux: timerfd; 0 = free */
+    int fired;
+    void *task;
+} RivenReactorTimerSlot;
+
+typedef struct RivenWakerCell {
+    void *reactor;
+    void *task;
+} RivenWakerCell;
 
 typedef struct RivenReactor {
     int fd;
@@ -119,15 +131,10 @@ typedef struct RivenReactor {
      * sched_yield behaviour rather than parking on epoll/kevent. */
     int wake_fd;
     int wake_fd_sentinel; /* address used as udata to identify wake events */
-#if defined(__APPLE__)
     int64_t next_ident;
     int slots_len;
     int slots_cap;
-    struct {
-        int64_t ident; /* 0 = free slot */
-        int fired;
-    } *slots;
-#endif
+    RivenReactorTimerSlot *slots;
 } RivenReactor;
 
 /* Per-thread current reactor pointer. Set by riven_executor_make_context
@@ -233,12 +240,10 @@ static void riven_reactor_free_struct(RivenReactor *r) {
         free(r->fd_slots);
         r->fd_slots = NULL;
     }
-#if defined(__APPLE__)
     if (r->slots) {
         free(r->slots);
         r->slots = NULL;
     }
-#endif
     free(r);
 }
 
@@ -271,7 +276,6 @@ int64_t riven_reactor_current_handle(void) {
     return (int64_t)(uintptr_t)t_current_reactor;
 }
 
-#if defined(__APPLE__)
 static int riven_reactor_alloc_slot(RivenReactor *r) {
     for (int i = 0; i < r->slots_len; i++) {
         if (r->slots[i].ident == 0) {
@@ -304,7 +308,6 @@ static int riven_reactor_find_slot(RivenReactor *r, int64_t ident) {
     }
     return -1;
 }
-#endif
 
 /* ── Fd-readiness slot allocator (Milestone 4B) ──────────────────────
  *
@@ -352,6 +355,37 @@ static RivenReactorFdSlot *riven_reactor_find_fd_slot(RivenReactor *r,
     return &r->fd_slots[idx];
 }
 
+void riven_reactor_set_waker(int64_t reactor_handle, int64_t handle, void *waker) {
+    if (reactor_handle == 0 || handle == 0 || !waker) {
+        return;
+    }
+    RivenReactor *r = (RivenReactor *)(uintptr_t)reactor_handle;
+    void *task = ((RivenWakerCell *)waker)->task;
+    if (!task) {
+        return;
+    }
+    if (handle < 0) {
+        RivenReactorFdSlot *slot = riven_reactor_find_fd_slot(r, handle);
+        if (slot) {
+            slot->task = task;
+            if (slot->fired) {
+                slot->fired = 0;
+                slot->task = NULL;
+                riven_executor_wake_task(task);
+            }
+        }
+        return;
+    }
+    int slot = riven_reactor_find_slot(r, handle);
+    if (slot >= 0) {
+        r->slots[slot].task = task;
+        if (r->slots[slot].fired) {
+            r->slots[slot].task = NULL;
+            riven_executor_wake_task(task);
+        }
+    }
+}
+
 /* Register an fd for read- or write-readiness. `mode`: 0 = read,
  * 1 = write. Returns a negative-encoded slot handle (always < 0) that
  * `check_fired` / `deregister` accept. The user's fd is NOT closed by
@@ -384,6 +418,7 @@ static int64_t riven_reactor_register_fd_internal(int64_t reactor_handle,
     r->fd_slots[slot].fd = user_fd;
     r->fd_slots[slot].mode = mode;
     r->fd_slots[slot].fired = 0;
+    r->fd_slots[slot].task = NULL;
 
 #if defined(__APPLE__)
     struct kevent ev;
@@ -418,29 +453,22 @@ int64_t riven_reactor_register_fd_write(int64_t reactor_handle, int64_t fd) {
     return riven_reactor_register_fd_internal(reactor_handle, fd, 1);
 }
 
-/* ── Persistent edge-triggered fd registration ─────────────────────────
+/* ── Persistent fd registration ────────────────────────────────────────
  *
- * Variant of register_fd_{read,write} that uses EV_CLEAR (kqueue) /
- * EPOLLET (epoll) so the OS only signals on r/w-readiness EDGES, not on
- * every park cycle. The intended caller registers ONCE at fd
+ * Variant of register_fd_{read,write} that keeps the OS registration
+ * live for the fd's lifetime. The intended caller registers ONCE at fd
  * construction (AsyncTcpStream / AsyncTcpListener `_from_fd` / `_bind`)
  * and keeps the handle alive until the owning stream drops, so the
  * per-poll register + deregister pair the futures used to emit becomes
  * zero syscalls on the hot path (-6 syscalls per HTTP request on the
  * rondo bench).
  *
- * Edge-triggered correctness contract for callers: the future's step
- * machine MUST drain the syscall until EAGAIN before returning Pending,
- * otherwise it will miss the next edge and deadlock. All three
- * async_net step machines (read/write/accept) loop until EAGAIN today,
- * so they satisfy this. async_fs / async_io callers still use the
- * level-triggered helpers above — they register per-poll and don't
- * need persistence.
- *
- * Both kqueue's EV_ADD|EV_CLEAR and epoll's EPOLLET emit one initial
- * "readiness" event if data is already buffered at registration time,
- * so a freshly-accepted fd with bytes in flight will wake the first
- * poll exactly once — no missed-initial-edge hazard. */
+ * Level-triggering is intentional here. Per-task waker routing means a
+ * future attaches its task only after it actually returns Pending; if an
+ * edge arrives before that attachment, edge-triggering can consume the
+ * event and strand the task. Level-triggering lets the reactor observe
+ * still-readable/still-writable fds after the task has registered its
+ * waker. */
 static int64_t riven_reactor_register_fd_persistent_internal(int64_t reactor_handle,
                                                              int64_t fd_in,
                                                              int mode) {
@@ -462,12 +490,13 @@ static int64_t riven_reactor_register_fd_persistent_internal(int64_t reactor_han
     r->fd_slots[slot].fd = user_fd;
     r->fd_slots[slot].mode = mode;
     r->fd_slots[slot].fired = 0;
+    r->fd_slots[slot].task = NULL;
 
 #if defined(__APPLE__)
     struct kevent ev;
     short filter = mode == 1 ? EVFILT_WRITE : EVFILT_READ;
     EV_SET(&ev, (uintptr_t)user_fd, filter,
-           EV_ADD | EV_ENABLE | EV_CLEAR,
+           EV_ADD | EV_ENABLE,
            0, 0, &r->fd_slots[slot]);
     if (kevent(r->fd, &ev, 1, NULL, 0, NULL) < 0) {
         r->fd_slots[slot].fd = 0;
@@ -476,7 +505,7 @@ static int64_t riven_reactor_register_fd_persistent_internal(int64_t reactor_han
 #elif defined(__linux__)
     struct epoll_event ev;
     memset(&ev, 0, sizeof(ev));
-    ev.events = (mode == 1 ? EPOLLOUT : EPOLLIN) | EPOLLET;
+    ev.events = mode == 1 ? EPOLLOUT : EPOLLIN;
     ev.data.ptr = &r->fd_slots[slot];
     if (epoll_ctl(r->fd, EPOLL_CTL_ADD, user_fd, &ev) < 0) {
         r->fd_slots[slot].fd = 0;
@@ -522,6 +551,7 @@ int64_t riven_reactor_register_timer(int64_t reactor_handle, int64_t nanos) {
     int64_t ident = r->next_ident++;
     r->slots[slot].ident = ident;
     r->slots[slot].fired = 0;
+    r->slots[slot].task = NULL;
 
     struct kevent ev;
     EV_SET(&ev, (uintptr_t)ident, EVFILT_TIMER,
@@ -560,6 +590,14 @@ int64_t riven_reactor_register_timer(int64_t reactor_handle, int64_t nanos) {
         close(tfd);
         riven_panic("riven_reactor_register_timer: epoll_ctl ADD failed");
         return 0;
+    }
+    {
+        int slot = riven_reactor_alloc_slot(r);
+        if (slot >= 0) {
+            r->slots[slot].ident = (int64_t)tfd;
+            r->slots[slot].fired = 0;
+            r->slots[slot].task = NULL;
+        }
     }
     r->registered_count++;
     return (int64_t)tfd;
@@ -633,6 +671,7 @@ void riven_reactor_deregister(int64_t reactor_handle, int64_t handle) {
         slot->fd = 0;
         slot->mode = 0;
         slot->fired = 0;
+        slot->task = NULL;
         if (r->registered_count > 0) {
             r->registered_count--;
         }
@@ -649,6 +688,7 @@ void riven_reactor_deregister(int64_t reactor_handle, int64_t handle) {
     (void)kevent(r->fd, &ev, 1, NULL, 0, NULL);
     r->slots[slot].ident = 0;
     r->slots[slot].fired = 0;
+    r->slots[slot].task = NULL;
     if (r->registered_count > 0) {
         r->registered_count--;
     }
@@ -656,6 +696,14 @@ void riven_reactor_deregister(int64_t reactor_handle, int64_t handle) {
     int tfd = (int)handle;
     (void)epoll_ctl(r->fd, EPOLL_CTL_DEL, tfd, NULL);
     close(tfd);
+    {
+        int slot = riven_reactor_find_slot(r, handle);
+        if (slot >= 0) {
+            r->slots[slot].ident = 0;
+            r->slots[slot].fired = 0;
+            r->slots[slot].task = NULL;
+        }
+    }
     if (r->registered_count > 0) {
         r->registered_count--;
     }
@@ -734,7 +782,6 @@ void riven_reactor_park_current(void) {
     if (n < 0) {
         return;
     }
-    int task_readiness_event = 0;
     for (int i = 0; i < n; i++) {
         /* Wake fd? Identified by udata == &r->wake_fd_sentinel. EV_CLEAR
          * already reset the trigger; nothing further to do. The unpark
@@ -747,8 +794,12 @@ void riven_reactor_park_current(void) {
          * in udata (see register_fd_internal). Timer events have a
          * NULL udata and use ident-lookup. Branch on udata. */
         if (events[i].udata != NULL) {
-            ((RivenReactorFdSlot *)events[i].udata)->fired = 1;
-            task_readiness_event = 1;
+            RivenReactorFdSlot *fd_slot = (RivenReactorFdSlot *)events[i].udata;
+            fd_slot->fired = 1;
+            if (fd_slot->task) {
+                riven_executor_wake_task(fd_slot->task);
+                fd_slot->task = NULL;
+            }
             /* Don't decrement registered_count for fd events — the
              * registration persists across multiple wake/poll cycles
              * until the future calls deregister. */
@@ -758,14 +809,14 @@ void riven_reactor_park_current(void) {
         int slot = riven_reactor_find_slot(r, ident);
         if (slot >= 0) {
             r->slots[slot].fired = 1;
-            task_readiness_event = 1;
+            if (r->slots[slot].task) {
+                riven_executor_wake_task(r->slots[slot].task);
+                r->slots[slot].task = NULL;
+            }
         }
         if (r->registered_count > 0) {
             r->registered_count--;
         }
-    }
-    if (task_readiness_event) {
-        riven_executor_wake_all_tasks();
     }
 #elif defined(__linux__)
     struct epoll_event events[16];
@@ -778,7 +829,6 @@ void riven_reactor_park_current(void) {
      * data.fd = timerfd and are observed via the timerfd's read() in
      * check_fired — no slot to mark here. We distinguish by checking
      * whether the pointer lies inside this reactor's fd_slots array. */
-    int task_readiness_event = 0;
     for (int i = 0; i < n; i++) {
         void *p = events[i].data.ptr;
         if (!p) {
@@ -793,7 +843,6 @@ void riven_reactor_park_current(void) {
             continue;
         }
         if (!r->fd_slots) {
-            task_readiness_event = 1;
             continue;
         }
         /* Pointer-range check: is `p` a slot in our table? */
@@ -802,18 +851,22 @@ void riven_reactor_park_current(void) {
                                    sizeof(*r->fd_slots);
         uintptr_t pp = (uintptr_t)p;
         if (pp >= base && pp < end) {
-            ((RivenReactorFdSlot *)p)->fired = 1;
-            task_readiness_event = 1;
+            RivenReactorFdSlot *fd_slot = (RivenReactorFdSlot *)p;
+            fd_slot->fired = 1;
+            if (fd_slot->task) {
+                riven_executor_wake_task(fd_slot->task);
+                fd_slot->task = NULL;
+            }
         } else {
-            task_readiness_event = 1;
+            int timer_slot = riven_reactor_find_slot(r, (int64_t)events[i].data.fd);
+            if (timer_slot >= 0) {
+                r->slots[timer_slot].fired = 1;
+                if (r->slots[timer_slot].task) {
+                    riven_executor_wake_task(r->slots[timer_slot].task);
+                    r->slots[timer_slot].task = NULL;
+                }
+            }
         }
-        /* Timer events use data.fd encoded in the same union; they fall
-         * into the else branch above. check_fired handles timers via
-         * read(timerfd, …), while wake_all makes older timer futures
-         * poll again without per-timer waker storage. */
-    }
-    if (task_readiness_event) {
-        riven_executor_wake_all_tasks();
     }
 #endif
 }

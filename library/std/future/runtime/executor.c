@@ -115,6 +115,25 @@ void *riven_context_waker(void *cx) {
     return ((RivenContext *)cx)->waker;
 }
 
+void *riven_context_clone(void *cx_opaque) {
+    if (!cx_opaque) {
+        riven_panic("riven_context_clone: null context");
+        return (void *)0;
+    }
+
+    RivenContext *src = (RivenContext *)cx_opaque;
+    RivenContext *dst = (RivenContext *)malloc(sizeof(RivenContext));
+    if (!dst) {
+        riven_panic("riven_context_clone: failed to allocate Context");
+        return (void *)0;
+    }
+
+    dst->inline_waker.reactor = src->inline_waker.reactor;
+    dst->inline_waker.task = src->inline_waker.task;
+    dst->waker = &dst->inline_waker;
+    return dst;
+}
+
 void *riven_context_test_dummy(void) {
     RivenContext *cx = (RivenContext *)malloc(sizeof(RivenContext));
     if (!cx) {

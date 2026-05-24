@@ -26,6 +26,8 @@ class AsyncWriteAllFuture
         let fd = riven_async_write_state_get_fd(self.state_ptr)
         self.handle = riven_reactor_register_fd_write(riven_reactor_current_handle(), fd)
       end
+      let w = cx.waker
+      riven_reactor_set_waker(riven_reactor_current_handle(), self.handle, w)
       return Poll.Pending
     end
     if self.handle != 0

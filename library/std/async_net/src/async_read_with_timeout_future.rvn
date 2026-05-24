@@ -36,14 +36,16 @@
 class AsyncReadWithTimeoutFuture
   state_ptr: Int
   timer_handle: Int
+  read_handle: Int
   timeout_ns: Int
   done: Int
   include Future
   type Output = Result[String, IoError]
 
-  def init(fd: Int, max_bytes: Int, timeout_ns: Int)
+  def init(fd: Int, max_bytes: Int, timeout_ns: Int, read_handle: Int)
     self.state_ptr = riven_async_tcp_read_state_new(fd, max_bytes)
     self.timer_handle = 0
+    self.read_handle = read_handle
     self.timeout_ns = timeout_ns
     self.done = 0
   end
@@ -63,6 +65,8 @@ class AsyncReadWithTimeoutFuture
         riven_reactor_register_timer(riven_reactor_current_handle(),
                                      self.timeout_ns)
     end
+    let w = cx.waker
+    riven_reactor_set_waker(riven_reactor_current_handle(), self.timer_handle, w)
 
     let step = riven_async_tcp_read_step(self.state_ptr)
     if step != 1
@@ -82,6 +86,7 @@ class AsyncReadWithTimeoutFuture
     end
 
     # Neither side ready — park. park_current wakes on fd OR timer.
+    riven_reactor_set_waker(riven_reactor_current_handle(), self.read_handle, w)
     Poll.Pending
   end
 

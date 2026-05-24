@@ -36,6 +36,8 @@ class TimeSleepFuture
         return Poll.Ready(nil)
       end
       self.handle = riven_reactor_register_timer(riven_reactor_current_handle(), remaining)
+      let w = cx.waker
+      riven_reactor_set_waker(riven_reactor_current_handle(), self.handle, w)
       return Poll.Pending
     end
     # Subsequent polls: ask the reactor whether the timer fired.

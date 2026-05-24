@@ -12,13 +12,19 @@
 class AsyncTcpStream
   fd: Int
   closed: Int
+  read_handle: Int
+  write_handle: Int
 
   def self.connect(addr: &String) -> AsyncConnectFuture
     AsyncConnectFuture.new(addr)
   end
 
   def var read(max_bytes: Int) -> AsyncReadFuture
-    AsyncReadFuture.new(riven_async_tcp_stream_fd(self), max_bytes)
+    AsyncReadFuture.new(
+      riven_async_tcp_stream_fd(self),
+      max_bytes,
+      riven_async_tcp_stream_read_handle(self)
+    )
   end
 
   ## Idle-timeout variant of read. Resolves to
@@ -35,7 +41,8 @@ class AsyncTcpStream
     AsyncReadWithTimeoutFuture.new(
       riven_async_tcp_stream_fd(self),
       max_bytes,
-      timeout_ns
+      timeout_ns,
+      riven_async_tcp_stream_read_handle(self)
     )
   end
 

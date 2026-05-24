@@ -30,6 +30,7 @@
 class Context
   lib "runtime/executor.c"
     def waker as "riven_context_waker"(self) -> &Waker
+    def clone as "riven_context_clone"(self) -> Context
     def self.test_dummy as "riven_context_test_dummy"() -> Context
     def self.executor as "riven_executor_make_context"() -> Context
     def drop as "riven_executor_context_drop"(self) -> ()

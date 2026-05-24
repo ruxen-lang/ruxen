@@ -11,12 +11,14 @@
 ## edge that wakes park_current.
 class AsyncAcceptFuture
   state_ptr: Int
+  handle: Int
   done: Int
   include Future
   type Output = Result[(AsyncTcpStream, String), IoError]
 
-  def init(listener_fd: Int)
+  def init(listener_fd: Int, handle: Int)
     self.state_ptr = riven_async_accept_state_new(listener_fd)
+    self.handle = handle
     self.done = 0
   end
 
@@ -26,6 +28,8 @@ class AsyncAcceptFuture
     end
     let step = riven_async_accept_step(self.state_ptr)
     if step == 1
+      let w = cx.waker
+      riven_reactor_set_waker(riven_reactor_current_handle(), self.handle, w)
       return Poll.Pending
     end
     self.done = 1

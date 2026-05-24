@@ -40,6 +40,8 @@ class AsyncReadToStringFuture
         let fd = riven_async_read_state_get_fd(self.state_ptr)
         self.handle = riven_reactor_register_fd_read(riven_reactor_current_handle(), fd)
       end
+      let w = cx.waker
+      riven_reactor_set_waker(riven_reactor_current_handle(), self.handle, w)
       return Poll.Pending
     end
     # step == 2 (EOF) or step == 3 (error) — both Ready paths.
