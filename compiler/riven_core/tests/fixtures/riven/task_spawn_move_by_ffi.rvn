@@ -39,6 +39,8 @@ class PayloadFuture
       Poll.Ready(self.payload)
     else
       self.remaining = self.remaining - 1
+      let w = cx.waker
+      w.wake_by_ref
       Poll.Pending
     end
   end

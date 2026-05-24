@@ -42,12 +42,12 @@
  * them split means the AST-level pump hook can be a single
  * forward-decl into here without touching the existing Context ABI.
  *
- * Wake routing: wake-all. The reactor wakes the calling thread on
- * any registered event; the block_on poll loop's pump call re-polls
- * every queued task on every iteration. Per-task waker routing is a
- * v2 optimisation (spec §B5; the wake state lives in the
- * RivenTaskHandle struct so adding a per-task waker later is a
- * structural change, not an ABI break).
+ * Wake routing: selective when a Future calls `cx.waker().wake()`.
+ * Each queued task owns a stable Context whose Waker points back to
+ * that queue entry; waking marks just that entry ready and pokes the
+ * reactor wake fd. Existing async-net/timer futures still use reactor
+ * readiness directly rather than storing wakers in fd/timer slots, so
+ * OS readiness falls back to marking all queued tasks ready.
  *
  * Recursion safety: `pump_tasks` walks by index, NOT by iterator.
  * If a polled task itself calls `Task.spawn`, the new entry is
@@ -85,6 +85,7 @@ int64_t Future_dynamic_poll(int64_t self, int64_t ctx);
  * the AST-level block_on rewriter already constructs one per
  * block_on call, and we reuse it via thread-local storage. */
 void *riven_executor_make_context(void);
+void *riven_executor_make_task_context(void *task_entry);
 void riven_executor_context_drop(void *cx);
 
 /* Poll[T] heap layout (pinned by `poll_tag_layout_stability` in
@@ -127,20 +128,17 @@ typedef struct RivenTaskHandle {
 typedef struct RivenTaskEntry {
     int64_t future_ptr;
     RivenTaskHandle *handle;
+    void *ctx;
+    int ready;
     struct RivenTaskEntry *next;
 } RivenTaskEntry;
 
-/* Per-thread queue head + a non-NULL ctx pointer reused across all
- * pump calls. The ctx is lazily created on first spawn (we cannot
- * reach into the block_on rewriter's local ctx — the rewriter's ctx
- * is on the C stack at block_on time, not addressable from C). Spec
- * §B5 says Context.test_dummy's waker is no-op, and the executor
- * Context's waker is also no-op in v1, so any Context will do — we
- * use one allocated by riven_executor_make_context on first spawn
- * and free it in drain_remaining. */
+/* Per-thread queue head. Each task entry owns its own Context so
+ * `cx.waker()` can be stashed by the future and still point back to
+ * the same task after the scheduler polls other entries. */
 static _Thread_local RivenTaskEntry *t_queue_head = NULL;
-static _Thread_local void *t_pump_ctx = NULL;
 static _Thread_local int t_pump_in_progress = 0;
+static _Thread_local int t_wake_all_pending = 0;
 
 /* ---------------------------------------------------------------------
  * Spawn.
@@ -172,7 +170,15 @@ int64_t riven_executor_spawn(int64_t future_ptr) {
     }
     e->future_ptr = future_ptr;
     e->handle = h;
+    e->ready = 1; /* First poll after spawn must happen without a wake. */
     e->next = NULL;
+    e->ctx = riven_executor_make_task_context((void *)e);
+    if (!e->ctx) {
+        free(e);
+        free(h);
+        riven_panic("riven_executor_spawn: make task context failed");
+        return 0;
+    }
 
     /* Append to tail. Round-robin = FIFO walk, so newer tasks land
      * at the end and won't be polled before the existing ones get
@@ -197,15 +203,29 @@ int64_t riven_executor_queue_nonempty(void) {
     return t_queue_head ? 1 : 0;
 }
 
-/* ---------------------------------------------------------------------
- * Lazy ctx getter. v1 reuses the no-op-waker Context for all pump
- * calls. The ctx persists across pump calls and is freed in
- * drain_remaining. */
-static void *get_or_init_pump_ctx(void) {
-    if (!t_pump_ctx) {
-        t_pump_ctx = riven_executor_make_context();
+int64_t riven_executor_ready_nonempty(void) {
+    if (t_wake_all_pending && t_queue_head) {
+        return 1;
     }
-    return t_pump_ctx;
+    RivenTaskEntry *cur = t_queue_head;
+    while (cur) {
+        if (cur->ready) {
+            return 1;
+        }
+        cur = cur->next;
+    }
+    return 0;
+}
+
+void riven_executor_wake_task(void *task_entry) {
+    if (!task_entry) {
+        return;
+    }
+    ((RivenTaskEntry *)task_entry)->ready = 1;
+}
+
+void riven_executor_wake_all_tasks(void) {
+    t_wake_all_pending = 1;
 }
 
 /* ---------------------------------------------------------------------
@@ -283,17 +303,19 @@ int64_t riven_executor_pump_tasks(void) {
     }
     t_pump_in_progress = 1;
 
-    void *ctx = get_or_init_pump_ctx();
-    if (!ctx) {
-        t_pump_in_progress = 0;
-        return 0;
-    }
-
     int64_t completions = 0;
+    int wake_all = t_wake_all_pending;
+    t_wake_all_pending = 0;
     RivenTaskEntry **prev_link = &t_queue_head;
     RivenTaskEntry *cur = t_queue_head;
     while (cur) {
-        int64_t poll_val = Future_dynamic_poll(cur->future_ptr, (int64_t)(uintptr_t)ctx);
+        if (!wake_all && !cur->ready) {
+            prev_link = &cur->next;
+            cur = cur->next;
+            continue;
+        }
+        cur->ready = 0;
+        int64_t poll_val = Future_dynamic_poll(cur->future_ptr, (int64_t)(uintptr_t)cur->ctx);
         int64_t payload = 0;
         if (riven_poll_is_ready(poll_val, &payload)) {
             cur->handle->result = payload;
@@ -305,6 +327,10 @@ int64_t riven_executor_pump_tasks(void) {
             }
             RivenTaskEntry *next = cur->next;
             *prev_link = next;
+            if (cur->ctx) {
+                riven_executor_context_drop(cur->ctx);
+                free(cur->ctx);
+            }
             free(cur);
             cur = next;
             completions++;
@@ -347,19 +373,14 @@ void riven_executor_drain_remaining(void) {
         if (cur->handle->refcount == 0) {
             free(cur->handle);
         }
+        if (cur->ctx) {
+            riven_executor_context_drop(cur->ctx);
+            free(cur->ctx);
+        }
         free(cur);
         cur = next;
     }
     t_queue_head = NULL;
-    if (t_pump_ctx) {
-        riven_executor_context_drop(t_pump_ctx);
-        /* The Context heap block itself isn't freed by context_drop
-         * (it relies on Riven's drop-elaboration to call riven_dealloc
-         * after the drop fn). We're calling from C, no elaboration —
-         * free explicitly. */
-        free(t_pump_ctx);
-        t_pump_ctx = NULL;
-    }
 }
 
 /* ---------------------------------------------------------------------

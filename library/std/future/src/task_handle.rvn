@@ -34,5 +34,6 @@ end
 lib "runtime/scheduler.c"
   def riven_executor_pump_tasks() -> Int
   def riven_executor_queue_nonempty() -> Int
+  def riven_executor_ready_nonempty() -> Int
   def riven_executor_drain_remaining() -> ()
 end

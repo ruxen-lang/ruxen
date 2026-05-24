@@ -1,0 +1,70 @@
+## Pin: spawned-task wakers mark only their owning task ready.
+##
+## `SelfWakeFuture` explicitly wakes itself before returning Pending.
+## `QuietFuture` never wakes. With the selective ready queue, repeated
+## pump calls advance only the self-woken task; the quiet task remains
+## pending after its initial poll. The old wake-all pump would poll both
+## tasks on every pass and incorrectly complete QuietFuture too.
+
+class SelfWakeFuture
+  remaining: Int
+  include Future
+  type Output = Int
+
+  def init(n: Int)
+    self.remaining = n
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    if self.remaining == 0
+      Poll.Ready(11)
+    else
+      self.remaining = self.remaining - 1
+      let w = cx.waker
+      w.wake_by_ref
+      Poll.Pending
+    end
+  end
+end
+
+class QuietFuture
+  remaining: Int
+  include Future
+  type Output = Int
+
+  def init(n: Int)
+    self.remaining = n
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    if self.remaining == 0
+      Poll.Ready(99)
+    else
+      self.remaining = self.remaining - 1
+      Poll.Pending
+    end
+  end
+end
+
+def main
+  let hot = Task.spawn_raw(SelfWakeFuture.new(2))
+  let quiet = Task.spawn_raw(QuietFuture.new(2))
+  let _p1 = riven_executor_pump_tasks()
+  let _p2 = riven_executor_pump_tasks()
+  let _p3 = riven_executor_pump_tasks()
+  let _p4 = riven_executor_pump_tasks()
+
+  if TaskHandle.is_done(hot) == 1
+    if TaskHandle.result(hot) == 11
+      if TaskHandle.is_done(quiet) == 0
+        puts "ok"
+      else
+        puts "quiet-finished"
+      end
+    else
+      puts "bad-hot-result"
+    end
+  else
+    puts "hot-pending"
+  end
+end

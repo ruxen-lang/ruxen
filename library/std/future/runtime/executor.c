@@ -28,12 +28,12 @@
  *   4. `riven_context_test_dummy` — test-only Context (does NOT
  *      install a reactor; tests that exercise reactor-aware
  *      futures use `riven_executor_make_context` instead).
- *   5. `riven_waker_wake` / `riven_waker_wake_by_ref` — no-ops in v1.
+ *   5. `riven_waker_wake` / `riven_waker_wake_by_ref` — mark the
+ *      owning task ready, then poke the reactor wake fd.
  *
  * ABI:
  *   - Context is a heap pointer passed as i64 (Riven's class-value ABI).
- *   - struct RivenContext layout: { void *waker; }  (unchanged from
- *     sub-phase 3 — the reactor is thread-local, not Context-local).
+ *   - struct RivenContext layout is private to this C runtime.
  *   - `&Waker` is the same pointer at the i64 ABI.
  */
 
@@ -42,30 +42,27 @@
 
 /* RivenContext layout, v1 (real-waker round):
  *
- *   offset 0:  waker_ptr  — points to (&inline_waker_reactor) inside
+ *   offset 0:  waker_ptr  — points to `inline_waker` inside
  *                            the same heap block. Returned by
  *                            `riven_context_waker(self)`.
- *   offset 8:  inline_waker_reactor — the Waker's payload: the i64
- *                            cast of the reactor pointer to wake.
- *                            Riven's Waker.wake calls
- *                            `riven_waker_wake(self_waker_ptr)` which
- *                            dereferences this slot.
+ *   offset 8:  inline_waker — the Waker's private payload:
+ *                            `(reactor_ptr, task_entry_ptr)`.
  *
  * Inlining the waker in the same allocation keeps Context construction
- * at a single malloc (was: 1 malloc for the Context + 1 lookup for the
- * singleton no-op waker; now: 1 malloc for the combined 16-byte block).
- * The waker pointer's stability requirement is met because the Context
- * heap block doesn't move — we only ever return `&cx->inline_...` for
- * the lifetime of the Context.
+ * at a single malloc. The waker pointer's stability requirement is met
+ * because the Context heap block doesn't move.
  *
- * The waker's interpretation as "a pointer into the inline slot" is
- * symmetric across `riven_waker_wake(waker_ptr)` — `*(void **)waker_ptr`
- * yields the reactor pointer to signal. Test contexts allocate the
- * same layout with `inline_waker_reactor = NULL`, so `wake` becomes
- * a no-op without a separate "is this a real waker?" branch. */
+ * Test contexts allocate the same layout with NULL payload fields, so
+ * `wake` becomes a no-op without a separate "is this a test waker?"
+ * branch. */
+typedef struct {
+    void *reactor;
+    void *task;
+} RivenWakerCell;
+
 typedef struct {
     void *waker;
-    void *inline_waker_reactor;
+    RivenWakerCell inline_waker;
 } RivenContext;
 
 /* Forward decls into reactor.c. */
@@ -73,6 +70,8 @@ struct RivenReactor;
 struct RivenReactor *riven_reactor_acquire(void);
 void riven_reactor_release(void);
 void riven_reactor_wake(int64_t reactor_handle);
+void riven_executor_wake_task(void *task_entry);
+void *riven_executor_make_task_context(void *task_entry);
 
 /* Allocate a Context. The per-thread reactor is NOT eagerly created
  * here — it's lazy-allocated by `riven_reactor_acquire` only when
@@ -89,6 +88,10 @@ void riven_reactor_wake(int64_t reactor_handle);
  * avoids opening an epoll fd / kqueue fd for every block_on that
  * doesn't touch async I/O. */
 void *riven_executor_make_context(void) {
+    return riven_executor_make_task_context((void *)0);
+}
+
+void *riven_executor_make_task_context(void *task_entry) {
     RivenContext *cx = (RivenContext *)malloc(sizeof(RivenContext));
     if (!cx) {
         riven_panic("riven_executor: failed to allocate Context");
@@ -98,8 +101,9 @@ void *riven_executor_make_context(void) {
      * stable reactor pointer to signal. The reactor lives for the
      * thread's lifetime; the Context only borrows it. */
     struct RivenReactor *r = riven_reactor_acquire();
-    cx->inline_waker_reactor = (void *)r;
-    cx->waker = &cx->inline_waker_reactor;
+    cx->inline_waker.reactor = (void *)r;
+    cx->inline_waker.task = task_entry;
+    cx->waker = &cx->inline_waker;
     return cx;
 }
 
@@ -121,8 +125,9 @@ void *riven_context_test_dummy(void) {
      * touching the reactor. The waker still has the same shape, but
      * its reactor slot is NULL — wake() becomes a no-op without a
      * separate "is_test" branch. */
-    cx->inline_waker_reactor = NULL;
-    cx->waker = &cx->inline_waker_reactor;
+    cx->inline_waker.reactor = NULL;
+    cx->inline_waker.task = NULL;
+    cx->waker = &cx->inline_waker;
     return cx;
 }
 
@@ -132,10 +137,10 @@ void riven_waker_test_noop(void *waker) {
 
 /* Waker.wake / wake_by_ref — real implementation.
  *
- * The waker pointer points at a `void *reactor` slot (inlined in the
- * owning Context for executor wakers, or NULL for test_dummy wakers).
- * Dereference and route to the reactor. Cross-thread safe: the underlying
- * eventfd_write / kevent NOTE_TRIGGER are kernel-side atomic.
+ * The waker pointer points at a `RivenWakerCell` inlined in the owning
+ * Context. For spawned tasks, `task` points at that task's scheduler
+ * entry; waking marks only that entry ready. The reactor wake remains
+ * wake-fd based so a parked worker returns from epoll_wait / kevent.
  *
  * v1 takes wake-by-value and wake-by-ref to the same path — neither
  * consumes ownership in any visible way (no refcount). Differentiated
@@ -145,22 +150,17 @@ void riven_waker_wake(void *waker) {
     if (!waker) {
         return;
     }
-    void *reactor = *(void **)waker;
-    if (!reactor) {
-        return;
+    RivenWakerCell *cell = (RivenWakerCell *)waker;
+    if (cell->task) {
+        riven_executor_wake_task(cell->task);
     }
-    riven_reactor_wake((int64_t)(uintptr_t)reactor);
+    if (cell->reactor) {
+        riven_reactor_wake((int64_t)(uintptr_t)cell->reactor);
+    }
 }
 
 void riven_waker_wake_by_ref(void *waker) {
-    if (!waker) {
-        return;
-    }
-    void *reactor = *(void **)waker;
-    if (!reactor) {
-        return;
-    }
-    riven_reactor_wake((int64_t)(uintptr_t)reactor);
+    riven_waker_wake(waker);
 }
 
 /* `def drop` for Context (wired via lib decl in

@@ -132,3 +132,23 @@ fn task_spawn_raw_sync_scope_transfers_ownership_to_executor() {
         "expected payload 42 round-trip; stdout={stdout:?} stderr={stderr:?}"
     );
 }
+
+/// A spawned task's `cx.waker()` marks that task ready without making
+/// every queued task pollable. Reactor fd/timer readiness still has a
+/// wake-all compatibility path, but explicit wakers should route to
+/// the owning task.
+#[test]
+fn task_waker_selective_ready_queue_polls_only_woken_task() {
+    let source = rvn("task_waker_selective_ready_queue");
+    let (stdout, stderr, exit_code) = compile_and_run(&source, "task_waker_selective_ready_queue");
+
+    assert_eq!(
+        exit_code,
+        Some(0),
+        "binary must exit cleanly; stdout={stdout:?} stderr={stderr:?}"
+    );
+    assert!(
+        stdout.contains("ok"),
+        "expected only the self-woken task to complete; stdout={stdout:?} stderr={stderr:?}"
+    );
+}

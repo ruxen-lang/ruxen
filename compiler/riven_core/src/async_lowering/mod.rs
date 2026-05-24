@@ -5471,8 +5471,8 @@ fn rewrite_block_on_in_expr(expr: &mut Expr, counter: &mut u32) {
 ///         Poll.Ready(__block_on_v_N) -> break __block_on_v_N
 ///         Poll.Pending ->
 ///           let __block_on_pumped_N = riven_executor_pump_tasks()
-///           let __block_on_has_tasks_N = riven_executor_queue_nonempty()
-///           if __block_on_pumped_N == 0 && __block_on_has_tasks_N == 0
+///           let __block_on_has_ready_N = riven_executor_ready_nonempty()
+///           if __block_on_pumped_N == 0 && __block_on_has_ready_N == 0
 ///             Thread.yield_now
 ///           end
 ///       end
@@ -5483,7 +5483,7 @@ fn build_block_on_loop(future_expr: Expr, n: u32, span: &Span) -> Expr {
     let ctx_name = format!("__block_on_ctx_{n}");
     let v_name = format!("__block_on_v_{n}");
     let pumped_name = format!("__block_on_pumped_{n}");
-    let has_tasks_name = format!("__block_on_has_tasks_{n}");
+    let has_ready_name = format!("__block_on_has_ready_{n}");
 
     // var __block_on_fut_N = EXPR
     let let_fut = Statement::Let(LetBinding {
@@ -5587,8 +5587,8 @@ fn build_block_on_loop(future_expr: Expr, n: u32, span: &Span) -> Expr {
     // Match arm:
     //   Poll.Pending ->
     //     let __block_on_pumped_N = riven_executor_pump_tasks()
-    //     let __block_on_has_tasks_N = riven_executor_queue_nonempty()
-    //     if __block_on_pumped_N == 0 && __block_on_has_tasks_N == 0
+    //     let __block_on_has_ready_N = riven_executor_ready_nonempty()
+    //     if __block_on_pumped_N == 0 && __block_on_has_ready_N == 0
     //       Thread.yield_now
     //     end
     //
@@ -5640,10 +5640,10 @@ fn build_block_on_loop(future_expr: Expr, n: u32, span: &Span) -> Expr {
         span: span.clone(),
     };
 
-    let make_queue_nonempty_call = || Expr {
+    let make_ready_nonempty_call = || Expr {
         kind: ExprKind::Call {
             callee: Box::new(Expr {
-                kind: ExprKind::Identifier("riven_executor_queue_nonempty".to_string()),
+                kind: ExprKind::Identifier("riven_executor_ready_nonempty".to_string()),
                 span: span.clone(),
             }),
             args: Vec::new(),
@@ -5657,10 +5657,11 @@ fn build_block_on_loop(future_expr: Expr, n: u32, span: &Span) -> Expr {
     // during the same poll: the iteration-start pump has already run,
     // so parking here could otherwise sleep before the new task ever
     // gets its first poll. If the pump completed work, or if tasks
-    // remain queued, skip Thread.yield_now and continue the block_on
+    // remain ready, skip Thread.yield_now and continue the block_on
     // loop so the root future and spawned tasks are re-polled. The
-    // executor only parks when there was no task progress and no live
-    // queued task.
+    // executor parks when there was no task completion and no ready
+    // queued task; reactor fd/timer events or explicit Waker.wake
+    // calls mark tasks ready again.
     let let_pumped = Statement::Let(LetBinding {
         mutable: false,
         pattern: Pattern::Identifier {
@@ -5672,15 +5673,15 @@ fn build_block_on_loop(future_expr: Expr, n: u32, span: &Span) -> Expr {
         value: Some(Box::new(make_pump_call())),
         span: span.clone(),
     });
-    let let_has_tasks = Statement::Let(LetBinding {
+    let let_has_ready = Statement::Let(LetBinding {
         mutable: false,
         pattern: Pattern::Identifier {
             mutable: false,
-            name: has_tasks_name.clone(),
+            name: has_ready_name.clone(),
             span: span.clone(),
         },
         type_annotation: None,
-        value: Some(Box::new(make_queue_nonempty_call())),
+        value: Some(Box::new(make_ready_nonempty_call())),
         span: span.clone(),
     });
     let no_pumped = Expr {
@@ -5697,10 +5698,10 @@ fn build_block_on_loop(future_expr: Expr, n: u32, span: &Span) -> Expr {
         },
         span: span.clone(),
     };
-    let no_tasks = Expr {
+    let no_ready = Expr {
         kind: ExprKind::BinaryOp {
             left: Box::new(Expr {
-                kind: ExprKind::Identifier(has_tasks_name.clone()),
+                kind: ExprKind::Identifier(has_ready_name.clone()),
                 span: span.clone(),
             }),
             op: BinOp::Eq,
@@ -5715,7 +5716,7 @@ fn build_block_on_loop(future_expr: Expr, n: u32, span: &Span) -> Expr {
         kind: ExprKind::BinaryOp {
             left: Box::new(no_pumped),
             op: BinOp::And,
-            right: Box::new(no_tasks),
+            right: Box::new(no_ready),
         },
         span: span.clone(),
     };
@@ -5738,7 +5739,7 @@ fn build_block_on_loop(future_expr: Expr, n: u32, span: &Span) -> Expr {
         body: MatchArmBody::Block(Block {
             statements: vec![
                 let_pumped,
-                let_has_tasks,
+                let_has_ready,
                 Statement::Expression(park_if_idle),
             ],
             span: span.clone(),
