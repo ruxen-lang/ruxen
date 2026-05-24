@@ -126,16 +126,26 @@ fn block_on_inline_loop_pumps_task_queue() {
 
     let mut pump_calls = 0usize;
     let mut loops_with_pump_first = 0usize;
-    walk_block(&main_fn.body, &mut pump_calls, &mut loops_with_pump_first);
+    let mut pending_arms_pump_before_yield = 0usize;
+    walk_block(
+        &main_fn.body,
+        &mut pump_calls,
+        &mut loops_with_pump_first,
+        &mut pending_arms_pump_before_yield,
+    );
 
     assert!(
-        pump_calls >= 1,
+        pump_calls >= 2,
         "expected at least one `riven_executor_pump_tasks()` call \
-         in the rewritten block_on loop body, found 0",
+         at loop start and one in the Pending arm, found {pump_calls}",
     );
     assert!(
         loops_with_pump_first >= 1,
         "expected at least one Loop whose first statement is the pump call",
+    );
+    assert!(
+        pending_arms_pump_before_yield >= 1,
+        "expected at least one Poll.Pending arm to pump before Thread.yield_now",
     );
 }
 
@@ -143,15 +153,26 @@ fn walk_block(
     block: &riven_core::parser::ast::Block,
     pump_calls: &mut usize,
     loops_with_pump_first: &mut usize,
+    pending_arms_pump_before_yield: &mut usize,
 ) {
     for stmt in &block.statements {
         match stmt {
             Statement::Let(lb) => {
                 if let Some(v) = &lb.value {
-                    walk_expr(v, pump_calls, loops_with_pump_first);
+                    walk_expr(
+                        v,
+                        pump_calls,
+                        loops_with_pump_first,
+                        pending_arms_pump_before_yield,
+                    );
                 }
             }
-            Statement::Expression(e) => walk_expr(e, pump_calls, loops_with_pump_first),
+            Statement::Expression(e) => walk_expr(
+                e,
+                pump_calls,
+                loops_with_pump_first,
+                pending_arms_pump_before_yield,
+            ),
         }
     }
 }
@@ -160,6 +181,7 @@ fn walk_expr(
     expr: &riven_core::parser::ast::Expr,
     pump_calls: &mut usize,
     loops_with_pump_first: &mut usize,
+    pending_arms_pump_before_yield: &mut usize,
 ) {
     if is_pump_call(expr) {
         *pump_calls += 1;
@@ -172,47 +194,126 @@ fn walk_expr(
                     *loops_with_pump_first += 1;
                 }
             }
-            walk_block(body, pump_calls, loops_with_pump_first);
+            walk_block(
+                body,
+                pump_calls,
+                loops_with_pump_first,
+                pending_arms_pump_before_yield,
+            );
         }
-        ExprKind::Block(b) => walk_block(b, pump_calls, loops_with_pump_first),
+        ExprKind::Block(b) => walk_block(
+            b,
+            pump_calls,
+            loops_with_pump_first,
+            pending_arms_pump_before_yield,
+        ),
         ExprKind::If(if_expr) => {
-            walk_expr(&if_expr.condition, pump_calls, loops_with_pump_first);
-            walk_block(&if_expr.then_body, pump_calls, loops_with_pump_first);
+            walk_expr(
+                &if_expr.condition,
+                pump_calls,
+                loops_with_pump_first,
+                pending_arms_pump_before_yield,
+            );
+            walk_block(
+                &if_expr.then_body,
+                pump_calls,
+                loops_with_pump_first,
+                pending_arms_pump_before_yield,
+            );
             for el in &if_expr.elsif_clauses {
-                walk_expr(&el.condition, pump_calls, loops_with_pump_first);
-                walk_block(&el.body, pump_calls, loops_with_pump_first);
+                walk_expr(
+                    &el.condition,
+                    pump_calls,
+                    loops_with_pump_first,
+                    pending_arms_pump_before_yield,
+                );
+                walk_block(
+                    &el.body,
+                    pump_calls,
+                    loops_with_pump_first,
+                    pending_arms_pump_before_yield,
+                );
             }
             if let Some(b) = &if_expr.else_body {
-                walk_block(b, pump_calls, loops_with_pump_first);
+                walk_block(
+                    b,
+                    pump_calls,
+                    loops_with_pump_first,
+                    pending_arms_pump_before_yield,
+                );
             }
         }
         ExprKind::Match(MatchExpr { subject, arms, .. }) => {
-            walk_expr(subject, pump_calls, loops_with_pump_first);
+            walk_expr(
+                subject,
+                pump_calls,
+                loops_with_pump_first,
+                pending_arms_pump_before_yield,
+            );
             for a in arms {
+                if is_pending_pattern(&a.pattern) && arm_pumps_before_yield(&a.body) {
+                    *pending_arms_pump_before_yield += 1;
+                }
                 match &a.body {
-                    riven_core::parser::ast::MatchArmBody::Expr(e) => {
-                        walk_expr(e, pump_calls, loops_with_pump_first)
-                    }
-                    riven_core::parser::ast::MatchArmBody::Block(b) => {
-                        walk_block(b, pump_calls, loops_with_pump_first)
-                    }
+                    riven_core::parser::ast::MatchArmBody::Expr(e) => walk_expr(
+                        e,
+                        pump_calls,
+                        loops_with_pump_first,
+                        pending_arms_pump_before_yield,
+                    ),
+                    riven_core::parser::ast::MatchArmBody::Block(b) => walk_block(
+                        b,
+                        pump_calls,
+                        loops_with_pump_first,
+                        pending_arms_pump_before_yield,
+                    ),
                 }
             }
         }
         ExprKind::While(w) => {
-            walk_expr(&w.condition, pump_calls, loops_with_pump_first);
-            walk_block(&w.body, pump_calls, loops_with_pump_first);
+            walk_expr(
+                &w.condition,
+                pump_calls,
+                loops_with_pump_first,
+                pending_arms_pump_before_yield,
+            );
+            walk_block(
+                &w.body,
+                pump_calls,
+                loops_with_pump_first,
+                pending_arms_pump_before_yield,
+            );
         }
         ExprKind::MethodCall { object, args, .. } => {
-            walk_expr(object, pump_calls, loops_with_pump_first);
+            walk_expr(
+                object,
+                pump_calls,
+                loops_with_pump_first,
+                pending_arms_pump_before_yield,
+            );
             for a in args {
-                walk_expr(a, pump_calls, loops_with_pump_first);
+                walk_expr(
+                    a,
+                    pump_calls,
+                    loops_with_pump_first,
+                    pending_arms_pump_before_yield,
+                );
             }
         }
         ExprKind::Call { callee, args, .. } => {
-            walk_expr(callee, pump_calls, loops_with_pump_first);
+            walk_expr(
+                callee,
+                pump_calls,
+                loops_with_pump_first,
+                pending_arms_pump_before_yield,
+            );
             for a in args {
-                walk_expr(a, pump_calls, loops_with_pump_first);
+                walk_expr(
+                    a,
+                    pump_calls,
+                    loops_with_pump_first,
+                    pending_arms_pump_before_yield,
+                );
             }
         }
         _ => {}
@@ -228,6 +329,92 @@ fn is_pump_call(expr: &riven_core::parser::ast::Expr) -> bool {
         }
     }
     false
+}
+
+fn is_pending_pattern(pattern: &riven_core::parser::ast::Pattern) -> bool {
+    matches!(
+        pattern,
+        riven_core::parser::ast::Pattern::Enum {
+            path,
+            variant,
+            fields,
+            ..
+        } if path == &vec!["Poll".to_string()] && variant == "Pending" && fields.is_empty()
+    )
+}
+
+fn arm_pumps_before_yield(body: &riven_core::parser::ast::MatchArmBody) -> bool {
+    let riven_core::parser::ast::MatchArmBody::Block(block) = body else {
+        return false;
+    };
+    let mut saw_pump = false;
+    for stmt in &block.statements {
+        match stmt {
+            Statement::Let(lb) => {
+                if lb.value.as_deref().is_some_and(is_pump_call) {
+                    saw_pump = true;
+                }
+            }
+            Statement::Expression(expr) => {
+                if is_pump_call(expr) {
+                    saw_pump = true;
+                    continue;
+                }
+                if expr_contains_thread_yield_now(expr) {
+                    return saw_pump;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn expr_contains_thread_yield_now(expr: &riven_core::parser::ast::Expr) -> bool {
+    if matches!(
+        &expr.kind,
+        ExprKind::FieldAccess { object, field }
+            if field == "yield_now"
+                && matches!(&object.kind, ExprKind::Identifier(name) if name == "Thread")
+    ) {
+        return true;
+    }
+    match &expr.kind {
+        ExprKind::If(if_expr) => {
+            expr_contains_thread_yield_now(&if_expr.condition)
+                || block_contains_thread_yield_now(&if_expr.then_body)
+                || if_expr.elsif_clauses.iter().any(|e| {
+                    expr_contains_thread_yield_now(&e.condition)
+                        || block_contains_thread_yield_now(&e.body)
+                })
+                || if_expr
+                    .else_body
+                    .as_ref()
+                    .is_some_and(block_contains_thread_yield_now)
+        }
+        ExprKind::Block(block) => block_contains_thread_yield_now(block),
+        ExprKind::BinaryOp { left, right, .. } => {
+            expr_contains_thread_yield_now(left) || expr_contains_thread_yield_now(right)
+        }
+        ExprKind::Call { callee, args, .. } => {
+            expr_contains_thread_yield_now(callee)
+                || args.iter().any(expr_contains_thread_yield_now)
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            expr_contains_thread_yield_now(object)
+                || args.iter().any(expr_contains_thread_yield_now)
+        }
+        _ => false,
+    }
+}
+
+fn block_contains_thread_yield_now(block: &riven_core::parser::ast::Block) -> bool {
+    block.statements.iter().any(|stmt| match stmt {
+        Statement::Let(lb) => lb
+            .value
+            .as_deref()
+            .is_some_and(expr_contains_thread_yield_now),
+        Statement::Expression(expr) => expr_contains_thread_yield_now(expr),
+    })
 }
 
 // ─── B7 — Task.spawn outside async rejected with E1116 ──────────────

@@ -5469,7 +5469,12 @@ fn rewrite_block_on_in_expr(expr: &mut Expr, counter: &mut u32) {
 ///     loop
 ///       match (&var __block_on_fut_N).poll(&var __block_on_ctx_N)
 ///         Poll.Ready(__block_on_v_N) -> break __block_on_v_N
-///         Poll.Pending -> Thread.yield_now
+///         Poll.Pending ->
+///           let __block_on_pumped_N = riven_executor_pump_tasks()
+///           let __block_on_has_tasks_N = riven_executor_queue_nonempty()
+///           if __block_on_pumped_N == 0 && __block_on_has_tasks_N == 0
+///             Thread.yield_now
+///           end
 ///       end
 ///     end
 ///   }
@@ -5477,6 +5482,8 @@ fn build_block_on_loop(future_expr: Expr, n: u32, span: &Span) -> Expr {
     let fut_name = format!("__block_on_fut_{n}");
     let ctx_name = format!("__block_on_ctx_{n}");
     let v_name = format!("__block_on_v_{n}");
+    let pumped_name = format!("__block_on_pumped_{n}");
+    let has_tasks_name = format!("__block_on_has_tasks_{n}");
 
     // var __block_on_fut_N = EXPR
     let let_fut = Statement::Let(LetBinding {
@@ -5577,7 +5584,13 @@ fn build_block_on_loop(future_expr: Expr, n: u32, span: &Span) -> Expr {
         span: span.clone(),
     };
 
-    // Match arm: Poll.Pending -> Thread.yield_now
+    // Match arm:
+    //   Poll.Pending ->
+    //     let __block_on_pumped_N = riven_executor_pump_tasks()
+    //     let __block_on_has_tasks_N = riven_executor_queue_nonempty()
+    //     if __block_on_pumped_N == 0 && __block_on_has_tasks_N == 0
+    //       Thread.yield_now
+    //     end
     //
     // Sub-phase 4A (docs/specs/stdlib/async_io.spec.md B2) replaces
     // the sched_yield-spin inside `Thread.yield_now` itself with a
@@ -5603,22 +5616,6 @@ fn build_block_on_loop(future_expr: Expr, n: u32, span: &Span) -> Expr {
         },
         span: span.clone(),
     };
-    let pending_arm = MatchArm {
-        pattern: pending_pattern,
-        guard: None,
-        body: MatchArmBody::Expr(yield_call),
-        span: span.clone(),
-    };
-
-    let match_expr = Expr {
-        kind: ExprKind::Match(MatchExpr {
-            subject: Box::new(poll_call),
-            arms: vec![ready_arm, pending_arm],
-            span: span.clone(),
-        }),
-        span: span.clone(),
-    };
-
     // Sub-phase 5 (docs/specs/stdlib/task_spawn.spec.md §B3):
     // pump the spawned-task queue once per iteration. The helper
     // short-circuits via a thread-local null-pointer check when no
@@ -5631,7 +5628,7 @@ fn build_block_on_loop(future_expr: Expr, n: u32, span: &Span) -> Expr {
     // library/std/future/src/lib.rvn). Same mechanism as the
     // Pending arm's `Thread.yield_now` call — identifier-callee
     // synthesis with no implicit self.
-    let pump_call = Expr {
+    let make_pump_call = || Expr {
         kind: ExprKind::Call {
             callee: Box::new(Expr {
                 kind: ExprKind::Identifier("riven_executor_pump_tasks".to_string()),
@@ -5643,12 +5640,127 @@ fn build_block_on_loop(future_expr: Expr, n: u32, span: &Span) -> Expr {
         span: span.clone(),
     };
 
+    let make_queue_nonempty_call = || Expr {
+        kind: ExprKind::Call {
+            callee: Box::new(Expr {
+                kind: ExprKind::Identifier("riven_executor_queue_nonempty".to_string()),
+                span: span.clone(),
+            }),
+            args: Vec::new(),
+            block: None,
+        },
+        span: span.clone(),
+    };
+
+    // Pump again immediately before deciding whether to park on
+    // Pending. This is required for tasks spawned by the root future
+    // during the same poll: the iteration-start pump has already run,
+    // so parking here could otherwise sleep before the new task ever
+    // gets its first poll. If the pump completed work, or if tasks
+    // remain queued, skip Thread.yield_now and continue the block_on
+    // loop so the root future and spawned tasks are re-polled. The
+    // executor only parks when there was no task progress and no live
+    // queued task.
+    let let_pumped = Statement::Let(LetBinding {
+        mutable: false,
+        pattern: Pattern::Identifier {
+            mutable: false,
+            name: pumped_name.clone(),
+            span: span.clone(),
+        },
+        type_annotation: None,
+        value: Some(Box::new(make_pump_call())),
+        span: span.clone(),
+    });
+    let let_has_tasks = Statement::Let(LetBinding {
+        mutable: false,
+        pattern: Pattern::Identifier {
+            mutable: false,
+            name: has_tasks_name.clone(),
+            span: span.clone(),
+        },
+        type_annotation: None,
+        value: Some(Box::new(make_queue_nonempty_call())),
+        span: span.clone(),
+    });
+    let no_pumped = Expr {
+        kind: ExprKind::BinaryOp {
+            left: Box::new(Expr {
+                kind: ExprKind::Identifier(pumped_name.clone()),
+                span: span.clone(),
+            }),
+            op: BinOp::Eq,
+            right: Box::new(Expr {
+                kind: ExprKind::IntLiteral(0, None),
+                span: span.clone(),
+            }),
+        },
+        span: span.clone(),
+    };
+    let no_tasks = Expr {
+        kind: ExprKind::BinaryOp {
+            left: Box::new(Expr {
+                kind: ExprKind::Identifier(has_tasks_name.clone()),
+                span: span.clone(),
+            }),
+            op: BinOp::Eq,
+            right: Box::new(Expr {
+                kind: ExprKind::IntLiteral(0, None),
+                span: span.clone(),
+            }),
+        },
+        span: span.clone(),
+    };
+    let should_park = Expr {
+        kind: ExprKind::BinaryOp {
+            left: Box::new(no_pumped),
+            op: BinOp::And,
+            right: Box::new(no_tasks),
+        },
+        span: span.clone(),
+    };
+    let park_if_idle = Expr {
+        kind: ExprKind::If(IfExpr {
+            condition: Box::new(should_park),
+            then_body: Block {
+                statements: vec![Statement::Expression(yield_call)],
+                span: span.clone(),
+            },
+            elsif_clauses: Vec::new(),
+            else_body: None,
+            span: span.clone(),
+        }),
+        span: span.clone(),
+    };
+    let pending_arm = MatchArm {
+        pattern: pending_pattern,
+        guard: None,
+        body: MatchArmBody::Block(Block {
+            statements: vec![
+                let_pumped,
+                let_has_tasks,
+                Statement::Expression(park_if_idle),
+            ],
+            span: span.clone(),
+        }),
+        span: span.clone(),
+    };
+
+    let match_expr = Expr {
+        kind: ExprKind::Match(MatchExpr {
+            subject: Box::new(poll_call),
+            arms: vec![ready_arm, pending_arm],
+            span: span.clone(),
+        }),
+        span: span.clone(),
+    };
+
     // loop ... end — pump first, then poll the top-level future.
     let loop_expr = Expr {
         kind: ExprKind::Loop(LoopExpr {
             body: Block {
                 statements: vec![
-                    Statement::Expression(pump_call),
+                    Statement::Expression(make_pump_call()),
                     Statement::Expression(match_expr),
                 ],
                 span: span.clone(),

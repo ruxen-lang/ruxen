@@ -120,6 +120,15 @@ scenarios don't need real wake signaling).
 With `Task.spawn` available, `future` may spawn additional tasks
 during its execution; the executor polls all of them.
 
+The generated `block_on` loop pumps the task queue at the start of
+each iteration and again in the `Poll.Pending` arm before it parks.
+That second pump is required for tasks spawned by the root future
+during the same poll: without it, the root future can enqueue a task,
+return `Pending`, and then park on an unrelated reactor registration
+before the new task has ever been polled. The pending arm only calls
+`Thread.yield_now` when that second pump completed no tasks and the
+task queue is empty.
+
 `block_on` returns when the TOP-LEVEL future (the one passed to
 block_on) returns Ready. Any still-running tasks at that point are
 **dropped** (their futures' `def drop` fires, cleaning up reactor
