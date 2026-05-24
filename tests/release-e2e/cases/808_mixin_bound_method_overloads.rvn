@@ -1,0 +1,29 @@
+mixin Picker
+  def pick(value: Int) -> String
+  def pick(value: String) -> String
+end
+
+class Item
+  def init
+  end
+
+  include Picker
+
+  def pick(value: Int) -> String
+    "mixin-int"
+  end
+
+  def pick(value: String) -> String
+    "mixin-string"
+  end
+end
+
+def show[T: Picker](item: &T)
+  puts item.pick(7)
+  puts item.pick("seven")
+end
+
+def main
+  let item = Item.new()
+  show(&item)
+end

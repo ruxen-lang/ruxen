@@ -36,10 +36,10 @@ pub struct MixinResolver {
     nominal_impls: HashMap<(String, String), Vec<ImplMethod>>,
     /// Methods defined on types (from class bodies and standalone impls)
     type_methods: HashMap<String, Vec<TypeMethod>>,
-    /// trait_name → (method_name → signature) from the trait *declaration*
+    /// trait_name → (method_name → overload signatures) from the trait *declaration*
     /// (both required method signatures and default methods). Used to
     /// dispatch method calls on a generic `T: Trait` receiver.
-    trait_method_sigs: HashMap<String, HashMap<String, FnSignature>>,
+    trait_method_sigs: HashMap<String, HashMap<String, Vec<FnSignature>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -61,6 +61,74 @@ impl MixinResolver {
             type_methods: HashMap::new(),
             trait_method_sigs: HashMap::new(),
         }
+    }
+
+    fn name_matches(def_name: &str, method_name: &str) -> bool {
+        def_name == method_name || def_name.starts_with(&format!("{}__overload", method_name))
+    }
+
+    fn signature_accepts_args(sig: &FnSignature, args: &[HirExpr]) -> bool {
+        let required = sig.params.iter().filter(|p| p.default.is_none()).count();
+        if args.len() < required || args.len() > sig.params.len() {
+            return false;
+        }
+        args.iter().zip(sig.params.iter()).all(|(arg, param)| {
+            arg.ty.is_infer()
+                || arg.ty.is_error()
+                || arg.ty == param.ty
+                || matches!((&arg.ty, &param.ty), (Ty::Str, Ty::String))
+        })
+    }
+
+    fn select_signature(sigs: Option<&Vec<FnSignature>>, args: &[HirExpr]) -> Option<FnSignature> {
+        let sigs = sigs?;
+        sigs.iter()
+            .find(|sig| sig.params.len() == args.len() && Self::signature_accepts_args(sig, args))
+            .or_else(|| {
+                sigs.iter()
+                    .find(|sig| Self::signature_accepts_args(sig, args))
+            })
+            .cloned()
+    }
+
+    fn select_impl_method<'a>(
+        methods: &'a [ImplMethod],
+        method_name: &str,
+        args: &[HirExpr],
+    ) -> Option<&'a ImplMethod> {
+        methods
+            .iter()
+            .find(|m| {
+                Self::name_matches(&m.name, method_name)
+                    && m.signature.params.len() == args.len()
+                    && Self::signature_accepts_args(&m.signature, args)
+            })
+            .or_else(|| {
+                methods.iter().find(|m| {
+                    Self::name_matches(&m.name, method_name)
+                        && Self::signature_accepts_args(&m.signature, args)
+                })
+            })
+    }
+
+    fn select_type_method<'a>(
+        methods: &'a [TypeMethod],
+        method_name: &str,
+        args: &[HirExpr],
+    ) -> Option<&'a TypeMethod> {
+        methods
+            .iter()
+            .find(|m| {
+                Self::name_matches(&m.name, method_name)
+                    && m.signature.params.len() == args.len()
+                    && Self::signature_accepts_args(&m.signature, args)
+            })
+            .or_else(|| {
+                methods.iter().find(|m| {
+                    Self::name_matches(&m.name, method_name)
+                        && Self::signature_accepts_args(&m.signature, args)
+                })
+            })
     }
 
     /// Register an impl block discovered during name resolution.
@@ -183,15 +251,16 @@ impl MixinResolver {
         &self,
         bounds: &[MixinRef],
         method_name: &str,
+        args: &[HirExpr],
     ) -> Result<Option<FnSignature>, Vec<String>> {
         let mut found: Option<FnSignature> = None;
         let mut providers: Vec<String> = Vec::new();
         for b in bounds {
             if let Some(methods) = self.trait_method_sigs.get(&b.name) {
-                if let Some(sig) = methods.get(method_name) {
+                if let Some(sig) = Self::select_signature(methods.get(method_name), args) {
                     providers.push(b.name.clone());
                     if found.is_none() {
-                        found = Some(sig.clone());
+                        found = Some(sig);
                     }
                 }
             } else if matches!(b.name.as_str(), "Hashable" | "Hash") && method_name == "hash_code" {
@@ -223,11 +292,21 @@ impl MixinResolver {
         method_name: &str,
         symbols: &SymbolTable,
     ) -> Option<FnSignature> {
+        self.lookup_method_with_args(ty, method_name, &[], symbols)
+    }
+
+    pub fn lookup_method_with_args(
+        &self,
+        ty: &Ty,
+        method_name: &str,
+        args: &[HirExpr],
+        symbols: &SymbolTable,
+    ) -> Option<FnSignature> {
         let type_name = Self::type_name(ty);
 
         // Check direct type methods first
         if let Some(meths) = self.type_methods.get(&type_name) {
-            if let Some(m) = meths.iter().find(|m| m.name == method_name) {
+            if let Some(m) = Self::select_type_method(meths, method_name, args) {
                 return Some(m.signature.clone());
             }
         }
@@ -235,7 +314,7 @@ impl MixinResolver {
         // Check trait impls
         for ((tname, _), methods) in &self.nominal_impls {
             if *tname == type_name {
-                if let Some(m) = methods.iter().find(|m| m.name == method_name) {
+                if let Some(m) = Self::select_impl_method(methods, method_name, args) {
                     return Some(m.signature.clone());
                 }
             }
@@ -247,8 +326,8 @@ impl MixinResolver {
         for (impl_target, trait_name) in self.nominal_impls.keys() {
             if *impl_target == type_name {
                 if let Some(methods) = self.trait_method_sigs.get(trait_name) {
-                    if let Some(sig) = methods.get(method_name) {
-                        return Some(sig.clone());
+                    if let Some(sig) = Self::select_signature(methods.get(method_name), args) {
+                        return Some(sig);
                     }
                 }
             }
@@ -265,7 +344,12 @@ impl MixinResolver {
                                     name: parent_def.name.clone(),
                                     generic_args: vec![],
                                 };
-                                return self.lookup_method(&parent_ty, method_name, symbols);
+                                return self.lookup_method_with_args(
+                                    &parent_ty,
+                                    method_name,
+                                    args,
+                                    symbols,
+                                );
                             }
                         }
                     }
@@ -390,7 +474,7 @@ impl MixinResolver {
                 }
                 let entry = self.trait_method_sigs.entry(tdef.name.clone()).or_default();
                 for (k, v) in new_entries {
-                    entry.insert(k, v);
+                    entry.entry(k).or_default().push(v);
                 }
             }
             HirItem::Class(class) => {

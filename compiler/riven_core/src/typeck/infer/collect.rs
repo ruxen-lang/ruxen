@@ -11,6 +11,7 @@ use crate::diagnostics::Diagnostic;
 use crate::hir::nodes::*;
 use crate::hir::types::Ty;
 use crate::lexer::token::Span;
+use crate::parser::ast;
 use crate::resolve::symbols::DefKind;
 
 use super::super::unify::unify;
@@ -78,14 +79,17 @@ impl<'a> InferenceEngine<'a> {
         }
 
         // Look up in trait resolver
-        if let Some(sig) = self.traits.lookup_method(obj_ty, method_name, self.symbols) {
+        if let Some(sig) =
+            self.traits
+                .lookup_method_with_args(obj_ty, method_name, args, self.symbols)
+        {
             return self.wrap_async_return(&sig);
         }
 
         // Method call on a generic type parameter `T: Trait + Trait`
         // or `impl Trait` / `dyn Trait`: search the trait bounds for the
         // declaring trait and report ambiguity when multiple bounds match.
-        if let Some(ret) = self.lookup_on_type_param_bounds(obj_ty, method_name, span) {
+        if let Some(ret) = self.lookup_on_type_param_bounds(obj_ty, method_name, args, span) {
             return ret;
         }
 
@@ -237,6 +241,7 @@ impl<'a> InferenceEngine<'a> {
         &mut self,
         ty: &Ty,
         name: &str,
+        args: &[HirExpr],
         span: &Span,
     ) -> Option<Ty> {
         // Peel reference layers — a method call on `&T` / `&mut T` / `&'a T`
@@ -266,7 +271,7 @@ impl<'a> InferenceEngine<'a> {
         if bounds.is_empty() {
             return None;
         }
-        match self.traits.lookup_method_on_bounds(bounds, name) {
+        match self.traits.lookup_method_on_bounds(bounds, name, args) {
             Ok(Some(sig)) => Some(self.wrap_async_return(&sig)),
             Ok(None) => None,
             Err(providers) => {
@@ -389,6 +394,172 @@ impl<'a> InferenceEngine<'a> {
             }
         }
         None
+    }
+
+    fn method_name_matches(def_name: &str, method_name: &str) -> bool {
+        def_name == method_name || def_name.starts_with(&format!("{}__overload", method_name))
+    }
+
+    fn method_accepts_arg_count(&self, method_id: DefId, argc: usize) -> bool {
+        let Some(def) = self.symbols.get(method_id) else {
+            return false;
+        };
+        let DefKind::Method { signature, .. } = &def.kind else {
+            return false;
+        };
+        let required = signature
+            .params
+            .iter()
+            .filter(|p| p.default.is_none())
+            .count();
+        argc >= required && argc <= signature.params.len()
+    }
+
+    fn method_accepts_args(&self, method_id: DefId, args: &[HirExpr]) -> bool {
+        let Some(def) = self.symbols.get(method_id) else {
+            return false;
+        };
+        let DefKind::Method { signature, .. } = &def.kind else {
+            return false;
+        };
+        if !self.method_accepts_arg_count(method_id, args.len()) {
+            return false;
+        }
+        args.iter()
+            .zip(signature.params.iter())
+            .all(|(arg, param)| {
+                let arg_ty = self.ctx.resolve(&arg.ty);
+                arg_ty.is_infer()
+                    || arg_ty.is_error()
+                    || arg_ty == param.ty
+                    || matches!((&arg_ty, &param.ty), (Ty::Str, Ty::String))
+            })
+    }
+
+    fn class_method_candidates(&self, type_name: &str, method_name: &str) -> Vec<DefId> {
+        self.symbols
+            .iter()
+            .filter_map(|def| {
+                if !Self::method_name_matches(&def.name, method_name) {
+                    return None;
+                }
+                let DefKind::Method { parent, .. } = &def.kind else {
+                    return None;
+                };
+                let parent_def = self.symbols.get(*parent)?;
+                (parent_def.name == type_name).then_some(def.id)
+            })
+            .collect()
+    }
+
+    fn find_class_def(&self, type_name: &str) -> Option<DefId> {
+        self.symbols.iter().find_map(|def| {
+            if def.name == type_name && matches!(def.kind, DefKind::Class { .. }) {
+                Some(def.id)
+            } else {
+                None
+            }
+        })
+    }
+
+    fn parent_class_name(&self, type_name: &str) -> Option<String> {
+        let class_id = self.find_class_def(type_name)?;
+        let class_def = self.symbols.get(class_id)?;
+        let DefKind::Class { info } = &class_def.kind else {
+            return None;
+        };
+        let parent_id = info.parent?;
+        self.symbols
+            .get(parent_id)
+            .map(|parent| parent.name.clone())
+    }
+
+    fn select_method_candidate(&self, candidates: &[DefId], args: &[HirExpr]) -> Option<DefId> {
+        candidates
+            .iter()
+            .copied()
+            .filter(|candidate| self.method_accepts_args(*candidate, args))
+            .find(|candidate| {
+                self.symbols
+                    .get(*candidate)
+                    .and_then(|def| match &def.kind {
+                        DefKind::Method { signature, .. } => {
+                            Some(signature.params.len() == args.len())
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or(false)
+            })
+            .or_else(|| {
+                candidates
+                    .iter()
+                    .copied()
+                    .find(|candidate| self.method_accepts_args(*candidate, args))
+            })
+    }
+
+    pub(super) fn select_class_method(
+        &self,
+        type_name: &str,
+        method_name: &str,
+        args: &[HirExpr],
+    ) -> Option<DefId> {
+        let candidates = self.class_method_candidates(type_name, method_name);
+        if let Some(selected) = self.select_method_candidate(&candidates, args) {
+            return Some(selected);
+        }
+        let parent = self.parent_class_name(type_name)?;
+        self.select_class_method(&parent, method_name, args)
+    }
+
+    fn default_ast_to_hir(&mut self, default: &ast::Expr) -> Option<HirExpr> {
+        let ty = match &default.kind {
+            ast::ExprKind::IntLiteral(_, _) => Ty::Int,
+            ast::ExprKind::FloatLiteral(_, _) => Ty::Float,
+            ast::ExprKind::StringLiteral(_) | ast::ExprKind::InterpolatedString(_) => Ty::String,
+            ast::ExprKind::CharLiteral(_) => Ty::Char,
+            ast::ExprKind::BoolLiteral(_) => Ty::Bool,
+            ast::ExprKind::UnitLiteral => Ty::Unit,
+            _ => return None,
+        };
+        Some(HirExpr {
+            kind: match &default.kind {
+                ast::ExprKind::IntLiteral(v, _) => HirExprKind::IntLiteral(*v),
+                ast::ExprKind::FloatLiteral(v, _) => HirExprKind::FloatLiteral(*v),
+                ast::ExprKind::StringLiteral(v) => HirExprKind::StringLiteral(v.clone()),
+                ast::ExprKind::InterpolatedString(_) => return None,
+                ast::ExprKind::CharLiteral(v) => HirExprKind::CharLiteral(*v),
+                ast::ExprKind::BoolLiteral(v) => HirExprKind::BoolLiteral(*v),
+                ast::ExprKind::UnitLiteral => HirExprKind::UnitLiteral,
+                _ => return None,
+            },
+            ty,
+            span: default.span.clone(),
+        })
+    }
+
+    pub(super) fn append_method_default_args(&mut self, method_id: DefId, args: &mut Vec<HirExpr>) {
+        let defaults: Vec<ast::Expr> = self
+            .symbols
+            .get(method_id)
+            .and_then(|def| match &def.kind {
+                DefKind::Method { signature, .. } => Some(signature),
+                _ => None,
+            })
+            .map(|signature| {
+                signature
+                    .params
+                    .iter()
+                    .skip(args.len())
+                    .filter_map(|p| p.default.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for default in defaults {
+            if let Some(hir) = self.default_ast_to_hir(&default) {
+                args.push(hir);
+            }
+        }
     }
 
     /// Infer the generic arguments of a class from the concrete types of a

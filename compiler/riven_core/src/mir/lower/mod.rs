@@ -224,6 +224,237 @@ impl<'a> Lowerer<'a> {
 
     // ── Public entry point ──────────────────────────────────────────────
 
+    fn qualified_item_name(module_path: &[String], name: &str) -> String {
+        if module_path.is_empty() {
+            name.to_string()
+        } else {
+            format!("{}.{}", module_path.join("."), name)
+        }
+    }
+
+    fn symbol_name(name: &str) -> String {
+        name.replace('.', "_")
+    }
+
+    fn class_has_method(&self, class_name: &str, method_name: &str) -> bool {
+        self.symbols.iter().any(|def| {
+            let crate::resolve::symbols::DefKind::Method { parent, .. } = &def.kind else {
+                return false;
+            };
+            self.symbols
+                .get(*parent)
+                .map(|parent_def| {
+                    parent_def.name == class_name
+                        && (def.name == method_name
+                            || def.name.starts_with(&format!("{}__overload", method_name)))
+                })
+                .unwrap_or(false)
+        })
+    }
+
+    fn method_signature_accepts_args(
+        &self,
+        signature: &crate::resolve::symbols::FnSignature,
+        args: &[HirExpr],
+    ) -> bool {
+        let required = signature
+            .params
+            .iter()
+            .filter(|p| p.default.is_none())
+            .count();
+        if args.len() < required || args.len() > signature.params.len() {
+            return false;
+        }
+        args.iter()
+            .zip(signature.params.iter())
+            .all(|(arg, param)| {
+                arg.ty.is_infer()
+                    || arg.ty.is_error()
+                    || arg.ty == param.ty
+                    || matches!((&arg.ty, &param.ty), (Ty::Str, Ty::String))
+            })
+    }
+
+    fn select_method_symbol_name(
+        &self,
+        class_name: &str,
+        method_name: &str,
+        args: &[HirExpr],
+    ) -> Option<String> {
+        let mut candidates = Vec::new();
+        for def in self.symbols.iter() {
+            let crate::resolve::symbols::DefKind::Method { parent, signature } = &def.kind else {
+                continue;
+            };
+            let Some(parent_def) = self.symbols.get(*parent) else {
+                continue;
+            };
+            if parent_def.name == class_name
+                && (def.name == method_name
+                    || def.name.starts_with(&format!("{}__overload", method_name)))
+            {
+                candidates.push((def.name.clone(), signature.clone()));
+            }
+        }
+        candidates
+            .iter()
+            .find(|(_, sig)| {
+                sig.params.len() == args.len() && self.method_signature_accepts_args(sig, args)
+            })
+            .or_else(|| {
+                candidates
+                    .iter()
+                    .find(|(_, sig)| self.method_signature_accepts_args(sig, args))
+            })
+            .map(|(name, _)| name.clone())
+    }
+
+    fn lower_items(
+        &mut self,
+        items: &[HirItem],
+        mir: &mut MirProgram,
+        module_path: &[String],
+    ) -> Result<(), String> {
+        for item in items {
+            self.lower_item(item, mir, module_path)?;
+        }
+        Ok(())
+    }
+
+    fn lower_item(
+        &mut self,
+        item: &HirItem,
+        mir: &mut MirProgram,
+        module_path: &[String],
+    ) -> Result<(), String> {
+        match item {
+            HirItem::Function(func) => {
+                let mut lowered = func.clone();
+                if !module_path.is_empty() {
+                    lowered.name =
+                        Self::symbol_name(&Self::qualified_item_name(module_path, &lowered.name));
+                }
+                let mir_fn = self.lower_function(&lowered)?;
+                if mir_fn.name == "main" {
+                    mir.entry = Some("main".to_string());
+                }
+                mir.functions.push(mir_fn);
+            }
+            HirItem::Class(class) => {
+                let qualified_class = Self::qualified_item_name(module_path, &class.name);
+                let class_symbol = Self::symbol_name(&qualified_class);
+                for method in &class.methods {
+                    let mangled = format!("{}_{}", class_symbol, method.name);
+                    let mir_fn = self.lower_method(&mangled, method)?;
+                    mir.functions.push(mir_fn);
+                }
+                let outer_methods: HashSet<String> =
+                    class.methods.iter().map(|m| m.name.clone()).collect();
+                for impl_block in &class.impl_blocks {
+                    self.lower_impl_block_with_outer_methods(
+                        impl_block,
+                        &qualified_class,
+                        mir,
+                        &outer_methods,
+                    )?;
+                }
+                let class_ty = Ty::Class {
+                    name: qualified_class,
+                    generic_args: vec![],
+                };
+                let class_has = |trait_name: &str| -> bool {
+                    crate::resolve::symbols::ty_has_derive_trait(
+                        &class_ty,
+                        self.symbols,
+                        trait_name,
+                    )
+                };
+                if module_path.is_empty() && class_has("Clone") {
+                    mir.functions.push(self.synthesize_class_clone(class));
+                }
+            }
+            HirItem::Struct(s) => {
+                let qualified_struct = Self::qualified_item_name(module_path, &s.name);
+                let struct_symbol = Self::symbol_name(&qualified_struct);
+                for method in &s.methods {
+                    let mangled = format!("{}_{}", struct_symbol, method.name);
+                    let mir_fn = self.lower_method(&mangled, method)?;
+                    mir.functions.push(mir_fn);
+                }
+                let struct_ty = Ty::Struct {
+                    name: qualified_struct,
+                    generic_args: vec![],
+                };
+                let has = |trait_name: &str| -> bool {
+                    crate::resolve::symbols::ty_has_derive_trait(
+                        &struct_ty,
+                        self.symbols,
+                        trait_name,
+                    )
+                };
+                if has("Debug") {
+                    let dbg_fn = self.synthesize_struct_to_debug(s);
+                    mir.functions.push(dbg_fn);
+                }
+                if has("PartialEq") {
+                    mir.functions.push(self.synthesize_struct_eq(s));
+                }
+                if has("Hashable") || has("Hash") {
+                    mir.functions.push(self.synthesize_struct_hash_code(s));
+                }
+                if has("Default") {
+                    mir.functions.push(self.synthesize_struct_default(s));
+                }
+                if has("Ord") {
+                    mir.functions.push(self.synthesize_struct_cmp(s, false));
+                }
+                if has("PartialOrd") {
+                    mir.functions.push(self.synthesize_struct_cmp(s, true));
+                }
+                if has("Clone") {
+                    mir.functions.push(self.synthesize_struct_clone(s));
+                }
+            }
+            HirItem::Enum(e) => {
+                let qualified_enum = Self::qualified_item_name(module_path, &e.name);
+                let enum_symbol = Self::symbol_name(&qualified_enum);
+                for method in &e.methods {
+                    let mangled = format!("{}_{}", enum_symbol, method.name);
+                    let mir_fn = self.lower_method(&mangled, method)?;
+                    mir.functions.push(mir_fn);
+                }
+                let enum_ty = Ty::Enum {
+                    name: qualified_enum,
+                    generic_args: vec![],
+                };
+                let has = |trait_name: &str| -> bool {
+                    crate::resolve::symbols::ty_has_derive_trait(&enum_ty, self.symbols, trait_name)
+                };
+                if has("Debug") {
+                    mir.functions.push(self.synthesize_enum_to_debug(e));
+                }
+                if has("Clone") {
+                    mir.functions.push(self.synthesize_enum_clone(e));
+                }
+            }
+            HirItem::Impl(impl_block) => {
+                let type_name = type_name_from_ty(&impl_block.target_ty);
+                self.lower_impl_block(impl_block, &type_name, mir)?;
+            }
+            HirItem::Module(m) => {
+                if module_path.is_empty() && m.name == "std" {
+                    return Ok(());
+                }
+                let mut child_path = module_path.to_vec();
+                child_path.push(m.name.clone());
+                self.lower_items(&m.items, mir, &child_path)?;
+            }
+            HirItem::Mixin(_) | HirItem::TypeAlias(_) | HirItem::Newtype(_) | HirItem::Const(_) => {
+            }
+        }
+        Ok(())
+    }
+
     pub fn lower_program(&mut self, program: &HirProgram) -> Result<MirProgram, String> {
         let mut mir = MirProgram::new();
 
@@ -276,149 +507,7 @@ impl<'a> Lowerer<'a> {
             });
         }
 
-        for item in &program.items {
-            match item {
-                HirItem::Function(func) => {
-                    let mir_fn = self.lower_function(func)?;
-                    if mir_fn.name == "main" {
-                        mir.entry = Some("main".to_string());
-                    }
-                    mir.functions.push(mir_fn);
-                }
-                HirItem::Class(class) => {
-                    for method in &class.methods {
-                        let mangled = format!("{}_{}", class.name, method.name);
-                        let mir_fn = self.lower_method(&mangled, method)?;
-                        mir.functions.push(mir_fn);
-                    }
-                    // ruby-naming.spec.md §3.4: a class's own `def` wins
-                    // over any default method an included mixin provides.
-                    // Track the names so trait-default synthesis below
-                    // skips already-defined methods.
-                    let outer_methods: HashSet<String> =
-                        class.methods.iter().map(|m| m.name.clone()).collect();
-                    for impl_block in &class.impl_blocks {
-                        self.lower_impl_block_with_outer_methods(
-                            impl_block,
-                            &class.name,
-                            &mut mir,
-                            &outer_methods,
-                        )?;
-                    }
-                    // ruby-naming.spec.md §3.6: a class never implicitly
-                    // includes `Copy`, but every other structural mixin
-                    // (Clone, Debug, Eq, …) is implicit when its field
-                    // contract is satisfied. Mirror the struct/enum
-                    // branches by routing through `ty_has_derive_trait`.
-                    let class_ty = Ty::Class {
-                        name: class.name.clone(),
-                        generic_args: vec![],
-                    };
-                    let class_has = |trait_name: &str| -> bool {
-                        crate::resolve::symbols::ty_has_derive_trait(
-                            &class_ty,
-                            self.symbols,
-                            trait_name,
-                        )
-                    };
-                    if class_has("Clone") {
-                        mir.functions.push(self.synthesize_class_clone(class));
-                    }
-                }
-                HirItem::Struct(s) => {
-                    // ruby-naming.spec.md §3.4a: lower inline methods
-                    // defined directly inside the struct body.
-                    for method in &s.methods {
-                        let mangled = format!("{}_{}", s.name, method.name);
-                        let mir_fn = self.lower_method(&mangled, method)?;
-                        mir.functions.push(mir_fn);
-                    }
-                    // ruby-naming.spec.md §3.6: structural mixins are
-                    // implicitly included when every field structurally
-                    // supports them. The synthesis gates therefore
-                    // consult `ty_has_derive_trait`, which folds the
-                    // explicit `derive_traits` list with the implicit
-                    // rule (see resolve::symbols).
-                    let struct_ty = Ty::Struct {
-                        name: s.name.clone(),
-                        generic_args: vec![],
-                    };
-                    let has = |trait_name: &str| -> bool {
-                        crate::resolve::symbols::ty_has_derive_trait(
-                            &struct_ty,
-                            self.symbols,
-                            trait_name,
-                        )
-                    };
-                    if has("Debug") {
-                        let dbg_fn = self.synthesize_struct_to_debug(s);
-                        mir.functions.push(dbg_fn);
-                    }
-                    if has("PartialEq") {
-                        mir.functions.push(self.synthesize_struct_eq(s));
-                    }
-                    if has("Hashable") || has("Hash") {
-                        mir.functions.push(self.synthesize_struct_hash_code(s));
-                    }
-                    if has("Default") {
-                        mir.functions.push(self.synthesize_struct_default(s));
-                    }
-                    if has("Ord") {
-                        mir.functions.push(self.synthesize_struct_cmp(s, false));
-                    }
-                    if has("PartialOrd") {
-                        mir.functions.push(self.synthesize_struct_cmp(s, true));
-                    }
-                    if has("Clone") {
-                        mir.functions.push(self.synthesize_struct_clone(s));
-                    }
-                }
-                HirItem::Enum(e) => {
-                    // ruby-naming.spec.md §3.4a: enums may carry inline
-                    // methods directly in their body. Lower each with
-                    // the `{EnumName}_{method}` mangling used by method
-                    // dispatch.
-                    for method in &e.methods {
-                        let mangled = format!("{}_{}", e.name, method.name);
-                        let mir_fn = self.lower_method(&mangled, method)?;
-                        mir.functions.push(mir_fn);
-                    }
-                    // ruby-naming.spec.md §3.6: structural mixins for
-                    // enums also work implicitly when every variant
-                    // field structurally supports them. Route through
-                    // ty_has_derive_trait, which folds explicit derives
-                    // with the implicit rule.
-                    let enum_ty = Ty::Enum {
-                        name: e.name.clone(),
-                        generic_args: vec![],
-                    };
-                    let has = |trait_name: &str| -> bool {
-                        crate::resolve::symbols::ty_has_derive_trait(
-                            &enum_ty,
-                            self.symbols,
-                            trait_name,
-                        )
-                    };
-                    if has("Debug") {
-                        mir.functions.push(self.synthesize_enum_to_debug(e));
-                    }
-                    if has("Clone") {
-                        mir.functions.push(self.synthesize_enum_clone(e));
-                    }
-                }
-                HirItem::Impl(impl_block) => {
-                    let type_name = type_name_from_ty(&impl_block.target_ty);
-                    self.lower_impl_block(impl_block, &type_name, &mut mir)?;
-                }
-                HirItem::Mixin(_)
-                | HirItem::TypeAlias(_)
-                | HirItem::Newtype(_)
-                | HirItem::Const(_)
-                | HirItem::Module(_) => {
-                    // These don't produce MIR functions directly.
-                }
-            }
-        }
+        self.lower_items(&program.items, &mut mir, &[])?;
 
         // Emit the primitive Display::fmt synth functions unconditionally
         // (Phase 2 #06.D2.S1). These are program-level, not per-use.

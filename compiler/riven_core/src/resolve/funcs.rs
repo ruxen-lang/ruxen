@@ -89,6 +89,40 @@ impl Resolver {
             .unwrap_or(def_id)
     }
 
+    pub(super) fn select_overload_candidate_by_args(
+        &self,
+        candidates: &[DefId],
+        args: &[HirExpr],
+    ) -> Option<DefId> {
+        candidates
+            .iter()
+            .copied()
+            .filter(|candidate| self.overload_accepts_args(*candidate, args))
+            .find(|candidate| {
+                self.symbols
+                    .get(*candidate)
+                    .and_then(|def| match &def.kind {
+                        DefKind::Function { signature } | DefKind::Method { signature, .. } => {
+                            Some(signature.params.len() == args.len())
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or(false)
+            })
+            .or_else(|| {
+                candidates
+                    .iter()
+                    .copied()
+                    .find(|candidate| self.overload_accepts_args(*candidate, args))
+            })
+            .or_else(|| {
+                candidates
+                    .iter()
+                    .copied()
+                    .find(|candidate| self.overload_accepts_arg_count(*candidate, args.len()))
+            })
+    }
+
     pub(super) fn append_default_args(&mut self, def_id: DefId, args: &mut Vec<HirExpr>) {
         let defaults: Vec<crate::parser::ast::Expr> = self
             .symbols
@@ -126,7 +160,7 @@ impl Resolver {
                 }
             });
         match existing.and_then(|id| self.symbols.get(id).map(|d| (id, d.kind.clone()))) {
-            Some((prev_id, DefKind::Function { .. }))
+            Some((prev_id, DefKind::Function { .. } | DefKind::Method { .. }))
                 if self
                     .symbols
                     .get(prev_id)
@@ -182,6 +216,40 @@ impl Resolver {
             }
         }
         final_name
+    }
+
+    fn bind_method_name(
+        &mut self,
+        source_name: &str,
+        parent: DefId,
+        def_id: DefId,
+        span: Span,
+    ) -> String {
+        let duplicate = self.symbols.iter().any(|def| {
+            if def.id == def_id {
+                return false;
+            }
+            let DefKind::Method {
+                parent: method_parent,
+                ..
+            } = &def.kind
+            else {
+                return false;
+            };
+            *method_parent == parent
+                && def.span != span
+                && (def.name == source_name
+                    || def.name.starts_with(&format!("{}__overload", source_name)))
+        });
+        if duplicate {
+            let final_name = format!("{}__overload{}", source_name, def_id);
+            if let Some(def) = self.symbols.get_mut(def_id) {
+                def.name = final_name.clone();
+            }
+            final_name
+        } else {
+            source_name.to_string()
+        }
     }
 
     pub(super) fn resolve_func_def(
@@ -369,11 +437,10 @@ impl Resolver {
             .define(f.name.clone(), def_kind, f.visibility, f.span.clone());
 
         // Register the function name in the enclosing scope (not the function scope we just popped).
-        let actual_name = if parent.is_none() {
-            self.bind_callable_name(&f.name, def_id, f.span.clone())
+        let actual_name = if let Some(parent) = parent {
+            self.bind_method_name(&f.name, parent, def_id, f.span.clone())
         } else {
-            self.scopes.insert(f.name.clone(), def_id);
-            f.name.clone()
+            self.bind_callable_name(&f.name, def_id, f.span.clone())
         };
 
         HirFuncDef {
@@ -677,6 +744,34 @@ impl Resolver {
         for item in &m.items {
             if let Some(hir_item) = self.resolve_item(item) {
                 items.push(hir_item);
+            }
+        }
+
+        let item_ids: Vec<DefId> = items
+            .iter()
+            .filter_map(|item| match item {
+                HirItem::Function(f) => Some(f.def_id),
+                HirItem::Class(c) => Some(c.def_id),
+                HirItem::Struct(s) => Some(s.def_id),
+                HirItem::Enum(e) => Some(e.def_id),
+                HirItem::Mixin(t) => Some(t.def_id),
+                HirItem::Module(m) => Some(m.def_id),
+                HirItem::TypeAlias(t) => Some(t.def_id),
+                HirItem::Newtype(n) => Some(n.def_id),
+                HirItem::Const(c) => Some(c.def_id),
+                HirItem::Impl(_) => None,
+            })
+            .collect();
+        if let Some(def) = self.symbols.get_mut(def_id) {
+            if let DefKind::Module {
+                items: module_items,
+            } = &mut def.kind
+            {
+                for item_id in item_ids {
+                    if !module_items.contains(&item_id) {
+                        module_items.push(item_id);
+                    }
+                }
             }
         }
 

@@ -338,8 +338,56 @@ impl Resolver {
                 block,
             } => {
                 let obj_hir = self.resolve_expr(object);
-                let args_hir: Vec<HirExpr> = args.iter().map(|a| self.resolve_expr(a)).collect();
+                let mut args_hir: Vec<HirExpr> =
+                    args.iter().map(|a| self.resolve_expr(a)).collect();
                 let block_hir = block.as_ref().map(|b| Box::new(self.resolve_expr(b)));
+                if block_hir.is_none() {
+                    if let HirExprKind::VarRef(module_id) = &obj_hir.kind {
+                        if let Some(module_def) = self.symbols.get(*module_id) {
+                            let module_name = module_def.name.clone();
+                            if let DefKind::Module { items } = &module_def.kind {
+                                let items = items.clone();
+                                let candidates: Vec<DefId> = items
+                                    .iter()
+                                    .copied()
+                                    .filter(|item_id| {
+                                        self.symbols
+                                            .get(*item_id)
+                                            .map(|def| {
+                                                def.name == *method
+                                                    || def.name.starts_with(&format!(
+                                                        "{}__overload",
+                                                        method
+                                                    ))
+                                            })
+                                            .unwrap_or(false)
+                                    })
+                                    .collect();
+                                if let Some(def_id) =
+                                    self.select_overload_candidate_by_args(&candidates, &args_hir)
+                                {
+                                    self.append_default_args(def_id, &mut args_hir);
+                                    let child_name = self
+                                        .symbols
+                                        .get(def_id)
+                                        .map(|d| d.name.clone())
+                                        .unwrap_or_else(|| method.clone());
+                                    let callee_name =
+                                        format!("{}_{}", module_name.replace('.', "_"), child_name);
+                                    return HirExpr {
+                                        kind: HirExprKind::FnCall {
+                                            callee: def_id,
+                                            callee_name,
+                                            args: args_hir,
+                                        },
+                                        ty: self.type_context.fresh_type_var(),
+                                        span,
+                                    };
+                                }
+                            }
+                        }
+                    }
+                }
                 let generic_args_hir = generic_args
                     .iter()
                     .map(|a| self.resolve_type_expr(a))

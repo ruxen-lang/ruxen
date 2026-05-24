@@ -206,7 +206,7 @@ impl<'a> InferenceEngine<'a> {
                         {
                             expr.ty = self.ctx.resolve(&sig.return_ty);
                         } else if let Some(ret) =
-                            self.lookup_on_type_param_bounds(&derefed, field_name, &expr.span)
+                            self.lookup_on_type_param_bounds(&derefed, field_name, &[], &expr.span)
                         {
                             expr.ty = ret;
                         } else {
@@ -222,11 +222,11 @@ impl<'a> InferenceEngine<'a> {
 
             HirExprKind::MethodCall {
                 object,
+                method,
                 method_name,
                 generic_args,
                 args,
                 block,
-                ..
             } => {
                 // ── Phase 2 stdlib (#04): HashMap.entry(K).or_insert(V) /
                 //    .or_insert_with(closure) chain.
@@ -382,11 +382,32 @@ impl<'a> InferenceEngine<'a> {
 
                 let obj_ty = self.ctx.resolve(&object.ty);
                 let (_, derefed) = auto_deref(&obj_ty, self.ctx);
+                let selected_method = match &derefed {
+                    Ty::Class { name, .. } => self
+                        .select_class_method(name, method_name, args)
+                        .inspect(|selected| {
+                            *method = *selected;
+                        }),
+                    _ => None,
+                };
+                if let Some(selected) = selected_method {
+                    self.append_method_default_args(selected, args);
+                    for arg in args.iter_mut() {
+                        self.infer_expr(arg);
+                    }
+                }
 
                 // Constructor calls on a generic class: infer the class's
                 // generic arguments from the types of the constructor args.
                 // This turns `Pair.new(42, "hi")` into `Pair[Int, String]`.
-                let ret_ty = if method_name == "new" {
+                let builtin_ret = if method_name == "new" {
+                    None
+                } else {
+                    self.builtin_method_type(&derefed, method_name, args, &expr.span)
+                };
+                let ret_ty = if let Some(ret) = builtin_ret {
+                    ret
+                } else if method_name == "new" {
                     if let Ty::Class { name, generic_args } = &derefed {
                         if generic_args.is_empty() {
                             if let Some(inferred) = self.infer_class_generics(name, args) {
@@ -402,6 +423,20 @@ impl<'a> InferenceEngine<'a> {
                         }
                     } else {
                         self.resolve_method_call(&derefed, method_name, args, &expr.span)
+                    }
+                } else if let Some(selected) = selected_method {
+                    let sig_opt = self.symbols.get(selected).and_then(|def| match &def.kind {
+                        DefKind::Method { signature, .. } => Some(signature.clone()),
+                        _ => None,
+                    });
+                    if let Some(signature) = sig_opt {
+                        for (arg, param) in args.iter().zip(&signature.params) {
+                            let _ = unify(&arg.ty, &param.ty, self.ctx, &expr.span);
+                            self.check_concurrency_bounds(&param.ty, &arg.ty, &arg.span);
+                        }
+                        self.wrap_async_return(&signature)
+                    } else {
+                        self.ctx.fresh_type_var()
                     }
                 } else {
                     // Regular method call — substitute TypeParam in the

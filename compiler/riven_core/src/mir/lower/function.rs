@@ -20,8 +20,19 @@ impl<'a> Lowerer<'a> {
         self.current_block = mir_fn.entry_block;
         self.current_fn = Some(mir_fn);
 
-        // If this method has a self_mode, add self as the first parameter.
-        if func.self_mode.is_some() {
+        let has_self_param = func.self_mode.is_some()
+            || (!func.is_class_method && self.class_name_from_mangled(name).is_some())
+            || self
+                .symbols
+                .get(func.def_id)
+                .map(|def| {
+                    matches!(def.kind, crate::resolve::symbols::DefKind::Method { .. })
+                        && !func.is_class_method
+                })
+                .unwrap_or(false);
+
+        // If this method has a self receiver, add self as the first parameter.
+        if has_self_param {
             // Derive the self type from the mangled method name (ClassName_method).
             //
             // Mangling is `format!("{ClassName}_{methodName}")`. Recovering
@@ -69,7 +80,7 @@ impl<'a> Lowerer<'a> {
         // The field_index must match the class field order, not the param
         // order, since the class may have fields that aren't auto-assigned
         // (e.g., `status` in Task is set in the init body, not via @param).
-        if func.name == "init" && func.self_mode.is_some() {
+        if func.name == "init" && has_self_param {
             // Find the self local (should be local 0 if self_mode is set)
             let self_local = self.def_to_local.values().copied().min().unwrap_or(0);
             // Recover the owning class name from the mangled method name
@@ -78,12 +89,12 @@ impl<'a> Lowerer<'a> {
             // caused auto-assigns on async state-machine classes to write
             // to slot 0/1 instead of slot 1/2, clobbering the
             // class_info_ptr header at slot 0).
-            let class_name = self.class_name_from_mangled(name).unwrap_or("");
-            let class_fields = self.get_class_field_names(class_name);
+            let class_name = self.class_name_from_mangled(name).unwrap_or_default();
+            let class_fields = self.get_class_field_names(&class_name);
             // Phase B-4: shift past class_info_ptr header for
             // runtime-dispatch classes — declared field idx 0 maps
             // to MIR slot 1, etc. Computed once per init body.
-            let shift = self.class_field_index_shift(class_name);
+            let shift = self.class_field_index_shift(&class_name);
             for param in func.params.iter() {
                 if param.auto_assign {
                     if let Some(&param_local) = self.def_to_local.get(&param.def_id) {

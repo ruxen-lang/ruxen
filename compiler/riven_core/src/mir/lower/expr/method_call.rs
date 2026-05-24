@@ -66,11 +66,11 @@ impl<'a> Lowerer<'a> {
             // ── Method call ─────────────────────────────────────────
             HirExprKind::MethodCall {
                 object,
+                method,
                 method_name,
                 generic_args: _generic_args,
                 args,
                 block,
-                ..
             } => {
                 let type_name = self
                     .receiver_type_name(object)
@@ -233,7 +233,8 @@ impl<'a> Lowerer<'a> {
                     // with dot → underscore, and let
                     // `resolve_ffi_alias_callee` rewrite to the C
                     // symbol.
-                    let is_module_nested_class = base_type.contains('.');
+                    let is_module_nested_class =
+                        base_type.contains('.') && !self.class_has_method(base_type, "init");
                     if is_module_nested_class
                         || matches!(
                             base_type,
@@ -457,7 +458,7 @@ impl<'a> Lowerer<'a> {
                     let _ = layout; // size used by Alloc internally via layout_of in codegen
                     self.emit(MirInst::Call {
                         dest: None,
-                        callee: format!("{}_init", type_name),
+                        callee: format!("{}_init", type_name.replace('.', "_")),
                         args: arg_values,
                     });
                     return Ok(Some(obj));
@@ -813,6 +814,20 @@ impl<'a> Lowerer<'a> {
                     },
                     _ => type_name.clone(),
                 };
+                let resolved_class = if *method != UNRESOLVED_DEF {
+                    self.symbols
+                        .get(*method)
+                        .and_then(|def| match &def.kind {
+                            crate::resolve::symbols::DefKind::Method { parent, .. } => self
+                                .symbols
+                                .get(*parent)
+                                .map(|parent_def| parent_def.name.clone()),
+                            _ => None,
+                        })
+                        .unwrap_or(resolved_class)
+                } else {
+                    resolved_class
+                };
                 // Phase 2 #06.5 T6: BufReader / BufWriter instance
                 // methods that need kind-suffix routing (`into_inner`
                 // returns the inner File or TcpStream — the runtime
@@ -859,10 +874,28 @@ impl<'a> Lowerer<'a> {
                 // `Outer_Inner_make`. The FFI alias map is keyed in
                 // the same shape by `register_class_lib_method`.
                 let resolved_class_cs = resolved_class.replace('.', "_");
-                let mangled = if let Some(suffix) = bufio_instance_suffix {
-                    format!("{}_{}_{}", resolved_class_cs, method_name, suffix)
+                let selected_method_name;
+                let lowered_method_name = if *method != UNRESOLVED_DEF {
+                    self.symbols
+                        .get(*method)
+                        .and_then(|def| match &def.kind {
+                            crate::resolve::symbols::DefKind::Method { .. } => {
+                                Some(def.name.as_str())
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or(method_name.as_str())
                 } else {
-                    format!("{}_{}", resolved_class_cs, method_name)
+                    selected_method_name =
+                        self.select_method_symbol_name(&resolved_class, method_name, args);
+                    selected_method_name
+                        .as_deref()
+                        .unwrap_or(method_name.as_str())
+                };
+                let mangled = if let Some(suffix) = bufio_instance_suffix {
+                    format!("{}_{}_{}", resolved_class_cs, lowered_method_name, suffix)
+                } else {
+                    format!("{}_{}", resolved_class_cs, lowered_method_name)
                 };
 
                 // `&mut String` detection: when the receiver is a local

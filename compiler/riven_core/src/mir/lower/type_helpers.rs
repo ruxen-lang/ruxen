@@ -305,21 +305,21 @@ impl<'a> Lowerer<'a> {
     /// Returns `None` for top-level functions (no underscore, or no
     /// matching type), letting callers fall back to a non-class-method
     /// shape (e.g. `Ty::Unit` self placeholder, empty shift).
-    pub(super) fn class_name_from_mangled<'b>(&self, mangled: &'b str) -> Option<&'b str> {
+    pub(super) fn class_name_from_mangled(&self, mangled: &str) -> Option<String> {
         use crate::resolve::symbols::DefKind;
         let mut end = mangled.len();
         while let Some(pos) = mangled[..end].rfind('_') {
             let candidate = &mangled[..pos];
-            if !candidate.is_empty()
-                && self.symbols.iter().any(|d| {
-                    d.name == candidate
-                        && matches!(
-                            &d.kind,
-                            DefKind::Class { .. } | DefKind::Struct { .. } | DefKind::Enum { .. }
-                        )
-                })
-            {
-                return Some(candidate);
+            if !candidate.is_empty() {
+                for def in self.symbols.iter() {
+                    if matches!(
+                        &def.kind,
+                        DefKind::Class { .. } | DefKind::Struct { .. } | DefKind::Enum { .. }
+                    ) && (def.name == candidate || def.name.replace('.', "_") == candidate)
+                    {
+                        return Some(def.name.clone());
+                    }
+                }
             }
             end = pos;
         }

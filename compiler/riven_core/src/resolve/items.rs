@@ -108,6 +108,11 @@ impl Resolver {
             .or_else(|| self.type_registry.get(&class.name))
             .copied()
             .unwrap_or(UNRESOLVED_DEF);
+        if !self.current_module_path.is_empty() {
+            if let Some(def) = self.symbols.get_mut(def_id) {
+                def.name = qualified_key.clone();
+            }
+        }
 
         let generic_params = self.resolve_generic_params(&class.generic_params);
 
