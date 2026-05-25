@@ -2,7 +2,7 @@
 
 Companion index for the Tier-4 requirements documents. Read this first.
 
-Tier 4 is about the *outside* of the compiler — the surfaces that make Riven a real ecosystem someone can depend on: a package manager that scales past `{ path = ".." }` and `{ git = "..." }`, a cross-compilation story, a WASM target, a no-std build mode, a stable C ABI for users embedding Riven in other stacks, and all the release-engineering hygiene (CI, examples, `LICENSE`, `CHANGELOG.md`, …) that turns a repo into a project.
+Tier 4 is about the *outside* of the compiler — the surfaces that make Ruxen a real ecosystem someone can depend on: a package manager that scales past `{ path = ".." }` and `{ git = "..." }`, a cross-compilation story, a WASM target, a no-std build mode, a stable C ABI for users embedding Ruxen in other stacks, and all the release-engineering hygiene (CI, examples, `LICENSE`, `CHANGELOG.md`, …) that turns a repo into a project.
 
 ## The docs
 
@@ -19,13 +19,13 @@ Tier 4 is about the *outside* of the compiler — the surfaces that make Riven a
 
 ## Current-state summary (the one-pager)
 
-- **Package manager**: `Riven.toml` exists (`crates/riven-cli/src/manifest.rs:7-21`) with `[package]`, `[dependencies]`, `[dev-dependencies]`, `[build]`, `[[bin]]`, `[profile.*]`. Registry dependencies are parsed but rejected at resolve time (`resolve_deps.rs:100-108`). **No `[workspace]`, no `[features]`, no `riven publish`, no registry, no `riven yank`.** `Riven.lock` exists with git-revision + checksum (`lock.rs:17-27`).
-- **Cross-compilation**: **zero support.** Cranelift backend hard-codes the host machine via `cranelift_native::builder()` (`crates/riven-core/src/codegen/cranelift.rs:50`). LLVM backend calls `TargetMachine::get_default_triple()` (`crates/riven-core/src/codegen/llvm/mod.rs:42`). No `--target` CLI flag anywhere (`crates/riven-cli/src/cli.rs:24-114`, `crates/rivenc/src/main.rs:40-67`). The linker is unconditionally `cc` (`crates/riven-core/src/codegen/object.rs:20,64`).
+- **Package manager**: `Ruxen.toml` exists (`crates/ruxen-cli/src/manifest.rs:7-21`) with `[package]`, `[dependencies]`, `[dev-dependencies]`, `[build]`, `[[bin]]`, `[profile.*]`. Registry dependencies are parsed but rejected at resolve time (`resolve_deps.rs:100-108`). **No `[workspace]`, no `[features]`, no `ruxen publish`, no registry, no `ruxen yank`.** `Ruxen.lock` exists with git-revision + checksum (`lock.rs:17-27`).
+- **Cross-compilation**: **zero support.** Cranelift backend hard-codes the host machine via `cranelift_native::builder()` (`crates/ruxen-core/src/codegen/cranelift.rs:50`). LLVM backend calls `TargetMachine::get_default_triple()` (`crates/ruxen-core/src/codegen/llvm/mod.rs:42`). No `--target` CLI flag anywhere (`crates/ruxen-cli/src/cli.rs:24-114`, `crates/ruxenc/src/main.rs:40-67`). The linker is unconditionally `cc` (`crates/ruxen-core/src/codegen/object.rs:20,64`).
 - **WASM target**: absent. No `wasm32` anywhere except test-name collisions. `emit_executable` always invokes `cc` with `-lc -lm` (`object.rs:64-70`) — fundamentally incompatible with `wasm32-unknown-unknown`.
-- **no_std / embedded**: absent. The runtime `runtime.c` (`crates/riven-core/runtime/runtime.c`, 426 lines) unconditionally pulls in `stdio.h`, `stdlib.h`, `string.h`, `stdint.h` and links `-lc -lm`. `riven_panic` calls `fprintf(stderr, …)` + `abort()`. No `#[panic_handler]` equivalent, no `panic = "abort"` knob, no no-alloc path.
-- **Stable ABI / cbindgen**: absent for the *Riven surface*. Riven-side `lib "..."` blocks exist (`parser/mod.rs:1570-1723`) for **importing** C; there is no generator that emits a `.h` header from Riven's public items. `layout c` is parsed but conflated with implicit-include structural mixins (see tier-1 B2).
+- **no_std / embedded**: absent. The runtime `runtime.c` (`crates/ruxen-core/runtime/runtime.c`, 426 lines) unconditionally pulls in `stdio.h`, `stdlib.h`, `string.h`, `stdint.h` and links `-lc -lm`. `ruxen_panic` calls `fprintf(stderr, …)` + `abort()`. No `#[panic_handler]` equivalent, no `panic = "abort"` knob, no no-alloc path.
+- **Stable ABI / cbindgen**: absent for the *Ruxen surface*. Ruxen-side `lib "..."` blocks exist (`parser/mod.rs:1570-1723`) for **importing** C; there is no generator that emits a `.h` header from Ruxen's public items. `layout c` is parsed but conflated with implicit-include structural mixins (see tier-1 B2).
 - **CI**: only a release workflow (`/.github/workflows/release.yml`, 144 lines) that fires on `v*` tags. **No `ci.yml`.** No lint job, no coverage, no fuzzing, no MSRV enforcement. The workspace `Cargo.toml` is 4 lines with no `rust-version` field (`Cargo.toml:1-4`). Every crate is `edition = "2021"`.
-- **`examples/`**: **the directory does not exist.** `crates/riven-core/tests/fixtures/` has 13 small `.rvn` test fixtures but nothing larger than ~50 lines, and none are runnable as projects with `riven run`.
+- **`examples/`**: **the directory does not exist.** `crates/ruxen-core/tests/fixtures/` has 13 small `.rx` test fixtures but nothing larger than ~50 lines, and none are runnable as projects with `ruxen run`.
 - **Repo hygiene**: `README.md` exists. **`LICENSE` is missing** (the release workflow does `cp LICENSE* … 2>/dev/null || true` — so it silently ships with no license). `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `CHANGELOG.md`, `SECURITY.md` all missing. README.md line 294-296: `## License\n\nTBD`.
 
 ## Cross-doc dependency graph
@@ -96,16 +96,16 @@ Key dependencies:
 
 **Phase 4-2 — package manager, iteration 1: workspaces + features (2-3 weeks).** Doc 01 phase 1a-1b.
 
-1. `[workspace]` parsing, path-dep discovery rooted at the workspace root, shared `Riven.lock`.
+1. `[workspace]` parsing, path-dep discovery rooted at the workspace root, shared `Ruxen.lock`.
 2. `[features]` table: optional-dep activation, feature unification, `--features`/`--no-default-features` flags.
-3. `riven check --workspace` / `riven build -p <crate>`.
+3. `ruxen check --workspace` / `ruxen build -p <crate>`.
 
 **Phase 4-3 — cross-compilation (2-3 weeks).** Doc 02.
 
-1. Add `--target <triple>` to `riven build/run/check` and `rivenc`. Parse via `target-lexicon` (already a dependency).
+1. Add `--target <triple>` to `ruxen build/run/check` and `ruxenc`. Parse via `target-lexicon` (already a dependency).
 2. Thread the triple into Cranelift via `cranelift_codegen::isa::lookup_by_name` and into LLVM via `TargetMachine::new` — replacing the host-only paths.
-3. Pick the right linker: `cc` for unix targets, `lld` for wasm32, configurable via `[target.<triple>] linker = "…"` in `Riven.toml`.
-4. Sysroot layout: `~/.riven/lib/runtime/<triple>/runtime.o` — precompiled `runtime.c` per target, fetched on demand by a new `riven target add <triple>` subcommand (Rustup analogue).
+3. Pick the right linker: `cc` for unix targets, `lld` for wasm32, configurable via `[target.<triple>] linker = "…"` in `Ruxen.toml`.
+4. Sysroot layout: `~/.ruxen/lib/runtime/<triple>/runtime.o` — precompiled `runtime.c` per target, fetched on demand by a new `ruxen target add <triple>` subcommand (Rustup analogue).
 
 **Phase 4-4 — no_std / embedded (2-3 weeks).** Doc 04.
 
@@ -132,17 +132,17 @@ Run in parallel with 4-1 onward. Minimum set:
 
 **Phase 4-7 — package manager, iteration 2: registry + publish (4-6 weeks).** Doc 01 phase 1c-1d.
 
-1. `riven publish` uploads a tarball + manifest + checksum to the registry.
+1. `ruxen publish` uploads a tarball + manifest + checksum to the registry.
 2. Index format: git-backed sparse index (crates.io `sparse+` protocol; simplest thing that works at scale).
 3. Registry server: an initial self-hosted instance running a small Rust service backed by S3-compatible object storage + Postgres. Defer open-source-ing the server until the protocol stabilizes.
-4. `riven yank <piece> <version>` marks a version unresolvable by new `riven update`s but installable if pinned in a lock file (Cargo semantics).
-5. `riven audit` checksums every downloaded tarball against the index.
+4. `ruxen yank <piece> <version>` marks a version unresolvable by new `ruxen update`s but installable if pinned in a lock file (Cargo semantics).
+5. `ruxen audit` checksums every downloaded tarball against the index.
 
 **Phase 4-8 — stable ABI / cbindgen (2-3 weeks, independent).** Doc 05.
 
-1. `rivenc --emit=c-header` walks the HIR, finds public C-ABI items, emits a `.h` file.
+1. `ruxenc --emit=c-header` walks the HIR, finds public C-ABI items, emits a `.h` file.
 2. Stability rules: only `layout c` structs, only C-ABI functions, no generics, no `Option`/`Result` (emit as `*T` / `int` with a sibling error-struct).
-3. Version-bake the header: `riven_abi_version()` compiles in the compiler version at emission time, so consumers can `riven_abi_version() != EXPECTED` at runtime.
+3. Version-bake the header: `ruxen_abi_version()` compiles in the compiler version at emission time, so consumers can `ruxen_abi_version() != EXPECTED` at runtime.
 
 ## Total estimate
 
@@ -167,14 +167,14 @@ These surfaced across the docs and need a single ruling before implementation be
 1. **Registry choice.** Three options:
    - **a) Host our own.** Full control. Real infrastructure cost (hosting, monitoring, abuse response, CDN). Time-to-launch: months.
    - **b) Piggyback on crates.io.** Culturally wrong — different language, different runtime, different ecosystem. crates.io will reject a new language's packages and should.
-   - **c) Go-style: git-URL based, no central registry.** `riven add foo --git https://github.com/…` is all there is. Simplest path. Already works in the current code (doc 01 §2). Discoverability is worse, but v1 doesn't need discoverability.
+   - **c) Go-style: git-URL based, no central registry.** `ruxen add foo --git https://github.com/…` is all there is. Simplest path. Already works in the current code (doc 01 §2). Discoverability is worse, but v1 doesn't need discoverability.
    - **Recommend**: ship **(c) only** for v1. Leave the manifest registry fields wired so that a future (a) can land without a manifest break. This defers the largest chunk of the tier-4 budget and is the same call Go made at 1.0.
 2. **License.** **Recommend: dual-license MIT OR Apache-2.0**, matching Rust, Cargo, tokio, and 80% of the Rust-adjacent ecosystem. This is the most-compatible license combination for downstream users (MIT for permissive linking, Apache-2.0 for explicit patent grant). See doc 08.
 3. **MSRV policy.** **Recommend: pin `rust-version = "1.78"` at the workspace root.** 1.78 released May 2024, is currently stable everywhere, and matches what `cranelift-codegen 0.130` already requires. Bump on a 6-month cadence. Enforce in CI with `dtolnay/rust-toolchain@1.78`.
 4. **Fuzzing.** **Recommend: `cargo-fuzz` with `libfuzzer-sys`.** Lexer + parser are prime targets (they accept arbitrary bytes). Borrow-check and type-check are secondary (they need a valid AST, so harness complexity is higher). Run 60s/target on every PR, 1h/target on nightly cron. See doc 06 §5.
 5. **CI provider.** **Recommend: GitHub Actions** — the release workflow already uses it, runners are free for public repos, matrix support is fine. Don't split across providers.
 6. **Examples: in-tree or separate repo?** **Recommend: in-tree `examples/`** at the repo root. Rust is in-tree, Go is in-tree, Python is in-tree. The "separate repo" pattern (Node.js) harms discoverability. See doc 07.
-7. **WASM: which toolchain?** `wasm-ld` (bundled with LLVM) or `lld` (bundled with Rust)? **Recommend: `lld`**, which is bundled with `rustup`'s default Rust install and already ships with every dev machine that builds Riven from source. Fall back to `wasm-ld` if `lld` is absent.
+7. **WASM: which toolchain?** `wasm-ld` (bundled with LLVM) or `lld` (bundled with Rust)? **Recommend: `lld`**, which is bundled with `rustup`'s default Rust install and already ships with every dev machine that builds Ruxen from source. Fall back to `wasm-ld` if `lld` is absent.
 8. **no_std: ship a `core` crate or just a feature flag?** **Recommend: feature flag in v1, crate split in v2.** Tier-1 stdlib doc (§6.3) already recommends this. The `core` *subdirectory* under `std.core.*` is a mechanical `mv` once stable.
 9. **Panic strategy default.** `abort` or `unwind`? **Recommend: `abort`** in v1. Unwinding requires landing-pad emission (MIR lowering change), per-function DWARF CFI, and an unwinder (libunwind / LLVM builtins). All deferred to v2.
 

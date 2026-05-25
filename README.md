@@ -1,8 +1,8 @@
-# Riven
+# Ruxen
 
 A compiled, statically-typed programming language that fuses Ruby's expressiveness with Rust's ownership-based memory safety. No garbage collector. Native binaries. Compile-time safety guarantees.
 
-```riven
+```ruxen
 class Greeter
   name: String
 
@@ -18,9 +18,9 @@ let greeter = Greeter.new("World")
 puts greeter.greet
 ```
 
-## Why Riven?
+## Why Ruxen?
 
-Riven targets developers coming from Ruby, Python, and JavaScript who want predictable performance and compile-time safety without sacrificing the joy of writing code.
+Ruxen targets developers coming from Ruby, Python, and JavaScript who want predictable performance and compile-time safety without sacrificing the joy of writing code.
 
 - **Reads like Ruby** — classes, blocks, `do...end`, string interpolation, implicit returns
 - **Compiles like Rust** — ownership, borrowing, no GC, deterministic destruction
@@ -42,41 +42,41 @@ Riven targets developers coming from Ruby, Python, and JavaScript who want predi
 ### Install (Linux / macOS)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sherazp995/riven/master/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ruxen-lang/ruxen/master/install.sh | bash
 ```
 
 The installer downloads the latest prebuilt release, installs the toolchain
-into `~/.riven`, and adds `~/.riven/bin` to your `PATH` via your shell rc
+into `~/.ruxen`, and adds `~/.ruxen/bin` to your `PATH` via your shell rc
 file. To pick up the new `PATH` in the current shell:
 
 ```bash
-source "$HOME/.riven/env"
+source "$HOME/.ruxen/env"
 ```
 
 Verify it worked:
 
 ```bash
-riven --version
-rivenc --version
+ruxen --version
+ruxenc --version
 ```
 
 Other install options:
 
 ```bash
 # Pin a specific version
-curl -fsSL https://raw.githubusercontent.com/sherazp995/riven/master/install.sh | bash -s -- --version v0.1.0
+curl -fsSL https://raw.githubusercontent.com/ruxen-lang/ruxen/master/install.sh | bash -s -- --version v0.1.0
 
 # Install without modifying shell rc files
-curl -fsSL https://raw.githubusercontent.com/sherazp995/riven/master/install.sh | bash -s -- --no-modify-path
+curl -fsSL https://raw.githubusercontent.com/ruxen-lang/ruxen/master/install.sh | bash -s -- --no-modify-path
 
 # Custom install root
-RIVEN_HOME=/opt/riven curl -fsSL https://raw.githubusercontent.com/sherazp995/riven/master/install.sh | bash
+RUXEN_HOME=/opt/ruxen curl -fsSL https://raw.githubusercontent.com/ruxen-lang/ruxen/master/install.sh | bash
 ```
 
 Uninstall:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sherazp995/riven/master/uninstall.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ruxen-lang/ruxen/master/uninstall.sh | bash
 ```
 
 ### Build from source
@@ -84,10 +84,10 @@ curl -fsSL https://raw.githubusercontent.com/sherazp995/riven/master/uninstall.s
 If you want to build from source instead:
 
 ```bash
-git clone https://github.com/sherazp995/riven.git
-cd riven
+git clone https://github.com/ruxen-lang/ruxen.git
+cd ruxen
 cargo build --release
-# Binaries land in target/release/ (riven, rivenc, riven-lsp, riven-repl)
+# Binaries land in target/release/ (ruxen, ruxenc, ruxen-lsp, ruxen-repl)
 ```
 
 ## Quick Start
@@ -95,10 +95,10 @@ cargo build --release
 ### Create a Project
 
 ```bash
-riven new my_app
+ruxen new my_app
 cd my_app
-riven build
-riven run
+ruxen build
+ruxen run
 ```
 
 ### Examples
@@ -110,40 +110,40 @@ The first in-tree example is [`examples/01-cli-utility/`](examples/01-cli-utilit
 ### Compile a Single File
 
 ```bash
-echo 'puts "Hello, Riven!"' > hello.rvn
-rivenc hello.rvn
+echo 'puts "Hello, Ruxen!"' > hello.rx
+ruxenc hello.rx
 ./hello
 
 # Inspect compiler stages
-rivenc --emit=tokens hello.rvn
-rivenc --emit=ast hello.rvn
-rivenc --emit=hir hello.rvn
-rivenc --emit=mir hello.rvn
+ruxenc --emit=tokens hello.rx
+ruxenc --emit=ast hello.rx
+ruxenc --emit=hir hello.rx
+ruxenc --emit=mir hello.rx
 
 # Release build (LLVM backend, requires LLVM 18)
-rivenc --release hello.rvn
+ruxenc --release hello.rx
 ```
 
 ### REPL
 
 ```bash
-riven-repl
+ruxen-repl
 ```
 
 ### Format Code
 
 ```bash
-rivenc fmt .                # format all .rvn files
-rivenc fmt --check .        # check without modifying
-rivenc fmt --diff file.rvn  # show unified diff
+ruxenc fmt .                # format all .rx files
+ruxenc fmt --check .        # check without modifying
+ruxenc fmt --diff file.rx  # show unified diff
 ```
 
 ## Language at a Glance
 
 ### Variables and Ownership
 
-```riven
-let name = "Riven"               # immutable
+```ruxen
+let name = "Ruxen"               # immutable
 var counter = 0                  # mutable
 counter += 1
 
@@ -154,7 +154,7 @@ let b = a                        # move — `a` is now invalid
 
 ### Functions
 
-```riven
+```ruxen
 # Types inferred where possible
 def double(x)
   x * 2
@@ -168,7 +168,7 @@ end
 
 ### Classes and Mixins
 
-```riven
+```ruxen
 class Animal
   name: String
   def init(@name: String) end
@@ -186,7 +186,7 @@ end
 
 ### Pattern Matching
 
-```riven
+```ruxen
 match status
   Status.Pending            -> handle_pending()
   Status.InProgress(who)    -> puts "Assigned: #{who}"
@@ -197,7 +197,7 @@ end
 
 ### Error Handling
 
-```riven
+```ruxen
 # No exceptions. Result[T, E] and Option[T] only.
 def load_config(path: &str) -> Result[Config, AppError]
   let text = fs.read_to_string(path)?  # ? propagates errors
@@ -211,7 +211,7 @@ let user = find_user(42).unwrap!        # panics on nil
 
 ### Closures
 
-```riven
+```ruxen
 let nums = [1, 2, 3, 4, 5]
 let evens = nums.filter { |n| n % 2 == 0 }
 
@@ -227,12 +227,12 @@ let result = add.(3, 4)
 
 | Binary | Purpose |
 |--------|---------|
-| `riven` | Package manager and build tool (`new`, `build`, `run`, `check`, `add`, `remove`, `clean`) |
-| `rivenc` | Standalone compiler and formatter |
-| `riven-lsp` | Language Server Protocol server for editor integration |
-| `riven-repl` | Interactive REPL (Cranelift JIT) |
+| `ruxen` | Package manager and build tool (`new`, `build`, `run`, `check`, `add`, `remove`, `clean`) |
+| `ruxenc` | Standalone compiler and formatter |
+| `ruxen-lsp` | Language Server Protocol server for editor integration |
+| `ruxen-repl` | Interactive REPL (Cranelift JIT) |
 
-After installation all four binaries live in `~/.riven/bin/`.
+After installation all four binaries live in `~/.ruxen/bin/`.
 
 ### Editor Support
 
@@ -243,7 +243,7 @@ A **VSCode extension** is included at `editors/vscode/` providing syntax highlig
 The compiler follows a six-phase pipeline:
 
 ```
-Source (.rvn)
+Source (.rx)
   → Lexer         → tokens
   → Parser        → AST (untyped)
   → Resolver      → symbol table + type registry
@@ -261,11 +261,11 @@ Two codegen backends:
 
 | Crate | Role |
 |-------|------|
-| `riven-core` | Compiler core — lexer, parser, type system, borrow checker, MIR, codegen, formatter |
-| `rivenc` | Standalone compiler binary |
-| `riven-cli` | Package manager and build tool |
-| `riven-ide` | Error-resilient semantic analysis for editors |
-| `riven-lsp` | LSP server (tower-lsp) |
+| `ruxen-core` | Compiler core — lexer, parser, type system, borrow checker, MIR, codegen, formatter |
+| `ruxenc` | Standalone compiler binary |
+| `ruxen-cli` | Package manager and build tool |
+| `ruxen-ide` | Error-resilient semantic analysis for editors |
+| `ruxen-lsp` | LSP server (tower-lsp) |
 
 ## Implementation Status
 
@@ -287,7 +287,7 @@ Two codegen backends:
 
 ## Documentation
 
-- [Tutorial](docs/tutorial/) — learn Riven step by step
+- [Tutorial](docs/tutorial/) — learn Ruxen step by step
   - [Getting Started](docs/tutorial/01-getting-started.md)
   - [Variables and Types](docs/tutorial/02-variables-and-types.md)
   - [Functions](docs/tutorial/03-functions.md)
@@ -299,7 +299,7 @@ Two codegen backends:
 
 ## License
 
-Riven is dual-licensed under either of:
+Ruxen is dual-licensed under either of:
 
 - [Apache License, Version 2.0](LICENSE-APACHE)
 - [MIT License](LICENSE-MIT)
@@ -307,5 +307,5 @@ Riven is dual-licensed under either of:
 at your option. This is the same licensing scheme used by the Rust project.
 
 Unless you explicitly state otherwise, any contribution intentionally submitted
-for inclusion in Riven by you, as defined in the Apache-2.0 license, shall be
+for inclusion in Ruxen by you, as defined in the Apache-2.0 license, shall be
 dual-licensed as above, without any additional terms or conditions.

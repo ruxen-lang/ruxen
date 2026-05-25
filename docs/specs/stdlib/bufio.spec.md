@@ -12,7 +12,7 @@ trait work.
 
 ## Surface
 
-```riven
+```ruxen
 class BufReader[R]
   def self.new(inner: R) -> BufReader[R]
   def self.with_capacity(cap: Int, inner: R) -> BufReader[R]   # 8 KiB default
@@ -67,13 +67,13 @@ end
 
 Both classes participate in the user_drop_classes pipeline (see
 `mir/lower/collect.rs::collect_user_drop_classes`). Scope exit emits
-`<Type>_drop(p) + riven_dealloc(p)`:
+`<Type>_drop(p) + ruxen_dealloc(p)`:
 
-- `riven_bufreader_drop` frees the 8 KiB byte buffer only. The inner
+- `ruxen_bufreader_drop` frees the 8 KiB byte buffer only. The inner
   `File` / `TcpStream` has its OWN drop helper that runs in the same
   scope-exit pass — bufio's drop intentionally does NOT close the
   inner.
-- `riven_bufwriter_drop` does a best-effort flush of pending bytes,
+- `ruxen_bufwriter_drop` does a best-effort flush of pending bytes,
   then frees the byte buffer. Flush errors are swallowed (drop has
   nowhere to surface them). **The drop-time flush is a safety net,
   not a guarantee**: depending on scope-exit drop ordering, the inner
@@ -93,10 +93,10 @@ Both classes participate in the user_drop_classes pipeline (see
 +8   uint32 pos      reader: next byte to return; writer: unused
 +12  uint32 filled   reader: bytes valid in buf; writer: bytes pending
 +16  uint8* buf      malloc(cap)
-+24  void*  inner    borrowed RivenFile* / RivenTcpStream*; not owned
++24  void*  inner    borrowed RuxenFile* / RuxenTcpStream*; not owned
 ```
 
-Wire layout pinned by `_Static_assert(sizeof(RivenBufReader) == 32, …)`
+Wire layout pinned by `_Static_assert(sizeof(RuxenBufReader) == 32, …)`
 in `library/runtime/io/bufio.c`. If the assertion drifts the runtime
 won't link — that's the design-level pin for this spine.
 
@@ -107,16 +107,16 @@ lowering from the inner argument's type:
 
 | Mangled name                          | Runtime symbol                            |
 |---------------------------------------|-------------------------------------------|
-| `BufReader_new_file`                  | `riven_bufreader_new_file`                |
-| `BufReader_new_tcp`                   | `riven_bufreader_new_tcp`                 |
-| `BufReader_with_capacity_file`        | `riven_bufreader_with_capacity_file`      |
-| `BufReader_with_capacity_tcp`         | `riven_bufreader_with_capacity_tcp`       |
-| `BufReader_read_line`                 | `riven_bufreader_read_line`               |
-| `BufReader_read`                      | `riven_bufreader_read`                    |
-| `BufReader_into_inner_file`           | `riven_bufreader_into_inner_file`         |
-| `BufReader_into_inner_tcp`            | `riven_bufreader_into_inner_tcp`          |
-| `BufReader_drop`                      | `riven_bufreader_drop`                    |
-| (and the parallel `BufWriter_*` set)  | (and `riven_bufwriter_*`)                 |
+| `BufReader_new_file`                  | `ruxen_bufreader_new_file`                |
+| `BufReader_new_tcp`                   | `ruxen_bufreader_new_tcp`                 |
+| `BufReader_with_capacity_file`        | `ruxen_bufreader_with_capacity_file`      |
+| `BufReader_with_capacity_tcp`         | `ruxen_bufreader_with_capacity_tcp`       |
+| `BufReader_read_line`                 | `ruxen_bufreader_read_line`               |
+| `BufReader_read`                      | `ruxen_bufreader_read`                    |
+| `BufReader_into_inner_file`           | `ruxen_bufreader_into_inner_file`         |
+| `BufReader_into_inner_tcp`            | `ruxen_bufreader_into_inner_tcp`          |
+| `BufReader_drop`                      | `ruxen_bufreader_drop`                    |
+| (and the parallel `BufWriter_*` set)  | (and `ruxen_bufwriter_*`)                 |
 
 The instance method `into_inner` is suffix-picked from the receiver's
 `generic_args[0]` in `mir/lower/expr/method_call.rs`. Other instance

@@ -2,28 +2,28 @@
 
 ## Code Formatting
 
-Riven ships with a built-in formatter. Zero configuration — one canonical style.
+Ruxen ships with a built-in formatter. Zero configuration — one canonical style.
 
 ```bash
 # Format files
-rivenc fmt file.rvn
-rivenc fmt src/
+ruxenc fmt file.rx
+ruxenc fmt src/
 
 # Check without modifying
-rivenc fmt --check .
+ruxenc fmt --check .
 
 # Show diff
-rivenc fmt --diff file.rvn
+ruxenc fmt --diff file.rx
 
 # Read from stdin
-echo 'let x=1+2' | rivenc fmt --stdin
+echo 'let x=1+2' | ruxenc fmt --stdin
 ```
 
 ### Disabling Formatting
 
 Use `fmt: off` / `fmt: on` comments to preserve manual formatting:
 
-```riven
+```ruxen
 # fmt: off
 let matrix = [
   [1, 0, 0],
@@ -37,7 +37,7 @@ let matrix = [
 
 ### Line Comments
 
-```riven
+```ruxen
 # This is a line comment
 let x = 42  # inline comment
 ```
@@ -46,7 +46,7 @@ let x = 42  # inline comment
 
 Block comments can be nested:
 
-```riven
+```ruxen
 #= This is a block comment
    spanning multiple lines
    #= nested block comments work =#
@@ -57,7 +57,7 @@ Block comments can be nested:
 
 Attach to the following item. Support Markdown formatting:
 
-```riven
+```ruxen
 ## Finds a user by their ID.
 ##
 ## Returns `nil` if no user with the given ID exists.
@@ -83,7 +83,7 @@ end
 - **No significant whitespace** — blocks use `do...end` or `{ }`
 - Lines ending with an operator, comma, or opening delimiter continue on the next line
 
-```riven
+```ruxen
 # Implicit continuation
 let result = long_function_name(
   argument_one,

@@ -2,7 +2,7 @@
 
 ## 1. Summary & Motivation
 
-Every Riven program today links against a C runtime (`crates/riven-core/runtime/runtime.c`, 426 lines) that pulls in libc (`stdio.h`, `stdlib.h`, `string.h`) and assumes a hosted environment. The final binary always links `-lc -lm` (`crates/riven-core/src/codegen/object.rs:64-70`). There is no way to turn this off. That eliminates Riven from:
+Every Ruxen program today links against a C runtime (`crates/ruxen-core/runtime/runtime.c`, 426 lines) that pulls in libc (`stdio.h`, `stdlib.h`, `string.h`) and assumes a hosted environment. The final binary always links `-lc -lm` (`crates/ruxen-core/src/codegen/object.rs:64-70`). There is no way to turn this off. That eliminates Ruxen from:
 
 - **Bare-metal embedded.** Cortex-M / RISC-V microcontrollers have no libc and 16KB of RAM. You bring your own panic handler, your own allocator (if any), and your own linker script.
 - **Kernel development.** No dynamic allocation, no I/O beyond what you expose through MMIO.
@@ -15,7 +15,7 @@ This is also prerequisite work for tier 4.03 WASM `wasm32-unknown-unknown`. Doc 
 
 ## 2. Current State
 
-### 2.1 Runtime (`crates/riven-core/runtime/runtime.c`)
+### 2.1 Runtime (`crates/ruxen-core/runtime/runtime.c`)
 
 All 426 lines assume a hosted C environment. Every function either:
 
@@ -26,7 +26,7 @@ All 426 lines assume a hosted C environment. Every function either:
 Panic (line 423-426):
 
 ```c
-void riven_panic(const char *msg) {
+void ruxen_panic(const char *msg) {
     fprintf(stderr, "panic: %s\n", msg);
     abort();
 }
@@ -35,12 +35,12 @@ void riven_panic(const char *msg) {
 Allocation (line 144-163):
 
 ```c
-void *riven_alloc(size_t size) { return malloc(size); }
-void riven_dealloc(void *p) { free(p); }
-void *riven_realloc(void *p, size_t sz) { return realloc(p, sz); }
+void *ruxen_alloc(size_t size) { return malloc(size); }
+void ruxen_dealloc(void *p) { free(p); }
+void *ruxen_realloc(void *p, size_t sz) { return realloc(p, sz); }
 ```
 
-### 2.2 Link line (`crates/riven-core/src/codegen/object.rs:64-70`)
+### 2.2 Link line (`crates/ruxen-core/src/codegen/object.rs:64-70`)
 
 ```rust
 let mut cmd = Command::new("cc");
@@ -82,7 +82,7 @@ Tier-1 B6 reserves `async`/`await`/`spawn`/`actor`/`send`/`receive` keywords tha
 5. `panic = "abort" | "unwind"` in `[profile.*]`, defaulting to `abort`. **v1 implements `abort` only.**
 6. A split runtime: `runtime_core.c` (no libc, no malloc, no I/O) linked in *every* build, plus `runtime_std.c` (the current `runtime.c` minus core bits) linked only when `no-std = false`.
 7. A `core` module set under `std.core.*` (re-exported from `std`) that works in no_std builds. Anything `std`-prefixed that touches libc or malloc becomes unavailable.
-8. Body-level `no_mangle` directive to export a Riven function with its source name (no mangling).
+8. Body-level `no_mangle` directive to export a Ruxen function with its source name (no mangling).
 9. Linker-line control: `-nostdlib` added when `no-std = true`; `-lc -lm` removed.
 10. Compatibility with tier 4.03: `wasm32-unknown-unknown` with `no-std = true` works without `runtime_wasm.c`'s bundled `dlmalloc` — users ship their own.
 
@@ -117,9 +117,9 @@ link-args = ["-T", "memory.ld", "-T", "link.ld", "--gc-sections"]
 
 ### 4.2 Source directives
 
-**Package-level** (top of `src/lib.rvn` or `src/main.rvn`):
+**Package-level** (top of `src/lib.rx` or `src/main.rx`):
 
-```riven
+```ruxen
 no_std                                                      # alternative to [package] no-std = true
 
 use core.Option
@@ -129,7 +129,7 @@ use core.panic.PanicInfo
 
 **Panic handler** (required in no_std binaries):
 
-```riven
+```ruxen
 def my_panic(info: &PanicInfo) -> !
   panic_handler
   # ... do whatever makes sense for the target ...
@@ -139,7 +139,7 @@ end
 
 **Global allocator** (required for no_std if `Array`/`String`/`Map`/`Set` are used):
 
-```riven
+```ruxen
 class MyAllocator
   def alloc(size: USize, align: USize) -> *var UInt8
     # ... MMIO or user-provided allocator ...
@@ -155,7 +155,7 @@ global_allocator :ALLOCATOR
 
 **No-mangle** (for exporting a C-callable function):
 
-```riven
+```ruxen
 def app_main
   no_mangle
   # ... called from assembly or a crt0 you wrote ...
@@ -190,17 +190,17 @@ Following Rust, there's a middle layer: `alloc` — items that need an allocator
 
 To pull these in, a no_std crate does:
 
-```riven
+```ruxen
 no_std
 use core.alloc.Array
 use core.alloc.Box
 ```
 
-If no `global_allocator` directive is provided and the user tries to use `Array`, the linker emits an unresolved-symbol error naming `__riven_global_allocator`. Sharp but clear.
+If no `global_allocator` directive is provided and the user tries to use `Array`, the linker emits an unresolved-symbol error naming `__ruxen_global_allocator`. Sharp but clear.
 
 ### 4.5 `PanicInfo`
 
-```riven
+```ruxen
 struct PanicInfo
   # Minimal. No downcasting; message is an owned slice.
   message: &static str
@@ -217,7 +217,7 @@ Passed into a `panic_handler`-marked function by value-of-reference. The compile
 
 ### 4.6 Allocator mixin
 
-```riven
+```ruxen
 mixin Allocator
   def alloc(layout: Layout) -> Result[*var UInt8, AllocError]
   def dealloc(ptr: *var UInt8, layout: Layout)
@@ -240,7 +240,7 @@ struct AllocError
 end
 ```
 
-The `global_allocator` directive binds a `static`-lifetime value that includes `Allocator`; `Array`, `String`, etc. route their allocations through it by dispatching on a compiler-internal `__riven_global_allocator` symbol.
+The `global_allocator` directive binds a `static`-lifetime value that includes `Allocator`; `Array`, `String`, etc. route their allocations through it by dispatching on a compiler-internal `__ruxen_global_allocator` symbol.
 
 ### 4.7 Linker line
 
@@ -267,7 +267,7 @@ runtime.c (426 lines)
 ├── To-string (59-92)        [requires libc]
 ├── String ops (98-216)      [partly libc: strlen/memcpy; partly pure]
 ├── Memory (144-163)         [requires libc]
-├── Vec (221-322)            [uses riven_alloc → malloc]
+├── Vec (221-322)            [uses ruxen_alloc → malloc]
 ├── &str (326-372)           [uses libc via strlen]
 ├── Option/Result (377-405)  [pure — no libc]
 ├── Fallbacks (410-419)      [pure]
@@ -279,14 +279,14 @@ Split into:
 **`runtime_core.c`** (always linked):
 
 - Option/Result inspection helpers (line 377-405).
-- `riven_noop_*` fallbacks (line 410-419) — to be removed with tier-1 B4.
-- `riven_panic` → exposes a weak symbol that the user's `panic_handler`-marked function overrides. Default weak extension for hosted builds calls `fprintf(stderr, …) + abort()` from `runtime_std.c`.
+- `ruxen_noop_*` fallbacks (line 410-419) — to be removed with tier-1 B4.
+- `ruxen_panic` → exposes a weak symbol that the user's `panic_handler`-marked function overrides. Default weak extension for hosted builds calls `fprintf(stderr, …) + abort()` from `runtime_std.c`.
 
 **`runtime_alloc.c`** (linked when an allocator is available):
 
-- `riven_alloc`, `riven_dealloc`, `riven_realloc` — thin wrappers over a `__riven_global_allocator` vtable.
-- `Array` primitives (221-322) — built atop `riven_alloc`.
-- `String` primitives (98-216) — built atop `riven_alloc`.
+- `ruxen_alloc`, `ruxen_dealloc`, `ruxen_realloc` — thin wrappers over a `__ruxen_global_allocator` vtable.
+- `Array` primitives (221-322) — built atop `ruxen_alloc`.
+- `String` primitives (98-216) — built atop `ruxen_alloc`.
 
 **`runtime_std.c`** (linked when `no-std = false`):
 
@@ -312,7 +312,7 @@ Resolver: validates exactly one panic_handler directive in the crate; stores Def
 Typeck:  validates signature (&PanicInfo) -> Never
          │
          ▼
-MIR:     adds a MirFunction alias: symbol "riven_panic" → user's function (strong)
+MIR:     adds a MirFunction alias: symbol "ruxen_panic" → user's function (strong)
          │
          ▼
 Codegen: emits the user function with LLVM/Cranelift external linkage + attributes
@@ -329,7 +329,7 @@ A hosted binary gets a synthesized `main` (already the case). A no_std binary ge
 
 For embedded ARM, users typically write:
 
-```riven
+```ruxen
 let VECTORS: Array[USize] = array![ ..., main as USize, ... ]
 no_mangle :VECTORS
 link_section :VECTORS, ".vector_table"
@@ -343,7 +343,7 @@ Tier-1 B1 fix is non-negotiable for no_std. Without real Drop, any program that 
 
 After B1 lands:
 
-- `Array.drop` calls `riven_alloc.dealloc(ptr, layout)`.
+- `Array.drop` calls `ruxen_alloc.dealloc(ptr, layout)`.
 - `String.drop` likewise.
 - User-defined classes that include `Drop` likewise.
 
@@ -362,30 +362,30 @@ The resolver walks directives in a second pass:
 Stdlib source files are partitioned:
 
 ```
-share/riven/std/
+share/ruxen/std/
 ├── core/
-│   ├── prelude.rvn
-│   ├── option.rvn
-│   ├── result.rvn
-│   ├── mem.rvn
-│   ├── ptr.rvn
-│   ├── slice.rvn
+│   ├── prelude.rx
+│   ├── option.rx
+│   ├── result.rx
+│   ├── mem.rx
+│   ├── ptr.rx
+│   ├── slice.rx
 │   └── alloc/
-│       ├── mod.rvn
-│       ├── array.rvn
-│       ├── string.rvn
-│       └── box.rvn
+│       ├── mod.rx
+│       ├── array.rx
+│       ├── string.rx
+│       └── box.rx
 └── std/
-    ├── prelude.rvn
-    ├── io.rvn
-    ├── fs.rvn
-    ├── env.rvn
-    ├── process.rvn
-    ├── net.rvn
-    ├── time.rvn
-    ├── path.rvn
+    ├── prelude.rx
+    ├── io.rx
+    ├── fs.rx
+    ├── env.rx
+    ├── process.rx
+    ├── net.rx
+    ├── time.rx
+    ├── path.rx
     └── hash/
-        └── default_hasher.rvn
+        └── default_hasher.rx
 ```
 
 Resolver behavior:
@@ -404,7 +404,7 @@ panic!("bad input: {}", x)
   expands to:
   {
     let __msg = format!("bad input: {}", x)
-    riven_panic_with_location(&__msg, file!(), line!(), col!())
+    ruxen_panic_with_location(&__msg, file!(), line!(), col!())
   }
 ```
 
@@ -440,35 +440,35 @@ For the wasm32-unknown-unknown case (doc 03), `-nostdlib` is redundant with `was
 
 ### New files
 
-- `crates/riven-core/runtime/runtime_core.c` — the always-linked subset.
-- `crates/riven-core/runtime/runtime_alloc.c` — allocator-based subset.
-- `crates/riven-core/runtime/runtime_std.c` — hosted-only subset.
-- `crates/riven-core/runtime/runtime_common.h` — shared typedefs.
-- `share/riven/std/core/prelude.rvn`, `core/option.rvn`, `core/result.rvn`, `core/mem.rvn`, `core/ptr.rvn`.
-- `share/riven/std/core/alloc/mod.rvn`, `alloc/vec.rvn`, `alloc/string.rvn`, `alloc/box.rvn`.
-- `share/riven/std/core/panic.rvn` — `PanicInfo` definition.
+- `crates/ruxen-core/runtime/runtime_core.c` — the always-linked subset.
+- `crates/ruxen-core/runtime/runtime_alloc.c` — allocator-based subset.
+- `crates/ruxen-core/runtime/runtime_std.c` — hosted-only subset.
+- `crates/ruxen-core/runtime/runtime_common.h` — shared typedefs.
+- `share/ruxen/std/core/prelude.rx`, `core/option.rx`, `core/result.rx`, `core/mem.rx`, `core/ptr.rx`.
+- `share/ruxen/std/core/alloc/mod.rx`, `alloc/vec.rx`, `alloc/string.rx`, `alloc/box.rx`.
+- `share/ruxen/std/core/panic.rx` — `PanicInfo` definition.
 
 ### Touched files
 
-- `crates/riven-core/runtime/runtime.c` — gutted; becomes `runtime_std.c` minus the common bits.
-- `crates/riven-core/src/parser/mod.rs:1572-1610` — directive parser accepts `panic_handler`, `global_allocator`, `no_mangle`, `no_std`, `cfg`.
-- `crates/riven-core/src/parser/ast.rs` — directive variant tags.
-- `crates/riven-core/src/resolve/mod.rs:97-343` — skip std-registered items when `no-std = true`; split `register_builtins` into `register_core_builtins` and `register_std_builtins`.
-- `crates/riven-core/src/hir/nodes.rs` — `HirFunction` + `HirItem` gain `is_panic_handler`, `is_no_mangle`.
-- `crates/riven-core/src/mir/nodes.rs` — `MirProgram` gains `panic_handler: Option<String>`, `global_allocator: Option<String>`, `no_std: bool`.
-- `crates/riven-core/src/codegen/llvm/emit.rs` / `cranelift.rs` — emit panic handler as strong `riven_panic`; emit global allocator functions.
-- `crates/riven-core/src/codegen/object.rs:52-92` — conditional linker flags (no_std → `-nostdlib`, drop `-lc -lm`).
-- `crates/riven-core/src/codegen/mod.rs` — `find_runtime_core()`, `find_runtime_std()`, `find_runtime_alloc()`.
-- `crates/riven-cli/src/manifest.rs:7-47` — `[package] no-std: bool`.
-- `crates/riven-cli/src/manifest.rs:100-118` — `[profile.*] panic: String` (accept `"abort"` / `"unwind"`; error on unwind for v1).
-- `crates/riven-cli/src/build.rs` — thread `no_std` through `compile_project`.
+- `crates/ruxen-core/runtime/runtime.c` — gutted; becomes `runtime_std.c` minus the common bits.
+- `crates/ruxen-core/src/parser/mod.rs:1572-1610` — directive parser accepts `panic_handler`, `global_allocator`, `no_mangle`, `no_std`, `cfg`.
+- `crates/ruxen-core/src/parser/ast.rs` — directive variant tags.
+- `crates/ruxen-core/src/resolve/mod.rs:97-343` — skip std-registered items when `no-std = true`; split `register_builtins` into `register_core_builtins` and `register_std_builtins`.
+- `crates/ruxen-core/src/hir/nodes.rs` — `HirFunction` + `HirItem` gain `is_panic_handler`, `is_no_mangle`.
+- `crates/ruxen-core/src/mir/nodes.rs` — `MirProgram` gains `panic_handler: Option<String>`, `global_allocator: Option<String>`, `no_std: bool`.
+- `crates/ruxen-core/src/codegen/llvm/emit.rs` / `cranelift.rs` — emit panic handler as strong `ruxen_panic`; emit global allocator functions.
+- `crates/ruxen-core/src/codegen/object.rs:52-92` — conditional linker flags (no_std → `-nostdlib`, drop `-lc -lm`).
+- `crates/ruxen-core/src/codegen/mod.rs` — `find_runtime_core()`, `find_runtime_std()`, `find_runtime_alloc()`.
+- `crates/ruxen-cli/src/manifest.rs:7-47` — `[package] no-std: bool`.
+- `crates/ruxen-cli/src/manifest.rs:100-118` — `[profile.*] panic: String` (accept `"abort"` / `"unwind"`; error on unwind for v1).
+- `crates/ruxen-cli/src/build.rs` — thread `no_std` through `compile_project`.
 
 ### Tests
 
-- `crates/riven-core/tests/no_std_basic.rs` — compiles a no_std program with a user-provided panic handler and asserts the resulting ELF has *no* libc imports (verified via `ldd` / `nm`).
-- `crates/riven-core/tests/no_std_panic_handler.rs` — missing handler → compile error with specific message.
-- `crates/riven-core/tests/no_std_global_allocator.rs` — `Array` usage without allocator → link error (caught and reported by `riven build`).
-- `crates/riven-core/tests/no_std_drop.rs` — `Array` gets dropped correctly (tier-1 B1 regression).
+- `crates/ruxen-core/tests/no_std_basic.rs` — compiles a no_std program with a user-provided panic handler and asserts the resulting ELF has *no* libc imports (verified via `ldd` / `nm`).
+- `crates/ruxen-core/tests/no_std_panic_handler.rs` — missing handler → compile error with specific message.
+- `crates/ruxen-core/tests/no_std_global_allocator.rs` — `Array` usage without allocator → link error (caught and reported by `ruxen build`).
+- `crates/ruxen-core/tests/no_std_drop.rs` — `Array` gets dropped correctly (tier-1 B1 regression).
 - Integration test: an example `examples/06-embedded-qemu/` (if we add it) that builds for `thumbv7em-none-eabihf` and boots in QEMU.
 
 ## 7. Interactions with Other Tiers
@@ -494,24 +494,24 @@ For the wasm32-unknown-unknown case (doc 03), `-nostdlib` is redundant with `was
 
 1. Split `runtime.c` into `runtime_core.c` / `runtime_std.c` (no `runtime_alloc.c` yet — just `runtime_core` + `runtime_std`).
 2. `find_runtime_obj` learns to link both when hosted, only core when no-std.
-3. `riven_panic` becomes a weak symbol in `runtime_core.c`, strong in `runtime_std.c`.
+3. `ruxen_panic` becomes a weak symbol in `runtime_core.c`, strong in `runtime_std.c`.
 4. **Exit:** a hosted build's binary is bit-compatible with today's (regression-tested by running every current test).
 
 ### Phase 4c — no_std linker path (1 week)
 
 1. `[package] no-std = true` parses.
 2. `-nostdlib`, drop `-lc -lm` when no_std.
-3. User's `panic_handler`-marked function replaces the weak `riven_panic` at link time.
-4. `no_mangle` directive emits the function with its Riven name (no mangling).
+3. User's `panic_handler`-marked function replaces the weak `ruxen_panic` at link time.
+4. `no_mangle` directive emits the function with its Ruxen name (no mangling).
 5. **Exit:** a no_std "loop forever" program builds, and `nm` on the output shows zero libc imports.
 
 ### Phase 4d — core vs std split (2 weeks)
 
-1. Bisect stdlib source under `share/riven/std/core/*` and `share/riven/std/std/*`.
+1. Bisect stdlib source under `share/ruxen/std/core/*` and `share/ruxen/std/std/*`.
 2. Resolver skips `std.*` under no_std.
 3. `core.alloc.{Array, String, Box, Map, Set}` exist and depend on a `global_allocator` directive.
 4. `Allocator` mixin + `Layout`.
-5. `__riven_global_allocator` vtable dispatch in `runtime_alloc.c`.
+5. `__ruxen_global_allocator` vtable dispatch in `runtime_alloc.c`.
 6. `panic!` macro: switch to no-alloc formatter for core, full `format!` for std.
 7. **Exit:** a no_std binary that uses `core.alloc.Array` with a user-supplied `global_allocator` directive builds, runs, and drops correctly (no leaks).
 
@@ -530,16 +530,16 @@ Landing-pad emission, DWARF CFI, libunwind integration. Months of work. Out of v
 2. **Two allocators.** Can a crate have one allocator for `Array` and another for `Box`? Rust says no (one `#[global_allocator]` per binary). Recommend: same rule. Multi-allocator is advanced and rare.
 3. **`format!` in no_std.** Proposal §5.7 picks (b) — no-alloc formatter with a fixed buffer. Size? 256 bytes. Truncation is documented.
 4. **`println!` in no_std.** It doesn't exist. Users write to an MMIO register or call a host function. Is `panic!("...")` the only reporting mechanism? Probably yes, for stdin-less targets.
-5. **ABI stability for `PanicInfo`.** If we later add fields, old no_std user code breaks. Recommend: `PanicInfo` is `#[non_exhaustive]` (Riven analog: in-body `sealed` directive). v1 exposes only `message`, `file`, `line`, `col`.
+5. **ABI stability for `PanicInfo`.** If we later add fields, old no_std user code breaks. Recommend: `PanicInfo` is `#[non_exhaustive]` (Ruxen analog: in-body `sealed` directive). v1 exposes only `message`, `file`, `line`, `col`.
 6. **Drop in no_std without an allocator.** If a user has `class Foo` with a destructor that calls `println!`, their no_std build fails at link time because `println!` pulls `runtime_std.c` which pulls libc. Recommend: document clearly; add `cfg(not(no_std))`-style gating so users can write conditional drops.
-7. **`Result.map` / `Option.unwrap`** that panic in no_std: these ultimately call `riven_panic` — which is satisfied by the user's handler. Fine.
-8. **`cfg(no_std)` vs `cfg(not(feature = "std"))`.** Rust uses the feature idiom. Riven should too? Recommend: `no-std` manifest key *implies* a `core` feature and negates a `std` feature. Users write `cfg(feature = "std")` to gate hosted-only code paths. Cleaner than a bespoke `no_std` cfg predicate.
+7. **`Result.map` / `Option.unwrap`** that panic in no_std: these ultimately call `ruxen_panic` — which is satisfied by the user's handler. Fine.
+8. **`cfg(no_std)` vs `cfg(not(feature = "std"))`.** Rust uses the feature idiom. Ruxen should too? Recommend: `no-std` manifest key *implies* a `core` feature and negates a `std` feature. Users write `cfg(feature = "std")` to gate hosted-only code paths. Cleaner than a bespoke `no_std` cfg predicate.
 9. **Link-line `--gc-sections`.** Embedded users demand it to strip unused symbols. Recommend: don't emit it by default; document in the book that `[target.<triple>].link-args = ["--gc-sections"]` is recommended for binary-size targets.
 10. **Shipping `runtime_core.o` per target.** Same problem as doc 02 §5.6: precompiled or source? Recommend: source. `runtime_core.c` is ~100 LOC and compiles in milliseconds with the target's toolchain. For embedded, the user likely has the cross compiler already.
-11. **`no_mangle` collisions.** Two `no_mangle`-marked functions with the same Riven name in different modules collide at link time. Rust has this problem too; error clearly at resolver time if we can see both.
+11. **`no_mangle` collisions.** Two `no_mangle`-marked functions with the same Ruxen name in different modules collide at link time. Rust has this problem too; error clearly at resolver time if we can see both.
 12. **Static initialization ordering.** A `global_allocator`-marked `let A = Foo.new` — when is `Foo.new` called? For a simple `struct { ... }` with no runtime init, this is a constant. For anything with a constructor, we'd need a static-init path. Recommend v1: `global_allocator`-marked values must be constructible via a `const` expression. Error otherwise.
-13. **Missing `core.alloc.Array` in a no_std build** with no global allocator: link error. Can we make this a compile error instead? It's resolvable at link time today; resolver-time errors require cross-item analysis. Recommend: post-link error parsing in `riven build` that maps `undefined symbol: __riven_global_allocator` to a friendlier message.
-14. **Interaction with tier-1 B4 (noop fallback).** `riven_noop_passthrough` et al. live in `runtime.c` today. In no_std they must live in `runtime_core.c`. When tier-1 B4 removes them, no_std inherits the cleanup.
+13. **Missing `core.alloc.Array` in a no_std build** with no global allocator: link error. Can we make this a compile error instead? It's resolvable at link time today; resolver-time errors require cross-item analysis. Recommend: post-link error parsing in `ruxen build` that maps `undefined symbol: __ruxen_global_allocator` to a friendlier message.
+14. **Interaction with tier-1 B4 (noop fallback).** `ruxen_noop_passthrough` et al. live in `runtime.c` today. In no_std they must live in `runtime_core.c`. When tier-1 B4 removes them, no_std inherits the cleanup.
 
 ## 10. Acceptance Criteria
 
@@ -561,8 +561,8 @@ Phase 4c — no_std linker:
 
 - [ ] `[package] no-std = true` + a trivial `loop; end` main + in-body `panic_handler` directive builds on Linux.
 - [ ] Output has no libc imports: `nm --undefined-only output` lists only user-defined / `runtime_core` symbols.
-- [ ] `-nostdlib` appears in the linker invocation (verified with `RIVEN_VERBOSE=1 riven build`).
-- [ ] A public C-ABI `def app_main` with in-body `no_mangle` appears as `app_main` (not `riven_app_main`) in `nm`.
+- [ ] `-nostdlib` appears in the linker invocation (verified with `RUXEN_VERBOSE=1 ruxen build`).
+- [ ] A public C-ABI `def app_main` with in-body `no_mangle` appears as `app_main` (not `ruxen_app_main`) in `nm`.
 
 Phase 4d — core vs std split:
 

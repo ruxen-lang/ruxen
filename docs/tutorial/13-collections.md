@@ -4,7 +4,7 @@
 
 The most common collection — a growable, heap-allocated sequence.
 
-```riven
+```ruxen
 # Create
 var v = Array.new              # empty
 let v = [1, 2, 3]        # with initial values
@@ -23,7 +23,7 @@ v.is_empty                     # true if empty
 
 ### Iterating
 
-```riven
+```ruxen
 let nums = [1, 2, 3, 4, 5]
 
 # Iterate
@@ -44,7 +44,7 @@ let (evens, odds) = nums.partition { |n| n % 2 == 0 }
 
 ## Map (Key-Value)
 
-```riven
+```ruxen
 var h: Map[String, Int] = Map.new
 let h = { "a" => 1, "b" => 2, "c" => 3 }
 
@@ -62,7 +62,7 @@ h.contains_key("a")
 
 ## Set (Unique Values)
 
-```riven
+```ruxen
 var s: Set[Int] = Set.new
 
 s.insert(1)
@@ -77,7 +77,7 @@ s.len                          # 2
 
 Strings support iteration:
 
-```riven
+```ruxen
 let greeting = "Hello"
 
 # Iterate over characters
@@ -99,7 +99,7 @@ greeting.char_count            # Unicode scalar count
 
 Collections follow ownership rules:
 
-```riven
+```ruxen
 let names = ["Alice", "Bob", "Charlie"]
 
 # Borrowing elements

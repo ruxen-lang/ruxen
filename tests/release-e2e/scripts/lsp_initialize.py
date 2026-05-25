@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Send an LSP `initialize` request to riven-lsp over stdio and verify
+"""Send an LSP `initialize` request to ruxen-lsp over stdio and verify
 the server returns a well-formed JSON-RPC response with a `capabilities`
 field.
 
@@ -37,17 +37,17 @@ def read_message(stream) -> dict:
 
 
 def main() -> int:
-    # Honor RIVEN_WORKSPACE (dev builds) and the installed release layout.
-    workspace = os.environ.get("RIVEN_WORKSPACE")
+    # Honor RUXEN_WORKSPACE (dev builds) and the installed release layout.
+    workspace = os.environ.get("RUXEN_WORKSPACE")
     candidates = []
     if workspace:
-        candidates.append(os.path.join(workspace, "target", "release", "riven-lsp"))
-    riven_home = os.environ.get("RIVEN_HOME") or os.path.expanduser("~/.riven")
-    candidates.append(os.path.join(riven_home, "bin", "riven-lsp"))
+        candidates.append(os.path.join(workspace, "target", "release", "ruxen-lsp"))
+    ruxen_home = os.environ.get("RUXEN_HOME") or os.path.expanduser("~/.ruxen")
+    candidates.append(os.path.join(ruxen_home, "bin", "ruxen-lsp"))
 
     bin_path = next((p for p in candidates if os.path.isfile(p)), None)
     if bin_path is None:
-        print(f"riven-lsp not found; looked in: {candidates}", file=sys.stderr)
+        print(f"ruxen-lsp not found; looked in: {candidates}", file=sys.stderr)
         return 2
 
     proc = subprocess.Popen(
@@ -65,7 +65,7 @@ def main() -> int:
             "processId": os.getpid(),
             "rootUri": None,
             "capabilities": {},
-            "clientInfo": {"name": "riven-e2e", "version": "0.0.1"},
+            "clientInfo": {"name": "ruxen-e2e", "version": "0.0.1"},
         },
     }
     shutdown = {"jsonrpc": "2.0", "id": 2, "method": "shutdown", "params": None}
@@ -83,7 +83,7 @@ def main() -> int:
             print(f"`capabilities` missing or wrong type: {response['result']}",
                   file=sys.stderr)
             return 4
-        print(f"ok: riven-lsp replied with {len(caps)} capability field(s)")
+        print(f"ok: ruxen-lsp replied with {len(caps)} capability field(s)")
 
         # Polite shutdown so the server doesn't hang on a pipe close.
         proc.stdin.write(frame(shutdown))

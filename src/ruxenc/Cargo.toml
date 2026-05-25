@@ -1,0 +1,63 @@
+[package]
+name = "ruxenc"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "ruxenc"
+path = "src/main.rs"
+
+[features]
+llvm = ["ruxen_core/llvm"]
+
+[dependencies]
+ruxen_core = { path = "../../compiler/ruxen_core" }
+sha2 = "0.10"
+postcard = { version = "1.1", features = ["alloc"] }
+serde = { version = "1", features = ["derive"] }
+rayon = "1.10"
+
+[dev-dependencies]
+tempfile = "3"
+criterion = { version = "0.5", default-features = false, features = ["plotters", "cargo_bench_support"] }
+
+[[bench]]
+name = "cache_bench"
+harness = false
+path = "benches/cache_bench.rs"
+
+# Compile-pipeline microbenchmarks — prompt 13 DoD item.
+# Each measures one stage of the parse → resolve → typeck → MIR
+# lower → codegen path on the 508_command_status fixture so a
+# regression in any stage is bisectable.
+
+[[bench]]
+name = "parse_bench"
+harness = false
+path = "benches/parse_bench.rs"
+
+[[bench]]
+name = "resolve_bench"
+harness = false
+path = "benches/resolve_bench.rs"
+
+[[bench]]
+name = "typeck_bench"
+harness = false
+path = "benches/typeck_bench.rs"
+
+[[bench]]
+name = "mir_bench"
+harness = false
+path = "benches/mir_bench.rs"
+
+[[bench]]
+name = "codegen_bench"
+harness = false
+path = "benches/codegen_bench.rs"
+
+[lints]
+workspace = true

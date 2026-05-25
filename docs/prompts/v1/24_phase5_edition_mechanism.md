@@ -6,7 +6,7 @@ editions).
 
 ## Goal
 
-Open Decision #6 ruling: ship editions. `Riven.toml`'s `edition`
+Open Decision #6 ruling: ship editions. `Ruxen.toml`'s `edition`
 field already validates (P0.11). Wire actual semantic gating.
 
 ## Surface
@@ -16,7 +16,7 @@ field already validates (P0.11). Wire actual semantic gating.
   ensure the framework accepts an unknown future edition with a
   warning (forward-compat).
 - `EditionLint` framework: each lint flags a syntax pattern that
-  changes meaning across editions; `riven fix --edition 2028` would
+  changes meaning across editions; `ruxen fix --edition 2028` would
   rewrite source to the next edition (v2 feature; scaffold only).
 
 ## TDD
@@ -25,12 +25,12 @@ field already validates (P0.11). Wire actual semantic gating.
   (`E0042`-equivalent — pick a code).
 - Unit test: a hypothetical `keyword_in_2028` lint fires when
   source uses an identifier reserved in 2028.
-- Integration test: `riven fix --edition 2028 --dry-run` produces
+- Integration test: `ruxen fix --edition 2028 --dry-run` produces
   diff output.
 
 ## Implementation
 
-- New `crates/riven-core/src/lints/` module.
+- New `crates/ruxen-core/src/lints/` module.
 - `EditionLint` Rust trait (internal compiler API):
   `fn check(item: &HirItem, ctx: &mut LintCtx)`.
 - Rules registered per edition.
@@ -43,12 +43,12 @@ field already validates (P0.11). Wire actual semantic gating.
 
 - E1700 — edition lint failure
 - E1701 — feature requires newer edition
-- E1702 — `riven fix` rewrite failed
+- E1702 — `ruxen fix` rewrite failed
 
 ## Definition of done
 
 - [ ] Edition field gates at least one observable behavior (the
       legacy Hash / current Map canary).
-- [ ] `riven fix --edition <Y>` scaffold compiles (full
+- [ ] `ruxen fix --edition <Y>` scaffold compiles (full
       implementation in v2).
 - [ ] CHANGELOG bullet.

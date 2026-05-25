@@ -1,6 +1,6 @@
 # Unsafe Code
 
-Riven's safety guarantees are enforced by default (P1 — Implicit Safety, Explicit Danger). The `unsafe` keyword opts into operations that the compiler cannot verify.
+Ruxen's safety guarantees are enforced by default (P1 — Implicit Safety, Explicit Danger). The `unsafe` keyword opts into operations that the compiler cannot verify.
 
 ## What Requires Unsafe
 
@@ -11,7 +11,7 @@ Riven's safety guarantees are enforced by default (P1 — Implicit Safety, Expli
 
 ## Unsafe Blocks
 
-```riven
+```ruxen
 let ptr: *Int = get_raw_pointer()
 
 # Must wrap pointer operations in unsafe
@@ -24,7 +24,7 @@ end
 
 Methods that can panic use `!` suffix — they're safe but signal danger:
 
-```riven
+```ruxen
 let value = option.unwrap!           # panics on nil
 let value = result.expect!("oops")   # panics on Err
 ```
@@ -35,7 +35,7 @@ This is a naming convention, not a language-level unsafe mechanism. `unwrap!` is
 
 The idiomatic approach is to create safe abstractions over unsafe code:
 
-```riven
+```ruxen
 # Unsafe implementation detail
 class SafeBuffer
   ptr: *var UInt8

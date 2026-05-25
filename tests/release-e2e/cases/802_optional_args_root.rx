@@ -1,0 +1,8 @@
+def join_label(name: String, suffix: String = "!") -> String
+  "#{name}#{suffix}"
+end
+
+def main
+  puts join_label("ruxen")
+  puts join_label("ruxen", "?")
+end

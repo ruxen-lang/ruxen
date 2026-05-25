@@ -6,7 +6,7 @@
 ## Decision
 
 LLVM-only debug info for v1. Cranelift backend stays
-release-mode-only. `riven build --debug` requires `--backend=llvm`.
+release-mode-only. `ruxen build --debug` requires `--backend=llvm`.
 
 ## Goal
 
@@ -15,7 +15,7 @@ local-variable info usable by `lldb` and `gdb`.
 
 ## TDD
 
-- Unit test: compile a `.rvn` with `--backend=llvm --debug`, dump
+- Unit test: compile a `.rx` with `--backend=llvm --debug`, dump
   with `dwarfdump`, assert `.debug_line`, `.debug_info`,
   `.debug_str` present.
 - Integration test: run lldb on the binary, run `b main`, assert
@@ -26,7 +26,7 @@ local-variable info usable by `lldb` and `gdb`.
 
 ## Implementation
 
-- Replace the 3-line stub at `crates/riven-core/src/codegen/llvm/debug.rs`
+- Replace the 3-line stub at `crates/ruxen-core/src/codegen/llvm/debug.rs`
   with full DWARF emission via LLVM's `DIBuilder` API.
 - Map MIR locals → DWARF DIE entries.
 - Map MIR span info → `.debug_line` table.
@@ -42,7 +42,7 @@ local-variable info usable by `lldb` and `gdb`.
 
 ## Definition of done
 
-- [ ] `riven build --debug --backend=llvm` produces fully debuggable
+- [ ] `ruxen build --debug --backend=llvm` produces fully debuggable
       binaries.
 - [ ] lldb test suite (golden output) passes on Ubuntu + macOS.
 - [ ] P0.14 closed.

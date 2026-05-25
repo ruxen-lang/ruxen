@@ -118,7 +118,7 @@ sender drops `tx`.
 | B7        | `channel_receiver_dropped_send_errs`             | `std_sync_runtime.rs`        |
 | B8        | `channel_all_senders_dropped_recv_errs`          | `std_sync_runtime.rs`        |
 | B9        | `channel_rejects_non_send_t_e1101`               | `concurrency_negative.rs`    |
-| B10       | e2e `cases/542_channel_pingpong.rvn`             | release-e2e                  |
+| B10       | e2e `cases/542_channel_pingpong.rx`             | release-e2e                  |
 
 ---
 

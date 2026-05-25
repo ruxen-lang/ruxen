@@ -13,9 +13,9 @@ non-goal for v1.
 
 ## B1 — `path_join(a, b) -> String` concatenates segments
 
-**Given** `a = "/usr/local"`, `b = "bin/riven.rvn"`
+**Given** `a = "/usr/local"`, `b = "bin/ruxen.rx"`
 **When** the program calls `path_join(&a, &b)`
-**Then** the result is `"/usr/local/bin/riven.rvn"` (one separator
+**Then** the result is `"/usr/local/bin/ruxen.rx"` (one separator
 inserted; no double-slash).
 
 ## B2 — `path_join` defers to absolute second argument
@@ -27,20 +27,20 @@ Matches Rust's `Path::join` semantics.
 
 ## B3 — `path_parent(p) -> String` strips the final component
 
-**Given** `p = "/usr/local/bin/riven.rvn"`
+**Given** `p = "/usr/local/bin/ruxen.rx"`
 **Then** `path_parent(&p)` returns `"/usr/local/bin"`.
 
 ## B4 — `path_file_name(p) -> String` returns the final component
 
-**Given** `p = "/usr/local/bin/riven.rvn"`
-**Then** `path_file_name(&p)` returns `"riven.rvn"`.
+**Given** `p = "/usr/local/bin/ruxen.rx"`
+**Then** `path_file_name(&p)` returns `"ruxen.rx"`.
 
 ## B5 — `path_extension(p) -> String`
 
 Returns the extension (without the dot) when present.
 
-**Given** `p = "/usr/local/bin/riven.rvn"`
-**Then** `path_extension(&p)` returns `"rvn"`.
+**Given** `p = "/usr/local/bin/ruxen.rx"`
+**Then** `path_extension(&p)` returns `"rx"`.
 
 **Given** `p = "/foo/bar"` (no extension)
 **Then** `path_extension(&p)` returns `""` (empty string, not Err).

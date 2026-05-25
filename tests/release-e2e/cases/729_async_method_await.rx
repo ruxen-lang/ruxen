@@ -1,0 +1,33 @@
+## B2b — instance-method-call `.await` desugar.
+##
+## Validates the Shape-3 path in
+## `compiler/ruxen_core/src/async_lowering/mod.rs::describe_await`:
+## `<obj>.method(args).await` where the receiver's class is known
+## from the outer fn's parameter annotation. Before B2b, only
+## free-fn awaitees and `Class.staticmethod(args).await` desugared;
+## any instance-method awaitee fell off the desugar path and codegen
+## emitted unresolved `<FutureClass>_await` link symbols.
+##
+## Server-only shape (no live socket required): a single async fn
+## takes a typed `AsyncTcpStream` param, drives `.read(N).await` on
+## it, and returns 1/0 based on the Result tag. Caller drives the
+## state machine with `block_on(...)` so the round-trip exercises
+## both the new Shape-3 desugar AND the executor's poll loop. The
+## fixture deliberately constructs the stream via the stdlib FFI
+## (ruxen_async_tcp_stream_from_fd(-1)) and accepts the Err — the
+## win condition is "compiles, links, runs, returns 0 cleanly,"
+## proving the desugar path produced a valid Future state machine.
+
+async def echo_read_one(s: AsyncTcpStream) -> Int
+  let n = s.read(64).await
+  match n
+    Ok(_)  -> 1
+    Err(_) -> 0
+  end
+end
+
+def main
+  let s = ruxen_async_tcp_stream_from_fd(-1)
+  let outcome = block_on(echo_read_one(s))
+  puts "outcome=#{outcome}"
+end

@@ -1,7 +1,7 @@
 # Agent prelude — read this before every spawned task
 
 This file is appended to every coder/tester/architect agent spawn for
-the Riven v1 orchestration. It sets up shared invariants and
+the Ruxen v1 orchestration. It sets up shared invariants and
 conventions every agent must follow.
 
 ## Before you start: read prior work
@@ -21,16 +21,16 @@ Before touching code:
 - **No `git add -A`** — `tmp/`, scratch files, and any session
   artifacts must NEVER be committed. Stage files explicitly:
   `git add <list of paths>`.
-- **No `#[ignore]`, no `riven_noop_passthrough`, no mocked
+- **No `#[ignore]`, no `ruxen_noop_passthrough`, no mocked
   HIR/SymbolTable, no `#[allow(dead_code)]` shortcuts** (universal
   rules §3-9 in `docs/prompts/00_universal_rules.md`).
 - **Every error code emitted must be in
-  `crates/riven-core/src/diagnostics/codes.rs::REGISTRY` AND have a
+  `crates/ruxen-core/src/diagnostics/codes.rs::REGISTRY` AND have a
   `docs/errors/<code>.md` long-form explainer**. The registry-coverage
-  test at `crates/riven-cli/tests/explain_long_form.rs` will fail the
+  test at `crates/ruxen-cli/tests/explain_long_form.rs` will fail the
   build otherwise.
-- **8 GiB RSS cap** on `rivenc`. Wrap heavy invocations:
-  `scripts/rivenc-rss-cap.sh -- <args>`.
+- **8 GiB RSS cap** on `ruxenc`. Wrap heavy invocations:
+  `scripts/ruxenc-rss-cap.sh -- <args>`.
 
 ## Commit flow (since agents can't run `git commit` due to harness)
 

@@ -2,9 +2,9 @@
 
 ## Variable Bindings
 
-Riven has two binding keywords. `let` is immutable; `var` is mutable.
+Ruxen has two binding keywords. `let` is immutable; `var` is mutable.
 
-```riven
+```ruxen
 let name = "Alaric"
 let age = 30
 let pi = 3.14
@@ -14,7 +14,7 @@ name = "Voss"   # COMPILE ERROR: `name` is immutable
 
 Use `var` to make a variable mutable:
 
-```riven
+```ruxen
 var counter = 0
 counter = counter + 1
 counter += 1              # compound assignment
@@ -22,19 +22,19 @@ counter += 1              # compound assignment
 
 ## Type Inference
 
-Riven infers types from the right-hand side. You rarely need to write type annotations:
+Ruxen infers types from the right-hand side. You rarely need to write type annotations:
 
-```riven
+```ruxen
 let x = 42                # Int
 let y = 3.14              # Float
-let name = "Riven"        # &str (borrowed string)
+let name = "Ruxen"        # &str (borrowed string)
 let flag = true           # Bool
 let ch = 'R'              # Char
 ```
 
 You can add explicit type annotations when needed:
 
-```riven
+```ruxen
 let x: Float = 42         # 42 interpreted as Float
 var bytes: Array[UInt8] = Array.new
 ```
@@ -56,7 +56,7 @@ var bytes: Array[UInt8] = Array.new
 
 ## Numeric Literals
 
-```riven
+```ruxen
 42              # Int
 42u             # UInt
 42i32           # Int32
@@ -74,14 +74,14 @@ var bytes: Array[UInt8] = Array.new
 
 ## Strings
 
-Riven has two string types:
+Ruxen has two string types:
 
 | Type | Ownership | Growable | When |
 |------|-----------|----------|------|
 | `String` | Owned, heap-allocated | Yes | You need to own or modify the string |
 | `&str` | Borrowed slice | No | Read-only access to string data |
 
-```riven
+```ruxen
 let greeting = "hello"               # &str (static, borrowed)
 let owned = String.from("hello")      # String (owned)
 let interpolated = "hi #{name}"      # String (interpolation allocates)
@@ -91,15 +91,15 @@ let interpolated = "hi #{name}"      # String (interpolation allocates)
 
 Use `#{}` inside double-quoted strings:
 
-```riven
-let name = "Riven"
+```ruxen
+let name = "Ruxen"
 let age = 1
 puts "#{name} is #{age} year old"
 ```
 
 ### Raw and Multiline Strings
 
-```riven
+```ruxen
 let raw = r"no\escape\here"          # raw string
 let raw2 = r#"can have "quotes""#    # raw with delimiters
 
@@ -113,7 +113,7 @@ let multi = """
 
 Fixed-size, heterogeneous collections:
 
-```riven
+```ruxen
 let point = (3, 4)                   # (Int, Int)
 let record = ("Alice", 30, true)     # (String, Int, Bool)
 let (x, y) = point                   # destructuring
@@ -121,7 +121,7 @@ let (x, y) = point                   # destructuring
 
 ## Fixed Arrays and Growable Arrays
 
-```riven
+```ruxen
 # Fixed-size arrays — stack-allocated
 let nums: [Int; 3] = [1, 2, 3]
 
@@ -134,7 +134,7 @@ v.push(4)
 
 ## Type Aliases
 
-```riven
+```ruxen
 type UserId = Int
 type Callback = Fn(Int) -> Bool
 ```
@@ -143,7 +143,7 @@ type Callback = Fn(Int) -> Bool
 
 Module-level `let` bindings serve as program-wide constants — there is no separate `const` binding form (the `const` keyword is reserved for the generic-parameter prefix, e.g. `[const N: USize]`). Naming convention is `SCREAMING_SNAKE_CASE`:
 
-```riven
+```ruxen
 let MAX_RETRIES = 3
 let DEFAULT_PORT: UInt16 = 8080
 ```

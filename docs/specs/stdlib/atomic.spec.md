@@ -112,8 +112,8 @@ indirection — exercises the atomic fast path directly.)
 | B5        | `atomic_compare_and_swap_round_trip`        | `std_sync_runtime.rs`       |
 | B6        | `atomic_bool_fetch_and_or`                  | `std_sync_runtime.rs`       |
 | B7        | `atomic_auto_derives_send_sync`             | `concurrency_markers.rs`    |
-| B8        | e2e `cases/543_atomic_round_trip.rvn`       | release-e2e                 |
-| B9        | e2e `cases/544_atomic_fetch_add_stress.rvn` | release-e2e                 |
+| B8        | e2e `cases/543_atomic_round_trip.rx`       | release-e2e                 |
+| B9        | e2e `cases/544_atomic_fetch_add_stress.rx` | release-e2e                 |
 
 ---
 

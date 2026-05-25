@@ -4,7 +4,7 @@
 
 Functions are defined with `def` and terminated with `end`:
 
-```riven
+```ruxen
 def greet
   puts "Hello!"
 end
@@ -12,7 +12,7 @@ end
 
 The last expression is the implicit return value (like Ruby):
 
-```riven
+```ruxen
 def double(x)
   x * 2
 end
@@ -22,7 +22,7 @@ end
 
 Private functions can have fully inferred types:
 
-```riven
+```ruxen
 def add(a, b)
   a + b
 end
@@ -30,7 +30,7 @@ end
 
 Public functions **must** have explicit type annotations (design principle P5 — Clarity At The Boundaries):
 
-```riven
+```ruxen
 def add(a: Int, b: Int) -> Int
   a + b
 end
@@ -40,7 +40,7 @@ end
 
 Use `return` for early exit:
 
-```riven
+```ruxen
 def find_positive(nums: &Array[Int]) -> Option[Int]
   for n in nums
     if n > 0
@@ -55,14 +55,14 @@ end
 
 Short functions can use brace syntax:
 
-```riven
+```ruxen
 def double(x: Int) -> Int { x * 2 }
 def is_even(n: Int) -> Bool { n % 2 == 0 }
 ```
 
 ## Visibility
 
-Riven is **public by default**. Section markers (`private`, `protected`) inside a module, class, struct, or mixin body gate subsequent declarations until the next marker.
+Ruxen is **public by default**. Section markers (`private`, `protected`) inside a module, class, struct, or mixin body gate subsequent declarations until the next marker.
 
 | Section marker | Scope |
 |----------------|-------|
@@ -70,7 +70,7 @@ Riven is **public by default**. Section markers (`private`, `protected`) inside 
 | `private` | Private — accessible only within the current module/type |
 | `protected` | Accessible from subclasses |
 
-```riven
+```ruxen
 module Util
   def public_api(x: Int) -> Int       # public — module default
     helper(x)
@@ -88,7 +88,7 @@ end
 
 Use square brackets for type parameters:
 
-```riven
+```ruxen
 def identity[T](x: T) -> T
   x
 end
@@ -110,7 +110,7 @@ For complex generic bounds:
 
 <!-- TODO(migration): canonical spec §3.4a discourages per-method `where` clauses on individual `def`s (re-group into an extension block). The form below is shown here for top-level functions; the spec is silent on whether top-level `def` accepts `where`. Verify when the parser pins this. -->
 
-```riven
+```ruxen
 def merge[A, B, C](left: &A, right: &B) -> C
   where A: Iterator[Item = Int],
         B: Iterator[Item = Int],
@@ -121,7 +121,7 @@ end
 
 ## Class Methods vs Instance Methods
 
-```riven
+```ruxen
 class User
   name: String
 

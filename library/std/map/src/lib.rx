@@ -1,0 +1,47 @@
+## std::map — Map (formerly `Hash` / `HashMap`) method surface.
+##
+## #06.8 T#15: every method here was a `Map[K,V]_<m>` /
+## `Hash[K,V]_<m>` / `HashMap[K,V]_<m>` entry in the
+## `name.starts_with("Map[") || ...` arm of
+## `compiler/ruxen_core/src/codegen/runtime_table/mod.rs` until the
+## anchor-extension landed in T#14. `Map` is NOT in
+## `register_builtins`'s type-scope map — `let m: Map[K, V]` resolves
+## via the hardcoded arm in `resolve_type_expr` that builds
+## `Ty::Map(_, _)` directly. The anchor branch creates a parent
+## DefId for FFI bookkeeping but does NOT insert into type-scope.
+##
+## ## Surface name spelling
+##
+## Ruby-naming.spec.md §10a canonicalises `HashMap[K, V]` → `Map[K,
+## V]`. Today the runtime C symbols still carry the legacy `hash`
+## prefix (`ruxen_hash_get`, `ruxen_hash_insert`, ...). The
+## `Lowerer::resolve_ffi_alias_callee` fallback added in T#14 lets
+## the call-site mangle resolve correctly regardless of whether
+## the user writes `Map.new` (surface), `Hash.new` (legacy via the
+## value-scope alias from `register_builtins`), or `m.get(k)` on a
+## `Ty::Map(_,_)` receiver — the lookup site peels the `[K,V]`
+## generic and routes through the alias-map key `Map_<m>` registered
+## here.
+
+class Map
+  lib "../hash/runtime/hash.c"
+    # ── Constructors (no `self`) ──────────────────────────────────
+    def self.new as "ruxen_hash_new"() -> Int
+    def self.with_capacity as "ruxen_hash_with_capacity"(cap: Int) -> Int
+    def self.from_iter as "ruxen_hash_from_iter"(items: Int) -> Int
+
+    # ── Read-only queries ─────────────────────────────────────────
+    def len as "ruxen_hash_len"(self) -> Int
+    def is_empty as "ruxen_hash_is_empty"(self) -> Bool
+    def get as "ruxen_hash_get"(self, key: Int) -> Int
+    def contains_key as "ruxen_hash_contains_key"(self, key: Int) -> Bool
+    def keys as "ruxen_hash_keys"(self) -> Int
+    def values as "ruxen_hash_values"(self) -> Int
+    def iter as "ruxen_hash_iter"(self) -> Int
+
+    # ── Mutating ops ──────────────────────────────────────────────
+    def insert as "ruxen_hash_insert"(self, key: Int, value: Int)
+    def remove as "ruxen_hash_remove"(self, key: Int) -> Int
+    def clear as "ruxen_hash_clear"(self)
+  end
+end

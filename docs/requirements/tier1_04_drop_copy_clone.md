@@ -7,13 +7,13 @@ Depends on: body-level directive parsing (existing), mixin resolution (existing)
 
 ## 1. Summary & Motivation
 
-Riven promises Rust-style deterministic ownership: "when the owner goes out
+Ruxen promises Rust-style deterministic ownership: "when the owner goes out
 of scope, the value is dropped (destructor runs, memory freed)"
 (`docs/tutorial/04-ownership-and-borrowing.md:11`). Today that promise is
 **not kept at the code-generation level** — locals of heap-allocated types
 are marked with `MirInst::Drop` in MIR, but both backends turn `Drop` into
-a no-op (`crates/riven-core/src/codegen/cranelift.rs:692-698`,
-`crates/riven-core/src/codegen/llvm/emit.rs:790-792`), so every Riven
+a no-op (`crates/ruxen-core/src/codegen/cranelift.rs:692-698`,
+`crates/ruxen-core/src/codegen/llvm/emit.rs:790-792`), so every Ruxen
 program leaks memory until `exit(3)` reclaims it.
 
 This document specifies the `Drop`, `Copy` and `Clone` mixins, the
@@ -40,7 +40,7 @@ interdependent:
 
 ### 2.1 Types already know Copy vs. Move
 
-`Ty::is_copy` in `crates/riven-core/src/hir/types.rs:189-221` hard-codes
+`Ty::is_copy` in `crates/ruxen-core/src/hir/types.rs:189-221` hard-codes
 the Copy set: all integer/float primitives, `Bool`, `Char`, `Unit`,
 `Never`, `&T` / `&a T` / `&str`, raw pointers, `Ty::Error`, plus tuples
 and fixed arrays whose elements are Copy. Everything else (including
@@ -48,7 +48,7 @@ and fixed arrays whose elements are Copy. Everything else (including
 `class`/`struct`/`enum`) reports `is_copy() == false`.
 
 `MoveSemantics { Copy, Move }` is defined at
-`crates/riven-core/src/hir/types.rs:178-182` and carried on every
+`crates/ruxen-core/src/hir/types.rs:178-182` and carried on every
 `HirExprKind::Assign` (`hir/nodes.rs:148`). The type-checker fills it in
 from `Ty::move_semantics()`; the borrow checker uses it in
 `check_assign` (`borrow_check/mod.rs:440-487`).
@@ -84,8 +84,8 @@ explicit or implicit `include Copy` (per syntax spec §3.6), but:
 ### 2.3 MIR already inserts Drop (partially) — but codegen ignores it
 
 `MirInst::Drop { local: LocalId }` exists at
-`crates/riven-core/src/mir/nodes.rs:282-285`. `insert_drops` in
-`crates/riven-core/src/mir/lower.rs:3346-3407` runs once per function
+`crates/ruxen-core/src/mir/nodes.rs:282-285`. `insert_drops` in
+`crates/ruxen-core/src/mir/lower.rs:3346-3407` runs once per function
 after lowering and appends Drop instructions **before every
 `Terminator::Return`**, in reverse declaration order, for locals that:
 
@@ -101,7 +101,7 @@ after lowering and appends Drop instructions **before every
 Both backends then **treat Drop as a no-op**:
 
 - Cranelift: `cranelift.rs:692-698` — comment says calling
-  `riven_dealloc` here would double-free values moved into collections,
+  `ruxen_dealloc` here would double-free values moved into collections,
   because the drop pass does not track ownership transfers to callees.
 - LLVM: `emit.rs:790-792` — same, "matches Cranelift backend".
 
@@ -137,19 +137,19 @@ call.
 
 ### 2.5 Runtime has allocation primitives but no typed free
 
-`crates/riven-core/runtime/runtime.c:144-163` provides:
+`crates/ruxen-core/runtime/runtime.c:144-163` provides:
 
 ```c
-void *riven_alloc(uint64_t size);         // malloc + zero + panic-on-null
-void  riven_dealloc(void *ptr);           // free
-void *riven_realloc(void *ptr, uint64_t);
+void *ruxen_alloc(uint64_t size);         // malloc + zero + panic-on-null
+void  ruxen_dealloc(void *ptr);           // free
+void *ruxen_realloc(void *ptr, uint64_t);
 ```
 
-`MirInst::Alloc` emits `riven_alloc(size)` (cranelift.rs:618-634). There
+`MirInst::Alloc` emits `ruxen_alloc(size)` (cranelift.rs:618-634). There
 is no matching "typed dealloc" runtime helper and no per-type free
 glue — the runtime assumes leaks are fine.
 
-`String_clone` is mapped to `riven_string_from`
+`String_clone` is mapped to `ruxen_string_from`
 (`codegen/runtime.rs:59`), which does a real `malloc`+`memcpy`, so
 string clone is already correct; other clone operations are not wired
 up.
@@ -157,7 +157,7 @@ up.
 ### 2.6 Attribute / legacy derive storage
 
 A historic prefix-attribute form was parsed by the lexer/parser
-(`parser/mod.rs:1572-1610`). Riven's surface syntax has since retired
+(`parser/mod.rs:1572-1610`). Ruxen's surface syntax has since retired
 both the prefix-attribute form and the `derive` keyword (see spec §3.5
 for `layout c` body directives and §3.6 for the implicit-include rule
 for structural mixins). The prefix-attribute and `derive` machinery
@@ -204,8 +204,8 @@ otherwise a completely ordinary method.
 
 ### 3.2 Non-goals (for this doc)
 
-- **NG1** — Drop-on-unwind. Riven has no panic strategy yet
-  (`riven_panic` just `exit(101)`s — runtime.c:423-426). This doc
+- **NG1** — Drop-on-unwind. Ruxen has no panic strategy yet
+  (`ruxen_panic` just `exit(101)`s — runtime.c:423-426). This doc
   assumes `panic = "abort"` and flags the follow-up in §9.
 - **NG2** — `?Sized` / DST support.
 - **NG3** — Async drop / `AsyncDrop`.
@@ -224,7 +224,7 @@ otherwise a completely ordinary method.
 
 ### 4.1 Declaration (compiler built-in)
 
-```riven
+```ruxen
 mixin Drop
   def var drop
 end
@@ -241,13 +241,13 @@ express:
 
 Rationale for the mutating-method form (not `def consume drop`): Rust chose this because
 consuming `self` inside `drop` would recursively need another drop call.
-Riven follows the same rule.
+Ruxen follows the same rule.
 
 ### 4.2 User implementation
 
 In the class body:
 
-```riven
+```ruxen
 class File
   handle: *var Void
   def init(@handle: *var Void) end
@@ -256,7 +256,7 @@ class File
 
   def var drop
     unsafe
-      riven_fclose(self.handle)
+      ruxen_fclose(self.handle)
     end
   end
 end
@@ -264,13 +264,13 @@ end
 
 Out-of-line via an extension block:
 
-```riven
+```ruxen
 extension File
   include Drop
 
   def var drop
     unsafe
-      riven_fclose(self.handle)
+      ruxen_fclose(self.handle)
     end
   end
 end
@@ -318,7 +318,7 @@ end
   itself at the drop point. Therefore **no other borrow of the value
   may be live at its drop point.** This prevents Rust's historical
   drop-check (`#[may_dangle]`) foot-gun in its simplest form. Because
-  Riven already has NLL-style borrow expiry
+  Ruxen already has NLL-style borrow expiry
   (`borrow_check/mod.rs:143`, `borrows::expire_before`), most code
   naturally satisfies this.
 - **D10** — Returning a value moves it and suppresses its drop. The
@@ -351,7 +351,7 @@ Three bound shapes that must work:
   Drop is not in the implicit-include set). Useful for wrapper types
   that want to explicitly document Drop-ness.
 - `T: !Drop` (syntax TBD) — not in scope for this doc. Rust has no stable
-  negative-Drop bound; Riven does not either.
+  negative-Drop bound; Ruxen does not either.
 - No bound — monomorphisation inserts the right drop glue at each
   instantiation based on the instantiated type.
 
@@ -363,7 +363,7 @@ Drop`, that is rejected with E-COPY-DROP-CONFLICT (see §5).
 
 ### 5.1 Declaration (compiler built-in)
 
-```riven
+```ruxen
 mixin Copy: Clone end
 ```
 
@@ -456,7 +456,7 @@ satisfy C1–C4) is a hard error.
 
 ### 6.1 Declaration (compiler built-in)
 
-```riven
+```ruxen
 mixin Clone
   def clone -> Self
 end
@@ -495,15 +495,15 @@ is a hard error:
 ### 6.4 Blanket / built-in provisions
 
 - All primitive Copy types: Clone is trivial (the value is already
-  bit-copied). Codegen emits `riven_noop_passthrough` for the clone
+  bit-copied). Codegen emits `ruxen_noop_passthrough` for the clone
   method — already available in the runtime (runtime.c:410-412).
 - Tuples `(T, U, ...)`: Clone iff every element is Clone. Synthesised.
 - Arrays `[T; N]`: Clone iff T is Clone. Synthesised as a loop.
-- `Array[T]`: Clone iff T is Clone. Runtime provides `riven_vec_clone`.
+- `Array[T]`: Clone iff T is Clone. Runtime provides `ruxen_vec_clone`.
   (Not in scope for the first phase — `Array[T].clone` already resolves
   to a missing method; we either ship the runtime helper with Drop or
   diagnose it as unimplemented.)
-- `String`: already `Clone`; `String_clone` → `riven_string_from`
+- `String`: already `Clone`; `String_clone` → `ruxen_string_from`
   (runtime.c:131-140, codegen/runtime.rs:59).
 - `&T`: `(&T).clone() = *self` — references are Copy, Clone is
   trivial.
@@ -518,7 +518,7 @@ pass synthesises:
 
 - struct `S { a: A, b: B }` →
 
-```riven
+```ruxen
 extension S
   include Clone
 
@@ -597,10 +597,10 @@ does **drop elaboration**, analogous to rustc's `drop_elaboration`.
    - Then, in reverse field order, emit `Drop { field }` for each
      non-Copy field (classes/structs/enums) — this is **drop glue**.
    - For primitives-with-heap-tail types we route to runtime helpers:
-     - `Ty::String` / `Ty::Str` (owned) → `riven_string_free` (new
-       helper — simple `riven_dealloc` wrapper).
-     - `Ty::Vec(T)` → `riven_vec_free` (new helper — iterates,
-       drops elements, frees buffer, frees the `RivenVec` struct).
+     - `Ty::String` / `Ty::Str` (owned) → `ruxen_string_free` (new
+       helper — simple `ruxen_dealloc` wrapper).
+     - `Ty::Vec(T)` → `ruxen_vec_free` (new helper — iterates,
+       drops elements, frees buffer, frees the `RuxenVec` struct).
      - `Ty::Option(T)` / `Ty::Result(T,E)` → branch on tag, drop
        payload, dealloc the 16-byte tagged union.
    - For `Ty::Array(T, N)` → emit a lowered loop that drops each
@@ -608,7 +608,7 @@ does **drop elaboration**, analogous to rustc's `drop_elaboration`.
    - For `Ty::Tuple(ts)` → drop each in reverse order.
    - For `Ty::Class` / `Ty::Struct` / `Ty::Enum` **without** user
      Drop → emit drop glue only (no user-method call), then free the
-     allocation via `riven_dealloc`.
+     allocation via `ruxen_dealloc`.
    - For raw pointers, references, and primitives → Drop is a no-op
      (they had no Drop to begin with; they shouldn't be in the drop
      set, but defence in depth).
@@ -646,7 +646,7 @@ does **drop elaboration**, analogous to rustc's `drop_elaboration`.
 Authors who want the loud form for documentation or early-failure write
 the include explicitly in the type body:
 
-```riven
+```ruxen
 struct Point
   x: Float
   y: Float
@@ -700,7 +700,7 @@ they must also write `def var drop`; the recursive field-drop glue
 
 ## 9. Panic / Unwind Interaction
 
-**Current state**: `riven_panic` in runtime.c:423-426 just prints and
+**Current state**: `ruxen_panic` in runtime.c:423-426 just prints and
 `exit(101)`. There is no unwinding, no panic-runtime, no landing pads.
 
 **Decision for this phase**: assume `panic = "abort"`. Drops do **not**
@@ -738,7 +738,7 @@ Rust.
 | Drop flags + real drop-elaboration pass | rewrite `insert_drops` at `mir/lower.rs:3346-3407`; new module `mir/drop_elab.rs` |
 | Emit `MoveFlow` from borrow-check | extend `borrow_check/moves.rs` public API with per-local history |
 | Real codegen of `MirInst::Drop` | `codegen/cranelift.rs:692-698`, `codegen/llvm/emit.rs:790-792` |
-| Runtime free helpers | `runtime/runtime.c` — add `riven_string_free`, `riven_vec_free`, `riven_option_free`, `riven_result_free` |
+| Runtime free helpers | `runtime/runtime.c` — add `ruxen_string_free`, `ruxen_vec_free`, `ruxen_option_free`, `ruxen_result_free` |
 | Declare new runtime functions | `codegen/runtime.rs:11-26`, `codegen/llvm/runtime_decl.rs` |
 | Prelude `drop[T](x: T)` | `resolve/mod.rs:173-195` (builtin fns) + a trivial MIR lowering |
 
@@ -747,25 +747,25 @@ Rust.
 ```c
 /* runtime/runtime.c */
 
-void riven_string_free(char *s) {
+void ruxen_string_free(char *s) {
     if (s) free(s);
 }
 
-void riven_vec_free(RivenVec *v) {
+void ruxen_vec_free(RuxenVec *v) {
     if (!v) return;
     /* Element-drop is emitted by codegen per-element;
-       riven_vec_free assumes elements are already dropped. */
+       ruxen_vec_free assumes elements are already dropped. */
     free(v->data);
     free(v);
 }
 
-void riven_option_free(void *opt) { if (opt) free(opt); }
-void riven_result_free(void *res) { if (res) free(res); }
+void ruxen_option_free(void *opt) { if (opt) free(opt); }
+void ruxen_result_free(void *res) { if (res) free(res); }
 ```
 
-Each matches the corresponding `riven_*_new` / allocation path. The
+Each matches the corresponding `ruxen_*_new` / allocation path. The
 compiler emits an element-level drop loop *before* calling
-`riven_vec_free` if the element type needs drop.
+`ruxen_vec_free` if the element type needs drop.
 
 ### 10.3 Type-check rules to add
 
@@ -818,7 +818,7 @@ compiler emits an element-level drop loop *before* calling
   - `include Drop` in a type body registered, checked, dispatched.
   - Rewrite `insert_drops` → `drop_elab` with reverse-order field drop.
   - Real Drop codegen for `Ty::Class/Struct/Enum` (today's whitelist).
-  - Runtime: no new functions yet; uses `riven_dealloc`.
+  - Runtime: no new functions yet; uses `ruxen_dealloc`.
   - Parameters and whitelisted temporaries start being dropped.
 - **4c** — Drop flags + `Copy` marker:
   - `Copy` nominal `include` recognised; `is_copy` consults mixin table.
@@ -832,14 +832,14 @@ compiler emits an element-level drop loop *before* calling
   - Built-in `drop(x)` prelude helper.
   - Extend drop elaboration to `String`, `Array`, `Option`, `Result`,
     `Tuple`, `Array` (removes the whitelist at lower.rs:3382-3387).
-  - Runtime: add `riven_string_free`, `riven_vec_free`, tagged-union
+  - Runtime: add `ruxen_string_free`, `ruxen_vec_free`, tagged-union
     free helpers.
 
 Each phase should be independently landable and testable.
 
 ## 11. Test Matrix
 
-Live in `crates/riven-core/tests/fixtures/` and unit tests in each
+Live in `crates/ruxen-core/tests/fixtures/` and unit tests in each
 phase's module. Minimum coverage:
 
 ### 11.1 Drop semantics
@@ -911,7 +911,7 @@ phase's module. Minimum coverage:
     double-free (valgrind).
 28. **DROP-FLAG-CODEGEN**: the conditional-move test compiles to code
     that reads the flag at runtime — assert on MIR output via
-    `rivenc --emit=mir`.
+    `ruxenc --emit=mir`.
 
 ## 12. Open Questions & Risks
 
@@ -924,7 +924,7 @@ phase's module. Minimum coverage:
   lower.rs:3382-3387 explicitly excludes them citing "pointers to
   static data". Part of phase 4d is removing that exclusion; we need a
   runtime invariant that `String` locals are always heap-owned
-  (`riven_string_from` / `riven_string_concat` copies) before we can
+  (`ruxen_string_from` / `ruxen_string_concat` copies) before we can
   free them. Audit: verify no codegen path stores a string-literal
   pointer directly into a local typed `Ty::String`. Today the literal
   comes from `MirInst::StringLiteral` at `cranelift.rs:700-705` and
@@ -942,7 +942,7 @@ phase's module. Minimum coverage:
   the child's? Today there is no destructor chain. Propose: yes,
   parent Drop runs after child Drop, matching reverse-construction
   order (init goes parent-then-child; drop goes child-then-parent).
-  Needs confirmation; classes.rvn has no Drop example.
+  Needs confirmation; classes.rx has no Drop example.
 - **OQ-6** — `ManuallyDrop[T]`: not in scope. Plan to add in a future
   phase when unsafe patterns need it.
 - **OQ-7** — Drop for `&var T` aliasing: the D9 "drop takes `&var

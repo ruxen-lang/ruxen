@@ -1,4 +1,4 @@
-# Tier 3.04 — Doc Generator (`rivendoc`)
+# Tier 3.04 — Doc Generator (`ruxendoc`)
 
 Status: draft
 Depends on: none (but LSP doc 01 benefits from the same AST change)
@@ -8,7 +8,7 @@ Blocks: self-hosted documentation of the stdlib (tier-1 doc 01)
 
 ## 1. Summary & motivation
 
-Riven has no way to produce documentation. Users who comment their
+Ruxen has no way to produce documentation. Users who comment their
 code with `## This function adds two integers` see their words
 extracted by the lexer as `TokenKind::DocComment` (`lexer/mod.rs:211-226`)
 and then silently discarded at four places in the parser:
@@ -16,7 +16,7 @@ and then silently discarded at four places in the parser:
 formatter round-trips them by re-emitting from the token stream
 (`formatter/format_expr.rs:442`), but nothing semantic consumes them.
 
-No `rivendoc` binary exists. No HTML template. No search index. No
+No `ruxendoc` binary exists. No HTML template. No search index. No
 cross-reference resolution. The consequence: once Tier-1 stdlib lands,
 users will have ~20 new modules and types with no reference documentation
 except tutorial prose.
@@ -26,7 +26,7 @@ This doc specifies:
 1. Capturing `##` doc comments on every documentable item
    (functions, methods, classes, structs, enums, variants, mixins,
    modules, type aliases, newtypes, consts, fields).
-2. A `rivendoc` binary that produces an HTML reference site from a
+2. A `ruxendoc` binary that produces an HTML reference site from a
    project's source, including cross-links, a search index, and
    Markdown rendering of doc-comment bodies.
 3. A path to JSON output for consumption by other tools (IDE hover,
@@ -39,7 +39,7 @@ This doc specifies:
 ### 2.1 Doc-comment syntax already decided
 
 The lexer recognizes **`##`** as the doc-comment syntax
-(`crates/riven-core/src/lexer/mod.rs:170-172`, `:211-226`):
+(`crates/ruxen-core/src/lexer/mod.rs:170-172`, `:211-226`):
 
 ```rust
 } else if self.peek_at(1) == Some('#') {
@@ -89,9 +89,9 @@ node. That means if we start attaching them to AST nodes, we must
 either update the formatter to read from AST nodes, or keep the
 token-based path and accept some duplication.
 
-### 2.4 No `rivendoc` binary, no HTML output, no search
+### 2.4 No `ruxendoc` binary, no HTML output, no search
 
-A grep for `rivendoc` in `crates/` returns zero matches. No templating
+A grep for `ruxendoc` in `crates/` returns zero matches. No templating
 engine, no Markdown parser, no search-index builder.
 
 ### 2.5 Existing public surface to document
@@ -99,7 +99,7 @@ engine, no Markdown parser, no search-index builder.
 Once tier-1 stdlib lands, the documented items are the exported set.
 Visibility levels already exist (`ast::Visibility::{Public, Protected,
 Private}`) and are tracked on `Definition.visibility`
-(`resolve/symbols.rs:144`). `rivendoc` defaults to documenting
+(`resolve/symbols.rs:144`). `ruxendoc` defaults to documenting
 `Public` items only.
 
 ---
@@ -108,8 +108,8 @@ Private}`) and are tracked on `Definition.visibility`
 
 ### Goals
 
-1. `rivendoc` binary that produces a navigable HTML site from
-   `src/**.rvn` in a project.
+1. `ruxendoc` binary that produces a navigable HTML site from
+   `src/**.rx` in a project.
 2. Every public item in the source has a dedicated page (or section)
    with its doc comment rendered.
 3. Cross-references: `see [Array.push]` in a doc comment renders as a
@@ -117,11 +117,11 @@ Private}`) and are tracked on `Definition.visibility`
 4. A fuzzy-searchable index page (client-side JS, single JSON blob).
 5. Markdown formatting inside doc comments (bold, code blocks, lists,
    links).
-6. `## ```rvn` code blocks get Riven syntax highlighting.
-7. Works against a single file (`rivendoc path/to/file.rvn`) and a
-   project (`rivendoc` in the project root).
+6. `## ```rx` code blocks get Ruxen syntax highlighting.
+7. Works against a single file (`ruxendoc path/to/file.rx`) and a
+   project (`ruxendoc` in the project root).
 8. Doc comments surface in LSP hover (shared work with doc 01).
-9. Optional JSON output (`rivendoc --format=json`) for IDE/search
+9. Optional JSON output (`ruxendoc --format=json`) for IDE/search
    tooling.
 
 ### Non-goals
@@ -150,7 +150,7 @@ Private}`) and are tracked on `Definition.visibility`
 ##
 ## # Examples
 ##
-## ```rvn
+## ```rx
 ## let result = add(2, 3)
 ## assert_eq(result, 5)
 ## ```
@@ -167,26 +167,26 @@ Rules:
   an item (no blank lines between).
 - Markdown syntax is rendered via a CommonMark subset.
 - `[Name]` or `[Module.Name]` resolves to a cross-link.
-- Fenced code blocks with language tag `rvn` / `riven` get syntax
+- Fenced code blocks with language tag `rx` / `ruxen` get syntax
   highlighted.
 
 ### 4.2 CLI
 
 ```
-rivendoc                             # docs for project at cwd
-rivendoc src/main.rvn                # docs for a single file
-rivendoc --output docs/              # output directory (default: target/doc/)
-rivendoc --format=html               # default
-rivendoc --format=json               # single JSON blob
-rivendoc --no-deps                   # don't rebuild dep docs
-rivendoc --open                      # after build, xdg-open / open the index.html
-riven doc                            # forwards to rivendoc (see §4.3)
-riven doc --open
+ruxendoc                             # docs for project at cwd
+ruxendoc src/main.rx                # docs for a single file
+ruxendoc --output docs/              # output directory (default: target/doc/)
+ruxendoc --format=html               # default
+ruxendoc --format=json               # single JSON blob
+ruxendoc --no-deps                   # don't rebuild dep docs
+ruxendoc --open                      # after build, xdg-open / open the index.html
+ruxen doc                            # forwards to ruxendoc (see §4.3)
+ruxen doc --open
 ```
 
-### 4.3 `riven doc` subcommand
+### 4.3 `ruxen doc` subcommand
 
-Add to `crates/riven-cli/src/cli.rs::Command`:
+Add to `crates/ruxen-cli/src/cli.rs::Command`:
 
 ```rust
 Doc {
@@ -197,8 +197,8 @@ Doc {
 },
 ```
 
-Implementation: shell out to `rivendoc` binary (parallel to
-`rivenc`/`riven-lsp`/`riven-dap`).
+Implementation: shell out to `ruxendoc` binary (parallel to
+`ruxenc`/`ruxen-lsp`/`ruxen-dap`).
 
 ### 4.4 Output layout
 
@@ -232,7 +232,7 @@ to their items; item pages link back to modules via breadcrumbs.
       "visibility": "public",
       "signature": "def add(a: Int, b: Int) -> Int",
       "doc": "Adds two integers.\n\nPanics if the addition overflows.",
-      "span": { "file": "src/math.rvn", "line": 12, "col": 1 },
+      "span": { "file": "src/math.rx", "line": 12, "col": 1 },
       "links": ["my_app.math.sub", "std.Array.push"]
     }
   ]
@@ -296,15 +296,15 @@ pub struct Definition {
 }
 ```
 
-This single-field addition unblocks both `rivendoc` and LSP-hover
+This single-field addition unblocks both `ruxendoc` and LSP-hover
 doc rendering (doc 01 §7).
 
-### 5.2 `rivendoc` binary
+### 5.2 `ruxendoc` binary
 
-New crate `crates/rivendoc/`:
+New crate `crates/ruxendoc/`:
 
 ```
-crates/rivendoc/
+crates/ruxendoc/
 ├── Cargo.toml
 ├── src/
 │   ├── main.rs
@@ -333,7 +333,7 @@ index. No templating engine — small enough to hand-roll with `format!`.
 
 ### 5.3 Item collection
 
-Reuse `riven_core::{lexer, parser, resolve, typeck}`. After `typeck`,
+Reuse `ruxen_core::{lexer, parser, resolve, typeck}`. After `typeck`,
 `TypeCheckResult.symbols` has every definition with its span and
 (after §5.1) doc comments. Walk `symbols.iter()` and produce:
 
@@ -359,7 +359,7 @@ match `[Name]` / `[A.B.C]`. Resolution:
 1. If the fragment is `A.B`, try `symbols.lookup_path(["A", "B"])`.
 2. On match, rewrite the link to the item's HTML URL.
 3. On miss, leave as plain text but emit a warning: `warning:
-   unresolved doc link [A.B] at src/foo.rvn:12`.
+   unresolved doc link [A.B] at src/foo.rx:12`.
 
 The symbol-table path-lookup API doesn't exist today — it's one helper
 function on `SymbolTable` iterating the definitions vector.
@@ -385,9 +385,9 @@ Use `pulldown-cmark` with:
 
 Disable: raw HTML, autolinks, footnotes (can be re-enabled later).
 
-### 5.7 Syntax highlighting for `rvn` code blocks
+### 5.7 Syntax highlighting for `rx` code blocks
 
-Reuse `riven_core::lexer::Lexer` to tokenize the code, then emit HTML
+Reuse `ruxen_core::lexer::Lexer` to tokenize the code, then emit HTML
 spans:
 
 ```rust
@@ -403,7 +403,7 @@ fn highlight(code: &str) -> String {
 }
 ```
 
-The same token-to-class mapping can reuse `riven-ide/src/semantic_tokens.rs:87-161`
+The same token-to-class mapping can reuse `ruxen-ide/src/semantic_tokens.rs:87-161`
 logic.
 
 ### 5.8 Module/item URL scheme
@@ -432,46 +432,46 @@ v2: hash-based invalidation.
 
 | Phase | File | Change |
 |---|---|---|
-| 1 | `crates/riven-core/src/lexer/token.rs` | (no change — `DocComment` already exists) |
-| 1 | `crates/riven-core/src/parser/ast.rs` | Add `doc_comments: Vec<String>` to every documentable node |
-| 1 | `crates/riven-core/src/parser/mod.rs:455-458`, `:884-887`, `:1112-1115`, `:1187-1190` | Capture instead of discard; attach to next item |
-| 1 | `crates/riven-core/src/hir/nodes.rs` | Add `doc_comments` to HIR variants |
-| 1 | `crates/riven-core/src/resolve/mod.rs:375`, `:811`, `:821` | Copy doc comments ast → hir |
-| 1 | `crates/riven-core/src/resolve/symbols.rs:140-146` | Add `doc_comments` to `Definition` |
-| 1 | `crates/riven-core/src/formatter/format_items.rs` | Emit doc comments before items (from AST, not tokens) |
-| 2 | `crates/rivendoc/` *new crate* | See §5.2 |
-| 2 | `crates/rivendoc/Cargo.toml` | Deps: `pulldown-cmark`, `serde_json`, `riven-core` |
-| 3 | `crates/riven-cli/src/cli.rs:25-114` | Add `Doc` subcommand |
-| 3 | `crates/riven-cli/src/main.rs` | Wire `Command::Doc` to shell out to `rivendoc` |
-| 4 | `crates/riven-ide/src/hover.rs:75` | Render `def.doc_comments` after signature |
-| 5 | `install.sh` | Copy `rivendoc` binary; ship assets |
-| 5 | `.github/workflows/release.yml:79-103` | Stage `rivendoc` into release tarball |
+| 1 | `crates/ruxen-core/src/lexer/token.rs` | (no change — `DocComment` already exists) |
+| 1 | `crates/ruxen-core/src/parser/ast.rs` | Add `doc_comments: Vec<String>` to every documentable node |
+| 1 | `crates/ruxen-core/src/parser/mod.rs:455-458`, `:884-887`, `:1112-1115`, `:1187-1190` | Capture instead of discard; attach to next item |
+| 1 | `crates/ruxen-core/src/hir/nodes.rs` | Add `doc_comments` to HIR variants |
+| 1 | `crates/ruxen-core/src/resolve/mod.rs:375`, `:811`, `:821` | Copy doc comments ast → hir |
+| 1 | `crates/ruxen-core/src/resolve/symbols.rs:140-146` | Add `doc_comments` to `Definition` |
+| 1 | `crates/ruxen-core/src/formatter/format_items.rs` | Emit doc comments before items (from AST, not tokens) |
+| 2 | `crates/ruxendoc/` *new crate* | See §5.2 |
+| 2 | `crates/ruxendoc/Cargo.toml` | Deps: `pulldown-cmark`, `serde_json`, `ruxen-core` |
+| 3 | `crates/ruxen-cli/src/cli.rs:25-114` | Add `Doc` subcommand |
+| 3 | `crates/ruxen-cli/src/main.rs` | Wire `Command::Doc` to shell out to `ruxendoc` |
+| 4 | `crates/ruxen-ide/src/hover.rs:75` | Render `def.doc_comments` after signature |
+| 5 | `install.sh` | Copy `ruxendoc` binary; ship assets |
+| 5 | `.github/workflows/release.yml:79-103` | Stage `ruxendoc` into release tarball |
 
 ### Phase breakdown
 
 **Phase 1 — AST capture (2 days).**
 The highest-leverage change in this doc. Once it lands, LSP hover
-instantly improves (doc 01 §7) and `rivendoc` has something to
+instantly improves (doc 01 §7) and `ruxendoc` has something to
 extract.
 
 - Day 1: AST + parser changes.
 - Day 2: HIR + resolver + symbol table + formatter.
 
-**Phase 2 — `rivendoc` core (5 days).**
+**Phase 2 — `ruxendoc` core (5 days).**
 - Day 1: crate skeleton, collection pass.
 - Day 2: HTML templates (module, function, class, struct).
-- Day 3: Markdown + `rvn` highlighting.
+- Day 3: Markdown + `rx` highlighting.
 - Day 4: cross-ref resolution + search index.
 - Day 5: snapshot tests (see §10).
 
 **Phase 3 — CLI integration (1 day).**
-`riven doc` wrapping `rivendoc`.
+`ruxen doc` wrapping `ruxendoc`.
 
 **Phase 4 — LSP hover integration (0.5 day).**
 Render doc in hover.
 
 **Phase 5 — Distribution (0.5 day).**
-Ship `rivendoc` in release artifacts.
+Ship `ruxendoc` in release artifacts.
 
 Total: ~9 engineer-days.
 
@@ -481,7 +481,7 @@ Total: ~9 engineer-days.
 
 - **Doc 01 (LSP).** The AST change in Phase 1 directly unblocks LSP
   hover enrichment. Ship together if possible.
-- **Doc 03 (test framework).** `rivendoc` can link to tests that cover
+- **Doc 03 (test framework).** `ruxendoc` can link to tests that cover
   each item. Nice-to-have.
 - **Doc 05 (bench).** Similar — link bench results to items.
 - **Doc 06 (incremental).** Docs generation should run against the
@@ -491,7 +491,7 @@ Total: ~9 engineer-days.
 
 ### Tier-1 dependencies
 
-- **Tier-1 doc 01 (stdlib).** Once stdlib lands, `rivendoc` becomes
+- **Tier-1 doc 01 (stdlib).** Once stdlib lands, `ruxendoc` becomes
   how users discover it. Stdlib must ship with doc comments on every
   exported item. Coordinate with doc 01 authors.
 - **Tier-1 doc 05 (macros).** Implicit mixin includes (Debug, Clone,
@@ -505,7 +505,7 @@ Total: ~9 engineer-days.
 | Phase | Scope | Days | Ships to users? |
 |---|---|---|---|
 | 1 | AST capture | 2 | No (internal only) |
-| 2 | `rivendoc` core | 5 | Yes |
+| 2 | `ruxendoc` core | 5 | Yes |
 | 3 | CLI + LSP hover | 1.5 | Yes |
 | 4 | Distribution | 0.5 | Yes |
 | 5 (v2) | Doctests | — | — |
@@ -530,19 +530,19 @@ Total: ~9 engineer-days.
 5. **OQ-5 — Multi-line signatures.**
    `def foo(a: Int, b: Int, c: Int) -> Int` that wraps across 3 lines
    in source: how does it render? Proposal: reuse
-   `riven_core::formatter` to pretty-print the signature; always render
+   `ruxen_core::formatter` to pretty-print the signature; always render
    the formatted form.
-6. **OQ-6 — `riven.toml` metadata.**
-   Project name, version, description — should flow from `riven.toml`
-   into the HTML `<title>` and index page. Requires `rivendoc` to
-   read `riven.toml`.
+6. **OQ-6 — `ruxen.toml` metadata.**
+   Project name, version, description — should flow from `ruxen.toml`
+   into the HTML `<title>` and index page. Requires `ruxendoc` to
+   read `ruxen.toml`.
 7. **OQ-7 — Versioned docs.**
    Publishing multiple versions of a project's docs is a package-registry
    concern. Out of scope v1.
 8. **R1 — Doc comments on anonymous extension blocks.**
    Low value. Skip; no doc page for extensions in v1.
 9. **R2 — Cross-refs to stdlib items.**
-   Works if `rivendoc` can resolve `std.*` paths. Requires loading
+   Works if `ruxendoc` can resolve `std.*` paths. Requires loading
    stdlib's symbol table. v1 punt: document `[std.Array.push]` as plain
    text if not found in the current project.
 10. **R3 — `pulldown-cmark` dependency weight.**
@@ -572,7 +572,7 @@ fixture projects + their expected HTML output.
 | `tests/fixtures/xref_internal/` | `[foo]` resolves to `fn.foo.html` |
 | `tests/fixtures/xref_missing/` | Unresolved `[bar]` stays as plain text + warning |
 | `tests/fixtures/markdown/` | Bold / lists / code blocks render correctly |
-| `tests/fixtures/rvn_highlight/` | `rvn` code block has span classes |
+| `tests/fixtures/rx_highlight/` | `rx` code block has span classes |
 | `tests/fixtures/private_hidden/` | Private `def` does not appear in output |
 | `tests/fixtures/search_index/` | `search-index.json` lists every public item |
 | `tests/fixtures/nested_modules/` | `a.b.c` produces `a/b/c/` paths correctly |

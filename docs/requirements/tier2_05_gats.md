@@ -14,7 +14,7 @@ A *generic associated type* is an associated type that takes its own
 generic parameters — typically lifetimes, occasionally types. The
 canonical example:
 
-```riven
+```ruxen
 mixin LendingIterator
   type Item[a]
   def var next[a](self: &a var Self) -> Option[Self.Item[a]]
@@ -24,7 +24,7 @@ end
 `Item[a]` is an associated type that varies with the lifetime `a`.
 A class body for `WindowIter` over a slice:
 
-```riven
+```ruxen
 class WindowIter[Int]
   include LendingIterator
   type Item[a] = &a [Int]
@@ -38,7 +38,7 @@ GATs, the caller would be forced to `clone` every item (turning
 `LendingIterator` into a plain `Iterator[Item = Array[Int]]`) or the
 class body would have to promote items to owned types.
 
-**Why Riven needs GATs:**
+**Why Ruxen needs GATs:**
 
 1. **Pools of borrowed resources.** `struct Pool[T]; pool.acquire -> some Handle[_ Pool]`
    where the handle's lifetime is tied to the pool.
@@ -101,7 +101,7 @@ extend every part with a generic-args slot.
 
 ### 4.1 Declaration
 
-```riven
+```ruxen
 mixin LendingIterator
   type Item[a]
   def var next[a](self: &a var Self) -> Option[Self.Item[a]]
@@ -126,7 +126,7 @@ Rules:
 
 ### 4.2 Class-body binding
 
-```riven
+```ruxen
 class WindowIter[T]
   data: Array[T]
   pos: USize
@@ -158,7 +158,7 @@ Rules:
 
 ### 4.3 Use-site projection
 
-```riven
+```ruxen
 def first_window[a, T](w: &a var WindowIter[T]) -> Option[&a [T]]
   w.next()
 end
@@ -372,7 +372,7 @@ See §6.2.
 
 - **OQ-1: same identifier for parameter on mixin side and class side?**
   `mixin T; type A[a]` and `class S; include T; type A[b] = ...` —
-  must the class use `a`? Rust is lenient, accepts either. Riven
+  must the class use `a`? Rust is lenient, accepts either. Ruxen
   follows: alpha-rename on parse.
 - **OQ-2: bound propagation.** `type Iter[a]: Iterator[Item = &a
   Self.Elem]` — at class-body adoption time, must we check that the binding satisfies
@@ -380,7 +380,7 @@ See §6.2.
   HRTB introduction.
 - **OQ-3: recursive GATs.** `type A[a] = Option[Self.A[a]]` — the
   type mentions itself. Rust forbids with a solver cycle error.
-  Riven: detect cycles at normalize time, E-GAT-CYCLE.
+  Ruxen: detect cycles at normalize time, E-GAT-CYCLE.
 - **OQ-4: GAT with a type parameter bound by `Self.Item` of another
   mixin.** Solver ordering question — does resolution of one GAT
   happen before another? Document: GATs in a single class body are resolved
@@ -431,9 +431,9 @@ See §6.2.
 
 ### 10.3 Fixture additions
 
-- `tests/fixtures/gat_lending.rvn` — LendingIterator over
+- `tests/fixtures/gat_lending.rx` — LendingIterator over
   `Array.windows`.
-- `tests/fixtures/gat_collection.rvn` — `Collection` with
+- `tests/fixtures/gat_collection.rx` — `Collection` with
   `type Iter[a]: Iterator`.
-- `tests/fixtures/gat_error_any.rvn` — negative: any on GAT mixin.
-- `tests/fixtures/gat_error_cycle.rvn` — negative: recursive GAT.
+- `tests/fixtures/gat_error_any.rx` — negative: any on GAT mixin.
+- `tests/fixtures/gat_error_cycle.rx` — negative: recursive GAT.

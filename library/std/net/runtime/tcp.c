@@ -7,12 +7,12 @@
  *
  * Phase 2 #06.5 T5 surface: class wrappers TcpListener / TcpStream
  * (owning fd, drop-closes) plus the Shutdown enum. The flat fd-based
- * free fns (riven_tcp_connect/listen/accept/read/write/close) that
+ * free fns (ruxen_tcp_connect/listen/accept/read/write/close) that
  * preceded the class API are still defined here — the class methods
  * reuse them as building blocks, and removing the symbols would force
- * a runtime relink — but the Riven-facing surface no longer exposes
- * them. The legacy `riven_tcp_read` (NUL-terminated, not binary-safe)
- * is replaced by `riven_tcp_read_bytes` for any byte-array consumer.
+ * a runtime relink — but the Ruxen-facing surface no longer exposes
+ * them. The legacy `ruxen_tcp_read` (NUL-terminated, not binary-safe)
+ * is replaced by `ruxen_tcp_read_bytes` for any byte-array consumer.
  *
  * Address parsing: we split the input on the *last* ':' so IPv6 literals
  * with embedded colons can be handled later (v1: IPv4/hostname only,
@@ -22,9 +22,9 @@
  * write to a peer that closed its end raises `EPIPE` rather than killing
  * us with SIGPIPE. macOS/BSD lack `MSG_NOSIGNAL` (collapsed to 0 above)
  * but have the per-socket `SO_NOSIGPIPE` option, which we set via
- * `riven_tcp_set_nosigpipe()` after every `socket()` / `accept()`.
+ * `ruxen_tcp_set_nosigpipe()` after every `socket()` / `accept()`.
  *
- * v1 binary-safety caveat: `tcp_read` returns a NUL-terminated Riven
+ * v1 binary-safety caveat: `tcp_read` returns a NUL-terminated Ruxen
  * String. The buffer is malloc'd at `max+1` and the byte after the last
  * received byte is set to 0. If the *received* bytes contain embedded
  * NULs, callers will observe truncation at the first NUL when treating
@@ -37,7 +37,7 @@
  * On macOS / *BSD MSG_NOSIGNAL doesn't exist (defined to 0 above), so
  * SO_NOSIGPIPE on the socket is what actually keeps a write-after-close
  * from killing us with SIGPIPE. */
-static void riven_tcp_set_nosigpipe(int fd) {
+static void ruxen_tcp_set_nosigpipe(int fd) {
 #ifdef SO_NOSIGPIPE
     int one = 1;
     (void)setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
@@ -49,7 +49,7 @@ static void riven_tcp_set_nosigpipe(int fd) {
 /* Internal: split "host:port" on the last colon. Returns 0 on success,
  * -1 on malformed input. `host` may end up empty (means INADDR_ANY for
  * listen, or fail-loudly for connect via getaddrinfo). */
-static int riven_tcp_split_addr(const char *addr, char *host, size_t host_cap,
+static int ruxen_tcp_split_addr(const char *addr, char *host, size_t host_cap,
                                 char *port, size_t port_cap) {
     if (!addr) return -1;
     const char *colon = strrchr(addr, ':');
@@ -63,10 +63,10 @@ static int riven_tcp_split_addr(const char *addr, char *host, size_t host_cap,
     return 0;
 }
 
-int64_t riven_tcp_connect(const char *addr) {
+int64_t ruxen_tcp_connect(const char *addr) {
     char host[256];
     char port[16];
-    if (riven_tcp_split_addr(addr, host, sizeof host, port, sizeof port) != 0) {
+    if (ruxen_tcp_split_addr(addr, host, sizeof host, port, sizeof port) != 0) {
         return -1;
     }
 
@@ -85,7 +85,7 @@ int64_t riven_tcp_connect(const char *addr) {
     for (struct addrinfo *ai = res; ai; ai = ai->ai_next) {
         fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (fd < 0) continue;
-        riven_tcp_set_nosigpipe(fd);
+        ruxen_tcp_set_nosigpipe(fd);
         if (connect(fd, ai->ai_addr, ai->ai_addrlen) == 0) {
             break;
         }
@@ -97,10 +97,10 @@ int64_t riven_tcp_connect(const char *addr) {
     return (int64_t)fd;
 }
 
-int64_t riven_tcp_listen(const char *addr) {
+int64_t ruxen_tcp_listen(const char *addr) {
     char host[256];
     char port[16];
-    if (riven_tcp_split_addr(addr, host, sizeof host, port, sizeof port) != 0) {
+    if (ruxen_tcp_split_addr(addr, host, sizeof host, port, sizeof port) != 0) {
         return -1;
     }
 
@@ -111,7 +111,7 @@ int64_t riven_tcp_listen(const char *addr) {
 
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return -1;
-    riven_tcp_set_nosigpipe(fd);
+    ruxen_tcp_set_nosigpipe(fd);
 
     int one = 1;
     /* SO_REUSEADDR so test runs can re-bind without TIME_WAIT delay. */
@@ -149,37 +149,37 @@ int64_t riven_tcp_listen(const char *addr) {
     return (int64_t)fd;
 }
 
-int64_t riven_tcp_accept(int64_t fd) {
+int64_t ruxen_tcp_accept(int64_t fd) {
     if (fd < 0) return -1;
     /* EINTR is propagated to the caller as `-1` rather than
      * auto-retried internally — this lets cooperative shutdown
      * loops notice a SIGINT and break out of their accept loop.
      * Callers that want auto-retry can wrap with `while fd < 0
-     * { ... }` in Riven and check `signal_received_sigint()` on
+     * { ... }` in Ruxen and check `signal_received_sigint()` on
      * each iteration. */
     int accepted = accept((int)fd, NULL, NULL);
     if (accepted >= 0) {
-        riven_tcp_set_nosigpipe(accepted);
+        ruxen_tcp_set_nosigpipe(accepted);
     }
     return (int64_t)accepted;
 }
 
-/* DEPRECATED in #06.5 T5: returns a NUL-terminated Riven String which
+/* DEPRECATED in #06.5 T5: returns a NUL-terminated Ruxen String which
  * is not binary-safe (embedded 0x00 bytes look like a short read). The
  * TcpStream class surface and any new code should use
- * `riven_tcp_read_bytes` (below), which pushes each received byte as
- * an int64 slot into a caller-provided RivenVec — matching
- * riven_file_read's contract. Kept linked because removing it would
- * require a runtime relink dance; no Riven-callable surface routes
+ * `ruxen_tcp_read_bytes` (below), which pushes each received byte as
+ * an int64 slot into a caller-provided RuxenVec — matching
+ * ruxen_file_read's contract. Kept linked because removing it would
+ * require a runtime relink dance; no Ruxen-callable surface routes
  * here after #06.5 T5 dropped the flat tcp_read free fn. */
-char *riven_tcp_read(int64_t fd, int64_t max) {
+char *ruxen_tcp_read(int64_t fd, int64_t max) {
     if (fd < 0 || max <= 0) {
-        return riven_string_from("");
+        return ruxen_string_from("");
     }
     size_t cap = (size_t)max;
     char *buf = (char *)malloc(cap + 1);
     if (!buf) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
     ssize_t n;
     do {
@@ -188,13 +188,13 @@ char *riven_tcp_read(int64_t fd, int64_t max) {
 
     if (n <= 0) {
         free(buf);
-        return riven_string_from("");
+        return ruxen_string_from("");
     }
     buf[n] = '\0';
     return buf;
 }
 
-int64_t riven_tcp_write(int64_t fd, const char *data) {
+int64_t ruxen_tcp_write(int64_t fd, const char *data) {
     if (fd < 0 || !data) return -1;
     size_t total = strlen(data);
     size_t sent = 0;
@@ -209,31 +209,31 @@ int64_t riven_tcp_write(int64_t fd, const char *data) {
     return (int64_t)sent;
 }
 
-void riven_tcp_close(int64_t fd) {
+void ruxen_tcp_close(int64_t fd) {
     if (fd < 0) return;
     /* Best-effort close — ignore EINTR/EBADF. */
     (void)close((int)fd);
 }
 
-/* Binary-safe replacement for `riven_tcp_read` (Phase 2 #06.5 T5).
+/* Binary-safe replacement for `ruxen_tcp_read` (Phase 2 #06.5 T5).
  * Reads up to `max` bytes into a stack staging buffer of up to 4096
  * bytes, then pushes each byte as an int64 slot into the caller's
- * RivenVec — mirroring `riven_file_read` in io/file.c. Returns
+ * RuxenVec — mirroring `ruxen_file_read` in io/file.c. Returns
  * Result[Int, IoError]: Ok(n) on n>=0 bytes (0 = EOF/peer-shutdown),
  * Err(IoError.*) on real failure. Retries on EINTR. The class-method
- * `TcpStream.read` calls this through `riven_tcp_stream_read` below
- * (which dereferences the RivenTcpStream wrapper first); future
+ * `TcpStream.read` calls this through `ruxen_tcp_stream_read` below
+ * (which dereferences the RuxenTcpStream wrapper first); future
  * non-class callers can use this fd-based variant directly. */
-void *riven_tcp_read_bytes(int64_t fd, RivenVec *buf, int64_t max) {
+void *ruxen_tcp_read_bytes(int64_t fd, RuxenVec *buf, int64_t max) {
     if (fd < 0 || !buf) {
-        return riven_result_err_value(
-            (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_result_err_value(
+            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
     }
     if (max <= 0) {
         /* Zero-byte read is a degenerate but valid request — surface
          * as Ok(0) so callers can pattern-match without a special
          * case. */
-        return riven_result_ok_value(0);
+        return ruxen_result_ok_value(0);
     }
     unsigned char stage[4096];
     size_t cap = (size_t)max;
@@ -243,12 +243,12 @@ void *riven_tcp_read_bytes(int64_t fd, RivenVec *buf, int64_t max) {
         got = recv((int)fd, stage, cap, 0);
     } while (got < 0 && errno == EINTR);
     if (got < 0) {
-        return riven_io_error_from_errno(errno);
+        return ruxen_io_error_from_errno(errno);
     }
     for (ssize_t i = 0; i < got; i++) {
-        riven_vec_push(buf, (int64_t)stage[i]);
+        ruxen_vec_push(buf, (int64_t)stage[i]);
     }
-    return riven_result_ok_value(got);
+    return ruxen_result_ok_value(got);
 }
 
 /* Phase 2 #06.5 T5: socket read/write timeouts. Both helpers take
@@ -258,14 +258,14 @@ void *riven_tcp_read_bytes(int64_t fd, RivenVec *buf, int64_t max) {
  * timeout (same convention as Rust's `set_read_timeout(None)` — the
  * class method passes `Duration.from_nanos(0)` for the "no timeout"
  * case). Errno → IoError via the standard classifier. */
-static void *riven_tcp_set_so_timeout(int64_t fd, int64_t total_ns, int which) {
+static void *ruxen_tcp_set_so_timeout(int64_t fd, int64_t total_ns, int which) {
     if (fd < 0) {
-        return riven_result_err_value(
-            (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_result_err_value(
+            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
     }
     if (total_ns < 0) {
-        return riven_result_err_value(
-            (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_result_err_value(
+            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
     }
     struct timeval tv;
     if (total_ns == 0) {
@@ -282,31 +282,31 @@ static void *riven_tcp_set_so_timeout(int64_t fd, int64_t total_ns, int which) {
         }
     }
     if (setsockopt((int)fd, SOL_SOCKET, which, &tv, sizeof tv) != 0) {
-        return riven_io_error_from_errno(errno);
+        return ruxen_io_error_from_errno(errno);
     }
-    return riven_result_ok_value(0);
+    return ruxen_result_ok_value(0);
 }
 
-void *riven_tcp_set_read_timeout_ns(int64_t fd, int64_t total_ns) {
-    return riven_tcp_set_so_timeout(fd, total_ns, SO_RCVTIMEO);
+void *ruxen_tcp_set_read_timeout_ns(int64_t fd, int64_t total_ns) {
+    return ruxen_tcp_set_so_timeout(fd, total_ns, SO_RCVTIMEO);
 }
 
-void *riven_tcp_set_write_timeout_ns(int64_t fd, int64_t total_ns) {
-    return riven_tcp_set_so_timeout(fd, total_ns, SO_SNDTIMEO);
+void *ruxen_tcp_set_write_timeout_ns(int64_t fd, int64_t total_ns) {
+    return ruxen_tcp_set_so_timeout(fd, total_ns, SO_SNDTIMEO);
 }
 
 /* ── Phase 2 #06.5 T5: TcpListener / TcpStream class wrappers ─────────
  *
  * The class surface owns a POSIX fd inside a flat 8-byte heap struct
- * `{ int32 fd; int32 closed }` mirroring `RivenFile`. Both classes
+ * `{ int32 fd; int32 closed }` mirroring `RuxenFile`. Both classes
  * participate in the MIR drop pipeline: scope-exit emits
- * `<Type>_drop(p) + riven_dealloc(p)` so the fd is released even when
+ * `<Type>_drop(p) + ruxen_dealloc(p)` so the fd is released even when
  * the user doesn't call `.close()` explicitly.
  *
  * All public methods return `Result[_, IoError]` so failures route
  * through the same `IoError` enum as `File` / `fs.*`. The runtime
- * helpers `riven_io_error_from_errno` / `riven_io_error_unit` /
- * `riven_io_error_struct` (in `io/io_error.c`) construct the variants.
+ * helpers `ruxen_io_error_from_errno` / `ruxen_io_error_unit` /
+ * `ruxen_io_error_struct` (in `io/io_error.c`) construct the variants.
  *
  * Shutdown enum tag mapping (pinned in `shutdown_tag_stability.rs`):
  *
@@ -315,58 +315,58 @@ void *riven_tcp_set_write_timeout_ns(int64_t fd, int64_t total_ns) {
  *   Shutdown.Both  = 2  -> SHUT_RDWR
  */
 
-#define RIVEN_SHUTDOWN_READ  0
-#define RIVEN_SHUTDOWN_WRITE 1
-#define RIVEN_SHUTDOWN_BOTH  2
+#define RUXEN_SHUTDOWN_READ  0
+#define RUXEN_SHUTDOWN_WRITE 1
+#define RUXEN_SHUTDOWN_BOTH  2
 
-/* RivenTcpListener body lives here (no cross-TU dereference). */
-typedef struct RivenTcpListener {
+/* RuxenTcpListener body lives here (no cross-TU dereference). */
+typedef struct RuxenTcpListener {
     int32_t fd;
     int32_t closed;
-} RivenTcpListener;
+} RuxenTcpListener;
 
-_Static_assert(sizeof(RivenTcpListener) == 8,
-    "RivenTcpListener wire layout drifted from documented 8-byte form");
+_Static_assert(sizeof(RuxenTcpListener) == 8,
+    "RuxenTcpListener wire layout drifted from documented 8-byte form");
 
-/* RivenTcpStream struct body lives in runtime.h so io/bufio.c can
+/* RuxenTcpStream struct body lives in runtime.h so io/bufio.c can
  * read `->fd` / `->closed` across the TU boundary. */
-_Static_assert(sizeof(RivenTcpStream) == 8,
-    "RivenTcpStream wire layout drifted from documented 8-byte form");
+_Static_assert(sizeof(RuxenTcpStream) == 8,
+    "RuxenTcpStream wire layout drifted from documented 8-byte form");
 
 /* Build Result::Err(IoError::InvalidInput) for the class methods'
  * "operates on closed / null receiver" guard paths. Mirrors
- * `riven_file_invalid_input` in `io/file.c`. */
-static void *riven_tcp_invalid_input(void) {
-    return riven_result_err_value(
-        (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+ * `ruxen_file_invalid_input` in `io/file.c`. */
+static void *ruxen_tcp_invalid_input(void) {
+    return ruxen_result_err_value(
+        (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
 }
 
 /* ── TcpListener ─────────────────────────────────────────────────── */
 
 /* `TcpListener.bind(addr) -> Result[TcpListener, IoError]`. Reuses the
- * existing flat `riven_tcp_listen` for the actual socket() + bind() +
+ * existing flat `ruxen_tcp_listen` for the actual socket() + bind() +
  * listen() flow; on -1 we map errno (captured immediately after the
  * call) to an `IoError` variant. On success we allocate the 8-byte
  * spine and wrap the fd. */
-void *riven_tcp_listener_bind(const char *addr) {
-    if (!addr) return riven_tcp_invalid_input();
+void *ruxen_tcp_listener_bind(const char *addr) {
+    if (!addr) return ruxen_tcp_invalid_input();
     /* Replicate the bind path inline so we can capture errno on each
      * failure point rather than getting a meaningless ENOTSOCK / 0
      * after the flat helper. */
     char host[256];
     char port[16];
-    if (riven_tcp_split_addr(addr, host, sizeof host, port, sizeof port) != 0) {
-        return riven_tcp_invalid_input();
+    if (ruxen_tcp_split_addr(addr, host, sizeof host, port, sizeof port) != 0) {
+        return ruxen_tcp_invalid_input();
     }
     int port_num = atoi(port);
     if (port_num < 0 || port_num > 65535) {
-        return riven_tcp_invalid_input();
+        return ruxen_tcp_invalid_input();
     }
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
-        return riven_io_error_from_errno(errno);
+        return ruxen_io_error_from_errno(errno);
     }
-    riven_tcp_set_nosigpipe(fd);
+    ruxen_tcp_set_nosigpipe(fd);
     int one = 1;
     (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
 
@@ -384,7 +384,7 @@ void *riven_tcp_listener_bind(const char *addr) {
         hints.ai_socktype = SOCK_STREAM;
         if (getaddrinfo(host, NULL, &hints, &res) != 0 || !res) {
             close(fd);
-            return riven_tcp_invalid_input();
+            return ruxen_tcp_invalid_input();
         }
         sa.sin_addr = ((struct sockaddr_in *)res->ai_addr)->sin_addr;
         freeaddrinfo(res);
@@ -392,17 +392,17 @@ void *riven_tcp_listener_bind(const char *addr) {
     if (bind(fd, (struct sockaddr *)&sa, sizeof sa) != 0) {
         int saved = errno;
         close(fd);
-        return riven_io_error_from_errno(saved);
+        return ruxen_io_error_from_errno(saved);
     }
     if (listen(fd, 128) != 0) {
         int saved = errno;
         close(fd);
-        return riven_io_error_from_errno(saved);
+        return ruxen_io_error_from_errno(saved);
     }
-    RivenTcpListener *l = (RivenTcpListener *)riven_alloc(sizeof(RivenTcpListener));
+    RuxenTcpListener *l = (RuxenTcpListener *)ruxen_alloc(sizeof(RuxenTcpListener));
     l->fd = fd;
     l->closed = 0;
-    return riven_result_ok_value((int64_t)l);
+    return ruxen_result_ok_value((int64_t)l);
 }
 
 /* `TcpListener.accept() -> Result[TcpStream, IoError]`. Blocking by
@@ -410,11 +410,11 @@ void *riven_tcp_listener_bind(const char *addr) {
  * surfaces EAGAIN/EWOULDBLOCK which we map to IoError.WouldBlock.
  * EINTR is propagated as IoError.Interrupted so cooperative SIGINT
  * loops can break out (no internal retry). */
-void *riven_tcp_listener_accept(RivenTcpListener *l) {
-    if (!l || l->closed) return riven_tcp_invalid_input();
+void *ruxen_tcp_listener_accept(RuxenTcpListener *l) {
+    if (!l || l->closed) return ruxen_tcp_invalid_input();
     int accepted;
     /* ECONNABORTED is the Stevens-UNP-§15.6 gotcha the async path
-     * handles in riven_async_accept_step: a head-of-queue conn that
+     * handles in ruxen_async_accept_step: a head-of-queue conn that
      * aborted before accept picked it up. Blocking accept rarely
      * surfaces it (kernel usually retries internally) but on macOS
      * it can leak through under churn. Retry in-place so callers
@@ -426,49 +426,49 @@ void *riven_tcp_listener_accept(RivenTcpListener *l) {
         accepted = accept(l->fd, NULL, NULL);
     } while (accepted < 0 && errno == ECONNABORTED);
     if (accepted < 0) {
-        return riven_io_error_from_errno(errno);
+        return ruxen_io_error_from_errno(errno);
     }
-    riven_tcp_set_nosigpipe(accepted);
-    RivenTcpStream *s = (RivenTcpStream *)riven_alloc(sizeof(RivenTcpStream));
+    ruxen_tcp_set_nosigpipe(accepted);
+    RuxenTcpStream *s = (RuxenTcpStream *)ruxen_alloc(sizeof(RuxenTcpStream));
     s->fd = accepted;
     s->closed = 0;
-    return riven_result_ok_value((int64_t)s);
+    return ruxen_result_ok_value((int64_t)s);
 }
 
 /* `TcpListener.local_addr() -> Result[String, IoError]`. IPv4-only
  * formatter: "<dotted-quad>:<port>". Closed listener → InvalidInput. */
-static void *riven_tcp_sockaddr_to_string(struct sockaddr_in *sa) {
+static void *ruxen_tcp_sockaddr_to_string(struct sockaddr_in *sa) {
     char buf[INET_ADDRSTRLEN];
     if (!inet_ntop(AF_INET, &sa->sin_addr, buf, sizeof buf)) {
-        return riven_io_error_from_errno(errno);
+        return ruxen_io_error_from_errno(errno);
     }
     char out[INET_ADDRSTRLEN + 8];
     int n = snprintf(out, sizeof out, "%s:%u", buf, (unsigned)ntohs(sa->sin_port));
     if (n < 0 || (size_t)n >= sizeof out) {
-        return riven_tcp_invalid_input();
+        return ruxen_tcp_invalid_input();
     }
-    return riven_result_ok_value((int64_t)riven_string_from(out));
+    return ruxen_result_ok_value((int64_t)ruxen_string_from(out));
 }
 
-void *riven_tcp_listener_local_addr(RivenTcpListener *l) {
-    if (!l || l->closed) return riven_tcp_invalid_input();
+void *ruxen_tcp_listener_local_addr(RuxenTcpListener *l) {
+    if (!l || l->closed) return ruxen_tcp_invalid_input();
     struct sockaddr_in sa;
     socklen_t len = sizeof sa;
     memset(&sa, 0, sizeof sa);
     if (getsockname(l->fd, (struct sockaddr *)&sa, &len) != 0) {
-        return riven_io_error_from_errno(errno);
+        return ruxen_io_error_from_errno(errno);
     }
-    return riven_tcp_sockaddr_to_string(&sa);
+    return ruxen_tcp_sockaddr_to_string(&sa);
 }
 
 /* `TcpListener.set_nonblocking(v: Bool) -> Result[(), IoError]`.
  * Flips O_NONBLOCK via fcntl. Bool comes through as an i64 (0 / 1)
  * — anything non-zero is treated as `true`. */
-void *riven_tcp_listener_set_nonblocking(RivenTcpListener *l, int64_t v) {
-    if (!l || l->closed) return riven_tcp_invalid_input();
+void *ruxen_tcp_listener_set_nonblocking(RuxenTcpListener *l, int64_t v) {
+    if (!l || l->closed) return ruxen_tcp_invalid_input();
     int flags = fcntl(l->fd, F_GETFL, 0);
     if (flags < 0) {
-        return riven_io_error_from_errno(errno);
+        return ruxen_io_error_from_errno(errno);
     }
     if (v) {
         flags |= O_NONBLOCK;
@@ -476,15 +476,15 @@ void *riven_tcp_listener_set_nonblocking(RivenTcpListener *l, int64_t v) {
         flags &= ~O_NONBLOCK;
     }
     if (fcntl(l->fd, F_SETFL, flags) < 0) {
-        return riven_io_error_from_errno(errno);
+        return ruxen_io_error_from_errno(errno);
     }
-    return riven_result_ok_value(0);
+    return ruxen_result_ok_value(0);
 }
 
 /* `TcpListener.close()` — idempotent. */
-void *riven_tcp_listener_close(RivenTcpListener *l) {
-    if (!l) return riven_tcp_invalid_input();
-    if (l->closed) return riven_result_ok_value(0);
+void *ruxen_tcp_listener_close(RuxenTcpListener *l) {
+    if (!l) return ruxen_tcp_invalid_input();
+    if (l->closed) return ruxen_result_ok_value(0);
     int rc;
     do {
         rc = close(l->fd);
@@ -492,15 +492,15 @@ void *riven_tcp_listener_close(RivenTcpListener *l) {
     l->closed = 1;
     l->fd = -1;
     if (rc < 0) {
-        return riven_io_error_from_errno(errno);
+        return ruxen_io_error_from_errno(errno);
     }
-    return riven_result_ok_value(0);
+    return ruxen_result_ok_value(0);
 }
 
 /* Drop helper — closes the fd if still open. Registered in
  * `collect_user_drop_classes` (mir/lower/collect.rs) so the MIR emits
- * `TcpListener_drop(l) + riven_dealloc(l)` at scope exit. */
-void riven_tcp_listener_drop(RivenTcpListener *l) {
+ * `TcpListener_drop(l) + ruxen_dealloc(l)` at scope exit. */
+void ruxen_tcp_listener_drop(RuxenTcpListener *l) {
     if (!l) return;
     if (!l->closed && l->fd >= 0) {
         int rc;
@@ -516,14 +516,14 @@ void riven_tcp_listener_drop(RivenTcpListener *l) {
 /* ── TcpStream ───────────────────────────────────────────────────── */
 
 /* `TcpStream.connect(addr) -> Result[TcpStream, IoError]`. Same as
- * the flat `riven_tcp_connect` but we capture errno at each failure
+ * the flat `ruxen_tcp_connect` but we capture errno at each failure
  * point so we can return a typed IoError variant instead of -1. */
-void *riven_tcp_stream_connect(const char *addr) {
-    if (!addr) return riven_tcp_invalid_input();
+void *ruxen_tcp_stream_connect(const char *addr) {
+    if (!addr) return ruxen_tcp_invalid_input();
     char host[256];
     char port[16];
-    if (riven_tcp_split_addr(addr, host, sizeof host, port, sizeof port) != 0) {
-        return riven_tcp_invalid_input();
+    if (ruxen_tcp_split_addr(addr, host, sizeof host, port, sizeof port) != 0) {
+        return ruxen_tcp_invalid_input();
     }
     struct addrinfo hints;
     memset(&hints, 0, sizeof hints);
@@ -536,7 +536,7 @@ void *riven_tcp_stream_connect(const char *addr) {
         /* getaddrinfo's error space doesn't map to errno; surface as
          * InvalidInput for malformed addresses or generic Other for
          * resolution failures. Keep it simple: InvalidInput. */
-        return riven_tcp_invalid_input();
+        return ruxen_tcp_invalid_input();
     }
     int fd = -1;
     int last_errno = 0;
@@ -546,7 +546,7 @@ void *riven_tcp_stream_connect(const char *addr) {
             last_errno = errno;
             continue;
         }
-        riven_tcp_set_nosigpipe(fd);
+        ruxen_tcp_set_nosigpipe(fd);
         if (connect(fd, ai->ai_addr, ai->ai_addrlen) == 0) {
             break;
         }
@@ -557,23 +557,23 @@ void *riven_tcp_stream_connect(const char *addr) {
     freeaddrinfo(res);
     if (fd < 0) {
         if (last_errno == 0) last_errno = ECONNREFUSED;
-        return riven_io_error_from_errno(last_errno);
+        return ruxen_io_error_from_errno(last_errno);
     }
-    RivenTcpStream *s = (RivenTcpStream *)riven_alloc(sizeof(RivenTcpStream));
+    RuxenTcpStream *s = (RuxenTcpStream *)ruxen_alloc(sizeof(RuxenTcpStream));
     s->fd = fd;
     s->closed = 0;
-    return riven_result_ok_value((int64_t)s);
+    return ruxen_result_ok_value((int64_t)s);
 }
 
 /* `TcpStream.read(buf: &var Array[U8]) -> Result[Int, IoError]`.
- * Delegates to `riven_tcp_read_bytes` so the binary-safe read path is
+ * Delegates to `ruxen_tcp_read_bytes` so the binary-safe read path is
  * shared with any future non-class caller. Closed/null receivers
  * short-circuit to InvalidInput before we touch the fd. The chunk
- * size is bounded by `riven_tcp_read_bytes`'s 4096-byte stage buffer
+ * size is bounded by `ruxen_tcp_read_bytes`'s 4096-byte stage buffer
  * — partial reads surface as Ok(n<max) and the caller may loop. */
-void *riven_tcp_stream_read(RivenTcpStream *s, RivenVec *buf) {
-    if (!s || s->closed || !buf) return riven_tcp_invalid_input();
-    return riven_tcp_read_bytes((int64_t)s->fd, buf, 4096);
+void *ruxen_tcp_stream_read(RuxenTcpStream *s, RuxenVec *buf) {
+    if (!s || s->closed || !buf) return ruxen_tcp_invalid_input();
+    return ruxen_tcp_read_bytes((int64_t)s->fd, buf, 4096);
 }
 
 /* `TcpStream.write(bytes: &Array[U8]) -> Result[Int, IoError]`.
@@ -581,11 +581,11 @@ void *riven_tcp_stream_read(RivenTcpStream *s, RivenVec *buf) {
  * loop. EPIPE → IoError.BrokenPipe (the per-socket SO_NOSIGPIPE /
  * MSG_NOSIGNAL machinery from the flat helpers keeps a write to a
  * dead peer from killing us). */
-void *riven_tcp_stream_write(RivenTcpStream *s, RivenVec *bytes) {
-    if (!s || s->closed || !bytes) return riven_tcp_invalid_input();
+void *ruxen_tcp_stream_write(RuxenTcpStream *s, RuxenVec *bytes) {
+    if (!s || s->closed || !bytes) return ruxen_tcp_invalid_input();
     size_t n = (size_t)bytes->len;
     unsigned char *stage = (unsigned char *)malloc(n > 0 ? n : 1);
-    if (!stage) riven_panic("out of memory");
+    if (!stage) ruxen_panic("out of memory");
     for (size_t i = 0; i < n; i++) {
         stage[i] = (unsigned char)(bytes->data[i] & 0xFF);
     }
@@ -596,23 +596,23 @@ void *riven_tcp_stream_write(RivenTcpStream *s, RivenVec *bytes) {
     if (put < 0) {
         int saved = errno;
         free(stage);
-        return riven_io_error_from_errno(saved);
+        return ruxen_io_error_from_errno(saved);
     }
     free(stage);
-    return riven_result_ok_value((int64_t)put);
+    return ruxen_result_ok_value((int64_t)put);
 }
 
 /* `TcpStream.peer_addr() -> Result[String, IoError]`. getpeername(2)
  * → "<dotted-quad>:<port>". Closed stream → InvalidInput. */
-void *riven_tcp_stream_peer_addr(RivenTcpStream *s) {
-    if (!s || s->closed) return riven_tcp_invalid_input();
+void *ruxen_tcp_stream_peer_addr(RuxenTcpStream *s) {
+    if (!s || s->closed) return ruxen_tcp_invalid_input();
     struct sockaddr_in sa;
     socklen_t len = sizeof sa;
     memset(&sa, 0, sizeof sa);
     if (getpeername(s->fd, (struct sockaddr *)&sa, &len) != 0) {
-        return riven_io_error_from_errno(errno);
+        return ruxen_io_error_from_errno(errno);
     }
-    return riven_tcp_sockaddr_to_string(&sa);
+    return ruxen_tcp_sockaddr_to_string(&sa);
 }
 
 /* `TcpStream.shutdown(how: Shutdown) -> Result[(), IoError]`. The
@@ -625,72 +625,72 @@ void *riven_tcp_stream_peer_addr(RivenTcpStream *s) {
  *
  * Any other tag is E0713 ("Shutdown variant unknown") surfaced as
  * Err(IoError.InvalidInput) with the canonical message. */
-void *riven_tcp_stream_shutdown(RivenTcpStream *s, void *how) {
-    if (!s || s->closed || !how) return riven_tcp_invalid_input();
+void *ruxen_tcp_stream_shutdown(RuxenTcpStream *s, void *how) {
+    if (!s || s->closed || !how) return ruxen_tcp_invalid_input();
     int32_t tag = *(int32_t *)how;
     int posix_how;
     switch (tag) {
-        case RIVEN_SHUTDOWN_READ:  posix_how = SHUT_RD;   break;
-        case RIVEN_SHUTDOWN_WRITE: posix_how = SHUT_WR;   break;
-        case RIVEN_SHUTDOWN_BOTH:  posix_how = SHUT_RDWR; break;
+        case RUXEN_SHUTDOWN_READ:  posix_how = SHUT_RD;   break;
+        case RUXEN_SHUTDOWN_WRITE: posix_how = SHUT_WR;   break;
+        case RUXEN_SHUTDOWN_BOTH:  posix_how = SHUT_RDWR; break;
         default:
             /* E0713: tag outside 0..=2. The typeck layer should keep
-             * this unreachable for compiled-from-source Riven code, so
+             * this unreachable for compiled-from-source Ruxen code, so
              * hitting this arm means either (a) the Shutdown enum's
              * tagged-value layout drifted from the pin test, or (b) a
              * raw memory smash. Either way, surface as InvalidInput
              * with the canonical E0713 message rather than crashing. */
-            return riven_result_err_value(
-                (int64_t)riven_io_error_struct(
-                    RIVEN_IO_ERROR_INVALID_INPUT,
+            return ruxen_result_err_value(
+                (int64_t)ruxen_io_error_struct(
+                    RUXEN_IO_ERROR_INVALID_INPUT,
                     "E0713 Shutdown variant unknown"));
     }
     if (shutdown(s->fd, posix_how) != 0) {
-        return riven_io_error_from_errno(errno);
+        return ruxen_io_error_from_errno(errno);
     }
-    return riven_result_ok_value(0);
+    return ruxen_result_ok_value(0);
 }
 
 /* `TcpStream.set_read_timeout(d: &Duration) -> Result[(), IoError]`.
- * The Duration value is a pointer to a RivenDuration { int64_t nanos }
- * — same convention as `riven_thread_sleep_duration`. Zero clears
+ * The Duration value is a pointer to a RuxenDuration { int64_t nanos }
+ * — same convention as `ruxen_thread_sleep_duration`. Zero clears
  * the timeout; sub-microsecond values round up to 1µs to preserve
  * the "set, not clear" semantic. After the timeout fires a blocking
  * `recv` returns EAGAIN/EWOULDBLOCK which maps to
  * `Err(IoError.WouldBlock)`. */
-void *riven_tcp_stream_set_read_timeout(RivenTcpStream *s, RivenDuration *d) {
-    if (!s || s->closed || !d) return riven_tcp_invalid_input();
-    return riven_tcp_set_read_timeout_ns((int64_t)s->fd, d->nanos);
+void *ruxen_tcp_stream_set_read_timeout(RuxenTcpStream *s, RuxenDuration *d) {
+    if (!s || s->closed || !d) return ruxen_tcp_invalid_input();
+    return ruxen_tcp_set_read_timeout_ns((int64_t)s->fd, d->nanos);
 }
 
-void *riven_tcp_stream_set_write_timeout(RivenTcpStream *s, RivenDuration *d) {
-    if (!s || s->closed || !d) return riven_tcp_invalid_input();
-    return riven_tcp_set_write_timeout_ns((int64_t)s->fd, d->nanos);
+void *ruxen_tcp_stream_set_write_timeout(RuxenTcpStream *s, RuxenDuration *d) {
+    if (!s || s->closed || !d) return ruxen_tcp_invalid_input();
+    return ruxen_tcp_set_write_timeout_ns((int64_t)s->fd, d->nanos);
 }
 
 /* `TcpStream.set_read_timeout_ns(ns: Int)` — plain-Int variant of
  * `set_read_timeout`. The `&Duration` form above can't be reached
- * from Riven user code today because the lib decl for std.net
+ * from Ruxen user code today because the lib decl for std.net
  * loads BEFORE std.time (where `Duration` lives), so the Duration
  * pointer's `&duration_obj` lowering can't be expressed across
  * the package boundary. Until that's untangled, the `_ns` variants
  * are the only working surface. Callers pass nanoseconds directly:
  *
  *   s.set_read_timeout_ns(60_000_000_000)   # 60s idle timeout */
-void *riven_tcp_stream_set_read_timeout_ns(RivenTcpStream *s, int64_t ns) {
-    if (!s || s->closed) return riven_tcp_invalid_input();
-    return riven_tcp_set_read_timeout_ns((int64_t)s->fd, ns);
+void *ruxen_tcp_stream_set_read_timeout_ns(RuxenTcpStream *s, int64_t ns) {
+    if (!s || s->closed) return ruxen_tcp_invalid_input();
+    return ruxen_tcp_set_read_timeout_ns((int64_t)s->fd, ns);
 }
 
-void *riven_tcp_stream_set_write_timeout_ns(RivenTcpStream *s, int64_t ns) {
-    if (!s || s->closed) return riven_tcp_invalid_input();
-    return riven_tcp_set_write_timeout_ns((int64_t)s->fd, ns);
+void *ruxen_tcp_stream_set_write_timeout_ns(RuxenTcpStream *s, int64_t ns) {
+    if (!s || s->closed) return ruxen_tcp_invalid_input();
+    return ruxen_tcp_set_write_timeout_ns((int64_t)s->fd, ns);
 }
 
 /* `TcpStream.close()` — idempotent. */
-void *riven_tcp_stream_close(RivenTcpStream *s) {
-    if (!s) return riven_tcp_invalid_input();
-    if (s->closed) return riven_result_ok_value(0);
+void *ruxen_tcp_stream_close(RuxenTcpStream *s) {
+    if (!s) return ruxen_tcp_invalid_input();
+    if (s->closed) return ruxen_result_ok_value(0);
     int rc;
     do {
         rc = close(s->fd);
@@ -698,14 +698,14 @@ void *riven_tcp_stream_close(RivenTcpStream *s) {
     s->closed = 1;
     s->fd = -1;
     if (rc < 0) {
-        return riven_io_error_from_errno(errno);
+        return ruxen_io_error_from_errno(errno);
     }
-    return riven_result_ok_value(0);
+    return ruxen_result_ok_value(0);
 }
 
 /* Drop helper — closes the fd if still open. Registered in
  * `collect_user_drop_classes`. */
-void riven_tcp_stream_drop(RivenTcpStream *s) {
+void ruxen_tcp_stream_drop(RuxenTcpStream *s) {
     if (!s) return;
     if (!s->closed && s->fd >= 0) {
         int rc;

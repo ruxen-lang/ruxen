@@ -11,9 +11,9 @@ once 1.0.0 ships.
 - **#06.8 stdlib self-hosting — Waves 1.5–2 + collection migrations
   (T#13/14/15/16/17/21).** Every named stdlib module and every
   collection-method dispatch table that previously lived as Rust
-  registrations in `compiler/riven_core/src/resolve/stdlib/mod.rs`
+  registrations in `compiler/ruxen_core/src/resolve/stdlib/mod.rs`
   and `codegen/runtime_table/mod.rs` now lives in `library/std/src/
-  *.rvn`. The bootstrap loader (`resolve/bootstrap.rs`) parses
+  *.rx`. The bootstrap loader (`resolve/bootstrap.rs`) parses
   these files at compiler startup before user code, the resolver's
   **namespace-anchor mode** reuses the existing type-scope bindings
   for builtin names (so `Ty::String` / `Ty::Array(_)` etc. stay
@@ -24,7 +24,7 @@ once 1.0.0 ships.
   `[...]` args so the parent-name-keyed alias entries
   (`Array_push`, `Option_unwrap_or`) match every call site. 94
   collection methods migrated across String / Option / Result /
-  Array / Map / Set; ~12 self-hosted .rvn modules under
+  Array / Map / Set; ~12 self-hosted .rx modules under
   `library/std/src/`. Two outliers retained in `runtime_table` for
   documented architectural reasons (`String_clone` aliases a C
   symbol with a different wire shape and trips E0722; `String_from_iter`
@@ -34,7 +34,7 @@ once 1.0.0 ships.
   BufWriter[W] over the closed inner set {File, TcpStream}, std.rand
   (kernel CSPRNG), Command + Instant promotion to the canonical
   surface (legacy `process_run` / `now_ns` free-fns retired).
-  Mixin/trait-driven Read/Write surface is deferred to v1.5; closed-set
+  Mixin/trait-druxen Read/Write surface is deferred to v1.5; closed-set
   inner check at typeck (E0714) keeps the runtime kind-tag honest.
 
 ### Fixed
@@ -50,12 +50,12 @@ once 1.0.0 ships.
   already uses; `codegen/runtime_table/mod.rs` adds a
   belt-and-suspenders fast-path for `any Fn[...]_call` and `?T*_call`
   manglings). 5 pin tests in
-  `compiler/riven_core/tests/closures_dyn_dispatch.rs`; e2e
-  fixture `tests/release-e2e/cases/600_closure_handler_dispatch.rvn`.
+  `compiler/ruxen_core/tests/closures_dyn_dispatch.rs`; e2e
+  fixture `tests/release-e2e/cases/600_closure_handler_dispatch.rx`.
 
 ### Changed
 - **Repo restructured to rust-lang-style layout (#06.75).** The
-  single `crates/riven-core` crate (≈26 KLOC, owning lexer / parser /
+  single `crates/ruxen-core` crate (≈26 KLOC, owning lexer / parser /
   hir / resolve / typeck / mir / borrow_check / codegen / formatter /
   the C runtime / every stdlib registration) is unpacked into a
   `compiler/` + `library/` + `src/` + `tests/` top-level tree:
@@ -66,27 +66,27 @@ once 1.0.0 ships.
     `env.c`).  Top-level `library/runtime/runtime.c` `#include`s each
     module so the build product is still a single translation unit
     with identical link symbols.
-  - `library/std/src/` — the `.rvn`-source side of the stdlib
-    (currently just `iter.rvn` as declarative documentation).
-  - `compiler/riven_core/` — the (still-single) compiler crate,
+  - `library/std/src/` — the `.rx`-source side of the stdlib
+    (currently just `iter.rx` as declarative documentation).
+  - `compiler/ruxen_core/` — the (still-single) compiler crate,
     relocated from `crates/`.  Internal stdlib registrations now live
-    under `compiler/riven_core/src/resolve/stdlib/` (carved out of the
+    under `compiler/ruxen_core/src/resolve/stdlib/` (carved out of the
     7 153-LOC `resolve/mod.rs`), method resolvers under
-    `compiler/riven_core/src/typeck/method_resolvers/` (carved out of
+    `compiler/ruxen_core/src/typeck/method_resolvers/` (carved out of
     `typeck/infer.rs`), and the runtime-name table under
-    `compiler/riven_core/src/codegen/runtime_table/` (carved out of
+    `compiler/ruxen_core/src/codegen/runtime_table/` (carved out of
     `codegen/runtime.rs`).
-  - `compiler/riven_driver/` — a thin `pub use riven_core::*` shim,
-    placeholder for the future per-phase crate split (`riven_lexer`,
-    `riven_parser`, `riven_resolve`, `riven_typeck`, …) which is
+  - `compiler/ruxen_driver/` — a thin `pub use ruxen_core::*` shim,
+    placeholder for the future per-phase crate split (`ruxen_lexer`,
+    `ruxen_parser`, `ruxen_resolve`, `ruxen_typeck`, …) which is
     deferred to a follow-up prompt.
-  - `src/` — every driver crate (`rivenc`, `riven_cli`, `riven_lsp`,
-    `riven_ide`, `riven_repl`), relocated from `crates/`.
+  - `src/` — every driver crate (`ruxenc`, `ruxen_cli`, `ruxen_lsp`,
+    `ruxen_ide`, `ruxen_repl`), relocated from `crates/`.
     Kebab-case package names switched to snake_case to match their
-    lib names — `use riven_core::…` import sites unchanged.
+    lib names — `use ruxen_core::…` import sites unchanged.
   - `tests/` — workspace-level integration root (currently houses
     `release-e2e/`; per-crate Cargo integration tests stay under
-    `compiler/riven_core/tests/` since Cargo's integration-test
+    `compiler/ruxen_core/tests/` since Cargo's integration-test
     convention is per-crate).
 
   Workspace `members` is now `["compiler/*", "src/*"]`.  C-side symbol
@@ -106,7 +106,7 @@ once 1.0.0 ships.
   `process_run` returns. Mirrors the `fs.metadata` flat-heap-struct
   pattern with one extension: `Command` is in `user_drop_classes` so
   builder-pattern temporaries are reclaimed via `Command_drop` +
-  `riven_dealloc` at scope exit. 9 pin tests in
+  `ruxen_dealloc` at scope exit. 9 pin tests in
   `stdlib_process.rs::command_*`; e2e fixtures `508_command_status`
   and `512_command_output`. `Command.spawn -> Child` (the async-style
   handle with `.wait/.kill/.try_wait`) is explicitly DEFERRED to v2
@@ -153,9 +153,9 @@ once 1.0.0 ships.
   gate for the historic shape).
 
 ### Added
-- E2E harness supports a `RIVEN_E2E_CASES` env-var case filter for
+- E2E harness supports a `RUXEN_E2E_CASES` env-var case filter for
   selective runs.  Comma-separated case stems (filenames without
-  `.rvn`); absent var preserves the existing behaviour (full
+  `.rx`); absent var preserves the existing behaviour (full
   sweep).  Whitespace is trimmed; empty entries ignored; unknown
   cases fail fast with a clear message so typos don't silently
   skip the case the developer was trying to verify.
@@ -163,7 +163,7 @@ once 1.0.0 ships.
   New workflow:
   - **Per-commit**: skip e2e entirely (`#[ignore]`-gated as before).
   - **New / changed fixture**:
-    `RIVEN_E2E_CASES=NAME cargo test --test release_e2e_smoke
+    `RUXEN_E2E_CASES=NAME cargo test --test release_e2e_smoke
      -- --ignored` runs just that one in ~1s.
   - **Phase / tier completion**: `cargo test --test
      release_e2e_smoke -- --ignored` runs the full ~3-min sweep.
@@ -190,7 +190,7 @@ once 1.0.0 ships.
   `Index` expression (the regression shape).
 
   E2E fixture:
-  `tests/release-e2e/cases/073_const_generic_class_instantiation.rvn`
+  `tests/release-e2e/cases/073_const_generic_class_instantiation.rx`
   exercises `Counter[10].new(1)`, `Counter[1000].new(2)`, and
   `Pair[Int, 7].new(99)` through full compile + run, confirming
   multi-instantiation and mixed type/const generics all work.
@@ -204,7 +204,7 @@ once 1.0.0 ships.
   S7 follow-up section.
 
 ### Added
-- `tests/release-e2e/cases/072_const_generic_array_arithmetic.rvn`:
+- `tests/release-e2e/cases/072_const_generic_array_arithmetic.rx`:
   new end-to-end fixture exercising the S8.S2/S8.S4 array-size
   arithmetic path through full compile-and-run.  Covers literal
   arithmetic (`2 + 1`), paren-grouped precedence
@@ -412,13 +412,13 @@ once 1.0.0 ships.
   validator already emits E0700 with the "requires `Add`" framing
   — the codes were colliding.  Spec amended to use E0704;
   iterator-`sum` keeps E0700.  Affects:
-  - `crates/riven-core/src/resolve/mod.rs`: kind-mismatch emit site
+  - `crates/ruxen-core/src/resolve/mod.rs`: kind-mismatch emit site
     now writes `"E0704"`.
-  - `crates/riven-core/src/diagnostics/codes.rs`: new `CodeInfo`
+  - `crates/ruxen-core/src/diagnostics/codes.rs`: new `CodeInfo`
     for E0704 ("kind mismatch on const-generic argument") with a
     header comment recording the collision resolution.
-  - `crates/riven-cli/src/explain.rs`: new `include_str!` row so
-    `riven explain E0704` works.
+  - `crates/ruxen-cli/src/explain.rs`: new `include_str!` row so
+    `ruxen explain E0704` works.
   - `docs/errors/E0704.md`: full Why / Example / Fix / Notes /
     Related stub with historical note.
   - Pin test renamed:
@@ -433,7 +433,7 @@ once 1.0.0 ships.
   `docs/specs/types/const-generics.spec.md` §"Error code
   reservations".  Each gets a `CodeInfo` entry in
   `codes::REGISTRY`, an `include_str!` row in
-  `riven-cli/src/explain.rs::EXPLAINS`, and a
+  `ruxen-cli/src/explain.rs::EXPLAINS`, and a
   `docs/errors/<code>.md` page describing the (planned) trigger,
   example, fix, and relationship to sibling codes.  No emit site
   yet — the reservations document where future S8 / S9 work will
@@ -461,7 +461,7 @@ once 1.0.0 ships.
   auto-synth path for `Hashable`, the `T: Hashable` generic bound
   dispatch (working today for user types), the `Map` /
   `Set` key-validity gate (`ty_is_valid_hash_key`), and the
-  primitive runtime hashing (`riven_hash_bits`, `riven_hash_str`).
+  primitive runtime hashing (`ruxen_hash_bits`, `ruxen_hash_str`).
   Documents the v2 gap on user-callable `.hash_code` for primitives
   and on `T: Hashable` monomorphisation for primitive `T` (link
   fails today with `_T: Hashable_hash_code`); a new `#[ignore]`
@@ -519,12 +519,12 @@ once 1.0.0 ships.
   string-like pass-through — they fall through to `String_fmt` so
   width / precision / align / fill all apply.  Covered by 7 new
   `stdlib_fmt_runtime.rs` tests and E2E fixture
-  `tests/release-e2e/cases/071_interp_format_specs.rvn`.  Out of
+  `tests/release-e2e/cases/071_interp_format_specs.rx`.  Out of
   scope (deferred to v2): width on `"#{x:?}"` debug-spec
   interpolation (debug path still bypasses the Formatter); sign /
   `#` alternate / `0` zero-pad / radix flags.
 - Phase 2 #06.D2.S4: end-to-end fixture
-  `tests/release-e2e/cases/070_interp_display_dispatch.rvn` proves the
+  `tests/release-e2e/cases/070_interp_display_dispatch.rx` proves the
   Display dispatch path runs at runtime — a `class Money` whose body
   `include Display`s and supplies `def fmt` interpolates via `"#{m}"`,
   while inner `"#{self.cents}"` routes through synth `Int_fmt`.
@@ -536,7 +536,7 @@ once 1.0.0 ships.
   dispatch — `Formatter_new` → `{T}_fmt(value, fmt)` → `Formatter_buffer`
   for primitives (Char / Int / Float / Bool) and any type whose body
   `include Display`s with a user `def fmt`. Output is byte-identical
-  to the legacy `riven_*_to_string` path because the Stage 1 synth
+  to the legacy `ruxen_*_to_string` path because the Stage 1 synth
   fns wrap the same helpers. Auto-`Debug`-only types still fall back
   to `{Name}_to_debug` until users provide their own `Display`
   implementation. Closes prompt 06's "string interpolation routes
@@ -565,17 +565,17 @@ once 1.0.0 ships.
 - Phase 2 #06.D2.S1: synthesize primitive `Display::fmt` MIR
   functions — `Char_fmt` / `Int_fmt` / `Float_fmt` / `Bool_fmt` /
   `String_fmt` are emitted at program lowering and wrap the existing
-  `riven_<prim>_to_string` helpers via `Formatter_write_str`. No
+  `ruxen_<prim>_to_string` helpers via `Formatter_write_str`. No
   interpolation call site is rewritten yet (Stage 3 will switch
   `lower_interpolation`). Bundles three S0 follow-ups: leak-tracker
-  visibility for `riven_fmt_formatter_free`; isolated pin tests for
+  visibility for `ruxen_fmt_formatter_free`; isolated pin tests for
   `Formatter.write_char` (ASCII) + `Formatter.len`; phase-designator
   alignment in the `write_char` placeholder.
-- Phase 2 #06.D2.S0: land the `riven_fmt_formatter_*` C runtime
+- Phase 2 #06.D2.S0: land the `ruxen_fmt_formatter_*` C runtime
   implementations (`new` / `free` / `write_str` / `write_char` /
   `buffer` / `len`) that Phase A's CHANGELOG referenced but never
   committed. `_free` uses `_ORIG_FREE` sentinel + asm-label rebind
-  (same pattern as `riven_string_free` / `riven_vec_free`); `_buffer`
+  (same pattern as `ruxen_string_free` / `ruxen_vec_free`); `_buffer`
   transfers buffer ownership and self-frees the Formatter struct.
   Also adds `"Formatter"` to the MIR lowerer's built-in constructor
   special-case list so `Formatter.new()` emits `Formatter_new` rather
@@ -586,8 +586,8 @@ once 1.0.0 ships.
   - **Phase A** — Display/Debug formal mixins registered with a
     reading `def fmt(f: &mut Formatter) -> Result[(), FmtError]`
     signature. `Formatter` and `FmtError` registered as built-in
-    classes. Runtime: `RivenFormatter { char* buf; size_t len, cap }`
-    plus `riven_fmt_formatter_{new,free,write_str,write_char,buffer,len}`
+    classes. Runtime: `RuxenFormatter { char* buf; size_t len, cap }`
+    plus `ruxen_fmt_formatter_{new,free,write_str,write_char,buffer,len}`
     helpers; v1 always returns `Ok(0)` from write_*. A user
     `class T ... include Display ... def fmt ... end ... end`
     parses and typechecks.
@@ -609,7 +609,7 @@ once 1.0.0 ships.
   and `*Iter.map` rewrites the iterator item type to the closure-body
   result so downstream `.collect_vec` and `Array` methods see the
   mapped element type instead of the source one. New focused unit
-  coverage in `crates/riven-core/tests/stdlib_iterator.rs` pins
+  coverage in `crates/ruxen-core/tests/stdlib_iterator.rs` pins
   `v.iter.filter { ... }.count` and cross-type
   `v.iter.map { |n| "#{n}" }.collect_vec.join(",")`.
 - Phase 2 stdlib `std::io` no-Result print conveniences (#06.1 partial):
@@ -619,10 +619,10 @@ once 1.0.0 ships.
   panic-on-broken-pipe is a v1 simplification omission, the
   matching `write_str` / `flush` on the same handles still surface the
   IoError when explicit handling is desired. Four new C runtime fns
-  (`riven_stdout_print`, `riven_stdout_println`, `riven_stderr_eprint`,
-  `riven_stderr_eprintln`) wired through `codegen/runtime.rs` plus
+  (`ruxen_stdout_print`, `ruxen_stdout_println`, `ruxen_stderr_eprint`,
+  `ruxen_stderr_eprintln`) wired through `codegen/runtime.rs` plus
   matching method-type entries in `typeck/infer.rs`. New integration
-  tests in `crates/riven-core/tests/stdlib_io.rs` (4 tests) pin the
+  tests in `crates/ruxen-core/tests/stdlib_io.rs` (4 tests) pin the
   per-stream stdout / stderr routing and the with/without-newline
   contract. `IoError` enum migration (the second half of prompt 06.1)
   remains deferred — it is a runtime layout change touching every
@@ -630,18 +630,18 @@ once 1.0.0 ships.
 - Phase 2 stdlib `std::env` / `std::fs` additions (#06 partial): `env.vars()`
   snapshots the process environment into `Map[String, String]` (walks
   `extern char **environ`, splits at first `=`, heap-copies both halves
-  via `riven_string_from`); `env.current_dir()` returns
+  via `ruxen_string_from`); `env.current_dir()` returns
   `Result[String, IoError]` via `getcwd` with a growing buffer;
   `fs.is_file(path)` and `fs.is_dir(path)` consult `stat()` and return
   `Bool` (matching `fs.exists`'s "false on error" convention so they slot
   into `if` predicates without `?`); `fs.read_dir(path)` returns
   `Result[Array[String], IoError]` of the directory entry names, skipping
-  `.` and `..`. Five new C runtime fns (`riven_env_vars`,
-  `riven_env_current_dir`, `riven_fs_is_file`, `riven_fs_is_dir`,
-  `riven_fs_read_dir`) wired through `codegen/runtime.rs` and registered
+  `.` and `..`. Five new C runtime fns (`ruxen_env_vars`,
+  `ruxen_env_current_dir`, `ruxen_fs_is_file`, `ruxen_fs_is_dir`,
+  `ruxen_fs_read_dir`) wired through `codegen/runtime.rs` and registered
   in the `std::env` / `std::fs` builtin modules. New integration tests in
-  `crates/riven-core/tests/stdlib_env.rs` (3 tests) and
-  `crates/riven-core/tests/stdlib_fs.rs` (4 tests) compile inline Riven
+  `crates/ruxen-core/tests/stdlib_env.rs` (3 tests) and
+  `crates/ruxen-core/tests/stdlib_fs.rs` (4 tests) compile inline Ruxen
   programs and run them against staged temp dirs / sentinel env vars.
   Outstanding from prompt 06: `env.vars` value extraction via
   `Option[&String].get` interpolates the raw pointer (pre-existing v1
@@ -652,20 +652,20 @@ once 1.0.0 ships.
   detected and inlined as a single MIR unit — there is no real
   `Entry[K, V]` runtime value, sidestepping the pointer-returning
   two-variant dispatch the prompt-04 deferred note flagged. Lowering
-  emits `if !riven_hash_contains_key(m, k) { riven_hash_insert(m, k, v); }`
+  emits `if !ruxen_hash_contains_key(m, k) { ruxen_hash_insert(m, k, v); }`
   so the lazy-default contract of `or_insert_with` is honoured: the
   closure body only runs on the missing-key path. The chain returns
   `Unit` (v1 simplification — Rust's `&mut V` return is deferred). Typeck
   rejects splitting the chain across statements (`let e = m.entry(k); e.or_insert(v)`)
   with a clear error so users do not silently fall through the lenient
   unknown-method path. New release-e2e fixtures
-  `510_map_entry_or_insert.rvn` and `511_map_entry_or_insert_with.rvn`
+  `510_map_entry_or_insert.rx` and `511_map_entry_or_insert_with.rx`
   cover the populated, empty, and lazy-default paths; positive
-  type-check tests in `crates/riven-core/tests/stdlib_map.rs` and
+  type-check tests in `crates/ruxen-core/tests/stdlib_map.rs` and
   matching negative tests in `stdlib_map_negatives.rs`.
 - Phase 2 stdlib `Iterator` eager terminators on `*Iter` classes
   (#05 batch 1). `vec.iter.sum` and `vec.iter.count` now type-check
-  and dispatch to the existing `riven_vec_sum` / `riven_vec_count`
+  and dispatch to the existing `ruxen_vec_sum` / `ruxen_vec_count`
   runtime helpers — the type-checker previously knew only
   `*Iter.filter` / `*Iter.map`, so any other terminator on an iter
   receiver was rejected by typeck before reaching codegen. New entries
@@ -676,8 +676,8 @@ once 1.0.0 ships.
   through `codegen/runtime.rs` for `VecIter` / `VecIntoIter` /
   `SplitIter`, so this is pure typeck plumbing — no new runtime fns,
   no new error codes. New release-e2e fixtures
-  `tests/release-e2e/cases/601_iter_sum.rvn` and
-  `602_iter_count.rvn` exercise both the populated and empty-iter
+  `tests/release-e2e/cases/601_iter_sum.rx` and
+  `602_iter_count.rx` exercise both the populated and empty-iter
   paths; the empty case verifies the additive-identity surprise
   check from the prompt brief (sum of empty = 0).
   The remaining Iterator surface (`fold`, `all`, `any`, `take(n)`,
@@ -688,7 +688,7 @@ once 1.0.0 ships.
   template) or new `*Iter`-specific runtime helpers — verifying
   either path requires a 140 s round-trip through the
   `cargo test --test p05_e2e_check` e2e probe (the agent sandbox
-  forbids invoking `target/release/rivenc` directly), which is too
+  forbids invoking `target/release/ruxenc` directly), which is too
   slow to land the full surface in a single batch.
 - Phase 2 stdlib `Iterator` closure terminators + lazy combinators
   on `*Iter` classes (#05 batch 2). Six new methods land:
@@ -698,16 +698,16 @@ once 1.0.0 ships.
   (already-passthrough) `enumerate`. The closure terminators inline
   at MIR via three new helpers in `mir/lower.rs`:
   `inline_fold` (Section 3.7 — seeds an accumulator local from the
-  init expression, walks the vec with `riven_vec_len` /
-  `riven_vec_get`, and reassigns the closure's return value back to
+  init expression, walks the vec with `ruxen_vec_len` /
+  `ruxen_vec_get`, and reassigns the closure's return value back to
   `acc` each step), and `inline_all_any` (Section 3.8 — seeds the
   result with the vacuous answer for the operator and short-circuits
   on the first counter-example, mirroring Rust's `Iterator::all` /
   `::any` semantics — empty iter → `all=true`, `any=false`). The
   lazy combinators `take` / `skip` eager-materialise into a fresh
-  `RivenVec*` via two new C runtime fns `riven_vec_take` /
-  `riven_vec_skip` in `crates/riven-core/runtime/runtime.c`
-  (clamped n; shallow element copy, matching `riven_vec_clone`),
+  `RuxenVec*` via two new C runtime fns `ruxen_vec_take` /
+  `ruxen_vec_skip` in `crates/ruxen-core/runtime/runtime.c`
+  (clamped n; shallow element copy, matching `ruxen_vec_clone`),
   registered in `RUNTIME_FUNCTIONS` and the LLVM `runtime_decl.rs`
   (Cranelift infers the sig from the call site). New typeck arms
   in `typeck/infer.rs::builtin_method_type` cover all five —
@@ -717,29 +717,29 @@ once 1.0.0 ships.
   for `take` / `skip` was lifted; `fold` / `all` / `any` stay in
   the rejection list because they never reach codegen (the inliner
   short-circuits before mangle). Updated
-  `crates/riven-core/tests/codegen_unknown_method_rejected.rs` —
+  `crates/ruxen-core/tests/codegen_unknown_method_rejected.rs` —
   the canary test that pinned `iter.fold` rejection now pins
   `iter.zip` rejection (still unimplemented — `chain` / `zip` /
   `collect[FromIterator]` are the deferred surface for #05 batch 3).
-  New unit-test file `crates/riven-core/tests/stdlib_iterator.rs`
+  New unit-test file `crates/ruxen-core/tests/stdlib_iterator.rs`
   drives the full lex → parse → typeck → MIR → Cranelift codegen
-  pipeline in-process (no `cc` link, no temp files, no `rivenc`
+  pipeline in-process (no `cc` link, no temp files, no `ruxenc`
   subprocess) and runs in ~30 ms total across 14 tests; this is
   the primary TDD loop for #05 (the e2e probe remains the
   end-to-end confirmation). Three new release-e2e fixtures
-  `603_iter_fold.rvn` / `604_iter_all_any.rvn` /
-  `605_iter_take_skip.rvn` confirm runtime behaviour
+  `603_iter_fold.rx` / `604_iter_all_any.rx` /
+  `605_iter_take_skip.rx` confirm runtime behaviour
   (`PASS=208 / 208` on `release_e2e_smoke`). Still deferred to a
   later batch: `chain` / `zip` (need real iterator structs holding
   two sources), `collect[C: FromIterator]` (needs the
   `FromIterator` mixin + include machinery; a v1 `iter.collect_vec`
   shorthand is the planned escape hatch), and lifting the surface
-  into a real `.rvn` `mixin Iterator` source (needs a stdlib
+  into a real `.rx` `mixin Iterator` source (needs a stdlib
   loader, not yet built).
 - Phase 2 stdlib `Map[K, V]` indexing operator and Hash-key
   constraint negatives (#04 batch 3). `m[k]` now lowers through
-  `riven_hash_index` and panics with `"hashmap index: missing key"`
-  on miss (mirrors `Array[i]` / `riven_vec_get_or_panic`). The MIR
+  `ruxen_hash_index` and panics with `"hashmap index: missing key"`
+  on miss (mirrors `Array[i]` / `ruxen_vec_get_or_panic`). The MIR
   `Index` handler in `mir/lower.rs` was extended to recognise
   `Ty::HashMap(_, _)` and `Ty::Ref(HashMap)` receivers; `infer_index_ty`
   in `typeck/infer.rs` was changed from `Ty::Option(V)` to `V` to
@@ -748,9 +748,9 @@ once 1.0.0 ships.
   (`Array`, `Set`, `Map`) as `Map` keys / `Set` elements, emitting
   `E0615` at the type-construction site (parallel to the per-field
   auto-synth validator in `implicit_includes/mod.rs`). New release-e2e fixture
-  `tests/release-e2e/cases/509_map_index_op.rvn` exercises
+  `tests/release-e2e/cases/509_map_index_op.rx` exercises
   the hit path; six new negative tests in
-  `crates/riven-core/tests/stdlib_map_negatives.rs`
+  `crates/ruxen-core/tests/stdlib_map_negatives.rs`
   (`hashmap_with_non_hash_key_emits_e0615`,
   `hashset_with_non_hash_element_emits_e0615`,
   `hashmap_with_nested_compound_key_emits_e0615`,
@@ -758,20 +758,20 @@ once 1.0.0 ships.
   checks) pin the typeck-level diagnostic.
 - Phase 2 stdlib `Map[K, V]` + `Set[T]` per-element drop
   selectors (#04 batch 2). Five new runtime helpers
-  (`riven_hash_drop_string_v`, `riven_hash_drop_v_string`,
-  `riven_hash_drop_string_string`, `riven_hash_drop_v_vec`,
-  `riven_set_drop_string`) walk the bucket chains and release the
+  (`ruxen_hash_drop_string_v`, `ruxen_hash_drop_v_string`,
+  `ruxen_hash_drop_string_string`, `ruxen_hash_drop_v_vec`,
+  `ruxen_set_drop_string`) walk the bucket chains and release the
   heap-owned key/value/element before delegating to the spine free.
-  New runtime helper `riven_set_free` (paired with `riven_set_new`)
+  New runtime helper `ruxen_set_free` (paired with `ruxen_set_new`)
   closes the `Set` spine-leak gap that batch 1 deferred. The MIR
   drop-elaboration in `mir/lower.rs::insert_drops` now dispatches on
   `Ty::HashMap(K, V)` and `Ty::Set(T)` to pick the right helper based
   on whether K/V/T own heap. Push-time ownership transfer extended
   to taint BOTH the key (idx 1) and value (idx 2) of
-  `riven_hash_insert` (and the value of `riven_set_insert`) so source
+  `ruxen_hash_insert` (and the value of `ruxen_set_insert`) so source
   `String.from(...)` / `Array.new` temps don't double-free with the
   per-element drop walk. Four new leak regression tests in
-  `crates/riven-core/tests/drop_fixtures.rs`
+  `crates/ruxen-core/tests/drop_fixtures.rs`
   (`p04_hashmap_string_to_int_releases_every_key`,
   `p04_hashmap_int_to_string_releases_every_value`,
   `p04_hashmap_string_to_vec_int_releases_every_value`,
@@ -780,39 +780,39 @@ once 1.0.0 ships.
   `Map` methods (runtime + Cranelift sig + LLVM extern + dispatch):
   `with_capacity(Int)`, `remove(&K) -> Option[V]`, `clear`, `keys ->
   Array[&K]`, `values -> Array[&V]`, `iter -> Array[&K]`, plus `==` /
-  `!=` routed through `riven_hash_eq` (mirrors `riven_vec_eq` from
+  `!=` routed through `ruxen_hash_eq` (mirrors `ruxen_vec_eq` from
   #03). New `Set` methods: `with_capacity`, `remove(&T) -> Bool`,
   `clear`, `iter -> Array[&T]`, set operations
   `union(&Self) -> Set[T]`, `intersection(&Self) -> Set[T]`,
-  `difference(&Self) -> Set[T]`, plus `==` via `riven_set_eq`.
+  `difference(&Self) -> Set[T]`, plus `==` via `ruxen_set_eq`.
   Set-op helpers and `Map`
   container-returning helpers (`keys`, `values`, `iter`, `remove`,
   `with_capacity`) are added to the `FRESH_ALLOC_CALLEES` whitelist
   in `mir/lower.rs` so their fresh allocations are dropped at scope
   exit. 13 new release-e2e fixtures at
-  `tests/release-e2e/cases/50[1-6]_map_*.rvn` and
-  `52[1-7]_set_*.rvn`; new typecheck-level pin tests in
-  `crates/riven-core/tests/stdlib_map.rs` and `stdlib_set.rs`.
+  `tests/release-e2e/cases/50[1-6]_map_*.rx` and
+  `52[1-7]_set_*.rx`; new typecheck-level pin tests in
+  `crates/ruxen-core/tests/stdlib_map.rs` and `stdlib_set.rs`.
 - Phase 2 stdlib `Array[T]` surface batch 2 (#03): closes the closure
   surface and wires the per-element drop selector. New methods:
   `Array.from_iter(I)` static constructor (runtime fn
-  `riven_vec_from_iter`, registered as an `Array` static method
+  `ruxen_vec_from_iter`, registered as an `Array` static method
   alongside `new` / `with_capacity`); `dedup` (runtime fn
-  `riven_vec_dedup`, removes consecutive bitwise-equal slots);
+  `ruxen_vec_dedup`, removes consecutive bitwise-equal slots);
   `sort_by(closure)` and `retain(closure)` (inlined at MIR via the
   existing closure-method machinery; `sort_by` lowers to a
-  selection-sort driven by the user comparator, `retain` lowers to
+  selection-sort druxen by the user comparator, `retain` lowers to
   a read-write cursor loop using the new runtime helper
-  `riven_vec_set`). MIR drop-elaboration now selects per-element
+  `ruxen_vec_set`). MIR drop-elaboration now selects per-element
   drop helpers based on element type: `Array[String]` →
-  `riven_vec_drop_string`, `Array[Array[T]]` → `riven_vec_drop_vec`,
-  primitives still use the spine-only `riven_vec_free`. Push-time
-  ownership transfer (`riven_vec_push` / `riven_vec_insert` /
-  `riven_hash_insert`) now taints the value-arg local so the drop
+  `ruxen_vec_drop_string`, `Array[Array[T]]` → `ruxen_vec_drop_vec`,
+  primitives still use the spine-only `ruxen_vec_free`. Push-time
+  ownership transfer (`ruxen_vec_push` / `ruxen_vec_insert` /
+  `ruxen_hash_insert`) now taints the value-arg local so the drop
   pass does not double-free the heap that the receiving slot
   inherits. Three new release-e2e fixture pairs at
   `tests/release-e2e/cases/40[9-11]_*` plus two new drop-leak
-  regression tests in `crates/riven-core/tests/drop_fixtures.rs`
+  regression tests in `crates/ruxen-core/tests/drop_fixtures.rs`
   (`vec_of_string_releases_every_element`,
   `vec_of_vec_int_releases_every_inner_vec`). New typeck negatives
   pinning `dedup`, `retain`, `sort_by`, and `from_iter` contracts.
@@ -824,23 +824,23 @@ once 1.0.0 ships.
   `clear`, `truncate(Int)`, `swap(Int, Int)`, `insert(Int, T)`,
   `remove(Int) -> T`, `extend(&Array[T])`; new conversions / iter
   surface stubs `as_slice`, `iter_mut` (both passthrough on the v1
-  RivenVec representation); operator wiring `Array[T] == Array[T]` /
-  `!=` (routed through `riven_vec_eq`, replacing the prior
+  RuxenVec representation); operator wiring `Array[T] == Array[T]` /
+  `!=` (routed through `ruxen_vec_eq`, replacing the prior
   pointer-compare); indexing `v[i]` (routed through
-  `riven_vec_get_or_panic`, panic message `"index N out of range,
-  len M"`). Per-element drop helpers `riven_vec_drop_string` and
-  `riven_vec_drop_vec` ship as runtime fns ready for the drop
+  `ruxen_vec_get_or_panic`, panic message `"index N out of range,
+  len M"`). Per-element drop helpers `ruxen_vec_drop_string` and
+  `ruxen_vec_drop_vec` ship as runtime fns ready for the drop
   selector wiring (closes the runtime half of the `Array[String]`
   spine-only limitation; full MIR selector lands in batch 2). Eight
   new release-e2e fixture pairs at `tests/release-e2e/cases/40[1-8]_*`.
-  New negatives suite `crates/riven-core/tests/stdlib_array_negatives.rs`
+  New negatives suite `crates/ruxen-core/tests/stdlib_array_negatives.rs`
   pinning the typecheck contract for `Array[i]`, `Array.pop -> Option`,
   `Array[T] == Array[T] -> Bool`, plus two TODO-tagged tests recording
   current typeck laxness for `Array.from(_)` / non-Int args to
   `with_capacity`.
 - Phase 2 stdlib `String` surface batch 2 (#02): closes the surface
-  gap left by batch 1. New runtime fns `riven_string_split`,
-  `riven_string_push`, `riven_string_into_bytes` (registered in the
+  gap left by batch 1. New runtime fns `ruxen_string_split`,
+  `ruxen_string_push`, `ruxen_string_into_bytes` (registered in the
   Cranelift signatures, LLVM externs, and `RUNTIME_FUNCTIONS`
   dispatch). New language wiring: `String.split(&str) -> Array[String]`
   (standalone, distinct from `splitn`); `String.push(Char)` (now
@@ -849,13 +849,13 @@ once 1.0.0 ships.
   consuming variant of `bytes` — frees the source spine internally
   and the dealloc-safety analysis taints the receiver to avoid a
   double-free); `String + String` (concat owned, reuses
-  `riven_string_concat`); `String += String` (push_str-style
-  in-place, reuses `riven_string_push_str`). Five new release-e2e
+  `ruxen_string_concat`); `String += String` (push_str-style
+  in-place, reuses `ruxen_string_push_str`). Five new release-e2e
   fixture pairs at `tests/release-e2e/cases/31[4-8]_*`. Three new
-  drop-leak regression tests in `crates/riven-core/tests/drop_fixtures.rs`
+  drop-leak regression tests in `crates/ruxen-core/tests/drop_fixtures.rs`
   (`string_push_does_not_leak`, `string_into_bytes_transfers_ownership`,
   `string_plus_op_frees_both_operands`). New negatives suite
-  `crates/riven-core/tests/stdlib_string_negatives.rs` pinning the
+  `crates/ruxen-core/tests/stdlib_string_negatives.rs` pinning the
   typecheck gaps around static-method arg validation and
   borrow-after-move on owned String args.
 - Phase 2 stdlib `String` surface batch 1 (#02): new constructors
@@ -865,22 +865,22 @@ once 1.0.0 ships.
   `insert(Int, Char)`, `insert_str(Int, &str)`, `remove(Int) -> Char`;
   new conversions `to_string`, `parse[Int] -> Result[Int, ParseIntError]`,
   `parse[Float] -> Result[Float, ParseFloatError]`. Each method has a
-  matching `riven_string_<op>` runtime fn (declared in
+  matching `ruxen_string_<op>` runtime fn (declared in
   `runtime.c`, registered in Cranelift+LLVM signatures and
   `RUNTIME_FUNCTIONS`), MIR dispatch in `mir/lower.rs`, and a
   release-e2e fixture pair under `tests/release-e2e/cases/3NN_*`.
   Surface gap remaining for batch 2: `split` (standalone), `push(Char)`,
   `into_bytes`, `+` and `+=` operators.
-- `riven explain ECODE` subcommand — looks up a compiler error code
+- `ruxen explain ECODE` subcommand — looks up a compiler error code
   in the central registry and prints its title (T5.04 phase 2).
-- Long-form `riven explain ECODE` output: every registered code now
+- Long-form `ruxen explain ECODE` output: every registered code now
   has a markdown file under `docs/errors/<code>.md` (Why / Example /
   Fix sections) embedded into the binary via `include_str!`. The
   CLI prints the full explanation when available and falls back to
   title-only with a note when not. A registry-coverage test enforces
   that the markdown table stays in sync with
-  `riven_core::diagnostics::codes::REGISTRY` (T5.04 phase 3, #01-C).
-- `crates/riven-core/src/diagnostics/codes.rs` — central registry
+  `ruxen_core::diagnostics::codes::REGISTRY` (T5.04 phase 3, #01-C).
+- `crates/ruxen-core/src/diagnostics/codes.rs` — central registry
   for every emitted compiler error code (T5.04 phase 1).
 - CI workflow with build/test/MSRV gating + advisory lint job
   (T4.06 phase 1).
@@ -894,8 +894,8 @@ once 1.0.0 ships.
 - Auto-synthesized `Clone` now produces a working `<Type>_clone` for
   structs, classes, and enums (including variants with payloads).
   Per-field clone dispatches to bitwise copy for primitives,
-  `riven_string_clone` for `String`, `riven_vec_clone` /
-  `riven_hash_clone` / `riven_set_clone` for built-in containers, and
+  `ruxen_string_clone` for `String`, `ruxen_vec_clone` /
+  `ruxen_hash_clone` / `ruxen_set_clone` for built-in containers, and
   recursively to `<Inner>_clone` for user types that themselves
   satisfy `Clone`. Non-`Clone` field/payload types are rejected with
   `E0610` at validation time (T1.05 #01-B2).
@@ -911,16 +911,16 @@ once 1.0.0 ships.
   auto-synthesized on an empty enum. Six new release-e2e fixtures
   (`tests/release-e2e/cases/201`, `206`, `207`, `208`, `209`)
   exercise the green path; five negatives in
-  `crates/riven-core/tests/implicit_negatives.rs` pin the red path.
+  `crates/ruxen-core/tests/implicit_negatives.rs` pin the red path.
 
 ### Fixed
 - Heap-owned `String`, `Array`, and `Map` locals are now freed on
   scope exit (P0.7). Previously these types leaked until program
   exit; drop elaboration only released `Class`/`Struct`/`Enum`
-  storage. Three new runtime helpers (`riven_string_free`,
-  `riven_vec_free`, `riven_hash_free`) release the spine of each
+  storage. Three new runtime helpers (`ruxen_string_free`,
+  `ruxen_vec_free`, `ruxen_hash_free`) release the spine of each
   owning type. (#01-A)
-- Process-level argv copy from `riven_env_init` is released via
+- Process-level argv copy from `ruxen_env_init` is released via
   `atexit` so leak-tracking test harnesses see a clean exit ledger.
 
 ### Known limitations
@@ -930,11 +930,11 @@ once 1.0.0 ships.
   *Update (#04 batch 2):* `Map[String, V]`, `Map[K, String]`,
   `Map[String, String]`, `Map[K, Array[T]]`, and
   `Set[String]` now release every owned key/value/element via
-  the per-element drop selectors `riven_hash_drop_string_v` /
-  `riven_hash_drop_v_string` / `riven_hash_drop_string_string` /
-  `riven_hash_drop_v_vec` / `riven_set_drop_string`. Deeper nesting
+  the per-element drop selectors `ruxen_hash_drop_string_v` /
+  `ruxen_hash_drop_v_string` / `ruxen_hash_drop_string_string` /
+  `ruxen_hash_drop_v_vec` / `ruxen_set_drop_string`. Deeper nesting
   (Map-in-Map, Set-in-V, etc.) is still spine-only and
-  lands with the mixin-driven drop dispatch in #05.
+  lands with the mixin-druxen drop dispatch in #05.
 
 ### Changed
 - `LoopFrame` now tracks `body_locals` for the drop pass.

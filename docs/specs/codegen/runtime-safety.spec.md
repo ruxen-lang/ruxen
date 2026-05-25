@@ -5,8 +5,8 @@
 
 **Status:** shipped Phase 1-2 (runtime sanitizer build + ABI pins).
 
-The C runtime (`crates/riven-core/runtime/runtime.c`) is the only
-unsafe-by-default part of the Riven compiler.  This spec captures
+The C runtime (`crates/ruxen-core/runtime/runtime.c`) is the only
+unsafe-by-default part of the Ruxen compiler.  This spec captures
 the structural guarantees the test harness enforces on it.
 
 ---
@@ -23,11 +23,11 @@ The runtime compiles with ASan + UBSan and a smoke-test invocation
 produces no sanitiser diagnostics.  Catches misalignment, integer
 UB, and obvious memory bugs at PR time.
 
-## B3 — `riven_env_init` copies argv and clones reads
+## B3 — `ruxen_env_init` copies argv and clones reads
 
-`riven_env_init` (called at process start to capture argv) makes a
+`ruxen_env_init` (called at process start to capture argv) makes a
 defensive copy of the OS argv buffer.  Subsequent reads via
-`riven_env_args_*` return clones, not pointers into the original.
+`ruxen_env_args_*` return clones, not pointers into the original.
 Catches the class of bugs where argv mutation by `setproctitle` /
 LD_PRELOAD would corrupt later reads.
 
@@ -43,10 +43,10 @@ the build.
 
 `_Static_assert(sizeof(void *) == 8)` and
 `_Static_assert(sizeof(void *) == sizeof(int64_t))` at the top of
-`runtime.c` reject 32-bit builds.  Riven assumes 64-bit pointers
+`runtime.c` reject 32-bit builds.  Ruxen assumes 64-bit pointers
 throughout the MIR + codegen.
 
-(C tokens `void *` / `int64_t` above are C source — not Riven
+(C tokens `void *` / `int64_t` above are C source — not Ruxen
 surface syntax — and stay as written.)
 
 ---

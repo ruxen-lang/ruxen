@@ -1,0 +1,23 @@
+use std.net.TcpStream
+use std.env.get
+
+def send_hello(s: TcpStream)
+  let bytes = "hello world".bytes()
+  match s.write(&bytes)
+    Ok(_)  -> nil
+    Err(_) -> eputs "write failed"
+  end
+  match s.close()
+    Ok(_)  -> nil
+    Err(_) -> eputs "close failed"
+  end
+end
+
+def main
+  let p: String = get("RUXEN_NET_TEST_PORT").expect!("port")
+  let addr = "127.0.0.1:#{p}"
+  match TcpStream.connect(&addr)
+    Ok(s)  -> send_hello(s)
+    Err(_) -> eputs "connect failed"
+  end
+end

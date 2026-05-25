@@ -1,12 +1,12 @@
 # Closures and Blocks
 
-Riven has **one closure type** (design principle P3 — One Obvious Path). No proc vs lambda distinction.
+Ruxen has **one closure type** (design principle P3 — One Obvious Path). No proc vs lambda distinction.
 
 ## Syntax
 
 Two equivalent forms:
 
-```riven
+```ruxen
 # Brace block — single line
 numbers.each { |n| puts n }
 
@@ -21,7 +21,7 @@ end
 
 Store closures in variables and call them with `.(...)`:
 
-```riven
+```ruxen
 let double = { |x: Int| x * 2 }
 let result = double.(10)           # 20
 
@@ -33,7 +33,7 @@ puts add.(3, 4)                    # 7
 
 Closure parameter types are usually inferred from context:
 
-```riven
+```ruxen
 let nums = [1, 2, 3]
 
 # `n` is inferred as &Int from Array[Int]
@@ -45,9 +45,9 @@ let parse = { |s: &str| s.parse_int }
 
 ## Iterator Methods
 
-Closures power Riven's iterator chain:
+Closures power Ruxen's iterator chain:
 
-```riven
+```ruxen
 let nums = [1, 2, 3, 4, 5, 6]
 
 let result = nums
@@ -64,7 +64,7 @@ let (evens, odds) = nums.partition { |n| n % 2 == 0 }
 
 Closures capture variables from their enclosing scope:
 
-```riven
+```ruxen
 let multiplier = 3
 let multiply = { |x: Int| x * multiplier }  # captures `multiplier`
 ```
@@ -81,7 +81,7 @@ let multiply = { |x: Int| x * multiplier }  # captures `multiplier`
 
 When a closure needs to own its captures (e.g., returned from a function):
 
-```riven
+```ruxen
 def make_adder(n: Int) -> some Fn(Int) -> Int
   move { |x| x + n }
 end
@@ -94,8 +94,8 @@ puts add_five.(10)                 # 15
 
 For fine-grained control:
 
-```riven
-let name = String.from("Riven")
+```ruxen
+let name = String.from("Ruxen")
 let age = 30
 let closure = [&name, move age] { puts "#{name}, #{age}" }
 ```
@@ -104,7 +104,7 @@ let closure = [&name, move age] { puts "#{name}, #{age}" }
 
 Functions can receive an implicit block via `yield`:
 
-```riven
+```ruxen
 def with_timing
   let start = Time.now
   yield

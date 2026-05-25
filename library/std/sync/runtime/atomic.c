@@ -8,71 +8,71 @@
  * round — every op is SEQ_CST.
  */
 
-typedef struct { atomic_int_fast64_t v; } RivenAtomicI64;
-typedef struct { atomic_bool        v; } RivenAtomicBool;
-typedef struct { atomic_uint_fast64_t v; } RivenAtomicUsize;
+typedef struct { atomic_int_fast64_t v; } RuxenAtomicI64;
+typedef struct { atomic_bool        v; } RuxenAtomicBool;
+typedef struct { atomic_uint_fast64_t v; } RuxenAtomicUsize;
 
 /* ─── AtomicI64 ───────────────────────────────────────────────── */
 
-int64_t riven_atomic_i64_new(int64_t initial) {
-    RivenAtomicI64 *a = (RivenAtomicI64 *)malloc(sizeof(RivenAtomicI64));
-    if (!a) riven_panic("AtomicI64.new: out of memory");
+int64_t ruxen_atomic_i64_new(int64_t initial) {
+    RuxenAtomicI64 *a = (RuxenAtomicI64 *)malloc(sizeof(RuxenAtomicI64));
+    if (!a) ruxen_panic("AtomicI64.new: out of memory");
     atomic_store(&a->v, initial);
     return (int64_t)a;
 }
 
-int64_t riven_atomic_i64_load(int64_t ptr) {
-    RivenAtomicI64 *a = (RivenAtomicI64 *)ptr;
+int64_t ruxen_atomic_i64_load(int64_t ptr) {
+    RuxenAtomicI64 *a = (RuxenAtomicI64 *)ptr;
     return (int64_t)atomic_load(&a->v);
 }
 
-void riven_atomic_i64_store(int64_t ptr, int64_t v) {
-    RivenAtomicI64 *a = (RivenAtomicI64 *)ptr;
+void ruxen_atomic_i64_store(int64_t ptr, int64_t v) {
+    RuxenAtomicI64 *a = (RuxenAtomicI64 *)ptr;
     atomic_store(&a->v, v);
 }
 
-int64_t riven_atomic_i64_fetch_add(int64_t ptr, int64_t delta) {
-    RivenAtomicI64 *a = (RivenAtomicI64 *)ptr;
+int64_t ruxen_atomic_i64_fetch_add(int64_t ptr, int64_t delta) {
+    RuxenAtomicI64 *a = (RuxenAtomicI64 *)ptr;
     return (int64_t)atomic_fetch_add(&a->v, delta);
 }
 
-int64_t riven_atomic_i64_fetch_sub(int64_t ptr, int64_t delta) {
-    RivenAtomicI64 *a = (RivenAtomicI64 *)ptr;
+int64_t ruxen_atomic_i64_fetch_sub(int64_t ptr, int64_t delta) {
+    RuxenAtomicI64 *a = (RuxenAtomicI64 *)ptr;
     return (int64_t)atomic_fetch_sub(&a->v, delta);
 }
 
-int64_t riven_atomic_i64_compare_and_swap(int64_t ptr, int64_t current, int64_t new_val) {
-    RivenAtomicI64 *a = (RivenAtomicI64 *)ptr;
+int64_t ruxen_atomic_i64_compare_and_swap(int64_t ptr, int64_t current, int64_t new_val) {
+    RuxenAtomicI64 *a = (RuxenAtomicI64 *)ptr;
     int_fast64_t expected = current;
     /* atomic_compare_exchange_strong updates `expected` on failure
        with the actual prior value. We return that prior either way;
-       the Riven side compares to `current` to learn whether the
+       the Ruxen side compares to `current` to learn whether the
        swap happened. */
     atomic_compare_exchange_strong(&a->v, &expected, new_val);
     return (int64_t)expected;
 }
 
-void riven_atomic_i64_drop(int64_t ptr) {
-    RivenAtomicI64 *a = (RivenAtomicI64 *)ptr;
+void ruxen_atomic_i64_drop(int64_t ptr) {
+    RuxenAtomicI64 *a = (RuxenAtomicI64 *)ptr;
     if (a) free(a);
 }
 
 /* ─── AtomicBool ──────────────────────────────────────────────── */
 
-int64_t riven_atomic_bool_new(int64_t initial) {
-    RivenAtomicBool *a = (RivenAtomicBool *)malloc(sizeof(RivenAtomicBool));
-    if (!a) riven_panic("AtomicBool.new: out of memory");
+int64_t ruxen_atomic_bool_new(int64_t initial) {
+    RuxenAtomicBool *a = (RuxenAtomicBool *)malloc(sizeof(RuxenAtomicBool));
+    if (!a) ruxen_panic("AtomicBool.new: out of memory");
     atomic_store(&a->v, initial != 0);
     return (int64_t)a;
 }
 
-int64_t riven_atomic_bool_load(int64_t ptr) {
-    RivenAtomicBool *a = (RivenAtomicBool *)ptr;
+int64_t ruxen_atomic_bool_load(int64_t ptr) {
+    RuxenAtomicBool *a = (RuxenAtomicBool *)ptr;
     return atomic_load(&a->v) ? 1 : 0;
 }
 
-void riven_atomic_bool_store(int64_t ptr, int64_t v) {
-    RivenAtomicBool *a = (RivenAtomicBool *)ptr;
+void ruxen_atomic_bool_store(int64_t ptr, int64_t v) {
+    RuxenAtomicBool *a = (RuxenAtomicBool *)ptr;
     atomic_store(&a->v, v != 0);
 }
 
@@ -84,8 +84,8 @@ void riven_atomic_bool_store(int64_t ptr, int64_t v) {
  * the ubuntu CI build. Implement bool fetch_and/or via a portable
  * compare-exchange loop instead — same semantics, both compilers happy.
  */
-int64_t riven_atomic_bool_fetch_and(int64_t ptr, int64_t v) {
-    RivenAtomicBool *a = (RivenAtomicBool *)ptr;
+int64_t ruxen_atomic_bool_fetch_and(int64_t ptr, int64_t v) {
+    RuxenAtomicBool *a = (RuxenAtomicBool *)ptr;
     bool desired_mask = (v != 0);
     bool expected = atomic_load(&a->v);
     while (!atomic_compare_exchange_weak(&a->v, &expected, expected && desired_mask)) {
@@ -95,8 +95,8 @@ int64_t riven_atomic_bool_fetch_and(int64_t ptr, int64_t v) {
     return expected ? 1 : 0;
 }
 
-int64_t riven_atomic_bool_fetch_or(int64_t ptr, int64_t v) {
-    RivenAtomicBool *a = (RivenAtomicBool *)ptr;
+int64_t ruxen_atomic_bool_fetch_or(int64_t ptr, int64_t v) {
+    RuxenAtomicBool *a = (RuxenAtomicBool *)ptr;
     bool desired_mask = (v != 0);
     bool expected = atomic_load(&a->v);
     while (!atomic_compare_exchange_weak(&a->v, &expected, expected || desired_mask)) {
@@ -105,55 +105,55 @@ int64_t riven_atomic_bool_fetch_or(int64_t ptr, int64_t v) {
     return expected ? 1 : 0;
 }
 
-int64_t riven_atomic_bool_compare_and_swap(int64_t ptr, int64_t current, int64_t new_val) {
-    RivenAtomicBool *a = (RivenAtomicBool *)ptr;
+int64_t ruxen_atomic_bool_compare_and_swap(int64_t ptr, int64_t current, int64_t new_val) {
+    RuxenAtomicBool *a = (RuxenAtomicBool *)ptr;
     bool expected = (current != 0);
     atomic_compare_exchange_strong(&a->v, &expected, new_val != 0);
     return expected ? 1 : 0;
 }
 
-void riven_atomic_bool_drop(int64_t ptr) {
-    RivenAtomicBool *a = (RivenAtomicBool *)ptr;
+void ruxen_atomic_bool_drop(int64_t ptr) {
+    RuxenAtomicBool *a = (RuxenAtomicBool *)ptr;
     if (a) free(a);
 }
 
 /* ─── AtomicUsize ─────────────────────────────────────────────── */
 
-int64_t riven_atomic_usize_new(int64_t initial) {
-    RivenAtomicUsize *a = (RivenAtomicUsize *)malloc(sizeof(RivenAtomicUsize));
-    if (!a) riven_panic("AtomicUsize.new: out of memory");
+int64_t ruxen_atomic_usize_new(int64_t initial) {
+    RuxenAtomicUsize *a = (RuxenAtomicUsize *)malloc(sizeof(RuxenAtomicUsize));
+    if (!a) ruxen_panic("AtomicUsize.new: out of memory");
     atomic_store(&a->v, (uint_fast64_t)initial);
     return (int64_t)a;
 }
 
-int64_t riven_atomic_usize_load(int64_t ptr) {
-    RivenAtomicUsize *a = (RivenAtomicUsize *)ptr;
+int64_t ruxen_atomic_usize_load(int64_t ptr) {
+    RuxenAtomicUsize *a = (RuxenAtomicUsize *)ptr;
     return (int64_t)atomic_load(&a->v);
 }
 
-void riven_atomic_usize_store(int64_t ptr, int64_t v) {
-    RivenAtomicUsize *a = (RivenAtomicUsize *)ptr;
+void ruxen_atomic_usize_store(int64_t ptr, int64_t v) {
+    RuxenAtomicUsize *a = (RuxenAtomicUsize *)ptr;
     atomic_store(&a->v, (uint_fast64_t)v);
 }
 
-int64_t riven_atomic_usize_fetch_add(int64_t ptr, int64_t delta) {
-    RivenAtomicUsize *a = (RivenAtomicUsize *)ptr;
+int64_t ruxen_atomic_usize_fetch_add(int64_t ptr, int64_t delta) {
+    RuxenAtomicUsize *a = (RuxenAtomicUsize *)ptr;
     return (int64_t)atomic_fetch_add(&a->v, (uint_fast64_t)delta);
 }
 
-int64_t riven_atomic_usize_fetch_sub(int64_t ptr, int64_t delta) {
-    RivenAtomicUsize *a = (RivenAtomicUsize *)ptr;
+int64_t ruxen_atomic_usize_fetch_sub(int64_t ptr, int64_t delta) {
+    RuxenAtomicUsize *a = (RuxenAtomicUsize *)ptr;
     return (int64_t)atomic_fetch_sub(&a->v, (uint_fast64_t)delta);
 }
 
-int64_t riven_atomic_usize_compare_and_swap(int64_t ptr, int64_t current, int64_t new_val) {
-    RivenAtomicUsize *a = (RivenAtomicUsize *)ptr;
+int64_t ruxen_atomic_usize_compare_and_swap(int64_t ptr, int64_t current, int64_t new_val) {
+    RuxenAtomicUsize *a = (RuxenAtomicUsize *)ptr;
     uint_fast64_t expected = (uint_fast64_t)current;
     atomic_compare_exchange_strong(&a->v, &expected, (uint_fast64_t)new_val);
     return (int64_t)expected;
 }
 
-void riven_atomic_usize_drop(int64_t ptr) {
-    RivenAtomicUsize *a = (RivenAtomicUsize *)ptr;
+void ruxen_atomic_usize_drop(int64_t ptr) {
+    RuxenAtomicUsize *a = (RuxenAtomicUsize *)ptr;
     if (a) free(a);
 }

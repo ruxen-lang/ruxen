@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Wrapper that runs `ruxenc` with:
+#   - a 30-second wall-clock cap,
+#   - an 8 GiB RSS cap via ps polling (macOS has no RLIMIT_AS).
+#
+# Agents and scripts should call this instead of `ruxenc` directly.
+# It expects `ruxenc` to be on PATH or at $RUXENC_BIN.
+
+set -u
+
+CAP_KB="${RUXENC_MEM_KB:-$((8 * 1024 * 1024))}"
+BIN="${RUXENC_BIN:-$(command -v ruxenc)}"
+if [ -z "$BIN" ]; then
+  echo "ruxenc-capped: cannot find ruxenc on PATH (set RUXENC_BIN)" >&2
+  exit 127
+fi
+
+timeout 30 bash -c '
+  CAP_KB='"$CAP_KB"'
+  "'"$BIN"'" "$@" &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    rss=$(ps -o rss= -p "$pid" 2>/dev/null | tr -d " ")
+    if [ -n "$rss" ] && [ "$rss" -gt "$CAP_KB" ]; then
+      kill -9 "$pid" 2>/dev/null
+      wait "$pid" 2>/dev/null
+      echo "ruxenc-capped: killed pid $pid (RSS ${rss}KB > ${CAP_KB}KB)" >&2
+      exit 137
+    fi
+    sleep 0.25
+  done
+  wait "$pid"
+' _ "$@"

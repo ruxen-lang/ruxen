@@ -37,7 +37,7 @@ as a bare `Int`-returning free-fn.
 The monotonic-clock surface is now class-based and lives in the same
 `std.time` module:
 
-```riven
+```ruxen
 use std.time.{Instant, Duration}
 use std.thread.sleep
 
@@ -75,9 +75,9 @@ searching for "monotonic" / "now_ns" land at the right import.
 
 - `now_ns() -> Int` free-fn — superseded by `Instant.now` +
   `Instant.elapsed` / `Instant.duration_since`.  The C symbol
-  `riven_time_now_ns` is still linked (it is the implementation used
-  internally by `riven_instant_now`) but is no longer reachable from
-  Riven user code.
+  `ruxen_time_now_ns` is still linked (it is the implementation used
+  internally by `ruxen_instant_now`) but is no longer reachable from
+  Ruxen user code.
 
 ## Out of scope (v2)
 

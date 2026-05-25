@@ -1,8 +1,0 @@
-use std.env.get
-
-def main
-  match get("RIVEN_SENTINEL")
-    Ok(v)  -> puts "got=#{v}"
-    Err(_) -> puts "missing"
-  end
-end

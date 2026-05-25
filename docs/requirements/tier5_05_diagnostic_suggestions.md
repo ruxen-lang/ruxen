@@ -3,7 +3,7 @@
 Status: draft
 Depends on: tier5_04 phase 4a (unified Diagnostic). Independent of
 tier5_03 but synergistic: deprecation warnings will carry suggestions.
-Blocks: LSP code actions (tier 3), `riven fix` migrator (tier5_02),
+Blocks: LSP code actions (tier 3), `ruxen fix` migrator (tier5_02),
 human-readable multi-line diagnostic output.
 
 ---
@@ -21,15 +21,15 @@ The LSP consumes the suggestion as a **code action** — the user hits
 **machine-applicable fixes**. The compiler itself renders it as a
 colourised `help:` line. All from one source of truth.
 
-Riven today has a primitive free-form `help: Vec<String>` on
-`BorrowError` (`crates/riven-core/src/borrow_check/errors.rs:61`):
+Ruxen today has a primitive free-form `help: Vec<String>` on
+`BorrowError` (`crates/ruxen-core/src/borrow_check/errors.rs:61`):
 
 ```rust
 help: vec![format!("consider cloning the value: `{}.clone`", name)]
 ```
 
 Good as human prose, useless as a machine-applicable fix. The LSP
-conversion (`crates/riven-ide/src/diagnostics.rs:30-60`) doesn't even
+conversion (`crates/ruxen-ide/src/diagnostics.rs:30-60`) doesn't even
 propagate `help` into the LSP diagnostic — it's just dropped. No
 `textDocument/codeAction` integration is possible.
 
@@ -43,7 +43,7 @@ usage guidelines.
 
 ### 2.1 Existing "help" plumbing
 
-`crates/riven-core/src/borrow_check/errors.rs:50-62`:
+`crates/ruxen-core/src/borrow_check/errors.rs:50-62`:
 
 ```rust
 pub struct SpanLabel {
@@ -71,7 +71,7 @@ applicability marker.
 
 ### 2.2 The LSP loses suggestions entirely
 
-`crates/riven-ide/src/diagnostics.rs:30-60`:
+`crates/ruxen-ide/src/diagnostics.rs:30-60`:
 
 ```rust
 pub fn borrow_error_to_lsp(err, line_index, uri) -> LspDiagnostic {
@@ -86,7 +86,7 @@ Fix button.
 
 ### 2.3 `Diagnostic` top-level carrier
 
-`crates/riven-core/src/diagnostics/mod.rs:21-27`:
+`crates/ruxen-core/src/diagnostics/mod.rs:21-27`:
 
 ```rust
 pub struct Diagnostic {
@@ -111,7 +111,7 @@ No help field at all. `BorrowError` has help; `Diagnostic` does not.
 - Terminal rendering: `help: …` with "↓" arrows at the relevant spans.
 - LSP integration: `textDocument/codeAction` returns every suggestion
   as a code action, with confidence → `kind` mapping.
-- `riven fix` (tier5_02) applies every `MachineApplicable`
+- `ruxen fix` (tier5_02) applies every `MachineApplicable`
   suggestion and flags the rest.
 - A small builder API so compiler passes can emit suggestions without
   ceremony.
@@ -134,7 +134,7 @@ No help field at all. `BorrowError` has help; `Diagnostic` does not.
 ### 4.1 `Suggestion` type
 
 ```rust
-// crates/riven-core/src/diagnostics/suggestion.rs
+// crates/ruxen-core/src/diagnostics/suggestion.rs
 
 /// A span-based, potentially-multi-part replacement.
 ///
@@ -275,9 +275,9 @@ Example output:
 
 ```
 error[E1001]: value used after move
-  --> src/main.rvn:9:8
+  --> src/main.rx:9:8
    |
- 7 | let name = String.from("Riven")
+ 7 | let name = String.from("Ruxen")
    |     ---- value created here
  8 | consume(name)
    |         ---- value given to `consume()` here
@@ -294,7 +294,7 @@ help: or borrow
  8 | consume(&name)
    |         +
    |
-   = note: see `riven explain E1001` for details
+   = note: see `ruxen explain E1001` for details
 ```
 
 Each `Suggestion` gets its own `help:` block with a rendered mini-diff
@@ -306,7 +306,7 @@ Multi-edit suggestions show all edits in the same block.
 
 ### 4.6 LSP mapping
 
-`crates/riven-ide/src/diagnostics.rs` gets a new function:
+`crates/ruxen-ide/src/diagnostics.rs` gets a new function:
 
 ```rust
 pub fn diagnostic_to_lsp(
@@ -343,7 +343,7 @@ auto-apply with `Cmd-.`. Only `MachineApplicable` gets it.
 
 ### 4.7 JSON output
 
-`rivenc --error-format=json` emits diagnostics as JSON, including
+`ruxenc --error-format=json` emits diagnostics as JSON, including
 suggestions:
 
 ```json
@@ -367,7 +367,7 @@ suggestions:
 }
 ```
 
-This is what `riven fix` consumes. External tools (VSCode extensions
+This is what `ruxen fix` consumes. External tools (VSCode extensions
 not using the LSP, linters, CI reporters) consume this.
 
 ---
@@ -377,21 +377,21 @@ not using the LSP, linters, CI reporters) consume this.
 ### 5.1 File organization
 
 New:
-- `crates/riven-core/src/diagnostics/suggestion.rs` — `Suggestion`,
+- `crates/ruxen-core/src/diagnostics/suggestion.rs` — `Suggestion`,
   `SuggestionEdit`, `Applicability`.
-- `crates/riven-core/src/diagnostics/render.rs` — terminal renderer
+- `crates/ruxen-core/src/diagnostics/render.rs` — terminal renderer
   (multi-line, with source context). Moves the `Display` extension off the
   carrier.
-- `crates/riven-core/src/diagnostics/json.rs` — JSON serialization
+- `crates/ruxen-core/src/diagnostics/json.rs` — JSON serialization
   behind a `json-output` feature flag.
 
 Modified:
-- `crates/riven-core/src/diagnostics/mod.rs` — `Diagnostic` carrier
+- `crates/ruxen-core/src/diagnostics/mod.rs` — `Diagnostic` carrier
   gains `suggestions`, `secondary`, `notes`, `help`. Builder methods.
-- `crates/riven-ide/src/diagnostics.rs` — rewrite entirely once the
+- `crates/ruxen-ide/src/diagnostics.rs` — rewrite entirely once the
   carriers merge; add code-action generation.
-- `crates/riven-lsp/src/server.rs` — handle `textDocument/codeAction`
-  by delegating to `riven-ide`.
+- `crates/ruxen-lsp/src/server.rs` — handle `textDocument/codeAction`
+  by delegating to `ruxen-ide`.
 - Every existing `BorrowError` site in `borrow_check/mod.rs` (~15
   spots) — rewritten as `Diagnostic::error(code, primary).with_*()`
   chains.
@@ -425,13 +425,13 @@ within a single suggestion are a bug (asserted in debug builds).
 
 A suggestion can cross non-contiguous regions of the file — e.g. switch
 `let` to `var` at the binding AND change every `&x` to `&var x`. This is
-one user-visible fix; reusing atomic semantics keeps `riven fix`
+one user-visible fix; reusing atomic semantics keeps `ruxen fix`
 simple.
 
 ### 5.4 Overlap between suggestions
 
 If two `Suggestion`s on the same `Diagnostic` touch overlapping spans,
-`riven fix` applies at most one — the first `MachineApplicable` in
+`ruxen fix` applies at most one — the first `MachineApplicable` in
 declaration order. The others become `MaybeIncorrect` for the tool's
 purposes.
 
@@ -452,7 +452,7 @@ shipped. Tools will build on it. Versioning:
 
 ```json
 {
-  "riven_diagnostic_version": 1,
+  "ruxen_diagnostic_version": 1,
   "diagnostics": [ ... ]
 }
 ```
@@ -480,7 +480,7 @@ Breaking changes bump the version; tooling pins.
 3. Replace `BorrowError::fmt` (`errors.rs:64-77`) with renderer
    delegation.
 4. Output fixtures in `tests/diagnostic_rendering/` — snapshot tests
-   (input `.rvn`, expected rendered-output `.txt`).
+   (input `.rx`, expected rendered-output `.txt`).
 
 ### 6.3 Phase 5c — compiler-wide suggestion emission (2-3 weeks)
 
@@ -509,25 +509,25 @@ Each suggestion is one PR with a fixture.
 
 ### 6.4 Phase 5d — LSP code actions (1 week)
 
-1. `riven-ide/src/diagnostics.rs` returns code actions.
-2. `riven-lsp/src/server.rs` implements
+1. `ruxen-ide/src/diagnostics.rs` returns code actions.
+2. `ruxen-lsp/src/server.rs` implements
    `textDocument/codeAction`.
 3. VSCode integration-test (manual): write a program with E1006, hit
    `Cmd-.`, assert the `let` → `var` fix applies.
 
-### 6.5 Phase 5e — JSON output + `riven fix` (2 weeks)
+### 6.5 Phase 5e — JSON output + `ruxen fix` (2 weeks)
 
-1. `rivenc --error-format=json` (also shared with tier5_04 phase 4e).
-2. `crates/riven-cli/src/fix.rs` — consumes JSON, applies
+1. `ruxenc --error-format=json` (also shared with tier5_04 phase 4e).
+2. `crates/ruxen-cli/src/fix.rs` — consumes JSON, applies
    machine-applicable edits.
 3. Integration test: fixture crate with several E1006-type errors,
-   `riven fix` rewrites and the crate compiles.
+   `ruxen fix` rewrites and the crate compiles.
 
 ---
 
 ## 7. Interactions with other tiers
 
-- **Tier 5 doc 02 (editions):** `riven fix --edition=YYYY` is the
+- **Tier 5 doc 02 (editions):** `ruxen fix --edition=YYYY` is the
   primary consumer. Edition migration is "apply all
   MachineApplicable suggestions and re-compile."
 - **Tier 5 doc 03 (directives):** deprecation warnings may emit
@@ -556,7 +556,7 @@ Each suggestion is one PR with a fixture.
 | 5b    | Terminal renderer | 1-2 | User-visible quality |
 | 5c    | High-value suggestion emissions (6 sites) | 2-3 | Real UX win |
 | 5d    | LSP code actions | 1 | Editor UX |
-| 5e    | JSON + `riven fix` | 2 | Migrator + CI tooling |
+| 5e    | JSON + `ruxen fix` | 2 | Migrator + CI tooling |
 
 Total: ~7-9 weeks. Phases 5a and 5b can ship behind 5c's actual
 content.
@@ -594,7 +594,7 @@ produces code that doesn't compile. Mitigation:
 
 - Regression tests: each suggestion fixture has an "after" state;
   the test applies the edit and asserts compilation.
-- Dogfooding: `riven fix` run on the compiler's own crates during
+- Dogfooding: `ruxen fix` run on the compiler's own crates during
   CI.
 
 ### OQ-5. What if the source has already changed between diagnostic
@@ -602,7 +602,7 @@ produces code that doesn't compile. Mitigation:
 
 The LSP handles this via document versioning (`textDocument.version`).
 CLI tools re-run the compiler and re-compute. The suggestion's span
-is stale once the source mutates. `riven fix` operates on the
+is stale once the source mutates. `ruxen fix` operates on the
 compiler's just-emitted JSON — no staleness.
 
 ### OQ-6. Confidence level "auto" based on heuristics?
@@ -623,7 +623,7 @@ suggestion message should not.
       diagnostics.
 
 If two diagnostics at different spans both suggest "switch `let` to `var` at line
-3", `riven fix` applies the edit once (dedup by span+replacement). If
+3", `ruxen fix` applies the edit once (dedup by span+replacement). If
 two suggestions conflict (same span, different replacements), only
 the first `MachineApplicable` wins; the rest log.
 
@@ -648,7 +648,7 @@ construct simply wouldn't be emitted on stable.
 ## 10. Acceptance criteria
 
 - [ ] `Suggestion`, `SuggestionEdit`, `Applicability` exist in
-      `crates/riven-core/src/diagnostics/suggestion.rs`.
+      `crates/ruxen-core/src/diagnostics/suggestion.rs`.
 - [ ] `Diagnostic.suggestions: Vec<Suggestion>` is the canonical
       carrier.
 - [ ] Builder API (`suggest_replace`, `suggest_insert_before`,
@@ -663,9 +663,9 @@ construct simply wouldn't be emitted on stable.
 - [ ] LSP `textDocument/codeAction` returns code actions for every
       suggestion.
 - [ ] `MachineApplicable` suggestions carry `isPreferred: true`.
-- [ ] `rivenc --error-format=json` emits suggestions in the
+- [ ] `ruxenc --error-format=json` emits suggestions in the
       JSON schema from §4.7.
-- [ ] `riven fix` applies all `MachineApplicable` suggestions in a
+- [ ] `ruxen fix` applies all `MachineApplicable` suggestions in a
       fixture crate and the result compiles.
 - [ ] Snapshot regressions: every suggestion fixture has before+after,
       the after compiles.

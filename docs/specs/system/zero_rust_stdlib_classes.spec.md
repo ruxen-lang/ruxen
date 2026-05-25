@@ -7,7 +7,7 @@
 **Status:** new — auto-connect cleanup absorbing the gaps surfaced
 during the multithreading + async sub-phases. Five focused fixes
 that together close the "trio leak": **adding a stdlib class or
-method must require zero edits to `compiler/riven_core/src/` beyond a
+method must require zero edits to `compiler/ruxen_core/src/` beyond a
 single `BOOTSTRAP_FILES` entry.**
 
 Three principles framing the spec:
@@ -23,7 +23,7 @@ Three principles framing the spec:
 
 ## B1 — Bootstrap-merge resolves class bodies
 
-`compiler/riven_core/src/resolve/bootstrap_merge.rs::resolve_with_bootstrap`
+`compiler/ruxen_core/src/resolve/bootstrap_merge.rs::resolve_with_bootstrap`
 currently runs `resolve_item` only over the user program. Bootstrap
 programs only get `register_top_level_type_with_ffi` (type + lib-decl
 registration). User-body methods on bootstrap-loaded classes (`def
@@ -34,8 +34,8 @@ order, against the cumulative bootstrap symbol table (so a later
 package can reference an earlier one). Then run it over the user
 program last.
 
-**Given** `library/std/time/src/lib.rvn` containing:
-```rvn
+**Given** `library/std/time/src/lib.rx` containing:
+```rx
 class TimeSleepFuture
   remaining_nanos: Int
   handle: Int
@@ -48,7 +48,7 @@ class TimeSleepFuture
   end
 
   def var poll(cx: &var Context) -> Poll[()]
-    # user-written Riven body that calls FFI helpers
+    # user-written Ruxen body that calls FFI helpers
     ...
   end
 
@@ -68,7 +68,7 @@ calls type-check but never execute the user-written code.
 
 ## B2 — Implicit transitive `Send` / `Sync` auto-derive
 
-`compiler/riven_core/src/hir/types.rs::is_send_strict_with` currently
+`compiler/ruxen_core/src/hir/types.rs::is_send_strict_with` currently
 has hardcoded match arms:
 ```rust
 match class_name {
@@ -101,9 +101,9 @@ all fields satisfy both); `Foo[BadType]: !Send` if `BadType: !Send`.
 **Given** the SAME definition with `include !Send` added
 **Then** `Foo[anything]: !Send` (escape hatch wins).
 
-## B3 — `[system_libs]` in `Riven.toml`
+## B3 — `[system_libs]` in `Ruxen.toml`
 
-`compiler/riven_core/src/codegen/object.rs::linker_args` currently
+`compiler/ruxen_core/src/codegen/object.rs::linker_args` currently
 hardcodes:
 ```rust
 "-lc", "-lm", "-lpthread"
@@ -112,7 +112,7 @@ hardcodes:
 New stdlib package needing `-lssl`, `-lz`, `-lcurl` requires editing
 this Rust function.
 
-**Fix:** each package's `Riven.toml` may carry a `[system_libs]`
+**Fix:** each package's `Ruxen.toml` may carry a `[system_libs]`
 table:
 ```toml
 [system_libs]
@@ -126,30 +126,30 @@ matter (linker resolves transitive references).
 toml. `-lpthread` moves into `std-sync`'s toml. Sanitizer flags
 stay in code (they're not package-specific).
 
-**Given** a new package `library/std/crypto/Riven.toml` with
+**Given** a new package `library/std/crypto/Ruxen.toml` with
 `[system_libs] libs = ["ssl", "crypto"]`
 **Then** compiled programs linking against std-crypto get `-lssl`
 `-lcrypto` automatically without touching `codegen/object.rs`.
 
 ## B4 — Sweep `def __drop` → `def drop` in stdlib
 
-`compiler/riven_core/src/mir/lower.rs::collect_user_drop_classes`
+`compiler/ruxen_core/src/mir/lower.rs::collect_user_drop_classes`
 matches the literal method name `drop` (no double-underscore).
-`library/std/sync/src/lib.rvn` declares lib decls as `def __drop as
+`library/std/sync/src/lib.rx` declares lib decls as `def __drop as
 "..."`. The collector silently skips them — every Mutex / SharedSync /
 MutexGuard / AtomicI64 / AtomicBool / AtomicUsize / Sender / Receiver /
 JoinHandle in user code is leaking its C heap.
 
-**Fix:** sweep across `library/std/sync/src/lib.rvn` (and any other
-`.rvn` that uses the `__drop` form). Change `def __drop as "..."`
+**Fix:** sweep across `library/std/sync/src/lib.rx` (and any other
+`.rx` that uses the `__drop` form). Change `def __drop as "..."`
 to `def drop as "..."`. Both forms map to the same C symbol; only
-the Riven-side method name changes.
+the Ruxen-side method name changes.
 
 **Pin:** `grep -rn "def __drop" library/std/*/src/` returns empty
 after the fix.
 
 **Sanity:** a focused leak test (e.g. `Mutex.new(0)` in a loop with
-RSS sampling, OR an explicit count of `riven_mutex_drop` invocations
+RSS sampling, OR an explicit count of `ruxen_mutex_drop` invocations
 via a counter) confirms drop fires post-fix.
 
 ## B5 — End-to-end pin test
@@ -157,9 +157,9 @@ via a counter) confirms drop fires post-fix.
 The trio-leak detector. Add a fresh dummy package
 `library/std/foobar/` containing:
 
-- `Riven.toml` with deps + `[system_libs] libs = []`.
-- `src/lib.rvn`:
-  ```rvn
+- `Ruxen.toml` with deps + `[system_libs] libs = []`.
+- `src/lib.rx`:
+  ```rx
   class FooBar[T]
     payload: T
     include Send
@@ -174,11 +174,11 @@ The trio-leak detector. Add a fresh dummy package
     end
 
     lib "runtime/foobar.c"
-      def drop as "riven_foobar_drop"(self) -> ()
+      def drop as "ruxen_foobar_drop"(self) -> ()
     end
   end
   ```
-- `runtime/foobar.c` with `riven_foobar_drop`.
+- `runtime/foobar.c` with `ruxen_foobar_drop`.
 - **One entry** in `BOOTSTRAP_FILES` (the explicit allowed exception).
 
 Pin test (e2e or Rust-side):
@@ -187,7 +187,7 @@ Pin test (e2e or Rust-side):
 - `FooBar[Int]: Send + Sync` (auto-derive works transitively because
   Int satisfies both).
 - `FooBar[NotSendType]: !Send` (negative transitivity).
-- Verify the diff `git log -1 -- compiler/riven_core/src/` between
+- Verify the diff `git log -1 -- compiler/ruxen_core/src/` between
   HEAD and HEAD~1 (where HEAD adds FooBar) contains ONLY the
   BOOTSTRAP_FILES line addition. Nothing else in `compiler/`.
 
@@ -205,10 +205,10 @@ The last assertion is the test that closes the trio-leak structurally.
 | B2        | `transitive_sync_iff_all_generic_params_sync`        | `tests/auto_derive_send_sync.rs`   |
 | B2        | `include_negative_send_overrides_transitive`         | `tests/auto_derive_send_sync.rs`   |
 | B2        | `include_unsafe_send_overrides_transitive`           | `tests/auto_derive_send_sync.rs`   |
-| B3        | `system_libs_aggregate_from_riven_tomls`             | `tests/linker_system_libs.rs`      |
+| B3        | `system_libs_aggregate_from_ruxen_tomls`             | `tests/linker_system_libs.rs`      |
 | B4        | `no_double_underscore_drop_remains_in_stdlib`        | `tests/drop_name_sweep.rs`         |
 | B4        | `mutex_drop_fires_count_pin`                         | `tests/drop_name_sweep.rs`         |
-| B5        | e2e `cases/750_foobar_zero_rust_pin.rvn`             | release-e2e                        |
+| B5        | e2e `cases/750_foobar_zero_rust_pin.rx`             | release-e2e                        |
 | B5        | `foobar_addition_touches_only_bootstrap_files`       | `tests/trio_leak_pin.rs`           |
 
 ---

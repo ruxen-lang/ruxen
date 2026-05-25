@@ -1,4 +1,4 @@
-# Riven — Whole-Project Quality Review
+# Ruxen — Whole-Project Quality Review
 
 **Date**: 2026-05-22 (original review)
 **Re-audited**: 2026-05-22 evening (after the CI-greening + correctness sweep landed)
@@ -10,8 +10,8 @@
 | Category | Status | Notes |
 |---|---|---|
 | Formatting | ✅ GREEN | `cargo fmt --all` sweep (74 files) committed in `ae20296`. |
-| Build | ✅ GREEN | `riven_repl` `MirInst::DataAddr` arm added; `Future_dynamic_poll` weak stub satisfies the librivenrt link (`ae20296`). gcc-on-linux `atomic_fetch_and(&atomic_bool, …)` rejection fixed with CAS loops (`79be087`). Workspace + MSRV both green on macOS aarch64 and ubuntu/gcc (verified via docker `rust:1.94-bookworm`). |
-| Clippy | WARN | 5 `riven_ide` lints auto-fixed (`79be087`); 4 `riven_core` lints + ~8 across the rest of the workspace remain. CI lint job stays `continue-on-error: true`. |
+| Build | ✅ GREEN | `ruxen_repl` `MirInst::DataAddr` arm added; `Future_dynamic_poll` weak stub satisfies the libruxenrt link (`ae20296`). gcc-on-linux `atomic_fetch_and(&atomic_bool, …)` rejection fixed with CAS loops (`79be087`). Workspace + MSRV both green on macOS aarch64 and ubuntu/gcc (verified via docker `rust:1.94-bookworm`). |
+| Clippy | WARN | 5 `ruxen_ide` lints auto-fixed (`79be087`); 4 `ruxen_core` lints + ~8 across the rest of the workspace remain. CI lint job stays `continue-on-error: true`. |
 | Security | **FAIL** | All 4 `resolve_deps.rs` / `bench.rs` holes still open. Listed in Wave 2 below. |
 | Performance | WARN | Unchanged from original review. |
 | Architecture | WARN | Unchanged. |
@@ -23,30 +23,30 @@ Map from review section → commit / file:
 
 | Review § | Finding | Fix landed in |
 |---|---|---|
-| §1.1 | `riven_repl/src/jit.rs:731` non-exhaustive `MirInst` match | `ae20296` |
+| §1.1 | `ruxen_repl/src/jit.rs:731` non-exhaustive `MirInst` match | `ae20296` |
 | §1.3 | `resolve/types.rs:516-548` String DefKind-stomp workaround | **Real fix** in `6fbf5d9` — `resolve/items.rs:332` now preserves `DefKind::TypeAlias` instead of overwriting it. Read-side patches in `types.rs` left for defence-in-depth. |
-| §10 | `project_riven_resolve_class_stomps_typealias.md` | Same as above — memory marked resolved at the write site. |
+| §10 | `project_ruxen_resolve_class_stomps_typealias.md` | Same as above — memory marked resolved at the write site. |
 | Wave 1 #1 | `MirInst::DataAddr` arm | `ae20296` |
 | Wave 1 #2 | `cargo fmt` sweep | `ae20296` |
 | Wave 1 #3 | Dead `runtime_c_src` helpers | `79be087` |
-| Wave 1 #4 | `cargo clippy --fix -p riven_ide` (5 auto-fixable) | `79be087` |
-| §8 (line_index UTF-8 char-boundary crash, also v1 STATUS.md follow-up) | `riven_ide/src/line_index.rs` | `79be087` — added stable `floor_char_boundary` helper, routed both bounds through it. Unblocks `analysis_of_sample_program`. |
-| §7 (E1100-E1118 missing markdown — surfaced on linux) | `src/riven_cli/src/explain.rs` | `79be087` — 9 `include_str!` lines added. |
+| Wave 1 #4 | `cargo clippy --fix -p ruxen_ide` (5 auto-fixable) | `79be087` |
+| §8 (line_index UTF-8 char-boundary crash, also v1 STATUS.md follow-up) | `ruxen_ide/src/line_index.rs` | `79be087` — added stable `floor_char_boundary` helper, routed both bounds through it. Unblocks `analysis_of_sample_program`. |
+| §7 (E1100-E1118 missing markdown — surfaced on linux) | `src/ruxen_cli/src/explain.rs` | `79be087` — 9 `include_str!` lines added. |
 | Cross-cutting | gcc rejects `atomic_fetch_and/or` on `atomic_bool` (C11 only defines those for integer atomics; Clang accepts it as an extension) | `79be087` — CAS-loop rewrite. |
-| §5 / §1.3 derivative | Command builder `riven_command_arg/args/env/current_dir` double-free at scope exit (intermediate and dest both alloc-rooted, both drop+dealloc) | `a398f72` — force-taint receiver in `mir/lower/drops.rs::compute_dealloc_safe_locals`. |
+| §5 / §1.3 derivative | Command builder `ruxen_command_arg/args/env/current_dir` double-free at scope exit (intermediate and dest both alloc-rooted, both drop+dealloc) | `a398f72` — force-taint receiver in `mir/lower/drops.rs::compute_dealloc_safe_locals`. |
 | §4 / §1.3 | `lookup_method_on_bounds` not reachable through `Ref(TypeParam)` receiver | `b840862` — `typeck/infer/collect.rs::lookup_on_type_param_bounds` peels references. |
-| §4 / §1.3 | Hashable/Ord/PartialOrd mixin sigs default to `Unit` return | `b840862` — stamped `-> Int` return types in `library/std/core/src/lib.rvn` + `library/std/hash/src/lib.rvn`. |
+| §4 / §1.3 | Hashable/Ord/PartialOrd mixin sigs default to `Unit` return | `b840862` — stamped `-> Int` return types in `library/std/core/src/lib.rx` + `library/std/hash/src/lib.rx`. |
 | §2 (extension on primitive) | `extension Int { def to_display }` lowered `self: Ty::Unit` because `class_name_from_mangled` only matched user-defined Class/Struct/Enum | `b6abe74` — `primitive_self_ty_from_mangled` fallback in `mir/lower/type_helpers.rs`. |
 
 ## Findings still open (priority order)
 
-1. **Wave 2 security boundary** (`src/riven_cli/src/resolve_deps.rs` lines 256/269/187, `src/rivenc/src/bench.rs:142-150`, `src/riven_repl/src/jit.rs:178-188`) — argument-injection on `git clone <url>` / `git checkout <ref>`, path-dep traversal, identifier-splice into synthesised `def main`, open `dlsym(RTLD_DEFAULT)` allowlist. All four CVE-class.
+1. **Wave 2 security boundary** (`src/ruxen_cli/src/resolve_deps.rs` lines 256/269/187, `src/ruxenc/src/bench.rs:142-150`, `src/ruxen_repl/src/jit.rs:178-188`) — argument-injection on `git clone <url>` / `git checkout <ref>`, path-dep traversal, identifier-splice into synthesised `def main`, open `dlsym(RTLD_DEFAULT)` allowlist. All four CVE-class.
 2. **Wave 3 soundness gaps** — see the original §1.3 list, minus the entries marked closed above. The four highest-value remaining items:
    - Tuple-field roundtrip through `f64` in `parser/expr/calls.rs:72-96` (`t.0.10` indexes field 1, not 10).
-   - `def __drop` never fires in `mir/lower/collect.rs:223+` (`sync.rvn` leaks). Memory `project_riven_drop_name_mismatch.md`.
+   - `def __drop` never fires in `mir/lower/collect.rs:223+` (`sync.rx` leaks). Memory `project_ruxen_drop_name_mismatch.md`.
    - `mir/lower/derive.rs::synthesize_class_clone` ignores parent-class fields (inherited fields zero-init).
    - `typeck/unify.rs:294-301` Ref auto-deref unsoundness (`&Int` unifies with `Int`).
-3. **Open allowlists** — `FRESH_ALLOC_CALLEES` in `mir/lower/drops.rs:412-652` and the ownership-transfer allowlist at `:786-789`. Make them attribute-driven from FFI decls.
+3. **Open allowlists** — `FRESH_ALLOC_CALLEES` in `mir/lower/drops.rs:412-652` and the ownership-transfer allowlist at `:786-789`. Make them attribute-druxen from FFI decls.
 4. **Wave 5 architecture splits** — five god files >1000 LOC (`async_lowering/mod.rs`, `mir/lower/{derive,expr/method_call,mod}.rs`, `resolve/ffi_registration.rs`). None affect correctness; all gate maintenance velocity.
 
 The full original report follows.
@@ -57,7 +57,7 @@ The full original report follows.
 
 Each finding cites an absolute `file:line` and a one-line proposed fix. Findings are organised by severity within each slice. The **Recommended action order** section at the end groups them into landing waves.
 
-When a finding references a memory entry like `project_riven_drop_name_mismatch.md`, that's an existing project memory in `/Users/hassan/.claude/projects/-Users-hassan--projects-riven/memory/` — confirmed still load-bearing by this review.
+When a finding references a memory entry like `project_ruxen_drop_name_mismatch.md`, that's an existing project memory in `/Users/hassan/.claude/projects/-Users-hassan--projects-ruxen/memory/` — confirmed still load-bearing by this review.
 
 ---
 
@@ -65,74 +65,74 @@ When a finding references a memory entry like `project_riven_drop_name_mismatch.
 
 ## 1.1 Build break (fix first)
 
-- **`src/riven_repl/src/jit.rs:731`** — `match inst` is non-exhaustive on `&MirInst`: `MirInst::DataAddr { dest, data_sym }` (added in `compiler/riven_core/src/mir/nodes.rs:333`) has no arm. Blocks the test target from compiling.
-  **Fix**: add the arm; mirror `compiler/riven_core/src/codegen/cranelift/emit.rs:460-477` (declare data, materialise address via `module.declare_data_in_func` + `builder.ins().global_value(I64, …)`). Add a tag-stability pin test that destructures every `MirInst` variant.
+- **`src/ruxen_repl/src/jit.rs:731`** — `match inst` is non-exhaustive on `&MirInst`: `MirInst::DataAddr { dest, data_sym }` (added in `compiler/ruxen_core/src/mir/nodes.rs:333`) has no arm. Blocks the test target from compiling.
+  **Fix**: add the arm; mirror `compiler/ruxen_core/src/codegen/cranelift/emit.rs:460-477` (declare data, materialise address via `module.declare_data_in_func` + `builder.ins().global_value(I64, …)`). Add a tag-stability pin test that destructures every `MirInst` variant.
 
 ## 1.2 Security boundary (fix this week)
 
-- **`src/riven_cli/src/resolve_deps.rs:256`** — `git clone <git_url>` invokes git with an unvalidated user URL. A `Riven.toml` with `git = "--upload-pack=/usr/bin/curl ..."` is CVE-2017-1000117-class argument-injection RCE.
+- **`src/ruxen_cli/src/resolve_deps.rs:256`** — `git clone <git_url>` invokes git with an unvalidated user URL. A `Ruxen.toml` with `git = "--upload-pack=/usr/bin/curl ..."` is CVE-2017-1000117-class argument-injection RCE.
   **Fix**: reject URLs starting with `-`, restrict scheme to `https://`/`ssh://`/`git@`, and pass `--` separator: `args(["clone", "--quiet", "--", git_url, ...])`.
 
-- **`src/riven_cli/src/resolve_deps.rs:269`** — `git checkout --quiet <effective_ref>` accepts `branch`/`tag`/`rev` straight from manifest. Same argument-injection vector on older git.
+- **`src/ruxen_cli/src/resolve_deps.rs:269`** — `git checkout --quiet <effective_ref>` accepts `branch`/`tag`/`rev` straight from manifest. Same argument-injection vector on older git.
   **Fix**: insert `--` separator; validate ref against `[A-Za-z0-9_./+-]`, rejecting leading `-`.
 
-- **`src/riven_cli/src/resolve_deps.rs:187-202`** — `resolve_path_dep` accepts absolute paths and `..` traversal from `Riven.toml`. A malicious `path = "/etc"` or `path = "../../../home/user/.ssh"` is read and linked into the user's binary.
+- **`src/ruxen_cli/src/resolve_deps.rs:187-202`** — `resolve_path_dep` accepts absolute paths and `..` traversal from `Ruxen.toml`. A malicious `path = "/etc"` or `path = "../../../home/user/.ssh"` is read and linked into the user's binary.
   **Fix**: refuse absolute paths and `..` components that escape `project_dir` unless `--allow-external-path`; document in `docs/security/path-deps.md`.
 
-- **`src/rivenc/src/bench.rs:142-150`** — synthesised `def main` text-splices user-controlled identifiers into a generated Riven runner. Safe today by parser contract, but the contract is unsafe by construction.
+- **`src/ruxenc/src/bench.rs:142-150`** — synthesised `def main` text-splices user-controlled identifiers into a generated Ruxen runner. Safe today by parser contract, but the contract is unsafe by construction.
   **Fix**: validate `bench_names` against `[A-Za-z_][A-Za-z0-9_]*` before splicing; emit through a synthesised registry array, not raw text in a generated function body.
 
-- **`src/riven_repl/src/jit.rs:178-188`** — `dlsym(RTLD_DEFAULT, name)` resolves any symbol in process memory. A `lib def system as "system"` JITs straight to libc.
-  **Fix**: allowlist `riven_*` plus an explicit small set of legitimate libc names; reject everything else from the dlsym path.
+- **`src/ruxen_repl/src/jit.rs:178-188`** — `dlsym(RTLD_DEFAULT, name)` resolves any symbol in process memory. A `lib def system as "system"` JITs straight to libc.
+  **Fix**: allowlist `ruxen_*` plus an explicit small set of legitimate libc names; reject everything else from the dlsym path.
 
 ## 1.3 Silent miscompilation / unsoundness (correctness P0)
 
-- **`compiler/riven_core/src/parser/expr/calls.rs:72-96`** — tuple field access `t.0.1` calls `format!("{}", val: f64)` and `split('.')`. For `t.0.10`, `0.10` formats to `"0.1"`; parser reads field 1 instead of 10. For `t.10.20`, `10.20` formats to `"10.2"`; reads field 2 instead of 20.
+- **`compiler/ruxen_core/src/parser/expr/calls.rs:72-96`** — tuple field access `t.0.1` calls `format!("{}", val: f64)` and `split('.')`. For `t.0.10`, `0.10` formats to `"0.1"`; parser reads field 1 instead of 10. For `t.10.20`, `10.20` formats to `"10.2"`; reads field 2 instead of 20.
   **Fix**: lex `.<int>.<int>` as three tokens when after a `.`, or carry the original raw text on `FloatLiteral`.
 
-- **`compiler/riven_core/src/mir/lower/collect.rs:223, 229, 239, 260, 290`** — drop collector matches only `"drop"`. Memory `project_riven_drop_name_mismatch.md` confirmed: `def __drop` never fires; `library/std/sync.rvn` leaks.
+- **`compiler/ruxen_core/src/mir/lower/collect.rs:223, 229, 239, 260, 290`** — drop collector matches only `"drop"`. Memory `project_ruxen_drop_name_mismatch.md` confirmed: `def __drop` never fires; `library/std/sync.rx` leaks.
   **Fix**: either normalise to `drop` (surface E1118 for `__drop`/`drop_`), or accept both spellings here and in `insert_drops`'s `_drop` suffix strip. Lock with a pin test.
 
-- **`compiler/riven_core/src/mir/lower/derive.rs:757-793`** — `synthesize_class_clone` iterates only `c.fields`, ignoring parent-class fields. Inherited fields silently zero-init in the synthesised `_clone`.
+- **`compiler/ruxen_core/src/mir/lower/derive.rs:757-793`** — `synthesize_class_clone` iterates only `c.fields`, ignoring parent-class fields. Inherited fields silently zero-init in the synthesised `_clone`.
   **Fix**: replicate the parent-walk loop from `alloc_size` to collect a flattened field list (parent fields first, in layout order, with `class_field_index_shift` applied for runtime-dispatch classes); emit one `GetField`/`SetField` pair per slot.
 
-- **`compiler/riven_core/src/mir/lower/mod.rs:803`** — `current_parent_class` uses `fn_name.split('_').next().unwrap_or("")`. For `__HandlerFuture_init` returns `""`; for `Foo_bar_baz` where `Foo_bar` is the class returns `"Foo"`. Memory `project_riven_mir_mangled_method_name_parsing.md` documents the correct helper.
+- **`compiler/ruxen_core/src/mir/lower/mod.rs:803`** — `current_parent_class` uses `fn_name.split('_').next().unwrap_or("")`. For `__HandlerFuture_init` returns `""`; for `Foo_bar_baz` where `Foo_bar` is the class returns `"Foo"`. Memory `project_ruxen_mir_mangled_method_name_parsing.md` documents the correct helper.
   **Fix**: `self.class_name_from_mangled(&fn_name)`.
 
-- **`compiler/riven_core/src/typeck/unify.rs:294-301`** — Ref auto-deref in `unify`: `unify(Ty::Ref(T), U)` returns `Ok(Ref(T))` when `unify(T, U)` succeeds. `&Int` unifies with `Int` silently; bypasses invariance.
+- **`compiler/ruxen_core/src/typeck/unify.rs:294-301`** — Ref auto-deref in `unify`: `unify(Ty::Ref(T), U)` returns `Ok(Ref(T))` when `unify(T, U)` succeeds. `&Int` unifies with `Int` silently; bypasses invariance.
   **Fix**: remove ref auto-deref from `unify`; push into `unify_or_coerce` where it belongs.
 
-- **`compiler/riven_core/src/codegen/cranelift/emit.rs:484-494`** — `MirInst::CallIndirect` builds the signature from `arg_vals` widths and hardcodes return to `types::I64`. For an indirect call whose real return is `I8` (Bool) or `I32` (Char): verifier rejection or garbage upper-bit reads.
+- **`compiler/ruxen_core/src/codegen/cranelift/emit.rs:484-494`** — `MirInst::CallIndirect` builds the signature from `arg_vals` widths and hardcodes return to `types::I64`. For an indirect call whose real return is `I8` (Bool) or `I32` (Char): verifier rejection or garbage upper-bit reads.
   **Fix**: thread the MIR-declared callee signature through `CallIndirect`; use `ty_to_cranelift(&func.locals[dest].ty)` for the return slot.
 
-- **`compiler/riven_core/src/codegen/cranelift/helpers.rs:148-191`** — `simple_type_size` hardcodes `Class | Struct => 64` ("up to 8 fields"). `codegen/layout.rs::layout_of` computes real size. Today `MirInst::Alloc.size` is precomputed; if any future emitter forgets, falls through to this for >8-field classes → heap corruption.
+- **`compiler/ruxen_core/src/codegen/cranelift/helpers.rs:148-191`** — `simple_type_size` hardcodes `Class | Struct => 64` ("up to 8 fields"). `codegen/layout.rs::layout_of` computes real size. Today `MirInst::Alloc.size` is precomputed; if any future emitter forgets, falls through to this for >8-field classes → heap corruption.
   **Fix**: delete the Class/Struct arm; take `&SymbolTable`, delegate to `layout::layout_of`; or `panic!` on zero-size path so the bug surfaces.
 
-- **`compiler/riven_core/src/codegen/cranelift/translation_env.rs:86-105`** — generic-method dispatch resolves missing callee via `ends_with("_<method>")` + shortest-name wins. Any class whose mangled name ends with the same suffix wins by chance.
+- **`compiler/ruxen_core/src/codegen/cranelift/translation_env.rs:86-105`** — generic-method dispatch resolves missing callee via `ends_with("_<method>")` + shortest-name wins. Any class whose mangled name ends with the same suffix wins by chance.
   **Fix**: track receiver class name through MIR (Phase B-5 vtable path already does this); forbid the suffix fallback; emit a hard error citing the unresolved `?T*`.
 
-- **`compiler/riven_core/src/codegen/cranelift/translation_env.rs:70-161`** — `get_or_declare_func` caches `FuncId` by name in one map but the signature is fixed by whichever caller declared first. Different call sites silently reuse the wrong sig.
+- **`compiler/ruxen_core/src/codegen/cranelift/translation_env.rs:70-161`** — `get_or_declare_func` caches `FuncId` by name in one map but the signature is fixed by whichever caller declared first. Different call sites silently reuse the wrong sig.
   **Fix**: assert sig matches on every `declare_function`, or key on `(name, sig_hash)` with upstream monomorphization disambiguating.
 
-- **`compiler/riven_core/src/typeck/method_resolvers/mod.rs:1134-1140`** — six catch-all wildcard arms `(_, "to_display"|"summary"|"is_actionable"|"is_done"|"serialize"|"message")` accept any receiver type and return `Some(Ty::String|Ty::Bool)`. `42.summary` typechecks. `is_actionable`/`is_done` are domain leaks from a test fixture.
+- **`compiler/ruxen_core/src/typeck/method_resolvers/mod.rs:1134-1140`** — six catch-all wildcard arms `(_, "to_display"|"summary"|"is_actionable"|"is_done"|"serialize"|"message")` accept any receiver type and return `Some(Ty::String|Ty::Bool)`. `42.summary` typechecks. `is_actionable`/`is_done` are domain leaks from a test fixture.
   **Fix**: delete bare-wildcard arms; gate `to_display` on `Displayable` mixin satisfaction if it really is universal; remove the domain-named ones.
 
-- **`compiler/riven_core/src/resolve/control_flow.rs:327`** — `record_capture_if_needed` snapshots `self.symbols.def_ty(def_id)` at capture-record time; stores `Ty::Infer`/`Error` permanently on `Capture.ty` for not-yet-typed locals. Memory `project_riven_closure_capture_ty_stale.md` confirms still open.
+- **`compiler/ruxen_core/src/resolve/control_flow.rs:327`** — `record_capture_if_needed` snapshots `self.symbols.def_ty(def_id)` at capture-record time; stores `Ty::Infer`/`Error` permanently on `Capture.ty` for not-yet-typed locals. Memory `project_ruxen_closure_capture_ty_stale.md` confirms still open.
   **Fix**: do not store `ty` on `Capture` at all; require consumers to re-fetch from `symbols.def_ty(cap.def_id)`. Or rename to `ty_at_capture_time` so staleness is at the type level.
 
 ## 1.4 Open-by-default allowlists
 
-- **`compiler/riven_core/src/mir/lower/drops.rs:412-652`** — `FRESH_ALLOC_CALLEES` is a 240-LOC hardcoded list. Every new stdlib constructor → leak risk if forgotten; every new consumer → double-free risk if mislabeled.
-  **Fix**: data-drive via FFI attributes — `def riven_string_concat as "..." returns owned` propagated into `FfiFuncDecl`. This function becomes a flag lookup.
+- **`compiler/ruxen_core/src/mir/lower/drops.rs:412-652`** — `FRESH_ALLOC_CALLEES` is a 240-LOC hardcoded list. Every new stdlib constructor → leak risk if forgotten; every new consumer → double-free risk if mislabeled.
+  **Fix**: data-drive via FFI attributes — `def ruxen_string_concat as "..." returns owned` propagated into `FfiFuncDecl`. This function becomes a flag lookup.
 
-- **`compiler/riven_core/src/mir/lower/drops.rs:786-789`** — ownership-transfer allowlist hardcoded to `"riven_executor_spawn" | "Task_spawn_raw"`. Memory `project_riven_task_spawn_ownership_gap.md` is exactly this gap. Anything else that transfers ownership through FFI (futures, channel send, future closure-passing) silently double-frees.
+- **`compiler/ruxen_core/src/mir/lower/drops.rs:786-789`** — ownership-transfer allowlist hardcoded to `"ruxen_executor_spawn" | "Task_spawn_raw"`. Memory `project_ruxen_task_spawn_ownership_gap.md` is exactly this gap. Anything else that transfers ownership through FFI (futures, channel send, future closure-passing) silently double-frees.
   **Fix**: extend `lib def NAME as "..."` with per-arg `move | borrow`; propagate into `MirProgram::ffi_libs`; consult it here.
 
 ---
 
 # 2. Frontend (lexer + parser + hir + diagnostics + implicit_includes)
 
-`compiler/riven_core/src/{lexer,parser,hir,diagnostics,implicit_includes}/`
+`compiler/ruxen_core/src/{lexer,parser,hir,diagnostics,implicit_includes}/`
 
 ## CRITICAL
 
@@ -182,12 +182,12 @@ When a finding references a memory entry like `project_riven_drop_name_mismatch.
 
 # 3. Resolve (name resolution + symbol table)
 
-`compiler/riven_core/src/resolve/`
+`compiler/ruxen_core/src/resolve/`
 
 ## CRITICAL
 
 - **`resolve/control_flow.rs:327`** — capture `ty` snapshot stale (see §1.3).
-- **`resolve/types.rs:516-548`** — `resolve_type_path` silently rewrites `Ty::Class { "String", … }` to `Ty::String` to paper over `resolve_class`'s `DefKind` stomp. The stomp itself still happens — only the read side is patched. Memory `project_riven_resolve_class_stomps_typealias.md`. **Fix**: in `resolve_class` (`items.rs:332`), refuse to overwrite a `DefKind::TypeAlias` whose target is a primitive `Ty::*`; attach methods/fields via a parallel `ClassInfo` keyed by the same DefId or a side map.
+- **`resolve/types.rs:516-548`** — `resolve_type_path` silently rewrites `Ty::Class { "String", … }` to `Ty::String` to paper over `resolve_class`'s `DefKind` stomp. The stomp itself still happens — only the read side is patched. Memory `project_ruxen_resolve_class_stomps_typealias.md`. **Fix**: in `resolve_class` (`items.rs:332`), refuse to overwrite a `DefKind::TypeAlias` whose target is a primitive `Ty::*`; attach methods/fields via a parallel `ClassInfo` keyed by the same DefId or a side map.
 - **`resolve/bootstrap_merge.rs:306-325`** — per-package snapshot uses `scopes.lookup(name).or_else(|| scopes.lookup_type(name))`; protects the auto-populate path but every other consumer of `scopes.lookup` (e.g. Pass-2 user code at `bootstrap_merge.rs:202`) still sees last-wins between packages. **Fix**: push a package-anchored scope frame around each `merge_bootstrap_programs` iteration; re-export through `std.<pkg>.items` only.
 - **`resolve/funcs.rs:67-84`** — `self_mode` silently inferred to `RefMut` for `def init`, `Ref` otherwise when `current_self_ty` is set; no diagnostic if a garbled AST sets `is_class_method=true` AND `self_mode=Some(...)`. **Fix**: `debug_assert!(!(f.is_class_method && self_mode.is_some()))` at line 85; reject or strip.
 - **`resolve/ffi_registration.rs:879-913`** — Mixin arm registers `MixinInfo { generic_params: vec![], ... }` even when `t.generic_params` is non-empty. Generic mixins (`mixin Into[T]`) lose their generic surface at registration. **Fix**: call `collect_generic_param_infos(&t.generic_params)` like the Class/Struct/Enum arms.
@@ -196,14 +196,14 @@ When a finding references a memory entry like `project_riven_drop_name_mismatch.
 
 - **`resolve/items.rs:273-287`** — `runtime_dispatch_includes` looks up mixin via `symbols.iter().find(|d| d.name == trait_ref.name)` — linear per include per class. **Fix**: `type_registry.get(&trait_ref.name)`.
 - **`resolve/items.rs:599`** — enum variant DefIds looked up by `scopes.lookup(&composite_name)` with `format!("{}.{}", e.name, variant.name)`; `unwrap_or_else(|| symbols.define(...))` silently creates a duplicate DefId if pass-1 missed it. **Fix**: `expect(...)`; or surface E0902-style internal-error via `self.diagnostics`.
-- **`resolve/bootstrap.rs:264-268`** — `RIVEN_STDLIB_PATH` env var trusted as bootstrap root. Low-likelihood but a trust boundary. **Fix**: canonicalise; refuse roots without a `Riven.toml` or sysroot marker.
+- **`resolve/bootstrap.rs:264-268`** — `RUXEN_STDLIB_PATH` env var trusted as bootstrap root. Low-likelihood but a trust boundary. **Fix**: canonicalise; refuse roots without a `Ruxen.toml` or sysroot marker.
 - **`resolve/ffi_registration.rs:444-1212`** — single ~770-LOC function with one giant `match item`; Class arm alone is 235 LOC. **Fix**: extract `register_class_in`/`register_struct_in`/`register_enum_in`/`register_mixin_in`/`register_module_in`/`register_lib_in`/`register_extern_in`; dispatch becomes ~30 LOC.
 - **`resolve/items.rs:308`** — `class_generic_param_infos` recomputed via `collect_generic_param_infos` even though `generic_params` was resolved 200 lines above. Two walks for the same data. **Fix**: have `resolve_generic_params` return both, or store one and synthesise the other.
 - **`resolve/helpers.rs:136-159 vs 161-185`** — `resolve_params` and `resolve_and_register_params` differ by one line. 24 lines copy-paste. **Fix**: collapse with a `register_in_scope: bool` parameter.
 
 ## MEDIUM
 
-- **`resolve/mod.rs:97-174`** — `Resolver` carries 17 fields of side-channel state. Memory `project_riven_caller_identity_as_arg.md` says caller-identity should be a `Copy` ctx struct. `RegistrationCtx` follows the pattern; the rest don't. **Fix**: extract `ResolveContext { current_self_ty, current_class_def, current_return_ty, current_impl_assoc_types, current_trait_context }` as a `Copy`/`Clone` snapshot passed down; move accumulators to a `ResolverScratch`.
+- **`resolve/mod.rs:97-174`** — `Resolver` carries 17 fields of side-channel state. Memory `project_ruxen_caller_identity_as_arg.md` says caller-identity should be a `Copy` ctx struct. `RegistrationCtx` follows the pattern; the rest don't. **Fix**: extract `ResolveContext { current_self_ty, current_class_def, current_return_ty, current_impl_assoc_types, current_trait_context }` as a `Copy`/`Clone` snapshot passed down; move accumulators to a `ResolverScratch`.
 - **`resolve/funcs.rs:298-370`** — `resolve_child_in_def` `.clone()`s entire parent `Definition` (full `ClassInfo`/`EnumInfo` with `Vec<DefId>` fields) per use-decl segment. **Fix**: borrow with narrower scope; extract `module_item_names_for(&self, parent: DefId) -> &[DefId]`.
 - **`resolve/types.rs:355-402`** — const-predicate evaluation clones `info.const_predicates` and `info.generic_params` twice per type-path resolution. **Fix**: borrow once; clone only predicates that surface diagnostics.
 - **`resolve/exprs.rs:188-229`** — `if name.contains('.')` for qualified type lookup. Substring detection. **Fix**: gate on a parser-side flag.
@@ -229,7 +229,7 @@ When a finding references a memory entry like `project_riven_drop_name_mismatch.
 
 # 4. Typeck (type inference + method resolution + unification)
 
-`compiler/riven_core/src/typeck/`
+`compiler/ruxen_core/src/typeck/`
 
 ## CRITICAL
 
@@ -237,7 +237,7 @@ When a finding references a memory entry like `project_riven_drop_name_mismatch.
 - **`typeck/infer/expr.rs:564-573`** — `If` arm unify error silently swallowed: on mismatch falls back to `then_ty` with no diagnostic. Users get a wrong inferred type and a confusing downstream error. **Fix**: emit a typed diagnostic (e.g. E0710); suppress only when one side `is_never()`.
 - **`typeck/infer/expr.rs:637, 652, 659, 829, 842, 845, 903, 913, 914`** — every `let _ = unify(...)` discards a real type-error. Assigns, compound assigns, return, array/map literals, macro-arg pins all swallow. **Fix**: route each through `self.type_error(...)` or document why suppression is correct (e.g. "macro arg unification is best-effort").
 - **`typeck/unify.rs:294-301`** — Ref auto-deref unsoundness (see §1.3).
-- **`typeck/infer/ops.rs:130-133`** — `Eq | NotEq | Lt | Gt | LtEq | GtEq` runs `unify` only; never emits a `.eq` method-resolution constraint or marks the binop for MIR string-comparison lowering. Memory `project_riven_async_compiler_gaps.md` gap #3 (String== falls back to pointer-eq after `Result` destructuring). **Fix**: when both sides resolve to `Ty::String`/`Ty::Str`, set a side-channel marker on `BinaryOp` or rewrite to a `MethodCall { method: "eq", ... }`.
+- **`typeck/infer/ops.rs:130-133`** — `Eq | NotEq | Lt | Gt | LtEq | GtEq` runs `unify` only; never emits a `.eq` method-resolution constraint or marks the binop for MIR string-comparison lowering. Memory `project_ruxen_async_compiler_gaps.md` gap #3 (String== falls back to pointer-eq after `Result` destructuring). **Fix**: when both sides resolve to `Ty::String`/`Ty::Str`, set a side-channel marker on `BinaryOp` or rewrite to a `MethodCall { method: "eq", ... }`.
 - **`typeck/infer/expr.rs:560-573`** — `match unify(then, else)` on `Err` doesn't check `is_error()`. Combined with silent `Ty::Error` in `lookup_field_with_parents`, a single bogus `then` branch poisons the whole `if` type. **Fix**: explicitly propagate `Ty::Error` upward when either branch is `is_error()`.
 
 ## HIGH
@@ -256,7 +256,7 @@ When a finding references a memory entry like `project_riven_drop_name_mismatch.
 - **`typeck/infer/mod.rs:62-75`** — `InferenceEngine::new` takes `&mut SymbolTable` but most reads in `collect.rs` are immutable. Only mutation is `update_ty`. **Fix**: refactor to `&SymbolTable` + `pending_ty_updates: Vec<(DefId, Ty)>` flushed once after inference.
 - **`typeck/infer/expr.rs:945`** — `NullLiteral` returns a fresh inference variable with no recorded "must resolve to nullable shape" constraint. The "backwards compatibility default to `UInt64`" path has no code that actually defaults it. **Fix**: deferred default in `TypeContext`, or store `NullLiteralKind` so MIR can decide.
 - **`typeck/infer/expr.rs:722-731, 755, 771`** — `EnumVariant` for `None`/`Ok`/`Err` falls back to `fresh_type_var()` when enclosing `current_return_ty` is not the expected shape. For `Err(e)` inside `async def -> Result[T, E]`, `current_return_ty` is `T` not `Result[T,E]` (async-lowering wraps). **Fix**: peel `Ty::Class{"Future", [inner]}` first.
-- **`typeck/infer/expr.rs:622-626`** — `For { iterable, body, .. }` does NOT bind the loop variable's type from the iterable's element type. Memory `project_riven_for_loop_infer_gap.md` confirmed. **Fix** (load-bearing): after `infer_expr(iterable)`, match shape (`Array(T)`/`Map(K,V)`/`*Iter[T]`/`Set(T)`/`Range`), look up the binding DefId from `HirExprKind::For`, `unify(binding_ty, elem_ty)`.
+- **`typeck/infer/expr.rs:622-626`** — `For { iterable, body, .. }` does NOT bind the loop variable's type from the iterable's element type. Memory `project_ruxen_for_loop_infer_gap.md` confirmed. **Fix** (load-bearing): after `infer_expr(iterable)`, match shape (`Array(T)`/`Map(K,V)`/`*Iter[T]`/`Set(T)`/`Range`), look up the binding DefId from `HirExprKind::For`, `unify(binding_ty, elem_ty)`.
 - **`typeck/infer/collect.rs:325-353`** — `lookup_class_method_return` returns only the return type, dropping `FnSignature`. Callers can't validate arity or arg types. **Fix**: return `Option<FnSignature>`; arity-check at call site.
 - **`typeck/infer/mod.rs:233-238`** — `is_mut_method` allow-list falls back to `Ty::Unit` for hardcoded names `display`/`display_all`/`init`/`drop`. User method `display` for unrelated reasons gets a silently-changed return type. **Fix**: drive off `func.self_mode == HirSelfMode::RefMut`, or require explicit `-> ()`.
 
@@ -278,21 +278,21 @@ When a finding references a memory entry like `project_riven_drop_name_mismatch.
 
 # 5. MIR + borrow_check
 
-`compiler/riven_core/src/mir/`, `compiler/riven_core/src/borrow_check/`
+`compiler/ruxen_core/src/mir/`, `compiler/ruxen_core/src/borrow_check/`
 
 ## CRITICAL
 
-- **`src/riven_repl/src/jit.rs:731`** — non-exhaustive `MirInst` match (see §1.1; cross-cited here because it indicts MIR's exhaustiveness contract across backends).
+- **`src/ruxen_repl/src/jit.rs:731`** — non-exhaustive `MirInst` match (see §1.1; cross-cited here because it indicts MIR's exhaustiveness contract across backends).
 - **`mir/lower/collect.rs:223+`** — `__drop` not collected (see §1.3).
 - **`mir/lower/derive.rs:757-793`** — `synthesize_class_clone` ignores parent fields (see §1.3).
 - **`mir/lower/mod.rs:803`** — `current_parent_class` naive `split('_')` (see §1.3).
 - **`mir/lower/drops.rs:786-789`** — ownership-transfer allowlist hardcoded (see §1.4).
-- **`mir/lower/expr/method_call.rs:177-394 vs 765-1283`** — two dispatch paths gotcha. Memory `project_riven_mir_two_dispatch_paths.md`. The static-ctor fast path consults `lookup_ffi_alias("<base>_<method>")` at 203, then falls back to a hardcoded class allowlist (238-289); the second route's `resolve_ffi_alias_callee` at 372-387 retries with `runtime_base` then `base_type` but does NOT retry the dotted-normalised form symmetrically. **Fix**: extract `resolve_dispatched_callee(receiver_ty, method_name, args) -> Either<DirectCall, ClassInit>` owning dot-normalisation, generic stripping, runtime-base remapping (Array→Vec, HashMap→Hash), and bufio suffix selection.
+- **`mir/lower/expr/method_call.rs:177-394 vs 765-1283`** — two dispatch paths gotcha. Memory `project_ruxen_mir_two_dispatch_paths.md`. The static-ctor fast path consults `lookup_ffi_alias("<base>_<method>")` at 203, then falls back to a hardcoded class allowlist (238-289); the second route's `resolve_ffi_alias_callee` at 372-387 retries with `runtime_base` then `base_type` but does NOT retry the dotted-normalised form symmetrically. **Fix**: extract `resolve_dispatched_callee(receiver_ty, method_name, args) -> Either<DirectCall, ClassInit>` owning dot-normalisation, generic stripping, runtime-base remapping (Array→Vec, HashMap→Hash), and bufio suffix selection.
 
 ## HIGH
 
 - **`mir/lower/drops.rs:412-652`** — `FRESH_ALLOC_CALLEES` 240-LOC hardcoded list (see §1.4).
-- **`mir/lower/derive.rs:160-260`** — `synthesize_struct_to_debug` emits N right-folding `riven_string_concat` calls; O(N²) bytes copied at runtime per `to_debug`. Same for enum debug at 906+. **Fix**: emit a `riven_string_builder_*` chain — append into a growing buffer; materialise at the end.
+- **`mir/lower/derive.rs:160-260`** — `synthesize_struct_to_debug` emits N right-folding `ruxen_string_concat` calls; O(N²) bytes copied at runtime per `to_debug`. Same for enum debug at 906+. **Fix**: emit a `ruxen_string_builder_*` chain — append into a growing buffer; materialise at the end.
 - **`mir/lower/expr/method_call.rs` (1291 LOC, single function)** — `lower_method_call` is 1200+ lines of sequential `if method_name == ...` before generic dispatch. **Fix**: registry of `MethodLoweringStrategy` impls keyed by `(receiver_ty_kind, method_name)`; extract OK/Some/Result helpers and String mutation dance.
 - **`mir/lower/drops.rs:336`** — `compute_dealloc_safe_locals` comment says "Loops/back-edges are not modeled". A `loop { x = String.from("b") }` taints `x` on first assign and assumes stays tainted; per-iteration alloc leaks. **Fix**: worklist fixpoint with `alloc_rooted` joined per-block on predecessors (intersection); keep single-pass as fast path.
 - **`mir/lower/derive.rs` (1339 LOC, god file)** — Display/Debug/Eq/Hash/Default/Clone (struct/class/enum)/Ord/PartialOrd + field-level recursors. **Fix**: split per-trait into `derive/{clone,debug,eq,ord,default,display}.rs`.
@@ -303,7 +303,7 @@ When a finding references a memory entry like `project_riven_drop_name_mismatch.
 
 - **`mir/lower/mod.rs` (1068 LOC)** — 13 distinct method clusters in one file. **Fix**: split into `program.rs`/`vtables.rs`/`dispatch_lookup.rs`.
 - **`borrow_check/moves.rs:60-79`** — `process_transfer`/`process_call_move` consult `ty.is_copy()`, not `ty_is_effectively_copy(ty, symbols)`. Every call site already gates on the symbol-table-aware variant — defense is dead today. **Fix**: take `&SymbolTable` here; call `is_copy_with`.
-- **`borrow_check/walk.rs:440`** — `check_for` registers binding with `Ty::Infer(0)`. Memory `project_riven_for_loop_infer_gap.md`. `is_copy(Infer)` returns false → treated as Move → use-after-move fires on `for x in xs.iter()` reading `x` twice. **Fix**: peek `iterable.ty`; compute element type same way typeck does; register with that. Or skip the binding entirely when type unknown.
+- **`borrow_check/walk.rs:440`** — `check_for` registers binding with `Ty::Infer(0)`. Memory `project_ruxen_for_loop_infer_gap.md`. `is_copy(Infer)` returns false → treated as Move → use-after-move fires on `for x in xs.iter()` reading `x` twice. **Fix**: peek `iterable.ty`; compute element type same way typeck does; register with that. Or skip the binding entirely when type unknown.
 - **`mir/lower/expr/field_access.rs:22-37`** — hardcoded Option method opt-out list for safe-nav. Adding `xor`/`zip`/`unzip`/`as_deref`/`iter`/`cloned` silently breaks `x?.method`. **Fix**: invert — opt-in for genuine field/accessor; gate on `field_name` resolving to a `Field` not a `Method`.
 - **`mir/lower/drops.rs:38, 314`** — `compute_dealloc_safe_locals` and `compute_return_alias_chain` both walk every block twice per function. **Fix**: cache `alloc_rooted` per-block during the forward pass; reuse.
 - **`mir/lower/mod.rs:595-617`** — `synthesize_dynamic_dispatch_helpers` does `symbols.iter().find_map(...)` per required method. O(M·K·N). **Fix**: `HashMap<MethodName, Vec<(parent_def_id, signature)>>` once at function entry.
@@ -329,7 +329,7 @@ When a finding references a memory entry like `project_riven_drop_name_mismatch.
 
 # 6. Codegen + async_lowering + formatter
 
-`compiler/riven_core/src/{codegen,async_lowering,formatter}/`
+`compiler/ruxen_core/src/{codegen,async_lowering,formatter}/`
 
 ## CRITICAL
 
@@ -345,9 +345,9 @@ When a finding references a memory entry like `project_riven_drop_name_mismatch.
 - **`async_lowering/mod.rs` (3357 LOC, single file, god file)** — contains AST-walking lowering (50-934), state-machine builder (935-1916), three near-identical E1115/E1112/E1116 diagnostic visitors (~900 LOC structural duplication), block_on rewriter (2897-3347). **Fix**: extract `mod visitor` with `trait AsyncAstVisitor` and a single recursion driver; split into `mod.rs` (orchestration), `segment.rs`, `state_machine.rs`, `diagnostics.rs`, `block_on.rs`, `visitor.rs`.
 - **`async_lowering/mod.rs:299-578, 578-934`** — 216 `.clone()` calls across the file (`func.return_type.clone()`, `span.clone()` repeated dozens of times per field). **Fix**: make `Span: Copy`; use `std::mem::replace`/`std::mem::take` where the original AST node is replaced immediately after. 30-50% allocation reduction in this pass.
 - **`codegen/cranelift/runtime_sigs.rs:13-280`** — `runtime_signature` returns `Option<(Vec<Type>, Option<Type>)>` — fresh `Vec<Type>` per lookup; called from `coerce_call_args` per call site lowered. **Fix**: return `Option<(&'static [Type], Option<Type>)>` backed by `&[types::I64]` static slices.
-- **`codegen/object.rs:117`** — `let obj_path = format!("{}.o", output_path);` — concurrent rivenc invocations targeting the same output collide. Runtime objects use `pid + atomic counter` (41-51); user `.o` does not. TOCTOU race. **Fix**: mirror runtime-object naming or write to `std::env::temp_dir()`.
+- **`codegen/object.rs:117`** — `let obj_path = format!("{}.o", output_path);` — concurrent ruxenc invocations targeting the same output collide. Runtime objects use `pid + atomic counter` (41-51); user `.o` does not. TOCTOU race. **Fix**: mirror runtime-object naming or write to `std::env::temp_dir()`.
 - **`codegen/object.rs:117-141`** — on link failure the `.o` is NOT removed; the `remove_file` at 141 runs only after `cmd.status()` success. **Fix**: RAII drop guard or `let _g = OnDrop::new(...)`.
-- **`codegen/lang_intrinsics.rs:62-66`** — `"super" => Ok("riven_noop")`, `"yield" => Ok("riven_noop_passthrough")`, `"&str_as_str" => Ok("riven_noop_passthrough")`. `riven_noop_passthrough` also hits at 145 and 164 as fallback for `Fn(...)_call` and dyn-erased closure dispatch. If MIR closure lowering ever has a bug that drops a real closure call into this path, it silently becomes a no-op returning its first arg. **Fix**: route to `riven_indirect_call_panic` runtime helper that aborts with a clear message.
+- **`codegen/lang_intrinsics.rs:62-66`** — `"super" => Ok("ruxen_noop")`, `"yield" => Ok("ruxen_noop_passthrough")`, `"&str_as_str" => Ok("ruxen_noop_passthrough")`. `ruxen_noop_passthrough` also hits at 145 and 164 as fallback for `Fn(...)_call` and dyn-erased closure dispatch. If MIR closure lowering ever has a bug that drops a real closure call into this path, it silently becomes a no-op returning its first arg. **Fix**: route to `ruxen_indirect_call_panic` runtime helper that aborts with a clear message.
 - **`formatter/comments.rs:103-114, 106`** — `CommentCollector` materialises the entire source as `Vec<char>`; duplicates `pos: usize` (char index) with `byte_pos: usize` (UTF-8 byte index). **Fix**: walk `source.char_indices()` once; track only `byte_pos`; eliminate `Vec<char>`.
 - **`formatter/comments.rs:546-575`** — `find_preceding_node`/`find_following_node`/`find_enclosing_node` do O(N) linear scan per comment despite `node_spans` being sorted. 5K-LOC file = 25M comparisons. **Fix**: `node_spans.partition_point(...)` for preceding/following; `BTreeMap<usize, usize>` for enclosing. ~100× speedup on large files.
 - **`formatter/format_expr.rs:662-704`** — `collect_chain` clones each link's `ExprKind` (668). For a 10-link chain: O(chain² × subtree-size) clones. **Fix**: `Vec<&'a ExprKind>` — `kind` is borrowed for formatting lifetime.
@@ -363,7 +363,7 @@ When a finding references a memory entry like `project_riven_drop_name_mismatch.
 
 ## LOW
 
-- **`codegen/cranelift/emit.rs:584`** — `TrapCode::user(1).unwrap()` — `1` hardcoded with no name. **Fix**: `const RIVEN_UNREACHABLE_TRAP: u8 = 1;` with comment.
+- **`codegen/cranelift/emit.rs:584`** — `TrapCode::user(1).unwrap()` — `1` hardcoded with no name. **Fix**: `const RUXEN_UNREACHABLE_TRAP: u8 = 1;` with comment.
 - **`codegen/cranelift/emit.rs:640`** — `BinOp::Mod => builder.ins().srem(lhs, rhs)` on floats. Comment admits "will fail verifier if it ever runs". Reachable from user `f64 %`. **Fix**: reject float `%` at typeck with a dedicated error, or implement via `fmod` runtime call.
 - **`async_lowering/mod.rs:3120`** — `_ => unreachable!("guarded above")` correct today but the guard at 3102 is 18 lines away. **Fix**: factor match into a fn returning `Option<&mut Vec<Expr>>` so guard and use are adjacent.
 - **`codegen/llvm/emit/instructions.rs:310, 349, 410`** — out of slice but three `unsafe` GEP-style address blocks; worth a follow-up. Each needs a doc-comment naming the invariant.
@@ -376,99 +376,99 @@ When a finding references a memory entry like `project_riven_drop_name_mismatch.
 
 ---
 
-# 7. rivenc + riven_cli
+# 7. ruxenc + ruxen_cli
 
-`src/rivenc/`, `src/riven_cli/`
+`src/ruxenc/`, `src/ruxen_cli/`
 
 ## CRITICAL
 
-- **`src/riven_cli/src/resolve_deps.rs:256`** — `git clone <git_url>` argument-injection (see §1.2).
-- **`src/riven_cli/src/resolve_deps.rs:269`** — `git checkout <ref>` argument-injection (see §1.2).
-- **`src/riven_cli/src/resolve_deps.rs:187-202`** — path-dep traversal (see §1.2).
-- **`src/rivenc/src/bench.rs:142-150`** — synthesised `def main` text-splicing (see §1.2).
+- **`src/ruxen_cli/src/resolve_deps.rs:256`** — `git clone <git_url>` argument-injection (see §1.2).
+- **`src/ruxen_cli/src/resolve_deps.rs:269`** — `git checkout <ref>` argument-injection (see §1.2).
+- **`src/ruxen_cli/src/resolve_deps.rs:187-202`** — path-dep traversal (see §1.2).
+- **`src/ruxenc/src/bench.rs:142-150`** — synthesised `def main` text-splicing (see §1.2).
 
 ## HIGH
 
-- **`src/rivenc/src/cache/driver.rs:299-369`** — driver's "pragmatic" first pass invokes `compile_fn` once just to discover dependencies, then again per cascade. The second `compile_fn` inside cascade BFS at line 470 recompiles dependents already in `outputs`, doubling work. **Fix**: thread `out.dependencies` through a single-pass topo; gate cascade compiles by `dirty_order` membership. Add `compiles_per_file: u32` counter to `BuildResult` so tests lock "≤ 1 compile per file per build".
-- **`src/rivenc/src/cache/driver.rs:374-384`** — re-reads previous object bytes from disk to hash them to compute `output_changed`. Hash is already stored — `prior_entry.object_file` keyed by content-addressed `cache_key`. **Fix**: `output_changed = new_key != prior.cache_key`; drop the disk read.
-- **`src/rivenc/src/compile.rs:158`** — `fs::read(obj_path)` re-reads the just-cached object only to hand to `emit_executable`; `compile_fn` already returned `object_bytes`. **Fix**: extend `BuildResult.objects` to carry `Vec<u8>` (or `Either<Vec<u8>, PathBuf>` for cache-hit path).
-- **`src/rivenc/src/compile.rs:240`** — `load_bootstrap_or_err()` called per file via `compile_to_object`; `stdlib_bootstrap::run_bootstrap` re-lexes/re-parses every `.rvn` in `library/std/` on each call. O(files × stdlib_size). **Fix**: hoist bootstrap loading to outer `compile::run`; pass `Arc<Vec<Program>>` through `BuildOptions`.
-- **`src/rivenc/src/bench.rs:200-218`** — timeout loop polls `try_wait` every 100 ms; `child.kill()` sends SIGKILL to only the child, not its group; benches that spawn subprocesses leak them. No RSS cap despite the 8-GiB standing requirement (memory `feedback_memory_limits.md`). **Fix**: spawn into a new process group (`Command::process_group(0)`); `kill(-pid, SIGKILL)` on timeout; honour `RIVENC_BENCH_RSS_LIMIT` via `setrlimit(RLIMIT_AS)` `pre_exec`.
-- **`src/riven_cli/src/build.rs:573`** — `fs::write(&obj_path, &obj_bytes)` writes a dep's `.o` to `target/deps/<name>.o` without atomic rename. Concurrent builds truncate each other mid-link. **Fix**: route through `rivenc::cache::store::atomic_write` (already public).
-- **`src/rivenc/src/compile.rs:74`** — `output_path = path.replace(".rvn", "")` naive: `foo.rvn.rvn` → `foo.`; `/home/u/.rvn/main.rvn` → `/home/u/main`. **Fix**: `Path::new(path).with_extension("")`.
+- **`src/ruxenc/src/cache/driver.rs:299-369`** — driver's "pragmatic" first pass invokes `compile_fn` once just to discover dependencies, then again per cascade. The second `compile_fn` inside cascade BFS at line 470 recompiles dependents already in `outputs`, doubling work. **Fix**: thread `out.dependencies` through a single-pass topo; gate cascade compiles by `dirty_order` membership. Add `compiles_per_file: u32` counter to `BuildResult` so tests lock "≤ 1 compile per file per build".
+- **`src/ruxenc/src/cache/driver.rs:374-384`** — re-reads previous object bytes from disk to hash them to compute `output_changed`. Hash is already stored — `prior_entry.object_file` keyed by content-addressed `cache_key`. **Fix**: `output_changed = new_key != prior.cache_key`; drop the disk read.
+- **`src/ruxenc/src/compile.rs:158`** — `fs::read(obj_path)` re-reads the just-cached object only to hand to `emit_executable`; `compile_fn` already returned `object_bytes`. **Fix**: extend `BuildResult.objects` to carry `Vec<u8>` (or `Either<Vec<u8>, PathBuf>` for cache-hit path).
+- **`src/ruxenc/src/compile.rs:240`** — `load_bootstrap_or_err()` called per file via `compile_to_object`; `stdlib_bootstrap::run_bootstrap` re-lexes/re-parses every `.rx` in `library/std/` on each call. O(files × stdlib_size). **Fix**: hoist bootstrap loading to outer `compile::run`; pass `Arc<Vec<Program>>` through `BuildOptions`.
+- **`src/ruxenc/src/bench.rs:200-218`** — timeout loop polls `try_wait` every 100 ms; `child.kill()` sends SIGKILL to only the child, not its group; benches that spawn subprocesses leak them. No RSS cap despite the 8-GiB standing requirement (memory `feedback_memory_limits.md`). **Fix**: spawn into a new process group (`Command::process_group(0)`); `kill(-pid, SIGKILL)` on timeout; honour `RUXENC_BENCH_RSS_LIMIT` via `setrlimit(RLIMIT_AS)` `pre_exec`.
+- **`src/ruxen_cli/src/build.rs:573`** — `fs::write(&obj_path, &obj_bytes)` writes a dep's `.o` to `target/deps/<name>.o` without atomic rename. Concurrent builds truncate each other mid-link. **Fix**: route through `ruxenc::cache::store::atomic_write` (already public).
+- **`src/ruxenc/src/compile.rs:74`** — `output_path = path.replace(".rx", "")` naive: `foo.rx.rx` → `foo.`; `/home/u/.rx/main.rx` → `/home/u/main`. **Fix**: `Path::new(path).with_extension("")`.
 
 ## MEDIUM
 
-- **`src/riven_cli/src/main.rs:104-110`** — `cli::Command::Test` is a `process::exit(2)` stub; a registered clap subcommand that always fails, bypassing the unified error path. **Fix**: return `Err("riven test: not yet implemented …".into())`; remove `process::exit(2)`.
-- **`src/riven_cli/src/cli.rs:131`** — `Compile { extra: Vec<String> }` with `allow_hyphen_values + trailing_var_arg` handed to `rivenc::compile::run` is stringly-typed argument forwarding. New flags accepted; unknown silently dropped (see next). **Fix**: shared clap derive struct, or error on unknown `--flag` tokens.
-- **`src/rivenc/src/compile.rs:69-71`** — unknown CLI flags silently dropped (loop falls through to `i += 1`). `rivenc foo.rvn --realese` (typo) silently produces a debug build. **Fix**: `else if args[i].starts_with("--") { return Err(format!("unknown flag: {}", args[i])); }`.
-- **`src/rivenc/src/fmt.rs:130-166`** — `discover_rvn_files` unbounded recursion; `target/` symlink loop spins forever. **Fix**: `walkdir::WalkDir` with `follow_links(false)` and depth cap, or visited-canonical-path set. `target/` filtered by basename but not canonical.
-- **`src/rivenc/src/compile.rs:484-497`** — `project_target_riven()` walks parents looking for `Cargo.toml` as well as `riven.toml`. Nested-rust-crate ancestor anchors riven cache wrong. **Fix**: anchor only on `riven.toml`; drop `Cargo.toml` fallback.
-- **`src/rivenc/tests/installed_binary.rs:111-118` + `src/riven_cli/tests/installed_pkg_manager.rs:25-27`** — `runtime_c_src()` dead per clippy. **Fix**: delete.
-- **`src/rivenc/src/bench.rs:198, 219; src/rivenc/src/compile.rs:73`** — `cargo fmt --all -- --check` reports unformatted code at these lines. **Fix**: `cargo fmt` and commit.
-- **`src/riven_cli/src/resolve_deps.rs:88-95`** — cycle-detection iterates a `HashSet` to build cycle path; non-deterministic ordering across runs. **Fix**: track `in_flight` as `Vec<String>` (it's a stack by usage).
-- **`src/riven_cli/src/resolve_deps.rs:250`** — `let short_hash = &cache_key[7..15]` slices SHA-256 hex with hardcoded "skip `sha256:`" offsets. If prefix changes to `blake3:`, slices into the middle of a hash. **Fix**: `cache_key.strip_prefix("sha256:").unwrap_or(&cache_key)[..8]`.
-- **`src/rivenc/src/cache/mod.rs:29`** — `#![allow(dead_code, unused_imports)]` at module scope hides clippy signal for 2200+ LOC. **Fix**: narrow to specific items.
-- **`src/riven_cli/src/build.rs:584-585`** — `output_path.to_string_lossy().to_string()` to `codegen::compile_with_options`. Loss of non-UTF8 path bytes on Linux. **Fix**: pass `&Path` through.
-- **`src/riven_cli/src/build.rs:148`** — `riven run` always passes `locked: false`; no `--locked` forwarding. **Fix**: forward `--locked` through `Run`.
+- **`src/ruxen_cli/src/main.rs:104-110`** — `cli::Command::Test` is a `process::exit(2)` stub; a registered clap subcommand that always fails, bypassing the unified error path. **Fix**: return `Err("ruxen test: not yet implemented …".into())`; remove `process::exit(2)`.
+- **`src/ruxen_cli/src/cli.rs:131`** — `Compile { extra: Vec<String> }` with `allow_hyphen_values + trailing_var_arg` handed to `ruxenc::compile::run` is stringly-typed argument forwarding. New flags accepted; unknown silently dropped (see next). **Fix**: shared clap derive struct, or error on unknown `--flag` tokens.
+- **`src/ruxenc/src/compile.rs:69-71`** — unknown CLI flags silently dropped (loop falls through to `i += 1`). `ruxenc foo.rx --realese` (typo) silently produces a debug build. **Fix**: `else if args[i].starts_with("--") { return Err(format!("unknown flag: {}", args[i])); }`.
+- **`src/ruxenc/src/fmt.rs:130-166`** — `discover_rx_files` unbounded recursion; `target/` symlink loop spins forever. **Fix**: `walkdir::WalkDir` with `follow_links(false)` and depth cap, or visited-canonical-path set. `target/` filtered by basename but not canonical.
+- **`src/ruxenc/src/compile.rs:484-497`** — `project_target_ruxen()` walks parents looking for `Cargo.toml` as well as `ruxen.toml`. Nested-rust-crate ancestor anchors ruxen cache wrong. **Fix**: anchor only on `ruxen.toml`; drop `Cargo.toml` fallback.
+- **`src/ruxenc/tests/installed_binary.rs:111-118` + `src/ruxen_cli/tests/installed_pkg_manager.rs:25-27`** — `runtime_c_src()` dead per clippy. **Fix**: delete.
+- **`src/ruxenc/src/bench.rs:198, 219; src/ruxenc/src/compile.rs:73`** — `cargo fmt --all -- --check` reports unformatted code at these lines. **Fix**: `cargo fmt` and commit.
+- **`src/ruxen_cli/src/resolve_deps.rs:88-95`** — cycle-detection iterates a `HashSet` to build cycle path; non-deterministic ordering across runs. **Fix**: track `in_flight` as `Vec<String>` (it's a stack by usage).
+- **`src/ruxen_cli/src/resolve_deps.rs:250`** — `let short_hash = &cache_key[7..15]` slices SHA-256 hex with hardcoded "skip `sha256:`" offsets. If prefix changes to `blake3:`, slices into the middle of a hash. **Fix**: `cache_key.strip_prefix("sha256:").unwrap_or(&cache_key)[..8]`.
+- **`src/ruxenc/src/cache/mod.rs:29`** — `#![allow(dead_code, unused_imports)]` at module scope hides clippy signal for 2200+ LOC. **Fix**: narrow to specific items.
+- **`src/ruxen_cli/src/build.rs:584-585`** — `output_path.to_string_lossy().to_string()` to `codegen::compile_with_options`. Loss of non-UTF8 path bytes on Linux. **Fix**: pass `&Path` through.
+- **`src/ruxen_cli/src/build.rs:148`** — `ruxen run` always passes `locked: false`; no `--locked` forwarding. **Fix**: forward `--locked` through `Run`.
 
 ## LOW
 
-- **`src/rivenc/src/cache/hash.rs:106-112`** — `to_hex` per-byte `push_str(&format!("{:02x}", b))`. **Fix**: `write!(s, "{b:02x}")`.
-- **`src/riven_cli/src/scaffold.rs:40, 45, 115, 120`** — generated stub uses brace syntax `def main { puts(...) }` while docs use `def main\n  …\nend`. **Fix**: pick one canonical form.
-- **`src/rivenc/src/compile.rs:428`** — `_opt_level: u8` underscore-prefixed but used under `#[cfg(feature = "llvm")]`. **Fix**: drop underscore; add `#[allow(unused_variables)]` for non-llvm cfg.
-- **`src/rivenc/src/fmt.rs:168-216`** — hand-rolled unified-diff printer with off-by-one risks. **Fix**: use `similar::TextDiff::from_lines(orig, fmt).unified_diff()`.
-- **`src/riven_cli/src/lock.rs:54-80`** — hand-built TOML emitter for `Riven.lock`. Struct derives `Serialize`. **Fix**: `toml::to_string_pretty`.
-- **`src/riven_cli/src/deps.rs:89, 93-98`** — interactive prints embedded in business-logic functions; same function that mutates `Riven.toml` also prints. Hard to test/silence. **Fix**: thread `quiet: bool` through, or return a `BuildReport`.
-- **`src/rivenc/src/main.rs:33`** — `_ => rivenc::compile::run(&args)` makes typoed subcommand (`rivenc buld foo.rvn`) parse as positional file path. **Fix**: reject `args[1]` starting with a letter and not ending in `.rvn` with a "did you mean?" hint.
+- **`src/ruxenc/src/cache/hash.rs:106-112`** — `to_hex` per-byte `push_str(&format!("{:02x}", b))`. **Fix**: `write!(s, "{b:02x}")`.
+- **`src/ruxen_cli/src/scaffold.rs:40, 45, 115, 120`** — generated stub uses brace syntax `def main { puts(...) }` while docs use `def main\n  …\nend`. **Fix**: pick one canonical form.
+- **`src/ruxenc/src/compile.rs:428`** — `_opt_level: u8` underscore-prefixed but used under `#[cfg(feature = "llvm")]`. **Fix**: drop underscore; add `#[allow(unused_variables)]` for non-llvm cfg.
+- **`src/ruxenc/src/fmt.rs:168-216`** — hand-rolled unified-diff printer with off-by-one risks. **Fix**: use `similar::TextDiff::from_lines(orig, fmt).unified_diff()`.
+- **`src/ruxen_cli/src/lock.rs:54-80`** — hand-built TOML emitter for `Ruxen.lock`. Struct derives `Serialize`. **Fix**: `toml::to_string_pretty`.
+- **`src/ruxen_cli/src/deps.rs:89, 93-98`** — interactive prints embedded in business-logic functions; same function that mutates `Ruxen.toml` also prints. Hard to test/silence. **Fix**: thread `quiet: bool` through, or return a `BuildReport`.
+- **`src/ruxenc/src/main.rs:33`** — `_ => ruxenc::compile::run(&args)` makes typoed subcommand (`ruxenc buld foo.rx`) parse as positional file path. **Fix**: reject `args[1]` starting with a letter and not ending in `.rx` with a "did you mean?" hint.
 
 ## Architectural summary
 
-- **The driver split is a clean library/binary cut.** Both binaries route through `rivenc::{compile,fmt,bench,clean}::run(&[String])`. The re-marshalling at the binary boundary is the weakest seam: every flag is now stringly-typed across two parsers. Next refactor: shared clap derive struct rather than ad-hoc `while i < args.len()` loops in `compile.rs`/`bench.rs`/`fmt.rs`.
+- **The driver split is a clean library/binary cut.** Both binaries route through `ruxenc::{compile,fmt,bench,clean}::run(&[String])`. The re-marshalling at the binary boundary is the weakest seam: every flag is now stringly-typed across two parsers. Next refactor: shared clap derive struct rather than ad-hoc `while i < args.len()` loops in `compile.rs`/`bench.rs`/`fmt.rs`.
 - **The security boundary is `resolve_deps.rs`, and it is currently soft.** Three of four CRITICAL findings live there. The compile/format codepath itself is reasonably hermetic (content-addressed cache keys, atomic writes, no env reads on hot path) — but the dep resolver shells out to `git` with attacker-controlled argv and reads arbitrary filesystem paths. Treat `resolve_deps` as an external-input boundary; every field of `DependencyDetail` is untrusted; `--` separator on every `git` invocation; absolute paths behind explicit opt-in.
 - **The incremental cache layer is well-shaped but over-eager on I/O.** Content-addressing, hermetic keys, fail-open corruption handling, atomic writes are all done right and tested. Wasteful: `output_changed` computed by re-reading and re-hashing prior bytes when key-equality suffices; objects written to store then re-read for linking; stdlib bootstrap re-parsed per file. `BuildResult` carrying `Vec<u8>` for fresh artifacts + bootstrap hoisted to `compile::run`'s prelude lands most of the win without changing cache invariants.
 
 ---
 
-# 8. riven_lsp + riven_ide
+# 8. ruxen_lsp + ruxen_ide
 
-`src/riven_lsp/`, `src/riven_ide/`
+`src/ruxen_lsp/`, `src/ruxen_ide/`
 
 ## CRITICAL
 
-- **`src/riven_lsp/src/server.rs:118, 165`** — `riven_ide::analysis::analyze(&source)` runs the full lex+parse+typeck+borrow-check pipeline **synchronously inside the async handler**. For a 5–10K LOC file this is hundreds of ms; concurrent didOpen + completion + hover queue on the tokio worker. Editor freezes. **Fix**: `tokio::task::spawn_blocking(move || analyze(&source)).await` (or dedicated bounded worker).
-- **`src/riven_lsp/src/server.rs:138-152`** — `did_change` mutates `doc.source` but does NOT bump or invalidate `analysis`. Every Wave-1/2 handler reads stale `analysis` against new `doc.source`. `rename.rs:389` (`span.end as usize > source.len()`) is the only thing keeping edits from landing at wildly wrong offsets. **Fix**: on did_change either (a) clear `doc.analysis = None`, or (b) trigger debounced re-analyze. "Analysis happens on didSave" is not an excuse to leave source/analysis desynced; break the invariant explicitly.
-- **`src/riven_ide/src/goto_def.rs:36` and `src/riven_ide/src/type_def.rs:74`** — `Url::parse("file:///placeholder").unwrap()` on production path. The LSP handler at `server.rs:239-242` and `server.rs:388-392` overwrites the URI, so the parse is pure tax per request and an `unwrap` on the LSP path. **Fix**: return `(Range,)` only; let the server build the `Location`. Or `OnceLock`.
-- **`src/riven_ide/src/references.rs:88`** — same `Url::parse("file:///__placeholder__").expect(...)` pattern, allocated per request, rewritten at `server.rs:425`. **Fix**: same.
-- **`src/riven_ide/src/hover.rs:176`** — `.expect("needle not found in source")`. Same pattern at **`src/riven_ide/src/node_finder.rs:469`**. **Fix**: isolate test helpers into a `pos_helper` mod gated by `#[cfg(test)]`.
+- **`src/ruxen_lsp/src/server.rs:118, 165`** — `ruxen_ide::analysis::analyze(&source)` runs the full lex+parse+typeck+borrow-check pipeline **synchronously inside the async handler**. For a 5–10K LOC file this is hundreds of ms; concurrent didOpen + completion + hover queue on the tokio worker. Editor freezes. **Fix**: `tokio::task::spawn_blocking(move || analyze(&source)).await` (or dedicated bounded worker).
+- **`src/ruxen_lsp/src/server.rs:138-152`** — `did_change` mutates `doc.source` but does NOT bump or invalidate `analysis`. Every Wave-1/2 handler reads stale `analysis` against new `doc.source`. `rename.rs:389` (`span.end as usize > source.len()`) is the only thing keeping edits from landing at wildly wrong offsets. **Fix**: on did_change either (a) clear `doc.analysis = None`, or (b) trigger debounced re-analyze. "Analysis happens on didSave" is not an excuse to leave source/analysis desynced; break the invariant explicitly.
+- **`src/ruxen_ide/src/goto_def.rs:36` and `src/ruxen_ide/src/type_def.rs:74`** — `Url::parse("file:///placeholder").unwrap()` on production path. The LSP handler at `server.rs:239-242` and `server.rs:388-392` overwrites the URI, so the parse is pure tax per request and an `unwrap` on the LSP path. **Fix**: return `(Range,)` only; let the server build the `Location`. Or `OnceLock`.
+- **`src/ruxen_ide/src/references.rs:88`** — same `Url::parse("file:///__placeholder__").expect(...)` pattern, allocated per request, rewritten at `server.rs:425`. **Fix**: same.
+- **`src/ruxen_ide/src/hover.rs:176`** — `.expect("needle not found in source")`. Same pattern at **`src/ruxen_ide/src/node_finder.rs:469`**. **Fix**: isolate test helpers into a `pos_helper` mod gated by `#[cfg(test)]`.
 
 ## HIGH
 
-- **`src/riven_ide/src/completion.rs:128, 219, 249, 281`** — `word_start_completions` + `after_dot_completions` do FOUR linear `symbols.iter()` scans (locals/keywords, methods, fields, module items). With bootstrap-merged stdlib `SymbolTable` is low thousands; single keystroke is `O(|symbols| × 4)` plus `def.name.clone()` allocations. **Fix**: prefix trie or `HashMap<char, Vec<DefId>>` built once per analysis; serves rename/references/highlight too.
-- **`src/riven_ide/src/semantic_tokens.rs:60-66`** — `collect_lexical_tokens` re-runs the lexer per `semantic-tokens-full` request. **Fix**: cache tokens on `AnalysisResult` (lexer produced them during `analyze`; just don't drop).
-- **`src/riven_ide/src/workspace_symbols.rs:32, 207`** — `name.to_lowercase().contains(needle_lower)` allocates fresh lowercased String per emitted symbol per document per keystroke. **Fix**: `eq_ignore_ascii_case`-style on bytes, or precompute `name_lc` once per definition.
-- **`src/riven_lsp/src/server.rs:302-316`** — `symbol()` collects `Vec<(Url, &AnalysisResult)>` per request by cloning every URI; iteration walks every doc's HIR. O(N · |HIR|) per keystroke in the picker. **Fix**: incrementally-updated workspace symbol index on `ServerState`; rebuild only on did_save/did_open/did_close.
-- **`src/riven_ide/src/code_actions.rs:148-178`** — `find_let_token_for_name` does `rfind("let")` on a string slice. `let` matches **inside string literals and comments** because the lexer's token stream is not consulted; `# let x` in a comment is found. Same at `find_enclosing_def` for `def`. **Fix**: walk the cached token stream; match `TokenKind::Let`/`TokenKind::Def`.
-- **`src/riven_ide/src/rename.rs:800-832`** — `narrow_to_identifier` does substring search inside host span. Same comment/string-literal hazard. If a method `foo` is called as `c.foo()` and the surrounding span includes `"# foo"` or `"foo"`, first-occurrence branch lands on wrong byte. **Fix**: intersect lexer's `Ident` tokens with host span; take first whose lexeme equals `name`.
-- **`src/riven_ide/src/rename.rs:139-227` + `highlight.rs` + `references.rs`** — three duplicated `MethodCallFinder` walkers (rename.rs 499-717, references.rs 150-407, highlight.rs same shape). ~200 LOC each with subtle drift (references walks `HirItem::Mixin`, rename does not). **Fix**: hoist a shared `hir_walk` module parameterised by callback or trait.
+- **`src/ruxen_ide/src/completion.rs:128, 219, 249, 281`** — `word_start_completions` + `after_dot_completions` do FOUR linear `symbols.iter()` scans (locals/keywords, methods, fields, module items). With bootstrap-merged stdlib `SymbolTable` is low thousands; single keystroke is `O(|symbols| × 4)` plus `def.name.clone()` allocations. **Fix**: prefix trie or `HashMap<char, Vec<DefId>>` built once per analysis; serves rename/references/highlight too.
+- **`src/ruxen_ide/src/semantic_tokens.rs:60-66`** — `collect_lexical_tokens` re-runs the lexer per `semantic-tokens-full` request. **Fix**: cache tokens on `AnalysisResult` (lexer produced them during `analyze`; just don't drop).
+- **`src/ruxen_ide/src/workspace_symbols.rs:32, 207`** — `name.to_lowercase().contains(needle_lower)` allocates fresh lowercased String per emitted symbol per document per keystroke. **Fix**: `eq_ignore_ascii_case`-style on bytes, or precompute `name_lc` once per definition.
+- **`src/ruxen_lsp/src/server.rs:302-316`** — `symbol()` collects `Vec<(Url, &AnalysisResult)>` per request by cloning every URI; iteration walks every doc's HIR. O(N · |HIR|) per keystroke in the picker. **Fix**: incrementally-updated workspace symbol index on `ServerState`; rebuild only on did_save/did_open/did_close.
+- **`src/ruxen_ide/src/code_actions.rs:148-178`** — `find_let_token_for_name` does `rfind("let")` on a string slice. `let` matches **inside string literals and comments** because the lexer's token stream is not consulted; `# let x` in a comment is found. Same at `find_enclosing_def` for `def`. **Fix**: walk the cached token stream; match `TokenKind::Let`/`TokenKind::Def`.
+- **`src/ruxen_ide/src/rename.rs:800-832`** — `narrow_to_identifier` does substring search inside host span. Same comment/string-literal hazard. If a method `foo` is called as `c.foo()` and the surrounding span includes `"# foo"` or `"foo"`, first-occurrence branch lands on wrong byte. **Fix**: intersect lexer's `Ident` tokens with host span; take first whose lexeme equals `name`.
+- **`src/ruxen_ide/src/rename.rs:139-227` + `highlight.rs` + `references.rs`** — three duplicated `MethodCallFinder` walkers (rename.rs 499-717, references.rs 150-407, highlight.rs same shape). ~200 LOC each with subtle drift (references walks `HirItem::Mixin`, rename does not). **Fix**: hoist a shared `hir_walk` module parameterised by callback or trait.
 
 ## MEDIUM
 
-- **`src/riven_ide/src/use_index.rs:707-709`** — `resolve_struct_method` is a stub returning `None`. Struct method renames silently no-op because `UseIndex` never records struct method uses. **Fix**: implement (walk struct's `impl_blocks`), or have rename refuse early with an explanation.
-- **`src/riven_lsp/src/server.rs:154-178`** — `did_save` re-reads `(source, version)` under read lock, drops it, runs `analyze`, re-acquires write lock. Between drop and re-acquire, another did_change can land. Tiny window but real. **Fix**: hold read lock across `analyze` (via spawn_blocking with cloned source), or version-tag analysis and discard on mismatch.
-- **`src/riven_ide/src/analysis.rs:14-27`** — `AnalysisResult` owns `source: String` (clone of doc source). With `DocumentState.source` server-side, every open doc holds two copies. 100K LOC × 20 buffers = 4 MB waste. **Fix**: `Arc<str>` shared.
-- **`src/riven_ide/src/code_actions.rs:24`** — `#![allow(dead_code)]` at module scope hides the lint indefinitely. **Fix**: remove blanket allow.
-- **`src/riven_ide/src/rename.rs:289-333`** — `is_reserved_keyword` hand-maintained list drifts from `riven_core::lexer`. **Fix**: expose `lexer::is_keyword(&str) -> bool`; add a pin test that fails when the lexer adds a keyword the LSP doesn't reject.
-- **`src/riven_ide/src/{inlay_hints,rename,use_index,node_finder,semantic_tokens}.rs`** — five files over 500 LOC each, all containing one giant HIR visitor. Decomposition by feature is correct; inside each, visitor sprawls. **Fix**: shared `hir_walk`; feature visitors become trait impls or callbacks (~100 LOC each).
-- **Clippy warnings (5 auto-fixable)**: `code_actions.rs:11`, `document_symbols.rs:86`, `rename.rs:389, 476:8, 476:66, 477`, `use_index.rs:629, 674`. **Fix**: `cargo clippy --fix -p riven_ide` and review.
+- **`src/ruxen_ide/src/use_index.rs:707-709`** — `resolve_struct_method` is a stub returning `None`. Struct method renames silently no-op because `UseIndex` never records struct method uses. **Fix**: implement (walk struct's `impl_blocks`), or have rename refuse early with an explanation.
+- **`src/ruxen_lsp/src/server.rs:154-178`** — `did_save` re-reads `(source, version)` under read lock, drops it, runs `analyze`, re-acquires write lock. Between drop and re-acquire, another did_change can land. Tiny window but real. **Fix**: hold read lock across `analyze` (via spawn_blocking with cloned source), or version-tag analysis and discard on mismatch.
+- **`src/ruxen_ide/src/analysis.rs:14-27`** — `AnalysisResult` owns `source: String` (clone of doc source). With `DocumentState.source` server-side, every open doc holds two copies. 100K LOC × 20 buffers = 4 MB waste. **Fix**: `Arc<str>` shared.
+- **`src/ruxen_ide/src/code_actions.rs:24`** — `#![allow(dead_code)]` at module scope hides the lint indefinitely. **Fix**: remove blanket allow.
+- **`src/ruxen_ide/src/rename.rs:289-333`** — `is_reserved_keyword` hand-maintained list drifts from `ruxen_core::lexer`. **Fix**: expose `lexer::is_keyword(&str) -> bool`; add a pin test that fails when the lexer adds a keyword the LSP doesn't reject.
+- **`src/ruxen_ide/src/{inlay_hints,rename,use_index,node_finder,semantic_tokens}.rs`** — five files over 500 LOC each, all containing one giant HIR visitor. Decomposition by feature is correct; inside each, visitor sprawls. **Fix**: shared `hir_walk`; feature visitors become trait impls or callbacks (~100 LOC each).
+- **Clippy warnings (5 auto-fixable)**: `code_actions.rs:11`, `document_symbols.rs:86`, `rename.rs:389, 476:8, 476:66, 477`, `use_index.rs:629, 674`. **Fix**: `cargo clippy --fix -p ruxen_ide` and review.
 
 ## LOW
 
-- **`src/riven_lsp/src/server.rs:282-298`** — `let Some(doc) = … else { return Ok(None); };` repeated 14×. **Fix**: extract `with_analysis(&self, &uri, f)` helper.
-- **`src/riven_ide/src/completion.rs:548-554`** — `KEYWORDS` hardcoded list duplicating `lexer::is_keyword`; same drift hazard.
-- **`src/riven_ide/src/line_index.rs:8`** — `source: String` owned again. Third copy. **Fix**: `Arc<str>` or `&str`.
-- **`src/riven_ide/src/rename.rs:117-126`** — "last-ditch alt lookup" returns `Some(word_span_to_range)` based on the original word span without ever calling rename on `alt`. `prepare_rename` says "yes" but subsequent `rename` resolves to a different def. Surface asymmetry — file a bug or remove.
-- **`src/riven_ide/src/completion.rs:46-47`** — `_trigger: Option<char>` unused. **Fix**: use it (`if trigger == Some('.')` skip context classification) or remove.
+- **`src/ruxen_lsp/src/server.rs:282-298`** — `let Some(doc) = … else { return Ok(None); };` repeated 14×. **Fix**: extract `with_analysis(&self, &uri, f)` helper.
+- **`src/ruxen_ide/src/completion.rs:548-554`** — `KEYWORDS` hardcoded list duplicating `lexer::is_keyword`; same drift hazard.
+- **`src/ruxen_ide/src/line_index.rs:8`** — `source: String` owned again. Third copy. **Fix**: `Arc<str>` or `&str`.
+- **`src/ruxen_ide/src/rename.rs:117-126`** — "last-ditch alt lookup" returns `Some(word_span_to_range)` based on the original word span without ever calling rename on `alt`. `prepare_rename` says "yes" but subsequent `rename` resolves to a different def. Surface asymmetry — file a bug or remove.
+- **`src/ruxen_ide/src/completion.rs:46-47`** — `_trigger: Option<char>` unused. **Fix**: use it (`if trigger == Some('.')` skip context classification) or remove.
 
 ## Architectural summary
 
@@ -478,9 +478,9 @@ When a finding references a memory entry like `project_riven_drop_name_mismatch.
 
 ---
 
-# 9. riven_repl
+# 9. ruxen_repl
 
-`src/riven_repl/`
+`src/ruxen_repl/`
 
 ## CRITICAL
 
@@ -496,7 +496,7 @@ When a finding references a memory entry like `project_riven_drop_name_mismatch.
 - **`jit.rs:914-916`** — `get_or_declare_func` re-walks `declared_fns.keys().filter(...).min_by_key(len)` for `?`-prefixed and generic-param resolution. O(K) per call per wrapper compile. **Fix**: `HashMap<method_suffix, FuncId>` index alongside `declared_fns`.
 - **`capture.rs:18`** — process-wide `Mutex<String>` for capture. Panic inside JIT'd code holding the lock poisons the mutex; surrounding `if let Ok(mut buf) = BUFFER.lock()` arms silently drop output. REPL appears "stuck on no output". **Fix**: use `.lock().unwrap_or_else(|p| p.into_inner())` consistently (matching test pattern at 127, 259); clear on entry.
 - **`eval.rs:604-622`** — capture-diff via `captured.starts_with(&session.prev_captured_output)`. If any prior `puts` produced non-deterministic output (timestamp, address, random), prefix match fails and fallback at 608 dumps the entire cumulative capture, double-printing everything. **Fix**: count `puts` invocations (deterministic by source) instead, or stash a per-input marker token via a synthetic prologue.
-- **`jit.rs:617-639`** — generic type-param resolution heuristic: "name starts with up-to-2 uppercase ASCII letters". Will mis-resolve user functions starting with `Db_foo`/`Io_read`/`Fs_open`. **Fix**: route generic-param dispatch through symbol-table metadata from `riven_core`, or require an explicit marker like `__GENERIC__T_method`.
+- **`jit.rs:617-639`** — generic type-param resolution heuristic: "name starts with up-to-2 uppercase ASCII letters". Will mis-resolve user functions starting with `Db_foo`/`Io_read`/`Fs_open`. **Fix**: route generic-param dispatch through symbol-table metadata from `ruxen_core`, or require an explicit marker like `__GENERIC__T_method`.
 - **`jit.rs:1286`** — float `%` falls back to `srem` (integer). Comment "will fail verifier if it ever actually runs" — defending on a downstream check is brittle. **Fix**: return explicit `Err("\`%\` not supported on floats — use \`.rem_euclid\`/\`.fract\`")`.
 - **`eval.rs:251-253`** — diagnostic message-substring sniffing (`d.message.contains("could not infer") || d.message.contains("type mismatch")`) to decide "defer this def". Couples REPL to typechecker prose. **Fix**: structured error code (`E0282` / similar); key off `d.code`.
 
@@ -504,7 +504,7 @@ When a finding references a memory entry like `project_riven_drop_name_mismatch.
 
 - **`jit.rs` (1540 LOC)** — mixes `JITCodeGen`, instruction translation, terminator translation, runtime symbol registration, signature tables, Ty↔Cranelift mappings. **Fix**: split into `jit/mod.rs`, `jit/translate.rs`, `jit/runtime_table.rs`, `jit/ty_lower.rs`.
 - **`jit.rs:1476-1539`** — `runtime_signature` is a 65-arm `match name` duplicating `extern "C"` declarations at 28-117. Two sources of truth that must agree. Already drifted. **Fix**: single `const RUNTIME: &[(name, &[Type], Option<Type>)]` table; derive both registration loop and signature lookup.
-- **`main.rs:41-374`** — `split_repl_chunks` is 333 LOC with a nested simulator, three pass walks, several heuristics. Duplicates work `validate.rs:40-72` does with different rules. **Fix**: expose `Parser::needs_continuation(tokens) -> bool` in `riven_core`; call from both.
+- **`main.rs:41-374`** — `split_repl_chunks` is 333 LOC with a nested simulator, three pass walks, several heuristics. Duplicates work `validate.rs:40-72` does with different rules. **Fix**: expose `Parser::needs_continuation(tokens) -> bool` in `ruxen_core`; call from both.
 - **`main.rs:5-17`** — six `#[allow(dead_code)]` attributes. Either dead (rule 35: delete) or test-only (`#[cfg(test)]`). **Fix**: remove blanket suppression; run `cargo check`; delete or gate properly.
 - **`env.rs:1-110`** — `ReplEnv` largely unused by the eval pipeline; `mark_moved`/`live_variables`/`all_states` have no non-test caller. Dead code masquerading as future work. **Fix**: delete `ReplEnv` entirely, or write the spec for what it's going to do and add at least one in-tree caller.
 - **`eval.rs:74`** — `EvalResult::Error(String)` discards structured diagnostic info (span, level, code). **Fix**: carry `Vec<Diagnostic>`; stringify only at the print boundary.
@@ -521,8 +521,8 @@ When a finding references a memory entry like `project_riven_drop_name_mismatch.
 
 ## Architectural summary
 
-- The REPL's "cumulative replay" strategy (every input re-compiles all prior statements) is correct but O(N²); it papers over the absence of an incremental compilation surface in `riven_core`. The real fix lives there; REPL can only memo per-def on top.
-- `jit.rs` is a parallel-but-not-shared codegen path beside `compiler/riven_core/src/codegen/cranelift.rs`. The non-exhaustive `MirInst` match is the visible symptom; every new MIR variant has to be implemented twice with no compile-time link. Right structural move: factor MIR→Cranelift translation into a `trait Backend { fn module(&mut self) -> &mut dyn Module; … }` consumed by both `ObjectModule` (batch) and `JITModule` (REPL).
+- The REPL's "cumulative replay" strategy (every input re-compiles all prior statements) is correct but O(N²); it papers over the absence of an incremental compilation surface in `ruxen_core`. The real fix lives there; REPL can only memo per-def on top.
+- `jit.rs` is a parallel-but-not-shared codegen path beside `compiler/ruxen_core/src/codegen/cranelift.rs`. The non-exhaustive `MirInst` match is the visible symptom; every new MIR variant has to be implemented twice with no compile-time link. Right structural move: factor MIR→Cranelift translation into a `trait Backend { fn module(&mut self) -> &mut dyn Module; … }` consumed by both `ObjectModule` (batch) and `JITModule` (REPL).
 - Trust boundaries are loose: `dlsym(RTLD_DEFAULT, ...)` resolves arbitrary process symbols; capture-diff is byte-prefix; type-inference deferral is diagnostic-substring. Each is small but together they make REPL semantics fragile under unrelated changes (libc shadowing, diagnostic rewording, non-deterministic output). Tightening to typed contracts (allowlist, structured diagnostic codes, marker tokens) is the highest-leverage hardening work.
 
 ---
@@ -533,16 +533,16 @@ Cross-referencing `memory/MEMORY.md` against this review — these memories are 
 
 | Memory | Site confirmed | Severity |
 |---|---|---|
-| `project_riven_resolve_class_stomps_typealias.md` | `resolve/types.rs:516-548` (read-side patch); `items.rs:332` (stomp unchanged) | CRITICAL |
-| `project_riven_closure_capture_ty_stale.md` | `resolve/control_flow.rs:327` | CRITICAL |
-| `project_riven_drop_name_mismatch.md` | `mir/lower/collect.rs:223+` | CRITICAL |
-| `project_riven_mir_mangled_method_name_parsing.md` | `mir/lower/mod.rs:803` | CRITICAL |
-| `project_riven_task_spawn_ownership_gap.md` | `mir/lower/drops.rs:786-789` | CRITICAL |
-| `project_riven_mir_two_dispatch_paths.md` | `mir/lower/expr/method_call.rs:177-394 vs 765-1283` | CRITICAL |
-| `project_riven_for_loop_infer_gap.md` | `typeck/infer/expr.rs:622`; bleeds to `borrow_check/walk.rs:440` | HIGH |
-| `project_riven_async_compiler_gaps.md` gap #3 (String==) | `typeck/infer/ops.rs:130` | HIGH |
-| `feedback_memory_limits.md` (8 GiB RSS cap) | `rivenc/src/bench.rs:200-218` (no rlimit) | HIGH |
-| `project_riven_caller_identity_as_arg.md` | `resolve/mod.rs:97-174` (17 fields not yet structured) | MEDIUM |
+| `project_ruxen_resolve_class_stomps_typealias.md` | `resolve/types.rs:516-548` (read-side patch); `items.rs:332` (stomp unchanged) | CRITICAL |
+| `project_ruxen_closure_capture_ty_stale.md` | `resolve/control_flow.rs:327` | CRITICAL |
+| `project_ruxen_drop_name_mismatch.md` | `mir/lower/collect.rs:223+` | CRITICAL |
+| `project_ruxen_mir_mangled_method_name_parsing.md` | `mir/lower/mod.rs:803` | CRITICAL |
+| `project_ruxen_task_spawn_ownership_gap.md` | `mir/lower/drops.rs:786-789` | CRITICAL |
+| `project_ruxen_mir_two_dispatch_paths.md` | `mir/lower/expr/method_call.rs:177-394 vs 765-1283` | CRITICAL |
+| `project_ruxen_for_loop_infer_gap.md` | `typeck/infer/expr.rs:622`; bleeds to `borrow_check/walk.rs:440` | HIGH |
+| `project_ruxen_async_compiler_gaps.md` gap #3 (String==) | `typeck/infer/ops.rs:130` | HIGH |
+| `feedback_memory_limits.md` (8 GiB RSS cap) | `ruxenc/src/bench.rs:200-218` (no rlimit) | HIGH |
+| `project_ruxen_caller_identity_as_arg.md` | `resolve/mod.rs:97-174` (17 fields not yet structured) | MEDIUM |
 
 ---
 
@@ -550,17 +550,17 @@ Cross-referencing `memory/MEMORY.md` against this review — these memories are 
 
 ## Wave 1 — same day
 
-1. Add `MirInst::DataAddr` arm to `src/riven_repl/src/jit.rs:731`.
+1. Add `MirInst::DataAddr` arm to `src/ruxen_repl/src/jit.rs:731`.
 2. `cargo fmt` — unblocks `--check`.
-3. Delete `runtime_c_src` dead helpers (`src/rivenc/tests/installed_binary.rs:111`, `src/riven_cli/tests/installed_pkg_manager.rs:25`).
-4. Run `cargo clippy --fix -p riven_ide` and review the 5 auto-fixable lints.
+3. Delete `runtime_c_src` dead helpers (`src/ruxenc/tests/installed_binary.rs:111`, `src/ruxen_cli/tests/installed_pkg_manager.rs:25`).
+4. Run `cargo clippy --fix -p ruxen_ide` and review the 5 auto-fixable lints.
 
 ## Wave 2 — this week (security)
 
 5. Insert `--` separator on every `git` invocation in `resolve_deps.rs` (lines 256, 269).
 6. Reject leading `-` and non-`https/ssh/git@` schemes in dep URLs.
 7. Refuse `..`-escaping or absolute path-deps unless `--allow-external-path` is set.
-8. Allowlist-gate the REPL `dlsym(RTLD_DEFAULT)` fallback to `riven_*` + a small explicit set.
+8. Allowlist-gate the REPL `dlsym(RTLD_DEFAULT)` fallback to `ruxen_*` + a small explicit set.
 9. Validate `bench_names` against `[A-Za-z_][A-Za-z0-9_]*` before splicing in `bench.rs:142-150`.
 
 ## Wave 3 — next sprint (correctness)
@@ -574,7 +574,7 @@ Cross-referencing `memory/MEMORY.md` against this review — these memories are 
 16. Stop swallowing `unify` errors in `typeck/infer/expr.rs` (8 sites).
 17. Fix LSP `did_change` invalidation + move `analyze()` to `spawn_blocking`.
 18. Fix `simple_type_size` for Class/Struct (`codegen/cranelift/helpers.rs:148-191`).
-19. Fix `JITModule` memory leak on `:reset` (`riven_repl/session.rs:92`).
+19. Fix `JITModule` memory leak on `:reset` (`ruxen_repl/session.rs:92`).
 
 ## Wave 4 — mid-term (data-drive the allowlists)
 
@@ -591,7 +591,7 @@ Cross-referencing `memory/MEMORY.md` against this review — these memories are 
 27. Split `mir/lower/expr/method_call.rs` (1291 LOC) into a `MethodLoweringStrategy` registry.
 28. Split `mir/lower/derive.rs` (1339 LOC) per-trait.
 29. Split `resolve/ffi_registration.rs` (1216 LOC) per item kind.
-30. Extract shared `hir_walk` for `riven_ide`'s 5 duplicated visitors (~1500 LOC saved).
+30. Extract shared `hir_walk` for `ruxen_ide`'s 5 duplicated visitors (~1500 LOC saved).
 31. Extract `ResolveCtx` `Clone` struct from `Resolver`'s 17 god-object fields.
 32. Factor MIR→Cranelift translation into a `trait Backend` consumed by both batch and REPL backends.
 
@@ -601,7 +601,7 @@ Cross-referencing `memory/MEMORY.md` against this review — these memories are 
 34. Name index on `SymbolTable` to kill the 10+ `symbols.iter().find()` sites across resolve + typeck + ide.
 35. Cache lexer tokens on `AnalysisResult`; serve `semantic_tokens` from cache.
 36. Persistent maps (`im::HashMap`) in `borrow_check` `check_if`/`check_match` branch state.
-37. Build `output_changed` from `cache_key` equality in `rivenc/cache/driver.rs:374-384`.
+37. Build `output_changed` from `cache_key` equality in `ruxenc/cache/driver.rs:374-384`.
 38. Hoist stdlib bootstrap loading out of per-file `compile_to_object`.
 39. Make `Span: Copy`; cut `async_lowering`'s 216 `.clone()` calls 30-50%.
 40. Static-slice `runtime_signature` returns in `codegen/cranelift/runtime_sigs.rs`.

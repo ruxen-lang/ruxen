@@ -12,7 +12,7 @@ Blocks: nothing on the tier-1 critical path; unblocks `SmallArray`,
 A *const generic* is a generic parameter whose value is a compile-time
 constant rather than a type. The canonical example:
 
-```riven
+```ruxen
 struct Matrix[T, const M: USize, const N: USize]
   data: [T; M * N]
   def init(@data: [T; M * N]) end
@@ -43,7 +43,7 @@ full template-metaprogramming Turing-complete form (SFINAE etc.).
 Zig's `comptime` is an alternative model — arbitrary compile-time
 functions.
 
-This doc specifies a **Riven-specific "min_const_generics + simple
+This doc specifies a **Ruxen-specific "min_const_generics + simple
 arithmetic"** subset: integer and boolean-valued const parameters,
 literal and parameter references, and the operators `+ - * /`. This
 is enough for matrices, small-vectors, and SIMD, and stops short of
@@ -134,7 +134,7 @@ new surface.**
   no recursion, no match at the const level. This is Zig's `comptime`
   and is a different feature entirely.
 - **NG2.** Floating-point const generics. Rust omits them because
-  `NaN != NaN` breaks type equality. Riven follows suit.
+  `NaN != NaN` breaks type equality. Ruxen follows suit.
 - **NG3.** `String` or `&str` const generics. Rust is moving toward
   this slowly; not in tier 2.
 - **NG4.** Const-generic type parameters: `def foo[const T: Type]`.
@@ -149,7 +149,7 @@ new surface.**
 
 ### 4.1 Declaration
 
-```riven
+```ruxen
 struct Vector[T, const N: USize]
   data: [T; N]
 end
@@ -179,7 +179,7 @@ Rules:
 
 ### 4.2 Instantiation
 
-```riven
+```ruxen
 let v: Vector[Int, 4] = Vector.new([1, 2, 3, 4])
 let m: Matrix[Float, 3, 3] = Matrix.zero
 let r = rotate[3](&buf)
@@ -192,12 +192,12 @@ Rules:
   const-item references, or arithmetic on other in-scope const
   parameters.
 - Turbofish-style explicit passing: `rotate[3](&buf)`. Mirrors the
-  existing turbofish for type arguments. (Riven uses `[...]` for
+  existing turbofish for type arguments. (Ruxen uses `[...]` for
   generics, not `::<...>` — see `parser/types.rs:317-335`.)
 
 ### 4.3 In signatures
 
-```riven
+```ruxen
 struct SmallArray[T, const N: USize]
   data: [T; N]
   len: USize
@@ -231,7 +231,7 @@ Rules:
 
 ### 4.4 Arithmetic in array sizes
 
-```riven
+```ruxen
 struct MatMul[const M: USize, const N: USize, const K: USize]
   out: [[Float; K]; M]
 end
@@ -501,7 +501,7 @@ See §6.2.
 ## 9. Open Questions & Risks
 
 - **OQ-1: what integer types?** Rust allows every integer type
-  including `i128`. Riven has the same menu (`Int8..64`, `UInt8..64`,
+  including `i128`. Ruxen has the same menu (`Int8..64`, `UInt8..64`,
   `USize`, `ISize`, `Int`, `UInt`). Recommendation: permit all.
   The evaluator uses `u128` internally; the signed/unsigned
   distinction affects overflow detection only.
@@ -573,8 +573,8 @@ See §6.2.
 
 ### 10.3 Fixture additions
 
-- `tests/fixtures/const_basic.rvn` — SmallArray with fixed capacity.
-- `tests/fixtures/const_matrix.rvn` — Matrix[T, M, N] with transpose.
-- `tests/fixtures/const_inference.rvn` — array size inferred from
+- `tests/fixtures/const_basic.rx` — SmallArray with fixed capacity.
+- `tests/fixtures/const_matrix.rx` — Matrix[T, M, N] with transpose.
+- `tests/fixtures/const_inference.rx` — array size inferred from
   literal argument.
-- `tests/fixtures/const_error_overflow.rvn` — negative test.
+- `tests/fixtures/const_error_overflow.rx` — negative test.

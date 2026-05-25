@@ -5,9 +5,9 @@
 
 **Status:** shipped Phase 2 #02-#03; integration via
 `option_result_runtime.rs`; helper-method surface self-hosted in
-`library/std/src/option_result.rvn` since #06.8 T#17.
+`library/std/src/option_result.rx` since #06.8 T#17.
 
-Riven's `Option` and `Result` mirror Rust's modulo a few v1
+Ruxen's `Option` and `Result` mirror Rust's modulo a few v1
 simplifications.  Both are tagged enums whose payload reaches the
 runtime as `int64_t`s (tag in the low half, payload pointer / scalar
 in the high half) so they pass cleanly through the C ABI.
@@ -64,20 +64,20 @@ present and pass through `nil` / `Err` unchanged.
 ## Pin tests
 
 All B1–B8 are covered by the integration test
-`crates/riven-core/tests/option_result_runtime.rs` which compiles +
+`crates/ruxen-core/tests/option_result_runtime.rs` which compiles +
 runs E2E fixtures:
 
 | Behaviour | E2E fixture                                | Pin fn                  |
 |-----------|--------------------------------------------|-------------------------|
-| B1        | `23_option.rvn`                            | `e2e_23_option`         |
-| B2        | `24_result.rvn`                            | `e2e_24_result`         |
-| B3        | `25_question_op.rvn`                       | `e2e_25_question_op`    |
-| B4        | `56_if_let_some.rvn`                       | `e2e_56_if_let_some`    |
-| B5        | `73_enum_generic.rvn`                      | `e2e_73_enum_generic`   |
-| B5        | `19_enums_data.rvn` + `18_enums_simple.rvn`| `e2e_19_enums_data` + `e2e_18_enums_simple` |
-| B6        | `97_expect_ok.rvn`                         | `e2e_97_expect_ok`      |
-| B7        | `98_unwrap_or.rvn`                         | `e2e_98_unwrap_or`      |
-| B8        | `99_map_option.rvn`                        | `e2e_99_map_option`     |
+| B1        | `23_option.rx`                            | `e2e_23_option`         |
+| B2        | `24_result.rx`                            | `e2e_24_result`         |
+| B3        | `25_question_op.rx`                       | `e2e_25_question_op`    |
+| B4        | `56_if_let_some.rx`                       | `e2e_56_if_let_some`    |
+| B5        | `73_enum_generic.rx`                      | `e2e_73_enum_generic`   |
+| B5        | `19_enums_data.rx` + `18_enums_simple.rx`| `e2e_19_enums_data` + `e2e_18_enums_simple` |
+| B6        | `97_expect_ok.rx`                         | `e2e_97_expect_ok`      |
+| B7        | `98_unwrap_or.rx`                         | `e2e_98_unwrap_or`      |
+| B8        | `99_map_option.rx`                        | `e2e_99_map_option`     |
 
 ---
 

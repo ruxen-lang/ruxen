@@ -9,7 +9,7 @@ include + leak-tracker).
 See §3.4a of the canonical surface-syntax spec for the `include Drop`
 + `def var drop` pattern.
 
-Riven elaborates drop calls on MIR so that every owned heap value
+Ruxen elaborates drop calls on MIR so that every owned heap value
 (`String`, `Array`, `Map`, `Set`, user types that own them) is
 released at scope exit.  The `drop_fixtures.rs` test suite uses a
 specially-rewritten runtime that counts `free` calls so we can assert
@@ -102,7 +102,7 @@ For every fixture the suite runs, `allocs == frees` at process exit
 | B10       | `tracker_reports_balanced_allocs_for_dropped_locals`   | `drop_fixtures.rs`  |
 
 The leak tracker is implemented by a textual substitution at test
-compile time (`free(` → `riven_test_free(`); see `drop_fixtures.rs`
+compile time (`free(` → `ruxen_test_free(`); see `drop_fixtures.rs`
 top-of-file commentary for the sentinel-based safe-list mechanism.
 
 ---

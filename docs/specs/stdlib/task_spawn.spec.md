@@ -12,7 +12,7 @@ the surface + lowering + executor + I/O. This sub-phase wires
 polled by one executor on one thread. The final async piece.
 
 After this lands, the full async-server pattern works:
-```rvn
+```rx
 async def server_loop()
   let listener = AsyncTcpListener.bind("127.0.0.1:8080").await.ok!
   loop
@@ -30,12 +30,12 @@ end
 
 ## B1 — `Task.spawn(future) -> JoinHandle[T]`
 
-Class-static method on `class Task` in `library/std/future/src/lib.rvn`
+Class-static method on `class Task` in `library/std/future/src/lib.rx`
 (sibling to `class Async`). Hands the future to the executor's task
 queue; returns immediately with a `JoinHandle[T]` that can later be
 awaited for the spawned task's Output.
 
-```rvn
+```rx
 let handle = Task.spawn(some_async_fn())
 # ... other work, possibly more spawns ...
 let result = handle.await   # blocks until the spawned task completes
@@ -53,7 +53,7 @@ Cooperative yield. Returns a future that, on first poll, registers
 a wakeup-on-next-tick and returns Pending; on second poll, returns
 Ready.
 
-```rvn
+```rx
 async def long_running()
   let mut i = 0
   while i < 1_000_000
@@ -88,7 +88,7 @@ in-executor task handles wrap a result slot the executor fills when
 the task completes, plus a per-task waker queue for callers
 awaiting the result.
 
-```rvn
+```rx
 class JoinHandle[T: Send]   # already exists for Thread.spawn
   # New method for in-executor tasks:
   def await(self) -> T
@@ -158,12 +158,12 @@ multi-threaded scheduler is v2).
 
 ## B9 — E2E: concurrent TCP echo server
 
-The 4C echo fixture (`727_async_tcp_echo.rvn`) currently
+The 4C echo fixture (`727_async_tcp_echo.rx`) currently
 thread-bridges (one thread per side, two `block_on` calls). With
 sub-phase 5, the echo server can be one process, one `block_on`,
 two `Task.spawn` calls:
 
-```rvn
+```rx
 async def server_loop()
   let listener = AsyncTcpListener.bind(addr).await.ok!
   let conn = listener.accept.await.ok!
@@ -187,7 +187,7 @@ def main
 end
 ```
 
-E2E fixture `728_async_tcp_echo_single_block_on.rvn` lands as part
+E2E fixture `728_async_tcp_echo_single_block_on.rx` lands as part
 of this sub-phase. Asserts the round-trip in one process, one
 `block_on`.
 
@@ -215,7 +215,7 @@ continues polling other tasks. v1: panic = process abort, same as
 | B5        | `waker_wake_re_enqueues_task`                          | `tests/task_scheduler.rs`     |
 | B6        | `block_on_drops_remaining_tasks_on_top_level_complete` | `tests/task_scheduler.rs`     |
 | B7        | `task_spawn_outside_async_rejected_e1116`              | `tests/async_negative.rs`     |
-| B9        | e2e `cases/728_async_tcp_echo_single_block_on.rvn`     | release-e2e                   |
+| B9        | e2e `cases/728_async_tcp_echo_single_block_on.rx`     | release-e2e                   |
 | B10       | `dropped_task_releases_reactor_registrations`          | `tests/task_scheduler.rs`     |
 
 ---

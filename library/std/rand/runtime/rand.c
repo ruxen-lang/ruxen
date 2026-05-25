@@ -21,7 +21,7 @@
  * codegen/object.rs::linker_args under cfg!(target_os = "macos").
  *
  * Error model: hard CSPRNG failure → IoError.Other(msg) (random_bytes
- * / random_fill) or riven_panic (random_u64 — the caller is presumed
+ * / random_fill) or ruxen_panic (random_u64 — the caller is presumed
  * to want an unconditional number). Negative n → IoError.InvalidInput.
  * Zero n → Ok(empty) without invoking the kernel.
  */
@@ -29,7 +29,7 @@
 /* Fill `out` with `len` bytes from the kernel CSPRNG. Returns 0 on
  * success, -1 on hard failure (caller maps to IoError.Other). The
  * `errno` left in place mirrors the syscall's last failure. */
-static int riven_rand_fill_raw(unsigned char *out, size_t len) {
+static int ruxen_rand_fill_raw(unsigned char *out, size_t len) {
     if (len == 0) return 0;
 
 #if defined(__linux__)
@@ -86,36 +86,36 @@ static int riven_rand_fill_raw(unsigned char *out, size_t len) {
 
 /* `random_bytes(n: Int) -> Result[Array[U8], IoError]`. n<0 →
  * InvalidInput; n==0 → Ok(empty Vec) without invoking the kernel;
- * n>0 → fresh RivenVec with each byte pushed as an int64 slot
+ * n>0 → fresh RuxenVec with each byte pushed as an int64 slot
  * (matching the Array[Int]/Array[U8] carrier convention used by
  * File.read / TcpStream.read). On CSPRNG hard failure the partial
  * Vec is freed before surfacing Err. */
-void *riven_rand_random_bytes(int64_t n) {
+void *ruxen_rand_random_bytes(int64_t n) {
     if (n < 0) {
-        return riven_result_err_value(
-            (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_result_err_value(
+            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
     }
-    RivenVec *v = riven_vec_new();
+    RuxenVec *v = ruxen_vec_new();
     if (n == 0) {
-        return riven_result_ok_value((int64_t)v);
+        return ruxen_result_ok_value((int64_t)v);
     }
     /* Stage into a heap buffer so we don't blow the stack on a large n
      * — getrandom's 256-byte single-call limit is per-syscall, not per
      * buffer, and the read-loop above handles partial fills. */
     size_t len = (size_t)n;
     unsigned char *stage = (unsigned char *)malloc(len);
-    if (!stage) riven_panic("out of memory");
-    if (riven_rand_fill_raw(stage, len) != 0) {
+    if (!stage) ruxen_panic("out of memory");
+    if (ruxen_rand_fill_raw(stage, len) != 0) {
         int saved = errno;
         free(stage);
-        riven_dealloc(v);
-        return riven_io_error_from_errno(saved);
+        ruxen_dealloc(v);
+        return ruxen_io_error_from_errno(saved);
     }
     for (size_t i = 0; i < len; i++) {
-        riven_vec_push(v, (int64_t)stage[i]);
+        ruxen_vec_push(v, (int64_t)stage[i]);
     }
     free(stage);
-    return riven_result_ok_value((int64_t)v);
+    return ruxen_result_ok_value((int64_t)v);
 }
 
 /* `random_u64() -> Int`. The int64 storage carries the 64-bit CSPRNG
@@ -123,10 +123,10 @@ void *riven_rand_random_bytes(int64_t n) {
  * read as-is; unsigned consumers reinterpret the bit pattern. On
  * hard CSPRNG failure we panic rather than return a Result so the
  * call site stays a bare expression. */
-int64_t riven_rand_random_u64(void) {
+int64_t ruxen_rand_random_u64(void) {
     uint64_t out = 0;
-    if (riven_rand_fill_raw((unsigned char *)&out, sizeof out) != 0) {
-        riven_panic("random_u64: kernel CSPRNG hard failure");
+    if (ruxen_rand_fill_raw((unsigned char *)&out, sizeof out) != 0) {
+        ruxen_panic("random_u64: kernel CSPRNG hard failure");
     }
     return (int64_t)out;
 }
@@ -134,25 +134,25 @@ int64_t riven_rand_random_u64(void) {
 /* `random_fill(buf: &var Array[U8]) -> Result[(), IoError]`. Overwrites
  * every existing slot of `buf` with one random byte each; preserves
  * `buf.len`. Empty buf → Ok(()) immediately. */
-void *riven_rand_random_fill(RivenVec *buf) {
+void *ruxen_rand_random_fill(RuxenVec *buf) {
     if (!buf) {
-        return riven_result_err_value(
-            (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_result_err_value(
+            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
     }
     size_t len = (size_t)buf->len;
     if (len == 0) {
-        return riven_result_ok_value(0);
+        return ruxen_result_ok_value(0);
     }
     unsigned char *stage = (unsigned char *)malloc(len);
-    if (!stage) riven_panic("out of memory");
-    if (riven_rand_fill_raw(stage, len) != 0) {
+    if (!stage) ruxen_panic("out of memory");
+    if (ruxen_rand_fill_raw(stage, len) != 0) {
         int saved = errno;
         free(stage);
-        return riven_io_error_from_errno(saved);
+        return ruxen_io_error_from_errno(saved);
     }
     for (size_t i = 0; i < len; i++) {
         buf->data[i] = (int64_t)stage[i];
     }
     free(stage);
-    return riven_result_ok_value(0);
+    return ruxen_result_ok_value(0);
 }

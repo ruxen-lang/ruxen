@@ -1,8 +1,8 @@
 # 22 — Phase 5: package manager extensions (T4.01)
 
-> **Status: 🟡 Partial** (audited 2026-05-21). Per-package `Riven.toml`
+> **Status: 🟡 Partial** (audited 2026-05-21). Per-package `Ruxen.toml`
 > manifests shipped across all 25 stdlib packages
-> (`library/std/<pkg>/Riven.toml`). BOOTSTRAP_FILES-driven loader
+> (`library/std/<pkg>/Ruxen.toml`). BOOTSTRAP_FILES-druxen loader
 > works for stdlib; bootstrap-aware resolver wires per-package
 > items into `std.<pkg>` modules. **Not shipped:** workspace
 > mechanism, dependency resolver, lockfile, publish/registry —
@@ -19,7 +19,7 @@ TEC-13, registry is **git-URL only** (Go-style).
 ## A. Workspaces
 
 ```toml
-# top-level Riven.toml
+# top-level Ruxen.toml
 [workspace]
 members = ["pkg-a", "pkg-b", "examples/*"]
 ```
@@ -28,7 +28,7 @@ members = ["pkg-a", "pkg-b", "examples/*"]
 - Unit test: `Manifest::is_workspace_root` detects workspace.
 - E2E: build a workspace with two members + one path-dep between
   them.
-- Test that `riven build` from any member finds workspace root.
+- Test that `ruxen build` from any member finds workspace root.
 
 ### Implementation
 - `[workspace]` section parsing.
@@ -38,14 +38,14 @@ members = ["pkg-a", "pkg-b", "examples/*"]
 
 ## B. Publish (git-URL registry)
 
-`riven publish` packages the current package and pushes a tag to a
+`ruxen publish` packages the current package and pushes a tag to a
 configured git remote. Consumers reference by `git = "..."`,
 `tag = "..."` (already supported per existing `gh` flow).
 
 ### TDD
-- Integration test: `riven publish --dry-run` on a fixture verifies
+- Integration test: `ruxen publish --dry-run` on a fixture verifies
   the tarball and tag-name without actually pushing.
-- E2E: in a tempdir, `riven publish` to a local bare repo; another
+- E2E: in a tempdir, `ruxen publish` to a local bare repo; another
   project consumes via `git = "file:///..."`.
 
 ### Implementation
@@ -56,8 +56,8 @@ configured git remote. Consumers reference by `git = "..."`,
 
 ## C. Lockfile improvements
 
-- `riven update` already exists. Add `--precise <pkg>=<rev>`.
-- `Riven.lock` checksum verification (already present; audit).
+- `ruxen update` already exists. Add `--precise <pkg>=<rev>`.
+- `Ruxen.lock` checksum verification (already present; audit).
 
 ## Reserved error codes
 
@@ -68,6 +68,6 @@ configured git remote. Consumers reference by `git = "..."`,
 ## Definition of done
 
 - [ ] Workspaces work with multiple members + intra-deps.
-- [ ] `riven publish --dry-run` and live publish to local bare repo
+- [ ] `ruxen publish --dry-run` and live publish to local bare repo
       work.
 - [ ] CHANGELOG bullet.

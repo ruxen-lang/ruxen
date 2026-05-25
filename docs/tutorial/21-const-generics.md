@@ -12,7 +12,7 @@ Const generics let types and functions be parameterised by a
 compile-time **value** — typically an integer that determines an
 array size, a fixed-capacity buffer length, or a build-time toggle.
 
-```riven
+```ruxen
 struct Vector[T, const N: USize]
   data: [T; N]
 end
@@ -26,7 +26,7 @@ def rotate[const K: USize](x: Int) -> Int
 end
 ```
 
-Riven's design follows Rust's `min_const_generics` plus simple
+Ruxen's design follows Rust's `min_const_generics` plus simple
 arithmetic on const expressions.  No general compile-time-function
 evaluation; no recursion or branching at the const level.
 
@@ -37,7 +37,7 @@ evaluation; no recursion or branching at the const level.
 The parser accepts `const NAME: Type` anywhere a generic parameter
 can go:
 
-```riven
+```ruxen
 struct Vector[T, const N: USize] end             # struct
 class SmallVec[T, const N: USize] end            # class
 def rotate[const K: USize](x: Int) end           # function
@@ -47,7 +47,7 @@ extension SmallVec[T, const N: USize] end        # extension
 
 Multiple const params and mixed type/const ordering both work:
 
-```riven
+```ruxen
 struct Matrix[T, const M: USize, const N: USize] end
 struct Buffer[const CAP: USize, T] end       # const-first is legal
 ```
@@ -60,7 +60,7 @@ The declared type must be an integer family (`Int`, `Int8`/`Int16`/
 `ISize`) or `Bool`.  Anything else surfaces as
 [**E0705**](../errors/E0705.md):
 
-```riven
+```ruxen
 struct Buf[T, const N: Float] end    # error[E0705]
 struct Bag[T, const N: String] end   # error[E0705]
 ```
@@ -73,7 +73,7 @@ struct Bag[T, const N: String] end   # error[E0705]
 
 Integer literals are the simplest form:
 
-```riven
+```ruxen
 struct Holder
   v: Vector[Int, 4]
   m: Matrix[Float, 3, 4]
@@ -86,7 +86,7 @@ end
 `+ - * /` and parens work in both **array-size position** and
 **const-arg position**:
 
-```riven
+```ruxen
 struct Buf
   data: [Int; 2 + 3]            # array size with arithmetic
   pad:  [Int; (4 + 4) * 2]      # parens for grouping
@@ -102,7 +102,7 @@ def take_one(v: Vector[Int, 2 + 3]) end   # arithmetic at use site
 Two different source forms that denote the same compile-time integer
 produce **the same type** thanks to a normal-form rewriter:
 
-```riven
+```ruxen
 def need_four(v: Vector[Int, 4]) end
 
 def main
@@ -123,7 +123,7 @@ reassociate — those are intentional v1 limits (spec §B8).
 Anything outside `Lit`, `Param`, and `+ - * /` arithmetic surfaces
 as [**E0702**](../errors/E0702.md):
 
-```riven
+```ruxen
 struct Bad
   data: [Int; 5 % 2]      # error[E0702]: `%` not in v1 const language
 end
@@ -146,7 +146,7 @@ const argument explicitly at every use site.
 Pure-literal const arithmetic that overflows `u64` or divides by
 zero surfaces as [**E0703**](../errors/E0703.md):
 
-```riven
+```ruxen
 struct Boom
   data: [Int; 9223372036854775807 * 4]    # error[E0703]: overflows
 end
@@ -165,7 +165,7 @@ checking lands with the S7 binding-threading follow-up.
 Passing a const where a type is expected (or vice versa) surfaces as
 [**E0704**](../errors/E0704.md):
 
-```riven
+```ruxen
 class OnlyType[T] end
 
 let _x: OnlyType[4] = ...    # error[E0704]: kind mismatch (const where type expected)
@@ -178,7 +178,7 @@ let _x: OnlyType[4] = ...    # error[E0704]: kind mismatch (const where type exp
 After Stage 5, two instantiations of the same generic that differ
 only in their const args are **distinct types**:
 
-```riven
+```ruxen
 class SmallVec[T, const N: USize] end
 
 let a: SmallVec[Int, 3] = ...
@@ -240,7 +240,7 @@ These are explicit non-goals — they won't ship even in v2.next:
 
 If something here doesn't work the way the text claims, the spec is
 authoritative: [`docs/specs/types/const-generics.spec.md`](../specs/types/const-generics.spec.md).
-The pin tests in `crates/riven-core/tests/const_generics.rs` are
+The pin tests in `crates/ruxen-core/tests/const_generics.rs` are
 the executable contract — every behaviour above corresponds to a
 named test.
 

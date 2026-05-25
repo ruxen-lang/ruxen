@@ -4,10 +4,10 @@
 [docs/requirements/tier1_01_stdlib.md §5.6](../../requirements/tier1_01_stdlib.md).
 
 **Status:** shipped Phase 2 #03-#04; ownership negatives Phase 2 #02;
-method surface self-hosted in `library/std/src/string.rvn` since
+method surface self-hosted in `library/std/src/string.rx` since
 #06.8 T#13.
 
-Riven's `String` is a heap-owned UTF-8 buffer; `&str` is a borrowed
+Ruxen's `String` is a heap-owned UTF-8 buffer; `&str` is a borrowed
 view.  Both share the same runtime representation at the FFI layer
 (`char*`).  Ownership and use-after-move are enforced statically by
 the borrow checker.
@@ -48,9 +48,9 @@ The string surface includes:
 - `truncate(n)` (in-place; byte-count)
 
 Pin tests for these live in the E2E fixture set
-(`106_string_chars.rvn`, `108_string_split.rvn`,
-`112_string_trim.rvn`, `113_string_methods_chain.rvn`,
-`05_string_interp.rvn`, `114_string_interp_mixed.rvn`).
+(`106_string_chars.rx`, `108_string_split.rx`,
+`112_string_trim.rx`, `113_string_methods_chain.rx`,
+`05_string_interp.rx`, `114_string_interp_mixed.rx`).
 
 ---
 

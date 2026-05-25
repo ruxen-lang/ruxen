@@ -20,7 +20,7 @@ before the individual docs.
 Tier-1 closes the gap between the advertised language (tutorials, fixture
 programs) and what compiles-and-runs correctly today. Tier-2 closes the
 gap between "correct on concrete types" and "correct on parametric types."
-None of this is optional if Riven intends to ship an `Iterator` mixin, a
+None of this is optional if Ruxen intends to ship an `Iterator` mixin, a
 stdlib that returns `some Iterator` from `Array.iter`, a vtable-backed
 plugin / scripting boundary, or safe lifetime subtyping on closures and
 references.
@@ -45,7 +45,7 @@ variance and HRTBs. The scaffolding is load-bearing for the design in
 these docs; here is where it lives:
 
 - **Mixin `type` items parse into `TraitItem::AssocType`.**
-  `crates/riven-core/src/parser/mod.rs:908-914`. The HIR variant
+  `crates/ruxen-core/src/parser/mod.rs:908-914`. The HIR variant
   `HirTraitItem::AssocType` exists (`hir/nodes.rs:483-486`) and resolve
   walks the AST into it (`resolve/mod.rs:940-945`). `TraitInfo::
   assoc_types: Vec<String>` is stored (`resolve/symbols.rs:65`). **No
@@ -201,7 +201,7 @@ Key cross-feature dependencies:
   because the GAT-dependent stdlib surface (`LendingIterator`,
   `StreamingIterator`) is not on the tier-1 path.
 
-- **HRTBs (03) benefit enormously from lifetime elision.** Riven's
+- **HRTBs (03) benefit enormously from lifetime elision.** Ruxen's
   elision rules already cover the 80% case
   (`borrow_check/lifetimes.rs:55-85`). HRTBs are only *needed* when a
   closure outlives the function that takes it and must work for any
@@ -257,7 +257,7 @@ implementation starts.
    simpler to implement and debug. Decide before M2.
 
 2. **Projection syntax: `Self.Item`.** Per the syntax spec, type-level
-   projection uses `.` consistent with Riven's dotted module paths. The
+   projection uses `.` consistent with Ruxen's dotted module paths. The
    case distinction (capital `Self` vs lowercase `self`) keeps it
    visually distinct from expression-level field access. The parser
    already reads uppercase `TypeIdentifier` differently from lowercase
@@ -285,13 +285,13 @@ implementation starts.
    Recommendation: no. Confirm.
 
 6. **Object-safety: what exactly is forbidden?** Doc 06 §4 enumerates
-   seven rules. Most match Rust's list. Two are Riven-specific:
-   (a) must a mixin be `Sized`-like? Riven has no unsized types, so yes
+   seven rules. Most match Rust's list. Two are Ruxen-specific:
+   (a) must a mixin be `Sized`-like? Ruxen has no unsized types, so yes
    by fiat. (b) what about methods with `consume self`? Rust forbids
-   them from vtables; Riven should too. Confirm.
+   them from vtables; Ruxen should too. Confirm.
 
 7. **HRTB surface syntax.** Doc 03 §4 uses `for[a] Fn(&a T) -> &a T`,
-   reusing Riven's bracket-generic syntax with the lowercase-lifetime
+   reusing Ruxen's bracket-generic syntax with the lowercase-lifetime
    convention. Consistent with `[T, U]` for generics. Document in the
    tutorial.
 
@@ -314,10 +314,10 @@ walltime drops to ~20-26 weeks.
 
 ## Conventions (same as Tier-1)
 
-- File:line citations in the form `crates/riven-core/src/foo.rs:123`.
+- File:line citations in the form `crates/ruxen-core/src/foo.rs:123`.
 - Per-feature phasing in a `Phasing` section with 2-letter phase codes
   (e.g., `01a`, `01b`).
-- Riven code examples inside fenced blocks tagged `riven` (the tutorial
+- Ruxen code examples inside fenced blocks tagged `ruxen` (the tutorial
   uses this convention too — `docs/tutorial/08-mixins.md:7`).
 - "Open questions" surfaced per-doc, then rolled up here.
 - Error codes use `E-<FEATURE>-<SHORTNAME>` form, e.g., `E-ASSOC-AMBIG`,

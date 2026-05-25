@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Memory + disk-bloat watchdog for Riven work.
+# Memory + disk-bloat watchdog for Ruxen work.
 #
-# (1) Kills any rivenc / rustc / cargo / ld / clang process whose RSS
+# (1) Kills any ruxenc / rustc / cargo / ld / clang process whose RSS
 #     exceeds the RSS cap (default 8 GiB).
 # (2) Deletes any file under target/ or /tmp/ that exceeds the FILE
-#     cap (default 1 GiB) and kills whichever rivenc/rustc/cargo
+#     cap (default 1 GiB) and kills whichever ruxenc/rustc/cargo
 #     process most recently touched its parent dir. File-size bloat
 #     from pathological codegen can happen without RSS bloat because
 #     the kernel flushes pages to disk as they're written.
@@ -13,20 +13,20 @@
 
 set -u
 
-RSS_CAP_KB="${RIVENC_MEM_KB:-$((8 * 1024 * 1024))}"      # 8 GiB
-FILE_CAP_BYTES="${RIVENC_FILE_CAP:-$((1 * 1024 * 1024 * 1024))}"  # 1 GiB
-PROC_PATTERN='rivenc|rustc|cargo|ld$|ld-classic|clang|riven-lsp|riven-repl'
-# Also match any process whose executable path includes riven target or test deps
+RSS_CAP_KB="${RUXENC_MEM_KB:-$((8 * 1024 * 1024))}"      # 8 GiB
+FILE_CAP_BYTES="${RUXENC_FILE_CAP:-$((1 * 1024 * 1024 * 1024))}"  # 1 GiB
+PROC_PATTERN='ruxenc|rustc|cargo|ld$|ld-classic|clang|ruxen-lsp|ruxen-repl'
+# Also match any process whose executable path includes ruxen target or test deps
 # (e.g. option_result_runtime-<hash>, installed_binary-<hash>). ps -eo comm
 # shows only the basename, so check arguments too via pgrep -f.
-PATH_PATTERN='target/(debug|release)/deps|target/(debug|release)/riven|/crates/.*/tests/|option_result_runtime|installed_binary|riven_core-|riven_cli-|riven_ide-|riven_lsp-|riven_repl-|rivenc-'
+PATH_PATTERN='target/(debug|release)/deps|target/(debug|release)/ruxen|/crates/.*/tests/|option_result_runtime|installed_binary|ruxen_core-|ruxen_cli-|ruxen_ide-|ruxen_lsp-|ruxen_repl-|ruxenc-'
 
-# Directories to scan for bloated output files. RIVEN_WORKSPACE (when set)
+# Directories to scan for bloated output files. RUXEN_WORKSPACE (when set)
 # takes precedence so Linux + macOS share the same script.
-RIVEN_WORKSPACE_DIR="${RIVEN_WORKSPACE:-$HOME/.projects/riven}"
+RUXEN_WORKSPACE_DIR="${RUXEN_WORKSPACE:-$HOME/.projects/ruxen}"
 SCAN_DIRS=(
-  "$RIVEN_WORKSPACE_DIR/target"
-  "$RIVEN_WORKSPACE_DIR/tmp"
+  "$RUXEN_WORKSPACE_DIR/target"
+  "$RUXEN_WORKSPACE_DIR/tmp"
   "/tmp"
 )
 
@@ -34,10 +34,10 @@ echo "[watchdog] rss_cap=${RSS_CAP_KB}KB  file_cap=$((FILE_CAP_BYTES / 1024 / 10
 
 kill_all_writers() {
   # When a file explodes, we can't reliably tell which process wrote it.
-  # Kill every rivenc/rustc/cargo/ld/clang we can find — the user said
+  # Kill every ruxenc/rustc/cargo/ld/clang we can find — the user said
   # memory must never exceed caps, so the right default is to stop
   # the bleeding.
-  pkill -9 -f "rivenc" 2>/dev/null
+  pkill -9 -f "ruxenc" 2>/dev/null
   pkill -9 rustc 2>/dev/null
   pkill -9 cargo 2>/dev/null
   pkill -9 -f "ld-classic" 2>/dev/null

@@ -18,7 +18,7 @@ during the multithreading round.
 
 ## B1 — `mixin Future` with associated `type Output`
 
-```rvn
+```rx
 mixin Future
   type Output
   def var poll(cx: &var Context) -> Poll[Self.Output]
@@ -42,7 +42,7 @@ Resolvable via `use std.core.Future` (the new canonical path) or
 
 ## B2 — `enum Poll[T] { Ready(T), Pending }`
 
-```rvn
+```rx
 enum Poll[T]
   Ready(T)
   Pending
@@ -58,7 +58,7 @@ for cross-build stability.
 **Match exhaustiveness:** the typeck enforces all variants are
 covered, same as Option/Result.
 
-```rvn
+```rx
 match poll_result
   Ready(v) -> v
   Pending  -> # waiting
@@ -67,17 +67,17 @@ end
 
 ## B3 — `class Context` + `class Waker` with the v1 API
 
-```rvn
+```rx
 class Context
   lib "runtime/executor.c"
-    def waker as "riven_context_waker"(self) -> &Waker
+    def waker as "ruxen_context_waker"(self) -> &Waker
   end
 end
 
 class Waker
   lib "runtime/executor.c"
-    def wake as "riven_waker_wake"(self) -> ()
-    def wake_by_ref as "riven_waker_wake_by_ref"(self) -> ()
+    def wake as "ruxen_waker_wake"(self) -> ()
+    def wake_by_ref as "ruxen_waker_wake_by_ref"(self) -> ()
   end
 end
 ```
@@ -86,17 +86,17 @@ Both classes are opaque to user code in v1 — they hold an executor-
 maintained pointer and expose only the wake API. Lib decls point at
 the as-yet-unwritten `library/std/future/runtime/executor.c`
 (creating the package as part of this sub-phase, with stub C
-implementations that `riven_panic` for now — they become real in
+implementations that `ruxen_panic` for now — they become real in
 sub-phase 3).
 
-Context/Waker move from their current home in `library/std/sync/src/lib.rvn`
-to a new `library/std/future/src/lib.rvn` package, with a deprecated
+Context/Waker move from their current home in `library/std/sync/src/lib.rx`
+to a new `library/std/future/src/lib.rx` package, with a deprecated
 re-export from sync to avoid breaking any caller. (Probably none —
 they're currently empty shells.)
 
 ## B4 — Hand-written Future round-trip (typeck-only)
 
-```rvn
+```rx
 class CountdownFuture
   remaining: Int
   include Future
@@ -128,7 +128,7 @@ Calling `f.poll(&var ctx)` at runtime panics until sub-phase 3 lands
 ## B5 — Negative: `include Future` without `type Output` rejected
 
 **Given**
-```rvn
+```rx
 class BadFuture
   include Future
   def var poll(cx: &var Context) -> Poll[Int]
@@ -149,7 +149,7 @@ diagnostic (E0613).
 
 ## B7 — `async def foo` parses (no lowering)
 
-```rvn
+```rx
 async def fetch(url: &str) -> Result[String, IoError]
   Result.Ok(url.to_string)
 end
@@ -164,7 +164,7 @@ and lowers.
 
 ## B8 — `async { ... }` block parses (no lowering)
 
-```rvn
+```rx
 let fut = async { 42 }
 ```
 
@@ -173,7 +173,7 @@ Sub-phase 2 makes it return a `some Future`.
 
 ## B9 — `.await` parses (sub-phase 2 wires the lowering)
 
-```rvn
+```rx
 async def main
   let x = some_future.await
 end
@@ -188,23 +188,23 @@ sub-phase 1 parses + type-checks, ships as a working synchronous
 program, and gets async semantics for free once sub-phase 2 lands.
 **Bridge mode.**
 
-## B10 — `library/std/future/Riven.toml` package
+## B10 — `library/std/future/Ruxen.toml` package
 
 A new package created during sub-phase 1:
-- `library/std/future/Riven.toml` declaring `std-future` v0.1.0
+- `library/std/future/Ruxen.toml` declaring `std-future` v0.1.0
   with deps on `std-core`.
-- `library/std/future/src/lib.rvn` carrying the class shells from B3.
+- `library/std/future/src/lib.rx` carrying the class shells from B3.
 - `library/std/future/runtime/executor.c` carrying stub
-  implementations of `riven_context_waker`, `riven_waker_wake`,
-  `riven_waker_wake_by_ref` — each `riven_panic("executor not
+  implementations of `ruxen_context_waker`, `ruxen_waker_wake`,
+  `ruxen_waker_wake_by_ref` — each `ruxen_panic("executor not
   implemented")` for now. Sub-phase 3 fills them in.
 
-## B11 — Declare Poll as an .rvn enum (not register_builtins)
+## B11 — Declare Poll as an .rx enum (not register_builtins)
 
-`Poll[T]` lives in `library/std/future/src/lib.rvn` as a plain
-Riven enum:
+`Poll[T]` lives in `library/std/future/src/lib.rx` as a plain
+Ruxen enum:
 
-```rvn
+```rx
 enum Poll[T]
   Ready(T)
   Pending
@@ -213,15 +213,15 @@ end
 
 This matches the existing pattern for `IoError` / `SeekFrom` /
 `IoErrorKind` / `Shutdown` — every other recently-added stdlib enum
-is in pure Riven, not in `register_builtins`. The bootstrap merge
+is in pure Ruxen, not in `register_builtins`. The bootstrap merge
 picks it up. Tag indices follow declaration order (0 = Ready, 1 =
-Pending). Pin test (`poll_tag_layout_stability`) reads the .rvn
+Pending). Pin test (`poll_tag_layout_stability`) reads the .rx
 source and asserts the order — same shape as
 `io_error_tag_stability` and `shutdown_tag_stability`.
 
 This is consistent with the project directive: keep the surface in
-Riven wherever feasible; Rust handles only what cannot be expressed
-in Riven (lowering passes, codegen, FFI registration).
+Ruxen wherever feasible; Rust handles only what cannot be expressed
+in Ruxen (lowering passes, codegen, FFI registration).
 
 ---
 
@@ -233,7 +233,7 @@ in Riven (lowering passes, codegen, FFI registration).
 | B2        | `poll_enum_registered_with_ready_pending_variants`   | `tests/async_surface.rs`            |
 | B2 (tag)  | `poll_tag_layout_stability`                          | `tests/async_surface.rs`            |
 | B3        | `context_and_waker_classes_resolve`                  | `tests/async_surface.rs`            |
-| B4        | e2e `tests/release-e2e/cases/720_handwritten_future_typechecks.rvn` (no execution — just compile) | release-e2e |
+| B4        | e2e `tests/release-e2e/cases/720_handwritten_future_typechecks.rx` (no execution — just compile) | release-e2e |
 | B5        | `include_future_without_output_rejected_e0612`       | `tests/async_negative.rs`           |
 | B6        | `poll_signature_mismatch_rejected_e0613`             | `tests/async_negative.rs`           |
 | B7        | `async_def_parses_subphase1_no_lowering`             | `parser/tests.rs`                   |

@@ -1,3 +1,0 @@
-lib "rt"
-  def foo as "riven_test_extern_add_one"(x: Int) -> Int
-end

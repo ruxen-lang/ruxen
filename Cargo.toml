@@ -6,7 +6,7 @@ resolver = "2"
 rust-version = "1.91"
 license = "MIT OR Apache-2.0"
 edition = "2021"
-repository = "https://github.com/sherazp995/riven"
+repository = "https://github.com/ruxen-lang/ruxen"
 
 [workspace.lints.clippy]
 result_large_err = "allow"

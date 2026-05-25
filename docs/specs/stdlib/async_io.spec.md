@@ -30,7 +30,7 @@ Land 4A first; commit; then 4B; then 4C.
 
 ### B1 — `time.sleep(d: &Duration) -> some Future[Output = ()]`
 
-```rvn
+```rx
 use std.time.Duration
 use std.time.sleep   # ← new async surface
 use std.executor.block_on
@@ -46,7 +46,7 @@ end
 async path (epoll_pwait timeout / kevent EVFILT_TIMER), NOT the
 synchronous `nanosleep` path.
 
-`time.sleep` is a free fn in `library/std/time/src/lib.rvn`. Its
+`time.sleep` is a free fn in `library/std/time/src/lib.rx`. Its
 return type lifts to a `__TimeSleepFuture` (same AST-synthesis
 pattern as `async def` — though here the function isn't `async def`,
 it's a hand-written future. The lib decl declares the typed return,
@@ -65,10 +65,10 @@ Internally the timer future:
 
 ```c
 // library/std/executor/runtime/executor.c
-static void riven_executor_park(RivenContext *ctx) {
+static void ruxen_executor_park(RuxenContext *ctx) {
     // Block on the reactor's wait point. The reactor is the per-
     // thread singleton that holds all registered fds/timers.
-    riven_reactor_wait(ctx->reactor);
+    ruxen_reactor_wait(ctx->reactor);
     // When this returns, at least one event has fired — the
     // executor's next poll iteration will see the futures that
     // were waiting on those events.
@@ -88,7 +88,7 @@ constructed on first `block_on(...)` and reused across nested
 `block_on` calls (which are forbidden in async contexts but allowed
 in sync contexts).
 
-Layout: `RivenReactor { fd: int, registered_count: int, ... }`.
+Layout: `RuxenReactor { fd: int, registered_count: int, ... }`.
 The fd is the epoll/kqueue file descriptor.
 
 ---
@@ -97,7 +97,7 @@ The fd is the epoll/kqueue file descriptor.
 
 ### B4 — `AsyncFile.open(path: &Path) -> some Future[Output = Result[AsyncFile, IoError]]`
 
-```rvn
+```rx
 use std.fs.AsyncFile
 
 async def read_config() -> Result[String, IoError]
@@ -197,7 +197,7 @@ iterations.
 ### B-X — Future drops deregister from reactor
 
 When a future implementing reactor-aware I/O is dropped before
-completion, its Drop hook calls `riven_reactor_deregister(handle)`
+completion, its Drop hook calls `ruxen_reactor_deregister(handle)`
 to clean up the registration. Same shape across timer / file /
 stream futures.
 
@@ -229,9 +229,9 @@ future.
 | B7        | `async_tcp_stream_connect_resolves`                  | `tests/async_io.rs`           |
 | B8, B9    | `async_tcp_stream_read_write_round_trip`             | `tests/async_io.rs`           |
 | B10       | `async_tcp_stream_close_completes`                   | `tests/async_io.rs`           |
-| B1 e2e    | `cases/725_time_sleep_block_on.rvn`                  | release-e2e                   |
-| B4-B6 e2e | `cases/726_async_file_round_trip.rvn`                | release-e2e                   |
-| B11       | `cases/727_async_tcp_echo.rvn`                       | release-e2e                   |
+| B1 e2e    | `cases/725_time_sleep_block_on.rx`                  | release-e2e                   |
+| B4-B6 e2e | `cases/726_async_file_round_trip.rx`                | release-e2e                   |
+| B11       | `cases/727_async_tcp_echo.rx`                       | release-e2e                   |
 | B-X       | `future_drop_deregisters_from_reactor`               | `tests/async_io.rs`           |
 | B12       | `tcp_stream_drop_no_leak_1000_iterations`            | `tests/async_io.rs`           |
 

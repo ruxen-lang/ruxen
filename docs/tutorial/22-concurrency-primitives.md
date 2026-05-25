@@ -8,7 +8,7 @@
 > **See also:** [Spec — std.sync](../specs/stdlib/sync.spec.md) for
 > the full v1 typeck surface + pin tests.
 
-`std.sync` is Riven's concurrency module.  The user-facing surface
+`std.sync` is Ruxen's concurrency module.  The user-facing surface
 mirrors Rust closely, but v1 ships the types in two waves:
 
 1. **Now (Phase 1-3):** typeck contract + the two utility helpers
@@ -25,7 +25,7 @@ This chapter shows what's typeable today, with explicit markers for
 
 ## 1. The two helpers that work today
 
-```riven
+```ruxen
 use std.sync.Thread
 
 def main
@@ -45,7 +45,7 @@ Both are real, runnable, and pin-tested by
 
 ## 2. Mutex (typeck only)
 
-```riven
+```ruxen
 use std.sync.{Mutex, MutexGuard, PoisonError}
 
 def main
@@ -76,11 +76,11 @@ same source compiles unchanged with a working runtime.
 
 ## 3. SharedSync (typeck only)
 
-`SharedSync[T]` is Riven's atomically reference-counted, thread-safe
+`SharedSync[T]` is Ruxen's atomically reference-counted, thread-safe
 shared pointer. Cloning a `SharedSync` bumps the atomic refcount;
 when the last clone drops, the value is freed.
 
-```riven
+```ruxen
 use std.sync.SharedSync
 
 def main
@@ -102,7 +102,7 @@ end
 
 ## 4. Spawning threads (typeck only)
 
-```riven
+```ruxen
 use std.sync.{Thread, JoinHandle, ThreadPanic}
 
 def main

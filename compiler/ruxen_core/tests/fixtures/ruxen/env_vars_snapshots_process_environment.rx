@@ -1,0 +1,10 @@
+use std.env.vars
+
+def main
+  let m = vars()
+  if m.contains_key("RUXEN_TEST_VARS_KEY")
+    puts "snapshot_has_key"
+  else
+    puts "snapshot_missing_key"
+  end
+end

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Translate a rivenc fixture (.rvn) into equivalent REPL input.
+"""Translate a ruxenc fixture (.rx) into equivalent REPL input.
 
-The rivenc harness runs full programs that each define a `def main
+The ruxenc harness runs full programs that each define a `def main
 ... end` entry point. The REPL evaluates top-level statements one at
 a time. To share the same `.out` expectations with the REPL harness,
 we strip the `def main` wrapper and hoist its body to the top level,

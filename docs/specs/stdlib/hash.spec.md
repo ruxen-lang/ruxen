@@ -8,7 +8,7 @@
 wiring).  Spec backfilled here so the v1 hash surface has a single
 source of truth.
 
-Riven's hashing surface is intentionally thin.  There is one mixin —
+Ruxen's hashing surface is intentionally thin.  There is one mixin —
 `Hashable` (CEO ruling TEC-13: renamed from `Hash` to keep the noun
 slot free for the type) — exposing one method that returns a single
 `Int`.  No `Hasher` builder, no `BuildHasher`, no DOS-resistant
@@ -20,7 +20,7 @@ v2 work; v1 ships exactly enough for `Map[K, V]` and
 
 ## B1 — The `Hashable` mixin
 
-```riven
+```ruxen
 mixin Hashable
   def hash_code -> Int
 end
@@ -32,7 +32,7 @@ end
 the bytes of `x` reachable through `&T`.
 
 The mixin is registered as a built-in by `Resolver::register_builtins`
-(see `crates/riven-core/src/resolve/mod.rs:179-186`); user code
+(see `crates/ruxen-core/src/resolve/mod.rs:179-186`); user code
 needs no `import` to refer to it.
 
 ## B2 — Primitive keys hash via the runtime, not a user-callable method
@@ -41,8 +41,8 @@ needs no `import` to refer to it.
 `UInt64`, `USize`/`ISize`, `Bool`, `Char`, `String`, and `&str` are
 all valid `Map` keys / `Set` elements: the runtime hashes
 them with a stable 64-bit FNV-style mix
-(`runtime/runtime.c::riven_hash_bits` for ints, `riven_hash_str` for
-strings; bool / char widen into `riven_hash_bits`).
+(`runtime/runtime.c::ruxen_hash_bits` for ints, `ruxen_hash_str` for
+strings; bool / char widen into `ruxen_hash_bits`).
 
 In the v1 surface this is a runtime-internal capability — there is
 no user-callable `42.hash_code` method on primitives, and a generic
@@ -67,12 +67,12 @@ Implicit `include Hashable` on a `struct` / `class` / `enum` synthesises
 `hash_code` by hashing each field in declaration order and folding
 the partial hashes through a `combine` mix.  Every field's type
 must itself be `Hashable`; the per-field validator at
-`crates/riven-core/src/implicit_includes/mod.rs::validate_per_field_traits`
+`crates/ruxen-core/src/implicit_includes/mod.rs::validate_per_field_traits`
 emits **E0615** when any field violates the bound (e.g. a struct
 field of type `Array[Int]` rejects implicit `Hashable` because `Array`
 isn't `Hashable`).
 
-```riven
+```ruxen
 struct Score
   player: String
   v: Int
@@ -92,8 +92,8 @@ check is rooted at the type-construction site
 before any insertion call.
 
 The key path inside the runtime
-(`runtime.c::riven_hash_key_hash`) routes string keys through
-`riven_hash_str` and every other key through `riven_hash_bits`,
+(`runtime.c::ruxen_hash_key_hash`) routes string keys through
+`ruxen_hash_str` and every other key through `ruxen_hash_bits`,
 mirroring the mixin dispatch the front-end performs.
 
 ## B5 — `T: Hashable` bound dispatches `hash_code`
@@ -102,7 +102,7 @@ Any generic function with the bound resolves `.hash_code` against
 the mixin method, even when the receiver type is a user struct
 that gained the include implicitly:
 
-```riven
+```ruxen
 def hash_it[T: Hashable](a: &T) -> Int
   a.hash_code
 end

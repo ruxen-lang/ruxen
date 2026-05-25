@@ -7,7 +7,7 @@ canonical surface-syntax §3.7
 
 **Status:** shipped Phase 7 (parser + layout; runtime trampolines).
 
-Riven's FFI surface lets user code declare external C symbols and
+Ruxen's FFI surface lets user code declare external C symbols and
 opt-in unsafe blocks.  This spec covers what the parser accepts and
 what the layout rules guarantee.
 
@@ -15,7 +15,7 @@ what the layout rules guarantee.
 
 ## B1 — `unsafe { ... }` block parses
 
-```riven
+```ruxen
 unsafe
   ptr.deref
 end
@@ -35,7 +35,7 @@ A pointer-typed `nil` reaching outside an `unsafe` block emits
 
 ## B3 — `lib "name"` declaration parses
 
-```riven
+```ruxen
 lib "c"
   def malloc(n: USize) -> *var Void
 end
@@ -54,7 +54,7 @@ the canonical spelling for the C standard library.
 
 ## B5 — `Void` return type
 
-FFI defs may return `Void` (mapped to Riven's `Unit`).
+FFI defs may return `Void` (mapped to Ruxen's `Unit`).
 
 ## B6 — Multi-parameter FFI
 
@@ -65,7 +65,7 @@ Accepts arbitrarily many parameters, mixing scalars and pointers.
 The parser accepts a trailing `...` inside `lib` block `def`
 signatures:
 
-```riven
+```ruxen
 lib "c"
   def printf(fmt: *UInt8, ...) -> Int32
 end
@@ -111,7 +111,7 @@ called C function must not retain it beyond that call.  To transfer
 ownership across the boundary, the wrapper must spell the transfer
 out — e.g. `String.from_raw(ptr, len)` to take ownership of a
 returned C buffer, or `Box.from_raw(ptr)` for a single allocation.
-Riven does not insert any implicit drop for raw pointers.
+Ruxen does not insert any implicit drop for raw pointers.
 
 ---
 
@@ -139,9 +139,9 @@ Riven does not insert any implicit drop for raw pointers.
 
 ## Out of scope (v2)
 
-- Calling C from Riven at runtime — Phase 7 covers parser + layout +
+- Calling C from Ruxen at runtime — Phase 7 covers parser + layout +
   declaration; the call-trampoline pin tests still need to land
   (tracked in the Phase 7 prompt).
 - C++ name mangling.
 - Bit-field / `_Atomic` layout matching.
-- Calling Riven from C (would need a stable Riven C header).
+- Calling Ruxen from C (would need a stable Ruxen C header).

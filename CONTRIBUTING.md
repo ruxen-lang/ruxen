@@ -1,6 +1,6 @@
-# Contributing to Riven
+# Contributing to Ruxen
 
-Thanks for your interest. Riven is pre-1.0 — APIs and internals can
+Thanks for your interest. Ruxen is pre-1.0 — APIs and internals can
 shift between commits.
 
 ## Getting started
@@ -36,7 +36,7 @@ fix(mir): close P0.2 Drop gaps for reassignment and loop bodies
 ## Error codes
 
 Every diagnostic emitted via `Diagnostic::error_with_code` must have
-an entry in `crates/riven-core/src/diagnostics/codes.rs`. The
+an entry in `crates/ruxen-core/src/diagnostics/codes.rs`. The
 `tests/error_code_registry.rs` integration test will fail the build
 if a code is used without a registry entry.
 
@@ -51,11 +51,11 @@ Reserved namespaces (see `docs/requirements/ROADMAP.md`):
 
 ## Memory caps
 
-`rivenc` can leak memory on certain inputs. Use the wrapper script when
+`ruxenc` can leak memory on certain inputs. Use the wrapper script when
 running it on large or untrusted sources:
 
 ```
-scripts/rivenc-rss-cap.sh -- <args>
+scripts/ruxenc-rss-cap.sh -- <args>
 ```
 
 It SIGKILLs the child if RSS exceeds 8 GiB.

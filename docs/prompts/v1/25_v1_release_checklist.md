@@ -8,7 +8,7 @@
 - [ ] `cargo test --workspace` green on master.
 - [ ] CI green on Ubuntu-latest, macOS-14, MSRV 1.91.
 - [ ] No `#[ignore]` test additions.
-- [ ] No `riven_noop_passthrough` for any user-callable method.
+- [ ] No `ruxen_noop_passthrough` for any user-callable method.
 - [ ] Every error code emitted is in `diagnostics::codes::REGISTRY`
       (the registry test enforces this).
 - [ ] Every E-code has a `docs/errors/E<NNNN>.md` long-form file.
@@ -16,7 +16,7 @@
       mdBook build, all examples compile and run.
 - [ ] All in-tree examples (`examples/01-..` through wherever 5+)
       build and run.
-- [ ] `riven doc` builds the stdlib doc site without warnings.
+- [ ] `ruxen doc` builds the stdlib doc site without warnings.
 - [ ] Benchmark suite runs and produces a baseline JSON committed at
       `bench/baselines/v1.0.0.json`.
 
@@ -24,17 +24,17 @@
 
 - [ ] Build release tarball via `release.yml`; install on a clean VM
       per OS (linux-x64, linux-aarch64, darwin-x64, darwin-aarch64).
-- [ ] `riven new hello && cd hello && riven run` works end-to-end.
-- [ ] `riven test` finds and runs functions marked with the `test`
+- [ ] `ruxen new hello && cd hello && ruxen run` works end-to-end.
+- [ ] `ruxen test` finds and runs functions marked with the `test`
       in-body directive.
-- [ ] `riven explain E0001` prints title + long-form.
-- [ ] `riven doc` generates a doc site for the new project.
+- [ ] `ruxen explain E0001` prints title + long-form.
+- [ ] `ruxen doc` generates a doc site for the new project.
 - [ ] LSP launches in VSCode extension and serves diagnostics +
       completion.
 
 ## Soundness audit
 
-- [ ] Run a leak audit on every `crates/riven-core/tests/*`
+- [ ] Run a leak audit on every `crates/ruxen-core/tests/*`
       that exercises user code; `outstanding == 0` for all.
 - [ ] Run a UB audit: build with `RUSTFLAGS="-Zsanitizer=address"`
       (or equivalent) and execute the e2e suite; no failures.

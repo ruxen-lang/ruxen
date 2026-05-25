@@ -28,13 +28,13 @@
  * `Command.arg/.args/...`). One terminal call (`File.open_options(p, o)`)
  * consumes the configuration; the OpenOptions value itself stays alive
  * for any further use and is freed by the scope-exit drop pipeline via
- * the generic `riven_dealloc` (no inner heap — 8-byte POD).
+ * the generic `ruxen_dealloc` (no inner heap — 8-byte POD).
  *
  * `SeekFrom` is a tagged enum with three struct-variants, each carrying
- * a single `offset: Int`. The codegen lays every Riven enum out as a
+ * a single `offset: Int`. The codegen lays every Ruxen enum out as a
  * 16-byte boxed pointer with `{i32 tag; i32 pad; i64 payload}` — for
  * a single-field struct variant the payload slot IS the field. So
- * `riven_file_seek` reads tag at +0 and offset at +8 directly.
+ * `ruxen_file_seek` reads tag at +0 and offset at +8 directly.
  *
  *     SeekFrom.Start(n)   -> tag 0,  whence SEEK_SET
  *     SeekFrom.End(n)     -> tag 1,  whence SEEK_END
@@ -42,17 +42,17 @@
  *
  * Drop semantics: `File` participates in the user_drop_classes pipeline
  * (see mir/lower/collect.rs::collect_user_drop_classes). At scope exit
- * the MIR emits `File_drop(f) + riven_dealloc(f)`. `riven_file_drop`
+ * the MIR emits `File_drop(f) + ruxen_dealloc(f)`. `ruxen_file_drop`
  * closes the fd iff `closed == 0` and then returns; the dealloc that
  * follows releases the 8-byte spine.
  *
  * Wire layouts:
  *
- *   RivenFile  (8 bytes)
+ *   RuxenFile  (8 bytes)
  *     +0   int32  fd       — open file descriptor (or -1 once closed)
  *     +4   int32  closed   — 1 once `close` has been called; idempotent
  *
- *   RivenOpenOptions  (8 bytes)
+ *   RuxenOpenOptions  (8 bytes)
  *     +0   u8     read
  *     +1   u8     write
  *     +2   u8     append
@@ -63,14 +63,14 @@
  *     +7   u8
  */
 
-#define RIVEN_SEEK_FROM_START   0
-#define RIVEN_SEEK_FROM_END     1
-#define RIVEN_SEEK_FROM_CURRENT 2
+#define RUXEN_SEEK_FROM_START   0
+#define RUXEN_SEEK_FROM_END     1
+#define RUXEN_SEEK_FROM_CURRENT 2
 
-/* RivenFile struct body lives in runtime.h so io/bufio.c can read
+/* RuxenFile struct body lives in runtime.h so io/bufio.c can read
  * `->fd` / `->closed` after a cross-TU cast. */
-_Static_assert(sizeof(RivenFile) == 8,
-    "RivenFile wire layout drifted from documented 8-byte form");
+_Static_assert(sizeof(RuxenFile) == 8,
+    "RuxenFile wire layout drifted from documented 8-byte form");
 
 typedef struct {
     uint8_t read;
@@ -80,17 +80,17 @@ typedef struct {
     uint8_t create;
     uint8_t create_new;
     uint8_t _pad[2];
-} RivenOpenOptions;
+} RuxenOpenOptions;
 
-_Static_assert(sizeof(RivenOpenOptions) == 8,
-    "RivenOpenOptions wire layout drifted from documented 8-byte form");
+_Static_assert(sizeof(RuxenOpenOptions) == 8,
+    "RuxenOpenOptions wire layout drifted from documented 8-byte form");
 
 /* Wrap an existing fd in a Result::Ok(File). */
-static void *riven_file_wrap_ok(int fd) {
-    RivenFile *f = (RivenFile *)riven_alloc(sizeof(RivenFile));
+static void *ruxen_file_wrap_ok(int fd) {
+    RuxenFile *f = (RuxenFile *)ruxen_alloc(sizeof(RuxenFile));
     f->fd = fd;
     f->closed = 0;
-    return riven_result_ok_value((int64_t)f);
+    return ruxen_result_ok_value((int64_t)f);
 }
 
 /* Build a Result::Err(IoError::InvalidInput(<msg>)) for the static
@@ -99,36 +99,36 @@ static void *riven_file_wrap_ok(int fd) {
  * variants happens via `IoError.message()` returning the canonical
  * static string. We therefore use the runtime helper that allocates a
  * unit-variant value with the canonical message. */
-static void *riven_file_invalid_input(void) {
-    return riven_result_err_value(
-        (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+static void *ruxen_file_invalid_input(void) {
+    return ruxen_result_err_value(
+        (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
 }
 
-void *riven_file_open(const char *path) {
-    if (!path) return riven_file_invalid_input();
+void *ruxen_file_open(const char *path) {
+    if (!path) return ruxen_file_invalid_input();
     int fd = open(path, O_RDONLY);
     if (fd < 0) {
-        return riven_io_error_from_errno(errno);
+        return ruxen_io_error_from_errno(errno);
     }
-    return riven_file_wrap_ok(fd);
+    return ruxen_file_wrap_ok(fd);
 }
 
-void *riven_file_create(const char *path) {
-    if (!path) return riven_file_invalid_input();
+void *ruxen_file_create(const char *path) {
+    if (!path) return ruxen_file_invalid_input();
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
-        return riven_io_error_from_errno(errno);
+        return ruxen_io_error_from_errno(errno);
     }
-    return riven_file_wrap_ok(fd);
+    return ruxen_file_wrap_ok(fd);
 }
 
-void *riven_file_append(const char *path) {
-    if (!path) return riven_file_invalid_input();
+void *ruxen_file_append(const char *path) {
+    if (!path) return ruxen_file_invalid_input();
     int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (fd < 0) {
-        return riven_io_error_from_errno(errno);
+        return ruxen_io_error_from_errno(errno);
     }
-    return riven_file_wrap_ok(fd);
+    return ruxen_file_wrap_ok(fd);
 }
 
 /* Derive `open(2)` flags from an OpenOptions value. E0711:
@@ -147,11 +147,11 @@ void *riven_file_append(const char *path) {
  *   create=1                            -> O_CREAT (mode 0644)
  *   create_new=1                        -> O_CREAT|O_EXCL (overrides create)
  */
-void *riven_file_open_options(const char *path, RivenOpenOptions *opts) {
-    if (!path || !opts) return riven_file_invalid_input();
+void *ruxen_file_open_options(const char *path, RuxenOpenOptions *opts) {
+    if (!path || !opts) return ruxen_file_invalid_input();
     if (!opts->read && !opts->write && !opts->append) {
         /* E0711 at runtime — see comment above for the deferral note. */
-        return riven_file_invalid_input();
+        return ruxen_file_invalid_input();
     }
     int flags = 0;
     if (opts->read && (opts->write || opts->append)) {
@@ -175,14 +175,14 @@ void *riven_file_open_options(const char *path, RivenOpenOptions *opts) {
         fd = open(path, flags);
     }
     if (fd < 0) {
-        return riven_io_error_from_errno(errno);
+        return ruxen_io_error_from_errno(errno);
     }
-    return riven_file_wrap_ok(fd);
+    return ruxen_file_wrap_ok(fd);
 }
 
 /* `File.read(buf: &mut Array[U8]) -> Result[Int, IoError]`.
  *
- * v1 simplification: buf is a `RivenVec` whose element slots are
+ * v1 simplification: buf is a `RuxenVec` whose element slots are
  * int64_t (the uniform Vec representation). We read into a stack
  * staging buffer of `min(remaining_cap, 4096)` bytes and push each
  * byte as a single int64 slot. This keeps the wire-level contract
@@ -192,33 +192,33 @@ void *riven_file_open_options(const char *path, RivenOpenOptions *opts) {
  *
  * Returns Ok(0) on EOF, Ok(n) on n>0 bytes, Err on real failure.
  * Retries on EINTR. */
-void *riven_file_read(RivenFile *f, RivenVec *buf) {
-    if (!f || f->closed || !buf) return riven_file_invalid_input();
+void *ruxen_file_read(RuxenFile *f, RuxenVec *buf) {
+    if (!f || f->closed || !buf) return ruxen_file_invalid_input();
     unsigned char stage[4096];
     ssize_t got;
     do {
         got = read(f->fd, stage, sizeof(stage));
     } while (got < 0 && errno == EINTR);
     if (got < 0) {
-        return riven_io_error_from_errno(errno);
+        return ruxen_io_error_from_errno(errno);
     }
     for (ssize_t i = 0; i < got; i++) {
-        riven_vec_push(buf, (int64_t)stage[i]);
+        ruxen_vec_push(buf, (int64_t)stage[i]);
     }
-    return riven_result_ok_value(got);
+    return ruxen_result_ok_value(got);
 }
 
-void *riven_file_read_to_string(RivenFile *f) {
-    if (!f || f->closed) return riven_file_invalid_input();
+void *ruxen_file_read_to_string(RuxenFile *f) {
+    if (!f || f->closed) return ruxen_file_invalid_input();
     size_t cap = 256;
     size_t len = 0;
     char *out = (char *)malloc(cap);
-    if (!out) riven_panic("out of memory");
+    if (!out) ruxen_panic("out of memory");
     for (;;) {
         if (len + 1 >= cap) {
             size_t next_cap = cap * 2;
             char *next = (char *)realloc(out, next_cap);
-            if (!next) { free(out); riven_panic("out of memory"); }
+            if (!next) { free(out); ruxen_panic("out of memory"); }
             out = next;
             cap = next_cap;
         }
@@ -229,22 +229,22 @@ void *riven_file_read_to_string(RivenFile *f) {
         if (got < 0) {
             int saved = errno;
             free(out);
-            return riven_io_error_from_errno(saved);
+            return ruxen_io_error_from_errno(saved);
         }
         if (got == 0) break;
         len += (size_t)got;
     }
     out[len] = '\0';
-    /* `riven_string_from` performs the canonical copy into the String
+    /* `ruxen_string_from` performs the canonical copy into the String
      * pool; free our staging buffer afterwards. */
-    char *s = riven_string_from(out);
+    char *s = ruxen_string_from(out);
     free(out);
-    return riven_result_ok_value((int64_t)s);
+    return ruxen_result_ok_value((int64_t)s);
 }
 
-void *riven_file_read_all(RivenFile *f) {
-    if (!f || f->closed) return riven_file_invalid_input();
-    RivenVec *v = riven_vec_new();
+void *ruxen_file_read_all(RuxenFile *f) {
+    if (!f || f->closed) return ruxen_file_invalid_input();
+    RuxenVec *v = ruxen_vec_new();
     unsigned char stage[4096];
     for (;;) {
         ssize_t got;
@@ -254,27 +254,27 @@ void *riven_file_read_all(RivenFile *f) {
         if (got < 0) {
             int saved = errno;
             /* Caller will not see the partial Vec on error; free it. */
-            riven_dealloc(v);
-            return riven_io_error_from_errno(saved);
+            ruxen_dealloc(v);
+            return ruxen_io_error_from_errno(saved);
         }
         if (got == 0) break;
         for (ssize_t i = 0; i < got; i++) {
-            riven_vec_push(v, (int64_t)stage[i]);
+            ruxen_vec_push(v, (int64_t)stage[i]);
         }
     }
-    return riven_result_ok_value((int64_t)v);
+    return ruxen_result_ok_value((int64_t)v);
 }
 
 /* `File.write(bytes: &Array[U8]) -> Result[Int, IoError]`. Single
  * `write(2)` call. Partial writes are possible and surface as
  * Ok(n) where n < bytes.len; the caller chooses how to retry. Use
  * `write_all` if a loop-until-complete contract is wanted. */
-void *riven_file_write(RivenFile *f, RivenVec *bytes) {
-    if (!f || f->closed || !bytes) return riven_file_invalid_input();
+void *ruxen_file_write(RuxenFile *f, RuxenVec *bytes) {
+    if (!f || f->closed || !bytes) return ruxen_file_invalid_input();
     /* Stage the int64-slot bytes into a tight buffer for `write(2)`. */
     size_t n = (size_t)bytes->len;
     unsigned char *stage = (unsigned char *)malloc(n > 0 ? n : 1);
-    if (!stage) riven_panic("out of memory");
+    if (!stage) ruxen_panic("out of memory");
     for (size_t i = 0; i < n; i++) {
         stage[i] = (unsigned char)(bytes->data[i] & 0xFF);
     }
@@ -285,17 +285,17 @@ void *riven_file_write(RivenFile *f, RivenVec *bytes) {
     if (put < 0) {
         int saved = errno;
         free(stage);
-        return riven_io_error_from_errno(saved);
+        return ruxen_io_error_from_errno(saved);
     }
     free(stage);
-    return riven_result_ok_value((int64_t)put);
+    return ruxen_result_ok_value((int64_t)put);
 }
 
-void *riven_file_write_all(RivenFile *f, RivenVec *bytes) {
-    if (!f || f->closed || !bytes) return riven_file_invalid_input();
+void *ruxen_file_write_all(RuxenFile *f, RuxenVec *bytes) {
+    if (!f || f->closed || !bytes) return ruxen_file_invalid_input();
     size_t n = (size_t)bytes->len;
     unsigned char *stage = (unsigned char *)malloc(n > 0 ? n : 1);
-    if (!stage) riven_panic("out of memory");
+    if (!stage) ruxen_panic("out of memory");
     for (size_t i = 0; i < n; i++) {
         stage[i] = (unsigned char)(bytes->data[i] & 0xFF);
     }
@@ -308,25 +308,25 @@ void *riven_file_write_all(RivenFile *f, RivenVec *bytes) {
         if (put < 0) {
             int saved = errno;
             free(stage);
-            return riven_io_error_from_errno(saved);
+            return ruxen_io_error_from_errno(saved);
         }
         if (put == 0) {
             /* WriteZero per std::io contract: write returned 0 with
              * bytes remaining and no signaled error. */
             free(stage);
-            return riven_result_err_value(
-                (int64_t)riven_io_error_struct(
-                    RIVEN_IO_ERROR_WRITE_ZERO,
+            return ruxen_result_err_value(
+                (int64_t)ruxen_io_error_struct(
+                    RUXEN_IO_ERROR_WRITE_ZERO,
                     "write returned 0 with bytes remaining"));
         }
         off += (size_t)put;
     }
     free(stage);
-    return riven_result_ok_value(0);
+    return ruxen_result_ok_value(0);
 }
 
-void *riven_file_write_str(RivenFile *f, const char *s) {
-    if (!f || f->closed) return riven_file_invalid_input();
+void *ruxen_file_write_str(RuxenFile *f, const char *s) {
+    if (!f || f->closed) return ruxen_file_invalid_input();
     if (!s) s = "";
     size_t n = strlen(s);
     size_t off = 0;
@@ -336,17 +336,17 @@ void *riven_file_write_str(RivenFile *f, const char *s) {
             put = write(f->fd, s + off, n - off);
         } while (put < 0 && errno == EINTR);
         if (put < 0) {
-            return riven_io_error_from_errno(errno);
+            return ruxen_io_error_from_errno(errno);
         }
         if (put == 0) {
-            return riven_result_err_value(
-                (int64_t)riven_io_error_struct(
-                    RIVEN_IO_ERROR_WRITE_ZERO,
+            return ruxen_result_err_value(
+                (int64_t)ruxen_io_error_struct(
+                    RUXEN_IO_ERROR_WRITE_ZERO,
                     "write returned 0 with bytes remaining"));
         }
         off += (size_t)put;
     }
-    return riven_result_ok_value(0);
+    return ruxen_result_ok_value(0);
 }
 
 /* `File.flush()` — POSIX `write(2)` has no userspace buffer to flush.
@@ -354,9 +354,9 @@ void *riven_file_write_str(RivenFile *f, const char *s) {
  * File the contract is just Ok(()). We deliberately do NOT fsync()
  * here — that would be a much heavier semantic and is what
  * `fs.write_atomic` covers (durability) when added in T3. */
-void *riven_file_flush(RivenFile *f) {
-    if (!f || f->closed) return riven_file_invalid_input();
-    return riven_result_ok_value(0);
+void *ruxen_file_flush(RuxenFile *f) {
+    if (!f || f->closed) return ruxen_file_invalid_input();
+    return ruxen_result_ok_value(0);
 }
 
 /* `File.seek(pos: SeekFrom) -> Result[Int, IoError]`. `pos` is a
@@ -365,68 +365,68 @@ void *riven_file_flush(RivenFile *f) {
  * file position before byte 0 is meaningless. We surface it as
  * Result::Err(IoError::InvalidInput) at runtime, matching the prompt's
  * "runtime check ok if not statically detectable" fallback. */
-void *riven_file_seek(RivenFile *f, void *pos) {
-    if (!f || f->closed || !pos) return riven_file_invalid_input();
+void *ruxen_file_seek(RuxenFile *f, void *pos) {
+    if (!f || f->closed || !pos) return ruxen_file_invalid_input();
     int32_t tag = *(int32_t *)pos;
     int64_t offset = ((int64_t *)pos)[1];
     int whence;
     switch (tag) {
-        case RIVEN_SEEK_FROM_START:
+        case RUXEN_SEEK_FROM_START:
             if (offset < 0) {
                 /* E0712: negative offset on Start. */
-                return riven_file_invalid_input();
+                return ruxen_file_invalid_input();
             }
             whence = SEEK_SET;
             break;
-        case RIVEN_SEEK_FROM_END:
+        case RUXEN_SEEK_FROM_END:
             whence = SEEK_END;
             break;
-        case RIVEN_SEEK_FROM_CURRENT:
+        case RUXEN_SEEK_FROM_CURRENT:
             whence = SEEK_CUR;
             break;
         default:
-            return riven_file_invalid_input();
+            return ruxen_file_invalid_input();
     }
     off_t pos_new = lseek(f->fd, (off_t)offset, whence);
     if (pos_new == (off_t)-1) {
-        return riven_io_error_from_errno(errno);
+        return ruxen_io_error_from_errno(errno);
     }
-    return riven_result_ok_value((int64_t)pos_new);
+    return ruxen_result_ok_value((int64_t)pos_new);
 }
 
 /* `File.metadata() -> Result[Metadata, IoError]`. Reuses the
- * `RivenMetadata` wire format produced by `riven_fs_metadata` — 3
+ * `RuxenMetadata` wire format produced by `ruxen_fs_metadata` — 3
  * int64s {size, modified_secs, kind}. fstat(2) so we report the
  * underlying file's identity, not whatever path created the fd. */
-void *riven_file_metadata(RivenFile *f) {
-    if (!f || f->closed) return riven_file_invalid_input();
+void *ruxen_file_metadata(RuxenFile *f) {
+    if (!f || f->closed) return ruxen_file_invalid_input();
     struct stat st;
     if (fstat(f->fd, &st) != 0) {
-        return riven_io_error_from_errno(errno);
+        return ruxen_io_error_from_errno(errno);
     }
-    int64_t *meta = (int64_t *)riven_alloc(24);
+    int64_t *meta = (int64_t *)ruxen_alloc(24);
     meta[0] = (int64_t)st.st_size;
     meta[1] = (int64_t)st.st_mtime;
     int64_t kind;
     if (S_ISREG(st.st_mode)) {
-        kind = RIVEN_METADATA_KIND_FILE;
+        kind = RUXEN_METADATA_KIND_FILE;
     } else if (S_ISDIR(st.st_mode)) {
-        kind = RIVEN_METADATA_KIND_DIR;
+        kind = RUXEN_METADATA_KIND_DIR;
     } else if (S_ISLNK(st.st_mode)) {
-        kind = RIVEN_METADATA_KIND_SYMLINK;
+        kind = RUXEN_METADATA_KIND_SYMLINK;
     } else {
-        kind = RIVEN_METADATA_KIND_OTHER;
+        kind = RUXEN_METADATA_KIND_OTHER;
     }
     meta[2] = kind;
-    return riven_result_ok_value((int64_t)meta);
+    return ruxen_result_ok_value((int64_t)meta);
 }
 
 /* `File.close()` — idempotent. Returns Ok(()) on first successful
  * close, Ok(()) on subsequent calls (no-op), Err on close(2) failure
  * (rare: EBADF, EIO). */
-void *riven_file_close(RivenFile *f) {
-    if (!f) return riven_file_invalid_input();
-    if (f->closed) return riven_result_ok_value(0);
+void *ruxen_file_close(RuxenFile *f) {
+    if (!f) return ruxen_file_invalid_input();
+    if (f->closed) return ruxen_result_ok_value(0);
     int rc;
     do {
         rc = close(f->fd);
@@ -434,16 +434,16 @@ void *riven_file_close(RivenFile *f) {
     f->closed = 1;
     f->fd = -1;
     if (rc < 0) {
-        return riven_io_error_from_errno(errno);
+        return ruxen_io_error_from_errno(errno);
     }
-    return riven_result_ok_value(0);
+    return ruxen_result_ok_value(0);
 }
 
 /* Drop helper for File — closes the fd if still open. Registered in
  * `mir/lower/collect.rs::collect_user_drop_classes` so the MIR emits
- * `File_drop(f) + riven_dealloc(f)` at scope exit. The dealloc that
+ * `File_drop(f) + ruxen_dealloc(f)` at scope exit. The dealloc that
  * follows releases the 8-byte spine. */
-void riven_file_drop(RivenFile *f) {
+void ruxen_file_drop(RuxenFile *f) {
     if (!f) return;
     if (!f->closed && f->fd >= 0) {
         int rc;
@@ -458,8 +458,8 @@ void riven_file_drop(RivenFile *f) {
 
 /* ── OpenOptions builder ──────────────────────────────────────────── */
 
-RivenOpenOptions *riven_open_options_new(void) {
-    RivenOpenOptions *o = (RivenOpenOptions *)riven_alloc(sizeof(RivenOpenOptions));
+RuxenOpenOptions *ruxen_open_options_new(void) {
+    RuxenOpenOptions *o = (RuxenOpenOptions *)ruxen_alloc(sizeof(RuxenOpenOptions));
     o->read = 0;
     o->write = 0;
     o->append = 0;
@@ -471,47 +471,47 @@ RivenOpenOptions *riven_open_options_new(void) {
     return o;
 }
 
-RivenOpenOptions *riven_open_options_read(RivenOpenOptions *o, int64_t v) {
+RuxenOpenOptions *ruxen_open_options_read(RuxenOpenOptions *o, int64_t v) {
     if (!o) return o;
     o->read = v ? 1 : 0;
     return o;
 }
 
-RivenOpenOptions *riven_open_options_write(RivenOpenOptions *o, int64_t v) {
+RuxenOpenOptions *ruxen_open_options_write(RuxenOpenOptions *o, int64_t v) {
     if (!o) return o;
     o->write = v ? 1 : 0;
     return o;
 }
 
-RivenOpenOptions *riven_open_options_append(RivenOpenOptions *o, int64_t v) {
+RuxenOpenOptions *ruxen_open_options_append(RuxenOpenOptions *o, int64_t v) {
     if (!o) return o;
     o->append = v ? 1 : 0;
     return o;
 }
 
-RivenOpenOptions *riven_open_options_truncate(RivenOpenOptions *o, int64_t v) {
+RuxenOpenOptions *ruxen_open_options_truncate(RuxenOpenOptions *o, int64_t v) {
     if (!o) return o;
     o->truncate = v ? 1 : 0;
     return o;
 }
 
-RivenOpenOptions *riven_open_options_create(RivenOpenOptions *o, int64_t v) {
+RuxenOpenOptions *ruxen_open_options_create(RuxenOpenOptions *o, int64_t v) {
     if (!o) return o;
     o->create = v ? 1 : 0;
     return o;
 }
 
-RivenOpenOptions *riven_open_options_create_new(RivenOpenOptions *o, int64_t v) {
+RuxenOpenOptions *ruxen_open_options_create_new(RuxenOpenOptions *o, int64_t v) {
     if (!o) return o;
     o->create_new = v ? 1 : 0;
     return o;
 }
 
-void riven_print_int(int64_t n) {
+void ruxen_print_int(int64_t n) {
     printf("%" PRId64 "\n", n);
 }
 
-void riven_print_float(double f) {
+void ruxen_print_float(double f) {
     printf("%g\n", f);
 }
 

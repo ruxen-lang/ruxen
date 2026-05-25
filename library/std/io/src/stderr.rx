@@ -1,0 +1,13 @@
+## std::io::Stderr — handle returned by `stderr()`. Same shape as
+## Stdout: Result-typed `write_str` / `flush` plus error-swallowing
+## `eprint` / `eprintln`.
+##
+## Migrated in #06.95 Phase E Slice B.2 from runtime_table.
+class Stderr
+  lib "runtime/stdio.c"
+    def write_str as "ruxen_stderr_write_str"(self, s: &String) -> Result[(), IoError]
+    def flush as "ruxen_stderr_flush"(self) -> Result[(), IoError]
+    def eprint as "ruxen_stderr_eprint"(self, s: &String) -> ()
+    def eprintln as "ruxen_stderr_eprintln"(self, s: &String) -> ()
+  end
+end

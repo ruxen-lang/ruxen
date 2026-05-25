@@ -10,7 +10,7 @@ This spec describes the **observable behaviour** of `std.fmt` — the
 `Display` and `Debug` mixins, the `Formatter` class, the string-
 interpolation lowering, and the format-spec surface (`width`, `align`,
 `fill`, `precision`, `:?`).  Each behaviour is numbered and pinned by
-one or more Rust integration tests in `crates/riven-core/tests/`.
+one or more Rust integration tests in `crates/ruxen-core/tests/`.
 
 ---
 
@@ -66,7 +66,7 @@ fmt = Formatter_new()              # or _new_with_spec(...)  see B6
 buf = Formatter_buffer(fmt)
 ```
 
-The legacy ad-hoc `riven_<prim>_to_string` direct call at the
+The legacy ad-hoc `ruxen_<prim>_to_string` direct call at the
 interp site is gone (it still lives inside the synth `_fmt` body — a
 different MIR function).
 
@@ -167,15 +167,15 @@ inside `_buffer` itself.
 | B1        | `interpolation_user_impl_display_money_round_trips`              | `stdlib_fmt_runtime.rs`               |
 | B2        | `debug_trait_is_resolvable_with_fmt_method`                      | `stdlib_fmt.rs`                       |
 | B2        | `debug_interpolation_spec_typechecks`                            | `stdlib_fmt.rs`                       |
-| B2        | implicit-Debug E2E fixtures `85_implicit_debug.rvn` etc.         | `tests/release-e2e/cases/`            |
+| B2        | implicit-Debug E2E fixtures `85_implicit_debug.rx` etc.         | `tests/release-e2e/cases/`            |
 | B3        | `formatter_write_str_then_buffer_round_trips`                    | `stdlib_fmt_runtime.rs`               |
 | B3        | `formatter_write_char_ascii_round_trips`                         | `stdlib_fmt_runtime.rs`               |
 | B3        | `formatter_len_after_write_str`                                  | `stdlib_fmt_runtime.rs`               |
 | B3        | `formatter_write_str_returns_result_unit_fmt_error`              | `stdlib_fmt.rs`                       |
 | B4        | `synth_primitive_fmt_functions_emitted`                          | `stdlib_fmt_display_dispatch.rs`      |
 | B4        | `interpolation_primitive_goes_through_display`                   | `stdlib_fmt_display_dispatch.rs`      |
-| B5        | implicit-Debug fixtures + existing interp E2E in `05_string_interp.rvn` | `tests/release-e2e/cases/`      |
-| B6        | `lex_format_spec_*` (8 tests)                                    | `crates/riven-core/src/lexer/tests.rs`|
+| B5        | implicit-Debug fixtures + existing interp E2E in `05_string_interp.rx` | `tests/release-e2e/cases/`      |
+| B6        | `lex_format_spec_*` (8 tests)                                    | `crates/ruxen-core/src/lexer/tests.rs`|
 | B6        | `width_and_precision_specs_typecheck`                            | `stdlib_fmt.rs`                       |
 | B7        | `interpolation_width_right_align_pads_int`                       | `stdlib_fmt_runtime.rs`               |
 | B7        | `interpolation_width_left_align_pads_int`                        | `stdlib_fmt_runtime.rs`               |
@@ -187,8 +187,8 @@ inside `_buffer` itself.
 | B10       | covered transitively by B7 / B8 / B9                             |                                       |
 | B11       | covered transitively by B3 + every interp test                   |                                       |
 
-E2E coverage: `tests/release-e2e/cases/070_interp_display_dispatch.rvn`
-(B1 + B4) and `071_interp_format_specs.rvn` (B7 + B8 + B9).
+E2E coverage: `tests/release-e2e/cases/070_interp_display_dispatch.rx`
+(B1 + B4) and `071_interp_format_specs.rx` (B7 + B8 + B9).
 
 ---
 

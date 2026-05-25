@@ -1,10 +1,10 @@
 ## Examples
 
-Each example is a stand-alone Riven package. Build and run with:
+Each example is a stand-alone Ruxen package. Build and run with:
 
 ```
 cd <example-dir>
-riven run
+ruxen run
 ```
 
 | Example                | Showcases                                                     |

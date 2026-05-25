@@ -116,9 +116,9 @@ same `ExitStatus` shape as `.status`.
 
 - `process_run(cmd, args) -> Int` free-fn — superseded by
   `Command.new(cmd).args(args).status`.  The C symbol
-  `riven_process_run` is still linked (it is the implementation used
-  internally by `riven_command_status`) but is no longer reachable
-  from Riven user code.
+  `ruxen_process_run` is still linked (it is the implementation used
+  internally by `ruxen_command_status`) but is no longer reachable
+  from Ruxen user code.
 
 ## Out of scope (v2)
 

@@ -5,7 +5,7 @@ Owner: compiler
 Depends on: tier-1 doc 04 (Drop) for vtable drop slot; associated types
             (doc 01) for projection-safety rule
 Blocks: plugin/script interfaces; heterogeneous collections
-        (`Array[Box[any Drawable]]`); event-driven code
+        (`Array[Box[any Drawable]]`); event-druxen code
 
 ## 1. Summary & Motivation
 
@@ -108,7 +108,7 @@ tier-1 doc 04 ships (else `any Mixin` leaks when dropped).
   `any Display + Ord` with E-DYN-MULTI.
 - **NG2.** Downcasting (`Any` mixin). Separate feature.
 - **NG3.** `any Mixin` by-value on the stack (DST / unsized locals).
-  Rust doesn't allow this without `Box`/`&`. Riven follows.
+  Rust doesn't allow this without `Box`/`&`. Ruxen follows.
 - **NG4.** Custom vtable layouts (`repr(C, any)` or similar). Fixed
   layout specified in §5.
 - **NG5.** Mixin upcasting (`&any Sub` → `&any Super`). Rust shipped
@@ -200,7 +200,7 @@ Rationale for 0/1/2:
   to the type's drop glue (tier-1 doc 04 §7).
 - `size` (slot 1): needed for `Box[any Mixin]`'s heap free — the
   allocator needs to know how many bytes to free. Same for
-  `riven_dealloc`.
+  `ruxen_dealloc`.
 - `align` (slot 2): needed for allocation.
 
 ### 5.2 Fat-pointer representation
@@ -240,10 +240,10 @@ load vtbl = box_val.vtbl
 load drop_fn = vtbl.drop
 load size = vtbl.size
 call drop_fn(box_val.data)
-call riven_dealloc(box_val.data, size)  // or riven_dealloc(box_val.data) if the runtime tracks sizes
+call ruxen_dealloc(box_val.data, size)  // or ruxen_dealloc(box_val.data) if the runtime tracks sizes
 ```
 
-The heap-free variant depends on the runtime. Today `riven_dealloc`
+The heap-free variant depends on the runtime. Today `ruxen_dealloc`
 takes a pointer and calls `free` (`runtime/runtime.c:156-158`); the
 vtable's `size` field is informational but may enable a future
 size-classed allocator.
@@ -263,7 +263,7 @@ int64_t __shim_Square_area(void *self_data, ...) {
 ```
 
 The shim is trivial (a cast + tail call). It preserves the
-`def var foo(&var self, ...)` self-mode correctly because Riven's
+`def var foo(&var self, ...)` self-mode correctly because Ruxen's
 calling convention is the same whether self is typed as `*var u8` or
 `&var Concrete` at the ABI level.
 
@@ -288,7 +288,7 @@ No new syntax. `any Mixin` already parses.
 
 ### 6.2 Construction
 
-```riven
+```ruxen
 class Square
   side: Float
   include Display
@@ -314,7 +314,7 @@ Rules:
 
 ### 6.3 Use
 
-```riven
+```ruxen
 def print_all(items: &Array[Box[any Display]])
   for item in items
     puts item.to_display
@@ -422,7 +422,7 @@ traits must be droppable. Tier-1 is a hard prerequisite.
   Recommendation: add in 06a or explicitly defer. See tutorial's
   `docs/tutorial/08-mixins.md:108`.
 - **OQ-2: vtable alignment.** 8-byte on 64-bit. ARM32 / wasm32 would
-  need 4-byte. Riven currently targets 64-bit only (tier-1 assumes
+  need 4-byte. Ruxen currently targets 64-bit only (tier-1 assumes
   `ISize/USize == 64`).
 - **OQ-3: vtable equality.** Two vtables for `(Square, Display)`
   emitted in different compilation units — must they be pointer-
@@ -484,9 +484,9 @@ traits must be droppable. Tier-1 is a hard prerequisite.
 
 ### 10.3 Fixture additions
 
-- `tests/fixtures/dyn_basic.rvn` — shape hierarchy with
+- `tests/fixtures/dyn_basic.rx` — shape hierarchy with
   `Array[Box[any Drawable]]`.
-- `tests/fixtures/dyn_iterator.rvn` — `any Iterator[Item = Int]`.
-- `tests/fixtures/dyn_callback.rvn` — `Box[any Fn()]` field.
-- `tests/fixtures/dyn_error_not_safe.rvn` — negative: generic
+- `tests/fixtures/dyn_iterator.rx` — `any Iterator[Item = Int]`.
+- `tests/fixtures/dyn_callback.rx` — `Box[any Fn()]` field.
+- `tests/fixtures/dyn_error_not_safe.rx` — negative: generic
   method.

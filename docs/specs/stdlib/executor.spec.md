@@ -11,7 +11,7 @@
 lowering. This sub-phase wires the single-threaded **block_on
 executor** so `block_on(future)` runs a future to completion.
 
-V1 scope is intentionally minimal — no real wake-driven scheduling
+V1 scope is intentionally minimal — no real wake-druxen scheduling
 yet. The wake mechanism only matters once there are concurrent
 tasks (sub-phase 5) or I/O events (sub-phase 4). With just `block_on`
 + user-written CPU-bound futures, a poll loop suffices.
@@ -20,7 +20,7 @@ tasks (sub-phase 5) or I/O events (sub-phase 4). With just `block_on`
 
 ## B1 — `std.executor.block_on(future)` runs a future to completion
 
-```rvn
+```rx
 use std.executor.block_on
 
 def main
@@ -38,41 +38,41 @@ Surface: `block_on` is a free function in `std.executor` taking any
 type that includes `Future` and returning the future's `Output`
 type.
 
-Lib decl (in `library/std/future/src/lib.rvn` or a new
-`library/std/executor/src/lib.rvn` package):
-```rvn
-def block_on as "riven_executor_block_on"(future: Int) -> Int
+Lib decl (in `library/std/future/src/lib.rx` or a new
+`library/std/executor/src/lib.rx` package):
+```rx
+def block_on as "ruxen_executor_block_on"(future: Int) -> Int
 ```
 
 (Generic-over-Output return type follows the typed-FFI-returns
 pattern from commit `0f357d5` — the typeck-level lift can be added
 once the executor proves the runtime path; v1 ships with `-> Int` and
-the user destructures at the call site or uses a Riven-level wrapper.)
+the user destructures at the call site or uses a Ruxen-level wrapper.)
 
 ## B2 — Poll loop implementation
 
 ```c
 // library/std/executor/runtime/executor.c
-int64_t riven_executor_block_on(int64_t future_ptr) {
+int64_t ruxen_executor_block_on(int64_t future_ptr) {
     // Construct a real Context with a working Waker.
-    RivenContext ctx = riven_executor_make_context();
+    RuxenContext ctx = ruxen_executor_make_context();
     for (;;) {
         // Call the future's poll(&var ctx) method via its mixin
         // dispatch. The lowered state machine class implements
         // Future, so this resolves through the Future-mixin vtable.
-        int64_t poll_result = riven_future_poll(future_ptr, &ctx);
-        if (riven_poll_is_ready(poll_result)) {
-            int64_t value = riven_poll_unwrap_ready(poll_result);
-            riven_executor_free_context(&ctx);
+        int64_t poll_result = ruxen_future_poll(future_ptr, &ctx);
+        if (ruxen_poll_is_ready(poll_result)) {
+            int64_t value = ruxen_poll_unwrap_ready(poll_result);
+            ruxen_executor_free_context(&ctx);
             return value;
         }
         // Pending — wait until a wake or the next iteration.
-        riven_executor_park(&ctx);
+        ruxen_executor_park(&ctx);
     }
 }
 ```
 
-`riven_executor_park` is the wait point. In v1's simplest form it
+`ruxen_executor_park` is the wait point. In v1's simplest form it
 spins (yield-loop with `sched_yield()`) since nothing in the
 no-I/O / no-spawn scope actually parks. Sub-phase 4 replaces it
 with `pthread_cond_wait` on the executor's wake condvar.
@@ -85,9 +85,9 @@ real signaling lands with sub-phase 4 when async I/O introduces
 genuine park points (where the executor blocks on epoll/kqueue and
 needs an explicit wake).
 
-The lib decls in `library/std/future/src/lib.rvn` are updated so
-`riven_waker_wake` / `riven_waker_wake_by_ref` are NO-OPS (they no
-longer `riven_panic`). The "wake" channel is conceptually wired but
+The lib decls in `library/std/future/src/lib.rx` are updated so
+`ruxen_waker_wake` / `ruxen_waker_wake_by_ref` are NO-OPS (they no
+longer `ruxen_panic`). The "wake" channel is conceptually wired but
 mechanically inert until sub-phase 4.
 
 ## B4 — `Context.waker(&self) -> &Waker` returns the executor's waker
@@ -99,7 +99,7 @@ it does nothing because the loop is already spinning).
 
 ## B5 — `Context.test_dummy` continues to work
 
-The test_dummy Context from sub-phase 2A's `riven_context_test_dummy`
+The test_dummy Context from sub-phase 2A's `ruxen_context_test_dummy`
 keeps working unchanged. It's still the way unit tests construct a
 Context without invoking the full executor — useful for testing
 hand-written state machines in isolation.
@@ -122,7 +122,7 @@ E1110 (`.await` outside async) but inverted.
 
 ## B7 — block_on round-trip for sub-phase-2A futures
 
-```rvn
+```rx
 use std.executor.block_on
 
 async def make_int() -> Int
@@ -139,7 +139,7 @@ poll, so block_on returns immediately. E2E fixture.
 
 ## B8 — block_on round-trip for sub-phase-2B chained-await futures
 
-```rvn
+```rx
 use std.executor.block_on
 
 async def inner_a() -> Int
@@ -176,7 +176,7 @@ that exactly one drop fires after `block_on` returns.
 
 ## B10 — No leak under repeated `block_on`
 
-```rvn
+```rx
 def main
   let mut i = 0
   while i < 1000
@@ -203,8 +203,8 @@ holds.
 | B4        | `context_waker_returns_real_waker_after_subphase3`   | `tests/async_executor.rs`     |
 | B5        | `context_test_dummy_still_works`                     | `tests/async_executor.rs`     |
 | B6        | `block_on_inside_async_rejected_e1112`               | `tests/async_negative.rs`     |
-| B7        | e2e `cases/723_block_on_subphase2a_future.rvn`       | release-e2e                   |
-| B8        | e2e `cases/724_block_on_subphase2b_chained.rvn`      | release-e2e                   |
+| B7        | e2e `cases/723_block_on_subphase2a_future.rx`       | release-e2e                   |
+| B8        | e2e `cases/724_block_on_subphase2b_chained.rx`      | release-e2e                   |
 | B9        | `block_on_drops_future_after_return`                 | `tests/async_executor.rs`     |
 | B10       | `block_on_loop_does_not_leak`                        | `tests/async_executor.rs`     |
 

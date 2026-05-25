@@ -1,4 +1,4 @@
-# Tier 3.03 — Test Framework (`test` in-body directive + `riven test`)
+# Tier 3.03 — Test Framework (`test` in-body directive + `ruxen test`)
 
 Status: draft
 Depends (soft): Tier-1 doc 05 (macros) for assertion macros; Tier-1 doc 01 (stdlib) for `fmt::Debug`; Tier-1 doc 04 (Drop) for non-leaking tests
@@ -9,15 +9,15 @@ Blocks: doc 05 (bench) shares 90% of the harness
 
 ## 1. Summary & motivation
 
-Riven has no way to write tests in Riven. Everything under
-`crates/riven-core/tests/` is Rust `#[test]` — that tests the *compiler*,
-not programs written in Riven. The tutorial never discusses testing
-(`docs/tutorial/` has no `testing.md`). A user building a Riven project
-with `riven new foo` gets a `src/main.rvn` — no `tests/` directory,
+Ruxen has no way to write tests in Ruxen. Everything under
+`crates/ruxen-core/tests/` is Rust `#[test]` — that tests the *compiler*,
+not programs written in Ruxen. The tutorial never discusses testing
+(`docs/tutorial/` has no `testing.md`). A user building a Ruxen project
+with `ruxen new foo` gets a `src/main.rx` — no `tests/` directory,
 no harness, no assertion functions.
 
 This doc specifies the v1 test surface: the `test` in-body directive,
-the `riven test` subcommand, an assertion API, test discovery, output
+the `ruxen test` subcommand, an assertion API, test discovery, output
 format, and the path from v1 (compiler-builtin) to v2
 (macro-system-aware).
 
@@ -33,9 +33,9 @@ in-body `test` keyword is recognized by the parser. A `test` directive
 on its own line inside a `def` body is currently treated as a regular
 identifier reference and fails resolution.
 
-### 2.2 No `riven test` subcommand
+### 2.2 No `ruxen test` subcommand
 
-`riven-cli`'s `Command` enum (`crates/riven-cli/src/cli.rs:25-114`) has
+`ruxen-cli`'s `Command` enum (`crates/ruxen-cli/src/cli.rs:25-114`) has
 no `Test`, `Bench`, or `Doc` variant. Only `New`, `Init`, `Build`, `Run`,
 `Check`, `Clean`, `Add`, `Remove`, `Update`, `Tree`, `Verify`.
 
@@ -43,7 +43,7 @@ no `Test`, `Bench`, or `Doc` variant. Only `New`, `Init`, `Build`, `Run`,
 
 There is no code anywhere in the workspace that collects functions
 tagged with an attribute and emits them into a test binary. The MIR
-lowerer (`crates/riven-core/src/mir/lower.rs`) walks `HirProgram.items`
+lowerer (`crates/ruxen-core/src/mir/lower.rs`) walks `HirProgram.items`
 and lowers every function present, emitting `main` as the entry point.
 Test entry-point generation requires a new code path.
 
@@ -51,7 +51,7 @@ Test entry-point generation requires a new code path.
 
 No `assert!`, `assert_eq!`, `assert_ne!` macros or functions. The only
 panic-like primitive is `panic!` routed through `runtime/runtime.c:423-426`
-(`riven_panic(const char*)` → `abort()`). Assertion messages would land
+(`ruxen_panic(const char*)` → `abort()`). Assertion messages would land
 here.
 
 ### 2.5 Existing conventions that inform shape
@@ -61,8 +61,8 @@ here.
   `include`, `layout`).
 - Doc comments are `##` (§doc 04).
 - Function definitions are `def name(args) -> Ret ... end`.
-- `riven-cli` uses clap; `Build` takes `--release` and `--bin`.
-- The cache (`rivenc/src/cache/driver.rs`) produces per-file
+- `ruxen-cli` uses clap; `Build` takes `--release` and `--bin`.
+- The cache (`ruxenc/src/cache/driver.rs`) produces per-file
   `CompileOutput` — reusable for test-build caching.
 
 ---
@@ -71,15 +71,15 @@ here.
 
 ### Goals
 
-1. Write a test in Riven: put a `test` directive inside a `def` body
-   and `riven test` runs it.
-2. Tests in `tests/*.rvn` (integration-style) and inline in `src/**.rvn`
+1. Write a test in Ruxen: put a `test` directive inside a `def` body
+   and `ruxen test` runs it.
+2. Tests in `tests/*.rx` (integration-style) and inline in `src/**.rx`
    (unit-style).
 3. An assertion API that prints the failing expression, the expected
    value, the actual value, and a file:line.
 4. A runner that reports pass / fail / skip, ignores panics (reports
    them as failures), and exits non-zero if any test failed.
-5. Filter by name substring: `riven test foo.bar`, `riven test
+5. Filter by name substring: `ruxen test foo.bar`, `ruxen test
    --filter bar`.
 6. Parallel execution of independent tests by default; `--test-threads=1`
    overrides.
@@ -155,19 +155,19 @@ end
 ### 4.2 CLI
 
 ```
-riven test                                  # build + run all tests
-riven test --release                        # release-mode tests
-riven test foo.bar                          # filter by substring (run tests whose path contains "foo.bar")
-riven test --filter="sub"                   # explicit filter form
-riven test --test-threads=1                 # serialize
-riven test --nocapture                      # show stdout/stderr of tests (default: capture)
-riven test --no-run                         # build but don't execute (useful for debugging)
-riven test --ignored                        # run only tests with `ignore` directive
-riven test --include-ignored                # run both ignored and normal
-riven test --exact                          # filter matches must be exact, not substring
-riven test --list                           # list discovered tests, don't run
-riven test --format=pretty|tap|json         # output format, default pretty
-riven test --bin main                       # limit to tests in a specific binary
+ruxen test                                  # build + run all tests
+ruxen test --release                        # release-mode tests
+ruxen test foo.bar                          # filter by substring (run tests whose path contains "foo.bar")
+ruxen test --filter="sub"                   # explicit filter form
+ruxen test --test-threads=1                 # serialize
+ruxen test --nocapture                      # show stdout/stderr of tests (default: capture)
+ruxen test --no-run                         # build but don't execute (useful for debugging)
+ruxen test --ignored                        # run only tests with `ignore` directive
+ruxen test --include-ignored                # run both ignored and normal
+ruxen test --exact                          # filter matches must be exact, not substring
+ruxen test --list                           # list discovered tests, don't run
+ruxen test --format=pretty|tap|json         # output format, default pretty
+ruxen test --bin main                       # limit to tests in a specific binary
 ```
 
 ### 4.3 Assertion API
@@ -192,7 +192,7 @@ Failure message format:
 assertion failed: actual != expected
   actual:   Array([1, 2, 3])
   expected: Array([1, 2, 4])
-  at tests/foo.rvn:12:5
+  at tests/foo.rx:12:5
 ```
 
 v1 compromise: without macros, `assert_eq` cannot stringify the
@@ -217,7 +217,7 @@ failures:
 assertion failed: actual != expected
   actual:   -1
   expected: 0
-  at tests/edge_cases.rvn:15:5
+  at tests/edge_cases.rx:15:5
 
 test result: FAILED. 3 passed; 1 failed; 1 skipped; finished in 0.04s
 ```
@@ -243,13 +243,13 @@ JSON output (`--format=json`): one event per line,
 
 ### 4.5 Test discovery
 
-- **Inline tests.** Any `def` in any `.rvn` file whose body contains a
+- **Inline tests.** Any `def` in any `.rx` file whose body contains a
   `test` directive (as the first statement).
-- **Integration tests.** Files under `tests/**.rvn`. Each top-level
+- **Integration tests.** Files under `tests/**.rx`. Each top-level
   `def` whose body contains `test` becomes a test.
 - **Naming convention.** Test path is `<module-path>.<fn-name>`.
-  For `src/math/helpers.rvn` with a `test`-directive `def adds_two`,
-  the path is `math.helpers.adds_two`. For `tests/foo.rvn` with a
+  For `src/math/helpers.rx` with a `test`-directive `def adds_two`,
+  the path is `math.helpers.adds_two`. For `tests/foo.rx` with a
   `test`-directive `def bar`, the path is `tests.foo.bar`.
 
 ---
@@ -289,7 +289,7 @@ metadata). Also threads through `resolve/mod.rs` and the formatter.
 **Typechecker.** No change needed — `test`-directive functions are
 regular functions with signature `def name()` (no args, no return value
 beyond Unit). A validator (new module
-`crates/riven-core/src/typeck/test_check.rs`) emits a diagnostic if a
+`crates/ruxen-core/src/typeck/test_check.rs`) emits a diagnostic if a
 `test` directive is on a function with non-empty parameters or a
 non-Unit/Never return type.
 
@@ -303,9 +303,9 @@ other. The test binary is a separate codegen job that:
 
 See §5.3 for the harness generation mechanics.
 
-### 5.2 CLI plumbing — `riven test`
+### 5.2 CLI plumbing — `ruxen test`
 
-Add to `crates/riven-cli/src/cli.rs::Command`:
+Add to `crates/ruxen-cli/src/cli.rs::Command`:
 
 ```rust
 Test {
@@ -322,15 +322,15 @@ Test {
 },
 ```
 
-New module `crates/riven-cli/src/test.rs`:
+New module `crates/ruxen-cli/src/test.rs`:
 
 ```rust
 pub fn test(opts: TestOptions) -> Result<(), String> {
     // 1. Discover test files:
-    //    src/**.rvn + tests/**.rvn
+    //    src/**.rx + tests/**.rx
     // 2. For each source file, compile with test-aware codegen that
     //    extracts functions whose bodies carry a `test` directive.
-    // 3. Generate a harness main.rvn at target/riven/tests/harness.rvn
+    // 3. Generate a harness main.rx at target/ruxen/tests/harness.rx
     // 4. Compile the harness + user code into target/debug/deps/test-<hash>.
     // 5. Unless --no-run, exec the binary with the filter passed through.
 }
@@ -342,10 +342,10 @@ in the requested format based on args it receives.
 
 ### 5.3 Harness generation
 
-The harness is a generated `.rvn` file (or directly-generated MIR
+The harness is a generated `.rx` file (or directly-generated MIR
 function) that looks like:
 
-```rvn
+```rx
 # Auto-generated; do not edit.
 use std.test.internal.{TestCase, run_all}
 
@@ -360,19 +360,19 @@ end
 ```
 
 Each `*_0xHASH` is the mangled name of a test function. The mangling
-ensures no collision between `adds_two_numbers` in `tests/a.rvn` and
-`adds_two_numbers` in `tests/b.rvn`.
+ensures no collision between `adds_two_numbers` in `tests/a.rx` and
+`adds_two_numbers` in `tests/b.rx`.
 
 `std.test.internal.run_all` is the runtime side: it parses
 `argv`, applies the filter, runs each test (optionally in parallel),
 catches panics via a signal handler (SIGABRT from `abort()` → jump to
 test-fail handler), collects results, and prints.
 
-**Panic catching.** The C runtime's `riven_panic` (`runtime.c:423-426`)
+**Panic catching.** The C runtime's `ruxen_panic` (`runtime.c:423-426`)
 currently calls `abort()`. For test mode, the runtime must be compiled
 with a variant that `longjmp`s back to the test runner. Simplest
-approach: an environment variable `RIVEN_TEST_MODE=1` that makes
-`riven_panic` call a special handler in the test runtime instead.
+approach: an environment variable `RUXEN_TEST_MODE=1` that makes
+`ruxen_panic` call a special handler in the test runtime instead.
 
 Alternative: fork-per-test. Every test runs in a child process. Crash
 is just a non-zero exit code. Simpler, more robust, slower. **Recommend
@@ -389,7 +389,7 @@ With in-process (v2), parallelism requires (a) tier-1 doc 02
 
 ### 5.5 Filtering semantics
 
-- Multiple positional filters OR'd: `riven test foo bar` runs tests
+- Multiple positional filters OR'd: `ruxen test foo bar` runs tests
   whose path contains `foo` OR `bar`.
 - `--exact` requires whole-path match.
 - `--ignored` runs *only* ignored tests.
@@ -399,7 +399,7 @@ These semantics match `cargo test`.
 
 ### 5.6 Cache integration
 
-The existing incremental cache (`rivenc/src/cache/`) already handles
+The existing incremental cache (`ruxenc/src/cache/`) already handles
 per-file caching with a `flags` field in `BuildOptions`. Test builds
 pass `flags="test"` to keep test objects separate from normal build
 objects. No new cache logic needed.
@@ -412,19 +412,19 @@ objects. No new cache logic needed.
 
 | Phase | File | Change |
 |---|---|---|
-| 1 | `crates/riven-core/src/parser/ast.rs` (FuncDef) | Add `test_directives: Vec<TestDirective>` |
-| 1 | `crates/riven-core/src/parser/mod.rs` (parse_func_body) | Recognize `test`/`ignore`/`should_panic`/`only`/`bench` at body head |
-| 1 | `crates/riven-core/src/hir/nodes.rs` (HirFuncDef) | Add `test_directives: Vec<TestDirective>` |
-| 1 | `crates/riven-core/src/resolve/mod.rs` | Thread directives from ast → hir |
-| 1 | `crates/riven-core/src/typeck/test_check.rs` *new* | Validate `test`-directive functions have no params, return Unit |
-| 1 | `crates/riven-core/src/formatter/format_items.rs` | Round-trip `test`-directive body in formatter |
-| 2 | `crates/riven-cli/src/cli.rs:25-114` | Add `Test` command |
-| 2 | `crates/riven-cli/src/test.rs` *new* | Discovery, harness gen, build, run (~400 lines) |
-| 2 | `crates/riven-cli/src/main.rs:7-52` | Wire `Command::Test` |
-| 2 | `crates/riven-cli/src/module_discovery.rs` | Extend to walk `tests/**.rvn` |
-| 3 | `crates/riven-core/runtime/runtime.c` | Add `riven_test_panic` entry point (longjmp or plain exit) |
-| 3 | `stdlib/test/mod.rvn` *new* | `TestCase`, `run_all`, `assert*` helpers (builtin registration first; real stdlib once tier-1 doc 01 lands) |
-| 4 | `crates/riven-cli/src/scaffold.rs:29-50` | `riven new` scaffolds a `tests/hello.rvn` with one example |
+| 1 | `crates/ruxen-core/src/parser/ast.rs` (FuncDef) | Add `test_directives: Vec<TestDirective>` |
+| 1 | `crates/ruxen-core/src/parser/mod.rs` (parse_func_body) | Recognize `test`/`ignore`/`should_panic`/`only`/`bench` at body head |
+| 1 | `crates/ruxen-core/src/hir/nodes.rs` (HirFuncDef) | Add `test_directives: Vec<TestDirective>` |
+| 1 | `crates/ruxen-core/src/resolve/mod.rs` | Thread directives from ast → hir |
+| 1 | `crates/ruxen-core/src/typeck/test_check.rs` *new* | Validate `test`-directive functions have no params, return Unit |
+| 1 | `crates/ruxen-core/src/formatter/format_items.rs` | Round-trip `test`-directive body in formatter |
+| 2 | `crates/ruxen-cli/src/cli.rs:25-114` | Add `Test` command |
+| 2 | `crates/ruxen-cli/src/test.rs` *new* | Discovery, harness gen, build, run (~400 lines) |
+| 2 | `crates/ruxen-cli/src/main.rs:7-52` | Wire `Command::Test` |
+| 2 | `crates/ruxen-cli/src/module_discovery.rs` | Extend to walk `tests/**.rx` |
+| 3 | `crates/ruxen-core/runtime/runtime.c` | Add `ruxen_test_panic` entry point (longjmp or plain exit) |
+| 3 | `stdlib/test/mod.rx` *new* | `TestCase`, `run_all`, `assert*` helpers (builtin registration first; real stdlib once tier-1 doc 01 lands) |
+| 4 | `crates/ruxen-cli/src/scaffold.rs:29-50` | `ruxen new` scaffolds a `tests/hello.rx` with one example |
 | 4 | `docs/tutorial/17-testing.md` *new* | Tutorial page |
 
 ### Phase breakdown
@@ -435,8 +435,8 @@ directives on `def`. Minimum scope: `test` + `ignore` + `should_panic`.
 No other directives accepted (the general macro dispatcher lands with
 tier-1 doc 05).
 
-**Phase 2 — `riven test` subcommand (3 days).**
-- Day 1: CLI + discovery (walk `src/**.rvn` + `tests/**.rvn`, find
+**Phase 2 — `ruxen test` subcommand (3 days).**
+- Day 1: CLI + discovery (walk `src/**.rx` + `tests/**.rx`, find
   functions whose bodies contain a `test` directive).
 - Day 2: harness generation; compile test binary.
 - Day 3: fork-per-test runner; pretty output format.
@@ -447,7 +447,7 @@ tier-1 doc 05).
 - Day 2: TAP + JSON output; `--list`; filter semantics.
 
 **Phase 4 — Polish (1 day).**
-`riven new` scaffolds an example test; docs; diagnostic errors for
+`ruxen new` scaffolds an example test; docs; diagnostic errors for
 mis-used `test` directive.
 
 Total: 9 engineer-days for a v1 that covers 90% of day-to-day usage.
@@ -458,14 +458,14 @@ Total: 9 engineer-days for a v1 that covers 90% of day-to-day usage.
 
 - **Doc 05 (bench).** Shares 90% of the harness: same discovery, same
   CLI skeleton, same output plumbing. Implement bench after test so
-  the shared code in `riven-cli/src/test.rs` is factored cleanly.
+  the shared code in `ruxen-cli/src/test.rs` is factored cleanly.
   Expected extraction: `test_harness::{discover, build, run}` common
   to both.
-- **Doc 04 (docs).** `rivendoc` should emit per-function test counts
+- **Doc 04 (docs).** `ruxendoc` should emit per-function test counts
   if any — a small integration point.
 - **Doc 01 (LSP).** Add code-lens `"Run test"` / `"Debug test"`
   above each function with a `test` directive once LSP ships rename.
-- **Doc 02 (debugger).** `riven test --debug foo.bar` launches the
+- **Doc 02 (debugger).** `ruxen test --debug foo.bar` launches the
   test binary under a debugger.
 - **Doc 06 (incremental).** No test run should re-compile source files
   that are cached. Verify `cache` handles the `flags="test"` key.
@@ -490,7 +490,7 @@ Total: 9 engineer-days for a v1 that covers 90% of day-to-day usage.
 | Phase | Scope | Days | Prereqs |
 |---|---|---|---|
 | 1 | Directive pipeline | 3 | nil |
-| 2 | `riven test` subcommand | 3 | 1 |
+| 2 | `ruxen test` subcommand | 3 | 1 |
 | 3 | Runner + assertions | 2 | 2 |
 | 4 | Polish + docs | 1 | 3 |
 | 5 | Macro-based assertions | + | tier-1 doc 05 |
@@ -508,18 +508,18 @@ Total: 9 engineer-days for a v1 that covers 90% of day-to-day usage.
    substring (matches Rust's `should_panic(expected = "...")`).
 3. **OQ-3 — `fail(msg)` return type `Never`.**
    Requires `Ty::Never` plumbed through the typechecker. Is it?
-   (Quick check: `riven-core/src/hir/types.rs` has a `Never` variant;
+   (Quick check: `ruxen-core/src/hir/types.rs` has a `Never` variant;
    verify it's usable as function return type.) If not, use
    `-> Unit` with an internal never-returning marker.
 4. **OQ-4 — Test path separator.**
-   `tests.arith.adds` (Riven uses `.` everywhere — `std.io`,
+   `tests.arith.adds` (Ruxen uses `.` everywhere — `std.io`,
    `package.utils`). Recommend `.` to match module-path conventions.
 5. **OQ-5 — Default `--test-threads`.**
-   Rust defaults to the number of CPUs. Riven should follow, but with
+   Rust defaults to the number of CPUs. Ruxen should follow, but with
    fork-per-test this might oversubscribe. Limit to min(ncpus, 8) by
    default.
 6. **R1 — Panic-catching without proper stack unwinding.**
-   Riven has no unwinding runtime. Fork-per-test sidesteps this. If
+   Ruxen has no unwinding runtime. Fork-per-test sidesteps this. If
    we ever move to in-process, we need `setjmp`/`longjmp` discipline
    and it must not interfere with Drop (tier-1 doc 04).
 7. **R2 — Leaking tests.**
@@ -529,7 +529,7 @@ Total: 9 engineer-days for a v1 that covers 90% of day-to-day usage.
 8. **R3 — Windows.**
    No `fork` on Windows. v1 is Linux+macOS only.
 9. **OQ-6 — Filter path semantics for integration tests.**
-   `tests/foo.rvn.bar` — is the file path part of the test path?
+   `tests/foo.rx.bar` — is the file path part of the test path?
    Recommend `tests.foo.bar` (drop the extension, use `.`).
 10. **OQ-7 — Test binary location.**
     `target/debug/deps/test-<hash>` (cargo-style) or
@@ -550,18 +550,18 @@ Total: 9 engineer-days for a v1 that covers 90% of day-to-day usage.
 | `def x; test; should_panic; ...; end` without panic | Reports `FAILED` |
 | `def x(i: Int); test; ... end` | Compile error: test fns take no args |
 | `def x -> Int; test; ...; end` | Compile error: return type must be Unit |
-| `riven test foo` with no matches | Exit 0, prints "0 passed" |
-| `riven test --exact foo.bar` matches exactly | Only that test runs |
-| `riven test --list --format=json` | JSON event per test |
-| `riven test --nocapture` | Test's `puts` reaches stdout |
+| `ruxen test foo` with no matches | Exit 0, prints "0 passed" |
+| `ruxen test --exact foo.bar` matches exactly | Only that test runs |
+| `ruxen test --list --format=json` | JSON event per test |
+| `ruxen test --nocapture` | Test's `puts` reaches stdout |
 | Panic in test | Reported as failure, other tests continue |
 | Infinite loop in test | (v2) `--timeout` kills it; v1 no timeout |
 | `assert_eq(1, 2)` | Prints "actual: 1 / expected: 2" with file:line |
-| Integration test in `tests/foo.rvn` | Discovered |
-| `riven test --release` | Rebuilds in release mode |
-| Second `riven test` with no changes | Uses cache; fast |
+| Integration test in `tests/foo.rx` | Discovered |
+| `ruxen test --release` | Rebuilds in release mode |
+| Second `ruxen test` with no changes | Uses cache; fast |
 | Forked test crashes via OOB access | Reported as failed, not a runner crash |
 
-These live under `crates/riven-cli/tests/test_runner.rs` as
-integration tests that invoke `riven test` on fixture projects in
-`crates/riven-cli/tests/fixtures/tests-*/`.
+These live under `crates/ruxen-cli/tests/test_runner.rs` as
+integration tests that invoke `ruxen test` on fixture projects in
+`crates/ruxen-cli/tests/fixtures/tests-*/`.

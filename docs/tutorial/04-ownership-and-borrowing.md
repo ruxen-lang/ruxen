@@ -1,6 +1,6 @@
 # Ownership and Borrowing
 
-Riven has no garbage collector. Instead, every value has a single owner, and the compiler tracks ownership at compile time. When the owner goes out of scope, the value is freed.
+Ruxen has no garbage collector. Instead, every value has a single owner, and the compiler tracks ownership at compile time. When the owner goes out of scope, the value is freed.
 
 ## The Five Rules
 
@@ -14,7 +14,7 @@ Riven has no garbage collector. Instead, every value has a single owner, and the
 
 When you assign a non-Copy value, ownership transfers:
 
-```riven
+```ruxen
 let greeting = String.from("hello")
 let moved = greeting              # ownership moves to `moved`
 puts greeting                     # COMPILE ERROR: `greeting` was moved
@@ -22,12 +22,12 @@ puts greeting                     # COMPILE ERROR: `greeting` was moved
 
 This applies to function calls too:
 
-```riven
+```ruxen
 def consume_string(s: String)
   puts s
 end
 
-let name = String.from("Riven")
+let name = String.from("Ruxen")
 consume_string(name)              # `name` moved into function
 puts name                         # COMPILE ERROR: `name` was moved
 ```
@@ -36,7 +36,7 @@ puts name                         # COMPILE ERROR: `name` was moved
 
 Primitive types are `Copy` — assignment duplicates the value:
 
-```riven
+```ruxen
 let x = 42
 let y = x       # copy, both valid
 puts x           # OK
@@ -49,19 +49,19 @@ Copy types include: all integers, floats, `Bool`, `Char`, `()`, references (`&T`
 
 Borrow a value to read it without taking ownership:
 
-```riven
+```ruxen
 def print_name(name: &String)     # borrows, doesn't own
   puts name
 end
 
-let name = String.from("Riven")
+let name = String.from("Ruxen")
 print_name(&name)                  # pass a borrow
 puts name                          # still valid
 ```
 
 You can have multiple read-only borrows at the same time:
 
-```riven
+```ruxen
 let data = String.from("hello")
 let r1 = &data
 let r2 = &data                    # OK — multiple read-only borrows
@@ -73,7 +73,7 @@ puts r2
 
 A writable borrow gives exclusive read-write access:
 
-```riven
+```ruxen
 def append_bang(s: &var String)
   s.push('!')
 end
@@ -85,7 +85,7 @@ puts greeting                      # "hello!"
 
 You cannot mix writable and read-only borrows:
 
-```riven
+```ruxen
 var data = [1, 2, 3]
 let view = &data                   # read-only borrow
 data.push(4)                       # ERROR: writable borrow while `view` exists
@@ -96,7 +96,7 @@ puts view
 
 Borrows end at their last use, not at the end of the scope:
 
-```riven
+```ruxen
 var data = [1, 2, 3]
 let view = &data
 puts view                          # last use of `view`
@@ -107,7 +107,7 @@ data.push(4)                       # OK — `view` is no longer active
 
 The compiler prevents returning references to local values:
 
-```riven
+```ruxen
 def dangling -> &String
   let local = String.from("hello")
   &local                           # ERROR: `local` dies when function returns
@@ -118,7 +118,7 @@ end
 
 User-defined structs implicitly include `Copy` when every field is `Copy` (§3.6 — no explicit declaration needed):
 
-```riven
+```ruxen
 struct Point
   x: Float
   y: Float
@@ -132,7 +132,7 @@ let b = a                          # copy, both valid
 
 For types that aren't Copy, use explicit `.clone` to duplicate:
 
-```riven
+```ruxen
 let original = String.from("hello")
 let copy = original.clone          # explicit deep copy
 puts original                      # still valid

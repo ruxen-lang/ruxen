@@ -5,47 +5,47 @@
  *
  * Architecture:
  *
- *   - One reactor per Riven thread, held in a `__thread`-storage
+ *   - One reactor per Ruxen thread, held in a `__thread`-storage
  *     pointer. `block_on(...)` (via `Context.executor`) calls
- *     `riven_reactor_acquire` which lazily creates the reactor and
+ *     `ruxen_reactor_acquire` which lazily creates the reactor and
  *     installs it as the current-thread pointer. `Context.drop`
- *     calls `riven_reactor_release` which closes the reactor fd and
+ *     calls `ruxen_reactor_release` which closes the reactor fd and
  *     clears the thread pointer.
  *
  *   - The thread-local approach removes the need for futures to
  *     thread the reactor pointer through every `poll(cx)` call;
  *     reactor-aware futures (TimeSleepFuture, AsyncFile,
  *     AsyncTcpStream) read the current reactor via
- *     `riven_reactor_current_handle` from within poll. This also
- *     means `Thread.yield_now`'s C body (riven_thread_yield in
+ *     `ruxen_reactor_current_handle` from within poll. This also
+ *     means `Thread.yield_now`'s C body (ruxen_thread_yield in
  *     time.c) can transparently switch from `sched_yield` to a
  *     reactor wait when registrations are pending — the AST-level
  *     block_on rewriter's existing emission unchanged.
  *
- * Public Riven-callable surface (declared in
- * library/std/time/src/lib.rvn as free fns; future 4B/4C may add
+ * Public Ruxen-callable surface (declared in
+ * library/std/time/src/lib.rx as free fns; future 4B/4C may add
  * file/socket variants):
  *
- *   riven_reactor_register_timer(reactor, nanos)  -> handle
- *   riven_reactor_check_fired(reactor, handle)    -> 0 / 1
- *   riven_reactor_deregister(reactor, handle)     -> ()
+ *   ruxen_reactor_register_timer(reactor, nanos)  -> handle
+ *   ruxen_reactor_check_fired(reactor, handle)    -> 0 / 1
+ *   ruxen_reactor_deregister(reactor, handle)     -> ()
  *
- * Internal Riven-callable surface (declared in
- * library/std/future/src/lib.rvn lib decls on Context):
+ * Internal Ruxen-callable surface (declared in
+ * library/std/future/src/lib.rx lib decls on Context):
  *
- *   riven_executor_make_context()                 -> ctx*
- *   riven_executor_context_drop(ctx)              -> ()
+ *   ruxen_executor_make_context()                 -> ctx*
+ *   ruxen_executor_context_drop(ctx)              -> ()
  *
  * Cross-TU C-only surface (called by the time package's
- * runtime/time.c::riven_thread_yield, and by futures resolved via
- * the reactor.c free-fn lib decls in time/src/lib.rvn):
+ * runtime/time.c::ruxen_thread_yield, and by futures resolved via
+ * the reactor.c free-fn lib decls in time/src/lib.rx):
  *
- *   riven_reactor_current_handle()                -> i64
- *   riven_reactor_park_current()                  -> ()  (yield-or-wait)
+ *   ruxen_reactor_current_handle()                -> i64
+ *   ruxen_reactor_park_current()                  -> ()  (yield-or-wait)
  *
  * Single-threaded v1: no locking. The reactor is invoked from exactly
- * one Riven thread per block_on per the executor's contract. Each
- * Riven thread that calls block_on gets its own reactor.
+ * one Ruxen thread per block_on per the executor's contract. Each
+ * Ruxen thread that calls block_on gets its own reactor.
  *
  * Platform support: macOS (kqueue) + Linux (epoll). Windows IOCP is
  * v2 (see spec B-Y).
@@ -55,7 +55,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-void riven_executor_wake_task(void *task_entry);
+void ruxen_executor_wake_task(void *task_entry);
 
 #if defined(__APPLE__)
 #  include <sys/event.h>
@@ -66,7 +66,7 @@ void riven_executor_wake_task(void *task_entry);
 #  include <sys/timerfd.h>
 #  include <sys/eventfd.h>
 #else
-#  error "riven reactor: unsupported platform (only Linux + macOS in v1; see async_io.spec.md B-Y)"
+#  error "ruxen reactor: unsupported platform (only Linux + macOS in v1; see async_io.spec.md B-Y)"
 #endif
 
 /* ---------------------------------------------------------------------
@@ -75,7 +75,7 @@ void riven_executor_wake_task(void *task_entry);
  *
  * Linux: one epoll fd. Each timer registration owns its own timerfd
  * which is added to the epoll set with EPOLLIN. The handle returned to
- * Riven IS the timerfd, so deregister/check_fired can look up the fd
+ * Ruxen IS the timerfd, so deregister/check_fired can look up the fd
  * directly.
  *
  * macOS: one kqueue fd. Each timer is a EVFILT_TIMER filter with a
@@ -95,33 +95,33 @@ void riven_executor_wake_task(void *task_entry);
  * so they live in the negative half of int64 — disjoint from timer
  * handles which are either positive timerfds (Linux) or positive
  * ident counters (macOS). `check_fired` / `deregister` route on sign. */
-typedef struct RivenReactorFdSlot {
+typedef struct RuxenReactorFdSlot {
     int fd;        /* 0 = free slot; -1 also free (we use >0 to mean live) */
     int mode;      /* 0 = read, 1 = write */
     int fired;     /* set by park_current when the OS reports readiness */
     void *task;    /* scheduler task to mark ready when this fd fires */
-} RivenReactorFdSlot;
+} RuxenReactorFdSlot;
 
-typedef struct RivenReactorTimerSlot {
+typedef struct RuxenReactorTimerSlot {
     int64_t ident; /* macOS: synthetic ident; Linux: timerfd; 0 = free */
     int fired;
     void *task;
-} RivenReactorTimerSlot;
+} RuxenReactorTimerSlot;
 
-#ifndef RIVEN_WAKER_CELL_DEFINED
-#define RIVEN_WAKER_CELL_DEFINED
-typedef struct RivenWakerCell {
+#ifndef RUXEN_WAKER_CELL_DEFINED
+#define RUXEN_WAKER_CELL_DEFINED
+typedef struct RuxenWakerCell {
     void *reactor;
     void *task;
-} RivenWakerCell;
+} RuxenWakerCell;
 #endif
 
-typedef struct RivenReactor {
+typedef struct RuxenReactor {
     int fd;
     int registered_count;
     int fd_slots_len;
     int fd_slots_cap;
-    RivenReactorFdSlot **fd_slots;
+    RuxenReactorFdSlot **fd_slots;
     /* Wake fd: a single registration used by Waker.wake to unpark the
      * thread when no I/O event is in flight. Created at reactor alloc
      * time, persists for the reactor's lifetime. Linux: eventfd. macOS:
@@ -137,20 +137,20 @@ typedef struct RivenReactor {
     int64_t next_ident;
     int slots_len;
     int slots_cap;
-    RivenReactorTimerSlot *slots;
-} RivenReactor;
+    RuxenReactorTimerSlot *slots;
+} RuxenReactor;
 
-/* Per-thread current reactor pointer. Set by riven_executor_make_context
- * (via riven_reactor_acquire), cleared by riven_executor_context_drop
- * (via riven_reactor_release). Read by riven_thread_yield in time.c
+/* Per-thread current reactor pointer. Set by ruxen_executor_make_context
+ * (via ruxen_reactor_acquire), cleared by ruxen_executor_context_drop
+ * (via ruxen_reactor_release). Read by ruxen_thread_yield in time.c
  * and by the TimeSleepFuture.poll method via
- * riven_reactor_current_handle. */
-static _Thread_local RivenReactor *t_current_reactor = (RivenReactor *)0;
+ * ruxen_reactor_current_handle. */
+static _Thread_local RuxenReactor *t_current_reactor = (RuxenReactor *)0;
 
-static RivenReactor *riven_reactor_alloc_struct(void) {
-    RivenReactor *r = (RivenReactor *)malloc(sizeof(RivenReactor));
+static RuxenReactor *ruxen_reactor_alloc_struct(void) {
+    RuxenReactor *r = (RuxenReactor *)malloc(sizeof(RuxenReactor));
     if (!r) {
-        riven_panic("riven_reactor: malloc(RivenReactor) failed");
+        ruxen_panic("ruxen_reactor: malloc(RuxenReactor) failed");
         return NULL;
     }
     memset(r, 0, sizeof(*r));
@@ -160,7 +160,7 @@ static RivenReactor *riven_reactor_alloc_struct(void) {
     r->fd = kqueue();
     if (r->fd < 0) {
         free(r);
-        riven_panic("riven_reactor: kqueue() failed");
+        ruxen_panic("ruxen_reactor: kqueue() failed");
         return NULL;
     }
     r->next_ident = 1;
@@ -182,7 +182,7 @@ static RivenReactor *riven_reactor_alloc_struct(void) {
         if (kevent(r->fd, &ev, 1, NULL, 0, NULL) < 0) {
             close(r->fd);
             free(r);
-            riven_panic("riven_reactor: kevent EVFILT_USER ADD failed");
+            ruxen_panic("ruxen_reactor: kevent EVFILT_USER ADD failed");
             return NULL;
         }
         /* wake_fd is unused on macOS (no fd backing for EVFILT_USER), but
@@ -193,7 +193,7 @@ static RivenReactor *riven_reactor_alloc_struct(void) {
     r->fd = epoll_create1(EPOLL_CLOEXEC);
     if (r->fd < 0) {
         free(r);
-        riven_panic("riven_reactor: epoll_create1() failed");
+        ruxen_panic("ruxen_reactor: epoll_create1() failed");
         return NULL;
     }
     /* Wake fd: eventfd registered with EPOLLIN, level-triggered. We use
@@ -207,7 +207,7 @@ static RivenReactor *riven_reactor_alloc_struct(void) {
     if (r->wake_fd < 0) {
         close(r->fd);
         free(r);
-        riven_panic("riven_reactor: eventfd() failed");
+        ruxen_panic("ruxen_reactor: eventfd() failed");
         return NULL;
     }
     {
@@ -219,7 +219,7 @@ static RivenReactor *riven_reactor_alloc_struct(void) {
             close(r->wake_fd);
             close(r->fd);
             free(r);
-            riven_panic("riven_reactor: epoll_ctl(wake_fd) failed");
+            ruxen_panic("ruxen_reactor: epoll_ctl(wake_fd) failed");
             return NULL;
         }
     }
@@ -227,7 +227,7 @@ static RivenReactor *riven_reactor_alloc_struct(void) {
     return r;
 }
 
-static void riven_reactor_free_struct(RivenReactor *r) {
+static void ruxen_reactor_free_struct(RuxenReactor *r) {
     if (!r) {
         return;
     }
@@ -258,31 +258,31 @@ static void riven_reactor_free_struct(RivenReactor *r) {
  * reactor for this block_on entry. Nested block_on within the same
  * thread reuses the existing reactor — matches spec B3 "reactor lives
  * per thread; one per block_on call gets the same reactor". */
-RivenReactor *riven_reactor_acquire(void) {
+RuxenReactor *ruxen_reactor_acquire(void) {
     if (!t_current_reactor) {
-        t_current_reactor = riven_reactor_alloc_struct();
+        t_current_reactor = ruxen_reactor_alloc_struct();
     }
     return t_current_reactor;
 }
 
 /* Release the current-thread reactor. Called by `Context.drop` at
  * scope exit. */
-void riven_reactor_release(void) {
+void ruxen_reactor_release(void) {
     if (t_current_reactor) {
-        riven_reactor_free_struct(t_current_reactor);
+        ruxen_reactor_free_struct(t_current_reactor);
         t_current_reactor = NULL;
     }
 }
 
-/* Return the current-thread reactor as an i64 handle for Riven side.
+/* Return the current-thread reactor as an i64 handle for Ruxen side.
  * Returns 0 if no reactor is installed (e.g. test_dummy contexts or
  * code outside any block_on call). The reactor-aware future uses
  * this in poll() rather than threading a pointer through cx. */
-int64_t riven_reactor_current_handle(void) {
+int64_t ruxen_reactor_current_handle(void) {
     return (int64_t)(uintptr_t)t_current_reactor;
 }
 
-static int riven_reactor_alloc_slot(RivenReactor *r) {
+static int ruxen_reactor_alloc_slot(RuxenReactor *r) {
     for (int i = 0; i < r->slots_len; i++) {
         if (r->slots[i].ident == 0) {
             return i;
@@ -292,7 +292,7 @@ static int riven_reactor_alloc_slot(RivenReactor *r) {
         int new_cap = r->slots_cap == 0 ? 8 : r->slots_cap * 2;
         void *new_slots = realloc(r->slots, (size_t)new_cap * sizeof(*r->slots));
         if (!new_slots) {
-            riven_panic("riven_reactor: realloc(slots) failed");
+            ruxen_panic("ruxen_reactor: realloc(slots) failed");
             return -1;
         }
         r->slots = new_slots;
@@ -303,7 +303,7 @@ static int riven_reactor_alloc_slot(RivenReactor *r) {
     return r->slots_len++;
 }
 
-static int riven_reactor_find_slot(RivenReactor *r, int64_t ident) {
+static int ruxen_reactor_find_slot(RuxenReactor *r, int64_t ident) {
     if (ident == 0) {
         return -1;
     }
@@ -321,13 +321,13 @@ static int riven_reactor_find_slot(RivenReactor *r, int64_t ident) {
  * (>= 0) or -1 on allocation failure (which never happens in practice —
  * malloc-failure here would have panicked already). Same growth shape
  * as the macOS timer slots array. */
-static int riven_reactor_alloc_fd_slot(RivenReactor *r) {
+static int ruxen_reactor_alloc_fd_slot(RuxenReactor *r) {
     for (int i = 0; i < r->fd_slots_len; i++) {
         if (!r->fd_slots[i] || r->fd_slots[i]->fd == 0) {
             if (!r->fd_slots[i]) {
-                r->fd_slots[i] = (RivenReactorFdSlot *)calloc(1, sizeof(*r->fd_slots[i]));
+                r->fd_slots[i] = (RuxenReactorFdSlot *)calloc(1, sizeof(*r->fd_slots[i]));
                 if (!r->fd_slots[i]) {
-                    riven_panic("riven_reactor: calloc(fd_slot) failed");
+                    ruxen_panic("ruxen_reactor: calloc(fd_slot) failed");
                     return -1;
                 }
             }
@@ -339,24 +339,24 @@ static int riven_reactor_alloc_fd_slot(RivenReactor *r) {
         void *next = realloc(r->fd_slots,
                              (size_t)new_cap * sizeof(*r->fd_slots));
         if (!next) {
-            riven_panic("riven_reactor: realloc(fd_slots) failed");
+            ruxen_panic("ruxen_reactor: realloc(fd_slots) failed");
             return -1;
         }
-        r->fd_slots = (RivenReactorFdSlot **)next;
+        r->fd_slots = (RuxenReactorFdSlot **)next;
         memset(&r->fd_slots[r->fd_slots_cap], 0,
                (size_t)(new_cap - r->fd_slots_cap) * sizeof(*r->fd_slots));
         r->fd_slots_cap = new_cap;
     }
-    r->fd_slots[r->fd_slots_len] = (RivenReactorFdSlot *)calloc(1, sizeof(*r->fd_slots[r->fd_slots_len]));
+    r->fd_slots[r->fd_slots_len] = (RuxenReactorFdSlot *)calloc(1, sizeof(*r->fd_slots[r->fd_slots_len]));
     if (!r->fd_slots[r->fd_slots_len]) {
-        riven_panic("riven_reactor: calloc(fd_slot) failed");
+        ruxen_panic("ruxen_reactor: calloc(fd_slot) failed");
         return -1;
     }
     return r->fd_slots_len++;
 }
 
 #if defined(__linux__)
-static int riven_reactor_owns_fd_slot(RivenReactor *r, void *p) {
+static int ruxen_reactor_owns_fd_slot(RuxenReactor *r, void *p) {
     if (!p || !r->fd_slots) {
         return 0;
     }
@@ -372,7 +372,7 @@ static int riven_reactor_owns_fd_slot(RivenReactor *r, void *p) {
 /* Map a handle (negative-encoded slot index) back to a slot pointer.
  * Returns NULL if the handle is non-negative (= timer handle, not ours)
  * or out of range. */
-static RivenReactorFdSlot *riven_reactor_find_fd_slot(RivenReactor *r,
+static RuxenReactorFdSlot *ruxen_reactor_find_fd_slot(RuxenReactor *r,
                                                      int64_t handle) {
     if (handle >= 0) {
         return NULL;
@@ -387,33 +387,33 @@ static RivenReactorFdSlot *riven_reactor_find_fd_slot(RivenReactor *r,
     return r->fd_slots[idx];
 }
 
-void riven_reactor_set_waker(int64_t reactor_handle, int64_t handle, void *waker) {
+void ruxen_reactor_set_waker(int64_t reactor_handle, int64_t handle, void *waker) {
     if (reactor_handle == 0 || handle == 0 || !waker) {
         return;
     }
-    RivenReactor *r = (RivenReactor *)(uintptr_t)reactor_handle;
-    void *task = ((RivenWakerCell *)waker)->task;
+    RuxenReactor *r = (RuxenReactor *)(uintptr_t)reactor_handle;
+    void *task = ((RuxenWakerCell *)waker)->task;
     if (!task) {
         return;
     }
     if (handle < 0) {
-        RivenReactorFdSlot *slot = riven_reactor_find_fd_slot(r, handle);
+        RuxenReactorFdSlot *slot = ruxen_reactor_find_fd_slot(r, handle);
         if (slot) {
             slot->task = task;
             if (slot->fired) {
                 slot->fired = 0;
                 slot->task = NULL;
-                riven_executor_wake_task(task);
+                ruxen_executor_wake_task(task);
             }
         }
         return;
     }
-    int slot = riven_reactor_find_slot(r, handle);
+    int slot = ruxen_reactor_find_slot(r, handle);
     if (slot >= 0) {
         r->slots[slot].task = task;
         if (r->slots[slot].fired) {
             r->slots[slot].task = NULL;
-            riven_executor_wake_task(task);
+            ruxen_executor_wake_task(task);
         }
     }
 }
@@ -429,25 +429,25 @@ void riven_reactor_set_waker(int64_t reactor_handle, int64_t handle, void *waker
  *
  * macOS: EVFILT_READ or EVFILT_WRITE with EV_ADD, no EV_CLEAR
  * (level-triggered analog). `udata` points at the slot. */
-static int64_t riven_reactor_register_fd_internal(int64_t reactor_handle,
+static int64_t ruxen_reactor_register_fd_internal(int64_t reactor_handle,
                                                   int64_t fd_in,
                                                   int mode) {
-    RivenReactor *r;
+    RuxenReactor *r;
     if (reactor_handle == 0) {
-        r = riven_reactor_acquire();
+        r = ruxen_reactor_acquire();
     } else {
-        r = (RivenReactor *)(uintptr_t)reactor_handle;
+        r = (RuxenReactor *)(uintptr_t)reactor_handle;
     }
     int user_fd = (int)fd_in;
     if (user_fd < 0) {
         return 0;
     }
 
-    int slot = riven_reactor_alloc_fd_slot(r);
+    int slot = ruxen_reactor_alloc_fd_slot(r);
     if (slot < 0) {
         return 0;
     }
-    RivenReactorFdSlot *fd_slot = r->fd_slots[slot];
+    RuxenReactorFdSlot *fd_slot = r->fd_slots[slot];
     fd_slot->fd = user_fd;
     fd_slot->mode = mode;
     fd_slot->fired = 0;
@@ -478,12 +478,12 @@ static int64_t riven_reactor_register_fd_internal(int64_t reactor_handle,
     return (int64_t)(-(slot + 1));
 }
 
-int64_t riven_reactor_register_fd_read(int64_t reactor_handle, int64_t fd) {
-    return riven_reactor_register_fd_internal(reactor_handle, fd, 0);
+int64_t ruxen_reactor_register_fd_read(int64_t reactor_handle, int64_t fd) {
+    return ruxen_reactor_register_fd_internal(reactor_handle, fd, 0);
 }
 
-int64_t riven_reactor_register_fd_write(int64_t reactor_handle, int64_t fd) {
-    return riven_reactor_register_fd_internal(reactor_handle, fd, 1);
+int64_t ruxen_reactor_register_fd_write(int64_t reactor_handle, int64_t fd) {
+    return ruxen_reactor_register_fd_internal(reactor_handle, fd, 1);
 }
 
 /* ── Persistent fd registration ────────────────────────────────────────
@@ -502,25 +502,25 @@ int64_t riven_reactor_register_fd_write(int64_t reactor_handle, int64_t fd) {
  * event and strand the task. Level-triggering lets the reactor observe
  * still-readable/still-writable fds after the task has registered its
  * waker. */
-static int64_t riven_reactor_register_fd_persistent_internal(int64_t reactor_handle,
+static int64_t ruxen_reactor_register_fd_persistent_internal(int64_t reactor_handle,
                                                              int64_t fd_in,
                                                              int mode) {
-    RivenReactor *r;
+    RuxenReactor *r;
     if (reactor_handle == 0) {
-        r = riven_reactor_acquire();
+        r = ruxen_reactor_acquire();
     } else {
-        r = (RivenReactor *)(uintptr_t)reactor_handle;
+        r = (RuxenReactor *)(uintptr_t)reactor_handle;
     }
     int user_fd = (int)fd_in;
     if (user_fd < 0) {
         return 0;
     }
 
-    int slot = riven_reactor_alloc_fd_slot(r);
+    int slot = ruxen_reactor_alloc_fd_slot(r);
     if (slot < 0) {
         return 0;
     }
-    RivenReactorFdSlot *fd_slot = r->fd_slots[slot];
+    RuxenReactorFdSlot *fd_slot = r->fd_slots[slot];
     fd_slot->fd = user_fd;
     fd_slot->mode = mode;
     fd_slot->fired = 0;
@@ -551,34 +551,34 @@ static int64_t riven_reactor_register_fd_persistent_internal(int64_t reactor_han
     return (int64_t)(-(slot + 1));
 }
 
-int64_t riven_reactor_register_fd_read_persistent(int64_t reactor_handle, int64_t fd) {
-    return riven_reactor_register_fd_persistent_internal(reactor_handle, fd, 0);
+int64_t ruxen_reactor_register_fd_read_persistent(int64_t reactor_handle, int64_t fd) {
+    return ruxen_reactor_register_fd_persistent_internal(reactor_handle, fd, 0);
 }
 
-int64_t riven_reactor_register_fd_write_persistent(int64_t reactor_handle, int64_t fd) {
-    return riven_reactor_register_fd_persistent_internal(reactor_handle, fd, 1);
+int64_t ruxen_reactor_register_fd_write_persistent(int64_t reactor_handle, int64_t fd) {
+    return ruxen_reactor_register_fd_persistent_internal(reactor_handle, fd, 1);
 }
 
 /* Register a one-shot timer. Returns an opaque i64 handle that
  * `check_fired` and `deregister` accept. `reactor` is the i64-cast
- * pointer returned by `riven_reactor_current_handle`; if 0 is
+ * pointer returned by `ruxen_reactor_current_handle`; if 0 is
  * passed, the function lazy-acquires the current-thread reactor
  * (matches the v1 spec — futures don't need to thread the handle
  * themselves; passing 0 means "use whatever reactor this thread
  * has, allocating if needed"). */
-int64_t riven_reactor_register_timer(int64_t reactor_handle, int64_t nanos) {
-    RivenReactor *r;
+int64_t ruxen_reactor_register_timer(int64_t reactor_handle, int64_t nanos) {
+    RuxenReactor *r;
     if (reactor_handle == 0) {
-        r = riven_reactor_acquire();
+        r = ruxen_reactor_acquire();
     } else {
-        r = (RivenReactor *)(uintptr_t)reactor_handle;
+        r = (RuxenReactor *)(uintptr_t)reactor_handle;
     }
     if (nanos < 0) {
         nanos = 0;
     }
 
 #if defined(__APPLE__)
-    int slot = riven_reactor_alloc_slot(r);
+    int slot = ruxen_reactor_alloc_slot(r);
     if (slot < 0) {
         return 0;
     }
@@ -593,7 +593,7 @@ int64_t riven_reactor_register_timer(int64_t reactor_handle, int64_t nanos) {
            NOTE_NSECONDS, (intptr_t)nanos, NULL);
     if (kevent(r->fd, &ev, 1, NULL, 0, NULL) < 0) {
         r->slots[slot].ident = 0;
-        riven_panic("riven_reactor_register_timer: kevent EV_ADD failed");
+        ruxen_panic("ruxen_reactor_register_timer: kevent EV_ADD failed");
         return 0;
     }
     r->registered_count++;
@@ -601,7 +601,7 @@ int64_t riven_reactor_register_timer(int64_t reactor_handle, int64_t nanos) {
 #elif defined(__linux__)
     int tfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
     if (tfd < 0) {
-        riven_panic("riven_reactor_register_timer: timerfd_create failed");
+        ruxen_panic("ruxen_reactor_register_timer: timerfd_create failed");
         return 0;
     }
     struct itimerspec spec;
@@ -613,7 +613,7 @@ int64_t riven_reactor_register_timer(int64_t reactor_handle, int64_t nanos) {
     }
     if (timerfd_settime(tfd, 0, &spec, NULL) < 0) {
         close(tfd);
-        riven_panic("riven_reactor_register_timer: timerfd_settime failed");
+        ruxen_panic("ruxen_reactor_register_timer: timerfd_settime failed");
         return 0;
     }
     struct epoll_event ev;
@@ -622,11 +622,11 @@ int64_t riven_reactor_register_timer(int64_t reactor_handle, int64_t nanos) {
     ev.data.fd = tfd;
     if (epoll_ctl(r->fd, EPOLL_CTL_ADD, tfd, &ev) < 0) {
         close(tfd);
-        riven_panic("riven_reactor_register_timer: epoll_ctl ADD failed");
+        ruxen_panic("ruxen_reactor_register_timer: epoll_ctl ADD failed");
         return 0;
     }
     {
-        int slot = riven_reactor_alloc_slot(r);
+        int slot = ruxen_reactor_alloc_slot(r);
         if (slot >= 0) {
             r->slots[slot].ident = (int64_t)tfd;
             r->slots[slot].fired = 0;
@@ -638,17 +638,17 @@ int64_t riven_reactor_register_timer(int64_t reactor_handle, int64_t nanos) {
 #endif
 }
 
-int64_t riven_reactor_check_fired(int64_t reactor_handle, int64_t handle) {
+int64_t ruxen_reactor_check_fired(int64_t reactor_handle, int64_t handle) {
     if (reactor_handle == 0 || handle == 0) {
         return 0;
     }
-    RivenReactor *r = (RivenReactor *)(uintptr_t)reactor_handle;
+    RuxenReactor *r = (RuxenReactor *)(uintptr_t)reactor_handle;
 
     /* Fd-readiness slots use negative-encoded handles; route on sign so
      * 4B's AsyncFile / 4C's AsyncTcpStream futures share `check_fired`
      * with TimeSleepFuture without an explicit kind argument. */
     if (handle < 0) {
-        RivenReactorFdSlot *slot = riven_reactor_find_fd_slot(r, handle);
+        RuxenReactorFdSlot *slot = ruxen_reactor_find_fd_slot(r, handle);
         if (!slot) {
             return 0;
         }
@@ -663,7 +663,7 @@ int64_t riven_reactor_check_fired(int64_t reactor_handle, int64_t handle) {
     }
 
 #if defined(__APPLE__)
-    int slot = riven_reactor_find_slot(r, handle);
+    int slot = ruxen_reactor_find_slot(r, handle);
     if (slot < 0) {
         return 0;
     }
@@ -679,17 +679,17 @@ int64_t riven_reactor_check_fired(int64_t reactor_handle, int64_t handle) {
 #endif
 }
 
-void riven_reactor_deregister(int64_t reactor_handle, int64_t handle) {
+void ruxen_reactor_deregister(int64_t reactor_handle, int64_t handle) {
     if (reactor_handle == 0 || handle == 0) {
         return;
     }
-    RivenReactor *r = (RivenReactor *)(uintptr_t)reactor_handle;
+    RuxenReactor *r = (RuxenReactor *)(uintptr_t)reactor_handle;
 
     /* Fd-readiness slots: negative-encoded handle. Tear down the OS
      * registration but do NOT close the user fd — the future owns the
      * fd lifecycle and closes it in its own drop hook. */
     if (handle < 0) {
-        RivenReactorFdSlot *slot = riven_reactor_find_fd_slot(r, handle);
+        RuxenReactorFdSlot *slot = ruxen_reactor_find_fd_slot(r, handle);
         if (!slot) {
             return;
         }
@@ -713,7 +713,7 @@ void riven_reactor_deregister(int64_t reactor_handle, int64_t handle) {
     }
 
 #if defined(__APPLE__)
-    int slot = riven_reactor_find_slot(r, handle);
+    int slot = ruxen_reactor_find_slot(r, handle);
     if (slot < 0) {
         return;
     }
@@ -731,7 +731,7 @@ void riven_reactor_deregister(int64_t reactor_handle, int64_t handle) {
     (void)epoll_ctl(r->fd, EPOLL_CTL_DEL, tfd, NULL);
     close(tfd);
     {
-        int slot = riven_reactor_find_slot(r, handle);
+        int slot = ruxen_reactor_find_slot(r, handle);
         if (slot >= 0) {
             r->slots[slot].ident = 0;
             r->slots[slot].fired = 0;
@@ -761,11 +761,11 @@ void riven_reactor_deregister(int64_t reactor_handle, int64_t handle) {
  * drain in park_current); EVFILT_USER NOTE_TRIGGER coalesces to a
  * single delivery between waits. Either way "multiple wakes between
  * parks → one unpark" is the correct semantic. */
-void riven_reactor_wake(int64_t reactor_handle) {
+void ruxen_reactor_wake(int64_t reactor_handle) {
     if (reactor_handle == 0) {
         return;
     }
-    RivenReactor *r = (RivenReactor *)(uintptr_t)reactor_handle;
+    RuxenReactor *r = (RuxenReactor *)(uintptr_t)reactor_handle;
 #if defined(__APPLE__)
     struct kevent ev;
     EV_SET(&ev, (uintptr_t)&r->wake_fd_sentinel, EVFILT_USER,
@@ -786,7 +786,7 @@ void riven_reactor_wake(int64_t reactor_handle) {
 }
 
 /* Park the current thread on the current-thread reactor's wait point.
- * Called by `riven_thread_yield` in time.c — the existing
+ * Called by `ruxen_thread_yield` in time.c — the existing
  * `Thread.yield_now` AST emission in the block_on rewriter routes
  * through here transparently when there's a reactor + registrations.
  *
@@ -803,12 +803,12 @@ void riven_reactor_wake(int64_t reactor_handle) {
  * "did it fire" bit, so we maintain that bookkeeping ourselves).
  * On Linux fired-ness is observed at check_fired time via read()
  * on the timerfd. */
-void riven_reactor_park_current(void) {
+void ruxen_reactor_park_current(void) {
     if (!t_current_reactor || t_current_reactor->registered_count <= 0) {
         sched_yield();
         return;
     }
-    RivenReactor *r = t_current_reactor;
+    RuxenReactor *r = t_current_reactor;
 
 #if defined(__APPLE__)
     struct kevent events[16];
@@ -828,10 +828,10 @@ void riven_reactor_park_current(void) {
          * in udata (see register_fd_internal). Timer events have a
          * NULL udata and use ident-lookup. Branch on udata. */
         if (events[i].udata != NULL) {
-            RivenReactorFdSlot *fd_slot = (RivenReactorFdSlot *)events[i].udata;
+            RuxenReactorFdSlot *fd_slot = (RuxenReactorFdSlot *)events[i].udata;
             fd_slot->fired = 1;
             if (fd_slot->task) {
-                riven_executor_wake_task(fd_slot->task);
+                ruxen_executor_wake_task(fd_slot->task);
                 fd_slot->task = NULL;
             }
             /* Don't decrement registered_count for fd events — the
@@ -840,11 +840,11 @@ void riven_reactor_park_current(void) {
             continue;
         }
         int64_t ident = (int64_t)events[i].ident;
-        int slot = riven_reactor_find_slot(r, ident);
+        int slot = ruxen_reactor_find_slot(r, ident);
         if (slot >= 0) {
             r->slots[slot].fired = 1;
             if (r->slots[slot].task) {
-                riven_executor_wake_task(r->slots[slot].task);
+                ruxen_executor_wake_task(r->slots[slot].task);
                 r->slots[slot].task = NULL;
             }
         }
@@ -879,19 +879,19 @@ void riven_reactor_park_current(void) {
         if (!r->fd_slots) {
             continue;
         }
-        if (riven_reactor_owns_fd_slot(r, p)) {
-            RivenReactorFdSlot *fd_slot = (RivenReactorFdSlot *)p;
+        if (ruxen_reactor_owns_fd_slot(r, p)) {
+            RuxenReactorFdSlot *fd_slot = (RuxenReactorFdSlot *)p;
             fd_slot->fired = 1;
             if (fd_slot->task) {
-                riven_executor_wake_task(fd_slot->task);
+                ruxen_executor_wake_task(fd_slot->task);
                 fd_slot->task = NULL;
             }
         } else {
-            int timer_slot = riven_reactor_find_slot(r, (int64_t)events[i].data.fd);
+            int timer_slot = ruxen_reactor_find_slot(r, (int64_t)events[i].data.fd);
             if (timer_slot >= 0) {
                 r->slots[timer_slot].fired = 1;
                 if (r->slots[timer_slot].task) {
-                    riven_executor_wake_task(r->slots[timer_slot].task);
+                    ruxen_executor_wake_task(r->slots[timer_slot].task);
                     r->slots[timer_slot].task = NULL;
                 }
             }

@@ -4,7 +4,7 @@
 > tutorial is the user-facing companion; the spec is the source of
 > truth for the compiler's behaviour.
 
-Riven gives you three layers for turning values into strings:
+Ruxen gives you three layers for turning values into strings:
 
 1. **Interpolation** — `"hello #{name}"` inline in any string literal.
 2. **The `Display` mixin** — how *your* types render in interpolation.
@@ -17,7 +17,7 @@ Riven gives you three layers for turning values into strings:
 
 Wrap any expression in `#{...}` inside a double-quoted string:
 
-```riven
+```ruxen
 def main
   let name = "world"
   let n = 42
@@ -50,7 +50,7 @@ The `:?` spec routes through `Debug` instead of `Display`.  Every
 type has `Debug` implicitly (§3.6), so a compiler-generated
 `T_to_debug` function exists for it:
 
-```riven
+```ruxen
 struct Point
   x: Int
   y: Int
@@ -71,7 +71,7 @@ p = Point { x: 1, y: 2 }
 
 Enums work the same way:
 
-```riven
+```ruxen
 enum Color
   Red
   Green
@@ -111,7 +111,7 @@ The grammar inside `#{...}` mirrors Rust's:
 
 ### 3.1 Width and alignment
 
-```riven
+```ruxen
 def main
   let n: Int = 42
   puts "[#{n:>5}]"      # right-align (default for numerics)
@@ -136,7 +136,7 @@ happens — the value prints in full.
 Any single character before the alignment flag becomes the pad
 char:
 
-```riven
+```ruxen
 def main
   let n: Int = 7
   puts "[#{n:*<5}]"     # left-align, fill with `*`
@@ -157,7 +157,7 @@ Non-ASCII fill codepoints fall back to space in v1.
 
 Precision (`.N`) is the number of decimal digits for floats:
 
-```riven
+```ruxen
 def main
   let pi: Float = 3.14159
   puts "pi = #{pi:.2}"        # 2 decimal places
@@ -180,7 +180,7 @@ which uses `snprintf("%.*f", prec, value)`.
 For strings, precision is the maximum number of **characters**
 (UTF-8 codepoints) — boundary-safe:
 
-```riven
+```ruxen
 def main
   let s: String = String.from("hello world")
   puts "[#{s:.5}]"
@@ -201,7 +201,7 @@ Rust's `min_const_generics`-era semantics.
 The two compose: precision runs first (shortening the value), then
 width pads the result.
 
-```riven
+```ruxen
 def main
   let pi: Float = 3.14159
   puts "[#{pi:>8.2}]"
@@ -218,7 +218,7 @@ Read as "right-align, total width 8, 2 decimal places".
 
 ## 4. Implementing `Display` for your own type
 
-```riven
+```ruxen
 class Money
   cents: Int
 
@@ -248,7 +248,7 @@ price: $4250
 Things to note:
 
 - `fmt` takes `&var Formatter` explicitly; `self` is the implicit
-  reading receiver, same as elsewhere in Riven.
+  reading receiver, same as elsewhere in Ruxen.
 - `f.write_str` returns `Result[(), FmtError]`.  Returning that
   result directly from `fmt` is idiomatic; `let _ = ...` discards
   earlier intermediate calls.

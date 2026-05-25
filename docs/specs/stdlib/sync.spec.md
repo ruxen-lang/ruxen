@@ -101,7 +101,7 @@ if `.join()` was never called.
 The Mutex stores `{ pthread_mutex_t, int64_t payload }`. The payload
 carries either T inline (if T fits in 8 bytes per the existing ABI)
 or a heap pointer to T. The same i64-payload pattern as
-`Array[T]`/`Vec[T]` — see `library/std/array/src/lib.rvn` for the
+`Array[T]`/`Vec[T]` — see `library/std/array/src/lib.rx` for the
 canonical comment.
 
 **Poison rule:** if the thread holding the lock panics, the mutex
@@ -143,7 +143,7 @@ drop if T implements Drop) and the allocation is `free`'d.
 
 The canonical pattern (covered by the spawn_join e2e case):
 
-```rvn
+```rx
 use std.sync.{Thread, Mutex, SharedSync}
 
 counter = SharedSync.new(Mutex.new(0))
@@ -245,13 +245,13 @@ bench fails the spec.
 | B5, B6    | `thread_spawn_join_round_trip`                       | `std_sync_runtime.rs`      |
 | B7, B8    | `mutex_lock_unlock_round_trip`                       | `std_sync_runtime.rs`      |
 | B9        | `sharedsync_clone_drop_refcount`                     | `std_sync_runtime.rs`      |
-| B10       | e2e `cases/540_spawn_join_round_trip.rvn`            | release-e2e                |
+| B10       | e2e `cases/540_spawn_join_round_trip.rx`            | release-e2e                |
 | B11       | `poison_error_and_thread_panic_display`              | `std_sync_runtime.rs`      |
 | B12       | `send_sync_marker_mixins_register_and_resolve`       | `concurrency_markers.rs`   |
 | B13, B14  | `thread_spawn_rejects_non_send_capture_e1100`        | `concurrency_negative.rs`  |
 | B15       | `mutex_new_rejects_non_send_t_e1101`                 | `concurrency_negative.rs`  |
 | B16       | `sharedsync_new_rejects_non_send_t_e1102`            | `concurrency_negative.rs`  |
-| B17       | e2e `cases/541_mutex_counter_stress.rvn`             | release-e2e                |
+| B17       | e2e `cases/541_mutex_counter_stress.rx`             | release-e2e                |
 | B18       | bench `tests/benches/concurrency_lock_throughput.rs` | bench                      |
 
 ---
@@ -261,7 +261,7 @@ bench fails the spec.
 - **Auto-derived `Send`/`Sync` for user classes.** Requires the
   auto-mixin engine (field-set walking). Tracked as a follow-up
   prompt; manual `include Send` covers the gap.
-- **Panic unwinding.** Currently `riven_panic` aborts. Once unwind
+- **Panic unwinding.** Currently `ruxen_panic` aborts. Once unwind
   support lands, `JoinHandle.join` must catch the unwind and return
   `Err(ThreadPanic)`; for now, a panicked thread aborts the whole
   process, so B6's Err arm is reachable only via an explicit

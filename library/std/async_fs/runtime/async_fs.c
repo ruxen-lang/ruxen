@@ -1,18 +1,18 @@
 /*
  * std::async_fs runtime — backs the AsyncFile / AsyncOpenFuture /
  * AsyncReadToStringFuture / AsyncWriteAllFuture surface declared in
- * library/std/async_fs/src/lib.rvn.
+ * library/std/async_fs/src/lib.rx.
  *
  * Spec: docs/specs/stdlib/async_io.spec.md Milestone 4B (B4–B6).
  *
  * Design notes:
  *   - AsyncFile is a thin wrapper around a non-blocking POSIX fd —
- *     same wire shape as RivenFile (8 bytes: int32 fd + int32 closed)
+ *     same wire shape as RuxenFile (8 bytes: int32 fd + int32 closed)
  *     so future BufReader / shared-fd tooling can cast across without
  *     a translation layer.
  *   - The three futures are hand-written (not async-def-lowered). They
- *     hold an opaque "state" pointer the Riven side stashes as an Int
- *     field; the state struct lives entirely in C so the Riven future
+ *     hold an opaque "state" pointer the Ruxen side stashes as an Int
+ *     field; the state struct lives entirely in C so the Ruxen future
  *     class stays small (5 Int fields, no heap of its own beyond the
  *     state pointer).
  *   - Reactor integration: when a `read(2)` / `write(2)` returns
@@ -22,26 +22,26 @@
  *     re-polls; the future drains again until EOF / EAGAIN / done.
  *
  * Symbols exported here:
- *   riven_async_file_open(path, flags) -> Result[AsyncFile, IoError]
+ *   ruxen_async_file_open(path, flags) -> Result[AsyncFile, IoError]
  *       Eager non-blocking open(2) — same semantics as
- *       riven_file_open but adds O_NONBLOCK. Used by both the read-
+ *       ruxen_file_open but adds O_NONBLOCK. Used by both the read-
  *       and write-side AsyncOpenFuture constructors via their init.
- *   riven_async_file_drop(self) -> ()
+ *   ruxen_async_file_drop(self) -> ()
  *       Drop hook — closes the fd if not already closed. Registered
  *       in the user_drop_classes set by mir/lower/collect (because
- *       the .rvn class body declares `def drop`).
+ *       the .rx class body declares `def drop`).
  *
- *   riven_async_read_state_new(fd) -> state*
- *   riven_async_read_step(state) -> int (0 progress, 1 EAGAIN, 2 EOF, 3 error)
- *   riven_async_read_state_take_result(state) -> Result[String, IoError]
- *   riven_async_read_state_get_fd(state) -> int
- *   riven_async_read_state_free(state) -> ()
+ *   ruxen_async_read_state_new(fd) -> state*
+ *   ruxen_async_read_step(state) -> int (0 progress, 1 EAGAIN, 2 EOF, 3 error)
+ *   ruxen_async_read_state_take_result(state) -> Result[String, IoError]
+ *   ruxen_async_read_state_get_fd(state) -> int
+ *   ruxen_async_read_state_free(state) -> ()
  *
- *   riven_async_write_state_new(fd, content) -> state*
- *   riven_async_write_step(state) -> int (0 progress, 1 EAGAIN, 2 done, 3 error)
- *   riven_async_write_state_take_result(state) -> Result[(), IoError]
- *   riven_async_write_state_get_fd(state) -> int
- *   riven_async_write_state_free(state) -> ()
+ *   ruxen_async_write_state_new(fd, content) -> state*
+ *   ruxen_async_write_step(state) -> int (0 progress, 1 EAGAIN, 2 done, 3 error)
+ *   ruxen_async_write_state_take_result(state) -> Result[(), IoError]
+ *   ruxen_async_write_state_get_fd(state) -> int
+ *   ruxen_async_write_state_free(state) -> ()
  */
 
 #include "../../core/runtime/runtime.h"
@@ -55,20 +55,20 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-/* AsyncFile wire layout — kept binary-compatible with RivenFile so
+/* AsyncFile wire layout — kept binary-compatible with RuxenFile so
  * future cross-package work (BufReader_for_AsyncFile, sendfile bridges)
  * can cast without an adapter. */
 typedef struct {
     int32_t fd;
     int32_t closed;
-} RivenAsyncFile;
+} RuxenAsyncFile;
 
-_Static_assert(sizeof(RivenAsyncFile) == 8,
-    "RivenAsyncFile wire layout drifted from documented 8-byte form");
+_Static_assert(sizeof(RuxenAsyncFile) == 8,
+    "RuxenAsyncFile wire layout drifted from documented 8-byte form");
 
 /* ── open(2) — eager, non-blocking ─────────────────────────────────── */
 
-/* flags shape mirrors riven_file_open / _create:
+/* flags shape mirrors ruxen_file_open / _create:
  *   0 = read-only            (O_RDONLY)
  *   1 = write-create-truncate (O_WRONLY | O_CREAT | O_TRUNC, 0644)
  * O_NONBLOCK is OR'd on always — even though open(2) on regular files
@@ -76,10 +76,10 @@ _Static_assert(sizeof(RivenAsyncFile) == 8,
  * write surface EAGAIN instead of blocking when the file is a fifo /
  * socket-like fd. Pipes and special files transparently get the right
  * non-blocking behaviour without further code. */
-void *riven_async_file_open(const char *path, int64_t flags) {
+void *ruxen_async_file_open(const char *path, int64_t flags) {
     if (!path) {
-        return riven_result_err_value(
-            (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_result_err_value(
+            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
     }
     int open_flags;
     int has_mode = 0;
@@ -100,21 +100,21 @@ void *riven_async_file_open(const char *path, int64_t flags) {
                       : open(path, open_flags);
     } while (fd < 0 && errno == EINTR);
     if (fd < 0) {
-        return riven_io_error_from_errno(errno);
+        return ruxen_io_error_from_errno(errno);
     }
 
-    RivenAsyncFile *f =
-        (RivenAsyncFile *)riven_alloc(sizeof(RivenAsyncFile));
+    RuxenAsyncFile *f =
+        (RuxenAsyncFile *)ruxen_alloc(sizeof(RuxenAsyncFile));
     f->fd = fd;
     f->closed = 0;
-    return riven_result_ok_value((int64_t)f);
+    return ruxen_result_ok_value((int64_t)f);
 }
 
-/* Drop hook — closes the fd if still open. Mirrors riven_file_drop.
+/* Drop hook — closes the fd if still open. Mirrors ruxen_file_drop.
  * Errors are swallowed (nobody to surface them to at scope exit). */
-void riven_async_file_drop(void *self) {
+void ruxen_async_file_drop(void *self) {
     if (!self) return;
-    RivenAsyncFile *f = (RivenAsyncFile *)self;
+    RuxenAsyncFile *f = (RuxenAsyncFile *)self;
     if (!f->closed && f->fd >= 0) {
         int rc;
         do {
@@ -126,12 +126,12 @@ void riven_async_file_drop(void *self) {
     }
 }
 
-/* Riven-callable "get fd" — used by the read/write future constructors
+/* Ruxen-callable "get fd" — used by the read/write future constructors
  * to extract the fd from an AsyncFile passed in by the user. Returns
  * the raw fd, or -1 if closed. */
-int64_t riven_async_file_fd(void *self) {
+int64_t ruxen_async_file_fd(void *self) {
     if (!self) return -1;
-    RivenAsyncFile *f = (RivenAsyncFile *)self;
+    RuxenAsyncFile *f = (RuxenAsyncFile *)self;
     if (f->closed) return -1;
     return (int64_t)f->fd;
 }
@@ -148,15 +148,15 @@ typedef struct {
     int done;            /* 1 once EOF reached */
     int result_taken;    /* 1 once the caller has consumed the result */
     char *out_str;       /* canonical-pool String pointer once done */
-} RivenAsyncReadState;
+} RuxenAsyncReadState;
 
-void *riven_async_read_state_new(int64_t fd) {
-    RivenAsyncReadState *s =
-        (RivenAsyncReadState *)riven_alloc(sizeof(RivenAsyncReadState));
+void *ruxen_async_read_state_new(int64_t fd) {
+    RuxenAsyncReadState *s =
+        (RuxenAsyncReadState *)ruxen_alloc(sizeof(RuxenAsyncReadState));
     s->fd = (int)fd;
     s->cap = 256;
     s->buf = (char *)malloc(s->cap);
-    if (!s->buf) riven_panic("riven_async_read_state_new: malloc failed");
+    if (!s->buf) ruxen_panic("ruxen_async_read_state_new: malloc failed");
     s->len = 0;
     s->err_tag = 0;
     s->err_set = 0;
@@ -166,26 +166,26 @@ void *riven_async_read_state_new(int64_t fd) {
     return s;
 }
 
-int64_t riven_async_read_state_get_fd(void *state) {
+int64_t ruxen_async_read_state_get_fd(void *state) {
     if (!state) return -1;
-    return (int64_t)((RivenAsyncReadState *)state)->fd;
+    return (int64_t)((RuxenAsyncReadState *)state)->fd;
 }
 
 /* Drain the fd as far as it'll go in one step. Returns:
  *   0 — made progress (or zero-progress but no EAGAIN yet); caller may
  *       loop without parking. (We collapse "made progress" into "look
  *       again" — the inner loop here continues until EAGAIN / EOF /
- *       error, so the Riven side typically sees only 1 / 2 / 3.)
+ *       error, so the Ruxen side typically sees only 1 / 2 / 3.)
  *   1 — would block (EAGAIN); caller must park on read-readiness.
  *   2 — EOF reached; result_string is populated.
  *   3 — fatal error; err_tag set.
  *
- * The Riven side calls this until it returns non-0. Looping fully here
- * (rather than returning 0 per chunk) keeps the Riven control flow
+ * The Ruxen side calls this until it returns non-0. Looping fully here
+ * (rather than returning 0 per chunk) keeps the Ruxen control flow
  * trivial — no inner re-loop, just "step until non-0, then dispatch". */
-int64_t riven_async_read_step(void *state) {
+int64_t ruxen_async_read_step(void *state) {
     if (!state) return 3;
-    RivenAsyncReadState *s = (RivenAsyncReadState *)state;
+    RuxenAsyncReadState *s = (RuxenAsyncReadState *)state;
     if (s->done) return 2;
     if (s->err_set) return 3;
 
@@ -196,7 +196,7 @@ int64_t riven_async_read_step(void *state) {
             char *next = (char *)realloc(s->buf, next_cap);
             if (!next) {
                 s->err_set = 1;
-                s->err_tag = RIVEN_IO_ERROR_OUT_OF_MEMORY;
+                s->err_tag = RUXEN_IO_ERROR_OUT_OF_MEMORY;
                 return 3;
             }
             s->buf = next;
@@ -214,19 +214,19 @@ int64_t riven_async_read_step(void *state) {
             }
             s->err_set = 1;
             switch (errno) {
-                case ENOENT: s->err_tag = RIVEN_IO_ERROR_NOT_FOUND; break;
+                case ENOENT: s->err_tag = RUXEN_IO_ERROR_NOT_FOUND; break;
                 case EACCES:
-                case EPERM:  s->err_tag = RIVEN_IO_ERROR_PERMISSION_DENIED; break;
-                case EBADF:  s->err_tag = RIVEN_IO_ERROR_INVALID_INPUT; break;
-                case EPIPE:  s->err_tag = RIVEN_IO_ERROR_BROKEN_PIPE; break;
-                default:     s->err_tag = RIVEN_IO_ERROR_OTHER; break;
+                case EPERM:  s->err_tag = RUXEN_IO_ERROR_PERMISSION_DENIED; break;
+                case EBADF:  s->err_tag = RUXEN_IO_ERROR_INVALID_INPUT; break;
+                case EPIPE:  s->err_tag = RUXEN_IO_ERROR_BROKEN_PIPE; break;
+                default:     s->err_tag = RUXEN_IO_ERROR_OTHER; break;
             }
             return 3;
         }
         if (got == 0) {
             /* EOF — finalize the String. */
             s->buf[s->len] = '\0';
-            s->out_str = riven_string_from(s->buf);
+            s->out_str = ruxen_string_from(s->buf);
             s->done = 1;
             return 2;
         }
@@ -234,21 +234,21 @@ int64_t riven_async_read_step(void *state) {
     }
 }
 
-/* Pull out the Result[String, IoError] for return. Called by the Riven
+/* Pull out the Result[String, IoError] for return. Called by the Ruxen
  * poll method once `step` returns 2 (EOF) or 3 (error). After this,
  * the state's owned heap (`buf`) is freed and out_str ownership has
  * passed to the result. The state struct itself is freed separately by
- * `riven_async_read_state_free`. */
-void *riven_async_read_state_take_result(void *state) {
+ * `ruxen_async_read_state_free`. */
+void *ruxen_async_read_state_take_result(void *state) {
     if (!state) {
-        return riven_result_err_value(
-            (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_result_err_value(
+            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
     }
-    RivenAsyncReadState *s = (RivenAsyncReadState *)state;
+    RuxenAsyncReadState *s = (RuxenAsyncReadState *)state;
     if (s->result_taken) {
         /* Defensive — double-take returns a fresh error. */
-        return riven_result_err_value(
-            (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_result_err_value(
+            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
     }
     s->result_taken = 1;
     if (s->buf) {
@@ -256,17 +256,17 @@ void *riven_async_read_state_take_result(void *state) {
         s->buf = NULL;
     }
     if (s->err_set) {
-        return riven_result_err_value(
-            (int64_t)riven_io_error_unit(s->err_tag));
+        return ruxen_result_err_value(
+            (int64_t)ruxen_io_error_unit(s->err_tag));
     }
     /* out_str points into the canonical String pool; ownership is in
      * the pool itself, so we hand back the pointer without freeing. */
-    return riven_result_ok_value((int64_t)s->out_str);
+    return ruxen_result_ok_value((int64_t)s->out_str);
 }
 
-void riven_async_read_state_free(void *state) {
+void ruxen_async_read_state_free(void *state) {
     if (!state) return;
-    RivenAsyncReadState *s = (RivenAsyncReadState *)state;
+    RuxenAsyncReadState *s = (RuxenAsyncReadState *)state;
     if (s->buf) {
         free(s->buf);
         s->buf = NULL;
@@ -285,11 +285,11 @@ typedef struct {
     int err_set;
     int done;
     int result_taken;
-} RivenAsyncWriteState;
+} RuxenAsyncWriteState;
 
-void *riven_async_write_state_new(int64_t fd, const char *content) {
-    RivenAsyncWriteState *s =
-        (RivenAsyncWriteState *)riven_alloc(sizeof(RivenAsyncWriteState));
+void *ruxen_async_write_state_new(int64_t fd, const char *content) {
+    RuxenAsyncWriteState *s =
+        (RuxenAsyncWriteState *)ruxen_alloc(sizeof(RuxenAsyncWriteState));
     s->fd = (int)fd;
     s->content = content ? content : "";
     s->total = strlen(s->content);
@@ -301,15 +301,15 @@ void *riven_async_write_state_new(int64_t fd, const char *content) {
     return s;
 }
 
-int64_t riven_async_write_state_get_fd(void *state) {
+int64_t ruxen_async_write_state_get_fd(void *state) {
     if (!state) return -1;
-    return (int64_t)((RivenAsyncWriteState *)state)->fd;
+    return (int64_t)((RuxenAsyncWriteState *)state)->fd;
 }
 
 /* Same return codes as read_step. */
-int64_t riven_async_write_step(void *state) {
+int64_t ruxen_async_write_step(void *state) {
     if (!state) return 3;
-    RivenAsyncWriteState *s = (RivenAsyncWriteState *)state;
+    RuxenAsyncWriteState *s = (RuxenAsyncWriteState *)state;
     if (s->done) return 2;
     if (s->err_set) return 3;
 
@@ -327,17 +327,17 @@ int64_t riven_async_write_step(void *state) {
             }
             s->err_set = 1;
             switch (errno) {
-                case EBADF:  s->err_tag = RIVEN_IO_ERROR_INVALID_INPUT; break;
-                case EPIPE:  s->err_tag = RIVEN_IO_ERROR_BROKEN_PIPE; break;
+                case EBADF:  s->err_tag = RUXEN_IO_ERROR_INVALID_INPUT; break;
+                case EPIPE:  s->err_tag = RUXEN_IO_ERROR_BROKEN_PIPE; break;
                 case EACCES:
-                case EPERM:  s->err_tag = RIVEN_IO_ERROR_PERMISSION_DENIED; break;
-                default:     s->err_tag = RIVEN_IO_ERROR_OTHER; break;
+                case EPERM:  s->err_tag = RUXEN_IO_ERROR_PERMISSION_DENIED; break;
+                default:     s->err_tag = RUXEN_IO_ERROR_OTHER; break;
             }
             return 3;
         }
         if (put == 0) {
             s->err_set = 1;
-            s->err_tag = RIVEN_IO_ERROR_WRITE_ZERO;
+            s->err_tag = RUXEN_IO_ERROR_WRITE_ZERO;
             return 3;
         }
         s->written += (size_t)put;
@@ -346,26 +346,26 @@ int64_t riven_async_write_step(void *state) {
     return 2;
 }
 
-void *riven_async_write_state_take_result(void *state) {
+void *ruxen_async_write_state_take_result(void *state) {
     if (!state) {
-        return riven_result_err_value(
-            (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_result_err_value(
+            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
     }
-    RivenAsyncWriteState *s = (RivenAsyncWriteState *)state;
+    RuxenAsyncWriteState *s = (RuxenAsyncWriteState *)state;
     if (s->result_taken) {
-        return riven_result_err_value(
-            (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_result_err_value(
+            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
     }
     s->result_taken = 1;
     if (s->err_set) {
-        return riven_result_err_value(
-            (int64_t)riven_io_error_unit(s->err_tag));
+        return ruxen_result_err_value(
+            (int64_t)ruxen_io_error_unit(s->err_tag));
     }
     /* Ok(()) — unit payload is just 0. */
-    return riven_result_ok_value(0);
+    return ruxen_result_ok_value(0);
 }
 
-void riven_async_write_state_free(void *state) {
+void ruxen_async_write_state_free(void *state) {
     if (!state) return;
     free(state);
 }

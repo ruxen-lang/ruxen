@@ -8,26 +8,26 @@ Blocks: none
 
 ## 1. Summary & motivation
 
-Riven has no source-level debugger today. A developer cannot
-`breakpoint` in VSCode, step over a Riven `let` statement, inspect
-locals, see a call stack labeled with Riven function names, or use any
+Ruxen has no source-level debugger today. A developer cannot
+`breakpoint` in VSCode, step over a Ruxen `let` statement, inspect
+locals, see a call stack labeled with Ruxen function names, or use any
 of the standard debugging conveniences that every mainstream
 compiled language offers.
 
-The absence is visible: `crates/riven-core/src/codegen/llvm/debug.rs`
+The absence is visible: `crates/ruxen-core/src/codegen/llvm/debug.rs`
 is a three-line stub that says "Full DWARF debug info will be
 implemented in a follow-up phase." No debug info is emitted on either
-Cranelift or LLVM. The `rivenc` CLI has no `--debug`, `--emit-debug`,
-or `-g` flag (`crates/rivenc/src/main.rs:40-68`). The `riven-cli`
-`build` command has no debug-symbol knob (`crates/riven-cli/src/cli.rs:42-52`).
+Cranelift or LLVM. The `ruxenc` CLI has no `--debug`, `--emit-debug`,
+or `-g` flag (`crates/ruxenc/src/main.rs:40-68`). The `ruxen-cli`
+`build` command has no debug-symbol knob (`crates/ruxen-cli/src/cli.rs:42-52`).
 
 This doc specifies:
 
 1. DWARF v5 emission through Inkwell's `DebugInfoBuilder` wired into
    the LLVM backend codegen.
 2. A lightweight Debug Adapter Protocol (DAP) server, shipped as a new
-   crate `riven-dap`, so VSCode / Neovim / any DAP-capable client can
-   set breakpoints, step, and inspect locals in a Riven program.
+   crate `ruxen-dap`, so VSCode / Neovim / any DAP-capable client can
+   set breakpoints, step, and inspect locals in a Ruxen program.
 3. Pretty-printer support for the v1 stdlib types (`String`, `Array`,
    `Option`, `Result`, `Map`) — delivered as optional Python
    scripts for `lldb`/`gdb` that the DAP adapter auto-loads.
@@ -43,7 +43,7 @@ UI.
 
 ### 2.1 LLVM codegen — no debug info at all
 
-`crates/riven-core/src/codegen/llvm/debug.rs:1-3`:
+`crates/ruxen-core/src/codegen/llvm/debug.rs:1-3`:
 
 ```rust
 //! Debug info generation (stub).
@@ -62,7 +62,7 @@ line above.
 
 ### 2.2 Cranelift codegen — no debug info
 
-`crates/riven-core/src/codegen/cranelift.rs` (1127 lines) has no
+`crates/ruxen-core/src/codegen/cranelift.rs` (1127 lines) has no
 calls into `cranelift-codegen`'s `debug::write_debuginfo` helper and
 doesn't enable the `emit_dwarf` flag. Cranelift *can* emit DWARF for
 line/column mappings and basic local-variable info, but the
@@ -70,28 +70,28 @@ integration work is non-trivial (see §5.3).
 
 ### 2.3 CLI flags
 
-`rivenc` supports `--release`, `--backend=cranelift|llvm`,
-`--opt-level=0..3|s|z` (`crates/rivenc/src/main.rs:41-57`) but has no
+`ruxenc` supports `--release`, `--backend=cranelift|llvm`,
+`--opt-level=0..3|s|z` (`crates/ruxenc/src/main.rs:41-57`) but has no
 debug-info flag. `opt-level=0` produces unoptimized code but without
 DWARF, so gdb/lldb show `??` for function names and `<optimized out>`
 for locals.
 
-`riven-cli` `build` has `--release` but no `--debug` / `-g` flag
-(`crates/riven-cli/src/cli.rs:42-52`). `cargo`-style conventions
+`ruxen-cli` `build` has `--release` but no `--debug` / `-g` flag
+(`crates/ruxen-cli/src/cli.rs:42-52`). `cargo`-style conventions
 would give `-g` at opt-level-0 by default in debug profile.
 
 ### 2.4 Runtime C shim
 
-`crates/riven-core/runtime/runtime.c` is compiled via `cc` in
-`crates/riven-core/src/codegen/object.rs::compile_runtime`. A quick
+`crates/ruxen-core/runtime/runtime.c` is compiled via `cc` in
+`crates/ruxen-core/src/codegen/object.rs::compile_runtime`. A quick
 grep shows no `-g` flag is passed. For a working debugger experience,
 the runtime must also ship with DWARF — otherwise stepping into
-`riven_string_concat` lands in assembly without source.
+`ruxen_string_concat` lands in assembly without source.
 
 ### 2.5 No DAP adapter
 
 No crate, no source file, no dependency on any DAP library. Editors
-cannot launch a Riven debugger today.
+cannot launch a Ruxen debugger today.
 
 ---
 
@@ -99,14 +99,14 @@ cannot launch a Riven debugger today.
 
 ### Goals
 
-1. Running `riven build --debug` (or `rivenc --emit-debug`) produces an
+1. Running `ruxen build --debug` (or `ruxenc --emit-debug`) produces an
    executable with DWARF v5 debug info embedded (or in a separate
    `.dwarf`/dSYM file on macOS).
-2. Setting a breakpoint on a line of Riven source in VSCode/Neovim
+2. Setting a breakpoint on a line of Ruxen source in VSCode/Neovim
    pauses execution at that line.
-3. `next`, `step`, `finish`, `continue` all work at Riven-source
+3. `next`, `step`, `finish`, `continue` all work at Ruxen-source
    granularity.
-4. The `locals` panel shows every Riven `let` and function parameter
+4. The `locals` panel shows every Ruxen `let` and function parameter
    currently in scope, by source name.
 5. Primitive types (`Int`, `Float`, `Bool`, `String`, `&str`) display
    as their source value, not the underlying pointer / integer.
@@ -123,8 +123,8 @@ cannot launch a Riven debugger today.
   "debug builds force `--backend=llvm`." Support Cranelift line-only
   debug info as a stretch goal.
 - **Reverse / time-travel debugging.** rr is out of scope.
-- **Conditional breakpoints evaluated by riven-lang expressions.**
-  Use gdb/lldb's own expression evaluator; a Riven-expression parser
+- **Conditional breakpoints evaluated by ruxen-lang expressions.**
+  Use gdb/lldb's own expression evaluator; a Ruxen-expression parser
   in gdb is a much larger ask.
 - **Multithreaded debugging.** Tier-1 doc 02 hasn't shipped. When it
   does, the single-thread assumption below will need updating.
@@ -138,14 +138,14 @@ cannot launch a Riven debugger today.
 ### 4.1 CLI flags
 
 ```
-rivenc hello.rvn --debug                 # adds -g at opt 0
-rivenc hello.rvn --debug --opt-level=2   # debug info at -O2 (works but locals may be optimized out)
-rivenc hello.rvn --release --debug       # DWARF + LLVM O2 — best for perf with partial debug
-riven build --debug                      # project build with debug info
-riven build --profile dev                # alias: --debug + -O0 (default in debug profile)
+ruxenc hello.rx --debug                 # adds -g at opt 0
+ruxenc hello.rx --debug --opt-level=2   # debug info at -O2 (works but locals may be optimized out)
+ruxenc hello.rx --release --debug       # DWARF + LLVM O2 — best for perf with partial debug
+ruxen build --debug                      # project build with debug info
+ruxen build --profile dev                # alias: --debug + -O0 (default in debug profile)
 ```
 
-Default profile for `riven build` (no flags) gains `debug = true,
+Default profile for `ruxen build` (no flags) gains `debug = true,
 opt_level = 0`. `--release` continues to mean `debug = false, opt_level = 2`.
 
 ### 4.2 Debug-info output location
@@ -158,12 +158,12 @@ opt_level = 0`. `--release` continues to mean `debug = false, opt_level = 2`.
 
 ### 4.3 DAP adapter
 
-Shipped as `crates/riven-dap/` with a `riven-dap` binary. Communicates
+Shipped as `crates/ruxen-dap/` with a `ruxen-dap` binary. Communicates
 over stdio per DAP convention. Launch arguments (JSON):
 
 ```json
 {
-  "type": "riven",
+  "type": "ruxen",
   "request": "launch",
   "program": "${workspaceFolder}/target/debug/my-program",
   "args": ["--flag"],
@@ -174,12 +174,12 @@ over stdio per DAP convention. Launch arguments (JSON):
 ```
 
 The adapter delegates actual debugging to `lldb-dap` (shipped with
-LLVM 18) or `gdb --interpreter=mi2`. `riven-dap` is primarily a thin
+LLVM 18) or `gdb --interpreter=mi2`. `ruxen-dap` is primarily a thin
 shim that:
 
 1. Translates DAP requests to the underlying debugger's protocol.
 2. Injects the pretty-printer scripts on `initialize`.
-3. Normalizes paths to match Riven's `src/**.rvn` layout.
+3. Normalizes paths to match Ruxen's `src/**.rx` layout.
 4. Handles `launch` vs `attach` vs `restart`.
 
 Directly reusing `lldb-dap`/`vscode-lldb` is the recommended first
@@ -191,11 +191,11 @@ A new section in `editors/vscode/package.json`:
 
 ```json
 "debuggers": [{
-  "type": "riven",
-  "label": "Riven Debugger",
+  "type": "ruxen",
+  "label": "Ruxen Debugger",
   "program": "./out/debugger.js",
   "runtime": "node",
-  "languages": ["riven"],
+  "languages": ["ruxen"],
   "configurationAttributes": {
     "launch": {
       "required": ["program"],
@@ -220,7 +220,7 @@ plan:
    let (di_builder, di_cu) = module.create_debug_info_builder(
        /* allow_unresolved = */ true,
        DWARFSourceLanguage::C,   // closest available; see §9
-       &file_name, &dir, "rivenc",
+       &file_name, &dir, "ruxenc",
        /* is_optimized = */ opt_level > 0,
        /* flags = */ "",
        /* runtime_ver = */ 0,
@@ -249,9 +249,9 @@ Reference: [Inkwell debug info example][inkwell-dbg] and LLVM's own
 
 ### 5.2 Type → `DIType` mapping
 
-Each Riven `Ty` maps to a DWARF type tag:
+Each Ruxen `Ty` maps to a DWARF type tag:
 
-| Riven `Ty` | DWARF kind | DIType construction |
+| Ruxen `Ty` | DWARF kind | DIType construction |
 |---|---|---|
 | `Int`, `Int64` | `DW_TAG_base_type`, `DW_ATE_signed`, 64 bits | `create_basic_type` |
 | `Int32`, `Int16`, `Int8` | `DW_ATE_signed` at the matching width | ditto |
@@ -302,15 +302,15 @@ Two options:
 
 **Option A (recommended for v1): reuse `lldb-dap`.**
 LLVM 18 ships `lldb-dap` — a DAP server that drives lldb. Our
-`riven-dap` binary:
+`ruxen-dap` binary:
 
 1. Starts `lldb-dap` as a child process.
 2. Forwards DAP stdin/stdout.
 3. Intercepts `initialize` to inject pretty-printer commands
-   (`command script import <path>/riven_pp.py`).
-4. Intercepts `setBreakpoints` to convert `.rvn` paths — no conversion
-   needed in practice, since LLVM emits paths exactly as seen by rivenc.
-5. Adds one custom DAP event: `riven/cacheInvalidated` when the user
+   (`command script import <path>/ruxen_pp.py`).
+4. Intercepts `setBreakpoints` to convert `.rx` paths — no conversion
+   needed in practice, since LLVM emits paths exactly as seen by ruxenc.
+5. Adds one custom DAP event: `ruxen/cacheInvalidated` when the user
    rebuilds, prompting the client to reload symbols.
 
 **Option B: bespoke Rust DAP server.**
@@ -320,7 +320,7 @@ Non-trivial; defer to v2.
 
 ### 5.5 MIR span tracking
 
-Current `MirInst` variants (`crates/riven-core/src/mir/nodes.rs:184-304`)
+Current `MirInst` variants (`crates/ruxen-core/src/mir/nodes.rs:184-304`)
 do **not** carry source spans. For DWARF line numbers, each instruction
 needs one. Add:
 
@@ -344,21 +344,21 @@ upgrade: v1 coarse-grained, v2 per-instruction.
 ### 5.6 Runtime debug info
 
 Update `codegen::object::compile_runtime` to pass `-g` when the
-compile request is a debug build. Runtime functions (`riven_print`,
-`riven_vec_push`, etc.) then appear by name in the stack trace.
+compile request is a debug build. Runtime functions (`ruxen_print`,
+`ruxen_vec_push`, etc.) then appear by name in the stack trace.
 Trivial change; ~5 lines.
 
 ### 5.7 Pretty-printers
 
-Ship a single Python script `runtime/debug/riven_pp.py` that:
+Ship a single Python script `runtime/debug/ruxen_pp.py` that:
 
 - Registers an lldb `type_summary` for each v1 stdlib type.
 - Registers equivalent gdb pretty-printers via
   `gdb.printing.RegexpCollectionPrettyPrinter`.
 
-Install location: `<installroot>/share/riven/debug/riven_pp.py`
+Install location: `<installroot>/share/ruxen/debug/ruxen_pp.py`
 (parallel to the existing runtime.c location at
-`<installroot>/lib/runtime.c`). `riven-dap` locates it via the same
+`<installroot>/lib/runtime.c`). `ruxen-dap` locates it via the same
 search order as `find_runtime_c` (`codegen/mod.rs:27-65`).
 
 Example lldb printer for `Array[T]`:
@@ -385,30 +385,30 @@ def vec_summary(valobj, _):
 
 | Phase | File | Change |
 |---|---|---|
-| 1 | `crates/rivenc/src/main.rs:40-68` | Add `--debug` flag parsing; propagate to backend |
-| 1 | `crates/riven-cli/src/cli.rs:42-52` | Add `--debug` + `--profile` to `Build` and `Run` |
-| 1 | `crates/riven-cli/src/build.rs` | Thread debug flag into `codegen::compile_with_options` |
-| 1 | `crates/riven-core/src/codegen/mod.rs:67-128` | Extend `Backend::Llvm` with `debug: bool`; pass through |
-| 2 | `crates/riven-core/src/codegen/llvm/mod.rs` | Plumb `debug: bool` into `CodeGen::new` |
-| 2 | `crates/riven-core/src/codegen/llvm/debug.rs` | Replace stub with `DebugInfoBuilder` wrapper (~300 lines) |
-| 2 | `crates/riven-core/src/codegen/llvm/emit.rs` | Attach `DILocation` to each generated LLVM instruction |
-| 2 | `crates/riven-core/src/mir/nodes.rs` | Add `Span` to `MirInst` (or parallel vec in `BasicBlock`) |
-| 2 | `crates/riven-core/src/mir/lower.rs` | Propagate HIR spans through lowering |
-| 2 | `crates/riven-core/src/codegen/object.rs` | Pass `-g` to `cc` when compiling the runtime |
-| 2 | `crates/riven-core/runtime/runtime.c` | No change (already compiles with `-g` if passed) |
-| 3 | `crates/riven-dap/` *new* | DAP shim (~400 lines) |
-| 3 | `crates/riven-dap/Cargo.toml` *new* | Deps: `serde`, `serde_json`, `anyhow` |
-| 3 | `runtime/debug/riven_pp.py` *new* | lldb + gdb pretty-printers |
-| 4 | `editors/vscode/package.json` | Register `type: "riven"` debugger |
+| 1 | `crates/ruxenc/src/main.rs:40-68` | Add `--debug` flag parsing; propagate to backend |
+| 1 | `crates/ruxen-cli/src/cli.rs:42-52` | Add `--debug` + `--profile` to `Build` and `Run` |
+| 1 | `crates/ruxen-cli/src/build.rs` | Thread debug flag into `codegen::compile_with_options` |
+| 1 | `crates/ruxen-core/src/codegen/mod.rs:67-128` | Extend `Backend::Llvm` with `debug: bool`; pass through |
+| 2 | `crates/ruxen-core/src/codegen/llvm/mod.rs` | Plumb `debug: bool` into `CodeGen::new` |
+| 2 | `crates/ruxen-core/src/codegen/llvm/debug.rs` | Replace stub with `DebugInfoBuilder` wrapper (~300 lines) |
+| 2 | `crates/ruxen-core/src/codegen/llvm/emit.rs` | Attach `DILocation` to each generated LLVM instruction |
+| 2 | `crates/ruxen-core/src/mir/nodes.rs` | Add `Span` to `MirInst` (or parallel vec in `BasicBlock`) |
+| 2 | `crates/ruxen-core/src/mir/lower.rs` | Propagate HIR spans through lowering |
+| 2 | `crates/ruxen-core/src/codegen/object.rs` | Pass `-g` to `cc` when compiling the runtime |
+| 2 | `crates/ruxen-core/runtime/runtime.c` | No change (already compiles with `-g` if passed) |
+| 3 | `crates/ruxen-dap/` *new* | DAP shim (~400 lines) |
+| 3 | `crates/ruxen-dap/Cargo.toml` *new* | Deps: `serde`, `serde_json`, `anyhow` |
+| 3 | `runtime/debug/ruxen_pp.py` *new* | lldb + gdb pretty-printers |
+| 4 | `editors/vscode/package.json` | Register `type: "ruxen"` debugger |
 | 4 | `editors/vscode/src/debugger.ts` *new* | Thin debug-adapter descriptor factory |
-| 5 | `install.sh` | Copy `share/riven/debug/riven_pp.py`; copy `riven-dap` binary |
-| 5 | `.github/workflows/release.yml:79-103` | Stage `riven-dap` into the tarball |
+| 5 | `install.sh` | Copy `share/ruxen/debug/ruxen_pp.py`; copy `ruxen-dap` binary |
+| 5 | `.github/workflows/release.yml:79-103` | Stage `ruxen-dap` into the tarball |
 
 ### Phase breakdown
 
 **Phase 1 — CLI plumbing (1 day).**
 Add flags, thread them through. No user-visible debug info yet, but
-`rivenc --debug hello.rvn` compiles and runs (just without DWARF).
+`ruxenc --debug hello.rx` compiles and runs (just without DWARF).
 
 **Phase 2 — LLVM DWARF emission (1 week).**
 - Day 1: add `Span` to MIR instructions; propagate through lowering.
@@ -419,7 +419,7 @@ Add flags, thread them through. No user-visible debug info yet, but
   (breakpoint + step + locals).
 
 **Phase 3 — DAP adapter (3-4 days).**
-- Day 1: `riven-dap` skeleton that spawns `lldb-dap` as a child.
+- Day 1: `ruxen-dap` skeleton that spawns `lldb-dap` as a child.
 - Day 2: `initialize` / `launch` / `setBreakpoints` forwarding.
 - Day 3: pretty-printer script loading.
 - Day 4: end-to-end smoke test from VSCode.
@@ -428,7 +428,7 @@ Add flags, thread them through. No user-visible debug info yet, but
 Register the debugger type; package a launch-config template.
 
 **Phase 5 — Distribution (0.5 day).**
-Ship `riven-dap` + `riven_pp.py` in the release tarball.
+Ship `ruxen-dap` + `ruxen_pp.py` in the release tarball.
 
 **Phase 6 — Pretty printers for stdlib (ongoing; co-develop with Tier-1
 doc 01).**
@@ -441,11 +441,11 @@ Total: 12-16 engineer-days.
 
 - **Doc 01 (LSP).** LSP can emit DAP run/debug commands via `codeLens`
   once the debugger ships. Not required for v1.
-- **Doc 03 (tests).** `riven test --debug` should drop the test binary
-  into a debugger session. Plumbing in `riven test` subcommand.
+- **Doc 03 (tests).** `ruxen test --debug` should drop the test binary
+  into a debugger session. Plumbing in `ruxen test` subcommand.
 - **Doc 06 (incremental).** Debug builds must not be cached
   differently based on whether `--debug` was passed — the cache key
-  already includes `flags` (`rivenc/src/cache/driver.rs` via
+  already includes `flags` (`ruxenc/src/cache/driver.rs` via
   `BuildOptions.flags`), so debug vs non-debug builds produce different
   cache entries naturally. Verify on landing.
 - **Doc 07 (MIR opts).** At opt level 0, no MIR opts run. Above opt
@@ -474,10 +474,10 @@ Total: 12-16 engineer-days.
 ## 9. Open questions & risks
 
 1. **OQ-1 — DWARF source language tag.**
-   DWARF standard has no Riven-specific language code.
+   DWARF standard has no Ruxen-specific language code.
    `DW_LANG_C` produces reasonable behavior in lldb and gdb.
    Alternatives: `DW_LANG_Rust` (lldb's rust plugin may misinterpret
-   Riven structures). Recommend `DW_LANG_C` for v1.
+   Ruxen structures). Recommend `DW_LANG_C` for v1.
 2. **OQ-2 — Enum DWARF encoding.**
    DWARF v5 added `DW_TAG_variant_part` for sum types. Inkwell/LLVM 18
    support it. For consistency with gdb/lldb versions that might not,
@@ -490,14 +490,14 @@ Total: 12-16 engineer-days.
 4. **OQ-4 — "Debug" vs "release with debug info".**
    Rust distinguishes `--release` (optimized, no DWARF) from
    `--release` with `[profile.release] debug = true` (optimized + DWARF).
-   Riven should follow: `--release --debug` produces a high-opt build
+   Ruxen should follow: `--release --debug` produces a high-opt build
    with debug info. Validated in §4.1.
-5. **OQ-5 — `riven-dap` transport.**
+5. **OQ-5 — `ruxen-dap` transport.**
    VSCode's DAP usually runs over stdio. For remote debugging, TCP
    transport is needed. Defer TCP to v2.
 6. **R1 — Inkwell DIBuilder API surface stability.**
    Inkwell's `debug_info` module has seen churn. Lock the inkwell
-   version in `riven-core/Cargo.toml:30` and test against LLVM 18
+   version in `ruxen-core/Cargo.toml:30` and test against LLVM 18
    specifically. Document LLVM 18 as required for debug builds.
 7. **R2 — lldb vs gdb differences.**
    lldb handles some DWARF edges gdb doesn't and vice versa. Test the
@@ -513,7 +513,7 @@ Total: 12-16 engineer-days.
 10. **R5 — LLVM 18 is a hard dependency for debug builds.**
     Users on LLVM 17 can't get debug info. Be clear in docs.
 11. **OQ-6 — How do we debug the C runtime?**
-    If a Riven program crashes inside `riven_vec_push`, the user
+    If a Ruxen program crashes inside `ruxen_vec_push`, the user
     wants to step into the C source. This works automatically if
     runtime.c is compiled with `-g` (§5.6). Verify on each platform.
 12. **OQ-7 — Windows.**
@@ -526,7 +526,7 @@ Total: 12-16 engineer-days.
 
 | Scenario | Assertion |
 |---|---|
-| Compile `hello.rvn --debug` | Binary links; `readelf --debug-dump=info` prints a compile unit |
+| Compile `hello.rx --debug` | Binary links; `readelf --debug-dump=info` prints a compile unit |
 | Breakpoint at `def main` | lldb stops at first line |
 | Step over `let x = 42` | Step moves to next source line |
 | `frame variable` shows `x = 42` | lldb prints the integer value |
@@ -537,7 +537,7 @@ Total: 12-16 engineer-days.
 | `--release --debug` | Optimized binary still has locals when DCE didn't eliminate them |
 | `--debug` with unused local | Either printed or `<optimized out>` — not a crash |
 | VSCode launch.json | One-click debug hits breakpoint |
-| Crash inside runtime.c | Backtrace shows `riven_vec_push` frame + source if runtime built with -g |
+| Crash inside runtime.c | Backtrace shows `ruxen_vec_push` frame + source if runtime built with -g |
 
 Add one integration test that checks ELF has a `.debug_info` section:
 ```rust

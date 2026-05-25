@@ -27,7 +27,7 @@
 ### Goal
 Mixin associated types that themselves take generic parameters:
 
-```riven
+```ruxen
 mixin Lender
   type Borrowed[a]
   def lend(self: &Self) -> Self.Borrowed[a]
@@ -54,7 +54,7 @@ both a data pointer and a vtable pointer (fat pointer, 16 bytes on
 64-bit targets); methods are dispatched indirectly through the
 vtable, allowing one function body to handle every conforming type.
 
-```riven
+```ruxen
 var shapes: Array[Box[any Shape]] = Array.new
 shapes.push(Box.new(Circle.new(3)))
 shapes.push(Box.new(Square.new(2)))

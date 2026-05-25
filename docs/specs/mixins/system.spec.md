@@ -8,7 +8,7 @@
 **Status:** shipped through Phase 2 #02-#04 plus Tier-2 surface
 (assoc types, multi-bound, `any Mixin` existentials).
 
-This spec covers Riven's user-facing mixin surface: declaring mixins,
+This spec covers Ruxen's user-facing mixin surface: declaring mixins,
 adopting them with `include`, default methods, mixin inheritance,
 associated types, generic constraints, and `any Mixin` parameters.
 Implicit includes are spec'd separately in
@@ -18,7 +18,7 @@ Implicit includes are spec'd separately in
 
 ## B1 — Mixin declaration with required method signature
 
-```riven
+```ruxen
 mixin Greeter
   def greet -> String
 end
@@ -29,7 +29,7 @@ a body.  No body required at the declaration site.
 
 ## B2 — `include Mixin` adopts the mixin in a class body
 
-```riven
+```ruxen
 class Person
   name: String
   def init(@name: String) end
@@ -49,7 +49,7 @@ mixin call site to it.
 
 ## B3 — Default methods in mixin body
 
-```riven
+```ruxen
 mixin Greeter
   def name -> String
   def greet -> String
@@ -75,7 +75,7 @@ requires the class to define its own implementation to disambiguate.
 
 ## B5 — Mixin inheritance: `mixin B: A`
 
-```riven
+```ruxen
 mixin A
   def a -> Int
 end
@@ -91,7 +91,7 @@ both mixins are dispatchable on the including type.
 
 ## B6 — Associated types
 
-```riven
+```ruxen
 mixin Container
   type Item
   def first(self) -> Self.Item
@@ -103,7 +103,7 @@ type flows through.
 
 ## B7 — `some Mixin` parameter position
 
-```riven
+```ruxen
 def print_it(x: &some Greeter)
   puts x.greet
 end
@@ -116,7 +116,7 @@ Structural satisfaction is accepted for `some Mixin`.
 
 ## B8 — `any Mixin` parameter position
 
-```riven
+```ruxen
 def print_it(x: &any Greeter)
   puts x.greet
 end
@@ -134,7 +134,7 @@ through an existential, take ownership (`Box[any Greeter]`,
 
 ## B9 — Multi-bound generics
 
-```riven
+```ruxen
 def show[T: Display + Debug](x: T) ...
 ```
 
@@ -142,7 +142,7 @@ The function may call methods from any of the bounded mixins on `x`.
 
 ## B10 — `where` clause syntax
 
-```riven
+```ruxen
 def f[T](x: T) where T: Display + Hashable ...
 ```
 
@@ -154,7 +154,7 @@ canonical syntax spec).
 
 ## B11 — Mixin with a class-level method
 
-```riven
+```ruxen
 mixin Empty
   def self.empty -> Self
 end
@@ -177,17 +177,17 @@ the override wins.
 
 | Behaviour | Test fixture / fn                                  | File                                  |
 |-----------|----------------------------------------------------|---------------------------------------|
-| B1, B2    | `21_mixins.rvn`                                    | `tests/release-e2e/cases/`            |
-| B2        | `22_mixin_default.rvn` (positive override)         | `tests/release-e2e/cases/`            |
-| B3, B4    | `86_mixin_default_method_used.rvn` + `87_mixin_override_default.rvn` | `tests/release-e2e/cases/`  |
-| B5        | `79_mixin_inherit.rvn`                             | `tests/release-e2e/cases/`            |
-| B6        | `80_mixin_assoc_type.rvn`                          | `tests/release-e2e/cases/`            |
-| B7        | `82_some_mixin_param.rvn`                          | `tests/release-e2e/cases/`            |
-| B8        | `83_any_mixin_param.rvn`                           | `tests/release-e2e/cases/`            |
-| B9        | `84_multi_bound.rvn`                               | `tests/release-e2e/cases/`            |
-| B10       | `100_where_clause.rvn` + `103_generic_constraint.rvn` | `tests/release-e2e/cases/`         |
-| B11       | `81_mixin_static_method.rvn`                       | `tests/release-e2e/cases/`            |
-| B12       | covered transitively by B4 + `66_class_inline_include.rvn` | `tests/release-e2e/cases/`    |
+| B1, B2    | `21_mixins.rx`                                    | `tests/release-e2e/cases/`            |
+| B2        | `22_mixin_default.rx` (positive override)         | `tests/release-e2e/cases/`            |
+| B3, B4    | `86_mixin_default_method_used.rx` + `87_mixin_override_default.rx` | `tests/release-e2e/cases/`  |
+| B5        | `79_mixin_inherit.rx`                             | `tests/release-e2e/cases/`            |
+| B6        | `80_mixin_assoc_type.rx`                          | `tests/release-e2e/cases/`            |
+| B7        | `82_some_mixin_param.rx`                          | `tests/release-e2e/cases/`            |
+| B8        | `83_any_mixin_param.rx`                           | `tests/release-e2e/cases/`            |
+| B9        | `84_multi_bound.rx`                               | `tests/release-e2e/cases/`            |
+| B10       | `100_where_clause.rx` + `103_generic_constraint.rx` | `tests/release-e2e/cases/`         |
+| B11       | `81_mixin_static_method.rx`                       | `tests/release-e2e/cases/`            |
+| B12       | covered transitively by B4 + `66_class_inline_include.rx` | `tests/release-e2e/cases/`    |
 
 Dispatch correctness for implicitly-included structural mixins
 (Debug / Clone / Eq / Hashable / Default / Ord / PartialOrd / Copy)

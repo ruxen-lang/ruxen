@@ -1,0 +1,60 @@
+## End-to-end exercise of `Class.static_method(args).await` —
+## the class-static-method-call awaitee shape in `describe_await`
+## (`async_lowering/mod.rs`). Unblocks the deferred slice from
+## task #21.
+##
+## What changed to unblock this: `lower_async_defs` now walks
+## bootstrap stdlib programs when populating its awaitee tables
+## (`collect_class_static_returns_into` /
+## `collect_future_outputs_into`). `Async` and `TimeSleepFuture`
+## live in library/std/future/src/lib.rx, invisible to the
+## previous user-program-only walks. See
+## `project_ruxen_async_compiler_gaps.md` (#2).
+##
+## Shape:
+##   async def doit() -> ()
+##     let _ = Async.sleep(Duration.from_millis(50)).await
+##     ()
+##   end
+##
+## The `.await` desugar treats `Async.sleep(d)` as an awaitee whose
+## Future class is `TimeSleepFuture` (declared in
+## library/std/future/src/lib.rx) and whose Output is `()` (read from
+## the future's `poll(...) -> Poll[()]` method signature). The synth
+## state machine has:
+##   __state: Int
+##   __sub_0: TimeSleepFuture   # constructed via `Async.sleep(...)` directly
+##   sleep_done: ()             # hoisted from the .await binding
+##
+## NOTE on binding shape: the await-let binding uses a named
+## identifier (`sleep_done`), not `_` — the AST async-lowering
+## segmenter currently requires `Pattern::Identifier` for the
+## await-let target. Wildcard support (`let _ = X.await`) is a
+## separate slice (memory: "async-lowering let _ shape").
+##
+## Runtime sequence mirrors fixture 725 (block_on directly on
+## Async.sleep) — first poll registers a timer + returns Pending, the
+## block_on parks on Thread.yield_now -> reactor wait, the timer fires,
+## next poll returns Ready, the outer state machine resolves.
+##
+## Tolerance window 40-200ms matches fixture 725 / 555.
+
+use std.time.Instant
+use std.time.Duration
+
+async def doit() -> ()
+  let sleep_done = Async.sleep(Duration.from_millis(50)).await
+  sleep_done
+end
+
+def main
+  let start = Instant.now()
+  block_on(doit())
+  let elapsed = start.elapsed()
+  let nanos = elapsed.as_nanos()
+  if nanos >= 40000000 && nanos <= 200000000
+    puts "ok"
+  else
+    puts "fail"
+  end
+end

@@ -11,7 +11,7 @@ Blocks: fluent closure APIs that accept any input lifetime;
 A higher-ranked mixin bound says "for any lifetime a, this type
 satisfies the bound." The canonical example:
 
-```riven
+```ruxen
 def filter_all[F: for[a] Fn(&a Str) -> Bool](
   list: &Array[String], f: F
 ) -> Array[&Str]
@@ -25,7 +25,7 @@ prove every borrow they hand to `f` lives long enough. HRTBs move the
 quantifier inside the bound: *the closure works for any lifetime I
 throw at it.*
 
-**Why Riven needs this:**
+**Why Ruxen needs this:**
 
 1. **Closure adapters.** Any function that forwards a borrow to a
    user-supplied closure with a lifetime shorter than the function's
@@ -83,7 +83,7 @@ rules:
 - Rule 2: exactly one input ref → output gets that lifetime.
 - Rule 3: `&self` or `&var self` → output gets `self`'s lifetime.
 
-**What Riven currently *cannot* express:**
+**What Ruxen currently *cannot* express:**
 
 - "All inputs have the same lifetime" — no named lifetime parameter.
 - "Output lifetime is this specific input's" — ambiguous elision is
@@ -140,13 +140,13 @@ token is `[` / `<` not an identifier.
 
 **Full form:**
 
-```riven
+```ruxen
 def each_line[F: for[a] Fn(&a Str)](source: &String, f: F) ...
 ```
 
 **Elided form:**
 
-```riven
+```ruxen
 def each_line[F: Fn(&Str)](source: &String, f: F) ...
 ```
 
@@ -158,11 +158,11 @@ elision rule Rust uses for closure-typed function arguments.
 ### 4.2 `for[...]` vs `for<...>`
 
 Rust uses `for<a>` because it predates const generics and type
-params were `<...>`. Riven uses `[...]` consistently for generics
+params were `<...>`. Ruxen uses `[...]` consistently for generics
 (`parser/types.rs:338`). Recommendation: `for[a]`. See overview
 §Open #7 for the decision.
 
-```riven
+```ruxen
 def apply_twice[F: for[a] Fn(&a Int) -> Int](f: F) -> Int
   let x = 1
   let y = 2
@@ -172,7 +172,7 @@ end
 
 ### 4.3 Multi-lifetime HRTBs
 
-```riven
+```ruxen
 def both[F: for[a, 'b] Fn(&a Str, &'b Str) -> Bool](f: F) ...
 ```
 
@@ -180,7 +180,7 @@ Rare but legal. The quantifier binds both lifetimes.
 
 ### 4.4 HRTBs on mixin existentials
 
-```riven
+```ruxen
 type LineProcessor = Box[any for[a] Fn(&a Str) -> Result[(), Error]]
 
 # Elided equivalent:
@@ -189,7 +189,7 @@ type LineProcessor = Box[any Fn(&Str) -> Result[(), Error]]
 
 ### 4.5 HRTBs in mixin bodies
 
-```riven
+```ruxen
 mixin Parser
   def parse[R](self, input: &Str, reducer: some for[a] Fn(&a Str) -> R) -> R
 end
@@ -200,7 +200,7 @@ usual idiom and HRTB qualification is implicit for closure types.
 
 ## 5. Elision Extension (the carrying-your-weight section)
 
-Riven's elision rules currently cover most idioms that would otherwise
+Ruxen's elision rules currently cover most idioms that would otherwise
 need HRTBs. Before adding HRTB syntax, extend the elision rules so
 that **explicit HRTBs become rare**. The extensions:
 
@@ -212,7 +212,7 @@ For function parameters of type `some Fn(...)` / `some FnVar(...)` /
 lifetime, quantified over the closure. Equivalent to implicitly
 wrapping the bound in `for[...]`.
 
-```riven
+```ruxen
 # Written:
 def each[F: Fn(&Str)](items: &Array[String], f: F) ...
 
@@ -406,7 +406,7 @@ Strategy: in 03b, reject HRTBs that mention associated types
 
 GATs + HRTBs is the "streaming iterator" pattern:
 
-```riven
+```ruxen
 mixin StreamingIterator
   type Item[a]
   def var next[a](self: &a var Self) -> Option[Self.Item[a]]
@@ -513,10 +513,10 @@ case. Explicit HRTBs on `some Mixin` are legal.
 
 ### 10.3 Fixture additions
 
-- `tests/fixtures/hrtb_closure_arg.rvn` — elided; uses `Array.filter`
+- `tests/fixtures/hrtb_closure_arg.rx` — elided; uses `Array.filter`
   with a closure taking `&T`.
-- `tests/fixtures/hrtb_explicit.rvn` — explicit `for[a]` syntax.
-- `tests/fixtures/hrtb_dyn.rvn` — `Box[any Fn(&Str)]` stored in a
+- `tests/fixtures/hrtb_explicit.rx` — explicit `for[a]` syntax.
+- `tests/fixtures/hrtb_dyn.rx` — `Box[any Fn(&Str)]` stored in a
   struct and called repeatedly.
-- `tests/fixtures/hrtb_error_non_poly.rvn` — negative: closure tied
+- `tests/fixtures/hrtb_error_non_poly.rx` — negative: closure tied
   to a specific lifetime where HRTB was required.

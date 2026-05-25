@@ -1,4 +1,4 @@
-# Riven plumbing needed for Rondo v1.0 (full Sinatra parity)
+# Ruxen plumbing needed for Rondo v1.0 (full Sinatra parity)
 
 Rondo v0.7 (in `~/.projects/rondo`) is Sinatra-feature-complete
 for the common-case surface: route DSL, path/query params,
@@ -7,7 +7,7 @@ cookies (read + set), redirect, HEAD auto-handling, static
 files with path-traversal protection, and a live blocking TCP
 server.
 
-This doc lists the Riven-side work that has to land before
+This doc lists the Ruxen-side work that has to land before
 Rondo can ship the remaining Sinatra features. Items are
 ordered roughly by how many real-world apps they block.
 
@@ -16,9 +16,9 @@ Every item lists:
 - **Where the fix lives** (existing file, new file, stdlib, runtime)
 - **A repro / acceptance test** so the fix can be pinned
 
-Cross-reference: rondo's own `docs/riven-issues.md` catalogues
+Cross-reference: rondo's own `docs/ruxen-issues.md` catalogues
 the workarounds rondo ships today; this doc is the inverse —
-what Riven needs to add.
+what Ruxen needs to add.
 
 ---
 
@@ -31,7 +31,7 @@ time. `Rondo.listen` is a sequential `accept → handle → close`
 loop. A slow request blocks every other client.
 
 **What's needed:** validate that `Thread.spawn { handle_one(...) }`
-on each accepted TcpStream works end-to-end. The Riven stdlib
+on each accepted TcpStream works end-to-end. The Ruxen stdlib
 exposes `Thread.spawn` and Codex's recent commits added a
 JoinHandle surface — but nobody has confirmed the per-connection
 threading shape works with:
@@ -40,14 +40,14 @@ threading shape works with:
 3. Independent drop semantics per connection (the thread's
    drop frees the stream; the accept loop keeps the listener)
 
-Memory file `project_riven_task_spawn_ownership_gap.md`
+Memory file `project_ruxen_task_spawn_ownership_gap.md`
 documents that `Task.spawn` already has a drop-elaboration
 gap; the same shape on `Thread.spawn` is the likely failure
 mode.
 
 **Acceptance test:**
 
-```riven
+```ruxen
 def main
   let listener = TcpListener.bind(&"127.0.0.1:8421").unwrap()
   loop
@@ -74,12 +74,12 @@ Should:
 
 ### B2. Three async compiler gaps from the original quality review
 
-Tracked in memory `project_riven_async_compiler_gaps.md` and
+Tracked in memory `project_ruxen_async_compiler_gaps.md` and
 `docs/quality_review.md` §1.3. Repeated here for the
 Rondo-blocking framing:
 
 #### B2a. `block_on` Output type erasure
-Riven's `block_on(future)` returns the future's `Output` type,
+Ruxen's `block_on(future)` returns the future's `Output` type,
 but the wrapper currently erases it back to a fresh inference
 variable. So `let n = block_on(some_int_future)` reads `n` as
 `?T`, not `Int`. Once fixed, Rondo can drop `Rondo.listen`'s
@@ -99,7 +99,7 @@ bite — `match read_result; Ok(line) -> if line == "..." then ...`
 silently wrong-comparing.
 
 **Acceptance test:** the existing async fixtures under
-`compiler/riven_core/tests/fixtures/riven/async_*.rvn` plus a
+`compiler/ruxen_core/tests/fixtures/ruxen/async_*.rx` plus a
 new fixture that does `async def handle(s: AsyncTcpStream)`
 mirroring Rondo's handle_one shape against
 `std.async_net.AsyncTcpListener`.
@@ -117,7 +117,7 @@ their own.
 - `JsonValue` enum with `Null | Bool(Bool) | Num(Float) | Str(String) | Array(Array[JsonValue]) | Object(Map[String, JsonValue])`
 - Helper accessors: `value.get("key")`, `value.as_string`, etc.
 
-Pure-Riven implementation is fine — no FFI needed. The parser
+Pure-Ruxen implementation is fine — no FFI needed. The parser
 is a few hundred lines of code.
 
 **Acceptance test:** round-trip the standard JSON test suite
@@ -184,7 +184,7 @@ shape `get %r{/post/\d+}`. Today only `:name` segments work.
 - `regex.matches(&String) -> Bool`
 - `regex.captures(&String) -> Option[Array[String]]`
 
-POSIX-ish flavour is plenty for v1. Could be a pure-Riven
+POSIX-ish flavour is plenty for v1. Could be a pure-Ruxen
 port of a small regex engine (a few hundred LOC) or an FFI
 binding to PCRE2.
 
@@ -197,7 +197,7 @@ returns `Some(["/post/42", "42"])`.
 `req.body` is the raw bytes; without a multipart parser you
 can't extract individual form fields or file parts.
 
-**What's needed:** a parser (pure-Riven is fine, ~200 LOC)
+**What's needed:** a parser (pure-Ruxen is fine, ~200 LOC)
 that takes:
 - `req.body: String`
 - `Content-Type: multipart/form-data; boundary=...`
@@ -228,11 +228,11 @@ them:
 | Item | Why dropped |
 |---|---|
 | `derive Clone` keyword | Ruby has `Object#dup` / `#clone` as universal methods (not a derive macro). Rondo doesn't need it today — `&Request` hook signatures sidestep clone entirely. If a class ever needs a copy, write `def clone -> Foo; var r = Foo.new; r.field = self.field; r end` by hand, same as Ruby's `def dup`. |
-| Forward refs in helper signatures | Workaround in place (helpers live at the end of `lib.rvn`). Ruby is dynamic so the question doesn't arise the same way. |
+| Forward refs in helper signatures | Workaround in place (helpers live at the end of `lib.rx`). Ruby is dynamic so the question doesn't arise the same way. |
 | Multi-stmt match arm needs leading `let` | Workaround in place (`let _captured = params`). Ruby's `case`/`when` is a different shape entirely, so there's no Ruby parity argument. |
 | `()` as no-op match arm | Rust-style ask. Ruby has `nil` for the same role; Rondo uses `None -> 0` which works fine. |
 | Path-dep modules (`use rondo.X`) | Flat-merge works today. Ruby has `require` + `Rondo::Class`, but Rondo doesn't NEED the namespacing — names don't collide. |
-| `String.split` returns SplitIter on `Str` | Rondo never hits this — every split receiver is an owned `String`. Ruby's `String#split` is consistent (always Array), so this is a real Riven inconsistency, but it doesn't block Rondo. |
+| `String.split` returns SplitIter on `Str` | Rondo never hits this — every split receiver is an owned `String`. Ruby's `String#split` is consistent (always Array), so this is a real Ruxen inconsistency, but it doesn't block Rondo. |
 | `Some("ada")` coerce to `Option[String]` | Rust-style ask (Ruby has no Option type). Rondo writes `Some(String.from(&"..."))` and moves on. |
 
 Anything listed above is fair game to fix later if it bites
@@ -242,12 +242,12 @@ another project — but they're not Rondo blockers.
 
 ## Tracking
 
-Memory files in `/Users/hassan/.claude/projects/-Users-hassan--projects-riven/memory/`:
-- `project_riven_async_compiler_gaps.md` — B2a/b/c
-- `project_riven_task_spawn_ownership_gap.md` — B1
+Memory files in `/Users/hassan/.claude/projects/-Users-hassan--projects-ruxen/memory/`:
+- `project_ruxen_async_compiler_gaps.md` — B2a/b/c
+- `project_ruxen_task_spawn_ownership_gap.md` — B1
 - `feedback_no_redundant_rebind` — adjacent style
 
-Rondo issues file (the inverse view): `~/.projects/rondo/docs/riven-issues.md`.
+Rondo issues file (the inverse view): `~/.projects/rondo/docs/ruxen-issues.md`.
 
 Latest related upstream commits (in this branch):
 - `b58b6fe` mir(drops): closure-call returns-self elide
@@ -260,4 +260,4 @@ Latest related upstream commits (in this branch):
 - `0257989` parser(match): nested multi-stmt match arm
 - `9c7028b` typeck(infer): pattern-binding type propagation
 - `0a12b18` mir(drops): UAF dealloc elide for returns-self
-- `d530ad9` core(stdlib): embed bootstrap .rvn via include_str!
+- `d530ad9` core(stdlib): embed bootstrap .rx via include_str!

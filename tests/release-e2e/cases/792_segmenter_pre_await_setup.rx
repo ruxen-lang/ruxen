@@ -1,0 +1,27 @@
+## Segmenter pre-await prefix — Milestone-2B extension end-to-end pin.
+##
+## Closes the gap noted in
+## `project_ruxen_milestone_2b_segmenter_constraints.md`: the natural
+## server-handler shape (`let parsed = parse(req); let r = service(parsed).await; reply(r)`)
+## used to bail in `segment_body` because pre-await statements were
+## rejected. After the fix, the same shape lowers cleanly: `parsed`
+## stays a non-crossing init-local consumed by the next sub-future's
+## constructor, and the await on `add_one(parsed).await` runs the
+## state machine through one suspend before returning.
+##
+## For req=5: parsed = 5*2 = 10; add_one(10) yields 11; result + 1 = 12.
+
+async def add_one(x: Int) -> Int
+  x + 1
+end
+
+async def handler(req: Int) -> Int
+  let parsed = req * 2
+  let result = add_one(parsed).await
+  result + 1
+end
+
+def main
+  let r = block_on(handler(5))
+  puts "#{r}"
+end

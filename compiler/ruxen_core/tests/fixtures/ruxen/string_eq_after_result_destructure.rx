@@ -1,0 +1,28 @@
+## A String flowing out of `match Result.Ok(s) -> ... s == needle ...`,
+## where `needle` is a `String`-typed parameter, must compare via the
+## runtime `ruxen_string_eq` (strcmp) — not pointer-equality. Before the
+## fix in task #22, the comparison fell back to integer pointer-eq.
+
+def make_result(payload: String) -> Result[String, Int]
+  Ok(payload)
+end
+
+def compare_with(needle: String) -> Int
+  match make_result(String.from("hello"))
+    Ok(s)  -> if s == needle
+                1
+              else
+                0
+              end
+    Err(_) -> 0
+  end
+end
+
+def main
+  let needle = String.from("hello")
+  if compare_with(needle) == 1
+    puts "match"
+  else
+    puts "fail"
+  end
+end

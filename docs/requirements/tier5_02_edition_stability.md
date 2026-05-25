@@ -12,20 +12,20 @@ when it lands."
 
 ## 1. Summary & motivation
 
-`Riven.toml` already declares a package edition:
+`Ruxen.toml` already declares a package edition:
 
 ```toml
 [package]
 edition = "2026"
 ```
 
-The field is parsed and stored (`crates/riven-cli/src/manifest.rs:28-29`),
+The field is parsed and stored (`crates/ruxen-cli/src/manifest.rs:28-29`),
 the scaffolder emits it (`scaffold.rs:145`), and tests assert its presence
 (`scaffold.rs:198`, `manifest.rs:329`). Every fixture crate declares
-`edition = "2026"` (`tests/fixtures/*/Riven.toml:4`).
+`edition = "2026"` (`tests/fixtures/*/Ruxen.toml:4`).
 
-But the compiler never reads it. `grep edition` across `crates/riven-core`
-and `crates/rivenc` turns up zero hits. There is no edition-gating, no
+But the compiler never reads it. `grep edition` across `crates/ruxen-core`
+and `crates/ruxenc` turns up zero hits. There is no edition-gating, no
 version-check, no semantic effect.
 
 This is a ticking bug: every time we publish a library on the current
@@ -35,9 +35,9 @@ make a cleanup change (e.g. tier-1 B3's proposed `Hash` → `Map`
 rename), we'll either break everyone or shrug and accept a bad name.
 
 This doc specifies:
-- What editions mean for Riven (scope, cadence, lifespan).
+- What editions mean for Ruxen (scope, cadence, lifespan).
 - How the compiler consumes the `edition` field.
-- What the migration tool (`riven fix --edition=…`) does and how it works.
+- What the migration tool (`ruxen fix --edition=…`) does and how it works.
 - What can and cannot change between editions.
 
 ---
@@ -46,7 +46,7 @@ This doc specifies:
 
 ### 2.1 Manifest field
 
-`crates/riven-cli/src/manifest.rs:23-47` (`Package` struct):
+`crates/ruxen-cli/src/manifest.rs:23-47` (`Package` struct):
 
 ```rust
 pub struct Package {
@@ -64,7 +64,7 @@ pub struct Package {
 
 ### 2.2 MSRV field (distinct but related)
 
-`Package::riven: Option<String>` (`manifest.rs:32`) — minimum supported
+`Package::ruxen: Option<String>` (`manifest.rs:32`) — minimum supported
 compiler version (e.g. `">=0.2.0"`). Also unused today. We will wire this
 alongside editions because the two are linked (new editions usually
 require a newer compiler).
@@ -75,7 +75,7 @@ No in-body `unstable(feature = "foo")` directive exists. No `#[cfg(feature = "�
 `BuildConfig` (`manifest.rs:77-91`) has `link` and `link-search` but no
 `features` section. Cargo-style feature propagation is not modelled.
 
-### 2.4 What edition-like behaviour Riven has de facto
+### 2.4 What edition-like behaviour Ruxen has de facto
 
 - **Reserved keywords** (`lexer/token.rs:127-137`) — `actor`, `spawn`,
   `send`, `receive`, `macro`, `package`, `extern`, `static`, `const`,
@@ -98,7 +98,7 @@ No in-body `unstable(feature = "foo")` directive exists. No `#[cfg(feature = "�
 - **Cross-edition linking works.** A `"2026"` library can be consumed by
   a `"2027"` binary, and vice versa. (Rust's hard-won lesson; we inherit
   it.)
-- A **migration tool** `riven fix --edition=N` rewrites source
+- A **migration tool** `ruxen fix --edition=N` rewrites source
   mechanically using machine-applicable suggestions (tier5_05).
 - **Per-edition feature gates**: items carrying an in-body
   `unstable(feature = "foo")` directive are locked out unless the
@@ -110,7 +110,7 @@ No in-body `unstable(feature = "foo")` directive exists. No `#[cfg(feature = "�
   what editions may change.
 - **Semver-style breakage *inside* an edition.** A crate with
   `edition = "2026"` must build on every 0.2.x compiler of the 2026 era.
-- **Replacing MSRV.** `riven = ">=0.2.0"` remains orthogonal; it bounds
+- **Replacing MSRV.** `ruxen = ">=0.2.0"` remains orthogonal; it bounds
   which compiler versions work, not which syntax the source uses.
 - **Go-style eternal backward compat with zero breakage.** See §9 OQ-1.
 
@@ -125,7 +125,7 @@ No in-body `unstable(feature = "foo")` directive exists. No `#[cfg(feature = "�
 name = "my-crate"
 version = "0.1.0"
 edition = "2026"           # one of a fixed known list
-riven   = ">=0.3.0"        # MSRV; enforced by the compiler
+ruxen   = ">=0.3.0"        # MSRV; enforced by the compiler
 
 [features]                 # NEW section
 default = ["color"]
@@ -143,9 +143,9 @@ Validation:
   edition "…"; this compiler knows "2026" and "2027"`.
 - If absent, default is the compiler's **default edition** (not the
   latest; see §4.4).
-- `riven = ">=…"` is compared to `CARGO_PKG_VERSION` of `rivenc`. If the
+- `ruxen = ">=…"` is compared to `CARGO_PKG_VERSION` of `ruxenc`. If the
   manifest demands a newer compiler → `E4101: this crate requires
-  Riven >=X.Y.Z; this compiler is vX.Y.W`.
+  Ruxen >=X.Y.Z; this compiler is vX.Y.W`.
 
 ### 4.2 What may change between editions
 
@@ -185,12 +185,12 @@ syntax keeps its old meaning.
 - Deprecation window: **one edition cycle** (≥ 2 years) between
   "compiler emits deprecation warning for this edition" and "compiler
   rejects this edition."
-- `E4102: edition "2026" is deprecated; run `riven fix --edition=2028`
+- `E4102: edition "2026" is deprecated; run `ruxen fix --edition=2028`
   to migrate`.
 
 ### 4.5 Feature gates (unstable features)
 
-```riven
+```ruxen
 mixin Try
   unstable feature: "try_mixin", issue: "42"
 
@@ -205,7 +205,7 @@ end
   unstable = ["try_mixin"]
   ```
 - On a **stable release** of the compiler, `unstable = […]` is rejected
-  unless `RIVENC_ALLOW_UNSTABLE=1` is set (intentional friction, matches
+  unless `RUXENC_ALLOW_UNSTABLE=1` is set (intentional friction, matches
   Rust's nightly channel pattern).
 - On a **nightly / dev** compiler (future: add a channel to the compiler
   build), `unstable = […]` works transparently.
@@ -215,12 +215,12 @@ end
 
 Detailed directive syntax lives in tier5_03.
 
-### 4.6 The migrator: `riven fix`
+### 4.6 The migrator: `ruxen fix`
 
-New CLI subcommand on `riven` (`crates/riven-cli`):
+New CLI subcommand on `ruxen` (`crates/ruxen-cli`):
 
 ```
-riven fix [--edition=YYYY] [--dry-run] [--check]
+ruxen fix [--edition=YYYY] [--dry-run] [--check]
 ```
 
 - `--edition=YYYY`: upgrade to target edition.
@@ -235,14 +235,14 @@ Behaviour:
 2. Apply every suggestion tagged `MachineApplicable`.
 3. Flag `MaybeIncorrect` suggestions in a report at the end ("the
    following need human review").
-4. Update `Riven.toml` edition field.
+4. Update `Ruxen.toml` edition field.
 5. Re-run the compiler on the new edition to verify the crate compiles.
 
 The migrator DOES NOT apply its own transforms — it only executes
 suggestions the compiler would already offer. That way:
 
 - One source of truth (the suggestion).
-- LSP code-actions and `riven fix` produce identical edits.
+- LSP code-actions and `ruxen fix` produce identical edits.
 - New edition-lint? Write the diagnostic + suggestion once; both tools
   get it.
 
@@ -252,7 +252,7 @@ suggestions the compiler would already offer. That way:
 
 ### 5.1 Edition representation in the compiler
 
-New module `crates/riven-core/src/edition.rs`:
+New module `crates/ruxen-core/src/edition.rs`:
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -283,10 +283,10 @@ impl Edition {
 The edition must be known at lex time (reserved keywords differ per
 edition), so it is passed into the entrypoint:
 
-- `rivenc` CLI accepts `--edition=YYYY` (default: read from manifest if
+- `ruxenc` CLI accepts `--edition=YYYY` (default: read from manifest if
   in a crate; fallback to `Edition::DEFAULT`).
-- `riven-cli` build loop reads it from the manifest and passes it to
-  `rivenc`.
+- `ruxen-cli` build loop reads it from the manifest and passes it to
+  `ruxenc`.
 - `Lexer::new(source, edition)` replaces `Lexer::new(source)`
   (`lexer/mod.rs:1`). A new param.
 - `Parser::new(tokens, edition)` similarly.
@@ -295,7 +295,7 @@ edition), so it is passed into the entrypoint:
   rules.
 - Codegen doesn't care.
 
-New `EditionCtx` struct (`riven-core/src/edition.rs`):
+New `EditionCtx` struct (`ruxen-core/src/edition.rs`):
 
 ```rust
 pub struct EditionCtx {
@@ -327,12 +327,12 @@ pub fn keyword(ident: &str, edition: Edition) -> Option<TokenKind> {
 
 On 2026, `try` remains an identifier — code calling `fn try(...)` keeps
 working. On 2027, `try` is a keyword — calling `fn try(...)` is an
-error, and `riven fix --edition=2027` rewrites it to `fn try_(...)` (or
+error, and `ruxen fix --edition=2027` rewrites it to `fn try_(...)` (or
 `r#try` if we adopt Rust-style raw identifiers; see OQ-3).
 
 ### 5.4 Per-edition lints / deprecation map
 
-A table in `riven-core` listing all **edition-migration lints**:
+A table in `ruxen-core` listing all **edition-migration lints**:
 
 ```rust
 pub struct EditionLint {
@@ -367,7 +367,7 @@ This is the hardest part.
 exist — it's `Map`.
 
 **Solution.** At compile time of the library (2026), the compiler emits
-a symbol table metadata file (`*.rivenmeta`) alongside the `*.rlib`.
+a symbol table metadata file (`*.ruxenmeta`) alongside the `*.rlib`.
 The metadata records **canonical** names — the names used internally
 by the compiler across editions. Consumers see canonical names remapped
 through the consumer's edition.
@@ -380,7 +380,7 @@ This implies:
 
 - A **canonical name table** is introduced early (even if there's only
   one edition today) so the 2027 migration doesn't require a retrofit.
-- `.rivenmeta` is a new artifact; `crates/rivenc/src/cache/` already has
+- `.ruxenmeta` is a new artifact; `crates/ruxenc/src/cache/` already has
   a signature extraction step that we extend.
 - Incremental compilation (tier-1 project_phase13) fingerprints
   canonical names, not surface names, so cross-edition cache hits work.
@@ -403,46 +403,46 @@ crate. Options:
 
 ### 6.1 New code
 
-- `crates/riven-core/src/edition.rs` — `Edition`, `EditionCtx`,
+- `crates/ruxen-core/src/edition.rs` — `Edition`, `EditionCtx`,
   `KNOWN_EDITIONS`, helpers.
-- `crates/riven-core/src/edition_lints.rs` — `EditionLint` table and
+- `crates/ruxen-core/src/edition_lints.rs` — `EditionLint` table and
   dispatch logic (invoked from typeck / resolve).
-- `crates/riven-core/src/canonical.rs` — canonical name table
+- `crates/ruxen-core/src/canonical.rs` — canonical name table
   (initially maps every surface type to itself; grows per-edition).
-- `crates/riven-cli/src/fix.rs` — `riven fix` subcommand.
-- `crates/rivenc/src/fix_mode.rs` — the in-compiler "rewrite mode"
+- `crates/ruxen-cli/src/fix.rs` — `ruxen fix` subcommand.
+- `crates/ruxenc/src/fix_mode.rs` — the in-compiler "rewrite mode"
   harness.
-- `crates/riven-cli/src/cli.rs:25-113` — add `Fix { edition: Option<String>, dry_run: bool, check: bool }` variant.
+- `crates/ruxen-cli/src/cli.rs:25-113` — add `Fix { edition: Option<String>, dry_run: bool, check: bool }` variant.
 
 ### 6.2 Modified code
 
-- `crates/riven-core/src/lexer/mod.rs:70` (`Lexer::new`) — take
+- `crates/ruxen-core/src/lexer/mod.rs:70` (`Lexer::new`) — take
   `EditionCtx`.
-- `crates/riven-core/src/lexer/token.rs:281` (`keyword`) — per-edition
+- `crates/ruxen-core/src/lexer/token.rs:281` (`keyword`) — per-edition
   dispatch.
-- `crates/riven-core/src/parser/mod.rs:41` (`Parser::new`) — take
+- `crates/ruxen-core/src/parser/mod.rs:41` (`Parser::new`) — take
   `EditionCtx`.
-- `crates/riven-core/src/typeck/mod.rs` — pass `&EditionCtx` through.
-- `crates/riven-core/src/resolve/mod.rs` — consult
+- `crates/ruxen-core/src/typeck/mod.rs` — pass `&EditionCtx` through.
+- `crates/ruxen-core/src/resolve/mod.rs` — consult
   `EditionCtx.features` when marking a use of an `unstable`-directive
   item.
-- `crates/riven-cli/src/manifest.rs` — validate `edition`, add `[features]`.
-- `crates/riven-cli/src/manifest.rs:184` (`validate`) — call
+- `crates/ruxen-cli/src/manifest.rs` — validate `edition`, add `[features]`.
+- `crates/ruxen-cli/src/manifest.rs:184` (`validate`) — call
   `Edition::from_str` and return `E4100` on unknown.
-- `crates/riven-cli/src/build.rs` — resolve features, pass to `rivenc`.
-- `crates/rivenc/src/main.rs:40-68` — `--edition=` flag.
-- `crates/rivenc/src/cache/` — include `EditionCtx` fingerprint in the
+- `crates/ruxen-cli/src/build.rs` — resolve features, pass to `ruxenc`.
+- `crates/ruxenc/src/main.rs:40-68` — `--edition=` flag.
+- `crates/ruxenc/src/cache/` — include `EditionCtx` fingerprint in the
   cache key so 2026 vs 2027 builds don't cache-hit each other.
 
 ### 6.3 Tests
 
-- `crates/riven-core/tests/edition_keyword_gating.rs` — `try` is ident
+- `crates/ruxen-core/tests/edition_keyword_gating.rs` — `try` is ident
   on 2026, keyword on 2027.
-- `crates/riven-core/tests/edition_rewrites.rs` — `Map[…]` → `Map[…]`
+- `crates/ruxen-core/tests/edition_rewrites.rs` — `Map[…]` → `Map[…]`
   suggestion fires on 2026, error on 2027.
-- `crates/riven-cli/tests/fix_migrator.rs` — run the migrator on a small
+- `crates/ruxen-cli/tests/fix_migrator.rs` — run the migrator on a small
   fixture, assert the rewritten source compiles on the new edition.
-- `crates/riven-cli/tests/cross_edition_linking.rs` — fixture with two
+- `crates/ruxen-cli/tests/cross_edition_linking.rs` — fixture with two
   crates: lib (2026), binary (2027); assert it builds and runs.
 
 ### 6.4 Documentation
@@ -459,7 +459,7 @@ crate. Options:
 - **Tier 5 doc 03 (directives):** in-body `stable`, `unstable`,
   `deprecated`, `since`-like directives — shared syntax. Editions
   use them extensively.
-- **Tier 5 doc 05 (suggestions):** the migrator `riven fix` is the
+- **Tier 5 doc 05 (suggestions):** the migrator `ruxen fix` is the
   canonical consumer of machine-applicable suggestions. Any feature that
   goes through an edition deprecation must ship with a suggestion.
 - **Tier 5 doc 04 (error codes):** `E4100-E4199` reserved for
@@ -483,9 +483,9 @@ crate. Options:
 1. `Edition` enum + `EditionCtx` + default values.
 2. Thread through `Lexer::new` and `Parser::new`. Default to
    `Edition::DEFAULT` from every call site.
-3. Read `package.edition` in `riven-cli/src/build.rs`; pass
-   `--edition=...` to `rivenc`.
-4. `rivenc --edition=...` flag.
+3. Read `package.edition` in `ruxen-cli/src/build.rs`; pass
+   `--edition=...` to `ruxenc`.
+4. `ruxenc --edition=...` flag.
 5. Validation in `Manifest::validate` + `E4100` error code.
 
 **Exit criterion:** `edition = "2026"` round-trips through the pipeline
@@ -499,14 +499,14 @@ Use B3 (Hash→Map) as the canary:
 2. Register an `EditionLint { from: E2026, to: E2027, ... }` that warns
    on 2026 and errors on 2027.
 3. Add `Edition::E2027` to `KNOWN`. It's not the default.
-4. `riven fix --edition=2027` test fixture with one file.
+4. `ruxen fix --edition=2027` test fixture with one file.
 
 **Exit criterion:** a two-crate fixture compiles on 2026, fails on 2027
 with E???? + suggestion, migrates cleanly.
 
 ### Phase 2c: features (2-3 weeks)
 
-1. `[features]` section in `Riven.toml`.
+1. `[features]` section in `Ruxen.toml`.
 2. In-body `unstable feature: "..."` directive recognition (requires
    tier5_03 phase 3a).
 3. `features = ["..."]` resolution and checking.
@@ -516,7 +516,7 @@ with E???? + suggestion, migrates cleanly.
 ### Phase 2d: canonical names + cross-edition (3-4 weeks)
 
 1. Introduce `canonical.rs` — initially every surface → same canonical.
-2. Emit `.rivenmeta` with canonical-name table.
+2. Emit `.ruxenmeta` with canonical-name table.
 3. On import, resolve through canonical.
 4. Fixture: 2026 lib ↔ 2027 bin.
 
@@ -533,7 +533,7 @@ with E???? + suggestion, migrates cleanly.
 
 ## 9. Open questions & risks
 
-### OQ-1. Is the editions model even right for Riven?
+### OQ-1. Is the editions model even right for Ruxen?
 
 The Go team argues editions are an anti-pattern: they split the
 ecosystem and create compiler complexity. Rust's experience: edition
@@ -541,12 +541,12 @@ machinery has paid for itself many times (the analogous wins in
 Rust's editions: 2018 `?` operator, 2021 disjoint captures, 2024
 `Cell::new` — internal Rust history, cited for the argument).
 
-**Recommended stance (confirms overview §7.5):** Riven adopts editions.
+**Recommended stance (confirms overview §7.5):** Ruxen adopts editions.
 Justification:
 
-- Riven is pre-1.0. Choosing no-editions means *every* cleanup we want
+- Ruxen is pre-1.0. Choosing no-editions means *every* cleanup we want
   in the next 5 years becomes impossible or a major-version break.
-- Riven inherits Rust's ownership model and will discover the same
+- Ruxen inherits Rust's ownership model and will discover the same
   "oh, if we had designed this differently…" cases. Rust needed
   editions to fix closure-capture inference in 2021; we will too.
 - We mitigate Go's objection with **strict constraints** (§4.2): no
@@ -557,7 +557,7 @@ Justification:
 ### OQ-2. Edition default: latest or oldest-supported?
 
 **Recommended:** the compiler's *default* edition is the oldest
-still-supported one. That way, running `rivenc foo.rvn` (no manifest,
+still-supported one. That way, running `ruxenc foo.rx` (no manifest,
 no flag) is maximally conservative — it'll accept old code.
 
 Rust defaults to `2015` (oldest) for the same reason. We follow.
@@ -591,14 +591,14 @@ and enforced by regression fixtures.
 
 Today it's `Option<String>`. **Recommended:** make it optional at parse
 time (to tolerate old manifests) but **warn** on omission ("no edition
-specified in Riven.toml; defaulting to 2026; add an explicit
+specified in Ruxen.toml; defaulting to 2026; add an explicit
 `edition = \"2026\"`"). In a far-future edition, promote to error. Rust
 did the same for 2015.
 
 ### OQ-6. Stability channels (stable / beta / nightly)?
 
 Rust has three; Go has one; Swift has one. **Recommended:** start with
-one channel (stable), with an `RIVENC_ALLOW_UNSTABLE=1` env var for
+one channel (stable), with an `RUXENC_ALLOW_UNSTABLE=1` env var for
 devs who need to play with unstable features. When unstable-feature
 volume grows (phase 2c+), add a formal nightly build target. Deferring
 this keeps the initial work small.
@@ -639,13 +639,13 @@ import-from-previous-edition.
       diagnostic.
 - [ ] `lexer` / `parser` / `resolve` / `typeck` all take `&EditionCtx`.
 - [ ] Cache key includes `EditionCtx::fingerprint()`.
-- [ ] `[features]` table is parsed from `Riven.toml`.
+- [ ] `[features]` table is parsed from `Ruxen.toml`.
 - [ ] In-body `unstable feature: "x"` directive + `features = ["x"]`
       opt-in works; without opt-in, error `E4103`.
-- [ ] `RIVENC_ALLOW_UNSTABLE=1` (or nightly channel) bypasses.
+- [ ] `RUXENC_ALLOW_UNSTABLE=1` (or nightly channel) bypasses.
 - [ ] At least one `EditionLint` exists and is exercised: warning on
       2026, error on 2027.
-- [ ] `riven fix --edition=2027` migrates a fixture crate: rewrites
+- [ ] `ruxen fix --edition=2027` migrates a fixture crate: rewrites
       source, updates manifest, the result compiles.
 - [ ] Cross-edition linking fixture: 2026 lib + 2027 bin builds and
       runs.

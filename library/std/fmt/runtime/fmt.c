@@ -13,7 +13,7 @@
  * (width/precision/align/fill) for Phase D4.
  */
 
-typedef struct RivenFormatter {
+typedef struct RuxenFormatter {
     char    *buf;
     size_t   len;
     size_t   cap;
@@ -22,27 +22,27 @@ typedef struct RivenFormatter {
     int32_t  precision;
     int8_t   align;    /* 0 = default, 1 = left, 2 = center, 3 = right */
     int32_t  fill_cp;  /* UTF-32 codepoint; -1 = default ' ' */
-} RivenFormatter;
+} RuxenFormatter;
 
 /* Grow the buffer so at least `additional` more bytes can be appended. */
-static void riven_fmt_formatter_reserve(RivenFormatter *f, size_t additional) {
+static void ruxen_fmt_formatter_reserve(RuxenFormatter *f, size_t additional) {
     size_t needed = f->len + additional + 1; /* +1 for NUL */
     if (needed <= f->cap) return;
     size_t newcap = f->cap == 0 ? 16 : f->cap;
     while (newcap < needed) newcap *= 2;
     char *nb = (char *) realloc(f->buf, newcap);
-    if (!nb) { fprintf(stderr, "riven: formatter alloc failed\n"); exit(101); }
+    if (!nb) { fprintf(stderr, "ruxen: formatter alloc failed\n"); exit(101); }
     f->buf = nb;
     f->cap = newcap;
 }
 
 /* Allocate and initialise a fresh Formatter with an empty buffer. */
-RivenFormatter *riven_fmt_formatter_new(void) {
-    RivenFormatter *f = (RivenFormatter *) calloc(1, sizeof(RivenFormatter));
-    if (!f) { fprintf(stderr, "riven: formatter alloc failed\n"); exit(101); }
+RuxenFormatter *ruxen_fmt_formatter_new(void) {
+    RuxenFormatter *f = (RuxenFormatter *) calloc(1, sizeof(RuxenFormatter));
+    if (!f) { fprintf(stderr, "ruxen: formatter alloc failed\n"); exit(101); }
     f->precision = -1;
     f->fill_cp   = -1;
-    riven_fmt_formatter_reserve(f, 0);
+    ruxen_fmt_formatter_reserve(f, 0);
     f->buf[0] = '\0';
     return f;
 }
@@ -56,10 +56,10 @@ RivenFormatter *riven_fmt_formatter_new(void) {
  *                       1 = left, 2 = center, 3 = right
  *   fill_cp    == -1 → default ' ' (space)
  */
-RivenFormatter *riven_fmt_formatter_new_with_spec(
+RuxenFormatter *ruxen_fmt_formatter_new_with_spec(
     int64_t width, int64_t precision, int64_t align, int64_t fill
 ) {
-    RivenFormatter *f = riven_fmt_formatter_new();
+    RuxenFormatter *f = ruxen_fmt_formatter_new();
     f->width     = (int32_t) width;
     f->precision = (int32_t) precision;
     f->align     = (int8_t)  align;
@@ -70,17 +70,17 @@ RivenFormatter *riven_fmt_formatter_new_with_spec(
 /* Phase 2 #06.D4: precision accessor.  Synth `Float_fmt` / `String_fmt`
  * read this to know whether to truncate / round.  Returns -1 when the
  * formatter was constructed without a precision (the default). */
-int64_t riven_fmt_formatter_precision(const RivenFormatter *f) {
+int64_t ruxen_fmt_formatter_precision(const RuxenFormatter *f) {
     return f ? (int64_t) f->precision : -1;
 }
 
 /* Free the Formatter and its buffer.
- * Uses the _ORIG_FREE sentinel + RIVEN_ASM_LABEL rebind so the
- * drop_fixtures textual `free(` → `riven_test_free(` rewrite does not
- * mangle this call site (same pattern as riven_string_free /
- * riven_vec_free).  Forward decl + asm label are at the top of the
+ * Uses the _ORIG_FREE sentinel + RUXEN_ASM_LABEL rebind so the
+ * drop_fixtures textual `free(` → `ruxen_test_free(` rewrite does not
+ * mangle this call site (same pattern as ruxen_string_free /
+ * ruxen_vec_free).  Forward decl + asm label are at the top of the
  * file to satisfy macOS clang's "asm label after first use" rule. */
-void riven_fmt_formatter_ORIG_FREE(RivenFormatter *f) {
+void ruxen_fmt_formatter_ORIG_FREE(RuxenFormatter *f) {
     if (!f) return;
     if (f->buf) free(f->buf);
     free(f);
@@ -89,10 +89,10 @@ void riven_fmt_formatter_ORIG_FREE(RivenFormatter *f) {
 /* Append the NUL-terminated string `s` to the buffer.
  * Returns 0 (tag-0 = Ok(())) on success, 1 (tag-1 = FmtError) on
  * null input (v1 simplification — buffer overflow is not surfaced). */
-int64_t riven_fmt_formatter_write_str(RivenFormatter *f, const char *s) {
+int64_t ruxen_fmt_formatter_write_str(RuxenFormatter *f, const char *s) {
     if (!f || !s) return 1;
     size_t n = strlen(s);
-    riven_fmt_formatter_reserve(f, n);
+    ruxen_fmt_formatter_reserve(f, n);
     memcpy(f->buf + f->len, s, n);
     f->len += n;
     f->buf[f->len] = '\0';
@@ -102,15 +102,15 @@ int64_t riven_fmt_formatter_write_str(RivenFormatter *f, const char *s) {
 /* Append a single Unicode codepoint.
  * v1: ASCII codepoints (0–0x7F) are stored directly; non-ASCII
  * codepoints emit '?' (Phase D4 will add full UTF-8 encoding). */
-int64_t riven_fmt_formatter_write_char(RivenFormatter *f, int64_t codepoint) {
+int64_t ruxen_fmt_formatter_write_char(RuxenFormatter *f, int64_t codepoint) {
     if (!f) return 1;
     if (codepoint >= 0 && codepoint <= 0x7f) {
-        riven_fmt_formatter_reserve(f, 1);
+        ruxen_fmt_formatter_reserve(f, 1);
         f->buf[f->len++] = (char) codepoint;
         f->buf[f->len]   = '\0';
     } else {
         /* Non-ASCII placeholder until Phase D4 UTF-8 encoding lands. */
-        riven_fmt_formatter_reserve(f, 1);
+        ruxen_fmt_formatter_reserve(f, 1);
         f->buf[f->len++] = '?';
         f->buf[f->len]   = '\0';
     }
@@ -122,7 +122,7 @@ int64_t riven_fmt_formatter_write_char(RivenFormatter *f, int64_t codepoint) {
  * returns `taken` untouched.  When a new buffer is allocated the input
  * is freed.  `len` is the byte length of `taken` (must not include the
  * trailing NUL).  The padded buffer is NUL-terminated. */
-static char *riven_fmt_apply_pad(
+static char *ruxen_fmt_apply_pad(
     char *taken, size_t len,
     int32_t width, int8_t align, int32_t fill_cp
 ) {
@@ -145,7 +145,7 @@ static char *riven_fmt_apply_pad(
         left_pad  = pad;
     }
     char *out = (char *) malloc((size_t) width + 1);
-    if (!out) { fprintf(stderr, "riven: pad alloc failed\n"); exit(101); }
+    if (!out) { fprintf(stderr, "ruxen: pad alloc failed\n"); exit(101); }
     memset(out, fill_ch, left_pad);
     if (taken && len > 0) memcpy(out + left_pad, taken, len);
     memset(out + left_pad + len, fill_ch, right_pad);
@@ -154,18 +154,18 @@ static char *riven_fmt_apply_pad(
     return out;
 }
 
-/* Transfer buffer ownership to a Riven String and free the Formatter.
+/* Transfer buffer ownership to a Ruxen String and free the Formatter.
  * The accumulated `buf` is taken directly (no copy unless padding is
  * required by the spec) and returned as a heap `char*` that satisfies
- * the Riven String ABI.  Codegen must not emit a follow-up `_free` call
+ * the Ruxen String ABI.  Codegen must not emit a follow-up `_free` call
  * on the Formatter after this.
  *
  * Phase 2 #06.D4: when the formatter was constructed with a width spec,
  * width/align/fill are applied here.  Precision is type-specific and is
  * consumed earlier by the synth `Float_fmt` / `String_fmt` bodies, not
  * here. */
-const char *riven_fmt_formatter_buffer(RivenFormatter *f) {
-    if (!f) return riven_string_from("");
+const char *ruxen_fmt_formatter_buffer(RuxenFormatter *f) {
+    if (!f) return ruxen_string_from("");
     char  *taken = f->buf;
     size_t len   = f->len;
     int32_t width   = f->width;
@@ -176,14 +176,14 @@ const char *riven_fmt_formatter_buffer(RivenFormatter *f) {
     f->buf = NULL;
     f->len = 0;
     f->cap = 0;
-    riven_fmt_formatter_ORIG_FREE(f);
-    if (!taken) return riven_string_from("");
-    taken = riven_fmt_apply_pad(taken, len, width, align, fill_cp);
+    ruxen_fmt_formatter_ORIG_FREE(f);
+    if (!taken) return ruxen_string_from("");
+    taken = ruxen_fmt_apply_pad(taken, len, width, align, fill_cp);
     return taken;
 }
 
 /* Return the number of bytes currently accumulated in the buffer. */
-int64_t riven_fmt_formatter_len(const RivenFormatter *f) {
+int64_t ruxen_fmt_formatter_len(const RuxenFormatter *f) {
     return f ? (int64_t) f->len : 0;
 }
 

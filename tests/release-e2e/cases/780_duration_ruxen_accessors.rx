@@ -1,0 +1,20 @@
+## Task #27 / #19 unlock proof: existing C-allocated Duration with
+## new pure-Ruxen accessors reading self.nanos directly via layout c.
+##
+## The C side (ruxen_duration_from_nanos) malloc's a
+## RuxenDuration { int64_t nanos } and returns the pointer. The
+## Ruxen-side Duration class now declares `layout c; nanos: Int`
+## matching the C wire layout, so self.nanos reads the same bytes
+## the previous ruxen_duration_as_nanos C accessor read.
+##
+## Verifies the layout c → pure-Ruxen accessor port end-to-end.
+
+use std.time.Duration
+
+def main
+  let d = Duration.from_nanos(1500000000)
+  puts "#{d.as_nanos}"     # 1500000000 (Ruxen: self.nanos)
+  puts "#{d.as_micros}"    # 1500000 (Ruxen: self.nanos / 1000)
+  puts "#{d.as_millis}"    # 1500 (Ruxen: self.nanos / 1_000_000)
+  puts "#{d.as_secs}"      # 1 (Ruxen: self.nanos / 1_000_000_000)
+end

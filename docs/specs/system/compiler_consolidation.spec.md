@@ -41,7 +41,7 @@ The three pre-existing branches become callers of this function, OR (preferred) 
 
 Task #14 commit `793751c` rewrote `is_send_strict_with` as a generic walker. But `is_send_with` (the looser variant for user-class auto-derive) still exists alongside it.
 
-**Fix:** one entry point `is_send(ty, symbols) -> bool` with the rules driven by mixin-membership data in the resolver:
+**Fix:** one entry point `is_send(ty, symbols) -> bool` with the rules druxen by mixin-membership data in the resolver:
 - `include !Send` → false.
 - `include unsafe Send` → true (escape hatch).
 - `include Send` → recursive walker (generic args + fields, with `subst_type_params` for substituting at call sites).
@@ -57,7 +57,7 @@ Task #14 commit `b74546d` ran `resolve_item` over bootstrap programs in pass 2. 
 
 **Fix:** make registration genuinely path-agnostic. The function should take the symbol-table state as input, not assume "user-program mode" vs "bootstrap mode". Eliminate any branches inside that check which caller invoked it. The work in `bootstrap_merge.rs` should be reduced to "set up the cumulative symbol table, then route through the same registration path the user program uses."
 
-**Acceptance:** `register_top_level_type_with_ffi_in` has no conditional logic on caller identity. The full type-registration flow can be exercised by a fresh `.rvn` package without any bootstrap-specific glue. The bootstrap_class_bodies pin test (added in #14) still passes.
+**Acceptance:** `register_top_level_type_with_ffi_in` has no conditional logic on caller identity. The full type-registration flow can be exercised by a fresh `.rx` package without any bootstrap-specific glue. The bootstrap_class_bodies pin test (added in #14) still passes.
 
 ## B4 — Drop registration: `def drop` and `include Drop` agree
 
@@ -77,7 +77,7 @@ For each B-row, the commit must:
 1. Have ONE entry point handling the concept (function-scope or module-scope, whichever is natural).
 2. Carry a canonical comment at the entry point: `// SINGLE ENTRY POINT for <concept>. Adding new <feature kind> means changing only this function.`
 3. All existing tests in the affected area pass.
-4. A new pin test (or extension of existing) asserts the entry point is the only place — e.g. `grep -rn "<old_function_name>" compiler/riven_core/src/` returns only the new entry's caller.
+4. A new pin test (or extension of existing) asserts the entry point is the only place — e.g. `grep -rn "<old_function_name>" compiler/ruxen_core/src/` returns only the new entry's caller.
 
 ## Out of scope
 
@@ -109,5 +109,5 @@ The acceptance criterion already specifies per-B-row pin tests. Concretely:
 ## Out of scope (follow-up tasks)
 
 - Cranelift vs LLVM dispatch consolidation (#15-codegen).
-- `register_builtins` removal — moving every hardcoded built-in to `.rvn` (paired with the BOOTSTRAP_FILES load-check rule from memory note `project_riven_bootstrap_files_load_check.md`).
+- `register_builtins` removal — moving every hardcoded built-in to `.rx` (paired with the BOOTSTRAP_FILES load-check rule from memory note `project_ruxen_bootstrap_files_load_check.md`).
 - Auto-derive for other built-in traits (Clone, Display, Hash) — task #14 only did Send/Sync.

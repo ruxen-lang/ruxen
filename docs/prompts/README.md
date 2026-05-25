@@ -1,4 +1,4 @@
-# Riven implementation prompts
+# Ruxen implementation prompts
 
 Self-contained briefs for agents (or humans) executing the remaining v1
 roadmap. Every prompt is TDD-discipline first: write the failing test,
@@ -31,7 +31,7 @@ docs/prompts/
 │   ├── 17_phase4_cross_compile_abi.md
 │   ├── 18_phase4_debugger_dwarf.md
 │   ├── 19_phase5_test_framework.md
-│   ├── 20_phase5_rivendoc.md
+│   ├── 20_phase5_ruxendoc.md
 │   ├── 21_phase5_mir_opts.md
 │   ├── 22_phase5_pkg_mgr_workspaces.md
 │   ├── 23_phase5_language_reference.md
@@ -113,7 +113,7 @@ rather than reopening the whole prompt.
   feature is "done" without a failing test that now passes.
 - **Mocking inputs the compiler will see in production.** No fake
   Symbol tables, no synthetic HIR — drive everything end-to-end from
-  source `.rvn` fixtures where possible.
-- **Aspirational stubs.** No `riven_noop_passthrough` fallbacks
+  source `.rx` fixtures where possible.
+- **Aspirational stubs.** No `ruxen_noop_passthrough` fallbacks
   (P0.5 lesson). If a method is not implemented, the call must error
   loudly at compile time.

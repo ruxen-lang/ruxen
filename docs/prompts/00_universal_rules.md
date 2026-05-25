@@ -28,8 +28,8 @@ A prompt is incomplete until the **entire workspace** passes
 
 ## 2. Memory cap
 
-`rivenc` and any process-spawning helper must respect the 8 GiB cap.
-Use `scripts/rivenc-rss-cap.sh -- <args>` when invoking the compiler
+`ruxenc` and any process-spawning helper must respect the 8 GiB cap.
+Use `scripts/ruxenc-rss-cap.sh -- <args>` when invoking the compiler
 on tests that exercise large inputs. If a test allocates more than
 8 GiB you have a leak; fix it instead of raising the cap.
 
@@ -37,19 +37,19 @@ on tests that exercise large inputs. If a test allocates more than
 
 The following lead to silent regressions and are forbidden:
 
-- **`riven_noop_passthrough` fallbacks** for unknown methods (P0.5
+- **`ruxen_noop_passthrough` fallbacks** for unknown methods (P0.5
   lesson). If a method is not implemented, codegen must `Err()`.
 - **Mocking the SymbolTable / HIR** in tests. Drive everything from
-  `.rvn` fixtures or call into the real `Lowerer`/`Parser`/`Lexer`.
-  See `crates/riven-core/tests/drop_fixtures.rs` for the canonical
+  `.rx` fixtures or call into the real `Lowerer`/`Parser`/`Lexer`.
+  See `crates/ruxen-core/tests/drop_fixtures.rs` for the canonical
   pattern.
 - **`free(NULL)`-style "safe stub"** for unimplemented runtime fns.
-  If `riven_xxx` is declared, it must do its job or panic.
+  If `ruxen_xxx` is declared, it must do its job or panic.
 - **Rust-side `#[allow(dead_code)]`** to hide unused error paths in
   the compiler. Use `unimplemented!("...")` so it shows up in
   failures.
 - **String-typed magic constants.** New error codes go in
-  `crates/riven-core/src/diagnostics/codes.rs`. New runtime function
+  `crates/ruxen-core/src/diagnostics/codes.rs`. New runtime function
   names go in the dispatch table at `codegen/runtime.rs`.
 
 ## 4. Cross-tier contract
@@ -57,8 +57,8 @@ The following lead to silent regressions and are forbidden:
 When you change a tier-1 surface (stdlib, drop, derive), check the
 test suites in:
 
-- `crates/riven-core/tests/`
-- `crates/riven-cli/tests/`
+- `crates/ruxen-core/tests/`
+- `crates/ruxen-cli/tests/`
 - `tests/release-e2e/cases/`
 
 If your change makes any of these fail, fix the failure as part of
@@ -90,14 +90,14 @@ user-visible change.
 
 Every public function, struct, enum, mixin you add gets at least one
 `##` doc comment line summarising what it does. P0.13 wired
-`##` capture; T3.04 (rivendoc) will harvest it.
+`##` capture; T3.04 (ruxendoc) will harvest it.
 
 ## 8. Fixture coverage
 
 For every language-surface feature (parser/lowering/codegen):
 
-- Add at least one positive `.rvn` fixture under
-  `tests/release-e2e/cases/NNN_<topic>.rvn` with a matching
+- Add at least one positive `.rx` fixture under
+  `tests/release-e2e/cases/NNN_<topic>.rx` with a matching
   `expected/NNN_<topic>.out`.
 - Add at least one negative test (compile error with right code) in
   the relevant unit test module.
@@ -110,7 +110,7 @@ Before a prompt is considered complete:
 - [ ] `cargo test --workspace` passes.
 - [ ] `cargo build --workspace --all-targets` passes.
 - [ ] No `#[ignore]` added.
-- [ ] No new `riven_noop_passthrough` introductions.
+- [ ] No new `ruxen_noop_passthrough` introductions.
 - [ ] CHANGELOG `[Unreleased]` updated with one bullet.
 - [ ] CI green on the PR (build + test on Ubuntu and macOS, MSRV).
 - [ ] All new public surface (public-by-default; no Ruby visibility

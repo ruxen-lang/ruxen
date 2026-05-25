@@ -1,0 +1,31 @@
+use std.net.TcpStream
+use std.env.get
+
+# Connects 200 TcpStream instances inside a scoped helper and lets
+# each one drop at the end of the helper's frame. If TcpStream_drop
+# didn't release the fd we'd exhaust the per-process descriptor table
+# well before reaching i=200 and a later connect would fail.
+def try_connect(addr: &String) -> Bool
+  match TcpStream.connect(addr)
+    Ok(_s) -> true
+    Err(_) -> false
+  end
+end
+
+def main
+  let p: String = get("RUXEN_NET_TEST_PORT").expect!("port")
+  let addr = "127.0.0.1:#{p}"
+  var i = 0
+  var all_ok = true
+  while i < 200
+    if !try_connect(&addr)
+      all_ok = false
+    end
+    i = i + 1
+  end
+  if all_ok
+    puts "all_ok=true"
+  else
+    puts "all_ok=false"
+  end
+end

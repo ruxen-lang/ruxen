@@ -1,10 +1,10 @@
 /*
  * std::bench runtime — opaque-identity black_box only.
  *
- * The whole bench harness lives in pure Riven (`src/lib.rvn`); the
+ * The whole bench harness lives in pure Ruxen (`src/lib.rx`); the
  * only thing C is doing here is preventing the compiler from
  * inlining + constant-folding the value the user wants to keep
- * "live" through the bench iteration. A pure-Riven `def black_box[T](
+ * "live" through the bench iteration. A pure-Ruxen `def black_box[T](
  * x: T) -> T; x; end` would be optimised away because the compiler
  * sees the body is a pass-through.
  *
@@ -14,7 +14,7 @@
  * point and the producer code cannot be dropped. Same trick that
  * `std::hint::black_box` in Rust uses.
  *
- * Riven-side declaration: `def self.black_box as "riven_bench_black_box"(v: Int) -> Int`.
+ * Ruxen-side declaration: `def self.black_box as "ruxen_bench_black_box"(v: Int) -> Int`.
  * `Int` (i64) is the only typed surface — closure return values that
  * are heap-typed (String, Array, ...) are already opaque to the
  * optimizer through the pointer indirection, so the Int specialisation
@@ -23,7 +23,7 @@
 #include <stdint.h>
 
 __attribute__((noinline))
-int64_t riven_bench_black_box(int64_t v) {
+int64_t ruxen_bench_black_box(int64_t v) {
     __asm__ __volatile__ ("" : "+r"(v) : : "memory");
     return v;
 }

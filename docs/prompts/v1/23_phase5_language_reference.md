@@ -6,7 +6,7 @@ before it can be referenced).
 
 ## Goal
 
-`docs/reference/` becomes the canonical Riven language spec. Per-
+`docs/reference/` becomes the canonical Ruxen language spec. Per-
 chapter coverage of every surface feature.
 
 ## Chapters (mandatory)
@@ -40,10 +40,10 @@ chapter coverage of every surface feature.
 ## TDD
 
 - Each chapter has at least one runnable code sample.
-- A test harness `crates/riven-core/tests/reference_examples.rs`
-  walks `docs/reference/**/*.md`, extracts ` ```riven ... ``` `
+- A test harness `crates/ruxen-core/tests/reference_examples.rs`
+  walks `docs/reference/**/*.md`, extracts ` ```ruxen ... ``` `
   blocks, compiles + runs each, asserts they succeed.
-- Snippets that intentionally fail are tagged ` ```riven,fail `
+- Snippets that intentionally fail are tagged ` ```ruxen,fail `
   and asserted to produce a known error code.
 
 ## Implementation
@@ -58,5 +58,5 @@ chapter coverage of every surface feature.
 - [ ] All 22 chapters drafted with ≥1 example each.
 - [ ] `cargo test reference_examples` runs every example.
 - [ ] mdBook builds without warnings.
-- [ ] Hosted at e.g. `riven-lang.org/reference/`.
+- [ ] Hosted at e.g. `ruxen-lang.org/reference/`.
 - [ ] CHANGELOG bullet.

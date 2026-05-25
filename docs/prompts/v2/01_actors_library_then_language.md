@@ -20,7 +20,7 @@ async + channels. No new keywords, no parser changes.
 
 ### Surface
 
-```riven
+```ruxen
 use std.actor.{Actor, ActorRef}
 
 class Counter

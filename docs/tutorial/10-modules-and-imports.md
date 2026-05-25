@@ -4,7 +4,7 @@
 
 Group related code with `module`. Items inside a module body are **public by default**; use a `private` section marker to gate subsequent declarations.
 
-```riven
+```ruxen
 module Http
   class Request
     url: String
@@ -26,7 +26,7 @@ end
 
 ## Nested Modules
 
-```riven
+```ruxen
 module App
   module Models
     class User
@@ -47,20 +47,20 @@ end
 
 ### Simple Import
 
-```riven
+```ruxen
 use Http.Request
 use Http.Response
 ```
 
 ### Grouped Import
 
-```riven
+```ruxen
 use Http.{ Request, Response }
 ```
 
 ### Aliased Import
 
-```riven
+```ruxen
 use Http.Client as HC
 ```
 
@@ -68,14 +68,14 @@ use Http.Client as HC
 
 The compilation unit is a **package**. Use `package` to refer to "this package" in an import path:
 
-```riven
+```ruxen
 use package.utils.format
 use package.models.User
 ```
 
 ### Using Imported Names
 
-```riven
+```ruxen
 use Http.{ Request, Response }
 
 let req = Request.new("https://example.com", "GET")
@@ -85,7 +85,7 @@ let req = Request.new("https://example.com", "GET")
 
 Items inside a module are **public by default**. A `private` section marker inside a module body makes subsequent declarations module-local; a `protected` section marker scopes them to subclass-visible.
 
-```riven
+```ruxen
 module Database
   def query(sql: &str) -> Result[Rows, DbError]
     let conn = connect_internal()

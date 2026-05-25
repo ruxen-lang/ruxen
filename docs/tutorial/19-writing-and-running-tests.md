@@ -1,6 +1,6 @@
 # Writing and Running Tests
 
-Riven uses **Spec-Driven Development** (see
+Ruxen uses **Spec-Druxen Development** (see
 [Chapter 20 — Specs & SDD](20-specs-and-sdd.md) for the workflow).
 The TL;DR for tests: every spec behaviour is pinned by at least one
 test in the Rust integration suite or as a release-e2e fixture.
@@ -13,8 +13,8 @@ and how to write your own.
 
 | Layer             | Lives in                                      | Best for                                              |
 |-------------------|-----------------------------------------------|-------------------------------------------------------|
-| Integration tests | `crates/riven-core/tests/*.rs`                | Compile-and-run + assertions on typed Rust values     |
-| Release-e2e       | `tests/release-e2e/cases/*.rvn` + `expected/` | Byte-exact stdout comparison across both backends     |
+| Integration tests | `crates/ruxen-core/tests/*.rs`                | Compile-and-run + assertions on typed Rust values     |
+| Release-e2e       | `tests/release-e2e/cases/*.rx` + `expected/` | Byte-exact stdout comparison across both backends     |
 
 Integration tests run on every `cargo test --workspace` (≈1180 tests
 on `v1-missing-features` as of writing).  Release-e2e fixtures run
@@ -30,15 +30,15 @@ CI job (~220 fixtures, takes a few minutes locally).
 cargo test --workspace
 
 # Just one test file:
-cargo test -p riven-core --test stdlib_fmt_runtime
+cargo test -p ruxen-core --test stdlib_fmt_runtime
 
 # Just one test fn:
-cargo test -p riven-core --test stdlib_fmt_runtime -- \
+cargo test -p ruxen-core --test stdlib_fmt_runtime -- \
     interpolation_float_precision
 
 # Slow but comprehensive — compile-and-run every release-e2e fixture
 # through the in-process pipeline:
-cargo test --release -p riven-core --test release_e2e_smoke -- --ignored
+cargo test --release -p ruxen-core --test release_e2e_smoke -- --ignored
 ```
 
 The full-fixture run is gated behind `--ignored` so it doesn't run
@@ -52,7 +52,7 @@ codegen or the runtime.
 Use these when you want a **byte-exact** stdout check.  Add two files:
 
 ```
-tests/release-e2e/cases/NNN_<name>.rvn
+tests/release-e2e/cases/NNN_<name>.rx
 tests/release-e2e/expected/NNN_<name>.out
 ```
 
@@ -60,9 +60,9 @@ tests/release-e2e/expected/NNN_<name>.out
 that doesn't collide with existing fixtures (highest currently in
 use is around `611`).
 
-**Example:** `tests/release-e2e/cases/071_interp_format_specs.rvn`:
+**Example:** `tests/release-e2e/cases/071_interp_format_specs.rx`:
 
-```riven
+```ruxen
 # Phase 2 #06.D4 — width / align / fill / precision applied at runtime.
 
 def main
@@ -107,12 +107,12 @@ The `compile_and_run` helper exists in most `stdlib_*.rs` files;
 copy-paste it.
 
 ```rust
-// crates/riven-core/tests/my_feature.rs
-use riven_core::codegen;
-use riven_core::lexer::Lexer;
-use riven_core::mir::lower::Lowerer;
-use riven_core::parser::Parser;
-use riven_core::typeck;
+// crates/ruxen-core/tests/my_feature.rs
+use ruxen_core::codegen;
+use ruxen_core::lexer::Lexer;
+use ruxen_core::mir::lower::Lowerer;
+use ruxen_core::parser::Parser;
+use ruxen_core::typeck;
 use std::process::Command;
 
 fn workspace_root() -> std::path::PathBuf {
@@ -132,7 +132,7 @@ fn compile_and_run(source: &str, basename: &str) -> (String, String, bool) {
     let program = parser.parse().expect("parse");
     let result = typeck::type_check(&program);
     assert!(result.diagnostics.iter().all(|d|
-        d.level != riven_core::diagnostics::DiagnosticLevel::Error),
+        d.level != ruxen_core::diagnostics::DiagnosticLevel::Error),
         "typecheck errors: {:?}", result.diagnostics);
 
     let mut lowerer = Lowerer::new(&result.symbols);
@@ -161,7 +161,7 @@ end
 ```
 
 That's the whole pattern.  Drop the file in
-`crates/riven-core/tests/`, add `#[test]` fns, and `cargo test`
+`crates/ruxen-core/tests/`, add `#[test]` fns, and `cargo test`
 picks it up automatically — no separate registration.
 
 ---
@@ -188,7 +188,7 @@ fills).
 ## 6. Diagnostics tests
 
 For typeck rejections, use `typeck::type_check(&program)` directly
-and inspect `.diagnostics`.  See `crates/riven-core/tests/implicit_negatives.rs`
+and inspect `.diagnostics`.  See `crates/ruxen-core/tests/implicit_negatives.rs`
 for the canonical pattern: compile-only (no codegen) and assert on
 the diagnostic `code` (e.g. `"E0610"`) rather than the message
 text.  Error-message wording can change; codes are stable.
@@ -209,12 +209,12 @@ assert!(codes.contains(&"E0610"), "expected E0610, got {:?}", codes);
 
 If you're adding new syntax that doesn't yet have semantics, you
 only need the lexer + parser.  See
-`crates/riven-core/tests/const_generics.rs` for the pattern:
+`crates/ruxen-core/tests/const_generics.rs` for the pattern:
 
 ```rust
-use riven_core::lexer::Lexer;
-use riven_core::parser::ast::{GenericParam, Program, TopLevelItem};
-use riven_core::parser::Parser;
+use ruxen_core::lexer::Lexer;
+use ruxen_core::parser::ast::{GenericParam, Program, TopLevelItem};
+use ruxen_core::parser::Parser;
 
 fn parse(src: &str) -> Program {
     let mut lx = Lexer::new(src);
@@ -251,8 +251,8 @@ surface red before any semantic work.
   helper pattern from `stdlib_fs.rs` so parallel test runs don't
   race.  Always clean up on success and failure.
 - **Network tests.** Bind on `127.0.0.1:0` so the kernel picks an
-  unused port; pass the port to the Riven binary via env var
-  (`RIVEN_NET_TEST_PORT` is the existing convention).  See
+  unused port; pass the port to the Ruxen binary via env var
+  (`RUXEN_NET_TEST_PORT` is the existing convention).  See
   `stdlib_net.rs::tcp_loopback_roundtrip`.
 
 ---

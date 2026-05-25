@@ -4,15 +4,15 @@ Status: draft
 Depends on: tier5_03 (directives — shared syntax), tier5_02 (editions — the
 reference must be per-edition), tier5_04 (error codes — referenced from
 normative-error sections).
-Blocks: external implementers, stability claims ("Riven supports X"),
+Blocks: external implementers, stability claims ("Ruxen supports X"),
 future language lawyering.
 
 ---
 
 ## 1. Summary & motivation
 
-Riven has no reference. There is a tutorial (`docs/tutorial/01-16`) aimed
-at readers, and an implementation (`crates/riven-core`) that is the
+Ruxen has no reference. There is a tutorial (`docs/tutorial/01-16`) aimed
+at readers, and an implementation (`crates/ruxen-core`) that is the
 **only** authoritative description of what the language accepts. That is a
 failure mode:
 
@@ -32,7 +32,7 @@ failure mode:
   they're changing relative to.
 
 This document specifies the structure, production pipeline, and
-sync-with-the-compiler discipline for a Riven Language Reference.
+sync-with-the-compiler discipline for a Ruxen Language Reference.
 
 ---
 
@@ -45,7 +45,7 @@ sync-with-the-compiler discipline for a Riven Language Reference.
   user-oriented prose. No grammar, no precedence table, no normative
   sections. Examples but no counter-examples of rejected programs.
 - **Inline doc comments** on many functions, particularly in
-  `crates/riven-core/src/parser/` and `hir/types.rs`.
+  `crates/ruxen-core/src/parser/` and `hir/types.rs`.
 - **`docs/requirements/tier1_*.md`** (which you're reading the tier-5
   sibling of) — design intent, not reference material.
 
@@ -60,11 +60,11 @@ Directories that do **not** exist:
 The following files are the **de facto** grammar today. They need to be
 extracted into normative form:
 
-- **Lexer.** `crates/riven-core/src/lexer/mod.rs` (842 lines) and
-  `crates/riven-core/src/lexer/token.rs` (414 lines). Token set at
+- **Lexer.** `crates/ruxen-core/src/lexer/mod.rs` (842 lines) and
+  `crates/ruxen-core/src/lexer/token.rs` (414 lines). Token set at
   `token.rs:56-222`. Line-continuation rules at `token.rs:227-266`.
   Keyword table at `token.rs:281-311`.
-- **Parser.** `crates/riven-core/src/parser/mod.rs` (1791 lines, top-level
+- **Parser.** `crates/ruxen-core/src/parser/mod.rs` (1791 lines, top-level
   items), `parser/expr.rs` (1544 lines, expressions + precedence),
   `parser/types.rs` (473 lines, type-expression grammar),
   `parser/patterns.rs` (479 lines, patterns).
@@ -73,11 +73,11 @@ extracted into normative form:
   `?`, `(...)`.
 - **Attribute syntax.** `parser/mod.rs:1572-1610` (`parse_attributes`) and
   `parser/mod.rs:473-511` (dispatch).
-- **Resolution rules.** `crates/riven-core/src/resolve/mod.rs` (2861
+- **Resolution rules.** `crates/ruxen-core/src/resolve/mod.rs` (2861
   lines) — scope, shadowing, visibility.
-- **Type rules.** `crates/riven-core/src/typeck/` (coerce 172 lines, infer
+- **Type rules.** `crates/ruxen-core/src/typeck/` (coerce 172 lines, infer
   1015 lines, unify 269 lines, traits 285 lines).
-- **Ownership / borrow rules.** `crates/riven-core/src/borrow_check/` —
+- **Ownership / borrow rules.** `crates/ruxen-core/src/borrow_check/` —
   regions (`regions.rs`), NLL (`borrows.rs`), elision
   (`lifetimes.rs:55-85`).
 
@@ -85,7 +85,7 @@ extracted into normative form:
 
 Even without a reference, some conventions surfaced in the code:
 
-- `.rvn` file extension.
+- `.rx` file extension.
 - Line comments: `#` (`lexer/mod.rs:70`); block comments nested with
   `#= ... =#` (tutorial ch. 16).
 - String interpolation: `"hello #{expr}"`
@@ -240,7 +240,7 @@ Conventions:
 - Grammar tables: **normative**.
 - Examples: **informative** unless introduced with "**Example (normative):**".
 - "Implementation note:" callouts: **informative** — describe a current
-  `riven-core` design choice, not a mandated behaviour.
+  `ruxen-core` design choice, not a mandated behaviour.
 - Error codes in prose: referenced by `E????` and linked into
   `docs/errors/`.
 
@@ -278,8 +278,8 @@ written anyway.
 **Rejected** — requires a parser rewrite for marginal gain.
 
 **Option B — test-fixture backing, prose written by humans. [RECOMMENDED]**
-Every grammar production has at least one `.rvn` fixture under
-`crates/riven-core/tests/reference/<chapter>/`. A dedicated integration
+Every grammar production has at least one `.rx` fixture under
+`crates/ruxen-core/tests/reference/<chapter>/`. A dedicated integration
 test `tests/reference_coverage.rs` does two things:
 
 1. Runs each fixture through the pipeline and asserts the expected
@@ -288,7 +288,7 @@ test `tests/reference_coverage.rs` does two things:
    one fixture has a `# reference: anchor-id` header comment. Missing
    anchors fail CI.
 
-Naming: `tests/reference/03-expressions/02-precedence-mul-over-add.rvn`.
+Naming: `tests/reference/03-expressions/02-precedence-mul-over-add.rx`.
 Each fixture has a header:
 
 ```
@@ -320,7 +320,7 @@ And for rejection fixtures:
 **Option C — pure prose discipline, no enforcement.**
 What most languages do before they become popular. Works only with a
 tiny, hyper-disciplined team.
-**Rejected** for Riven because by the time divergence bites, it'll be
+**Rejected** for Ruxen because by the time divergence bites, it'll be
 too late to fix without a "spec-vs-compiler" rewrite.
 
 ### 5.4 Edition scoping
@@ -341,8 +341,8 @@ is a **fixture** — so it's syntax-checked. Use inline include:
 ```markdown
 Addition binds tighter than subtraction.
 
-\```rvn
-{{#fixture: 03-expressions/02-precedence-mul-over-add.rvn}}
+\```rx
+{{#fixture: 03-expressions/02-precedence-mul-over-add.rx}}
 \```
 ```
 
@@ -358,8 +358,8 @@ version committed; CI verifies expansion is up to date.
 
 - `docs/reference/README.md`, full chapter tree (~35 files — one per §4.1
   entry).
-- `crates/riven-core/tests/reference/` — fixture tree mirroring chapters.
-- `crates/riven-core/tests/reference_coverage.rs` — anchor-to-fixture
+- `crates/ruxen-core/tests/reference/` — fixture tree mirroring chapters.
+- `crates/ruxen-core/tests/reference_coverage.rs` — anchor-to-fixture
   cross-check.
 - `tools/refgen/` (tiny Rust binary) — fixture include expansion, anchor
   lint.
@@ -367,7 +367,7 @@ version committed; CI verifies expansion is up to date.
 
 ### 6.2 Code changes
 
-- `crates/riven-core/src/lib.rs` — expose a `reference_anchors()` helper
+- `crates/ruxen-core/src/lib.rs` — expose a `reference_anchors()` helper
   that returns the full list of anchor IDs referenced by the compiler's
   error-reporting code (so `refgen` can fail-fast on typos). Optional; not
   blocking.

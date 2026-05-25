@@ -1,0 +1,107 @@
+## std::async_net — async TCP I/O.
+##
+## Spec: docs/specs/stdlib/async_io.spec.md Milestone 4C (B6.5–B12).
+##
+## Five hand-written futures backed by the per-thread reactor:
+##
+##   AsyncTcpListener.bind(addr)  -> AsyncBindFuture
+##   listener.accept              -> AsyncAcceptFuture
+##   AsyncTcpStream.connect(addr) -> AsyncConnectFuture
+##   stream.read(max_bytes)       -> AsyncReadFuture
+##   stream.write(content)        -> AsyncWriteFuture
+##   async_tcp_stream_close_of(s) -> AsyncCloseFuture   (free fn — see below)
+##
+## Each future follows the 4B pattern (see library/std/async_fs/src/lib.rx):
+##   * `state_ptr: Int` — opaque pointer to a C state struct
+##   * `handle: Int`    — reactor registration; 0 when not registered
+##   * `done: Int`      — 1 once Ready has been returned
+##   * On first poll: call `step(state)`; if it returns 1 (EAGAIN),
+##     register fd via ruxen_reactor_register_fd_{read,write} and
+##     return Pending. If 2 (done) or 3 (error), deregister and
+##     return Ready.
+##   * On drop: if registered, deregister; free the C state struct.
+##
+## Why a separate `async_net` package rather than extending net.rx:
+##   * net/src/lib.rx loads BEFORE future/src/lib.rx — the futures
+##     here `include Future`, which would fail to resolve at
+##     registration time if they lived in net.rx.
+##
+## Surface deviation from spec B8: the v1 read surface is
+##   read(max_bytes: Int) -> AsyncReadFuture (Output = Result[String, IoError])
+## rather than the spec's
+##   read(&var Array[Int]) -> Result[Int, IoError]
+## (buf-fill semantics). Returning a String matches the AsyncFile
+## read_to_string shape and avoids Array[Int]-passing across the
+## FFI boundary. v1-follow-up: tighten back to buf-fill semantics
+## once Array wire-format passes through `lib` decls cleanly.
+##
+## Surface deviation from spec B10: close is a free fn
+##   async_tcp_stream_close_of(stream: AsyncTcpStream) -> AsyncCloseFuture
+## rather than a method `stream.close`. The parser today rejects
+## `def close(self) -> ...` outside lib-decl blocks (the explicit
+## `(self)` consume form is only legal inside `lib "..." { ... }`),
+## and a parameter-less method body has no way to take the stream
+## by-move. v1-follow-up: lift to a method once user-body methods
+## can declare by-move self.
+
+## --- Reactor fd-readiness primitives -------------------------------
+##
+## async_fs.rx already declares `register_fd_read` / `_write`; the
+## per-package import boundary requires this TU to declare them too
+## (bootstrap pass-2 walks each package's lib decls in isolation).
+## `check_fired` + `deregister` are declared in time/src/lib.rx from
+## sub-phase 4A and are visible across packages.
+lib "../../future/runtime/reactor.c"
+  def ruxen_reactor_register_fd_read(reactor: Int, fd: Int) -> Int
+  def ruxen_reactor_register_fd_write(reactor: Int, fd: Int) -> Int
+end
+
+## --- async_net state-machine primitives (Int-shaped signatures) ----
+##
+## Connect / accept / read / write each own a heap state struct in C;
+## the Ruxen futures hold its address as an Int and dispatch through
+## these free fns. `Listener.bind` is eager (no state machine) — it
+## returns Result[AsyncTcpListener, IoError] directly via the C-side
+## `ruxen_async_tcp_listener_bind` declared further down (after the
+## AsyncTcpListener class so its return type resolves).
+lib "runtime/async_net.c"
+  def ruxen_async_bind_state_new(addr: &String) -> Int
+  def ruxen_async_bind_state_to_result(state: Int) -> Result[AsyncTcpListener, IoError]
+  def ruxen_async_bind_state_free(state: Int) -> ()
+
+  def ruxen_async_accept_state_new(listener_fd: Int) -> Int
+  def ruxen_async_accept_state_get_fd(state: Int) -> Int
+  def ruxen_async_accept_step(state: Int) -> Int
+  def ruxen_async_accept_state_take_fd(state: Int) -> Int
+  def ruxen_async_accept_state_take_peer(state: Int) -> String
+  def ruxen_async_accept_state_get_err(state: Int) -> Int
+  def ruxen_async_accept_state_mark_taken(state: Int) -> ()
+  def ruxen_async_accept_state_free(state: Int) -> ()
+
+  def ruxen_async_connect_state_new(addr: &String) -> Int
+  def ruxen_async_connect_state_get_fd(state: Int) -> Int
+  def ruxen_async_connect_step(state: Int) -> Int
+  def ruxen_async_connect_state_take_fd(state: Int) -> Int
+  def ruxen_async_connect_state_get_err(state: Int) -> Int
+  def ruxen_async_connect_state_mark_taken(state: Int) -> ()
+  def ruxen_async_connect_state_free(state: Int) -> ()
+
+  def ruxen_async_tcp_read_state_new(fd: Int, max_bytes: Int) -> Int
+  def ruxen_async_tcp_read_state_get_fd(state: Int) -> Int
+  def ruxen_async_tcp_read_step(state: Int) -> Int
+  def ruxen_async_tcp_read_state_take_result(state: Int) -> Result[String, IoError]
+  def ruxen_async_tcp_read_state_free(state: Int) -> ()
+
+  # Helper for AsyncReadWithTimeoutFuture — builds a
+  # Result::Err(IoError.TimedOut("read timed out")) without touching
+  # the read-state struct. The unit-tag form used internally by
+  # take_result can't carry the TimedOut payload, so we mint the
+  # tagged-with-message variant directly in C.
+  def ruxen_async_net_make_timeout_result() -> Result[String, IoError]
+
+  def ruxen_async_tcp_write_state_new(fd: Int, content: &String) -> Int
+  def ruxen_async_tcp_write_state_get_fd(state: Int) -> Int
+  def ruxen_async_tcp_write_step(state: Int) -> Int
+  def ruxen_async_tcp_write_state_take_result(state: Int) -> Result[Int, IoError]
+  def ruxen_async_tcp_write_state_free(state: Int) -> ()
+end

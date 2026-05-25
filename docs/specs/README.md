@@ -1,13 +1,13 @@
-# Riven Specs
+# Ruxen Specs
 
-Riven uses **Spec-Driven Development (SDD)**.  Every feature flows:
+Ruxen uses **Spec-Druxen Development (SDD)**.  Every feature flows:
 
 ```
 docs/requirements (or tutorial / prompts)
         ↓
 docs/specs/<area>/<feature>.spec.md         ← this directory
         ↓
-crates/riven-core/tests/*.rs (pin tests)
+crates/ruxen-core/tests/*.rs (pin tests)
         ↓
 implementation
 ```

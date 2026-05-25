@@ -23,11 +23,11 @@ prior art):
 - `#[stable(since = "1.0.0", feature = "try_trait")]`
 
 and rustc emits warnings / errors accordingly. The stdlib itself uses
-these to graduate APIs from nightly to stable. Riven expresses the
+these to graduate APIs from nightly to stable. Ruxen expresses the
 same concepts via **in-body directives** — Ruby-flavored statements
 inside the item body, not prefix annotations.
 
-Riven has **none** of this. Zero recognition of `deprecated`, `stable`,
+Ruxen has **none** of this. Zero recognition of `deprecated`, `stable`,
 or `unstable`. The stdlib (tier 1) cannot evolve without breakage. The
 edition mechanism (tier 5 doc 02) cannot gate unstable features without
 it. The LSP (tier 3) cannot show "this function is deprecated" hovers.
@@ -102,7 +102,7 @@ suppressed by directive X."
   `mixin`, `const`, `type` alias, `use` re-export, enum variant, struct
   field, method.
 - LSP hovers show stability and deprecation.
-- Metadata (`.rivenmeta`) round-trips stability.
+- Metadata (`.ruxenmeta`) round-trips stability.
 
 ### 3.2 Non-goals
 
@@ -163,7 +163,7 @@ pub enum AttrLit {
 
 ### 4.2 Deprecation directive
 
-```riven
+```ruxen
 def from_utf8_lossy_impl(bytes: &Array[UInt8]) -> String
   deprecated since: "0.3",
              note: "use `String.from_utf8_lossy` instead"
@@ -195,7 +195,7 @@ Semantics:
 
 ### 4.3 Unstable directive
 
-```riven
+```ruxen
 mixin Try
   unstable feature: "try_mixin", issue: "42"
 
@@ -217,14 +217,14 @@ Semantics:
   opts in via manifest `[features]` + `unstable = […]` (tier5_02 §4.5).
 - Nightly-or-override channel bypasses the error.
 - Error text: `` error[E2002]: use of unstable feature `try_mixin`;
-  add `features = ["try_mixin"]` to Riven.toml ``.
+  add `features = ["try_mixin"]` to Ruxen.toml ``.
 - Recursive: if a stable function calls an unstable function, the
   stable function is implicitly-unstable (emits an error on use unless
   opted in). This is the same rule as Rust.
 
 ### 4.4 Stable directive
 
-```riven
+```ruxen
 def String.trim_ascii(self) -> &str
   stable since: "0.2.0", feature: "string_ext"
 
@@ -255,7 +255,7 @@ Semantics:
 A small family of in-body directives on any *enclosing* item that
 change the level of specific lints inside its body:
 
-```riven
+```ruxen
 def use_old_api(s: String) -> String
   allow deprecated
 
@@ -441,12 +441,12 @@ error).
 
 The canonical-name / metadata system introduced in tier5_02 §5.5 must
 also carry `Stability` — otherwise a deprecated stdlib item loses its
-deprecation when consumed from another crate. The `.rivenmeta` schema
+deprecation when consumed from another crate. The `.ruxenmeta` schema
 gets a `stability:` field per exported symbol.
 
 ### 5.7 LSP integration
 
-`crates/riven-ide/src/hover.rs` should, on hover of a symbol with
+`crates/ruxen-ide/src/hover.rs` should, on hover of a symbol with
 deprecation:
 
 - Prepend `**Deprecated since 0.3** — use `Foo.new`.\n\n---\n\n` to
@@ -456,7 +456,7 @@ deprecation:
 - Surface the full rendering to VSCode / whichever client via the
   existing hover pipeline.
 
-`riven-ide/src/diagnostics.rs:11-28` already passes `diag.code`
+`ruxen-ide/src/diagnostics.rs:11-28` already passes `diag.code`
 through to LSP; W-prefixed codes work identically.
 
 ---
@@ -493,7 +493,7 @@ body parses and appears in `--emit=ast` output.
 ### 6.3 Phase 3c — deprecation warnings (1 week)
 
 1. `lints/deprecation.rs` pass.
-2. Wire after typeck in `rivenc/src/main.rs` and the cache's
+2. Wire after typeck in `ruxenc/src/main.rs` and the cache's
    `compile_to_object`.
 3. Register `W2001` (deprecated use) in the error-code registry.
 4. In-body `allow deprecated` support on enclosing items.
@@ -515,10 +515,10 @@ alongside.
 
 ### 6.5 Phase 3e — metadata round-trip + LSP (1 week)
 
-1. Serialize `Stability` into `.rivenmeta`.
+1. Serialize `Stability` into `.ruxenmeta`.
 2. Deserialize on import, attach to imported `Definition`.
 3. Fixture: cross-crate deprecation warning.
-4. `riven-ide/src/hover.rs` prepends deprecation notice.
+4. `ruxen-ide/src/hover.rs` prepends deprecation notice.
 
 ---
 
@@ -569,7 +569,7 @@ Total: ~5-7 weeks.
 ### OQ-1. Directive-arg grammar: strictly key-value or positional allowed?
 
 Rust's `#[deprecated("message")]` shorthand is confusing — it maps to
-`note = "message"`. **Recommended:** Riven is **strictly keyword**. The
+`note = "message"`. **Recommended:** Ruxen is **strictly keyword**. The
 shorthand is rejected with a good error: `E0921: expected key: value
 form, e.g. deprecated note: "..."`. Enforces one way to do it.
 
@@ -578,13 +578,13 @@ form, e.g. deprecated note: "..."`. Enforces one way to do it.
 
 **Recommended:** lowercase identifiers matching Ruby/Rust idiom
 (`deprecated`, `stable`, `unstable`, `allow`, `warn`, `deny`,
-`forbid`). Riven's P2 (tutorial-aligned principle: "Ruby-flavored
+`forbid`). Ruxen's P2 (tutorial-aligned principle: "Ruby-flavored
 where Ruby has a convention") leans this way.
 
 ### OQ-3. Should `stable ...` be required on public items?
 
 Rust doesn't require it (implicit default applies). **Recommended:**
-Riven also doesn't require it — it would be noise on every stdlib
+Ruxen also doesn't require it — it would be noise on every stdlib
 function. Document the implicit default in tier5_01
 §03-grammar/06-directives.md.
 
@@ -621,7 +621,7 @@ only fires once, at the caller site in user code.
 
 If an old compiler sees a future version in `since`, the item should
 still be usable (compiler version check is not a gate; the `since` is
-purely informational). **Recommended:** yes. The manifest's `riven =
+purely informational). **Recommended:** yes. The manifest's `ruxen =
 ">=X"` is where version enforcement lives.
 
 ### OQ-9. Nested directives: how deep?
@@ -659,7 +659,7 @@ deferred.
 - [ ] In-body `allow deprecated` on an enclosing item suppresses
       `W2001` inside its body.
 - [ ] In-body `deny deprecated` promotes `W2001` to an error.
-- [ ] `.rivenmeta` round-trips `Stability` for exported symbols.
+- [ ] `.ruxenmeta` round-trips `Stability` for exported symbols.
 - [ ] LSP hover prepends a "Deprecated" callout when hovering a
       deprecated symbol.
 - [ ] Fixture: deprecated item used in-crate → warning with note.

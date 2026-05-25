@@ -1,5 +1,0 @@
-use std.env.get
-
-def main
-  puts get("RIVEN_STD_ENV_TEST").expect!("env")
-end

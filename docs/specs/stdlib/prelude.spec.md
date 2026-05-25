@@ -6,7 +6,7 @@
 **Status:** shipped since Phase 1; expands incrementally as new
 stdlib types land.
 
-`std.prelude` is the set of names auto-imported into every Riven
+`std.prelude` is the set of names auto-imported into every Ruxen
 program — types and free functions that are reachable without a
 `use` statement.
 
@@ -60,7 +60,7 @@ needing `use std.option.Option`.  Bare `Some(x)` / `nil` / `Ok(x)` /
 | Behaviour | Test fn / fixture                                         | File                       |
 |-----------|-----------------------------------------------------------|----------------------------|
 | B1, B3    | every release-e2e fixture that uses `Array` / `Option` / `Result` without `use` (hundreds) | `tests/release-e2e/cases/` |
-| B2        | `01_hello.rvn` (`puts`) + `e2e_24_result.rvn` (`panic!`)  | `tests/release-e2e/cases/` |
+| B2        | `01_hello.rx` (`puts`) + `e2e_24_result.rx` (`panic!`)  | `tests/release-e2e/cases/` |
 
 The prelude is *implicitly* pin-tested by every program that
 compiles without importing these names.  A regression would

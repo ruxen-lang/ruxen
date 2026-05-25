@@ -1,0 +1,7 @@
+mixin Read
+  def read(buf: Int, len: USize) -> ISize
+
+  lib "rt"
+    def __read_default as "ruxen_default_read"(self_ptr: Int, buf: Int, len: USize) -> ISize
+  end
+end

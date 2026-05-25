@@ -1,4 +1,4 @@
-# Riven Surface-Syntax Migration — Agent Prompt
+# Ruxen Surface-Syntax Migration — Agent Prompt
 
 Paste this entire file as the first message to an AI agent. The agent's
 job is to bring every doc, fixture, test, and source file into line
@@ -11,7 +11,7 @@ with the canonical surface-syntax spec.
 You are a migration engineer with full access to the repo. The
 canonical spec at `docs/specs/syntax/ruby-naming.spec.md` was
 rewritten on 2026-05-16 and is now the single source of truth for
-Riven surface syntax. Every other file (tutorial, stdlib spec,
+Ruxen surface syntax. Every other file (tutorial, stdlib spec,
 requirements doc, fixture, example, README, CHANGELOG, source
 comment, error message) must conform. Your job is to find and
 rewrite the drift.
@@ -144,7 +144,7 @@ both exist with the new names. See §10a.
 | "mutating method" | "writing method" |
 | "borrow mutably" | "borrow writably" |
 | "borrow immutably" | "borrow read-only" |
-| "trait" (as a Riven concept) | "mixin" |
+| "trait" (as a Ruxen concept) | "mixin" |
 | "impl block" | "extension block" or "method inside the type body" |
 | "trait object" | "any-mixin existential" or "`any Mixin`" |
 
@@ -179,7 +179,7 @@ comment naming the affected behavior and continue — do not silently
    parameter `[T: Mixin]` with `&var T`.
 5. **`extension C[T] where T: B`** is the form for conditional
    methods on a generic type (§3.4a). Per-method `where` clauses on
-   individual `def`s are not a Riven form — re-group into an
+   individual `def`s are not a Ruxen form — re-group into an
    extension block if you see them.
 6. **Variadic FFI is supported in v1** (§3.7). Old `out of scope
    (v2)` notes for `def f(fmt: *UInt8, ...)` should be deleted.
@@ -223,19 +223,19 @@ Many of these were written before the rename. Fix references in
 prose and code blocks. Do not invent new requirements — only bring
 existing text into line.
 
-### 5. Fixture programs — `tests/release-e2e/cases/*.rvn` + `expected/*.out`
+### 5. Fixture programs — `tests/release-e2e/cases/*.rx` + `expected/*.out`
 
 Any fixture using retired syntax must compile under the new rules.
 If a fixture exists to test a retired construct, decide whether to
 delete it or rewrite it to test the equivalent new construct.
 
-File **names** also need renaming: e.g. an old `06_let_mut.rvn`
-becomes `06_var.rvn` (the git status at handoff shows this rename
+File **names** also need renaming: e.g. an old `06_let_mut.rx`
+becomes `06_var.rx` (the git status at handoff shows this rename
 is partial). Search for fixtures whose names contain `mut`,
 `hash`, `trait`, `impl`, `dyn`, `comparable`, `displayable`,
 `iterable`, `vec_`, `none`, and rename to the new vocabulary.
 
-### 6. Rust source — `crates/riven-*/src/**/*.rs`
+### 6. Rust source — `crates/ruxen-*/src/**/*.rs`
 
 Lower priority but in scope for:
 - **Error-message strings**: every user-visible diagnostic must use
@@ -244,7 +244,7 @@ Lower priority but in scope for:
   (when referring to the mixin), `"Displayable"`, `"Comparable"`,
   `"Iterable"`, etc., in `format!` / `write!` / `Diagnostic::`
   construction sites.
-- **Public identifiers** in `riven-core` that match retired surface
+- **Public identifiers** in `ruxen-core` that match retired surface
   vocabulary: e.g. `HirSelfMode::Mutating` should be renamed
   `Writing` if any error-message text uses the variant name. (If
   the variant is purely internal and never appears in user-facing
@@ -257,7 +257,7 @@ Lower priority but in scope for:
 - `CHANGELOG.md` — any line referring to current syntax
 - `CLAUDE.md` — if it references old forms
 - `Cargo.toml` workspace metadata if it has tagline text
-- `examples/**/*.rvn` and `examples/**/README.md`
+- `examples/**/*.rx` and `examples/**/README.md`
 
 ---
 
@@ -283,7 +283,7 @@ Lower priority but in scope for:
   incidental. If renaming `HirSelfMode::Mutating` to
   `HirSelfMode::Writing` would touch 200 sites and zero of them
   surface to users, leave it and add a comment.
-- **Third-party dependencies and vendored code.** Only Riven's own
+- **Third-party dependencies and vendored code.** Only Ruxen's own
   source is in scope.
 
 ---
@@ -319,7 +319,7 @@ grep -rE '\bmut\b|\btrait\b|\bimpl\b|\bdyn\b|\bHashMap\b|\bHashSet\b|\b(Comparab
 cargo build --workspace
 cargo test --workspace
 # E2E fixtures (slow):
-cargo test --release -p riven-core --test release_e2e_smoke -- --ignored
+cargo test --release -p ruxen-core --test release_e2e_smoke -- --ignored
 ```
 
 Every failing test points at a place where the spec and the
@@ -330,7 +330,7 @@ implementation is the side that gives.
 
 ```bash
 # No fixture should be named with a retired token
-find tests/release-e2e/cases -name '*.rvn' \
+find tests/release-e2e/cases -name '*.rx' \
   | grep -E '(_mut|_hash|_trait|_impl|_dyn|_vec|_comparable|_displayable|_iterable|_none)'
 
 # expected output: empty

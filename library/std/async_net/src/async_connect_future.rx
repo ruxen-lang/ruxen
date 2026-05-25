@@ -1,0 +1,47 @@
+## --- AsyncConnectFuture (B7) ---------------------------------------
+class AsyncConnectFuture
+  state_ptr: Int
+  handle: Int
+  done: Int
+  include Future
+  type Output = Result[AsyncTcpStream, IoError]
+
+  def init(addr: &String)
+    self.state_ptr = ruxen_async_connect_state_new(addr)
+    self.handle = 0
+    self.done = 0
+  end
+
+  def var poll(cx: &var Context) -> Poll[Result[AsyncTcpStream, IoError]]
+    if self.done != 0
+      return Poll.Ready(connect_state_to_result(self.state_ptr))
+    end
+    let step = ruxen_async_connect_step(self.state_ptr)
+    if step == 1
+      if self.handle == 0
+        let sfd = ruxen_async_connect_state_get_fd(self.state_ptr)
+        self.handle = ruxen_reactor_register_fd_write(ruxen_reactor_current_handle(), sfd)
+      end
+      let w = cx.waker
+      ruxen_reactor_set_waker(ruxen_reactor_current_handle(), self.handle, w)
+      return Poll.Pending
+    end
+    if self.handle != 0
+      ruxen_reactor_deregister(ruxen_reactor_current_handle(), self.handle)
+      self.handle = 0
+    end
+    self.done = 1
+    Poll.Ready(connect_state_to_result(self.state_ptr))
+  end
+
+  def drop
+    if self.handle != 0
+      ruxen_reactor_deregister(ruxen_reactor_current_handle(), self.handle)
+      self.handle = 0
+    end
+    if self.state_ptr != 0
+      ruxen_async_connect_state_free(self.state_ptr)
+      self.state_ptr = 0
+    end
+  end
+end

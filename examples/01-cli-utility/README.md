@@ -7,5 +7,5 @@ Prints a file to stdout using the current Tier-1 stdlib surface.
 From the repo root:
 
 ```sh
-cargo run -p riven-cli -- run -- README.md
+cargo run -p ruxen-cli -- run -- README.md
 ```

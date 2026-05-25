@@ -5,42 +5,42 @@
 
 /* ── To-String Conversions ─────────────────────────────────────────── */
 
-char *riven_int_to_string(int64_t n) {
+char *ruxen_int_to_string(int64_t n) {
     char buf[32];
     snprintf(buf, sizeof(buf), "%" PRId64, n);
     size_t len = strlen(buf);
     char *result = (char *)malloc(len + 1);
     if (!result) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
     memcpy(result, buf, len + 1);
     return result;
 }
 
-char *riven_float_to_string(double f) {
+char *ruxen_float_to_string(double f) {
     char buf[64];
     snprintf(buf, sizeof(buf), "%g", f);
     size_t len = strlen(buf);
     char *result = (char *)malloc(len + 1);
     if (!result) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
     memcpy(result, buf, len + 1);
     return result;
 }
 
 /* Phase 2 #06.D4: format a float with an explicit decimal precision.
- * `prec < 0` falls back to `%g` (matches `riven_float_to_string`).
+ * `prec < 0` falls back to `%g` (matches `ruxen_float_to_string`).
  * `prec >= 0` uses `%.<prec>f`. */
-char *riven_float_to_string_prec(double f, int64_t prec) {
-    if (prec < 0) return riven_float_to_string(f);
+char *ruxen_float_to_string_prec(double f, int64_t prec) {
+    if (prec < 0) return ruxen_float_to_string(f);
     if (prec > 60) prec = 60; /* snprintf safety bound */
     char buf[96];
     snprintf(buf, sizeof(buf), "%.*f", (int)prec, f);
     size_t len = strlen(buf);
     char *result = (char *)malloc(len + 1);
     if (!result) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
     memcpy(result, buf, len + 1);
     return result;
@@ -48,7 +48,7 @@ char *riven_float_to_string_prec(double f, int64_t prec) {
 
 /* Convert a Unicode codepoint (passed widened to i64) into a heap-allocated
    UTF-8 string. Used for `"#{c}"` interpolation on values of type `Char`. */
-char *riven_char_to_string(int64_t codepoint) {
+char *ruxen_char_to_string(int64_t codepoint) {
     uint32_t cp = (uint32_t)codepoint;
     char buf[5];
     size_t len;
@@ -73,19 +73,19 @@ char *riven_char_to_string(int64_t codepoint) {
     }
     char *result = (char *)malloc(len + 1);
     if (!result) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
     memcpy(result, buf, len);
     result[len] = '\0';
     return result;
 }
 
-char *riven_bool_to_string(int64_t b) {
+char *ruxen_bool_to_string(int64_t b) {
     const char *s = b ? "true" : "false";
     size_t len = strlen(s);
     char *result = (char *)malloc(len + 1);
     if (!result) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
     memcpy(result, s, len + 1);
     return result;
@@ -95,21 +95,21 @@ char *riven_bool_to_string(int64_t b) {
 
 /* ── String Comparison ─────────────────────────────────────────── */
 
-int64_t riven_string_eq(const char *a, const char *b) {
+int64_t ruxen_string_eq(const char *a, const char *b) {
     if (a == b) return 1;
     if (!a || !b) return 0;
     return strcmp(a, b) == 0 ? 1 : 0;
 }
 
-int64_t riven_string_cmp(const char *a, const char *b) {
+int64_t ruxen_string_cmp(const char *a, const char *b) {
     if (!a && !b) return 0;
     if (!a) return -1;
     if (!b) return 1;
     return (int64_t)strcmp(a, b);
 }
 
-int64_t riven_string_hash(const char *s) {
-    return (int64_t)riven_hash_str(s);
+int64_t ruxen_string_hash(const char *s) {
+    return (int64_t)ruxen_hash_str(s);
 }
 /* ---------------------------------------------------------------------
  * std::path
@@ -121,29 +121,29 @@ int64_t riven_string_hash(const char *s) {
  * an empty string as the absent-value sentinel rather than wiring a
  * tagged Option[String] return. Callers can branch on `.is_empty()`.
  * Promoting to Option[String] is a follow-up once a runtime-side
- * Option-of-heap helper exists (the current `riven_option_*` family
+ * Option-of-heap helper exists (the current `ruxen_option_*` family
  * only handles primitive payloads).
  * --------------------------------------------------------------------- */
-char *riven_path_join(const char *a, const char *b) {
+char *ruxen_path_join(const char *a, const char *b) {
     const char *base = a ? a : "";
     const char *tail = b ? b : "";
 
     /* If the second component is absolute it overrides the first. */
     if (tail[0] == '/') {
-        return riven_string_from(tail);
+        return ruxen_string_from(tail);
     }
 
     size_t la = strlen(base);
     size_t lb = strlen(tail);
 
     /* Empty base → just clone tail; empty tail → just clone base. */
-    if (la == 0) return riven_string_from(tail);
-    if (lb == 0) return riven_string_from(base);
+    if (la == 0) return ruxen_string_from(tail);
+    if (lb == 0) return ruxen_string_from(base);
 
     int needsep = base[la - 1] != '/';
     size_t total = la + (needsep ? 1 : 0) + lb;
     char *out = (char *)malloc(total + 1);
-    if (!out) return riven_string_from("");
+    if (!out) return ruxen_string_from("");
     memcpy(out, base, la);
     size_t i = la;
     if (needsep) {
@@ -154,8 +154,8 @@ char *riven_path_join(const char *a, const char *b) {
     return out;
 }
 
-char *riven_path_parent(const char *p) {
-    if (!p || !*p) return riven_string_from("");
+char *ruxen_path_parent(const char *p) {
+    if (!p || !*p) return ruxen_string_from("");
     size_t n = strlen(p);
 
     /* Strip trailing slashes (but keep leading "/" itself). */
@@ -171,22 +171,22 @@ char *riven_path_parent(const char *p) {
 
     if (i < 0) {
         /* No separator → no parent. */
-        return riven_string_from("");
+        return ruxen_string_from("");
     }
     if (i == 0) {
         /* Parent is root. */
-        return riven_string_from("/");
+        return ruxen_string_from("/");
     }
 
     char *out = (char *)malloc((size_t)i + 1);
-    if (!out) return riven_string_from("");
+    if (!out) return ruxen_string_from("");
     memcpy(out, p, (size_t)i);
     out[i] = '\0';
     return out;
 }
 
-char *riven_path_file_name(const char *p) {
-    if (!p || !*p) return riven_string_from("");
+char *ruxen_path_file_name(const char *p) {
+    if (!p || !*p) return ruxen_string_from("");
     size_t n = strlen(p);
 
     /* Trailing slashes mean the path designates a directory whose name
@@ -194,7 +194,7 @@ char *riven_path_file_name(const char *p) {
     while (n > 0 && p[n - 1] == '/') {
         n--;
     }
-    if (n == 0) return riven_string_from("");
+    if (n == 0) return ruxen_string_from("");
 
     ssize_t start = (ssize_t)n - 1;
     while (start >= 0 && p[start] != '/') {
@@ -204,16 +204,16 @@ char *riven_path_file_name(const char *p) {
 
     size_t len = n - (size_t)start;
     char *out = (char *)malloc(len + 1);
-    if (!out) return riven_string_from("");
+    if (!out) return ruxen_string_from("");
     memcpy(out, p + start, len);
     out[len] = '\0';
     return out;
 }
 
-char *riven_path_extension(const char *p) {
-    char *name = riven_path_file_name(p);
+char *ruxen_path_extension(const char *p) {
+    char *name = ruxen_path_file_name(p);
     if (!name || !*name) {
-        return name ? name : riven_string_from("");
+        return name ? name : ruxen_string_from("");
     }
 
     size_t n = strlen(name);
@@ -226,14 +226,14 @@ char *riven_path_extension(const char *p) {
 
     if (dot <= 0 || name[dot] != '.') {
         free(name);
-        return riven_string_from("");
+        return ruxen_string_from("");
     }
 
     size_t ext_len = n - (size_t)dot - 1;
     char *out = (char *)malloc(ext_len + 1);
     if (!out) {
         free(name);
-        return riven_string_from("");
+        return ruxen_string_from("");
     }
     memcpy(out, name + dot + 1, ext_len);
     out[ext_len] = '\0';
@@ -241,36 +241,36 @@ char *riven_path_extension(const char *p) {
     return out;
 }
 
-int64_t riven_path_is_absolute(const char *p) {
+int64_t ruxen_path_is_absolute(const char *p) {
     return (p && p[0] == '/') ? 1 : 0;
 }
 
-char *riven_string_concat(const char *a, const char *b) {
+char *ruxen_string_concat(const char *a, const char *b) {
     if (!a && !b) return NULL;
-    if (!a) return riven_string_from(b);
-    if (!b) return riven_string_from(a);
+    if (!a) return ruxen_string_from(b);
+    if (!b) return ruxen_string_from(a);
     size_t len_a = strlen(a);
     size_t len_b = strlen(b);
     size_t total;
     if (__builtin_add_overflow(len_a, len_b, &total) ||
         __builtin_add_overflow(total, 1, &total)) {
-        riven_panic("string size overflow");
+        ruxen_panic("string size overflow");
     }
     char *result = (char *)malloc(total);
     if (!result) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
     memcpy(result, a, len_a);
     memcpy(result + len_a, b, len_b + 1);
     return result;
 }
 
-char *riven_string_from(const char *s) {
+char *ruxen_string_from(const char *s) {
     if (!s) return NULL;
     size_t len = strlen(s);
     char *result = (char *)malloc(len + 1);
     if (!result) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
     memcpy(result, s, len + 1);
     return result;
@@ -283,12 +283,12 @@ char *riven_string_from(const char *s) {
  * widened int64s. Surface: `String.from_bytes(&Array[Int]) -> String`.
  *
  * The caller retains ownership of the source Vec; we copy out. */
-char *riven_string_from_bytes(const RivenVec *v) {
-    if (!v) return riven_string_from("");
+char *ruxen_string_from_bytes(const RuxenVec *v) {
+    if (!v) return ruxen_string_from("");
     uint64_t n = v->len;
     char *result = (char *)malloc(n + 1);
     if (!result) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
     for (uint64_t i = 0; i < n; i++) {
         result[i] = (char)(v->data[i] & 0xff);
@@ -303,12 +303,12 @@ char *riven_string_from_bytes(const RivenVec *v) {
  * respects UTF-8 boundaries — the returned string is always valid
  * UTF-8.  Returns a freshly-allocated heap string the caller owns.
  *
- * Distinct from the in-place `riven_string_truncate(char*, n)` used by
+ * Distinct from the in-place `ruxen_string_truncate(char*, n)` used by
  * `String.truncate(n)` — this variant takes char count (not bytes) and
  * returns a fresh string so the source remains usable. */
-char *riven_string_truncate_chars(const char *s, int64_t max_chars) {
-    if (!s) return riven_string_from("");
-    if (max_chars < 0) return riven_string_from(s);
+char *ruxen_string_truncate_chars(const char *s, int64_t max_chars) {
+    if (!s) return ruxen_string_from("");
+    if (max_chars < 0) return ruxen_string_from(s);
     size_t kept_bytes = 0;
     int64_t kept_chars = 0;
     while (s[kept_bytes] != '\0' && kept_chars < max_chars) {
@@ -322,7 +322,7 @@ char *riven_string_truncate_chars(const char *s, int64_t max_chars) {
         kept_chars += 1;
     }
     char *result = (char *) malloc(kept_bytes + 1);
-    if (!result) riven_panic("out of memory");
+    if (!result) ruxen_panic("out of memory");
     memcpy(result, s, kept_bytes);
     result[kept_bytes] = '\0';
     return result;
@@ -330,11 +330,11 @@ char *riven_string_truncate_chars(const char *s, int64_t max_chars) {
 
 /* ── String Extended Operations ────────────────────────────────────── */
 
-uint64_t riven_string_len(const char *s) {
+uint64_t ruxen_string_len(const char *s) {
     return s ? (uint64_t)strlen(s) : 0;
 }
 
-int8_t riven_string_is_empty(const char *s) {
+int8_t ruxen_string_is_empty(const char *s) {
     return (!s || s[0] == '\0') ? 1 : 0;
 }
 
@@ -343,18 +343,18 @@ int8_t riven_string_is_empty(const char *s) {
        value directly and reassigns the returned buffer.
    (2) Caller has a `&mut String` pointer (`char**`) — the codegen derefs it
        to read the current buffer, calls this helper, then stores the result
-       back through the pointer via `riven_store_ptr`.
+       back through the pointer via `ruxen_store_ptr`.
    Either way this helper itself just takes two `char*` and returns a fresh
    concatenated buffer. */
-char *riven_string_push_str(const char *dst, const char *src) {
+char *ruxen_string_push_str(const char *dst, const char *src) {
     if (!dst && !src) return NULL;
-    return riven_string_concat(dst, src);
+    return ruxen_string_concat(dst, src);
 }
 
 /* Dereference a pointer-to-pointer: `*p` where `p` is a `char**`.
    Used by the codegen to read the current value of a `&mut String` local
    before calling a mutating method like `push` or `push_str`. */
-char *riven_deref_ptr(char **p) {
+char *ruxen_deref_ptr(char **p) {
     return p ? *p : NULL;
 }
 
@@ -362,12 +362,12 @@ char *riven_deref_ptr(char **p) {
    Used by the codegen to write back a new buffer into a `&mut String`
    local so that the caller observes the reassignment after a mutating
    method returns. */
-void riven_store_ptr(char **p, char *v) {
+void ruxen_store_ptr(char **p, char *v) {
     if (p) *p = v;
 }
 
-char *riven_string_trim(const char *s) {
-    if (!s) return riven_string_from("");
+char *ruxen_string_trim(const char *s) {
+    if (!s) return ruxen_string_from("");
     /* Skip leading whitespace */
     while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') s++;
     size_t len = strlen(s);
@@ -376,19 +376,19 @@ char *riven_string_trim(const char *s) {
            s[len-1] == '\n' || s[len-1] == '\r')) len--;
     char *result = (char *)malloc(len + 1);
     if (!result) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
     memcpy(result, s, len);
     result[len] = '\0';
     return result;
 }
 
-char *riven_string_to_lower(const char *s) {
-    if (!s) return riven_string_from("");
+char *ruxen_string_to_lower(const char *s) {
+    if (!s) return ruxen_string_from("");
     size_t len = strlen(s);
     char *result = (char *)malloc(len + 1);
     if (!result) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
     for (size_t i = 0; i < len; i++) {
         char c = s[i];
@@ -399,12 +399,12 @@ char *riven_string_to_lower(const char *s) {
     return result;
 }
 
-char *riven_string_to_upper(const char *s) {
-    if (!s) return riven_string_from("");
+char *ruxen_string_to_upper(const char *s) {
+    if (!s) return ruxen_string_from("");
     size_t len = strlen(s);
     char *result = (char *)malloc(len + 1);
     if (!result) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
     for (size_t i = 0; i < len; i++) {
         char c = s[i];
@@ -418,19 +418,19 @@ char *riven_string_to_upper(const char *s) {
 /* ── String constructors (#02) ────────────────────────────────────── */
 
 /* String.new — fresh empty owned string. */
-char *riven_string_new(void) {
-    return riven_string_from("");
+char *ruxen_string_new(void) {
+    return ruxen_string_from("");
 }
 
 /* String.with_capacity(n) — empty string with at least `n` bytes
    pre-allocated. v1 stores strings as plain malloc'd char* with no
    inline capacity field; we honour the request by allocating a buffer
    of size max(n+1, 1) but the user-visible length is still 0. */
-char *riven_string_with_capacity(int64_t cap) {
+char *ruxen_string_with_capacity(int64_t cap) {
     size_t want = cap > 0 ? (size_t)cap : 0;
     char *out = (char *)malloc(want + 1);
     if (!out) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
     out[0] = '\0';
     return out;
@@ -438,43 +438,43 @@ char *riven_string_with_capacity(int64_t cap) {
 
 /* String.as_str / String.to_string — identity at the runtime layer.
    `to_string` returns an owned clone so the user can mutate it. */
-const char *riven_string_as_str(const char *s) {
+const char *ruxen_string_as_str(const char *s) {
     return s ? s : "";
 }
 
-char *riven_string_to_string(const char *s) {
-    return riven_string_from(s ? s : "");
+char *ruxen_string_to_string(const char *s) {
+    return ruxen_string_from(s ? s : "");
 }
 
-/* String.bytes / String.into_bytes — return a Vec[U8] (i.e. RivenVec
+/* String.bytes / String.into_bytes — return a Vec[U8] (i.e. RuxenVec
    with one slot per byte). Currently runtime Vec slots are 64-bit so
    each byte gets widened on the way in; the typecker promises the
    user-visible element type is U8. */
-RivenVec *riven_string_bytes(const char *s) {
-    RivenVec *result = riven_vec_new();
+RuxenVec *ruxen_string_bytes(const char *s) {
+    RuxenVec *result = ruxen_vec_new();
     if (!s) return result;
     while (*s) {
-        riven_vec_push(result, (int64_t)(uint8_t)*s);
+        ruxen_vec_push(result, (int64_t)(uint8_t)*s);
         s++;
     }
     return result;
 }
 
 /* trim_start / trim_end — like trim but only one side. Returns owned. */
-char *riven_string_trim_start(const char *s) {
-    if (!s) return riven_string_from("");
+char *ruxen_string_trim_start(const char *s) {
+    if (!s) return ruxen_string_from("");
     while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') s++;
-    return riven_string_from(s);
+    return ruxen_string_from(s);
 }
 
-char *riven_string_trim_end(const char *s) {
-    if (!s) return riven_string_from("");
+char *ruxen_string_trim_end(const char *s) {
+    if (!s) return ruxen_string_from("");
     size_t len = strlen(s);
     while (len > 0 && (s[len-1] == ' ' || s[len-1] == '\t' ||
            s[len-1] == '\n' || s[len-1] == '\r')) len--;
     char *result = (char *)malloc(len + 1);
     if (!result) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
     memcpy(result, s, len);
     result[len] = '\0';
@@ -483,8 +483,8 @@ char *riven_string_trim_end(const char *s) {
 
 /* String.find(&str) — return Option[USize] of the first byte index of
    the needle, or None if not found / empty needle / null receiver. */
-void *riven_string_find(const char *s, const char *needle) {
-    int64_t *out = (int64_t *)riven_alloc(16);
+void *ruxen_string_find(const char *s, const char *needle) {
+    int64_t *out = (int64_t *)ruxen_alloc(16);
     if (!s || !needle || needle[0] == '\0') {
         *(int32_t *)out = 0; /* None */
         return out;
@@ -502,11 +502,11 @@ void *riven_string_find(const char *s, const char *needle) {
 /* String.splitn(n, &str) — split into at most `n` parts. Returns a
    Vec of owned strings. n <= 0 produces an empty Vec. n == 1 yields
    a Vec containing the entire string. */
-RivenVec *riven_string_splitn(const char *s, int64_t n, const char *delimiter) {
-    RivenVec *result = riven_vec_new();
+RuxenVec *ruxen_string_splitn(const char *s, int64_t n, const char *delimiter) {
+    RuxenVec *result = ruxen_vec_new();
     if (!s || n <= 0) return result;
     if (!delimiter || delimiter[0] == '\0' || n == 1) {
-        riven_vec_push(result, (int64_t)riven_string_from(s));
+        ruxen_vec_push(result, (int64_t)ruxen_string_from(s));
         return result;
     }
     size_t dlen = strlen(delimiter);
@@ -518,29 +518,29 @@ RivenVec *riven_string_splitn(const char *s, int64_t n, const char *delimiter) {
         size_t part_len = (size_t)(found - start);
         char *part = (char *)malloc(part_len + 1);
         if (!part) {
-            riven_panic("out of memory");
+            ruxen_panic("out of memory");
         }
         memcpy(part, start, part_len);
         part[part_len] = '\0';
-        riven_vec_push(result, (int64_t)part);
+        ruxen_vec_push(result, (int64_t)part);
         start = found + dlen;
         produced++;
     }
-    riven_vec_push(result, (int64_t)riven_string_from(start));
+    ruxen_vec_push(result, (int64_t)ruxen_string_from(start));
     return result;
 }
 
 /* String.clear / truncate(n) — mutating, in place. The caller must
-   ensure the buffer is owned (i.e. came from riven_string_from /
+   ensure the buffer is owned (i.e. came from ruxen_string_from /
    _new / _with_capacity). For `&mut String` parameters the codegen
-   reads the buffer pointer via `riven_deref_ptr` and passes it here;
+   reads the buffer pointer via `ruxen_deref_ptr` and passes it here;
    we just rewrite the bytes in place. truncate(n) keeps at most `n`
    leading bytes; n >= len is a no-op. Negative n is a no-op. */
-void riven_string_clear(char *s) {
+void ruxen_string_clear(char *s) {
     if (s) s[0] = '\0';
 }
 
-void riven_string_truncate(char *s, int64_t n) {
+void ruxen_string_truncate(char *s, int64_t n) {
     if (!s) return;
     if (n < 0) return;
     size_t len = strlen(s);
@@ -552,17 +552,17 @@ void riven_string_truncate(char *s, int64_t n) {
 /* String.insert(i, char) — return a new owned string with the char
    widened to UTF-8 inserted at byte index `i`. Out-of-range index
    panics. */
-char *riven_string_insert(const char *s, int64_t i, int64_t codepoint) {
+char *ruxen_string_insert(const char *s, int64_t i, int64_t codepoint) {
     const char *base = s ? s : "";
     size_t len = strlen(base);
     if (i < 0 || (size_t)i > len) {
-        riven_panic("string insert index out of bounds");
+        ruxen_panic("string insert index out of bounds");
     }
-    char *one = riven_char_to_string(codepoint);
+    char *one = ruxen_char_to_string(codepoint);
     size_t one_len = strlen(one);
     char *out = (char *)malloc(len + one_len + 1);
     if (!out) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
     memcpy(out, base, (size_t)i);
     memcpy(out + i, one, one_len);
@@ -573,17 +573,17 @@ char *riven_string_insert(const char *s, int64_t i, int64_t codepoint) {
 }
 
 /* String.insert_str(i, &str) — same idea but for a borrowed slice. */
-char *riven_string_insert_str(const char *s, int64_t i, const char *part) {
+char *ruxen_string_insert_str(const char *s, int64_t i, const char *part) {
     const char *base = s ? s : "";
     size_t len = strlen(base);
     if (i < 0 || (size_t)i > len) {
-        riven_panic("string insert_str index out of bounds");
+        ruxen_panic("string insert_str index out of bounds");
     }
     const char *src = part ? part : "";
     size_t plen = strlen(src);
     char *out = (char *)malloc(len + plen + 1);
     if (!out) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
     memcpy(out, base, (size_t)i);
     memcpy(out + i, src, plen);
@@ -596,27 +596,27 @@ char *riven_string_insert_str(const char *s, int64_t i, const char *part) {
    (proper UTF-8 codepoint removal lands with full Char support, see
    §9 of the stdlib brief). Returns the byte at `i` (widened to i64)
    and an out-parameter that points at the new buffer. The codegen
-   pairs this with a `riven_store_ptr` to update the &mut String. */
-struct RivenStringRemove {
+   pairs this with a `ruxen_store_ptr` to update the &mut String. */
+struct RuxenStringRemove {
     int64_t removed;   /* Char codepoint (the byte for v1) */
     char *new_buffer;  /* Caller stores this back through &mut String */
 };
 
-void *riven_string_remove(const char *s, int64_t i) {
+void *ruxen_string_remove(const char *s, int64_t i) {
     /* Lay the result out so the codegen can read .removed (i64 at
        offset 0) and .new_buffer (ptr at offset 8) from one alloc. */
-    int64_t *out = (int64_t *)riven_alloc(16);
+    int64_t *out = (int64_t *)ruxen_alloc(16);
     if (!s) {
-        riven_panic("string remove on null");
+        ruxen_panic("string remove on null");
     }
     size_t len = strlen(s);
     if (i < 0 || (size_t)i >= len) {
-        riven_panic("string remove index out of bounds");
+        ruxen_panic("string remove index out of bounds");
     }
     out[0] = (int64_t)(uint8_t)s[i];
     char *new_buf = (char *)malloc(len);  /* one byte shorter + NUL */
     if (!new_buf) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
     memcpy(new_buf, s, (size_t)i);
     memcpy(new_buf + i, s + i + 1, len - (size_t)i - 1);
@@ -628,17 +628,17 @@ void *riven_string_remove(const char *s, int64_t i) {
 /* String.parse_int / parse_float — full surface, returning the same
    tagged Result the rest of the runtime uses. The Err payload is a
    ParseIntError / ParseFloatError box (newtype around a String message). */
-static void *riven_parse_error_box(const char *msg) {
-    char **box_ = (char **)riven_alloc(8);
-    *box_ = riven_string_from(msg ? msg : "parse error");
+static void *ruxen_parse_error_box(const char *msg) {
+    char **box_ = (char **)ruxen_alloc(8);
+    *box_ = ruxen_string_from(msg ? msg : "parse error");
     return box_;
 }
 
-void *riven_string_parse_int(const char *s) {
-    int64_t *out = (int64_t *)riven_alloc(16);
+void *ruxen_string_parse_int(const char *s) {
+    int64_t *out = (int64_t *)ruxen_alloc(16);
     if (!s || *s == '\0') {
         *(int32_t *)out = 1; /* Err */
-        out[1] = (int64_t)riven_parse_error_box("empty string");
+        out[1] = (int64_t)ruxen_parse_error_box("empty string");
         return out;
     }
     /* Skip leading whitespace — matches Rust's i64::from_str_radix
@@ -649,10 +649,10 @@ void *riven_string_parse_int(const char *s) {
     long long val = strtoll(s, &end, 10);
     if (end == s || *end != '\0') {
         *(int32_t *)out = 1; /* Err */
-        out[1] = (int64_t)riven_parse_error_box("invalid integer");
+        out[1] = (int64_t)ruxen_parse_error_box("invalid integer");
     } else if (errno == ERANGE) {
         *(int32_t *)out = 1; /* Err */
-        out[1] = (int64_t)riven_parse_error_box("integer out of range");
+        out[1] = (int64_t)ruxen_parse_error_box("integer out of range");
     } else {
         *(int32_t *)out = 0; /* Ok */
         out[1] = (int64_t)val;
@@ -660,11 +660,11 @@ void *riven_string_parse_int(const char *s) {
     return out;
 }
 
-void *riven_string_parse_float(const char *s) {
-    int64_t *out = (int64_t *)riven_alloc(16);
+void *ruxen_string_parse_float(const char *s) {
+    int64_t *out = (int64_t *)ruxen_alloc(16);
     if (!s || *s == '\0') {
         *(int32_t *)out = 1; /* Err */
-        out[1] = (int64_t)riven_parse_error_box("empty string");
+        out[1] = (int64_t)ruxen_parse_error_box("empty string");
         return out;
     }
     char *end = NULL;
@@ -672,10 +672,10 @@ void *riven_string_parse_float(const char *s) {
     double val = strtod(s, &end);
     if (end == s || *end != '\0') {
         *(int32_t *)out = 1; /* Err */
-        out[1] = (int64_t)riven_parse_error_box("invalid float");
+        out[1] = (int64_t)ruxen_parse_error_box("invalid float");
     } else if (errno == ERANGE) {
         *(int32_t *)out = 1; /* Err */
-        out[1] = (int64_t)riven_parse_error_box("float out of range");
+        out[1] = (int64_t)ruxen_parse_error_box("float out of range");
     } else {
         *(int32_t *)out = 0; /* Ok */
         /* Bit-cast double into the 64-bit payload slot. */
@@ -690,23 +690,23 @@ void *riven_string_parse_float(const char *s) {
    error variants as a newtype around a heap String — a `char**` whose
    pointee is the message buffer. The .message accessor returns a
    reference (just the inner pointer) so the caller doesn't free it. */
-const char *riven_parse_error_message(char **box_) {
+const char *ruxen_parse_error_message(char **box_) {
     if (!box_ || !*box_) return "";
     return *box_;
 }
 
 /* String.split(&str) — split at every occurrence of the delimiter.
    Returns a Vec of owned strings (heap-allocated `char*` per part).
-   Differs from `riven_string_splitn`, which caps the number of parts.
+   Differs from `ruxen_string_splitn`, which caps the number of parts.
    Empty delimiter or null receiver yields a Vec containing the
    original string (matches Rust's surprising `"abc".split("")`-like
    convention only at the empty-receiver edge; for our v1 surface we
    treat empty delimiter as "no split"). */
-RivenVec *riven_string_split(const char *s, const char *delimiter) {
-    RivenVec *result = riven_vec_new();
+RuxenVec *ruxen_string_split(const char *s, const char *delimiter) {
+    RuxenVec *result = ruxen_vec_new();
     if (!s) return result;
     if (!delimiter || delimiter[0] == '\0') {
-        riven_vec_push(result, (int64_t)riven_string_from(s));
+        ruxen_vec_push(result, (int64_t)ruxen_string_from(s));
         return result;
     }
     size_t dlen = strlen(delimiter);
@@ -714,17 +714,17 @@ RivenVec *riven_string_split(const char *s, const char *delimiter) {
     while (1) {
         const char *found = strstr(start, delimiter);
         if (!found) {
-            riven_vec_push(result, (int64_t)riven_string_from(start));
+            ruxen_vec_push(result, (int64_t)ruxen_string_from(start));
             break;
         }
         size_t part_len = (size_t)(found - start);
         char *part = (char *)malloc(part_len + 1);
         if (!part) {
-            riven_panic("out of memory");
+            ruxen_panic("out of memory");
         }
         memcpy(part, start, part_len);
         part[part_len] = '\0';
-        riven_vec_push(result, (int64_t)part);
+        ruxen_vec_push(result, (int64_t)part);
         start = found + dlen;
     }
     return result;
@@ -737,14 +737,14 @@ RivenVec *riven_string_split(const char *s, const char *delimiter) {
    variable. The receiver buffer is consumed: the codegen's reassign
    path arranges the prior buffer to be freed via the existing
    reassignment-drop machinery. */
-char *riven_string_push(const char *s, int64_t codepoint) {
+char *ruxen_string_push(const char *s, int64_t codepoint) {
     const char *base = s ? s : "";
     size_t len = strlen(base);
-    char *one = riven_char_to_string(codepoint);
+    char *one = ruxen_char_to_string(codepoint);
     size_t one_len = strlen(one);
     char *out = (char *)malloc(len + one_len + 1);
     if (!out) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
     memcpy(out, base, len);
     memcpy(out + len, one, one_len + 1);
@@ -758,17 +758,17 @@ char *riven_string_push(const char *s, int64_t codepoint) {
    suppressing the regular scope-exit drop on the source local so we
    don't double-free. The Vec returned holds widened i64 byte values
    per the existing v1 element-slot convention. */
-RivenVec *riven_string_into_bytes(char *s) {
-    RivenVec *result = riven_vec_new();
+RuxenVec *ruxen_string_into_bytes(char *s) {
+    RuxenVec *result = ruxen_vec_new();
     if (!s) return result;
     const char *p = s;
     while (*p) {
-        riven_vec_push(result, (int64_t)(uint8_t)*p);
+        ruxen_vec_push(result, (int64_t)(uint8_t)*p);
         p++;
     }
     /* Free the source buffer — the caller has handed us ownership and
        relies on us draining it. The drop pass above the call site must
-       not also emit a `riven_string_free` for the same local, or this
+       not also emit a `ruxen_string_free` for the same local, or this
        becomes a double-free. */
     free(s);
     return result;
@@ -776,11 +776,11 @@ RivenVec *riven_string_into_bytes(char *s) {
 
 /* ── &str Operations ──────────────────────────────────────────────── */
 
-RivenVec *riven_str_split(const char *s, const char *delimiter) {
-    RivenVec *result = riven_vec_new();
+RuxenVec *ruxen_str_split(const char *s, const char *delimiter) {
+    RuxenVec *result = ruxen_vec_new();
     if (!s) return result;
     if (!delimiter || delimiter[0] == '\0') {
-        riven_vec_push(result, (int64_t)riven_string_from(s));
+        ruxen_vec_push(result, (int64_t)ruxen_string_from(s));
         return result;
     }
     size_t dlen = strlen(delimiter);
@@ -788,17 +788,17 @@ RivenVec *riven_str_split(const char *s, const char *delimiter) {
     while (1) {
         const char *found = strstr(start, delimiter);
         if (!found) {
-            riven_vec_push(result, (int64_t)riven_string_from(start));
+            ruxen_vec_push(result, (int64_t)ruxen_string_from(start));
             break;
         }
         size_t part_len = (size_t)(found - start);
         char *part = (char *)malloc(part_len + 1);
         if (!part) {
-            riven_panic("out of memory");
+            ruxen_panic("out of memory");
         }
         memcpy(part, start, part_len);
         part[part_len] = '\0';
-        riven_vec_push(result, (int64_t)part);
+        ruxen_vec_push(result, (int64_t)part);
         start = found + dlen;
     }
     return result;
@@ -806,9 +806,9 @@ RivenVec *riven_str_split(const char *s, const char *delimiter) {
 
 /* Parse a string to an unsigned integer, returning a Result-like value.
    Returns a tagged union: tag=0 (Ok) with value, tag=1 (Err). */
-void *riven_str_parse_uint(const char *s) {
+void *ruxen_str_parse_uint(const char *s) {
     /* Allocate a tagged union: [tag:i32 pad:i32 payload:i64] = 16 bytes */
-    int64_t *result = (int64_t *)riven_alloc(16);
+    int64_t *result = (int64_t *)ruxen_alloc(16);
     if (!s || *s == '\0') {
         *(int32_t *)result = 1; /* Err */
         return result;

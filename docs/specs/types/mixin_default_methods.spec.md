@@ -9,7 +9,7 @@ only declares a REQUIRED method — implementors must supply the
 body. There's no support for DEFAULT bodies on mixin methods. This
 spec adds that.
 
-The need was surfaced by `library/std/core/src/lib.rvn`'s comment:
+The need was surfaced by `library/std/core/src/lib.rx`'s comment:
 "aspirational broader surfaces are intentionally left out — adding
 required methods today would break every user impl that doesn't
 provide them. They'll expand once default-method lowering for
@@ -19,7 +19,7 @@ mixins ships." This spec is the "ships" half.
 
 ## B1 — Mixin can declare a method with a body
 
-```rvn
+```rx
 mixin Comparable
   def compare(other)        # required, no body
   def less_than(self, other) -> Bool
@@ -38,7 +38,7 @@ end` (with body) for default.
 
 ## B2 — Implementor inherits defaults automatically
 
-```rvn
+```rx
 class Money
   amount: Int
   include Comparable
@@ -62,7 +62,7 @@ body, with `self.compare(other)` resolved to `Money.compare`.
 
 ## B3 — Implementor can override defaults
 
-```rvn
+```rx
 class FastInt
   value: Int
   include Comparable
@@ -84,7 +84,7 @@ emits a call to FastInt.less_than, not the inherited default.
 
 ## B4 — Missing required method still rejected (E0612)
 
-```rvn
+```rx
 class Broken
   include Comparable
   # No def compare — error.
@@ -119,7 +119,7 @@ A default body can reference any method on the mixin's contract —
 required OR default. Resolution happens at the class level after
 synthesis:
 
-```rvn
+```rx
 mixin Iterable
   def next                  # required
   def each(self, f)         # default — uses next + a loop
@@ -144,7 +144,7 @@ resolves cleanly.
 
 ## B7 — Negative: signature mismatch on override (E0613)
 
-```rvn
+```rx
 mixin Foo
   def bar(self, x: Int) -> Bool
     true
@@ -175,14 +175,14 @@ Existing E0613 — reused.
 | B4        | `missing_required_method_rejected_e0612`             | `tests/mixin_defaults.rs`       |
 | B6        | `default_body_calls_required_and_default_chain`      | `tests/mixin_defaults.rs`       |
 | B7        | `override_signature_mismatch_rejected_e0613`         | `tests/mixin_defaults.rs`       |
-| B2 e2e    | e2e `cases/760_mixin_default_method_dispatch.rvn`    | release-e2e                     |
-| B3 e2e    | e2e `cases/761_mixin_default_method_override.rvn`    | release-e2e                     |
+| B2 e2e    | e2e `cases/760_mixin_default_method_dispatch.rx`    | release-e2e                     |
+| B3 e2e    | e2e `cases/761_mixin_default_method_override.rx`    | release-e2e                     |
 
 ---
 
 ## Stdlib impact
 
-Once this ships, `library/std/core/src/lib.rvn`'s mixin declarations
+Once this ships, `library/std/core/src/lib.rx`'s mixin declarations
 can grow richer defaults. Candidates (separate prompt, not this
 task's scope):
 - `Iterable`: `each`, `map`, `filter`, `count`, `collect` on top of `next`.

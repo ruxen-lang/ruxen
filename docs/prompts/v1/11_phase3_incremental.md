@@ -1,8 +1,8 @@
 # 11 — Phase 3: incremental compilation (T3.06)
 
-> **Status: 🟡 Partial** (audited 2026-05-21). rivenc has working
+> **Status: 🟡 Partial** (audited 2026-05-21). ruxenc has working
 > incremental cache: `[cache]` log lines visible, files written to
-> `~/.cache/riven/incremental/`, `--force` bypass flag, `rivenc
+> `~/.cache/ruxen/incremental/`, `--force` bypass flag, `ruxenc
 > clean` subcommand. Formal query-layer / salsa-style invalidation
 > design not landed; current cache is content-hash-based per-file.
 
@@ -27,7 +27,7 @@ trait QueryDb {
 ```
 
 This is the Rust trait that the compiler crates implement — not a
-Riven-source mixin. Memoize each query by input hash. Invalidate
+Ruxen-source mixin. Memoize each query by input hash. Invalidate
 downstream when an input file changes.
 
 ## TDD
@@ -47,13 +47,13 @@ downstream when an input file changes.
   a query.
 - File contents stored as inputs.
 - `cache/` directory persists query results across runs (already
-  exists at `crates/rivenc/src/cache/`).
+  exists at `crates/ruxenc/src/cache/`).
 
 ## Cross-cutting
 
 - LSP (prompt 10) switches from debounced full re-analysis to query
   invalidation.
-- `riven build` uses incremental cache; `riven build --release`
+- `ruxen build` uses incremental cache; `ruxen build --release`
   always full-rebuilds for predictable artifacts.
 
 ## Definition of done

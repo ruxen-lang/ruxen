@@ -27,24 +27,24 @@ typedef struct {
     ChannelSlot *tail;
     atomic_int sender_count;   /* # of live Sender handles */
     int receiver_alive;        /* 0/1; flipped on Receiver Drop */
-} RivenChannel;
+} RuxenChannel;
 
 typedef struct {
-    RivenChannel *chan;
-} RivenSender;
+    RuxenChannel *chan;
+} RuxenSender;
 
 typedef struct {
-    RivenChannel *chan;
-} RivenReceiver;
+    RuxenChannel *chan;
+} RuxenReceiver;
 
 /* Construct a (Sender, Receiver) pair.
  *
  * Returns a 2-element heap array of i64 [sender_ptr, receiver_ptr].
- * The Riven side destructures into the tuple at the call site.
+ * The Ruxen side destructures into the tuple at the call site.
  */
-int64_t riven_channel_new_pair(void) {
-    RivenChannel *c = (RivenChannel *)malloc(sizeof(RivenChannel));
-    if (!c) riven_panic("channel: out of memory");
+int64_t ruxen_channel_new_pair(void) {
+    RuxenChannel *c = (RuxenChannel *)malloc(sizeof(RuxenChannel));
+    if (!c) ruxen_panic("channel: out of memory");
     pthread_mutex_init(&c->mu, NULL);
     pthread_cond_init(&c->cv, NULL);
     c->head = NULL;
@@ -52,25 +52,25 @@ int64_t riven_channel_new_pair(void) {
     atomic_store(&c->sender_count, 1);
     c->receiver_alive = 1;
 
-    RivenSender *tx = (RivenSender *)malloc(sizeof(RivenSender));
-    RivenReceiver *rx = (RivenReceiver *)malloc(sizeof(RivenReceiver));
-    if (!tx || !rx) riven_panic("channel: out of memory");
+    RuxenSender *tx = (RuxenSender *)malloc(sizeof(RuxenSender));
+    RuxenReceiver *rx = (RuxenReceiver *)malloc(sizeof(RuxenReceiver));
+    if (!tx || !rx) ruxen_panic("channel: out of memory");
     tx->chan = c;
     rx->chan = c;
 
     int64_t *pair = (int64_t *)malloc(2 * sizeof(int64_t));
-    if (!pair) riven_panic("channel: out of memory");
+    if (!pair) ruxen_panic("channel: out of memory");
     pair[0] = (int64_t)tx;
     pair[1] = (int64_t)rx;
     return (int64_t)pair;
 }
 
-/* Tuple accessors used by the Riven shim to destructure the pair. */
-int64_t riven_channel_pair_sender(int64_t pair_ptr) {
+/* Tuple accessors used by the Ruxen shim to destructure the pair. */
+int64_t ruxen_channel_pair_sender(int64_t pair_ptr) {
     int64_t *pair = (int64_t *)pair_ptr;
     return pair[0];
 }
-int64_t riven_channel_pair_receiver(int64_t pair_ptr) {
+int64_t ruxen_channel_pair_receiver(int64_t pair_ptr) {
     int64_t *pair = (int64_t *)pair_ptr;
     int64_t rx = pair[1];
     free(pair);   /* tuple consumed; both handles extracted */
@@ -78,10 +78,10 @@ int64_t riven_channel_pair_receiver(int64_t pair_ptr) {
 }
 
 /* Sender.send(value) -> 0 (Ok) / 1 (Err: receiver dropped). */
-int64_t riven_channel_send(int64_t sender_ptr, int64_t value) {
-    RivenSender *tx = (RivenSender *)sender_ptr;
-    if (!tx) riven_panic("Sender.send: null sender");
-    RivenChannel *c = tx->chan;
+int64_t ruxen_channel_send(int64_t sender_ptr, int64_t value) {
+    RuxenSender *tx = (RuxenSender *)sender_ptr;
+    if (!tx) ruxen_panic("Sender.send: null sender");
+    RuxenChannel *c = tx->chan;
 
     pthread_mutex_lock(&c->mu);
     if (!c->receiver_alive) {
@@ -91,7 +91,7 @@ int64_t riven_channel_send(int64_t sender_ptr, int64_t value) {
     ChannelSlot *slot = (ChannelSlot *)malloc(sizeof(ChannelSlot));
     if (!slot) {
         pthread_mutex_unlock(&c->mu);
-        riven_panic("Sender.send: out of memory");
+        ruxen_panic("Sender.send: out of memory");
     }
     slot->payload = value;
     slot->next = NULL;
@@ -107,18 +107,18 @@ int64_t riven_channel_send(int64_t sender_ptr, int64_t value) {
 }
 
 /* Sender.clone -> new Sender handle (same channel). */
-int64_t riven_channel_sender_clone(int64_t sender_ptr) {
-    RivenSender *tx = (RivenSender *)sender_ptr;
-    if (!tx) riven_panic("Sender.clone: null sender");
+int64_t ruxen_channel_sender_clone(int64_t sender_ptr) {
+    RuxenSender *tx = (RuxenSender *)sender_ptr;
+    if (!tx) ruxen_panic("Sender.clone: null sender");
     atomic_fetch_add(&tx->chan->sender_count, 1);
-    RivenSender *cloned = (RivenSender *)malloc(sizeof(RivenSender));
-    if (!cloned) riven_panic("Sender.clone: out of memory");
+    RuxenSender *cloned = (RuxenSender *)malloc(sizeof(RuxenSender));
+    if (!cloned) ruxen_panic("Sender.clone: out of memory");
     cloned->chan = tx->chan;
     return (int64_t)cloned;
 }
 
 /* Drop the channel only if both halves are gone. */
-static void try_free_channel(RivenChannel *c) {
+static void try_free_channel(RuxenChannel *c) {
     if (atomic_load(&c->sender_count) == 0 && !c->receiver_alive) {
         /* Drain remaining slots. */
         ChannelSlot *s = c->head;
@@ -135,10 +135,10 @@ static void try_free_channel(RivenChannel *c) {
 
 /* Sender drop — decrement sender_count; wake any blocked recv if
  * this was the last sender. */
-void riven_channel_sender_drop(int64_t sender_ptr) {
-    RivenSender *tx = (RivenSender *)sender_ptr;
+void ruxen_channel_sender_drop(int64_t sender_ptr) {
+    RuxenSender *tx = (RuxenSender *)sender_ptr;
     if (!tx) return;
-    RivenChannel *c = tx->chan;
+    RuxenChannel *c = tx->chan;
     int prev = atomic_fetch_sub(&c->sender_count, 1);
     if (prev == 1) {
         /* Last sender just left — wake any blocked receiver so it
@@ -162,15 +162,15 @@ void riven_channel_sender_drop(int64_t sender_ptr) {
 typedef struct {
     int64_t tag;     /* 0 = Ok, 1 = Err(RecvError) */
     int64_t value;
-} RivenRecvResult;
+} RuxenRecvResult;
 
-int64_t riven_channel_recv(int64_t receiver_ptr) {
-    RivenReceiver *rx = (RivenReceiver *)receiver_ptr;
-    if (!rx) riven_panic("Receiver.recv: null receiver");
-    RivenChannel *c = rx->chan;
+int64_t ruxen_channel_recv(int64_t receiver_ptr) {
+    RuxenReceiver *rx = (RuxenReceiver *)receiver_ptr;
+    if (!rx) ruxen_panic("Receiver.recv: null receiver");
+    RuxenChannel *c = rx->chan;
 
-    RivenRecvResult *r = (RivenRecvResult *)malloc(sizeof(RivenRecvResult));
-    if (!r) riven_panic("Receiver.recv: out of memory");
+    RuxenRecvResult *r = (RuxenRecvResult *)malloc(sizeof(RuxenRecvResult));
+    if (!r) ruxen_panic("Receiver.recv: out of memory");
 
     pthread_mutex_lock(&c->mu);
     while (!c->head && atomic_load(&c->sender_count) > 0) {
@@ -193,13 +193,13 @@ int64_t riven_channel_recv(int64_t receiver_ptr) {
 }
 
 /* Receiver.try_recv -> { tag: 0=Some, 1=None, value: i64 }. */
-int64_t riven_channel_try_recv(int64_t receiver_ptr) {
-    RivenReceiver *rx = (RivenReceiver *)receiver_ptr;
-    if (!rx) riven_panic("Receiver.try_recv: null receiver");
-    RivenChannel *c = rx->chan;
+int64_t ruxen_channel_try_recv(int64_t receiver_ptr) {
+    RuxenReceiver *rx = (RuxenReceiver *)receiver_ptr;
+    if (!rx) ruxen_panic("Receiver.try_recv: null receiver");
+    RuxenChannel *c = rx->chan;
 
-    RivenRecvResult *r = (RivenRecvResult *)malloc(sizeof(RivenRecvResult));
-    if (!r) riven_panic("Receiver.try_recv: out of memory");
+    RuxenRecvResult *r = (RuxenRecvResult *)malloc(sizeof(RuxenRecvResult));
+    if (!r) ruxen_panic("Receiver.try_recv: out of memory");
 
     pthread_mutex_lock(&c->mu);
     if (c->head) {
@@ -218,13 +218,13 @@ int64_t riven_channel_try_recv(int64_t receiver_ptr) {
 }
 
 /* Tuple accessors for the recv result wrapper. */
-int64_t riven_channel_recv_result_tag(int64_t r_ptr) {
-    RivenRecvResult *r = (RivenRecvResult *)r_ptr;
+int64_t ruxen_channel_recv_result_tag(int64_t r_ptr) {
+    RuxenRecvResult *r = (RuxenRecvResult *)r_ptr;
     int64_t t = r->tag;
     return t;
 }
-int64_t riven_channel_recv_result_value(int64_t r_ptr) {
-    RivenRecvResult *r = (RivenRecvResult *)r_ptr;
+int64_t ruxen_channel_recv_result_value(int64_t r_ptr) {
+    RuxenRecvResult *r = (RuxenRecvResult *)r_ptr;
     int64_t v = r->value;
     free(r);   /* tuple consumed */
     return v;
@@ -232,10 +232,10 @@ int64_t riven_channel_recv_result_value(int64_t r_ptr) {
 
 /* Receiver drop — mark receiver gone, wake nobody (no blocked
  * receiver to wake — that's the dropping side). */
-void riven_channel_receiver_drop(int64_t receiver_ptr) {
-    RivenReceiver *rx = (RivenReceiver *)receiver_ptr;
+void ruxen_channel_receiver_drop(int64_t receiver_ptr) {
+    RuxenReceiver *rx = (RuxenReceiver *)receiver_ptr;
     if (!rx) return;
-    RivenChannel *c = rx->chan;
+    RuxenChannel *c = rx->chan;
     pthread_mutex_lock(&c->mu);
     c->receiver_alive = 0;
     pthread_mutex_unlock(&c->mu);

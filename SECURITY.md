@@ -2,14 +2,14 @@
 
 ## Supported versions
 
-Riven is pre-1.0. Only the latest commit on `master` is supported. We
+Ruxen is pre-1.0. Only the latest commit on `master` is supported. We
 do not backport fixes to older tags.
 
 ## Reporting a vulnerability
 
 Please report security issues privately:
 
-- Open a [GitHub Security Advisory](https://github.com/sherazp995/riven/security/advisories/new)
+- Open a [GitHub Security Advisory](https://github.com/ruxen-lang/ruxen/security/advisories/new)
   on the repo, or
 - Email the maintainer (see `Cargo.toml` for the current maintainer
   address).
@@ -22,9 +22,9 @@ to either ship a fix or publish a public disclosure within 90 days.
 
 In scope:
 
-- Memory-safety bugs in `rivenc`, the standard library runtime
-  (`crates/riven-core/runtime/runtime.c`), and the package manager.
-- Sandbox escapes in `riven-repl`.
+- Memory-safety bugs in `ruxenc`, the standard library runtime
+  (`crates/ruxen-core/runtime/runtime.c`), and the package manager.
+- Sandbox escapes in `ruxen-repl`.
 - Dependency-resolution attacks (lockfile bypass, registry deps —
   currently deferred per TEC-13).
 
@@ -35,4 +35,4 @@ Out of scope:
 - Crashes on intentionally malformed input that the compiler rejects
   with a diagnostic.
 - DoS via large inputs (compile-bomb-style). Use the
-  `scripts/rivenc-rss-cap.sh` wrapper for now.
+  `scripts/ruxenc-rss-cap.sh` wrapper for now.

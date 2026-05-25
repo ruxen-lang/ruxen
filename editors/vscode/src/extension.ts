@@ -10,7 +10,7 @@ import {
 let client: LanguageClient | undefined;
 
 export async function activate(context: ExtensionContext): Promise<void> {
-  const config = workspace.getConfiguration("riven");
+  const config = workspace.getConfiguration("ruxen");
   const configured = config.get<string>("server.path")?.trim();
 
   const command = configured && configured.length > 0
@@ -24,21 +24,21 @@ export async function activate(context: ExtensionContext): Promise<void> {
 
   const clientOptions: LanguageClientOptions = {
     documentSelector: [
-      { scheme: "file", language: "riven" },
-      { scheme: "untitled", language: "riven" },
+      { scheme: "file", language: "ruxen" },
+      { scheme: "untitled", language: "ruxen" },
     ],
     synchronize: {
-      fileEvents: workspace.createFileSystemWatcher("**/*.{riven,rvn}"),
+      fileEvents: workspace.createFileSystemWatcher("**/*.{ruxen,rx}"),
     },
   };
 
-  client = new LanguageClient("riven", "Riven LSP", serverOptions, clientOptions);
+  client = new LanguageClient("ruxen", "Ruxen LSP", serverOptions, clientOptions);
 
   try {
     await client.start();
   } catch (err) {
     window.showErrorMessage(
-      `Failed to start riven-lsp (${command}). Set 'riven.server.path' in settings. ${err}`,
+      `Failed to start ruxen-lsp (${command}). Set 'ruxen.server.path' in settings. ${err}`,
     );
   }
 }
@@ -54,7 +54,7 @@ function defaultServerPath(_context: ExtensionContext): string {
   const ext = process.platform === "win32" ? ".exe" : "";
   const ws = workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (ws) {
-    return path.join(ws, "target", "release", `riven-lsp${ext}`);
+    return path.join(ws, "target", "release", `ruxen-lsp${ext}`);
   }
-  return `riven-lsp${ext}`;
+  return `ruxen-lsp${ext}`;
 }

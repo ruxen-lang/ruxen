@@ -1,0 +1,20 @@
+## std::hash — the `Hashable` mixin (CEO ruling TEC-13).
+##
+## Wave 2 (#06.8) — migrated from resolve/stdlib/mod.rs Rust
+## registrations into self-hosted library/std/src/hash.rx.
+##
+## Ruxen's hashing surface is intentionally thin: one mixin, one
+## method that returns a single Int. Custom hashers / DOS-resistant
+## random seeds / Hasher builder / BuildHasher are explicit v2 work.
+## v1 ships exactly enough for `Map[K, V]` and `Set[T]` to key on
+## user types via implicit `include Hashable`.
+##
+## The deprecated `Hash` (trait) → `Hashable` alias is re-established
+## by `Resolver::fixup_bootstrapped_stdlib_modules` after bootstrap
+## merge, so `Hash` as a trait name keeps resolving (the `Hash[K,V]`
+## collection type has its own type-position resolution path and is
+## unaffected).
+
+mixin Hashable
+  def hash_code -> Int
+end

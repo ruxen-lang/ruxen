@@ -2,7 +2,7 @@
 
 ## 1. Summary & Motivation
 
-WebAssembly is the single target with the largest payoff-to-effort ratio in tier 4. "Write Riven, run in browsers / edge workers / Lambda@Edge / serverless / plugins" is a capability unlock no other target provides. Because LLVM 18 (already linked — `crates/riven-core/Cargo.toml:27`) includes a mature `wasm32` backend, the bulk of the code-generation work is already done. What's missing is the *scaffolding*: accepting the triple (tier 4.02), producing a valid `.wasm` module (rather than an ELF executable), shipping a runtime that doesn't assume libc, exposing user functions as wasm *exports*, and importing host functions as wasm *imports*.
+WebAssembly is the single target with the largest payoff-to-effort ratio in tier 4. "Write Ruxen, run in browsers / edge workers / Lambda@Edge / serverless / plugins" is a capability unlock no other target provides. Because LLVM 18 (already linked — `crates/ruxen-core/Cargo.toml:27`) includes a mature `wasm32` backend, the bulk of the code-generation work is already done. What's missing is the *scaffolding*: accepting the triple (tier 4.02), producing a valid `.wasm` module (rather than an ELF executable), shipping a runtime that doesn't assume libc, exposing user functions as wasm *exports*, and importing host functions as wasm *imports*.
 
 This document specifies two levels of WASM support:
 
@@ -17,7 +17,7 @@ The Component Model + WIT (WebAssembly Interface Types) story is explicitly **fu
 
 Doc 02 §2 documents the absence of `--target`. A fortiori there is no wasm32 support.
 
-### 2.2 Linker assumptions (`crates/riven-core/src/codegen/object.rs:52-92`)
+### 2.2 Linker assumptions (`crates/ruxen-core/src/codegen/object.rs:52-92`)
 
 ```rust
 let mut cmd = Command::new("cc");
@@ -34,12 +34,12 @@ For `wasm32-wasi`:
 - `cc` invoking a standard toolchain produces ELF; we need `wasi-sdk`'s `clang` with `--target=wasm32-wasi`.
 - `-lc` is provided by `wasi-libc`, but supplied as `libc.a` inside the sysroot rather than auto-linked.
 
-### 2.3 Runtime assumptions (`crates/riven-core/runtime/runtime.c`, 426 lines)
+### 2.3 Runtime assumptions (`crates/ruxen-core/runtime/runtime.c`, 426 lines)
 
 - `#include <stdio.h>` → `fprintf`, `fputs`, `fflush`. Not available in `wasm32-unknown-unknown`.
 - `#include <stdlib.h>` → `malloc`, `free`, `realloc`, `abort`. Not available.
-- `fprintf(stderr, ...)` in `riven_panic` (line 423-426). Not available.
-- Every heap allocation goes through `riven_alloc` → `malloc`. Not available.
+- `fprintf(stderr, ...)` in `ruxen_panic` (line 423-426). Not available.
+- Every heap allocation goes through `ruxen_alloc` → `malloc`. Not available.
 
 For `wasm32-wasi`, `wasi-libc` provides `stdio.h`, `stdlib.h`, `string.h` so the runtime *mostly* works. `stderr` is file descriptor 2 by WASI convention; `fprintf(stderr, …)` does the right thing.
 
@@ -65,25 +65,25 @@ typedef struct {
     int64_t* data;
     size_t len;
     size_t cap;
-} RivenVec;
+} RuxenVec;
 ```
 
 `int64_t` on wasm32 is still 64 bits — wasm32 means 32-bit *pointers*, not 32-bit integers. So `Array[Int64]` works. But `Array[String]` stores `char*` pointers in 64-bit slots; on wasm32, half of each slot is padding. That wastes memory and breaks any runtime code that casts `int64_t` → pointer assuming the pointer occupies the low bits (endianness trap on big-endian wasm, though wasm is LE).
 
-Recommendation: introduce `riven_slot_t` in the runtime, `typedef` to `intptr_t`. It's `int32_t` on wasm32 and `int64_t` on 64-bit targets. Tier-1 §10 R5 already flags this.
+Recommendation: introduce `ruxen_slot_t` in the runtime, `typedef` to `intptr_t`. It's `int32_t` on wasm32 and `int64_t` on 64-bit targets. Tier-1 §10 R5 already flags this.
 
 ## 3. Goals & Non-Goals
 
 ### Goals
 
-1. `riven build --target wasm32-unknown-unknown` produces a valid `.wasm` module.
-2. `riven build --target wasm32-wasi` produces a WASI-compatible `.wasm` executable runnable under `wasmtime run <file>.wasm`.
+1. `ruxen build --target wasm32-unknown-unknown` produces a valid `.wasm` module.
+2. `ruxen build --target wasm32-wasi` produces a WASI-compatible `.wasm` executable runnable under `wasmtime run <file>.wasm`.
 3. Body-level `wasm_export("name")` directive on a public `def` exports it to the host.
 4. Body-level `wasm_import("module", "name")` directive in a `lib "..." ... end` block imports a host function.
 5. A minimal in-runtime allocator for `wasm32-unknown-unknown` (bump or `dlmalloc`).
 6. `std.io.println` works on WASI (writes to fd 1 via `fd_write`).
 7. Example in `examples/04-wasm-hello/` (doc 07) demonstrating the full pipeline + an HTML harness.
-8. `slot_t` plumbing so `sizeof(riven_slot_t) == sizeof(void*)`.
+8. `slot_t` plumbing so `sizeof(ruxen_slot_t) == sizeof(void*)`.
 
 ### Non-Goals
 
@@ -101,8 +101,8 @@ Recommendation: introduce `riven_slot_t` in the runtime, `typedef` to `intptr_t`
 ### 4.1 CLI
 
 ```
-riven build --target wasm32-unknown-unknown [--release]
-riven build --target wasm32-wasi [--release]
+ruxen build --target wasm32-unknown-unknown [--release]
+ruxen build --target wasm32-wasi [--release]
 ```
 
 Output: `target/wasm32-<env>/<profile>/<pkg-name>.wasm`.
@@ -111,7 +111,7 @@ Output: `target/wasm32-<env>/<profile>/<pkg-name>.wasm`.
 
 **Exports** (wasm32-unknown-unknown or wasi):
 
-```riven
+```ruxen
 def add(a: Int32, b: Int32) -> Int32
   wasm_export "add"
   a + b
@@ -125,7 +125,7 @@ end
 
 **Imports** (host-provided):
 
-```riven
+```ruxen
 lib "wasm:env"                              # new ABI link string; "c" is the existing one
   def console_log(ptr: *UInt8, len: USize)
     wasm_import "env", "console_log"
@@ -158,7 +158,7 @@ link-args = []
 ### 4.4 Runtime layout
 
 ```
-~/.riven/lib/runtime/
+~/.ruxen/lib/runtime/
 ├── wasm32-unknown-unknown/
 │   ├── runtime.o              # Compiled from runtime_wasm.c with bump allocator
 │   └── version
@@ -218,19 +218,19 @@ Build recipe for the runtime:
 
 ```bash
 $WASI_SDK_PATH/bin/clang --target=wasm32-wasi \
-    -c crates/riven-core/runtime/runtime.c \
-    -o ~/.riven/lib/runtime/wasm32-wasi/runtime.o
+    -c crates/ruxen-core/runtime/runtime.c \
+    -o ~/.ruxen/lib/runtime/wasm32-wasi/runtime.o
 ```
 
-`argv`: `wasi-libc` fills it via `__wasi_args_get`; the existing tier-1 plumbing (`riven_env_init(argc, argv)` in tier1_01_stdlib.md §7.6) works unchanged.
+`argv`: `wasi-libc` fills it via `__wasi_args_get`; the existing tier-1 plumbing (`ruxen_env_init(argc, argv)` in tier1_01_stdlib.md §7.6) works unchanged.
 
 ### 5.6 `wasm_export` / `wasm_import` lowering
 
 - Parser: extend `parse_attributes` (`parser/mod.rs:1572-1610`) to accept body-level `wasm_export "name"` and `wasm_import "module", "name"` directives. Keep shape compatible with the existing directive machinery.
 - Typeck / HIR: annotate the `HirFunction` with `export_name: Option<String>` and `import_source: Option<(String, String)>`.
-- MIR: propagate. `MirProgram` grows `pub wasm_exports: Vec<(String, String)>` (Riven symbol, wasm export name).
+- MIR: propagate. `MirProgram` grows `pub wasm_exports: Vec<(String, String)>` (Ruxen symbol, wasm export name).
 - LLVM emit: for exports, set `LLVMSetLinkage(fn, LLVMExternalLinkage)` + `LLVMSetDLLStorageClass` (the wasm attribute equivalent) and emit `wasm.custom.attributes = ["used"]`. For imports, declare the function with `LLVMLinkageExternalWeak` and attach the `wasm-import-module` + `wasm-import-name` attributes.
-- Linker: `--export=<riven-mangled-name>` is the primary mechanism. LLVM attribute-based export also works and is preferred for name stability (we can emit the *wasm export name* and the *LLVM function name* independently, avoiding Riven-name-mangling leakage).
+- Linker: `--export=<ruxen-mangled-name>` is the primary mechanism. LLVM attribute-based export also works and is preferred for name stability (we can emit the *wasm export name* and the *LLVM function name* independently, avoiding Ruxen-name-mangling leakage).
 
 ### 5.7 Memory model
 
@@ -242,18 +242,18 @@ $WASI_SDK_PATH/bin/clang --target=wasm32-wasi \
 
 New hidden module. Users don't write `wasm_import` directives directly; they call:
 
-```riven
+```ruxen
 use std.wasm
 std.wasm.debug_log("hello")                 # wraps in-body wasm_import("env", "debug_log")
 std.wasm.memory_size_bytes() -> USize
 std.wasm.memory_grow_pages(n: USize) -> USize
 ```
 
-Each entry is a thin Riven wrapper over a `lib "wasm:..."` declaration. Users that want ad-hoc imports do it at the FFI level.
+Each entry is a thin Ruxen wrapper over a `lib "wasm:..."` declaration. Users that want ad-hoc imports do it at the FFI level.
 
 ### 5.9 `slot_t` plumbing (tier-1 pre-work)
 
-In `runtime.c`, replace `int64_t` slots with `intptr_t` throughout Array/Map/Set/`riven_vec_push`/etc. This is a ~50-line churn. Required before wasm32 array operations are correct; compatible with host 64-bit as `intptr_t` == `int64_t` there.
+In `runtime.c`, replace `int64_t` slots with `intptr_t` throughout Array/Map/Set/`ruxen_vec_push`/etc. This is a ~50-line churn. Required before wasm32 array operations are correct; compatible with host 64-bit as `intptr_t` == `int64_t` there.
 
 This is tier-1 work (flagged there under tier1_00 §10 R5). If tier 4.03 ships before tier-1 resolves R5, we carry the `int64_t`-only wasm32 restriction and type-error any `Array.map` that would store a pointer-sized element.
 
@@ -264,43 +264,43 @@ The Component Model adds type-safe WASM ABI definitions via WIT. Tooling:
 - `wit-bindgen` emits host/guest bindings from `.wit` files.
 - `wasm-tools component new` wraps a core wasm module into a component.
 
-For Riven this would mean:
+For Ruxen this would mean:
 
-- A `[wit]` table in `Riven.toml` pointing at `.wit` files.
-- A `riven wit bindgen` subcommand that generates Riven-side stubs.
+- A `[wit]` table in `Ruxen.toml` pointing at `.wit` files.
+- A `ruxen wit bindgen` subcommand that generates Ruxen-side stubs.
 - Body-level `wit_export("interface-name", "method")` directives.
 
-Explicitly deferred. Call out in the book that the Component Model will be Riven's v2 story for WASM ABI stability.
+Explicitly deferred. Call out in the book that the Component Model will be Ruxen's v2 story for WASM ABI stability.
 
 ## 6. Implementation Plan — files to touch
 
 ### New files
 
-- `crates/riven-core/runtime/runtime_wasm.c` — the `wasm32-unknown-unknown` subset with bundled `dlmalloc` and import-based `console_log`.
-- `crates/riven-core/runtime/dlmalloc.c` + `dlmalloc.h` — vendored from the canonical `ftp.gnu.org/…/dlmalloc.c` (BSD-0 license, public domain).
-- `crates/riven-core/src/codegen/wasm.rs` — wasm-specific codegen helpers: export/import attribute emission, linker invocation.
-- `share/riven/std/wasm.rvn` — `std.wasm` module (exposed once stdlib-as-source lands per tier 1 §7.8).
-- `share/riven/std/wasi/` — `std.wasi` hidden module with `fd_write`, `args_get`, etc., imports.
+- `crates/ruxen-core/runtime/runtime_wasm.c` — the `wasm32-unknown-unknown` subset with bundled `dlmalloc` and import-based `console_log`.
+- `crates/ruxen-core/runtime/dlmalloc.c` + `dlmalloc.h` — vendored from the canonical `ftp.gnu.org/…/dlmalloc.c` (BSD-0 license, public domain).
+- `crates/ruxen-core/src/codegen/wasm.rs` — wasm-specific codegen helpers: export/import attribute emission, linker invocation.
+- `share/ruxen/std/wasm.rx` — `std.wasm` module (exposed once stdlib-as-source lands per tier 1 §7.8).
+- `share/ruxen/std/wasi/` — `std.wasi` hidden module with `fd_write`, `args_get`, etc., imports.
 - `examples/04-wasm-hello/` — see doc 07.
 
 ### Touched files
 
-- `crates/riven-core/src/parser/mod.rs:1572-1610` — directive parser: accept `wasm_export`, `wasm_import`.
-- `crates/riven-core/src/parser/ast.rs:770-` — `LinkAttr` etc. grow a `WasmImport` / `WasmExport` variant.
-- `crates/riven-core/src/hir/nodes.rs` — `HirFunction` gains `wasm_export_name: Option<String>`, `wasm_import: Option<(String, String)>`.
-- `crates/riven-core/src/mir/nodes.rs:19-26` — `MirProgram` gains `wasm_exports: Vec<(String, String)>`, `wasm_imports: Vec<FfiFuncDecl>` (wasm-flavored).
-- `crates/riven-core/src/codegen/llvm/emit.rs` — emit wasm attributes on imports/exports.
-- `crates/riven-core/src/codegen/object.rs:52-92` — wasm-target branch drops `-lc -lm`, invokes `wasm-ld` with `--export`/`--import-memory`/etc.
-- `crates/riven-core/src/codegen/mod.rs:27-65` — `find_runtime_obj` (doc 02 §5.6) resolves `wasm32-*` to `runtime_wasm.o`.
-- `crates/riven-core/runtime/runtime.c` — the `int64_t` → `intptr_t` slot churn (tier-1 pre-work).
-- `crates/riven-cli/src/cli.rs` — no direct change; `--target` (doc 02) covers it.
+- `crates/ruxen-core/src/parser/mod.rs:1572-1610` — directive parser: accept `wasm_export`, `wasm_import`.
+- `crates/ruxen-core/src/parser/ast.rs:770-` — `LinkAttr` etc. grow a `WasmImport` / `WasmExport` variant.
+- `crates/ruxen-core/src/hir/nodes.rs` — `HirFunction` gains `wasm_export_name: Option<String>`, `wasm_import: Option<(String, String)>`.
+- `crates/ruxen-core/src/mir/nodes.rs:19-26` — `MirProgram` gains `wasm_exports: Vec<(String, String)>`, `wasm_imports: Vec<FfiFuncDecl>` (wasm-flavored).
+- `crates/ruxen-core/src/codegen/llvm/emit.rs` — emit wasm attributes on imports/exports.
+- `crates/ruxen-core/src/codegen/object.rs:52-92` — wasm-target branch drops `-lc -lm`, invokes `wasm-ld` with `--export`/`--import-memory`/etc.
+- `crates/ruxen-core/src/codegen/mod.rs:27-65` — `find_runtime_obj` (doc 02 §5.6) resolves `wasm32-*` to `runtime_wasm.o`.
+- `crates/ruxen-core/runtime/runtime.c` — the `int64_t` → `intptr_t` slot churn (tier-1 pre-work).
+- `crates/ruxen-cli/src/cli.rs` — no direct change; `--target` (doc 02) covers it.
 - `.github/workflows/release.yml` — add wasm runtime artifacts.
 - `.github/workflows/ci.yml` (doc 06) — wasm matrix entry: `wasmtime run target/wasm32-wasi/debug/hello.wasm` smoke test.
 
 ### Tests
 
-- `crates/riven-core/tests/wasm_codegen.rs` — gated on `cfg(feature = "llvm")`. Compiles a trivial program for `wasm32-unknown-unknown`, loads the `.wasm` via `wasmi` (small, pure-Rust wasm interpreter), invokes an exported function, asserts the return value.
-- `crates/riven-core/tests/wasi_codegen.rs` — same but for `wasm32-wasi`, using `wasmi_wasi` or shelling out to `wasmtime`.
+- `crates/ruxen-core/tests/wasm_codegen.rs` — gated on `cfg(feature = "llvm")`. Compiles a trivial program for `wasm32-unknown-unknown`, loads the `.wasm` via `wasmi` (small, pure-Rust wasm interpreter), invokes an exported function, asserts the return value.
+- `crates/ruxen-core/tests/wasi_codegen.rs` — same but for `wasm32-wasi`, using `wasmi_wasi` or shelling out to `wasmtime`.
 - Example `examples/04-wasm-hello/` doubles as an end-to-end acceptance test.
 
 ## 7. Interactions with Other Tiers
@@ -322,7 +322,7 @@ Explicitly deferred. Call out in the book that the Component Model will be Riven
 3. Runtime: compile `runtime.c` against `wasi-libc`, cache as `runtime.o`.
 4. `_start` wired (via `wasi-libc`'s crt0).
 5. `slot_t` churn in `runtime.c`.
-6. **Exit:** a hello-world Riven program builds to a `.wasm` file that `wasmtime run hello.wasm` prints "Hello, Riven!" to stdout. (Requires tier-1 §7.6 argv shim.)
+6. **Exit:** a hello-world Ruxen program builds to a `.wasm` file that `wasmtime run hello.wasm` prints "Hello, Ruxen!" to stdout. (Requires tier-1 §7.6 argv shim.)
 
 ### Phase 3b — wasm32-unknown-unknown MVP (2 weeks)
 
@@ -330,7 +330,7 @@ Explicitly deferred. Call out in the book that the Component Model will be Riven
 2. In-body `wasm_export` / `wasm_import` directive parsing + lowering.
 3. LLVM emit: attach wasm-specific attributes.
 4. `wasm-ld --no-entry --export-dynamic …` invocation.
-5. **Exit:** a Riven program with `def fib(n: Int32) -> Int32` + in-body `wasm_export "fib"` produces a `.wasm` that the example HTML page in `examples/04-wasm-hello/` loads via `WebAssembly.instantiate` and invokes from JS, returning the correct value.
+5. **Exit:** a Ruxen program with `def fib(n: Int32) -> Int32` + in-body `wasm_export "fib"` produces a `.wasm` that the example HTML page in `examples/04-wasm-hello/` loads via `WebAssembly.instantiate` and invokes from JS, returning the correct value.
 
 ### Phase 3c — std.wasm module (0.5 week)
 
@@ -357,29 +357,29 @@ Explicitly deferred. Call out in the book that the Component Model will be Riven
 
 1. **`dlmalloc` vs bump vs host-imported allocator.** Recommend `dlmalloc` — it's the battle-tested choice Rust's wasm32 target uses. Bump is too restrictive (no reallocation). Host-imported is elegant but fragmenting (every host embedding must provide `alloc`/`free`).
 2. **Runtime `.c` fork vs `#ifdef` soup.** Two files (`runtime.c`, `runtime_wasm.c`) keep each simple but duplicate some code. One file with `#if defined(__wasm__) && !defined(__wasi__)` is a maintenance cliff. Recommend: keep them split, factor the truly-shared parts (string ops, Vec structural code) into `runtime_common.h`.
-3. **`wasi-sdk` dependency.** Building `runtime.o` for wasi requires the user to have `wasi-sdk` installed. Recommend: `riven target add wasm32-wasi` ships a precompiled runtime. No wasi-sdk required for *using* the target, only for developing the runtime.
+3. **`wasi-sdk` dependency.** Building `runtime.o` for wasi requires the user to have `wasi-sdk` installed. Recommend: `ruxen target add wasm32-wasi` ships a precompiled runtime. No wasi-sdk required for *using* the target, only for developing the runtime.
 4. **`wasm-ld` availability.** On macOS with `rustup` installed, `rust-lld` (which is `wasm-ld` under the hood) lives at `~/.rustup/toolchains/<version>/lib/rustlib/<triple>/bin/rust-lld`. `lld` from Homebrew works. Distros ship `lld` as an apt/dnf package. Recommend: detect one, error helpfully if none found (point at `rustup component add rust-src` — no, point at `apt install lld` / `brew install lld`).
-5. **Memory ownership across the JS boundary.** If Riven returns a `String` as `(*UInt8, USize)` to JS, who frees it? JS doesn't know the Riven allocator. Recommend: export `riven_alloc` / `riven_free` from the runtime; JS callers are responsible for freeing. Document this as the "you return a pointer → you own the memory → remember to call free" convention, matching `wasm-bindgen`'s approach.
+5. **Memory ownership across the JS boundary.** If Ruxen returns a `String` as `(*UInt8, USize)` to JS, who frees it? JS doesn't know the Ruxen allocator. Recommend: export `ruxen_alloc` / `ruxen_free` from the runtime; JS callers are responsible for freeing. Document this as the "you return a pointer → you own the memory → remember to call free" convention, matching `wasm-bindgen`'s approach.
 6. **Name mangling.** LLVM mangles function names for debug info. Wasm exports must be exact ASCII. Recommend: use `LLVMAddFunctionAttr(fn, "wasm-export-name", name)` (LLVM attribute) to decouple the LLVM symbol name from the wasm export name — avoids surprising users with mangled names.
-7. **Binary size.** Riven's wasm output will be larger than Rust's — our runtime brings a C malloc + stdlib shims. Recommend: document that `--release` + `wasm-opt -Oz` (user-run) brings it in line with Rust; budget ~30KB for "Hello World" on `wasm32-unknown-unknown`.
+7. **Binary size.** Ruxen's wasm output will be larger than Rust's — our runtime brings a C malloc + stdlib shims. Recommend: document that `--release` + `wasm-opt -Oz` (user-run) brings it in line with Rust; budget ~30KB for "Hello World" on `wasm32-unknown-unknown`.
 8. **Debug info.** `wasmtime` has limited DWARF support on wasm. Recommend: emit DWARF in debug builds anyway; it's useful in browsers via the DevTools C/C++ DevTools extension.
 9. **Floating-point traps.** Wasm2 SIMD has `f32x4.div`-style traps on NaN in some runtimes. Recommend: document; no action.
 10. **Reactor vs command module conflict.** A user might want a wasm32-wasi reactor (no `_start`, only exports). Recommend: support via `[package] wasm-crate-type = "cdylib"` manifest key → pass `--no-entry` to `wasm-ld` even on wasi.
-11. **Imported memory.** If the host provides memory, Riven's allocator needs to start from a nonzero offset to avoid clobbering the host's data. Recommend: v1 always uses `--export-memory` (Riven owns memory); `--import-memory` deferred.
+11. **Imported memory.** If the host provides memory, Ruxen's allocator needs to start from a nonzero offset to avoid clobbering the host's data. Recommend: v1 always uses `--export-memory` (Ruxen owns memory); `--import-memory` deferred.
 12. **`intptr_t` on wasm32 is `i32`.** Anywhere the codegen assumes 64-bit slots breaks. Tier-1 R5 (slot erasure) must land before wasm32 has a correct `Array` of pointers. Gate wasm32 release-tier behind R5.
 
 ## 10. Acceptance Criteria
 
 Phase 3a — wasm32-wasi:
 
-- [ ] `riven build --target wasm32-wasi` on a hello-world produces a valid `.wasm` file (validated with `wasm-validate` if available, else via `wasmtime --help | head`).
-- [ ] `wasmtime run target/wasm32-wasi/debug/hello.wasm` prints "Hello, Riven!" to stdout.
+- [ ] `ruxen build --target wasm32-wasi` on a hello-world produces a valid `.wasm` file (validated with `wasm-validate` if available, else via `wasmtime --help | head`).
+- [ ] `wasmtime run target/wasm32-wasi/debug/hello.wasm` prints "Hello, Ruxen!" to stdout.
 - [ ] `wasmtime run --dir=. target/wasm32-wasi/debug/cat.wasm -- README.md` reads a file from the current directory and prints its contents (requires tier-1 `std.fs.read_to_string` and `std.env.args`).
 - [ ] Binary size of hello-world on `wasm32-wasi` is ≤ 200KB in `--release`.
 
 Phase 3b — wasm32-unknown-unknown:
 
-- [ ] `riven build --target wasm32-unknown-unknown` on a program with `def add(a: Int32, b: Int32) -> Int32` + in-body `wasm_export "add"` produces a `.wasm` whose exports include `add` (validated via `wasm-objdump -x`).
+- [ ] `ruxen build --target wasm32-unknown-unknown` on a program with `def add(a: Int32, b: Int32) -> Int32` + in-body `wasm_export "add"` produces a `.wasm` whose exports include `add` (validated via `wasm-objdump -x`).
 - [ ] Loading that `.wasm` in Node.js via `WebAssembly.instantiate` and calling `instance.exports.add(2, 3)` returns `5`.
 - [ ] A program using `std.wasm.debug_log("hello")` compiled for wasm32-unknown-unknown imports `env.console_log` (validated via `wasm-objdump -x`).
 - [ ] A `lib "wasm:host"` block containing `def now_ms -> Int64` with an in-body `wasm_import "host", "now_ms"` directive declares an import on module `host` with field `now_ms` of signature `() -> i64`.
@@ -392,5 +392,5 @@ Phase 3c — std.wasm:
 
 Phase 3d — CI + examples:
 
-- [ ] `examples/04-wasm-hello/` has `index.html` + `build.sh` + a `Riven.toml` that targets `wasm32-unknown-unknown`; opening `index.html` in a browser and clicking the button shows the Riven function's output.
-- [ ] CI runs `riven build --target wasm32-wasi` and `wasmtime run` on the result, asserts exit code 0 and expected stdout.
+- [ ] `examples/04-wasm-hello/` has `index.html` + `build.sh` + a `Ruxen.toml` that targets `wasm32-unknown-unknown`; opening `index.html` in a browser and clicking the button shows the Ruxen function's output.
+- [ ] CI runs `ruxen build --target wasm32-wasi` and `wasmtime run` on the result, asserts exit code 0 and expected stdout.

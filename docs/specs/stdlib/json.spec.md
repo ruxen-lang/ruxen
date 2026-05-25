@@ -69,7 +69,7 @@ the existing parsed/built `Json` node.
 
 ## Tests
 
-Focused runtime tests live in `compiler/riven_core/tests/stdlib_json.rs`. They
+Focused runtime tests live in `compiler/ruxen_core/tests/stdlib_json.rs`. They
 compile only the runtime files used by `std.json` and drive the C ABI directly.
-Release e2e coverage lives in `tests/release-e2e/cases/800_json_parse_relaxed_strict.rvn`
-and `tests/release-e2e/cases/801_json_builders_stringify.rvn`.
+Release e2e coverage lives in `tests/release-e2e/cases/800_json_parse_relaxed_strict.rx`
+and `tests/release-e2e/cases/801_json_builders_stringify.rx`.

@@ -2,60 +2,60 @@
 
 Status: draft
 Depends on: none (but see §7 for strong coupling with LSP)
-Blocks: high-perf LSP for large files; fast `riven check` iteration
+Blocks: high-perf LSP for large files; fast `ruxen check` iteration
 
 ---
 
 ## 1. Summary & motivation
 
-Riven has file-level incremental compilation in `rivenc` via
-`crates/rivenc/src/cache/`. That layer is excellent at its job: two
-`rivenc` invocations on an unchanged project re-link the binary in
+Ruxen has file-level incremental compilation in `ruxenc` via
+`crates/ruxenc/src/cache/`. That layer is excellent at its job: two
+`ruxenc` invocations on an unchanged project re-link the binary in
 <100 ms without recompiling anything. But inside a single compilation
 of a single file, every phase runs from scratch: lex → parse →
 resolve → typeck → borrow-check → MIR lowering → codegen.
 
 This matters in three scenarios:
 
-1. **LSP latency.** A 1000-line Riven file takes ~80-200 ms to fully
+1. **LSP latency.** A 1000-line Ruxen file takes ~80-200 ms to fully
    analyze. Per-keystroke analysis is infeasible at this cost. The
    LSP (doc 01) already debounces to 200 ms and can feel sluggish.
-2. **Large projects with many small changes.** The rivenc cache
+2. **Large projects with many small changes.** The ruxenc cache
    invalidates the *whole file* on any edit. If a user changes a
    single function body, every other function in the same file is
    re-typechecked unnecessarily.
-3. **`riven check` — a build that runs everything except codegen.**
+3. **`ruxen check` — a build that runs everything except codegen.**
    Today it's almost as slow as a full build because there is no
    memoization of typeck results.
 
 This doc specifies a query-based (salsa-style) incremental compilation
-layer inside `riven-core`, with the following properties:
+layer inside `ruxen-core`, with the following properties:
 
 - Fine-grained: functions and items, not just whole files.
 - Memoized on content-addressed fingerprints — the same input produces
   the same output, always.
-- Backwards-compatible with the file-level cache in `rivenc`.
-- Available from both the `rivenc` CLI and from `riven-ide` (consumed
+- Backwards-compatible with the file-level cache in `ruxenc`.
+- Available from both the `ruxenc` CLI and from `ruxen-ide` (consumed
   by the LSP).
 
 ---
 
 ## 2. Current state
 
-### 2.1 File-level cache in `rivenc/src/cache/`
+### 2.1 File-level cache in `ruxenc/src/cache/`
 
 The existing layer (Phase 13 per `~/.claude1/.../project_phase13_incremental.md`)
 keys a whole-file compile on:
 
-- Content hash of the `.rvn` file.
+- Content hash of the `.rx` file.
 - Compiler version (`cache::hash::compiler_version()`).
 - Build flags (`backend`, `opt-level`, `release`).
-- Dependency file signatures (other `.rvn` files the current one
+- Dependency file signatures (other `.rx` files the current one
   imports).
 
 On cache hit: re-use the `.o` file and `FileSignature` from disk.
 On miss: run lex → parse → typeck → borrow-check → MIR → codegen from
-scratch (see `rivenc/src/main.rs::compile_to_object` at `main.rs:503-576`).
+scratch (see `ruxenc/src/main.rs::compile_to_object` at `main.rs:503-576`).
 
 Files:
 
@@ -71,7 +71,7 @@ Files:
 
 ### 2.2 In-process analysis always full-pipeline
 
-Both `rivenc` (`main.rs:503-576`) and `riven-ide` (`analysis.rs:43-88`)
+Both `ruxenc` (`main.rs:503-576`) and `ruxen-ide` (`analysis.rs:43-88`)
 call the full pipeline in sequence:
 
 ```rust
@@ -88,7 +88,7 @@ between invocations.
 
 ### 2.3 No query infrastructure
 
-Grep for `salsa`, `query`, `memoize` under `crates/riven-core`: zero
+Grep for `salsa`, `query`, `memoize` under `crates/ruxen-core`: zero
 matches. No `salsa` dependency. No `DashMap`-based memoizer. No
 `OnceCell` / `Lazy` statics keyed by content hash.
 
@@ -149,7 +149,7 @@ state for a single compile. Not reused.
 ### 4.1 `Database` handle
 
 ```rust
-// crates/riven-core/src/db/mod.rs (new)
+// crates/ruxen-core/src/db/mod.rs (new)
 
 pub struct Database {
     // Internal: memoization tables indexed by query key
@@ -195,7 +195,7 @@ No call site changes.
 
 ### 4.3 LSP consumption
 
-`riven-ide/src/analysis.rs::analyze` becomes:
+`ruxen-ide/src/analysis.rs::analyze` becomes:
 
 ```rust
 pub fn analyze_incremental(db: &mut Database, source: &str) -> AnalysisResult {
@@ -236,13 +236,13 @@ invalidation is error-prone.
 **Option C: Adopt `salsa-macros` minimal subset or similar lightweight
 lib.** Middle ground. Evaluate `dashmap` + a minimal query mixin.
 
-**Recommendation: Option B (hand-rolled) for v1.** Riven's query
+**Recommendation: Option B (hand-rolled) for v1.** Ruxen's query
 graph is small (~8 query types). The invalidation discipline is
 achievable without salsa's machinery. Revisit if the graph grows
 past ~20 nodes.
 
 Rationale: salsa is a big dep for the shape of the problem. rust-analyzer
-has 200+ queries and benefits from salsa enormously. Riven has ~8
+has 200+ queries and benefits from salsa enormously. Ruxen has ~8
 queries (§5.2). The manual code is maybe 400 lines.
 
 ### 5.2 Query graph
@@ -322,7 +322,7 @@ Borrow-check similarly factors — it already runs per-function.
 
 ### 5.6 Content hashes
 
-Use SHA-256 (already in `rivenc/src/cache/hash.rs`). Hash:
+Use SHA-256 (already in `ruxenc/src/cache/hash.rs`). Hash:
 
 - `tokens`: the source text + compiler version.
 - `ast`: the full token stream serialized.
@@ -357,17 +357,17 @@ each = 40k entries. Most `Arc<HirProgram>` values are ~10-100 KB, so
 upper bound ~4 GB, lower bound ~400 MB. Cap map sizes aggressively;
 monitor in practice.
 
-### 5.9 Integration with `rivenc` file-level cache
+### 5.9 Integration with `ruxenc` file-level cache
 
-The file-level cache (`rivenc/src/cache/`) remains the source of
+The file-level cache (`ruxenc/src/cache/`) remains the source of
 truth for cached *object files*. The new `Database` holds only
-in-memory intermediate results for the lifetime of a `rivenc`
+in-memory intermediate results for the lifetime of a `ruxenc`
 invocation.
 
 Relationship:
 
 ```
-rivenc invocation
+ruxenc invocation
   └── Database (in-memory, one per process)
          └── File-level cache (on-disk, shared across processes)
 ```
@@ -392,23 +392,23 @@ layer.
 
 | Phase | File | Change |
 |---|---|---|
-| 1 | `crates/riven-core/src/db/mod.rs` *new* | Database skeleton |
-| 1 | `crates/riven-core/src/db/query.rs` *new* | Memoization primitive (DashMap wrapper) |
-| 1 | `crates/riven-core/Cargo.toml:29-36` | Add `dashmap` dep |
-| 2 | `crates/riven-core/src/lib.rs` | Re-export `db::Database` |
-| 2 | `crates/riven-core/src/db/queries/tokens.rs` *new* | Lex query |
-| 2 | `crates/riven-core/src/db/queries/ast.rs` *new* | Parse query |
-| 2 | `crates/riven-core/src/db/queries/symbols.rs` *new* | Resolve query |
-| 2 | `crates/riven-core/src/db/queries/hir.rs` *new* | HIR query |
-| 3 | `crates/riven-core/src/typeck/mod.rs:37-80` | Refactor into split global + per-fn |
-| 3 | `crates/riven-core/src/db/queries/typeck.rs` *new* | File-level typeck query |
-| 3 | `crates/riven-core/src/db/queries/typeck_fn.rs` *new* | Per-fn typeck query |
-| 4 | `crates/riven-core/src/borrow_check/mod.rs` | Factor to per-fn |
-| 4 | `crates/riven-core/src/db/queries/borrow_check.rs` *new* | Borrow-check query |
-| 4 | `crates/riven-core/src/db/queries/mir.rs` *new* | MIR query |
-| 5 | `crates/riven-ide/src/analysis.rs:43-88` | Accept optional `&var Database` |
-| 5 | `crates/riven-lsp/src/server.rs:17-20` | Hold a `Database` in `ServerState` |
-| 6 | `crates/rivenc/src/main.rs:503-576` | Optionally use `Database` for within-file caching |
+| 1 | `crates/ruxen-core/src/db/mod.rs` *new* | Database skeleton |
+| 1 | `crates/ruxen-core/src/db/query.rs` *new* | Memoization primitive (DashMap wrapper) |
+| 1 | `crates/ruxen-core/Cargo.toml:29-36` | Add `dashmap` dep |
+| 2 | `crates/ruxen-core/src/lib.rs` | Re-export `db::Database` |
+| 2 | `crates/ruxen-core/src/db/queries/tokens.rs` *new* | Lex query |
+| 2 | `crates/ruxen-core/src/db/queries/ast.rs` *new* | Parse query |
+| 2 | `crates/ruxen-core/src/db/queries/symbols.rs` *new* | Resolve query |
+| 2 | `crates/ruxen-core/src/db/queries/hir.rs` *new* | HIR query |
+| 3 | `crates/ruxen-core/src/typeck/mod.rs:37-80` | Refactor into split global + per-fn |
+| 3 | `crates/ruxen-core/src/db/queries/typeck.rs` *new* | File-level typeck query |
+| 3 | `crates/ruxen-core/src/db/queries/typeck_fn.rs` *new* | Per-fn typeck query |
+| 4 | `crates/ruxen-core/src/borrow_check/mod.rs` | Factor to per-fn |
+| 4 | `crates/ruxen-core/src/db/queries/borrow_check.rs` *new* | Borrow-check query |
+| 4 | `crates/ruxen-core/src/db/queries/mir.rs` *new* | MIR query |
+| 5 | `crates/ruxen-ide/src/analysis.rs:43-88` | Accept optional `&var Database` |
+| 5 | `crates/ruxen-lsp/src/server.rs:17-20` | Hold a `Database` in `ServerState` |
+| 6 | `crates/ruxenc/src/main.rs:503-576` | Optionally use `Database` for within-file caching |
 
 ### Phase breakdown
 
@@ -429,10 +429,10 @@ The hard refactor. Split typeck into global + per-fn. Add
 Same pattern as Phase 3.
 
 **Phase 5 — LSP integration (2 days).**
-Plumb `Database` through `riven-ide::analyze_incremental`. Benchmark
+Plumb `Database` through `ruxen-ide::analyze_incremental`. Benchmark
 LSP latency before/after.
 
-**Phase 6 — `rivenc` integration (2 days, optional).**
+**Phase 6 — `ruxenc` integration (2 days, optional).**
 For multi-file projects, use `Database` to avoid re-parsing shared
 header-like modules. Often a no-op because of the file-level cache.
 
@@ -447,7 +447,7 @@ Total: 15-20 engineer-days for Phases 1-5.
 - 1000-line file, add a `use` at top → typeck should be <50 ms
   (invalidates `symbols`, cascades to all `typeck_fn`).
 
-Fold into `rivenc/benches/` or a new `riven-core/benches/incremental.rs`.
+Fold into `ruxenc/benches/` or a new `ruxen-core/benches/incremental.rs`.
 
 ---
 
@@ -458,7 +458,7 @@ Fold into `rivenc/benches/` or a new `riven-core/benches/incremental.rs`.
   requests; Phase 3 makes on-keystroke analysis viable.
 - **Doc 03 (test), doc 05 (bench).** Test/bench binaries benefit from
   faster incremental builds. No direct API change.
-- **Doc 04 (doc generator).** `rivendoc` can hold a long-lived
+- **Doc 04 (doc generator).** `ruxendoc` can hold a long-lived
   `Database` for watch-mode HTML regeneration.
 - **Doc 07 (MIR opts).** New opt passes slot in as additional per-fn
   queries (`mir_optimized(fn_id)` depends on `mir(fn_id)`). Cache-friendly.
@@ -479,7 +479,7 @@ None hard. The query layer is lateral — it accelerates what's there.
 | 3 | Per-fn typeck | 5 | LSP: on-keystroke typeck viable |
 | 4 | Per-fn borrow + MIR | 3 | Full per-fn incremental |
 | 5 | LSP integration | 2 | User-visible LSP speedup |
-| 6 | rivenc integration (opt) | 2 | Minor |
+| 6 | ruxenc integration (opt) | 2 | Minor |
 
 ---
 
@@ -531,7 +531,7 @@ None hard. The query layer is lateral — it accelerates what's there.
 10. **R4 — Backward compat with existing typeck tests.**
     Phase 3's refactor changes `type_check` internally. The compat
     shim at §4.2 keeps the signature. Validate every existing
-    `riven-core/src/typeck/tests.rs` test still passes.
+    `ruxen-core/src/typeck/tests.rs` test still passes.
 11. **OQ-7 — When to evict the database.**
     On file close in LSP? On project switch? Policy to be decided.
     v1: never evict in-memory; flush on server shutdown.
@@ -559,7 +559,7 @@ None hard. The query layer is lateral — it accelerates what's there.
 | LRU eviction correctness | Query result still re-computable after eviction |
 | 10 open files in LSP | Each has its own Database entries; cross-talk free |
 
-Dedicated bench file `crates/riven-core/benches/incremental.rs`:
+Dedicated bench file `crates/ruxen-core/benches/incremental.rs`:
 
 - `bench_repeated_typeck(c)`: 1000 identical calls to `db.typeck(file)`.
 - `bench_edit_one_fn(c)`: 100 alternating edits to two fns.

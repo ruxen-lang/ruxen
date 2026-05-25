@@ -23,7 +23,7 @@
 - Negative: heap allocation without the `alloc` package → E1400.
 
 ### Implementation
-- Carve `crates/riven-core/runtime/std/core.rvn` and `std.rvn`.
+- Carve `crates/ruxen-core/runtime/std/core.rx` and `std.rx`.
 - Compiler accepts the `no_std` directive and rejects heap-allocating
   types in scope.
 - Panic strategy: `abort` only (Open Decision #5 ruling).
@@ -31,8 +31,8 @@
 ## B. WASM target (T4.03)
 
 ### Goal
-- `riven build --target wasm32-unknown-unknown` produces a `.wasm`.
-- Demonstrate calling Riven from JS via a wasm-bindgen-style shim.
+- `ruxen build --target wasm32-unknown-unknown` produces a `.wasm`.
+- Demonstrate calling Ruxen from JS via a wasm-bindgen-style shim.
 
 ### TDD
 - Unit test invokes the LLVM backend with wasm32 triple, asserts
@@ -43,7 +43,7 @@
 ### Implementation
 - LLVM backend already supports wasm32 targets; wire CLI to pass
   the triple through.
-- Riven runtime needs a wasm-compatible variant: `runtime_wasm.c`
+- Ruxen runtime needs a wasm-compatible variant: `runtime_wasm.c`
   with no syscalls (provide imports for `print`, `read`).
 - Examples: add `examples/05-wasm-hello/` building a wasm artifact
   loaded by an HTML harness.

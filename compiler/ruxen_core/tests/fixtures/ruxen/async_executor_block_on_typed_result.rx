@@ -1,0 +1,28 @@
+## Task #20 (docs/specs/stdlib/executor.spec.md): block_on must
+## preserve the future's Output type — not erase it to Int as the
+## prior `var __block_on_res_N = 0` lowering shape did.
+##
+## This fixture exercises a future whose Output is Result[Int, Int].
+## After block_on returns, destructuring the Result via match must
+## see the Ok payload typed as Int, not as the inner-of-Int-pinned
+## value the prior shape produced. The success criterion is purely
+## typecheck-time: the match arm body `Ok(v) -> v + 1` requires
+## `v: Int` to be visible, which is only possible if the loop
+## expression's type is inferred from the `break v` value (the
+## Poll.Ready payload) instead of pinned to Int by a synthesised
+## result-var initializer.
+##
+## See compiler/ruxen_core/src/async_lowering/mod.rs::build_block_on_loop
+## for the lowering shape this fixture pins.
+
+async def make_result() -> Result[Int, Int]
+  Ok(7)
+end
+
+def main
+  let res = block_on(make_result())
+  match res
+    Ok(v)  -> puts "#{v + 1}"
+    Err(e) -> puts "err #{e}"
+  end
+end

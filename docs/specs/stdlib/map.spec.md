@@ -4,7 +4,7 @@
 [docs/requirements/tier1_01_stdlib.md §5.2](../../requirements/tier1_01_stdlib.md).
 
 **Status:** shipped Phase 2 #04-#05; method surface self-hosted in
-`library/std/src/map.rvn` since #06.8 T#15.
+`library/std/src/map.rx` since #06.8 T#15.
 
 `Map` is a separate-chaining hash table over keys that satisfy
 `Hashable + Eq`.  The runtime uses FNV-style hashing; collisions resolve
@@ -89,8 +89,8 @@ on a plain `Map` receiver.  Same for `or_insert_with`.
 | B10       | `hashmap_or_insert_on_non_entry_receiver_rejected` | `stdlib_map_negatives.rs` |
 | B11       | `hashmap_entry_then_or_insert_split_is_rejected` | `stdlib_map_negatives.rs` |
 
-Runtime round-trips covered by E2E fixtures `104_hash_basic.rvn` and
-`610_iter_collect_map.rvn`.
+Runtime round-trips covered by E2E fixtures `104_hash_basic.rx` and
+`610_iter_collect_map.rx`.
 
 ---
 

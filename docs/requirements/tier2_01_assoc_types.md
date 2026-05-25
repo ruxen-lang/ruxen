@@ -12,7 +12,7 @@ An *associated type* is a type-level member of a mixin that each
 `include` directive resolves to a concrete type. The canonical example
 is `Iterator.Item`:
 
-```riven
+```ruxen
 mixin Iterator
   type Item
   def var next -> Option[Self.Item]
@@ -53,7 +53,7 @@ Beyond `Iterator`, the same mechanism is wanted for:
 The tutorial already describes the feature
 (`docs/tutorial/08-mixins.md:27-33`), and the fixture sample program
 in tier-1 doc 01 (stdlib) implicitly depends on it (Array chains that
-compile to `riven_noop_passthrough`).
+compile to `ruxen_noop_passthrough`).
 
 This doc specifies syntax, resolution, projection (the type-level
 operation that turns `Array[Int].Item` into `Int`), type-check rules,
@@ -160,7 +160,7 @@ pure type-check elaboration.
 - **NG1.** GATs. These are doc 05. The surface syntax here is
   `type Name` (no generic parameters on the associated type).
 - **NG2.** `some Mixin` return-position *desugaring* to an associated
-  type. Rust does this internally for `async fn` / RPITIT; Riven ships
+  type. Rust does this internally for `async fn` / RPITIT; Ruxen ships
   this in doc 04.
 - **NG3.** Associated consts. `type Item` only — no `const N: Int` in
   mixins. Can be added later (see overview §Open #3).
@@ -173,7 +173,7 @@ pure type-check elaboration.
 
 ### 4.1 Declaration
 
-```riven
+```ruxen
 mixin Iterator
   type Item
   def var next -> Option[Self.Item]
@@ -203,7 +203,7 @@ Rules:
 
 ### 4.2 Binding via `include`
 
-```riven
+```ruxen
 extension Array[Int]
   include Iterator
   type Item = Int
@@ -227,7 +227,7 @@ Rules:
 - Every associated type declared on the mixin must be bound in the
   type body that includes it, else E-ASSOC-MISSING.
 - A bound like `type IntoIter: Iterator[Item = Self.Item]` must be
-  satisfied by the binding. Riven checks this at include-registration
+  satisfied by the binding. Ruxen checks this at include-registration
   time (§5.3).
 - Defaulted associated types (NG4) would skip the required-to-bind
   rule; not in scope.
@@ -236,7 +236,7 @@ Rules:
 
 Two forms, equivalent:
 
-```riven
+```ruxen
 # Dot form (Ruby-style, matches tutorial 08:31):
 def sum[I: Iterator[Item = Int]](i: &var I) -> Int
   var total = 0
@@ -273,7 +273,7 @@ Rules:
 
 ### 4.4 Equality constraints
 
-```riven
+```ruxen
 def process[I: Iterator[Item = Int]](i: &var I) ...
 def collect_strings[I: Iterator[Item = String]](i: I) -> Array[String] ...
 ```
@@ -475,7 +475,7 @@ New pass `typeck/check_impls.rs`, runs after `TraitResolver::collect_impls`:
 | Impl-completeness pass | new `typeck/check_impls.rs` |
 | Error variants | `diagnostics/` |
 | MIR: projections erased by monomorphization | `mir/lower.rs` post-M2 |
-| Fixture tests | `crates/riven-core/tests/fixtures/assoc_*.rvn` |
+| Fixture tests | `crates/ruxen-core/tests/fixtures/assoc_*.rx` |
 
 ### 6.2 Phasing
 
@@ -506,7 +506,7 @@ to `Int` at the call site).
    project to known types.
 9. Drop-glue per-instantiation: if `type Item = String`, the Array's
    drop pass (per tier-1 doc 04 §7) sees `Ty::String` per
-   instantiation and emits `riven_string_free` per element.
+   instantiation and emits `ruxen_string_free` per element.
 
 **Phase 01c — stdlib Iterator.** Depends on 01a + 01b + doc 01
 phase 1a of tier-1.
@@ -517,7 +517,7 @@ phase 1a of tier-1.
     139-151` just carries a name; this is adequate).
 11. Write `extension` blocks that `include Iterator` on `ArrayIter[T]`,
     `ArrayIntoIter[T]`, `SplitIter`, `Range`, `RangeInclusive` — each
-    with a real `next` that is not `riven_noop_passthrough`. Tier-1
+    with a real `next` that is not `ruxen_noop_passthrough`. Tier-1
     doc 01 §6 lists the concrete type list; each gains an
     `include Iterator` provision.
 12. Add the default methods `map`, `filter`, `take`, `skip`, `enumerate`,
@@ -604,7 +604,7 @@ See §6.2. Summary:
   corner case, a verbose syntax is fine.
 - **OQ-3: early vs late normalization.** Rust has a reputation for
   subtle bugs around "I didn't normalize early enough, so inference
-  missed a constraint." Riven's type-checker is simpler (no
+  missed a constraint." Ruxen's type-checker is simpler (no
   higher-ranked solve in 01a). Recommendation: normalize eagerly in
   01a, and revisit when HRTBs land.
 - **OQ-4: defaulted associated types.** Out of scope for tier 2; will
@@ -669,10 +669,10 @@ See §6.2. Summary:
 
 ### 10.3 Fixture additions
 
-- `tests/fixtures/assoc_basic.rvn` — Iterator on Array[Int].
-- `tests/fixtures/assoc_generic.rvn` — generic function over
+- `tests/fixtures/assoc_basic.rx` — Iterator on Array[Int].
+- `tests/fixtures/assoc_generic.rx` — generic function over
   `I: Iterator[Item = T]`.
-- `tests/fixtures/assoc_bound_chain.rvn` — IntoIterator with
+- `tests/fixtures/assoc_bound_chain.rx` — IntoIterator with
   `type IntoIter: Iterator[Item = Self.Item]`.
-- `tests/fixtures/assoc_error_missing.rvn` — negative: extension missing
+- `tests/fixtures/assoc_error_missing.rx` — negative: extension missing
   associated type.

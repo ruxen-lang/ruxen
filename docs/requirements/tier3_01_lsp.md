@@ -8,20 +8,20 @@ Blocks: doc 03 (test) and doc 04 (doc) benefit from richer LSP for in-editor UX 
 
 ## 1. Summary & motivation
 
-Today's `riven-lsp` implements five capabilities: `textDocument/didOpen`,
+Today's `ruxen-lsp` implements five capabilities: `textDocument/didOpen`,
 `didChange`, `didSave`, `hover`, `definition`, and `semanticTokens/full`.
-A developer opening a Riven file in VSCode sees syntax highlighting
+A developer opening a Ruxen file in VSCode sees syntax highlighting
 (TextMate grammar + semantic tokens), hover-for-types, goto-definition
 *within a single file*, and error squigglies — but **only on save**, with
 no diagnostics during editing. There is no completion, no
 find-references, no rename, no inlay hints, no signature help, no code
-actions, no LSP-driven formatting (though the formatter exists as a CLI),
+actions, no LSP-druxen formatting (though the formatter exists as a CLI),
 no document symbols, and no workspace symbols. This is a functional but
 minimal IDE experience; users who have seen rust-analyzer will find it
 painfully sparse.
 
 This doc specifies the v1 of a full-featured LSP: the capabilities to
-ship, the `riven-ide` API surface they depend on, how incremental
+ship, the `ruxen-ide` API surface they depend on, how incremental
 analysis fits in, and the phasing that spreads the work over roughly
 3-5 weeks.
 
@@ -29,7 +29,7 @@ analysis fits in, and the phasing that spreads the work over roughly
 
 ## 2. Current state
 
-### 2.1 LSP server capabilities (`crates/riven-lsp/src/server.rs`)
+### 2.1 LSP server capabilities (`crates/ruxen-lsp/src/server.rs`)
 
 Declared in `initialize` at `server.rs:40-72`:
 
@@ -69,14 +69,14 @@ The analysis state is a `tokio::sync::RwLock<HashMap<Url, DocumentState>>`
 the source, version, and the last `AnalysisResult` (which may be `nil`
 if no analysis has ever completed).
 
-### 2.3 `riven-ide` semantic surface (`crates/riven-ide/src/`)
+### 2.3 `ruxen-ide` semantic surface (`crates/ruxen-ide/src/`)
 
 Seven modules, all consumed by the LSP:
 
 | Module | Purpose | Key API |
 |---|---|---|
 | `analysis.rs` | Runs the full compiler pipeline against a source string | `pub fn analyze(source: &str) -> AnalysisResult` (`:43-88`) |
-| `diagnostics.rs` | Converts `riven_core::diagnostics::Diagnostic` + `BorrowError` to LSP diagnostics | `collect_diagnostics` (`:63-75`) |
+| `diagnostics.rs` | Converts `ruxen_core::diagnostics::Diagnostic` + `BorrowError` to LSP diagnostics | `collect_diagnostics` (`:63-75`) |
 | `goto_def.rs` | Resolves cursor position to a single Location | `goto_definition` (`:8-39`) |
 | `hover.rs` | Formats `Definition` + inferred type as markdown | `hover_at` (`:13-62`) |
 | `line_index.rs` | Byte offset ↔ LSP UTF-16 position, span → range | `LineIndex::position_of` (`:26-41`) |
@@ -104,10 +104,10 @@ Key limitations:
 
 ### 2.4 Formatter availability
 
-`riven_core::formatter::format(source: &str) -> FormatResult`
-(`crates/riven-core/src/formatter/mod.rs:56-128`) and `format_range`
-(`:131-134`) exist and are already exercised by the `rivenc fmt` CLI
-(`crates/rivenc/src/main.rs:72-159`). Wiring LSP
+`ruxen_core::formatter::format(source: &str) -> FormatResult`
+(`crates/ruxen-core/src/formatter/mod.rs:56-128`) and `format_range`
+(`:131-134`) exist and are already exercised by the `ruxenc fmt` CLI
+(`crates/ruxenc/src/main.rs:72-159`). Wiring LSP
 `textDocument/formatting` to `format(source)` is ~20 lines. `format_range`
 currently forwards to full-document formatting — range support is a
 follow-up but declaring the capability is free.
@@ -115,11 +115,11 @@ follow-up but declaring the capability is free.
 ### 2.5 VSCode client (`editors/vscode/src/extension.ts`)
 
 Standard `vscode-languageclient/node` integration: launches the
-`riven-lsp` binary over stdio, subscribes to `.riven` and `.rvn` files.
-Accepts an override path via `riven.server.path` configuration
+`ruxen-lsp` binary over stdio, subscribes to `.ruxen` and `.rx` files.
+Accepts an override path via `ruxen.server.path` configuration
 (`extension.ts:14-18`). No custom LSP extensions, no custom request
 forwarding, no client-side quick-fix registration. The client is
-capability-driven: adding a server capability auto-surfaces it in the
+capability-druxen: adding a server capability auto-surfaces it in the
 editor.
 
 ### 2.6 Symbol-table → LSP primitives
@@ -147,9 +147,9 @@ basis for `workspace/symbol`.
 1. A full LSP capability set matching what mid-sized languages (Zig's
    ZLS, OCaml's `ocaml-lsp-server`, Go's `gopls` phase 1) offer.
 2. Diagnostics on every edit (debounced, incremental).
-3. Deep integration with the Riven compiler's `HirProgram` +
-   `SymbolTable`: no duplicated name-resolution logic in `riven-ide`.
-4. Incremental-friendliness: the API shape in `riven-ide` should not
+3. Deep integration with the Ruxen compiler's `HirProgram` +
+   `SymbolTable`: no duplicated name-resolution logic in `ruxen-ide`.
+4. Incremental-friendliness: the API shape in `ruxen-ide` should not
    change when doc 06 lands.
 5. UTF-16 correctness for all positions (line_index already supports
    this — must not regress).
@@ -159,7 +159,7 @@ basis for `workspace/symbol`.
 
 - **Multi-file cross-references.** v1 ships same-project-wide
   definitions/references when the file is already open or discoverable
-  via `riven-cli::module_discovery`. True workspace-wide indexing across
+  via `ruxen-cli::module_discovery`. True workspace-wide indexing across
   unopened files is a stretch goal gated on doc 06.
 - **Semantic tokens delta.** v1 emits full-document tokens; delta
   support ships later.
@@ -168,7 +168,7 @@ basis for `workspace/symbol`.
 - **Rename across crates.** Rename is limited to the same file in v1,
   the same project in v2.
 - **Debugger adapter wiring.** Doc 02 covers DAP.
-- **LSP extension methods.** No custom `riven/*` request methods in
+- **LSP extension methods.** No custom `ruxen/*` request methods in
   v1. Only standard LSP.
 
 ---
@@ -178,7 +178,7 @@ basis for `workspace/symbol`.
 ### 4.1 Capabilities to declare in `initialize`
 
 Every capability below has a matching request handler and a matching
-`riven-ide` API.
+`ruxen-ide` API.
 
 | Capability | LSP method(s) | New? |
 |---|---|---|
@@ -200,16 +200,16 @@ Every capability below has a matching request handler and a matching
 
 ### 4.2 Client-side settings (`editors/vscode/package.json` additions)
 
-Extend the existing `riven.*` configuration block:
+Extend the existing `ruxen.*` configuration block:
 
 ```json
-"riven.inlayHints.typeHints": { "type": "boolean", "default": true },
-"riven.inlayHints.parameterHints": { "type": "boolean", "default": true },
-"riven.inlayHints.chainHints": { "type": "boolean", "default": false },
-"riven.diagnostics.onEdit": { "type": "boolean", "default": true },
-"riven.diagnostics.debounceMs": { "type": "number", "default": 200 },
-"riven.completion.autoImport": { "type": "boolean", "default": true },
-"riven.formatting.onSave": { "type": "boolean", "default": false },
+"ruxen.inlayHints.typeHints": { "type": "boolean", "default": true },
+"ruxen.inlayHints.parameterHints": { "type": "boolean", "default": true },
+"ruxen.inlayHints.chainHints": { "type": "boolean", "default": false },
+"ruxen.diagnostics.onEdit": { "type": "boolean", "default": true },
+"ruxen.diagnostics.debounceMs": { "type": "number", "default": 200 },
+"ruxen.completion.autoImport": { "type": "boolean", "default": true },
+"ruxen.formatting.onSave": { "type": "boolean", "default": false },
 ```
 
 These are client-side hints; the server reads them via
@@ -226,68 +226,68 @@ Outstanding requests for stale document versions return
 
 ## 5. Architecture / design
 
-### 5.1 `riven-ide` API extensions
+### 5.1 `ruxen-ide` API extensions
 
-Each new LSP feature maps to one new public function in `riven-ide`.
+Each new LSP feature maps to one new public function in `ruxen-ide`.
 The signatures below are the target — server handlers are thin adapters
 that convert LSP types to these and back.
 
 ```rust
-// crates/riven-ide/src/completion.rs (new)
+// crates/ruxen-ide/src/completion.rs (new)
 pub fn completions(result: &AnalysisResult, position: lsp_types::Position,
                    trigger: Option<char>) -> Vec<CompletionItem>;
 
-// crates/riven-ide/src/signature_help.rs (new)
+// crates/ruxen-ide/src/signature_help.rs (new)
 pub fn signature_help(result: &AnalysisResult, position: lsp_types::Position)
                       -> Option<SignatureHelp>;
 
-// crates/riven-ide/src/document_symbols.rs (new)
+// crates/ruxen-ide/src/document_symbols.rs (new)
 pub fn document_symbols(result: &AnalysisResult) -> Vec<DocumentSymbol>;
 
-// crates/riven-ide/src/workspace_symbols.rs (new)
+// crates/ruxen-ide/src/workspace_symbols.rs (new)
 pub fn workspace_symbols(results: &[(Url, &AnalysisResult)], query: &str)
                          -> Vec<SymbolInformation>;
 
-// crates/riven-ide/src/references.rs (new)
+// crates/ruxen-ide/src/references.rs (new)
 pub fn references(result: &AnalysisResult, position: lsp_types::Position,
                   include_decl: bool) -> Vec<lsp_types::Location>;
 
-// crates/riven-ide/src/rename.rs (new)
+// crates/ruxen-ide/src/rename.rs (new)
 pub fn prepare_rename(result: &AnalysisResult, position: lsp_types::Position)
                       -> Option<lsp_types::Range>;
 pub fn rename(result: &AnalysisResult, position: lsp_types::Position,
               new_name: &str) -> Option<WorkspaceEdit>;
 
-// crates/riven-ide/src/highlight.rs (new)
+// crates/ruxen-ide/src/highlight.rs (new)
 pub fn document_highlights(result: &AnalysisResult, position: lsp_types::Position)
                            -> Vec<DocumentHighlight>;
 
-// crates/riven-ide/src/code_actions.rs (new)
+// crates/ruxen-ide/src/code_actions.rs (new)
 pub fn code_actions(result: &AnalysisResult, range: lsp_types::Range,
                     context: &CodeActionContext) -> Vec<CodeAction>;
 
-// crates/riven-ide/src/inlay_hints.rs (new)
+// crates/ruxen-ide/src/inlay_hints.rs (new)
 pub fn inlay_hints(result: &AnalysisResult, range: lsp_types::Range,
                    cfg: &InlayHintConfig) -> Vec<InlayHint>;
 
-// crates/riven-ide/src/folding.rs (new)
+// crates/ruxen-ide/src/folding.rs (new)
 pub fn folding_ranges(result: &AnalysisResult) -> Vec<FoldingRange>;
 
-// crates/riven-ide/src/format.rs (new) — thin wrapper over riven_core::formatter
+// crates/ruxen-ide/src/format.rs (new) — thin wrapper over ruxen_core::formatter
 pub fn format_document(source: &str) -> Option<Vec<TextEdit>>;
 pub fn format_range(source: &str, range: lsp_types::Range) -> Option<Vec<TextEdit>>;
 
-// crates/riven-ide/src/type_def.rs (new)
+// crates/ruxen-ide/src/type_def.rs (new)
 pub fn type_definition(result: &AnalysisResult, position: lsp_types::Position)
                        -> Option<lsp_types::Location>;
 ```
 
-Adding ~14 new modules is fine — `riven-ide` is currently 7 modules and
+Adding ~14 new modules is fine — `ruxen-ide` is currently 7 modules and
 ~700 lines. Each new module owns a ~60-200 line implementation.
 
 ### 5.2 Reverse-index for references, rename, highlight
 
-The single most important data structure that `riven-ide` lacks today is
+The single most important data structure that `ruxen-ide` lacks today is
 a `DefId -> Vec<Span>` map of *use-sites*. `goto_def.rs` walks forward
 (reference → definition); references/rename/highlight need the opposite.
 
@@ -341,7 +341,7 @@ Completion is the most complex capability. Split into four triggers:
    - Methods defined on the receiver's type (including via mixin includes).
    - Built-in methods from `typeck::infer::builtin_method_type` for
      primitive / stdlib types.
-3. **After `.` for a module path** (Riven uses `.` everywhere — `std.io`,
+3. **After `.` for a module path** (Ruxen uses `.` everywhere — `std.io`,
    `package.utils`).** Offer module contents.
 4. **After `(` or `,` inside a call.** Offer signature help instead
    of completion, but also filter completion by the expected parameter
@@ -383,7 +383,7 @@ Implementation:
 2. `rename(new_name)` — resolve the cursor to a `DefId`, look up
    `UseIndex.uses[def_id]`, return a `WorkspaceEdit` with one `TextEdit`
    per use-site, every edit replacing `Span` → `new_name`.
-3. Validate `new_name` as a Riven identifier before returning the edit
+3. Validate `new_name` as a Ruxen identifier before returning the edit
    (must match `[a-z_][a-zA-Z0-9_]*` for value bindings; `[A-Z][a-zA-Z0-9_]*`
    for types). Return `Err` for an invalid name.
 
@@ -397,7 +397,7 @@ Phase 1 set (low-hanging):
 - **`unused variable`** → prefix with `_`.
 - **`missing import`** — once stdlib lands with a real module surface.
   Scan top-level `use` decls for a matching unimport; offer insertion.
-- **`add missing semicolon`** — not applicable; Riven is
+- **`add missing semicolon`** — not applicable; Ruxen is
   newline-terminated.
 - **`wrap in Some(...)` / `Ok(...)`** when the return type expects one.
 - **`add `&`` / `add &var`** when a borrow-checker error suggests it.
@@ -415,17 +415,17 @@ async fn formatting(params: DocumentFormattingParams) -> Result<Option<Vec<TextE
 async fn range_formatting(params: DocumentRangeFormattingParams) -> Result<Option<Vec<TextEdit>>>
 ```
 
-Both call `riven_core::formatter::format` / `format_range` on the
+Both call `ruxen_core::formatter::format` / `format_range` on the
 in-memory source and produce a single whole-document `TextEdit` that
 replaces the entire range with the formatted output. No diffing — the
 client applies the replacement atomically.
 
 Config options (optional, client-provided via `workspace/configuration`):
-`riven.formatting.tabWidth`, `riven.formatting.useSpaces`. Today the
+`ruxen.formatting.tabWidth`, `ruxen.formatting.useSpaces`. Today the
 formatter has no knobs (`formatter/mod.rs` takes no options); add them
 later.
 
-Cost estimate: ~30 lines in `riven-ide/src/format.rs` + ~20 lines of
+Cost estimate: ~30 lines in `ruxen-ide/src/format.rs` + ~20 lines of
 handler boilerplate. **Very cheap first win.**
 
 ---
@@ -436,25 +436,25 @@ handler boilerplate. **Very cheap first win.**
 
 | Area | Crate | File | Change |
 |---|---|---|---|
-| Server caps | `riven-lsp` | `src/server.rs` | Extend `ServerCapabilities` in `initialize`; add handlers |
-| Debounce | `riven-lsp` | `src/server.rs` | Add `pending_gen: AtomicU64` per doc; use `tokio::spawn + sleep` |
-| IDE API | `riven-ide` | `src/lib.rs` | Export 14 new modules |
-| IDE API | `riven-ide` | `src/completion.rs` *new* | Scope-aware completion |
-| IDE API | `riven-ide` | `src/signature_help.rs` *new* | Active-param tracking |
-| IDE API | `riven-ide` | `src/document_symbols.rs` *new* | Walk HIR top-level items |
-| IDE API | `riven-ide` | `src/workspace_symbols.rs` *new* | Query across `HashMap<Url, AnalysisResult>` |
-| IDE API | `riven-ide` | `src/references.rs` *new* | Uses `UseIndex` |
-| IDE API | `riven-ide` | `src/rename.rs` *new* | Uses `UseIndex` |
-| IDE API | `riven-ide` | `src/highlight.rs` *new* | Same-document references |
-| IDE API | `riven-ide` | `src/code_actions.rs` *new* | Diagnostic-driven |
-| IDE API | `riven-ide` | `src/inlay_hints.rs` *new* | Type hints + param name hints |
-| IDE API | `riven-ide` | `src/folding.rs` *new* | Class/struct/def/`if`/`match` ranges |
-| IDE API | `riven-ide` | `src/format.rs` *new* | Thin wrapper over formatter |
-| IDE API | `riven-ide` | `src/type_def.rs` *new* | "Go to type definition" |
-| Index | `riven-ide` | `src/analysis.rs` | Add `UseIndex`, build during `analyze()` |
-| Node finder | `riven-ide` | `src/node_finder.rs` | Add more node kinds (pattern binding, import path) |
-| Tests | `riven-ide` | `tests/integration.rs` | Add integration tests per feature (see §10) |
-| Client settings | `editors/vscode` | `package.json` | Add `riven.inlayHints.*`, `riven.diagnostics.*` |
+| Server caps | `ruxen-lsp` | `src/server.rs` | Extend `ServerCapabilities` in `initialize`; add handlers |
+| Debounce | `ruxen-lsp` | `src/server.rs` | Add `pending_gen: AtomicU64` per doc; use `tokio::spawn + sleep` |
+| IDE API | `ruxen-ide` | `src/lib.rs` | Export 14 new modules |
+| IDE API | `ruxen-ide` | `src/completion.rs` *new* | Scope-aware completion |
+| IDE API | `ruxen-ide` | `src/signature_help.rs` *new* | Active-param tracking |
+| IDE API | `ruxen-ide` | `src/document_symbols.rs` *new* | Walk HIR top-level items |
+| IDE API | `ruxen-ide` | `src/workspace_symbols.rs` *new* | Query across `HashMap<Url, AnalysisResult>` |
+| IDE API | `ruxen-ide` | `src/references.rs` *new* | Uses `UseIndex` |
+| IDE API | `ruxen-ide` | `src/rename.rs` *new* | Uses `UseIndex` |
+| IDE API | `ruxen-ide` | `src/highlight.rs` *new* | Same-document references |
+| IDE API | `ruxen-ide` | `src/code_actions.rs` *new* | Diagnostic-druxen |
+| IDE API | `ruxen-ide` | `src/inlay_hints.rs` *new* | Type hints + param name hints |
+| IDE API | `ruxen-ide` | `src/folding.rs` *new* | Class/struct/def/`if`/`match` ranges |
+| IDE API | `ruxen-ide` | `src/format.rs` *new* | Thin wrapper over formatter |
+| IDE API | `ruxen-ide` | `src/type_def.rs` *new* | "Go to type definition" |
+| Index | `ruxen-ide` | `src/analysis.rs` | Add `UseIndex`, build during `analyze()` |
+| Node finder | `ruxen-ide` | `src/node_finder.rs` | Add more node kinds (pattern binding, import path) |
+| Tests | `ruxen-ide` | `tests/integration.rs` | Add integration tests per feature (see §10) |
+| Client settings | `editors/vscode` | `package.json` | Add `ruxen.inlayHints.*`, `ruxen.diagnostics.*` |
 | Client init | `editors/vscode` | `src/extension.ts` | Wire `workspace/configuration` response |
 
 ### Per-phase file deltas
@@ -463,23 +463,23 @@ handler boilerplate. **Very cheap first win.**
 - `server.rs:109-123` (`did_change`) rewrite: debounced re-analyze.
 - `server.rs` add `documentFormattingProvider` / `documentRangeFormattingProvider`
   capabilities + handlers.
-- `riven-ide/src/format.rs` new.
+- `ruxen-ide/src/format.rs` new.
 - Tests: `tests/format_integration.rs`, `tests/debounce_integration.rs`.
 
 **Phase 1B (completion, 5-7 days):**
-- `riven-ide/src/completion.rs` new, ~400 lines.
+- `ruxen-ide/src/completion.rs` new, ~400 lines.
 - `server.rs` add completion handler + capability.
 - Tests: a dozen fixtures for `foo.` / `Bar::` / scope-based completion.
 
 **Phase 1C (symbols + references + rename, 5 days):**
-- `riven-ide/src/analysis.rs` add `UseIndex`.
-- `riven-ide/src/document_symbols.rs`, `workspace_symbols.rs`,
+- `ruxen-ide/src/analysis.rs` add `UseIndex`.
+- `ruxen-ide/src/document_symbols.rs`, `workspace_symbols.rs`,
   `references.rs`, `rename.rs`, `highlight.rs`, `type_def.rs` new.
 - `server.rs` add 6 handlers + capabilities.
 - Tests per capability.
 
 **Phase 1D (inlay hints + signature help + folding + code actions, 5 days):**
-- `riven-ide/src/inlay_hints.rs`, `signature_help.rs`, `folding.rs`,
+- `ruxen-ide/src/inlay_hints.rs`, `signature_help.rs`, `folding.rs`,
   `code_actions.rs` new.
 - `server.rs` add 4 handlers + capabilities.
 - Tests per capability.
@@ -544,8 +544,8 @@ Follow doc 06. Re-run the LSP test suite to verify no regressions.
 Workspace symbols over the whole project, rename across files,
 find-references across files. Depends on the compiler gaining
 multi-file compilation beyond the current concat-sources model
-(`riven-cli/src/build.rs` `gather_sources`) and on `riven-ide` gaining
-a workspace manager that watches `src/**.rvn`.
+(`ruxen-cli/src/build.rs` `gather_sources`) and on `ruxen-ide` gaining
+a workspace manager that watches `src/**.rx`.
 
 Total: 18-22 engineer-days for Phases 1A-1D.
 
@@ -562,7 +562,7 @@ Total: 18-22 engineer-days for Phases 1A-1D.
    identifiers? rust-analyzer disables. Recommendation: disable.
 3. **Q3 — Find references without loading every file.** Today references
    only work inside the currently-open document. A workspace-wide index
-   requires opening every `.rvn` file in the project. Plan: compute
+   requires opening every `.rx` file in the project. Plan: compute
    lazily on first `workspace/symbol`, cache per-file; invalidate on
    `didChangeWatchedFiles`. This adds memory pressure; cap at ~10k
    symbols.
@@ -588,15 +588,15 @@ Total: 18-22 engineer-days for Phases 1A-1D.
    used first)? Worth it for Phase 2, not Phase 1. Requires per-user
    state; skip for v1.
 10. **Q5 — Per-client configuration surface stability.** Are the
-    `riven.inlayHints.*` / `riven.diagnostics.debounceMs` names we want
+    `ruxen.inlayHints.*` / `ruxen.diagnostics.debounceMs` names we want
     to lock in? These become a compat surface. Decide before merging.
 
 ---
 
 ## 10. Test matrix
 
-LSP work benefits from end-to-end tests driven by the `tower-lsp` test
-client plus unit tests on `riven-ide` pure functions.
+LSP work benefits from end-to-end tests druxen by the `tower-lsp` test
+client plus unit tests on `ruxen-ide` pure functions.
 
 | Feature | Fixture file | Assertions |
 |---|---|---|
@@ -619,10 +619,10 @@ client plus unit tests on `riven-ide` pure functions.
 | UTF-16 column | `tests/utf16_columns.rs` | Emoji + accented chars correct |
 
 Each test should exercise the full `initialize` → `didOpen` → request →
-response flow rather than calling `riven-ide` functions directly. This
+response flow rather than calling `ruxen-ide` functions directly. This
 catches capability-declaration mistakes.
 
-Additionally, add a "LSP smoke test" that spawns `riven-lsp` as a
+Additionally, add a "LSP smoke test" that spawns `ruxen-lsp` as a
 subprocess, sends a canned `initialize`, then disconnects — verifies
 the binary starts without panicking. Integrate into CI alongside the
 existing `installed_binary` test pattern.

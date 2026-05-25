@@ -1,0 +1,5 @@
+class Foo
+  lib "ruxen_runtime"
+    def self.bar as "ruxen_test_extern_add_one"(x: Int) -> Int
+  end
+end

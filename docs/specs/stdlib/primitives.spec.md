@@ -6,7 +6,7 @@
 **Status:** shipped across Phase 1-2; numeric-literal suffixes since
 Phase 1.
 
-Riven primitives (`Int`, sized `Int8..64` / `UInt8..64`, `ISize`,
+Ruxen primitives (`Int`, sized `Int8..64` / `UInt8..64`, `ISize`,
 `USize`, `Float`, `Float32`, `Float64`, `Bool`, `Char`) have small,
 type-stable method surfaces.  This spec lists the methods that the
 typechecker resolves and the runtime helpers that back them.
@@ -16,7 +16,7 @@ typechecker resolves and the runtime helpers that back them.
 ## B1 — `Int.to_string() -> String`
 
 `Int` exposes `to_string()` returning `String`.  Runtime backed by
-`riven_int_to_string`.
+`ruxen_int_to_string`.
 
 **Given** `let n: Int = 42`
 **When** `n.to_string()` is evaluated
@@ -27,7 +27,7 @@ sizes and `Array.len`).
 
 ## B2 — `Float.to_string() -> String`
 
-`Float` (`= Float64`) exposes `to_string()`; runtime `riven_float_to_string`
+`Float` (`= Float64`) exposes `to_string()`; runtime `ruxen_float_to_string`
 uses `%g` formatting.
 
 **Given** `let f: Float = 3.14`
@@ -38,14 +38,14 @@ for the `:.N` format spec — see [fmt.spec.md](fmt.spec.md) B8.
 
 ## B3 — `Bool.to_string() -> String`
 
-Returns `"true"` or `"false"` via `riven_bool_to_string`.
+Returns `"true"` or `"false"` via `ruxen_bool_to_string`.
 
 ## B4 — `Char` interpolation produces a UTF-8 single-codepoint string
 
 `Char` does not currently expose `to_string()` as a typeck method
 (unlike `Int` / `Float` / `Bool` / `USize`).  Conversion happens via
 string interpolation `"#{c}"` which routes through `Char_fmt` →
-`riven_char_to_string` and handles all four UTF-8 code-unit widths
+`ruxen_char_to_string` and handles all four UTF-8 code-unit widths
 (1-4 bytes).
 
 **Given** `let h: Char = '\u{6C34}'`
@@ -104,9 +104,9 @@ fine (literal narrows on assignment).
 
 | Behaviour | Test fixture / fn                                          | File                                           |
 |-----------|------------------------------------------------------------|------------------------------------------------|
-| B1        | `e2e_02_int_arith.rvn` + many interpolation fixtures       | `tests/release-e2e/cases/`                     |
-| B2        | `e2e_03_float_arith.rvn` + `interpolation_float_precision` | `stdlib_fmt_runtime.rs`                        |
-| B3        | `e2e_04_bool_logic.rvn`                                    | `tests/release-e2e/cases/`                     |
+| B1        | `e2e_02_int_arith.rx` + many interpolation fixtures       | `tests/release-e2e/cases/`                     |
+| B2        | `e2e_03_float_arith.rx` + `interpolation_float_precision` | `stdlib_fmt_runtime.rs`                        |
+| B3        | `e2e_04_bool_logic.rx`                                    | `tests/release-e2e/cases/`                     |
 | B4        | `prim_char_unicode_escapes_round_trip`                     | `stdlib_primitives.rs`                         |
 | B5        | `prim_numeric_suffix_int_widths_round_trip`                | `stdlib_primitives.rs`                         |
 | B6        | `prim_numeric_suffix_int_widths_round_trip` + `prim_float_scientific_notation` | `stdlib_primitives.rs`     |

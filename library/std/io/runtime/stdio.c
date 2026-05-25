@@ -5,7 +5,7 @@
 
 /* ── Printing ──────────────────────────────────────────────────────── */
 
-void riven_puts(const char *s) {
+void ruxen_puts(const char *s) {
     if (s) {
         puts(s);
     } else {
@@ -13,52 +13,52 @@ void riven_puts(const char *s) {
     }
 }
 
-void riven_print(const char *s) {
+void ruxen_print(const char *s) {
     if (s) {
         fputs(s, stdout);
     }
 }
 
-void riven_eputs(const char *s) {
+void ruxen_eputs(const char *s) {
     if (s) {
         fprintf(stderr, "%s\n", s);
     }
 }
 
-void *riven_read_line(void) {
-    return riven_stream_read_line(stdin);
+void *ruxen_read_line(void) {
+    return ruxen_stream_read_line(stdin);
 }
 
-void *riven_stdin(void) {
-    return riven_stream_handle(stdin);
+void *ruxen_stdin(void) {
+    return ruxen_stream_handle(stdin);
 }
 
-void *riven_stdout(void) {
-    return riven_stream_handle(stdout);
+void *ruxen_stdout(void) {
+    return ruxen_stream_handle(stdout);
 }
 
-void *riven_stderr(void) {
-    return riven_stream_handle(stderr);
+void *ruxen_stderr(void) {
+    return ruxen_stream_handle(stderr);
 }
 
-void *riven_stdin_read_line(void *handle) {
-    return riven_stream_read_line(riven_stream_from_handle(handle, stdin));
+void *ruxen_stdin_read_line(void *handle) {
+    return ruxen_stream_read_line(ruxen_stream_from_handle(handle, stdin));
 }
 
-void *riven_stdin_read_to_string(void *handle) {
-    return riven_stream_read_to_string(riven_stream_from_handle(handle, stdin));
+void *ruxen_stdin_read_to_string(void *handle) {
+    return ruxen_stream_read_to_string(ruxen_stream_from_handle(handle, stdin));
 }
 
 /* Phase 2 stdlib (#06.2): `Stdin.lines() -> Vec[Result[String, IoError]]`.
  *
  * v1 simplification of Rust's `BufRead::lines`: read all of stdin to
- * EOF up front, split on '\n', materialise into a `RivenVec*` of
+ * EOF up front, split on '\n', materialise into a `RuxenVec*` of
  * `Result::Ok(line)` elements. If the read itself fails the returned
  * vec contains a single `Result::Err(IoError(strerror))`. Newlines are
  * stripped from each line; a trailing '\n' does NOT produce a final
  * empty element (matches Rust). Empty input → empty vec. */
-void *riven_stdin_lines(void *handle) {
-    FILE *stream = riven_stream_from_handle(handle, stdin);
+void *ruxen_stdin_lines(void *handle) {
+    FILE *stream = ruxen_stream_from_handle(handle, stdin);
 
     size_t cap = 256;
     size_t len = 0;
@@ -66,7 +66,7 @@ void *riven_stdin_lines(void *handle) {
     int ch;
 
     if (!buf) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
 
     while ((ch = fgetc(stream)) != EOF) {
@@ -75,7 +75,7 @@ void *riven_stdin_lines(void *handle) {
             char *next = (char *)realloc(buf, next_cap);
             if (!next) {
                 free(buf);
-                riven_panic("out of memory");
+                ruxen_panic("out of memory");
             }
             buf = next;
             cap = next_cap;
@@ -85,16 +85,16 @@ void *riven_stdin_lines(void *handle) {
 
     /* Capture errno BEFORE any other call that might clobber it. The
      * original `errno` from a failed `fgetc` could be overwritten by
-     * `riven_vec_new` (allocator path) or `clearerr`, so snapshot it
+     * `ruxen_vec_new` (allocator path) or `clearerr`, so snapshot it
      * here. */
     int saved_errno = errno;
 
-    RivenVec *v = riven_vec_new();
+    RuxenVec *v = ruxen_vec_new();
 
     if (ferror(stream)) {
         free(buf);
         clearerr(stream);
-        riven_vec_push(v, (int64_t)riven_io_error_from_errno(saved_errno));
+        ruxen_vec_push(v, (int64_t)ruxen_io_error_from_errno(saved_errno));
         return v;
     }
 
@@ -102,57 +102,57 @@ void *riven_stdin_lines(void *handle) {
     for (size_t i = 0; i < len; i++) {
         if (buf[i] == '\n') {
             size_t line_len = i - line_start;
-            char *line = (char *)riven_alloc(line_len + 1);
+            char *line = (char *)ruxen_alloc(line_len + 1);
             memcpy(line, &buf[line_start], line_len);
             line[line_len] = '\0';
-            riven_vec_push(v, (int64_t)riven_result_ok_value((int64_t)line));
+            ruxen_vec_push(v, (int64_t)ruxen_result_ok_value((int64_t)line));
             line_start = i + 1;
         }
     }
     if (line_start < len) {
         size_t line_len = len - line_start;
-        char *line = (char *)riven_alloc(line_len + 1);
+        char *line = (char *)ruxen_alloc(line_len + 1);
         memcpy(line, &buf[line_start], line_len);
         line[line_len] = '\0';
-        riven_vec_push(v, (int64_t)riven_result_ok_value((int64_t)line));
+        ruxen_vec_push(v, (int64_t)ruxen_result_ok_value((int64_t)line));
     }
 
     free(buf);
     return v;
 }
 
-void *riven_stdout_write_str(void *handle, const char *s) {
-    FILE *stream = riven_stream_from_handle(handle, stdout);
+void *ruxen_stdout_write_str(void *handle, const char *s) {
+    FILE *stream = ruxen_stream_from_handle(handle, stdout);
     const char *text = s ? s : "";
     if (fputs(text, stream) == EOF) {
-        return riven_io_error_from_errno(errno);
+        return ruxen_io_error_from_errno(errno);
     }
-    return riven_result_ok_value(0);
+    return ruxen_result_ok_value(0);
 }
 
-void *riven_stdout_flush(void *handle) {
-    FILE *stream = riven_stream_from_handle(handle, stdout);
+void *ruxen_stdout_flush(void *handle) {
+    FILE *stream = ruxen_stream_from_handle(handle, stdout);
     if (fflush(stream) != 0) {
-        return riven_io_error_from_errno(errno);
+        return ruxen_io_error_from_errno(errno);
     }
-    return riven_result_ok_value(0);
+    return ruxen_result_ok_value(0);
 }
 
-void *riven_stderr_write_str(void *handle, const char *s) {
-    FILE *stream = riven_stream_from_handle(handle, stderr);
+void *ruxen_stderr_write_str(void *handle, const char *s) {
+    FILE *stream = ruxen_stream_from_handle(handle, stderr);
     const char *text = s ? s : "";
     if (fputs(text, stream) == EOF) {
-        return riven_io_error_from_errno(errno);
+        return ruxen_io_error_from_errno(errno);
     }
-    return riven_result_ok_value(0);
+    return ruxen_result_ok_value(0);
 }
 
-void *riven_stderr_flush(void *handle) {
-    FILE *stream = riven_stream_from_handle(handle, stderr);
+void *ruxen_stderr_flush(void *handle) {
+    FILE *stream = ruxen_stream_from_handle(handle, stderr);
     if (fflush(stream) != 0) {
-        return riven_io_error_from_errno(errno);
+        return ruxen_io_error_from_errno(errno);
     }
-    return riven_result_ok_value(0);
+    return ruxen_result_ok_value(0);
 }
 
 /* ── Phase 2 stdlib (#06.1): Stdout / Stderr convenience methods.
@@ -165,30 +165,30 @@ void *riven_stderr_flush(void *handle) {
  * text via a second fputs so the buffer flush behaviour matches what
  * `puts(3)` would do on a stdio stream. */
 
-void riven_stdout_print(void *handle, const char *s) {
-    FILE *stream = riven_stream_from_handle(handle, stdout);
+void ruxen_stdout_print(void *handle, const char *s) {
+    FILE *stream = ruxen_stream_from_handle(handle, stdout);
     if (s) {
         (void)fputs(s, stream);
     }
 }
 
-void riven_stdout_println(void *handle, const char *s) {
-    FILE *stream = riven_stream_from_handle(handle, stdout);
+void ruxen_stdout_println(void *handle, const char *s) {
+    FILE *stream = ruxen_stream_from_handle(handle, stdout);
     if (s) {
         (void)fputs(s, stream);
     }
     (void)fputc('\n', stream);
 }
 
-void riven_stderr_eprint(void *handle, const char *s) {
-    FILE *stream = riven_stream_from_handle(handle, stderr);
+void ruxen_stderr_eprint(void *handle, const char *s) {
+    FILE *stream = ruxen_stream_from_handle(handle, stderr);
     if (s) {
         (void)fputs(s, stream);
     }
 }
 
-void riven_stderr_eprintln(void *handle, const char *s) {
-    FILE *stream = riven_stream_from_handle(handle, stderr);
+void ruxen_stderr_eprintln(void *handle, const char *s) {
+    FILE *stream = ruxen_stream_from_handle(handle, stderr);
     if (s) {
         (void)fputs(s, stream);
     }

@@ -2,7 +2,7 @@
 
 ## Our pledge
 
-We pledge to make participation in the Riven project a harassment-free
+We pledge to make participation in the Ruxen project a harassment-free
 experience for everyone, regardless of age, body size, disability,
 ethnicity, gender identity and expression, level of experience,
 nationality, personal appearance, race, religion, or sexual identity

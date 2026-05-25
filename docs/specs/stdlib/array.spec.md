@@ -4,7 +4,7 @@
 [docs/requirements/tier1_01_stdlib.md §5.1](../../requirements/tier1_01_stdlib.md).
 
 **Status:** shipped Phase 2 #04; method surface self-hosted in
-`library/std/src/array.rvn` since #06.8 T#14.
+`library/std/src/array.rx` since #06.8 T#14.
 
 `Array[T]` is a growable contiguous heap array with `O(1)` amortised
 push/pop and `O(1)` index access.  The C runtime stores
@@ -74,7 +74,7 @@ Pairwise comparison of two arrays at corresponding indices.
 | B9        | `vec_equality_yields_bool`                             | `stdlib_array_negatives.rs`  |
 
 Runtime round-trips covered by E2E fixtures
-`tests/release-e2e/cases/107_array_push_pop.rvn` and the `60x_iter_*`
+`tests/release-e2e/cases/107_array_push_pop.rx` and the `60x_iter_*`
 series.
 
 ---

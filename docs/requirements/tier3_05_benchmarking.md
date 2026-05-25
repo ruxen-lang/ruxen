@@ -1,4 +1,4 @@
-# Tier 3.05 — Benchmarking (`bench` in-body directive + `riven bench`)
+# Tier 3.05 — Benchmarking (`bench` in-body directive + `ruxen bench`)
 
 Status: draft
 Depends on: doc 03 (test framework) — shares 90% of the harness
@@ -8,11 +8,11 @@ Blocks: regression tracking of compiler performance (as a special application)
 
 ## 1. Summary & motivation
 
-Riven has no first-class benchmarking surface. Users cannot write
-`def measure_x; bench; ... end` and run `riven bench` to get
+Ruxen has no first-class benchmarking surface. Users cannot write
+`def measure_x; bench; ... end` and run `ruxen bench` to get
 statistical measurements. `criterion` is used for Rust-level
-benchmarks inside the compiler (`rivenc/benches/cache_bench.rs` + the
-`criterion = "0.5"` dev-dep in `rivenc/Cargo.toml:22`), but that
+benchmarks inside the compiler (`ruxenc/benches/cache_bench.rs` + the
+`criterion = "0.5"` dev-dep in `ruxenc/Cargo.toml:22`), but that
 benchmarks the compiler, not user programs.
 
 This doc specifies v1 benchmarking: attribute, subcommand, harness,
@@ -31,9 +31,9 @@ by the parser. A `bench` directive on its own line inside a `def` body
 is currently treated as a regular identifier reference and fails
 resolution.
 
-### 2.2 No `riven bench` subcommand
+### 2.2 No `ruxen bench` subcommand
 
-`crates/riven-cli/src/cli.rs:25-114` has no `Bench` variant.
+`crates/ruxen-cli/src/cli.rs:25-114` has no `Bench` variant.
 
 ### 2.3 No harness
 
@@ -42,13 +42,13 @@ measures per-iteration time, warmup, outliers, stddev, or regression.
 
 ### 2.4 `criterion` is a known-good pattern to imitate
 
-`rivenc/benches/cache_bench.rs:10` shows the compile-time usage:
+`ruxenc/benches/cache_bench.rs:10` shows the compile-time usage:
 
 ```rust
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 ```
 
-We can't pull `criterion` *into* user Riven programs (it's a Rust
+We can't pull `criterion` *into* user Ruxen programs (it's a Rust
 crate), but we can copy its statistical approach: warmup, iteration
 count auto-scaling, mean + stddev, outlier detection via MAD
 (median absolute deviation).
@@ -59,13 +59,13 @@ count auto-scaling, mean + stddev, outlier detection via MAD
 
 ### Goals
 
-1. Write a benchmark in Riven with a `bench` directive inside a `def` body.
-2. `riven bench` builds and runs all benchmarks, reports wall time +
+1. Write a benchmark in Ruxen with a `bench` directive inside a `def` body.
+2. `ruxen bench` builds and runs all benchmarks, reports wall time +
    stddev + throughput.
 3. Auto-scaling iteration count so that even fast benchmarks produce
    meaningful statistics.
 4. `black_box` primitive so the optimizer can't eliminate the work.
-5. Filter by name (same semantics as `riven test`).
+5. Filter by name (same semantics as `ruxen test`).
 6. JSON output for CI and regression tools.
 7. Optional baseline comparison: save a result, compare a later run.
 
@@ -123,17 +123,17 @@ end
 ### 4.2 CLI
 
 ```
-riven bench                          # build + run all benches
-riven bench --filter="foo"
-riven bench --format=pretty|json|csv
-riven bench --save-baseline=master
-riven bench --baseline=master        # compare to saved baseline
-riven bench --list                   # just enumerate benches
-riven bench --sample-size=500
-riven bench --warmup=50
-riven bench --release                # always on for bench; explicit for clarity
-riven bench --no-run                 # build but don't execute
-riven bench --bin foo                # limit to a specific binary
+ruxen bench                          # build + run all benches
+ruxen bench --filter="foo"
+ruxen bench --format=pretty|json|csv
+ruxen bench --save-baseline=master
+ruxen bench --baseline=master        # compare to saved baseline
+ruxen bench --list                   # just enumerate benches
+ruxen bench --sample-size=500
+ruxen bench --warmup=50
+ruxen bench --release                # always on for bench; explicit for clarity
+ruxen bench --no-run                 # build but don't execute
+ruxen bench --bin foo                # limit to a specific binary
 ```
 
 ### 4.3 `Bencher` type and `black_box`
@@ -188,11 +188,11 @@ JSON format: one record per benchmark:
 
 ```
 # On master:
-$ riven bench --save-baseline=master
+$ ruxen bench --save-baseline=master
 # ... runs benches, saves results to target/bench/baselines/master.json
 
 # After change:
-$ riven bench --baseline=master
+$ ruxen bench --baseline=master
 bench tests.vec.alloc_1000     ...   1.38 µs ± 0.04 µs  [n=500]  +11.2% (regressed)
 bench tests.hash.insert_1000   ...  12.12 µs ± 0.20 µs  [n=500]   -1.5% (noise)
 bench tests.sort.quicksort     ... 142.01 µs ± 3.00 µs  [n=200]  -0.3% (unchanged)
@@ -212,8 +212,8 @@ Every §5.x section in doc 03 applies here with renaming:
 - Directive-pipeline work from doc 03 Phase 1 is shared. Both `test`
   and `bench` directives are recognized via the same body-head pass on
   `FuncDef`.
-- Discovery walks the same tree (`src/**.rvn` + `benches/**.rvn` ++
-  `tests/**.rvn`; see §5.3 for where benches live).
+- Discovery walks the same tree (`src/**.rx` + `benches/**.rx` ++
+  `tests/**.rx`; see §5.3 for where benches live).
 - Harness generation is the same pattern: collect, synth a `main`,
   link.
 - Filter/list/format semantics match.
@@ -241,17 +241,17 @@ Parent collects and aggregates.
 
 Three options:
 
-- **`benches/**.rvn`** — dedicated directory (Rust/Cargo convention).
-- **Inline with `bench` directive** in `src/**.rvn`.
-- **Inline with `bench` directive in `tests/**.rvn`** — co-locate perf regression
+- **`benches/**.rx`** — dedicated directory (Rust/Cargo convention).
+- **Inline with `bench` directive** in `src/**.rx`.
+- **Inline with `bench` directive in `tests/**.rx`** — co-locate perf regression
   tests with correctness tests.
 
-Support all three. `riven bench` picks up benches anywhere in `src/`,
+Support all three. `ruxen bench` picks up benches anywhere in `src/`,
 `tests/`, or `benches/`. Paths:
 
-- `src/foo.rvn` with `bench` directive in `def b` → `foo.b`
-- `tests/foo.rvn` with `bench` directive in `def b` → `tests.foo.b`
-- `benches/foo.rvn` with `bench` directive in `def b` → `benches.foo.b`
+- `src/foo.rx` with `bench` directive in `def b` → `foo.b`
+- `tests/foo.rx` with `bench` directive in `def b` → `tests.foo.b`
+- `benches/foo.rx` with `bench` directive in `def b` → `benches.foo.b`
 
 ### 5.4 Timing measurement
 
@@ -259,7 +259,7 @@ Use the clock primitive exposed by tier-1 stdlib:
 `std.time.Instant.now() -> Instant`, `Instant.elapsed() -> Duration`,
 `Duration.as_nanos() -> UInt64`. If stdlib hasn't landed, ship a
 minimal C-level wrapper in the runtime for the bench harness only:
-`riven_bench_now_ns() -> UInt64` using `clock_gettime(CLOCK_MONOTONIC)`.
+`ruxen_bench_now_ns() -> UInt64` using `clock_gettime(CLOCK_MONOTONIC)`.
 
 ### 5.5 `black_box` intrinsic
 
@@ -321,17 +321,17 @@ Rust behavior).
 | Phase | File | Change |
 |---|---|---|
 | 1 | *shared with doc 03* | Directive pipeline for `bench` — same change as the `test` directive; if doc 03 lands first, this is a one-line directive-name addition |
-| 2 | `crates/riven-cli/src/cli.rs:25-114` | Add `Bench` command |
-| 2 | `crates/riven-cli/src/bench.rs` *new* | Parallel to `test.rs`; ~300 lines |
-| 2 | `crates/riven-cli/src/main.rs` | Wire `Command::Bench` |
-| 2 | `crates/riven-cli/src/test_harness.rs` *new* (refactor) | Shared discovery + build logic between test and bench |
-| 3 | `stdlib/test/bench.rvn` *new* | `Bencher` class + `iter` method |
-| 3 | `crates/riven-core/src/resolve/mod.rs` | Register `black_box` builtin |
-| 3 | `crates/riven-core/src/codegen/llvm/emit.rs` | Emit volatile asm for `black_box` calls |
-| 3 | `crates/riven-core/src/codegen/cranelift.rs` | Same for Cranelift |
-| 4 | `crates/riven-core/runtime/runtime.c` | Add `riven_bench_now_ns` if tier-1 stdlib hasn't shipped |
-| 4 | `crates/riven-cli/src/bench.rs` | Sampling + stats + comparison |
-| 5 | Docs, scaffold, distribution | `riven new` adds a `benches/` example |
+| 2 | `crates/ruxen-cli/src/cli.rs:25-114` | Add `Bench` command |
+| 2 | `crates/ruxen-cli/src/bench.rs` *new* | Parallel to `test.rs`; ~300 lines |
+| 2 | `crates/ruxen-cli/src/main.rs` | Wire `Command::Bench` |
+| 2 | `crates/ruxen-cli/src/test_harness.rs` *new* (refactor) | Shared discovery + build logic between test and bench |
+| 3 | `stdlib/test/bench.rx` *new* | `Bencher` class + `iter` method |
+| 3 | `crates/ruxen-core/src/resolve/mod.rs` | Register `black_box` builtin |
+| 3 | `crates/ruxen-core/src/codegen/llvm/emit.rs` | Emit volatile asm for `black_box` calls |
+| 3 | `crates/ruxen-core/src/codegen/cranelift.rs` | Same for Cranelift |
+| 4 | `crates/ruxen-core/runtime/runtime.c` | Add `ruxen_bench_now_ns` if tier-1 stdlib hasn't shipped |
+| 4 | `crates/ruxen-cli/src/bench.rs` | Sampling + stats + comparison |
+| 5 | Docs, scaffold, distribution | `ruxen new` adds a `benches/` example |
 
 ### Phase breakdown
 
@@ -341,7 +341,7 @@ names. If not: do the same AST/HIR work doc 03 describes for the
 `test` directive at the same time as the `bench` directive.
 
 **Phase 2 — CLI + harness (3 days).**
-- Day 1: `riven bench` subcommand; discovery walks `benches/**.rvn`
+- Day 1: `ruxen bench` subcommand; discovery walks `benches/**.rx`
   in addition to the test paths.
 - Day 2: harness gen (fork-per-bench); stdin/stdout JSON protocol.
 - Day 3: filter, list, --release default, --no-run.
@@ -363,21 +363,21 @@ Total: ~7 engineer-days after doc 03.
 ## 7. Interactions with other tier-3 items
 
 - **Doc 03 (test).** Shared directive pipeline and harness. Extract
-  shared code into `crates/riven-cli/src/test_harness.rs`.
+  shared code into `crates/ruxen-cli/src/test_harness.rs`.
 - **Doc 07 (MIR opts).** `black_box` correctness must be preserved
   through any MIR optimization. Any new opt pass must not see through
   `black_box`. Write an integration test.
 - **Doc 06 (incremental).** Cache bench objects same as test objects
   with `flags="bench"`.
-- **Doc 02 (debugger).** `riven bench --debug` not meaningful (debug
+- **Doc 02 (debugger).** `ruxen bench --debug` not meaningful (debug
   builds are slow by design). Document this and skip.
-- **Doc 04 (doc generator).** `rivendoc` can link to bench results
+- **Doc 04 (doc generator).** `ruxendoc` can link to bench results
   per-function. v2.
 
 ### Tier-1 dependencies
 
 - **Tier-1 doc 01 (stdlib).** `std.time.Instant` is the clock source.
-  Until it exists, `riven_bench_now_ns` ships as a bench-only runtime
+  Until it exists, `ruxen_bench_now_ns` ships as a bench-only runtime
   helper.
 - **Tier-1 doc 04 (Drop).** Leaking benches are fine for fork-per-bench
   runs (child exits, OS reclaims) but allocate-hot benches will skew
@@ -440,7 +440,7 @@ Total: ~7 engineer-days after doc 03.
     Author writes a `throughput "1000 elem"` directive to get
     Melem/s reporting? Or compute from a `ctx.throughput(Throughput.Elements(1000))`
     call inside the bench body? Recommend the latter (matches
-    criterion; stays on the Riven side, not the directive side).
+    criterion; stays on the Ruxen side, not the directive side).
 
 ---
 
@@ -450,9 +450,9 @@ Total: ~7 engineer-days after doc 03.
 |---|---|
 | `def b(ctx: &var Bencher); bench; ... end` compiles | No parse/type error |
 | `def b; bench; ... end` without ctx param | Compile error: benches need `&var Bencher` param |
-| `riven bench` runs all benches | Exit 0, output lists them |
-| `riven bench --filter=foo` | Only matching benches run |
-| `riven bench --list` | No execution, just names |
+| `ruxen bench` runs all benches | Exit 0, output lists them |
+| `ruxen bench --filter=foo` | Only matching benches run |
+| `ruxen bench --list` | No execution, just names |
 | Baseline save/load round-trip | Comparison shows 0% diff |
 | `black_box(expr)` preserved through MIR/LLVM | Bench scales with input, not folded away |
 | Bench with `ctx.iter do ... end` | Measurements produced |

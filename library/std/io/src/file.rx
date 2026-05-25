@@ -1,0 +1,59 @@
+## std::io::File — owning wrapper around a POSIX fd. The class-body
+## lib block carries the static-ctor surface (`File.open` /
+## `.create` / `.append` / `.open_options`) and the instance method
+## surface (`read` / `write` / `seek` / `flush` / `close` / `drop`).
+## Phase E-rest 1 of #06.95 moved these from `runtime_table` arms —
+## the FFI alias map populated from `as "..."` clauses rewrites the
+## MIR-mangled callee (`File_open` → `ruxen_file_open`) BEFORE
+## codegen consults runtime_table.
+##
+## `File.metadata -> Result[Metadata, IoError]` stays on the
+## runtime_table dispatch path because `Metadata` is declared in
+## `library/std/fs/src/lib.rx` which loads AFTER io.rx — the
+## forward reference would fail to resolve here. Migrating that one
+## method needs Metadata to land in io.rx (or fs to load earlier).
+class File
+  lib "runtime/file.c"
+    def self.open as "ruxen_file_open"(path: &String) -> Result[File, IoError]
+    def self.create as "ruxen_file_create"(path: &String) -> Result[File, IoError]
+    def self.append as "ruxen_file_append"(path: &String) -> Result[File, IoError]
+    def self.open_options as "ruxen_file_open_options"(path: &String, opts: &OpenOptions) -> Result[File, IoError]
+    def read as "ruxen_file_read"(self, buf: &var Array[Int]) -> Result[Int, IoError]
+    def read_to_string as "ruxen_file_read_to_string"(self) -> Result[String, IoError]
+    def read_all as "ruxen_file_read_all"(self) -> Result[Array[Int], IoError]
+    def write as "ruxen_file_write"(self, bytes: &Array[Int]) -> Result[Int, IoError]
+    def write_all as "ruxen_file_write_all"(self, bytes: &Array[Int]) -> Result[(), IoError]
+    def write_str as "ruxen_file_write_str"(self, s: &String) -> Result[(), IoError]
+    def flush as "ruxen_file_flush"(self) -> Result[(), IoError]
+    def seek as "ruxen_file_seek"(self, from: SeekFrom) -> Result[Int, IoError]
+    def metadata as "ruxen_file_metadata"(self) -> Result[Metadata, IoError]
+    def close as "ruxen_file_close"(self) -> Result[(), IoError]
+    def drop as "ruxen_file_drop"(self) -> ()
+  end
+end
+
+## BufReader / BufWriter classes moved to `library/std/bufio/src/lib.rx`
+## in Phase E.E of #06.95 — reshaped as `module BufReader { class File;
+## class Tcp }` / `module BufWriter { class File; class Tcp }` to
+## eliminate the MIR inner-arg-type sniff. The bufio package depends
+## on both io (for File / IoError) and net (for TcpStream), so its
+## .rx loads after both in BOOTSTRAP_FILES.
+
+## std::io kernel-level free fns — `puts` / `print` / `println` /
+## `eputs` / `eprintln` / `read_line` / `stdin` / `stdout` / `stderr`
+## stay GLOBAL like Ruby's Kernel#puts. Class-prefixing IO operations
+## (`IO.puts(...)`) is non-idiomatic for a Ruby-flavored language and
+## was rolled back in Phase C — only operation namespaces that don't
+## have a Ruby-Kernel counterpart get class-prefixed (FS, Env, Path,
+## Rand, Process, Time, Thread, Signal).
+lib "runtime/stdio.c"
+  def puts as "ruxen_puts"(value: &String) -> ()
+  def eputs as "ruxen_eputs"(value: &String) -> ()
+  def print as "ruxen_print"(value: &String) -> ()
+  def println as "ruxen_puts"(value: &String) -> ()
+  def eprintln as "ruxen_eputs"(value: &String) -> ()
+  def read_line as "ruxen_read_line"() -> Result[String, IoError]
+  def stdin as "ruxen_stdin"() -> Stdin
+  def stdout as "ruxen_stdout"() -> Stdout
+  def stderr as "ruxen_stderr"() -> Stderr
+end

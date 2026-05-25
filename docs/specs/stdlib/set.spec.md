@@ -4,7 +4,7 @@
 [docs/requirements/tier1_01_stdlib.md §5.3](../../requirements/tier1_01_stdlib.md).
 
 **Status:** shipped Phase 2 #04-#05; method surface self-hosted in
-`library/std/src/set.rvn` since #06.8 T#16.
+`library/std/src/set.rx` since #06.8 T#16.
 
 `Set[T]` is a thin layer over `Map[T, ()]` — same hashing
 semantics, same `Hashable` bound on `T`.
@@ -62,8 +62,8 @@ hashable)
 | B6        | `hashset_equality_yields_bool`                | `stdlib_set.rs`           |
 | B7        | `hashset_with_non_hash_element_emits_e0615` + `hashset_of_hashmap_emits_e0615` | `stdlib_map_negatives.rs` |
 
-Runtime round-trips covered by E2E fixture `105_set_basic.rvn` and
-`611_iter_collect_set.rvn`.
+Runtime round-trips covered by E2E fixture `105_set_basic.rx` and
+`611_iter_collect_set.rx`.
 
 ---
 

@@ -10,14 +10,14 @@
  *     list. Each entry holds (future_ptr, classinfo_ptr — implied
  *     by future_ptr's offset-0 header, done_flag, result_slot,
  *     handle_ptr). The handle is a separately heap-allocated
- *     `RivenTaskHandle` so the caller can hold a pointer to it
+ *     `RuxenTaskHandle` so the caller can hold a pointer to it
  *     across the task's lifetime; the queue entry holds the same
  *     pointer so `pump` can set the done bit + write the result.
  *
- *   - `riven_executor_spawn(future_ptr)` enqueues a new task and
+ *   - `ruxen_executor_spawn(future_ptr)` enqueues a new task and
  *     returns the handle pointer. Does NOT poll the future.
  *
- *   - `riven_executor_pump_tasks()` walks the queue ONCE. For each
+ *   - `ruxen_executor_pump_tasks()` walks the queue ONCE. For each
  *     live task: calls `Future_dynamic_poll(self, ctx)` (the
  *     compiler-synthesised dispatch helper for the `Future` mixin).
  *     If Ready, writes the payload into the handle's result slot
@@ -25,12 +25,12 @@
  *     persists for the caller's `task_join`. If Pending, leaves
  *     the task in the queue.
  *
- *   - `riven_executor_queue_nonempty()` — fast bool check used by
+ *   - `ruxen_executor_queue_nonempty()` — fast bool check used by
  *     the AST-level block_on rewriter to skip the pump call when
  *     no tasks were ever spawned (zero overhead on the existing
  *     2A/2B/3 / 4 / 770 fixtures that never spawn).
  *
- *   - On `Context.drop` (end of block_on), `riven_executor_drain_remaining`
+ *   - On `Context.drop` (end of block_on), `ruxen_executor_drain_remaining`
  *     fires `def drop` on every still-queued future per spec B10.
  *     v1 drop discipline: leak the future heap blocks if no `def drop`
  *     was registered, mirror the same loose contract `Thread.spawn`'s
@@ -56,14 +56,14 @@
  * either is correct). Removing a completed task during the walk
  * uses the linked-list unlink pattern to keep the walk valid.
  *
- * ABI summary (all entries take/return i64 at the Riven call site):
- *   riven_executor_spawn(future_ptr: i64) -> i64   (handle pointer)
- *   riven_executor_pump_tasks() -> i64             (count of completions this pass)
- *   riven_executor_queue_nonempty() -> i64         (1 if any live task)
- *   riven_executor_drain_remaining() -> ()
- *   riven_task_handle_is_done(handle: i64) -> i64
- *   riven_task_handle_result(handle: i64) -> i64
- *   riven_task_handle_drop(handle: i64) -> ()
+ * ABI summary (all entries take/return i64 at the Ruxen call site):
+ *   ruxen_executor_spawn(future_ptr: i64) -> i64   (handle pointer)
+ *   ruxen_executor_pump_tasks() -> i64             (count of completions this pass)
+ *   ruxen_executor_queue_nonempty() -> i64         (1 if any live task)
+ *   ruxen_executor_drain_remaining() -> ()
+ *   ruxen_task_handle_is_done(handle: i64) -> i64
+ *   ruxen_task_handle_result(handle: i64) -> i64
+ *   ruxen_task_handle_drop(handle: i64) -> ()
  */
 
 #include <stdint.h>
@@ -76,7 +76,7 @@
  * when any class includes `Future dispatch runtime`). Signature is
  * fixed at the i64 ABI: takes the future's heap pointer and the
  * context's heap pointer, returns the poll result as the Poll[T]
- * tagged enum value at the i64 ABI (Riven tagged enums fit in i64
+ * tagged enum value at the i64 ABI (Ruxen tagged enums fit in i64
  * for v1). */
 int64_t Future_dynamic_poll(int64_t self, int64_t ctx);
 
@@ -84,40 +84,40 @@ int64_t Future_dynamic_poll(int64_t self, int64_t ctx);
  * needs a Context pointer to pass into each Future_dynamic_poll;
  * the AST-level block_on rewriter already constructs one per
  * block_on call, and we reuse it via thread-local storage. */
-void *riven_executor_make_context(void);
-void *riven_executor_make_task_context(void *task_entry);
-void riven_executor_context_drop(void *cx);
+void *ruxen_executor_make_context(void);
+void *ruxen_executor_make_task_context(void *task_entry);
+void ruxen_executor_context_drop(void *cx);
 
 /* Poll[T] heap layout (pinned by `poll_tag_layout_stability` in
- * compiler/riven_core/tests/async_surface.rs; emit lives in
- * compiler/riven_core/src/codegen/cranelift/emit.rs SetTag/GetTag/
+ * compiler/ruxen_core/tests/async_surface.rs; emit lives in
+ * compiler/ruxen_core/src/codegen/cranelift/emit.rs SetTag/GetTag/
  * GetPayload):
  *   offset 0: tag (i32, slot is 8-aligned)
  *     Ready = 0
  *     Pending = 1
  *   offset 8: payload (i64; for Ready arms only)
- * Riven enums with payloads are heap-allocated as a 16-byte block.
+ * Ruxen enums with payloads are heap-allocated as a 16-byte block.
  * Future_dynamic_poll returns the heap pointer as i64 at the FFI
  * boundary. We don't free the Poll block here — accepting a
  * 16-byte leak per Pending poll for v1 (the Ready arm's payload
  * gets stored into the TaskHandle and the Poll header block stays
  * leaked too; total leak is bounded by total polls, not total
  * lifetime). Tracked. */
-#define RIVEN_POLL_READY_TAG   0
-#define RIVEN_POLL_PENDING_TAG 1
+#define RUXEN_POLL_READY_TAG   0
+#define RUXEN_POLL_PENDING_TAG 1
 
 /* ---------------------------------------------------------------------
- * Task handle (Riven-visible). Caller-held; outlives the queue entry.
+ * Task handle (Ruxen-visible). Caller-held; outlives the queue entry.
  *
- * Layout MUST match the C-side ABI assumed by the Riven-level
- * `class TaskHandle[T]` lib decls in library/std/future/src/lib.rvn.
- * Keep this struct private to scheduler.c — Riven sees only the
+ * Layout MUST match the C-side ABI assumed by the Ruxen-level
+ * `class TaskHandle[T]` lib decls in library/std/future/src/lib.rx.
+ * Keep this struct private to scheduler.c — Ruxen sees only the
  * opaque pointer. */
-typedef struct RivenTaskHandle {
+typedef struct RuxenTaskHandle {
     int64_t done;        /* 0 = pending, 1 = ready */
     int64_t result;      /* valid only when done == 1 */
     int64_t refcount;    /* 2 on spawn (queue + caller), drops to 0 frees */
-} RivenTaskHandle;
+} RuxenTaskHandle;
 
 /* ---------------------------------------------------------------------
  * Queue entry. Lives on the heap. Linked-list intrusive next pointer.
@@ -125,18 +125,18 @@ typedef struct RivenTaskHandle {
  * `future_ptr` is the heap pointer to the future's instance — the
  * class_info_ptr lives at *(void**)future_ptr per mixin_vtables
  * §B2. Future_dynamic_poll reads it. */
-typedef struct RivenTaskEntry {
+typedef struct RuxenTaskEntry {
     int64_t future_ptr;
-    RivenTaskHandle *handle;
+    RuxenTaskHandle *handle;
     void *ctx;
     int ready;
-    struct RivenTaskEntry *next;
-} RivenTaskEntry;
+    struct RuxenTaskEntry *next;
+} RuxenTaskEntry;
 
 /* Per-thread queue head. Each task entry owns its own Context so
  * `cx.waker()` can be stashed by the future and still point back to
  * the same task after the scheduler polls other entries. */
-static _Thread_local RivenTaskEntry *t_queue_head = NULL;
+static _Thread_local RuxenTaskEntry *t_queue_head = NULL;
 static _Thread_local int t_pump_in_progress = 0;
 static _Thread_local int t_wake_all_pending = 0;
 
@@ -144,39 +144,39 @@ static _Thread_local int t_wake_all_pending = 0;
  * Spawn.
  *
  * Allocates the queue entry + handle, pushes onto the tail of the
- * queue. Returns the handle pointer to Riven as an i64. The future
+ * queue. Returns the handle pointer to Ruxen as an i64. The future
  * pointer's lifetime is now owned by the queue — the caller's local
  * binding for the future must fall out of scope (per spec §B1 —
  * Task.spawn moves the future into the queue). */
-int64_t riven_executor_spawn(int64_t future_ptr) {
+int64_t ruxen_executor_spawn(int64_t future_ptr) {
     if (future_ptr == 0) {
-        riven_panic("riven_executor_spawn: null future");
+        ruxen_panic("ruxen_executor_spawn: null future");
         return 0;
     }
-    RivenTaskHandle *h = (RivenTaskHandle *)malloc(sizeof(RivenTaskHandle));
+    RuxenTaskHandle *h = (RuxenTaskHandle *)malloc(sizeof(RuxenTaskHandle));
     if (!h) {
-        riven_panic("riven_executor_spawn: malloc(handle) failed");
+        ruxen_panic("ruxen_executor_spawn: malloc(handle) failed");
         return 0;
     }
     h->done = 0;
     h->result = 0;
     h->refcount = 2; /* queue + caller */
 
-    RivenTaskEntry *e = (RivenTaskEntry *)malloc(sizeof(RivenTaskEntry));
+    RuxenTaskEntry *e = (RuxenTaskEntry *)malloc(sizeof(RuxenTaskEntry));
     if (!e) {
         free(h);
-        riven_panic("riven_executor_spawn: malloc(entry) failed");
+        ruxen_panic("ruxen_executor_spawn: malloc(entry) failed");
         return 0;
     }
     e->future_ptr = future_ptr;
     e->handle = h;
     e->ready = 1; /* First poll after spawn must happen without a wake. */
     e->next = NULL;
-    e->ctx = riven_executor_make_task_context((void *)e);
+    e->ctx = ruxen_executor_make_task_context((void *)e);
     if (!e->ctx) {
         free(e);
         free(h);
-        riven_panic("riven_executor_spawn: make task context failed");
+        ruxen_panic("ruxen_executor_spawn: make task context failed");
         return 0;
     }
 
@@ -186,7 +186,7 @@ int64_t riven_executor_spawn(int64_t future_ptr) {
     if (!t_queue_head) {
         t_queue_head = e;
     } else {
-        RivenTaskEntry *cur = t_queue_head;
+        RuxenTaskEntry *cur = t_queue_head;
         while (cur->next) {
             cur = cur->next;
         }
@@ -198,16 +198,16 @@ int64_t riven_executor_spawn(int64_t future_ptr) {
 /* ---------------------------------------------------------------------
  * Queue-nonempty fast check. Used by the AST-level block_on rewriter
  * to skip the pump call when no tasks ever spawned. Returns i64 1/0
- * to match the Riven Bool ABI. */
-int64_t riven_executor_queue_nonempty(void) {
+ * to match the Ruxen Bool ABI. */
+int64_t ruxen_executor_queue_nonempty(void) {
     return t_queue_head ? 1 : 0;
 }
 
-int64_t riven_executor_ready_nonempty(void) {
+int64_t ruxen_executor_ready_nonempty(void) {
     if (t_wake_all_pending && t_queue_head) {
         return 1;
     }
-    RivenTaskEntry *cur = t_queue_head;
+    RuxenTaskEntry *cur = t_queue_head;
     while (cur) {
         if (cur->ready) {
             return 1;
@@ -217,21 +217,21 @@ int64_t riven_executor_ready_nonempty(void) {
     return 0;
 }
 
-void riven_executor_wake_task(void *task_entry) {
+void ruxen_executor_wake_task(void *task_entry) {
     if (!task_entry) {
         return;
     }
-    ((RivenTaskEntry *)task_entry)->ready = 1;
+    ((RuxenTaskEntry *)task_entry)->ready = 1;
 }
 
-void riven_executor_wake_all_tasks(void) {
+void ruxen_executor_wake_all_tasks(void) {
     t_wake_all_pending = 1;
 }
 
 /* ---------------------------------------------------------------------
- * Decode a Poll[T] return value. Riven tagged enums with payloads
+ * Decode a Poll[T] return value. Ruxen tagged enums with payloads
  * are returned as heap pointers to {tag: i64, payload: i64}. We do
- * NOT free the pointer here — Riven's existing drop discipline on
+ * NOT free the pointer here — Ruxen's existing drop discipline on
  * tagged enums handles that. We read tag + payload then leak our
  * local view (the actual heap block will be GC'd or drop-elaborated
  * by the surrounding match arm in the inline poll loop — but in the
@@ -239,7 +239,7 @@ void riven_executor_wake_all_tasks(void) {
  * an internal artifact we discard). For v1, accepting the leak of
  * one 16-byte block per Pending poll is the right ship — fixing it
  * properly requires either a dedicated `Future_dynamic_poll_raw`
- * variant that returns by-value, or wiring riven_dealloc here.
+ * variant that returns by-value, or wiring ruxen_dealloc here.
  *
  * UPDATE: the existing inline block_on loop's match-on-Poll fully
  * consumes the Poll value (Ready arm extracts payload, Pending arm
@@ -248,19 +248,19 @@ void riven_executor_wake_all_tasks(void) {
  * elaboration since we're calling Future_dynamic_poll from C —
  * accept the leak for now. Tracked.
  */
-static int riven_poll_is_ready(int64_t poll_val, int64_t *out_payload) {
+static int ruxen_poll_is_ready(int64_t poll_val, int64_t *out_payload) {
     if (poll_val == 0) {
         /* Defensive: shouldn't happen — Future_dynamic_poll always
          * returns a valid Poll. Treat as Pending. */
         return 0;
     }
     /* Tag is i32 at offset 0; payload i64 at offset 8 (cranelift emit
-     * in compiler/riven_core/src/codegen/cranelift/emit.rs::SetTag /
+     * in compiler/ruxen_core/src/codegen/cranelift/emit.rs::SetTag /
      * GetTag / GetPayload). Reading the tag as i32 avoids picking up
      * 4 bytes of uninitialised slop after the tag word. */
     char *p = (char *)(uintptr_t)poll_val;
     int32_t tag = *(int32_t *)(p + 0);
-    if (tag == RIVEN_POLL_READY_TAG) {
+    if (tag == RUXEN_POLL_READY_TAG) {
         if (out_payload) {
             *out_payload = *(int64_t *)(p + 8);
         }
@@ -293,7 +293,7 @@ static int riven_poll_is_ready(int64_t poll_val, int64_t *out_payload) {
  * shouldn't see this — no surface lets a future synchronously
  * pump — but the flag is cheap insurance.
  */
-int64_t riven_executor_pump_tasks(void) {
+int64_t ruxen_executor_pump_tasks(void) {
     if (!t_queue_head) {
         return 0;
     }
@@ -306,8 +306,8 @@ int64_t riven_executor_pump_tasks(void) {
     int64_t completions = 0;
     int wake_all = t_wake_all_pending;
     t_wake_all_pending = 0;
-    RivenTaskEntry **prev_link = &t_queue_head;
-    RivenTaskEntry *cur = t_queue_head;
+    RuxenTaskEntry **prev_link = &t_queue_head;
+    RuxenTaskEntry *cur = t_queue_head;
     while (cur) {
         if (!wake_all && !cur->ready) {
             prev_link = &cur->next;
@@ -317,7 +317,7 @@ int64_t riven_executor_pump_tasks(void) {
         cur->ready = 0;
         int64_t poll_val = Future_dynamic_poll(cur->future_ptr, (int64_t)(uintptr_t)cur->ctx);
         int64_t payload = 0;
-        if (riven_poll_is_ready(poll_val, &payload)) {
+        if (ruxen_poll_is_ready(poll_val, &payload)) {
             cur->handle->result = payload;
             cur->handle->done = 1;
             /* Queue-side refcount drop. */
@@ -325,10 +325,10 @@ int64_t riven_executor_pump_tasks(void) {
             if (cur->handle->refcount == 0) {
                 free(cur->handle);
             }
-            RivenTaskEntry *next = cur->next;
+            RuxenTaskEntry *next = cur->next;
             *prev_link = next;
             if (cur->ctx) {
-                riven_executor_context_drop(cur->ctx);
+                ruxen_executor_context_drop(cur->ctx);
                 free(cur->ctx);
             }
             free(cur);
@@ -361,10 +361,10 @@ int64_t riven_executor_pump_tasks(void) {
  * "v1 leak the future heap blocks" carve-out in the scheduler.c
  * header comment.
  */
-void riven_executor_drain_remaining(void) {
-    RivenTaskEntry *cur = t_queue_head;
+void ruxen_executor_drain_remaining(void) {
+    RuxenTaskEntry *cur = t_queue_head;
     while (cur) {
-        RivenTaskEntry *next = cur->next;
+        RuxenTaskEntry *next = cur->next;
         /* Decrement handle refcount; free if no caller holds it
          * (rare — usually the caller has dropped its TaskHandle by
          * the time block_on exits; the join-fence in B6 is the
@@ -374,7 +374,7 @@ void riven_executor_drain_remaining(void) {
             free(cur->handle);
         }
         if (cur->ctx) {
-            riven_executor_context_drop(cur->ctx);
+            ruxen_executor_context_drop(cur->ctx);
             free(cur->ctx);
         }
         free(cur);
@@ -384,30 +384,30 @@ void riven_executor_drain_remaining(void) {
 }
 
 /* ---------------------------------------------------------------------
- * TaskHandle accessors (used by the Riven-level `class TaskHandle[T]`
+ * TaskHandle accessors (used by the Ruxen-level `class TaskHandle[T]`
  * lib decls and by the synthesised `__TaskJoinFuture` in commit 2). */
-int64_t riven_task_handle_is_done(int64_t handle_ptr) {
+int64_t ruxen_task_handle_is_done(int64_t handle_ptr) {
     if (handle_ptr == 0) {
         return 0;
     }
-    return ((RivenTaskHandle *)(uintptr_t)handle_ptr)->done;
+    return ((RuxenTaskHandle *)(uintptr_t)handle_ptr)->done;
 }
 
-int64_t riven_task_handle_result(int64_t handle_ptr) {
+int64_t ruxen_task_handle_result(int64_t handle_ptr) {
     if (handle_ptr == 0) {
         return 0;
     }
-    return ((RivenTaskHandle *)(uintptr_t)handle_ptr)->result;
+    return ((RuxenTaskHandle *)(uintptr_t)handle_ptr)->result;
 }
 
-/* Caller-side drop. The Riven `class TaskHandle[T]` declares this as
+/* Caller-side drop. The Ruxen `class TaskHandle[T]` declares this as
  * its `def drop`; it drops the caller-side refcount. When the queue
  * is also done (refcount → 0), the handle is freed here. */
-void riven_task_handle_drop(int64_t handle_ptr) {
+void ruxen_task_handle_drop(int64_t handle_ptr) {
     if (handle_ptr == 0) {
         return;
     }
-    RivenTaskHandle *h = (RivenTaskHandle *)(uintptr_t)handle_ptr;
+    RuxenTaskHandle *h = (RuxenTaskHandle *)(uintptr_t)handle_ptr;
     h->refcount--;
     if (h->refcount == 0) {
         free(h);

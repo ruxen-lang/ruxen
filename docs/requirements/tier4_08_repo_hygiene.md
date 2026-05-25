@@ -12,7 +12,7 @@ A newcomer opening a GitHub repo evaluates its seriousness in seconds. The signa
 - A `CHANGELOG.md` — has this project shipped anything?
 - Badges, issue templates, PR templates — does the maintainer care about quality?
 
-Riven today has `README.md`. **Everything else is missing.** The release workflow cargo-cults a `cp LICENSE* "${STAGE}/" 2>/dev/null || true` that silently succeeds when there is no LICENSE (`.github/workflows/release.yml:96`), shipping releases with an unclear legal status. The README declares `## License\n\nTBD` (`README.md:294-296`).
+Ruxen today has `README.md`. **Everything else is missing.** The release workflow cargo-cults a `cp LICENSE* "${STAGE}/" 2>/dev/null || true` that silently succeeds when there is no LICENSE (`.github/workflows/release.yml:96`), shipping releases with an unclear legal status. The README declares `## License\n\nTBD` (`README.md:294-296`).
 
 This document is the smallest of the tier-4 docs because the actual work is mostly writing prose. But the decisions — which license, what the CoC says, how security disclosure works — are consequential and shape what the project is.
 
@@ -20,7 +20,7 @@ This document is the smallest of the tier-4 docs because the actual work is most
 
 ### 2.1 Present
 
-- `/home/sheraz/Documents/riven/README.md` — 296 lines. Solid content; declares license as "TBD" (line 294-296).
+- `/home/sheraz/Documents/ruxen/README.md` — 296 lines. Solid content; declares license as "TBD" (line 294-296).
 
 ### 2.2 Absent
 
@@ -46,15 +46,15 @@ This document is the smallest of the tier-4 docs because the actual work is most
 cp README.md LICENSE* "${STAGE}/" 2>/dev/null || true
 ```
 
-If `LICENSE` doesn't exist, the command fails, `2>/dev/null` hides it, `|| true` swallows it, and the release tarball ships without a license file. Users who download Riven today receive ambiguous legal terms. **This is the single most urgent tier-4 issue.**
+If `LICENSE` doesn't exist, the command fails, `2>/dev/null` hides it, `|| true` swallows it, and the release tarball ships without a license file. Users who download Ruxen today receive ambiguous legal terms. **This is the single most urgent tier-4 issue.**
 
 ### 2.5 .gitignore
 
-Scaffold generates a per-project `.gitignore` (`crates/riven-cli/src/scaffold.rs:154-159`):
+Scaffold generates a per-project `.gitignore` (`crates/ruxen-cli/src/scaffold.rs:154-159`):
 
 ```
 /target
-Riven.lock                       # only for library projects
+Ruxen.lock                       # only for library projects
 ```
 
 No root-level `.gitignore` in the repo itself — but given the root doesn't have much except `target/`, that's probably fine. Double-check: if `target/` isn't gitignored at root, the workspace `target/` accidentally gets committed.
@@ -120,7 +120,7 @@ Replace lines 294-296:
 ```md
 ## License
 
-Riven is dual-licensed under either of:
+Ruxen is dual-licensed under either of:
 
 - [Apache License, Version 2.0](LICENSE-APACHE) ([http://www.apache.org/licenses/LICENSE-2.0](http://www.apache.org/licenses/LICENSE-2.0))
 - [MIT license](LICENSE-MIT) ([http://opensource.org/licenses/MIT](http://opensource.org/licenses/MIT))
@@ -129,13 +129,13 @@ at your option.
 
 ### Contribution
 
-Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in Riven by you, as defined in the Apache-2.0 license, shall be dual-licensed as above, without any additional terms or conditions.
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in Ruxen by you, as defined in the Apache-2.0 license, shall be dual-licensed as above, without any additional terms or conditions.
 ```
 
 Insert badges after the tagline (after line 3):
 
 ```md
-[![CI](https://github.com/sherazp995/riven/actions/workflows/ci.yml/badge.svg)](https://github.com/sherazp995/riven/actions/workflows/ci.yml)
+[![CI](https://github.com/ruxen-lang/ruxen/actions/workflows/ci.yml/badge.svg)](https://github.com/ruxen-lang/ruxen/actions/workflows/ci.yml)
 [![MSRV](https://img.shields.io/badge/rustc-1.78+-blue.svg)](https://releases.rs/docs/1.78.0/)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 ```
@@ -143,7 +143,7 @@ Insert badges after the tagline (after line 3):
 ### 4.4 `CONTRIBUTING.md` — skeleton
 
 ```markdown
-# Contributing to Riven
+# Contributing to Ruxen
 
 Thanks for considering a contribution! This document covers the practical bits.
 
@@ -162,8 +162,8 @@ By participating in this project, you agree to the [Code of Conduct](CODE_OF_CON
 ### Build & test
 
 ```bash
-git clone https://github.com/sherazp995/riven.git
-cd riven
+git clone https://github.com/ruxen-lang/ruxen.git
+cd ruxen
 cargo build --workspace
 cargo test  --workspace
 cargo fmt  --all --check
@@ -230,7 +230,7 @@ Verbatim from https://www.contributor-covenant.org/version/2/1/code_of_conduct/.
 ```markdown
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leaders responsible for enforcement at **riven-conduct@example.com** (replace with the actual maintainer email when ready). All complaints will be reviewed and investigated promptly and fairly.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leaders responsible for enforcement at **ruxen-conduct@example.com** (replace with the actual maintainer email when ready). All complaints will be reviewed and investigated promptly and fairly.
 ```
 
 ### 4.6 `SECURITY.md`
@@ -240,7 +240,7 @@ Instances of abusive, harassing, or otherwise unacceptable behavior may be repor
 
 ## Supported Versions
 
-Riven is pre-1.0. We support only the latest minor release series. Security fixes land on `master` and are backported to the most recent tagged release.
+Ruxen is pre-1.0. We support only the latest minor release series. Security fixes land on `master` and are backported to the most recent tagged release.
 
 | Version | Supported          |
 |---------|--------------------|
@@ -251,13 +251,13 @@ Riven is pre-1.0. We support only the latest minor release series. Security fixe
 
 **Please do not open a public issue for security vulnerabilities.**
 
-Email **riven-security@example.com** (replace with the actual address when ready). We aim to acknowledge receipt within 72 hours and provide a remediation plan within 7 days for high-severity issues.
+Email **ruxen-security@example.com** (replace with the actual address when ready). We aim to acknowledge receipt within 72 hours and provide a remediation plan within 7 days for high-severity issues.
 
 When reporting, include:
 
 - A description of the issue and its impact.
 - Steps to reproduce, ideally with a minimal test case.
-- The version of Riven affected.
+- The version of Ruxen affected.
 - Your contact info for follow-up.
 
 ## Our commitment
@@ -271,16 +271,16 @@ When reporting, include:
 
 In scope:
 
-- Miscompilation that causes undefined behavior in safe Riven code.
+- Miscompilation that causes undefined behavior in safe Ruxen code.
 - Borrow-checker holes that allow data races.
-- Linker-line injection via malicious `Riven.toml` (tier 4.01).
+- Linker-line injection via malicious `Ruxen.toml` (tier 4.01).
 - Registry vulnerabilities (tier 4.01).
 
 Out of scope (in the sense of "still important but not handled via this channel"):
 
 - `unsafe` code doing what `unsafe` says it does.
 - Denial-of-service by feeding the compiler adversarial inputs. File a regular issue.
-- Any behavior of a user-written Riven program.
+- Any behavior of a user-written Ruxen program.
 ```
 
 ### 4.7 `CHANGELOG.md` — Keep-a-Changelog format
@@ -288,7 +288,7 @@ Out of scope (in the sense of "still important but not handled via this channel"
 ```markdown
 # Changelog
 
-All notable changes to Riven are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (pre-1.0: every minor bump may include breaking changes).
+All notable changes to Ruxen are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (pre-1.0: every minor bump may include breaking changes).
 
 ## [Unreleased]
 
@@ -300,14 +300,14 @@ All notable changes to Riven are documented here. The format follows [Keep a Cha
 ### Added
 - Initial public release.
 - Compiler with lexer, parser, resolver, type inference, borrow checker, MIR lowering, Cranelift backend, LLVM backend (feature-gated).
-- `riven` package-manager CLI (new, build, run, check, clean, add, remove, update, tree, verify).
-- `rivenc` standalone compiler with `--emit={tokens,ast,hir,mir}` and `fmt`.
-- `riven-lsp` server with hover, goto-definition, diagnostics, semantic tokens.
-- `riven-repl` with Cranelift JIT.
+- `ruxen` package-manager CLI (new, build, run, check, clean, add, remove, update, tree, verify).
+- `ruxenc` standalone compiler with `--emit={tokens,ast,hir,mir}` and `fmt`.
+- `ruxen-lsp` server with hover, goto-definition, diagnostics, semantic tokens.
+- `ruxen-repl` with Cranelift JIT.
 - VSCode extension.
 
-[Unreleased]: https://github.com/sherazp995/riven/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/sherazp995/riven/releases/tag/v0.1.0
+[Unreleased]: https://github.com/ruxen-lang/ruxen/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/ruxen-lang/ruxen/releases/tag/v0.1.0
 ```
 
 ### 4.8 `.github/ISSUE_TEMPLATE/bug_report.md`
@@ -327,14 +327,14 @@ labels: bug
 
 ## Minimal reproducer
 
-```rvn
-# smallest .rvn program that triggers it
+```rx
+# smallest .rx program that triggers it
 ```
 
 ## Versions
 
-- `riven --version`:
-- `rivenc --version`:
+- `ruxen --version`:
+- `ruxenc --version`:
 - OS / arch:
 - Rust toolchain (`rustc --version`) if building from source:
 
@@ -371,10 +371,10 @@ labels: enhancement
 blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability
-    url: mailto:riven-security@example.com
+    url: mailto:ruxen-security@example.com
     about: Please report vulnerabilities privately per SECURITY.md.
   - name: Community discussion
-    url: https://github.com/sherazp995/riven/discussions
+    url: https://github.com/ruxen-lang/ruxen/discussions
     about: General questions, show-and-tell, design chat.
 ```
 
@@ -411,21 +411,21 @@ Fixes #<issue-number>
 *                           @sherazp995
 
 # Subsystem-specific owners (add as maintainers grow):
-# crates/riven-core/        @parser-team
-# crates/riven-lsp/         @ide-team
+# crates/ruxen-core/        @parser-team
+# crates/ruxen-lsp/         @ide-team
 # docs/                     @docs-team
 ```
 
 ### 4.13 Per-crate `Cargo.toml` metadata
 
-For each of `riven-core`, `rivenc`, `riven-cli`, `riven-lsp`, `riven-ide`, `riven-repl`, add to `[package]`:
+For each of `ruxen-core`, `ruxenc`, `ruxen-cli`, `ruxen-lsp`, `ruxen-ide`, `ruxen-repl`, add to `[package]`:
 
 ```toml
 description = "<one-line description of this crate's role>"
 authors = ["Sheraz <arehman0279@gmail.com>"]
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/sherazp995/riven"
-homepage = "https://github.com/sherazp995/riven"
+repository = "https://github.com/ruxen-lang/ruxen"
+homepage = "https://github.com/ruxen-lang/ruxen"
 readme = "../../README.md"
 rust-version = "1.78"
 ```
@@ -453,12 +453,12 @@ Once tier 4.01 workspace inheritance lands, these become `*.workspace = true` re
 
 The Rust ecosystem's default. Rationale:
 
-- **MIT** is maximally permissive. Users embedding Riven in proprietary products have no ambiguity.
+- **MIT** is maximally permissive. Users embedding Ruxen in proprietary products have no ambiguity.
 - **Apache-2.0** adds an explicit patent grant, protecting downstream users from patent trolls.
 - **OR** (not AND) lets users pick. Most pick MIT for simplicity; projects that ship binaries prefer Apache for patent coverage.
 - 80%+ of the Rust ecosystem uses this combo (Rust itself, Cargo, tokio, serde, rayon, …). Matching avoids downstream-compatibility surprises.
 
-Alternative considered: **BSD-2-Clause** only. Shorter, simpler. No patent grant. Rejected on the grounds that Riven competes in a space with patent implications (ownership / memory safety research).
+Alternative considered: **BSD-2-Clause** only. Shorter, simpler. No patent grant. Rejected on the grounds that Ruxen competes in a space with patent implications (ownership / memory safety research).
 
 Alternative considered: **MPL-2.0**. Weak copyleft. Forces derivatives of MPL files to remain MPL. Not aligned with the ecosystem. Rejected.
 
@@ -472,7 +472,7 @@ Alternative considered: **GPL / AGPL**. Strong copyleft. Makes the compiler usel
 
 Alternative: **Django's CoC**. Fine. Less common.
 
-Alternative: **Mozilla's CoC**. Longer, more prescriptive. Fine for Mozilla-sized projects. Overkill for Riven today.
+Alternative: **Mozilla's CoC**. Longer, more prescriptive. Fine for Mozilla-sized projects. Overkill for Ruxen today.
 
 ### 5.3 Private security disclosure
 
@@ -531,9 +531,9 @@ Repo-hygiene is mostly prose; tests are meta.
 
 ## 7. Interactions with Other Tiers
 
-- **Tier 4.01 package manager.** `[package.license = "MIT OR Apache-2.0"]` + `[package.authors = ...]` in the manifest propagates to published packages' registry metadata. `riven publish` rejects `license = "TBD"` or unrecognized SPDX.
+- **Tier 4.01 package manager.** `[package.license = "MIT OR Apache-2.0"]` + `[package.authors = ...]` in the manifest propagates to published packages' registry metadata. `ruxen publish` rejects `license = "TBD"` or unrecognized SPDX.
 - **Tier 4.06 CI.** CI checks that license files exist; `audit.yml` flags license-incompatible transitive deps.
-- **Tier 4.07 examples.** Each example carries `license = "MIT OR Apache-2.0"` in its `Riven.toml`. Reusers are clear on terms.
+- **Tier 4.07 examples.** Each example carries `license = "MIT OR Apache-2.0"` in its `Ruxen.toml`. Reusers are clear on terms.
 - **Tier 1 derive.** Copyright headers in source files are a style choice. Recommend: **no per-file headers**. The repo's `LICENSE-MIT` + `LICENSE-APACHE` at the root apply to everything under it. Per-file headers are noise in 2024.
 
 ## 8. Phasing
@@ -553,7 +553,7 @@ This is a single 0.5-week push, best done before anything else in tier 4.
 
 **Exit:**
 
-- `curl -fsSL https://raw.githubusercontent.com/sherazp995/riven/master/LICENSE-MIT` returns HTTP 200 with valid MIT text.
+- `curl -fsSL https://raw.githubusercontent.com/ruxen-lang/ruxen/master/LICENSE-MIT` returns HTTP 200 with valid MIT text.
 - `README.md` says "dual-licensed MIT OR Apache-2.0" and links to both files.
 - Releases include both license files.
 - A newcomer visiting GitHub sees all six sidebar items (license, CoC, contributing, security, issues, PRs) highlighted.
@@ -569,7 +569,7 @@ This is a single 0.5-week push, best done before anything else in tier 4.
 
 1. **Who owns the copyright?** Today: the individual committers. This is fine (matches Rust's model). Document in CONTRIBUTING.md that contributors retain copyright and license their contributions to the project. Alternative: CLA assigning copyright to a single entity. Rejected — adds friction, no clear benefit.
 2. **Should we require DCO sign-off?** `git commit -s` appends `Signed-off-by:`. Some projects require it. Recommend: **no**. The LICENSE + CONTRIBUTING.md language is enough. DCO adds friction, catches nothing CLA wouldn't.
-3. **Email address for security + CoC.** Both `SECURITY.md` and `CODE_OF_CONDUCT.md` list an email. Recommend: use a dedicated GitHub-project mailbox (Google Workspace for the domain, ~$6/mo), not a personal address. Placeholder is `riven-security@example.com` / `riven-conduct@example.com`; update before landing.
+3. **Email address for security + CoC.** Both `SECURITY.md` and `CODE_OF_CONDUCT.md` list an email. Recommend: use a dedicated GitHub-project mailbox (Google Workspace for the domain, ~$6/mo), not a personal address. Placeholder is `ruxen-security@example.com` / `ruxen-conduct@example.com`; update before landing.
 4. **CODEOWNERS granularity.** Everything → `@sherazp995` today. Fine. Split as maintainers grow.
 5. **Issue label taxonomy.** `bug`, `enhancement`, `good first issue`, `help wanted`. Out of v1; use GitHub defaults. Don't over-engineer.
 6. **Discussions vs Issues.** GitHub Discussions is good for "how do I …" chat. Issues are for tracked bugs/features. Recommend: enable Discussions in repo settings; point `config.yml` at it.
@@ -593,7 +593,7 @@ This is a single 0.5-week push, best done before anything else in tier 4.
 - [ ] `.github/PULL_REQUEST_TEMPLATE.md` exists.
 - [ ] `CODEOWNERS` exists with at least one owner entry.
 - [ ] Every `crates/*/Cargo.toml` has `description`, `authors`, `license = "MIT OR Apache-2.0"`, `repository`, `rust-version`.
-- [ ] `cargo publish --dry-run -p riven-core` passes the metadata-completeness check.
+- [ ] `cargo publish --dry-run -p ruxen-core` passes the metadata-completeness check.
 - [ ] `.github/workflows/release.yml:96` uses an explicit `cp README.md LICENSE-MIT LICENSE-APACHE "${STAGE}/"` (no silent failure).
 - [ ] Release tarballs contain `LICENSE-MIT` and `LICENSE-APACHE` at their root.
 - [ ] Root `.gitignore` excludes `target/`, `fuzz/target/`, `fuzz/corpus/`, `fuzz/artifacts/`, `.DS_Store`, common editor dirs.

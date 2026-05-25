@@ -1,14 +1,14 @@
 # `std::fmt` Implementation Plan (Prompt #06 — fmt subset)
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-druxen-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Deliver the `std::fmt` portion of `docs/prompts/v1/06_phase2_stdlib_io_fmt.md` — `Display` + `Debug` traits, `Formatter`, `fmt::Error`, interpolation routed through `Display::fmt`, and `"#{x:?}"` debug interpolation — without regressing any existing test.
 
 **Architecture:** Build the trait/type surface first as a non-disruptive addition (Phase A). Then thread a `FormatSpec` through lexer → parser → HIR → MIR (Phase B). Wire the `:?` debug path on top of the existing synthesized `{Name}_to_debug` formatter (Phase C). Finally, refactor the canonical interpolation path so every part goes through `Display::fmt`, synthesizing `Display` impls for primitives and stdlib types (Phase D). Each phase ships green tests + commits independently.
 
-**Tech Stack:** Rust workspace (`riven-core`, `rivenc`, `riven-cli`), C runtime (`crates/riven-core/runtime/runtime.c`), `.rvn` E2E fixtures under `tests/release-e2e/cases/`.
+**Tech Stack:** Rust workspace (`ruxen-core`, `ruxenc`, `ruxen-cli`), C runtime (`crates/ruxen-core/runtime/runtime.c`), `.rx` E2E fixtures under `tests/release-e2e/cases/`.
 
-**Universal rules apply** — see `docs/prompts/00_universal_rules.md`. Highlights: TDD red→green→refactor; no `#[ignore]` / `riven_noop_passthrough`; `cargo test --workspace` green at every commit; new error codes go in `crates/riven-core/src/diagnostics/codes.rs::REGISTRY`; CHANGELOG bullet per user-visible change; `##` doc comment on every new public surface.
+**Universal rules apply** — see `docs/prompts/00_universal_rules.md`. Highlights: TDD red→green→refactor; no `#[ignore]` / `ruxen_noop_passthrough`; `cargo test --workspace` green at every commit; new error codes go in `crates/ruxen-core/src/diagnostics/codes.rs::REGISTRY`; CHANGELOG bullet per user-visible change; `##` doc comment on every new public surface.
 
 ---
 
@@ -19,20 +19,20 @@
 ### Task A1: Register `Display` built-in trait
 
 **Files:**
-- Modify: `crates/riven-core/src/resolve/mod.rs` (built-in trait list ~line 182-202)
-- Test: `crates/riven-core/tests/stdlib_fmt.rs` (new)
+- Modify: `crates/ruxen-core/src/resolve/mod.rs` (built-in trait list ~line 182-202)
+- Test: `crates/ruxen-core/tests/stdlib_fmt.rs` (new)
 
 - [ ] **Step 1: Write failing test**
 
 ```rust
-// crates/riven-core/tests/stdlib_fmt.rs
+// crates/ruxen-core/tests/stdlib_fmt.rs
 //! Phase 2 #06 — `std::fmt` surface tests.
 
-use riven_core::lexer::Lexer;
-use riven_core::parser::Parser;
-use riven_core::typeck;
+use ruxen_core::lexer::Lexer;
+use ruxen_core::parser::Parser;
+use ruxen_core::typeck;
 
-fn typecheck(src: &str) -> Vec<riven_core::diagnostics::Diagnostic> {
+fn typecheck(src: &str) -> Vec<ruxen_core::diagnostics::Diagnostic> {
     let mut lx = Lexer::new(src);
     let toks = lx.tokenize().expect("lex");
     let mut p = Parser::new(toks);
@@ -40,7 +40,7 @@ fn typecheck(src: &str) -> Vec<riven_core::diagnostics::Diagnostic> {
     let r = typeck::type_check(&prog);
     r.diagnostics
         .into_iter()
-        .filter(|d| d.level == riven_core::diagnostics::DiagnosticLevel::Error)
+        .filter(|d| d.level == ruxen_core::diagnostics::DiagnosticLevel::Error)
         .collect()
 }
 
@@ -68,14 +68,14 @@ fn display_trait_is_resolvable() {
 - [ ] **Step 2: Run — expect FAIL (Display unknown)**
 
 ```bash
-cargo test -p riven-core --test stdlib_fmt display_trait_is_resolvable
+cargo test -p ruxen-core --test stdlib_fmt display_trait_is_resolvable
 ```
 
 Expected: error referring to unknown trait `Display` or unknown type `Formatter`.
 
 - [ ] **Step 3: Implement minimal**
 
-In `crates/riven-core/src/resolve/mod.rs::register_builtins`:
+In `crates/ruxen-core/src/resolve/mod.rs::register_builtins`:
 
 ```rust
 let builtin_traits = [
@@ -93,14 +93,14 @@ Also register `Formatter` as a built-in class type (`DefKind::Type` with `Ty::Cl
 - [ ] **Step 5: Commit**
 
 ```
-git add crates/riven-core/src/resolve/mod.rs crates/riven-core/tests/stdlib_fmt.rs
+git add crates/ruxen-core/src/resolve/mod.rs crates/ruxen-core/tests/stdlib_fmt.rs
 git commit -m "feat(stdlib): register Display + Debug + Formatter built-in surface (#06.A1)"
 ```
 
 ### Task A2: Negative test — non-trait `Display::fmt` mismatch
 
 **Files:**
-- Modify: `crates/riven-core/tests/stdlib_fmt.rs`
+- Modify: `crates/ruxen-core/tests/stdlib_fmt.rs`
 
 - [ ] **Step 1: Failing test**
 
@@ -129,9 +129,9 @@ fn display_fmt_signature_mismatch_errors() {
 ### Task A3: `Formatter` as a class with surface
 
 **Files:**
-- Modify: `crates/riven-core/src/resolve/mod.rs` (built-in class registry)
-- Modify: `crates/riven-core/src/typeck/infer.rs::builtin_method_type` (add Formatter methods)
-- Test: `crates/riven-core/tests/stdlib_fmt.rs`
+- Modify: `crates/ruxen-core/src/resolve/mod.rs` (built-in class registry)
+- Modify: `crates/ruxen-core/src/typeck/infer.rs::builtin_method_type` (add Formatter methods)
+- Test: `crates/ruxen-core/tests/stdlib_fmt.rs`
 
 Surface (per prompt):
 - `Formatter::write_str(&mut self, s: &str) -> Result[(), fmt::Error]`
@@ -140,14 +140,14 @@ Surface (per prompt):
 
 - [ ] Failing test: program defines `impl Display for Money` whose `fmt` body calls `f.write_str("…")`. Should typecheck.
 - [ ] Implement: register methods in `builtin_method_type`. Stub the runtime semantics for now (Formatter buffers into a `String`).
-- [ ] Wire `riven_fmt_formatter_*` runtime fns in `runtime.c` (write_str = string concat into internal buf; write_char similarly).
+- [ ] Wire `ruxen_fmt_formatter_*` runtime fns in `runtime.c` (write_str = string concat into internal buf; write_char similarly).
 - [ ] Green, commit.
 
 ### Task A4: `fmt::Error` enum
 
 **Files:**
-- Modify: `crates/riven-core/src/resolve/mod.rs` (enum registry alongside Option/Result)
-- Test: `crates/riven-core/tests/stdlib_fmt.rs`
+- Modify: `crates/ruxen-core/src/resolve/mod.rs` (enum registry alongside Option/Result)
+- Test: `crates/ruxen-core/tests/stdlib_fmt.rs`
 
 - [ ] Failing test: returning `Err(fmt::Error)` from a `fmt` impl typechecks.
 - [ ] Implement: register `fmt::Error` as a unit-variant enum (`fmt::Error` only — no variant payload for v1, matching Rust's API).
@@ -162,11 +162,11 @@ Surface (per prompt):
 ### Task B1: Add `FormatSpec` to lexer token + `StringPart`
 
 **Files:**
-- Modify: `crates/riven-core/src/lexer/token.rs` (extend `StringPart`)
-- Modify: `crates/riven-core/src/lexer/mod.rs` (`lex_interpolation_expr`)
-- Modify: `crates/riven-core/src/parser/ast.rs`, `printer.rs`
-- Modify: `crates/riven-core/src/hir/nodes.rs` (`HirInterpolationPart`)
-- Test: `crates/riven-core/src/lexer/tests.rs`
+- Modify: `crates/ruxen-core/src/lexer/token.rs` (extend `StringPart`)
+- Modify: `crates/ruxen-core/src/lexer/mod.rs` (`lex_interpolation_expr`)
+- Modify: `crates/ruxen-core/src/parser/ast.rs`, `printer.rs`
+- Modify: `crates/ruxen-core/src/hir/nodes.rs` (`HirInterpolationPart`)
+- Test: `crates/ruxen-core/src/lexer/tests.rs`
 
 `FormatSpec`:
 
@@ -241,13 +241,13 @@ The lexer currently consumes tokens until the matching `}`. Track brace depth �
 ### Task C1: Wire `:?` to existing struct `_to_debug`
 
 **Files:**
-- Modify: `crates/riven-core/src/mir/lower.rs::lower_interpolation`
-- Test: `crates/riven-core/tests/stdlib_fmt.rs` + `tests/release-e2e/cases/NNN_debug_interp_struct.rvn`
+- Modify: `crates/ruxen-core/src/mir/lower.rs::lower_interpolation`
+- Test: `crates/ruxen-core/tests/stdlib_fmt.rs` + `tests/release-e2e/cases/NNN_debug_interp_struct.rx`
 
 - [ ] **Step 1: Failing E2E fixture**
 
-```riven
-# tests/release-e2e/cases/NNN_debug_interp_struct.rvn
+```ruxen
+# tests/release-e2e/cases/NNN_debug_interp_struct.rx
 struct Point
   x: Int
   y: Int
@@ -273,7 +273,7 @@ if spec.debug {
     } else if let Some(enum_name) = self.enum_with_derive_debug(&effective_ty) {
         // call {EnumName}_to_debug (synthesize if not yet present)
     } else {
-        // primitive: same path as today (riven_int_to_string etc.)
+        // primitive: same path as today (ruxen_int_to_string etc.)
         // — Debug for primitives matches Display in v1
     }
 }
@@ -284,7 +284,7 @@ if spec.debug {
 ### Task C2: Synthesize `to_debug` for `derive Debug` enums
 
 **Files:**
-- Modify: `crates/riven-core/src/mir/lower.rs` (new `synthesize_enum_to_debug`)
+- Modify: `crates/ruxen-core/src/mir/lower.rs` (new `synthesize_enum_to_debug`)
 
 - [ ] Failing E2E fixture: enum with `derive Debug` formatted as `Variant(payload)`.
 - [ ] Implement synthesis (mirror the struct path).
@@ -293,8 +293,8 @@ if spec.debug {
 ### Task C3: Negative — `:?` on non-Debug type errors
 
 **Files:**
-- Modify: `crates/riven-core/src/typeck/infer.rs` (interpolation handling)
-- Modify: `crates/riven-core/src/diagnostics/codes.rs` (E0XXX in trait range)
+- Modify: `crates/ruxen-core/src/typeck/infer.rs` (interpolation handling)
+- Modify: `crates/ruxen-core/src/diagnostics/codes.rs` (E0XXX in trait range)
 
 - [ ] Failing typecheck test: a struct without `derive Debug` used with `:?` errors with a clear diagnostic (`E1001`-`E1099` range — borrow/trait/impl).
 - [ ] Implement check in typeck for interpolation parts.
@@ -309,9 +309,9 @@ if spec.debug {
 ### Task D1: Synthesize `Display` for primitives
 
 **Files:**
-- Modify: `crates/riven-core/src/mir/lower.rs`
+- Modify: `crates/ruxen-core/src/mir/lower.rs`
 
-For each primitive type (`Int`, `Float`, `Bool`, `Char`, `String`/`Str`), synthesize (or treat as built-in) a `Display::fmt` impl that delegates to the existing `riven_X_to_string`. This is a virtual dispatch table — we do not need to actually emit Riven code.
+For each primitive type (`Int`, `Float`, `Bool`, `Char`, `String`/`Str`), synthesize (or treat as built-in) a `Display::fmt` impl that delegates to the existing `ruxen_X_to_string`. This is a virtual dispatch table — we do not need to actually emit Ruxen code.
 
 - [ ] Failing test: typecheck `let s: String = format(x); s == x.to_display()` for `x: Int`. (Need `format!` macro? Or use direct trait method call.)
 
@@ -374,5 +374,5 @@ Risk areas:
 ## Execution
 
 This is a multi-day plan. Two execution paths:
-1. **Subagent-driven (recommended for D-Phase refactor)** — researcher + tester for each Task, coder + reviewer pipeline, commits between tasks.
+1. **Subagent-druxen (recommended for D-Phase refactor)** — researcher + tester for each Task, coder + reviewer pipeline, commits between tasks.
 2. **Inline** — execute Tasks A1 → D5 sequentially in the current session, checkpointing for the user between phases.

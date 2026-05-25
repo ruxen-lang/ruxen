@@ -6,26 +6,26 @@
 **Status:** Cranelift backend default since Phase 1; LLVM 18 backend
 behind `--features llvm` since Phase 4.
 
-Riven compiles MIR through one of two backends.  Both must accept the
+Ruxen compiles MIR through one of two backends.  Both must accept the
 same MIR and produce binaries that pass the same E2E suite.
 
 ---
 
 ## B1 — Default backend is Cranelift
 
-A bare `rivenc input.rvn` produces a binary via Cranelift.  Optimised
+A bare `ruxenc input.rx` produces a binary via Cranelift.  Optimised
 build time is dominated by Cranelift; debug build time is dominated
 by C-runtime compilation.
 
 ## B2 — `--features llvm` switches to LLVM 18
 
-When the workspace is built with `--features llvm`, `rivenc --llvm`
+When the workspace is built with `--features llvm`, `ruxenc --llvm`
 produces a binary via LLVM 18.  The CLI flag exists; the backend is
 feature-gated so default builds don't need llvm-sys.
 
 ## B3 — Both backends produce byte-identical stdout on the E2E fixture set
 
-For every `tests/release-e2e/cases/<fixture>.rvn`, the Cranelift and
+For every `tests/release-e2e/cases/<fixture>.rx`, the Cranelift and
 LLVM backends must produce a binary whose stdout matches
 `tests/release-e2e/expected/<fixture>.out` exactly.
 
@@ -47,21 +47,21 @@ wired (`some_value.flat_map(...)` today)
 **Then** codegen rejects with a clear diagnostic; the rejection
 happens before any binary is emitted.
 
-## B6 — String literals lower through `riven_string_from` wrapper
+## B6 — String literals lower through `ruxen_string_from` wrapper
 
 String literals are not emitted as bare `char*` pointers — they're
-copied into a fresh heap allocation via `riven_string_from` so that
+copied into a fresh heap allocation via `ruxen_string_from` so that
 ownership semantics work uniformly (the same value can be moved /
 dropped / re-bound).
 
 ## B7 — Unreserved identifiers do not collide with runtime symbols
 
-Riven user code may use names like `len`, `push`, `clone`, etc., as
+Ruxen user code may use names like `len`, `push`, `clone`, etc., as
 local bindings or method names without colliding with the runtime
-helpers (`riven_string_len`, `riven_array_push`, `riven_string_clone`,
-…).  E2E fixture `135_unreserved_idents.rvn` exercises a long list.
+helpers (`ruxen_string_len`, `ruxen_array_push`, `ruxen_string_clone`,
+…).  E2E fixture `135_unreserved_idents.rx` exercises a long list.
 
-<!-- TODO(migration): runtime helper symbols (`riven_vec_push`, etc.) are internal C symbol names; this spec lists them illustratively. Rename when the runtime symbols themselves are renamed. -->
+<!-- TODO(migration): runtime helper symbols (`ruxen_vec_push`, etc.) are internal C symbol names; this spec lists them illustratively. Rename when the runtime symbols themselves are renamed. -->
 
 ---
 

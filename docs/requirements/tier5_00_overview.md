@@ -9,7 +9,7 @@ Companion index for the five Tier-5 requirements documents. Read this first.
 | 01 | Language reference (formal grammar + normative prose) | [tier5_01_language_reference.md](tier5_01_language_reference.md) |
 | 02 | Edition / stability mechanism (`edition = "2026"`) | [tier5_02_edition_stability.md](tier5_02_edition_stability.md) |
 | 03 | Deprecation / stability attributes on APIs | [tier5_03_deprecation_stability_attrs.md](tier5_03_deprecation_stability_attrs.md) |
-| 04 | Error-code registry + `riven --explain` | [tier5_04_error_code_registry.md](tier5_04_error_code_registry.md) |
+| 04 | Error-code registry + `ruxen --explain` | [tier5_04_error_code_registry.md](tier5_04_error_code_registry.md) |
 | 05 | Diagnostic suggestions framework (`help:` + replacement) | [tier5_05_diagnostic_suggestions.md](tier5_05_diagnostic_suggestions.md) |
 
 ---
@@ -20,17 +20,17 @@ Tiers 1-4 fill functional gaps: stdlib, concurrency, async, LSP, macros, and so
 on. Tier 5 is about **what a language needs to survive past v1**:
 
 - A **normative reference** so an independent implementer could build a
-  conforming compiler without reverse-engineering `riven-core`.
+  conforming compiler without reverse-engineering `ruxen-core`.
 - A **stability and versioning story** so libraries written today keep
   compiling tomorrow, and breaking improvements can still ship.
 - **Deprecation and feature-gating attributes** so stdlib can grow without
   freezing every wart into permanence.
 - **Legible error output with stable codes and long-form explanations** — the
   single most cited reason Rust won user affection, and uniquely important
-  for Riven because borrow-check + lifetime errors are the hardest diagnostics
+  for Ruxen because borrow-check + lifetime errors are the hardest diagnostics
   any language emits.
 - A **structured suggestion framework** (span + replacement + confidence) so
-  the LSP (tier 3), `riven fix` migrator (tier 5 §02), and terminal renderer
+  the LSP (tier 3), `ruxen fix` migrator (tier 5 §02), and terminal renderer
   can all share one source of truth.
 
 None of this is urgent for a prototype. All of it is the difference between
@@ -43,8 +43,8 @@ None of this is urgent for a prototype. All of it is the difference between
 | Consumer | What they need |
 |----------|----------------|
 | **External implementers** (alt-compilers, interpreters, transpilers) | A complete, normative grammar + type-system description; error codes they can emit compatibly. |
-| **Tooling** (LSP, formatter, docs generator, `riven fix`) | A machine-readable or stable surface: error codes with categories, suggestion payloads, stable AST shape per edition. |
-| **Users** (debugging errors) | `riven --explain E0308` long-form, hover-docs in LSP, deprecation warnings with upgrade paths. |
+| **Tooling** (LSP, formatter, docs generator, `ruxen fix`) | A machine-readable or stable surface: error codes with categories, suggestion payloads, stable AST shape per edition. |
+| **Users** (debugging errors) | `ruxen --explain E0308` long-form, hover-docs in LSP, deprecation warnings with upgrade paths. |
 | **Compiler contributors** | Know which rules are normative vs informative; know where to register new error codes; know what an edition gate looks like. |
 | **Library authors** | in-body `stable since: "0.3"` / `deprecated since: "0.5", note: "use Foo.new"` directives so they can evolve APIs without breaking downstream. |
 
@@ -59,9 +59,9 @@ The fine-grained citations are in the per-doc §2 sections. Top-level status:
   informative-only and incomplete even as a tutorial (e.g. precedence is
   never shown; only hinted at in `docs/tutorial/02-variables-and-types.md`).
 - **Editions**: the field `package.edition: Option<String>` exists
-  (`crates/riven-cli/src/manifest.rs:29`) and `"2026"` is written by the
+  (`crates/ruxen-cli/src/manifest.rs:29`) and `"2026"` is written by the
   scaffolder (`scaffold.rs:145`). It is **never read** by the compiler —
-  grep `edition` across `crates/riven-core` returns zero matches outside of
+  grep `edition` across `crates/ruxen-core` returns zero matches outside of
   Rust's own `Cargo.toml` files. No edition-gating logic exists.
 - **Deprecation / stability attributes**: no attribute named `deprecated`,
   `stable`, or `unstable` is recognised. `parse_attributes` only
@@ -71,12 +71,12 @@ The fine-grained citations are in the per-doc §2 sections. Top-level status:
   (`borrow_check/errors.rs:6-16`) and renders `error[E1001]:` headers
   (`:66`). `Diagnostic::error_with_code` exists (`diagnostics/mod.rs:39`) but
   **no other subsystem uses it** — the typeck emits plain `Diagnostic::error`
-  with no code. No `--explain` subcommand anywhere in `rivenc` or
-  `riven-cli/src/cli.rs:25-113`. No error-explanation registry.
+  with no code. No `--explain` subcommand anywhere in `ruxenc` or
+  `ruxen-cli/src/cli.rs:25-113`. No error-explanation registry.
 - **Diagnostic suggestions**: ad-hoc. `BorrowError.help: Vec<String>`
   (`borrow_check/errors.rs:61`) is free-form prose. No span-based
   replacement, no machine-applicability level, no structured suggestion
-  type. The LSP (`riven-ide/src/diagnostics.rs:30-60`) only maps primary
+  type. The LSP (`ruxen-ide/src/diagnostics.rs:30-60`) only maps primary
   span + secondary "related information"; `help` entries are lost in the
   LSP conversion (`:47-58` does not touch `err.help`).
 
@@ -128,10 +128,10 @@ The fine-grained citations are in the per-doc §2 sections. Top-level status:
 | Tier 5 doc | Interacts with |
 |------------|----------------|
 | 01 Language reference | **All tiers.** Parser (tier 2 if any), typeck, borrow check, stdlib (tier 1). The reference must be updated whenever surface changes. |
-| 02 Editions | **Tier 1** (stdlib — old-edition shims); **Tier 3** (LSP — edition-aware diagnostics); **Tier 4** (`riven-cli` — manifest). |
+| 02 Editions | **Tier 1** (stdlib — old-edition shims); **Tier 3** (LSP — edition-aware diagnostics); **Tier 4** (`ruxen-cli` — manifest). |
 | 03 Attributes | **Tier 1** (implicit-include for structural mixins — `derive`/`@[...]` retired; see tier1_05); **Tier 1.05** (stability directives on every stdlib item); **Tier 3** (LSP — hover shows stability). |
-| 04 Error codes | **Tier 3** (LSP — `diag.code` already flows through `riven-ide/src/diagnostics.rs:22`); all phases that emit errors. |
-| 05 Suggestions | **Tier 3** (LSP code actions = quick fix); **tier 5 doc 02** (`riven fix` migrator reuses machine-applicable suggestions). |
+| 04 Error codes | **Tier 3** (LSP — `diag.code` already flows through `ruxen-ide/src/diagnostics.rs:22`); all phases that emit errors. |
+| 05 Suggestions | **Tier 3** (LSP code actions = quick fix); **tier 5 doc 02** (`ruxen fix` migrator reuses machine-applicable suggestions). |
 
 ---
 
@@ -146,14 +146,14 @@ Unblocks tier-1 B2 (derive attribute untangling) and all other Tier-5 docs.
 **Phase B — diagnostic infrastructure unification (1-2 weeks).**
 Doc 04 phases 4a-4b and doc 05 phases 5a-5b, interleaved:
 
-1. Introduce `riven-core::diagnostics::v2::Diagnostic` with codes,
+1. Introduce `ruxen-core::diagnostics::v2::Diagnostic` with codes,
    primary/secondary labels, suggestions.
 2. Migrate `BorrowError` into it; delete `BorrowError` as a separate type
    (or keep as `pub use` alias for now).
 3. Introduce `ErrorCode` as a crate-wide enum covering typeck, borrow check,
    resolve, parser, lexer.
-4. `riven --explain` subcommand in `rivenc/src/main.rs` (and mirror in
-   `riven-cli`).
+4. `ruxen --explain` subcommand in `ruxenc/src/main.rs` (and mirror in
+   `ruxen-cli`).
 
 **Phase C — error-code population (2-3 weeks).**
 Doc 04 phase 4c. Every `self.error(…)` site in resolve/typeck/parser/lexer
@@ -174,7 +174,7 @@ structured suggestions:
 Doc 02 phases 2a-2b. Wire `package.edition` through the pipeline; introduce
 `EditionCtx`; add the first edition-gated feature (something cheap — e.g.
 rename `Map[K,V]` to `Map[K,V]` on 2027 only, issue deprecation on
-2026). Implement `riven fix --edition=2027` driver that applies machine-
+2026). Implement `ruxen fix --edition=2027` driver that applies machine-
 applicable suggestions across the whole crate.
 
 **Phase F — language reference drafting (4-6 weeks).**
@@ -186,7 +186,7 @@ Add a test harness that every grammar rule has a fixture under
 **Phase G — public polish (ongoing).**
 - Spec CI: markdown-lint, broken-link check, fixture-coverage check.
 - Website that renders `docs/reference/` + `docs/errors/`.
-- `Riven.toml` MSRV (`riven = ">=0.2.0"`) already exists
+- `Ruxen.toml` MSRV (`ruxen = ">=0.2.0"`) already exists
   (`manifest.rs:32`) — wire it into the compiler so old compilers refuse
   too-new editions cleanly.
 
@@ -226,25 +226,25 @@ the relevant doc §OQ for the full argument.
 
    Rust-compatible numbering (like `E0308`) is *tempting* but **rejected**
    — Rust's numbers are not contractually stable and would create an
-   expectation of semantic parity we can't keep. Riven owns its registry.
+   expectation of semantic parity we can't keep. Ruxen owns its registry.
 
 3. **Suggestion-confidence enum.** Rust has five levels
    (`MachineApplicable`/`MaybeIncorrect`/`HasPlaceholders`/`Unspecified`).
-   **Doc 05 §4.3** proposes **three** for Riven:
+   **Doc 05 §4.3** proposes **three** for Ruxen:
    `MachineApplicable` / `MaybeIncorrect` / `HasPlaceholders`. Editors
    only auto-apply the first.
 
 4. **`--explain` storage.** **Doc 04 §4.4** proposes:
    - Source of truth: `docs/errors/E????.md`, Markdown-formatted.
-   - Compiled into the `rivenc` binary as a `phf` or `include_str!` map at
+   - Compiled into the `ruxenc` binary as a `phf` or `include_str!` map at
      build time (one `include_str!` per file, gated by an `explain-embed`
      feature so a slim compiler build can skip it).
-   - `riven --explain E0308` looks up the string and pipes it through a
+   - `ruxen --explain E0308` looks up the string and pipes it through a
      pager if stdout is a TTY.
    - The CI lint already mentioned in phase C enforces that every
      registered `ErrorCode` has a matching `.md` file.
 
-5. **Editions: good for Riven?** Go's thesis (no editions) prioritises
+5. **Editions: good for Ruxen?** Go's thesis (no editions) prioritises
    total backward compat at the cost of bad names living forever. Rust's
    thesis (editions) prioritises surface-level cleanup at the cost of
    multi-edition compatibility burden on the compiler. **Doc 02 §4.1**
@@ -269,7 +269,7 @@ the relevant doc §OQ for the full argument.
 
 7. **Spec-to-compiler sync.** **Doc 01 §5.3** recommends the
    **test-fixture approach**: every production rule in the reference has
-   at least one `tests/reference/<section>_<n>.rvn` fixture that the
+   at least one `tests/reference/<section>_<n>.rx` fixture that the
    parser must accept (or reject, with a specific error code). A lint in
    CI enforces 100% rule coverage. This is a middle ground between
    "generated from the parser grammar" (brittle, rules don't map 1-to-1)
@@ -284,18 +284,18 @@ Items below survived the docs and need the project lead's call:
 - **Attribute naming style: bare `deprecated` directive vs in-body
   `deprecated since: "0.3"` keyword-args vs `deprecated "since 0.3"`
   bare-arg form**. Docs recommend keyword-argument form
-  (`since: "0.3"`, `note: "..."`) matching Ruby/Riven directive style.
+  (`since: "0.3"`, `note: "..."`) matching Ruby/Ruxen directive style.
   See doc 03 §OQ-2.
 - **Stability track for the stdlib itself.** Tier-1 stdlib ships every
   function with an in-body `stable since: "0.2"` directive? Or ships
   some with `unstable feature: "foo"` requiring a feature gate? Rust uses
-  nightly for unstable; Riven has no nightly channel today. Doc 03 §OQ-4.
-- **Whether `--explain` should be on `rivenc` or `riven` or both.** Rust
-  exposes `rustc --explain` only. We currently have `rivenc` (compiler)
-  and `riven` (build tool / `cargo` equivalent). Doc 04 §OQ-2 recommends
-  both, with `riven explain` being the canonical user-facing name.
+  nightly for unstable; Ruxen has no nightly channel today. Doc 03 §OQ-4.
+- **Whether `--explain` should be on `ruxenc` or `ruxen` or both.** Rust
+  exposes `rustc --explain` only. We currently have `ruxenc` (compiler)
+  and `ruxen` (build tool / `cargo` equivalent). Doc 04 §OQ-2 recommends
+  both, with `ruxen explain` being the canonical user-facing name.
 - **Public-ID vs private-ID for spans in serialized diagnostics.** JSON-out
-  for `riven-ide` needs a stable shape if people build tooling on it;
+  for `ruxen-ide` needs a stable shape if people build tooling on it;
   today `Span` includes byte offsets, which are source-version-sensitive.
   Doc 05 §OQ-3.
 
@@ -308,18 +308,18 @@ Tier 5 is "done" when:
 - [ ] `docs/reference/` renders at a stable URL, covers lex/parse/types/
       ownership/mixin-resolution/coercions/editions, and has a test-fixture
       backing every rule.
-- [ ] `riven --explain E1001` prints a paragraph of Markdown-rendered prose
+- [ ] `ruxen --explain E1001` prints a paragraph of Markdown-rendered prose
       and an example; same for every other registered code.
-- [ ] Every `Diagnostic::error(...)` call in `riven-core` carries an
+- [ ] Every `Diagnostic::error(...)` call in `ruxen-core` carries an
       `ErrorCode`.
 - [ ] `deprecated` on a stdlib item causes call sites to produce a
       warning diagnostic with the `note` and a suggestion to migrate.
 - [ ] In-body `stable since: "0.2.0"` and `unstable feature: "foo"` directives are
-      parsed, stored on items, and queryable from `riven-ide` hovers.
+      parsed, stored on items, and queryable from `ruxen-ide` hovers.
 - [ ] Two editions (`"2026"`, `"2027"`) are live; a crate on `"2026"` can
       be linked against from a crate on `"2027"`; a 2027-only feature is
       gated out when the manifest says `edition = "2026"`.
-- [ ] `riven fix --edition=2027` auto-rewrites a small sample project end-
+- [ ] `ruxen fix --edition=2027` auto-rewrites a small sample project end-
       to-end using machine-applicable suggestions, and leaves
       maybe-incorrect ones flagged.
 - [ ] LSP hovers show stability and deprecation info; LSP code actions

@@ -5,7 +5,7 @@
 
 **Status:** shipped Tier-2 (`variance.rs` module wired into typeck).
 
-Riven's typeck enforces variance rules at coercion / argument sites:
+Ruxen's typeck enforces variance rules at coercion / argument sites:
 which "wider" types may flow where, which "narrower" types may not.
 This spec lists the rules that have explicit pin tests.
 
@@ -77,5 +77,5 @@ module is reachable.
 - User-controllable variance annotations (in-body `covariant` /
   `contravariant` directives).
 - Variance for higher-kinded types and GATs.
-- Contravariance — Riven has no surface today that admits it
+- Contravariance — Ruxen has no surface today that admits it
   (closures are invariant in their parameter types).

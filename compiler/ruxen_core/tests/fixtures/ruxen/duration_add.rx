@@ -1,0 +1,17 @@
+use std.time.Duration
+
+def main
+  let a = Duration.from_millis(750)
+  let b = Duration.from_millis(250)
+  # Operator path: routes through binops.rs special-case to
+  # ruxen_duration_add.
+  let sum = a + b
+  # Named-method path: survives generic code where the binop site
+  # isn't statically resolved.
+  let named = a.add(b)
+  if sum.as_millis() == 1000 && named.as_millis() == 1000
+    puts "ok"
+  else
+    puts "fail sum=#{sum.as_millis()} named=#{named.as_millis()}"
+  end
+end

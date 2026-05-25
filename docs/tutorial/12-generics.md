@@ -6,7 +6,7 @@ Generics let you write code that works with multiple types while maintaining typ
 
 Type parameters go in square brackets. **Uppercase identifiers are type parameters; lowercase identifiers are lifetime parameters** (see "Lifetime Parameters" below).
 
-```riven
+```ruxen
 def identity[T](x: T) -> T
   x
 end
@@ -19,7 +19,7 @@ let s = identity("hello")    # T = &str
 
 Constrain type parameters with `:`:
 
-```riven
+```ruxen
 def largest[T: Ord](list: &Array[T]) -> &T
   var best = &list[0]
   for item in list
@@ -35,7 +35,7 @@ end
 
 Use `+` for multiple mixin requirements:
 
-```riven
+```ruxen
 def log_and_save[T: Display + Serializable](item: &T)
   puts "#{item}"
   save(item.serialize)
@@ -44,7 +44,7 @@ end
 
 ## Generic Classes
 
-```riven
+```ruxen
 class Stack[T]
   items: Array[T]
 
@@ -76,7 +76,7 @@ end
 
 ## Generic Structs
 
-```riven
+```ruxen
 struct Pair[A, B]
   first: A
   second: B
@@ -87,7 +87,7 @@ let p = Pair.new(42, "hello")
 
 ## Generic Enums
 
-```riven
+```ruxen
 enum Either[L, R]
   Left(L)
   Right(R)
@@ -102,7 +102,7 @@ For complex constraints:
 
 <!-- TODO(migration): canonical spec §3.4a discourages per-method `where` clauses on individual `def`s (re-group into an extension block). Top-level functions with `where` are shown here pending a clarifying spec rule. -->
 
-```riven
+```ruxen
 def merge[A, B, C](left: &A, right: &B) -> C
   where A: Iterator[Item = Int],
         B: Iterator[Item = Int],
@@ -115,7 +115,7 @@ end
 
 Use an `extension` block to add methods to a generic type — optionally gated by a `where` clause. The class body stays focused on the unconditional surface; conditional methods live in `extension` blocks alongside it.
 
-```riven
+```ruxen
 # All Containers get this method (unconditional extension)
 extension Container[T]
   def count -> Int
@@ -137,7 +137,7 @@ end
 
 Lifetime parameters appear in the same `[...]` slot as type parameters. **Lowercase identifiers are lifetimes; uppercase identifiers are types.** No sigil.
 
-```riven
+```ruxen
 def longest[a](x: &a String, y: &a String) -> &a String
   if x.len > y.len
     x
@@ -149,7 +149,7 @@ end
 
 Lifetimes can mix freely with type parameters:
 
-```riven
+```ruxen
 class Slice[T, a]
   data: &a Array[T]
   start: USize

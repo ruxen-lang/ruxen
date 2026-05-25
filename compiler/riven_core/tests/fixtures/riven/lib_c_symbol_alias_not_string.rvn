@@ -1,3 +1,0 @@
-lib "riven_runtime"
-  def add_one as 42(x: I32) -> I32
-end

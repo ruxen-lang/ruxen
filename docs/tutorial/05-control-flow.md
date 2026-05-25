@@ -4,7 +4,7 @@
 
 `if` is an expression — it returns a value:
 
-```riven
+```ruxen
 let result = if x > 0
   "positive"
 elsif x < 0
@@ -14,13 +14,13 @@ else
 end
 ```
 
-Note: Riven uses `elsif`, not `else if` or `elif`.
+Note: Ruxen uses `elsif`, not `else if` or `elif`.
 
 ## Match
 
 Pattern matching is exhaustive — the compiler ensures all cases are covered:
 
-```riven
+```ruxen
 match value
   0     -> "zero"
   1     -> "one"
@@ -30,7 +30,7 @@ end
 
 ### Enum Matching
 
-```riven
+```ruxen
 match status
   Status.Pending            -> handle_pending()
   Status.InProgress(who)    -> puts "Assigned: #{who}"
@@ -41,7 +41,7 @@ end
 
 ### Match with Guards
 
-```riven
+```ruxen
 match score
   n if n >= 90 -> "A"
   n if n >= 80 -> "B"
@@ -52,7 +52,7 @@ end
 
 ### Or Patterns
 
-```riven
+```ruxen
 match day
   "Saturday" | "Sunday" -> "weekend"
   _                     -> "weekday"
@@ -61,7 +61,7 @@ end
 
 ### Destructuring
 
-```riven
+```ruxen
 match point
   (0, 0)    -> "origin"
   (x, 0)    -> "on x-axis at #{x}"
@@ -74,7 +74,7 @@ end
 
 Combine pattern matching with control flow:
 
-```riven
+```ruxen
 if let Some(user) = find_user(42)
   puts user.name
 end
@@ -86,7 +86,7 @@ end
 
 ## While Loops
 
-```riven
+```ruxen
 var i = 0
 while i < 10
   puts i
@@ -98,7 +98,7 @@ end
 
 Iterate over anything iterable:
 
-```riven
+```ruxen
 for item in collection
   puts item
 end
@@ -114,7 +114,7 @@ end
 
 ## Loop (Infinite)
 
-```riven
+```ruxen
 loop
   let input = read_line()
   if input == "quit"
@@ -126,7 +126,7 @@ end
 
 ## Break and Continue
 
-```riven
+```ruxen
 for n in 0..100
   if n % 2 == 0
     continue          # skip even numbers
@@ -140,9 +140,9 @@ end
 
 ## Blocks as Expressions
 
-Every block in Riven is an expression. The last value is the result:
+Every block in Ruxen is an expression. The last value is the result:
 
-```riven
+```ruxen
 let value = do
   let x = compute()
   let y = transform(x)

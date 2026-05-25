@@ -1,34 +1,34 @@
 {
-  "name": "riven",
-  "displayName": "Riven",
-  "description": "Language support for Riven",
+  "name": "ruxen",
+  "displayName": "Ruxen",
+  "description": "Language support for Ruxen",
   "version": "0.0.1",
-  "publisher": "riven",
+  "publisher": "ruxen",
   "engines": { "vscode": "^1.80.0" },
   "categories": ["Programming Languages"],
-  "activationEvents": ["onLanguage:riven"],
+  "activationEvents": ["onLanguage:ruxen"],
   "main": "./out/extension.js",
   "contributes": {
     "languages": [{
-      "id": "riven",
-      "aliases": ["Riven", "riven"],
-      "extensions": [".riven", ".rvn"],
+      "id": "ruxen",
+      "aliases": ["Ruxen", "ruxen"],
+      "extensions": [".rx"],
       "configuration": "./language-configuration.json"
     }],
     "grammars": [{
-      "language": "riven",
-      "scopeName": "source.riven",
-      "path": "./syntaxes/riven.tmLanguage.json"
+      "language": "ruxen",
+      "scopeName": "source.ruxen",
+      "path": "./syntaxes/ruxen.tmLanguage.json"
     }],
     "configuration": {
-      "title": "Riven",
+      "title": "Ruxen",
       "properties": {
-        "riven.server.path": {
+        "ruxen.server.path": {
           "type": "string",
           "default": "",
-          "description": "Absolute path to the riven-lsp binary. If empty, falls back to 'riven-lsp' on PATH."
+          "description": "Absolute path to the ruxen-lsp binary. If empty, falls back to 'ruxen-lsp' on PATH."
         },
-        "riven.trace.server": {
+        "ruxen.trace.server": {
           "type": "string",
           "enum": ["off", "messages", "verbose"],
           "default": "off",

@@ -54,7 +54,7 @@ blocks until the first call completes, then returns immediately.
 
 ## B4 — Single-thread round-trip
 
-```rvn
+```rx
 ol = OnceLock[Int].new()
 assert_eq(ol.get, None)
 ol.set(42).ok!
@@ -82,7 +82,7 @@ where `expensive` increments a shared atomic counter and returns 7
 |-----------|--------------------------------------------------|----------------------------|
 | B1, B2    | `once_call_once_round_trip`                      | `std_sync_runtime.rs`      |
 | B3, B4    | `oncelock_get_set_round_trip`                    | `std_sync_runtime.rs`      |
-| B5        | e2e `cases/547_oncelock_get_or_init_stress.rvn`  | release-e2e                |
+| B5        | e2e `cases/547_oncelock_get_or_init_stress.rx`  | release-e2e                |
 | B6        | `oncelock_rejects_non_send_t_e1101`              | `concurrency_negative.rs`  |
 
 ---

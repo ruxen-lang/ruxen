@@ -1,0 +1,12 @@
+## std::io::Stdin — handle returned by the free fn `stdin()`. Wire
+## shape is an opaque `void *` handle pointer. All read methods are
+## Result-typed because the underlying read can fail.
+##
+## Migrated in #06.95 Phase E Slice B.2 from runtime_table.
+class Stdin
+  lib "runtime/stdio.c"
+    def read_line as "ruxen_stdin_read_line"(self) -> Result[String, IoError]
+    def read_to_string as "ruxen_stdin_read_to_string"(self) -> Result[String, IoError]
+    def lines as "ruxen_stdin_lines"(self) -> Array[Result[String, IoError]]
+  end
+end

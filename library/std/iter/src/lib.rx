@@ -1,0 +1,24 @@
+## std::iter — Iterator and FromIterator mixins.
+##
+## Wave 2 (#06.8) — migrated from resolve/stdlib/mod.rs Rust
+## registrations into self-hosted library/std/src/iter.rx. The
+## minimum-faithful version below preserves the EXACT required-method
+## list that the Rust registration carried (`["next"]` for Iterator,
+## `["from_iter"]` for FromIterator); the aspirational broader surface
+## from the pre-migration version (map / filter / collect / fold / …)
+## is intentionally left out — those methods are not enforced today,
+## and adding them as `required_methods` would break every user impl
+## that only provides `next` / `from_iter`. They will move in once
+## default-implementation lowering for mixins is wired.
+##
+## Iterator and FromIterator are registered into the prelude type
+## scope (not under a `std.iter` namespace), matching the behaviour of
+## the pre-migration registration.
+
+mixin Iterator
+  def next
+end
+
+mixin FromIterator
+  def from_iter
+end

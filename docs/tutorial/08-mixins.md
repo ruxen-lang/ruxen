@@ -1,15 +1,15 @@
 # Mixins
 
-A **mixin** is Riven's contract-and-provision unit. The same construct does two jobs:
+A **mixin** is Ruxen's contract-and-provision unit. The same construct does two jobs:
 
 - **Contract** — it declares required methods that an including type must provide.
 - **Provision** — it can supply default method bodies that the including type gets for free.
 
-Mixins are how shared behaviour is expressed in Riven.
+Mixins are how shared behaviour is expressed in Ruxen.
 
 ## Defining a Mixin
 
-```riven
+```ruxen
 mixin Renderable
   def to_display -> String
 end
@@ -21,7 +21,7 @@ That mixin declares one required method (a signature with no body). Including ty
 
 A mixin can supply default implementations:
 
-```riven
+```ruxen
 mixin Greetable
   def name -> String                  # required
   def greet -> String                 # default
@@ -36,7 +36,7 @@ Any class that includes `Greetable` must supply `name` but gets `greet` for free
 
 A mixin can declare types that the including type binds:
 
-```riven
+```ruxen
 mixin Iterator
   type Item
   def var next -> Option[Self.Item]
@@ -47,7 +47,7 @@ end
 
 A mixin can extend another mixin's contract:
 
-```riven
+```ruxen
 mixin Serializable: Renderable
   def serialize -> String
   def self.deserialize(data: &str) -> Result[Self, Error]
@@ -60,7 +60,7 @@ A class that includes `Serializable` must satisfy both `Serializable` *and* `Ren
 
 Adopt a mixin with the `include` directive in the type body. Required methods become obligations the compiler checks. Default methods are pulled into the class as if defined inline; a class-defined method with the same name overrides the mixin's default.
 
-```riven
+```ruxen
 class User
   name: String
   email: String
@@ -79,7 +79,7 @@ Multiple `include` directives stack in source order. The class's own definition 
 
 ### Overriding a Default
 
-```riven
+```ruxen
 class FormalUser
   name: String
 
@@ -99,7 +99,7 @@ end
 
 Constrain a type parameter with `:`. Multiple bounds use `+`:
 
-```riven
+```ruxen
 def largest[T: Ord](list: &Array[T]) -> &T
   # ...
 end
@@ -115,7 +115,7 @@ A function parameter or return type may name a mixin in one of two ways.
 
 **`some Mixin`** — the compiler picks one concrete conforming type per call site. The function body is monomorphized; the receiver type is fixed for any given call but invisible to callers. Zero runtime cost; methods may inline.
 
-```riven
+```ruxen
 def print_it(item: &some Renderable)
   puts item.to_display
 end
@@ -126,7 +126,7 @@ print_it(&Robot.new(42))                         # specialized for Robot
 
 **`any Mixin`** — the value carries a vtable at runtime; one function body handles every conforming type. This is what enables heterogeneous collections.
 
-```riven
+```ruxen
 def shout_all(crowd: &Array[Box[any Greetable]])
   for member in crowd
     puts member.greet.upcase
@@ -169,7 +169,7 @@ Note: there is no separate `Iterable` mixin — a type that includes `Iterator` 
 
 Use an `extension` block to add methods only when a type parameter satisfies a bound:
 
-```riven
+```ruxen
 extension Container[T] where T: Renderable
   def print_all
     for item in self.items
@@ -185,7 +185,7 @@ Without a `where` clause, an `extension` block simply adds methods to the named 
 
 A handful of standard mixins — `Debug`, `Clone`, `Eq`, `PartialEq`, `Hashable`, `Default`, `Ord`, `PartialOrd`, and (on structs) `Copy` — are **implicitly included** when every field supports the mixin. No declaration is required:
 
-```riven
+```ruxen
 struct Point
   x: Float
   y: Float

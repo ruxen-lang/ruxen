@@ -12,7 +12,7 @@ canonical examples are `Array[T, N: Int]`, `BitSet[N: USize]`, and
 `SmallVec[T, N: USize]` — fixed-size collections whose layout
 depends on a numeric parameter known at compile time.
 
-Riven's design follows Rust's `min_const_generics` plus simple
+Ruxen's design follows Rust's `min_const_generics` plus simple
 arithmetic on const expressions.  No general `const fn` evaluation;
 no recursion or branching at the const level.
 
@@ -24,8 +24,8 @@ const-evaluability at the use site (`E-NOT-CONST-EVAL`).
 
 Identifiers shown inside backticks below that contain `::` (e.g.
 `Ty::Array`, `DefKind::ConstParam`, `ConstExpr::Lit`) refer to
-**internal compiler types in the Rust source**, not Riven surface
-syntax.  Riven user-level paths use `.` (`Color.Red`, `Array.new`).
+**internal compiler types in the Rust source**, not Ruxen surface
+syntax.  Ruxen user-level paths use `.` (`Color.Red`, `Array.new`).
 
 ---
 
@@ -58,7 +58,7 @@ Generic-param brackets `[...]` accept a new form `const NAME: TYPE`
 alongside the existing type and lifetime params.
 
 **Given** the source
-```riven
+```ruxen
 struct Vector[T, const N: USize]
   data: [T; N]
 end
@@ -160,7 +160,7 @@ monomorphization; failing predicate emits E-CONST-WHERE-FALSE.
 > validator predates the spec and already squats on E0700.  The
 > spec was amended to use E0704 for kind mismatch; iterator-sum
 > retains E0700.  All current emit sites have been updated to the
-> new code (see `crates/riven-core/src/resolve/mod.rs` and the
+> new code (see `crates/ruxen-core/src/resolve/mod.rs` and the
 > `const_lit_against_type_param_emits_e0704` pin test).
 
 (Specific E-CONST-* names from §B8 will map to the E07xx slot once
@@ -174,11 +174,11 @@ reserved in the registry.)
 
 | Behaviour | Test fn                                                  | File                                  |
 |-----------|----------------------------------------------------------|---------------------------------------|
-| B1 struct | `parse_const_generic_param_on_struct`                    | `crates/riven-core/tests/const_generics.rs` |
-| B1 class  | `parse_const_generic_param_on_class`                     | `crates/riven-core/tests/const_generics.rs` |
-| B1 fn     | `parse_const_generic_param_on_fn`                        | `crates/riven-core/tests/const_generics.rs` |
-| B1 multi  | `parse_multiple_const_generic_params_typecheck_position` | `crates/riven-core/tests/const_generics.rs` |
-| B1 mixed  | `parse_mixed_type_and_const_generic_params`              | `crates/riven-core/tests/const_generics.rs` |
+| B1 struct | `parse_const_generic_param_on_struct`                    | `crates/ruxen-core/tests/const_generics.rs` |
+| B1 class  | `parse_const_generic_param_on_class`                     | `crates/ruxen-core/tests/const_generics.rs` |
+| B1 fn     | `parse_const_generic_param_on_fn`                        | `crates/ruxen-core/tests/const_generics.rs` |
+| B1 multi  | `parse_multiple_const_generic_params_typecheck_position` | `crates/ruxen-core/tests/const_generics.rs` |
+| B1 mixed  | `parse_mixed_type_and_const_generic_params`              | `crates/ruxen-core/tests/const_generics.rs` |
 
 ### Stages 2-9
 

@@ -1,0 +1,56 @@
+## std::future — Future / Poll / Context / Waker surface.
+##
+## Sub-phase 1 of the async round (docs/specs/stdlib/async.spec.md):
+## pure stdlib surface, no executor, no `async def` lowering. The
+## types declared here let user code write `include Future` /
+## `type Output = T` / `def var poll(cx: &var Context) -> Poll[T]`
+## and have it type-check. Running anything that calls into the
+## Waker / Context C runtime panics with "executor not yet
+## implemented" — sub-phase 3 fills in the real implementations.
+##
+## Why a separate package: the Future mixin signature references
+## Poll AND Context, and Poll is generic over the future's Output.
+## Co-locating the three keeps the cross-references inside one
+## bootstrap-loaded file and avoids ordering surprises between
+## `core.rx` (Future mixin's old home) and the executor runtime.
+
+## Poll[T] — the result of polling a Future. Tag layout is fixed:
+##   Ready = 0, Pending = 1
+## Pinned by `poll_tag_layout_stability` in
+## `compiler/ruxen_core/tests/async_surface.rs`. DO NOT reorder;
+## append new variants at the END only (no current need, kept here
+## for parity with the IoError contract).
+enum Poll[T]
+  Ready(T)
+  Pending
+end
+
+## Future — the mixin every async type implements. Sub-phase 1
+## defines the surface only; sub-phase 2 lowers `async def` / `.await`
+## to state machines that satisfy this shape. Implementors:
+##
+##   class CountdownFuture
+##     remaining: Int
+##     include Future
+##     type Output = Int
+##
+##     def var poll(cx: &var Context) -> Poll[Int]
+##       if self.remaining == 0
+##         Poll.Ready(0)
+##       else
+##         self.remaining = self.remaining - 1
+##         Poll.Pending
+##       end
+##     end
+##   end
+## `dispatch runtime` — see docs/specs/types/mixin_vtables.spec.md.
+## Future is the v1 reference case for vtable-based runtime dispatch:
+## the executor / scheduler queues heterogeneous futures and polls
+## each via `Future_dynamic_poll(self, cx)` rather than a static
+## `<ConcreteClass>_poll`. Every class that includes Future gets an
+## 8-byte `class_info_ptr` header at heap offset 0, populated at
+## construction time with the class's `__rx_classinfo_<Class>`.
+mixin Future dispatch runtime
+  type Output
+  def var poll(cx: &var Context) -> Poll[Self.Output]
+end

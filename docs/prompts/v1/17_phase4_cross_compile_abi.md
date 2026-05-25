@@ -7,7 +7,7 @@
 ## A. Cross-compilation (T4.02)
 
 ### Goal
-`riven build --target <triple>` emits artifacts for any LLVM-supported
+`ruxen build --target <triple>` emits artifacts for any LLVM-supported
 triple. The release.yml already cross-builds aarch64-linux; generalize.
 
 ### TDD
@@ -18,22 +18,22 @@ triple. The release.yml already cross-builds aarch64-linux; generalize.
 
 ### Implementation
 - CLI accepts `--target` flag.
-- Toolchain installs sysroot via `riven sysroot install <triple>`
+- Toolchain installs sysroot via `ruxen sysroot install <triple>`
   (new subcommand wrapping rustup-style downloads).
-- `riven.toml` `[target.<triple>]` sections override link flags.
+- `ruxen.toml` `[target.<triple>]` sections override link flags.
 
 ## B. Stable ABI + cbindgen (T4.05)
 
 ### Goal
-Riven structs that carry `layout c` are FFI-stable. `riven cbindgen`
+Ruxen structs that carry `layout c` are FFI-stable. `ruxen cbindgen`
 emits a `.h` for functions declared inside a `lib` block (the FFI-
 export surface).
 
 ### TDD
 - Unit test: `struct Point { layout c; x: Int; y: Int end }` lowers
   to a 16-byte struct with predictable field order.
-- Integration test: build a Riven cdylib + a C harness; assert C
-  can call a Riven-defined function with ABI-stable parameters
+- Integration test: build a Ruxen cdylib + a C harness; assert C
+  can call a Ruxen-defined function with ABI-stable parameters
   (use the C-export surface that maps to `lib` semantics in
   reverse — final export-side syntax is the prompt-17 design
   decision; the spec covers `lib "..." ... end` only for imports).
@@ -46,7 +46,7 @@ export surface).
   (candidates: a `lib "self" ... end` block, an `export` body
   directive, etc.). Whatever lands must lower to a function with
   C ABI.
-- `riven cbindgen` walks every C-export declaration and emits a
+- `ruxen cbindgen` walks every C-export declaration and emits a
   header.
 - Document ABI stability promise in `docs/abi-stability.md`.
 
@@ -60,5 +60,5 @@ export surface).
 
 - [ ] Cross-compile to ≥4 triples in CI matrix.
 - [ ] cbindgen emits a usable `.h` for a sample cdylib.
-- [ ] C harness calls Riven and round-trips a `Point` struct.
+- [ ] C harness calls Ruxen and round-trips a `Point` struct.
 - [ ] CHANGELOG bullet.

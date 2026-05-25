@@ -9,9 +9,9 @@
 > **See also:** [Spec — std.iter (Iterator)](../specs/stdlib/iterator.spec.md)
 > for the full pipeline-method surface.
 
-Riven's `Iterator` mixin is the same shape as Rust's `Iterator`:
+Ruxen's `Iterator` mixin is the same shape as Rust's `Iterator`:
 
-```riven
+```ruxen
 mixin Iterator
   type Item
   def var next -> Option[Self.Item]
@@ -26,7 +26,7 @@ gains the full pipeline surface (`map`, `filter`, `collect`, `fold`,
 
 ## 1. A minimal user iterator
 
-```riven
+```ruxen
 class Counter
   current: Int
   limit: Int
@@ -52,7 +52,7 @@ end
 
 Usage:
 
-```riven
+```ruxen
 def main
   var c = Counter.new(5)
   for n in c
@@ -77,7 +77,7 @@ Output:
 
 The `for x in iter` loop expands roughly to:
 
-```riven
+```ruxen
 var __iter = iter
 loop
   match __iter.next
@@ -96,7 +96,7 @@ a `for` loop.
 
 Because `Counter` includes `Iterator`, you get the whole pipeline:
 
-```riven
+```ruxen
 let total = Counter.new(10).fold(0, |acc, x| acc + x)
 let evens: Array[Int] = Counter.new(10).filter(|x| x % 2 == 0).collect[Array[Int]]()
 puts "total=#{total} evens.len=#{evens.len}"
@@ -109,7 +109,7 @@ the mixin's default methods and monomorphisation.
 
 ## 4. Returning your iterator type
 
-```riven
+```ruxen
 def count_to(n: Int) -> Counter
   Counter.new(n)
 end
@@ -118,7 +118,7 @@ end
 The concrete type is what callers see.  If you want to hide the
 type, return `some Iterator[Item = Int]`:
 
-```riven
+```ruxen
 def count_to(n: Int) -> some Iterator[Item = Int]
   Counter.new(n)
 end
@@ -133,14 +133,14 @@ The associated type `Item` is bound at the function signature.
 The reverse direction — collecting an arbitrary iterator into your
 type — is the `FromIterator` mixin:
 
-```riven
+```ruxen
 mixin FromIterator
   type Item
   def self.from_iter(iter: some Iterator[Item = Self.Item]) -> Self
 end
 ```
 
-```riven
+```ruxen
 class Stats
   count: USize
   sum: Int
@@ -187,7 +187,7 @@ The `.collect[Stats]()` call routes through your `from_iter`.
   `Set`, and `String` expose `.iter()` as a method.  Your type
   *is* the iterator — there's nothing to "go into iter mode" on.
 - **Generic `Iterator`.**  `mixin Iterator[T] ... end` is not
-  Riven's shape.  Use the associated-type form above; it matches
+  Ruxen's shape.  Use the associated-type form above; it matches
   Rust and the builtin pipeline expects it.
 
 ---
@@ -199,7 +199,7 @@ flows through the type's parameter list and out through the
 `Item` binding.  Recall that **lowercase identifiers in `[...]`
 are lifetimes; uppercase are type parameters**:
 
-```riven
+```ruxen
 class WindowIter[T, a]
   source: &a Array[T]
   pos: USize
@@ -231,16 +231,16 @@ source `Array`.
 
 ## 8. Where this lives in the compiler
 
-- `Iterator` mixin registered in `crates/riven-core/src/resolve/mod.rs`
+- `Iterator` mixin registered in `crates/ruxen-core/src/resolve/mod.rs`
   (search for `"Iterator"`).
 - `FromIterator` mixin registered there too.
-- Pipeline method resolution in `crates/riven-core/src/typeck/infer.rs`
+- Pipeline method resolution in `crates/ruxen-core/src/typeck/infer.rs`
   (search for `"sum"`, `"fold"`, `"map"`, `"filter"`).
-- Runtime `riven_*_from_iter` helpers in
-  `crates/riven-core/runtime/runtime.c`.
+- Runtime `ruxen_*_from_iter` helpers in
+  `crates/ruxen-core/runtime/runtime.c`.
 
 ---
 
 **Next:** browse the [spec index](../specs/README.md) for every
-formal contract Riven currently enforces, or jump to
+formal contract Ruxen currently enforces, or jump to
 [chapter 14 — FFI](14-ffi.md) for cross-language interop.

@@ -4,7 +4,7 @@
 
 Classes are heap-allocated, support inheritance, and have reference semantics for method dispatch.
 
-```riven
+```ruxen
 class User
   name: String
   age: Int
@@ -31,7 +31,7 @@ Fields and methods are **public by default**. Use the `private` and `protected` 
 | `private` | Private — only accessible within the class |
 | `protected` | Accessible from the class and its subclasses |
 
-```riven
+```ruxen
 class Account
   name: String              # public field
 
@@ -47,7 +47,7 @@ end
 
 The `@` prefix in constructor parameters automatically assigns to the field:
 
-```riven
+```ruxen
 def init(@name: String, @age: Int)
 end
 # Equivalent to:
@@ -61,7 +61,7 @@ end
 
 Every method has a relationship to its receiver — *reading*, *writing*, *consuming*, or *class-method* (no receiver).
 
-```riven
+```ruxen
 class Account
   balance: Int
 
@@ -94,7 +94,7 @@ end
 
 Classes can inherit from one parent with `<`:
 
-```riven
+```ruxen
 class Animal
   name: String
   def init(@name: String) end
@@ -118,7 +118,7 @@ end
 
 To adopt a mixin (a contract-and-provision unit — see [Chapter 8](08-mixins.md)), use the `include` directive in the class body. The mixin's required methods become obligations; default methods are pulled in as if defined inline.
 
-```riven
+```ruxen
 mixin Display
   def fmt(f: &var Formatter) -> Result[(), FmtError]
 end
@@ -141,7 +141,7 @@ end
 
 Structs are lightweight value types. No inheritance, no heap allocation by default.
 
-```riven
+```ruxen
 struct Point
   x: Float
   y: Float
@@ -154,7 +154,7 @@ let p = Point.new(3.0, 4.0)
 
 Structs automatically include `Debug`, `Clone`, `Eq`, `Hashable`, `Default`, `Ord`, and `PartialOrd` whenever every field supports the mixin — no declaration needed. `Copy` is implicit when every field is `Copy`. See §3.6 of the syntax spec and [Chapter 23](23-attributes.md) for the loud `include D1, D2` form.
 
-```riven
+```ruxen
 struct Color
   r: UInt8
   g: UInt8
@@ -180,7 +180,7 @@ let also_red = red               # copy, both valid (every field is Copy)
 
 Zero-cost wrapper types that create a distinct type from an existing one:
 
-```riven
+```ruxen
 newtype UserId(Int)
 newtype Email(String)
 
@@ -192,7 +192,7 @@ let email = Email(String.from("user@example.com"))
 
 ## Generic Classes and Structs
 
-```riven
+```ruxen
 class Container[T]
   items: Array[T]
 

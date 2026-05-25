@@ -2,7 +2,7 @@
 
 ## 1. Summary & Motivation
 
-The tutorial (`docs/tutorial/01..16`) teaches Riven feature-by-feature through small snippets; the test fixtures (`crates/riven-core/tests/fixtures/*.rvn`, 13 files) exercise compiler paths through small programs. **Neither is a complete, runnable project that a newcomer can `git clone && riven run`.** There is no `examples/` directory anywhere in the repo.
+The tutorial (`docs/tutorial/01..16`) teaches Ruxen feature-by-feature through small snippets; the test fixtures (`crates/ruxen-core/tests/fixtures/*.rx`, 13 files) exercise compiler paths through small programs. **Neither is a complete, runnable project that a newcomer can `git clone && ruxen run`.** There is no `examples/` directory anywhere in the repo.
 
 "Show me a real program written in this language" is the single most common request a new user has. It drives adoption, validates the language's stdlib, and — critically — keeps the language honest: every example that stops building under a compiler change generates CI noise that forces the change to either fix the example or document the break. Examples are the acceptance test for tier 1 / 2 / 3 work.
 
@@ -13,7 +13,7 @@ This document specifies a curated set of in-tree examples under `examples/`, wha
 ### 2.1 Directory listing
 
 ```
-$ ls /home/sheraz/Documents/riven/
+$ ls /home/sheraz/Documents/ruxen/
 Cargo.lock  Cargo.toml  CLAUDE.md  crates  docs  editors  install.sh  README.md  target  uninstall.sh
 ```
 
@@ -21,9 +21,9 @@ No `examples/`.
 
 ### 2.2 What exists that's example-adjacent
 
-- `crates/riven-core/tests/fixtures/` (13 `.rvn` files, most < 50 lines):
-  - `arithmetic.rvn`, `classes.rvn`, `class_methods.rvn`, `control_flow.rvn`, `enum_data.rvn`, `enums.rvn`, `functions.rvn`, `hello.rvn`, `mini_sample.rvn`, `sample_program.rvn`, `simple_class.rvn`, `string_interp.rvn`, `tasklist.rvn`.
-  - `tasklist.rvn` and `sample_program.rvn` are the largest — still < 100 lines.
+- `crates/ruxen-core/tests/fixtures/` (13 `.rx` files, most < 50 lines):
+  - `arithmetic.rx`, `classes.rx`, `class_methods.rx`, `control_flow.rx`, `enum_data.rx`, `enums.rx`, `functions.rx`, `hello.rx`, `mini_sample.rx`, `sample_program.rx`, `simple_class.rx`, `string_interp.rx`, `tasklist.rx`.
+  - `tasklist.rx` and `sample_program.rx` are the largest — still < 100 lines.
   - These are compiler fixtures (they live in `tests/`). Not user-facing.
 
 - Tutorial code snippets in `docs/tutorial/*.md`. Copy-paste-quality, not complete projects.
@@ -33,14 +33,14 @@ No `examples/`.
 - **Nowhere to point a newcomer** beyond "read the tutorial."
 - **No integration tests across the whole stack.** A stdlib change that breaks `read_line + parse + format` wouldn't be caught by fixture tests.
 - **No forcing function for stdlib completeness.** Tier-1 stdlib doc mentions tutorial files use methods that don't exist. An `examples/` entry would fail loudly.
-- **The package manager is untested against real projects.** `riven-cli/tests/installed_pkg_manager.rs` uses synthetic `my-dep` fixtures; no real cross-package integration.
+- **The package manager is untested against real projects.** `ruxen-cli/tests/installed_pkg_manager.rs` uses synthetic `my-dep` fixtures; no real cross-package integration.
 
 ## 3. Goals & Non-Goals
 
 ### Goals
 
 1. An `examples/` directory at the repo root containing 5-7 curated, runnable projects.
-2. Each example is a complete `Riven.toml`-rooted project that `riven build && riven run` builds and runs.
+2. Each example is a complete `Ruxen.toml`-rooted project that `ruxen build && ruxen run` builds and runs.
 3. Examples cover **breadth**: sync CLI utility, blocking network server, threaded server (concurrency), async server (tier 1.03), WASM target (tier 4.03), a small game (dependency on an external piece, exercises tier 4.01 registry).
 4. Every example has a `README.md` explaining: what it does, how to run it, which language features it demonstrates.
 5. CI matrix (doc 06 phase 6d) compiles every example. A broken example fails the build.
@@ -52,10 +52,10 @@ No `examples/`.
 - A comprehensive standard-library cookbook (that's `docs/tutorial/`).
 - Examples for every language feature (macros for every mixin, every pattern). Less is more.
 - Benchmarking examples. Performance is a separate concern.
-- GUI examples. No GUI toolkit exists in Riven's stdlib.
-- A separate `riven-examples` repository (discoverability loss; doc 00 §"Critical questions" answers: in-tree).
-- "Awesome Riven" catalogs. Third-party, community-run.
-- Examples written in obsolete Riven syntax (pre-v1). If a breaking language change lands, every example gets updated in the same PR.
+- GUI examples. No GUI toolkit exists in Ruxen's stdlib.
+- A separate `ruxen-examples` repository (discoverability loss; doc 00 §"Critical questions" answers: in-tree).
+- "Awesome Ruxen" catalogs. Third-party, community-run.
+- Examples written in obsolete Ruxen syntax (pre-v1). If a breaking language change lands, every example gets updated in the same PR.
 
 ## 4. Surface
 
@@ -66,35 +66,35 @@ examples/
 ├── README.md                          # index of examples; when to use each
 ├── 01-cli-utility/
 │   ├── README.md
-│   ├── Riven.toml
+│   ├── Ruxen.toml
 │   └── src/
-│       └── main.rvn
+│       └── main.rx
 ├── 02-tcp-echo-server/
 │   ├── README.md
-│   ├── Riven.toml
-│   └── src/main.rvn
+│   ├── Ruxen.toml
+│   └── src/main.rx
 ├── 03-threaded-http-server/
 │   ├── README.md
-│   ├── Riven.toml
-│   └── src/main.rvn
+│   ├── Ruxen.toml
+│   └── src/main.rx
 ├── 04-wasm-hello/
 │   ├── README.md
-│   ├── Riven.toml
+│   ├── Ruxen.toml
 │   ├── index.html                      # JS harness
-│   └── src/main.rvn
+│   └── src/main.rx
 ├── 05-snake-game/                      # (exercises tier 4.01 registry when ready)
 │   ├── README.md
-│   ├── Riven.toml
-│   └── src/main.rvn
+│   ├── Ruxen.toml
+│   └── src/main.rx
 ├── 06-embedded-qemu/                   # optional — tier 4.04 no_std showcase
 │   ├── README.md
-│   ├── Riven.toml
+│   ├── Ruxen.toml
 │   ├── memory.ld
-│   └── src/main.rvn
+│   └── src/main.rx
 └── 07-async-echo/                      # (tier 1.03 async)
     ├── README.md
-    ├── Riven.toml
-    └── src/main.rvn
+    ├── Ruxen.toml
+    └── src/main.rx
 ```
 
 Numbering is a learning path, roughly from easiest to most ambitious. Not all examples need to exist from day one — see §8 phasing.
@@ -114,22 +114,22 @@ This doc adds:
 
 ### 4.3 Example detail — `01-cli-utility` (word-count clone)
 
-`Riven.toml`:
+`Ruxen.toml`:
 
 ```toml
 [package]
 name = "wc"
 version = "0.1.0"
 edition = "2026"
-description = "A Riven port of the classic `wc` utility."
+description = "A Ruxen port of the classic `wc` utility."
 
 [build]
 type = "binary"
 ```
 
-`src/main.rvn`:
+`src/main.rx`:
 
-```riven
+```ruxen
 use std.env
 use std.fs
 use std.io.IoError
@@ -179,9 +179,9 @@ Prerequisites:
 
 ### 4.4 Example detail — `02-tcp-echo-server`
 
-`src/main.rvn`:
+`src/main.rx`:
 
-```riven
+```ruxen
 use std.net.TcpListener
 use std.io
 
@@ -233,9 +233,9 @@ Prerequisites: tier 1 phase 2.
 
 ### 4.6 Example detail — `04-wasm-hello`
 
-Riven side (`src/main.rvn`):
+Ruxen side (`src/main.rx`):
 
-```riven
+```ruxen
 def greet(count: Int32) -> Int32
   wasm_export "greet"
   var total = 0
@@ -280,7 +280,7 @@ Depends on a hypothetical `termio` piece (cursor positioning, nonblocking key re
 
 ```toml
 [dependencies]
-termio = { git = "https://github.com/riven-lang/termio.git", tag = "v0.1.0" }
+termio = { git = "https://github.com/ruxen-lang/termio.git", tag = "v0.1.0" }
 ```
 
 This is the single example that exercises the package manager's external-dep path. Once the tier 4.01 registry lands, change to `termio = "0.1.0"`.
@@ -311,9 +311,9 @@ Prerequisites: tier 1.03 phases 3a-3c.
 An index:
 
 ```md
-# Riven Examples
+# Ruxen Examples
 
-Curated, complete Riven projects. Each has its own `README.md` and `Riven.toml`; run with `riven run` from inside the example's directory.
+Curated, complete Ruxen projects. Each has its own `README.md` and `Ruxen.toml`; run with `ruxen run` from inside the example's directory.
 
 ## The examples
 
@@ -331,7 +331,7 @@ Curated, complete Riven projects. Each has its own `README.md` and `Riven.toml`;
 
 ```bash
 cd examples/01-cli-utility
-riven run -- README.md
+ruxen run -- README.md
 ```
 
 Each example's README.md has more detail.
@@ -341,9 +341,9 @@ Each example's README.md has more detail.
 
 ### 5.1 How examples are not test fixtures
 
-Fixtures live in `crates/riven-core/tests/fixtures/`. They are small, single-file, designed to exercise a specific compiler path, and compiled through an in-process `Lexer`/`Parser`/`typeck`/`mir` pipeline.
+Fixtures live in `crates/ruxen-core/tests/fixtures/`. They are small, single-file, designed to exercise a specific compiler path, and compiled through an in-process `Lexer`/`Parser`/`typeck`/`mir` pipeline.
 
-Examples live in `examples/`. They are multi-file projects built by the user-facing `riven` CLI. They exercise the full install path (find stdlib, find runtime, link against it).
+Examples live in `examples/`. They are multi-file projects built by the user-facing `ruxen` CLI. They exercise the full install path (find stdlib, find runtime, link against it).
 
 Both are valuable. They do not replace each other.
 
@@ -371,10 +371,10 @@ A new `examples` job in `ci.yml` (doc 06 §4.2):
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build compiler
-        run: cargo build -p rivenc -p riven-cli
+        run: cargo build -p ruxenc -p ruxen-cli
       - name: Build example
         working-directory: examples/${{ matrix.example }}
-        run: ../../target/debug/riven build
+        run: ../../target/debug/ruxen build
       - name: Smoke-test example
         working-directory: examples/${{ matrix.example }}
         run: |
@@ -393,26 +393,26 @@ Each example's source files carry a permissive license comment at the top (match
 
 ### 5.5 Example-to-example isolation
 
-Each example has its own `target/` directory (inside the example's folder, gitignored by the example's `.gitignore`). Examples share the compiler with the rest of the repo via `../../target/debug/riven` in CI. Users who `cd examples/01 && riven build` from a cloned repo use the system-installed `riven` — and that's fine.
+Each example has its own `target/` directory (inside the example's folder, gitignored by the example's `.gitignore`). Examples share the compiler with the rest of the repo via `../../target/debug/ruxen` in CI. Users who `cd examples/01 && ruxen build` from a cloned repo use the system-installed `ruxen` — and that's fine.
 
 ## 6. Implementation Plan — files to touch
 
 ### New files
 
 - `examples/README.md`.
-- `examples/<n>-<name>/README.md`, `Riven.toml`, `src/main.rvn`, and optionally `smoke.sh`, per §4.x.
+- `examples/<n>-<name>/README.md`, `Ruxen.toml`, `src/main.rx`, and optionally `smoke.sh`, per §4.x.
 - `.github/workflows/ci.yml` — the `examples` matrix job (part of doc 06).
 
 ### Touched files
 
 - `README.md` — add an "Examples" section pointing at `examples/`.
 - `.gitignore` (if one exists at root) — ensure `examples/*/target/` is ignored.
-- `crates/riven-cli/src/scaffold.rs:154-159` — nothing to change; examples aren't scaffolded, they're authored.
+- `crates/ruxen-cli/src/scaffold.rs:154-159` — nothing to change; examples aren't scaffolded, they're authored.
 
 ### Tests
 
 - CI's `examples` matrix (see §5.2) is the test. Each example's `smoke.sh` is an integration test.
-- Optional: `crates/riven-cli/tests/examples_build.rs` — runs `riven build` on every `examples/*/` in a temp dir clone. Same as the CI matrix but locally runnable. Recommend: skip, CI is enough.
+- Optional: `crates/ruxen-cli/tests/examples_build.rs` — runs `ruxen build` on every `examples/*/` in a temp dir clone. Same as the CI matrix but locally runnable. Recommend: skip, CI is enough.
 
 ## 7. Interactions with Other Tiers
 
@@ -431,10 +431,10 @@ Each example has its own `target/` directory (inside the example's folder, gitig
 ### Phase 7a — `01-cli-utility` (0.5 week, after tier-1 phase 1b)
 
 1. `examples/01-cli-utility/` as per §4.3.
-2. `smoke.sh` runs `riven run -- README.md` and checks the output matches `<lines> <words> <bytes>` pattern.
+2. `smoke.sh` runs `ruxen run -- README.md` and checks the output matches `<lines> <words> <bytes>` pattern.
 3. `examples/README.md` index.
 4. CI entry for this example.
-5. **Exit:** `cd examples/01-cli-utility && riven run -- src/main.rvn` prints a plausible word count.
+5. **Exit:** `cd examples/01-cli-utility && ruxen run -- src/main.rx` prints a plausible word count.
 
 ### Phase 7b — `02-tcp-echo-server` (0.5 week, after tier-1 phase 1c)
 
@@ -452,14 +452,14 @@ Each example has its own `target/` directory (inside the example's folder, gitig
 
 ### Phase 7d — `04-wasm-hello` (0.5 week, after doc 03 phase 3b)
 
-1. `examples/04-wasm-hello/` with `src/main.rvn` + `index.html` + `build.sh`.
-2. `smoke.sh`: `riven build --target wasm32-unknown-unknown --release`, loads the `.wasm` in `wasmi` (small pure-Rust interpreter), calls `greet(100)`, asserts result is `4950`.
+1. `examples/04-wasm-hello/` with `src/main.rx` + `index.html` + `build.sh`.
+2. `smoke.sh`: `ruxen build --target wasm32-unknown-unknown --release`, loads the `.wasm` in `wasmi` (small pure-Rust interpreter), calls `greet(100)`, asserts result is `4950`.
 3. CI entry.
 4. **Exit:** `smoke.sh` succeeds.
 
 ### Phase 7e — `05-snake-game` (1 week)
 
-1. Write a `termio` piece externally (https://github.com/riven-lang/termio) — small cursor + raw-input wrapper over `tcsetattr` + ANSI escapes. Probably ~150 lines of Riven.
+1. Write a `termio` piece externally (https://github.com/ruxen-lang/termio) — small cursor + raw-input wrapper over `tcsetattr` + ANSI escapes. Probably ~150 lines of Ruxen.
 2. `examples/05-snake-game/` depending on it.
 3. `smoke.sh`: start the game, `printf 'wwwwq' | ./snake` (q = quit), assert exit code 0.
 4. CI entry.
@@ -469,7 +469,7 @@ Each example has its own `target/` directory (inside the example's folder, gitig
 
 1. `examples/06-embedded-qemu/` with package-level `no_std` + minimal `panic_handler` + `global_allocator` directives (or no-alloc design).
 2. A `memory.ld` linker script.
-3. `smoke.sh`: `riven build --target thumbv7em-none-eabihf` then `qemu-system-arm -M mps2-an386 -nographic -kernel target/…/example`; pipe stdout through `timeout 5`; grep the UART output for the expected string.
+3. `smoke.sh`: `ruxen build --target thumbv7em-none-eabihf` then `qemu-system-arm -M mps2-an386 -nographic -kernel target/…/example`; pipe stdout through `timeout 5`; grep the UART output for the expected string.
 4. CI entry.
 5. **Exit:** smoke test green.
 
@@ -482,14 +482,14 @@ Each example has its own `target/` directory (inside the example's folder, gitig
 ## 9. Open Questions & Risks
 
 1. **Example drift.** As stdlib APIs change, examples break. This is the feature, not the bug — but it requires a discipline: every stdlib-API-renaming PR updates every example that uses the old name. Recommend: CI gating catches it; no-one merges a stdlib API rename without touching the examples.
-2. **Third-party `termio` dependency.** Making example 05 depend on an external piece is a risk — if `termio` lags behind language changes, the example breaks. Recommend: keep `termio` in the same GitHub org (`riven-lang`), maintained by the compiler team, so PRs can update both in lockstep. Pin to an exact tag in `Riven.toml`.
+2. **Third-party `termio` dependency.** Making example 05 depend on an external piece is a risk — if `termio` lags behind language changes, the example breaks. Recommend: keep `termio` in the same GitHub org (`ruxen-lang`), maintained by the compiler team, so PRs can update both in lockstep. Pin to an exact tag in `Ruxen.toml`.
 3. **Example sprawl.** Seven is a lot to maintain. Recommend: five is a reasonable steady state (drop `06-embedded-qemu` to optional, drop `07-async-echo` if async slips).
 4. **Scope creep within examples.** A contributor might want to add a 1000-line "realistic web app" example. Recommend: hard cap at 300 lines per example. If more is needed, break into a separate repo.
 5. **HTML harness for WASM example.** `index.html` + inline JS is fragile (CORS, fetch, `file://` restrictions in browsers). Recommend: include a `serve.sh` that runs `python3 -m http.server 8000` so `http://localhost:8000/index.html` works; document this.
 6. **Example in the dependency graph of the compiler's own tests?** No — examples are separate. The compiler's `tests/fixtures/` are canonical for compiler testing. Examples are *user-facing*.
 7. **Platform differences.** Example 02 (TCP echo) works on Linux and macOS identically; example 06 (embedded) needs `qemu-system-arm` installed in CI. Recommend: document prerequisites per example, skip the CI matrix entry on platforms that don't support it.
 8. **Example discoverability.** `examples/` is standard and discoverable. But the README should also point at it. Recommend: README's "Quick Start" section grows a line: "For complete projects, see `examples/`."
-9. **SPDX headers vs readability.** Adding `# SPDX-License-Identifier: MIT OR Apache-2.0` at the top of every example's `.rvn` file is noisy for a teaching artifact. Recommend: put it in each example's `README.md` + `LICENSE` (symlink or copy). Skip inline `.rvn` headers.
+9. **SPDX headers vs readability.** Adding `# SPDX-License-Identifier: MIT OR Apache-2.0` at the top of every example's `.rx` file is noisy for a teaching artifact. Recommend: put it in each example's `README.md` + `LICENSE` (symlink or copy). Skip inline `.rx` headers.
 10. **Examples tested with `--release`?** Debug builds are faster; release builds surface LLVM-only bugs. Recommend: CI builds every example with `--release` once, debug once. ~2× CI time for the examples job but catches regressions.
 11. **Versioning examples.** When the language hits 1.0, pin examples at tag-level. Example 05's `termio` dep should pin a tag, not `branch = "main"`.
 12. **Example size vs language flexibility.** An obviously-too-verbose example suggests the language is too verbose. Watch for readability regressions as examples grow. Recommend: annual prune.
@@ -508,7 +508,7 @@ Each example has its own `target/` directory (inside the example's folder, gitig
 - [ ] Every example has a `smoke.sh` that exercises the happy path non-interactively.
 - [ ] CI runs every example's `smoke.sh` and fails the workflow on any failure.
 - [ ] `README.md` at repo root links to `examples/`.
-- [ ] A newcomer clone-and-run flow works: `git clone … && cd riven && cargo build -p riven-cli && cd examples/01-cli-utility && ../../target/debug/riven run -- README.md` prints output matching `<lines> <words> <bytes>`.
+- [ ] A newcomer clone-and-run flow works: `git clone … && cd ruxen && cargo build -p ruxen-cli && cd examples/01-cli-utility && ../../target/debug/ruxen run -- README.md` prints output matching `<lines> <words> <bytes>`.
 - [ ] A stdlib API rename PR that breaks an example also updates that example (enforced by CI gating).
-- [ ] No example exceeds 300 lines of Riven code.
-- [ ] Every example's `Riven.toml` has `description` + `license = "MIT OR Apache-2.0"` fields.
+- [ ] No example exceeds 300 lines of Ruxen code.
+- [ ] Every example's `Ruxen.toml` has `description` + `license = "MIT OR Apache-2.0"` fields.

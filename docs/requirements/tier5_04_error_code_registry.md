@@ -5,7 +5,7 @@ Depends on: tier5_03 phase 3a (warning-level directive support — for
 in-body `allow` directives), tier5_05 (suggestion struct — shares the
 Diagnostic carrier).
 Blocks: credible borrow-check UX. Rust's biggest UX win was `rustc
---explain E0308`; Riven users will hit borrow-check errors harder than
+--explain E0308`; Ruxen users will hit borrow-check errors harder than
 Rust users (smaller surface, less Stack Overflow).
 
 ---
@@ -13,7 +13,7 @@ Rust users (smaller surface, less Stack Overflow).
 ## 1. Summary & motivation
 
 Error messages are a user's first experience with a language's
-difficulty. Riven's core value proposition — "Rust safety, Ruby
+difficulty. Ruxen's core value proposition — "Rust safety, Ruby
 expressiveness" — puts the borrow checker front and centre. A user who
 can't read `error[E1001]: use after move` will give up.
 
@@ -23,7 +23,7 @@ Rust's solution is a **registry** of error codes (`E0308`, `E0277`, …,
 and get a paragraph-long explanation with examples of bad code and
 fixed code.
 
-Riven has the skeleton of this already:
+Ruxen has the skeleton of this already:
 
 - `ErrorCode::E1001..E1010` for borrow check (`borrow_check/errors.rs:
   6-16`).
@@ -33,11 +33,11 @@ Riven has the skeleton of this already:
 
 What's missing:
 
-- No `riven --explain EXXXX` subcommand.
+- No `ruxen --explain EXXXX` subcommand.
 - No registry; codes live in scattered enums per-subsystem.
 - No long-form explanations.
 - Most diagnostics don't have codes: lexer, parser, resolver, typeck,
-  MIR — `grep -r error_with_code crates/riven-core` returns zero non-
+  MIR — `grep -r error_with_code crates/ruxen-core` returns zero non-
   test hits.
 
 This doc specifies the code-namespace policy, the registration
@@ -50,7 +50,7 @@ how to roll out codes across the compiler.
 
 ### 2.1 Existing error code enum
 
-`crates/riven-core/src/borrow_check/errors.rs:5-48`:
+`crates/ruxen-core/src/borrow_check/errors.rs:5-48`:
 
 ```rust
 pub enum ErrorCode {
@@ -77,7 +77,7 @@ variants.
 
 ### 2.2 Diagnostic carrier (top-level)
 
-`crates/riven-core/src/diagnostics/mod.rs:21-56`:
+`crates/ruxen-core/src/diagnostics/mod.rs:21-56`:
 
 ```rust
 pub struct Diagnostic {
@@ -96,7 +96,7 @@ impl Diagnostic {
 
 `BorrowError` is a **separate** struct (not a `Diagnostic`)
 with its own `Display` extension (`borrow_check/errors.rs:64-77`). They
-render differently. The IDE glue at `crates/riven-ide/src/diagnostics.
+render differently. The IDE glue at `crates/ruxen-ide/src/diagnostics.
 rs:30-60` has two different conversion functions.
 
 ### 2.3 Reserved codes from tier-1 docs
@@ -109,8 +109,8 @@ rs:30-60` has two different conversion functions.
 
 ### 2.4 What's absent
 
-- No `riven --explain X` in `crates/rivenc/src/main.rs:40-68` nor
-  `crates/riven-cli/src/cli.rs:25-113`.
+- No `ruxen --explain X` in `crates/ruxenc/src/main.rs:40-68` nor
+  `crates/ruxen-cli/src/cli.rs:25-113`.
 - No `docs/errors/` directory.
 - No central `ErrorCode` enum spanning the whole compiler. Per-
   subsystem enums will multiply (doc 05 adds more, tier1 adds more).
@@ -123,13 +123,13 @@ rs:30-60` has two different conversion functions.
 
 ### 3.1 Goals
 
-- A **single, crate-wide** `ErrorCode` enum in `riven-core` naming
+- A **single, crate-wide** `ErrorCode` enum in `ruxen-core` naming
   every error code in the compiler.
 - Every error-level `Diagnostic` emitted by the compiler carries an
   `ErrorCode` (no more bare `.error(msg, span)` in end-user output).
 - A **namespacing scheme** that leaves room for 30+ years of growth.
 - `docs/errors/E????.md` — one file per code, with a structured format.
-- `riven --explain EXXXX` subcommand. Mirror on `rivenc --explain` for
+- `ruxen --explain EXXXX` subcommand. Mirror on `ruxenc --explain` for
   users who only have the compiler.
 - A **CI lint** that every `ErrorCode` variant has a `.md` file, and
   every `.md` file corresponds to a live variant.
@@ -189,10 +189,10 @@ zeros (`E0001`, `E0308`, `E1001`). Padded so sorts are natural and
 
 ### 4.3 Registry module
 
-New module `crates/riven-core/src/error_codes.rs`:
+New module `crates/ruxen-core/src/error_codes.rs`:
 
 ```rust
-//! Central registry of all error codes emitted by the Riven compiler.
+//! Central registry of all error codes emitted by the Ruxen compiler.
 //! Every code is listed here, even if only one subsystem emits it.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -247,7 +247,7 @@ pub enum ErrorCode {
     // ...
 
     // ── Build tool (E5000-E5999) ──
-    E5001,  // Riven.toml not found
+    E5001,  // Ruxen.toml not found
     // ...
 }
 
@@ -267,7 +267,7 @@ impl ErrorCode {
         }
     }
 
-    /// All known codes. Used by `riven --explain` and the registry-coverage test.
+    /// All known codes. Used by `ruxen --explain` and the registry-coverage test.
     pub fn all() -> &'static [ErrorCode] { ... }
 }
 ```
@@ -286,7 +286,7 @@ in one enum means:
 
 - One registry.
 - One lint-level map.
-- Simpler tooling (`riven --explain W2001` works the same as
+- Simpler tooling (`ruxen --explain W2001` works the same as
   `--explain E1001`).
 
 Alternative: split `ErrorCode` / `WarningCode`. Rejected — small
@@ -295,7 +295,7 @@ duplication for marginal safety.
 ### 4.5 Diagnostic unification
 
 **This is a prerequisite.** `BorrowError` and `Diagnostic` should
-merge. Proposed new carrier in `crates/riven-core/src/diagnostics/
+merge. Proposed new carrier in `crates/ruxen-core/src/diagnostics/
 mod.rs`:
 
 ```rust
@@ -329,19 +329,19 @@ pub fn borrow_diag(code: ErrorCode, primary: Label, secondary: Vec<Label>,
 ```markdown
 # E1001: value used after move
 
-Non-`Copy` types in Riven have a single owner at a time. Assigning or
+Non-`Copy` types in Ruxen have a single owner at a time. Assigning or
 passing a value transfers ownership; the original binding becomes
 unusable.
 
 ## Erroneous example
 
-```rvn
+```rx
 def consume(s: String)
   puts s
 end
 
 def main()
-  let name = String.from("Riven")
+  let name = String.from("Ruxen")
   consume(name)   # `name` moved into `consume`
   puts name        # ERROR: `name` was moved on the previous line
 end
@@ -350,7 +350,7 @@ end
 ## Why this is an error
 
 Allowing reads of moved values would risk reading freed memory or
-duplicated references to the same resource. Riven makes this error
+duplicated references to the same resource. Ruxen makes this error
 loud so you catch it at compile time.
 
 ## How to fix
@@ -359,27 +359,27 @@ There are three standard fixes depending on intent:
 
 ### 1. Borrow instead of moving (the usual fix)
 
-```rvn
+```rx
 def consume(s: &String)     # borrow, not own
   puts s
 end
 
-let name = String.from("Riven")
+let name = String.from("Ruxen")
 consume(&name)               # pass a borrow
 puts name                    # still valid
 ```
 
 ### 2. Clone before the transfer (when you truly need two copies)
 
-```rvn
+```rx
 consume(name.clone)
 puts name
 ```
 
 ### 3. Reinitialize the binding
 
-```rvn
-var name = String.from("Riven")
+```rx
+var name = String.from("Ruxen")
 consume(name)
 name = String.from("reused")  # new value in the same variable
 puts name
@@ -397,7 +397,7 @@ Sections (normative for authors):
 1. **Title line** — `# EXXXX: <title>` — must match
    `ErrorCode::title()` byte-for-byte.
 2. **One-paragraph summary.**
-3. **Erroneous example** — fenced `rvn` block the compiler would
+3. **Erroneous example** — fenced `rx` block the compiler would
    actually reject. A test harness compiles it and asserts the rejection.
 4. **Why this is an error.**
 5. **How to fix** — one or more subsections with fixed code.
@@ -411,9 +411,9 @@ linked to `ErrorCode::title`).
 Usage:
 
 ```
-riven explain EXXXX             # preferred form (`riven` is the user-facing tool)
-rivenc --explain EXXXX          # also supported (the compiler's flag-style)
-rivenc --explain=EXXXX          # equivalent
+ruxen explain EXXXX             # preferred form (`ruxen` is the user-facing tool)
+ruxenc --explain EXXXX          # also supported (the compiler's flag-style)
+ruxenc --explain=EXXXX          # equivalent
 ```
 
 Behaviour:
@@ -421,14 +421,14 @@ Behaviour:
 - Print the Markdown (unrendered) to stdout.
 - If stdout is a TTY: try to pipe through `$PAGER` (default: `less -R`).
 - Unknown code: `error: no error code 'EXXXX' is known by this compiler;
-  run \`riven explain --list\` for all known codes`.
+  run \`ruxen explain --list\` for all known codes`.
 
-`riven explain --list`:
+`ruxen explain --list`:
 
 - Print a table of `EXXXX  title`, sorted.
 - Useful for spelunking.
 
-`riven explain --list --json`:
+`ruxen explain --list --json`:
 
 - JSON array of `{code, title, domain, kind: "error"|"warning"}`. Used
   by external tools / documentation generators.
@@ -440,9 +440,9 @@ mod.rs:58-70`). Upgrade to a rustc-alike multi-line format:
 
 ```
 error[E1001]: value used after move
-  --> src/main.rvn:9:8
+  --> src/main.rx:9:8
    |
- 7 | let name = String.from("Riven")
+ 7 | let name = String.from("Ruxen")
    |     ---- value created here
  8 | consume(name)
    |         ---- value given to `consume()` here
@@ -451,7 +451,7 @@ error[E1001]: value used after move
    |
    = help: consider cloning the value: `name.clone`
    = help: or borrow: `consume(&name)`
-   = note: see `riven explain E1001` for details
+   = note: see `ruxen explain E1001` for details
 ```
 
 The `BorrowError` rendering (`errors.rs:64-77`) is already in this
@@ -463,12 +463,12 @@ shape; we generalize it to all `Diagnostic` values.
 
 ### 5.1 Where `ErrorCode` lives
 
-`crates/riven-core/src/error_codes.rs` — new module.
+`crates/ruxen-core/src/error_codes.rs` — new module.
 
-`crates/riven-core/src/diagnostics/mod.rs` — imports `ErrorCode`, uses
+`crates/ruxen-core/src/diagnostics/mod.rs` — imports `ErrorCode`, uses
 in `Diagnostic.code: Option<ErrorCode>`.
 
-`crates/riven-core/src/borrow_check/errors.rs` — the local
+`crates/ruxen-core/src/borrow_check/errors.rs` — the local
 `ErrorCode` enum is deleted; replaced with re-export:
 `pub use crate::error_codes::ErrorCode;`. All existing call sites keep
 compiling.
@@ -489,7 +489,7 @@ docs/errors/
 
 ### 5.3 Build-time inclusion
 
-`build.rs` in `riven-core` scans `docs/errors/*.md`, fails the build if
+`build.rs` in `ruxen-core` scans `docs/errors/*.md`, fails the build if
 any file-to-variant or variant-to-file mismatch, and emits an
 `include!()`-friendly `$OUT_DIR/error_explanations.rs`:
 
@@ -506,9 +506,9 @@ Feature flag: `explain-embed` (default on). Turning it off excludes
 the explanations from the binary (saves ~500 KB for a minimal
 distributed compiler).
 
-### 5.4 `riven explain` subcommand
+### 5.4 `ruxen explain` subcommand
 
-`crates/riven-cli/src/cli.rs:25-113` — add:
+`crates/ruxen-cli/src/cli.rs:25-113` — add:
 
 ```rust
 Explain {
@@ -523,15 +523,15 @@ Explain {
 },
 ```
 
-Handler in `riven-cli/src/main.rs` calls into
-`riven_core::error_codes::ErrorCode::explain(...)`.
+Handler in `ruxen-cli/src/main.rs` calls into
+`ruxen_core::error_codes::ErrorCode::explain(...)`.
 
-For `rivenc` the flag is `--explain EXXXX`, parsed in
-`crates/rivenc/src/main.rs:27-37`.
+For `ruxenc` the flag is `--explain EXXXX`, parsed in
+`crates/ruxenc/src/main.rs:27-37`.
 
 ### 5.5 CI lint for registry coverage
 
-Test `crates/riven-core/tests/error_code_registry.rs`:
+Test `crates/ruxen-core/tests/error_code_registry.rs`:
 
 ```rust
 #[test]
@@ -567,7 +567,7 @@ fn title_matches_md_h1() {
 
 ### 5.6 Populating codes — the migration
 
-Running `grep 'diag.*error(' crates/riven-core/src` across the parser,
+Running `grep 'diag.*error(' crates/ruxen-core/src` across the parser,
 resolver, typeck, MIR, etc., turns up on the order of 300-400 call
 sites. Each needs a code.
 
@@ -575,7 +575,7 @@ Approach:
 
 1. Introduce the `ErrorCode` enum with a special variant `UNSPECIFIED`
    temporarily.
-2. Add a `riven_core::diagnostics::error_unspecified` helper that
+2. Add a `ruxen_core::diagnostics::error_unspecified` helper that
    emits `UNSPECIFIED`.
 3. Do a blanket `sed` renaming every `error(msg, span)` call in end-
    user emission paths to `error_unspecified(msg, span)`.
@@ -598,18 +598,18 @@ This is mechanical and can be done incrementally across several PRs.
    `E0500` type mismatch; etc.).
 2. Replace `Diagnostic.code: Option<String>` with
    `Option<ErrorCode>`. Update the LSP conversion in
-   `riven-ide/src/diagnostics.rs:11-28`.
+   `ruxen-ide/src/diagnostics.rs:11-28`.
 3. Migrate `BorrowError` to a factory over the new `Diagnostic`. Kill
    the `BorrowError` struct or keep it as a compat alias. Delete
-   `riven-ide/src/diagnostics.rs:30-60` once merge is complete.
+   `ruxen-ide/src/diagnostics.rs:30-60` once merge is complete.
 4. `Diagnostic` renderer in the rustc-alike multi-line shape (§4.8).
 
 ### 6.2 Phase 4b — `--explain` scaffolding (1 week)
 
 1. `docs/errors/` with `_template.md`, `README.md`, and `.md` files
    for the ten existing `E1001-E1010` codes.
-2. `build.rs` in `riven-core` generates `EXPLANATIONS` table.
-3. `riven explain X` / `rivenc --explain X` subcommands.
+2. `build.rs` in `ruxen-core` generates `EXPLANATIONS` table.
+3. `ruxen explain X` / `ruxenc --explain X` subcommands.
 4. Registry-coverage tests.
 
 ### 6.3 Phase 4c — compiler-wide code population (2-3 weeks)
@@ -633,8 +633,8 @@ stub files, so a dashboard shows how many are still stubs.
 
 ### 6.5 Phase 4e — JSON output (small)
 
-`rivenc --error-format=json` emits diagnostics as JSON (spans, codes,
-suggestions). Consumed by external tooling, CI reporters, `riven fix`.
+`ruxenc --error-format=json` emits diagnostics as JSON (spans, codes,
+suggestions). Consumed by external tooling, CI reporters, `ruxen fix`.
 Already planned in tier5_05 §5.6; this phase is the joint deliverable.
 
 ---
@@ -650,7 +650,7 @@ Already planned in tier5_05 §5.6; this phase is the joint deliverable.
   suppress by code too.
 - **Tier 5 doc 05 (suggestions):** `Diagnostic.suggestions` field
   added in phase 4a.
-- **Tier 3 (LSP):** `riven-ide/src/diagnostics.rs:22` already maps
+- **Tier 3 (LSP):** `ruxen-ide/src/diagnostics.rs:22` already maps
   `diag.code` to `NumberOrString`. Once unified, this mapping drops
   the `BorrowError` branch.
 - **Tier 1 concurrency (doc 02) / derive (doc 05):** both pre-
@@ -677,17 +677,17 @@ Already planned in tier5_05 §5.6; this phase is the joint deliverable.
 ### OQ-1. Code granularity: one per variant, or grouped?
 
 Rust uses one code per distinct error variant. **Recommended:** same
-for Riven. One semantic error = one code. Two errors that happen to
+for Ruxen. One semantic error = one code. Two errors that happen to
 share a title ("use after move" in two contexts) become separate codes
 if the example / fix differ. Users search by code; ambiguous codes
 waste their time.
 
-### OQ-2. Should `--explain` live on `riven` or `rivenc` or both?
+### OQ-2. Should `--explain` live on `ruxen` or `ruxenc` or both?
 
-**Recommended:** both. `riven explain X` is the canonical user-facing
-name (matches `riven build`, `riven run`). `rivenc --explain X` keeps
+**Recommended:** both. `ruxen explain X` is the canonical user-facing
+name (matches `ruxen build`, `ruxen run`). `ruxenc --explain X` keeps
 single-binary distributions (IDE bundles, CI images) self-contained.
-Both delegate to the same `riven_core::error_codes::explain()`.
+Both delegate to the same `ruxen_core::error_codes::explain()`.
 
 ### OQ-3. `--explain` storage: embedded vs external?
 
@@ -721,7 +721,7 @@ range, which is semantically correct.
 ### OQ-7. Warnings without codes?
 
 Rust has unnamed lint-level diagnostics ("warning: unused variable").
-**Recommended:** every warning Riven emits has a code (e.g. `W1000`
+**Recommended:** every warning Ruxen emits has a code (e.g. `W1000`
 for unused variable). Lints are suppressible by code *or* by name
 via the in-body `allow` directive (`allow :unused`). Costs one code
 per lint; worth it for consistency.
@@ -745,7 +745,7 @@ Mitigation:
 ### OQ-10. Multilingual `--explain`?
 
 Deferred. `docs/errors/` is English. A future tier may add
-`docs/errors/zh/E1001.md`, with `riven explain X --lang=zh`. Out of
+`docs/errors/zh/E1001.md`, with `ruxen explain X --lang=zh`. Out of
 scope for this doc.
 
 ### OQ-11. How does this interact with the existing
@@ -760,24 +760,24 @@ new uses after phase 4c.
 
 ## 10. Acceptance criteria
 
-- [ ] `crates/riven-core/src/error_codes.rs` exists with a single
+- [ ] `crates/ruxen-core/src/error_codes.rs` exists with a single
       `ErrorCode` enum.
 - [ ] `Diagnostic.code: Option<ErrorCode>` replaces `Option<String>`.
 - [ ] `BorrowError` is either deleted or re-implemented as a
       `Diagnostic` factory.
 - [ ] `docs/errors/` exists with `_template.md` and at least the 10
       existing `E1001-E1010` explanations.
-- [ ] `riven explain E1001` prints the Markdown from
+- [ ] `ruxen explain E1001` prints the Markdown from
       `docs/errors/E1001.md`.
-- [ ] `rivenc --explain E1001` does the same.
-- [ ] `riven explain --list` prints all known codes.
-- [ ] `riven explain --list --json` prints a JSON table.
+- [ ] `ruxenc --explain E1001` does the same.
+- [ ] `ruxen explain --list` prints all known codes.
+- [ ] `ruxen explain --list --json` prints a JSON table.
 - [ ] Registry coverage test: every variant has a `.md` file; every
       `.md` file has a variant.
 - [ ] Title-match test: `# EXXXX: title` in `.md` matches
       `ErrorCode::title()`.
-- [ ] Every end-user diagnostic in `riven-core` has an `ErrorCode`.
+- [ ] Every end-user diagnostic in `ruxen-core` has an `ErrorCode`.
 - [ ] Multi-line rustc-alike rendering for all diagnostics.
 - [ ] LSP `diag.code` field flows through (already works; verify no
       regressions).
-- [ ] `rivenc --error-format=json` emits structured JSON.
+- [ ] `ruxenc --error-format=json` emits structured JSON.

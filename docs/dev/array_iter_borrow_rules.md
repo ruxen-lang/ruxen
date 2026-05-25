@@ -1,6 +1,6 @@
 # `Array[T]` iterator borrow rules
 
-This page documents how Riven v1 ensures iterator–mutator interleavings
+This page documents how Ruxen v1 ensures iterator–mutator interleavings
 on an `Array[T]` are statically rejected. The contract is enforced by the
 borrow checker against the receiver-mode of each method; it does not
 require any runtime tag.
@@ -33,13 +33,13 @@ versioning.
 
 For the v1 runtime, the iterator types `ArrayIter[T]` /
 `ArrayIntoIter[T]` / `ArrayVarIter[T]` are represented identically — each
-is a `RivenVec*`. The compile-time receiver-mode contract is what
+is a `RuxenVec*`. The compile-time receiver-mode contract is what
 prevents conflicting access; the runtime does not need a generation
 counter.
 
 ## Examples
 
-```riven
+```ruxen
 var v: Array[Int] = Array.new
 v.push(1)
 v.push(2)
@@ -55,7 +55,7 @@ v.push(3)        # ERROR: cannot borrow `v` as mutable while `it` lives
 puts "#{it.next.unwrap_or(0)}"
 ```
 
-```riven
+```ruxen
 # OK: into_iter consumes `v`. After the loop, `v` is gone — no
 # mutator can be called.
 let v: Array[Int] = Array.new
@@ -67,18 +67,18 @@ end
 ## Notes for implementers
 
 - **`into_iter` taint**: the MIR-level analysis tags
-  `riven_vec_from_iter` (and the planned `Array_into_iter`) as a
+  `ruxen_vec_from_iter` (and the planned `Array_into_iter`) as a
   *consume-helper* in `compute_dealloc_safe_locals` so the source
   local does not double-free at scope exit. See
-  `crates/riven-core/src/mir/lower.rs` (search
+  `crates/ruxen-core/src/mir/lower.rs` (search
   `is_runtime_consume_helper`).
 
 - **`push` ownership transfer**: when the element type owns heap
   (`Array[String]`, `Array[Array[T]]`, …), the source temporary at the
   push site is tainted so the drop pass does not free it. The
   receiving slot inherits the responsibility through the
-  per-element drop helper (`riven_vec_drop_string`,
-  `riven_vec_drop_vec`).
+  per-element drop helper (`ruxen_vec_drop_string`,
+  `ruxen_vec_drop_vec`).
 
 - **Closure-takers** (`sort_by`, `retain`, `each`, `filter`,
   `find`, `position`, `map`, `partition`) are inlined at MIR

@@ -61,19 +61,19 @@ jobs:
         shell: bash
         run: |
           cargo test --release --target ${{ matrix.target }} \
-            -p rivenc   --test installed_binary \
-            -p riven_cli --test installed_pkg_manager \
-            -p riven_repl --test installed_repl
+            -p ruxenc   --test installed_binary \
+            -p ruxen_cli --test installed_pkg_manager \
+            -p ruxen_repl --test installed_repl
 
       - name: Build release binaries
         shell: bash
         run: |
           if [ "${{ matrix.cross }}" = "true" ]; then
             cross build --release --target ${{ matrix.target }} \
-              -p riven_cli -p rivenc -p riven_lsp -p riven_repl
+              -p ruxen_cli -p ruxenc -p ruxen_lsp -p ruxen_repl
           else
             cargo build --release --target ${{ matrix.target }} \
-              -p riven_cli -p rivenc -p riven_lsp -p riven_repl
+              -p ruxen_cli -p ruxenc -p ruxen_lsp -p ruxen_repl
           fi
 
       - name: Stage artifacts
@@ -81,12 +81,12 @@ jobs:
         run: |
           TAG="${{ steps.tag.outputs.tag }}"
           TARGET="${{ matrix.target }}"
-          NAME="riven-${TAG}-${TARGET}"
+          NAME="ruxen-${TAG}-${TARGET}"
           STAGE="dist/${NAME}"
           mkdir -p "${STAGE}/bin"
 
           BIN_DIR="target/${TARGET}/release"
-          for bin in riven rivenc riven_lsp riven_repl; do
+          for bin in ruxen ruxenc ruxen_lsp ruxen_repl; do
             if [ -f "${BIN_DIR}/${bin}" ]; then
               cp "${BIN_DIR}/${bin}" "${STAGE}/bin/${bin}"
               chmod +x "${STAGE}/bin/${bin}"
@@ -109,8 +109,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: riven-${{ matrix.target }}
-          path: dist/riven-*.tar.gz*
+          name: ruxen-${{ matrix.target }}
+          path: dist/ruxen-*.tar.gz*
 
   release:
     name: Publish release
@@ -139,9 +139,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
-          name: Riven ${{ steps.tag.outputs.tag }}
+          name: Ruxen ${{ steps.tag.outputs.tag }}
           generate_release_notes: true
           files: |
-            dist/riven-*.tar.gz
-            dist/riven-*.tar.gz.sha256
+            dist/ruxen-*.tar.gz
+            dist/ruxen-*.tar.gz.sha256
             install.sh

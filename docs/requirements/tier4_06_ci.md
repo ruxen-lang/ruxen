@@ -2,7 +2,7 @@
 
 ## 1. Summary & Motivation
 
-Riven has a release workflow (`.github/workflows/release.yml`, 144 lines) that fires on `v*` tags and ships prebuilt binaries. **There is no other CI.** Every PR today is merged on trust. `cargo test` is run by contributors on their local machines or not at all. `cargo fmt` isn't enforced. `cargo clippy` isn't enforced. There is no coverage metric, no fuzz target, no MSRV check, no security audit, no cross-compile smoke test. The root `Cargo.toml` has no `rust-version` field (`Cargo.toml:1-4`); a contributor can land code that only compiles on nightly and *nothing catches it* until a user tries to install.
+Ruxen has a release workflow (`.github/workflows/release.yml`, 144 lines) that fires on `v*` tags and ships prebuilt binaries. **There is no other CI.** Every PR today is merged on trust. `cargo test` is run by contributors on their local machines or not at all. `cargo fmt` isn't enforced. `cargo clippy` isn't enforced. There is no coverage metric, no fuzz target, no MSRV check, no security audit, no cross-compile smoke test. The root `Cargo.toml` has no `rust-version` field (`Cargo.toml:1-4`); a contributor can land code that only compiles on nightly and *nothing catches it* until a user tries to install.
 
 This document specifies a single `ci.yml` workflow that ships *before* any other tier-4 subsystem lands. It's the cheapest, highest-leverage piece of tier-4 work: one week of engineering saves months of regression hunting.
 
@@ -27,26 +27,26 @@ Triggers on `push: tags: v*` and `workflow_dispatch`. Matrix of 4 triples (x86_6
   shell: bash
   run: |
     cargo test --release --target ${{ matrix.target }} \
-      -p rivenc   --test installed_binary \
-      -p riven-cli --test installed_pkg_manager \
-      -p riven-repl --test installed_repl
+      -p ruxenc   --test installed_binary \
+      -p ruxen-cli --test installed_pkg_manager \
+      -p ruxen-repl --test installed_repl
 ```
 
 So the *full* test suite never runs in CI. On anyone's machine.
 
 ### 2.3 Linting / formatting
 
-- `rivenc fmt` exists (`crates/rivenc/src/main.rs:28`) — the Riven source formatter.
-- `rivenc fmt --check` exists for CI mode.
+- `ruxenc fmt` exists (`crates/ruxenc/src/main.rs:28`) — the Ruxen source formatter.
+- `ruxenc fmt --check` exists for CI mode.
 - But `cargo fmt` on the Rust code, `cargo clippy` on the Rust code — not enforced.
 
 ### 2.4 Coverage / fuzzing
 
-Neither exists. `Cargo.lock` shows `proptest` is a `[dev-dependencies]` entry in `riven-core/Cargo.toml:14` — used for property testing in typeck/lexer, but no fuzz harness.
+Neither exists. `Cargo.lock` shows `proptest` is a `[dev-dependencies]` entry in `ruxen-core/Cargo.toml:14` — used for property testing in typeck/lexer, but no fuzz harness.
 
 ### 2.5 MSRV
 
-No `rust-version` anywhere. `crates/riven-core/Cargo.toml:4` is `edition = "2021"` — every crate matches. Some deps (cranelift 0.130) require recent Rust; `inkwell 0.5` with `llvm18-0` requires Rust 1.76+.
+No `rust-version` anywhere. `crates/ruxen-core/Cargo.toml:4` is `edition = "2021"` — every crate matches. Some deps (cranelift 0.130) require recent Rust; `inkwell 0.5` with `llvm18-0` requires Rust 1.76+.
 
 ### 2.6 Security
 
@@ -158,10 +158,10 @@ jobs:
         run: cargo fmt --all --check
       - name: cargo clippy -D warnings
         run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: rivenc fmt --check on fixtures
+      - name: ruxenc fmt --check on fixtures
         run: |
-          cargo build -p rivenc
-          ./target/debug/rivenc fmt --check crates/riven-core/tests/fixtures/
+          cargo build -p ruxenc
+          ./target/debug/ruxenc fmt --check crates/ruxen-core/tests/fixtures/
 
   cross:
     name: Cross-compile (${{ matrix.target }})
@@ -346,7 +346,7 @@ Example `fuzz_targets/lexer.rs`:
 ```rust
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-use riven_core::lexer::Lexer;
+use ruxen_core::lexer::Lexer;
 
 fuzz_target!(|data: &[u8]| {
     if let Ok(s) = std::str::from_utf8(data) {
@@ -361,8 +361,8 @@ Example `fuzz_targets/parser.rs`:
 ```rust
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-use riven_core::lexer::Lexer;
-use riven_core::parser::Parser;
+use ruxen_core::lexer::Lexer;
+use ruxen_core::parser::Parser;
 
 fuzz_target!(|data: &[u8]| {
     if let Ok(s) = std::str::from_utf8(data) {
@@ -383,11 +383,11 @@ use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
     if let Ok(s) = std::str::from_utf8(data) {
-        let mut lex = riven_core::lexer::Lexer::new(s);
+        let mut lex = ruxen_core::lexer::Lexer::new(s);
         if let Ok(tokens) = lex.tokenize() {
-            let mut p = riven_core::parser::Parser::new(tokens);
+            let mut p = ruxen_core::parser::Parser::new(tokens);
             if let Ok(prog) = p.parse() {
-                let _ = riven_core::typeck::type_check(&prog);
+                let _ = ruxen_core::typeck::type_check(&prog);
             }
         }
     }
@@ -419,9 +419,9 @@ Pinning absolutely is Cargo's policy (`rust-version` in every crate that cares).
 
 CI flakes erode trust. Standing rules:
 
-1. **No network in tests.** Tests that touch the network are tagged `#[ignore]` and run in a separate job (for `riven-cli/tests/registry_mock.rs`, doc 01).
+1. **No network in tests.** Tests that touch the network are tagged `#[ignore]` and run in a separate job (for `ruxen-cli/tests/registry_mock.rs`, doc 01).
 2. **No `#[cfg(target_os = "linux")]` assumptions.** Tests must work on both Linux and macOS or be explicitly gated.
-3. **Temp files in `std.env.temp_dir()` with unique names.** Already the pattern (`crates/riven-cli/src/scaffold.rs:225-231`).
+3. **Temp files in `std.env.temp_dir()` with unique names.** Already the pattern (`crates/ruxen-cli/src/scaffold.rs:225-231`).
 4. **No real git clones from `https://github.com/…` in tests.** Use `file://` local repos (tier 4.01 mock registry).
 5. **Timeouts on all async ops.** If a test hangs, fail fast with `cargo test --timeout 120`.
 
@@ -467,7 +467,7 @@ All parallel. Longest single job dictates wall time.
 - `.github/workflows/coverage.yml` — coverage upload.
 - `fuzz/Cargo.toml` — nested cargo-fuzz workspace.
 - `fuzz/fuzz_targets/lexer.rs`, `parser.rs`, `typeck.rs` — see §4.7.
-- `fuzz/corpus/lexer/`, `parser/`, `typeck/` — seeded from `crates/riven-core/tests/fixtures/*.rvn`.
+- `fuzz/corpus/lexer/`, `parser/`, `typeck/` — seeded from `crates/ruxen-core/tests/fixtures/*.rx`.
 - `fuzz/.gitignore`.
 - `codecov.yml` at repo root — coverage configuration (target %, status checks).
 - `clippy.toml` at repo root — lint config (any allowlisted lints documented inline).
@@ -491,7 +491,7 @@ CI is self-testing — if the workflow runs, it works. Add a canary test that in
 - **Tier 4.02 cross-compilation.** The `cross` job in `ci.yml` is the first real test of the toolchain. Adds target smoke tests as each target lands.
 - **Tier 4.03 WASM.** `ci.yml` should grow a `wasm32-wasi` matrix entry running `wasmtime run` on the compiled artifact once doc 03 phase 3a ships.
 - **Tier 4.04 no_std.** `ci.yml` grows a no_std matrix entry (`cargo build --target <embedded-triple>` of a tiny fixture) once doc 04 phase 4c ships.
-- **Tier 4.05 cbindgen.** `ci.yml` grows a cbindgen smoke test (`rivenc --emit=c-header … | gcc -fsyntax-only -`) once doc 05 phase 5a ships.
+- **Tier 4.05 cbindgen.** `ci.yml` grows a cbindgen smoke test (`ruxenc --emit=c-header … | gcc -fsyntax-only -`) once doc 05 phase 5a ships.
 - **Tier 4.07 examples.** Every example in `examples/` gets compiled in CI via a matrix job `examples: strategy: matrix: example: [01-cli-utility, 02-tcp-echo, ...]`. Prevents examples from bitrotting.
 - **Tier 4.08 repo hygiene.** `SECURITY.md` and `CODE_OF_CONDUCT.md` don't affect CI directly, but a dependency-review workflow (`actions/dependency-review-action@v4`) enforces that new deps in PRs don't add yanked/advisory'd crates.
 
@@ -545,7 +545,7 @@ CI is self-testing — if the workflow runs, it works. Add a canary test that in
 8. **Test runtime balloon.** As tests grow, CI slows. Recommend: enforce a soft limit (`timeout 30` at the `cargo test` level) and open investigation if any single test > 5 seconds.
 9. **LLVM install time.** `apt.llvm.org`'s script is slow (~2 min). Recommend: consider caching the LLVM install in a custom Docker image if it becomes a bottleneck.
 10. **macOS runner time.** macOS runners are slower + billed at 10× rate internally (doesn't matter for public repos). Recommend: only run `test / macos / stable` — drop `test / macos / 1.78`. Linux covers MSRV.
-11. **Windows.** No Windows in the matrix because Riven doesn't support Windows as a target (doc 02 §3). If/when it does, add.
+11. **Windows.** No Windows in the matrix because Ruxen doesn't support Windows as a target (doc 02 §3). If/when it does, add.
 12. **Required-status churn.** Every time we add a matrix entry, branch protection needs updating. Recommend: document in CONTRIBUTING.md, treat as expected maintenance.
 13. **CODEOWNERS.** `@sherazp995` is currently the only human. Recommend shipping a `CODEOWNERS` file in `.github/` once a second maintainer joins.
 14. **Dependency-review-action.** GitHub built-in, works on public repos. Recommend adding to `ci.yml` as an informational check.

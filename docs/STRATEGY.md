@@ -1,6 +1,6 @@
-# Riven — Strategic Positioning (2026-05-17)
+# Ruxen — Strategic Positioning (2026-05-17)
 
-This document captures a strategic assessment of Riven written after the
+This document captures a strategic assessment of Ruxen written after the
 v1 #05/#06 closure session. It is **not** a roadmap; it is a *frame* for
 making roadmap decisions. The roadmap itself lives at
 `docs/prompts/README.md` and is being reprioritized in light of this
@@ -26,7 +26,7 @@ what shape**, and **what to build first** to make it land.
 
 ---
 
-## 2. The unique slot Riven occupies
+## 2. The unique slot Ruxen occupies
 
 The honest competitive matrix:
 
@@ -37,7 +37,7 @@ The honest competitive matrix:
 | Rust         | ❌ | ✅ | ✅ | ✅ |
 | Nim          | ❌ | optional | ❌ | ✅ |
 | Zig          | ❌ | ✅ | ❌ | ✅ |
-| **Riven**    | ✅ | ✅ | ✅ | ✅ |
+| **Ruxen**    | ✅ | ✅ | ✅ | ✅ |
 
 That row is genuinely unique. But unique ≠ wanted. The skeptical
 question: *does anyone actually want all four at once?*
@@ -52,7 +52,7 @@ The user base is a thin slice: **senior Rubyists who've done some Rust,
 hated the syntax, but loved the guarantees.** That slice is real.
 It is also small (think Crystal-sized, not Go-sized).
 
-If Riven competes head-on with Ruby or Crystal on those terms, it
+If Ruxen competes head-on with Ruby or Crystal on those terms, it
 loses or stays small. The growth path is **not** "be a better Ruby" —
 it is "occupy a wedge nobody else owns."
 
@@ -70,9 +70,9 @@ and maintaining C extensions is miserable. The current alternatives:
 - Rust + magnus/rb-sys (better DX, but you're learning Rust)
 - Crystal (no clean Ruby FFI story)
 
-**Reposition Riven as: "Write a `.so` Ruby can `require`, with
+**Reposition Ruxen as: "Write a `.so` Ruby can `require`, with
 Ruby-like syntax and Rust-like safety."** Rubyists capture the win
-*without* writing a single Riven app — they ship faster gems.
+*without* writing a single Ruxen app — they ship faster gems.
 
 Why this is the best opportunity:
 - **Distribution is free** — RubyGems already exists.
@@ -83,13 +83,13 @@ Why this is the best opportunity:
 - **Viral mechanic** — one fast gem ("nokogiri-rv is 10× faster") and
   you're on Hacker News.
 
-**What Riven needs to add to win here:**
+**What Ruxen needs to add to win here:**
 - First-class `extern "Ruby"` ABI calling convention.
 - Ergonomic Ruby-object marshaling (VALUE in/out, GC-safe handles).
-- A `cargo`-style template `riven new --gem` that scaffolds a
+- A `cargo`-style template `ruxen new --gem` that scaffolds a
   ruby-callable extension with `Rakefile` + native-extension build
   glue out of the box.
-- A canonical example gem in the docs (e.g. `riven-fast-json`).
+- A canonical example gem in the docs (e.g. `ruxen-fast-json`).
 
 ### Wedge #2 — "Ruby for WebAssembly" (second highest)
 
@@ -110,7 +110,7 @@ Why this works:
 - **Game scripting** (Lua dominates only because nothing else is small
   + fast enough) is suddenly contestable.
 
-**What Riven needs to add to win here:**
+**What Ruxen needs to add to win here:**
 - WASM target as a first-class codegen backend (not "technically
   supported").
 - Aggressive dead-code elimination to keep binary size small.
@@ -136,14 +136,14 @@ flavour, and the `IntoInnerError` recovery type Rust ships on
 Rails made Ruby. Phoenix made Elixir. TensorFlow made Python ML.
 **Languages don't sell languages — flagship apps do.**
 
-Pick one app shape and build the canonical version in Riven:
+Pick one app shape and build the canonical version in Ruxen:
 
 - A Sinatra-style web framework that proves the perf story.
 - A CLI tool framework that beats Cobra/Click on ergonomics + speed.
 - A static site generator that beats Hugo (compiled = fast).
 - A test runner that beats RSpec on speed.
 
-Then *every blog post about Riven* is actually about that flagship.
+Then *every blog post about Ruxen* is actually about that flagship.
 People come for the tool, stay for the language.
 
 This is slower than #1 or #2 because the flagship itself needs
@@ -199,8 +199,8 @@ in Phase 4) to the front of Phase 2 if Wedge #2 is the chosen play.
 
 ### One-command tooling
 
-`riven new`, `riven build`, `riven run`, `riven test`, `riven publish`,
-`riven add foo`. **Cargo is the bar.** Match it *before* v1, not after.
+`ruxen new`, `ruxen build`, `ruxen run`, `ruxen test`, `ruxen publish`,
+`ruxen add foo`. **Cargo is the bar.** Match it *before* v1, not after.
 A great language with bad tooling loses to a mediocre language with
 great tooling. Every time.
 
@@ -273,7 +273,7 @@ the Cloudflare Workers story. Re-evaluate then. If Wedge #1
 
 ## 8. The brutally honest risk
 
-Riven's biggest risk is **not technical** — the compiler is real, the
+Ruxen's biggest risk is **not technical** — the compiler is real, the
 roadmap is coherent, the patterns established (the "flat heap struct
 + accessors" mirror pattern from fs.metadata, the runtime-fn
 registration triple, the no-shortcut TDD discipline) are sound.
@@ -330,13 +330,13 @@ the three wedges are sequenced rather than mutually-exclusive:
 ### Framing correction (Wedge #1)
 
 The "nokogiri-rv is 10× faster than C" pitch in §3 is unwinnable
-and is dropped. Riven won't beat hand-tuned C extensions (oj,
-nokogiri, mysql2). Realistic Riven perf vs hand-tuned C is **1.5-3×
+and is dropped. Ruxen won't beat hand-tuned C extensions (oj,
+nokogiri, mysql2). Realistic Ruxen perf vs hand-tuned C is **1.5-3×
 slower** for the same workload.
 
 The actual Wedge #1 bet:
 
-> **"Riven extensions are *almost-as-fast-as-C* but written in 10×
+> **"Ruxen extensions are *almost-as-fast-as-C* but written in 10×
 > less developer time, with memory safety guarantees, by people who
 > already know Ruby."**
 
@@ -389,7 +389,7 @@ swap.
 
 ### Phase C entry criteria
 
-Same as Phase B. Flagship app development is mostly Riven-the-language
+Same as Phase B. Flagship app development is mostly Ruxen-the-language
 work (writing the framework code), so the only requirement is the
 language being stable enough for serious app development — which it
 is today.

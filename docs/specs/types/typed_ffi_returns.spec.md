@@ -7,8 +7,8 @@
 
 **Status:** new — phase 2 of the multithreading round.
 
-The FFI boundary in Riven carries every value as `int64_t` per the
-existing ABI (see `library/std/array/src/lib.rvn` for the canonical
+The FFI boundary in Ruxen carries every value as `int64_t` per the
+existing ABI (see `library/std/array/src/lib.rx` for the canonical
 "generic-stripping at the call site" comment). Today, `Array[T]`'s
 constructor `Array.new()` is declared as `-> Int` in its lib block
 but **typeck reports the result as `Array[T]`** because
@@ -28,7 +28,7 @@ the call site reports, and how T is bound.
 ## B1 — `def self.new as "..."(value: T) -> Int` lifts to `-> Self[T]`
 
 **Given** a generic class `Foo[T]` with a lib decl
-`def self.new as "riven_foo_new"(value: T) -> Int` inside its
+`def self.new as "ruxen_foo_new"(value: T) -> Int` inside its
 `lib "..."` block
 **When** the user writes `let f = Foo.new(value)`
 **Then** typeck reports `f: Foo[T]` (T inferred from `value`'s
@@ -39,8 +39,8 @@ C symbol; only the *reported* surface type changes.
 class-relative surface return
 
 **Given** a generic class `Foo[T]` with a lib decl
-`def bar as "riven_foo_bar"(self) -> Int` inside its lib block,
-AND a co-located lib decl `def baz as "riven_foo_baz"(self) -> Bar[T]`
+`def bar as "ruxen_foo_bar"(self) -> Int` inside its lib block,
+AND a co-located lib decl `def baz as "ruxen_foo_baz"(self) -> Bar[T]`
 **When** the user writes `f.bar` on `f: Foo[T]`
 **Then** the return type is reported as the **declared** surface
 type. If the lib decl says `-> Int`, the return is Int (B2 doesn't
@@ -50,17 +50,17 @@ substituted from the receiver.
 The asymmetry vs. B1 is deliberate: `.new` always returns the
 constructed class (universal pattern), so the lift is safe to bake
 in. Instance-method return types are user-chosen and may legitimately
-be raw Int (e.g., `riven_thread_join` returning the closure's i64
+be raw Int (e.g., `ruxen_thread_join` returning the closure's i64
 result before unwrapping to `Result[T, ThreadPanic]`).
 
 Authors who want a typed return write it explicitly:
 
-```rvn
+```rx
 class Mutex[T]
   lib "runtime/mutex.c"
-    def self.new as "riven_mutex_new"(initial: T) -> Mutex[T]
-    def lock_raw as "riven_mutex_lock"(self) -> MutexGuard[T]
-    def get as "riven_mutex_guard_get"(self) -> T  # on MutexGuard
+    def self.new as "ruxen_mutex_new"(initial: T) -> Mutex[T]
+    def lock_raw as "ruxen_mutex_lock"(self) -> MutexGuard[T]
+    def get as "ruxen_mutex_guard_get"(self) -> T  # on MutexGuard
   end
 end
 ```
@@ -101,7 +101,7 @@ the spelling. Codegen emits the same i64-returning C call.
 
 **Given** the typed Mutex decl from B2
 **Then** the following typechecks:
-```rvn
+```rx
 let m = Mutex.new(7)           # m: Mutex[Int]
 let g = m.lock_raw             # g: MutexGuard[Int]
 let v = g.get                  # v: Int
@@ -114,7 +114,7 @@ The lift propagates through the chain without any explicit casts.
 
 **Given** `Mutex.new(...)` returns `Mutex[T]` typed
 **Then** the MIR drop pass emits a call to `Mutex_drop` (mapped to
-`riven_mutex_drop` via the FFI alias) on scope exit. The lift
+`ruxen_mutex_drop` via the FFI alias) on scope exit. The lift
 preserves Drop semantics — the codegen knows the value is a
 `Mutex[T]` handle and dispatches drop on the class, not on Int.
 
@@ -178,7 +178,7 @@ escape hatch.
 
 ## B11 — Negative: lift does NOT change the FFI symbol's signature
 
-The C symbol `riven_mutex_new(int64_t initial)` is called the same
+The C symbol `ruxen_mutex_new(int64_t initial)` is called the same
 way before and after the lift. Cranelift sees the same arg types,
 the same return type (i64). Only typeck's reporting changes.
 
@@ -198,7 +198,7 @@ class) does NOT get the lift. The lift is keyed on
 | B2        | `instance_method_return_type_honours_declaration`    | `typed_ffi_returns.rs`        |
 | B4        | `class_generic_t_substitutes_in_return`              | `typed_ffi_returns.rs`        |
 | B5        | `self_in_return_position_resolves_to_class_t`        | `typed_ffi_returns.rs`        |
-| B6        | e2e `cases/710_mutex_lock_unlock_typed_surface.rvn`  | release-e2e                   |
+| B6        | e2e `cases/710_mutex_lock_unlock_typed_surface.rx`  | release-e2e                   |
 | B7        | `mutex_drop_emitted_on_typed_scope_exit`             | `typed_ffi_returns.rs`        |
 | B8        | covered by 710 (Mutex), 711 (SharedSync), 712 (Atomic) | release-e2e                 |
 | B9        | covered by integration tests B1-B7                   | —                             |

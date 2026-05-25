@@ -1,6 +1,6 @@
 /*
  * std::async_io runtime — backs the AsyncStdin / AsyncReadLineFuture
- * surface declared in library/std/async_io/src/lib.rvn.
+ * surface declared in library/std/async_io/src/lib.rx.
  *
  * Spec: docs/prompts/v1/15_phase4_async.md DoD bullet 4
  * ("All 9 stdlib types have Async* variants"). This is the AsyncStdin
@@ -19,28 +19,28 @@
  *     responsibility.
  *
  * Reactor coupling: NO new reactor primitives. Uses
- *   riven_reactor_register_fd_read / _deregister / _current_handle
- * shipped in sub-phase 4B (declared in async_fs/src/lib.rvn — we
- * re-declare them here in the .rvn so this package stands alone).
+ *   ruxen_reactor_register_fd_read / _deregister / _current_handle
+ * shipped in sub-phase 4B (declared in async_fs/src/lib.rx — we
+ * re-declare them here in the .rx so this package stands alone).
  *
  * Symbols exported here:
- *   riven_async_stdin_state_new() -> state*
+ *   ruxen_async_stdin_state_new() -> state*
  *       Sets O_NONBLOCK on fd 0, saving the previous flags in the
  *       state struct for restoration on free. If fd 0 is already
  *       non-blocking, the save still records that (drop is a no-op
  *       in that case).
- *   riven_async_stdin_state_get_fd(state) -> int64
- *       Always 0 — there for the Riven side to feed to
+ *   ruxen_async_stdin_state_get_fd(state) -> int64
+ *       Always 0 — there for the Ruxen side to feed to
  *       reactor_register_fd_read without hard-coding the fd number.
- *   riven_async_stdin_step(state) -> int
+ *   ruxen_async_stdin_step(state) -> int
  *       0 progress, 1 EAGAIN, 2 line-or-EOF reached, 3 error.
  *       "Line-or-EOF" means: we hit either '\n' (included in the
  *       returned String per Rust's BufRead::read_line semantics) or
  *       EOF (read returned 0 with no preceding bytes in this poll
  *       cycle — in that case the returned String is empty and the
  *       caller observes it as the conventional EOF signal).
- *   riven_async_stdin_state_take_result(state) -> Result[String, IoError]
- *   riven_async_stdin_state_free(state) -> ()
+ *   ruxen_async_stdin_state_take_result(state) -> Result[String, IoError]
+ *   ruxen_async_stdin_state_free(state) -> ()
  *       Restores the original fcntl flags on fd 0. Idempotent.
  */
 
@@ -70,11 +70,11 @@ typedef struct {
     int done;            /* 1 once '\n' or EOF reached */
     int result_taken;
     char *out_str;       /* canonical-pool String pointer once done */
-} RivenAsyncStdinState;
+} RuxenAsyncStdinState;
 
-void *riven_async_stdin_state_new(void) {
-    RivenAsyncStdinState *s =
-        (RivenAsyncStdinState *)riven_alloc(sizeof(RivenAsyncStdinState));
+void *ruxen_async_stdin_state_new(void) {
+    RuxenAsyncStdinState *s =
+        (RuxenAsyncStdinState *)ruxen_alloc(sizeof(RuxenAsyncStdinState));
     s->fd = 0;
     s->saved_flags = 0;
     s->flags_saved = 0;
@@ -93,7 +93,7 @@ void *riven_async_stdin_state_new(void) {
     int flags = fcntl(0, F_GETFL, 0);
     if (flags < 0) {
         s->err_set = 1;
-        s->err_tag = RIVEN_IO_ERROR_INVALID_INPUT;
+        s->err_tag = RUXEN_IO_ERROR_INVALID_INPUT;
         return s;
     }
     s->saved_flags = flags;
@@ -115,13 +115,13 @@ void *riven_async_stdin_state_new(void) {
      * input; grows on demand below. */
     s->cap = 256;
     s->buf = (char *)malloc(s->cap);
-    if (!s->buf) riven_panic("riven_async_stdin_state_new: malloc failed");
+    if (!s->buf) ruxen_panic("ruxen_async_stdin_state_new: malloc failed");
     return s;
 }
 
-int64_t riven_async_stdin_state_get_fd(void *state) {
+int64_t ruxen_async_stdin_state_get_fd(void *state) {
     if (!state) return -1;
-    return (int64_t)((RivenAsyncStdinState *)state)->fd;
+    return (int64_t)((RuxenAsyncStdinState *)state)->fd;
 }
 
 /* Single-byte read loop so we can stop precisely at '\n' without
@@ -129,9 +129,9 @@ int64_t riven_async_stdin_state_get_fd(void *state) {
  * simplicity — interactive stdin is not a perf hotspot. v1.1 can
  * switch to a chunked read with a pushback buffer if profiling shows
  * this matters. */
-int64_t riven_async_stdin_step(void *state) {
+int64_t ruxen_async_stdin_step(void *state) {
     if (!state) return 3;
-    RivenAsyncStdinState *s = (RivenAsyncStdinState *)state;
+    RuxenAsyncStdinState *s = (RuxenAsyncStdinState *)state;
     if (s->done) return 2;
     if (s->err_set) return 3;
 
@@ -141,7 +141,7 @@ int64_t riven_async_stdin_step(void *state) {
             char *next = (char *)realloc(s->buf, next_cap);
             if (!next) {
                 s->err_set = 1;
-                s->err_tag = RIVEN_IO_ERROR_OUT_OF_MEMORY;
+                s->err_tag = RUXEN_IO_ERROR_OUT_OF_MEMORY;
                 return 3;
             }
             s->buf = next;
@@ -160,38 +160,38 @@ int64_t riven_async_stdin_step(void *state) {
             }
             s->err_set = 1;
             switch (errno) {
-                case EBADF:  s->err_tag = RIVEN_IO_ERROR_INVALID_INPUT; break;
-                case EPIPE:  s->err_tag = RIVEN_IO_ERROR_BROKEN_PIPE; break;
-                default:     s->err_tag = RIVEN_IO_ERROR_OTHER; break;
+                case EBADF:  s->err_tag = RUXEN_IO_ERROR_INVALID_INPUT; break;
+                case EPIPE:  s->err_tag = RUXEN_IO_ERROR_BROKEN_PIPE; break;
+                default:     s->err_tag = RUXEN_IO_ERROR_OTHER; break;
             }
             return 3;
         }
         if (got == 0) {
             /* EOF — finalize whatever we've buffered (may be empty). */
             s->buf[s->len] = '\0';
-            s->out_str = riven_string_from(s->buf);
+            s->out_str = ruxen_string_from(s->buf);
             s->done = 1;
             return 2;
         }
         s->buf[s->len++] = c;
         if (c == '\n') {
             s->buf[s->len] = '\0';
-            s->out_str = riven_string_from(s->buf);
+            s->out_str = ruxen_string_from(s->buf);
             s->done = 1;
             return 2;
         }
     }
 }
 
-void *riven_async_stdin_state_take_result(void *state) {
+void *ruxen_async_stdin_state_take_result(void *state) {
     if (!state) {
-        return riven_result_err_value(
-            (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_result_err_value(
+            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
     }
-    RivenAsyncStdinState *s = (RivenAsyncStdinState *)state;
+    RuxenAsyncStdinState *s = (RuxenAsyncStdinState *)state;
     if (s->result_taken) {
-        return riven_result_err_value(
-            (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_result_err_value(
+            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
     }
     s->result_taken = 1;
     if (s->buf) {
@@ -199,15 +199,15 @@ void *riven_async_stdin_state_take_result(void *state) {
         s->buf = NULL;
     }
     if (s->err_set) {
-        return riven_result_err_value(
-            (int64_t)riven_io_error_unit(s->err_tag));
+        return ruxen_result_err_value(
+            (int64_t)ruxen_io_error_unit(s->err_tag));
     }
-    return riven_result_ok_value((int64_t)s->out_str);
+    return ruxen_result_ok_value((int64_t)s->out_str);
 }
 
-void riven_async_stdin_state_free(void *state) {
+void ruxen_async_stdin_state_free(void *state) {
     if (!state) return;
-    RivenAsyncStdinState *s = (RivenAsyncStdinState *)state;
+    RuxenAsyncStdinState *s = (RuxenAsyncStdinState *)state;
     /* Restore the original fcntl flags so the parent process sees stdin
      * as it left it. Idempotent: flags_saved==0 means we either didn't
      * change them or already restored. */

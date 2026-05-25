@@ -1,0 +1,31 @@
+## --- AsyncTcpListener ----------------------------------------------
+class AsyncTcpListener
+  fd: Int
+  closed: Int
+  accept_handle: Int
+
+  def self.bind(addr: &String) -> AsyncBindFuture
+    AsyncBindFuture.new(addr)
+  end
+
+  def self.bind_now(addr: &String) -> Result[AsyncTcpListener, IoError]
+    ruxen_async_tcp_listener_bind(addr)
+  end
+
+  def var accept -> AsyncAcceptFuture
+    AsyncAcceptFuture.new(
+      ruxen_async_tcp_listener_fd(self),
+      ruxen_async_tcp_listener_accept_handle(self)
+    )
+  end
+
+  lib "runtime/async_net.c"
+    def drop as "ruxen_async_tcp_listener_drop"(self) -> ()
+  end
+end
+
+lib "runtime/async_net.c"
+  def ruxen_async_tcp_listener_bind(addr: &String) -> Result[AsyncTcpListener, IoError]
+  def ruxen_async_tcp_listener_fd(listener: &AsyncTcpListener) -> Int
+  def ruxen_async_tcp_listener_accept_handle(listener: &AsyncTcpListener) -> Int
+end

@@ -1,6 +1,6 @@
 # In-Body Directives
 
-Riven attaches metadata to a declaration **inside the body of the
+Ruxen attaches metadata to a declaration **inside the body of the
 thing it modifies** — the same way `private`, `attr_accessor`, and
 `include` live in Ruby class bodies. Three in-body directives plus
 the `!` macro suffix convention on method names.
@@ -13,7 +13,7 @@ the `!` macro suffix convention on method names.
 | `!` suffix | On a method name | Marks the method as macro-aware / can-panic |
 
 The mixin methods you'd otherwise hand-list are **synthesized
-automatically** via implicit `include` — Riven has no `derive`
+automatically** via implicit `include` — Ruxen has no `derive`
 directive at all. The four sections below walk implicit-include,
 layout, inline, and the `!` convention. The `include` directive is
 covered alongside mixins — see [Chapter 8](08-mixins.md).
@@ -26,7 +26,7 @@ The compiler implicitly `include`s a fixed set of common mixins for
 any class, struct, or enum whose fields structurally support them.
 No declaration is needed:
 
-```riven
+```ruxen
 struct Point
   x: Int
   y: Int
@@ -71,7 +71,7 @@ For documentation clarity or to fail loudly at the include site if
 the structural rule no longer applies, write the include
 explicitly:
 
-```riven
+```ruxen
 struct Point
   x: Int
   y: Int
@@ -84,7 +84,7 @@ end
 Define the method yourself. Your definition wins; the implicit
 `include` does not provide a duplicate.
 
-```riven
+```ruxen
 struct Point
   x: Int
   y: Int
@@ -117,7 +117,7 @@ body. Three forms exist.
 
 ### `layout c`
 
-```riven
+```ruxen
 struct Point
   layout c
   x: Int
@@ -136,7 +136,7 @@ existing C header layout.
 
 ### `layout packed`
 
-```riven
+```ruxen
 struct Header
   layout packed
   kind: UInt8
@@ -154,7 +154,7 @@ out first.
 
 ### `layout transparent`
 
-```riven
+```ruxen
 struct UserId
   layout transparent
   inner: Int
@@ -181,7 +181,7 @@ size optimisation — declaration order is **not** guaranteed.
 
 **Modifier on a `def`:**
 
-```riven
+```ruxen
 inline def fast_path(x: Int) -> Int
   x * 2 + 1
 end
@@ -189,7 +189,7 @@ end
 
 **Standalone directive naming a previously-defined method:**
 
-```riven
+```ruxen
 def fast_path(x: Int) -> Int
   x * 2 + 1
 end
@@ -216,7 +216,7 @@ Today's `!` methods:
 
 | Method                 | Origin                              |
 |------------------------|--------------------------------------|
-| `panic!(msg)`          | prelude — `riven_panic`              |
+| `panic!(msg)`          | prelude — `ruxen_panic`              |
 | `expect!(msg)`         | `Option` / `Result`                  |
 | `unwrap!()`            | `Option` / `Result`                  |
 | `Mutex.lock!()`        | `std.sync` (Phase 4 runtime)         |
@@ -235,7 +235,7 @@ reserved for compiler-aware forms.
 
 The Ruby world settled long ago on putting metadata next to the
 field list: `attr_accessor :name`, `include Ord`,
-`validates :email`, `private`. Riven follows the same pattern.
+`validates :email`, `private`. Ruxen follows the same pattern.
 Everything that describes a type lives **inside its body**, in
 source order.
 

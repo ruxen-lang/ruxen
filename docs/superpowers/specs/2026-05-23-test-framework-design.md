@@ -2,13 +2,13 @@
 
 Date: 2026-05-23
 Status: draft (awaiting user review before plan)
-Supersedes (for v1): `docs/requirements/tier3_03_test_framework.md` — that spec specified parser/AST/HIR changes; this design ships entirely as a pure-`.rvn` package + CLI subcommand, mirroring the `library/std/bench/` precedent and `feedback_pure_riven_first.md`.
+Supersedes (for v1): `docs/requirements/tier3_03_test_framework.md` — that spec specified parser/AST/HIR changes; this design ships entirely as a pure-`.rx` package + CLI subcommand, mirroring the `library/std/bench/` precedent and `feedback_pure_ruxen_first.md`.
 
 ---
 
 ## 1. Summary
 
-Add a pure-Riven test framework. A single `library/std/test/` package supplies an RSpec-flavored DSL keyed on a `Tester` instance yielded into block arguments. A new `riven test` CLI subcommand discovers every `.rvn` file under `tests/**`, wraps each in a synthesized `def main`, builds one binary per file through the existing incremental cache, and executes them in parallel with fork-per-test isolation. No parser, AST, HIR, MIR, or codegen change is required.
+Add a pure-Ruxen test framework. A single `library/std/test/` package supplies an RSpec-flavored DSL keyed on a `Tester` instance yielded into block arguments. A new `ruxen test` CLI subcommand discovers every `.rx` file under `tests/**`, wraps each in a synthesized `def main`, builds one binary per file through the existing incremental cache, and executes them in parallel with fork-per-test isolation. No parser, AST, HIR, MIR, or codegen change is required.
 
 ---
 
@@ -16,11 +16,11 @@ Add a pure-Riven test framework. A single `library/std/test/` package supplies a
 
 ### Goals
 
-1. Write a test in Riven inside `tests/**.rvn` using a familiar RSpec-shaped DSL.
-2. No method-name convention — the file is the discovery unit. Any `.rvn` under `tests/` is a test file.
-3. No compiler changes. Everything lives in `library/std/test/` + `crates/riven-cli/src/test.rs`.
+1. Write a test in Ruxen inside `tests/**.rx` using a familiar RSpec-shaped DSL.
+2. No method-name convention — the file is the discovery unit. Any `.rx` under `tests/` is a test file.
+3. No compiler changes. Everything lives in `library/std/test/` + `crates/ruxen-cli/src/test.rs`.
 4. A panic in one test does not abort the run; other tests continue.
-5. Incremental: a second `riven test` with no source changes does no recompilation and only re-executes the requested tests.
+5. Incremental: a second `ruxen test` with no source changes does no recompilation and only re-executes the requested tests.
 6. Parallel test execution by default (`min(ncpus, 8)`); `--test-threads=1` opts out.
 7. Lean default output: progress dots while running, full detail only for failures.
 8. Stable machine-readable outputs (`--format=tap`, `--format=json`) for CI.
@@ -44,9 +44,9 @@ Add a pure-Riven test framework. A single `library/std/test/` package supplies a
 
 ### 3.1 Test file shape
 
-Every `.rvn` file under `tests/**` is a test file. No method-name convention. The user writes only `Tester` DSL calls — no `def`, no `main`:
+Every `.rx` file under `tests/**` is a test file. No method-name convention. The user writes only `Tester` DSL calls — no `def`, no `main`:
 
-```rvn
+```rx
 use std.test.Tester
 
 Tester.describe("Calculator") do |t|
@@ -79,7 +79,7 @@ end
 
 ### 3.2 API
 
-`Tester` is a class in `library/std/test/src/lib.rvn`. Only `Tester.describe` is a class method (the entry point); all nested calls are instance methods on the `t` yielded into each block. Nested `context` yields a fresh child `Tester` linked to its parent.
+`Tester` is a class in `library/std/test/src/lib.rx`. Only `Tester.describe` is a class method (the entry point); all nested calls are instance methods on the `t` yielded into each block. Nested `context` yields a fresh child `Tester` linked to its parent.
 
 | Call | Where | Effect |
 |---|---|---|
@@ -106,24 +106,24 @@ end
 
 ### 3.4 Discovery & naming
 
-- Test files: every `.rvn` under `tests/**` (relative to the package root).
-- Test path = relative file path with `/` → `.` and `.rvn` dropped.
-  - `tests/calculator/math.rvn` → `calculator.math`
-- Full test case name = `<test-path> › <describe> › <context...> › <it>`. The `›` separator is used in pretty output; for filters use `/` (regex-friendly): `riven test calculator/math/addition/adds`.
+- Test files: every `.rx` under `tests/**` (relative to the package root).
+- Test path = relative file path with `/` → `.` and `.rx` dropped.
+  - `tests/calculator/math.rx` → `calculator.math`
+- Full test case name = `<test-path> › <describe> › <context...> › <it>`. The `›` separator is used in pretty output; for filters use `/` (regex-friendly): `ruxen test calculator/math/addition/adds`.
 
 ### 3.5 CLI
 
 ```
-riven test                                  # build + run all tests
-riven test FILTER                           # substring filter on test name (positional)
-riven test --release                        # build tests in release mode
-riven test --test-threads=N                 # parallel fan-out width (default: min(ncpus, 8))
-riven test --fail-fast                      # stop dispatching new tests after first failure
-riven test --nocapture                      # don't capture test stdout/stderr; pass through live
-riven test --list                           # list discovered tests; don't run
-riven test --no-run                         # build but don't execute
-riven test --include-pending                # also execute `xit` blocks
-riven test --format=pretty|tap|json         # output format (default: pretty)
+ruxen test                                  # build + run all tests
+ruxen test FILTER                           # substring filter on test name (positional)
+ruxen test --release                        # build tests in release mode
+ruxen test --test-threads=N                 # parallel fan-out width (default: min(ncpus, 8))
+ruxen test --fail-fast                      # stop dispatching new tests after first failure
+ruxen test --nocapture                      # don't capture test stdout/stderr; pass through live
+ruxen test --list                           # list discovered tests; don't run
+ruxen test --no-run                         # build but don't execute
+ruxen test --include-pending                # also execute `xit` blocks
+ruxen test --format=pretty|tap|json         # output format (default: pretty)
 ```
 
 Semantics match `cargo test` where overlapping. Positional FILTER is substring on the full test name (path + describe + contexts + it).
@@ -140,7 +140,7 @@ arithmetic.basic: ..
 FAILED: calculator.math › Calculator › addition › adds two numbers
   expected: 3
   actual:   4
-  at tests/calculator/math.rvn:7
+  at tests/calculator/math.rx:7
 
 test result: FAILED. 5 passed; 1 failed; 1 pending; finished in 0.08s
 ```
@@ -154,7 +154,7 @@ ok 1 - calculator.math › Calculator › addition › is commutative
 not ok 2 - calculator.math › Calculator › addition › adds two numbers
   ---
   message: "expected 3, got 4"
-  at: tests/calculator/math.rvn:7
+  at: tests/calculator/math.rx:7
   ...
 ok 3 - calculator.math › Calculator › errors › not yet implemented # SKIP pending
 ...
@@ -172,13 +172,13 @@ New directory `library/std/test/`:
 
 ```
 library/std/test/
-  Riven.toml
+  Ruxen.toml
   src/
-    lib.rvn            # public entry: Tester, Matcher, Runner, free imports
-    runner.rvn         # Runner — owns the group tree, executes test cases
-    matcher.rvn        # Matcher[T] implementations
+    lib.rx            # public entry: Tester, Matcher, Runner, free imports
+    runner.rx         # Runner — owns the group tree, executes test cases
+    matcher.rx        # Matcher[T] implementations
   # no runtime/ directory in v1 — fork/wait via std.process / std.sync,
-  # panic via existing riven_panic
+  # panic via existing ruxen_panic
 ```
 
 #### `class Runner`
@@ -197,18 +197,18 @@ library/std/test/
 
 #### `class Matcher[T]`
 - Fields: `actual: T`, `location: (file: String, line: Int)` — captured at `expect` call site via a `__caller_location` intrinsic *(see Open Q 1)*.
-- Methods: matcher set per §3.3. Each matcher on failure calls `riven_panic` with a structured message the parent decodes.
+- Methods: matcher set per §3.3. Each matcher on failure calls `ruxen_panic` with a structured message the parent decodes.
 
 #### Free re-imports
-`library/std/test/src/lib.rvn` re-exports `Tester` only. The DSL is exclusively instance methods on `t`; there are no free `it`/`expect`/`before`/etc. functions.
+`library/std/test/src/lib.rx` re-exports `Tester` only. The DSL is exclusively instance methods on `t`; there are no free `it`/`expect`/`before`/etc. functions.
 
 ### 4.2 Compile-time wrap
 
-`riven test`, before invoking `rivenc`, synthesizes one `.rvn` file per test file at `target/riven/test-build/<test-path>.synth.rvn` by **textual concatenation** of three parts:
+`ruxen test`, before invoking `ruxenc`, synthesizes one `.rx` file per test file at `target/ruxen/test-build/<test-path>.synth.rx` by **textual concatenation** of three parts:
 
 1. Prelude (auto-generated):
-   ```rvn
-   # AUTO-GENERATED from tests/calculator/math.rvn — do not edit.
+   ```rx
+   # AUTO-GENERATED from tests/calculator/math.rx — do not edit.
    use std.test.Tester
    use std.test.Runner
 
@@ -217,31 +217,31 @@ library/std/test/
    ```
 2. The user's test file body verbatim (line-for-line; see R1 for line-number handling).
 3. Postlude:
-   ```rvn
+   ```rx
      r.execute
    end
    ```
 
-The synthesized file is what `rivenc` compiles. No `#include`-style directive is added to the language — concatenation is purely a tooling step inside `riven test`.
+The synthesized file is what `ruxenc` compiles. No `#include`-style directive is added to the language — concatenation is purely a tooling step inside `ruxen test`.
 
 ### 4.3 Constraints on test file contents
 
-Because the wrap is textual concatenation into a `def main` body, a `tests/**.rvn` file:
+Because the wrap is textual concatenation into a `def main` body, a `tests/**.rx` file:
 
 - May contain only **expression statements** at top level (`Tester.describe(...) do ... end`, `let x = ...`, etc.) — anything legal inside a `def` body.
 - May **not** contain top-level `def`, `class`, `mixin`, or `use` statements after the prelude — those would be syntactically illegal inside the synthesized `def main`.
 - May not redefine `main` (the wrap already supplies it).
 
-**Helper code** (factories, fixtures, shared `def`s) lives in `tests/support/**.rvn`. The discovery walker excludes `tests/support/` from the test-file list; those files are compiled as regular modules and imported by name from test files via `use tests.support.factories` *(exact module path TBD in implementation — depends on how `tests/` is registered as a module root; see Open Q 2)*.
+**Helper code** (factories, fixtures, shared `def`s) lives in `tests/support/**.rx`. The discovery walker excludes `tests/support/` from the test-file list; those files are compiled as regular modules and imported by name from test files via `use tests.support.factories` *(exact module path TBD in implementation — depends on how `tests/` is registered as a module root; see Open Q 2)*.
 
 ### 4.4 Build pipeline
 
 For each discovered test file:
 
-1. Compute wrapper path: `target/riven/test-build/<test-path>.wrapper.rvn`.
+1. Compute wrapper path: `target/ruxen/test-build/<test-path>.wrapper.rx`.
 2. Synthesize wrapper (Option A above).
-3. Invoke `rivenc` with `BuildOptions { flags: "test", output: target/debug/test/<test-path> }`.
-4. The existing incremental cache (`rivenc/src/cache/`) keys on source content hash + flags; rebuilds only changed wrappers.
+3. Invoke `ruxenc` with `BuildOptions { flags: "test", output: target/debug/test/<test-path> }`.
+4. The existing incremental cache (`ruxenc/src/cache/`) keys on source content hash + flags; rebuilds only changed wrappers.
 
 Per-file binary (vs one monolithic binary):
 - Touching one test file rebuilds one binary. Touching `library/std/test/` rebuilds all.
@@ -250,12 +250,12 @@ Per-file binary (vs one monolithic binary):
 
 ### 4.5 Execution pipeline
 
-`riven test` (the outer dispatcher) is a Rust process. For each test binary it dispatches:
+`ruxen test` (the outer dispatcher) is a Rust process. For each test binary it dispatches:
 
 ```
-   riven test (Rust)
+   ruxen test (Rust)
      │ spawn min(ncpus, 8) at a time
-     ├── target/debug/test/calculator/math   (Riven binary)
+     ├── target/debug/test/calculator/math   (Ruxen binary)
      │     │ on startup, reads argv (filter, format, --list, ...)
      │     │ for each registered TestCase:
      │     │   fork()
@@ -269,11 +269,11 @@ Per-file binary (vs one monolithic binary):
 
 - **Fork-per-test** isolates panics, OOM, infinite recursion. No unwinding required. Side effect: each test starts from a clean heap, hiding leaks (acceptable until `Drop` lands per memory).
 - **Inter-process protocol:** child writes one structured line to stdout per case start/finish in a stable format the parent parses and re-renders into the user-selected `--format`. Captured stdout/stderr of the test body itself is on a separate FD (the body's stdout is piped to a buffer, only printed on failure unless `--nocapture`).
-- **Outer parallelism:** `riven test` dispatches up to `min(ncpus, 8)` test binaries concurrently. **Inner parallelism:** each binary forks up to N children concurrently (same cap). Total concurrency is bounded; `--test-threads=1` serializes both.
+- **Outer parallelism:** `ruxen test` dispatches up to `min(ncpus, 8)` test binaries concurrently. **Inner parallelism:** each binary forks up to N children concurrently (same cap). Total concurrency is bounded; `--test-threads=1` serializes both.
 
 ### 4.6 Panic catching
 
-The existing `riven_panic` in `library/std/core/runtime/alloc.c` calls `abort()`. That's exactly what fork-per-test needs:
+The existing `ruxen_panic` in `library/std/core/runtime/alloc.c` calls `abort()`. That's exactly what fork-per-test needs:
 - Child aborts → parent sees SIGABRT exit → records `FAILED` with the captured stderr message.
 - `expect_panic("substr")` asserts the child aborted AND captured stderr contains `substr`.
 
@@ -281,26 +281,26 @@ No new runtime entry point required. The test runtime reuses what's already ther
 
 ### 4.7 Cache integration
 
-The existing `rivenc/src/cache/driver.rs` already keys on `BuildOptions.flags`. Test builds pass `flags="test"`, keeping test object files in a separate cache namespace from `riven build`.
+The existing `ruxenc/src/cache/driver.rs` already keys on `BuildOptions.flags`. Test builds pass `flags="test"`, keeping test object files in a separate cache namespace from `ruxen build`.
 
-Additionally, `riven test` maintains a discovery cache at `target/riven/test-cache/discovery.json` keyed on (file path, mtime, content hash) so repeated runs over unchanged test directories skip the walk + parse phase entirely.
+Additionally, `ruxen test` maintains a discovery cache at `target/ruxen/test-cache/discovery.json` keyed on (file path, mtime, content hash) so repeated runs over unchanged test directories skip the walk + parse phase entirely.
 
 ### 4.8 Files touched
 
 | Kind | Path | Change |
 |---|---|---|
-| new pkg | `library/std/test/Riven.toml` | New package manifest |
-| new pkg | `library/std/test/src/lib.rvn` | `Tester` class + class entry `describe` |
-| new pkg | `library/std/test/src/runner.rvn` | `Runner` + `TestCase` |
-| new pkg | `library/std/test/src/matcher.rvn` | `Matcher[T]` + v1 matchers |
-| new cli | `crates/riven-cli/src/test.rs` | Discovery, wrap, build, dispatch, output (~400 LOC) |
-| new cli | `crates/riven-cli/src/test_output.rs` | Pretty / TAP / JSON renderers (~150 LOC) |
-| edit cli | `crates/riven-cli/src/cli.rs` | Add `Command::Test { ... }` |
-| edit cli | `crates/riven-cli/src/main.rs` | Wire `Command::Test` to `test::run` |
-| edit cli | `crates/riven-cli/src/scaffold.rs` | `riven new` drops `tests/example.rvn` |
-| edit | `library/BOOTSTRAP_FILES` | Register `library/std/test/src/*.rvn` per `project_riven_bootstrap_files_load_check.md` (orphan-load risk — required) |
+| new pkg | `library/std/test/Ruxen.toml` | New package manifest |
+| new pkg | `library/std/test/src/lib.rx` | `Tester` class + class entry `describe` |
+| new pkg | `library/std/test/src/runner.rx` | `Runner` + `TestCase` |
+| new pkg | `library/std/test/src/matcher.rx` | `Matcher[T]` + v1 matchers |
+| new cli | `crates/ruxen-cli/src/test.rs` | Discovery, wrap, build, dispatch, output (~400 LOC) |
+| new cli | `crates/ruxen-cli/src/test_output.rs` | Pretty / TAP / JSON renderers (~150 LOC) |
+| edit cli | `crates/ruxen-cli/src/cli.rs` | Add `Command::Test { ... }` |
+| edit cli | `crates/ruxen-cli/src/main.rs` | Wire `Command::Test` to `test::run` |
+| edit cli | `crates/ruxen-cli/src/scaffold.rs` | `ruxen new` drops `tests/example.rx` |
+| edit | `library/BOOTSTRAP_FILES` | Register `library/std/test/src/*.rx` per `project_ruxen_bootstrap_files_load_check.md` (orphan-load risk — required) |
 | new doc | `docs/tutorial/17-testing.md` | Tutorial page |
-| new tests | `crates/riven-cli/tests/test_runner.rs` | Integration tests on fixture projects under `crates/riven-cli/tests/fixtures/test-*` |
+| new tests | `crates/ruxen-cli/tests/test_runner.rs` | Integration tests on fixture projects under `crates/ruxen-cli/tests/fixtures/test-*` |
 
 ---
 
@@ -317,13 +317,13 @@ Additionally, `riven test` maintains a discovery cache at `target/riven/test-cac
 | `t.before { ... }` in parent + `t.it` in child context | before runs before each `it`, including nested |
 | `t.after { ... }` runs even when `it` fails | post-failure cleanup observed |
 | 2 test files, 8 cores | Both build + run in parallel |
-| `riven test foo` with no matches | Exit 0, prints "0 tests" |
-| Repeated `riven test` with no source changes | Uses cache; no rebuild; only re-executes |
-| `riven test --list --format=json` | One JSON event per discovered test, no execution |
-| `riven test --nocapture` | Test's `puts` reaches stdout live |
-| `riven test --fail-fast` | First failure stops outer dispatch |
-| `riven test --test-threads=1` | All cases serialized |
-| Test file with a syntax error | rivenc emits diagnostic; that one binary marked build-failed; others still run |
+| `ruxen test foo` with no matches | Exit 0, prints "0 tests" |
+| Repeated `ruxen test` with no source changes | Uses cache; no rebuild; only re-executes |
+| `ruxen test --list --format=json` | One JSON event per discovered test, no execution |
+| `ruxen test --nocapture` | Test's `puts` reaches stdout live |
+| `ruxen test --fail-fast` | First failure stops outer dispatch |
+| `ruxen test --test-threads=1` | All cases serialized |
+| Test file with a syntax error | ruxenc emits diagnostic; that one binary marked build-failed; others still run |
 | Test that hangs forever | (v2) `--timeout` kills it; v1 documents the constraint |
 
 ---
@@ -333,9 +333,9 @@ Additionally, `riven test` maintains a discovery cache at `target/riven/test-cac
 | Phase | Scope | Est. days |
 |---|---|---|
 | 1 | `library/std/test/` package — `Tester`, `Runner`, `TestCase`, v1 matchers, no runner CLI yet (drives via hand-written wrapper to validate the DSL compiles and runs) | 1 |
-| 2 | `crates/riven-cli/src/test.rs` — discovery, wrap, single-file build & run, pretty output | 1 |
+| 2 | `crates/ruxen-cli/src/test.rs` — discovery, wrap, single-file build & run, pretty output | 1 |
 | 3 | Fork-per-test isolation, parallel dispatch, cache integration, TAP + JSON formats | 0.5 |
-| 4 | `riven new` scaffold, tutorial doc 17, integration test fixtures | 0.5 |
+| 4 | `ruxen new` scaffold, tutorial doc 17, integration test fixtures | 0.5 |
 
 Total: **~3 engineer-days** (vs the original 9-day estimate). The compression comes entirely from skipping every compiler change.
 
@@ -343,14 +343,14 @@ Total: **~3 engineer-days** (vs the original 9-day estimate). The compression co
 
 ## 7. Open questions
 
-1. **`__caller_location` for matcher file:line.** Riven has no `caller_location` intrinsic today. Options:
+1. **`__caller_location` for matcher file:line.** Ruxen has no `caller_location` intrinsic today. Options:
    - (a) Add one — minor compiler addition, breaks the "no compiler change" thesis.
    - (b) Pass `(file, line)` explicitly into `expect(x, __FILE__, __LINE__)` — clunky.
    - (c) v1 omits file:line for matcher failures; show only test name + describe path. Failure message still includes the actual/expected diff.
    - **Recommend (c) for v1.** Add (a) later as a small follow-up.
 
 2. **Helper files under `tests/`.** Users will want shared helpers (factories, fixtures). Three options:
-   - (a) `tests/support/**.rvn` is excluded from discovery and imported by name from test files.
+   - (a) `tests/support/**.rx` is excluded from discovery and imported by name from test files.
    - (b) Files whose body doesn't contain `Tester.describe` are skipped (heuristic).
    - (c) Forbid helpers; helpers live in `src/test_helpers/` and are imported.
    - **Recommend (a)** — simple, matches RSpec's `spec/support/` convention.
@@ -367,8 +367,8 @@ Total: **~3 engineer-days** (vs the original 9-day estimate). The compression co
 
 ## 8. Risks
 
-- **R1 — Concatenation-based include is fragile.** Line numbers in diagnostics may not match the user's source file. Mitigation: the synthesized wrapper file starts with a `# line N "tests/calculator/math.rvn"` marker *if* rivenc supports it; otherwise diagnostics show the wrapper path and the user manually maps lines. Investigate during Phase 2.
-- **R2 — Thread-local active-runner slot.** `std.test` needs a single-slot per-process mutable cell to thread the active `Runner` from `Tester.describe` into the closure-time DSL. `std.sync` has the primitives; verify the bootstrap order works (per memory `project_riven_bootstrap_files_load_check.md` — moved-to-`.rvn` declarations need a `BOOTSTRAP_FILES` entry).
+- **R1 — Concatenation-based include is fragile.** Line numbers in diagnostics may not match the user's source file. Mitigation: the synthesized wrapper file starts with a `# line N "tests/calculator/math.rx"` marker *if* ruxenc supports it; otherwise diagnostics show the wrapper path and the user manually maps lines. Investigate during Phase 2.
+- **R2 — Thread-local active-runner slot.** `std.test` needs a single-slot per-process mutable cell to thread the active `Runner` from `Tester.describe` into the closure-time DSL. `std.sync` has the primitives; verify the bootstrap order works (per memory `project_ruxen_bootstrap_files_load_check.md` — moved-to-`.rx` declarations need a `BOOTSTRAP_FILES` entry).
 - **R3 — Closure leak across fork.** The test body closure may capture parent-process state (e.g., a file handle opened in `before`). Document: per-example state must be set up inside the `before` block; cross-test state is not supported in v1 (no `before(:all)`).
 
 ---

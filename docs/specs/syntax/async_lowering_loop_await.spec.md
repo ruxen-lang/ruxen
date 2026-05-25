@@ -7,7 +7,7 @@ and `while let`.
 **Source docs:**
 - `docs/errors/E1115.md` (current rejection diagnostic)
 - `docs/specs/syntax/async_lowering.spec.md` (Milestone 2A + 2B)
-- `compiler/riven_core/src/async_lowering/mod.rs` (the implementation)
+- `compiler/ruxen_core/src/async_lowering/mod.rs` (the implementation)
 
 ---
 
@@ -28,10 +28,10 @@ edge** anywhere in the lowering; the state field grows monotonically
 from 0 to N and stops.
 
 Rondo cannot use the recently-shipped `Task.spawn_raw` runtime
-surface (riven `59b8de6`) because the natural accept-spawn pattern
+surface (ruxen `59b8de6`) because the natural accept-spawn pattern
 requires `.await` inside a `while`:
 
-```riven
+```ruxen
 async def serve(app: &Rondo, l: AsyncTcpListener) -> Int
   var keep_going: Bool = true
   while keep_going
@@ -56,7 +56,7 @@ high-blast-radius — most of the existing lowering code assumes
 monotonic state advancement.
 
 **v1 ships a simpler shape**: the loop iterations happen inside an
-**actual Riven `while` loop** in the synthesised `poll` body. The
+**actual Ruxen `while` loop** in the synthesised `poll` body. The
 state-machine field has only two logical values for the loop region
 (running vs done). Each call to `poll` runs as many iterations as
 the inner sub-future allows before either completing all iterations
@@ -133,7 +133,7 @@ The existing eager-init shape is preserved but adjusted:
 
 ### 2.5 `poll` body
 
-```riven
+```ruxen
 def var poll(cx: &var Context) -> Poll[<ReturnTy>]
   if self.__state != 0
     return Poll.Pending
@@ -174,9 +174,9 @@ def var poll(cx: &var Context) -> Poll[<ReturnTy>]
 end
 ```
 
-#### Why the inner Riven `while` is sound
+#### Why the inner Ruxen `while` is sound
 
-The poll method itself is **not** async — it's a plain Riven method
+The poll method itself is **not** async — it's a plain Ruxen method
 that returns `Poll[T]`. Loops inside non-async methods compile
 today. The `.await` desugaring restriction (E1115) only applies to
 `.await` expressions, and there are no `.await` expressions in the
@@ -239,7 +239,7 @@ existing single-await terminal rule.
 
 ### 3.1 Files touched
 
-1. `compiler/riven_core/src/async_lowering/mod.rs`:
+1. `compiler/ruxen_core/src/async_lowering/mod.rs`:
    - Add `BodyShape` enum.
    - Refactor `segment_body` to return `Option<BodyShape>` (today
      it returns `Option<Segments>`; the linear shape becomes
@@ -257,12 +257,12 @@ existing single-await terminal rule.
      v1 restrictions. If any restriction violates, the
      pre-pass still fires.)
 
-2. `compiler/riven_core/tests/fixtures/riven/async_negative_await_in_while.rvn`:
+2. `compiler/ruxen_core/tests/fixtures/ruxen/async_negative_await_in_while.rx`:
    - Update the fixture to no longer reject the canonical shape.
      Add new negative fixtures for the unsupported subset
      (multi-await body, `for` loop, `while let`, etc.).
 
-3. `tests/release-e2e/cases/728c_async_spawn_loop.rvn`:
+3. `tests/release-e2e/cases/728c_async_spawn_loop.rx`:
    - Already drafted (by the prior agent attempt). Move from
      `.deferred` back to active once the implementation works.
    - Adjust if needed to match the v1 restriction surface.
@@ -272,9 +272,9 @@ existing single-await terminal rule.
 Single-fixture filter, per the harness convention:
 
 ```bash
-cd /Users/hassan/.projects/riven
-RIVEN_E2E_CASES=728c_async_spawn_loop cargo test \
-  -p riven_core --test release_e2e_smoke -- --ignored
+cd /Users/hassan/.projects/ruxen
+RUXEN_E2E_CASES=728c_async_spawn_loop cargo test \
+  -p ruxen_core --test release_e2e_smoke -- --ignored
 ```
 
 **Do not run the full e2e suite during iteration** — it's ~3
@@ -284,8 +284,8 @@ runs in ~1s.
 Final verification (once 728c passes), run the async-only subset:
 
 ```bash
-RIVEN_E2E_CASES=723_async_block_on,724_async_block_on_chain,725_time_sleep_block_on,726_async_listener_bind,727_async_tcp_echo,727b_async_tcp_read_timeout,728_async_spawn_join_basic,728c_async_spawn_loop \
-  cargo test -p riven_core --test release_e2e_smoke -- --ignored
+RUXEN_E2E_CASES=723_async_block_on,724_async_block_on_chain,725_time_sleep_block_on,726_async_listener_bind,727_async_tcp_echo,727b_async_tcp_read_timeout,728_async_spawn_join_basic,728c_async_spawn_loop \
+  cargo test -p ruxen_core --test release_e2e_smoke -- --ignored
 ```
 
 ### 3.3 Rondo bench
@@ -293,7 +293,7 @@ RIVEN_E2E_CASES=723_async_block_on,724_async_block_on_chain,725_time_sleep_block
 After the runtime fix, optionally wire Rondo's `async_serve_loop`
 to use the new pattern:
 
-```riven
+```ruxen
 async def accept_and_spawn(app: &Rondo, l: AsyncTcpListener) -> Int
   var keep_going: Bool = true
   while keep_going
@@ -319,7 +319,7 @@ accept loop and document the limitation.
 
 For the canonical Rondo accept loop:
 
-```riven
+```ruxen
 async def serve(app: &Rondo, l: AsyncTcpListener) -> Int
   var keep_going: Bool = true
   while keep_going
@@ -335,7 +335,7 @@ end
 
 Lowers to:
 
-```riven
+```ruxen
 class __ServeFuture
   __state: Int
   __sub_ready: Int
@@ -363,7 +363,7 @@ class __ServeFuture
     while keep_iterating
       if self.keep_going
         if self.__sub_ready == 0
-          self.__sub = self.l.accept    # awaitee ctor; Riven instance method
+          self.__sub = self.l.accept    # awaitee ctor; Ruxen instance method
           self.__sub_ready = 1
         end
         let p = (&var self.__sub).poll(cx)
@@ -416,14 +416,14 @@ server accept-spawn pattern; the rest land as follow-up milestones.
 
 1. **Drop elaboration on `__sub`**: the sub-future is constructed
    per-iteration. Each construction allocates a state struct (e.g.
-   `riven_async_accept_state_new`). On Ready, the state's
+   `ruxen_async_accept_state_new`). On Ready, the state's
    `take_result` consumes the buffer and `state_free` is called by
    the existing drop chain. Verify the per-iteration alloc is
    matched by per-iteration free — leak-check with the existing
    `runtime_no_leak_fixture` harness if time permits.
 
 2. **Default-uninit field**: `self.__sub` is declared but not
-   initialised in `init`. Riven's typeck may flag this. If so,
+   initialised in `init`. Ruxen's typeck may flag this. If so,
    either:
    - Initialise with a sentinel via a zero-arg ctor on the awaitee
      class (e.g. `AsyncAcceptFuture.new(0)` or similar), OR
@@ -433,7 +433,7 @@ server accept-spawn pattern; the rest land as follow-up milestones.
    poll dispatch. Try sentinel first.
 
 3. **Bench regression**: the per-poll inner `while` is fine
-   (Riven loops are cheap) but if the new field layout shifts
+   (Ruxen loops are cheap) but if the new field layout shifts
    anything in MIR, alignment changes could surprise hot-path
    allocations. Watch RPS after wiring Rondo; if it drops below
    50 k, revert Rondo and keep the runtime change as-is.

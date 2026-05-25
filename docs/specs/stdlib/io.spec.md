@@ -123,5 +123,5 @@ e.message()` chains is currently incomplete (deferred).
 
 > **Note:** `Stdin.read_to_string()` is pinned by
 > `std_io_stdin_read_to_string_round_trip` in
-> `crates/riven-core/tests/std_use_resolution.rs` — the round-trip
+> `crates/ruxen-core/tests/std_use_resolution.rs` — the round-trip
 > test was previously hidden behind a sibling-file naming convention.

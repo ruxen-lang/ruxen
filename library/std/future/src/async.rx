@@ -1,0 +1,33 @@
+## --- Async namespace (sub-phase 4A B1) -----------------------------
+##
+## The user-facing async runtime surface. `Async.sleep(d)` returns a
+## TimeSleepFuture that resolves after `d` has elapsed; usable from
+## both sync code via `block_on(Async.sleep(d))` and async code via
+## `Async.sleep(d).await` (per async_io.spec.md B-Z).
+##
+## Why a class rather than a free fn: class-static-method dispatch
+## is unambiguous about the async runtime surface (cf. discussion
+## around naming — sync stays on `Thread.sleep`, async lives on
+## `Async.*`). Future additions land here as more class-statics.
+class Async
+  def self.sleep(d: &Duration) -> TimeSleepFuture
+    TimeSleepFuture.new(d)
+  end
+end
+
+## --- Sub-phase 5: task scheduler (commit 1) ------------------------
+##
+## Spec: docs/specs/stdlib/task_spawn.spec.md.
+##
+## Commit 1 ships the queue + spawn + yield_now + raw handle
+## accessors. Commit 2 layers `task_join(h).await` over this surface
+## via the existing free-fn `.await` desugar. The TaskHandle is held
+## as an opaque `Int` at the Ruxen surface, mirroring the convention
+## established by `JoinHandle.join_raw(handle: Int)` in library/std/
+## sync/src/lib.rx (an OS-thread join handle).
+##
+## Trade-off documented in the brief: a typed `class TaskHandle[T]`
+## value-class would need lib-decl support for `&var Future` /
+## `self` ↔ `Int` cast at the call boundary. v1 ships at the raw
+## Int level (same as Thread.spawn_raw). Commit 2 introduces a typed
+## __TaskJoinFuture[T] that recovers T at the join site.

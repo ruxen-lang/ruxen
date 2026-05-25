@@ -1,4 +1,4 @@
-# Riven — Full-Stack Roadmap
+# Ruxen — Full-Stack Roadmap
 
 Companion index for all tier-1 through tier-5 requirements docs. Read this first.
 
@@ -22,13 +22,13 @@ The research agents independently uncovered broken or aspirational-but-nonfuncti
 | **P0.2** | Correctness | `MirInst::Drop` is emitted but both codegen backends silently discard it. Every program leaks heap memory until exit. | `codegen/cranelift.rs:692-698`, `codegen/llvm/emit.rs:790-792` | tier1_04 |
 | **P0.3** | Correctness | The body-level `derive Mixin` directive is parsed but no pass consumes it. `Ty::is_copy()` ignores `derive_traits`. | `parser/mod.rs:473-511`, `hir/types.rs:189-221` | tier1_05 |
 | **P0.4** | Design | `layout` storage and `derive Mixin` storage share the same `Vec<String>` field. | `parser/mod.rs:499-503` | tier1_05 |
-| **P0.5** | Correctness | `?T..._method` codegen fallback maps unresolved generic method calls to `riven_noop_passthrough`. Some currently-passing tests are no-ops. | `codegen/runtime.rs` | tier1_01 |
+| **P0.5** | Correctness | `?T..._method` codegen fallback maps unresolved generic method calls to `ruxen_noop_passthrough`. Some currently-passing tests are no-ops. | `codegen/runtime.rs` | tier1_01 |
 | **P0.6** | Design | `Map[K,V]` collection name collides with the conventional `Hash` mixin. Both stdlib and derive docs recommend renaming to `Map`. | `resolve/mod.rs:200` | tier1_01 / tier1_05 |
 | **P0.7** | Correctness | String literals flow as `Ty::String`; lowering `String::drop` to `free()` would double-free. | `mir/lower.rs` + runtime | tier1_04 |
-| **P0.8** | UX | Manifest parses registry dependencies (`manifest.rs:51-57`) but `resolve_deps.rs:100-108` hard-rejects them with "not yet supported". | `crates/riven-cli/src/` | tier4_01 |
+| **P0.8** | UX | Manifest parses registry dependencies (`manifest.rs:51-57`) but `resolve_deps.rs:100-108` hard-rejects them with "not yet supported". | `crates/ruxen-cli/src/` | tier4_01 |
 | **P0.9** | Policy | `Cargo.toml` workspace root is 4 lines with no `rust-version`. Contributor can land nightly-only Rust. | root | tier4_06 |
 | **P0.10** | Docs | `CLAUDE.md` claims proptest coverage. The only two proptest uses are `prop_assert!(expected_len <= 100)` and `prop_assert_eq!(n, n)` tautologies. | `tests/runtime_safety.rs:68-86` | tier3_08 |
-| **P0.11** | Dead code | `package.edition` field exists and is tested, but `grep edition` across `riven-core` returns zero hits — entirely inert. | `crates/riven-cli/src/manifest.rs:29` | tier5_02 |
+| **P0.11** | Dead code | `package.edition` field exists and is tested, but `grep edition` across `ruxen-core` returns zero hits — entirely inert. | `crates/ruxen-cli/src/manifest.rs:29` | tier5_02 |
 | **P0.12** | Dead code | `async`/`await`/`spawn`/`actor`/`send`/`receive` reserved in lexer but never consumed by the parser. | `lexer/token.rs:83-85,:127-130` | tier1_02 / tier1_03 |
 | **P0.13** | UX | Doc comments `##` are lexed as `TokenKind::DocComment` but discarded at four parser sites. | `parser/mod.rs:455-458,:884-887,:1112-1115,:1187-1190` | tier3_04 |
 | **P0.14** | Correctness | `DWARF` emission is a 3-line stub. `--backend=llvm` debug builds have no line info. | `codegen/llvm/debug.rs:1-3` | tier3_02 |
@@ -109,7 +109,7 @@ Fixes P0.1, P0.3, P0.4, P0.6, P0.9, P0.10, P0.11, P0.13 — anything that's eith
 3. **CI bootstrap** (tier-4.06 phase 1): ship `ci.yml` running `cargo test` + `cargo clippy` + MSRV check. 0.5 weeks.
 4. **Directive untangle** (P0.3, P0.4): wire body-level `derive` dispatch, widen the storage from `Vec<String>` to a structured form, separate `derive_traits` from `layout` storage, add `derive_traits` to class/enum.
 5. **Hash rename** (P0.6): `Map[K,V]` → `Map[K,V]`. Update tutorial + fixtures. First `EditionLint` canary once tier-5.02 ships.
-6. **Doc-comment capture** (P0.13): stop discarding `##` at 4 parser sites; thread into HIR. Unblocks both tier-3.04 (rivendoc) and tier-3.01 hover enrichment.
+6. **Doc-comment capture** (P0.13): stop discarding `##` at 4 parser sites; thread into HIR. Unblocks both tier-3.04 (ruxendoc) and tier-3.01 hover enrichment.
 7. **Edition removal or wiring** (P0.11): either delete the inert `edition` field from the manifest or gate a single behavior on it as a smoke test.
 8. **Proptest cleanup** (P0.10): either add real properties per tier-3.08, or remove the claim from `CLAUDE.md`.
 
@@ -127,7 +127,7 @@ Fixes the remaining P0s that are actual semantic bugs, and lands the mixin infra
 
 ### Phase 2 — stdlib (6-8 weeks)
 
-Tier-1.01 phases 1a, 1b, 1c. Overlap tier-2.01 (associated types) to land `Iterator` with a real `Item` type. Write stdlib in Riven-plus-FFI as the docs specify. Keep key types int64-slot-erased until monomorphization lands (tier-2.02 const-generics dependency — noted).
+Tier-1.01 phases 1a, 1b, 1c. Overlap tier-2.01 (associated types) to land `Iterator` with a real `Item` type. Write stdlib in Ruxen-plus-FFI as the docs specify. Keep key types int64-slot-erased until monomorphization lands (tier-2.02 const-generics dependency — noted).
 
 Overlaps nicely with tier-3.03 (test framework) because now users have a stdlib to test *and* a test framework to drive it.
 
@@ -163,7 +163,7 @@ Can run in parallel to every other phase because it's documentation-heavy.
 - Tier-5.02 edition-stability mechanism (formalize once the Hash-rename edition-lint canary ships).
 - Tier-3.08 proptest (if not done in phase 0).
 - Tier-3.07 MIR optimizations (small passes can land anytime `simplify_cfg` always on, others at opt≥1).
-- Tier-3.04 rivendoc (requires P0.13 doc-comment capture).
+- Tier-3.04 ruxendoc (requires P0.13 doc-comment capture).
 
 ## Total estimate
 
@@ -194,7 +194,7 @@ Consolidated from all five tier overviews:
 11. **Variance declaration** — inference-only (recommended) vs user annotation. [tier2_07]
 12. **Specialization in v1** — Rust's `min_specialization` is still unstable after a decade; ship it or defer. [tier2_04]
 13. **Attribute arg grammar** — `String`-based (today) vs structured `Vec<AttrArg>`. [tier5_03]
-14. **Error-code namespace** — `E0001`-style (Rust parity) or Riven-specific prefix. [tier5_04]
+14. **Error-code namespace** — `E0001`-style (Rust parity) or Ruxen-specific prefix. [tier5_04]
 15. **`--explain` storage** — markdown under `docs/errors/` vs embedded in the binary. [tier5_04]
 16. **Grammar formalism** — EBNF vs PEG vs ANTLR. [tier5_01]
 17. **Doc-comment syntax** — `##` (already lexed) vs `///` (Rust parity). Recommended: keep `##`. [tier3_04]

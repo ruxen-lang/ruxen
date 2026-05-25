@@ -10,7 +10,7 @@ stdlib module landing.
 This spec covers the `use ...` import surface and the runtime-entry
 shim that bootstraps argv before user code runs.  Every numbered
 behaviour is pinned by an integration test in
-[`crates/riven-core/tests/std_use_resolution.rs`](../../../crates/riven-core/tests/std_use_resolution.rs).
+[`crates/ruxen-core/tests/std_use_resolution.rs`](../../../crates/ruxen-core/tests/std_use_resolution.rs).
 
 ---
 
@@ -60,8 +60,8 @@ For modules with shipped runtime impls, a complete
 
 ## B5 — `main` shim initialises runtime argv
 
-Every Riven binary has a generated `main` shim that calls
-`riven_env_init(argc, argv)` before user code runs.  This lets
+Every Ruxen binary has a generated `main` shim that calls
+`ruxen_env_init(argc, argv)` before user code runs.  This lets
 `std.env.args()` return the right values from the first line of
 `main`.
 
@@ -75,7 +75,7 @@ entries (the program name plus the two user args).
 ## Pin tests
 
 All behaviours live in
-`crates/riven-core/tests/std_use_resolution.rs`:
+`crates/ruxen-core/tests/std_use_resolution.rs`:
 
 | Behaviour | Test fn                                                 |
 |-----------|---------------------------------------------------------|

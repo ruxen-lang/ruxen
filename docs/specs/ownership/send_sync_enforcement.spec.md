@@ -63,7 +63,7 @@ site:
 [E1101] error: cannot construct Mutex[Foo] — type parameter T must
 implement Send, but Foo does not
 note: add `include Send` to Foo if it is safe to share across threads
-  --> file.rvn:NN:NN
+  --> file.rx:NN:NN
    | Mutex.new(Foo.new)
    |           ^^^^^^^
 ```
@@ -97,7 +97,7 @@ type's mixin set, and on `Send` absent emits:
 [E1100] error: cannot capture `foo` of type Foo across thread boundary
   — Foo does not implement Send
 note: add `include Send` to Foo if it is safe to share across threads
-  --> file.rvn:NN:NN
+  --> file.rx:NN:NN
    | Thread.spawn do || foo.bar end
    |                    ^^^
 ```
@@ -136,7 +136,7 @@ for the transitivity case; B3 covers it.
 
 ## B10 — User opt-in marker pattern
 
-```rvn
+```rx
 class MyData
   include Send         # marker — no methods required
   include Sync         # marker — no methods required
@@ -160,7 +160,7 @@ of B3-B8.
 
 ## B12 — `unsafe impl Send` escape hatch
 
-```rvn
+```rx
 class WrapsRawPointer
   include unsafe Send   # asserts safety manually
 end
@@ -179,7 +179,7 @@ All E1100/E1101/E1102 diagnostics share a common note:
 > note: add `include Send` to TYPE_NAME if it is safe to share across
 > threads. See docs/specs/ownership/send_sync_enforcement.spec.md.
 
-Diagnostic codes are reserved in `compiler/riven_core/src/diagnostics/`:
+Diagnostic codes are reserved in `compiler/ruxen_core/src/diagnostics/`:
 - E1100 — non-Send closure capture across thread boundary
 - E1101 — `Mutex.new` / `Sender`/`Receiver`/`channel[T]` with non-Send T
 - E1102 — `SharedSync.new` with non-Send T

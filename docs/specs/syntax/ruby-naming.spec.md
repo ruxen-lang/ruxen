@@ -1,4 +1,4 @@
-# Spec — Riven Surface Syntax (Ruby Flavor)
+# Spec — Ruxen Surface Syntax (Ruby Flavor)
 
 Status: Draft (2026-05-16)
 Owner: language
@@ -12,7 +12,7 @@ When any other document in the repo (tutorial, stdlib spec,
 requirements doc, fixture) disagrees with this file on a surface
 form, this file wins and the other should be updated.
 
-This document is the **canonical source** for what Riven looks like
+This document is the **canonical source** for what Ruxen looks like
 on the page. Every tutorial, requirements doc, fixture, and example
 conforms to the forms below.
 
@@ -20,7 +20,7 @@ conforms to the forms below.
 
 ## 1. Motivation
 
-Riven's tagline is *reads like Ruby, compiles like Rust*. The first
+Ruxen's tagline is *reads like Ruby, compiles like Rust*. The first
 half is the design promise the user makes a hiring decision on; the
 second half is what the implementation provides. Where the two
 collide on a naming choice, the surface bends toward Ruby — the
@@ -37,7 +37,7 @@ no Ruby idiom maps cleanly.
 
 ### Goals
 
-- **G1.** A Ruby developer can read any Riven source file without a
+- **G1.** A Ruby developer can read any Ruxen source file without a
   Rust dictionary.
 - **G2.** Declaration metadata lives **in the body of the thing it
   modifies**, the way `private`, `attr_accessor`, and `include` live
@@ -56,7 +56,7 @@ no Ruby idiom maps cleanly.
 - **G6.** Stdlib type names use the Ruby word where one exists
   (`Array`, `Set`, `Map`), the descriptive English word where Ruby
   has no analogue (`Shared`, `SharedSync`), and the existing name
-  where Riven made a deliberate semantic departure (`Option`,
+  where Ruxen made a deliberate semantic departure (`Option`,
   `Result`, `Box`, `String`, `&str`).
 - **G7.** Lifetime parameters appear in the same `[...]` slot as
   type parameters, lowercase-named, no sigil.
@@ -82,8 +82,8 @@ no Ruby idiom maps cleanly.
 Two keywords. `let` is immutable, `var` is mutable. No two-word
 forms.
 
-```riven
-let name = "Riven"
+```ruxen
+let name = "Ruxen"
 let pi = 3.14
 
 var counter = 0
@@ -95,7 +95,7 @@ Reassignment to a `let` is a compile error.
 
 Type annotations attach the same way:
 
-```riven
+```ruxen
 let x: Float = 42
 var bytes: Array[UInt8] = Array.new
 ```
@@ -105,7 +105,7 @@ var bytes: Array[UInt8] = Array.new
 Module-level `let` bindings serve as program-wide constants —
 naming convention is `SCREAMING_SNAKE_CASE`:
 
-```riven
+```ruxen
 let MAX_RETRIES = 3
 let DEFAULT_PORT: UInt16 = 8080
 ```
@@ -126,7 +126,7 @@ A `let` or `var` may shadow a same-named binding from an enclosing
 scope. The new binding takes a fresh type; the old binding is
 unreachable until the new binding goes out of scope.
 
-```riven
+```ruxen
 let x = 1            # x: Int
 let x = "two"        # x: &str — shadows
 puts "#{x}"
@@ -136,7 +136,7 @@ puts "#{x}"
 
 `let` and `var` accept irrefutable destructuring patterns:
 
-```riven
+```ruxen
 let (a, b) = pair                  # tuple
 let Point { x, y } = origin        # struct
 ```
@@ -152,7 +152,7 @@ Public by default. Three section markers — `public`, `private`,
 `module`, and `mixin` bodies. Each marker stays in effect until the
 next marker or the end of the body:
 
-```riven
+```ruxen
 class Account
   balance: Int                  # public field (default)
 
@@ -184,7 +184,7 @@ end
 
 Field visibility uses the same markers:
 
-```riven
+```ruxen
 class User
   name: String                  # public field
   email: String                 # public field
@@ -197,7 +197,7 @@ end
 
 A method-name-list form is also accepted, matching Ruby:
 
-```riven
+```ruxen
 class User
   def helper_a; ...; end
   def helper_b; ...; end
@@ -241,7 +241,7 @@ exists only to flip back from a prior `private`/`protected` section.
 Lifetimes are generic parameters in the same `[...]` slot as types.
 **Lowercase identifier = lifetime, uppercase = type.** No sigil.
 
-```riven
+```ruxen
 def longest[a](x: &a String, y: &a String) -> &a String
   if x.len > y.len; x; else; y; end
 end
@@ -280,7 +280,7 @@ References to compiled-in constants (string literals, `const` items)
 have lifetime `static` by default. A bound `T: static` on a type
 parameter means "the type contains no non-`static` references."
 
-```riven
+```ruxen
 let s: &static str = "compiled-in literal"
 def spawn[T: static](value: T) -> JoinHandle[T] ...
 ```
@@ -295,7 +295,7 @@ mixin body come in two flavors:
 - **Default** — signature with body. Including class gets the body
   for free, may override.
 
-```riven
+```ruxen
 mixin Greetable
   def name -> String                  # required
   
@@ -310,7 +310,7 @@ obligations the compiler checks; default methods are pulled into
 the class as if defined inline; class-defined methods with the same
 name override the mixin's default.
 
-```riven
+```ruxen
 class User
   name: String
   def init(@name: String) end
@@ -353,7 +353,7 @@ Mixins support inheritance: `mixin Sortable: Ord` means
 
 Mixins support associated types:
 
-```riven
+```ruxen
 mixin Iterator
   type Item
   def var next -> Option[Self.Item]
@@ -370,7 +370,7 @@ per call site. The function body is monomorphized; the receiver
 type is not visible to callers but is fixed for any given call.
 Zero runtime cost. Methods may inline.
 
-```riven
+```ruxen
 def print_it(item: &some Greetable)
   puts item.greet
 end
@@ -383,7 +383,7 @@ print_it(&Robot.new(42))       # specialized for Robot
 function body handles all conforming types. Required for
 heterogeneous collections.
 
-```riven
+```ruxen
 def shout_all(crowd: &Array[Box[any Greetable]])
   for member in crowd
     puts member.greet.upcase
@@ -434,7 +434,7 @@ concrete type must itself satisfy `static`).
 A class, struct, or enum's methods live inside the type body — there
 are no separate "methods-for-this-type" blocks for the common case:
 
-```riven
+```ruxen
 class Container[T]
   items: Array[T]
 
@@ -451,7 +451,7 @@ end
 For methods that should exist **only when a type parameter satisfies
 a bound**, use an `extension` block:
 
-```riven
+```ruxen
 extension Container[T] where T: Display
   def print_all
     for item in self.items
@@ -469,7 +469,7 @@ The body of a `class`, `struct`, `enum`, or `extension` block may
 also carry `include` directives. The destructor pattern is one
 example:
 
-```riven
+```ruxen
 class SafeBuffer
   ptr: *var UInt8
   len: USize
@@ -500,7 +500,7 @@ Same `include` directive, same scattered-method rule as §3.4.
 `struct` bodies may carry a `layout` directive at the top of the
 body. Three forms:
 
-```riven
+```ruxen
 struct Point
   layout c                    # field order preserved, native align,
                               # ABI-compatible with C struct
@@ -570,7 +570,7 @@ an inference-incompatible structure (e.g. a hand-rolled lock-free
 queue) via `unsafe include Send` / `unsafe include Sync` — the only
 legal use of `unsafe include`.
 
-```riven
+```ruxen
 class RawHandle
   fd: *var Void
   exclude Send       # opt out — inference would also reach !Send
@@ -590,7 +590,7 @@ no longer accepted: `Hash` (use `Hashable`), `Displayable` (use
 For documentation clarity or when you want the inclusion to fail
 loudly if the rule no longer applies, write it:
 
-```riven
+```ruxen
 struct Point
   x: Int
   y: Int
@@ -608,7 +608,7 @@ but still caught at compile time).
 Default methods of any included mixin (implicit or explicit) can be
 overridden by defining the method in the class body:
 
-```riven
+```ruxen
 struct Point
   x: Int
   y: Int
@@ -627,7 +627,7 @@ a duplicate.
 External libraries are declared with `lib`. The string after `lib`
 is the link name. Options follow as keyword arguments:
 
-```riven
+```ruxen
 lib "m"
   def sin(x: Float) -> Float
   def cos(x: Float) -> Float
@@ -656,12 +656,12 @@ called C function must not retain it beyond that call. To transfer
 ownership across the boundary, the wrapper must spell the transfer
 out — e.g. `String.from_raw(ptr, len)` to take ownership of a
 returned C buffer, or `Box.from_raw(ptr)` for a single allocation.
-Riven does not insert any implicit drop for raw pointers — the FFI
+Ruxen does not insert any implicit drop for raw pointers — the FFI
 boundary is where the user takes responsibility for memory.
 
 Strings cross the FFI boundary in one of three forms:
 
-| Riven type        | C side                                                  |
+| Ruxen type        | C side                                                  |
 |-------------------|---------------------------------------------------------|
 | `&str`            | `const char *` — borrowed, valid for the call           |
 | `String`          | C must not retain after call returns                    |
@@ -673,7 +673,7 @@ Strings cross the FFI boundary in one of three forms:
 The parser accepts a trailing `...` inside `lib` block `def`
 signatures:
 
-```riven
+```ruxen
 lib "c"
   def printf(fmt: *UInt8, ...) -> Int32
 end
@@ -687,7 +687,7 @@ typeck error.
 
 `inline` is a modifier on a `def` declaration:
 
-```riven
+```ruxen
 inline def fast_path(x: Int) -> Int
   x * 2 + 1
 end
@@ -695,7 +695,7 @@ end
 
 Or, Ruby-style, a directive that names a previously defined method:
 
-```riven
+```ruxen
 def fast_path(x: Int) -> Int
   x * 2 + 1
 end
@@ -711,7 +711,7 @@ ignores it.
 The compilation unit is a **package**. `package` is the keyword
 that refers to "this package" in import paths:
 
-```riven
+```ruxen
 use package.utils.format
 use package.models.User
 ```
@@ -727,7 +727,7 @@ is out of date.
 
 Group imports and aliases:
 
-```riven
+```ruxen
 use std.io.{ Stdin, Stdout, Stderr }
 use std.io.Stdout as Out
 use std.collections.{ Map, Set }
@@ -741,7 +741,7 @@ items (§3.2). Nested modules are legal. The body may carry any
 top-level item: `class`, `struct`, `enum`, `mixin`, `extension`,
 `def`, `use`, `type`, `newtype`, `let`, `lib`.
 
-```riven
+```ruxen
 module Http
   class Request
     url: String
@@ -771,14 +771,14 @@ use Http.Request
 syntactic positions:
 
 1. The absence case of `Option[T]` (safe code):
-   ```riven
+   ```ruxen
    def find(id: Int) -> Option[User]
      if id < 0; return nil; end
      # ...
    end
    ```
 2. The raw-pointer null literal at `*T` / `*var T` (FFI / unsafe):
-   ```riven
+   ```ruxen
    unsafe
      let ptr: *var UInt8 = nil
      if some_ptr == nil; return Err("got null"); end
@@ -817,7 +817,7 @@ triggers either diagnostic.
 The asymmetry is intentional — presence has to wrap a value;
 absence is just `nil`.
 
-Riven references (`&T`, `&var T`) cannot be `nil` — they are valid
+Ruxen references (`&T`, `&var T`) cannot be `nil` — they are valid
 by construction. If you want a possibly-missing reference, use
 `Option[&T]`.
 
@@ -846,7 +846,7 @@ see §3.22).
 
 Stdlib import paths and constructor names follow:
 
-```riven
+```ruxen
 let words: Array[String] = Array.new
 let seen: Set[Int] = Set.new
 let counts: Map[String, Int] = Map.new
@@ -898,7 +898,7 @@ references-to-self notation is not user-facing.
 
 Methods ending in `!` follow Ruby's convention for danger/mutation:
 
-```riven
+```ruxen
 let value = option.unwrap!
 let value = result.expect!("must be present")
 panic!("unrecoverable")
@@ -957,7 +957,7 @@ the binding form for constants.
 
 Three comment forms:
 
-```riven
+```ruxen
 # line comment — runs to end of line
 let x = 1  # inline comment
 
@@ -984,7 +984,7 @@ are not retained on expressions — only on items (`def`, `class`,
 
 Four forms:
 
-```riven
+```ruxen
 let plain  = "hello"                # &str literal — borrows compiled-in bytes
 let interp = "hi #{name}"           # interpolation — produces an owned String
 let raw    = r"no\escape\here"      # raw string — no escape processing
@@ -1016,7 +1016,7 @@ Standard character escapes inside `"..."`: `\n`, `\r`, `\t`, `\\`,
 One closure concept, two syntactic spellings (single-line brace
 form and multi-line `do`/`end` form) producing identical values:
 
-```riven
+```ruxen
 let double = { |x: Int| x * 2 }         # brace form
 let total = nums.fold(0) do |acc, n|
   acc + n
@@ -1025,7 +1025,7 @@ end                                     # do/end form (trailing)
 
 A closure value is called with `.(...)`:
 
-```riven
+```ruxen
 let result = double.(10)                # 20
 ```
 
@@ -1047,7 +1047,7 @@ Captures are inferred per use. A `move` prefix forces every capture
 to be owned (used when the closure must outlive the captured scope
 — e.g. crossing a thread boundary):
 
-```riven
+```ruxen
 def make_adder(n: Int) -> some Fn(Int) -> Int
   move { |x| x + n }
 end
@@ -1055,7 +1055,7 @@ end
 
 A trailing-block call passes the closure as the last argument:
 
-```riven
+```ruxen
 nums.each do |n|
   puts n
 end
@@ -1067,7 +1067,7 @@ nums.each({ |n| puts n })
 Inside a method body, the keyword `yield` invokes the implicit
 trailing-block argument:
 
-```riven
+```ruxen
 def with_timing
   let start = Instant.now
   yield
@@ -1084,7 +1084,7 @@ Fixed-arity heterogeneous values, written `(a, b, ...)`. Type form
 is `(T1, T2, ...)`. Single-element tuple is `(T,)` (with trailing
 comma — `(T)` is a parenthesized expression).
 
-```riven
+```ruxen
 let point: (Int, Int) = (3, 4)
 let (x, y) = point                      # destructuring
 
@@ -1108,7 +1108,7 @@ type-distinct from its inner type but shares its representation
 (equivalent to `struct Name; layout transparent; inner: InnerType;
 end`).
 
-```riven
+```ruxen
 newtype UserId(Int)
 newtype Email(String)
 
@@ -1120,7 +1120,7 @@ A newtype inherits its inner type's `Copy` / `Clone` status. It
 does **not** inherit any other mixin includes — adopt them
 explicitly with `include` in an `extension` block:
 
-```riven
+```ruxen
 extension UserId
   include Display
 
@@ -1152,7 +1152,7 @@ numeric types.
 Suffix forms (`i8`, `i16`, `i32`, `i64`, `u`, `u8`, `u16`, `u32`,
 `u64`, `isize`, `usize`, `f32`, `f64`) pin a literal's type:
 
-```riven
+```ruxen
 let b: UInt8 = 200u8
 let pi32     = 3.14f32                  # Float32
 ```
@@ -1166,7 +1166,7 @@ The `for x in iter` loop expects `iter` to satisfy `Iterator` (its
 required method is `def var next -> Option[Self.Item]`). The loop
 desugars to:
 
-```riven
+```ruxen
 var __it = <iter expression>
 loop
   match __it.next
@@ -1197,7 +1197,7 @@ form, covering `0..10`.
 A struct or enum value may be constructed with `.new(...)`
 (positional) or with the field-literal form (named):
 
-```riven
+```ruxen
 let p1 = Point.new(1, 2)                # positional
 let p2 = Point { x: 1, y: 2 }           # named — same value
 
@@ -1231,7 +1231,7 @@ types and for any type that has a custom `def init(...)` body
 
 ### 4.1 A class with a mixin and visibility
 
-```riven
+```ruxen
 mixin Ord
   def cmp(other: &Self) -> Ordering
 
@@ -1279,7 +1279,7 @@ auto-included by §3.6 whenever every field is `Ord`, and the
 
 ### 4.2 Heterogeneous collection with `any`
 
-```riven
+```ruxen
 mixin Drawable
   def draw -> String
 end
@@ -1312,7 +1312,7 @@ render_scene(&scene)
 
 ### 4.3 FFI with `lib` options
 
-```riven
+```ruxen
 lib "c"
   def malloc(n: USize) -> *var Void
   def free(p: *var Void)
@@ -1337,7 +1337,7 @@ end
 
 ### 4.4 Generic function with bound and lifetime
 
-```riven
+```ruxen
 def first_match[T, a](haystack: &a Array[T], pred: |&T| -> Bool) -> Option[&a T]
   for item in haystack
     if pred(item); return Some(item); end
@@ -1351,7 +1351,7 @@ let found = first_match(&words, |w| w.starts_with("b"))
 
 ### 4.5 Layout — derives are automatic
 
-```riven
+```ruxen
 struct Header
   layout c
   magic: UInt32
@@ -1600,6 +1600,6 @@ The migration plan (which references both end-state and prior
 forms for the duration of the work) lives in
 `docs/specs/syntax/_migration-plan.md` and is deleted on
 completion. After deletion, no document in the repo references
-prior syntax forms — Riven source files, tutorials, requirements
+prior syntax forms — Ruxen source files, tutorials, requirements
 docs, examples, and orchestration prompts all conform to this
 spec.

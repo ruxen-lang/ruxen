@@ -12,7 +12,7 @@ Stability metadata sits in the body of the thing it modifies, the
 same way `include` / `inline :name` do. No prefix
 annotation syntax — those forms are retired.
 
-```riven
+```ruxen
 def foo_v1 -> Int
   deprecated since: "0.5.0", note: "use foo_v2 instead"
   0

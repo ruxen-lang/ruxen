@@ -1,0 +1,15 @@
+## MPSC channel — multi-producer single-consumer unbounded queue.
+##
+## Typed FFI return surface (docs/specs/types/typed_ffi_returns.spec.md).
+## `Sender[T].clone` reports `Sender[T]` (B5); `Receiver[T].recv_raw`
+## reports `T` (B4 — the item type). `send_raw`'s return stays raw
+## `Int` because it carries a success/error code, not a typed value.
+class Sender[T: Send]
+  include Send
+
+  lib "runtime/channel.c"
+    def send_raw as "ruxen_channel_send"(self, value: T) -> Int
+    def clone as "ruxen_channel_sender_clone"(self) -> Sender[T]
+    def drop as "ruxen_channel_sender_drop"(self) -> ()
+  end
+end

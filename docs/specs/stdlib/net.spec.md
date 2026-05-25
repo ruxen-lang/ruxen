@@ -11,18 +11,18 @@ are passed as `"host:port"` strings; the class wrappers own a POSIX
 fd and `close` it on drop. The flat fd-based `tcp_*` free functions
 from the prompt-#06.5-T5 predecessor (Phase 3) have been **removed**
 from the user-facing surface — the underlying C runtime symbols
-(`riven_tcp_connect`, `riven_tcp_listen`, …) are still linked and
+(`ruxen_tcp_connect`, `ruxen_tcp_listen`, …) are still linked and
 reused internally by `TcpListener` / `TcpStream`, but they are no
-longer Riven-callable.
+longer Ruxen-callable.
 
 ---
 
 ## Typed class surface
 
 `TcpListener` and `TcpStream` are flat 8-byte heap structs
-`{ int32 fd; int32 closed }` mirroring `RivenFile`. Both participate
+`{ int32 fd; int32 closed }` mirroring `RuxenFile`. Both participate
 in the user_drop_classes pipeline so the MIR emits `<Type>_drop +
-riven_dealloc` at scope exit, idempotent with explicit `.close()`.
+ruxen_dealloc` at scope exit, idempotent with explicit `.close()`.
 
 ```
 class TcpListener
@@ -72,7 +72,7 @@ After `.close()` returns `Ok(())`, subsequent `.accept()` /
 
 Letting a `TcpListener` go out of scope without an explicit `close`
 still releases the fd — the drop pipeline emits
-`TcpListener_drop(l) + riven_dealloc(l)`. A loop that binds + drops
+`TcpListener_drop(l) + ruxen_dealloc(l)`. A loop that binds + drops
 N listeners must not exhaust the fd table.
 
 ### C4 — `TcpListener.local_addr() -> Result[String, IoError]`
@@ -117,11 +117,11 @@ matching `File.read`'s Vec[U8] convention).
 
 **Binary-safety:** the read path is genuinely binary-safe — embedded
 `0x00` bytes round-trip via `Array[U8]`. The implementation routes
-through the new `riven_tcp_read_bytes(fd, buf, max)` runtime helper
+through the new `ruxen_tcp_read_bytes(fd, buf, max)` runtime helper
 which writes each received byte into a fresh int64 slot, never
 treating the staging buffer as a C string. The legacy
-`riven_tcp_read(fd, max) -> char*` helper (which DID truncate on
-embedded NULs) is kept linked but no longer reachable from Riven —
+`ruxen_tcp_read(fd, max) -> char*` helper (which DID truncate on
+embedded NULs) is kept linked but no longer reachable from Ruxen —
 the flat-fn surface that exposed it was removed alongside the rest
 of the Phase-3 free fns.
 
@@ -157,14 +157,14 @@ streams must not exhaust fds.
 ### C14 — `Shutdown` enum tag stability
 
 Tag values are pinned: `Read=0`, `Write=1`, `Both=2` — pin-tested
-against the runtime `RIVEN_SHUTDOWN_*` defines in
+against the runtime `RUXEN_SHUTDOWN_*` defines in
 `library/runtime/net/tcp.c`.
 
 ### C15 — Auto-import from prelude
 
 `TcpListener`, `TcpStream`, and `Shutdown` are importable via
 `use std.net.{TcpListener, TcpStream, Shutdown}`. The class
-declarations live in `library/std/src/net.rvn` (declarative doc —
+declarations live in `library/std/src/net.rx` (declarative doc —
 executable behavior is wired in resolve/typeck/codegen).
 
 ### C17 — `TcpStream.set_read_timeout(d: &Duration) -> Result[(), IoError]`
@@ -192,16 +192,16 @@ sent via `TcpStream.write(&bytes)` and read back via `TcpStream.read(
 embedded NUL. Pinned by `tcp_stream_class_read_is_binary_safe` and
 e2e case `541_tcp_stream_connect_write_read` (which exercises a
 clean roundtrip; the binary-safety guarantee piggy-backs on the
-same `riven_tcp_read_bytes` path).
+same `ruxen_tcp_read_bytes` path).
 
 ### C16 — Flat `tcp_*` free fns are no longer exposed
 
-A Riven program that writes `use std.net.tcp_connect` must fail at
+A Ruxen program that writes `use std.net.tcp_connect` must fail at
 resolve time with "name not found in std.net". The 6 C runtime
-symbols (`riven_tcp_connect`, `riven_tcp_listen`,
-`riven_tcp_accept`, `riven_tcp_read`, `riven_tcp_write`,
-`riven_tcp_close`) remain linked and reused by the class wrappers;
-they are simply no longer reachable from Riven user code.
+symbols (`ruxen_tcp_connect`, `ruxen_tcp_listen`,
+`ruxen_tcp_accept`, `ruxen_tcp_read`, `ruxen_tcp_write`,
+`ruxen_tcp_close`) remain linked and reused by the class wrappers;
+they are simply no longer reachable from Ruxen user code.
 
 ---
 

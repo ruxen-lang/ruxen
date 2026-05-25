@@ -1,13 +1,13 @@
-# Specifications and Spec-Driven Development
+# Specifications and Spec-Druxen Development
 
-Riven uses **Spec-Driven Development** (SDD).  Every feature flows:
+Ruxen uses **Spec-Druxen Development** (SDD).  Every feature flows:
 
 ```
 docs/requirements (or tutorial / prompts)
         ↓
 docs/specs/<area>/<feature>.spec.md
         ↓
-crates/riven-core/tests/*.rs (pin tests)
+crates/ruxen-core/tests/*.rs (pin tests)
         ↓
 implementation
 ```
@@ -122,7 +122,7 @@ truth — they're the only thing that today encodes the contract.
 
 The procedure:
 
-1. List every `#[test]` fn in the relevant `crates/riven-core/tests/<name>.rs`.
+1. List every `#[test]` fn in the relevant `crates/ruxen-core/tests/<name>.rs`.
 2. Group them by behaviour.  Multiple tests often pin the same
    B<n>; that's fine.
 3. Write the spec with each behaviour numbered.

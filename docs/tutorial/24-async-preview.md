@@ -8,7 +8,7 @@
 > **See also:** [Spec — std.future](../specs/stdlib/async.spec.md)
 > for the full contract + pin tests.
 
-Async support in Riven follows Rust's design: a `Future` mixin with
+Async support in Ruxen follows Rust's design: a `Future` mixin with
 a `poll` method, a `Poll[T]` enum with `Ready(T)` / `Pending`
 variants, and `async def` / `async { }` / `.await` syntax that lowers
 to a state-machine.
@@ -23,7 +23,7 @@ APIs ahead of the runtime.
 
 ## 1. The types that exist
 
-```riven
+```ruxen
 use std.future.{Future, Poll, Waker, Context}
 ```
 
@@ -41,7 +41,7 @@ write functions that take `&var Context` as a parameter.
 
 ## 2. `async def`
 
-```riven
+```ruxen
 async def fetch(url: &str) -> Result[String, IoError]
   Ok(String.from("placeholder"))
 end
@@ -59,7 +59,7 @@ the body — you need the executor.
 
 ## 3. `async { ... }` block
 
-```riven
+```ruxen
 let fut = async { 42 }
 ```
 
@@ -69,7 +69,7 @@ let fut = async { 42 }
 
 ## 4. `.await`
 
-```riven
+```ruxen
 async def main
   let bytes = fetch(&"https://example.com").await?
   puts "got #{bytes.len} bytes"

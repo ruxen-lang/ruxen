@@ -1,0 +1,15 @@
+## std::io::Stdout — handle returned by `stdout()`. The Result-
+## returning methods (`write_str`, `flush`) report a `WriteZero` /
+## `Other` IoError on partial / failed writes; the `print` / `println`
+## convenience pair swallow errors and return `()` — mirroring Rust's
+## `print!` / `println!` macros at method-shape level.
+##
+## Migrated in #06.95 Phase E Slice B.2 from runtime_table.
+class Stdout
+  lib "runtime/stdio.c"
+    def write_str as "ruxen_stdout_write_str"(self, s: &String) -> Result[(), IoError]
+    def flush as "ruxen_stdout_flush"(self) -> Result[(), IoError]
+    def print as "ruxen_stdout_print"(self, s: &String) -> ()
+    def println as "ruxen_stdout_println"(self, s: &String) -> ()
+  end
+end

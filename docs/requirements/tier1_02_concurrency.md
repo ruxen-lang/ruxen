@@ -13,9 +13,9 @@ P3 (One Obvious Path), P4 (Own What You Use), P5 (Clarity At The Boundaries).
 
 A language that markets "Rust-flavored safety with Ruby ergonomics" must ship
 compile-time-checked concurrency. Shared-memory data races are the single biggest
-class of bugs that ownership + borrow checking prevents *in Rust*, but Riven
+class of bugs that ownership + borrow checking prevents *in Rust*, but Ruxen
 does not yet enforce any of the cross-thread checks that make Rust's story
-coherent. Today Riven has:
+coherent. Today Ruxen has:
 
 - Ownership, borrow checking, move semantics (single-threaded only).
 - No thread primitives in the runtime.
@@ -24,7 +24,7 @@ coherent. Today Riven has:
 - No `Send`, `Sync`, `Mutex`, `SharedSync`, channel, or atomic in the standard library.
 
 The goal of this document is to specify **Phase 2 Concurrency** — a pragmatic,
-Rust-inspired subset that gives Riven *fearless concurrency* using native OS
+Rust-inspired subset that gives Ruxen *fearless concurrency* using native OS
 threads, with opt-in message passing via channels. It deliberately defers green
 threads / async-await / actors to a later phase (though reserves syntax for
 them).
@@ -36,20 +36,20 @@ alternatives because:
 |-------|-----|-----|
 | **Rust-style (chosen)** | Well-trodden, composes cleanly with existing ownership. | Two auto-mixins instead of one. |
 | Swift `Sendable` only | Simpler mental model (one marker). | Loses `Sync` nuance — forces `Mutex` around any shared read. |
-| Go goroutines + channels only | Ergonomic. | No compile-time race detection — contradicts Riven's "safety by default". |
+| Go goroutines + channels only | Ergonomic. | No compile-time race detection — contradicts Ruxen's "safety by default". |
 | Pony ref capabilities | Strongest static guarantees. | Huge learning curve — breaks P3 (One Obvious Path). |
-| Ruby Ractor / actor-only | Matches Riven's Ruby heritage. | Data-copy on every message — violates P4 (Own What You Use). |
+| Ruby Ractor / actor-only | Matches Ruxen's Ruby heritage. | Data-copy on every message — violates P4 (Own What You Use). |
 
-Rust's model already composes with everything Riven has (ownership, traits,
+Rust's model already composes with everything Ruxen has (ownership, traits,
 generics, closures with move semantics). Extending it costs the least new
-machinery and preserves the mental model users who came to Riven from Rust will
+machinery and preserves the mental model users who came to Ruxen from Rust will
 have. Ruby-style surface syntax (`Thread.spawn do ... end`) keeps the ergonomics.
 
 ---
 
 ## 2. Current State (the gap)
 
-### 2.1 Types (`crates/riven-core/src/hir/types.rs`)
+### 2.1 Types (`crates/ruxen-core/src/hir/types.rs`)
 
 `Ty` has **no thread-safety markers**. `is_copy()` at line 189 is the only auto-mixin
 we currently synthesize; no equivalent `is_send()` / `is_sync()` exists.
@@ -58,13 +58,13 @@ Smart-pointer types (`SharedSync`, `Shared`) are absent from the `Ty` enum. The 
 reference mechanism is `&T` / `&var T` at lines 88-95, which rely on lexical
 borrow scopes that cannot cross a thread boundary.
 
-### 2.2 Mixins (`crates/riven-core/src/resolve/mod.rs`, lines 138–170)
+### 2.2 Mixins (`crates/ruxen-core/src/resolve/mod.rs`, lines 138–170)
 
 Built-in mixins currently registered: `Display`, `Error`, `Ord`,
 `Hashable`, `Iterator`, `Iterator`, `FromIterator`, `Copy`, `Clone`, `Debug`,
 `Drop`. **No `Send`. No `Sync`.**
 
-`TraitResolver` (`crates/riven-core/src/typeck/traits.rs`) supports:
+`TraitResolver` (`crates/ruxen-core/src/typeck/traits.rs`) supports:
 - Nominal satisfaction via an in-body `include Mixin` directive (line 68).
 - Structural satisfaction via method-name matching (line 112).
 
@@ -72,7 +72,7 @@ It has **no notion of auto-mixins** — mixins whose provisions are inferred
 structurally from a type's fields rather than from its method set. Auto-mixins
 are the core new mechanic we must add.
 
-### 2.3 Borrow checker (`crates/riven-core/src/borrow_check/`)
+### 2.3 Borrow checker (`crates/ruxen-core/src/borrow_check/`)
 
 `BorrowChecker::check_closure` (lines 949-998) handles move vs. borrow captures
 but has **no notion of thread-crossing**. Today, capturing a non-`Send`
@@ -80,10 +80,10 @@ value into a closure that gets passed to a hypothetical `Thread.spawn` would
 type-check without error. Error codes E1001–E1010
 (`borrow_check/errors.rs`) cover single-threaded ownership only.
 
-### 2.4 Runtime (`crates/riven-core/runtime/runtime.c`)
+### 2.4 Runtime (`crates/ruxen-core/runtime/runtime.c`)
 
 Exposes only: `printf` wrappers, `malloc`/`free`/`realloc`, string ops, a
-single-threaded `RivenArray`, Option/Result helpers, and `riven_panic`.
+single-threaded `RuxenArray`, Option/Result helpers, and `ruxen_panic`.
 
 **No `pthread_*`, no atomics, no TLS.** The linker invocation
 (`codegen/object.rs` line 64) does `cc <obj> <runtime.o> -o <out> -lc -lm` —
@@ -91,10 +91,10 @@ pthread is not linked.
 
 ### 2.5 Parser & lexer
 
-`crates/riven-core/src/lexer/token.rs` already reserves the keywords
+`crates/ruxen-core/src/lexer/token.rs` already reserves the keywords
 `Actor` (line 127), `Spawn` (line 128), `Send` (line 129), `Receive` (line 130),
 `Async` (line 84), `Await` (line 85). None of them are consumed by the parser
-today (`grep` across `crates/riven-core/src/parser` returns zero hits for these
+today (`grep` across `crates/ruxen-core/src/parser` returns zero hits for these
 token kinds). **No surface syntax is committed yet** — we are free to design.
 
 ### 2.6 Codegen
@@ -132,9 +132,9 @@ specific intrinsic support anywhere in the pipeline.
 - **NG4.** Work-stealing runtime (Tokio/Rayon-style).
 - **NG5.** Formal memory model (we inherit the C11/pthreads happens-before
   model). A rigorous spec is future work.
-- **NG6.** `no_std`-style stripped-down threading. Every Riven binary links
+- **NG6.** `no_std`-style stripped-down threading. Every Ruxen binary links
   libc and libpthread.
-- **NG7.** Thread-safe GC — Riven has no GC.
+- **NG7.** Thread-safe GC — Ruxen has no GC.
 
 ---
 
@@ -197,7 +197,7 @@ is_send(T) is true iff:
 
 ### 4.3 HIR representation
 
-Add to `crates/riven-core/src/hir/types.rs`, alongside `is_copy()`:
+Add to `crates/ruxen-core/src/hir/types.rs`, alongside `is_copy()`:
 
 ```rust
 impl Ty {
@@ -230,7 +230,7 @@ pub enum SendSyncViolation {
 ### 4.4 Symbol-table additions
 
 Add to `DefKind::Struct` (and `Class`, `Enum`) in
-`crates/riven-core/src/resolve/symbols.rs`:
+`crates/ruxen-core/src/resolve/symbols.rs`:
 
 ```rust
 pub struct StructInfo {
@@ -249,7 +249,7 @@ pub struct StructInfo {
 
 **Inference is the default.** Users rarely write anything:
 
-```riven
+```ruxen
 struct Point
   x: Float
   y: Float
@@ -262,7 +262,7 @@ end
 not-`Sync`. Only valid for `Send` and `Sync`; rejected for other mixins with a
 diagnostic.
 
-```riven
+```ruxen
 class RawHandle
   fd: *var Void
 
@@ -274,7 +274,7 @@ end
 
 **Manual positive provision** (unsafe — the escape hatch):
 
-```riven
+```ruxen
 # A hand-rolled lock-free queue that the author has verified is thread-safe.
 struct LockFreeQueue[T]
   head: *var Node[T]
@@ -293,20 +293,20 @@ auto-mixin boundary manually is explicit danger).
 
 **Bound usage**:
 
-```riven
+```ruxen
 def spawn_task[F: FnOnce() -> () + Send + static](f: F) -> JoinHandle[()]
   Thread.spawn(f)
 end
 ```
 
-`static` is an additional lifetime bound — because Riven already has explicit
+`static` is an additional lifetime bound — because Ruxen already has explicit
 lifetime parameters as lowercase identifiers in `[...]` (see `Ty::RefLifetime`
 in `hir/types.rs:93`), this slots in without new syntax beyond permitting
 lifetime names in mixin-bound lists.
 
 ### 4.6 Parser work
 
-Add to `crates/riven-core/src/parser/items.rs` (the file that parses top-level
+Add to `crates/ruxen-core/src/parser/items.rs` (the file that parses top-level
 item bodies):
 
 1. Accept `exclude Send` / `exclude Sync` directives inside `class`/`struct`/`enum` bodies.
@@ -319,7 +319,7 @@ item bodies):
 
 ### 4.7 Type-checker integration
 
-Extend `crates/riven-core/src/typeck/traits.rs`:
+Extend `crates/ruxen-core/src/typeck/traits.rs`:
 
 - `TraitResolver` gains an `AutoTraitResolver` helper. It maintains two maps:
   `send_impls: HashMap<String, Impl>` and `sync_impls: HashMap<String, Impl>`
@@ -333,7 +333,7 @@ Extend `crates/riven-core/src/typeck/traits.rs`:
 
 ### 4.8 Borrow-checker integration (the critical part)
 
-In `crates/riven-core/src/borrow_check/mod.rs`, extend
+In `crates/ruxen-core/src/borrow_check/mod.rs`, extend
 `BorrowChecker::check_closure` (lines 949-998) with a new flag
 `requires_send: bool` passed through from the call site:
 
@@ -357,7 +357,7 @@ declared mixin bounds. `Thread.spawn`'s signature bakes in
 
 ### 5.1 Surface syntax
 
-```riven
+```ruxen
 use std.thread.Thread
 
 # Ruby-ish block form — the primary idiom.
@@ -371,7 +371,7 @@ let result = handle.join!   # result is Int (the return type of the block)
 
 Equivalent closure form (for point-free style):
 
-```riven
+```ruxen
 let handle = Thread.spawn({ || compute_42() })
 ```
 
@@ -397,7 +397,7 @@ class JoinHandle[T: Send]
 end
 ```
 
-- `join` **consumes** `self` (`consume self` in Riven terms — we already have
+- `join` **consumes** `self` (`consume self` in Ruxen terms — we already have
   `HirSelfMode::Consuming`). You can only join once.
 - `join!` is the familiar `!`-panics convention (see
   `docs/tutorial/15-unsafe.md` §3 — `!` suffix = "safe but can panic").
@@ -406,7 +406,7 @@ end
 ### 5.3 Panic propagation
 
 - A panic in a spawned thread is caught by the thread's trampoline
-  (`riven_thread_entry`) and stored in the `JoinHandle`'s result slot.
+  (`ruxen_thread_entry`) and stored in the `JoinHandle`'s result slot.
 - On `join()`, the caller receives `Err(ThreadPanic { message: String })`.
 - `ThreadPanic` implements `Error`.
 - Panics do not propagate to the parent thread implicitly — the parent must
@@ -417,7 +417,7 @@ end
 
 ### 5.4 Thread-local storage
 
-```riven
+```ruxen
 thread_local! REQUEST_ID: UInt64 = 0
 
 def current_request -> UInt64
@@ -444,7 +444,7 @@ if schedule pressure requires.
 - `Thread.name` — returns `Option[String]`.
 - Builder pattern via `ThreadBuilder` (set name, stack size):
 
-```riven
+```ruxen
 let handle = ThreadBuilder.new
   .name("worker")
   .stack_size(2 * 1024 * 1024)
@@ -464,24 +464,24 @@ typedef struct {
     int panicked;
     char *panic_message;    /* owned — freed on join */
     int64_t return_value;   /* scalar return — aggregates handled via heap */
-} RivenJoinHandle;
+} RuxenJoinHandle;
 
-RivenJoinHandle *riven_thread_spawn(
+RuxenJoinHandle *ruxen_thread_spawn(
     int64_t (*entry)(void *env),
     void *env,                  /* closure environment (heap-allocated) */
     void (*env_dropper)(void *) /* drops env on thread exit */
 );
 
-int64_t riven_thread_join(RivenJoinHandle *h);        /* returns value or traps on panic */
-void    riven_thread_detach(RivenJoinHandle *h);      /* invoked by Drop on JoinHandle */
-int64_t riven_thread_current_id(void);
-void    riven_thread_sleep_ns(int64_t ns);
-void    riven_thread_yield(void);
+int64_t ruxen_thread_join(RuxenJoinHandle *h);        /* returns value or traps on panic */
+void    ruxen_thread_detach(RuxenJoinHandle *h);      /* invoked by Drop on JoinHandle */
+int64_t ruxen_thread_current_id(void);
+void    ruxen_thread_sleep_ns(int64_t ns);
+void    ruxen_thread_yield(void);
 ```
 
 ### 5.7 Linker additions
 
-`crates/riven-core/src/codegen/object.rs:64` must append `-lpthread` to the
+`crates/ruxen-core/src/codegen/object.rs:64` must append `-lpthread` to the
 linker invocation unconditionally (modern glibc lets it be a no-op, but BSD
 and musl need it explicit).
 
@@ -490,13 +490,13 @@ and musl need it explicit).
 ## 6. Synchronization Primitives
 
 Each primitive is a built-in generic type known to the compiler (like
-`Array[T]`) — it is not expressed in user-level Riven because of the absence of
+`Array[T]`) — it is not expressed in user-level Ruxen because of the absence of
 unsafe internals. Users see a clean surface API; the implementation lives in
 `runtime.c` with thin HIR-to-runtime glue.
 
 ### 6.1 `Mutex[T]`
 
-```riven
+```ruxen
 class Mutex[T]
   def self.new(value: T) -> Mutex[T]
   def lock -> Result[MutexGuard[T], PoisonError]
@@ -522,13 +522,13 @@ end
 - **Poisoning:** If a thread panics while holding the lock, the mutex is
   marked poisoned. `lock()` returns `Err(PoisonError)` thereafter.
   `lock!` turns that into a panic.
-- **Runtime:** wraps `pthread_mutex_t`. `riven_mutex_new` (allocates + inits),
-  `riven_mutex_lock`, `riven_mutex_trylock`, `riven_mutex_unlock`, and
-  `riven_mutex_free` (called from `Drop`).
+- **Runtime:** wraps `pthread_mutex_t`. `ruxen_mutex_new` (allocates + inits),
+  `ruxen_mutex_lock`, `ruxen_mutex_trylock`, `ruxen_mutex_unlock`, and
+  `ruxen_mutex_free` (called from `Drop`).
 
 ### 6.2 `RwLock[T]`
 
-```riven
+```ruxen
 class RwLock[T]
   def self.new(value: T) -> RwLock[T]
   def read -> Result[RwLockReadGuard[T], PoisonError]
@@ -546,7 +546,7 @@ end
 
 ### 6.3 `Condvar`
 
-```riven
+```ruxen
 class Condvar
   def self.new -> Condvar
   def wait[T](guard: MutexGuard[T]) -> Result[MutexGuard[T], PoisonError]
@@ -562,7 +562,7 @@ Follows Rust almost exactly. Runtime: `pthread_cond_*`.
 
 Primitive types only — one atomic per scalar width.
 
-```riven
+```ruxen
 AtomicBool
 AtomicI32  AtomicI64  AtomicIsize
 AtomicU32  AtomicU64  AtomicUsize
@@ -574,7 +574,7 @@ Each has `new(initial)`, `load(order)`, `store(v, order)`,
 `Ordering` is an enum matching C11 memory orderings: `Relaxed`, `Acquire`,
 `Release`, `AcqRel`, `SeqCst`.
 
-```riven
+```ruxen
 use std.sync.atomic.{AtomicI64, Ordering}
 
 let counter = AtomicI64.new(0)
@@ -591,7 +591,7 @@ counter.fetch_add(1, Ordering.Relaxed)
 
 Atomic reference counting — the primary way to share ownership across threads.
 
-```riven
+```ruxen
 class SharedSync[T]
   def self.new(value: T) -> SharedSync[T]
   def clone -> SharedSync[T]                 # increments refcount
@@ -609,14 +609,14 @@ end
   does not silently become refcounted. The existence of a `.clone()` that
   bumps the refcount is the loud signal.
 - **Runtime:** single 16-byte header `{ strong: AtomicUsize; weak: AtomicUsize; value: T }`;
-  `riven_arc_new`, `riven_arc_clone`, `riven_arc_drop` (decrement + free at 0).
+  `ruxen_arc_new`, `ruxen_arc_clone`, `ruxen_arc_drop` (decrement + free at 0).
 - **Weak[T]** is optional for v1 — list as stretch goal. It avoids cycles but
   adds complexity. If deferred, document: "cycles with `SharedSync` leak; for now,
   avoid them."
 
 ### 6.6 `Barrier`
 
-```riven
+```ruxen
 class Barrier
   def self.new(n: USize) -> Barrier
   def wait -> BarrierWaitResult  # .is_leader returns true for one thread
@@ -628,7 +628,7 @@ with `Mutex` + `Condvar` + counter.
 
 ### 6.7 `Once`
 
-```riven
+```ruxen
 class Once
   def self.new -> Once
   def call_once(f: FnOnce() -> ())
@@ -652,7 +652,7 @@ MPMC deferred.
 
 ### 7.1 Surface API
 
-```riven
+```ruxen
 use std.sync.channel
 
 let (sender, receiver) = channel.unbounded[Int]
@@ -675,7 +675,7 @@ end
 
 ### 7.2 Types
 
-```riven
+```ruxen
 class Sender[T]
   def send(v: T) -> Result[(), SendError[T]]
   def clone -> Sender[T]                 # cloning extends producer count
@@ -740,7 +740,7 @@ later as `channel.mpmc_unbounded`/`mpmc_bounded` without breaking anything.
 
 ### 8.1 Where the checks go
 
-A new file: `crates/riven-core/src/borrow_check/thread_safety.rs`. It exposes:
+A new file: `crates/ruxen-core/src/borrow_check/thread_safety.rs`. It exposes:
 
 ```rust
 pub struct ThreadSafetyChecker<'a> {
@@ -781,7 +781,7 @@ satisfaction is decided by `ThreadSafetyChecker::is_send`, not by method-based
 
 ### 8.3 New error codes
 
-Extend `crates/riven-core/src/borrow_check/errors.rs`:
+Extend `crates/ruxen-core/src/borrow_check/errors.rs`:
 
 ```rust
 pub enum ErrorCode {
@@ -797,32 +797,32 @@ pub enum ErrorCode {
 
 ### 8.4 Test cases (fixtures to add)
 
-Place in `crates/riven-core/tests/fixtures/concurrency/`:
+Place in `crates/ruxen-core/tests/fixtures/concurrency/`:
 
 **Must compile (positive):**
 
-- `spawn_send_primitive.rvn` — `Thread.spawn do let x = 42; puts x end`.
-- `spawn_move_string.rvn` — `let s = String.from("x"); Thread.spawn do puts s end`.
-- `arc_mutex_counter.rvn` — classic shared counter with `SharedSync[Mutex[Int]]` over
+- `spawn_send_primitive.rx` — `Thread.spawn do let x = 42; puts x end`.
+- `spawn_move_string.rx` — `let s = String.from("x"); Thread.spawn do puts s end`.
+- `arc_mutex_counter.rx` — classic shared counter with `SharedSync[Mutex[Int]]` over
   N threads, joins, asserts total.
-- `channel_ping_pong.rvn` — two threads exchanging `Int` through a bounded
+- `channel_ping_pong.rx` — two threads exchanging `Int` through a bounded
   channel of capacity 1.
-- `rwlock_many_readers.rvn` — multiple `read!` guards held simultaneously.
-- `atomic_spin_barrier.rvn` — `AtomicBool` spin-wait as rendezvous.
+- `rwlock_many_readers.rx` — multiple `read!` guards held simultaneously.
+- `atomic_spin_barrier.rx` — `AtomicBool` spin-wait as rendezvous.
 
 **Must reject (negative):**
 
-- `spawn_capture_shared.rvn` — capturing a hypothetical `Shared` (or any non-`Send` type)
+- `spawn_capture_shared.rx` — capturing a hypothetical `Shared` (or any non-`Send` type)
   in `Thread.spawn` → expect E1011.
-- `spawn_borrow_local.rvn` — `let x = 42; Thread.spawn do puts &x end` without
+- `spawn_borrow_local.rx` — `let x = 42; Thread.spawn do puts &x end` without
   `move` and without `static` → expect E1013.
-- `send_receiver_across_clone.rvn` — `let (_, r) = channel.unbounded[Int]; r.clone` →
+- `send_receiver_across_clone.rx` — `let (_, r) = channel.unbounded[Int]; r.clone` →
   expect "method `clone` not found on `Receiver[Int]`".
-- `mutex_guard_escape.rvn` — return `MutexGuard` from function that owns the
+- `mutex_guard_escape.rx` — return `MutexGuard` from function that owns the
   `Mutex` → expect E1010 (existing code, exercised for the new guard type).
-- `unsafe_include_without_unsafe.rvn` — `include Send` in a type body that fails
+- `unsafe_include_without_unsafe.rx` — `include Send` in a type body that fails
   auto-inference, without the `unsafe` prefix → expect E1014.
-- `sync_raw_pointer_struct.rvn` — struct with `*var Void` field; call
+- `sync_raw_pointer_struct.rx` — struct with `*var Void` field; call
   `Thread.spawn` moving it → expect E1011 with field-level diagnostic
   (`SendSyncViolation::FieldNotSend`).
 
@@ -844,7 +844,7 @@ Place in `crates/riven-core/tests/fixtures/concurrency/`:
 
 ### 9.1 Split `runtime.c` into modules
 
-Current single-file runtime (`crates/riven-core/runtime/runtime.c`) grows
+Current single-file runtime (`crates/ruxen-core/runtime/runtime.c`) grows
 unwieldy. Proposal: add a second file `runtime_thread.c` in the same
 directory, compiled and linked alongside. `codegen/object.rs:compile_runtime`
 changes to:
@@ -863,46 +863,46 @@ pthread-wrappers only. One function per C primitive:
 
 ```c
 /* Threads */
-RivenJoinHandle *riven_thread_spawn(int64_t (*entry)(void *), void *env,
+RuxenJoinHandle *ruxen_thread_spawn(int64_t (*entry)(void *), void *env,
                                     void (*env_dropper)(void *));
-int64_t riven_thread_join(RivenJoinHandle *h);
-void    riven_thread_detach(RivenJoinHandle *h);
-int64_t riven_thread_current_id(void);
-void    riven_thread_sleep_ns(int64_t ns);
-void    riven_thread_yield(void);
-void    riven_thread_set_name(const char *name);
+int64_t ruxen_thread_join(RuxenJoinHandle *h);
+void    ruxen_thread_detach(RuxenJoinHandle *h);
+int64_t ruxen_thread_current_id(void);
+void    ruxen_thread_sleep_ns(int64_t ns);
+void    ruxen_thread_yield(void);
+void    ruxen_thread_set_name(const char *name);
 
 /* Mutex */
-void *  riven_mutex_new(void);
-void    riven_mutex_lock(void *m);
-int     riven_mutex_trylock(void *m);        /* 0 = ok, 1 = would block */
-void    riven_mutex_unlock(void *m);
-void    riven_mutex_free(void *m);
+void *  ruxen_mutex_new(void);
+void    ruxen_mutex_lock(void *m);
+int     ruxen_mutex_trylock(void *m);        /* 0 = ok, 1 = would block */
+void    ruxen_mutex_unlock(void *m);
+void    ruxen_mutex_free(void *m);
 
 /* RwLock */
-void *  riven_rwlock_new(void);
-void    riven_rwlock_rdlock(void *);
-int     riven_rwlock_tryrdlock(void *);
-void    riven_rwlock_wrlock(void *);
-int     riven_rwlock_trywrlock(void *);
-void    riven_rwlock_unlock(void *);
-void    riven_rwlock_free(void *);
+void *  ruxen_rwlock_new(void);
+void    ruxen_rwlock_rdlock(void *);
+int     ruxen_rwlock_tryrdlock(void *);
+void    ruxen_rwlock_wrlock(void *);
+int     ruxen_rwlock_trywrlock(void *);
+void    ruxen_rwlock_unlock(void *);
+void    ruxen_rwlock_free(void *);
 
 /* Condvar */
-void *  riven_cond_new(void);
-void    riven_cond_wait(void *c, void *m);
-int     riven_cond_wait_timeout(void *c, void *m, int64_t ns);
-void    riven_cond_notify_one(void *c);
-void    riven_cond_notify_all(void *c);
-void    riven_cond_free(void *c);
+void *  ruxen_cond_new(void);
+void    ruxen_cond_wait(void *c, void *m);
+int     ruxen_cond_wait_timeout(void *c, void *m, int64_t ns);
+void    ruxen_cond_notify_one(void *c);
+void    ruxen_cond_notify_all(void *c);
+void    ruxen_cond_free(void *c);
 
 /* Once */
-void    riven_once_call(void *once_state, void (*f)(void *), void *env);
+void    ruxen_once_call(void *once_state, void (*f)(void *), void *env);
 
 /* TLS */
-int64_t riven_tls_key_create(void (*dtor)(void *));
-void *  riven_tls_get(int64_t key);
-void    riven_tls_set(int64_t key, void *value);
+int64_t ruxen_tls_key_create(void (*dtor)(void *));
+void *  ruxen_tls_get(int64_t key);
+void    ruxen_tls_set(int64_t key, void *value);
 ```
 
 ### 9.3 Atomics do not go through C
@@ -911,20 +911,20 @@ They lower directly via Cranelift/LLVM atomic instructions. Rationale: a C
 round-trip would defeat the purpose (cost + missed optimizations) and the
 memory order is easier to express at the IR level.
 
-### 9.4 Runtime support table (`crates/riven-core/src/codegen/runtime.rs`)
+### 9.4 Runtime support table (`crates/ruxen-core/src/codegen/runtime.rs`)
 
-Add entries to the mangled-name table mapping Riven method names to C
+Add entries to the mangled-name table mapping Ruxen method names to C
 runtime symbols:
 
-| Riven call                | C symbol                  |
+| Ruxen call                | C symbol                  |
 |---------------------------|---------------------------|
-| `Thread_spawn`            | `riven_thread_spawn`      |
-| `JoinHandle_join`         | `riven_thread_join`       |
-| `JoinHandle_detach`       | `riven_thread_detach`     |
-| `Thread_sleep`            | `riven_thread_sleep_ns`   |
-| `Mutex_new`               | `riven_mutex_new`         |
-| `Mutex_lock`              | `riven_mutex_lock`        |
-| `Mutex_unlock`            | `riven_mutex_unlock`      |
+| `Thread_spawn`            | `ruxen_thread_spawn`      |
+| `JoinHandle_join`         | `ruxen_thread_join`       |
+| `JoinHandle_detach`       | `ruxen_thread_detach`     |
+| `Thread_sleep`            | `ruxen_thread_sleep_ns`   |
+| `Mutex_new`               | `ruxen_mutex_new`         |
+| `Mutex_lock`              | `ruxen_mutex_lock`        |
+| `Mutex_unlock`            | `ruxen_mutex_unlock`      |
 | `RwLock_*`, `Condvar_*`, `Once_*` | analogous         |
 
 Channel, SharedSync, and atomic ops are synthesized by the compiler, not dispatched
@@ -957,7 +957,7 @@ is harmless there. Windows build path will diverge when Tier 2 arrives.
 
 ### 10.1 SharedSync + Mutex counter
 
-```riven
+```ruxen
 use std.thread.Thread
 use std.sync.{SharedSync, Mutex}
 
@@ -995,7 +995,7 @@ Borrow-check expectations:
 
 ### 10.2 Channel pipeline
 
-```riven
+```ruxen
 use std.sync.channel
 use std.thread.Thread
 
@@ -1017,7 +1017,7 @@ end
 
 ### 10.3 Producer group via `SharedSync`
 
-```riven
+```ruxen
 let (tx, rx) = channel.unbounded[Int]
 
 for i in 0..4
@@ -1039,7 +1039,7 @@ puts total                     # 0+1+...+99 = 4950
 
 ### 10.4 Borrow-check rejection: capturing non-Send
 
-```riven
+```ruxen
 class NonSendThing
   ptr: *var Void
 
@@ -1056,7 +1056,7 @@ Diagnostic (rendered via existing `BorrowError::fmt`):
 
 ```
 error[E1011]: value of type `NonSendThing` is not `Send`
-  --> src/main.rvn:9:1
+  --> src/main.rx:9:1
    | 9:3 — `NonSendThing` is not Send because it contains a raw pointer
    | 3:3 — field `ptr: *var Void` is not Send
    | 9:1 — captured here by spawned closure
@@ -1066,7 +1066,7 @@ error[E1011]: value of type `NonSendThing` is not `Send`
 
 ### 10.5 Atomic counter
 
-```riven
+```ruxen
 use std.sync.atomic.{AtomicI64, Ordering}
 use std.sync.SharedSync
 use std.thread.Thread
@@ -1094,11 +1094,11 @@ end
 
 ### 10.6 `Once` for lazy init
 
-```riven
+```ruxen
 use std.sync.Once
 
 # Process-global runtime state goes through a library wrapper (SharedSync[Mutex[T]],
-# Once, Atomic*) — per spec §3.14, `static` is only a lifetime keyword in Riven
+# Once, Atomic*) — per spec §3.14, `static` is only a lifetime keyword in Ruxen
 # and there is no item-level storage class. The example below shows a writable
 # log-fd guarded by `Once` for initialization; the underlying mutability is
 # expressed through the wrapper, not a `static var` binding.
@@ -1135,7 +1135,7 @@ diagnostics. No runtime changes. Validation: the `spawn_capture_*` fixtures
 all compile or reject as expected *even though `Thread.spawn` doesn't exist
 yet* — we use a sentinel `std.mem.require_send[T: Send](x: T)` helper and
 assertions on its use site.
-**Deliverable:** `crates/riven-core/src/borrow_check/thread_safety.rs`,
+**Deliverable:** `crates/ruxen-core/src/borrow_check/thread_safety.rs`,
 `typeck/traits.rs` extended for auto-mixins, E1011/E1012/E1014 errors,
 6+ fixture tests.
 
@@ -1148,7 +1148,7 @@ Panic propagation. Includes `Drop` wiring for `MutexGuard` (lock release).
 
 ### Phase 2c — Channels
 `channel.unbounded` + `channel.bounded` (MPSC). `Sender`/`Receiver`/iter.
-Pure Riven + `SharedSync` + `Mutex` + `Condvar` — minimal new C code (Condvar is
+Pure Ruxen + `SharedSync` + `Mutex` + `Condvar` — minimal new C code (Condvar is
 the only new primitive).
 **Deliverable:** `std.sync.channel` module, disconnect semantics,
 bounded back-pressure tests.
@@ -1167,7 +1167,7 @@ actor syntax (separate Tier 2 doc).
 
 ## 12. Open Questions & Risks
 
-1. **Deref ergonomics on `MutexGuard` and `SharedSync`.** Riven has no `Deref` mixin
+1. **Deref ergonomics on `MutexGuard` and `SharedSync`.** Ruxen has no `Deref` mixin
    yet. Three options:
    - (a) Add an `AutoDeref` built-in mixin that the method resolver consults.
    - (b) Make these types "magic" in the method resolver: hard-code
@@ -1195,7 +1195,7 @@ actor syntax (separate Tier 2 doc).
 
 4. **Drop glue in spawned thread environments.** The closure's captured
    environment (the heap-allocated `env` arg passed to
-   `riven_thread_spawn`) must be dropped *by the child thread* when its
+   `ruxen_thread_spawn`) must be dropped *by the child thread* when its
    `entry` function returns. MIR already emits drop calls at end-of-scope;
    we need to confirm that the synthesized wrapper around a spawned closure
    emits drops for all captures. Test with a `Drop`-implementing type
@@ -1208,11 +1208,11 @@ actor syntax (separate Tier 2 doc).
 
 6. **Signature synthesis for built-in generic methods.** `Mutex.lock`
    returns a `MutexGuard` whose lifetime is tied to a reading-receiver
-   borrow. Riven's inference engine (`typeck/infer.rs`) needs to understand
+   borrow. Ruxen's inference engine (`typeck/infer.rs`) needs to understand
    self-borrowing return types. Check whether `Array.iter` (which has the
    same shape) is already modeled; if so, reuse.
 
-7. **`static` bound.** Riven has `Ty::RefLifetime(String, ...)`. Need to
+7. **`static` bound.** Ruxen has `Ty::RefLifetime(String, ...)`. Need to
    make the name `static` reserved and recognized as "outlives all scopes".
    The bound `T: static` on a type parameter means "contains no non-static
    references" — same rule as Rust. Implementable as a simple traversal over
@@ -1225,7 +1225,7 @@ actor syntax (separate Tier 2 doc).
    `include Send` / `include Sync` permitted as the loud form (a no-op
    when inference already said yes).
 
-9. **Cache compatibility.** The incremental-compilation cache (`rivenc::cache`)
+9. **Cache compatibility.** The incremental-compilation cache (`ruxenc::cache`)
    keys on the hash of compilation inputs. Adding `Send`/`Sync` inference to
    a definition's effective signature means cached entries from pre-2a
    builds will be invalidated. Not a blocker — bump the cache version.
@@ -1248,45 +1248,45 @@ actor syntax (separate Tier 2 doc).
 
 Files to modify (Phase 2a):
 
-- `crates/riven-core/src/hir/types.rs` — add `Ty::is_send`, `Ty::is_sync`,
+- `crates/ruxen-core/src/hir/types.rs` — add `Ty::is_send`, `Ty::is_sync`,
   `SendSyncViolation` enum.
-- `crates/riven-core/src/resolve/mod.rs` — add `Send`, `Sync` to
+- `crates/ruxen-core/src/resolve/mod.rs` — add `Send`, `Sync` to
   `builtin_traits` (lines 139-151).
-- `crates/riven-core/src/resolve/symbols.rs` — extend `StructInfo`,
+- `crates/ruxen-core/src/resolve/symbols.rs` — extend `StructInfo`,
   `ClassInfo`, `EnumInfo` with opt-out fields.
-- `crates/riven-core/src/parser/items.rs` — parse `exclude Send`, `unsafe include Send`.
-- `crates/riven-core/src/typeck/traits.rs` — auto-mixin resolution path.
-- `crates/riven-core/src/borrow_check/thread_safety.rs` — **NEW FILE**.
-- `crates/riven-core/src/borrow_check/errors.rs` — add E1011-E1016.
-- `crates/riven-core/src/borrow_check/mod.rs` — thread `send_required` through
+- `crates/ruxen-core/src/parser/items.rs` — parse `exclude Send`, `unsafe include Send`.
+- `crates/ruxen-core/src/typeck/traits.rs` — auto-mixin resolution path.
+- `crates/ruxen-core/src/borrow_check/thread_safety.rs` — **NEW FILE**.
+- `crates/ruxen-core/src/borrow_check/errors.rs` — add E1011-E1016.
+- `crates/ruxen-core/src/borrow_check/mod.rs` — thread `send_required` through
   `check_closure`, `check_fn_call`, `check_method_call`.
-- `crates/riven-core/tests/fixtures/concurrency/*.rvn` — **NEW FIXTURES**.
+- `crates/ruxen-core/tests/fixtures/concurrency/*.rx` — **NEW FIXTURES**.
 
 Files to modify (Phase 2b):
 
-- `crates/riven-core/runtime/runtime_thread.c` — **NEW FILE** (or inlined).
-- `crates/riven-core/runtime/runtime.c` — include thread module.
-- `crates/riven-core/src/codegen/runtime.rs` — new mangled-name entries.
-- `crates/riven-core/src/codegen/object.rs` — add `-lpthread`.
-- `crates/riven-core/src/hir/types.rs` — add `Ty::SharedSync`, `Ty::Mutex` (or
+- `crates/ruxen-core/runtime/runtime_thread.c` — **NEW FILE** (or inlined).
+- `crates/ruxen-core/runtime/runtime.c` — include thread module.
+- `crates/ruxen-core/src/codegen/runtime.rs` — new mangled-name entries.
+- `crates/ruxen-core/src/codegen/object.rs` — add `-lpthread`.
+- `crates/ruxen-core/src/hir/types.rs` — add `Ty::SharedSync`, `Ty::Mutex` (or
   keep them as `Ty::Class { name: "SharedSync", ... }` with special-case handling).
-- Standard library Riven source for `Thread`, `JoinHandle`, `Mutex`,
+- Standard library Ruxen source for `Thread`, `JoinHandle`, `Mutex`,
   `MutexGuard`, `SharedSync`, `PoisonError`, `ThreadPanic`.
 
 Files to modify (Phase 2c):
 
-- `crates/riven-core/src/codegen/runtime.rs` — Condvar entries.
+- `crates/ruxen-core/src/codegen/runtime.rs` — Condvar entries.
 - `runtime_thread.c` — `pthread_cond_*` wrappers.
-- Stdlib Riven source: `std.sync.channel`, `Sender`, `Receiver`,
+- Stdlib Ruxen source: `std.sync.channel`, `Sender`, `Receiver`,
   `SendError`, `RecvError`, `TryRecvError`.
 
 Files to modify (Phase 2d):
 
-- `crates/riven-core/src/codegen/cranelift.rs` — lower atomic ops via
+- `crates/ruxen-core/src/codegen/cranelift.rs` — lower atomic ops via
   `ins().atomic_rmw`, `atomic_cas`, `atomic_load`, `atomic_store`.
-- `crates/riven-core/src/codegen/llvm.rs` — analogous via LLVM atomic
+- `crates/ruxen-core/src/codegen/llvm.rs` — analogous via LLVM atomic
   intrinsics.
-- Stdlib Riven source: `std.sync.atomic`, `Ordering`, each `AtomicX`,
+- Stdlib Ruxen source: `std.sync.atomic`, `Ordering`, each `AtomicX`,
   `RwLock`, `Barrier`, `Once`, `ThreadBuilder`.
 - `thread_local!` macro handler in the macro dispatcher (wherever the native
   `[…]` array and `{ k => v, … }` map literal lowerings live today — see
@@ -1299,12 +1299,12 @@ Files to modify (Phase 2d):
 Phase 2 is considered complete when:
 
 - [ ] All fixtures in `tests/fixtures/concurrency/` behave as documented in §8.4.
-- [ ] `arc_mutex_counter.rvn` runs to completion with the correct total
+- [ ] `arc_mutex_counter.rx` runs to completion with the correct total
       under TSan (when the sanitize-build path runs with ThreadSanitizer).
-- [ ] `cargo test -p riven-core concurrency` passes on Linux and macOS in CI.
+- [ ] `cargo test -p ruxen-core concurrency` passes on Linux and macOS in CI.
 - [ ] `docs/tutorial/` gains a chapter `17-concurrency.md` mirroring this doc
       for end users.
-- [ ] At least one end-to-end `cargo run -p rivenc -- examples/threads/*.rvn`
+- [ ] At least one end-to-end `cargo run -p ruxenc -- examples/threads/*.rx`
       example exists per primitive.
 - [ ] The rendered error for E1011 points at the offending field, not just the
       struct.

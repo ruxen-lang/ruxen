@@ -34,7 +34,7 @@ This unblocks:
 
 The mixin author marks the mixin as runtime-dispatched:
 
-```rvn
+```rx
 mixin Future dispatch runtime
   type Output
   def var poll(cx: &var Context) -> Poll[Self.Output]
@@ -95,7 +95,7 @@ static const struct __FutureVtable_TimeSleepFuture
     };
 ```
 
-The vtable's function pointers reference the existing Riven-emitted
+The vtable's function pointers reference the existing Ruxen-emitted
 method symbols (`TimeSleepFuture_poll` etc.) so no extra trampoline
 generation is needed — the symbols are already C-callable per the
 existing FFI ABI.
@@ -105,13 +105,13 @@ existing FFI ABI.
 At class construction (every `__init` method, including the
 synth-generated `<Class>.new`), the codegen emits:
 
-```rvn
+```rx
 # Synthesised at the head of every __init:
 @vtable_slot_for(Future) = &__future_vtable_<Class>
 ```
 
 For C-backed classes (Mutex, etc. with no user-body `def init`),
-the existing C `riven_<class>_new` function gains a `vtable_ptr`
+the existing C `ruxen_<class>_new` function gains a `vtable_ptr`
 write at the top of its body. This is one of the few places the
 trio-leak pin's "no compiler/src/ edits" rule has a legitimate
 exception — but the edit is mechanical, one line per builtin
@@ -160,7 +160,7 @@ unchanged for direct method calls.
 The dynamic path activates when the receiver's type is the **mixin
 itself** (e.g., a `dyn Future` parameter or a polymorphic slot):
 
-```rvn
+```rx
 def run_one(fut: &var Future) -> ()
   match fut.poll(cx)
     ...
@@ -183,7 +183,7 @@ denotes a runtime-dispatched reference. The static type check
 verifies the receiver's class includes the mixin; the runtime
 dispatch reads the vtable.
 
-```rvn
+```rx
 let tasks: Array[&var Future] = Array.new()    # heterogeneous task queue
 tasks.push(some_future_a)
 tasks.push(some_future_b)   # different concrete type, both Future-includers
@@ -241,7 +241,7 @@ the compiler enforces structurally:
   via `Drop_dynamic_drop(self)` for any class with a Drop slot in
   its class-info.
 - `def __drop` vs `def drop` name mismatch (memory note
-  `project_riven_drop_name_mismatch.md`) becomes a compile-time
+  `project_ruxen_drop_name_mismatch.md`) becomes a compile-time
   diagnostic if `include Drop` is present but `def drop` is missing.
 
 This is the "promote silent state to required contract" work from
@@ -289,7 +289,7 @@ review.
 | B5, B8    | `dynamic_dispatch_helper_resolves_concrete_method`     | `tests/mixin_vtables.rs`   |
 | B6        | `direct_method_call_stays_static_dispatch`             | `tests/mixin_vtables.rs`   |
 | B7        | `dyn_mixin_param_type_parses_and_typechecks`           | `tests/mixin_vtables.rs`   |
-| B7 e2e    | `cases/770_heterogeneous_future_dispatch.rvn`          | release-e2e                |
+| B7 e2e    | `cases/770_heterogeneous_future_dispatch.rx`          | release-e2e                |
 | B9 (next round) | n/a — depends on Drop migration                  | —                          |
 
 ---

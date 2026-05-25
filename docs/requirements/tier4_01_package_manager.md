@@ -2,22 +2,22 @@
 
 ## 1. Summary & Motivation
 
-Riven already has a functional package manager (`riven-cli`) with project scaffolding (`riven new`, `riven init`), a build pipeline that produces `.rlib` archives and executables, dependency resolution with topological sorting, cycle detection, and a lock file (`Riven.lock`) with content-addressed checksums. Dependencies can be declared as `path = "../lib"` or `git = "https://..."`, and transitive git dependencies are cloned, checked out, and compiled in order.
+Ruxen already has a functional package manager (`ruxen-cli`) with project scaffolding (`ruxen new`, `ruxen init`), a build pipeline that produces `.rlib` archives and executables, dependency resolution with topological sorting, cycle detection, and a lock file (`Ruxen.lock`) with content-addressed checksums. Dependencies can be declared as `path = "../lib"` or `git = "https://..."`, and transitive git dependencies are cloned, checked out, and compiled in order.
 
-What's missing is **everything a package manager needs past a toy.** There is no `[workspace]` for multi-crate repos. There is no `[features]` table for optional dependencies. Registry entries are accepted at parse time and rejected at resolve time with a hard-coded error. There is no `riven publish`, no registry server, no `riven yank`, no `riven audit`, no semver-resolution across a dependency graph, and no way to bump a single transitive dep without re-resolving everything. This document specifies the path from "single-crate `git+path` dependencies" to "multi-crate workspace with a registry, feature flags, published packages, yanking, and principled semver resolution."
+What's missing is **everything a package manager needs past a toy.** There is no `[workspace]` for multi-crate repos. There is no `[features]` table for optional dependencies. Registry entries are accepted at parse time and rejected at resolve time with a hard-coded error. There is no `ruxen publish`, no registry server, no `ruxen yank`, no `ruxen audit`, no semver-resolution across a dependency graph, and no way to bump a single transitive dep without re-resolving everything. This document specifies the path from "single-crate `git+path` dependencies" to "multi-crate workspace with a registry, feature flags, published packages, yanking, and principled semver resolution."
 
 ## 2. Current State
 
-### 2.1 Manifest (`crates/riven-cli/src/manifest.rs`, 451 lines)
+### 2.1 Manifest (`crates/ruxen-cli/src/manifest.rs`, 451 lines)
 
-`Riven.toml` (capitalized — not `riven.toml`). Structure:
+`Ruxen.toml` (capitalized — not `ruxen.toml`). Structure:
 
 ```toml
 [package]
 name = "my-project"                                         # validate_package_name: [a-z][a-z0-9_-]*, max 64
 version = "0.1.0"                                           # parsed via SemVer::parse (version.rs:18-50)
 edition = "2026"
-riven = ">=0.2.0"                                           # minimum compiler version (optional, unused at resolve time)
+ruxen = ">=0.2.0"                                           # minimum compiler version (optional, unused at resolve time)
 authors = ["Alice <alice@example.com>"]
 license = "MIT"
 description = "A short summary"
@@ -36,13 +36,13 @@ test_helpers = "0.1.0"
 
 [build]
 type = "binary"                                             # or "library"
-entry = "src/main.rvn"                                      # default: src/main.rvn for binary, src/lib.rvn for library
+entry = "src/main.rx"                                      # default: src/main.rx for binary, src/lib.rx for library
 link = ["ssl", "crypto"]                                    # linker -l flags
 link-search = ["/usr/local/lib"]                            # linker -L flags
 
 [[bin]]
 name = "my-cli"
-entry = "src/bin/cli.rvn"
+entry = "src/bin/cli.rx"
 
 [profile.debug]
 opt-level = 0
@@ -62,19 +62,19 @@ Absent fields (all from `manifest.rs:7-118`):
 - `[registries]` / `[source]` — absent. No way to point at an alternate registry.
 - `[package.categories]`, `[package.documentation]`, `[package.include]`/`exclude`, `[package.workspace]` (the "I belong to this workspace root" flag) — absent.
 
-### 2.2 Dependency resolution (`crates/riven-cli/src/resolve_deps.rs`, 520 lines)
+### 2.2 Dependency resolution (`crates/ruxen-cli/src/resolve_deps.rs`, 520 lines)
 
 - `resolve()` (line 33-69) walks the `[dependencies]` table, fetches each dep, recurses into its manifest, does cycle detection via an `in_flight: HashSet`, then topologically sorts by leaves-first (line 295-325).
 - `Dependency::Version(_)` always errors (line 100-108, 116-120): `"registry dependencies are not yet supported. Use --git or --path"`.
-- **Path deps** (`resolve_path_dep` line 166-198): canonicalize path, read `Riven.toml` for version, no checksum.
+- **Path deps** (`resolve_path_dep` line 166-198): canonicalize path, read `Ruxen.toml` for version, no checksum.
 - **Git deps** (`resolve_git_dep` line 201-292): `git clone` into `target/deps/<name>-<8-char-cache-key>/`, `git checkout`, `git rev-parse HEAD`, compute source-tree sha256 via `rlib::hash_sources`.
 - **No semver unification.** If package `A` depends on `http = "1.0"` and package `B` depends on `http = "1.1"`, both are cloned to different directories and compiled separately. There is no attempt to pick a single version satisfying both.
 - **No version requirement matching used at resolve time.** `VersionReq::matches` exists (`version.rs:137-169`) but is never called from `resolve_deps`.
 
-### 2.3 Lock file (`crates/riven-cli/src/lock.rs`, 325 lines)
+### 2.3 Lock file (`crates/ruxen-cli/src/lock.rs`, 325 lines)
 
 ```toml
-# This file is auto-generated by `riven`. Do not edit manually.
+# This file is auto-generated by `ruxen`. Do not edit manually.
 version = 1
 
 [[piece]]
@@ -89,29 +89,29 @@ dependencies = ["tls"]
 - `LockFile::is_up_to_date` (line 94-108) compares manifest dep *names* against lock entries — does not check version requirements satisfied.
 - `verify_checksums` (line 111-133) recomputes the source-tree hash against `target/deps/<name>/` and errors on mismatch.
 
-### 2.4 CLI (`crates/riven-cli/src/cli.rs`, 115 lines) — existing subcommands
+### 2.4 CLI (`crates/ruxen-cli/src/cli.rs`, 115 lines) — existing subcommands
 
 ```
-riven new <name> [--lib] [--no-git]
-riven init
-riven build [--release] [--locked] [--bin <name>]
-riven run [--release] [-- <args>]
-riven check
-riven clean
-riven add <piece> [--version VER | --git URL | --path PATH] [--dev] [--branch B] [--tag T] [--rev R]
-riven remove <piece>
-riven update [<piece>]
-riven tree
-riven verify
+ruxen new <name> [--lib] [--no-git]
+ruxen init
+ruxen build [--release] [--locked] [--bin <name>]
+ruxen run [--release] [-- <args>]
+ruxen check
+ruxen clean
+ruxen add <piece> [--version VER | --git URL | --path PATH] [--dev] [--branch B] [--tag T] [--rev R]
+ruxen remove <piece>
+ruxen update [<piece>]
+ruxen tree
+ruxen verify
 ```
 
 No `publish`, no `package`, no `search`, no `yank`, no `login`, no `owner`, no `audit`.
 
-### 2.5 Build pipeline interactions (`crates/riven-cli/src/build.rs:71-83`)
+### 2.5 Build pipeline interactions (`crates/ruxen-cli/src/build.rs:71-83`)
 
 Dependencies compile to `target/<profile>/deps/<name>.rlib`, then the main project consumes them via `extract_object_code` + link flags. There's no reuse across projects — every new project re-compiles every transitive dep from source.
 
-### 2.6 What `riven-cli/tests/` exercises
+### 2.6 What `ruxen-cli/tests/` exercises
 
 `tests/installed_pkg_manager.rs` (referenced from the release workflow — `.github/workflows/release.yml:63-66`) — exercises the installed binary. Covers new/init/add/remove/build/run/tree/verify in a sandbox temp dir. Does not cover workspaces, features, or registries (they don't exist).
 
@@ -119,17 +119,17 @@ Dependencies compile to `target/<profile>/deps/<name>.rlib`, then the main proje
 
 ### Goals
 
-1. `[workspace]` table for multi-crate repos with a single shared `Riven.lock` and `target/` directory.
+1. `[workspace]` table for multi-crate repos with a single shared `Ruxen.lock` and `target/` directory.
 2. `[features]` table for optional dependencies and conditional compilation (`#[cfg(feature = "…")]` analog).
 3. Registry-aware resolution: full semver constraint solving, version unification across the graph (pick one version per semver-compatible range).
-4. `riven publish` that uploads a source tarball + manifest + checksum to a registry.
+4. `ruxen publish` that uploads a source tarball + manifest + checksum to a registry.
 5. A sparse git-backed index (Cargo's `sparse+` protocol, 2022+).
-6. `riven yank` / `riven unyank` that marks versions unresolvable by new resolves but keeps them installable for pinned lock files.
-7. `riven audit` that cross-checks lock checksums against the registry's published checksums.
-8. `riven search` that queries the registry index.
-9. `riven login` / `riven logout` / `riven owner` for publishing auth.
-10. Alternative-registry support: `[registries.mycorp] index = "sparse+https://mycorp.dev/riven/"` with per-dependency `registry = "mycorp"`.
-11. Backward-compatible: every `Riven.toml` that parses today must keep parsing.
+6. `ruxen yank` / `ruxen unyank` that marks versions unresolvable by new resolves but keeps them installable for pinned lock files.
+7. `ruxen audit` that cross-checks lock checksums against the registry's published checksums.
+8. `ruxen search` that queries the registry index.
+9. `ruxen login` / `ruxen logout` / `ruxen owner` for publishing auth.
+10. Alternative-registry support: `[registries.mycorp] index = "sparse+https://mycorp.dev/ruxen/"` with per-dependency `registry = "mycorp"`.
+11. Backward-compatible: every `Ruxen.toml` that parses today must keep parsing.
 
 ### Non-Goals
 
@@ -137,12 +137,12 @@ Dependencies compile to `target/<profile>/deps/<name>.rlib`, then the main proje
 - A web UI for the registry (ship the protocol first; UI later).
 - Private registries with fine-grained auth scopes. Per-user publish token is v1's auth surface.
 - A replacement for `git` as a transport — git deps stay.
-- Peer-dependency semantics (npm-style). Riven resolves the flat single-version-per-name graph.
-- Monorepo cross-language support (Riven + Rust + Go in one workspace).
+- Peer-dependency semantics (npm-style). Ruxen resolves the flat single-version-per-name graph.
+- Monorepo cross-language support (Ruxen + Rust + Go in one workspace).
 
 ## 4. Surface
 
-### 4.1 `Riven.toml` additions
+### 4.1 `Ruxen.toml` additions
 
 **Workspaces:**
 
@@ -159,13 +159,13 @@ resolver = "2"
 version = "0.3.0"
 authors = ["Team <team@example.com>"]
 license = "MIT OR Apache-2.0"
-riven = ">=0.2"
+ruxen = ">=0.2"
 
 [workspace.dependencies]
 http = "1.2"
 serde = { version = "2", features = ["derive"] }
 
-# In a member's Riven.toml:
+# In a member's Ruxen.toml:
 [package]
 name = "my-cli"
 version.workspace = true
@@ -193,7 +193,7 @@ rustls = { version = "0.22", optional = true }
 http = { version = "1.2", default-features = false }
 ```
 
-`#[cfg(feature = "ansi")]` is conceptually available in Riven as a body-level `cfg(feature = "ansi")` directive on items. Resolution: the existing directive machinery (`parser/mod.rs:1572-1610`) is extended to accept `cfg`. Items whose `cfg` evaluates to false are dropped in the resolver before type checking.
+`#[cfg(feature = "ansi")]` is conceptually available in Ruxen as a body-level `cfg(feature = "ansi")` directive on items. Resolution: the existing directive machinery (`parser/mod.rs:1572-1610`) is extended to accept `cfg`. Items whose `cfg` evaluates to false are dropped in the resolver before type checking.
 
 **Target-specific dependencies:**
 
@@ -218,7 +218,7 @@ index = "sparse+https://registry.mycorp.dev/"
 token-env = "MYCORP_REGISTRY_TOKEN"                         # env var from which auth token is read
 
 [dependencies]
-# Default registry (Riven's own):
+# Default registry (Ruxen's own):
 http = "1.2"
 # Explicit registry:
 widgets = { version = "0.5", registry = "mycorp" }
@@ -230,8 +230,8 @@ widgets = { version = "0.5", registry = "mycorp" }
 [package]
 # New fields:
 categories = ["command-line-utilities", "network-programming"]
-documentation = "https://docs.riven.land/http"
-include = ["src/**/*.rvn", "Riven.toml", "README.md", "LICENSE*"]
+documentation = "https://docs.ruxen.land/http"
+include = ["src/**/*.rx", "Ruxen.toml", "README.md", "LICENSE*"]
 exclude = ["tests/fixtures/**"]
 publish = ["mycorp"]                                        # or `false` to block accidental publish
 ```
@@ -239,32 +239,32 @@ publish = ["mycorp"]                                        # or `false` to bloc
 ### 4.2 CLI additions
 
 ```
-riven publish [--registry <name>] [--token <token>] [--dry-run] [--allow-dirty] [--no-verify]
-riven package [--list]                                      # produce the publish tarball without uploading
-riven search <query> [--registry <name>] [--limit N]
-riven yank <piece>@<version> [--registry <name>]
-riven unyank <piece>@<version> [--registry <name>]
-riven audit [--fix] [--deny <level>]                        # checksum + yank status + advisories
-riven login [--registry <name>] [--token <token>]
-riven logout [--registry <name>]
-riven owner <piece> {--add|--remove|--list} [<user>]
+ruxen publish [--registry <name>] [--token <token>] [--dry-run] [--allow-dirty] [--no-verify]
+ruxen package [--list]                                      # produce the publish tarball without uploading
+ruxen search <query> [--registry <name>] [--limit N]
+ruxen yank <piece>@<version> [--registry <name>]
+ruxen unyank <piece>@<version> [--registry <name>]
+ruxen audit [--fix] [--deny <level>]                        # checksum + yank status + advisories
+ruxen login [--registry <name>] [--token <token>]
+ruxen logout [--registry <name>]
+ruxen owner <piece> {--add|--remove|--list} [<user>]
 
 # Feature + workspace flags threaded through build/run/check:
-riven build [-p <pkg>] [--workspace] [--exclude <pkg>]
+ruxen build [-p <pkg>] [--workspace] [--exclude <pkg>]
             [--features <list>] [--no-default-features] [--all-features]
             [--target <triple>]                             # see tier4_02
-riven run   -p <pkg> [-- <args>]
-riven check [-p <pkg>] [--workspace]
-riven tree  [-p <pkg>] [--edges features] [--duplicates]
+ruxen run   -p <pkg> [-- <args>]
+ruxen check [-p <pkg>] [--workspace]
+ruxen tree  [-p <pkg>] [--edges features] [--duplicates]
 ```
 
 ### 4.3 File layout
 
 ```
-~/.riven/
+~/.ruxen/
 ├── bin/
 ├── lib/
-├── share/riven/std/                          # stdlib source (tier 1)
+├── share/ruxen/std/                          # stdlib source (tier 1)
 ├── registry/
 │   ├── index/<registry-name>/                # sparse-cloned index
 │   │   └── ht/tp/http                        # 2+2+name shard (crates.io convention)
@@ -273,8 +273,8 @@ riven tree  [-p <pkg>] [--edges features] [--duplicates]
 └── credentials.toml                          # [registries.<name>] token = "..."
 
 <project>/
-├── Riven.toml
-├── Riven.lock
+├── Ruxen.toml
+├── Ruxen.lock
 ├── target/
 │   ├── debug/
 │   ├── release/
@@ -284,26 +284,26 @@ riven tree  [-p <pkg>] [--edges features] [--duplicates]
 
 ### 4.4 Registry protocol (sparse index)
 
-`sparse+https://registry.riven.land/` serves:
+`sparse+https://registry.ruxen.land/` serves:
 
 - `GET /<shard>/<name>` → newline-delimited JSON, one object per version:
   ```json
-  {"name":"http","vers":"1.2.5","deps":[{"name":"tls","req":"^0.3","optional":false,"default_features":true,"features":[],"target":null,"kind":"normal","registry":null}],"cksum":"a1b2c3d4...","features":{"default":["std"],"std":[],"tls":["dep:rustls"]},"yanked":false,"links":null,"riven_version":"1"}
+  {"name":"http","vers":"1.2.5","deps":[{"name":"tls","req":"^0.3","optional":false,"default_features":true,"features":[],"target":null,"kind":"normal","registry":null}],"cksum":"a1b2c3d4...","features":{"default":["std"],"std":[],"tls":["dep:rustls"]},"yanked":false,"links":null,"ruxen_version":"1"}
   ```
 - `GET /api/v1/crates/new` (authenticated POST, multipart) — publish.
 - `GET /api/v1/crates/<name>/<version>/yank` (authenticated DELETE) — yank.
 - `GET /api/v1/crates/<name>/<version>/unyank` (authenticated PUT) — unyank.
 - `GET /api/v1/crates` (query: `q=<query>&per_page=N`) — search.
 
-The protocol is deliberately a near-copy of crates.io's sparse protocol (RFC 2789). This makes it trivial for a user to point a Riven registry at an existing crates.io-compatible registry (e.g. the mirrors like `kellnr`, `meuse`).
+The protocol is deliberately a near-copy of crates.io's sparse protocol (RFC 2789). This makes it trivial for a user to point a Ruxen registry at an existing crates.io-compatible registry (e.g. the mirrors like `kellnr`, `meuse`).
 
 ## 5. Architecture / Design
 
 ### 5.1 Workspace resolution
 
-- `Manifest::load` grows a second entry point `Workspace::load(dir)` that walks up looking for a `Riven.toml` with a `[workspace]` table.
+- `Manifest::load` grows a second entry point `Workspace::load(dir)` that walks up looking for a `Ruxen.toml` with a `[workspace]` table.
 - `find_project_root` (`build.rs:201-215`) returns `(workspace_root, member_dir)`.
-- A shared `target/` lives at the workspace root. `Riven.lock` lives at the workspace root.
+- A shared `target/` lives at the workspace root. `Ruxen.lock` lives at the workspace root.
 - Member crates inherit `[package.workspace = true]` fields from `[workspace.package]`.
 - `[workspace.dependencies]` is the canonical source of versions. Members say `http.workspace = true` and don't restate the version. This is Cargo's pattern and avoids version drift.
 - Feature unification happens at workspace-resolve time: if member A activates `http/tls` and member B does not, the single resolved `http` sees `tls` active.
@@ -316,7 +316,7 @@ Classic DAG. Algorithm:
 2. For each dep, start with its `default` feature (unless `default-features = false`), plus any explicit `features = [...]`, plus any `feature_name = "dep/inner"` activations that reference it.
 3. Walk transitively: if feature `F` in package `P` lists `"Q/X"`, then in the resolved set `(Q, X)` is active.
 4. Optional deps (`optional = true`): a dep is present only if some feature activates it via `dep:name`.
-5. The Cargo v2 resolver (`resolver = "2"`) isolates dev-deps and build-deps from normal-dep feature unification. Riven should ship `resolver = "2"` as the default; `"1"` is pre-registered for future compatibility but not implemented.
+5. The Cargo v2 resolver (`resolver = "2"`) isolates dev-deps and build-deps from normal-dep feature unification. Ruxen should ship `resolver = "2"` as the default; `"1"` is pre-registered for future compatibility but not implemented.
 
 ### 5.3 Semver resolution
 
@@ -332,39 +332,39 @@ This is a *pure* resolver: no backtracking needed because we pick greedily per p
 
 ### 5.4 Publishing
 
-1. `riven package` produces a `.tar.gz` of the `include`-filtered source plus `Riven.toml` plus a generated `Riven.lock` (if binary). The manifest is *normalized* — `workspace.*` inheritances are resolved, relative paths are stripped, `path = "..."` deps must have a matching registry `version` or the publish aborts.
-2. A `CARGO_VCS_INFO.json`-equivalent is generated: `.riven_vcs_info.json` with the git commit SHA if available.
-3. `riven publish` POSTs the tarball to `<registry>/api/v1/crates/new` with `Authorization: Bearer <token>`. The registry verifies the checksum, stores the tarball, updates the index with a new version line.
+1. `ruxen package` produces a `.tar.gz` of the `include`-filtered source plus `Ruxen.toml` plus a generated `Ruxen.lock` (if binary). The manifest is *normalized* — `workspace.*` inheritances are resolved, relative paths are stripped, `path = "..."` deps must have a matching registry `version` or the publish aborts.
+2. A `CARGO_VCS_INFO.json`-equivalent is generated: `.ruxen_vcs_info.json` with the git commit SHA if available.
+3. `ruxen publish` POSTs the tarball to `<registry>/api/v1/crates/new` with `Authorization: Bearer <token>`. The registry verifies the checksum, stores the tarball, updates the index with a new version line.
 4. The index update is atomic via a git-backed branch or a transactional kv store (implementation detail of the registry).
 
 ### 5.5 Yanking
 
 - Registry sets `"yanked": true` in the index line for that version.
-- `resolve_deps` skips yanked versions when picking a fresh version but accepts them if pinned in `Riven.lock`.
-- `riven audit` warns when a lock entry is yanked.
+- `resolve_deps` skips yanked versions when picking a fresh version but accepts them if pinned in `Ruxen.lock`.
+- `ruxen audit` warns when a lock entry is yanked.
 
 ### 5.6 Offline / vendored mode
 
-- `riven vendor` copies all resolved deps' sources into `vendor/` and generates a `.riven/config.toml` with `[source.crates-io] replace-with = "vendored-sources"` plus `[source.vendored-sources] directory = "vendor"`.
+- `ruxen vendor` copies all resolved deps' sources into `vendor/` and generates a `.ruxen/config.toml` with `[source.crates-io] replace-with = "vendored-sources"` plus `[source.vendored-sources] directory = "vendor"`.
 - Builds with `--offline` refuse to touch the network.
 
 ### 5.7 Auth & credentials
 
-- `~/.riven/credentials.toml`:
+- `~/.ruxen/credentials.toml`:
   ```toml
-  [registries.riven]
+  [registries.ruxen]
   token = "rv-..."
   [registries.mycorp]
   token = "mc-..."
   ```
 - File mode enforced at 0600 on unix. Warn if world-readable.
-- `riven login` is a thin writer; the token is pasted via prompt or `--token`.
-- Environment override: `RIVEN_REGISTRY_TOKEN` (and `RIVEN_REGISTRIES_<NAME>_TOKEN` for alternates) always wins over the file — CI-friendly.
+- `ruxen login` is a thin writer; the token is pasted via prompt or `--token`.
+- Environment override: `RUXEN_REGISTRY_TOKEN` (and `RUXEN_REGISTRIES_<NAME>_TOKEN` for alternates) always wins over the file — CI-friendly.
 
 ### 5.8 Security model
 
 - Published tarballs are immutable. Yanking changes metadata only, never content.
-- Checksums in `Riven.lock` are `sha256`, prefixed `sha256:` (already the convention — see `lock.rs:67`).
+- Checksums in `Ruxen.lock` are `sha256`, prefixed `sha256:` (already the convention — see `lock.rs:67`).
 - The registry serves over HTTPS. Certificate pinning: out of scope for v1.
 - 2FA on publish: deferred to v2. Token scoping (read-only vs publish-capable): deferred to v2.
 
@@ -372,53 +372,53 @@ This is a *pure* resolver: no backtracking needed because we pick greedily per p
 
 ### New files
 
-- `crates/riven-cli/src/workspace.rs` — `Workspace` struct, member discovery, inheritance, shared-target logic.
-- `crates/riven-cli/src/features.rs` — `FeatureResolver`, activation algorithm.
-- `crates/riven-cli/src/cfg.rs` — `cfg(...)` expression parser + evaluator against a target triple + enabled-features set.
-- `crates/riven-cli/src/registry/mod.rs` — registry client mixin.
-- `crates/riven-cli/src/registry/sparse.rs` — sparse-index HTTP client.
-- `crates/riven-cli/src/registry/index.rs` — index-line parsing (serde-json).
-- `crates/riven-cli/src/publish.rs` — `riven publish` + `riven package`.
-- `crates/riven-cli/src/yank.rs` — `riven yank` + `riven unyank`.
-- `crates/riven-cli/src/audit.rs` — `riven audit`.
-- `crates/riven-cli/src/auth.rs` — credentials file + env override.
-- `crates/riven-cli/src/search.rs` — `riven search`.
-- `crates/riven-cli/src/owner.rs` — `riven owner`.
-- `crates/riven-cli/src/login.rs` — `riven login/logout`.
-- `crates/riven-cli/src/vendor.rs` — `riven vendor`.
-- `crates/riven-cli/src/cli.rs` — new subcommand variants.
+- `crates/ruxen-cli/src/workspace.rs` — `Workspace` struct, member discovery, inheritance, shared-target logic.
+- `crates/ruxen-cli/src/features.rs` — `FeatureResolver`, activation algorithm.
+- `crates/ruxen-cli/src/cfg.rs` — `cfg(...)` expression parser + evaluator against a target triple + enabled-features set.
+- `crates/ruxen-cli/src/registry/mod.rs` — registry client mixin.
+- `crates/ruxen-cli/src/registry/sparse.rs` — sparse-index HTTP client.
+- `crates/ruxen-cli/src/registry/index.rs` — index-line parsing (serde-json).
+- `crates/ruxen-cli/src/publish.rs` — `ruxen publish` + `ruxen package`.
+- `crates/ruxen-cli/src/yank.rs` — `ruxen yank` + `ruxen unyank`.
+- `crates/ruxen-cli/src/audit.rs` — `ruxen audit`.
+- `crates/ruxen-cli/src/auth.rs` — credentials file + env override.
+- `crates/ruxen-cli/src/search.rs` — `ruxen search`.
+- `crates/ruxen-cli/src/owner.rs` — `ruxen owner`.
+- `crates/ruxen-cli/src/login.rs` — `ruxen login/logout`.
+- `crates/ruxen-cli/src/vendor.rs` — `ruxen vendor`.
+- `crates/ruxen-cli/src/cli.rs` — new subcommand variants.
 
 ### Touched files
 
-- `crates/riven-cli/src/manifest.rs:7-21` — add `Option<Workspace>`, `BTreeMap<String, Feature>`, `BTreeMap<String, TargetSpec>`, `BTreeMap<String, RegistryConfig>`.
-- `crates/riven-cli/src/manifest.rs:61-74` — `DependencyDetail` grows `optional: bool`, `default_features: bool`, `features: Vec<String>`, `registry: Option<String>`, `package: Option<String>` (for rename — internal Rust field).
-- `crates/riven-cli/src/manifest.rs:120-150` — `Manifest::load` delegates to `Workspace::load` when a `[workspace]` table is found.
-- `crates/riven-cli/src/resolve_deps.rs:33-69` — `resolve()` takes a `Workspace` + `FeatureSet`, builds a registry-aware graph, picks versions.
-- `crates/riven-cli/src/resolve_deps.rs:100-108, 116-120` — remove the "registry dependencies are not yet supported" errors.
-- `crates/riven-cli/src/resolve_deps.rs:201-292` — git dep resolution stays; registry fetch delegates to `registry/sparse.rs`.
-- `crates/riven-cli/src/lock.rs:22-27` — `LockedPiece` grows `features: Vec<String>`, `source: "registry+<url>"` variant.
-- `crates/riven-cli/src/build.rs:21-118` — `build` accepts `-p`, `--workspace`, `--features`, threads through to `compile_piece`.
-- `crates/riven-cli/src/cli.rs:24-114` — add subcommands from §4.2.
-- `crates/riven-core/src/parser/mod.rs:1572-1610` — `parse_attributes` grows a `cfg` case and evaluates conditional compilation.
-- `crates/riven-core/src/resolve/mod.rs` — items with body-level `cfg(...)` evaluating to false are skipped at registration.
-- `crates/riven-cli/Cargo.toml:17-24` — add `reqwest` (TLS feature), `pubgrub` (semver resolver), `tar` + `flate2` (tarball), `rpassword` (publish token prompt).
+- `crates/ruxen-cli/src/manifest.rs:7-21` — add `Option<Workspace>`, `BTreeMap<String, Feature>`, `BTreeMap<String, TargetSpec>`, `BTreeMap<String, RegistryConfig>`.
+- `crates/ruxen-cli/src/manifest.rs:61-74` — `DependencyDetail` grows `optional: bool`, `default_features: bool`, `features: Vec<String>`, `registry: Option<String>`, `package: Option<String>` (for rename — internal Rust field).
+- `crates/ruxen-cli/src/manifest.rs:120-150` — `Manifest::load` delegates to `Workspace::load` when a `[workspace]` table is found.
+- `crates/ruxen-cli/src/resolve_deps.rs:33-69` — `resolve()` takes a `Workspace` + `FeatureSet`, builds a registry-aware graph, picks versions.
+- `crates/ruxen-cli/src/resolve_deps.rs:100-108, 116-120` — remove the "registry dependencies are not yet supported" errors.
+- `crates/ruxen-cli/src/resolve_deps.rs:201-292` — git dep resolution stays; registry fetch delegates to `registry/sparse.rs`.
+- `crates/ruxen-cli/src/lock.rs:22-27` — `LockedPiece` grows `features: Vec<String>`, `source: "registry+<url>"` variant.
+- `crates/ruxen-cli/src/build.rs:21-118` — `build` accepts `-p`, `--workspace`, `--features`, threads through to `compile_piece`.
+- `crates/ruxen-cli/src/cli.rs:24-114` — add subcommands from §4.2.
+- `crates/ruxen-core/src/parser/mod.rs:1572-1610` — `parse_attributes` grows a `cfg` case and evaluates conditional compilation.
+- `crates/ruxen-core/src/resolve/mod.rs` — items with body-level `cfg(...)` evaluating to false are skipped at registration.
+- `crates/ruxen-cli/Cargo.toml:17-24` — add `reqwest` (TLS feature), `pubgrub` (semver resolver), `tar` + `flate2` (tarball), `rpassword` (publish token prompt).
 
 ### Tests
 
-- `crates/riven-cli/tests/workspace.rs` — multi-crate workspace, shared lock, inheritance.
-- `crates/riven-cli/tests/features.rs` — default-features off/on, feature activation, optional deps.
-- `crates/riven-cli/tests/semver_resolution.rs` — two paths converging on one transitive dep, version unification.
-- `crates/riven-cli/tests/registry_mock.rs` — stand up a mock sparse index over localhost, resolve against it.
-- `crates/riven-cli/tests/publish.rs` — publish a package to the mock, verify the uploaded tarball's manifest is normalized.
-- `crates/riven-cli/tests/yank.rs` — yank then resolve (should fail for fresh resolve, succeed with pinned lock).
+- `crates/ruxen-cli/tests/workspace.rs` — multi-crate workspace, shared lock, inheritance.
+- `crates/ruxen-cli/tests/features.rs` — default-features off/on, feature activation, optional deps.
+- `crates/ruxen-cli/tests/semver_resolution.rs` — two paths converging on one transitive dep, version unification.
+- `crates/ruxen-cli/tests/registry_mock.rs` — stand up a mock sparse index over localhost, resolve against it.
+- `crates/ruxen-cli/tests/publish.rs` — publish a package to the mock, verify the uploaded tarball's manifest is normalized.
+- `crates/ruxen-cli/tests/yank.rs` — yank then resolve (should fail for fresh resolve, succeed with pinned lock).
 
 ## 7. Interactions with Other Tiers
 
-- **Tier 1 stdlib.** §7.8 of `tier1_01_stdlib.md` proposes shipping stdlib as Riven source in `share/riven/std/`. If stdlib grows into a proper `std` piece inside the compiler workspace, workspaces (§5.1) are prerequisite.
+- **Tier 1 stdlib.** §7.8 of `tier1_01_stdlib.md` proposes shipping stdlib as Ruxen source in `share/ruxen/std/`. If stdlib grows into a proper `std` piece inside the compiler workspace, workspaces (§5.1) are prerequisite.
 - **Tier 2 codegen / Tier 3 borrow checker.** `[features]` interacts with type-checking: items gated by inactive features must be pruned *before* resolve/typeck so that their `use`s don't produce unresolved-name errors. This is the `parser/mod.rs:1572-1610` → `resolve/mod.rs` plumbing.
 - **Tier 4.02 cross-compilation.** `[target.<triple>.dependencies]` lives in the manifest (§4.1). The target triple the user passes via `--target` (doc 02 §4) is the input to `cfg(...)` evaluation (doc 02 §5.1).
 - **Tier 4.03 WASM.** Body-level `wasm_export` / `wasm_import` directives interact with `[package.publish]` — a piece that only compiles on wasm32 should be publishable but warn on `x86_64-unknown-linux-gnu` builds.
-- **Tier 4.05 stable ABI / cbindgen.** `riven package` should include generated `.h` files when the package has public C-ABI items and `[package.cbindgen] generate = true` is set.
+- **Tier 4.05 stable ABI / cbindgen.** `ruxen package` should include generated `.h` files when the package has public C-ABI items and `[package.cbindgen] generate = true` is set.
 - **Tier 4.08 repo hygiene.** `[package.license]` and `[package.license-file]` must match the SPDX expression in the registry's validation. The registry rejects publishes with unknown licenses.
 
 ## 8. Phasing
@@ -428,7 +428,7 @@ This is a *pure* resolver: no backtracking needed because we pick greedily per p
 1. `[workspace]` parsing: members, exclude, default-members, resolver.
 2. `[workspace.package]` / `[workspace.dependencies]` inheritance (`.workspace = true`).
 3. `Workspace::load` walker. `find_project_root` returns `(root, member)`.
-4. Shared `Riven.lock` at workspace root.
+4. Shared `Ruxen.lock` at workspace root.
 5. `-p <pkg>` and `--workspace` flags on build/run/check/test.
 6. **Exit:** a workspace with 3 members (one bin, two libs), two of which share a path-dep, builds to a single `target/`.
 
@@ -444,29 +444,29 @@ This is a *pure* resolver: no backtracking needed because we pick greedily per p
 
 ### Phase 1c — Registry + publish (3-4 weeks)
 
-1. Sparse-index client (HTTP GET, JSON-lines parsing, disk caching at `~/.riven/registry/`).
+1. Sparse-index client (HTTP GET, JSON-lines parsing, disk caching at `~/.ruxen/registry/`).
 2. `pubgrub`-based or simple-greedy semver resolver.
 3. `Dependency::Version(_)` no longer errors — routes to registry.
-4. `riven publish` tarball creation + upload.
-5. `riven search`.
-6. `riven package` (publish dry-run).
+4. `ruxen publish` tarball creation + upload.
+5. `ruxen search`.
+6. `ruxen package` (publish dry-run).
 7. Registry server: out-of-repo work. Recommend contracting or using a `kellnr`/`meuse` fork initially.
-8. **Exit:** `riven add http` (without `--git` or `--path`) resolves from a live registry, downloads the tarball, verifies checksum, builds. `riven publish` on a clean working tree uploads a tarball that round-trips.
+8. **Exit:** `ruxen add http` (without `--git` or `--path`) resolves from a live registry, downloads the tarball, verifies checksum, builds. `ruxen publish` on a clean working tree uploads a tarball that round-trips.
 
 ### Phase 1d — Yank, audit, auth polish (1 week)
 
-1. `riven yank` / `unyank`.
-2. `riven audit` (checksum + yank status).
-3. `riven login` / `logout` / `owner`.
+1. `ruxen yank` / `unyank`.
+2. `ruxen audit` (checksum + yank status).
+3. `ruxen login` / `logout` / `owner`.
 4. Credentials file with 0600 enforcement.
-5. `RIVEN_REGISTRY_TOKEN` env override.
-6. **Exit:** yanked version can't be freshly resolved; `riven audit` flags a lock entry whose upstream was yanked.
+5. `RUXEN_REGISTRY_TOKEN` env override.
+6. **Exit:** yanked version can't be freshly resolved; `ruxen audit` flags a lock entry whose upstream was yanked.
 
 ### Phase 1e — Vendor + offline (0.5 week)
 
-1. `riven vendor` + `.riven/config.toml` source-replacement.
+1. `ruxen vendor` + `.ruxen/config.toml` source-replacement.
 2. `--offline` flag that errors on any network call.
-3. **Exit:** CI can run `riven build --offline` against a checked-in `vendor/` directory.
+3. **Exit:** CI can run `ruxen build --offline` against a checked-in `vendor/` directory.
 
 ## 9. Open Questions & Risks
 
@@ -476,30 +476,30 @@ This is a *pure* resolver: no backtracking needed because we pick greedily per p
 4. **`.workspace = true` inheritance — flat or recursive?** A member of a member? Cargo does not allow nested workspaces. Recommend: flat only. Error clearly if a member also has `[workspace]`.
 5. **Feature-name collisions.** A feature named `dep` conflicts with the `dep:name` syntax. Cargo reserves `dep`, `default`, and `<name>` for each dependency. Recommend: same reservation set.
 6. **Alternative-registry indexing.** If `pieceA` on registry X depends on `pieceB`, is `pieceB` resolved on X or on the default registry? Cargo's rule: transitive deps inherit the registry of the declaring package unless overridden. Recommend: same rule.
-7. **Registry tarball size limit.** crates.io is 10 MB. Recommend 10 MB for Riven v1. Bigger pieces should use git.
-8. **SPDX license expressions.** `[package.license]` should validate against SPDX. Recommend: enforce at publish, warn (not error) at `riven check` / `build`. List of valid IDs bundled at compile time from `spdx-expression-parser`.
-9. **Path deps in published packages.** Cargo requires that path deps in a published package also have a registry `version` so the *published* version can resolve against the registry. Recommend: same rule, error at `riven publish`.
+7. **Registry tarball size limit.** crates.io is 10 MB. Recommend 10 MB for Ruxen v1. Bigger pieces should use git.
+8. **SPDX license expressions.** `[package.license]` should validate against SPDX. Recommend: enforce at publish, warn (not error) at `ruxen check` / `build`. List of valid IDs bundled at compile time from `spdx-expression-parser`.
+9. **Path deps in published packages.** Cargo requires that path deps in a published package also have a registry `version` so the *published* version can resolve against the registry. Recommend: same rule, error at `ruxen publish`.
 10. **Yank is not delete.** Emphasize this in docs. A yanked version's checksum stays valid; reproducible builds keep working. This is load-bearing for trust.
-11. **Network failure modes.** If the sparse index 500s mid-resolve, what happens? Recommend: retry with exponential backoff (3 attempts), then fall back to `~/.riven/registry/index/` cache. If cache is stale, error.
-12. **Registry outage during `riven update`.** `--offline` works. Without it, emit the clearest possible error: `"registry '<name>' unreachable and no cached index; run with --offline or try again"`.
+11. **Network failure modes.** If the sparse index 500s mid-resolve, what happens? Recommend: retry with exponential backoff (3 attempts), then fall back to `~/.ruxen/registry/index/` cache. If cache is stale, error.
+12. **Registry outage during `ruxen update`.** `--offline` works. Without it, emit the clearest possible error: `"registry '<name>' unreachable and no cached index; run with --offline or try again"`.
 13. **Pre-release versions.** `1.0.0-alpha.1` — `SemVer::parse` (`version.rs:18-50`) does not handle pre-release suffixes today. Recommend: extend the parser in phase 1c; pre-releases are `<` their release for ordering.
-14. **Build scripts (`build.rs` equivalent).** Not in this doc's scope. Note: the current `[build]` table in the manifest is *not* a build script; it's just linker config. A future `build = "build.rvn"` needs a separate RFC.
+14. **Build scripts (`build.rs` equivalent).** Not in this doc's scope. Note: the current `[build]` table in the manifest is *not* a build script; it's just linker config. A future `build = "build.rx"` needs a separate RFC.
 
 ## 10. Acceptance Criteria
 
 Phase 1a — Workspaces:
 
-- [ ] `riven new myws --workspace` scaffolds a workspace with two example members.
+- [ ] `ruxen new myws --workspace` scaffolds a workspace with two example members.
 - [ ] A workspace with 3 members compiles to a single `target/`.
-- [ ] `riven build -p member-a` builds exactly one member.
-- [ ] `riven build --workspace` builds every member.
+- [ ] `ruxen build -p member-a` builds exactly one member.
+- [ ] `ruxen build --workspace` builds every member.
 - [ ] `[workspace.package] version = "0.3.0"` inherited by a member with `version.workspace = true`.
 - [ ] `[workspace.dependencies] http = "1.2"` + member's `http.workspace = true` resolves to `http 1.2.x`.
-- [ ] `Riven.lock` lives at workspace root; deleting a member's `Riven.toml` and re-running `riven build` emits a helpful "member not found" error.
+- [ ] `Ruxen.lock` lives at workspace root; deleting a member's `Ruxen.toml` and re-running `ruxen build` emits a helpful "member not found" error.
 
 Phase 1b — Features:
 
-- [ ] `[features] default = ["a"]`, `a = ["dep:foo"]`, `foo = { version = "1", optional = true }` — `riven build` includes `foo`, `riven build --no-default-features` omits it.
+- [ ] `[features] default = ["a"]`, `a = ["dep:foo"]`, `foo = { version = "1", optional = true }` — `ruxen build` includes `foo`, `ruxen build --no-default-features` omits it.
 - [ ] `def f` with in-body `cfg(feature = "a")` — `f` is resolvable with default features, not resolvable with `--no-default-features`.
 - [ ] `def f` with in-body `cfg(target_os = "linux")` — skipped on non-Linux host.
 - [ ] A dependency's feature is transitively activated via `"foo/x"` syntax.
@@ -507,23 +507,23 @@ Phase 1b — Features:
 
 Phase 1c — Registry + publish:
 
-- [ ] `riven add http` (no flags) resolves against the default registry.
+- [ ] `ruxen add http` (no flags) resolves against the default registry.
 - [ ] Version unification: two transitive deps requesting `http ^1.0` and `^1.2` resolve to a single `http 1.x.y` where `x.y >= 1.2`.
 - [ ] Conflicting requirements (`http = "1"`, `http = "2"`) compile both versions side-by-side.
-- [ ] `riven publish --dry-run` produces a tarball whose extracted `Riven.toml` has no `path = "..."` deps, workspace inheritances fully resolved.
-- [ ] `riven publish` against a mock registry uploads the tarball; a subsequent `riven add <name>@<version>` installs it.
-- [ ] `riven search http` returns at least one hit against a registry with a published `http` piece.
+- [ ] `ruxen publish --dry-run` produces a tarball whose extracted `Ruxen.toml` has no `path = "..."` deps, workspace inheritances fully resolved.
+- [ ] `ruxen publish` against a mock registry uploads the tarball; a subsequent `ruxen add <name>@<version>` installs it.
+- [ ] `ruxen search http` returns at least one hit against a registry with a published `http` piece.
 
 Phase 1d — Yank + audit:
 
-- [ ] `riven yank http@1.2.3` sets `"yanked": true` in the index.
-- [ ] A fresh `riven update http` refuses to pick 1.2.3 after yank.
+- [ ] `ruxen yank http@1.2.3` sets `"yanked": true` in the index.
+- [ ] A fresh `ruxen update http` refuses to pick 1.2.3 after yank.
 - [ ] A lock file pinning 1.2.3 still builds after yank (with a warning).
-- [ ] `riven audit` reports the yanked lock entry with a yellow warning (non-fatal).
-- [ ] `riven audit` reports a checksum mismatch as a red error (fatal).
-- [ ] Credentials file at `~/.riven/credentials.toml` has mode 0600 on unix; warning if worse.
+- [ ] `ruxen audit` reports the yanked lock entry with a yellow warning (non-fatal).
+- [ ] `ruxen audit` reports a checksum mismatch as a red error (fatal).
+- [ ] Credentials file at `~/.ruxen/credentials.toml` has mode 0600 on unix; warning if worse.
 
 Phase 1e — Vendor + offline:
 
-- [ ] `riven vendor` produces a `vendor/` tree whose contents reproduce `target/deps/` after `riven build`.
-- [ ] `riven build --offline --locked` builds from `vendor/` without a single network call (verified with `strace` / `nc` sidecar in CI).
+- [ ] `ruxen vendor` produces a `vendor/` tree whose contents reproduce `target/deps/` after `ruxen build`.
+- [ ] `ruxen build --offline --locked` builds from `vendor/` without a single network call (verified with `strace` / `nc` sidecar in CI).

@@ -7,9 +7,9 @@ Blocks: soundness of `any Mixin + a` subtyping, GAT lifetime projection, anythin
 
 ## 1. Summary & Motivation
 
-**Variance** answers one question: *given `b: a` (read "`b` outlives `a`"), when is `F[b]` a subtype of `F[a]`?* The answer depends on which position the parameter appears in — reference, function argument, function return, interior-mutable cell, `&var` binding. Rust learned these rules the hard way (soundness holes in early versions of `Cell`, `Fn`-mixins, and `HashMap` iterators); Riven should not re-learn them.
+**Variance** answers one question: *given `b: a` (read "`b` outlives `a`"), when is `F[b]` a subtype of `F[a]`?* The answer depends on which position the parameter appears in — reference, function argument, function return, interior-mutable cell, `&var` binding. Rust learned these rules the hard way (soundness holes in early versions of `Cell`, `Fn`-mixins, and `HashMap` iterators); Ruxen should not re-learn them.
 
-Today Riven has:
+Today Ruxen has:
 
 - An explicit lifetime representation (`Ty::RefLifetime(String, Box<Ty>)`, `Ty::RefMutLifetime(String, Box<Ty>)` — `hir/types.rs:93-95`).
 - A lifetime elision checker (`borrow_check/lifetimes.rs:42-98`) implementing Rust's three elision rules and a borrow-outlives-owner check.
@@ -45,23 +45,23 @@ From `typeck/coerce.rs`:
 
 ### 2.3 No variance inference for user types
 
-A user-defined `struct Foo; x: &a T; y: fn(T); end` has *conflicting* variance in `T` — covariant through `x`, contravariant through `y`'s argument, forcing `T` to be invariant overall. Riven's resolver treats all generic parameters uniformly (`resolve/mod.rs` — generic parameter registration carries no variance annotation), and typeck has no pass that walks field types to compute variance. The net effect: user types behave as if **every parameter is invariant**, because the coercion table never recurses into user structs looking for a variance match.
+A user-defined `struct Foo; x: &a T; y: fn(T); end` has *conflicting* variance in `T` — covariant through `x`, contravariant through `y`'s argument, forcing `T` to be invariant overall. Ruxen's resolver treats all generic parameters uniformly (`resolve/mod.rs` — generic parameter registration carries no variance annotation), and typeck has no pass that walks field types to compute variance. The net effect: user types behave as if **every parameter is invariant**, because the coercion table never recurses into user structs looking for a variance match.
 
-This is *safe* (invariance is the conservative default) but **overly strict**. The moment stdlib ships a `Shared[T]` or `SharedSync[T]` or `Iter[a, T]` written in Riven, users will expect `Shared[Child]` → `Shared[Parent]` coercion and won't get it.
+This is *safe* (invariance is the conservative default) but **overly strict**. The moment stdlib ships a `Shared[T]` or `SharedSync[T]` or `Iter[a, T]` written in Ruxen, users will expect `Shared[Child]` → `Shared[Parent]` coercion and won't get it.
 
 ### 2.4 No PhantomData equivalent
 
-Types like Rust's `PhantomData[&a T]` exist precisely to let zero-sized marker types participate in variance inference. Riven has no such type today. Needed once user variance inference ships, because otherwise zero-sized types with phantom parameters (`struct Handle[T]; id: Int; end`) default to bivariant — actually unsound — or invariant — usable but imprecise.
+Types like Rust's `PhantomData[&a T]` exist precisely to let zero-sized marker types participate in variance inference. Ruxen has no such type today. Needed once user variance inference ships, because otherwise zero-sized types with phantom parameters (`struct Handle[T]; id: Int; end`) default to bivariant — actually unsound — or invariant — usable but imprecise.
 
 ### 2.5 Existing lifetime work to build on
 
 - Three-rule elision in `LifetimeChecker::check_elision` (`borrow_check/lifetimes.rs:57-85`).
 - Outlives check `check_outlives` at line 101 — only handles scope-relative outlives, not lifetime-parameter relationships.
-- `regions.rs` (referenced at line 4) encodes `ScopeId` — Riven uses *scopes* as its region model, not Rust-style lexical lifetime regions. This is simpler but variance rules still need to map onto it.
+- `regions.rs` (referenced at line 4) encodes `ScopeId` — Ruxen uses *scopes* as its region model, not Rust-style lexical lifetime regions. This is simpler but variance rules still need to map onto it.
 
 ### 2.6 No fixture exercises variance
 
-Grep across `crates/riven-core/tests/fixtures/` for explicit-lifetime names or `static` shows a handful of borrow-check fixtures exist but none test lifetime *subtyping* — the closest is borrow-owner outlives checks. This means today's coercion rules are effectively unchecked for soundness with respect to lifetime variance.
+Grep across `crates/ruxen-core/tests/fixtures/` for explicit-lifetime names or `static` shows a handful of borrow-check fixtures exist but none test lifetime *subtyping* — the closest is borrow-owner outlives checks. This means today's coercion rules are effectively unchecked for soundness with respect to lifetime variance.
 
 ## 3. Goals & Non-Goals
 
@@ -79,13 +79,13 @@ G5. Ship a test matrix that covers the known-hard variance cases (Rust's histori
 
 ### Non-goals
 
-N1. **User-declared variance annotations** (Scala-style `+T` / `-T`). Riven follows Rust's inference-based approach. Future work.
+N1. **User-declared variance annotations** (Scala-style `+T` / `-T`). Ruxen follows Rust's inference-based approach. Future work.
 
 N2. **Higher-kinded variance** (variance of `F<_>`). Covered implicitly by GATs (doc 05).
 
 N3. **Type-level reasoning for `static` as a subtype of all lifetimes.** This falls out of G1 + G3 but is called out explicitly because `static` is the one named lifetime users write by hand.
 
-N4. **Changing Riven's region model from scopes to Rust-style free/bound regions.** That would be a much bigger rewrite; variance rules must live within the existing scope-based model.
+N4. **Changing Ruxen's region model from scopes to Rust-style free/bound regions.** That would be a much bigger rewrite; variance rules must live within the existing scope-based model.
 
 ## 4. Surface Syntax
 
@@ -266,8 +266,8 @@ Risk: once inference is wired in, changing a private field type can silently cha
 
 ### Files to create
 
-- `crates/riven-core/src/typeck/variance.rs` — the inference pass. Exposes `VarianceTable` keyed on `DefId`.
-- `crates/riven-core/src/hir/variance.rs` (if the shared type is needed by more than one crate) — the `Variance` enum + lattice operations.
+- `crates/ruxen-core/src/typeck/variance.rs` — the inference pass. Exposes `VarianceTable` keyed on `DefId`.
+- `crates/ruxen-core/src/hir/variance.rs` (if the shared type is needed by more than one crate) — the `Variance` enum + lattice operations.
 
 ### Files to modify
 
@@ -275,15 +275,15 @@ Risk: once inference is wired in, changing a private field type can silently cha
 - `resolve/mod.rs`: register `PhantomData` as a built-in type constructor alongside `Array`/`Map`/`Set`.
 - `typeck/mod.rs`: run `variance::infer_all` after symbol collection, before the main inference loop. Store the resulting `VarianceTable` on `TypeckContext`.
 - `typeck/unify.rs:262` and neighboring — replace the ad-hoc "Option covariance" block with a single dispatch through the variance table.
-- `typeck/coerce.rs:60-113`: delete the per-constructor rules and replace with a variance-driven walk. The `is_subtype_class` helper at line 117 stays — it handles nominal class inheritance, which is orthogonal to parametric variance.
+- `typeck/coerce.rs:60-113`: delete the per-constructor rules and replace with a variance-druxen walk. The `is_subtype_class` helper at line 117 stays — it handles nominal class inheritance, which is orthogonal to parametric variance.
 - `borrow_check/lifetimes.rs`: add `check_lifetime_subtype(long: &Ty, short: &Ty) -> Result<(), LifetimeError>` that consumes the `VarianceTable`.
 - `diagnostics`: add error codes `E0705` *invariant lifetime mismatch* and `E0706` *contravariant lifetime mismatch* (see tier-5 doc 04 for the namespace).
 
 ### Test coverage to add
 
-- Fixture: `fixtures/variance/option_covariant_lifetime.rvn` — `Option[&long T]` flows into `Option[&short T]`.
-- Fixture: `fixtures/variance/refmut_invariant.rvn` — `&long var T` must *not* coerce to `&short var T`; expect E0705.
-- Fixture: `fixtures/variance/fn_contravariant_arg.rvn` — `fn(&short T)` coerces to `fn(&long T)` (the function accepting a narrower arg works where a wider one is expected).
+- Fixture: `fixtures/variance/option_covariant_lifetime.rx` — `Option[&long T]` flows into `Option[&short T]`.
+- Fixture: `fixtures/variance/refmut_invariant.rx` — `&long var T` must *not* coerce to `&short var T`; expect E0705.
+- Fixture: `fixtures/variance/fn_contravariant_arg.rx` — `fn(&short T)` coerces to `fn(&long T)` (the function accepting a narrower arg works where a wider one is expected).
 - Unit tests in `typeck/variance.rs` for the inference algorithm using synthetic `DefId`s.
 - Proptest: generate random struct definitions with varying field shapes and assert that the fixed-point iteration converges in O(depth) steps.
 
@@ -311,7 +311,7 @@ Normalized projections `<T as Mixin>.Output` inherit the variance of the mixin's
 
 **Phase 7b — variance inference for user types (2 weeks).** Implement `typeck::variance` with the fixed-point algorithm. Store a `VarianceTable` on `TypeckContext`. Do *not* yet change coercion/unification behavior — the pass runs but its result is only consumed by new fixture-check code.
 
-**Phase 7c — wire variance into coercion/unification (2 weeks).** Replace the ad-hoc rules at `coerce.rs:84-109` with table-driven dispatch. Add `E0705`/`E0706` diagnostics. Add the `PhantomData` marker type. Update stdlib (once tier-1 is ready) to add `PhantomData` fields to collections that need them.
+**Phase 7c — wire variance into coercion/unification (2 weeks).** Replace the ad-hoc rules at `coerce.rs:84-109` with table-druxen dispatch. Add `E0705`/`E0706` diagnostics. Add the `PhantomData` marker type. Update stdlib (once tier-1 is ready) to add `PhantomData` fields to collections that need them.
 
 **Phase 7d — bivariant warning + semver lint (1 week, after tier-3 LSP).** Wire `W0710` (bivariant unused param) and `W0711` (variance-changed-across-edition) into the diagnostic pipeline. Part of the tier-5 stability story.
 
@@ -323,11 +323,11 @@ Total ~6 weeks linear, 3-4 weeks if 7c and the PhantomData work parallelize with
 
 **OQ-1.** **`Never` (`!`) and subtyping.** `hir/types.rs:60` claims `!` is a bottom type, subtype of everything. Current code handles this via unification only. Should we formalize it in the variance framework (treat `!` as inhabiting every type position) or leave the ad-hoc handling? Recommend: leave ad-hoc; variance is about *parametric* substitution, bottom types are orthogonal.
 
-**OQ-2.** **`PhantomData` vs body-level `phantom` directive.** Rust uses the type; Swift has no equivalent because it doesn't need one (variance via protocol). Riven could ship either. Recommend `PhantomData[T]` for Rust familiarity, but keep the directive form as an escape hatch for stdlib authors who want declarative variance without a field.
+**OQ-2.** **`PhantomData` vs body-level `phantom` directive.** Rust uses the type; Swift has no equivalent because it doesn't need one (variance via protocol). Ruxen could ship either. Recommend `PhantomData[T]` for Rust familiarity, but keep the directive form as an escape hatch for stdlib authors who want declarative variance without a field.
 
 **OQ-3.** **`static` as the supertype of all lifetimes.** Falls out of the framework because `static` outlives every scope. Confirm this works in practice with the scope-based region model — may need a special-case in `check_outlives`.
 
-**OQ-4.** **Scope-based regions vs free lifetime variables.** Riven's `regions.rs` encodes scopes, not free/bound lifetime variables. Variance works for *parameters* (which are always free within a definition) but GATs/HRTBs introduce bound lifetimes. A follow-up doc may need to extend the region model. Call out as future work.
+**OQ-4.** **Scope-based regions vs free lifetime variables.** Ruxen's `regions.rs` encodes scopes, not free/bound lifetime variables. Variance works for *parameters* (which are always free within a definition) but GATs/HRTBs introduce bound lifetimes. A follow-up doc may need to extend the region model. Call out as future work.
 
 **OQ-5.** **Public-API variance semver.** Can a patch release silently change a public type's inferred variance? Recommend: treat inferred variance as part of the public API and gate changes on edition boundaries (tier-5 doc 02).
 
@@ -335,7 +335,7 @@ Total ~6 weeks linear, 3-4 weeks if 7c and the PhantomData work parallelize with
 
 **R1. Fixed-point non-termination for recursive types.** `struct List[T]; next: Option[Box[List[T]]]; end` — the inference pass depends on itself. Standard fix: seed all parameters with bivariant and iterate; the lattice is finite, so convergence is guaranteed.
 
-**R2. Silently breaking existing code when the coercion rewrite lands.** Phase 7c replaces the current ad-hoc rules with table-driven logic; if the table doesn't exactly match today's behavior, fixture tests fail. Mitigate by shipping phase 7a's fixtures *before* phase 7c.
+**R2. Silently breaking existing code when the coercion rewrite lands.** Phase 7c replaces the current ad-hoc rules with table-druxen logic; if the table doesn't exactly match today's behavior, fixture tests fail. Mitigate by shipping phase 7a's fixtures *before* phase 7c.
 
 **R3. `&var T` invariance breaking intuitive-looking code.** Many users expect `&var Child` to coerce to `&var Parent` because single-value mutation seems safe. It isn't. Ensure `E0705` has a `help:` note explaining the soundness rationale (tier-5 doc 05).
 
@@ -375,7 +375,7 @@ Total ~6 weeks linear, 3-4 weeks if 7c and the PhantomData work parallelize with
 
 - Variance inference pass runs on every user-defined generic type and memoizes results.
 - All 23 test-matrix cases pass.
-- The existing `coerce.rs:84-109` ad-hoc rules are replaced by a single table-driven dispatch that passes all existing coercion fixtures *without* changes.
+- The existing `coerce.rs:84-109` ad-hoc rules are replaced by a single table-druxen dispatch that passes all existing coercion fixtures *without* changes.
 - `W0710` fires on any user struct with a truly-unused generic parameter, and the suggested `PhantomData` fix is actionable.
 - Documentation in the language reference (tier-5 doc 01) contains the §5.2 variance table verbatim, with normative status.
 
@@ -383,17 +383,17 @@ Total ~6 weeks linear, 3-4 weeks if 7c and the PhantomData work parallelize with
 
 | Path | Line(s) | Relevance |
 |------|---------|-----------|
-| `crates/riven-core/src/hir/types.rs` | 60 | `Never` bottom-type note |
+| `crates/ruxen-core/src/hir/types.rs` | 60 | `Never` bottom-type note |
 | | 82-95 | `Ref` / `RefLifetime` / `RefMut` / `RefMutLifetime` |
 | | 389-390 | `Display` for explicit-lifetime references |
-| `crates/riven-core/src/typeck/coerce.rs` | 84-88 | current `Option` covariance |
+| `crates/ruxen-core/src/typeck/coerce.rs` | 84-88 | current `Option` covariance |
 | | 90-95 | current `Result` covariance on both params |
 | | 97-106 | `&Ref` subtype via class inheritance |
 | | 108-109 | informal invariance comments for `Vec`/`Hash`/`Set`/`&var T` |
 | | 117-145 | `is_subtype_class` |
-| `crates/riven-core/src/typeck/unify.rs` | 262 | duplicated `Option` covariance |
-| `crates/riven-core/src/borrow_check/lifetimes.rs` | 34-85 | `LifetimeChecker` + three-rule elision |
+| `crates/ruxen-core/src/typeck/unify.rs` | 262 | duplicated `Option` covariance |
+| `crates/ruxen-core/src/borrow_check/lifetimes.rs` | 34-85 | `LifetimeChecker` + three-rule elision |
 | | 101 | `check_outlives` (scope-based) |
-| `crates/riven-core/src/borrow_check/regions.rs` | (entire) | `ScopeId` region model |
-| `crates/riven-core/src/resolve/mod.rs` | ~200 | built-in type-constructor registration — where `PhantomData` will go |
-| `crates/riven-core/src/borrow_check/errors.rs` | 6-16 | existing `ErrorCode` range — `E0705`/`E0706` reserved here |
+| `crates/ruxen-core/src/borrow_check/regions.rs` | (entire) | `ScopeId` region model |
+| `crates/ruxen-core/src/resolve/mod.rs` | ~200 | built-in type-constructor registration — where `PhantomData` will go |
+| `crates/ruxen-core/src/borrow_check/errors.rs` | 6-16 | existing `ErrorCode` range — `E0705`/`E0706` reserved here |

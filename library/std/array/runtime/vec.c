@@ -12,10 +12,10 @@
  * field layout `{ int64_t *data; uint64_t len; uint64_t cap; }`
  * matches the hoisted definition exactly. */
 
-RivenVec *riven_vec_new(void) {
-    RivenVec *v = (RivenVec *)malloc(sizeof(RivenVec));
+RuxenVec *ruxen_vec_new(void) {
+    RuxenVec *v = (RuxenVec *)malloc(sizeof(RuxenVec));
     if (!v) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
     v->data = NULL;
     v->len = 0;
@@ -27,57 +27,57 @@ RivenVec *riven_vec_new(void) {
    memory-management section above for the dual-name pattern. Element
    heap (e.g. for `Vec[String]`) is a known v1 limitation: only the
    data buffer and outer struct are released; recursive element
-   drops are codegen-driven and not yet emitted. */
+   drops are codegen-druxen and not yet emitted. */
 /* asm label declared at the top of the file alongside the matching
- * forward decl — see the `RIVEN_ASM_LABEL` block there. */
-void riven_vec_ORIG_FREE(RivenVec *v) {
+ * forward decl — see the `RUXEN_ASM_LABEL` block there. */
+void ruxen_vec_ORIG_FREE(RuxenVec *v) {
     if (!v) return;
     if (v->data) free(v->data);
     free(v);
 }
 
 /* Internal: grow a Vec's capacity to at least `needed` slots.
-   Kept available for future Vec operations even if `riven_vec_push`
+   Kept available for future Vec operations even if `ruxen_vec_push`
    currently inlines its own grow logic. */
 __attribute__((unused))
-static void riven_vec_grow(RivenVec *v, uint64_t needed) {
+static void ruxen_vec_grow(RuxenVec *v, uint64_t needed) {
     uint64_t new_cap = v->cap == 0 ? 4 : v->cap * 2;
     while (new_cap < needed) {
         uint64_t doubled = new_cap * 2;
         if (doubled < new_cap) {
-            riven_panic("vector capacity overflow");
+            ruxen_panic("vector capacity overflow");
         }
         new_cap = doubled;
     }
     size_t alloc_size;
     if (__builtin_mul_overflow(new_cap, sizeof(int64_t), &alloc_size)) {
-        riven_panic("vector allocation size overflow");
+        ruxen_panic("vector allocation size overflow");
     }
     int64_t *new_data = (int64_t *)realloc(v->data, alloc_size);
     if (!new_data) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
     v->data = new_data;
     v->cap = new_cap;
 }
 
-void riven_vec_push(RivenVec *v, int64_t item) {
+void ruxen_vec_push(RuxenVec *v, int64_t item) {
     if (!v) return;
     if (v->len >= v->cap) {
         uint64_t new_cap = v->cap == 0 ? 4 : v->cap * 2;
         /* Overflow check on capacity doubling */
         if (new_cap < v->cap) {
-            riven_panic("vector capacity overflow");
+            ruxen_panic("vector capacity overflow");
         }
         /* Overflow check on allocation size */
         size_t alloc_size;
         if (__builtin_mul_overflow(new_cap, sizeof(int64_t), &alloc_size)) {
-            riven_panic("vector allocation size overflow");
+            ruxen_panic("vector allocation size overflow");
         }
         /* Preserve original pointer in case realloc fails */
         int64_t *new_data = (int64_t *)realloc(v->data, alloc_size);
         if (!new_data) {
-            riven_panic("out of memory");
+            ruxen_panic("out of memory");
         }
         v->data = new_data;
         v->cap = new_cap;
@@ -87,8 +87,8 @@ void riven_vec_push(RivenVec *v, int64_t item) {
 
 /* Pop the last element off a Vec, returning an Option tagged union:
    [tag:i32 pad:i32 payload:i64]. tag=0 → None, tag=1 → Some(value). */
-void *riven_vec_pop(RivenVec *v) {
-    int64_t *result = (int64_t *)riven_alloc(16);
+void *ruxen_vec_pop(RuxenVec *v) {
+    int64_t *result = (int64_t *)ruxen_alloc(16);
     if (!v || v->len == 0) {
         *(int32_t *)result = 0; /* None */
     } else {
@@ -99,7 +99,7 @@ void *riven_vec_pop(RivenVec *v) {
     return result;
 }
 
-uint64_t riven_vec_len(RivenVec *v) {
+uint64_t ruxen_vec_len(RuxenVec *v) {
     return v ? v->len : 0;
 }
 
@@ -108,12 +108,12 @@ uint64_t riven_vec_len(RivenVec *v) {
    Malformed bytes are passed through as single-byte codepoints. */
 /* String predicates / search / repeat — quick helpers around libc. */
 
-int8_t riven_string_contains(const char *s, const char *needle) {
+int8_t ruxen_string_contains(const char *s, const char *needle) {
     if (!s || !needle) return 0;
     return strstr(s, needle) ? 1 : 0;
 }
 
-int8_t riven_string_starts_with(const char *s, const char *prefix) {
+int8_t ruxen_string_starts_with(const char *s, const char *prefix) {
     if (!s || !prefix) return 0;
     size_t plen = strlen(prefix);
     if (plen == 0) return 1;
@@ -121,7 +121,7 @@ int8_t riven_string_starts_with(const char *s, const char *prefix) {
     return strncmp(s, prefix, plen) == 0 ? 1 : 0;
 }
 
-int8_t riven_string_ends_with(const char *s, const char *suffix) {
+int8_t ruxen_string_ends_with(const char *s, const char *suffix) {
     if (!s || !suffix) return 0;
     size_t slen = strlen(s);
     size_t xlen = strlen(suffix);
@@ -130,14 +130,14 @@ int8_t riven_string_ends_with(const char *s, const char *suffix) {
     return strncmp(s + slen - xlen, suffix, xlen) == 0 ? 1 : 0;
 }
 
-char *riven_string_repeat(const char *s, int64_t count) {
-    if (!s || count <= 0) return riven_string_from("");
+char *ruxen_string_repeat(const char *s, int64_t count) {
+    if (!s || count <= 0) return ruxen_string_from("");
     size_t slen = strlen(s);
-    if (slen == 0) return riven_string_from("");
+    if (slen == 0) return ruxen_string_from("");
     size_t total = slen * (size_t)count;
     char *out = (char *)malloc(total + 1);
     if (!out) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
     for (int64_t i = 0; i < count; i++) {
         memcpy(out + (size_t)i * slen, s, slen);
@@ -146,8 +146,8 @@ char *riven_string_repeat(const char *s, int64_t count) {
     return out;
 }
 
-RivenVec *riven_string_chars(const char *s) {
-    RivenVec *result = riven_vec_new();
+RuxenVec *ruxen_string_chars(const char *s) {
+    RuxenVec *result = ruxen_vec_new();
     if (!s) return result;
     const unsigned char *p = (const unsigned char *)s;
     while (*p) {
@@ -179,15 +179,15 @@ RivenVec *riven_string_chars(const char *s) {
             cp = b0;
             n = 1;
         }
-        riven_vec_push(result, (int64_t)cp);
+        ruxen_vec_push(result, (int64_t)cp);
         p += n;
     }
     return result;
 }
 
-int64_t riven_vec_get(RivenVec *v, uint64_t index) {
+int64_t ruxen_vec_get(RuxenVec *v, uint64_t index) {
     if (!v || index >= v->len) {
-        riven_panic("index out of bounds");
+        ruxen_panic("index out of bounds");
     }
     return v->data[index];
 }
@@ -195,9 +195,9 @@ int64_t riven_vec_get(RivenVec *v, uint64_t index) {
 /* get_mut: returns a POINTER to the element in the Vec's buffer.
    This allows mutations through the returned reference to modify
    the actual element in the Vec. Panics if out of bounds. */
-int64_t *riven_vec_get_mut(RivenVec *v, uint64_t index) {
+int64_t *ruxen_vec_get_mut(RuxenVec *v, uint64_t index) {
     if (!v || index >= v->len) {
-        riven_panic("index out of bounds");
+        ruxen_panic("index out of bounds");
     }
     return &v->data[index];
 }
@@ -205,8 +205,8 @@ int64_t *riven_vec_get_mut(RivenVec *v, uint64_t index) {
 /* get_opt: returns a proper Option tagged union (16 bytes):
    [tag: i32] [pad: i32] [payload: i64]
    tag=0 → None, tag=1 → Some(value) */
-void *riven_vec_get_opt(RivenVec *v, uint64_t index) {
-    int64_t *result = (int64_t *)riven_alloc(16);
+void *ruxen_vec_get_opt(RuxenVec *v, uint64_t index) {
+    int64_t *result = (int64_t *)ruxen_alloc(16);
     if (!v || index >= v->len) {
         *(int32_t *)result = 0; /* None */
     } else {
@@ -218,8 +218,8 @@ void *riven_vec_get_opt(RivenVec *v, uint64_t index) {
 
 /* get_mut_opt: like get_opt but returns a pointer to the element
    instead of a copy, enabling mutation through the reference. */
-void *riven_vec_get_mut_opt(RivenVec *v, uint64_t index) {
-    int64_t *result = (int64_t *)riven_alloc(16);
+void *ruxen_vec_get_mut_opt(RuxenVec *v, uint64_t index) {
+    int64_t *result = (int64_t *)ruxen_alloc(16);
     if (!v || index >= v->len) {
         *(int32_t *)result = 0; /* None */
     } else {
@@ -230,11 +230,11 @@ void *riven_vec_get_mut_opt(RivenVec *v, uint64_t index) {
     return result;
 }
 
-int8_t riven_vec_is_empty(RivenVec *v) {
+int8_t ruxen_vec_is_empty(RuxenVec *v) {
     return (!v || v->len == 0) ? 1 : 0;
 }
 
-void riven_vec_each(RivenVec *v, void (*callback)(int64_t)) {
+void ruxen_vec_each(RuxenVec *v, void (*callback)(int64_t)) {
     /* In the v1 runtime, closures/blocks are not yet supported.
        Just iterate and call the callback if non-null. */
     if (!v || !callback) return;
@@ -245,7 +245,7 @@ void riven_vec_each(RivenVec *v, void (*callback)(int64_t)) {
 
 /* Sum the elements of an Int Vec. The callee is responsible for ensuring
    the elements are i64 — non-Int Vecs are typeck-rejected upstream. */
-int64_t riven_vec_sum(RivenVec *v) {
+int64_t ruxen_vec_sum(RuxenVec *v) {
     if (!v) return 0;
     int64_t total = 0;
     for (uint64_t i = 0; i < v->len; i++) {
@@ -256,12 +256,12 @@ int64_t riven_vec_sum(RivenVec *v) {
 
 /* `Vec::count` — alias for length. Kept as a separate symbol so the
    codegen can dispatch without a special case. */
-int64_t riven_vec_count(RivenVec *v) {
+int64_t ruxen_vec_count(RuxenVec *v) {
     return v ? (int64_t)v->len : 0;
 }
 
 /* Reverse a Vec in place. Returns the same pointer for fluent chaining. */
-RivenVec *riven_vec_reverse(RivenVec *v) {
+RuxenVec *ruxen_vec_reverse(RuxenVec *v) {
     if (!v || v->len < 2) return v;
     uint64_t i = 0, j = v->len - 1;
     while (i < j) {
@@ -276,8 +276,8 @@ RivenVec *riven_vec_reverse(RivenVec *v) {
 
 /* Vec::first / Vec::last — return Option-tagged 16-byte pair.
    Some(v) is tag=1, payload=v; None is tag=0. */
-void *riven_vec_first(RivenVec *v) {
-    int64_t *out = (int64_t *)riven_alloc(16);
+void *ruxen_vec_first(RuxenVec *v) {
+    int64_t *out = (int64_t *)ruxen_alloc(16);
     if (v && v->len > 0) {
         *(int32_t *)out = 1; /* Some */
         out[1] = v->data[0];
@@ -287,8 +287,8 @@ void *riven_vec_first(RivenVec *v) {
     return out;
 }
 
-void *riven_vec_last(RivenVec *v) {
-    int64_t *out = (int64_t *)riven_alloc(16);
+void *ruxen_vec_last(RuxenVec *v) {
+    int64_t *out = (int64_t *)ruxen_alloc(16);
     if (v && v->len > 0) {
         *(int32_t *)out = 1; /* Some */
         out[1] = v->data[v->len - 1];
@@ -301,74 +301,74 @@ void *riven_vec_last(RivenVec *v) {
 /* Vec::clone — shallow copy: a new Vec with the same elements.
    Element types that own heap data (String, Class) keep aliasing
    that storage; v1 only guarantees structural duplication. */
-RivenVec *riven_vec_clone(RivenVec *v) {
-    RivenVec *out = riven_vec_new();
+RuxenVec *ruxen_vec_clone(RuxenVec *v) {
+    RuxenVec *out = ruxen_vec_new();
     if (!v || v->len == 0) return out;
     for (uint64_t i = 0; i < v->len; i++) {
-        riven_vec_push(out, v->data[i]);
+        ruxen_vec_push(out, v->data[i]);
     }
     return out;
 }
 
 /* `Vec::take(n)` — eager-materialise the first `n` elements as a
-   fresh `RivenVec*`. Phase 2 stdlib (#05 batch 2): we do NOT yet
+   fresh `RuxenVec*`. Phase 2 stdlib (#05 batch 2): we do NOT yet
    model lazy iterators; `vec.iter.take(n)` returns a copy, which
    keeps the chain trivially composable with downstream eager
    terminators (`sum`, `count`, etc.) without a per-call iterator
    struct. Bounds: `n` is clamped to `[0, len]`; a negative `n`
    yields an empty Vec. Element ownership is shallow-copied (same
-   contract as `riven_vec_clone`). */
-RivenVec *riven_vec_take(RivenVec *v, int64_t n) {
-    RivenVec *out = riven_vec_new();
+   contract as `ruxen_vec_clone`). */
+RuxenVec *ruxen_vec_take(RuxenVec *v, int64_t n) {
+    RuxenVec *out = ruxen_vec_new();
     if (!v || n <= 0) return out;
     uint64_t bound = (uint64_t)n;
     if (bound > v->len) bound = v->len;
     for (uint64_t i = 0; i < bound; i++) {
-        riven_vec_push(out, v->data[i]);
+        ruxen_vec_push(out, v->data[i]);
     }
     return out;
 }
 
 /* `Vec::skip(n)` — eager-materialise the tail starting from index `n`
-   as a fresh `RivenVec*`. Mirrors `riven_vec_take` but copies from
+   as a fresh `RuxenVec*`. Mirrors `ruxen_vec_take` but copies from
    `n..len`. `n >= len` yields an empty Vec; `n <= 0` yields a full
    shallow clone. */
-RivenVec *riven_vec_skip(RivenVec *v, int64_t n) {
-    RivenVec *out = riven_vec_new();
+RuxenVec *ruxen_vec_skip(RuxenVec *v, int64_t n) {
+    RuxenVec *out = ruxen_vec_new();
     if (!v) return out;
     uint64_t start = n <= 0 ? 0 : (uint64_t)n;
     if (start >= v->len) return out;
     for (uint64_t i = start; i < v->len; i++) {
-        riven_vec_push(out, v->data[i]);
+        ruxen_vec_push(out, v->data[i]);
     }
     return out;
 }
 
 /* `Iter::chain(other)` — eager-materialise the concatenation of two
-   iterators as a fresh `RivenVec*`. Phase 2 stdlib (#05 batch 3): we
+   iterators as a fresh `RuxenVec*`. Phase 2 stdlib (#05 batch 3): we
    keep the v1 "every iter is a Vec" invariant; chain copies each
    source's slots into a new Vec so downstream terminators (`sum`,
-   `count`, `fold`, …) keep using the same `RivenVec*` shape. Element
+   `count`, `fold`, …) keep using the same `RuxenVec*` shape. Element
    ownership is shallow-copied — the same contract as
-   `riven_vec_clone` / `riven_vec_take` / `riven_vec_skip`. The two
+   `ruxen_vec_clone` / `ruxen_vec_take` / `ruxen_vec_skip`. The two
    source iters remain owned by their respective scope frames. */
-RivenVec *riven_vec_chain(RivenVec *a, RivenVec *b) {
-    RivenVec *out = riven_vec_new();
+RuxenVec *ruxen_vec_chain(RuxenVec *a, RuxenVec *b) {
+    RuxenVec *out = ruxen_vec_new();
     if (a) {
         for (uint64_t i = 0; i < a->len; i++) {
-            riven_vec_push(out, a->data[i]);
+            ruxen_vec_push(out, a->data[i]);
         }
     }
     if (b) {
         for (uint64_t i = 0; i < b->len; i++) {
-            riven_vec_push(out, b->data[i]);
+            ruxen_vec_push(out, b->data[i]);
         }
     }
     return out;
 }
 
 /* `Iter::zip(other)` — eager-materialise pairs as a fresh
-   `RivenVec*`, where each slot holds a pointer to a freshly
+   `RuxenVec*`, where each slot holds a pointer to a freshly
    allocated 2-tuple `{a[i], b[i]}` (16 bytes, layout: field0 at +0,
    field1 at +8). Stops at the shorter source's length. The tuple
    payloads are shallow-copied — for `Vec[Int]`/`Vec[&str]` this is a
@@ -376,17 +376,17 @@ RivenVec *riven_vec_chain(RivenVec *a, RivenVec *b) {
    ownership is aliased (same shallow-copy contract as `clone`).
 
    v1 ships eager-materialisation rather than a lazy `ZipIter`
-   struct; once trait-driven dispatch lands (#09) the inner cell can
+   struct; once trait-druxen dispatch lands (#09) the inner cell can
    become a tagged-pair iterator over two cursors. */
-RivenVec *riven_vec_zip(RivenVec *a, RivenVec *b) {
-    RivenVec *out = riven_vec_new();
+RuxenVec *ruxen_vec_zip(RuxenVec *a, RuxenVec *b) {
+    RuxenVec *out = ruxen_vec_new();
     if (!a || !b) return out;
     uint64_t bound = a->len < b->len ? a->len : b->len;
     for (uint64_t i = 0; i < bound; i++) {
-        int64_t *pair = (int64_t *)riven_alloc(16);
+        int64_t *pair = (int64_t *)ruxen_alloc(16);
         pair[0] = a->data[i];
         pair[1] = b->data[i];
-        riven_vec_push(out, (int64_t)pair);
+        ruxen_vec_push(out, (int64_t)pair);
     }
     return out;
 }
@@ -395,7 +395,7 @@ RivenVec *riven_vec_zip(RivenVec *a, RivenVec *b) {
    Element type is opaque at runtime; we treat each slot as int64
    bitwise-equal. For Vec[String]/Vec[&str] callers should use a
    different path once a polymorphic `contains` lands. */
-int8_t riven_vec_contains_int(RivenVec *v, int64_t needle) {
+int8_t ruxen_vec_contains_int(RuxenVec *v, int64_t needle) {
     if (!v) return 0;
     for (uint64_t i = 0; i < v->len; i++) {
         if (v->data[i] == needle) return 1;
@@ -403,7 +403,7 @@ int8_t riven_vec_contains_int(RivenVec *v, int64_t needle) {
     return 0;
 }
 
-static int riven_vec_int_cmp(const void *a, const void *b) {
+static int ruxen_vec_int_cmp(const void *a, const void *b) {
     int64_t x = *(const int64_t *)a;
     int64_t y = *(const int64_t *)b;
     return x < y ? -1 : (x > y ? 1 : 0);
@@ -411,9 +411,9 @@ static int riven_vec_int_cmp(const void *a, const void *b) {
 
 /* Vec::sort (Int) — in-place ascending qsort. Returns the same
    pointer for chaining. Non-Int Vecs are typeck-rejected upstream. */
-RivenVec *riven_vec_sort(RivenVec *v) {
+RuxenVec *ruxen_vec_sort(RuxenVec *v) {
     if (!v || v->len < 2) return v;
-    qsort(v->data, (size_t)v->len, sizeof(int64_t), riven_vec_int_cmp);
+    qsort(v->data, (size_t)v->len, sizeof(int64_t), ruxen_vec_int_cmp);
     return v;
 }
 
@@ -421,21 +421,21 @@ RivenVec *riven_vec_sort(RivenVec *v) {
  * Constructors / inspectors / mutators that the v1 surface promises
  * but the runtime did not yet implement. All operate on the same
  * 64-bit-slot element layout; the type system enforces correctness
- * upstream so e.g. `riven_vec_swap` on Vec[String] is safe — the
+ * upstream so e.g. `ruxen_vec_swap` on Vec[String] is safe — the
  * slot bits are pointer-typed but bitwise-swappable.
  */
 
 /* Vec.with_capacity(cap) — pre-allocate the backing array. */
-RivenVec *riven_vec_with_capacity(uint64_t cap) {
-    RivenVec *v = riven_vec_new();
+RuxenVec *ruxen_vec_with_capacity(uint64_t cap) {
+    RuxenVec *v = ruxen_vec_new();
     if (cap == 0) return v;
     size_t alloc_size;
     if (__builtin_mul_overflow(cap, sizeof(int64_t), &alloc_size)) {
-        riven_panic("vector allocation size overflow");
+        ruxen_panic("vector allocation size overflow");
     }
     int64_t *data = (int64_t *)malloc(alloc_size);
     if (!data) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
     v->data = data;
     v->cap = cap;
@@ -443,7 +443,7 @@ RivenVec *riven_vec_with_capacity(uint64_t cap) {
 }
 
 /* Vec.capacity — total slot count of the backing array. */
-uint64_t riven_vec_capacity(RivenVec *v) {
+uint64_t ruxen_vec_capacity(RuxenVec *v) {
     return v ? v->cap : 0;
 }
 
@@ -452,14 +452,14 @@ uint64_t riven_vec_capacity(RivenVec *v) {
    the v1 contract is that `clear` is a *bulk forget* — callers who
    need element-drop should use `truncate(0)` once that helper learns
    per-type drop, or drain explicitly. */
-void riven_vec_clear(RivenVec *v) {
+void ruxen_vec_clear(RuxenVec *v) {
     if (!v) return;
     v->len = 0;
 }
 
 /* Vec.truncate(n) — drop trailing elements past index `n`. No-op if
    `n >= len`. */
-void riven_vec_truncate(RivenVec *v, uint64_t n) {
+void ruxen_vec_truncate(RuxenVec *v, uint64_t n) {
     if (!v) return;
     if (n < v->len) {
         v->len = n;
@@ -467,9 +467,9 @@ void riven_vec_truncate(RivenVec *v, uint64_t n) {
 }
 
 /* Vec.swap(i, j) — swap two elements in place. Panics on OOB. */
-void riven_vec_swap(RivenVec *v, uint64_t i, uint64_t j) {
+void ruxen_vec_swap(RuxenVec *v, uint64_t i, uint64_t j) {
     if (!v || i >= v->len || j >= v->len) {
-        riven_panic("vec swap: index out of bounds");
+        ruxen_panic("vec swap: index out of bounds");
     }
     if (i == j) return;
     int64_t tmp = v->data[i];
@@ -479,15 +479,15 @@ void riven_vec_swap(RivenVec *v, uint64_t i, uint64_t j) {
 
 /* Vec.insert(i, item) — shift elements at >= i one slot right and
    place `item` at position `i`. Panics if i > len. */
-void riven_vec_insert(RivenVec *v, uint64_t i, int64_t item) {
+void ruxen_vec_insert(RuxenVec *v, uint64_t i, int64_t item) {
     if (!v) {
-        riven_panic("vec insert: null receiver");
+        ruxen_panic("vec insert: null receiver");
     }
     if (i > v->len) {
-        riven_panic("vec insert: index out of bounds");
+        ruxen_panic("vec insert: index out of bounds");
     }
     /* Reuse push's grow path by appending then rotating. */
-    riven_vec_push(v, 0);
+    ruxen_vec_push(v, 0);
     for (uint64_t k = v->len - 1; k > i; k--) {
         v->data[k] = v->data[k - 1];
     }
@@ -496,9 +496,9 @@ void riven_vec_insert(RivenVec *v, uint64_t i, int64_t item) {
 
 /* Vec.remove(i) — remove and return the element at index `i`,
    shifting subsequent elements one slot left. Panics on OOB. */
-int64_t riven_vec_remove(RivenVec *v, uint64_t i) {
+int64_t ruxen_vec_remove(RuxenVec *v, uint64_t i) {
     if (!v || i >= v->len) {
-        riven_panic("vec remove: index out of bounds");
+        ruxen_panic("vec remove: index out of bounds");
     }
     int64_t out = v->data[i];
     for (uint64_t k = i; k + 1 < v->len; k++) {
@@ -515,23 +515,23 @@ int64_t riven_vec_remove(RivenVec *v, uint64_t i) {
    to avoid double-free; v1 documents this as a known sharp edge
    for heap-element types and the borrow checker treats `extend`'s
    second arg as a borrow only — full move semantics land in 05. */
-void riven_vec_extend(RivenVec *v, RivenVec *other) {
+void ruxen_vec_extend(RuxenVec *v, RuxenVec *other) {
     if (!v || !other) return;
     for (uint64_t k = 0; k < other->len; k++) {
-        riven_vec_push(v, other->data[k]);
+        ruxen_vec_push(v, other->data[k]);
     }
 }
 
 /* Vec[i] — panicking indexed read used by IndexOp lowering for Vec
    receivers. Mirrors Rust's `v[i]`: OOB → panic with a descriptive
    message including both `i` and `len`. */
-int64_t riven_vec_get_or_panic(RivenVec *v, uint64_t i) {
+int64_t ruxen_vec_get_or_panic(RuxenVec *v, uint64_t i) {
     if (!v || i >= (v ? v->len : 0)) {
         char buf[96];
         uint64_t len = v ? v->len : 0;
         snprintf(buf, sizeof(buf), "index %llu out of range, len %llu",
                  (unsigned long long)i, (unsigned long long)len);
-        riven_panic(buf);
+        ruxen_panic(buf);
     }
     return v->data[i];
 }
@@ -542,7 +542,7 @@ int64_t riven_vec_get_or_panic(RivenVec *v, uint64_t i) {
    structural string equality on Vec[String] will land alongside the
    PartialEq trait dispatch in 05. v1 ships the integer-correct
    version that the existing fixtures exercise. */
-int8_t riven_vec_eq(RivenVec *a, RivenVec *b) {
+int8_t ruxen_vec_eq(RuxenVec *a, RuxenVec *b) {
     if (a == b) return 1;
     if (!a || !b) return 0;
     if (a->len != b->len) return 0;
@@ -553,7 +553,7 @@ int8_t riven_vec_eq(RivenVec *a, RivenVec *b) {
 }
 
 /* Vec[String] / Vec[Vec[T]] element-aware drop. The existing
-   `riven_vec_free` releases only the spine + backing array; for
+   `ruxen_vec_free` releases only the spine + backing array; for
    element types that own heap (String, nested Vec, HashMap), we
    need to walk the elements first. Drop elaboration in MIR picks
    the right per-element variant based on the static element type.
@@ -562,39 +562,39 @@ int8_t riven_vec_eq(RivenVec *a, RivenVec *b) {
    free). */
 /* NOTE on free-helper call sites in this file: the drop_fixtures test
  * harness textually rewrites every `free(` substring to
- * `riven_test_free(`. To call `riven_string_free` / `riven_vec_free`
+ * `ruxen_test_free(`. To call `ruxen_string_free` / `ruxen_vec_free`
  * from C without losing them to that rewrite we go through the
  * `ORIG_FREE(` sentinel — see the long comment above
- * `riven_string_ORIG_FREE`. In the production build the sentinel
+ * `ruxen_string_ORIG_FREE`. In the production build the sentinel
  * resolves directly to the canonical helper via the asm-label
  * declarations; under the leak-tracking splice it is restored to
  * `free(` and folded into the wrapper that bumps the per-kind
  * counters.
  */
-void riven_vec_drop_string(RivenVec *v) {
+void ruxen_vec_drop_string(RuxenVec *v) {
     if (!v) return;
     for (uint64_t i = 0; i < v->len; i++) {
         char *s = (char *)v->data[i];
-        if (s) riven_string_ORIG_FREE(s);
+        if (s) ruxen_string_ORIG_FREE(s);
         v->data[i] = 0;
     }
-    riven_vec_ORIG_FREE(v);
+    ruxen_vec_ORIG_FREE(v);
 }
 
-void riven_vec_drop_vec(RivenVec *v) {
+void ruxen_vec_drop_vec(RuxenVec *v) {
     if (!v) return;
     for (uint64_t i = 0; i < v->len; i++) {
-        RivenVec *inner = (RivenVec *)v->data[i];
+        RuxenVec *inner = (RuxenVec *)v->data[i];
         if (inner) {
             /* Recurse: inner Vecs of integer slots are spine-only. The
                compiler currently only emits this for Vec[Vec[Int]]; for
                Vec[Vec[String]] the per-type drop selector will pick a
                nested-string variant once parser surfaces that. */
-            riven_vec_ORIG_FREE(inner);
+            ruxen_vec_ORIG_FREE(inner);
         }
         v->data[i] = 0;
     }
-    riven_vec_ORIG_FREE(v);
+    ruxen_vec_ORIG_FREE(v);
 }
 
 /* ---------------------------------------------------------------------
@@ -622,7 +622,7 @@ void riven_vec_drop_vec(RivenVec *v) {
  * used by POSIX shells, so callers that just check `!= 0` will treat
  * exec failures the same as a missing binary.
  * --------------------------------------------------------------------- */
-int64_t riven_process_run(const char *cmd, RivenVec *args) {
+int64_t ruxen_process_run(const char *cmd, RuxenVec *args) {
     if (!cmd) {
         return 127;
     }
@@ -650,7 +650,7 @@ int64_t riven_process_run(const char *cmd, RivenVec *args) {
     pid_t pid = fork();
     if (pid < 0) {
         int saved = errno;
-        fprintf(stderr, "riven_process_run: fork failed: %s (errno=%d)\n",
+        fprintf(stderr, "ruxen_process_run: fork failed: %s (errno=%d)\n",
                 strerror(saved), saved);
         free(argv);
         return 127;
@@ -665,7 +665,7 @@ int64_t riven_process_run(const char *cmd, RivenVec *args) {
         execvp(cmd, argv);
         int saved = errno;
         fprintf(stderr,
-                "riven_process_run: execvp(\"%s\") failed: %s (errno=%d)\n",
+                "ruxen_process_run: execvp(\"%s\") failed: %s (errno=%d)\n",
                 cmd ? cmd : "(null)",
                 strerror(saved),
                 saved);
@@ -681,7 +681,7 @@ int64_t riven_process_run(const char *cmd, RivenVec *args) {
             continue;
         }
         int saved = errno;
-        fprintf(stderr, "riven_process_run: waitpid failed: %s (errno=%d)\n",
+        fprintf(stderr, "ruxen_process_run: waitpid failed: %s (errno=%d)\n",
                 strerror(saved), saved);
         return 127;
     }
@@ -700,17 +700,17 @@ int64_t riven_process_run(const char *cmd, RivenVec *args) {
 /* ── Vec[T] surface — Phase 2 stdlib batch 2 (#03) ──────────────────
  * `from_iter`, `dedup`, plus the consume-style `into_iter` whose
  * runtime side is identity (the v1 iterator representation IS a
- * RivenVec*, so `iter` / `into_iter` / `iter_mut` are all the same
+ * RuxenVec*, so `iter` / `into_iter` / `iter_mut` are all the same
  * passthrough at the C layer). The closure-takers `sort_by` and
  * `retain` are inlined at the MIR layer and do not appear here.
  */
 
 /* Vec.from_iter(iter) — currently identity passthrough since every
-   "iterator" in the v1 runtime is already a RivenVec*. The MIR-level
+   "iterator" in the v1 runtime is already a RuxenVec*. The MIR-level
    drop-elaboration treats this as a fresh allocation (see
    FRESH_ALLOC_CALLEES in mir/lower.rs) so the destination local
    inherits the spine-free responsibility. */
-RivenVec *riven_vec_from_iter(RivenVec *iter) {
+RuxenVec *ruxen_vec_from_iter(RuxenVec *iter) {
     /* The source iter is consumed (its Vec spine is what the new Vec
        owns now). The drop pass already taints the source local via
        the consume-helper match. Nothing else to do. */
@@ -721,13 +721,13 @@ RivenVec *riven_vec_from_iter(RivenVec *iter) {
    the owned string (or &str-like) elements in iteration order into one
    fresh owned string. v1 keeps this narrow: typeck only accepts
    String/&str items, not arbitrary Display/ToString conversions. */
-char *riven_string_from_iter(RivenVec *iter) {
-    char *out = riven_string_from("");
+char *ruxen_string_from_iter(RuxenVec *iter) {
+    char *out = ruxen_string_from("");
     if (!iter) return out;
     for (uint64_t i = 0; i < iter->len; i++) {
         const char *part = (const char *)iter->data[i];
-        char *next = riven_string_concat(out, part ? part : "");
-        riven_string_ORIG_FREE(out);
+        char *next = ruxen_string_concat(out, part ? part : "");
+        ruxen_string_ORIG_FREE(out);
         out = next;
     }
     return out;
@@ -737,9 +737,9 @@ char *riven_string_from_iter(RivenVec *iter) {
    surviving elements into the prefix. Panics on OOB so a buggy
    inliner (or a future user-callable use that escapes) doesn't
    silently corrupt out-of-bounds memory. */
-void riven_vec_set(RivenVec *v, uint64_t index, int64_t value) {
+void ruxen_vec_set(RuxenVec *v, uint64_t index, int64_t value) {
     if (!v || index >= v->len) {
-        riven_panic("vec set: index out of bounds");
+        ruxen_panic("vec set: index out of bounds");
     }
     v->data[index] = value;
 }
@@ -747,7 +747,7 @@ void riven_vec_set(RivenVec *v, uint64_t index, int64_t value) {
 /* Vec.dedup — remove consecutive duplicates. Mirrors Rust's
    `Vec::dedup` for primitive slot equality (PartialEq required at the
    type level; the runtime uses bitwise 64-bit slot compare). */
-void riven_vec_dedup(RivenVec *v) {
+void ruxen_vec_dedup(RuxenVec *v) {
     if (!v || v->len < 2) return;
     uint64_t write = 1;
     for (uint64_t read = 1; read < v->len; read++) {
@@ -763,8 +763,8 @@ void riven_vec_dedup(RivenVec *v) {
    Treats each Vec slot as a `const char *`. Caller is responsible
    for ensuring the elements are strings; non-String Vecs are
    typeck-rejected upstream. */
-char *riven_vec_join(RivenVec *v, const char *sep) {
-    if (!v || v->len == 0) return riven_string_from("");
+char *ruxen_vec_join(RuxenVec *v, const char *sep) {
+    if (!v || v->len == 0) return ruxen_string_from("");
     const char *separator = sep ? sep : "";
     size_t sep_len = strlen(separator);
     size_t total = 0;
@@ -777,7 +777,7 @@ char *riven_vec_join(RivenVec *v, const char *sep) {
     }
     char *out = (char *)malloc(total + 1);
     if (!out) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
     char *cursor = out;
     for (uint64_t i = 0; i < v->len; i++) {
@@ -799,8 +799,8 @@ char *riven_vec_join(RivenVec *v, const char *sep) {
 /* String::lines — split on '\n'. The trailing empty element after
    a terminating newline is dropped (matches Rust's `str::lines`).
    '\r' immediately before a '\n' is also dropped. */
-RivenVec *riven_string_lines(const char *s) {
-    RivenVec *result = riven_vec_new();
+RuxenVec *ruxen_string_lines(const char *s) {
+    RuxenVec *result = ruxen_vec_new();
     if (!s) return result;
     const char *start = s;
     while (1) {
@@ -811,11 +811,11 @@ RivenVec *riven_string_lines(const char *s) {
         }
         char *line = (char *)malloc(len + 1);
         if (!line) {
-            riven_panic("out of memory");
+            ruxen_panic("out of memory");
         }
         memcpy(line, start, len);
         line[len] = '\0';
-        riven_vec_push(result, (int64_t)line);
+        ruxen_vec_push(result, (int64_t)line);
         if (!nl) break;
         start = nl + 1;
         if (*start == '\0') {
@@ -828,9 +828,9 @@ RivenVec *riven_string_lines(const char *s) {
 
 /* String::replace — non-overlapping substring replace. Returns a
    newly allocated owned string; the receiver is left intact. */
-char *riven_string_replace(const char *s, const char *from, const char *to) {
-    if (!s) return riven_string_from("");
-    if (!from || from[0] == '\0') return riven_string_from(s);
+char *ruxen_string_replace(const char *s, const char *from, const char *to) {
+    if (!s) return ruxen_string_from("");
+    if (!from || from[0] == '\0') return ruxen_string_from(s);
     const char *replacement = to ? to : "";
     size_t from_len = strlen(from);
     size_t to_len = strlen(replacement);
@@ -845,7 +845,7 @@ char *riven_string_replace(const char *s, const char *from, const char *to) {
             cursor += from_len;
         }
     }
-    if (occurrences == 0) return riven_string_from(s);
+    if (occurrences == 0) return ruxen_string_from(s);
 
     size_t total = s_len + occurrences * (to_len > from_len ? (to_len - from_len) : 0);
     if (to_len < from_len) {
@@ -853,7 +853,7 @@ char *riven_string_replace(const char *s, const char *from, const char *to) {
     }
     char *out = (char *)malloc(total + 1);
     if (!out) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
 
     char *write = out;
@@ -879,12 +879,12 @@ char *riven_string_replace(const char *s, const char *from, const char *to) {
 
 /* ── Iterator → Vec collection ────────────────────────────────────────
  * `Iter::to_vec` collects an iterator into a Vec. In the v1 runtime
- * every iterator producer (`riven_str_split`, `riven_vec_iter`, …)
- * already returns a `RivenVec *` rather than a separate iterator
+ * every iterator producer (`ruxen_str_split`, `ruxen_vec_iter`, …)
+ * already returns a `RuxenVec *` rather than a separate iterator
  * struct, so `to_vec` is an identity passthrough. When real iterator
  * types land later this can dispatch to a per-iterator collector.
  */
-RivenVec *riven_iter_to_vec(RivenVec *iter) {
+RuxenVec *ruxen_iter_to_vec(RuxenVec *iter) {
     return iter;
 }
 

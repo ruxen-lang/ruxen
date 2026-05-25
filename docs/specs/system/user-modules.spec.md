@@ -11,7 +11,7 @@ handles `std.*` paths** today.  User modules parse and produce
 
 ## B1 — `module foo ... end` parses
 
-```riven
+```ruxen
 module geometry
   struct Point
     x: Int
@@ -26,12 +26,12 @@ end
 
 The parser produces a `TopLevelItem::Module(ModuleDef { name,
 items, span })` (see
-[`parser/ast.rs` `ModuleDef`](../../../crates/riven-core/src/parser/ast.rs)).
+[`parser/ast.rs` `ModuleDef`](../../../crates/ruxen-core/src/parser/ast.rs)).
 Nested top-level items inside the module are parsed normally.
 
 ## B2 — Nested modules parse
 
-```riven
+```ruxen
 module outer
   module inner
     def hi -> Int { 1 }

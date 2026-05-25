@@ -25,7 +25,7 @@
 ### Goal
 Allow `for[a]` quantification on lifetime params in mixin bounds:
 
-```riven
+```ruxen
 def takes_closure[F: for[a] Fn(&a Int) -> Int](f: F) -> Int
   ...
 end

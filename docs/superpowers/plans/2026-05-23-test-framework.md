@@ -1,52 +1,52 @@
 # Test Framework Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-druxen-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship a pure-Riven `std.test` package + `riven test` CLI subcommand that discovers `tests/**.rvn`, wraps each file in a synthesized `def main`, builds per-file binaries through the existing incremental cache, and runs them in parallel with fork-per-test isolation.
+**Goal:** Ship a pure-Ruxen `std.test` package + `ruxen test` CLI subcommand that discovers `tests/**.rx`, wraps each file in a synthesized `def main`, builds per-file binaries through the existing incremental cache, and runs them in parallel with fork-per-test isolation.
 
-**Architecture:** `library/std/test/` exposes `Tester.describe(name) do |t| ... end` as the only class entry; nested `t.context` / `t.it` / `t.before` / `t.after` / `t.xit` / `t.expect` / `t.expect_panic` are instance methods on the yielded `Tester`. Discovery and synthesis happen in Rust (`src/rivenc/src/test_runner.rs` + `src/riven_cli/src/test.rs`); execution is process-isolated per test case via a small `fork()` C shim in `library/std/test/runtime/test.c`.
+**Architecture:** `library/std/test/` exposes `Tester.describe(name) do |t| ... end` as the only class entry; nested `t.context` / `t.it` / `t.before` / `t.after` / `t.xit` / `t.expect` / `t.expect_panic` are instance methods on the yielded `Tester`. Discovery and synthesis happen in Rust (`src/ruxenc/src/test_runner.rs` + `src/ruxen_cli/src/test.rs`); execution is process-isolated per test case via a small `fork()` C shim in `library/std/test/runtime/test.c`.
 
-**Tech Stack:** Riven (stdlib), Rust (CLI + rivenc), C (3-function FFI shim for `fork`/`waitpid`/`current-runner` slot).
+**Tech Stack:** Ruxen (stdlib), Rust (CLI + ruxenc), C (3-function FFI shim for `fork`/`waitpid`/`current-runner` slot).
 
 **Spec:** `docs/superpowers/specs/2026-05-23-test-framework-design.md`.
 
 **Conventions (load-bearing — do not skip):**
-- `feedback_no_inline_rvn_in_pin_tests.md` — Riven source for tests lives in `compiler/riven_core/tests/fixtures/riven/<stem>.rvn`, never inline `r#"..."#`.
+- `feedback_no_inline_rx_in_pin_tests.md` — Ruxen source for tests lives in `compiler/ruxen_core/tests/fixtures/ruxen/<stem>.rx`, never inline `r#"..."#`.
 - `feedback_no_full_paths_in_shell.md` — bare `git` / `cargo`, no `-C /Users/hassan/...`.
 - `feedback_no_commit_co_authors.md` — strip the `Co-Authored-By:` trailer.
 - `feedback_no_git_push.md` — commits OK; no `git push`, no PRs.
-- `project_riven_bootstrap_files_load_check.md` — new stdlib packages MUST be added to `compiler/riven_core/src/resolve/bootstrap.rs` `BOOTSTRAP_FILES` or they will silently fail to load.
+- `project_ruxen_bootstrap_files_load_check.md` — new stdlib packages MUST be added to `compiler/ruxen_core/src/resolve/bootstrap.rs` `BOOTSTRAP_FILES` or they will silently fail to load.
 - Cache test runs to `tmp/test-cache/<name>.log` (rule 41).
 
 ---
 
 ## File Structure
 
-**New files (Riven stdlib package):**
-- `library/std/test/Riven.toml` — manifest (deps: std-core, std-sync, std-string, std-array, std-option_result, std-fmt)
-- `library/std/test/src/lib.rvn` — public entry: `Tester`, `Matcher`, `TestCase`, `Runner` re-exports + the small `bootstrap_smoke` symbol
-- `library/std/test/src/tester.rvn` — `class Tester` + `describe`/`context`/`it`/`xit`/`before`/`after` + `expect` / `expect_panic`
-- `library/std/test/src/matcher.rvn` — `class Matcher[T]` + matchers (`to_eq`, `not_to_eq`, `to_be_truthy`, `to_be_falsy`, `to_include`, `to_be_nil`, `not_to_be_nil`, `to_be_a`)
-- `library/std/test/src/test_case.rvn` — `class TestCase` (name + body closure + pending flag + expect-panic substring)
-- `library/std/test/src/runner.rvn` — `class Runner` (group tree, current-runner slot, `execute`)
-- `library/std/test/runtime/test.c` — three C entry points: `riven_test_current_set` / `riven_test_current_get` (process-static `int64_t` slot for the active Runner handle) and `riven_test_fork_and_wait` (fork + run-child-closure + waitpid, returning child exit code)
+**New files (Ruxen stdlib package):**
+- `library/std/test/Ruxen.toml` — manifest (deps: std-core, std-sync, std-string, std-array, std-option_result, std-fmt)
+- `library/std/test/src/lib.rx` — public entry: `Tester`, `Matcher`, `TestCase`, `Runner` re-exports + the small `bootstrap_smoke` symbol
+- `library/std/test/src/tester.rx` — `class Tester` + `describe`/`context`/`it`/`xit`/`before`/`after` + `expect` / `expect_panic`
+- `library/std/test/src/matcher.rx` — `class Matcher[T]` + matchers (`to_eq`, `not_to_eq`, `to_be_truthy`, `to_be_falsy`, `to_include`, `to_be_nil`, `not_to_be_nil`, `to_be_a`)
+- `library/std/test/src/test_case.rx` — `class TestCase` (name + body closure + pending flag + expect-panic substring)
+- `library/std/test/src/runner.rx` — `class Runner` (group tree, current-runner slot, `execute`)
+- `library/std/test/runtime/test.c` — three C entry points: `ruxen_test_current_set` / `ruxen_test_current_get` (process-static `int64_t` slot for the active Runner handle) and `ruxen_test_fork_and_wait` (fork + run-child-closure + waitpid, returning child exit code)
 
 **New files (Rust CLI):**
-- `src/rivenc/src/test_runner.rs` — discovery (walk `tests/**.rvn`), synthesis wrap, build invocation, parallel dispatch, output rendering (~500 LOC)
-- `src/rivenc/src/test_output.rs` — pretty / TAP / JSON formatters (~150 LOC)
-- `src/riven_cli/tests/fixtures/test-projects/basic/` — integration-test fixture project (Riven.toml + tests/example.rvn)
-- `src/riven_cli/tests/test_runner.rs` — integration tests for the `riven test` end-to-end flow
+- `src/ruxenc/src/test_runner.rs` — discovery (walk `tests/**.rx`), synthesis wrap, build invocation, parallel dispatch, output rendering (~500 LOC)
+- `src/ruxenc/src/test_output.rs` — pretty / TAP / JSON formatters (~150 LOC)
+- `src/ruxen_cli/tests/fixtures/test-projects/basic/` — integration-test fixture project (Ruxen.toml + tests/example.rx)
+- `src/ruxen_cli/tests/test_runner.rs` — integration tests for the `ruxen test` end-to-end flow
 
 **Modified files:**
-- `compiler/riven_core/src/resolve/bootstrap.rs:77-162` — append `"test/src/lib.rvn"` to `BOOTSTRAP_FILES`
-- `src/rivenc/src/lib.rs` — `pub mod test_runner; pub mod test_output;`
-- `src/riven_cli/src/cli.rs:174-179` — replace placeholder `Test { filter }` with full subcommand definition
-- `src/riven_cli/src/main.rs:116-122` — replace `exit(2)` stub with `rivenc::test_runner::run(...)`
-- `src/riven_cli/src/scaffold.rs` — add a `tests/example.rvn` to the `riven new` template
+- `compiler/ruxen_core/src/resolve/bootstrap.rs:77-162` — append `"test/src/lib.rx"` to `BOOTSTRAP_FILES`
+- `src/ruxenc/src/lib.rs` — `pub mod test_runner; pub mod test_output;`
+- `src/ruxen_cli/src/cli.rs:174-179` — replace placeholder `Test { filter }` with full subcommand definition
+- `src/ruxen_cli/src/main.rs:116-122` — replace `exit(2)` stub with `ruxenc::test_runner::run(...)`
+- `src/ruxen_cli/src/scaffold.rs` — add a `tests/example.rx` to the `ruxen new` template
 
 **New test files (TDD harness):**
-- `compiler/riven_core/tests/stdlib_test.rs` — Rust-side integration tests that compile + run `.rvn` fixtures exercising the `std.test` API
-- `compiler/riven_core/tests/fixtures/riven/test_*.rvn` — fixture Riven programs
+- `compiler/ruxen_core/tests/stdlib_test.rs` — Rust-side integration tests that compile + run `.rx` fixtures exercising the `std.test` API
+- `compiler/ruxen_core/tests/fixtures/ruxen/test_*.rx` — fixture Ruxen programs
 
 **New docs:**
 - `docs/tutorial/17-testing.md` — user-facing tutorial page
@@ -55,12 +55,12 @@
 
 ## Phase 1 — Package skeleton and bootstrap wiring
 
-Goal: an empty-but-loaded `std.test` package that the bootstrap merger recognizes. Catches the `BOOTSTRAP_FILES` orphan-file class of bugs (memory `project_riven_bootstrap_files_load_check.md`) before we sink time into class bodies.
+Goal: an empty-but-loaded `std.test` package that the bootstrap merger recognizes. Catches the `BOOTSTRAP_FILES` orphan-file class of bugs (memory `project_ruxen_bootstrap_files_load_check.md`) before we sink time into class bodies.
 
 ### Task 1.1: Create the package manifest
 
 **Files:**
-- Create: `library/std/test/Riven.toml`
+- Create: `library/std/test/Ruxen.toml`
 
 - [ ] **Step 1: Write the manifest**
 
@@ -68,7 +68,7 @@ Goal: an empty-but-loaded `std.test` package that the bootstrap merger recognize
 [package]
 name = "std-test"
 version = "0.1.0"
-description = "Pure-Riven test framework: Tester DSL (describe/context/it/before/after) + matchers + fork-per-test runner. The riven test CLI subcommand drives it. See docs/superpowers/specs/2026-05-23-test-framework-design.md."
+description = "Pure-Ruxen test framework: Tester DSL (describe/context/it/before/after) + matchers + fork-per-test runner. The ruxen test CLI subcommand drives it. See docs/superpowers/specs/2026-05-23-test-framework-design.md."
 
 [dependencies]
 std-core = "= 0.1.0"
@@ -82,25 +82,25 @@ std-sync = "= 0.1.0"
 - [ ] **Step 2: Commit**
 
 ```bash
-git add library/std/test/Riven.toml
+git add library/std/test/Ruxen.toml
 git commit -m "stdlib(test): manifest for std-test package"
 ```
 
-### Task 1.2: Create a minimal lib.rvn that loads cleanly
+### Task 1.2: Create a minimal lib.rx that loads cleanly
 
 **Files:**
-- Create: `library/std/test/src/lib.rvn`
+- Create: `library/std/test/src/lib.rx`
 
 - [ ] **Step 1: Write a single-symbol stub so the file is parseable**
 
-```rvn
-## std::test — pure-Riven test framework (skeleton).
+```rx
+## std::test — pure-Ruxen test framework (skeleton).
 ##
 ## Public surface ships in companion files (loaded via bootstrap order):
-##   tester.rvn      — `class Tester` + describe/context/it/before/after
-##   matcher.rvn     — `class Matcher[T]` + v1 matchers
-##   test_case.rvn   — `class TestCase` (name + body + pending flag)
-##   runner.rvn      — `class Runner` + current-runner slot + execute
+##   tester.rx      — `class Tester` + describe/context/it/before/after
+##   matcher.rx     — `class Matcher[T]` + v1 matchers
+##   test_case.rx   — `class TestCase` (name + body + pending flag)
+##   runner.rx      — `class Runner` + current-runner slot + execute
 ##
 ## This file is the BOOTSTRAP entry; it carries one marker symbol so the
 ## bootstrap pre-walk has something to register.
@@ -117,33 +117,33 @@ end
 - [ ] **Step 2: Commit**
 
 ```bash
-git add library/std/test/src/lib.rvn
-git commit -m "stdlib(test): bootstrap-loadable lib.rvn stub"
+git add library/std/test/src/lib.rx
+git commit -m "stdlib(test): bootstrap-loadable lib.rx stub"
 ```
 
 ### Task 1.3: Wire the package into BOOTSTRAP_FILES
 
 **Files:**
-- Modify: `compiler/riven_core/src/resolve/bootstrap.rs:77-162` (append before the closing `];`)
+- Modify: `compiler/ruxen_core/src/resolve/bootstrap.rs:77-162` (append before the closing `];`)
 
 - [ ] **Step 1: Add the entry**
 
-Find the existing `bench/src/lib.rvn,` line near the end of `BOOTSTRAP_FILES` and add immediately after it:
+Find the existing `bench/src/lib.rx,` line near the end of `BOOTSTRAP_FILES` and add immediately after it:
 
 ```rust
-    // test — pure-Riven test framework (Tester DSL + Matcher + Runner).
+    // test — pure-Ruxen test framework (Tester DSL + Matcher + Runner).
     // Depends on string/array/option_result/fmt/sync — all already loaded
-    // above. Discovery + synthesis live in Rust (rivenc::test_runner);
+    // above. Discovery + synthesis live in Rust (ruxenc::test_runner);
     // this entry registers the runtime classes the synthesised `def main`
     // references via `use std.test.Tester` / `use std.test.Runner`.
-    "test/src/lib.rvn",
+    "test/src/lib.rx",
 ```
 
 - [ ] **Step 2: Run the bootstrap-parse pin test**
 
 ```bash
 mkdir -p tmp/test-cache
-cargo test -p riven_core --test bootstrap_prelude_merge 2>&1 | tee tmp/test-cache/bootstrap-after-test-entry.log
+cargo test -p ruxen_core --test bootstrap_prelude_merge 2>&1 | tee tmp/test-cache/bootstrap-after-test-entry.log
 ```
 
 Expected: PASS (all bootstrap files parse cleanly; package count incremented by 1).
@@ -151,7 +151,7 @@ Expected: PASS (all bootstrap files parse cleanly; package count incremented by 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add compiler/riven_core/src/resolve/bootstrap.rs
+git add compiler/ruxen_core/src/resolve/bootstrap.rs
 git commit -m "stdlib(test): register std-test in BOOTSTRAP_FILES"
 ```
 
@@ -164,15 +164,15 @@ Goal: the value types the DSL produces. No execution semantics yet — just data
 ### Task 2.1: `class TestCase` — name + body + pending + expect_panic
 
 **Files:**
-- Create: `library/std/test/src/test_case.rvn`
-- Test: `compiler/riven_core/tests/fixtures/riven/test_case_construct.rvn`
-- Test: `compiler/riven_core/tests/stdlib_test.rs` (new file)
+- Create: `library/std/test/src/test_case.rx`
+- Test: `compiler/ruxen_core/tests/fixtures/ruxen/test_case_construct.rx`
+- Test: `compiler/ruxen_core/tests/stdlib_test.rs` (new file)
 
 - [ ] **Step 1: Write the failing fixture**
 
-`compiler/riven_core/tests/fixtures/riven/test_case_construct.rvn`:
+`compiler/ruxen_core/tests/fixtures/ruxen/test_case_construct.rx`:
 
-```rvn
+```rx
 use std.test.TestCase
 
 def main
@@ -184,27 +184,27 @@ end
 
 - [ ] **Step 2: Write the failing Rust test harness**
 
-`compiler/riven_core/tests/stdlib_test.rs`:
+`compiler/ruxen_core/tests/stdlib_test.rs`:
 
 ```rust
 //! Integration tests for the `std.test` stdlib package.
 //!
-//! Fixture .rvn files live under `tests/fixtures/riven/test_*.rvn` per
-//! the no-inline-rvn convention (feedback_no_inline_rvn_in_pin_tests.md).
+//! Fixture .rx files live under `tests/fixtures/ruxen/test_*.rx` per
+//! the no-inline-rx convention (feedback_no_inline_rx_in_pin_tests.md).
 //! Each test compiles + runs a fixture and asserts on captured stdout.
 
-use riven_core::codegen;
-use riven_core::diagnostics::DiagnosticLevel;
-use riven_core::lexer::Lexer;
-use riven_core::mir::lower::Lowerer;
-use riven_core::parser::Parser;
-use riven_core::typeck;
+use ruxen_core::codegen;
+use ruxen_core::diagnostics::DiagnosticLevel;
+use ruxen_core::lexer::Lexer;
+use ruxen_core::mir::lower::Lowerer;
+use ruxen_core::parser::Parser;
+use ruxen_core::typeck;
 use std::process::Command;
 
-fn rvn(name: &str) -> String {
+fn rx(name: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/riven")
-        .join(format!("{name}.rvn"));
+        .join("tests/fixtures/ruxen")
+        .join(format!("{name}.rx"));
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
 }
 
@@ -248,7 +248,7 @@ fn compile_and_run(source: &str, basename: &str) -> (String, String, bool) {
 #[test]
 fn test_case_construct_name_and_pending_default_false() {
     let (stdout, stderr, ok) =
-        compile_and_run(&rvn("test_case_construct"), "stdlib_test_case_construct");
+        compile_and_run(&rx("test_case_construct"), "stdlib_test_case_construct");
     assert!(ok, "stderr: {}", stderr);
     assert!(stdout.contains("name=adds two numbers"), "got: {}", stdout);
     assert!(stdout.contains("pending=false"), "got: {}", stdout);
@@ -258,20 +258,20 @@ fn test_case_construct_name_and_pending_default_false() {
 - [ ] **Step 3: Run the test — expect failure (TestCase not defined)**
 
 ```bash
-cargo test -p riven_core --test stdlib_test test_case_construct 2>&1 | tee tmp/test-cache/2.1-red.log
+cargo test -p ruxen_core --test stdlib_test test_case_construct 2>&1 | tee tmp/test-cache/2.1-red.log
 ```
 
 Expected: FAIL — `use std.test.TestCase` cannot resolve (`TestCase` is not yet defined).
 
 - [ ] **Step 4: Implement TestCase**
 
-`library/std/test/src/test_case.rvn`:
+`library/std/test/src/test_case.rx`:
 
-```rvn
+```rx
 ## std.test.TestCase — one executable test case.
 ##
 ## Built by `Tester#it(name) do ... end` and `Tester#xit(name) do ... end`.
-## The Runner walks the group tree (see runner.rvn) and invokes each
+## The Runner walks the group tree (see runner.rx) and invokes each
 ## TestCase's body closure inside a forked child process for isolation.
 ##
 ## `expect_panic_substr` is None for an ordinary test. When set, the
@@ -296,7 +296,7 @@ end
 - [ ] **Step 5: Run the test — expect pass**
 
 ```bash
-cargo test -p riven_core --test stdlib_test test_case_construct 2>&1 | tee tmp/test-cache/2.1-green.log
+cargo test -p ruxen_core --test stdlib_test test_case_construct 2>&1 | tee tmp/test-cache/2.1-green.log
 ```
 
 Expected: PASS.
@@ -304,24 +304,24 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add library/std/test/src/test_case.rvn \
-        compiler/riven_core/tests/fixtures/riven/test_case_construct.rvn \
-        compiler/riven_core/tests/stdlib_test.rs
+git add library/std/test/src/test_case.rx \
+        compiler/ruxen_core/tests/fixtures/ruxen/test_case_construct.rx \
+        compiler/ruxen_core/tests/stdlib_test.rs
 git commit -m "stdlib(test): TestCase value class — name + body + pending"
 ```
 
 ### Task 2.2: `class Matcher[T]` — `to_eq` and `not_to_eq`
 
 **Files:**
-- Create: `library/std/test/src/matcher.rvn`
-- Test: `compiler/riven_core/tests/fixtures/riven/test_matcher_to_eq.rvn`
-- Test: `compiler/riven_core/tests/stdlib_test.rs` (append)
+- Create: `library/std/test/src/matcher.rx`
+- Test: `compiler/ruxen_core/tests/fixtures/ruxen/test_matcher_to_eq.rx`
+- Test: `compiler/ruxen_core/tests/stdlib_test.rs` (append)
 
 - [ ] **Step 1: Write the failing fixture**
 
-`compiler/riven_core/tests/fixtures/riven/test_matcher_to_eq.rvn`:
+`compiler/ruxen_core/tests/fixtures/ruxen/test_matcher_to_eq.rx`:
 
-```rvn
+```rx
 use std.test.Matcher
 
 def main
@@ -343,13 +343,13 @@ end
 
 - [ ] **Step 2: Append failing Rust test**
 
-In `compiler/riven_core/tests/stdlib_test.rs`:
+In `compiler/ruxen_core/tests/stdlib_test.rs`:
 
 ```rust
 #[test]
 fn matcher_to_eq_and_not_to_eq() {
     let (stdout, stderr, ok) =
-        compile_and_run(&rvn("test_matcher_to_eq"), "stdlib_test_matcher_to_eq");
+        compile_and_run(&rx("test_matcher_to_eq"), "stdlib_test_matcher_to_eq");
     assert!(ok, "stderr: {}", stderr);
     assert!(stdout.contains("to_eq_pass"), "got: {}", stdout);
     assert!(stdout.contains("not_to_eq_pass"), "got: {}", stdout);
@@ -359,20 +359,20 @@ fn matcher_to_eq_and_not_to_eq() {
 - [ ] **Step 3: Run — expect failure**
 
 ```bash
-cargo test -p riven_core --test stdlib_test matcher_to_eq_and_not_to_eq 2>&1 | tee tmp/test-cache/2.2-red.log
+cargo test -p ruxen_core --test stdlib_test matcher_to_eq_and_not_to_eq 2>&1 | tee tmp/test-cache/2.2-red.log
 ```
 
 Expected: FAIL — `Matcher` unresolved.
 
 - [ ] **Step 4: Implement Matcher with `to_eq` / `not_to_eq`**
 
-`library/std/test/src/matcher.rvn`:
+`library/std/test/src/matcher.rx`:
 
-```rvn
+```rx
 ## std.test.Matcher[T] — value wrapper returned by `Tester#expect(x)`.
 ##
 ## v1 matchers are pure-boolean: `to_eq` / `not_to_eq` etc. return Bool;
-## the Tester layer turns a `false` into a `riven_panic` with a
+## the Tester layer turns a `false` into a `ruxen_panic` with a
 ## structured message the Runner parent decodes.
 ##
 ## Equality matchers require `T: PartialEq`. Non-PartialEq types fail
@@ -400,7 +400,7 @@ end
 - [ ] **Step 5: Run — expect pass**
 
 ```bash
-cargo test -p riven_core --test stdlib_test matcher_to_eq_and_not_to_eq 2>&1 | tee tmp/test-cache/2.2-green.log
+cargo test -p ruxen_core --test stdlib_test matcher_to_eq_and_not_to_eq 2>&1 | tee tmp/test-cache/2.2-green.log
 ```
 
 Expected: PASS.
@@ -408,24 +408,24 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add library/std/test/src/matcher.rvn \
-        compiler/riven_core/tests/fixtures/riven/test_matcher_to_eq.rvn \
-        compiler/riven_core/tests/stdlib_test.rs
+git add library/std/test/src/matcher.rx \
+        compiler/ruxen_core/tests/fixtures/ruxen/test_matcher_to_eq.rx \
+        compiler/ruxen_core/tests/stdlib_test.rs
 git commit -m "stdlib(test): Matcher[T] with to_eq / not_to_eq"
 ```
 
 ### Task 2.3: Matcher truthy/falsy/nil checks
 
 **Files:**
-- Modify: `library/std/test/src/matcher.rvn`
-- Test: `compiler/riven_core/tests/fixtures/riven/test_matcher_truthy_nil.rvn`
-- Test: `compiler/riven_core/tests/stdlib_test.rs` (append)
+- Modify: `library/std/test/src/matcher.rx`
+- Test: `compiler/ruxen_core/tests/fixtures/ruxen/test_matcher_truthy_nil.rx`
+- Test: `compiler/ruxen_core/tests/stdlib_test.rs` (append)
 
 - [ ] **Step 1: Write the failing fixture**
 
-`compiler/riven_core/tests/fixtures/riven/test_matcher_truthy_nil.rvn`:
+`compiler/ruxen_core/tests/fixtures/ruxen/test_matcher_truthy_nil.rx`:
 
-```rvn
+```rx
 use std.test.Matcher
 
 def main
@@ -459,7 +459,7 @@ end
 #[test]
 fn matcher_truthy_falsy_and_nil() {
     let (stdout, stderr, ok) =
-        compile_and_run(&rvn("test_matcher_truthy_nil"), "stdlib_test_matcher_truthy_nil");
+        compile_and_run(&rx("test_matcher_truthy_nil"), "stdlib_test_matcher_truthy_nil");
     assert!(ok, "stderr: {}", stderr);
     for token in ["truthy_pass", "falsy_pass", "not_nil_pass", "nil_pass"] {
         assert!(stdout.contains(token), "missing {token}: {}", stdout);
@@ -470,14 +470,14 @@ fn matcher_truthy_falsy_and_nil() {
 - [ ] **Step 3: Run — expect failure** (`to_be_truthy` not defined)
 
 ```bash
-cargo test -p riven_core --test stdlib_test matcher_truthy_falsy_and_nil 2>&1 | tee tmp/test-cache/2.3-red.log
+cargo test -p ruxen_core --test stdlib_test matcher_truthy_falsy_and_nil 2>&1 | tee tmp/test-cache/2.3-red.log
 ```
 
 - [ ] **Step 4: Extend Matcher**
 
-Append to `library/std/test/src/matcher.rvn` AFTER the `class Matcher[T]` block; for the nullable matchers we add a separate, non-generic-constrained sibling class because the `where T: PartialEq` constraint on the generic Matcher would block `Matcher.new(opt)` for Option-typed values that may not implement PartialEq.
+Append to `library/std/test/src/matcher.rx` AFTER the `class Matcher[T]` block; for the nullable matchers we add a separate, non-generic-constrained sibling class because the `where T: PartialEq` constraint on the generic Matcher would block `Matcher.new(opt)` for Option-typed values that may not implement PartialEq.
 
-```rvn
+```rx
 ## Boolean-valued matcher path. Decoupled from the generic Matcher[T]
 ## constraint because `to_be_truthy`/`to_be_falsy` don't need equality
 ## and the call site shouldn't be forced to satisfy PartialEq for a
@@ -521,7 +521,7 @@ end
 
 And extend the generic Matcher to provide bool/nil shortcuts when the call site stays on the equality-path: add to the `class Matcher[T]` body, **inside the existing `where T: PartialEq` block**:
 
-```rvn
+```rx
   def to_be_truthy -> Bool
     # Generic to_be_truthy is awkward without a Truthy mixin; v1
     # routes Bool callers to BoolMatcher.new explicitly. This stub
@@ -534,7 +534,7 @@ And extend the generic Matcher to provide bool/nil shortcuts when the call site 
 
 NOTE: the fixture uses `Matcher.new(true)` directly — that compiles only if `Bool: PartialEq` (true for primitives). If `Bool: PartialEq` isn't in the prelude yet, switch the fixture to use `BoolMatcher.new(true).to_be_truthy` explicitly:
 
-```rvn
+```rx
 use std.test.BoolMatcher
 use std.test.OptionMatcher
 
@@ -559,30 +559,30 @@ Use the explicit class form in the fixture; the unified `expect` overload is bui
 - [ ] **Step 5: Run — expect pass**
 
 ```bash
-cargo test -p riven_core --test stdlib_test matcher_truthy_falsy_and_nil 2>&1 | tee tmp/test-cache/2.3-green.log
+cargo test -p ruxen_core --test stdlib_test matcher_truthy_falsy_and_nil 2>&1 | tee tmp/test-cache/2.3-green.log
 ```
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add library/std/test/src/matcher.rvn \
-        compiler/riven_core/tests/fixtures/riven/test_matcher_truthy_nil.rvn \
-        compiler/riven_core/tests/stdlib_test.rs
+git add library/std/test/src/matcher.rx \
+        compiler/ruxen_core/tests/fixtures/ruxen/test_matcher_truthy_nil.rx \
+        compiler/ruxen_core/tests/stdlib_test.rs
 git commit -m "stdlib(test): BoolMatcher + OptionMatcher truthy/falsy/nil"
 ```
 
 ### Task 2.4: Matcher `to_include` for Array and String
 
 **Files:**
-- Modify: `library/std/test/src/matcher.rvn`
-- Test: `compiler/riven_core/tests/fixtures/riven/test_matcher_include.rvn`
-- Test: `compiler/riven_core/tests/stdlib_test.rs` (append)
+- Modify: `library/std/test/src/matcher.rx`
+- Test: `compiler/ruxen_core/tests/fixtures/ruxen/test_matcher_include.rx`
+- Test: `compiler/ruxen_core/tests/stdlib_test.rs` (append)
 
 - [ ] **Step 1: Write the failing fixture**
 
-`compiler/riven_core/tests/fixtures/riven/test_matcher_include.rvn`:
+`compiler/ruxen_core/tests/fixtures/ruxen/test_matcher_include.rx`:
 
-```rvn
+```rx
 use std.test.ArrayMatcher
 use std.test.StringMatcher
 
@@ -605,7 +605,7 @@ end
 #[test]
 fn matcher_to_include_array_and_string() {
     let (stdout, stderr, ok) =
-        compile_and_run(&rvn("test_matcher_include"), "stdlib_test_matcher_include");
+        compile_and_run(&rx("test_matcher_include"), "stdlib_test_matcher_include");
     assert!(ok, "stderr: {}", stderr);
     assert!(stdout.contains("array_include_pass"), "got: {}", stdout);
     assert!(stdout.contains("string_include_pass"), "got: {}", stdout);
@@ -615,14 +615,14 @@ fn matcher_to_include_array_and_string() {
 - [ ] **Step 3: Run — expect failure**
 
 ```bash
-cargo test -p riven_core --test stdlib_test matcher_to_include_array_and_string 2>&1 | tee tmp/test-cache/2.4-red.log
+cargo test -p ruxen_core --test stdlib_test matcher_to_include_array_and_string 2>&1 | tee tmp/test-cache/2.4-red.log
 ```
 
 - [ ] **Step 4: Implement the two include matchers**
 
-Append to `library/std/test/src/matcher.rvn`:
+Append to `library/std/test/src/matcher.rx`:
 
-```rvn
+```rx
 ## Element-membership matcher for Array[T]. Loops with `each` rather
 ## than `contains?` because the v1 Array surface may not expose contains?
 ## uniformly across T (PartialEq required).
@@ -663,7 +663,7 @@ end
 
 If `String.contains` doesn't exist yet, sub in a tiny inline scan:
 
-```rvn
+```rx
   def to_include(needle: &String) -> Bool
     let haystack = self.actual_ref
     let h_len = haystack.len
@@ -682,20 +682,20 @@ If `String.contains` doesn't exist yet, sub in a tiny inline scan:
   end
 ```
 
-(`slice` / `clone` may need substitution depending on what `library/std/string/src/lib.rvn` exposes — check before implementing.)
+(`slice` / `clone` may need substitution depending on what `library/std/string/src/lib.rx` exposes — check before implementing.)
 
 - [ ] **Step 5: Run — expect pass**
 
 ```bash
-cargo test -p riven_core --test stdlib_test matcher_to_include_array_and_string 2>&1 | tee tmp/test-cache/2.4-green.log
+cargo test -p ruxen_core --test stdlib_test matcher_to_include_array_and_string 2>&1 | tee tmp/test-cache/2.4-green.log
 ```
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add library/std/test/src/matcher.rvn \
-        compiler/riven_core/tests/fixtures/riven/test_matcher_include.rvn \
-        compiler/riven_core/tests/stdlib_test.rs
+git add library/std/test/src/matcher.rx \
+        compiler/ruxen_core/tests/fixtures/ruxen/test_matcher_include.rx \
+        compiler/ruxen_core/tests/stdlib_test.rs
 git commit -m "stdlib(test): ArrayMatcher + StringMatcher to_include"
 ```
 
@@ -709,14 +709,14 @@ Goal: a process-static slot for the active Runner handle, so `Tester.describe` c
 
 **Files:**
 - Create: `library/std/test/runtime/test.c`
-- Test: `compiler/riven_core/tests/fixtures/riven/test_current_runner_slot.rvn`
-- Test: `compiler/riven_core/tests/stdlib_test.rs` (append)
+- Test: `compiler/ruxen_core/tests/fixtures/ruxen/test_current_runner_slot.rx`
+- Test: `compiler/ruxen_core/tests/stdlib_test.rs` (append)
 
 - [ ] **Step 1: Write the failing fixture**
 
-`compiler/riven_core/tests/fixtures/riven/test_current_runner_slot.rvn`:
+`compiler/ruxen_core/tests/fixtures/ruxen/test_current_runner_slot.rx`:
 
-```rvn
+```rx
 use std.test.Runner
 
 def main
@@ -732,7 +732,7 @@ end
 #[test]
 fn runner_current_slot_roundtrip() {
     let (stdout, stderr, ok) =
-        compile_and_run(&rvn("test_current_runner_slot"), "stdlib_test_current_slot");
+        compile_and_run(&rx("test_current_runner_slot"), "stdlib_test_current_slot");
     assert!(ok, "stderr: {}", stderr);
     assert!(stdout.contains("slot=42"), "got: {}", stdout);
 }
@@ -741,7 +741,7 @@ fn runner_current_slot_roundtrip() {
 - [ ] **Step 3: Run — expect failure** (`Runner` doesn't exist yet)
 
 ```bash
-cargo test -p riven_core --test stdlib_test runner_current_slot_roundtrip 2>&1 | tee tmp/test-cache/3.1-red.log
+cargo test -p ruxen_core --test stdlib_test runner_current_slot_roundtrip 2>&1 | tee tmp/test-cache/3.1-red.log
 ```
 
 - [ ] **Step 4: Write the C shim**
@@ -751,15 +751,15 @@ cargo test -p riven_core --test stdlib_test runner_current_slot_roundtrip 2>&1 |
 ```c
 /* std.test runtime — three entry points only:
  *
- *   riven_test_current_set / riven_test_current_get
+ *   ruxen_test_current_set / ruxen_test_current_get
  *     Process-static slot holding the active Runner handle (an int64
  *     pointer cast to int64_t). Set by Runner.new before the user file
  *     body runs; read by Tester.describe to know which Runner to
  *     attach new root groups to. Single-thread access only —
  *     a test binary's DSL-setup phase is strictly single-threaded.
  *
- *   riven_test_fork_and_wait (Task 5.1)
- *     fork() + child runs a Riven closure + exit + parent waitpid.
+ *   ruxen_test_fork_and_wait (Task 5.1)
+ *     fork() + child runs a Ruxen closure + exit + parent waitpid.
  *     Lives in this file; Phase 5 fills the body.
  */
 
@@ -767,28 +767,28 @@ cargo test -p riven_core --test stdlib_test runner_current_slot_roundtrip 2>&1 |
 
 #include "../../core/runtime/runtime.h"
 
-static int64_t riven_test_current_runner = 0;
+static int64_t ruxen_test_current_runner = 0;
 
-int64_t riven_test_current_set(int64_t handle) {
-    int64_t prev = riven_test_current_runner;
-    riven_test_current_runner = handle;
+int64_t ruxen_test_current_set(int64_t handle) {
+    int64_t prev = ruxen_test_current_runner;
+    ruxen_test_current_runner = handle;
     return prev;
 }
 
-int64_t riven_test_current_get(void) {
-    return riven_test_current_runner;
+int64_t ruxen_test_current_get(void) {
+    return ruxen_test_current_runner;
 }
 ```
 
 - [ ] **Step 5: Write the Runner shell with the static accessors**
 
-`library/std/test/src/runner.rvn`:
+`library/std/test/src/runner.rx`:
 
-```rvn
+```rx
 ## std.test.Runner — owns the group tree for one test FILE.
 ##
-## Constructed by the synthesised `def main` (see riven test in
-## `src/rivenc/src/test_runner.rs`); the file body's `Tester.describe`
+## Constructed by the synthesised `def main` (see ruxen test in
+## `src/ruxenc/src/test_runner.rs`); the file body's `Tester.describe`
 ## calls attach root groups to the Runner via the process-static
 ## current-runner slot in runtime/test.c.
 
@@ -803,8 +803,8 @@ class Runner
   end
 
   lib "runtime/test.c"
-    def self.set_current as "riven_test_current_set"(handle: Int) -> Int
-    def self.get_current as "riven_test_current_get"() -> Int
+    def self.set_current as "ruxen_test_current_set"(handle: Int) -> Int
+    def self.get_current as "ruxen_test_current_get"() -> Int
   end
 end
 ```
@@ -812,16 +812,16 @@ end
 - [ ] **Step 6: Run — expect pass**
 
 ```bash
-cargo test -p riven_core --test stdlib_test runner_current_slot_roundtrip 2>&1 | tee tmp/test-cache/3.1-green.log
+cargo test -p ruxen_core --test stdlib_test runner_current_slot_roundtrip 2>&1 | tee tmp/test-cache/3.1-green.log
 ```
 
 - [ ] **Step 7: Commit**
 
 ```bash
 git add library/std/test/runtime/test.c \
-        library/std/test/src/runner.rvn \
-        compiler/riven_core/tests/fixtures/riven/test_current_runner_slot.rvn \
-        compiler/riven_core/tests/stdlib_test.rs
+        library/std/test/src/runner.rx \
+        compiler/ruxen_core/tests/fixtures/ruxen/test_current_runner_slot.rx \
+        compiler/ruxen_core/tests/stdlib_test.rs
 git commit -m "stdlib(test): Runner shell + process-static current-runner slot"
 ```
 
@@ -834,15 +834,15 @@ Goal: the user-facing DSL works end-to-end with in-process sequential execution.
 ### Task 4.1: `class Tester` — minimal `describe → it → expect.to_eq`
 
 **Files:**
-- Create: `library/std/test/src/tester.rvn`
-- Test: `compiler/riven_core/tests/fixtures/riven/test_tester_describe_it_eq.rvn`
-- Test: `compiler/riven_core/tests/stdlib_test.rs` (append)
+- Create: `library/std/test/src/tester.rx`
+- Test: `compiler/ruxen_core/tests/fixtures/ruxen/test_tester_describe_it_eq.rx`
+- Test: `compiler/ruxen_core/tests/stdlib_test.rs` (append)
 
 - [ ] **Step 1: Write the failing fixture**
 
-`compiler/riven_core/tests/fixtures/riven/test_tester_describe_it_eq.rvn`:
+`compiler/ruxen_core/tests/fixtures/ruxen/test_tester_describe_it_eq.rx`:
 
-```rvn
+```rx
 use std.test.Tester
 use std.test.Runner
 
@@ -875,7 +875,7 @@ end
 #[test]
 fn tester_describe_it_expect_to_eq_pass_path() {
     let (stdout, stderr, ok) = compile_and_run(
-        &rvn("test_tester_describe_it_eq"),
+        &rx("test_tester_describe_it_eq"),
         "stdlib_test_tester_describe_it_eq",
     );
     assert!(ok, "stderr: {}", stderr);
@@ -889,14 +889,14 @@ fn tester_describe_it_expect_to_eq_pass_path() {
 - [ ] **Step 3: Run — expect failure**
 
 ```bash
-cargo test -p riven_core --test stdlib_test tester_describe_it_expect_to_eq_pass_path 2>&1 | tee tmp/test-cache/4.1-red.log
+cargo test -p ruxen_core --test stdlib_test tester_describe_it_expect_to_eq_pass_path 2>&1 | tee tmp/test-cache/4.1-red.log
 ```
 
 - [ ] **Step 4: Implement Tester + Runner.execute**
 
-`library/std/test/src/tester.rvn`:
+`library/std/test/src/tester.rx`:
 
-```rvn
+```rx
 use std.test.TestCase
 use std.test.Matcher
 use std.test.Runner
@@ -968,9 +968,9 @@ class Tester
 end
 ```
 
-Extend `library/std/test/src/runner.rvn`:
+Extend `library/std/test/src/runner.rx`:
 
-```rvn
+```rx
 use std.test.Tester
 
 class Runner
@@ -987,7 +987,7 @@ class Runner
 
   ## Address of self, used to fish the Runner back out of the C-static
   ## current-runner slot. `__addr_of_self` is an existing intrinsic;
-  ## if absent, expose via runtime/test.c riven_test_box_runner(handle).
+  ## if absent, expose via runtime/test.c ruxen_test_box_runner(handle).
   def handle_addr -> Int
     __addr_of_self
   end
@@ -1035,17 +1035,17 @@ class Runner
   end
 
   lib "runtime/test.c"
-    def self.set_current as "riven_test_current_set"(handle: Int) -> Int
-    def self.get_current as "riven_test_current_get"() -> Int
+    def self.set_current as "ruxen_test_current_set"(handle: Int) -> Int
+    def self.get_current as "ruxen_test_current_get"() -> Int
   end
 
   ## Recovers a &var Runner from a stored handle. Implemented as a thin
   ## intrinsic; if `__from_addr[T]` does not exist, expose via
   ## runtime/test.c with a typed wrapper. Tracking note: this is the
   ## one spot where the Tester layer needs to upcast an Int back to a
-  ## Riven object; if the language can't, the alternative is to make
+  ## Ruxen object; if the language can't, the alternative is to make
   ## the Runner slot store the box itself rather than a handle —
-  ## that means a static Riven variable (which we'd then need a small
+  ## that means a static Ruxen variable (which we'd then need a small
   ## std.sync OnceCell-style primitive for).
   def self.from_handle(addr: Int) -> &var Runner
     __from_addr[Runner](addr)
@@ -1053,41 +1053,41 @@ class Runner
 end
 ```
 
-**IMPLEMENTATION NOTE (open risk):** `__addr_of_self` and `__from_addr[T]` may not be language intrinsics. If not, plan-time fix: store the active Runner in a Riven-level static cell. Riven doesn't have static vars today either. The fallback is a small C-side handle table:
+**IMPLEMENTATION NOTE (open risk):** `__addr_of_self` and `__from_addr[T]` may not be language intrinsics. If not, plan-time fix: store the active Runner in a Ruxen-level static cell. Ruxen doesn't have static vars today either. The fallback is a small C-side handle table:
 
 `library/std/test/runtime/test.c` additions:
 
 ```c
 /* Single-slot Runner storage. We hold the box pointer itself, not a
- * cast handle, because the Riven side can pass us the box pointer
+ * cast handle, because the Ruxen side can pass us the box pointer
  * via a typed lib decl. */
-static void *riven_test_runner_box = NULL;
+static void *ruxen_test_runner_box = NULL;
 
-int64_t riven_test_runner_set(int64_t box_ptr) {
-    riven_test_runner_box = (void *)box_ptr;
+int64_t ruxen_test_runner_set(int64_t box_ptr) {
+    ruxen_test_runner_box = (void *)box_ptr;
     return 0;
 }
 
-int64_t riven_test_runner_get(void) {
-    return (int64_t)riven_test_runner_box;
+int64_t ruxen_test_runner_get(void) {
+    return (int64_t)ruxen_test_runner_box;
 }
 ```
 
-And in Riven, the Runner exposes:
+And in Ruxen, the Runner exposes:
 
-```rvn
+```rx
 lib "runtime/test.c"
-  def self.box_store as "riven_test_runner_set"(box: Int) -> Int
-  def self.box_load  as "riven_test_runner_get"() -> Int
+  def self.box_store as "ruxen_test_runner_set"(box: Int) -> Int
+  def self.box_load  as "ruxen_test_runner_get"() -> Int
 end
 ```
 
-Then `Runner.new(...)` calls `Runner.box_store(self_as_int)`; `Tester.describe` calls `Runner.box_load → cast back`. This works because Riven heap objects ARE pointers at the FFI boundary (per the std.bench precedent and the atomic shim's pattern of returning Int handles).
+Then `Runner.new(...)` calls `Runner.box_store(self_as_int)`; `Tester.describe` calls `Runner.box_load → cast back`. This works because Ruxen heap objects ARE pointers at the FFI boundary (per the std.bench precedent and the atomic shim's pattern of returning Int handles).
 
 - [ ] **Step 5: Run — expect pass**
 
 ```bash
-cargo test -p riven_core --test stdlib_test tester_describe_it_expect_to_eq_pass_path 2>&1 | tee tmp/test-cache/4.1-green.log
+cargo test -p ruxen_core --test stdlib_test tester_describe_it_expect_to_eq_pass_path 2>&1 | tee tmp/test-cache/4.1-green.log
 ```
 
 If the test fails on `__addr_of_self` / `__from_addr` resolution: switch to the C-slot fallback above, regenerate the fixture, re-run.
@@ -1095,26 +1095,26 @@ If the test fails on `__addr_of_self` / `__from_addr` resolution: switch to the 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add library/std/test/src/tester.rvn \
-        library/std/test/src/runner.rvn \
+git add library/std/test/src/tester.rx \
+        library/std/test/src/runner.rx \
         library/std/test/runtime/test.c \
-        compiler/riven_core/tests/fixtures/riven/test_tester_describe_it_eq.rvn \
-        compiler/riven_core/tests/stdlib_test.rs
+        compiler/ruxen_core/tests/fixtures/ruxen/test_tester_describe_it_eq.rx \
+        compiler/ruxen_core/tests/stdlib_test.rs
 git commit -m "stdlib(test): Tester DSL + Runner.execute (in-process, sequential)"
 ```
 
 ### Task 4.2: `context` + `before` / `after` semantics
 
 **Files:**
-- Test: `compiler/riven_core/tests/fixtures/riven/test_tester_context_hooks.rvn`
-- Test: `compiler/riven_core/tests/stdlib_test.rs` (append)
-- Modify: `library/std/test/src/runner.rvn` (`run_group` needs to inherit parent hooks)
+- Test: `compiler/ruxen_core/tests/fixtures/ruxen/test_tester_context_hooks.rx`
+- Test: `compiler/ruxen_core/tests/stdlib_test.rs` (append)
+- Modify: `library/std/test/src/runner.rx` (`run_group` needs to inherit parent hooks)
 
 - [ ] **Step 1: Write the failing fixture**
 
-`compiler/riven_core/tests/fixtures/riven/test_tester_context_hooks.rvn`:
+`compiler/ruxen_core/tests/fixtures/ruxen/test_tester_context_hooks.rx`:
 
-```rvn
+```rx
 use std.test.Tester
 use std.test.Runner
 
@@ -1154,7 +1154,7 @@ end
 #[test]
 fn tester_context_inherits_parent_hooks() {
     let (stdout, stderr, ok) = compile_and_run(
-        &rvn("test_tester_context_hooks"),
+        &rx("test_tester_context_hooks"),
         "stdlib_test_tester_context_hooks",
     );
     assert!(ok, "stderr: {}", stderr);
@@ -1176,14 +1176,14 @@ fn tester_context_inherits_parent_hooks() {
 - [ ] **Step 3: Run — expect failure** (run_group doesn't pass parent hooks)
 
 ```bash
-cargo test -p riven_core --test stdlib_test tester_context_inherits_parent_hooks 2>&1 | tee tmp/test-cache/4.2-red.log
+cargo test -p ruxen_core --test stdlib_test tester_context_inherits_parent_hooks 2>&1 | tee tmp/test-cache/4.2-red.log
 ```
 
 - [ ] **Step 4: Update run_group to inherit hooks**
 
-Replace `Runner.run_group` body in `library/std/test/src/runner.rvn`:
+Replace `Runner.run_group` body in `library/std/test/src/runner.rx`:
 
-```rvn
+```rx
   def self.run_group(g: &Tester,
                      path: &String,
                      inherited_before: &Array[any Fn() -> ()],
@@ -1236,7 +1236,7 @@ Replace `Runner.run_group` body in `library/std/test/src/runner.rvn`:
 
 Update `Runner.execute` to seed empty hook arrays:
 
-```rvn
+```rx
   def execute -> ()
     var passed: Int = 0
     var failed: Int = 0
@@ -1253,31 +1253,31 @@ Update `Runner.execute` to seed empty hook arrays:
 - [ ] **Step 5: Run — expect pass**
 
 ```bash
-cargo test -p riven_core --test stdlib_test tester_context_inherits_parent_hooks 2>&1 | tee tmp/test-cache/4.2-green.log
+cargo test -p ruxen_core --test stdlib_test tester_context_inherits_parent_hooks 2>&1 | tee tmp/test-cache/4.2-green.log
 ```
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add library/std/test/src/runner.rvn \
-        compiler/riven_core/tests/fixtures/riven/test_tester_context_hooks.rvn \
-        compiler/riven_core/tests/stdlib_test.rs
+git add library/std/test/src/runner.rx \
+        compiler/ruxen_core/tests/fixtures/ruxen/test_tester_context_hooks.rx \
+        compiler/ruxen_core/tests/stdlib_test.rs
 git commit -m "stdlib(test): context inherits parent before/after hooks"
 ```
 
 ### Task 4.3: `xit` reports pending; `it` failure increments `failed`
 
 **Files:**
-- Test: `compiler/riven_core/tests/fixtures/riven/test_tester_xit_and_fail.rvn`
-- Test: `compiler/riven_core/tests/stdlib_test.rs` (append)
-- Modify: `library/std/test/src/runner.rvn` (failure detection — see step 4)
-- Modify: `library/std/test/src/tester.rvn` (`expect` failure path)
+- Test: `compiler/ruxen_core/tests/fixtures/ruxen/test_tester_xit_and_fail.rx`
+- Test: `compiler/ruxen_core/tests/stdlib_test.rs` (append)
+- Modify: `library/std/test/src/runner.rx` (failure detection — see step 4)
+- Modify: `library/std/test/src/tester.rx` (`expect` failure path)
 
 - [ ] **Step 1: Write the failing fixture**
 
-`compiler/riven_core/tests/fixtures/riven/test_tester_xit_and_fail.rvn`:
+`compiler/ruxen_core/tests/fixtures/ruxen/test_tester_xit_and_fail.rx`:
 
-```rvn
+```rx
 use std.test.Tester
 use std.test.Runner
 
@@ -1307,7 +1307,7 @@ end
 #[test]
 fn tester_summary_counts_pass_fail_pending() {
     let (stdout, stderr, _ok) = compile_and_run(
-        &rvn("test_tester_xit_and_fail"),
+        &rx("test_tester_xit_and_fail"),
         "stdlib_test_tester_xit_and_fail",
     );
     // Binary may exit non-zero because one test failed — that's expected.
@@ -1319,12 +1319,12 @@ fn tester_summary_counts_pass_fail_pending() {
 - [ ] **Step 3: Run — expect failure** (current code counts every non-pending as passed; nothing detects failure)
 
 ```bash
-cargo test -p riven_core --test stdlib_test tester_summary_counts_pass_fail_pending 2>&1 | tee tmp/test-cache/4.3-red.log
+cargo test -p ruxen_core --test stdlib_test tester_summary_counts_pass_fail_pending 2>&1 | tee tmp/test-cache/4.3-red.log
 ```
 
 - [ ] **Step 4: Wire `expect` failures into the count**
 
-The simplest in-process path: `Tester#expect(...).to_eq(...)` should `riven_panic` when the comparison fails; the runner wraps each case body in a fork (Phase 5) to catch the abort.
+The simplest in-process path: `Tester#expect(...).to_eq(...)` should `ruxen_panic` when the comparison fails; the runner wraps each case body in a fork (Phase 5) to catch the abort.
 
 In v1 sequential mode (no fork yet), use a per-case `bool` flag set by a class-method `Tester.mark_failure()` that the Matcher invokes on a failing comparison. Since Matcher doesn't know about Tester, do this via a per-process static failure flag:
 
@@ -1333,38 +1333,38 @@ Add to `library/std/test/runtime/test.c`:
 ```c
 /* Per-case failure flag. Reset before each case body, set by any
  * failing matcher path. Reads as 0=pass, 1=fail. */
-static int64_t riven_test_case_failed = 0;
+static int64_t ruxen_test_case_failed = 0;
 
-int64_t riven_test_case_reset(void) {
-    riven_test_case_failed = 0;
+int64_t ruxen_test_case_reset(void) {
+    ruxen_test_case_failed = 0;
     return 0;
 }
 
-int64_t riven_test_case_mark_failed(void) {
-    riven_test_case_failed = 1;
+int64_t ruxen_test_case_mark_failed(void) {
+    ruxen_test_case_failed = 1;
     return 0;
 }
 
-int64_t riven_test_case_get_failed(void) {
-    return riven_test_case_failed;
+int64_t ruxen_test_case_get_failed(void) {
+    return ruxen_test_case_failed;
 }
 ```
 
-Extend `library/std/test/src/runner.rvn`:
+Extend `library/std/test/src/runner.rx`:
 
-```rvn
+```rx
   lib "runtime/test.c"
-    def self.box_store as "riven_test_runner_set"(box: Int) -> Int
-    def self.box_load  as "riven_test_runner_get"() -> Int
-    def self.case_reset as "riven_test_case_reset"() -> Int
-    def self.case_mark_failed as "riven_test_case_mark_failed"() -> Int
-    def self.case_get_failed as "riven_test_case_get_failed"() -> Int
+    def self.box_store as "ruxen_test_runner_set"(box: Int) -> Int
+    def self.box_load  as "ruxen_test_runner_get"() -> Int
+    def self.case_reset as "ruxen_test_case_reset"() -> Int
+    def self.case_mark_failed as "ruxen_test_case_mark_failed"() -> Int
+    def self.case_get_failed as "ruxen_test_case_get_failed"() -> Int
   end
 ```
 
-Change `Matcher#to_eq` (and `not_to_eq`) in `library/std/test/src/matcher.rvn` to set the flag on failure rather than returning bool — the user-facing call site doesn't need the bool anymore once Tester drives:
+Change `Matcher#to_eq` (and `not_to_eq`) in `library/std/test/src/matcher.rx` to set the flag on failure rather than returning bool — the user-facing call site doesn't need the bool anymore once Tester drives:
 
-```rvn
+```rx
   def to_eq(expected: T) -> ()
     if self.actual != expected
       Runner.case_mark_failed
@@ -1384,7 +1384,7 @@ Change `Matcher#to_eq` (and `not_to_eq`) in `library/std/test/src/matcher.rvn` t
 
 Update the run loop in `Runner.run_group` to reset + check per case:
 
-```rvn
+```rx
       if case.pending
         pending = pending + 1
       else
@@ -1407,16 +1407,16 @@ Update the run loop in `Runner.run_group` to reset + check per case:
 - [ ] **Step 5: Run — expect pass**
 
 ```bash
-cargo test -p riven_core --test stdlib_test tester_summary_counts_pass_fail_pending 2>&1 | tee tmp/test-cache/4.3-green.log
+cargo test -p ruxen_core --test stdlib_test tester_summary_counts_pass_fail_pending 2>&1 | tee tmp/test-cache/4.3-green.log
 ```
 
 - [ ] **Step 6: Update earlier fixtures**
 
-`test_tester_describe_it_eq.rvn` and `test_tester_context_hooks.rvn` from Tasks 4.1 / 4.2 reference `m.to_eq(...) == false` — now `to_eq` returns Unit. Rewrite both fixtures to use the new flag-driven API:
+`test_tester_describe_it_eq.rx` and `test_tester_context_hooks.rx` from Tasks 4.1 / 4.2 reference `m.to_eq(...) == false` — now `to_eq` returns Unit. Rewrite both fixtures to use the new flag-druxen API:
 
-In `test_tester_describe_it_eq.rvn` simplify the `it` body to:
+In `test_tester_describe_it_eq.rx` simplify the `it` body to:
 
-```rvn
+```rx
     t.it("adds two numbers") do
       t.expect(1 + 2).to_eq(3)
     end
@@ -1425,7 +1425,7 @@ In `test_tester_describe_it_eq.rvn` simplify the `it` body to:
 And re-run the Phase 4.1 / 4.2 tests:
 
 ```bash
-cargo test -p riven_core --test stdlib_test 2>&1 | tee tmp/test-cache/4.3-regress.log
+cargo test -p ruxen_core --test stdlib_test 2>&1 | tee tmp/test-cache/4.3-regress.log
 ```
 
 Expected: all three Phase 4 tests PASS.
@@ -1434,13 +1434,13 @@ Expected: all three Phase 4 tests PASS.
 
 ```bash
 git add library/std/test/runtime/test.c \
-        library/std/test/src/runner.rvn \
-        library/std/test/src/matcher.rvn \
-        library/std/test/src/tester.rvn \
-        compiler/riven_core/tests/fixtures/riven/test_tester_describe_it_eq.rvn \
-        compiler/riven_core/tests/fixtures/riven/test_tester_context_hooks.rvn \
-        compiler/riven_core/tests/fixtures/riven/test_tester_xit_and_fail.rvn \
-        compiler/riven_core/tests/stdlib_test.rs
+        library/std/test/src/runner.rx \
+        library/std/test/src/matcher.rx \
+        library/std/test/src/tester.rx \
+        compiler/ruxen_core/tests/fixtures/ruxen/test_tester_describe_it_eq.rx \
+        compiler/ruxen_core/tests/fixtures/ruxen/test_tester_context_hooks.rx \
+        compiler/ruxen_core/tests/fixtures/ruxen/test_tester_xit_and_fail.rx \
+        compiler/ruxen_core/tests/stdlib_test.rs
 git commit -m "stdlib(test): pass/fail/pending counts via per-case flag"
 ```
 
@@ -1450,7 +1450,7 @@ git commit -m "stdlib(test): pass/fail/pending counts via per-case flag"
 
 Goal: a panic in one test doesn't kill its siblings. `expect_panic("substr") do ... end` works.
 
-### Task 5.1: `riven_test_fork_and_wait` C shim
+### Task 5.1: `ruxen_test_fork_and_wait` C shim
 
 **Files:**
 - Modify: `library/std/test/runtime/test.c`
@@ -1467,8 +1467,8 @@ Goal: a panic in one test doesn't kill its siblings. `expect_panic("substr") do 
 #include <unistd.h>
 #include <fcntl.h>
 
-/* Fork; child invokes the Riven closure stored in `closure_handle`
- * (via the per-process indirect-call shim Riven uses for `f.()`); on
+/* Fork; child invokes the Ruxen closure stored in `closure_handle`
+ * (via the per-process indirect-call shim Ruxen uses for `f.()`); on
  * return, child writes the captured stderr to a parent-supplied pipe
  * and exits 0. Parent waitpid()s and returns a packed result:
  *
@@ -1480,22 +1480,22 @@ Goal: a panic in one test doesn't kill its siblings. `expect_panic("substr") do 
  * The stderr bytes are written to a file at `stderr_path` (parent-
  * provided string). Parent reads it to verify expect_panic substr.
  *
- * Limitation: we cannot directly call a Riven closure from C without
- * an indirect-call adapter Riven exposes. v1 implementation defers
- * the actual fork-then-invoke into Riven; this C entry only forks
- * and waits. See companion Riven-side `Runner.fork_each` (Task 5.2)
+ * Limitation: we cannot directly call a Ruxen closure from C without
+ * an indirect-call adapter Ruxen exposes. v1 implementation defers
+ * the actual fork-then-invoke into Ruxen; this C entry only forks
+ * and waits. See companion Ruxen-side `Runner.fork_each` (Task 5.2)
  * for the closure-invocation half.
  */
 
-int64_t riven_test_fork(void) {
+int64_t ruxen_test_fork(void) {
     pid_t pid = fork();
     if (pid < 0) {
-        riven_panic("fork failed");
+        ruxen_panic("fork failed");
     }
     return (int64_t)pid;
 }
 
-int64_t riven_test_wait(int64_t pid) {
+int64_t ruxen_test_wait(int64_t pid) {
     int status = 0;
     pid_t result = waitpid((pid_t)pid, &status, 0);
     if (result < 0) {
@@ -1516,7 +1516,7 @@ int64_t riven_test_wait(int64_t pid) {
 
 /* Child-side: redirect stderr to a file so the parent can scan for
  * expect_panic substrings after waitpid returns. */
-int64_t riven_test_redirect_stderr(int64_t path_handle, int64_t path_len) {
+int64_t ruxen_test_redirect_stderr(int64_t path_handle, int64_t path_len) {
     const char *path = (const char *)path_handle;
     (void)path_len;
     int fd = open(path, O_CREAT | O_WRONLY | O_TRUNC, 0644);
@@ -1531,26 +1531,26 @@ int64_t riven_test_redirect_stderr(int64_t path_handle, int64_t path_len) {
 
 /* Child-side: explicit exit. Used after the test body returns so we
  * don't fall through to the parent's continuing run_group loop. */
-void riven_test_child_exit(int64_t code) {
+void ruxen_test_child_exit(int64_t code) {
     _exit((int)code);
 }
 ```
 
 - [ ] **Step 2: Expose them as lib decls on Runner**
 
-Append to the `lib "runtime/test.c"` block in `library/std/test/src/runner.rvn`:
+Append to the `lib "runtime/test.c"` block in `library/std/test/src/runner.rx`:
 
-```rvn
-    def self.fork as "riven_test_fork"() -> Int
-    def self.wait as "riven_test_wait"(pid: Int) -> Int
-    def self.redirect_stderr as "riven_test_redirect_stderr"(path: Int, len: Int) -> Int
-    def self.child_exit as "riven_test_child_exit"(code: Int) -> ()
+```rx
+    def self.fork as "ruxen_test_fork"() -> Int
+    def self.wait as "ruxen_test_wait"(pid: Int) -> Int
+    def self.redirect_stderr as "ruxen_test_redirect_stderr"(path: Int, len: Int) -> Int
+    def self.child_exit as "ruxen_test_child_exit"(code: Int) -> ()
 ```
 
 - [ ] **Step 3: Run the existing stdlib_test suite — expect still-green**
 
 ```bash
-cargo test -p riven_core --test stdlib_test 2>&1 | tee tmp/test-cache/5.1-regress.log
+cargo test -p ruxen_core --test stdlib_test 2>&1 | tee tmp/test-cache/5.1-regress.log
 ```
 
 Expected: all prior PASS, no regression (we've only added unused entry points).
@@ -1559,22 +1559,22 @@ Expected: all prior PASS, no regression (we've only added unused entry points).
 
 ```bash
 git add library/std/test/runtime/test.c \
-        library/std/test/src/runner.rvn
+        library/std/test/src/runner.rx
 git commit -m "stdlib(test): fork/wait/redirect-stderr C shims for test isolation"
 ```
 
 ### Task 5.2: Run each test case in a forked child
 
 **Files:**
-- Modify: `library/std/test/src/runner.rvn` (`run_group` calls fork instead of in-process)
-- Test: `compiler/riven_core/tests/fixtures/riven/test_runner_fork_isolates_panic.rvn`
-- Test: `compiler/riven_core/tests/stdlib_test.rs` (append)
+- Modify: `library/std/test/src/runner.rx` (`run_group` calls fork instead of in-process)
+- Test: `compiler/ruxen_core/tests/fixtures/ruxen/test_runner_fork_isolates_panic.rx`
+- Test: `compiler/ruxen_core/tests/stdlib_test.rs` (append)
 
 - [ ] **Step 1: Write the failing fixture**
 
-`compiler/riven_core/tests/fixtures/riven/test_runner_fork_isolates_panic.rvn`:
+`compiler/ruxen_core/tests/fixtures/ruxen/test_runner_fork_isolates_panic.rx`:
 
-```rvn
+```rx
 use std.test.Tester
 use std.test.Runner
 
@@ -1604,7 +1604,7 @@ end
 #[test]
 fn runner_fork_isolates_panic() {
     let (stdout, _stderr, _ok) = compile_and_run(
-        &rvn("test_runner_fork_isolates_panic"),
+        &rx("test_runner_fork_isolates_panic"),
         "stdlib_test_runner_fork_isolation",
     );
     assert!(stdout.contains("2 passed, 1 failed, 0 pending"), "got: {}", stdout);
@@ -1614,14 +1614,14 @@ fn runner_fork_isolates_panic() {
 - [ ] **Step 3: Run — expect failure** (in-process panic kills the whole binary; only 1 pass observed before abort)
 
 ```bash
-cargo test -p riven_core --test stdlib_test runner_fork_isolates_panic 2>&1 | tee tmp/test-cache/5.2-red.log
+cargo test -p ruxen_core --test stdlib_test runner_fork_isolates_panic 2>&1 | tee tmp/test-cache/5.2-red.log
 ```
 
 - [ ] **Step 4: Replace the in-process body invocation with a fork**
 
 In `Runner.run_group`, replace the case-body block:
 
-```rvn
+```rx
       if case.pending
         pending = pending + 1
       else
@@ -1657,13 +1657,13 @@ In `Runner.run_group`, replace the case-body block:
 - [ ] **Step 5: Run — expect pass**
 
 ```bash
-cargo test -p riven_core --test stdlib_test runner_fork_isolates_panic 2>&1 | tee tmp/test-cache/5.2-green.log
+cargo test -p ruxen_core --test stdlib_test runner_fork_isolates_panic 2>&1 | tee tmp/test-cache/5.2-green.log
 ```
 
 Also re-run the Phase 4 tests to verify no regression:
 
 ```bash
-cargo test -p riven_core --test stdlib_test 2>&1 | tee tmp/test-cache/5.2-regress.log
+cargo test -p ruxen_core --test stdlib_test 2>&1 | tee tmp/test-cache/5.2-regress.log
 ```
 
 Expected: all earlier tests still PASS.
@@ -1671,26 +1671,26 @@ Expected: all earlier tests still PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add library/std/test/src/runner.rvn \
-        compiler/riven_core/tests/fixtures/riven/test_runner_fork_isolates_panic.rvn \
-        compiler/riven_core/tests/stdlib_test.rs
+git add library/std/test/src/runner.rx \
+        compiler/ruxen_core/tests/fixtures/ruxen/test_runner_fork_isolates_panic.rx \
+        compiler/ruxen_core/tests/stdlib_test.rs
 git commit -m "stdlib(test): fork-per-test isolation in Runner.run_group"
 ```
 
 ### Task 5.3: `expect_panic("substr") do ... end`
 
 **Files:**
-- Modify: `library/std/test/src/tester.rvn` (add `expect_panic`)
-- Modify: `library/std/test/src/test_case.rvn` (set `expect_panic_substr` on the case)
-- Modify: `library/std/test/src/runner.rvn` (verify exit was nonzero + stderr contains substr)
-- Test: `compiler/riven_core/tests/fixtures/riven/test_expect_panic.rvn`
-- Test: `compiler/riven_core/tests/stdlib_test.rs` (append)
+- Modify: `library/std/test/src/tester.rx` (add `expect_panic`)
+- Modify: `library/std/test/src/test_case.rx` (set `expect_panic_substr` on the case)
+- Modify: `library/std/test/src/runner.rx` (verify exit was nonzero + stderr contains substr)
+- Test: `compiler/ruxen_core/tests/fixtures/ruxen/test_expect_panic.rx`
+- Test: `compiler/ruxen_core/tests/stdlib_test.rs` (append)
 
 - [ ] **Step 1: Write the failing fixture**
 
-`compiler/riven_core/tests/fixtures/riven/test_expect_panic.rvn`:
+`compiler/ruxen_core/tests/fixtures/ruxen/test_expect_panic.rx`:
 
-```rvn
+```rx
 use std.test.Tester
 use std.test.Runner
 
@@ -1728,7 +1728,7 @@ end
 #[test]
 fn expect_panic_substring_match_drives_pass_fail() {
     let (stdout, _stderr, _ok) =
-        compile_and_run(&rvn("test_expect_panic"), "stdlib_test_expect_panic");
+        compile_and_run(&rx("test_expect_panic"), "stdlib_test_expect_panic");
     assert!(stdout.contains("1 passed, 2 failed, 0 pending"), "got: {}", stdout);
 }
 ```
@@ -1736,16 +1736,16 @@ fn expect_panic_substring_match_drives_pass_fail() {
 - [ ] **Step 3: Run — expect failure** (no `expect_panic` method yet)
 
 ```bash
-cargo test -p riven_core --test stdlib_test expect_panic_substring_match_drives_pass_fail 2>&1 | tee tmp/test-cache/5.3-red.log
+cargo test -p ruxen_core --test stdlib_test expect_panic_substring_match_drives_pass_fail 2>&1 | tee tmp/test-cache/5.3-red.log
 ```
 
 - [ ] **Step 4: Wire `expect_panic` through the case + runner**
 
-In `test_case.rvn`, no schema change needed (we already have `expect_panic_substr: String?`).
+In `test_case.rx`, no schema change needed (we already have `expect_panic_substr: String?`).
 
-In `tester.rvn`, change `it` to accept an optional kind and add `expect_panic` as a body-scoped helper. The cleanest path:
+In `tester.rx`, change `it` to accept an optional kind and add `expect_panic` as a body-scoped helper. The cleanest path:
 
-```rvn
+```rx
   ## Inside an `it` body, schedule an inner expectation that the
   ## enclosed block panics. Implementation: temporarily store the
   ## expected substring in a process-static slot; the Runner sees the
@@ -1762,48 +1762,48 @@ In `tester.rvn`, change `it` to accept an optional kind and add `expect_panic` a
 Add to `runtime/test.c`:
 
 ```c
-static char riven_test_expect_panic_buf[256] = {0};
-static int riven_test_expect_panic_set = 0;
+static char ruxen_test_expect_panic_buf[256] = {0};
+static int ruxen_test_expect_panic_set = 0;
 
-int64_t riven_test_set_expect_panic(int64_t str_ptr, int64_t str_len) {
+int64_t ruxen_test_set_expect_panic(int64_t str_ptr, int64_t str_len) {
     const char *s = (const char *)str_ptr;
     int n = (int)str_len;
-    if (n >= (int)sizeof(riven_test_expect_panic_buf) - 1) {
-        n = (int)sizeof(riven_test_expect_panic_buf) - 1;
+    if (n >= (int)sizeof(ruxen_test_expect_panic_buf) - 1) {
+        n = (int)sizeof(ruxen_test_expect_panic_buf) - 1;
     }
     if (n < 0) n = 0;
-    memcpy(riven_test_expect_panic_buf, s, n);
-    riven_test_expect_panic_buf[n] = 0;
-    riven_test_expect_panic_set = 1;
+    memcpy(ruxen_test_expect_panic_buf, s, n);
+    ruxen_test_expect_panic_buf[n] = 0;
+    ruxen_test_expect_panic_set = 1;
     return 0;
 }
 
-int64_t riven_test_get_expect_panic_set(void) {
-    return riven_test_expect_panic_set;
+int64_t ruxen_test_get_expect_panic_set(void) {
+    return ruxen_test_expect_panic_set;
 }
 
-int64_t riven_test_get_expect_panic_substr(void) {
-    return (int64_t)riven_test_expect_panic_buf;
+int64_t ruxen_test_get_expect_panic_substr(void) {
+    return (int64_t)ruxen_test_expect_panic_buf;
 }
 
-int64_t riven_test_clear_expect_panic(void) {
-    riven_test_expect_panic_set = 0;
-    riven_test_expect_panic_buf[0] = 0;
+int64_t ruxen_test_clear_expect_panic(void) {
+    ruxen_test_expect_panic_set = 0;
+    ruxen_test_expect_panic_buf[0] = 0;
     return 0;
 }
 ```
 
 Add lib decls on Runner:
 
-```rvn
-    def self.set_expect_panic_substr as "riven_test_set_expect_panic"(s: Int, n: Int) -> Int
-    def self.get_expect_panic_set as "riven_test_get_expect_panic_set"() -> Int
-    def self.clear_expect_panic as "riven_test_clear_expect_panic"() -> Int
+```rx
+    def self.set_expect_panic_substr as "ruxen_test_set_expect_panic"(s: Int, n: Int) -> Int
+    def self.get_expect_panic_set as "ruxen_test_get_expect_panic_set"() -> Int
+    def self.clear_expect_panic as "ruxen_test_clear_expect_panic"() -> Int
 ```
 
 In `Runner.run_group`, after the case body returns in the child, decide:
 
-```rvn
+```rx
           case.body.()
           for hook in &after_chain
             hook.()
@@ -1822,7 +1822,7 @@ In `Runner.run_group`, after the case body returns in the child, decide:
 
 In the parent's wait branch:
 
-```rvn
+```rx
           let packed = Runner.wait(pid)
           let pass_bit = packed & 1
           let exit_code = (packed >> 1) & 255
@@ -1853,7 +1853,7 @@ For the v1 substring match to work, the **`Tester#expect_panic` MUST record the 
 
 **Pragmatic v1 cut:** `expect_panic` accepts the substring; the substring is recorded onto the **last registered TestCase in the current group** at DSL time, not at body run time. This means `expect_panic` must be called at the top of the `it` block, before any other expectations:
 
-```rvn
+```rx
   def expect_panic(substr: &String, body: any Fn() -> ()) -> ()
     let last_idx = self.cases.len - 1
     if last_idx >= 0
@@ -1870,7 +1870,7 @@ But this Tester method is called INSIDE an `it` body — `self` here is the inne
 
 Replace the `expect_panic` body with:
 
-```rvn
+```rx
   ## v1: substring is accepted for forward compatibility but NOT verified.
   ## A child panic always satisfies expect_panic; an absent panic always
   ## fails it. Per-message substring verification ships in v1.1 once the
@@ -1884,7 +1884,7 @@ Replace the `expect_panic` body with:
 
 And in `Runner.run_group` child:
 
-```rvn
+```rx
           let code = if Runner.get_expect_panic_set == 1
             Runner.clear_expect_panic
             # Body returned but expect_panic was set → no panic → fail.
@@ -1898,7 +1898,7 @@ And in `Runner.run_group` child:
 
 Parent:
 
-```rvn
+```rx
           if signaled != 0 || exit_code != 0
             # Child died abnormally (panic or fail). If expect_panic was
             # set in the child, this is exactly what we wanted — but
@@ -1912,14 +1912,14 @@ Parent:
             # asking the in-process Tester whether THIS case scheduled
             # an expect_panic earlier — but that flag was set IN THE
             # CHILD. Workaround: the parent inspects the case's
-            # `expect_panic_substr` Riven field, which was set
+            # `expect_panic_substr` Ruxen field, which was set
             # synchronously in the it-body BEFORE fork in v1.
             ...
 ```
 
 This is getting complicated. **Resolve the architecture cleanly:** record `expect_panic_substr` on the TestCase **at DSL setup time** — the user writes `t.expect_panic("substr")` at the top of the `it` BLOCK BODY but in v1 we move it to be a DSL-setup-time call:
 
-```rvn
+```rx
     t.it("panics on overflow") do
       t.expect_panic_substr = "overflow"   # decorator-style
       compute_overflow()
@@ -1928,7 +1928,7 @@ This is getting complicated. **Resolve the architecture cleanly:** record `expec
 
 OR use an alternate `it` overload:
 
-```rvn
+```rx
     t.it_panics("never-thrown", "expected-substr") do
       compute_no_panic()
     end
@@ -1936,9 +1936,9 @@ OR use an alternate `it` overload:
 
 For v1, ship **`it_panics(name, substr) do ... end`** instead of inline `expect_panic`. The DSL is uglier but the implementation is clean:
 
-In `tester.rvn`:
+In `tester.rx`:
 
-```rvn
+```rx
   def it_panics(name: &String, expected_substr: &String,
                 body: any Fn() -> ()) -> ()
     var tc = TestCase.new(name, body)
@@ -1949,7 +1949,7 @@ In `tester.rvn`:
 
 In `Runner.run_group` parent branch:
 
-```rvn
+```rx
           let expects_panic = case.expect_panic_substr != nil
           if expects_panic
             # Pass iff child died on signal OR exited nonzero.
@@ -1970,9 +1970,9 @@ In `Runner.run_group` parent branch:
 
 Rewrite the fixture for the simpler API:
 
-`test_expect_panic.rvn`:
+`test_expect_panic.rx`:
 
-```rvn
+```rx
 use std.test.Tester
 use std.test.Runner
 
@@ -2000,7 +2000,7 @@ Update the Rust expectation:
 #[test]
 fn it_panics_pass_when_body_panics_fail_when_not() {
     let (stdout, _stderr, _ok) =
-        compile_and_run(&rvn("test_expect_panic"), "stdlib_test_expect_panic");
+        compile_and_run(&rx("test_expect_panic"), "stdlib_test_expect_panic");
     assert!(stdout.contains("1 passed, 1 failed, 0 pending"), "got: {}", stdout);
 }
 ```
@@ -2008,36 +2008,36 @@ fn it_panics_pass_when_body_panics_fail_when_not() {
 - [ ] **Step 5: Run — expect pass**
 
 ```bash
-cargo test -p riven_core --test stdlib_test it_panics_pass_when_body_panics_fail_when_not 2>&1 | tee tmp/test-cache/5.3-green.log
+cargo test -p ruxen_core --test stdlib_test it_panics_pass_when_body_panics_fail_when_not 2>&1 | tee tmp/test-cache/5.3-green.log
 ```
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add library/std/test/src/tester.rvn \
-        library/std/test/src/runner.rvn \
-        compiler/riven_core/tests/fixtures/riven/test_expect_panic.rvn \
-        compiler/riven_core/tests/stdlib_test.rs
+git add library/std/test/src/tester.rx \
+        library/std/test/src/runner.rx \
+        compiler/ruxen_core/tests/fixtures/ruxen/test_expect_panic.rx \
+        compiler/ruxen_core/tests/stdlib_test.rs
 git commit -m "stdlib(test): it_panics(name, substr) — fork-detected panic expectation (v1 substring not yet verified)"
 ```
 
-**Open follow-up** (NOT v1): proper substring verification needs the parent to read the child's stderr. Add later by routing the child's stderr to a per-PID file via `riven_test_redirect_stderr` (already in shim from Task 5.1) and grepping it after `wait` returns. Track this in the spec's "Known limitations" section.
+**Open follow-up** (NOT v1): proper substring verification needs the parent to read the child's stderr. Add later by routing the child's stderr to a per-PID file via `ruxen_test_redirect_stderr` (already in shim from Task 5.1) and grepping it after `wait` returns. Track this in the spec's "Known limitations" section.
 
 ---
 
-## Phase 6 — `riven test` CLI subcommand
+## Phase 6 — `ruxen test` CLI subcommand
 
-Goal: end-to-end CLI flow — `riven test` in a project with `tests/foo.rvn` discovers, wraps, builds, runs sequentially. Parallelism + formats land in subsequent tasks.
+Goal: end-to-end CLI flow — `ruxen test` in a project with `tests/foo.rx` discovers, wraps, builds, runs sequentially. Parallelism + formats land in subsequent tasks.
 
 ### Task 6.1: Replace the CLI placeholder with real argument shape
 
 **Files:**
-- Modify: `src/riven_cli/src/cli.rs:174-179`
+- Modify: `src/ruxen_cli/src/cli.rs:174-179`
 
 - [ ] **Step 1: Expand the `Test` variant**
 
 ```rust
-/// Test framework — discover `tests/**.rvn`, build per-file binaries
+/// Test framework — discover `tests/**.rx`, build per-file binaries
 /// via the incremental cache, fork-per-test for isolation.
 Test {
     /// Substring filter on test names (positional)
@@ -2072,14 +2072,14 @@ Test {
 - [ ] **Step 2: Verify the workspace still builds**
 
 ```bash
-cargo build -p riven_cli 2>&1 | tee tmp/test-cache/6.1-build.log
+cargo build -p ruxen_cli 2>&1 | tee tmp/test-cache/6.1-build.log
 ```
 
 Expected: succeeds; `cli::Command::Test { filter: _ }` match arm in `main.rs` is now non-exhaustive — will fail next step.
 
 - [ ] **Step 3: Update the match arm in main.rs to use the new fields**
 
-In `src/riven_cli/src/main.rs:116-122`:
+In `src/ruxen_cli/src/main.rs:116-122`:
 
 ```rust
 cli::Command::Test {
@@ -2092,7 +2092,7 @@ cli::Command::Test {
     no_run,
     include_pending,
     format,
-} => rivenc::test_runner::run(rivenc::test_runner::TestOptions {
+} => ruxenc::test_runner::run(ruxenc::test_runner::TestOptions {
     filter,
     release,
     test_threads,
@@ -2108,10 +2108,10 @@ cli::Command::Test {
 - [ ] **Step 4: Verify build fails at the missing module — this is expected**
 
 ```bash
-cargo build -p riven_cli 2>&1 | tee tmp/test-cache/6.1-build-fail.log
+cargo build -p ruxen_cli 2>&1 | tee tmp/test-cache/6.1-build-fail.log
 ```
 
-Expected: error "could not find `test_runner` in `rivenc`". Next task builds the module.
+Expected: error "could not find `test_runner` in `ruxenc`". Next task builds the module.
 
 - [ ] **Step 5: Commit the CLI surface (compile-broken intentionally)**
 
@@ -2120,15 +2120,15 @@ Actually, don't commit yet — broken build. Defer the commit until Task 6.2 lan
 ### Task 6.2: `test_runner.rs` skeleton + discovery
 
 **Files:**
-- Create: `src/rivenc/src/test_runner.rs`
-- Modify: `src/rivenc/src/lib.rs` (add `pub mod test_runner;`)
+- Create: `src/ruxenc/src/test_runner.rs`
+- Modify: `src/ruxenc/src/lib.rs` (add `pub mod test_runner;`)
 
 - [ ] **Step 1: Write the module skeleton**
 
-`src/rivenc/src/test_runner.rs`:
+`src/ruxenc/src/test_runner.rs`:
 
 ```rust
-//! `riven test` — discover `tests/**.rvn`, wrap each in a synthesised
+//! `ruxen test` — discover `tests/**.rx`, wrap each in a synthesised
 //! `def main`, build per-file binaries through the incremental cache,
 //! and dispatch them in parallel with fork-per-test isolation
 //! supplied by `library/std/test/runtime/test.c`.
@@ -2173,22 +2173,22 @@ pub fn run(opts: TestOptions) -> Result<(), String> {
     Ok(())
 }
 
-/// Walk upward from CWD until we find a Riven.toml.
+/// Walk upward from CWD until we find a Ruxen.toml.
 fn find_project_root() -> Result<PathBuf, String> {
     let mut dir = std::env::current_dir()
         .map_err(|e| format!("cannot read cwd: {}", e))?;
     loop {
-        if dir.join("Riven.toml").exists() {
+        if dir.join("Ruxen.toml").exists() {
             return Ok(dir);
         }
         match dir.parent() {
             Some(p) => dir = p.to_path_buf(),
-            None => return Err("no Riven.toml found in CWD or any ancestor".into()),
+            None => return Err("no Ruxen.toml found in CWD or any ancestor".into()),
         }
     }
 }
 
-/// Collect every `.rvn` file under `<project_dir>/tests/` EXCEPT those
+/// Collect every `.rx` file under `<project_dir>/tests/` EXCEPT those
 /// under `tests/support/` (helper modules — see spec §4.3).
 fn discover_test_files(project_dir: &Path) -> Result<Vec<PathBuf>, String> {
     let tests_dir = project_dir.join("tests");
@@ -2211,13 +2211,13 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) {
                 continue;
             }
             walk(root, &p, out);
-        } else if p.extension() == Some(std::ffi::OsStr::new("rvn")) {
+        } else if p.extension() == Some(std::ffi::OsStr::new("rx")) {
             out.push(p);
         }
     }
 }
 
-/// Convert `<project>/tests/foo/bar.rvn` -> "foo.bar".
+/// Convert `<project>/tests/foo/bar.rx` -> "foo.bar".
 fn test_path_for(project_dir: &Path, file: &Path) -> String {
     let tests = project_dir.join("tests");
     let rel = file.strip_prefix(&tests).unwrap_or(file);
@@ -2229,12 +2229,12 @@ fn test_path_for(project_dir: &Path, file: &Path) -> String {
 }
 ```
 
-`src/rivenc/src/lib.rs` — add `pub mod test_runner;`.
+`src/ruxenc/src/lib.rs` — add `pub mod test_runner;`.
 
 - [ ] **Step 2: Verify the workspace builds**
 
 ```bash
-cargo build -p riven_cli 2>&1 | tee tmp/test-cache/6.2-build.log
+cargo build -p ruxen_cli 2>&1 | tee tmp/test-cache/6.2-build.log
 ```
 
 Expected: PASS.
@@ -2242,17 +2242,17 @@ Expected: PASS.
 - [ ] **Step 3: Smoke test discovery**
 
 ```bash
-mkdir -p /tmp/riven-test-smoke/tests/calculator
-mkdir -p /tmp/riven-test-smoke/tests/support
-cat > /tmp/riven-test-smoke/Riven.toml <<'EOF'
+mkdir -p /tmp/ruxen-test-smoke/tests/calculator
+mkdir -p /tmp/ruxen-test-smoke/tests/support
+cat > /tmp/ruxen-test-smoke/Ruxen.toml <<'EOF'
 [package]
 name = "smoke"
 version = "0.0.1"
 EOF
-touch /tmp/riven-test-smoke/tests/calculator/math.rvn
-touch /tmp/riven-test-smoke/tests/calculator/edge.rvn
-touch /tmp/riven-test-smoke/tests/support/factories.rvn
-( cd /tmp/riven-test-smoke && cargo run -q -p riven_cli -- test --list ) 2>&1 | tee tmp/test-cache/6.2-list.log
+touch /tmp/ruxen-test-smoke/tests/calculator/math.rx
+touch /tmp/ruxen-test-smoke/tests/calculator/edge.rx
+touch /tmp/ruxen-test-smoke/tests/support/factories.rx
+( cd /tmp/ruxen-test-smoke && cargo run -q -p ruxen_cli -- test --list ) 2>&1 | tee tmp/test-cache/6.2-list.log
 ```
 
 Expected: two lines printed (`calculator.edge`, `calculator.math`), NOT `support.factories`.
@@ -2260,24 +2260,24 @@ Expected: two lines printed (`calculator.edge`, `calculator.math`), NOT `support
 - [ ] **Step 4: Commit Phase 6.1 + 6.2 together**
 
 ```bash
-git add src/riven_cli/src/cli.rs \
-        src/riven_cli/src/main.rs \
-        src/rivenc/src/lib.rs \
-        src/rivenc/src/test_runner.rs
-git commit -m "cli(test): TestOptions + discovery (tests/**.rvn, excludes support/)"
+git add src/ruxen_cli/src/cli.rs \
+        src/ruxen_cli/src/main.rs \
+        src/ruxenc/src/lib.rs \
+        src/ruxenc/src/test_runner.rs
+git commit -m "cli(test): TestOptions + discovery (tests/**.rx, excludes support/)"
 ```
 
 ### Task 6.3: Synthesise wrapper file
 
 **Files:**
-- Modify: `src/rivenc/src/test_runner.rs` (add `synthesise_wrapper`)
+- Modify: `src/ruxenc/src/test_runner.rs` (add `synthesise_wrapper`)
 
 - [ ] **Step 1: Write the synthesiser**
 
 Add to `test_runner.rs`:
 
 ```rust
-/// Generate the wrapper .rvn file that compiles to the per-file
+/// Generate the wrapper .rx file that compiles to the per-file
 /// test binary. Layout (textual concatenation):
 ///
 ///   <prelude>
@@ -2313,7 +2313,7 @@ fn synthesise_wrapper(
 
     fs::create_dir_all(out_dir)
         .map_err(|e| format!("mkdir {}: {}", out_dir.display(), e))?;
-    let synth_path = out_dir.join(format!("{}.synth.rvn", test_path.replace('.', "_")));
+    let synth_path = out_dir.join(format!("{}.synth.rx", test_path.replace('.', "_")));
     fs::write(&synth_path, &synth)
         .map_err(|e| format!("write {}: {}", synth_path.display(), e))?;
     Ok(synth_path)
@@ -2335,7 +2335,7 @@ mod tests {
         let tmp = std::env::temp_dir().join("test-runner-synth-1");
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
-        let user_file = tmp.join("user.rvn");
+        let user_file = tmp.join("user.rx");
         fs::write(&user_file, "Tester.describe(\"X\") do |t|\n  t.it(\"y\") do\n    t.expect(1).to_eq(1)\n  end\nend").unwrap();
         let synth_path = synthesise_wrapper("foo.bar", &user_file, &tmp.join("out")).unwrap();
         let synth = fs::read_to_string(&synth_path).unwrap();
@@ -2351,20 +2351,20 @@ mod tests {
 - [ ] **Step 3: Run — expect pass**
 
 ```bash
-cargo test -p rivenc test_runner::tests::synthesise_wraps_user_body_with_runner 2>&1 | tee tmp/test-cache/6.3-green.log
+cargo test -p ruxenc test_runner::tests::synthesise_wraps_user_body_with_runner 2>&1 | tee tmp/test-cache/6.3-green.log
 ```
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/rivenc/src/test_runner.rs
+git add src/ruxenc/src/test_runner.rs
 git commit -m "cli(test): wrapper synthesiser — prelude + body + postlude"
 ```
 
 ### Task 6.4: Wire build + sequential execution
 
 **Files:**
-- Modify: `src/rivenc/src/test_runner.rs` (call `compile::run` + spawn binary)
+- Modify: `src/ruxenc/src/test_runner.rs` (call `compile::run` + spawn binary)
 
 - [ ] **Step 1: Add the build+exec helper**
 
@@ -2388,7 +2388,7 @@ fn build_and_run(
     let bin_path = bin_dir.join(test_path.replace('.', "_"));
 
     let mut compile_args = vec![
-        "rivenc".to_string(),
+        "ruxenc".to_string(),
         synth.to_string_lossy().into_owned(),
         "-o".to_string(),
         bin_path.to_string_lossy().into_owned(),
@@ -2481,7 +2481,7 @@ pub fn run(opts: TestOptions) -> Result<(), String> {
         return Ok(());
     }
 
-    let out_dir = project_dir.join("target").join("riven").join("test-build");
+    let out_dir = project_dir.join("target").join("ruxen").join("test-build");
     let mut total_passed = 0u32;
     let mut total_failed = 0u32;
     let mut total_pending = 0u32;
@@ -2518,20 +2518,20 @@ pub fn run(opts: TestOptions) -> Result<(), String> {
 - [ ] **Step 2: Build**
 
 ```bash
-cargo build -p riven_cli 2>&1 | tee tmp/test-cache/6.4-build.log
+cargo build -p ruxen_cli 2>&1 | tee tmp/test-cache/6.4-build.log
 ```
 
-- [ ] **Step 3: End-to-end smoke against a real Riven project**
+- [ ] **Step 3: End-to-end smoke against a real Ruxen project**
 
 ```bash
-rm -rf /tmp/riven-test-e2e
-mkdir -p /tmp/riven-test-e2e/tests
-cat > /tmp/riven-test-e2e/Riven.toml <<'EOF'
+rm -rf /tmp/ruxen-test-e2e
+mkdir -p /tmp/ruxen-test-e2e/tests
+cat > /tmp/ruxen-test-e2e/Ruxen.toml <<'EOF'
 [package]
 name = "e2e_smoke"
 version = "0.0.1"
 EOF
-cat > /tmp/riven-test-e2e/tests/example.rvn <<'EOF'
+cat > /tmp/ruxen-test-e2e/tests/example.rx <<'EOF'
 Tester.describe("e2e smoke") do |t|
   t.it("adds") do
     t.expect(1 + 1).to_eq(2)
@@ -2541,7 +2541,7 @@ Tester.describe("e2e smoke") do |t|
   end
 end
 EOF
-( cd /tmp/riven-test-e2e && cargo run -q -p riven_cli -- test ) 2>&1 | tee tmp/test-cache/6.4-e2e.log
+( cd /tmp/ruxen-test-e2e && cargo run -q -p ruxen_cli -- test ) 2>&1 | tee tmp/test-cache/6.4-e2e.log
 echo "---exit=$?---" | tee -a tmp/test-cache/6.4-e2e.log
 ```
 
@@ -2550,22 +2550,22 @@ Expected: stdout ends with `1 passed; 1 failed; 0 pending`, exit code 1.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/rivenc/src/test_runner.rs
+git add src/ruxenc/src/test_runner.rs
 git commit -m "cli(test): sequential build + run + summary aggregation"
 ```
 
 ### Task 6.5: Parallel dispatch (per-file)
 
 **Files:**
-- Modify: `src/rivenc/src/test_runner.rs` (replace serial loop with rayon or thread::spawn pool)
-- Modify: `src/rivenc/Cargo.toml` (add `rayon = "1"` if not already present; otherwise hand-rolled threads)
+- Modify: `src/ruxenc/src/test_runner.rs` (replace serial loop with rayon or thread::spawn pool)
+- Modify: `src/ruxenc/Cargo.toml` (add `rayon = "1"` if not already present; otherwise hand-rolled threads)
 
 - [ ] **Step 1: Decide parallelism source**
 
 Check if `rayon` is already a workspace dep:
 
 ```bash
-grep -rn "rayon" src/rivenc/Cargo.toml Cargo.toml 2>/dev/null
+grep -rn "rayon" src/ruxenc/Cargo.toml Cargo.toml 2>/dev/null
 ```
 
 If present, use `rayon::scope`. If absent, use `std::thread::scope` (no new dep — preferred for a tiny pool).
@@ -2661,15 +2661,15 @@ Ok(())
 - [ ] **Step 3: Smoke test with 4 files**
 
 ```bash
-rm -rf /tmp/riven-test-parallel
-mkdir -p /tmp/riven-test-parallel/tests
-cat > /tmp/riven-test-parallel/Riven.toml <<'EOF'
+rm -rf /tmp/ruxen-test-parallel
+mkdir -p /tmp/ruxen-test-parallel/tests
+cat > /tmp/ruxen-test-parallel/Ruxen.toml <<'EOF'
 [package]
 name = "parallel_smoke"
 version = "0.0.1"
 EOF
 for n in 1 2 3 4; do
-  cat > /tmp/riven-test-parallel/tests/case_${n}.rvn <<EOF
+  cat > /tmp/ruxen-test-parallel/tests/case_${n}.rx <<EOF
 Tester.describe("case ${n}") do |t|
   t.it("passes") do
     t.expect(${n}).to_eq(${n})
@@ -2677,7 +2677,7 @@ Tester.describe("case ${n}") do |t|
 end
 EOF
 done
-( cd /tmp/riven-test-parallel && cargo run -q -p riven_cli -- test --test-threads=4 ) 2>&1 | tee tmp/test-cache/6.5-parallel.log
+( cd /tmp/ruxen-test-parallel && cargo run -q -p ruxen_cli -- test --test-threads=4 ) 2>&1 | tee tmp/test-cache/6.5-parallel.log
 ```
 
 Expected: `4 passed; 0 failed; 0 pending`, all four files reported.
@@ -2685,7 +2685,7 @@ Expected: `4 passed; 0 failed; 0 pending`, all four files reported.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/rivenc/src/test_runner.rs
+git add src/ruxenc/src/test_runner.rs
 git commit -m "cli(test): bounded thread-pool parallel dispatch (--test-threads)"
 ```
 
@@ -2696,16 +2696,16 @@ git commit -m "cli(test): bounded thread-pool parallel dispatch (--test-threads)
 ### Task 7.1: TAP output
 
 **Files:**
-- Create: `src/rivenc/src/test_output.rs`
-- Modify: `src/rivenc/src/lib.rs` (`pub mod test_output;`)
-- Modify: `src/rivenc/src/test_runner.rs` (dispatch on `opts.format`)
+- Create: `src/ruxenc/src/test_output.rs`
+- Modify: `src/ruxenc/src/lib.rs` (`pub mod test_output;`)
+- Modify: `src/ruxenc/src/test_runner.rs` (dispatch on `opts.format`)
 
 - [ ] **Step 1: Implement TAP renderer**
 
-`src/rivenc/src/test_output.rs`:
+`src/ruxenc/src/test_output.rs`:
 
 ```rust
-//! Output renderers for `riven test`: pretty (default), tap, json.
+//! Output renderers for `ruxen test`: pretty (default), tap, json.
 
 use crate::test_runner::TestFileResult;
 
@@ -2774,8 +2774,8 @@ match opts.format.as_str() {
 - [ ] **Step 2: Smoke test**
 
 ```bash
-( cd /tmp/riven-test-parallel && cargo run -q -p riven_cli -- test --format=tap ) 2>&1 | tee tmp/test-cache/7.1-tap.log
-( cd /tmp/riven-test-parallel && cargo run -q -p riven_cli -- test --format=json ) 2>&1 | tee tmp/test-cache/7.1-json.log
+( cd /tmp/ruxen-test-parallel && cargo run -q -p ruxen_cli -- test --format=tap ) 2>&1 | tee tmp/test-cache/7.1-tap.log
+( cd /tmp/ruxen-test-parallel && cargo run -q -p ruxen_cli -- test --format=json ) 2>&1 | tee tmp/test-cache/7.1-json.log
 ```
 
 Expected: TAP-13 header + 4 `ok N - case_N` lines; JSON: one event per test + summary line.
@@ -2783,55 +2783,55 @@ Expected: TAP-13 header + 4 `ok N - case_N` lines; JSON: one event per test + su
 - [ ] **Step 3: Commit**
 
 ```bash
-git add src/rivenc/src/test_output.rs \
-        src/rivenc/src/lib.rs \
-        src/rivenc/src/test_runner.rs
+git add src/ruxenc/src/test_output.rs \
+        src/ruxenc/src/lib.rs \
+        src/ruxenc/src/test_runner.rs
 git commit -m "cli(test): TAP + JSON output formats"
 ```
 
-### Task 7.2: `riven new` scaffolds an example test
+### Task 7.2: `ruxen new` scaffolds an example test
 
 **Files:**
-- Modify: `src/riven_cli/src/scaffold.rs`
+- Modify: `src/ruxen_cli/src/scaffold.rs`
 
 - [ ] **Step 1: Locate the scaffold function**
 
 ```bash
-grep -n "fn new_project\|tests/" src/riven_cli/src/scaffold.rs
+grep -n "fn new_project\|tests/" src/ruxen_cli/src/scaffold.rs
 ```
 
-- [ ] **Step 2: Add a `tests/` directory creation + example.rvn write**
+- [ ] **Step 2: Add a `tests/` directory creation + example.rx write**
 
-In the `new_project` function, after the `src/main.rvn` creation:
+In the `new_project` function, after the `src/main.rx` creation:
 
 ```rust
 let tests_dir = root.join("tests");
 fs::create_dir_all(&tests_dir)
     .map_err(|e| format!("create tests/: {}", e))?;
 fs::write(
-    tests_dir.join("example.rvn"),
+    tests_dir.join("example.rx"),
     "Tester.describe(\"example\") do |t|\n  \
        t.it(\"adds two numbers\") do\n    \
          t.expect(1 + 1).to_eq(2)\n  \
        end\nend\n",
-).map_err(|e| format!("write tests/example.rvn: {}", e))?;
+).map_err(|e| format!("write tests/example.rx: {}", e))?;
 ```
 
 - [ ] **Step 3: Smoke test scaffold**
 
 ```bash
-rm -rf /tmp/riven-new-test && cargo run -q -p riven_cli -- new --no-git /tmp/riven-new-test 2>&1 | tee tmp/test-cache/7.2-scaffold.log
-ls /tmp/riven-new-test/tests/
-( cd /tmp/riven-new-test && cargo run -q -p riven_cli -- test ) 2>&1 | tee tmp/test-cache/7.2-runtest.log
+rm -rf /tmp/ruxen-new-test && cargo run -q -p ruxen_cli -- new --no-git /tmp/ruxen-new-test 2>&1 | tee tmp/test-cache/7.2-scaffold.log
+ls /tmp/ruxen-new-test/tests/
+( cd /tmp/ruxen-new-test && cargo run -q -p ruxen_cli -- test ) 2>&1 | tee tmp/test-cache/7.2-runtest.log
 ```
 
-Expected: `tests/example.rvn` exists; `riven test` reports `1 passed; 0 failed; 0 pending`.
+Expected: `tests/example.rx` exists; `ruxen test` reports `1 passed; 0 failed; 0 pending`.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/riven_cli/src/scaffold.rs
-git commit -m "cli(new): scaffold tests/example.rvn"
+git add src/ruxen_cli/src/scaffold.rs
+git commit -m "cli(new): scaffold tests/example.rx"
 ```
 
 ### Task 7.3: Tutorial documentation
@@ -2846,13 +2846,13 @@ git commit -m "cli(new): scaffold tests/example.rvn"
 ```markdown
 # 17. Testing
 
-Riven ships a pure-Riven test framework. Tests live in `tests/**.rvn`.
-Each `.rvn` file under `tests/` is a test file — no method-name
-convention. Run them with `riven test`.
+Ruxen ships a pure-Ruxen test framework. Tests live in `tests/**.rx`.
+Each `.rx` file under `tests/` is a test file — no method-name
+convention. Run them with `ruxen test`.
 
 ## A first test
 
-```rvn
+```rx
 Tester.describe("Calculator") do |t|
   t.it("adds two numbers") do
     t.expect(1 + 2).to_eq(3)
@@ -2860,10 +2860,10 @@ Tester.describe("Calculator") do |t|
 end
 ```
 
-Put this in `tests/calculator.rvn` and run:
+Put this in `tests/calculator.rx` and run:
 
 ```
-$ riven test
+$ ruxen test
 test result: ok. 1 passed; 0 failed; 0 pending
 ```
 
@@ -2891,7 +2891,7 @@ test result: ok. 1 passed; 0 failed; 0 pending
 
 Use `it_panics(name, expected_substring) do ... end` instead of `it`:
 
-```rvn
+```rx
 t.it_panics("overflow", "overflow") do
   Int.max + 1
 end
@@ -2905,10 +2905,10 @@ any panic from the body satisfies the assertion.)
 `before` / `after` run before / after each test in the surrounding
 group. They inherit downward into nested `context` blocks.
 
-Shared helpers (factories, fixtures) go in `tests/support/**.rvn` —
+Shared helpers (factories, fixtures) go in `tests/support/**.rx` —
 those files are NOT executed as test files; you import them by name:
 
-```rvn
+```rx
 use tests.support.factories.{build_user}
 
 Tester.describe("user") do |t|
@@ -2921,15 +2921,15 @@ end
 
 ## Command-line options
 
-- `riven test FILTER` — substring filter on test path.
-- `riven test --release` — build tests in release mode.
-- `riven test --test-threads=N` — limit parallelism (default `min(ncpus, 8)`).
-- `riven test --fail-fast` — stop after first failure.
-- `riven test --nocapture` — pass through test stdout / stderr live.
-- `riven test --list` — list discovered tests; don't run.
-- `riven test --no-run` — build but don't execute.
-- `riven test --include-pending` — execute `xit` blocks too.
-- `riven test --format=pretty|tap|json` — output format.
+- `ruxen test FILTER` — substring filter on test path.
+- `ruxen test --release` — build tests in release mode.
+- `ruxen test --test-threads=N` — limit parallelism (default `min(ncpus, 8)`).
+- `ruxen test --fail-fast` — stop after first failure.
+- `ruxen test --nocapture` — pass through test stdout / stderr live.
+- `ruxen test --list` — list discovered tests; don't run.
+- `ruxen test --no-run` — build but don't execute.
+- `ruxen test --include-pending` — execute `xit` blocks too.
+- `ruxen test --format=pretty|tap|json` — output format.
 
 ## What's not in v1
 
@@ -2977,7 +2977,7 @@ Expected: PASS. If any failure surfaces, it is either:
 
 ```bash
 cargo test --test release_e2e_smoke -- --ignored --list 2>&1 | head -5
-RIVEN_E2E_CASES=01_hello cargo test --test release_e2e_smoke -- --ignored 2>&1 | tee tmp/test-cache/8.1-e2e-hello.log
+RUXEN_E2E_CASES=01_hello cargo test --test release_e2e_smoke -- --ignored 2>&1 | tee tmp/test-cache/8.1-e2e-hello.log
 ```
 
 Expected: 01_hello passes (smoke that the toolchain isn't broken).
@@ -2985,10 +2985,10 @@ Expected: 01_hello passes (smoke that the toolchain isn't broken).
 - [ ] **Step 3: Run the bench harness once to verify no co-location regression**
 
 ```bash
-cargo run -q --bin rivenc -- bench library/std/bench/src/lib.rvn 2>&1 | head -5
+cargo run -q --bin ruxenc -- bench library/std/bench/src/lib.rx 2>&1 | head -5
 ```
 
-(May not produce output if no `bench_*` fns in lib.rvn — that's fine; the goal is to verify rivenc still builds and dispatches.)
+(May not produce output if no `bench_*` fns in lib.rx — that's fine; the goal is to verify ruxenc still builds and dispatches.)
 
 - [ ] **Step 4: Commit a sentinel marker if any follow-up tasks emerged**
 
@@ -3012,8 +3012,8 @@ Performed against `docs/superpowers/specs/2026-05-23-test-framework-design.md`:
 - §4.3 constraints (no top-level `def`/`use`; helpers in `tests/support/`) → Task 6.2 walker excludes `tests/support/`; documented in Task 7.3.
 - §4.4 build pipeline → Task 6.4 (calls `compile::run`; the existing incremental cache is what `compile::run` consults).
 - §4.5 execution → Tasks 6.4 / 6.5 (per-file parallel) + 5.2 (per-test fork in-binary).
-- §4.6 panic catching via `riven_panic`+`abort` → Task 5.2.
-- §4.7 cache integration → no explicit task — `compile::run` already keys by content+flags, so `riven test` inherits caching for free. Verify in Task 8.1 (incidentally; second `riven test` on the smoke project should be near-instant).
+- §4.6 panic catching via `ruxen_panic`+`abort` → Task 5.2.
+- §4.7 cache integration → no explicit task — `compile::run` already keys by content+flags, so `ruxen test` inherits caching for free. Verify in Task 8.1 (incidentally; second `ruxen test` on the smoke project should be near-instant).
 - §4.8 files touched — matches the File Structure list above.
 - §5 test matrix → Tasks 4.1 / 4.3 / 5.2 / 5.3 cover the pass / fail / panic / fork-isolation matrix rows; CLI rows covered in 6.2 (`--list`), 6.4 (basic + cache), 6.5 (`--test-threads`), 7.1 (formats).
 - §7 open questions:

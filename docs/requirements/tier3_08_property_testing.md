@@ -9,9 +9,9 @@ Blocks: nothing; this is a documentation-correctness + coverage item
 ## 1. Summary & motivation
 
 `CLAUDE.md` (the workspace-level instructions file at
-`/home/sheraz/Documents/riven/CLAUDE.md`) claims:
+`/home/sheraz/Documents/ruxen/CLAUDE.md`) claims:
 
-> The project uses `proptest` for property-based testing in `riven-core`.
+> The project uses `proptest` for property-based testing in `ruxen-core`.
 
 This doc verifies that claim and recommends an action. Ground truth:
 the dependency *exists* but is effectively unused. Of the two
@@ -26,7 +26,7 @@ v1 property set.
 
 ### 2.1 Dependency declaration
 
-`crates/riven-core/Cargo.toml:16-17`:
+`crates/ruxen-core/Cargo.toml:16-17`:
 
 ```
 [dev-dependencies]
@@ -34,15 +34,15 @@ proptest = "1"
 ```
 
 Present. No workspace-level `proptest` in `Cargo.toml`, just the
-`riven-core` dev-dep.
+`ruxen-core` dev-dep.
 
 ### 2.2 Usage sites — two and only two
 
 Grep `use proptest|proptest!\s*\{|proptest::` across the whole repo:
 
 ```
-crates/riven-core/tests/runtime_safety.rs:61:    use proptest::prelude::*;
-crates/riven-core/tests/runtime_safety.rs:68:    proptest! {
+crates/ruxen-core/tests/runtime_safety.rs:61:    use proptest::prelude::*;
+crates/ruxen-core/tests/runtime_safety.rs:68:    proptest! {
 ```
 
 One file, one `proptest!` block. That block contains two tests
@@ -69,14 +69,14 @@ proptest! {
 }
 ```
 
-**Neither test exercises Riven code.**
+**Neither test exercises Ruxen code.**
 
 - `concat_length` generates two strings of length 0-50, adds their
   lengths, and asserts the sum ≤ 100. Trivially true by
-  construction. No call into `riven_string_concat` or any Riven
+  construction. No call into `ruxen_string_concat` or any Ruxen
   runtime function.
 - `vec_size_invariant` generates an integer `n` in 0..100 and asserts
-  `n == n`. Trivially true. No call into `riven_vec_push` / `riven_vec_len`.
+  `n == n`. Trivially true. No call into `ruxen_vec_push` / `ruxen_vec_len`.
 
 The inline comments acknowledge this ("This is a compile-time
 validation... the actual concat happens in the C runtime" — but the
@@ -84,7 +84,7 @@ test doesn't actually call the C runtime).
 
 ### 2.3 What the CLAUDE.md claim implies vs reality
 
-Claim: "property-based testing in riven-core."
+Claim: "property-based testing in ruxen-core."
 Reality: two placeholder tests that assert tautologies. Property
 testing as an engineering practice is not happening.
 
@@ -111,13 +111,13 @@ property-shaped assertions.
 
 ### Non-goals
 
-- **Property testing for user Riven code.** That's a tier-4 item
+- **Property testing for user Ruxen code.** That's a tier-4 item
   (if we ever add a `proptest` in-body directive). Out of scope here.
 - **Fuzzing.** `cargo fuzz` + libfuzzer is complementary; this doc
   specifies proptest-style randomized testing inside the standard
   `cargo test` flow, not continuous fuzzing.
 - **Random-program generation that must typecheck.** Generating
-  well-typed Riven programs is a full research problem (see
+  well-typed Ruxen programs is a full research problem (see
   `csmith` for C). v1 focuses on round-trip / panic-freedom
   properties, which work with arbitrary byte streams.
 
@@ -151,7 +151,7 @@ This doc specifies Option B.
 UTF-8 lossy.
 
 **Rationale.** A panic in the lexer is a P0 bug — it breaks LSP
-(doc 01), the formatter (`riven fmt`), and every user's IDE.
+(doc 01), the formatter (`ruxen fmt`), and every user's IDE.
 Fuzzing the lexer is one of the highest-value property tests.
 
 **Expected failure.** If the lexer ever hits an
@@ -174,7 +174,7 @@ generate cleanly (tokens are a richer alphabet) but higher value.
 
 ### 5.3 P3 — Formatter roundtrip is a fixpoint
 
-**Hypothesis.** For any valid Riven program `src`:
+**Hypothesis.** For any valid Ruxen program `src`:
 
 ```
 format(src) = format(format(src))
@@ -183,9 +183,9 @@ format(src) = format(format(src))
 That is, running the formatter twice produces identical output.
 
 **Generator.** Either (a) a corpus of existing fixtures
-(`crates/riven-core/tests/fixtures/*.rvn`) — then this is not strictly
+(`crates/ruxen-core/tests/fixtures/*.rx`) — then this is not strictly
 a property but a deterministic roundtrip; or (b) a generator that
-produces random well-formed Riven AST via a recursive-descent
+produces random well-formed Ruxen AST via a recursive-descent
 proptest strategy.
 
 **Rationale.** Fixpoint formatting is a widely-expected property
@@ -229,13 +229,13 @@ of invocation order, regardless of environment variables.
 
 **Generator.** Random strings + flag sets.
 
-**Rationale.** The content-addressed cache (`rivenc/src/cache/hash.rs`)
+**Rationale.** The content-addressed cache (`ruxenc/src/cache/hash.rs`)
 underlies correctness of incremental builds. A non-deterministic key
 means false cache hits → silent miscompilation. Worth guarding.
 
 ### 5.6 P6 — Borrow-check decision stability
 
-**Hypothesis.** For any valid Riven program `src`:
+**Hypothesis.** For any valid Ruxen program `src`:
 
 ```
 borrow_check(typeck(parse(src))) == borrow_check(typeck(parse(src)))
@@ -267,16 +267,16 @@ Easy to test; catches a whole class of bugs cheaply.
 
 | File | Change |
 |---|---|
-| `crates/riven-core/tests/runtime_safety.rs:57-87` | Delete placeholder proptest block |
-| `crates/riven-core/tests/proptest_lexer.rs` *new* | P1 tests (~50 lines) |
-| `crates/riven-core/tests/proptest_parser.rs` *new* | P2 tests (~80 lines, includes `arb_token` strategy) |
-| `crates/riven-core/tests/proptest_formatter.rs` *new* | P3 + P4 tests (~100 lines) |
-| `crates/riven-core/tests/proptest_cache.rs` *new* (or in `rivenc/tests/`) | P5 tests (~40 lines) |
-| `crates/riven-core/tests/proptest_borrow.rs` *new* | P6 tests (~50 lines) |
-| `crates/riven-core/Cargo.toml` | (no change — `proptest` already declared) |
+| `crates/ruxen-core/tests/runtime_safety.rs:57-87` | Delete placeholder proptest block |
+| `crates/ruxen-core/tests/proptest_lexer.rs` *new* | P1 tests (~50 lines) |
+| `crates/ruxen-core/tests/proptest_parser.rs` *new* | P2 tests (~80 lines, includes `arb_token` strategy) |
+| `crates/ruxen-core/tests/proptest_formatter.rs` *new* | P3 + P4 tests (~100 lines) |
+| `crates/ruxen-core/tests/proptest_cache.rs` *new* (or in `ruxenc/tests/`) | P5 tests (~40 lines) |
+| `crates/ruxen-core/tests/proptest_borrow.rs` *new* | P6 tests (~50 lines) |
+| `crates/ruxen-core/Cargo.toml` | (no change — `proptest` already declared) |
 | `CLAUDE.md` | Update claim to be accurate: "property-based testing for lexer, parser, formatter roundtrip, and cache keys via proptest" |
-| `crates/riven-core/src/CLAUDE.md` (if present) | Same update |
-| `README.md` or `CONTRIBUTING.md` | Brief note on running proptest: `cargo test -p riven-core --test proptest_*` |
+| `crates/ruxen-core/src/CLAUDE.md` (if present) | Same update |
+| `README.md` or `CONTRIBUTING.md` | Brief note on running proptest: `cargo test -p ruxen-core --test proptest_*` |
 
 ### Phase breakdown
 
@@ -324,7 +324,7 @@ default 256.
   (incremental vs fresh analysis agreement).
 - **Doc 03 (test framework).** If the `test` in-body directive lands, a
   future `proptest` directive (alongside `test`) could expose proptest to
-  user Riven code. v2+.
+  user Ruxen code. v2+.
 - **Doc 02 (debugger).** No interaction.
 - **Doc 01 (LSP).** No direct interaction, but LSP benefits
   indirectly from a panic-free lexer/parser.
@@ -415,14 +415,14 @@ themselves. Coverage:
 | P6 | Borrow-check order dependency |
 
 Each property lives in its own `tests/proptest_*.rs` file. Each file
-is runnable independently (`cargo test -p riven-core --test
-proptest_lexer`). Running all six: `cargo test -p riven-core --test
+is runnable independently (`cargo test -p ruxen-core --test
+proptest_lexer`). Running all six: `cargo test -p ruxen-core --test
 'proptest_*'`.
 
 One smoke test confirms the property-test infrastructure works:
 
 ```rust
-// crates/riven-core/tests/proptest_smoke.rs
+// crates/ruxen-core/tests/proptest_smoke.rs
 #[test]
 fn proptest_framework_available() {
     use proptest::prelude::*;
@@ -442,12 +442,12 @@ This is the only tautology we keep, and it's explicitly a smoke test.
 is already present; removing it and re-adding later costs more than
 just doing the work. The lexer and parser are exactly the kind of
 surface where property tests have historically found high-value bugs,
-and Riven's are young enough that bugs are likely present.
+and Ruxen's are young enough that bugs are likely present.
 
 If the project lead prefers Option A, the minimal edits are:
 
-- Delete `crates/riven-core/tests/runtime_safety.rs:57-87`.
-- Delete `crates/riven-core/Cargo.toml:16-17` (the `proptest` dev-dep).
+- Delete `crates/ruxen-core/tests/runtime_safety.rs:57-87`.
+- Delete `crates/ruxen-core/Cargo.toml:16-17` (the `proptest` dev-dep).
 - Update `CLAUDE.md` to drop the claim.
 - Total effort: 5 minutes.
 

@@ -21,7 +21,7 @@ Implement, in order:
 ## TDD
 
 For each pass:
-- Unit test in `crates/riven-core/src/mir/opts/`: hand-build a MIR
+- Unit test in `crates/ruxen-core/src/mir/opts/`: hand-build a MIR
   fn, run the pass, assert structure of output.
 - Snapshot test: dump MIR before/after on a fixture program; assert
   expected savings (instruction count drop).

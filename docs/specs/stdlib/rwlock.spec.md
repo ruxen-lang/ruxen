@@ -84,8 +84,8 @@ RwLock. Read locks do not poison (they hold no mutable invariant).
 |-----------|--------------------------------------------------|----------------------------|
 | B1, B2    | `rwlock_constructors_resolve`                    | `std_sync_runtime.rs`      |
 | B3, B4    | `rwlock_guards_deref_round_trip`                 | `std_sync_runtime.rs`      |
-| B5        | e2e `cases/545_rwlock_multi_reader.rvn`          | release-e2e                |
-| B6        | e2e `cases/546_rwlock_writer_excludes.rvn`       | release-e2e                |
+| B5        | e2e `cases/545_rwlock_multi_reader.rx`          | release-e2e                |
+| B6        | e2e `cases/546_rwlock_writer_excludes.rx`       | release-e2e                |
 | B7        | `rwlock_rejects_non_send_t_e1101`                | `concurrency_negative.rs`  |
 | B8        | `rwlock_poison_on_writer_panic`                  | `std_sync_runtime.rs`      |
 

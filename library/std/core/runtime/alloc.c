@@ -5,64 +5,64 @@
 
 /* ── Memory Management ─────────────────────────────────────────────── */
 
-void *riven_alloc(uint64_t size) {
+void *ruxen_alloc(uint64_t size) {
     void *ptr = malloc((size_t)size);
     if (!ptr && size > 0) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
     memset(ptr, 0, (size_t)size);
     return ptr;
 }
 
-void riven_dealloc(void *ptr) {
+void ruxen_dealloc(void *ptr) {
     free(ptr);
 }
 
 /* ── Heap-owned built-in drops (P0.7) ──────────────────────────────────
  *
- * The drop-elaboration pass emits `Call { callee: "riven_string_free" }`
- * (and `riven_vec_free` / `riven_hash_free`) at scope exit for owning
+ * The drop-elaboration pass emits `Call { callee: "ruxen_string_free" }`
+ * (and `ruxen_vec_free` / `ruxen_hash_free`) at scope exit for owning
  * locals of those built-in types. Each helper here frees the spine of
  * its argument and tolerates NULL.
  *
  * Implementation note (test scaffolding): the `drop_fixtures` test
  * harness rewrites every `free(` call site in this file via a textual
  * `String::replace`. That rewrite mangles any function header whose
- * name ends in `free(`, so we cannot write `void riven_string_free(`
+ * name ends in `free(`, so we cannot write `void ruxen_string_free(`
  * directly — the rewrite would turn it into
- * `void riven_string_riven_test_free(` and break the link.
+ * `void ruxen_string_ruxen_test_free(` and break the link.
  *
  * The harness exposes a sentinel `ORIG_FREE(` that survives the
  * blanket `free(` rewrite (case-sensitive `_FREE(` ≠ `free(`) and is
  * substituted back to `free(` immediately afterwards. We use that
- * sentinel for the C-level identifier — `riven_string_ORIG_FREE` —
- * and pin the link symbol to the canonical `riven_string_free` via
+ * sentinel for the C-level identifier — `ruxen_string_ORIG_FREE` —
+ * and pin the link symbol to the canonical `ruxen_string_free` via
  * the GCC/Clang `__asm__` label syntax. Mach-O requires a leading
  * underscore on the asm label (the platform's C-name → symbol
- * convention), so the macro `RIVEN_ASM_LABEL` adds one on Darwin.
+ * convention), so the macro `RUXEN_ASM_LABEL` adds one on Darwin.
  *
  * In production, the source goes straight to the C compiler:
- *   void riven_string_ORIG_FREE(char *s) __asm__("_riven_string_free");
- * defines a function whose link symbol is `riven_string_free`.
+ *   void ruxen_string_ORIG_FREE(char *s) __asm__("_ruxen_string_free");
+ * defines a function whose link symbol is `ruxen_string_free`.
  *
  * In the test runtime, step 4 of the splice rewrites `ORIG_FREE(` →
  * `free(`, so both the C identifier and the asm label string become
- * `riven_string_free` (a self-referent label that is a no-op rename).
+ * `ruxen_string_free` (a self-referent label that is a no-op rename).
  * The `inject_helper_counter` splice then matches the post-rewrite
  * header and decorates the body with a per-kind counter increment.
  */
-/* `RIVEN_ASM_LABEL` and the labelled forward decls live near the top
+/* `RUXEN_ASM_LABEL` and the labelled forward decls live near the top
  * of the file (around line ~50) — they have to be in scope before the
  * first caller takes the address of `_ORIG_FREE` or macOS clang
  * rejects with "asm label after first use". */
-void riven_string_ORIG_FREE(char *s) {
+void ruxen_string_ORIG_FREE(char *s) {
     if (s) free(s);
 }
 
-void *riven_realloc(void *ptr, uint64_t new_size) {
+void *ruxen_realloc(void *ptr, uint64_t new_size) {
     void *new_ptr = realloc(ptr, (size_t)new_size);
     if (!new_ptr && new_size > 0) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
     return new_ptr;
 }
@@ -70,7 +70,7 @@ void *riven_realloc(void *ptr, uint64_t new_size) {
 /* ── Option / Result Helpers ──────────────────────────────────────── */
 
 /* Option unwrap_or: if tag==0 (None), return default_val; if tag==1 (Some), return payload */
-int64_t riven_option_unwrap_or(void *opt, int64_t default_val) {
+int64_t ruxen_option_unwrap_or(void *opt, int64_t default_val) {
     if (!opt) return default_val;
     int32_t tag = *(int32_t *)opt;
     if (tag == 0) return default_val; /* None */
@@ -78,7 +78,7 @@ int64_t riven_option_unwrap_or(void *opt, int64_t default_val) {
 }
 
 /* Result unwrap_or_else: if Ok (tag 0), return payload. If Err, call handler. */
-int64_t riven_result_unwrap_or_else(void *result, void (*handler)(int64_t)) {
+int64_t ruxen_result_unwrap_or_else(void *result, void (*handler)(int64_t)) {
     if (!result) return 0;
     int32_t tag = *(int32_t *)result;
     if (tag == 0) return ((int64_t *)result)[1]; /* Ok */
@@ -91,7 +91,7 @@ int64_t riven_result_unwrap_or_else(void *result, void (*handler)(int64_t)) {
 }
 
 /* Result try_op (? operator): if Ok, return payload. If Err, propagate. */
-int64_t riven_result_try_op(void *result) {
+int64_t ruxen_result_try_op(void *result) {
     if (!result) return 0;
     int32_t tag = *(int32_t *)result;
     if (tag == 0) return ((int64_t *)result)[1]; /* Ok */
@@ -101,44 +101,44 @@ int64_t riven_result_try_op(void *result) {
 }
 
 /* Result expect!(msg): if Ok, return payload; if Err, panic with `msg`. */
-int64_t riven_result_expect(void *result, const char *msg) {
-    if (!result) riven_panic(msg ? msg : "expect! on null");
+int64_t ruxen_result_expect(void *result, const char *msg) {
+    if (!result) ruxen_panic(msg ? msg : "expect! on null");
     int32_t tag = *(int32_t *)result;
     if (tag == 0) return ((int64_t *)result)[1]; /* Ok */
-    riven_panic(msg ? msg : "expect! on Err");
+    ruxen_panic(msg ? msg : "expect! on Err");
     return 0; /* unreachable */
 }
 
 /* Result unwrap!: if Ok, return payload; if Err, panic. */
-int64_t riven_result_unwrap(void *result) {
-    if (!result) riven_panic("unwrap! on null");
+int64_t ruxen_result_unwrap(void *result) {
+    if (!result) ruxen_panic("unwrap! on null");
     int32_t tag = *(int32_t *)result;
     if (tag == 0) return ((int64_t *)result)[1]; /* Ok */
-    riven_panic("unwrap! on Err");
+    ruxen_panic("unwrap! on Err");
     return 0; /* unreachable */
 }
 
 /* Option expect!(msg): if Some, return payload; if None, panic with `msg`. */
-int64_t riven_option_expect(void *opt, const char *msg) {
-    if (!opt) riven_panic(msg ? msg : "expect! on null");
+int64_t ruxen_option_expect(void *opt, const char *msg) {
+    if (!opt) ruxen_panic(msg ? msg : "expect! on null");
     int32_t tag = *(int32_t *)opt;
     if (tag == 1) return ((int64_t *)opt)[1]; /* Some */
-    riven_panic(msg ? msg : "expect! on None");
+    ruxen_panic(msg ? msg : "expect! on None");
     return 0; /* unreachable */
 }
 
 /* Option unwrap!: if Some, return payload; if None, panic. */
-int64_t riven_option_unwrap(void *opt) {
-    if (!opt) riven_panic("unwrap! on null");
+int64_t ruxen_option_unwrap(void *opt) {
+    if (!opt) ruxen_panic("unwrap! on null");
     int32_t tag = *(int32_t *)opt;
     if (tag == 1) return ((int64_t *)opt)[1]; /* Some */
-    riven_panic("unwrap! on None");
+    ruxen_panic("unwrap! on None");
     return 0; /* unreachable */
 }
 
 /* Result ok(): Result[T,E] -> Option[T]. Ok(x) -> Some(x); Err(_) -> None. */
-void *riven_result_ok(void *result) {
-    int64_t *out = (int64_t *)riven_alloc(16);
+void *ruxen_result_ok(void *result) {
+    int64_t *out = (int64_t *)ruxen_alloc(16);
     if (result && *(int32_t *)result == 0) {
         *(int32_t *)out = 1; /* Some */
         out[1] = ((int64_t *)result)[1];
@@ -149,8 +149,8 @@ void *riven_result_ok(void *result) {
 }
 
 /* Result err(): Result[T,E] -> Option[E]. Err(e) -> Some(e); Ok(_) -> None. */
-void *riven_result_err(void *result) {
-    int64_t *out = (int64_t *)riven_alloc(16);
+void *ruxen_result_err(void *result) {
+    int64_t *out = (int64_t *)ruxen_alloc(16);
     if (result && *(int32_t *)result == 1) {
         *(int32_t *)out = 1; /* Some */
         out[1] = ((int64_t *)result)[1];
@@ -162,7 +162,7 @@ void *riven_result_err(void *result) {
 
 /* Result unwrap_or(): Ok(v) -> v; Err(_) -> default. No closure variant
    (use unwrap_or_else for that). */
-int64_t riven_result_unwrap_or(void *result, int64_t default_val) {
+int64_t ruxen_result_unwrap_or(void *result, int64_t default_val) {
     if (result && *(int32_t *)result == 0) {
         return ((int64_t *)result)[1];
     }
@@ -170,10 +170,10 @@ int64_t riven_result_unwrap_or(void *result, int64_t default_val) {
 }
 
 /* Option ok_or(): Some(v) -> Ok(v); None -> Err(err_value). The error
-   value is supplied eagerly; for the closure-driven variant use
+   value is supplied eagerly; for the closure-druxen variant use
    `ok_or_else` (not yet implemented). */
-void *riven_option_ok_or(void *opt, int64_t err_value) {
-    int64_t *out = (int64_t *)riven_alloc(16);
+void *ruxen_option_ok_or(void *opt, int64_t err_value) {
+    int64_t *out = (int64_t *)ruxen_alloc(16);
     if (opt && *(int32_t *)opt == 1) {
         *(int32_t *)out = 0; /* Ok */
         out[1] = ((int64_t *)opt)[1];
@@ -185,38 +185,38 @@ void *riven_option_ok_or(void *opt, int64_t err_value) {
 }
 
 /* Option / Result is_* predicates (return i8). */
-int8_t riven_option_is_some(void *opt) {
+int8_t ruxen_option_is_some(void *opt) {
     return opt && *(int32_t *)opt == 1;
 }
-int8_t riven_option_is_none(void *opt) {
+int8_t ruxen_option_is_none(void *opt) {
     return !opt || *(int32_t *)opt == 0;
 }
-int8_t riven_result_is_ok(void *result) {
+int8_t ruxen_result_is_ok(void *result) {
     return result && *(int32_t *)result == 0;
 }
-int8_t riven_result_is_err(void *result) {
+int8_t ruxen_result_is_err(void *result) {
     return !result || *(int32_t *)result == 1;
 }
 
 /* ── No-op Stubs ──────────────────────────────────────────────────── */
 
 /* Pass through the first argument unchanged (for iterator wrappers etc.) */
-int64_t riven_noop_passthrough(int64_t val) {
+int64_t ruxen_noop_passthrough(int64_t val) {
     return val;
 }
 
 /* Return null (for find/position that return Option) */
-int64_t riven_noop_return_null(void) {
+int64_t ruxen_noop_return_null(void) {
     return 0;
 }
 
-void riven_noop(void) {}
+void ruxen_noop(void) {}
 
 /* ── Panic ─────────────────────────────────────────────────────────── */
 
-void riven_panic(const char *message) {
+void ruxen_panic(const char *message) {
     fflush(stdout);
-    fprintf(stderr, "riven panic: %s\n", message ? message : "(unknown)");
+    fprintf(stderr, "ruxen panic: %s\n", message ? message : "(unknown)");
     fflush(stderr);
     exit(101);
 }

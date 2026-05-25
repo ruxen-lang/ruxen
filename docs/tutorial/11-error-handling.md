@@ -1,12 +1,12 @@
 # Error Handling
 
-Riven has **no exceptions**. All errors are values, handled through `Result[T, E]` and `Option[T]`.
+Ruxen has **no exceptions**. All errors are values, handled through `Result[T, E]` and `Option[T]`.
 
 ## Result[T, E]
 
 Functions that can fail return `Result`:
 
-```riven
+```ruxen
 def parse_number(input: &str) -> Result[Int, String]
   match input.trim.parse_int
     Ok(n)  -> Ok(n)
@@ -19,7 +19,7 @@ end
 
 `?` is the primary way to handle errors. It returns early on `Err`, unwraps on `Ok`:
 
-```riven
+```ruxen
 def process(path: &str) -> Result[Data, AppError]
   let text = read_file(path)?          # early return if Err
   let parsed = parse_data(&text)?      # early return if Err
@@ -29,7 +29,7 @@ end
 
 Without `?`, you'd have to write:
 
-```riven
+```ruxen
 def process(path: &str) -> Result[Data, AppError]
   let text = match read_file(path)
     Ok(t)  -> t
@@ -41,7 +41,7 @@ end
 
 ### Matching on Result
 
-```riven
+```ruxen
 match do_work()
   Ok(value) -> puts "Success: #{value}"
   Err(e)    -> puts "Error: #{e.message}"
@@ -50,7 +50,7 @@ end
 
 ### Result Methods
 
-```riven
+```ruxen
 let result = parse_number("42")
 
 result.unwrap_or(0)                # 42 on Ok, 0 on Err
@@ -64,7 +64,7 @@ result.map_err { |e| wrap(e) }    # transform Err value
 
 For values that may or may not exist:
 
-```riven
+```ruxen
 def find(id: Int) -> Option[User]
   # ...
 end
@@ -72,7 +72,7 @@ end
 
 ### Option Methods
 
-```riven
+```ruxen
 let maybe_user = find(42)
 
 maybe_user.unwrap_or(default)      # value or default
@@ -84,7 +84,7 @@ maybe_user.map { |u| u.name }     # transform if Some
 
 Chain through optional values:
 
-```riven
+```ruxen
 let name = find_user(42)?.profile?.display_name
 
 # Equivalent to:
@@ -101,7 +101,7 @@ end
 
 Define your own error types as enums. Include the `Error` mixin to participate in the standard error surface.
 
-```riven
+```ruxen
 enum AppError
   NotFound(resource: String)
   InvalidInput(message: String)
@@ -123,7 +123,7 @@ end
 
 Include the `Into[AppError]` mixin on the source error to enable automatic conversion through `?`:
 
-```riven
+```ruxen
 extension IoError
   include Into[AppError]
 
@@ -142,7 +142,7 @@ end
 
 For bugs and invariant violations — not for expected errors:
 
-```riven
+```ruxen
 panic!("this should never happen")
 
 let value = option.unwrap!                  # panics on nil

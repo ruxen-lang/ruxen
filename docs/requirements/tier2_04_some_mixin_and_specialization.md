@@ -135,7 +135,7 @@ see §9 risk).
 
 ### 4.1 Argument-position `some Mixin`
 
-```riven
+```ruxen
 def print_all(items: some Iterator[Item = String])
   for s in items
     puts s
@@ -148,7 +148,7 @@ def print_all[I: Iterator[Item = String]](items: I) ...
 
 Multiple bounds:
 
-```riven
+```ruxen
 def log(x: some Display + Serializable)
   puts x.to_display
   save(x.serialize)
@@ -159,7 +159,7 @@ end
 
 ### 4.2 Return-position `some Mixin`
 
-```riven
+```ruxen
 def ones -> some Iterator[Item = Int]
   (1..).map { |_| 1 }
 end
@@ -180,7 +180,7 @@ Rules:
 
 ### 4.3 Named opaque types (phase 04c, optional)
 
-```riven
+```ruxen
 type FizzBuzzIter = some Iterator[Item = String]
 
 def fizzbuzz -> FizzBuzzIter
@@ -397,7 +397,7 @@ See §6.2.
 Specialization lets multiple impls of the same mixin overlap, with
 the compiler picking the *most specific* one at each call site:
 
-```riven
+```ruxen
 # Blanket extension:
 extension[T] T where T: Clone
   include Transform
@@ -444,7 +444,7 @@ gate. Seven years; still not shipped. This is not a "the Rust team is
 slow" problem — it is a "the feature is genuinely hard to make sound"
 problem.
 
-### 9.3 The Riven recommendation
+### 9.3 The Ruxen recommendation
 
 - Do not implement specialization in tier 2.
 - Coherence rejects overlaps with E-IMPL-OVERLAP. No workaround.
@@ -486,7 +486,7 @@ This is ~4-6 weeks of careful design + coherence work. Deferred.
   with the declared bounds (normal recursion).
 - **OQ-4: does argument-position `some Mixin` allow turbofish?**
   Rust says no — the user can't specify `T` for a synthetic param.
-  Riven follows: E-IMPL-ARG-TURBOFISH.
+  Ruxen follows: E-IMPL-ARG-TURBOFISH.
 - **R-1: the current coherence hole.** `TraitResolver::register_impl`
   silently overwrites duplicate `(type, mixin)` keys
   (`typeck/traits.rs:59-79`). Phase 04a introduces E-IMPL-OVERLAP.
@@ -501,7 +501,7 @@ This is ~4-6 weeks of careful design + coherence work. Deferred.
 - **R-3: mixin inheritance and opaque.** `def f -> some Iterator`
   inferred body returns `VecIter[T]` which also implements
   `DoubleEndedIterator`. May the caller call `rev()`? Rust says no —
-  only the declared bounds are exposed. Riven follows.
+  only the declared bounds are exposed. Ruxen follows.
 
 ## 11. Test Matrix
 
@@ -540,8 +540,8 @@ This is ~4-6 weeks of careful design + coherence work. Deferred.
 
 ### 11.4 Fixture additions
 
-- `tests/fixtures/impl_trait_arg.rvn` — argument-position.
-- `tests/fixtures/impl_trait_return.rvn` — return-position, with
+- `tests/fixtures/impl_trait_arg.rx` — argument-position.
+- `tests/fixtures/impl_trait_return.rx` — return-position, with
   `take.collect`.
-- `tests/fixtures/opaque_identity.rvn` — two calls, same type.
-- `tests/fixtures/coherence_dup_impl.rvn` — negative.
+- `tests/fixtures/opaque_identity.rx` — two calls, same type.
+- `tests/fixtures/coherence_dup_impl.rx` — negative.

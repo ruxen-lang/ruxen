@@ -1,0 +1,19 @@
+use std.fs.{write, rename, read_to_string, exists, remove_file}
+
+def main
+  write("/tmp/ruxen_e2e_531_a.txt", "renamed body").expect!("write")
+  match rename("/tmp/ruxen_e2e_531_a.txt", "/tmp/ruxen_e2e_531_b.txt")
+    Ok(_)  -> puts "renamed"
+    Err(_) -> puts "rename_fail"
+  end
+  if exists("/tmp/ruxen_e2e_531_a.txt")
+    puts "a_still_there"
+  else
+    puts "a_gone"
+  end
+  match read_to_string("/tmp/ruxen_e2e_531_b.txt")
+    Ok(s)  -> puts "b=#{s}"
+    Err(_) -> puts "b_read_fail"
+  end
+  remove_file("/tmp/ruxen_e2e_531_b.txt").expect!("rm b")
+end

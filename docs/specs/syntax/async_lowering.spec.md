@@ -10,7 +10,7 @@
 enum, `Context`/`Waker` shells. This sub-phase wires the **lowering**
 so `async def foo` and `expr.await` produce real state machines that
 implement Future. No executor yet (sub-phase 3) — but the lowered
-code can be poll-driven by hand-written test harnesses to validate
+code can be poll-druxen by hand-written test harnesses to validate
 shape.
 
 Two staged milestones inside this sub-phase:
@@ -29,7 +29,7 @@ Land 2A first; commit; then 2B.
 
 ### B1 — `async def foo() -> T` typechecks as returning `some Future[Output = T]`
 
-```rvn
+```rx
 async def make_int() -> Int
   42
 end
@@ -45,7 +45,7 @@ the existential return `some Future[Output = Int]`.
 Calling `make_int()` returns a Future-implementing value. The
 non-async caller can poll it manually:
 
-```rvn
+```rx
 def main
   let mut fut = make_int()
   # Hand-written Context for testing — see B6
@@ -63,7 +63,7 @@ For Milestone 2A this should print `42`.
 
 The lowering pass synthesizes one class per `async def`:
 
-```rvn
+```rx
 # Pseudocode for what the compiler generates for `async def make_int() -> Int  42 end`:
 class __MakeIntFuture
   __state: Int            # 0 = start, 1 = completed
@@ -99,7 +99,7 @@ call site.
 Function arguments (if any) become fields on the state-machine
 struct:
 
-```rvn
+```rx
 async def add(a: Int, b: Int) -> Int
   a + b
 end
@@ -134,13 +134,13 @@ to v2.)
 
 ### B6 — Test harness: `Context.test_dummy` (#[cfg(test)] only)
 
-Add a `Context.test_dummy` static method (in `library/std/future/src/lib.rvn`)
+Add a `Context.test_dummy` static method (in `library/std/future/src/lib.rx`)
 returning a `Context` whose `Waker` is a no-op stub. Lives behind a
-`# Test-only — see context.spec.md` comment. The hand-driven poll
+`# Test-only — see context.spec.md` comment. The hand-druxen poll
 loop in B1 uses it; no executor needed.
 
 Implementation: a static method that returns a heap-allocated
-`RivenContext` whose waker is a function pointer to a `riven_waker_noop`
+`RuxenContext` whose waker is a function pointer to a `ruxen_waker_noop`
 that does nothing. Wired in `library/std/future/runtime/executor.c`
 (stubbed in sub-phase 1; this milestone replaces those stubs for
 `test_dummy` only — real executor still pending sub-phase 3).
@@ -151,7 +151,7 @@ that does nothing. Wired in `library/std/future/runtime/executor.c`
 
 ### B7 — `.await` desugars to a poll loop with a `return Pending` on Pending
 
-```rvn
+```rx
 async def f() -> Int
   let x = g().await
   x + 1
@@ -189,7 +189,7 @@ one global — each await may produce a different Future type).
 
 ### B8 — Locals live across `.await` are captured as state-machine fields
 
-```rvn
+```rx
 async def add_async() -> Int
   let a = compute().await
   let b = compute_other().await
@@ -231,7 +231,7 @@ generated MIR.
 
 
 
-```rvn
+```rx
 async def conditional() -> Int
   if check_condition()
     g().await
@@ -252,7 +252,7 @@ limit clearly.
 
 ### B12 — `.await` outside async context rejected (E1110)
 
-```rvn
+```rx
 def main
   some_future.await    # E1110
 end
@@ -289,7 +289,7 @@ suspended future may be polled later from a different stack frame,
 so the borrow could outlive its referent.
 
 **Given:**
-```rvn
+```rx
 async def bad() -> Int
   let v = compute_vec()
   let r = &v[0]                # borrow
@@ -341,7 +341,7 @@ Pin test: a state machine in state 1 holds `__sub_0` Ready and
 | B3 (2A)   | `async_def_args_become_state_machine_fields`           | `tests/async_lowering.rs`     |
 | B5 (2A)   | `poll_after_ready_returns_pending`                     | `tests/async_lowering.rs`     |
 | B6 (2A)   | `context_test_dummy_constructs`                        | `tests/async_lowering.rs`     |
-| B1-B6 e2e | `cases/721_async_def_no_await_handpoll.rvn`            | release-e2e                   |
+| B1-B6 e2e | `cases/721_async_def_no_await_handpoll.rx`            | release-e2e                   |
 | B7 (2B)   | `await_desugars_to_poll_match_pending_return`          | `tests/async_lowering.rs`     |
 | B8 (2B)   | `local_live_across_await_promoted_to_field`            | `tests/async_lowering.rs`     |
 | B10 (2B)  | `chained_awaits_generate_n_plus_1_states`              | `tests/async_lowering.rs`     |
@@ -349,7 +349,7 @@ Pin test: a state machine in state 1 holds `__sub_0` Ready and
 | B12 (2B)  | `await_outside_async_context_rejected_e1110`           | `tests/async_negative.rs`     |
 | B13 (2B)  | `borrow_across_suspend_rejected_e1010`                 | `tests/async_negative.rs`     |
 | B14 (2B)  | `state_machine_drop_only_active_fields`                | `tests/async_lowering.rs`     |
-| B7-B14 e2e| `cases/722_async_def_chained_await_handpoll.rvn`       | release-e2e                   |
+| B7-B14 e2e| `cases/722_async_def_chained_await_handpoll.rx`       | release-e2e                   |
 
 ---
 
@@ -357,7 +357,7 @@ Pin test: a state machine in state 1 holds `__sub_0` Ready and
 
 The v1 cut of 2B supports a canonical straight-line `.await` shape:
 
-```rvn
+```rx
 async def f(args...) -> R
   let x_1 = g_1(<args from outer / consts>).await
   let x_2 = g_2(<args from outer / consts>).await
@@ -386,7 +386,7 @@ with these constraints:
 
 B11, B13, B14 are explicitly DEFERRED (each section above carries
 its own deferral block). Their pin tests in
-`compiler/riven_core/tests/async_lowering.rs` are `#[ignore]`d with
+`compiler/ruxen_core/tests/async_lowering.rs` are `#[ignore]`d with
 reason strings pointing back here.
 
 ## Out of scope (sub-phase 3+)

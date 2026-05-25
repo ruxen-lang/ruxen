@@ -8,7 +8,7 @@ Blocks: stdlib mixin coverage, every struct/enum that needs `Debug`/`Eq`/`Hash`
 
 ## 1. Summary & motivation
 
-Riven's core traits (`Debug`, `Clone`, `Copy`, `Eq`, `PartialEq`, `Hash`, `Default`,
+Ruxen's core traits (`Debug`, `Clone`, `Copy`, `Eq`, `PartialEq`, `Hash`, `Default`,
 `Ord`, `PartialOrd`) are structural in shape: their implementations are
 mechanically derivable from the type definition. Requiring every user to
 hand-write them is:
@@ -42,11 +42,11 @@ representation declarations).
 
 **In-body `derive Mixin1, Mixin2` clause** inside a `struct ... end`.
 Lexed as a dedicated keyword token `TokenKind::Derive`
-(`crates/riven-core/src/lexer/token.rs:105`, `:327`) and parsed by
+(`crates/ruxen-core/src/lexer/token.rs:105`, `:327`) and parsed by
 `parse_struct_def` at
-`crates/riven-core/src/parser/mod.rs:832-841` into
+`crates/ruxen-core/src/parser/mod.rs:832-841` into
 `StructDef.derive_traits: Vec<String>`
-(`crates/riven-core/src/parser/ast.rs:597`).
+(`crates/ruxen-core/src/parser/ast.rs:597`).
 
 The tutorial documents the in-body form
 (`docs/tutorial/06-classes-and-structs.md:135-141`,
@@ -70,7 +70,7 @@ focuses on the derive surface.
 - Formatter round-trips it:
   `formatter/format_items.rs:391-402`, `parser/printer.rs:114-118`.
 
-Grepping `derive_traits` under `crates/riven-core/src/typeck`,
+Grepping `derive_traits` under `crates/ruxen-core/src/typeck`,
 `.../mir`, `.../codegen`, `.../borrow_check` returns **zero** matches. The
 list is syntactic metadata with no semantic effect.
 
@@ -111,10 +111,10 @@ expanded into desugared AST/HIR. It flows as a first-class construct:
   (`hir/nodes.rs:223-247`).
 - MIR lowering in `mir/lower.rs:1232` and the helper
   `lower_interpolation` at `mir/lower.rs:2024-2128` emits the concatenation
-  calls (`riven_string_concat`, `riven_int_to_string`, etc.) directly into
+  calls (`ruxen_string_concat`, `ruxen_int_to_string`, etc.) directly into
   MIR.
 
-Implication: **Riven has no precedent for an AST/HIR rewrite pass.** Every
+Implication: **Ruxen has no precedent for an AST/HIR rewrite pass.** Every
 "expansion" today is a first-class node lowered straight to MIR. The
 derive system is the first feature that genuinely needs either a pre-resolve
 AST synthesis pass or a post-HIR extension-synthesis pass. This doc picks one in
@@ -164,14 +164,14 @@ AST synthesis pass or a post-HIR extension-synthesis pass. This doc picks one in
 ## 4. Built-in derive catalog
 
 All nine derives are **compiler-built-in**: hard-coded in Rust inside
-`riven-core`. Rationale in §5.4. Spec for each is given as: what it
+`ruxen-core`. Rationale in §5.4. Spec for each is given as: what it
 generates, what bounds it adds, what errors are raised.
 
 ### 4.1 `Debug`
 
 **Generates:** an in-body `include Debug` directive on `T[GP]` with method
 `def fmt(&self) -> String`. The returned string is the struct/enum printed
-in Riven source-ish form:
+in Ruxen source-ish form:
 
 - Named struct `Point { x: 1, y: 2 }` →  `"Point { x: 1, y: 2 }"`
 - Tuple struct `Wrap(42)` → `"Wrap(42)"`
@@ -217,7 +217,7 @@ records a derived `Copy` provision for `name` (§5.5).
   `Foo` because field `bar: Bar` is not Copy`. Span: the offending field's
   `TypeExpr`. Note: recurse on generic args when the field type is
   parameterized.
-- **Copy without Clone.** Rust requires `Copy: Clone`. Riven should follow
+- **Copy without Clone.** Rust requires `Copy: Clone`. Ruxen should follow
   suit: emit `E0602: deriving Copy also requires Clone` and suggest
   `derive Copy, Clone`. (Alternative: auto-add Clone; rejected for
   explicitness.)
@@ -349,7 +349,7 @@ codegen
 ```
 
 Concretely: `typeck::type_check` at
-`crates/riven-core/src/typeck/mod.rs:37-69` currently runs
+`crates/ruxen-core/src/typeck/mod.rs:37-69` currently runs
 `Resolver::resolve` then `TraitResolver::collect_impls`. Insert a new
 `DeriveExpander::expand(&var program, &var symbols)` between those two
 lines. It **must** run before `TraitResolver::collect_impls` so collected
@@ -357,7 +357,7 @@ impls include the derived ones.
 
 ### 5.3 `DeriveExpander` module
 
-New file: `crates/riven-core/src/implicit_includes/mod.rs` (and submodules per implicit
+New file: `crates/ruxen-core/src/implicit_includes/mod.rs` (and submodules per implicit
 kind). Public API:
 
 ```rust
@@ -385,13 +385,13 @@ fn expand_debug_enum(&mut self, e: &HirEnumDef) -> HirImplBlock;
 
 Generators return `HirImplBlock`s which are appended to `program.items`.
 
-### 5.4 Why compiler-built-in (not written in Riven)
+### 5.4 Why compiler-built-in (not written in Ruxen)
 
 The tension is: a self-hosting language wants these in the surface
 language. But:
 
-- **Bootstrapping.** Riven's stdlib depends on `Debug`/`Clone`. If the
-  derives are written in a Riven macro, we have a circular dependency
+- **Bootstrapping.** Ruxen's stdlib depends on `Debug`/`Clone`. If the
+  derives are written in a Ruxen macro, we have a circular dependency
   at stdlib build time.
 - **Simplicity.** Hard-coding nine derives in ~800 lines of Rust is small.
   A general macro engine powerful enough to express these is
@@ -400,7 +400,7 @@ language. But:
   compiler's diagnostic infrastructure and can point at precise field
   spans; user-written derives eventually need this too but not in v1.
 - **Future-proof.** Once a declarative or proc-macro system lands
-  (§7), the nine built-ins can be progressively ported to Riven source
+  (§7), the nine built-ins can be progressively ported to Ruxen source
   without breaking the surface syntax.
 
 ### 5.5 Updating `is_copy`
@@ -461,7 +461,7 @@ auto-derived — see §9.4 for the span strategy.
 
 ### 6.1 Canonical form
 
-```riven
+```ruxen
 struct Point
   x: Float
   y: Float
@@ -511,7 +511,7 @@ This is the 5d milestone, not v1. Sketch only.
 
 ### 7.1 Declarative macros (preferred first step)
 
-Borrowing from Rust's `macro_rules!` but rendered in Riven keyword style:
+Borrowing from Rust's `macro_rules!` but rendered in Ruxen keyword style:
 
 ```
 macro array!
@@ -533,19 +533,19 @@ end
   tree), `literal`.
 - Expansion target: AST. Matches tokens, substitutes into an AST
   template, re-parses.
-- **Token tree layer.** Riven does not today have a public
+- **Token tree layer.** Ruxen does not today have a public
   `TokenStream`/`TokenTree` representation. The lexer emits
   `Vec<Token>` which the parser consumes. For macros we'd grow a
   `TokenTree` enum (`Group`, `Ident`, `Punct`, `Literal`) — add this to
-  `riven-core/src/macros/` when 5d lands.
+  `ruxen-core/src/macros/` when 5d lands.
 
 ### 7.2 Function-like and custom derives
 
-Both are compile-time Riven code that runs inside the compiler. The
+Both are compile-time Ruxen code that runs inside the compiler. The
 Rust approach (separate proc-macro packages compiled separately, loaded
 as shared libraries) is a significant engineering investment. Crystal's
 approach (macros are interpreted in a mini-AST-level evaluator built into
-the compiler) is cheaper. Riven is unlikely to need proc-macros for
+the compiler) is cheaper. Ruxen is unlikely to need proc-macros for
 years; leave the door open by making the declarative macro engine the
 first stop, and revisit when concrete demand appears.
 
@@ -553,7 +553,7 @@ first stop, and revisit when concrete demand appears.
 
 For v1 built-in derives the rule is simple: **synthesized identifiers use
 names that the lexer rejects for user code**. Prefix generated locals
-with `$riven$` (dollar sign is not a valid identifier char in the lexer).
+with `$ruxen$` (dollar sign is not a valid identifier char in the lexer).
 Generator never introduces a free identifier that could shadow a user
 binding.
 
@@ -566,11 +566,11 @@ actually provides and is good enough for 95% of uses.
 
 ### 7.4 Public API surface
 
-For v1: there is **no** user-facing macro/derive API. `riven-core` has no
+For v1: there is **no** user-facing macro/derive API. `ruxen-core` has no
 `TokenStream` in its public surface. Users cannot import from
-`riven::macros::*` because no such module exists.
+`ruxen::macros::*` because no such module exists.
 
-For 5d: introduce `riven-core::macros` with `TokenStream`, `TokenTree`,
+For 5d: introduce `ruxen-core::macros` with `TokenStream`, `TokenTree`,
 `Span`, `Spanned<T>`. Intentionally lean; proc-macro-style
 `quote!`/`parse_macro_input!` deferred.
 
@@ -604,12 +604,12 @@ For stdlib mixin definitions themselves (the definition of `mixin Clone
 The built-in mixin list in `resolve/mod.rs` is a bootstrap shim that will
 eventually be removed once stdlib is loaded as a real dependency.
 
-### 8.3 LSP / `riven-ide`
+### 8.3 LSP / `ruxen-ide`
 
 Derived provisions must be discoverable by hover and goto-definition.
 The expander attaches a `Span` to each generated item pointing at the
 original `derive MixinName` directive's span — not a synthesized
-span. `riven-ide` then treats goto-def on a call to `.clone()` on a
+span. `ruxen-ide` then treats goto-def on a call to `.clone()` on a
 derived struct as "jumps to the `derive Clone` directive on the
 struct definition", which is the right UX.
 
@@ -661,9 +661,9 @@ Each step is a separately reviewable PR.
 - Each with correct required methods (`eq`, `hash`, `default`, `cmp`,
   `partial_cmp`).
 
-### 9.3 Step 3 — Scaffold `riven-core::derive` module
+### 9.3 Step 3 — Scaffold `ruxen-core::derive` module
 
-- Create `crates/riven-core/src/implicit_includes/mod.rs` with the struct layout
+- Create `crates/ruxen-core/src/implicit_includes/mod.rs` with the struct layout
   from §5.3.
 - Wire into `typeck::type_check` between phase 1 (resolve) and phase 2
   (collect_impls).
@@ -693,7 +693,7 @@ Each generator:
 3. Append to `program.items`.
 4. Every span inside the generated provision uses the original derive
    attribute's span (§8.3). Every synthesized identifier is prefixed
-   `$riven$` (§7.3).
+   `$ruxen$` (§7.3).
 
 ### 9.5 Step 5 — Error reporting
 
@@ -701,12 +701,12 @@ Diagnostic codes: E0601–E0609 (reserved block). Template:
 
 ```
 error[E0601]: cannot derive Copy on struct `Foo`
-  --> foo.rvn:3:3
+  --> foo.rx:3:3
 3 |   inner: Array[Int]
   |   ^^^^^^^^^^^^^^^^^ field type `Array[Int]` is not Copy
   |
 note: Copy was requested here
-  --> foo.rvn:5:3
+  --> foo.rx:5:3
 5 |   derive Copy
   |   ^^^^^^^^^^^
 ```
@@ -746,8 +746,8 @@ default all emits to `derive ...` (cleaner; adopt this).
 ## 10. Test matrix
 
 For each combination cell, a fixture under
-`crates/riven-core/tests/fixtures/derive/` and an integration test under
-`crates/riven-core/tests/derive_*.rs` asserting
+`crates/ruxen-core/tests/fixtures/derive/` and an integration test under
+`crates/ruxen-core/tests/derive_*.rs` asserting
 (1) compiles, (2) produces expected output or expected diagnostic.
 
 ### 10.1 Shape axis
@@ -793,12 +793,12 @@ PartialEq)`, all nine together.
 
 ### 10.5 Formatter roundtrip
 
-Every fixture feeds into `rivenc fmt` and the output must re-parse to
+Every fixture feeds into `ruxenc fmt` and the output must re-parse to
 the same HIR.
 
 ### 10.6 LSP / IDE
 
-`riven-ide` hover on a `.clone()` call for a derived struct shows the
+`ruxen-ide` hover on a `.clone()` call for a derived struct shows the
 generated provision signature; goto-def lands on the `derive Clone`
 attribute (§8.3).
 
@@ -861,7 +861,7 @@ foreign type because no mechanism exists for it.
 `derive Debug` produces an extension with bound `T: Debug`. Rust's
 current heuristic adds `T: Debug` for every type parameter that appears
 "anywhere" in a field. Mostly right but over-bounded in phantom-data
-cases — we don't have phantom data in Riven yet, so the simple heuristic
+cases — we don't have phantom data in Ruxen yet, so the simple heuristic
 holds. Revisit when `PhantomData` lands.
 
 ### 12.5 Debug output format
@@ -875,13 +875,13 @@ but the decision is worth one explicit line in the final doc.
 Deriving nine traits on every struct across a large program is a
 non-trivial HIR volume increase. Measure at 5a landing: count HIR item
 count before/after. If the expander materially hurts incremental rebuilds
-in `rivenc`'s content-addressed cache, adopt lazy generation (derive on
+in `ruxenc`'s content-addressed cache, adopt lazy generation (derive on
 demand when a mixin bound requires it). Almost certainly a premature
 optimization; flag for vigilance.
 
 ### 12.7 Risk: scope creep into full macros
 
-The fastest path to a maintainable Riven is "builtin derives only, no
+The fastest path to a maintainable Ruxen is "builtin derives only, no
 user-extensibility until later". The temptation to ship a minimally-
 capable `macro` keyword alongside this work should be resisted —
 v1 = nine hard-coded derives, full stop. The 5d phase exists to make the
@@ -889,7 +889,7 @@ staging explicit.
 
 ### 12.8 Risk: hygiene debt
 
-The `$riven$` identifier prefix works for v1 but is not real hygiene.
+The `$ruxen$` identifier prefix works for v1 but is not real hygiene.
 Any future macro work that introduces user identifiers will need span-
 based hygiene. The refactor from prefix-based to span-based is
 non-trivial but bounded (touches resolve/name lookup only). Budget a

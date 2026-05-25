@@ -1,8 +1,0 @@
-class File
-  layout flat_heap_struct
-  fd: I32
-
-  lib "rt"
-    def open as "riven_file_open"(path: &String) -> Int
-  end
-end

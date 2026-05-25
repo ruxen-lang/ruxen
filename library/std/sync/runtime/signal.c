@@ -16,17 +16,17 @@
  * / SIGHUP / per-signal handlers on top.
  * ------------------------------------------------------------------ */
 
-static volatile sig_atomic_t riven_sigint_received = 0;
+static volatile sig_atomic_t ruxen_sigint_received = 0;
 
-static void riven_sigint_handler(int signo) {
+static void ruxen_sigint_handler(int signo) {
     (void)signo;
-    riven_sigint_received = 1;
+    ruxen_sigint_received = 1;
 }
 
-void riven_signal_install_sigint(void) {
+void ruxen_signal_install_sigint(void) {
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = riven_sigint_handler;
+    sa.sa_handler = ruxen_sigint_handler;
     sigemptyset(&sa.sa_mask);
     /* Intentionally no SA_RESTART: we want blocking syscalls to
      * return EINTR so cooperative loops can notice the flag. */
@@ -34,6 +34,6 @@ void riven_signal_install_sigint(void) {
     sigaction(SIGINT, &sa, NULL);
 }
 
-int64_t riven_signal_received_sigint(void) {
-    return riven_sigint_received ? 1 : 0;
+int64_t ruxen_signal_received_sigint(void) {
+    return ruxen_sigint_received ? 1 : 0;
 }

@@ -1,29 +1,29 @@
 /*
  * std::async_net runtime — backs AsyncTcpListener / AsyncTcpStream +
  * five hand-written futures (bind / accept / connect / read / write /
- * close) declared in library/std/async_net/src/lib.rvn.
+ * close) declared in library/std/async_net/src/lib.rx.
  *
  * Spec: docs/specs/stdlib/async_io.spec.md Milestone 4C (B6.5–B12).
  *
  * Design mirrors async_fs.c:
- *   - Two thin wrapper classes (RivenAsyncTcpListener / Stream) with
+ *   - Two thin wrapper classes (RuxenAsyncTcpListener / Stream) with
  *     identical 8-byte (int32 fd + int32 closed) wire shape as
- *     RivenAsyncFile so future BufReader / cross-package work can cast
+ *     RuxenAsyncFile so future BufReader / cross-package work can cast
  *     across without an adapter.
  *   - Each blocking operation has an opaque C state struct held on the
- *     Riven future class as an Int pointer. State `step` calls return
- *     {0 progress, 1 EAGAIN, 2 done, 3 error}. The Riven side caches
+ *     Ruxen future class as an Int pointer. State `step` calls return
+ *     {0 progress, 1 EAGAIN, 2 done, 3 error}. The Ruxen side caches
  *     a reactor handle (negative-encoded slot index from
- *     riven_reactor_register_fd_{read,write}) and re-parks across
+ *     ruxen_reactor_register_fd_{read,write}) and re-parks across
  *     wake cycles.
  *
  * Reactor coupling: NO reactor.c extensions. The five futures all use
  * the existing fd-readiness primitives shipped in sub-phase 4B:
- *   riven_reactor_register_fd_read(reactor, fd) -> handle
- *   riven_reactor_register_fd_write(reactor, fd) -> handle
- *   riven_reactor_check_fired(reactor, handle) -> 0/1 (declared in
- *     library/std/time/src/lib.rvn from 4A; reused here)
- *   riven_reactor_deregister(reactor, handle) -> () (same)
+ *   ruxen_reactor_register_fd_read(reactor, fd) -> handle
+ *   ruxen_reactor_register_fd_write(reactor, fd) -> handle
+ *   ruxen_reactor_check_fired(reactor, handle) -> 0/1 (declared in
+ *     library/std/time/src/lib.rx from 4A; reused here)
+ *   ruxen_reactor_deregister(reactor, handle) -> () (same)
  *
  * Surface deviation from spec B8: the v1 read surface is
  *   read(max_bytes: Int) -> Result[String, IoError]
@@ -35,7 +35,7 @@
  * (up to max_bytes), as a String" surface exercises the same
  * reactor-park-wake-retry mechanism end to end and matches the
  * existing read_to_string shape from AsyncFile. Tracked as a
- * v1-follow-up in the lib.rvn header.
+ * v1-follow-up in the lib.rx header.
  *
  * Platform support: macOS (Darwin) + Linux. Both kqueue and epoll
  * cases are routed through the per-thread reactor's existing
@@ -60,14 +60,14 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-/* Wire layout — C-owned. The Riven-side class fields (`fd: Int`,
- * `closed: Int`) are unused on the access path: the Riven side only
+/* Wire layout — C-owned. The Ruxen-side class fields (`fd: Int`,
+ * `closed: Int`) are unused on the access path: the Ruxen side only
  * touches these structs through FFI accessors, and `*_bind` / `*_from_fd`
  * are the only allocators. Growing the struct to add the persistent
- * reactor handles is safe because Riven never directly indexes fields.
+ * reactor handles is safe because Ruxen never directly indexes fields.
  *
  * Layout note: handles are negative-encoded int64 slot indices returned
- * by riven_reactor_register_fd_*_persistent (0 = not registered).
+ * by ruxen_reactor_register_fd_*_persistent (0 = not registered).
  * They're per-(reactor, fd, mode) and must be deregistered on the SAME
  * thread that registered them — see the drop functions below.
  */
@@ -75,28 +75,28 @@ typedef struct {
     int32_t fd;
     int32_t closed;
     int64_t accept_handle;  /* persistent read-readiness registration */
-} RivenAsyncTcpListener;
+} RuxenAsyncTcpListener;
 
 typedef struct {
     int32_t fd;
     int32_t closed;
     int64_t read_handle;    /* persistent read-readiness registration */
     int64_t write_handle;   /* persistent write-readiness registration */
-} RivenAsyncTcpStream;
+} RuxenAsyncTcpStream;
 
-_Static_assert(sizeof(RivenAsyncTcpListener) == 16,
-    "RivenAsyncTcpListener wire layout drifted from documented 16-byte form "
+_Static_assert(sizeof(RuxenAsyncTcpListener) == 16,
+    "RuxenAsyncTcpListener wire layout drifted from documented 16-byte form "
     "(grew from 8 in v1-missing-features to add accept_handle)");
-_Static_assert(sizeof(RivenAsyncTcpStream) == 24,
-    "RivenAsyncTcpStream wire layout drifted from documented 24-byte form "
+_Static_assert(sizeof(RuxenAsyncTcpStream) == 24,
+    "RuxenAsyncTcpStream wire layout drifted from documented 24-byte form "
     "(grew from 8 in v1-missing-features to add read_handle + write_handle)");
 
 /* Reactor FFI — declared here so we can register persistently at
- * stream/listener construction without going through the Riven side.
+ * stream/listener construction without going through the Ruxen side.
  * The persistent variants live in library/std/future/runtime/reactor.c. */
-extern int64_t riven_reactor_register_fd_read_persistent(int64_t reactor, int64_t fd);
-extern int64_t riven_reactor_register_fd_write_persistent(int64_t reactor, int64_t fd);
-extern void    riven_reactor_deregister(int64_t reactor, int64_t handle);
+extern int64_t ruxen_reactor_register_fd_read_persistent(int64_t reactor, int64_t fd);
+extern int64_t ruxen_reactor_register_fd_write_persistent(int64_t reactor, int64_t fd);
+extern void    ruxen_reactor_deregister(int64_t reactor, int64_t handle);
 
 /* ── socket helpers ────────────────────────────────────────────────── */
 
@@ -104,7 +104,7 @@ extern void    riven_reactor_deregister(int64_t reactor, int64_t handle);
  * on failure. Supports IPv4 literals (e.g. "127.0.0.1:9000") and host
  * names resolved via getaddrinfo. v1 sync DNS — async DNS is a v2
  * follow-up. */
-static int riven_async_net_parse_addr(const char *addr,
+static int ruxen_async_net_parse_addr(const char *addr,
                                       struct sockaddr_in *out) {
     if (!addr) return -1;
     const char *colon = strrchr(addr, ':');
@@ -137,7 +137,7 @@ static int riven_async_net_parse_addr(const char *addr,
     return 0;
 }
 
-static int riven_async_net_set_nonblock(int fd) {
+static int ruxen_async_net_set_nonblock(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0) return -1;
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
@@ -146,14 +146,14 @@ static int riven_async_net_set_nonblock(int fd) {
 /* BSD/macOS doesn't honour MSG_NOSIGNAL on send(); per-socket
  * SO_NOSIGPIPE is the portable way to keep write-after-peer-close from
  * raising SIGPIPE (which would terminate the process by default).
- * Symmetric with `riven_tcp_set_nosigpipe` in the sync net runtime —
+ * Symmetric with `ruxen_tcp_set_nosigpipe` in the sync net runtime —
  * we MUST call this on every accepted fd here too, otherwise an HTTP
  * client closing mid-response silently kills the server. (Observed:
  * rondo-async exiting at the END of a wrk run with no log output,
  * after thousands of clean requests, when wrk tore down its
  * connection pool faster than the server finished writing the last
  * few responses.) */
-static void riven_async_net_set_nosigpipe(int fd) {
+static void ruxen_async_net_set_nosigpipe(int fd) {
 #ifdef SO_NOSIGPIPE
     int one = 1;
     (void)setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
@@ -164,21 +164,21 @@ static void riven_async_net_set_nosigpipe(int fd) {
 
 /* Map errno -> IoError tag for socket operations. Covers the codes
  * connect / accept / read / write can produce post-EAGAIN. */
-static int riven_async_net_io_error_tag(int err) {
+static int ruxen_async_net_io_error_tag(int err) {
     switch (err) {
-        case ECONNREFUSED: return RIVEN_IO_ERROR_CONNECTION_REFUSED;
-        case ECONNRESET:   return RIVEN_IO_ERROR_CONNECTION_RESET;
-        case ECONNABORTED: return RIVEN_IO_ERROR_CONNECTION_ABORTED;
-        case ENOTCONN:     return RIVEN_IO_ERROR_NOT_CONNECTED;
-        case EADDRINUSE:   return RIVEN_IO_ERROR_ADDR_IN_USE;
-        case EADDRNOTAVAIL:return RIVEN_IO_ERROR_ADDR_NOT_AVAILABLE;
-        case EPIPE:        return RIVEN_IO_ERROR_BROKEN_PIPE;
+        case ECONNREFUSED: return RUXEN_IO_ERROR_CONNECTION_REFUSED;
+        case ECONNRESET:   return RUXEN_IO_ERROR_CONNECTION_RESET;
+        case ECONNABORTED: return RUXEN_IO_ERROR_CONNECTION_ABORTED;
+        case ENOTCONN:     return RUXEN_IO_ERROR_NOT_CONNECTED;
+        case EADDRINUSE:   return RUXEN_IO_ERROR_ADDR_IN_USE;
+        case EADDRNOTAVAIL:return RUXEN_IO_ERROR_ADDR_NOT_AVAILABLE;
+        case EPIPE:        return RUXEN_IO_ERROR_BROKEN_PIPE;
         case EACCES:
-        case EPERM:        return RIVEN_IO_ERROR_PERMISSION_DENIED;
+        case EPERM:        return RUXEN_IO_ERROR_PERMISSION_DENIED;
         case EBADF:
-        case EINVAL:       return RIVEN_IO_ERROR_INVALID_INPUT;
-        case ETIMEDOUT:    return RIVEN_IO_ERROR_TIMED_OUT;
-        default:           return RIVEN_IO_ERROR_OTHER;
+        case EINVAL:       return RUXEN_IO_ERROR_INVALID_INPUT;
+        case ETIMEDOUT:    return RUXEN_IO_ERROR_TIMED_OUT;
+        default:           return RUXEN_IO_ERROR_OTHER;
     }
 }
 
@@ -192,11 +192,11 @@ typedef struct {
     void *result;
     int done;
     int result_taken;
-} RivenAsyncBindState;
+} RuxenAsyncBindState;
 
-void *riven_async_bind_state_new(const char *addr) {
-    RivenAsyncBindState *s =
-        (RivenAsyncBindState *)riven_alloc(sizeof(RivenAsyncBindState));
+void *ruxen_async_bind_state_new(const char *addr) {
+    RuxenAsyncBindState *s =
+        (RuxenAsyncBindState *)ruxen_alloc(sizeof(RuxenAsyncBindState));
     s->result = NULL;
     s->done = 0;
     s->result_taken = 0;
@@ -210,24 +210,24 @@ void *riven_async_bind_state_new(const char *addr) {
     return s;
 }
 
-void *riven_async_tcp_listener_bind(const char *addr) {
+void *ruxen_async_tcp_listener_bind(const char *addr) {
     if (!addr) {
-        return riven_result_err_value(
-            (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_result_err_value(
+            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
     }
     struct sockaddr_in sa;
-    if (riven_async_net_parse_addr(addr, &sa) != 0) {
-        return riven_result_err_value(
-            (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+    if (ruxen_async_net_parse_addr(addr, &sa) != 0) {
+        return ruxen_result_err_value(
+            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
     }
 
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
-        return riven_result_err_value(
-            (int64_t)riven_io_error_unit(
-                riven_async_net_io_error_tag(errno)));
+        return ruxen_result_err_value(
+            (int64_t)ruxen_io_error_unit(
+                ruxen_async_net_io_error_tag(errno)));
     }
-    riven_async_net_set_nosigpipe(fd);
+    ruxen_async_net_set_nosigpipe(fd);
     int one = 1;
     /* SO_REUSEADDR so the e2e fixture can pick a port and not get
      * TIME_WAIT'd across re-runs. */
@@ -240,32 +240,32 @@ void *riven_async_tcp_listener_bind(const char *addr) {
      * the single-listener path working unchanged. */
     (void)setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one));
 
-    if (riven_async_net_set_nonblock(fd) != 0) {
+    if (ruxen_async_net_set_nonblock(fd) != 0) {
         int saved = errno;
         close(fd);
-        return riven_result_err_value(
-            (int64_t)riven_io_error_unit(
-                riven_async_net_io_error_tag(saved)));
+        return ruxen_result_err_value(
+            (int64_t)ruxen_io_error_unit(
+                ruxen_async_net_io_error_tag(saved)));
     }
 
     if (bind(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
         int saved = errno;
         close(fd);
-        return riven_result_err_value(
-            (int64_t)riven_io_error_unit(
-                riven_async_net_io_error_tag(saved)));
+        return ruxen_result_err_value(
+            (int64_t)ruxen_io_error_unit(
+                ruxen_async_net_io_error_tag(saved)));
     }
 
     if (listen(fd, 128) != 0) {
         int saved = errno;
         close(fd);
-        return riven_result_err_value(
-            (int64_t)riven_io_error_unit(
-                riven_async_net_io_error_tag(saved)));
+        return ruxen_result_err_value(
+            (int64_t)ruxen_io_error_unit(
+                ruxen_async_net_io_error_tag(saved)));
     }
 
-    RivenAsyncTcpListener *l =
-        (RivenAsyncTcpListener *)riven_alloc(sizeof(RivenAsyncTcpListener));
+    RuxenAsyncTcpListener *l =
+        (RuxenAsyncTcpListener *)ruxen_alloc(sizeof(RuxenAsyncTcpListener));
     l->fd = fd;
     l->closed = 0;
     /* Register the listener fd for read-readiness ONCE, edge-triggered,
@@ -273,36 +273,36 @@ void *riven_async_tcp_listener_bind(const char *addr) {
      * calls accept_step (which loops until EAGAIN) — no per-poll
      * register/deregister syscalls. 0 = "use current-thread reactor",
      * lazy-acquires if needed. */
-    l->accept_handle = riven_reactor_register_fd_read_persistent(0, (int64_t)fd);
-    return riven_result_ok_value((int64_t)l);
+    l->accept_handle = ruxen_reactor_register_fd_read_persistent(0, (int64_t)fd);
+    return ruxen_result_ok_value((int64_t)l);
 }
 
-void *riven_async_bind_state_to_result(void *state) {
+void *ruxen_async_bind_state_to_result(void *state) {
     if (!state) {
-        return riven_result_err_value(
-            (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_result_err_value(
+            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
     }
-    RivenAsyncBindState *s = (RivenAsyncBindState *)state;
+    RuxenAsyncBindState *s = (RuxenAsyncBindState *)state;
     if (!s->done) {
-        s->result = riven_async_tcp_listener_bind(s->addr);
+        s->result = ruxen_async_tcp_listener_bind(s->addr);
         s->done = 1;
     }
     if (s->result_taken) {
-        return riven_result_err_value(
-            (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_result_err_value(
+            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
     }
     s->result_taken = 1;
     return s->result;
 }
 
-void riven_async_bind_state_free(void *state) {
+void ruxen_async_bind_state_free(void *state) {
     if (!state) return;
     free(state);
 }
 
-int64_t riven_async_tcp_listener_fd(void *self) {
+int64_t ruxen_async_tcp_listener_fd(void *self) {
     if (!self) return -1;
-    RivenAsyncTcpListener *l = (RivenAsyncTcpListener *)self;
+    RuxenAsyncTcpListener *l = (RuxenAsyncTcpListener *)self;
     if (l->closed) return -1;
     return (int64_t)l->fd;
 }
@@ -311,20 +311,20 @@ int64_t riven_async_tcp_listener_fd(void *self) {
  * from the listener at construction time so it doesn't have to register
  * per-poll. Returns 0 if not registered (defensive — bind always
  * registers, so this only happens for a corrupted listener). */
-int64_t riven_async_tcp_listener_accept_handle(void *self) {
+int64_t ruxen_async_tcp_listener_accept_handle(void *self) {
     if (!self) return 0;
-    return ((RivenAsyncTcpListener *)self)->accept_handle;
+    return ((RuxenAsyncTcpListener *)self)->accept_handle;
 }
 
-void riven_async_tcp_listener_drop(void *self) {
+void ruxen_async_tcp_listener_drop(void *self) {
     if (!self) return;
-    RivenAsyncTcpListener *l = (RivenAsyncTcpListener *)self;
+    RuxenAsyncTcpListener *l = (RuxenAsyncTcpListener *)self;
     /* Deregister BEFORE close — kqueue EV_DELETE / epoll EPOLL_CTL_DEL
      * need the fd to still be valid; closing an fd implicitly removes
      * it from kqueue but NOT epoll, and even on kqueue the slot
      * bookkeeping in reactor.c needs the fd to look up the filter. */
     if (l->accept_handle != 0) {
-        riven_reactor_deregister(0, l->accept_handle);
+        ruxen_reactor_deregister(0, l->accept_handle);
         l->accept_handle = 0;
     }
     if (!l->closed && l->fd >= 0) {
@@ -346,11 +346,11 @@ typedef struct {
     int err_set;
     int done;
     int result_taken;
-} RivenAsyncAcceptState;
+} RuxenAsyncAcceptState;
 
-void *riven_async_accept_state_new(int64_t listener_fd) {
-    RivenAsyncAcceptState *s =
-        (RivenAsyncAcceptState *)riven_alloc(sizeof(RivenAsyncAcceptState));
+void *ruxen_async_accept_state_new(int64_t listener_fd) {
+    RuxenAsyncAcceptState *s =
+        (RuxenAsyncAcceptState *)ruxen_alloc(sizeof(RuxenAsyncAcceptState));
     s->listener_fd = (int)listener_fd;
     s->accepted_fd = -1;
     s->peer_buf[0] = '\0';
@@ -361,14 +361,14 @@ void *riven_async_accept_state_new(int64_t listener_fd) {
     return s;
 }
 
-int64_t riven_async_accept_state_get_fd(void *state) {
+int64_t ruxen_async_accept_state_get_fd(void *state) {
     if (!state) return -1;
-    return (int64_t)((RivenAsyncAcceptState *)state)->listener_fd;
+    return (int64_t)((RuxenAsyncAcceptState *)state)->listener_fd;
 }
 
-int64_t riven_async_accept_step(void *state) {
+int64_t ruxen_async_accept_step(void *state) {
     if (!state) return 3;
-    RivenAsyncAcceptState *s = (RivenAsyncAcceptState *)state;
+    RuxenAsyncAcceptState *s = (RuxenAsyncAcceptState *)state;
     if (s->done) return 2;
     if (s->err_set) return 3;
 
@@ -410,15 +410,15 @@ int64_t riven_async_accept_step(void *state) {
                 continue;
             }
             s->err_set = 1;
-            s->err_tag = riven_async_net_io_error_tag(errno);
+            s->err_tag = ruxen_async_net_io_error_tag(errno);
             return 3;
         }
-        riven_async_net_set_nosigpipe(new_fd);
-        if (riven_async_net_set_nonblock(new_fd) != 0) {
+        ruxen_async_net_set_nosigpipe(new_fd);
+        if (ruxen_async_net_set_nonblock(new_fd) != 0) {
             int saved = errno;
             close(new_fd);
             s->err_set = 1;
-            s->err_tag = riven_async_net_io_error_tag(saved);
+            s->err_tag = ruxen_async_net_io_error_tag(saved);
             return 3;
         }
         char ip[INET_ADDRSTRLEN];
@@ -434,38 +434,38 @@ int64_t riven_async_accept_step(void *state) {
 }
 
 /* Result payload is a tuple (AsyncTcpStream, String). The C side
- * doesn't know how to construct tuples generically; the Riven future
+ * doesn't know how to construct tuples generically; the Ruxen future
  * pulls fd + peer separately and assembles the tuple in surface code.
  * These three takers return the components individually. */
-int64_t riven_async_accept_state_take_fd(void *state) {
+int64_t ruxen_async_accept_state_take_fd(void *state) {
     if (!state) return -1;
-    RivenAsyncAcceptState *s = (RivenAsyncAcceptState *)state;
+    RuxenAsyncAcceptState *s = (RuxenAsyncAcceptState *)state;
     if (s->result_taken || s->err_set) return -1;
     return (int64_t)s->accepted_fd;
 }
 
-void *riven_async_accept_state_take_peer(void *state) {
-    if (!state) return riven_string_from("");
-    RivenAsyncAcceptState *s = (RivenAsyncAcceptState *)state;
-    if (s->result_taken || s->err_set) return riven_string_from("");
-    return riven_string_from(s->peer_buf);
+void *ruxen_async_accept_state_take_peer(void *state) {
+    if (!state) return ruxen_string_from("");
+    RuxenAsyncAcceptState *s = (RuxenAsyncAcceptState *)state;
+    if (s->result_taken || s->err_set) return ruxen_string_from("");
+    return ruxen_string_from(s->peer_buf);
 }
 
-int64_t riven_async_accept_state_get_err(void *state) {
+int64_t ruxen_async_accept_state_get_err(void *state) {
     if (!state) return -1;
-    RivenAsyncAcceptState *s = (RivenAsyncAcceptState *)state;
+    RuxenAsyncAcceptState *s = (RuxenAsyncAcceptState *)state;
     if (!s->err_set) return -1;
     return (int64_t)s->err_tag;
 }
 
-void riven_async_accept_state_mark_taken(void *state) {
+void ruxen_async_accept_state_mark_taken(void *state) {
     if (!state) return;
-    ((RivenAsyncAcceptState *)state)->result_taken = 1;
+    ((RuxenAsyncAcceptState *)state)->result_taken = 1;
 }
 
-void riven_async_accept_state_free(void *state) {
+void ruxen_async_accept_state_free(void *state) {
     if (!state) return;
-    RivenAsyncAcceptState *s = (RivenAsyncAcceptState *)state;
+    RuxenAsyncAcceptState *s = (RuxenAsyncAcceptState *)state;
     /* If the user dropped the future without consuming the accepted
      * fd, close it here so we don't leak. */
     if (s->accepted_fd >= 0 && !s->result_taken) {
@@ -485,9 +485,9 @@ void riven_async_accept_state_free(void *state) {
  * stream and are deregistered on drop. AsyncReadFuture / AsyncWriteFuture
  * read these handles via the accessors below; they no longer touch the
  * reactor themselves. */
-void *riven_async_tcp_stream_from_fd(int64_t fd) {
-    RivenAsyncTcpStream *s =
-        (RivenAsyncTcpStream *)riven_alloc(sizeof(RivenAsyncTcpStream));
+void *ruxen_async_tcp_stream_from_fd(int64_t fd) {
+    RuxenAsyncTcpStream *s =
+        (RuxenAsyncTcpStream *)ruxen_alloc(sizeof(RuxenAsyncTcpStream));
     s->fd = (int)fd;
     s->closed = 0;
     /* 0 = use current-thread reactor (lazy-acquired). Stream construction
@@ -501,8 +501,8 @@ void *riven_async_tcp_stream_from_fd(int64_t fd) {
      * registration on first EAGAIN — reintroduces the per-poll syscall
      * we're trying to eliminate. Two kevents at construction (one per
      * filter) is dwarfed by the savings on the hot path. */
-    s->read_handle  = riven_reactor_register_fd_read_persistent(0, fd);
-    s->write_handle = riven_reactor_register_fd_write_persistent(0, fd);
+    s->read_handle  = ruxen_reactor_register_fd_read_persistent(0, fd);
+    s->write_handle = ruxen_reactor_register_fd_write_persistent(0, fd);
     return s;
 }
 
@@ -518,11 +518,11 @@ typedef struct {
     int err_set;
     int done;
     int result_taken;
-} RivenAsyncConnectState;
+} RuxenAsyncConnectState;
 
-void *riven_async_connect_state_new(const char *addr) {
-    RivenAsyncConnectState *s =
-        (RivenAsyncConnectState *)riven_alloc(sizeof(RivenAsyncConnectState));
+void *ruxen_async_connect_state_new(const char *addr) {
+    RuxenAsyncConnectState *s =
+        (RuxenAsyncConnectState *)ruxen_alloc(sizeof(RuxenAsyncConnectState));
     s->fd = -1;
     s->started = 0;
     s->completed = 0;
@@ -541,35 +541,35 @@ void *riven_async_connect_state_new(const char *addr) {
     return s;
 }
 
-int64_t riven_async_connect_state_get_fd(void *state) {
+int64_t ruxen_async_connect_state_get_fd(void *state) {
     if (!state) return -1;
-    return (int64_t)((RivenAsyncConnectState *)state)->fd;
+    return (int64_t)((RuxenAsyncConnectState *)state)->fd;
 }
 
-int64_t riven_async_connect_step(void *state) {
+int64_t ruxen_async_connect_step(void *state) {
     if (!state) return 3;
-    RivenAsyncConnectState *s = (RivenAsyncConnectState *)state;
+    RuxenAsyncConnectState *s = (RuxenAsyncConnectState *)state;
     if (s->done) return 2;
     if (s->err_set) return 3;
 
     if (!s->started) {
-        if (riven_async_net_parse_addr(s->addr, &s->sa) != 0) {
+        if (ruxen_async_net_parse_addr(s->addr, &s->sa) != 0) {
             s->err_set = 1;
-            s->err_tag = RIVEN_IO_ERROR_INVALID_INPUT;
+            s->err_tag = RUXEN_IO_ERROR_INVALID_INPUT;
             return 3;
         }
         int fd = socket(AF_INET, SOCK_STREAM, 0);
         if (fd < 0) {
             s->err_set = 1;
-            s->err_tag = riven_async_net_io_error_tag(errno);
+            s->err_tag = ruxen_async_net_io_error_tag(errno);
             return 3;
         }
-        riven_async_net_set_nosigpipe(fd);
-        if (riven_async_net_set_nonblock(fd) != 0) {
+        ruxen_async_net_set_nosigpipe(fd);
+        if (ruxen_async_net_set_nonblock(fd) != 0) {
             int saved = errno;
             close(fd);
             s->err_set = 1;
-            s->err_tag = riven_async_net_io_error_tag(saved);
+            s->err_tag = ruxen_async_net_io_error_tag(saved);
             return 3;
         }
         s->fd = fd;
@@ -585,7 +585,7 @@ int64_t riven_async_connect_step(void *state) {
             return 1;
         }
         s->err_set = 1;
-        s->err_tag = riven_async_net_io_error_tag(errno);
+        s->err_tag = ruxen_async_net_io_error_tag(errno);
         return 3;
     }
 
@@ -594,7 +594,7 @@ int64_t riven_async_connect_step(void *state) {
     socklen_t slen = sizeof(soerr);
     if (getsockopt(s->fd, SOL_SOCKET, SO_ERROR, &soerr, &slen) != 0) {
         s->err_set = 1;
-        s->err_tag = riven_async_net_io_error_tag(errno);
+        s->err_tag = ruxen_async_net_io_error_tag(errno);
         return 3;
     }
     if (soerr == 0) {
@@ -606,36 +606,36 @@ int64_t riven_async_connect_step(void *state) {
         return 1;
     }
     s->err_set = 1;
-    s->err_tag = riven_async_net_io_error_tag(soerr);
+    s->err_tag = ruxen_async_net_io_error_tag(soerr);
     return 3;
 }
 
-int64_t riven_async_connect_state_take_fd(void *state) {
+int64_t ruxen_async_connect_state_take_fd(void *state) {
     if (!state) return -1;
-    RivenAsyncConnectState *s = (RivenAsyncConnectState *)state;
+    RuxenAsyncConnectState *s = (RuxenAsyncConnectState *)state;
     if (s->result_taken || s->err_set || !s->completed) return -1;
     return (int64_t)s->fd;
 }
 
-int64_t riven_async_connect_state_get_err(void *state) {
+int64_t ruxen_async_connect_state_get_err(void *state) {
     if (!state) return -1;
-    RivenAsyncConnectState *s = (RivenAsyncConnectState *)state;
+    RuxenAsyncConnectState *s = (RuxenAsyncConnectState *)state;
     if (!s->err_set) return -1;
     return (int64_t)s->err_tag;
 }
 
-void riven_async_connect_state_mark_taken(void *state) {
+void ruxen_async_connect_state_mark_taken(void *state) {
     if (!state) return;
-    ((RivenAsyncConnectState *)state)->result_taken = 1;
+    ((RuxenAsyncConnectState *)state)->result_taken = 1;
 }
 
-void riven_async_connect_state_free(void *state) {
+void ruxen_async_connect_state_free(void *state) {
     if (!state) return;
-    RivenAsyncConnectState *s = (RivenAsyncConnectState *)state;
+    RuxenAsyncConnectState *s = (RuxenAsyncConnectState *)state;
     /* If the user dropped the connect future without consuming the
      * fd (failed connect, or half-resolved connect that was
      * cancelled), close it here. The reactor deregister happens on
-     * the Riven side via the future's def drop. */
+     * the Ruxen side via the future's def drop. */
     if (s->fd >= 0 && !s->result_taken) {
         close(s->fd);
         s->fd = -1;
@@ -663,20 +663,20 @@ typedef struct {
     int err_set;
     int done;
     int result_taken;
-} RivenAsyncTcpReadState;
+} RuxenAsyncTcpReadState;
 
-void *riven_async_tcp_read_state_new(int64_t fd, int64_t max_bytes) {
-    RivenAsyncTcpReadState *s =
-        (RivenAsyncTcpReadState *)riven_alloc(sizeof(RivenAsyncTcpReadState));
+void *ruxen_async_tcp_read_state_new(int64_t fd, int64_t max_bytes) {
+    RuxenAsyncTcpReadState *s =
+        (RuxenAsyncTcpReadState *)ruxen_alloc(sizeof(RuxenAsyncTcpReadState));
     s->fd = (int)fd;
     /* Cap at 64 KiB per call — keeps the scratch allocation bounded
-     * even if a buggy caller passes a huge max. The Riven surface can
+     * even if a buggy caller passes a huge max. The Ruxen surface can
      * always loop. */
     if (max_bytes <= 0) max_bytes = 1;
     if (max_bytes > 65536) max_bytes = 65536;
     s->max_bytes = (size_t)max_bytes;
     s->buf = (char *)malloc(s->max_bytes + 1);
-    if (!s->buf) riven_panic("riven_async_tcp_read_state_new: malloc failed");
+    if (!s->buf) ruxen_panic("ruxen_async_tcp_read_state_new: malloc failed");
     s->len = 0;
     s->out_str = NULL;
     s->err_tag = 0;
@@ -686,14 +686,14 @@ void *riven_async_tcp_read_state_new(int64_t fd, int64_t max_bytes) {
     return s;
 }
 
-int64_t riven_async_tcp_read_state_get_fd(void *state) {
+int64_t ruxen_async_tcp_read_state_get_fd(void *state) {
     if (!state) return -1;
-    return (int64_t)((RivenAsyncTcpReadState *)state)->fd;
+    return (int64_t)((RuxenAsyncTcpReadState *)state)->fd;
 }
 
-int64_t riven_async_tcp_read_step(void *state) {
+int64_t ruxen_async_tcp_read_step(void *state) {
     if (!state) return 3;
-    RivenAsyncTcpReadState *s = (RivenAsyncTcpReadState *)state;
+    RuxenAsyncTcpReadState *s = (RuxenAsyncTcpReadState *)state;
     if (s->done) return 2;
     if (s->err_set) return 3;
 
@@ -709,7 +709,7 @@ int64_t riven_async_tcp_read_step(void *state) {
                 return 1;
             }
             s->err_set = 1;
-            s->err_tag = riven_async_net_io_error_tag(errno);
+            s->err_tag = ruxen_async_net_io_error_tag(errno);
             return 3;
         }
         /* got == 0 → clean EOF; got > 0 → at least one byte read.
@@ -718,21 +718,21 @@ int64_t riven_async_tcp_read_step(void *state) {
          * partial-read by inspecting the returned String length. */
         s->len = (size_t)got;
         s->buf[s->len] = '\0';
-        s->out_str = riven_string_from(s->buf);
+        s->out_str = ruxen_string_from(s->buf);
         s->done = 1;
         return 2;
     }
 }
 
-void *riven_async_tcp_read_state_take_result(void *state) {
+void *ruxen_async_tcp_read_state_take_result(void *state) {
     if (!state) {
-        return riven_result_err_value(
-            (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_result_err_value(
+            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
     }
-    RivenAsyncTcpReadState *s = (RivenAsyncTcpReadState *)state;
+    RuxenAsyncTcpReadState *s = (RuxenAsyncTcpReadState *)state;
     if (s->result_taken) {
-        return riven_result_err_value(
-            (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_result_err_value(
+            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
     }
     s->result_taken = 1;
     if (s->buf) {
@@ -740,15 +740,15 @@ void *riven_async_tcp_read_state_take_result(void *state) {
         s->buf = NULL;
     }
     if (s->err_set) {
-        return riven_result_err_value(
-            (int64_t)riven_io_error_unit(s->err_tag));
+        return ruxen_result_err_value(
+            (int64_t)ruxen_io_error_unit(s->err_tag));
     }
-    return riven_result_ok_value((int64_t)s->out_str);
+    return ruxen_result_ok_value((int64_t)s->out_str);
 }
 
-void riven_async_tcp_read_state_free(void *state) {
+void ruxen_async_tcp_read_state_free(void *state) {
     if (!state) return;
-    RivenAsyncTcpReadState *s = (RivenAsyncTcpReadState *)state;
+    RuxenAsyncTcpReadState *s = (RuxenAsyncTcpReadState *)state;
     if (s->buf) {
         free(s->buf);
         s->buf = NULL;
@@ -759,16 +759,16 @@ void riven_async_tcp_read_state_free(void *state) {
 /* Build a Result::Err(IoError.TimedOut("read timed out")) without
  * touching a read-state struct. Used by AsyncReadWithTimeoutFuture
  * when the deadline timer fires before the kernel reports any
- * readiness on the fd. We bypass riven_async_tcp_read_state_take_result
+ * readiness on the fd. We bypass ruxen_async_tcp_read_state_take_result
  * deliberately — that helper consumes / frees the buffer and would
  * collapse the variant to the *unit* tag form (no payload), but
  * IoError.TimedOut is a message-carrying variant (#06.5 T1).
  *
  * The state struct is NOT freed here; the future's drop calls
- * riven_async_tcp_read_state_free for that. */
-void *riven_async_net_make_timeout_result(void) {
-    return riven_result_err_value(
-        (int64_t)riven_io_error_struct(RIVEN_IO_ERROR_TIMED_OUT,
+ * ruxen_async_tcp_read_state_free for that. */
+void *ruxen_async_net_make_timeout_result(void) {
+    return ruxen_result_err_value(
+        (int64_t)ruxen_io_error_struct(RUXEN_IO_ERROR_TIMED_OUT,
                                        "read timed out"));
 }
 
@@ -786,11 +786,11 @@ typedef struct {
     int err_set;
     int done;
     int result_taken;
-} RivenAsyncTcpWriteState;
+} RuxenAsyncTcpWriteState;
 
-void *riven_async_tcp_write_state_new(int64_t fd, const char *content) {
-    RivenAsyncTcpWriteState *s =
-        (RivenAsyncTcpWriteState *)riven_alloc(sizeof(RivenAsyncTcpWriteState));
+void *ruxen_async_tcp_write_state_new(int64_t fd, const char *content) {
+    RuxenAsyncTcpWriteState *s =
+        (RuxenAsyncTcpWriteState *)ruxen_alloc(sizeof(RuxenAsyncTcpWriteState));
     s->fd = (int)fd;
     s->content = content ? content : "";
     s->total = strlen(s->content);
@@ -802,14 +802,14 @@ void *riven_async_tcp_write_state_new(int64_t fd, const char *content) {
     return s;
 }
 
-int64_t riven_async_tcp_write_state_get_fd(void *state) {
+int64_t ruxen_async_tcp_write_state_get_fd(void *state) {
     if (!state) return -1;
-    return (int64_t)((RivenAsyncTcpWriteState *)state)->fd;
+    return (int64_t)((RuxenAsyncTcpWriteState *)state)->fd;
 }
 
-int64_t riven_async_tcp_write_step(void *state) {
+int64_t ruxen_async_tcp_write_step(void *state) {
     if (!state) return 3;
-    RivenAsyncTcpWriteState *s = (RivenAsyncTcpWriteState *)state;
+    RuxenAsyncTcpWriteState *s = (RuxenAsyncTcpWriteState *)state;
     if (s->done) return 2;
     if (s->err_set) return 3;
 
@@ -826,12 +826,12 @@ int64_t riven_async_tcp_write_step(void *state) {
                 return 1;
             }
             s->err_set = 1;
-            s->err_tag = riven_async_net_io_error_tag(errno);
+            s->err_tag = ruxen_async_net_io_error_tag(errno);
             return 3;
         }
         if (put == 0) {
             s->err_set = 1;
-            s->err_tag = RIVEN_IO_ERROR_WRITE_ZERO;
+            s->err_tag = RUXEN_IO_ERROR_WRITE_ZERO;
             return 3;
         }
         s->written += (size_t)put;
@@ -840,49 +840,49 @@ int64_t riven_async_tcp_write_step(void *state) {
     return 2;
 }
 
-void *riven_async_tcp_write_state_take_result(void *state) {
+void *ruxen_async_tcp_write_state_take_result(void *state) {
     if (!state) {
-        return riven_result_err_value(
-            (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_result_err_value(
+            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
     }
-    RivenAsyncTcpWriteState *s = (RivenAsyncTcpWriteState *)state;
+    RuxenAsyncTcpWriteState *s = (RuxenAsyncTcpWriteState *)state;
     if (s->result_taken) {
-        return riven_result_err_value(
-            (int64_t)riven_io_error_unit(RIVEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_result_err_value(
+            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
     }
     s->result_taken = 1;
     if (s->err_set) {
-        return riven_result_err_value(
-            (int64_t)riven_io_error_unit(s->err_tag));
+        return ruxen_result_err_value(
+            (int64_t)ruxen_io_error_unit(s->err_tag));
     }
     /* Return the count written as the Ok payload (matches spec B9). */
-    return riven_result_ok_value((int64_t)s->written);
+    return ruxen_result_ok_value((int64_t)s->written);
 }
 
-void riven_async_tcp_write_state_free(void *state) {
+void ruxen_async_tcp_write_state_free(void *state) {
     if (!state) return;
     free(state);
 }
 
 /* ── AsyncTcpStream — fd accessor + drop (B10's stream side) ───────── */
 
-int64_t riven_async_tcp_stream_fd(void *self) {
+int64_t ruxen_async_tcp_stream_fd(void *self) {
     if (!self) return -1;
-    RivenAsyncTcpStream *s = (RivenAsyncTcpStream *)self;
+    RuxenAsyncTcpStream *s = (RuxenAsyncTcpStream *)self;
     if (s->closed) return -1;
     return (int64_t)s->fd;
 }
 
 /* Persistent r/w handles. AsyncReadFuture / AsyncWriteFuture grab these
  * at construction time so they don't have to register per-poll. */
-int64_t riven_async_tcp_stream_read_handle(void *self) {
+int64_t ruxen_async_tcp_stream_read_handle(void *self) {
     if (!self) return 0;
-    return ((RivenAsyncTcpStream *)self)->read_handle;
+    return ((RuxenAsyncTcpStream *)self)->read_handle;
 }
 
-int64_t riven_async_tcp_stream_write_handle(void *self) {
+int64_t ruxen_async_tcp_stream_write_handle(void *self) {
     if (!self) return 0;
-    return ((RivenAsyncTcpStream *)self)->write_handle;
+    return ((RuxenAsyncTcpStream *)self)->write_handle;
 }
 
 /* Internal helper: tear down both r+w persistent registrations. Idempotent.
@@ -891,22 +891,22 @@ int64_t riven_async_tcp_stream_write_handle(void *self) {
  * for `fired` / `registered_count`, and Linux epoll does NOT auto-remove
  * on close (only on the last fd dup closes). Always deregister
  * explicitly. */
-static void riven_async_tcp_stream_unregister(RivenAsyncTcpStream *s) {
+static void ruxen_async_tcp_stream_unregister(RuxenAsyncTcpStream *s) {
     if (s->read_handle != 0) {
-        riven_reactor_deregister(0, s->read_handle);
+        ruxen_reactor_deregister(0, s->read_handle);
         s->read_handle = 0;
     }
     if (s->write_handle != 0) {
-        riven_reactor_deregister(0, s->write_handle);
+        ruxen_reactor_deregister(0, s->write_handle);
         s->write_handle = 0;
     }
 }
 
-void riven_async_tcp_stream_drop(void *self) {
+void ruxen_async_tcp_stream_drop(void *self) {
     if (!self) return;
-    RivenAsyncTcpStream *s = (RivenAsyncTcpStream *)self;
+    RuxenAsyncTcpStream *s = (RuxenAsyncTcpStream *)self;
     /* Deregister BEFORE close — see listener_drop note. */
-    riven_async_tcp_stream_unregister(s);
+    ruxen_async_tcp_stream_unregister(s);
     if (!s->closed && s->fd >= 0) {
         int rc;
         do { rc = close(s->fd); } while (rc < 0 && errno == EINTR);
@@ -934,14 +934,14 @@ void riven_async_tcp_stream_drop(void *self) {
  *   IS closed. The stream's own drop becomes a no-op fallback for
  *   the "stream dropped without explicit close" path, which is the
  *   only path that still depends on drop elaboration. */
-void riven_async_tcp_stream_shutdown(void *self) {
+void ruxen_async_tcp_stream_shutdown(void *self) {
     if (!self) return;
-    RivenAsyncTcpStream *s = (RivenAsyncTcpStream *)self;
+    RuxenAsyncTcpStream *s = (RuxenAsyncTcpStream *)self;
     /* Deregister r+w handles BEFORE close so the reactor's slot table
-     * and registered_count stay consistent (see drop note). The Riven
+     * and registered_count stay consistent (see drop note). The Ruxen
      * stream's own def-drop will run after this and find handles == 0
      * + closed == 1, making it a no-op. */
-    riven_async_tcp_stream_unregister(s);
+    ruxen_async_tcp_stream_unregister(s);
     if (!s->closed && s->fd >= 0) {
         (void)shutdown(s->fd, SHUT_RDWR);
         int rc;

@@ -6,7 +6,7 @@
 
 **Status:** shipped Phase 2 #02 (Rust-style borrow check on MIR).
 
-Riven's borrow checker runs after typeck on the MIR.  It rejects
+Ruxen's borrow checker runs after typeck on the MIR.  It rejects
 use-after-move, mutable aliasing, and dangling borrows.  This spec
 captures the **observable** rejection envelope; cross-reference
 `docs/dev/` for the implementation notes.
@@ -15,7 +15,7 @@ captures the **observable** rejection envelope; cross-reference
 
 ## B1 — Sample-program acceptance baseline
 
-The `borrow_check_sample.rvn` fixture is a canonical mid-size program
+The `borrow_check_sample.rx` fixture is a canonical mid-size program
 that exercises move semantics, immutable borrowing, and mutable
 borrowing across function boundaries.  Borrow check accepts it
 without diagnostics.
@@ -62,10 +62,10 @@ sites.  Both must agree.
 
 - The borrow checker has many internal rules (NLL-style two-phase
   borrows, conditional moves, partial moves through struct fields)
-  that today are pinned by unit tests inside `crates/riven-core/src/`
+  that today are pinned by unit tests inside `crates/ruxen-core/src/`
   rather than at the integration boundary.  Listing them here would
   duplicate the unit suite — point readers to
-  `crates/riven-core/src/borrow_check/tests.rs` and only surface
+  `crates/ruxen-core/src/borrow_check/tests.rs` and only surface
   observable rejection-envelope behaviours at the integration layer.
 
 ## Out of scope (v2)
@@ -73,7 +73,7 @@ sites.  Both must agree.
 - Polonius-style next-gen borrow checker (the current implementation
   is NLL-equivalent).
 - User-controllable lifetimes beyond the surface in
-  `tests/release-e2e/cases/102_lifetime_explicit.rvn`.
+  `tests/release-e2e/cases/102_lifetime_explicit.rx`.
 - `Pin[T]` and self-referential structures.
 - Reborrowing across closure captures (closures currently take
   ownership of captures unless marked otherwise).

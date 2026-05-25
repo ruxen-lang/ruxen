@@ -1,9 +1,0 @@
-lib "riven_runtime"
-  def add_one as "riven_test_extern_add_one"(x: Int) -> Int
-end
-
-lib "riven_runtime"
-  # Disagrees on arity: same C symbol, different parameter count.
-  # The resolver should fire E0722 at the second decl.
-  def add_one_alt as "riven_test_extern_add_one"(x: Int, y: Int) -> Int
-end

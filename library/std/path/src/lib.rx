@@ -1,0 +1,37 @@
+## std::path — POSIX path manipulation, Linux-style forward-slash
+## separators only. Windows backslash support is a non-goal for v1.
+##
+## Wave 2 (#06.8) — migrated from resolve/stdlib/mod.rs Rust
+## registrations into self-hosted library/std/src/path.rx.
+##
+## See docs/specs/stdlib/path.spec.md for the behavioural contract.
+## The runtime C implementations live in library/runtime/fs.c (paired
+## with the fs surface — same translation unit, no separate
+## `path.c`).
+
+## std::path namespace class — 5 static methods. Phase C of #06.95
+## also drops the redundant `path_` prefix on each method name since
+## the class itself supplies the namespace. The bare lib block below
+## is the transition shim that keeps `path_join` etc. resolving while
+## existing callers migrate to `Path.join` / `Path.parent` / …
+class Path
+  lib "../string/runtime/string.c"
+    def self.join as "ruxen_path_join"(a: &String, b: &String) -> String
+    def self.parent as "ruxen_path_parent"(path: &String) -> String
+    def self.file_name as "ruxen_path_file_name"(path: &String) -> String
+    # Named `extname` (not `extension`) because `extension` is a
+    # reserved keyword in Ruxen (used by `extension Foo[T: Bar] { ... }`
+    # blocks). `extname` matches Ruby's File.extname spelling.
+    def self.extname as "ruxen_path_extension"(path: &String) -> String
+    def self.is_absolute as "ruxen_path_is_absolute"(path: &String) -> Bool
+  end
+end
+
+# Phase C transition shim — see comment on `class Path` above.
+lib "../string/runtime/string.c"
+  def path_join as "ruxen_path_join"(a: &String, b: &String) -> String
+  def path_parent as "ruxen_path_parent"(path: &String) -> String
+  def path_file_name as "ruxen_path_file_name"(path: &String) -> String
+  def path_extension as "ruxen_path_extension"(path: &String) -> String
+  def path_is_absolute as "ruxen_path_is_absolute"(path: &String) -> Bool
+end

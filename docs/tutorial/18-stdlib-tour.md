@@ -4,7 +4,7 @@
 > under [`docs/specs/stdlib/`](../specs/).  The tutorial gives you
 > the 10-minute orientation; the spec is the source of truth.
 
-Riven ships a small focused standard library.  This chapter is a
+Ruxen ships a small focused standard library.  This chapter is a
 "what's in the box" tour — one section per module, each with the
 minimum to be productive.  For full method surfaces, follow the
 spec link at the top of each section.
@@ -15,7 +15,7 @@ spec link at the top of each section.
 
 [Spec](../specs/stdlib/io.spec.md)
 
-```riven
+```ruxen
 use std.io.{Stdin, Stdout, Stderr}
 
 def main
@@ -52,12 +52,12 @@ Cheat sheet:
 
 [Spec](../specs/stdlib/fs.spec.md)
 
-```riven
+```ruxen
 use std.fs.{read_to_string, write, exists, is_file, is_dir, read_dir,
             create_dir, remove_file}
 
 def main
-  match write("hello.txt", "hi from Riven!")
+  match write("hello.txt", "hi from Ruxen!")
     Ok(_)  -> puts "wrote"
     Err(_) -> puts "write failed"
   end
@@ -88,7 +88,7 @@ unspecified; sort before comparing.
 
 [Spec](../specs/stdlib/env.spec.md)
 
-```riven
+```ruxen
 use std.env.{args, var, vars, current_dir}
 
 def main
@@ -121,7 +121,7 @@ Read-only in v1: no `set_var` / `remove_var`.
 
 [Spec](../specs/stdlib/process.spec.md)
 
-```riven
+```ruxen
 use std.process.{exit, Command}
 
 def main
@@ -151,7 +151,7 @@ use case — see `docs/specs/stdlib/process.spec.md`.
 
 [Spec](../specs/stdlib/net.spec.md)
 
-```riven
+```ruxen
 use std.net.{TcpStream}
 
 def main
@@ -178,16 +178,16 @@ previews have been removed from the user-facing surface.
 
 [Spec](../specs/stdlib/path.spec.md)
 
-```riven
+```ruxen
 use std.path.{path_join, path_parent, path_file_name,
               path_extension, path_is_absolute}
 
 def main
-  let p = path_join(&"/usr/local", &"bin/riven.rvn")
-  puts p                               # /usr/local/bin/riven.rvn
+  let p = path_join(&"/usr/local", &"bin/ruxen.rx")
+  puts p                               # /usr/local/bin/ruxen.rx
   puts path_parent(&p)                 # /usr/local/bin
-  puts path_file_name(&p)              # riven.rvn
-  puts path_extension(&p)              # rvn
+  puts path_file_name(&p)              # ruxen.rx
+  puts path_extension(&p)              # rx
   puts "abs=#{path_is_absolute(&p)}"   # abs=true
 end
 ```
@@ -204,7 +204,7 @@ end
 
 [Spec](../specs/stdlib/time.spec.md)
 
-```riven
+```ruxen
 use std.time.{Instant, Duration, unix_ns}
 
 def main
@@ -260,7 +260,7 @@ Collections are introduced in [Chapter 13 — Collections](13-collections.md).
 The specs above cover the v1 method surface; the most common
 patterns are:
 
-```riven
+```ruxen
 var counts: Map[String, Int] = Map.new
 for word in text.split(" ")
   counts.entry(word).or_insert(0)
@@ -278,19 +278,19 @@ let doubled: Array[Int] = v.iter.map(|x| x * 2).collect[Array[Int]]()
 
 ## Where it lives in the source tree
 
-| Module       | Riven-side resolution           | C runtime fn prefix         |
+| Module       | Ruxen-side resolution           | C runtime fn prefix         |
 |--------------|----------------------------------|------------------------------|
-| `std.io`    | `resolve/mod.rs` builtin reg     | `riven_stdin_*` / `riven_stdout_*` / `riven_stderr_*` |
-| `std.fs`    | same                             | `riven_fs_*`                 |
-| `std.env`   | same                             | `riven_env_*`                |
-| `std.process` | same                           | `riven_process_*`            |
-| `std.net`   | same                             | `riven_tcp_*` / `riven_net_*`|
-| `std.path`  | same                             | `riven_path_*`               |
-| `std.time`  | same                             | `riven_time_*`               |
-| `std.fmt`   | same + `Formatter` class         | `riven_fmt_formatter_*`      |
+| `std.io`    | `resolve/mod.rs` builtin reg     | `ruxen_stdin_*` / `ruxen_stdout_*` / `ruxen_stderr_*` |
+| `std.fs`    | same                             | `ruxen_fs_*`                 |
+| `std.env`   | same                             | `ruxen_env_*`                |
+| `std.process` | same                           | `ruxen_process_*`            |
+| `std.net`   | same                             | `ruxen_tcp_*` / `ruxen_net_*`|
+| `std.path`  | same                             | `ruxen_path_*`               |
+| `std.time`  | same                             | `ruxen_time_*`               |
+| `std.fmt`   | same + `Formatter` class         | `ruxen_fmt_formatter_*`      |
 
 Codegen wiring lives in
-[`codegen/runtime.rs`](../../crates/riven-core/src/codegen/runtime.rs)
+[`codegen/runtime.rs`](../../crates/ruxen-core/src/codegen/runtime.rs)
 (the symbol allow-list + the MIR-callee → C-symbol map).
 
 ---

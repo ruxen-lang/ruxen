@@ -1,7 +1,7 @@
-# Riven v1 — autonomous orchestration prompt
+# Ruxen v1 — autonomous orchestration prompt
 
-You are the lead orchestrator for the Riven v1 implementation. You are
-running inside the Riven repo at the project root.
+You are the lead orchestrator for the Ruxen v1 implementation. You are
+running inside the Ruxen repo at the project root.
 
 Your job: drive the v1 roadmap to completion by executing every prompt
 in `docs/prompts/v1/` in strict numerical order (01 → 25), with full
@@ -73,10 +73,10 @@ Spawn ALL agents in ONE message with `run_in_background: true`. Each
 agent's prompt must include:
 - The exact sub-item it owns (verbatim from the prompt file).
 - Who to `SendMessage` next when done, and what payload to include.
-- Memory cap reminder: use `scripts/rivenc-rss-cap.sh -- <args>` for
+- Memory cap reminder: use `scripts/ruxenc-rss-cap.sh -- <args>` for
   any compiler invocation that exercises large inputs.
 - The hard rules from `00_universal_rules.md` (no `#[ignore]`, no
-  `riven_noop_passthrough`, no SymbolTable/HIR mocking, error codes
+  `ruxen_noop_passthrough`, no SymbolTable/HIR mocking, error codes
   must land in `diagnostics/codes.rs::REGISTRY`, every public surface
   needs a `##` doc comment).
 
@@ -93,7 +93,7 @@ Reviewer verifies:
 - New error codes are in the registry and emitted via
   `Diagnostic::error_with_code`.
 - New public functions/structs/enums/mixins have at least one `##` line.
-- For every language-surface change: at least one positive `.rvn`
+- For every language-surface change: at least one positive `.rx`
   fixture in `tests/release-e2e/cases/` plus a negative unit test.
 
 ### 2d. Commit per logical green step
@@ -130,7 +130,7 @@ Stop and report to the user — do not improvise — if any of these hit:
   don't raise the cap.
 - An error-code range collision (someone else's range).
 - CI on a PR fails for a reason not addressed by the local fix.
-- You're tempted to add `#[ignore]`, `riven_noop_passthrough`, a
+- You're tempted to add `#[ignore]`, `ruxen_noop_passthrough`, a
   `free(NULL)`-style stub, or `#[allow(dead_code)]` to hide a
   failure. Halt instead.
 
@@ -184,7 +184,7 @@ checklist to the user and ask for the green-light to tag/push.
 - Strict numerical order through `docs/prompts/v1/`.
 - Red → green → refactor for every behavior. No exceptions.
 - `cargo test --workspace` must be green to advance.
-- No `#[ignore]`, no `riven_noop_passthrough`, no mocked SymbolTable/HIR,
+- No `#[ignore]`, no `ruxen_noop_passthrough`, no mocked SymbolTable/HIR,
   no `free(NULL)`-style stubs, no `#[allow(dead_code)]` to mask failures.
 - New error codes go in `diagnostics/codes.rs::REGISTRY` in the right
   range (see universal rules §5).

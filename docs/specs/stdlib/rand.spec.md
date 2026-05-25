@@ -3,7 +3,7 @@
 **Status:** shipped Phase 2 #06.5 T8 — kernel CSPRNG-backed surface.
 
 CSPRNG-only. No userspace PRNG, no seeding — each call delegates to
-the OS kernel. Pin tests in `compiler/riven_core/tests/stdlib_rand.rs`
+the OS kernel. Pin tests in `compiler/ruxen_core/tests/stdlib_rand.rs`
 are the canonical docs for behaviour.
 
 - `random_bytes(n: Int) -> Result[Array[U8], IoError]` — returns
@@ -25,5 +25,5 @@ are the canonical docs for behaviour.
 
 **Type-system note:** the resolver / typeck use `Array[Int]` for the
 byte carrier — same convention as `File.read_all` and `TcpStream.read`
-(RivenVec slots are int64). The user-visible `Array[U8]` in the prose
+(RuxenVec slots are int64). The user-visible `Array[U8]` in the prose
 above is the declarative spec spelling.

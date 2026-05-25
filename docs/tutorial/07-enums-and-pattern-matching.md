@@ -4,7 +4,7 @@
 
 Enums are algebraic data types (tagged unions). Each variant can optionally carry data.
 
-```riven
+```ruxen
 enum Direction
   North
   South
@@ -15,7 +15,7 @@ end
 
 ### Variants with Data
 
-```riven
+```ruxen
 enum Shape
   Circle(radius: Float)
   Rectangle(width: Float, height: Float)
@@ -27,7 +27,7 @@ let s = Shape.Circle(5.0)
 
 ### Generic Enums
 
-```riven
+```ruxen
 enum Option[T]
   Some(T)
   nil
@@ -43,7 +43,7 @@ end
 
 `match` is exhaustive — every variant must be handled:
 
-```riven
+```ruxen
 def area(shape: &Shape) -> Float
   match shape
     Shape.Circle(r)           -> 3.14159 * r * r
@@ -58,9 +58,9 @@ end
 
 ## Option[T]
 
-Riven has no nullable references for ordinary values. (`nil` exists only as a raw-pointer literal in `unsafe`/FFI contexts — see [Chapter 14](14-ffi.md) and [Chapter 15](15-unsafe.md).) Optional values use `Option[T]`:
+Ruxen has no nullable references for ordinary values. (`nil` exists only as a raw-pointer literal in `unsafe`/FFI contexts — see [Chapter 14](14-ffi.md) and [Chapter 15](15-unsafe.md).) Optional values use `Option[T]`:
 
-```riven
+```ruxen
 def find_user(id: Int) -> Option[User]
   if id == 42
     Some(User.new("Alice", 30))
@@ -72,7 +72,7 @@ end
 
 ### Working with Option
 
-```riven
+```ruxen
 let user = find_user(42)
 
 # Pattern match
@@ -101,7 +101,7 @@ let name = find_user(42).expect!("user 42 must exist")
 
 Fallible operations return `Result`:
 
-```riven
+```ruxen
 def parse_port(input: &str) -> Result[Int, ParseError]
   match input.trim.parse_int
     Ok(n) if n > 0 && n < 65536 -> Ok(n)
@@ -115,7 +115,7 @@ end
 
 `?` propagates errors — returns early on `Err` or `nil`:
 
-```riven
+```ruxen
 def load_config(path: &str) -> Result[Config, AppError]
   let text = fs.read_to_string(path)?    # returns Err if file fails
   let json = Json.parse(&text)?          # returns Err if parse fails
@@ -125,7 +125,7 @@ end
 
 ### Custom Error Types
 
-```riven
+```ruxen
 enum AppError
   NotFound(resource: String)
   Validation(message: String)
@@ -149,7 +149,7 @@ end
 
 When matching on an owned value, bindings move by default. Use `ref` to borrow instead:
 
-```riven
+```ruxen
 match some_string
   ref s -> puts s    # borrow, don't move
 end
@@ -159,7 +159,7 @@ When matching on a reference (`&T`), bindings are automatically `ref` — no ann
 
 ### Wildcard and Rest
 
-```riven
+```ruxen
 match value
   _  -> "matches anything"
 end

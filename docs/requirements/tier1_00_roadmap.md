@@ -17,7 +17,7 @@ Companion index for the five Tier-1 requirements documents. Read this first.
 The five agents independently surfaced issues in code that already exists. None of the Tier-1 work is safe to build on top of the current state without addressing these.
 
 ### B1. `Drop` is a no-op; every program leaks heap memory
-- `MirInst::Drop` is emitted by `insert_drops` (`crates/riven-core/src/mir/lower.rs:3346-3407`) but both codegen backends silently discard it (`codegen/cranelift.rs:692-698`, `codegen/llvm/emit.rs:790-792`).
+- `MirInst::Drop` is emitted by `insert_drops` (`crates/ruxen-core/src/mir/lower.rs:3346-3407`) but both codegen backends silently discard it (`codegen/cranelift.rs:692-698`, `codegen/llvm/emit.rs:790-792`).
 - The whitelist explicitly excludes `String`/`Array`/`Option`/`Result`, so even the existing infrastructure wouldn't free them.
 - Tutorials at `docs/tutorial/15-unsafe.md:62-68` describe `include Drop` as if it works.
 - **Consequence:** all heap allocations survive until process exit. Blocking for any non-trivial stdlib program.
@@ -34,7 +34,7 @@ The five agents independently surfaced issues in code that already exists. None 
 - Both docs recommend renaming the collection to `Map[K,V]`. This breaks the tutorial and any fixture that uses `Map[K,V]`.
 
 ### B4. `?T..._method` codegen fallback masks failures
-- `codegen/runtime.rs`'s `runtime_name()` has a fallback that maps unresolved generic method calls to `riven_noop_passthrough`.
+- `codegen/runtime.rs`'s `runtime_name()` has a fallback that maps unresolved generic method calls to `ruxen_noop_passthrough`.
 - Some currently-passing tests exercise code that is, in fact, a no-op.
 - Fixing this is a prerequisite for real `Array.map`/`.filter`/`.find` implementations — and will likely surface test regressions.
 

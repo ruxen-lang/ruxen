@@ -1,10 +1,10 @@
 # FFI (Foreign Function Interface)
 
-Riven calls C libraries through `lib "..." ... end` blocks. The string after `lib` is the link name; options follow as keyword arguments.
+Ruxen calls C libraries through `lib "..." ... end` blocks. The string after `lib` is the link name; options follow as keyword arguments.
 
 ## Declaring External Libraries
 
-```riven
+```ruxen
 lib "m"
   def sin(x: Float) -> Float
   def cos(x: Float) -> Float
@@ -23,7 +23,7 @@ The bare string is the library name *without* the `lib` prefix or platform exten
 
 `lib` accepts keyword arguments for version pinning, custom search paths, and similar linker hints:
 
-```riven
+```ruxen
 lib "sqlite3", version: "3"
   def sqlite3_open(filename: *UInt8, db: *var *Void) -> Int32
   def sqlite3_close(db: *Void) -> Int32
@@ -39,7 +39,7 @@ end
 
 FFI uses raw pointers (`*T`, `*var T`). Pointer operations — including dereference and comparison against `nil` — are `unsafe` (see [Chapter 15](15-unsafe.md)).
 
-```riven
+```ruxen
 lib "c"
   def malloc(n: USize) -> *var Void
   def free(p: *var Void)
@@ -55,13 +55,13 @@ unsafe
 end
 ```
 
-`nil` is the raw-pointer literal for an invalid/zero pointer. It is valid only at `*T` / `*var T` types and only in `unsafe` / FFI contexts; Riven references (`&T`, `&var T`) cannot be `nil` — they are always valid by construction.
+`nil` is the raw-pointer literal for an invalid/zero pointer. It is valid only at `*T` / `*var T` types and only in `unsafe` / FFI contexts; Ruxen references (`&T`, `&var T`) cannot be `nil` — they are always valid by construction.
 
 ## Variadic Functions
 
 C functions with `...` in the parameter list:
 
-```riven
+```ruxen
 lib "c"
   def printf(fmt: *UInt8, ...) -> Int32
 end
@@ -69,9 +69,9 @@ end
 
 ## Safety
 
-All FFI calls are inherently `unsafe` — the compiler cannot verify memory safety across the language boundary. The idiomatic pattern is to wrap FFI calls in safe Riven APIs:
+All FFI calls are inherently `unsafe` — the compiler cannot verify memory safety across the language boundary. The idiomatic pattern is to wrap FFI calls in safe Ruxen APIs:
 
-```riven
+```ruxen
 lib "m"
   def sqrt(x: Float) -> Float
 end
@@ -86,4 +86,4 @@ def sqrt(x: Float) -> Result[Float, String]
 end
 ```
 
-The `sqrt` definition shadows the linked-in C function with a checked Riven version; callers of the Riven `sqrt` never see `unsafe`.
+The `sqrt` definition shadows the linked-in C function with a checked Ruxen version; callers of the Ruxen `sqrt` never see `unsafe`.

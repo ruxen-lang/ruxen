@@ -10,25 +10,25 @@
    For string keys (char*), hashing walks the bytes. For integer keys,
    the raw bits are hashed. Chained collisions handled via next pointer. */
 
-#ifndef RIVEN_HASH_RUNTIME_STRUCTS
-#define RIVEN_HASH_RUNTIME_STRUCTS
+#ifndef RUXEN_HASH_RUNTIME_STRUCTS
+#define RUXEN_HASH_RUNTIME_STRUCTS
 
-typedef struct RivenHashEntry {
+typedef struct RuxenHashEntry {
     int64_t key;
     int64_t value;
-    struct RivenHashEntry *next;
-} RivenHashEntry;
+    struct RuxenHashEntry *next;
+} RuxenHashEntry;
 
-#define RIVEN_HASH_INITIAL_BUCKETS 16u
+#define RUXEN_HASH_INITIAL_BUCKETS 16u
 
-struct RivenHash {
+struct RuxenHash {
     /* Heap-allocated bucket array of length `bucket_count`. The
-       count starts at RIVEN_HASH_INITIAL_BUCKETS and doubles when
+       count starts at RUXEN_HASH_INITIAL_BUCKETS and doubles when
        `len` would push the load factor past 0.75 — see
-       `riven_hash_maybe_grow` below. Keeping the count as a power
+       `ruxen_hash_maybe_grow` below. Keeping the count as a power
        of two preserves a clean `% bucket_count` modulo without
        biasing the splitmix/FNV hash distribution. */
-    RivenHashEntry **buckets;
+    RuxenHashEntry **buckets;
     uint64_t bucket_count;
     uint64_t len;
     /* Flag set to 1 if keys should be compared/hashed as C strings. The
@@ -38,11 +38,11 @@ struct RivenHash {
        readable NUL-terminated region that is ASCII-ish, treat as string.
        For simplicity and correctness, we always hash the low 8 bytes as
        raw bits and only switch to strcmp if the caller uses the string
-       variant (see riven_hash_insert_str). v1 keeps a single code path
+       variant (see ruxen_hash_insert_str). v1 keeps a single code path
        and treats keys by raw bits, relying on the fact that string
        interning / stable pointers aren't assumed — callers using string
        keys in the v1 runtime must pass pointers whose identity matches
-       the `riven_string_from`-returned pointer. Since hash!{} lowers to
+       the `ruxen_string_from`-returned pointer. Since hash!{} lowers to
        insert calls on the same string literals, this works for the
        common case where the same string constant pointer is reused. */
     int8_t string_keys;
@@ -50,7 +50,7 @@ struct RivenHash {
 
 #endif
 
-static uint64_t riven_hash_bits(int64_t k) {
+static uint64_t ruxen_hash_bits(int64_t k) {
     /* splitmix64-ish finalizer for decent distribution on raw int bits. */
     uint64_t x = (uint64_t)k;
     x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
@@ -59,7 +59,7 @@ static uint64_t riven_hash_bits(int64_t k) {
     return x;
 }
 
-uint64_t riven_hash_str(const char *s) {
+uint64_t ruxen_hash_str(const char *s) {
     /* FNV-1a on the byte contents for string-keyed hashes. */
     uint64_t h = 1469598103934665603ULL;
     if (!s) return h;
@@ -71,7 +71,7 @@ uint64_t riven_hash_str(const char *s) {
     return h;
 }
 
-static int riven_hash_keys_equal(const RivenHash *h, int64_t a, int64_t b) {
+static int ruxen_hash_keys_equal(const RuxenHash *h, int64_t a, int64_t b) {
     if (a == b) return 1;
     if (h && h->string_keys) {
         const char *sa = (const char *)a;
@@ -82,11 +82,11 @@ static int riven_hash_keys_equal(const RivenHash *h, int64_t a, int64_t b) {
     return 0;
 }
 
-static uint64_t riven_hash_key_hash(const RivenHash *h, int64_t key) {
+static uint64_t ruxen_hash_key_hash(const RuxenHash *h, int64_t key) {
     if (h && h->string_keys) {
-        return riven_hash_str((const char *)key);
+        return ruxen_hash_str((const char *)key);
     }
-    return riven_hash_bits(key);
+    return ruxen_hash_bits(key);
 }
 
 /* Heuristic: assume the key is a string if its value looks like a
@@ -94,7 +94,7 @@ static uint64_t riven_hash_key_hash(const RivenHash *h, int64_t key) {
    is conservative — tests use literal string constants whose bits
    are always >= 0x1000 on practical systems. Integers small enough
    to be clearly non-pointers fall through to bit hashing. */
-static int riven_hash_looks_like_string(int64_t key) {
+static int ruxen_hash_looks_like_string(int64_t key) {
     uintptr_t p = (uintptr_t)key;
     /* Small non-pointer values. */
     if (p < 0x1000) return 0;
@@ -110,22 +110,22 @@ static int riven_hash_looks_like_string(int64_t key) {
     return 0;
 }
 
-RivenHash *riven_hash_new(void) {
-    RivenHash *h = (RivenHash *)malloc(sizeof(RivenHash));
+RuxenHash *ruxen_hash_new(void) {
+    RuxenHash *h = (RuxenHash *)malloc(sizeof(RuxenHash));
     if (!h) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
-    h->bucket_count = RIVEN_HASH_INITIAL_BUCKETS;
+    h->bucket_count = RUXEN_HASH_INITIAL_BUCKETS;
     /* Use malloc + explicit NULL init rather than calloc so the
        drop_fixtures leak harness (which rewrites `malloc(` →
-       `riven_test_malloc(` and `free(` → `riven_test_free(`) keeps
+       `ruxen_test_malloc(` and `free(` → `ruxen_test_free(`) keeps
        the per-allocation counters balanced. calloc is not rewritten,
        so a calloc'd buckets array would free-count without an
        alloc-count and underflow the raw_outstanding counter. */
-    h->buckets = (RivenHashEntry **)malloc(
-        h->bucket_count * sizeof(RivenHashEntry *));
+    h->buckets = (RuxenHashEntry **)malloc(
+        h->bucket_count * sizeof(RuxenHashEntry *));
     if (!h->buckets) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
     for (uint64_t i = 0; i < h->bucket_count; i++) {
         h->buckets[i] = NULL;
@@ -136,21 +136,21 @@ RivenHash *riven_hash_new(void) {
 }
 
 /* Hash::clone — shallow copy: a new Hash with the same (key, value)
-   pairs. Mirrors the v1 contract of `riven_vec_clone` (vec.c:301-311):
+   pairs. Mirrors the v1 contract of `ruxen_vec_clone` (vec.c:301-311):
    the entry slots are heap-owned i64 pointers; cloning shares storage
    with the source. Suitable for `derive Clone` on user classes whose
    fields include `Map[K, V]` — without this symbol the MIR-synthesised
    `<Class>_clone` references an undefined helper and the link fails
-   ("Undefined symbols: _riven_hash_clone, referenced from _Foo_clone").
+   ("Undefined symbols: _ruxen_hash_clone, referenced from _Foo_clone").
    Pin: the compiler's `synthesize_clone_field` (mir/lower/derive.rs:647)
    names this symbol. */
-RivenHash *riven_hash_clone(RivenHash *h) {
-    RivenHash *out = riven_hash_new();
+RuxenHash *ruxen_hash_clone(RuxenHash *h) {
+    RuxenHash *out = ruxen_hash_new();
     if (!h) return out;
     out->string_keys = h->string_keys;
     for (uint64_t i = 0; i < h->bucket_count; i++) {
-        for (RivenHashEntry *e = h->buckets[i]; e; e = e->next) {
-            riven_hash_insert(out, e->key, e->value);
+        for (RuxenHashEntry *e = h->buckets[i]; e; e = e->next) {
+            ruxen_hash_insert(out, e->key, e->value);
         }
     }
     return out;
@@ -161,13 +161,13 @@ RivenHash *riven_hash_clone(RivenHash *h) {
    spine-only variant frees the bucket chains and the struct itself;
    per-element drop selectors below walk K/V slots before delegating
    here. */
-void riven_hash_ORIG_FREE(RivenHash *h) RIVEN_ASM_LABEL(riven_hash_free);
-void riven_hash_ORIG_FREE(RivenHash *h) {
+void ruxen_hash_ORIG_FREE(RuxenHash *h) RUXEN_ASM_LABEL(ruxen_hash_free);
+void ruxen_hash_ORIG_FREE(RuxenHash *h) {
     if (!h) return;
     for (uint64_t i = 0; i < h->bucket_count; i++) {
-        RivenHashEntry *e = h->buckets[i];
+        RuxenHashEntry *e = h->buckets[i];
         while (e) {
-            RivenHashEntry *nx = e->next;
+            RuxenHashEntry *nx = e->next;
             free(e);
             e = nx;
         }
@@ -183,83 +183,83 @@ void riven_hash_ORIG_FREE(RivenHash *h) {
  * heap-owned key (or value, or both) for each entry. The drop
  * selector in `mir/lower.rs::insert_drops` dispatches on `Ty::Map(K, V)`
  * to pick the right one based on K/V being heap-owning. The
- * `_ORIG_FREE` sentinel naming pattern (see `riven_string_ORIG_FREE`
+ * `_ORIG_FREE` sentinel naming pattern (see `ruxen_string_ORIG_FREE`
  * comment ~line 620) keeps the link symbol clean while letting the
  * leak-tracker rewrite `free(` calls inside the body.
  */
-void riven_hash_drop_string_v_ORIG_FREE(RivenHash *h)
-    RIVEN_ASM_LABEL(riven_hash_drop_string_v);
-void riven_hash_drop_string_v_ORIG_FREE(RivenHash *h) {
+void ruxen_hash_drop_string_v_ORIG_FREE(RuxenHash *h)
+    RUXEN_ASM_LABEL(ruxen_hash_drop_string_v);
+void ruxen_hash_drop_string_v_ORIG_FREE(RuxenHash *h) {
     if (!h) return;
     for (uint64_t i = 0; i < h->bucket_count; i++) {
-        for (RivenHashEntry *e = h->buckets[i]; e; e = e->next) {
+        for (RuxenHashEntry *e = h->buckets[i]; e; e = e->next) {
             char *k = (char *)e->key;
-            if (k) riven_string_ORIG_FREE(k);
+            if (k) ruxen_string_ORIG_FREE(k);
             e->key = 0;
         }
     }
-    riven_hash_ORIG_FREE(h);
+    ruxen_hash_ORIG_FREE(h);
 }
 
-void riven_hash_drop_v_string_ORIG_FREE(RivenHash *h)
-    RIVEN_ASM_LABEL(riven_hash_drop_v_string);
-void riven_hash_drop_v_string_ORIG_FREE(RivenHash *h) {
+void ruxen_hash_drop_v_string_ORIG_FREE(RuxenHash *h)
+    RUXEN_ASM_LABEL(ruxen_hash_drop_v_string);
+void ruxen_hash_drop_v_string_ORIG_FREE(RuxenHash *h) {
     if (!h) return;
     for (uint64_t i = 0; i < h->bucket_count; i++) {
-        for (RivenHashEntry *e = h->buckets[i]; e; e = e->next) {
+        for (RuxenHashEntry *e = h->buckets[i]; e; e = e->next) {
             char *v = (char *)e->value;
-            if (v) riven_string_ORIG_FREE(v);
+            if (v) ruxen_string_ORIG_FREE(v);
             e->value = 0;
         }
     }
-    riven_hash_ORIG_FREE(h);
+    ruxen_hash_ORIG_FREE(h);
 }
 
-void riven_hash_drop_string_string_ORIG_FREE(RivenHash *h)
-    RIVEN_ASM_LABEL(riven_hash_drop_string_string);
-void riven_hash_drop_string_string_ORIG_FREE(RivenHash *h) {
+void ruxen_hash_drop_string_string_ORIG_FREE(RuxenHash *h)
+    RUXEN_ASM_LABEL(ruxen_hash_drop_string_string);
+void ruxen_hash_drop_string_string_ORIG_FREE(RuxenHash *h) {
     if (!h) return;
     for (uint64_t i = 0; i < h->bucket_count; i++) {
-        for (RivenHashEntry *e = h->buckets[i]; e; e = e->next) {
+        for (RuxenHashEntry *e = h->buckets[i]; e; e = e->next) {
             char *k = (char *)e->key;
             char *v = (char *)e->value;
-            if (k) riven_string_ORIG_FREE(k);
-            if (v) riven_string_ORIG_FREE(v);
+            if (k) ruxen_string_ORIG_FREE(k);
+            if (v) ruxen_string_ORIG_FREE(v);
             e->key = 0;
             e->value = 0;
         }
     }
-    riven_hash_ORIG_FREE(h);
+    ruxen_hash_ORIG_FREE(h);
 }
 
-/* HashMap[K, Vec[T]] — value slot owns a RivenVec*. v1 only walks one
+/* HashMap[K, Vec[T]] — value slot owns a RuxenVec*. v1 only walks one
  * level here (the inner Vec spine free); deeper element heap inside the
  * inner Vec is not currently freed. Acceptable for the v1 surface; the
- * trait-driven dispatch in #05 will widen this. */
-void riven_hash_drop_v_vec_ORIG_FREE(RivenHash *h)
-    RIVEN_ASM_LABEL(riven_hash_drop_v_vec);
-void riven_hash_drop_v_vec_ORIG_FREE(RivenHash *h) {
+ * trait-druxen dispatch in #05 will widen this. */
+void ruxen_hash_drop_v_vec_ORIG_FREE(RuxenHash *h)
+    RUXEN_ASM_LABEL(ruxen_hash_drop_v_vec);
+void ruxen_hash_drop_v_vec_ORIG_FREE(RuxenHash *h) {
     if (!h) return;
     for (uint64_t i = 0; i < h->bucket_count; i++) {
-        for (RivenHashEntry *e = h->buckets[i]; e; e = e->next) {
-            RivenVec *v = (RivenVec *)e->value;
-            if (v) riven_vec_ORIG_FREE(v);
+        for (RuxenHashEntry *e = h->buckets[i]; e; e = e->next) {
+            RuxenVec *v = (RuxenVec *)e->value;
+            if (v) ruxen_vec_ORIG_FREE(v);
             e->value = 0;
         }
     }
-    riven_hash_ORIG_FREE(h);
+    ruxen_hash_ORIG_FREE(h);
 }
 
 /* Double the bucket array and rehash every entry into the new
-   spine. Called from `riven_hash_insert` when an additional entry
+   spine. Called from `ruxen_hash_insert` when an additional entry
    would push the load factor past 0.75. We splice the existing
-   RivenHashEntry nodes into the new buckets in place — no
+   RuxenHashEntry nodes into the new buckets in place — no
    per-entry malloc/free, so a rehash costs one buckets-array
    alloc + one buckets-array free regardless of how many entries
    we relink. The leak harness counts only `free(` calls, and we
    add one matched malloc/free pair for the buckets spine, so
    counters stay balanced. */
-static void riven_hash_maybe_grow(RivenHash *h) {
+static void ruxen_hash_maybe_grow(RuxenHash *h) {
     /* Load factor 0.75 — grow when len+1 would exceed
        bucket_count * 3 / 4. Integer-math equivalent below. */
     if (h->len + 1 <= (h->bucket_count * 3) / 4) return;
@@ -267,20 +267,20 @@ static void riven_hash_maybe_grow(RivenHash *h) {
     uint64_t old_n = h->bucket_count;
     uint64_t new_n = old_n * 2;
     /* malloc + NULL-init for leak-harness counter parity — see the
-       comment in riven_hash_new. */
-    RivenHashEntry **nb =
-        (RivenHashEntry **)malloc(new_n * sizeof(RivenHashEntry *));
+       comment in ruxen_hash_new. */
+    RuxenHashEntry **nb =
+        (RuxenHashEntry **)malloc(new_n * sizeof(RuxenHashEntry *));
     if (!nb) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
     for (uint64_t j = 0; j < new_n; j++) {
         nb[j] = NULL;
     }
     for (uint64_t i = 0; i < old_n; i++) {
-        RivenHashEntry *e = h->buckets[i];
+        RuxenHashEntry *e = h->buckets[i];
         while (e) {
-            RivenHashEntry *nx = e->next;
-            uint64_t bj = riven_hash_key_hash(h, e->key) % new_n;
+            RuxenHashEntry *nx = e->next;
+            uint64_t bj = ruxen_hash_key_hash(h, e->key) % new_n;
             e->next = nb[bj];
             nb[bj] = e;
             e = nx;
@@ -291,15 +291,15 @@ static void riven_hash_maybe_grow(RivenHash *h) {
     h->bucket_count = new_n;
 }
 
-void riven_hash_insert(RivenHash *h, int64_t key, int64_t value) {
+void ruxen_hash_insert(RuxenHash *h, int64_t key, int64_t value) {
     if (!h) return;
     if (h->string_keys < 0) {
-        h->string_keys = riven_hash_looks_like_string(key) ? 1 : 0;
+        h->string_keys = ruxen_hash_looks_like_string(key) ? 1 : 0;
     }
-    uint64_t bucket_idx = riven_hash_key_hash(h, key) % h->bucket_count;
-    RivenHashEntry *e = h->buckets[bucket_idx];
+    uint64_t bucket_idx = ruxen_hash_key_hash(h, key) % h->bucket_count;
+    RuxenHashEntry *e = h->buckets[bucket_idx];
     while (e) {
-        if (riven_hash_keys_equal(h, e->key, key)) {
+        if (ruxen_hash_keys_equal(h, e->key, key)) {
             e->value = value;
             return;
         }
@@ -307,11 +307,11 @@ void riven_hash_insert(RivenHash *h, int64_t key, int64_t value) {
     }
     /* Grow before linking the new entry. Grow recomputes the bucket
        index, so we re-read after. */
-    riven_hash_maybe_grow(h);
-    bucket_idx = riven_hash_key_hash(h, key) % h->bucket_count;
-    RivenHashEntry *ne = (RivenHashEntry *)malloc(sizeof(RivenHashEntry));
+    ruxen_hash_maybe_grow(h);
+    bucket_idx = ruxen_hash_key_hash(h, key) % h->bucket_count;
+    RuxenHashEntry *ne = (RuxenHashEntry *)malloc(sizeof(RuxenHashEntry));
     if (!ne) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
     ne->key = key;
     ne->value = value;
@@ -323,16 +323,16 @@ void riven_hash_insert(RivenHash *h, int64_t key, int64_t value) {
 /* Return an Option tagged union (16 bytes): tag=1 Some(&value), tag=0 None.
    The payload carries the raw value (v1 treats &V the same as V at the
    runtime level — both are 8 bytes). */
-void *riven_hash_get(RivenHash *h, int64_t key) {
-    int64_t *result = (int64_t *)riven_alloc(16);
+void *ruxen_hash_get(RuxenHash *h, int64_t key) {
+    int64_t *result = (int64_t *)ruxen_alloc(16);
     if (!h) {
         *(int32_t *)result = 0;
         return result;
     }
-    uint64_t bucket_idx = riven_hash_key_hash(h, key) % h->bucket_count;
-    RivenHashEntry *e = h->buckets[bucket_idx];
+    uint64_t bucket_idx = ruxen_hash_key_hash(h, key) % h->bucket_count;
+    RuxenHashEntry *e = h->buckets[bucket_idx];
     while (e) {
-        if (riven_hash_keys_equal(h, e->key, key)) {
+        if (ruxen_hash_keys_equal(h, e->key, key)) {
             *(int32_t *)result = 1; /* Some */
             result[1] = e->value;
             return result;
@@ -343,12 +343,12 @@ void *riven_hash_get(RivenHash *h, int64_t key) {
     return result;
 }
 
-int8_t riven_hash_contains_key(RivenHash *h, int64_t key) {
+int8_t ruxen_hash_contains_key(RuxenHash *h, int64_t key) {
     if (!h) return 0;
-    uint64_t bucket_idx = riven_hash_key_hash(h, key) % h->bucket_count;
-    RivenHashEntry *e = h->buckets[bucket_idx];
+    uint64_t bucket_idx = ruxen_hash_key_hash(h, key) % h->bucket_count;
+    RuxenHashEntry *e = h->buckets[bucket_idx];
     while (e) {
-        if (riven_hash_keys_equal(h, e->key, key)) {
+        if (ruxen_hash_keys_equal(h, e->key, key)) {
             return 1;
         }
         e = e->next;
@@ -356,11 +356,11 @@ int8_t riven_hash_contains_key(RivenHash *h, int64_t key) {
     return 0;
 }
 
-uint64_t riven_hash_len(RivenHash *h) {
+uint64_t ruxen_hash_len(RuxenHash *h) {
     return h ? h->len : 0;
 }
 
-int8_t riven_hash_is_empty(RivenHash *h) {
+int8_t ruxen_hash_is_empty(RuxenHash *h) {
     return (!h || h->len == 0) ? 1 : 0;
 }
 
@@ -369,21 +369,21 @@ int8_t riven_hash_is_empty(RivenHash *h) {
 /* Built on top of the Hash — values are unused (set to 1). */
 
 typedef struct {
-    RivenHash inner;
-} RivenSet;
+    RuxenHash inner;
+} RuxenSet;
 
-RivenSet *riven_set_new(void) {
-    RivenSet *s = (RivenSet *)malloc(sizeof(RivenSet));
+RuxenSet *ruxen_set_new(void) {
+    RuxenSet *s = (RuxenSet *)malloc(sizeof(RuxenSet));
     if (!s) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
-    s->inner.bucket_count = RIVEN_HASH_INITIAL_BUCKETS;
+    s->inner.bucket_count = RUXEN_HASH_INITIAL_BUCKETS;
     /* malloc + NULL-init for leak-harness counter parity with the
-       free() rewrite — see the comment in riven_hash_new. */
-    s->inner.buckets = (RivenHashEntry **)malloc(
-        s->inner.bucket_count * sizeof(RivenHashEntry *));
+       free() rewrite — see the comment in ruxen_hash_new. */
+    s->inner.buckets = (RuxenHashEntry **)malloc(
+        s->inner.bucket_count * sizeof(RuxenHashEntry *));
     if (!s->inner.buckets) {
-        riven_panic("out of memory");
+        ruxen_panic("out of memory");
     }
     for (uint64_t i = 0; i < s->inner.bucket_count; i++) {
         s->inner.buckets[i] = NULL;
@@ -393,52 +393,52 @@ RivenSet *riven_set_new(void) {
     return s;
 }
 
-void riven_set_insert(RivenSet *s, int64_t item) {
+void ruxen_set_insert(RuxenSet *s, int64_t item) {
     if (!s) return;
     /* Reuse hash insert for dedup semantics; value is 1 (unused). */
-    riven_hash_insert(&s->inner, item, 1);
+    ruxen_hash_insert(&s->inner, item, 1);
 }
 
-/* Set::clone — shallow copy. Mirrors `riven_hash_clone` (same v1
+/* Set::clone — shallow copy. Mirrors `ruxen_hash_clone` (same v1
    contract: heap-owned element slots are shared between source and
    clone). Required for `derive Clone` on user classes with `Set[T]`
    fields — pin: `synthesize_clone_field` in mir/lower/derive.rs. */
-RivenSet *riven_set_clone(RivenSet *s) {
-    RivenSet *out = riven_set_new();
+RuxenSet *ruxen_set_clone(RuxenSet *s) {
+    RuxenSet *out = ruxen_set_new();
     if (!s) return out;
     out->inner.string_keys = s->inner.string_keys;
     for (uint64_t i = 0; i < s->inner.bucket_count; i++) {
-        for (RivenHashEntry *e = s->inner.buckets[i]; e; e = e->next) {
-            riven_hash_insert(&out->inner, e->key, e->value);
+        for (RuxenHashEntry *e = s->inner.buckets[i]; e; e = e->next) {
+            ruxen_hash_insert(&out->inner, e->key, e->value);
         }
     }
     return out;
 }
 
-int8_t riven_set_contains(RivenSet *s, int64_t item) {
+int8_t ruxen_set_contains(RuxenSet *s, int64_t item) {
     if (!s) return 0;
-    return riven_hash_contains_key(&s->inner, item);
+    return ruxen_hash_contains_key(&s->inner, item);
 }
 
-uint64_t riven_set_len(RivenSet *s) {
+uint64_t ruxen_set_len(RuxenSet *s) {
     return s ? s->inner.len : 0;
 }
 
-int8_t riven_set_is_empty(RivenSet *s) {
+int8_t ruxen_set_is_empty(RuxenSet *s) {
     return (!s || s->inner.len == 0) ? 1 : 0;
 }
 
 /* Set spine drop — Phase 2 stdlib (#04 batch 2). Mirrors
-   `riven_hash_ORIG_FREE`: walks bucket chains, frees each entry,
+   `ruxen_hash_ORIG_FREE`: walks bucket chains, frees each entry,
    frees the spine. The element heap (heap-owned T) is freed by
-   `riven_set_drop_string` below before delegating here. */
-void riven_set_ORIG_FREE(RivenSet *s) RIVEN_ASM_LABEL(riven_set_free);
-void riven_set_ORIG_FREE(RivenSet *s) {
+   `ruxen_set_drop_string` below before delegating here. */
+void ruxen_set_ORIG_FREE(RuxenSet *s) RUXEN_ASM_LABEL(ruxen_set_free);
+void ruxen_set_ORIG_FREE(RuxenSet *s) {
     if (!s) return;
     for (uint64_t i = 0; i < s->inner.bucket_count; i++) {
-        RivenHashEntry *e = s->inner.buckets[i];
+        RuxenHashEntry *e = s->inner.buckets[i];
         while (e) {
-            RivenHashEntry *nx = e->next;
+            RuxenHashEntry *nx = e->next;
             free(e);
             e = nx;
         }
@@ -450,49 +450,49 @@ void riven_set_ORIG_FREE(RivenSet *s) {
 /* HashSet[String] per-element drop — frees each owned key string before
  * the spine free. Selector dispatched from `mir/lower.rs::insert_drops`
  * for `Ty::Set(Ty::String)`. */
-void riven_set_drop_string_ORIG_FREE(RivenSet *s)
-    RIVEN_ASM_LABEL(riven_set_drop_string);
-void riven_set_drop_string_ORIG_FREE(RivenSet *s) {
+void ruxen_set_drop_string_ORIG_FREE(RuxenSet *s)
+    RUXEN_ASM_LABEL(ruxen_set_drop_string);
+void ruxen_set_drop_string_ORIG_FREE(RuxenSet *s) {
     if (!s) return;
     for (uint64_t i = 0; i < s->inner.bucket_count; i++) {
-        for (RivenHashEntry *e = s->inner.buckets[i]; e; e = e->next) {
+        for (RuxenHashEntry *e = s->inner.buckets[i]; e; e = e->next) {
             char *k = (char *)e->key;
-            if (k) riven_string_ORIG_FREE(k);
+            if (k) ruxen_string_ORIG_FREE(k);
             e->key = 0;
         }
     }
-    riven_set_ORIG_FREE(s);
+    ruxen_set_ORIG_FREE(s);
 }
 
 /* ── HashMap[K,V] surface — Phase 2 stdlib (#04) ──────────────────── */
 
 /* HashMap.with_capacity(Int) — capacity is an advisory hint in v1.
    The chained-bucket implementation has fixed bucket count, so this
-   function returns a fresh empty map identical to `riven_hash_new`.
+   function returns a fresh empty map identical to `ruxen_hash_new`.
    A future open-addressing rewrite would use the hint to size the
    initial bucket array. */
-RivenHash *riven_hash_with_capacity(int64_t cap) {
+RuxenHash *ruxen_hash_with_capacity(int64_t cap) {
     (void)cap;
-    return riven_hash_new();
+    return ruxen_hash_new();
 }
 
 /* HashMap.remove(&K) — return Option[V] (16-byte tagged union).
    tag=1 Some(prior_value), tag=0 None. Walks the bucket chain and
-   unlinks the matching entry; the freed RivenHashEntry must go
-   through `riven_test_free` under the leak harness, which is what
+   unlinks the matching entry; the freed RuxenHashEntry must go
+   through `ruxen_test_free` under the leak harness, which is what
    plain `free(` rewrites to. The bucket-walk emits an explicit
    `free(e)` so the entry counter increments correctly. */
-void *riven_hash_remove(RivenHash *h, int64_t key) {
-    int64_t *result = (int64_t *)riven_alloc(16);
+void *ruxen_hash_remove(RuxenHash *h, int64_t key) {
+    int64_t *result = (int64_t *)ruxen_alloc(16);
     if (!h) {
         *(int32_t *)result = 0;
         return result;
     }
-    uint64_t bucket_idx = riven_hash_key_hash(h, key) % h->bucket_count;
-    RivenHashEntry *prev = NULL;
-    RivenHashEntry *e = h->buckets[bucket_idx];
+    uint64_t bucket_idx = ruxen_hash_key_hash(h, key) % h->bucket_count;
+    RuxenHashEntry *prev = NULL;
+    RuxenHashEntry *e = h->buckets[bucket_idx];
     while (e) {
-        if (riven_hash_keys_equal(h, e->key, key)) {
+        if (ruxen_hash_keys_equal(h, e->key, key)) {
             int64_t value = e->value;
             if (prev) {
                 prev->next = e->next;
@@ -515,12 +515,12 @@ void *riven_hash_remove(RivenHash *h, int64_t key) {
 /* HashMap.clear — remove every entry. Frees per-bucket entry chains
    then resets `len` to 0 and clears the string-key flag so the next
    inserted key can re-decide. The spine itself is preserved. */
-void riven_hash_clear(RivenHash *h) {
+void ruxen_hash_clear(RuxenHash *h) {
     if (!h) return;
     for (uint64_t i = 0; i < h->bucket_count; i++) {
-        RivenHashEntry *e = h->buckets[i];
+        RuxenHashEntry *e = h->buckets[i];
         while (e) {
-            RivenHashEntry *nx = e->next;
+            RuxenHashEntry *nx = e->next;
             free(e);
             e = nx;
         }
@@ -535,24 +535,24 @@ void riven_hash_clear(RivenHash *h) {
    not distinguish &K from K at the runtime layer (both 8 bytes),
    so this is a flat slot copy. Iteration order matches bucket
    traversal order — callers must not rely on it (per prompt §44). */
-RivenVec *riven_hash_keys(RivenHash *h) {
-    RivenVec *out = riven_vec_new();
+RuxenVec *ruxen_hash_keys(RuxenHash *h) {
+    RuxenVec *out = ruxen_vec_new();
     if (!h) return out;
     for (uint64_t i = 0; i < h->bucket_count; i++) {
-        for (RivenHashEntry *e = h->buckets[i]; e; e = e->next) {
-            riven_vec_push(out, e->key);
+        for (RuxenHashEntry *e = h->buckets[i]; e; e = e->next) {
+            ruxen_vec_push(out, e->key);
         }
     }
     return out;
 }
 
 /* HashMap.values -> Vec[&V] — symmetric to `keys`. */
-RivenVec *riven_hash_values(RivenHash *h) {
-    RivenVec *out = riven_vec_new();
+RuxenVec *ruxen_hash_values(RuxenHash *h) {
+    RuxenVec *out = ruxen_vec_new();
     if (!h) return out;
     for (uint64_t i = 0; i < h->bucket_count; i++) {
-        for (RivenHashEntry *e = h->buckets[i]; e; e = e->next) {
-            riven_vec_push(out, e->value);
+        for (RuxenHashEntry *e = h->buckets[i]; e; e = e->next) {
+            ruxen_vec_push(out, e->value);
         }
     }
     return out;
@@ -562,28 +562,28 @@ RivenVec *riven_hash_values(RivenHash *h) {
    lands in #05). Returns the keys list; callers using `for k in
    m.iter` get the same shape they would from a real iterator since
    the v1 `for` lowering already accepts a `Vec` directly. */
-RivenVec *riven_hash_iter(RivenHash *h) {
-    return riven_hash_keys(h);
+RuxenVec *ruxen_hash_iter(RuxenHash *h) {
+    return ruxen_hash_keys(h);
 }
 
 /* HashMap == HashMap — pairwise key/value equality. Mirrors
-   `riven_vec_eq` in spirit: returns 1 iff both maps have the same
+   `ruxen_vec_eq` in spirit: returns 1 iff both maps have the same
    length and every key in `a` maps to a value structurally equal
    (bitwise on slot ints; for String values the slot pointers are
    compared, which is correct only for interned-pointer use cases
    today — full structural value-eq lands with the trait dispatch
-   in #05, the same caveat documented on `riven_vec_eq`). */
-int8_t riven_hash_eq(RivenHash *a, RivenHash *b) {
+   in #05, the same caveat documented on `ruxen_vec_eq`). */
+int8_t ruxen_hash_eq(RuxenHash *a, RuxenHash *b) {
     if (a == b) return 1;
     if (!a || !b) return 0;
     if (a->len != b->len) return 0;
     for (uint64_t i = 0; i < a->bucket_count; i++) {
-        for (RivenHashEntry *e = a->buckets[i]; e; e = e->next) {
-            if (!riven_hash_contains_key(b, e->key)) return 0;
-            uint64_t bj = riven_hash_key_hash(b, e->key) % b->bucket_count;
+        for (RuxenHashEntry *e = a->buckets[i]; e; e = e->next) {
+            if (!ruxen_hash_contains_key(b, e->key)) return 0;
+            uint64_t bj = ruxen_hash_key_hash(b, e->key) % b->bucket_count;
             int matched = 0;
-            for (RivenHashEntry *f = b->buckets[bj]; f; f = f->next) {
-                if (riven_hash_keys_equal(b, f->key, e->key)) {
+            for (RuxenHashEntry *f = b->buckets[bj]; f; f = f->next) {
+                if (ruxen_hash_keys_equal(b, f->key, e->key)) {
                     if (f->value != e->value) return 0;
                     matched = 1;
                     break;
@@ -596,76 +596,76 @@ int8_t riven_hash_eq(RivenHash *a, RivenHash *b) {
 }
 
 /* HashMap[&K] — panicking indexed read used by IndexOp lowering for
-   HashMap receivers. Mirrors `riven_vec_get_or_panic`: missing key
-   triggers a riven panic. Returns the value slot directly (raw 8
+   HashMap receivers. Mirrors `ruxen_vec_get_or_panic`: missing key
+   triggers a ruxen panic. Returns the value slot directly (raw 8
    bytes), not an Option. */
-int64_t riven_hash_index(RivenHash *h, int64_t key) {
+int64_t ruxen_hash_index(RuxenHash *h, int64_t key) {
     if (!h) {
-        riven_panic("hashmap index: missing key");
+        ruxen_panic("hashmap index: missing key");
     }
-    uint64_t bucket_idx = riven_hash_key_hash(h, key) % h->bucket_count;
-    for (RivenHashEntry *e = h->buckets[bucket_idx]; e; e = e->next) {
-        if (riven_hash_keys_equal(h, e->key, key)) {
+    uint64_t bucket_idx = ruxen_hash_key_hash(h, key) % h->bucket_count;
+    for (RuxenHashEntry *e = h->buckets[bucket_idx]; e; e = e->next) {
+        if (ruxen_hash_keys_equal(h, e->key, key)) {
             return e->value;
         }
     }
-    riven_panic("hashmap index: missing key");
+    ruxen_panic("hashmap index: missing key");
     return 0; /* unreachable */
 }
 
 /* ── HashSet[T] surface — Phase 2 stdlib (#04) ──────────────────── */
 
 /* HashSet.with_capacity(Int) — capacity hint, see HashMap.with_capacity. */
-RivenSet *riven_set_with_capacity(int64_t cap) {
+RuxenSet *ruxen_set_with_capacity(int64_t cap) {
     (void)cap;
-    return riven_set_new();
+    return ruxen_set_new();
 }
 
 /* HashSet.remove(&T) -> Bool — true iff the element was present.
-   Reuses `riven_hash_remove` for the unlink work, then collapses the
+   Reuses `ruxen_hash_remove` for the unlink work, then collapses the
    resulting Option to a Bool via the tag word. */
-int8_t riven_set_remove(RivenSet *s, int64_t item) {
+int8_t ruxen_set_remove(RuxenSet *s, int64_t item) {
     if (!s) return 0;
-    void *opt = riven_hash_remove(&s->inner, item);
+    void *opt = ruxen_hash_remove(&s->inner, item);
     int8_t was_present = (*(int32_t *)opt) == 1 ? 1 : 0;
-    riven_dealloc(opt);
+    ruxen_dealloc(opt);
     return was_present;
 }
 
 /* HashSet.clear — release every entry, reset len, mirror
-   `riven_hash_clear`. */
-void riven_set_clear(RivenSet *s) {
+   `ruxen_hash_clear`. */
+void ruxen_set_clear(RuxenSet *s) {
     if (!s) return;
-    riven_hash_clear(&s->inner);
+    ruxen_hash_clear(&s->inner);
 }
 
 /* HashSet.iter -> Vec[&T] — v1 eager iterator, see HashMap.iter. */
-RivenVec *riven_set_iter(RivenSet *s) {
-    if (!s) return riven_vec_new();
-    return riven_hash_keys(&s->inner);
+RuxenVec *ruxen_set_iter(RuxenSet *s) {
+    if (!s) return ruxen_vec_new();
+    return ruxen_hash_keys(&s->inner);
 }
 
 /* HashMap.from_iter(iter[(K, V)]) / iter.collect[HashMap[K, V]].
    Each iter slot is a heap-allocated 2-tuple with field0 at +0 and
-   field1 at +8, matching `riven_vec_zip`'s tuple layout and the
+   field1 at +8, matching `ruxen_vec_zip`'s tuple layout and the
    compiler's generic tuple allocation rule. */
-RivenHash *riven_hash_from_iter(RivenVec *iter) {
-    RivenHash *out = riven_hash_new();
+RuxenHash *ruxen_hash_from_iter(RuxenVec *iter) {
+    RuxenHash *out = ruxen_hash_new();
     if (!iter) return out;
     for (uint64_t i = 0; i < iter->len; i++) {
         int64_t *pair = (int64_t *)iter->data[i];
         if (!pair) continue;
-        riven_hash_insert(out, pair[0], pair[1]);
+        ruxen_hash_insert(out, pair[0], pair[1]);
     }
     return out;
 }
 
 /* HashSet.from_iter(iter[T]) / iter.collect[HashSet[T]]. */
-RivenSet *riven_set_from_iter(RivenVec *iter) {
-    RivenSet *out = riven_set_new();
+RuxenSet *ruxen_set_from_iter(RuxenVec *iter) {
+    RuxenSet *out = ruxen_set_new();
     if (!iter) return out;
     for (uint64_t i = 0; i < iter->len; i++) {
-        riven_set_insert(out, iter->data[i]);
+        ruxen_set_insert(out, iter->data[i]);
     }
     return out;
 }
@@ -676,19 +676,19 @@ RivenSet *riven_set_from_iter(RivenVec *iter) {
    semantics dedup). The new set is registered as a fresh-alloc
    callee in mir/lower.rs::FRESH_ALLOC_CALLEES so its lifetime is
    the caller's drop frame. */
-RivenSet *riven_set_union(RivenSet *a, RivenSet *b) {
-    RivenSet *out = riven_set_new();
+RuxenSet *ruxen_set_union(RuxenSet *a, RuxenSet *b) {
+    RuxenSet *out = ruxen_set_new();
     if (a) {
         for (uint64_t i = 0; i < a->inner.bucket_count; i++) {
-            for (RivenHashEntry *e = a->inner.buckets[i]; e; e = e->next) {
-                riven_set_insert(out, e->key);
+            for (RuxenHashEntry *e = a->inner.buckets[i]; e; e = e->next) {
+                ruxen_set_insert(out, e->key);
             }
         }
     }
     if (b) {
         for (uint64_t i = 0; i < b->inner.bucket_count; i++) {
-            for (RivenHashEntry *e = b->inner.buckets[i]; e; e = e->next) {
-                riven_set_insert(out, e->key);
+            for (RuxenHashEntry *e = b->inner.buckets[i]; e; e = e->next) {
+                ruxen_set_insert(out, e->key);
             }
         }
     }
@@ -696,13 +696,13 @@ RivenSet *riven_set_union(RivenSet *a, RivenSet *b) {
 }
 
 /* HashSet.intersection(&Self) -> HashSet[T] */
-RivenSet *riven_set_intersection(RivenSet *a, RivenSet *b) {
-    RivenSet *out = riven_set_new();
+RuxenSet *ruxen_set_intersection(RuxenSet *a, RuxenSet *b) {
+    RuxenSet *out = ruxen_set_new();
     if (!a || !b) return out;
     for (uint64_t i = 0; i < a->inner.bucket_count; i++) {
-        for (RivenHashEntry *e = a->inner.buckets[i]; e; e = e->next) {
-            if (riven_set_contains(b, e->key)) {
-                riven_set_insert(out, e->key);
+        for (RuxenHashEntry *e = a->inner.buckets[i]; e; e = e->next) {
+            if (ruxen_set_contains(b, e->key)) {
+                ruxen_set_insert(out, e->key);
             }
         }
     }
@@ -710,13 +710,13 @@ RivenSet *riven_set_intersection(RivenSet *a, RivenSet *b) {
 }
 
 /* HashSet.difference(&Self) -> HashSet[T] — elements in `a` not in `b`. */
-RivenSet *riven_set_difference(RivenSet *a, RivenSet *b) {
-    RivenSet *out = riven_set_new();
+RuxenSet *ruxen_set_difference(RuxenSet *a, RuxenSet *b) {
+    RuxenSet *out = ruxen_set_new();
     if (!a) return out;
     for (uint64_t i = 0; i < a->inner.bucket_count; i++) {
-        for (RivenHashEntry *e = a->inner.buckets[i]; e; e = e->next) {
-            if (!b || !riven_set_contains(b, e->key)) {
-                riven_set_insert(out, e->key);
+        for (RuxenHashEntry *e = a->inner.buckets[i]; e; e = e->next) {
+            if (!b || !ruxen_set_contains(b, e->key)) {
+                ruxen_set_insert(out, e->key);
             }
         }
     }
@@ -724,13 +724,13 @@ RivenSet *riven_set_difference(RivenSet *a, RivenSet *b) {
 }
 
 /* HashSet == HashSet — same length + every element of `a` is in `b`. */
-int8_t riven_set_eq(RivenSet *a, RivenSet *b) {
+int8_t ruxen_set_eq(RuxenSet *a, RuxenSet *b) {
     if (a == b) return 1;
     if (!a || !b) return 0;
     if (a->inner.len != b->inner.len) return 0;
     for (uint64_t i = 0; i < a->inner.bucket_count; i++) {
-        for (RivenHashEntry *e = a->inner.buckets[i]; e; e = e->next) {
-            if (!riven_set_contains(b, e->key)) return 0;
+        for (RuxenHashEntry *e = a->inner.buckets[i]; e; e = e->next) {
+            if (!ruxen_set_contains(b, e->key)) return 0;
         }
     }
     return 1;
