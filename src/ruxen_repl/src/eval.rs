@@ -280,6 +280,9 @@ fn eval_top_level(session: &mut ReplSession, raw_input: &str, item: TopLevelItem
                 Ok(mir) => mir,
                 Err(e) => return EvalResult::Error(display::format_error(&e)),
             };
+            if let Err(e) = session.jit.declare_program_data(&mir_program) {
+                return EvalResult::Error(display::format_error(&e));
+            }
 
             // Two-phase: declare all newly-introduced functions first so
             // forward references resolve. Then compile bodies, then finalize.
@@ -292,6 +295,9 @@ fn eval_top_level(session: &mut ReplSession, raw_input: &str, item: TopLevelItem
                     return EvalResult::Error(display::format_error(&e));
                 }
                 to_define.push(mir_func);
+            }
+            if let Err(e) = session.jit.define_program_data(&mir_program) {
+                return EvalResult::Error(display::format_error(&e));
             }
             for mir_func in to_define {
                 if let Err(e) = session.jit.compile_function(mir_func) {
@@ -382,6 +388,9 @@ fn eval_top_level(session: &mut ReplSession, raw_input: &str, item: TopLevelItem
                 Ok(mir) => mir,
                 Err(e) => return EvalResult::Error(display::format_error(&e)),
             };
+            if let Err(e) = session.jit.declare_program_data(&mir_program) {
+                return EvalResult::Error(display::format_error(&e));
+            }
             let mut to_define: Vec<&MirFunction> = Vec::new();
             for mir_func in &mir_program.functions {
                 if session.jit.is_declared(&mir_func.name) {
@@ -391,6 +400,9 @@ fn eval_top_level(session: &mut ReplSession, raw_input: &str, item: TopLevelItem
                     return EvalResult::Error(display::format_error(&e));
                 }
                 to_define.push(mir_func);
+            }
+            if let Err(e) = session.jit.define_program_data(&mir_program) {
+                return EvalResult::Error(display::format_error(&e));
             }
             for mir_func in to_define {
                 if let Err(e) = session.jit.compile_function(mir_func) {
@@ -476,6 +488,9 @@ fn compile_and_execute(
         Ok(mir) => mir,
         Err(e) => return EvalResult::Error(display::format_error(&e)),
     };
+    if let Err(e) = session.jit.declare_program_data(&mir_program) {
+        return EvalResult::Error(display::format_error(&e));
+    }
 
     // Compile every synthesized MIR function (closures `__closure_N`,
     // class methods, trait default-method monomorphizations, ...) that
@@ -492,6 +507,9 @@ fn compile_and_execute(
             return EvalResult::Error(display::format_error(&e));
         }
         to_define.push(mir_func);
+    }
+    if let Err(e) = session.jit.define_program_data(&mir_program) {
+        return EvalResult::Error(display::format_error(&e));
     }
     for mir_func in to_define {
         if let Err(e) = session.jit.compile_function(mir_func) {

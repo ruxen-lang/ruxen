@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 fn repl_exe() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_ruxen_repl"))
+    PathBuf::from(env!("CARGO_BIN_EXE_ruxen-repl"))
 }
 
 /// Run the REPL with the given stdin input, return (stdout, stderr).

@@ -252,6 +252,28 @@ impl<'a> Lowerer<'a> {
         })
     }
 
+    fn class_has_method_accepting_args(
+        &self,
+        class_name: &str,
+        method_name: &str,
+        args: &[HirExpr],
+    ) -> bool {
+        self.symbols.iter().any(|def| {
+            let crate::resolve::symbols::DefKind::Method { parent, signature } = &def.kind else {
+                return false;
+            };
+            self.symbols
+                .get(*parent)
+                .map(|parent_def| {
+                    parent_def.name == class_name
+                        && (def.name == method_name
+                            || def.name.starts_with(&format!("{}__overload", method_name)))
+                        && self.method_signature_accepts_args(signature, args)
+                })
+                .unwrap_or(false)
+        })
+    }
+
     fn method_signature_accepts_args(
         &self,
         signature: &crate::resolve::symbols::FnSignature,
@@ -1160,6 +1182,40 @@ impl<'a> Lowerer<'a> {
         }
         // Fallback to the original class name
         class_name.to_string()
+    }
+
+    /// Find the class that owns the overload selected by the call arguments.
+    /// A child overload for `pick(Bool)` must not shadow inherited
+    /// `pick(Int)` / `pick(String)` overloads during MIR mangling.
+    fn resolve_method_class_with_args(
+        &self,
+        class_name: &str,
+        method_name: &str,
+        args: &[HirExpr],
+    ) -> String {
+        use crate::resolve::symbols::DefKind;
+
+        if self.class_has_method_accepting_args(class_name, method_name, args) {
+            return class_name.to_string();
+        }
+
+        for def in self.symbols.iter() {
+            if def.name == class_name {
+                if let DefKind::Class { ref info } = def.kind {
+                    if let Some(parent_id) = info.parent {
+                        if let Some(parent_def) = self.symbols.get(parent_id) {
+                            return self.resolve_method_class_with_args(
+                                &parent_def.name,
+                                method_name,
+                                args,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        self.resolve_method_class(class_name, method_name)
     }
 }
 

@@ -15,7 +15,7 @@ use cranelift_codegen::settings::{self, Configurable};
 use cranelift_codegen::Context;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_jit::{JITBuilder, JITModule};
-use cranelift_module::{DataDescription, FuncId, Linkage, Module};
+use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
 
 use ruxen_core::codegen::runtime::{extract_method_name, runtime_name};
 use ruxen_core::hir::types::Ty;
@@ -122,6 +122,8 @@ pub struct JITCodeGen {
     ctx: Context,
     builder_ctx: FunctionBuilderContext,
     string_data: HashMap<String, cranelift_module::DataId>,
+    vtable_data: HashMap<String, DataId>,
+    defined_vtable_data: HashSet<String>,
     string_counter: u32,
     declared_fns: HashMap<String, FuncId>,
     /// Param Cranelift types for every user/synth function the JIT has
@@ -208,6 +210,8 @@ impl JITCodeGen {
             ctx,
             builder_ctx: FunctionBuilderContext::new(),
             string_data: HashMap::new(),
+            vtable_data: HashMap::new(),
+            defined_vtable_data: HashSet::new(),
             string_counter: 0,
             declared_fns: HashMap::new(),
             user_fn_param_tys: HashMap::new(),
@@ -291,6 +295,107 @@ impl JITCodeGen {
         self.declared_fns.contains_key(name)
     }
 
+    /// Declare vtable and class_info data symbols for a lowered program.
+    ///
+    /// The REPL lowers the accumulated session on every input, so this is
+    /// intentionally idempotent across programs that re-emit the same stdlib
+    /// metadata.
+    pub fn declare_program_data(&mut self, program: &MirProgram) -> Result<(), String> {
+        for vt in &program.vtables {
+            let sym = vt.symbol();
+            if self.vtable_data.contains_key(&sym) {
+                continue;
+            }
+            let data_id = self
+                .module
+                .declare_data(&sym, Linkage::Local, false, false)
+                .map_err(|e| format!("declare vtable data '{}': {}", sym, e))?;
+            self.vtable_data.insert(sym, data_id);
+        }
+
+        for ci in &program.class_infos {
+            let sym = ci.symbol();
+            if self.vtable_data.contains_key(&sym) {
+                continue;
+            }
+            let data_id = self
+                .module
+                .declare_data(&sym, Linkage::Local, false, false)
+                .map_err(|e| format!("declare class_info data '{}': {}", sym, e))?;
+            self.vtable_data.insert(sym, data_id);
+        }
+
+        Ok(())
+    }
+
+    /// Define any not-yet-defined vtable and class_info data for a program.
+    ///
+    /// Call after all MIR functions in the program have been declared, because
+    /// vtable entries relocate to method function symbols.
+    pub fn define_program_data(&mut self, program: &MirProgram) -> Result<(), String> {
+        const PTR_SIZE: u32 = 8;
+
+        for vt in &program.vtables {
+            let sym = vt.symbol();
+            if self.defined_vtable_data.contains(&sym) {
+                continue;
+            }
+            let data_id = *self
+                .vtable_data
+                .get(&sym)
+                .ok_or_else(|| format!("vtable data '{}' was not declared", sym))?;
+            let size = (vt.method_symbols.len() as u32) * PTR_SIZE;
+            let mut desc = DataDescription::new();
+            desc.define(vec![0u8; size as usize].into_boxed_slice());
+            desc.set_align(PTR_SIZE as u64);
+            for (i, method_sym) in vt.method_symbols.iter().enumerate() {
+                let func_id = *self.declared_fns.get(method_sym).ok_or_else(|| {
+                    format!(
+                        "mixin-vtables: method symbol '{}' for vtable '{}' not declared",
+                        method_sym, sym
+                    )
+                })?;
+                let func_ref = self.module.declare_func_in_data(func_id, &mut desc);
+                desc.write_function_addr((i as u32) * PTR_SIZE, func_ref);
+            }
+            self.module
+                .define_data(data_id, &desc)
+                .map_err(|e| format!("define vtable data '{}': {}", sym, e))?;
+            self.defined_vtable_data.insert(sym);
+        }
+
+        for ci in &program.class_infos {
+            let sym = ci.symbol();
+            if self.defined_vtable_data.contains(&sym) {
+                continue;
+            }
+            let data_id = *self
+                .vtable_data
+                .get(&sym)
+                .ok_or_else(|| format!("class_info data '{}' was not declared", sym))?;
+            let size = (ci.vtable_symbols.len() as u32) * PTR_SIZE;
+            let mut desc = DataDescription::new();
+            desc.define(vec![0u8; size as usize].into_boxed_slice());
+            desc.set_align(PTR_SIZE as u64);
+            for (i, vt_sym) in ci.vtable_symbols.iter().enumerate() {
+                let vt_data_id = *self.vtable_data.get(vt_sym).ok_or_else(|| {
+                    format!(
+                        "mixin-vtables: class_info '{}' references unknown vtable '{}'",
+                        sym, vt_sym
+                    )
+                })?;
+                let gv = self.module.declare_data_in_data(vt_data_id, &mut desc);
+                desc.write_data_addr((i as u32) * PTR_SIZE, gv, 0);
+            }
+            self.module
+                .define_data(data_id, &desc)
+                .map_err(|e| format!("define class_info data '{}': {}", sym, e))?;
+            self.defined_vtable_data.insert(sym);
+        }
+
+        Ok(())
+    }
+
     /// Internal: translate MIR to Cranelift IR and define the function.
     fn compile_function_inner(
         &mut self,
@@ -307,6 +412,7 @@ impl JITCodeGen {
                 module: &mut self.module,
                 declared_fns: &mut self.declared_fns,
                 string_data: &mut self.string_data,
+                vtable_data: &self.vtable_data,
                 string_counter: &mut self.string_counter,
                 user_fn_param_tys: &self.user_fn_param_tys,
             };
@@ -563,6 +669,7 @@ struct JITTranslationEnv<'a> {
     module: &'a mut JITModule,
     declared_fns: &'a mut HashMap<String, FuncId>,
     string_data: &'a mut HashMap<String, cranelift_module::DataId>,
+    vtable_data: &'a HashMap<String, DataId>,
     string_counter: &'a mut u32,
     user_fn_param_tys: &'a HashMap<String, Vec<Type>>,
 }
@@ -647,6 +754,23 @@ impl<'a> JITTranslationEnv<'a> {
                     let func_id = self.declared_fns[&resolved];
                     let func_ref = self.module.declare_func_in_func(func_id, builder.func);
                     return Ok(func_ref);
+                }
+            }
+        }
+
+        // Compiler-internal surface names such as `Formatter_new` lower to
+        // C runtime symbols in the batch backend. Mirror that mapping before
+        // declaring an import so the JIT resolves the linked runtime symbol,
+        // not the synthetic source-level name.
+        if let Some(mapped) = jit_runtime_name(name) {
+            if let Some((param_tys, ret_ty)) = runtime_signature(mapped) {
+                return self.declare_runtime_func(mapped, &param_tys, ret_ty, builder);
+            }
+        }
+        if let Ok(mapped) = runtime_name(name) {
+            if mapped != name {
+                if let Some((param_tys, ret_ty)) = runtime_signature(mapped) {
+                    return self.declare_runtime_func(mapped, &param_tys, ret_ty, builder);
                 }
             }
         }
@@ -1102,20 +1226,16 @@ fn translate_instruction(
             }
         }
 
-        // `MirInst::DataAddr` materialises the address of a static data
-        // symbol (mixin vtables, class_info headers — see
-        // `synthesize_dynamic_dispatch_helpers` and the Pass 1.5
-        // `declare_mixin_vtable_data` in the AOT Cranelift backend).
-        // The REPL JIT compiles one expression at a time and doesn't
-        // model those statics, so any program reaching this arm tried
-        // to invoke runtime-dispatch mixin machinery in the REPL —
-        // surface it loudly rather than silently failing.
-        MirInst::DataAddr { data_sym, .. } => {
-            return Err(format!(
-                "REPL JIT cannot resolve data symbol `{}` — runtime-dispatch \
-                 mixins and class_info statics are AOT-only",
-                data_sym
-            ));
+        MirInst::DataAddr { dest, data_sym } => {
+            let data_id = *env.vtable_data.get(data_sym).ok_or_else(|| {
+                format!(
+                    "mixin-vtables: DataAddr for unknown data symbol '{}'",
+                    data_sym
+                )
+            })?;
+            let gv = env.module.declare_data_in_func(data_id, builder.func);
+            let ptr = builder.ins().symbol_value(types::I64, gv);
+            def_local(var_map, stack_slots, builder, *dest, ptr);
         }
     }
 
@@ -1563,6 +1683,39 @@ fn runtime_signature(name: &str) -> Option<(Vec<Type>, Option<Type>)> {
         "ruxen_result_is_ok" => Some((vec![types::I64], Some(types::I8))),
         "ruxen_result_is_err" => Some((vec![types::I64], Some(types::I8))),
         "ruxen_noop" => Some((vec![], None)),
+        "ruxen_fmt_formatter_new" => Some((vec![], Some(types::I64))),
+        "ruxen_fmt_formatter_free" => Some((vec![types::I64], None)),
+        "ruxen_fmt_formatter_write_str" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "ruxen_fmt_formatter_write_char" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "ruxen_fmt_formatter_buffer" => Some((vec![types::I64], Some(types::I64))),
+        "ruxen_fmt_formatter_len" => Some((vec![types::I64], Some(types::I64))),
+        "ruxen_fmt_formatter_precision" => Some((vec![types::I64], Some(types::I64))),
+        "ruxen_fmt_formatter_new_with_spec" => Some((
+            vec![
+                types::I64,
+                types::I64,
+                types::I64,
+                types::I64,
+                types::I64,
+                types::I64,
+                types::I64,
+            ],
+            Some(types::I64),
+        )),
+        _ => None,
+    }
+}
+
+fn jit_runtime_name(name: &str) -> Option<&'static str> {
+    match name {
+        "Formatter_new" => Some("ruxen_fmt_formatter_new"),
+        "Formatter_free" => Some("ruxen_fmt_formatter_free"),
+        "Formatter_write_str" => Some("ruxen_fmt_formatter_write_str"),
+        "Formatter_write_char" => Some("ruxen_fmt_formatter_write_char"),
+        "Formatter_buffer" => Some("ruxen_fmt_formatter_buffer"),
+        "Formatter_len" => Some("ruxen_fmt_formatter_len"),
+        "Formatter_new_with_spec" => Some("ruxen_fmt_formatter_new_with_spec"),
+        "Formatter_precision" => Some("ruxen_fmt_formatter_precision"),
         _ => None,
     }
 }

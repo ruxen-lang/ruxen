@@ -145,13 +145,10 @@ if [ -n "$FROM_SOURCE" ]; then
   fi
   ok "Building Ruxen ${BOLD}${TAG}${RESET} from ${DIM}${ABS_SRC}${RESET}"
 
-  # One build command, four binaries. Cargo bin targets carry the
-  # underscore form (ruxen_lsp / ruxen_repl); the install loop below
-  # checks both spellings when sourcing from $BIN_SRC_DIR so the on-
-  # disk install ends up with the hyphenated release-tarball names.
+  # One build command, four public command binaries.
   ( cd "$ABS_SRC" && \
     cargo build --release \
-      --bin ruxen --bin ruxenc --bin ruxen_lsp --bin ruxen_repl ) \
+      --bin ruxen --bin ruxenc --bin ruxen-lsp --bin ruxen-repl ) \
     || err "cargo build failed in $ABS_SRC"
 
   # Point the install loop at cargo's output dir.

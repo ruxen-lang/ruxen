@@ -796,7 +796,9 @@ impl<'a> Lowerer<'a> {
                 // to the unique implementor of the trait bound when one
                 // exists.
                 let resolved_class = match &object.ty {
-                    Ty::Class { name, .. } => self.resolve_method_class(name, method_name),
+                    Ty::Class { name, .. } => {
+                        self.resolve_method_class_with_args(name, method_name, args)
+                    }
                     Ty::TypeParam { bounds, .. } | Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds) => {
                         self.unique_bound_impl(bounds)
                             .unwrap_or_else(|| type_name.clone())
@@ -818,10 +820,21 @@ impl<'a> Lowerer<'a> {
                     self.symbols
                         .get(*method)
                         .and_then(|def| match &def.kind {
-                            crate::resolve::symbols::DefKind::Method { parent, .. } => self
-                                .symbols
-                                .get(*parent)
-                                .map(|parent_def| parent_def.name.clone()),
+                            crate::resolve::symbols::DefKind::Method { parent, signature } => {
+                                // Only trust the resolver's choice when its
+                                // signature actually accepts the call args.
+                                // For inherited overloaded methods the
+                                // resolver may have latched onto a child's
+                                // unrelated overload (e.g. ChildPicker's
+                                // `pick(Bool)`) for a call that really wants
+                                // the parent's `pick(Int)`.
+                                if !self.method_signature_accepts_args(signature, args) {
+                                    return None;
+                                }
+                                self.symbols
+                                    .get(*parent)
+                                    .map(|parent_def| parent_def.name.clone())
+                            }
                             _ => None,
                         })
                         .unwrap_or(resolved_class)

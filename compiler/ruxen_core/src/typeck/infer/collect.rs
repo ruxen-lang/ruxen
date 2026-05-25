@@ -480,7 +480,11 @@ impl<'a> InferenceEngine<'a> {
             .map(|parent| parent.name.clone())
     }
 
-    fn select_method_candidate(&self, candidates: &[DefId], args: &[HirExpr]) -> Option<DefId> {
+    fn select_method_candidate_strict(
+        &self,
+        candidates: &[DefId],
+        args: &[HirExpr],
+    ) -> Option<DefId> {
         candidates
             .iter()
             .copied()
@@ -502,12 +506,17 @@ impl<'a> InferenceEngine<'a> {
                     .copied()
                     .find(|candidate| self.method_accepts_args(*candidate, args))
             })
-            .or_else(|| {
-                candidates
-                    .iter()
-                    .copied()
-                    .find(|candidate| self.method_accepts_arg_count(*candidate, args.len()))
-            })
+    }
+
+    fn select_method_candidate_arity(
+        &self,
+        candidates: &[DefId],
+        args: &[HirExpr],
+    ) -> Option<DefId> {
+        candidates
+            .iter()
+            .copied()
+            .find(|candidate| self.method_accepts_arg_count(*candidate, args.len()))
     }
 
     pub(super) fn select_class_method(
@@ -516,12 +525,42 @@ impl<'a> InferenceEngine<'a> {
         method_name: &str,
         args: &[HirExpr],
     ) -> Option<DefId> {
+        // First walk the inheritance chain looking for a candidate whose
+        // parameter TYPES accept the call args. This prevents a child's
+        // unrelated overload (same name, wrong param types) from masking
+        // an inherited overload that actually matches. Only after no
+        // ancestor has a strict match do we fall back to arity-only
+        // matching, again walking the chain from this class up.
+        self.select_class_method_strict(type_name, method_name, args)
+            .or_else(|| self.select_class_method_arity(type_name, method_name, args))
+    }
+
+    fn select_class_method_strict(
+        &self,
+        type_name: &str,
+        method_name: &str,
+        args: &[HirExpr],
+    ) -> Option<DefId> {
         let candidates = self.class_method_candidates(type_name, method_name);
-        if let Some(selected) = self.select_method_candidate(&candidates, args) {
+        if let Some(selected) = self.select_method_candidate_strict(&candidates, args) {
             return Some(selected);
         }
         let parent = self.parent_class_name(type_name)?;
-        self.select_class_method(&parent, method_name, args)
+        self.select_class_method_strict(&parent, method_name, args)
+    }
+
+    fn select_class_method_arity(
+        &self,
+        type_name: &str,
+        method_name: &str,
+        args: &[HirExpr],
+    ) -> Option<DefId> {
+        let candidates = self.class_method_candidates(type_name, method_name);
+        if let Some(selected) = self.select_method_candidate_arity(&candidates, args) {
+            return Some(selected);
+        }
+        let parent = self.parent_class_name(type_name)?;
+        self.select_class_method_arity(&parent, method_name, args)
     }
 
     fn default_ast_to_hir(&mut self, default: &ast::Expr) -> Option<HirExpr> {

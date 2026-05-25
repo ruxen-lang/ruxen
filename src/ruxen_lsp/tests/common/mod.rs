@@ -42,11 +42,11 @@ pub enum Incoming {
     },
 }
 
-/// Path to the built `ruxen_lsp` binary. Uses `CARGO_BIN_EXE_ruxen_lsp` which
+/// Path to the built `ruxen-lsp` binary. Uses `CARGO_BIN_EXE_ruxen-lsp` which
 /// cargo injects at test-compile time and already points at the correct
 /// profile (release when tests are built with `--release`).
 pub fn lsp_binary() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_ruxen_lsp"))
+    PathBuf::from(env!("CARGO_BIN_EXE_ruxen-lsp"))
 }
 
 /// Handle to a running `ruxen_lsp` child process with framed IO plumbing.

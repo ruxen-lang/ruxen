@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[[bin]]
+name = "ruxen-lsp"
+path = "src/main.rs"
+
 [dependencies]
 ruxen_ide = { path = "../ruxen_ide" }
 tower-lsp = "0.20"

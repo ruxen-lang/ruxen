@@ -79,7 +79,7 @@ end
 def client_run(stream: AsyncTcpStream) -> Int
   var s = stream
   let payload = String.from("hello")
-  let wrote = block_on(s.write(payload))
+  let wrote = block_on(s.write(payload.clone))
   match wrote
     Ok(_)  -> client_read_echo(s, payload)
     Err(_) -> 0

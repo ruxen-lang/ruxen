@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [[bin]]
-name = "ruxen_repl"
+name = "ruxen-repl"
 path = "src/main.rs"
 
 [dependencies]

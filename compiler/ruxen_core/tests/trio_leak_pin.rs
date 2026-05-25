@@ -175,7 +175,13 @@ fn foobar_addition_touches_only_bootstrap_files() {
     // recent commits for the path. This is robust against rebase/squash
     // because the commit hash isn't hardcoded.
     let log_out = Command::new("git")
-        .args(["log", "--format=%H", "--", "library/std/foobar/Ruxen.toml"])
+        .args([
+            "log",
+            "--follow",
+            "--format=%H",
+            "--",
+            "library/std/foobar/Ruxen.toml",
+        ])
         .current_dir(&repo_root)
         .output()
         .expect("git log failed");
@@ -201,10 +207,13 @@ fn foobar_addition_touches_only_bootstrap_files() {
 
     let mut offenders: Vec<&str> = Vec::new();
     for path in diff.lines() {
-        if !path.starts_with("compiler/ruxen_core/src/") {
+        let core_src_path = path
+            .strip_prefix("compiler/ruxen_core/src/")
+            .or_else(|| path.strip_prefix("compiler/riven_core/src/"));
+        let Some(core_src_path) = core_src_path else {
             continue;
-        }
-        if path == "compiler/ruxen_core/src/resolve/bootstrap.rs" {
+        };
+        if core_src_path == "resolve/bootstrap.rs" {
             // Permitted: ONLY a one-line BOOTSTRAP_FILES addition.
             continue;
         }

@@ -60,7 +60,7 @@ end
 ## Both A.poll and B.poll must reach this site via the dispatch
 ## helper, not a static `CountdownFutureA_poll`.
 def drive_once(f: &var Future) -> Int
-  let var cx = Context.test_dummy()
+  var cx = Context.test_dummy()
   match f.poll(&var cx)
     Poll.Ready(v) -> v
     Poll.Pending -> 0
@@ -68,8 +68,8 @@ def drive_once(f: &var Future) -> Int
 end
 
 def main
-  let var a = CountdownFutureA.new(0)
-  let var b = CountdownFutureB.new(0)
+  var a = CountdownFutureA.new(0)
+  var b = CountdownFutureB.new(0)
   let va = drive_once(&var a)
   let vb = drive_once(&var b)
   if va == 11 && vb == 22

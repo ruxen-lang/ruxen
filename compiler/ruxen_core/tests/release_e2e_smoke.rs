@@ -12,8 +12,60 @@ use ruxen_core::mir::lower::Lowerer;
 use ruxen_core::parser::ast::Program;
 use ruxen_core::parser::Parser;
 use ruxen_core::typeck;
+use std::io::Read;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+/// Hard wall-clock budget for any single fixture's binary. A hung
+/// runtime (e.g. spawn-join with an unfinished executor) must surface
+/// as a test FAILURE, not as a six-hour CI job. 30s leaves comfortable
+/// margin for the slowest legitimate fixture.
+const FIXTURE_WALL_CLOCK_TIMEOUT: Duration = Duration::from_secs(30);
+
+struct RunOutcome {
+    stdout: String,
+    stderr: String,
+    exit: Option<i32>,
+    timed_out: bool,
+}
+
+fn run_with_timeout(bin_path: &PathBuf) -> std::io::Result<RunOutcome> {
+    let mut child = Command::new(bin_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let started = Instant::now();
+    let mut timed_out = false;
+    let exit = loop {
+        match child.try_wait()? {
+            Some(status) => break Some(status),
+            None => {
+                if started.elapsed() >= FIXTURE_WALL_CLOCK_TIMEOUT {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    timed_out = true;
+                    break None;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+    };
+    let mut stdout = String::new();
+    if let Some(mut h) = child.stdout.take() {
+        let _ = h.read_to_string(&mut stdout);
+    }
+    let mut stderr = String::new();
+    if let Some(mut h) = child.stderr.take() {
+        let _ = h.read_to_string(&mut stderr);
+    }
+    Ok(RunOutcome {
+        stdout,
+        stderr,
+        exit: exit.and_then(|s| s.code()),
+        timed_out,
+    })
+}
 
 fn workspace_root() -> PathBuf {
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -141,7 +193,7 @@ fn compile_and_run(case_name: &str, bootstrap_packages: &[(String, Program)]) ->
         }
     };
 
-    let output = match Command::new(&bin_path).output() {
+    let outcome = match run_with_timeout(&bin_path) {
         Ok(o) => o,
         Err(e) => {
             return CaseOutcome {
@@ -151,20 +203,28 @@ fn compile_and_run(case_name: &str, bootstrap_packages: &[(String, Program)]) ->
             }
         }
     };
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let exit = output.status.code();
-
-    if stdout != expected {
+    if outcome.timed_out {
+        return CaseOutcome {
+            name: case_name.to_string(),
+            ok: false,
+            detail: format!(
+                "timed out after {:?}\n  partial stdout: {}\n  partial stderr: {}",
+                FIXTURE_WALL_CLOCK_TIMEOUT,
+                outcome.stdout.escape_debug(),
+                outcome.stderr.escape_debug()
+            ),
+        };
+    }
+    if outcome.stdout != expected {
         return CaseOutcome {
             name: case_name.to_string(),
             ok: false,
             detail: format!(
                 "stdout mismatch (exit={:?})\n  got: {}\n  expected: {}\n  stderr: {}",
-                exit,
-                stdout.escape_debug(),
+                outcome.exit,
+                outcome.stdout.escape_debug(),
                 expected.escape_debug(),
-                stderr.escape_debug()
+                outcome.stderr.escape_debug()
             ),
         };
     }
