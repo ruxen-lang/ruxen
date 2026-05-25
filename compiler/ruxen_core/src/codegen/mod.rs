@@ -154,6 +154,43 @@ pub fn find_runtime_c() -> Result<PathBuf, String> {
         .ok_or_else(|| "no runtime sources".to_string())
 }
 
+/// Locate every `<dir>/runtime/*.c` source file under a single project
+/// or path-dependency directory.
+///
+/// Mirrors `find_runtime_sources` (which scans the stdlib root) but for
+/// a user project or a single path-dep. The build driver calls this for
+/// the project root AND once per entry in `dep_source_dirs` so that a
+/// user can drop a `runtime/foo.c` alongside `src/lib.rx` and have it
+/// auto-compiled and linked, exactly like a stdlib package does.
+///
+/// Returns `Ok(vec![])` (NOT an error) when `<dir>/runtime` does not
+/// exist — most user projects won't have any C runtime sources, and a
+/// missing directory is the normal case. Errors only on read-dir
+/// failures of an existing `runtime/` directory.
+///
+/// Output is sorted for reproducible link command lines.
+pub fn find_runtime_sources_in_dir(dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let runtime_dir = dir.join("runtime");
+    if !runtime_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut sources: Vec<PathBuf> = Vec::new();
+    let iter = std::fs::read_dir(&runtime_dir)
+        .map_err(|e| format!("read_dir({}): {}", runtime_dir.display(), e))?;
+    for entry in iter {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) == Some("c") {
+            sources.push(path);
+        }
+    }
+    sources.sort();
+    Ok(sources)
+}
+
 /// Walk every `library/std/<pkg>/Ruxen.toml`, extract the
 /// `[system_libs] libs = [...]` entries, and return the deduplicated
 /// union as `-l<name>` linker flags in stable order.
@@ -280,7 +317,7 @@ pub enum Backend {
 
 /// Compile a MIR program to a native executable.
 pub fn compile(program: &MirProgram, output_path: &str) -> Result<(), String> {
-    compile_with_options(program, output_path, false, &[], Backend::Cranelift)
+    compile_with_options(program, output_path, false, &[], &[], Backend::Cranelift)
 }
 
 /// Compile a MIR program to a native executable with additional options.
@@ -289,12 +326,19 @@ pub fn compile(program: &MirProgram, output_path: &str) -> Result<(), String> {
 ///   the sanitizer runtime into the final binary.
 /// - `extra_link_flags`: additional linker flags (e.g. `-lfoo` from FFI
 ///   `@[link("foo")]` attributes).
+/// - `extra_runtime_sources`: additional `.c` files to compile and link
+///   alongside the stdlib runtime. The build driver passes the user
+///   project's own `runtime/*.c` and each path-dep's `runtime/*.c` here
+///   so that a `lib "runtime/foo.c"` declaration in user code resolves
+///   to symbols defined in a sibling-of-`src/` C file. Discovery is the
+///   caller's responsibility — see [`find_runtime_sources_in_dir`].
 /// - `backend`: which code-generation backend to use.
 pub fn compile_with_options(
     program: &MirProgram,
     output_path: &str,
     sanitize: bool,
     extra_link_flags: &[String],
+    extra_runtime_sources: &[PathBuf],
     backend: Backend,
 ) -> Result<(), String> {
     // Step 1: Generate object code via the selected backend
@@ -317,7 +361,26 @@ pub fn compile_with_options(
     // compile each to its own `.o` and link them all into the final
     // binary.
     let runtime_sources = find_runtime_sources()?;
-    let runtime_objects = object::compile_runtime_sources(&runtime_sources, sanitize)?;
+    let mut runtime_objects = object::compile_runtime_sources(&runtime_sources, sanitize)?;
+
+    // Step 2b: Compile any caller-supplied runtime sources (user project
+    // `runtime/*.c` and each path-dep's `runtime/*.c`). These share the
+    // exact compile path as stdlib runtime — same `cc -c` invocation,
+    // same sanitizer flags — so a user `runtime/foo.c` is
+    // indistinguishable from a stdlib package's runtime at link time.
+    // On failure we still need to clean up the stdlib objects we just
+    // wrote, so route through a helper that propagates the cleanup.
+    if !extra_runtime_sources.is_empty() {
+        match object::compile_runtime_sources(extra_runtime_sources, sanitize) {
+            Ok(mut extra) => runtime_objects.append(&mut extra),
+            Err(e) => {
+                for o in &runtime_objects {
+                    let _ = std::fs::remove_file(o);
+                }
+                return Err(e);
+            }
+        }
+    }
 
     // Step 3: Collect FFI link flags from the program AND from every
     // stdlib package's `[system_libs]` table. B3 of

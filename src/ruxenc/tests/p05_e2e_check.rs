@@ -1,5 +1,5 @@
 //! P0.5 verification: compile every release-e2e fixture with the workspace
-//! `ruxenc` binary and report compile-fail / output-mismatch fixtures.
+//! `ruxen compile` driver and report compile-fail / output-mismatch fixtures.
 //!
 //! This is intentionally minimal — the canonical e2e harness lives in
 //! tests/release-e2e/run.sh and is the source of truth in CI. This test
@@ -14,11 +14,11 @@ use std::process::Command;
 fn release_e2e_fixtures_compile_and_match() {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let workspace = manifest.parent().unwrap().parent().unwrap();
-    let ruxenc = workspace.join("target").join("release").join("ruxenc");
+    let ruxen = workspace.join("target").join("release").join("ruxen");
     assert!(
-        ruxenc.exists(),
-        "ruxenc release binary not built at {}",
-        ruxenc.display()
+        ruxen.exists(),
+        "ruxen release binary not built at {}",
+        ruxen.display()
     );
     let cases = workspace.join("tests").join("release-e2e").join("cases");
     let expected_dir = workspace.join("tests").join("release-e2e").join("expected");
@@ -40,12 +40,13 @@ fn release_e2e_fixtures_compile_and_match() {
         let base = src.file_stem().unwrap().to_string_lossy().to_string();
         let bin = tmp.path().join(format!("{base}.bin"));
 
-        let compile = Command::new(&ruxenc)
+        let compile = Command::new(&ruxen)
+            .arg("compile")
             .arg(&src)
             .arg("-o")
             .arg(&bin)
             .output()
-            .expect("ruxenc spawn");
+            .expect("ruxen compile spawn");
 
         if !compile.status.success() {
             compile_fails.push(format!(

@@ -42,11 +42,14 @@ pub enum Incoming {
     },
 }
 
-/// Path to the built `ruxen-lsp` binary. Uses `CARGO_BIN_EXE_ruxen-lsp` which
-/// cargo injects at test-compile time and already points at the correct
-/// profile (release when tests are built with `--release`).
+/// Path to the unified `ruxen` driver binary. The LSP runs as the
+/// `ruxen lsp` subcommand; tests spawn it the same way an editor would.
+///
+/// `CARGO_BIN_EXE_ruxen` is injected by cargo at test-compile time and
+/// already points at the correct profile (release when tests are built
+/// with `--release`).
 pub fn lsp_binary() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_ruxen-lsp"))
+    PathBuf::from(env!("CARGO_BIN_EXE_ruxen"))
 }
 
 /// Handle to a running `ruxen_lsp` child process with framed IO plumbing.
@@ -66,11 +69,12 @@ impl LspClient {
         let bin = lsp_binary();
         assert!(
             bin.is_file(),
-            "ruxen-lsp binary not found at {:?} — run `cargo build --release -p ruxen-lsp` first",
+            "ruxen binary not found at {:?} — run `cargo build --release -p ruxen_cli` first",
             bin
         );
 
         let mut child = Command::new(&bin)
+            .arg("lsp")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

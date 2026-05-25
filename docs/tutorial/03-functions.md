@@ -1,34 +1,47 @@
 # Functions
 
-## Defining Functions
+A **function** is a named piece of code you can call. Functions let you give a name to "this is the operation we do here," reuse it, and test it in isolation. Every Ruxen program starts at a function called `main`.
 
-Functions are defined with `def` and terminated with `end`:
-
-```ruxen
-def greet
-  puts "Hello!"
-end
-```
-
-The last expression is the implicit return value (like Ruby):
+## A first runnable example
 
 ```ruxen
-def double(x)
+def double(x: Int) -> Int
   x * 2
 end
-```
 
-## Parameters and Return Types
-
-Private functions can have fully inferred types:
-
-```ruxen
-def add(a, b)
-  a + b
+def main
+  puts "#{double(5)}"
+  puts "#{double(21)}"
 end
 ```
 
-Public functions **must** have explicit type annotations (design principle P5 — Clarity At The Boundaries):
+```bash
+ruxen compile doubler.rx
+./doubler
+```
+
+Output:
+
+```
+10
+42
+```
+
+You defined a function `double`, called it twice, and printed the results.
+
+## The shape of a function
+
+```ruxen
+def name(param1: Type1, param2: Type2) -> ReturnType
+  # ... body ...
+end
+```
+
+- `def` introduces a function.
+- The parameters list types after a colon.
+- `-> ReturnType` says what comes back.
+- The body is everything up to `end`.
+- The **last expression in the body is the return value** — no `return` keyword needed for the normal case (familiar to Ruby readers).
 
 ```ruxen
 def add(a: Int, b: Int) -> Int
@@ -36,90 +49,117 @@ def add(a: Int, b: Int) -> Int
 end
 ```
 
-## Early Return
-
-Use `return` for early exit:
+A function that returns nothing uses `nil` as its return type — and can omit the arrow altogether:
 
 ```ruxen
-def find_positive(nums: &Array[Int]) -> Option[Int]
-  for n in nums
-    if n > 0
-      return Some(n)
-    end
-  end
-  nil
+def greet
+  puts "Hello!"
+end
+
+# same thing, spelled out:
+def greet -> nil
+  puts "Hello!"
 end
 ```
 
-## Single-Expression Functions
+## Inference for private helpers
 
-Short functions can use brace syntax:
+A function used only inside the current file (a private helper) can leave its types blank — Ruxen will infer them:
+
+```ruxen
+def add(a, b)
+  a + b
+end
+```
+
+When a function is part of your **public surface** — anything callers outside the file rely on — write the types explicitly. This is a friendliness rule: callers should be able to learn how to use your function by reading its signature, not its body.
+
+## Early return
+
+The last expression returns automatically, but sometimes you want to bail out early. Use `return`:
+
+```ruxen
+def first_positive(a: Int, b: Int) -> Int
+  if a > 0
+    return a
+  end
+  if b > 0
+    return b
+  end
+  0
+end
+```
+
+## Single-expression form
+
+Short functions can use braces instead of `... end`:
 
 ```ruxen
 def double(x: Int) -> Int { x * 2 }
 def is_even(n: Int) -> Bool { n % 2 == 0 }
 ```
 
+Same meaning, just compact.
+
+## Recursion
+
+Functions can call themselves:
+
+```ruxen
+def factorial(n: Int) -> Int
+  if n <= 1
+    1
+  else
+    n * factorial(n - 1)
+  end
+end
+
+def main
+  puts "#{factorial(5)}"     # 120
+end
+```
+
 ## Visibility
 
-Ruxen is **public by default**. Section markers (`private`, `protected`) inside a module, class, struct, or mixin body gate subsequent declarations until the next marker.
-
-| Section marker | Scope |
-|----------------|-------|
-| (default) | Public — accessible from anywhere |
-| `private` | Private — accessible only within the current module/type |
-| `protected` | Accessible from subclasses |
+Ruxen is **public by default** — anything you define is callable from outside its module unless you say otherwise. Use a `private` section marker inside a module body to gate everything that comes after it (until the next marker):
 
 ```ruxen
 module Util
-  def public_api(x: Int) -> Int       # public — module default
+  def public_api(x: Int) -> Int      # public — module default
     helper(x)
   end
 
   private
 
-  def helper(x: Int) -> Int           # private — until next marker
+  def helper(x: Int) -> Int          # private — only Util can call this
     x * 2
   end
 end
 ```
 
-## Generic Functions
+A `protected` marker is also available; it scopes declarations to subclasses (relevant inside class bodies — see [Chapter 6](06-classes-and-structs.md)).
 
-Use square brackets for type parameters:
+## Generic functions
+
+Sometimes a function does the same thing regardless of the type of its argument — an identity function returns whatever you give it. **Generics** let you express that without copy-pasting the function for every type. Type parameters go in square brackets:
 
 ```ruxen
 def identity[T](x: T) -> T
   x
 end
 
-def largest[T: Ord](list: &Array[T]) -> &T
-  var best = &list[0]
-  for item in list
-    if item > best
-      best = item
-    end
-  end
-  best
+def main
+  let n = identity(42)         # T = Int
+  let s = identity("hello")    # T = &str
+  puts "#{n} #{s}"
 end
 ```
 
-## Where Clauses
+Chapter 12 covers generics in depth — including how to require that `T` supports a particular operation.
 
-For complex generic bounds:
+## Class methods vs. instance methods (preview)
 
-<!-- TODO(migration): canonical spec §3.4a discourages per-method `where` clauses on individual `def`s (re-group into an extension block). The form below is shown here for top-level functions; the spec is silent on whether top-level `def` accepts `where`. Verify when the parser pins this. -->
-
-```ruxen
-def merge[A, B, C](left: &A, right: &B) -> C
-  where A: Iterator[Item = Int],
-        B: Iterator[Item = Int],
-        C: FromIterator[Item = Int]
-  # ...
-end
-```
-
-## Class Methods vs Instance Methods
+Once you start writing classes (Chapter 6), you'll see four flavours of method. Here they are at a glance:
 
 ```ruxen
 class User
@@ -127,33 +167,72 @@ class User
 
   def init(@name: String) end
 
-  # Reading method — borrows the receiver read-only
+  # Reading — borrows the receiver, doesn't change it
   def display -> String
     "User: #{self.name}"
   end
 
-  # Writing method — borrows the receiver writably
+  # Writing — borrows the receiver writably (allowed to change fields)
   def var rename(name: String)
     self.name = name
   end
 
-  # Consuming method — takes ownership of the receiver
+  # Consuming — takes ownership of the receiver; the receiver can't be used after
   def consume into_name -> String
     self.name
   end
 
-  # Class method — no receiver
+  # Class method — no receiver, called on the type itself
   def self.anonymous -> User
-    User.new("Anonymous")
+    User.new(String.from("Anonymous"))
   end
 end
 ```
 
-### Method-Mode Summary
+| Form | Mode | Meaning |
+|------|------|---------|
+| `def method` | reading | Reads `self`, doesn't change it |
+| `def var method` | writing | Allowed to change `self`'s fields |
+| `def consume method` | consuming | Takes `self` by value — caller loses access |
+| `def self.method` | class | Called on the type, not on an instance |
 
-| Declaration | Mode | Meaning |
-|-------------|------|---------|
-| `def method` | reading | Borrows the receiver read-only |
-| `def var method` | writing | Borrows the receiver writably |
-| `def consume method` | consuming | Takes ownership of the receiver |
-| `def self.method` | class | No receiver — module-style call |
+Don't worry about the distinction yet — it'll click in Chapter 4 (borrowing) and Chapter 6 (classes).
+
+## Common mistakes
+
+**Forgetting the return type on a public function.**
+
+```ruxen
+def add(a: Int, b: Int)        # ERROR: public function needs -> ReturnType
+  a + b
+end
+```
+
+Fix: add `-> Int`.
+
+**Putting a statement after the last expression.**
+
+```ruxen
+def double(x: Int) -> Int
+  x * 2
+  puts "computed"     # ERROR: last expression must be Int, not nil
+end
+```
+
+Fix: swap the order, or store the value first: `let result = x * 2; puts "computed"; result` — though splitting into two lines is more idiomatic.
+
+**Confusing `def var foo` with a mutable parameter.** `def var` controls how the *receiver* (`self`) is borrowed, not how parameters are borrowed. Parameters are immutable bindings inside the function — to get a writable parameter, use a writable borrow: `def append(s: &var String)`.
+
+## Try it
+
+Write a function `triple(x: Int) -> Int` and call it from `main`. Then write a private helper `square(x)` (no types — let inference do the work) and a public `sum_of_squares(a: Int, b: Int) -> Int` that uses it. Compile and run.
+
+## Recap
+
+- `def name(...) -> Type ... end` defines a function. The last expression is the return value.
+- Private helpers can skip type annotations; public functions must spell them out.
+- `return` is for early exit only.
+- `[T]` introduces a type parameter — preview of generics in [Chapter 12](12-generics.md).
+- Method receivers come in four flavours: reading, writing, consuming, class — full details in [Chapter 6](06-classes-and-structs.md).
+
+**Next:** [Ownership and Borrowing](04-ownership-and-borrowing.md) — the rule that makes Ruxen safe without a garbage collector.

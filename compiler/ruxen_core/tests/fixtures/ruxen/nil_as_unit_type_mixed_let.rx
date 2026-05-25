@@ -1,0 +1,7 @@
+# Pin: `nil` works in both generic-arg slots of `Result[nil, nil]`,
+# bound to a `let` with an explicit type annotation.
+
+def main
+  let _x: Result[nil, nil] = Ok(nil)
+  nil
+end

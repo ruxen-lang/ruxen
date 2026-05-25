@@ -44,7 +44,7 @@ fn compile_to_exe(source: &str, backend: Backend) -> String {
     let mir_program = lowerer
         .lower_program(&type_result.program)
         .expect("MIR lowering failed");
-    codegen::compile_with_options(&mir_program, &output_path, false, &[], backend)
+    codegen::compile_with_options(&mir_program, &output_path, false, &[], &[], backend)
         .expect("codegen failed");
 
     output_path

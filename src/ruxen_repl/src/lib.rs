@@ -1,6 +1,7 @@
 //! Ruxen REPL — Interactive shell for the Ruxen programming language.
 //!
-//! Uses Cranelift JIT for in-process compilation and execution.
+//! Uses Cranelift JIT for in-process compilation and execution. The unified
+//! `ruxen` driver invokes this crate as `ruxen repl` via [`run`].
 
 #[allow(dead_code)]
 mod capture;
@@ -426,35 +427,15 @@ impl Helper for RuxenHelper {}
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const PRIMARY_PROMPT: &str = "ruxen> ";
 
-fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() > 1 {
-        match args[1].as_str() {
-            "--version" | "-V" => {
-                println!("ruxen-repl {}", VERSION);
-                return;
-            }
-            "--help" | "-h" => {
-                println!("ruxen-repl {} — interactive Ruxen REPL", VERSION);
-                println!();
-                println!("Usage: ruxen-repl");
-                println!();
-                println!("Once inside, type :help for REPL commands.");
-                return;
-            }
-            _ => {}
-        }
-    }
-
+/// Run the interactive REPL until the user quits (`:quit` or EOF).
+///
+/// `--version` / `--help` for `ruxen repl` are handled by clap at the
+/// `ruxen` driver layer and never reach this function.
+pub fn run() -> Result<(), String> {
     println!("Ruxen {} REPL — Type :help for commands", VERSION);
 
-    let mut session = match ReplSession::new() {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Failed to initialize REPL: {}", e);
-            std::process::exit(1);
-        }
-    };
+    let mut session = ReplSession::new()
+        .map_err(|e| format!("Failed to initialize REPL: {}", e))?;
 
     // Non-TTY stdin (piped input): read the whole stream and split into
     // logical chunks by lexer-balance so multi-line `class`/`enum`/`trait`
@@ -483,7 +464,7 @@ fn main() {
                     eval::EvalResult::Command(output) => println!("{}", output),
                     eval::EvalResult::Quit => {
                         println!("Goodbye!");
-                        return;
+                        return Ok(());
                     }
                     eval::EvalResult::Incomplete => {
                         eprintln!("Error: Incomplete input: {}", trimmed);
@@ -493,7 +474,7 @@ fn main() {
             }
         }
         println!("Goodbye!");
-        return;
+        return Ok(());
     }
 
     let config = Config::builder()
@@ -507,13 +488,8 @@ fn main() {
         validator: RuxenValidator,
     };
 
-    let mut editor: Editor<RuxenHelper, _> = match Editor::with_config(config) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("Failed to create editor: {}", e);
-            std::process::exit(1);
-        }
-    };
+    let mut editor: Editor<RuxenHelper, _> =
+        Editor::with_config(config).map_err(|e| format!("Failed to create editor: {}", e))?;
     editor.set_helper(Some(helper));
 
     let _ = editor.load_history(&session.history_path);
@@ -580,6 +556,7 @@ fn main() {
     }
 
     let _ = editor.save_history(&session.history_path);
+    Ok(())
 }
 #[cfg(test)]
 mod tests {

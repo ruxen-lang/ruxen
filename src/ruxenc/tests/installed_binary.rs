@@ -1,15 +1,19 @@
-//! End-to-end tests for the `ruxenc` release binary.
+//! End-to-end tests for the `ruxen compile` subcommand (low-level driver).
 //!
 //! These tests stage an isolated "installed" layout:
 //!
-//!     <tempdir>/bin/ruxenc
+//!     <tempdir>/bin/ruxen
 //!     <tempdir>/lib/runtime.c
 //!
-//! …and invoke the staged `ruxenc` against a suite of real Ruxen programs.
-//! This validates the full compile → link → execute pipeline exactly as it
-//! runs on a user's machine after `install.sh` — catching regressions like
-//! hardcoded `CARGO_MANIFEST_DIR` paths, missing runtime functions, and
-//! backend verifier errors.
+//! …and invoke the staged `ruxen compile` against a suite of real Ruxen
+//! programs. This validates the full compile → link → execute pipeline
+//! exactly as it runs on a user's machine after `install.sh` — catching
+//! regressions like hardcoded `CARGO_MANIFEST_DIR` paths, missing runtime
+//! functions, and backend verifier errors.
+//!
+//! The fixtures shipped a `ruxenc` binary historically; the toolchain now
+//! consolidates everything under a single `ruxen` driver, so these tests
+//! stage and exercise `ruxen compile <file>` instead.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -37,14 +41,14 @@ fn shared_install() -> &'static Path {
             fs::create_dir_all(&bin_dir).unwrap();
             fs::create_dir_all(&lib_dir).unwrap();
 
-            let staged_ruxenc = bin_dir.join("ruxenc");
-            fs::copy(ruxenc_exe(), &staged_ruxenc).expect("copy ruxenc");
+            let staged_ruxen = bin_dir.join("ruxen");
+            fs::copy(ruxen_exe(), &staged_ruxen).expect("copy ruxen");
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                let mut perms = fs::metadata(&staged_ruxenc).unwrap().permissions();
+                let mut perms = fs::metadata(&staged_ruxen).unwrap().permissions();
                 perms.set_mode(0o755);
-                fs::set_permissions(&staged_ruxenc, perms).unwrap();
+                fs::set_permissions(&staged_ruxen, perms).unwrap();
             }
 
             // #06.95 Phase B reorganized the C runtime into per-package
@@ -71,7 +75,7 @@ fn shared_install() -> &'static Path {
             // no additional copy is needed for the .rx sources — the
             // staged_stdlib_dir() helper returns this same root.
 
-            (temp, staged_ruxenc)
+            (temp, staged_ruxen)
         })
         .1
 }
@@ -104,9 +108,10 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// Path to the `ruxenc` binary under test (cargo populates this env var).
-fn ruxenc_exe() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_ruxenc"))
+/// Path to the unified `ruxen` driver under test (cargo populates this
+/// env var via the `ruxen_cli` dev-dependency).
+fn ruxen_exe() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_ruxen"))
 }
 
 /// Path to the staged `library/std/` package-root tree alongside the
@@ -156,26 +161,28 @@ fn rx(name: &str) -> String {
 }
 
 /// Build an isolated layout for a test: a per-test tempdir for project
-/// files, with the path to the process-wide shared staged `ruxenc` binary.
+/// files, with the path to the process-wide shared staged `ruxen` binary.
 ///
 /// Returns the tempdir (kept alive by the caller, cleaned up at test end)
-/// and the path to the staged `ruxenc` binary that is shared across all
+/// and the path to the staged `ruxen` binary that is shared across all
 /// tests in this binary.
 fn stage_install() -> (tempfile::TempDir, PathBuf) {
     let temp = tempfile::tempdir().expect("mktemp");
     (temp, shared_install().to_path_buf())
 }
 
-/// Compile `source` with the staged `ruxenc` in `dir`, then run the resulting
-/// binary and return its captured stdout. Panics with context on any failure.
-fn compile_and_run(ruxenc: &Path, dir: &Path, source_name: &str, source: &str) -> String {
+/// Compile `source` with `ruxen compile` (staged) in `dir`, then run the
+/// resulting binary and return its captured stdout. Panics with context
+/// on any failure.
+fn compile_and_run(ruxen: &Path, dir: &Path, source_name: &str, source: &str) -> String {
     let src = dir.join(source_name);
     fs::write(&src, source).unwrap();
 
     let out_name = source_name.trim_end_matches(".rx");
     let out = dir.join(out_name);
 
-    let compile = Command::new(ruxenc)
+    let compile = Command::new(ruxen)
+        .arg("compile")
         .arg(source_name)
         .arg("-o")
         .arg(out_name)
@@ -183,7 +190,7 @@ fn compile_and_run(ruxenc: &Path, dir: &Path, source_name: &str, source: &str) -
         .env("RUXEN_STDLIB_PATH", staged_stdlib_dir())
         .env("RUXEN_RUNTIME", staged_runtime_c())
         .output()
-        .expect("spawn ruxenc");
+        .expect("spawn ruxen compile");
 
     assert!(
         compile.status.success(),
@@ -213,11 +220,13 @@ fn compile_and_run(ruxenc: &Path, dir: &Path, source_name: &str, source: &str) -
 
 #[test]
 fn version_flag() {
-    let (_temp, ruxenc) = stage_install();
-    let out = Command::new(&ruxenc).arg("--version").output().unwrap();
+    // `ruxen --version` (the unified driver). The legacy `ruxenc` name
+    // is gone; the version now comes from the parent `ruxen` package.
+    let (_temp, ruxen) = stage_install();
+    let out = Command::new(&ruxen).arg("--version").output().unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.starts_with("ruxenc "), "got: {:?}", stdout);
+    assert!(stdout.starts_with("ruxen "), "got: {:?}", stdout);
 }
 
 #[test]
@@ -346,7 +355,7 @@ fn runtime_env_override() {
     // RUXEN_RUNTIME env var should take precedence over the bin-relative
     // lookup. We stage a normal install and then point RUXEN_RUNTIME at a
     // secondary copy of runtime.c — compilation must still succeed.
-    let (temp, ruxenc) = stage_install();
+    let (temp, ruxen) = stage_install();
     // Stage a secondary copy of the whole `library/std/` tree so the
     // unity-build `#include "../../<pkg>/runtime/*.c"` lookups still
     // resolve, then point RUXEN_RUNTIME at the aggregator inside.
@@ -356,7 +365,8 @@ fn runtime_env_override() {
 
     fs::write(temp.path().join("env_ov.rx"), rx("runtime_env_override")).unwrap();
 
-    let compile = Command::new(&ruxenc)
+    let compile = Command::new(&ruxen)
+        .arg("compile")
         .arg("env_ov.rx")
         .arg("-o")
         .arg("env_ov")
@@ -383,14 +393,14 @@ fn missing_runtime_gives_clear_error() {
     let temp = tempfile::tempdir().unwrap();
     let bin_dir = temp.path().join("bin");
     fs::create_dir_all(&bin_dir).unwrap();
-    let ruxenc = bin_dir.join("ruxenc");
-    fs::copy(ruxenc_exe(), &ruxenc).unwrap();
+    let ruxen = bin_dir.join("ruxen");
+    fs::copy(ruxen_exe(), &ruxen).unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&ruxenc).unwrap().permissions();
+        let mut perms = fs::metadata(&ruxen).unwrap().permissions();
         perms.set_mode(0o755);
-        fs::set_permissions(&ruxenc, perms).unwrap();
+        fs::set_permissions(&ruxen, perms).unwrap();
     }
 
     fs::write(temp.path().join("x.rx"), "def main\n  puts \"hi\"\nend\n").unwrap();
@@ -403,7 +413,8 @@ fn missing_runtime_gives_clear_error() {
     // RUXEN_STDLIB_PATH at the staged copy alongside the shared
     // install so bootstrap finds .rx files without falling back
     // through CARGO_MANIFEST_DIR.
-    let out = Command::new(&ruxenc)
+    let out = Command::new(&ruxen)
+        .arg("compile")
         .arg("x.rx")
         .current_dir(temp.path())
         .env_remove("RUXEN_RUNTIME")
@@ -730,13 +741,14 @@ fn e2e_96_panic_basic() {
     // Fixture 96: `panic!("boom")` prints the message to stderr and
     // exits non-zero. Stdout captures only the output before the
     // panic; anything after is unreachable.
-    let (temp, ruxenc) = stage_install();
+    let (temp, ruxen) = stage_install();
     let src_name = "panic_basic.rx";
     let src = temp.path().join(src_name);
     fs::write(&src, rx("e2e_96_panic_basic")).unwrap();
 
     let out_name = "panic_basic";
-    let compile = Command::new(&ruxenc)
+    let compile = Command::new(&ruxen)
+        .arg("compile")
         .arg(src_name)
         .arg("-o")
         .arg(out_name)
@@ -744,7 +756,7 @@ fn e2e_96_panic_basic() {
         .env("RUXEN_STDLIB_PATH", staged_stdlib_dir())
         .env("RUXEN_RUNTIME", staged_runtime_c())
         .output()
-        .expect("spawn ruxenc");
+        .expect("spawn ruxen compile");
     assert!(
         compile.status.success(),
         "compile failed:\nstdout:\n{}\nstderr:\n{}",

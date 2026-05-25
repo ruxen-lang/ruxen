@@ -1,27 +1,29 @@
-//! End-to-end tests for the `ruxen-repl` binary.
+//! End-to-end tests for the `ruxen repl` subcommand.
 //!
-//! These drive the binary via stdin and check that its command protocol
-//! (`:help`, `:type`, `:quit`, `--version`) and basic expression evaluation
-//! continue to work. Actual JIT execution needs W+X memory permissions
-//! which aren't always available in sandboxes, so evaluation tests are
-//! gated behind a permissiveness probe.
+//! These drive the unified `ruxen` binary via `ruxen repl` over stdin and
+//! check that its command protocol (`:help`, `:type`, `:quit`) and basic
+//! expression evaluation continue to work. Actual JIT execution needs W+X
+//! memory permissions which aren't always available in sandboxes, so
+//! evaluation tests are gated behind a permissiveness probe.
 
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-fn repl_exe() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_ruxen-repl"))
+/// Path to the unified `ruxen` driver. The REPL runs as `ruxen repl`.
+fn ruxen_exe() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_ruxen"))
 }
 
-/// Run the REPL with the given stdin input, return (stdout, stderr).
+/// Run `ruxen repl` with the given stdin input, return (stdout, stderr).
 fn run_repl(stdin_input: &str) -> (String, String) {
-    let mut child = Command::new(repl_exe())
+    let mut child = Command::new(ruxen_exe())
+        .arg("repl")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn ruxen-repl");
+        .expect("spawn ruxen repl");
 
     child
         .stdin
@@ -39,14 +41,17 @@ fn run_repl(stdin_input: &str) -> (String, String) {
 
 #[test]
 fn version_flag() {
-    let out = Command::new(repl_exe())
-        .arg("--version")
+    // `ruxen repl --version` is intercepted by clap on the parent `ruxen`
+    // CLI before the REPL ever starts; the version string therefore
+    // comes from the unified `ruxen` package.
+    let out = Command::new(ruxen_exe())
+        .args(["repl", "--version"])
         .output()
-        .expect("spawn ruxen-repl --version");
+        .expect("spawn ruxen repl --version");
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.starts_with("ruxen-repl "),
+        stdout.starts_with("ruxen "),
         "unexpected: {:?}",
         stdout,
     );
@@ -54,11 +59,15 @@ fn version_flag() {
 
 #[test]
 fn help_flag() {
-    let out = Command::new(repl_exe()).arg("--help").output().unwrap();
+    let out = Command::new(ruxen_exe())
+        .args(["repl", "--help"])
+        .output()
+        .unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("ruxen-repl"));
-    assert!(stdout.contains(":help"));
+    // Clap auto-generates the subcommand help; it mentions the parent
+    // binary plus the subcommand path.
+    assert!(stdout.contains("repl"));
 }
 
 #[test]

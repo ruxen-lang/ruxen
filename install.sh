@@ -2,8 +2,8 @@
 #
 # Ruxen installer.
 #
-# Installs the Ruxen toolchain (ruxen, ruxenc, ruxen-lsp, ruxen-repl)
-# from GitHub Releases into ~/.ruxen and configures PATH.
+# Installs the unified `ruxen` binary (which subsumes compile / lsp / repl
+# as subcommands) from GitHub Releases into ~/.ruxen and configures PATH.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/ruxen-lang/ruxen/master/install.sh | bash
@@ -145,10 +145,12 @@ if [ -n "$FROM_SOURCE" ]; then
   fi
   ok "Building Ruxen ${BOLD}${TAG}${RESET} from ${DIM}${ABS_SRC}${RESET}"
 
-  # One build command, four public command binaries.
+  # One build command, one shipped binary. The unified `ruxen` driver
+  # exposes everything (compile, lsp, repl, fmt, bench, etc.) as
+  # subcommands; the old standalone `ruxenc` / `ruxen-lsp` / `ruxen-repl`
+  # binaries no longer exist.
   ( cd "$ABS_SRC" && \
-    cargo build --release \
-      --bin ruxen --bin ruxenc --bin ruxen-lsp --bin ruxen-repl ) \
+    cargo build --release --bin ruxen ) \
     || err "cargo build failed in $ABS_SRC"
 
   # Point the install loop at cargo's output dir.
@@ -202,26 +204,17 @@ fi
 
 # ── Install ───────────────────────────────────────────────────────────
 mkdir -p "$RUXEN_HOME/bin"
-info "Installing binaries to ${BOLD}${RUXEN_HOME}/bin${RESET}"
-for bin in ruxen ruxenc ruxen-lsp ruxen-repl; do
-  # Accept either spelling at the source: release tarballs ship the
-  # hyphen form (`ruxen-lsp`); cargo build emits the underscore form
-  # (`ruxen_lsp`). The installed name is always the hyphen form so
-  # `ruxen-lsp` works on PATH regardless of install path.
-  src_hyphen="$BIN_SRC_DIR/$bin"
-  src_underscore="$BIN_SRC_DIR/${bin//-/_}"
-  if [ -f "$src_hyphen" ]; then
-    src="$src_hyphen"
-  elif [ -f "$src_underscore" ]; then
-    src="$src_underscore"
-  else
-    warn "missing from build/archive: $bin"
-    continue
-  fi
-  cp -f "$src" "$RUXEN_HOME/bin/$bin"
-  chmod +x "$RUXEN_HOME/bin/$bin"
-  ok "Installed ${BOLD}$bin${RESET}"
-done
+info "Installing binary to ${BOLD}${RUXEN_HOME}/bin${RESET}"
+# Only one binary ships: `ruxen`. Compile / lsp / repl / fmt / bench are
+# all subcommands. Older release tarballs included `ruxenc`, `ruxen-lsp`,
+# and `ruxen-repl`; they are dropped silently if present.
+src="$BIN_SRC_DIR/ruxen"
+if [ ! -f "$src" ]; then
+  err "ruxen binary missing from build/archive at $src"
+fi
+cp -f "$src" "$RUXEN_HOME/bin/ruxen"
+chmod +x "$RUXEN_HOME/bin/ruxen"
+ok "Installed ${BOLD}ruxen${RESET}"
 
 # Copy any supporting files (stdlib, runtime headers, etc.) — only
 # applies to the release-tarball install path. Local builds embed
@@ -284,6 +277,5 @@ echo
 echo "Or open a new terminal. Then verify with:"
 echo
 echo "    ${BOLD}ruxen --version${RESET}"
-echo "    ${BOLD}ruxenc --version${RESET}"
 echo
 echo "Get started:  ${DIM}https://github.com/${RUXEN_REPO}/blob/master/docs/tutorial/01-getting-started.md${RESET}"

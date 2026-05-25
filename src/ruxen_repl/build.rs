@@ -86,6 +86,15 @@ fn main() {
 
     println!("cargo:rustc-link-search=native={out_dir}");
 
+    // Publish OUT_DIR via the `cargo:` metadata channel keyed off the
+    // `links = "ruxenrt"` declaration in Cargo.toml. Downstream build
+    // scripts (notably ruxen_cli's, which links the unified `ruxen`
+    // binary) read this as `DEP_RUXENRT_LIB_DIR` so they can re-emit
+    // the same -force_load / -export_dynamic link args for THEIR bin's
+    // link command — `cargo:rustc-link-arg` doesn't propagate across
+    // package boundaries, but `cargo:<key>=<val>` metadata does.
+    println!("cargo:lib_dir={out_dir}");
+
     if target_os == "macos" || target_os == "ios" {
         // macOS ld doesn't honour `+whole-archive`; use `-force_load`
         // with the absolute archive path instead, and combine with

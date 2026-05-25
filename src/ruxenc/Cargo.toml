@@ -6,10 +6,6 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[[bin]]
-name = "ruxenc"
-path = "src/main.rs"
-
 [features]
 llvm = ["ruxen_core/llvm"]
 
@@ -21,6 +17,10 @@ serde = { version = "1", features = ["derive"] }
 rayon = "1.10"
 
 [dev-dependencies]
+# Pull in the unified `ruxen` driver so integration tests can resolve
+# `CARGO_BIN_EXE_ruxen` and exercise compile/fmt/etc. through the same
+# binary users get from `install.sh`.
+ruxen_cli = { path = "../ruxen_cli" }
 tempfile = "3"
 criterion = { version = "0.5", default-features = false, features = ["plotters", "cargo_bench_support"] }
 

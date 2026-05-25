@@ -72,6 +72,21 @@ impl Parser {
             // Tuple type or unit: (Type, Type, ...)
             TokenKind::LParen => self.parse_tuple_or_unit_type(),
 
+            // `nil` in type position — alias for the unit type `()`.
+            // Produces the IDENTICAL AST node as `()` (empty Tuple) so
+            // every downstream consumer (resolve, typeck, MIR, codegen,
+            // pretty-printer) sees one canonical form. Users who write
+            // `nil` still see `()` in error messages — `()` remains the
+            // canonical display form.
+            TokenKind::Nil => {
+                let span = self.current_span();
+                self.advance();
+                TypeExpr::Tuple {
+                    elements: vec![],
+                    span,
+                }
+            }
+
             // Array type: [Type; size]
             TokenKind::LBracket => self.parse_array_type(),
 

@@ -626,8 +626,26 @@ fn compile_project(
         extra_link_flags.push(obj_path.to_string_lossy().to_string());
     }
 
+    // Gather user-side C runtime sources: the project's own
+    // `runtime/*.c` plus every path-dep's `runtime/*.c`. Mirrors what
+    // stdlib packages get for free (`library/std/<pkg>/runtime/*.c`)
+    // so a `lib "runtime/foo.c"` decl in user code resolves to symbols
+    // defined in a sibling-of-`src/` C file.
+    let mut user_runtime: Vec<PathBuf> = Vec::new();
+    user_runtime.extend(codegen::find_runtime_sources_in_dir(project_dir)?);
+    for dep_dir in dep_source_dirs {
+        user_runtime.extend(codegen::find_runtime_sources_in_dir(dep_dir)?);
+    }
+
     let output_str = output_path.to_string_lossy().to_string();
-    codegen::compile_with_options(&mir_program, &output_str, false, &extra_link_flags, backend)?;
+    codegen::compile_with_options(
+        &mir_program,
+        &output_str,
+        false,
+        &extra_link_flags,
+        &user_runtime,
+        backend,
+    )?;
 
     Ok(())
 }

@@ -1,261 +1,233 @@
 # Writing and Running Tests
 
-Ruxen uses **Spec-Druxen Development** (see
-[Chapter 20 — Specs & SDD](20-specs-and-sdd.md) for the workflow).
-The TL;DR for tests: every spec behaviour is pinned by at least one
-test in the Rust integration suite or as a release-e2e fixture.
-This chapter shows you both layers — how to read the existing tests
-and how to write your own.
+Writing tests is how you keep code working as it grows. In Ruxen, a test is just a normal `.rx` file with a `def main` that runs your code and panics if anything is wrong. There's no special test framework — you call `assert_eq` (or whatever helper you write), it panics on a failure, and the program's non-zero exit code tells `ruxen run` or your CI system that the test failed. This chapter walks through the minimal pattern, then shows how to organise tests in a real project, share helper functions, and write microbenchmarks.
 
 ---
 
-## 1. The two test layers
+## 1. Your first test
 
-| Layer             | Lives in                                      | Best for                                              |
-|-------------------|-----------------------------------------------|-------------------------------------------------------|
-| Integration tests | `crates/ruxen-core/tests/*.rs`                | Compile-and-run + assertions on typed Rust values     |
-| Release-e2e       | `tests/release-e2e/cases/*.rx` + `expected/` | Byte-exact stdout comparison across both backends     |
-
-Integration tests run on every `cargo test --workspace` (≈1180 tests
-on `v1-missing-features` as of writing).  Release-e2e fixtures run
-under `cargo test --release ... -- --ignored` and on the post-merge
-CI job (~220 fixtures, takes a few minutes locally).
-
----
-
-## 2. Running everything
-
-```bash
-# Fast default suite — every cargo test in the workspace.
-cargo test --workspace
-
-# Just one test file:
-cargo test -p ruxen-core --test stdlib_fmt_runtime
-
-# Just one test fn:
-cargo test -p ruxen-core --test stdlib_fmt_runtime -- \
-    interpolation_float_precision
-
-# Slow but comprehensive — compile-and-run every release-e2e fixture
-# through the in-process pipeline:
-cargo test --release -p ruxen-core --test release_e2e_smoke -- --ignored
-```
-
-The full-fixture run is gated behind `--ignored` so it doesn't run
-in the default loop.  Run it before merging anything that touches
-codegen or the runtime.
-
----
-
-## 3. Writing a release-e2e fixture
-
-Use these when you want a **byte-exact** stdout check.  Add two files:
-
-```
-tests/release-e2e/cases/NNN_<name>.rx
-tests/release-e2e/expected/NNN_<name>.out
-```
-
-`NNN_` is a free integer prefix used for ordering.  Pick a number
-that doesn't collide with existing fixtures (highest currently in
-use is around `611`).
-
-**Example:** `tests/release-e2e/cases/071_interp_format_specs.rx`:
+Save this as `test_math.rx`:
 
 ```ruxen
-# Phase 2 #06.D4 — width / align / fill / precision applied at runtime.
+def add(a: Int, b: Int) -> Int
+  a + b
+end
 
 def main
-  let n: Int = 42
-  puts "[#{n:>5}]"
-  puts "[#{n:<5}]"
-  puts "[#{n:^6}]"
-
-  let pi: Float = 3.14159
-  puts "pi=#{pi:.2}"
-  puts "[#{pi:>8.2}]"
+  let result = add(2, 3)
+  if result != 5
+    panic!("expected 5, got #{result}")
+  end
+  puts "ok"
 end
 ```
 
-`tests/release-e2e/expected/071_interp_format_specs.out`:
+Run it:
 
-```
-[   42]
-[42   ]
-[  42  ]
-pi=3.14
-[    3.14]
+```bash
+ruxen run test_math.rx
 ```
 
-The harness diffs stdout against the `.out` file character-by-character.
-A trailing newline difference is meaningful — preserve it exactly.
+Output:
 
-To run just your new fixture during development, write an inline
-cargo test (see §4) that compiles+runs the same source; the
-release-e2e harness will then pick up the fixture automatically
-when you next run the full suite.
+```
+ok
+```
 
----
+If you change `a + b` to `a - b` and re-run, the program panics with `expected 5, got -1` and exits non-zero. That's the entire mechanism: **panic on failure, exit zero on success.**
 
-## 4. Writing an integration test
+`panic!(msg)` is the underlying primitive. Helpers like `assert_eq` and `expect!` are thin wrappers around it.
 
-Use these when you need to assert on values, behaviour, or
-diagnostics that aren't visible from stdout.
+## 2. A reusable `assert_eq` helper
 
-**Pattern:** parse → typecheck → MIR-lower → codegen → run → assert.
-The `compile_and_run` helper exists in most `stdlib_*.rs` files;
-copy-paste it.
+Writing `if x != y then panic!(...)` over and over gets tedious. Pull it into a helper:
 
-```rust
-// crates/ruxen-core/tests/my_feature.rs
-use ruxen_core::codegen;
-use ruxen_core::lexer::Lexer;
-use ruxen_core::mir::lower::Lowerer;
-use ruxen_core::parser::Parser;
-use ruxen_core::typeck;
-use std::process::Command;
-
-fn workspace_root() -> std::path::PathBuf {
-    let crate_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    crate_dir.parent().unwrap().parent().unwrap().to_path_buf()
-}
-
-fn compile_and_run(source: &str, basename: &str) -> (String, String, bool) {
-    let root = workspace_root();
-    let tmp_dir = root.join("tmp");
-    let _ = std::fs::create_dir_all(&tmp_dir);
-    let bin_path = tmp_dir.join(format!("{}.bin", basename));
-
-    let mut lexer = Lexer::new(source);
-    let tokens = lexer.tokenize().expect("lex");
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse().expect("parse");
-    let result = typeck::type_check(&program);
-    assert!(result.diagnostics.iter().all(|d|
-        d.level != ruxen_core::diagnostics::DiagnosticLevel::Error),
-        "typecheck errors: {:?}", result.diagnostics);
-
-    let mut lowerer = Lowerer::new(&result.symbols);
-    let mir = lowerer.lower_program(&result.program).expect("MIR lowering");
-    codegen::compile(&mir, bin_path.to_str().unwrap()).expect("codegen");
-
-    let output = Command::new(&bin_path).output().expect("run");
-    (
-        String::from_utf8_lossy(&output.stdout).to_string(),
-        String::from_utf8_lossy(&output.stderr).to_string(),
-        output.status.success(),
-    )
-}
-
-#[test]
-fn my_feature_does_the_thing() {
-    let source = r##"
-def main
-  puts "expected output"
+```ruxen
+def assert_eq[T](actual: T, expected: T) -> nil
+    where T: PartialEq,
+          T: Display
+  if actual != expected
+    panic!("assertion failed: #{actual} != #{expected}")
+  end
 end
-"##;
-    let (stdout, _stderr, ok) = compile_and_run(source, "my_feature_thing");
-    assert!(ok);
-    assert_eq!(stdout, "expected output\n");
-}
+
+def add(a: Int, b: Int) -> Int
+  a + b
+end
+
+def main
+  assert_eq(add(2, 3), 5)
+  assert_eq(add(0, 0), 0)
+  assert_eq(add(-1, 1), 0)
+  puts "ok"
+end
 ```
 
-That's the whole pattern.  Drop the file in
-`crates/ruxen-core/tests/`, add `#[test]` fns, and `cargo test`
-picks it up automatically — no separate registration.
+The `where` clause says `T` needs `PartialEq` (so we can use `!=`) and `Display` (so we can interpolate it into the panic message). Most numeric and string types satisfy both.
 
----
+> **Try it:** add a `assert_true(cond: Bool, label: &str)` helper to your file. Then use it to check `add(10, 5) > 0`.
 
-## 5. Linking tests back to specs
+## 3. Organising tests in a project
 
-When you add a behaviour to a spec, follow the existing convention:
-list each pin test in the spec's "Pin tests" table.  Future readers
-should be able to trace any `B<n>` to the exact `fn` that pins it.
+Once your project has a manifest (`Ruxen.toml`), the convention is to put one test file per area under a `tests/` directory:
 
-**Don't** write tests that aren't named in a spec — the SDD
-workflow says spec first, test second.  If you need a test for
-behaviour that isn't yet spec'd, either extend the spec or write
-the test as a TODO and revisit.
-
-When you find a behaviour in a spec's **Gaps** section, that's an
-invitation: write the pin test, then move the line out of "Gaps"
-and into the "Pin tests" table.  See commits 0a8c499 and `4f...`
-for examples of this workflow in action (env, fs, process, vec gap
-fills).
-
----
-
-## 6. Diagnostics tests
-
-For typeck rejections, use `typeck::type_check(&program)` directly
-and inspect `.diagnostics`.  See `crates/ruxen-core/tests/implicit_negatives.rs`
-for the canonical pattern: compile-only (no codegen) and assert on
-the diagnostic `code` (e.g. `"E0610"`) rather than the message
-text.  Error-message wording can change; codes are stable.
-
-```rust
-let diagnostics = typecheck_source(src);
-let codes: Vec<&str> = diagnostics
-    .iter()
-    .filter(|d| d.level == DiagnosticLevel::Error)
-    .filter_map(|d| d.code.as_deref())
-    .collect();
-assert!(codes.contains(&"E0610"), "expected E0610, got {:?}", codes);
+```
+my_app/
+  Ruxen.toml
+  src/
+    main.rx
+    lib.rx
+  tests/
+    string_helpers.rx
+    parser.rx
+    integration_round_trip.rx
 ```
 
----
+Declare each one as a binary in `Ruxen.toml`:
 
-## 7. Parser-only tests
+```toml
+[package]
+name = "my_app"
+version = "0.1.0"
 
-If you're adding new syntax that doesn't yet have semantics, you
-only need the lexer + parser.  See
-`crates/ruxen-core/tests/const_generics.rs` for the pattern:
+[[bin]]
+name = "string_helpers_test"
+path = "tests/string_helpers.rx"
 
-```rust
-use ruxen_core::lexer::Lexer;
-use ruxen_core::parser::ast::{GenericParam, Program, TopLevelItem};
-use ruxen_core::parser::Parser;
-
-fn parse(src: &str) -> Program {
-    let mut lx = Lexer::new(src);
-    let toks = lx.tokenize().expect("lex");
-    let mut p = Parser::new(toks);
-    p.parse().expect("parse")
-}
-
-#[test]
-fn my_new_syntax_parses() {
-    let prog = parse("struct Foo[const N: USize] field: USize end");
-    // Walk prog.items, assert on AST shape...
-}
+[[bin]]
+name = "parser_test"
+path = "tests/parser.rx"
 ```
 
-This is the right scaffold for SDD Stage-1 tests: pin the parser
-surface red before any semantic work.
+Run individual tests:
+
+```bash
+ruxen run --bin string_helpers_test
+ruxen run --bin parser_test
+```
+
+Or chain them in a shell script:
+
+```bash
+#!/usr/bin/env bash
+set -e
+for t in string_helpers_test parser_test integration_round_trip_test; do
+  ruxen run --bin "$t"
+done
+echo "all tests passed"
+```
+
+The `set -e` line is important — it makes the script abort on the first failing test, so your CI picks up the non-zero exit code instead of barrelling on to the next one.
+
+## 4. Sharing helpers across test files
+
+Put `assert_eq` and friends in a module so every test file can use them:
+
+```ruxen
+# src/test_support.rx
+
+use std.fmt.Display
+
+def assert_eq[T](actual: T, expected: T) -> nil
+    where T: PartialEq,
+          T: Display
+  if actual != expected
+    panic!("assertion failed: #{actual} != #{expected}")
+  end
+end
+
+def assert_true(cond: Bool, msg: &String) -> nil
+  if !cond
+    panic!("assertion failed: #{msg}")
+  end
+end
+```
+
+Then in each test file:
+
+```ruxen
+# tests/string_helpers.rx
+
+use my_app.test_support.{assert_eq, assert_true}
+use my_app.string_helpers.{capitalize}
+
+def main
+  assert_eq(capitalize(&"hello"), "Hello")
+  assert_true(capitalize(&"").len == 0, &"empty input yields empty output")
+  puts "ok"
+end
+```
+
+## 5. Testing error paths with `Result`
+
+When the code under test returns a `Result`, match on it explicitly:
+
+```ruxen
+match parse(&"3 + (2")
+  Ok(_)  -> panic!("expected parse error on unbalanced input")
+  Err(e) -> assert_eq(e.kind, ParseErrorKind.UnbalancedParen)
+end
+```
+
+For the happy path, `unwrap!()` is the shortcut for "this should be `Ok`":
+
+```ruxen
+let parsed = parse(&"1 + 2").unwrap!()
+assert_eq(parsed.value, 3)
+```
+
+## 6. Microbenchmarks with `ruxen bench`
+
+Once a test passes, the natural next question is "how fast is it?" Ruxen ships a tiny benchmarking harness. A bench file is a `.rx` file with one or more `def bench_*` functions:
+
+```ruxen
+# benches/string_concat.rx
+
+use std.bench.Bencher
+
+def bench_string_concat(b: &var Bencher)
+  b.iter(&"string_concat", { ||
+    var s = String.new
+    for _i in 0..100
+      s.push_str(&"xx")
+    end
+    s.len
+  })
+end
+
+def main
+  var b = Bencher.new(1000)
+  bench_string_concat(&var b)
+end
+```
+
+Run it:
+
+```bash
+ruxen bench benches/string_concat.rx
+ruxen bench benches/string_concat.rx --filter concat
+ruxen bench benches/string_concat.rx --iter-hint 10000
+```
+
+The harness scales the iteration count automatically until each measurement runs for at least ~100 ms, then prints `iters | total ns | ns/iter`. Your closure must return an `Int`; the harness uses that to keep the optimiser from deleting the work.
+
+## 7. Common mistakes
+
+- **Calling `exit(0)` at the end of `main`.** Don't — falling off the end already exits with 0, and `exit` short-circuits any cleanup (like file close on drop). Save `exit(n)` for non-zero codes from deep in helpers.
+- **Not printing anything on success.** A test that silently exits looks identical to one that crashed before reaching `puts`. Always end with `puts "ok"` (or similar) so you can tell from the output that the test actually ran.
+- **Forgetting `set -e` in test scripts.** Without it, a failing test prints its error and the script merrily continues. Add it to every shell wrapper.
+- **Mocking instead of using real I/O.** Ruxen doesn't have a mocking library. The idiomatic shape is: write to a unique tmp file (or use `std.env.current_dir`), read it back, assert. Clean up the path at the *start* of each run, not the end, so a previous crash doesn't leave state behind.
+
+> **Try it:** add a second test case that intentionally fails (e.g. `assert_eq(add(2, 2), 5)`). Re-run with `ruxen run test_math.rx && echo PASS || echo FAIL`. What do you see?
 
 ---
 
-## 8. Common pitfalls
+## Recap
 
-- **Forgetting `--release` on release-e2e.** The fixture runner is
-  marked `#[ignore]` because it takes ~5 minutes; the `--release`
-  flag speeds compile-and-run roughly 5× — without it the suite
-  takes ~20 minutes locally.
-- **Calling `Stdout.new()` instead of using `puts`.** Both work, but
-  `puts s` is the idiomatic shortcut in test programs.  `Stdout.new()`
-  has its place when you need `write_str` (no trailing newline).
-- **Asserting on exact stdout including newlines.** Use
-  `assert_eq!(stdout, "expected\n")` to catch missing / extra
-  newlines — `assert!(stdout.contains(...))` will mask them.
-- **Tests that touch the filesystem.** Use the `unique_tmp_dir`
-  helper pattern from `stdlib_fs.rs` so parallel test runs don't
-  race.  Always clean up on success and failure.
-- **Network tests.** Bind on `127.0.0.1:0` so the kernel picks an
-  unused port; pass the port to the Ruxen binary via env var
-  (`RUXEN_NET_TEST_PORT` is the existing convention).  See
-  `stdlib_net.rs::tcp_loopback_roundtrip`.
+- A test is just a `.rx` file: assertions in `main`, panic on failure, non-zero exit on panic.
+- `panic!(msg)` is the primitive; build `assert_eq` / `assert_true` helpers on top of it.
+- Real projects use `tests/` with one binary per file declared in `Ruxen.toml`.
+- Shared helpers live in a module like `src/test_support.rx`.
+- `ruxen bench` runs microbenchmarks — auto-scales iterations and reports ns/iter.
 
----
-
-**Next:** [Chapter 20 — Specifications and SDD Workflow](20-specs-and-sdd.md)
-to learn the why behind the patterns in this chapter.
+**Next:** [Chapter 20 — Const Generics](20-const-generics.md).

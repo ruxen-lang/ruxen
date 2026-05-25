@@ -1684,6 +1684,8 @@ dependencies = [
  "ar",
  "clap",
  "ruxen_core",
+ "ruxen_lsp",
+ "ruxen_repl",
  "ruxenc",
  "serde",
  "serde_json",
@@ -1727,6 +1729,7 @@ name = "ruxen_lsp"
 version = "0.1.0"
 dependencies = [
  "lsp-types",
+ "ruxen_cli",
  "ruxen_ide",
  "serde",
  "serde_json",
@@ -1746,6 +1749,7 @@ dependencies = [
  "cranelift-native",
  "libc",
  "rustyline",
+ "ruxen_cli",
  "ruxen_core",
  "target-lexicon",
 ]
@@ -1757,6 +1761,7 @@ dependencies = [
  "criterion",
  "postcard",
  "rayon",
+ "ruxen_cli",
  "ruxen_core",
  "serde",
  "sha2",

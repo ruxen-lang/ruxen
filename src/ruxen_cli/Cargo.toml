@@ -20,6 +20,8 @@ llvm = ["ruxen_core/llvm"]
 [dependencies]
 ruxen_core = { path = "../../compiler/ruxen_core" }
 ruxenc = { path = "../ruxenc" }
+ruxen_lsp = { path = "../ruxen_lsp" }
+ruxen_repl = { path = "../ruxen_repl" }
 clap = { version = "4", features = ["derive"] }
 toml = "0.8"
 serde = { version = "1", features = ["derive"] }

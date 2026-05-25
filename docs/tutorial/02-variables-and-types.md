@@ -1,60 +1,97 @@
 # Variables and Types
 
-## Variable Bindings
+This chapter shows how to give names to values and what kinds of values Ruxen knows about. A **value** is a piece of data your program manipulates — a number, a piece of text, a true/false flag. A **type** is the category that value belongs to — `Int`, `String`, `Bool`. Ruxen figures out the type from context most of the time, so you write less and read more.
 
-Ruxen has two binding keywords. `let` is immutable; `var` is mutable.
-
-```ruxen
-let name = "Alaric"
-let age = 30
-let pi = 3.14
-
-name = "Voss"   # COMPILE ERROR: `name` is immutable
-```
-
-Use `var` to make a variable mutable:
+## A first runnable example
 
 ```ruxen
-var counter = 0
-counter = counter + 1
-counter += 1              # compound assignment
+def main
+  let name = "Ruxen"
+  let year = 2026
+  puts "Hello from #{name} in #{year}!"
+end
 ```
 
-## Type Inference
+Save as `intro.rx` and run:
 
-Ruxen infers types from the right-hand side. You rarely need to write type annotations:
+```bash
+ruxen compile intro.rx
+./intro
+```
+
+Output:
+
+```
+Hello from Ruxen in 2026!
+```
+
+You just used two bindings (`name`, `year`), two different types (text and integer), and **string interpolation** — the `#{...}` syntax that drops a value into a string.
+
+## `let` vs `var`
+
+Ruxen has two ways to name a value:
+
+- `let` makes an **immutable** binding — once assigned, it cannot be changed.
+- `var` makes a **mutable** binding — you can reassign it later.
 
 ```ruxen
-let x = 42                # Int
-let y = 3.14              # Float
-let name = "Ruxen"        # &str (borrowed string)
-let flag = true           # Bool
-let ch = 'R'              # Char
+def main
+  let name = "Alaric"
+  var counter = 0
+
+  counter = counter + 1     # OK — counter is var
+  counter += 1              # same thing, shorter
+
+  puts "#{name} has counter #{counter}"
+  # name = "Voss"           # would not compile — name is immutable
+end
 ```
 
-You can add explicit type annotations when needed:
+Prefer `let` whenever you can. Immutable bindings are easier to reason about because the value can't change underneath you.
+
+## Type inference
+
+Ruxen looks at the right-hand side and figures out the type for you. You rarely need to write the type yourself:
 
 ```ruxen
-let x: Float = 42         # 42 interpreted as Float
-var bytes: Array[UInt8] = Array.new
+def main
+  let x = 42                 # Int
+  let y = 3.14               # Float
+  let name = "Ruxen"         # &str (a borrowed piece of text)
+  let flag = true            # Bool
+  let ch = 'R'               # Char (a single Unicode character)
+
+  puts "#{x} #{y} #{name} #{flag} #{ch}"
+end
 ```
 
-## Primitive Types
+You can spell out the type when you want to be explicit or when the default would be wrong:
+
+```ruxen
+let temperature: Float = 42         # 42 is interpreted as 42.0
+let bytes: Array[UInt8] = Array.new # empty array of unsigned bytes
+```
+
+## Primitive types
+
+These are the built-in scalar types — values that fit in a register and copy cheaply:
 
 | Type | Size | Description |
 |------|------|-------------|
 | `Int` | 64-bit | Default signed integer |
-| `Int8`, `Int16`, `Int32`, `Int64` | 8-64 bit | Explicit-width signed |
+| `Int8`, `Int16`, `Int32`, `Int64` | 8 to 64 bit | Signed with explicit width |
 | `UInt` | 64-bit | Default unsigned integer |
-| `UInt8`, `UInt16`, `UInt32`, `UInt64` | 8-64 bit | Explicit-width unsigned |
-| `ISize`, `USize` | pointer-width | Signed/unsigned pointer-sized |
-| `Float` | 64-bit | Default IEEE 754 double |
-| `Float32`, `Float64` | 32/64 bit | Explicit-width floats |
+| `UInt8`, `UInt16`, `UInt32`, `UInt64` | 8 to 64 bit | Unsigned with explicit width |
+| `ISize`, `USize` | pointer-width | Signed/unsigned values the size of a memory address |
+| `Float` | 64-bit | Default IEEE 754 double-precision float |
+| `Float32`, `Float64` | 32 or 64 bit | Floats with explicit width |
 | `Bool` | 1 byte | `true` or `false` |
-| `Char` | 4 bytes | Unicode scalar value |
-| `()` | 0 bytes | Unit type |
+| `Char` | 4 bytes | A single Unicode scalar value |
+| `nil` | 0 bytes | The empty value — used for "nothing to return" |
 
-## Numeric Literals
+`nil` is unusual: it's both the type name (`def f -> nil` — "this function returns nothing") and the value (`Ok(nil)` — "the Ok case carries no payload"). You'll see it a lot.
+
+## Numeric literals
 
 ```ruxen
 42              # Int
@@ -62,10 +99,10 @@ var bytes: Array[UInt8] = Array.new
 42i32           # Int32
 42u8            # UInt8
 
-1_000_000       # underscores for readability
-0xFF            # hexadecimal
-0b1010          # binary
-0o777           # octal
+1_000_000       # underscores are ignored, used for readability
+0xFF            # hexadecimal (255)
+0b1010          # binary (10)
+0o777           # octal (511)
 
 3.14            # Float
 3.14f32         # Float32
@@ -74,34 +111,50 @@ var bytes: Array[UInt8] = Array.new
 
 ## Strings
 
-Ruxen has two string types:
+Ruxen has two string flavours:
 
-| Type | Ownership | Growable | When |
-|------|-----------|----------|------|
-| `String` | Owned, heap-allocated | Yes | You need to own or modify the string |
-| `&str` | Borrowed slice | No | Read-only access to string data |
+| Type | Owned? | Growable? | Use it when |
+|------|--------|-----------|-------------|
+| `String` | Yes — owns its memory | Yes | You need to keep the text around or change it |
+| `&str` | No — borrows from someone else | No | You just need to read existing text |
+
+The `&` in `&str` means **borrow** — you're reading data that someone else owns. Borrowing is covered in detail in [Chapter 4](04-ownership-and-borrowing.md); for now, just know that string literals like `"hello"` are `&str` (borrowed from the program's read-only data) and methods like `String.from(...)` build an owned `String`.
 
 ```ruxen
-let greeting = "hello"               # &str (static, borrowed)
-let owned = String.from("hello")      # String (owned)
-let interpolated = "hi #{name}"      # String (interpolation allocates)
+def main
+  let greeting = "hello"                  # &str — a string literal
+  let owned = String.from("hello")        # String — heap-allocated, owned
+
+  puts greeting
+  puts owned
+end
 ```
 
-### String Interpolation
+### String interpolation
 
-Use `#{}` inside double-quoted strings:
+Put any expression inside `#{...}` to drop its value into a string:
 
 ```ruxen
-let name = "Ruxen"
-let age = 1
-puts "#{name} is #{age} year old"
+def main
+  let name = "Ruxen"
+  let age = 1
+  puts "#{name} is #{age} year old"
+end
 ```
 
-### Raw and Multiline Strings
+Output:
+
+```
+Ruxen is 1 year old
+```
+
+Chapter 17 goes deeper on formatting; this much is enough for now.
+
+### Raw and multiline strings
 
 ```ruxen
-let raw = r"no\escape\here"          # raw string
-let raw2 = r#"can have "quotes""#    # raw with delimiters
+let raw = r"no\escape\here"           # backslashes stay literal
+let raw2 = r#"can have "quotes""#     # use r#"..."# when you need a quote
 
 let multi = """
   This is a
@@ -111,41 +164,105 @@ let multi = """
 
 ## Tuples
 
-Fixed-size, heterogeneous collections:
+A **tuple** is a fixed-size grouping of values, possibly of different types. Use one when you want to return two things from a function or pass a few related values together without defining a whole class:
 
 ```ruxen
-let point = (3, 4)                   # (Int, Int)
-let record = ("Alice", 30, true)     # (String, Int, Bool)
-let (x, y) = point                   # destructuring
+def divmod(a: Int, b: Int) -> (Int, Int)
+  (a / b, a % b)
+end
+
+def main
+  let (q, r) = divmod(17, 5)
+  puts "q=#{q}"
+  puts "r=#{r}"
+end
 ```
 
-## Fixed Arrays and Growable Arrays
+Output:
+
+```
+q=3
+r=2
+```
+
+The `let (q, r) = ...` line is **destructuring** — unpacking a tuple into named pieces.
+
+## Arrays
+
+A growable, heap-allocated sequence. The literal `[1, 2, 3]` builds an `Array[Int]`:
 
 ```ruxen
-# Fixed-size arrays — stack-allocated
-let nums: [Int; 3] = [1, 2, 3]
-
-# Growable arrays — heap-allocated. The bare `[…]` literal builds an
-# `Array[T]`; the fixed-size form is only chosen when the binding has
-# an `[T; N]` annotation.
-var v = [1, 2, 3]
-v.push(4)
+def main
+  var v: Array[Int] = Array.new
+  v.push(1)
+  v.push(2)
+  v.push(3)
+  puts "#{v.len}"     # 3
+end
 ```
 
-## Type Aliases
+The fixed-size form `[Int; 3]` exists for stack-allocated arrays with a known length — most code uses the growable `Array[T]` instead.
+
+## Type aliases
+
+Give a long type a short name:
 
 ```ruxen
 type UserId = Int
 type Callback = Fn(Int) -> Bool
 ```
 
+A type alias is purely a naming convenience — `UserId` and `Int` are the same type to the compiler. For a *distinct* type that wraps `Int`, use a newtype (see [Chapter 6](06-classes-and-structs.md)).
+
 ## Constants
 
-Module-level `let` bindings serve as program-wide constants — there is no separate `const` binding form (the `const` keyword is reserved for the generic-parameter prefix, e.g. `[const N: USize]`). Naming convention is `SCREAMING_SNAKE_CASE`:
+Module-level `let` bindings serve as program-wide constants. By convention, name them in `SCREAMING_SNAKE_CASE`:
 
 ```ruxen
 let MAX_RETRIES = 3
 let DEFAULT_PORT: UInt16 = 8080
+
+def main
+  puts "retries=#{MAX_RETRIES} port=#{DEFAULT_PORT}"
+end
 ```
 
-A module-level `let` whose initializer is a const-evaluable expression is usable in type-level positions (const-generic arguments, fixed array sizes). The compiler validates const-evaluability at the use site that requires it.
+There is no separate `const` keyword for value bindings — a top-level `let` *is* the constant form. A constant whose initializer is a simple compile-time expression can also be used in type positions like array sizes.
+
+## Common mistakes
+
+**Trying to reassign a `let`.**
+
+```ruxen
+let count = 0
+count = count + 1     # ERROR: cannot assign to immutable `count`
+```
+
+Change `let` to `var`.
+
+**Mismatched numeric types.**
+
+```ruxen
+let x: Int = 1
+let y: Float = 2.0
+let z = x + y         # ERROR: Int and Float don't auto-convert
+```
+
+Convert explicitly: `let z = (x as Float) + y`.
+
+**Treating `&str` and `String` as interchangeable.** They aren't, but Ruxen will often convert for you at call boundaries. When the compiler complains, `&owned` borrows a `String` as `&String`, and `owned.as_str` gets you an `&str`. We'll come back to this once you've met borrowing properly in Chapter 4.
+
+## Try it
+
+Change `intro.rx` so that `year` is a `Float` (`let year: Float = 2026`). Recompile. The interpolation still works — Ruxen knows how to render any printable value. Now try printing a tuple: `puts "#{(1, 2)}"` — what does it look like?
+
+## Recap
+
+- `let` is immutable, `var` is mutable. Prefer `let`.
+- Types are usually inferred. Add `: Type` when you need to be specific.
+- Primitives include `Int`, `Float`, `Bool`, `Char`, and the unit type `nil`.
+- `String` is owned and growable; `&str` is borrowed and read-only.
+- `#{expr}` interpolates a value into a string.
+- Tuples group a few values without ceremony; arrays grow.
+
+**Next:** [Functions](03-functions.md) — defining your own building blocks.

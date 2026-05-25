@@ -100,19 +100,24 @@ pub enum Command {
         piece: String,
     },
 
-    /// Update dependencies (all or specific), or rebuild the
-    /// toolchain itself from a local source checkout via
-    /// `--from-source <path>`.
+    /// Update project dependencies (all or a specific one).
     Update {
-        /// Specific piece to update
+        /// Specific piece to update (default: all)
         piece: Option<String>,
+    },
 
-        /// Rebuild + reinstall the ruxen toolchain from a local
-        /// source checkout. Pass `.` for the current directory.
-        /// When set, the `[piece]` argument is ignored — this is a
-        /// self-update flow, not a dependency update.
+    /// Upgrade the Ruxen toolchain itself.
+    Upgrade {
+        /// Rebuild and reinstall from a local source checkout
+        /// instead of fetching a release. Pass `.` for the
+        /// current directory.
         #[arg(long, value_name = "PATH")]
         from_source: Option<String>,
+
+        /// Pin a specific release tag when fetching from GitHub
+        /// (e.g. `v0.2.0`). Ignored when `--from-source` is set.
+        #[arg(long, value_name = "TAG")]
+        version: Option<String>,
     },
 
     /// Display dependency tree
@@ -177,4 +182,111 @@ pub enum Command {
         #[arg(long)]
         filter: Option<String>,
     },
+
+    /// Start the Ruxen Language Server (LSP over stdio).
+    ///
+    /// Launched by editors / IDEs; communicates over stdin/stdout. There
+    /// are no flags today.
+    Lsp,
+
+    /// Start the interactive Ruxen REPL.
+    Repl,
+}
+
+#[cfg(test)]
+mod tests {
+    //! Argv-parse tests for the `update` / `upgrade` subcommand split.
+    //! Live in the lib (not under `tests/`) so they don't drag the
+    //! `ruxen` bin into the test link graph — the bin pulls in the
+    //! cranelift-JIT runtime archive from `ruxen_repl`, which is
+    //! orthogonal to the CLI surface this test exercises.
+
+    use super::*;
+    use clap::Parser;
+
+    fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
+        Cli::try_parse_from(args)
+    }
+
+    #[test]
+    fn update_accepts_no_args() {
+        let cli = parse(&["ruxen", "update"]).expect("ruxen update parses");
+        match cli.command {
+            Command::Update { piece } => assert!(piece.is_none()),
+            _ => panic!("expected Update"),
+        }
+    }
+
+    #[test]
+    fn update_accepts_piece() {
+        let cli = parse(&["ruxen", "update", "foo"]).expect("ruxen update foo parses");
+        match cli.command {
+            Command::Update { piece } => assert_eq!(piece.as_deref(), Some("foo")),
+            _ => panic!("expected Update"),
+        }
+    }
+
+    #[test]
+    fn update_rejects_from_source() {
+        // The whole point of the split — `--from-source` must no longer
+        // live on `update`. It belongs to `upgrade` now.
+        let err = match parse(&["ruxen", "update", "--from-source", "."]) {
+            Ok(_) => panic!(
+                "ruxen update --from-source must error now that the flag moved to `upgrade`"
+            ),
+            Err(e) => e,
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("--from-source") || msg.contains("unexpected"),
+            "expected clap to reject --from-source on update; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn upgrade_accepts_no_args() {
+        let cli = parse(&["ruxen", "upgrade"]).expect("ruxen upgrade parses");
+        match cli.command {
+            Command::Upgrade {
+                from_source,
+                version,
+            } => {
+                assert!(from_source.is_none());
+                assert!(version.is_none());
+            }
+            _ => panic!("expected Upgrade"),
+        }
+    }
+
+    #[test]
+    fn upgrade_accepts_from_source() {
+        let cli = parse(&["ruxen", "upgrade", "--from-source", "/tmp/checkout"])
+            .expect("ruxen upgrade --from-source parses");
+        match cli.command {
+            Command::Upgrade {
+                from_source,
+                version,
+            } => {
+                assert_eq!(from_source.as_deref(), Some("/tmp/checkout"));
+                assert!(version.is_none());
+            }
+            _ => panic!("expected Upgrade"),
+        }
+    }
+
+    #[test]
+    fn upgrade_accepts_version() {
+        let cli = parse(&["ruxen", "upgrade", "--version", "v0.2.0"])
+            .expect("ruxen upgrade --version parses");
+        match cli.command {
+            Command::Upgrade {
+                from_source,
+                version,
+            } => {
+                assert!(from_source.is_none());
+                assert_eq!(version.as_deref(), Some("v0.2.0"));
+            }
+            _ => panic!("expected Upgrade"),
+        }
+    }
 }

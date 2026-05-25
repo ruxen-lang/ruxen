@@ -39,19 +39,22 @@ fn main() {
             rev.as_deref(),
         ),
         cli::Command::Remove { piece } => deps::remove(&piece),
-        cli::Command::Update { piece, from_source } => {
-            if let Some(src) = from_source {
-                if piece.is_some() {
+        cli::Command::Update { piece } => deps::update(piece.as_deref()),
+        cli::Command::Upgrade {
+            from_source,
+            version,
+        } => match from_source {
+            Some(src) => {
+                if version.is_some() {
                     eprintln!(
-                        "  warning: ignoring `<piece>` argument — \
-                         `--from-source` is a toolchain self-update"
+                        "  warning: ignoring `--version` — \
+                         `--from-source` builds the checkout as-is"
                     );
                 }
                 self_update::from_source(&src)
-            } else {
-                deps::update(piece.as_deref())
             }
-        }
+            None => self_update::from_release(version.as_deref()),
+        },
         cli::Command::Tree => deps::tree(),
         cli::Command::Verify => deps::verify(),
         cli::Command::Explain { code } => explain::explain(&code),
@@ -120,6 +123,13 @@ fn main() {
             );
             std::process::exit(2);
         }
+
+        // ── Editor / interactive subcommands ────────────────────────
+        // Both crates expose a `run() -> Result<(), String>` library
+        // entry point; the unified `ruxen` driver is the only shipped
+        // binary that invokes them.
+        cli::Command::Lsp => ruxen_lsp::run(),
+        cli::Command::Repl => ruxen_repl::run(),
     };
 
     if let Err(e) = result {

@@ -1,21 +1,12 @@
 # String Formatting and Interpolation
 
-> **See also:** [Spec — std.fmt](../specs/stdlib/fmt.spec.md).  This
-> tutorial is the user-facing companion; the spec is the source of
-> truth for the compiler's behaviour.
-
-Ruxen gives you three layers for turning values into strings:
-
-1. **Interpolation** — `"hello #{name}"` inline in any string literal.
-2. **The `Display` mixin** — how *your* types render in interpolation.
-3. **The `Debug` mixin** — `"#{x:?}"` for diagnostic output. `Debug`
-   is implicitly included on every type (§3.6); no declaration needed.
+Almost every program eventually needs to turn values into nicely-formatted strings — to print them, log them, or build messages for users. Ruxen gives you a single syntax for this: **string interpolation**. You drop `#{...}` into any double-quoted string, and whatever expression is inside gets converted to text and spliced in. This chapter walks through the basics, then shows how to control width, alignment, and decimal precision, and finally how to teach your own types to render themselves.
 
 ---
 
-## 1. Basic interpolation
+## 1. Your first interpolated string
 
-Wrap any expression in `#{...}` inside a double-quoted string:
+Here is a complete program. Save it as `hello.rx`:
 
 ```ruxen
 def main
@@ -25,36 +16,48 @@ def main
 end
 ```
 
+Run it:
+
+```bash
+ruxen run hello.rx
+```
+
 Output:
 
 ```
 hello, world! count = 42
 ```
 
-The compiler routes every interpolated expression through the
-`Display.fmt` dispatch path:
+That's the whole feature: anything inside `#{...}` is evaluated as an expression and converted to a string. The built-in types (`Int`, `Float`, `Bool`, `Char`, `String`) all know how to render themselves, so they work straight away.
 
-```text
-fmt = Formatter.new()
-{T}_fmt(value, fmt)          # T_fmt = Display fmt for the value's type
-buf = fmt.buffer()           # consumes the Formatter, returns String
+## 2. Interpolating any expression
+
+The thing inside `#{...}` doesn't have to be a single variable — it can be any expression:
+
+```ruxen
+def main
+  let a = 3
+  let b = 4
+  puts "#{a} + #{b} = #{a + b}"
+end
 ```
 
-For primitives (`Char`, `Int`, `Float`, `Bool`, `String`) the compiler
-synthesises the `T_fmt` function automatically.  For your own types,
-include the `Display` mixin and provide a `fmt` method (see §4).
+Output:
 
-## 2. Debug interpolation: `"#{x:?}"`
+```
+3 + 4 = 7
+```
 
-The `:?` spec routes through `Debug` instead of `Display`.  Every
-type has `Debug` implicitly (§3.6), so a compiler-generated
-`T_to_debug` function exists for it:
+You can call methods, index into arrays, do arithmetic — anything that produces a value.
+
+## 3. Debug interpolation with `:?`
+
+Sometimes you want to peek at a value's internal structure — useful for debugging. Add `:?` after the expression and Ruxen prints it in **debug form**: a programmer-readable view that shows field names, enum variants, and structure.
 
 ```ruxen
 struct Point
   x: Int
   y: Int
-
 end
 
 def main
@@ -69,7 +72,7 @@ Output:
 p = Point { x: 1, y: 2 }
 ```
 
-Enums work the same way:
+Every type supports `:?` automatically, so you can debug-print any value without writing extra code. Enums work the same way:
 
 ```ruxen
 enum Color
@@ -77,7 +80,6 @@ enum Color
   Green
   Blue
   Custom { r: Int, g: Int, b: Int }
-
 end
 
 def main
@@ -93,30 +95,16 @@ Red
 Custom { r: 10, g: 20, b: 30 }
 ```
 
-## 3. Format specs: width, alignment, fill, precision
+## 4. Width and alignment
 
-The grammar inside `#{...}` mirrors Rust's:
-
-```
-"#{<expr>:[<fill><align>][<width>][.<precision>][?]}"
-```
-
-| Field        | Form         | Example       | Effect                          |
-|--------------|--------------|---------------|---------------------------------|
-| `fill align` | `<c>[<>^]`   | `*<`          | Pad char + side                 |
-| `align`      | `[<>^]`      | `>`           | Pad side (default = right for numerics) |
-| `width`      | digits       | `10`          | Minimum total width             |
-| `.precision` | `.` + digits | `.2`          | Float decimals; String char cap |
-| `?`          | literal `?`  | `?`           | Debug instead of Display        |
-
-### 3.1 Width and alignment
+Sometimes you want output to line up in columns. The bit after the colon controls **width** (minimum total characters) and **alignment** (which side gets padded):
 
 ```ruxen
 def main
   let n: Int = 42
-  puts "[#{n:>5}]"      # right-align (default for numerics)
-  puts "[#{n:<5}]"      # left-align
-  puts "[#{n:^6}]"      # center-align
+  puts "[#{n:>5}]"      # right-align in width 5
+  puts "[#{n:<5}]"      # left-align in width 5
+  puts "[#{n:^6}]"      # center-align in width 6
 end
 ```
 
@@ -128,19 +116,17 @@ Output:
 [  42  ]
 ```
 
-When the value is wider than the requested width, no truncation
-happens — the value prints in full.
+If the value is wider than the requested width, nothing gets cut off — it just prints in full.
 
-### 3.2 Custom fill character
+### Custom fill character
 
-Any single character before the alignment flag becomes the pad
-char:
+Want to pad with something other than spaces? Put any single character before the alignment flag:
 
 ```ruxen
 def main
   let n: Int = 7
-  puts "[#{n:*<5}]"     # left-align, fill with `*`
-  puts "[#{n:0>4}]"     # zero-pad on the left (NOT the same as `:04` Rust syntax)
+  puts "[#{n:*<5}]"     # left-align, fill with *
+  puts "[#{n:0>4}]"     # right-align, fill with 0
 end
 ```
 
@@ -151,17 +137,17 @@ Output:
 [0007]
 ```
 
-Non-ASCII fill codepoints fall back to space in v1.
+> **Try it:** change `*<5` to `-<10` and re-run. What changes?
 
-### 3.3 Float precision
+## 5. Float precision
 
-Precision (`.N`) is the number of decimal digits for floats:
+For floating-point numbers, `.N` means "show N digits after the decimal point":
 
 ```ruxen
 def main
   let pi: Float = 3.14159
-  puts "pi = #{pi:.2}"        # 2 decimal places
-  puts "pi = #{pi:.5}"        # 5 decimal places
+  puts "pi = #{pi:.2}"
+  puts "pi = #{pi:.5}"
 end
 ```
 
@@ -172,13 +158,9 @@ pi = 3.14
 pi = 3.14159
 ```
 
-Internally this routes through `Float_to_string_prec(value, prec)`
-which uses `snprintf("%.*f", prec, value)`.
+## 6. String truncation
 
-### 3.4 String precision (truncate)
-
-For strings, precision is the maximum number of **characters**
-(UTF-8 codepoints) — boundary-safe:
+For strings, `.N` means "show at most N characters":
 
 ```ruxen
 def main
@@ -193,13 +175,11 @@ Output:
 [hello]
 ```
 
-For `Int`, `Bool`, and `Char`, precision is **ignored** — matches
-Rust's `min_const_generics`-era semantics.
+For `Int`, `Bool`, and `Char`, the `.N` setting is ignored — those types either fit or they don't.
 
-### 3.5 Composing width + precision
+## 7. Combining width and precision
 
-The two compose: precision runs first (shortening the value), then
-width pads the result.
+You can stack them. Precision runs first; width pads the result:
 
 ```ruxen
 def main
@@ -214,9 +194,11 @@ Output:
 [    3.14]
 ```
 
-Read as "right-align, total width 8, 2 decimal places".
+Read that as: "round to 2 decimals first, then right-align inside a total width of 8."
 
-## 4. Implementing `Display` for your own type
+## 8. Teaching your own type to render
+
+Out of the box, your custom classes get debug-printing (`:?`). But for plain `"#{value}"`, you need to tell Ruxen how the value should look. This is done by including the `Display` **mixin** — a mixin is a small bundle of behaviour you opt into by writing `include MixinName` inside the type's body. (See [Chapter 8](08-mixins.md) for the full story.)
 
 ```ruxen
 class Money
@@ -227,7 +209,7 @@ class Money
 
   include Display
 
-  def fmt(f: &var Formatter) -> Result[(), FmtError]
+  def fmt(f: &var Formatter) -> Result[nil, FmtError]
     let _ = f.write_str("$")
     f.write_str("#{self.cents}")
   end
@@ -245,81 +227,33 @@ Output:
 price: $4250
 ```
 
-Things to note:
+A few things to notice:
 
-- `fmt` takes `&var Formatter` explicitly; `self` is the implicit
-  reading receiver, same as elsewhere in Ruxen.
-- `f.write_str` returns `Result[(), FmtError]`.  Returning that
-  result directly from `fmt` is idiomatic; `let _ = ...` discards
-  earlier intermediate calls.
-- Inside `fmt` you can use interpolation `"#{...}"` itself — that
-  inner interpolation routes through `Display.fmt` again (`Int_fmt`
-  in this case).
+- `fmt` is the method `Display` requires. It receives a `Formatter`, which is a small object you write strings into.
+- `f.write_str(...)` returns a `Result`. Inside `fmt`, the very last call's `Result` is what you return; earlier ones get tossed with `let _ = ...`.
+- You can use `"#{...}"` inside `fmt` itself — it just routes through `Display.fmt` recursively for whatever you interpolate.
 
-### 4.1 User `Display` plus format specs
+## 9. Width and precision with your own types
 
-When the call site adds a spec — `"#{m:>10}"` — width / align / fill
-still apply.  The compiler builds the formatter with the spec, your
-`fmt` body writes into the buffer, and `Formatter.buffer()` applies
-padding at finalize time.  Precision is type-specific and your
-`fmt` body sees the value via `f.precision()` if it wants to react.
+When you write `"#{m:>10}"` on a value whose type implements `Display`, the width and alignment still apply. Your `fmt` body writes the raw text; Ruxen handles padding around it.
 
-## 5. `Formatter` helpers
+## 10. Common mistakes
 
-Inside a class that includes `Display`, the formatter exposes:
+- **Forgetting the `&var` on `Formatter`.** The signature must be `fmt(f: &var Formatter) -> Result[nil, FmtError]`. If you forget `&var`, you'll get a type-mismatch error pointing at the `include Display` line.
+- **Using `+` to build strings.** Ruxen doesn't have `+` on `String`. Interpolation is the idiomatic way to combine pieces. Use `"#{a}#{b}"` instead of `a + b`.
+- **Expecting `:x` or `:b` for hex / binary.** Those flags don't exist yet — call a method like `.to_radix(16)` and interpolate the result instead.
+- **Width on `:?`.** The debug path ignores width and alignment, so `"#{value:>10?}"` won't pad. Use `Display` if you need formatted output.
 
-| Method                | Returns                | Notes                          |
-|-----------------------|------------------------|--------------------------------|
-| `f.write_str(&str)`   | `Result[(), FmtError]` | Append a string                |
-| `f.write_char(Char)`  | `Result[(), FmtError]` | Append a single codepoint      |
-| `f.buffer()`          | `String`               | Consumes `f`; not for user use |
-| `f.len()`             | `Int`                  | Bytes accumulated so far       |
-| `f.width()`           | `Option[Int]`          | The spec's width, if any       |
-| `f.precision()`       | `Option[Int]`          | The spec's precision, if any   |
-| `f.align()`           | `Char`                 | `<`, `>`, `^`, or space        |
-| `f.fill()`            | `Char`                 | Fill char (default `' '`)      |
-
-Don't call `f.buffer()` yourself inside `fmt` — that's how the
-compiler ends the dispatch.  Use `write_str` / `write_char` for
-output and let the compiler call `buffer()` at the call site.
-
-## 6. Common pitfalls
-
-- **`Debug` only.** A bare `"#{x}"` for a type that has `Debug` (auto
-  via §3.6) but does **not** include `Display` falls back to the
-  Debug path (so you still see something useful).  Once the type
-  includes `Display`, the bare form picks Display automatically.
-- **Width on `:?`.** The Debug path bypasses the Formatter today, so
-  `"#{x:?}"` ignores width / align / fill.  This is a documented v1
-  limitation (see [fmt.spec.md Out of scope](../specs/stdlib/fmt.spec.md)).
-- **Sign / radix flags.** `:x`, `:X`, `:b`, `:o`, `:e`, leading `+`,
-  `#` alternate form, and `0` zero-pad — none of these are parsed
-  yet.  Use a `.to_radix(...)` method or write a wrapper type for
-  now.
-
-## 7. Where this lives in the compiler
-
-The pipeline is:
-
-```
-Lexer captures FormatSpec (width / align / fill / precision / debug)
-   ↓
-HIR carries it on an interpolation Expr part with {expr, spec}
-   ↓
-MIR lower_interpolation emits Formatter_new_with_spec(...) + T_fmt + Formatter_buffer
-   ↓
-Runtime applies width/align/fill at Formatter_buffer finalize
-   ↓
-Float_fmt + String_fmt read precision via Formatter_precision
-   ↓
-Output goes to puts / println / String binding
-```
-
-Every step is pin-tested.  See the [spec's Pin tests table](../specs/stdlib/fmt.spec.md#pin-tests)
-for the exact test functions that exercise each behaviour.
+> **Try it:** add a `Display` mixin to the `Point` struct from earlier and make it render as `"(1, 2)"`. Compare the result to `"#{p:?}"`.
 
 ---
 
-**Next:** [Chapter 14 — Foreign Function Interface](14-ffi.md) if you
-want to call into C libraries; [Chapter 15 — Unsafe](15-unsafe.md) for
-the unsafe-block surface that supports it.
+## Recap
+
+- `"#{expr}"` interpolates any expression as a string.
+- `"#{expr:?}"` prints a debug view — works on every type for free.
+- Format specs control width (`:>5`), alignment (`<`, `>`, `^`), fill (`*<5`), and float / string precision (`.2`, `.5`).
+- For your own types, `include Display` and write `def fmt(f: &var Formatter) -> Result[nil, FmtError]`.
+- Width and precision can be combined: `:>8.2`.
+
+**Next:** [Chapter 18 — Standard Library Tour](18-stdlib-tour.md) — a "what's in the box" walkthrough of the modules you'll reach for most often.

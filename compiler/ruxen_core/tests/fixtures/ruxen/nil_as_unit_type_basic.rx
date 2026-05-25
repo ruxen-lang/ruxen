@@ -1,0 +1,10 @@
+# Pin: `nil` is accepted as an alias for `()` in return-type position.
+# Parses + typechecks identically to `def f -> () nil end`.
+
+def f -> nil
+  nil
+end
+
+def main
+  f()
+end

@@ -1,0 +1,21 @@
+## Pin fixture for the user-runtime test (tests/user_runtime_c.rs).
+## Declares a top-level FFI block that calls two functions defined in
+## a user-supplied `runtime/widget.rxruntime.c`. The build pipeline is
+## responsible for compiling that .c file and putting the resulting .o
+## on the linker line. Exit 0 iff both calls returned the expected
+## values.
+
+lib "ruxen_runtime"
+  def rx_widget_new(seed: Int) -> Int
+  def rx_widget_value(handle: Int) -> Int
+end
+
+def main() -> Int
+  let h = rx_widget_new(7)
+  let v = rx_widget_value(h)
+  if v == 49
+    0
+  else
+    1
+  end
+end
