@@ -41,5 +41,14 @@ class Runner
     def self.case_reset as "ruxen_test_case_reset"() -> Int
     def self.case_mark_failed as "ruxen_test_case_mark_failed"() -> Int
     def self.case_get_failed as "ruxen_test_case_get_failed"() -> Int
+    # Phase 5: fork-per-test isolation.
+    # `fork` returns 0 in the child, >0 (child pid) in the parent.
+    # `wait` returns a packed status (see runtime/test.c comment).
+    # `child_exit` is `_exit(code)` — child side only.
+    # `panic` is a fixed-message ruxen_panic for fixtures.
+    def self.fork as "ruxen_test_fork"() -> Int
+    def self.wait as "ruxen_test_wait"(pid: Int) -> Int
+    def self.child_exit as "ruxen_test_child_exit"(code: Int) -> ()
+    def self.panic as "ruxen_test_panic"() -> ()
   end
 end

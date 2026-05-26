@@ -1,0 +1,21 @@
+use std.test.Tester
+use std.test.Runner
+
+def main
+  let r = Runner.new("fixture.fork_isolation")
+  Runner.set_current(r.handle_addr)
+
+  Tester.describe("Survives panic") do |t: &var Tester|
+    t.it("first - passes") do
+      t.expect(1).to_eq(1)
+    end
+    t.it("second - panics") do
+      Runner.panic
+    end
+    t.it("third - still runs") do
+      t.expect(2).to_eq(2)
+    end
+  end
+
+  r.execute
+end

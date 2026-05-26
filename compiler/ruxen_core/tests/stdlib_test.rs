@@ -175,3 +175,30 @@ fn tester_summary_counts_pass_fail_pending() {
         stderr
     );
 }
+
+#[test]
+fn runner_fork_isolates_panic() {
+    // The fixture's middle case calls Runner.panic which `_exit(101)`s
+    // the child. The fork-per-test isolation means cases 1 and 3 still
+    // run; counts should be 2 passed, 1 failed.
+    let (stdout, _stderr, _ok) = compile_and_run(
+        &rx("test_runner_fork_isolates_panic"),
+        "stdlib_test_runner_fork_isolation",
+    );
+    assert!(
+        stdout.contains("2 passed, 1 failed, 0 pending"),
+        "got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn it_panics_pass_when_body_panics_fail_when_not() {
+    let (stdout, _stderr, _ok) =
+        compile_and_run(&rx("test_expect_panic"), "stdlib_test_expect_panic");
+    assert!(
+        stdout.contains("1 passed, 1 failed, 0 pending"),
+        "got: {}",
+        stdout
+    );
+}

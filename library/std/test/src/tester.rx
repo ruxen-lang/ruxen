@@ -48,25 +48,87 @@ class Tester
     self.hooks_after.push(hook)
   end
 
-  ## Define and immediately execute one test case.
+  ## Define and immediately execute one test case under fork-per-test
+  ## isolation. A panic in the body kills only the child; the parent
+  ## decodes wait status and updates the active Runner's counts.
+  ##
+  ## Child path (pid == 0):
+  ##   - reset per-case failure flag
+  ##   - run before-hooks → body → after-hooks
+  ##   - exit 0 if flag is unset, 1 otherwise
+  ## Parent path:
+  ##   - waitpid; packed status bit 0 == 1 means the child exited cleanly
+  ##     with code 0 → pass. Any other state → fail.
   def it(name: &String, body: any Fn() -> ()) -> ()
     let runner_addr = Runner.get_current
     if runner_addr == 0
       return
     end
-    Runner.case_reset
-    for hook in &self.hooks_before
-      hook.()
+    let pid = Runner.fork
+    if pid == 0
+      Runner.case_reset
+      for hook in &self.hooks_before
+        hook.()
+      end
+      body.()
+      for hook in &self.hooks_after
+        hook.()
+      end
+      let code: Int = if Runner.case_get_failed == 0
+        0
+      else
+        1
+      end
+      Runner.child_exit(code)
     end
-    body.()
-    for hook in &self.hooks_after
-      hook.()
-    end
+    let packed = Runner.wait(pid)
+    let pass_bit = packed & 1
     let r = Runner.from_handle(runner_addr)
-    if Runner.case_get_failed == 0
+    if pass_bit == 1
       r.passed = r.passed + 1
     else
       r.failed = r.failed + 1
+    end
+  end
+
+  ## Define and immediately execute a test case that is EXPECTED to
+  ## panic. The expected substring is recorded but not verified in v1
+  ## (see docs/tutorial/17-testing.md "Known v1 limitations").
+  ##
+  ## Pass iff the child either died from a signal OR exited with a
+  ## non-zero status — both indicate the body did not return normally.
+  def it_panics(name: &String, expected_substr: &String,
+                body: any Fn() -> ()) -> ()
+    let runner_addr = Runner.get_current
+    if runner_addr == 0
+      return
+    end
+    let pid = Runner.fork
+    if pid == 0
+      Runner.case_reset
+      for hook in &self.hooks_before
+        hook.()
+      end
+      body.()
+      for hook in &self.hooks_after
+        hook.()
+      end
+      # Body returned WITHOUT panicking. From it_panics' perspective
+      # that is a failure — but we communicate it to the parent via a
+      # clean exit code 0, which the parent then INVERTS for this case.
+      Runner.child_exit(0)
+    end
+    let packed = Runner.wait(pid)
+    let pass_bit = packed & 1
+    let signaled = (packed >> 9) & 255
+    let r = Runner.from_handle(runner_addr)
+    # Pass condition: child died (signal != 0) OR exited nonzero
+    # (pass_bit == 0). Failure condition: child exited cleanly
+    # (pass_bit == 1 AND no signal) — body did NOT panic.
+    if pass_bit == 1 && signaled == 0
+      r.failed = r.failed + 1
+    else
+      r.passed = r.passed + 1
     end
   end
 
