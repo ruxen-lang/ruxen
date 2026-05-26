@@ -8,7 +8,7 @@
 //! Supported codes:
 //!   - `E1006` (cannot assign to `let` binding)  →  `let` → `var`
 //!   - `E1110` (`.await` outside async)          →  prepend `async ` to
-//!                                                  the enclosing `def`.
+//!     the enclosing `def`.
 //!   - `E1112` (`block_on` inside async)         →  no quick fix.
 //!
 //! Unrecognised codes: silently ignored.

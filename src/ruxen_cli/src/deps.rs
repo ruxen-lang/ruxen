@@ -224,7 +224,7 @@ fn apply_precise(
             target
         ));
     }
-    let mut lock = LockFile::load(&project_dir).map_err(|_| {
+    let mut lock = LockFile::load(project_dir).map_err(|_| {
         "Ruxen.lock not found; run `ruxen build` first to generate it before --precise".to_string()
     })?;
     let entry = lock
@@ -253,7 +253,7 @@ fn apply_precise(
         .unwrap_or(&entry.source)
         .to_string();
     entry.source = format!("{}?rev={}", url_part, rev);
-    lock.save(&project_dir)?;
+    lock.save(project_dir)?;
     println!("  Pinned `{}` to rev `{}` in Ruxen.lock", target, rev);
     Ok(())
 }
@@ -461,8 +461,7 @@ mod tests {
         let reloaded = LockFile::load(&tmp).unwrap();
         let foo = reloaded.find("foo").unwrap();
         assert_eq!(
-            foo.source,
-            "git+https://example.com/foo.git?rev=newrev9",
+            foo.source, "git+https://example.com/foo.git?rev=newrev9",
             "lockfile entry must be rewritten to the new rev"
         );
 

@@ -47,7 +47,11 @@ pub struct Workspace {
     /// is passed to the build/run driver. Not yet consumed by the
     /// build pipeline; reserved so the field survives a parse →
     /// serialize round-trip.
-    #[serde(default, rename = "default-members", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "default-members",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub default_members: Option<Vec<String>>,
 }
 
@@ -540,9 +544,15 @@ lto = true
 "#;
         let manifest = Manifest::from_str(toml).unwrap();
         assert_eq!(manifest.package.as_ref().unwrap().name, "my-project");
-        assert_eq!(manifest.package.as_ref().unwrap().edition.as_deref(), Some("2026"));
+        assert_eq!(
+            manifest.package.as_ref().unwrap().edition.as_deref(),
+            Some("2026")
+        );
         assert_eq!(manifest.package.as_ref().unwrap().authors.len(), 1);
-        assert_eq!(manifest.package.as_ref().unwrap().keywords, vec!["web", "http"]);
+        assert_eq!(
+            manifest.package.as_ref().unwrap().keywords,
+            vec!["web", "http"]
+        );
         assert_eq!(manifest.dependencies.len(), 5);
         assert_eq!(manifest.dev_dependencies.len(), 1);
         assert_eq!(manifest.bin.len(), 2);

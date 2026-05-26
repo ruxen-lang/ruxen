@@ -689,14 +689,14 @@ impl<'a> Lowerer<'a> {
                 continue;
             }
             for def in self.symbols.iter() {
-                if def.name == vt.mixin_name {
-                    if matches!(&def.kind, DefKind::Trait { info } if matches!(
+                if def.name == vt.mixin_name
+                    && matches!(&def.kind, DefKind::Trait { info } if matches!(
                         info.dispatch_mode,
                         crate::parser::ast::DispatchMode::Runtime
-                    )) {
-                        mixins_to_synth.insert(vt.mixin_name.clone(), def.id);
-                        break;
-                    }
+                    ))
+                {
+                    mixins_to_synth.insert(vt.mixin_name.clone(), def.id);
+                    break;
                 }
             }
         }

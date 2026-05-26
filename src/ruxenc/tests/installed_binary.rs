@@ -108,10 +108,37 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// Path to the unified `ruxen` driver under test (cargo populates this
-/// env var via the `ruxen_cli` dev-dependency).
+/// Path to the unified `ruxen` driver under test. `CARGO_BIN_EXE_ruxen`
+/// is only injected for tests in the bin's own package (`ruxen_cli`);
+/// here in `ruxenc` we fall back to building the bin once and resolving
+/// it at `<workspace>/target/<profile>/ruxen`.
 fn ruxen_exe() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_ruxen"))
+    use std::sync::OnceLock;
+    static BIN: OnceLock<PathBuf> = OnceLock::new();
+    BIN.get_or_init(|| {
+        if let Some(p) = option_env!("CARGO_BIN_EXE_ruxen") {
+            return PathBuf::from(p);
+        }
+        let workspace = workspace_root();
+        let target = std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| workspace.join("target"));
+        let exe = if cfg!(windows) { "ruxen.exe" } else { "ruxen" };
+        let bin = target.join("debug").join(exe);
+        if !bin.exists() {
+            let status = Command::new("cargo")
+                .args(["build", "-p", "ruxen_cli", "--bin", "ruxen"])
+                .current_dir(&workspace)
+                .status()
+                .expect("spawn cargo build for ruxen bin");
+            assert!(
+                status.success(),
+                "cargo build -p ruxen_cli --bin ruxen failed"
+            );
+        }
+        bin
+    })
+    .clone()
 }
 
 /// Path to the staged `library/std/` package-root tree alongside the

@@ -572,12 +572,11 @@ impl Resolver {
                     .scopes
                     .lookup_type(last)
                     .or_else(|| self.scopes.lookup(last));
-                if fallback.is_some() {
+                if let Some(final_id) = fallback {
                     // Symbol already in scope via flat-merge. Re-bind
                     // under the requested name (Simple/Alias/Group)
                     // so the explicit `use` still produces a usable
                     // local alias.
-                    let final_id = fallback.unwrap();
                     match &use_decl.kind {
                         ast::UseKind::Simple => {
                             let import_name = last.clone();

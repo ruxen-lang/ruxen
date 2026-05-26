@@ -2805,10 +2805,10 @@ fn build_multi_state_poll_body(
 
     // elsif clauses for states 1..n-1
     let mut elsif_clauses: Vec<ElsifClause> = Vec::new();
-    for i in 1..n {
+    for (i, arm) in state_arms.iter().enumerate().take(n).skip(1) {
         elsif_clauses.push(ElsifClause {
             condition: Box::new(make_eq(i as i64)),
-            body: to_block(state_arms[i].clone()),
+            body: to_block(arm.clone()),
             span: span.clone(),
         });
     }
@@ -3366,8 +3366,8 @@ fn build_loop_state_machine_poll_body(
 
 /// Build the poll body for a [`WhileMultiAwaitShape`] — N>=2
 /// `.await`s per iteration. Same outer skeleton as
-/// [`build_loop_state_machine_poll_body`] (guard + control vars
-/// + while keep_iter + exit_if), but the inner-iteration body
+/// [`build_loop_state_machine_poll_body`] (guard + control vars,
+/// `while keep_iter`, and `exit_if`), but the inner-iteration body
 /// runs N phase blocks instead of one inline await.
 ///
 /// Each phase block:
@@ -3767,10 +3767,10 @@ fn build_multi_phase_loop_poll_body(
         span: span.clone(),
     };
     let mut elsif_clauses: Vec<ElsifClause> = Vec::new();
-    for i in 1..phase_bodies.len() {
+    for (i, body) in phase_bodies.iter().enumerate().skip(1) {
         elsif_clauses.push(ElsifClause {
             condition: Box::new(phase_eq_for(i, span)),
-            body: phase_bodies[i].clone(),
+            body: body.clone(),
             span: span.clone(),
         });
     }

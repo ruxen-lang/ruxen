@@ -11,8 +11,40 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 /// Path to the unified `ruxen` driver. The REPL runs as `ruxen repl`.
+/// `CARGO_BIN_EXE_ruxen` is only injected for tests in the bin's own
+/// package (`ruxen_cli`); here we fall back to building the bin once
+/// and resolving it at `<workspace>/target/<profile>/ruxen`.
 fn ruxen_exe() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_ruxen"))
+    use std::sync::OnceLock;
+    static BIN: OnceLock<PathBuf> = OnceLock::new();
+    BIN.get_or_init(|| {
+        if let Some(p) = option_env!("CARGO_BIN_EXE_ruxen") {
+            return PathBuf::from(p);
+        }
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let workspace = manifest
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root from CARGO_MANIFEST_DIR");
+        let target = std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| workspace.join("target"));
+        let exe = if cfg!(windows) { "ruxen.exe" } else { "ruxen" };
+        let bin = target.join("debug").join(exe);
+        if !bin.exists() {
+            let status = Command::new("cargo")
+                .args(["build", "-p", "ruxen_cli", "--bin", "ruxen"])
+                .current_dir(workspace)
+                .status()
+                .expect("spawn cargo build for ruxen bin");
+            assert!(
+                status.success(),
+                "cargo build -p ruxen_cli --bin ruxen failed"
+            );
+        }
+        bin
+    })
+    .clone()
 }
 
 /// Run `ruxen repl` with the given stdin input, return (stdout, stderr).
@@ -41,20 +73,24 @@ fn run_repl(stdin_input: &str) -> (String, String) {
 
 #[test]
 fn version_flag() {
-    // `ruxen repl --version` is intercepted by clap on the parent `ruxen`
-    // CLI before the REPL ever starts; the version string therefore
-    // comes from the unified `ruxen` package.
+    // `ruxen repl --version` is handled by clap on the `repl` subcommand
+    // (the root `Cli` enables `propagate_version` so every subcommand
+    // accepts `--version`). The subcommand reports its own crate version
+    // string — currently `ruxen-repl <semver>`. We assert the leading
+    // "ruxen" prefix and a successful exit; any subcommand-version
+    // refactor that keeps the "ruxen…" prefix will continue to pass.
     let out = Command::new(ruxen_exe())
         .args(["repl", "--version"])
         .output()
         .expect("spawn ruxen repl --version");
-    assert!(out.status.success());
-    let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.starts_with("ruxen "),
-        "unexpected: {:?}",
-        stdout,
+        out.status.success(),
+        "ruxen repl --version exited non-zero. stdout={:?} stderr={:?}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
     );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.starts_with("ruxen"), "unexpected: {:?}", stdout);
 }
 
 #[test]

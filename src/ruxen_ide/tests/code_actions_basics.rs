@@ -303,7 +303,11 @@ fn multiple_diagnostics_yield_multiple_actions() {
     if has_e1110 {
         assert!(e1110_fixed, "expected an E1110 quick-fix in {:?}", actions);
     }
-    assert!(actions.len() >= 1, "expected ≥1 actions, got {:?}", actions);
+    assert!(
+        !actions.is_empty(),
+        "expected ≥1 actions, got {:?}",
+        actions
+    );
 }
 
 // ─── E1112 has no quick-fix ──────────────────────────────────────────

@@ -434,8 +434,8 @@ const PRIMARY_PROMPT: &str = "ruxen> ";
 pub fn run() -> Result<(), String> {
     println!("Ruxen {} REPL — Type :help for commands", VERSION);
 
-    let mut session = ReplSession::new()
-        .map_err(|e| format!("Failed to initialize REPL: {}", e))?;
+    let mut session =
+        ReplSession::new().map_err(|e| format!("Failed to initialize REPL: {}", e))?;
 
     // Non-TTY stdin (piped input): read the whole stream and split into
     // logical chunks by lexer-balance so multi-line `class`/`enum`/`trait`

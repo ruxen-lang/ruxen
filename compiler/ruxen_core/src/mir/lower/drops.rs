@@ -9,6 +9,7 @@ use super::*;
 /// - Parameters (owned by the caller)
 /// - Any local that appears as the value of a `Return` terminator
 ///   (returning the value, not dropping it).
+///
 /// Post-lowering fixup that elides use-after-free deallocs caused by
 /// the `lower_assign` "pre-reassign drop" path emitting
 /// `ruxen_dealloc(R)` before `Assign { dest: R, value: Use(X) }` —
@@ -138,7 +139,11 @@ pub fn elide_returns_self_realloc(mir: &mut crate::mir::nodes::MirProgram) {
                             }
                         }
                     }
-                    MirInst::CallIndirect { dest, args, .. } => {
+                    MirInst::CallIndirect {
+                        dest: Some(d),
+                        args,
+                        ..
+                    } => {
                         // Indirect call through a closure / fn pointer.
                         // ABI: args[0] is the captures_ptr the closure
                         // lowering prepends; args[1..] are the user's
@@ -147,17 +152,15 @@ pub fn elide_returns_self_realloc(mir: &mut crate::mir::nodes::MirProgram) {
                         // user arg as a potential alias and tag with
                         // INDIRECT_SENTINEL — worst case is a bounded
                         // one-time leak, not a use-after-free.
-                        if let Some(d) = dest {
-                            let candidates: Vec<crate::mir::nodes::LocalId> = args
-                                .iter()
-                                .skip(1) // skip captures_ptr
-                                .filter_map(|a| match a {
-                                    MirValue::Use(l) => Some(*l),
-                                    _ => None,
-                                })
-                                .collect();
-                            last_call.insert(*d, (INDIRECT_SENTINEL.to_string(), candidates));
-                        }
+                        let candidates: Vec<crate::mir::nodes::LocalId> = args
+                            .iter()
+                            .skip(1) // skip captures_ptr
+                            .filter_map(|a| match a {
+                                MirValue::Use(l) => Some(*l),
+                                _ => None,
+                            })
+                            .collect();
+                        last_call.insert(*d, (INDIRECT_SENTINEL.to_string(), candidates));
                     }
                     MirInst::Assign {
                         dest,

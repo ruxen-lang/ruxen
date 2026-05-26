@@ -253,14 +253,12 @@ impl<'a> InferenceEngine<'a> {
         // "expected Int, found ()" against the declared signature. Pin:
         // `derive_hashable_dispatches_through_trait_bounds`.
         let mut cur = ty;
-        loop {
-            match cur {
-                Ty::Ref(inner)
-                | Ty::RefMut(inner)
-                | Ty::RefLifetime(_, inner)
-                | Ty::RefMutLifetime(_, inner) => cur = inner.as_ref(),
-                _ => break,
-            }
+        while let Ty::Ref(inner)
+        | Ty::RefMut(inner)
+        | Ty::RefLifetime(_, inner)
+        | Ty::RefMutLifetime(_, inner) = cur
+        {
+            cur = inner.as_ref();
         }
         let bounds: &[crate::hir::types::MixinRef] = match cur {
             Ty::TypeParam { bounds, .. } | Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds) => {

@@ -152,7 +152,7 @@ fn compile_and_run(case_name: &str, bootstrap_packages: &[(String, Program)]) ->
         let msgs: Vec<String> = errors
             .iter()
             .take(5)
-            .map(|d| format!("{}", d.message))
+            .map(|d| d.message.to_string())
             .collect();
         return CaseOutcome {
             name: case_name.to_string(),

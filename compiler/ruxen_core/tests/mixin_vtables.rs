@@ -487,12 +487,12 @@ fn runtime_dispatch_class_field_index_shifted_by_one() {
         })
         .collect();
     assert!(
-        radius_get_slots.iter().any(|&s| s == 1),
+        radius_get_slots.contains(&1),
         "Circle_size must GetField `radius` at slot 1, got slots: {:?}",
         radius_get_slots
     );
     assert!(
-        !radius_get_slots.iter().any(|&s| s == 0),
+        !radius_get_slots.contains(&0),
         "Circle_size must NOT GetField at slot 0 (that's the class_info_ptr header), \
          got slots: {:?}",
         radius_get_slots

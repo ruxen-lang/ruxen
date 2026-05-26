@@ -69,10 +69,7 @@ pub fn publish(dry_run: bool, registry: Option<&str>) -> Result<(), String> {
         .status()
         .map_err(|e| format!("failed to run `tar`: {}", e))?;
     if !status.success() {
-        return Err(format!(
-            "tar failed (exit {})",
-            status.code().unwrap_or(-1)
-        ));
+        return Err(format!("tar failed (exit {})", status.code().unwrap_or(-1)));
     }
 
     println!(

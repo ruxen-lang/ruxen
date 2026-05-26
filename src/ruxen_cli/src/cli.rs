@@ -3,7 +3,12 @@
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "ruxen", version, about = "The Ruxen language toolchain")]
+#[command(
+    name = "ruxen",
+    version,
+    propagate_version = true,
+    about = "The Ruxen language toolchain"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -111,6 +116,12 @@ pub enum Command {
     },
 
     /// Upgrade the Ruxen toolchain itself.
+    //
+    // `disable_version_flag` because `propagate_version = true` on the
+    // root `Cli` injects a clap-managed `--version` into every subcommand;
+    // this command has its own `--version <TAG>` arg for selecting which
+    // release to install, which would otherwise collide.
+    #[command(disable_version_flag = true)]
     Upgrade {
         /// Rebuild and reinstall from a local source checkout
         /// instead of fetching a release. Pass `.` for the
@@ -290,9 +301,9 @@ mod tests {
         // The whole point of the split — `--from-source` must no longer
         // live on `update`. It belongs to `upgrade` now.
         let err = match parse(&["ruxen", "update", "--from-source", "."]) {
-            Ok(_) => panic!(
-                "ruxen update --from-source must error now that the flag moved to `upgrade`"
-            ),
+            Ok(_) => {
+                panic!("ruxen update --from-source must error now that the flag moved to `upgrade`")
+            }
             Err(e) => e,
         };
         let msg = err.to_string();

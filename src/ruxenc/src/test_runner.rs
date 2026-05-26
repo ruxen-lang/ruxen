@@ -171,18 +171,18 @@ fn render_pretty(results: &[TestFileResult], nocapture: bool) {
     let mut total_pending = 0u32;
     for r in results {
         // Suppress per-file output on green; surface failures fully.
-        if nocapture || r.failed > 0 || !r.exit_ok {
-            if !r.stdout.is_empty() || !r.stderr.is_empty() {
-                println!("--- {} ---", r.test_path);
-                if !r.stdout.is_empty() {
-                    print!("{}", r.stdout);
-                    if !r.stdout.ends_with('\n') {
-                        println!();
-                    }
+        if (nocapture || r.failed > 0 || !r.exit_ok)
+            && (!r.stdout.is_empty() || !r.stderr.is_empty())
+        {
+            println!("--- {} ---", r.test_path);
+            if !r.stdout.is_empty() {
+                print!("{}", r.stdout);
+                if !r.stdout.ends_with('\n') {
+                    println!();
                 }
-                if !r.stderr.is_empty() {
-                    eprint!("{}", r.stderr);
-                }
+            }
+            if !r.stderr.is_empty() {
+                eprint!("{}", r.stderr);
             }
         }
         total_passed += r.passed;
@@ -299,8 +299,7 @@ fn synthesise_wrapper(
 
     fs::create_dir_all(out_dir).map_err(|e| format!("mkdir {}: {}", out_dir.display(), e))?;
     let synth_path = out_dir.join(format!("{}.synth.rx", test_path.replace('.', "_")));
-    fs::write(&synth_path, &synth)
-        .map_err(|e| format!("write {}: {}", synth_path.display(), e))?;
+    fs::write(&synth_path, &synth).map_err(|e| format!("write {}: {}", synth_path.display(), e))?;
     Ok(synth_path)
 }
 
@@ -414,10 +413,7 @@ mod tests {
         let synth_path = synthesise_wrapper("foo.bar", &user_file, &tmp.join("out")).unwrap();
         let synth = fs::read_to_string(&synth_path).unwrap();
         assert!(synth.contains("def main"), "synth: {synth}");
-        assert!(
-            synth.contains("Runner.new(\"foo.bar\")"),
-            "synth: {synth}"
-        );
+        assert!(synth.contains("Runner.new(\"foo.bar\")"), "synth: {synth}");
         assert!(synth.contains("Tester.describe(\"X\")"), "synth: {synth}");
         assert!(synth.contains("r.execute"), "synth: {synth}");
     }
@@ -437,7 +433,11 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(tmp.join("tests/support")).unwrap();
         fs::create_dir_all(tmp.join("tests/a")).unwrap();
-        fs::write(tmp.join("Ruxen.toml"), "[package]\nname=\"p\"\nversion=\"0.0.1\"").unwrap();
+        fs::write(
+            tmp.join("Ruxen.toml"),
+            "[package]\nname=\"p\"\nversion=\"0.0.1\"",
+        )
+        .unwrap();
         fs::write(tmp.join("tests/a/x.rx"), "").unwrap();
         fs::write(tmp.join("tests/support/helpers.rx"), "").unwrap();
         let files = discover_test_files(&tmp).unwrap();

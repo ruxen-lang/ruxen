@@ -213,7 +213,7 @@ pub fn run_bootstrap_with_package_names(
     let programs = run_bootstrap(diagnostics);
     BOOTSTRAP_FILES
         .iter()
-        .zip(programs.into_iter())
+        .zip(programs)
         .filter_map(|(rel, p)| {
             // First path segment is the package name.
             let pkg = rel.split('/').next()?.to_string();

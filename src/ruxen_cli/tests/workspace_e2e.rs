@@ -11,9 +11,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use ruxen_cli::manifest::{
-    expand_workspace_members, find_workspace_root, Manifest,
-};
+use ruxen_cli::manifest::{expand_workspace_members, find_workspace_root, Manifest};
 use ruxen_cli::resolve_deps;
 
 // ─── Fixture helpers ───────────────────────────────────────────────
@@ -75,10 +73,7 @@ fn workspace_glob_expansion() {
     for name in ["ex-one", "ex-two", "ex-three"] {
         write(
             &root.join(format!("examples/{}/Ruxen.toml", name)),
-            &format!(
-                "[package]\nname = \"{}\"\nversion = \"0.1.0\"\n",
-                name
-            ),
+            &format!("[package]\nname = \"{}\"\nversion = \"0.1.0\"\n", name),
         );
         write(
             &root.join(format!("examples/{}/src/main.rx", name)),

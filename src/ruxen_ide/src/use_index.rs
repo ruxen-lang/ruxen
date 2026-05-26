@@ -628,18 +628,16 @@ fn resolve_field_def(
     field_name: &str,
 ) -> Option<DefId> {
     let mut ty = object_ty;
-    loop {
-        match ty {
-            Ty::Ref(inner)
-            | Ty::RefMut(inner)
-            | Ty::RefLifetime(_, inner)
-            | Ty::RefMutLifetime(_, inner)
-            | Ty::RawPtr(inner)
-            | Ty::RawPtrMut(inner)
-            | Ty::Newtype { inner, .. }
-            | Ty::Alias { target: inner, .. } => ty = inner,
-            _ => break,
-        }
+    while let Ty::Ref(inner)
+    | Ty::RefMut(inner)
+    | Ty::RefLifetime(_, inner)
+    | Ty::RefMutLifetime(_, inner)
+    | Ty::RawPtr(inner)
+    | Ty::RawPtrMut(inner)
+    | Ty::Newtype { inner, .. }
+    | Ty::Alias { target: inner, .. } = ty
+    {
+        ty = inner;
     }
     let name = match ty {
         Ty::Class { name, .. } | Ty::Struct { name, .. } => name.as_str(),
@@ -675,18 +673,16 @@ fn resolve_field_def(
 /// can recover the def by scanning the class / struct method list.
 fn resolve_method_def(symbols: &SymbolTable, receiver_ty: &Ty, method_name: &str) -> Option<DefId> {
     let mut ty = receiver_ty;
-    loop {
-        match ty {
-            Ty::Ref(inner)
-            | Ty::RefMut(inner)
-            | Ty::RefLifetime(_, inner)
-            | Ty::RefMutLifetime(_, inner)
-            | Ty::RawPtr(inner)
-            | Ty::RawPtrMut(inner)
-            | Ty::Newtype { inner, .. }
-            | Ty::Alias { target: inner, .. } => ty = inner,
-            _ => break,
-        }
+    while let Ty::Ref(inner)
+    | Ty::RefMut(inner)
+    | Ty::RefLifetime(_, inner)
+    | Ty::RefMutLifetime(_, inner)
+    | Ty::RawPtr(inner)
+    | Ty::RawPtrMut(inner)
+    | Ty::Newtype { inner, .. }
+    | Ty::Alias { target: inner, .. } = ty
+    {
+        ty = inner;
     }
     let type_name = match ty {
         Ty::Class { name, .. } | Ty::Struct { name, .. } => name.as_str(),

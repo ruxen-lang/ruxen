@@ -146,8 +146,8 @@ int64_t rx_widget_value(int64_t handle) {
     );
 
     // ── 3. Parse + typecheck + lower the fixture ──
-    let fixture_path = workspace_root()
-        .join("compiler/ruxen_core/tests/fixtures/ruxen/user_runtime_widget.rx");
+    let fixture_path =
+        workspace_root().join("compiler/ruxen_core/tests/fixtures/ruxen/user_runtime_widget.rx");
     let source = std::fs::read_to_string(&fixture_path)
         .unwrap_or_else(|e| panic!("read fixture {}: {}", fixture_path.display(), e));
 

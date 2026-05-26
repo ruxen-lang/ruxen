@@ -106,6 +106,14 @@ fn main() {
         // framework (see library/std/rand/runtime/rand.c). The full-program
         // codegen path emits this in compiler/ruxen_core/src/codegen/object.rs;
         // the REPL's libruxenrt.a link needs the same flag.
+        //
+        // Emit as a raw `-framework Security` link-arg pair so it lands
+        // on the cc invocation for every artifact this crate produces
+        // (lib, bins, AND integration test binaries). The `link-lib=
+        // framework=...` form alone was not propagating to the
+        // tests/repl_tests binary's link command on this toolchain.
+        println!("cargo:rustc-link-arg=-framework");
+        println!("cargo:rustc-link-arg=Security");
         println!("cargo:rustc-link-lib=framework=Security");
     } else {
         // GNU ld / lld: `+whole-archive` modifier on the link-lib

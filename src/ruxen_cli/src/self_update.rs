@@ -18,8 +18,7 @@ use std::process::Command;
 
 /// Canonical install.sh URL — matches the one printed by the README
 /// and the help text in install.sh itself.
-const INSTALL_SH_URL: &str =
-    "https://raw.githubusercontent.com/ruxen-lang/ruxen/master/install.sh";
+const INSTALL_SH_URL: &str = "https://raw.githubusercontent.com/ruxen-lang/ruxen/master/install.sh";
 
 /// Returns Err if `tool` isn't found on PATH. Used as preflight before
 /// shelling out — gives a grounded error instead of "No such file or
@@ -126,7 +125,10 @@ pub fn from_release(version: Option<&str>) -> Result<(), String> {
     // We pass `-s --` to bash so anything after it goes to install.sh
     // as positional args, matching the documented one-liner in
     // install.sh's own header comment.
-    let mut pipeline = format!("set -o pipefail; curl -fsSL {} | bash -s --", INSTALL_SH_URL);
+    let mut pipeline = format!(
+        "set -o pipefail; curl -fsSL {} | bash -s --",
+        INSTALL_SH_URL
+    );
     if let Some(tag) = version {
         // install.sh accepts `--version <tag>`. We let bash quote the
         // tag — pass it as its own positional arg so any odd characters
@@ -173,4 +175,3 @@ fn validate_version_tag(tag: &str) -> Result<(), String> {
     }
     Ok(())
 }
-

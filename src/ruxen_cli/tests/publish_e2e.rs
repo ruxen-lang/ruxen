@@ -5,6 +5,7 @@
 //!   * a working repo in another tempdir whose `origin` points at the
 //!     bare one,
 //!   * a Ruxen.toml + tiny src/ tree inside the working repo,
+//!
 //! and then calls `publish::publish(...)` directly. We never `cd` —
 //! `publish` reads `std::env::current_dir()` only via
 //! `find_project_root`, so each test sets cwd to its working repo
@@ -184,7 +185,15 @@ fn publish_existing_tag_emits_e1602() {
     // --update-ref plumbing; the clone+push path mirrors what a real
     // first publish would have done.
     let preclone = tmp.path().join("preclone");
-    run_git(tmp.path(), &["clone", "--quiet", &bare.to_string_lossy(), &preclone.to_string_lossy()]);
+    run_git(
+        tmp.path(),
+        &[
+            "clone",
+            "--quiet",
+            &bare.to_string_lossy(),
+            &preclone.to_string_lossy(),
+        ],
+    );
     run_git(&preclone, &["config", "user.email", "test@example.com"]);
     run_git(&preclone, &["config", "user.name", "Test"]);
     // The clone of an empty bare repo has no HEAD; create one commit.

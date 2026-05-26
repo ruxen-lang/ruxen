@@ -45,11 +45,45 @@ pub enum Incoming {
 /// Path to the unified `ruxen` driver binary. The LSP runs as the
 /// `ruxen lsp` subcommand; tests spawn it the same way an editor would.
 ///
-/// `CARGO_BIN_EXE_ruxen` is injected by cargo at test-compile time and
-/// already points at the correct profile (release when tests are built
-/// with `--release`).
+/// `CARGO_BIN_EXE_ruxen` is injected only when tests compile in the same
+/// package that defines the `ruxen` binary (`ruxen_cli`). For tests in
+/// other packages (here in `ruxen_lsp`), fall back to building the bin
+/// once and pointing at `<workspace>/target/<profile>/ruxen`.
 pub fn lsp_binary() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_ruxen"))
+    find_ruxen_bin()
+}
+
+fn find_ruxen_bin() -> PathBuf {
+    use std::sync::OnceLock;
+    static BIN: OnceLock<PathBuf> = OnceLock::new();
+    BIN.get_or_init(|| {
+        if let Some(p) = option_env!("CARGO_BIN_EXE_ruxen") {
+            return PathBuf::from(p);
+        }
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let workspace = manifest
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root from CARGO_MANIFEST_DIR");
+        let target = std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| workspace.join("target"));
+        let exe = if cfg!(windows) { "ruxen.exe" } else { "ruxen" };
+        let bin = target.join("debug").join(exe);
+        if !bin.exists() {
+            let status = std::process::Command::new("cargo")
+                .args(["build", "-p", "ruxen_cli", "--bin", "ruxen"])
+                .current_dir(workspace)
+                .status()
+                .expect("spawn cargo build for ruxen bin");
+            assert!(
+                status.success(),
+                "cargo build -p ruxen_cli --bin ruxen failed"
+            );
+        }
+        bin
+    })
+    .clone()
 }
 
 /// Handle to a running `ruxen_lsp` child process with framed IO plumbing.

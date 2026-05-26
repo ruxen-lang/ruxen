@@ -131,10 +131,7 @@ pub fn build(release: bool, locked: bool, bin_name: Option<&str>) -> Result<(), 
     }
 
     // Step 3: Compile project source
-    println!(
-        "  Compiling piece `{}` v{}",
-        package.name, package.version
-    );
+    println!("  Compiling piece `{}` v{}", package.name, package.version);
 
     if manifest.build_type() == "library" {
         // Library: produce an .rlib
@@ -188,10 +185,7 @@ pub fn run(release: bool, args: Vec<String>) -> Result<(), String> {
     build(release, false, None)?;
     let profile = if release { "release" } else { "debug" };
     let target_root = find_target_root(&project_dir);
-    let binary = target_root
-        .join("target")
-        .join(profile)
-        .join(&package.name);
+    let binary = target_root.join("target").join(profile).join(&package.name);
 
     if !binary.exists() {
         return Err(format!("binary not found at {}", binary.display()));
