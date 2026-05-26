@@ -23,6 +23,7 @@ pub fn build(release: bool, locked: bool, bin_name: Option<&str>) -> Result<(), 
     let project_dir = find_project_root()?;
     let manifest = Manifest::load(&project_dir)?;
     manifest.validate()?;
+    let package = manifest.require_package()?.clone();
 
     // Advisory: dev-dependencies are parsed + survive `ruxen add --dev`
     // / `ruxen remove`, but `ruxen build` does not yet compile them
@@ -44,7 +45,12 @@ pub fn build(release: bool, locked: bool, bin_name: Option<&str>) -> Result<(), 
     }
 
     let profile = if release { "release" } else { "debug" };
-    let target_dir = project_dir.join("target").join(profile);
+    // Shared `target/` semantics: when this project is a member of a
+    // workspace, every member writes into `<workspace>/target/` so
+    // shared deps are built once. Falls back to the project's own
+    // `target/` for standalone projects.
+    let target_root = find_target_root(&project_dir);
+    let target_dir = target_root.join("target").join(profile);
     fs::create_dir_all(&target_dir)
         .map_err(|e| format!("failed to create target directory: {}", e))?;
     fs::create_dir_all(target_dir.join("deps"))
@@ -70,7 +76,29 @@ pub fn build(release: bool, locked: bool, bin_name: Option<&str>) -> Result<(), 
             }
         }
 
-        let result = resolve_deps::resolve(&project_dir, &manifest, existing_lock.as_ref())?;
+        // Build sibling-member map so `pkg-b = "0.1.0"` inside one
+        // workspace member resolves to the sibling's source dir rather
+        // than the registry-rejection path.
+        let mut workspace_members: std::collections::BTreeMap<String, PathBuf> = Default::default();
+        if let Some(ws_root) = crate::manifest::find_workspace_root(&project_dir) {
+            let ws_manifest = Manifest::load(&ws_root)?;
+            if let Some(ws) = ws_manifest.workspace.as_ref() {
+                for (member_dir, member_name) in
+                    crate::manifest::expand_workspace_members(&ws_root, &ws.members)?
+                {
+                    // Skip self — a member is not a dep of itself.
+                    if member_dir != project_dir {
+                        workspace_members.insert(member_name, member_dir);
+                    }
+                }
+            }
+        }
+        let result = resolve_deps::resolve_with_workspace(
+            &project_dir,
+            &manifest,
+            existing_lock.as_ref(),
+            &workspace_members,
+        )?;
 
         // Verify checksums
         result.lock.verify_checksums(&project_dir)?;
@@ -105,23 +133,23 @@ pub fn build(release: bool, locked: bool, bin_name: Option<&str>) -> Result<(), 
     // Step 3: Compile project source
     println!(
         "  Compiling piece `{}` v{}",
-        manifest.package.name, manifest.package.version
+        package.name, package.version
     );
 
     if manifest.build_type() == "library" {
         // Library: produce an .rlib
-        let rlib_path = target_dir.join(format!("{}.rlib", manifest.package.name));
+        let rlib_path = target_dir.join(format!("{}.rlib", package.name));
         compile_piece(
             &project_dir,
-            &manifest.package.name,
-            &manifest.package.version,
+            &package.name,
+            &package.version,
             &rlib_path,
             release,
             &extern_libs,
         )?;
     } else {
         // Binary: produce an executable
-        let output_name = bin_name.unwrap_or(&manifest.package.name);
+        let output_name = bin_name.unwrap_or(&package.name);
         let output_path = target_dir.join(output_name);
         let dep_source_dirs: Vec<PathBuf> = resolved
             .as_ref()
@@ -151,6 +179,7 @@ pub fn build(release: bool, locked: bool, bin_name: Option<&str>) -> Result<(), 
 pub fn run(release: bool, args: Vec<String>) -> Result<(), String> {
     let project_dir = find_project_root()?;
     let manifest = Manifest::load(&project_dir)?;
+    let package = manifest.require_package()?;
 
     if manifest.build_type() == "library" {
         return Err("cannot run a library project. Use `ruxen build` instead.".to_string());
@@ -158,10 +187,11 @@ pub fn run(release: bool, args: Vec<String>) -> Result<(), String> {
 
     build(release, false, None)?;
     let profile = if release { "release" } else { "debug" };
-    let binary = project_dir
+    let target_root = find_target_root(&project_dir);
+    let binary = target_root
         .join("target")
         .join(profile)
-        .join(&manifest.package.name);
+        .join(&package.name);
 
     if !binary.exists() {
         return Err(format!("binary not found at {}", binary.display()));
@@ -185,6 +215,7 @@ pub fn check() -> Result<(), String> {
     let project_dir = find_project_root()?;
     let manifest = Manifest::load(&project_dir)?;
     manifest.validate()?;
+    let package = manifest.require_package()?;
 
     let entry = project_dir.join(manifest.entry_point());
     if !entry.exists() {
@@ -193,7 +224,7 @@ pub fn check() -> Result<(), String> {
 
     // Discover and gather all module sources
     let tree = ModuleTree::discover(&project_dir)?;
-    let combined = gather_sources(&project_dir, &tree, &manifest.package.name)?;
+    let combined = gather_sources(&project_dir, &tree, &package.name)?;
 
     if let Err(e) = check_single_file(&combined, &entry) {
         eprintln!("{}", e);
@@ -203,7 +234,7 @@ pub fn check() -> Result<(), String> {
     let elapsed = start.elapsed();
     println!(
         "    Finished checking `{}` in {:.2}s",
-        manifest.package.name,
+        package.name,
         elapsed.as_secs_f64()
     );
 
@@ -225,6 +256,13 @@ pub fn clean() -> Result<(), String> {
 }
 
 /// Find the project root by searching upward for Ruxen.toml.
+///
+/// Returns the FIRST ancestor with a Ruxen.toml — i.e. the nearest
+/// member when invoked from inside a workspace. The workspace root
+/// (which may also contain a Ruxen.toml) is found separately by
+/// [`manifest::find_workspace_root`] and used only to compute the
+/// shared `target/` directory; build/run still operate against the
+/// nearest member's package.
 pub fn find_project_root() -> Result<PathBuf, String> {
     let mut dir =
         std::env::current_dir().map_err(|e| format!("failed to get current directory: {}", e))?;
@@ -239,6 +277,27 @@ pub fn find_project_root() -> Result<PathBuf, String> {
             );
         }
     }
+}
+
+/// Return the directory that owns `target/`. When `project_dir` is a
+/// member of a workspace, this is the workspace root; otherwise the
+/// project's own directory.
+pub fn find_target_root(project_dir: &Path) -> PathBuf {
+    // The workspace search starts ONE level above project_dir — a
+    // workspace root may itself contain `[workspace]` AND `[package]`
+    // (Cargo's non-virtual root), but for a standalone non-workspace
+    // package we must not match that package's own Ruxen.toml as a
+    // workspace. The `is_workspace_root` check inside
+    // `find_workspace_root` is what guards against that — but starting
+    // at `project_dir.parent()` also handles the edge case where
+    // `project_dir` itself is the workspace root: that's a self-build
+    // and the target stays in `project_dir/target/` regardless.
+    if let Some(parent) = project_dir.parent() {
+        if let Some(ws) = crate::manifest::find_workspace_root(parent) {
+            return ws;
+        }
+    }
+    project_dir.to_path_buf()
 }
 
 /// Compile a single .rx file through the full pipeline: lex → parse → typecheck → borrow check → MIR → codegen.
@@ -509,7 +568,8 @@ fn compile_project(
     }
 
     let tree = ModuleTree::discover(project_dir)?;
-    let user_source = gather_sources(project_dir, &tree, &manifest.package.name)?;
+    let package_name = manifest.require_package()?.name.clone();
+    let user_source = gather_sources(project_dir, &tree, &package_name)?;
 
     // Flat-merge dep sources ahead of user source so the resolver
     // sees their declarations during typecheck. v1: symbols are flat

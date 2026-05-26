@@ -170,7 +170,11 @@ pub fn tree() -> Result<(), String> {
     let project_dir = find_project_root()?;
     let manifest = Manifest::load(&project_dir)?;
 
-    println!("{} v{}", manifest.package.name, manifest.package.version);
+    if let Some(pkg) = manifest.package.as_ref() {
+        println!("{} v{}", pkg.name, pkg.version);
+    } else {
+        println!("(virtual workspace root)");
+    }
 
     if manifest.dependencies.is_empty() {
         println!("  (no dependencies)");

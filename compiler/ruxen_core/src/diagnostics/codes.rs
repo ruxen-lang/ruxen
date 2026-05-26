@@ -386,6 +386,22 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E1118",
         title: "`&Mixin` references a non-`dispatch runtime` mixin",
     },
+    // ── Package manager (E1600-E1699) ────────────────────────────────
+    // Emitted from `ruxen_cli`. Spans don't apply (these are toolchain
+    // errors, not compile errors), but the codes follow the same
+    // numbering scheme so `ruxen explain E1600` returns a hit.
+    CodeInfo {
+        code: "E1600",
+        title: "workspace member not found",
+    },
+    CodeInfo {
+        code: "E1601",
+        title: "circular path dependency between workspace members",
+    },
+    CodeInfo {
+        code: "E1602",
+        title: "published version tag already exists at remote",
+    },
 ];
 
 /// Look up an error code's metadata. Returns `None` if the code is not

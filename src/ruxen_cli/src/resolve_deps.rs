@@ -113,10 +113,35 @@ pub struct ResolveResult {
 }
 
 /// Resolve all dependencies for a project.
+///
+/// Backwards-compatible entry point — no workspace context. Existing
+/// callers (standalone packages with no workspace) keep their current
+/// behaviour. The workspace-aware path goes through [`resolve_with_workspace`].
 pub fn resolve(
     project_dir: &Path,
     manifest: &Manifest,
     existing_lock: Option<&LockFile>,
+) -> Result<ResolveResult, String> {
+    resolve_with_workspace(project_dir, manifest, existing_lock, &BTreeMap::new())
+}
+
+/// Resolve dependencies with knowledge of sibling workspace members.
+///
+/// `workspace_members` maps package-name → member-directory. When a
+/// dependency name matches a member, it's resolved as a synthetic
+/// path-dep instead of going through the registry/git path. This is
+/// what lets `pkg-a` write `pkg-b = "0.1.0"` and have it pick up the
+/// sibling member without spelling out `path = "../pkg-b"`.
+///
+/// Path-dep cycles inside the workspace are tagged `E1601`; cycles
+/// crossing the workspace boundary keep the legacy diagnostic since
+/// it's harder to attribute the cycle to a workspace member without
+/// surface clutter.
+pub fn resolve_with_workspace(
+    project_dir: &Path,
+    manifest: &Manifest,
+    existing_lock: Option<&LockFile>,
+    workspace_members: &BTreeMap<String, PathBuf>,
 ) -> Result<ResolveResult, String> {
     let deps_dir = project_dir.join("target").join("deps");
     std::fs::create_dir_all(&deps_dir)
@@ -135,6 +160,7 @@ pub fn resolve(
             existing_lock,
             &mut resolved,
             &mut in_flight,
+            workspace_members,
         )?;
     }
 
@@ -159,6 +185,7 @@ fn resolve_dep(
     existing_lock: Option<&LockFile>,
     resolved: &mut BTreeMap<String, ResolvedDep>,
     in_flight: &mut HashSet<String>,
+    workspace_members: &BTreeMap<String, PathBuf>,
 ) -> Result<(), String> {
     // Skip if already resolved
     if resolved.contains_key(name) {
@@ -166,35 +193,70 @@ fn resolve_dep(
     }
 
     // Cycle detection: if this package is already being resolved up the
-    // call stack, we have a circular dependency.
+    // call stack, we have a circular dependency. When the cycle is
+    // wholly inside the workspace (every node on the stack is a known
+    // member), surface E1601 so the user is pointed at the workspace
+    // page for the right context.
     if !in_flight.insert(name.to_string()) {
         let cycle: Vec<_> = in_flight.iter().cloned().collect();
+        let all_in_ws = !workspace_members.is_empty()
+            && workspace_members.contains_key(name)
+            && cycle.iter().all(|n| workspace_members.contains_key(n));
+        let code_prefix = if all_in_ws { "error[E1601]: " } else { "" };
         return Err(format!(
-            "Circular dependency detected:\n  {} -> {}",
+            "{}Circular dependency detected:\n  {} -> {}",
+            code_prefix,
             cycle.join(" -> "),
             name
         ));
     }
 
-    let (source_dir, version, is_path, checksum) = match dep {
-        Dependency::Version(_ver) => {
-            in_flight.remove(name);
-            return Err(registry_deferred_error(name));
+    // Intra-workspace name resolution. When the dep name matches a
+    // sibling workspace member AND the spec has no `path`/`git`
+    // override, treat it as a synthetic path-dep into the member's
+    // directory. This is what lets bare `pkg-b = "0.1.0"` work.
+    //
+    // We honour an explicit `path = "..."` / `git = "..."` even when
+    // the name happens to match a workspace member — explicit beats
+    // implicit so a member can still depend on an external fork of
+    // a sibling.
+    let workspace_override = match dep {
+        Dependency::Version(_) => workspace_members.get(name),
+        Dependency::Detailed(d) if d.path.is_none() && d.git.is_none() => {
+            workspace_members.get(name)
         }
-        Dependency::Detailed(detail) => {
-            if let Some(path) = &detail.path {
-                resolve_path_dep(name, path, project_dir)?
-            } else if let Some(git_url) = &detail.git {
-                resolve_git_dep(name, git_url, detail, deps_dir, existing_lock)?
-            } else if detail.version.is_some() {
+        Dependency::Detailed(_) => None,
+    };
+
+    let (source_dir, version, is_path, checksum) = if let Some(member_dir) = workspace_override {
+        // Read version from the member's manifest. The dir was already
+        // validated by `expand_workspace_members`, so a missing
+        // [package] here is a structural bug in the workspace, not user
+        // input — but we still error cleanly.
+        let m = Manifest::load(member_dir)?;
+        let pkg = m.require_package()?;
+        (member_dir.clone(), pkg.version.clone(), true, None)
+    } else {
+        match dep {
+            Dependency::Version(_ver) => {
                 in_flight.remove(name);
                 return Err(registry_deferred_error(name));
-            } else {
-                in_flight.remove(name);
-                return Err(format!(
-                    "dependency `{}` has no source (specify `path = \"...\"` or `git = \"...\"`)",
-                    name
-                ));
+            }
+            Dependency::Detailed(detail) => {
+                if let Some(path) = &detail.path {
+                    resolve_path_dep(name, path, project_dir)?
+                } else if let Some(git_url) = &detail.git {
+                    resolve_git_dep(name, git_url, detail, deps_dir, existing_lock)?
+                } else if detail.version.is_some() {
+                    in_flight.remove(name);
+                    return Err(registry_deferred_error(name));
+                } else {
+                    in_flight.remove(name);
+                    return Err(format!(
+                        "dependency `{}` has no source (specify `path = \"...\"` or `git = \"...\"`)",
+                        name
+                    ));
+                }
             }
         }
     };
@@ -220,6 +282,7 @@ fn resolve_dep(
                 existing_lock,
                 resolved,
                 in_flight,
+                workspace_members,
             )?;
         }
     }
@@ -296,7 +359,10 @@ fn resolve_path_dep(
     // Read version from the dependency's manifest
     let version = if dep_dir.join("Ruxen.toml").exists() {
         let m = Manifest::load(&dep_dir)?;
-        m.package.version.clone()
+        m.package
+            .as_ref()
+            .map(|p| p.version.clone())
+            .unwrap_or_else(|| "0.0.0".to_string())
     } else {
         "0.0.0".to_string()
     };
@@ -401,7 +467,10 @@ fn resolve_git_dep(
     // Read version from the dependency's manifest
     let version = if clone_dir.join("Ruxen.toml").exists() {
         let m = Manifest::load(&clone_dir)?;
-        m.package.version.clone()
+        m.package
+            .as_ref()
+            .map(|p| p.version.clone())
+            .unwrap_or_else(|| "0.0.0".to_string())
     } else {
         "0.0.0".to_string()
     };

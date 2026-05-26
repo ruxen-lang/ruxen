@@ -91,6 +91,10 @@ static EXPLAINS: &[(&str, &str)] = &[
     ("E1116", include_str!("../../../docs/errors/E1116.md")),
     ("E1117", include_str!("../../../docs/errors/E1117.md")),
     ("E1118", include_str!("../../../docs/errors/E1118.md")),
+    // Package manager (E1600-E1699).
+    ("E1600", include_str!("../../../docs/errors/E1600.md")),
+    ("E1601", include_str!("../../../docs/errors/E1601.md")),
+    ("E1602", include_str!("../../../docs/errors/E1602.md")),
 ];
 
 /// Look up the embedded markdown explanation for `code`. Returns

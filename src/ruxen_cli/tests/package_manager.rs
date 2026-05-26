@@ -31,8 +31,8 @@ fn temp_dir(test_name: &str) -> PathBuf {
 #[test]
 fn test_parse_simple_binary_manifest() {
     let manifest = Manifest::load(&fixture_path("simple-binary")).unwrap();
-    assert_eq!(manifest.package.name, "simple-binary");
-    assert_eq!(manifest.package.version, "0.1.0");
+    assert_eq!(manifest.package.as_ref().unwrap().name, "simple-binary");
+    assert_eq!(manifest.package.as_ref().unwrap().version, "0.1.0");
     assert_eq!(manifest.build_type(), "binary");
     assert_eq!(manifest.entry_point(), "src/main.rx");
 }
@@ -40,7 +40,7 @@ fn test_parse_simple_binary_manifest() {
 #[test]
 fn test_parse_simple_lib_manifest() {
     let manifest = Manifest::load(&fixture_path("simple-lib")).unwrap();
-    assert_eq!(manifest.package.name, "simple-lib");
+    assert_eq!(manifest.package.as_ref().unwrap().name, "simple-lib");
     assert_eq!(manifest.build_type(), "library");
     assert_eq!(manifest.entry_point(), "src/lib.rx");
 }
@@ -166,8 +166,8 @@ fn test_scaffold_binary_project() {
 
     // Manifest should be parseable
     let manifest = Manifest::load(&project).unwrap();
-    assert_eq!(manifest.package.name, "my-app");
-    assert_eq!(manifest.package.version, "0.1.0");
+    assert_eq!(manifest.package.as_ref().unwrap().name, "my-app");
+    assert_eq!(manifest.package.as_ref().unwrap().version, "0.1.0");
     assert!(manifest.validate().is_ok());
 
     // Source should contain a main function
