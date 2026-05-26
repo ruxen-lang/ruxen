@@ -62,10 +62,22 @@ else
   export PATH="$RUXEN_HOME/bin:$PATH"
 fi
 
-# macOS default TMPDIR (/var/folders/...) is inside a per-user sandbox
-# quota that 100+ compiled binaries can exhaust, producing spurious
-# ENOSPC errors during the run. Pin TMPDIR to /tmp which has no quota.
-export TMPDIR="/tmp"
+# Per-run private temp dir under /tmp. Two reasons:
+#
+#  1. macOS's default TMPDIR (/var/folders/...) lives inside a per-user
+#     sandbox quota that 100+ compiled binaries can exhaust → spurious
+#     ENOSPC. /tmp has no quota.
+#  2. ISOLATION. `ruxen compile`'s link step writes per-package runtime
+#     objects to `$TMPDIR/ruxen_<pkg>_<pid>_<n>.o`. Pinning every run to
+#     the shared `/tmp` means a *second* concurrent run (or a stray
+#     `rm /tmp/ruxen_*`, or `cargo test release_e2e_smoke` which uses
+#     the same naming) can delete another run's in-flight objects
+#     mid-link → bogus "compile failed". A private subdir keys the whole
+#     run's scratch space off a unique path so concurrent runs and
+#     external cleanup can't collide. Removed on exit.
+E2E_TMP_ROOT="$(mktemp -d "/tmp/ruxen-e2e-run.XXXXXX")"
+export TMPDIR="$E2E_TMP_ROOT"
+trap 'rm -rf "$E2E_TMP_ROOT" 2>/dev/null' EXIT
 
 # Cap `ruxen compile` memory at 8 GiB (RSS).
 # Compiler bugs have leaked 35 GB+ before being noticed.

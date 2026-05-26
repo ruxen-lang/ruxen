@@ -32,6 +32,14 @@ struct RunOutcome {
 
 fn run_with_timeout(bin_path: &PathBuf) -> std::io::Result<RunOutcome> {
     let mut child = Command::new(bin_path)
+        // Redirect stdin from /dev/null. Without this the fixture
+        // inherits the test runner's stdin (a tty under `cargo test`,
+        // or whatever cargo attaches), so a fixture that reads stdin
+        // expecting EOF — e.g. 740_async_stdin_read_line_eof — never
+        // sees EOF and reports `eof_fail`. A null stdin gives every
+        // fixture a deterministic, immediately-EOF input and a clean
+        // fd 0.
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
