@@ -206,6 +206,41 @@ impl<'a> Lowerer<'a> {
                                     base: payload_ptr,
                                     field_index: idx,
                                 });
+                            } else if matches!(field_pat, HirPattern::Wildcard { .. }) {
+                                // A `_`-discarded payload field that owns heap
+                                // (e.g. the File in `match File.open(p) {
+                                // Ok(_) => .. }`) is never bound to a local, so
+                                // nothing frees it and the resource leaks —
+                                // fixture 518_file_drop_closes leaks an fd per
+                                // iteration. Materialise it into a temp via
+                                // GetField so scope-exit drop elaboration can
+                                // run its destructor: the GetField-from-payload
+                                // rule in `compute_dealloc_safe_locals` marks
+                                // the temp owned, and the drop filter emits
+                                // `{Class}_drop` + dealloc. Only heap-owning
+                                // payload types need this; Int/Bool/etc. and
+                                // enum payloads (which the container drop
+                                // handles) are left alone.
+                                let field_ty = variant_field_types
+                                    .get(idx)
+                                    .cloned()
+                                    .unwrap_or(Ty::Int);
+                                if matches!(
+                                    field_ty,
+                                    Ty::Class { .. }
+                                        | Ty::Struct { .. }
+                                        | Ty::String
+                                        | Ty::Array(_)
+                                        | Ty::Map(_, _)
+                                        | Ty::Set(_)
+                                ) {
+                                    let tmp = self.new_temp(field_ty);
+                                    self.emit(MirInst::GetField {
+                                        dest: tmp,
+                                        base: payload_ptr,
+                                        field_index: idx,
+                                    });
+                                }
                             }
 
                             // Handle nested Enum patterns: e.g.

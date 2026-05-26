@@ -559,6 +559,17 @@ fn compute_dealloc_safe_locals(func: &MirFunction) -> std::collections::HashSet<
     // honor this — we conservatively keep the local out of the safe set.
     let mut tainted_perm: HashSet<LocalId> = HashSet::new();
 
+    // `match_payload_ptrs`: locals produced by `GetPayload` whose source
+    // is a `Result`/`Option` value. A `GetField` reading out of such a
+    // pointer extracts an OWNED payload (the sum type owned it; the match
+    // moves ownership to the binding). We only seed this for Result /
+    // Option — NOT user enums — because Result/Option are never themselves
+    // drop-elaborated (not in the drop-eligible `Ty` set), so dropping the
+    // extracted payload cannot double-free with a container drop; user
+    // enums ARE drop-elaborated and their drop recurses into the payload.
+    let mut match_payload_ptrs: HashSet<LocalId> = HashSet::new();
+    let local_ty = |id: LocalId| func.locals.iter().find(|l| l.id == id).map(|l| &l.ty);
+
     // Single forward pass — block order is the lowering order, which
     // matches program execution order for the cases we care about.
     // Loops/back-edges are not modeled; back-edges only matter when an
@@ -604,13 +615,53 @@ fn compute_dealloc_safe_locals(func: &MirFunction) -> std::collections::HashSet<
                 // Every other instruction that defines a local produces
                 // a value that is NOT a fresh allocation owned by this
                 // frame — taint the destination.
+                // Payload pointer of a `match` / `?` extraction. The
+                // pointer itself is an intermediate (taint it), but if it
+                // reads out of a Result/Option we remember it so the
+                // GetField that pulls the payload field out knows that
+                // field is OWNED (the sum type owned it; the match transfers
+                // ownership to the binding). Scoped to Result/Option — see
+                // `match_payload_ptrs` doc above.
+                MirInst::GetPayload { dest, src, .. } => {
+                    if matches!(
+                        local_ty(*src),
+                        Some(Ty::Result(_, _)) | Some(Ty::Option(_))
+                    ) {
+                        match_payload_ptrs.insert(*dest);
+                    }
+                    tainted_perm.insert(*dest);
+                    alloc_rooted.remove(dest);
+                }
+                // Field read. Out of a match payload pointer it is an OWNED
+                // extraction of a heap-owning value → alloc-root it so the
+                // drop-eligibility filter (plus the return-alias / move-out
+                // guards) can give it a scope-exit drop; without this a
+                // `File` matched out of `File.open(p)` leaks its fd. A field
+                // read of anything else is a borrowed view into a parent the
+                // frame already owns — tainting keeps us from double-freeing.
+                MirInst::GetField { dest, base, .. } => {
+                    let owns_heap = matches!(
+                        local_ty(*dest),
+                        Some(Ty::Class { .. })
+                            | Some(Ty::Struct { .. })
+                            | Some(Ty::String)
+                            | Some(Ty::Array(_))
+                            | Some(Ty::Map(_, _))
+                            | Some(Ty::Set(_))
+                    );
+                    if match_payload_ptrs.contains(base) && owns_heap && !tainted_perm.contains(dest)
+                    {
+                        alloc_rooted.insert(*dest);
+                    } else {
+                        tainted_perm.insert(*dest);
+                        alloc_rooted.remove(dest);
+                    }
+                }
                 MirInst::BinOp { dest, .. }
                 | MirInst::Negate { dest, .. }
                 | MirInst::Not { dest, .. }
                 | MirInst::Compare { dest, .. }
-                | MirInst::GetField { dest, .. }
                 | MirInst::GetTag { dest, .. }
-                | MirInst::GetPayload { dest, .. }
                 | MirInst::Ref { dest, .. }
                 | MirInst::RefMut { dest, .. }
                 | MirInst::StringLiteral { dest, .. }
