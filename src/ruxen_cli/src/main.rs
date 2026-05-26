@@ -1,5 +1,5 @@
 use clap::Parser;
-use ruxen_cli::{build, cli, deps, explain, scaffold, self_update};
+use ruxen_cli::{build, cli, deps, explain, publish, scaffold, self_update};
 
 fn main() {
     let args = cli::Cli::parse();
@@ -144,6 +144,10 @@ fn main() {
         // binary that invokes them.
         cli::Command::Lsp => ruxen_lsp::run(),
         cli::Command::Repl => ruxen_repl::run(),
+
+        cli::Command::Publish { dry_run, registry } => {
+            publish::publish(dry_run, registry.as_deref())
+        }
     };
 
     if let Err(e) = result {

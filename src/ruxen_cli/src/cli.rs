@@ -215,6 +215,18 @@ pub enum Command {
 
     /// Start the interactive Ruxen REPL.
     Repl,
+
+    /// Package the current project and push a `v<name>-<version>`
+    /// tag to the configured git remote.
+    Publish {
+        /// Build the tarball and print what would happen, but do not
+        /// create or push the tag.
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+        /// Git remote to push the tag to (default: `origin`).
+        #[arg(long)]
+        registry: Option<String>,
+    },
 }
 
 #[cfg(test)]
