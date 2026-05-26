@@ -176,11 +176,35 @@ pub enum Command {
         iter_hint: Option<i64>,
     },
 
-    /// Test framework — placeholder. See docs/prompts/v1/19_phase5_test_framework.md.
+    /// Test framework — discover `tests/**.rx`, build per-file binaries
+    /// via the incremental cache, fork-per-test for isolation.
     Test {
-        /// Substring filter on test names
-        #[arg(long)]
+        /// Substring filter on test names (positional)
         filter: Option<String>,
+        /// Build tests in release mode
+        #[arg(long)]
+        release: bool,
+        /// Parallel fan-out width; "auto" = min(ncpus, 8)
+        #[arg(long = "test-threads", default_value = "auto")]
+        test_threads: String,
+        /// Stop dispatching after first failure
+        #[arg(long = "fail-fast")]
+        fail_fast: bool,
+        /// Don't capture test stdout/stderr
+        #[arg(long)]
+        nocapture: bool,
+        /// List discovered tests; don't run
+        #[arg(long)]
+        list: bool,
+        /// Build but don't execute
+        #[arg(long = "no-run")]
+        no_run: bool,
+        /// Include xit (pending) tests in execution
+        #[arg(long = "include-pending")]
+        include_pending: bool,
+        /// Output format: pretty | tap | json
+        #[arg(long, default_value = "pretty")]
+        format: String,
     },
 
     /// Start the Ruxen Language Server (LSP over stdio).

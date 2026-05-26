@@ -1,233 +1,130 @@
 # Writing and Running Tests
 
-Writing tests is how you keep code working as it grows. In Ruxen, a test is just a normal `.rx` file with a `def main` that runs your code and panics if anything is wrong. There's no special test framework — you call `assert_eq` (or whatever helper you write), it panics on a failure, and the program's non-zero exit code tells `ruxen run` or your CI system that the test failed. This chapter walks through the minimal pattern, then shows how to organise tests in a real project, share helper functions, and write microbenchmarks.
+Ruxen ships a pure-Ruxen test framework. Tests live in `tests/**.rx`
+inside your project. Each `.rx` file under `tests/` is a test file —
+no method-name convention, no `#[test]` attribute. Run them with
+`ruxen test`.
 
----
+## A first test
 
-## 1. Your first test
-
-Save this as `test_math.rx`:
-
-```ruxen
-def add(a: Int, b: Int) -> Int
-  a + b
-end
-
-def main
-  let result = add(2, 3)
-  if result != 5
-    panic!("expected 5, got #{result}")
-  end
-  puts "ok"
-end
-```
-
-Run it:
-
-```bash
-ruxen run test_math.rx
-```
-
-Output:
-
-```
-ok
-```
-
-If you change `a + b` to `a - b` and re-run, the program panics with `expected 5, got -1` and exits non-zero. That's the entire mechanism: **panic on failure, exit zero on success.**
-
-`panic!(msg)` is the underlying primitive. Helpers like `assert_eq` and `expect!` are thin wrappers around it.
-
-## 2. A reusable `assert_eq` helper
-
-Writing `if x != y then panic!(...)` over and over gets tedious. Pull it into a helper:
-
-```ruxen
-def assert_eq[T](actual: T, expected: T) -> nil
-    where T: PartialEq,
-          T: Display
-  if actual != expected
-    panic!("assertion failed: #{actual} != #{expected}")
-  end
-end
-
-def add(a: Int, b: Int) -> Int
-  a + b
-end
-
-def main
-  assert_eq(add(2, 3), 5)
-  assert_eq(add(0, 0), 0)
-  assert_eq(add(-1, 1), 0)
-  puts "ok"
-end
-```
-
-The `where` clause says `T` needs `PartialEq` (so we can use `!=`) and `Display` (so we can interpolate it into the panic message). Most numeric and string types satisfy both.
-
-> **Try it:** add a `assert_true(cond: Bool, label: &str)` helper to your file. Then use it to check `add(10, 5) > 0`.
-
-## 3. Organising tests in a project
-
-Once your project has a manifest (`Ruxen.toml`), the convention is to put one test file per area under a `tests/` directory:
-
-```
-my_app/
-  Ruxen.toml
-  src/
-    main.rx
-    lib.rx
-  tests/
-    string_helpers.rx
-    parser.rx
-    integration_round_trip.rx
-```
-
-Declare each one as a binary in `Ruxen.toml`:
-
-```toml
-[package]
-name = "my_app"
-version = "0.1.0"
-
-[[bin]]
-name = "string_helpers_test"
-path = "tests/string_helpers.rx"
-
-[[bin]]
-name = "parser_test"
-path = "tests/parser.rx"
-```
-
-Run individual tests:
-
-```bash
-ruxen run --bin string_helpers_test
-ruxen run --bin parser_test
-```
-
-Or chain them in a shell script:
-
-```bash
-#!/usr/bin/env bash
-set -e
-for t in string_helpers_test parser_test integration_round_trip_test; do
-  ruxen run --bin "$t"
-done
-echo "all tests passed"
-```
-
-The `set -e` line is important — it makes the script abort on the first failing test, so your CI picks up the non-zero exit code instead of barrelling on to the next one.
-
-## 4. Sharing helpers across test files
-
-Put `assert_eq` and friends in a module so every test file can use them:
-
-```ruxen
-# src/test_support.rx
-
-use std.fmt.Display
-
-def assert_eq[T](actual: T, expected: T) -> nil
-    where T: PartialEq,
-          T: Display
-  if actual != expected
-    panic!("assertion failed: #{actual} != #{expected}")
-  end
-end
-
-def assert_true(cond: Bool, msg: &String) -> nil
-  if !cond
-    panic!("assertion failed: #{msg}")
+```rx
+Tester.describe("Calculator") do |t: &var Tester|
+  t.it("adds two numbers") do
+    t.expect(1 + 2).to_eq(3)
   end
 end
 ```
 
-Then in each test file:
+Put this in `tests/calculator.rx` and run:
 
-```ruxen
-# tests/string_helpers.rx
+```
+$ ruxen test
+test result: ok. 1 passed; 0 failed; 0 pending
+```
 
-use my_app.test_support.{assert_eq, assert_true}
-use my_app.string_helpers.{capitalize}
+`ruxen new <name>` scaffolds a working `tests/example.rx` for you, so
+the first `ruxen test` in a new project is already green.
 
-def main
-  assert_eq(capitalize(&"hello"), "Hello")
-  assert_true(capitalize(&"").len == 0, &"empty input yields empty output")
-  puts "ok"
+## Structure
+
+- `Tester.describe(name) do |t: &var Tester| ... end` — opens a group.
+  Always the first call in a test file. The explicit
+  `|t: &var Tester|` binding type is required in v1 because closure
+  parameter inference does not yet propagate the inner `T` at
+  `t.expect(...)` call sites without it.
+- `t.context(name) do |t: &var Tester| ... end` — nested group.
+  Inherits the parent group's `before` hooks (after-hook inheritance
+  ships in v1.1).
+- `t.it(name) do ... end` — one test case. Runs in a forked child
+  process, so a panic inside the body cannot poison sibling tests.
+- `t.xit(name) do ... end` — pending test. The body is not executed;
+  the case counts toward `pending` in the summary.
+- `t.before do ... end` — runs before every `it` in this group.
+- `t.after do ... end` — runs after every `it` in this group.
+
+## Matchers
+
+- `t.expect(actual).to_eq(expected)` — equality (requires
+  `T: PartialEq`). Marks the case as failed if the comparison fails.
+- `t.expect(actual).not_to_eq(expected)` — inequality.
+- `BoolMatcher.new(actual).to_be_truthy` / `.to_be_falsy` — boolean
+  assertions decoupled from the `PartialEq` constraint.
+- `OptionMatcher.new(option.is_some).to_be_nil` / `.not_to_be_nil`.
+- `ArrayMatcher.new(&xs).to_include(value)`.
+- `StringMatcher.new(&s).to_include(needle)`.
+
+The unified `t.expect(...)` returns a `Matcher[T]` and only dispatches
+to the equality matchers in v1. For the boolean / option / array /
+string matchers, instantiate the matcher class directly (see above).
+
+## Expecting a panic
+
+Use `t.it_panics(name, expected_substring) do ... end` instead of
+`t.it(...)`:
+
+```rx
+t.it_panics("explodes on overflow", "overflow") do
+  Runner.panic  # or any code that ultimately calls ruxen_panic
 end
 ```
 
-## 5. Testing error paths with `Result`
+The test passes if the body causes the case to exit abnormally (panic,
+abort, signal). In v1 the substring is recorded but not verified —
+any panic from the body satisfies the assertion. Substring verification
+ships in v1.1 once parent-side stderr capture lands.
 
-When the code under test returns a `Result`, match on it explicitly:
+## Hooks and helpers
 
-```ruxen
-match parse(&"3 + (2")
-  Ok(_)  -> panic!("expected parse error on unbalanced input")
-  Err(e) -> assert_eq(e.kind, ParseErrorKind.UnbalancedParen)
-end
-```
+`before` and `after` run before / after each test in the surrounding
+group. Nested `context` blocks inherit the surrounding group's
+`before` hooks (outer-first ordering — outer `before` runs, then
+inner `before`, then the body).
 
-For the happy path, `unwrap!()` is the shortcut for "this should be `Ok`":
+Shared helpers (factories, fixtures, custom assertions) go in
+`tests/support/**.rx` — those files are NOT executed as test files.
+The discovery walker explicitly skips the `tests/support/` subtree.
 
-```ruxen
-let parsed = parse(&"1 + 2").unwrap!()
-assert_eq(parsed.value, 3)
-```
+## Process isolation
 
-## 6. Microbenchmarks with `ruxen bench`
+Every `t.it` runs in a forked child process. This means:
+- A panic in one test does not abort sibling tests.
+- Tests can mutate process-level state (env vars, the current-runner
+  slot, FFI handles) without leaking changes into other tests.
+- The OS reclaims any allocations the test leaks — useful while
+  `Drop` semantics are still landing in v1.
 
-Once a test passes, the natural next question is "how fast is it?" Ruxen ships a tiny benchmarking harness. A bench file is a `.rx` file with one or more `def bench_*` functions:
+Per-file parallelism is bounded by `--test-threads` (default
+`min(ncpus, 8)`); compilation runs serially to keep the incremental
+cache's `manifest.bin` consistent, then the produced binaries fan out
+across worker threads.
 
-```ruxen
-# benches/string_concat.rx
+## Command-line options
 
-use std.bench.Bencher
+- `ruxen test FILTER` — substring filter on the test file path
+  (e.g. `ruxen test calculator` runs only `tests/calculator*.rx`).
+- `ruxen test --release` — build tests with `--release` optimisation.
+- `ruxen test --test-threads=N` — limit parallelism (default
+  `min(ncpus, 8)`). Set to `1` for fully serial execution.
+- `ruxen test --fail-fast` — stop dispatching after first failure.
+- `ruxen test --nocapture` — print captured stdout/stderr live, even
+  for passing tests.
+- `ruxen test --list` — list discovered tests; don't compile or run.
+- `ruxen test --no-run` — build all test binaries; don't execute.
+- `ruxen test --include-pending` — execute `xit` blocks too (v1.1).
+- `ruxen test --format=pretty|tap|json` — output format.
 
-def bench_string_concat(b: &var Bencher)
-  b.iter(&"string_concat", { ||
-    var s = String.new
-    for _i in 0..100
-      s.push_str(&"xx")
-    end
-    s.len
-  })
-end
+## What is not in v1
 
-def main
-  var b = Bencher.new(1000)
-  bench_string_concat(&var b)
-end
-```
+These behaviours are documented as planned for v1.1 — track in the
+test framework spec at
+`docs/superpowers/specs/2026-05-23-test-framework-design.md`:
 
-Run it:
-
-```bash
-ruxen bench benches/string_concat.rx
-ruxen bench benches/string_concat.rx --filter concat
-ruxen bench benches/string_concat.rx --iter-hint 10000
-```
-
-The harness scales the iteration count automatically until each measurement runs for at least ~100 ms, then prints `iters | total ns | ns/iter`. Your closure must return an `Int`; the harness uses that to keep the optimiser from deleting the work.
-
-## 7. Common mistakes
-
-- **Calling `exit(0)` at the end of `main`.** Don't — falling off the end already exits with 0, and `exit` short-circuits any cleanup (like file close on drop). Save `exit(n)` for non-zero codes from deep in helpers.
-- **Not printing anything on success.** A test that silently exits looks identical to one that crashed before reaching `puts`. Always end with `puts "ok"` (or similar) so you can tell from the output that the test actually ran.
-- **Forgetting `set -e` in test scripts.** Without it, a failing test prints its error and the script merrily continues. Add it to every shell wrapper.
-- **Mocking instead of using real I/O.** Ruxen doesn't have a mocking library. The idiomatic shape is: write to a unique tmp file (or use `std.env.current_dir`), read it back, assert. Clean up the path at the *start* of each run, not the end, so a previous crash doesn't leave state behind.
-
-> **Try it:** add a second test case that intentionally fails (e.g. `assert_eq(add(2, 2), 5)`). Re-run with `ruxen run test_math.rx && echo PASS || echo FAIL`. What do you see?
-
----
-
-## Recap
-
-- A test is just a `.rx` file: assertions in `main`, panic on failure, non-zero exit on panic.
-- `panic!(msg)` is the primitive; build `assert_eq` / `assert_true` helpers on top of it.
-- Real projects use `tests/` with one binary per file declared in `Ruxen.toml`.
-- Shared helpers live in a module like `src/test_support.rx`.
-- `ruxen bench` runs microbenchmarks — auto-scales iterations and reports ns/iter.
-
-**Next:** [Chapter 20 — Const Generics](20-const-generics.md).
+- `let` / `subject` memoised helpers.
+- `before(:all)` / `after(:all)` / `around` hooks.
+- Custom matchers, `change { }`, `to_satisfy`, `to_be_a(ClassName)`.
+- Mocking / `double` / partial stubbing.
+- Shared example groups.
+- Property testing.
+- `--timeout` (per-test wall-clock cap).
+- Parent-side substring verification for `it_panics`.
+- After-hook inheritance from `context` to nested children.

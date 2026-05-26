@@ -48,6 +48,24 @@ pub fn new_project_in(name: &str, lib: bool, no_git: bool, parent: &Path) -> Res
         println!("      Created src/main.rx");
     }
 
+    // Scaffold a starter test under tests/. The Ruxen.toml is enough for
+    // `ruxen test` to discover this file; the user runs the suite with
+    // `ruxen test` from the project root.
+    //
+    // The block-arg uses an explicit `do |t: &var Tester|` because
+    // Ruxen's closure-arg type-inference does not yet infer the inner
+    // T at `t.expect(...)` call sites without the binding type
+    // annotation — see fixture `test_tester_describe_it_eq.rx`.
+    let tests_dir = project_dir.join("tests");
+    fs::create_dir_all(&tests_dir).map_err(|e| format!("failed to create tests/: {}", e))?;
+    let example_test = "Tester.describe(\"example\") do |t: &var Tester|\n  \
+                         t.it(\"adds two numbers\") do\n    \
+                           t.expect(1 + 1).to_eq(2)\n  \
+                         end\nend\n";
+    fs::write(tests_dir.join("example.rx"), example_test)
+        .map_err(|e| format!("failed to write tests/example.rx: {}", e))?;
+    println!("      Created tests/example.rx");
+
     // Generate .gitignore
     let gitignore = generate_gitignore(lib);
     fs::write(project_dir.join(".gitignore"), gitignore)

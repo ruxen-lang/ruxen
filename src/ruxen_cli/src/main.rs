@@ -116,13 +116,27 @@ fn main() {
             }
             ruxenc::bench::run(&argv)
         }
-        cli::Command::Test { filter: _ } => {
-            eprintln!(
-                "`ruxen test` not yet implemented — decisions locked in \
-                 docs/prompts/v1/19_phase5_test_framework.md; implementation deferred."
-            );
-            std::process::exit(2);
-        }
+        cli::Command::Test {
+            filter,
+            release,
+            test_threads,
+            fail_fast,
+            nocapture,
+            list,
+            no_run,
+            include_pending,
+            format,
+        } => ruxenc::test_runner::run(ruxenc::test_runner::TestOptions {
+            filter,
+            release,
+            test_threads,
+            fail_fast,
+            nocapture,
+            list,
+            no_run,
+            include_pending,
+            format,
+        }),
 
         // ── Editor / interactive subcommands ────────────────────────
         // Both crates expose a `run() -> Result<(), String>` library
