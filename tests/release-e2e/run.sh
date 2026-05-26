@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
 # Ruxen release-bundle e2e test harness.
 #
-# Verifies an installed Ruxen toolchain against the language tutorial docs
-# (docs/tutorial/*.md) and exercises every shipped binary:
-#   ruxenc, ruxen, ruxen-repl, ruxen-lsp
+# Verifies an installed Ruxen toolchain by exercising the unified
+# `ruxen` driver: compile, run, fmt, repl, lsp, and the pkg-manager
+# subcommands. The historical standalone `ruxenc` / `ruxen-repl` /
+# `ruxen-lsp` binaries no longer ship — everything routes through
+# `ruxen <subcommand>` now.
 #
 # Exit status is 0 if every test passes, 1 otherwise.
+#
+# Tuning knobs:
+#   JOBS=N         Worker count for the fixture loops. Default: nproc.
+#   CASE_FILTER=…  Glob applied to cases/*.rx. Default: '*.rx'.
+#                  Example: CASE_FILTER='01_*.rx' to debug one fixture.
 
 set -u
 
@@ -17,6 +24,34 @@ SCRIPTS="$HERE/scripts"
 
 mkdir -p "$RESULTS"
 : > "$RESULTS/summary.txt"
+
+# Default worker count. Each worker drives a full compile→cc→ld→exec
+# pipeline, so past ~8-way the machine oversubscribes IO / fds /
+# memory and fixtures that probe resource limits flake — e.g.
+# 518_file_drop_closes opens a file 1024 times and a transient fd
+# shortage under heavy load makes a few opens fail (opened=1021
+# instead of 1024). Cap the default at 8; override with JOBS=N on a
+# beefy box, JOBS=1 to serialise for debugging.
+_e2e_ncpu="$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 4)"
+JOBS="${JOBS:-$(( _e2e_ncpu < 8 ? _e2e_ncpu : 8 ))}"
+CASE_FILTER="${CASE_FILTER:-*.rx}"
+
+# Ctrl-C handling. Without this trap, bash's `for f in …; do …; done`
+# pattern absorbs SIGINT at iteration boundaries: the current child
+# dies, the loop walks to the next iteration, and you have to hit
+# Ctrl-C once per fixture. The fixture loops below also moved off
+# `for` onto `xargs -P`, which itself propagates SIGINT cleanly — this
+# trap covers everything outside those loops (binary smoke tests, CLI
+# lifecycle, LSP, etc.).
+trap '_e2e_interrupt' INT TERM
+_e2e_interrupt() {
+  trap - INT TERM
+  printf "\n\033[31minterrupted\033[0m\n" >&2
+  # Signal our entire process group so any backgrounded `timeout` /
+  # `ruxenc` / `xargs` workers die with us.
+  kill 0 2>/dev/null
+  exit 130
+}
 
 RUXEN_HOME="${RUXEN_HOME:-$HOME/.ruxen}"
 # If RUXEN_WORKSPACE is set, prefer binaries built from source in that
@@ -32,7 +67,7 @@ fi
 # ENOSPC errors during the run. Pin TMPDIR to /tmp which has no quota.
 export TMPDIR="/tmp"
 
-# Cap ruxenc memory at 8 GiB (RSS).
+# Cap `ruxen compile` memory at 8 GiB (RSS).
 # Compiler bugs have leaked 35 GB+ before being noticed.
 # macOS bash doesn't support `ulimit -v` (RLIMIT_AS), so we poll
 # the process's RSS and SIGKILL when it crosses the cap.
@@ -90,113 +125,177 @@ banner() {
 
 # ── 1. binary smoke tests ─────────────────────────────────────────────
 test_binaries() {
-  banner "binaries: --version / --help"
-  for bin in ruxen ruxenc ruxen-repl ruxen-lsp; do
-    if ! command -v "$bin" >/dev/null 2>&1; then
-      record_fail "bin/$bin" "not on PATH"
-      continue
-    fi
-    if "$bin" --version >/dev/null 2>&1; then
-      record_pass "bin/$bin --version"
-    else
-      record_fail "bin/$bin --version" "nonzero exit"
-    fi
-    if "$bin" --help >/dev/null 2>&1; then
-      record_pass "bin/$bin --help"
-    else
-      record_fail "bin/$bin --help" "nonzero exit"
-    fi
-  done
+  banner "binary: --version / --help"
+  if ! command -v ruxen >/dev/null 2>&1; then
+    record_fail "bin/ruxen" "not on PATH"
+    return
+  fi
+  if ruxen --version >/dev/null 2>&1; then
+    record_pass "bin/ruxen --version"
+  else
+    record_fail "bin/ruxen --version" "nonzero exit"
+  fi
+  if ruxen --help >/dev/null 2>&1; then
+    record_pass "bin/ruxen --help"
+  else
+    record_fail "bin/ruxen --help" "nonzero exit"
+  fi
 }
 
-# ── 2. ruxenc compile+run cases ───────────────────────────────────────
-test_cases() {
-  banner "ruxenc: compile + run language cases"
-  local tmp
-  tmp="$(mktemp -d "${TMPDIR:-/tmp}/ruxen-e2e.XXXXXX")"
-  trap 'rm -rf "$tmp"' RETURN
+# ── 2. ruxen compile+run cases ────────────────────────────────────────
+#
+# Per-fixture worker. Reads one .rx path on $1, writes ONE TSV line to
+# stdout (consumed by the tally) and one colourised progress line to
+# stderr (live throughput, interleaved across workers — that's fine,
+# each printf is atomic).
+#
+# Lives at module scope (not nested inside test_cases) because xargs
+# -P spawns subshells with `bash -c`, which only sees `export -f`d
+# functions in the environment.
+_e2e_run_case_one() {
+  local src="$1"
+  local tmp="$E2E_CASE_TMP"
+  local base name expect_file rc work
+  base="$(basename "$src" .rx)"
+  name="case/$base"
+  expect_file="$E2E_EXPECTED_DIR/$base.out"
 
-  for src in "$CASES"/*.rx; do
-    [ -f "$src" ] || continue
-    local name base expect_file
-    base="$(basename "$src" .rx)"
-    expect_file="$EXPECTED/$base.out"
-    name="case/$base"
+  # Per-fixture working directory. `ruxen compile`'s incremental cache
+  # writes to `./target/ruxen/incremental/manifest.bin` (relative to
+  # cwd) and uses a fixed `.tmp` suffix during the atomic-rename swap.
+  # With N parallel workers in the same cwd, two workers race on the
+  # .tmp name and one rename fails with ENOENT ("No such file or
+  # directory"). Each worker gets its own cwd so its incremental tree
+  # is isolated; the `-o` target stays absolute so the harness still
+  # finds the binary.
+  work="$tmp/work-$base"
+  mkdir -p "$work"
 
-    # compile: 30s wall-clock cap + 8 GiB RSS cap
-    # (catches pathological codegen and memory leaks like the 35GB incident)
-    if ! timeout 30 bash -c '
-        RUXENC_MEM_KB='"$RUXENC_MEM_KB"'
-        ruxenc "$@" &
-        pid=$!
-        while kill -0 "$pid" 2>/dev/null; do
-          rss=$(ps -o rss= -p "$pid" 2>/dev/null | tr -d " ")
-          if [ -n "$rss" ] && [ "$rss" -gt "$RUXENC_MEM_KB" ]; then
-            kill -9 "$pid" 2>/dev/null
-            wait "$pid" 2>/dev/null
-            echo "compile killed: ruxenc RSS ${rss}KB exceeded cap" >&2
-            exit 137
-          fi
-          sleep 0.25
-        done
-        wait "$pid"
-    ' _ "$src" -o "$tmp/$base.bin" >"$tmp/$base.compile.log" 2>&1; then
-      local rc=$?
-      if [ "$rc" -eq 124 ]; then
-        record_fail "$name" "compile timed out (>30s)"
-      else
-        record_fail "$name" "compile failed (see $tmp/$base.compile.log)"
-      fi
-      cp "$tmp/$base.compile.log" "$RESULTS/$base.compile.log" 2>/dev/null
-      rm -f "$tmp/$base.bin" "$tmp/$base.bin.o"
-      continue
-    fi
-
-    # Guard against pathological codegen: any binary >10 MB for a
-    # fixture this small is a compiler bug. Flag and drop it so we
-    # don't exhaust disk.
-    if [ -f "$tmp/$base.bin" ]; then
-      local size_bytes
-      # BSD stat uses -f %z; GNU stat uses -c %s. Try both.
-      size_bytes=$(stat -c %s "$tmp/$base.bin" 2>/dev/null \
-                   || stat -f %z "$tmp/$base.bin" 2>/dev/null \
-                   || echo 0)
-      if [ "$size_bytes" -gt $((10 * 1024 * 1024)) ]; then
-        local size_mb=$(( size_bytes / 1024 / 1024 ))
-        record_fail "$name" "binary ${size_mb}MB — pathological codegen"
-        rm -f "$tmp/$base.bin" "$tmp/$base.bin.o"
-        continue
-      fi
-    fi
-
-    # run (skip if no expected output file — compile-only test)
-    if [ ! -f "$expect_file" ]; then
-      record_pass "$name (compile-only)"
-      continue
-    fi
-
-    # Capture stdout separately from stderr — fixtures assert stdout only.
-    # panic! / eputs / diagnostic output belongs on stderr and must not
-    # corrupt the diff. Nonzero exit is acceptable as long as stdout
-    # matches — e.g. panic! fixtures print to stdout then exit 101.
-    timeout 10 "$tmp/$base.bin" >"$tmp/$base.out" 2>"$tmp/$base.err"
-    local rc=$?
+  # compile: 30s wall-clock cap + 8 GiB RSS cap
+  # (catches pathological codegen and memory leaks like the 35GB incident)
+  if ! ( cd "$work" && timeout 30 bash -c '
+      RUXENC_MEM_KB='"$RUXENC_MEM_KB"'
+      ruxen compile "$@" &
+      pid=$!
+      while kill -0 "$pid" 2>/dev/null; do
+        rss=$(ps -o rss= -p "$pid" 2>/dev/null | tr -d " ")
+        if [ -n "$rss" ] && [ "$rss" -gt "$RUXENC_MEM_KB" ]; then
+          kill -9 "$pid" 2>/dev/null
+          wait "$pid" 2>/dev/null
+          echo "compile killed: ruxen-compile RSS ${rss}KB exceeded cap" >&2
+          exit 137
+        fi
+        sleep 0.25
+      done
+      wait "$pid"
+  ' _ "$src" -o "$tmp/$base.bin" >"$tmp/$base.compile.log" 2>&1 ); then
+    rc=$?
+    cp "$tmp/$base.compile.log" "$E2E_RESULTS_DIR/$base.compile.log" 2>/dev/null
+    rm -f "$tmp/$base.bin" "$tmp/$base.bin.o"
     if [ "$rc" -eq 124 ]; then
-      record_fail "$name" "run timed out (>10s)"
-      { cat "$tmp/$base.out"; echo "--- stderr ---"; cat "$tmp/$base.err"; } \
-        > "$RESULTS/$base.actual.out" 2>/dev/null
-      continue
-    fi
-
-    if diff -u "$expect_file" "$tmp/$base.out" >"$tmp/$base.diff" 2>&1; then
-      record_pass "$name"
+      _e2e_emit FAIL "$name" "compile timed out (>30s)"
     else
-      record_fail "$name" "output mismatch (exit=$rc)"
-      { cat "$tmp/$base.out"; echo "--- stderr ---"; cat "$tmp/$base.err"; } \
-        > "$RESULTS/$base.actual.out" 2>/dev/null
-      cp "$tmp/$base.diff" "$RESULTS/$base.diff" 2>/dev/null
+      _e2e_emit FAIL "$name" "compile failed (see results/$base.compile.log)"
     fi
-  done
+    return
+  fi
+
+  # Guard against pathological codegen: any binary >10 MB for a
+  # fixture this small is a compiler bug. Flag and drop it so we
+  # don't exhaust disk.
+  if [ -f "$tmp/$base.bin" ]; then
+    local size_bytes size_mb
+    # BSD stat uses -f %z; GNU stat uses -c %s. Try both.
+    size_bytes=$(stat -c %s "$tmp/$base.bin" 2>/dev/null \
+                 || stat -f %z "$tmp/$base.bin" 2>/dev/null \
+                 || echo 0)
+    if [ "$size_bytes" -gt $((10 * 1024 * 1024)) ]; then
+      size_mb=$(( size_bytes / 1024 / 1024 ))
+      rm -f "$tmp/$base.bin" "$tmp/$base.bin.o"
+      _e2e_emit FAIL "$name" "binary ${size_mb}MB — pathological codegen"
+      return
+    fi
+  fi
+
+  # run (skip if no expected output file — compile-only test)
+  if [ ! -f "$expect_file" ]; then
+    _e2e_emit PASS "$name (compile-only)" ""
+    return
+  fi
+
+  # Capture stdout separately from stderr — fixtures assert stdout only.
+  # panic! / eputs / diagnostic output belongs on stderr and must not
+  # corrupt the diff. Nonzero exit is acceptable as long as stdout
+  # matches — e.g. panic! fixtures print to stdout then exit 101.
+  timeout 10 "$tmp/$base.bin" >"$tmp/$base.out" 2>"$tmp/$base.err"
+  rc=$?
+  if [ "$rc" -eq 124 ]; then
+    { cat "$tmp/$base.out"; echo "--- stderr ---"; cat "$tmp/$base.err"; } \
+      > "$E2E_RESULTS_DIR/$base.actual.out" 2>/dev/null
+    _e2e_emit FAIL "$name" "run timed out (>10s)"
+    return
+  fi
+
+  if diff -u "$expect_file" "$tmp/$base.out" >"$tmp/$base.diff" 2>&1; then
+    _e2e_emit PASS "$name" ""
+  else
+    { cat "$tmp/$base.out"; echo "--- stderr ---"; cat "$tmp/$base.err"; } \
+      > "$E2E_RESULTS_DIR/$base.actual.out" 2>/dev/null
+    cp "$tmp/$base.diff" "$E2E_RESULTS_DIR/$base.diff" 2>/dev/null
+    _e2e_emit FAIL "$name" "output mismatch (exit=$rc)"
+  fi
+}
+
+# stdout = machine-readable TSV (parent tallies these), stderr = live
+# progress. PASS lines have an empty reason; FAIL lines carry the
+# failure summary verbatim.
+_e2e_emit() {
+  local status="$1" name="$2" reason="${3:-}"
+  if [ "$status" = "PASS" ]; then
+    printf 'PASS\t%s\n' "$name"
+    printf '  \033[32mPASS\033[0m  %s\n' "$name" >&2
+  else
+    printf 'FAIL\t%s\t%s\n' "$name" "$reason"
+    printf '  \033[31mFAIL\033[0m  %s  \033[2m%s\033[0m\n' "$name" "$reason" >&2
+  fi
+}
+export -f _e2e_run_case_one _e2e_emit
+
+test_cases() {
+  banner "ruxen compile: language cases ($JOBS jobs)"
+  local tmp results
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/ruxen-e2e.XXXXXX")"
+  results="$tmp/results.tsv"
+  : > "$results"
+
+  # Export everything the worker needs. Subshells spawned by `xargs
+  # -P … bash -c …` only see the environment, not the parent's locals.
+  export E2E_CASE_TMP="$tmp"
+  export E2E_RESULTS_DIR="$RESULTS"
+  export E2E_EXPECTED_DIR="$EXPECTED"
+  export RUXENC_MEM_KB
+
+  # xargs -P propagates SIGINT to its workers and exits, so Ctrl-C
+  # cancels the whole batch instead of being absorbed per-iteration
+  # like the old `for` loop. -0 + find -print0 keeps filenames with
+  # whitespace safe (none today, but cheap insurance).
+  find "$CASES" -maxdepth 1 -type f -name "$CASE_FILTER" -print0 \
+    | xargs -0 -P "$JOBS" -n 1 bash -c '_e2e_run_case_one "$1"' _ \
+    >> "$results"
+
+  # Fold worker results into the script-level counters + summary file.
+  while IFS=$'\t' read -r status name reason; do
+    if [ "$status" = "PASS" ]; then
+      PASS=$((PASS + 1))
+      printf 'PASS\t%s\n' "$name" >> "$RESULTS/summary.txt"
+    else
+      FAIL=$((FAIL + 1))
+      FAIL_NAMES+=("$name")
+      printf 'FAIL\t%s\t%s\n' "$name" "$reason" >> "$RESULTS/summary.txt"
+    fi
+  done < "$results"
+
+  rm -rf "$tmp"
 }
 
 # ── 3. ruxen CLI lifecycle ────────────────────────────────────────────
@@ -295,11 +394,11 @@ test_cli() {
   done
 }
 
-# ── 3b. ruxenc direct-compiler flags ──────────────────────────────────
+# ── 3b. ruxen compile: driver flags ───────────────────────────────────
 test_ruxenc_flags() {
-  banner "ruxenc: direct-compiler flags"
+  banner "ruxen compile: driver flags"
   local tmp prog
-  tmp="$(mktemp -d "${TMPDIR:-/tmp}/ruxen-ruxenc.XXXXXX")"
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/ruxen-compile.XXXXXX")"
   prog="$tmp/flagprog.rx"
   cat >"$prog" <<'EOF'
 def main
@@ -309,135 +408,116 @@ end
 EOF
 
   # baseline compile + run
-  if ruxenc "$prog" -o "$tmp/flagprog.bin" >"$tmp/baseline.log" 2>&1 \
+  if ruxen compile "$prog" -o "$tmp/flagprog.bin" >"$tmp/baseline.log" 2>&1 \
       && [ "$("$tmp/flagprog.bin")" = "5" ]; then
-    record_pass "ruxenc/baseline compile+run"
+    record_pass "compile/baseline"
   else
-    record_fail "ruxenc/baseline compile+run" "see $tmp/baseline.log"
+    record_fail "compile/baseline" "see $tmp/baseline.log"
   fi
 
   # --emit variants: the compiler should print something & exit 0,
   # without linking a binary.
   for kind in tokens ast hir mir; do
-    if ruxenc "$prog" --emit="$kind" >"$tmp/emit-$kind.log" 2>&1 \
+    if ruxen compile "$prog" --emit="$kind" >"$tmp/emit-$kind.log" 2>&1 \
         && [ -s "$tmp/emit-$kind.log" ]; then
-      record_pass "ruxenc/--emit=$kind"
+      record_pass "compile/--emit=$kind"
     else
-      record_fail "ruxenc/--emit=$kind" "empty output or nonzero exit"
+      record_fail "compile/--emit=$kind" "empty output or nonzero exit"
     fi
   done
 
   # --backend=cranelift (default path)
-  if ruxenc "$prog" --backend=cranelift -o "$tmp/cl.bin" >"$tmp/cl.log" 2>&1; then
-    record_pass "ruxenc/--backend=cranelift"
+  if ruxen compile "$prog" --backend=cranelift -o "$tmp/cl.bin" >"$tmp/cl.log" 2>&1; then
+    record_pass "compile/--backend=cranelift"
   else
-    record_fail "ruxenc/--backend=cranelift" "see $tmp/cl.log"
+    record_fail "compile/--backend=cranelift" "see $tmp/cl.log"
   fi
 
   # --backend=llvm
   #
-  # The LLVM 18 backend is a v1.1 goal — the shipped `ruxenc` is built without
+  # The LLVM 18 backend is a v1.1 goal — the shipped driver is built without
   # the `llvm` Cargo feature, so passing `--backend=llvm` is expected to exit
   # non-zero with a clear "LLVM backend not available" diagnostic. That is an
   # accepted v1 outcome and must NOT be treated as a regression. Only mark the
   # fixture as failed if the binary crashes, produces no diagnostic, or (once
   # the feature is enabled) silently emits a broken executable.
-  ruxenc "$prog" --backend=llvm -o "$tmp/llvm.bin" >"$tmp/llvm.log" 2>&1
+  ruxen compile "$prog" --backend=llvm -o "$tmp/llvm.bin" >"$tmp/llvm.log" 2>&1
   llvm_rc=$?
   if [ "$llvm_rc" -eq 0 ] && [ -x "$tmp/llvm.bin" ] && [ "$("$tmp/llvm.bin")" = "5" ]; then
     # Full LLVM codegen path is live and working.
-    record_pass "ruxenc/--backend=llvm"
+    record_pass "compile/--backend=llvm"
   elif [ "$llvm_rc" -ne 0 ] \
       && grep -q "LLVM backend not available" "$tmp/llvm.log"; then
     # Accepted v1 outcome: feature not compiled in.
-    record_pass "ruxenc/--backend=llvm (feature disabled — v1.1)"
+    record_pass "compile/--backend=llvm (feature disabled — v1.1)"
   else
-    record_fail "ruxenc/--backend=llvm" "see $tmp/llvm.log"
+    record_fail "compile/--backend=llvm" "see $tmp/llvm.log"
   fi
 
   # --opt-level variants
   for lvl in 0 1 2 3 s z; do
-    if ruxenc "$prog" --opt-level=$lvl -o "$tmp/opt-$lvl.bin" \
+    if ruxen compile "$prog" --opt-level=$lvl -o "$tmp/opt-$lvl.bin" \
         >"$tmp/opt-$lvl.log" 2>&1; then
-      record_pass "ruxenc/--opt-level=$lvl"
+      record_pass "compile/--opt-level=$lvl"
     else
-      record_fail "ruxenc/--opt-level=$lvl" "see $tmp/opt-$lvl.log"
+      record_fail "compile/--opt-level=$lvl" "see $tmp/opt-$lvl.log"
     fi
   done
 
   # --force (ignore cache)
-  if ruxenc "$prog" --force -o "$tmp/force.bin" >"$tmp/force.log" 2>&1; then
-    record_pass "ruxenc/--force"
+  if ruxen compile "$prog" --force -o "$tmp/force.bin" >"$tmp/force.log" 2>&1; then
+    record_pass "compile/--force"
   else
-    record_fail "ruxenc/--force" "see $tmp/force.log"
+    record_fail "compile/--force" "see $tmp/force.log"
   fi
 
   # --verbose — should emit [cache] lines per docs
-  if ruxenc "$prog" --verbose -o "$tmp/verbose.bin" >"$tmp/verbose.log" 2>&1; then
-    record_pass "ruxenc/--verbose"
+  if ruxen compile "$prog" --verbose -o "$tmp/verbose.bin" >"$tmp/verbose.log" 2>&1; then
+    record_pass "compile/--verbose"
   else
-    record_fail "ruxenc/--verbose" "see $tmp/verbose.log"
+    record_fail "compile/--verbose" "see $tmp/verbose.log"
   fi
 
   # fmt in place — input is canonical by construction (single simple fn)
   cp "$prog" "$tmp/fmt_in.rx"
-  if ruxenc fmt "$tmp/fmt_in.rx" >"$tmp/fmt.log" 2>&1; then
-    record_pass "ruxenc/fmt"
+  if ruxen fmt "$tmp/fmt_in.rx" >"$tmp/fmt.log" 2>&1; then
+    record_pass "fmt"
   else
-    record_fail "ruxenc/fmt" "see $tmp/fmt.log"
+    record_fail "fmt" "see $tmp/fmt.log"
   fi
 
   # fmt --check on canonical file — should exit 0
-  if ruxenc fmt --check "$tmp/fmt_in.rx" >"$tmp/fmt-check.log" 2>&1; then
-    record_pass "ruxenc/fmt --check (canonical)"
+  if ruxen fmt --check "$tmp/fmt_in.rx" >"$tmp/fmt-check.log" 2>&1; then
+    record_pass "fmt --check (canonical)"
   else
-    record_fail "ruxenc/fmt --check (canonical)" "see $tmp/fmt-check.log"
+    record_fail "fmt --check (canonical)" "see $tmp/fmt-check.log"
   fi
 
   # fmt --diff on already-formatted — no diff output expected
-  if ruxenc fmt --diff "$tmp/fmt_in.rx" >"$tmp/fmt-diff.log" 2>&1 \
+  if ruxen fmt --diff "$tmp/fmt_in.rx" >"$tmp/fmt-diff.log" 2>&1 \
       && [ ! -s "$tmp/fmt-diff.log" ]; then
-    record_pass "ruxenc/fmt --diff (no changes)"
+    record_pass "fmt --diff (no changes)"
   else
-    record_fail "ruxenc/fmt --diff (no changes)" "non-empty diff or error"
+    record_fail "fmt --diff (no changes)" "non-empty diff or error"
   fi
 
   # fmt --stdin
-  if echo 'def main;puts "x";end' | ruxenc fmt --stdin >"$tmp/fmt-stdin.log" 2>&1 \
+  if echo 'def main;puts "x";end' | ruxen fmt --stdin >"$tmp/fmt-stdin.log" 2>&1 \
       && [ -s "$tmp/fmt-stdin.log" ]; then
-    record_pass "ruxenc/fmt --stdin"
+    record_pass "fmt --stdin"
   else
-    record_fail "ruxenc/fmt --stdin" "see $tmp/fmt-stdin.log"
+    record_fail "fmt --stdin" "see $tmp/fmt-stdin.log"
   fi
 
-  # clean — project cache (requires running inside a built project)
-  local cleantmp="$tmp/cleanproj"
-  mkdir -p "$cleantmp/src"
-  cat >"$cleantmp/Ruxen.toml" <<'EOF'
-[package]
-name = "cleanproj"
-version = "0.1.0"
-edition = "2026"
-EOF
-  cp "$prog" "$cleantmp/src/main.rx"
-  if (cd "$cleantmp" && ruxen build >/dev/null 2>&1 \
-      && ruxenc clean >"$tmp/clean.log" 2>&1); then
-    record_pass "ruxenc/clean"
-  else
-    record_fail "ruxenc/clean" "see $tmp/clean.log"
-  fi
-
-  # clean --global — resets global incremental cache
-  if ruxenc clean --global >"$tmp/clean-global.log" 2>&1; then
-    record_pass "ruxenc/clean --global"
-  else
-    record_fail "ruxenc/clean --global" "see $tmp/clean-global.log"
-  fi
+  # The legacy `ruxenc clean` / `ruxenc clean --global` cache-reset
+  # subcommands aren't exposed on the unified `ruxen` driver — the
+  # only public surface is `ruxen clean` (which removes the project
+  # target/ dir and is already covered by test_cli).
 }
 
-# ── 3c. ruxenc negative test: top-level code must error or timeout ────
+# ── 3c. negative test: top-level code must error or timeout ───────────
 test_ruxenc_toplevel_hang() {
-  banner "ruxenc: top-level code must not hang"
+  banner "ruxen compile: top-level code must not hang"
   local tmp
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/ruxen-hang.XXXXXX")"
   cat >"$tmp/bad.rx" <<'EOF'
@@ -449,20 +529,20 @@ EOF
   # Compiler should exit (with either success or a parse error) in <5s.
   # An infinite-loop/hang is a failure.
   local rc=0
-  if ! (timeout 5 ruxenc "$tmp/bad.rx" -o "$tmp/bad.bin" \
+  if ! (timeout 5 ruxen compile "$tmp/bad.rx" -o "$tmp/bad.bin" \
         >"$tmp/hang.log" 2>&1); then
     rc=$?
   fi
   if [ "$rc" -eq 124 ]; then
-    record_fail "ruxenc/no-hang top-level" "compiler timed out (>5s)"
+    record_fail "compile/no-hang top-level" "compiler timed out (>5s)"
   else
-    record_pass "ruxenc/no-hang top-level (exit=$rc)"
+    record_pass "compile/no-hang top-level (exit=$rc)"
   fi
 }
 
-# ── 4. ruxen-repl scripted session ────────────────────────────────────
+# ── 4. ruxen repl: scripted session ───────────────────────────────────
 test_repl() {
-  banner "ruxen-repl: scripted session"
+  banner "ruxen repl: scripted session"
   local tmp
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/ruxen-repl.XXXXXX")"
 
@@ -474,7 +554,7 @@ test_repl() {
     return
   fi
 
-  ruxen-repl <"$SCRIPTS/repl_session.in" >"$tmp/repl.out" 2>&1
+  ruxen repl <"$SCRIPTS/repl_session.in" >"$tmp/repl.out" 2>&1
 
   # Strip ANSI escapes, blank lines, banner, 'Goodbye!' — compare tokens.
   sed -E 's/\x1b\[[0-9;]*m//g' "$tmp/repl.out" \
@@ -492,69 +572,129 @@ test_repl() {
   fi
 }
 
-# ── 4b. ruxen-repl: fixture parity ────────────────────────────────────
-# For each ruxenc case, translate to REPL input (strip `def main` wrapper
-# so top-level items + main body become REPL inputs), pipe through
-# ruxen-repl, diff against the same expected/*.out as the compile test.
-# This surfaces REPL↔ruxenc divergences. Fixtures listed in REPL_KNOWN_SKIP
-# exercise features the REPL genuinely can't model without a redesign
-# (mutation persistence across inputs, JIT paths for certain features) —
+# ── 4b. ruxen repl: fixture parity ────────────────────────────────────
+# For each compile-case fixture, translate to REPL input (strip
+# `def main` wrapper so top-level items + main body become REPL
+# inputs), pipe through `ruxen repl`, diff against the same
+# expected/*.out as the compile test. This surfaces compile↔REPL
+# divergences. Fixtures listed in REPL_KNOWN_SKIP exercise features
+# the REPL genuinely can't model without a redesign (mutation
+# persistence across inputs, JIT paths for certain features) —
 # those are reported separately as "skip" and not counted as failures.
 REPL_KNOWN_SKIP=()
 
-is_repl_skipped() {
-  local name="$1"
-  # Handle empty array under `set -u`: expand with default.
-  for s in "${REPL_KNOWN_SKIP[@]:-}"; do
-    [ -z "$s" ] && continue
-    [ "$s" = "$name" ] && return 0
-  done
-  return 1
+# Per-fixture REPL worker. Same shape as _e2e_run_case_one: stdout =
+# TSV status (PASS / FAIL / SKIP), stderr = live progress line. The
+# parent tallies stdout, summary.txt is folded in at the end.
+_e2e_repl_case_one() {
+  local src="$1"
+  local tmp="$E2E_REPL_TMP"
+  local base expect_file name
+  base="$(basename "$src" .rx)"
+  expect_file="$E2E_EXPECTED_DIR/$base.out"
+  name="repl-case/$base"
+
+  [ -f "$expect_file" ] || {
+    # No expected output → not a REPL parity candidate. Emit a
+    # sentinel so the parent's "total" count matches the old loop.
+    printf 'SKIP\t%s\tno-expected\n' "$name"
+    return
+  }
+
+  if _e2e_is_repl_skipped "$base"; then
+    printf 'SKIP\t%s\tknown-gap\n' "$name"
+    printf '  \033[33mSKIP\033[0m  %s  \033[2m(known REPL gap)\033[0m\n' "$name" >&2
+    return
+  fi
+
+  python3 "$E2E_SCRIPTS_DIR/translate_to_repl.py" <"$src" >"$tmp/$base.in"
+  # Capture stdout separately from stderr — fixtures assert stdout only.
+  # panic! / eputs / diagnostic output belongs on stderr and must not
+  # corrupt the diff. Nonzero exit is acceptable as long as stdout
+  # matches — e.g. panic! fixtures print to stdout then exit 101.
+  #
+  # Run in a per-fixture cwd so any on-disk cache the JIT touches is
+  # isolated from concurrent workers (cf. the incremental-manifest
+  # race in `_e2e_run_case_one`).
+  local work="$tmp/work-$base"
+  mkdir -p "$work"
+  ( cd "$work" && timeout 15 ruxen repl <"$tmp/$base.in" >"$tmp/$base.raw" 2>"$tmp/$base.err" ) || true
+  # Strip REPL chrome (banner, `=>` result/def lines, Goodbye, prompts),
+  # then trim only LEADING and TRAILING blank lines. Interior blanks are
+  # real program output (e.g. a fixture that `puts ""` between records)
+  # and must survive — the AOT `.out` fixtures contain them. The old
+  # `grep -v '^$'` deleted every blank line and mismatched any program
+  # that prints one.
+  sed -E 's/\x1b\[[0-9;]*m//g' "$tmp/$base.raw" \
+    | grep -vE '^(Ruxen.*REPL|Goodbye|=>|Available commands:|State cleared|\s*:)' \
+    | awk '{ l[NR] = $0 }
+           END {
+             s = 1;  while (s <= NR && l[s] ~ /^[[:space:]]*$/) s++;
+             f = NR; while (f >= s  && l[f] ~ /^[[:space:]]*$/) f--;
+             for (i = s; i <= f; i++) print l[i];
+           }' \
+    > "$tmp/$base.clean"
+
+  if diff -u "$expect_file" "$tmp/$base.clean" >"$tmp/$base.diff" 2>&1; then
+    printf 'PASS\t%s\t\n' "$name"
+    printf '  \033[32mPASS\033[0m  %s\n' "$name" >&2
+  else
+    cp "$tmp/$base.clean" "$E2E_RESULTS_DIR/repl_$base.actual.out" 2>/dev/null
+    cp "$tmp/$base.diff"  "$E2E_RESULTS_DIR/repl_$base.diff" 2>/dev/null
+    printf 'FAIL\t%s\tREPL diverges from compile\n' "$name"
+    printf '  \033[31mFAIL\033[0m  %s  \033[2m(REPL diverges from compile)\033[0m\n' "$name" >&2
+  fi
 }
 
+_e2e_is_repl_skipped() {
+  local n="$1"
+  # Convert the (currently empty) REPL_KNOWN_SKIP env list into a
+  # newline-separated lookup. Exported as a single colon-delimited
+  # string from the parent so xargs subshells can read it.
+  case ":${E2E_REPL_SKIP:-}:" in
+    *":$n:"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+export -f _e2e_repl_case_one _e2e_is_repl_skipped
+
 test_repl_cases() {
-  banner "ruxen-repl: fixture parity (translate .rx → REPL → diff)"
-  local tmp total=0 passed=0 failed=0 skipped=0
+  banner "ruxen repl: fixture parity (translate .rx → REPL → diff) ($JOBS jobs)"
+  local tmp results
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/ruxen-repl-cases.XXXXXX")"
+  results="$tmp/results.tsv"
+  : > "$results"
 
-  for src in "$CASES"/*.rx; do
-    [ -f "$src" ] || continue
-    local base expect_file
-    base="$(basename "$src" .rx)"
-    expect_file="$EXPECTED/$base.out"
-    [ -f "$expect_file" ] || continue
-    total=$((total + 1))
-    local name="repl-case/$base"
-
-    if is_repl_skipped "$base"; then
-      skipped=$((skipped + 1))
-      printf "  %sSKIP%s  %s  %s(known REPL gap)%s\n" "$YELLOW" "$RESET" \
-        "$name" "$DIM" "$RESET"
-      continue
-    fi
-
-    python3 "$SCRIPTS/translate_to_repl.py" <"$src" >"$tmp/$base.in"
-    # Capture stdout separately from stderr — fixtures assert stdout only.
-    # panic! / eputs / diagnostic output belongs on stderr and must not
-    # corrupt the diff. Nonzero exit is acceptable as long as stdout
-    # matches — e.g. panic! fixtures print to stdout then exit 101.
-    timeout 15 ruxen-repl <"$tmp/$base.in" >"$tmp/$base.raw" 2>"$tmp/$base.err" || true
-    sed -E 's/\x1b\[[0-9;]*m//g' "$tmp/$base.raw" \
-      | grep -vE '^(Ruxen.*REPL|Goodbye|=>|Available commands:|State cleared|\s*:)' \
-      | grep -v '^$' \
-      > "$tmp/$base.clean"
-
-    if diff -u "$expect_file" "$tmp/$base.clean" >"$tmp/$base.diff" 2>&1; then
-      passed=$((passed + 1))
-      printf "  %sPASS%s  %s\n" "$GREEN" "$RESET" "$name"
-    else
-      failed=$((failed + 1))
-      printf "  %sFAIL%s  %s  %s(REPL diverges from ruxenc)%s\n" \
-        "$RED" "$RESET" "$name" "$DIM" "$RESET"
-      cp "$tmp/$base.clean" "$RESULTS/repl_$base.actual.out" 2>/dev/null
-      cp "$tmp/$base.diff"  "$RESULTS/repl_$base.diff" 2>/dev/null
-    fi
+  export E2E_REPL_TMP="$tmp"
+  export E2E_RESULTS_DIR="$RESULTS"
+  export E2E_EXPECTED_DIR="$EXPECTED"
+  export E2E_SCRIPTS_DIR="$SCRIPTS"
+  # Fold REPL_KNOWN_SKIP into a colon-delimited string for the worker.
+  local skip_str=""
+  for s in "${REPL_KNOWN_SKIP[@]:-}"; do
+    [ -z "$s" ] && continue
+    skip_str="${skip_str}${s}:"
   done
+  export E2E_REPL_SKIP="${skip_str%:}"
+
+  find "$CASES" -maxdepth 1 -type f -name "$CASE_FILTER" -print0 \
+    | xargs -0 -P "$JOBS" -n 1 bash -c '_e2e_repl_case_one "$1"' _ \
+    >> "$results"
+
+  local passed=0 failed=0 skipped=0 total=0
+  while IFS=$'\t' read -r status name reason; do
+    case "$status" in
+      PASS) passed=$((passed + 1)); total=$((total + 1)) ;;
+      FAIL) failed=$((failed + 1)); total=$((total + 1)) ;;
+      SKIP)
+        if [ "$reason" = "no-expected" ]; then
+          : # not a candidate at all — don't count
+        else
+          skipped=$((skipped + 1)); total=$((total + 1))
+        fi
+        ;;
+    esac
+  done < "$results"
 
   printf "\n  %s%d/%d passed,%s %d skipped,%s %d failed%s\n" \
     "$GREEN" "$passed" "$total" "$YELLOW" "$skipped" "$RED" "$failed" "$RESET"
@@ -562,17 +702,19 @@ test_repl_cases() {
   # Roll failures into the main summary so they count; skips are informational.
   if [ "$failed" -gt 0 ]; then
     FAIL=$((FAIL + failed))
-    for _ in $(seq 1 "$failed"); do
-      FAIL_NAMES+=("repl-case/...")
-    done
+    while IFS=$'\t' read -r status name _; do
+      [ "$status" = "FAIL" ] && FAIL_NAMES+=("$name")
+    done < "$results"
   fi
   PASS=$((PASS + passed))
   printf "REPL-CASES\tpass=%d skipped=%d fail=%d\n" "$passed" "$skipped" "$failed" >> "$RESULTS/summary.txt"
+
+  rm -rf "$tmp"
 }
 
-# ── 5. ruxen-lsp initialize handshake ─────────────────────────────────
+# ── 5. ruxen lsp: initialize handshake ────────────────────────────────
 test_lsp() {
-  banner "ruxen-lsp: initialize handshake"
+  banner "ruxen lsp: initialize handshake"
   if ! command -v python3 >/dev/null 2>&1; then
     record_fail "lsp/initialize" "python3 not found"
     return
@@ -584,13 +726,13 @@ test_lsp() {
   fi
 }
 
-# ── 5b. ruxen-lsp feature tests ──────────────────────────────────────
+# ── 5b. ruxen lsp: feature tests ─────────────────────────────────────
 # Drives the server through did_open / did_change / did_save /
 # did_close, hover, goto_definition, and semantic_tokens. Each check
 # runs one assertion of the form "[ok] <name>" or "[FAIL] <name>" on
 # stdout; the overall exit code is nonzero on any failure.
 test_lsp_features() {
-  banner "ruxen-lsp: feature exercises"
+  banner "ruxen lsp: feature exercises"
   if ! command -v python3 >/dev/null 2>&1; then
     record_fail "lsp/features" "python3 not found"
     return

@@ -238,20 +238,38 @@ fn eval_top_level(session: &mut ReplSession, raw_input: &str, item: TopLevelItem
                 .iter()
                 .any(|d| d.level == DiagnosticLevel::Error);
 
-            // Some functions (e.g. `def with_x; yield 42; end`) can't be
-            // fully inferred without a call site — the block parameter's
-            // type is free. When that happens, just record the def and
-            // wait for a later input (usually the call) to force inference
-            // to ground out. We still report the def as accepted.
+            // Some defs can't compile in isolation and must wait for a
+            // later input. Two cases:
+            //
+            //  1. Inference can't ground out without a call site — e.g.
+            //     `def with_x; yield 42; end` (the block param's type is
+            //     free until called).
+            //  2. FORWARD REFERENCES — `def write_payload` calls
+            //     `finish_write`, which is defined further down the same
+            //     file. Fed line-by-line, the REPL sees the caller before
+            //     the callee, so resolution reports "undefined function
+            //     finish_write". Recording the def (instead of erroring)
+            //     lets it compile once the callee arrives: every
+            //     subsequent input rebuilds the program from the full
+            //     `func_defs` set, and the two-phase declare-then-define
+            //     in the compile path resolves the cycle.
+            //
+            // In both cases we record the def and report it accepted; a
+            // genuine typo simply surfaces when the symbol is finally
+            // called.
             if has_errors {
-                let only_cant_infer = type_result
+                let only_deferrable = type_result
                     .diagnostics
                     .iter()
                     .filter(|d| d.level == DiagnosticLevel::Error)
                     .all(|d| {
-                        d.message.contains("could not infer") || d.message.contains("type mismatch")
+                        let m = &d.message;
+                        m.contains("could not infer")
+                            || m.contains("type mismatch")
+                            || m.contains("undefined function")
+                            || m.contains("undefined variable")
                     });
-                if only_cant_infer {
+                if only_deferrable {
                     session.func_defs.push(func_def);
                     session.record_input(raw_input);
                     return EvalResult::Ok(Some(format!(
@@ -274,39 +292,23 @@ fn eval_top_level(session: &mut ReplSession, raw_input: &str, item: TopLevelItem
                 return EvalResult::Error(display::format_error(&msg));
             }
 
-            // MIR lowering
-            let mut lowerer = Lowerer::new(&type_result.symbols);
-            let mir_program = match lowerer.lower_program(&type_result.program) {
-                Ok(mir) => mir,
-                Err(e) => return EvalResult::Error(display::format_error(&e)),
-            };
-            if let Err(e) = session.jit.declare_program_data(&mir_program) {
-                return EvalResult::Error(display::format_error(&e));
-            }
-
-            // Two-phase: declare all newly-introduced functions first so
-            // forward references resolve. Then compile bodies, then finalize.
-            let mut to_define: Vec<&MirFunction> = Vec::new();
-            for mir_func in &mir_program.functions {
-                if session.jit.is_declared(&mir_func.name) {
-                    continue;
-                }
-                if let Err(e) = session.jit.declare_function(mir_func) {
-                    return EvalResult::Error(display::format_error(&e));
-                }
-                to_define.push(mir_func);
-            }
-            if let Err(e) = session.jit.define_program_data(&mir_program) {
-                return EvalResult::Error(display::format_error(&e));
-            }
-            for mir_func in to_define {
-                if let Err(e) = session.jit.compile_function(mir_func) {
-                    return EvalResult::Error(display::format_error(&e));
-                }
-            }
-            if let Err(e) = session.jit.finalize() {
-                return EvalResult::Error(display::format_error(&e));
-            }
+            // Do NOT JIT-compile the body now — only record the def and
+            // let the next expression/call site compile the accumulated
+            // `func_defs` together (compile_and_execute's two-phase pass).
+            //
+            // Why lazy: overloaded defs (`def classify(Int)` /
+            // `def classify(String)` / `def classify(Bool)`) mangle to
+            // `classify`, `classify__overloadN`, … and exactly one keeps
+            // the bare `classify`. Which one does depends on how many
+            // overloads exist at lowering time. Eager-compiling each def
+            // as it arrives froze `classify` to the FIRST overload (Int);
+            // when a later overload reassigned the bare name (Bool), the
+            // JIT's already-defined `classify` symbol couldn't be
+            // redefined, so `classify(true)` dispatched to the stale Int
+            // body. Deferring compilation until the whole set is present
+            // makes every overload compile once, under its final name.
+            // (Type + borrow checking above already ran, so genuine
+            // errors are still reported at definition time.)
 
             // Extract param info for display — look at the just-defined fn
             // (matched by name) in the typechecked HIR.

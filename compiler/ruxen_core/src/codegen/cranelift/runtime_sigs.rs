@@ -10,7 +10,13 @@ use cranelift_codegen::ir::types::{self, Type};
 /// Known runtime function signatures.
 ///
 /// Returns `(param_types, optional_return_type)`.
-pub(super) fn runtime_signature(name: &str) -> Option<(Vec<Type>, Option<Type>)> {
+///
+/// `pub` (re-exported from `codegen::cranelift`) so the REPL's separate
+/// JIT backend can share this single authoritative ABI table instead of
+/// maintaining a drifting subset — a missing entry there silently
+/// derives the wrong width from the HIR (`Char`→i32) and the JIT
+/// verifier rejects the call.
+pub fn runtime_signature(name: &str) -> Option<(Vec<Type>, Option<Type>)> {
     match name {
         // I/O
         "puts" | "ruxen_puts" => Some((vec![types::I64], None)),

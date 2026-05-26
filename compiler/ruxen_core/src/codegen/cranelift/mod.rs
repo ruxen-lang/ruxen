@@ -17,6 +17,11 @@ mod helpers;
 mod runtime_sigs;
 mod translation_env;
 
+/// The authoritative C-runtime ABI signature table. Re-exported so the
+/// REPL's standalone JIT backend (`ruxen_repl`) shares it rather than
+/// keeping a subset that drifts out of sync.
+pub use runtime_sigs::runtime_signature;
+
 use std::collections::{HashMap, HashSet};
 
 use cranelift_codegen::ir::types::{self, Type};

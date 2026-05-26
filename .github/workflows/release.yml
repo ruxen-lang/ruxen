@@ -65,15 +65,17 @@ jobs:
             -p ruxen_cli --test installed_pkg_manager \
             -p ruxen_repl --test installed_repl
 
-      - name: Build release binaries
+      - name: Build release binary
         shell: bash
         run: |
+          # One binary ships: `ruxen`. Building `-p ruxen_cli` transitively
+          # builds ruxenc / ruxen_lsp / ruxen_repl as libraries (they no
+          # longer produce their own bins; everything routes through
+          # `ruxen <subcommand>`).
           if [ "${{ matrix.cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }} \
-              -p ruxen_cli -p ruxenc -p ruxen_lsp -p ruxen_repl
+            cross build --release --target ${{ matrix.target }} --bin ruxen
           else
-            cargo build --release --target ${{ matrix.target }} \
-              -p ruxen_cli -p ruxenc -p ruxen_lsp -p ruxen_repl
+            cargo build --release --target ${{ matrix.target }} --bin ruxen
           fi
 
       - name: Stage artifacts
@@ -86,12 +88,8 @@ jobs:
           mkdir -p "${STAGE}/bin"
 
           BIN_DIR="target/${TARGET}/release"
-          for bin in ruxen ruxenc ruxen_lsp ruxen_repl; do
-            if [ -f "${BIN_DIR}/${bin}" ]; then
-              cp "${BIN_DIR}/${bin}" "${STAGE}/bin/${bin}"
-              chmod +x "${STAGE}/bin/${bin}"
-            fi
-          done
+          cp "${BIN_DIR}/ruxen" "${STAGE}/bin/ruxen"
+          chmod +x "${STAGE}/bin/ruxen"
 
           cp README.md LICENSE* "${STAGE}/" 2>/dev/null || true
 

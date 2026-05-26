@@ -3,6 +3,7 @@ crates/*/target/
 
 CLAUDE.md
 .claude-flow/
+.claude/settings.local.json
 .mcp.json
 .swarm/
 .DS_Store

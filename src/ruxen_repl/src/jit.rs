@@ -301,6 +301,83 @@ impl JITCodeGen {
     /// intentionally idempotent across programs that re-emit the same stdlib
     /// metadata.
     pub fn declare_program_data(&mut self, program: &MirProgram) -> Result<(), String> {
+        // ── FFI declarations ─────────────────────────────────────────────
+        // Mirror the batch backend's `CodeGen::compile_program` Pass 0
+        // (compiler/ruxen_core/src/codegen/cranelift/mod.rs): declare every
+        // `lib`/`extern` function — including the ones merged in from the
+        // stdlib bootstrap (`String.new as "ruxen_string_new"`, the fs /
+        // async symbols, …) — as an imported function, and register it in
+        // `declared_fns` under BOTH `ffi_fn.name` (the linked C symbol) AND
+        // `ffi_fn.ruxen_name` (the mangled call-site identifier).
+        //
+        // Without this, a paren-less zero-arg static FFI call like
+        // `let s = String.new` lowers to a MIR `Call { callee: "String_new" }`
+        // (the ruxen_name, NOT the `as`-aliased C symbol), and
+        // `get_or_declare_func` falls through to declaring a raw import
+        // literally named `String_new`. dlsym(RTLD_DEFAULT) can't resolve
+        // that — it isn't a `ruxen_*` runtime symbol — so the JIT panics
+        // with "can't resolve symbol String_new". Declaring the import here
+        // under the C name and aliasing the ruxen_name to the same FuncId
+        // makes the call resolve to `ruxen_string_new` exactly as the AOT
+        // path does.
+        for lib in &program.ffi_libs {
+            for ffi_fn in &lib.functions {
+                // Reuse an existing declaration of the C symbol if one was
+                // already made (e.g. via the `runtime_signature` path on a
+                // prior input) so we never declare the same import twice;
+                // otherwise declare it fresh.
+                let func_id = if let Some(&id) = self.declared_fns.get(&ffi_fn.name) {
+                    id
+                } else {
+                    let call_conv = self.module.isa().default_call_conv();
+                    let mut sig = Signature::new(call_conv);
+                    // Prefer the hand-maintained ABI table (`runtime_signature`)
+                    // — it is the authoritative width for each runtime symbol
+                    // and matches what call sites emit. Deriving purely from
+                    // the HIR `param_types` via `ty_to_cranelift` widens
+                    // `Char`→i32, but the REPL passes chars as i64, so the
+                    // verifier rejects the call ("arg has type i64, expected
+                    // i32"). Fall back to the HIR types for user FFI symbols
+                    // the table doesn't know.
+                    match runtime_signature(&ffi_fn.name) {
+                        Some((param_tys, ret_ty)) => {
+                            for p in param_tys {
+                                sig.params.push(AbiParam::new(p));
+                            }
+                            if let Some(r) = ret_ty {
+                                sig.returns.push(AbiParam::new(r));
+                            }
+                        }
+                        None => {
+                            for param_ty in &ffi_fn.param_types {
+                                if let Some(cl_ty) = ty_to_cranelift(param_ty) {
+                                    sig.params.push(AbiParam::new(cl_ty));
+                                }
+                            }
+                            if let Some(ref ret_ty) = ffi_fn.return_type {
+                                if let Some(cl_ty) = ty_to_cranelift(ret_ty) {
+                                    sig.returns.push(AbiParam::new(cl_ty));
+                                }
+                            }
+                        }
+                    }
+                    let id = self
+                        .module
+                        .declare_function(&ffi_fn.name, Linkage::Import, &sig)
+                        .map_err(|e| format!("declare FFI function '{}': {}", ffi_fn.name, e))?;
+                    self.declared_fns.insert(ffi_fn.name.clone(), id);
+                    id
+                };
+                // Alias the mangled call-site name (`String_new`) onto the
+                // same FuncId as the linked C symbol (`ruxen_string_new`).
+                if ffi_fn.ruxen_name != ffi_fn.name {
+                    self.declared_fns
+                        .entry(ffi_fn.ruxen_name.clone())
+                        .or_insert(func_id);
+                }
+            }
+        }
+
         for vt in &program.vtables {
             let sym = vt.symbol();
             if self.vtable_data.contains_key(&sym) {
@@ -1622,6 +1699,17 @@ fn simple_type_size(ty: &Ty) -> usize {
 }
 
 fn runtime_signature(name: &str) -> Option<(Vec<Type>, Option<Type>)> {
+    // Consult the compiler's authoritative ABI table first so this JIT
+    // backend stays in lockstep with the batch backend for every
+    // `ruxen_*` helper (208 entries and counting). The local table below
+    // only needs to cover REPL-only aliases the core table omits (the
+    // bare `puts`/`print`/etc. surface names). Without this delegation a
+    // symbol missing from the local table (e.g. `ruxen_string_push`)
+    // silently derived its width from the HIR `Char`→i32, and the JIT
+    // verifier rejected the i64 call arg.
+    if let Some(sig) = ruxen_core::codegen::cranelift::runtime_signature(name) {
+        return Some(sig);
+    }
     match name {
         "puts" | "ruxen_puts" => Some((vec![types::I64], None)),
         "eputs" | "ruxen_eputs" => Some((vec![types::I64], None)),

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """End-to-end LSP feature tests over stdio JSON-RPC.
 
-Exercises the shipped ruxen-lsp beyond the initialize handshake:
+Exercises the shipped `ruxen lsp` beyond the initialize handshake:
   - did_open → publishDiagnostics
   - did_open with an invalid program → non-empty diagnostics
   - did_save → re-diagnoses after a text change
@@ -83,12 +83,13 @@ def collect_until(stream, pred, max_messages: int = 40) -> dict | None:
 
 
 def resolve_binary() -> str | None:
+    # The LSP is a subcommand of the unified driver now: `ruxen lsp`.
     ws = os.environ.get("RUXEN_WORKSPACE")
     if ws:
-        candidate = os.path.join(ws, "target", "release", "ruxen-lsp")
+        candidate = os.path.join(ws, "target", "release", "ruxen")
         if os.path.isfile(candidate):
             return candidate
-    home = os.path.expanduser("~/.ruxen/bin/ruxen-lsp")
+    home = os.path.expanduser("~/.ruxen/bin/ruxen")
     if os.path.isfile(home):
         return home
     return None
@@ -96,7 +97,7 @@ def resolve_binary() -> str | None:
 
 def start_lsp(bin_path: str) -> subprocess.Popen:
     return subprocess.Popen(
-        [bin_path],
+        [bin_path, "lsp"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
@@ -170,7 +171,7 @@ def did_close(proc, uri: str) -> None:
 def main() -> int:
     bin_path = resolve_binary()
     if not bin_path:
-        print("lsp_features: ruxen-lsp not found", file=sys.stderr)
+        print("lsp_features: ruxen binary not found", file=sys.stderr)
         return 2
 
     proc = start_lsp(bin_path)

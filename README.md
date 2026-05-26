@@ -57,7 +57,6 @@ Verify it worked:
 
 ```bash
 ruxen --version
-ruxenc --version
 ```
 
 Other install options:
@@ -87,7 +86,8 @@ If you want to build from source instead:
 git clone https://github.com/ruxen-lang/ruxen.git
 cd ruxen
 cargo build --release
-# Binaries land in target/release/ (ruxen, ruxenc, ruxen-lsp, ruxen-repl)
+# Binary lands in target/release/ruxen — every subcommand
+# (build, run, compile, fmt, lsp, repl, …) routes through it.
 ```
 
 ## Quick Start
@@ -111,31 +111,31 @@ The first in-tree example is [`examples/01-cli-utility/`](examples/01-cli-utilit
 
 ```bash
 echo 'puts "Hello, Ruxen!"' > hello.rx
-ruxenc hello.rx
+ruxen compile hello.rx
 ./hello
 
 # Inspect compiler stages
-ruxenc --emit=tokens hello.rx
-ruxenc --emit=ast hello.rx
-ruxenc --emit=hir hello.rx
-ruxenc --emit=mir hello.rx
+ruxen compile hello.rx --emit=tokens
+ruxen compile hello.rx --emit=ast
+ruxen compile hello.rx --emit=hir
+ruxen compile hello.rx --emit=mir
 
 # Release build (LLVM backend, requires LLVM 18)
-ruxenc --release hello.rx
+ruxen compile hello.rx --release
 ```
 
 ### REPL
 
 ```bash
-ruxen-repl
+ruxen repl
 ```
 
 ### Format Code
 
 ```bash
-ruxenc fmt .                # format all .rx files
-ruxenc fmt --check .        # check without modifying
-ruxenc fmt --diff file.rx  # show unified diff
+ruxen fmt .                # format all .rx files
+ruxen fmt --check .        # check without modifying
+ruxen fmt --diff file.rx   # show unified diff
 ```
 
 ## Language at a Glance
@@ -225,14 +225,21 @@ let result = add.(3, 4)
 
 ## Toolchain
 
-| Binary | Purpose |
-|--------|---------|
-| `ruxen` | Package manager and build tool (`new`, `build`, `run`, `check`, `add`, `remove`, `clean`) |
-| `ruxenc` | Standalone compiler and formatter |
-| `ruxen-lsp` | Language Server Protocol server for editor integration |
-| `ruxen-repl` | Interactive REPL (Cranelift JIT) |
+Everything ships as one binary, `ruxen`. Subcommands:
 
-After installation all four binaries live in `~/.ruxen/bin/`.
+| Command | Purpose |
+|---------|---------|
+| `ruxen new` / `init` / `build` / `run` / `check` / `clean` | Project lifecycle |
+| `ruxen add` / `remove` / `update` / `tree` / `verify` | Dependency management |
+| `ruxen compile` | Low-level single-file driver (like `rustc`) — `--emit=tokens/ast/hir/mir`, `--release`, `--backend=...` |
+| `ruxen fmt` | Format `.rx` files (`--check`, `--diff`) |
+| `ruxen test` / `bench` | Test runner / microbenchmarks |
+| `ruxen repl` | Interactive REPL (Cranelift JIT) |
+| `ruxen lsp` | Language Server Protocol over stdio |
+| `ruxen explain <code>` | Explain a compiler error code |
+| `ruxen publish` / `upgrade` | Publish a release tag / upgrade the toolchain |
+
+After installation the `ruxen` binary lives in `~/.ruxen/bin/`.
 
 ### Editor Support
 
@@ -261,11 +268,12 @@ Two codegen backends:
 
 | Crate | Role |
 |-------|------|
-| `ruxen-core` | Compiler core — lexer, parser, type system, borrow checker, MIR, codegen, formatter |
-| `ruxenc` | Standalone compiler binary |
-| `ruxen-cli` | Package manager and build tool |
-| `ruxen-ide` | Error-resilient semantic analysis for editors |
-| `ruxen-lsp` | LSP server (tower-lsp) |
+| `ruxen_core` | Compiler core — lexer, parser, type system, borrow checker, MIR, codegen, formatter |
+| `ruxen_cli` | Unified `ruxen` binary — every subcommand routes through here |
+| `ruxenc` | Compile/fmt/test/bench driver library that `ruxen_cli` invokes |
+| `ruxen_repl` | Cranelift JIT REPL library + `libruxenrt` C runtime build |
+| `ruxen_lsp` | LSP server (tower-lsp) |
+| `ruxen_ide` | Error-resilient semantic analysis for editors |
 
 ## Implementation Status
 

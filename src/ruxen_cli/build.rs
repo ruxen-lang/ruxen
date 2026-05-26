@@ -2,21 +2,28 @@
 //!
 //! Why this exists: the `ruxen_repl` crate's build script compiles
 //! every per-package `runtime/*.c` source into a single
-//! `libruxenrt.a` and emits `cargo:rustc-link-arg=-Wl,-force_load,…`
-//! so its OWN `cdylib`/`bin` targets link the whole archive.
-//!
-//! Cargo, by design, does NOT propagate `rustc-link-arg` directives
-//! across package boundaries — they apply only to artifacts in the
-//! emitting package. The unified `ruxen` binary lives here in
-//! `ruxen_cli`, so without this build script its link command
-//! drops the runtime archive and the linker errors out with
-//! "_ruxen_vec_new" / "_ruxen_string_concat" / etc. undefined.
+//! `libruxenrt.a` and tells the linker to whole-archive it. On macOS
+//! it does so via `cargo:rustc-link-arg=-Wl,-force_load,…`, which
+//! cargo does NOT propagate across package boundaries — so the
+//! unified `ruxen` binary that lives in this crate would link
+//! without the runtime and fail with "_ruxen_vec_new" /
+//! "_ruxen_string_concat" / etc. undefined.
 //!
 //! Fix: `ruxen_repl/Cargo.toml` declares `links = "ruxenrt"` and its
 //! build.rs publishes the OUT_DIR via `cargo:lib_dir=…`. Cargo turns
 //! that into the env var `DEP_RUXENRT_LIB_DIR` for THIS build script,
-//! which we use to re-emit the platform-appropriate link args for the
+//! which we use to re-emit the macOS-specific link args for the
 //! `ruxen` bin.
+//!
+//! On Linux / other GNU-ld targets the REPL emits
+//! `cargo:rustc-link-lib=static:+whole-archive=ruxenrt`, which DOES
+//! propagate to dependent crates. Re-emitting the link directive
+//! here would inject `-lruxenrt` a second time and the archive would
+//! get pulled into the link command twice — surfacing as a wall of
+//! "duplicate symbol" errors from rust-lld. So on non-Darwin we only
+//! emit `--export-dynamic` (a non-propagating link-arg that the bin
+//! needs for the REPL's dlsym(RTLD_DEFAULT) lookups), and leave the
+//! archive itself to the propagated link-lib directive.
 
 use std::env;
 
@@ -31,26 +38,22 @@ fn main() {
     );
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
 
-    // The bin lives in this crate, so the link args take effect here.
-    // Mirror the platform branch in ruxen_repl/build.rs exactly — same
-    // archive, same dlsym(RTLD_DEFAULT) requirement.
     if target_os == "macos" || target_os == "ios" {
+        // macOS ld doesn't honour `+whole-archive`; ruxen_repl uses
+        // `-force_load` via `cargo:rustc-link-arg`, which doesn't
+        // propagate. Re-emit the same args scoped to the `ruxen` bin.
         println!("cargo:rustc-link-arg-bin=ruxen=-Wl,-force_load,{archive_dir}/libruxenrt.a");
         println!("cargo:rustc-link-arg-bin=ruxen=-Wl,-export_dynamic");
         // std.rand's runtime/rand.c calls SecRandomCopyBytes.
         println!("cargo:rustc-link-arg-bin=ruxen=-framework");
         println!("cargo:rustc-link-arg-bin=ruxen=Security");
-    } else {
-        // GNU ld / lld: re-issue the static lib with whole-archive
-        // applied, scoped to the `ruxen` bin only. The
-        // `rustc-link-search` is already in scope because cargo's
-        // dependency-link propagation forwards `cargo:rustc-link-search`
-        // from ruxen_repl's build.rs.
-        println!("cargo:rustc-link-arg-bin=ruxen=-Wl,--whole-archive");
-        println!("cargo:rustc-link-arg-bin=ruxen=-lruxenrt");
-        println!("cargo:rustc-link-arg-bin=ruxen=-Wl,--no-whole-archive");
-        if target_os == "linux" || target_os == "android" {
-            println!("cargo:rustc-link-arg-bin=ruxen=-Wl,--export-dynamic");
-        }
+    } else if target_os == "linux" || target_os == "android" {
+        // The archive itself is pulled in by the propagating
+        // `rustc-link-lib=static:+whole-archive=ruxenrt` from
+        // ruxen_repl. We only need `--export-dynamic` here so the
+        // REPL's cranelift-jit can dlsym(RTLD_DEFAULT) the runtime
+        // symbols at runtime — that's a `link-arg`, which does NOT
+        // propagate, so it must be re-emitted in this crate.
+        println!("cargo:rustc-link-arg-bin=ruxen=-Wl,--export-dynamic");
     }
 }
