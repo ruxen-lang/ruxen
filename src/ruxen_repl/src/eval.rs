@@ -119,17 +119,73 @@ fn eval_parsed_input(
     }
 }
 
+/// Names of every session-level `let`/`var` binding recorded so far.
+/// Used to decide whether a side-effecting statement participates in
+/// variable state (and therefore must be replayed) or is independent.
+fn session_var_names(session: &ReplSession) -> std::collections::HashSet<String> {
+    session
+        .let_bindings
+        .iter()
+        .filter_map(|b| {
+            if let Pattern::Identifier { name, .. } = &b.pattern {
+                Some(name.clone())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// True if `src` mentions any session variable name as a whole word.
+/// A statement that mutates session state must name the variable it
+/// mutates, so this (over-)approximates "participates in variable
+/// state". False positives (a name appearing only inside a string
+/// literal) merely cause a harmless extra replay of an idempotent
+/// statement; they never lose state.
+fn references_session_var(src: &str, vars: &std::collections::HashSet<String>) -> bool {
+    if vars.is_empty() {
+        return false;
+    }
+    let mut word = String::new();
+    for ch in src.chars().chain(std::iter::once(' ')) {
+        if ch.is_alphanumeric() || ch == '_' {
+            word.push(ch);
+        } else {
+            if !word.is_empty() {
+                if vars.contains(&word) {
+                    return true;
+                }
+                word.clear();
+            }
+        }
+    }
+    false
+}
+
 /// Evaluate an expression by wrapping it in a function, compiling, and executing.
 fn eval_expression(session: &mut ReplSession, raw_input: &str, expr: Expr) -> EvalResult {
     let fn_name = session.next_repl_fn_name();
     let span = expr.span.clone();
-    let side_effecting = is_side_effect_expr(&expr);
+    // Record for replay only when the statement BOTH has side effects
+    // AND touches session variable state. The cumulative-replay model
+    // re-runs every recorded statement on each later input to rebuild
+    // variable values; a side-effecting statement that establishes no
+    // variable state (e.g. `symlink(...)`, `File.write(...)`, a bare
+    // `puts`, a subprocess via `Command`) gains nothing from replay and
+    // actively breaks under it — a second `symlink(...).expect!()`
+    // panics because the link now exists, a subprocess re-runs and
+    // double-prints. Its world-effect (file on disk, stdout) already
+    // happened once; only variable VALUES need rebuilding, and those
+    // are rebuilt by replaying the statements that name them.
+    let session_vars = session_var_names(session);
+    let side_effecting =
+        is_side_effect_expr(&expr) && references_session_var(raw_input, &session_vars);
 
-    // Wrapper body: replay the full cumulative statement history first
-    // so prior `let mut` bindings, assignments, and mutating method
-    // calls all take effect before the new expression runs. For
-    // side-effecting inputs, the expression is also appended to the
-    // cumulative history on success.
+    // Wrapper body: replay the recorded statement history first so prior
+    // `let mut` bindings, assignments, and mutating method calls all
+    // take effect before the new expression runs. For side-effecting
+    // inputs that touch session state, the expression is also appended
+    // to the cumulative history on success.
     let mut statements: Vec<Statement> = session.all_statements.clone();
     statements.push(Statement::Expression(expr.clone()));
 
@@ -618,15 +674,25 @@ fn compile_and_execute(
     }
 
     // Drain the capture buffer produced by this cumulative replay.
-    // The prior-input output is a strict prefix of this run's output
-    // (replay is deterministic), so the suffix is what the newest input
-    // contributed.
+    // The newest input's output is whatever the replayed prefix didn't
+    // already produce. We locate it by LINE COUNT rather than a byte
+    // prefix: replaying a non-idempotent side effect can print
+    // different text the second time (e.g. a `symlink` that now finds
+    // the link already present emits an error line where it first
+    // emitted a success line), which breaks a `starts_with` prefix diff
+    // and used to dump the entire replay to stdout. Line-count skipping
+    // tolerates that text drift as long as the replayed prefix emits the
+    // same NUMBER of lines it did originally — true for the common case
+    // (and every fixture), though a prior statement whose output line
+    // count itself depends on mutated state could still mis-skip. That
+    // residual case is the replay model's inherent limit; the proper fix
+    // is persistent execution state (no replay), out of scope here.
     let captured = capture::take_all();
-    let new_output = if captured.starts_with(&session.prev_captured_output) {
-        captured[session.prev_captured_output.len()..].to_string()
-    } else {
-        captured.clone()
-    };
+    let prev_line_count = session.prev_captured_output.matches('\n').count();
+    let new_output: String = captured
+        .split_inclusive('\n')
+        .skip(prev_line_count)
+        .collect();
     if !new_output.is_empty() {
         use std::io::Write;
         let stdout = std::io::stdout();

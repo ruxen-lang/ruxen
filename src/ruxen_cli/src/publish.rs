@@ -55,11 +55,24 @@ pub fn publish(dry_run: bool, registry: Option<&str>) -> Result<(), String> {
     let tarball_name = format!("{}-{}.tar.gz", package.name, package.version);
     let tarball_path = project_dir.join(&tarball_name);
 
+    // Write the archive to a scratch path OUTSIDE the project tree, then
+    // move it in. Writing it into `project_dir` while taring `.` makes
+    // GNU tar observe the directory grow as the output file is written
+    // and abort with "file changed as we read it" (exit 1) — even though
+    // `--exclude=./*.tar.gz` keeps the tarball out of the archive
+    // contents, the enclosing directory still changed. A scratch path on
+    // the side sidesteps the race entirely.
+    let scratch = std::env::temp_dir().join(format!(
+        "ruxen-publish-{}-{}",
+        std::process::id(),
+        tarball_name
+    ));
+    let scratch_str = scratch.to_string_lossy().to_string();
     let status = Command::new("tar")
         .current_dir(&project_dir)
         .args([
             "-czf",
-            &tarball_name,
+            &scratch_str,
             "--exclude=./target",
             "--exclude=./tmp",
             "--exclude=./.git",
@@ -69,7 +82,17 @@ pub fn publish(dry_run: bool, registry: Option<&str>) -> Result<(), String> {
         .status()
         .map_err(|e| format!("failed to run `tar`: {}", e))?;
     if !status.success() {
+        let _ = std::fs::remove_file(&scratch);
         return Err(format!("tar failed (exit {})", status.code().unwrap_or(-1)));
+    }
+
+    // Move the finished archive into the project dir. `rename` is atomic
+    // but fails across filesystems (temp dir may be a different mount),
+    // so fall back to copy + remove.
+    if std::fs::rename(&scratch, &tarball_path).is_err() {
+        std::fs::copy(&scratch, &tarball_path)
+            .map_err(|e| format!("failed to move tarball into project: {}", e))?;
+        let _ = std::fs::remove_file(&scratch);
     }
 
     println!(

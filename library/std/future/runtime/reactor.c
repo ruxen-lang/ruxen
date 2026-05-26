@@ -780,8 +780,14 @@ void ruxen_reactor_wake(int64_t reactor_handle) {
      * — either 8 bytes or -1. EAGAIN is not possible on the writer side
      * unless the counter is at UINT64_MAX-1, which would require
      * 2^64 unanswered wakes. Ignore the result; on failure the parked
-     * thread will eventually time out via the next real I/O event. */
-    (void)write(r->wake_fd, &one, sizeof(one));
+     * thread will eventually time out via the next real I/O event.
+     *
+     * Assign-then-`(void)` rather than a bare `(void)write(...)`: glibc
+     * tags write(2) `warn_unused_result`, and a plain cast does NOT
+     * silence that on stricter gcc (`-Wall -Wextra -Werror` in the
+     * runtime_safety test), only the assigned-local form does. */
+    ssize_t wake_wr = write(r->wake_fd, &one, sizeof(one));
+    (void)wake_wr;
 #endif
 }
 
@@ -873,7 +879,12 @@ void ruxen_reactor_park_current(void) {
          * park if no further wakes arrive. */
         if (p == (void *)&r->wake_fd_sentinel) {
             uint64_t drain;
-            (void)read(r->wake_fd, &drain, sizeof(drain));
+            /* Assign-then-`(void)`: read(2) is `warn_unused_result` in
+             * glibc and a bare cast doesn't silence it under
+             * `-Werror`. Draining is best-effort — the counter reset is
+             * advisory, so the value is intentionally discarded. */
+            ssize_t drain_rd = read(r->wake_fd, &drain, sizeof(drain));
+            (void)drain_rd;
             continue;
         }
         if (!r->fd_slots) {

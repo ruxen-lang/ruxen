@@ -331,34 +331,25 @@ impl JITCodeGen {
                 } else {
                     let call_conv = self.module.isa().default_call_conv();
                     let mut sig = Signature::new(call_conv);
-                    // Prefer the hand-maintained ABI table (`runtime_signature`)
-                    // — it is the authoritative width for each runtime symbol
-                    // and matches what call sites emit. Deriving purely from
-                    // the HIR `param_types` via `ty_to_cranelift` widens
-                    // `Char`→i32, but the REPL passes chars as i64, so the
-                    // verifier rejects the call ("arg has type i64, expected
-                    // i32"). Fall back to the HIR types for user FFI symbols
-                    // the table doesn't know.
-                    match runtime_signature(&ffi_fn.name) {
-                        Some((param_tys, ret_ty)) => {
-                            for p in param_tys {
-                                sig.params.push(AbiParam::new(p));
-                            }
-                            if let Some(r) = ret_ty {
-                                sig.returns.push(AbiParam::new(r));
-                            }
+                    // Derive the signature from the HIR param/return types,
+                    // but WIDEN narrow integers (i8/i16/i32 — Bool, Char,
+                    // small ints) to i64. The batch backend keeps the narrow
+                    // widths and coerces each call argument to match
+                    // (`coerce_call_args`); the REPL's call path does NOT
+                    // coerce — it materialises every scalar as i64. Declaring
+                    // the FFI param as the narrow type would then fail the
+                    // verifier ("arg 0 has type i64, expected i8" for a Bool,
+                    // "expected i32" for a Char). Widening the declared param
+                    // to i64 matches the REPL's call convention exactly. f64
+                    // and pointer (i64) types pass through unchanged.
+                    for param_ty in &ffi_fn.param_types {
+                        if let Some(cl_ty) = ty_to_cranelift(param_ty) {
+                            sig.params.push(AbiParam::new(widen_scalar_to_word(cl_ty)));
                         }
-                        None => {
-                            for param_ty in &ffi_fn.param_types {
-                                if let Some(cl_ty) = ty_to_cranelift(param_ty) {
-                                    sig.params.push(AbiParam::new(cl_ty));
-                                }
-                            }
-                            if let Some(ref ret_ty) = ffi_fn.return_type {
-                                if let Some(cl_ty) = ty_to_cranelift(ret_ty) {
-                                    sig.returns.push(AbiParam::new(cl_ty));
-                                }
-                            }
+                    }
+                    if let Some(ref ret_ty) = ffi_fn.return_type {
+                        if let Some(cl_ty) = ty_to_cranelift(ret_ty) {
+                            sig.returns.push(AbiParam::new(widen_scalar_to_word(cl_ty)));
                         }
                     }
                     let id = self
@@ -1698,18 +1689,42 @@ fn simple_type_size(ty: &Ty) -> usize {
     }
 }
 
-fn runtime_signature(name: &str) -> Option<(Vec<Type>, Option<Type>)> {
-    // Consult the compiler's authoritative ABI table first so this JIT
-    // backend stays in lockstep with the batch backend for every
-    // `ruxen_*` helper (208 entries and counting). The local table below
-    // only needs to cover REPL-only aliases the core table omits (the
-    // bare `puts`/`print`/etc. surface names). Without this delegation a
-    // symbol missing from the local table (e.g. `ruxen_string_push`)
-    // silently derived its width from the HIR `Char`→i32, and the JIT
-    // verifier rejected the i64 call arg.
-    if let Some(sig) = ruxen_core::codegen::cranelift::runtime_signature(name) {
-        return Some(sig);
+/// Widen a narrow integer Cranelift type (i8/i16/i32) to the i64 machine
+/// word. The REPL materialises every scalar value (Bool, Char, small
+/// ints) as i64 and does not coerce call arguments down to a callee's
+/// narrow parameter type the way the batch backend does, so FFI/runtime
+/// signatures the REPL declares must use i64 for those slots or the
+/// Cranelift verifier rejects the call. f64 and i64 pass through.
+fn widen_scalar_to_word(ty: Type) -> Type {
+    match ty {
+        types::I8 | types::I16 | types::I32 => types::I64,
+        other => other,
     }
+}
+
+fn runtime_signature(name: &str) -> Option<(Vec<Type>, Option<Type>)> {
+    // Resolve the raw signature (core ABI table first — it carries the
+    // correct arg counts AND types for every `ruxen_*` helper and keeps
+    // this JIT backend in lockstep with the batch backend; the local
+    // table below is only a fallback for REPL-only surface names), THEN
+    // widen every narrow integer slot (params AND return) to i64. The
+    // REPL materialises scalar values as i64 and does NOT coerce call
+    // args down to a narrow parameter the way the batch backend does, so
+    // a declared i8/i16/i32 slot (e.g. a Bool-returning `*_is_empty`)
+    // would mismatch the i64 value and fail the Cranelift verifier.
+    // Widening at this single exit point covers BOTH the core-table and
+    // local-fallback results — earlier the local table's raw `I8`
+    // returns slipped through un-widened.
+    let (params, ret) = ruxen_core::codegen::cranelift::runtime_signature(name)
+        .or_else(|| runtime_signature_local(name))?;
+    let params = params.into_iter().map(widen_scalar_to_word).collect();
+    Some((params, ret.map(widen_scalar_to_word)))
+}
+
+/// REPL-only fallback signature table for surface names the core ABI
+/// table omits (the bare `puts`/`print`/etc.). Raw widths — the caller
+/// (`runtime_signature`) widens narrow ints to i64.
+fn runtime_signature_local(name: &str) -> Option<(Vec<Type>, Option<Type>)> {
     match name {
         "puts" | "ruxen_puts" => Some((vec![types::I64], None)),
         "eputs" | "ruxen_eputs" => Some((vec![types::I64], None)),
