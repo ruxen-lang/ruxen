@@ -8,6 +8,19 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **Package manager — workspaces, `ruxen publish`, `ruxen update
+  --precise`.** `Ruxen.toml` now accepts a `[workspace]` table with
+  literal members and trailing-`*` globs; intra-workspace deps
+  resolve by bare-name shorthand (`pkg-b = "0.1.0"` finds the
+  sibling member), and every member shares `target/` at the
+  workspace root. `ruxen publish [--dry-run] [--registry <name>]`
+  packages the current package into `<name>-<version>.tar.gz` and
+  pushes a `v<name>-<version>` git tag to the configured remote
+  after probing for collisions. `ruxen update --precise <pkg>=<rev>`
+  pins a single git dep in `Ruxen.lock` without re-resolving the
+  rest. New diagnostic codes: E1600 (workspace member not found),
+  E1601 (intra-workspace path-dep cycle), E1602 (publish tag
+  already exists at remote).
 - **#06.8 stdlib self-hosting — Waves 1.5–2 + collection migrations
   (T#13/14/15/16/17/21).** Every named stdlib module and every
   collection-method dispatch table that previously lived as Rust

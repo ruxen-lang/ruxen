@@ -39,7 +39,9 @@ fn main() {
             rev.as_deref(),
         ),
         cli::Command::Remove { piece } => deps::remove(&piece),
-        cli::Command::Update { piece } => deps::update(piece.as_deref()),
+        cli::Command::Update { piece, precise } => {
+            deps::update(piece.as_deref(), precise.as_deref())
+        }
         cli::Command::Upgrade {
             from_source,
             version,

@@ -138,14 +138,40 @@ pub fn remove(piece: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// `ruxen update [<piece>]`
-pub fn update(piece: Option<&str>) -> Result<(), String> {
+/// `ruxen update [<piece>] [--precise <pkg>=<rev>]`
+pub fn update(piece: Option<&str>, precise: Option<&str>) -> Result<(), String> {
     let project_dir = find_project_root()?;
     let manifest = Manifest::load(&project_dir)?;
 
     if manifest.dependencies.is_empty() {
         println!("  No dependencies to update.");
         return Ok(());
+    }
+
+    // --precise rewrites a single lockfile entry to a pinned rev. We
+    // never combine it with the broader "re-resolve from scratch" path
+    // — pinning is a surgical operation, and the spec mandates a
+    // target piece. Rejecting the repo-wide form keeps the contract
+    // honest (a user typing `ruxen update --precise foo=abc` expects
+    // exactly that to land, not a side-effect-laden refresh of every
+    // other dep).
+    if let Some(spec) = precise {
+        let (target_name, rev) = parse_precise(spec)?;
+        // The CLI accepts `ruxen update foo --precise bar=abc` syntactically
+        // — but the spec says --precise requires a piece target. Treat
+        // `piece` as that target when set; otherwise the pkg portion
+        // of <pkg>=<rev> IS the target. Mismatches are a user mistake
+        // worth flagging.
+        let resolved_target = match piece {
+            Some(p) if p != target_name => {
+                return Err(format!(
+                    "`--precise {}={}` names piece `{}`, but the positional argument was `{}`",
+                    target_name, rev, target_name, p
+                ));
+            }
+            _ => target_name,
+        };
+        return apply_precise(&project_dir, &manifest, resolved_target, rev);
     }
 
     if let Some(name) = piece {
@@ -162,6 +188,73 @@ pub fn update(piece: Option<&str>) -> Result<(), String> {
     result.lock.save(&project_dir)?;
     println!("    Updated Ruxen.lock");
 
+    Ok(())
+}
+
+/// Split a `<pkg>=<rev>` spec. Both halves must be non-empty.
+fn parse_precise(spec: &str) -> Result<(&str, &str), String> {
+    let (pkg, rev) = spec.split_once('=').ok_or_else(|| {
+        format!(
+            "`--precise` requires the form `<pkg>=<rev>` (got `{}`)",
+            spec
+        )
+    })?;
+    if pkg.is_empty() || rev.is_empty() {
+        return Err(format!(
+            "`--precise` requires both sides non-empty (got `{}`)",
+            spec
+        ));
+    }
+    Ok((pkg, rev))
+}
+
+/// Rewrite the lockfile entry for `target` to pin its source to `rev`.
+/// The source string is rewritten from `git+<url>?rev=<old>` to
+/// `git+<url>?rev=<new>`; other source shapes (path+...) are rejected
+/// since pinning a path dep to a git rev is meaningless.
+fn apply_precise(
+    project_dir: &std::path::Path,
+    manifest: &Manifest,
+    target: &str,
+    rev: &str,
+) -> Result<(), String> {
+    if !manifest.dependencies.contains_key(target) {
+        return Err(format!(
+            "piece `{}` not found in [dependencies]; cannot --precise an undeclared dep",
+            target
+        ));
+    }
+    let mut lock = LockFile::load(&project_dir).map_err(|_| {
+        "Ruxen.lock not found; run `ruxen build` first to generate it before --precise".to_string()
+    })?;
+    let entry = lock
+        .pieces
+        .iter_mut()
+        .find(|p| p.name == target)
+        .ok_or_else(|| {
+            format!(
+                "piece `{}` is in Ruxen.toml but not in Ruxen.lock; run `ruxen build` first",
+                target
+            )
+        })?;
+
+    if !entry.source.starts_with("git+") {
+        return Err(format!(
+            "piece `{}` is not a git dependency (source: `{}`); --precise only applies to git deps",
+            target, entry.source
+        ));
+    }
+    // Source shape: `git+<url>?rev=<old>`. Replace everything from
+    // `?rev=` onward with the new rev.
+    let url_part = entry
+        .source
+        .split('?')
+        .next()
+        .unwrap_or(&entry.source)
+        .to_string();
+    entry.source = format!("{}?rev={}", url_part, rev);
+    lock.save(&project_dir)?;
+    println!("  Pinned `{}` to rev `{}` in Ruxen.lock", target, rev);
     Ok(())
 }
 
@@ -273,6 +366,7 @@ fn describe_dep_source(dep: &Dependency) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lock::LockedPiece;
     use std::fs;
 
     #[test]
@@ -321,6 +415,66 @@ mod tests {
         assert!(manifest.dependencies.is_empty());
 
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn precise_parser_rejects_malformed_specs() {
+        assert!(parse_precise("foo").is_err());
+        assert!(parse_precise("=abc").is_err());
+        assert!(parse_precise("foo=").is_err());
+        assert_eq!(parse_precise("foo=abc1234").unwrap(), ("foo", "abc1234"));
+    }
+
+    #[test]
+    fn precise_rewrites_git_rev_in_lockfile() {
+        // Stand up a working project with a git dep + a hand-written
+        // lockfile so we can drive apply_precise directly without
+        // hitting the network.
+        let tmp = std::env::temp_dir().join(format!(
+            "ruxen_precise_{}_{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("src")).unwrap();
+        std::fs::write(
+            tmp.join("Ruxen.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nfoo = { git = \"https://example.com/foo.git\" }\n",
+        )
+        .unwrap();
+        std::fs::write(tmp.join("src/main.rx"), "def main\nend\n").unwrap();
+
+        let initial_lock = LockFile {
+            version: 1,
+            pieces: vec![LockedPiece {
+                name: "foo".to_string(),
+                version: "0.1.0".to_string(),
+                source: "git+https://example.com/foo.git?rev=oldrev1".to_string(),
+                checksum: None,
+                dependencies: vec![],
+            }],
+        };
+        initial_lock.save(&tmp).unwrap();
+
+        let manifest = Manifest::load(&tmp).unwrap();
+        apply_precise(&tmp, &manifest, "foo", "newrev9").expect("precise rewrite");
+        let reloaded = LockFile::load(&tmp).unwrap();
+        let foo = reloaded.find("foo").unwrap();
+        assert_eq!(
+            foo.source,
+            "git+https://example.com/foo.git?rev=newrev9",
+            "lockfile entry must be rewritten to the new rev"
+        );
+
+        // --precise on an undeclared piece must fail.
+        let err = apply_precise(&tmp, &manifest, "ghost", "abc").unwrap_err();
+        assert!(
+            err.contains("ghost") && err.contains("not found"),
+            "expected undeclared-dep error, got: {}",
+            err
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

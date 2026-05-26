@@ -284,6 +284,56 @@ mod tests {
         assert!(reparsed.pieces.is_empty());
     }
 
+    /// Pin test (Phase C step 2): a stale lockfile checksum MUST
+    /// cause `verify_checksums` to fail. Regression target: a
+    /// silent fall-through here would let `ruxen verify` lie about
+    /// the source tree's integrity.
+    #[test]
+    fn checksum_drift_is_caught_by_verify() {
+        let tmp = std::env::temp_dir().join(format!(
+            "ruxen_checksum_drift_{}_{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("target/deps/dep-a/src")).unwrap();
+        std::fs::write(
+            tmp.join("target/deps/dep-a/src/lib.rx"),
+            "pub def hi\nend\n",
+        )
+        .unwrap();
+        // Need a Ruxen.toml inside the dep dir; hash_sources reads
+        // the src/ tree directly so the file content is what drives
+        // the hash, but we still want a valid dep layout.
+        std::fs::write(
+            tmp.join("target/deps/dep-a/Ruxen.toml"),
+            "[package]\nname = \"dep-a\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        let lock = LockFile {
+            version: 1,
+            pieces: vec![LockedPiece {
+                name: "dep-a".to_string(),
+                version: "0.1.0".to_string(),
+                source: "git+https://example.com/dep-a.git?rev=abc1234".to_string(),
+                checksum: Some("sha256:deadbeefdeadbeef".to_string()), // wrong on purpose
+                dependencies: vec![],
+            }],
+        };
+
+        let err = lock
+            .verify_checksums(&tmp)
+            .expect_err("must reject wrong checksum");
+        assert!(
+            err.contains("Checksum mismatch") && err.contains("dep-a"),
+            "expected drift diagnostic naming dep-a, got: {}",
+            err
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     #[test]
     fn test_is_up_to_date() {
         use crate::manifest::Manifest;

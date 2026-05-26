@@ -104,6 +104,10 @@ pub enum Command {
     Update {
         /// Specific piece to update (default: all)
         piece: Option<String>,
+        /// Pin a piece to a precise revision. Format: `<pkg>=<rev>`.
+        /// Requires a piece target — refuses a repo-wide update.
+        #[arg(long, value_name = "PKG=REV")]
+        precise: Option<String>,
     },
 
     /// Upgrade the Ruxen toolchain itself.
@@ -248,7 +252,10 @@ mod tests {
     fn update_accepts_no_args() {
         let cli = parse(&["ruxen", "update"]).expect("ruxen update parses");
         match cli.command {
-            Command::Update { piece } => assert!(piece.is_none()),
+            Command::Update { piece, precise } => {
+                assert!(piece.is_none());
+                assert!(precise.is_none());
+            }
             _ => panic!("expected Update"),
         }
     }
@@ -257,7 +264,23 @@ mod tests {
     fn update_accepts_piece() {
         let cli = parse(&["ruxen", "update", "foo"]).expect("ruxen update foo parses");
         match cli.command {
-            Command::Update { piece } => assert_eq!(piece.as_deref(), Some("foo")),
+            Command::Update { piece, precise } => {
+                assert_eq!(piece.as_deref(), Some("foo"));
+                assert!(precise.is_none());
+            }
+            _ => panic!("expected Update"),
+        }
+    }
+
+    #[test]
+    fn update_accepts_precise() {
+        let cli = parse(&["ruxen", "update", "foo", "--precise", "foo=abc1234"])
+            .expect("ruxen update foo --precise foo=abc1234 parses");
+        match cli.command {
+            Command::Update { piece, precise } => {
+                assert_eq!(piece.as_deref(), Some("foo"));
+                assert_eq!(precise.as_deref(), Some("foo=abc1234"));
+            }
             _ => panic!("expected Update"),
         }
     }
