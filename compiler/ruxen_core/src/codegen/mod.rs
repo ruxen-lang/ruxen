@@ -356,18 +356,49 @@ pub fn compile_with_options(
         }
     };
 
-    // Step 2: Compile every stdlib package's C runtime sources. After
-    // #06.95 Phase B-2 each `.c` is a standalone translation unit; we
-    // compile each to its own `.o` and link them all into the final
-    // binary.
-    let runtime_sources = find_runtime_sources()?;
-    let mut runtime_objects = object::compile_runtime_sources(&runtime_sources, sanitize)?;
+    // Step 2: Provide the C runtime to the linker.
+    //
+    // Fast path (opt-in): when `RUXEN_RUNTIME_AR=<archive>` names an
+    // existing static archive (typically the `libruxenrt.a` that
+    // `ruxen_repl`'s build script already produced under
+    // `target/<profile>/build/ruxen_repl-*/out/`), skip the per-
+    // package `cc -c` invocations entirely and arrange for the
+    // linker to whole-archive that archive instead. With 30+ stdlib
+    // runtime `.c` files this drops 30+ `cc` forks per compile to
+    // zero — the dominant cost in the shell e2e harness and the
+    // in-process `release_e2e_smoke` cargo test.
+    //
+    // Slow path (default): compile every `library/std/<pkg>/runtime/*.c`
+    // to its own `.o` (post-#06.95 Phase B-2 standalone translation
+    // units) and link those individually. Used when the env var
+    // isn't set or the archive is missing.
+    //
+    // Sanitize builds always take the slow path: the prebuilt
+    // archive was compiled without ASan/UBSan instrumentation, so
+    // reusing it would silently strip sanitization from runtime calls.
+    let prebuilt_archive: Option<PathBuf> = if sanitize {
+        None
+    } else {
+        std::env::var("RUXEN_RUNTIME_AR")
+            .ok()
+            .map(PathBuf::from)
+            .filter(|p| p.is_file())
+    };
+
+    let mut runtime_objects: Vec<PathBuf> = if prebuilt_archive.is_some() {
+        Vec::new()
+    } else {
+        let runtime_sources = find_runtime_sources()?;
+        object::compile_runtime_sources(&runtime_sources, sanitize)?
+    };
 
     // Step 2b: Compile any caller-supplied runtime sources (user project
     // `runtime/*.c` and each path-dep's `runtime/*.c`). These share the
     // exact compile path as stdlib runtime — same `cc -c` invocation,
     // same sanitizer flags — so a user `runtime/foo.c` is
     // indistinguishable from a stdlib package's runtime at link time.
+    // Always honoured, even on the fast path: the prebuilt archive
+    // covers only stdlib runtime, not user runtime sources.
     // On failure we still need to clean up the stdlib objects we just
     // wrote, so route through a helper that propagates the cleanup.
     if !extra_runtime_sources.is_empty() {
@@ -402,6 +433,27 @@ pub fn compile_with_options(
             if !all_link_flags.contains(flag) {
                 all_link_flags.push(flag.clone());
             }
+        }
+    }
+
+    // Step 3b: When the fast path is active, whole-archive the prebuilt
+    // runtime so every `ruxen_*` symbol survives the link. The linker
+    // would otherwise drop archive members no user-object section
+    // happens to reference, and Cranelift dispatch helpers / FFI calls
+    // would see undefined symbols at run time.
+    //
+    // GNU ld and lld accept `-Wl,--whole-archive <ar> -Wl,--no-whole-archive`.
+    // Apple ld doesn't honour `--whole-archive`; on macOS we emit
+    // `-Wl,-force_load,<ar>` instead, matching `ruxen_repl/build.rs`
+    // and `src/ruxen_cli/build.rs` for the REPL bin.
+    if let Some(ar) = &prebuilt_archive {
+        let ar_str = ar.to_string_lossy().to_string();
+        if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
+            all_link_flags.push(format!("-Wl,-force_load,{}", ar_str));
+        } else {
+            all_link_flags.push("-Wl,--whole-archive".to_string());
+            all_link_flags.push(ar_str);
+            all_link_flags.push("-Wl,--no-whole-archive".to_string());
         }
     }
 

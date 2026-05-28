@@ -221,10 +221,8 @@ impl<'a> Lowerer<'a> {
                                 // payload types need this; Int/Bool/etc. and
                                 // enum payloads (which the container drop
                                 // handles) are left alone.
-                                let field_ty = variant_field_types
-                                    .get(idx)
-                                    .cloned()
-                                    .unwrap_or(Ty::Int);
+                                let field_ty =
+                                    variant_field_types.get(idx).cloned().unwrap_or(Ty::Int);
                                 if matches!(
                                     field_ty,
                                     Ty::Class { .. }

@@ -263,9 +263,67 @@ fn compile_and_run(case_name: &str, bootstrap_packages: &[(String, Program)]) ->
 //     release_e2e_smoke -- --ignored` runs just that one (~1s).
 //   - phase / tier completion: `cargo test --test release_e2e_smoke
 //     -- --ignored` runs the full sweep (~3 min).
+/// Locate the `libruxenrt.a` that `ruxen_repl`'s build script
+/// produced under the current cargo target dir, so that the
+/// in-process `codegen::compile` path takes its `RUXEN_RUNTIME_AR`
+/// fast path instead of forking `cc -c` 30+ times per fixture. The
+/// archive is content-identical across fixtures (the `.c` sources
+/// don't change between runs), so reusing it is sound and drops the
+/// 308-fixture sweep from minutes to seconds. Picks the most
+/// recently modified candidate so re-runs after `cargo clean
+/// -p ruxen_repl` always pick up the fresh archive.
+fn find_prebuilt_runtime_archive() -> Option<PathBuf> {
+    let root = workspace_root();
+    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+    for profile in ["debug", "release"] {
+        let build_dir = root.join("target").join(profile).join("build");
+        let entries = match std::fs::read_dir(&build_dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for ent in entries.flatten() {
+            let name = ent.file_name();
+            let name = name.to_string_lossy();
+            if !name.starts_with("ruxen_repl-") {
+                continue;
+            }
+            let ar = ent.path().join("out").join("libruxenrt.a");
+            if let Ok(meta) = std::fs::metadata(&ar) {
+                let modified = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+                match &best {
+                    Some((t, _)) if *t >= modified => {}
+                    _ => best = Some((modified, ar)),
+                }
+            }
+        }
+    }
+    best.map(|(_, p)| p)
+}
+
 #[test]
 #[ignore]
 fn release_e2e_all_fixtures() {
+    // Opt into the fast-path link: skip the per-fixture `cc -c`
+    // forks for stdlib runtime sources and whole-archive a prebuilt
+    // libruxenrt.a instead. Mirrors what `tests/release-e2e/run.sh`
+    // does for the shell harness. Caller can pre-set the env var to
+    // override (e.g. point at a sanitized build); we only auto-set
+    // when it's empty.
+    //
+    // SAFETY: `set_var` is `unsafe` from Rust 2024+ because env-var
+    // writes race with `getenv` across threads. This `#[ignore]`d
+    // test runs single-threaded under `cargo test -- --ignored`, no
+    // other reader is on the env var, and the value is set once
+    // before any fixture spins up — so the documented hazard does
+    // not apply here.
+    if std::env::var_os("RUXEN_RUNTIME_AR").is_none() {
+        if let Some(ar) = find_prebuilt_runtime_archive() {
+            // SAFETY: see comment above.
+            unsafe { std::env::set_var("RUXEN_RUNTIME_AR", &ar) };
+            eprintln!("[fast-path] linking via {}", ar.display());
+        }
+    }
+
     let cases_dir = workspace_root().join("tests/release-e2e/cases");
     let mut names: Vec<String> = std::fs::read_dir(&cases_dir)
         .unwrap_or_else(|e| panic!("read {}: {}", cases_dir.display(), e))

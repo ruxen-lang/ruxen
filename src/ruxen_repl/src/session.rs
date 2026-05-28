@@ -5,10 +5,28 @@
 
 use std::path::PathBuf;
 
+use ruxen_core::hir::types::Ty;
 use ruxen_core::parser::ast::{FuncDef, LetBinding, Statement, TopLevelItem};
 
 use crate::env::ReplEnv;
 use crate::jit::JITCodeGen;
+
+/// Number of persistent variable slots. Each session variable gets one
+/// 8-byte slot in a stable Rust-owned region; the JIT'd wrapper reads
+/// and writes them by baked-in address. 256 is plenty for an
+/// interactive session and keeps the region a fixed (non-reallocating,
+/// address-stable) allocation.
+pub const REPL_MAX_SLOTS: usize = 256;
+
+/// A persisted session variable: its name, declared type, and the
+/// fixed slot index holding its current value (an i64 word — a pointer
+/// for heap types, the value itself for scalars).
+#[derive(Clone)]
+pub struct VarSlot {
+    pub name: String,
+    pub ty: Ty,
+    pub idx: usize,
+}
 
 /// Complete state for a REPL session.
 pub struct ReplSession {
@@ -41,6 +59,16 @@ pub struct ReplSession {
     pub type_items: Vec<TopLevelItem>,
     /// History file path for persistence.
     pub history_path: PathBuf,
+    /// Stable, address-fixed region of persistent variable slots. The
+    /// JIT'd wrapper loads/stores variable values here by baked-in
+    /// address, so state persists across inputs WITHOUT re-executing the
+    /// statements that produced it (no replay of side effects, no
+    /// re-evaluation of non-deterministic bindings like `Instant.now()`).
+    pub slots: Box<[i64]>,
+    /// Session variables that currently have a persisted slot, in
+    /// declaration order. A name may appear once; rebinding updates its
+    /// type in place and reuses the slot.
+    pub var_slots: Vec<VarSlot>,
 }
 
 impl ReplSession {
@@ -62,7 +90,48 @@ impl ReplSession {
             prev_captured_output: String::new(),
             type_items: Vec::new(),
             history_path,
+            slots: vec![0i64; REPL_MAX_SLOTS].into_boxed_slice(),
+            var_slots: Vec::new(),
         })
+    }
+
+    /// Base address of the persistent slot region (stable for the
+    /// session's lifetime).
+    pub fn slots_base_addr(&self) -> i64 {
+        self.slots.as_ptr() as i64
+    }
+
+    /// Byte address of slot `idx`.
+    pub fn slot_addr(&self, idx: usize) -> i64 {
+        self.slots_base_addr() + (idx as i64) * 8
+    }
+
+    /// Find the slot for a live session variable by name.
+    pub fn find_var_slot(&self, name: &str) -> Option<&VarSlot> {
+        self.var_slots.iter().find(|v| v.name == name)
+    }
+
+    /// Register (or re-register) a session variable, returning its slot
+    /// index. Rebinding an existing name reuses its slot and updates the
+    /// type. New names get the next free slot.
+    pub fn register_var(&mut self, name: &str, ty: Ty) -> Result<usize, String> {
+        if let Some(existing) = self.var_slots.iter_mut().find(|v| v.name == name) {
+            existing.ty = ty;
+            return Ok(existing.idx);
+        }
+        let idx = self.var_slots.len();
+        if idx >= REPL_MAX_SLOTS {
+            return Err(format!(
+                "REPL session variable limit ({}) reached",
+                REPL_MAX_SLOTS
+            ));
+        }
+        self.var_slots.push(VarSlot {
+            name: name.to_string(),
+            ty,
+            idx,
+        });
+        Ok(idx)
     }
 
     /// Get the next REPL wrapper function name and increment the counter.
@@ -87,6 +156,13 @@ impl ReplSession {
         self.all_statements.clear();
         self.prev_captured_output.clear();
         self.type_items.clear();
+        // Zero the persistent slot region and forget all variable→slot
+        // mappings. (The heap region itself is reused — its address stays
+        // stable; we just clear the stored pointers/values.)
+        for s in self.slots.iter_mut() {
+            *s = 0;
+        }
+        self.var_slots.clear();
         crate::capture::clear();
         // Recreate JIT module (old one can't be reused after reset)
         self.jit = JITCodeGen::new()?;

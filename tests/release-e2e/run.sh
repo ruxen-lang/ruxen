@@ -10,9 +10,28 @@
 # Exit status is 0 if every test passes, 1 otherwise.
 #
 # Tuning knobs:
-#   JOBS=N         Worker count for the fixture loops. Default: nproc.
+#   JOBS=N         Worker count for the fixture loops. Default: 1 (serial).
+#                  Going parallel is unsafe with the current fixture set —
+#                  see the JOBS default comment below for the specific races.
 #   CASE_FILTER=…  Glob applied to cases/*.rx. Default: '*.rx'.
 #                  Example: CASE_FILTER='01_*.rx' to debug one fixture.
+#   PHASES=...     Comma-separated allow-list. Default: 'all'.
+#                  Recognised: binaries, compile, compile-flags, cli,
+#                  repl, lsp, all.
+#                  Examples:
+#                    PHASES=compile         # just the 310 compile fixtures
+#                    PHASES=repl            # just the REPL parity sweep
+#                    PHASES=compile,cli     # both, skip repl/lsp/flags
+#
+#   RUXEN_RUNTIME_AR=<archive>
+#                  Tell `ruxen compile` to whole-archive a prebuilt
+#                  libruxenrt.a instead of forking cc once per stdlib
+#                  runtime .c. Auto-set to the ruxen_repl build artifact
+#                  when RUXEN_WORKSPACE is set; the auto-set gives ~46x
+#                  speedup per fixture.
+#   RUXEN_E2E_NO_FAST_AR=1
+#                  Disable the auto-set above and exercise the slow
+#                  cold-compile path (cc -c per .c file).
 
 set -u
 
@@ -25,24 +44,90 @@ SCRIPTS="$HERE/scripts"
 mkdir -p "$RESULTS"
 : > "$RESULTS/summary.txt"
 
-# Default worker count. Each worker drives a full compile→cc→ld→exec
-# pipeline, so past ~8-way the machine oversubscribes IO / fds /
-# memory and fixtures that probe resource limits flake — e.g.
-# 518_file_drop_closes opens a file 1024 times and a transient fd
-# shortage under heavy load makes a few opens fail (opened=1021
-# instead of 1024). Cap the default at 8; override with JOBS=N on a
-# beefy box, JOBS=1 to serialise for debugging.
-_e2e_ncpu="$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 4)"
-JOBS="${JOBS:-$(( _e2e_ncpu < 8 ? _e2e_ncpu : 8 ))}"
+# Default worker count: serial (1).
+#
+# Reason: fixtures that bind hardcoded TCP ports (727 → :31729,
+# 727b → :31730), open file descriptors at resource caps
+# (518_file_drop_closes opens 1024 fds), spawn child processes
+# (508_command_status), or touch fixed `/tmp/ruxen_e2e_*` paths
+# (534/536) are not safe under concurrency: parallel workers race
+# on the same port/fd cap/tmp path. The symptoms were classic
+# Heisenbugs — "sometimes pass, sometimes fail" 727s timing out
+# at 10s when system load delayed the async runtime past the
+# client's connect window.
+#
+# With the RUXEN_RUNTIME_AR fast path the per-fixture cost is
+# <0.1s anyway, so serial is fast enough (~30s for the whole 308-
+# fixture compile sweep). Override with JOBS=N if you genuinely
+# need parallelism and your filter excludes the racy fixtures.
+JOBS="${JOBS:-1}"
 CASE_FILTER="${CASE_FILTER:-*.rx}"
 
+# Selective phases. Comma-separated allow-list; default `all`. Use
+# this to skip the slow REPL parity sweep while iterating on the
+# compile path, or to drill into just one layer:
+#
+#   PHASES=compile          ./run.sh   # just the 310 compile fixtures
+#   PHASES=repl             ./run.sh   # just the REPL parity sweep
+#   PHASES=compile,cli      ./run.sh   # both, skip repl/lsp/flags
+#   PHASES=binaries,lsp     ./run.sh   # smoke + LSP only
+#
+# Recognised values: binaries, compile, compile-flags, cli, repl, lsp, all.
+# Unknown phases are flagged so typos don't silently skip everything.
+PHASES="${PHASES:-all}"
+_e2e_phase_enabled() {
+  local p="$1"
+  case ",$PHASES," in
+    *,all,*)  return 0 ;;
+    *,"$p",*) return 0 ;;
+    *)        return 1 ;;
+  esac
+}
+_e2e_validate_phases() {
+  local known=",binaries,compile,compile-flags,cli,repl,lsp,all,"
+  local IFS=,
+  for p in $PHASES; do
+    [ -z "$p" ] && continue
+    case "$known" in
+      *,"$p",*) : ;;
+      *) printf "run.sh: unknown phase '%s' (known: binaries, compile, compile-flags, cli, repl, lsp, all)\n" "$p" >&2
+         exit 2 ;;
+    esac
+  done
+}
+_e2e_validate_phases
+
+# Fast-path runtime archive. Each `ruxen compile` invocation otherwise
+# forks `cc -c` ~30 times per fixture to compile every stdlib
+# `library/std/<pkg>/runtime/*.c` to a fresh `.o`. With 310 fixtures
+# that's a four-second dominant cost we pay once per fixture.
+#
+# Workaround: ruxen_repl's build script already produces a fully-
+# linked `libruxenrt.a` at workspace build time. Point the compile
+# driver at it via the `RUXEN_RUNTIME_AR` env var and the per-package
+# .c step is skipped — the linker whole-archives this archive
+# instead. Per-fixture wall-clock drops to <0.1s.
+#
+# Honor RUXEN_RUNTIME_AR if the user already exported one (e.g. from
+# a custom build); otherwise auto-discover the workspace artifact.
+# Set RUXEN_E2E_NO_FAST_AR=1 to bypass this and exercise the slow
+# path (useful when validating the cold-compile path itself).
+if [ -z "${RUXEN_RUNTIME_AR:-}" ] && [ -z "${RUXEN_E2E_NO_FAST_AR:-}" ]; then
+  if [ -n "${RUXEN_WORKSPACE:-}" ]; then
+    _ar=$(ls "$RUXEN_WORKSPACE"/target/release/build/ruxen_repl-*/out/libruxenrt.a 2>/dev/null | head -1)
+    if [ -n "$_ar" ] && [ -f "$_ar" ]; then
+      export RUXEN_RUNTIME_AR="$_ar"
+      printf "\033[2m[fast-path] linking via %s\033[0m\n" "$_ar" >&2
+    fi
+    unset _ar
+  fi
+fi
+
 # Ctrl-C handling. Without this trap, bash's `for f in …; do …; done`
-# pattern absorbs SIGINT at iteration boundaries: the current child
-# dies, the loop walks to the next iteration, and you have to hit
-# Ctrl-C once per fixture. The fixture loops below also moved off
-# `for` onto `xargs -P`, which itself propagates SIGINT cleanly — this
-# trap covers everything outside those loops (binary smoke tests, CLI
-# lifecycle, LSP, etc.).
+# (and `xargs -P` when JOBS>1) absorbs SIGINT at iteration boundaries:
+# the current child dies, the loop walks to the next iteration, and
+# you have to hit Ctrl-C once per fixture. The trap exits the whole
+# script the first time the user signals.
 trap '_e2e_interrupt' INT TERM
 _e2e_interrupt() {
   trap - INT TERM
@@ -239,12 +324,20 @@ _e2e_run_case_one() {
   # panic! / eputs / diagnostic output belongs on stderr and must not
   # corrupt the diff. Nonzero exit is acceptable as long as stdout
   # matches — e.g. panic! fixtures print to stdout then exit 101.
-  timeout 10 "$tmp/$base.bin" >"$tmp/$base.out" 2>"$tmp/$base.err"
+  #
+  # 30s cap (was 10s): fixtures that bind sockets, spawn worker threads,
+  # or wait on async runtimes — notably 727_async_tcp_echo and
+  # 727b_async_tcp_read_timeout — flaked at the 10s mark when the
+  # spawned listener thread didn't bind within the client's 50ms
+  # grace window under any system load (CI, other processes, even
+  # background editors). The work itself takes ~50ms in isolation
+  # so 30s is pure headroom, not a guard against real perf bugs.
+  timeout 30 "$tmp/$base.bin" >"$tmp/$base.out" 2>"$tmp/$base.err"
   rc=$?
   if [ "$rc" -eq 124 ]; then
     { cat "$tmp/$base.out"; echo "--- stderr ---"; cat "$tmp/$base.err"; } \
       > "$E2E_RESULTS_DIR/$base.actual.out" 2>/dev/null
-    _e2e_emit FAIL "$name" "run timed out (>10s)"
+    _e2e_emit FAIL "$name" "run timed out (>30s)"
     return
   fi
 
@@ -769,15 +862,20 @@ test_lsp_features() {
 }
 
 # ── main ──────────────────────────────────────────────────────────────
-test_binaries
-test_cases
-test_cli
-test_ruxenc_flags
-test_ruxenc_toplevel_hang
-test_repl
-test_repl_cases
-test_lsp
-test_lsp_features
+# Each phase is gated by PHASES (see header). The grouping is
+# coarser than the function list — `compile-flags` rolls together
+# the direct-driver flag matrix and the top-level-hang negative
+# test, `repl` covers both the scripted session and the 310-fixture
+# parity sweep, etc.
+_e2e_phase_enabled binaries      && test_binaries
+_e2e_phase_enabled compile       && test_cases
+_e2e_phase_enabled cli           && test_cli
+_e2e_phase_enabled compile-flags && test_ruxenc_flags
+_e2e_phase_enabled compile-flags && test_ruxenc_toplevel_hang
+_e2e_phase_enabled repl          && test_repl
+_e2e_phase_enabled repl          && test_repl_cases
+_e2e_phase_enabled lsp           && test_lsp
+_e2e_phase_enabled lsp           && test_lsp_features
 
 TOTAL=$((PASS + FAIL))
 printf "\n%s━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s\n" "$BOLD" "$RESET"

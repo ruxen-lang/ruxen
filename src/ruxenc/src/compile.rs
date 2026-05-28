@@ -159,17 +159,54 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let object_bytes = fs::read(obj_path)
         .map_err(|e| format!("Failed to read cached object {}: {}", obj_path.display(), e))?;
 
-    let runtime_sources = ruxen_core::codegen::find_runtime_sources()?;
-    let runtime_objects =
+    // Fast path: `RUXEN_RUNTIME_AR=<archive>` lets a caller skip the
+    // 30+ `cc -c` forks per fixture by pointing at a prebuilt
+    // `libruxenrt.a` (the one `ruxen_repl`'s build script already
+    // produces under `target/<profile>/build/ruxen_repl-*/out/` is a
+    // ready-made match). When set, we leave the stdlib runtime
+    // compilation step empty and pass `-Wl,--whole-archive <ar>
+    // -Wl,--no-whole-archive` to the linker so every `ruxen_*` symbol
+    // survives — the same shape `ruxen_repl/build.rs` and
+    // `src/ruxen_cli/build.rs` use for their own bin links. The
+    // release-e2e harness exploits this to drop per-fixture wall-clock
+    // from ~4s to under a second. Apple ld doesn't honour
+    // `--whole-archive`; it uses `-force_load,<ar>` instead.
+    //
+    // Default path: each `library/std/<pkg>/runtime/*.c` is still
+    // compiled to its own `.o` (post-#06.95 Phase B-2 standalone
+    // translation units) and linked individually, preserving the
+    // dead-code elimination the production binaries depend on.
+    let prebuilt_archive: Option<std::path::PathBuf> = std::env::var("RUXEN_RUNTIME_AR")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_file());
+
+    let runtime_objects: Vec<std::path::PathBuf> = if prebuilt_archive.is_some() {
+        Vec::new()
+    } else {
+        let runtime_sources = ruxen_core::codegen::find_runtime_sources()?;
         ruxen_core::codegen::object::compile_runtime_sources(&runtime_sources, false)
-            .map_err(|e| format!("Failed to compile runtime: {}", e))?;
+            .map_err(|e| format!("Failed to compile runtime: {}", e))?
+    };
+
+    let mut link_flags: Vec<String> = Vec::new();
+    if let Some(ar) = &prebuilt_archive {
+        let ar_str = ar.to_string_lossy().to_string();
+        if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
+            link_flags.push(format!("-Wl,-force_load,{}", ar_str));
+        } else {
+            link_flags.push("-Wl,--whole-archive".to_string());
+            link_flags.push(ar_str);
+            link_flags.push("-Wl,--no-whole-archive".to_string());
+        }
+    }
 
     if let Err(e) = ruxen_core::codegen::object::emit_executable(
         &object_bytes,
         &runtime_objects,
         &output_path,
         false,
-        &[],
+        &link_flags,
     ) {
         for o in &runtime_objects {
             let _ = fs::remove_file(o);

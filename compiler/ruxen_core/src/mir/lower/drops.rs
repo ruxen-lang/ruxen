@@ -623,10 +623,7 @@ fn compute_dealloc_safe_locals(func: &MirFunction) -> std::collections::HashSet<
                 // ownership to the binding). Scoped to Result/Option — see
                 // `match_payload_ptrs` doc above.
                 MirInst::GetPayload { dest, src, .. } => {
-                    if matches!(
-                        local_ty(*src),
-                        Some(Ty::Result(_, _)) | Some(Ty::Option(_))
-                    ) {
+                    if matches!(local_ty(*src), Some(Ty::Result(_, _)) | Some(Ty::Option(_))) {
                         match_payload_ptrs.insert(*dest);
                     }
                     tainted_perm.insert(*dest);
@@ -649,7 +646,9 @@ fn compute_dealloc_safe_locals(func: &MirFunction) -> std::collections::HashSet<
                             | Some(Ty::Map(_, _))
                             | Some(Ty::Set(_))
                     );
-                    if match_payload_ptrs.contains(base) && owns_heap && !tainted_perm.contains(dest)
+                    if match_payload_ptrs.contains(base)
+                        && owns_heap
+                        && !tainted_perm.contains(dest)
                     {
                         alloc_rooted.insert(*dest);
                     } else {
