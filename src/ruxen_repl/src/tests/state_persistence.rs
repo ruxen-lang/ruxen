@@ -38,8 +38,12 @@ fn let_binding_survives_next_input() {
 
 #[test]
 fn mutation_persists_across_inputs() {
+    // Ruxen retired `let mut` — `mut` is no longer a keyword. The
+    // mutable form is `var` (see parser/methods.rs:524). The test's
+    // intent ("a session variable can be mutated across REPL
+    // inputs") is unchanged; only the surface syntax is corrected.
     let outs = run_session(&[
-        "let mut counter = 0",
+        "var counter = 0",
         "counter = counter + 1",
         "counter = counter + 1",
         "counter",
@@ -94,6 +98,21 @@ fn int_let_allocates_var_slot() {
         .expect("expected a slot for `answer` after `let answer = 42`");
     assert_eq!(slot.name, "answer");
     assert_eq!(slot.ty, Ty::Int, "expected Ty::Int, got {:?}", slot.ty);
+}
+
+/// Task 1.3 slot-store suffix: a mutation to a session Int var
+/// in one input is visible (via slot read) in the next input.
+/// This is the END-TO-END mutation persistence the refactor exists
+/// to enable — without slot store, the prefix would always load
+/// the initial value.
+#[test]
+fn int_mutation_persists_via_slot() {
+    let outs = run_session(&[
+        "var x = 10",
+        "x = x + 5",
+        "x",
+    ]);
+    assert!(outs[2].contains("15"), "got: {:?}", outs);
 }
 
 #[test]

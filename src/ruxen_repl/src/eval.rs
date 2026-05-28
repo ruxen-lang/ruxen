@@ -803,6 +803,24 @@ fn eval_type_command(session: &mut ReplSession, expr_str: &str) -> EvalResult {
 ///     suffix that keeps the slot fresh lands in Task 1.3; once the
 ///     replay is removed in Phase 3 the prefix becomes the sole source
 ///     of truth for session-variable reads).
+///
+/// Task 1.3 additions:
+///   - For each slot-eligible session var, a synthetic
+///     `__slot_store_i64(<addr>, <name>)` is APPENDED to the wrapper
+///     body so the (possibly mutated) value of the binding gets
+///     written back to its persistent slot. Combined with the load
+///     prefix this closes the read+write loop: a mutation in input N
+///     is visible (via the slot) in input N+1.
+///   - To keep the wrapper's user-visible return value intact, the
+///     trailing tail expression is hoisted into a fresh local
+///     (`__ruxen_repl_tail_<fn>`) before the store-suffix and
+///     re-emitted after — otherwise the wrapper would return Unit
+///     (the type of the last store call) instead of the user's
+///     expression value.
+///   - Until Phase 3 drops the all_statements replay, the suffix
+///     reads the replay-bound `<name>` (whose value is the user's
+///     mutated one, because the replay reproduces every assignment).
+///     This is the intended shadowing for the dormant slot path.
 fn build_program(
     session: &ReplSession,
     fn_name: &str,
@@ -814,13 +832,83 @@ fn build_program(
     // instances) are deferred to a follow-up — the ABI is the same
     // (i64 handle), but resolving the right Ruxen type to annotate
     // requires more plumbing than this phase pays for.
-    let mut body: Vec<Statement> = Vec::with_capacity(statements.len() + session.var_slots.len());
-    for vs in &session.var_slots {
+    //
+    // Task 1.3: collect slot-eligible vars up front so the prefix
+    // (load) and suffix (store) iterate the exact same set. A var
+    // that gets a prefix MUST get a matching suffix; otherwise a
+    // mutation in user code is silently dropped before the next
+    // input loads.
+    let slot_vars: Vec<&crate::session::VarSlot> = session
+        .var_slots
+        .iter()
+        .filter(|vs| slot_kind_eligible(&vs.ty))
+        .collect();
+
+    let mut body: Vec<Statement> =
+        Vec::with_capacity(statements.len() + slot_vars.len() * 2 + 2);
+    for vs in &slot_vars {
         if let Some(stmt) = slot_load_let(vs, session, span) {
             body.push(stmt);
         }
     }
     body.extend(statements);
+
+    // Task 1.3: slot-store suffix. For each slot-eligible session var,
+    // append `__slot_store_i64(addr, name)` so the current binding's
+    // value (whatever the replay + user statements left it at) is
+    // written back to the persistent slot. The next input's prefix
+    // will load that value.
+    //
+    // Tail preservation: the wrapper's return type is inferred from
+    // the tail expression. A store call is `Unit`-typed, so naïvely
+    // appending it would change the wrapper's return type and break
+    // the value-display path (`=> 15 : Int` would become `=> () :
+    // Unit`). We re-bind the existing tail to a temporary, push the
+    // stores, then re-emit the temporary as the new tail.
+    //
+    // Only do the tail-preserve dance when we actually have stores
+    // to emit; otherwise `build_program` is a no-op transform over
+    // the input statements (matches Task 1.2 behaviour exactly for
+    // sessions with no Int vars).
+    if !slot_vars.is_empty() {
+        let tail_name = format!("__ruxen_repl_tail_{}", fn_name);
+        let original_tail_expr: Option<Expr> = match body.last() {
+            Some(Statement::Expression(_)) => match body.pop() {
+                Some(Statement::Expression(e)) => Some(e),
+                _ => unreachable!(),
+            },
+            _ => None,
+        };
+        let had_tail = original_tail_expr.is_some();
+
+        if let Some(tail_expr) = original_tail_expr {
+            // `let __ruxen_repl_tail_<fn> = <original tail>`
+            body.push(Statement::Let(LetBinding {
+                mutable: false,
+                pattern: Pattern::Identifier {
+                    mutable: false,
+                    name: tail_name.clone(),
+                    span: span.clone(),
+                },
+                type_annotation: None,
+                value: Some(Box::new(tail_expr)),
+                span: span.clone(),
+            }));
+        }
+
+        for vs in &slot_vars {
+            body.push(slot_store_expr_stmt(vs, session, span));
+        }
+
+        // Re-emit the temp as the new tail so the wrapper's return
+        // type — and thus the user-visible result — is preserved.
+        if had_tail {
+            body.push(Statement::Expression(Expr {
+                kind: ExprKind::Identifier(tail_name),
+                span: span.clone(),
+            }));
+        }
+    }
 
     let wrapper = FuncDef {
         name: fn_name.to_string(),
@@ -902,6 +990,23 @@ fn find_let_type_in_wrapper(
     None
 }
 
+/// True for session-variable types the slot prefix/suffix pair currently
+/// supports. Phase 1 scope is `Ty::Int` only — Bool/Float/Char and the
+/// heap-backed types (String, Array, Option, Result, struct/class
+/// instances) fit in i64 the same way but need either a narrowing
+/// transmute (Bool/Float/Char) or a Ruxen-side cast (heap handles) to
+/// type-check, both deferred to follow-up phases.
+///
+/// This is the single source of truth shared between `build_program`
+/// (which decides whether to inject a load/store pair at all), the
+/// prefix builder `slot_load_let`, and the suffix builder
+/// `slot_store_expr_stmt`. Widening it without updating both sides
+/// would emit a load with no matching store (mutations lost) or vice
+/// versa (slot stuck at its initial value).
+fn slot_kind_eligible(ty: &Ty) -> bool {
+    matches!(ty, Ty::Int)
+}
+
 /// Build a synthetic `let <name>: <Ty> = __slot_load_i64(<addr>)` for a
 /// primitive session variable. Returns `None` for types this phase
 /// doesn't yet handle (Bool/Float/Char/heap types) — heap types fit
@@ -951,6 +1056,46 @@ fn slot_load_let(
         value: Some(Box::new(call)),
         span: span.clone(),
     }))
+}
+
+/// Build a synthetic `__slot_store_i64(<addr>, <name>)` expression
+/// statement. Counterpart to `slot_load_let` — emitted at the END of
+/// the wrapper body so whatever value the user's statements left the
+/// `<name>` binding at is persisted to the slot for the next input.
+///
+/// Callers must only invoke this for `vs.ty` values that
+/// `slot_kind_eligible` returns true for; the FFI signature for
+/// `ruxen_repl_slot_store_i64` is `(Int, Int) -> Unit`, so a non-Int
+/// value would fail typeck. Until widening hits, the matching
+/// load-let above is also Int-typed, so the binding the suffix
+/// references is always Int.
+fn slot_store_expr_stmt(
+    vs: &crate::session::VarSlot,
+    session: &ReplSession,
+    span: &ruxen_core::lexer::token::Span,
+) -> Statement {
+    let addr = session.slot_addr(vs.idx);
+    let call = Expr {
+        kind: ExprKind::Call {
+            callee: Box::new(Expr {
+                kind: ExprKind::Identifier("__slot_store_i64".to_string()),
+                span: span.clone(),
+            }),
+            args: vec![
+                Expr {
+                    kind: ExprKind::IntLiteral(addr, None),
+                    span: span.clone(),
+                },
+                Expr {
+                    kind: ExprKind::Identifier(vs.name.clone()),
+                    span: span.clone(),
+                },
+            ],
+            block: None,
+        },
+        span: span.clone(),
+    };
+    Statement::Expression(call)
 }
 
 /// Get the span from a top-level item.

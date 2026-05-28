@@ -8,6 +8,20 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **REPL session-variable slot writeback (refactor phase 1.3 — Path C step 2).**
+  `build_program` now appends a synthetic
+  `__slot_store_i64(<addr>, <name>)` for every slot-eligible Int session
+  variable, so a mutation in one REPL input (e.g. `x = x + 5`) is
+  persisted to the variable's fixed slot and visible (via the load
+  prefix from phase 1.2) on the next input. The wrapper's trailing
+  tail expression is hoisted into a fresh local before the stores and
+  re-emitted after, preserving the wrapper's return type so the
+  `=> <value> : <ty>` display path is unchanged. Closes the slot
+  read+write loop for primitive Int session vars; the
+  `all_statements` replay still runs in lockstep — phase 3 drops the
+  replay and the slot becomes the sole source of truth. Also fixes the
+  `mutation_persists_across_inputs` REPL safety-net test that used the
+  retired `let mut` syntax (now `var`).
 - **REPL session-variable slots (refactor phase 1.2 — Path C step 1).**
   `ReplSession::register_var` is now wired on every successful `let`
   binding (`CompileHook::RecordLet`), allocating a persistent 8-byte
