@@ -6,7 +6,9 @@
 use std::path::PathBuf;
 
 use ruxen_core::hir::types::Ty;
+use ruxen_core::lexer::Lexer;
 use ruxen_core::parser::ast::{FuncDef, LetBinding, Statement, TopLevelItem};
+use ruxen_core::parser::Parser;
 
 use crate::env::ReplEnv;
 use crate::jit::JITCodeGen;
@@ -69,6 +71,17 @@ pub struct ReplSession {
     /// declaration order. A name may appear once; rebinding updates its
     /// type in place and reuses the slot.
     pub var_slots: Vec<VarSlot>,
+    /// Pre-parsed `lib "ruxen_repl" ... end` block declaring the two
+    /// FFI shims (`__slot_load_i64`, `__slot_store_i64`) that the
+    /// synthetic prefix/suffix injection in `eval::build_program` calls
+    /// to read/write session-variable slots. Parsed once at session
+    /// creation so every input cheaply prepends it to the wrapper
+    /// program. The C symbols `ruxen_repl_slot_load_i64` /
+    /// `ruxen_repl_slot_store_i64` are registered as JIT symbols in
+    /// `jit::new_jit_module_builder` — the lib block here only tells
+    /// the typechecker and resolver that callable Ruxen-side names
+    /// exist with the right signatures.
+    pub repl_slot_lib: TopLevelItem,
 }
 
 impl ReplSession {
@@ -92,6 +105,7 @@ impl ReplSession {
             history_path,
             slots: vec![0i64; REPL_MAX_SLOTS].into_boxed_slice(),
             var_slots: Vec::new(),
+            repl_slot_lib: parse_repl_slot_lib(),
         })
     }
 
@@ -168,6 +182,36 @@ impl ReplSession {
         self.jit = JITCodeGen::new()?;
         Ok(())
     }
+}
+
+/// Parse the REPL-internal `lib "ruxen_repl" ... end` block declaring
+/// the two slot helpers. Returning `TopLevelItem::Lib(_)` lets
+/// `build_program` cheaply prepend it to every input's program so the
+/// resolver/typechecker see the FFI fn names in scope. We parse a
+/// hardcoded source snippet rather than hand-constructing the AST so
+/// the layered FfiFunction/TypeExpr/Span fields stay in sync with
+/// whatever the parser emits (Approach A fallback per Task 1.2).
+fn parse_repl_slot_lib() -> TopLevelItem {
+    // Two FFI shims for the REPL-internal slot read/write helpers
+    // registered in `jit::new_jit_module_builder`. `as "ruxen_repl_*"`
+    // pins the linked C symbol; the bare Ruxen names are what the
+    // synthetic prefix/suffix call sites spell.
+    let src = "lib \"ruxen_repl\"\n\
+               def __slot_load_i64 as \"ruxen_repl_slot_load_i64\"(addr: Int) -> Int\n\
+               def __slot_store_i64 as \"ruxen_repl_slot_store_i64\"(addr: Int, val: Int)\n\
+               end\n";
+    let tokens = Lexer::new(src)
+        .tokenize()
+        .expect("REPL slot-lib snippet should tokenize");
+    let mut parser = Parser::new(tokens);
+    let program = parser
+        .parse()
+        .expect("REPL slot-lib snippet should parse");
+    program
+        .items
+        .into_iter()
+        .find(|it| matches!(it, TopLevelItem::Lib(_)))
+        .expect("REPL slot-lib snippet should produce a `lib` item")
 }
 
 /// Get the Ruxen config directory, creating it if needed.

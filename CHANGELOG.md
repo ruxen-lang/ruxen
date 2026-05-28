@@ -8,6 +8,18 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **REPL session-variable slots (refactor phase 1.2 — Path C step 1).**
+  `ReplSession::register_var` is now wired on every successful `let`
+  binding (`CompileHook::RecordLet`), allocating a persistent 8-byte
+  slot per primitive Int variable and reusing it on rebind. `build_program`
+  injects a REPL-internal `lib "ruxen_repl" ... end` block declaring
+  `__slot_load_i64` / `__slot_store_i64` (aliased to the runtime symbols
+  `ruxen_repl_slot_load_i64` / `ruxen_repl_slot_store_i64`) plus a
+  synthetic `let <name>: Int = __slot_load_i64(<addr>)` prefix for every
+  Int session variable, giving the typechecker an explicit binding from
+  the slot. The `all_statements` replay still runs alongside (the
+  replayed let shadows the synthetic prefix during phase 1.2); phase 3
+  removes the replay once the store suffix lands in phase 1.3.
 - **Test framework — `ruxen test` + pure-Ruxen `std.test` (T3.03).**
   A new `std-test` stdlib package ships an RSpec-style DSL —
   `Tester.describe`/`context`/`it`/`xit`/`before`/`after` with

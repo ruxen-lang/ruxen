@@ -133,13 +133,7 @@ fn eval_expression(session: &mut ReplSession, raw_input: &str, expr: Expr) -> Ev
     let mut statements: Vec<Statement> = session.all_statements.clone();
     statements.push(Statement::Expression(expr.clone()));
 
-    let wrapper = build_program(
-        &session.func_defs,
-        &session.type_items,
-        &fn_name,
-        statements,
-        &span,
-    );
+    let wrapper = build_program(session, &fn_name, statements, &span);
 
     let hook = if side_effecting {
         Some(CompileHook::RecordStatement(Statement::Expression(expr)))
@@ -171,13 +165,7 @@ fn eval_statement(session: &mut ReplSession, raw_input: &str, stmt: Statement) -
                 }));
             }
 
-            let wrapper = build_program(
-                &session.func_defs,
-                &session.type_items,
-                &fn_name,
-                statements,
-                &span,
-            );
+            let wrapper = build_program(session, &fn_name, statements, &span);
 
             // Stash the binding so future inputs can see this variable.
             // We add it *before* compile_and_execute so any failures later
@@ -608,6 +596,32 @@ fn compile_and_execute(
     if let Some(hook) = on_success {
         match hook {
             CompileHook::RecordLet(b) => {
+                // Task 1.2: every successful single-identifier let
+                // allocates (or refreshes) its persistent slot so the
+                // next input's synthetic prefix can load it. Multi-
+                // pattern lets (tuple/struct destructuring) skip slot
+                // registration for now — Phase 1 scope is primitives
+                // only.
+                if let Pattern::Identifier { name, .. } = &b.pattern {
+                    if let Some(let_ty) =
+                        find_let_type_in_wrapper(&type_result.program, fn_name, name)
+                    {
+                        // Phase 1.2 only emits a slot-load prefix for
+                        // Int (see `slot_load_let`). To avoid burning
+                        // through `REPL_MAX_SLOTS` on session vars whose
+                        // type the prefix can't yet consume, only
+                        // register slot-eligible types here. Future
+                        // phases that widen `slot_load_let` should
+                        // update this gate in lockstep.
+                        if matches!(let_ty, Ty::Int) {
+                            // Failure here means we've run out of slots —
+                            // surface it the same way other compile-time
+                            // resource exhaustion would, after the input
+                            // has already executed.
+                            let _ = session.register_var(name, let_ty);
+                        }
+                    }
+                }
                 session.all_statements.push(Statement::Let(b.clone()));
                 session.let_bindings.push(b);
             }
@@ -724,13 +738,7 @@ fn eval_type_command(session: &mut ReplSession, expr_str: &str) -> EvalResult {
                 .map(Statement::Let)
                 .collect();
             statements.push(Statement::Expression(expr));
-            let wrapper = build_program(
-                &session.func_defs,
-                &session.type_items,
-                "__type_check",
-                statements,
-                &span,
-            );
+            let wrapper = build_program(session, "__type_check", statements, &span);
             let type_result = typeck::type_check(&wrapper);
 
             let has_errors = type_result
@@ -782,13 +790,38 @@ fn eval_type_command(session: &mut ReplSession, expr_str: &str) -> EvalResult {
 /// single synthetic wrapper function whose body is the given statement
 /// list. The wrapper's return type is left unannotated so the typechecker
 /// infers it from the tail expression.
+///
+/// Task 1.2 additions:
+///   - The REPL-internal `lib "ruxen_repl" ... end` block (declaring
+///     `__slot_load_i64` / `__slot_store_i64`) is prepended to the
+///     program items so the FFI shims are in scope.
+///   - For each session variable with a primitive type that fits in i64
+///     (today: `Ty::Int`), a synthetic `let <name>: Int =
+///     __slot_load_i64(<addr>)` is PREPENDED to the wrapper body. It
+///     binds *before* the replayed `all_statements`, so the replay path
+///     still shadows the slot value during Phase 1/1.2 (the store
+///     suffix that keeps the slot fresh lands in Task 1.3; once the
+///     replay is removed in Phase 3 the prefix becomes the sole source
+///     of truth for session-variable reads).
 fn build_program(
-    func_defs: &[FuncDef],
-    type_items: &[TopLevelItem],
+    session: &ReplSession,
     fn_name: &str,
     statements: Vec<Statement>,
     span: &ruxen_core::lexer::token::Span,
 ) -> Program {
+    // Synthetic slot-load prefix for every primitive session variable.
+    // Heap-backed types (String, Array, Option, Result, struct/class
+    // instances) are deferred to a follow-up — the ABI is the same
+    // (i64 handle), but resolving the right Ruxen type to annotate
+    // requires more plumbing than this phase pays for.
+    let mut body: Vec<Statement> = Vec::with_capacity(statements.len() + session.var_slots.len());
+    for vs in &session.var_slots {
+        if let Some(stmt) = slot_load_let(vs, session, span) {
+            body.push(stmt);
+        }
+    }
+    body.extend(statements);
+
     let wrapper = FuncDef {
         name: fn_name.to_string(),
         visibility: Visibility::Private,
@@ -800,23 +833,124 @@ fn build_program(
         return_type: None,
         where_clause: None,
         body: Block {
-            statements,
+            statements: body,
             span: span.clone(),
         },
         doc_comments: Vec::new(),
         span: span.clone(),
     };
 
-    // Order: type-level items first (so methods/fns can reference them),
-    // then function defs, then the wrapper.
-    let mut items: Vec<TopLevelItem> = type_items.to_vec();
-    items.extend(func_defs.iter().cloned().map(TopLevelItem::Function));
+    // Order: REPL slot-FFI lib (declares the __slot_load_i64 /
+    // __slot_store_i64 symbols), then type-level items (so methods/fns
+    // can reference them), then function defs, then the wrapper.
+    let mut items: Vec<TopLevelItem> = Vec::with_capacity(session.type_items.len() + 2);
+    items.push(session.repl_slot_lib.clone());
+    items.extend(session.type_items.iter().cloned());
+    items.extend(session.func_defs.iter().cloned().map(TopLevelItem::Function));
     items.push(TopLevelItem::Function(wrapper));
 
     Program {
         items,
         span: span.clone(),
     }
+}
+
+/// Walk the typed wrapper function's HIR body and return the inferred
+/// type of the LAST let whose binding pattern is
+/// `Pattern::Binding { name }`. Used by `CompileHook::RecordLet` to
+/// feed `register_var` with the real (post-inference) type rather than
+/// the parser-side annotation (which may be absent or partial).
+///
+/// The "last" semantics matter: the wrapper body holds three layered
+/// bindings for a rebound session var — the synthetic slot-load prefix
+/// (always `Ty::Int` today), the cumulative `all_statements` replay
+/// (the prior input's type), and the new user-level let we're about to
+/// record. Scope-wise the new let shadows the others, so its type is
+/// the right answer to register for the slot — picking the first match
+/// would clamp every rebind to whatever the prefix said.
+///
+/// Returns `None` when no such let is found — e.g. multi-pattern
+/// destructuring or a name mismatch.
+fn find_let_type_in_wrapper(
+    program: &ruxen_core::hir::nodes::HirProgram,
+    fn_name: &str,
+    binding_name: &str,
+) -> Option<Ty> {
+    use ruxen_core::hir::nodes::{HirExprKind, HirItem, HirPattern, HirStatement};
+    fn search_stmts(stmts: &[HirStatement], name: &str) -> Option<Ty> {
+        let mut last: Option<Ty> = None;
+        for s in stmts {
+            if let HirStatement::Let { pattern, ty, .. } = s {
+                if let HirPattern::Binding { name: n, .. } = pattern {
+                    if n == name {
+                        last = Some(ty.clone());
+                    }
+                }
+            }
+        }
+        last
+    }
+    for item in &program.items {
+        if let HirItem::Function(f) = item {
+            if f.name == fn_name {
+                if let HirExprKind::Block(stmts, _tail) = &f.body.kind {
+                    return search_stmts(stmts, binding_name);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Build a synthetic `let <name>: <Ty> = __slot_load_i64(<addr>)` for a
+/// primitive session variable. Returns `None` for types this phase
+/// doesn't yet handle (Bool/Float/Char/heap types) — heap types fit
+/// in i64 the same way but need a Ruxen-side cast on the load to type-
+/// check, which is deferred.
+fn slot_load_let(
+    vs: &crate::session::VarSlot,
+    session: &ReplSession,
+    span: &ruxen_core::lexer::token::Span,
+) -> Option<Statement> {
+    use ruxen_core::parser::ast::{LetBinding, Pattern, TypeExpr, TypePath};
+    // Phase 1 scope: Int only. Bool/Float/Char/heap deferred — see fn doc.
+    let (ty_name, ret_segment): (&str, &str) = match vs.ty {
+        Ty::Int => ("Int", "Int"),
+        _ => return None,
+    };
+    let addr = session.slot_addr(vs.idx);
+    let call = Expr {
+        kind: ExprKind::Call {
+            callee: Box::new(Expr {
+                kind: ExprKind::Identifier("__slot_load_i64".to_string()),
+                span: span.clone(),
+            }),
+            args: vec![Expr {
+                kind: ExprKind::IntLiteral(addr, None),
+                span: span.clone(),
+            }],
+            block: None,
+        },
+        span: span.clone(),
+    };
+    let _ = ret_segment;
+    let type_annotation = Some(TypeExpr::Named(TypePath {
+        segments: vec![ty_name.to_string()],
+        generic_args: None,
+        span: span.clone(),
+        rooted: false,
+    }));
+    Some(Statement::Let(LetBinding {
+        mutable: false,
+        pattern: Pattern::Identifier {
+            mutable: false,
+            name: vs.name.clone(),
+            span: span.clone(),
+        },
+        type_annotation,
+        value: Some(Box::new(call)),
+        span: span.clone(),
+    }))
 }
 
 /// Get the span from a top-level item.

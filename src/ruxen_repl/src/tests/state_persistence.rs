@@ -56,6 +56,46 @@ fn def_callable_from_later_input() {
     assert!(outs[1].contains("42"), "got: {:?}", outs);
 }
 
+/// With Task 1.2's synthetic slot-load prefix, a session Int
+/// variable's value comes from the slot at every input — even
+/// when the all_statements replay path is also active (the
+/// prefix-defined binding shadows the replayed one). Phase 3
+/// will remove the replay; this test must keep passing.
+#[test]
+fn int_var_read_from_slot_persists() {
+    let outs = run_session(&[
+        "let answer = 42",
+        "answer",
+    ]);
+    assert!(outs[1].contains("42"), "got: {:?}", outs);
+}
+
+/// After a successful `let` binding, the session must own a
+/// `VarSlot` for the name with type `Ty::Int`. Phase 1
+/// (`register_var` wiring) — the synthetic prefix that consumes
+/// these `VarSlot`s in `build_program` is meaningless without
+/// them being populated in the first place.
+#[test]
+fn int_let_allocates_var_slot() {
+    use crate::eval::eval_input;
+    use crate::session::ReplSession;
+    use ruxen_core::hir::types::Ty;
+
+    let mut session = ReplSession::new().expect("session");
+    match eval_input(&mut session, "let answer = 42") {
+        crate::eval::EvalResult::Ok(_) => {}
+        other => panic!("eval failed: {:?}", match other {
+            crate::eval::EvalResult::Error(e) => e,
+            _ => "non-Ok, non-Error result".into(),
+        }),
+    }
+    let slot = session
+        .find_var_slot("answer")
+        .expect("expected a slot for `answer` after `let answer = 42`");
+    assert_eq!(slot.name, "answer");
+    assert_eq!(slot.ty, Ty::Int, "expected Ty::Int, got {:?}", slot.ty);
+}
+
 #[test]
 fn type_item_visible_from_later_input() {
     let outs = run_session(&[
