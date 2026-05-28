@@ -8,6 +8,13 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **VS Code extension is releasable (`editors/vscode` v0.1.0).** The
+  extension now launches the language server via the unified `ruxen`
+  binary's `lsp` subcommand (configurable through the new
+  `ruxen.server.args` setting), ships `package`/`publish` npm scripts,
+  marketplace metadata, a README, and a license pointer. Packaging no
+  longer strips `node_modules`, so the `.vsix` bundles its
+  `vscode-languageclient` runtime dependency and starts correctly.
 - **Package manager — workspaces, `ruxen publish`, `ruxen update
   --precise`.** `Ruxen.toml` now accepts a `[workspace]` table with
   literal members and trailing-`*` globs; intra-workspace deps

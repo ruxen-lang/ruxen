@@ -1,11 +1,16 @@
 {
   "name": "ruxen",
   "displayName": "Ruxen",
-  "description": "Language support for Ruxen",
-  "version": "0.0.1",
+  "description": "Language support for Ruxen — syntax highlighting and LSP (completion, hover, diagnostics, go-to-definition).",
+  "version": "0.1.0",
   "publisher": "ruxen",
+  "license": "(MIT OR Apache-2.0)",
   "engines": { "vscode": "^1.80.0" },
   "categories": ["Programming Languages"],
+  "keywords": ["ruxen", "rx", "language server", "lsp"],
+  "repository": { "type": "git", "url": "https://github.com/ruxen-lang/ruxen.git", "directory": "editors/vscode" },
+  "bugs": { "url": "https://github.com/ruxen-lang/ruxen/issues" },
+  "homepage": "https://github.com/ruxen-lang/ruxen#readme",
   "activationEvents": ["onLanguage:ruxen"],
   "main": "./out/extension.js",
   "contributes": {
@@ -26,7 +31,13 @@
         "ruxen.server.path": {
           "type": "string",
           "default": "",
-          "description": "Absolute path to the ruxen-lsp binary. If empty, falls back to 'ruxen-lsp' on PATH."
+          "description": "Absolute path to the 'ruxen' executable that hosts the language server. If empty, uses 'target/release/ruxen' in the workspace, then 'ruxen' on PATH."
+        },
+        "ruxen.server.args": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["lsp"],
+          "description": "Arguments passed to the server executable. The language server is the 'lsp' subcommand of the 'ruxen' binary, so the default is [\"lsp\"]."
         },
         "ruxen.trace.server": {
           "type": "string",
@@ -38,9 +49,13 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "vscode:prepublish": "npm run check-types && node esbuild.js --production",
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "check-types": "tsc --noEmit",
+    "package": "vsce package",
+    "publish": "vsce publish",
+    "publish:openvsx": "ovsx publish"
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1"
@@ -48,6 +63,9 @@
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.80.0",
+    "@vscode/vsce": "^3.2.0",
+    "esbuild": "^0.24.0",
+    "ovsx": "^0.10.0",
     "typescript": "^5.3.0"
   }
 }
