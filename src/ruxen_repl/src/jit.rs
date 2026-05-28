@@ -659,6 +659,19 @@ fn register_runtime_symbols(builder: &mut JITBuilder) {
         "ruxen_print_float",
         crate::capture::ruxen_repl_print_float_shim as *const u8,
     );
+    // Session-variable slot helpers — invoked by the synthetic
+    // prefix/suffix injection in `eval::build_program` (Phase 1
+    // Approach A). Keep them adjacent to the puts/print shims so
+    // future maintainers see all REPL-only runtime overrides in
+    // one place.
+    builder.symbol(
+        "ruxen_repl_slot_load_i64",
+        crate::slots::ruxen_repl_slot_load_i64 as *const u8,
+    );
+    builder.symbol(
+        "ruxen_repl_slot_store_i64",
+        crate::slots::ruxen_repl_slot_store_i64 as *const u8,
+    );
     reg!(builder, ruxen_int_to_string);
     reg!(builder, ruxen_float_to_string);
     reg!(builder, ruxen_bool_to_string);

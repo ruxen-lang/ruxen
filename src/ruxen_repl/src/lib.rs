@@ -6,6 +6,8 @@
 #[allow(dead_code)]
 mod capture;
 #[allow(dead_code)]
+mod slots;
+#[allow(dead_code)]
 mod commands;
 mod completion;
 #[allow(dead_code)]
