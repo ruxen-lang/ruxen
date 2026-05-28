@@ -7,6 +7,20 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+### Fixed
+- **Parser: accept `;` as a leading terminator in block bodies.**
+  `parse_body_with_options` (the common loop behind every `def`/`if`/
+  `while`/`for`/`match`-arm/class body) called `skip_newlines()` at the
+  loop head, which doesn't consume `Semicolon`. As a result, single-line
+  idioms like `def double(n: Int) -> Int; n * 2; end` and `def noop ->
+  Unit; end` failed with a misleading `expected expression, found
+  Semicolon`. Added `Parser::skip_terminators()` (consumes both
+  `Newline` and `Semicolon`) and switched the body loop to use it.
+  `expect_terminator` already accepted either form after a statement;
+  this brings the loop head into line. No semantic change for
+  multi-line bodies. Closes the REPL safety-net test
+  `def_callable_from_later_input`.
+
 ### Added
 - **REPL session-variable slot writeback (refactor phase 1.3 — Path C step 2).**
   `build_program` now appends a synthetic

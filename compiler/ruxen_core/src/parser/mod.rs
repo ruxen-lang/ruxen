@@ -408,6 +408,17 @@ impl Parser {
         }
     }
 
+    /// Skip both `Newline` and `Semicolon` tokens at the current
+    /// position. Used by block-body loops so multiple terminators
+    /// in a row (`stmt;;`, `;\n;\n`, a leading `;` right after a
+    /// `def` header, etc.) don't fall into `parse_statement` and
+    /// produce a misleading "expected expression, found Semicolon".
+    pub(crate) fn skip_terminators(&mut self) {
+        while self.at(TokenKind::Newline) || self.at(TokenKind::Semicolon) {
+            self.advance();
+        }
+    }
+
     /// Expect a statement terminator: newline, `;`, or EOF.
     pub(crate) fn expect_terminator(&mut self) {
         if self.at(TokenKind::Newline) || self.at(TokenKind::Semicolon) {

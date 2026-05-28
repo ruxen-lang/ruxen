@@ -429,7 +429,7 @@ impl Parser {
         let mut statements = Vec::new();
 
         loop {
-            self.skip_newlines();
+            self.skip_terminators();
             match self.current_kind() {
                 TokenKind::End | TokenKind::Else | TokenKind::Elsif | TokenKind::Eof => break,
                 _ => {
