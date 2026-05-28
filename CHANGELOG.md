@@ -8,6 +8,21 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **Test framework — `ruxen test` + pure-Ruxen `std.test` (T3.03).**
+  A new `std-test` stdlib package ships an RSpec-style DSL —
+  `Tester.describe`/`context`/`it`/`xit`/`before`/`after` with
+  `t.expect(x).to_eq/.not_to_eq` plus `BoolMatcher`/`OptionMatcher`/
+  `ArrayMatcher`/`StringMatcher` and `t.it_panics(name, substr)`. The
+  `ruxen test` subcommand discovers `tests/**.rx` (skipping
+  `tests/support/`), synthesises a per-file `def main` that drives a
+  `Runner`, builds each file through the incremental cache, and fans the
+  binaries out across worker threads — each `it` runs in a forked child
+  so a panic isolates to one case. Flags: `FILTER`, `--release`,
+  `--test-threads`, `--fail-fast`, `--nocapture`, `--list`, `--no-run`,
+  `--include-pending`, `--format=pretty|tap|json`. `ruxen new` scaffolds
+  a green `tests/example.rx`. v1 limitations (substring verification for
+  `it_panics`, after-hook inheritance into nested `context`) are tracked
+  in `docs/tutorial/19-writing-and-running-tests.md`.
 - **VS Code extension is releasable (`editors/vscode` v0.1.0).** The
   extension now launches the language server via the unified `ruxen`
   binary's `lsp` subcommand (configurable through the new

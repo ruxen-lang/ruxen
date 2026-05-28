@@ -93,7 +93,7 @@ class Tester
 
   ## Define and immediately execute a test case that is EXPECTED to
   ## panic. The expected substring is recorded but not verified in v1
-  ## (see docs/tutorial/17-testing.md "Known v1 limitations").
+  ## (see docs/tutorial/19-writing-and-running-tests.md "What is not in v1").
   ##
   ## Pass iff the child either died from a signal OR exited with a
   ## non-zero status — both indicate the body did not return normally.

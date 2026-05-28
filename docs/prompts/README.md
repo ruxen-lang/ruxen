@@ -11,26 +11,13 @@ docs/prompts/
 ├── README.md                           # this file
 ├── 00_universal_rules.md               # TDD, mem caps, anti-shortcuts — READ FIRST
 ├── v1/
-│   ├── 01_phase1_remainder.md          # P0.7, T1.05 derive, T5.04 phase 3, P0.12 un-reserve
-│   ├── 02_phase2_stdlib_string.md
-│   ├── 03_phase2_stdlib_array.md
-│   ├── 04_phase2_stdlib_map.md
-│   ├── 05_phase2_stdlib_iterator.md
-│   ├── 06_phase2_stdlib_io_fmt.md
-│   ├── 06_5_phase2_sync_io_completeness.md   # File, BufReader/Writer, fs power ops, TCP wrappers, Duration/Instant/sleep, tagged IoError
-│   ├── 07_phase3_const_generics.md           # DEFERRED — finish in-flight only
 │   ├── 08_phase3_hrtbs_some_mixin.md         # DEFERRED — v1.5/v2
 │   ├── 09_phase3_gats_any_mixin.md           # DEFERRED — v1.5/v2
-│   ├── 10_phase3_lsp.md
 │   ├── 11_phase3_incremental.md
 │   ├── 12_phase3_diagnostics_polish.md  # T5.03 + T5.05
-│   ├── 13_phase3_benchmarking.md
-│   ├── 14_phase4_concurrency.md
-│   ├── 15_phase4_async.md
 │   ├── 16_phase4_no_std_wasm.md
 │   ├── 17_phase4_cross_compile_abi.md
 │   ├── 18_phase4_debugger_dwarf.md
-│   ├── 19_phase5_test_framework.md
 │   ├── 20_phase5_ruxendoc.md
 │   ├── 21_phase5_mir_opts.md
 │   ├── 22_phase5_pkg_mgr_workspaces.md
