@@ -249,10 +249,17 @@ impl<'a> InferenceEngine<'a> {
                 // For mut methods (RefMut self mode) or void-like methods
                 // (display, display_all, etc.), default to Unit instead of erroring
                 let is_mut_method = func.self_mode == Some(HirSelfMode::RefMut);
-                let is_void_method = matches!(
-                    func.name.as_str(),
-                    "display" | "display_all" | "init" | "drop"
-                );
+                // Overloaded methods are renamed `<name>__overload<N>` by the
+                // resolver, so match the BASE name — otherwise an overloaded
+                // void method (`drop`, `display`, …) would skip the Unit
+                // default and spuriously demand an explicit return type.
+                let base_name = func
+                    .name
+                    .split("__overload")
+                    .next()
+                    .unwrap_or(func.name.as_str());
+                let is_void_method =
+                    matches!(base_name, "display" | "display_all" | "init" | "drop");
                 if is_mut_method || is_void_method {
                     func.return_ty = Ty::Unit;
                 } else {

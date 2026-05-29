@@ -8,6 +8,12 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Fixed
+- **Overloaded `drop` (and `display`/`init`) no longer demands an explicit
+  return type.** The resolver renames overloaded methods to
+  `<name>__overload<N>`; the "public function must have an explicit return
+  type" check matched the bare name, so an overload-renamed void method (e.g.
+  `drop__overload1400`) skipped the Unit default and spuriously errored. The
+  check now matches the base name.
 - **Shared signature renderer for IDE display.** Hover and signature help no
   longer hand-roll signature strings (which disagreed with each other and with
   `ruxen fmt` — e.g. `def f()` vs `def f`, `async def f()`). Both now call the

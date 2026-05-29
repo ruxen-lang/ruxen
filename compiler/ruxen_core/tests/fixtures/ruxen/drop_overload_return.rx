@@ -1,0 +1,15 @@
+## An overloaded `drop` (the resolver renames the variants to
+## `drop__overload<N>`). A `drop` variant with no explicit return type must
+## still default to Unit — not trip the "public function must have an explicit
+## return type" check, which matched the bare name `drop` only.
+class Res
+  count: Int
+
+  def drop
+    nil
+  end
+
+  def drop(n: Int)
+    nil
+  end
+end
