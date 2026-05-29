@@ -686,7 +686,34 @@ test_repl() {
 # the REPL genuinely can't model without a redesign (mutation
 # persistence across inputs, JIT paths for certain features) —
 # those are reported separately as "skip" and not counted as failures.
-REPL_KNOWN_SKIP=()
+REPL_KNOWN_SKIP=(
+  # 727_async_tcp_echo, 727b_async_tcp_read_timeout — bridge a
+  # sync `Thread.spawn_raw` server with an async client over a
+  # hardcoded localhost port (31729 / 31730). The REPL refactor's
+  # replay-suppression flag (Phase 3) wraps ruxen_puts /
+  # ruxen_fs_* / ruxen_tcp_* etc. to no-op during the replay
+  # portion of each wrapper, but Thread.spawn_raw is intentionally
+  # NOT flag-wrapped — fixtures 555 / 725 rely on Thread.sleep
+  # advancing across replays so async timer chains complete. The
+  # consequence: on the REPL's per-input replay, the cumulative
+  # session_var_mutations re-runs the original spawn. The second
+  # spawn's listener.bind hits EADDRINUSE on the still-bound port,
+  # server_loop returns 0, the fixture's spawn-fail guard exits
+  # early before any puts reaches stdout — and even the spawn-fail
+  # message is suppressed because the replay flag is still set
+  # when it would fire.
+  #
+  # Fixing this properly requires either (a) a persistent async
+  # executor whose listener state survives across REPL inputs,
+  # or (b) a per-session-var binding for Thread/JoinHandle/
+  # AsyncTcpListener so each is constructed once and replays load
+  # the prior handle from a slot instead of re-running the
+  # constructor. Both are multi-day refactors outside the scope
+  # of the v1 release. Gated here with this rationale so future
+  # work has a clear pickup point.
+  727_async_tcp_echo
+  727b_async_tcp_read_timeout
+)
 
 # Per-fixture REPL worker. Same shape as _e2e_run_case_one: stdout =
 # TSV status (PASS / FAIL / SKIP), stderr = live progress line. The
