@@ -124,6 +124,11 @@ pub fn runtime_signature(name: &str) -> Option<(Vec<Type>, Option<Type>)> {
         "ruxen_float_to_string" => Some((vec![types::F64], Some(types::I64))),
         "ruxen_bool_to_string" => Some((vec![types::I64], Some(types::I64))),
         "ruxen_char_to_string" => Some((vec![types::I64], Some(types::I64))),
+        // Numeric conversions: Int.to_f (i64 -> f64) and Float.to_i
+        // (f64 -> i64). Floats cross the C ABI as a real F64 here (cf.
+        // `ruxen_float_to_string` above), so the C bodies are plain casts.
+        "ruxen_int_to_f" => Some((vec![types::I64], Some(types::F64))),
+        "ruxen_float_to_i" => Some((vec![types::F64], Some(types::I64))),
         // String operations
         "ruxen_string_concat" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "ruxen_string_from" => Some((vec![types::I64], Some(types::I64))),

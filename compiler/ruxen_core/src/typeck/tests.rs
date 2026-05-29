@@ -366,6 +366,58 @@ mod tests {
     }
 
     #[test]
+    fn unknown_method_on_primitive_errors() {
+        // `a.to_f()` on an Int has no such method. Typeck must emit a
+        // clean "no method" error instead of silently returning a fresh
+        // type var that crashes the JIT with `can't resolve symbol
+        // Int_to_f`.
+        let result = parse_and_check("def test\n  let a: Int = 1\n  let b = a.bogus()\nend");
+        let has_no_method = result.diagnostics.iter().any(|d| {
+            d.level == crate::diagnostics::DiagnosticLevel::Error
+                && d.message.contains("no method")
+                && d.message.contains("bogus")
+        });
+        assert!(
+            has_no_method,
+            "expected `no method bogus` error, got: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn int_to_f_infers_float() {
+        // `Int.to_f` converts to Float; typeck must resolve it cleanly
+        // (no "no method" error from the REQ2 scalar-primitive guard).
+        let result = parse_and_check("def test\n  let a: Int = 1\n  let b = a.to_f()\nend");
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.level == crate::diagnostics::DiagnosticLevel::Error)
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "`Int.to_f` should type-check cleanly, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn float_to_i_infers_int() {
+        // `Float.to_i` converts to Int; typeck must resolve it cleanly.
+        let result = parse_and_check("def test\n  let a: Float = 1.5\n  let b = a.to_i()\nend");
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.level == crate::diagnostics::DiagnosticLevel::Error)
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "`Float.to_i` should type-check cleanly, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
     fn undefined_variable_error() {
         let result = parse_and_check("def test\n  let x = undefined_var\nend");
         let has_error = result

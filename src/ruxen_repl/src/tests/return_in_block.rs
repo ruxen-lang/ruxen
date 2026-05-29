@@ -56,3 +56,38 @@ fn return_inside_else_arm_compiles() {
     // break the tail-preservation skip guard either.
     let _ = outs;
 }
+
+/// The replayed bare `return` from a prior input must not collide
+/// with the natural tail of the wrapper for a subsequent let-binding
+/// input. Specifically: input 1 binds an Int; input 2 uses `if…return…end`
+/// (no else); input 3 does `let ok = some_int_call`. The wrapper for
+/// input 3 has to swallow the replayed return cleanly — by emitting
+/// `()` as the tail instead of the natural `ok`-name tail.
+#[test]
+fn let_after_replayed_return_compiles() {
+    let outs = run_session(&[
+        "def maybe_fail(x: Int) -> Int; if x == 0; 1; else; x; end; end",
+        "let n = 5",
+        "if n == 0\n  puts \"zero\"\n  return\nend",
+        "let ok = maybe_fail(n)",
+        "ok",
+    ]);
+    // The last input ("ok") asks the REPL to display the slot
+    // value. If the wrapper for input 3 (`let ok = …`) failed to
+    // compile (the Phase 2 bug), output 4 wouldn't have ok defined
+    // and the bare `ok` query would error.
+    assert!(outs[4].contains("5"), "got: {:?}", outs);
+}
+
+/// Variant: a side-effecting `puts` after a return-containing
+/// replay. The wrapper for the `puts` input must accept the
+/// replayed bare return.
+#[test]
+fn puts_after_replayed_return_compiles() {
+    let outs = run_session(&[
+        "let n = 5",
+        "if n == 0\n  puts \"zero\"\n  return\nend",
+        "puts \"reached\"",
+    ]);
+    assert!(outs[2].contains("reached"), "got: {:?}", outs);
+}

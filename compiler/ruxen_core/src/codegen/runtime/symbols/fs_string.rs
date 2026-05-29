@@ -67,6 +67,8 @@ pub(in crate::codegen::runtime) const PRIMITIVES: &[&str] = &[
     "ruxen_float_to_string",
     "ruxen_bool_to_string",
     "ruxen_char_to_string",
+    "ruxen_int_to_f",
+    "ruxen_float_to_i",
 ];
 
 // String stdlib surface.

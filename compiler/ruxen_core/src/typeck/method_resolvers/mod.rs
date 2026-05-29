@@ -1127,6 +1127,13 @@ pub(super) fn builtin_method_type(
         (Ty::USize, "to_string") => Some(Ty::String),
         (Ty::Float, "to_string") => Some(Ty::String),
 
+        // Numeric conversions. Ruxen has no implicit Int<->Float coercion
+        // (see E0707), so these explicit methods are the supported way to
+        // cross the integer/float boundary. `to_f` widens an `Int` to a
+        // `Float`; `to_i` truncates a `Float` toward zero to an `Int`.
+        (Ty::Int, "to_f") => Some(Ty::Float),
+        (Ty::Float, "to_i") => Some(Ty::Int),
+
         // Generic class methods
         (Ty::Class { .. }, "new") => Some(ty.clone()),
         (Ty::Class { .. }, "clone") => Some(ty.clone()),

@@ -98,7 +98,42 @@ impl<'a> InferenceEngine<'a> {
             return self.ctx.fresh_type_var();
         }
 
+        // `.await` is postfix syntax, not a real method: on a synthesised
+        // future class (e.g. `__FetchUserFuture`) it is resolved by the
+        // async-lowering elision path long after typeck, so it never has
+        // a method signature here. Leave it to that later phase — erroring
+        // would reject every `expr.await` whose future is not the bridge
+        // `Future` class.
+        if method_name == "await" {
+            return self.ctx.fresh_type_var();
+        }
+
+        // Method not found. For a scalar value-primitive receiver
+        // (numeric, Bool, Char) an unknown method is definitively an
+        // error: these types have no class shell and no user-defined
+        // method surface, so the call would mangle to `<Type>_<method>`
+        // (e.g. `Int_to_f`) with no matching runtime symbol — a link
+        // error in AOT builds and a hard JIT panic in the REPL
+        // (`can't resolve symbol Int_to_f`). Emit a clean, source-spanned
+        // diagnostic instead, mirroring the field-access path in
+        // `infer/expr.rs` so `a.bogus` and `a.bogus()` fail identically.
+        //
+        // We deliberately do NOT error for class / struct / enum /
+        // collection / generic receivers: methods on those are resolved
+        // by later phases (e.g. `Array[T]_get_var` → `ruxen_vec_get_opt`,
+        // user methods on generic classes like `Repository[Todo]`), which
+        // the lenient fresh-var fallback below still feeds.
+        let resolved = self.ctx.resolve(obj_ty);
+        if resolved.is_numeric() || matches!(resolved, Ty::Bool | Ty::Char) {
+            self.error(
+                format!("no method `{method_name}` on type `{resolved}`"),
+                span,
+            );
+            return Ty::Error;
+        }
+
         // Method not found — but don't error for common chaining patterns
+        // on richer receiver types (resolved by later phases).
         self.ctx.fresh_type_var()
     }
 

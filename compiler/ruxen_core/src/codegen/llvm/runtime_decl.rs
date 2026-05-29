@@ -150,6 +150,9 @@ pub fn declare_runtime_functions<'ctx>(module: &Module<'ctx>, context: &'ctx Con
     decl!("ruxen_int_to_string", ptr_ty, [i64_ty]);
     decl!("ruxen_float_to_string", ptr_ty, [f64_ty]);
     decl!("ruxen_bool_to_string", ptr_ty, [i64_ty]);
+    // Numeric conversions: Int.to_f (i64 -> f64), Float.to_i (f64 -> i64).
+    decl!("ruxen_int_to_f", f64_ty, [i64_ty]);
+    decl!("ruxen_float_to_i", i64_ty, [f64_ty]);
 
     // String operations
     decl!("ruxen_string_concat", ptr_ty, [ptr_ty, ptr_ty]);

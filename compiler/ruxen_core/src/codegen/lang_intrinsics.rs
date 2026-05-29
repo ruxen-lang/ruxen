@@ -75,6 +75,16 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // names (Fn(...)_call, super, yield) rather than in any
         // package's lib block.
         "Float_to_string_prec" => return Ok("ruxen_float_to_string_prec"),
+        // Numeric conversions. `Int.to_f()` / `Float.to_i()` are real
+        // surface methods (typeck: `method_resolvers::builtin_method_type`)
+        // but the receiver is a scalar primitive with no `.rx` class shell,
+        // so the call-site mangling (`Int_to_f` / `Float_to_i`) has no
+        // FFI-alias entry to rewrite it. Map them to their runtime symbols
+        // here, the same way the precision helpers above are handled —
+        // otherwise the mangled name falls through to the `Ok(name)`
+        // link-time fallback and dies as `can't resolve symbol Int_to_f`.
+        "Int_to_f" => return Ok("ruxen_int_to_f"),
+        "Float_to_i" => return Ok("ruxen_float_to_i"),
         "String_truncate_chars" => return Ok("ruxen_string_truncate_chars"),
         // Phase E-rest 3 of #06.95: MIR-synthesised Formatter callees
         // from `mir/lower/interpolation.rs::emit_display_dispatch`.
