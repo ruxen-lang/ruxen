@@ -26,7 +26,11 @@ class Regex
     def is_match as "ruxen_regex_is_match"(text: &String) -> Bool
 
     ## First match, with capture data, or None.
-    def match as "ruxen_regex_match"(text: &String) -> Option[Match]
+    ## Named `find` (not `match`) because `match` is a reserved
+    ## keyword in Ruxen — block opener for pattern matching. The C
+    ## symbol stays `ruxen_regex_match`; only the surface name
+    ## differs. Matches the Rust regex crate's naming convention.
+    def find as "ruxen_regex_match"(text: &String) -> Option[Match]
 
     ## All matches, left-to-right, non-overlapping.
     def scan as "ruxen_regex_scan"(text: &String) -> Array[Match]
@@ -50,10 +54,16 @@ class Match
     def matched as "ruxen_match_matched" -> String
 
     ## Byte offset (inclusive) into the subject where the match begins.
-    def start as "ruxen_match_start" -> Int
+    ## Paired with `end_pos` for symmetric naming (the keyword
+    ## collision is on `end`, not `start`, but matching the pair
+    ## reads cleaner).
+    def start_pos as "ruxen_match_start" -> Int
 
     ## Byte offset (exclusive) into the subject where the match ends.
-    def end as "ruxen_match_end" -> Int
+    ## Named `end_pos` (not `end`) because `end` is a reserved
+    ## keyword in Ruxen — block terminator. The C symbol is still
+    ## `ruxen_match_end`; only the surface name is renamed.
+    def end_pos as "ruxen_match_end" -> Int
 
     ## Numbered capture group. `group(0)` returns the whole match for
     ## symmetry with JS `match[0]`. Returns None if `n` exceeds the
