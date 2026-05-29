@@ -1,3 +1,64 @@
 ## std::regex — PCRE2-backed regex with first-class /pat/flags literals
-## and the `~=` match operator. Scaffolding only — public surface
-## (class Regex / class Match / class RegexError) lands in Phase 2.
+## and the `~=` match operator.
+
+lib "pcre2-8"
+
+class RegexError
+  ## Description from PCRE2's compile-time error.
+  def message as "ruxen_regex_error_message" -> String
+  ## Byte offset into the pattern where compilation failed.
+  def offset as "ruxen_regex_error_offset" -> Int
+end
+
+class Regex
+  ## Runtime-built pattern. For compile-time-known patterns use the
+  ## /pat/flags literal — those are compiled once at program start.
+  def self.new as "ruxen_regex_new"(pattern: &String, flags: &String) -> Result[Regex, RegexError]
+
+  ## Predicate. The `~=` operator desugars to this.
+  def is_match as "ruxen_regex_is_match"(text: &String) -> Bool
+
+  ## First match, with capture data, or None.
+  def match as "ruxen_regex_match"(text: &String) -> Option[Match]
+
+  ## All matches, left-to-right, non-overlapping.
+  def scan as "ruxen_regex_scan"(text: &String) -> Array[Match]
+
+  ## Replace the FIRST match. Replacement supports PCRE2 substitution
+  ## syntax (`$1`, `${name}` for back-references).
+  def replace as "ruxen_regex_replace"(text: &String, replacement: &String) -> String
+
+  ## Replace ALL matches. Same replacement syntax as `replace`.
+  def replace_all as "ruxen_regex_replace_all"(text: &String, replacement: &String) -> String
+
+  ## Split `text` at every match. Empty trailing-match segments
+  ## are dropped (matches Ruby / JS behaviour).
+  def split as "ruxen_regex_split"(text: &String) -> Array[String]
+end
+
+class Match
+  ## The entire matched substring.
+  def matched as "ruxen_match_matched" -> String
+
+  ## Byte offset (inclusive) into the subject where the match begins.
+  def start as "ruxen_match_start" -> Int
+
+  ## Byte offset (exclusive) into the subject where the match ends.
+  def end as "ruxen_match_end" -> Int
+
+  ## Numbered capture group. `group(0)` returns the whole match for
+  ## symmetry with JS `match[0]`. Returns None if `n` exceeds the
+  ## group count or the group didn't participate in the match.
+  def group as "ruxen_match_group"(n: Int) -> Option[String]
+
+  ## Named capture from `(?<name>...)`. None if no such group or it
+  ## didn't participate.
+  def named as "ruxen_match_named"(name: &String) -> Option[String]
+
+  ## All numbered groups in declaration order. Index 0 is the whole
+  ## match; index 1+ are parenthesised captures.
+  def groups as "ruxen_match_groups" -> Array[Option[String]]
+
+  ## All successful named captures.
+  def named_groups as "ruxen_match_named_groups" -> HashMap[String, String]
+end

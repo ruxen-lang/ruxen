@@ -284,6 +284,31 @@ pub fn runtime_signature(name: &str) -> Option<(Vec<Type>, Option<Type>)> {
         "ruxen_option_is_none" => Some((vec![types::I64], Some(types::I8))),
         "ruxen_result_is_ok" => Some((vec![types::I64], Some(types::I8))),
         "ruxen_result_is_err" => Some((vec![types::I64], Some(types::I8))),
+        // std::regex — see library/std/regex/runtime/regex.c
+        "ruxen_regex_new" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "ruxen_regex_compile_const" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "ruxen_regex_is_match" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "ruxen_regex_match" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "ruxen_regex_scan" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "ruxen_regex_replace" => {
+            Some((vec![types::I64, types::I64, types::I64], Some(types::I64)))
+        }
+        "ruxen_regex_replace_all" => {
+            Some((vec![types::I64, types::I64, types::I64], Some(types::I64)))
+        }
+        "ruxen_regex_split" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "ruxen_regex_drop" => Some((vec![types::I64], None)),
+        "ruxen_regex_error_message" => Some((vec![types::I64], Some(types::I64))),
+        "ruxen_regex_error_offset" => Some((vec![types::I64], Some(types::I64))),
+        "ruxen_regex_error_drop" => Some((vec![types::I64], None)),
+        "ruxen_match_matched" => Some((vec![types::I64], Some(types::I64))),
+        "ruxen_match_start" => Some((vec![types::I64], Some(types::I64))),
+        "ruxen_match_end" => Some((vec![types::I64], Some(types::I64))),
+        "ruxen_match_group" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "ruxen_match_named" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "ruxen_match_groups" => Some((vec![types::I64], Some(types::I64))),
+        "ruxen_match_named_groups" => Some((vec![types::I64], Some(types::I64))),
+        "ruxen_match_drop" => Some((vec![types::I64], None)),
         // No-ops: these are declared via call-site inference (variable arity).
         "ruxen_noop" => Some((vec![], None)),
         _ => None,
