@@ -97,45 +97,312 @@ fn collect_replay_statements(session: &ReplSession) -> Vec<Statement> {
         .iter()
         .map(|vs| vs.name.as_str())
         .collect();
+    // Heap-typed session vars (Array, Vec, AtomicI64, …) — receivers
+    // we care about when deciding whether to keep the side effect of
+    // a dropped slot-backed let. A `let removed = v.remove(0)` whose
+    // receiver `v` is in this set IS a mutation we must replay; a
+    // `let handle = Thread.spawn_raw(closure)` whose receiver
+    // `Thread` is NOT a session variable is an external resource
+    // spawn we must NOT replay (port re-bind / leaked threads —
+    // fixture 727 hangs otherwise).
+    let session_var_names: HashSet<String> = session
+        .let_bindings
+        .iter()
+        .filter_map(|b| match &b.pattern {
+            Pattern::Identifier { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
     session
         .session_var_mutations
         .iter()
-        .filter(|s| !is_let_for_slot_backed(s, &slot_names))
-        .cloned()
+        .filter_map(|s| rewrite_for_replay(s, &slot_names, &session_var_names))
         .collect()
 }
 
-fn is_let_for_slot_backed(stmt: &Statement, slot_names: &HashSet<&str>) -> bool {
+/// Replay rewrite for a historical statement.
+///
+/// - Pure-binding lets / assigns to a slot-backed name: dropped
+///   (`None`). The slot LOAD/STORE pair already round-trips the
+///   value, and re-binding would either shadow the slot prefix with
+///   a stale RHS (`let x = 1` after slot already holds 20) or
+///   double-apply a mutation (`x = x + 1` on top of the slot-loaded
+///   post-mutation value).
+/// - Slot-backed lets whose RHS has side effects on OTHER state
+///   (e.g. `let removed = v.remove(0)` mutating heap-backed `v`,
+///   `let prev = a.fetch_add(5)` mutating heap-backed AtomicI64
+///   `a`): rewritten to a bare expression statement
+///   `Statement::Expression(RHS)` so the side effect re-fires but
+///   the rebinding is skipped. Without this, fixtures 404 (Array
+///   remove/insert) and 712 (AtomicI64 fetch_add) lost their
+///   mutation on every subsequent input's replay — `v.len`
+///   stayed stale and `a.load` always returned 0.
+/// - Everything else: passes through unchanged.
+fn rewrite_for_replay(
+    stmt: &Statement,
+    slot_names: &HashSet<&str>,
+    session_var_names: &HashSet<String>,
+) -> Option<Statement> {
     match stmt {
         Statement::Let(b) => match &b.pattern {
-            Pattern::Identifier { name, .. } => slot_names.contains(name.as_str()),
-            // Multi-pattern lets (tuple/struct destructuring) aren't
-            // slot-backed today; let them replay normally.
-            _ => false,
+            Pattern::Identifier { name, .. } if slot_names.contains(name.as_str()) => {
+                match b.value.as_deref() {
+                    Some(rhs) if rhs_mutates_session_var(rhs, session_var_names) => {
+                        // Drop the binding, keep the side effect.
+                        Some(Statement::Expression(rhs.clone()))
+                    }
+                    _ => None,
+                }
+            }
+            _ => Some(stmt.clone()),
         },
-        // Assignments / compound-assignments to a slot-backed name are
-        // dropped too. The slot prefix/suffix already round-trips the
-        // value through the persistent slot, so the slot LOAD reflects
-        // every prior mutation's stored result. Re-replaying the
-        // assignment would re-apply the mutation on top of the already-
-        // up-to-date slot value — `counter = counter + 1` would
-        // double-count on every subsequent input. (Pre-Phase 2.5 the
-        // model worked because the corresponding `Let` in the replay
-        // first re-shadowed the binding back to its initial value, so
-        // the chronological assignments rebuilt the current value from
-        // scratch. Phase 2.5 makes the slot the source of truth and
-        // drops both halves of that dance together.)
         Statement::Expression(e) => match &e.kind {
             ExprKind::Assign { target, .. } | ExprKind::CompoundAssign { target, .. } => {
                 if let ExprKind::Identifier(n) = &target.kind {
-                    slot_names.contains(n.as_str())
-                } else {
-                    false
+                    if slot_names.contains(n.as_str()) {
+                        return None;
+                    }
                 }
+                Some(stmt.clone())
             }
-            _ => false,
+            _ => Some(stmt.clone()),
         },
     }
+}
+
+/// True if the let-RHS expression mutates a SESSION variable
+/// transitively — i.e. contains a method-call whose receiver chain
+/// roots in an identifier present in `session_var_names`.
+///
+/// This is narrower than "any side effect": we deliberately leave
+/// out free-function calls and method calls on non-session
+/// receivers (class statics like `Thread.spawn_raw`,
+/// `AtomicI64.new`, `String.from`). Those create or touch resources
+/// outside the cumulative session-state model — replaying them would
+/// either re-allocate (harmless leak) or, for `Thread.spawn_raw`,
+/// spawn a second OS thread that races with the original on a bound
+/// port (fixture 727 hangs that way).
+///
+/// In contrast, a method call whose receiver IS a tracked session
+/// variable (`v.remove(0)`, `a.fetch_add(5)`, `v.push(x)`) mutates
+/// state the next input's slot prefix / heap-handle reload CANNOT
+/// reconstruct, so its side effect MUST replay. Fixtures 404 / 712
+/// hinge on this.
+///
+/// Heuristic limits: we walk through composite-expression structure
+/// (binary op, field access, etc.) so a mutation buried in a sub-
+/// expression still counts. Closures defined in the RHS are NOT
+/// inspected — their bodies don't execute until invoked, so the
+/// let itself doesn't carry their side effect.
+fn rhs_mutates_session_var(rhs: &Expr, session_var_names: &HashSet<String>) -> bool {
+    fn receiver_is_session_var(recv: &Expr, names: &HashSet<String>) -> bool {
+        let mut cur = recv;
+        loop {
+            match &cur.kind {
+                ExprKind::Identifier(n) => return names.contains(n),
+                ExprKind::FieldAccess { object, .. } | ExprKind::SafeNav { object, .. } => {
+                    cur = object;
+                }
+                ExprKind::Index { object, .. } => {
+                    cur = object;
+                }
+                ExprKind::MethodCall { object, .. } | ExprKind::SafeNavCall { object, .. } => {
+                    cur = object;
+                }
+                ExprKind::Try(inner) => cur = inner,
+                _ => return false,
+            }
+        }
+    }
+    fn walk(e: &Expr, names: &HashSet<String>) -> bool {
+        match &e.kind {
+            ExprKind::MethodCall { object, args, .. }
+            | ExprKind::SafeNavCall { object, args, .. } => {
+                if receiver_is_session_var(object, names) {
+                    return true;
+                }
+                if walk(object, names) {
+                    return true;
+                }
+                args.iter().any(|a| walk(a, names))
+            }
+            ExprKind::Call { callee, args, .. } => {
+                if walk(callee, names) {
+                    return true;
+                }
+                args.iter().any(|a| walk(a, names))
+            }
+            ExprKind::ClosureCall { callee, args, .. } => {
+                if walk(callee, names) {
+                    return true;
+                }
+                args.iter().any(|a| walk(a, names))
+            }
+            ExprKind::FieldAccess { object, .. } | ExprKind::SafeNav { object, .. } => {
+                walk(object, names)
+            }
+            ExprKind::Index { object, index } => walk(object, names) || walk(index, names),
+            ExprKind::BinaryOp { left, right, .. } => walk(left, names) || walk(right, names),
+            ExprKind::UnaryOp { operand, .. } => walk(operand, names),
+            ExprKind::Try(inner) => walk(inner, names),
+            _ => false,
+        }
+    }
+    walk(rhs, session_var_names)
+}
+
+// Phase 2.6: `is_let_for_slot_backed` replaced by `rewrite_for_replay`
+// (above), which can rewrite a slot-backed `let x = RHS` into a bare
+// `Statement::Expression(RHS)` when the RHS has side effects on heap-
+// backed state. The old "drop entirely" behaviour lost mutations on
+// `let removed = v.remove(0)` / `let prev = a.fetch_add(5)` because
+// those RHSes mutate the receiver — fixtures 404 / 712.
+
+/// Per-slot decision: should we emit the post-replay refresh for
+/// THIS slot var? Returns true only when the replay region contains
+/// a syntactic mutation target naming this slot — an `Assign`,
+/// `CompoundAssign`, or `+=`-style update whose left-hand side is
+/// `Identifier(name)`. The walker descends into closure bodies and
+/// `do/end` blocks so a capture-mutating closure (`{ || count += 1 }`
+/// — fixture 90) still triggers, while a read-only capture
+/// (`{ |x| x * multiplier }` — fixture 89_closure_capture_immut)
+/// does not.
+///
+/// Why per-slot, not global: fixture 89's replay region DOES contain
+/// a ClosureCall (`multiply.(5)`, recorded as a side-effecting
+/// statement from input 3 onwards), but the closure body only READS
+/// `multiplier`. A global "any potential mutation" heuristic would
+/// trigger refresh on multiplier and hit E1009 because the closure's
+/// shared borrow on multiplier is still live when the refresh-assign
+/// runs. By keying off the slot NAME appearing as a mutation target,
+/// we skip refresh for read-only captures while still firing for
+/// `count += 1` in fixture 90.
+///
+/// What we miss: aliased mutation through method calls (e.g.
+/// `set_field(&mut count)` — there's no such API today). If/when
+/// that lands, we'll widen the walker. For now, the entire stdlib
+/// surface that mutates a slot-backed (Int) var does so via
+/// `x += …` or `x = …` syntax in user code that's been recorded.
+fn replay_region_mutates_slot(stmts: &[Statement], slot_name: &str) -> bool {
+    fn target_names(target: &Expr, name: &str) -> bool {
+        matches!(&target.kind, ExprKind::Identifier(n) if n == name)
+    }
+    fn walk_expr(e: &Expr, name: &str) -> bool {
+        match &e.kind {
+            ExprKind::Assign { target, value } => {
+                target_names(target, name) || walk_expr(target, name) || walk_expr(value, name)
+            }
+            ExprKind::CompoundAssign { target, value, .. } => {
+                target_names(target, name) || walk_expr(target, name) || walk_expr(value, name)
+            }
+            ExprKind::Closure(c) => walk_closure_body(&c.body, name),
+            ExprKind::MethodCall {
+                object, args, block, ..
+            } => {
+                if walk_expr(object, name) {
+                    return true;
+                }
+                if args.iter().any(|a| walk_expr(a, name)) {
+                    return true;
+                }
+                // The trailing block argument (`each { |_| count += 1 }`)
+                // is where stdlib iterator methods carry the user's
+                // mutation closure. Missing this misses fixture 108
+                // (`.split.each { count += 1 }`) and 307
+                // (`.splitn.each { … }`).
+                block.as_deref().map(|b| walk_expr(b, name)).unwrap_or(false)
+            }
+            ExprKind::SafeNavCall { object, args, .. } => {
+                walk_expr(object, name) || args.iter().any(|a| walk_expr(a, name))
+            }
+            ExprKind::Call { callee, args, block } => {
+                if walk_expr(callee, name) {
+                    return true;
+                }
+                if args.iter().any(|a| walk_expr(a, name)) {
+                    return true;
+                }
+                block.as_deref().map(|b| walk_expr(b, name)).unwrap_or(false)
+            }
+            ExprKind::ClosureCall { callee, args, .. } => {
+                walk_expr(callee, name) || args.iter().any(|a| walk_expr(a, name))
+            }
+            ExprKind::FieldAccess { object, .. } | ExprKind::SafeNav { object, .. } => {
+                walk_expr(object, name)
+            }
+            ExprKind::Index { object, index } => {
+                walk_expr(object, name) || walk_expr(index, name)
+            }
+            ExprKind::BinaryOp { left, right, .. } => {
+                walk_expr(left, name) || walk_expr(right, name)
+            }
+            ExprKind::UnaryOp { operand, .. } => walk_expr(operand, name),
+            ExprKind::Try(inner) => walk_expr(inner, name),
+            ExprKind::Block(b) => walk_block(b, name),
+            ExprKind::If(if_expr) => walk_if(if_expr, name),
+            ExprKind::While(w) => walk_expr(&w.condition, name) || walk_block(&w.body, name),
+            ExprKind::For(f) => walk_expr(&f.iterable, name) || walk_block(&f.body, name),
+            ExprKind::Loop(l) => walk_block(&l.body, name),
+            ExprKind::Match(m) => {
+                if walk_expr(&m.subject, name) {
+                    return true;
+                }
+                use ruxen_core::parser::ast::MatchArmBody;
+                m.arms.iter().any(|a| match &a.body {
+                    MatchArmBody::Expr(e) => walk_expr(e, name),
+                    MatchArmBody::Block(b) => walk_block(b, name),
+                })
+            }
+            // InterpolatedString carries raw lexer tokens for each `#{}`
+            // expression — the AST doesn't expose a parsed Expr we can
+            // walk. Conservative read-only assumption: any mutation in
+            // an interpolated expression would be highly unusual
+            // (`"#{x = y}"`-style), and missing those false negatives
+            // only loses a refresh that wouldn't matter for the
+            // read-only display path. Treat as no-mutation.
+            ExprKind::InterpolatedString(_) => false,
+            ExprKind::Borrow(inner) | ExprKind::BorrowMut(inner) => walk_expr(inner, name),
+            ExprKind::Await(inner) => walk_expr(inner, name),
+            _ => false,
+        }
+    }
+    fn walk_block(block: &Block, name: &str) -> bool {
+        block.statements.iter().any(|s| match s {
+            Statement::Expression(e) => walk_expr(e, name),
+            Statement::Let(b) => b.value.as_deref().map(|v| walk_expr(v, name)).unwrap_or(false),
+        })
+    }
+    fn walk_if(if_expr: &ruxen_core::parser::ast::IfExpr, name: &str) -> bool {
+        if walk_expr(&if_expr.condition, name) {
+            return true;
+        }
+        if walk_block(&if_expr.then_body, name) {
+            return true;
+        }
+        for elsif in &if_expr.elsif_clauses {
+            if walk_expr(&elsif.condition, name) || walk_block(&elsif.body, name) {
+                return true;
+            }
+        }
+        if let Some(else_body) = &if_expr.else_body {
+            return walk_block(else_body, name);
+        }
+        false
+    }
+    fn walk_closure_body(body: &ruxen_core::parser::ast::ClosureBody, name: &str) -> bool {
+        use ruxen_core::parser::ast::ClosureBody;
+        match body {
+            ClosureBody::Expr(e) => walk_expr(e, name),
+            ClosureBody::Block(b) => walk_block(b, name),
+        }
+    }
+    fn walk_stmt(s: &Statement, name: &str) -> bool {
+        match s {
+            Statement::Expression(e) => walk_expr(e, name),
+            Statement::Let(b) => b.value.as_deref().map(|v| walk_expr(v, name)).unwrap_or(false),
+        }
+    }
+    stmts.iter().any(|s| walk_stmt(s, slot_name))
 }
 
 /// Walk an expression and collect every base identifier name that
@@ -529,7 +796,13 @@ fn eval_statement(session: &mut ReplSession, raw_input: &str, stmt: Statement) -
             // User portion: this input's new `let` plus a synthetic
             // identifier read so the wrapper returns the freshly-bound
             // value for display.
-            let replay_stmts = collect_replay_statements(session);
+            //
+            // Phase 2.6: defer collecting `replay_stmts` until AFTER the
+            // probe block — a probe-driven `unregister_var` (Int → non-
+            // Int shadow) flips the `is_let_for_slot_backed` filter for
+            // this name, and collecting beforehand would freeze the old
+            // (drop-the-historical-lets) filter into the wrapper. See
+            // the trailing `collect_replay_statements` call.
             let mut user_stmts: Vec<Statement> = Vec::with_capacity(2);
             user_stmts.push(Statement::Let(binding.clone()));
             if let Pattern::Identifier { name, .. } = &binding.pattern {
@@ -594,26 +867,74 @@ fn eval_statement(session: &mut ReplSession, raw_input: &str, stmt: Statement) -
                     if let Some(let_ty) =
                         find_let_type_in_wrapper(&probe_result.program, &probe_fn, name)
                     {
-                        if matches!(let_ty, Ty::Int)
-                            && session.find_var_slot(name).is_none()
-                        {
-                            // Either the LetBinding-level `mutable`
-                            // (top-level `var name = …` form) or the
-                            // pattern's own `mutable` (the inline `let
-                            // var name = …` form) is enough to make
-                            // the slot mutable — a later input's
-                            // `name = expr` is well-formed in both
-                            // shapes.
-                            let is_mut = binding.mutable || *pat_mut;
+                        // Either the LetBinding-level `mutable`
+                        // (top-level `var name = …` form) or the
+                        // pattern's own `mutable` (the inline `let
+                        // var name = …` form) is enough to make
+                        // the slot mutable — a later input's
+                        // `name = expr` is well-formed in both
+                        // shapes.
+                        let is_mut = binding.mutable || *pat_mut;
+                        let already_registered = session.find_var_slot(name).is_some();
+                        if matches!(let_ty, Ty::Int) && !already_registered {
+                            // New Int binding → allocate a fresh slot.
                             // Failure here means slot exhaustion —
                             // surface it the same way other compile-
                             // time resource exhaustion would.
                             let _ = session.register_var(name, let_ty, is_mut);
+                        } else if already_registered && !matches!(let_ty, Ty::Int) {
+                            // Phase 2.6: shadowing widens an existing
+                            // slot-backed Int binding to a non-slot-
+                            // eligible type (e.g. `let x: Int = 1` then
+                            // `let x = "twenty"`). DROP the slot entry
+                            // so the var no longer appears in
+                            // `var_slots`. Two layers depend on this:
+                            //
+                            //  - `build_program`'s `slot_kind_eligible`
+                            //    filter — now trivially excludes the
+                            //    name since it's gone, so no Int slot
+                            //    prefix/suffix is emitted around the
+                            //    user's new String let.
+                            //  - `collect_replay_statements`'s
+                            //    `is_let_for_slot_backed` filter, which
+                            //    keys off PRESENCE in `var_slots` (not
+                            //    eligibility). Updating-in-place would
+                            //    leave the entry present → the filter
+                            //    would still strip every historical
+                            //    `let x = <Int expr>` AND the new
+                            //    `let x = "twenty"` from replay, so the
+                            //    next input that READS `x` (e.g.
+                            //    `puts x`) sees no binding at all —
+                            //    "undefined variable `x`". Dropping the
+                            //    entry lets the historical lets replay,
+                            //    the new String let lands on top, and
+                            //    subsequent reads observe "twenty".
+                            //    Fixture 128_let_shadowing.
+                            //
+                            // The mutability flag would be propagated by
+                            // register_var if we kept the entry; on the
+                            // unregister path it's irrelevant because no
+                            // slot prefix/suffix is generated for `name`.
+                            let _ = is_mut;
+                            session.unregister_var(name);
                         }
                     }
                 }
             }
 
+            // Recompute the replay set AFTER the probe block — a probe
+            // that detected a shadowing widen (Int → non-Int) called
+            // `unregister_var`, which flips the
+            // `collect_replay_statements` filter for this name from
+            // "drop slot-backed lets" to "keep them". The pre-probe
+            // capture at line 532 used the OLD filter, so it would
+            // omit the historical lets and any replayed `puts
+            // "#{name}"` would see `name` as undefined in the real
+            // wrapper (no slot prefix is generated either, since the
+            // slot is gone). Re-collecting here yields a replay that
+            // restores `name` before the user's String let lands on
+            // top. Fixture 128_let_shadowing.
+            let replay_stmts = collect_replay_statements(session);
             let wrapper = build_program(session, &fn_name, replay_stmts, user_stmts, &span);
 
             // Stash the binding so future inputs can see this variable.
@@ -1322,6 +1643,30 @@ fn build_program(
     // value during replay. Pure reads (`fs.read*`, `getenv`, …) ignore
     // the flag and execute on both passes — needed so let-RHS values
     // that depend on the world survive replay.
+    // Phase 2.6: emit the slot-load prefix BOTH before AND after the
+    // replay region. The pre-replay copy keeps the replayed statements
+    // type-checking (a replayed `puts "#{excl}"` or `for n in 1..5;
+    // excl += n end` would otherwise reference an unbound `excl`). The
+    // post-replay copy RE-SHADOWS each slot-backed name with the
+    // persistent slot value, overwriting whatever the replay's
+    // mutations (closure calls that capture slot vars by reference,
+    // for-loop bodies with compound assigns, atomic fetch_add, Array /
+    // String / HashMap mutating methods, etc.) left the lexical
+    // binding at. The user's input then reads the slot value, not the
+    // mutated replay copy.
+    //
+    // The slot-backed-let filter in `collect_replay_statements` still
+    // drops direct `let <slot_var> = …` / `<slot_var> = …` /
+    // `<slot_var> += …` statements so e.g. 727's `let handle =
+    // Thread.spawn_raw(...)` does not re-spawn on replay. The combined
+    // fix:
+    //   - filter: keeps idempotent constructors from re-firing.
+    //   - second slot-load: keeps replay-side mutations from leaking
+    //     into the user's lexical view of slot-backed vars.
+    //
+    // Closes 9 fixtures (90 / 106 / 108 / 122 / 128 / 307 / 404 / 600
+    // / 712) while keeping the original Phase 2.5 wins (508 / 534 /
+    // 536 / 727 / 727b).
     let mut statements: Vec<Statement> =
         Vec::with_capacity(replay_stmts.len() + user_stmts.len() + 2);
     if !replay_stmts.is_empty() {
@@ -1343,6 +1688,11 @@ fn build_program(
     let user_has_return = statements_contain_return(&user_stmts);
     let replay_has_return = statements_contain_return(&statements);
     let body_has_return = user_has_return || replay_has_return;
+    // Mark the boundary between the replay region and the user
+    // statements. We need it so the post-replay slot-load refresh
+    // lands between the two (after `__repl_set_replaying(0)`, before
+    // the user's input).
+    let replay_region_len = statements.len();
     statements.extend(user_stmts);
 
     // Synthetic slot-load prefix for every primitive session variable.
@@ -1362,12 +1712,74 @@ fn build_program(
         .filter(|vs| slot_kind_eligible(&vs.ty))
         .collect();
 
-    let mut body: Vec<Statement> = Vec::with_capacity(statements.len() + slot_vars.len() * 2 + 2);
+    let mut body: Vec<Statement> =
+        Vec::with_capacity(statements.len() + slot_vars.len() * 3 + 2);
+    // (1) Pre-replay slot LOAD prefix — establishes the lexical
+    //     binding so replayed expressions that READ slot-backed
+    //     names (puts "#{x}", `for n in r; excl += n end`, etc.)
+    //     type-check and run. Any mutations the replay applies to
+    //     this binding will be discarded by step (3).
     for vs in &slot_vars {
         if let Some(stmt) = slot_load_let(vs, session, span) {
             body.push(stmt);
         }
     }
+    // Per-slot decision: scan the replay region BEFORE draining for an
+    // assign / compound-assign whose target is the slot's name. Only
+    // refresh slots that actually appear as a mutation target;
+    // read-only captures (fixture 89) must not be refreshed, or the
+    // closure's shared borrow conflicts with the refresh-assign
+    // (E1009). The per-slot map lives until (3).
+    let replay_slice: &[Statement] = if replay_region_len > 0 {
+        &statements[..replay_region_len]
+    } else {
+        &[]
+    };
+    let slot_refresh_needed: Vec<bool> = slot_vars
+        .iter()
+        .map(|vs| replay_region_mutates_slot(replay_slice, &vs.name))
+        .collect();
+    // (2) Replay region.
+    body.extend(statements.drain(..replay_region_len));
+    // (3) Post-replay slot REFRESH — ASSIGNS the persistent slot value
+    //     back into the SAME pre-replay binding (`name =
+    //     __slot_load_<repr>(addr)`). This must NOT introduce a new
+    //     `let` — a fresh let creates a second memory cell at a
+    //     different address, and any closure that was constructed
+    //     during replay captured the FIRST cell. The closure's later
+    //     mutations would land on cell A while the user statement and
+    //     the suffix store read cell B → mutations lost (fixture 90).
+    //
+    //     Using an assignment keeps a single cell across the wrapper:
+    //     closure captures stay valid; user reads observe the
+    //     slot-refreshed value; the suffix store reads the actual
+    //     mutated cell. Closes 90 / 404 / 712 (and keeps 106 / 108 /
+    //     122 / 307 / 600 green — none of those construct a closure
+    //     across the boundary so they're insensitive to the address).
+    //
+    //     Skipped when:
+    //       - `replay_region_len == 0` — no replay means no in-replay
+    //         mutations to overwrite; OR
+    //       - the replay region contains no closure-call /
+    //         function-call / compound-assign that could mutate a
+    //         slot. Without that gate, fixture 89_closure_capture_immut
+    //         emits `multiplier = __slot_load_i64(addr)` AFTER replay's
+    //         `let multiply = { |x| x * multiplier }` borrows
+    //         multiplier by reference — E1009 "cannot move value —
+    //         currently borrowed". The slot value can't have changed
+    //         in this case (no callee in replay observed it as &mut),
+    //         so dropping the assign is sound.
+    if replay_region_len > 0 {
+        for (vs, &needs_refresh) in slot_vars.iter().zip(slot_refresh_needed.iter()) {
+            if !needs_refresh {
+                continue;
+            }
+            if let Some(stmt) = slot_refresh_assign(vs, session, span) {
+                body.push(stmt);
+            }
+        }
+    }
+    // (4) User statements run against the refreshed slot-loaded values.
     body.extend(statements);
 
     // Task 1.3: slot-store suffix. For each slot-eligible session var,
@@ -1666,6 +2078,21 @@ fn slot_load_let(
         span: span.clone(),
         rooted: false,
     }));
+    // Phase 2.6: emit with `vs.mutable` (the source-level mutability
+    // recorded at the var's first let/var binding). The post-replay
+    // `slot_refresh_assign` writes back into this same cell (`name =
+    // __slot_load_<repr>(addr)`), which requires `mutable` to satisfy
+    // E1006 — but we only emit a refresh for slots whose name appears
+    // as a mutation target in the replay region (see
+    // `replay_region_mutates_slot` and the caller in
+    // `build_program`). A name that's recorded as a mutation target
+    // necessarily came from a `var` binding (mutation of a `let` is
+    // a compile error), so `vs.mutable` is true for any slot we'd
+    // refresh. Keeping the original mutability avoids spuriously
+    // making `let`-declared slots mutable in the wrapper, which the
+    // user can't observe but which can interact with the borrow
+    // checker in surprising ways for shared-borrow captures
+    // (fixture 89_closure_capture_immut).
     Some(Statement::Let(LetBinding {
         mutable: vs.mutable,
         pattern: Pattern::Identifier {
@@ -1677,6 +2104,65 @@ fn slot_load_let(
         value: Some(Box::new(call)),
         span: span.clone(),
     }))
+}
+
+/// Build a synthetic `<name> = __slot_load_i64(<addr>)` ASSIGNMENT
+/// statement — the post-replay refresh that overwrites in-replay
+/// mutations to the lexical binding WITHOUT introducing a second
+/// memory cell.
+///
+/// Why not reuse `slot_load_let`? A new `let name: Int = …` makes a
+/// fresh binding at a NEW stack slot. Closures constructed during
+/// replay captured the ORIGINAL pre-replay binding's address — a
+/// new let would silently move the slot under the closure, so any
+/// later `closure.()` (whether replayed for the next input or invoked
+/// directly by user code) would mutate the OLD cell while user reads
+/// and the suffix store target the NEW cell. Mutations would vanish.
+/// Fixture 90_closure_capture_var fails exactly this way.
+///
+/// The assignment shape `name = __slot_load_i64(addr)` keeps the
+/// binding's address stable: closure captures, user reads, and the
+/// suffix store all reference the same cell.
+///
+/// Returns `None` for the same types `slot_load_let` returns None
+/// for — the eligibility filter (`slot_kind_eligible`) is the single
+/// source of truth.
+fn slot_refresh_assign(
+    vs: &crate::session::VarSlot,
+    session: &ReplSession,
+    span: &ruxen_core::lexer::token::Span,
+) -> Option<Statement> {
+    // Phase 1 scope: Int only — matches slot_load_let / slot_kind_eligible.
+    if !matches!(vs.ty, Ty::Int) {
+        return None;
+    }
+    let addr = session.slot_addr(vs.idx);
+    let load_call = Expr {
+        kind: ExprKind::Call {
+            callee: Box::new(Expr {
+                kind: ExprKind::Identifier("__slot_load_i64".to_string()),
+                span: span.clone(),
+            }),
+            args: vec![Expr {
+                kind: ExprKind::IntLiteral(addr, None),
+                span: span.clone(),
+            }],
+            block: None,
+        },
+        span: span.clone(),
+    };
+    let target = Expr {
+        kind: ExprKind::Identifier(vs.name.clone()),
+        span: span.clone(),
+    };
+    let assign = Expr {
+        kind: ExprKind::Assign {
+            target: Box::new(target),
+            value: Box::new(load_call),
+        },
+        span: span.clone(),
+    };
+    Some(Statement::Expression(assign))
 }
 
 /// Build a synthetic `__slot_store_i64(<addr>, <name>)` expression

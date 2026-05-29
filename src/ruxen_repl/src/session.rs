@@ -147,6 +147,29 @@ impl ReplSession {
         self.var_slots.iter().find(|v| v.name == name)
     }
 
+    /// Drop the slot entry for a session variable name, if present.
+    /// Returns `true` if an entry was removed.
+    ///
+    /// Used by `eval_statement` when a `let` shadow widens an existing
+    /// slot-backed Int to a non-slot-eligible type (String, Array, etc.).
+    /// Merely updating the existing entry's `ty` is not enough — the
+    /// `collect_replay_statements` filter keys off the *presence* of the
+    /// name in `var_slots`, not its eligibility, so the prior
+    /// `let name = <Int expr>` history entries would stay filtered out
+    /// and the next input that READS `name` would find it undefined
+    /// (no slot prefix is generated for the now-non-eligible type, AND
+    /// no replay statement restores the binding). Dropping the entry
+    /// flips the filter so the historical lets replay, the user's
+    /// shadow runs after them, and subsequent reads see the new
+    /// binding. We deliberately do NOT reclaim the underlying slot
+    /// index — the persistent slot region is append-only and forward-
+    /// compatible with future re-registration of the same name.
+    pub fn unregister_var(&mut self, name: &str) -> bool {
+        let before = self.var_slots.len();
+        self.var_slots.retain(|v| v.name != name);
+        self.var_slots.len() != before
+    }
+
     /// Register (or re-register) a session variable, returning its slot
     /// index. Rebinding an existing name reuses its slot and updates the
     /// type. New names get the next free slot.
