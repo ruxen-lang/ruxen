@@ -97,6 +97,24 @@ fn synthesize_unity_runtime() -> String {
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| p.is_dir() && p.join("runtime").is_dir())
+        // The regex package's `runtime/regex.c` `#include`s
+        // `pcre2/pcre2.h` (vendored under `runtime/pcre2/`) which
+        // only resolves when the C file is compiled in-place via the
+        // `cc` crate (see `src/ruxen_repl/build.rs` and
+        // `codegen/object.rs`, both of which add the pcre2 dir to
+        // the include path). The unity build below concatenates
+        // every per-package .c into a single tempfile in `tmp/` and
+        // hands that to `cc` with no such include path, so the
+        // include fails. The drop-elaboration suite never exercises
+        // regex anyway — the splices it injects target malloc/free
+        // patterns in core/string/vec/hash. Skip the regex package
+        // outright.
+        .filter(|p| {
+            p.file_name()
+                .and_then(|s| s.to_str())
+                .map(|n| n != "regex")
+                .unwrap_or(true)
+        })
         .collect();
     pkg_dirs.sort_by_key(|p| {
         let name = p
