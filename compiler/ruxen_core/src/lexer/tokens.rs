@@ -460,7 +460,20 @@ impl<'a> Lexer<'a> {
                 }
             }
             '/' => {
-                if !self.is_at_end() && self.current() == '=' {
+                // JS/Ruby positional rule: a `/` opens a `RegexLiteral`
+                // only when the previous non-trivia token is in an
+                // expression-context position (see
+                // `prev_token_starts_expr_context`). Otherwise it lexes
+                // as `Slash` (division) or `SlashEq` (compound-assign).
+                let prev = self
+                    .tokens
+                    .iter()
+                    .rev()
+                    .find(|t| t.kind != TokenKind::Newline)
+                    .map(|t| t.kind.clone());
+                if prev_token_starts_expr_context(prev.as_ref()) {
+                    self.lex_regex_literal(start_byte, start_line, start_col);
+                } else if !self.is_at_end() && self.current() == '=' {
                     self.advance();
                     self.emit(TokenKind::SlashEq, start_byte, start_line, start_col);
                 } else {
@@ -606,6 +619,23 @@ impl<'a> Lexer<'a> {
             '}' => {
                 self.emit(TokenKind::RBrace, start_byte, start_line, start_col);
             }
+            '~' => {
+                // `~=` regex-match operator. There is no bare `~` in
+                // Ruxen today (no bitwise-not — use `!x` and `^` for
+                // the integer surface); a lone `~` falls through to
+                // the unexpected-character path below by design.
+                if !self.is_at_end() && self.current() == '=' {
+                    self.advance();
+                    self.emit(TokenKind::TildeEq, start_byte, start_line, start_col);
+                } else {
+                    let span = self.make_span(start_byte, start_line, start_col);
+                    self.diagnostics.push(Diagnostic::error_with_code(
+                        format!("unexpected character: '{}'", ch),
+                        span,
+                        "E0006",
+                    ));
+                }
+            }
             '\\' => {
                 // Line continuation with backslash — just skip the newline
                 if !self.is_at_end() && self.current() == '\n' {
@@ -628,6 +658,190 @@ impl<'a> Lexer<'a> {
                 ));
             }
         }
+    }
+}
+
+/// Returns true when the most-recently-emitted non-trivia token is in
+/// "expression-expected" position — i.e. the next non-whitespace
+/// character could legally start a fresh expression. Used by the `/`
+/// lex arm to decide between `Slash` (division) and `RegexLiteral`.
+/// See `docs/superpowers/specs/2026-05-29-std-regex-design.md` for
+/// the full expression-context token set.
+pub(super) fn prev_token_starts_expr_context(prev: Option<&TokenKind>) -> bool {
+    use TokenKind::*;
+    let Some(t) = prev else {
+        // No previous token — start of file. A `/` at SOF must be a
+        // regex literal (division has no LHS).
+        return true;
+    };
+    matches!(
+        t,
+        // Structural / position markers that imply "expression next".
+        Eof | Newline
+        // Opening delimiters.
+        | LParen | LBracket | LBrace
+        // Separators.
+        | Comma | Semicolon | Colon | FatArrow | Arrow
+        // Assignment / comparison operators (after these, an
+        // expression must follow).
+        | Eq | EqEq | NotEq | Lt | Gt | LtEq | GtEq
+        // Arithmetic operators and `/=` (also a context-resetter
+        // for the RHS).
+        | Plus | Minus | Star | SlashEq | Percent
+        // Logical operators.
+        | AmpAmp | PipePipe | Bang
+        // The regex-match operator itself.
+        | TildeEq
+        // Keywords that introduce an expression position.
+        | If | While | Match | Return | When | Else | Elsif
+        | In | Do | Unless
+    )
+}
+
+impl<'a> Lexer<'a> {
+    /// Lex a `/pat/flags` regex literal. The opening `/` has already
+    /// been consumed by [`lex_operator_or_punct`]. Emits the token on
+    /// success; pushes an E1700/E1701/E1703 diagnostic on failure (and
+    /// still emits a best-effort token / recovers at end-of-line so
+    /// downstream parsing isn't poisoned).
+    pub(super) fn lex_regex_literal(&mut self, start_byte: usize, start_line: u32, start_col: u32) {
+        // Scan the pattern body.
+        let mut pattern = String::new();
+        let mut bracket_depth: usize = 0;
+        let mut prev_char_escaped = false;
+        let mut empty_pattern = false;
+
+        // Special-case: empty pattern `//` — closing `/` is the
+        // immediate next character.
+        if !self.is_at_end() && self.current() == '/' {
+            let span = self.make_span(start_byte, start_line, start_col);
+            self.diagnostics.push(Diagnostic::error_with_code(
+                "empty regex pattern",
+                span,
+                "E1703",
+            ));
+            self.advance(); // consume the closing `/`
+            empty_pattern = true;
+        }
+
+        if !empty_pattern {
+            loop {
+                if self.is_at_end() {
+                    let span = self.make_span(start_byte, start_line, start_col);
+                    self.diagnostics.push(Diagnostic::error_with_code(
+                        "unterminated regex literal",
+                        span,
+                        "E1701",
+                    ));
+                    // Recovery: emit a best-effort token so downstream
+                    // parsing has something to chew on.
+                    self.emit(
+                        TokenKind::RegexLiteral {
+                            pattern,
+                            flags: String::new(),
+                        },
+                        start_byte,
+                        start_line,
+                        start_col,
+                    );
+                    return;
+                }
+                let c = self.current();
+                if c == '\n' {
+                    let span = self.make_span(start_byte, start_line, start_col);
+                    self.diagnostics.push(Diagnostic::error_with_code(
+                        "unterminated regex literal",
+                        span,
+                        "E1701",
+                    ));
+                    self.emit(
+                        TokenKind::RegexLiteral {
+                            pattern,
+                            flags: String::new(),
+                        },
+                        start_byte,
+                        start_line,
+                        start_col,
+                    );
+                    return;
+                }
+
+                // Bracket-depth only tracks unescaped class openers.
+                // PCRE2 handles `()` and `{}` inside the pattern; we
+                // only need `[…]` here so the `/` inside a class is
+                // not treated as a terminator.
+                if !prev_char_escaped {
+                    if c == '[' {
+                        bracket_depth += 1;
+                    } else if c == ']' && bracket_depth > 0 {
+                        bracket_depth -= 1;
+                    }
+                }
+
+                // Closing `/` only when not escaped AND not inside a
+                // character class.
+                if c == '/' && !prev_char_escaped && bracket_depth == 0 {
+                    self.advance(); // consume closing /
+                    break;
+                }
+
+                // Track escape for the NEXT iteration. Consecutive
+                // backslashes alternate the escape state, so `\\/` is
+                // `\\` + `/` (closing the literal).
+                prev_char_escaped = (c == '\\') && !prev_char_escaped;
+                pattern.push(c);
+                self.advance();
+            }
+        }
+
+        // Flag suffix. Each of `i m s g x` may appear at most once.
+        // Anything else (any other ASCII letter, or a repeat) is E1700.
+        let mut flags = String::new();
+        loop {
+            if self.is_at_end() {
+                break;
+            }
+            let c = self.current();
+            if !c.is_ascii_alphabetic() {
+                break;
+            }
+            match c {
+                'i' | 'm' | 's' | 'g' | 'x' => {
+                    if flags.contains(c) {
+                        let span = self.make_span(start_byte, start_line, start_col);
+                        self.diagnostics.push(Diagnostic::error_with_code(
+                            format!("regex flag '{}' specified more than once", c),
+                            span,
+                            "E1700",
+                        ));
+                        // Consume so we don't loop forever on the same
+                        // duplicate character; flag set stays as-is.
+                        self.advance();
+                    } else {
+                        flags.push(c);
+                        self.advance();
+                    }
+                }
+                other => {
+                    let span = self.make_span(start_byte, start_line, start_col);
+                    self.diagnostics.push(Diagnostic::error_with_code(
+                        format!("unrecognised regex flag '{}'", other),
+                        span,
+                        "E1700",
+                    ));
+                    // Consume the bad flag char so we can keep scanning;
+                    // if anything else valid follows we still pick it up.
+                    self.advance();
+                }
+            }
+        }
+
+        self.emit(
+            TokenKind::RegexLiteral { pattern, flags },
+            start_byte,
+            start_line,
+            start_col,
+        );
     }
 }
 

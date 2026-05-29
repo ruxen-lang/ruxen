@@ -167,11 +167,15 @@ fn test_ruby_naming_legacy_none_lexes_as_type_identifier() {
 
 #[test]
 fn test_single_char_operators() {
-    let pairs = vec![
+    // For division (`/`) we prefix with an identifier `a ` so the
+    // lexer's positional `/`-disambiguation (introduced with the
+    // regex-literal token, E17xx) takes the division branch instead
+    // of opening a regex literal. Identifier is NOT in the expression-
+    // context token set, so `a /` lexes as `Identifier(a)` + `Slash`.
+    let standalone_pairs = vec![
         ("+", TokenKind::Plus),
         ("-", TokenKind::Minus),
         ("*", TokenKind::Star),
-        ("/", TokenKind::Slash),
         ("%", TokenKind::Percent),
         ("=", TokenKind::Eq),
         ("!", TokenKind::Bang),
@@ -194,7 +198,7 @@ fn test_single_char_operators() {
         ("}", TokenKind::RBrace),
     ];
 
-    for (input, expected) in pairs {
+    for (input, expected) in standalone_pairs {
         let kinds = lex_kinds(input);
         assert_eq!(
             kinds,
@@ -203,10 +207,25 @@ fn test_single_char_operators() {
             input
         );
     }
+
+    // Division — see comment at top of test.
+    let kinds = lex_kinds("a /");
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::Identifier("a".into()),
+            TokenKind::Slash,
+            TokenKind::Eof
+        ]
+    );
 }
 
 #[test]
 fn test_multi_char_operators() {
+    // For `/=` we use the same `a /=` prefix trick as
+    // `test_single_char_operators`: identifier is not in the
+    // expression-context set, so the lexer's positional `/`-
+    // disambiguation falls through to the SlashEq branch.
     let pairs = vec![
         ("==", TokenKind::EqEq),
         ("!=", TokenKind::NotEq),
@@ -219,7 +238,6 @@ fn test_multi_char_operators() {
         ("+=", TokenKind::PlusEq),
         ("-=", TokenKind::MinusEq),
         ("*=", TokenKind::StarEq),
-        ("/=", TokenKind::SlashEq),
         ("%=", TokenKind::PercentEq),
         ("..", TokenKind::DotDot),
         ("..=", TokenKind::DotDotEq),
@@ -237,6 +255,17 @@ fn test_multi_char_operators() {
             input
         );
     }
+
+    // Compound divide-assign — see comment at top of test.
+    let kinds = lex_kinds("a /=");
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::Identifier("a".into()),
+            TokenKind::SlashEq,
+            TokenKind::Eof
+        ]
+    );
 }
 
 #[test]
@@ -1468,4 +1497,155 @@ fn test_empty_string() {
 fn test_escaped_single_quote_in_char() {
     let kinds = lex_kinds(r"'\''");
     assert_eq!(kinds, vec![TokenKind::CharLiteral('\''), TokenKind::Eof]);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Regex literal + `~=` operator (E17xx)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// `~=` lexes as a single TildeEq token.
+#[test]
+fn lex_regex_tilde_eq_operator() {
+    let kinds = lex_kinds("~=");
+    assert_eq!(kinds[0], TokenKind::TildeEq);
+}
+
+/// A lone `~` is still rejected with E0006 — there's no bitwise-not
+/// in Ruxen, and the regex op is only the two-char form.
+#[test]
+fn lex_regex_tilde_alone_is_rejected() {
+    let (_, diags) = lex_with_errors("~");
+    assert!(
+        diags.iter().any(|d| d.code.as_deref() == Some("E0006")),
+        "expected E0006 for bare `~`, got {:?}",
+        diags
+    );
+}
+
+/// `/foo/i` after `=` lexes as a RegexLiteral.
+#[test]
+fn lex_regex_literal_after_eq() {
+    let toks = lex("let r = /foo/i");
+    let kinds: Vec<&TokenKind> = toks.iter().map(|t| &t.kind).collect();
+    let lit = kinds
+        .iter()
+        .find(|k| matches!(k, TokenKind::RegexLiteral { .. }))
+        .expect("expected RegexLiteral token");
+    match lit {
+        TokenKind::RegexLiteral { pattern, flags } => {
+            assert_eq!(pattern, "foo");
+            assert_eq!(flags, "i");
+        }
+        _ => unreachable!(),
+    }
+}
+
+/// `/` after `Identifier` is division (not a regex literal). The JS
+/// positional rule: a `/` opens a regex only after a token that ends
+/// an expression-context position.
+#[test]
+fn lex_regex_slash_after_identifier_is_division() {
+    let kinds = lex_kinds("a / 2");
+    // [Identifier("a"), Slash, IntLiteral(2, _), Eof]
+    assert!(
+        kinds.iter().any(|k| matches!(k, TokenKind::Slash)),
+        "expected Slash, got {:?}",
+        kinds
+    );
+    assert!(
+        !kinds
+            .iter()
+            .any(|k| matches!(k, TokenKind::RegexLiteral { .. })),
+        "no RegexLiteral should be produced for `a / 2`"
+    );
+}
+
+/// A `/` inside a character class doesn't close the literal.
+#[test]
+fn lex_regex_literal_with_char_class_containing_slash() {
+    let toks = lex("let r = /[/]/");
+    let lit = toks
+        .iter()
+        .find_map(|t| match &t.kind {
+            TokenKind::RegexLiteral { pattern, flags } => Some((pattern.clone(), flags.clone())),
+            _ => None,
+        })
+        .expect("expected RegexLiteral");
+    assert_eq!(lit.0, "[/]");
+    assert_eq!(lit.1, "");
+}
+
+/// A `\/` escapes the slash and the next bare `/` closes the literal.
+#[test]
+fn lex_regex_literal_with_escaped_slash() {
+    let toks = lex(r"let r = /a\/b/");
+    let lit = toks
+        .iter()
+        .find_map(|t| match &t.kind {
+            TokenKind::RegexLiteral { pattern, flags } => Some((pattern.clone(), flags.clone())),
+            _ => None,
+        })
+        .expect("expected RegexLiteral");
+    assert_eq!(lit.0, r"a\/b");
+    assert_eq!(lit.1, "");
+}
+
+/// An unterminated regex literal (EOL before closing `/`) errors with
+/// E1701.
+#[test]
+fn lex_regex_literal_unterminated_errors_e1701() {
+    let (_, diags) = lex_with_errors("let r = /foo\n");
+    assert!(
+        diags.iter().any(|d| d.code.as_deref() == Some("E1701")),
+        "expected E1701, got {:?}",
+        diags
+    );
+}
+
+/// An unknown trailing flag errors with E1700.
+#[test]
+fn lex_regex_literal_unknown_flag_errors_e1700() {
+    let (_, diags) = lex_with_errors("let r = /foo/q");
+    assert!(
+        diags.iter().any(|d| d.code.as_deref() == Some("E1700")),
+        "expected E1700, got {:?}",
+        diags
+    );
+}
+
+/// A repeated flag errors with E1700.
+#[test]
+fn lex_regex_literal_repeated_flag_errors_e1700() {
+    let (_, diags) = lex_with_errors("let r = /foo/ii");
+    assert!(
+        diags.iter().any(|d| d.code.as_deref() == Some("E1700")),
+        "expected E1700, got {:?}",
+        diags
+    );
+}
+
+/// An empty pattern `//` errors with E1703.
+#[test]
+fn lex_regex_literal_empty_pattern_errors_e1703() {
+    let (_, diags) = lex_with_errors("let r = //");
+    assert!(
+        diags.iter().any(|d| d.code.as_deref() == Some("E1703")),
+        "expected E1703, got {:?}",
+        diags
+    );
+}
+
+/// `s ~= /foo/g` — after `~=` the `/` opens a regex literal.
+#[test]
+fn lex_regex_literal_after_tilde_eq() {
+    let toks = lex("s ~= /foo/g");
+    let lit = toks
+        .iter()
+        .find_map(|t| match &t.kind {
+            TokenKind::RegexLiteral { pattern, flags } => Some((pattern.clone(), flags.clone())),
+            _ => None,
+        })
+        .expect("expected RegexLiteral after ~=");
+    assert_eq!(lit.0, "foo");
+    assert_eq!(lit.1, "g");
 }

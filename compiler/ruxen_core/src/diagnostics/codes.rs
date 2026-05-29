@@ -13,6 +13,8 @@
 //! | E0601-E0618   | implicit-include / auto-synth |
 //! | E0700-E0799   | tier-2 type system            |
 //! | E1011-E1099   | mixin / include checking      |
+//! | E1600-E1699   | package manager               |
+//! | E1700-E1799   | std.regex                     |
 
 /// Metadata for a single compiler error code.
 #[derive(Debug, Clone, Copy)]
@@ -421,6 +423,22 @@ pub const REGISTRY: &[CodeInfo] = &[
     CodeInfo {
         code: "E1602",
         title: "published version tag already exists at remote",
+    },
+    // ── Regex (E1700-E1799) ──────────────────────────────────────────
+    // Lexer/parser/typeck errors for the std.regex package's
+    // `/pat/flags` literal syntax and the `~=` match operator.
+    // Spec: `docs/superpowers/specs/2026-05-29-std-regex-design.md`.
+    CodeInfo {
+        code: "E1700",
+        title: "unrecognised regex flag",
+    },
+    CodeInfo {
+        code: "E1701",
+        title: "unterminated regex literal",
+    },
+    CodeInfo {
+        code: "E1703",
+        title: "empty regex pattern",
     },
 ];
 

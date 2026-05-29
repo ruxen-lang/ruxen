@@ -202,6 +202,9 @@ pub enum TokenKind {
     LtEq,  // <=
     GtEq,  // >=
 
+    // ── Operators: Regex Match ──
+    TildeEq, // ~= — `s ~= /pat/` regex-match operator (E17xx).
+
     // ── Operators: Logical ──
     AmpAmp,   // &&
     PipePipe, // ||
@@ -257,6 +260,16 @@ pub enum TokenKind {
     StringLiteral(String),
     InterpolatedString(Vec<StringPart>),
     CharLiteral(char),
+    /// `/pat/flags` regex literal. Recognised by the lexer's `/`
+    /// dispatcher only in expression-context positions per the JS/Ruby
+    /// positional rule (see `prev_token_starts_expr_context`). Flag
+    /// set: `i m s g x`. Lifecycle: lifted by Phase-2 stdlib bootstrap
+    /// to a `Ty::Class { name: "Regex" }` after typeck — codegen lowers
+    /// to a `ruxen_regex_compile_const` call.
+    RegexLiteral {
+        pattern: String,
+        flags: String,
+    },
 
     // ── Identifiers ──
     Identifier(String),
@@ -332,12 +345,65 @@ impl TokenKind {
 /// from the lexer. Every entry MUST be recognized by [`lookup_keyword`];
 /// the `keywords_const_matches_lookup` test enforces that.
 pub const KEYWORDS: &[&str] = &[
-    "let", "move", "ref", "var", "class", "struct", "enum", "mixin", "include", "extension",
-    "newtype", "type", "def", "public", "private", "protected", "consume", "inline", "self",
-    "Self", "init", "super", "return", "yield", "async", "await", "if", "elsif", "else", "match",
-    "while", "for", "in", "loop", "do", "end", "break", "continue", "where", "as", "some", "any",
-    "layout", "module", "use", "package", "unsafe", "lib", "nil", "true", "false", "Some", "Ok",
-    "Err", "macro", "static", "const", "when", "unless",
+    "let",
+    "move",
+    "ref",
+    "var",
+    "class",
+    "struct",
+    "enum",
+    "mixin",
+    "include",
+    "extension",
+    "newtype",
+    "type",
+    "def",
+    "public",
+    "private",
+    "protected",
+    "consume",
+    "inline",
+    "self",
+    "Self",
+    "init",
+    "super",
+    "return",
+    "yield",
+    "async",
+    "await",
+    "if",
+    "elsif",
+    "else",
+    "match",
+    "while",
+    "for",
+    "in",
+    "loop",
+    "do",
+    "end",
+    "break",
+    "continue",
+    "where",
+    "as",
+    "some",
+    "any",
+    "layout",
+    "module",
+    "use",
+    "package",
+    "unsafe",
+    "lib",
+    "nil",
+    "true",
+    "false",
+    "Some",
+    "Ok",
+    "Err",
+    "macro",
+    "static",
+    "const",
+    "when",
+    "unless",
 ];
 
 /// Look up a keyword from an identifier string.
