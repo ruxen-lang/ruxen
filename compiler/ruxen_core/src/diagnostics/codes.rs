@@ -170,6 +170,17 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E0706",
         title: "where-clause const predicate is not satisfied at this instantiation",
     },
+    // Numeric arithmetic operand mismatch. Ruxen performs no implicit
+    // numeric coercion in binary arithmetic (`+ - * / %`); both operands
+    // must already share a type. Emitted from
+    // `typeck::infer::ops::infer_binop` when the two numeric operand types
+    // fail to unify (e.g. `Int - Float`, `Int + Int64`). Catching it here
+    // turns what was a silent miscompile (a Cranelift verifier crash:
+    // `isub.i64 ... arg has type f64`) into a source-spanned diagnostic.
+    CodeInfo {
+        code: "E0707",
+        title: "binary operator applied to mismatched numeric types",
+    },
     // Phase 2 #06.5 T1: IoError variant constructor arity. Reserved
     // for the diagnostic emitted when a user constructs an IoError
     // variant with the wrong field set (e.g. `IoError.ConnectionRefused()`

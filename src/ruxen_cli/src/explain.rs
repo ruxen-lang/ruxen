@@ -53,6 +53,7 @@ static EXPLAINS: &[(&str, &str)] = &[
     ("E0704", include_str!("../../../docs/errors/E0704.md")),
     ("E0705", include_str!("../../../docs/errors/E0705.md")),
     ("E0706", include_str!("../../../docs/errors/E0706.md")),
+    ("E0707", include_str!("../../../docs/errors/E0707.md")),
     // Phase 2 #06.5 T1: IoError variant constructor arity.
     ("E0710", include_str!("../../../docs/errors/E0710.md")),
     // Phase 2 #06.5 T2: File / OpenOptions / SeekFrom diagnostics.

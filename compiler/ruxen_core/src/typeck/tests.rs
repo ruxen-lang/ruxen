@@ -334,6 +334,38 @@ mod tests {
     }
 
     #[test]
+    fn mixed_int_float_arithmetic_errors() {
+        // `Int - Float` must surface a clean type error (E0707) at typeck
+        // time, NOT silently flow through to codegen where it crashes the
+        // Cranelift verifier with `isub.i64 ... arg has type f64`.
+        let result = parse_and_check("def test\n  let a: Int = 1\n  let b = a - 3.5\nend");
+        let has_e0707 = result
+            .diagnostics
+            .iter()
+            .any(|d| d.code.as_deref() == Some("E0707"));
+        assert!(
+            has_e0707,
+            "expected E0707 for `Int - Float`, got: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn matched_numeric_arithmetic_is_clean() {
+        // Same-typed numeric arithmetic must NOT trip the new diagnostic.
+        let result = parse_and_check("def test\n  let a: Int = 1\n  let b = a - 2\nend");
+        let has_e0707 = result
+            .diagnostics
+            .iter()
+            .any(|d| d.code.as_deref() == Some("E0707"));
+        assert!(
+            !has_e0707,
+            "Int - Int must not emit E0707, got: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
     fn undefined_variable_error() {
         let result = parse_and_check("def test\n  let x = undefined_var\nend");
         let has_error = result

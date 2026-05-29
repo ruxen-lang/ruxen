@@ -109,10 +109,34 @@ impl<'a> InferenceEngine<'a> {
                     match unify(left, right, self.ctx, span) {
                         Ok(unified) => unified,
                         Err(_) => {
-                            // String + String = String (concatenation)
-                            if *left == Ty::String && *right == Ty::String && op == BinOp::Add {
-                                return Ty::String;
-                            }
+                            // Ruxen has no implicit numeric coercion in
+                            // arithmetic: the operand types must already
+                            // match. A mismatch (e.g. `Int - Float`, or
+                            // `Int + Int64`) must surface here as a clean
+                            // diagnostic — if it slips through, codegen
+                            // selects the instruction from the LHS type
+                            // (`isub.i64`) and feeds it the un-coerced RHS
+                            // (`f64`), tripping the Cranelift verifier with
+                            // an opaque internal error. Make both operands
+                            // share a type (e.g. annotate `a: Float` and
+                            // use `1.0`, or keep both sides integers).
+                            let op_sym = match op {
+                                BinOp::Add => "+",
+                                BinOp::Sub => "-",
+                                BinOp::Mul => "*",
+                                BinOp::Div => "/",
+                                BinOp::Mod => "%",
+                                _ => "<op>",
+                            };
+                            self.diagnostics.push(Diagnostic::error_with_code(
+                                format!(
+                                    "binary operator `{op_sym}` cannot be applied to \
+                                     mismatched numeric types `{left}` and `{right}`; \
+                                     convert one side explicitly so both operands share a type",
+                                ),
+                                span.clone(),
+                                "E0707",
+                            ));
                             left.clone()
                         }
                     }
