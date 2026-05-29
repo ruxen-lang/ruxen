@@ -8,6 +8,18 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **Type-directed auto-call of function references (Ruby-style
+  ergonomics).** A bare reference to a named nullary function/method used
+  in a value position whose expected type is *not* a function type is now
+  auto-called: `let argv = args` binds `args()`'s result, so `argv.len`
+  resolves. A `Fn`-typed context (annotation or `Fn`-typed parameter)
+  suppresses the rewrite and references the function instead
+  (`let f: Fn() -> Array[String] = args`). A bare reference to a function
+  that *requires* arguments reports the new **E0726** with both escape
+  routes (call it, or annotate a `Fn` type). Implemented as a contextual
+  rewrite in `typeck` (`auto_call_fn_reference`), so MIR/codegen and the
+  IDE/LSP analysis (which share `typeck::type_check`) pick it up
+  automatically. Fixes the previously-broken `examples/01-cli-utility`.
 - **Universal `to_s` method on every type (Ruby convention).** Scalar
   primitives (`Int`, `USize`, `Float`, `Bool`, `Char`, `String`, `&str`)
   stringify via the existing `ruxen_*_to_string` runtime helpers. User

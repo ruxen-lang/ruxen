@@ -83,7 +83,11 @@ fn struct_to_s_matches_interpolation() {
     let source = "struct P\n  x: Int\n  y: Int\nend\n\ndef main\n  let p = P.new(1, 2)\n  puts p.to_s()\n  puts \"#{p}\"\nend\n";
     let (stdout, stderr, ok) = compile_and_run(source, "to_s_struct");
     assert!(ok, "stderr: {}", stderr);
-    assert_eq!(stdout, "P { x: 1, y: 2 }\nP { x: 1, y: 2 }\n", "got: {:?}", stdout);
+    assert_eq!(
+        stdout, "P { x: 1, y: 2 }\nP { x: 1, y: 2 }\n",
+        "got: {:?}",
+        stdout
+    );
 }
 
 /// An enum's `to_s()` matches its `"#{e}"` form too.
@@ -119,8 +123,7 @@ fn to_s_universal_fixture() {
     let (stdout, stderr, ok) = compile_and_run(source, "to_s_universal_fixture");
     assert!(ok, "stderr: {}", stderr);
     assert_eq!(
-        stdout,
-        "42\n1.5\ntrue\nPoint { x: 3, y: 4 }\nCircle { radius: 2.5 }\nwidget#7\n",
+        stdout, "42\n1.5\ntrue\nPoint { x: 3, y: 4 }\nCircle { radius: 2.5 }\nwidget#7\n",
         "got: {:?}",
         stdout
     );

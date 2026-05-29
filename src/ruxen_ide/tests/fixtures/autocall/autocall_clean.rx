@@ -1,0 +1,11 @@
+## IDE: clean auto-call source with no dangling members — proves the
+## editor shows NO false "no field on Fn" diagnostic once `xs` binds the
+## auto-called Array[Int] result.
+def get_items -> Array[Int]
+  [1, 2, 3]
+end
+
+def main
+  let xs = get_items
+  let n = xs.len
+end

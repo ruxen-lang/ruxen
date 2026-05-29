@@ -1,0 +1,11 @@
+## Positive: a bare reference to a nullary function in a non-Fn-typed
+## context auto-calls. `get_items` is `Fn() -> Array[Int]`; `let xs =
+## get_items` must bind the RESULT (Array[Int]), so `xs.len` resolves.
+def get_items -> Array[Int]
+  [1, 2, 3]
+end
+
+def main
+  let xs = get_items
+  let n = xs.len
+end

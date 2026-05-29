@@ -1,0 +1,13 @@
+## Type-directed auto-call: a bare nullary fn reference auto-calls in a
+## non-Fn value position, so `xs` binds the Array result and `xs.len`
+## resolves. A `Fn`-typed annotation suppresses the call (references it).
+def get_items -> Array[Int]
+  [10, 20, 30]
+end
+
+def main
+  let xs = get_items
+  let f: Fn() -> Array[Int] = get_items
+  puts "#{xs.len}"
+  puts "#{f().len}"
+end

@@ -281,6 +281,12 @@ impl<'a> InferenceEngine<'a> {
         let old_return_ty = self.current_return_ty.replace(func.return_ty.clone());
         self.infer_expr(&mut func.body);
 
+        // Type-directed auto-call in return position: a bare nullary fn
+        // reference as the body's tail expression binds its RESULT against
+        // the declared return type (unless that type is a `Fn`). Runs
+        // before the Option-wrap, same ordering as the let-binding hook.
+        self.auto_call_fn_reference(&func.return_ty, &mut func.body);
+
         // "Drop Some" sugar: when the declared return type is `T?`
         // (= `Option[T]`) but the body's tail expression is a bare
         // `T`, wrap the tail in `Option::Some` automatically. Same
@@ -342,6 +348,12 @@ impl<'a> InferenceEngine<'a> {
                     // binding has an explicit `[T; N]` annotation. The element
                     // count must match the annotation.
                     self.coerce_array_literal_to_fixed(ty, val);
+                    // Type-directed auto-call: a bare reference to a nullary
+                    // function/method binds its RESULT unless the annotation
+                    // is a `Fn` type. Runs before the Option-wrap so a
+                    // `Fn() -> Int` reference bound to a `T?` slot first
+                    // becomes `Int`, then wraps to `Some(Int)`.
+                    self.auto_call_fn_reference(ty, val);
                     // "Drop Some" sugar: when the binding type is `T?`
                     // (= `Option[T]`) but the RHS is a bare `T`, wrap
                     // the RHS in `Option::Some` automatically. Pin:
@@ -397,6 +409,116 @@ impl<'a> InferenceEngine<'a> {
                 Box::new(elem_ty),
                 crate::hir::types::ConstExpr::Lit(expected_len as u64),
             );
+        }
+    }
+
+    /// Type-directed auto-call of a bare function reference.
+    ///
+    /// When `val` is a bare reference (`VarRef`) to a named function or
+    /// method and the expected type at this position is **not** a function
+    /// type, rewrite `val` in place into a zero-argument call. A `Fn`-typed
+    /// `expected` (annotation or `Fn`-typed parameter) suppresses the
+    /// rewrite — the function is referenced, not called.
+    ///
+    /// A reference to a function that *requires* arguments cannot be
+    /// auto-called with zero args; that is reported as E0726, which names
+    /// both escape routes (call it, or annotate a `Fn` type to reference it).
+    ///
+    /// Mirrors `auto_wrap_option_some` / `coerce_array_literal_to_fixed`:
+    /// a contextual rewrite applied at known value positions (let binding,
+    /// function return, call arguments, branches).
+    ///
+    /// See `docs/superpowers/specs/2026-05-29-auto-call-fn-references-design.md`.
+    pub(super) fn auto_call_fn_reference(&mut self, expected: &Ty, val: &mut HirExpr) {
+        // A `Fn`-typed context references the function without calling it.
+        // (Only a *concrete* function type suppresses; an unconstrained
+        // inference variable — e.g. a `let` with no annotation — defaults
+        // to auto-call, the Ruby-style behaviour.)
+        let expected_resolved = self.ctx.resolve(expected);
+        if matches!(
+            expected_resolved,
+            Ty::Fn { .. } | Ty::FnMut { .. } | Ty::FnOnce { .. }
+        ) {
+            return;
+        }
+        // Descend into structural tails so return-position and branch
+        // positions see the same context, mirroring auto_wrap_option_some:
+        // the value assigned to the slot is the block tail / each branch.
+        match &mut val.kind {
+            HirExprKind::Block(_, Some(tail)) => {
+                self.auto_call_fn_reference(&expected_resolved, tail);
+                val.ty = self.ctx.resolve(&tail.ty);
+                return;
+            }
+            HirExprKind::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                self.auto_call_fn_reference(&expected_resolved, then_branch);
+                if let Some(e) = else_branch {
+                    self.auto_call_fn_reference(&expected_resolved, e);
+                }
+                return;
+            }
+            HirExprKind::Match { arms, .. } => {
+                for arm in arms.iter_mut() {
+                    self.auto_call_fn_reference(&expected_resolved, &mut arm.body);
+                }
+                return;
+            }
+            _ => {}
+        }
+        // Only a bare reference to a *named* function/method auto-calls.
+        let def_id = match &val.kind {
+            HirExprKind::VarRef(def_id) => *def_id,
+            _ => return,
+        };
+        // The value must currently hold a function type. Guards against a
+        // VarRef whose slot was already rewritten, and against references
+        // to non-function definitions.
+        let val_ty = self.ctx.resolve(&val.ty);
+        if !matches!(val_ty, Ty::Fn { .. } | Ty::FnMut { .. } | Ty::FnOnce { .. }) {
+            return;
+        }
+        let (name, signature) = match self.symbols.get(def_id) {
+            Some(def) => {
+                let name = def.name.clone();
+                match &def.kind {
+                    crate::resolve::symbols::DefKind::Function { signature }
+                    | crate::resolve::symbols::DefKind::Method { signature, .. } => {
+                        (name, signature.clone())
+                    }
+                    _ => return,
+                }
+            }
+            None => return,
+        };
+        if signature.params.is_empty() {
+            // Nullary: rewrite into a zero-argument call so the value takes
+            // the function's return type.
+            let ret = self.wrap_async_return(&signature);
+            val.kind = HirExprKind::FnCall {
+                callee: def_id,
+                callee_name: name,
+                args: Vec::new(),
+            };
+            val.ty = ret;
+        } else {
+            // Requires arguments — cannot auto-call. Name both escape routes.
+            self.diagnostics.push(crate::diagnostics::Diagnostic::error_with_code(
+                format!(
+                    "`{name}` is a function that needs {} argument{}; call it like `{name}(...)`, or annotate a `Fn` type to reference it without calling (e.g. `let f: Fn(...) -> ... = {name}`)",
+                    signature.params.len(),
+                    if signature.params.len() == 1 { "" } else { "s" },
+                ),
+                val.span.clone(),
+                "E0726",
+            ));
+            // Mark the slot as Error so the subsequent unify against a
+            // concrete annotation doesn't emit a second, cascading
+            // type-mismatch diagnostic for the same expression.
+            val.ty = Ty::Error;
         }
     }
 

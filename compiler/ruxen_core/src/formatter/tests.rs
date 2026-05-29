@@ -351,21 +351,26 @@ fn test_import_sorting_groups() {
 
 fn assert_reparses(source: &str) -> String {
     let result = format(source);
-    assert!(result.errors.is_empty(), "format errors: {:?}", result.errors);
+    assert!(
+        result.errors.is_empty(),
+        "format errors: {:?}",
+        result.errors
+    );
     let mut lexer = crate::lexer::Lexer::new(&result.output);
-    let tokens = lexer
-        .tokenize()
-        .unwrap_or_else(|d| panic!("lex of formatted output failed: {:?}\n---\n{}", d, result.output));
+    let tokens = lexer.tokenize().unwrap_or_else(|d| {
+        panic!(
+            "lex of formatted output failed: {:?}\n---\n{}",
+            d, result.output
+        )
+    });
     let mut parser = crate::parser::Parser::new(tokens);
-    parser
-        .parse()
-        .unwrap_or_else(|d| {
-            panic!(
-                "formatted output no longer parses: {:?}\n--- output ---\n{}",
-                d.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
-                result.output
-            )
-        });
+    parser.parse().unwrap_or_else(|d| {
+        panic!(
+            "formatted output no longer parses: {:?}\n--- output ---\n{}",
+            d.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+            result.output
+        )
+    });
     assert_idempotent(source);
     result.output
 }
@@ -383,7 +388,11 @@ fn private_fields_use_section_marker() {
     // No corpus file exercises non-public fields; pin the section-marker form.
     let src = "class C\n  private\n  secret: Int\nend\n";
     let out = assert_reparses(src);
-    assert!(out.contains("private"), "expected private section marker:\n{}", out);
+    assert!(
+        out.contains("private"),
+        "expected private section marker:\n{}",
+        out
+    );
     assert!(!out.contains("pub "), "{}", out);
 }
 
@@ -391,7 +400,11 @@ fn private_fields_use_section_marker() {
 fn lib_block_name_keeps_quotes() {
     let src = "lib \"runtime/env.c\"\n  def args as \"ruxen_env_args\" -> Array[String]\nend\n";
     let out = assert_reparses(src);
-    assert!(out.contains("lib \"runtime/env.c\""), "lib name lost quotes:\n{}", out);
+    assert!(
+        out.contains("lib \"runtime/env.c\""),
+        "lib name lost quotes:\n{}",
+        out
+    );
 }
 
 #[test]
@@ -403,9 +416,14 @@ fn ffi_class_method_keeps_self() {
 
 #[test]
 fn mixin_method_sig_def_before_var() {
-    let src = "mixin Future\n  type Output\n  def var poll(cx: &var Context) -> Poll[Self.Output]\nend\n";
+    let src =
+        "mixin Future\n  type Output\n  def var poll(cx: &var Context) -> Poll[Self.Output]\nend\n";
     let out = assert_reparses(src);
-    assert!(out.contains("def var poll"), "expected `def var`, got:\n{}", out);
+    assert!(
+        out.contains("def var poll"),
+        "expected `def var`, got:\n{}",
+        out
+    );
     assert!(!out.contains("var def"), "emitted `var def`:\n{}", out);
 }
 
@@ -413,13 +431,21 @@ fn mixin_method_sig_def_before_var() {
 fn extension_keyword_not_impl() {
     let src = "extension Int\n  def to_s -> String\n    \"#{self}\"\n  end\nend\n";
     let out = assert_reparses(src);
-    assert!(out.contains("extension Int"), "expected `extension`, got:\n{}", out);
+    assert!(
+        out.contains("extension Int"),
+        "expected `extension`, got:\n{}",
+        out
+    );
 }
 
 #[test]
 fn const_without_type_omits_annotation() {
     let out = assert_reparses("const MAX = 100\n");
-    assert!(!out.contains(": _"), "spurious inferred-type annotation:\n{}", out);
+    assert!(
+        !out.contains(": _"),
+        "spurious inferred-type annotation:\n{}",
+        out
+    );
     assert!(out.contains("const MAX = 100"), "{}", out);
 }
 
@@ -435,7 +461,11 @@ fn do_end_block_expression_preserved() {
 fn move_closure_keeps_move() {
     let src = "def f -> some Fn(Int) -> Int\n  move { |x| x + 1 }\nend\n";
     let out = assert_reparses(src);
-    assert!(out.contains("move {") || out.contains("move do"), "move keyword lost:\n{}", out);
+    assert!(
+        out.contains("move {") || out.contains("move do"),
+        "move keyword lost:\n{}",
+        out
+    );
 }
 
 #[test]
@@ -451,5 +481,10 @@ fn multi_statement_match_arm_has_no_end() {
     let src = "def main\n  match x\n    Some(v) ->\n      puts \"a\"\n      puts \"b\"\n    None -> puts \"c\"\n  end\nend\n";
     let out = assert_reparses(src);
     // Exactly two `end`s: the match and the def. A per-arm `end` would make 3.
-    assert_eq!(out.matches("end").count(), 2, "spurious arm `end`:\n{}", out);
+    assert_eq!(
+        out.matches("end").count(),
+        2,
+        "spurious arm `end`:\n{}",
+        out
+    );
 }

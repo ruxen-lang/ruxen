@@ -1,0 +1,10 @@
+## Suppression guard: a `Fn`-typed context references the function
+## WITHOUT calling it. Must remain valid (no auto-call) after the
+## auto-call transform lands.
+def get_items -> Array[Int]
+  [1, 2, 3]
+end
+
+def main
+  let f: Fn() -> Array[Int] = get_items
+end

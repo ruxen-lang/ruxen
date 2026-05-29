@@ -255,6 +255,15 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E0725",
         title: "stdlib bootstrap failed (file missing / lex / parse error)",
     },
+    // Type-directed auto-call: a bare reference to a function/method that
+    // requires arguments, used in a value position whose expected type is
+    // not a `Fn` type, cannot be auto-called with zero arguments. The
+    // diagnostic names both escape routes (call it, or annotate a `Fn`
+    // type to reference it).
+    CodeInfo {
+        code: "E0726",
+        title: "function reference needs arguments; call it or annotate a `Fn` type",
+    },
     // ── Borrow checking + mixin/include (E1001-E1099) ────────────────
     // The borrow checker maintains a parallel `ErrorCode` enum in
     // `borrow_check/errors.rs`; titles below mirror its `title()`
