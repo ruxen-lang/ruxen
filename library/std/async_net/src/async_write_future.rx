@@ -9,6 +9,8 @@ class AsyncWriteFuture
   state_ptr: Int
   handle: Int
   done: Int
+  include Future
+  type Output = Result[Int, IoError]
 
   def init(fd: Int, content: &String, handle: Int)
     self.state_ptr = ruxen_async_tcp_write_state_new(fd, content)
@@ -23,7 +25,7 @@ class AsyncWriteFuture
     let step = ruxen_async_tcp_write_step(self.state_ptr)
     if step == 1
       let w = cx.waker
-      ruxen_reactor_set_waker(ruxen_reactor_current_handle, self.handle, w)
+      ruxen_reactor_set_waker(ruxen_reactor_current_handle(), self.handle, w)
       return Poll.Pending
     end
     self.done = 1
@@ -36,6 +38,4 @@ class AsyncWriteFuture
       self.state_ptr = 0
     end
   end
-
-  include Future
 end

@@ -12,10 +12,14 @@
 ## registration because the open call never returns EAGAIN.
 class AsyncOpenFuture
   result: Result[AsyncFile, IoError]
-
-  def init(path: &String, flags: Int) { self.result = ruxen_async_file_open(path, flags) }
-
-  def var poll(cx: &var Context) -> Poll[Result[AsyncFile, IoError]] { Poll.Ready(self.result) }
-
   include Future
+  type Output = Result[AsyncFile, IoError]
+
+  def init(path: &String, flags: Int)
+    self.result = ruxen_async_file_open(path, flags)
+  end
+
+  def var poll(cx: &var Context) -> Poll[Result[AsyncFile, IoError]]
+    Poll.Ready(self.result)
+  end
 end

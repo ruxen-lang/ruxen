@@ -18,6 +18,8 @@ class AsyncReadFuture
   state_ptr: Int
   handle: Int
   done: Int
+  include Future
+  type Output = Result[String, IoError]
 
   def init(fd: Int, max_bytes: Int, handle: Int)
     self.state_ptr = ruxen_async_tcp_read_state_new(fd, max_bytes)
@@ -32,7 +34,7 @@ class AsyncReadFuture
     let step = ruxen_async_tcp_read_step(self.state_ptr)
     if step == 1
       let w = cx.waker
-      ruxen_reactor_set_waker(ruxen_reactor_current_handle, self.handle, w)
+      ruxen_reactor_set_waker(ruxen_reactor_current_handle(), self.handle, w)
       return Poll.Pending
     end
     self.done = 1
@@ -45,6 +47,4 @@ class AsyncReadFuture
       self.state_ptr = 0
     end
   end
-
-  include Future
 end

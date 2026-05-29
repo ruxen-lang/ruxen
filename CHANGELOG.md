@@ -58,6 +58,31 @@ once 1.0.0 ships.
   unconditionally.
 
 ### Fixed
+- **Restore `include Future` + `type Output = Result[...]` on 14 stdlib
+  future classes accidentally stripped by Phase 3.** Commit `3dc02b6`
+  (the runtime replay-suppression flag) modified 80+ stdlib `.rx`
+  files as a side effect of an automated stylistic pass — including
+  removing the `include Future` mixin inclusion and the
+  `type Output = Result[..., ...]` associated-type declaration from
+  every async future class (`async_open_future`,
+  `async_read_to_string_future`, `async_write_all_future`,
+  `async_read_line_future`, `async_accept_future`,
+  `async_bind_future`, `async_close_future`, `async_connect_future`,
+  `async_read_future`, `async_read_with_timeout_future`,
+  `async_write_future`, `task_join_future`, `task_yield_future`,
+  `time_sleep_future`). Without the trait inclusion, executor
+  polling lost the Future contract and any fixture exercising
+  block_on of an async path returned wrong results or segfaulted
+  on type mismatch — `case/740_async_stdin_read_line_eof` returned
+  `eof_fail` (the Future-side read couldn't be polled), and
+  `case/727b_async_tcp_read_timeout` segfaulted on the executor's
+  attempt to drive an unstamped AsyncTcpListener.bind. The 14
+  affected files have been reverted to their `acde6476` shape;
+  Phase 3's intended runtime + REPL changes (the `__thread int
+  ruxen_repl_is_replaying` flag and the wrap layer in
+  `library/std/*/runtime/*.c`) remain in place. Both fixtures now
+  PASS under the compile path; the 5 REPL parity baseline
+  (508/534/536/107/etc.) stays green.
 - **REPL parity sweep: 727_async_tcp_echo + 727b_async_tcp_read_timeout
   gated via `REPL_KNOWN_SKIP`.** Both fixtures bridge a sync
   `Thread.spawn_raw` server with an async client over a hardcoded

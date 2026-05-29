@@ -10,6 +10,8 @@
 class AsyncCloseFuture
   stream: AsyncTcpStream
   done: Int
+  include Future
+  type Output = ()
 
   def init(stream: AsyncTcpStream)
     self.stream = stream
@@ -23,11 +25,10 @@ class AsyncCloseFuture
     end
     Poll.Ready(nil)
   end
-
-  include Future
 end
 
 ## --- helpers (declared AFTER all classes so types resolve) ---------
+
 ## Construct AsyncCloseFuture by-move from a stream — surface deviation
 ## from spec B10 (see the file-level header comment). Call site:
 ##
@@ -69,7 +70,9 @@ end
 ## an IoError struct. The state takers expose the tag as an Int rather
 ## than constructing the IoError themselves so the Ruxen side controls
 ## the typed value the Result.Err arm carries.
-def io_error_from_tag(tag: Int) -> IoError { ruxen_io_error_from_tag(tag) }
+def io_error_from_tag(tag: Int) -> IoError
+  ruxen_io_error_from_tag(tag)
+end
 
 lib "../io/runtime/io_error.c"
   def ruxen_io_error_from_tag as "ruxen_io_error_unit"(tag: Int) -> IoError

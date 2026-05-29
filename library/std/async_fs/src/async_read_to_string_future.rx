@@ -18,6 +18,8 @@ class AsyncReadToStringFuture
   state_ptr: Int
   handle: Int
   done: Int
+  include Future
+  type Output = Result[String, IoError]
 
   def init(fd: Int)
     self.state_ptr = ruxen_async_read_state_new(fd)
@@ -27,20 +29,24 @@ class AsyncReadToStringFuture
 
   def var poll(cx: &var Context) -> Poll[Result[String, IoError]]
     if self.done != 0
+      # Defensive: executor shouldn't poll after Ready.
       return Poll.Ready(ruxen_async_read_state_take_result(self.state_ptr))
     end
     let step = ruxen_async_read_step(self.state_ptr)
     if step == 1
+      # EAGAIN — register for read-readiness (idempotent: handle == 0
+      # means we haven't registered yet on this thread of polling).
       if self.handle == 0
         let fd = ruxen_async_read_state_get_fd(self.state_ptr)
-        self.handle = ruxen_reactor_register_fd_read(ruxen_reactor_current_handle, fd)
+        self.handle = ruxen_reactor_register_fd_read(ruxen_reactor_current_handle(), fd)
       end
       let w = cx.waker
-      ruxen_reactor_set_waker(ruxen_reactor_current_handle, self.handle, w)
+      ruxen_reactor_set_waker(ruxen_reactor_current_handle(), self.handle, w)
       return Poll.Pending
     end
+    # step == 2 (EOF) or step == 3 (error) — both Ready paths.
     if self.handle != 0
-      ruxen_reactor_deregister(ruxen_reactor_current_handle, self.handle)
+      ruxen_reactor_deregister(ruxen_reactor_current_handle(), self.handle)
       self.handle = 0
     end
     self.done = 1
@@ -49,7 +55,7 @@ class AsyncReadToStringFuture
 
   def drop
     if self.handle != 0
-      ruxen_reactor_deregister(ruxen_reactor_current_handle, self.handle)
+      ruxen_reactor_deregister(ruxen_reactor_current_handle(), self.handle)
       self.handle = 0
     end
     if self.state_ptr != 0
@@ -57,6 +63,4 @@ class AsyncReadToStringFuture
       self.state_ptr = 0
     end
   end
-
-  include Future
 end

@@ -37,8 +37,12 @@
 ## state machine fires when the join future falls out of scope.
 class TaskJoinFuture
   handle: Int
+  include Future
+  type Output = Int
 
-  def init(h: Int) { self.handle = h }
+  def init(h: Int)
+    self.handle = h
+  end
 
   def var poll(cx: &var Context) -> Poll[Int]
     if TaskHandle.is_done(self.handle) == 1
@@ -48,7 +52,7 @@ class TaskJoinFuture
     end
   end
 
-  def drop { TaskHandle.drop_handle(self.handle) }
-
-  include Future
+  def drop
+    TaskHandle.drop_handle(self.handle)
+  end
 end
