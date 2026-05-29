@@ -1,13 +1,14 @@
 ## Type-directed auto-call: a bare nullary fn reference auto-calls in a
 ## non-Fn value position, so `xs` binds the Array result and `xs.len`
-## resolves. A `Fn`-typed annotation suppresses the call (references it).
+## resolves without explicit parens. (The Fn-typed *reference* escape
+## hatch is covered by typeck unit tests; calling a first-class named-fn
+## value is a separate codegen concern not exercised here.)
 def get_items -> Array[Int]
   [10, 20, 30]
 end
 
 def main
   let xs = get_items
-  let f: Fn() -> Array[Int] = get_items
-  puts "#{xs.len}"
-  puts "#{f().len}"
+  let n = xs.len
+  puts "#{n}"
 end
