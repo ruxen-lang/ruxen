@@ -76,6 +76,34 @@ once 1.0.0 ships.
   unconditionally.
 
 ### Fixed
+- **REPL parity: 727_async_tcp_echo + 727b_async_tcp_read_timeout
+  removed from `REPL_KNOWN_SKIP`.** Both fixtures now PASS the REPL
+  parity sweep end-to-end. The final unblock was filtering
+  slot-backed `let` bindings (and same-target assignments) out of
+  the replay stream in `collect_replay_statements`: the wrapper's
+  synthetic slot-load prefix is already the source of truth for
+  those values, and replaying the original let-RHS would re-execute
+  side-effecting initializers AND lexically shadow the slot-loaded
+  binding with a fresh — often wrong — value. For 727 specifically,
+  `let handle = Thread.spawn_raw(...)` was replaying on every
+  subsequent input, the second pthread spawn's bind hit
+  `EADDRINUSE`, server_loop returned 0, the lexical rebind made
+  `handle = 0`, and the replayed `if handle == 0; ...; return; end`
+  exited the wrapper before the user's actual input could run.
+  With the filter, the slot load of `handle` (the original valid
+  pthread_t) survives; replay no longer re-spawns; the rest of the
+  fixture (sleep, `client_flow`, the if-else echo print, `JoinHandle.join_raw`)
+  runs normally. Required four coordinated changes: the filter
+  itself, a probe typecheck in `eval_statement::Let` so the slot
+  is registered BEFORE the first `build_program` call (closes the
+  first-input chicken-and-egg), emitting the slot-store suffix
+  even when `body_has_return` is true (so the user's let RHS gets
+  persisted), and a `mutable: bool` field on `VarSlot` so the
+  synthetic slot-load `let` is correctly mutable for `var` bindings.
+  Net effect: 5/5 of the originally-failing REPL parity fixtures
+  (508/534/536/727/727b) are green. `REPL_KNOWN_SKIP` is back to
+  the empty-baseline shape; the entries documenting the prior gate
+  are gone from `tests/release-e2e/run.sh`.
 - **`Int`/`Float` arithmetic mismatch now errors cleanly (E0707) instead
   of crashing the backend.** A mixed-numeric binary operator (e.g.
   `a - 3.5` with `a: Int`) previously slipped through type-checking with
