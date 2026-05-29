@@ -7,6 +7,22 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+### Added
+- **`std.regex` — PCRE2-backed regex package.** New `library/std/regex/` with
+  `class Regex`, `class Match`, `class RegexError`. PCRE2 10.44 is vendored
+  under `library/std/regex/runtime/pcre2/` and compiled into `libruxenrt.a`
+  alongside the package's `runtime/regex.c` C wrapper (no `system_libs` entry
+  needed). First-class `/pat/flags` literal syntax disambiguated from division
+  via the standard JS/Ruby positional rule. New `~=` operator at the equality
+  precedence tier (`s ~= regex` → `Bool`; `regex.find(s)` → `Option[Match]`).
+  Surface: `is_match`, `find`, `scan`, `replace`, `replace_all`, `split` on
+  `Regex`; `matched`, `start_pos`, `end_pos`, `group`, `named`, `groups`,
+  `named_groups` on `Match`. Flag set: `i m s x` (semantic); `g` accepted as a
+  no-op. Compile-time pattern validation via PCRE2 at typeck (E1704). New
+  error codes E1700/E1701/E1702/E1703/E1704 with long-form docs under
+  `docs/errors/`. Seven e2e fixtures (`900_…` through `906_…`). Spec:
+  `docs/superpowers/specs/2026-05-29-std-regex-design.md`.
+
 ### Fixed
 - **Overloaded `drop` (and `display`/`init`) no longer demands an explicit
   return type.** The resolver renames overloaded methods to
