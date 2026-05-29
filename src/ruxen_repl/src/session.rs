@@ -28,6 +28,14 @@ pub struct VarSlot {
     pub name: String,
     pub ty: Ty,
     pub idx: usize,
+    /// True if the original Ruxen declaration was `var` (mutable);
+    /// false for `let` (immutable). The synthetic slot-load binding
+    /// in `eval::slot_load_let` propagates this flag so subsequent
+    /// inputs' typechecker rejects user `name = expr` assignments
+    /// to immutable lets but allows them on `var` decls — matching
+    /// the source's declared mutability after Phase 2.5's replay
+    /// filter dropped the original `let`/`var` from the wrapper body.
+    pub mutable: bool,
 }
 
 /// Complete state for a REPL session.
@@ -142,9 +150,14 @@ impl ReplSession {
     /// Register (or re-register) a session variable, returning its slot
     /// index. Rebinding an existing name reuses its slot and updates the
     /// type. New names get the next free slot.
-    pub fn register_var(&mut self, name: &str, ty: Ty) -> Result<usize, String> {
+    pub fn register_var(&mut self, name: &str, ty: Ty, mutable: bool) -> Result<usize, String> {
         if let Some(existing) = self.var_slots.iter_mut().find(|v| v.name == name) {
             existing.ty = ty;
+            // Rebinding refreshes mutability — `var foo = ...` after a
+            // prior `let foo = ...` is a fresh binding in the source
+            // (Pattern::Identifier carries its own `mutable` flag), and
+            // the slot now represents the latest decl.
+            existing.mutable = mutable;
             return Ok(existing.idx);
         }
         let idx = self.var_slots.len();
@@ -158,6 +171,7 @@ impl ReplSession {
             name: name.to_string(),
             ty,
             idx,
+            mutable,
         });
         Ok(idx)
     }

@@ -74,11 +74,68 @@ fn replay_flag_toggle_stmt(enter: bool, span: &ruxen_core::lexer::token::Span) -
 /// session variable. The runtime flag is set around this block in
 /// `build_program`, so any embedded side-effects no-op cleanly.
 fn collect_replay_statements(session: &ReplSession) -> Vec<Statement> {
-    // `session_var_mutations` already interleaves let-bindings and
-    // mutation expression-statements in input order — clone it
-    // directly. The separate `let_bindings` field exists only for
-    // the typecheck-only `:type` path.
-    session.session_var_mutations.clone()
+    // Filter out `let` bindings for slot-backed variables. The wrapper's
+    // synthetic slot-load prefix (from Task 1.2 / 1.3) is the source of
+    // truth for those values; replaying the original let-RHS would
+    // re-execute side-effecting initializers (`Thread.spawn_raw`,
+    // network bind, file open) AND would shadow the slot-loaded
+    // binding with a fresh — and potentially wrong — value.
+    //
+    // For 727_async_tcp_echo specifically: `let handle = Thread.spawn_raw(...)`
+    // re-runs the spawn on every replay, the second bind hits
+    // EADDRINUSE, server_loop returns 0, the lexical rebind makes
+    // `handle = 0`, and the replayed `if handle == 0; puts; return; end`
+    // exits the wrapper before the user's actual input runs. That's
+    // the 727 hang.
+    //
+    // Heap-typed lets (String, Array, etc.) are NOT slot-backed today
+    // (Task 1.2 gates on Ty::Int only), so they continue to replay —
+    // which is correct for state continuity since their constructor
+    // RHS is idempotent.
+    let slot_names: HashSet<&str> = session
+        .var_slots
+        .iter()
+        .map(|vs| vs.name.as_str())
+        .collect();
+    session
+        .session_var_mutations
+        .iter()
+        .filter(|s| !is_let_for_slot_backed(s, &slot_names))
+        .cloned()
+        .collect()
+}
+
+fn is_let_for_slot_backed(stmt: &Statement, slot_names: &HashSet<&str>) -> bool {
+    match stmt {
+        Statement::Let(b) => match &b.pattern {
+            Pattern::Identifier { name, .. } => slot_names.contains(name.as_str()),
+            // Multi-pattern lets (tuple/struct destructuring) aren't
+            // slot-backed today; let them replay normally.
+            _ => false,
+        },
+        // Assignments / compound-assignments to a slot-backed name are
+        // dropped too. The slot prefix/suffix already round-trips the
+        // value through the persistent slot, so the slot LOAD reflects
+        // every prior mutation's stored result. Re-replaying the
+        // assignment would re-apply the mutation on top of the already-
+        // up-to-date slot value — `counter = counter + 1` would
+        // double-count on every subsequent input. (Pre-Phase 2.5 the
+        // model worked because the corresponding `Let` in the replay
+        // first re-shadowed the binding back to its initial value, so
+        // the chronological assignments rebuilt the current value from
+        // scratch. Phase 2.5 makes the slot the source of truth and
+        // drops both halves of that dance together.)
+        Statement::Expression(e) => match &e.kind {
+            ExprKind::Assign { target, .. } | ExprKind::CompoundAssign { target, .. } => {
+                if let ExprKind::Identifier(n) = &target.kind {
+                    slot_names.contains(n.as_str())
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        },
+    }
 }
 
 /// Walk an expression and collect every base identifier name that
@@ -480,6 +537,81 @@ fn eval_statement(session: &mut ReplSession, raw_input: &str, stmt: Statement) -
                     kind: ExprKind::Identifier(name.clone()),
                     span: span.clone(),
                 }));
+            }
+
+            // Phase 2.5: pre-register a slot for the new let BEFORE the
+            // wrapper is built so `build_program` includes the matching
+            // slot prefix (load — bogus on first run, the user's `let
+            // name = …` shadows it) and slot suffix (store — captures
+            // the user's freshly-bound value into the persistent slot).
+            //
+            // Without this, the slot wasn't populated until the SECOND
+            // input that references `name` (since `var_slots` was empty
+            // at first build_program time, no suffix store was emitted),
+            // which combined with Phase 2.5's replay filter — that drops
+            // the original `let name = …` so the slot load is the source
+            // of truth — left subsequent inputs reading 0 instead of the
+            // bound value.
+            //
+            // To know whether the let is slot-eligible we need its type,
+            // which requires a typecheck pass. We typecheck a probe
+            // wrapper (no slot ops yet) just to discover the let's
+            // inferred type; if it's `Ty::Int` we register the slot,
+            // then rebuild the wrapper so the prefix/suffix pair lands
+            // around the user's let. The probe's typecheck is cheap
+            // (the same body the real path would have typechecked) and
+            // is discarded if it errors — the real compile_and_execute
+            // will re-surface the same error to the user.
+            //
+            // Heap-typed lets stay on the existing path: register_var
+            // is gated on `Ty::Int` in the RecordLet hook, so a
+            // heap-typed binding falls through pre-registration and
+            // registers normally (with no slot store, just session
+            // history bookkeeping).
+            if let Pattern::Identifier {
+                name,
+                mutable: pat_mut,
+                ..
+            } = &binding.pattern
+            {
+                let probe_replay = collect_replay_statements(session);
+                let probe_user = vec![
+                    Statement::Let(binding.clone()),
+                    Statement::Expression(Expr {
+                        kind: ExprKind::Identifier(name.clone()),
+                        span: span.clone(),
+                    }),
+                ];
+                let probe_fn = format!("__repl_probe_{}", session.input_counter);
+                let probe_wrapper =
+                    build_program(session, &probe_fn, probe_replay, probe_user, &span);
+                let probe_result = typeck::type_check(&probe_wrapper);
+                let probe_ok = probe_result
+                    .diagnostics
+                    .iter()
+                    .all(|d| d.level != DiagnosticLevel::Error);
+                if probe_ok {
+                    if let Some(let_ty) =
+                        find_let_type_in_wrapper(&probe_result.program, &probe_fn, name)
+                    {
+                        if matches!(let_ty, Ty::Int)
+                            && session.find_var_slot(name).is_none()
+                        {
+                            // Either the LetBinding-level `mutable`
+                            // (top-level `var name = …` form) or the
+                            // pattern's own `mutable` (the inline `let
+                            // var name = …` form) is enough to make
+                            // the slot mutable — a later input's
+                            // `name = expr` is well-formed in both
+                            // shapes.
+                            let is_mut = binding.mutable || *pat_mut;
+                            // Failure here means slot exhaustion —
+                            // surface it the same way other compile-
+                            // time resource exhaustion would.
+                            let _ = session.register_var(name, let_ty, is_mut);
+                        }
+                    }
+                }
             }
 
             let wrapper = build_program(session, &fn_name, replay_stmts, user_stmts, &span);
@@ -918,7 +1050,12 @@ fn compile_and_execute(
                 // pattern lets (tuple/struct destructuring) skip slot
                 // registration for now — Phase 1 scope is primitives
                 // only.
-                if let Pattern::Identifier { name, .. } = &b.pattern {
+                if let Pattern::Identifier {
+                    name,
+                    mutable: pat_mut,
+                    ..
+                } = &b.pattern
+                {
                     if let Some(let_ty) =
                         find_let_type_in_wrapper(&type_result.program, fn_name, name)
                     {
@@ -930,11 +1067,36 @@ fn compile_and_execute(
                         // phases that widen `slot_load_let` should
                         // update this gate in lockstep.
                         if matches!(let_ty, Ty::Int) {
-                            // Failure here means we've run out of slots —
-                            // surface it the same way other compile-time
-                            // resource exhaustion would, after the input
-                            // has already executed.
-                            let _ = session.register_var(name, let_ty);
+                            // Phase 2.5: `eval_statement` already pre-
+                            // registers the slot before build_program so
+                            // the in-wrapper `__slot_store_i64` suffix
+                            // captures the bound value on the very first
+                            // input. The call here is idempotent for the
+                            // common path (find_var_slot was already Some
+                            // pre-registration), but stays as a safety
+                            // net for any future caller that lands a
+                            // RecordLet hook without going through the
+                            // eval_statement Let arm. The mutability
+                            // flag is propagated so a `var foo = …`
+                            // binding gets a mutable slot-load in the
+                            // next input's wrapper (otherwise the user's
+                            // subsequent `foo = …` would hit E1006
+                            // "cannot assign to `let` binding").
+                            //
+                            // Mutability lives on the LetBinding wrapper
+                            // for the top-level `var name = …` form (the
+                            // standard idiom) and on Pattern::Identifier
+                            // for the inline `let var name = …` form.
+                            // Either flag is enough to make the slot
+                            // mutable — `parse_let_binding` consumes
+                            // `var` before `parse_pattern`, so `var
+                            // counter = 0` is `LetBinding { mutable:
+                            // true, pattern: Identifier { mutable:
+                            // false, … }, … }`, while `let var counter =
+                            // 0` is `LetBinding { mutable: false,
+                            // pattern: Identifier { mutable: true } }`.
+                            let is_mut = b.mutable || *pat_mut;
+                            let _ = session.register_var(name, let_ty, is_mut);
                         }
                     }
                 }
@@ -1244,48 +1406,79 @@ fn build_program(
     // input's slot prefix will reload from the persistent slot
     // (i.e. the value the previous successful input wrote).
 
-    // Only do the tail-preserve dance when we actually have stores
-    // to emit AND the input doesn't embed a `return`; otherwise
-    // `build_program` is a no-op transform over the input statements
-    // (matches Task 1.2 behaviour exactly for sessions with no Int
-    // vars).
-    if !slot_vars.is_empty() && !body_has_return {
-        let tail_name = format!("__ruxen_repl_tail_{}", fn_name);
-        let original_tail_expr: Option<Expr> = match body.last() {
-            Some(Statement::Expression(_)) => match body.pop() {
-                Some(Statement::Expression(e)) => Some(e),
-                _ => unreachable!(),
-            },
-            _ => None,
-        };
-        let had_tail = original_tail_expr.is_some();
-
-        if let Some(tail_expr) = original_tail_expr {
-            // `let __ruxen_repl_tail_<fn> = <original tail>`
-            body.push(Statement::Let(LetBinding {
-                mutable: false,
-                pattern: Pattern::Identifier {
-                    mutable: false,
-                    name: tail_name.clone(),
-                    span: span.clone(),
+    // Tail-preserve dance: only when we have stores to emit AND the
+    // input doesn't embed a `return`. Otherwise `build_program` is a
+    // no-op transform over the input statements (matches Task 1.2
+    // behaviour exactly for sessions with no Int vars).
+    //
+    // Phase 2.5: when `body_has_return` is true we STILL need to emit
+    // the slot store suffix — the replayed `return` typically doesn't
+    // fire (its condition reads a slot-loaded value whose current
+    // state means the if-branch is false), the user's let-RHS runs
+    // to completion, and the next input's slot prefix is the sole
+    // source of truth for the new value. Without the store the next
+    // input observes the previous (or 0) slot value, breaking 727
+    // (`let ok = client_flow()` → next input's `if ok == 1` reads
+    // stale 0 → echo_fail).
+    //
+    // What we skip on the body_has_return path is just the
+    // tail-preservation rebind — Phase 2's Unit-coercion below
+    // strips the wrapper's natural tail and pushes `Block(())`, so
+    // the wrapper return type is Unit regardless of whether the
+    // store calls leave non-Unit expressions in tail position. The
+    // stores themselves are simple `Expression(Call(...))` statements
+    // that don't change the wrapper's effective tail because Phase 2
+    // re-emits its own Unit tail after them.
+    if !slot_vars.is_empty() {
+        if !body_has_return {
+            // Standard tail-preservation: rebind the natural tail to
+            // a temp, emit stores, re-emit temp.
+            let tail_name = format!("__ruxen_repl_tail_{}", fn_name);
+            let original_tail_expr: Option<Expr> = match body.last() {
+                Some(Statement::Expression(_)) => match body.pop() {
+                    Some(Statement::Expression(e)) => Some(e),
+                    _ => unreachable!(),
                 },
-                type_annotation: None,
-                value: Some(Box::new(tail_expr)),
-                span: span.clone(),
-            }));
-        }
+                _ => None,
+            };
+            let had_tail = original_tail_expr.is_some();
 
-        for vs in &slot_vars {
-            body.push(slot_store_expr_stmt(vs, session, span));
-        }
+            if let Some(tail_expr) = original_tail_expr {
+                // `let __ruxen_repl_tail_<fn> = <original tail>`
+                body.push(Statement::Let(LetBinding {
+                    mutable: false,
+                    pattern: Pattern::Identifier {
+                        mutable: false,
+                        name: tail_name.clone(),
+                        span: span.clone(),
+                    },
+                    type_annotation: None,
+                    value: Some(Box::new(tail_expr)),
+                    span: span.clone(),
+                }));
+            }
 
-        // Re-emit the temp as the new tail so the wrapper's return
-        // type — and thus the user-visible result — is preserved.
-        if had_tail {
-            body.push(Statement::Expression(Expr {
-                kind: ExprKind::Identifier(tail_name),
-                span: span.clone(),
-            }));
+            for vs in &slot_vars {
+                body.push(slot_store_expr_stmt(vs, session, span));
+            }
+
+            // Re-emit the temp as the new tail so the wrapper's return
+            // type — and thus the user-visible result — is preserved.
+            if had_tail {
+                body.push(Statement::Expression(Expr {
+                    kind: ExprKind::Identifier(tail_name),
+                    span: span.clone(),
+                }));
+            }
+        } else {
+            // body_has_return path: append stores directly, no tail
+            // rebind. Phase 2's coercion below strips the user's
+            // natural tail and pushes Block(()), so the wrapper's
+            // overall return type is Unit and the bare `return`
+            // matches the signature.
+            for vs in &slot_vars {
+                body.push(slot_store_expr_stmt(vs, session, span));
+            }
         }
     }
 
@@ -1474,9 +1667,9 @@ fn slot_load_let(
         rooted: false,
     }));
     Some(Statement::Let(LetBinding {
-        mutable: false,
+        mutable: vs.mutable,
         pattern: Pattern::Identifier {
-            mutable: false,
+            mutable: vs.mutable,
             name: vs.name.clone(),
             span: span.clone(),
         },

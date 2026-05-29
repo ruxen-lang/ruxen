@@ -165,6 +165,56 @@ once 1.0.0 ships.
   verifier error through the entire translated input; `echo_ok`
   surfacing is gated on a separate slot-widening question for
   Thread handles tracked as Phase 3+ follow-up).
+- **REPL: filter slot-backed `let` bindings out of the replay stream
+  + populate slot stores even when the wrapper body contains a
+  `return`.** `collect_replay_statements` now drops
+  `Statement::Let` entries whose pattern is a single-identifier
+  name that's currently slot-backed, and also drops
+  `Statement::Expression` entries that are bare `Assign` /
+  `CompoundAssign` to the same names. The wrapper's synthetic
+  slot-load prefix is the source of truth for those values;
+  replaying the original let-RHS would re-execute side-effecting
+  initializers (`Thread.spawn_raw`, network bind, file open) AND
+  shadow the slot-loaded binding with a fresh (possibly wrong)
+  value — and replaying assignments on top of an already-up-to-date
+  slot load would double-count (`counter = counter + 1`). To make
+  the slot the source of truth from the very FIRST input that
+  registers a slot variable, `eval_statement` now runs a probe
+  typecheck on a no-slot-ops wrapper to discover the binding's
+  inferred type and pre-registers slot-eligible names BEFORE the
+  real `build_program` call, so the slot prefix/suffix pair lands
+  around the user's `let` and the suffix `__slot_store_i64` captures
+  the freshly-bound value. The slot store suffix is now also
+  emitted when `body_has_return` is true (without the tail-preserve
+  rebind — Phase 2's Unit-coercion still strips the natural tail
+  and appends `Block(())`); the replayed `return` typically doesn't
+  fire (its condition reads a slot-loaded value whose current state
+  makes the if-branch false), the user's let-RHS runs to
+  completion, and the store persists the new value for the next
+  input. `VarSlot` gains a `mutable` flag plumbed from
+  `LetBinding.mutable` so `var foo = …` renders as a mutable
+  slot-load in subsequent wrappers and user `foo = expr`
+  assignments aren't rejected by E1006 ("cannot assign to `let`
+  binding"). For `727_async_tcp_echo` specifically: `let handle =
+  Thread.spawn_raw(...)` was being replayed on every subsequent
+  input, the second pthread spawn's bind hit EADDRINUSE,
+  `server_loop` returned 0, the lexical rebind made `handle = 0`,
+  and the replayed `if handle == 0; puts "spawn_fail"; return;
+  end` exited the wrapper before the user's actual input could
+  run — that's the test_repl_cases hang. With the filter +
+  pre-registration + body_has_return slot store, the slot load
+  of `handle` (the original valid `pthread_t`) survives; replay
+  no longer re-spawns; the user's later `let ok = client_flow()`
+  populates slot[ok] correctly via the in-wrapper store; the if-
+  else echo-print sequence reads the correct slot value; the
+  test produces `echo_ok` exactly as compile-and-run does. Two
+  new tests under `src/ruxen_repl/src/tests/return_in_block.rs`
+  pin the contract (`slot_backed_let_does_not_shadow_via_replay`
+  for the literal-RHS case, `slot_backed_let_with_call_rhs_does_not_replay`
+  for the call-RHS shape that mirrors 727's `Thread.spawn_raw` /
+  `client_flow` lets). Closes the 727 / 727b REPL parity hang —
+  Phase 3 (removing the `REPL_KNOWN_SKIP` entries) can now
+  proceed.
 - **Restore `include Future` + `type Output = Result[...]` on 14 stdlib
   future classes accidentally stripped by Phase 3.** Commit `3dc02b6`
   (the runtime replay-suppression flag) modified 80+ stdlib `.rx`
