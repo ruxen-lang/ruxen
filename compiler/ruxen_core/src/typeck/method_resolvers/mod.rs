@@ -1134,6 +1134,20 @@ pub(super) fn builtin_method_type(
         (Ty::Int, "to_f") => Some(Ty::Float),
         (Ty::Float, "to_i") => Some(Ty::Int),
 
+        // Universal `to_s` (Ruby convention) on scalar primitives — every
+        // value can be rendered to a `String`. Backed by the same
+        // `ruxen_*_to_string` runtime helpers as string interpolation
+        // (`lang_intrinsics::runtime_name` maps the mangled `<Type>_to_s`
+        // names). User-defined class/struct/enum `to_s` is handled in the
+        // MIR display-dispatch path, not here.
+        (Ty::Int, "to_s") => Some(Ty::String),
+        (Ty::USize, "to_s") => Some(Ty::String),
+        (Ty::Float, "to_s") => Some(Ty::String),
+        (Ty::Bool, "to_s") => Some(Ty::String),
+        (Ty::Char, "to_s") => Some(Ty::String),
+        (Ty::String, "to_s") => Some(Ty::String),
+        (Ty::Str, "to_s") => Some(Ty::String),
+
         // Generic class methods
         (Ty::Class { .. }, "new") => Some(ty.clone()),
         (Ty::Class { .. }, "clone") => Some(ty.clone()),

@@ -85,6 +85,18 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // link-time fallback and dies as `can't resolve symbol Int_to_f`.
         "Int_to_f" => return Ok("ruxen_int_to_f"),
         "Float_to_i" => return Ok("ruxen_float_to_i"),
+        // Universal `to_s` on scalar primitives — share the same runtime
+        // string helpers that interpolation (`#{x}`) uses. Same rationale
+        // as the conversions above: scalar primitives have no `.rx` class
+        // shell, so the mangled `<Type>_to_s` needs an explicit mapping or
+        // it falls through to the link-time `Ok(name)` fallback and dies.
+        "Int_to_s" | "USize_to_s" => return Ok("ruxen_int_to_string"),
+        "Float_to_s" => return Ok("ruxen_float_to_string"),
+        "Bool_to_s" => return Ok("ruxen_bool_to_string"),
+        "Char_to_s" => return Ok("ruxen_char_to_string"),
+        // `String`/`&str` are already strings; `to_s` clones to an owned
+        // `String` (matching `String.to_string`'s `ruxen_string_to_string`).
+        "String_to_s" | "&str_to_s" => return Ok("ruxen_string_to_string"),
         "String_truncate_chars" => return Ok("ruxen_string_truncate_chars"),
         // Phase E-rest 3 of #06.95: MIR-synthesised Formatter callees
         // from `mir/lower/interpolation.rs::emit_display_dispatch`.

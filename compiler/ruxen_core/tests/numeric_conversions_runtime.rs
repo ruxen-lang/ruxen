@@ -70,3 +70,13 @@ fn float_to_i_truncates_to_int() {
     assert!(ok, "stderr: {}", stderr);
     assert!(stdout.contains("i=2"), "expected i=2, got: {}", stdout);
 }
+
+/// Round-trip `Int -> Float -> Int` via chained conversions. Pins the
+/// exact stdout of the `809_numeric_conversions` e2e fixture.
+#[test]
+fn numeric_conversions_fixture_roundtrip() {
+    let source = "def main\n  let a: Int = 7\n  let f = a.to_f() + 0.5\n  puts \"f=#{f}\"\n  let g: Float = 2.9\n  let i = g.to_i()\n  puts \"i=#{i}\"\n  let n: Int = 42\n  let back = n.to_f().to_i()\n  puts \"back=#{back}\"\nend\n";
+    let (stdout, stderr, ok) = compile_and_run(source, "numconv_roundtrip");
+    assert!(ok, "stderr: {}", stderr);
+    assert_eq!(stdout, "f=7.5\ni=2\nback=42\n", "fixture stdout mismatch");
+}

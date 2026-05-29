@@ -1,0 +1,17 @@
+def main
+  # Int.to_f widens to a real Float — the result participates in
+  # float arithmetic, so 7.to_f + 0.5 is 7.5 (not 7).
+  let a: Int = 7
+  let f = a.to_f() + 0.5
+  puts "f=#{f}"
+
+  # Float.to_i truncates toward zero into an Int.
+  let g: Float = 2.9
+  let i = g.to_i()
+  puts "i=#{i}"
+
+  # Round-trip: Int -> Float -> Int.
+  let n: Int = 42
+  let back = n.to_f().to_i()
+  puts "back=#{back}"
+end
