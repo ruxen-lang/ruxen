@@ -2369,7 +2369,8 @@ fn expr_contains_return(expr: &Expr) -> bool {
         | ExprKind::SelfRef
         | ExprKind::SelfType
         | ExprKind::Continue
-        | ExprKind::NullLiteral => false,
+        | ExprKind::NullLiteral
+        | ExprKind::RegexLiteral { .. } => false,
     }
 }
 

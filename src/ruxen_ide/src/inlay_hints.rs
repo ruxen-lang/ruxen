@@ -364,6 +364,7 @@ fn walk_expr(ctx: &Ctx<'_>, expr: &HirExpr, out: &mut Vec<InlayHint>) {
         | HirExprKind::CharLiteral(_)
         | HirExprKind::UnitLiteral
         | HirExprKind::NullLiteral
+        | HirExprKind::RegexLiteral { .. }
         | HirExprKind::VarRef(_)
         | HirExprKind::Continue
         | HirExprKind::Error => {}

@@ -87,16 +87,41 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Lower a `/pat/flags` regex literal. Phase 4 ships the parser +
-    /// HIR thread-through only; the real lowering to a
-    /// `ruxen_regex_compile_const` call lands in Phase 6. Until then
-    /// we error out loudly so any use of `/…/` in real code fails the
-    /// compile with a clear message rather than silently no-oping.
+    /// Lower a `/pat/flags` regex literal to a
+    /// `ruxen_regex_compile_const(pattern_ptr, flags_ptr)` call.
+    ///
+    /// v1 compiles the pattern once per evaluation (no module-init
+    /// hoisting yet — see the spec's risk register R4). Both args
+    /// cross the FFI as raw `const char *` (`Ty::Str` — the same
+    /// shape produced by `MirInst::StringLiteral` for any string
+    /// literal). The returned handle is typed as
+    /// `Ty::Class { name: "Regex" }`, matching the HIR-level typeck
+    /// assignment from Phase 4.
     pub(super) fn lower_regex_literal(
         &mut self,
         expr: &HirExpr,
     ) -> Result<Option<LocalId>, String> {
-        let _ = expr;
-        Err("regex literal lowering not yet wired (std.regex Phase 6 pending)".to_string())
+        let (pattern, flags) = match &expr.kind {
+            HirExprKind::RegexLiteral { pattern, flags } => (pattern, flags),
+            _ => unreachable!("lower_regex_literal: dispatched to wrong helper"),
+        };
+
+        let pat_raw = self.new_temp(Ty::Str);
+        self.emit(MirInst::StringLiteral {
+            dest: pat_raw,
+            value: pattern.clone(),
+        });
+        let flag_raw = self.new_temp(Ty::Str);
+        self.emit(MirInst::StringLiteral {
+            dest: flag_raw,
+            value: flags.clone(),
+        });
+        let dest = self.new_temp(expr.ty.clone());
+        self.emit(MirInst::Call {
+            dest: Some(dest),
+            callee: "ruxen_regex_compile_const".to_string(),
+            args: vec![MirValue::Use(pat_raw), MirValue::Use(flag_raw)],
+        });
+        Ok(Some(dest))
     }
 }

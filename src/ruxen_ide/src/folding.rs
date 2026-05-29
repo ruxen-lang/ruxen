@@ -331,6 +331,7 @@ impl<'a> HirWalker<'a> {
             | HirExprKind::CharLiteral(_)
             | HirExprKind::UnitLiteral
             | HirExprKind::NullLiteral
+            | HirExprKind::RegexLiteral { .. }
             | HirExprKind::VarRef(_)
             | HirExprKind::Continue
             | HirExprKind::Error => {}

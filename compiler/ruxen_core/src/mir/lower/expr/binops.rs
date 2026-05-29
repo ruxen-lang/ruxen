@@ -202,6 +202,25 @@ impl<'a> Lowerer<'a> {
                     return Ok(Some(dest));
                 }
 
+                // ── std.regex (#06.96): `String ~= Regex` -> `Bool` ──
+                // Desugars to `ruxen_regex_is_match(regex_handle, text)`
+                // (note arg order: the C runtime takes the regex first,
+                // text second). Typeck enforced the operand types
+                // already (E1702); on the off-chance the literal hadn't
+                // resolved (e.g. an Infer var) we fall through to the
+                // default arm and let codegen catch it via the
+                // `unreachable!` in `emit_binop`.
+                if matches!(op, BinOp::MatchOp) {
+                    let dest = self.new_temp(Ty::Bool);
+                    self.emit(MirInst::Call {
+                        dest: Some(dest),
+                        callee: "ruxen_regex_is_match".to_string(),
+                        // C signature: ruxen_regex_is_match(pcre2_code_8 *r, const char *text)
+                        args: vec![rhs_val, lhs_val],
+                    });
+                    return Ok(Some(dest));
+                }
+
                 let dest = self.new_temp(expr.ty.clone());
 
                 if is_comparison(*op) {

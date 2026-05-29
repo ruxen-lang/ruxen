@@ -500,6 +500,7 @@ impl CallFinder {
             | HirExprKind::CharLiteral(_)
             | HirExprKind::UnitLiteral
             | HirExprKind::NullLiteral
+            | HirExprKind::RegexLiteral { .. }
             | HirExprKind::Continue
             | HirExprKind::Return(None)
             | HirExprKind::Break(None)

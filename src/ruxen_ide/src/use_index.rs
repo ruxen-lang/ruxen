@@ -330,6 +330,7 @@ impl<'a> Builder<'a> {
             | HirExprKind::UnitLiteral
             | HirExprKind::NullLiteral
             | HirExprKind::Continue
+            | HirExprKind::RegexLiteral { .. }
             | HirExprKind::Error => {}
 
             HirExprKind::VarRef(def_id) => self.record(*def_id, expr.span.clone()),

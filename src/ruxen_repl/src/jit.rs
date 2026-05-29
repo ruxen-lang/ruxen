@@ -1527,6 +1527,12 @@ fn emit_binop(
             BinOp::BitXor => builder.ins().bxor(lhs, rhs),
             BinOp::Shl => builder.ins().ishl(lhs, rhs),
             BinOp::Shr => builder.ins().sshr(lhs, rhs),
+            // `~=` is lowered to a `ruxen_regex_is_match` call before
+            // it reaches the binop emitter; reaching here is a lowering
+            // bug, not a runtime condition.
+            BinOp::MatchOp => unreachable!(
+                "BinOp::MatchOp must be lowered to ruxen_regex_is_match before emit_binop"
+            ),
         }
     } else {
         match op {
@@ -1550,6 +1556,12 @@ fn emit_binop(
             BinOp::GtEq => builder
                 .ins()
                 .icmp(IntCC::SignedGreaterThanOrEqual, lhs, rhs),
+            // `~=` is lowered to a `ruxen_regex_is_match` call before
+            // it reaches the binop emitter; reaching here is a lowering
+            // bug, not a runtime condition.
+            BinOp::MatchOp => unreachable!(
+                "BinOp::MatchOp must be lowered to ruxen_regex_is_match before emit_binop"
+            ),
         }
     }
 }
