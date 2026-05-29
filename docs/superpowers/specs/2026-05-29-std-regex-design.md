@@ -168,7 +168,9 @@ class Regex
   def is_match as "ruxen_regex_is_match"(text: &String) -> Bool
 
   ## First match, with capture data, or None.
-  def match as "ruxen_regex_match"(text: &String) -> Option[Match]
+  ## Named `find` (not `match`) because `match` is a reserved
+  ## block-opener keyword in Ruxen. C symbol unchanged.
+  def find as "ruxen_regex_match"(text: &String) -> Option[Match]
 
   ## All matches, left-to-right, non-overlapping.
   def scan as "ruxen_regex_scan"(text: &String) -> Array[Match]
@@ -190,10 +192,14 @@ class Match
   def matched as "ruxen_match_matched" -> String
 
   ## Byte offset (inclusive) into the subject where the match begins.
-  def start as "ruxen_match_start" -> Int
+  ## `start` parses fine (not a keyword), but renamed to start_pos
+  ## for symmetric pairing with end_pos.
+  def start_pos as "ruxen_match_start" -> Int
 
   ## Byte offset (exclusive) into the subject where the match ends.
-  def end as "ruxen_match_end" -> Int
+  ## `end` is Ruxen's block-terminator keyword, can't be a method
+  ## name. Renamed to end_pos. C symbol unchanged.
+  def end_pos as "ruxen_match_end" -> Int
 
   ## Numbered capture group. `group(0)` returns the whole match for
   ## symmetry with JS `match[0]`. Returns None if `n` exceeds the
