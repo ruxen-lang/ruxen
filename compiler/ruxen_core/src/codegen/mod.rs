@@ -127,6 +127,43 @@ pub fn find_runtime_sources() -> Result<Vec<PathBuf>, String> {
             let file_path = file_entry.path();
             if file_path.extension().and_then(|s| s.to_str()) == Some("c") {
                 sources.push(file_path);
+            } else if file_path.is_dir() {
+                // One level of recursion: per-package vendored C sources
+                // (e.g. `library/std/regex/runtime/pcre2/*.c`) get picked
+                // up. Mirrors `src/ruxen_repl/build.rs::collect_runtime_sources`
+                // so the AOT linker sees the same set of TUs as the JIT.
+                // We intentionally do NOT recurse further — keeps the
+                // build glob predictable and matches the "vendor in a
+                // single subdir" convention this repo uses.
+                let sub_iter = match std::fs::read_dir(&file_path) {
+                    Ok(it) => it,
+                    Err(_) => continue,
+                };
+                for sub_entry in sub_iter {
+                    let sub_entry = match sub_entry {
+                        Ok(e) => e,
+                        Err(_) => continue,
+                    };
+                    let sub_path = sub_entry.path();
+                    if sub_path.extension().and_then(|s| s.to_str()) != Some("c") {
+                        continue;
+                    }
+                    // PCRE2 ships two ".c" files that are NOT standalone
+                    // translation units — they're pulled in via
+                    // `#include` from `pcre2_compile.c` /
+                    // `pcre2_tables.c`. Compiling them as TUs would fail
+                    // with missing-include errors. Filter by basename
+                    // so the build glob stays a glob. Same exclusion
+                    // list as `src/ruxen_repl/build.rs`.
+                    let name = sub_path
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("");
+                    if matches!(name, "pcre2_printint.c" | "pcre2_ucptables.c") {
+                        continue;
+                    }
+                    sources.push(sub_path);
+                }
             }
         }
     }

@@ -61,6 +61,32 @@ pub fn compile_runtime(runtime_c_path: &Path, sanitize: bool) -> Result<PathBuf,
         cmd.arg("-O2");
     }
 
+    // Vendored PCRE2 lives at `library/std/regex/runtime/pcre2/`. Its
+    // `.c` files `#include "config.h"`, `"pcre2.h"`,
+    // `"pcre2_internal.h"`, etc. via bare filenames, so we add the
+    // vendor dir to the include path here. `HAVE_CONFIG_H` tells PCRE2
+    // to consult our hand-authored config.h; `PCRE2_CODE_UNIT_WIDTH=8`
+    // selects the 8-bit single-width build (matches the REPL JIT build
+    // in `src/ruxen_repl/build.rs`). The detection key is whether the
+    // source file path goes through a directory literally named `pcre2`,
+    // which covers the vendor-tree itself but never matches the
+    // user-authored `library/std/regex/runtime/regex.c`.
+    if runtime_c_path
+        .components()
+        .any(|c| c.as_os_str() == "pcre2")
+    {
+        if let Some(parent) = runtime_c_path.parent() {
+            cmd.arg("-I").arg(parent);
+        }
+        cmd.arg("-DHAVE_CONFIG_H=1")
+            .arg("-DPCRE2_CODE_UNIT_WIDTH=8")
+            // Suppress noisy warnings from vendored upstream code we
+            // don't want to patch.
+            .arg("-Wno-sign-compare")
+            .arg("-Wno-unused-parameter")
+            .arg("-Wno-implicit-fallthrough");
+    }
+
     let status = cmd.status().map_err(|e| {
         format!(
             "Failed to invoke cc for {}: {}",
