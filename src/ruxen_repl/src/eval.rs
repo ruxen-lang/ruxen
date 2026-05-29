@@ -1167,6 +1167,20 @@ fn build_program(
         statements.extend(replay_stmts);
         statements.push(replay_flag_toggle_stmt(false, span));
     }
+    // Compute the embedded-`return` check BEFORE moving user_stmts
+    // into `statements`. We check BOTH the user's new statements AND
+    // the replayed ones: the source_history-replay path re-emits
+    // every prior input verbatim (per `collect_replay_statements`),
+    // so an `if cond; ...; return; end` recorded in a previous input
+    // still ends up in the wrapper body even when this input's user
+    // portion is a plain `let`. The tail-preservation transform
+    // applied around that replayed `return` produces the same
+    // signature mismatch (`arguments of return must match function
+    // signature`) the user-portion guard prevents — see the comment
+    // block above the `if !slot_vars ... && !body_has_return` branch.
+    let user_has_return = statements_contain_return(&user_stmts);
+    let replay_has_return = statements_contain_return(&statements);
+    let body_has_return = user_has_return || replay_has_return;
     statements.extend(user_stmts);
 
     // Synthetic slot-load prefix for every primitive session variable.
@@ -1207,11 +1221,35 @@ fn build_program(
     // Unit`). We re-bind the existing tail to a temporary, push the
     // stores, then re-emit the temporary as the new tail.
     //
+    // Skip the tail-preservation transform when the user's input
+    // contains an embedded `return` along a non-tail path. Applying
+    // the transform there produces a wrapper signature that the
+    // bare-return exit point can't satisfy: the wrapper's CLIF
+    // signature is inferred from the rebound `__ruxen_repl_tail_<fn>`
+    // (typed as whatever the original tail expression was — often a
+    // primitive Int), but the user's bare `return` lowers to MIR
+    // `Terminator::Return(None)` which the JIT emits as
+    // `return_(&[])`. Signature expects one operand, the bare return
+    // supplies zero → Cranelift's verifier rejects with
+    // `arguments of return must match function signature` (the
+    // exact failure on 727_async_tcp_echo's third REPL input,
+    // `if handle == 0; puts "spawn_fail"; return; end`).
+    //
+    // Without the transform the user's `return` becomes the actual
+    // exit; the wrapper's return type infers naturally from the
+    // remaining tail (or Unit when the tail is a control-flow block
+    // or itself a return). Slot stores are skipped on this path —
+    // an input that bails out via `return` can't be relied on to
+    // have mutated state in a meaningful way anyway, and the next
+    // input's slot prefix will reload from the persistent slot
+    // (i.e. the value the previous successful input wrote).
+
     // Only do the tail-preserve dance when we actually have stores
-    // to emit; otherwise `build_program` is a no-op transform over
-    // the input statements (matches Task 1.2 behaviour exactly for
-    // sessions with no Int vars).
-    if !slot_vars.is_empty() {
+    // to emit AND the input doesn't embed a `return`; otherwise
+    // `build_program` is a no-op transform over the input statements
+    // (matches Task 1.2 behaviour exactly for sessions with no Int
+    // vars).
+    if !slot_vars.is_empty() && !body_has_return {
         let tail_name = format!("__ruxen_repl_tail_{}", fn_name);
         let original_tail_expr: Option<Expr> = match body.last() {
             Some(Statement::Expression(_)) => match body.pop() {
@@ -1443,6 +1481,178 @@ fn slot_store_expr_stmt(
         span: span.clone(),
     };
     Statement::Expression(call)
+}
+
+/// Walk a statement list looking for an embedded `return` along any
+/// path. Used by `build_program` to decide whether to apply the
+/// tail-preservation transform from Task 1.3.
+///
+/// When the user's input contains a `return`, the transform would
+/// produce a wrapper whose CLIF signature is inferred from the
+/// rebound tail (e.g. `Int` because the original tail was an Int
+/// expression) — but the bare `return` lowers to MIR
+/// `Terminator::Return(None)`, which Cranelift's JIT emits as
+/// `return_(&[])`. Signature wants one operand, the bare return
+/// supplies zero → verifier rejects with
+/// `arguments of return must match function signature`. Skip the
+/// transform in that case: the user's `return` becomes the actual
+/// exit path, the wrapper's return type infers naturally from the
+/// remaining tail (or Unit when the tail is a control-flow block
+/// or itself a return).
+///
+/// Conservative: returns true for any nested `return`, even when
+/// the user clearly intended only a partial short-circuit. Skipping
+/// the transform in those cases is safe — we just stop capturing
+/// the tail value into a synthetic let — and dodges the verifier
+/// error without trying to reason about which exit type "should
+/// win".
+fn statements_contain_return(statements: &[Statement]) -> bool {
+    statements.iter().any(|s| match s {
+        Statement::Expression(e) => expr_contains_return(e),
+        Statement::Let(b) => b
+            .value
+            .as_deref()
+            .map(expr_contains_return)
+            .unwrap_or(false),
+    })
+}
+
+/// Recurse through every expression node that can host a `return`.
+/// The wildcard arm at the bottom is intentional: if a future
+/// `ExprKind` variant gains an `Expr`/`Block` field that can host
+/// a return, it must be added here or `build_program` will miss the
+/// embedded return and reapply the buggy tail-preservation
+/// transform. Audit when `ExprKind` grows.
+fn expr_contains_return(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Return(_) => true,
+        ExprKind::If(if_expr) => {
+            expr_contains_return(&if_expr.condition)
+                || block_contains_return(&if_expr.then_body)
+                || if_expr
+                    .elsif_clauses
+                    .iter()
+                    .any(|c| expr_contains_return(&c.condition) || block_contains_return(&c.body))
+                || if_expr
+                    .else_body
+                    .as_ref()
+                    .is_some_and(block_contains_return)
+        }
+        ExprKind::IfLet(if_let) => {
+            expr_contains_return(&if_let.value)
+                || block_contains_return(&if_let.then_body)
+                || if_let
+                    .else_body
+                    .as_ref()
+                    .is_some_and(block_contains_return)
+        }
+        ExprKind::Match(match_expr) => {
+            expr_contains_return(&match_expr.subject)
+                || match_expr.arms.iter().any(|arm| {
+                    let guard_has = arm
+                        .guard
+                        .as_deref()
+                        .map(expr_contains_return)
+                        .unwrap_or(false);
+                    let body_has = match &arm.body {
+                        ruxen_core::parser::ast::MatchArmBody::Expr(e) => expr_contains_return(e),
+                        ruxen_core::parser::ast::MatchArmBody::Block(b) => {
+                            block_contains_return(b)
+                        }
+                    };
+                    guard_has || body_has
+                })
+        }
+        ExprKind::While(w) => expr_contains_return(&w.condition) || block_contains_return(&w.body),
+        ExprKind::WhileLet(w) => {
+            expr_contains_return(&w.value) || block_contains_return(&w.body)
+        }
+        ExprKind::For(f) => {
+            expr_contains_return(&f.iterable) || block_contains_return(&f.body)
+        }
+        ExprKind::Loop(l) => block_contains_return(&l.body),
+        ExprKind::Block(b) => block_contains_return(b),
+        ExprKind::UnsafeBlock(b) => block_contains_return(b),
+        ExprKind::BinaryOp { left, right, .. } => {
+            expr_contains_return(left) || expr_contains_return(right)
+        }
+        ExprKind::UnaryOp { operand, .. } => expr_contains_return(operand),
+        ExprKind::Borrow(inner) | ExprKind::BorrowMut(inner) => expr_contains_return(inner),
+        ExprKind::FieldAccess { object, .. } | ExprKind::SafeNav { object, .. } => {
+            expr_contains_return(object)
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            expr_contains_return(object) || args.iter().any(expr_contains_return)
+        }
+        ExprKind::SafeNavCall { object, args, .. } => {
+            expr_contains_return(object) || args.iter().any(expr_contains_return)
+        }
+        ExprKind::Call { callee, args, .. } => {
+            expr_contains_return(callee) || args.iter().any(expr_contains_return)
+        }
+        ExprKind::ClosureCall { callee, args } => {
+            expr_contains_return(callee) || args.iter().any(expr_contains_return)
+        }
+        ExprKind::Index { object, index } => {
+            expr_contains_return(object) || expr_contains_return(index)
+        }
+        ExprKind::Try(inner) | ExprKind::Await(inner) => expr_contains_return(inner),
+        ExprKind::Assign { target, value } => {
+            expr_contains_return(target) || expr_contains_return(value)
+        }
+        ExprKind::CompoundAssign { target, value, .. } => {
+            expr_contains_return(target) || expr_contains_return(value)
+        }
+        ExprKind::Range { start, end, .. } => {
+            start
+                .as_deref()
+                .map(expr_contains_return)
+                .unwrap_or(false)
+                || end.as_deref().map(expr_contains_return).unwrap_or(false)
+        }
+        ExprKind::ArrayLiteral(items) => items.iter().any(expr_contains_return),
+        ExprKind::ArrayFill { value, count } => {
+            expr_contains_return(value) || expr_contains_return(count)
+        }
+        ExprKind::TupleLiteral(items) => items.iter().any(expr_contains_return),
+        ExprKind::MapLiteral(pairs) => pairs
+            .iter()
+            .any(|(k, v)| expr_contains_return(k) || expr_contains_return(v)),
+        ExprKind::Break(inner) => inner
+            .as_deref()
+            .map(expr_contains_return)
+            .unwrap_or(false),
+        ExprKind::Yield(items) => items.iter().any(expr_contains_return),
+        ExprKind::MacroCall { args, .. } => args.iter().any(expr_contains_return),
+        ExprKind::Cast { expr, .. } => expr_contains_return(expr),
+        ExprKind::EnumVariant { args, .. } => args.iter().any(|f| expr_contains_return(&f.value)),
+        ExprKind::Closure(_) => {
+            // A closure body is a distinct function — a `return` inside
+            // it returns from the closure, not from the wrapper. So we
+            // intentionally do NOT recurse into closure bodies; the
+            // closure's body is lowered as its own MIR function with
+            // its own signature.
+            false
+        }
+        // Pure leaves — literals, identifiers, self/SelfType,
+        // Continue, NullLiteral. None can host an embedded return.
+        ExprKind::IntLiteral(..)
+        | ExprKind::FloatLiteral(..)
+        | ExprKind::StringLiteral(_)
+        | ExprKind::InterpolatedString(_)
+        | ExprKind::CharLiteral(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::UnitLiteral
+        | ExprKind::Identifier(_)
+        | ExprKind::SelfRef
+        | ExprKind::SelfType
+        | ExprKind::Continue
+        | ExprKind::NullLiteral => false,
+    }
+}
+
+fn block_contains_return(block: &Block) -> bool {
+    statements_contain_return(&block.statements)
 }
 
 /// Get the span from a top-level item.

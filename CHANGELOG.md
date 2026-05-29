@@ -58,6 +58,41 @@ once 1.0.0 ships.
   unconditionally.
 
 ### Fixed
+- **REPL: skip the tail-preservation transform when the wrapper body
+  contains an embedded `return`.** The transform added in Task 1.3
+  (the REPL state refactor) hoists the trailing expression into
+  `let __ruxen_repl_tail_<fn> = <expr>` and re-emits the tail-name
+  identifier as the new tail; the wrapper's return type infers from
+  that. When the user's input embeds a `return` along a non-tail
+  path — e.g. `if cond; puts ...; return; end` inside a top-level
+  expression statement, or the same shape replayed from
+  `session_var_mutations` into a later input's wrapper — the wrapper
+  ends up with two exit points whose return types disagree, and
+  Cranelift's verifier rejects it with `arguments of return must
+  match function signature` (the failure on
+  `727_async_tcp_echo`'s `if handle == 0; puts "spawn_fail"; return;
+  end` REPL input). New `statements_contain_return` /
+  `expr_contains_return` / `block_contains_return` helpers walk the
+  user's statement list (and the replayed statement list) looking
+  for an embedded `Return` AST node anywhere — recursing through
+  every control-flow / call / binary / unary / block / cast / index
+  / try / await / assign / range / array-literal / tuple-literal /
+  map-literal / enum-variant / macro-call form, but stopping at
+  closure bodies (a `return` inside a closure exits the closure, not
+  the wrapper). When the walker reports any embedded return,
+  `build_program` skips the tail-preservation rebind: the embedded
+  `return` becomes the actual exit, and the wrapper's signature
+  infers naturally from the remaining tail (or Unit when the tail
+  is a control-flow block). Three new unit tests under
+  `src/ruxen_repl/src/tests/return_in_block.rs` pin the contract
+  (return-inside-if-then, return-inside-if-no-else,
+  return-inside-else-arm). Phase 2 (slot-store re-ordering /
+  wrapper-signature widening) is still needed for the full
+  `727_async_tcp_echo` REPL parity run — a later input
+  (`let ok = client_flow()`) trips the same verifier error on the
+  *replayed* `return` from the earlier `if handle == 0; ...; return;
+  end`, which this fix detects but cannot fully resolve without
+  widening the wrapper signature to accept a bare `return`.
 - **Restore `include Future` + `type Output = Result[...]` on 14 stdlib
   future classes accidentally stripped by Phase 3.** Commit `3dc02b6`
   (the runtime replay-suppression flag) modified 80+ stdlib `.rx`
