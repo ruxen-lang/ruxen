@@ -60,7 +60,15 @@ impl Parser {
         while !self.at(TokenKind::End) && !self.at(TokenKind::Eof) {
             let __progress = self.pos;
             self.skip_newlines();
-            if self.at(TokenKind::End) {
+            // Doc comments (`##`) may precede each FFI `def`, exactly as in
+            // class/mixin bodies and at top level — stdlib packages such as
+            // `std.regex` document every FFI decl. Consume them here so a
+            // documented `lib` block parses. The formatter re-derives doc
+            // comments from source text (its own CommentMap), so they are
+            // preserved across `ruxen fmt` without living on the AST node.
+            let _docs = self.collect_doc_comments();
+            self.skip_newlines();
+            if self.at(TokenKind::End) || self.at(TokenKind::Eof) {
                 break;
             }
             if self.at(TokenKind::Def) {

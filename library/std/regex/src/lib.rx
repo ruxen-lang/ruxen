@@ -16,38 +16,6 @@ class RegexError
   end
 end
 
-class Regex
-  lib "runtime/regex.c"
-    ## Runtime-built pattern. For compile-time-known patterns use the
-    ## /pat/flags literal — those are compiled once at program start.
-    def self.new as "ruxen_regex_new"(pattern: &String, flags: &String) -> Result[Regex, RegexError]
-
-    ## Predicate. The `~=` operator desugars to this.
-    def is_match as "ruxen_regex_is_match"(text: &String) -> Bool
-
-    ## First match, with capture data, or None.
-    ## Named `find` (not `match`) because `match` is a reserved
-    ## keyword in Ruxen — block opener for pattern matching. The C
-    ## symbol stays `ruxen_regex_match`; only the surface name
-    ## differs. Matches the Rust regex crate's naming convention.
-    def find as "ruxen_regex_match"(text: &String) -> Option[Match]
-
-    ## All matches, left-to-right, non-overlapping.
-    def scan as "ruxen_regex_scan"(text: &String) -> Array[Match]
-
-    ## Replace the FIRST match. Replacement supports PCRE2 substitution
-    ## syntax (`$1`, `${name}` for back-references).
-    def replace as "ruxen_regex_replace"(text: &String, replacement: &String) -> String
-
-    ## Replace ALL matches. Same replacement syntax as `replace`.
-    def replace_all as "ruxen_regex_replace_all"(text: &String, replacement: &String) -> String
-
-    ## Split `text` at every match. Empty trailing-match segments
-    ## are dropped (matches Ruby / JS behaviour).
-    def split as "ruxen_regex_split"(text: &String) -> Array[String]
-  end
-end
-
 class Match
   lib "runtime/regex.c"
     ## The entire matched substring.
@@ -80,5 +48,37 @@ class Match
 
     ## All successful named captures.
     def named_groups as "ruxen_match_named_groups" -> HashMap[String, String]
+  end
+end
+
+class Regex
+  lib "runtime/regex.c"
+    ## Runtime-built pattern. For compile-time-known patterns use the
+    ## /pat/flags literal — those are compiled once at program start.
+    def self.new as "ruxen_regex_new"(pattern: &String, flags: &String) -> Result[Regex, RegexError]
+
+    ## Predicate. The `~=` operator desugars to this.
+    def is_match as "ruxen_regex_is_match"(text: &String) -> Bool
+
+    ## First match, with capture data, or None.
+    ## Named `find` (not `match`) because `match` is a reserved
+    ## keyword in Ruxen — block opener for pattern matching. The C
+    ## symbol stays `ruxen_regex_match`; only the surface name
+    ## differs. Matches the Rust regex crate's naming convention.
+    def find as "ruxen_regex_match"(text: &String) -> Option[Match]
+
+    ## All matches, left-to-right, non-overlapping.
+    def scan as "ruxen_regex_scan"(text: &String) -> Array[Match]
+
+    ## Replace the FIRST match. Replacement supports PCRE2 substitution
+    ## syntax (`$1`, `${name}` for back-references).
+    def replace as "ruxen_regex_replace"(text: &String, replacement: &String) -> String
+
+    ## Replace ALL matches. Same replacement syntax as `replace`.
+    def replace_all as "ruxen_regex_replace_all"(text: &String, replacement: &String) -> String
+
+    ## Split `text` at every match. Empty trailing-match segments
+    ## are dropped (matches Ruby / JS behaviour).
+    def split as "ruxen_regex_split"(text: &String) -> Array[String]
   end
 end

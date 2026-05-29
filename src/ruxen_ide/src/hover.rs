@@ -86,9 +86,19 @@ fn format_function_hover(def: &Definition) -> String {
                 Visibility::Protected => "protected ",
                 Visibility::Private => "private ",
             };
+            // Match the formatter (`format_func_def`): a def with no
+            // explicit parameters is written WITHOUT parens (`def name`),
+            // not `def name()`. Keeping hover in sync with `ruxen fmt`
+            // avoids the IDE showing a signature shape the formatter would
+            // never produce.
+            let param_clause = if signature.params.is_empty() {
+                String::new()
+            } else {
+                format!("({params})")
+            };
             format!(
-                "```ruxen\n{}def {}({}) -> {}\n```",
-                vis, def.name, params, signature.return_ty
+                "```ruxen\n{}def {}{} -> {}\n```",
+                vis, def.name, param_clause, signature.return_ty
             )
         }
         _ => format!("```ruxen\n{}\n```", def.name),

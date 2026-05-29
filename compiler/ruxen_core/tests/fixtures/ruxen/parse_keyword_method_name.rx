@@ -1,0 +1,12 @@
+## `match` is a keyword (match-expressions) but also the standard Ruby
+## regex method name. It must be usable as a method/FFI def name and in
+## method-call position, exactly like `var` / `some` / `any` already are.
+class Regex
+  lib "runtime/regex.c"
+    def match as "ruxen_regex_match"(text: &String) -> Int
+  end
+end
+
+def use_it(r: &Regex, s: &String) -> Int
+  r.match(s)
+end

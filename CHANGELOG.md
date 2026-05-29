@@ -7,6 +7,25 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+### Fixed
+- **Cross-binary parser/formatter/IDE parity.** Several constructs the
+  language supports were rejected or mangled by some front-end consumers but
+  not others. Since the lexer/parser/typeck/formatter are single shared
+  implementations in `ruxen_core`, each was one shared-code fix:
+  - Doc comments (`##`) are now accepted before FFI `def`s inside `lib`
+    blocks, and at end-of-file / in doc-only source files (previously
+    `expected def in lib block` / `expected top-level declaration, found Eof`).
+  - `match` is now usable as a method/FFI def name (it is the canonical regex
+    method), joining `var`/`some`/`any` as contextual keywords.
+  - `ruxen fmt` no longer silently **deletes** `##` doc comments attached to
+    FFI defs inside `lib` blocks (top-level and class-body).
+  - IDE hover renders a no-parameter `def` without parens (`def f`), matching
+    `ruxen fmt`, instead of `def f()`.
+  - The IDE/LSP diagnostic source label is now `ruxen` (was the deprecated
+    `ruxenc`).
+  - New guard `compiler/ruxen_core/tests/parser_feature_parity.rs` asserts
+    every shipped `library/std/**` and `examples/**` `.rx` parses.
+
 ### Added
 - **Type-directed auto-call of function references (Ruby-style
   ergonomics).** A bare reference to a named nullary function/method used

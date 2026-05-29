@@ -897,6 +897,15 @@ pub fn collect_node_spans(program: &crate::parser::ast::Program) -> Vec<(usize, 
                 for m in &c.methods {
                     visit_func(spans, m);
                 }
+                // Class-body `lib "..." ... end` blocks: register each FFI
+                // def span so `##` doc comments attached above them survive
+                // formatting (otherwise `ruxen fmt` drops the docs).
+                for lib in &c.lib_decls {
+                    add_span(spans, &lib.span);
+                    for f in &lib.functions {
+                        add_span(spans, &f.span);
+                    }
+                }
             }
             TopLevelItem::Struct(s) => {
                 add_span(spans, &s.span);

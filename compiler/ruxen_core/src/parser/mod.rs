@@ -499,6 +499,15 @@ impl Parser {
                 self.advance();
                 "some".to_string()
             }
+            // `match` is a keyword (match-expressions) but is also the
+            // canonical Ruby method name for regex matching (`re.match(s)`,
+            // `Regex#match`). Method-name and field/path positions are
+            // unambiguous, so accept it as a plain identifier here — same
+            // contextual-keyword treatment as `var` / `some` / `any` above.
+            TokenKind::Match => {
+                self.advance();
+                "match".to_string()
+            }
             _ => {
                 self.error(&format!(
                     "expected identifier, found {:?}",

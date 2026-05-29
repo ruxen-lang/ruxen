@@ -20,7 +20,7 @@ pub fn to_lsp_diagnostic(diag: &Diagnostic, line_index: &LineIndex) -> LspDiagno
             .code
             .as_ref()
             .map(|c| NumberOrString::String(c.clone())),
-        source: Some("ruxenc".to_string()),
+        source: Some("ruxen".to_string()),
         message: diag.message.clone(),
         related_information: None,
         ..Default::default()
@@ -44,7 +44,7 @@ pub fn borrow_error_to_lsp(err: &BorrowError, line_index: &LineIndex, uri: &Url)
         range: line_index.span_to_range(&err.primary.span),
         severity: Some(DiagnosticSeverity::ERROR),
         code: Some(NumberOrString::String(err.code.code_str().to_string())),
-        source: Some("ruxenc".to_string()),
+        source: Some("ruxen".to_string()),
         message: format!("{}: {}", err.code.title(), err.primary.label),
         related_information: if related.is_empty() {
             None
@@ -115,11 +115,11 @@ mod tests {
     }
 
     #[test]
-    fn diagnostic_source_is_ruxenc() {
+    fn diagnostic_source_is_ruxen() {
         let idx = make_line_index("x");
         let diag = Diagnostic::error("err", Span::new(0, 1, 0, 0));
         let lsp = to_lsp_diagnostic(&diag, &idx);
-        assert_eq!(lsp.source.as_deref(), Some("ruxenc"));
+        assert_eq!(lsp.source.as_deref(), Some("ruxen"));
     }
 
     #[test]
@@ -189,7 +189,7 @@ mod tests {
     }
 
     #[test]
-    fn borrow_error_has_ruxenc_source() {
+    fn borrow_error_has_ruxen_source() {
         let idx = make_line_index("a");
         let uri = Url::parse("file:///x.rx").unwrap();
         let err = BorrowError {
@@ -202,7 +202,7 @@ mod tests {
             help: Vec::new(),
         };
         let lsp = borrow_error_to_lsp(&err, &idx, &uri);
-        assert_eq!(lsp.source.as_deref(), Some("ruxenc"));
+        assert_eq!(lsp.source.as_deref(), Some("ruxen"));
     }
 
     #[test]
@@ -299,7 +299,7 @@ mod tests {
         let diagnostics = collect_diagnostics(&result, &uri);
         assert!(!diagnostics.is_empty(), "Expected diagnostics");
         assert_eq!(diagnostics[0].severity, Some(DiagnosticSeverity::ERROR));
-        assert_eq!(diagnostics[0].source.as_deref(), Some("ruxenc"));
+        assert_eq!(diagnostics[0].source.as_deref(), Some("ruxen"));
     }
 
     #[test]

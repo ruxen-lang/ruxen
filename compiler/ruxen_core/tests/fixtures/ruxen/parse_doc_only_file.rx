@@ -1,0 +1,5 @@
+## A source file consisting ENTIRELY of module-level doc comments, with
+## no item to attach them to — e.g. a doc-only stdlib surface file like
+## library/std/string/src/lib.rx. Must parse cleanly (no item, no error).
+##
+## Second paragraph of module docs.

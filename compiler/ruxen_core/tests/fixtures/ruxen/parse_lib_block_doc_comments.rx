@@ -1,0 +1,9 @@
+## A `lib` block whose FFI `def`s carry `##` doc comments — exactly as
+## stdlib packages (e.g. std.regex) write them. Doc comments are a
+## language-wide feature and must parse here too.
+lib "pcre2-8"
+  ## Description from the C error.
+  def message as "ruxen_regex_error_message" -> String
+  ## Byte offset into the pattern.
+  def offset as "ruxen_regex_error_offset" -> Int
+end

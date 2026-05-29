@@ -911,7 +911,17 @@ fn format_lib(l: &LibDecl, comments: &CommentMap) -> Doc {
     let mut body_parts: Vec<Doc> = Vec::new();
 
     for func in &l.functions {
-        body_parts.push(format_ffi_function(func, comments));
+        // Emit `##` doc comments attached above each FFI `def` — stdlib
+        // packages document every FFI alias, and dropping the comment here
+        // would make `ruxen fmt` silently delete documentation the parser
+        // accepts (a cross-binary divergence).
+        let mut entry: Vec<Doc> = Vec::new();
+        for comment in comments.leading_comments(func.span.start) {
+            entry.push(format_comment(comment));
+            entry.push(hardline());
+        }
+        entry.push(format_ffi_function(func, comments));
+        body_parts.push(concat(entry));
     }
 
     let body = join(hardline(), body_parts);
@@ -947,7 +957,13 @@ fn format_extern(e: &ExternBlock, comments: &CommentMap) -> Doc {
     let mut body_parts: Vec<Doc> = Vec::new();
 
     for func in &e.functions {
-        body_parts.push(format_ffi_function(func, comments));
+        let mut entry: Vec<Doc> = Vec::new();
+        for comment in comments.leading_comments(func.span.start) {
+            entry.push(format_comment(comment));
+            entry.push(hardline());
+        }
+        entry.push(format_ffi_function(func, comments));
+        body_parts.push(concat(entry));
     }
 
     let body = join(hardline(), body_parts);

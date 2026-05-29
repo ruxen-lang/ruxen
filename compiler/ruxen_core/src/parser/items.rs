@@ -18,6 +18,17 @@ impl Parser {
             self.pending_doc_comments.extend(docs);
         }
 
+        // A file may end with trailing doc comments, or consist ENTIRELY of
+        // module-level `##` documentation (e.g. a doc-only stdlib surface
+        // file such as `library/std/string/src/lib.rx`). Once those docs are
+        // consumed there is no item left to build — stop cleanly instead of
+        // erroring `expected top-level declaration, found Eof`. This keeps
+        // the parser (shared by the compiler, IDE/LSP, and formatter) from
+        // rejecting files the toolchain otherwise treats as valid.
+        if self.at(TokenKind::Eof) {
+            return None;
+        }
+
         match self.current_kind().clone() {
             TokenKind::Module => Some(TopLevelItem::Module(self.parse_module_def())),
             TokenKind::Class => Some(TopLevelItem::Class(self.parse_class_def())),
