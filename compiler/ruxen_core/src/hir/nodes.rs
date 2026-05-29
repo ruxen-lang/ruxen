@@ -100,6 +100,13 @@ pub enum HirExprKind {
     BoolLiteral(bool),
     CharLiteral(char),
     UnitLiteral,
+    /// `/pat/flags` regex literal (std.regex). Typed as
+    /// `Ty::Class { name: "Regex" }`; MIR lowers it to a
+    /// `ruxen_regex_compile_const(pattern, flags)` call.
+    RegexLiteral {
+        pattern: String,
+        flags: String,
+    },
 
     /// Resolved variable reference
     VarRef(DefId),

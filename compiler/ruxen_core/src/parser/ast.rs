@@ -435,6 +435,14 @@ pub enum ExprKind {
 
     // Null literal (for raw pointer types)
     NullLiteral,
+
+    /// `/pat/flags` regex literal (std.regex). Typed as
+    /// `Ty::Class { name: "Regex" }` after typeck and lowered to a
+    /// `ruxen_regex_compile_const` call by MIR.
+    RegexLiteral {
+        pattern: String,
+        flags: String,
+    },
 }
 
 // ─── Field Argument (for struct/enum construction) ───────────────────
@@ -468,6 +476,9 @@ pub enum BinOp {
     BitXor,
     Shl,
     Shr,
+    /// Regex match: `s ~= /pat/flags`. Desugars to `pat.is_match(s)`
+    /// at MIR-lower time. Equality-tier precedence (same as `==`).
+    MatchOp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

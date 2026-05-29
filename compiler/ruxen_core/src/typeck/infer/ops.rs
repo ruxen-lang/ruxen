@@ -166,6 +166,12 @@ impl<'a> InferenceEngine<'a> {
                     Err(_) => left.clone(),
                 }
             }
+
+            // Regex match: `String ~= Regex` -> `Bool`. Full
+            // String × Regex enforcement (with E1702) lands in Phase
+            // 5. For now, hand back `Bool` so the rest of typeck can
+            // continue propagating types correctly.
+            BinOp::MatchOp => Ty::Bool,
         }
     }
 

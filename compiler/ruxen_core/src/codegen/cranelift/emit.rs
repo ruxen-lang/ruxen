@@ -660,6 +660,12 @@ pub(super) fn emit_binop(
             BinOp::BitXor => builder.ins().bxor(lhs, rhs),
             BinOp::Shl => builder.ins().ishl(lhs, rhs),
             BinOp::Shr => builder.ins().sshr(lhs, rhs),
+            // `~=` is desugared at MIR-lower time (Phase 6) into a
+            // method call on the Regex handle. If it ever reaches
+            // codegen something upstream let it through unlowered.
+            BinOp::MatchOp => unreachable!(
+                "BinOp::MatchOp should have been desugared to a method call at MIR-lower"
+            ),
         }
     } else {
         match op {
@@ -683,6 +689,11 @@ pub(super) fn emit_binop(
             BinOp::GtEq => builder
                 .ins()
                 .icmp(IntCC::SignedGreaterThanOrEqual, lhs, rhs),
+            // See comment on the float branch above — MIR lower must
+            // desugar `~=` to a method call before codegen runs.
+            BinOp::MatchOp => unreachable!(
+                "BinOp::MatchOp should have been desugared to a method call at MIR-lower"
+            ),
         }
     }
 }

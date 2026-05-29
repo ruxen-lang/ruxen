@@ -90,6 +90,7 @@ impl<'a> BorrowChecker<'a> {
             | HirExprKind::CharLiteral(_)
             | HirExprKind::UnitLiteral
             | HirExprKind::Continue
+            | HirExprKind::RegexLiteral { .. }
             | HirExprKind::Error => {}
 
             HirExprKind::FieldAccess { object, .. } => {

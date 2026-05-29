@@ -461,16 +461,13 @@ impl<'a> Lexer<'a> {
             }
             '/' => {
                 // JS/Ruby positional rule: a `/` opens a `RegexLiteral`
-                // only when the previous non-trivia token is in an
-                // expression-context position (see
-                // `prev_token_starts_expr_context`). Otherwise it lexes
-                // as `Slash` (division) or `SlashEq` (compound-assign).
-                let prev = self
-                    .tokens
-                    .iter()
-                    .rev()
-                    .find(|t| t.kind != TokenKind::Newline)
-                    .map(|t| t.kind.clone());
+                // only when we're in an expression-context position
+                // (see `prev_token_starts_expr_context`). The last
+                // emitted token (including a fresh `Newline`) drives
+                // the decision — `Newline` itself counts as
+                // expression-context because a fresh statement is
+                // about to begin.
+                let prev = self.tokens.last().map(|t| t.kind.clone());
                 if prev_token_starts_expr_context(prev.as_ref()) {
                     self.lex_regex_literal(start_byte, start_line, start_col);
                 } else if !self.is_at_end() && self.current() == '=' {

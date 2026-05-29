@@ -49,6 +49,18 @@ impl Parser {
                     span: start,
                 }
             }
+            TokenKind::RegexLiteral {
+                ref pattern,
+                ref flags,
+            } => {
+                let pattern = pattern.clone();
+                let flags = flags.clone();
+                self.advance();
+                Expr {
+                    kind: ExprKind::RegexLiteral { pattern, flags },
+                    span: start,
+                }
+            }
             TokenKind::True => {
                 self.advance();
                 Expr {

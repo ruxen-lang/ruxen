@@ -50,6 +50,7 @@ impl<'a> InferenceEngine<'a> {
             | HirExprKind::BoolLiteral(_)
             | HirExprKind::CharLiteral(_)
             | HirExprKind::UnitLiteral
+            | HirExprKind::RegexLiteral { .. }
             | HirExprKind::Error => {}
 
             HirExprKind::VarRef(def_id) => {

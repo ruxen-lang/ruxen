@@ -1612,4 +1612,58 @@ end";
             other => panic!("expected Assign, got {:?}", other),
         }
     }
+
+    // ── std.regex (Phase 4) ────────────────────────────────────────
+
+    /// `/foo/i` parses as a `RegexLiteral` atom.
+    #[test]
+    fn parse_regex_literal_atom() {
+        let expr = parse_expr("/foo/i");
+        match expr.kind {
+            ExprKind::RegexLiteral { pattern, flags } => {
+                assert_eq!(pattern, "foo");
+                assert_eq!(flags, "i");
+            }
+            other => panic!("expected RegexLiteral, got {:?}", other),
+        }
+    }
+
+    /// `s ~= /error/` parses as `BinaryOp { op: MatchOp, .. }`.
+    #[test]
+    fn parse_regex_tilde_eq_binop() {
+        let expr = parse_expr(r#"s ~= /error/"#);
+        match expr.kind {
+            ExprKind::BinaryOp { op, left, right } => {
+                assert_eq!(op, BinOp::MatchOp);
+                match left.kind {
+                    ExprKind::Identifier(ref n) => assert_eq!(n, "s"),
+                    other => panic!("expected Identifier(s) on LHS, got {:?}", other),
+                }
+                match right.kind {
+                    ExprKind::RegexLiteral { ref pattern, .. } => assert_eq!(pattern, "error"),
+                    other => panic!("expected RegexLiteral on RHS, got {:?}", other),
+                }
+            }
+            other => panic!("expected BinaryOp(MatchOp), got {:?}", other),
+        }
+    }
+
+    /// `~=` is at the same precedence as `==`/`!=`. `a == b ~= /x/`
+    /// must parse as `(a == b) ~= /x/` (left-associative within the
+    /// equality tier).
+    #[test]
+    fn parse_regex_tilde_eq_same_precedence_as_equality() {
+        let expr = parse_expr(r#"a == b ~= /x/"#);
+        // Outermost should be MatchOp with LHS = (a == b)
+        match expr.kind {
+            ExprKind::BinaryOp { op, left, .. } => {
+                assert_eq!(op, BinOp::MatchOp);
+                match left.kind {
+                    ExprKind::BinaryOp { op, .. } => assert_eq!(op, BinOp::Eq),
+                    other => panic!("expected nested BinaryOp(Eq) on LHS, got {:?}", other),
+                }
+            }
+            other => panic!("expected BinaryOp(MatchOp) at top, got {:?}", other),
+        }
+    }
 }

@@ -71,6 +71,21 @@ impl Resolver {
                 ty: Ty::Char,
                 span,
             },
+            ast::ExprKind::RegexLiteral { pattern, flags } => HirExpr {
+                kind: HirExprKind::RegexLiteral {
+                    pattern: pattern.clone(),
+                    flags: flags.clone(),
+                },
+                // Typed as `Regex` class — the std.regex bootstrap
+                // declares `class Regex` so downstream method
+                // resolution finds `.is_match`, `.find`, `.scan`,
+                // `.replace`, `.replace_all`, `.split`, etc.
+                ty: Ty::Class {
+                    name: "Regex".to_string(),
+                    generic_args: vec![],
+                },
+                span,
+            },
             ast::ExprKind::BoolLiteral(b) => HirExpr {
                 kind: HirExprKind::BoolLiteral(*b),
                 ty: Ty::Bool,

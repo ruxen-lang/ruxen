@@ -42,13 +42,15 @@ fn infix_binding_power(kind: &TokenKind) -> Option<(u8, u8)> {
         // Logical AND: left-associative (5, 6)
         TokenKind::AmpAmp => Some((5, 6)),
 
-        // Comparison: non-associative (7, 8)
+        // Comparison + regex-match: non-associative (7, 8). `~=` sits
+        // at the same precedence as `==`/`!=` per the std.regex spec.
         TokenKind::EqEq
         | TokenKind::NotEq
         | TokenKind::Lt
         | TokenKind::Gt
         | TokenKind::LtEq
-        | TokenKind::GtEq => Some((7, 8)),
+        | TokenKind::GtEq
+        | TokenKind::TildeEq => Some((7, 8)),
 
         // Range: non-associative (9, 10)
         TokenKind::DotDot | TokenKind::DotDotEq => Some((9, 10)),
@@ -246,6 +248,7 @@ impl Parser {
                 | TokenKind::StringLiteral(_)
                 | TokenKind::InterpolatedString(_)
                 | TokenKind::CharLiteral(_)
+                | TokenKind::RegexLiteral { .. }
                 | TokenKind::True
                 | TokenKind::False
                 | TokenKind::Identifier(_)
@@ -301,6 +304,7 @@ fn token_to_binop(kind: &TokenKind) -> BinOp {
         TokenKind::Caret => BinOp::BitXor,
         TokenKind::Shl => BinOp::Shl,
         TokenKind::Shr => BinOp::Shr,
+        TokenKind::TildeEq => BinOp::MatchOp,
         _ => unreachable!("not a binary operator: {:?}", kind),
     }
 }

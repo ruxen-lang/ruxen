@@ -176,6 +176,7 @@ pub fn format_expr_short(e: &Expr) -> String {
         ExprKind::IntLiteral(v, suffix) => format_numeric(*v as f64, suffix),
         ExprKind::FloatLiteral(v, suffix) => format_numeric(*v, suffix),
         ExprKind::StringLiteral(s) => format!("\"{}\"", s),
+        ExprKind::RegexLiteral { pattern, flags } => format!("/{}/{}", pattern, flags),
         ExprKind::InterpolatedString(parts) => {
             let mut out = String::from("\"");
             for part in parts {

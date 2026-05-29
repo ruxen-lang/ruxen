@@ -80,6 +80,23 @@ impl<'a> Lowerer<'a> {
             | HirExprKind::ArrayFill { .. }
             | HirExprKind::Range { .. }
             | HirExprKind::Error => self.lower_misc(expr),
+
+            // `/pat/flags` regex literal — wired into MIR by Phase 6
+            // of the std.regex rollout.
+            HirExprKind::RegexLiteral { .. } => self.lower_regex_literal(expr),
         }
+    }
+
+    /// Lower a `/pat/flags` regex literal. Phase 4 ships the parser +
+    /// HIR thread-through only; the real lowering to a
+    /// `ruxen_regex_compile_const` call lands in Phase 6. Until then
+    /// we error out loudly so any use of `/…/` in real code fails the
+    /// compile with a clear message rather than silently no-oping.
+    pub(super) fn lower_regex_literal(
+        &mut self,
+        expr: &HirExpr,
+    ) -> Result<Option<LocalId>, String> {
+        let _ = expr;
+        Err("regex literal lowering not yet wired (std.regex Phase 6 pending)".to_string())
     }
 }

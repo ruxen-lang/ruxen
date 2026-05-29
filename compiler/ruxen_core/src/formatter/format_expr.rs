@@ -22,6 +22,7 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
         ExprKind::BoolLiteral(b) => text(if *b { "true" } else { "false" }),
         ExprKind::UnitLiteral => text("()"),
         ExprKind::NullLiteral => text("nil"),
+        ExprKind::RegexLiteral { pattern, flags } => text(format!("/{}/{}", pattern, flags)),
 
         // ── Identifiers ──
         ExprKind::Identifier(name) => text(name.clone()),
@@ -593,6 +594,7 @@ fn bin_op_str(op: BinOp) -> &'static str {
         BinOp::BitXor => "^",
         BinOp::Shl => "<<",
         BinOp::Shr => ">>",
+        BinOp::MatchOp => "~=",
     }
 }
 
