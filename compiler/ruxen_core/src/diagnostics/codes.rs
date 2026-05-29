@@ -437,8 +437,16 @@ pub const REGISTRY: &[CodeInfo] = &[
         title: "unterminated regex literal",
     },
     CodeInfo {
+        code: "E1702",
+        title: "`~=` operand type mismatch",
+    },
+    CodeInfo {
         code: "E1703",
         title: "empty regex pattern",
+    },
+    CodeInfo {
+        code: "E1704",
+        title: "invalid regex pattern",
     },
 ];
 

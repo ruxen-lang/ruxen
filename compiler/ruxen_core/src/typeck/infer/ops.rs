@@ -167,11 +167,49 @@ impl<'a> InferenceEngine<'a> {
                 }
             }
 
-            // Regex match: `String ~= Regex` -> `Bool`. Full
-            // String × Regex enforcement (with E1702) lands in Phase
-            // 5. For now, hand back `Bool` so the rest of typeck can
-            // continue propagating types correctly.
-            BinOp::MatchOp => Ty::Bool,
+            // Regex match: `String ~= Regex` -> `Bool`. LHS must be a
+            // String / &String / Str; RHS must be a `Regex` class.
+            // Mismatch on either side emits E1702.
+            BinOp::MatchOp => {
+                fn is_string_like(ty: &Ty) -> bool {
+                    match ty {
+                        Ty::String | Ty::Str => true,
+                        Ty::Ref(inner)
+                        | Ty::RefMut(inner)
+                        | Ty::RefLifetime(_, inner)
+                        | Ty::RefMutLifetime(_, inner) => is_string_like(inner),
+                        _ => false,
+                    }
+                }
+                fn is_regex(ty: &Ty) -> bool {
+                    match ty {
+                        Ty::Class { name, .. } => name == "Regex",
+                        Ty::Ref(inner)
+                        | Ty::RefMut(inner)
+                        | Ty::RefLifetime(_, inner)
+                        | Ty::RefMutLifetime(_, inner) => is_regex(inner),
+                        _ => false,
+                    }
+                }
+                // Tolerate unresolved Infer vars: they may not be
+                // pinned yet at first inference visit. Emit E1702
+                // only when both sides have settled to a concrete
+                // (non-Infer, non-Error, non-Never) type AND at
+                // least one side is wrong.
+                let lhs_resolved = !matches!(left, Ty::Infer(_) | Ty::Error | Ty::Never);
+                let rhs_resolved = !matches!(right, Ty::Infer(_) | Ty::Error | Ty::Never);
+                if lhs_resolved && rhs_resolved && (!is_string_like(left) || !is_regex(right)) {
+                    self.diagnostics.push(Diagnostic::error_with_code(
+                        format!(
+                            "`~=` operands must be String and Regex, got `{}` and `{}`",
+                            left, right
+                        ),
+                        span.clone(),
+                        "E1702",
+                    ));
+                }
+                Ty::Bool
+            }
         }
     }
 

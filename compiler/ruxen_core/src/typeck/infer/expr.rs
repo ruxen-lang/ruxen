@@ -4,6 +4,7 @@
 //! `HirExprKind`. Extracted from `mod.rs` so the per-variant logic is
 //! easier to navigate.
 
+use crate::diagnostics::Diagnostic;
 use crate::hir::nodes::*;
 use crate::hir::types::Ty;
 use crate::resolve::symbols::DefKind;
@@ -50,8 +51,38 @@ impl<'a> InferenceEngine<'a> {
             | HirExprKind::BoolLiteral(_)
             | HirExprKind::CharLiteral(_)
             | HirExprKind::UnitLiteral
-            | HirExprKind::RegexLiteral { .. }
             | HirExprKind::Error => {}
+
+            // `/pat/flags` regex literal. Type was set by resolve to
+            // `Ty::Class { name: "Regex" }`; here we validate the
+            // pattern at compile time and emit E1704 if it doesn't
+            // parse.
+            HirExprKind::RegexLiteral { pattern, flags } => {
+                use regex_syntax::ParserBuilder;
+                let mut builder = ParserBuilder::new();
+                // Map Ruxen flag chars onto regex-syntax compile
+                // options. `g` is accepted as a no-op at lex time and
+                // has no compile-side effect, so it's omitted here.
+                if flags.contains('i') {
+                    builder.case_insensitive(true);
+                }
+                if flags.contains('m') {
+                    builder.multi_line(true);
+                }
+                if flags.contains('s') {
+                    builder.dot_matches_new_line(true);
+                }
+                if flags.contains('x') {
+                    builder.ignore_whitespace(true);
+                }
+                if let Err(err) = builder.build().parse(pattern) {
+                    self.diagnostics.push(Diagnostic::error_with_code(
+                        format!("invalid regex pattern: {}", err),
+                        expr.span.clone(),
+                        "E1704",
+                    ));
+                }
+            }
 
             HirExprKind::VarRef(def_id) => {
                 if let Some(ty) = self.symbols.def_ty(*def_id) {

@@ -25,6 +25,20 @@ cranelift-object = "0.130"
 cranelift-native = "0.130"
 target-lexicon = "0.13"
 
+# `regex-syntax` is used by typeck to validate the pattern body of
+# every `/pat/flags` literal at compile time. The runtime engine is
+# PCRE2 (vendored under library/std/regex/runtime/pcre2/); this
+# Rust-side parse catches the common-shape errors (unbalanced
+# brackets, unclosed groups, malformed escapes, etc.) without
+# pulling in libpcre2 at compiler-build time. PCRE2-specific
+# syntax that `regex-syntax` rejects (e.g. some lookaround flavours)
+# still typechecks here and surfaces later at the
+# `ruxen_regex_compile_const` panic if PCRE2 itself rejects it —
+# acceptable for a v1 cut. Already in the dep tree transitively
+# from cranelift-codegen; declare it explicitly so future cranelift
+# bumps don't silently drop the import.
+regex-syntax = "0.8"
+
 # LLVM backend (optional, requires LLVM 18 installed)
 [dependencies.inkwell]
 version = "0.5"
