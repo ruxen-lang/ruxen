@@ -13,13 +13,36 @@ fn collect_runtime_sources(std_root: &std::path::Path) -> Vec<PathBuf> {
             continue;
         }
         for f in std::fs::read_dir(&runtime_dir).expect("read runtime dir") {
-            let f = match f {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
+            let Ok(f) = f else { continue };
             let p = f.path();
             if p.extension().and_then(|s| s.to_str()) == Some("c") {
                 sources.push(p);
+            } else if p.is_dir() {
+                // One level of recursion: per-package vendored C sources
+                // (e.g. library/std/regex/runtime/pcre2/*.c) get picked up.
+                // We intentionally do NOT recurse further — keeps the build
+                // glob predictable and matches the "vendor in a single
+                // subdir" convention this repo uses.
+                for sub in std::fs::read_dir(&p).into_iter().flatten() {
+                    let Ok(sub) = sub else { continue };
+                    let sp = sub.path();
+                    if sp.extension().and_then(|s| s.to_str()) != Some("c") {
+                        continue;
+                    }
+                    // PCRE2 ships two ".c" files that are NOT standalone
+                    // translation units — they're pulled in via #include
+                    // from pcre2_compile.c / pcre2_tables.c. Compiling
+                    // them as TUs would fail with missing-include errors.
+                    // Filter by basename so the build glob stays a glob.
+                    let name = sp
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("");
+                    if matches!(name, "pcre2_printint.c" | "pcre2_ucptables.c") {
+                        continue;
+                    }
+                    sources.push(sp);
+                }
             }
         }
     }
@@ -82,6 +105,28 @@ fn main() {
     // archive so the link succeeds. The stub is overridden whenever a
     // real definition lands at link time.
     build.file(PathBuf::from(&crate_dir).join("runtime_stubs.c"));
+
+    // Vendored PCRE2 lives at library/std/regex/runtime/pcre2/. Its
+    // .c files #include "config.h", "pcre2.h", "pcre2_internal.h",
+    // etc. via bare filenames, so we add the dir to the include
+    // path here. HAVE_CONFIG_H tells PCRE2 to consult our
+    // hand-authored config.h; PCRE2_CODE_UNIT_WIDTH=8 selects the
+    // 8-bit single-width build (no 16/32-bit variants).
+    let pcre2_dir = std_root
+        .join("regex")
+        .join("runtime")
+        .join("pcre2");
+    if pcre2_dir.is_dir() {
+        build.include(&pcre2_dir);
+        build.define("HAVE_CONFIG_H", None);
+        build.define("PCRE2_CODE_UNIT_WIDTH", "8");
+        // Suppress noisy warnings from vendored upstream code we
+        // don't want to patch.
+        build.flag_if_supported("-Wno-sign-compare");
+        build.flag_if_supported("-Wno-unused-parameter");
+        build.flag_if_supported("-Wno-implicit-fallthrough");
+    }
+
     build.compile("ruxenrt");
 
     println!("cargo:rustc-link-search=native={out_dir}");

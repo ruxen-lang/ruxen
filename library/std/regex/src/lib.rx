@@ -1,0 +1,3 @@
+## std::regex — PCRE2-backed regex with first-class /pat/flags literals
+## and the `~=` match operator. Scaffolding only — public surface
+## (class Regex / class Match / class RegexError) lands in Phase 2.
