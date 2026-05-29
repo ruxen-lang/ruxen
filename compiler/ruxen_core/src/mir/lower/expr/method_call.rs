@@ -76,6 +76,44 @@ impl<'a> Lowerer<'a> {
                     .receiver_type_name(object)
                     .unwrap_or_else(|| type_name_from_ty(&object.ty));
 
+                // ── Universal `to_s` on user-defined types (REQ4) ───────
+                // `obj.to_s()` on a class / struct / enum that does NOT
+                // define its own `to_s` returns the same `String` that
+                // `"#{obj}"` would — we route it through the identical
+                // interpolation display dispatch so the two are always
+                // byte-identical (derive-Debug structs/enums, user
+                // `impl Display`, etc.). A user-defined `to_s` wins: when
+                // the type declares one we fall through to the normal
+                // mangled `<Type>_to_s` call, which links to their method.
+                // Scalar primitives are handled by the mangled-name path
+                // (`lang_intrinsics`: `Int_to_s` → `ruxen_int_to_string`),
+                // so this intercept is intentionally limited to the
+                // user-defined aggregate types.
+                fn peel_refs(ty: &Ty) -> &Ty {
+                    match ty {
+                        Ty::Ref(inner)
+                        | Ty::RefMut(inner)
+                        | Ty::RefLifetime(_, inner)
+                        | Ty::RefMutLifetime(_, inner) => peel_refs(inner),
+                        other => other,
+                    }
+                }
+                if method_name == "to_s"
+                    && args.is_empty()
+                    && block.is_none()
+                    && matches!(
+                        peel_refs(&object.ty),
+                        Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
+                    )
+                    && !self.class_has_method(&type_name, "to_s")
+                {
+                    let parts = vec![HirInterpolationPart::Expr {
+                        expr: (**object).clone(),
+                        spec: crate::lexer::token::FormatSpec::default(),
+                    }];
+                    return self.lower_interpolation(&parts, &Ty::String);
+                }
+
                 // ── Phase C: dynamic dispatch on `&Mixin` / `&var Mixin` ─
                 // When the receiver is statically typed as a
                 // runtime-dispatch mixin reference (e.g. `f: &Future`),

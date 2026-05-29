@@ -1147,6 +1147,14 @@ pub(super) fn builtin_method_type(
         (Ty::Char, "to_s") => Some(Ty::String),
         (Ty::String, "to_s") => Some(Ty::String),
         (Ty::Str, "to_s") => Some(Ty::String),
+        // `to_s` on user-defined types also yields a `String`. The MIR
+        // method-call lowering routes it through the same display dispatch
+        // as `"#{obj}"` (unless the type defines its own `to_s`, which
+        // wins). A user `to_s` conventionally returns `String` too, so
+        // reporting `String` here is correct in both cases.
+        (Ty::Class { .. }, "to_s") => Some(Ty::String),
+        (Ty::Struct { .. }, "to_s") => Some(Ty::String),
+        (Ty::Enum { .. }, "to_s") => Some(Ty::String),
 
         // Generic class methods
         (Ty::Class { .. }, "new") => Some(ty.clone()),

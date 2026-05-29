@@ -8,6 +8,14 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **Universal `to_s` method on every type (Ruby convention).** Scalar
+  primitives (`Int`, `USize`, `Float`, `Bool`, `Char`, `String`, `&str`)
+  stringify via the existing `ruxen_*_to_string` runtime helpers. User
+  classes / structs / enums get a `to_s` that returns the *same* `String`
+  as string interpolation `"#{obj}"` — the MIR method-call lowering routes
+  `obj.to_s()` through the identical display dispatch (derive-Debug
+  structs/enums, user `impl Display`, …). A user-defined `to_s` method
+  takes precedence over the synthesized default.
 - **Numeric conversion methods `Int.to_f()` and `Float.to_i()`.** Ruxen
   performs no implicit `Int`↔`Float` coercion (see E0707), so these are
   the supported way to cross the integer/float boundary: `to_f` widens an

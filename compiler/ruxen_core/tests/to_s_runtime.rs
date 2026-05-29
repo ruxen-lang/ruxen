@@ -72,3 +72,65 @@ fn float_to_s_stringifies() {
     assert!(ok, "stderr: {}", stderr);
     assert_eq!(stdout, "1.5\n", "got: {:?}", stdout);
 }
+
+// ── Part B: user-defined types ──────────────────────────────────────
+
+/// A struct's `to_s()` returns the same string as `"#{s}"` (the derived
+/// Debug representation), since `to_s` routes through the identical
+/// display dispatch.
+#[test]
+fn struct_to_s_matches_interpolation() {
+    let source = "struct P\n  x: Int\n  y: Int\nend\n\ndef main\n  let p = P.new(1, 2)\n  puts p.to_s()\n  puts \"#{p}\"\nend\n";
+    let (stdout, stderr, ok) = compile_and_run(source, "to_s_struct");
+    assert!(ok, "stderr: {}", stderr);
+    assert_eq!(stdout, "P { x: 1, y: 2 }\nP { x: 1, y: 2 }\n", "got: {:?}", stdout);
+}
+
+/// An enum's `to_s()` matches its `"#{e}"` form too.
+#[test]
+fn enum_to_s_matches_interpolation() {
+    let source = "enum Shape\n  Circle(radius: Float)\nend\n\ndef main\n  let c = Shape.Circle(radius: 1.5)\n  puts c.to_s()\n  puts \"#{c}\"\nend\n";
+    let (stdout, stderr, ok) = compile_and_run(source, "to_s_enum");
+    assert!(ok, "stderr: {}", stderr);
+    assert_eq!(
+        stdout, "Circle { radius: 1.5 }\nCircle { radius: 1.5 }\n",
+        "got: {:?}",
+        stdout
+    );
+}
+
+/// Pins the exact stdout of the `810_to_s_universal` e2e fixture.
+#[test]
+fn to_s_universal_fixture() {
+    let source = concat!(
+        "struct Point\n  x: Int\n  y: Int\nend\n\n",
+        "enum Shape\n  Circle(radius: Float)\nend\n\n",
+        "class Widget\n  id: Int\n  def init(@id: Int)\n  end\n",
+        "  def to_s -> String\n    \"widget##{self.id}\"\n  end\nend\n\n",
+        "def main\n",
+        "  let n: Int = 42\n  puts n.to_s()\n",
+        "  let f: Float = 1.5\n  puts f.to_s()\n",
+        "  let b: Bool = true\n  puts b.to_s()\n",
+        "  let p = Point.new(3, 4)\n  puts p.to_s()\n",
+        "  let c = Shape.Circle(radius: 2.5)\n  puts c.to_s()\n",
+        "  let w = Widget.new(7)\n  puts w.to_s()\n",
+        "end\n",
+    );
+    let (stdout, stderr, ok) = compile_and_run(source, "to_s_universal_fixture");
+    assert!(ok, "stderr: {}", stderr);
+    assert_eq!(
+        stdout,
+        "42\n1.5\ntrue\nPoint { x: 3, y: 4 }\nCircle { radius: 2.5 }\nwidget#7\n",
+        "got: {:?}",
+        stdout
+    );
+}
+
+/// A user-defined `to_s` method wins over the synthesized default.
+#[test]
+fn user_defined_to_s_wins() {
+    let source = "class Widget\n  id: Int\n  def init(@id: Int)\n  end\n  def to_s -> String\n    \"custom-widget\"\n  end\nend\n\ndef main\n  let w = Widget.new(1)\n  puts w.to_s()\nend\n";
+    let (stdout, stderr, ok) = compile_and_run(source, "to_s_user_override");
+    assert!(ok, "stderr: {}", stderr);
+    assert_eq!(stdout, "custom-widget\n", "got: {:?}", stdout);
+}
