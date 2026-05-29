@@ -13,28 +13,20 @@
 ## (surface) and `HashSet.new` (legacy value-scope alias) by retrying
 ## the lookup with the base_type-mangled key after the runtime_base
 ## form misses.
-
 class Set
   lib "../hash/runtime/hash.c"
-    # ── Constructors (no `self`) ──────────────────────────────────
-    def self.new as "ruxen_set_new"() -> Int
+    def self.new as "ruxen_set_new" -> Int
     def self.with_capacity as "ruxen_set_with_capacity"(cap: Int) -> Int
     def self.from_iter as "ruxen_set_from_iter"(items: Int) -> Int
-
-    # ── Read-only queries ─────────────────────────────────────────
-    def len as "ruxen_set_len"(self) -> Int
-    def is_empty as "ruxen_set_is_empty"(self) -> Bool
-    def contains as "ruxen_set_contains"(self, item: Int) -> Bool
-    def iter as "ruxen_set_iter"(self) -> Int
-
-    # ── Set algebra ───────────────────────────────────────────────
-    def union as "ruxen_set_union"(self, other: Int) -> Int
-    def intersection as "ruxen_set_intersection"(self, other: Int) -> Int
-    def difference as "ruxen_set_difference"(self, other: Int) -> Int
-
-    # ── Mutating ops ──────────────────────────────────────────────
-    def insert as "ruxen_set_insert"(self, item: Int)
-    def remove as "ruxen_set_remove"(self, item: Int) -> Bool
-    def clear as "ruxen_set_clear"(self)
+    def len as "ruxen_set_len" -> Int
+    def is_empty as "ruxen_set_is_empty" -> Bool
+    def contains as "ruxen_set_contains"(item: Int) -> Bool
+    def iter as "ruxen_set_iter" -> Int
+    def union as "ruxen_set_union"(other: Int) -> Int
+    def intersection as "ruxen_set_intersection"(other: Int) -> Int
+    def difference as "ruxen_set_difference"(other: Int) -> Int
+    def insert as "ruxen_set_insert"(item: Int)
+    def remove as "ruxen_set_remove"(item: Int) -> Bool
+    def clear as "ruxen_set_clear"
   end
 end

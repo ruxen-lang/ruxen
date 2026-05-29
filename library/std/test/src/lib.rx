@@ -9,10 +9,7 @@
 ## This file is the BOOTSTRAP entry; it carries one marker symbol so the
 ## bootstrap pre-walk has something to register.
 class StdTestPackageMarker
-  layout c
   marker: Int
 
-  def init
-    self.marker = 1
-  end
+  def init { self.marker = 1 }
 end

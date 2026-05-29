@@ -10,12 +10,12 @@
 ## silently truncates the bottom byte (0 or 1).
 class OpenOptions
   lib "runtime/file.c"
-    def self.new as "ruxen_open_options_new"() -> OpenOptions
-    def read as "ruxen_open_options_read"(self, value: Int) -> OpenOptions
-    def write as "ruxen_open_options_write"(self, value: Int) -> OpenOptions
-    def append as "ruxen_open_options_append"(self, value: Int) -> OpenOptions
-    def truncate as "ruxen_open_options_truncate"(self, value: Int) -> OpenOptions
-    def create as "ruxen_open_options_create"(self, value: Int) -> OpenOptions
-    def create_new as "ruxen_open_options_create_new"(self, value: Int) -> OpenOptions
+    def self.new as "ruxen_open_options_new" -> OpenOptions
+    def read as "ruxen_open_options_read"(value: Int) -> OpenOptions
+    def write as "ruxen_open_options_write"(value: Int) -> OpenOptions
+    def append as "ruxen_open_options_append"(value: Int) -> OpenOptions
+    def truncate as "ruxen_open_options_truncate"(value: Int) -> OpenOptions
+    def create as "ruxen_open_options_create"(value: Int) -> OpenOptions
+    def create_new as "ruxen_open_options_create_new"(value: Int) -> OpenOptions
   end
 end

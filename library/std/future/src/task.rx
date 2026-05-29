@@ -31,15 +31,11 @@
 ## making the desugar see bootstrap classes — this future becomes
 ## invisibly more ergonomic with zero stdlib changes.
 class Task
+  def self.yield_now -> TaskYieldFuture { TaskYieldFuture.new }
+
+  def self.join(h: Int) -> TaskJoinFuture { TaskJoinFuture.new(h) }
+
   lib "runtime/scheduler.c"
     def self.spawn_raw as "ruxen_executor_spawn"(future_ptr: Int) -> Int
-  end
-
-  def self.yield_now -> TaskYieldFuture
-    TaskYieldFuture.new()
-  end
-
-  def self.join(h: Int) -> TaskJoinFuture
-    TaskJoinFuture.new(h)
   end
 end

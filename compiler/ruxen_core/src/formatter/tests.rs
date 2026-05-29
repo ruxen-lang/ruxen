@@ -341,3 +341,115 @@ fn test_import_sorting_groups() {
         lines[0]
     );
 }
+
+// ─── Semantic round-trip regressions (fmt-in-sync-with-parser) ──────
+//
+// Each of these formats a source the parser accepts, then re-parses the
+// formatter's output and asserts it still parses. They pin the fixes for the
+// drift catalogued by `tests/formatter_corpus_roundtrip.rs`: the formatter
+// must never emit a spelling the current parser rejects.
+
+fn assert_reparses(source: &str) -> String {
+    let result = format(source);
+    assert!(result.errors.is_empty(), "format errors: {:?}", result.errors);
+    let mut lexer = crate::lexer::Lexer::new(&result.output);
+    let tokens = lexer
+        .tokenize()
+        .unwrap_or_else(|d| panic!("lex of formatted output failed: {:?}\n---\n{}", d, result.output));
+    let mut parser = crate::parser::Parser::new(tokens);
+    parser
+        .parse()
+        .unwrap_or_else(|d| {
+            panic!(
+                "formatted output no longer parses: {:?}\n--- output ---\n{}",
+                d.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+                result.output
+            )
+        });
+    assert_idempotent(source);
+    result.output
+}
+
+#[test]
+fn fields_have_no_pub_prefix() {
+    // Public is the default; `pub fd: Int` is not valid field syntax.
+    let out = assert_reparses("class C\n  fd: Int\n  closed: Int\nend\n");
+    assert!(!out.contains("pub "), "spurious pub prefix:\n{}", out);
+    assert!(out.contains("fd: Int"), "{}", out);
+}
+
+#[test]
+fn private_fields_use_section_marker() {
+    // No corpus file exercises non-public fields; pin the section-marker form.
+    let src = "class C\n  private\n  secret: Int\nend\n";
+    let out = assert_reparses(src);
+    assert!(out.contains("private"), "expected private section marker:\n{}", out);
+    assert!(!out.contains("pub "), "{}", out);
+}
+
+#[test]
+fn lib_block_name_keeps_quotes() {
+    let src = "lib \"runtime/env.c\"\n  def args as \"ruxen_env_args\" -> Array[String]\nend\n";
+    let out = assert_reparses(src);
+    assert!(out.contains("lib \"runtime/env.c\""), "lib name lost quotes:\n{}", out);
+}
+
+#[test]
+fn ffi_class_method_keeps_self() {
+    let src = "class Env\n  lib \"runtime/env.c\"\n    def self.args as \"ruxen_env_args\" -> Array[String]\n  end\nend\n";
+    let out = assert_reparses(src);
+    assert!(out.contains("def self.args"), "FFI self. dropped:\n{}", out);
+}
+
+#[test]
+fn mixin_method_sig_def_before_var() {
+    let src = "mixin Future\n  type Output\n  def var poll(cx: &var Context) -> Poll[Self.Output]\nend\n";
+    let out = assert_reparses(src);
+    assert!(out.contains("def var poll"), "expected `def var`, got:\n{}", out);
+    assert!(!out.contains("var def"), "emitted `var def`:\n{}", out);
+}
+
+#[test]
+fn extension_keyword_not_impl() {
+    let src = "extension Int\n  def to_s -> String\n    \"#{self}\"\n  end\nend\n";
+    let out = assert_reparses(src);
+    assert!(out.contains("extension Int"), "expected `extension`, got:\n{}", out);
+}
+
+#[test]
+fn const_without_type_omits_annotation() {
+    let out = assert_reparses("const MAX = 100\n");
+    assert!(!out.contains(": _"), "spurious inferred-type annotation:\n{}", out);
+    assert!(out.contains("const MAX = 100"), "{}", out);
+}
+
+#[test]
+fn do_end_block_expression_preserved() {
+    let src = "def main\n  let v = do\n    let a = 1\n    a + 1\n  end\n  puts \"#{v}\"\nend\n";
+    let out = assert_reparses(src);
+    assert!(out.contains("= do"), "do...end wrapper lost:\n{}", out);
+    assert!(out.contains("end"), "{}", out);
+}
+
+#[test]
+fn move_closure_keeps_move() {
+    let src = "def f -> some Fn(Int) -> Int\n  move { |x| x + 1 }\nend\n";
+    let out = assert_reparses(src);
+    assert!(out.contains("move {") || out.contains("move do"), "move keyword lost:\n{}", out);
+}
+
+#[test]
+fn never_type_spelled_never() {
+    let src = "lib \"runtime/process.c\"\n  def exit as \"ruxen_process_exit\"(code: Int) -> Never\nend\n";
+    let out = assert_reparses(src);
+    assert!(out.contains("-> Never"), "Never emitted as `!`:\n{}", out);
+    assert!(!out.contains("-> !"), "{}", out);
+}
+
+#[test]
+fn multi_statement_match_arm_has_no_end() {
+    let src = "def main\n  match x\n    Some(v) ->\n      puts \"a\"\n      puts \"b\"\n    None -> puts \"c\"\n  end\nend\n";
+    let out = assert_reparses(src);
+    // Exactly two `end`s: the match and the def. A per-arm `end` would make 3.
+    assert_eq!(out.matches("end").count(), 2, "spurious arm `end`:\n{}", out);
+}

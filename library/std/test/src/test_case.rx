@@ -7,14 +7,13 @@
 ## `expect_panic_substr` is None for an ordinary test. When set, the
 ## runner inverts the success condition: the child MUST panic and the
 ## captured stderr MUST contain the substring.
-
 class TestCase
   name: String
-  body: any Fn() -> ()
+  body: any Fn[Fn() -> ()]
   pending: Bool
-  expect_panic_substr: String?
+  expect_panic_substr: Option[String]
 
-  def init(name: &String, body: any Fn() -> ())
+  def init(name: &String, body: any Fn[Fn() -> ()])
     self.name = name.clone
     self.body = body
     self.pending = false

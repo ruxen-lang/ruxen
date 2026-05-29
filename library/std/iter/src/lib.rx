@@ -14,7 +14,6 @@
 ## Iterator and FromIterator are registered into the prelude type
 ## scope (not under a `std.iter` namespace), matching the behaviour of
 ## the pre-migration registration.
-
 mixin Iterator
   def next
 end

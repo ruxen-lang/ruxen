@@ -1,52 +1,52 @@
 class Thread
-  ## Phase C of #06.95 absorbed the Rust-side `sleep(&Duration)` free
-  ## fn into `Thread.sleep` — the duration-typed counterpart to the
-  ## bare-int `Thread.sleep_ns` still served by runtime_table.
-  ## Phase E Slice B.4 added `yield_now` (no-arg cooperative yield);
-  ## the runtime_table `Thread_yield_now -> ruxen_thread_yield`
-  ## entry was deleted at the same commit.
-  ##
-  ## `Thread.sleep(Int)` — the bare-int convenience overload that
-  ## maps to `ruxen_thread_sleep_ns` — stays in runtime_table for
-  ## now. typeck's method_resolver returns `Ty::Unit` for both
-  ## `Thread.sleep(&Duration)` and `Thread.sleep(Int)`, so adding
-  ## a second `def self.sleep as "ruxen_thread_sleep_ns"(ns: Int)`
-  ## lib decl here would create two FFI aliases keyed on the same
-  ## `Thread_sleep` mangled name — runtime_table's existing entry
-  ## for the Int form is the cleanest disambiguation point until
-  ## the lib-decl grammar grows parameter-type-keyed dispatch.
   lib "runtime/time.c"
     def self.sleep as "ruxen_thread_sleep_duration"(d: &Duration) -> ()
-    def self.yield_now as "ruxen_thread_yield"() -> ()
+    def self.yield_now as "ruxen_thread_yield" -> ()
   end
 
-  ## Multithreading round — Thread.spawn / current_id runtime.
-  ## Both surfaces declared at the i64 ABI; the Ruxen-level type
-  ## wrappers (`Thread.spawn` returning `JoinHandle[T]`) are layered
-  ## on top via the same generic-stripping pattern that Array uses
-  ## (see library/std/array/src/lib.rx).
   lib "runtime/thread.c"
-    def self.current_id as "ruxen_thread_current_id"() -> Int
+    def self.current_id as "ruxen_thread_current_id" -> Int
     def self.spawn_raw as "ruxen_thread_spawn"(closure: Int) -> Int
-    # `Thread.spawn(closure)` — the high-level surface a Rubyist
-    # reaches for first. Same runtime entry point as `spawn_raw`;
-    # both take a closure pointer at the i64 ABI and return the
-    # JoinHandle as an Int. The typed JoinHandle[T] lift is layered
-    # through the typed-FFI return mechanism
-    # (docs/specs/types/typed_ffi_returns.spec.md); callers who
-    # want the typed handle explicitly can use `.join_raw` on it.
-    # Accept-loop shape:
-    #
-    #   loop
-    #     match listener.accept
-    #       Ok(stream) -> Thread.spawn({ || handle(stream) })
-    #       Err(_)     -> break
-    #     end
-    #   end
     def self.spawn as "ruxen_thread_spawn"(closure: Int) -> Int
   end
 end
 
+## Phase C of #06.95 absorbed the Rust-side `sleep(&Duration)` free
+## fn into `Thread.sleep` — the duration-typed counterpart to the
+## bare-int `Thread.sleep_ns` still served by runtime_table.
+## Phase E Slice B.4 added `yield_now` (no-arg cooperative yield);
+## the runtime_table `Thread_yield_now -> ruxen_thread_yield`
+## entry was deleted at the same commit.
+##
+## `Thread.sleep(Int)` — the bare-int convenience overload that
+## maps to `ruxen_thread_sleep_ns` — stays in runtime_table for
+## now. typeck's method_resolver returns `Ty::Unit` for both
+## `Thread.sleep(&Duration)` and `Thread.sleep(Int)`, so adding
+## a second `def self.sleep as "ruxen_thread_sleep_ns"(ns: Int)`
+## lib decl here would create two FFI aliases keyed on the same
+## `Thread_sleep` mangled name — runtime_table's existing entry
+## for the Int form is the cleanest disambiguation point until
+## the lib-decl grammar grows parameter-type-keyed dispatch.
+## Multithreading round — Thread.spawn / current_id runtime.
+## Both surfaces declared at the i64 ABI; the Ruxen-level type
+## wrappers (`Thread.spawn` returning `JoinHandle[T]`) are layered
+## on top via the same generic-stripping pattern that Array uses
+## (see library/std/array/src/lib.rx).
+# `Thread.spawn(closure)` — the high-level surface a Rubyist
+# reaches for first. Same runtime entry point as `spawn_raw`;
+# both take a closure pointer at the i64 ABI and return the
+# JoinHandle as an Int. The typed JoinHandle[T] lift is layered
+# through the typed-FFI return mechanism
+# (docs/specs/types/typed_ffi_returns.spec.md); callers who
+# want the typed handle explicitly can use `.join_raw` on it.
+# Accept-loop shape:
+#
+#   loop
+#     match listener.accept
+#       Ok(stream) -> Thread.spawn({ || handle(stream) })
+#       Err(_)     -> break
+#     end
+#   end
 ## Thread.spawn free-fn shim. Declared at module scope (not inside
 ## the class) historically because static-method dispatch through
 ## `Thread.spawn` was prepending an implicit self arg, breaking the

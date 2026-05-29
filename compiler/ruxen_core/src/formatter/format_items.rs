@@ -330,11 +330,7 @@ fn format_class(class: &ClassDef, comments: &CommentMap) -> Doc {
     let mut body_parts: Vec<Doc> = Vec::new();
 
     // Fields — one per line, no blank lines between them
-    let field_docs: Vec<Doc> = class
-        .fields
-        .iter()
-        .map(|f| format_field_decl(f, comments))
-        .collect();
+    let field_docs = format_field_section(&class.fields, comments);
     if !field_docs.is_empty() {
         body_parts.push(join(hardline(), field_docs));
     }
@@ -368,16 +364,47 @@ fn format_class(class: &ClassDef, comments: &CommentMap) -> Doc {
 }
 
 fn format_field_decl(field: &FieldDecl, comments: &CommentMap) -> Doc {
-    let mut parts = Vec::new();
-    match field.visibility {
-        Visibility::Public => parts.push(text("pub ")),
-        Visibility::Protected => parts.push(text("protected ")),
-        Visibility::Private => {}
+    // ruby-naming.spec.md §3.2: fields have NO per-field visibility prefix
+    // (`pub`/`private`/`protected` keywords before a field name are not valid
+    // surface syntax — `pub` is not even a keyword, only `public` is). Field
+    // visibility is expressed through section markers in the type body, which
+    // `format_field_section` emits. A field declaration is just `name: Type`.
+    concat(vec![
+        text(field.name.clone()),
+        text(": "),
+        format_type_expr(&field.type_expr, comments),
+    ])
+}
+
+/// Render a type's fields, inserting `public` / `private` / `protected`
+/// section markers (ruby-naming.spec.md §3.2) whenever the running visibility
+/// changes. The body default is `public`, so leading public fields emit no
+/// marker. If the run ends on a non-public visibility, a trailing `public`
+/// marker is emitted so that methods following the field block (which the
+/// formatter groups after fields) keep their default-public visibility rather
+/// than silently inheriting the last field's section.
+fn format_field_section(fields: &[FieldDecl], comments: &CommentMap) -> Vec<Doc> {
+    let mut docs: Vec<Doc> = Vec::new();
+    let mut running = Visibility::Public;
+    for field in fields {
+        if field.visibility != running {
+            docs.push(text(visibility_marker(field.visibility)));
+            running = field.visibility;
+        }
+        docs.push(format_field_decl(field, comments));
     }
-    parts.push(text(field.name.clone()));
-    parts.push(text(": "));
-    parts.push(format_type_expr(&field.type_expr, comments));
-    concat(parts)
+    if running != Visibility::Public {
+        docs.push(text("public"));
+    }
+    docs
+}
+
+fn visibility_marker(v: Visibility) -> &'static str {
+    match v {
+        Visibility::Public => "public",
+        Visibility::Protected => "protected",
+        Visibility::Private => "private",
+    }
 }
 
 // ─── Structs ────────────────────────────────────────────────────────
@@ -401,11 +428,7 @@ fn format_struct(s: &StructDef, comments: &CommentMap) -> Doc {
     // each separated by a blank line — mirrors `format_class`.
     let mut body_parts: Vec<Doc> = Vec::new();
 
-    let field_docs: Vec<Doc> = s
-        .fields
-        .iter()
-        .map(|f| format_field_decl(f, comments))
-        .collect();
+    let field_docs = format_field_section(&s.fields, comments);
     if !field_docs.is_empty() {
         body_parts.push(join(hardline(), field_docs));
     }
@@ -609,7 +632,11 @@ fn format_trait_item(item: &MixinItem, comments: &CommentMap) -> Doc {
 fn format_method_sig(sig: &MethodSig, comments: &CommentMap) -> Doc {
     let mut parts = Vec::new();
 
-    // Self mode
+    // Keyword order matches `format_func_def`: `def` first, then the self-mode
+    // modifier (`var` / `consume`). Emitting `var def` instead of `def var`
+    // does not parse — the mixin-body parser expects `def`/`type` to lead.
+    parts.push(text("def "));
+
     if let Some(self_mode) = &sig.self_mode {
         match self_mode {
             SelfMode::Mutable => parts.push(text("var ")),
@@ -617,8 +644,6 @@ fn format_method_sig(sig: &MethodSig, comments: &CommentMap) -> Doc {
             SelfMode::Immutable => {}
         }
     }
-
-    parts.push(text("def "));
 
     if sig.is_class_method {
         parts.push(text("self."));
@@ -659,7 +684,14 @@ fn format_method_sig(sig: &MethodSig, comments: &CommentMap) -> Doc {
 // `include` / `extension` blocks.
 
 fn format_impl(imp: &ImplBlock, comments: &CommentMap) -> Doc {
-    let mut header = vec![text("impl ")];
+    // ruby-naming.spec.md §3.4a: the block opener is `extension` — `impl` was
+    // retired and is now lexed as a bare identifier, so emitting `impl ...` no
+    // longer parses ("expected top-level declaration, found Identifier").
+    let mut header = vec![text("extension ")];
+
+    if imp.negative_trait {
+        header.push(text("!"));
+    }
 
     if let Some(gp) = &imp.generic_params {
         header.push(format_generic_params(gp));
@@ -834,17 +866,46 @@ fn format_newtype(nt: &NewtypeDef, comments: &CommentMap) -> Doc {
 // ─── Constants ──────────────────────────────────────────────────────
 
 fn format_const(c: &ConstDef, comments: &CommentMap) -> Doc {
-    group(concat(vec![
-        text("const "),
-        text(c.name.clone()),
-        text(": "),
-        format_type_expr(&c.type_expr, comments),
-        text(" = "),
-        format_expr(&c.value, comments),
-    ]))
+    let mut parts = vec![text("const "), text(c.name.clone())];
+    // An omitted const type parses to `TypeExpr::Inferred`. Re-emitting it as
+    // `: _` does not parse (`expected type, found _`), so only render the
+    // annotation when the source actually wrote one.
+    if !matches!(c.type_expr, TypeExpr::Inferred { .. }) {
+        parts.push(text(": "));
+        parts.push(format_type_expr(&c.type_expr, comments));
+    }
+    parts.push(text(" = "));
+    parts.push(format_expr(&c.value, comments));
+    group(concat(parts))
 }
 
 // ─── FFI Declarations ───────────────────────────────────────────────
+
+/// Render a `lib` block's link name. The parser (`parse_lib_decl`) accepts
+/// either a string literal (`lib "runtime/foo.c"`) or a bare TypeIdentifier
+/// (`lib LibM`), storing only the raw text in `LibDecl.name`. To round-trip we
+/// re-quote anything that is not a valid bare TypeIdentifier — paths like
+/// `runtime/foo.c` and lowercase names like `c` must keep their quotes, or the
+/// re-parse fails ("expected lib name — a string literal or TypeIdentifier").
+fn format_lib_name(name: &str) -> String {
+    if is_bare_type_identifier(name) {
+        name.to_string()
+    } else {
+        format!("\"{}\"", name)
+    }
+}
+
+/// A bare TypeIdentifier starts with an uppercase ASCII letter and contains
+/// only ASCII alphanumerics or underscores — matching the lexer's TypeIdentifier
+/// rule. Anything else (paths, lowercase names, `.`/`/`) must be quoted.
+fn is_bare_type_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_uppercase() => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
 
 fn format_lib(l: &LibDecl, comments: &CommentMap) -> Doc {
     let mut body_parts: Vec<Doc> = Vec::new();
@@ -855,7 +916,7 @@ fn format_lib(l: &LibDecl, comments: &CommentMap) -> Doc {
 
     let body = join(hardline(), body_parts);
 
-    let mut header_parts = vec![text("lib "), text(l.name.clone())];
+    let mut header_parts = vec![text("lib "), text(format_lib_name(&l.name))];
 
     // Link attrs
     for attr in &l.link_attrs {
@@ -912,7 +973,15 @@ fn format_ffi_function(func: &FfiFunction, comments: &CommentMap) -> Doc {
         })
         .collect();
 
-    let mut parts = vec![text("def "), text(func.name.clone())];
+    let mut parts = vec![text("def ")];
+
+    // `def self.NAME` marks a class method (ruby-naming.spec.md §3.4a). The
+    // parser records this in `FfiFunction.is_class_method`; emit it back so a
+    // static FFI decl does not silently become an instance method on re-parse.
+    if func.is_class_method {
+        parts.push(text("self."));
+    }
+    parts.push(text(func.name.clone()));
 
     // Preserve the `as "<c-symbol>"` rename clause when present so the
     // formatter round-trips per-decl C-symbol aliases (#06.8).

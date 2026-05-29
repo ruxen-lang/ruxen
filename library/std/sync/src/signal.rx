@@ -4,8 +4,8 @@
 ## Phase C of #06.95.
 class Signal
   lib "runtime/signal.c"
-    def self.install_sigint as "ruxen_signal_install_sigint"() -> ()
-    def self.received_sigint as "ruxen_signal_received_sigint"() -> Int
+    def self.install_sigint as "ruxen_signal_install_sigint" -> ()
+    def self.received_sigint as "ruxen_signal_received_sigint" -> Int
   end
 end
 
@@ -16,6 +16,6 @@ end
 # around `Async.sleep` introduction); call sites use `Thread.sleep`
 # (sync) or `Async.sleep` (async, returns TimeSleepFuture).
 lib "runtime/signal.c"
-  def signal_install_sigint as "ruxen_signal_install_sigint"() -> ()
-  def signal_received_sigint as "ruxen_signal_received_sigint"() -> Int
+  def signal_install_sigint as "ruxen_signal_install_sigint" -> ()
+  def signal_received_sigint as "ruxen_signal_received_sigint" -> Int
 end

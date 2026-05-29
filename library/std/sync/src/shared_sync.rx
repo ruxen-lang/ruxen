@@ -4,13 +4,14 @@
 ## SharedSync[T] (B5: Self in return); `.get` -> T (B4).
 class SharedSync[T]
   include Send
+
   include Sync
 
   lib "runtime/sharedsync.c"
     def self.new as "ruxen_sharedsync_new"(initial: T) -> SharedSync[T]
-    def clone as "ruxen_sharedsync_clone"(self) -> SharedSync[T]
-    def strong_count as "ruxen_sharedsync_strong_count"(self) -> Int
-    def get as "ruxen_sharedsync_get"(self) -> T
-    def drop as "ruxen_sharedsync_drop"(self) -> ()
+    def clone as "ruxen_sharedsync_clone" -> SharedSync[T]
+    def strong_count as "ruxen_sharedsync_strong_count" -> Int
+    def get as "ruxen_sharedsync_get" -> T
+    def drop as "ruxen_sharedsync_drop" -> ()
   end
 end

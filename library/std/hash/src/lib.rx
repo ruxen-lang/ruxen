@@ -14,7 +14,6 @@
 ## merge, so `Hash` as a trait name keeps resolving (the `Hash[K,V]`
 ## collection type has its own type-position resolution path and is
 ## unaffected).
-
 mixin Hashable
   def hash_code -> Int
 end

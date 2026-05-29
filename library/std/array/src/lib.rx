@@ -39,42 +39,34 @@
 ## check is taught to compare at the wire level. The migration is
 ## therefore mechanically incomplete by a handful of low-traffic
 ## aliases — same shape as the `String_clone` outlier from T#13.
-
 class Array
   lib "runtime/vec.c"
-    # ── Constructors (no `self`) ──────────────────────────────────
-    def self.new as "ruxen_vec_new"() -> Int
+    def self.new as "ruxen_vec_new" -> Int
     def self.with_capacity as "ruxen_vec_with_capacity"(cap: Int) -> Int
     def self.from_iter as "ruxen_vec_from_iter"(items: Int) -> Int
-
-    # ── Read-only queries ─────────────────────────────────────────
-    def len as "ruxen_vec_len"(self) -> Int
-    def capacity as "ruxen_vec_capacity"(self) -> Int
-    def is_empty as "ruxen_vec_is_empty"(self) -> Bool
-    def get as "ruxen_vec_get_opt"(self, i: Int) -> Int
-    def first as "ruxen_vec_first"(self) -> Int
-    def last as "ruxen_vec_last"(self) -> Int
-    def count as "ruxen_vec_count"(self) -> Int
-    def contains as "ruxen_vec_contains_int"(self, x: Int) -> Bool
-    def sum as "ruxen_vec_sum"(self) -> Int
-
-    # ── Pure transforms / collectors ──────────────────────────────
-    def clone as "ruxen_vec_clone"(self) -> Int
-    def join as "ruxen_vec_join"(self, sep: &String) -> String
-    def iter as "ruxen_iter_to_vec"(self) -> Int
-    def each as "ruxen_vec_each"(self) -> Int
-
-    # ── Mutating ops ──────────────────────────────────────────────
-    def push as "ruxen_vec_push"(self, x: Int)
-    def pop as "ruxen_vec_pop"(self) -> Int
-    def clear as "ruxen_vec_clear"(self)
-    def truncate as "ruxen_vec_truncate"(self, n: Int)
-    def swap as "ruxen_vec_swap"(self, i: Int, j: Int)
-    def insert as "ruxen_vec_insert"(self, i: Int, x: Int)
-    def remove as "ruxen_vec_remove"(self, i: Int) -> Int
-    def extend as "ruxen_vec_extend"(self, other: Int)
-    def dedup as "ruxen_vec_dedup"(self)
-    def reverse as "ruxen_vec_reverse"(self) -> Int
-    def sort as "ruxen_vec_sort"(self) -> Int
+    def len as "ruxen_vec_len" -> Int
+    def capacity as "ruxen_vec_capacity" -> Int
+    def is_empty as "ruxen_vec_is_empty" -> Bool
+    def get as "ruxen_vec_get_opt"(i: Int) -> Int
+    def first as "ruxen_vec_first" -> Int
+    def last as "ruxen_vec_last" -> Int
+    def count as "ruxen_vec_count" -> Int
+    def contains as "ruxen_vec_contains_int"(x: Int) -> Bool
+    def sum as "ruxen_vec_sum" -> Int
+    def clone as "ruxen_vec_clone" -> Int
+    def join as "ruxen_vec_join"(sep: &String) -> String
+    def iter as "ruxen_iter_to_vec" -> Int
+    def each as "ruxen_vec_each" -> Int
+    def push as "ruxen_vec_push"(x: Int)
+    def pop as "ruxen_vec_pop" -> Int
+    def clear as "ruxen_vec_clear"
+    def truncate as "ruxen_vec_truncate"(n: Int)
+    def swap as "ruxen_vec_swap"(i: Int, j: Int)
+    def insert as "ruxen_vec_insert"(i: Int, x: Int)
+    def remove as "ruxen_vec_remove"(i: Int) -> Int
+    def extend as "ruxen_vec_extend"(other: Int)
+    def dedup as "ruxen_vec_dedup"
+    def reverse as "ruxen_vec_reverse" -> Int
+    def sort as "ruxen_vec_sort" -> Int
   end
 end

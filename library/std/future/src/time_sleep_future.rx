@@ -20,28 +20,24 @@
 class TimeSleepFuture
   deadline_nanos: Int
   handle: Int
-  include Future
-  type Output = ()
 
   def init(d: &Duration)
-    self.deadline_nanos = ruxen_time_now_ns() + d.as_nanos()
+    self.deadline_nanos = ruxen_time_now_ns + d.as_nanos
     self.handle = 0
   end
 
   def var poll(cx: &var Context) -> Poll[()]
-    # First poll: compute remaining and register with the reactor.
     if self.handle == 0
-      let remaining = self.deadline_nanos - ruxen_time_now_ns()
+      let remaining = self.deadline_nanos - ruxen_time_now_ns
       if remaining <= 0
         return Poll.Ready(nil)
       end
-      self.handle = ruxen_reactor_register_timer(ruxen_reactor_current_handle(), remaining)
+      self.handle = ruxen_reactor_register_timer(ruxen_reactor_current_handle, remaining)
       let w = cx.waker
-      ruxen_reactor_set_waker(ruxen_reactor_current_handle(), self.handle, w)
+      ruxen_reactor_set_waker(ruxen_reactor_current_handle, self.handle, w)
       return Poll.Pending
     end
-    # Subsequent polls: ask the reactor whether the timer fired.
-    if ruxen_reactor_check_fired(ruxen_reactor_current_handle(), self.handle) != 0
+    if ruxen_reactor_check_fired(ruxen_reactor_current_handle, self.handle) != 0
       Poll.Ready(nil)
     else
       Poll.Pending
@@ -49,11 +45,10 @@ class TimeSleepFuture
   end
 
   def drop
-    # Idempotent cleanup. `deregister` is safe with handle == 0 (no
-    # slot match → no-op), but we gate it anyway to avoid the
-    # find-slot walk on the common drop-before-register path.
     if self.handle != 0
-      ruxen_reactor_deregister(ruxen_reactor_current_handle(), self.handle)
+      ruxen_reactor_deregister(ruxen_reactor_current_handle, self.handle)
     end
   end
+
+  include Future
 end

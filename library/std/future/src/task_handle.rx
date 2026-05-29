@@ -32,8 +32,8 @@ end
 ## scheduler.c's header. Tasks that complete cleanly via the pump
 ## free themselves; only abandoned tasks leak.
 lib "runtime/scheduler.c"
-  def ruxen_executor_pump_tasks() -> Int
-  def ruxen_executor_queue_nonempty() -> Int
-  def ruxen_executor_ready_nonempty() -> Int
-  def ruxen_executor_drain_remaining() -> ()
+  def ruxen_executor_pump_tasks -> Int
+  def ruxen_executor_queue_nonempty -> Int
+  def ruxen_executor_ready_nonempty -> Int
+  def ruxen_executor_drain_remaining -> ()
 end

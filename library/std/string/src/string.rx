@@ -1,70 +1,38 @@
 class String
   lib "runtime/string.c"
-    # ── Constructors (no `self`) ──────────────────────────────────
     def self.from as "ruxen_string_from"(s: &String) -> String
-    def self.new as "ruxen_string_new"() -> String
+    def self.new as "ruxen_string_new" -> String
     def self.with_capacity as "ruxen_string_with_capacity"(cap: Int) -> String
-    # `from_bytes` reads each i64 slot's low byte and concatenates
-    # them into a fresh String. Used by IO callers that pull raw
-    # bytes (`TcpStream.read` / `BufReader.read`) and need a
-    # String back — e.g. an HTTP request body that arrives as
-    # `Content-Length` bytes after the header block.
     def self.from_bytes as "ruxen_string_from_bytes"(bytes: &Array[Int]) -> String
-
-    # ── Read-only queries ─────────────────────────────────────────
-    def len as "ruxen_string_len"(self) -> Int
-    def is_empty as "ruxen_string_is_empty"(self) -> Bool
-    def contains as "ruxen_string_contains"(self, needle: &String) -> Bool
-    def starts_with as "ruxen_string_starts_with"(self, needle: &String) -> Bool
-    def ends_with as "ruxen_string_ends_with"(self, needle: &String) -> Bool
-    # `find` is typeck'd as `Option[USize]` but the runtime returns a
-    # void* tagged Option box. Declaring `Int` keeps the cranelift
-    # import signature wire-compatible (8 bytes either way); the MIR
-    # decoder reads the boxed tag.
-    def find as "ruxen_string_find"(self, needle: &String) -> Int
-
-    # ── Pure transforms (return new String) ───────────────────────
-    # `clone` is intentionally NOT migrated: it aliases the SAME C
-    # symbol as `String.from` (`ruxen_string_from`) but with an
-    # instance-method receiver shape. Two FFI decls aliasing the same
-    # C symbol with different wire shapes trip E0722 by design. Until
-    # the E0722 check is taught to compare at the wire level
-    # (post-instance-self-prepend), `String_clone => ruxen_string_from`
-    # stays in `codegen/runtime_table/mod.rs`. The runtime_table miss
-    # path is the fallback when ffi_alias_map doesn't carry the
-    # mangled callee, so leaving the entry there is a clean no-op.
-    def trim as "ruxen_string_trim"(self) -> String
-    def trim_start as "ruxen_string_trim_start"(self) -> String
-    def trim_end as "ruxen_string_trim_end"(self) -> String
-    def to_lower as "ruxen_string_to_lower"(self) -> String
-    def to_upper as "ruxen_string_to_upper"(self) -> String
-    def repeat as "ruxen_string_repeat"(self, n: Int) -> String
-    def replace as "ruxen_string_replace"(self, from: &String, to: &String) -> String
-    def as_str as "ruxen_string_as_str"(self) -> String
-    def to_string as "ruxen_string_to_string"(self) -> String
-
-    # ── Splitters / iterators ─────────────────────────────────────
-    def chars as "ruxen_string_chars"(self) -> Array[Char]
-    def lines as "ruxen_string_lines"(self) -> Array[String]
-    def split as "ruxen_string_split"(self, delimiter: &String) -> Array[String]
-    def splitn as "ruxen_string_splitn"(self, n: Int, delimiter: &String) -> Array[String]
-    def bytes as "ruxen_string_bytes"(self) -> Array[Int]
-    def into_bytes as "ruxen_string_into_bytes"(self) -> Array[Int]
-
-    # ── Parsers (return tagged Result boxes — Int wire-compatible) ─
-    def parse_int as "ruxen_string_parse_int"(self) -> Int
-    def parse_float as "ruxen_string_parse_float"(self) -> Int
-
-    # ── Mutating ops — MIR special-cases these for &mut String ────
-    def push_str as "ruxen_string_push_str"(self, other: &String) -> String
-    def push as "ruxen_string_push"(self, c: Char) -> String
-    def clear as "ruxen_string_clear"(self)
-    def truncate as "ruxen_string_truncate"(self, n: Int)
-    def insert as "ruxen_string_insert"(self, i: Int, codepoint: Int) -> String
-    def insert_str as "ruxen_string_insert_str"(self, i: Int, part: &String) -> String
-    # `remove` returns a 16-byte {removed: Char, new_buffer: ptr} struct;
-    # MIR reads field 0 for the returned Char and field 1 to update the
-    # local. Declared as `Int` so the cranelift sig is one i64 register.
-    def remove as "ruxen_string_remove"(self, i: Int) -> Int
+    def len as "ruxen_string_len" -> Int
+    def is_empty as "ruxen_string_is_empty" -> Bool
+    def contains as "ruxen_string_contains"(needle: &String) -> Bool
+    def starts_with as "ruxen_string_starts_with"(needle: &String) -> Bool
+    def ends_with as "ruxen_string_ends_with"(needle: &String) -> Bool
+    def find as "ruxen_string_find"(needle: &String) -> Int
+    def trim as "ruxen_string_trim" -> String
+    def trim_start as "ruxen_string_trim_start" -> String
+    def trim_end as "ruxen_string_trim_end" -> String
+    def to_lower as "ruxen_string_to_lower" -> String
+    def to_upper as "ruxen_string_to_upper" -> String
+    def repeat as "ruxen_string_repeat"(n: Int) -> String
+    def replace as "ruxen_string_replace"(from: &String, to: &String) -> String
+    def as_str as "ruxen_string_as_str" -> String
+    def to_string as "ruxen_string_to_string" -> String
+    def chars as "ruxen_string_chars" -> Array[Char]
+    def lines as "ruxen_string_lines" -> Array[String]
+    def split as "ruxen_string_split"(delimiter: &String) -> Array[String]
+    def splitn as "ruxen_string_splitn"(n: Int, delimiter: &String) -> Array[String]
+    def bytes as "ruxen_string_bytes" -> Array[Int]
+    def into_bytes as "ruxen_string_into_bytes" -> Array[Int]
+    def parse_int as "ruxen_string_parse_int" -> Int
+    def parse_float as "ruxen_string_parse_float" -> Int
+    def push_str as "ruxen_string_push_str"(other: &String) -> String
+    def push as "ruxen_string_push"(c: Char) -> String
+    def clear as "ruxen_string_clear"
+    def truncate as "ruxen_string_truncate"(n: Int)
+    def insert as "ruxen_string_insert"(i: Int, codepoint: Int) -> String
+    def insert_str as "ruxen_string_insert_str"(i: Int, part: &String) -> String
+    def remove as "ruxen_string_remove"(i: Int) -> Int
   end
 end

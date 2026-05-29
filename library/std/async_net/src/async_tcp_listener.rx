@@ -4,9 +4,7 @@ class AsyncTcpListener
   closed: Int
   accept_handle: Int
 
-  def self.bind(addr: &String) -> AsyncBindFuture
-    AsyncBindFuture.new(addr)
-  end
+  def self.bind(addr: &String) -> AsyncBindFuture { AsyncBindFuture.new(addr) }
 
   def self.bind_now(addr: &String) -> Result[AsyncTcpListener, IoError]
     ruxen_async_tcp_listener_bind(addr)
@@ -15,12 +13,12 @@ class AsyncTcpListener
   def var accept -> AsyncAcceptFuture
     AsyncAcceptFuture.new(
       ruxen_async_tcp_listener_fd(self),
-      ruxen_async_tcp_listener_accept_handle(self)
+      ruxen_async_tcp_listener_accept_handle(self),
     )
   end
 
   lib "runtime/async_net.c"
-    def drop as "ruxen_async_tcp_listener_drop"(self) -> ()
+    def drop as "ruxen_async_tcp_listener_drop" -> ()
   end
 end
 

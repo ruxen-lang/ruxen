@@ -5,12 +5,8 @@
 ## bookkeeping). Construction is zero-arg.
 class TaskYieldFuture
   polled: Int
-  include Future
-  type Output = ()
 
-  def init
-    self.polled = 0
-  end
+  def init { self.polled = 0 }
 
   def var poll(cx: &var Context) -> Poll[()]
     if self.polled == 0
@@ -22,4 +18,6 @@ class TaskYieldFuture
       Poll.Ready(nil)
     end
   end
+
+  include Future
 end

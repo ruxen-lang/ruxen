@@ -7,7 +7,6 @@
 ## intentionally left out — adding required methods today would
 ## break every user impl that doesn't provide them. They'll
 ## expand once default-method lowering for mixins ships.
-
 mixin Displayable
   def to_display
 end
@@ -22,15 +21,19 @@ end
 
 # Marker mixins (no required methods).
 mixin Iterable
+
 end
 
 mixin Copy
+
 end
 
 mixin Send
+
 end
 
 mixin Sync
+
 end
 
 mixin Clone
@@ -42,6 +45,7 @@ mixin PartialEq
 end
 
 mixin Eq
+
 end
 
 # `Hash` here is the historic trait NAME (one method `hash`). The
@@ -75,7 +79,6 @@ end
 # Co-locating the four keeps the cross-references between
 # Future's `def poll(cx: &var Context) -> Poll[Self.Output]`
 # signature and Context/Poll inside a single bootstrap file.
-
 # Into[T] — generic conversion mixin used by `?` to coerce source
 # errors into the outer function's declared error type. The MIR
 # `try_op` lowering looks up `into_impls[(Src, Dst)]` (populated by

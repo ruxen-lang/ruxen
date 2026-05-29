@@ -6,11 +6,10 @@
 ## immediately during the block traversal — no deferred tree is built,
 ## avoiding self-referential `Array[Tester]` type cycles. Pass/fail/pending
 ## counts are accumulated on the active Runner via the C-static slot.
-
 class Tester
   name: String
-  hooks_before: Array[any Fn() -> ()]
-  hooks_after: Array[any Fn() -> ()]
+  hooks_before: Array[any Fn[Fn() -> ()]]
+  hooks_after: Array[any Fn[Fn() -> ()]]
 
   def init(name: &String)
     self.name = name.clone
@@ -18,18 +17,12 @@ class Tester
     self.hooks_after = Array.new
   end
 
-  ## Class entry point: build a root group, run its block body to populate
-  ## and execute its cases, then discard the Tester (execution is immediate).
-  def self.describe(name: &String, body: any Fn(&var Tester) -> ()) -> ()
+  def self.describe(name: &String, body: any Fn[Fn(&var Tester) -> ()]) -> ()
     var root = Tester.new(name)
     body.(&var root)
   end
 
-  ## Nested group. Inherits parent's before-hooks so they fire for inner
-  ## cases too (outer → inner order). After-hooks from the parent are
-  ## NOT inherited in v1 — the Task 4.2 assertions only require before
-  ## ordering. Phase 5 can add full after-chain inheritance if needed.
-  def context(name: &String, body: any Fn(&var Tester) -> ()) -> ()
+  def context(name: &String, body: any Fn[Fn(&var Tester) -> ()]) -> ()
     var child = Tester.new(name)
     for h in &self.hooks_before
       child.hooks_before.push(h)
@@ -37,29 +30,11 @@ class Tester
     body.(&var child)
   end
 
-  ## Register a before-hook. Fires before every `it` case in this group
-  ## (and in nested `context` groups that inherit this Tester's before chain).
-  def before(hook: any Fn() -> ()) -> ()
-    self.hooks_before.push(hook)
-  end
+  def before(hook: any Fn[Fn() -> ()]) -> () { self.hooks_before.push(hook) }
 
-  ## Register an after-hook. Fires after every `it` case in this group.
-  def after(hook: any Fn() -> ()) -> ()
-    self.hooks_after.push(hook)
-  end
+  def after(hook: any Fn[Fn() -> ()]) -> () { self.hooks_after.push(hook) }
 
-  ## Define and immediately execute one test case under fork-per-test
-  ## isolation. A panic in the body kills only the child; the parent
-  ## decodes wait status and updates the active Runner's counts.
-  ##
-  ## Child path (pid == 0):
-  ##   - reset per-case failure flag
-  ##   - run before-hooks → body → after-hooks
-  ##   - exit 0 if flag is unset, 1 otherwise
-  ## Parent path:
-  ##   - waitpid; packed status bit 0 == 1 means the child exited cleanly
-  ##     with code 0 → pass. Any other state → fail.
-  def it(name: &String, body: any Fn() -> ()) -> ()
+  def it(name: &String, body: any Fn[Fn() -> ()]) -> ()
     let runner_addr = Runner.get_current
     if runner_addr == 0
       return
@@ -75,10 +50,10 @@ class Tester
         hook.()
       end
       let code: Int = if Runner.case_get_failed == 0
-        0
-      else
-        1
-      end
+          0
+        else
+          1
+        end
       Runner.child_exit(code)
     end
     let packed = Runner.wait(pid)
@@ -91,14 +66,7 @@ class Tester
     end
   end
 
-  ## Define and immediately execute a test case that is EXPECTED to
-  ## panic. The expected substring is recorded but not verified in v1
-  ## (see docs/tutorial/19-writing-and-running-tests.md "What is not in v1").
-  ##
-  ## Pass iff the child either died from a signal OR exited with a
-  ## non-zero status — both indicate the body did not return normally.
-  def it_panics(name: &String, expected_substr: &String,
-                body: any Fn() -> ()) -> ()
+  def it_panics(name: &String, expected_substr: &String, body: any Fn[Fn() -> ()]) -> ()
     let runner_addr = Runner.get_current
     if runner_addr == 0
       return
@@ -113,18 +81,12 @@ class Tester
       for hook in &self.hooks_after
         hook.()
       end
-      # Body returned WITHOUT panicking. From it_panics' perspective
-      # that is a failure — but we communicate it to the parent via a
-      # clean exit code 0, which the parent then INVERTS for this case.
       Runner.child_exit(0)
     end
     let packed = Runner.wait(pid)
     let pass_bit = packed & 1
-    let signaled = (packed >> 9) & 255
+    let signaled = packed >> 9 & 255
     let r = Runner.from_handle(runner_addr)
-    # Pass condition: child died (signal != 0) OR exited nonzero
-    # (pass_bit == 0). Failure condition: child exited cleanly
-    # (pass_bit == 1 AND no signal) — body did NOT panic.
     if pass_bit == 1 && signaled == 0
       r.failed = r.failed + 1
     else
@@ -132,8 +94,7 @@ class Tester
     end
   end
 
-  ## Pending test case — body is never run; just increments pending count.
-  def xit(name: &String, body: any Fn() -> ()) -> ()
+  def xit(name: &String, body: any Fn[Fn() -> ()]) -> ()
     let runner_addr = Runner.get_current
     if runner_addr == 0
       return
@@ -142,8 +103,5 @@ class Tester
     r.pending = r.pending + 1
   end
 
-  ## Create a Matcher wrapping the actual value for assertions.
-  def expect[T](actual: T) -> Matcher[T]
-    Matcher.new(actual)
-  end
+  def expect[T](actual: T) -> Matcher[T] { Matcher.new(actual) }
 end

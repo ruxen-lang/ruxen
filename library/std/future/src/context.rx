@@ -29,10 +29,10 @@
 ## now drives the reactor's wait point without any compiler change.
 class Context
   lib "runtime/executor.c"
-    def waker as "ruxen_context_waker"(self) -> &Waker
-    def clone as "ruxen_context_clone"(self) -> Context
-    def self.test_dummy as "ruxen_context_test_dummy"() -> Context
-    def self.executor as "ruxen_executor_make_context"() -> Context
-    def drop as "ruxen_executor_context_drop"(self) -> ()
+    def waker as "ruxen_context_waker" -> &Waker
+    def clone as "ruxen_context_clone" -> Context
+    def self.test_dummy as "ruxen_context_test_dummy" -> Context
+    def self.executor as "ruxen_executor_make_context" -> Context
+    def drop as "ruxen_executor_context_drop" -> ()
   end
 end

@@ -22,26 +22,20 @@
 ## `Ty::Map(_,_)` receiver — the lookup site peels the `[K,V]`
 ## generic and routes through the alias-map key `Map_<m>` registered
 ## here.
-
 class Map
   lib "../hash/runtime/hash.c"
-    # ── Constructors (no `self`) ──────────────────────────────────
-    def self.new as "ruxen_hash_new"() -> Int
+    def self.new as "ruxen_hash_new" -> Int
     def self.with_capacity as "ruxen_hash_with_capacity"(cap: Int) -> Int
     def self.from_iter as "ruxen_hash_from_iter"(items: Int) -> Int
-
-    # ── Read-only queries ─────────────────────────────────────────
-    def len as "ruxen_hash_len"(self) -> Int
-    def is_empty as "ruxen_hash_is_empty"(self) -> Bool
-    def get as "ruxen_hash_get"(self, key: Int) -> Int
-    def contains_key as "ruxen_hash_contains_key"(self, key: Int) -> Bool
-    def keys as "ruxen_hash_keys"(self) -> Int
-    def values as "ruxen_hash_values"(self) -> Int
-    def iter as "ruxen_hash_iter"(self) -> Int
-
-    # ── Mutating ops ──────────────────────────────────────────────
-    def insert as "ruxen_hash_insert"(self, key: Int, value: Int)
-    def remove as "ruxen_hash_remove"(self, key: Int) -> Int
-    def clear as "ruxen_hash_clear"(self)
+    def len as "ruxen_hash_len" -> Int
+    def is_empty as "ruxen_hash_is_empty" -> Bool
+    def get as "ruxen_hash_get"(key: Int) -> Int
+    def contains_key as "ruxen_hash_contains_key"(key: Int) -> Bool
+    def keys as "ruxen_hash_keys" -> Int
+    def values as "ruxen_hash_values" -> Int
+    def iter as "ruxen_hash_iter" -> Int
+    def insert as "ruxen_hash_insert"(key: Int, value: Int)
+    def remove as "ruxen_hash_remove"(key: Int) -> Int
+    def clear as "ruxen_hash_clear"
   end
 end

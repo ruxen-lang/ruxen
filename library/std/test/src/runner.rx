@@ -5,9 +5,7 @@
 ## process-static C slot before any `Tester.describe` calls so that
 ## `Tester#it` can find and mutate the active runner's counts directly.
 ## Execution is eager (immediate) — no deferred group tree is built.
-
 class Runner
-  layout c
   passed: Int
   failed: Int
   pending: Int
@@ -20,35 +18,23 @@ class Runner
     self.name = test_path.clone
   end
 
-  ## Returns the address of this Runner as an Int so it can be stored
-  ## in the C-static current-runner slot. Implemented via a C identity
-  ## function (ruxen_test_runner_addr) that receives self as a heap
-  ## pointer and returns it as int64_t — no __addr_of_self intrinsic needed.
-  def handle_addr -> Int
-    Runner.self_addr(self)
-  end
+  def handle_addr -> Int { Runner.self_addr(self) }
 
-  ## Print the final summary line.
   def execute -> ()
-    puts "#{self.passed} passed, #{self.failed} failed, #{self.pending} pending"
+    puts("#{self.passed} passed, #{self.failed} failed, #{self.pending} pending")
   end
 
   lib "runtime/test.c"
     def self.set_current as "ruxen_test_current_set"(handle: Int) -> Int
-    def self.get_current as "ruxen_test_current_get"() -> Int
+    def self.get_current as "ruxen_test_current_get" -> Int
     def self.self_addr as "ruxen_test_runner_addr"(r: Runner) -> Int
     def self.from_handle as "ruxen_test_runner_from_addr"(addr: Int) -> &var Runner
-    def self.case_reset as "ruxen_test_case_reset"() -> Int
-    def self.case_mark_failed as "ruxen_test_case_mark_failed"() -> Int
-    def self.case_get_failed as "ruxen_test_case_get_failed"() -> Int
-    # Phase 5: fork-per-test isolation.
-    # `fork` returns 0 in the child, >0 (child pid) in the parent.
-    # `wait` returns a packed status (see runtime/test.c comment).
-    # `child_exit` is `_exit(code)` — child side only.
-    # `panic` is a fixed-message ruxen_panic for fixtures.
-    def self.fork as "ruxen_test_fork"() -> Int
+    def self.case_reset as "ruxen_test_case_reset" -> Int
+    def self.case_mark_failed as "ruxen_test_case_mark_failed" -> Int
+    def self.case_get_failed as "ruxen_test_case_get_failed" -> Int
+    def self.fork as "ruxen_test_fork" -> Int
     def self.wait as "ruxen_test_wait"(pid: Int) -> Int
     def self.child_exit as "ruxen_test_child_exit"(code: Int) -> ()
-    def self.panic as "ruxen_test_panic"() -> ()
+    def self.panic as "ruxen_test_panic" -> ()
   end
 end

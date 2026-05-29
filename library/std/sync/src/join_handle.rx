@@ -4,10 +4,11 @@
 ## typeck-reported surface type changes.
 class JoinHandle[T: Send]
   include Send
+
   include Sync
 
   lib "runtime/thread.c"
-    def join_raw as "ruxen_thread_join"(self) -> T
-    def drop as "ruxen_thread_join_handle_drop"(self) -> ()
+    def join_raw as "ruxen_thread_join" -> T
+    def drop as "ruxen_thread_join_handle_drop" -> ()
   end
 end

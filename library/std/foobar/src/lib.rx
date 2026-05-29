@@ -17,7 +17,6 @@
 ##    helper that calls them — proves the free-fn FFI path is also
 ##    zero-Rust.
 ## 5. `[system_libs]` table in Ruxen.toml — B3 (linker aggregation).
-
 ## Module-scope free-fn lib decls. Mirrors the shape used by sync.rx
 ## for `sleep` / `signal_install_sigint`, by executor.rx for
 ## `block_on`, and by time.rx for the reactor primitives.
@@ -27,24 +26,20 @@ end
 
 ## Pure-Ruxen free fn that calls the module-scope FFI binding. Proves
 ## the call site dispatches correctly without compiler edits.
-def foobar_double_plus_one(x: Int) -> Int
-  foobar_runtime_double(x) + 1
-end
+def foobar_double_plus_one(x: Int) -> Int { foobar_runtime_double(x) + 1 }
 
 class FooBar[T]
   payload: T
+
+  def init(value: T) { self.payload = value }
+
+  def get -> T { self.payload }
+
   include Send
+
   include Sync
 
-  def init(value: T)
-    self.payload = value
-  end
-
-  def get -> T
-    self.payload
-  end
-
   lib "runtime/foobar.c"
-    def drop as "ruxen_foobar_drop"(self) -> ()
+    def drop as "ruxen_foobar_drop" -> ()
   end
 end

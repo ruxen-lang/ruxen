@@ -24,7 +24,6 @@
 ##   - The package boundary also gives 4C's AsyncTcpStream / Listener a
 ##     parallel home (`library/std/async_net`) without forcing async
 ##     I/O into the synchronous fs/net packages.
-
 ## --- Reactor fd-readiness primitives (sub-phase 4B reactor extension)
 ##
 ## Live in the same C TU as the timer primitives because they share the
@@ -53,7 +52,6 @@ lib "runtime/async_fs.c"
   def ruxen_async_read_step(state: Int) -> Int
   def ruxen_async_read_state_take_result(state: Int) -> Result[String, IoError]
   def ruxen_async_read_state_free(state: Int) -> ()
-
   def ruxen_async_write_state_new(fd: Int, content: &String) -> Int
   def ruxen_async_write_state_get_fd(state: Int) -> Int
   def ruxen_async_write_step(state: Int) -> Int

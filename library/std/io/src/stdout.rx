@@ -7,9 +7,9 @@
 ## Migrated in #06.95 Phase E Slice B.2 from runtime_table.
 class Stdout
   lib "runtime/stdio.c"
-    def write_str as "ruxen_stdout_write_str"(self, s: &String) -> Result[(), IoError]
-    def flush as "ruxen_stdout_flush"(self) -> Result[(), IoError]
-    def print as "ruxen_stdout_print"(self, s: &String) -> ()
-    def println as "ruxen_stdout_println"(self, s: &String) -> ()
+    def write_str as "ruxen_stdout_write_str"(s: &String) -> Result[(), IoError]
+    def flush as "ruxen_stdout_flush" -> Result[(), IoError]
+    def print as "ruxen_stdout_print"(s: &String) -> ()
+    def println as "ruxen_stdout_println"(s: &String) -> ()
   end
 end

@@ -22,42 +22,26 @@ class AsyncFile
   fd: Int
   closed: Int
 
-  ## Construct an AsyncOpenFuture for read-only access. Returns the
-  ## future eagerly — its first poll completes the open(2) synchronously
-  ## (regular files are non-blocking even without O_NONBLOCK; the
-  ## O_NONBLOCK flag is still set so subsequent read futures can park
-  ## on EAGAIN if the fd is a pipe/fifo).
-  def self.open(path: &String) -> AsyncOpenFuture
-    AsyncOpenFuture.new(path, 0)
-  end
+  def self.open(path: &String) -> AsyncOpenFuture { AsyncOpenFuture.new(path, 0) }
 
-  ## Construct an AsyncOpenFuture for write+create+truncate access.
-  ## Equivalent to sync `File.create(path)` plus O_NONBLOCK.
-  def self.create(path: &String) -> AsyncOpenFuture
-    AsyncOpenFuture.new(path, 1)
-  end
+  def self.create(path: &String) -> AsyncOpenFuture { AsyncOpenFuture.new(path, 1) }
 
-  ## Construct an AsyncReadToStringFuture for this file. The future
-  ## borrows the fd; the AsyncFile remains owner of the fd lifecycle
-  ## (its `def drop` closes the fd). The future deregisters its own
-  ## reactor registration on drop.
   def var read_to_string -> AsyncReadToStringFuture
     AsyncReadToStringFuture.new(ruxen_async_file_fd(self))
   end
 
-  ## Construct an AsyncWriteAllFuture for this file with `content`.
   def var write_all(content: &String) -> AsyncWriteAllFuture
     AsyncWriteAllFuture.new(ruxen_async_file_fd(self), content)
   end
 
-  ## C-side drop hook (closes the fd). Registered in user_drop_classes
-  ## because this method exists; the MIR drop elaborator emits a call
-  ## to `AsyncFile_drop` at scope exit followed by ruxen_dealloc.
   lib "runtime/async_fs.c"
-    def drop as "ruxen_async_file_drop"(self) -> ()
+    def drop as "ruxen_async_file_drop" -> ()
   end
 end
 
+## C-side drop hook (closes the fd). Registered in user_drop_classes
+## because this method exists; the MIR drop elaborator emits a call
+## to `AsyncFile_drop` at scope exit followed by ruxen_dealloc.
 ## AsyncFile-typed C decls. Live in a module-scope lib block AFTER
 ## the AsyncFile class so the return / param types resolve. Declared
 ## as free fns (not class methods) because they're called directly by

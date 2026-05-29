@@ -21,32 +21,21 @@
 ## `ruxen_metadata_{len,modified,is_file,is_dir,is_symlink}` were
 ## deleted in the same pass.
 class Metadata
-  layout c
   size: Int
   modified_secs: Int
   kind: Int
 
+  def len -> Int { self.size }
+
+  def modified -> Int { self.modified_secs }
+
+  def is_file -> Bool { self.kind == 0 }
+
+  def is_dir -> Bool { self.kind == 1 }
+
+  def is_symlink -> Bool { self.kind == 2 }
+
   lib "../fs/runtime/fs.c"
-    def free as "ruxen_metadata_free"(self) -> ()
-  end
-
-  def len -> Int
-    self.size
-  end
-
-  def modified -> Int
-    self.modified_secs
-  end
-
-  def is_file -> Bool
-    self.kind == 0
-  end
-
-  def is_dir -> Bool
-    self.kind == 1
-  end
-
-  def is_symlink -> Bool
-    self.kind == 2
+    def free as "ruxen_metadata_free" -> ()
   end
 end

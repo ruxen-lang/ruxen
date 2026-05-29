@@ -10,7 +10,6 @@
 ##
 ## `vars` snapshots the process environment at call time; mutations
 ## after the call do not propagate into the returned map.
-
 ## std::env namespace class — 4 static methods over the process
 ## environment. Phase C of #06.95. The bare lib block below is the
 ## transition shim that keeps `args()` / `get(name)` / `vars()` /
@@ -18,17 +17,17 @@
 ## `Env.args` / `Env.get` / …
 class Env
   lib "runtime/env.c"
-    def self.args as "ruxen_env_args"() -> Array[String]
+    def self.args as "ruxen_env_args" -> Array[String]
     def self.get as "ruxen_env_var"(name: &String) -> Result[String, IoError]
-    def self.vars as "ruxen_env_vars"() -> Map[String, String]
-    def self.current_dir as "ruxen_env_current_dir"() -> Result[String, IoError]
+    def self.vars as "ruxen_env_vars" -> Map[String, String]
+    def self.current_dir as "ruxen_env_current_dir" -> Result[String, IoError]
   end
 end
 
 # Phase C transition shim — see comment on `class Env` above.
 lib "runtime/env.c"
-  def args as "ruxen_env_args"() -> Array[String]
+  def args as "ruxen_env_args" -> Array[String]
   def get as "ruxen_env_var"(name: &String) -> Result[String, IoError]
-  def vars as "ruxen_env_vars"() -> Map[String, String]
-  def current_dir as "ruxen_env_current_dir"() -> Result[String, IoError]
+  def vars as "ruxen_env_vars" -> Map[String, String]
+  def current_dir as "ruxen_env_current_dir" -> Result[String, IoError]
 end

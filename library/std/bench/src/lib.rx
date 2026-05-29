@@ -45,7 +45,6 @@
 ## - Generic `black_box[T]` — needs typeck generic-monomorphisation
 ##   over the C-symbol path; the Int specialisation covers every
 ##   heap-typed payload through opaque pointer indirection.
-
 use std.time.Instant
 
 ## `layout c` pins the two int64 fields to the wire layout the
@@ -53,7 +52,6 @@ use std.time.Instant
 ## — `init` sets the initial iteration target, `iter` mutates
 ## `iterations` and `total_ns` as it auto-scales.
 class Bencher
-  layout c
   iterations: Int
   total_ns: Int
 
@@ -62,22 +60,12 @@ class Bencher
     self.total_ns = 0
   end
 
-  ## Run `f` repeatedly, auto-scaling the iteration count until
-  ## total wall time ≥ 100 ms (criterion-style minimum-sample
-  ## window). Reports `bench <name>: <iters> iters, <total> ns
-  ## total, <per> ns/iter` to stdout, mirroring the format the
-  ## `ruxenc bench` subcommand parses for JSON / CI output.
-  ##
-  ## The closure must return `Int` — the harness pushes each
-  ## return through `Bencher.black_box` so a zero-side-effect
-  ## body still measures the actual work instead of being
-  ## constant-folded to nothing.
-  def iter(name: &String, f: any Fn() -> Int) -> ()
+  def iter(name: &String, f: any Fn[Fn() -> Int]) -> ()
     var iters: Int = self.iterations
     var total: Int = 0
     var stop: Int = 0
     while stop == 0
-      let start = Instant.now()
+      let start = Instant.now
       for _i in 0..iters
         let v = f.()
         let _ = Bencher.black_box(v)
@@ -94,15 +82,9 @@ class Bencher
     self.iterations = iters
     self.total_ns = total
     let per_iter = total / iters
-    puts "bench #{name}: #{iters} iters, #{total} ns total, #{per_iter} ns/iter"
+    puts("bench #{name}: #{iters} iters, #{total} ns total, #{per_iter} ns/iter")
   end
 
-  ## Opaque-identity barrier. Backed by a C `__attribute__((noinline))`
-  ## fn with an `asm volatile` constraint on the value — see
-  ## `library/std/bench/runtime/bench.c`. A pure-Ruxen version
-  ## (`def self.black_box(v: Int) -> Int; v; end`) would be
-  ## inlined and the value's producer eliminated; routing
-  ## through the C call site prevents both.
   lib "runtime/bench.c"
     def self.black_box as "ruxen_bench_black_box"(v: Int) -> Int
   end

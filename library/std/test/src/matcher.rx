@@ -6,24 +6,17 @@
 ##
 ## Equality matchers require `T: PartialEq`. Non-PartialEq types fail
 ## typeck at the call site (correct — surfaces the constraint early).
-
-class Matcher[T] where T: PartialEq
+class Matcher[T]
   actual: T
 
-  def init(actual: T)
-    self.actual = actual
-  end
+  def init(actual: T) { self.actual = actual }
 
-  ## Assert actual == expected. Marks the active case as failed via the
-  ## per-case failure flag if the comparison fails. Returns Unit so the
-  ## call site is a statement (no `if m.to_eq(x)` pattern needed).
   def to_eq(expected: T) -> ()
     if self.actual != expected
       Runner.case_mark_failed
     end
   end
 
-  ## Assert actual != expected.
   def not_to_eq(expected: T) -> ()
     if self.actual == expected
       Runner.case_mark_failed
@@ -38,17 +31,11 @@ end
 class BoolMatcher
   actual: Bool
 
-  def init(actual: Bool)
-    self.actual = actual
-  end
+  def init(actual: Bool) { self.actual = actual }
 
-  def to_be_truthy -> Bool
-    self.actual
-  end
+  def to_be_truthy -> Bool { self.actual }
 
-  def to_be_falsy -> Bool
-    !self.actual
-  end
+  def to_be_falsy -> Bool { !self.actual }
 end
 
 ## Nilness check for any Option-typed value. We accept the value as
@@ -58,42 +45,29 @@ end
 class OptionMatcher
   is_some: Bool
 
-  def init(present: Bool)
-    self.is_some = present
-  end
+  def init(present: Bool) { self.is_some = present }
 
-  def to_be_nil -> Bool
-    self.is_some == false
-  end
+  def to_be_nil -> Bool { self.is_some == false }
 
-  def not_to_be_nil -> Bool
-    self.is_some
-  end
+  def not_to_be_nil -> Bool { self.is_some }
 end
 
 ## Element-membership matcher for Array[T]. Loops with `each` rather
 ## than `contains?` because the v1 Array surface may not expose contains?
 ## uniformly across T (PartialEq required).
-class ArrayMatcher[T] where T: PartialEq
+class ArrayMatcher[T]
   actual_ref: &Array[T]
 
-  def init(actual: &Array[T])
-    self.actual_ref = actual
-  end
+  def init(actual: &Array[T]) { self.actual_ref = actual }
 
   def to_include(needle: T) -> Bool
-    # Early-return on first hit. Indexed loop instead of
-    # `.each do |item|` because the closure form would capture
-    # the result var mutably and Ruxen's borrow checker holds
-    # that borrow live across the inner assignment.
-    let n: Int = self.actual_ref.len() as Int
+    let n: Int = self.actual_ref.len as Int
     var i: Int = 0
     while i < n
       match self.actual_ref.get(i)
-        Some(item) ->
-          if item == needle
-            return true
-          end
+        Some(item) -> if item == needle
+          return true
+        end
         None -> 0
       end
       i = i + 1
@@ -106,11 +80,7 @@ end
 class StringMatcher
   actual_ref: &String
 
-  def init(actual: &String)
-    self.actual_ref = actual
-  end
+  def init(actual: &String) { self.actual_ref = actual }
 
-  def to_include(needle: &String) -> Bool
-    self.actual_ref.contains(needle)
-  end
+  def to_include(needle: &String) -> Bool { self.actual_ref.contains(needle) }
 end

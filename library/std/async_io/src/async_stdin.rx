@@ -4,15 +4,5 @@
 ## exists purely so `AsyncStdin.read_line()` reads as a method call
 ## consistent with `AsyncFile.open(path)` and `AsyncTcpListener.bind(...)`.
 class AsyncStdin
-  ## Construct an AsyncReadLineFuture. The future eagerly allocates
-  ## its state (and sets O_NONBLOCK on fd 0) in its `init`; the
-  ## fcntl flag is restored on the future's `def drop`. This means
-  ## holding an unawaited AsyncReadLineFuture for a long stretch
-  ## leaves stdin in non-blocking mode for the rest of the process —
-  ## acceptable in v1 because (a) the pattern is awaiting promptly,
-  ## (b) the fix on misuse is to drop the future, not to add another
-  ## API surface.
-  def self.read_line -> AsyncReadLineFuture
-    AsyncReadLineFuture.new
-  end
+  def self.read_line -> AsyncReadLineFuture { AsyncReadLineFuture.new }
 end

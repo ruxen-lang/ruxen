@@ -16,7 +16,6 @@
 ## .try_wait) is explicitly DEFERRED to v2 per
 ## docs/prompts/v1/06_phase2_stdlib_io_fmt.md — v1 ships the blocking
 ## terminals (.status, .output) only.
-
 ## std::process namespace class — folds the `exit` free fn into
 ## `Process.exit`. Ruby keeps a global `exit` too (Kernel#exit), so
 ## the bare `exit` lib block below is permanent, not transitional.
@@ -46,19 +45,14 @@ end
 ## `exit_code` lets the method names stay `code` / `success` without
 ## shadowing.
 class ExitStatus
-  layout c
   exit_code: Int
 
+  def code -> Int { self.exit_code }
+
+  def success -> Bool { self.exit_code == 0 }
+
   lib "runtime/process.c"
-    def free as "ruxen_exit_status_free"(self) -> ()
-  end
-
-  def code -> Int
-    self.exit_code
-  end
-
-  def success -> Bool
-    self.exit_code == 0
+    def free as "ruxen_exit_status_free" -> ()
   end
 end
 
@@ -67,10 +61,10 @@ end
 ## user_drop_classes auto-detect.
 class Output
   lib "runtime/process.c"
-    def stdout as "ruxen_output_stdout"(self) -> String
-    def stderr as "ruxen_output_stderr"(self) -> String
-    def status as "ruxen_output_status"(self) -> ExitStatus
-    def drop as "ruxen_output_drop"(self) -> ()
+    def stdout as "ruxen_output_stdout" -> String
+    def stderr as "ruxen_output_stderr" -> String
+    def status as "ruxen_output_status" -> ExitStatus
+    def drop as "ruxen_output_drop" -> ()
   end
 end
 
@@ -81,12 +75,12 @@ end
 class Command
   lib "runtime/process.c"
     def self.new as "ruxen_command_new"(program: &String) -> Command
-    def arg as "ruxen_command_arg"(self, arg: &String) -> Command
-    def args as "ruxen_command_args"(self, args: &Array[String]) -> Command
-    def env as "ruxen_command_env"(self, key: &String, value: &String) -> Command
-    def current_dir as "ruxen_command_current_dir"(self, path: &String) -> Command
-    def status as "ruxen_command_status"(self) -> Result[ExitStatus, IoError]
-    def output as "ruxen_command_output"(self) -> Result[Output, IoError]
-    def drop as "ruxen_command_drop"(self) -> ()
+    def arg as "ruxen_command_arg"(arg: &String) -> Command
+    def args as "ruxen_command_args"(args: &Array[String]) -> Command
+    def env as "ruxen_command_env"(key: &String, value: &String) -> Command
+    def current_dir as "ruxen_command_current_dir"(path: &String) -> Command
+    def status as "ruxen_command_status" -> Result[ExitStatus, IoError]
+    def output as "ruxen_command_output" -> Result[Output, IoError]
+    def drop as "ruxen_command_drop" -> ()
   end
 end

@@ -7,6 +7,6 @@
 ## shared `ruxen_parse_error_message` runtime symbol.
 class ParseIntError
   lib "runtime/string.c"
-    def message as "ruxen_parse_error_message"(self) -> String
+    def message as "ruxen_parse_error_message" -> String
   end
 end

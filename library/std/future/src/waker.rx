@@ -9,8 +9,8 @@
 ## I/O introduces genuine blocking park points.
 class Waker
   lib "runtime/executor.c"
-    def wake as "ruxen_waker_wake"(self) -> ()
-    def wake_by_ref as "ruxen_waker_wake_by_ref"(self) -> ()
+    def wake as "ruxen_waker_wake" -> ()
+    def wake_by_ref as "ruxen_waker_wake_by_ref" -> ()
   end
 end
 
@@ -27,7 +27,7 @@ end
 ## `Thread.yield_now` → `ruxen_reactor_park_current` indirection.
 ## The user-side Async.sleep / TimeSleepFuture follow here.
 lib "runtime/reactor.c"
-  def ruxen_reactor_current_handle() -> Int
+  def ruxen_reactor_current_handle -> Int
   def ruxen_reactor_register_timer(reactor: Int, nanos: Int) -> Int
   def ruxen_reactor_set_waker(reactor: Int, handle: Int, waker: &Waker) -> ()
   def ruxen_reactor_check_fired(reactor: Int, handle: Int) -> Int
@@ -38,5 +38,5 @@ end
 ## absolute deadline. Cross-package lib decl pointing at the C symbol
 ## owned by std.time's runtime/time.c.
 lib "../../time/runtime/time.c"
-  def ruxen_time_now_ns() -> Int
+  def ruxen_time_now_ns -> Int
 end

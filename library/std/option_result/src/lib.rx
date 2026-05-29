@@ -30,26 +30,25 @@
 ## int64_t-bit-cast results; typeck still serves the user-facing
 ## generic-aware types from its hardcoded table in
 ## `typeck/method_resolvers`.
-
 class Option
   lib "../core/runtime/alloc.c"
-    def unwrap_or as "ruxen_option_unwrap_or"(self, default: Int) -> Int
-    def unwrap as "ruxen_option_unwrap"(self) -> Int
-    def expect as "ruxen_option_expect"(self, msg: &String) -> Int
-    def is_some as "ruxen_option_is_some"(self) -> Bool
-    def is_none as "ruxen_option_is_none"(self) -> Bool
-    def ok_or as "ruxen_option_ok_or"(self, err: Int) -> Int
+    def unwrap_or as "ruxen_option_unwrap_or"(default: Int) -> Int
+    def unwrap as "ruxen_option_unwrap" -> Int
+    def expect as "ruxen_option_expect"(msg: &String) -> Int
+    def is_some as "ruxen_option_is_some" -> Bool
+    def is_none as "ruxen_option_is_none" -> Bool
+    def ok_or as "ruxen_option_ok_or"(err: Int) -> Int
   end
 end
 
 class Result
   lib "../core/runtime/alloc.c"
-    def unwrap_or as "ruxen_result_unwrap_or"(self, default: Int) -> Int
-    def unwrap as "ruxen_result_unwrap"(self) -> Int
-    def expect as "ruxen_result_expect"(self, msg: &String) -> Int
-    def is_ok as "ruxen_result_is_ok"(self) -> Bool
-    def is_err as "ruxen_result_is_err"(self) -> Bool
-    def ok as "ruxen_result_ok"(self) -> Int
-    def err as "ruxen_result_err"(self) -> Int
+    def unwrap_or as "ruxen_result_unwrap_or"(default: Int) -> Int
+    def unwrap as "ruxen_result_unwrap" -> Int
+    def expect as "ruxen_result_expect"(msg: &String) -> Int
+    def is_ok as "ruxen_result_is_ok" -> Bool
+    def is_err as "ruxen_result_is_err" -> Bool
+    def ok as "ruxen_result_ok" -> Int
+    def err as "ruxen_result_err" -> Int
   end
 end

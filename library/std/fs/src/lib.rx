@@ -14,13 +14,11 @@
 ##
 ## See docs/specs/stdlib/fs.spec.md for the behavioural contract. The
 ## C runtime symbols live in library/std/fs/runtime/fs.c.
-
 ## Metadata moved to `library/std/io/src/lib.rx` in Phase E-rest 1b
 ## of #06.95 so `File.metadata -> Result[Metadata, IoError]` lib
 ## decl in io.rx can resolve Metadata as a return type at parse
 ## time. fs.metadata's `Result[Metadata, IoError]` resolves here
 ## because fs.rx loads after io.rx — Metadata is in scope by then.
-
 ## std::fs namespace class — 17 static methods wrapping the C-runtime
 ## filesystem surface. Phase C of #06.95. The bare lib block below is
 ## the transition shim that keeps `read_to_string(...)` etc. resolving
@@ -41,7 +39,10 @@ class FS
     def self.copy as "ruxen_fs_copy"(src: &String, dst: &String) -> Result[Int, IoError]
     def self.remove_dir_all as "ruxen_fs_remove_dir_all"(path: &String) -> Result[(), IoError]
     def self.canonicalize as "ruxen_fs_canonicalize"(path: &String) -> Result[String, IoError]
-    def self.write_atomic as "ruxen_fs_write_atomic"(path: &String, contents: &String) -> Result[(), IoError]
+    def self.write_atomic as "ruxen_fs_write_atomic"(path: &String, contents: &String) -> Result[
+      (),
+      IoError
+    ]
     def self.read_link as "ruxen_fs_read_link"(path: &String) -> Result[String, IoError]
     def self.symlink as "ruxen_fs_symlink"(target: &String, link: &String) -> Result[(), IoError]
   end
@@ -63,7 +64,10 @@ lib "runtime/fs.c"
   def copy as "ruxen_fs_copy"(src: &String, dst: &String) -> Result[Int, IoError]
   def remove_dir_all as "ruxen_fs_remove_dir_all"(path: &String) -> Result[(), IoError]
   def canonicalize as "ruxen_fs_canonicalize"(path: &String) -> Result[String, IoError]
-  def write_atomic as "ruxen_fs_write_atomic"(path: &String, contents: &String) -> Result[(), IoError]
+  def write_atomic as "ruxen_fs_write_atomic"(path: &String, contents: &String) -> Result[
+    (),
+    IoError
+  ]
   def read_link as "ruxen_fs_read_link"(path: &String) -> Result[String, IoError]
   def symlink as "ruxen_fs_symlink"(target: &String, link: &String) -> Result[(), IoError]
 end

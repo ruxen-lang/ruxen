@@ -5,8 +5,8 @@
 ## Migrated in #06.95 Phase E Slice B.2 from runtime_table.
 class Stdin
   lib "runtime/stdio.c"
-    def read_line as "ruxen_stdin_read_line"(self) -> Result[String, IoError]
-    def read_to_string as "ruxen_stdin_read_to_string"(self) -> Result[String, IoError]
-    def lines as "ruxen_stdin_lines"(self) -> Array[Result[String, IoError]]
+    def read_line as "ruxen_stdin_read_line" -> Result[String, IoError]
+    def read_to_string as "ruxen_stdin_read_to_string" -> Result[String, IoError]
+    def lines as "ruxen_stdin_lines" -> Array[Result[String, IoError]]
   end
 end

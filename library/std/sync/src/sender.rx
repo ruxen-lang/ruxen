@@ -8,8 +8,8 @@ class Sender[T: Send]
   include Send
 
   lib "runtime/channel.c"
-    def send_raw as "ruxen_channel_send"(self, value: T) -> Int
-    def clone as "ruxen_channel_sender_clone"(self) -> Sender[T]
-    def drop as "ruxen_channel_sender_drop"(self) -> ()
+    def send_raw as "ruxen_channel_send"(value: T) -> Int
+    def clone as "ruxen_channel_sender_clone" -> Sender[T]
+    def drop as "ruxen_channel_sender_drop" -> ()
   end
 end

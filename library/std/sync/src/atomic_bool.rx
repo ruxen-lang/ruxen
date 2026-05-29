@@ -4,15 +4,16 @@
 ## a sensible class type at the let-binding.
 class AtomicBool
   include Send
+
   include Sync
 
   lib "runtime/atomic.c"
     def self.new as "ruxen_atomic_bool_new"(initial: Int) -> AtomicBool
-    def load as "ruxen_atomic_bool_load"(self) -> Int
-    def store as "ruxen_atomic_bool_store"(self, value: Int) -> ()
-    def fetch_and as "ruxen_atomic_bool_fetch_and"(self, value: Int) -> Int
-    def fetch_or as "ruxen_atomic_bool_fetch_or"(self, value: Int) -> Int
-    def compare_and_swap as "ruxen_atomic_bool_compare_and_swap"(self, current: Int, new_val: Int) -> Int
-    def drop as "ruxen_atomic_bool_drop"(self) -> ()
+    def load as "ruxen_atomic_bool_load" -> Int
+    def store as "ruxen_atomic_bool_store"(value: Int) -> ()
+    def fetch_and as "ruxen_atomic_bool_fetch_and"(value: Int) -> Int
+    def fetch_or as "ruxen_atomic_bool_fetch_or"(value: Int) -> Int
+    def compare_and_swap as "ruxen_atomic_bool_compare_and_swap"(current: Int, new_val: Int) -> Int
+    def drop as "ruxen_atomic_bool_drop" -> ()
   end
 end

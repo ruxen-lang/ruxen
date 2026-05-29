@@ -2,8 +2,6 @@
 class AsyncBindFuture
   state_ptr: Int
   done: Int
-  include Future
-  type Output = Result[AsyncTcpListener, IoError]
 
   def init(addr: &String)
     self.state_ptr = ruxen_async_bind_state_new(addr)
@@ -21,4 +19,6 @@ class AsyncBindFuture
       self.state_ptr = 0
     end
   end
+
+  include Future
 end

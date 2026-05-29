@@ -31,6 +31,4 @@
 ## trip the resolver's E1112 / type errors at the call site (a
 ## `__FooFuture` doesn't satisfy `Int`), so the user sees a
 ## diagnostic before this body could even matter.
-def block_on(future: Int) -> Int
-  future
-end
+def block_on(future: Int) -> Int { future }

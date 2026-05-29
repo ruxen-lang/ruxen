@@ -102,7 +102,10 @@ pub fn format_type_expr(ty: &TypeExpr, _comments: &CommentMap) -> Doc {
             concat(vec![text("any "), join(text(" + "), bound_docs)])
         }
 
-        TypeExpr::Never { .. } => text("!"),
+        // The only surface spelling the type parser accepts is `Never`
+        // (`parse_type` matches the `Never` TypeIdentifier); `!` is not a valid
+        // type token and fails to re-parse ("expected type, found Bang").
+        TypeExpr::Never { .. } => text("Never"),
 
         TypeExpr::Inferred { .. } => text("_"),
 

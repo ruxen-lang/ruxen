@@ -13,7 +13,6 @@
 ## Co-locating the three keeps the cross-references inside one
 ## bootstrap-loaded file and avoids ordering surprises between
 ## `core.rx` (Future mixin's old home) and the executor runtime.
-
 ## Poll[T] — the result of polling a Future. Tag layout is fixed:
 ##   Ready = 0, Pending = 1
 ## Pinned by `poll_tag_layout_stability` in

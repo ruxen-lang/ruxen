@@ -25,7 +25,6 @@
 ## io_error_tag_stability and file_class_layout_stability pin tests
 ## scan the enum bodies themselves — they are insensitive to the
 ## enum-vs-class ordering at the file level.
-
 ## IoError variants — variant order IS the load-bearing contract
 ## against `RUXEN_IO_ERROR_*` in library/runtime/io/io_error.c.
 ## DO NOT reorder. Append new variants at the END only. The

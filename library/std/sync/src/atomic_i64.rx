@@ -10,15 +10,16 @@
 ## is no `T` to recover.
 class AtomicI64
   include Send
+
   include Sync
 
   lib "runtime/atomic.c"
     def self.new as "ruxen_atomic_i64_new"(initial: Int) -> AtomicI64
-    def load as "ruxen_atomic_i64_load"(self) -> Int
-    def store as "ruxen_atomic_i64_store"(self, value: Int) -> ()
-    def fetch_add as "ruxen_atomic_i64_fetch_add"(self, delta: Int) -> Int
-    def fetch_sub as "ruxen_atomic_i64_fetch_sub"(self, delta: Int) -> Int
-    def compare_and_swap as "ruxen_atomic_i64_compare_and_swap"(self, current: Int, new_val: Int) -> Int
-    def drop as "ruxen_atomic_i64_drop"(self) -> ()
+    def load as "ruxen_atomic_i64_load" -> Int
+    def store as "ruxen_atomic_i64_store"(value: Int) -> ()
+    def fetch_add as "ruxen_atomic_i64_fetch_add"(delta: Int) -> Int
+    def fetch_sub as "ruxen_atomic_i64_fetch_sub"(delta: Int) -> Int
+    def compare_and_swap as "ruxen_atomic_i64_compare_and_swap"(current: Int, new_val: Int) -> Int
+    def drop as "ruxen_atomic_i64_drop" -> ()
   end
 end

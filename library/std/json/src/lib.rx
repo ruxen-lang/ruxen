@@ -7,8 +7,8 @@
 ## `JSON.parse` accepts comments and trailing commas for config-file
 ## ergonomics. `JSON.parse_strict` keeps the RFC-style surface: no
 ## comments, no trailing commas, no NaN/Infinity, and bounded nesting.
-
 class Json
+
 end
 
 enum JsonError
@@ -33,16 +33,19 @@ class JSON
     def self.parse as "ruxen_json_parse"(input: &String) -> Result[Json, JsonError]
     def self.parse_strict as "ruxen_json_parse_strict"(input: &String) -> Result[Json, JsonError]
     def self.stringify as "ruxen_json_stringify"(value: &Json) -> Result[String, JsonError]
-    def self.stringify_pretty as "ruxen_json_stringify_pretty"(value: &Json, indent: Int) -> Result[String, JsonError]
-    def self.null_value as "ruxen_json_make_null"() -> Json
+    def self.stringify_pretty as "ruxen_json_stringify_pretty"(value: &Json, indent: Int) -> Result[
+      String,
+      JsonError
+    ]
+    def self.null_value as "ruxen_json_make_null" -> Json
     def self.bool as "ruxen_json_make_bool"(value: Bool) -> Json
     def self.int as "ruxen_json_make_int"(value: Int) -> Json
     def self.float as "ruxen_json_make_float"(value: Float) -> Json
     def self.string as "ruxen_json_make_string"(value: &String) -> Json
     def self.array as "ruxen_json_make_array"(items: Array[Json]) -> Json
     def self.object as "ruxen_json_make_object"(fields: Map[String, Json]) -> Json
-    def self.empty_array as "ruxen_json_make_empty_array"() -> Json
-    def self.empty_object as "ruxen_json_make_empty_object"() -> Json
+    def self.empty_array as "ruxen_json_make_empty_array" -> Json
+    def self.empty_object as "ruxen_json_make_empty_object" -> Json
     def self.kind as "ruxen_json_kind"(value: &Json) -> JsonKind
     def self.is_null as "ruxen_json_is_null"(value: &Json) -> Bool
     def self.is_bool as "ruxen_json_is_bool"(value: &Json) -> Bool
@@ -66,5 +69,8 @@ lib "runtime/json.c"
   def parse_json as "ruxen_json_parse"(input: &String) -> Result[Json, JsonError]
   def parse_json_strict as "ruxen_json_parse_strict"(input: &String) -> Result[Json, JsonError]
   def stringify_json as "ruxen_json_stringify"(value: &Json) -> Result[String, JsonError]
-  def stringify_json_pretty as "ruxen_json_stringify_pretty"(value: &Json, indent: Int) -> Result[String, JsonError]
+  def stringify_json_pretty as "ruxen_json_stringify_pretty"(value: &Json, indent: Int) -> Result[
+    String,
+    JsonError
+  ]
 end

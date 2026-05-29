@@ -866,14 +866,16 @@ fn format_match_arm(arm: &MatchArm, comments: &CommentMap) -> Doc {
                 let body_doc = format_block_body(block, comments);
                 group(concat(vec![pattern_doc, text(" -> "), body_doc]))
             } else {
-                // Multi-line: break after ->, indent body, close with end
+                // Multi-statement arm: break after `->` and indent the body.
+                // Match arms have NO closing `end` — the parser
+                // (`parse_match_arm_body`) collects statements until the next
+                // sibling arm header or the match's `end`. Emitting a per-arm
+                // `end` injects a spurious delimiter that breaks the re-parse.
                 let body_doc = format_block_body(block, comments);
                 concat(vec![
                     pattern_doc,
                     text(" ->"),
                     nest(INDENT_WIDTH, concat(vec![hardline(), body_doc])),
-                    hardline(),
-                    text("end"),
                 ])
             }
         }
@@ -938,10 +940,22 @@ fn format_loop_expr(l: &LoopExpr, comments: &CommentMap) -> Doc {
 // ─── Blocks ─────────────────────────────────────────────────────────
 
 pub fn format_block(block: &Block, comments: &CommentMap) -> Doc {
+    // `ExprKind::Block` is a `do ... end` block expression (parser
+    // `parse_do_block_expr`). The `do`/`end` delimiters are part of the
+    // surface syntax — emitting only the inner statements collapses the block
+    // into its surrounding context and no longer parses.
     if block.statements.is_empty() {
-        return nil();
+        return concat(vec![text("do"), hardline(), text("end")]);
     }
-    format_block_body(block, comments)
+    concat(vec![
+        text("do"),
+        nest(
+            INDENT_WIDTH,
+            concat(vec![hardline(), format_block_body(block, comments)]),
+        ),
+        hardline(),
+        text("end"),
+    ])
 }
 
 pub fn format_block_body(block: &Block, comments: &CommentMap) -> Doc {
@@ -986,7 +1000,20 @@ fn format_let_binding(binding: &LetBinding, comments: &CommentMap) -> Doc {
 pub fn format_closure(closure: &ClosureExpr, comments: &CommentMap) -> Doc {
     let params_doc = format_closure_params(&closure.params, comments);
 
-    match &closure.body {
+    // `async` / `move` modifiers (parser keyword order is `async move`). A move
+    // closure written `{ |x| ... }` without the `move` keyword does not re-parse
+    // at expression position — the leading `{` is taken as a block — so the
+    // modifier must be preserved.
+    let mut prefix: Vec<Doc> = Vec::new();
+    if closure.is_async {
+        prefix.push(text("async "));
+    }
+    if closure.is_move {
+        prefix.push(text("move "));
+    }
+    let prefix_doc = concat(prefix);
+
+    let body = match &closure.body {
         ClosureBody::Expr(expr) => {
             // Single expression: normalize to { |params| expr }
             let body_doc = format_expr(expr, comments);
@@ -1033,7 +1060,9 @@ pub fn format_closure(closure: &ClosureExpr, comments: &CommentMap) -> Doc {
                 ])
             }
         }
-    }
+    };
+
+    concat(vec![prefix_doc, body])
 }
 
 fn format_closure_params(params: &[ClosureParam], comments: &CommentMap) -> Doc {

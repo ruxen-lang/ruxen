@@ -28,7 +28,6 @@
 ## reads one byte), so this isn't a recommended pattern — but it
 ## doesn't UAF either. v2's multi-threaded scheduler will need a
 ## mutex around the read path.
-
 ## --- Reactor fd-readiness primitives (re-declared so this package
 ## stands on its own, mirroring async_fs/async_net). These are the
 ## same C symbols already declared in async_fs/src/lib.rx — Ruxen's
@@ -43,7 +42,7 @@ end
 ## See library/std/async_io/runtime/async_io.c for the C side. The state
 ## struct owns its own line buffer + saves/restores fd 0's fcntl flags.
 lib "runtime/async_io.c"
-  def ruxen_async_stdin_state_new() -> Int
+  def ruxen_async_stdin_state_new -> Int
   def ruxen_async_stdin_state_get_fd(state: Int) -> Int
   def ruxen_async_stdin_step(state: Int) -> Int
   def ruxen_async_stdin_state_take_result(state: Int) -> Result[String, IoError]
