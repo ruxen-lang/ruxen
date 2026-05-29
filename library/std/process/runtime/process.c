@@ -4,6 +4,12 @@
    DO NOT add to this file unless you also update the top-level runtime.c #include order. */
 
 void ruxen_process_exit(int64_t code) {
+    /* REPL replay-suppression: a `process_exit` re-firing in the
+     * replay portion of the next input's wrapper would terminate
+     * the REPL itself. Silently skip; the original real-path call
+     * already exited (or didn't, because the user's flow let
+     * subsequent inputs land). */
+    if (ruxen_repl_is_replaying) return;
     exit((int)code);
 }
 
@@ -308,6 +314,14 @@ static RuxenExitStatus *ruxen_exit_status_alloc(int64_t code) {
  * `ruxen_process_run`'s contract.
  */
 void *ruxen_command_status(RuxenCommand *c) {
+    /* REPL replay-suppression: re-running a subprocess would emit
+     * its stdout/stderr again (and burn time / fork). Return a
+     * synthetic Ok(ExitStatus(0)) so a let-bound `let s = ...status`
+     * survives replay; the success/failure-branching that the
+     * user's NEW statement does runs against the real status. */
+    if (ruxen_repl_is_replaying) {
+        return ruxen_result_ok_value((int64_t)ruxen_exit_status_alloc(0));
+    }
     if (!c) {
         return ruxen_io_error_message("command is null");
     }
@@ -426,6 +440,17 @@ static char *ruxen_command_drain_fd(int fd, int *err_out) {
  * there. The Command stays live until the caller's scope-exit drop.
  */
 void *ruxen_command_output(RuxenCommand *c) {
+    /* REPL replay-suppression: synthesize an empty-Output Ok so the
+     * caller's binding shape stays valid. Stdout/stderr buffers are
+     * heap-owned strings; allocate empty ones the Output_drop path
+     * can free safely. */
+    if (ruxen_repl_is_replaying) {
+        RuxenOutput *out = (RuxenOutput *)ruxen_alloc(sizeof(RuxenOutput));
+        out->status = ruxen_exit_status_alloc(0);
+        out->stdout_buf = ruxen_string_from("");
+        out->stderr_buf = ruxen_string_from("");
+        return ruxen_result_ok_value((int64_t)out);
+    }
     if (!c) {
         return ruxen_io_error_message("command is null");
     }

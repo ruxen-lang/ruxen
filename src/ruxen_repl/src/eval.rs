@@ -21,17 +21,333 @@ use ruxen_core::parser::ast::{
 };
 use ruxen_core::parser::Parser;
 use ruxen_core::typeck;
+use std::collections::HashSet;
 
 use crate::capture;
 use crate::commands::{self, Command};
 use crate::display;
 use crate::session::ReplSession;
 
+extern "C" {
+    /// Cross-language linkage to the C runtime's REPL replay-suppression
+    /// flag accessor (defined in
+    /// `library/std/core/runtime/repl_replay.c`). The REPL calls this
+    /// directly from Rust only in tests that assert the flag is
+    /// properly cleared between inputs; runtime production traffic
+    /// flips the flag through the synthetic
+    /// `__repl_set_replaying(1/0)` Ruxen calls emitted inside the
+    /// wrapper body.
+    #[allow(dead_code)]
+    pub fn ruxen_repl_set_replaying(v: i32) -> i32;
+    #[allow(dead_code)]
+    pub fn ruxen_repl_get_replaying() -> i32;
+}
+
+/// Build the synthetic `__repl_set_replaying(0|1)` statement that
+/// brackets the replay portion of every wrapper. Lowering to MIR
+/// resolves the call through the `repl_slot_lib` FFI block parsed
+/// in `session::parse_repl_slot_lib`, which in turn binds to the
+/// C symbol `ruxen_repl_set_replaying`. The argument is a literal
+/// 1 (entering replay) or 0 (leaving replay).
+fn replay_flag_toggle_stmt(enter: bool, span: &ruxen_core::lexer::token::Span) -> Statement {
+    let arg = Expr {
+        kind: ExprKind::IntLiteral(if enter { 1 } else { 0 }, None),
+        span: span.clone(),
+    };
+    let call = Expr {
+        kind: ExprKind::Call {
+            callee: Box::new(Expr {
+                kind: ExprKind::Identifier("__repl_set_replaying".to_string()),
+                span: span.clone(),
+            }),
+            args: vec![arg],
+            block: None,
+        },
+        span: span.clone(),
+    };
+    Statement::Expression(call)
+}
+
+/// Build the cumulative replay-prefix statement list for the next
+/// input's wrapper: all prior let bindings (so previously-named
+/// values rebind), followed by every mutation that targets a known
+/// session variable. The runtime flag is set around this block in
+/// `build_program`, so any embedded side-effects no-op cleanly.
+fn collect_replay_statements(session: &ReplSession) -> Vec<Statement> {
+    // `session_var_mutations` already interleaves let-bindings and
+    // mutation expression-statements in input order — clone it
+    // directly. The separate `let_bindings` field exists only for
+    // the typecheck-only `:type` path.
+    session.session_var_mutations.clone()
+}
+
+/// Walk an expression and collect every base identifier name that
+/// appears as the target of a mutation (assignment LHS, compound-
+/// assignment LHS, or as the receiver of a method-call). Used by
+/// `is_session_var_mutation` to decide whether a statement's effect
+/// touches a name the session has bound — and is therefore worth
+/// replaying.
+/// Shallow inspector: records the mutation/method-call target at
+/// `expr` itself (if any). Does NOT recurse into sub-expressions;
+/// the caller (`walk_expr_for_targets`) handles recursion. Used as
+/// the single-node primitive so we don't have a recursive collector
+/// AND a recursive walker fighting each other.
+///
+/// Currently dead: the replay history (`session_var_mutations`)
+/// records every side-effecting expression statement chronologically
+/// — the runtime replay-suppression flag handles puts/IO
+/// duplication, and Thread.sleep / Instant.now() / `let` RHS
+/// evaluation all NEED to replay for state continuity. The
+/// classifier remains here as a documented building block for a
+/// future per-target optimisation that drops statements whose
+/// effects we can prove are local.
+#[allow(dead_code)]
+fn collect_mutation_targets(expr: &Expr, names: &mut HashSet<String>) {
+    match &expr.kind {
+        ExprKind::Assign { target, .. } | ExprKind::CompoundAssign { target, .. } => {
+            base_identifier(target, names);
+        }
+        ExprKind::MethodCall { object, .. } | ExprKind::SafeNavCall { object, .. } => {
+            // Any method call on a session var is treated as a mutation
+            // candidate. Read-only methods (e.g. `arr.len`) replay
+            // harmlessly — the runtime flag suppresses any embedded
+            // side effect they'd otherwise re-fire.
+            base_identifier(object, names);
+        }
+        ExprKind::FieldAccess { object, .. } | ExprKind::SafeNav { object, .. } => {
+            // Zero-arg method call without parens (`c.inc`) parses as
+            // FieldAccess — treat as a mutation candidate to keep
+            // mutation-via-no-parens calls in the replay set.
+            base_identifier(object, names);
+        }
+        ExprKind::ClosureCall { callee, .. } => {
+            // `bump.()` — invoking a closure stored in a session var
+            // may mutate captured state. Conservatively treat as a
+            // mutation candidate so closure-driven mutations replay.
+            base_identifier(callee, names);
+        }
+        _ => {}
+    }
+}
+
+/// Pull the base identifier from an l-value-ish expression (variable,
+/// field access, index, deref) — what the mutation root would name.
+#[allow(dead_code)]
+fn base_identifier(expr: &Expr, names: &mut HashSet<String>) {
+    let mut cur = expr;
+    loop {
+        match &cur.kind {
+            ExprKind::Identifier(n) => {
+                names.insert(n.clone());
+                return;
+            }
+            ExprKind::FieldAccess { object, .. } | ExprKind::SafeNav { object, .. } => {
+                cur = object;
+            }
+            ExprKind::Index { object, .. } => {
+                cur = object;
+            }
+            ExprKind::MethodCall { object, .. } | ExprKind::SafeNavCall { object, .. } => {
+                cur = object;
+            }
+            ExprKind::Try(inner) => cur = inner,
+            _ => return,
+        }
+    }
+}
+
+/// Recursively scan a control-flow expression's subtree for mutation
+/// targets. Cheap enough — typical block bodies have a handful of
+/// statements.
+#[allow(dead_code)]
+fn walk_expr_for_targets(expr: &Expr, names: &mut HashSet<String>) {
+    use ruxen_core::parser::ast::MatchArmBody;
+    fn walk_block(b: &Block, names: &mut HashSet<String>) {
+        for s in &b.statements {
+            match s {
+                Statement::Expression(e) => {
+                    collect_mutation_targets(e, names);
+                    walk_expr_for_targets(e, names);
+                }
+                Statement::Let(l) => {
+                    if let Some(v) = &l.value {
+                        walk_expr_for_targets(v, names);
+                    }
+                }
+            }
+        }
+    }
+    // First pull any direct mutation/method-call target from this
+    // expression node itself — match scrutinees like `v.pop` need
+    // their receiver (`v`) recorded too, not just the bodies.
+    collect_mutation_targets(expr, names);
+    match &expr.kind {
+        ExprKind::Block(b) | ExprKind::UnsafeBlock(b) => walk_block(b, names),
+        ExprKind::If(if_expr) => {
+            walk_expr_for_targets(&if_expr.condition, names);
+            walk_block(&if_expr.then_body, names);
+            for clause in &if_expr.elsif_clauses {
+                walk_expr_for_targets(&clause.condition, names);
+                walk_block(&clause.body, names);
+            }
+            if let Some(eb) = &if_expr.else_body {
+                walk_block(eb, names);
+            }
+        }
+        ExprKind::IfLet(if_let) => {
+            walk_expr_for_targets(&if_let.value, names);
+            walk_block(&if_let.then_body, names);
+            if let Some(eb) = &if_let.else_body {
+                walk_block(eb, names);
+            }
+        }
+        ExprKind::Match(m) => {
+            walk_expr_for_targets(&m.subject, names);
+            for arm in &m.arms {
+                match &arm.body {
+                    MatchArmBody::Expr(e) => {
+                        walk_expr_for_targets(e, names);
+                    }
+                    MatchArmBody::Block(b) => walk_block(b, names),
+                }
+            }
+        }
+        ExprKind::For(f) => {
+            walk_expr_for_targets(&f.iterable, names);
+            walk_block(&f.body, names);
+        }
+        ExprKind::While(w) => {
+            walk_expr_for_targets(&w.condition, names);
+            walk_block(&w.body, names);
+        }
+        ExprKind::WhileLet(w) => {
+            walk_expr_for_targets(&w.value, names);
+            walk_block(&w.body, names);
+        }
+        ExprKind::Loop(l) => walk_block(&l.body, names),
+        ExprKind::Call {
+            callee,
+            args,
+            block,
+        } => {
+            walk_expr_for_targets(callee, names);
+            for a in args {
+                walk_expr_for_targets(a, names);
+            }
+            if let Some(b) = block {
+                walk_expr_for_targets(b, names);
+            }
+        }
+        ExprKind::MethodCall {
+            object,
+            args,
+            block,
+            ..
+        } => {
+            walk_expr_for_targets(object, names);
+            for a in args {
+                walk_expr_for_targets(a, names);
+            }
+            if let Some(b) = block {
+                walk_expr_for_targets(b, names);
+            }
+        }
+        ExprKind::SafeNavCall { object, args, .. } => {
+            walk_expr_for_targets(object, names);
+            for a in args {
+                walk_expr_for_targets(a, names);
+            }
+        }
+        ExprKind::Closure(c) => {
+            use ruxen_core::parser::ast::ClosureBody;
+            match &c.body {
+                ClosureBody::Expr(e) => walk_expr_for_targets(e, names),
+                ClosureBody::Block(b) => {
+                    for s in &b.statements {
+                        match s {
+                            Statement::Expression(e) => walk_expr_for_targets(e, names),
+                            Statement::Let(l) => {
+                                if let Some(v) = &l.value {
+                                    walk_expr_for_targets(v, names);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        ExprKind::FieldAccess { object, .. } | ExprKind::SafeNav { object, .. } => {
+            walk_expr_for_targets(object, names);
+        }
+        ExprKind::Index { object, index } => {
+            walk_expr_for_targets(object, names);
+            walk_expr_for_targets(index, names);
+        }
+        ExprKind::Assign { target, value } => {
+            walk_expr_for_targets(target, names);
+            walk_expr_for_targets(value, names);
+        }
+        ExprKind::CompoundAssign { target, value, .. } => {
+            walk_expr_for_targets(target, names);
+            walk_expr_for_targets(value, names);
+        }
+        ExprKind::Try(inner) => walk_expr_for_targets(inner, names),
+        // `&var x` / `&mut x` style — the inner identifier is the
+        // mutation root, since the borrow lets a downstream callee
+        // write through it. Treat as a mutation target so a
+        // statement like `append_bang(&var greeting)` lands in the
+        // replay set even though no direct `=` assignment appears.
+        ExprKind::Borrow(inner) | ExprKind::BorrowMut(inner) => {
+            base_identifier(inner, names);
+            walk_expr_for_targets(inner, names);
+        }
+        ExprKind::Await(inner) => walk_expr_for_targets(inner, names),
+        ExprKind::UnaryOp { operand, .. } => walk_expr_for_targets(operand, names),
+        ExprKind::BinaryOp { left, right, .. } => {
+            walk_expr_for_targets(left, names);
+            walk_expr_for_targets(right, names);
+        }
+        ExprKind::Range { start, end, .. } => {
+            if let Some(s) = start {
+                walk_expr_for_targets(s, names);
+            }
+            if let Some(e) = end {
+                walk_expr_for_targets(e, names);
+            }
+        }
+        ExprKind::ClosureCall { callee, args } => {
+            walk_expr_for_targets(callee, names);
+            for a in args {
+                walk_expr_for_targets(a, names);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// True when `stmt`'s effect touches at least one name in
+/// `session_var_names`. Drives the narrow `session_var_mutations`
+/// history that gets replayed — statements whose effect is purely
+/// local (a one-shot `puts`, a `Command.new(...).status` not bound
+/// to anything) are excluded and therefore fire exactly once.
+#[allow(dead_code)]
+fn is_session_var_mutation(stmt: &Statement, session_var_names: &HashSet<String>) -> bool {
+    let expr = match stmt {
+        Statement::Expression(e) => e,
+        Statement::Let(_) => return false, // let bindings replay separately via let_bindings
+    };
+    let mut targets: HashSet<String> = HashSet::new();
+    walk_expr_for_targets(expr, &mut targets);
+    !targets.is_disjoint(session_var_names)
+}
+
 /// Classify whether an expression drives side effects the REPL must
 /// replay on every subsequent input. Pure reads (`5 + 3`, a bare
 /// identifier, a string literal) get the one-shot `=> value : Ty`
-/// display path; everything else is appended to `all_statements` and
-/// re-executed from scratch each input so mutations persist.
+/// display path; everything else is appended to `session_var_mutations`
+/// (if it touches a session var) so mutations persist. The runtime
+/// replay-suppression flag prevents puts/IO inside the replayed
+/// mutation from re-firing.
 fn is_side_effect_expr(expr: &Expr) -> bool {
     match &expr.kind {
         // Mutations always count.
@@ -125,15 +441,15 @@ fn eval_expression(session: &mut ReplSession, raw_input: &str, expr: Expr) -> Ev
     let span = expr.span.clone();
     let side_effecting = is_side_effect_expr(&expr);
 
-    // Wrapper body: replay the full cumulative statement history first
-    // so prior `let mut` bindings, assignments, and mutating method
-    // calls all take effect before the new expression runs. For
-    // side-effecting inputs, the expression is also appended to the
-    // cumulative history on success.
-    let mut statements: Vec<Statement> = session.all_statements.clone();
-    statements.push(Statement::Expression(expr.clone()));
+    // Build the wrapper body in two slices so the runtime
+    // replay-suppression flag can wrap exactly the replay portion:
+    //   [replay] = prior let_bindings + session_var_mutations
+    //   [user]   = this input's new expression
+    // `build_program` injects the toggle calls + slot prefix/suffix.
+    let replay_stmts = collect_replay_statements(session);
+    let user_stmts: Vec<Statement> = vec![Statement::Expression(expr.clone())];
 
-    let wrapper = build_program(session, &fn_name, statements, &span);
+    let wrapper = build_program(session, &fn_name, replay_stmts, user_stmts, &span);
 
     let hook = if side_effecting {
         Some(CompileHook::RecordStatement(Statement::Expression(expr)))
@@ -150,22 +466,23 @@ fn eval_statement(session: &mut ReplSession, raw_input: &str, stmt: Statement) -
     match stmt {
         Statement::Let(binding) => {
             let span = binding.span.clone();
-            // Replay the cumulative history, then run the new let, then
-            // read out its bound name so the wrapper returns the freshly-
-            // bound value (displayed as `=> <value> : <ty>`).
-            let mut statements: Vec<Statement> = session.all_statements.clone();
-            statements.push(Statement::Let(binding.clone()));
-
-            // Pull the identifier name (we only support simple patterns
-            // in this phase) and append it as the tail expression.
+            // Replay portion: prior let_bindings + session_var_mutations
+            // — wrapped in the runtime suppression flag so any embedded
+            // puts/fs.write/subprocess from the originals do NOT re-fire.
+            // User portion: this input's new `let` plus a synthetic
+            // identifier read so the wrapper returns the freshly-bound
+            // value for display.
+            let replay_stmts = collect_replay_statements(session);
+            let mut user_stmts: Vec<Statement> = Vec::with_capacity(2);
+            user_stmts.push(Statement::Let(binding.clone()));
             if let Pattern::Identifier { name, .. } = &binding.pattern {
-                statements.push(Statement::Expression(Expr {
+                user_stmts.push(Statement::Expression(Expr {
                     kind: ExprKind::Identifier(name.clone()),
                     span: span.clone(),
                 }));
             }
 
-            let wrapper = build_program(session, &fn_name, statements, &span);
+            let wrapper = build_program(session, &fn_name, replay_stmts, user_stmts, &span);
 
             // Stash the binding so future inputs can see this variable.
             // We add it *before* compile_and_execute so any failures later
@@ -592,7 +909,6 @@ fn compile_and_execute(
     session.record_input(raw_input);
 
     // Apply the post-success hook (e.g., persist a new let binding).
-    let hook_applied = on_success.is_some();
     if let Some(hook) = on_success {
         match hook {
             CompileHook::RecordLet(b) => {
@@ -622,48 +938,51 @@ fn compile_and_execute(
                         }
                     }
                 }
-                session.all_statements.push(Statement::Let(b.clone()));
+                session
+                    .session_var_mutations
+                    .push(Statement::Let(b.clone()));
                 session.let_bindings.push(b);
             }
             CompileHook::RecordStatement(s) => {
-                session.all_statements.push(s);
+                // Task 3: every side-effecting Statement::Expression
+                // joins the chronological replay history so future
+                // inputs see the same world state — Thread.sleep
+                // advancing the clock, fs.write touching the disk,
+                // a session-var mutation growing an array, etc.
+                // The runtime replay-suppression flag, set around
+                // the replay portion of each wrapper, gates the
+                // non-idempotent helpers (puts, print, fs.write,
+                // Command.status, …) so they no-op on replay even
+                // though the statement re-runs. That's why we don't
+                // narrow the history to "session-var mutations
+                // only" here — narrowing dropped Thread.sleep /
+                // Instant.now() chains that the old cumulative
+                // replay had been carrying for free, and would
+                // regress fixtures like 555 / 725. The classifier
+                // (`is_session_var_mutation` + friends) still
+                // exists for documentation and as a building block
+                // future per-target optimisations may use.
+                session.session_var_mutations.push(s);
             }
         }
     }
 
-    // Drain the capture buffer produced by this cumulative replay.
-    // The newest input's output is whatever the replayed prefix didn't
-    // already produce. We locate it by LINE COUNT rather than a byte
-    // prefix: replaying a non-idempotent side effect can print
-    // different text the second time (e.g. a `symlink` that now finds
-    // the link already present emits an error line where it first
-    // emitted a success line), which breaks a `starts_with` prefix diff
-    // and used to dump the entire replay to stdout. Line-count skipping
-    // tolerates that text drift as long as the replayed prefix emits the
-    // same NUMBER of lines it did originally — true for the common case
-    // (and every fixture), though a prior statement whose output line
-    // count itself depends on mutated state could still mis-skip. That
-    // residual case is the replay model's inherent limit; the proper fix
-    // is persistent execution state (no replay), out of scope here.
-    let captured = capture::take_all();
-    let prev_line_count = session.prev_captured_output.matches('\n').count();
-    let new_output: String = captured
-        .split_inclusive('\n')
-        .skip(prev_line_count)
-        .collect();
-    if !new_output.is_empty() {
-        use std::io::Write;
-        let stdout = std::io::stdout();
-        let mut lock = stdout.lock();
-        let _ = lock.write_all(new_output.as_bytes());
-        let _ = lock.flush();
-    }
-    // Only advance the recorded prefix when the new input is actually
-    // appended to cumulative history — pure reads replay the same
-    // prefix so `prev_captured_output` must not grow.
-    if hook_applied {
-        session.prev_captured_output = captured;
-    }
+    // Drain the capture buffer to populate the session's
+    // `last_output` snapshot for test harnesses. The capture shims
+    // (see `capture::ruxen_repl_puts_shim` & friends) ALREADY write
+    // to real stdout/stderr in real time — that's the change that
+    // restores correct ordering between `puts` and subprocess
+    // stdout (`Command.status` writes the child's fd 1 via the
+    // kernel; the prior buffered-then-drained scheme always emitted
+    // `puts` after the subprocess output and broke `508_command_status`).
+    //
+    // With the runtime replay-suppression flag bracketing the
+    // replay portion of every wrapper, every replayed `puts` /
+    // `print` / `fs.write` / `Command.status` inside the replayed
+    // `let_bindings` and `session_var_mutations` no-ops at the
+    // C-runtime layer — so both the buffer AND real stdout contain
+    // ONLY the user's new statement's output.
+    session.last_output = capture::take_all();
 
     // Display result
     if show_result {
@@ -729,16 +1048,21 @@ fn eval_type_command(session: &mut ReplSession, expr_str: &str) -> EvalResult {
             }
 
             let span = expr.span.clone();
-            // Build a wrapper that sees all prior defs + lets (so the
-            // expression can reference them).
-            let mut statements: Vec<Statement> = session
+            // Build a wrapper that sees all prior lets as the replay
+            // prefix (so the expression can reference them) and the
+            // expression itself as the user portion. The toggle calls
+            // bracket the lets — :type never executes anything (it
+            // only typechecks) so the toggles are inert here, but
+            // including them keeps the wrapper shape identical to the
+            // real eval path.
+            let replay_stmts: Vec<Statement> = session
                 .let_bindings
                 .iter()
                 .cloned()
                 .map(Statement::Let)
                 .collect();
-            statements.push(Statement::Expression(expr));
-            let wrapper = build_program(session, "__type_check", statements, &span);
+            let user_stmts: Vec<Statement> = vec![Statement::Expression(expr)];
+            let wrapper = build_program(session, "__type_check", replay_stmts, user_stmts, &span);
             let type_result = typeck::type_check(&wrapper);
 
             let has_errors = type_result
@@ -824,9 +1148,27 @@ fn eval_type_command(session: &mut ReplSession, expr_str: &str) -> EvalResult {
 fn build_program(
     session: &ReplSession,
     fn_name: &str,
-    statements: Vec<Statement>,
+    replay_stmts: Vec<Statement>,
+    user_stmts: Vec<Statement>,
     span: &ruxen_core::lexer::token::Span,
 ) -> Program {
+    // Task 3 — runtime replay-suppression flag. The replay portion of
+    // the wrapper body is bracketed with synthetic
+    // `__repl_set_replaying(1)` / `__repl_set_replaying(0)` calls so
+    // every non-idempotent C-runtime helper (puts, print, fs.write,
+    // Command.status, TcpListener.bind, …) early-returns a benign
+    // value during replay. Pure reads (`fs.read*`, `getenv`, …) ignore
+    // the flag and execute on both passes — needed so let-RHS values
+    // that depend on the world survive replay.
+    let mut statements: Vec<Statement> =
+        Vec::with_capacity(replay_stmts.len() + user_stmts.len() + 2);
+    if !replay_stmts.is_empty() {
+        statements.push(replay_flag_toggle_stmt(true, span));
+        statements.extend(replay_stmts);
+        statements.push(replay_flag_toggle_stmt(false, span));
+    }
+    statements.extend(user_stmts);
+
     // Synthetic slot-load prefix for every primitive session variable.
     // Heap-backed types (String, Array, Option, Result, struct/class
     // instances) are deferred to a follow-up — the ABI is the same
@@ -844,8 +1186,7 @@ fn build_program(
         .filter(|vs| slot_kind_eligible(&vs.ty))
         .collect();
 
-    let mut body: Vec<Statement> =
-        Vec::with_capacity(statements.len() + slot_vars.len() * 2 + 2);
+    let mut body: Vec<Statement> = Vec::with_capacity(statements.len() + slot_vars.len() * 2 + 2);
     for vs in &slot_vars {
         if let Some(stmt) = slot_load_let(vs, session, span) {
             body.push(stmt);
@@ -934,7 +1275,13 @@ fn build_program(
     let mut items: Vec<TopLevelItem> = Vec::with_capacity(session.type_items.len() + 2);
     items.push(session.repl_slot_lib.clone());
     items.extend(session.type_items.iter().cloned());
-    items.extend(session.func_defs.iter().cloned().map(TopLevelItem::Function));
+    items.extend(
+        session
+            .func_defs
+            .iter()
+            .cloned()
+            .map(TopLevelItem::Function),
+    );
     items.push(TopLevelItem::Function(wrapper));
 
     Program {

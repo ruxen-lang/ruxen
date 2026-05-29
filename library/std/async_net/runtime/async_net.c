@@ -211,6 +211,15 @@ void *ruxen_async_bind_state_new(const char *addr) {
 }
 
 void *ruxen_async_tcp_listener_bind(const char *addr) {
+    /* REPL replay-suppression: a re-bind during replay would race
+     * the original socket on TIME_WAIT or fail outright. Return an
+     * InvalidInput Err — the caller's NEW (non-replay) input is the
+     * one whose result actually matters; replay only re-binds for
+     * let-binding RHS evaluation. */
+    if (ruxen_repl_is_replaying) {
+        return ruxen_result_err_value(
+            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
+    }
     if (!addr) {
         return ruxen_result_err_value(
             (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));

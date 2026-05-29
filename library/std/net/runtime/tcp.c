@@ -341,6 +341,26 @@ static void *ruxen_tcp_invalid_input(void) {
         (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
 }
 
+/* REPL replay-suppression sentinel: Ok-wrapped pre-closed listener.
+ * Subsequent accept/local_addr/close calls on a `closed=1` listener
+ * already return InvalidInput Err, so a let-bound listener carrying
+ * this sentinel through replay won't perform any real I/O. */
+static void *ruxen_tcp_listener_replay_sentinel(void) {
+    RuxenTcpListener *l = (RuxenTcpListener *)ruxen_alloc(sizeof(RuxenTcpListener));
+    l->fd = -1;
+    l->closed = 1;
+    return ruxen_result_ok_value((int64_t)l);
+}
+
+/* REPL replay-suppression sentinel: Ok-wrapped pre-closed stream.
+ * Mirrors the listener sentinel above for `connect` and friends. */
+static void *ruxen_tcp_stream_replay_sentinel(void) {
+    RuxenTcpStream *s = (RuxenTcpStream *)ruxen_alloc(sizeof(RuxenTcpStream));
+    s->fd = -1;
+    s->closed = 1;
+    return ruxen_result_ok_value((int64_t)s);
+}
+
 /* ── TcpListener ─────────────────────────────────────────────────── */
 
 /* `TcpListener.bind(addr) -> Result[TcpListener, IoError]`. Reuses the
@@ -349,6 +369,7 @@ static void *ruxen_tcp_invalid_input(void) {
  * call) to an `IoError` variant. On success we allocate the 8-byte
  * spine and wrap the fd. */
 void *ruxen_tcp_listener_bind(const char *addr) {
+    if (ruxen_repl_is_replaying) return ruxen_tcp_listener_replay_sentinel();
     if (!addr) return ruxen_tcp_invalid_input();
     /* Replicate the bind path inline so we can capture errno on each
      * failure point rather than getting a meaningless ENOTSOCK / 0
@@ -411,6 +432,7 @@ void *ruxen_tcp_listener_bind(const char *addr) {
  * EINTR is propagated as IoError.Interrupted so cooperative SIGINT
  * loops can break out (no internal retry). */
 void *ruxen_tcp_listener_accept(RuxenTcpListener *l) {
+    if (ruxen_repl_is_replaying) return ruxen_tcp_stream_replay_sentinel();
     if (!l || l->closed) return ruxen_tcp_invalid_input();
     int accepted;
     /* ECONNABORTED is the Stevens-UNP-§15.6 gotcha the async path
@@ -519,6 +541,7 @@ void ruxen_tcp_listener_drop(RuxenTcpListener *l) {
  * the flat `ruxen_tcp_connect` but we capture errno at each failure
  * point so we can return a typed IoError variant instead of -1. */
 void *ruxen_tcp_stream_connect(const char *addr) {
+    if (ruxen_repl_is_replaying) return ruxen_tcp_stream_replay_sentinel();
     if (!addr) return ruxen_tcp_invalid_input();
     char host[256];
     char port[16];
@@ -572,6 +595,11 @@ void *ruxen_tcp_stream_connect(const char *addr) {
  * size is bounded by `ruxen_tcp_read_bytes`'s 4096-byte stage buffer
  * — partial reads surface as Ok(n<max) and the caller may loop. */
 void *ruxen_tcp_stream_read(RuxenTcpStream *s, RuxenVec *buf) {
+    /* Returns Ok(0) under replay: TCP reads are technically
+     * idempotent on a fresh socket, but during replay the peer/
+     * socket may not exist — Ok(0) (EOF semantics) is safer than
+     * a real read that errors. */
+    if (ruxen_repl_is_replaying) return ruxen_result_ok_value(0);
     if (!s || s->closed || !buf) return ruxen_tcp_invalid_input();
     return ruxen_tcp_read_bytes((int64_t)s->fd, buf, 4096);
 }
@@ -582,6 +610,7 @@ void *ruxen_tcp_stream_read(RuxenTcpStream *s, RuxenVec *buf) {
  * MSG_NOSIGNAL machinery from the flat helpers keeps a write to a
  * dead peer from killing us). */
 void *ruxen_tcp_stream_write(RuxenTcpStream *s, RuxenVec *bytes) {
+    if (ruxen_repl_is_replaying) return ruxen_result_ok_value(0);
     if (!s || s->closed || !bytes) return ruxen_tcp_invalid_input();
     size_t n = (size_t)bytes->len;
     unsigned char *stage = (unsigned char *)malloc(n > 0 ? n : 1);

@@ -93,6 +93,20 @@ static void *ruxen_file_wrap_ok(int fd) {
     return ruxen_result_ok_value((int64_t)f);
 }
 
+/* REPL replay-suppression sentinel: a pre-closed RuxenFile wrapped
+ * in Result::Ok so callers can let-bind without crashing on the
+ * subsequent inputs' replay. All real I/O methods on RuxenFile check
+ * `->closed` first (file_read/write/flush/close return InvalidInput
+ * on a closed handle), so this is a benign placeholder — and on the
+ * REAL execution path of the user's new statement, the flag is 0
+ * and the actual fd from the actual open() is returned. */
+static void *ruxen_file_replay_sentinel(void) {
+    RuxenFile *f = (RuxenFile *)ruxen_alloc(sizeof(RuxenFile));
+    f->fd = -1;
+    f->closed = 1;
+    return ruxen_result_ok_value((int64_t)f);
+}
+
 /* Build a Result::Err(IoError::InvalidInput(<msg>)) for the static
  * detection paths (E0711/E0712). The runtime InvalidInput variant has
  * no payload in the current 8-tag layout — message routing for unit
@@ -114,6 +128,12 @@ void *ruxen_file_open(const char *path) {
 }
 
 void *ruxen_file_create(const char *path) {
+    /* REPL replay-suppression: re-creating a file would truncate
+     * any content the user wrote to it on subsequent statements.
+     * Return an Ok-wrapped closed sentinel so a replayed
+     * `let f = File.create(...)` binds `f` to a benign placeholder;
+     * the actual on-disk truncation is suppressed. */
+    if (ruxen_repl_is_replaying) return ruxen_file_replay_sentinel();
     if (!path) return ruxen_file_invalid_input();
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
@@ -123,6 +143,7 @@ void *ruxen_file_create(const char *path) {
 }
 
 void *ruxen_file_append(const char *path) {
+    if (ruxen_repl_is_replaying) return ruxen_file_replay_sentinel();
     if (!path) return ruxen_file_invalid_input();
     int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (fd < 0) {
@@ -152,6 +173,14 @@ void *ruxen_file_open_options(const char *path, RuxenOpenOptions *opts) {
     if (!opts->read && !opts->write && !opts->append) {
         /* E0711 at runtime — see comment above for the deferral note. */
         return ruxen_file_invalid_input();
+    }
+    /* REPL replay-suppression: gate on any *writing* flag. A pure
+     * read open is idempotent and skips the gate so let-bound file
+     * handles stay readable across replay. */
+    if (ruxen_repl_is_replaying &&
+        (opts->write || opts->append || opts->truncate ||
+         opts->create || opts->create_new)) {
+        return ruxen_file_replay_sentinel();
     }
     int flags = 0;
     if (opts->read && (opts->write || opts->append)) {
@@ -270,6 +299,7 @@ void *ruxen_file_read_all(RuxenFile *f) {
  * Ok(n) where n < bytes.len; the caller chooses how to retry. Use
  * `write_all` if a loop-until-complete contract is wanted. */
 void *ruxen_file_write(RuxenFile *f, RuxenVec *bytes) {
+    if (ruxen_repl_is_replaying) return ruxen_result_ok_value(0);
     if (!f || f->closed || !bytes) return ruxen_file_invalid_input();
     /* Stage the int64-slot bytes into a tight buffer for `write(2)`. */
     size_t n = (size_t)bytes->len;
@@ -292,6 +322,7 @@ void *ruxen_file_write(RuxenFile *f, RuxenVec *bytes) {
 }
 
 void *ruxen_file_write_all(RuxenFile *f, RuxenVec *bytes) {
+    if (ruxen_repl_is_replaying) return ruxen_result_ok_value(0);
     if (!f || f->closed || !bytes) return ruxen_file_invalid_input();
     size_t n = (size_t)bytes->len;
     unsigned char *stage = (unsigned char *)malloc(n > 0 ? n : 1);
@@ -326,6 +357,7 @@ void *ruxen_file_write_all(RuxenFile *f, RuxenVec *bytes) {
 }
 
 void *ruxen_file_write_str(RuxenFile *f, const char *s) {
+    if (ruxen_repl_is_replaying) return ruxen_result_ok_value(0);
     if (!f || f->closed) return ruxen_file_invalid_input();
     if (!s) s = "";
     size_t n = strlen(s);
@@ -355,6 +387,7 @@ void *ruxen_file_write_str(RuxenFile *f, const char *s) {
  * here — that would be a much heavier semantic and is what
  * `fs.write_atomic` covers (durability) when added in T3. */
 void *ruxen_file_flush(RuxenFile *f) {
+    if (ruxen_repl_is_replaying) return ruxen_result_ok_value(0);
     if (!f || f->closed) return ruxen_file_invalid_input();
     return ruxen_result_ok_value(0);
 }
@@ -508,10 +541,12 @@ RuxenOpenOptions *ruxen_open_options_create_new(RuxenOpenOptions *o, int64_t v) 
 }
 
 void ruxen_print_int(int64_t n) {
+    if (ruxen_repl_is_replaying) return;
     printf("%" PRId64 "\n", n);
 }
 
 void ruxen_print_float(double f) {
+    if (ruxen_repl_is_replaying) return;
     printf("%g\n", f);
 }
 

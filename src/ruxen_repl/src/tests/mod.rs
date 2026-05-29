@@ -5,6 +5,6 @@
 //! `split_chunks` covers the piped-stdin chunker that used to live
 //! inline at the bottom of `lib.rs`.
 
+mod single_execution;
 mod split_chunks;
 mod state_persistence;
-mod single_execution;

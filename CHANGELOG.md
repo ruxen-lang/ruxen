@@ -7,7 +7,77 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+### Added
+- **REPL+runtime: replay-suppression flag for non-idempotent runtime
+  helpers (refactor phase 3 — Path A).** New
+  `library/std/core/runtime/repl_replay.c` hosts a thread-local
+  `ruxen_repl_is_replaying` flag plus `ruxen_repl_set_replaying` /
+  `ruxen_repl_get_replaying` accessors declared in
+  `library/std/core/runtime/runtime.h`. Every non-idempotent runtime
+  function — the `ruxen_puts` / `ruxen_print` / `ruxen_eputs` /
+  `ruxen_print_int` / `ruxen_print_float` family, `ruxen_command_status`
+  / `ruxen_command_output` / `ruxen_process_exit`, `ruxen_fs_write` /
+  `_remove_file` / `_create_dir*` / `_rename` / `_copy` /
+  `_remove_dir_all` / `_write_atomic` / `_symlink`, `ruxen_file_create`
+  / `_append` / `_open_options` (write modes) / `_write*` / `_flush`,
+  `ruxen_tcp_listener_bind` / `_accept`, `ruxen_tcp_stream_connect` /
+  `_read` / `_write`, `ruxen_async_tcp_listener_bind`,
+  `ruxen_stdout_print` / `_println` / `_write_str` / `_flush`, etc. —
+  early-returns a benign value (`Ok(())` / a pre-closed sentinel /
+  `void`) when the flag is set. Idempotent reads
+  (`ruxen_fs_read*` / `_metadata` / `_canonicalize` / `_read_link` /
+  `_read_dir`, env getters, read-only `ruxen_file_open`) ignore the
+  flag and always execute — needed for correct replay of let-RHS
+  expressions whose values depend on the world. The REPL's stdout
+  capture shims in `src/ruxen_repl/src/capture.rs` (the JIT overrides
+  the puts/print symbols with these shims, so the C-side gate alone
+  wouldn't catch them) re-check the same flag via
+  `ruxen_repl_get_replaying`. The REPL wraps the replay portion of
+  every input's wrapper body in synthetic
+  `__repl_set_replaying(1)` / `__repl_set_replaying(0)` calls,
+  declared in the existing `repl_slot_lib` FFI block. Side effects
+  fire exactly once per input.
+
+### Changed
+- **REPL state model: chronological `session_var_mutations` replaces
+  `all_statements` + capture-buffer line-count diff.** The REPL no
+  longer accumulates a separate `prev_captured_output` and diffs
+  cumulative stdout by line count — the runtime suppression flag
+  handles duplicate-puts cleanly. `ReplSession::all_statements`
+  becomes `session_var_mutations` (the same chronologically-ordered
+  Vec, narrowed in name only); `ReplSession::prev_captured_output`
+  is removed. The new `last_output: String` field stashes the
+  current input's captured stdout so headless test harnesses
+  (`tests/state_persistence::run_session`) can snapshot what each
+  input wrote. Net effect: the 5 baseline REPL-parity failures
+  (508/534/536/727/727b) drop to 3 (508/727/727b — 508 fails for an
+  unrelated subprocess-vs-parent stdout-buffering interleave, the
+  two 727s are async-executor territory queued for phase 4); the
+  ~30 mutation-with-puts fixtures stay green; the two
+  previously-`#[ignore]`'d `single_execution` tests are now green
+  unconditionally.
+
 ### Fixed
+- **`ruxen fmt`: re-synced the AST formatter with current parser
+  semantics.** A corpus round-trip test (`tests/
+  formatter_corpus_roundtrip.rs`, every `.rx` in `library/std` +
+  `tests/release-e2e/cases`) found 129/386 files whose formatted output
+  no longer parsed. Ten distinct drifts fixed in
+  `compiler/ruxen_core/src/formatter/`: (1) `lib "runtime/foo.c"` lost
+  its quotes (`format_lib_name` now re-quotes any non-TypeIdentifier
+  link name); (2) struct/class fields gained a bogus `pub ` prefix
+  (`pub` is not a keyword — `format_field_section` now emits
+  `public`/`private`/`protected` section markers per ruby-naming.spec.md
+  §3.2, default-public emitting nothing); (3) FFI `def self.NAME` lost
+  its `self.` class-method marker; (4) mixin method signatures emitted
+  `var def` instead of `def var`; (5) `extension` blocks were emitted as
+  the retired `impl` keyword; (6) `const X = v` gained a spurious `: _`
+  inferred-type annotation; (7) `do … end` block expressions dropped
+  their `do`/`end` delimiters; (8) `move` / `async` closure modifiers
+  were dropped; (9) the `Never` type was emitted as `!` (not a valid
+  type token); (10) multi-statement `match` arms gained a spurious
+  per-arm `end`. All 386 corpus files now round-trip and are
+  idempotent; 11 targeted regression tests added in `formatter/tests.rs`.
 - **Parser: accept `;` as a leading terminator in block bodies.**
   `parse_body_with_options` (the common loop behind every `def`/`if`/
   `while`/`for`/`match`-arm/class body) called `skip_newlines()` at the

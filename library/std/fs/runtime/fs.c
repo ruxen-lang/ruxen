@@ -20,6 +20,10 @@ void *ruxen_fs_read_to_string(const char *path) {
 }
 
 void *ruxen_fs_write(const char *path, const char *contents) {
+    /* REPL replay-suppression: the actual write happened on the
+     * original input; replay just needs the same Ok(()) shape so
+     * downstream `.expect!("write")` chains don't trip. */
+    if (ruxen_repl_is_replaying) return ruxen_result_ok_value(0);
     FILE *stream = fopen(path, "wb");
     const char *text = contents ? contents : "";
     size_t len = strlen(text);
@@ -49,6 +53,7 @@ int64_t ruxen_fs_exists(const char *path) {
 }
 
 void *ruxen_fs_remove_file(const char *path) {
+    if (ruxen_repl_is_replaying) return ruxen_result_ok_value(0);
     if (!path) {
         return ruxen_io_error_message("path is null");
     }
@@ -59,6 +64,7 @@ void *ruxen_fs_remove_file(const char *path) {
 }
 
 void *ruxen_fs_create_dir(const char *path) {
+    if (ruxen_repl_is_replaying) return ruxen_result_ok_value(0);
     if (!path) {
         return ruxen_io_error_message("path is null");
     }
@@ -69,6 +75,7 @@ void *ruxen_fs_create_dir(const char *path) {
 }
 
 void *ruxen_fs_create_dir_all(const char *path) {
+    if (ruxen_repl_is_replaying) return ruxen_result_ok_value(0);
     char *copy;
     size_t len;
 
@@ -111,6 +118,7 @@ void *ruxen_fs_create_dir_all(const char *path) {
 }
 
 void *ruxen_fs_rename(const char *from, const char *to) {
+    if (ruxen_repl_is_replaying) return ruxen_result_ok_value(0);
     if (!from || !to) {
         return ruxen_io_error_message("path is null");
     }
@@ -301,6 +309,10 @@ static void *ruxen_fs_invalid_input(void) {
 }
 
 void *ruxen_fs_copy(const char *src, const char *dst) {
+    /* Returns Ok(bytes_copied). Under replay we return Ok(0); the
+     * caller's original input already produced the on-disk side
+     * effect. */
+    if (ruxen_repl_is_replaying) return ruxen_result_ok_value(0);
     if (!src || !dst) return ruxen_fs_invalid_input();
     int in_fd = open(src, O_RDONLY);
     if (in_fd < 0) {
@@ -410,6 +422,7 @@ static int ruxen_fs_remove_dir_all_inner(const char *path) {
 }
 
 void *ruxen_fs_remove_dir_all(const char *path) {
+    if (ruxen_repl_is_replaying) return ruxen_result_ok_value(0);
     if (!path) return ruxen_fs_invalid_input();
     if (ruxen_fs_remove_dir_all_inner(path) != 0) {
         return ruxen_io_error_from_errno(errno);
@@ -432,6 +445,7 @@ void *ruxen_fs_canonicalize(const char *path) {
 }
 
 void *ruxen_fs_write_atomic(const char *path, const char *contents) {
+    if (ruxen_repl_is_replaying) return ruxen_result_ok_value(0);
     if (!path) return ruxen_fs_invalid_input();
     const char *text = contents ? contents : "";
     size_t text_len = strlen(text);
@@ -543,6 +557,7 @@ void *ruxen_fs_read_link(const char *path) {
 }
 
 void *ruxen_fs_symlink(const char *target, const char *linkpath) {
+    if (ruxen_repl_is_replaying) return ruxen_result_ok_value(0);
     if (!target || !linkpath) return ruxen_fs_invalid_input();
     if (symlink(target, linkpath) != 0) {
         return ruxen_io_error_from_errno(errno);

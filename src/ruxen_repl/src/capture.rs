@@ -1,24 +1,75 @@
 //! Stdout capture infrastructure for the REPL.
 //!
-//! The REPL replays the full cumulative statement history into each
-//! synthetic wrapper so that mutations (`x = x + 1`, `v.push(...)`,
-//! `s.insert(...)`, `c.inc`, etc.) actually persist across inputs.
-//! As a side effect, every run re-executes every prior `puts` and the
-//! captured stdout accumulates. To show the user only the *new* output
-//! produced by the latest input, we redirect the runtime's print
-//! family (`ruxen_puts` / `ruxen_print` / `ruxen_print_int` /
-//! `ruxen_print_float`) into a process-wide buffer; the REPL then
-//! diffs it against the previous run's capture and emits just the
-//! delta to real stdout.
+//! Task 3 (Path A — runtime replay-suppression flag) reshaped how
+//! `puts` / `print` flow through the REPL. The capture shims registered
+//! into the JIT (see `jit::register_runtime_symbols`) now do TWO
+//! things on every call:
+//!
+//!   1. Write to **real stdout/stderr** immediately. This restores
+//!      correct interleaving with subprocess output (`Command.status`
+//!      writes the child's stdout directly to fd 1 via the kernel —
+//!      the prior buffered-then-drained design always emitted `puts`
+//!      AFTER subprocess stdout because the buffer flushed at wrapper
+//!      exit, which broke fixtures like `508_command_status`).
+//!   2. Append to a process-wide **`BUFFER`** so test harnesses (see
+//!      `tests/state_persistence::run_session` and
+//!      `tests/single_execution`) can snapshot what each input wrote
+//!      without intercepting fd 1.
+//!
+//! Replay suppression: the C runtime's `ruxen_repl_is_replaying`
+//! thread-local flag (set by the REPL around the replay portion of
+//! each wrapper) gates both write paths. When the flag is non-zero,
+//! every shim early-returns — matching the gate on the REAL
+//! `ruxen_puts` / `ruxen_print` / … in
+//! `library/std/io/runtime/stdio.c`. That mirroring is what lets a
+//! replayed `puts` inside `let_bindings` / `session_var_mutations`
+//! no-op cleanly even though the surrounding statement re-runs.
 
 use std::sync::Mutex;
 
-/// Process-wide capture buffer. The JIT-linked shim functions append
-/// to this; `take_all` returns and clears the accumulated output.
+/// Process-wide capture buffer. The JIT-linked shim functions
+/// append to this whenever the runtime replay-suppression flag is
+/// clear (i.e. on the user's new-statement path). Test harnesses
+/// drain via `take_all`.
 static BUFFER: Mutex<String> = Mutex::new(String::new());
 
-/// Append a raw string to the capture buffer.
-fn append(s: &str) {
+extern "C" {
+    /// Cross-language linkage to the runtime replay-suppression flag
+    /// (`library/std/core/runtime/repl_replay.c`). The capture shims
+    /// below early-return when this is non-zero so the replayed
+    /// portion of each input's wrapper doesn't duplicate stdout. The
+    /// REAL `ruxen_puts` / `ruxen_print` family (in
+    /// `library/std/io/runtime/stdio.c`) check the same flag — the
+    /// shims override the JIT's `ruxen_puts` symbol so we have to
+    /// re-check it here for the suppression to take effect on the
+    /// REPL's stdout path.
+    fn ruxen_repl_get_replaying() -> i32;
+
+    /// Real C runtime print family. The shims delegate to these for
+    /// stdout/stderr output, which routes through libc's stdio
+    /// buffering — matching exactly how AOT-compiled binaries
+    /// emit `puts` / `print`. Crucial for ordering with subprocess
+    /// output that writes directly to fd 1 via the kernel (e.g.
+    /// `Command.status` forking `/bin/echo`): when stdout is piped
+    /// (as it is under the e2e harness), libc fully-buffers parent-
+    /// process writes until exit, so `puts` lines after a child's
+    /// output appear in the order the kernel saw them, not the
+    /// order the parent issued them.
+    fn ruxen_puts(s: *const std::ffi::c_char);
+    fn ruxen_print(s: *const std::ffi::c_char);
+    fn ruxen_eputs(s: *const std::ffi::c_char);
+    fn ruxen_print_int(n: i64);
+    fn ruxen_print_float(f: f64);
+}
+
+#[inline(always)]
+fn is_replaying() -> bool {
+    // SAFETY: pure TLS read with no aliasing concerns.
+    unsafe { ruxen_repl_get_replaying() != 0 }
+}
+
+/// Append a raw string to the capture buffer (test-only sink).
+fn buffer_append(s: &str) {
     if let Ok(mut buf) = BUFFER.lock() {
         buf.push_str(s);
     }
@@ -42,71 +93,98 @@ pub fn clear() {
 
 // ── Shim functions linked into the JIT module ──────────────────────
 //
-// Signatures mirror the C runtime functions in `runtime/runtime.c`;
-// the JIT registers these under the same symbol names so compiled
-// code calls us instead of the real stdout-emitting C helpers.
+// Signatures mirror the C runtime functions in
+// `library/std/io/runtime/stdio.c`; the JIT registers these under the
+// same symbol names so compiled code calls us instead of the real
+// stdout-emitting C helpers. Each shim:
+//   1. Returns early when `ruxen_repl_is_replaying` is set.
+//   2. Writes to real stdout/stderr immediately (correct ordering
+//      with subprocess output).
+//   3. Mirrors the same text into `BUFFER` for test snapshots.
 
-/// Append a C string and a trailing newline. Mirrors C `ruxen_puts`.
+/// Delegate to C `ruxen_puts` (which calls libc `puts`) and mirror
+/// into BUFFER for test harnesses. The libc path provides the same
+/// stdio buffering that AOT-compiled binaries use, so the e2e
+/// fixture diffs see identical ordering between `puts` lines and
+/// subprocess-stdout lines.
 #[no_mangle]
 pub extern "C" fn ruxen_repl_puts_shim(s: *const std::ffi::c_char) {
+    if is_replaying() {
+        return;
+    }
+    unsafe { ruxen_puts(s) };
     if s.is_null() {
-        append("(nil)\n");
+        buffer_append("(nil)\n");
         return;
     }
     // SAFETY: the JIT passes a null-terminated C string here (same
     // contract as the C runtime). We read through the pointer without
-    // assuming any particular lifetime since the string is interned or
-    // heap-allocated by the runtime for the duration of the call.
+    // assuming any particular lifetime since the string is interned
+    // or heap-allocated by the runtime for the duration of the call.
     let c_str = unsafe { std::ffi::CStr::from_ptr(s) };
-    match c_str.to_str() {
-        Ok(rust) => {
-            append(rust);
-            append("\n");
-        }
-        Err(_) => append("(invalid-utf8)\n"),
+    if let Ok(rust) = c_str.to_str() {
+        buffer_append(rust);
+        buffer_append("\n");
+    } else {
+        buffer_append("(invalid-utf8)\n");
     }
 }
 
-/// Append a C string (no trailing newline). Mirrors C `ruxen_print`.
+/// Delegate to C `ruxen_print` (no trailing newline). Mirrors into
+/// BUFFER for test harnesses.
 #[no_mangle]
 pub extern "C" fn ruxen_repl_print_shim(s: *const std::ffi::c_char) {
+    if is_replaying() {
+        return;
+    }
+    unsafe { ruxen_print(s) };
     if s.is_null() {
         return;
     }
     let c_str = unsafe { std::ffi::CStr::from_ptr(s) };
     if let Ok(rust) = c_str.to_str() {
-        append(rust);
+        buffer_append(rust);
     }
 }
 
-/// Append a C string to stderr. We still mix stderr into the capture
-/// buffer so the harness diff sees panics / `eputs` messages emitted
-/// during a re-run only show up once.
+/// Delegate to C `ruxen_eputs` (stderr). Mirrors into BUFFER so the
+/// test harness can assert on diagnostic-emitting inputs, though
+/// normal e2e harnesses diff stdout only.
 #[no_mangle]
 pub extern "C" fn ruxen_repl_eputs_shim(s: *const std::ffi::c_char) {
+    if is_replaying() {
+        return;
+    }
+    unsafe { ruxen_eputs(s) };
     if s.is_null() {
         return;
     }
     let c_str = unsafe { std::ffi::CStr::from_ptr(s) };
     if let Ok(rust) = c_str.to_str() {
-        // Route to real stderr — it's not part of stdout diffing.
-        eprintln!("{rust}");
+        buffer_append(rust);
+        buffer_append("\n");
     }
 }
 
-/// Mirrors C `ruxen_print_int`: prints an integer followed by newline.
+/// Delegate to C `ruxen_print_int` (prints int + newline via libc).
 #[no_mangle]
 pub extern "C" fn ruxen_repl_print_int_shim(n: i64) {
-    append(&format!("{n}\n"));
+    if is_replaying() {
+        return;
+    }
+    unsafe { ruxen_print_int(n) };
+    buffer_append(&format!("{n}\n"));
 }
 
-/// Mirrors C `ruxen_print_float`: prints a float followed by newline,
-/// using `%g`-style formatting.
+/// Delegate to C `ruxen_print_float` (prints float + newline via
+/// libc `%g`).
 #[no_mangle]
 pub extern "C" fn ruxen_repl_print_float_shim(f: f64) {
-    // C's `%g` picks between `%e` and `%f`, dropping trailing zeros.
-    // Rust's default `{}` for f64 is close enough for REPL display.
-    append(&format!("{f}\n"));
+    if is_replaying() {
+        return;
+    }
+    unsafe { ruxen_print_float(f) };
+    buffer_append(&format!("{f}\n"));
 }
 
 #[cfg(test)]

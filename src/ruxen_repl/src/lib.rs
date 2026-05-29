@@ -6,8 +6,6 @@
 #[allow(dead_code)]
 mod capture;
 #[allow(dead_code)]
-mod slots;
-#[allow(dead_code)]
 mod commands;
 mod completion;
 #[allow(dead_code)]
@@ -19,6 +17,8 @@ mod highlight;
 #[allow(dead_code)]
 mod jit;
 mod session;
+#[allow(dead_code)]
+mod slots;
 mod validate;
 
 use std::borrow::Cow;

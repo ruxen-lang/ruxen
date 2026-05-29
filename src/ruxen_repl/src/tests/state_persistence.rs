@@ -10,22 +10,32 @@
 use crate::eval::{eval_input, EvalResult};
 use crate::session::ReplSession;
 
-/// Feed a sequence of inputs to a fresh session, capturing the
-/// real-stdout side of each `EvalResult`. Used as the golden harness
-/// for every test in this file.
+/// Feed a sequence of inputs to a fresh session. For each input,
+/// concatenate the `=> value : Ty` display line (if any) with the
+/// stdout the wrapper produced (read back through the session's
+/// `last_output` field which `compile_and_execute` populates after
+/// draining the capture buffer). This lets tests assert against
+/// both display output AND `puts`/`print` output without depending
+/// on stdout redirection.
 pub(crate) fn run_session(inputs: &[&str]) -> Vec<String> {
     let mut session = ReplSession::new().expect("session");
     inputs
         .iter()
-        .map(|inp| match eval_input(&mut session, inp) {
-            EvalResult::Ok(Some(s)) => s,
-            EvalResult::Ok(None) => String::new(),
-            EvalResult::Command(s) => s,
-            EvalResult::Quit => String::new(),
-            EvalResult::Incomplete => {
-                panic!("input {:?} → unexpected Incomplete", inp)
-            }
-            EvalResult::Error(e) => panic!("input {:?} → {}", inp, e),
+        .map(|inp| {
+            session.last_output.clear();
+            let display = match eval_input(&mut session, inp) {
+                EvalResult::Ok(Some(s)) => s,
+                EvalResult::Ok(None) => String::new(),
+                EvalResult::Command(s) => s,
+                EvalResult::Quit => String::new(),
+                EvalResult::Incomplete => {
+                    panic!("input {:?} → unexpected Incomplete", inp)
+                }
+                EvalResult::Error(e) => panic!("input {:?} → {}", inp, e),
+            };
+            let mut combined = std::mem::take(&mut session.last_output);
+            combined.push_str(&display);
+            combined
         })
         .collect()
 }
@@ -53,10 +63,7 @@ fn mutation_persists_across_inputs() {
 
 #[test]
 fn def_callable_from_later_input() {
-    let outs = run_session(&[
-        "def double(n: Int) -> Int; n * 2; end",
-        "double(21)",
-    ]);
+    let outs = run_session(&["def double(n: Int) -> Int; n * 2; end", "double(21)"]);
     assert!(outs[1].contains("42"), "got: {:?}", outs);
 }
 
@@ -67,10 +74,7 @@ fn def_callable_from_later_input() {
 /// will remove the replay; this test must keep passing.
 #[test]
 fn int_var_read_from_slot_persists() {
-    let outs = run_session(&[
-        "let answer = 42",
-        "answer",
-    ]);
+    let outs = run_session(&["let answer = 42", "answer"]);
     assert!(outs[1].contains("42"), "got: {:?}", outs);
 }
 
@@ -88,10 +92,13 @@ fn int_let_allocates_var_slot() {
     let mut session = ReplSession::new().expect("session");
     match eval_input(&mut session, "let answer = 42") {
         crate::eval::EvalResult::Ok(_) => {}
-        other => panic!("eval failed: {:?}", match other {
-            crate::eval::EvalResult::Error(e) => e,
-            _ => "non-Ok, non-Error result".into(),
-        }),
+        other => panic!(
+            "eval failed: {:?}",
+            match other {
+                crate::eval::EvalResult::Error(e) => e,
+                _ => "non-Ok, non-Error result".into(),
+            }
+        ),
     }
     let slot = session
         .find_var_slot("answer")
@@ -107,11 +114,7 @@ fn int_let_allocates_var_slot() {
 /// the initial value.
 #[test]
 fn int_mutation_persists_via_slot() {
-    let outs = run_session(&[
-        "var x = 10",
-        "x = x + 5",
-        "x",
-    ]);
+    let outs = run_session(&["var x = 10", "x = x + 5", "x"]);
     assert!(outs[2].contains("15"), "got: {:?}", outs);
 }
 

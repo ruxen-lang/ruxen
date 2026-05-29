@@ -46,15 +46,29 @@ pub struct ReplSession {
     /// Let bindings declared in prior inputs (replayed into every wrapper
     /// body so subsequent inputs can reference the bound names).
     pub let_bindings: Vec<LetBinding>,
-    /// Full cumulative statement history — every executed `let`, every
-    /// side-effecting expression (assignment, compound assignment,
-    /// method call, `puts`, control-flow with mutations, etc.). Replayed
-    /// into each new wrapper so mutations persist across inputs.
-    pub all_statements: Vec<Statement>,
-    /// Full captured stdout produced by the previous cumulative replay.
-    /// On the next input, the fresh capture is diffed against this prefix
-    /// and only the new suffix is emitted to real stdout.
-    pub prev_captured_output: String,
+    /// Captured stdout from the most recent input's wrapper execution.
+    /// Populated by `eval::compile_and_execute` after draining the
+    /// `capture::BUFFER` shim sink; the interactive main loop reads
+    /// nothing from it (compile_and_execute also re-emits to the real
+    /// stdout), but the test harness `run_session` snapshots this so
+    /// tests can assert what `puts` produced per input.
+    pub last_output: String,
+    /// Chronologically ordered replay history. Contains every prior
+    /// `let` binding AND every prior side-effecting expression
+    /// statement that mutates a session-bound name (assignment,
+    /// compound-assignment, method call whose receiver is a known
+    /// session var, etc.). Interleaved in input order so an
+    /// intervening `let n = h.len` between two `h.insert(...)` calls
+    /// captures the correct intermediate state.
+    ///
+    /// Note (Task 3 — replay-suppression flag): the replay portion of
+    /// each input's wrapper runs with the runtime
+    /// `ruxen_repl_is_replaying` flag set, so any embedded puts /
+    /// fs.write / subprocess spawn inside a replayed mutation
+    /// silently no-ops at the C-runtime layer. The classifier can
+    /// therefore be aggressive about what counts as a mutation
+    /// without spurious stdout duplicates.
+    pub session_var_mutations: Vec<Statement>,
     /// Type-level items (class, struct, enum, trait, impl, const,
     /// type-alias, newtype, module, use, lib, extern) declared in prior
     /// inputs. Replayed into every new program.
@@ -99,8 +113,8 @@ impl ReplSession {
             env: ReplEnv::new(),
             func_defs: Vec::new(),
             let_bindings: Vec::new(),
-            all_statements: Vec::new(),
-            prev_captured_output: String::new(),
+            session_var_mutations: Vec::new(),
+            last_output: String::new(),
             type_items: Vec::new(),
             history_path,
             slots: vec![0i64; REPL_MAX_SLOTS].into_boxed_slice(),
@@ -167,8 +181,8 @@ impl ReplSession {
         self.env.reset();
         self.func_defs.clear();
         self.let_bindings.clear();
-        self.all_statements.clear();
-        self.prev_captured_output.clear();
+        self.session_var_mutations.clear();
+        self.last_output.clear();
         self.type_items.clear();
         // Zero the persistent slot region and forget all variable→slot
         // mappings. (The heap region itself is reused — its address stays
@@ -196,17 +210,27 @@ fn parse_repl_slot_lib() -> TopLevelItem {
     // registered in `jit::new_jit_module_builder`. `as "ruxen_repl_*"`
     // pins the linked C symbol; the bare Ruxen names are what the
     // synthetic prefix/suffix call sites spell.
+    // The two `__repl_set_replaying` / `__repl_get_replaying` decls
+    // expose Task 3's runtime replay-suppression flag (see
+    // `library/std/core/runtime/repl_replay.c`). The synthetic
+    // wrapper body in `eval::build_program` calls
+    // `__repl_set_replaying(1)` immediately before the replayed
+    // `let_bindings + session_var_mutations` block and
+    // `__repl_set_replaying(0)` immediately after, so every non-
+    // idempotent runtime helper (puts/print/Command.status/fs.write/
+    // …) early-returns a benign value during replay and only fires
+    // once per input on the user's new-statement path.
     let src = "lib \"ruxen_repl\"\n\
                def __slot_load_i64 as \"ruxen_repl_slot_load_i64\"(addr: Int) -> Int\n\
                def __slot_store_i64 as \"ruxen_repl_slot_store_i64\"(addr: Int, val: Int)\n\
+               def __repl_set_replaying as \"ruxen_repl_set_replaying\"(v: Int) -> Int\n\
+               def __repl_get_replaying as \"ruxen_repl_get_replaying\"() -> Int\n\
                end\n";
     let tokens = Lexer::new(src)
         .tokenize()
         .expect("REPL slot-lib snippet should tokenize");
     let mut parser = Parser::new(tokens);
-    let program = parser
-        .parse()
-        .expect("REPL slot-lib snippet should parse");
+    let program = parser.parse().expect("REPL slot-lib snippet should parse");
     program
         .items
         .into_iter()
@@ -353,22 +377,18 @@ mod tests {
     #[test]
     fn new_session_has_empty_cumulative_state() {
         let s = ReplSession::new().expect("create session");
-        assert!(s.all_statements.is_empty());
-        assert!(s.prev_captured_output.is_empty());
+        assert!(s.session_var_mutations.is_empty());
         let _ = Ty::Unit;
     }
 
     #[test]
-    fn reset_clears_all_statements_and_capture_prefix() {
+    fn reset_clears_session_var_mutations() {
         let mut s = ReplSession::new().expect("create session");
-        s.all_statements
+        s.session_var_mutations
             .push(Statement::Let(parse_let_binding("let a = 1")));
-        s.prev_captured_output.push_str("prior output\n");
-        assert_eq!(s.all_statements.len(), 1);
-        assert!(!s.prev_captured_output.is_empty());
+        assert_eq!(s.session_var_mutations.len(), 1);
         s.reset().expect("reset");
-        assert!(s.all_statements.is_empty());
-        assert!(s.prev_captured_output.is_empty());
+        assert!(s.session_var_mutations.is_empty());
     }
 
     #[test]

@@ -6,6 +6,9 @@
 /* ── Printing ──────────────────────────────────────────────────────── */
 
 void ruxen_puts(const char *s) {
+    /* REPL replay-suppression: prior inputs' puts are re-emitted by
+     * the cumulative replay; squash them so each call fires once. */
+    if (ruxen_repl_is_replaying) return;
     if (s) {
         puts(s);
     } else {
@@ -14,12 +17,14 @@ void ruxen_puts(const char *s) {
 }
 
 void ruxen_print(const char *s) {
+    if (ruxen_repl_is_replaying) return;
     if (s) {
         fputs(s, stdout);
     }
 }
 
 void ruxen_eputs(const char *s) {
+    if (ruxen_repl_is_replaying) return;
     if (s) {
         fprintf(stderr, "%s\n", s);
     }
@@ -122,6 +127,7 @@ void *ruxen_stdin_lines(void *handle) {
 }
 
 void *ruxen_stdout_write_str(void *handle, const char *s) {
+    if (ruxen_repl_is_replaying) return ruxen_result_ok_value(0);
     FILE *stream = ruxen_stream_from_handle(handle, stdout);
     const char *text = s ? s : "";
     if (fputs(text, stream) == EOF) {
@@ -131,6 +137,7 @@ void *ruxen_stdout_write_str(void *handle, const char *s) {
 }
 
 void *ruxen_stdout_flush(void *handle) {
+    if (ruxen_repl_is_replaying) return ruxen_result_ok_value(0);
     FILE *stream = ruxen_stream_from_handle(handle, stdout);
     if (fflush(stream) != 0) {
         return ruxen_io_error_from_errno(errno);
@@ -139,6 +146,7 @@ void *ruxen_stdout_flush(void *handle) {
 }
 
 void *ruxen_stderr_write_str(void *handle, const char *s) {
+    if (ruxen_repl_is_replaying) return ruxen_result_ok_value(0);
     FILE *stream = ruxen_stream_from_handle(handle, stderr);
     const char *text = s ? s : "";
     if (fputs(text, stream) == EOF) {
@@ -148,6 +156,7 @@ void *ruxen_stderr_write_str(void *handle, const char *s) {
 }
 
 void *ruxen_stderr_flush(void *handle) {
+    if (ruxen_repl_is_replaying) return ruxen_result_ok_value(0);
     FILE *stream = ruxen_stream_from_handle(handle, stderr);
     if (fflush(stream) != 0) {
         return ruxen_io_error_from_errno(errno);
@@ -166,6 +175,7 @@ void *ruxen_stderr_flush(void *handle) {
  * `puts(3)` would do on a stdio stream. */
 
 void ruxen_stdout_print(void *handle, const char *s) {
+    if (ruxen_repl_is_replaying) return;
     FILE *stream = ruxen_stream_from_handle(handle, stdout);
     if (s) {
         (void)fputs(s, stream);
@@ -173,6 +183,7 @@ void ruxen_stdout_print(void *handle, const char *s) {
 }
 
 void ruxen_stdout_println(void *handle, const char *s) {
+    if (ruxen_repl_is_replaying) return;
     FILE *stream = ruxen_stream_from_handle(handle, stdout);
     if (s) {
         (void)fputs(s, stream);
@@ -181,6 +192,7 @@ void ruxen_stdout_println(void *handle, const char *s) {
 }
 
 void ruxen_stderr_eprint(void *handle, const char *s) {
+    if (ruxen_repl_is_replaying) return;
     FILE *stream = ruxen_stream_from_handle(handle, stderr);
     if (s) {
         (void)fputs(s, stream);
@@ -188,6 +200,7 @@ void ruxen_stderr_eprint(void *handle, const char *s) {
 }
 
 void ruxen_stderr_eprintln(void *handle, const char *s) {
+    if (ruxen_repl_is_replaying) return;
     FILE *stream = ruxen_stream_from_handle(handle, stderr);
     if (s) {
         (void)fputs(s, stream);

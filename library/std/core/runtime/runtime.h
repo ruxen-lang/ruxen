@@ -134,6 +134,30 @@ typedef struct RuxenDuration {
  * cross-file (all manipulation goes through ruxen_instant_*). */
 typedef struct RuxenInstant RuxenInstant;
 
+/* ── REPL replay-suppression flag ────────────────────────────────────
+ *
+ * The REPL session re-runs prior `let_bindings` + session var
+ * mutations on every input so cross-input state persists. To stop
+ * non-idempotent side effects (puts, subprocess spawn, fs.write,
+ * TcpListener.bind, …) from firing N times, the REPL sets this
+ * thread-local flag to 1 around the replay portion of each input's
+ * wrapper. Every non-idempotent `ruxen_*` runtime function early-
+ * returns a benign value (Ok-unit / null / 0) when the flag is set.
+ *
+ * Idempotent reads (fs.read*, fs.metadata, fs.canonicalize,
+ * fs.read_link, fs.read_dir, env getters) ignore the flag — they
+ * don't perturb state and their values are needed for correct
+ * replay of let-RHS expressions like `let n = file_size("x.txt")`.
+ *
+ * Owner: library/std/core/runtime/repl_replay.c.
+ *
+ * AOT binaries / `ruxen run` / `ruxen build` outputs never set this;
+ * the flag stays 0, every wrapped function executes normally, and
+ * the only cost is a single TLS load per gated entry point. */
+extern __thread int ruxen_repl_is_replaying;
+int ruxen_repl_set_replaying(int v);
+int ruxen_repl_get_replaying(void);
+
 /* ── Core memory + panic surface ──────────────────────────────────── */
 
 void ruxen_panic(const char *message);
