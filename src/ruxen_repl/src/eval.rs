@@ -1294,24 +1294,34 @@ fn build_program(
     // type so the bare `return`'s default Unit value matches the
     // signature. Phase 1 already skipped the slot-store tail-preserve
     // rebind via `body_has_return`, but skipping the rebind alone is
-    // not enough — the wrapper's natural tail (e.g. the bound name
-    // from `let ok = client_flow()`) still infers a non-Unit return
-    // type. Cranelift's verifier then rejects the replayed
-    // `return_(&[])` with "arguments of return must match function
-    // signature".
+    // not enough — the wrapper's natural tail (e.g. the synthetic
+    // `Identifier(ok)` display read appended after `let ok =
+    // client_flow()`) still infers a non-Unit return type. Cranelift's
+    // verifier then rejects the replayed `return_(&[])` with
+    // "arguments of return must match function signature".
     //
-    // Fix: strip the user's natural tail expression and append an
-    // empty Block (which evaluates to Unit). The wrapper unambiguously
-    // returns Unit and both the bare `return` and the synthetic tail
-    // match.
+    // Fix: strip the user's natural tail expression IF it's a
+    // pure display read (a `Statement::Expression(Identifier(_))`
+    // — the synthetic line `eval_statement` appends after a let to
+    // surface the bound name) and append an empty Block (which
+    // evaluates to Unit). The wrapper unambiguously returns Unit
+    // and both the bare `return` and the synthetic tail match.
+    //
+    // We deliberately do NOT pop side-effecting expression
+    // statements like `puts "reached"` — those are the user's
+    // actual work and must still run. They typically already type
+    // as Unit anyway; the Unit literal we append simply makes the
+    // wrapper's tail position unambiguous.
     //
     // User-visible: inputs that contain a `return` no longer surface
-    // their natural tail via `=> <value> : <ty>`. This matches
+    // their natural tail value via `=> <value> : <ty>`. This matches
     // compile-and-run semantics (`def main; …; return; end` returns
     // Unit and has no display value).
     if body_has_return {
-        if matches!(body.last(), Some(Statement::Expression(_))) {
-            body.pop();
+        if let Some(Statement::Expression(e)) = body.last() {
+            if matches!(e.kind, ExprKind::Identifier(_)) {
+                body.pop();
+            }
         }
         body.push(Statement::Expression(Expr {
             kind: ExprKind::Block(Block {

@@ -8,6 +8,16 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **Numeric conversion methods `Int.to_f()` and `Float.to_i()`.** Ruxen
+  performs no implicit `Int`↔`Float` coercion (see E0707), so these are
+  the supported way to cross the integer/float boundary: `to_f` widens an
+  `Int` to a `Float`, `to_i` truncates a `Float` toward zero to an `Int`.
+  Backed by new runtime helpers `ruxen_int_to_f` (i64→f64) and
+  `ruxen_float_to_i` (f64→i64) in `library/std/string/runtime/string.c`,
+  wired through the typeck method table, the Cranelift ABI table
+  (`runtime_sigs.rs`), the LLVM declarations, and the
+  `lang_intrinsics::runtime_name` symbol mapping (the missing mapping was
+  why `a.to_f()` previously died as `can't resolve symbol Int_to_f`).
 - **REPL+runtime: replay-suppression flag for non-idempotent runtime
   helpers (refactor phase 3 — Path A).** New
   `library/std/core/runtime/repl_replay.c` hosts a thread-local
@@ -58,6 +68,23 @@ once 1.0.0 ships.
   unconditionally.
 
 ### Fixed
+- **`Int`/`Float` arithmetic mismatch now errors cleanly (E0707) instead
+  of crashing the backend.** A mixed-numeric binary operator (e.g.
+  `a - 3.5` with `a: Int`) previously slipped through type-checking with
+  the left operand's type, then tripped the Cranelift verifier in codegen
+  (`isub.i64 … arg has type f64`) / a JIT panic in the REPL. `typeck`
+  now reports E0707 at the operator's source span; convert one operand
+  (`a.to_f() - 3.5`) so both sides share a type. New registry entry +
+  `docs/errors/E0707.md`.
+- **Unknown method on a scalar primitive now errors at type-check
+  instead of crashing the JIT.** `a.to_f()` / `a.bogus()` on an `Int`
+  used to mangle to `Int_to_f` with no runtime symbol and panic the REPL
+  (`can't resolve symbol Int_to_f`). `typeck` now emits a clean
+  `no method \`X\` on type \`Int\`` for numeric / `Bool` / `Char`
+  receivers, matching the existing field-access diagnostic so the
+  brace-less (`a.to_f`) and braced (`a.to_f()`) forms fail identically.
+  Class / struct / enum / collection / generic receivers keep their
+  later-phase resolution path unchanged.
 - **REPL: skip the tail-preservation transform when the wrapper body
   contains an embedded `return`.** The transform added in Task 1.3
   (the REPL state refactor) hoists the trailing expression into
@@ -93,6 +120,43 @@ once 1.0.0 ships.
   *replayed* `return` from the earlier `if handle == 0; ...; return;
   end`, which this fix detects but cannot fully resolve without
   widening the wrapper signature to accept a bare `return`.
+- **REPL: coerce wrapper return type to Unit when the body contains
+  any `return` (user OR replayed).** Phase 1 (above) skipped the
+  tail-preservation rebind when the wrapper body contained an
+  embedded `return`, but skipping the rebind alone left the
+  wrapper's natural tail in place — so on a later input like
+  `let ok = client_flow()` the synthetic display tail
+  (`Statement::Expression(Identifier(ok))` appended by
+  `eval_statement`) made the wrapper infer return type `Int`, and
+  the *replayed* bare `return` from the earlier `if handle == 0;
+  ...; return; end` then re-tripped the verifier with `arguments
+  of return must match function signature` — this time on
+  `__repl_4` (`let ok = client_flow()`) in the 727 REPL parity
+  run. `build_program` now, when `body_has_return` is true, strips
+  a pure display-read tail (any `Statement::Expression` whose
+  expression is a bare `Identifier(_)` — exclusively the synthetic
+  read appended after a let so the new binding can be displayed)
+  and appends an empty `Block` (which evaluates to Unit) as the
+  new tail. Side-effecting expression statements like `puts
+  "reached"` are kept as-is — they execute as intermediate
+  statements; only the synthetic display name is dropped. The
+  wrapper's signature unambiguously infers as Unit and both the
+  bare `return` (lowered as `return_(&[])`) and the synthetic
+  Unit tail satisfy it. User-visible: inputs that contain a
+  `return` (directly or via replayed history) no longer display
+  their natural tail value via `=> <value> : <ty>`. This matches
+  compile-and-run semantics (`def main; …; return; end` returns
+  Unit and has no display value). Two new tests under
+  `src/ruxen_repl/src/tests/return_in_block.rs` pin the contract:
+  `let_after_replayed_return_compiles` (let-binding follows a
+  return-containing input) and `puts_after_replayed_return_compiles`
+  (a `puts` side-effect statement follows the same). Phase 3 of
+  the unblock plan will remove `727_async_tcp_echo` and `727b`
+  from the `REPL_KNOWN_SKIP` gate once their full REPL parity is
+  confirmed end-to-end (manual run after this patch shows no
+  verifier error through the entire translated input; `echo_ok`
+  surfacing is gated on a separate slot-widening question for
+  Thread handles tracked as Phase 3+ follow-up).
 - **Restore `include Future` + `type Output = Result[...]` on 14 stdlib
   future classes accidentally stripped by Phase 3.** Commit `3dc02b6`
   (the runtime replay-suppression flag) modified 80+ stdlib `.rx`
