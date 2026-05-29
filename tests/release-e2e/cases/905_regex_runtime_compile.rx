@@ -1,0 +1,6 @@
+def main
+  match Regex.new(String.from("\\d+"), String.from(""))
+    Ok(_)  -> puts "ok"
+    Err(_) -> puts "err"
+  end
+end

@@ -66,6 +66,9 @@ static EXPLAINS: &[(&str, &str)] = &[
     ("E0722", include_str!("../../../docs/errors/E0722.md")),
     ("E0723", include_str!("../../../docs/errors/E0723.md")),
     ("E0725", include_str!("../../../docs/errors/E0725.md")),
+    // Type-directed auto-call (E0726): bare function references that
+    // need arguments cannot auto-call with zero args.
+    ("E0726", include_str!("../../../docs/errors/E0726.md")),
     // ── Borrow checker / trait-impl ─────────────────────────────────
     ("E1001", include_str!("../../../docs/errors/E1001.md")),
     ("E1002", include_str!("../../../docs/errors/E1002.md")),
@@ -96,6 +99,13 @@ static EXPLAINS: &[(&str, &str)] = &[
     ("E1600", include_str!("../../../docs/errors/E1600.md")),
     ("E1601", include_str!("../../../docs/errors/E1601.md")),
     ("E1602", include_str!("../../../docs/errors/E1602.md")),
+    // std.regex (E1700-E1704) — `/pat/flags` lexer + `~=` typeck
+    // diagnostics.
+    ("E1700", include_str!("../../../docs/errors/E1700.md")),
+    ("E1701", include_str!("../../../docs/errors/E1701.md")),
+    ("E1702", include_str!("../../../docs/errors/E1702.md")),
+    ("E1703", include_str!("../../../docs/errors/E1703.md")),
+    ("E1704", include_str!("../../../docs/errors/E1704.md")),
 ];
 
 /// Look up the embedded markdown explanation for `code`. Returns

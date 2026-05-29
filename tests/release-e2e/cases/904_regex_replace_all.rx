@@ -1,0 +1,5 @@
+def main
+  let text = String.from("foo bar baz")
+  let out = /\w+/.replace_all(text, String.from("***"))
+  puts out
+end

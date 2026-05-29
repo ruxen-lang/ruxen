@@ -158,6 +158,18 @@ pub const BOOTSTRAP_FILES: &[&str] = &[
     // in `compiler/ruxen_core/src/`. Anything else is an auto-connect
     // gap to fix in the bootstrap pipeline, not in this list.
     "foobar/src/lib.rx",
+    // regex — PCRE2-backed `Regex`, `Match`, `RegexError` classes.
+    // Depends on string/array/map/option_result for return types
+    // (`Array[Match]`, `HashMap[String, String]`, `Option[String]`,
+    // `Result[Regex, RegexError]`) — all loaded above. The
+    // `/pat/flags` literal + `~=` operator surface in the lexer /
+    // parser / typeck reference `Ty::Class { name: "Regex" }`, and
+    // every method call (`is_match`, `find`, `scan`, `replace`,
+    // `replace_all`, `split`, plus `Match` accessors) routes through
+    // the per-class `lib "runtime/regex.c"` FFI aliases declared
+    // here. Without this entry, those calls mangle to bare
+    // `Regex_<method>` / `Match_<method>` and fail to link.
+    "regex/src/lib.rx",
     // bench — prompt 13 microbenchmark harness. `Bencher` class
     // with auto-scaling `iter` + Int-typed `black_box` opaque
     // barrier (C shim). Depends on `time` (Instant.now /

@@ -128,6 +128,10 @@ pub const BOOTSTRAP_EMBEDDED: &[(&str, &str)] = &[
         include_str!("../../../../library/std/foobar/src/lib.rx"),
     ),
     (
+        "regex/src/lib.rx",
+        include_str!("../../../../library/std/regex/src/lib.rx"),
+    ),
+    (
         "bench/src/lib.rx",
         include_str!("../../../../library/std/bench/src/lib.rx"),
     ),

@@ -1,0 +1,8 @@
+def main
+  let s = String.from("error: 42")
+  if s ~= /error/
+    puts "matched"
+  else
+    puts "missed"
+  end
+end
