@@ -15,6 +15,7 @@ pub mod references;
 pub mod rename;
 pub mod semantic_tokens;
 pub mod signature_help;
+pub mod signature_render;
 pub mod type_def;
 pub mod use_index;
 pub mod workspace_symbols;

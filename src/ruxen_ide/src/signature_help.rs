@@ -514,18 +514,11 @@ impl CallFinder {
 /// it close to `format_signature` in `completion.rs` so the two
 /// surfaces look consistent.
 fn format_signature(name: &str, sig: &FnSignature) -> String {
-    let params: Vec<String> = sig
-        .params
-        .iter()
-        .map(|p| format!("{}: {}", p.name, p.ty))
-        .collect();
-    let ret = if matches!(sig.return_ty, ruxen_core::hir::types::Ty::Unit) {
-        String::new()
-    } else {
-        format!(" -> {}", sig.return_ty)
-    };
-    let prefix = if sig.is_async { "async def " } else { "def " };
-    format!("{}{}({}){}", prefix, name, params.join(", "), ret)
+    // Delegate to the shared renderer so signature help, hover, and
+    // `ruxen fmt` always agree on signature shape. `build_parameter_information`
+    // still locates each `name: type` substring in this label for active-param
+    // highlighting, which the shared renderer preserves.
+    crate::signature_render::render(name, sig)
 }
 
 /// Build per-parameter `ParameterInformation` entries whose `label`

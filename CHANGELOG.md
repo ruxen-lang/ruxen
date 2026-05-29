@@ -8,6 +8,15 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Fixed
+- **Shared signature renderer for IDE display.** Hover and signature help no
+  longer hand-roll signature strings (which disagreed with each other and with
+  `ruxen fmt` — e.g. `def f()` vs `def f`, `async def f()`). Both now call the
+  new `ruxen_core::formatter::render_fn_signature`, so the IDE can never drift
+  from the formatter's signature shape.
+- **IDE completion keywords come from the lexer.** Completion's keyword list
+  was a hardcoded copy missing ~26 real keywords (`unless`, `where`, `unsafe`,
+  `const`, …) and wrongly including non-keywords (`and`/`or`/`not`). It now
+  uses the lexer's canonical `KEYWORDS`, guarded by a consistency test.
 - **Cross-binary parser/formatter/IDE parity.** Several constructs the
   language supports were rejected or mangled by some front-end consumers but
   not others. Since the lexer/parser/typeck/formatter are single shared

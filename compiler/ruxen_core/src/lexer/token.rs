@@ -327,6 +327,19 @@ impl TokenKind {
     }
 }
 
+/// The canonical list of Ruxen keyword spellings — the single source of
+/// truth shared with IDE features (e.g. completion) so they cannot drift
+/// from the lexer. Every entry MUST be recognized by [`lookup_keyword`];
+/// the `keywords_const_matches_lookup` test enforces that.
+pub const KEYWORDS: &[&str] = &[
+    "let", "move", "ref", "var", "class", "struct", "enum", "mixin", "include", "extension",
+    "newtype", "type", "def", "public", "private", "protected", "consume", "inline", "self",
+    "Self", "init", "super", "return", "yield", "async", "await", "if", "elsif", "else", "match",
+    "while", "for", "in", "loop", "do", "end", "break", "continue", "where", "as", "some", "any",
+    "layout", "module", "use", "package", "unsafe", "lib", "nil", "true", "false", "Some", "Ok",
+    "Err", "macro", "static", "const", "when", "unless",
+];
+
 /// Look up a keyword from an identifier string.
 pub fn lookup_keyword(ident: &str) -> Option<TokenKind> {
     match ident {

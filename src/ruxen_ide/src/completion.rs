@@ -31,7 +31,7 @@
 use lsp_types::{CompletionItem, CompletionItemKind, InsertTextFormat, Position};
 use ruxen_core::hir::nodes::{DefId, HirExpr, HirExprKind, HirItem, HirProgram, HirStatement};
 use ruxen_core::hir::types::Ty;
-use ruxen_core::lexer::token::Span;
+use ruxen_core::lexer::token::{Span, KEYWORDS};
 use ruxen_core::resolve::symbols::{DefKind, Definition, SymbolTable};
 
 use crate::analysis::AnalysisResult;
@@ -543,10 +543,6 @@ fn sort_text(name: &str, prefix: &str) -> String {
     }
 }
 
-// ─── Built-in keywords (spec §5.4 lowest-rank fallback) ────────────
-
-const KEYWORDS: &[&str] = &[
-    "def", "class", "struct", "enum", "mixin", "module", "lib", "if", "elsif", "else", "end", "do",
-    "loop", "while", "for", "in", "return", "break", "continue", "match", "let", "var", "include",
-    "use", "as", "async", "await", "self", "Self", "true", "false", "and", "or", "not", "yield",
-];
+// Built-in keywords for completion (spec §5.4 lowest-rank fallback) come from
+// the lexer's canonical `KEYWORDS` list (imported above) — never a local copy,
+// so the completion set can never drift from the language's actual keywords.

@@ -1,5 +1,4 @@
 use ruxen_core::hir::types::Ty;
-use ruxen_core::parser::ast::Visibility;
 use ruxen_core::resolve::symbols::{DefKind, Definition};
 
 use crate::analysis::AnalysisResult;
@@ -75,31 +74,10 @@ fn format_variable_hover(def: &Definition, ty: &Ty) -> String {
 fn format_function_hover(def: &Definition) -> String {
     match &def.kind {
         DefKind::Function { signature } | DefKind::Method { signature, .. } => {
-            let params = signature
-                .params
-                .iter()
-                .map(|p| format!("{}: {}", p.name, p.ty))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let vis = match def.visibility {
-                Visibility::Public => "",
-                Visibility::Protected => "protected ",
-                Visibility::Private => "private ",
-            };
-            // Match the formatter (`format_func_def`): a def with no
-            // explicit parameters is written WITHOUT parens (`def name`),
-            // not `def name()`. Keeping hover in sync with `ruxen fmt`
-            // avoids the IDE showing a signature shape the formatter would
-            // never produce.
-            let param_clause = if signature.params.is_empty() {
-                String::new()
-            } else {
-                format!("({params})")
-            };
-            format!(
-                "```ruxen\n{}def {}{} -> {}\n```",
-                vis, def.name, param_clause, signature.return_ty
-            )
+            // Render through the shared renderer so hover, signature help,
+            // and `ruxen fmt` never disagree on signature shape.
+            let sig = crate::signature_render::render(&def.name, signature);
+            format!("```ruxen\n{sig}\n```")
         }
         _ => format!("```ruxen\n{}\n```", def.name),
     }
