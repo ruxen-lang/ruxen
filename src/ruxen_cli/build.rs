@@ -38,6 +38,27 @@ fn main() {
     );
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
 
+    // Place the prebuilt runtime archive next to the `ruxen` binary
+    // (target/<profile>/libruxenrt.a) so the compiler's
+    // `find_prebuilt_runtime_archive()` auto-discovers it in dev builds,
+    // and so `install.sh --from-source` has a known path to stage into
+    // `~/.ruxen/lib/`. OUT_DIR = target/<profile>/build/ruxen_cli-<hash>/out,
+    // so the profile dir is its 3rd ancestor (out -> ruxen_cli-* -> build).
+    {
+        let src = std::path::Path::new(&archive_dir).join("libruxenrt.a");
+        if src.is_file() {
+            if let Ok(out_dir) = env::var("OUT_DIR") {
+                if let Some(profile_dir) =
+                    std::path::Path::new(&out_dir).ancestors().nth(3)
+                {
+                    let dest = profile_dir.join("libruxenrt.a");
+                    let _ = std::fs::copy(&src, &dest);
+                }
+            }
+            println!("cargo:rerun-if-changed={}", src.display());
+        }
+    }
+
     if target_os == "macos" || target_os == "ios" {
         // macOS ld doesn't honour `+whole-archive`; ruxen_repl uses
         // `-force_load` via `cargo:rustc-link-arg`, which doesn't

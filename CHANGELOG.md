@@ -8,6 +8,15 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **Prebuilt C runtime archive.** The stdlib C runtime is no longer recompiled
+  on every AOT build: a prebuilt `libruxenrt.a` ships to `~/.ruxen/lib/` and is
+  auto-discovered relative to the `ruxen` binary (override with
+  `RUXEN_RUNTIME_AR`). When no archive is found the compiler transparently
+  falls back to compiling the runtime `.c`. NOTE: the final link still invokes
+  `cc` — full `cc`-free linking is separate, deferred work. Also fixes installed
+  / `--from-source` toolchains that previously shipped no runtime sources and
+  could not link AOT binaries, and a stale `library/runtime/` path in the
+  release packaging that produced an empty `lib/` payload.
 - **`std.regex` — PCRE2-backed regex package.** New `library/std/regex/` with
   `class Regex`, `class Match`, `class RegexError`. PCRE2 10.44 is vendored
   under `library/std/regex/runtime/pcre2/` and compiled into `libruxenrt.a`

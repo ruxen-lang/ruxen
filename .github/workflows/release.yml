@@ -93,13 +93,15 @@ jobs:
 
           cp README.md LICENSE* "${STAGE}/" 2>/dev/null || true
 
-          # Include the unity-build runtime tree so users with
-          # LLVM/Cranelift can link against it. Post-#06.75 the
-          # aggregator `runtime.c` `#include`s per-module sources under
-          # `core/`, `io/`, `net/`; install.sh maps the staged `lib/`
-          # tree onto `<install>/lib/` verbatim.
+          # Ship the prebuilt C runtime archive. The `ruxen_cli` build
+          # script copies `libruxenrt.a` next to the binary at
+          # target/${TARGET}/release/; install.sh maps the staged `lib/`
+          # tree onto `<install>/lib/` verbatim, so an installed toolchain
+          # links AOT binaries without recompiling the runtime `.c`.
+          # (Replaces the pre-#06.95 `library/runtime/` copy, a path that
+          # no longer exists — the real tree is `library/std/*/runtime/`.)
           mkdir -p "${STAGE}/lib"
-          cp -R library/runtime/. "${STAGE}/lib/"
+          cp "target/${TARGET}/release/libruxenrt.a" "${STAGE}/lib/libruxenrt.a"
 
           tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"
           (cd dist && shasum -a 256 "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256")

@@ -180,6 +180,75 @@ pub fn find_runtime_sources() -> Result<Vec<PathBuf>, String> {
     Ok(sources)
 }
 
+/// Locate a prebuilt `libruxenrt.a` so an AOT build can link the stdlib C
+/// runtime without recompiling it. Returns the first existing candidate, or
+/// `None` (the caller then compiles the runtime `.c` from source).
+///
+/// Probe order:
+/// 1. `RUXEN_RUNTIME_AR` env var — explicit override.
+/// 2. `<exe>/../lib/libruxenrt.a` — installed layout (`~/.ruxen/lib/`).
+/// 3. `<exe>/../lib/ruxen/<host-triple>/libruxenrt.a` — future per-triple home.
+/// 4. `<exe>/libruxenrt.a` and `<exe>/../libruxenrt.a` — dev/test layouts
+///    (`target/<profile>/` for `cargo build`, `.../deps/` for `cargo test`).
+///
+/// NOTE: this removes runtime *C compilation*, not the link step — the final
+/// link still invokes `cc`. Full `cc`-elimination depends on the deferred
+/// bundled-linker work.
+pub fn find_prebuilt_runtime_archive() -> Option<PathBuf> {
+    probe_runtime_archive(
+        std::env::var("RUXEN_RUNTIME_AR").ok().as_deref(),
+        std::env::current_exe().ok().as_deref(),
+    )
+}
+
+/// Pure core of [`find_prebuilt_runtime_archive`] — takes the env override and
+/// the executable path explicitly so it is deterministically testable without
+/// mutating process-global state.
+fn probe_runtime_archive(env_ar: Option<&str>, exe: Option<&Path>) -> Option<PathBuf> {
+    // 1. Explicit override.
+    if let Some(p) = env_ar {
+        let path = PathBuf::from(p);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+
+    let exe = exe?;
+    let bin_dir = exe.parent()?;
+
+    if let Some(root) = bin_dir.parent() {
+        // 2. Installed layout: ~/.ruxen/bin/ruxen -> ~/.ruxen/lib/libruxenrt.a
+        let lib = root.join("lib").join("libruxenrt.a");
+        if lib.is_file() {
+            return Some(lib);
+        }
+        // 3. Future per-triple home.
+        let triple = root
+            .join("lib")
+            .join("ruxen")
+            .join(option_env!("RUXEN_HOST_TARGET").unwrap_or("unknown"))
+            .join("libruxenrt.a");
+        if triple.is_file() {
+            return Some(triple);
+        }
+    }
+
+    // 4a. Dev: target/<profile>/libruxenrt.a, exe = target/<profile>/ruxen.
+    let beside = bin_dir.join("libruxenrt.a");
+    if beside.is_file() {
+        return Some(beside);
+    }
+    // 4b. Test: exe = target/<profile>/deps/<bin> -> target/<profile>/libruxenrt.a.
+    if let Some(parent) = bin_dir.parent() {
+        let up = parent.join("libruxenrt.a");
+        if up.is_file() {
+            return Some(up);
+        }
+    }
+
+    None
+}
+
 /// Backward-compatibility shim — returns the first stdlib runtime
 /// source as a single path. Pre-B-2 callers that expected a single
 /// `runtime.c` should migrate to [`find_runtime_sources`].
@@ -413,13 +482,22 @@ pub fn compile_with_options(
     // Sanitize builds always take the slow path: the prebuilt
     // archive was compiled without ASan/UBSan instrumentation, so
     // reusing it would silently strip sanitization from runtime calls.
-    let prebuilt_archive: Option<PathBuf> = if sanitize {
+    // `find_prebuilt_runtime_archive` probes the `RUXEN_RUNTIME_AR` override
+    // first, then the installed `~/.ruxen/lib/` layout, then dev/test
+    // layouts — falling back to `None` (compile the runtime `.c`).
+    //
+    // The fast path is forced OFF in two cases, because the prebuilt archive
+    // is a cache of the *default*, uninstrumented runtime build:
+    //   - `sanitize`: the archive carries no ASan/UBSan instrumentation, so
+    //     reusing it would silently strip sanitization from runtime calls.
+    //   - `RUXEN_RUNTIME` set: an explicit runtime-source override (e.g. the
+    //     drop/leak fixtures inject an allocation-tracking runtime). The
+    //     requested source must be compiled — the archive must not replace it.
+    let runtime_source_overridden = std::env::var_os("RUXEN_RUNTIME").is_some();
+    let prebuilt_archive: Option<PathBuf> = if sanitize || runtime_source_overridden {
         None
     } else {
-        std::env::var("RUXEN_RUNTIME_AR")
-            .ok()
-            .map(PathBuf::from)
-            .filter(|p| p.is_file())
+        find_prebuilt_runtime_archive()
     };
 
     let mut runtime_objects: Vec<PathBuf> = if prebuilt_archive.is_some() {
@@ -509,4 +587,91 @@ pub fn compile_with_options(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod prebuilt_archive_tests {
+    use super::probe_runtime_archive;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static N: AtomicU64 = AtomicU64::new(0);
+
+    /// Unique empty temp dir per call (no external crates).
+    fn fresh_dir() -> PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "ruxen_ar_test_{}_{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed),
+        ));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn touch(p: &std::path::Path) {
+        std::fs::write(p, b"!<arch>\n").unwrap();
+    }
+
+    #[test]
+    fn env_override_existing_file_wins() {
+        let dir = fresh_dir();
+        let ar = dir.join("libruxenrt.a");
+        touch(&ar);
+        let got = probe_runtime_archive(Some(ar.to_str().unwrap()), None);
+        assert_eq!(got.as_deref(), Some(ar.as_path()));
+    }
+
+    #[test]
+    fn env_override_missing_file_skipped() {
+        let got = probe_runtime_archive(Some("/no/such/libruxenrt.a"), None);
+        assert_eq!(got, None);
+    }
+
+    #[test]
+    fn installed_lib_layout_found() {
+        // <root>/bin/ruxen  ->  <root>/lib/libruxenrt.a
+        let root = fresh_dir();
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        std::fs::create_dir_all(root.join("lib")).unwrap();
+        let exe = root.join("bin").join("ruxen");
+        touch(&exe);
+        let ar = root.join("lib").join("libruxenrt.a");
+        touch(&ar);
+        let got = probe_runtime_archive(None, Some(&exe));
+        assert_eq!(got.as_deref(), Some(ar.as_path()));
+    }
+
+    #[test]
+    fn dev_beside_binary_found() {
+        // <profile>/ruxen  ->  <profile>/libruxenrt.a
+        let prof = fresh_dir();
+        let exe = prof.join("ruxen");
+        touch(&exe);
+        let ar = prof.join("libruxenrt.a");
+        touch(&ar);
+        let got = probe_runtime_archive(None, Some(&exe));
+        assert_eq!(got.as_deref(), Some(ar.as_path()));
+    }
+
+    #[test]
+    fn dev_deps_parent_found() {
+        // <profile>/deps/<testbin>  ->  <profile>/libruxenrt.a
+        let prof = fresh_dir();
+        std::fs::create_dir_all(prof.join("deps")).unwrap();
+        let exe = prof.join("deps").join("testbin");
+        touch(&exe);
+        let ar = prof.join("libruxenrt.a");
+        touch(&ar);
+        let got = probe_runtime_archive(None, Some(&exe));
+        assert_eq!(got.as_deref(), Some(ar.as_path()));
+    }
+
+    #[test]
+    fn none_when_no_archive_anywhere() {
+        let prof = fresh_dir();
+        let exe = prof.join("ruxen");
+        touch(&exe);
+        let got = probe_runtime_archive(None, Some(&exe));
+        assert_eq!(got, None);
+    }
 }

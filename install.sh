@@ -155,7 +155,21 @@ if [ -n "$FROM_SOURCE" ]; then
 
   # Point the install loop at cargo's output dir.
   BIN_SRC_DIR="$ABS_SRC/target/release"
-  EXTRA_SRC=""  # no lib/share/include payload — stdlib is embedded
+
+  # Stage the prebuilt C runtime archive so an installed toolchain can link
+  # AOT binaries without recompiling (or even having) the runtime `.c`. The
+  # `ruxen_cli` build script copies it next to the binary; route it through
+  # the existing `lib/` copy loop (below) so it lands at $RUXEN_HOME/lib/.
+  STAGE="$(mktemp -d "${TMPDIR:-/tmp}/ruxen-stage.XXXXXX")"
+  trap 'rm -rf "$STAGE"' EXIT
+  RT_AR="$ABS_SRC/target/release/libruxenrt.a"
+  if [ -f "$RT_AR" ]; then
+    mkdir -p "$STAGE/lib"
+    cp -f "$RT_AR" "$STAGE/lib/libruxenrt.a"
+    EXTRA_SRC="$STAGE"   # the copy loop installs $STAGE/lib -> $RUXEN_HOME/lib
+  else
+    EXTRA_SRC=""         # archive absent: install proceeds, compiler falls back to cc
+  fi
 else
   # ── Resolve release tag ─────────────────────────────────────────────
   if [ "$RUXEN_VERSION" = "latest" ]; then
