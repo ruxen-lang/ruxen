@@ -37,7 +37,21 @@ fn collect_runtime_sources() -> Vec<std::path::PathBuf> {
             Ok(e) => e,
             Err(_) => continue,
         };
-        let runtime_dir = pkg.path().join("runtime");
+        let pkg_path = pkg.path();
+        // Skip the regex package: its `runtime/regex.c` `#include`s
+        // `pcre2/pcre2.h` from the vendored PCRE2 tree, which only
+        // resolves when the file is compiled in-place with the pcre2
+        // dir on the include path (see `src/ruxen_repl/build.rs` and
+        // `codegen/object.rs`). This harness compiles each `.c` with a
+        // bare `cc` and links the objects standalone, so including
+        // `regex.c` drags in PCRE2 — undefined symbols at link time,
+        // plus warning noise under the `-Werror` strict-warnings test —
+        // for a package these ABI tests never exercise. Mirrors the
+        // same skip in `drop_fixtures.rs` (commit 20098e8).
+        if pkg_path.file_name().and_then(|n| n.to_str()) == Some("regex") {
+            continue;
+        }
+        let runtime_dir = pkg_path.join("runtime");
         if !runtime_dir.is_dir() {
             continue;
         }
