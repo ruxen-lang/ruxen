@@ -34,6 +34,9 @@ fn top_level_lib_block_preserves_doc_comments() {
     let src = "lib \"pcre2-8\"\n  ## A documented FFI alias.\n  def offset as \"ruxen_regex_error_offset\" -> Int\nend\n";
     formats_preserving(
         src,
-        &["## A documented FFI alias.", "def offset as \"ruxen_regex_error_offset\""],
+        &[
+            "## A documented FFI alias.",
+            "def offset as \"ruxen_regex_error_offset\"",
+        ],
     );
 }

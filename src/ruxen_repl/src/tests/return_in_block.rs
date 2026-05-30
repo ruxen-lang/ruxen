@@ -35,10 +35,7 @@ fn return_inside_if_at_top_level_compiles() {
 
 #[test]
 fn return_inside_if_then_no_else_compiles() {
-    let outs = run_session(&[
-        "let x = 0",
-        "if x == 0\n  return\nend",
-    ]);
+    let outs = run_session(&["let x = 0", "if x == 0\n  return\nend"]);
     // x == 0 is true, the bare `return` exits the wrapper. The
     // contract is that the wrapper passes the Cranelift verifier
     // even though the if has no else branch.

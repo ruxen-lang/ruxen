@@ -104,7 +104,11 @@ fn annotated_multi_arg_fn_reference_is_only_e0726() {
             .map(|d| (&d.code, &d.message))
             .collect::<Vec<_>>()
     );
-    assert_eq!(count_with_code(&errs, "E0726"), 1, "the one diagnostic must be E0726");
+    assert_eq!(
+        count_with_code(&errs, "E0726"),
+        1,
+        "the one diagnostic must be E0726"
+    );
 }
 
 /// A bare nullary fn reference as a function's tail expression auto-calls

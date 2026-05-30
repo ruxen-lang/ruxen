@@ -48,9 +48,7 @@ fn main() {
         let src = std::path::Path::new(&archive_dir).join("libruxenrt.a");
         if src.is_file() {
             if let Ok(out_dir) = env::var("OUT_DIR") {
-                if let Some(profile_dir) =
-                    std::path::Path::new(&out_dir).ancestors().nth(3)
-                {
+                if let Some(profile_dir) = std::path::Path::new(&out_dir).ancestors().nth(3) {
                     let dest = profile_dir.join("libruxenrt.a");
                     let _ = std::fs::copy(&src, &dest);
                 }

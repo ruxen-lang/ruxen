@@ -155,10 +155,7 @@ pub fn find_runtime_sources() -> Result<Vec<PathBuf>, String> {
                     // with missing-include errors. Filter by basename
                     // so the build glob stays a glob. Same exclusion
                     // list as `src/ruxen_repl/build.rs`.
-                    let name = sub_path
-                        .file_name()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("");
+                    let name = sub_path.file_name().and_then(|s| s.to_str()).unwrap_or("");
                     if matches!(name, "pcre2_printint.c" | "pcre2_ucptables.c") {
                         continue;
                     }

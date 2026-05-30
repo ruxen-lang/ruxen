@@ -290,9 +290,7 @@ pub fn runtime_signature(name: &str) -> Option<(Vec<Type>, Option<Type>)> {
         "ruxen_regex_is_match" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "ruxen_regex_match" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "ruxen_regex_scan" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_regex_replace" => {
-            Some((vec![types::I64, types::I64, types::I64], Some(types::I64)))
-        }
+        "ruxen_regex_replace" => Some((vec![types::I64, types::I64, types::I64], Some(types::I64))),
         "ruxen_regex_replace_all" => {
             Some((vec![types::I64, types::I64, types::I64], Some(types::I64)))
         }

@@ -297,7 +297,10 @@ fn replay_region_mutates_slot(stmts: &[Statement], slot_name: &str) -> bool {
             }
             ExprKind::Closure(c) => walk_closure_body(&c.body, name),
             ExprKind::MethodCall {
-                object, args, block, ..
+                object,
+                args,
+                block,
+                ..
             } => {
                 if walk_expr(object, name) {
                     return true;
@@ -310,19 +313,29 @@ fn replay_region_mutates_slot(stmts: &[Statement], slot_name: &str) -> bool {
                 // mutation closure. Missing this misses fixture 108
                 // (`.split.each { count += 1 }`) and 307
                 // (`.splitn.each { … }`).
-                block.as_deref().map(|b| walk_expr(b, name)).unwrap_or(false)
+                block
+                    .as_deref()
+                    .map(|b| walk_expr(b, name))
+                    .unwrap_or(false)
             }
             ExprKind::SafeNavCall { object, args, .. } => {
                 walk_expr(object, name) || args.iter().any(|a| walk_expr(a, name))
             }
-            ExprKind::Call { callee, args, block } => {
+            ExprKind::Call {
+                callee,
+                args,
+                block,
+            } => {
                 if walk_expr(callee, name) {
                     return true;
                 }
                 if args.iter().any(|a| walk_expr(a, name)) {
                     return true;
                 }
-                block.as_deref().map(|b| walk_expr(b, name)).unwrap_or(false)
+                block
+                    .as_deref()
+                    .map(|b| walk_expr(b, name))
+                    .unwrap_or(false)
             }
             ExprKind::ClosureCall { callee, args, .. } => {
                 walk_expr(callee, name) || args.iter().any(|a| walk_expr(a, name))
@@ -330,9 +343,7 @@ fn replay_region_mutates_slot(stmts: &[Statement], slot_name: &str) -> bool {
             ExprKind::FieldAccess { object, .. } | ExprKind::SafeNav { object, .. } => {
                 walk_expr(object, name)
             }
-            ExprKind::Index { object, index } => {
-                walk_expr(object, name) || walk_expr(index, name)
-            }
+            ExprKind::Index { object, index } => walk_expr(object, name) || walk_expr(index, name),
             ExprKind::BinaryOp { left, right, .. } => {
                 walk_expr(left, name) || walk_expr(right, name)
             }
@@ -369,7 +380,11 @@ fn replay_region_mutates_slot(stmts: &[Statement], slot_name: &str) -> bool {
     fn walk_block(block: &Block, name: &str) -> bool {
         block.statements.iter().any(|s| match s {
             Statement::Expression(e) => walk_expr(e, name),
-            Statement::Let(b) => b.value.as_deref().map(|v| walk_expr(v, name)).unwrap_or(false),
+            Statement::Let(b) => b
+                .value
+                .as_deref()
+                .map(|v| walk_expr(v, name))
+                .unwrap_or(false),
         })
     }
     fn walk_if(if_expr: &ruxen_core::parser::ast::IfExpr, name: &str) -> bool {
@@ -399,7 +414,11 @@ fn replay_region_mutates_slot(stmts: &[Statement], slot_name: &str) -> bool {
     fn walk_stmt(s: &Statement, name: &str) -> bool {
         match s {
             Statement::Expression(e) => walk_expr(e, name),
-            Statement::Let(b) => b.value.as_deref().map(|v| walk_expr(v, name)).unwrap_or(false),
+            Statement::Let(b) => b
+                .value
+                .as_deref()
+                .map(|v| walk_expr(v, name))
+                .unwrap_or(false),
         }
     }
     stmts.iter().any(|s| walk_stmt(s, slot_name))
@@ -1712,8 +1731,7 @@ fn build_program(
         .filter(|vs| slot_kind_eligible(&vs.ty))
         .collect();
 
-    let mut body: Vec<Statement> =
-        Vec::with_capacity(statements.len() + slot_vars.len() * 3 + 2);
+    let mut body: Vec<Statement> = Vec::with_capacity(statements.len() + slot_vars.len() * 3 + 2);
     // (1) Pre-replay slot LOAD prefix — establishes the lexical
     //     binding so replayed expressions that READ slot-backed
     //     names (puts "#{x}", `for n in r; excl += n end`, etc.)
@@ -2263,10 +2281,7 @@ fn expr_contains_return(expr: &Expr) -> bool {
         ExprKind::IfLet(if_let) => {
             expr_contains_return(&if_let.value)
                 || block_contains_return(&if_let.then_body)
-                || if_let
-                    .else_body
-                    .as_ref()
-                    .is_some_and(block_contains_return)
+                || if_let.else_body.as_ref().is_some_and(block_contains_return)
         }
         ExprKind::Match(match_expr) => {
             expr_contains_return(&match_expr.subject)
@@ -2278,20 +2293,14 @@ fn expr_contains_return(expr: &Expr) -> bool {
                         .unwrap_or(false);
                     let body_has = match &arm.body {
                         ruxen_core::parser::ast::MatchArmBody::Expr(e) => expr_contains_return(e),
-                        ruxen_core::parser::ast::MatchArmBody::Block(b) => {
-                            block_contains_return(b)
-                        }
+                        ruxen_core::parser::ast::MatchArmBody::Block(b) => block_contains_return(b),
                     };
                     guard_has || body_has
                 })
         }
         ExprKind::While(w) => expr_contains_return(&w.condition) || block_contains_return(&w.body),
-        ExprKind::WhileLet(w) => {
-            expr_contains_return(&w.value) || block_contains_return(&w.body)
-        }
-        ExprKind::For(f) => {
-            expr_contains_return(&f.iterable) || block_contains_return(&f.body)
-        }
+        ExprKind::WhileLet(w) => expr_contains_return(&w.value) || block_contains_return(&w.body),
+        ExprKind::For(f) => expr_contains_return(&f.iterable) || block_contains_return(&f.body),
         ExprKind::Loop(l) => block_contains_return(&l.body),
         ExprKind::Block(b) => block_contains_return(b),
         ExprKind::UnsafeBlock(b) => block_contains_return(b),
@@ -2326,10 +2335,7 @@ fn expr_contains_return(expr: &Expr) -> bool {
             expr_contains_return(target) || expr_contains_return(value)
         }
         ExprKind::Range { start, end, .. } => {
-            start
-                .as_deref()
-                .map(expr_contains_return)
-                .unwrap_or(false)
+            start.as_deref().map(expr_contains_return).unwrap_or(false)
                 || end.as_deref().map(expr_contains_return).unwrap_or(false)
         }
         ExprKind::ArrayLiteral(items) => items.iter().any(expr_contains_return),
@@ -2340,10 +2346,7 @@ fn expr_contains_return(expr: &Expr) -> bool {
         ExprKind::MapLiteral(pairs) => pairs
             .iter()
             .any(|(k, v)| expr_contains_return(k) || expr_contains_return(v)),
-        ExprKind::Break(inner) => inner
-            .as_deref()
-            .map(expr_contains_return)
-            .unwrap_or(false),
+        ExprKind::Break(inner) => inner.as_deref().map(expr_contains_return).unwrap_or(false),
         ExprKind::Yield(items) => items.iter().any(expr_contains_return),
         ExprKind::MacroCall { args, .. } => args.iter().any(expr_contains_return),
         ExprKind::Cast { expr, .. } => expr_contains_return(expr),

@@ -34,10 +34,7 @@ fn collect_runtime_sources(std_root: &std::path::Path) -> Vec<PathBuf> {
                     // from pcre2_compile.c / pcre2_tables.c. Compiling
                     // them as TUs would fail with missing-include errors.
                     // Filter by basename so the build glob stays a glob.
-                    let name = sp
-                        .file_name()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("");
+                    let name = sp.file_name().and_then(|s| s.to_str()).unwrap_or("");
                     if matches!(name, "pcre2_printint.c" | "pcre2_ucptables.c") {
                         continue;
                     }
@@ -112,10 +109,7 @@ fn main() {
     // path here. HAVE_CONFIG_H tells PCRE2 to consult our
     // hand-authored config.h; PCRE2_CODE_UNIT_WIDTH=8 selects the
     // 8-bit single-width build (no 16/32-bit variants).
-    let pcre2_dir = std_root
-        .join("regex")
-        .join("runtime")
-        .join("pcre2");
+    let pcre2_dir = std_root.join("regex").join("runtime").join("pcre2");
     if pcre2_dir.is_dir() {
         build.include(&pcre2_dir);
         build.define("HAVE_CONFIG_H", None);

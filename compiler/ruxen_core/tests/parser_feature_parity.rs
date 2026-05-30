@@ -20,14 +20,19 @@ fn rx(name: &str) -> String {
 
 fn parse_diags(src: &str) -> Result<(), String> {
     let mut lexer = Lexer::new(src);
-    let tokens = lexer
-        .tokenize()
-        .map_err(|d| format!("lex: {:?}", d.iter().map(|e| e.to_string()).collect::<Vec<_>>()))?;
+    let tokens = lexer.tokenize().map_err(|d| {
+        format!(
+            "lex: {:?}",
+            d.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+        )
+    })?;
     let mut parser = Parser::new(tokens);
-    parser
-        .parse()
-        .map(|_| ())
-        .map_err(|d| format!("parse: {:?}", d.iter().map(|e| e.to_string()).collect::<Vec<_>>()))
+    parser.parse().map(|_| ()).map_err(|d| {
+        format!(
+            "parse: {:?}",
+            d.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+        )
+    })
 }
 
 /// Doc comments (`##`) must be accepted before FFI `def`s inside a `lib`

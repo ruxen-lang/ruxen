@@ -5,13 +5,23 @@ use ruxen_core::formatter::{render_fn_signature, SigSelf};
 
 #[test]
 fn no_params_omits_parens() {
-    let s = render_fn_signature("get_items", SigSelf::None, false, &[], &[], Some("Array[Int]"));
+    let s = render_fn_signature(
+        "get_items",
+        SigSelf::None,
+        false,
+        &[],
+        &[],
+        Some("Array[Int]"),
+    );
     assert_eq!(s, "def get_items -> Array[Int]");
 }
 
 #[test]
 fn params_rendered_with_types() {
-    let params = [("a".to_string(), "Int".to_string()), ("b".to_string(), "String".to_string())];
+    let params = [
+        ("a".to_string(), "Int".to_string()),
+        ("b".to_string(), "String".to_string()),
+    ];
     let s = render_fn_signature("add", SigSelf::None, false, &[], &params, Some("Int"));
     assert_eq!(s, "def add(a: Int, b: String) -> Int");
 }
@@ -23,7 +33,14 @@ fn generics_and_self_mode_and_class_method() {
     let s = render_fn_signature("make", SigSelf::None, true, &generics, &params, Some("T"));
     assert_eq!(s, "def self.make[T](x: T) -> T");
 
-    let s = render_fn_signature("push", SigSelf::RefMut, false, &[], &[("v".into(), "Int".into())], None);
+    let s = render_fn_signature(
+        "push",
+        SigSelf::RefMut,
+        false,
+        &[],
+        &[("v".into(), "Int".into())],
+        None,
+    );
     assert_eq!(s, "def var push(v: Int)");
 
     let s = render_fn_signature("into", SigSelf::Consuming, false, &[], &[], Some("Int"));
