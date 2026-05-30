@@ -2019,11 +2019,14 @@ fn find_let_type_in_wrapper(
     fn search_stmts(stmts: &[HirStatement], name: &str) -> Option<Ty> {
         let mut last: Option<Ty> = None;
         for s in stmts {
-            if let HirStatement::Let { pattern, ty, .. } = s {
-                if let HirPattern::Binding { name: n, .. } = pattern {
-                    if n == name {
-                        last = Some(ty.clone());
-                    }
+            if let HirStatement::Let {
+                pattern: HirPattern::Binding { name: n, .. },
+                ty,
+                ..
+            } = s
+            {
+                if n == name {
+                    last = Some(ty.clone());
                 }
             }
         }
