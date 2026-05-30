@@ -1,0 +1,12 @@
+# Keep the build context for ci/cross-aarch64/Dockerfile small and stable:
+# that image only needs library/ and the check script. Excluding heavy,
+# frequently-changing trees avoids shipping gigabytes to the daemon and keeps
+# the layer cache warm across Rust-only edits.
+/target
+**/target
+.git
+dist
+docs
+examples
+tests
+*.md

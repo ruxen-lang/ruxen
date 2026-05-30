@@ -26,8 +26,17 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             cross: true
+          # GitHub's macOS runners are arm64 (Apple Silicon); the Intel
+          # macos-13 image is retired. So x86_64-apple-darwin is a
+          # cross-compile here: `cargo build --target` produces a valid
+          # x86_64 artifact, but the "native only" installed-binary tests
+          # cannot run — they link cranelift's x86_64 objects against
+          # arm64-host runtime objects and fail ("found architecture
+          # 'arm64', required architecture 'x86_64'"). Skip them via
+          # cross_arch, exactly as the aarch64-linux cross build does.
           - target: x86_64-apple-darwin
             os: macos-14
+            cross_arch: true
           - target: aarch64-apple-darwin
             os: macos-14
 
@@ -54,10 +63,12 @@ jobs:
         run: cargo install cross --locked
 
       - name: Run installed-binary tests (native only)
-        # Skip on cross builds — we can't execute aarch64 binaries on an
-        # x86_64 runner. Other native matrix entries cover the same code
-        # paths (find_runtime_c, pkg-manager, REPL).
-        if: matrix.cross != true
+        # Skip on cross builds — we can't execute aarch64 Linux binaries on
+        # an x86_64 runner (matrix.cross), nor link/run an x86_64 target on
+        # an arm64 macOS runner (matrix.cross_arch). Other native matrix
+        # entries cover the same code paths (find_runtime_c, pkg-manager,
+        # REPL).
+        if: matrix.cross != true && matrix.cross_arch != true
         shell: bash
         run: |
           cargo test --release --target ${{ matrix.target }} \

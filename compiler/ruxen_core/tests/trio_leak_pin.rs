@@ -39,7 +39,6 @@ use ruxen_core::parser::Parser;
 use ruxen_core::resolve::symbols::DefKind;
 use ruxen_core::typeck;
 use std::path::PathBuf;
-use std::process::Command;
 
 fn workspace_root() -> PathBuf {
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -168,61 +167,63 @@ fn foobar_resolves_through_std_namespace() {
 /// pin: any future stdlib package addition that touches `compiler/`
 /// outside the BOOTSTRAP_FILES const is a fresh auto-connect gap,
 /// not a normal compiler change.
+///
+/// Detection is a scan of the CURRENT source tree, not a git-history diff.
+/// The original implementation diffed the commit that introduced
+/// `library/std/foobar/`, but that cannot work under this repo's
+/// squash-merge history (foobar arrived inside a large squashed PR alongside
+/// unrelated compiler changes, so the introducing commit touches hundreds of
+/// files). The invariant we actually care about is structural and holds for
+/// the tree as it stands: the `foobar` fixture package must be referenced in
+/// `compiler/ruxen_core/src/` ONLY by the stdlib-registration plumbing
+/// (`resolve/bootstrap.rs` + `resolve/stdlib_embedded.rs`) and must never
+/// leak into a compiler phase (typeck / codegen / hir / borrow_check / mir /
+/// …). Any such leak is a fresh auto-connect gap.
 #[test]
 fn foobar_addition_touches_only_bootstrap_files() {
     let repo_root = workspace_root();
-    // Find the commit that introduced the foobar package by searching
-    // recent commits for the path. This is robust against rebase/squash
-    // because the commit hash isn't hardcoded.
-    let log_out = Command::new("git")
-        .args([
-            "log",
-            "--follow",
-            "--format=%H",
-            "--",
-            "library/std/foobar/Ruxen.toml",
-        ])
-        .current_dir(&repo_root)
-        .output()
-        .expect("git log failed");
-    let log_stdout = String::from_utf8_lossy(&log_out.stdout);
-    let foobar_intro_commit = log_stdout
-        .lines()
-        .last()
-        .expect("could not locate foobar intro commit");
+    let core_src = repo_root.join("compiler/ruxen_core/src");
 
-    // Diff that commit against its parent.
-    let diff_out = Command::new("git")
-        .args([
-            "diff-tree",
-            "--no-commit-id",
-            "--name-only",
-            "-r",
-            foobar_intro_commit,
-        ])
-        .current_dir(&repo_root)
-        .output()
-        .expect("git diff-tree failed");
-    let diff = String::from_utf8_lossy(&diff_out.stdout);
+    // Files permitted to name the foobar fixture package: the embedded-stdlib
+    // registration plumbing every package goes through. Paths are relative to
+    // compiler/ruxen_core/src/.
+    const PERMITTED: &[&str] = &["resolve/bootstrap.rs", "resolve/stdlib_embedded.rs"];
 
-    let mut offenders: Vec<&str> = Vec::new();
-    for path in diff.lines() {
-        let core_src_path = path
-            .strip_prefix("compiler/ruxen_core/src/")
-            .or_else(|| path.strip_prefix("compiler/riven_core/src/"));
-        let Some(core_src_path) = core_src_path else {
-            continue;
-        };
-        if core_src_path == "resolve/bootstrap.rs" {
-            // Permitted: ONLY a one-line BOOTSTRAP_FILES addition.
+    fn rs_files(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("read core src dir") {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                rs_files(&path, out);
+            } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
+                out.push(path);
+            }
+        }
+    }
+
+    let mut files = Vec::new();
+    rs_files(&core_src, &mut files);
+
+    let mut offenders: Vec<String> = Vec::new();
+    for file in &files {
+        let rel = file
+            .strip_prefix(&core_src)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        if PERMITTED.contains(&rel.as_str()) {
             continue;
         }
-        offenders.push(path);
+        let contents = std::fs::read_to_string(file).unwrap_or_default();
+        if contents.to_lowercase().contains("foobar") {
+            offenders.push(rel);
+        }
     }
+    offenders.sort();
+
     assert!(
         offenders.is_empty(),
-        "adding library/std/foobar/ touched compiler/ruxen_core/src/ files \
-         beyond bootstrap.rs (trio leak not yet closed): {:?}",
-        offenders
+        "the `foobar` stdlib fixture leaked into compiler/ruxen_core/src/ files \
+         beyond the permitted stdlib-registration plumbing {PERMITTED:?} \
+         (trio leak not yet closed): {offenders:?}",
     );
 }

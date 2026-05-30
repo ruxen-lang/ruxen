@@ -1,0 +1,44 @@
+# Local aarch64 cross-compile check, runnable with one command.
+#
+# From the repository root:
+#
+#   docker compose    -f ci/cross-aarch64/docker-compose.yml run --rm cross-aarch64
+#   # or with the native podman compose tool:
+#   podman-compose    -f ci/cross-aarch64/docker-compose.yml run --rm cross-aarch64
+#
+# NOTE: use `podman-compose` (hyphen, the standalone tool), not
+# `podman compose` — the latter shells out to the Docker compose provider,
+# which needs the podman API socket running (`systemctl --user start
+# podman.socket`). `podman-compose` drives the podman CLI directly and needs
+# no socket.
+#
+# The service mounts the working tree read-only at /work and runs
+# compile-runtime.sh against the LIVE source, so you can edit anything under
+# library/ and re-run without rebuilding the image. A zero exit + the final
+# "OK: cross-compiled N ..." line means every stdlib runtime translation unit
+# compiles against the old (glibc 2.23) aarch64 sysroot that `cross` uses.
+#
+# `docker compose build` (or the implicit build on first `run`) also runs the
+# check once at image-build time via the Dockerfile's RUN, so a plain build is
+# itself a valid one-shot check.
+services:
+  cross-aarch64:
+    build:
+      # Context is the repo root (two levels up) so the Dockerfile can COPY
+      # library/ and the script; the dockerfile path is relative to it.
+      context: ../..
+      dockerfile: ci/cross-aarch64/Dockerfile
+    image: ruxen-cross-aarch64
+    working_dir: /work
+    # On SELinux hosts (Fedora, RHEL, …) a bind mount is unreadable from the
+    # container unless the labels are reconciled, surfacing as
+    # `find: 'library/std': Permission denied`. Disabling SELinux label
+    # confinement for this throwaway, read-only check is the least invasive
+    # fix — it does NOT relabel the host repo (unlike a `:z` volume flag,
+    # which rewrites the SELinux context of your working tree in place).
+    security_opt:
+      - label=disable
+    volumes:
+      # Live source, read-only — re-run picks up edits without a rebuild.
+      - ../..:/work:ro
+    command: ["sh", "/usr/local/bin/compile-runtime.sh"]

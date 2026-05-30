@@ -46,11 +46,14 @@
 #include <fcntl.h>
 #include <sys/types.h>
 
-#if defined(__linux__)
-#  include <sys/random.h>
-#elif defined(__APPLE__)
-#  include <Security/Security.h>
-#endif
+/* Secure-entropy headers (<sys/random.h>, <Security/Security.h>) are
+ * intentionally NOT included here. This header is pulled into every
+ * runtime translation unit, and <sys/random.h> was added in glibc 2.25
+ * — it is absent from older cross-compile sysroots (e.g. the Ubuntu
+ * 16.04 image `cross` uses for aarch64-unknown-linux-gnu), which would
+ * break compilation of EVERY runtime TU. The sole consumer is
+ * library/std/rand/runtime/rand.c, which includes what it needs locally
+ * and reaches the kernel CSPRNG via syscall(SYS_getrandom) on Linux. */
 
 /* Linux-only send() flag that suppresses SIGPIPE on a closed peer.
  * macOS / *BSD don't define it; on those platforms we set the

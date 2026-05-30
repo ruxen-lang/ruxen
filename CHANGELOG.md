@@ -9,6 +9,19 @@ once 1.0.0 ships.
 
 ## [0.1.0] - 2026-05-30
 
+### Fixed
+- Cross-compilation for `aarch64-unknown-linux-gnu` (and other targets using
+  older `cross` sysroots) no longer fails with `sys/random.h: No such file or
+  directory`. The shared runtime header no longer includes `<sys/random.h>`
+  (glibc ≥ 2.25); secure entropy in the `rand` runtime now invokes the
+  `getrandom(2)` syscall directly with a `/dev/urandom` fallback.
+- Release build for `x86_64-apple-darwin` no longer fails its installed-binary
+  tests with `found architecture 'arm64', required architecture 'x86_64'`.
+  GitHub's macOS runners are arm64 and the Intel `macos-13` image is retired,
+  so that target is a cross-compile; the release workflow now builds the
+  artifact with `cargo build --target` and skips the native-only tests for it
+  (mirroring the `aarch64-unknown-linux-gnu` cross build).
+
 ### Added
 - **Prebuilt C runtime archive.** The stdlib C runtime is no longer recompiled
   on every AOT build: a prebuilt `libruxenrt.a` ships to `~/.ruxen/lib/` and is
