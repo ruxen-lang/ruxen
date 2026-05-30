@@ -1,0 +1,25 @@
+## TaskYieldFuture — cooperative yield. First poll returns Pending,
+## second poll returns Ready. Holds a single "did I yield yet?" bit.
+##
+## Same one-field shape as TimeSleepFuture (no generic, single-state
+## bookkeeping). Construction is zero-arg.
+class TaskYieldFuture
+  polled: Int
+  include Future
+  type Output = ()
+
+  def init
+    self.polled = 0
+  end
+
+  def var poll(cx: &var Context) -> Poll[()]
+    if self.polled == 0
+      self.polled = 1
+      let w = cx.waker
+      w.wake_by_ref
+      Poll.Pending
+    else
+      Poll.Ready(nil)
+    end
+  end
+end

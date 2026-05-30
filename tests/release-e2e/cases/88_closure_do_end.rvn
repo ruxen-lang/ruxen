@@ -1,7 +1,0 @@
-def main
-  let v = vec![1, 2, 3]
-  v.each do |n|
-    let doubled = n * 2
-    puts "#{doubled}"
-  end
-end

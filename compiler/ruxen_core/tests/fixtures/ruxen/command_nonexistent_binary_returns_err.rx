@@ -1,0 +1,8 @@
+use std.process.Command
+
+def main
+  match Command.new("/no/such/binary/anywhere/here").status
+    Ok(_)  -> puts "unexpected_ok"
+    Err(_) -> puts "err_ok"
+  end
+end

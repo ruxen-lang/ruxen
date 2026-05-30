@@ -1,0 +1,6 @@
+def main
+  let v = [1, 2, 3, 4, 5]
+  let n = v.iter.take(2).count
+  let s = n.to_string
+  puts "n=#{s}"
+end

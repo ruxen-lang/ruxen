@@ -1,0 +1,7 @@
+
+def main
+  let out = stdout()
+  out.print("alpha")
+  out.print("beta")
+  out.println("")
+end

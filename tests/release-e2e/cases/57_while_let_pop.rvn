@@ -1,7 +1,0 @@
-def main
-  let mut v = vec![1, 2, 3]
-  while let Some(x) = v.pop
-    puts "#{x}"
-  end
-  puts "done"
-end

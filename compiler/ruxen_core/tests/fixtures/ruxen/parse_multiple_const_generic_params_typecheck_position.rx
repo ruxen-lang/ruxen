@@ -1,0 +1,4 @@
+
+struct Matrix[T, const M: USize, const N: USize]
+  rows: USize
+end

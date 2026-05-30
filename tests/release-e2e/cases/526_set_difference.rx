@@ -1,0 +1,14 @@
+def main
+  var a: Set[Int] = Set.new
+  a.insert(1)
+  a.insert(2)
+  a.insert(3)
+  var b: Set[Int] = Set.new
+  b.insert(2)
+  let d = a.difference(&b)
+  let n = d.len
+  puts "len=#{n}"
+  puts "has1=#{d.contains(1)}"
+  puts "has2=#{d.contains(2)}"
+  puts "has3=#{d.contains(3)}"
+end

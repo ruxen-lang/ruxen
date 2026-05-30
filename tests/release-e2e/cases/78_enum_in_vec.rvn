@@ -1,9 +1,0 @@
-enum Shape
-  Circle(radius: Float)
-  Square(side: Float)
-end
-
-def main
-  let shapes = vec![Shape.Circle(radius: 1.0), Shape.Square(side: 2.0)]
-  puts "#{shapes.len}"
-end

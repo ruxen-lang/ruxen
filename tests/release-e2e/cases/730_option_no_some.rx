@@ -1,0 +1,34 @@
+## "Drop Some" sugar: `T?` parses as `Option[T]`, bare value
+## auto-wraps to `Some(value)`, `nil` lowers to `None`. Exercises
+## the let-binding RHS and function-return wrap sites.
+
+def find(id: Int) -> Int?
+  if id < 0
+    nil
+  else
+    id * 2
+  end
+end
+
+def main
+  let a: Int? = 5
+  let b: Int? = nil
+  let c = find(3)
+  let d = find(-1)
+  match a
+    Some(n) -> puts "a=#{n}"
+    None    -> puts "a=nil"
+  end
+  match b
+    Some(n) -> puts "b=#{n}"
+    None    -> puts "b=nil"
+  end
+  match c
+    Some(n) -> puts "c=#{n}"
+    None    -> puts "c=nil"
+  end
+  match d
+    Some(n) -> puts "d=#{n}"
+    None    -> puts "d=nil"
+  end
+end

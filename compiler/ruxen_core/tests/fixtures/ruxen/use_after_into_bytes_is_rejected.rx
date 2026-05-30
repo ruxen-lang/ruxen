@@ -1,0 +1,5 @@
+def main
+  let s = String.from("hi")
+  let _bs = s.into_bytes
+  let _len = s.len
+end

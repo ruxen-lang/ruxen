@@ -1,0 +1,5 @@
+use std.process.exit
+
+def main
+  exit(42)
+end

@@ -1,0 +1,15 @@
+class Ticker
+  count: Int
+
+  def init(@count: Int)
+  end
+
+  def tick_anchor_qzx(extra: Int) -> Int
+    self.count + extra
+  end
+end
+
+def main
+  let t = Ticker.new(0)
+  let r = t.tick_anchor_qzx(2)
+end

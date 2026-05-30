@@ -1,0 +1,9 @@
+class MutexGuard[T]
+  include !Send
+
+  lib "runtime/mutex.c"
+    def get as "ruxen_mutex_guard_get" -> T
+    def set as "ruxen_mutex_guard_set"(value: T) -> ()
+    def drop as "ruxen_mutex_guard_drop" -> ()
+  end
+end

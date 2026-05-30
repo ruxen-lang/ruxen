@@ -1,0 +1,5 @@
+def main
+  let hvar_anchor_qzx = 1
+  let a = hvar_anchor_qzx + hvar_anchor_qzx
+  let b = hvar_anchor_qzx
+end

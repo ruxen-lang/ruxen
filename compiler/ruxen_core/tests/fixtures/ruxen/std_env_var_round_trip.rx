@@ -1,0 +1,5 @@
+use std.env.get
+
+def main
+  puts get("RUXEN_STD_ENV_TEST").expect!("env")
+end

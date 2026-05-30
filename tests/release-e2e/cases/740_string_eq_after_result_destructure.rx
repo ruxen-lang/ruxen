@@ -1,0 +1,44 @@
+## Task #22: String == on values flowing through a Result destructure
+## and through `String`-typed parameters must use strcmp, not pointer-eq.
+##
+## Before the fix, function parameters annotated `s: String` were typed
+## `Ty::Class { name: "String" }` (resolve/items.rs::resolve_class
+## stomps the primitive TypeAlias kind during class-body resolution).
+## The codegen `is_string_mir_ty` helper only recognised the canonical
+## `Ty::String` form, so any compare where BOTH sides came from such a
+## parameter fell back to integer pointer-equality — byte-identical
+## strings compared unequal silently. This impacted every URL match,
+## header lookup, and response comparison in real server code.
+##
+## The fixture exercises the two surface shapes that previously failed:
+##   1. A `String` parameter compared with a `String` parameter inside a
+##      helper called from a `match Ok(s) -> check(s, expected)` arm.
+##      (Both compare operands are `Ty::Class { "String" }`.)
+##   2. A direct `match Ok(s) -> s == expected_param` from a String-typed
+##      param compared against another String-typed param.
+
+def make_result(payload: String) -> Result[String, Int]
+  Ok(payload)
+end
+
+def check_strings(s: String, needle: String) -> Int
+  if s == needle
+    1
+  else
+    0
+  end
+end
+
+def main
+  let want = String.from("hello")
+  let needle = String.from("hello")
+  let r = match make_result(want)
+    Ok(s)  -> check_strings(s, needle)
+    Err(_) -> 0
+  end
+  if r == 1
+    puts "match"
+  else
+    puts "fail"
+  end
+end

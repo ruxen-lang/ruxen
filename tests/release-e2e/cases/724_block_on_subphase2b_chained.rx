@@ -1,0 +1,34 @@
+## Spec B8 (docs/specs/stdlib/executor.spec.md): block_on drives
+## a sub-phase-2B chained-await future to completion across multiple
+## suspension points.
+##
+## The outer future has two `.await`s, so its state machine has 3
+## states (state 0 polls inner_a, state 1 polls inner_b, terminal
+## fold inside state 1). Per spec B5 of the lowering, transitions
+## return Pending between states (no eager fall-through), so the
+## block_on poll loop polls outer 3 times — yielding between each —
+## before reaching Ready(30).
+##
+## Pinned behaviours:
+##   B8 — block_on correctly drives a multi-state future past every
+##        Poll.Pending the lowering emits, returning Ready(30) only
+##        when the final state's continuation produces it.
+
+async def inner_a() -> Int
+  10
+end
+
+async def inner_b() -> Int
+  20
+end
+
+async def outer() -> Int
+  let a = inner_a().await
+  let b = inner_b().await
+  a + b
+end
+
+def main
+  let result = block_on(outer())
+  puts "#{result}"
+end

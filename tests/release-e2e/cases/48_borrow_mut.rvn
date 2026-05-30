@@ -1,9 +1,0 @@
-def append_bang(s: &mut String)
-  s.push('!')
-end
-
-def main
-  let mut greeting = String.from("hello")
-  append_bang(&mut greeting)
-  puts "#{greeting}"
-end

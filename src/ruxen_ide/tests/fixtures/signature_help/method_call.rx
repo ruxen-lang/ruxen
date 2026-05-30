@@ -1,0 +1,26 @@
+## Signature help fixture — cursor inside a method call's argument
+## list. Tests that MethodCall dispatch through the symbol table's
+## DefKind::Method branch produces a signature like a free fn does.
+##
+## The first arg is bound to a real local (`factor_local`) above the
+## call so the arg expression type-checks; without that, method
+## resolution short-circuits with the arg's typeck failure and
+## `method` stays UNRESOLVED_DEF. The cursor anchor sits in the
+## offset position (second arg).
+
+class Calculator
+  base: Int
+
+  def init(@base: Int)
+  end
+
+  def scale(factor: Int, offset: Int) -> Int
+    self.base * factor + offset
+  end
+end
+
+def main
+  let c = Calculator.new(10)
+  let factor_local = 3
+  let r = c.scale(factor_local, cursor_method_second_anchor)
+end

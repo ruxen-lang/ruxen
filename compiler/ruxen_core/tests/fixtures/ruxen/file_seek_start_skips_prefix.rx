@@ -1,0 +1,23 @@
+use std.io.File
+use std.io.SeekFrom
+
+def read_tail(f: File)
+  match f.read_to_string()
+    Ok(s)  -> puts "tail=#{s}"
+    Err(_) -> puts "read_fail"
+  end
+end
+
+def after_seek(f: File)
+  match f.seek(SeekFrom.Start(offset: 3))
+    Ok(_)  -> read_tail(f)
+    Err(_) -> puts "seek_fail"
+  end
+end
+
+def main
+  match File.open("__FILE__")
+    Ok(f)  -> after_seek(f)
+    Err(_) -> puts "open_fail"
+  end
+end

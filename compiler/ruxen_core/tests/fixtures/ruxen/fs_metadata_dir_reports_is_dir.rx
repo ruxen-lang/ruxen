@@ -1,0 +1,22 @@
+
+use std.fs.metadata
+
+def report(m: Metadata)
+  if m.is_dir
+    puts "dir_yes"
+  else
+    puts "dir_no"
+  end
+  if m.is_file
+    puts "file_yes"
+  else
+    puts "file_no"
+  end
+end
+
+def main
+  match metadata("__DIR__")
+    Ok(m)  -> report(m)
+    Err(_) -> puts "unexpected_err"
+  end
+end

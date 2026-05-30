@@ -1,0 +1,24 @@
+## Doubles the input.
+##
+## Demonstrates that `##` doc comments are captured by the parser and
+## attached to the next item rather than discarded.
+def double(x: Int) -> Int
+  x * 2
+end
+
+## Returns its argument unchanged.
+def identity(x: Int) -> Int
+  x
+end
+
+## A simple struct with leading docs.
+struct Pair
+  fst: Int
+  snd: Int
+end
+
+def main
+  let p = Pair.new(double(3), identity(7))
+  puts "#{p.fst}"
+  puts "#{p.snd}"
+end

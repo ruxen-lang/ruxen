@@ -1,0 +1,7 @@
+def main
+  let s = String.from("hello")
+  match &s
+    ref inner -> puts "#{inner}"
+  end
+  puts "#{s}"
+end

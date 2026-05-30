@@ -1,0 +1,22 @@
+## Spec B8 (docs/specs/stdlib/executor.spec.md): block_on drives a
+## sub-phase-2B chained-await future to completion across multiple
+## suspension points. The poll loop polls 3 times (Pending after
+## state 0, Pending after state 1, Ready(30) from state 2).
+async def inner_a() -> Int
+  10
+end
+
+async def inner_b() -> Int
+  20
+end
+
+async def outer() -> Int
+  let a = inner_a().await
+  let b = inner_b().await
+  a + b
+end
+
+def main
+  let result = block_on(outer())
+  puts "#{result}"
+end

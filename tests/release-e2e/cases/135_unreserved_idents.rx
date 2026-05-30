@@ -1,0 +1,17 @@
+def send(msg: &str)
+  puts msg
+end
+
+def receive -> Int
+  42
+end
+
+class Mailbox
+  count: Int
+end
+
+def main
+  send("hello")
+  let n = receive()
+  puts "#{n}"
+end

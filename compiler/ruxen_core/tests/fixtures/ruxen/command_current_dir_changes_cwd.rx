@@ -1,0 +1,17 @@
+use std.process.Command
+
+def report(out: Output)
+  # /tmp on Linux; /private/tmp on macOS — contains catches both.
+  if out.stdout.contains("/tmp")
+    puts "cwd_ok"
+  else
+    puts "cwd_bad=#{out.stdout}"
+  end
+end
+
+def main
+  match Command.new("/bin/pwd").current_dir("/tmp").output
+    Ok(out) -> report(out)
+    Err(_)  -> puts "cwd_err"
+  end
+end

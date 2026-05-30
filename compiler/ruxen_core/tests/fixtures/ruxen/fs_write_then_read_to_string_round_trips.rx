@@ -1,0 +1,13 @@
+
+use std.fs.{write, read_to_string}
+
+def main
+  match write("__FILE__", "hello fs")
+    Ok(_)  -> puts "wrote"
+    Err(_) -> puts "write_fail"
+  end
+  match read_to_string("__FILE__")
+    Ok(c)  -> puts "read=#{c}"
+    Err(_) -> puts "read_fail"
+  end
+end

@@ -1,0 +1,22 @@
+struct Score
+  v: Int
+  include Ord
+  include Eq
+  include PartialOrd
+  include PartialEq
+end
+
+def cmp_it[T: Ord](a: &T, b: &T) -> Bool
+  a.cmp(b) < 0
+end
+
+def pcmp_it[T: PartialOrd](a: &T, b: &T) -> Bool
+  a.partial_cmp(b) < 0
+end
+
+def main
+  let a = Score.new(1)
+  let b = Score.new(2)
+  puts "#{cmp_it(&a, &b)}"
+  puts "#{pcmp_it(&a, &b)}"
+end

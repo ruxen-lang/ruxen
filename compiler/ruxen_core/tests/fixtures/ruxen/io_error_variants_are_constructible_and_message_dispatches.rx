@@ -1,0 +1,13 @@
+
+def show(e: IoError) -> String
+  e.message()
+end
+
+def main
+  let nf  = IoError.NotFound
+  let pd  = IoError.PermissionDenied
+  let oth = IoError.Other(message: "boom")
+  puts show(nf)
+  puts show(pd)
+  puts show(oth)
+end

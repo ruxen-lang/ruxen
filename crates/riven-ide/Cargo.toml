@@ -1,8 +1,0 @@
-[package]
-name = "riven-ide"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-riven-core = { path = "../riven-core" }
-lsp-types = "0.94"

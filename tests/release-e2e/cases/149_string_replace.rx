@@ -1,0 +1,5 @@
+def main
+  let s = String.from("hello world hello")
+  puts s.replace("hello", "bye")
+  puts s.replace("xx", "yy")
+end

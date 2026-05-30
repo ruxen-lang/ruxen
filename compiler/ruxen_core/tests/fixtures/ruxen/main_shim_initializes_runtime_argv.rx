@@ -1,0 +1,7 @@
+lib "c"
+  def ruxen_env_args_count() -> Int64
+end
+
+def main
+  puts "#{ruxen_env_args_count()}"
+end

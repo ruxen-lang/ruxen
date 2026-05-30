@@ -1,0 +1,53 @@
+## Loop body has a pre-await local that the awaitee_ctor reads.
+## Tests whether describe_await + the body_pre_await emission
+## correctly preserves local scoping across iterations.
+
+class TickFuture
+  ticks: Int
+  payload: Int
+  include Future
+  type Output = Int
+
+  def init(ticks: Int, payload: Int)
+    self.ticks = ticks
+    self.payload = payload
+  end
+
+  def self.make(ticks: Int, payload: Int) -> TickFuture
+    TickFuture.new(ticks, payload)
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    if self.ticks == 0
+      Poll.Ready(self.payload)
+    else
+      self.ticks = self.ticks - 1
+      Poll.Pending
+    end
+  end
+end
+
+async def loop_with_local -> Int
+  var i: Int = 0
+  var sum: Int = 0
+  while i < 2
+    let p = i + 100
+    let v = TickFuture.make(1, p).await
+    sum = sum + v
+    i = i + 1
+  end
+  sum
+end
+
+def main
+  puts "main: start"
+  let total = block_on(loop_with_local())
+  puts "main: done"
+  # iter 1: p=100, v=100, sum=100
+  # iter 2: p=101, v=101, sum=201
+  if total == 201
+    puts "ok"
+  else
+    puts "fail: #{total}"
+  end
+end

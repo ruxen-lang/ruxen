@@ -1,0 +1,8 @@
+def greet_anchor_qzx -> Int
+  42
+end
+
+def main
+  let a = greet_anchor_qzx
+  let b = greet_anchor_qzx
+end

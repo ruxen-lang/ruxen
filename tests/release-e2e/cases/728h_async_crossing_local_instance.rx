@@ -1,0 +1,48 @@
+## Tests Shape 3 with the receiver being a CROSSING LOCAL (var
+## declared pre-loop, type-annotated, used inside the loop).
+## Mirrors Rondo's `var l: AsyncTcpListener = listener` shape.
+
+class Holder
+  ticks: Int
+  payload: Int
+  include Future
+  type Output = Int
+
+  def init(ticks: Int, payload: Int)
+    self.ticks = ticks
+    self.payload = payload
+  end
+
+  def var make_inner(extra: Int) -> Holder
+    Holder.new(1, self.payload + extra)
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    if self.ticks == 0
+      Poll.Ready(self.payload)
+    else
+      self.ticks = self.ticks - 1
+      Poll.Pending
+    end
+  end
+end
+
+async def call_via_crossing(h_in: Holder) -> Int
+  var h: Holder = h_in
+  var keep_going: Bool = true
+  while keep_going
+    let v = h.make_inner(5).await
+    keep_going = false
+  end
+  0
+end
+
+def main
+  let h = Holder.new(0, 100)
+  let r = block_on(call_via_crossing(h))
+  if r == 0
+    puts "ok"
+  else
+    puts "fail: #{r}"
+  end
+end

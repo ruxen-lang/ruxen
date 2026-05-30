@@ -1,0 +1,7 @@
+[package]
+name = "std-set"
+version = "0.1.0"
+description = "Set (HashSet) class"
+
+[dependencies]
+std-hash = "= 0.1.0"

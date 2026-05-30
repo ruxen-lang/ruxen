@@ -1,0 +1,8 @@
+def shout_anchor_qzx -> Int
+  7
+end
+
+def main
+  let a = shout_anchor_qzx
+  let b = shout_anchor_qzx
+end

@@ -1,0 +1,22 @@
+## std.test.TestCase — one executable test case.
+##
+## Built by `Tester#it(name) do ... end` and `Tester#xit(name) do ... end`.
+## The Runner walks the group tree (see runner.rx) and invokes each
+## TestCase's body closure inside a forked child process for isolation.
+##
+## `expect_panic_substr` is None for an ordinary test. When set, the
+## runner inverts the success condition: the child MUST panic and the
+## captured stderr MUST contain the substring.
+class TestCase
+  name: String
+  body: any Fn[Fn() -> ()]
+  pending: Bool
+  expect_panic_substr: Option[String]
+
+  def init(name: &String, body: any Fn[Fn() -> ()])
+    self.name = name.clone
+    self.body = body
+    self.pending = false
+    self.expect_panic_substr = nil
+  end
+end

@@ -1,0 +1,4 @@
+
+def rotate[const K: USize](x: Int) -> Int
+  x
+end

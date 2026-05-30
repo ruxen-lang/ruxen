@@ -1,0 +1,5 @@
+def outer_qf
+  let pinned_qf = 0
+  pinned_qf = 1
+  fut_qf.await
+end

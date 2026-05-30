@@ -1,0 +1,12 @@
+use std.time.Duration
+
+def main
+  # 1500 ms = 1.5 sec — as_secs is integer floor.
+  let d = Duration.from_millis(1500)
+  let s = d.as_secs()
+  if s == 1
+    puts "ok"
+  else
+    puts "fail s=#{s}"
+  end
+end

@@ -1,0 +1,8 @@
+def main
+  let x = 10
+  var y = 5
+  y = y + 1
+  y += 3
+  puts "#{x}"
+  puts "#{y}"
+end

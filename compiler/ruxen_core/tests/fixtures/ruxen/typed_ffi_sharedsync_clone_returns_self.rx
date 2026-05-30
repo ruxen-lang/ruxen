@@ -1,0 +1,9 @@
+## Pin: B5 — a lib decl returning `Self[T]` / class-self resolves to
+## the same class type with the same generic args. `SharedSync[T].clone
+## -> SharedSync[T]` typechecks as a chain.
+def main
+  let s = SharedSync.new(7)
+  let s2 = s.clone
+  let v = s2.get
+  let _doubled = v + 1
+end

@@ -1,0 +1,19 @@
+[package]
+name = "ruxen_driver"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "ruxen_driver"
+
+[features]
+llvm = ["ruxen_core/llvm"]
+
+[dependencies]
+ruxen_core = { path = "../ruxen_core" }
+
+[lints]
+workspace = true

@@ -1,0 +1,32 @@
+mixin A
+  def a_msg -> String
+end
+
+mixin B: A
+  def b_msg -> String
+end
+
+class Thing
+  name: String
+
+  def init(@name: String)
+  end
+
+  include A
+
+  def a_msg -> String
+    "A: #{self.name}"
+  end
+
+  include B
+
+  def b_msg -> String
+    "B: #{self.name}"
+  end
+end
+
+def main
+  let t = Thing.new(String.from("x"))
+  puts "#{t.a_msg}"
+  puts "#{t.b_msg}"
+end

@@ -1,0 +1,20 @@
+use std.process.Command
+
+def report(s: ExitStatus)
+  if s.code == 0
+    puts "ok"
+  else
+    puts "code=#{s.code}"
+  end
+end
+
+def main
+  var bulk: Array[String] = Array.new
+  bulk.push("a")
+  bulk.push("b")
+  bulk.push("c")
+  match Command.new("/bin/echo").args(bulk).status
+    Ok(s)  -> report(s)
+    Err(_) -> puts "err"
+  end
+end

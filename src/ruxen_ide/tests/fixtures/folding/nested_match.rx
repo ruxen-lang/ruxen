@@ -1,0 +1,7 @@
+def fold_anchor_match_runner(n: Int) -> Int
+  match n
+    0 -> 100
+    1 -> 200
+    _ -> 300
+  end
+end

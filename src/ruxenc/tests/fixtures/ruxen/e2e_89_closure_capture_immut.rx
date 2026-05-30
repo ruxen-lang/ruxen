@@ -1,0 +1,6 @@
+def main
+  let multiplier = 3
+  let multiply = { |x: Int| x * multiplier }
+  puts "#{multiply.(5)}"
+  puts "#{multiply.(10)}"
+end

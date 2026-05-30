@@ -1,0 +1,38 @@
+# Class with methods and enum
+enum Priority
+  Low
+  High
+
+  def weight -> Int
+    match self
+      Priority.Low  -> 1
+      Priority.High -> 3
+    end
+  end
+end
+
+class Todo
+  id: Int
+  priority: Priority
+
+  def init(@id: Int, @priority: Priority)
+  end
+
+  def is_high -> Bool
+    match &self.priority
+      Priority.High -> true
+      _ -> false
+    end
+  end
+end
+
+def main
+  puts "Starting..."
+  let t = Todo.new(1, Priority.High)
+  puts "Created task"
+  if t.is_high
+    puts "high priority"
+  else
+    puts "low priority"
+  end
+end

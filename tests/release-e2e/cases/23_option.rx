@@ -1,0 +1,18 @@
+def find(n: Int) -> Int?
+  if n > 0
+    n * 10
+  else
+    nil
+  end
+end
+
+def main
+  match find(5)
+    Some(v) -> puts "got #{v}"
+    nil     -> puts "nothing"
+  end
+  match find(-1)
+    Some(v) -> puts "got #{v}"
+    nil     -> puts "nothing"
+  end
+end

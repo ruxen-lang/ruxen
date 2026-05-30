@@ -1,0 +1,11 @@
+use std.time.Instant
+
+def main
+  let t = Instant.now()
+  let e = t.elapsed()
+  if e.as_nanos() >= 0
+    puts "ok"
+  else
+    puts "fail"
+  end
+end

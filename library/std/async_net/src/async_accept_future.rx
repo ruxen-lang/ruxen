@@ -1,0 +1,45 @@
+## --- AsyncAcceptFuture (B6.6) --------------------------------------
+##
+## Persistent-fd-registration model: the AsyncTcpListener owns the
+## edge-triggered read-readiness registration on its listening socket,
+## installed at bind time. Successive accept calls just drive the step
+## machine which loops accept(2) until EAGAIN.
+##
+## Drain-to-empty correctness: ruxen_async_accept_step's loop calls
+## accept() until EAGAIN before returning 1, satisfying the
+## edge-triggered contract. The next incoming SYN will produce an
+## edge that wakes park_current.
+class AsyncAcceptFuture
+  state_ptr: Int
+  handle: Int
+  done: Int
+  include Future
+  type Output = Result[(AsyncTcpStream, String), IoError]
+
+  def init(listener_fd: Int, handle: Int)
+    self.state_ptr = ruxen_async_accept_state_new(listener_fd)
+    self.handle = handle
+    self.done = 0
+  end
+
+  def var poll(cx: &var Context) -> Poll[Result[(AsyncTcpStream, String), IoError]]
+    if self.done != 0
+      return Poll.Ready(accept_state_to_result(self.state_ptr))
+    end
+    let step = ruxen_async_accept_step(self.state_ptr)
+    if step == 1
+      let w = cx.waker
+      ruxen_reactor_set_waker(ruxen_reactor_current_handle(), self.handle, w)
+      return Poll.Pending
+    end
+    self.done = 1
+    Poll.Ready(accept_state_to_result(self.state_ptr))
+  end
+
+  def drop
+    if self.state_ptr != 0
+      ruxen_async_accept_state_free(self.state_ptr)
+      self.state_ptr = 0
+    end
+  end
+end

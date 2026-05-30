@@ -1,0 +1,8 @@
+## --- AsyncStdin --------------------------------------------------------
+##
+## Zero-sized handle (the actual state lives in the future). The class
+## exists purely so `AsyncStdin.read_line()` reads as a method call
+## consistent with `AsyncFile.open(path)` and `AsyncTcpListener.bind(...)`.
+class AsyncStdin
+  def self.read_line -> AsyncReadLineFuture { AsyncReadLineFuture.new }
+end

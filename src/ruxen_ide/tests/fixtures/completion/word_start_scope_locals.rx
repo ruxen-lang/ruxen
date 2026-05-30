@@ -1,0 +1,10 @@
+## Completion fixture — locals declared BEFORE the cursor are
+## visible; locals declared AFTER are not. The test locates the
+## cursor by a unique anchor identifier in the function body and
+## verifies only the earlier-declared local surfaces.
+
+def main
+  let before_local = 1
+  cursor_anchor
+  let after_local = 2
+end

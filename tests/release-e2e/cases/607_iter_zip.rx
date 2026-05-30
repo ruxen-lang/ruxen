@@ -1,0 +1,13 @@
+def main
+  let a = [1, 2, 3, 4]
+  let b = [10, 20, 30]
+  let n = a.iter.zip(b.iter).count
+  puts "n=#{n}"
+  let m = b.iter.zip(a.iter).count
+  puts "m=#{m}"
+  let empty: Array[Int] = Array.new
+  let z = a.iter.zip(empty.iter).count
+  puts "empty_rhs=#{z}"
+  let z2 = empty.iter.zip(a.iter).count
+  puts "empty_lhs=#{z2}"
+end

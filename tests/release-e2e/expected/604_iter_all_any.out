@@ -1,0 +1,5 @@
+all_even=true
+any_gt2=true
+any_gt100=false
+empty_all=true
+empty_any=false

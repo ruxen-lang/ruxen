@@ -1,0 +1,29 @@
+class ParentPicker
+  def init
+  end
+
+  def pick(value: Int) -> String
+    "parent-int"
+  end
+
+  def pick(value: String) -> String
+    "parent-string"
+  end
+end
+
+class ChildPicker < ParentPicker
+  def init
+    super()
+  end
+
+  def pick(value: Bool) -> String
+    "child-bool"
+  end
+end
+
+def main
+  let picker = ChildPicker.new()
+  puts picker.pick(7)
+  puts picker.pick("seven")
+  puts picker.pick(true)
+end

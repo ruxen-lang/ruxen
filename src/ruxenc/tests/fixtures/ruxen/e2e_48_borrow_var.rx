@@ -1,0 +1,9 @@
+def append_bang(s: &var String)
+  s.push('!')
+end
+
+def main
+  var greeting = String.from("hello")
+  append_bang(&var greeting)
+  puts "#{greeting}"
+end

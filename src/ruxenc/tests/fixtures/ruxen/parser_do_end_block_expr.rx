@@ -1,0 +1,8 @@
+def main
+  let v = do
+    let a = 1
+    let b = 2
+    a + b
+  end
+  puts "#{v}"
+end

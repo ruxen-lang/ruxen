@@ -1,0 +1,7 @@
+def main
+  var data = [1, 2, 3]
+  let view = &data
+  puts "#{view.len}"
+  data.push(4)
+  puts "#{data.len}"
+end

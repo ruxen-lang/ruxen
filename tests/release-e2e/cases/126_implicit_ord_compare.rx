@@ -1,0 +1,17 @@
+struct Score
+  v: Int
+end
+
+def main
+  let a = Score.new(5)
+  let b = Score.new(10)
+  if a < b
+    puts "a<b"
+  end
+  if b > a
+    puts "b>a"
+  end
+  if a <= b
+    puts "a<=b"
+  end
+end

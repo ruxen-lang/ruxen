@@ -1,0 +1,12 @@
+def area(r: Float) -> Float
+  3.14159 * r * r
+end
+
+def main
+  puts "#{area(5.0)}"
+  let a = 2.5
+  let b = 4.0
+  puts "#{a + b}"
+  puts "#{b - a}"
+  puts "#{b / a}"
+end

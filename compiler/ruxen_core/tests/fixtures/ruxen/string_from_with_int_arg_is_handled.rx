@@ -1,0 +1,3 @@
+def main
+  let _s = String.from(123)
+end

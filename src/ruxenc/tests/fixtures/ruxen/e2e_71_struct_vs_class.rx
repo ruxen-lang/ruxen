@@ -1,0 +1,24 @@
+struct Point
+  x: Int
+  y: Int
+
+end
+
+class Circle
+  center: Point
+  radius: Int
+
+  def init(@center: Point, @radius: Int)
+  end
+
+  def describe -> String
+    "center=(#{self.center.x},#{self.center.y}) r=#{self.radius}"
+  end
+end
+
+def main
+  let p = Point.new(1, 2)
+  let c = Circle.new(p, 5)
+  puts "#{c.describe}"
+  puts "#{p.x}"
+end

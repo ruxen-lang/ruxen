@@ -1,0 +1,29 @@
+class Builder
+  a: Int
+  b: Int
+
+  def init
+    self.a = 0
+    self.b = 0
+  end
+
+  def var set_a(v: Int) -> &var Self
+    self.a = v
+    self
+  end
+
+  def var set_b(v: Int) -> &var Self
+    self.b = v
+    self
+  end
+
+  def sum -> Int
+    self.a + self.b
+  end
+end
+
+def main
+  var b = Builder.new
+  b.set_a(1).set_b(2)
+  puts "#{b.sum}"
+end

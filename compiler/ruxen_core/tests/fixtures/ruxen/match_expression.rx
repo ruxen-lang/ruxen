@@ -1,0 +1,12 @@
+
+enum Color
+  Red
+  Blue
+end
+
+def describe(c: Color) -> String
+  match c
+    Color.Red -> "red"
+    Color.Blue -> "blue"
+  end
+end

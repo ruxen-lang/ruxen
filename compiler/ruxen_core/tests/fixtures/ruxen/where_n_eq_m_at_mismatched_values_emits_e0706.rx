@@ -1,0 +1,7 @@
+
+struct Square[const W: USize, const H: USize] where W == H
+  area: Int
+end
+
+def take_rect(_s: Square[3, 4])
+end

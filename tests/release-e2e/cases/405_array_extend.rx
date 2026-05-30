@@ -1,0 +1,13 @@
+def main
+  var a: Array[Int] = Array.new
+  a.push(1)
+  a.push(2)
+  var b: Array[Int] = Array.new
+  b.push(3)
+  b.push(4)
+  a.extend(&b)
+  puts "len=#{a.len}"
+  for x in &a
+    puts "#{x}"
+  end
+end

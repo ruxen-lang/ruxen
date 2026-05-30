@@ -1,0 +1,8 @@
+use std.env.get
+
+def main
+  match get("RUXEN_SENTINEL")
+    Ok(v)  -> puts "got=#{v}"
+    Err(_) -> puts "missing"
+  end
+end

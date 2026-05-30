@@ -1,0 +1,11 @@
+use std.net.TcpStream
+
+def main
+  # Port 1 with no listener should fail; whether the kernel hands us
+  # ECONNREFUSED or EACCES depends on privileges, but either lands in
+  # the Err arm.
+  match TcpStream.connect(&"127.0.0.1:1")
+    Ok(_)  -> puts "connect=ok"
+    Err(_) -> puts "connect=err"
+  end
+end

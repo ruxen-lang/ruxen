@@ -1,0 +1,10 @@
+use std.fs.{create_dir_all, exists}
+
+def main
+  create_dir_all("{nested}").expect!("create_dir_all")
+  if exists("{nested}")
+    puts "created"
+  else
+    puts "missing"
+  end
+end

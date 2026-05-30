@@ -1,0 +1,30 @@
+enum MyErr
+  NotFound(id: Int)
+
+  include Error
+
+  def message -> String
+    match self
+      MyErr.NotFound(id) -> "not found: #{id}"
+    end
+  end
+end
+
+def lookup(id: Int) -> Result[Int, MyErr]
+  if id == 1
+    Ok(100)
+  else
+    Err(MyErr.NotFound(id: id))
+  end
+end
+
+def main
+  match lookup(1)
+    Ok(v)  -> puts "ok #{v}"
+    Err(e) -> puts "err #{e.message}"
+  end
+  match lookup(2)
+    Ok(v)  -> puts "ok #{v}"
+    Err(e) -> puts "err #{e.message}"
+  end
+end

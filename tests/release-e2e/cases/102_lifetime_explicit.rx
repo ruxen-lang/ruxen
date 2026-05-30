@@ -1,0 +1,14 @@
+def longest[a](x: &a String, y: &a String) -> &a String
+  if x.len > y.len
+    x
+  else
+    y
+  end
+end
+
+def main
+  let a = String.from("hello")
+  let b = String.from("hi")
+  let r = longest(&a, &b)
+  puts "#{r}"
+end

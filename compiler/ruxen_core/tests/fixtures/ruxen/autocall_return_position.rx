@@ -1,0 +1,14 @@
+## A bare nullary fn reference as a function's tail expression auto-calls
+## against the declared return type (a non-Fn context).
+def get_items -> Array[Int]
+  [1, 2, 3]
+end
+
+def wrapper -> Array[Int]
+  get_items
+end
+
+def main
+  let xs = wrapper
+  let n = xs.len
+end

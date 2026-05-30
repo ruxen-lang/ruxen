@@ -1,0 +1,60 @@
+use std.net.TcpStream
+use std.env.get
+use std.time.Duration
+use std.io.IoErrorKind
+use std.io.IoError
+
+def kind_label(k: IoErrorKind) -> String
+  match k
+    IoErrorKind.WouldBlock        -> "WouldBlock"
+    IoErrorKind.Interrupted       -> "Interrupted"
+    IoErrorKind.InvalidInput      -> "InvalidInput"
+    IoErrorKind.NotFound          -> "NotFound"
+    IoErrorKind.PermissionDenied  -> "PermissionDenied"
+    IoErrorKind.AlreadyExists     -> "AlreadyExists"
+    IoErrorKind.UnexpectedEof     -> "UnexpectedEof"
+    IoErrorKind.BrokenPipe        -> "BrokenPipe"
+    IoErrorKind.Other             -> "Other"
+    IoErrorKind.ConnectionRefused -> "ConnectionRefused"
+    IoErrorKind.ConnectionReset   -> "ConnectionReset"
+    IoErrorKind.ConnectionAborted -> "ConnectionAborted"
+    IoErrorKind.NotConnected      -> "NotConnected"
+    IoErrorKind.AddrInUse         -> "AddrInUse"
+    IoErrorKind.AddrNotAvailable  -> "AddrNotAvailable"
+    IoErrorKind.InvalidData       -> "InvalidData"
+    IoErrorKind.TimedOut          -> "TimedOut"
+    IoErrorKind.WriteZero         -> "WriteZero"
+    IoErrorKind.Unsupported       -> "Unsupported"
+    IoErrorKind.OutOfMemory       -> "OutOfMemory"
+  end
+end
+
+def report_err(e: IoError)
+  puts "kind=#{kind_label(e.kind())}"
+end
+
+def try_read(s: TcpStream)
+  var buf: Array[Int] = Array.new
+  match s.read(&var buf)
+    Ok(_)  -> puts "kind=UnexpectedOk"
+    Err(e) -> report_err(e)
+  end
+end
+
+def set_timeout_and_read(s: TcpStream)
+  let t = Duration.from_millis(50)
+  match s.set_read_timeout(&t)
+    Ok(_)  -> nil
+    Err(_) -> puts "set_read_timeout=err"
+  end
+  try_read(s)
+end
+
+def main
+  let p: String = get("RUXEN_NET_TEST_PORT").expect!("port")
+  let addr = "127.0.0.1:#{p}"
+  match TcpStream.connect(&addr)
+    Ok(s)  -> set_timeout_and_read(s)
+    Err(_) -> puts "connect=err"
+  end
+end

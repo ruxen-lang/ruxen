@@ -1,0 +1,13 @@
+
+class Vector[T, const N: USize]
+  data: USize
+
+  def init(@data: USize)
+  end
+end
+
+def take_one(v: Vector[Int, 4 * 1])
+end
+
+def take_two(v: Vector[Int, 4])
+end

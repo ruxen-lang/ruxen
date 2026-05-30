@@ -1,0 +1,20 @@
+def main
+  let a: UInt8 = 200u8
+  let b: UInt8 = 50u8
+  # a + b would overflow at u8 (wraps to 250 → 250 ok)
+  # add to a wider type after lifting:
+  let sum: UInt32 = 200u32 + 50u32
+  puts "sum=#{sum}"
+
+  let small: Int8 = 7i8
+  puts "small=#{small}"
+
+  let big: Int64 = 1_234_567_890i64
+  puts "big=#{big}"
+
+  let hex: Int = 0x1F
+  puts "hex=#{hex}"
+
+  let bin: Int = 0b1010
+  puts "bin=#{bin}"
+end

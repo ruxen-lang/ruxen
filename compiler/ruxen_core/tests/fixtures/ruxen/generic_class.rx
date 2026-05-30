@@ -1,0 +1,7 @@
+
+class Container[T]
+  value: T
+
+  def init(@value: T)
+  end
+end

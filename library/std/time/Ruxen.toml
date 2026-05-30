@@ -1,0 +1,4 @@
+[package]
+name = "std-time"
+version = "0.1.0"
+description = "Duration + Instant + monotonic / realtime clocks"

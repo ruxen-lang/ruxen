@@ -1,0 +1,9 @@
+use std.io.{stdin, stdout}
+
+def main
+  let reader = stdin()
+  let out = stdout()
+  let text = reader.read_to_string().expect!("stdin read_to_string")
+  out.write_str(text).expect!("stdout write")
+  out.flush().expect!("stdout flush")
+end

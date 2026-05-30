@@ -1,0 +1,16 @@
+use std.io.File
+use std.io.SeekFrom
+
+def report(f: File)
+  match f.seek(SeekFrom.End(offset: 0))
+    Ok(p)  -> puts "pos=#{p}"
+    Err(_) -> puts "seek_fail"
+  end
+end
+
+def main
+  match File.open("__FILE__")
+    Ok(f)  -> report(f)
+    Err(_) -> puts "open_fail"
+  end
+end

@@ -1,0 +1,3 @@
+def main
+  var s: Set[Map[Int, Int]] = Set.new
+end

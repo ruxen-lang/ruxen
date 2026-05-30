@@ -1,0 +1,7 @@
+use std.fs.{create_dir, rename, remove_file}
+
+def main
+  create_dir("tmp-dir").expect!("mkdir")
+  rename("tmp-dir/a.txt", "tmp-dir/b.txt").expect!("rename")
+  remove_file("tmp-dir/b.txt").expect!("remove")
+end

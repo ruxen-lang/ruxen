@@ -1,0 +1,38 @@
+def classify(e: IoError) -> String
+  match e.kind()
+    IoErrorKind.ConnectionRefused -> "refused"
+    IoErrorKind.NotFound          -> "missing"
+    IoErrorKind.PermissionDenied  -> "denied"
+    IoErrorKind.AlreadyExists     -> "exists"
+    IoErrorKind.Interrupted       -> "interrupted"
+    IoErrorKind.WouldBlock        -> "would_block"
+    IoErrorKind.InvalidInput      -> "invalid_input"
+    IoErrorKind.UnexpectedEof     -> "eof"
+    IoErrorKind.BrokenPipe        -> "broken_pipe"
+    IoErrorKind.Other             -> "other"
+    IoErrorKind.ConnectionReset   -> "reset"
+    IoErrorKind.ConnectionAborted -> "aborted"
+    IoErrorKind.NotConnected      -> "not_connected"
+    IoErrorKind.AddrInUse         -> "addr_in_use"
+    IoErrorKind.AddrNotAvailable  -> "addr_unavail"
+    IoErrorKind.InvalidData       -> "invalid_data"
+    IoErrorKind.TimedOut          -> "timed_out"
+    IoErrorKind.WriteZero         -> "write_zero"
+    IoErrorKind.Unsupported       -> "unsupported"
+    IoErrorKind.OutOfMemory       -> "oom"
+  end
+end
+
+def main
+  # Direct construction. The runtime errno-classifier path
+  # (ECONNREFUSED -> IoError.ConnectionRefused) is exercised by the
+  # T5 TcpStream wrapper work; T1's e2e contract is that the variant
+  # exists, constructs, matches, and round-trips through `.kind()`.
+  #
+  # Two fresh constructions avoid the move-after-`.kind()` borrow
+  # error: classify() takes ownership, and the second binding is
+  # used to print the message.
+  puts classify(IoError.ConnectionRefused(message: "connection refused"))
+  let e = IoError.ConnectionRefused(message: "connection refused")
+  puts e.message()
+end

@@ -1,0 +1,12 @@
+## Pin: B3 — `Mutex.new(value)` rejects non-Send T with E1101.
+## See docs/specs/ownership/send_sync_enforcement.spec.md §B3.
+
+class Foo
+  def init
+  end
+end
+
+def main
+  let f = Foo.new
+  let _m = Mutex.new(f)
+end

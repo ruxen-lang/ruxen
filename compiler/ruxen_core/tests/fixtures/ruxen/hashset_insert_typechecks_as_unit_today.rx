@@ -1,0 +1,4 @@
+def main
+  var s: Set[Int] = Set.new
+  s.insert(1)
+end

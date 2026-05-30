@@ -1,0 +1,21 @@
+mixin Greet
+  def hello -> String
+end
+
+class Dog
+  name: String
+
+  def init(@name: String)
+  end
+
+  include Greet
+
+  def hello -> String
+    "Woof! I'm #{self.name}"
+  end
+end
+
+def main
+  let d = Dog.new(String.from("Rex"))
+  puts d.hello
+end

@@ -1,0 +1,21 @@
+mixin Empty
+  def self.empty -> Self
+end
+
+class Bag
+  count: Int
+
+  def init(@count: Int)
+  end
+
+  include Empty
+
+  def self.empty -> Self
+    Bag.new(0)
+  end
+end
+
+def main
+  let b = Bag.empty
+  puts "#{b.count}"
+end

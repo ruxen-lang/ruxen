@@ -1,0 +1,15 @@
+def classify(n: Int) -> String
+  match n
+    0 -> "zero"
+    1 -> "one"
+    2 -> "two"
+    _ -> "many"
+  end
+end
+
+def main
+  puts classify(0)
+  puts classify(1)
+  puts classify(2)
+  puts classify(99)
+end

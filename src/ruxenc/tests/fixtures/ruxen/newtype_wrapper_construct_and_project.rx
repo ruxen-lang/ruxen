@@ -1,0 +1,6 @@
+newtype Meters(Float)
+
+def main
+  let m = Meters(3.14)
+  puts "#{m.0}"
+end

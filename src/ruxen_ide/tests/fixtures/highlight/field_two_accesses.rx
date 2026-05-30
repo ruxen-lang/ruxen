@@ -1,0 +1,13 @@
+class HPoint
+  hpx_anchor_qzx: Int
+  y: Int
+
+  def init(@hpx_anchor_qzx: Int, @y: Int)
+  end
+end
+
+def main
+  let p = HPoint.new(1, 2)
+  let a = p.hpx_anchor_qzx
+  let b = p.hpx_anchor_qzx
+end

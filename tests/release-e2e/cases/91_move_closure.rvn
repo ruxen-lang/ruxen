@@ -1,8 +1,0 @@
-def make_adder(n: Int) -> impl Fn(Int) -> Int
-  move { |x| x + n }
-end
-
-def main
-  let add_five = make_adder(5)
-  puts "#{add_five.(10)}"
-end

@@ -1,0 +1,9 @@
+
+use std.fs.read_to_string
+
+def main
+  match read_to_string("/no/such/file/we/hope.txt")
+    Ok(_)  -> puts "unexpected_ok"
+    Err(_) -> puts "err_ok"
+  end
+end

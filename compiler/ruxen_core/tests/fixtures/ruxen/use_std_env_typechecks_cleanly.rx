@@ -1,0 +1,7 @@
+use std.env.{args, get}
+
+def main
+  let argv = args()
+  puts "#{argv.len()}"
+  puts get("HOME").expect!("home")
+end

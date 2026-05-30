@@ -1,0 +1,12 @@
+def main
+  var m: Map[Int, Array[Int]] = Map.new
+  var row1: Array[Int] = Array.new
+  row1.push(1)
+  row1.push(2)
+  var row2: Array[Int] = Array.new
+  row2.push(3)
+  row2.push(4)
+  m.insert(1, row1)
+  m.insert(2, row2)
+  let _len = m.len
+end

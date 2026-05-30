@@ -1,0 +1,19 @@
+# TaskList test - with method call but no call in main
+
+class Counter
+  count: Int
+
+  def init
+    self.count = 0
+  end
+
+  def var increment
+    self.count = self.count + 1
+  end
+end
+
+def main
+  puts "Before new"
+  var c = Counter.new
+  puts "After new"
+end

@@ -1,0 +1,30 @@
+# #06.93 Phase 5: a class inside a module includes a mixin from
+# the SAME module. The shared mixin holds a `lib` block whose FFI
+# decls must propagate to the class under the qualified mangled
+# name (`BufferedThings_File_add`) so the call site
+# `BufferedThings.File.add(41)` links against the right C symbol.
+#
+# This is the load-bearing shape for #06.95 BufReader/BufWriter
+# module + mixin reshape — inner classes share instance methods
+# via a sibling mixin within the same module.
+
+module BufferedThings
+  mixin AddMixin
+    lib "ruxen_runtime"
+      def self.add as "ruxen_test_extern_add_one"(x: Int) -> Int
+    end
+  end
+
+  class File
+    include AddMixin
+  end
+end
+
+def main() -> Int
+  let r = BufferedThings.File.add(41)
+  if r == 42
+    0
+  else
+    1
+  end
+end

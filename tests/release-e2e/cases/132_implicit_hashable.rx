@@ -1,0 +1,15 @@
+## Auto-synthesized Hashable mixin works for structs whose fields are all Hashable.
+struct KeyA
+  v: Int
+end
+
+struct KeyB
+  v: Int
+end
+
+def main
+  let a = KeyA.new(1)
+  let b = KeyB.new(2)
+  puts "#{a.v}"
+  puts "#{b.v}"
+end

@@ -1,0 +1,22 @@
+## Typed FFI returns — SharedSync surface.
+##
+## Source: docs/specs/types/typed_ffi_returns.spec.md (B8 row for SharedSync).
+##
+## Verifies:
+##   * `SharedSync.new(100)` reports `SharedSync[Int]` (B1+B3)
+##   * `.clone` reports `SharedSync[T]` and bumps the refcount (B5)
+##   * `.strong_count` returns Int (unchanged — primitive-shaped return)
+##   * `.get` reports `T` resolved to `Int` (B4)
+
+def main
+  let s = SharedSync.new(100)
+  let s2 = s.clone
+  let count = s.strong_count
+  let v = s.get
+  let v2 = s2.get
+  if v == 100 && v2 == 100 && count == 2
+    puts "ok"
+  else
+    puts "fail"
+  end
+end

@@ -1,0 +1,16 @@
+## Signature help fixture — nested call: cursor sits inside the INNER
+## call's arg list (`inner(cursor)`), which is itself the first arg of
+## the outer call. The innermost call's signature must be the one
+## returned, not the outer's.
+
+def outer(value: Int) -> Int
+  value * 2
+end
+
+def inner(seed: Int, scale: Int) -> Int
+  seed + scale
+end
+
+def main
+  let r = outer(inner(cursor_inner_nested_anchor, 7))
+end

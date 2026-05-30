@@ -1,0 +1,18 @@
+## A bare nullary fn reference passed where a non-Fn parameter is expected
+## auto-calls; passed where a `Fn` parameter is expected, it is referenced.
+def greeting -> String
+  "hi"
+end
+
+def shout(s: String) -> String
+  s
+end
+
+def call_fn(f: Fn() -> String) -> String
+  f()
+end
+
+def main
+  let a = shout(greeting)
+  let b = call_fn(greeting)
+end

@@ -1,0 +1,22 @@
+mixin Showable
+  def to_display -> String
+end
+
+extension Int
+  include Showable
+
+  def to_display -> String
+    "#{self}"
+  end
+end
+
+def merge[A, B](x: A, y: B) -> String
+  where A: Showable,
+        B: Showable
+  "#{x.to_display}+#{y.to_display}"
+end
+
+def main
+  let s = merge(1, 2)
+  puts "#{s}"
+end

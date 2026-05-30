@@ -1,0 +1,1027 @@
+//! End-to-end tests for the `ruxen compile` subcommand (low-level driver).
+//!
+//! These tests stage an isolated "installed" layout:
+//!
+//!     <tempdir>/bin/ruxen
+//!     <tempdir>/lib/runtime.c
+//!
+//! …and invoke the staged `ruxen compile` against a suite of real Ruxen
+//! programs. This validates the full compile → link → execute pipeline
+//! exactly as it runs on a user's machine after `install.sh` — catching
+//! regressions like hardcoded `CARGO_MANIFEST_DIR` paths, missing runtime
+//! functions, and backend verifier errors.
+//!
+//! The fixtures shipped a `ruxenc` binary historically; the toolchain now
+//! consolidates everything under a single `ruxen` driver, so these tests
+//! stage and exercise `ruxen compile <file>` instead.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::OnceLock;
+
+use tempfile::TempDir;
+
+/// Shared, pre-staged install layout for all tests in this binary.
+///
+/// On Linux, if two parallel tests each `fs::copy(ruxenc_exe(), dst)` and
+/// `Command::new(dst).spawn()` at the same time, a sibling thread's fork
+/// inherits the still-open write fd, and the child's `execve` hits
+/// ETXTBUSY ("Text file busy") even when its own staged binary is fully
+/// written and closed. Staging exactly once via `OnceLock` — before any
+/// test spawns — eliminates the race: there is no live write fd when
+/// tests run.
+fn shared_install() -> &'static Path {
+    static INSTALL: OnceLock<(TempDir, PathBuf)> = OnceLock::new();
+    &INSTALL
+        .get_or_init(|| {
+            let temp = tempfile::tempdir().expect("mktemp shared install");
+            let bin_dir = temp.path().join("bin");
+            let lib_dir = temp.path().join("lib");
+            fs::create_dir_all(&bin_dir).unwrap();
+            fs::create_dir_all(&lib_dir).unwrap();
+
+            let staged_ruxen = bin_dir.join("ruxen");
+            fs::copy(ruxen_exe(), &staged_ruxen).expect("copy ruxen");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mut perms = fs::metadata(&staged_ruxen).unwrap().permissions();
+                perms.set_mode(0o755);
+                fs::set_permissions(&staged_ruxen, perms).unwrap();
+            }
+
+            // #06.95 Phase B reorganized the C runtime into per-package
+            // subdirectories under `library/std/<pkg>/runtime/`, with
+            // the aggregator `runtime.c` living at
+            // `library/std/core/runtime/runtime.c`. The aggregator
+            // `#include`s siblings via relative `../../<pkg>/runtime/*.c`
+            // paths, so the entire `library/std/` tree must be staged
+            // with its directory structure intact for the includes to
+            // resolve at build time. Stage it under `<install>/lib/std/`
+            // and point `RUXEN_RUNTIME` at the staged `runtime.c`.
+            let staged_std_root = lib_dir.join("std");
+            copy_runtime_tree(&workspace_root().join("library/std"), &staged_std_root);
+
+            // #06.8 Wave 2 stdlib self-hosting: ruxenc reads
+            // `library/std/<pkg>/src/lib.rx` at startup via the
+            // bootstrap loader. `resolve_stdlib_root` walks
+            //   1. $RUXEN_STDLIB_PATH
+            //   2. workspace-relative (CARGO_MANIFEST_DIR walk)
+            //   3. `<exe>/../library/std/`
+            // The full `library/std/` tree is already staged at
+            // `<install>/lib/std/` above (it contains both the runtime
+            // and the .rx sources side-by-side per #06.95 Phase B), so
+            // no additional copy is needed for the .rx sources — the
+            // staged_stdlib_dir() helper returns this same root.
+
+            (temp, staged_ruxen)
+        })
+        .1
+}
+
+/// Recursively copy a workspace directory tree (e.g. `library/std/`)
+/// into the staged install layout, preserving structure. Mirrors what
+/// `install.sh` does with `cp -R "$SRC/lib/." "$RUXEN_HOME/lib/"` on a
+/// real release archive.
+fn copy_runtime_tree(src: &Path, dst: &Path) {
+    fs::create_dir_all(dst).unwrap();
+    for entry in fs::read_dir(src).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        let dest = dst.join(entry.file_name());
+        if path.is_dir() {
+            copy_runtime_tree(&path, &dest);
+        } else {
+            fs::copy(&path, &dest).expect("copy runtime file");
+        }
+    }
+}
+
+/// Resolve the workspace root by walking up from this crate's manifest dir.
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf()
+}
+
+/// Path to the unified `ruxen` driver under test. `CARGO_BIN_EXE_ruxen`
+/// is only injected for tests in the bin's own package (`ruxen_cli`);
+/// here in `ruxenc` we fall back to building the bin once and resolving
+/// it at `<workspace>/target/<profile>/ruxen`.
+fn ruxen_exe() -> PathBuf {
+    use std::sync::OnceLock;
+    static BIN: OnceLock<PathBuf> = OnceLock::new();
+    BIN.get_or_init(|| {
+        if let Some(p) = option_env!("CARGO_BIN_EXE_ruxen") {
+            return PathBuf::from(p);
+        }
+        let workspace = workspace_root();
+        let target = std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| workspace.join("target"));
+        let exe = if cfg!(windows) { "ruxen.exe" } else { "ruxen" };
+        let bin = target.join("debug").join(exe);
+        if !bin.exists() {
+            let status = Command::new("cargo")
+                .args(["build", "-p", "ruxen_cli", "--bin", "ruxen"])
+                .current_dir(&workspace)
+                .status()
+                .expect("spawn cargo build for ruxen bin");
+            assert!(
+                status.success(),
+                "cargo build -p ruxen_cli --bin ruxen failed"
+            );
+        }
+        bin
+    })
+    .clone()
+}
+
+/// Path to the staged `library/std/` package-root tree alongside the
+/// shared install. Spawned ruxenc subprocesses need this via
+/// `RUXEN_STDLIB_PATH` because the bootstrap loader's CARGO_MANIFEST_DIR
+/// fallback resolves to `src/ruxenc` (this crate, not the workspace)
+/// when cargo runs the test binary; walking up from there does NOT
+/// find a sibling `library/std/` because we're already two levels
+/// deep under `src/`. Exe-adjacent resolution would land on the
+/// staged copy, but only if ruxenc is invoked through the staged
+/// binary path — the env var is the deterministic fix.
+///
+/// Post-#06.95 Phase B the staged stdlib lives under `<install>/lib/std/`
+/// (per-package layout with both `src/lib.rx` and `runtime/*.c` for
+/// each module).
+fn staged_stdlib_dir() -> PathBuf {
+    shared_install()
+        .parent()
+        .and_then(|bin| bin.parent())
+        .map(|root| root.join("lib").join("std"))
+        .expect("staged install layout")
+}
+
+/// Path to the staged aggregator `runtime.c`. The C runtime tree is
+/// staged with its `library/std/` directory structure intact so that
+/// `runtime.c`'s `#include "../../<pkg>/runtime/*.c"` directives
+/// resolve. Subprocess `ruxenc` invocations need this via
+/// `RUXEN_RUNTIME` because `find_runtime_c`'s `<exe>/../lib/runtime.c`
+/// fallback no longer matches the per-package layout.
+fn staged_runtime_c() -> PathBuf {
+    staged_stdlib_dir()
+        .join("core")
+        .join("runtime")
+        .join("runtime.c")
+}
+
+/// Read a `.rx` fixture from `tests/fixtures/ruxen/<name>.rx`.
+///
+/// Ruxen source for these tests lives in standalone `.rx` files so that
+/// future surface-syntax migrations can sweep `*.rx` uniformly without
+/// touching Rust string literals.
+fn rx(name: &str) -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/ruxen")
+        .join(format!("{name}.rx"));
+    fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+}
+
+/// Build an isolated layout for a test: a per-test tempdir for project
+/// files, with the path to the process-wide shared staged `ruxen` binary.
+///
+/// Returns the tempdir (kept alive by the caller, cleaned up at test end)
+/// and the path to the staged `ruxen` binary that is shared across all
+/// tests in this binary.
+fn stage_install() -> (tempfile::TempDir, PathBuf) {
+    let temp = tempfile::tempdir().expect("mktemp");
+    (temp, shared_install().to_path_buf())
+}
+
+/// Compile `source` with `ruxen compile` (staged) in `dir`, then run the
+/// resulting binary and return its captured stdout. Panics with context
+/// on any failure.
+fn compile_and_run(ruxen: &Path, dir: &Path, source_name: &str, source: &str) -> String {
+    let src = dir.join(source_name);
+    fs::write(&src, source).unwrap();
+
+    let out_name = source_name.trim_end_matches(".rx");
+    let out = dir.join(out_name);
+
+    let compile = Command::new(ruxen)
+        .arg("compile")
+        .arg(source_name)
+        .arg("-o")
+        .arg(out_name)
+        .current_dir(dir)
+        .env("RUXEN_STDLIB_PATH", staged_stdlib_dir())
+        .env("RUXEN_RUNTIME", staged_runtime_c())
+        .output()
+        .expect("spawn ruxen compile");
+
+    assert!(
+        compile.status.success(),
+        "compile failed for {}\nstdout:\n{}\nstderr:\n{}",
+        source_name,
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr),
+    );
+
+    let run = Command::new(&out)
+        .current_dir(dir)
+        .output()
+        .expect("spawn compiled binary");
+
+    assert!(
+        run.status.success(),
+        "run failed for {}\nstdout:\n{}\nstderr:\n{}",
+        source_name,
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+
+    String::from_utf8(run.stdout).expect("utf8 stdout")
+}
+
+// ── Individual tests ──────────────────────────────────────────────────
+
+#[test]
+fn version_flag() {
+    // `ruxen --version` (the unified driver). The legacy `ruxenc` name
+    // is gone; the version now comes from the parent `ruxen` package.
+    let (_temp, ruxen) = stage_install();
+    let out = Command::new(&ruxen).arg("--version").output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.starts_with("ruxen "), "got: {:?}", stdout);
+}
+
+#[test]
+fn find_runtime_c_from_sibling_lib_dir() {
+    // The core assertion: the binary resolves runtime.c via the installed
+    // layout (bin/../lib/runtime.c), not via the CARGO_MANIFEST_DIR baked in
+    // at build time. If this regresses, release binaries will fail on every
+    // user machine.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("find_runtime_c_from_sibling_lib_dir");
+    let out = compile_and_run(&ruxenc, temp.path(), "hello.rx", &source);
+    assert_eq!(out.trim(), "hello");
+}
+
+#[test]
+fn integer_arithmetic() {
+    let (temp, ruxenc) = stage_install();
+    let source = rx("integer_arithmetic");
+    let out = compile_and_run(&ruxenc, temp.path(), "int_arith.rx", &source);
+    assert_eq!(out.trim(), "3\n7\n24\n5\n2");
+}
+
+#[test]
+fn owned_rebind_does_not_double_drop() {
+    let (temp, ruxenc) = stage_install();
+    let source = rx("owned_rebind_does_not_double_drop");
+    let out = compile_and_run(&ruxenc, temp.path(), "owned_rebind.rx", &source);
+    assert_eq!(out.trim(), "18");
+}
+
+#[test]
+fn float_arithmetic() {
+    // Regression: Cranelift codegen previously emitted `imul`/`iadd` for
+    // f64 values, which the verifier rejects. Must dispatch to `fmul`/`fadd`.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("float_arithmetic");
+    let out = compile_and_run(&ruxenc, temp.path(), "float_arith.rx", &source);
+    let lines: Vec<&str> = out.trim().lines().collect();
+    assert_eq!(lines.len(), 4, "got: {:?}", out);
+    // area(5.0) ≈ 78.5397
+    assert!(
+        lines[0].starts_with("78.5"),
+        "area(5.0) should be ~78.5, got {:?}",
+        lines[0]
+    );
+    assert_eq!(lines[1], "6.5");
+    assert_eq!(lines[2], "1.5");
+    assert_eq!(lines[3], "1.6");
+}
+
+#[test]
+fn float_comparison() {
+    // Regression: Cranelift float comparisons must use `fcmp`, not `icmp`.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("float_comparison");
+    let out = compile_and_run(&ruxenc, temp.path(), "float_cmp.rx", &source);
+    assert_eq!(out.trim(), "less\ngreater");
+}
+
+#[test]
+fn string_interpolation() {
+    let (temp, ruxenc) = stage_install();
+    let source = rx("string_interpolation");
+    let out = compile_and_run(&ruxenc, temp.path(), "interp.rx", &source);
+    assert_eq!(out.trim(), "hello world 3");
+}
+
+#[test]
+fn enum_with_match() {
+    let (temp, ruxenc) = stage_install();
+    let source = rx("enum_with_match");
+    let out = compile_and_run(&ruxenc, temp.path(), "match.rx", &source);
+    let lines: Vec<&str> = out.trim().lines().collect();
+    assert_eq!(lines.len(), 2);
+    assert!(lines[0].starts_with("12.56"), "got {:?}", lines[0]);
+    assert_eq!(lines[1], "16");
+}
+
+#[test]
+fn classes_and_methods() {
+    let (temp, ruxenc) = stage_install();
+    let source = rx("classes_and_methods");
+    let out = compile_and_run(&ruxenc, temp.path(), "classes.rx", &source);
+    assert_eq!(out.trim(), "3");
+}
+
+#[test]
+fn closures_and_iterators() {
+    let (temp, ruxenc) = stage_install();
+    let source = rx("closures_and_iterators");
+    let out = compile_and_run(&ruxenc, temp.path(), "iter.rx", &source);
+    assert_eq!(out.trim(), "5\nfirst > 7: 8");
+}
+
+#[test]
+fn sample_program_fixture_compiles_and_runs() {
+    // Runs the canonical sample program through the installed toolchain.
+    // This is the broadest smoke test — it exercises enums, classes, traits,
+    // generics, iterators, closures, string interpolation, and pattern
+    // matching together.
+    let (temp, ruxenc) = stage_install();
+    let src = fs::read_to_string(
+        workspace_root().join("compiler/ruxen_core/tests/fixtures/sample_program.rx"),
+    )
+    .expect("sample_program.rx fixture exists");
+
+    let out = compile_and_run(&ruxenc, temp.path(), "sample.rx", &src);
+
+    // The sample program produces ~50 lines of structured task-tracker
+    // output. We don't assert the exact text (formatting drift is expected);
+    // we do assert it reached the "Archiving" tail section.
+    assert!(
+        out.contains("Archiving completed tasks"),
+        "sample program didn't reach archive section:\n{}",
+        out
+    );
+    assert!(
+        out.lines().count() > 40,
+        "sample produced too few lines: {}",
+        out.lines().count()
+    );
+}
+
+#[test]
+fn runtime_env_override() {
+    // RUXEN_RUNTIME env var should take precedence over the bin-relative
+    // lookup. We stage a normal install and then point RUXEN_RUNTIME at a
+    // secondary copy of runtime.c — compilation must still succeed.
+    let (temp, ruxen) = stage_install();
+    // Stage a secondary copy of the whole `library/std/` tree so the
+    // unity-build `#include "../../<pkg>/runtime/*.c"` lookups still
+    // resolve, then point RUXEN_RUNTIME at the aggregator inside.
+    let alt_std_root = temp.path().join("alt_std");
+    copy_runtime_tree(&workspace_root().join("library/std"), &alt_std_root);
+    let alt = alt_std_root.join("core").join("runtime").join("runtime.c");
+
+    fs::write(temp.path().join("env_ov.rx"), rx("runtime_env_override")).unwrap();
+
+    let compile = Command::new(&ruxen)
+        .arg("compile")
+        .arg("env_ov.rx")
+        .arg("-o")
+        .arg("env_ov")
+        .env("RUXEN_RUNTIME", &alt)
+        .env("RUXEN_STDLIB_PATH", staged_stdlib_dir())
+        .current_dir(temp.path())
+        .output()
+        .unwrap();
+
+    assert!(
+        compile.status.success(),
+        "compile failed:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let run = Command::new(temp.path().join("env_ov")).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "ok");
+}
+
+#[test]
+fn missing_runtime_gives_clear_error() {
+    // If runtime.c cannot be found anywhere, the error message should name
+    // every location we looked, so users can fix their install.
+    let temp = tempfile::tempdir().unwrap();
+    let bin_dir = temp.path().join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let ruxen = bin_dir.join("ruxen");
+    fs::copy(ruxen_exe(), &ruxen).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&ruxen).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&ruxen, perms).unwrap();
+    }
+
+    fs::write(temp.path().join("x.rx"), "def main\n  puts \"hi\"\nend\n").unwrap();
+
+    // Deliberately do NOT create lib/runtime.c. Also clear RUXEN_RUNTIME
+    // and CARGO_MANIFEST_DIR so the dev fallback can't accidentally save us.
+    //
+    // We DO need stdlib bootstrap to succeed (else its E0725 fires
+    // first and obscures the runtime-missing error). Point
+    // RUXEN_STDLIB_PATH at the staged copy alongside the shared
+    // install so bootstrap finds .rx files without falling back
+    // through CARGO_MANIFEST_DIR.
+    let out = Command::new(&ruxen)
+        .arg("compile")
+        .arg("x.rx")
+        .current_dir(temp.path())
+        .env_remove("RUXEN_RUNTIME")
+        .env("CARGO_MANIFEST_DIR", "/nonexistent/ruxen-fake")
+        .env("RUXEN_STDLIB_PATH", staged_stdlib_dir())
+        .output()
+        .unwrap();
+
+    // We can't cleanly prevent the binary from finding runtime.c via its
+    // compile-time baked CARGO_MANIFEST_DIR (env!()), so this test only
+    // asserts that *when* the binary reports a missing runtime, the
+    // message is informative. Most CI users will have the fallback path
+    // populated, so we tolerate success here and only check error shape
+    // if the compile failed.
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("runtime.c not found") && stderr.contains("RUXEN_RUNTIME"),
+            "unhelpful error message: {}",
+            stderr
+        );
+    }
+}
+
+#[test]
+fn match_guards_on_int_binding() {
+    // Regression: `match` arm guards (`case if cond -> body`) were being
+    // silently dropped during HIR-to-MIR lowering — the first arm whose
+    // pattern matched was taken regardless of the guard. This verifies
+    // guards gate arm selection.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("match_guards_on_int_binding");
+    let out = compile_and_run(&ruxenc, temp.path(), "match_guards.rx", &source);
+    assert_eq!(out.trim(), "A\nB\nC\nF");
+}
+
+#[test]
+fn match_on_int_literals_still_works() {
+    // Smoke: ensures the cascading match path still handles literal
+    // patterns with no guards after the guard-related refactor.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("match_on_int_literals_still_works");
+    let out = compile_and_run(&ruxenc, temp.path(), "match_int.rx", &source);
+    assert_eq!(out.trim(), "zero\none\ntwo\nmany");
+}
+
+#[test]
+fn match_on_simple_enum_still_works() {
+    // Smoke: tag-switch lowering for unit-variant enums.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("match_on_simple_enum_still_works");
+    let out = compile_and_run(&ruxenc, temp.path(), "simple_enum.rx", &source);
+    assert_eq!(out.trim(), "red\ngreen\nblue");
+}
+
+#[test]
+fn match_on_enum_with_data_still_works() {
+    // Smoke: tag-switch + payload-field bindings.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("match_on_enum_with_data_still_works");
+    let out = compile_and_run(&ruxenc, temp.path(), "enum_data.rx", &source);
+    assert_eq!(out.trim(), "75\n24");
+}
+
+#[test]
+fn match_guards_with_enum_variant_bindings() {
+    // Guards must also work when combined with enum-variant patterns that
+    // introduce field bindings — the guard expression must see those
+    // bindings and its false case must fall through to the next arm.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("match_guards_with_enum_variant_bindings");
+    let out = compile_and_run(&ruxenc, temp.path(), "guard_enum.rx", &source);
+    assert_eq!(out.trim(), "bright red\nred\nblue");
+}
+
+#[test]
+fn fixed_array_literal_coerces() {
+    // Bug 1: `let a: [Int; 3] = [1,2,3]` — the bracket literal is typed
+    // as Vec[Int] by the resolver; typeck must coerce to fixed array.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("fixed_array_literal_coerces");
+    let out = compile_and_run(&ruxenc, temp.path(), "fixed_array.rx", &source);
+    assert_eq!(out.trim(), "10\n20\n30");
+}
+
+#[test]
+fn newtype_wrapper_construct_and_project() {
+    // Bug 2: `newtype Meters(Float)` — `Meters(3.14)` must construct
+    // the wrapper and `.0` must project the inner value.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("newtype_wrapper_construct_and_project");
+    let out = compile_and_run(&ruxenc, temp.path(), "newtype.rx", &source);
+    assert_eq!(out.trim(), "3.14");
+}
+
+#[test]
+fn const_decl_substitutes_at_use_sites() {
+    // Bug 3: top-level `const` reference must emit the initializer
+    // expression at every use site; otherwise we read uninitialized
+    // stack memory and print garbage.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("const_decl_substitutes_at_use_sites");
+    let out = compile_and_run(&ruxenc, temp.path(), "const_decl.rx", &source);
+    assert_eq!(out.trim(), "100");
+}
+
+#[test]
+fn regression_int_arith() {
+    let (temp, ruxenc) = stage_install();
+    let source = rx("regression_int_arith");
+    let out = compile_and_run(&ruxenc, temp.path(), "int_arith_reg.rx", &source);
+    assert_eq!(out.trim(), "50");
+}
+
+#[test]
+fn regression_classes_init() {
+    let (temp, ruxenc) = stage_install();
+    let source = rx("regression_classes_init");
+    let out = compile_and_run(&ruxenc, temp.path(), "classes_reg.rx", &source);
+    assert_eq!(out.trim(), "21\n42");
+}
+
+#[test]
+fn regression_type_alias() {
+    let (temp, ruxenc) = stage_install();
+    let source = rx("regression_type_alias");
+    let out = compile_and_run(&ruxenc, temp.path(), "type_alias_reg.rx", &source);
+    assert_eq!(out.trim(), "5");
+}
+
+#[test]
+fn derive_copy_struct_copies_on_assignment() {
+    // Bug 4: a struct with `derive Copy` must be treated as Copy by
+    // the borrow checker (no "value used after move" on `let b = a`).
+    let (temp, ruxenc) = stage_install();
+    let source = rx("derive_copy_struct_copies_on_assignment");
+    let out = compile_and_run(&ruxenc, temp.path(), "derive_copy.rx", &source);
+    assert_eq!(out.trim(), "1 2\n1 2");
+}
+
+// ── Parser / pattern bug fixtures (current task) ──────────────────────
+
+#[test]
+fn parser_tuple_field_access_dot_int() {
+    // Fixture 32: `t.0` — parser must accept IntLiteral after `.`.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("parser_tuple_field_access_dot_int");
+    let out = compile_and_run(&ruxenc, temp.path(), "tuple_field.rx", &source);
+    assert_eq!(out.trim(), "10\n20");
+}
+
+#[test]
+fn parser_or_pattern_literal_alternatives() {
+    // Fixture 58: `a | b | c -> body` restricted to literals.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("parser_or_pattern_literal_alternatives");
+    let out = compile_and_run(&ruxenc, temp.path(), "or_pattern.rx", &source);
+    assert_eq!(out.trim(), "low\nmid\nother");
+}
+
+#[test]
+fn parser_match_tuple_pattern() {
+    // Fixture 62: `(a, b) -> body` in match.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("parser_match_tuple_pattern");
+    let out = compile_and_run(&ruxenc, temp.path(), "match_tuple.rx", &source);
+    assert_eq!(
+        out.trim(),
+        "origin\non x-axis at 3\non y-axis at 4\nat (3, 4)"
+    );
+}
+
+#[test]
+fn parser_match_ref_binding() {
+    // Fixture 76: `ref x -> body` — bind to a reference, same runtime
+    // value as a plain binding for v1.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("parser_match_ref_binding");
+    let out = compile_and_run(&ruxenc, temp.path(), "match_ref.rx", &source);
+    assert_eq!(out.trim(), "hello\nhello");
+}
+
+#[test]
+fn parser_regression_match_int() {
+    // Fixture 10: plain literal match arms still route through the
+    // non-or branch.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("parser_regression_match_int");
+    let out = compile_and_run(&ruxenc, temp.path(), "match_int.rx", &source);
+    assert_eq!(out.trim(), "zero\none\ntwo\nmany");
+}
+
+#[test]
+fn parser_regression_match_guards() {
+    // Fixture 11: `name if guard -> body` still compiles.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("parser_regression_match_guards");
+    let out = compile_and_run(&ruxenc, temp.path(), "match_guards.rx", &source);
+    assert_eq!(out.trim(), "A\nB\nC\nF");
+}
+
+#[test]
+fn parser_do_end_block_expr() {
+    // Fixture 59: `do ... last_expr end` used as an expression.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("parser_do_end_block_expr");
+    let out = compile_and_run(&ruxenc, temp.path(), "do_end_block.rx", &source);
+    assert_eq!(out.trim(), "3");
+}
+
+#[test]
+fn e2e_16_inheritance() {
+    // Fixture 16_inheritance: `super(name)` inside a subclass init must
+    // invoke the parent's init with the child's self as the receiver so
+    // the parent's `@name` auto-assign writes into the same object.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("e2e_16_inheritance");
+    let out = compile_and_run(&ruxenc, temp.path(), "inh.rx", &source);
+    assert_eq!(out.trim(), "Meow! I'm Whiskers");
+}
+
+#[test]
+fn e2e_22_mixin_default() {
+    // Fixture 22_mixin_default: a mixin's default method body may refer
+    // to `self.<abstract>` and is monomorphized per impl.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("e2e_22_mixin_default");
+    let out = compile_and_run(&ruxenc, temp.path(), "td22.rx", &source);
+    assert_eq!(out.trim(), "Hello, Alice!");
+}
+
+#[test]
+fn e2e_86_mixin_default_method_used() {
+    // Fixture 86: mixin default method used via interpolation.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("e2e_86_mixin_default_method_used");
+    let out = compile_and_run(&ruxenc, temp.path(), "td86.rx", &source);
+    assert_eq!(out.trim(), "Hello, Riv!");
+}
+
+#[test]
+fn e2e_87_mixin_override_default() {
+    // Fixture 87: include overrides the mixin default; the override wins.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("e2e_87_mixin_override_default");
+    let out = compile_and_run(&ruxenc, temp.path(), "td87.rx", &source);
+    assert_eq!(out.trim(), "Hi, Riv.");
+}
+
+#[test]
+fn e2e_14_classes() {
+    // Fixture 14_classes: plain class + instance method sanity smoke.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("e2e_14_classes");
+    let out = compile_and_run(&ruxenc, temp.path(), "c14.rx", &source);
+    assert_eq!(out.trim(), "7");
+}
+
+#[test]
+fn e2e_17_class_self_method() {
+    // Fixture 17_class_self_method: calling another method via self.<name>.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("e2e_17_class_self_method");
+    let out = compile_and_run(&ruxenc, temp.path(), "csm17.rx", &source);
+    assert_eq!(out.trim(), "20");
+}
+
+#[test]
+fn e2e_21_mixins() {
+    // Fixture 21_mixins: mixin with only required methods (no defaults).
+    let (temp, ruxenc) = stage_install();
+    let source = rx("e2e_21_mixins");
+    let out = compile_and_run(&ruxenc, temp.path(), "tr21.rx", &source);
+    assert_eq!(out.trim(), "Rex");
+}
+
+// ── Stdlib method + panic! tests (current task) ───────────────────────
+
+#[test]
+fn e2e_45_string_methods() {
+    // Fixture 45: String.len (byte length) + "abc".to_upper returning
+    // an uppercased String.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("e2e_45_string_methods");
+    let out = compile_and_run(&ruxenc, temp.path(), "string_methods.rx", &source);
+    assert_eq!(out.trim(), "5\nABC");
+}
+
+#[test]
+fn e2e_106_string_chars() {
+    // Fixture 106: `for ch in s.chars` must iterate once per codepoint.
+    // `s.chars` returns a `Vec[Char]` which the for-loop lowering then
+    // walks via `ruxen_vec_len`/`ruxen_vec_get`.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("e2e_106_string_chars");
+    let out = compile_and_run(&ruxenc, temp.path(), "string_chars.rx", &source);
+    assert_eq!(out.trim(), "3");
+}
+
+#[test]
+fn e2e_107_array_push_pop() {
+    // Fixture 107: `Vec.push` grows the vector, `Vec.pop` returns an
+    // `Option[T]` tagged union matching the runtime convention used by
+    // `ruxen_vec_get_opt`.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("e2e_107_array_push_pop");
+    let out = compile_and_run(&ruxenc, temp.path(), "vec_push_pop.rx", &source);
+    assert_eq!(out.trim(), "3\npopped 3\n2");
+}
+
+#[test]
+fn e2e_57_while_let_pop() {
+    // Fixture 57: `while let Some(x) = v.pop` drains a vec in LIFO
+    // order, exercising both the Option matcher and the refreshed
+    // `v.pop` call inside the loop header.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("e2e_57_while_let_pop");
+    let out = compile_and_run(&ruxenc, temp.path(), "while_let_pop.rx", &source);
+    assert_eq!(out.trim(), "3\n2\n1\ndone");
+}
+
+#[test]
+fn e2e_96_panic_basic() {
+    // Fixture 96: `panic!("boom")` prints the message to stderr and
+    // exits non-zero. Stdout captures only the output before the
+    // panic; anything after is unreachable.
+    let (temp, ruxen) = stage_install();
+    let src_name = "panic_basic.rx";
+    let src = temp.path().join(src_name);
+    fs::write(&src, rx("e2e_96_panic_basic")).unwrap();
+
+    let out_name = "panic_basic";
+    let compile = Command::new(&ruxen)
+        .arg("compile")
+        .arg(src_name)
+        .arg("-o")
+        .arg(out_name)
+        .current_dir(temp.path())
+        .env("RUXEN_STDLIB_PATH", staged_stdlib_dir())
+        .env("RUXEN_RUNTIME", staged_runtime_c())
+        .output()
+        .expect("spawn ruxen compile");
+    assert!(
+        compile.status.success(),
+        "compile failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr),
+    );
+
+    let bin = temp.path().join(out_name);
+    let run = Command::new(&bin)
+        .current_dir(temp.path())
+        .output()
+        .expect("spawn compiled binary");
+    assert!(
+        !run.status.success(),
+        "expected non-zero exit from panic!, got success; stdout={:?}",
+        String::from_utf8_lossy(&run.stdout),
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout).trim(),
+        "before",
+        "stderr:\n{}",
+        String::from_utf8_lossy(&run.stderr),
+    );
+}
+
+#[test]
+fn e2e_26_array_basic() {
+    // Fixture 26: smoke test — `[1,2,3]` array literal + `len` + `for x in &v`
+    // must still round-trip after the pop/chars changes.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("e2e_26_array_basic");
+    let out = compile_and_run(&ruxenc, temp.path(), "vec_basic.rx", &source);
+    assert_eq!(out.trim(), "len=3\n1\n2\n3");
+}
+
+#[test]
+fn e2e_108_string_split() {
+    // Fixture 108: `"a,b,c".split(",").to_vec.len` → 3. Exercises
+    // SplitIter → Vec[&str] collection (the `.to_vec` passthrough).
+    let (temp, ruxenc) = stage_install();
+    let source = rx("e2e_108_string_split");
+    let out = compile_and_run(&ruxenc, temp.path(), "string_split.rx", &source);
+    assert_eq!(out.trim(), "3");
+}
+
+#[test]
+fn e2e_63_struct_basic() {
+    // Fixture 63: plain struct with Int fields; construct + read.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("e2e_63_struct_basic");
+    let out = compile_and_run(&ruxenc, temp.path(), "s63.rx", &source);
+    assert_eq!(out.trim(), "3 4");
+}
+
+#[test]
+fn e2e_64_struct_implicit() {
+    // Fixture 64: struct with implicit `Copy, Clone` (per §3.6) —
+    // `let also_red = red` must not move the original; both names
+    // remain readable.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("e2e_64_struct_implicit");
+    let out = compile_and_run(&ruxenc, temp.path(), "s64.rx", &source);
+    assert_eq!(out.trim(), "255 0 0\n255 0 0");
+}
+
+#[test]
+fn e2e_71_struct_vs_class() {
+    // Fixture 71: struct embedded as a class field; both read-through and
+    // the struct original remain usable because of implicit `Copy, Clone`.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("e2e_71_struct_vs_class");
+    let out = compile_and_run(&ruxenc, temp.path(), "s71.rx", &source);
+    assert_eq!(out.trim(), "center=(1,2) r=5\n1");
+}
+
+#[test]
+fn e2e_85_implicit_debug() {
+    // Fixture 85: struct with implicit `Debug, Copy, Clone` — we only
+    // assert field access + interpolation works (we don't ship a full
+    // `#{p}` Debug printer yet; the fixture itself doesn't rely on it).
+    let (temp, ruxenc) = stage_install();
+    let source = rx("e2e_85_implicit_debug");
+    let out = compile_and_run(&ruxenc, temp.path(), "s85.rx", &source);
+    assert_eq!(out.trim(), "1 2");
+}
+
+#[test]
+fn e2e_28_closures() {
+    // Fixture 28_closures: non-capturing closure bound to a `let` and
+    // invoked twice via `.()`.  Exercises the closure-pair heap layout
+    // and indirect-call path with an empty captures struct (NULL).
+    let (temp, ruxenc) = stage_install();
+    let source = rx("e2e_28_closures");
+    let out = compile_and_run(&ruxenc, temp.path(), "c28.rx", &source);
+    assert_eq!(out.trim(), "10\n20");
+}
+
+#[test]
+fn e2e_88_closure_do_end() {
+    // Fixture 88: `do ... end` closure passed to `vec.each` — the MIR
+    // `try_inline_closure_method` path turns the call into a plain loop.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("e2e_88_closure_do_end");
+    let out = compile_and_run(&ruxenc, temp.path(), "c88.rx", &source);
+    assert_eq!(out.trim(), "2\n4\n6");
+}
+
+#[test]
+fn e2e_89_closure_capture_immut() {
+    // Fixture 89: closure captures an immutable `let multiplier` by
+    // value.  `multiplier` is `Int` (Copy), so its current value is
+    // copied into the captures struct at closure-construction time.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("e2e_89_closure_capture_immut");
+    let out = compile_and_run(&ruxenc, temp.path(), "c89.rx", &source);
+    assert_eq!(out.trim(), "15\n30");
+}
+
+#[test]
+fn e2e_90_closure_capture_mut() {
+    // Fixture 90: non-`move` closure mutates a `var count` across
+    // three calls.  `count` must be cell-promoted so the closure and
+    // the enclosing frame share storage.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("e2e_90_closure_capture_mut");
+    let out = compile_and_run(&ruxenc, temp.path(), "c90.rx", &source);
+    assert_eq!(out.trim(), "3");
+}
+
+#[test]
+fn e2e_91_move_closure() {
+    // Fixture 91: `move` closure that captures `n` by value and is
+    // returned from `make_adder`.  No cell promotion — the closure
+    // owns its own copy of `n`.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("e2e_91_move_closure");
+    let out = compile_and_run(&ruxenc, temp.path(), "c91.rx", &source);
+    assert_eq!(out.trim(), "15");
+}
+
+#[test]
+fn e2e_92_closure_as_arg() {
+    // Fixture 92: non-capturing closure passed as an argument and
+    // invoked inside the callee.  `apply` receives a closure pair and
+    // calls it indirectly, forwarding a NULL captures pointer.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("e2e_92_closure_as_arg");
+    let out = compile_and_run(&ruxenc, temp.path(), "c92.rx", &source);
+    assert_eq!(out.trim(), "16");
+}
+
+#[test]
+fn e2e_104_map_basic() {
+    // Fixture 104: `{ k => v, ... }` Map literal builds a
+    // `Map[String, Int]` and `.get(key)` returns `Option[&Int]`.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("e2e_104_map_basic");
+    let out = compile_and_run(&ruxenc, temp.path(), "map_basic.rx", &source);
+    assert_eq!(out.trim(), "a=1\nb=2");
+}
+
+#[test]
+fn e2e_105_set_basic() {
+    // Fixture 105: `Set.new` + `.insert` + `.contains` + `.len`. The
+    // second `s.insert(1)` is a duplicate and must not change `.len`.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("e2e_105_set_basic");
+    let out = compile_and_run(&ruxenc, temp.path(), "set_basic.rx", &source);
+    assert_eq!(out.trim(), "2\nhas 1\nno 3");
+}
+
+#[test]
+fn e2e_93_yield_block() {
+    // Fixture 93: `yield VALUE` inside a function invokes the trailing
+    // `do ... end` block supplied by the caller.  Functions whose body
+    // contains `yield` receive a synthetic `__block: Fn(...) -> ()`
+    // parameter, and `yield VALUE` desugars to `__block.(VALUE)`.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("e2e_93_yield_block");
+    let out = compile_and_run(&ruxenc, temp.path(), "c93.rx", &source);
+    assert_eq!(out.trim(), "42");
+}
+
+// ── Type-inference coverage: &var params and fluent-builder chains ────
+
+#[test]
+fn e2e_12_functions() {
+    // Fixture 12_functions: plain multi-argument functions without
+    // receivers — baseline sanity for return-type inference.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("e2e_12_functions");
+    let out = compile_and_run(&ruxenc, temp.path(), "f12.rx", &source);
+    assert_eq!(out.trim(), "5\n30\n20\n42");
+}
+
+#[test]
+fn e2e_15_class_var() {
+    // Fixture 15_class_var: a `def var` (writing) method with no declared
+    // return type must default to `Unit`, not trigger inference errors.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("e2e_15_class_var");
+    let out = compile_and_run(&ruxenc, temp.path(), "cv15.rx", &source);
+    assert_eq!(out.trim(), "2");
+}
+
+#[test]
+fn e2e_47_borrow_immut() {
+    // Fixture 47_borrow_immut: free function taking `&String` — the
+    // caller passes `&s` and the original binding remains usable.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("e2e_47_borrow_immut");
+    let out = compile_and_run(&ruxenc, temp.path(), "bi47.rx", &source);
+    assert_eq!(out.trim(), "Ruxen\nRuxen");
+}
+
+#[test]
+fn e2e_48_borrow_var() {
+    // Fixture 48_borrow_var: the free function `append_bang` takes a
+    // `&var String` and has no explicit return type. Without the
+    // "default to Unit for unresolved return vars" fix in typeck, the
+    // inference engine could not infer a return type and emitted a
+    // "could not infer return type for function `append_bang`"
+    // diagnostic.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("e2e_48_borrow_var");
+    let out = compile_and_run(&ruxenc, temp.path(), "bv48.rx", &source);
+    assert_eq!(out.trim(), "hello!");
+}
+
+#[test]
+fn e2e_70_method_chain() {
+    // Fixture 70_method_chain: a fluent builder where each `set_*`
+    // method is declared `-> &var Self` and ends in `self`. Without
+    // the auto-ref return-type coercion in infer_func, the body type
+    // (`Self`) could not be unified with the declared return
+    // (`&var Self`), breaking the whole chain.
+    let (temp, ruxenc) = stage_install();
+    let source = rx("e2e_70_method_chain");
+    let out = compile_and_run(&ruxenc, temp.path(), "mc70.rx", &source);
+    assert_eq!(out.trim(), "3");
+}

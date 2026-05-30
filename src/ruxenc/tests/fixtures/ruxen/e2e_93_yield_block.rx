@@ -1,0 +1,9 @@
+def with_x
+  yield 42
+end
+
+def main
+  with_x do |n|
+    puts "#{n}"
+  end
+end

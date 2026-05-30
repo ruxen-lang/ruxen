@@ -1,0 +1,28 @@
+use std.net.TcpListener
+
+# Binds 200 TcpListener instances inside a scoped block and lets each
+# one drop at the end of its iteration. If TcpListener_drop didn't
+# release the fd we'd exhaust the per-process descriptor table well
+# before reaching i=200 and a later bind would fail.
+def try_bind -> Bool
+  match TcpListener.bind(&"127.0.0.1:0")
+    Ok(_l) -> true
+    Err(_) -> false
+  end
+end
+
+def main
+  var i = 0
+  var all_ok = true
+  while i < 200
+    if !try_bind()
+      all_ok = false
+    end
+    i = i + 1
+  end
+  if all_ok
+    puts "all_ok=true"
+  else
+    puts "all_ok=false"
+  end
+end

@@ -1,0 +1,13 @@
+class File
+  layout flat_heap_struct
+  fd: I32
+
+  lib "rt"
+    def open as "ruxen_file_open"(path: &String) -> Int
+    def close as "ruxen_file_close"(self_ptr: Int) -> Int
+  end
+
+  lib "rt2"
+    def read as "ruxen_file_read"(self_ptr: Int, buf: Int, len: USize) -> ISize
+  end
+end

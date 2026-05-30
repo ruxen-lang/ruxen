@@ -1,0 +1,26 @@
+# Faster linking for local dev/test builds.
+#
+# The workspace produces ~130 test binaries, each statically linking all of
+# ruxen_core + the Cranelift backend + libruxenrt.a. Linking — not compiling —
+# dominates `cargo test --workspace`. We swap the default `ld.bfd` for LLVM's
+# `lld`, which is dramatically faster at this kind of repeated heavy link.
+#
+# We use the `lld` that ships inside the Rust toolchain (no system install, no
+# root). `~/.local/lib/ruxen-lld/ld.lld` is a stable symlink to the toolchain's
+# `gcc-ld/ld.lld`; pointing gcc at it with `-B` keeps this working across
+# toolchain updates and `cargo +1.91`. To (re)create the symlink:
+#
+#   SYSROOT=$(rustc --print sysroot)
+#   mkdir -p ~/.local/lib/ruxen-lld
+#   ln -sf "$SYSROOT/lib/rustlib/x86_64-unknown-linux-gnu/bin/gcc-ld/ld.lld" \
+#          ~/.local/lib/ruxen-lld/ld.lld
+#
+# NOTE: the absolute path below is machine-specific. On a machine that has
+# `mold` or system `lld` installed, replace it with `-fuse-ld=mold` / drop the
+# `-B`. CI / other contributors that lack this symlink should override or
+# remove this file.
+[target.x86_64-unknown-linux-gnu]
+rustflags = [
+    "-C", "link-arg=-fuse-ld=lld",
+    "-C", "link-arg=-B/home/sheraz/.local/lib/ruxen-lld",
+]

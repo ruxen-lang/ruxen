@@ -1,0 +1,24 @@
+use std.fs.{symlink, metadata, read_link}
+
+def describe(m: Metadata)
+  if m.is_symlink
+    puts "is_symlink=true"
+  else
+    puts "is_symlink=false"
+  end
+end
+
+def main
+  match symlink("__TARGET__", "__LINK__")
+    Ok(_)  -> puts "linked"
+    Err(_) -> puts "symlink_fail"
+  end
+  match metadata("__LINK__")
+    Ok(m)  -> describe(m)
+    Err(_) -> puts "metadata_fail"
+  end
+  match read_link("__LINK__")
+    Ok(t)  -> puts "target=#{t}"
+    Err(_) -> puts "readlink_fail"
+  end
+end

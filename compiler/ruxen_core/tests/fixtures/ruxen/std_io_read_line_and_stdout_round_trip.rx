@@ -1,0 +1,8 @@
+use std.io.{read_line, stdout}
+
+def main
+  let line = read_line().expect!("stdin line")
+  let out = stdout()
+  out.write_str(line).expect!("stdout write")
+  out.flush().expect!("stdout flush")
+end

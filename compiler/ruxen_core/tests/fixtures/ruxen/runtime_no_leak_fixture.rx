@@ -1,0 +1,9 @@
+struct Buffer
+  value: Int
+end
+
+def main
+  let a = Buffer.new(10)
+  let b = Buffer.new(32)
+  let _sum = a.value + b.value
+end

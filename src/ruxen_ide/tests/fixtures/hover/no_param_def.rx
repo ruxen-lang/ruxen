@@ -1,0 +1,9 @@
+## Hover on a no-parameter `def` must render it WITHOUT parens
+## (`def get_items -> Array[Int]`), matching `ruxen fmt`, not `get_items()`.
+def get_items -> Array[Int]
+  [1, 2, 3]
+end
+
+def main
+  let xs = get_items
+end

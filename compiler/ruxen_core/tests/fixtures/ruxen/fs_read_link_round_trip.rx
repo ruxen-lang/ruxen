@@ -1,0 +1,8 @@
+use std.fs.read_link
+
+def main
+  match read_link("__LINK__")
+    Ok(t)  -> puts "target=#{t}"
+    Err(_) -> puts "readlink_fail"
+  end
+end

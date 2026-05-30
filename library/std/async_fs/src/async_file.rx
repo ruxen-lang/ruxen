@@ -1,0 +1,52 @@
+## --- AsyncFile -----------------------------------------------------
+##
+## Owning wrapper around a non-blocking POSIX fd. Wire-compatible with
+## RuxenFile (8 bytes: int32 fd + int32 closed). Drop closes the fd —
+## the C side's `ruxen_async_file_drop` is idempotent.
+##
+## `fd` and `closed` are field-level Ints in Ruxen but the C struct
+## (RuxenAsyncFile in runtime/async_fs.c) lays them out as int32s. The
+## codegen for class fields packs sub-i64 fields by their declared
+## type — but here Int is i64 in Ruxen, which would put us at 16 bytes
+## not 8. This is OK in v1 because the wire layout is owned by the C
+## allocator (`ruxen_async_file_open` returns a freshly-allocated
+## 8-byte struct), and the Ruxen class never directly allocates: it
+## only borrows existing pointers from C. The fields here are
+## declared for the `def drop` body to consult, but in practice the
+## drop body delegates to the C-side `ruxen_async_file_drop` which
+## reads the i32 layout directly.
+##
+## TODO when v1.1 tightens layout: add a `repr(C, 8-byte)` annotation
+## that pins Ruxen-side field sizes to the C wire format.
+class AsyncFile
+  fd: Int
+  closed: Int
+
+  def self.open(path: &String) -> AsyncOpenFuture { AsyncOpenFuture.new(path, 0) }
+
+  def self.create(path: &String) -> AsyncOpenFuture { AsyncOpenFuture.new(path, 1) }
+
+  def var read_to_string -> AsyncReadToStringFuture
+    AsyncReadToStringFuture.new(ruxen_async_file_fd(self))
+  end
+
+  def var write_all(content: &String) -> AsyncWriteAllFuture
+    AsyncWriteAllFuture.new(ruxen_async_file_fd(self), content)
+  end
+
+  lib "runtime/async_fs.c"
+    def drop as "ruxen_async_file_drop" -> ()
+  end
+end
+
+## C-side drop hook (closes the fd). Registered in user_drop_classes
+## because this method exists; the MIR drop elaborator emits a call
+## to `AsyncFile_drop` at scope exit followed by ruxen_dealloc.
+## AsyncFile-typed C decls. Live in a module-scope lib block AFTER
+## the AsyncFile class so the return / param types resolve. Declared
+## as free fns (not class methods) because they're called directly by
+## the future state-machine bodies, not dispatched through `self`.
+lib "runtime/async_fs.c"
+  def ruxen_async_file_open(path: &String, flags: Int) -> Result[AsyncFile, IoError]
+  def ruxen_async_file_fd(file: &AsyncFile) -> Int
+end

@@ -1,0 +1,14 @@
+def find(n: Int) -> Int?
+  if n > 0
+    n
+  else
+    nil
+  end
+end
+
+def main
+  let a = find(5).unwrap_or(0)
+  let b = find(-1).unwrap_or(99)
+  puts "#{a}"
+  puts "#{b}"
+end

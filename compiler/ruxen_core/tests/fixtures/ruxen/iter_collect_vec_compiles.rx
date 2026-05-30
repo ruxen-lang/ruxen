@@ -1,0 +1,7 @@
+def main
+  let v = [1, 2, 3]
+  let out = v.iter.take(2).collect_vec
+  let n = out.len
+  let s = n.to_string
+  puts "n=#{s}"
+end

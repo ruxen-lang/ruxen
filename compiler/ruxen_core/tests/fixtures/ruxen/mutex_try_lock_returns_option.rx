@@ -1,0 +1,6 @@
+use std.sync.{Mutex, MutexGuard}
+
+def main
+  let m: Mutex[Int] = Mutex.new(0)
+  let guard: Option[MutexGuard[Int]] = m.try_lock()
+end

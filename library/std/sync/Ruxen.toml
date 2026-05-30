@@ -1,0 +1,15 @@
+[package]
+name = "std-sync"
+version = "0.1.0"
+description = "Thread + Signal + Mutex"
+
+[dependencies]
+std-time = "= 0.1.0"
+std-core = "= 0.1.0"
+
+# `-lpthread` is required by `runtime/thread.c` / `runtime/mutex.c`
+# / `runtime/sharedsync.c` / `runtime/channel.c`. Moved here from
+# `compiler/ruxen_core/src/codegen/object.rs::linker_args` by B3 of
+# docs/specs/system/zero_rust_stdlib_classes.spec.md.
+[system_libs]
+libs = ["pthread"]

@@ -1,0 +1,14 @@
+## Completion fixture — synthesised `__*Future` classes from async
+## lowering must NOT pollute the completion list. The cursor anchor
+## starts with a double underscore so the test can put the cursor
+## past the leading `_` and verify even prefix-matching synth names
+## are filtered out.
+
+async def fetch -> Int
+  let v = 42
+  v + 1
+end
+
+def main
+  __cursor_synth_anchor
+end

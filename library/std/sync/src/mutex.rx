@@ -1,0 +1,21 @@
+## Typed FFI return surface (docs/specs/types/typed_ffi_returns.spec.md).
+## `def self.new` declares `-> Mutex[T]`; the codegen still treats the
+## return value as i64 at the C ABI (see `ty_to_cranelift`), so
+## `ruxen_mutex_new(int64_t initial)` is called unchanged. Per B1+B3
+## of the spec, T is bound from the constructor's first arg type;
+## `Mutex.new(7)` reports `Mutex[Int]` at the let-binding site.
+class Mutex[T]
+  include Send
+
+  include Sync
+
+  lib "runtime/mutex.c"
+    def self.new as "ruxen_mutex_new"(initial: T) -> Mutex[T]
+    def lock_raw as "ruxen_mutex_lock" -> MutexGuard[T]
+    def try_lock_raw as "ruxen_mutex_try_lock" -> MutexGuard[T]
+    def is_poisoned as "ruxen_mutex_is_poisoned" -> Int
+    def clear_poison as "ruxen_mutex_clear_poison" -> ()
+    def into_inner_raw as "ruxen_mutex_into_inner" -> T
+    def drop as "ruxen_mutex_drop" -> ()
+  end
+end

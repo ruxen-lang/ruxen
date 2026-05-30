@@ -1,0 +1,17 @@
+# Phase B-2/B-3 negative pin test: a class that only includes a
+# statically-dispatched mixin (no `dispatch runtime`) must NOT cause
+# the compiler to emit a vtable or class_info data section. Spec §B11:
+# the layout change is opt-in per mixin; static-only-mixin classes
+# keep their flat layout.
+
+mixin Plain
+  def speak -> Int
+end
+
+class Bob
+  include Plain
+
+  def speak -> Int
+    1
+  end
+end

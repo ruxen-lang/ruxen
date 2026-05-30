@@ -1,34 +1,46 @@
 {
-  "name": "riven",
-  "displayName": "Riven",
-  "description": "Language support for Riven",
-  "version": "0.0.1",
-  "publisher": "riven",
+  "name": "ruxen",
+  "displayName": "Ruxen",
+  "description": "Language support for Ruxen — syntax highlighting and LSP (completion, hover, diagnostics, go-to-definition).",
+  "version": "0.1.0",
+  "publisher": "ruxen",
+  "license": "(MIT OR Apache-2.0)",
+  "icon": "icon.png",
   "engines": { "vscode": "^1.80.0" },
   "categories": ["Programming Languages"],
-  "activationEvents": ["onLanguage:riven"],
+  "keywords": ["ruxen", "rx", "language server", "lsp"],
+  "repository": { "type": "git", "url": "https://github.com/ruxen-lang/ruxen.git", "directory": "editors/vscode" },
+  "bugs": { "url": "https://github.com/ruxen-lang/ruxen/issues" },
+  "homepage": "https://github.com/ruxen-lang/ruxen#readme",
+  "activationEvents": ["onLanguage:ruxen"],
   "main": "./out/extension.js",
   "contributes": {
     "languages": [{
-      "id": "riven",
-      "aliases": ["Riven", "riven"],
-      "extensions": [".riven", ".rvn"],
+      "id": "ruxen",
+      "aliases": ["Ruxen", "ruxen"],
+      "extensions": [".rx"],
       "configuration": "./language-configuration.json"
     }],
     "grammars": [{
-      "language": "riven",
-      "scopeName": "source.riven",
-      "path": "./syntaxes/riven.tmLanguage.json"
+      "language": "ruxen",
+      "scopeName": "source.ruxen",
+      "path": "./syntaxes/ruxen.tmLanguage.json"
     }],
     "configuration": {
-      "title": "Riven",
+      "title": "Ruxen",
       "properties": {
-        "riven.server.path": {
+        "ruxen.server.path": {
           "type": "string",
           "default": "",
-          "description": "Absolute path to the riven-lsp binary. If empty, falls back to 'riven-lsp' on PATH."
+          "description": "Absolute path to the 'ruxen' executable that hosts the language server. If empty, uses 'target/release/ruxen' in the workspace, then 'ruxen' on PATH."
         },
-        "riven.trace.server": {
+        "ruxen.server.args": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["lsp"],
+          "description": "Arguments passed to the server executable. The language server is the 'lsp' subcommand of the 'ruxen' binary, so the default is [\"lsp\"]."
+        },
+        "ruxen.trace.server": {
           "type": "string",
           "enum": ["off", "messages", "verbose"],
           "default": "off",
@@ -38,9 +50,13 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "vscode:prepublish": "npm run check-types && node esbuild.js --production",
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "check-types": "tsc --noEmit",
+    "package": "vsce package",
+    "publish": "vsce publish",
+    "publish:openvsx": "ovsx publish"
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1"
@@ -48,6 +64,9 @@
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.80.0",
+    "@vscode/vsce": "^3.2.0",
+    "esbuild": "^0.24.0",
+    "ovsx": "^0.10.0",
     "typescript": "^5.3.0"
   }
 }

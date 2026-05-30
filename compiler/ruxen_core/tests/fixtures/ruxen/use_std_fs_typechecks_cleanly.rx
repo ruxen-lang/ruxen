@@ -1,0 +1,8 @@
+use std.fs.{read_to_string, write, exists}
+
+def main
+  if exists("fixture.txt")
+    puts read_to_string("fixture.txt").expect!("read")
+  end
+  write("fixture.txt", "hello file").expect!("write")
+end

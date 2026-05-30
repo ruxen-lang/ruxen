@@ -1,0 +1,501 @@
+# ============================================================================
+# Todo Manager — Ruxen Language Showcase
+# ============================================================================
+
+# --- Type Definitions ---
+
+mixin Showable
+  def to_display -> String
+end
+
+enum Priority
+  Low
+  Medium
+  High
+  Critical
+
+  def weight -> Int
+    match self
+      Priority.Low      -> 1
+      Priority.Medium   -> 2
+      Priority.High     -> 3
+      Priority.Critical -> 4
+    end
+  end
+
+  include Showable
+
+  def to_display -> String
+    match self
+      Priority.Low      -> String.from("LOW")
+      Priority.Medium   -> String.from("MEDIUM")
+      Priority.High     -> String.from("HIGH")
+      Priority.Critical -> String.from("CRITICAL")
+    end
+  end
+end
+
+enum Status
+  Pending
+  InProgress(assignee: String)
+  Completed(completed_at: String)
+  Cancelled(reason: String)
+
+  include Showable
+
+  def to_display -> String
+    match self
+      Status.Pending              -> String.from("Pending")
+      Status.InProgress(who)      -> "In Progress (#{who})"
+      Status.Completed(date)      -> "Completed on #{date}"
+      Status.Cancelled(reason)    -> "Cancelled: #{reason}"
+    end
+  end
+end
+
+enum TodoError
+  InvalidPriority(value: String)
+  MissingField(name: String)
+  ParseFailed(message: String)
+  NotFound(id: USize)
+
+  include Error
+
+  def message -> String
+    match self
+      TodoError.InvalidPriority(v)  -> "Invalid priority: '#{v}'"
+      TodoError.MissingField(name)  -> "Missing required field: #{name}"
+      TodoError.ParseFailed(msg)    -> "Parse error: #{msg}"
+      TodoError.NotFound(id)        -> "Todo ##{id} not found"
+    end
+  end
+end
+
+# --- Mixins ---
+
+mixin Serializable
+  def serialize -> String
+  def self.deserialize(data: &str) -> Result[Self, TodoError]
+end
+
+mixin Summarizable
+  def summary -> String
+  def is_actionable -> Bool
+end
+
+# --- Classes ---
+
+class Todo
+  id: USize
+  title: String
+  description: String
+  status: Status
+  priority: Priority
+
+  def init(@id: USize, @title: String, @description: String, @priority: Priority)
+    self.status = Status.Pending
+  end
+
+  def id -> USize { self.id }
+
+  def title_ref -> &String { &self.title }
+
+  def priority_ref -> &Priority { &self.priority }
+
+  def is_done -> Bool
+    match &self.status
+      Status.Completed(_) -> true
+      Status.Cancelled(_) -> true
+      _ -> false
+    end
+  end
+
+  def var assign(assignee: String)
+    self.status = Status.InProgress(assignee: assignee)
+  end
+
+  def var complete(date: String)
+    self.status = Status.Completed(completed_at: date)
+  end
+
+  def var cancel(reason: String)
+    self.status = Status.Cancelled(reason: reason)
+  end
+
+  include Showable
+
+  def to_display -> String
+    "[##{self.id}] #{self.title} | #{self.priority.to_display} | #{self.status.to_display}"
+  end
+
+  include Summarizable
+
+  def summary -> String
+    "#{self.title} (#{self.priority.to_display})"
+  end
+
+  def is_actionable -> Bool
+    match &self.status
+      Status.Pending          -> true
+      Status.InProgress(_)    -> true
+      _                       -> false
+    end
+  end
+
+  include Serializable
+
+  def serialize -> String
+    "#{self.id}|#{self.title}|#{self.description}|#{self.priority.to_display}"
+  end
+
+  def self.deserialize(data: &str) -> Result[Todo, TodoError]
+    let parts: Array[String] = data.split("|").to_vec
+    if parts.len < 4
+      return Err(TodoError.ParseFailed(
+        message: String.from("expected 4 fields, got #{parts.len}")
+      ))
+    end
+
+    # parts is now Array[String] (split returns Array[String] for both
+    # &str and String receivers — pin B13). Convert each element back
+    # to &str at the call boundary.
+    let id = parts[0].as_str.parse_uint
+      .map_err { |_| TodoError.ParseFailed(message: String.from("invalid id")) }?
+
+    let priority = parse_priority(parts[3].as_str)?
+
+    Ok(Todo.new(
+      id,
+      String.from(parts[1]),
+      String.from(parts[2]),
+      priority
+    ))
+  end
+end
+
+class TimedTodo < Todo
+  deadline: String
+  estimated_hours: Float
+
+  def init(
+    id: USize,
+    title: String,
+    description: String,
+    priority: Priority,
+    @deadline: String,
+    @estimated_hours: Float
+  )
+    super(id, title, description, priority)
+  end
+
+  def is_overdue(current_date: &str) -> Bool
+    # Simple string comparison — a real app would use proper date types
+    !self.is_done && current_date > &self.deadline
+  end
+
+  def deadline_ref -> &String { &self.deadline }
+
+  include Showable
+
+  def to_display -> String
+    let base = "[##{self.id}] #{self.title} | #{self.priority.to_display}"
+    let time = "Due: #{self.deadline} (#{self.estimated_hours}h est.)"
+    "#{base} | #{time} | #{self.status.to_display}"
+  end
+end
+
+# --- Generic Repository ---
+
+class Repository[T: Showable]
+  items: Array[T]
+  next_id: USize
+
+  def init
+    self.items = Array.new
+    self.next_id = 1
+  end
+
+  def var add(item: T) -> USize
+    # item is moved into the Array — caller gives up ownership
+    let id = self.next_id
+    self.items.push(item)
+    self.next_id += 1
+    id
+  end
+
+  def count -> USize
+    self.items.len
+  end
+
+  def get(index: USize) -> Option[&T]
+    self.items.get(index)
+  end
+
+  def get_var(index: USize) -> Option[&var T]
+    self.items.get_var(index)
+  end
+
+  def all -> &Array[T]
+    &self.items
+  end
+
+  # Takes a predicate block, returns borrowed references to matching items
+  def where_matching(&block: Block(&T) -> Bool) -> Array[&T]
+    self.items.iter
+      .filter { |item| yield item }
+      .to_vec
+  end
+
+  # Consumes the repository, returns only items that pass the predicate
+  def consume into_filtered(predicate: Fn(&T) -> Bool) -> Array[T]
+    self.items.into_iter
+      .filter { |item| predicate.(&item) }
+      .to_vec
+  end
+
+  def display_all
+    if self.items.is_empty
+      puts "  (empty)"
+      return
+    end
+    self.items.each { |item| puts "  #{item.to_display}" }
+  end
+end
+
+# --- TodoList (domain-specific wrapper) ---
+
+class TodoList
+  repo: Repository[Todo]
+
+  def init
+    self.repo = Repository.new
+  end
+
+  def var add_task(title: String, desc: String, priority: Priority) -> USize
+    let task = Todo.new(self.repo.count, title, desc, priority)
+    self.repo.add(task)
+  end
+
+  def find_by_id(id: USize) -> Option[&Todo]
+    self.repo.all.iter.find { |t| t.id == id }
+  end
+
+  def var update_status(id: USize, status: Status) -> Result[(), TodoError]
+    let task = self.repo.all.iter
+      .position { |t| t.id == id }
+      .ok_or(TodoError.NotFound(id: id))?
+
+    match self.repo.get_var(task)
+      Some(t) -> match status
+        Status.InProgress(ref assignee) -> t.assign(assignee.clone)
+        Status.Completed(ref date)      -> t.complete(date.clone)
+        Status.Cancelled(ref reason)    -> t.cancel(reason.clone)
+        Status.Pending                  -> t.status = Status.Pending
+      end
+      nil -> return Err(TodoError.NotFound(id: id))
+    end
+
+    Ok(nil)
+  end
+
+  def high_priority_tasks -> Array[&Todo]
+    self.repo.where_matching { |t| t.priority_ref.weight >= 3 }
+  end
+
+  def actionable_tasks -> Array[&Todo]
+    self.repo.where_matching { |t| t.is_actionable }
+  end
+
+  def display
+    puts "--- All Tasks ---"
+    self.repo.display_all
+  end
+
+  # Consumes the TodoList, returns only completed tasks
+  def consume into_completed -> Array[Todo]
+    self.repo.into_filtered({ |t| t.is_done })
+  end
+end
+
+# --- Helper Functions ---
+
+def parse_priority(input: &str) -> Result[Priority, TodoError]
+  match input.trim.to_lower.as_str
+    "low"      -> Ok(Priority.Low)
+    "medium"   -> Ok(Priority.Medium)
+    "high"     -> Ok(Priority.High)
+    "critical" -> Ok(Priority.Critical)
+    other      -> Err(TodoError.InvalidPriority(value: String.from(other)))
+  end
+end
+
+# Accepts borrowed tasks, returns a formatted report — no ownership taken
+def generate_report(tasks: &Array[&Todo]) -> String
+  var report = String.from("=== Todo Report ===\n")
+
+  let (done, active): (Array[&&Todo], Array[&&Todo]) = tasks.iter
+    .partition { |t| t.is_done }
+
+  report.push_str("Active: #{active.len}\n")
+  report.push_str("Completed: #{done.len}\n\n")
+
+  for task in active
+    report.push_str("  [ ] #{task.summary}\n")
+  end
+  for task in done
+    report.push_str("  [x] #{task.summary}\n")
+  end
+
+  report
+end
+
+# Demonstrates generic function with mixin bounds
+def print_items[T: Showable + Summarizable](items: &Array[T], label: &str)
+  puts "--- #{label} ---"
+  items.each do |item|
+    if item.is_actionable
+      puts "  * #{item.summary}"
+    else
+      puts "    #{item.summary} (done)"
+    end
+  end
+end
+
+# Demonstrates closure stored in a variable
+def apply_filter[T](items: &Array[T], predicate: &Fn(&T) -> Bool) -> Array[&T]
+  items.iter.filter { |item| predicate.(item) }.to_vec
+end
+
+# Demonstrates error propagation with ?
+def create_task_from_input(
+  list: &var TodoList,
+  title: &str,
+  desc: &str,
+  priority_str: &str
+) -> Result[USize, TodoError]
+  if title.is_empty
+    return Err(TodoError.MissingField(name: String.from("title")))
+  end
+  if desc.is_empty
+    return Err(TodoError.MissingField(name: String.from("description")))
+  end
+
+  let priority = parse_priority(priority_str)?  # ? propagates TodoError
+  let id = list.add_task(
+    String.from(title),
+    String.from(desc),
+    priority
+  )
+  Ok(id)
+end
+
+# --- Main ---
+
+def main
+  var list = TodoList.new
+
+  # ── Create tasks via helper (demonstrates ? operator) ──
+  puts "Creating tasks..."
+
+  let results = [
+    create_task_from_input(&var list, "Design ownership model", "Define borrow rules", "critical"),
+    create_task_from_input(&var list, "Write parser",           "Implement lexer+parser", "high"),
+    create_task_from_input(&var list, "Add syntax highlighting", "Editor plugin",         "medium"),
+    create_task_from_input(&var list, "Update README",           "Document new features",  "low"),
+    create_task_from_input(&var list, "Fix borrow checker bug",  "Edge case in closures",  "critical"),
+    create_task_from_input(&var list, "",                         "Missing title",          "high"),
+  ]
+
+  # ── Report creation results (pattern matching) ──
+  for (i, result) in results.into_iter.enumerate
+    match result
+      Ok(id)  -> puts "  Created task ##{id}"
+      Err(e)  -> puts "  Failed: #{e.message}"
+    end
+  end
+
+  puts ""
+
+  # ── Display all tasks ──
+  list.display
+
+  puts ""
+
+  # ── Update statuses (demonstrates writing methods and pattern matching) ──
+  puts "Updating statuses..."
+  list.update_status(0, Status.InProgress(assignee: String.from("Alaric")))
+    .unwrap_or_else { |e| eputs "  #{e.message}" }
+
+  list.update_status(0, Status.Completed(completed_at: String.from("2026-04-11")))
+    .unwrap_or_else { |e| eputs "  #{e.message}" }
+
+  list.update_status(1, Status.InProgress(assignee: String.from("Dana")))
+    .unwrap_or_else { |e| eputs "  #{e.message}" }
+
+  # Try updating a non-existent task (demonstrates error handling)
+  match list.update_status(99, Status.Pending)
+    Ok(nil) -> puts "  Updated"
+    Err(TodoError.NotFound(id)) -> puts "  Todo ##{id} doesn't exist (expected)"
+    Err(e) -> puts "  Unexpected: #{e.message}"
+  end
+
+  puts ""
+
+  # ── Query with closures (demonstrates blocks and stored closures) ──
+  puts "--- High Priority ---"
+  let urgent = list.high_priority_tasks
+  for task in &urgent
+    puts "  #{task.to_display}"
+  end
+
+  puts ""
+
+  # Closure stored in a variable and passed to a function
+  let is_pending = { |t: &&Todo|
+    match &t.status
+      Status.Pending -> true
+      _ -> false
+    end
+  }
+  let pending = apply_filter(list.repo.all, &is_pending)
+  puts "--- Pending Tasks (#{pending.len}) ---"
+  pending.each { |t| puts "  #{t.to_display}" }
+
+  puts ""
+
+  # ── Find by ID (demonstrates Option) ──
+  let task_name = list.find_by_id(1)
+    .map { |t| t.title_ref.clone }
+    .unwrap_or(String.from("Unknown"))
+  puts "Todo #1: #{task_name}"
+
+  # Safe navigation chain
+  let deadline_info = list.find_by_id(0)
+    ?.title_ref
+    .map { |title| "Found: #{title}" }
+    .unwrap_or(String.from("Not found"))
+  puts deadline_info
+
+  puts ""
+
+  # ── Generate report (demonstrates borrowing — list is NOT consumed) ──
+  let all_refs: Array[&Todo] = list.repo.all.iter.to_vec
+  let report = generate_report(&all_refs)
+  puts report
+
+  # ── Print with generic function ──
+  print_items(list.repo.all, "Final Overview")
+
+  puts ""
+
+  # ── Consume the list (demonstrates ownership transfer) ──
+  puts "Archiving completed tasks..."
+  let completed = list.into_completed
+  # `list` is now consumed — cannot be used
+
+  puts "Archived #{completed.len} completed tasks:"
+  completed.each { |t| puts "  #{t.to_display}" }
+
+  # This would be a compile error:
+  # list.display  # ERROR: `list` was consumed by `into_completed`
+end

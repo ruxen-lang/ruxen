@@ -1,0 +1,13 @@
+class Money
+  cents: Int
+
+  include Debug
+
+  def fmt(f: &var Formatter) -> Result[(), FmtError]
+    Ok(nil)
+  end
+end
+
+def main
+  let _m = Money.new(100)
+end

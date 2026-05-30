@@ -1,0 +1,49 @@
+## Minimal: loop with a direct await on a class-static-method
+## awaitee that goes Pending once then Ready. No Task.spawn.
+
+class TickFuture
+  ticks: Int
+  payload: Int
+  include Future
+  type Output = Int
+
+  def init(ticks: Int, payload: Int)
+    self.ticks = ticks
+    self.payload = payload
+  end
+
+  def self.make(ticks: Int, payload: Int) -> TickFuture
+    TickFuture.new(ticks, payload)
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    if self.ticks == 0
+      Poll.Ready(self.payload)
+    else
+      self.ticks = self.ticks - 1
+      Poll.Pending
+    end
+  end
+end
+
+async def loop_two -> Int
+  var i: Int = 0
+  var sum: Int = 0
+  while i < 2
+    let v = TickFuture.make(1, 10).await
+    sum = sum + v
+    i = i + 1
+  end
+  sum
+end
+
+def main
+  puts "main: start"
+  let total = block_on(loop_two())
+  puts "main: done"
+  if total == 20
+    puts "ok"
+  else
+    puts "fail"
+  end
+end

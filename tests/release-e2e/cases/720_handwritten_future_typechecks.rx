@@ -1,0 +1,34 @@
+## Spec B4 (docs/specs/stdlib/async.spec.md): a hand-written class
+## that `include`s the Future mixin, binds `type Output = Int`, and
+## defines `def var poll(cx: &var Context) -> Poll[Int]` must
+## compile cleanly. Sub-phase 1 only checks the surface — running
+## `f.poll(&var ctx)` would panic at the executor stub, so this
+## fixture never CALLS poll. It exists to prove the trio
+## (Future / Poll / Context) lift together as a usable surface.
+##
+## Sub-phase 3 will add a sibling fixture that actually invokes
+## block_on(f); that one will exercise ruxen_context_waker too.
+
+class CountdownFuture
+  remaining: Int
+  include Future
+  type Output = Int
+
+  def init(n: Int)
+    self.remaining = n
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    if self.remaining == 0
+      Poll.Ready(0)
+    else
+      self.remaining = self.remaining - 1
+      Poll.Pending
+    end
+  end
+end
+
+def main
+  let _f = CountdownFuture.new(3)
+  puts "compiled"
+end

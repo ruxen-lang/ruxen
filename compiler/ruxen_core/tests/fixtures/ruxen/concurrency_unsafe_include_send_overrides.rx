@@ -1,0 +1,22 @@
+## Pin: B12 — `unsafe include Send` is the explicit-safety-assertion
+## variant; behaves like a plain `include Send` for v1 (no
+## auto-derive to suppress), so a class containing a raw pointer
+## still typechecks through Mutex.new / Thread.spawn.
+##
+## NOTE: spec example writes `include unsafe Send` but the parser
+## accepts the `unsafe include Send` token order (consistent with
+## Ruby's `private def …` modifier style). This is a known
+## spec-vs-grammar wording mismatch; the SEMANTICS match.
+## See docs/specs/ownership/send_sync_enforcement.spec.md §B12.
+
+class WrapsRawPointer
+  unsafe include Send
+
+  def init
+  end
+end
+
+def main
+  let w = WrapsRawPointer.new
+  let _m = Mutex.new(w)
+end

@@ -1,0 +1,7 @@
+def main
+  var h: Map[Int, Int] = Map.with_capacity(8)
+  h.insert(1, 10)
+  h.insert(2, 20)
+  let n = h.len
+  puts "len=#{n}"
+end

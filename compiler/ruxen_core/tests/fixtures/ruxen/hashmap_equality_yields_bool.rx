@@ -1,0 +1,8 @@
+def main
+  var a: Map[Int, Int] = Map.new
+  var b: Map[Int, Int] = Map.new
+  a.insert(1, 10)
+  b.insert(1, 10)
+  let c: Bool = a == b
+  puts "#{c}"
+end

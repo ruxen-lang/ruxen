@@ -1,0 +1,9 @@
+## B1 pin fixture — user program that constructs a bootstrap-loaded
+## class via its user-body `def init` and calls the user-body `get`
+## accessor. If the bootstrap merge silently drops bodies (pre-B1),
+## the constructor is unresolved and typeck fails.
+
+def main()
+  let b = BootstrapBodied.new(42)
+  let _ = b.get()
+end

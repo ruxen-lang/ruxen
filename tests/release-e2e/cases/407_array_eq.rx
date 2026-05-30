@@ -1,0 +1,16 @@
+def main
+  var a: Array[Int] = Array.new
+  a.push(1)
+  a.push(2)
+  a.push(3)
+  var b: Array[Int] = Array.new
+  b.push(1)
+  b.push(2)
+  b.push(3)
+  var c: Array[Int] = Array.new
+  c.push(1)
+  c.push(2)
+  puts "a_eq_b=#{a == b}"
+  puts "a_eq_c=#{a == c}"
+  puts "a_neq_c=#{a != c}"
+end

@@ -1,0 +1,7 @@
+use std.sync.Thread
+
+def main
+  Thread.sleep(0)
+  Thread.yield_now()
+  puts "thread helpers ok"
+end

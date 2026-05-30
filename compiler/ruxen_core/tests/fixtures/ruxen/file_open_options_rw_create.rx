@@ -1,0 +1,17 @@
+use std.io.File
+use std.io.OpenOptions
+
+def write_msg(f: File)
+  match f.write_str("from OpenOptions")
+    Ok(_)  -> puts "wrote_ok"
+    Err(_) -> puts "wrote_fail"
+  end
+end
+
+def main
+  let opts = OpenOptions.new().read(true).write(true).create(true)
+  match File.open_options("__FILE__", opts)
+    Ok(f)  -> write_msg(f)
+    Err(_) -> puts "open_fail"
+  end
+end

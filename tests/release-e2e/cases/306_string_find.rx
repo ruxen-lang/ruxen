@@ -1,0 +1,11 @@
+def main
+  let s = "hello world"
+  match s.find("world")
+    Some(idx) -> puts "found at #{idx}"
+    nil       -> puts "missing"
+  end
+  match s.find("zzz")
+    Some(idx) -> puts "found at #{idx}"
+    nil       -> puts "missing"
+  end
+end

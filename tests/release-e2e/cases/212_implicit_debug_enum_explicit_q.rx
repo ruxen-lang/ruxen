@@ -1,0 +1,10 @@
+enum Color
+  Red
+  Green
+  Blue
+end
+
+def main
+  let c = Color.Blue
+  puts "#{c:?}"
+end

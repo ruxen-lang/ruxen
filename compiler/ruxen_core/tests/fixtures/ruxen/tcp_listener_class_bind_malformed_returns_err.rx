@@ -1,0 +1,8 @@
+use std.net.TcpListener
+
+def main
+  match TcpListener.bind(&"not an address at all")
+    Ok(_)  -> puts "bind=ok"
+    Err(_) -> puts "bind=err"
+  end
+end

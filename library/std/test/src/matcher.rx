@@ -1,0 +1,86 @@
+## std.test.Matcher[T] — value wrapper returned by `Tester#expect(x)`.
+##
+## v1 matchers are pure-boolean: `to_eq` / `not_to_eq` etc. return Bool;
+## the Tester layer turns a `false` into a `ruxen_panic` with a
+## structured message the Runner parent decodes.
+##
+## Equality matchers require `T: PartialEq`. Non-PartialEq types fail
+## typeck at the call site (correct — surfaces the constraint early).
+class Matcher[T]
+  actual: T
+
+  def init(actual: T) { self.actual = actual }
+
+  def to_eq(expected: T) -> ()
+    if self.actual != expected
+      Runner.case_mark_failed
+    end
+  end
+
+  def not_to_eq(expected: T) -> ()
+    if self.actual == expected
+      Runner.case_mark_failed
+    end
+  end
+end
+
+## Boolean-valued matcher path. Decoupled from the generic Matcher[T]
+## constraint because `to_be_truthy`/`to_be_falsy` don't need equality
+## and the call site shouldn't be forced to satisfy PartialEq for a
+## boolean assertion.
+class BoolMatcher
+  actual: Bool
+
+  def init(actual: Bool) { self.actual = actual }
+
+  def to_be_truthy -> Bool { self.actual }
+
+  def to_be_falsy -> Bool { !self.actual }
+end
+
+## Nilness check for any Option-typed value. We accept the value as
+## Bool (is_some) at the v1 surface because the test framework only
+## inspects "is present?" — the inner type is irrelevant. The Tester#expect
+## overload (Tester#expect_opt) routes Option-typed arguments here.
+class OptionMatcher
+  is_some: Bool
+
+  def init(present: Bool) { self.is_some = present }
+
+  def to_be_nil -> Bool { self.is_some == false }
+
+  def not_to_be_nil -> Bool { self.is_some }
+end
+
+## Element-membership matcher for Array[T]. Loops with `each` rather
+## than `contains?` because the v1 Array surface may not expose contains?
+## uniformly across T (PartialEq required).
+class ArrayMatcher[T]
+  actual_ref: &Array[T]
+
+  def init(actual: &Array[T]) { self.actual_ref = actual }
+
+  def to_include(needle: T) -> Bool
+    let n: Int = self.actual_ref.len as Int
+    var i: Int = 0
+    while i < n
+      match self.actual_ref.get(i)
+        Some(item) -> if item == needle
+          return true
+        end
+        None -> 0
+      end
+      i = i + 1
+    end
+    false
+  end
+end
+
+## Substring matcher for String. Delegates to `String#contains`.
+class StringMatcher
+  actual_ref: &String
+
+  def init(actual: &String) { self.actual_ref = actual }
+
+  def to_include(needle: &String) -> Bool { self.actual_ref.contains(needle) }
+end

@@ -1,0 +1,10 @@
+module geometry
+  struct Point
+    x: Int
+    y: Int
+  end
+
+  def origin -> Int
+    0
+  end
+end

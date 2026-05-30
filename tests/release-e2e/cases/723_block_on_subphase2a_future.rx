@@ -1,0 +1,21 @@
+## Spec B1, B7 (docs/specs/stdlib/executor.spec.md): block_on
+## drives a sub-phase-2A future (no `.await`) to completion. The
+## async_lowering rewriter erases `block_on(make_int())` at AST
+## time and replaces with an inline poll-yield loop. The future is
+## a single-state machine returning Poll.Ready(42) on its first
+## poll, so block_on returns immediately without ever spinning.
+##
+## Pinned behaviours:
+##   B1 — `block_on(future)` is a callable free function.
+##   B2 — Inlined poll loop calls `(&var fut).poll(&var ctx)` and
+##        matches Poll.Ready(v) → exit / Poll.Pending → yield.
+##   B7 — End-to-end: block_on returns the future's Ready payload.
+
+async def make_int() -> Int
+  42
+end
+
+def main
+  let result = block_on(make_int())
+  puts "#{result}"
+end

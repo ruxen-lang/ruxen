@@ -1,0 +1,7 @@
+
+struct Eight[const N: USize, const M: USize] where N + M == 8
+  data: Int
+end
+
+def take_ok(_e: Eight[3, 5])
+end

@@ -1,0 +1,4 @@
+def main
+  let s = String.from("ab")
+  puts s.repeat(3)
+end

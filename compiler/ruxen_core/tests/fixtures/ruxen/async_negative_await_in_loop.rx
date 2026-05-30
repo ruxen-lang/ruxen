@@ -1,0 +1,27 @@
+## Spec docs/errors/E1115.md / docs/specs/types/async_lowering.spec.md
+## ("Out of scope" §): `.await` inside the body of a `loop` /
+## `while` / `while let` / `for` block is rejected at type-check
+## time with code E1115. v1 lowering builds a flat
+## `[await_let]* tail` state machine; per-iteration loop suspension
+## requires re-constructing the awaitee on each iteration and
+## restoring the right state on resume — deferred to v2.
+
+async def fetch() -> Int
+  42
+end
+
+async def handler() -> Int
+  let var sum = 0
+  loop
+    let v = fetch().await
+    sum = sum + v
+    if sum > 100
+      break sum
+    end
+  end
+end
+
+def main
+  let r = block_on(handler())
+  puts "#{r}"
+end

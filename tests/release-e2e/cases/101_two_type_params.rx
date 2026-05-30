@@ -1,0 +1,21 @@
+class Pair[A, B]
+  first: A
+  second: B
+
+  def init(@first: A, @second: B)
+  end
+
+  def first_ref -> &A
+    &self.first
+  end
+
+  def second_ref -> &B
+    &self.second
+  end
+end
+
+def main
+  let p = Pair[Int, String].new(42, String.from("hi"))
+  puts "#{p.first_ref}"
+  puts "#{p.second_ref}"
+end

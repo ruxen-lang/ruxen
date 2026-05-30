@@ -1,0 +1,11 @@
+enum Shape
+  Circle(radius: Float)
+  Rect(w: Int, h: Int)
+end
+
+def main
+  let c = Shape.Circle(radius: 1.5)
+  let r = Shape.Rect(w: 3, h: 4)
+  puts "#{c}"
+  puts "#{r}"
+end

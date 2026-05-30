@@ -1,0 +1,13 @@
+use std.time.unix_ns
+
+def main
+  let now = unix_ns()
+  # 2020-01-01T00:00:00Z = 1577836800 seconds
+  # 1577836800 * 1_000_000_000 = 1577836800000000000 nanoseconds
+  let threshold: Int = 1577836800000000000
+  if now > threshold
+    puts "ok"
+  else
+    puts "fail now=#{now}"
+  end
+end

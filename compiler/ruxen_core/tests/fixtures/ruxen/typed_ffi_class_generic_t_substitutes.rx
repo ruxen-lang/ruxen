@@ -1,0 +1,13 @@
+## Pin: B4 — `def get -> T` inside `class MutexGuard[T]` resolves to
+## the class's T at the call site. With `g: MutexGuard[Int]`, `g.get`
+## reports `Int`. Regression check for subst_ty's recursion into
+## Ty::Class generic args.
+def main
+  let m = Mutex.new(42)
+  let g = m.lock_raw
+  let v = g.get
+  # v must be a plain Int; if substitute_generics_in_return ever stops
+  # walking into the class-arg position, v becomes a fresh inference
+  # var and arithmetic below fails.
+  let _doubled = v * 2
+end

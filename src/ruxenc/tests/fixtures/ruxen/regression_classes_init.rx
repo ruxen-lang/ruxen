@@ -1,0 +1,20 @@
+class Box
+  x: Int
+
+  def init(@x: Int)
+  end
+
+  def value -> Int
+    self.x
+  end
+
+  def doubled -> Int
+    self.x * 2
+  end
+end
+
+def main
+  let b = Box.new(21)
+  puts "#{b.value}"
+  puts "#{b.doubled}"
+end

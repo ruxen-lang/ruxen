@@ -1,0 +1,6 @@
+def fold_anchor_simple_def
+  let a = 1
+  let b = 2
+  let c = a + b
+  c
+end

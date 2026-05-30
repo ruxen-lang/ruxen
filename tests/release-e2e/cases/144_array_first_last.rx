@@ -1,0 +1,14 @@
+def main
+  var v: Array[Int] = Array.new
+  v.push(10)
+  v.push(20)
+  v.push(30)
+  match v.first
+    Some(x) -> puts "first=#{x}"
+    nil     -> puts "empty"
+  end
+  match v.last
+    Some(x) -> puts "last=#{x}"
+    nil     -> puts "empty"
+  end
+end

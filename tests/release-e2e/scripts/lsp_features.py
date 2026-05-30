@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """End-to-end LSP feature tests over stdio JSON-RPC.
 
-Exercises the shipped riven-lsp beyond the initialize handshake:
+Exercises the shipped `ruxen lsp` beyond the initialize handshake:
   - did_open → publishDiagnostics
   - did_open with an invalid program → non-empty diagnostics
   - did_save → re-diagnoses after a text change
@@ -10,9 +10,9 @@ Exercises the shipped riven-lsp beyond the initialize handshake:
   - goto_definition on a reference
   - semantic_tokens_full returns a token list
 
-Driven by the release-e2e harness. Prefers a binary from
-$RIVEN_WORKSPACE/target/release/ when set, otherwise falls back to
-~/.riven/bin/. Exits 0 if every check passes, non-zero otherwise.
+Druxen by the release-e2e harness. Prefers a binary from
+$RUXEN_WORKSPACE/target/release/ when set, otherwise falls back to
+~/.ruxen/bin/. Exits 0 if every check passes, non-zero otherwise.
 """
 from __future__ import annotations
 
@@ -83,12 +83,13 @@ def collect_until(stream, pred, max_messages: int = 40) -> dict | None:
 
 
 def resolve_binary() -> str | None:
-    ws = os.environ.get("RIVEN_WORKSPACE")
+    # The LSP is a subcommand of the unified driver now: `ruxen lsp`.
+    ws = os.environ.get("RUXEN_WORKSPACE")
     if ws:
-        candidate = os.path.join(ws, "target", "release", "riven-lsp")
+        candidate = os.path.join(ws, "target", "release", "ruxen")
         if os.path.isfile(candidate):
             return candidate
-    home = os.path.expanduser("~/.riven/bin/riven-lsp")
+    home = os.path.expanduser("~/.ruxen/bin/ruxen")
     if os.path.isfile(home):
         return home
     return None
@@ -96,7 +97,7 @@ def resolve_binary() -> str | None:
 
 def start_lsp(bin_path: str) -> subprocess.Popen:
     return subprocess.Popen(
-        [bin_path],
+        [bin_path, "lsp"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
@@ -112,7 +113,7 @@ def initialize(proc: subprocess.Popen) -> dict:
             "processId": os.getpid(),
             "rootUri": None,
             "capabilities": {},
-            "clientInfo": {"name": "riven-e2e-features", "version": "0.0.1"},
+            "clientInfo": {"name": "ruxen-e2e-features", "version": "0.0.1"},
         },
     }
     proc.stdin.write(frame(msg))
@@ -142,7 +143,7 @@ def send_request(proc: subprocess.Popen, req_id: int, method: str, params: dict)
 def did_open(proc, uri: str, text: str, version: int = 1) -> None:
     send_notification(proc, "textDocument/didOpen", {
         "textDocument": {
-            "uri": uri, "languageId": "riven",
+            "uri": uri, "languageId": "ruxen",
             "version": version, "text": text,
         },
     })
@@ -170,7 +171,7 @@ def did_close(proc, uri: str) -> None:
 def main() -> int:
     bin_path = resolve_binary()
     if not bin_path:
-        print("lsp_features: riven-lsp not found", file=sys.stderr)
+        print("lsp_features: ruxen binary not found", file=sys.stderr)
         return 2
 
     proc = start_lsp(bin_path)
@@ -196,7 +197,7 @@ def main() -> int:
         send_notification(proc, "initialized", {})
 
         # ── Case 1: valid program, expect empty-or-only-warnings diagnostics ─
-        uri_ok = "file:///tmp/lsp_feat_ok.rvn"
+        uri_ok = "file:///tmp/lsp_feat_ok.rx"
         did_open(proc, uri_ok, PROGRAM_OK)
         diag_ok = collect_until(
             proc.stdout,
@@ -212,7 +213,7 @@ def main() -> int:
                   detail=f"got {len(errors)}: {errors[:2]}")
 
         # ── Case 2: invalid program, expect >=1 error diagnostic ─────────────
-        uri_err = "file:///tmp/lsp_feat_err.rvn"
+        uri_err = "file:///tmp/lsp_feat_err.rx"
         did_open(proc, uri_err, PROGRAM_ERR)
         diag_err = collect_until(
             proc.stdout,

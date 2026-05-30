@@ -1,0 +1,10 @@
+struct Buffer
+  value: Int
+end
+
+def main
+  loop
+    let _b = Buffer.new(1)
+    break
+  end
+end

@@ -1,0 +1,39 @@
+# Universal `to_s` (Ruby convention): every value renders to a String.
+struct Point
+  x: Int
+  y: Int
+end
+
+enum Shape
+  Circle(radius: Float)
+end
+
+class Widget
+  id: Int
+  def init(@id: Int)
+  end
+  # A user-defined `to_s` wins over the synthesized default.
+  def to_s -> String
+    "widget##{self.id}"
+  end
+end
+
+def main
+  # Scalar primitives.
+  let n: Int = 42
+  puts n.to_s()
+  let f: Float = 1.5
+  puts f.to_s()
+  let b: Bool = true
+  puts b.to_s()
+
+  # User types: `to_s` matches `"#{value}"` (the derived Debug form).
+  let p = Point.new(3, 4)
+  puts p.to_s()
+  let c = Shape.Circle(radius: 2.5)
+  puts c.to_s()
+
+  # User-defined `to_s` takes precedence.
+  let w = Widget.new(7)
+  puts w.to_s()
+end

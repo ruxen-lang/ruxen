@@ -1,0 +1,36 @@
+use std.net.{TcpListener, TcpStream, Shutdown}
+
+# E2E smoke for TcpStream.shutdown: bind a listener, self-connect
+# (without accepting — connect(2) succeeds onto the backlog on
+# loopback), then half-close via Shutdown.Both. The full peer-EOF
+# observation is exercised by the stdlib_net.rs
+# `tcp_stream_class_shutdown_write_then_read_eof` pin test which
+# has two-sided host coordination.
+def half_close(s: TcpStream)
+  match s.shutdown(Shutdown.Both)
+    Ok(_)  -> puts "shutdown=ok"
+    Err(_) -> puts "shutdown=err"
+  end
+end
+
+def connect_and_shutdown(addr: &String)
+  match TcpStream.connect(addr)
+    Ok(s)  -> half_close(s)
+    Err(_) -> puts "connect=err"
+  end
+end
+
+def with_addr(l: TcpListener)
+  match l.local_addr()
+    Ok(addr) -> connect_and_shutdown(&addr)
+    Err(_)   -> puts "local_addr=err"
+  end
+end
+
+def main
+  let addr = String.from("127.0.0.1:0")
+  match TcpListener.bind(&addr)
+    Ok(l)  -> with_addr(l)
+    Err(_) -> puts "bind=err"
+  end
+end

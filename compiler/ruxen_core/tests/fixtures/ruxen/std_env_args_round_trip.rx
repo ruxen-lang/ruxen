@@ -1,0 +1,6 @@
+use std.env.args
+
+def main
+  let argv = args()
+  puts "#{argv.len()}"
+end

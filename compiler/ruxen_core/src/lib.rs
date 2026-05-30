@@ -1,0 +1,12 @@
+pub mod async_lowering;
+pub mod borrow_check;
+pub mod codegen;
+pub mod diagnostics;
+pub mod formatter;
+pub mod hir;
+pub mod implicit_includes;
+pub mod lexer;
+pub mod mir;
+pub mod parser;
+pub mod resolve;
+pub mod typeck;

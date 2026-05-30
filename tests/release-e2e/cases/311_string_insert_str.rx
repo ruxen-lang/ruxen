@@ -1,0 +1,5 @@
+def main
+  var s = String.from("hello world")
+  s.insert_str(5, ",")
+  puts s
+end

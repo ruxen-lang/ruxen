@@ -1,0 +1,5 @@
+
+def show[T](x: T) -> Int
+where T: Display
+  0
+end

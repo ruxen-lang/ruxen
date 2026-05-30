@@ -1,0 +1,9 @@
+# Pin: `nil` is accepted inside an `Fn() -> nil` callback type.
+
+def h(cb: any Fn() -> nil)
+  cb()
+end
+
+def main
+  h({ || nil })
+end

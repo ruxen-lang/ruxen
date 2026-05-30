@@ -1,0 +1,15 @@
+
+class NotSync
+  def init
+  end
+
+  include !Sync
+end
+
+def require_sync[T: Sync](value: T)
+end
+
+def test
+  let value = NotSync.new()
+  require_sync(value)
+end

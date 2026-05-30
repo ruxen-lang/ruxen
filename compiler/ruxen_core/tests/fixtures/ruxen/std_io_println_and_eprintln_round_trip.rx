@@ -1,0 +1,6 @@
+use std.io.{println, eprintln}
+
+def main
+  println("hello stdout")
+  eprintln("hello stderr")
+end

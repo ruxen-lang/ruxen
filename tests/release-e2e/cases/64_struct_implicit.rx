@@ -1,0 +1,12 @@
+struct Color
+  r: UInt8
+  g: UInt8
+  b: UInt8
+end
+
+def main
+  let red = Color.new(255u8, 0u8, 0u8)
+  let also_red = red
+  puts "#{red.r} #{red.g} #{red.b}"
+  puts "#{also_red.r} #{also_red.g} #{also_red.b}"
+end

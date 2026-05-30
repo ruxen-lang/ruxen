@@ -1,0 +1,20 @@
+module Tools
+  class Picker
+    def init
+    end
+
+    def pick(value: Int) -> String
+      "module-class-int"
+    end
+
+    def pick(value: String) -> String
+      "module-class-string"
+    end
+  end
+end
+
+def main
+  let picker = Tools.Picker.new()
+  puts picker.pick(7)
+  puts picker.pick("seven")
+end

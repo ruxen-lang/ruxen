@@ -1,0 +1,19 @@
+use std.test.Tester
+use std.test.Runner
+
+def main
+  let r = Runner.new("fixture.expect_panic")
+  Runner.set_current(r.handle_addr)
+
+  Tester.describe("Panic-expecting tests") do |t: &var Tester|
+    t.it_panics("panics -> pass", "kaboom") do
+      Runner.panic
+    end
+
+    t.it_panics("does NOT panic -> fail", "never-thrown") do
+      let x: Int = 1
+    end
+  end
+
+  r.execute
+end

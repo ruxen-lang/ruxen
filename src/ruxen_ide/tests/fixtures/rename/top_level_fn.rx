@@ -1,0 +1,8 @@
+def helper_anchor_kzx -> Int
+  42
+end
+
+def main
+  let a = helper_anchor_kzx
+  let b = helper_anchor_kzx
+end

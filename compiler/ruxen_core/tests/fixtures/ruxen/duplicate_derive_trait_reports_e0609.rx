@@ -1,0 +1,11 @@
+struct Point
+  x: Int
+  y: Int
+
+  include Debug
+  include Debug
+end
+
+def main
+  let _x = 0
+end

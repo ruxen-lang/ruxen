@@ -1,0 +1,8 @@
+def main
+  var count = 0
+  var bump = { || count += 1 }
+  bump.()
+  bump.()
+  bump.()
+  puts "#{count}"
+end

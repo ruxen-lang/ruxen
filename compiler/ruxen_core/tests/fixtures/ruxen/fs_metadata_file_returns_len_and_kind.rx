@@ -1,0 +1,32 @@
+
+use std.fs.metadata
+
+def report(m: Metadata)
+  if m.len > 0
+    puts "len_positive"
+  else
+    puts "len_zero"
+  end
+  if m.is_file
+    puts "is_file_yes"
+  else
+    puts "is_file_no"
+  end
+  if m.is_dir
+    puts "is_dir_yes"
+  else
+    puts "is_dir_no"
+  end
+  if m.is_symlink
+    puts "is_symlink_yes"
+  else
+    puts "is_symlink_no"
+  end
+end
+
+def main
+  match metadata("__FILE__")
+    Ok(m)  -> report(m)
+    Err(_) -> puts "unexpected_err"
+  end
+end

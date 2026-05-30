@@ -1,0 +1,14 @@
+def main
+  var a: Set[Int] = Set.new
+  a.insert(1)
+  a.insert(2)
+  var b: Set[Int] = Set.new
+  b.insert(2)
+  b.insert(1)
+  var c: Set[Int] = Set.new
+  c.insert(1)
+  c.insert(3)
+  puts "a_eq_b=#{a == b}"
+  puts "a_eq_c=#{a == c}"
+  puts "a_neq_c=#{a != c}"
+end

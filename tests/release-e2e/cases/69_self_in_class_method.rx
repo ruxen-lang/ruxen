@@ -1,0 +1,19 @@
+class Widget
+  id: Int
+
+  def init(@id: Int)
+  end
+
+  def self.build -> Self
+    Widget.new(7)
+  end
+
+  def id -> Int
+    self.id
+  end
+end
+
+def main
+  let w = Widget.build
+  puts "#{w.id}"
+end

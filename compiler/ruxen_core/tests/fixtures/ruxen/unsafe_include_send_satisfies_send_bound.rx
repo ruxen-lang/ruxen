@@ -1,0 +1,17 @@
+
+class FfiHandle
+  ptr: *var Void
+
+  def init(@ptr: *var Void)
+  end
+
+  unsafe include Send
+end
+
+def require_send[T: Send](value: T)
+end
+
+def test
+  let handle = FfiHandle.new(nil)
+  require_send(handle)
+end

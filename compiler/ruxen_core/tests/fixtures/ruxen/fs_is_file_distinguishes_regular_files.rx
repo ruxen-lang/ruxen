@@ -1,0 +1,20 @@
+
+use std.fs.is_file
+
+def main
+  if is_file("__FILE__")
+    puts "yes"
+  else
+    puts "no"
+  end
+  if is_file("__DIR__")
+    puts "dir_yes"
+  else
+    puts "dir_no"
+  end
+  if is_file("__MISSING__")
+    puts "missing_yes"
+  else
+    puts "missing_no"
+  end
+end

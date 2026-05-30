@@ -1,0 +1,10 @@
+def main
+  var original: Array[Int] = Array.new
+  original.push(1)
+  original.push(2)
+  original.push(3)
+  let copy = original.clone
+  original.push(99)
+  puts "orig_len=#{original.len}"
+  puts "copy_len=#{copy.len}"
+end

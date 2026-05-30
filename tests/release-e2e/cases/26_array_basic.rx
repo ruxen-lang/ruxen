@@ -1,0 +1,7 @@
+def main
+  let v = [1, 2, 3]
+  puts "len=#{v.len}"
+  for x in &v
+    puts "#{x}"
+  end
+end

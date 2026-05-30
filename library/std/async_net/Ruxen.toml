@@ -1,0 +1,12 @@
+[package]
+name = "std-async_net"
+version = "0.1.0"
+description = "Async TCP I/O (AsyncTcpListener.bind/accept + AsyncTcpStream.connect/read/write/close) backed by the per-thread reactor."
+
+[dependencies]
+std-core = "= 0.1.0"
+std-io = "= 0.1.0"
+std-future = "= 0.1.0"
+
+[system_libs]
+libs = []

@@ -1,0 +1,9 @@
+lib "ruxen_runtime"
+  def add_one as "ruxen_test_extern_add_one"(x: Int) -> Int
+end
+
+lib "ruxen_runtime"
+  # Disagrees on arity: same C symbol, different parameter count.
+  # The resolver should fire E0722 at the second decl.
+  def add_one_alt as "ruxen_test_extern_add_one"(x: Int, y: Int) -> Int
+end

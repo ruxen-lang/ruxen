@@ -1,0 +1,9 @@
+# Minimal user program. The T#21 pin test only inspects resolver
+# output (HirProgram.ffi_libs + symbol-table state for `String`), so
+# this `main` body deliberately does NOT exercise the anchored
+# `len_via_anchor` method — wiring typeck up to know about
+# anchor-registered methods on builtin types is T#13's job, not T#21's.
+
+def main() -> Int
+  0
+end

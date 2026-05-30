@@ -1,0 +1,24 @@
+# Probe: does Ruxen currently support declaring a class inside a
+# module AND referencing it via the qualified type path
+# `Outer.Inner`?
+#
+# This is foundational for the #06.95 module + mixin pattern. If
+# `let x: BufReader.FromFile = ...` doesn't resolve at typeck, the
+# whole reshape needs resolver work, not just `::Name` parser work.
+
+module Outer
+  class Inner
+    lib "ruxen_runtime"
+      def self.make as "ruxen_test_extern_add_one"(x: Int) -> Int
+    end
+  end
+end
+
+def main() -> Int
+  let r = Outer.Inner.make(41)
+  if r == 42
+    0
+  else
+    1
+  end
+end

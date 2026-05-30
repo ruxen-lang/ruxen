@@ -1,0 +1,12 @@
+def fold_anchor_if_chain(n: Int) -> Int
+  if n < 0
+    let neg = 0 - n
+    neg
+  elsif n == 0
+    let zero = 0
+    zero
+  else
+    let pos = n + 1
+    pos
+  end
+end

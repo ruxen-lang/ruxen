@@ -1,0 +1,13 @@
+def main
+  let v = [10, 20, 30, 40, 50]
+  let head = v.iter.take(3).sum
+  puts "head=#{head}"
+  let tail = v.iter.skip(2).sum
+  puts "tail=#{tail}"
+  let mid = v.iter.skip(1).take(3).sum
+  puts "mid=#{mid}"
+  let over = v.iter.take(99).count
+  puts "over=#{over}"
+  let drop_all = v.iter.skip(99).count
+  puts "drop_all=#{drop_all}"
+end

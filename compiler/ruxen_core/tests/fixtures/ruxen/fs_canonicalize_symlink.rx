@@ -1,0 +1,8 @@
+use std.fs.canonicalize
+
+def main
+  match canonicalize("__LINK__")
+    Ok(p)  -> puts "resolved=#{p}"
+    Err(_) -> puts "canon_fail"
+  end
+end

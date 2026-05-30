@@ -1,0 +1,15 @@
+## Spec B6 (docs/specs/stdlib/executor.spec.md): block_on inside an
+## async context is rejected with E1112. Symmetric to E1110 (.await
+## outside async).
+async def inner() -> Int
+  42
+end
+
+async def outer() -> Int
+  let v = block_on(inner())
+  v
+end
+
+def main
+  puts "unreachable"
+end

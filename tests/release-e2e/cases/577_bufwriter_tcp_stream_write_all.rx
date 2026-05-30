@@ -1,0 +1,21 @@
+use std.net.TcpStream
+use std.bufio.BufWriter
+
+# E2E single-side smoke: BufWriter over TcpStream must compile + lower.
+# As with 576, a real write round-trip needs a peer; here we only prove
+# the typeck + MIR + runtime-table arms for the TCP suffix lift through
+# end-to-end and the connect-error case short-circuits cleanly.
+def try_write(s: TcpStream)
+  let bw = BufWriter.Tcp.new(s)
+  match bw.write_str(&"hi")
+    Ok(_)  -> puts "write=ok"
+    Err(_) -> puts "write=err"
+  end
+end
+
+def main
+  match TcpStream.connect(&"127.0.0.1:1")
+    Ok(s)  -> try_write(s)
+    Err(_) -> puts "connect=err"
+  end
+end

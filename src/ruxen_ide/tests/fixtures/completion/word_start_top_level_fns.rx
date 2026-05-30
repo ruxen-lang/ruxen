@@ -1,0 +1,17 @@
+## Completion fixture — word-start completion suggests visible
+## top-level function names matching the typed prefix. The test
+## locates the cursor by anchor identifier in the function body
+## below and puts the cursor one byte in (just past the leading
+## letter) to simulate the user mid-typing.
+
+def greet
+  puts "hi"
+end
+
+def goodbye
+  puts "bye"
+end
+
+def main
+  g_anchor_unique_xyz
+end

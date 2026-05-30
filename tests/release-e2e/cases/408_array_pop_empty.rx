@@ -1,0 +1,12 @@
+def main
+  var v: Array[Int] = Array.new
+  match v.pop
+    Some(_) -> puts "unexpected"
+    nil     -> puts "got_none"
+  end
+  v.push(7)
+  match v.pop
+    Some(x) -> puts "got #{x}"
+    nil     -> puts "unexpected"
+  end
+end

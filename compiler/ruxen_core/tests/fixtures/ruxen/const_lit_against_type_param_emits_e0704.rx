@@ -1,0 +1,11 @@
+
+class OnlyType[T]
+  data: USize
+
+  def init(@data: USize)
+  end
+end
+
+def main
+  let _x: OnlyType[4] = OnlyType.new(0)
+end

@@ -1,0 +1,9 @@
+def main
+  var v: Array[Int] = Array.new
+  v.push(10)
+  v.push(20)
+  v.push(30)
+  puts "v0=#{v[0]}"
+  puts "v1=#{v[1]}"
+  puts "v2=#{v[2]}"
+end

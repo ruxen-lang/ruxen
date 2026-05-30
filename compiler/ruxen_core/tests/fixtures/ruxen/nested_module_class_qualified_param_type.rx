@@ -1,0 +1,15 @@
+# #06.93 Phase 1: three-level nesting. `A.B.C` at parameter-type
+# position must resolve after Phase 1 — the module-path stack
+# must thread through nested module recursion so that the inner
+# class's qualified key concatenates all enclosing module names.
+
+module A
+  module B
+    class C
+    end
+  end
+end
+
+def take_c(_x: A.B.C) -> Int
+  0
+end

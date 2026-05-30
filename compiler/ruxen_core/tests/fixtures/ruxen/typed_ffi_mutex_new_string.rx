@@ -1,0 +1,9 @@
+## Pin: B3 — `Mutex.new("hi")` reports `Mutex[String]`, lifted via the
+## init-method generic inference path (`Mutex` has no user-side `init`,
+## so the fallback is the builtin_method_type arm).
+def main
+  let m = Mutex.new("hello")
+  let g = m.lock_raw
+  let v = g.get
+  let _len = v.len
+end

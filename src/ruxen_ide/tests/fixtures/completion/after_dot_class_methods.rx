@@ -1,0 +1,21 @@
+## Completion fixture — after `.` on a typed receiver, list the
+## class's methods. The cursor anchor is the field-position
+## identifier the user is mid-typing; the test puts the cursor at
+## the start of the anchor (empty prefix, immediately after `.`).
+
+class Counter
+  value: Int
+
+  def get_value -> Int
+    self.value
+  end
+
+  def doubled -> Int
+    self.value * 2
+  end
+end
+
+def main
+  let c = Counter.new(7)
+  c.unique_member_anchor
+end

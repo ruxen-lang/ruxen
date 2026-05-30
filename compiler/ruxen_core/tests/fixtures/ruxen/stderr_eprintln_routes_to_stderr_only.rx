@@ -1,0 +1,5 @@
+
+def main
+  let err = stderr()
+  err.eprintln("warning")
+end

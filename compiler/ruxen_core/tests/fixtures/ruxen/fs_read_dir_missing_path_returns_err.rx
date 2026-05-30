@@ -1,0 +1,9 @@
+
+use std.fs.read_dir
+
+def main
+  match read_dir("/no/such/dir/we/hope")
+    Ok(_)  -> puts "unexpectedly_ok"
+    Err(_) -> puts "err_ok"
+  end
+end

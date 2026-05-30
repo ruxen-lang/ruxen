@@ -1,0 +1,16 @@
+## Pin: B11 — `include !Send` (negative include) explicitly opts out
+## even if the class would otherwise be Send. Construction through
+## Thread.spawn / Mutex.new is rejected.
+## See docs/specs/ownership/send_sync_enforcement.spec.md §B11.
+
+class NotSend
+  include !Send
+
+  def init
+  end
+end
+
+def main
+  let n = NotSend.new
+  let _m = Mutex.new(n)
+end

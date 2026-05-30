@@ -1,0 +1,21 @@
+mixin Showable
+  def to_display -> String
+end
+
+class User
+  name: String
+
+  def init(@name: String)
+  end
+
+  include Showable
+
+  def to_display -> String
+    self.name.clone
+  end
+end
+
+def main
+  let u = User.new(String.from("Alice"))
+  puts "#{u.to_display}"
+end

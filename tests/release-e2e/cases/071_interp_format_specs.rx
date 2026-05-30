@@ -1,0 +1,18 @@
+# Phase 2 #06.D4 — width / align / fill / precision applied at runtime.
+
+def main
+  let n: Int = 42
+  puts "[#{n:>5}]"
+  puts "[#{n:<5}]"
+  puts "[#{n:^6}]"
+
+  let m: Int = 7
+  puts "[#{m:*<5}]"
+
+  let pi: Float = 3.14159
+  puts "pi=#{pi:.2}"
+  puts "[#{pi:>8.2}]"
+
+  let s: String = String.from("hello world")
+  puts "[#{s:.5}]"
+end

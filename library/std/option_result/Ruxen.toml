@@ -1,0 +1,7 @@
+[package]
+name = "std-option-result"
+version = "0.1.0"
+description = "Option / Result anchor + combinators"
+
+[dependencies]
+std-core = "= 0.1.0"

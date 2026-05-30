@@ -1,0 +1,23 @@
+mixin Container
+  type Item
+  def get_first -> Self.Item
+end
+
+class IntBox
+  v: Int
+
+  def init(@v: Int)
+  end
+
+  include Container
+
+  type Item = Int
+  def get_first -> Int
+    self.v
+  end
+end
+
+def main
+  let b = IntBox.new(5)
+  puts "#{b.get_first}"
+end

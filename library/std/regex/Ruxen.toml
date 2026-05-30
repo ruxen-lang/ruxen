@@ -1,0 +1,6 @@
+[package]
+name = "regex"
+version = "0.1.0"
+
+# No [system_libs] entry — PCRE2 is vendored under runtime/pcre2/ and
+# compiled into libruxenrt.a alongside our own runtime sources.

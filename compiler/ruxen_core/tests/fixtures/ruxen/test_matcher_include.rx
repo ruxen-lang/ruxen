@@ -1,0 +1,14 @@
+use std.test.ArrayMatcher
+use std.test.StringMatcher
+
+def main
+  let xs = [1, 2, 3]
+  if ArrayMatcher.new(&xs).to_include(2)
+    puts "array_include_pass"
+  end
+
+  let s = "hello world"
+  if StringMatcher.new(&s).to_include("world")
+    puts "string_include_pass"
+  end
+end

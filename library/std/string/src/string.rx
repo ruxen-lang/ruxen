@@ -1,0 +1,38 @@
+class String
+  lib "runtime/string.c"
+    def self.from as "ruxen_string_from"(s: &String) -> String
+    def self.new as "ruxen_string_new" -> String
+    def self.with_capacity as "ruxen_string_with_capacity"(cap: Int) -> String
+    def self.from_bytes as "ruxen_string_from_bytes"(bytes: &Array[Int]) -> String
+    def len as "ruxen_string_len" -> Int
+    def is_empty as "ruxen_string_is_empty" -> Bool
+    def contains as "ruxen_string_contains"(needle: &String) -> Bool
+    def starts_with as "ruxen_string_starts_with"(needle: &String) -> Bool
+    def ends_with as "ruxen_string_ends_with"(needle: &String) -> Bool
+    def find as "ruxen_string_find"(needle: &String) -> Int
+    def trim as "ruxen_string_trim" -> String
+    def trim_start as "ruxen_string_trim_start" -> String
+    def trim_end as "ruxen_string_trim_end" -> String
+    def to_lower as "ruxen_string_to_lower" -> String
+    def to_upper as "ruxen_string_to_upper" -> String
+    def repeat as "ruxen_string_repeat"(n: Int) -> String
+    def replace as "ruxen_string_replace"(from: &String, to: &String) -> String
+    def as_str as "ruxen_string_as_str" -> String
+    def to_string as "ruxen_string_to_string" -> String
+    def chars as "ruxen_string_chars" -> Array[Char]
+    def lines as "ruxen_string_lines" -> Array[String]
+    def split as "ruxen_string_split"(delimiter: &String) -> Array[String]
+    def splitn as "ruxen_string_splitn"(n: Int, delimiter: &String) -> Array[String]
+    def bytes as "ruxen_string_bytes" -> Array[Int]
+    def into_bytes as "ruxen_string_into_bytes" -> Array[Int]
+    def parse_int as "ruxen_string_parse_int" -> Int
+    def parse_float as "ruxen_string_parse_float" -> Int
+    def push_str as "ruxen_string_push_str"(other: &String) -> String
+    def push as "ruxen_string_push"(c: Char) -> String
+    def clear as "ruxen_string_clear"
+    def truncate as "ruxen_string_truncate"(n: Int)
+    def insert as "ruxen_string_insert"(i: Int, codepoint: Int) -> String
+    def insert_str as "ruxen_string_insert_str"(i: Int, part: &String) -> String
+    def remove as "ruxen_string_remove"(i: Int) -> Int
+  end
+end

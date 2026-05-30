@@ -1,0 +1,55 @@
+## Loop body with TWO `.await`s per iteration — exercises the
+## multi-await loop lowering. Phases: phase 0 polls TickFuture A,
+## phase 1 polls TickFuture B with the result of A folded into
+## the payload. Two iterations of the outer while, so 4 awaits
+## total resolve to compute sum = 100 + 110 + 110 + 120 = 440.
+
+class TickFuture
+  ticks: Int
+  payload: Int
+  include Future
+  type Output = Int
+
+  def init(ticks: Int, payload: Int)
+    self.ticks = ticks
+    self.payload = payload
+  end
+
+  def self.make(ticks: Int, payload: Int) -> TickFuture
+    TickFuture.new(ticks, payload)
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    if self.ticks == 0
+      Poll.Ready(self.payload)
+    else
+      self.ticks = self.ticks - 1
+      Poll.Pending
+    end
+  end
+end
+
+async def loop_two_awaits -> Int
+  var i: Int = 0
+  var sum: Int = 0
+  while i < 2
+    let a = TickFuture.make(1, 100 + i * 10).await
+    let b = TickFuture.make(1, a + 10).await
+    sum = sum + a + b
+    i = i + 1
+  end
+  sum
+end
+
+def main
+  puts "main: start"
+  let total = block_on(loop_two_awaits())
+  puts "main: done"
+  # iter 1 (i=0): a=100, b=110, sum=210
+  # iter 2 (i=1): a=110, b=120, sum=440
+  if total == 440
+    puts "ok"
+  else
+    puts "fail: #{total}"
+  end
+end

@@ -1,0 +1,7 @@
+echo_status=0
+echo_stdout=xyz
+
+sh_status=0
+sh_stderr=err
+
+env_ok

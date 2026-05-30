@@ -1,0 +1,10 @@
+def hash_it[T: Hashable](a: &T) -> Int
+  a.hash_code
+end
+
+def main
+  let a: Int = 42
+  let s: String = "hello".to_string
+  puts "#{hash_it(&a)}"
+  puts "#{hash_it(&s)}"
+end

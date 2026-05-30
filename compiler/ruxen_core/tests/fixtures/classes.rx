@@ -1,0 +1,16 @@
+class Point
+  x: Int
+  y: Int
+
+  def init(@x: Int, @y: Int) end
+
+  def sum -> Int
+    self.x + self.y
+  end
+end
+
+def main
+  let p = Point.new(3, 4)
+  let s = p.sum()
+  puts "#{s}"
+end

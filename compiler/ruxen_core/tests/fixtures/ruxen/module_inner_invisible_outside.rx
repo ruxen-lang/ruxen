@@ -1,0 +1,18 @@
+# #06.93 Phase 4: a class declared inside `module Outer` is NOT
+# reachable at top-level via its un-qualified name. The only
+# external paths are the qualified `Outer.Inner` (via type_registry)
+# and the root-anchor-or-use path.
+#
+# Without Phase 4's module-scope push + restricted type_registry
+# insertion, `take_inner_unqualified` would resolve `Inner` to the
+# inner class. After Phase 4 it must NOT resolve — the function
+# returns an error diagnostic.
+
+module Outer
+  class Inner
+  end
+end
+
+def take_inner_unqualified(_x: Inner) -> Int
+  0
+end

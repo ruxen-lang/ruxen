@@ -1,0 +1,6 @@
+
+def main
+  let out = stdout()
+  out.println("first")
+  out.println("second")
+end

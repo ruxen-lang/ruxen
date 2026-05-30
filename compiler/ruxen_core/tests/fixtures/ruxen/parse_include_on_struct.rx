@@ -1,0 +1,7 @@
+struct Pair
+  x: Int
+  y: Int
+
+  include Copy
+  include Clone
+end

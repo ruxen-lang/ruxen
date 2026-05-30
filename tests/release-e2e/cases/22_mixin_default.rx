@@ -1,0 +1,24 @@
+mixin Greetable
+  def name -> String
+  def greet -> String
+    "Hello, #{self.name}!"
+  end
+end
+
+class Person
+  pname: String
+
+  def init(@pname: String)
+  end
+
+  include Greetable
+
+  def name -> String
+    self.pname.clone
+  end
+end
+
+def main
+  let p = Person.new(String.from("Alice"))
+  puts p.greet
+end

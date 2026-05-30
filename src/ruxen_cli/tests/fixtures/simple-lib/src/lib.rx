@@ -1,0 +1,3 @@
+def hello -> String
+  "Hello from simple-lib!"
+end

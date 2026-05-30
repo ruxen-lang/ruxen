@@ -1,0 +1,28 @@
+[package]
+name = "ruxen_lsp"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "ruxen_lsp"
+path = "src/lib.rs"
+
+[dependencies]
+ruxen_ide = { path = "../ruxen_ide" }
+tower-lsp = "0.20"
+lsp-types = "0.94"
+tokio = { version = "1.0", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[dev-dependencies]
+# Integration tests spawn the unified `ruxen lsp` subcommand rather than
+# a separate `ruxen-lsp` binary. Depending on `ruxen_cli` here gives the
+# tests access to `CARGO_BIN_EXE_ruxen`.
+ruxen_cli = { path = "../ruxen_cli" }
+
+[lints]
+workspace = true

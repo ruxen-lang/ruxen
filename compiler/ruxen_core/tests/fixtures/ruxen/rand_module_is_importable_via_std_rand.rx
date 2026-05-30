@@ -1,0 +1,16 @@
+
+use std.rand.{random_bytes, random_u64, random_fill}
+
+def main
+  let _u = random_u64()
+  match random_bytes(1)
+    Ok(_)  -> nil
+    Err(_) -> nil
+  end
+  var buf: Array[Int] = Array.new
+  buf.push(0)
+  match random_fill(&var buf)
+    Ok(_)  -> puts "ok"
+    Err(_) -> puts "fail"
+  end
+end

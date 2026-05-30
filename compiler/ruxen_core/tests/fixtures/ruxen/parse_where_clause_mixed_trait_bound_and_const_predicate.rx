@@ -1,0 +1,5 @@
+
+def shown[T, const N: USize](x: T) -> Int
+where T: Display, N > 0
+  0
+end

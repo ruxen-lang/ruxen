@@ -1,0 +1,7 @@
+
+class Plain
+  value: Int
+end
+
+def take_plain(_p: Plain)
+end

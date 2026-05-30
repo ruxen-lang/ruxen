@@ -1,0 +1,16 @@
+null=true
+bool=true
+int=7
+float=1.5
+string=hi
+array-len=2
+array-json=[7,true]
+pretty=[
+  7,
+  true
+]
+object=true
+object-len=2
+title=hi
+empty-array=[]
+empty-object={}

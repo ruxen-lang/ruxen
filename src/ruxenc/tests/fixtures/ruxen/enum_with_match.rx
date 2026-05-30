@@ -1,0 +1,16 @@
+enum Shape
+  Circle(radius: Float)
+  Square(side: Float)
+end
+
+def area(s: Shape) -> Float
+  match s
+    Shape.Circle(r) -> 3.14159 * r * r
+    Shape.Square(x) -> x * x
+  end
+end
+
+def main
+  puts "#{area(Shape.Circle(radius: 2.0))}"
+  puts "#{area(Shape.Square(side: 4.0))}"
+end

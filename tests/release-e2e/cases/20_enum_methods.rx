@@ -1,0 +1,19 @@
+enum Priority
+  Low
+  Medium
+  High
+
+  def label -> String
+    match self
+      Priority.Low    -> String.from("low")
+      Priority.Medium -> String.from("medium")
+      Priority.High   -> String.from("high")
+    end
+  end
+end
+
+def main
+  puts Priority.Low.label
+  puts Priority.Medium.label
+  puts Priority.High.label
+end

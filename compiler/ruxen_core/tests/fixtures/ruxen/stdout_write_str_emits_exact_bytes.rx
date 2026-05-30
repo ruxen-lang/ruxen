@@ -1,0 +1,9 @@
+
+def main
+  let out = stdout()
+  let tag = match out.write_str("hello")
+    Ok(_)  -> String.from("ok")
+    Err(_) -> String.from("err")
+  end
+  out.print(tag)
+end

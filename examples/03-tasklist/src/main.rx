@@ -1,0 +1,29 @@
+## Minimal task tracker built on a class with writing methods.
+## Demonstrates classes, `def var`, encapsulation, and `Array[T]`.
+class TaskList
+  items: Array[String]
+  done: Int
+
+  def init
+    self.items = Array.new
+    self.done = 0
+  end
+
+  def var add(name: &String) { self.items.push(name.clone) }
+
+  def var complete { self.done = self.done + 1 }
+
+  def remaining -> Int
+    let total: Int = self.items.len as Int
+    total - self.done
+  end
+end
+
+def main
+  var list = TaskList.new
+  list.add("write docs")
+  list.add("ship CI")
+  list.add("close P0s")
+  list.complete
+  puts("remaining: #{list.remaining}")
+end

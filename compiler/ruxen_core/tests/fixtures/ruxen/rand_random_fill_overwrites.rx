@@ -1,0 +1,33 @@
+
+use std.rand.random_fill
+
+def main
+  var buf: Array[Int] = Array.new
+  var i = 0
+  while i < 16
+    buf.push(170)
+    i = i + 1
+  end
+  match random_fill(&var buf)
+    Ok(_) ->
+      if buf.len != 16
+        puts "fail len=#{buf.len}"
+      else
+        var any_diff = false
+        var j = 0
+        while j < 16
+          let b = buf.get(j).unwrap_or(0)
+          if b != 170
+            any_diff = true
+          end
+          j = j + 1
+        end
+        if any_diff
+          puts "ok"
+        else
+          puts "fail unchanged"
+        end
+      end
+    Err(_) -> puts "fail err"
+  end
+end

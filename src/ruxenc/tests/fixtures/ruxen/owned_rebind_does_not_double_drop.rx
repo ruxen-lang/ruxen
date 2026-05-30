@@ -1,0 +1,10 @@
+struct Pair
+  left: Int
+  right: Int
+end
+
+def main
+  let pair = Pair.new(7, 11)
+  let rebound = pair
+  puts "#{rebound.left + rebound.right}"
+end

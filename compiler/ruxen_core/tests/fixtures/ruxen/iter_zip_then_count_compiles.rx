@@ -1,0 +1,7 @@
+def main
+  let a = [1, 2, 3, 4]
+  let b = [10, 20, 30]
+  let n = a.iter.zip(b.iter).count
+  let s = n.to_string
+  puts "n=#{s}"
+end

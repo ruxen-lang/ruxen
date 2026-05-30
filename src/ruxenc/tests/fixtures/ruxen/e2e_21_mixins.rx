@@ -1,0 +1,21 @@
+mixin Named
+  def label -> String
+end
+
+class Dog
+  n: String
+
+  def init(@n: String)
+  end
+
+  include Named
+
+  def label -> String
+    self.n.clone
+  end
+end
+
+def main
+  let d = Dog.new(String.from("Rex"))
+  puts d.label
+end

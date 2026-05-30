@@ -1,0 +1,35 @@
+## Demonstrates Phase 3 #07.S6/S7 follow-up: runtime construction of
+## const-generic classes via `Type[const_arg].new(...)`.  The body of
+## the class doesn't reference the const param, so a single shared
+## MIR constructor handles all instantiations — per-instantiation
+## MIR lowering for bodies that *do* use the const param is a v1.next
+## follow-up.
+
+class Counter[const LIMIT: USize]
+  value: Int
+
+  def init(@value: Int)
+  end
+
+  def get -> Int
+    self.value
+  end
+end
+
+class Pair[T, const N: USize]
+  payload: T
+
+  def init(@payload: T)
+  end
+
+  def get -> T
+    self.payload
+  end
+end
+
+def main
+  let small = Counter[10].new(1)
+  let big   = Counter[1000].new(2)
+  let p     = Pair[Int, 7].new(99)
+  puts "#{small.get} #{big.get} #{p.get}"
+end

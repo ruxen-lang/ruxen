@@ -1,0 +1,31 @@
+use std.sync.{Thread, JoinHandle, ThreadId, Mutex, MutexGuard, SharedSync, PoisonError, ThreadPanic}
+
+def main
+  let mutex: Mutex[Int] = Mutex.new(41)
+  let guard_result: Result[MutexGuard[Int], PoisonError] = mutex.lock()
+  let guard: MutexGuard[Int] = mutex.lock!()
+  let try_guard: Option[MutexGuard[Int]] = mutex.try_lock()
+  let inner: Result[Int, PoisonError] = mutex.into_inner()
+
+  let shared: SharedSync[Int] = SharedSync.new(5)
+  let shared2: SharedSync[Int] = shared.clone()
+  let strong: USize = shared.strong_count()
+  let weak: USize = shared.weak_count()
+  let shared_ref: &Int = shared.deref()
+  let guard_ref: &Int = guard.deref()
+  let guard_var_ref: &var Int = guard.deref_var()
+
+  let handle: JoinHandle[Int] = Thread.spawn({ || 42 })
+  let joined: Result[Int, ThreadPanic] = handle.join()
+
+  let handle2 = Thread.spawn({ || 7 })
+  let joined2: Int = handle2.join!()
+  let spawned_thread_id: ThreadId = Thread.spawn({ || 1 }).thread_id()
+  let current: Thread = Thread.current()
+  let current_id: ThreadId = current.id()
+  let current_name: Option[String] = current.name()
+  Thread.sleep(0)
+  Thread.yield_now()
+
+  let _ = joined
+end

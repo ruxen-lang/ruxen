@@ -1,0 +1,5 @@
+def main
+  let x = unsafe
+    42
+  end
+end

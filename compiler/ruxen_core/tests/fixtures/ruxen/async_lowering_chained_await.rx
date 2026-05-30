@@ -1,0 +1,18 @@
+## Spec B8+B10 (docs/specs/syntax/async_lowering.spec.md Milestone 2B):
+## two `.await` calls generate a three-state machine (states 0, 1, and
+## the terminal Ready-on-2 fold). Locals (`a`, `b`) live across the
+## intermediate suspend and become fields on the state-machine class.
+
+async def make_int() -> Int
+  42
+end
+
+async def make_other() -> Int
+  35
+end
+
+async def chain() -> Int
+  let a = make_int().await
+  let b = make_other().await
+  a + b
+end

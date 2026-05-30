@@ -1,0 +1,11 @@
+## Signature help fixture — cursor in the SECOND argument of a
+## two-parameter free function. One comma sits between the `(` and
+## the cursor, so `active_parameter` should be 1.
+
+def add(a: Int, b: Int) -> Int
+  a + b
+end
+
+def main
+  let r = add(1, cursor_second_arg_anchor)
+end

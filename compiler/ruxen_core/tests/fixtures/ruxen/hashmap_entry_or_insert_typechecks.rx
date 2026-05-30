@@ -1,0 +1,6 @@
+def main
+  var m: Map[Int, Int] = Map.new
+  m.entry(1).or_insert(10)
+  m.entry(1).or_insert(99)
+  puts "#{m.len}"
+end

@@ -1,0 +1,6 @@
+def main
+  let keys = [1, 2, 3]
+  let vals = [10, 20, 30]
+  let m = keys.iter.zip(vals.iter).collect[Map[Int, Int]]
+  puts m.len.to_string
+end

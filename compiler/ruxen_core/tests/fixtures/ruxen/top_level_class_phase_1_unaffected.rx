@@ -1,0 +1,12 @@
+# #06.93 Phase 1: regression check. A class at the top level (no
+# enclosing module) keeps its single un-qualified entry — Phase 1's
+# changes must not break existing top-level resolution. Nothing
+# qualified about this fixture; if it fails, the helper threading
+# regressed something.
+
+class Solo
+end
+
+def take_solo(_s: Solo) -> Int
+  0
+end

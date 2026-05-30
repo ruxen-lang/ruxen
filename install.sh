@@ -1,26 +1,30 @@
 #!/usr/bin/env bash
 #
-# Riven installer.
+# Ruxen installer.
 #
-# Installs the Riven toolchain (riven, rivenc, riven-lsp, riven-repl)
-# from GitHub Releases into ~/.riven and configures PATH.
+# Installs the unified `ruxen` binary (which subsumes compile / lsp / repl
+# as subcommands) from GitHub Releases into ~/.ruxen and configures PATH.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/sherazp995/riven/master/install.sh | bash
-#   curl -fsSL https://raw.githubusercontent.com/sherazp995/riven/master/install.sh | bash -s -- --version v0.1.0
+#   curl -fsSL https://raw.githubusercontent.com/ruxen-lang/ruxen/master/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/ruxen-lang/ruxen/master/install.sh | bash -s -- --version v0.1.0
 #
 # Environment overrides:
-#   RIVEN_VERSION   Pin a specific release tag (default: latest)
-#   RIVEN_REPO      owner/repo on GitHub (default: sherazp995/riven)
-#   RIVEN_HOME      Install root (default: $HOME/.riven)
-#   RIVEN_NO_MODIFY_PATH=1    Skip editing shell rc files
+#   RUXEN_VERSION   Pin a specific release tag (default: latest)
+#   RUXEN_REPO      owner/repo on GitHub (default: ruxen-lang/ruxen)
+#   RUXEN_HOME      Install root (default: $HOME/.ruxen)
+#   RUXEN_NO_MODIFY_PATH=1    Skip editing shell rc files
 
 set -euo pipefail
 
-RIVEN_REPO="${RIVEN_REPO:-sherazp995/riven}"
-RIVEN_HOME="${RIVEN_HOME:-$HOME/.riven}"
-RIVEN_VERSION="${RIVEN_VERSION:-latest}"
-NO_MODIFY_PATH="${RIVEN_NO_MODIFY_PATH:-0}"
+RUXEN_REPO="${RUXEN_REPO:-ruxen-lang/ruxen}"
+RUXEN_HOME="${RUXEN_HOME:-$HOME/.ruxen}"
+RUXEN_VERSION="${RUXEN_VERSION:-latest}"
+NO_MODIFY_PATH="${RUXEN_NO_MODIFY_PATH:-0}"
+# Set to a ruxen source checkout path to skip GitHub releases and
+# build + install from that working tree instead. Cargo on PATH is
+# required when this is non-empty.
+FROM_SOURCE="${RUXEN_FROM_SOURCE:-}"
 
 # ── ANSI colors (if stdout is a tty) ──────────────────────────────────
 if [ -t 1 ]; then
@@ -43,22 +47,32 @@ err()     { echo "${RED}${BOLD} ✗${RESET} $*" >&2; exit 1; }
 # ── Argument parsing ──────────────────────────────────────────────────
 while [ $# -gt 0 ]; do
   case "$1" in
-    --version)   RIVEN_VERSION="$2"; shift 2 ;;
-    --prefix)    RIVEN_HOME="$2"; shift 2 ;;
-    --repo)      RIVEN_REPO="$2"; shift 2 ;;
+    --version)     RUXEN_VERSION="$2"; shift 2 ;;
+    --prefix)      RUXEN_HOME="$2"; shift 2 ;;
+    --repo)        RUXEN_REPO="$2"; shift 2 ;;
+    --from-source) FROM_SOURCE="${2:-.}"; shift 2 ;;
     --no-modify-path) NO_MODIFY_PATH=1; shift ;;
     -h|--help)
       cat <<EOF
-Riven installer.
+Ruxen installer.
 
-Usage: install.sh [--version <tag>] [--prefix <dir>] [--no-modify-path]
+Usage: install.sh [options]
 
 Options:
-  --version <tag>     Release tag to install (default: latest)
-  --prefix <dir>      Install root (default: \$HOME/.riven)
-  --repo <owner/repo> GitHub repo (default: sherazp995/riven)
-  --no-modify-path    Do not edit shell rc files
-  -h, --help          Show this help
+  --version <tag>       Release tag to install (default: latest)
+  --prefix <dir>        Install root (default: \$HOME/.ruxen)
+  --repo <owner/repo>   GitHub repo (default: ruxen-lang/ruxen)
+  --from-source <path>  Build + install from a local ruxen checkout
+                        instead of downloading a release. Pass "." for
+                        the current directory. Requires \`cargo\` on PATH.
+  --no-modify-path      Do not edit shell rc files
+  -h, --help            Show this help
+
+Examples:
+  install.sh                              # install latest release
+  install.sh --version v0.2.0             # install a pinned release
+  install.sh --from-source .              # build + install from CWD
+  install.sh --from-source ~/.projects/ruxen --prefix ~/.ruxen-dev
 EOF
       exit 0
       ;;
@@ -103,87 +117,149 @@ esac
 TARGET="${ARCH_TAG}-${OS_TAG}"
 info "Detected platform: ${BOLD}${TARGET}${RESET}"
 
-# ── Resolve release tag ───────────────────────────────────────────────
-if [ "$RIVEN_VERSION" = "latest" ]; then
+# ── Branch: local source build vs GitHub release ──────────────────────
+# When --from-source is set we build the four binaries from a working
+# tree and install them directly. Stdlib `.rx` is embedded into the
+# ruxen binary via `include_str!`, so no `library/` copy is needed —
+# the resulting install at $RUXEN_HOME is fully self-contained.
+if [ -n "$FROM_SOURCE" ]; then
+  need cargo
+
+  # Resolve to an absolute path so cd-by-the-user later doesn't break us.
+  case "$FROM_SOURCE" in
+    /*) ABS_SRC="$FROM_SOURCE" ;;
+    *)  ABS_SRC="$(cd "$FROM_SOURCE" 2>/dev/null && pwd)" || \
+        err "--from-source path not found: $FROM_SOURCE" ;;
+  esac
+  [ -f "$ABS_SRC/Cargo.toml" ] || \
+    err "--from-source path is not a ruxen checkout (no Cargo.toml at $ABS_SRC)"
+  [ -d "$ABS_SRC/compiler/ruxen_core" ] || \
+    err "--from-source path doesn't look like ruxen (missing compiler/ruxen_core/)"
+
+  # Tag the install with a local-build marker so `ruxen --version` and
+  # the on-disk version file disambiguate from a release install.
+  if command -v git >/dev/null 2>&1 && git -C "$ABS_SRC" rev-parse HEAD >/dev/null 2>&1; then
+    TAG="local-$(git -C "$ABS_SRC" rev-parse --short HEAD)"
+  else
+    TAG="local"
+  fi
+  ok "Building Ruxen ${BOLD}${TAG}${RESET} from ${DIM}${ABS_SRC}${RESET}"
+
+  # One build command, one shipped binary. The unified `ruxen` driver
+  # exposes everything (compile, lsp, repl, fmt, bench, etc.) as
+  # subcommands; the old standalone `ruxenc` / `ruxen-lsp` / `ruxen-repl`
+  # binaries no longer exist.
+  ( cd "$ABS_SRC" && \
+    cargo build --release --bin ruxen ) \
+    || err "cargo build failed in $ABS_SRC"
+
+  # Point the install loop at cargo's output dir.
+  BIN_SRC_DIR="$ABS_SRC/target/release"
+
+  # Stage the prebuilt C runtime archive so an installed toolchain can link
+  # AOT binaries without recompiling (or even having) the runtime `.c`. The
+  # `ruxen_cli` build script copies it next to the binary; route it through
+  # the existing `lib/` copy loop (below) so it lands at $RUXEN_HOME/lib/.
+  STAGE="$(mktemp -d "${TMPDIR:-/tmp}/ruxen-stage.XXXXXX")"
+  trap 'rm -rf "$STAGE"' EXIT
+  RT_AR="$ABS_SRC/target/release/libruxenrt.a"
+  if [ -f "$RT_AR" ]; then
+    mkdir -p "$STAGE/lib"
+    cp -f "$RT_AR" "$STAGE/lib/libruxenrt.a"
+    EXTRA_SRC="$STAGE"   # the copy loop installs $STAGE/lib -> $RUXEN_HOME/lib
+  else
+    EXTRA_SRC=""         # archive absent: install proceeds, compiler falls back to cc
+  fi
+else
+  # ── Resolve release tag ─────────────────────────────────────────────
+  if [ "$RUXEN_VERSION" = "latest" ]; then
   info "Resolving latest release..."
-  API_URL="https://api.github.com/repos/${RIVEN_REPO}/releases/latest"
+  API_URL="https://api.github.com/repos/${RUXEN_REPO}/releases/latest"
   TAG="$($FETCH "$API_URL" 2>/dev/null \
     | grep -o '"tag_name": *"[^"]*"' \
     | head -n1 \
     | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/' || true)"
   if [ -z "$TAG" ]; then
-    err "could not resolve latest release from ${RIVEN_REPO}. Pin one with --version <tag> or set RIVEN_VERSION."
+    err "could not resolve latest release from ${RUXEN_REPO}. Pin one with --version <tag> or set RUXEN_VERSION."
   fi
 else
-  TAG="$RIVEN_VERSION"
+  TAG="$RUXEN_VERSION"
 fi
-ok "Installing Riven ${BOLD}${TAG}${RESET}"
+ok "Installing Ruxen ${BOLD}${TAG}${RESET}"
 
 # ── Compute download URL ──────────────────────────────────────────────
-ASSET="riven-${TAG}-${TARGET}.tar.gz"
-URL="https://github.com/${RIVEN_REPO}/releases/download/${TAG}/${ASSET}"
+ASSET="ruxen-${TAG}-${TARGET}.tar.gz"
+URL="https://github.com/${RUXEN_REPO}/releases/download/${TAG}/${ASSET}"
 
 # ── Download + extract ────────────────────────────────────────────────
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/riven-install.XXXXXX")"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/ruxen-install.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 
 info "Downloading ${DIM}${URL}${RESET}"
 if ! $FETCH_TO "$TMP/$ASSET" "$URL" 2>/dev/null; then
   err "download failed. Verify release assets exist at:
-    https://github.com/${RIVEN_REPO}/releases/tag/${TAG}
+    https://github.com/${RUXEN_REPO}/releases/tag/${TAG}
   Expected asset name: ${ASSET}"
 fi
 
 info "Extracting..."
 tar -xzf "$TMP/$ASSET" -C "$TMP"
 
-# Accept either a flat tarball (bin/ at root) or nested (riven-*/bin/).
+# Accept either a flat tarball (bin/ at root) or nested (ruxen-*/bin/).
 if [ -d "$TMP/bin" ]; then
   SRC="$TMP"
 else
   SRC="$(find "$TMP" -maxdepth 2 -type d -name bin | head -n1 | xargs -I{} dirname {})"
   [ -n "$SRC" ] || err "archive does not contain a bin/ directory"
 fi
+  BIN_SRC_DIR="$SRC/bin"
+  EXTRA_SRC="$SRC"
+fi
 
 # ── Install ───────────────────────────────────────────────────────────
-mkdir -p "$RIVEN_HOME/bin"
-info "Installing binaries to ${BOLD}${RIVEN_HOME}/bin${RESET}"
-for bin in riven rivenc riven-lsp riven-repl; do
-  if [ -f "$SRC/bin/$bin" ]; then
-    mv -f "$SRC/bin/$bin" "$RIVEN_HOME/bin/$bin"
-    chmod +x "$RIVEN_HOME/bin/$bin"
-    ok "Installed ${BOLD}$bin${RESET}"
-  else
-    warn "missing from archive: $bin"
-  fi
-done
+mkdir -p "$RUXEN_HOME/bin"
+info "Installing binary to ${BOLD}${RUXEN_HOME}/bin${RESET}"
+# Only one binary ships: `ruxen`. Compile / lsp / repl / fmt / bench are
+# all subcommands. Older release tarballs included `ruxenc`, `ruxen-lsp`,
+# and `ruxen-repl`; they are dropped silently if present.
+src="$BIN_SRC_DIR/ruxen"
+if [ ! -f "$src" ]; then
+  err "ruxen binary missing from build/archive at $src"
+fi
+cp -f "$src" "$RUXEN_HOME/bin/ruxen"
+chmod +x "$RUXEN_HOME/bin/ruxen"
+ok "Installed ${BOLD}ruxen${RESET}"
 
-# Copy any supporting files (stdlib, runtime headers, etc.)
-for dir in lib share include; do
-  if [ -d "$SRC/$dir" ]; then
-    mkdir -p "$RIVEN_HOME/$dir"
-    cp -R "$SRC/$dir/." "$RIVEN_HOME/$dir/"
-    ok "Installed ${BOLD}$dir${RESET}"
-  fi
-done
+# Copy any supporting files (stdlib, runtime headers, etc.) — only
+# applies to the release-tarball install path. Local builds embed
+# stdlib into the binary so this loop is a no-op there.
+if [ -n "$EXTRA_SRC" ]; then
+  for dir in lib share include; do
+    if [ -d "$EXTRA_SRC/$dir" ]; then
+      mkdir -p "$RUXEN_HOME/$dir"
+      cp -R "$EXTRA_SRC/$dir/." "$RUXEN_HOME/$dir/"
+      ok "Installed ${BOLD}$dir${RESET}"
+    fi
+  done
+fi
 
-echo "$TAG" > "$RIVEN_HOME/version"
+echo "$TAG" > "$RUXEN_HOME/version"
 
 # ── Write env file ────────────────────────────────────────────────────
-ENV_FILE="$RIVEN_HOME/env"
+ENV_FILE="$RUXEN_HOME/env"
 cat > "$ENV_FILE" <<'EOF'
-# Riven toolchain environment.
-# This file is sourced from your shell rc to put riven on PATH.
+# Ruxen toolchain environment.
+# This file is sourced from your shell rc to put ruxen on PATH.
 
 case ":${PATH}:" in
-  *:"$HOME/.riven/bin":*) ;;
-  *) export PATH="$HOME/.riven/bin:$PATH" ;;
+  *:"$HOME/.ruxen/bin":*) ;;
+  *) export PATH="$HOME/.ruxen/bin:$PATH" ;;
 esac
 EOF
 ok "Wrote ${BOLD}${ENV_FILE}${RESET}"
 
 # ── Update shell rc files ─────────────────────────────────────────────
-SOURCE_LINE='. "$HOME/.riven/env"'
+SOURCE_LINE='. "$HOME/.ruxen/env"'
 
 update_rc() {
   local rc="$1"
@@ -192,7 +268,7 @@ update_rc() {
     return 0
   fi
   {
-    printf '\n# Added by the Riven installer\n%s\n' "$SOURCE_LINE"
+    printf '\n# Added by the Ruxen installer\n%s\n' "$SOURCE_LINE"
   } >> "$rc"
   ok "Updated ${BOLD}$rc${RESET}"
 }
@@ -206,15 +282,14 @@ fi
 
 # ── Final message ─────────────────────────────────────────────────────
 echo
-echo "${GREEN}${BOLD}Riven ${TAG} installed successfully.${RESET}"
+echo "${GREEN}${BOLD}Ruxen ${TAG} installed successfully.${RESET}"
 echo
-echo "To start using ${BOLD}riven${RESET} in the current shell, run:"
+echo "To start using ${BOLD}ruxen${RESET} in the current shell, run:"
 echo
-echo "    ${BOLD}source \"\$HOME/.riven/env\"${RESET}"
+echo "    ${BOLD}source \"\$HOME/.ruxen/env\"${RESET}"
 echo
 echo "Or open a new terminal. Then verify with:"
 echo
-echo "    ${BOLD}riven --version${RESET}"
-echo "    ${BOLD}rivenc --version${RESET}"
+echo "    ${BOLD}ruxen --version${RESET}"
 echo
-echo "Get started:  ${DIM}https://github.com/${RIVEN_REPO}/blob/master/docs/tutorial/01-getting-started.md${RESET}"
+echo "Get started:  ${DIM}https://github.com/${RUXEN_REPO}/blob/master/docs/tutorial/01-getting-started.md${RESET}"

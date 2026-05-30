@@ -1,0 +1,10 @@
+def main
+  let a = 2.5
+  let b = 4.0
+  if a < b
+    puts "less"
+  end
+  if b > a
+    puts "greater"
+  end
+end

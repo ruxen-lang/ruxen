@@ -1,0 +1,4 @@
+def main
+  let s: String = String.from("hello world")
+  puts "[#{s:.5}]"
+end

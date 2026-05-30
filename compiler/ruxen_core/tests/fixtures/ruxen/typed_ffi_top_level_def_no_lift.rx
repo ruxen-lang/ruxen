@@ -1,0 +1,11 @@
+## Pin: B12 — a top-level `lib { def foo -> Int }` (outside any class)
+## does NOT receive the lift. This shim exists in sync.rx at module
+## scope (`def signal_received_sigint -> Int`). Without the lift, the
+## variable typechecks as Int and arithmetic is allowed.
+def main
+  # `signal_received_sigint() -> Int` is the canonical top-level
+  # bare-fn shim from library/std/sync/src/lib.rx. The return MUST
+  # stay Int — no class to lift to.
+  let n = signal_received_sigint()
+  let _doubled = n + 1
+end

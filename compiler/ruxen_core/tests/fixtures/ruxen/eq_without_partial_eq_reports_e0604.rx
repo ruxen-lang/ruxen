@@ -1,0 +1,9 @@
+struct Id
+  value: Int
+
+  include Eq
+end
+
+def main
+  let _x = 0
+end

@@ -1,0 +1,15 @@
+
+class RawBox
+  ptr: *var Void
+
+  def init(@ptr: *var Void)
+  end
+end
+
+def require_send[T: Send](value: T)
+end
+
+def test
+  let box = RawBox.new(nil)
+  require_send(box)
+end

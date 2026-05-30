@@ -1,0 +1,17 @@
+## Task #27: `layout c` extended to class bodies.
+##
+## Same C-compatible-layout guarantee as struct-body `layout c`
+## (ffi.spec.md §B8): fields in declaration order, native alignment,
+## no reordering. Parser captures `"C"` on ClassDef.layout (note
+## case-normalized — the surface accepts `c` or `C` per the existing
+## struct convention).
+##
+## Codegen wiring (instances emitted as flat repr-C structs vs.
+## opaque heap handles) lands in the follow-up; this fixture covers
+## the parser+resolver surface only.
+
+class CLayoutDemo
+  layout c
+  len: Int
+  cap: Int
+end

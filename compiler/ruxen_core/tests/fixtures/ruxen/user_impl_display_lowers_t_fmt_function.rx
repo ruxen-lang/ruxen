@@ -1,0 +1,14 @@
+class Money
+  def init(@cents: Int)
+  end
+
+  include Display
+
+  def fmt(f: &var Formatter) -> Result[(), FmtError]
+    f.write_str("$")
+  end
+end
+
+def main
+  let _ = Money.new(100)
+end

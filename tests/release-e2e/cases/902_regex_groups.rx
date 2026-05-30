@@ -1,0 +1,15 @@
+def main
+  let line = String.from("code=42 name=ok")
+  match /code=(\d+) name=(\w+)/.find(line)
+    Some(m) ->
+      match m.group(1)
+        Some(g1) ->
+          match m.group(2)
+            Some(g2) -> puts "code=#{g1} name=#{g2}"
+            None     -> puts "no g2"
+          end
+        None     -> puts "no g1"
+      end
+    None -> puts "no match"
+  end
+end

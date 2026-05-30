@@ -1,0 +1,19 @@
+## Demonstrates Phase 3 #07.S8 const-generic arithmetic in fixed-size
+## array sizes.  The const evaluator + S8.S4 normal-form rewriter
+## collapse pure-literal `+ - * /` to a single value at resolve time,
+## so codegen sees a stable size.
+
+def main
+  # `2 + 1` folds to `Lit(3)`; the array literal must have 3 elements.
+  let a: [Int; 2 + 1] = [10, 20, 30]
+
+  # Parens override precedence: `(1 + 1) * 2` = 4.
+  let b: [Int; (1 + 1) * 2] = [1, 2, 3, 4]
+
+  # Identity rewrite: `N + 0` normalises to `N`; `5 + 0` folds to `5`.
+  let c: [Int; 5 + 0] = [100, 200, 300, 400, 500]
+
+  puts "#{a[0]} #{a[1]} #{a[2]}"
+  puts "#{b[0]} #{b[1]} #{b[2]} #{b[3]}"
+  puts "#{c[0]} #{c[4]}"
+end

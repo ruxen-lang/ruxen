@@ -1,0 +1,19 @@
+## Document-symbols fixture — a class with two fields and two methods.
+## The class becomes a parent symbol; fields are FIELD children;
+## methods are METHOD children.
+
+class Counter
+  value: Int
+  step: Int
+
+  def init(@value: Int, @step: Int)
+  end
+
+  def increment
+    self.value = self.value + self.step
+  end
+
+  def get -> Int
+    self.value
+  end
+end

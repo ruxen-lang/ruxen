@@ -1,0 +1,19 @@
+class Thing
+  value: Int
+
+  def init(@value: Int)
+  end
+
+  def value -> Int
+    self.value
+  end
+
+  def self.factory -> Thing
+    Thing.new(7)
+  end
+end
+
+def main
+  let t = Thing.factory
+  puts "#{t.value}"
+end

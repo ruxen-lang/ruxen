@@ -1,0 +1,12 @@
+## Pin: B2 — instance method return is the DECLARED surface type,
+## not auto-lifted. `Mutex.is_poisoned -> Int` stays Int per its lib
+## decl; `Mutex.lock_raw -> MutexGuard[T]` returns a MutexGuard (not
+## Int) per its lib decl. This pin guards against an over-eager lift
+## that would auto-promote any `-> Int` instance method.
+def main
+  let m = Mutex.new(0)
+  let poisoned = m.is_poisoned
+  # If the lift over-promoted, `poisoned + 1` would fail because
+  # `Mutex[Int]` doesn't implement +.
+  let _ = poisoned + 1
+end

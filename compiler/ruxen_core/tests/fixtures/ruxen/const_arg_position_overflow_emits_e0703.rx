@@ -1,0 +1,9 @@
+
+class Vector[T, const N: USize]
+  data: USize
+  def init(@data: USize)
+  end
+end
+
+def take_vec(v: Vector[Int, 9223372036854775807 * 4])
+end

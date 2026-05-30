@@ -1,0 +1,10 @@
+class Client
+  @host: String
+
+  def new(@host: String) -> Client
+  end
+
+  def get(path: String) -> String
+    @host + path
+  end
+end

@@ -1,0 +1,5 @@
+lib "ruxen_runtime"
+  def add_one as "ruxen_test_add_one"(x: I32) -> I32
+  def double(x: I32) -> I32
+  def sub as "ruxen_test_sub"(a: I32, b: I32) -> I32
+end

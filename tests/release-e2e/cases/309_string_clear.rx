@@ -1,0 +1,7 @@
+def main
+  var s = String.from("hello")
+  puts "before len=#{s.len}"
+  s.clear
+  puts "after len=#{s.len}"
+  puts "empty=#{s.is_empty}"
+end

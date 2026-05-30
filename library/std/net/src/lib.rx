@@ -1,0 +1,102 @@
+## std::net — TcpListener / TcpStream class lib-decl surface + Shutdown enum.
+##
+## Phase E-rest 2 of #06.95 migrated most TcpListener / TcpStream
+## methods from `codegen/runtime_table/mod.rs` arms into class-body
+## lib decls. The FFI alias map populated by `as "..."` clauses
+## rewrites the MIR-mangled callee (`TcpListener_bind` →
+## `ruxen_tcp_listener_bind`) BEFORE codegen consults runtime_table.
+##
+## Three method surfaces stay on runtime_table dispatch for now:
+##   - `TcpStream.set_read_timeout(&Duration)` /
+##     `.set_write_timeout(&Duration)` — Duration is declared in
+##     `library/std/time/src/lib.rx`, which loads AFTER net.rx in
+##     BOOTSTRAP_FILES. Forward-referencing Duration here fails at
+##     net.rx parse time. Migrating needs Duration to land in a
+##     package that loads before net, or net to load after time
+##     (which would break time-uses-no-net).
+##   - `TcpListener.set_nonblocking(Bool)` — the C runtime takes
+##     `int8_t` for the Bool arg; the cranelift verifier rejects
+##     the typed Bool→int8_t coercion through the FFI alias path.
+##     Same OpenOptions setter ABI mismatch.
+##
+## The Shutdown variant order is the load-bearing contract: tag
+## indices must match `RUXEN_SHUTDOWN_{READ,WRITE,BOTH}` in
+## `library/std/net/runtime/tcp.c`. The `shutdown_tag_stability`
+## pin test scans this file.
+# Shutdown declared FIRST so TcpStream.shutdown's `how: Shutdown`
+# param type resolves at net.rx parse time.
+enum Shutdown
+  Read
+  Write
+  Both
+end
+
+## std::net::TcpStream — owning wrapper around a connected POSIX fd.
+## Declared BEFORE TcpListener so TcpListener.accept's `-> Result[
+## TcpStream, IoError]` return type resolves at parse time.
+##
+## A POSIX fd is safe to move between threads — the kernel handles
+## any concurrent-use race the user might create. Mark `Send` so the
+## standard per-connection threading shape compiles:
+##
+##   loop
+##     match listener.accept
+##       Ok(stream) -> Thread.spawn({ || handle(stream) })
+##       Err(_)     -> break
+##     end
+##   end
+class TcpStream
+  include Send
+
+  lib "runtime/tcp.c"
+    def self.connect as "ruxen_tcp_stream_connect"(addr: &String) -> Result[TcpStream, IoError]
+    def read as "ruxen_tcp_stream_read"(buf: &var Array[Int]) -> Result[Int, IoError]
+    def write as "ruxen_tcp_stream_write"(bytes: &Array[Int]) -> Result[Int, IoError]
+    def peer_addr as "ruxen_tcp_stream_peer_addr" -> Result[String, IoError]
+    def shutdown as "ruxen_tcp_stream_shutdown"(how: Shutdown) -> Result[(), IoError]
+    def set_read_timeout as "ruxen_tcp_stream_set_read_timeout"(d: Int) -> Result[(), IoError]
+    def set_write_timeout as "ruxen_tcp_stream_set_write_timeout"(d: Int) -> Result[(), IoError]
+    def set_read_timeout_ns as "ruxen_tcp_stream_set_read_timeout_ns"(ns: Int) -> Result[
+      (),
+      IoError
+    ]
+    def set_write_timeout_ns as "ruxen_tcp_stream_set_write_timeout_ns"(ns: Int) -> Result[
+      (),
+      IoError
+    ]
+    def close as "ruxen_tcp_stream_close" -> Result[(), IoError]
+    def drop as "ruxen_tcp_stream_drop" -> ()
+  end
+end
+
+# `set_read_timeout` / `set_write_timeout` declare their second
+# param as `Int` (the int64 nanosecond count) rather than the
+# surface `&Duration` type because Duration is in time.rx which
+# loads AFTER net.rx — forward-referencing it here would fail
+# at parse time. The C runtime takes a `RuxenDuration*` (just a
+# single-field {int64 nanos} struct); the lib decl's Int matches
+# the wire shape one level deep. Typeck callers pass via
+# `&duration_obj` which lowers as the address of the int64 field
+# at the ABI level, matching the C signature in practice.
+# `_ns` variants take a plain int64 nanosecond count. Use these
+# when you don't have a `Duration` value handy (e.g. when calling
+# from a package that loads before std.time). 0 clears the
+# timeout; sub-microsecond rounds up to 1 µs.
+## std::net::TcpListener — owning wrapper around a listening POSIX
+## fd. The `def drop` lib decl drives user_drop_classes auto-detect.
+##
+## Send for the same reason as TcpStream — POSIX fd is thread-safe
+## to move; this lets users park the listener on a dedicated
+## accept-loop thread.
+class TcpListener
+  include Send
+
+  lib "runtime/tcp.c"
+    def self.bind as "ruxen_tcp_listener_bind"(addr: &String) -> Result[TcpListener, IoError]
+    def accept as "ruxen_tcp_listener_accept" -> Result[TcpStream, IoError]
+    def local_addr as "ruxen_tcp_listener_local_addr" -> Result[String, IoError]
+    def set_nonblocking as "ruxen_tcp_listener_set_nonblocking"(value: Int) -> Result[(), IoError]
+    def close as "ruxen_tcp_listener_close" -> Result[(), IoError]
+    def drop as "ruxen_tcp_listener_drop" -> ()
+  end
+end

@@ -1,0 +1,7 @@
+def main
+  let i = 42
+  let f = 3.14
+  let b = true
+  let s = "world"
+  puts "i=#{i} f=#{f} b=#{b} s=#{s}"
+end

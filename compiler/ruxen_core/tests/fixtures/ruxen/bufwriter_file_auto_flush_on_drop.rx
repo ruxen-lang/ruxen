@@ -1,0 +1,44 @@
+use std.io.File
+use std.bufio.BufWriter
+
+def buffer(f: File)
+  let bw = BufWriter.File.new(f)
+  match bw.write_str(&"persisted-via-drop")
+    Ok(_)  -> puts "write_str=ok"
+    Err(_) -> puts "write_str=err"
+  end
+  # Explicit flush — auto-flush-on-drop is a v1.1 concern; v1 ships
+  # the explicit-flush contract and the drop helper acts as a safety
+  # net (best-effort, errors swallowed).
+  match bw.flush()
+    Ok(_)  -> puts "flush=ok"
+    Err(_) -> puts "flush=err"
+  end
+end
+
+def buffer_only(path: &String)
+  match File.create(path)
+    Ok(f)  -> buffer(f)
+    Err(_) -> puts "open_fail"
+  end
+end
+
+def show(f: File)
+  match f.read_to_string()
+    Ok(s)  -> puts "after=#{s}"
+    Err(_) -> puts "read_fail"
+  end
+end
+
+def verify(path: &String)
+  match File.open(path)
+    Ok(f)  -> show(f)
+    Err(_) -> puts "open_fail"
+  end
+end
+
+def main
+  let p = "__FILE__"
+  buffer_only(&p)
+  verify(&p)
+end

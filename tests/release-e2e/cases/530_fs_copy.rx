@@ -1,0 +1,15 @@
+use std.fs.{write, copy, read_to_string, remove_file}
+
+def main
+  write("/tmp/ruxen_e2e_530_src.txt", "hello copy 530").expect!("write src")
+  match copy("/tmp/ruxen_e2e_530_src.txt", "/tmp/ruxen_e2e_530_dst.txt")
+    Ok(n)  -> puts "copied=#{n}"
+    Err(_) -> puts "copy_fail"
+  end
+  match read_to_string("/tmp/ruxen_e2e_530_dst.txt")
+    Ok(s)  -> puts "dst=#{s}"
+    Err(_) -> puts "read_fail"
+  end
+  remove_file("/tmp/ruxen_e2e_530_src.txt").expect!("rm src")
+  remove_file("/tmp/ruxen_e2e_530_dst.txt").expect!("rm dst")
+end

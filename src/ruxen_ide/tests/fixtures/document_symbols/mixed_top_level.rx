@@ -1,0 +1,23 @@
+## Document-symbols fixture — mixed top-level items: a class, an
+## enum, a free function and a top-level constant. Verifies the
+## outline preserves item order and assigns the right SymbolKind to
+## each variant.
+
+const MAX_SIZE: Int = 100
+
+class Point
+  x: Int
+  y: Int
+
+  def init(@x: Int, @y: Int)
+  end
+end
+
+enum Shape
+  Circle
+  Square
+end
+
+def make_origin -> Point
+  Point.new(0, 0)
+end

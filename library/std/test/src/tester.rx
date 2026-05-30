@@ -1,0 +1,107 @@
+## std.test.Tester — one group in the spec tree.
+##
+## A Tester is created by `Tester.describe` and passed (by mutable
+## reference) to the user's block. Nested `context` calls create child
+## Testers inheriting the parent's before-hook chain. Cases (`it`) execute
+## immediately during the block traversal — no deferred tree is built,
+## avoiding self-referential `Array[Tester]` type cycles. Pass/fail/pending
+## counts are accumulated on the active Runner via the C-static slot.
+class Tester
+  name: String
+  hooks_before: Array[any Fn[Fn() -> ()]]
+  hooks_after: Array[any Fn[Fn() -> ()]]
+
+  def init(name: &String)
+    self.name = name.clone
+    self.hooks_before = Array.new
+    self.hooks_after = Array.new
+  end
+
+  def self.describe(name: &String, body: any Fn[Fn(&var Tester) -> ()]) -> ()
+    var root = Tester.new(name)
+    body.(&var root)
+  end
+
+  def context(name: &String, body: any Fn[Fn(&var Tester) -> ()]) -> ()
+    var child = Tester.new(name)
+    for h in &self.hooks_before
+      child.hooks_before.push(h)
+    end
+    body.(&var child)
+  end
+
+  def before(hook: any Fn[Fn() -> ()]) -> () { self.hooks_before.push(hook) }
+
+  def after(hook: any Fn[Fn() -> ()]) -> () { self.hooks_after.push(hook) }
+
+  def it(name: &String, body: any Fn[Fn() -> ()]) -> ()
+    let runner_addr = Runner.get_current
+    if runner_addr == 0
+      return
+    end
+    let pid = Runner.fork
+    if pid == 0
+      Runner.case_reset
+      for hook in &self.hooks_before
+        hook.()
+      end
+      body.()
+      for hook in &self.hooks_after
+        hook.()
+      end
+      let code: Int = if Runner.case_get_failed == 0
+          0
+        else
+          1
+        end
+      Runner.child_exit(code)
+    end
+    let packed = Runner.wait(pid)
+    let pass_bit = packed & 1
+    let r = Runner.from_handle(runner_addr)
+    if pass_bit == 1
+      r.passed = r.passed + 1
+    else
+      r.failed = r.failed + 1
+    end
+  end
+
+  def it_panics(name: &String, expected_substr: &String, body: any Fn[Fn() -> ()]) -> ()
+    let runner_addr = Runner.get_current
+    if runner_addr == 0
+      return
+    end
+    let pid = Runner.fork
+    if pid == 0
+      Runner.case_reset
+      for hook in &self.hooks_before
+        hook.()
+      end
+      body.()
+      for hook in &self.hooks_after
+        hook.()
+      end
+      Runner.child_exit(0)
+    end
+    let packed = Runner.wait(pid)
+    let pass_bit = packed & 1
+    let signaled = packed >> 9 & 255
+    let r = Runner.from_handle(runner_addr)
+    if pass_bit == 1 && signaled == 0
+      r.failed = r.failed + 1
+    else
+      r.passed = r.passed + 1
+    end
+  end
+
+  def xit(name: &String, body: any Fn[Fn() -> ()]) -> ()
+    let runner_addr = Runner.get_current
+    if runner_addr == 0
+      return
+    end
+    let r = Runner.from_handle(runner_addr)
+    r.pending = r.pending + 1
+  end
+
+  def expect[T](actual: T) -> Matcher[T] { Matcher.new(actual) }
+end

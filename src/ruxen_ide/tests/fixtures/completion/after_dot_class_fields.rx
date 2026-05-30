@@ -1,0 +1,12 @@
+## Completion fixture — after `.` on a class instance, list the
+## class's fields (in addition to methods). The cursor anchor is the
+## identifier the user is mid-typing immediately after the `.`.
+
+class Counter
+  value: Int
+end
+
+def main
+  let c = Counter.new(7)
+  c.unique_member_anchor
+end

@@ -1,0 +1,7 @@
+## A doc comment on the anchor function with marker_keep_me_q1 —
+## the formatter must preserve doc comments verbatim alongside any
+## whitespace normalisation.
+def fmt_anchor_with_comment_xyz
+  let n = 99
+  n
+end

@@ -1,0 +1,3 @@
+def main
+  var h: Map[Array[Int], Int] = Map.new
+end

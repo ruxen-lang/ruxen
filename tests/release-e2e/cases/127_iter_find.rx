@@ -1,0 +1,11 @@
+def main
+  let v = [1, 2, 3, 4, 5]
+  match v.iter.find { |n| n > 3 }
+    Some(x) -> puts "found #{x}"
+    nil     -> puts "none"
+  end
+  match v.iter.find { |n| n > 100 }
+    Some(x) -> puts "found #{x}"
+    nil     -> puts "none"
+  end
+end

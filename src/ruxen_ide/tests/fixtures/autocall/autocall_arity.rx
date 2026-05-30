@@ -1,0 +1,9 @@
+## IDE: a bare reference to a fn needing arguments surfaces E0726 in the
+## editor (shares the typeck pipeline).
+def add(a: Int, b: Int) -> Int
+  a + b
+end
+
+def main
+  let arity_anchor = add
+end

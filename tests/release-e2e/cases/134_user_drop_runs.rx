@@ -1,0 +1,18 @@
+class Holder
+  tag: Int
+
+  def init(t: Int)
+    self.tag = t
+  end
+
+  include Drop
+
+  def var drop
+    puts "dropped tag=#{self.tag}"
+  end
+end
+
+def main
+  let h = Holder.new(7)
+  puts "before"
+end

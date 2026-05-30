@@ -1,0 +1,20 @@
+use std.env.args
+use std.fs.read_to_string
+use std.io.{IoError, eputs, puts}
+use std.process.exit
+
+def print_file(path: &String) -> Result[(), IoError]
+  let text = read_to_string(path)?
+  puts(text)
+  Ok(nil)
+end
+
+def main
+  let argv = args
+  if argv.len < 2
+    eputs("usage: cli-utility <file>")
+    exit(1)
+  end
+  let path = argv.get(1).expect!("path")
+  print_file(path).expect!("read file")
+end

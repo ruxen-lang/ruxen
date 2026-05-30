@@ -1,0 +1,12 @@
+## Completion fixture — verify function-shaped defs surface with
+## `CompletionItemKind::FUNCTION`. The cursor anchor sits in the
+## function body; the test puts the cursor one byte past the leading
+## letter.
+
+def helper
+  42
+end
+
+def main
+  h_cursor_anchor
+end

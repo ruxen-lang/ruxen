@@ -1,0 +1,15 @@
+## Segmenter pin (Milestone 2B extension):
+## an awaitee argument referencing a pre-await local. `n` is computed
+## before the suspend, fed into `add_one(n)`'s awaitee constructor in
+## the init body (still a plain init-local since it's not read after
+## the await), and the resumed sub-future yields `n + 1`.
+
+async def add_one(x: Int) -> Int
+  x + 1
+end
+
+async def handler(req: Int) -> Int
+  let n = req * 2
+  let result = add_one(n).await
+  result + 1
+end

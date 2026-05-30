@@ -1,0 +1,14 @@
+struct Point
+  x: Int
+  y: Int
+
+  include Copy
+  include Clone
+end
+
+def main
+  let a = Point.new(1, 2)
+  let b = a
+  puts "#{a.x} #{a.y}"
+  puts "#{b.x} #{b.y}"
+end

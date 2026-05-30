@@ -1,0 +1,28 @@
+use std.net.TcpListener
+
+# Tight bind-then-drop loop. If TcpListener_drop didn't close the
+# underlying fd at scope exit we'd exhaust the per-process fd table
+# well before reaching i=200 and a later bind would fail.
+def try_bind -> Bool
+  let addr = String.from("127.0.0.1:0")
+  match TcpListener.bind(&addr)
+    Ok(_l) -> true
+    Err(_) -> false
+  end
+end
+
+def main
+  var i = 0
+  var all_ok = true
+  while i < 200
+    if !try_bind()
+      all_ok = false
+    end
+    i = i + 1
+  end
+  if all_ok
+    puts "all_ok=true"
+  else
+    puts "all_ok=false"
+  end
+end

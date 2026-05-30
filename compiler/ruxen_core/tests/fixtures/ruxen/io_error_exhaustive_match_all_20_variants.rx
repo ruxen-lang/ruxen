@@ -1,0 +1,31 @@
+def describe(e: IoError) -> String
+  match e
+    IoError.NotFound             -> "nf"
+    IoError.PermissionDenied     -> "pd"
+    IoError.AlreadyExists        -> "ae"
+    IoError.Interrupted          -> "in"
+    IoError.WouldBlock           -> "wb"
+    IoError.InvalidInput         -> "ii"
+    IoError.UnexpectedEof        -> "ue"
+    IoError.BrokenPipe           -> "bp"
+    IoError.Other(_)             -> "ot"
+    IoError.ConnectionRefused(_) -> "cr"
+    IoError.ConnectionReset(_)   -> "cs"
+    IoError.ConnectionAborted(_) -> "ca"
+    IoError.NotConnected(_)      -> "nc"
+    IoError.AddrInUse(_)         -> "au"
+    IoError.AddrNotAvailable(_)  -> "an"
+    IoError.InvalidData(_)       -> "id"
+    IoError.TimedOut(_)          -> "to"
+    IoError.WriteZero(_)         -> "wz"
+    IoError.Unsupported(_)       -> "un"
+    IoError.OutOfMemory(_)       -> "om"
+  end
+end
+
+def main
+  puts describe(IoError.NotFound)
+  puts describe(IoError.Other(message: "x"))
+  puts describe(IoError.ConnectionRefused(message: "x"))
+  puts describe(IoError.OutOfMemory(message: "x"))
+end

@@ -1,0 +1,5 @@
+
+def pair[const N: USize, const M: USize](x: Int) -> Int
+where N == M
+  x
+end

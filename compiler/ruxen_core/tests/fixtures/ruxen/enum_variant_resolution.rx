@@ -1,0 +1,9 @@
+
+enum Priority
+  Low
+  High
+end
+
+def test
+  let p = Priority.Low
+end

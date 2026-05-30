@@ -1,0 +1,13 @@
+use std.fs.{remove_dir_all, exists}
+
+def main
+  match remove_dir_all("__ROOT__")
+    Ok(_)  -> puts "removed"
+    Err(_) -> puts "remove_fail"
+  end
+  if exists("__ROOT__")
+    puts "still_there"
+  else
+    puts "gone"
+  end
+end

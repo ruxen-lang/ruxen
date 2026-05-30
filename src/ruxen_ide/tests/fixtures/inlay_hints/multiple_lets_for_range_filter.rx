@@ -1,0 +1,6 @@
+def main
+  let early_a = 1
+  let early_b = 2
+  let late_c = 3
+  let late_d = 4
+end

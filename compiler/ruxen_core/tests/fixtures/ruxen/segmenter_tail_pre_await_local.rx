@@ -1,0 +1,15 @@
+## Segmenter pin (Milestone 2B extension):
+## a pre-await local referenced in the tail expression crosses the
+## suspend point and must be hoisted onto the state-machine class as
+## a field. The let's explicit type annotation lets the lowering
+## declare the field type without typeck integration.
+
+async def pure_compute() -> Int
+  10
+end
+
+async def handler(req: Int) -> Int
+  let x: Int = req * 2
+  let r = pure_compute().await
+  x + r
+end

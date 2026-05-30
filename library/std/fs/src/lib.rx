@@ -1,0 +1,73 @@
+## std::fs — POSIX filesystem helpers.
+##
+## Wave 2 (#06.8) — partial migration:
+## - All seventeen `fs::*` free fns are fully migrated (lib block with
+##   c_symbol aliases; runtime_table entries deleted).
+## - `Metadata` accessor methods migrated in #06.95 Phase E Slice B.1 —
+##   the class-body `lib "runtime/fs.c"` block below carries the six
+##   `ruxen_metadata_*` aliases that used to live in runtime_table.
+## - The `File` re-export (so `use std.fs.File` works in addition to
+##   `use std.io.File`) is preserved via the FIXUPS table — it looks up
+##   "File" in the type scope after the bootstrap merge, finding
+##   whichever registration is canonical at the time (Rust today, .rx
+##   once io migrates).
+##
+## See docs/specs/stdlib/fs.spec.md for the behavioural contract. The
+## C runtime symbols live in library/std/fs/runtime/fs.c.
+## Metadata moved to `library/std/io/src/lib.rx` in Phase E-rest 1b
+## of #06.95 so `File.metadata -> Result[Metadata, IoError]` lib
+## decl in io.rx can resolve Metadata as a return type at parse
+## time. fs.metadata's `Result[Metadata, IoError]` resolves here
+## because fs.rx loads after io.rx — Metadata is in scope by then.
+## std::fs namespace class — 17 static methods wrapping the C-runtime
+## filesystem surface. Phase C of #06.95. The bare lib block below is
+## the transition shim that keeps `read_to_string(...)` etc. resolving
+## while existing callers migrate to `FS.read_to_string(...)`.
+class FS
+  lib "runtime/fs.c"
+    def self.read_to_string as "ruxen_fs_read_to_string"(path: &String) -> Result[String, IoError]
+    def self.write as "ruxen_fs_write"(path: &String, contents: &String) -> Result[(), IoError]
+    def self.exists as "ruxen_fs_exists"(path: &String) -> Bool
+    def self.is_file as "ruxen_fs_is_file"(path: &String) -> Bool
+    def self.is_dir as "ruxen_fs_is_dir"(path: &String) -> Bool
+    def self.read_dir as "ruxen_fs_read_dir"(path: &String) -> Result[Array[String], IoError]
+    def self.metadata as "ruxen_fs_metadata"(path: &String) -> Result[Metadata, IoError]
+    def self.remove_file as "ruxen_fs_remove_file"(path: &String) -> Result[(), IoError]
+    def self.create_dir as "ruxen_fs_create_dir"(path: &String) -> Result[(), IoError]
+    def self.create_dir_all as "ruxen_fs_create_dir_all"(path: &String) -> Result[(), IoError]
+    def self.rename as "ruxen_fs_rename"(from: &String, to: &String) -> Result[(), IoError]
+    def self.copy as "ruxen_fs_copy"(src: &String, dst: &String) -> Result[Int, IoError]
+    def self.remove_dir_all as "ruxen_fs_remove_dir_all"(path: &String) -> Result[(), IoError]
+    def self.canonicalize as "ruxen_fs_canonicalize"(path: &String) -> Result[String, IoError]
+    def self.write_atomic as "ruxen_fs_write_atomic"(path: &String, contents: &String) -> Result[
+      (),
+      IoError
+    ]
+    def self.read_link as "ruxen_fs_read_link"(path: &String) -> Result[String, IoError]
+    def self.symlink as "ruxen_fs_symlink"(target: &String, link: &String) -> Result[(), IoError]
+  end
+end
+
+# Phase C transition shim — see comment on `class FS` above.
+lib "runtime/fs.c"
+  def read_to_string as "ruxen_fs_read_to_string"(path: &String) -> Result[String, IoError]
+  def write as "ruxen_fs_write"(path: &String, contents: &String) -> Result[(), IoError]
+  def exists as "ruxen_fs_exists"(path: &String) -> Bool
+  def is_file as "ruxen_fs_is_file"(path: &String) -> Bool
+  def is_dir as "ruxen_fs_is_dir"(path: &String) -> Bool
+  def read_dir as "ruxen_fs_read_dir"(path: &String) -> Result[Array[String], IoError]
+  def metadata as "ruxen_fs_metadata"(path: &String) -> Result[Metadata, IoError]
+  def remove_file as "ruxen_fs_remove_file"(path: &String) -> Result[(), IoError]
+  def create_dir as "ruxen_fs_create_dir"(path: &String) -> Result[(), IoError]
+  def create_dir_all as "ruxen_fs_create_dir_all"(path: &String) -> Result[(), IoError]
+  def rename as "ruxen_fs_rename"(from: &String, to: &String) -> Result[(), IoError]
+  def copy as "ruxen_fs_copy"(src: &String, dst: &String) -> Result[Int, IoError]
+  def remove_dir_all as "ruxen_fs_remove_dir_all"(path: &String) -> Result[(), IoError]
+  def canonicalize as "ruxen_fs_canonicalize"(path: &String) -> Result[String, IoError]
+  def write_atomic as "ruxen_fs_write_atomic"(path: &String, contents: &String) -> Result[
+    (),
+    IoError
+  ]
+  def read_link as "ruxen_fs_read_link"(path: &String) -> Result[String, IoError]
+  def symlink as "ruxen_fs_symlink"(target: &String, link: &String) -> Result[(), IoError]
+end

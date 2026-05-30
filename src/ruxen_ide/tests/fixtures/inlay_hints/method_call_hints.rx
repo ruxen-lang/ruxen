@@ -1,0 +1,13 @@
+class Calc
+  def init
+  end
+
+  def add(lhs: Int, rhs: Int) -> Int
+    lhs + rhs
+  end
+end
+
+def main
+  let c = Calc.new()
+  let _r = c.add(2, 3)
+end

@@ -1,0 +1,7 @@
+[package]
+name = "std-future"
+version = "0.1.0"
+description = "Future mixin + Poll enum + Context/Waker stdlib surface"
+
+[dependencies]
+std-core = "= 0.1.0"

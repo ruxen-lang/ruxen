@@ -1,0 +1,81 @@
+# Spec — Variance & coercion
+
+**Source docs:**
+[docs/requirements/tier2_07_variance.md](../../requirements/tier2_07_variance.md).
+
+**Status:** shipped Tier-2 (`variance.rs` module wired into typeck).
+
+Ruxen's typeck enforces variance rules at coercion / argument sites:
+which "wider" types may flow where, which "narrower" types may not.
+This spec lists the rules that have explicit pin tests.
+
+---
+
+## B1 — `&var T` is **invariant** in `T`
+
+`&var Inner1` does **not** coerce to `&var Inner2`, even when
+`Inner2` is a supertype / wider type.
+
+| Rejection                                              | Reason                       |
+|--------------------------------------------------------|------------------------------|
+| `&var SubClass` → `&var BaseClass`                     | unsound: write through alias |
+| `&var Int8`     → `&var Int64`                         | width mismatch               |
+| `&var TypeA`    → `&var UnrelatedTypeB`                | unrelated types              |
+
+## B2 — `&var T` → `&T` is allowed
+
+The standard "writable to read-only" reborrow remains legal; a
+`&var T` automatically demotes to `&T` at coercion sites.
+
+## B3 — `Array[T]` is **invariant** in `T`
+
+`Array[Inner1]` does not coerce to `Array[Inner2]`, by the same logic
+as B1 (a write through the wider alias would be unsound).
+
+## B4 — `Array[T]` of the same `T` is accepted
+
+Sanity check that the invariance rule does not over-reject:
+`Array[Foo]` flows where `Array[Foo]` is expected.
+
+## B5 — `Option[T]` is **covariant** in `T`
+
+Read-only single-value wrappers admit safe upcasts.
+
+| Coercion accepted                                       | Reason                |
+|---------------------------------------------------------|-----------------------|
+| `Option[&var T]` → `Option[&T]`                         | demote inner          |
+| `Option[Int8]`   → `Option[Int64]`                      | integer widening      |
+
+`Option[T]` does not coerce when the inner types are incompatible
+(e.g. `Option[String]` → `Option[Int]`).
+
+## B6 — `variance` module is wired into typeck
+
+The variance checker runs as part of the typeck pipeline (not gated
+behind a feature flag or test-only hook).  Sanity test asserts the
+module is reachable.
+
+---
+
+## Pin tests
+
+| Behaviour | Test fn                                               | File          |
+|-----------|-------------------------------------------------------|---------------|
+| B1        | `mut_ref_no_coerce_to_different_inner_type` + `mut_ref_no_coerce_widening_inner` + `mut_ref_no_coerce_to_different_class` | `variance.rs` |
+| B2        | `mut_ref_to_immut_ref_still_works`                    | `variance.rs` |
+| B3        | `vec_no_coerce_to_different_inner_type` + `vec_no_coerce_widening_inner` + `vec_no_coerce_through_inheritance` | `variance.rs` |
+| B4        | `vec_same_type_works`                                 | `variance.rs` |
+| B5        | `option_covariant_through_mut_to_immut_ref` + `option_covariant_through_integer_widening` + `option_no_coerce_when_inner_incompatible` | `variance.rs` |
+| B6        | `variance_module_is_wired_into_typeck`                | `variance.rs` |
+
+<!-- TODO(migration): pin-test fn names still contain `mut_ref_*` / `vec_*` — internal Rust identifiers, rename when in scope. -->
+
+---
+
+## Out of scope (v2)
+
+- User-controllable variance annotations (in-body `covariant` /
+  `contravariant` directives).
+- Variance for higher-kinded types and GATs.
+- Contravariance — Ruxen has no surface today that admits it
+  (closures are invariant in their parameter types).

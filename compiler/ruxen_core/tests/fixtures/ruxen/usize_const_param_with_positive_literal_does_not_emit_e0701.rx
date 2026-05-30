@@ -1,0 +1,10 @@
+
+class Buf[const N: USize]
+  payload: Int
+
+  def init(@payload: Int)
+  end
+end
+
+def take_buf(_b: Buf[42])
+end

@@ -1,0 +1,10 @@
+## Negative: a bare reference to a function that needs arguments, in a
+## non-Fn-typed context, attempts a zero-arg auto-call -> E0726, which
+## names both escape routes (call it, or annotate a Fn type).
+def add(a: Int, b: Int) -> Int
+  a + b
+end
+
+def main
+  let f = add
+end

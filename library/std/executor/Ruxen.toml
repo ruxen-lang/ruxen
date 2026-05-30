@@ -1,0 +1,8 @@
+[package]
+name = "std-executor"
+version = "0.1.0"
+description = "Single-threaded block_on executor for sub-phase 3 of the async round"
+
+[dependencies]
+std-future = "= 0.1.0"
+std-core = "= 0.1.0"

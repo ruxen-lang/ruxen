@@ -1,0 +1,12 @@
+class Counter
+  count: Int
+
+  def init(@count: Int)
+  end
+end
+
+def main
+  let a = Counter.new(5)
+  let b = a.clone
+  puts "#{a.count};#{b.count}"
+end

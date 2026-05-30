@@ -1,0 +1,10 @@
+## A bare multi-arg fn reference with a CONCRETE non-Fn annotation must
+## report ONLY E0726 — not a cascading "type mismatch" from the failed
+## unify against the annotation.
+def add(a: Int, b: Int) -> Int
+  a + b
+end
+
+def main
+  let f: Int = add
+end

@@ -1,0 +1,15 @@
+def main
+  var h: Map[String, Int] = Map.new
+  h.insert(String.from("alpha"), 10)
+  h.insert(String.from("beta"), 20)
+  h.insert(String.from("gamma"), 30)
+  puts "len=#{h.len}"
+  match h.get(String.from("alpha"))
+    Some(v) -> puts "alpha=#{v}"
+    nil     -> puts "alpha=missing"
+  end
+  match h.get(String.from("missing"))
+    Some(v) -> puts "missing=#{v}"
+    nil     -> puts "missing=missing"
+  end
+end

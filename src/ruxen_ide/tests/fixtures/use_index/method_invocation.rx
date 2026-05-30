@@ -1,0 +1,15 @@
+class Counter
+  count: Int
+
+  def init(@count: Int)
+  end
+
+  def bump_anchor_qzx(extra: Int) -> Int
+    self.count + extra
+  end
+end
+
+def main
+  let c = Counter.new(5)
+  let r = c.bump_anchor_qzx(3)
+end

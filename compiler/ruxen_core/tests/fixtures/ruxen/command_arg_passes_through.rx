@@ -1,0 +1,16 @@
+use std.process.Command
+
+def report(s: ExitStatus)
+  if s.code == 0
+    puts "ok"
+  else
+    puts "code=#{s.code}"
+  end
+end
+
+def main
+  match Command.new("/bin/echo").arg("hello").status
+    Ok(s)  -> report(s)
+    Err(_) -> puts "err"
+  end
+end

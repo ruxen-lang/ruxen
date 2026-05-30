@@ -1,0 +1,14 @@
+use std.time.Instant
+
+def main
+  let t = Instant.now()
+  let e = t.elapsed()
+  # Just non-negative: elapsed() is computed inside the runtime via
+  # CLOCK_MONOTONIC sample minus the original. Sleep is unnecessary —
+  # any non-zero work between the two calls suffices.
+  if e.as_nanos() >= 0
+    puts "ok"
+  else
+    puts "fail nanos=#{e.as_nanos()}"
+  end
+end

@@ -1,0 +1,23 @@
+## Task #17 — strengthened trio-leak pin.
+##
+## Source: docs/specs/system/zero_rust_stdlib_classes.spec.md (B5).
+##
+## Resolves `FooBar` through the `std.foobar.FooBar` namespace path —
+## the same shape every other stdlib type uses (`std.io.File`,
+## `std.fs.OpenOptions`, `std.net.TcpStream`). Pre-Task-17 this fails
+## because the hand-maintained STD_SUBMODULES list in
+## `resolve/stdlib/mod.rs` does not include `foobar`, so `std.foobar`
+## is not a known submodule even though `library/std/foobar/src/lib.rx`
+## is bootstrap-loaded. After Task #17 derives STD_SUBMODULES from
+## BOOTSTRAP_FILES basenames, this resolves automatically.
+use std.foobar.FooBar
+
+def main
+  let x = FooBar.new(42)
+  let v = x.get
+  if v == 42
+    puts "ok"
+  else
+    puts "fail"
+  end
+end

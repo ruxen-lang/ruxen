@@ -1,0 +1,14 @@
+module Tools
+  def pick(value: Int) -> String
+    "module-int"
+  end
+
+  def pick(value: String) -> String
+    "module-string"
+  end
+end
+
+def main
+  puts Tools.pick(7)
+  puts Tools.pick("seven")
+end

@@ -1,0 +1,11 @@
+struct Person
+  name: String
+  age: Int
+
+  include Copy
+  include Clone
+end
+
+def main
+  let _x = 0
+end

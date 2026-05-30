@@ -1,0 +1,19 @@
+# Calls a class method declared in the bootstrap-loaded
+# `library/std/src/_bootstrap_smoke.rx` (specifically
+# `BootstrapSmokeClass.add_one`). Phase 4 proves the full surface:
+# a class defined in a `.rx` stdlib file is callable from user
+# code with no extra wiring.
+
+def main() -> Int
+  let x = BootstrapSmokeClass.add_one(41)
+  let y = BootstrapSmokeClass.double(20)
+  if x == 42
+    if y == 40
+      0
+    else
+      2
+    end
+  else
+    1
+  end
+end

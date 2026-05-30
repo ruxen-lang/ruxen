@@ -1,0 +1,6 @@
+def main
+  var v: Array[Int] = Array.new
+  v.push(1)
+  v.push(2)
+  v.retain { |x| x > 1 }
+end

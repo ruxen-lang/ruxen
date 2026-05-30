@@ -1,0 +1,35 @@
+use std.rand.random_fill
+
+# E2E smoke for std.rand.random_fill: seed a 4-slot buf with a
+# sentinel, fill it from the CSPRNG, and report whether any slot
+# changed. The 4/256 chance of a single slot matching the sentinel
+# byte-for-byte across all four positions is ~1 in 4e9 — well below
+# any other test's false-negative budget.
+def check(buf: &Array[Int])
+  var any_diff = false
+  var i = 0
+  while i < 4
+    let b = buf.get(i).unwrap_or(0)
+    if b != 170
+      any_diff = true
+    end
+    i = i + 1
+  end
+  if any_diff
+    puts "fill=ok"
+  else
+    puts "fill=unchanged"
+  end
+end
+
+def main
+  var buf: Array[Int] = Array.new
+  buf.push(170)
+  buf.push(170)
+  buf.push(170)
+  buf.push(170)
+  match random_fill(&var buf)
+    Ok(_)  -> check(&buf)
+    Err(_) -> puts "err"
+  end
+end

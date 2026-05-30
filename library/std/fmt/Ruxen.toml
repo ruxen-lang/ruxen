@@ -1,0 +1,7 @@
+[package]
+name = "std-fmt"
+version = "0.1.0"
+description = "Display + Debug trait surface + Formatter"
+
+[dependencies]
+std-core = "= 0.1.0"

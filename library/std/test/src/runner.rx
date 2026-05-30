@@ -1,0 +1,40 @@
+## std.test.Runner — accumulates pass/fail/pending counts for one test file.
+##
+## Constructed by the synthesised `def main` (see ruxen test in
+## `src/ruxenc/src/test_runner.rs`). The Runner is registered in a
+## process-static C slot before any `Tester.describe` calls so that
+## `Tester#it` can find and mutate the active runner's counts directly.
+## Execution is eager (immediate) — no deferred group tree is built.
+class Runner
+  passed: Int
+  failed: Int
+  pending: Int
+  name: String
+
+  def init(test_path: &String)
+    self.passed = 0
+    self.failed = 0
+    self.pending = 0
+    self.name = test_path.clone
+  end
+
+  def handle_addr -> Int { Runner.self_addr(self) }
+
+  def execute -> ()
+    puts("#{self.passed} passed, #{self.failed} failed, #{self.pending} pending")
+  end
+
+  lib "runtime/test.c"
+    def self.set_current as "ruxen_test_current_set"(handle: Int) -> Int
+    def self.get_current as "ruxen_test_current_get" -> Int
+    def self.self_addr as "ruxen_test_runner_addr"(r: Runner) -> Int
+    def self.from_handle as "ruxen_test_runner_from_addr"(addr: Int) -> &var Runner
+    def self.case_reset as "ruxen_test_case_reset" -> Int
+    def self.case_mark_failed as "ruxen_test_case_mark_failed" -> Int
+    def self.case_get_failed as "ruxen_test_case_get_failed" -> Int
+    def self.fork as "ruxen_test_fork" -> Int
+    def self.wait as "ruxen_test_wait"(pid: Int) -> Int
+    def self.child_exit as "ruxen_test_child_exit"(code: Int) -> ()
+    def self.panic as "ruxen_test_panic" -> ()
+  end
+end

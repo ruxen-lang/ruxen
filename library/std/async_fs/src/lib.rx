@@ -1,0 +1,74 @@
+## std::async_fs — async file I/O.
+##
+## Spec: docs/specs/stdlib/async_io.spec.md Milestone 4B (B4–B6).
+##
+## Three hand-written futures backed by the per-thread reactor in
+## library/std/future/runtime/reactor.c (sub-phase 4A). The futures
+## reuse the same pattern as TimeSleepFuture: an `Int` reactor handle
+## stashed on the future, registered lazily on the first poll that
+## hits EAGAIN, deregistered in `def drop`.
+##
+## Surface (mirrors the spec):
+##
+##   AsyncFile.open(path)         -> AsyncOpenFuture (read-only)
+##   AsyncFile.create(path)       -> AsyncOpenFuture (write+create+trunc)
+##   f.read_to_string()           -> AsyncReadToStringFuture
+##   f.write_all(content)         -> AsyncWriteAllFuture
+##   f.close                      -> Result[(), IoError]   (sync convenience)
+##
+## Why a separate `async_fs` package rather than extending `fs/src/lib.rx`:
+##   - `fs/src/lib.rx` loads BEFORE `future/src/lib.rx` in
+##     BOOTSTRAP_FILES (see `compiler/ruxen_core/src/resolve/bootstrap.rs`),
+##     so `include Future` would fail to resolve at registration time
+##     if AsyncFile / the three futures lived in fs.rx.
+##   - The package boundary also gives 4C's AsyncTcpStream / Listener a
+##     parallel home (`library/std/async_net`) without forcing async
+##     I/O into the synchronous fs/net packages.
+## --- Reactor fd-readiness primitives (sub-phase 4B reactor extension)
+##
+## Live in the same C TU as the timer primitives because they share the
+## per-thread reactor singleton + slot table. Declared here (rather
+## than in `library/std/future/src/lib.rx` alongside the timer decls)
+## so we don't churn the future package — async_fs is the only caller
+## until 4C also pulls them in.
+lib "../../future/runtime/reactor.c"
+  def ruxen_reactor_register_fd_read(reactor: Int, fd: Int) -> Int
+  def ruxen_reactor_register_fd_write(reactor: Int, fd: Int) -> Int
+end
+
+## --- async_fs state-machine primitives (Int-only signatures) -------
+##
+## See library/std/async_fs/runtime/async_fs.c for the C side. The
+## read/write step machines own a heap state struct; the Ruxen futures
+## hold its address as an Int and dispatch through these free fns.
+##
+## Declared here (rather than after AsyncFile) because every type
+## referenced is already in scope from core/io/future — no forward
+## reference. The `ruxen_async_file_open` / `_fd` decls that reference
+## AsyncFile live in a second lib block below the class.
+lib "runtime/async_fs.c"
+  def ruxen_async_read_state_new(fd: Int) -> Int
+  def ruxen_async_read_state_get_fd(state: Int) -> Int
+  def ruxen_async_read_step(state: Int) -> Int
+  def ruxen_async_read_state_take_result(state: Int) -> Result[String, IoError]
+  def ruxen_async_read_state_free(state: Int) -> ()
+  def ruxen_async_write_state_new(fd: Int, content: &String) -> Int
+  def ruxen_async_write_state_get_fd(state: Int) -> Int
+  def ruxen_async_write_step(state: Int) -> Int
+  def ruxen_async_write_state_take_result(state: Int) -> Result[(), IoError]
+  def ruxen_async_write_state_free(state: Int) -> ()
+end
+
+## Workaround for the 4B e2e fixture: the canonical `String == String`
+## codegen path (cranelift/emit.rs `is_string_typed_value`) currently
+## misses the MIR shape produced by destructuring `Ok(s)` out of a
+## `Result[String, IoError]` returned via the manual poll loop — the
+## Local::ty for `s` ends up not matching `Ty::String`, so the
+## generated Compare is integer-pointer-eq rather than `ruxen_string_eq`.
+## Routing through this typed lib decl gives the fixture deterministic
+## value-equality without depending on whichever path typeck picks for
+## `==`. v1 follow-up: thread the destructured-payload ty through the
+## Compare lowering so `==` works on String for every MIR shape.
+lib "../string/runtime/string.c"
+  def ruxen_async_str_equals as "ruxen_string_eq"(a: &String, b: &String) -> Int
+end

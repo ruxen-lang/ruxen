@@ -1,0 +1,8 @@
+
+struct WithParens
+  data: [Int; (2 + 3) * 4]
+end
+
+struct NoParens
+  data: [Int; 2 + 3 * 4]
+end

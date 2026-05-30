@@ -1,0 +1,7 @@
+use std.sync.{Mutex, MutexGuard}
+
+def main
+  let m: Mutex[Int] = Mutex.new(0)
+  let guard: MutexGuard[Int] = m.lock!()
+  let r: &var Int = guard.deref_var()
+end

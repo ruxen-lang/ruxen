@@ -1,0 +1,13 @@
+use std.net.TcpStream
+
+# E2E single-side smoke: connecting to a port with no listener
+# returns Err. The full read/write round-trip is exercised by the
+# stdlib_net.rs `tcp_class_loopback_roundtrip` pin test which has
+# two-sided host coordination — this e2e case proves the connect
+# path lowers + lands an Err shape that the runtime maps from errno.
+def main
+  match TcpStream.connect(&"127.0.0.1:1")
+    Ok(_)  -> puts "connect=ok"
+    Err(_) -> puts "connect=err"
+  end
+end

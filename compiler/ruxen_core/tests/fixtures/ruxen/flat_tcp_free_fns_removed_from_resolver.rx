@@ -1,0 +1,6 @@
+
+use std.net.tcp_connect
+
+def main
+  let _fd = tcp_connect(&"127.0.0.1:1")
+end

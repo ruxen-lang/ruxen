@@ -1,0 +1,86 @@
+## std::process — Command builder, ExitStatus, Output, exit().
+##
+## Phase D-6 of #06.95: Command and Output gained their `def drop` lib
+## decls and now drive the `user_drop_classes` auto-detect through the
+## generic class-method walk in
+## `mir/lower/collect.rs::collect_user_drop_classes` — no hardcoded
+## compiler-side list entries required.
+##
+## Declaration order is load-bearing: `ExitStatus` and `Output` are
+## declared BEFORE `Command` so the `Command.status -> Result[
+## ExitStatus, IoError]` / `Command.output -> Result[Output, IoError]`
+## return types resolve at bootstrap-merge time (forward-reference
+## resolution isn't supported for lib-decl return types).
+##
+## `Command.spawn -> Child` (async-style handle with .wait / .kill /
+## .try_wait) is explicitly DEFERRED to v2 per
+## docs/prompts/v1/06_phase2_stdlib_io_fmt.md — v1 ships the blocking
+## terminals (.status, .output) only.
+## std::process namespace class — folds the `exit` free fn into
+## `Process.exit`. Ruby keeps a global `exit` too (Kernel#exit), so
+## the bare `exit` lib block below is permanent, not transitional.
+class Process
+  lib "runtime/process.c"
+    def self.exit as "ruxen_process_exit"(code: Int) -> Never
+  end
+end
+
+# Kernel-level `exit` (also available as Process.exit).
+lib "runtime/process.c"
+  def exit as "ruxen_process_exit"(code: Int) -> Never
+end
+
+## std::process::ExitStatus — flat-spine class wrapping a packed
+## exit-code int. ExitStatus is NOT a drop class (no `def drop`); the
+## generic `ruxen_dealloc` path handles spine cleanup. `free` is a
+## user-callable explicit release.
+##
+## `layout c` + `exit_code: Int` field pins the Ruxen-side layout to
+## the `RuxenExitStatus { int64_t code }` C struct (see
+## `library/std/process/runtime/process.c`). The C side still
+## allocates and returns these pointers from `Command.status()` /
+## `Command.output()`; the accessor reads below replace the trivial
+## `ruxen_exit_status_code` / `ruxen_exit_status_success` getters
+## that previously lived in C. The C field name `code` vs Ruxen field
+## `exit_code` lets the method names stay `code` / `success` without
+## shadowing.
+class ExitStatus
+  exit_code: Int
+
+  def code -> Int { self.exit_code }
+
+  def success -> Bool { self.exit_code == 0 }
+
+  lib "runtime/process.c"
+    def free as "ruxen_exit_status_free" -> ()
+  end
+end
+
+## std::process::Output — captured stdout / stderr / status triple
+## returned by `Command.output()`. The `def drop` lib decl drives the
+## user_drop_classes auto-detect.
+class Output
+  lib "runtime/process.c"
+    def stdout as "ruxen_output_stdout" -> String
+    def stderr as "ruxen_output_stderr" -> String
+    def status as "ruxen_output_status" -> ExitStatus
+    def drop as "ruxen_output_drop" -> ()
+  end
+end
+
+## std::process::Command — process-spawning builder. The terminal
+## methods (`status`, `output`) consume self and return `Result`.
+## Builder methods (`arg`, `args`, `env`, `current_dir`) mutate in
+## place and return Self for chaining.
+class Command
+  lib "runtime/process.c"
+    def self.new as "ruxen_command_new"(program: &String) -> Command
+    def arg as "ruxen_command_arg"(arg: &String) -> Command
+    def args as "ruxen_command_args"(args: &Array[String]) -> Command
+    def env as "ruxen_command_env"(key: &String, value: &String) -> Command
+    def current_dir as "ruxen_command_current_dir"(path: &String) -> Command
+    def status as "ruxen_command_status" -> Result[ExitStatus, IoError]
+    def output as "ruxen_command_output" -> Result[Output, IoError]
+    def drop as "ruxen_command_drop" -> ()
+  end
+end

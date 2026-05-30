@@ -1,0 +1,56 @@
+## --- AsyncTcpStream ------------------------------------------------
+##
+## Declared FIRST (before any future) so AsyncAcceptFuture's Output
+## tuple `(AsyncTcpStream, String)` resolves at typeck time. Method
+## bodies reference future classes declared later — forward refs
+## between class signatures resolve through bootstrap pass-2, but free
+## fns (like `accept_state_to_result` below) require their parameter
+## and return types to be already-declared classes.
+##
+## Owning wrapper around a non-blocking connected socket fd. 8-byte
+## wire shape (int32 fd + int32 closed) identical to RuxenAsyncFile.
+class AsyncTcpStream
+  fd: Int
+  closed: Int
+  read_handle: Int
+  write_handle: Int
+
+  def self.connect(addr: &String) -> AsyncConnectFuture { AsyncConnectFuture.new(addr) }
+
+  def var read(max_bytes: Int) -> AsyncReadFuture
+    AsyncReadFuture.new(
+      ruxen_async_tcp_stream_fd(self),
+      max_bytes,
+      ruxen_async_tcp_stream_read_handle(self),
+    )
+  end
+
+  def var read_with_timeout(max_bytes: Int, timeout_ns: Int) -> AsyncReadWithTimeoutFuture
+    AsyncReadWithTimeoutFuture.new(
+      ruxen_async_tcp_stream_fd(self),
+      max_bytes,
+      timeout_ns,
+      ruxen_async_tcp_stream_read_handle(self),
+    )
+  end
+
+  def var write(content: &String) -> AsyncWriteFuture
+    AsyncWriteFuture.new(
+      ruxen_async_tcp_stream_fd(self),
+      content,
+      ruxen_async_tcp_stream_write_handle(self),
+    )
+  end
+
+  lib "runtime/async_net.c"
+    def drop as "ruxen_async_tcp_stream_drop" -> ()
+  end
+end
+
+lib "runtime/async_net.c"
+  def ruxen_async_tcp_stream_fd(stream: &AsyncTcpStream) -> Int
+  def ruxen_async_tcp_stream_from_fd(fd: Int) -> AsyncTcpStream
+  def ruxen_async_tcp_stream_shutdown(stream: &AsyncTcpStream) -> ()
+  def ruxen_async_tcp_stream_read_handle(stream: &AsyncTcpStream) -> Int
+  def ruxen_async_tcp_stream_write_handle(stream: &AsyncTcpStream) -> Int
+end

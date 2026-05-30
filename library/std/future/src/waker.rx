@@ -1,0 +1,42 @@
+## Waker — handle a Future stashes to notify the executor when it
+## becomes pollable again. Two methods: `wake` (consumes the waker)
+## and `wake_by_ref` (borrowed).
+##
+## Sub-phase 3 of the async round (executor.spec.md B3): both
+## methods are no-ops. The poll loop in block_on spins
+## continuously (with Thread.yield_now between iterations), so any
+## "wake" is implicit. Sub-phase 4 wires real signaling when async
+## I/O introduces genuine blocking park points.
+class Waker
+  lib "runtime/executor.c"
+    def wake as "ruxen_waker_wake" -> ()
+    def wake_by_ref as "ruxen_waker_wake_by_ref" -> ()
+  end
+end
+
+## --- Sub-phase 4A: reactor free-fn lib decls -----------------------
+##
+## Spec: docs/specs/stdlib/async_io.spec.md Milestone 4A.
+##
+## The four reactor primitives in C (runtime/reactor.c) are declared
+## here as free-fn lib decls so the user-side `TimeSleepFuture`
+## (below) reaches them through the FFI alias map.
+##
+## 4A landed in two steps. Commit `42daaeb` shipped the C reactor +
+## per-thread lifecycle (Context.executor / Context.drop) + the
+## `Thread.yield_now` → `ruxen_reactor_park_current` indirection.
+## The user-side Async.sleep / TimeSleepFuture follow here.
+lib "runtime/reactor.c"
+  def ruxen_reactor_current_handle -> Int
+  def ruxen_reactor_register_timer(reactor: Int, nanos: Int) -> Int
+  def ruxen_reactor_set_waker(reactor: Int, handle: Int, waker: &Waker) -> ()
+  def ruxen_reactor_check_fired(reactor: Int, handle: Int) -> Int
+  def ruxen_reactor_deregister(reactor: Int, handle: Int) -> ()
+end
+
+## Monotonic nanos free fn used by `TimeSleepFuture` to compute its
+## absolute deadline. Cross-package lib decl pointing at the C symbol
+## owned by std.time's runtime/time.c.
+lib "../../time/runtime/time.c"
+  def ruxen_time_now_ns -> Int
+end

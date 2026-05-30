@@ -1,0 +1,26 @@
+## Spec docs/errors/E1115.md: `.await` inside a `while` loop body is
+## the same v2-deferred shape as `loop { ...await }`. Pin both
+## shapes so a future segmenter extension that adds one but not the
+## other is caught by tests.
+
+async def fetch() -> Int
+  42
+end
+
+async def handler() -> Int
+  let var sum = 0
+  while sum < 100
+    if sum < 50
+      let v = fetch().await
+      sum = sum + v
+    else
+      sum = sum + 1
+    end
+  end
+  sum
+end
+
+def main
+  let r = block_on(handler())
+  puts "#{r}"
+end

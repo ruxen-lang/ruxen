@@ -1,0 +1,12 @@
+## Spec docs/specs/stdlib/task_spawn.spec.md §B2: Task.yield_now
+## returns a TaskYieldFuture. This pin test verifies the surface
+## typechecks — the construction returns a class that includes
+## Future and whose Output is `()`.
+def main
+  let var fut = Task.yield_now
+  let var cx = Context.test_dummy()
+  match (&var fut).poll(&var cx)
+    Poll.Ready(_) -> puts "ready"
+    Poll.Pending  -> puts "pending"
+  end
+end

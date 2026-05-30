@@ -1,0 +1,7 @@
+def widen_anchor_qzx(value_anchor_qzx: Int) -> Int
+  value_anchor_qzx + value_anchor_qzx
+end
+
+def main
+  let r = widen_anchor_qzx(3)
+end

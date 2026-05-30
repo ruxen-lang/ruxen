@@ -1,0 +1,17 @@
+use std.test.BoolMatcher
+use std.test.OptionMatcher
+
+def main
+  if BoolMatcher.new(true).to_be_truthy
+    puts "truthy_pass"
+  end
+  if BoolMatcher.new(false).to_be_falsy
+    puts "falsy_pass"
+  end
+  if OptionMatcher.new(true).not_to_be_nil
+    puts "not_nil_pass"
+  end
+  if OptionMatcher.new(false).to_be_nil
+    puts "nil_pass"
+  end
+end

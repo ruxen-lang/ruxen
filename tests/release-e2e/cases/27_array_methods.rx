@@ -1,0 +1,11 @@
+def main
+  let v = [1, 2, 3, 4]
+  for x in &v
+    puts "d #{x * 2}"
+  end
+  for x in &v
+    if x % 2 == 0
+      puts "e #{x}"
+    end
+  end
+end

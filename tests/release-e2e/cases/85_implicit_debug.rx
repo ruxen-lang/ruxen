@@ -1,0 +1,9 @@
+struct Pair
+  a: Int
+  b: Int
+end
+
+def main
+  let p = Pair.new(1, 2)
+  puts "#{p.a} #{p.b}"
+end

@@ -1,0 +1,7 @@
+module outer
+  module inner
+    def hi -> Int
+      1
+    end
+  end
+end

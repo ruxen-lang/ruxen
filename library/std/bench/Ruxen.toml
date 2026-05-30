@@ -1,0 +1,8 @@
+[package]
+name = "std-bench"
+version = "0.1.0"
+description = "Microbenchmark harness: Bencher class with auto-scaling iter + black_box opaque-identity intrinsic. Pure-Ruxen body; tiny C shim for the optimizer barrier only."
+
+[dependencies]
+std-core = "= 0.1.0"
+std-time = "= 0.1.0"

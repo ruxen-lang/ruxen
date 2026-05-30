@@ -1,0 +1,22 @@
+class Money
+  cents: Int
+
+  def init(@cents: Int)
+  end
+
+  include Display
+
+  def fmt(f: &var Formatter) -> Result[(), FmtError]
+    let _ = f.write_str("$")
+    f.write_str("#{self.cents}")
+  end
+end
+
+def main
+  let m = Money.new(4250)
+  puts "price: #{m}"
+  let n: Int = 7
+  puts "count: #{n}"
+  let b: Bool = true
+  puts "ok: #{b}"
+end

@@ -1,0 +1,118 @@
+## --- AsyncReadWithTimeoutFuture (v1-missing-features) --------------
+##
+## Wraps AsyncReadFuture's state machine plus a per-call deadline
+## timer. Resolves to:
+##   * Ok(String)              — bytes (incl. zero-length on clean EOF)
+##   * Err(IoError.<errno>)    — read(2) reported a real I/O error
+##   * Err(IoError.TimedOut)   — `timeout_ns` elapsed with no readiness
+##
+## Two registrations are live while the future is parked:
+##
+##   1. The PERSISTENT read-readiness registration owned by the parent
+##      AsyncTcpStream (installed at stream construction, see
+##      async_net.c::ruxen_async_tcp_stream_from_fd). park_current
+##      wakes on real bytes arriving — handled fully outside this
+##      future. We must NOT deregister it on drop.
+##
+##   2. A FRESH timer registered on first poll via
+##      ruxen_reactor_register_timer. THIS future owns the timer slot
+##      and is responsible for tearing it down (Ready or drop).
+##
+## Both registrations live in the same per-thread reactor, so
+## `park_current` returns as soon as EITHER fires; the next poll
+## resolves the race deterministically:
+##   - If ruxen_async_tcp_read_step returns 2/3 (data/error), the
+##     read won — return Ready with that result, deregister the timer.
+##   - If step returns 1 (EAGAIN), check the timer. If fired, return
+##     Ready(Err(TimedOut)). Otherwise stay Pending.
+## Step is checked first so a byte that arrived in the same wakeup
+## as the timer doesn't get silently dropped.
+##
+## State-struct lifecycle: on Ready-with-timeout we deliberately
+## bypass ruxen_async_tcp_read_state_take_result (it would consume
+## buffer + lose the unit-tag semantics we need for the message-
+## carrying TimedOut variant). The state is freed unconditionally
+## in `drop` via ruxen_async_tcp_read_state_free.
+class AsyncReadWithTimeoutFuture
+  state_ptr: Int
+  timer_handle: Int
+  read_handle: Int
+  timeout_ns: Int
+  done: Int
+  include Future
+  type Output = Result[String, IoError]
+
+  def init(fd: Int, max_bytes: Int, timeout_ns: Int, read_handle: Int)
+    self.state_ptr = ruxen_async_tcp_read_state_new(fd, max_bytes)
+    self.timer_handle = 0
+    self.read_handle = read_handle
+    self.timeout_ns = timeout_ns
+    self.done = 0
+  end
+
+  def var poll(cx: &var Context) -> Poll[Result[String, IoError]]
+    if self.done != 0
+      return Poll.Pending
+    end
+    # First poll: register the deadline timer with the per-thread
+    # reactor. We do this BEFORE the first step so a never-readable
+    # fd can't starve the timer registration. timeout_ns <= 0 still
+    # registers (the reactor treats sub-ms remaining as "fire ASAP"
+    # via timerfd's it_value); user code wanting a zero-timeout
+    # poll should call `read` directly.
+    if self.timer_handle == 0
+      self.timer_handle =
+        ruxen_reactor_register_timer(ruxen_reactor_current_handle(),
+                                     self.timeout_ns)
+    end
+    let w = cx.waker
+    ruxen_reactor_set_waker(ruxen_reactor_current_handle(), self.timer_handle, w)
+
+    let step = ruxen_async_tcp_read_step(self.state_ptr)
+    if step != 1
+      # Ready (step == 2 data / step == 3 error). Tear down the timer
+      # and return the read state's result.
+      let _drop_timer = self.discard_timer()
+      self.done = 1
+      return Poll.Ready(ruxen_async_tcp_read_state_take_result(self.state_ptr))
+    end
+
+    # step == 1 (EAGAIN). Check whether the timer has fired in the
+    # interim. If it has, the timeout wins this poll.
+    if ruxen_reactor_check_fired(ruxen_reactor_current_handle(), self.timer_handle) != 0
+      let _drop_timer = self.discard_timer()
+      self.done = 1
+      return Poll.Ready(ruxen_async_net_make_timeout_result())
+    end
+
+    # Neither side ready — park. park_current wakes on fd OR timer.
+    ruxen_reactor_set_waker(ruxen_reactor_current_handle(), self.read_handle, w)
+    Poll.Pending
+  end
+
+  ## Idempotent timer-deregister. Separate method so both the
+  ## ready-path and the drop-path share one teardown sequence.
+  ## Returns 0 (W3: `()` is not an expression).
+  def var discard_timer -> Int
+    if self.timer_handle != 0
+      ruxen_reactor_deregister(ruxen_reactor_current_handle(), self.timer_handle)
+      self.timer_handle = 0
+    end
+    0
+  end
+
+  def drop
+    # Order: timer first (it lives in the reactor slot table), then
+    # the read state (heap allocation owned by this future). The
+    # stream's persistent fd registration is NOT touched here — it
+    # outlives this future.
+    if self.timer_handle != 0
+      ruxen_reactor_deregister(ruxen_reactor_current_handle(), self.timer_handle)
+      self.timer_handle = 0
+    end
+    if self.state_ptr != 0
+      ruxen_async_tcp_read_state_free(self.state_ptr)
+      self.state_ptr = 0
+    end
+  end
+end

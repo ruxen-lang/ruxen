@@ -1,0 +1,4 @@
+def main
+  let s = "hello"
+  puts s
+end

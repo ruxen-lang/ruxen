@@ -1,0 +1,14 @@
+def main
+  let h = { "a" => 1, "b" => 2 }
+  if h.contains_key("a")
+    puts "has a"
+  else
+    puts "no a"
+  end
+  if h.contains_key("z")
+    puts "has z"
+  else
+    puts "no z"
+  end
+  puts "len=#{h.len}"
+end

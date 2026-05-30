@@ -1,0 +1,18 @@
+use std.test.Tester
+use std.test.Runner
+
+def main
+  let r = Runner.new("fixture.describe_it")
+  Runner.set_current(r.handle_addr)
+
+  Tester.describe("Calculator") do |t: &var Tester|
+    t.it("adds two numbers") do
+      t.expect(1 + 2).to_eq(3)
+    end
+    t.it("subtracts") do
+      t.expect(5 - 2).to_eq(3)
+    end
+  end
+
+  r.execute
+end

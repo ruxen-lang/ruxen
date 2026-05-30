@@ -1,0 +1,25 @@
+mixin Showable
+  def to_display -> String
+end
+
+class Tag
+  label: String
+
+  def init(@label: String)
+  end
+
+  include Showable
+
+  def to_display -> String
+    self.label.clone
+  end
+end
+
+def print_it(x: &some Showable)
+  puts "#{x.to_display}"
+end
+
+def main
+  let t = Tag.new(String.from("hi"))
+  print_it(&t)
+end

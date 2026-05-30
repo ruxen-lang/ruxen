@@ -1,0 +1,8 @@
+## Leading module docs.
+def thing -> Int
+  1
+end
+
+## Trailing doc comments after the last item, before EOF. These attach
+## to nothing and must not crash the top-level parser.
+## More trailing docs.

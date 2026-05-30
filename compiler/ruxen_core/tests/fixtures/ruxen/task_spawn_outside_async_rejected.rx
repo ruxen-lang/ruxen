@@ -1,0 +1,7 @@
+## Spec docs/specs/stdlib/task_spawn.spec.md §B7: `Task.spawn` called
+## from sync scope must be rejected with E1116. Polarity-inverted
+## twin of E1112 (block_on inside async).
+def main
+  let h = Task.spawn(0)
+  puts "unreachable"
+end

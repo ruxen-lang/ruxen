@@ -1610,82 +1610,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "riven-cli"
-version = "0.1.0"
-dependencies = [
- "ar",
- "clap",
- "riven-core",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "toml",
-]
-
-[[package]]
-name = "riven-core"
-version = "0.1.0"
-dependencies = [
- "cranelift-codegen",
- "cranelift-frontend",
- "cranelift-module",
- "cranelift-native",
- "cranelift-object",
- "inkwell",
- "proptest",
- "target-lexicon",
-]
-
-[[package]]
-name = "riven-ide"
-version = "0.1.0"
-dependencies = [
- "lsp-types",
- "riven-core",
-]
-
-[[package]]
-name = "riven-lsp"
-version = "0.1.0"
-dependencies = [
- "lsp-types",
- "riven-ide",
- "serde",
- "serde_json",
- "tokio",
- "tower-lsp",
-]
-
-[[package]]
-name = "riven-repl"
-version = "0.1.0"
-dependencies = [
- "cc",
- "cranelift-codegen",
- "cranelift-frontend",
- "cranelift-jit",
- "cranelift-module",
- "cranelift-native",
- "riven-core",
- "rustyline",
- "target-lexicon",
-]
-
-[[package]]
-name = "rivenc"
-version = "0.1.0"
-dependencies = [
- "criterion",
- "postcard",
- "rayon",
- "riven-core",
- "serde",
- "sha2",
- "tempfile",
-]
-
-[[package]]
 name = "rustc-hash"
 version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1751,6 +1675,98 @@ dependencies = [
  "unicode-width",
  "utf8parse",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "ruxen_cli"
+version = "0.1.0"
+dependencies = [
+ "ar",
+ "clap",
+ "ruxen_core",
+ "ruxen_lsp",
+ "ruxen_repl",
+ "ruxenc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
+name = "ruxen_core"
+version = "0.1.0"
+dependencies = [
+ "cranelift-codegen",
+ "cranelift-frontend",
+ "cranelift-module",
+ "cranelift-native",
+ "cranelift-object",
+ "inkwell",
+ "libc",
+ "proptest",
+ "regex-syntax",
+ "target-lexicon",
+]
+
+[[package]]
+name = "ruxen_driver"
+version = "0.1.0"
+dependencies = [
+ "ruxen_core",
+]
+
+[[package]]
+name = "ruxen_ide"
+version = "0.1.0"
+dependencies = [
+ "lsp-types",
+ "ruxen_core",
+]
+
+[[package]]
+name = "ruxen_lsp"
+version = "0.1.0"
+dependencies = [
+ "lsp-types",
+ "ruxen_cli",
+ "ruxen_ide",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-lsp",
+]
+
+[[package]]
+name = "ruxen_repl"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "cranelift-codegen",
+ "cranelift-frontend",
+ "cranelift-jit",
+ "cranelift-module",
+ "cranelift-native",
+ "libc",
+ "rustyline",
+ "ruxen_cli",
+ "ruxen_core",
+ "target-lexicon",
+]
+
+[[package]]
+name = "ruxenc"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "postcard",
+ "rayon",
+ "ruxen_cli",
+ "ruxen_core",
+ "serde",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]

@@ -1,0 +1,7 @@
+def main
+  var v: Array[Int] = Array.new
+  match v.pop
+    Some(_) -> puts "x"
+    nil     -> puts "y"
+  end
+end

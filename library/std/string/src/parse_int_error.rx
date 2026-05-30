@@ -1,0 +1,12 @@
+## ParseIntError / ParseFloatError — error classes returned by the
+## `String#parse_int` / `String#parse_float` Result. The class shells
+## are NOT in `register_builtins` (typeck constructs `Ty::Class { name:
+## "ParseIntError" }` on the fly), so anchor mode does not apply here —
+## these `class` decls register fresh DefKind::Class entries the
+## ordinary way. The single `message` method on each maps to the same
+## shared `ruxen_parse_error_message` runtime symbol.
+class ParseIntError
+  lib "runtime/string.c"
+    def message as "ruxen_parse_error_message" -> String
+  end
+end

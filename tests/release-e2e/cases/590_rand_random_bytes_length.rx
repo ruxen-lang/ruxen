@@ -1,0 +1,21 @@
+use std.rand.random_bytes
+
+# E2E smoke for std.rand.random_bytes: ask for 16 bytes and verify
+# the returned Vec has length 16. The full stuck-at / kind-check
+# behaviour is pinned in stdlib_rand.rs; this case proves the
+# free-fn lowers + links + executes end-to-end through the release
+# pipeline.
+def report(n: Int)
+  if n == 16
+    puts "len=ok"
+  else
+    puts "len=fail"
+  end
+end
+
+def main
+  match random_bytes(16)
+    Ok(buf) -> report(buf.len)
+    Err(_)  -> puts "err"
+  end
+end

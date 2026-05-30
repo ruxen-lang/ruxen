@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <radialGradient id="bg" cx="0.5" cy="0.6" r="0.85">
+      <stop offset="0" stop-color="#241712"/>
+      <stop offset="0.5" stop-color="#160f10"/>
+      <stop offset="1" stop-color="#0a080b"/>
+    </radialGradient>
+    <radialGradient id="forge" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ff8a1f" stop-opacity="0.95"/>
+      <stop offset="0.45" stop-color="#e85a16" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#e85a16" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="tbl" cx="0.42" cy="0.32" r="0.9">
+      <stop offset="0" stop-color="#ff9c80"/>
+      <stop offset="0.55" stop-color="#e0402f"/>
+      <stop offset="1" stop-color="#bb2113"/>
+    </radialGradient>
+    <linearGradient id="molten" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e8531f"/>
+      <stop offset="0.55" stop-color="#ff7a1c"/>
+      <stop offset="1" stop-color="#ffc457"/>
+    </linearGradient>
+    <radialGradient id="sheen" cx="0.4" cy="0.24" r="0.85">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.15"/>
+      <stop offset="0.55" stop-color="#ffffff" stop-opacity="0.03"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDev="7"/></filter>
+    <filter id="emberblur" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDev="1.5"/></filter>
+    <filter id="gemshadow" x="-40%" y="-40%" width="180%" height="190%">
+      <feDropShadow dx="0" dy="3" stdDev="3.5" flood-color="#000" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+
+  <rect x="0" y="0" width="128" height="128" rx="26" ry="26" fill="url(#bg)"/>
+
+  <!-- forge halo around the culet + rising embers -->
+  <ellipse cx="64.0" cy="92.0" rx="46" ry="30" fill="url(#forge)" filter="url(#soft)"/>
+  <g filter="url(#emberblur)">
+      <circle cx="38" cy="26" r="2.6" fill="#ffd070" opacity="0.95"/>
+      <circle cx="50" cy="12" r="1.7" fill="#ffb347" opacity="0.9"/>
+      <circle cx="80" cy="20" r="3.0" fill="#ff9a3d" opacity="0.85"/>
+      <circle cx="92" cy="36" r="1.9" fill="#ffc25a" opacity="0.9"/>
+      <circle cx="30" cy="46" r="1.5" fill="#ff8a3a" opacity="0.8"/>
+      <circle cx="98" cy="56" r="1.6" fill="#ffd070" opacity="0.8"/>
+      <circle cx="68" cy="9" r="1.3" fill="#ffe6a0" opacity="0.95"/>
+  </g>
+    <circle cx="50" cy="12" r="0.9" fill="#fff3d6" opacity="0.95"/>
+    <circle cx="80" cy="20" r="1.1" fill="#fff3d6" opacity="0.9"/>
+    <circle cx="68" cy="9" r="0.7" fill="#fff3d6" opacity="0.95"/>
+
+  <!-- the cut gem -->
+  <g filter="url(#gemshadow)">
+    <polygon points="17.00,51.00 46.00,51.00 64.00,114.00" fill="#bf4019" stroke="#470b05" stroke-width="0.8" stroke-linejoin="round"/>
+    <polygon points="46.00,51.00 82.00,51.00 64.00,114.00" fill="url(#molten)" stroke="#470b05" stroke-width="0.8" stroke-linejoin="round"/>
+    <polygon points="82.00,51.00 111.00,51.00 64.00,114.00" fill="#8d3414" stroke="#470b05" stroke-width="0.8" stroke-linejoin="round"/>
+    <polygon points="39.00,22.00 17.00,51.00 46.00,51.00" fill="#d83f30" stroke="#470b05" stroke-width="0.8" stroke-linejoin="round"/>
+    <polygon points="89.00,22.00 111.00,51.00 82.00,51.00" fill="#a31f14" stroke="#470b05" stroke-width="0.8" stroke-linejoin="round"/>
+    <polygon points="39.00,22.00 89.00,22.00 82.00,51.00 46.00,51.00" fill="url(#tbl)" stroke="#470b05" stroke-width="0.9" stroke-linejoin="round"/>
+    <!-- catch-light edges -->
+    <path d="M 39.00 22.00 L 89.00 22.00" stroke="#ffd9cf" stroke-opacity="0.5" stroke-width="0.9" fill="none" stroke-linecap="round"/>
+    <path d="M 39.00 22.00 L 17.00 51.00" stroke="#ffcebf" stroke-opacity="0.5" stroke-width="1.3" fill="none" stroke-linecap="round"/>
+    <polygon points="48.00,26.00 60.00,28.00 55.00,37.00 45.00,34.00" fill="#fff6ef" opacity="0.9"/>
+  </g>
+
+  <rect x="0" y="0" width="128" height="128" rx="26" ry="26" fill="url(#sheen)"/>
+</svg>

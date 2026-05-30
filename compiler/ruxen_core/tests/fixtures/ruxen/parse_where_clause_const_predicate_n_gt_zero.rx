@@ -1,0 +1,5 @@
+
+def take_pos[const N: USize](x: Int) -> Int
+where N > 0
+  x
+end

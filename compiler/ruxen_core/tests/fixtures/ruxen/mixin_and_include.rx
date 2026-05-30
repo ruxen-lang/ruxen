@@ -1,0 +1,17 @@
+
+mixin Greetable
+  def greet -> String
+end
+
+class Dog
+  name: String
+
+  def init(@name: String)
+  end
+
+  include Greetable
+
+  def greet -> String
+    "woof"
+  end
+end

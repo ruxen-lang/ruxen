@@ -1,0 +1,6 @@
+def main
+  var f = Formatter.new()
+  let _ = f.write_str("hello ")
+  let _ = f.write_str("world")
+  println(f.buffer())
+end

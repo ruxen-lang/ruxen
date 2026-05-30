@@ -1,0 +1,22 @@
+class Counter
+  count: Int
+
+  def init
+    self.count = 0
+  end
+
+  def value -> Int
+    self.count
+  end
+
+  def var inc
+    self.count = self.count + 1
+  end
+end
+
+def main
+  var c = Counter.new
+  c.inc
+  c.inc
+  puts "#{c.value}"
+end

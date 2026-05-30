@@ -1,0 +1,21 @@
+use std.fs.{write_atomic, read_to_string, remove_file}
+
+def main
+  match write_atomic("__FILE__", "first contents")
+    Ok(_)  -> puts "first_ok"
+    Err(_) -> puts "first_fail"
+  end
+  match read_to_string("__FILE__")
+    Ok(s)  -> puts "first=#{s}"
+    Err(_) -> puts "first_read_fail"
+  end
+  match write_atomic("__FILE__", "second")
+    Ok(_)  -> puts "second_ok"
+    Err(_) -> puts "second_fail"
+  end
+  match read_to_string("__FILE__")
+    Ok(s)  -> puts "second=#{s}"
+    Err(_) -> puts "second_read_fail"
+  end
+  let _ = remove_file("__FILE__")
+end

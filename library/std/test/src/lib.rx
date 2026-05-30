@@ -1,0 +1,15 @@
+## std::test — pure-Ruxen test framework (skeleton).
+##
+## Public surface ships in companion files (loaded via bootstrap order):
+##   tester.rx      — `class Tester` + describe/context/it/before/after
+##   matcher.rx     — `class Matcher[T]` + v1 matchers
+##   test_case.rx   — `class TestCase` (name + body + pending flag)
+##   runner.rx      — `class Runner` + current-runner slot + execute
+##
+## This file is the BOOTSTRAP entry; it carries one marker symbol so the
+## bootstrap pre-walk has something to register.
+class StdTestPackageMarker
+  marker: Int
+
+  def init { self.marker = 1 }
+end

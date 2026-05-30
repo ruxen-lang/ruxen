@@ -1,0 +1,18 @@
+enum MyOpt[T]
+  Has(T)
+  Empty
+end
+
+def describe(o: MyOpt[Int]) -> String
+  match o
+    MyOpt.Has(n)  -> "some #{n}"
+    MyOpt.Empty   -> String.from("none")
+  end
+end
+
+def main
+  let a = MyOpt.Has(42)
+  let b: MyOpt[Int] = MyOpt.Empty
+  puts "#{describe(a)}"
+  puts "#{describe(b)}"
+end

@@ -1,0 +1,10 @@
+def main
+  let closure = { || 42 }
+  let handle: Int = Thread.spawn_raw(closure)
+  if handle == 0
+    puts "spawn null"
+  else
+    let result: Int = JoinHandle.join_raw(handle)
+    puts "#{result}"
+  end
+end

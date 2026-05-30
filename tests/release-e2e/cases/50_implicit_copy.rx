@@ -1,0 +1,11 @@
+struct Point
+  x: Int
+  y: Int
+end
+
+def main
+  let a = Point.new(1, 2)
+  let b = a
+  puts "#{a.x} #{a.y}"
+  puts "#{b.x} #{b.y}"
+end

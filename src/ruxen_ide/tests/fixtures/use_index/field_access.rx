@@ -1,0 +1,12 @@
+class Point
+  px_anchor_qzx: Int
+  y: Int
+
+  def init(@px_anchor_qzx: Int, @y: Int)
+  end
+end
+
+def main
+  let p = Point.new(1, 2)
+  let v = p.px_anchor_qzx
+end

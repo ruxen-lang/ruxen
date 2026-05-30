@@ -1,0 +1,77 @@
+## Spec docs/specs/stdlib/task_spawn.spec.md §B1 / §B3 / §B4 e2e.
+##
+## Two CountdownFutures spawned via `Task.spawn_raw`, then each
+## joined via `Task.join(h).await`. The driver suspends back through
+## `block_on`'s outer pump loop on every await, so the spawned tasks
+## advance round-robin against the scheduler queue without any
+## hand-pumping inside the driver.
+##
+## This is the post-Gap-1, post-Gap-2 shape — what the original
+## hand-pump variant was deferring until the v1 missing-features
+## work landed:
+##   * Gap 1 (commit f899788): `Task.spawn_raw(fut)` is now
+##     recognised as a move-by-FFI handoff by drop elaboration —
+##     the local `f1` / `f2` bindings DON'T get a scope-exit drop
+##     emitted that would `ruxen_dealloc` the heap block out from
+##     under the scheduler.
+##   * Gap 2 (commit 7fc8a1e + 447e280): the Milestone-2B segmenter
+##     accepts pre-await statements (`let f1 = ...; let h1 =
+##     Task.spawn_raw(f1)`) before the first `.await`, and the
+##     MIR class-name parser for synth state-machine classes
+##     emits the correct class_info_ptr header shift so outer
+##     args read back correctly inside `init`.
+##
+## What this proves end-to-end:
+##   - Task.spawn_raw enqueues a future without polling it.
+##   - The block_on inline loop's pump call drives every queued
+##     task forward in round-robin order (no starvation), even
+##     across multiple `.await` suspends in the driver.
+##   - Task.join(handle).await yields the i64 payload after the
+##     spawned task transitions to Ready.
+##   - Two tasks completing both their N-step countdowns sum
+##     correctly: 11 + 22 == 33.
+
+class CountdownFuture
+  remaining: Int
+  payload: Int
+  include Future
+  type Output = Int
+
+  def init(n: Int, p: Int)
+    self.remaining = n
+    self.payload = p
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    if self.remaining == 0
+      Poll.Ready(self.payload)
+    else
+      self.remaining = self.remaining - 1
+      Poll.Pending
+    end
+  end
+end
+
+## Driver: spawn two countdowns, chain `Task.join(h).await` on both,
+## return their sum. Both spawn locals live in the pre-await prefix
+## (Gap 2 segmenter); the move-by-FFI handoff (Gap 1) keeps drop
+## elaboration from freeing the spawned futures while the scheduler
+## still owns them.
+async def driver -> Int
+  let f1 = CountdownFuture.new(3, 11)
+  let f2 = CountdownFuture.new(5, 22)
+  let h1 = Task.spawn_raw(f1)
+  let h2 = Task.spawn_raw(f2)
+  let v1 = Task.join(h1).await
+  let v2 = Task.join(h2).await
+  v1 + v2
+end
+
+def main
+  let total = block_on(driver())
+  if total == 33
+    puts "ok"
+  else
+    puts "fail"
+  end
+end

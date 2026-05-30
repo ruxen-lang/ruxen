@@ -1,0 +1,8 @@
+
+class Point
+  x: Int
+  y: Int
+
+  def init(@x: Int, @y: Int)
+  end
+end

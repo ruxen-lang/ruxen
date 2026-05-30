@@ -1,7 +1,13 @@
-src/**
-tsconfig.json
 .vscode/**
-.gitignore
+src/**
+scripts/**
 node_modules/**
+esbuild.js
+tsconfig.json
+.gitignore
+icon.svg
 **/*.ts
 **/*.map
+**/*.tsbuildinfo
+.vscodeignore
+*.vsix

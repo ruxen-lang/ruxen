@@ -1,0 +1,17 @@
+
+use std.fs.read_dir
+
+def or_empty(r: Result[Array[String], IoError]) -> Array[String]
+  match r
+    Ok(v)  -> v
+    Err(_) -> Array.new
+  end
+end
+
+def main
+  let entries = or_empty(read_dir("__DIR__"))
+  puts "len=#{entries.len}"
+  for name in entries
+    puts "name=#{name}"
+  end
+end

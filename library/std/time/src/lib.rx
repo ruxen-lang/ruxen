@@ -1,0 +1,67 @@
+## std::time — Duration + Instant class shells + unix_ns free fn.
+##
+## #06.8 T#20 follow-through: Duration and Instant now carry
+## class-body `lib "runtime/time.c"` blocks for every method that
+## previously lived in `codegen/runtime_table/mod.rs`. The
+## static-ctor fast path in `mir/lower/expr/method_call.rs` still
+## fires for `Duration.from_secs(5)` / `Instant.now()` — those keep
+## the existing 0-arg / 1-arg fast path semantics (no synthetic
+## self prepend) — but the callee resolution now goes through the
+## ffi_alias_map rewrite (added in T#14) rather than the
+## runtime_table lookup. Instance methods (`d.as_secs()`,
+## `i.elapsed()`) flow through the general method dispatch with
+## the same alias-map rewrite.
+##
+## `unix_ns` is wall-clock (nanoseconds since 1970-01-01 UTC) and
+## stays a bare Int-returning free fn until a `SystemTime` class
+## lands. The monotonic `now_ns` free fn previously exposed here
+## was removed in #06.5 T5.5 once `Instant.now` + `Instant.elapsed`
+## covered every use case — the `ruxen_time_now_ns` C symbol is
+## still linked (it backs `ruxen_instant_now`); it just is not
+## reachable from Ruxen user code.
+class Duration
+  nanos: Int
+
+  def as_nanos -> Int { self.nanos }
+
+  def as_micros -> Int { self.nanos / 1000 }
+
+  def as_millis -> Int { self.nanos / 1000000 }
+
+  def as_secs -> Int { self.nanos / 1000000000 }
+
+  lib "runtime/time.c"
+    def self.from_secs as "ruxen_duration_from_secs"(secs: Int) -> Int
+    def self.from_millis as "ruxen_duration_from_millis"(ms: Int) -> Int
+    def self.from_micros as "ruxen_duration_from_micros"(us: Int) -> Int
+    def self.from_nanos as "ruxen_duration_from_nanos"(ns: Int) -> Int
+    def add as "ruxen_duration_add"(other: Int) -> Int
+    def sub as "ruxen_duration_sub"(other: Int) -> Int
+  end
+end
+
+class Instant
+  lib "runtime/time.c"
+    def self.now as "ruxen_instant_now" -> Int
+    def elapsed as "ruxen_instant_elapsed" -> Int
+    def duration_since as "ruxen_instant_duration_since"(earlier: Int) -> Int
+    def sub as "ruxen_instant_sub"(other: Int) -> Int
+  end
+end
+
+# Constructor (no `self`).
+# Accessors.
+## std::time namespace class — Time.unix_ns wall-clock surface.
+## Phase C of #06.95. Duration / Instant remain separate classes
+## (they're value types, not namespace anchors). The bare `unix_ns`
+## lib block below is the transition shim while callers migrate.
+class Time
+  lib "runtime/time.c"
+    def self.unix_ns as "ruxen_time_unix_ns" -> Int
+  end
+end
+
+# Phase C transition shim — see comment on `class Time` above.
+lib "runtime/time.c"
+  def unix_ns as "ruxen_time_unix_ns" -> Int
+end

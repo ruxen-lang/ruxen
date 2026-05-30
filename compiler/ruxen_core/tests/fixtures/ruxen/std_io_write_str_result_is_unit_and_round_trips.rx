@@ -1,0 +1,18 @@
+use std.io.{stdout, stderr, Stdout, Stderr, IoError}
+
+def write_stdout(out: Stdout) -> Result[(), IoError]
+  out.write_str("hello stdout")
+end
+
+def write_stderr(err: Stderr) -> Result[(), IoError]
+  err.write_str("hello stderr")
+end
+
+def main
+  let out = stdout()
+  let err = stderr()
+  write_stdout(out).expect!("stdout write")
+  stdout().flush().expect!("stdout flush")
+  write_stderr(err).expect!("stderr write")
+  stderr().flush().expect!("stderr flush")
+end

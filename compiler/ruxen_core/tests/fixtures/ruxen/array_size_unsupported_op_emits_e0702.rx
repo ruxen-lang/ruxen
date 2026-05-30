@@ -1,0 +1,4 @@
+
+struct Buf
+  data: [Int; 5 % 2]
+end

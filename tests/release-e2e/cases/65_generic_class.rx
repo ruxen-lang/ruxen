@@ -1,0 +1,15 @@
+class Box[T]
+  value: T
+
+  def init(@value: T)
+  end
+
+  def get -> &T
+    &self.value
+  end
+end
+
+def main
+  let b = Box[Int].new(42)
+  puts "#{b.get}"
+end

@@ -1,0 +1,37 @@
+def label(k: IoErrorKind) -> String
+  match k
+    IoErrorKind.NotFound          -> "NotFound"
+    IoErrorKind.PermissionDenied  -> "PermissionDenied"
+    IoErrorKind.AlreadyExists     -> "AlreadyExists"
+    IoErrorKind.Interrupted       -> "Interrupted"
+    IoErrorKind.WouldBlock        -> "WouldBlock"
+    IoErrorKind.InvalidInput      -> "InvalidInput"
+    IoErrorKind.UnexpectedEof     -> "UnexpectedEof"
+    IoErrorKind.BrokenPipe        -> "BrokenPipe"
+    IoErrorKind.Other             -> "Other"
+    IoErrorKind.ConnectionRefused -> "ConnectionRefused"
+    IoErrorKind.ConnectionReset   -> "ConnectionReset"
+    IoErrorKind.ConnectionAborted -> "ConnectionAborted"
+    IoErrorKind.NotConnected      -> "NotConnected"
+    IoErrorKind.AddrInUse         -> "AddrInUse"
+    IoErrorKind.AddrNotAvailable  -> "AddrNotAvailable"
+    IoErrorKind.InvalidData       -> "InvalidData"
+    IoErrorKind.TimedOut          -> "TimedOut"
+    IoErrorKind.WriteZero         -> "WriteZero"
+    IoErrorKind.Unsupported       -> "Unsupported"
+    IoErrorKind.OutOfMemory       -> "OutOfMemory"
+  end
+end
+
+def main
+  let nf  = IoError.NotFound
+  let cr  = IoError.ConnectionRefused(message: "x")
+  let to  = IoError.TimedOut(message: "x")
+  let id  = IoError.InvalidData(message: "x")
+  let oom = IoError.OutOfMemory(message: "x")
+  puts label(nf.kind())
+  puts label(cr.kind())
+  puts label(to.kind())
+  puts label(id.kind())
+  puts label(oom.kind())
+end

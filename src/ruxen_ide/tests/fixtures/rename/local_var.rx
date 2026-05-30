@@ -1,0 +1,5 @@
+def main
+  let tally_anchor_kzx = 1
+  let a = tally_anchor_kzx + tally_anchor_kzx
+  let b = tally_anchor_kzx
+end

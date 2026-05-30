@@ -1,0 +1,10 @@
+def fmt_anchor_range_block_xyz
+  let a = 1
+  let b = 2
+  a + b
+end
+
+def main
+  let r = fmt_anchor_range_block_xyz
+  puts r
+end

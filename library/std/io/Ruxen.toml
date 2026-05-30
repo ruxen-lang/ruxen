@@ -1,0 +1,7 @@
+[package]
+name = "std-io"
+version = "0.1.0"
+description = "stdio + File + buffered IO + IoError"
+
+[dependencies]
+std-core = "= 0.1.0"

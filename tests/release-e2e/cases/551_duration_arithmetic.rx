@@ -1,0 +1,10 @@
+use std.time.Duration
+
+def main
+  let a = Duration.from_millis(750)
+  let b = Duration.from_millis(250)
+  let sum_op = a + b
+  let sum_named = a.add(b)
+  puts "op=#{sum_op.as_millis()}"
+  puts "named=#{sum_named.as_millis()}"
+end

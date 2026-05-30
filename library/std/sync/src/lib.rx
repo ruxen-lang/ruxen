@@ -1,0 +1,24 @@
+## std::sync — thread / Mutex / SharedSync surface (partial).
+##
+## Wave 2 (#06.8) — 9 class shells migrated from Rust registrations
+## (Thread, ThreadId, JoinHandle[T: Send], Mutex[T], MutexGuard[T],
+## SharedSync[T], PoisonError, ThreadPanic, plus Context / Waker
+## from std::task). Methods on every shell still flow through the
+## runtime_table mangled-name dispatch until T#21 lands.
+##
+## Phase D-2 of #06.95 deleted the Rust-side `Arc[T]` backward-compat
+## alias entirely — `SharedSync[T]` is the only canonical name
+## (TEC-13 / §10a) and Arc has no remaining call sites in the tree.
+## The Rust-side `ThreadId` value-scope shim was also deleted;
+## fixtures only use `ThreadId` as a type, never as a sentinel
+## value, so the `class ThreadId end` bootstrap-loaded registration
+## below is the complete surface.
+##
+## Context / Waker historically lived here as empty shells indexed
+## under `std.sync.{Context, Waker}`. The async sub-phase 1 (see
+## docs/specs/stdlib/async.spec.md B3 + B10) moved them into the
+## dedicated `library/std/future/` package alongside the Future
+## mixin and Poll enum — that's where their real lib decls /
+## runtime/executor.c land. No call sites referenced the old empty
+## shells (they were aspirational), so no transition shim is
+## needed.

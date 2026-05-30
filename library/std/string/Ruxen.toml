@@ -1,0 +1,7 @@
+[package]
+name = "std-string"
+version = "0.1.0"
+description = "String method anchor + string runtime"
+
+[dependencies]
+std-core = "= 0.1.0"

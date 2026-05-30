@@ -1,0 +1,12 @@
+def main
+  let v = [1, 2, 3, 4, 5, 6]
+  let (evens, odds) = v.iter.partition { |n| n % 2 == 0 }
+  puts "evens=#{evens.len}"
+  puts "odds=#{odds.len}"
+  for e in &evens
+    puts "e=#{e}"
+  end
+  for o in &odds
+    puts "o=#{o}"
+  end
+end

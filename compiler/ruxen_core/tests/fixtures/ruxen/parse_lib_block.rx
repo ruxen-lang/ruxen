@@ -1,0 +1,4 @@
+lib LibM
+  def sin(x: Float64) -> Float64
+  def cos(x: Float64) -> Float64
+end

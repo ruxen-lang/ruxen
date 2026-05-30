@@ -1,0 +1,48 @@
+## Spec B7-B10 (docs/specs/syntax/async_lowering.spec.md Milestone 2B):
+## an `async def` with one or more `.await` calls lowers to a
+## multi-state Future state machine. Per spec B5 the v1 lowering
+## returns Poll.Pending between states (no eager fall-through), so
+## the driver polls 3 times: state 0 → Pending after make_int Ready,
+## state 1 → Pending after make_other Ready, state 2 → Ready(77).
+##
+## This fixture pins:
+##   B7 — `.await` desugars to a poll-match-and-suspend at each site.
+##   B8 — locals (a, b) bound to `.await` results survive across
+##        the intermediate suspend by becoming fields on the state
+##        machine.
+##   B9 — `self.__state` dispatches between arms.
+##   B10 — two `.await`s ⇒ three states (state 0, state 1, terminal
+##         Ready fold inside state 1's continuation).
+
+async def make_int() -> Int
+  42
+end
+
+async def make_other() -> Int
+  35
+end
+
+async def chain() -> Int
+  let a = make_int().await
+  let b = make_other().await
+  a + b
+end
+
+def main
+  var fut = chain()
+  var ctx = Context.test_dummy
+  var result = 0
+  match (&var fut).poll(&var ctx)
+    Poll.Ready(v) -> result = v
+    Poll.Pending -> result = result
+  end
+  match (&var fut).poll(&var ctx)
+    Poll.Ready(v) -> result = v
+    Poll.Pending -> result = result
+  end
+  match (&var fut).poll(&var ctx)
+    Poll.Ready(v) -> result = v
+    Poll.Pending -> result = result
+  end
+  puts "#{result}"
+end

@@ -1,0 +1,11 @@
+def main
+  let h = { "a" => 1, "b" => 2 }
+  match h.get("a")
+    Some(v) -> puts "a=#{v}"
+    nil     -> puts "a=missing"
+  end
+  match h.get("b")
+    Some(v) -> puts "b=#{v}"
+    nil     -> puts "b=missing"
+  end
+end

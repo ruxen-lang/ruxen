@@ -1,0 +1,37 @@
+use std.fs.{write, metadata, remove_file}
+
+def describe(m: Metadata)
+  if m.is_file
+    puts "is_file=true"
+  else
+    puts "is_file=false"
+  end
+  if m.is_dir
+    puts "is_dir=true"
+  else
+    puts "is_dir=false"
+  end
+  if m.is_symlink
+    puts "is_symlink=true"
+  else
+    puts "is_symlink=false"
+  end
+  if m.len > 0
+    puts "len_positive"
+  else
+    puts "len_zero"
+  end
+end
+
+def main
+  write("/tmp/ruxen_e2e_507_metadata.txt", "0123456789").expect!("write")
+  match metadata("/tmp/ruxen_e2e_507_metadata.txt")
+    Ok(m)  -> describe(m)
+    Err(_) -> puts "unexpected_err"
+  end
+  match metadata("/no/such/path/ever/exists/here")
+    Ok(_)  -> puts "unexpectedly_ok"
+    Err(_) -> puts "missing_err_ok"
+  end
+  remove_file("/tmp/ruxen_e2e_507_metadata.txt").expect!("remove")
+end

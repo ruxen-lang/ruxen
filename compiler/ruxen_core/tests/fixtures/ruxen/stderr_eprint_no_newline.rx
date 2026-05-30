@@ -1,0 +1,7 @@
+
+def main
+  let err = stderr()
+  err.eprint("a")
+  err.eprint("b")
+  err.eprintln("c")
+end

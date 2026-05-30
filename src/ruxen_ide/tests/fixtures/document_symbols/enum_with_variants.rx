@@ -1,0 +1,8 @@
+## Document-symbols fixture — an enum with three unit variants. The
+## enum becomes an ENUM parent; variants are ENUM_MEMBER children.
+
+enum Color
+  Red
+  Green
+  Blue
+end

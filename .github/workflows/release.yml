@@ -61,19 +61,21 @@ jobs:
         shell: bash
         run: |
           cargo test --release --target ${{ matrix.target }} \
-            -p rivenc   --test installed_binary \
-            -p riven-cli --test installed_pkg_manager \
-            -p riven-repl --test installed_repl
+            -p ruxenc   --test installed_binary \
+            -p ruxen_cli --test installed_pkg_manager \
+            -p ruxen_repl --test installed_repl
 
-      - name: Build release binaries
+      - name: Build release binary
         shell: bash
         run: |
+          # One binary ships: `ruxen`. Building `-p ruxen_cli` transitively
+          # builds ruxenc / ruxen_lsp / ruxen_repl as libraries (they no
+          # longer produce their own bins; everything routes through
+          # `ruxen <subcommand>`).
           if [ "${{ matrix.cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }} \
-              -p riven-cli -p rivenc -p riven-lsp -p riven-repl
+            cross build --release --target ${{ matrix.target }} --bin ruxen
           else
-            cargo build --release --target ${{ matrix.target }} \
-              -p riven-cli -p rivenc -p riven-lsp -p riven-repl
+            cargo build --release --target ${{ matrix.target }} --bin ruxen
           fi
 
       - name: Stage artifacts
@@ -81,23 +83,25 @@ jobs:
         run: |
           TAG="${{ steps.tag.outputs.tag }}"
           TARGET="${{ matrix.target }}"
-          NAME="riven-${TAG}-${TARGET}"
+          NAME="ruxen-${TAG}-${TARGET}"
           STAGE="dist/${NAME}"
           mkdir -p "${STAGE}/bin"
 
           BIN_DIR="target/${TARGET}/release"
-          for bin in riven rivenc riven-lsp riven-repl; do
-            if [ -f "${BIN_DIR}/${bin}" ]; then
-              cp "${BIN_DIR}/${bin}" "${STAGE}/bin/${bin}"
-              chmod +x "${STAGE}/bin/${bin}"
-            fi
-          done
+          cp "${BIN_DIR}/ruxen" "${STAGE}/bin/ruxen"
+          chmod +x "${STAGE}/bin/ruxen"
 
           cp README.md LICENSE* "${STAGE}/" 2>/dev/null || true
 
-          # Include runtime C file so users with LLVM/Cranelift can link against it.
+          # Ship the prebuilt C runtime archive. The `ruxen_cli` build
+          # script copies `libruxenrt.a` next to the binary at
+          # target/${TARGET}/release/; install.sh maps the staged `lib/`
+          # tree onto `<install>/lib/` verbatim, so an installed toolchain
+          # links AOT binaries without recompiling the runtime `.c`.
+          # (Replaces the pre-#06.95 `library/runtime/` copy, a path that
+          # no longer exists — the real tree is `library/std/*/runtime/`.)
           mkdir -p "${STAGE}/lib"
-          cp crates/riven-core/runtime/runtime.c "${STAGE}/lib/runtime.c"
+          cp "target/${TARGET}/release/libruxenrt.a" "${STAGE}/lib/libruxenrt.a"
 
           tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"
           (cd dist && shasum -a 256 "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256")
@@ -105,8 +109,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: riven-${{ matrix.target }}
-          path: dist/riven-*.tar.gz*
+          name: ruxen-${{ matrix.target }}
+          path: dist/ruxen-*.tar.gz*
 
   release:
     name: Publish release
@@ -135,9 +139,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
-          name: Riven ${{ steps.tag.outputs.tag }}
+          name: Ruxen ${{ steps.tag.outputs.tag }}
           generate_release_notes: true
           files: |
-            dist/riven-*.tar.gz
-            dist/riven-*.tar.gz.sha256
+            dist/ruxen-*.tar.gz
+            dist/ruxen-*.tar.gz.sha256
             install.sh
