@@ -7,6 +7,8 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-05-30
+
 ### Added
 - **Prebuilt C runtime archive.** The stdlib C runtime is no longer recompiled
   on every AOT build: a prebuilt `libruxenrt.a` ships to `~/.ruxen/lib/` and is
@@ -1383,7 +1385,6 @@ once 1.0.0 ships.
   path; actors are deferred to v2 as a library, then language v2.0.
   `async` / `await` remain reserved for Phase 4. (P0.12)
 
-## [0.1.0] — 2026-04-23
-
-Initial public preview. See `docs/requirements/ROADMAP.md` for the
-roadmap to 1.0.
+### Notes
+- Initial public preview was first cut 2026-04-23 and is folded into this
+  0.1.0 release. See `docs/requirements/ROADMAP.md` for the roadmap to 1.0.
