@@ -40,7 +40,9 @@
  * -1 on hard failure (errno preserved). open(2) surfaces ENOENT if the
  * device node is missing so the caller's IoError classifier picks
  * NotFound. Used as the Linux getrandom(2) fallback and the generic
- * Unix path. */
+ * Unix path; macOS routes through SecRandomCopyBytes and never calls
+ * this, so we omit it under -Werror,-Wunused-function. */
+#if !defined(__APPLE__)
 static int ruxen_rand_fill_urandom(unsigned char *out, size_t len) {
     int fd = open("/dev/urandom", O_RDONLY);
     if (fd < 0) return -1;
@@ -65,6 +67,7 @@ static int ruxen_rand_fill_urandom(unsigned char *out, size_t len) {
     (void)close(fd);
     return 0;
 }
+#endif /* !__APPLE__ */
 
 /* Fill `out` with `len` bytes from the kernel CSPRNG. Returns 0 on
  * success, -1 on hard failure (caller maps to IoError.Other). The
