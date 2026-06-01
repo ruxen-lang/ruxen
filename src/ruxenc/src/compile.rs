@@ -176,10 +176,15 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // compiled to its own `.o` (post-#06.95 Phase B-2 standalone
     // translation units) and linked individually, preserving the
     // dead-code elimination the production binaries depend on.
-    let prebuilt_archive: Option<std::path::PathBuf> = std::env::var("RUXEN_RUNTIME_AR")
-        .ok()
-        .map(std::path::PathBuf::from)
-        .filter(|p| p.is_file());
+    // Prefer a prebuilt `libruxenrt.a` so we skip ~30 `cc -c` forks of the
+    // stdlib runtime C sources on every single-file compile (the dominant
+    // cost — e.g. `ruxen test` recompiled the runtime once per test file).
+    // `find_prebuilt_runtime_archive` checks `RUXEN_RUNTIME_AR` first, then
+    // the installed `<exe>/../lib/libruxenrt.a` (~/.ruxen/lib/), so an
+    // installed toolchain gets the fast path automatically. Falls back to
+    // compiling the runtime sources only when no archive is found.
+    let prebuilt_archive: Option<std::path::PathBuf> =
+        ruxen_core::codegen::find_prebuilt_runtime_archive();
 
     let runtime_objects: Vec<std::path::PathBuf> = if prebuilt_archive.is_some() {
         Vec::new()
