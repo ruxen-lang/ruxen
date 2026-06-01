@@ -121,6 +121,15 @@ fn main() {
         build.flag_if_supported("-Wno-implicit-fallthrough");
     }
 
+    // Pin a single macOS deployment target so the runtime objects in
+    // libruxenrt.a carry the same build-version (11.0) as the Cranelift
+    // objects (LC_BUILD_VERSION) and the final link. Without this, cc
+    // stamps the current SDK (e.g. 26.4) and ld warns the prebuilt
+    // archive was "built for a newer macOS version than being linked".
+    if cfg!(target_os = "macos") {
+        build.flag("-mmacosx-version-min=11.0");
+    }
+
     build.compile("ruxenrt");
 
     println!("cargo:rustc-link-search=native={out_dir}");

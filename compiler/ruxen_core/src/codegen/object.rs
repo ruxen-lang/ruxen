@@ -53,6 +53,12 @@ pub fn compile_runtime(runtime_c_path: &Path, sanitize: bool) -> Result<PathBuf,
     let mut cmd = Command::new("cc");
     cmd.arg("-c").arg(runtime_c_path).arg("-o").arg(&runtime_o);
 
+    // Pin the macOS deployment target to match libruxenrt.a's prebuilt
+    // objects (ruxen_repl/build.rs), the Cranelift LC_BUILD_VERSION, and
+    // the link — all 11.0 — so ld never reports a version skew.
+    #[cfg(target_os = "macos")]
+    cmd.arg("-mmacosx-version-min=11.0");
+
     if sanitize {
         cmd.arg("-fsanitize=address,undefined")
             .arg("-g")
@@ -155,6 +161,11 @@ pub fn emit_executable(
         cmd.arg(runtime_o);
     }
     cmd.arg("-o").arg(output_path);
+    // Match the deployment target of every input object (11.0) so the link
+    // target isn't the lower OS-major default, which makes ld flag the
+    // prebuilt archive as "built for a newer macOS version".
+    #[cfg(target_os = "macos")]
+    cmd.arg("-mmacosx-version-min=11.0");
 
     for arg in linker_args(sanitize, extra_link_flags) {
         cmd.arg(arg);

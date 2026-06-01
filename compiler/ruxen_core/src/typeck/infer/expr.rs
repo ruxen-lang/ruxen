@@ -512,7 +512,39 @@ impl<'a> InferenceEngine<'a> {
                             self.check_concurrency_bounds(&param_ty, &arg.ty, &arg.span);
                         }
                         let ret = self.wrap_async_return(&signature);
-                        self.substitute_generics_in_return(&derefed, &ret)
+                        // First substitute the receiver's generic args
+                        // (handles `MutexGuard[T]` from `Mutex[Int].lock_raw`).
+                        let mut ret = self.substitute_generics_in_return(&derefed, &ret);
+                        // Then, for a method that declares its OWN type params
+                        // (`def expect[T](actual: T) -> Matcher[T]`), harvest
+                        // `{T → concrete}` from the actual argument types and
+                        // substitute into the return type — the same binding
+                        // the FnCall path does for free generic functions.
+                        // The receiver-based substitution above can't bind the
+                        // method's own params, so `expect(aString)` previously
+                        // returned `Matcher[T]` instead of `Matcher[String]`.
+                        if !signature.generic_params.is_empty() {
+                            let param_names: std::collections::HashSet<String> = signature
+                                .generic_params
+                                .iter()
+                                .map(|gp| gp.name.clone())
+                                .collect();
+                            let mut bindings: std::collections::HashMap<String, Ty> =
+                                std::collections::HashMap::new();
+                            for (arg, param) in args.iter().zip(&signature.params) {
+                                let actual = self.ctx.resolve(&arg.ty);
+                                Self::bind_type_params_from_args(
+                                    &param_names,
+                                    &param.ty,
+                                    &actual,
+                                    &mut bindings,
+                                );
+                            }
+                            if !bindings.is_empty() {
+                                ret = Self::subst_ty(&ret, &bindings);
+                            }
+                        }
+                        ret
                     } else {
                         self.ctx.fresh_type_var()
                     }
@@ -617,7 +649,43 @@ impl<'a> InferenceEngine<'a> {
                                 self.check_concurrency_bounds(&param.ty, &arg.ty, &arg.span);
                             }
                         }
-                        expr.ty = self.wrap_async_return(&signature);
+                        // Generic free-function call inference: when the
+                        // function declares its own type params (e.g.
+                        // `expect[T](actual: T) -> Matcher[T]`), harvest
+                        // `{T → concrete}` bindings by matching each formal
+                        // param type against the resolved actual arg type,
+                        // then substitute into the declared return type so
+                        // the call expression's type becomes concrete
+                        // (`Matcher[String]`). Without this the return type
+                        // keeps `TypeParam{T}` and the concrete type never
+                        // reaches MIR, so binop / Display over a `T` field
+                        // can't dispatch. Type params NOT determined by an
+                        // argument (return-only / turbofish) stay free —
+                        // `bind_type_params_from_args` skips Infer/TypeParam
+                        // actuals — preserving existing behaviour.
+                        let mut base_ty = self.wrap_async_return(&signature);
+                        if !signature.generic_params.is_empty() {
+                            let param_names: std::collections::HashSet<String> = signature
+                                .generic_params
+                                .iter()
+                                .map(|gp| gp.name.clone())
+                                .collect();
+                            let mut bindings: std::collections::HashMap<String, Ty> =
+                                std::collections::HashMap::new();
+                            for (arg, param) in args.iter().zip(&signature.params) {
+                                let actual = self.ctx.resolve(&arg.ty);
+                                Self::bind_type_params_from_args(
+                                    &param_names,
+                                    &param.ty,
+                                    &actual,
+                                    &mut bindings,
+                                );
+                            }
+                            if !bindings.is_empty() {
+                                base_ty = Self::subst_ty(&base_ty, &bindings);
+                            }
+                        }
+                        expr.ty = base_ty;
                     }
                 }
             }

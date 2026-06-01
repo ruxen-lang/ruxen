@@ -512,7 +512,24 @@ pub fn build(
     }
 
     // ─── Persist the manifest ────────────────────────────────────────
+    // Carry forward prior entries for files NOT part of this invocation.
+    // The manifest is shared per (target, flags), but callers may build
+    // subsets across SEPARATE `build()` calls — e.g. `ruxen test` compiles
+    // each test file in its own single-file invocation. Without preserving
+    // the others' entries, each invocation would clobber the manifest down
+    // to just its own file, so every file would miss the cache on the next
+    // run (the symptom: a warm `ruxen test` recompiling everything). Stale
+    // carried-over entries self-heal: the cache-hit check re-verifies the
+    // object exists on disk and recompiles if not.
     let mut new_manifest = CacheManifest::empty(&options.target, &options.flags);
+    let current_paths: HashSet<&str> = items.iter().map(|it| it.source.path.as_str()).collect();
+    if let Some(prior_m) = &prior {
+        for f in &prior_m.files {
+            if !current_paths.contains(f.path.as_str()) {
+                new_manifest.files.push(f.clone());
+            }
+        }
+    }
     for item in &items {
         if let Some(entry) = item.prior.clone() {
             new_manifest.files.push(entry);

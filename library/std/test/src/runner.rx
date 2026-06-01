@@ -1,3 +1,5 @@
+use std.env.get
+
 ## std.test.Runner — accumulates pass/fail/pending counts for one test file.
 ##
 ## Constructed by the synthesised `def main` (see ruxen test in
@@ -5,22 +7,82 @@
 ## process-static C slot before any `Tester.describe` calls so that
 ## `Tester#it` can find and mutate the active runner's counts directly.
 ## Execution is eager (immediate) — no deferred group tree is built.
+##
+## Per-test reporting: as each `it`/`xit` runs, the Tester appends to
+## `self.report` (in-memory, parent-side — no per-test I/O, no fork/stdio
+## duplication). `execute` emits the whole report once, on stderr, so it
+## survives the runner's per-file stdout capture. `report_mode` is read
+## from `RUXEN_TEST_FORMAT` (set by the `ruxen test` runner per spawn):
+##   1 = progress (RSpec-style dots: `.` pass, `F` fail, `*` pending)
+##   2 = documentation (group name + `✓`/`✗`/`-` per case)
+##   0 = quiet (tap/json renderers own the output)
 class Runner
   passed: Int
   failed: Int
   pending: Int
   name: String
+  report_mode: Int
+  report: String
 
   def init(test_path: &String)
     self.passed = 0
     self.failed = 0
     self.pending = 0
     self.name = test_path.clone
+    self.report = ""
+    let fmt = match get(&String.from(&"RUXEN_TEST_FORMAT"))
+      Ok(v)  -> v
+      Err(_) -> String.from(&"progress")
+    end
+    self.report_mode = match fmt
+      "documentation" -> 2
+      "progress"      -> 1
+      _               -> 0
+    end
   end
 
   def handle_addr -> Int { Runner.self_addr(self) }
 
+  def var note_group(name: &String)
+    if self.report_mode == 2
+      self.report = self.report + name.clone + "\n"
+    end
+  end
+
+  def var note_pass(name: &String)
+    if self.report_mode == 1
+      self.report = self.report + "."
+    else
+      if self.report_mode == 2
+        self.report = self.report + "  ✓ " + name.clone + "\n"
+      end
+    end
+  end
+
+  def var note_fail(name: &String)
+    if self.report_mode == 1
+      self.report = self.report + "F"
+    else
+      if self.report_mode == 2
+        self.report = self.report + "  ✗ " + name.clone + "\n"
+      end
+    end
+  end
+
+  def var note_pending(name: &String)
+    if self.report_mode == 1
+      self.report = self.report + "*"
+    else
+      if self.report_mode == 2
+        self.report = self.report + "  - " + name.clone + " (pending)\n"
+      end
+    end
+  end
+
   def execute -> ()
+    if self.report.len() > 0
+      eputs "#{self.report}"
+    end
     puts("#{self.passed} passed, #{self.failed} failed, #{self.pending} pending")
   end
 

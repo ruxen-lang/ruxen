@@ -23,6 +23,7 @@ mod function;
 mod impl_block;
 mod interpolation;
 mod match_arms;
+mod monomorphize;
 mod statement;
 mod trait_default;
 mod type_helpers;
@@ -114,6 +115,19 @@ pub struct Lowerer<'a> {
     /// rewrite the linker would resolve the call to the wrong symbol
     /// (or fail outright if no `add_one` C symbol exists).
     ffi_alias_map: HashMap<String, String>,
+    /// Generic-class monomorphization (option 1): eligible generic classes
+    /// keyed by class name. Populated by `collect_mono_instances`; an entry
+    /// exists only for a user-defined generic class with ≥1 user method and
+    /// NO FFI `lib` methods (so `Mutex[T]` & friends are excluded).
+    mono_classes: HashMap<String, crate::hir::nodes::HirClassDef>,
+    /// Class name → distinct fully-concrete generic-arg vectors seen at use
+    /// sites (e.g. `Matcher` → `[[String], [Int], [Bool]]`).
+    mono_instances: HashMap<String, Vec<monomorphize::MonoKey>>,
+    /// Monomorphized bases actually emitted (`Box__mono__String`, …). A
+    /// call/construct site is redirected to a specialized callee only when
+    /// its receiver instantiation's base is in this set — otherwise the
+    /// opaque `{Class}_{method}` fallback is kept.
+    mono_emitted: HashSet<String>,
 }
 
 /// A captured variable's storage inside the captures struct.
@@ -180,6 +194,9 @@ impl<'a> Lowerer<'a> {
             captures_ptr_local: None,
             initialized_heap_locals: HashSet::new(),
             ffi_alias_map: HashMap::new(),
+            mono_classes: HashMap::new(),
+            mono_instances: HashMap::new(),
+            mono_emitted: HashSet::new(),
         }
     }
 
@@ -498,6 +515,12 @@ impl<'a> Lowerer<'a> {
         // monomorphise missing methods into a concrete {Type}_{method}.
         self.collect_trait_default_methods(program);
 
+        // Generic-class monomorphization (option 1): record every concrete
+        // instantiation of an eligible generic class so binop / Display
+        // lowering over a type parameter resolves to the concrete type.
+        // FFI-shell generic classes (`Mutex[T]`, …) are excluded here.
+        self.collect_mono_instances(program);
+
         // Collect `const` initializer expressions so references are
         // substituted with the RHS value at every use site.
         self.collect_const_values(program);
@@ -540,6 +563,14 @@ impl<'a> Lowerer<'a> {
         }
 
         self.lower_items(&program.items, &mut mir, &[])?;
+
+        // Generic-class monomorphization (option 1): emit a specialized MIR
+        // copy of every user-defined method (incl. `init`) of each eligible
+        // generic class, once per recorded concrete instantiation. Must run
+        // after `lower_items` so the opaque fallback bodies and the symbol
+        // table are already in place. Call sites are redirected to these
+        // specialized callees in `method_call.rs` via `mono_base_for_ty`.
+        self.emit_mono_instances(&mut mir)?;
 
         // Emit the primitive Display::fmt synth functions unconditionally
         // (Phase 2 #06.D2.S1). These are program-level, not per-use.

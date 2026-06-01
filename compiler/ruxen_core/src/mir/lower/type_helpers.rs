@@ -307,6 +307,21 @@ impl<'a> Lowerer<'a> {
     /// shape (e.g. `Ty::Unit` self placeholder, empty shift).
     pub(super) fn class_name_from_mangled(&self, mangled: &str) -> Option<String> {
         use crate::resolve::symbols::DefKind;
+        // Generic-class monomorphization: a specialized body is named
+        // `Base__mono__Args_method`. Strip the `__mono__Args` segment so the
+        // prefix walk below sees the original `Base` (or its dotted form)
+        // and recovers the receiver class for self-type derivation.
+        if let Some(base) = crate::mir::lower::monomorphize::strip_mono_suffix(mangled) {
+            for def in self.symbols.iter() {
+                if matches!(
+                    &def.kind,
+                    DefKind::Class { .. } | DefKind::Struct { .. } | DefKind::Enum { .. }
+                ) && (def.name == base || def.name.replace('.', "_") == base)
+                {
+                    return Some(def.name.clone());
+                }
+            }
+        }
         let mut end = mangled.len();
         while let Some(pos) = mangled[..end].rfind('_') {
             let candidate = &mangled[..pos];

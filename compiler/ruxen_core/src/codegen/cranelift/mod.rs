@@ -325,7 +325,26 @@ impl CodeGen {
 
     /// Emit the finished object file as raw bytes.
     pub fn finish(self) -> Result<Vec<u8>, String> {
-        let product = self.module.finish();
+        #[allow(unused_mut)]
+        let mut product = self.module.finish();
+        // macOS: stamp an `LC_BUILD_VERSION` load command on the emitted
+        // Mach-O object. Cranelift/`object` omit it by default, so Apple's
+        // linker prints `warning: no platform load command found in
+        // '<obj>', assuming: macOS` for every object on every link. Adding
+        // the command (platform=macOS, a conservative 11.0 min/SDK) makes
+        // the platform explicit and silences the warning. Native builds
+        // target the host, so gating on the macOS host is correct; the
+        // setter is a no-op for non-Mach-O output anyway.
+        #[cfg(target_os = "macos")]
+        {
+            use cranelift_object::object::macho::PLATFORM_MACOS;
+            use cranelift_object::object::write::MachOBuildVersion;
+            let mut build_version = MachOBuildVersion::default();
+            build_version.platform = PLATFORM_MACOS;
+            build_version.minos = 0x000B_0000; // 11.0.0
+            build_version.sdk = 0x000B_0000; // 11.0.0
+            product.object.set_macho_build_version(build_version);
+        }
         let bytes = product
             .emit()
             .map_err(|e| format!("Failed to emit object: {}", e))?;

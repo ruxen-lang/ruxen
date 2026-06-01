@@ -18,6 +18,11 @@ class Tester
   end
 
   def self.describe(name: &String, body: any Fn[Fn(&var Tester) -> ()]) -> ()
+    let addr = Runner.get_current
+    if addr != 0
+      let r = Runner.from_handle(addr)
+      r.note_group(name)
+    end
     var root = Tester.new(name)
     body.(&var root)
   end
@@ -61,8 +66,10 @@ class Tester
     let r = Runner.from_handle(runner_addr)
     if pass_bit == 1
       r.passed = r.passed + 1
+      r.note_pass(name)
     else
       r.failed = r.failed + 1
+      r.note_fail(name)
     end
   end
 
@@ -101,6 +108,7 @@ class Tester
     end
     let r = Runner.from_handle(runner_addr)
     r.pending = r.pending + 1
+    r.note_pending(name)
   end
 
   def expect[T](actual: T) -> Matcher[T] { Matcher.new(actual) }

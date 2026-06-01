@@ -1,11 +1,26 @@
 ## std.test.Matcher[T] — value wrapper returned by `Tester#expect(x)`.
 ##
-## v1 matchers are pure-boolean: `to_eq` / `not_to_eq` etc. return Bool;
-## the Tester layer turns a `false` into a `ruxen_panic` with a
-## structured message the Runner parent decodes.
+## Every matcher that detects a failed expectation does two things:
+##   1. prints a one-line `expected … got …` diagnostic to stdout, which
+##      the Runner parent surfaces under `--- <file> ---` on failure
+##      (see `run_one` / the failure-reporting block in
+##      `src/ruxenc/src/test_runner.rs`), and
+##   2. calls `Runner.case_mark_failed` so the forked case exits non-zero.
+##
+## The boolean / option / array / string matchers still RETURN their Bool
+## result (callers like the compiler fixtures branch on it with `if`), but
+## a `false` result now also marks the case failed instead of being a
+## silent no-op.
 ##
 ## Equality matchers require `T: PartialEq`. Non-PartialEq types fail
 ## typeck at the call site (correct — surfaces the constraint early).
+## NOTE: for a non-primitive type parameter `T` (e.g. `String`), the
+## generic `==`/`!=` and `#{}` operations do not yet dispatch to the
+## concrete type's `PartialEq`/`Display` — they fall back to the uniform
+## word representation (pointer compare / pointer print). So `to_eq` on a
+## `String` can mis-compare and the diagnostic can show a raw handle.
+## That is a compiler-level generics gap tracked separately, not a defect
+## of this file. `to_eq` on primitives (`Int`, `Bool`, …) is exact.
 class Matcher[T]
   actual: T
 
@@ -13,12 +28,14 @@ class Matcher[T]
 
   def to_eq(expected: T) -> ()
     if self.actual != expected
+      puts "  to_eq failed: expected [#{expected}], got [#{self.actual}]"
       Runner.case_mark_failed
     end
   end
 
   def not_to_eq(expected: T) -> ()
     if self.actual == expected
+      puts "  not_to_eq failed: expected a value other than [#{expected}], but they are equal"
       Runner.case_mark_failed
     end
   end
@@ -27,15 +44,28 @@ end
 ## Boolean-valued matcher path. Decoupled from the generic Matcher[T]
 ## constraint because `to_be_truthy`/`to_be_falsy` don't need equality
 ## and the call site shouldn't be forced to satisfy PartialEq for a
-## boolean assertion.
+## boolean assertion. Returns the Bool result AND marks the case failed
+## when the assertion does not hold.
 class BoolMatcher
   actual: Bool
 
   def init(actual: Bool) { self.actual = actual }
 
-  def to_be_truthy -> Bool { self.actual }
+  def to_be_truthy -> Bool
+    if !self.actual
+      puts "  to_be_truthy failed: expected true, got false"
+      Runner.case_mark_failed
+    end
+    self.actual
+  end
 
-  def to_be_falsy -> Bool { !self.actual }
+  def to_be_falsy -> Bool
+    if self.actual
+      puts "  to_be_falsy failed: expected false, got true"
+      Runner.case_mark_failed
+    end
+    !self.actual
+  end
 end
 
 ## Nilness check for any Option-typed value. We accept the value as
@@ -47,14 +77,27 @@ class OptionMatcher
 
   def init(present: Bool) { self.is_some = present }
 
-  def to_be_nil -> Bool { self.is_some == false }
+  def to_be_nil -> Bool
+    if self.is_some
+      puts "  to_be_nil failed: expected None, got a present value"
+      Runner.case_mark_failed
+    end
+    self.is_some == false
+  end
 
-  def not_to_be_nil -> Bool { self.is_some }
+  def not_to_be_nil -> Bool
+    if !self.is_some
+      puts "  not_to_be_nil failed: expected a present value, got None"
+      Runner.case_mark_failed
+    end
+    self.is_some
+  end
 end
 
-## Element-membership matcher for Array[T]. Loops with `each` rather
-## than `contains?` because the v1 Array surface may not expose contains?
-## uniformly across T (PartialEq required).
+## Element-membership matcher for Array[T]. Loops with indexed `get`
+## rather than `contains?` because the v1 Array surface may not expose
+## contains? uniformly across T (PartialEq required). Marks the case
+## failed when the needle is absent.
 class ArrayMatcher[T]
   actual_ref: &Array[T]
 
@@ -63,24 +106,38 @@ class ArrayMatcher[T]
   def to_include(needle: T) -> Bool
     let n: Int = self.actual_ref.len as Int
     var i: Int = 0
+    var found: Bool = false
     while i < n
       match self.actual_ref.get(i)
         Some(item) -> if item == needle
-          return true
+          found = true
         end
         None -> 0
       end
       i = i + 1
     end
-    false
+    if !found
+      puts "  to_include failed: array does not contain the expected element"
+      Runner.case_mark_failed
+    end
+    found
   end
 end
 
-## Substring matcher for String. Delegates to `String#contains`.
+## Substring matcher for String. Delegates to `String#contains`. Marks
+## the case failed when the substring is absent. `actual_ref`/`needle`
+## are concrete `&String`, so the diagnostic prints real content.
 class StringMatcher
   actual_ref: &String
 
   def init(actual: &String) { self.actual_ref = actual }
 
-  def to_include(needle: &String) -> Bool { self.actual_ref.contains(needle) }
+  def to_include(needle: &String) -> Bool
+    let ok = self.actual_ref.contains(needle)
+    if !ok
+      puts "  to_include failed: \"#{self.actual_ref}\" does not contain \"#{needle}\""
+      Runner.case_mark_failed
+    end
+    ok
+  end
 end

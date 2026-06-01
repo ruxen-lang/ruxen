@@ -795,7 +795,7 @@ impl<'a> InferenceEngine<'a> {
         Self::subst_ty(ret_ty, &subst)
     }
 
-    fn subst_ty(ty: &Ty, subst: &std::collections::HashMap<String, Ty>) -> Ty {
+    pub(super) fn subst_ty(ty: &Ty, subst: &std::collections::HashMap<String, Ty>) -> Ty {
         match ty {
             Ty::TypeParam { name, .. } => subst.get(name).cloned().unwrap_or_else(|| ty.clone()),
             Ty::Ref(inner) => Ty::Ref(Box::new(Self::subst_ty(inner, subst))),
@@ -837,6 +837,146 @@ impl<'a> InferenceEngine<'a> {
             ),
             Ty::Tuple(elems) => Ty::Tuple(elems.iter().map(|e| Self::subst_ty(e, subst)).collect()),
             _ => ty.clone(),
+        }
+    }
+
+    /// Generic free-function call inference: harvest `{ type_param → concrete }`
+    /// bindings by structurally matching each declared formal parameter type
+    /// (which may contain the function's own `TypeParam`s) against the
+    /// resolved actual argument type. One-directional — only names in
+    /// `param_names` (the function's own generic params) are bound; every
+    /// other position is walked for nested bindings. Mirrors the
+    /// `subst_generics_in_return` direction so the two stay consistent.
+    ///
+    /// Used by the `FnCall` handler so `expect[T](actual: T) -> Matcher[T]`
+    /// called as `expect(aString)` yields `{ T → String }`, making the call
+    /// expression's type `Matcher[String]` — which the MIR class-mono pass
+    /// then specializes.
+    pub(super) fn bind_type_params_from_args(
+        param_names: &std::collections::HashSet<String>,
+        formal: &Ty,
+        actual: &Ty,
+        out: &mut std::collections::HashMap<String, Ty>,
+    ) {
+        // Peel matching reference layers on both sides so `&T` vs `&String`
+        // binds `T → String`. If only one side is a reference, fall through
+        // to the structural match below (the `TypeParam` arm still binds the
+        // whole actual, which is the safe over-approximation).
+        match (formal, actual) {
+            (Ty::Ref(f), Ty::Ref(a))
+            | (Ty::RefMut(f), Ty::RefMut(a))
+            | (Ty::RefLifetime(_, f), Ty::RefLifetime(_, a))
+            | (Ty::RefMutLifetime(_, f), Ty::RefMutLifetime(_, a)) => {
+                Self::bind_type_params_from_args(param_names, f, a, out);
+                return;
+            }
+            // A `&T` / `&var T` formal matched against a non-reference actual
+            // (callers commonly pass an owned value where the signature
+            // borrows): bind `T` to the actual value type.
+            (Ty::Ref(f), _) | (Ty::RefMut(f), _) => {
+                Self::bind_type_params_from_args(param_names, f, actual, out);
+                return;
+            }
+            _ => {}
+        }
+
+        match formal {
+            Ty::TypeParam { name, .. } if param_names.contains(name) => {
+                // Don't bind to a still-unresolved inference variable; that
+                // would only restate the unknown and risk over-eager
+                // substitution. Leave `T` free so the existing
+                // `wrap_async_return` behaviour (TypeParam passthrough) is
+                // preserved for return-only / turbofish cases.
+                if !matches!(actual, Ty::Infer(_) | Ty::TypeParam { .. }) {
+                    // First binding wins; consistent re-binding is a no-op.
+                    out.entry(name.clone()).or_insert_with(|| actual.clone());
+                }
+            }
+            Ty::Option(f) => {
+                if let Ty::Option(a) = actual {
+                    Self::bind_type_params_from_args(param_names, f, a, out);
+                }
+            }
+            Ty::Array(f) => {
+                if let Ty::Array(a) = actual {
+                    Self::bind_type_params_from_args(param_names, f, a, out);
+                }
+            }
+            Ty::Set(f) => {
+                if let Ty::Set(a) = actual {
+                    Self::bind_type_params_from_args(param_names, f, a, out);
+                }
+            }
+            Ty::Map(fk, fv) => {
+                if let Ty::Map(ak, av) = actual {
+                    Self::bind_type_params_from_args(param_names, fk, ak, out);
+                    Self::bind_type_params_from_args(param_names, fv, av, out);
+                }
+            }
+            Ty::Result(fo, fe) => {
+                if let Ty::Result(ao, ae) = actual {
+                    Self::bind_type_params_from_args(param_names, fo, ao, out);
+                    Self::bind_type_params_from_args(param_names, fe, ae, out);
+                }
+            }
+            Ty::Tuple(fs) => {
+                if let Ty::Tuple(as_) = actual {
+                    if fs.len() == as_.len() {
+                        for (f, a) in fs.iter().zip(as_.iter()) {
+                            Self::bind_type_params_from_args(param_names, f, a, out);
+                        }
+                    }
+                }
+            }
+            Ty::Class {
+                name: fname,
+                generic_args: fargs,
+            } => {
+                if let Ty::Class {
+                    name: aname,
+                    generic_args: aargs,
+                } = actual
+                {
+                    if fname == aname && fargs.len() == aargs.len() {
+                        for (f, a) in fargs.iter().zip(aargs.iter()) {
+                            Self::bind_type_params_from_args(param_names, f, a, out);
+                        }
+                    }
+                }
+            }
+            Ty::Struct {
+                name: fname,
+                generic_args: fargs,
+            } => {
+                if let Ty::Struct {
+                    name: aname,
+                    generic_args: aargs,
+                } = actual
+                {
+                    if fname == aname && fargs.len() == aargs.len() {
+                        for (f, a) in fargs.iter().zip(aargs.iter()) {
+                            Self::bind_type_params_from_args(param_names, f, a, out);
+                        }
+                    }
+                }
+            }
+            Ty::Enum {
+                name: fname,
+                generic_args: fargs,
+            } => {
+                if let Ty::Enum {
+                    name: aname,
+                    generic_args: aargs,
+                } = actual
+                {
+                    if fname == aname && fargs.len() == aargs.len() {
+                        for (f, a) in fargs.iter().zip(aargs.iter()) {
+                            Self::bind_type_params_from_args(param_names, f, a, out);
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
 }

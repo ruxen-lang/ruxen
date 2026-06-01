@@ -364,6 +364,24 @@ impl<'a> Lowerer<'a> {
                     let resolved_class_cs = resolved_class.replace('.', "_");
                     let mangled = format!("{}_{}", resolved_class_cs, field_name);
 
+                    // Generic-class monomorphization: a paren-less method
+                    // call (`box.show`) lowers here as a field access. When
+                    // the receiver is a concrete instantiation we
+                    // specialized, redirect to the specialized callee
+                    // (`Box__mono__String_show`) so the body dispatches
+                    // `==` / `#{}` through the concrete type. Static methods
+                    // are left alone (no monomorphic self-bearing copy
+                    // exists for them in this pass). `dispatch_ty` carries
+                    // the receiver's concrete generic args.
+                    let mangled = if !is_static {
+                        match self.mono_base_for_ty(dispatch_ty) {
+                            Some(base) => format!("{}_{}", base, field_name),
+                            None => mangled,
+                        }
+                    } else {
+                        mangled
+                    };
+
                     let dest = if expr.ty != Ty::Unit && expr.ty != Ty::Never {
                         Some(self.new_temp(expr.ty.clone()))
                     } else {
