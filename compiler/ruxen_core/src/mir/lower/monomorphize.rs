@@ -168,7 +168,13 @@ impl<'a> Lowerer<'a> {
                     && classes.contains_key(name)
                     && generic_args.iter().all(is_fully_concrete)
                 {
-                    let key = format!("{:?}", generic_args);
+                    // Dedup on the EMITTED mangled base, not the debug form of
+                    // the arg vector: two `Ty` spellings of the same logical
+                    // instantiation (e.g. `Ty::String` vs
+                    // `Ty::Class{name:"String"}`) debug-format differently but
+                    // collapse to the same `mono_base`, and emitting both would
+                    // be a DuplicateDefinition.
+                    let key = mono_base(name, generic_args);
                     if seen.entry(name.clone()).or_default().insert(key) {
                         instances
                             .entry(name.clone())
@@ -240,10 +246,18 @@ impl<'a> Lowerer<'a> {
                 }
             }
 
+            // Defensive: never emit the same mangled base twice even if two
+            // keys slipped through collection (the symbol table rejects a
+            // DuplicateDefinition). Collection already dedups on `mono_base`.
+            let mut emitted_bases: HashSet<String> = HashSet::new();
             for args in keys {
                 if args.len() != param_names.len() {
                     // Arity mismatch (should not happen post-typeck): skip
                     // rather than emit a malformed body.
+                    continue;
+                }
+                let base = mono_base(class_name, args);
+                if !emitted_bases.insert(base.clone()) {
                     continue;
                 }
                 let subst: HashMap<String, Ty> = param_names
@@ -251,7 +265,6 @@ impl<'a> Lowerer<'a> {
                     .cloned()
                     .zip(args.iter().cloned())
                     .collect();
-                let base = mono_base(class_name, args);
 
                 for method in &methods {
                     let mut cloned = method.clone();

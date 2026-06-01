@@ -244,7 +244,11 @@ fn tcp_class_loopback_roundtrip() {
     listener
         .set_nonblocking(true)
         .expect("set nonblocking listener");
-    let deadline = Instant::now() + Duration::from_secs(5);
+    // 30s (not 5s): sibling tests' CPU-heavy `compile()` calls under
+    // `cargo test` parallelism starve freshly-spawned children; a tight
+    // window flaked. This is a spawn-sync deadline, not a functional I/O
+    // timeout — it only elapses if the child never connects.
+    let deadline = Instant::now() + Duration::from_secs(30);
     let (mut stream, _peer) = loop {
         match listener.accept() {
             Ok(c) => break c,
@@ -256,7 +260,10 @@ fn tcp_class_loopback_roundtrip() {
                         .as_ref()
                         .map(|o| String::from_utf8_lossy(&o.stderr).to_string())
                         .unwrap_or_default();
-                    panic!("no inbound connection within 5s; child stderr=[{}]", stderr);
+                    panic!(
+                        "no inbound connection within 30s; child stderr=[{}]",
+                        stderr
+                    );
                 }
                 std::thread::sleep(Duration::from_millis(25));
             }
@@ -302,14 +309,18 @@ fn tcp_stream_class_peer_addr() {
         .expect("spawn ruxen binary");
 
     listener.set_nonblocking(true).expect("set nonblocking");
-    let deadline = Instant::now() + Duration::from_secs(5);
+    // 30s (not 5s): sibling tests' CPU-heavy `compile()` calls under
+    // `cargo test` parallelism starve freshly-spawned children; a tight
+    // window flaked. This is a spawn-sync deadline, not a functional I/O
+    // timeout — it only elapses if the child never connects.
+    let deadline = Instant::now() + Duration::from_secs(30);
     let _accepted = loop {
         match listener.accept() {
             Ok(c) => break c,
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 if Instant::now() >= deadline {
                     let _ = child.kill();
-                    panic!("no inbound connection within 5s");
+                    panic!("no inbound connection within 30s");
                 }
                 std::thread::sleep(Duration::from_millis(25));
             }
@@ -347,14 +358,18 @@ fn tcp_stream_class_shutdown_write_then_read_eof() {
         .expect("spawn ruxen binary");
 
     listener.set_nonblocking(true).expect("set nonblocking");
-    let deadline = Instant::now() + Duration::from_secs(5);
+    // 30s (not 5s): sibling tests' CPU-heavy `compile()` calls under
+    // `cargo test` parallelism starve freshly-spawned children; a tight
+    // window flaked. This is a spawn-sync deadline, not a functional I/O
+    // timeout — it only elapses if the child never connects.
+    let deadline = Instant::now() + Duration::from_secs(30);
     let (mut stream, _peer) = loop {
         match listener.accept() {
             Ok(c) => break c,
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 if Instant::now() >= deadline {
                     let _ = child.kill();
-                    panic!("no inbound connection within 5s");
+                    panic!("no inbound connection within 30s");
                 }
                 std::thread::sleep(Duration::from_millis(25));
             }
@@ -422,14 +437,18 @@ fn tcp_stream_class_set_read_timeout_would_block() {
     // Host accepts but never sends anything — the Ruxen child's read
     // must time out and surface WouldBlock.
     listener.set_nonblocking(true).expect("set nonblocking");
-    let deadline = Instant::now() + Duration::from_secs(5);
+    // 30s (not 5s): sibling tests' CPU-heavy `compile()` calls under
+    // `cargo test` parallelism starve freshly-spawned children; a tight
+    // window flaked. This is a spawn-sync deadline, not a functional I/O
+    // timeout — it only elapses if the child never connects.
+    let deadline = Instant::now() + Duration::from_secs(30);
     let (_stream, _peer) = loop {
         match listener.accept() {
             Ok(c) => break c,
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 if Instant::now() >= deadline {
                     let _ = child.kill();
-                    panic!("no inbound connection within 5s");
+                    panic!("no inbound connection within 30s");
                 }
                 std::thread::sleep(Duration::from_millis(25));
             }
@@ -473,14 +492,18 @@ fn tcp_stream_class_set_write_timeout_resolves() {
         .expect("spawn ruxen binary");
 
     listener.set_nonblocking(true).expect("set nonblocking");
-    let deadline = Instant::now() + Duration::from_secs(5);
+    // 30s (not 5s): sibling tests' CPU-heavy `compile()` calls under
+    // `cargo test` parallelism starve freshly-spawned children; a tight
+    // window flaked. This is a spawn-sync deadline, not a functional I/O
+    // timeout — it only elapses if the child never connects.
+    let deadline = Instant::now() + Duration::from_secs(30);
     let (_stream, _peer) = loop {
         match listener.accept() {
             Ok(c) => break c,
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 if Instant::now() >= deadline {
                     let _ = child.kill();
-                    panic!("no inbound connection within 5s");
+                    panic!("no inbound connection within 30s");
                 }
                 std::thread::sleep(Duration::from_millis(25));
             }
@@ -526,14 +549,18 @@ fn tcp_stream_class_read_is_binary_safe() {
         .expect("spawn ruxen binary");
 
     listener.set_nonblocking(true).expect("set nonblocking");
-    let deadline = Instant::now() + Duration::from_secs(5);
+    // 30s (not 5s): sibling tests' CPU-heavy `compile()` calls under
+    // `cargo test` parallelism starve freshly-spawned children; a tight
+    // window flaked. This is a spawn-sync deadline, not a functional I/O
+    // timeout — it only elapses if the child never connects.
+    let deadline = Instant::now() + Duration::from_secs(30);
     let (mut stream, _peer) = loop {
         match listener.accept() {
             Ok(c) => break c,
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 if Instant::now() >= deadline {
                     let _ = child.kill();
-                    panic!("no inbound connection within 5s");
+                    panic!("no inbound connection within 30s");
                 }
                 std::thread::sleep(Duration::from_millis(25));
             }
@@ -593,7 +620,7 @@ fn tcp_stream_class_drop_closes_fd() {
     // the deadline.
     let listener_thread = std::thread::spawn(move || {
         listener.set_nonblocking(true).expect("set nonblocking");
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(30);
         let mut accepted = 0;
         while Instant::now() < deadline {
             match listener.accept() {
@@ -709,8 +736,27 @@ fn blocking_tcp_echo_server_with_graceful_sigint_shutdown() {
         .spawn()
         .expect("spawn ruxen server");
 
-    let deadline = Instant::now() + Duration::from_secs(5);
+    // Generous window: under `cargo test`'s default parallelism the sibling
+    // tests in this file each shell out to a full `compile()`, saturating CPU
+    // and starving this freshly-spawned server of scheduling time before it
+    // reaches `accept()`. The old 5s window flaked (solo and in-suite); 30s
+    // never legitimately elapses for a localhost connect once the server is
+    // up. We also fail fast if the child has already exited (e.g. a bind
+    // error) instead of burning the whole window and reporting a misleading
+    // "didn't accept" with empty stderr.
+    let deadline = Instant::now() + Duration::from_secs(30);
     let mut stream = loop {
+        if let Ok(Some(status)) = child.try_wait() {
+            let out = child.wait_with_output().ok();
+            let stderr = out
+                .as_ref()
+                .map(|o| String::from_utf8_lossy(&o.stderr).to_string())
+                .unwrap_or_default();
+            panic!(
+                "server exited before accepting (status={:?}); stderr=[{}]",
+                status, stderr
+            );
+        }
         match std::net::TcpStream::connect(format!("127.0.0.1:{}", port)) {
             Ok(s) => break s,
             Err(_) => {
@@ -722,7 +768,7 @@ fn blocking_tcp_echo_server_with_graceful_sigint_shutdown() {
                         .map(|o| String::from_utf8_lossy(&o.stderr).to_string())
                         .unwrap_or_default();
                     panic!(
-                        "server didn't accept connections within 5s; stderr=[{}]",
+                        "server didn't accept connections within 30s; stderr=[{}]",
                         stderr
                     );
                 }
@@ -749,7 +795,7 @@ fn blocking_tcp_echo_server_with_graceful_sigint_shutdown() {
         libc::kill(child.id() as libc::pid_t, libc::SIGINT);
     }
 
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
@@ -763,7 +809,7 @@ fn blocking_tcp_echo_server_with_graceful_sigint_shutdown() {
             Ok(None) => {
                 if Instant::now() >= deadline {
                     let _ = child.kill();
-                    panic!("server did not exit within 5s of SIGINT");
+                    panic!("server did not exit within 30s of SIGINT");
                 }
                 std::thread::sleep(Duration::from_millis(25));
             }
