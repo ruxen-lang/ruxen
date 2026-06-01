@@ -494,9 +494,19 @@ impl<'a> Lowerer<'a> {
                         arg_values.push(local_to_value(local));
                     }
                     let _ = layout; // size used by Alloc internally via layout_of in codegen
+                                    // Generic-class monomorphization: when this `.new()`
+                                    // constructs a concrete instantiation we specialized
+                                    // (e.g. `Box[String]`), call the specialized
+                                    // `Box__mono__String_init` so the init body sees the
+                                    // concrete field type. Otherwise keep the opaque
+                                    // `{Class}_init` fallback.
+                    let init_callee = match self.mono_base_for_ty(&expr.ty) {
+                        Some(base) => format!("{}_init", base),
+                        None => format!("{}_init", type_name.replace('.', "_")),
+                    };
                     self.emit(MirInst::Call {
                         dest: None,
-                        callee: format!("{}_init", type_name.replace('.', "_")),
+                        callee: init_callee,
                         args: arg_values,
                     });
                     return Ok(Some(obj));
@@ -946,6 +956,25 @@ impl<'a> Lowerer<'a> {
                     format!("{}_{}_{}", resolved_class_cs, lowered_method_name, suffix)
                 } else {
                     format!("{}_{}", resolved_class_cs, lowered_method_name)
+                };
+
+                // Generic-class monomorphization: when the receiver is a
+                // concrete instantiation we specialized (e.g. the receiver
+                // of `box.eq(...)` is `Box[String]`), redirect the callee to
+                // the specialized `Box__mono__String_eq` so the body
+                // dispatches `==` / `#{}` through the concrete type. Guarded
+                // on `bufio_instance_suffix.is_none()` so the BufReader/
+                // BufWriter kind-suffix routing above is untouched, and on
+                // `mono_base_for_ty` returning Some only when a copy was
+                // actually emitted (FFI shells / un-specialized
+                // instantiations keep the opaque callee).
+                let mangled = if bufio_instance_suffix.is_none() {
+                    match self.mono_base_for_ty(&object.ty) {
+                        Some(base) => format!("{}_{}", base, lowered_method_name),
+                        None => mangled,
+                    }
+                } else {
+                    mangled
                 };
 
                 // `&mut String` detection: when the receiver is a local

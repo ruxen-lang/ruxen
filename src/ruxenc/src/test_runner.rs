@@ -263,11 +263,58 @@ fn test_path_for(project_dir: &Path, file: &Path) -> String {
     s
 }
 
+/// Flat-merge a *library* project's own `src/**.rx` so the test binary
+/// can reference the project's classes and free fns. `ruxenc` is a
+/// single-file driver (it does not resolve project deps), so without
+/// this a test file can only see std-prelude symbols — making it
+/// impossible to test the very library that owns the `tests/` dir.
+///
+/// Mirrors `ruxen_cli`'s `gather_sources` ordering: entry (`src/lib.rx`)
+/// first, then the remaining `src/**.rx` sorted by path. We only merge
+/// for **library** projects (those with `src/lib.rx`); a `src/main.rx`
+/// binary project would inject its own `def main`, clashing with the
+/// synthesised one, so we skip it and return `None`.
+fn gather_project_lib_sources(project_dir: &Path) -> Result<Option<String>, String> {
+    let lib = project_dir.join("src").join("lib.rx");
+    if !lib.is_file() {
+        return Ok(None);
+    }
+    let mut combined = fs::read_to_string(&lib)
+        .map_err(|e| format!("read {}: {}", lib.display(), e))?;
+    combined.push('\n');
+
+    let mut others = Vec::new();
+    collect_rx(&project_dir.join("src"), &lib, &mut others);
+    others.sort();
+    for f in &others {
+        let src = fs::read_to_string(f).map_err(|e| format!("read {}: {}", f.display(), e))?;
+        combined.push_str(&src);
+        combined.push('\n');
+    }
+    Ok(Some(combined))
+}
+
+/// Recursively collect every `.rx` under `dir` except `skip` (the entry).
+fn collect_rx(dir: &Path, skip: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            collect_rx(&p, skip, out);
+        } else if p.extension() == Some(std::ffi::OsStr::new("rx")) && p != skip {
+            out.push(p);
+        }
+    }
+}
+
 /// Generate the wrapper .rx file that compiles to the per-file test
 /// binary. Layout:
 ///
 ///   use std.test.Tester
 ///   use std.test.Runner
+///   <project src/**.rx merged at top level, for library projects>
 ///   def main
 ///     let r = Runner.new("<test_path>")
 ///     Runner.set_current(r.handle_addr)
@@ -275,6 +322,7 @@ fn test_path_for(project_dir: &Path, file: &Path) -> String {
 ///     r.execute
 ///   end
 fn synthesise_wrapper(
+    project_dir: &Path,
     test_path: &str,
     user_file: &Path,
     out_dir: &Path,
@@ -282,11 +330,14 @@ fn synthesise_wrapper(
     let body = fs::read_to_string(user_file)
         .map_err(|e| format!("read {}: {}", user_file.display(), e))?;
 
+    let project_src = gather_project_lib_sources(project_dir)?.unwrap_or_default();
+
     let prelude = format!(
         "# AUTO-GENERATED from {} — do not edit.\n\
          use std.test.Tester\n\
          use std.test.Runner\n\
          \n\
+         {project_src}\n\
          def main\n  \
            let r = Runner.new(\"{}\")\n  \
            Runner.set_current(r.handle_addr)\n",
@@ -313,7 +364,7 @@ fn build_one(
     out_dir: &Path,
     release: bool,
 ) -> Result<PathBuf, String> {
-    let synth = synthesise_wrapper(test_path, user_file, out_dir)?;
+    let synth = synthesise_wrapper(project_dir, test_path, user_file, out_dir)?;
     let profile = if release { "release" } else { "debug" };
     let bin_dir = project_dir.join("target").join(profile).join("test");
     fs::create_dir_all(&bin_dir).map_err(|e| e.to_string())?;
@@ -410,12 +461,34 @@ mod tests {
             "Tester.describe(\"X\") do |t: &var Tester|\n  t.it(\"y\") do\n    t.expect(1).to_eq(1)\n  end\nend",
         )
         .unwrap();
-        let synth_path = synthesise_wrapper("foo.bar", &user_file, &tmp.join("out")).unwrap();
+        let synth_path = synthesise_wrapper(&tmp, "foo.bar", &user_file, &tmp.join("out")).unwrap();
         let synth = fs::read_to_string(&synth_path).unwrap();
         assert!(synth.contains("def main"), "synth: {synth}");
         assert!(synth.contains("Runner.new(\"foo.bar\")"), "synth: {synth}");
         assert!(synth.contains("Tester.describe(\"X\")"), "synth: {synth}");
         assert!(synth.contains("r.execute"), "synth: {synth}");
+    }
+
+    #[test]
+    fn synthesise_merges_library_source_at_top_level() {
+        let tmp = std::env::temp_dir().join("test-runner-synth-lib");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(tmp.join("src")).unwrap();
+        fs::write(tmp.join("src/lib.rx"), "## pkg doc\n").unwrap();
+        fs::write(tmp.join("src/widget.rx"), "class Widget\n  def answer -> Int\n    42\n  end\nend\n").unwrap();
+        let user_file = tmp.join("widget_test.rx");
+        fs::write(
+            &user_file,
+            "Tester.describe(\"W\") do |t: &var Tester|\n  t.it(\"y\") do\n    t.expect(Widget.new.answer).to_eq(42)\n  end\nend",
+        )
+        .unwrap();
+        let synth_path =
+            synthesise_wrapper(&tmp, "widget_test", &user_file, &tmp.join("out")).unwrap();
+        let synth = fs::read_to_string(&synth_path).unwrap();
+        // Library class must appear at top level, BEFORE the synthesised main.
+        let class_at = synth.find("class Widget").expect("class merged");
+        let main_at = synth.find("def main").expect("has main");
+        assert!(class_at < main_at, "class must precede def main: {synth}");
     }
 
     #[test]
