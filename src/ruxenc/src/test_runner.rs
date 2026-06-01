@@ -279,8 +279,8 @@ fn gather_project_lib_sources(project_dir: &Path) -> Result<Option<String>, Stri
     if !lib.is_file() {
         return Ok(None);
     }
-    let mut combined = fs::read_to_string(&lib)
-        .map_err(|e| format!("read {}: {}", lib.display(), e))?;
+    let mut combined =
+        fs::read_to_string(&lib).map_err(|e| format!("read {}: {}", lib.display(), e))?;
     combined.push('\n');
 
     let mut others = Vec::new();
@@ -475,7 +475,11 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(tmp.join("src")).unwrap();
         fs::write(tmp.join("src/lib.rx"), "## pkg doc\n").unwrap();
-        fs::write(tmp.join("src/widget.rx"), "class Widget\n  def answer -> Int\n    42\n  end\nend\n").unwrap();
+        fs::write(
+            tmp.join("src/widget.rx"),
+            "class Widget\n  def answer -> Int\n    42\n  end\nend\n",
+        )
+        .unwrap();
         let user_file = tmp.join("widget_test.rx");
         fs::write(
             &user_file,
