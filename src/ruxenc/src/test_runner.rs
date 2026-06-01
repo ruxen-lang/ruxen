@@ -118,12 +118,25 @@ pub fn run(opts: TestOptions) -> Result<(), String> {
     let results: Arc<Mutex<Vec<TestFileResult>>> = Arc::new(Mutex::new(Vec::new()));
     let queue: Arc<Mutex<Vec<(PathBuf, String, PathBuf)>>> = Arc::new(Mutex::new(built));
 
+    // Per-test report style, handed to each test binary via the
+    // RUXEN_TEST_FORMAT env var (std.test.Runner reads it). The default
+    // (and `pretty`) is RSpec-style progress dots; `documentation` prints
+    // group + per-case names; tap/json own their own output (quiet).
+    let env_format: String = match opts.format.as_str() {
+        "documentation" | "doc" => "documentation",
+        "tap" => "tap",
+        "json" => "json",
+        _ => "progress",
+    }
+    .to_string();
+
     std::thread::scope(|scope| {
         for _ in 0..n_workers {
             let queue = queue.clone();
             let results = results.clone();
             let stop = stop.clone();
             let fail_fast = opts.fail_fast;
+            let env_format = env_format.clone();
             scope.spawn(move || loop {
                 if stop.load(std::sync::atomic::Ordering::SeqCst) {
                     return;
@@ -136,7 +149,7 @@ pub fn run(opts: TestOptions) -> Result<(), String> {
                     q.remove(0)
                 };
                 let (_user_file, tp, bin_path) = item;
-                let r = run_one(&tp, &bin_path);
+                let r = run_one(&tp, &bin_path, &env_format);
                 let had_failure = r.failed > 0 || !r.exit_ok;
                 results.lock().unwrap().push(r);
                 if fail_fast && had_failure {
@@ -170,19 +183,21 @@ fn render_pretty(results: &[TestFileResult], nocapture: bool) {
     let mut total_failed = 0u32;
     let mut total_pending = 0u32;
     for r in results {
-        // Suppress per-file output on green; surface failures fully.
-        if (nocapture || r.failed > 0 || !r.exit_ok)
-            && (!r.stdout.is_empty() || !r.stderr.is_empty())
-        {
-            println!("--- {} ---", r.test_path);
-            if !r.stdout.is_empty() {
-                print!("{}", r.stdout);
-                if !r.stdout.ends_with('\n') {
-                    println!();
-                }
+        // Per-test report (progress dots / documentation lines) is emitted
+        // by std.test.Runner on stderr — always surface it.
+        if !r.stderr.is_empty() {
+            eprint!("{}", r.stderr);
+            if !r.stderr.ends_with('\n') {
+                eprintln!();
             }
-            if !r.stderr.is_empty() {
-                eprint!("{}", r.stderr);
+        }
+        // Failure diagnostics (matcher messages) go to stdout — surface
+        // them on failure (or when --nocapture is set).
+        if (nocapture || r.failed > 0 || !r.exit_ok) && !r.stdout.is_empty() {
+            println!("--- {} ---", r.test_path);
+            print!("{}", r.stdout);
+            if !r.stdout.ends_with('\n') {
+                println!();
             }
         }
         total_passed += r.passed;
@@ -386,8 +401,9 @@ fn build_one(
 /// Spawn one previously-built test binary, capture stdout/stderr,
 /// parse the summary line, return a TestFileResult. Safe to call
 /// in parallel (each binary is its own process).
-fn run_one(test_path: &str, bin_path: &Path) -> TestFileResult {
+fn run_one(test_path: &str, bin_path: &Path, format: &str) -> TestFileResult {
     let output = match Command::new(bin_path)
+        .env("RUXEN_TEST_FORMAT", format)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
