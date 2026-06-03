@@ -11,7 +11,6 @@
 //! `pub fn resolvers() -> Vec<MethodResolver>` that the dispatcher walks.
 //! The internal arm groupings below already mark the cut lines.
 
-use crate::diagnostics::Diagnostic;
 use crate::hir::nodes::*;
 use crate::hir::types::Ty;
 use crate::lexer::token::Span;
@@ -22,9 +21,11 @@ mod concurrency;
 mod fmt;
 mod fs;
 mod io;
+mod iter;
 mod net;
 mod process;
 mod resolver;
+mod strings;
 mod time;
 
 use resolver::MethodResolver;
@@ -67,7 +68,9 @@ fn resolvers() -> Vec<MethodResolver> {
     v.extend(process::resolvers());
     v.extend(net::resolvers());
     v.extend(time::resolvers());
-    v.extend(resolver::legacy_resolvers()); // TIER 2 (remaining named stdlib, still legacy-wrapped)
+    v.extend(strings::resolvers()); // TIER 3 — structural
+    v.extend(iter::resolvers());
+    v.extend(resolver::legacy_resolvers()); // TIER 3 (remaining structural, still legacy-wrapped)
     v.extend(resolver::structural_fallback_resolvers()); // TIER 3 tail
     v
 }
@@ -79,97 +82,12 @@ fn legacy_builtin_method_type(
     eng: &mut InferenceEngine<'_>,
     ty: &Ty,
     method: &str,
-    args: &[HirExpr],
-    span: &Span,
+    _args: &[HirExpr],
+    _span: &Span,
 ) -> Option<Ty> {
     match (ty, method) {
-        // String methods
-        (Ty::String, "clone") => Some(Ty::String),
-        (Ty::String, "size") => Some(Ty::USize),
-        (Ty::String, "empty?") => Some(Ty::Bool),
-        (Ty::String, "push_str") => Some(Ty::Unit),
-        (Ty::String, "trim") => Some(Ty::Str),
-        (Ty::String, "to_lower") => Some(Ty::String),
-        (Ty::String, "to_upper") => Some(Ty::String),
-        (Ty::String, "chars") => Some(Ty::Array(Box::new(Ty::Char))),
-        // Phase 2 stdlib batch 2 (#02): split returns owned Vec[String]
-        // (per the v1 rule: iterator producers return Vec, not lazy
-        // SplitIter, until prompt 05 ships the lazy iterator story).
-        (Ty::String, "split") => Some(Ty::Array(Box::new(Ty::String))),
-        (Ty::String, "push") => Some(Ty::Unit),
-        (Ty::String, "as_str") => Some(Ty::Str),
-        (Ty::String, "from") => Some(Ty::String),
-        (Ty::String, "include?") => Some(Ty::Bool),
-        (Ty::String, "starts_with") => Some(Ty::Bool),
-        (Ty::String, "ends_with") => Some(Ty::Bool),
-        (Ty::String, "repeat") => Some(Ty::String),
-        (Ty::String, "lines") => Some(Ty::Array(Box::new(Ty::String))),
-        (Ty::String, "replace") => Some(Ty::String),
-        // Phase 2 stdlib (#02).
-        (Ty::String, "new") => Some(Ty::String),
-        (Ty::String, "with_capacity") => Some(Ty::String),
-        (Ty::String, "to_string") => Some(Ty::String),
-        (Ty::String, "bytes") => Some(Ty::Array(Box::new(Ty::UInt8))),
-        (Ty::String, "trim_start") => Some(Ty::Str),
-        (Ty::String, "trim_end") => Some(Ty::Str),
-        (Ty::String, "find") => Some(Ty::Option(Box::new(Ty::USize))),
-        (Ty::String, "splitn") => Some(Ty::Array(Box::new(Ty::String))),
-        (Ty::String, "clear") => Some(Ty::Unit),
-        (Ty::String, "truncate") => Some(Ty::Unit),
-        (Ty::String, "insert") => Some(Ty::Unit),
-        (Ty::String, "insert_str") => Some(Ty::Unit),
-        (Ty::String, "remove") => Some(Ty::Char),
-        (Ty::String, "parse_int") => Some(Ty::Result(
-            Box::new(Ty::Int),
-            Box::new(InferenceEngine::class_ty("ParseIntError", vec![])),
-        )),
-        (Ty::String, "parse_float") => Some(Ty::Result(
-            Box::new(Ty::Float),
-            Box::new(InferenceEngine::class_ty("ParseFloatError", vec![])),
-        )),
-        (Ty::String, "into_bytes") => Some(Ty::Array(Box::new(Ty::UInt8))),
-        (Ty::Str, "size") => Some(Ty::USize),
-        (Ty::Str, "empty?") => Some(Ty::Bool),
-        (Ty::Str, "trim") => Some(Ty::Str),
-        (Ty::Str, "to_lower") => Some(Ty::Str),
-        (Ty::Str, "to_upper") => Some(Ty::Str),
-        (Ty::Str, "chars") => Some(Ty::Array(Box::new(Ty::Char))),
-        // String#split returns Array<String> in Ruby — always. Both
-        // owned-`String` and borrowed-`&str` receivers should produce
-        // the same surface type. The historical `SplitIter` class
-        // shape on the `&str` arm was a Rust-style lazy iterator that
-        // didn't expose `.get(i)` / `.len()`, leaving callers stuck
-        // (every multipart/header parser hits this). Unifying to
-        // Array<String> matches Ruby and removes the footgun. Pin:
-        // `docs/rondo_v1_blockers.md` B13.
-        (Ty::Str, "split") => Some(Ty::Array(Box::new(Ty::String))),
-        (Ty::Str, "parse_uint") => Some(Ty::Result(Box::new(Ty::USize), Box::new(Ty::Error))),
-        (Ty::Str, "as_str") => Some(Ty::Str),
-        (Ty::Str, "include?") => Some(Ty::Bool),
-        (Ty::Str, "starts_with") => Some(Ty::Bool),
-        (Ty::Str, "ends_with") => Some(Ty::Bool),
-        (Ty::Str, "lines") => Some(Ty::Array(Box::new(Ty::String))),
-        (Ty::Str, "replace") => Some(Ty::String),
-        (Ty::Str, "to_string") => Some(Ty::String),
-        (Ty::Str, "bytes") => Some(Ty::Array(Box::new(Ty::UInt8))),
-        (Ty::Str, "trim_start") => Some(Ty::Str),
-        (Ty::Str, "trim_end") => Some(Ty::Str),
-        (Ty::Str, "find") => Some(Ty::Option(Box::new(Ty::USize))),
-        (Ty::Str, "splitn") => Some(Ty::Array(Box::new(Ty::String))),
-        (Ty::Str, "parse_int") => Some(Ty::Result(
-            Box::new(Ty::Int),
-            Box::new(InferenceEngine::class_ty("ParseIntError", vec![])),
-        )),
-        (Ty::Str, "parse_float") => Some(Ty::Result(
-            Box::new(Ty::Float),
-            Box::new(InferenceEngine::class_ty("ParseFloatError", vec![])),
-        )),
-        // ParseIntError / ParseFloatError accessors.
-        (Ty::Class { name, .. }, "message")
-            if name == "ParseIntError" || name == "ParseFloatError" =>
-        {
-            Some(Ty::String)
-        }
+        // NOTE: String/Str structural arms + ParseIntError/ParseFloatError
+        // moved to `strings::resolvers()` (tier 3). See Phase 5 Task 9.
 
         // Vec methods
         (Ty::Array(_), "size") => Some(Ty::USize),
@@ -218,7 +136,6 @@ fn legacy_builtin_method_type(
         (Ty::Array(_), "dedup") => Some(Ty::Unit),
         (Ty::Array(_), "sort_by") => Some(Ty::Unit),
         (Ty::Array(_), "retain") => Some(Ty::Unit),
-        (Ty::String, "from_iter") => Some(Ty::String),
 
         // HashMap methods
         (Ty::Map(_, _), "new") => Some(ty.clone()),
@@ -290,122 +207,10 @@ fn legacy_builtin_method_type(
         // NOTE: the Formatter arms moved to `fmt::resolvers()` (tier 2).
         // See Phase 5 Task 5.
 
-        // Iterator-like methods on any "Iter" class
-        //
-        // Phase 2 stdlib (#05): the Iterator surface lives at the MIR
-        // layer — `vec.iter` returns a `*Iter` class which is a
-        // run-time no-op pass-through (`ruxen_iter_to_vec`). Eager
-        // terminators that don't take a closure (`sum`, `count`,
-        // `first`, `last`, `contains`, `reverse`, `clone`) route to
-        // the same `ruxen_vec_*` helpers their `Vec` counterparts use,
-        // so all that's missing is the type-check entry.
-        (Ty::Class { name, .. }, "filter") if name.ends_with("Iter") => Some(ty.clone()),
-        (Ty::Class { name, .. }, "map") if name.ends_with("Iter") => Some(Ty::Class {
-            name: name.clone(),
-            generic_args: vec![eng.ctx.fresh_type_var()],
-        }),
-        (Ty::Class { name, generic_args }, "find") if name.ends_with("Iter") => {
-            let elem = generic_args
-                .first()
-                .cloned()
-                .unwrap_or_else(|| eng.ctx.fresh_type_var());
-            Some(Ty::Option(Box::new(Ty::Ref(Box::new(elem)))))
-        }
-        (Ty::Class { name, .. }, "position") if name.ends_with("Iter") => {
-            Some(Ty::Option(Box::new(Ty::USize)))
-        }
-        (Ty::Class { name, generic_args }, "sum") if name.ends_with("Iter") => {
-            // Sum returns the element type for numeric Items. The
-            // runtime path is `ruxen_vec_sum` which integer-sums
-            // raw 64-bit slots — calling it on a non-`Add` element
-            // type produces nonsensical bytes-as-int sums (e.g.
-            // `Vec[String].iter.sum` would add string pointers).
-            //
-            // Phase 2 stdlib (#05 batch 3): reject non-`Add` Items
-            // up front. The v1 trait machinery only models a few
-            // built-in numeric types as `Add`; surface the rejection
-            // here rather than at the runtime layer so users get a
-            // typeck-time error with a real source span. Inferred
-            // element types (`Ty::Infer`) and the type-error sentinel
-            // pass through silently — they will be either pinned by
-            // a downstream constraint (still numeric) or already
-            // surfaced as a separate diagnostic.
-            let elem = generic_args.first().cloned().unwrap_or(Ty::Int);
-            let resolved = eng.ctx.resolve(&elem);
-            if !is_iter_sum_compatible(&resolved) {
-                eng.diagnostics.push(Diagnostic::error_with_code(
-                    format!(
-                        "`sum` requires an iterator whose Item implements `Add`; \
-                             `{resolved}` is not numeric"
-                    ),
-                    span.clone(),
-                    "E0700",
-                ));
-                return Some(Ty::Error);
-            }
-            Some(resolved)
-        }
-        (Ty::Class { name, .. }, "count") if name.ends_with("Iter") => Some(Ty::USize),
-        // Phase 2 stdlib (#05 batch 2): closure-taking eager
-        // terminators. `fold` returns the accumulator type — for
-        // v1 we surface a fresh inference variable that the
-        // closure-body unification will pin to the real type
-        // (the MIR inliner reads `args[0].ty` to seed the seed).
-        // `all` / `any` always return Bool. Inlining happens at
-        // MIR; the runtime never sees a `VecIter_fold` call.
-        (Ty::Class { name, .. }, "fold") if name.ends_with("Iter") => {
-            if let Some(init) = args.first() {
-                Some(eng.ctx.resolve(&init.ty))
-            } else {
-                Some(eng.ctx.fresh_type_var())
-            }
-        }
-        (Ty::Class { name, .. }, "all") if name.ends_with("Iter") => Some(Ty::Bool),
-        (Ty::Class { name, .. }, "any") if name.ends_with("Iter") => Some(Ty::Bool),
-        // `take(n)` / `skip(n)` are lazy combinators — they return
-        // a same-shape iter wrapper. v1 ships eager-materialising
-        // runtime helpers (`ruxen_vec_take` / `ruxen_vec_skip`)
-        // that hand back a fresh `RuxenVec*`, so the surface type
-        // stays the receiver's iter class for chaining.
-        (Ty::Class { name, .. }, "take") if name.ends_with("Iter") => Some(ty.clone()),
-        (Ty::Class { name, .. }, "skip") if name.ends_with("Iter") => Some(ty.clone()),
-        // Phase 2 stdlib (#05 batch 3): `chain(other)` returns the
-        // same iter shape (concatenation preserves Item type).
-        // `zip(other)` returns an iter whose Item is the pair
-        // `(Self.Item, Other.Item)` — for v1 we surface a fresh
-        // `*Iter[(T, U)]` so downstream `.count` and `.collect_vec`
-        // see the right element type.  `collect_vec` is the v1
-        // type-specific shorthand for `collect[Vec[T]]` — it
-        // materialises the iter into a `Vec[T]`.
-        (Ty::Class { name, .. }, "chain") if name.ends_with("Iter") => Some(ty.clone()),
-        (Ty::Class { name, generic_args }, "zip") if name.ends_with("Iter") => {
-            let self_item = generic_args
-                .first()
-                .cloned()
-                .unwrap_or_else(|| eng.ctx.fresh_type_var());
-            let other_item = match args.first() {
-                Some(arg) => match eng.ctx.resolve(&arg.ty) {
-                    Ty::Class { generic_args, .. } => generic_args
-                        .first()
-                        .cloned()
-                        .unwrap_or_else(|| eng.ctx.fresh_type_var()),
-                    Ty::Array(elem) => *elem,
-                    other => other,
-                },
-                None => eng.ctx.fresh_type_var(),
-            };
-            Some(Ty::Class {
-                name: name.clone(),
-                generic_args: vec![Ty::Tuple(vec![self_item, other_item])],
-            })
-        }
-        (Ty::Class { name, generic_args }, "collect_vec") if name.ends_with("Iter") => {
-            let elem = generic_args
-                .first()
-                .cloned()
-                .unwrap_or_else(|| eng.ctx.fresh_type_var());
-            Some(Ty::Array(Box::new(elem)))
-        }
+        // NOTE: the *Iter combinator block (filter/map/find/sum[E0700]/
+        // fold/zip/collect_vec/to_vec/enumerate/partition/…) moved to
+        // `iter::resolvers()` (tier 3). See Phase 5 Task 9.
+
         // NOTE: Stdin/Stdout/Stderr arms moved to `io::resolvers()` (tier 2).
         // See Phase 5 Task 6.
         // Phase 2 stdlib (#06): std::fs::Metadata accessors.
@@ -420,28 +225,6 @@ fn legacy_builtin_method_type(
         // (time), and TcpListener/TcpStream (net) arms moved to
         // `process::`/`time::`/`net::resolvers()` (tier 2). See Phase 5
         // Task 8. BufReader/BufWriter (E0714) + IoError → io.rs (Task 6).
-        (Ty::Class { name, generic_args }, "to_vec") if name.ends_with("Iter") => {
-            let elem = if name == "SplitIter" {
-                // SplitIter yields &str segments
-                Ty::Str
-            } else {
-                generic_args.first().cloned().unwrap_or(Ty::Error)
-            };
-            Some(Ty::Array(Box::new(elem)))
-        }
-        (Ty::Class { name, .. }, "enumerate")
-            if name.ends_with("Iter") || name.ends_with("IntoIter") =>
-        {
-            Some(ty.clone())
-        }
-        (Ty::Class { name, generic_args }, "partition") if name.ends_with("Iter") => {
-            let elem = generic_args.first().cloned().unwrap_or(Ty::Error);
-            Some(Ty::Tuple(vec![
-                Ty::Array(Box::new(elem.clone())),
-                Ty::Array(Box::new(elem)),
-            ]))
-        }
-
         // Enum weight (Priority.weight)
         (Ty::Enum { .. }, "weight") => Some(Ty::Int),
 
@@ -471,8 +254,7 @@ fn legacy_builtin_method_type(
         (Ty::Float, "to_s") => Some(Ty::String),
         (Ty::Bool, "to_s") => Some(Ty::String),
         (Ty::Char, "to_s") => Some(Ty::String),
-        (Ty::String, "to_s") => Some(Ty::String),
-        (Ty::Str, "to_s") => Some(Ty::String),
+        // NOTE: String/Str `to_s` moved to `strings::resolvers()` (Task 9).
         // `to_s` on user-defined types also yields a `String`. The MIR
         // method-call lowering routes it through the same display dispatch
         // as `"#{obj}"` (unless the type defines its own `to_s`, which
