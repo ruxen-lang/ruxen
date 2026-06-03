@@ -530,3 +530,61 @@ fn oracle_sanity_spot_checks() {
 
     assert!(ref_is_pointer_store_helper("ruxen_store_ptr"));
 }
+
+// ---------------------------------------------------------------------------
+// Full-union parity: the production table must reproduce every oracle answer
+// for every symbol. This is the SAFETY GATE — it proves the table is
+// byte-equivalent to the six old predicates BEFORE drops.rs deletes them.
+// ---------------------------------------------------------------------------
+
+use ruxen_core::mir::lower::runtime_abi::{callee_ownership, ArgMask, ResultOwnership};
+
+/// Reconstruct the expected ArgMask from the oracle's transfer index list +
+/// the pointer-store rule. In this domain at most two indices ever transfer.
+fn expected_arg_mask(c: &str) -> ArgMask {
+    let mut idxs: Vec<usize> = ref_transfer_indices(c).to_vec();
+    if ref_is_pointer_store_helper(c) && !idxs.contains(&1) {
+        idxs.push(1);
+    }
+    match idxs.as_slice() {
+        [] => ArgMask::none(),
+        [i] => ArgMask::single(*i),
+        [i, j] => ArgMask::pair(*i, *j),
+        _ => panic!("more than two transfer indices for {c:?}: {idxs:?}"),
+    }
+}
+
+#[test]
+fn table_reproduces_every_oracle_answer_for_every_symbol() {
+    for &c in SYMBOLS {
+        let o = callee_ownership(c);
+
+        // result == FRESH_ALLOC_CALLEES membership
+        assert_eq!(
+            o.result == ResultOwnership::Fresh,
+            ref_returns_fresh_alloc(c),
+            "result mismatch for {c:?}"
+        );
+
+        // borrows_first_arg
+        assert_eq!(
+            o.borrows_first_arg,
+            ref_borrows_first_arg(c),
+            "borrows_first_arg mismatch for {c:?}"
+        );
+
+        // args_are_borrowed == effective is_runtime_borrow_helper
+        assert_eq!(
+            o.args_are_borrowed,
+            ref_is_runtime_borrow_helper(c),
+            "args_are_borrowed mismatch for {c:?}"
+        );
+
+        // arg_transfer == transfer_indices (plus pointer-store arg1)
+        assert_eq!(
+            o.arg_transfer,
+            expected_arg_mask(c),
+            "arg_transfer mismatch for {c:?}"
+        );
+    }
+}
