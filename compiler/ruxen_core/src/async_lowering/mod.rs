@@ -28,7 +28,7 @@ use std::collections::HashMap;
 
 use crate::lexer::token::Span;
 use crate::parser::ast::*;
-use crate::parser::visit::{walk_expr, Visit};
+use crate::parser::visit::{walk_expr, walk_expr_mut, Visit, VisitMut};
 
 /// Run the async-lowering pass over `program`. Mutates in place:
 /// every `async def` is replaced with a non-async wrapper that
@@ -5240,174 +5240,78 @@ fn rewrite_block_on_in_item(item: &mut TopLevelItem, counter: &mut u32) {
     }
 }
 
-fn rewrite_block_on_in_block(block: &mut Block, counter: &mut u32) {
-    for stmt in block.statements.iter_mut() {
-        match stmt {
-            Statement::Let(let_binding) => {
-                if let Some(v) = &mut let_binding.value {
-                    rewrite_block_on_in_expr(v, counter);
-                }
+/// Rewrites every `block_on(future)` call in a (non-async) scope to the
+/// inline poll-loop block via the shared exhaustive `walk_expr_mut`.
+///
+/// The old hand-rolled `rewrite_block_on_in_expr` matched a fixed set of
+/// expression forms and ended with a `_ => {}` arm, so it silently skipped
+/// `WhileLet` bodies (and `IfLet`, `SafeNav`/`SafeNavCall`, `Yield`,
+/// `MacroCall`) — leaving `block_on(...)` inside them un-rewritten. Bug #2.
+///
+/// Behaviour preserved exactly: (a) recurse into children FIRST, then
+/// transform this node (innermost-out, so `block_on(block_on(x))` rewrites
+/// correctly); (b) async closures are opaque — same reasoning as async fns
+/// (`block_on` inside async would deadlock; the resolver flags it as E1112).
+struct BlockOnRewriter {
+    counter: u32,
+}
+
+impl VisitMut for BlockOnRewriter {
+    fn visit_expr_mut(&mut self, e: &mut Expr) {
+        // Async closures are a separate scope and are left untouched so the
+        // resolver can flag a `block_on` inside them (E1112), matching the
+        // old walker's `if !c.is_async` guard.
+        if let ExprKind::Closure(c) = &e.kind {
+            if c.is_async {
+                return;
             }
-            Statement::Expression(e) => rewrite_block_on_in_expr(e, counter),
+        }
+
+        // Children first (innermost-out rewrite order).
+        walk_expr_mut(self, e);
+
+        // Then this node: `block_on(EXPR)` with exactly one arg → poll-loop.
+        if let Some(future_expr) = take_block_on_argument(e) {
+            self.counter += 1;
+            let n = self.counter;
+            let span = e.span.clone();
+            *e = build_block_on_loop(future_expr, n, &span);
         }
     }
 }
 
-fn rewrite_block_on_in_expr(expr: &mut Expr, counter: &mut u32) {
-    // Recurse into children FIRST so nested block_on calls
-    // (`block_on(block_on(x))` — pathological but legal at parse
-    // time) get rewritten innermost-out.
-    match &mut expr.kind {
-        ExprKind::BinaryOp { left, right, .. } => {
-            rewrite_block_on_in_expr(left, counter);
-            rewrite_block_on_in_expr(right, counter);
-        }
-        ExprKind::UnaryOp { operand, .. } => rewrite_block_on_in_expr(operand, counter),
-        ExprKind::Borrow(inner) | ExprKind::BorrowMut(inner) => {
-            rewrite_block_on_in_expr(inner, counter);
-        }
-        ExprKind::FieldAccess { object, .. } => rewrite_block_on_in_expr(object, counter),
-        ExprKind::MethodCall { object, args, .. } => {
-            rewrite_block_on_in_expr(object, counter);
-            for a in args.iter_mut() {
-                rewrite_block_on_in_expr(a, counter);
-            }
-        }
-        ExprKind::Call { callee, args, .. } => {
-            rewrite_block_on_in_expr(callee, counter);
-            for a in args.iter_mut() {
-                rewrite_block_on_in_expr(a, counter);
-            }
-        }
-        ExprKind::Index { object, index } => {
-            rewrite_block_on_in_expr(object, counter);
-            rewrite_block_on_in_expr(index, counter);
-        }
-        ExprKind::ClosureCall { callee, args } => {
-            rewrite_block_on_in_expr(callee, counter);
-            for a in args.iter_mut() {
-                rewrite_block_on_in_expr(a, counter);
-            }
-        }
-        ExprKind::Try(inner) | ExprKind::Await(inner) => {
-            rewrite_block_on_in_expr(inner, counter);
-        }
-        ExprKind::Assign { target, value } | ExprKind::CompoundAssign { target, value, .. } => {
-            rewrite_block_on_in_expr(target, counter);
-            rewrite_block_on_in_expr(value, counter);
-        }
-        ExprKind::If(IfExpr {
-            condition,
-            then_body,
-            elsif_clauses,
-            else_body,
-            ..
-        }) => {
-            rewrite_block_on_in_expr(condition, counter);
-            rewrite_block_on_in_block(then_body, counter);
-            for el in elsif_clauses.iter_mut() {
-                rewrite_block_on_in_expr(&mut el.condition, counter);
-                rewrite_block_on_in_block(&mut el.body, counter);
-            }
-            if let Some(b) = else_body {
-                rewrite_block_on_in_block(b, counter);
-            }
-        }
-        ExprKind::Match(MatchExpr { subject, arms, .. }) => {
-            rewrite_block_on_in_expr(subject, counter);
-            for a in arms.iter_mut() {
-                if let Some(g) = &mut a.guard {
-                    rewrite_block_on_in_expr(g, counter);
-                }
-                match &mut a.body {
-                    MatchArmBody::Expr(e) => rewrite_block_on_in_expr(e, counter),
-                    MatchArmBody::Block(b) => rewrite_block_on_in_block(b, counter),
-                }
-            }
-        }
-        ExprKind::Block(b) => rewrite_block_on_in_block(b, counter),
-        ExprKind::Loop(loop_expr) => rewrite_block_on_in_block(&mut loop_expr.body, counter),
-        ExprKind::While(while_expr) => {
-            rewrite_block_on_in_expr(&mut while_expr.condition, counter);
-            rewrite_block_on_in_block(&mut while_expr.body, counter);
-        }
-        ExprKind::For(for_expr) => {
-            rewrite_block_on_in_expr(&mut for_expr.iterable, counter);
-            rewrite_block_on_in_block(&mut for_expr.body, counter);
-        }
-        ExprKind::Return(Some(inner)) | ExprKind::Break(Some(inner)) => {
-            rewrite_block_on_in_expr(inner, counter);
-        }
-        ExprKind::ArrayLiteral(items) | ExprKind::TupleLiteral(items) => {
-            for it in items.iter_mut() {
-                rewrite_block_on_in_expr(it, counter);
-            }
-        }
-        ExprKind::ArrayFill { value, count } => {
-            rewrite_block_on_in_expr(value, counter);
-            rewrite_block_on_in_expr(count, counter);
-        }
-        ExprKind::MapLiteral(pairs) => {
-            for (k, v) in pairs.iter_mut() {
-                rewrite_block_on_in_expr(k, counter);
-                rewrite_block_on_in_expr(v, counter);
-            }
-        }
-        ExprKind::Range { start, end, .. } => {
-            if let Some(s) = start {
-                rewrite_block_on_in_expr(s, counter);
-            }
-            if let Some(e) = end {
-                rewrite_block_on_in_expr(e, counter);
-            }
-        }
-        ExprKind::Cast { expr: inner, .. } => rewrite_block_on_in_expr(inner, counter),
-        ExprKind::Closure(c) => {
-            // Skip async closures — same reasoning as async fns
-            // (see rewrite_block_on_in_item).
-            if !c.is_async {
-                match &mut c.body {
-                    ClosureBody::Expr(e) => rewrite_block_on_in_expr(e, counter),
-                    ClosureBody::Block(b) => rewrite_block_on_in_block(b, counter),
-                }
-            }
-        }
-        ExprKind::UnsafeBlock(b) => rewrite_block_on_in_block(b, counter),
-        ExprKind::EnumVariant { args, .. } => {
-            for fa in args.iter_mut() {
-                rewrite_block_on_in_expr(&mut fa.value, counter);
-            }
-        }
-        _ => {}
-    }
-
-    // Now check this node itself. If it's `block_on(EXPR)` with
-    // exactly one argument, replace it with the inline poll-loop
-    // block expression.
-    let rewrite_target = matches!(
+/// If `expr` is a single-argument `block_on(future)` free call, steal the
+/// `future` argument out of it and return it (leaving `expr` as a temporary
+/// `NullLiteral` placeholder the caller is expected to overwrite). Returns
+/// `None` for any other expression.
+fn take_block_on_argument(expr: &mut Expr) -> Option<Expr> {
+    let is_target = matches!(
         &expr.kind,
         ExprKind::Call { callee, args, block: None }
             if matches!(&callee.kind, ExprKind::Identifier(name) if name == "block_on")
                 && args.len() == 1
     );
-    if rewrite_target {
-        // Steal the future expression out of the Call.
-        let span = expr.span.clone();
-        let mut owned = std::mem::replace(
-            expr,
-            Expr {
-                kind: ExprKind::NullLiteral,
-                span: span.clone(),
-            },
-        );
-        let future_expr = match &mut owned.kind {
-            ExprKind::Call { args, .. } => args.remove(0),
-            _ => unreachable!("guarded above"),
-        };
-        *counter += 1;
-        let n = *counter;
-        *expr = build_block_on_loop(future_expr, n, &span);
+    if !is_target {
+        return None;
     }
+    let span = expr.span.clone();
+    let mut owned = std::mem::replace(
+        expr,
+        Expr {
+            kind: ExprKind::NullLiteral,
+            span,
+        },
+    );
+    match &mut owned.kind {
+        ExprKind::Call { args, .. } => Some(args.remove(0)),
+        _ => unreachable!("guarded by is_target above"),
+    }
+}
+
+fn rewrite_block_on_in_block(block: &mut Block, counter: &mut u32) {
+    let mut r = BlockOnRewriter { counter: *counter };
+    r.visit_block_mut(block);
+    *counter = r.counter;
 }
 
 /// Build the inline poll-loop block for a `block_on(future_expr)`
@@ -5747,5 +5651,71 @@ mod tests {
         assert_eq!(mangle_future_class_name("make_int"), "__MakeIntFuture");
         assert_eq!(mangle_future_class_name("fetch"), "__FetchFuture");
         assert_eq!(mangle_future_class_name("a_b_c"), "__ABCFuture");
+    }
+
+    fn parse_program(src: &str) -> Program {
+        let mut lx = crate::lexer::Lexer::new(src);
+        let toks = lx.tokenize().expect("lex");
+        let mut p = crate::parser::Parser::new(toks);
+        p.parse().expect("parse")
+    }
+
+    /// Counts residual `block_on(..)` calls anywhere in a program via
+    /// the shared `Visit` traversal.
+    struct BlockOnCounter {
+        n: usize,
+    }
+    impl crate::parser::visit::Visit for BlockOnCounter {
+        fn visit_expr(&mut self, e: &Expr) {
+            if let ExprKind::Call { callee, .. } = &e.kind {
+                if matches!(&callee.kind, ExprKind::Identifier(name) if name == "block_on") {
+                    self.n += 1;
+                }
+            }
+            crate::parser::visit::walk_expr(self, e);
+        }
+    }
+
+    fn count_block_on_calls(program: &Program) -> usize {
+        let mut c = BlockOnCounter { n: 0 };
+        for item in &program.items {
+            if let TopLevelItem::Function(f) = item {
+                use crate::parser::visit::Visit;
+                c.visit_block(&f.body);
+            }
+        }
+        c.n
+    }
+
+    #[test]
+    fn block_on_inside_while_let_is_rewritten() {
+        // `while let Some(x) = it.next() do block_on(f()) end`
+        // The OLD rewrite_block_on_in_expr lacked a WhileLet arm, so the
+        // inner block_on(...) call was left un-rewritten. Bug #2.
+        let mut program = parse_program(
+            r#"
+            def f() -> Int
+                7
+            end
+            def main() -> Unit
+                let var it = [1].iter()
+                while let Some(x) = it.next()
+                    block_on(f())
+                end
+            end
+        "#,
+        );
+        // Sanity: the un-rewritten program DOES contain a block_on call.
+        assert_eq!(
+            count_block_on_calls(&program),
+            1,
+            "fixture should start with exactly one block_on call"
+        );
+        rewrite_block_on_calls(&mut program);
+        assert_eq!(
+            count_block_on_calls(&program),
+            0,
+            "block_on inside a while-let body must be rewritten away"
+        );
     }
 }
