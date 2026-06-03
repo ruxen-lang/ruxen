@@ -24,6 +24,7 @@ mod impl_block;
 mod interpolation;
 mod match_arms;
 mod monomorphize;
+pub mod runtime_abi;
 mod statement;
 mod trait_default;
 mod type_helpers;
