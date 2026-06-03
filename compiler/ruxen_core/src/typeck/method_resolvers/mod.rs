@@ -4,12 +4,25 @@
 //! lived as the 774-LOC `InferenceEngine::builtin_method_type` method,
 //! a single `match (recv_ty, method_name) { … }` table).
 //!
-//! Future follow-up (tracked separately): split this single
-//! `builtin_method_type` function into per-namespace files
-//! (`primitives.rs`, `string.rs`, `array.rs`, `option.rs`, `result.rs`,
-//! `iter.rs`, `io.rs`, `fs.rs`, `time.rs`, …) and have each contribute a
-//! `pub fn resolvers() -> Vec<MethodResolver>` that the dispatcher walks.
-//! The internal arm groupings below already mark the cut lines.
+//! Phase 5 (thermonuke) completed the split this header originally
+//! envisioned: the ~290-arm match is now an ORDERED resolver pipeline.
+//! `builtin_method_type` walks `resolvers()`; the FIRST resolver whose
+//! `resolve` returns `Some` wins, so precedence is ONE decision (the Vec
+//! order) instead of being smeared across arm positions. Three tiers:
+//!
+//!   1. declared-method (`resolver::declared_method_resolvers`) — a user
+//!      class's own `new` beats a builtin (bug A2 fix), scoped away from
+//!      the stdlib types that own a payload-inferring named `new` arm.
+//!   2. named-stdlib — `concurrency`/`fmt`/`io`/`fs`/`process`/`net`/
+//!      `time`, each a `resolvers()` table keyed on the receiver class
+//!      name (incl. the E1100/E1101/E1102/E0714 construction checks).
+//!   3. structural — `strings`/`collections`/`numeric`/`iter` (keyed on
+//!      `Ty` shape) + `resolver::structural_fallback_resolvers` (the
+//!      generic Class/Struct/Enum `to_s`/`clone`/`new`/`default` tail).
+//!
+//! No resolver may match all receivers and no `_ => Some(...)` may claim
+//! an arbitrary type; the only `_ => None` arms are within-namespace
+//! "method not in this type" fallthroughs and the dispatcher's tail.
 
 use crate::hir::nodes::*;
 use crate::hir::types::Ty;
@@ -17,12 +30,14 @@ use crate::lexer::token::Span;
 
 use super::infer::{is_bufio_inner_supported, is_iter_sum_compatible, InferenceEngine};
 
+mod collections;
 mod concurrency;
 mod fmt;
 mod fs;
 mod io;
 mod iter;
 mod net;
+mod numeric;
 mod process;
 mod resolver;
 mod strings;
@@ -69,219 +84,11 @@ fn resolvers() -> Vec<MethodResolver> {
     v.extend(net::resolvers());
     v.extend(time::resolvers());
     v.extend(strings::resolvers()); // TIER 3 — structural
+    v.extend(collections::resolvers());
+    v.extend(numeric::resolvers());
     v.extend(iter::resolvers());
-    v.extend(resolver::legacy_resolvers()); // TIER 3 (remaining structural, still legacy-wrapped)
     v.extend(resolver::structural_fallback_resolvers()); // TIER 3 tail
     v
-}
-
-/// LEGACY — the original `match (ty, method)`. Arms are carved out of
-/// here into per-namespace resolvers over Tasks 3–10; once empty it is
-/// deleted. Reached only through the `legacy_resolvers()` wrapper.
-fn legacy_builtin_method_type(
-    eng: &mut InferenceEngine<'_>,
-    ty: &Ty,
-    method: &str,
-    _args: &[HirExpr],
-    _span: &Span,
-) -> Option<Ty> {
-    match (ty, method) {
-        // NOTE: String/Str structural arms + ParseIntError/ParseFloatError
-        // moved to `strings::resolvers()` (tier 3). See Phase 5 Task 9.
-
-        // Vec methods
-        (Ty::Array(_), "size") => Some(Ty::USize),
-        (Ty::Array(_), "empty?") => Some(Ty::Bool),
-        (Ty::Array(_), "push") => Some(Ty::Unit),
-        (Ty::Array(elem), "pop") => Some(Ty::Option(elem.clone())),
-        (Ty::Array(elem), "get") => Some(Ty::Option(Box::new(Ty::Ref(elem.clone())))),
-        (Ty::Array(elem), "get_mut") => Some(Ty::Option(Box::new(Ty::RefMut(elem.clone())))),
-        (Ty::Array(elem), "iter") => Some(Ty::Class {
-            name: "VecIter".to_string(),
-            generic_args: vec![*elem.clone()],
-        }),
-        (Ty::Array(elem), "into_iter") => Some(Ty::Class {
-            name: "VecIntoIter".to_string(),
-            generic_args: vec![*elem.clone()],
-        }),
-        (Ty::Array(_), "each") => Some(Ty::Unit),
-        (Ty::Array(_), "map") => Some(Ty::Array(Box::new(eng.ctx.fresh_type_var()))),
-        (Ty::Array(elem), "filter") => Some(Ty::Array(elem.clone())),
-        (Ty::Array(elem), "find") => Some(Ty::Option(Box::new(Ty::Ref(elem.clone())))),
-        (Ty::Array(_), "position") => Some(Ty::Option(Box::new(Ty::USize))),
-        (Ty::Array(_), "to_vec") => Some(ty.clone()),
-        (Ty::Array(_), "new") => Some(ty.clone()),
-        (Ty::Array(_), "sum") => Some(Ty::Int),
-        (Ty::Array(_), "count") => Some(Ty::USize),
-        (Ty::Array(_), "reverse") => Some(ty.clone()),
-        (Ty::Array(elem), "first") => Some(Ty::Option(elem.clone())),
-        (Ty::Array(elem), "last") => Some(Ty::Option(elem.clone())),
-        (Ty::Array(_), "clone") => Some(ty.clone()),
-        (Ty::Array(_), "include?") => Some(Ty::Bool),
-        (Ty::Array(_), "sort") => Some(ty.clone()),
-        (Ty::Array(_), "join") => Some(Ty::String),
-        // Phase 2 stdlib batch 1 (#03).
-        (Ty::Array(_), "with_capacity") => Some(ty.clone()),
-        (Ty::Array(_), "capacity") => Some(Ty::USize),
-        (Ty::Array(_), "clear") => Some(Ty::Unit),
-        (Ty::Array(_), "truncate") => Some(Ty::Unit),
-        (Ty::Array(_), "swap") => Some(Ty::Unit),
-        (Ty::Array(_), "insert") => Some(Ty::Unit),
-        (Ty::Array(elem), "remove") => Some(*elem.clone()),
-        (Ty::Array(_), "extend") => Some(Ty::Unit),
-        (Ty::Array(_), "iter_mut") => Some(ty.clone()),
-        (Ty::Array(_), "as_slice") => Some(ty.clone()),
-        // Phase 2 stdlib batch 2 (#03).
-        (Ty::Array(_), "from_iter") => Some(ty.clone()),
-        (Ty::Array(_), "dedup") => Some(Ty::Unit),
-        (Ty::Array(_), "sort_by") => Some(Ty::Unit),
-        (Ty::Array(_), "retain") => Some(Ty::Unit),
-
-        // HashMap methods
-        (Ty::Map(_, _), "new") => Some(ty.clone()),
-        (Ty::Map(_, _), "from_iter") => Some(ty.clone()),
-        (Ty::Map(_, _), "insert") => Some(Ty::Unit),
-        (Ty::Map(_, v), "get") => Some(Ty::Option(Box::new(Ty::Ref(v.clone())))),
-        (Ty::Map(_, _), "key?") => Some(Ty::Bool),
-        (Ty::Map(_, _), "size") => Some(Ty::USize),
-        (Ty::Map(_, _), "empty?") => Some(Ty::Bool),
-        // Phase 2 stdlib (#04): full HashMap[K,V] surface.
-        (Ty::Map(_, _), "with_capacity") => Some(ty.clone()),
-        (Ty::Map(_, v), "remove") => Some(Ty::Option(v.clone())),
-        (Ty::Map(_, _), "clear") => Some(Ty::Unit),
-        (Ty::Map(k, _), "keys") => Some(Ty::Array(Box::new(Ty::Ref(k.clone())))),
-        (Ty::Map(_, v), "values") => Some(Ty::Array(Box::new(Ty::Ref(v.clone())))),
-        (Ty::Map(k, _), "iter") => Some(Ty::Array(Box::new(Ty::Ref(k.clone())))),
-
-        // Set methods
-        (Ty::Set(_), "new") => Some(ty.clone()),
-        (Ty::Set(_), "from_iter") => Some(ty.clone()),
-        (Ty::Set(_), "insert") => Some(Ty::Unit),
-        (Ty::Set(_), "include?") => Some(Ty::Bool),
-        (Ty::Set(_), "size") => Some(Ty::USize),
-        (Ty::Set(_), "empty?") => Some(Ty::Bool),
-        // Phase 2 stdlib (#04): full HashSet[T] surface.
-        (Ty::Set(_), "with_capacity") => Some(ty.clone()),
-        (Ty::Set(_), "remove") => Some(Ty::Bool),
-        (Ty::Set(_), "clear") => Some(Ty::Unit),
-        (Ty::Set(t), "iter") => Some(Ty::Array(Box::new(Ty::Ref(t.clone())))),
-        (Ty::Set(_), "union") => Some(ty.clone()),
-        (Ty::Set(_), "intersection") => Some(ty.clone()),
-        (Ty::Set(_), "difference") => Some(ty.clone()),
-
-        // Option try_op (the ? operator desugars to this)
-        (Ty::Option(inner), "try_op") => Some(*inner.clone()),
-
-        // Option methods
-        (Ty::Option(inner), "unwrap") => Some(*inner.clone()),
-        (Ty::Option(inner), "expect") => Some(*inner.clone()),
-        (Ty::Option(inner), "unwrap_or") => Some(*inner.clone()),
-        (Ty::Option(inner), "unwrap_or_else") => Some(*inner.clone()),
-        (Ty::Option(_), "map") => Some(Ty::Option(Box::new(eng.ctx.fresh_type_var()))),
-        (Ty::Option(inner), "ok_or") => Some(Ty::Result(inner.clone(), Box::new(Ty::Error))),
-        (Ty::Option(_), "is_some") => Some(Ty::Bool),
-        (Ty::Option(_), "is_none") => Some(Ty::Bool),
-
-        // Result try_op (the ? operator desugars to this)
-        (Ty::Result(ok, _), "try_op") => Some(*ok.clone()),
-
-        // Result methods
-        (Ty::Result(ok, _), "unwrap") => Some(*ok.clone()),
-        (Ty::Result(ok, _), "expect") => Some(*ok.clone()),
-        (Ty::Result(ok, _), "unwrap_or") => Some(*ok.clone()),
-        (Ty::Result(ok, _), "unwrap_or_else") => Some(*ok.clone()),
-        (Ty::Result(_, _), "map") => Some(Ty::Result(
-            Box::new(eng.ctx.fresh_type_var()),
-            Box::new(Ty::Error),
-        )),
-        (Ty::Result(_, err), "map_err") => {
-            Some(Ty::Result(Box::new(eng.ctx.fresh_type_var()), err.clone()))
-        }
-        (Ty::Result(_, _), "is_ok") => Some(Ty::Bool),
-        (Ty::Result(_, _), "is_err") => Some(Ty::Bool),
-
-        // NOTE: the concurrency arms (Future/Thread/JoinHandle/ThreadPanic/
-        // Mutex/MutexGuard/Arc/SharedSync, incl. E1100/E1101/E1102) moved to
-        // `concurrency::resolvers()` (tier 2). See Phase 5 Task 4.
-
-        // NOTE: the Formatter arms moved to `fmt::resolvers()` (tier 2).
-        // See Phase 5 Task 5.
-
-        // NOTE: the *Iter combinator block (filter/map/find/sum[E0700]/
-        // fold/zip/collect_vec/to_vec/enumerate/partition/…) moved to
-        // `iter::resolvers()` (tier 3). See Phase 5 Task 9.
-
-        // NOTE: Stdin/Stdout/Stderr arms moved to `io::resolvers()` (tier 2).
-        // See Phase 5 Task 6.
-        // Phase 2 stdlib (#06): std::fs::Metadata accessors.
-        // Backed by `ruxen_metadata_*` runtime fns reading from
-        // the flat 24-byte heap struct produced by
-        // `ruxen_fs_metadata`. `modified` is a UNIX timestamp in
-        // seconds (Int), matching `std.time.unix_ns / 1_000_000_000`.
-        // NOTE: Metadata arms moved to `fs::resolvers()` (tier 2).
-        // See Phase 5 Task 7.
-        // Phase 2 stdlib (#06): std::process::Command builder.
-        // NOTE: Command/ExitStatus/Output (process), Duration/Instant
-        // (time), and TcpListener/TcpStream (net) arms moved to
-        // `process::`/`time::`/`net::resolvers()` (tier 2). See Phase 5
-        // Task 8. BufReader/BufWriter (E0714) + IoError → io.rs (Task 6).
-        // Enum weight (Priority.weight)
-        (Ty::Enum { .. }, "weight") => Some(Ty::Int),
-
-        // Bool methods
-        (Ty::Bool, "to_string") => Some(Ty::String),
-
-        // Int methods
-        (Ty::Int, "to_string") => Some(Ty::String),
-        (Ty::USize, "to_string") => Some(Ty::String),
-        (Ty::Float, "to_string") => Some(Ty::String),
-
-        // Numeric conversions. Ruxen has no implicit Int<->Float coercion
-        // (see E0707), so these explicit methods are the supported way to
-        // cross the integer/float boundary. `to_f` widens an `Int` to a
-        // `Float`; `to_i` truncates a `Float` toward zero to an `Int`.
-        (Ty::Int, "to_f") => Some(Ty::Float),
-        (Ty::Float, "to_i") => Some(Ty::Int),
-
-        // Universal `to_s` (Ruby convention) on scalar primitives — every
-        // value can be rendered to a `String`. Backed by the same
-        // `ruxen_*_to_string` runtime helpers as string interpolation
-        // (`lang_intrinsics::runtime_name` maps the mangled `<Type>_to_s`
-        // names). User-defined class/struct/enum `to_s` is handled in the
-        // MIR display-dispatch path, not here.
-        (Ty::Int, "to_s") => Some(Ty::String),
-        (Ty::USize, "to_s") => Some(Ty::String),
-        (Ty::Float, "to_s") => Some(Ty::String),
-        (Ty::Bool, "to_s") => Some(Ty::String),
-        (Ty::Char, "to_s") => Some(Ty::String),
-        // NOTE: String/Str `to_s` moved to `strings::resolvers()` (Task 9).
-        // `to_s` on user-defined types also yields a `String`. The MIR
-        // method-call lowering routes it through the same display dispatch
-        // as `"#{obj}"` (unless the type defines its own `to_s`, which
-        // wins). A user `to_s` conventionally returns `String` too, so
-        // reporting `String` here is correct in both cases.
-        // NOTE: the generic `to_s`/`clone`/`new`/`default` arms for
-        // `Class`/`Struct`/`Enum` receivers moved to
-        // `resolver::structural_fallback_resolvers` (tier 3 tail), and the
-        // declared-`new` override moved to `resolver::declared_method_resolvers`
-        // (tier 1 — the bug-A2 fix). See Phase 5 Task 3.
-
-        // NOTE: six wildcard catch-all arms here (`to_display`, `summary`,
-        // `is_actionable`, `is_done`, `serialize`, `message`) used to
-        // claim `Ty::String` / `Ty::Bool` for ANY receiver type. They
-        // were quality-review §1.3 / §4 — domain-named ones (`is_done`,
-        // `is_actionable`) leaked from the sample_program.rx fixture;
-        // `to_display`/`summary` were a fallback for an earlier era when
-        // mixin-bound dispatch on `&T where T: Mixin` didn't reach the
-        // hardcoded signature registry. With the ref-peel fix in
-        // `lookup_on_type_param_bounds` (commit b840862) and the proper
-        // return types on the Showable/Summarizable mixins, normal
-        // dispatch handles them. Real receiver types resolve through
-        // `lookup_method` / `lookup_method_on_bounds` above; a typo on
-        // an unrelated value (`42.summary`) now surfaces as the
-        // intended "unknown method" diagnostic instead of typechecking.
-        _ => None,
-    }
 }
 
 #[cfg(test)]
