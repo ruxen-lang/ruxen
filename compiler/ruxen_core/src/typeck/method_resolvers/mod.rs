@@ -18,7 +18,48 @@ use crate::lexer::token::Span;
 
 use super::infer::{is_bufio_inner_supported, is_iter_sum_compatible, InferenceEngine};
 
+mod resolver;
+
+use resolver::MethodResolver;
+
+/// The method-resolution entry point. Signature UNCHANGED — callers in
+/// `infer/collect.rs:333` and `infer/expr.rs` stay byte-identical. Walks
+/// the ordered resolver pipeline; the first resolver to return `Some`
+/// wins. The pipeline (one ordered `Vec`) is the single precedence
+/// decision, replacing the smear of ~290 arm positions.
 pub(super) fn builtin_method_type(
+    eng: &mut InferenceEngine<'_>,
+    ty: &Ty,
+    method: &str,
+    args: &[HirExpr],
+    span: &Span,
+) -> Option<Ty> {
+    for r in resolvers() {
+        if (r.matches)(ty, method) {
+            if let Some(ret) = (r.resolve)(eng, ty, method, args, span) {
+                return Some(ret);
+            }
+        }
+    }
+    // The single, deliberate "nothing claimed it" — was the legacy
+    // match's trailing `_ => None`.
+    None
+}
+
+/// The ONE precedence decision. During the migration this delegates to a
+/// single legacy-wrapping resolver; each migration task carves a
+/// namespace out of the legacy match into its own slot here, at the
+/// correct precedence position.
+fn resolvers() -> Vec<MethodResolver> {
+    let mut v = Vec::new();
+    v.extend(resolver::legacy_resolvers());
+    v
+}
+
+/// LEGACY — the original `match (ty, method)`. Arms are carved out of
+/// here into per-namespace resolvers over Tasks 3–10; once empty it is
+/// deleted. Reached only through the `legacy_resolvers()` wrapper.
+fn legacy_builtin_method_type(
     eng: &mut InferenceEngine<'_>,
     ty: &Ty,
     method: &str,
@@ -1653,6 +1694,80 @@ mod golden {
                 "golden parity divergence at corpus index {i}:\n  got:  {got}\n  want: {want}"
             );
         }
+    }
+
+    /// Task 2: the dispatcher (`resolvers()` walked by `builtin_method_type`)
+    /// must reproduce the legacy match's answer for the whole corpus. Since
+    /// `builtin_method_type` IS the dispatcher after Task 2, this asserts the
+    /// dispatcher is behaviour-identical to the legacy match it wraps, and
+    /// that the resolver pipeline is actually assembled (non-empty).
+    #[test]
+    fn dispatcher_matches_legacy_for_whole_corpus() {
+        assert!(
+            !super::resolvers().is_empty(),
+            "dispatcher must assemble at least one resolver"
+        );
+        // Re-run the corpus through the public dispatcher entry and compare
+        // to the frozen oracle — identical assertion to `golden_parity`,
+        // named to document that the dispatcher path is what's exercised.
+        let cases = corpus();
+        let expected = std::fs::read_to_string(snapshot_path())
+            .expect("golden snapshot missing — run with RECORD_GOLDEN=1 first");
+        let expected_lines: Vec<&str> = expected.lines().collect();
+        for (i, case) in cases.iter().enumerate() {
+            let (ret, codes) = run_case(case);
+            assert_eq!(
+                render(case, &ret, &codes),
+                expected_lines[i],
+                "dispatcher diverged from legacy at corpus index {i}"
+            );
+        }
+    }
+
+    /// Task 2 — bug-A2 precedence DECISION (decided empirically, per plan).
+    ///
+    /// The plan posed: is the real stdlib `Mutex.new` a builtin arm only
+    /// (no symbol-table `DefKind::Method`)? If so, tier-1-first would be
+    /// safe. This test records the empirical answer: it is NOT — the
+    /// stdlib `class Mutex[T]` in `library/std/sync/src/mutex.rx` declares
+    /// `def self.new as "ruxen_mutex_new"(initial: T) -> Mutex[T]`, so
+    /// `lookup_class_method_return("Mutex", "new")` returns `Some(Mutex[T])`.
+    ///
+    /// CONSEQUENCE (load-bearing for Task 3): tier-1-first is UNSAFE — a
+    /// declared-method resolver running before the named-stdlib arms would
+    /// return the unsubstituted `Mutex[T]` instead of the named arm's
+    /// payload-inferred `Mutex[<args[0].ty>]` + E1101 Send check, changing
+    /// stdlib behaviour and breaking the golden corpus. Therefore tier 1
+    /// (declared-method) MUST be scoped to USER-DEFINED receivers only: it
+    /// skips any receiver whose name is in the stdlib type-name set
+    /// (`resolver::STDLIB_TYPE_NAMES`). This test pins that precondition so
+    /// a future change to the stdlib surface that removed the declared
+    /// `new` would re-open the tier-1-first option deliberately.
+    #[test]
+    fn stdlib_mutex_new_is_a_declared_method_so_tier1_is_user_scoped() {
+        let mut bootstrap_diagnostics = Vec::new();
+        let bootstrap_packages =
+            crate::resolve::bootstrap::run_bootstrap_with_package_names(&mut bootstrap_diagnostics);
+        // A trivial user program; we only need the stdlib symbols loaded.
+        let src = "def main\nend\n";
+        let mut lx = crate::lexer::Lexer::new(src);
+        let toks = lx.tokenize().expect("lex");
+        let mut p = crate::parser::Parser::new(toks);
+        let prog = p.parse().expect("parse");
+        let resolver = crate::resolve::Resolver::new();
+        let result = resolver.resolve_with_bootstrap_packages(&prog, &bootstrap_packages);
+
+        let mut ctx = result.type_context;
+        let mut symbols = result.symbols;
+        let traits = MixinResolver::new();
+        let eng = InferenceEngine::new(&mut ctx, &mut symbols, &traits);
+        let mutex_new = eng.lookup_class_method_return("Mutex", "new");
+        assert!(
+            matches!(mutex_new, Some(Ty::Class { ref name, .. }) if name == "Mutex"),
+            "stdlib Mutex declares its own `new` (FFI) returning Mutex[T]; \
+             tier-1 must therefore be scoped to user-defined receivers only. \
+             got {mutex_new:?}"
+        );
     }
 
     /// Completeness backstop: every method-name literal that appears in a
