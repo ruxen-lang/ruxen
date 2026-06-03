@@ -20,6 +20,7 @@ use super::infer::{is_bufio_inner_supported, is_iter_sum_compatible, InferenceEn
 
 mod concurrency;
 mod fmt;
+mod fs;
 mod io;
 mod resolver;
 
@@ -59,6 +60,7 @@ fn resolvers() -> Vec<MethodResolver> {
     v.extend(concurrency::resolvers()); // TIER 2 — named stdlib
     v.extend(fmt::resolvers());
     v.extend(io::resolvers());
+    v.extend(fs::resolvers());
     v.extend(resolver::legacy_resolvers()); // TIER 2 (remaining named stdlib, still legacy-wrapped)
     v.extend(resolver::structural_fallback_resolvers()); // TIER 3 tail
     v
@@ -405,11 +407,8 @@ fn legacy_builtin_method_type(
         // the flat 24-byte heap struct produced by
         // `ruxen_fs_metadata`. `modified` is a UNIX timestamp in
         // seconds (Int), matching `std.time.unix_ns / 1_000_000_000`.
-        (Ty::Class { name, .. }, "size") if name == "Metadata" => Some(Ty::Int),
-        (Ty::Class { name, .. }, "modified") if name == "Metadata" => Some(Ty::Int),
-        (Ty::Class { name, .. }, "is_file") if name == "Metadata" => Some(Ty::Bool),
-        (Ty::Class { name, .. }, "is_dir") if name == "Metadata" => Some(Ty::Bool),
-        (Ty::Class { name, .. }, "is_symlink") if name == "Metadata" => Some(Ty::Bool),
+        // NOTE: Metadata arms moved to `fs::resolvers()` (tier 2).
+        // See Phase 5 Task 7.
         // Phase 2 stdlib (#06): std::process::Command builder.
         // `.arg/.args/.env/.current_dir` return Self (same handle,
         // mutate-in-place — the source local is tainted by the
@@ -445,119 +444,8 @@ fn legacy_builtin_method_type(
         }
         (Ty::Class { name, .. }, "stdout") if name == "Output" => Some(Ty::String),
         (Ty::Class { name, .. }, "stderr") if name == "Output" => Some(Ty::String),
-        // Phase 2 stdlib (#06.5 T2): std::io::File static-style
-        // constructors. Receiver type is `File` (the class identifier
-        // promoted to a type via resolve::IdentifierKind promotion).
-        // All return `Result[File, IoError]`.
-        (Ty::Class { name, .. }, "open") if name == "File" => Some(Ty::Result(
-            Box::new(InferenceEngine::class_ty("File", vec![])),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "create") if name == "File" => Some(Ty::Result(
-            Box::new(InferenceEngine::class_ty("File", vec![])),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "append") if name == "File" => Some(Ty::Result(
-            Box::new(InferenceEngine::class_ty("File", vec![])),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "open_options") if name == "File" => Some(Ty::Result(
-            Box::new(InferenceEngine::class_ty("File", vec![])),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        // Phase 2 stdlib (#06.5 T2): std::io::File instance methods.
-        // Every path that can fail returns `Result[_, IoError]`. The
-        // io_error_ty helper would be cleaner but inferring it here
-        // matches the existing Command-arm style above.
-        (Ty::Class { name, .. }, "read") if name == "File" => Some(Ty::Result(
-            Box::new(Ty::Int),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "read_to_string") if name == "File" => Some(Ty::Result(
-            Box::new(Ty::String),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "read_all") if name == "File" => Some(Ty::Result(
-            Box::new(Ty::Array(Box::new(Ty::Int))),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "write") if name == "File" => Some(Ty::Result(
-            Box::new(Ty::Int),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "write_all") if name == "File" => Some(Ty::Result(
-            Box::new(Ty::Unit),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "write_str") if name == "File" => Some(Ty::Result(
-            Box::new(Ty::Unit),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "flush") if name == "File" => Some(Ty::Result(
-            Box::new(Ty::Unit),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "seek") if name == "File" => Some(Ty::Result(
-            Box::new(Ty::Int),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "metadata") if name == "File" => Some(Ty::Result(
-            Box::new(InferenceEngine::class_ty("Metadata", vec![])),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "close") if name == "File" => Some(Ty::Result(
-            Box::new(Ty::Unit),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        // OpenOptions builder methods — each returns Self.
-        (Ty::Class { name, .. }, "read") if name == "OpenOptions" => Some(ty.clone()),
-        (Ty::Class { name, .. }, "write") if name == "OpenOptions" => Some(ty.clone()),
-        (Ty::Class { name, .. }, "append") if name == "OpenOptions" => Some(ty.clone()),
-        (Ty::Class { name, .. }, "truncate") if name == "OpenOptions" => Some(ty.clone()),
-        (Ty::Class { name, .. }, "create") if name == "OpenOptions" => Some(ty.clone()),
-        (Ty::Class { name, .. }, "create_new") if name == "OpenOptions" => Some(ty.clone()),
+        // NOTE: File + OpenOptions arms moved to `fs::resolvers()` (tier 2).
+        // See Phase 5 Task 7.
         // Phase 2 stdlib (#06.5 T4): Duration static-style
         // constructors. Receiver type-name resolves to `Duration`
         // (class identifier promoted to its Ty by the resolver).
