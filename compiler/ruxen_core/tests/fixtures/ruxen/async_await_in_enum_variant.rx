@@ -1,0 +1,17 @@
+## Bug #1 (docs/specs/syntax/async_lowering.spec.md): a `.await` inside
+## an enum-variant constructor argument (`Option.Some(make_int().await)`)
+## must be seen by the await-scan so the fn takes the await-aware
+## lowering path. Before the Visit migration, `expr_contains_await`
+## had a `_ => false` arm that missed `ExprKind::EnumVariant`, so the
+## fn fell into the no-await path and the resolver then misreported
+## E1110 ("`.await` only valid inside async def") on a `.await` that
+## is, in fact, inside an async def.
+
+async def make_int() -> Int
+  42
+end
+
+async def f() -> Option[Int]
+  let x = Option.Some(make_int().await)
+  x
+end

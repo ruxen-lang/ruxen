@@ -28,6 +28,7 @@ use std::collections::HashMap;
 
 use crate::lexer::token::Span;
 use crate::parser::ast::*;
+use crate::parser::visit::{walk_expr, Visit};
 
 /// Run the async-lowering pass over `program`. Mutates in place:
 /// every `async def` is replaced with a non-async wrapper that
@@ -4328,110 +4329,48 @@ fn poll_return_type(inner: &TypeExpr, span: &Span) -> TypeExpr {
 /// expression tree. Milestone 2A skips lowering on any async fn
 /// whose body has even one suspension point — those land in
 /// Milestone 2B.
-fn block_contains_await(block: &Block) -> bool {
-    for stmt in &block.statements {
-        match stmt {
-            Statement::Let(let_binding) => {
-                if let Some(v) = &let_binding.value {
-                    if expr_contains_await(v) {
-                        return true;
-                    }
-                }
-            }
-            Statement::Expression(e) => {
-                if expr_contains_await(e) {
-                    return true;
-                }
-            }
+/// Detects whether a block/expr contains a `.await` in THIS function's
+/// scope. Nested closures have their own async scope, so we override
+/// `visit_expr` to NOT recurse into closure bodies (the old code's
+/// deliberate opacity) — every other node recurses via the shared
+/// exhaustive `walk_expr`, so the variants the old hand-rolled scan
+/// missed under its `_ => false` arm (`EnumVariant`, `UnsafeBlock`,
+/// `IfLet`, `SafeNav`/`SafeNavCall`, `Range`, `MapLiteral`, `ArrayFill`,
+/// `MacroCall`, `Yield`) are now covered. Bug #1.
+///
+/// Loop/while/while-let/for bodies still count (they recurse via
+/// `walk_expr`): an `.await` inside a loop must trigger the await-aware
+/// path so the dedicated E1115 pre-pass can surface a clean diagnostic,
+/// rather than falling into the no-await path which would leave the
+/// `.await` in place and misreport E1110.
+struct AwaitScan {
+    found: bool,
+}
+
+impl Visit for AwaitScan {
+    fn visit_expr(&mut self, e: &Expr) {
+        if self.found {
+            return;
+        }
+        match &e.kind {
+            ExprKind::Await(_) => self.found = true,
+            // Closure bodies are a separate async scope — opaque to this scan.
+            ExprKind::Closure(_) => {}
+            _ => walk_expr(self, e),
         }
     }
-    false
+}
+
+fn block_contains_await(block: &Block) -> bool {
+    let mut s = AwaitScan { found: false };
+    s.visit_block(block);
+    s.found
 }
 
 fn expr_contains_await(expr: &Expr) -> bool {
-    match &expr.kind {
-        ExprKind::Await(_) => true,
-        ExprKind::BinaryOp { left, right, .. } => {
-            expr_contains_await(left) || expr_contains_await(right)
-        }
-        ExprKind::UnaryOp { operand, .. } => expr_contains_await(operand),
-        ExprKind::Borrow(inner) | ExprKind::BorrowMut(inner) => expr_contains_await(inner),
-        ExprKind::FieldAccess { object, .. } => expr_contains_await(object),
-        ExprKind::MethodCall { object, args, .. } => {
-            expr_contains_await(object) || args.iter().any(expr_contains_await)
-        }
-        ExprKind::Call { callee, args, .. } => {
-            expr_contains_await(callee) || args.iter().any(expr_contains_await)
-        }
-        ExprKind::ClosureCall { callee, args } => {
-            expr_contains_await(callee) || args.iter().any(expr_contains_await)
-        }
-        ExprKind::Try(inner) => expr_contains_await(inner),
-        ExprKind::Assign { target, value } | ExprKind::CompoundAssign { target, value, .. } => {
-            expr_contains_await(target) || expr_contains_await(value)
-        }
-        ExprKind::If(IfExpr {
-            condition,
-            then_body,
-            elsif_clauses,
-            else_body,
-            ..
-        }) => {
-            expr_contains_await(condition)
-                || block_contains_await(then_body)
-                || elsif_clauses
-                    .iter()
-                    .any(|el| expr_contains_await(&el.condition) || block_contains_await(&el.body))
-                || else_body.as_ref().is_some_and(block_contains_await)
-        }
-        ExprKind::Match(MatchExpr { subject, arms, .. }) => {
-            expr_contains_await(subject)
-                || arms.iter().any(|a| match &a.body {
-                    MatchArmBody::Expr(e) => expr_contains_await(e),
-                    MatchArmBody::Block(b) => block_contains_await(b),
-                })
-        }
-        ExprKind::Block(b) => block_contains_await(b),
-        ExprKind::Return(Some(inner)) | ExprKind::Break(Some(inner)) => expr_contains_await(inner),
-        ExprKind::ArrayLiteral(items) | ExprKind::TupleLiteral(items) => {
-            items.iter().any(expr_contains_await)
-        }
-        ExprKind::Index { object, index } => {
-            expr_contains_await(object) || expr_contains_await(index)
-        }
-        ExprKind::Cast { expr: inner, .. } => expr_contains_await(inner),
-        ExprKind::Closure(c) => match &c.body {
-            // A nested `async {}` closure has its own scope — its
-            // `.await` doesn't count against the outer fn. v1 keeps
-            // closures lowered separately; treat closure bodies as
-            // opaque for the await-scan.
-            ClosureBody::Expr(_) | ClosureBody::Block(_) => false,
-        },
-        // Loop bodies count: an `.await` inside `loop { ... }`,
-        // `while cond { ... }`, `while let pat = expr { ... }`, or
-        // `for pat in iter { ... }` is still an await in this fn
-        // and must trigger the await-aware lowering path. The
-        // segmenter will bail on the actual loop shape (v1 doesn't
-        // build per-iteration state machines), but the dedicated
-        // E1115 pre-pass below surfaces a clean diagnostic — without
-        // this branch, the scan would skip the loop body and the
-        // function would fall into `lower_one_async_fn` (no-await
-        // path) instead, which wraps the body in a single-state
-        // Poll.Ready and leaves the `.await` inside it — producing
-        // a misleading E1110 ("`.await` only valid inside async
-        // def") downstream rather than the correct E1115.
-        ExprKind::Loop(LoopExpr { body, .. }) => block_contains_await(body),
-        ExprKind::While(WhileExpr {
-            condition, body, ..
-        }) => expr_contains_await(condition) || block_contains_await(body),
-        ExprKind::WhileLet(WhileLetExpr { value, body, .. }) => {
-            expr_contains_await(value) || block_contains_await(body)
-        }
-        ExprKind::For(ForExpr { iterable, body, .. }) => {
-            expr_contains_await(iterable) || block_contains_await(body)
-        }
-        _ => false,
-    }
+    let mut s = AwaitScan { found: false };
+    s.visit_expr(expr);
+    s.found
 }
 
 /// Pre-pass E1115 (`.await` inside a loop body): walks every async
