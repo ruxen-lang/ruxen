@@ -609,6 +609,108 @@ mod golden {
         );
     }
 
+    /// Resolve `builtin_method_type(receiver, method, [])` against a real
+    /// engine built from the given user `src` (no stdlib prelude — the
+    /// program is self-contained), so a user-declared `new` is present in
+    /// the symbol table for the declared-method tier to find.
+    fn resolve_method_in_program(src: &str, recv: Ty, method: &str) -> Option<Ty> {
+        let mut lx = crate::lexer::Lexer::new(src);
+        let toks = lx.tokenize().expect("lex");
+        let mut p = crate::parser::Parser::new(toks);
+        let prog = p.parse().expect("parse");
+        let resolver = crate::resolve::Resolver::new();
+        let result = resolver.resolve(&prog);
+        let mut ctx = result.type_context;
+        let mut symbols = result.symbols;
+        let traits = MixinResolver::new();
+        let mut eng = InferenceEngine::new(&mut ctx, &mut symbols, &traits);
+        builtin_method_type(&mut eng, &recv, method, &[], &span())
+    }
+
+    /// Bug A2 (the ONE intended behaviour change in Phase 5): a user class
+    /// that declares its own `new` returning a `Result` must honour that
+    /// DECLARED return type, not be overridden by the builtin's structural
+    /// `Some(Self)` constructor fallback.
+    ///
+    /// Collision choice (per the Task 11 implementer obligation): verified
+    /// against the real fs.rs arms — the stdlib `File` arms claim
+    /// `open`/`create`/`read`/`metadata`/… but NOT `new` (there is no
+    /// named `File.new` arm; `File.new` flowed to the generic
+    /// `(Ty::Class, "new")` declared-lookup at legacy `mod.rs:1214`). So
+    /// the real, fixable A2 collision IS `new` via the structural
+    /// fallback, exactly the case the plan flagged as "correct as written".
+    /// We exercise it with BOTH a stdlib-shaped name (`File`, the plan's
+    /// example) and a plain user name to show the fix is general.
+    ///
+    /// Before Phase 5 the declared-`new` lookup sat positionally AFTER the
+    /// generic structural arm only in spirit; the tier split now guarantees
+    /// declared (tier 1) precedes the structural fallback (tier 3 tail).
+    #[test]
+    fn user_class_named_like_stdlib_honours_declared_new_return_a2() {
+        // A user class literally named `File` (a stdlib type name, but NOT
+        // one with a payload-inferring named `new` arm) declaring its own
+        // `self.new -> Result[File, String]`.
+        let src = "\
+class File
+  def self.new -> Result[File, String]
+    Err(\"nope\")
+  end
+end
+def main
+  let _f = File.new
+end
+";
+        let ret = resolve_method_in_program(src, class("File", vec![]), "new");
+        assert!(
+            matches!(ret, Some(Ty::Result(..))),
+            "user-declared `File.new -> Result` must win over the builtin \
+             structural `Some(Self)` fallback; got {ret:?}"
+        );
+
+        // And the same fix for an ordinary user name (no stdlib shadow at
+        // all) — declared `new` is honoured.
+        let src2 = "\
+class Config
+  def self.new -> Result[Config, String]
+    Err(\"nope\")
+  end
+end
+def main
+  let _c = Config.new
+end
+";
+        let ret2 = resolve_method_in_program(src2, class("Config", vec![]), "new");
+        assert!(
+            matches!(ret2, Some(Ty::Result(..))),
+            "user-declared `Config.new -> Result` must be honoured; got {ret2:?}"
+        );
+    }
+
+    /// Counterpart to A2: a stdlib type that owns a payload-inferring named
+    /// `new` arm (`Mutex`) must keep that arm's behaviour — the named arm
+    /// wins over the declared-method tier, so `Mutex.new(7)` is still
+    /// `Mutex[Int]` (not the unsubstituted declared `Mutex[T]`). This is
+    /// the non-contradiction the corpus and A2 must both satisfy.
+    #[test]
+    fn stdlib_named_new_arm_still_wins_over_declared() {
+        let mut ctx = TypeContext::new();
+        let mut symbols = SymbolTable::new();
+        let traits = MixinResolver::new();
+        let mut eng = InferenceEngine::new(&mut ctx, &mut symbols, &traits);
+        let ret = builtin_method_type(
+            &mut eng,
+            &class("Mutex", vec![]),
+            "new",
+            &[arg(Ty::Int)],
+            &span(),
+        );
+        assert!(
+            matches!(ret, Some(Ty::Class { ref name, ref generic_args, .. })
+                if name == "Mutex" && generic_args == &vec![Ty::Int]),
+            "Mutex.new(Int) must stay the named arm's Mutex[Int]; got {ret:?}"
+        );
+    }
+
     /// Completeness backstop: every method-name literal that appears in a
     /// `mod.rs` arm pattern must be exercised by at least one corpus case.
     /// This turns "I forgot to transcribe an arm" from a silent gap into a
