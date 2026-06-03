@@ -145,7 +145,7 @@ def main
   let needle = String.from("banana")
   match find(&dict, &needle)
     Some(found) -> puts "got #{found}"
-    None        -> puts "missing"
+    nil        -> puts "missing"
   end
 end
 ```

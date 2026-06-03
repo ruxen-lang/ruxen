@@ -5,7 +5,7 @@ class Router
     self.handlers = Array.new
   end
 
-  def add(h: any Fn(Int) -> Int) -> ()
+  def add(h: any Fn(Int) -> Int) -> nil
     self.handlers.push(h)
   end
 

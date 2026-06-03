@@ -16,10 +16,10 @@ class AtomicI64
   lib "runtime/atomic.c"
     def self.new as "ruxen_atomic_i64_new"(initial: Int) -> AtomicI64
     def load as "ruxen_atomic_i64_load" -> Int
-    def store as "ruxen_atomic_i64_store"(value: Int) -> ()
+    def store as "ruxen_atomic_i64_store"(value: Int) -> nil
     def fetch_add as "ruxen_atomic_i64_fetch_add"(delta: Int) -> Int
     def fetch_sub as "ruxen_atomic_i64_fetch_sub"(delta: Int) -> Int
     def compare_and_swap as "ruxen_atomic_i64_compare_and_swap"(current: Int, new_val: Int) -> Int
-    def drop as "ruxen_atomic_i64_drop" -> ()
+    def drop as "ruxen_atomic_i64_drop" -> nil
   end
 end

@@ -534,7 +534,7 @@ fn token_to_source(token: &crate::lexer::token::Token) -> String {
         TokenKind::Eq => "=".to_string(),
         TokenKind::Arrow => "->".to_string(),
         TokenKind::DotDot => "..".to_string(),
-        TokenKind::DotDotEq => "..=".to_string(),
+        TokenKind::DotDotDot => "...".to_string(),
         TokenKind::Question => "?".to_string(),
         TokenKind::QuestionDot => "?.".to_string(),
         TokenKind::At => "@".to_string(),

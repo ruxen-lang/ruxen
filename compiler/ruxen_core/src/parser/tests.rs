@@ -1038,7 +1038,8 @@ end";
 
     #[test]
     fn range_exclusive() {
-        let expr = parse_expr("0..10");
+        // ruby-naming.spec.md §3.10b: `...` is the EXCLUSIVE range.
+        let expr = parse_expr("0...10");
         match &expr.kind {
             ExprKind::Range {
                 start,
@@ -1063,7 +1064,8 @@ end";
 
     #[test]
     fn range_inclusive() {
-        let expr = parse_expr("0..=10");
+        // ruby-naming.spec.md §3.10b: `..` is the INCLUSIVE range.
+        let expr = parse_expr("0..10");
         match &expr.kind {
             ExprKind::Range {
                 start,
@@ -1665,5 +1667,36 @@ end";
             }
             other => panic!("expected BinaryOp(MatchOp) at top, got {:?}", other),
         }
+    }
+
+    /// ruby-naming.spec.md §3.10: `()` is not Ruxen syntax — the unit
+    /// type and value are both spelled `nil`. The parser rejects `()`
+    /// in both positions with a fix-it pointing at `nil`.
+    fn parse_errors(input: &str) -> Vec<crate::diagnostics::Diagnostic> {
+        let mut lexer = Lexer::new(input);
+        let tokens = lexer.tokenize().expect("lexer failed");
+        let mut parser = Parser::new(tokens);
+        match parser.parse() {
+            Ok(_) => vec![],
+            Err(diags) => diags,
+        }
+    }
+
+    #[test]
+    fn unit_paren_type_is_rejected_use_nil() {
+        let diags = parse_errors("def f(x: Int) -> ()\n  x\nend\n");
+        assert!(
+            diags.iter().any(|d| d.message.contains("use `nil`")),
+            "`-> ()` should be rejected with a `nil` fix-it; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn unit_paren_value_is_rejected_use_nil() {
+        let diags = parse_errors("def f\n  let x = ()\n  x\nend\n");
+        assert!(
+            diags.iter().any(|d| d.message.contains("nil")),
+            "`()` value should be rejected with a `nil` fix-it; got: {diags:?}"
+        );
     }
 }

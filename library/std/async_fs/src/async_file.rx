@@ -35,7 +35,7 @@ class AsyncFile
   end
 
   lib "runtime/async_fs.c"
-    def drop as "ruxen_async_file_drop" -> ()
+    def drop as "ruxen_async_file_drop" -> nil
   end
 end
 

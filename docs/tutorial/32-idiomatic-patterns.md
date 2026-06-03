@@ -177,7 +177,7 @@ At the call site, `match` exhaustively or compose with `?`:
 ```ruxen
 match find_user(42)
   Some(user) -> greet(user)
-  None       -> puts "not found"
+  nil       -> puts "not found"
 end
 ```
 

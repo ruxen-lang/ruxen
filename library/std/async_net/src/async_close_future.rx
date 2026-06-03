@@ -4,21 +4,21 @@
 ## `async_tcp_stream_close_of` free fn). On first poll, issues
 ## `shutdown(SHUT_RDWR)` so the peer sees a clean half-close; the
 ## stream's own def drop (on the by-move self going out of scope at
-## this future's drop) closes the fd. Always resolves Ready(()) on
+## this future's drop) closes the fd. Always resolves Ready(nil) on
 ## first poll — no kernel-level "wait for close to finish" that
 ## requires reactor parking in v1.
 class AsyncCloseFuture
   stream: AsyncTcpStream
   done: Int
   include Future
-  type Output = ()
+  type Output = nil
 
   def init(stream: AsyncTcpStream)
     self.stream = stream
     self.done = 0
   end
 
-  def var poll(cx: &var Context) -> Poll[()]
+  def var poll(cx: &var Context) -> Poll[nil]
     if self.done == 0
       ruxen_async_tcp_stream_shutdown(&self.stream)
       self.done = 1

@@ -280,7 +280,7 @@ class TodoList
     self.repo.all.iter.find { |t| t.id == id }
   end
 
-  def var update_status(id: USize, status: Status) -> Result[(), TodoError]
+  def var update_status(id: USize, status: Status) -> Result[nil, TodoError]
     let task = self.repo.all.iter
       .position { |t| t.id == id }
       .ok_or(TodoError.NotFound(id: id))?

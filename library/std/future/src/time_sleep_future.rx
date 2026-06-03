@@ -21,14 +21,14 @@ class TimeSleepFuture
   deadline_nanos: Int
   handle: Int
   include Future
-  type Output = ()
+  type Output = nil
 
   def init(d: &Duration)
     self.deadline_nanos = ruxen_time_now_ns() + d.as_nanos()
     self.handle = 0
   end
 
-  def var poll(cx: &var Context) -> Poll[()]
+  def var poll(cx: &var Context) -> Poll[nil]
     # First poll: compute remaining and register with the reactor.
     if self.handle == 0
       let remaining = self.deadline_nanos - ruxen_time_now_ns()

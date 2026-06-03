@@ -26,14 +26,14 @@ class Matcher[T]
 
   def init(actual: T) { self.actual = actual }
 
-  def to_eq(expected: T) -> ()
+  def to_eq(expected: T) -> nil
     if self.actual != expected
       puts "  to_eq failed: expected [#{expected}], got [#{self.actual}]"
       Runner.case_mark_failed
     end
   end
 
-  def not_to_eq(expected: T) -> ()
+  def not_to_eq(expected: T) -> nil
     if self.actual == expected
       puts "  not_to_eq failed: expected a value other than [#{expected}], but they are equal"
       Runner.case_mark_failed
@@ -79,7 +79,7 @@ class OptionMatcher
 
   def to_be_nil -> Bool
     if self.is_some
-      puts "  to_be_nil failed: expected None, got a present value"
+      puts "  to_be_nil failed: expected nil, got a present value"
       Runner.case_mark_failed
     end
     self.is_some == false
@@ -87,7 +87,7 @@ class OptionMatcher
 
   def not_to_be_nil -> Bool
     if !self.is_some
-      puts "  not_to_be_nil failed: expected a present value, got None"
+      puts "  not_to_be_nil failed: expected a present value, got nil"
       Runner.case_mark_failed
     end
     self.is_some
@@ -112,7 +112,7 @@ class ArrayMatcher[T]
         Some(item) -> if item == needle
           found = true
         end
-        None -> 0
+        nil -> 0
       end
       i = i + 1
     end

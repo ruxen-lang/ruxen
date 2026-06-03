@@ -7,7 +7,7 @@
 ## Display is the canonical interpolation mixin (`"#{x}"` lowers
 ## through Display::fmt). Debug is the `"#{x:?}"` and `derive Debug`
 ## target. Both share the `fmt(&self, &mut Formatter) ->
-## Result[(), FmtError]` signature, but the Rust registration only
+## Result[nil, FmtError]` signature, but the Rust registration only
 ## carried the method NAME (`["fmt"]`) — typeck checks
 ## `impl Display for T` / `impl Debug for T` provides `fmt` against
 ## that name. The minimum-faithful mixin definitions below preserve
@@ -34,11 +34,11 @@ end
 ## into class-body lib decls. `new_with_spec` and `precision` stay
 ## on runtime_table because their `Option[USize]` typeck contract
 ## doesn't yet round-trip through the FFI alias path (the C runtime
-## uses an `int64_t -1` sentinel for None, which the lib decl
+## uses an `int64_t -1` sentinel for nil, which the lib decl
 ## syntax can't yet express).
 ##
 ## FmtError is declared BEFORE Formatter so Formatter.write_str /
-## write_char's `-> Result[(), FmtError]` return type resolves at
+## write_char's `-> Result[nil, FmtError]` return type resolves at
 ## parse time.
 class FmtError
 
@@ -47,9 +47,9 @@ end
 class Formatter
   lib "runtime/fmt.c"
     def self.new as "ruxen_fmt_formatter_new" -> Formatter
-    def free as "ruxen_fmt_formatter_free" -> ()
-    def write_str as "ruxen_fmt_formatter_write_str"(s: &String) -> Result[(), FmtError]
-    def write_char as "ruxen_fmt_formatter_write_char"(ch: Int) -> Result[(), FmtError]
+    def free as "ruxen_fmt_formatter_free" -> nil
+    def write_str as "ruxen_fmt_formatter_write_str"(s: &String) -> Result[nil, FmtError]
+    def write_char as "ruxen_fmt_formatter_write_char"(ch: Int) -> Result[nil, FmtError]
     def buffer as "ruxen_fmt_formatter_buffer" -> String
     def len as "ruxen_fmt_formatter_len" -> Int
   end

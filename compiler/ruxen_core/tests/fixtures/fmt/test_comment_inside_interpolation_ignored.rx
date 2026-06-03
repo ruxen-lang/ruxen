@@ -1,0 +1,2 @@
+let s = "value: #{x + 1}"
+# real comment

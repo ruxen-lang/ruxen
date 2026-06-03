@@ -40,7 +40,7 @@ blocks until the first call completes, then returns immediately.
 | Call                              | Returns                  |
 |-----------------------------------|--------------------------|
 | `OnceLock.new()`                  | `OnceLock[T]`            |
-| `ol.set(value: T)`                | `Result[(), T]`          |
+| `ol.set(value: T)`                | `Result[nil, T]`          |
 | `ol.get()`                        | `Option[&T]`             |
 | `ol.get_or_init(closure)`         | `&T`                     |
 

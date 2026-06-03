@@ -1,5 +1,5 @@
 ## type_def fixture — cursor on a local of primitive type (Int)
-## should return None: built-ins have no source location.
+## should return nil: built-ins have no source location.
 
 def main
   let primitive_anchor_local = 42

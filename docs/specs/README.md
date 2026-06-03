@@ -86,7 +86,7 @@ cross-link rather than duplicate.
 - [std.iter (Iterator)](stdlib/iterator.spec.md) — pipeline +
   collect surface.
 - [Map](stdlib/map.spec.md) — separate-chaining hash table.
-- [Set](stdlib/set.spec.md) — `Map[T, ()]` alias.
+- [Set](stdlib/set.spec.md) — `Map[T, nil]` alias.
 - [Array](stdlib/array.spec.md) — growable contiguous array.
 - [String / &str](stdlib/string.spec.md) — UTF-8 owned + borrowed
   string surface and ownership negatives.
@@ -101,7 +101,7 @@ cross-link rather than duplicate.
   v1: parser + typeck only.  Executor in Phase 4.
 - [Primitives](stdlib/primitives.spec.md) — Int / sized integers /
   Float / Bool / Char method surfaces, numeric literal suffixes
-  (`123u8`, `1.5f32`), escape sequences (`'\n'`, `'\u{1F600}'`).
+  (`123u8`, `1.5f32`), escape sequences (`?\n`, `?\u{1F600}`).
 - [std.prelude](stdlib/prelude.spec.md) — auto-imported names
   available without a `use` statement.
 

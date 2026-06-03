@@ -13,9 +13,9 @@ are the canonical docs for behaviour.
 - `random_u64() -> Int` — returns 64 random bits in an int64 carrier
   (same convention as `now_ns` / `unix_ns`); panics on hard CSPRNG
   failure.
-- `random_fill(buf: &var Array[U8]) -> Result[(), IoError]` —
+- `random_fill(buf: &var Array[U8]) -> Result[nil, IoError]` —
   overwrites every existing slot of `buf` with one random byte each;
-  preserves `buf.len`; `Ok(())` when `buf` is empty.
+  preserves `buf.len`; `Ok(nil)` when `buf` is empty.
 
 **Backends** (compile-time `#if` selected, not user-visible):
 - Linux: `getrandom(buf, len, 0)` from `<sys/random.h>`, EINTR retry.

@@ -6,7 +6,7 @@
 **Status:** shipped Phase 2 #04-#05; method surface self-hosted in
 `library/std/src/set.rx` since #06.8 T#16.
 
-`Set[T]` is a thin layer over `Map[T, ()]` — same hashing
+`Set[T]` is a thin layer over `Map[T, nil]` — same hashing
 semantics, same `Hashable` bound on `T`.
 
 ---

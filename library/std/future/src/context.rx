@@ -33,6 +33,6 @@ class Context
     def clone as "ruxen_context_clone" -> Context
     def self.test_dummy as "ruxen_context_test_dummy" -> Context
     def self.executor as "ruxen_executor_make_context" -> Context
-    def drop as "ruxen_executor_context_drop" -> ()
+    def drop as "ruxen_executor_context_drop" -> nil
   end
 end

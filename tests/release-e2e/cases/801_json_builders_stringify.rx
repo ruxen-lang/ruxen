@@ -11,19 +11,19 @@ def main
   puts "null=#{JSON.is_null(&n)}"
   match JSON.as_bool(&b)
     Some(v) -> puts "bool=#{v}"
-    None -> puts "bool=missing"
+    nil -> puts "bool=missing"
   end
   match JSON.as_int(&i)
     Some(v) -> puts "int=#{v}"
-    None -> puts "int=missing"
+    nil -> puts "int=missing"
   end
   match JSON.as_float(&f)
     Some(v) -> puts "float=#{v}"
-    None -> puts "float=missing"
+    nil -> puts "float=missing"
   end
   match JSON.as_string(&s)
     Some(v) -> puts "string=#{v}"
-    None -> puts "string=missing"
+    nil -> puts "string=missing"
   end
 
   var items: Array[Json] = Array.new
@@ -32,7 +32,7 @@ def main
   let arr = JSON.array(items)
   match JSON.array_len(&arr)
     Some(v) -> puts "array-len=#{v}"
-    None -> puts "array-len=missing"
+    nil -> puts "array-len=missing"
   end
   match JSON.stringify(&arr)
     Ok(v) -> puts "array-json=#{v}"
@@ -50,15 +50,15 @@ def main
   puts "object=#{JSON.is_object(&obj)}"
   match JSON.object_len(&obj)
     Some(v) -> puts "object-len=#{v}"
-    None -> puts "object-len=missing"
+    nil -> puts "object-len=missing"
   end
   match JSON.object_get(&obj, "title")
     Some(title) ->
       match JSON.as_string(&title)
         Some(v) -> puts "title=#{v}"
-        None -> puts "title=missing"
+        nil -> puts "title=missing"
       end
-    None -> puts "title=missing"
+    nil -> puts "title=missing"
   end
 
   let empty_a = JSON.empty_array()

@@ -1,0 +1,4 @@
+class C
+  fd: Int
+  closed: Int
+end

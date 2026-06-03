@@ -1,0 +1,4 @@
+# A comment
+def main
+  puts "hello"
+end

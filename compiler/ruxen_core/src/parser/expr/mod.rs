@@ -53,7 +53,7 @@ fn infix_binding_power(kind: &TokenKind) -> Option<(u8, u8)> {
         | TokenKind::TildeEq => Some((7, 8)),
 
         // Range: non-associative (9, 10)
-        TokenKind::DotDot | TokenKind::DotDotEq => Some((9, 10)),
+        TokenKind::DotDot | TokenKind::DotDotDot => Some((9, 10)),
 
         // Bitwise OR (11, 12)
         TokenKind::Pipe => Some((11, 12)),

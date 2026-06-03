@@ -33,10 +33,10 @@ constructor under `std.sync.mpsc`.
 **Then** `tx` and `rx` are linked. Sending on `tx` makes the value
 available on `rx`. Both halves are independently `Send`.
 
-## B3 — `Sender.send(value: T) -> Result[(), SendError]`
+## B3 — `Sender.send(value: T) -> Result[nil, SendError]`
 
 **Given** an open channel and `tx.send(42)`
-**Then** the value is enqueued and `Ok(())` is returned.
+**Then** the value is enqueued and `Ok(nil)` is returned.
 **When** the matching `Receiver` has been dropped
 **Then** `Err(SendError)` is returned (no panic).
 

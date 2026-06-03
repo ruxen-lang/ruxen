@@ -17,7 +17,7 @@ one or more Rust integration tests in `crates/ruxen-core/tests/`.
 ## B1 — `Display` mixin surface
 
 `std.fmt.Display` is resolvable at the type level with method
-signature `def fmt(f: &var Formatter) -> Result[(), FmtError]`.
+signature `def fmt(f: &var Formatter) -> Result[nil, FmtError]`.
 
 **Given** a user type `T` with `include Display` in its body
 **When** `T` is used in an interpolation `"#{t}"`
@@ -43,8 +43,8 @@ structs; `Variant(<payload>)` / `Variant { .. }` for enums).
 | Method                                          | Returns                  |
 |-------------------------------------------------|--------------------------|
 | `Formatter.new()`                               | `Formatter`              |
-| `f.write_str(s: &str)`                          | `Result[(), FmtError]`   |
-| `f.write_char(c: Char)`                         | `Result[(), FmtError]`   |
+| `f.write_str(s: &str)`                          | `Result[nil, FmtError]`   |
+| `f.write_char(c: Char)`                         | `Result[nil, FmtError]`   |
 | `f.buffer()`                                    | `String` (consumes `f`)  |
 | `f.len()`                                       | `Int`                    |
 | `f.width()` / `precision()` / `align()` / `fill()` | accessors (read-only)  |

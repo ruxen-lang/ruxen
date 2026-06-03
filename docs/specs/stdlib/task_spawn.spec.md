@@ -47,7 +47,7 @@ let result = handle.await   # blocks until the spawned task completes
 returns a `JoinHandle[T]` immediately (does NOT poll the future).
 The executor polls the queued future as part of its round-robin loop.
 
-## B2 — `Task.yield_now() -> some Future[Output = ()]`
+## B2 — `Task.yield_now() -> some Future[Output = nil]`
 
 Cooperative yield. Returns a future that, on first poll, registers
 a wakeup-on-next-tick and returns Pending; on second poll, returns

@@ -53,19 +53,19 @@ class TcpStream
     def read as "ruxen_tcp_stream_read"(buf: &var Array[Int]) -> Result[Int, IoError]
     def write as "ruxen_tcp_stream_write"(bytes: &Array[Int]) -> Result[Int, IoError]
     def peer_addr as "ruxen_tcp_stream_peer_addr" -> Result[String, IoError]
-    def shutdown as "ruxen_tcp_stream_shutdown"(how: Shutdown) -> Result[(), IoError]
-    def set_read_timeout as "ruxen_tcp_stream_set_read_timeout"(d: Int) -> Result[(), IoError]
-    def set_write_timeout as "ruxen_tcp_stream_set_write_timeout"(d: Int) -> Result[(), IoError]
+    def shutdown as "ruxen_tcp_stream_shutdown"(how: Shutdown) -> Result[nil, IoError]
+    def set_read_timeout as "ruxen_tcp_stream_set_read_timeout"(d: Int) -> Result[nil, IoError]
+    def set_write_timeout as "ruxen_tcp_stream_set_write_timeout"(d: Int) -> Result[nil, IoError]
     def set_read_timeout_ns as "ruxen_tcp_stream_set_read_timeout_ns"(ns: Int) -> Result[
-      (),
+      nil,
       IoError
     ]
     def set_write_timeout_ns as "ruxen_tcp_stream_set_write_timeout_ns"(ns: Int) -> Result[
-      (),
+      nil,
       IoError
     ]
-    def close as "ruxen_tcp_stream_close" -> Result[(), IoError]
-    def drop as "ruxen_tcp_stream_drop" -> ()
+    def close as "ruxen_tcp_stream_close" -> Result[nil, IoError]
+    def drop as "ruxen_tcp_stream_drop" -> nil
   end
 end
 
@@ -95,8 +95,8 @@ class TcpListener
     def self.bind as "ruxen_tcp_listener_bind"(addr: &String) -> Result[TcpListener, IoError]
     def accept as "ruxen_tcp_listener_accept" -> Result[TcpStream, IoError]
     def local_addr as "ruxen_tcp_listener_local_addr" -> Result[String, IoError]
-    def set_nonblocking as "ruxen_tcp_listener_set_nonblocking"(value: Int) -> Result[(), IoError]
-    def close as "ruxen_tcp_listener_close" -> Result[(), IoError]
-    def drop as "ruxen_tcp_listener_drop" -> ()
+    def set_nonblocking as "ruxen_tcp_listener_set_nonblocking"(value: Int) -> Result[nil, IoError]
+    def close as "ruxen_tcp_listener_close" -> Result[nil, IoError]
+    def drop as "ruxen_tcp_listener_drop" -> nil
   end
 end

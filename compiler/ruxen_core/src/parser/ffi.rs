@@ -161,12 +161,9 @@ impl Parser {
             self.skip_newlines();
 
             while !self.at(TokenKind::RParen) && !self.at(TokenKind::Eof) {
-                // Check for variadic `...`
-                if self.at(TokenKind::DotDot) {
-                    self.advance(); // consume ..
-                    if self.at(TokenKind::Dot) {
-                        self.advance(); // consume the third .
-                    }
+                // Check for C-variadic `...` (now a single DotDotDot token).
+                if self.at(TokenKind::DotDotDot) {
+                    self.advance(); // consume ...
                     is_variadic = true;
                     self.skip_newlines();
                     break;

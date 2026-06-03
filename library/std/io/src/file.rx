@@ -25,13 +25,13 @@ class File
     def read_to_string as "ruxen_file_read_to_string" -> Result[String, IoError]
     def read_all as "ruxen_file_read_all" -> Result[Array[Int], IoError]
     def write as "ruxen_file_write"(bytes: &Array[Int]) -> Result[Int, IoError]
-    def write_all as "ruxen_file_write_all"(bytes: &Array[Int]) -> Result[(), IoError]
-    def write_str as "ruxen_file_write_str"(s: &String) -> Result[(), IoError]
-    def flush as "ruxen_file_flush" -> Result[(), IoError]
+    def write_all as "ruxen_file_write_all"(bytes: &Array[Int]) -> Result[nil, IoError]
+    def write_str as "ruxen_file_write_str"(s: &String) -> Result[nil, IoError]
+    def flush as "ruxen_file_flush" -> Result[nil, IoError]
     def seek as "ruxen_file_seek"(from: SeekFrom) -> Result[Int, IoError]
     def metadata as "ruxen_file_metadata" -> Result[Metadata, IoError]
-    def close as "ruxen_file_close" -> Result[(), IoError]
-    def drop as "ruxen_file_drop" -> ()
+    def close as "ruxen_file_close" -> Result[nil, IoError]
+    def drop as "ruxen_file_drop" -> nil
   end
 end
 
@@ -49,11 +49,11 @@ end
 ## have a Ruby-Kernel counterpart get class-prefixed (FS, Env, Path,
 ## Rand, Process, Time, Thread, Signal).
 lib "runtime/stdio.c"
-  def puts as "ruxen_puts"(value: &String) -> ()
-  def eputs as "ruxen_eputs"(value: &String) -> ()
-  def print as "ruxen_print"(value: &String) -> ()
-  def println as "ruxen_puts"(value: &String) -> ()
-  def eprintln as "ruxen_eputs"(value: &String) -> ()
+  def puts as "ruxen_puts"(value: &String) -> nil
+  def eputs as "ruxen_eputs"(value: &String) -> nil
+  def print as "ruxen_print"(value: &String) -> nil
+  def println as "ruxen_puts"(value: &String) -> nil
+  def eprintln as "ruxen_eputs"(value: &String) -> nil
   def read_line as "ruxen_read_line" -> Result[String, IoError]
   def stdin as "ruxen_stdin" -> Stdin
   def stdout as "ruxen_stdout" -> Stdout

@@ -12,6 +12,6 @@ class SharedSync[T]
     def clone as "ruxen_sharedsync_clone" -> SharedSync[T]
     def strong_count as "ruxen_sharedsync_strong_count" -> Int
     def get as "ruxen_sharedsync_get" -> T
-    def drop as "ruxen_sharedsync_drop" -> ()
+    def drop as "ruxen_sharedsync_drop" -> nil
   end
 end

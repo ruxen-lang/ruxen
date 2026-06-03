@@ -25,9 +25,9 @@ class BufWriter[W]
   def self.new(inner: W) -> BufWriter[W]
   def self.with_capacity(cap: Int, inner: W) -> BufWriter[W]
   def write(self, bytes: &Array[U8]) -> Result[Int, IoError]
-  def write_all(self, bytes: &Array[U8]) -> Result[(), IoError]
-  def write_str(self, s: &String) -> Result[(), IoError]
-  def flush(self) -> Result[(), IoError]                        # required for guaranteed persistence
+  def write_all(self, bytes: &Array[U8]) -> Result[nil, IoError]
+  def write_str(self, s: &String) -> Result[nil, IoError]
+  def flush(self) -> Result[nil, IoError]                        # required for guaranteed persistence
   def into_inner(self) -> Result[W, IoError]                    # flush then surrender
 end
 ```
@@ -44,7 +44,7 @@ end
 - `with_capacity(0, inner)` rounds up to 1 to keep `fill_buf` from
   spinning. Negative caps are also rounded to 1.
 - `read_line` returns `Ok(Some(line))` where `line` includes the
-  trailing `'\n'` if one was seen, or just the remaining bytes at EOF.
+  trailing `?\n` if one was seen, or just the remaining bytes at EOF.
   Returns `Ok(None)` at true EOF (no bytes read). `Err` on real I/O
   failure.
 - `read(buf)` pulls the next chunk from the inner (refilling if empty),

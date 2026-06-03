@@ -8,7 +8,7 @@ end
 def report_first(opt: Option[String])
   match opt
     Some(line) -> show_first(line)
-    None       -> puts "eof"
+    nil       -> puts "eof"
   end
 end
 

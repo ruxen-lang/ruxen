@@ -49,10 +49,10 @@ impl<'a> Lexer<'a> {
                 '\n' => self.lex_newline(),
                 '#' => self.lex_comment_or_hash(),
                 '"' => self.lex_string(),
-                '\'' => self.lex_char(),
-                'r' if self.peek_at(1) == Some('"') || self.peek_at(1) == Some('#') => {
-                    self.lex_raw_string()
-                }
+                // ruby-naming.spec.md §3.10a: single quotes are RAW strings
+                // (verbatim, no interpolation); the Rust-style `r"…"` /
+                // `r#"…"#` raw-string prefix is retired in favour of this.
+                '\'' => self.lex_single_quote(),
                 '0'..='9' => self.lex_number(),
                 'a'..='z' | '_' => self.lex_identifier_or_keyword(),
                 'A'..='Z' => self.lex_type_identifier_or_keyword(),

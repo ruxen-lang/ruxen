@@ -29,8 +29,8 @@ class TcpListener
   def self.bind(addr: &String) -> Result[TcpListener, IoError]
   def accept(self) -> Result[TcpStream, IoError]        # blocking
   def local_addr(self) -> Result[String, IoError]
-  def set_nonblocking(self, v: Bool) -> Result[(), IoError]
-  def close(self) -> Result[(), IoError]                # also on drop
+  def set_nonblocking(self, v: Bool) -> Result[nil, IoError]
+  def close(self) -> Result[nil, IoError]                # also on drop
 end
 
 class TcpStream
@@ -38,10 +38,10 @@ class TcpStream
   def read(self, buf: &var Array[U8]) -> Result[Int, IoError]
   def write(self, bytes: &Array[U8]) -> Result[Int, IoError]
   def peer_addr(self) -> Result[String, IoError]
-  def shutdown(self, how: Shutdown) -> Result[(), IoError]
-  def set_read_timeout(self, d: &Duration) -> Result[(), IoError]
-  def set_write_timeout(self, d: &Duration) -> Result[(), IoError]
-  def close(self) -> Result[(), IoError]                # also on drop
+  def shutdown(self, how: Shutdown) -> Result[nil, IoError]
+  def set_read_timeout(self, d: &Duration) -> Result[nil, IoError]
+  def set_write_timeout(self, d: &Duration) -> Result[nil, IoError]
+  def close(self) -> Result[nil, IoError]                # also on drop
 end
 
 enum Shutdown
@@ -63,10 +63,10 @@ underlying fd.
 
 ### C2 — `TcpListener.close()` releases the fd
 
-After `.close()` returns `Ok(())`, subsequent `.accept()` /
+After `.close()` returns `Ok(nil)`, subsequent `.accept()` /
 `.set_nonblocking(...)` / `.local_addr()` fail with
 `Err(IoError.InvalidInput)`. Idempotent — repeated `.close()` is
-`Ok(())`.
+`Ok(nil)`.
 
 ### C3 — `TcpListener` `drop` closes the fd
 
@@ -81,7 +81,7 @@ Returns `Ok("127.0.0.1:<port>")` for an IPv4 listener. The port is
 the kernel-chosen one when `bind` used `:0`. Closed listeners return
 `Err(IoError.InvalidInput)`.
 
-### C5 — `TcpListener.set_nonblocking(v: Bool) -> Result[(), IoError]`
+### C5 — `TcpListener.set_nonblocking(v: Bool) -> Result[nil, IoError]`
 
 Flips `O_NONBLOCK` on the underlying fd. After
 `set_nonblocking(true)`, `accept()` on an idle listener returns
@@ -130,7 +130,7 @@ of the Phase-3 free fns.
 Returns `Ok("127.0.0.1:<port>")` for the remote end of a connected
 IPv4 socket. After `.close()` returns `Err(IoError.InvalidInput)`.
 
-### C11 — `TcpStream.shutdown(how: Shutdown) -> Result[(), IoError]`
+### C11 — `TcpStream.shutdown(how: Shutdown) -> Result[nil, IoError]`
 
 Half-closes the stream:
 - `Shutdown.Read`  — `SHUT_RD` — further `read` returns `Ok(0)` (EOF).
@@ -138,7 +138,7 @@ Half-closes the stream:
   writes return `Err(IoError.BrokenPipe)`.
 - `Shutdown.Both`  — `SHUT_RDWR` — both directions.
 
-**E0713** — `Shutdown` variant unknown (tag outside 0..=2) is
+**E0713** — `Shutdown` variant unknown (tag outside 0..2) is
 surfaced as `Err(IoError.InvalidInput)` with message `"E0713 Shutdown
 variant unknown"`. The runtime only emits this if the enum tagged-
 value layout has drifted; in normal compiled code the typeck arm
@@ -167,7 +167,7 @@ against the runtime `RUXEN_SHUTDOWN_*` defines in
 declarations live in `library/std/src/net.rx` (declarative doc —
 executable behavior is wired in resolve/typeck/codegen).
 
-### C17 — `TcpStream.set_read_timeout(d: &Duration) -> Result[(), IoError]`
+### C17 — `TcpStream.set_read_timeout(d: &Duration) -> Result[nil, IoError]`
 
 Sets the `SO_RCVTIMEO` socket option to the given Duration. Once the
 timeout fires a subsequent blocking `.read(...)` returns
@@ -177,7 +177,7 @@ Duration with `nanos == 0` clears the timeout (matches Rust's
 Durations round up to 1µs so a "set as short as possible" intent
 isn't accidentally interpreted as "clear".
 
-### C18 — `TcpStream.set_write_timeout(d: &Duration) -> Result[(), IoError]`
+### C18 — `TcpStream.set_write_timeout(d: &Duration) -> Result[nil, IoError]`
 
 Sets the `SO_SNDTIMEO` socket option. Same semantics as
 `set_read_timeout` but applied to writes — a `.write(...)` that

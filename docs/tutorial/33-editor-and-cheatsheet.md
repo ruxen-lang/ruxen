@@ -132,12 +132,20 @@ Bool Char nil
 "plain &str literal"
 String.from("owned string")
 "hi #{name}"                          # interpolation -> String
-r"no \escape \here"                  # raw
-r#"can have "quotes""#               # raw with delimiters
+'no \escape \here'                    # raw (single quotes, verbatim)
+'can have "quotes" inside'            # raw can hold double quotes
 """
 multi
 line
 """
+```
+
+### Characters
+
+```ruxen
+?a            ?Z            ?5           # Char literals
+?\n           ?\t           ?\\          # escapes
+?\u{1F600}                              # unicode scalar
 ```
 
 ### Control flow
@@ -149,8 +157,8 @@ while cond
   body
 end
 
-for x in 0..10                       # exclusive range
-for x in 0..=10                      # inclusive range
+for x in 0...10                      # exclusive range (0..9)
+for x in 0..10                       # inclusive range (0..10)
 
 loop
   break
@@ -300,8 +308,8 @@ move { |x| ... }                      # move-capturing closure
 == != <  >  <= >=                     # comparison
 && || !                               # logical
 &  |  ^  ~  << >>                     # bitwise
-?                                     # try (propagates Err / None)
-..  ..=                               # range exclusive / inclusive
+?                                     # try (propagates Err / nil)
+..  ...                               # range inclusive / exclusive
 ?.                                    # safe navigation
 =  += -= *= /= %=                     # assignment
 ->                                    # function return / match arm
@@ -328,9 +336,9 @@ end
 ```ruxen
 Result[T, E]                          # explicit
 Option[T]    or    T?                # equivalent
-Some(v)   None    nil                # Option payloads (nil = None)
+Some(v)   nil                          # Option payloads (nil = the empty case)
 Ok(v)     Err(e)                     # Result payloads
-expr?                                 # propagate Err / None
+expr?                                 # propagate Err / nil
 
 panic!("msg")
 opt.unwrap!

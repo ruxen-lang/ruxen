@@ -1,0 +1,3 @@
+def foo(
+  this is invalid syntax!!!@@@
+end

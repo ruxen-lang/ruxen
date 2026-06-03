@@ -9,8 +9,8 @@
 ## I/O introduces genuine blocking park points.
 class Waker
   lib "runtime/executor.c"
-    def wake as "ruxen_waker_wake" -> ()
-    def wake_by_ref as "ruxen_waker_wake_by_ref" -> ()
+    def wake as "ruxen_waker_wake" -> nil
+    def wake_by_ref as "ruxen_waker_wake_by_ref" -> nil
   end
 end
 
@@ -29,9 +29,9 @@ end
 lib "runtime/reactor.c"
   def ruxen_reactor_current_handle -> Int
   def ruxen_reactor_register_timer(reactor: Int, nanos: Int) -> Int
-  def ruxen_reactor_set_waker(reactor: Int, handle: Int, waker: &Waker) -> ()
+  def ruxen_reactor_set_waker(reactor: Int, handle: Int, waker: &Waker) -> nil
   def ruxen_reactor_check_fired(reactor: Int, handle: Int) -> Int
-  def ruxen_reactor_deregister(reactor: Int, handle: Int) -> ()
+  def ruxen_reactor_deregister(reactor: Int, handle: Int) -> nil
 end
 
 ## Monotonic nanos free fn used by `TimeSleepFuture` to compute its

@@ -3,7 +3,7 @@ class Money
 
   include Debug
 
-  def fmt(f: &var Formatter) -> Result[(), FmtError]
+  def fmt(f: &var Formatter) -> Result[nil, FmtError]
     Ok(nil)
   end
 end

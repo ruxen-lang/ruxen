@@ -25,13 +25,13 @@ file's bytes interpreted as UTF-8.
 **Then** the result is `Result.Err(io_error)` whose `.message()`
 mentions "not found".
 
-## B2 — `write(path, contents) -> Result[(), IoError]`
+## B2 — `write(path, contents) -> Result[nil, IoError]`
 
 Writes `contents` to `path`, truncating any existing file.
 
 **Given** a writable destination
 **When** the program calls `fs.write(path, "hi")`
-**Then** the result is `Result.Ok(())` and reading the file back
+**Then** the result is `Result.Ok(nil)` and reading the file back
 yields `"hi"`.
 
 ## B3 — `exists(path) -> Bool`
@@ -72,7 +72,7 @@ Hidden files (`.dotfile`) are included.  `.` and `..` are filtered.
 
 ## B8 — write-side helpers: `create_dir`, `create_dir_all`, `remove_file`, `rename`
 
-These return `Result[(), IoError]`.  Pin tests exist transitively
+These return `Result[nil, IoError]`.  Pin tests exist transitively
 through the E2E pipeline but are not yet covered by dedicated
 `stdlib_fs.rs` tests — flagged as a gap.
 

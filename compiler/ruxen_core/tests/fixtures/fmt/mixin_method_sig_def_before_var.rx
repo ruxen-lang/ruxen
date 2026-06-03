@@ -1,0 +1,4 @@
+mixin Future
+  type Output
+  def var poll(cx: &var Context) -> Poll[Self.Output]
+end

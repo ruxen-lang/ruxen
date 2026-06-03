@@ -4,6 +4,6 @@ class Receiver[T: Send]
   lib "runtime/channel.c"
     def recv_raw as "ruxen_channel_recv" -> T
     def try_recv_raw as "ruxen_channel_try_recv" -> T
-    def drop as "ruxen_channel_receiver_drop" -> ()
+    def drop as "ruxen_channel_receiver_drop" -> nil
   end
 end

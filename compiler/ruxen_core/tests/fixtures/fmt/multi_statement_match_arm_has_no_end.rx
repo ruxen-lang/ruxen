@@ -1,0 +1,8 @@
+def main
+  match x
+    Some(v) ->
+      puts "a"
+      puts "b"
+    nil -> puts "c"
+  end
+end

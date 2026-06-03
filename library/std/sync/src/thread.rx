@@ -1,7 +1,7 @@
 class Thread
   lib "runtime/time.c"
-    def self.sleep as "ruxen_thread_sleep_duration"(d: &Duration) -> ()
-    def self.yield_now as "ruxen_thread_yield" -> ()
+    def self.sleep as "ruxen_thread_sleep_duration"(d: &Duration) -> nil
+    def self.yield_now as "ruxen_thread_yield" -> nil
   end
 
   lib "runtime/thread.c"

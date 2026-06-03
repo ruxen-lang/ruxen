@@ -24,14 +24,14 @@ end
 def show_int(v: Json, label: &String)
   match JSON.as_int(&v)
     Some(n) -> puts "#{label}=#{n}"
-    None -> puts "#{label}=missing"
+    nil -> puts "#{label}=missing"
   end
 end
 
 def show_string(v: Json, label: &String)
   match JSON.as_string(&v)
     Some(s) -> puts "#{label}=#{s}"
-    None -> puts "#{label}=missing"
+    nil -> puts "#{label}=missing"
   end
 end
 
@@ -46,24 +46,24 @@ def main
       puts "has-missing=#{JSON.object_has(&root, "missing")}"
       match JSON.object_len(&root)
         Some(n) -> puts "object-len=#{n}"
-        None -> puts "object-len=missing"
+        nil -> puts "object-len=missing"
       end
       match JSON.object_get(&root, "answer")
         Some(answer) -> show_int(answer, "answer")
-        None -> puts "answer=missing"
+        nil -> puts "answer=missing"
       end
       match JSON.object_get(&root, "name")
         Some(name) -> show_string(name, "name")
-        None -> puts "name=missing"
+        nil -> puts "name=missing"
       end
       match JSON.object_get(&root, "items")
         Some(items) ->
           puts "items-array=#{JSON.is_array(&items)}"
           match JSON.array_len(&items)
             Some(n) -> puts "items-len=#{n}"
-            None -> puts "items-len=missing"
+            nil -> puts "items-len=missing"
           end
-        None -> puts "items=missing"
+        nil -> puts "items=missing"
       end
       puts "root-null=#{JSON.is_null(&root)}"
       puts "root-bool=#{JSON.is_bool(&root)}"

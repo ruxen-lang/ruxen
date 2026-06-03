@@ -225,9 +225,11 @@ pub enum TokenKind {
     SlashEq,   // /=
     PercentEq, // %=
 
-    // ── Operators: Range ──
-    DotDot,   // ..
-    DotDotEq, // ..=
+    // ── Operators: Range (ruby-naming.spec.md §3.10b) ──
+    // Ruby semantics: `..` is INCLUSIVE, `...` is EXCLUSIVE. There is no
+    // `..=` token — the Rust inclusive form is rejected at lex time (E0009).
+    DotDot,    // ..  (inclusive)
+    DotDotDot, // ... (exclusive)
 
     // ── Operators: Arrow ──
     Arrow,    // ->
@@ -326,7 +328,7 @@ impl TokenKind {
                 | TokenKind::Shl
                 | TokenKind::Shr
                 | TokenKind::DotDot
-                | TokenKind::DotDotEq
+                | TokenKind::DotDotDot
                 | TokenKind::Colon
                 | TokenKind::ColonColon
         )

@@ -6,10 +6,10 @@ def main
         Some(g1) ->
           match m.group(2)
             Some(g2) -> puts "code=#{g1} name=#{g2}"
-            None     -> puts "no g2"
+            nil     -> puts "no g2"
           end
-        None     -> puts "no g1"
+        nil     -> puts "no g1"
       end
-    None -> puts "no match"
+    nil -> puts "no match"
   end
 end

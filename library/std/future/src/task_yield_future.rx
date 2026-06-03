@@ -6,13 +6,13 @@
 class TaskYieldFuture
   polled: Int
   include Future
-  type Output = ()
+  type Output = nil
 
   def init
     self.polled = 0
   end
 
-  def var poll(cx: &var Context) -> Poll[()]
+  def var poll(cx: &var Context) -> Poll[nil]
     if self.polled == 0
       self.polled = 1
       let w = cx.waker

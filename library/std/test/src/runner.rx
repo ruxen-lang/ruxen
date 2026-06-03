@@ -79,7 +79,7 @@ class Runner
     end
   end
 
-  def execute -> ()
+  def execute -> nil
     if self.report.len() > 0
       eputs "#{self.report}"
     end
@@ -96,7 +96,7 @@ class Runner
     def self.case_get_failed as "ruxen_test_case_get_failed" -> Int
     def self.fork as "ruxen_test_fork" -> Int
     def self.wait as "ruxen_test_wait"(pid: Int) -> Int
-    def self.child_exit as "ruxen_test_child_exit"(code: Int) -> ()
-    def self.panic as "ruxen_test_panic" -> ()
+    def self.child_exit as "ruxen_test_child_exit"(code: Int) -> nil
+    def self.panic as "ruxen_test_panic" -> nil
   end
 end

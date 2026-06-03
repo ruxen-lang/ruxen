@@ -36,6 +36,6 @@ class Metadata
   def is_symlink -> Bool { self.kind == 2 }
 
   lib "../fs/runtime/fs.c"
-    def free as "ruxen_metadata_free" -> ()
+    def free as "ruxen_metadata_free" -> nil
   end
 end

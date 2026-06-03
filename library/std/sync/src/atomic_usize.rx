@@ -6,10 +6,10 @@ class AtomicUsize
   lib "runtime/atomic.c"
     def self.new as "ruxen_atomic_usize_new"(initial: Int) -> AtomicUsize
     def load as "ruxen_atomic_usize_load" -> Int
-    def store as "ruxen_atomic_usize_store"(value: Int) -> ()
+    def store as "ruxen_atomic_usize_store"(value: Int) -> nil
     def fetch_add as "ruxen_atomic_usize_fetch_add"(delta: Int) -> Int
     def fetch_sub as "ruxen_atomic_usize_fetch_sub"(delta: Int) -> Int
     def compare_and_swap as "ruxen_atomic_usize_compare_and_swap"(current: Int, new_val: Int) -> Int
-    def drop as "ruxen_atomic_usize_drop" -> ()
+    def drop as "ruxen_atomic_usize_drop" -> nil
   end
 end

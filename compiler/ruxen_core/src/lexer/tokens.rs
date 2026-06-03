@@ -5,52 +5,61 @@ use token::*;
 impl<'a> Lexer<'a> {
     // ── Characters ──
 
-    pub(super) fn lex_char(&mut self) {
+    /// Lex a single-quoted RAW string (ruby-naming.spec.md §3.10a):
+    /// content verbatim, no escape processing, no `#{}` interpolation
+    /// (double quotes interpolate; char literals are `?a`). Single-line —
+    /// the closing `'` must appear before the end of the line.
+    ///
+    /// There is NO `'a` lifetime sigil (ruby-naming.spec.md §3.3 / G7):
+    /// lifetimes are bare lowercase names in the `[...]` parameter slot,
+    /// no sigil. A leading `'` with no closing quote on the line is an
+    /// unterminated raw string, not a lifetime.
+    pub(super) fn lex_single_quote(&mut self) {
         let start_byte = self.byte_pos;
         let start_line = self.line;
         let start_col = self.column;
 
-        // Disambiguate lifetime vs char literal:
-        // 'a' is a char, 'a (not followed by ') is a lifetime
-        if self
-            .peek_at(1)
-            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-        {
-            // Check if this is 'x' (char) or 'ident (lifetime)
-            let mut look = 2;
-            while self
-                .peek_at(look)
-                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
-            {
-                look += 1;
-            }
-            if self.peek_at(look) != Some('\'') {
-                // It's a lifetime: 'a, 'input, etc.
-                self.advance(); // '
-                let name_start = self.pos;
-                while !self.is_at_end()
-                    && (self.current().is_ascii_alphanumeric() || self.current() == '_')
-                {
-                    self.advance();
-                }
-                let name: String = self.chars[name_start..self.pos].iter().collect();
-                self.emit(TokenKind::Lifetime(name), start_byte, start_line, start_col);
-                return;
-            }
+        self.advance(); // opening '
+        let content_start = self.pos;
+        while !self.is_at_end() && self.current() != '\'' && self.current() != '\n' {
+            self.advance();
         }
 
-        self.advance(); // opening '
-
-        if self.is_at_end() {
+        if self.is_at_end() || self.current() != '\'' {
             let span = self.make_span(start_byte, start_line, start_col);
             self.diagnostics.push(Diagnostic::error_with_code(
-                "unterminated character literal",
+                "unterminated raw string literal (single quotes are raw strings; \
+                 lifetimes use a bare lowercase name in `[...]`, no `'` sigil)",
                 span,
-                "E0005",
+                "E0002",
             ));
+            // Recover: emit what we scanned so downstream parsing continues.
+            let content: String = self.chars[content_start..self.pos].iter().collect();
+            self.emit(
+                TokenKind::StringLiteral(content),
+                start_byte,
+                start_line,
+                start_col,
+            );
             return;
         }
 
+        let content: String = self.chars[content_start..self.pos].iter().collect();
+        self.advance(); // closing '
+        self.emit(
+            TokenKind::StringLiteral(content),
+            start_byte,
+            start_line,
+            start_col,
+        );
+    }
+
+    /// Lex a Ruby-style `?a` / `?\n` character literal. The opening `?`
+    /// has already been consumed; `self.current()` is the char (or the
+    /// `\` of an escape). Caller guarantees we're in an expression-
+    /// context position (so postfix `?` / `?.` / optional-type `T?`
+    /// stay operators).
+    pub(super) fn lex_question_char(&mut self, start_byte: usize, start_line: u32, start_col: u32) {
         let ch = if self.current() == '\\' {
             match self.lex_escape_sequence() {
                 Ok(c) => c,
@@ -59,18 +68,6 @@ impl<'a> Lexer<'a> {
         } else {
             self.advance()
         };
-
-        if self.is_at_end() || self.current() != '\'' {
-            let span = self.make_span(start_byte, start_line, start_col);
-            self.diagnostics.push(Diagnostic::error_with_code(
-                "unterminated character literal, expected closing '",
-                span,
-                "E0005",
-            ));
-            return;
-        }
-
-        self.advance(); // closing '
         self.emit(
             TokenKind::CharLiteral(ch),
             start_byte,
@@ -397,6 +394,30 @@ impl<'a> Lexer<'a> {
 
         let ident: String = self.chars[start_pos..self.pos].iter().collect();
 
+        // ruby-naming.spec.md §3.10: `None` is not a valid spelling — the
+        // single empty literal is `nil` (which covers Option::None, the
+        // null pointer, and unit). Reject the identifier `None` uniformly
+        // here (expression, pattern, and type positions all funnel through
+        // this lexer path) with a fix-it pointing at `nil`. We still emit a
+        // TypeIdentifier token so the parser keeps making progress and the
+        // user sees this one clean error rather than a parse cascade.
+        if ident == "None" {
+            let span = self.make_span(start_byte, start_line, start_col);
+            self.diagnostics.push(Diagnostic::error_with_code(
+                "`None` is not valid in Ruxen — use `nil` instead (the single \
+                 empty literal: Option::None, null, and unit)",
+                span,
+                "E0008",
+            ));
+            self.emit(
+                TokenKind::TypeIdentifier(ident),
+                start_byte,
+                start_line,
+                start_col,
+            );
+            return;
+        }
+
         // Check for ! suffix (same logic as identifiers)
         if !self.is_at_end() && self.current() == '!' {
             let suffix = self.advance();
@@ -563,10 +584,26 @@ impl<'a> Lexer<'a> {
             '.' => {
                 if !self.is_at_end() && self.current() == '.' {
                     self.advance();
-                    if !self.is_at_end() && self.current() == '=' {
+                    if !self.is_at_end() && self.current() == '.' {
+                        // `...` — Ruby exclusive range.
                         self.advance();
-                        self.emit(TokenKind::DotDotEq, start_byte, start_line, start_col);
+                        self.emit(TokenKind::DotDotDot, start_byte, start_line, start_col);
+                    } else if !self.is_at_end() && self.current() == '=' {
+                        // `..=` is the retired Rust inclusive form. There is no
+                        // `DotDotEq` token — reject here with a fix-it and
+                        // recover as `..` (Ruby's inclusive range) by consuming
+                        // the stray `=`.
+                        self.advance(); // consume '='
+                        let span = self.make_span(start_byte, start_line, start_col);
+                        self.diagnostics.push(Diagnostic::error_with_code(
+                            "`..=` is not valid Ruxen syntax — ranges are Ruby-shaped: \
+                             `..` is inclusive, `...` is exclusive (use `..` here)",
+                            span,
+                            "E0009",
+                        ));
+                        self.emit(TokenKind::DotDot, start_byte, start_line, start_col);
                     } else {
+                        // `..` — Ruby inclusive range.
                         self.emit(TokenKind::DotDot, start_byte, start_line, start_col);
                     }
                 } else {
@@ -574,9 +611,25 @@ impl<'a> Lexer<'a> {
                 }
             }
             '?' => {
+                // `?.` safe-navigation takes priority.
                 if !self.is_at_end() && self.current() == '.' {
                     self.advance();
                     self.emit(TokenKind::QuestionDot, start_byte, start_line, start_col);
+                } else if !self.is_at_end()
+                    && {
+                        // ruby-naming.spec.md §3.10a: `?a` / `?\n` is a char
+                        // literal, but only in an expression-context position
+                        // so postfix-`?` (try) and optional-type `T?` keep
+                        // their operator meaning. The char must follow `?`
+                        // immediately (no whitespace) and be an alphanumeric,
+                        // `_`, or the start of an escape.
+                        let c = self.current();
+                        let prev = self.tokens.last().map(|t| t.kind.clone());
+                        prev_token_starts_expr_context(prev.as_ref())
+                            && (c == '\\' || c.is_ascii_alphanumeric() || c == '_')
+                    }
+                {
+                    self.lex_question_char(start_byte, start_line, start_col);
                 } else {
                     self.emit(TokenKind::Question, start_byte, start_line, start_col);
                 }

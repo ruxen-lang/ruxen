@@ -21,7 +21,7 @@ class Rand
   lib "runtime/rand.c"
     def self.random_bytes as "ruxen_rand_random_bytes"(n: Int) -> Result[Array[Int], IoError]
     def self.random_u64 as "ruxen_rand_random_u64" -> Int
-    def self.random_fill as "ruxen_rand_random_fill"(buf: &var Array[Int]) -> Result[(), IoError]
+    def self.random_fill as "ruxen_rand_random_fill"(buf: &var Array[Int]) -> Result[nil, IoError]
   end
 end
 
@@ -29,5 +29,5 @@ end
 lib "runtime/rand.c"
   def random_bytes as "ruxen_rand_random_bytes"(n: Int) -> Result[Array[Int], IoError]
   def random_u64 as "ruxen_rand_random_u64" -> Int
-  def random_fill as "ruxen_rand_random_fill"(buf: &var Array[Int]) -> Result[(), IoError]
+  def random_fill as "ruxen_rand_random_fill"(buf: &var Array[Int]) -> Result[nil, IoError]
 end

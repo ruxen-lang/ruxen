@@ -205,7 +205,7 @@ end
 def handle(opt: String?) -> Bool
   match opt
     Some(line) -> show(line)
-    None       -> true            # EOF
+    nil       -> true            # EOF
   end
 end
 
@@ -227,7 +227,7 @@ def main
 end
 ```
 
-`BufReader.read_line` returns `Result[Option[String], IoError]` — `Ok(None)` means clean EOF.
+`BufReader.read_line` returns `Result[Option[String], IoError]` — `Ok(nil)` means clean EOF.
 
 `BufWriter` is the writing equivalent:
 

@@ -241,6 +241,10 @@ exists only to flip back from a prior `private`/`protected` section.
 Lifetimes are generic parameters in the same `[...]` slot as types.
 **Lowercase identifier = lifetime, uppercase = type.** No sigil.
 
+There is **no `'a` sigil** (G7). A leading `'` always opens a raw
+string (§3.10a); a stray `'a` is rejected as an unterminated raw
+string (E0002), not read as a lifetime.
+
 ```ruxen
 def longest[a](x: &a String, y: &a String) -> &a String
   if x.len > y.len; x; else; y; end
@@ -767,7 +771,7 @@ use Http.Request
 
 ### 3.10 Nil — the universal absence literal
 
-`nil` is the absence keyword. It is polymorphic across two
+`nil` is the **single empty literal**. It is polymorphic across three
 syntactic positions:
 
 1. The absence case of `Option[T]` (safe code):
@@ -784,6 +788,24 @@ syntactic positions:
      if some_ptr == nil; return Err("got null"); end
    end
    ```
+3. The unit value and the unit return type — "this carries / returns
+   nothing":
+   ```ruxen
+   def log(msg: &String) -> nil
+     puts msg
+     nil
+   end
+   let r: Result[nil, String] = Ok(nil)
+   ```
+
+**`None` is not a valid spelling.** There is no `None` keyword or
+identifier; writing `None` is rejected at lex time with `E0008`
+("use `nil`"). The empty case of an `Option[T]` is always `nil`.
+
+**`()` is not a valid spelling either.** The Rust-style unit literal /
+unit type `()` is rejected by the parser in both positions (a fix-it
+points at `nil`). Write `nil` for the unit type (`def f -> nil`,
+`Result[nil, E]`) and the unit value (`Ok(nil)`).
 
 Equality comparisons (`==` / `!=`) with `nil` pick whichever of the
 two domains matches the other operand's type.
@@ -828,6 +850,56 @@ Array literals use bare `[...]` and produce an `Array[T]` (see
 distinguishes the struct/enum literal form `Path { field: value }`
 from a Map literal by the presence of a leading identifier or path —
 see §3.22).
+
+### 3.10a String and character literals
+
+Ruxen has three text-literal forms, distinguished by their delimiter:
+
+| Form        | Delimiter | Escapes | `#{}` interpolation | Notes |
+|-------------|-----------|---------|---------------------|-------|
+| Interpolated string | `"…"` | yes | yes | the default string form |
+| Raw string  | `'…'`     | no      | no    | content verbatim; can hold `"` but not `'` |
+| Character   | `?c`      | via `?\…` | n/a | a single `Char` (Unicode scalar) |
+
+```ruxen
+let greeting = "hi #{name}\n"     # interpolated: name spliced in, \n is newline
+let path     = 'C:\Users\me'      # raw: backslashes literal, no interpolation
+let newline  = ?\n                # Char (the newline scalar)
+let letter   = ?A                 # Char
+```
+
+Rationale and rules:
+
+- **Single quotes are raw strings, not char literals.** The Rust-style
+  `r"…"` / `r#"…"#` raw-string prefix is retired — single quotes cover
+  the raw case. A raw string cannot contain a `'`; reach for a `"…"`
+  string (escaping as needed) when you need one.
+- **Character literals use the `?c` form** (Ruby-style): `?a`, `?\n`,
+  `?\t`, `?\\`, `?\'`, `?\u{1F600}`. A `?` is only read as a char
+  literal in an *expression-context* position so postfix `?` (try),
+  `?.` (safe-navigation), and optional-type `T?` keep their operator
+  meaning.
+- **Lifetimes** still use the leading-quote form (`'a`, `'input`): a
+  single quote with no closing quote on the same line is a lifetime,
+  not a raw string.
+
+### 3.10b Ranges
+
+Ranges follow **Ruby** semantics, not Rust's:
+
+| Form     | Meaning   | Example   | Iterates |
+|----------|-----------|-----------|----------|
+| `a..b`   | inclusive | `0..3`    | 0, 1, 2, 3 |
+| `a...b`  | exclusive | `0...3`   | 0, 1, 2 |
+
+```ruxen
+for i in 0..n      # inclusive: 0 through n
+for i in 0...n     # exclusive: 0 through n-1
+```
+
+The Rust `..=` inclusive form **does not exist** — `..=` is rejected
+at lex time (E0009) with a fix-it pointing at `..`. (The `..` rest
+pattern in array/struct destructuring is unchanged; it's not a range.)
 
 ### 3.11 Stdlib type names
 
@@ -1188,9 +1260,9 @@ rules:
 A type that includes `Iterator` directly may be used as the source
 expression with no further desugaring — the type *is* the iterator.
 
-`for i in 0..10` uses the range form `..`, which produces an
-`Iterator[Item = Int]` covering `0..9`. `0..=10` is the inclusive
-form, covering `0..10`.
+`for i in 0..10` uses the inclusive range form `..`, producing an
+`Iterator[Item = Int]` covering `0` through `10`. `0...10` is the
+exclusive form, covering `0` through `9`.
 
 ### 3.22 Struct and enum literals
 

@@ -161,7 +161,7 @@ The dynamic path activates when the receiver's type is the **mixin
 itself** (e.g., a `dyn Future` parameter or a polymorphic slot):
 
 ```rx
-def run_one(fut: &var Future) -> ()
+def run_one(fut: &var Future) -> nil
   match fut.poll(cx)
     ...
   end

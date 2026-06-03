@@ -1,0 +1,7 @@
+class Priority
+  include Display
+
+  def to_display -> String
+    "hello"
+  end
+end

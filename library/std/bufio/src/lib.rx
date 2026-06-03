@@ -29,7 +29,7 @@ module BufReader
       def self.new as "ruxen_bufreader_new_file"(inner: File) -> BufReader.File
       def self.with_capacity as "ruxen_bufreader_with_capacity_file"(cap: Int, inner: File) -> BufReader.File
       def into_inner as "ruxen_bufreader_into_inner_file" -> File
-      def drop as "ruxen_bufreader_drop" -> ()
+      def drop as "ruxen_bufreader_drop" -> nil
     end
   end
 
@@ -40,7 +40,7 @@ module BufReader
       def self.new as "ruxen_bufreader_new_tcp"(inner: TcpStream) -> BufReader.Tcp
       def self.with_capacity as "ruxen_bufreader_with_capacity_tcp"(cap: Int, inner: TcpStream) -> BufReader.Tcp
       def into_inner as "ruxen_bufreader_into_inner_tcp" -> TcpStream
-      def drop as "ruxen_bufreader_drop" -> ()
+      def drop as "ruxen_bufreader_drop" -> nil
     end
   end
 end
@@ -49,9 +49,9 @@ module BufWriter
   mixin Writer
     lib "../io/runtime/bufio.c"
       def write as "ruxen_bufwriter_write"(buf: &Array[Int]) -> Result[Int, IoError]
-      def write_all as "ruxen_bufwriter_write_all"(buf: &Array[Int]) -> Result[(), IoError]
-      def write_str as "ruxen_bufwriter_write_str"(s: &String) -> Result[(), IoError]
-      def flush as "ruxen_bufwriter_flush" -> Result[(), IoError]
+      def write_all as "ruxen_bufwriter_write_all"(buf: &Array[Int]) -> Result[nil, IoError]
+      def write_str as "ruxen_bufwriter_write_str"(s: &String) -> Result[nil, IoError]
+      def flush as "ruxen_bufwriter_flush" -> Result[nil, IoError]
     end
   end
 
@@ -62,7 +62,7 @@ module BufWriter
       def self.new as "ruxen_bufwriter_new_file"(inner: File) -> BufWriter.File
       def self.with_capacity as "ruxen_bufwriter_with_capacity_file"(cap: Int, inner: File) -> BufWriter.File
       def into_inner as "ruxen_bufwriter_into_inner_file" -> File
-      def drop as "ruxen_bufwriter_drop" -> ()
+      def drop as "ruxen_bufwriter_drop" -> nil
     end
   end
 
@@ -73,7 +73,7 @@ module BufWriter
       def self.new as "ruxen_bufwriter_new_tcp"(inner: TcpStream) -> BufWriter.Tcp
       def self.with_capacity as "ruxen_bufwriter_with_capacity_tcp"(cap: Int, inner: TcpStream) -> BufWriter.Tcp
       def into_inner as "ruxen_bufwriter_into_inner_tcp" -> TcpStream
-      def drop as "ruxen_bufwriter_drop" -> ()
+      def drop as "ruxen_bufwriter_drop" -> nil
     end
   end
 end

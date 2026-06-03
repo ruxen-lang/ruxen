@@ -40,6 +40,6 @@ class FooBar[T]
   include Sync
 
   lib "runtime/foobar.c"
-    def drop as "ruxen_foobar_drop" -> ()
+    def drop as "ruxen_foobar_drop" -> nil
   end
 end
