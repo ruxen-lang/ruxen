@@ -16,7 +16,7 @@ use crate::mir::nodes::*;
 ///
 /// Returns `None` for `Unit` / `Never` (no runtime representation in return
 /// position), `Some(type)` for everything else.
-pub(super) fn ty_to_cranelift(ty: &Ty) -> Option<Type> {
+pub fn ty_to_cranelift(ty: &Ty) -> Option<Type> {
     match ty {
         Ty::Bool => Some(types::I8),
         Ty::Int8 | Ty::UInt8 => Some(types::I8),
@@ -66,7 +66,7 @@ pub(super) fn ty_to_cranelift(ty: &Ty) -> Option<Type> {
 }
 
 /// Map a MIR `CmpOp` to a Cranelift `IntCC`.
-pub(super) fn cmpop_to_intcc(op: CmpOp) -> IntCC {
+pub fn cmpop_to_intcc(op: CmpOp) -> IntCC {
     match op {
         CmpOp::Eq => IntCC::Equal,
         CmpOp::NotEq => IntCC::NotEqual,
@@ -77,7 +77,7 @@ pub(super) fn cmpop_to_intcc(op: CmpOp) -> IntCC {
     }
 }
 
-pub(super) fn cmpop_to_floatcc(op: CmpOp) -> FloatCC {
+pub fn cmpop_to_floatcc(op: CmpOp) -> FloatCC {
     match op {
         CmpOp::Eq => FloatCC::Equal,
         CmpOp::NotEq => FloatCC::NotEqual,
@@ -94,7 +94,7 @@ pub(super) fn cmpop_to_floatcc(op: CmpOp) -> FloatCC {
 /// is `String`, `Str`, or a reference to either. This is used to decide
 /// whether a `Compare` instruction should use `strcmp` rather than pointer
 /// equality.
-pub(super) fn is_string_typed_value(val: &MirValue, func: &MirFunction) -> bool {
+pub fn is_string_typed_value(val: &MirValue, func: &MirFunction) -> bool {
     if let MirValue::Use(local_id) = val {
         if let Some(local) = func.locals.get(*local_id as usize) {
             return is_string_mir_ty(&local.ty);
@@ -127,7 +127,7 @@ pub(super) fn is_string_typed_value(val: &MirValue, func: &MirFunction) -> bool 
 /// pointer-equality on `def check(s: String, needle: String)` style code —
 /// byte-identical strings compare unequal, silently breaking every URL
 /// match / header lookup / response comparison in real server code.
-pub(super) fn is_string_mir_ty(ty: &Ty) -> bool {
+pub fn is_string_mir_ty(ty: &Ty) -> bool {
     match ty {
         Ty::String | Ty::Str => true,
         Ty::Class { name, .. } if name == "String" => true,
@@ -145,7 +145,7 @@ pub(super) fn is_string_mir_ty(ty: &Ty) -> bool {
 /// per field, since all fields are stored as 64-bit words). For enums,
 /// we allocate tag (8 bytes) + payload. Minimum allocation is 8 bytes
 /// for any composite type.
-pub(super) fn simple_type_size(ty: &Ty) -> usize {
+pub fn simple_type_size(ty: &Ty) -> usize {
     match ty {
         Ty::Bool | Ty::Int8 | Ty::UInt8 => 1,
         Ty::Int16 | Ty::UInt16 => 2,

@@ -22,6 +22,16 @@ mod translation_env;
 /// keeping a subset that drifts out of sync.
 pub use runtime_sigs::runtime_signature;
 
+/// Module-agnostic Cranelift lowering helpers. These take only
+/// `&mut FunctionBuilder` or pure values and never touch the module, so the
+/// REPL JIT backend shares them verbatim rather than forking. Re-exported as
+/// `pub` (Phase 4); a regression to `pub(super)` breaks `cranelift_share_pin`.
+pub use emit::{coerce_value, coerce_value_signed, emit_binop};
+pub use helpers::{
+    cmpop_to_floatcc, cmpop_to_intcc, is_string_mir_ty, is_string_typed_value, simple_type_size,
+    ty_to_cranelift,
+};
+
 use std::collections::{HashMap, HashSet};
 
 use cranelift_codegen::ir::types::{self, Type};
@@ -37,7 +47,6 @@ use cranelift_object::{ObjectBuilder, ObjectModule};
 use crate::mir::nodes::*;
 
 use self::emit::{build_signature, def_local, translate_instruction, translate_terminator};
-use self::helpers::{is_string_mir_ty, ty_to_cranelift};
 use self::translation_env::TranslationEnv;
 
 /// Cranelift code generation engine.

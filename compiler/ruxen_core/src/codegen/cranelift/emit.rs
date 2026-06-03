@@ -630,7 +630,7 @@ pub(super) fn gen_value(
 ///
 /// Dispatches to float (`fadd`/`fsub`/…) or integer (`iadd`/`isub`/…)
 /// instructions based on the runtime type of the left operand.
-pub(super) fn emit_binop(
+pub fn emit_binop(
     op: BinOp,
     lhs: cranelift_codegen::ir::Value,
     rhs: cranelift_codegen::ir::Value,
@@ -702,7 +702,7 @@ pub(super) fn emit_binop(
 ///
 /// Handles integer width conversions (e.g., I64 → I8, I8 → I64) using
 /// `ireduce` (narrowing) or `uextend`/`sextend` (widening).
-pub(super) fn coerce_value(
+pub fn coerce_value(
     val: cranelift_codegen::ir::Value,
     target_ty: Type,
     builder: &mut FunctionBuilder,
@@ -716,7 +716,7 @@ pub(super) fn coerce_value(
 /// `uextend` otherwise. This matters for negative values: a signed
 /// `-1i32` must become `0xFFFF_FFFF_FFFF_FFFF` when promoted to i64,
 /// not `0x0000_0000_FFFF_FFFF`.
-pub(super) fn coerce_value_signed(
+pub fn coerce_value_signed(
     val: cranelift_codegen::ir::Value,
     target_ty: Type,
     signed: bool,
