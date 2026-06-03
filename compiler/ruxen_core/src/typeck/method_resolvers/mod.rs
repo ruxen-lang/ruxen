@@ -22,7 +22,10 @@ mod concurrency;
 mod fmt;
 mod fs;
 mod io;
+mod net;
+mod process;
 mod resolver;
+mod time;
 
 use resolver::MethodResolver;
 
@@ -61,6 +64,9 @@ fn resolvers() -> Vec<MethodResolver> {
     v.extend(fmt::resolvers());
     v.extend(io::resolvers());
     v.extend(fs::resolvers());
+    v.extend(process::resolvers());
+    v.extend(net::resolvers());
+    v.extend(time::resolvers());
     v.extend(resolver::legacy_resolvers()); // TIER 2 (remaining named stdlib, still legacy-wrapped)
     v.extend(resolver::structural_fallback_resolvers()); // TIER 3 tail
     v
@@ -410,190 +416,10 @@ fn legacy_builtin_method_type(
         // NOTE: Metadata arms moved to `fs::resolvers()` (tier 2).
         // See Phase 5 Task 7.
         // Phase 2 stdlib (#06): std::process::Command builder.
-        // `.arg/.args/.env/.current_dir` return Self (same handle,
-        // mutate-in-place — the source local is tainted by the
-        // method-call default in `compute_dealloc_safe_locals` so
-        // double-free is avoided in chained-let bindings).
-        // `.status` / `.output` consume self and return Result.
-        (Ty::Class { name, .. }, "arg") if name == "Command" => Some(ty.clone()),
-        (Ty::Class { name, .. }, "args") if name == "Command" => Some(ty.clone()),
-        (Ty::Class { name, .. }, "env") if name == "Command" => Some(ty.clone()),
-        (Ty::Class { name, .. }, "current_dir") if name == "Command" => Some(ty.clone()),
-        (Ty::Class { name, .. }, "status") if name == "Command" => Some(Ty::Result(
-            Box::new(InferenceEngine::class_ty("ExitStatus", vec![])),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "output") if name == "Command" => Some(Ty::Result(
-            Box::new(InferenceEngine::class_ty("Output", vec![])),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        // ExitStatus accessors.
-        (Ty::Class { name, .. }, "code") if name == "ExitStatus" => Some(Ty::Int),
-        (Ty::Class { name, .. }, "success") if name == "ExitStatus" => Some(Ty::Bool),
-        // Output accessors. `.status` returns a fresh ExitStatus
-        // (cloned in the runtime so the Output can be dropped
-        // independently).
-        (Ty::Class { name, .. }, "status") if name == "Output" => {
-            Some(InferenceEngine::class_ty("ExitStatus", vec![]))
-        }
-        (Ty::Class { name, .. }, "stdout") if name == "Output" => Some(Ty::String),
-        (Ty::Class { name, .. }, "stderr") if name == "Output" => Some(Ty::String),
-        // NOTE: File + OpenOptions arms moved to `fs::resolvers()` (tier 2).
-        // See Phase 5 Task 7.
-        // Phase 2 stdlib (#06.5 T4): Duration static-style
-        // constructors. Receiver type-name resolves to `Duration`
-        // (class identifier promoted to its Ty by the resolver).
-        // Each `from_*` takes `Int` and returns `Duration`.
-        (Ty::Class { name, .. }, "from_secs")
-        | (Ty::Class { name, .. }, "from_millis")
-        | (Ty::Class { name, .. }, "from_micros")
-        | (Ty::Class { name, .. }, "from_nanos")
-            if name == "Duration" =>
-        {
-            Some(InferenceEngine::class_ty("Duration", vec![]))
-        }
-        // Duration instance accessors — integer division.
-        (Ty::Class { name, .. }, "as_secs")
-        | (Ty::Class { name, .. }, "as_millis")
-        | (Ty::Class { name, .. }, "as_micros")
-        | (Ty::Class { name, .. }, "as_nanos")
-            if name == "Duration" =>
-        {
-            Some(Ty::Int)
-        }
-        // Duration named arithmetic methods. The `+`/`-` operator
-        // path also routes here (see mir/lower/expr/binops.rs);
-        // `.add()` / `.sub()` are the explicit named surface,
-        // load-bearing when the binop site isn't statically
-        // resolvable (e.g. generic over Duration).
-        (Ty::Class { name, .. }, "add") if name == "Duration" => {
-            Some(InferenceEngine::class_ty("Duration", vec![]))
-        }
-        (Ty::Class { name, .. }, "sub") if name == "Duration" => {
-            Some(InferenceEngine::class_ty("Duration", vec![]))
-        }
-        // Phase 2 stdlib (#06.5 T4): Instant.now / elapsed /
-        // duration_since. CLOCK_MONOTONIC under the hood.
-        (Ty::Class { name, .. }, "now") if name == "Instant" => {
-            Some(InferenceEngine::class_ty("Instant", vec![]))
-        }
-        (Ty::Class { name, .. }, "elapsed") if name == "Instant" => {
-            Some(InferenceEngine::class_ty("Duration", vec![]))
-        }
-        (Ty::Class { name, .. }, "duration_since") if name == "Instant" => {
-            Some(InferenceEngine::class_ty("Duration", vec![]))
-        }
-        // `.sub()` as the named alias for `Instant - Instant`.
-        (Ty::Class { name, .. }, "sub") if name == "Instant" => {
-            Some(InferenceEngine::class_ty("Duration", vec![]))
-        }
-        // Phase 2 stdlib (#06.5 T5): std::net::TcpListener surface.
-        // Every fallible op returns `Result[_, IoError]`. Static
-        // constructor `bind` (Ty::Class receiver promoted from the
-        // class identifier by the resolver) returns
-        // `Result[TcpListener, IoError]`.
-        (Ty::Class { name, .. }, "bind") if name == "TcpListener" => Some(Ty::Result(
-            Box::new(InferenceEngine::class_ty("TcpListener", vec![])),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "accept") if name == "TcpListener" => Some(Ty::Result(
-            Box::new(InferenceEngine::class_ty("TcpStream", vec![])),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "local_addr") if name == "TcpListener" => Some(Ty::Result(
-            Box::new(Ty::String),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "set_nonblocking") if name == "TcpListener" => Some(Ty::Result(
-            Box::new(Ty::Unit),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "close") if name == "TcpListener" => Some(Ty::Result(
-            Box::new(Ty::Unit),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        // Phase 2 stdlib (#06.5 T5): std::net::TcpStream surface.
-        (Ty::Class { name, .. }, "connect") if name == "TcpStream" => Some(Ty::Result(
-            Box::new(InferenceEngine::class_ty("TcpStream", vec![])),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "read") if name == "TcpStream" => Some(Ty::Result(
-            Box::new(Ty::Int),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "write") if name == "TcpStream" => Some(Ty::Result(
-            Box::new(Ty::Int),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "peer_addr") if name == "TcpStream" => Some(Ty::Result(
-            Box::new(Ty::String),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "shutdown") if name == "TcpStream" => Some(Ty::Result(
-            Box::new(Ty::Unit),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "close") if name == "TcpStream" => Some(Ty::Result(
-            Box::new(Ty::Unit),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        // Phase 2 #06.5 T5 additions: socket read/write timeouts.
-        // Both take a `&Duration` and return Result[(), IoError].
-        (Ty::Class { name, .. }, "set_read_timeout") if name == "TcpStream" => Some(Ty::Result(
-            Box::new(Ty::Unit),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "set_write_timeout") if name == "TcpStream" => Some(Ty::Result(
-            Box::new(Ty::Unit),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        // NOTE: BufReader/BufWriter (incl. E0714) + IoError arms moved to
-        // `io::resolvers()` (tier 2). See Phase 5 Task 6.
+        // NOTE: Command/ExitStatus/Output (process), Duration/Instant
+        // (time), and TcpListener/TcpStream (net) arms moved to
+        // `process::`/`time::`/`net::resolvers()` (tier 2). See Phase 5
+        // Task 8. BufReader/BufWriter (E0714) + IoError → io.rs (Task 6).
         (Ty::Class { name, generic_args }, "to_vec") if name.ends_with("Iter") => {
             let elem = if name == "SplitIter" {
                 // SplitIter yields &str segments
