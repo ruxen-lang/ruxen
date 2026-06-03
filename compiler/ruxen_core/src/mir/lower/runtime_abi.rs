@@ -188,6 +188,19 @@ const FRESH_ALLOC_CALLEES: &[&str] = &[
     "ruxen_string_concat",
     "ruxen_vec_new",
     "ruxen_hash_new",
+    // `String_into_bytes` / `ruxen_string_into_bytes` are in BOTH this list and
+    // CONSUME_HELPERS, and this is NOT a contradiction — they are load-bearing
+    // in two INDEPENDENT axes the drop pass tracks separately:
+    //   * RESULT (dest): into_bytes produces a fresh Vec[U8] spine the caller
+    //     owns. Without Fresh here, the dest is tainted, scope-exit drop emits
+    //     no `ruxen_vec_free`, and the Vec struct + data buffer LEAK (verified:
+    //     drop_fixtures::string_into_bytes_transfers_ownership goes to
+    //     raw_outstanding=2, vec_frees=0 the moment this membership is removed).
+    //   * ARG (arg0): the runtime frees the source `char*` internally, so the
+    //     source String must be tainted (consume) to avoid a double-free.
+    // The original "fresh-vs-consume contradiction" hypothesis (Phase 2 plan
+    // Task 3b) was disproven by the leak backstop: the result and arg axes are
+    // orthogonal, and BOTH classifications are required. Kept as-is.
     "String_into_bytes",
     "ruxen_string_into_bytes",
     "String_push",

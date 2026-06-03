@@ -490,15 +490,23 @@ pub(crate) const SYMBOLS: &[&str] = &[
 // ---------------------------------------------------------------------------
 
 #[test]
-fn documents_into_bytes_fresh_alloc_vs_consume_contradiction() {
-    // ruxen_string_into_bytes is in BOTH FRESH_ALLOC_CALLEES and
-    // is_runtime_consume_helper. The arg loop only reads consume; the
-    // FRESH_ALLOC membership is dead+misleading. Pin the CURRENT answers
-    // so Task 3b's resolution (one category) shows up as a test diff.
-    assert!(ref_returns_fresh_alloc("ruxen_string_into_bytes"));
-    assert!(ref_is_runtime_consume_helper("ruxen_string_into_bytes"));
-    assert!(ref_returns_fresh_alloc("String_into_bytes"));
-    assert!(ref_is_runtime_consume_helper("String_into_bytes"));
+fn into_bytes_is_dual_axis_fresh_result_and_consumed_arg() {
+    // INVESTIGATED (Phase 2 Task 3b): the "fresh-vs-consume contradiction" was
+    // a FALSE hypothesis. into_bytes legitimately occupies both axes the drop
+    // pass tracks INDEPENDENTLY:
+    //   * RESULT axis: Fresh — it produces a brand-new Vec[U8] spine the dest
+    //     local owns and must `ruxen_vec_free` at scope exit.
+    //   * ARG axis: consumed — the runtime frees the source char* internally,
+    //     so the source String must be tainted to avoid a double-free.
+    // Dropping the Fresh membership LEAKS the Vec (proven by the leak backstop
+    // drop_fixtures::string_into_bytes_transfers_ownership →
+    // raw_outstanding=2, vec_frees=0). Both classifications are load-bearing.
+    let s = callee_ownership("ruxen_string_into_bytes");
+    assert_eq!(s.result, ResultOwnership::Fresh, "fresh Vec[U8] result");
+    assert!(!s.args_are_borrowed, "source char* is consumed (arg tainted)");
+    let m = callee_ownership("String_into_bytes");
+    assert_eq!(m.result, ResultOwnership::Fresh);
+    assert!(!m.args_are_borrowed);
 }
 
 #[test]
