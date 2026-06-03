@@ -398,7 +398,7 @@ impl<'a> InferenceEngine<'a> {
     }
 
     /// Look up a user-defined method on a class (or its parents) and return its return type.
-    pub(super) fn lookup_class_method_return(
+    pub(in crate::typeck) fn lookup_class_method_return(
         &self,
         type_name: &str,
         method_name: &str,

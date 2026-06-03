@@ -1,0 +1,30 @@
+# Regression: calling a method on the `Ok`-bound payload of a runtime-
+# compiled regex must monomorphise to the concrete receiver type.
+#
+# `Regex.new(...)` returns `Result[Regex, RegexError]`. A class-owned
+# (FFI) method's DECLARED return type must win over the builtin
+# "X.new returns X" assumption — otherwise the scrutinee of
+# `match Regex.new(...)` is typed `Regex` instead of `Result`, the
+# `Ok(rx)` binding stays an unresolved inference var, and `rx.is_match`
+# mangles to `?T<n>_is_match` with no runtime symbol (codegen failure).
+def matches(pat: &String, text: &String) -> Bool
+  let flags = String.from("")
+  match Regex.new(pat, &flags)
+    Ok(rx)  -> rx.is_match(text)
+    Err(_) -> false
+  end
+end
+
+def main
+  let digits = String.from("^\\d+$")
+  if matches(&digits, &String.from("42"))
+    puts "match"
+  else
+    puts "no"
+  end
+  if matches(&digits, &String.from("4a2"))
+    puts "match"
+  else
+    puts "no"
+  end
+end
