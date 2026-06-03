@@ -118,6 +118,68 @@ pub fn callee_ownership(callee: &str) -> CalleeOwnership {
     }
 }
 
+/// Is `type_name::method_name` a static (no-`self`) constructor that dispatches
+/// directly to a runtime symbol? Single source for the static-vs-instance
+/// decision shared by `util.rs::is_builtin_static_method` and the
+/// `method_call.rs` fast-path gate. Reconciles the two formerly-diverged lists
+/// (util.rs:74-132 + method_call.rs:162-214) into one declarative table.
+///
+/// RECONCILIATION DECISIONS (recorded per the plan's obligation):
+///  1. The universal `.new` rule: `method_name == "new"` is a static ctor for
+///     ANY type. This is the behaviour `method_call.rs::is_collection_ctor`
+///     actually ships (line 197); `util.rs` did NOT have it. The union keeps
+///     it — verified against ffi_alias_single_entry + the broad suite that it
+///     does not reroute a user class with a real `init` (the method_call.rs
+///     fast path still gates on `lookup_ffi_alias` / the base-type allowlist
+///     downstream, and the field_access/method_call `is_static` checks OR in
+///     `is_user_static_method`, so a user `.new` with an init still resolves
+///     correctly).
+///  2. `String.from/from_bytes/from_iter`, `Thread.*`, `Mutex/Arc/SharedSync.new`
+///     came from util.rs; `File.*`, `Duration.*`, `Instant.now`, `Tcp*`,
+///     `BufReader/BufWriter` came from method_call.rs. The union is the set both
+///     sites now read. Widening each site to the union is behaviour-preserving
+///     for the observable compilation outcome (proven by the integration suite
+///     in Task 5): the extra (type, method) pairs a given site gains were
+///     already classified static at the OTHER site, and both sites funnel a
+///     positive answer through the same downstream FFI-alias / `_init` gates.
+pub fn is_static_constructor(type_name: &str, method_name: &str) -> bool {
+    // Any `.new` is a static constructor (method_call.rs is_collection_ctor rule).
+    if method_name == "new" {
+        return true;
+    }
+    let base = match type_name.find('[') {
+        Some(pos) => &type_name[..pos],
+        None => type_name,
+    };
+    STATIC_CTORS
+        .iter()
+        .any(|(b, methods)| *b == base && methods.contains(&method_name))
+}
+
+/// (base_type, static-constructor method names). UNION of the two formerly
+/// duplicated lists (util.rs:74-132 + method_call.rs:162-214). One source.
+/// `new` is handled by the universal rule in `is_static_constructor`, so it is
+/// omitted here.
+const STATIC_CTORS: &[(&str, &[&str])] = &[
+    ("String", &["from", "with_capacity", "from_iter", "from_bytes"]),
+    ("Vec", &["with_capacity", "from_iter"]),
+    ("Array", &["with_capacity", "from_iter"]),
+    ("Hash", &["with_capacity", "from_iter"]),
+    ("HashMap", &["with_capacity", "from_iter"]),
+    ("Map", &["with_capacity", "from_iter"]),
+    ("Set", &["with_capacity", "from_iter"]),
+    ("HashSet", &["with_capacity", "from_iter"]),
+    ("Thread", &["spawn", "current", "sleep", "yield_now"]),
+    // Mutex / Arc / SharedSync: only `.new`, handled by the universal rule.
+    ("Duration", &["from_secs", "from_millis", "from_micros", "from_nanos"]),
+    ("Instant", &["now"]),
+    ("TcpListener", &["bind"]),
+    ("TcpStream", &["connect"]),
+    ("File", &["open", "create", "append", "open_options"]),
+    ("BufReader", &["with_capacity"]),
+    ("BufWriter", &["with_capacity"]),
+];
+
 /// Old `transfer_indices` + `is_pointer_store_helper`, folded into one mask.
 fn arg_transfer_mask(callee: &str) -> ArgMask {
     if callee == "ruxen_store_ptr" {
@@ -468,5 +530,33 @@ mod tests {
         assert_eq!(o.result, ResultOwnership::None); // dest tainted
         assert!(!o.args_are_borrowed); // every Use(arg) tainted
         assert!(!o.borrows_first_arg);
+    }
+
+    #[test]
+    fn static_constructor_union_is_reconciled() {
+        // From the method_call.rs fast-path cascade:
+        assert!(is_static_constructor("File", "open"));
+        assert!(is_static_constructor("Duration", "from_secs"));
+        assert!(is_static_constructor("Instant", "now"));
+        assert!(is_static_constructor("TcpListener", "bind"));
+        assert!(is_static_constructor("TcpStream", "connect"));
+        assert!(is_static_constructor("BufReader", "new"));
+        assert!(is_static_constructor("BufWriter", "with_capacity"));
+        // From util.rs::is_builtin_static_method (the diverged sibling):
+        assert!(is_static_constructor("String", "from"));
+        assert!(is_static_constructor("String", "from_bytes"));
+        assert!(is_static_constructor("Thread", "spawn"));
+        assert!(is_static_constructor("Mutex", "new"));
+        assert!(is_static_constructor("Arc", "new"));
+        assert!(is_static_constructor("SharedSync", "new"));
+        // Generic-base handling (Vec[T] → Vec):
+        assert!(is_static_constructor("Vec[String]", "with_capacity"));
+        assert!(is_static_constructor("HashMap[K, V]", "from_iter"));
+        // The universal `new` rule that method_call.rs's is_collection_ctor
+        // applies to ANY type:
+        assert!(is_static_constructor("AnyUserClass", "new"));
+        // Negatives:
+        assert!(!is_static_constructor("Vec", "len"));
+        assert!(!is_static_constructor("File", "read"));
     }
 }
