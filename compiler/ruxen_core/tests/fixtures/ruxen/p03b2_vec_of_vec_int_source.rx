@@ -8,5 +8,5 @@ def main
   row2.push(4)
   grid.push(row1)
   grid.push(row2)
-  let _len = grid.len
+  let _len = grid.size
 end

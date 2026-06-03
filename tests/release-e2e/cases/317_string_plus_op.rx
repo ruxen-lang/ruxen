@@ -2,6 +2,6 @@ def main
   let a = String.from("foo")
   let b = String.from("bar")
   let c = a + b
-  puts "len=#{c.len}"
+  puts "len=#{c.size}"
   puts c
 end

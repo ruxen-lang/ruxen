@@ -1,5 +1,5 @@
 def main
   let v = [1, 2, 2, 3]
   let s: Set[Int] = Set.from_iter(v.iter)
-  puts s.len.to_string
+  puts s.size.to_string
 end

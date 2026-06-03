@@ -13,7 +13,7 @@ def main
   let name = String.from("Ruxen")
   let greeting = "hello, #{name}!"
   puts greeting
-  puts "bytes = #{greeting.len}"
+  puts "bytes = #{greeting.size}"
 end
 ```
 
@@ -30,7 +30,7 @@ hello, Ruxen!
 bytes = 13
 ```
 
-Notice three things: `String.from` to create an owned string from a literal, `"#{...}"` interpolation to build a new owned string, and `.len` returning the byte count.
+Notice three things: `String.from` to create an owned string from a literal, `"#{...}"` interpolation to build a new owned string, and `.size` returning the byte count.
 
 ---
 
@@ -82,14 +82,14 @@ puts s                                  # hello, world
 ```ruxen
 let s = String.from("hello world")
 
-s.len                       # byte length (Int)
-s.is_empty                  # Bool
-s.contains("world")         # Bool
+s.size                       # byte length (Int)
+s.empty?                  # Bool
+s.include?("world")         # Bool
 s.starts_with("hello")      # Bool
 s.ends_with("world")        # Bool
 ```
 
-`len` returns **bytes**, not characters. For a Unicode-aware count, use `.char_count` (or iterate `.chars` and count).
+`size` returns **bytes**, not characters. For a Unicode-aware count, use `.char_count` (or iterate `.chars` and count).
 
 ## 6. Slicing, splitting, and lines
 
@@ -245,7 +245,7 @@ A cast that doesn't fit (e.g. `300 as UInt8`) truncates by masking — it never 
 
 ## 15. Common mistakes
 
-- **Treating `len` as character count.** `s.len` is bytes; "café" has 5 bytes but 4 characters. Use `.char_count` for the Unicode count.
+- **Treating `size` as character count.** `s.size` is bytes; "café" has 5 bytes but 4 characters. Use `.char_count` for the Unicode count.
 - **Forgetting `&` on `push_str`.** `s.push_str("hi")` won't compile — `push_str` takes `&String`. Write `s.push_str(&"hi")`.
 - **Expecting `+` on strings.** Ruxen has no `+` for `String`. Use interpolation: `"#{a}#{b}"`.
 - **Implicit numeric promotion.** Adding `Int` and `Int32` is a type error — cast one side explicitly with `as`.

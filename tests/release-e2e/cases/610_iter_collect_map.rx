@@ -2,6 +2,6 @@ def main
   let keys = [1, 2, 3]
   let vals = [10, 20, 30]
   let m = keys.iter.zip(vals.iter).collect[Map[Int, Int]]
-  puts "#{m.len}"
-  puts "#{m.contains_key(2)}"
+  puts "#{m.size}"
+  puts "#{m.key?(2)}"
 end

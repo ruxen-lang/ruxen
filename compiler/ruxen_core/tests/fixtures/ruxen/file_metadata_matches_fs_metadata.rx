@@ -1,7 +1,7 @@
 use std.io.File
 
 def report(m: Metadata)
-  puts "len=#{m.len}"
+  puts "len=#{m.size}"
   if m.is_file
     puts "is_file=true"
   else

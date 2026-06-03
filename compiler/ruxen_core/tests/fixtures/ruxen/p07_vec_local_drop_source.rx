@@ -1,5 +1,5 @@
 def main
   var v: Array[Int] = Array.new
   v.push(1)
-  let _len = v.len
+  let _len = v.size
 end

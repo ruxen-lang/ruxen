@@ -2,8 +2,8 @@
 use std.rand.random_bytes
 
 def check(buf: &Array[Int])
-  if buf.len != 32
-    puts "fail length=#{buf.len}"
+  if buf.size != 32
+    puts "fail length=#{buf.size}"
   else
     let first = buf.get(0).unwrap_or(0)
     var distinct = false

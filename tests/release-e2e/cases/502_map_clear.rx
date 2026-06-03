@@ -3,9 +3,9 @@ def main
   h.insert(1, 10)
   h.insert(2, 20)
   h.insert(3, 30)
-  let before = h.len
+  let before = h.size
   h.clear
-  let after = h.len
+  let after = h.size
   let empty = h.is_empty
   puts "before=#{before}"
   puts "after=#{after}"

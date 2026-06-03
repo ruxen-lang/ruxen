@@ -247,7 +247,7 @@ string (E0002), not read as a lifetime.
 
 ```ruxen
 def longest[a](x: &a String, y: &a String) -> &a String
-  if x.len > y.len; x; else; y; end
+  if x.size > y.size; x; else; y; end
 end
 
 class Slice[T, a]
@@ -435,6 +435,14 @@ concrete type must itself satisfy `static`).
 
 ### 3.4a Methods on a type
 
+Method names may carry Ruby's conventional suffixes: `?` for
+predicates (`empty?`, `include?`, `any?`) and `!` for in-place / bang
+variants (`sort!`). The suffix is part of the name. Because `?`
+belongs to method names, **safe navigation is `&.`** (Ruby), not
+`?.`: `user&.name&.upcase`. (The standalone `?` after a call is still
+the try operator: `parse(s)?`; uppercase `T?` is still an optional
+type.)
+
 A class, struct, or enum's methods live inside the type body — there
 are no separate "methods-for-this-type" blocks for the common case:
 
@@ -447,7 +455,7 @@ class Container[T]
   end
 
   def count -> Int
-    self.items.len
+    self.items.size
   end
 end
 ```
@@ -481,7 +489,7 @@ class SafeBuffer
   def init(size: USize)
     unsafe
       self.ptr = malloc(size) as *var UInt8
-      self.len = size
+      self.size = size
     end
   end
 

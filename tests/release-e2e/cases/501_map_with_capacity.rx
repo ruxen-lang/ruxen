@@ -2,6 +2,6 @@ def main
   var h: Map[Int, Int] = Map.with_capacity(8)
   h.insert(1, 10)
   h.insert(2, 20)
-  let n = h.len
+  let n = h.size
   puts "len=#{n}"
 end

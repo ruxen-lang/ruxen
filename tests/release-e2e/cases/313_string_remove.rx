@@ -1,6 +1,6 @@
 def main
   var s = String.from("hello")
   let _c = s.remove(0)
-  puts "len=#{s.len}"
+  puts "len=#{s.size}"
   puts s
 end

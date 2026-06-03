@@ -25,7 +25,7 @@ def main
   # the source. The point of the pin is that the helper exists and
   # produces a working Map (right len, lookups succeed) — not deep-
   # clone semantics, which Vec / Hash share as a v1 ceiling.
-  puts "clone_len=#{b2.data.len}"
+  puts "clone_len=#{b2.data.size}"
   match b2.data.get(String.from("alpha"))
     Some(v) -> puts "alpha=#{v}"
     nil     -> puts "alpha=MISSING"

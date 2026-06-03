@@ -858,7 +858,7 @@ end";
 
     #[test]
     fn safe_navigation() {
-        let expr = parse_expr("user?.name");
+        let expr = parse_expr("user&.name");
         match &expr.kind {
             ExprKind::SafeNav { object, field } => {
                 assert_eq!(field, "name");
@@ -877,17 +877,14 @@ end";
 
     #[test]
     fn try_operator() {
-        let expr = parse_expr("file.read?");
+        // After ruby-naming, a trailing `?` on a lowercase name is a
+        // predicate method (`read?`), so the try operator binds after a
+        // call/index: `file.read()?` is `Try(file.read())`.
+        let expr = parse_expr("file.read()?");
         match &expr.kind {
             ExprKind::Try(inner) => match &inner.kind {
-                ExprKind::FieldAccess { object, field } => {
-                    assert_eq!(field, "read");
-                    match &object.kind {
-                        ExprKind::Identifier(name) => assert_eq!(name, "file"),
-                        other => panic!("expected Identifier(file), got {:?}", other),
-                    }
-                }
-                other => panic!("expected FieldAccess, got {:?}", other),
+                ExprKind::MethodCall { method, .. } => assert_eq!(method, "read"),
+                other => panic!("expected MethodCall, got {:?}", other),
             },
             other => panic!("expected Try, got {:?}", other),
         }

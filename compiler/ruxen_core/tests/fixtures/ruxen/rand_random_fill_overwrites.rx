@@ -10,8 +10,8 @@ def main
   end
   match random_fill(&var buf)
     Ok(_) ->
-      if buf.len != 16
-        puts "fail len=#{buf.len}"
+      if buf.size != 16
+        puts "fail len=#{buf.size}"
       else
         var any_diff = false
         var j = 0

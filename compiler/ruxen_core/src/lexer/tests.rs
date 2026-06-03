@@ -249,7 +249,7 @@ fn test_multi_char_operators() {
         ("..", TokenKind::DotDot),
         ("...", TokenKind::DotDotDot),
         ("->", TokenKind::Arrow),
-        ("?.", TokenKind::QuestionDot),
+        ("&.", TokenKind::AmpDot),
         ("::", TokenKind::ColonColon),
     ];
 
@@ -988,13 +988,13 @@ fn test_type_identifier() {
 
 #[test]
 fn test_identifier_with_question_suffix() {
-    // ? is emitted as a separate token; parser combines identifier + ? for method names
+    // Ruby predicate methods: a trailing `?` (not followed by `.`) is
+    // absorbed into a lowercase identifier, so `is_empty?` is one token.
     let kinds = lex_kinds("is_empty?");
     assert_eq!(
         kinds,
         vec![
-            TokenKind::Identifier("is_empty".into()),
-            TokenKind::Question,
+            TokenKind::Identifier("is_empty?".into()),
             TokenKind::Eof,
         ]
     );
@@ -1299,12 +1299,13 @@ fn test_generic_type() {
 
 #[test]
 fn test_safe_navigation() {
-    let kinds = lex_kinds("user?.name");
+    // Ruby safe navigation is `&.` (not `?.`): `user&.name`.
+    let kinds = lex_kinds("user&.name");
     assert_eq!(
         kinds,
         vec![
             TokenKind::Identifier("user".into()),
-            TokenKind::QuestionDot,
+            TokenKind::AmpDot,
             TokenKind::Identifier("name".into()),
             TokenKind::Eof,
         ]
@@ -1312,13 +1313,30 @@ fn test_safe_navigation() {
 }
 
 #[test]
-fn test_try_operator() {
-    let kinds = lex_kinds("result?");
+fn test_predicate_suffix_and_try_and_safenav() {
+    // `result?` (lowercase + trailing `?`) is a Ruby predicate method name.
     assert_eq!(
-        kinds,
+        lex_kinds("result?"),
+        vec![TokenKind::Identifier("result?".into()), TokenKind::Eof]
+    );
+    // The try operator survives after `)`: `f()?` → `f` `(` `)` `?`.
+    assert_eq!(
+        lex_kinds("f()?"),
         vec![
-            TokenKind::Identifier("result".into()),
+            TokenKind::Identifier("f".into()),
+            TokenKind::LParen,
+            TokenKind::RParen,
             TokenKind::Question,
+            TokenKind::Eof,
+        ]
+    );
+    // Safe navigation is Ruby's `&.` (not `?.`): `h&.now`.
+    assert_eq!(
+        lex_kinds("h&.now"),
+        vec![
+            TokenKind::Identifier("h".into()),
+            TokenKind::AmpDot,
+            TokenKind::Identifier("now".into()),
             TokenKind::Eof,
         ]
     );

@@ -51,6 +51,6 @@ class Formatter
     def write_str as "ruxen_fmt_formatter_write_str"(s: &String) -> Result[nil, FmtError]
     def write_char as "ruxen_fmt_formatter_write_char"(ch: Int) -> Result[nil, FmtError]
     def buffer as "ruxen_fmt_formatter_buffer" -> String
-    def len as "ruxen_fmt_formatter_len" -> Int
+    def size as "ruxen_fmt_formatter_len" -> Int
   end
 end

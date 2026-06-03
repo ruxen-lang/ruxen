@@ -80,7 +80,7 @@ class Runner
   end
 
   def execute -> nil
-    if self.report.len() > 0
+    if self.report.size() > 0
       eputs "#{self.report}"
     end
     puts("#{self.passed} passed, #{self.failed} failed, #{self.pending} pending")

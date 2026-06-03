@@ -7,5 +7,5 @@ end
 
 def main
   let xs = get_items
-  let n = xs.len
+  let n = xs.size
 end

@@ -6,7 +6,7 @@ def main
   v.push(4)
   v.push(5)
   v.retain { |x| x > 2 }
-  let n = v.len
+  let n = v.size
   puts "len=#{n}"
   for x in &v
     puts "#{x}"

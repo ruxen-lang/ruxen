@@ -201,7 +201,7 @@ end
 
 def main
   let argv = args()
-  if argv.len < 2
+  if argv.size < 2
     eputs "usage: tool <file>"
     exit(1)
   end

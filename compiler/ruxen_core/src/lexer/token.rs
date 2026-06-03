@@ -236,7 +236,7 @@ pub enum TokenKind {
     FatArrow, // =>
 
     // ── Operators: Special ──
-    QuestionDot, // ?.
+    AmpDot, // &.
     Question,    // ?
     At,          // @
     ColonColon,  // ::
@@ -316,7 +316,7 @@ impl TokenKind {
                 | TokenKind::Arrow
                 | TokenKind::FatArrow
                 | TokenKind::Dot
-                | TokenKind::QuestionDot
+                | TokenKind::AmpDot
                 | TokenKind::Comma
                 | TokenKind::LParen
                 | TokenKind::LBracket

@@ -75,13 +75,13 @@ class SafeBuffer
   def init(size: Int)
     unsafe
       self.ptr = malloc(size) as *var UInt8
-      self.len = size
+      self.size = size
     end
   end
 
   # Safe public API — bounds-checked, returns Option
   def get(index: Int) -> Option[UInt8]
-    if index < 0 || index >= self.len
+    if index < 0 || index >= self.size
       nil
     else
       unsafe

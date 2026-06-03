@@ -15,7 +15,7 @@ end
 
 def main
   match random_bytes(16)
-    Ok(buf) -> report(buf.len)
+    Ok(buf) -> report(buf.size)
     Err(_)  -> puts "err"
   end
 end

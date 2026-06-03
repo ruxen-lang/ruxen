@@ -1,9 +1,9 @@
 def take_owned(s: String) -> USize
-  s.len
+  s.size
 end
 
 def main
   let s = String.from("hello")
   let _a = take_owned(s)
-  let _b = s.len
+  let _b = s.size
 end

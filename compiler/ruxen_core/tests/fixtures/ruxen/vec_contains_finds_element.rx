@@ -3,12 +3,12 @@ def main
   v.push(1)
   v.push(2)
   v.push(3)
-  if v.contains(&2)
+  if v.include?(&2)
     puts "has_2"
   else
     puts "missing_2"
   end
-  if v.contains(&99)
+  if v.include?(&99)
     puts "has_99"
   else
     puts "missing_99"

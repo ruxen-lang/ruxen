@@ -147,7 +147,7 @@ impl Parser {
             }
 
             // Safe navigation: ?.name or ?.name(args)
-            TokenKind::QuestionDot => {
+            TokenKind::AmpDot => {
                 self.advance(); // consume ?.
                 let field = self.expect_any_identifier();
 

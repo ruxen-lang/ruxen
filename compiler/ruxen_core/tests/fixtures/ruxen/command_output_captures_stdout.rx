@@ -1,7 +1,7 @@
 use std.process.Command
 
 def report(out: Output)
-  if out.stdout.contains("xyz")
+  if out.stdout.include?("xyz")
     puts "stdout_ok"
   else
     puts "stdout_bad"

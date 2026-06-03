@@ -67,7 +67,7 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
 
         ExprKind::SafeNav { object, field } => concat(vec![
             format_expr(object, comments),
-            text("?."),
+            text("&."),
             text(field.clone()),
         ]),
 
@@ -79,7 +79,7 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
             let arg_docs: Vec<Doc> = args.iter().map(|a| format_expr(a, comments)).collect();
             concat(vec![
                 format_expr(object, comments),
-                text("?."),
+                text("&."),
                 text(method.clone()),
                 format_call_args(arg_docs),
             ])
@@ -536,7 +536,7 @@ fn token_to_source(token: &crate::lexer::token::Token) -> String {
         TokenKind::DotDot => "..".to_string(),
         TokenKind::DotDotDot => "...".to_string(),
         TokenKind::Question => "?".to_string(),
-        TokenKind::QuestionDot => "?.".to_string(),
+        TokenKind::AmpDot => "&.".to_string(),
         TokenKind::At => "@".to_string(),
         TokenKind::AmpMut => "&var".to_string(),
         TokenKind::LParen => "(".to_string(),

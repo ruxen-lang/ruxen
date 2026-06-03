@@ -6,9 +6,9 @@ def main
   var b: Set[Int] = Set.new
   b.insert(2)
   let d = a.difference(&b)
-  let n = d.len
+  let n = d.size
   puts "len=#{n}"
-  puts "has1=#{d.contains(1)}"
-  puts "has2=#{d.contains(2)}"
-  puts "has3=#{d.contains(3)}"
+  puts "has1=#{d.include?(1)}"
+  puts "has2=#{d.include?(2)}"
+  puts "has3=#{d.include?(3)}"
 end

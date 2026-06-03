@@ -6,9 +6,9 @@ def main
   b.insert(2)
   b.insert(3)
   let u = a.union(&b)
-  let n = u.len
+  let n = u.size
   puts "len=#{n}"
-  puts "has1=#{u.contains(1)}"
-  puts "has2=#{u.contains(2)}"
-  puts "has3=#{u.contains(3)}"
+  puts "has1=#{u.include?(1)}"
+  puts "has2=#{u.include?(2)}"
+  puts "has3=#{u.include?(3)}"
 end

@@ -1,7 +1,7 @@
 def main
   var s = String.from("hello")
-  puts "before len=#{s.len}"
+  puts "before len=#{s.size}"
   s.clear
-  puts "after len=#{s.len}"
+  puts "after len=#{s.size}"
   puts "empty=#{s.is_empty}"
 end

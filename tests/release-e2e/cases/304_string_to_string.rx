@@ -1,6 +1,6 @@
 def main
   let s = String.from("ruxen")
   let copy = s.to_string
-  puts "len=#{copy.len}"
+  puts "len=#{copy.size}"
   puts copy
 end

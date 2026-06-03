@@ -88,13 +88,13 @@ Because `Counter` includes `Iterator`, you immediately get the whole pipeline:
 ```ruxen
 let total = Counter.new(10).fold(0, |acc, x| acc + x)
 let evens: Array[Int] = Counter.new(10).filter(|x| x % 2 == 0).collect[Array[Int]]()
-puts "total=#{total} evens.len=#{evens.len}"
+puts "total=#{total} evens.size=#{evens.size}"
 ```
 
 Output:
 
 ```
-total=45 evens.len=5
+total=45 evens.size=5
 ```
 
 You wrote `next`; the mixin gives you `map`, `filter`, `fold`, `collect`, `take`, `skip`, `count`, `sum`, `min`, `max`, and more.
@@ -181,7 +181,7 @@ class WindowIter[T, a]
   type Item = &a T
 
   def var next -> Option[&a T]
-    if self.pos >= self.source.len
+    if self.pos >= self.source.size
       return nil
     end
     let item = &self.source[self.pos]

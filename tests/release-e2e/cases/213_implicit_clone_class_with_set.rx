@@ -19,17 +19,17 @@ def main
 
   let t2 = t1.clone
 
-  puts "clone_len=#{t2.ids.len}"
-  if t2.ids.contains(7)
+  puts "clone_len=#{t2.ids.size}"
+  if t2.ids.include?(7)
     puts "has_7"
   end
-  if t2.ids.contains(42)
+  if t2.ids.include?(42)
     puts "has_42"
   end
-  if t2.ids.contains(99)
+  if t2.ids.include?(99)
     puts "has_99"
   end
-  if t2.ids.contains(123)
+  if t2.ids.include?(123)
     puts "BUG_has_123"
   end
 end

@@ -4,9 +4,9 @@ class String
     def self.new as "ruxen_string_new" -> String
     def self.with_capacity as "ruxen_string_with_capacity"(cap: Int) -> String
     def self.from_bytes as "ruxen_string_from_bytes"(bytes: &Array[Int]) -> String
-    def len as "ruxen_string_len" -> Int
-    def is_empty as "ruxen_string_is_empty" -> Bool
-    def contains as "ruxen_string_contains"(needle: &String) -> Bool
+    def size as "ruxen_string_len" -> Int
+    def empty? as "ruxen_string_is_empty" -> Bool
+    def include? as "ruxen_string_contains"(needle: &String) -> Bool
     def starts_with as "ruxen_string_starts_with"(needle: &String) -> Bool
     def ends_with as "ruxen_string_ends_with"(needle: &String) -> Bool
     def find as "ruxen_string_find"(needle: &String) -> Int

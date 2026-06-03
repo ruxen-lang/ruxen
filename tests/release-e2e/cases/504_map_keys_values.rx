@@ -5,6 +5,6 @@ def main
   h.insert(3, 30)
   let ks = h.keys
   let vs = h.values
-  puts "keys_len=#{ks.len}"
-  puts "values_len=#{vs.len}"
+  puts "keys_len=#{ks.size}"
+  puts "values_len=#{vs.size}"
 end

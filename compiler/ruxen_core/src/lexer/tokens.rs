@@ -351,11 +351,15 @@ impl<'a> Lexer<'a> {
         // Check for `&mut` — if we just lexed "mut" and the previous token was `&`
         // Actually, `&mut` is handled in operator lexing. Here we just handle identifiers.
 
-        // Check for ! suffix on identifiers (e.g., unwrap!, panic!)
-        // Note: ? is NOT consumed as an identifier suffix because it conflicts
-        // with the ? try operator and ?. safe navigation. The parser will handle
-        // method names like is_empty? by combining identifier + ? tokens.
-        if !self.is_at_end() && self.current() == '!' {
+        // Ruby-style suffixes on lowercase (method/value) identifiers:
+        //   * `!`  — bang methods (`sort!`, `lock!`).
+        //   * `?`  — predicate methods (`empty?`, `include?`, `any?`).
+        // `?` belongs to method names; safe navigation is `&.` (Ruby), not
+        // `?.`, so there is no conflict — `coll.empty?` is the method name
+        // `empty?`. A trailing `?` after `)`/`]` (the try operator) is
+        // unaffected — it is never part of an identifier lex. Uppercase
+        // type identifiers do NOT absorb `?` (so `T?` stays an optional type).
+        if !self.is_at_end() && (self.current() == '!' || self.current() == '?') {
             let suffix = self.advance();
             let full_ident: String = format!("{}{}", ident, suffix);
             self.emit(
@@ -551,6 +555,10 @@ impl<'a> Lexer<'a> {
                 if !self.is_at_end() && self.current() == '&' {
                     self.advance();
                     self.emit(TokenKind::AmpAmp, start_byte, start_line, start_col);
+                } else if !self.is_at_end() && self.current() == '.' {
+                    // `&.` — Ruby safe navigation (`h&.hello&.now`).
+                    self.advance();
+                    self.emit(TokenKind::AmpDot, start_byte, start_line, start_col);
                 } else if !self.is_at_end() && self.current() == 'v' {
                     // Check for &var — single-token writable-reference marker
                     // (variant kept as `AmpMut` internally; surface is `&var`).
@@ -611,11 +619,11 @@ impl<'a> Lexer<'a> {
                 }
             }
             '?' => {
-                // `?.` safe-navigation takes priority.
-                if !self.is_at_end() && self.current() == '.' {
-                    self.advance();
-                    self.emit(TokenKind::QuestionDot, start_byte, start_line, start_col);
-                } else if !self.is_at_end()
+                // Safe navigation is `&.` (not `?.`), and a trailing `?` on
+                // an identifier is absorbed as a predicate-method name — so a
+                // standalone `?` here is either a char literal (`?a`) or the
+                // try operator.
+                if !self.is_at_end()
                     && {
                         // ruby-naming.spec.md §3.10a: `?a` / `?\n` is a char
                         // literal, but only in an expression-context position

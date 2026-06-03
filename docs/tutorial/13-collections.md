@@ -17,12 +17,12 @@ def main
   v.push(2)
   v.push(3)
 
-  puts "#{v.len}"               # 3
+  puts "#{v.size}"               # 3
   match v.pop
     Some(x) -> puts "popped #{x}"
     nil     -> puts "empty"
   end
-  puts "#{v.len}"               # 2
+  puts "#{v.size}"               # 2
 end
 ```
 
@@ -63,8 +63,8 @@ let maybe = w.get(10)                # safe — Option[&T]
 ### Querying
 
 ```ruxen
-w.len                                # number of elements
-w.is_empty                           # true if no elements
+w.size                                # number of elements
+w.empty?                           # true if no elements
 ```
 
 ### Iterating with closures
@@ -128,8 +128,8 @@ Prefer `.get` unless you can prove the key exists.
 ### Querying
 
 ```ruxen
-h.len
-h.contains_key("a")
+h.size
+h.key?("a")
 ```
 
 ### Iterating
@@ -148,11 +148,11 @@ def main
   s.insert(1)
   s.insert(2)
   s.insert(1)                   # no effect, already present
-  puts "#{s.len}"               # 2
-  if s.contains(1)
+  puts "#{s.size}"               # 2
+  if s.include?(1)
     puts "has 1"
   end
-  if s.contains(3)
+  if s.include?(3)
     puts "has 3"
   else
     puts "no 3"
@@ -182,7 +182,7 @@ def main
     puts "#{ch}"
   end
 
-  puts "#{greeting.len}"          # byte length
+  puts "#{greeting.size}"          # byte length
 end
 ```
 
@@ -208,7 +208,7 @@ def main
   for name in &names
     puts name
   end
-  puts "#{names.len}"          # OK, names still owned
+  puts "#{names.size}"          # OK, names still owned
 end
 ```
 
@@ -242,7 +242,7 @@ let x = h.get("a")              # Option[&V]
 
 1. Build an `Array[Int]` of the numbers 1 to 10. Use `.filter` to get the evens, `.map` to double them, then `.each` to print them.
 2. Build a `Map[String, Int]` recording the count of each word in a string. Iterate the words with `.split`, use `.get` + `.insert` (or a get-or-default helper).
-3. Build a `Set[Int]` from the same input and print its `.len` — that's the count of distinct values.
+3. Build a `Set[Int]` from the same input and print its `.size` — that's the count of distinct values.
 
 ## Recap
 

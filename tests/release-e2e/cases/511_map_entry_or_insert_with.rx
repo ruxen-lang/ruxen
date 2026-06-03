@@ -3,7 +3,7 @@ def main
   m.entry("first").or_insert_with { || 100 }
   m.entry("first").or_insert_with { || 999 }
   m.entry("second").or_insert_with { || 200 + 50 }
-  puts "len=#{m.len}"
+  puts "len=#{m.size}"
   puts "first=#{m["first"]}"
   puts "second=#{m["second"]}"
 end

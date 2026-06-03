@@ -150,9 +150,9 @@ class Todo
 
   def self.deserialize(data: &str) -> Result[Todo, TodoError]
     let parts: Array[String] = data.split("|").to_vec
-    if parts.len < 4
+    if parts.size < 4
       return Err(TodoError.ParseFailed(
-        message: String.from("expected 4 fields, got #{parts.len}")
+        message: String.from("expected 4 fields, got #{parts.size}")
       ))
     end
 
@@ -224,7 +224,7 @@ class Repository[T: Showable]
   end
 
   def count -> USize
-    self.items.len
+    self.items.size
   end
 
   def get(index: USize) -> Option[&T]
@@ -336,8 +336,8 @@ def generate_report(tasks: &Array[&Todo]) -> String
   let (done, active): (Array[&&Todo], Array[&&Todo]) = tasks.iter
     .partition { |t| t.is_done }
 
-  report.push_str("Active: #{active.len}\n")
-  report.push_str("Completed: #{done.len}\n\n")
+  report.push_str("Active: #{active.size}\n")
+  report.push_str("Completed: #{done.size}\n\n")
 
   for task in active
     report.push_str("  [ ] #{task.summary}\n")
@@ -458,7 +458,7 @@ def main
     end
   }
   let pending = apply_filter(list.repo.all, &is_pending)
-  puts "--- Pending Tasks (#{pending.len}) ---"
+  puts "--- Pending Tasks (#{pending.size}) ---"
   pending.each { |t| puts "  #{t.to_display}" }
 
   puts ""
@@ -471,7 +471,7 @@ def main
 
   # Safe navigation chain
   let deadline_info = list.find_by_id(0)
-    ?.title_ref
+    &.title_ref
     .map { |title| "Found: #{title}" }
     .unwrap_or(String.from("Not found"))
   puts deadline_info
@@ -493,7 +493,7 @@ def main
   let completed = list.into_completed
   # `list` is now consumed — cannot be used
 
-  puts "Archived #{completed.len} completed tasks:"
+  puts "Archived #{completed.size} completed tasks:"
   completed.each { |t| puts "  #{t.to_display}" }
 
   # This would be a compile error:

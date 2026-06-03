@@ -44,14 +44,14 @@ class Array
     def self.new as "ruxen_vec_new" -> Int
     def self.with_capacity as "ruxen_vec_with_capacity"(cap: Int) -> Int
     def self.from_iter as "ruxen_vec_from_iter"(items: Int) -> Int
-    def len as "ruxen_vec_len" -> Int
+    def size as "ruxen_vec_len" -> Int
     def capacity as "ruxen_vec_capacity" -> Int
-    def is_empty as "ruxen_vec_is_empty" -> Bool
+    def empty? as "ruxen_vec_is_empty" -> Bool
     def get as "ruxen_vec_get_opt"(i: Int) -> Int
     def first as "ruxen_vec_first" -> Int
     def last as "ruxen_vec_last" -> Int
     def count as "ruxen_vec_count" -> Int
-    def contains as "ruxen_vec_contains_int"(x: Int) -> Bool
+    def include? as "ruxen_vec_contains_int"(x: Int) -> Bool
     def sum as "ruxen_vec_sum" -> Int
     def clone as "ruxen_vec_clone" -> Int
     def join as "ruxen_vec_join"(sep: &String) -> String

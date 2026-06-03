@@ -25,7 +25,6 @@ class Metadata
   modified_secs: Int
   kind: Int
 
-  def len -> Int { self.size }
 
   def modified -> Int { self.modified_secs }
 

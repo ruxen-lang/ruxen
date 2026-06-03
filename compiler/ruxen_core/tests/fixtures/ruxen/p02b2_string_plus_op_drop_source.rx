@@ -2,5 +2,5 @@ def main
   let a = String.from("foo")
   let b = String.from("bar")
   let c = a + b
-  let _len = c.len
+  let _len = c.size
 end

@@ -8,7 +8,7 @@ def main
   v.push(3)
   v.push(1)
   v.dedup
-  let n = v.len
+  let n = v.size
   puts "len=#{n}"
   for x in &v
     puts "#{x}"

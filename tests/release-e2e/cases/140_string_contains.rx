@@ -1,6 +1,6 @@
 def main
   let s = String.from("hello world")
-  if s.contains("world")
+  if s.include?("world")
     puts "found"
   end
   if s.starts_with("hello")

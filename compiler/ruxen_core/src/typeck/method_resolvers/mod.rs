@@ -28,8 +28,8 @@ pub(super) fn builtin_method_type(
     match (ty, method) {
         // String methods
         (Ty::String, "clone") => Some(Ty::String),
-        (Ty::String, "len") => Some(Ty::USize),
-        (Ty::String, "is_empty") => Some(Ty::Bool),
+        (Ty::String, "size") => Some(Ty::USize),
+        (Ty::String, "empty?") => Some(Ty::Bool),
         (Ty::String, "push_str") => Some(Ty::Unit),
         (Ty::String, "trim") => Some(Ty::Str),
         (Ty::String, "to_lower") => Some(Ty::String),
@@ -42,7 +42,7 @@ pub(super) fn builtin_method_type(
         (Ty::String, "push") => Some(Ty::Unit),
         (Ty::String, "as_str") => Some(Ty::Str),
         (Ty::String, "from") => Some(Ty::String),
-        (Ty::String, "contains") => Some(Ty::Bool),
+        (Ty::String, "include?") => Some(Ty::Bool),
         (Ty::String, "starts_with") => Some(Ty::Bool),
         (Ty::String, "ends_with") => Some(Ty::Bool),
         (Ty::String, "repeat") => Some(Ty::String),
@@ -71,8 +71,8 @@ pub(super) fn builtin_method_type(
             Box::new(InferenceEngine::class_ty("ParseFloatError", vec![])),
         )),
         (Ty::String, "into_bytes") => Some(Ty::Array(Box::new(Ty::UInt8))),
-        (Ty::Str, "len") => Some(Ty::USize),
-        (Ty::Str, "is_empty") => Some(Ty::Bool),
+        (Ty::Str, "size") => Some(Ty::USize),
+        (Ty::Str, "empty?") => Some(Ty::Bool),
         (Ty::Str, "trim") => Some(Ty::Str),
         (Ty::Str, "to_lower") => Some(Ty::Str),
         (Ty::Str, "to_upper") => Some(Ty::Str),
@@ -88,7 +88,7 @@ pub(super) fn builtin_method_type(
         (Ty::Str, "split") => Some(Ty::Array(Box::new(Ty::String))),
         (Ty::Str, "parse_uint") => Some(Ty::Result(Box::new(Ty::USize), Box::new(Ty::Error))),
         (Ty::Str, "as_str") => Some(Ty::Str),
-        (Ty::Str, "contains") => Some(Ty::Bool),
+        (Ty::Str, "include?") => Some(Ty::Bool),
         (Ty::Str, "starts_with") => Some(Ty::Bool),
         (Ty::Str, "ends_with") => Some(Ty::Bool),
         (Ty::Str, "lines") => Some(Ty::Array(Box::new(Ty::String))),
@@ -115,8 +115,8 @@ pub(super) fn builtin_method_type(
         }
 
         // Vec methods
-        (Ty::Array(_), "len") => Some(Ty::USize),
-        (Ty::Array(_), "is_empty") => Some(Ty::Bool),
+        (Ty::Array(_), "size") => Some(Ty::USize),
+        (Ty::Array(_), "empty?") => Some(Ty::Bool),
         (Ty::Array(_), "push") => Some(Ty::Unit),
         (Ty::Array(elem), "pop") => Some(Ty::Option(elem.clone())),
         (Ty::Array(elem), "get") => Some(Ty::Option(Box::new(Ty::Ref(elem.clone())))),
@@ -142,7 +142,7 @@ pub(super) fn builtin_method_type(
         (Ty::Array(elem), "first") => Some(Ty::Option(elem.clone())),
         (Ty::Array(elem), "last") => Some(Ty::Option(elem.clone())),
         (Ty::Array(_), "clone") => Some(ty.clone()),
-        (Ty::Array(_), "contains") => Some(Ty::Bool),
+        (Ty::Array(_), "include?") => Some(Ty::Bool),
         (Ty::Array(_), "sort") => Some(ty.clone()),
         (Ty::Array(_), "join") => Some(Ty::String),
         // Phase 2 stdlib batch 1 (#03).
@@ -168,9 +168,9 @@ pub(super) fn builtin_method_type(
         (Ty::Map(_, _), "from_iter") => Some(ty.clone()),
         (Ty::Map(_, _), "insert") => Some(Ty::Unit),
         (Ty::Map(_, v), "get") => Some(Ty::Option(Box::new(Ty::Ref(v.clone())))),
-        (Ty::Map(_, _), "contains_key") => Some(Ty::Bool),
-        (Ty::Map(_, _), "len") => Some(Ty::USize),
-        (Ty::Map(_, _), "is_empty") => Some(Ty::Bool),
+        (Ty::Map(_, _), "key?") => Some(Ty::Bool),
+        (Ty::Map(_, _), "size") => Some(Ty::USize),
+        (Ty::Map(_, _), "empty?") => Some(Ty::Bool),
         // Phase 2 stdlib (#04): full HashMap[K,V] surface.
         (Ty::Map(_, _), "with_capacity") => Some(ty.clone()),
         (Ty::Map(_, v), "remove") => Some(Ty::Option(v.clone())),
@@ -183,9 +183,9 @@ pub(super) fn builtin_method_type(
         (Ty::Set(_), "new") => Some(ty.clone()),
         (Ty::Set(_), "from_iter") => Some(ty.clone()),
         (Ty::Set(_), "insert") => Some(Ty::Unit),
-        (Ty::Set(_), "contains") => Some(Ty::Bool),
-        (Ty::Set(_), "len") => Some(Ty::USize),
-        (Ty::Set(_), "is_empty") => Some(Ty::Bool),
+        (Ty::Set(_), "include?") => Some(Ty::Bool),
+        (Ty::Set(_), "size") => Some(Ty::USize),
+        (Ty::Set(_), "empty?") => Some(Ty::Bool),
         // Phase 2 stdlib (#04): full HashSet[T] surface.
         (Ty::Set(_), "with_capacity") => Some(ty.clone()),
         (Ty::Set(_), "remove") => Some(Ty::Bool),
@@ -456,7 +456,7 @@ pub(super) fn builtin_method_type(
         )),
         // `len()` returns the current byte count of the accumulated
         // buffer — mirrors `ruxen_fmt_formatter_len` (returns int64_t).
-        (Ty::Class { name, .. }, "len") if name == "Formatter" => Some(Ty::Int),
+        (Ty::Class { name, .. }, "size") if name == "Formatter" => Some(Ty::Int),
         // Read-only spec accessors that Phase D will use when
         // formatting widths / precision / fill. Optional types
         // because `"#{x}"` (no spec) leaves them all None.
@@ -645,7 +645,7 @@ pub(super) fn builtin_method_type(
         // the flat 24-byte heap struct produced by
         // `ruxen_fs_metadata`. `modified` is a UNIX timestamp in
         // seconds (Int), matching `std.time.unix_ns / 1_000_000_000`.
-        (Ty::Class { name, .. }, "len") if name == "Metadata" => Some(Ty::Int),
+        (Ty::Class { name, .. }, "size") if name == "Metadata" => Some(Ty::Int),
         (Ty::Class { name, .. }, "modified") if name == "Metadata" => Some(Ty::Int),
         (Ty::Class { name, .. }, "is_file") if name == "Metadata" => Some(Ty::Bool),
         (Ty::Class { name, .. }, "is_dir") if name == "Metadata" => Some(Ty::Bool),

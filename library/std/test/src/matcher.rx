@@ -104,7 +104,7 @@ class ArrayMatcher[T]
   def init(actual: &Array[T]) { self.actual_ref = actual }
 
   def to_include(needle: T) -> Bool
-    let n: Int = self.actual_ref.len as Int
+    let n: Int = self.actual_ref.size as Int
     var i: Int = 0
     var found: Bool = false
     while i < n
@@ -133,7 +133,7 @@ class StringMatcher
   def init(actual: &String) { self.actual_ref = actual }
 
   def to_include(needle: &String) -> Bool
-    let ok = self.actual_ref.contains(needle)
+    let ok = self.actual_ref.include?(needle)
     if !ok
       puts "  to_include failed: \"#{self.actual_ref}\" does not contain \"#{needle}\""
       Runner.case_mark_failed

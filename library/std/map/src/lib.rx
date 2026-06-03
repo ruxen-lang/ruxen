@@ -27,10 +27,10 @@ class Map
     def self.new as "ruxen_hash_new" -> Int
     def self.with_capacity as "ruxen_hash_with_capacity"(cap: Int) -> Int
     def self.from_iter as "ruxen_hash_from_iter"(items: Int) -> Int
-    def len as "ruxen_hash_len" -> Int
-    def is_empty as "ruxen_hash_is_empty" -> Bool
+    def size as "ruxen_hash_len" -> Int
+    def empty? as "ruxen_hash_is_empty" -> Bool
     def get as "ruxen_hash_get"(key: Int) -> Int
-    def contains_key as "ruxen_hash_contains_key"(key: Int) -> Bool
+    def key? as "ruxen_hash_contains_key"(key: Int) -> Bool
     def keys as "ruxen_hash_keys" -> Int
     def values as "ruxen_hash_values" -> Int
     def iter as "ruxen_hash_iter" -> Int

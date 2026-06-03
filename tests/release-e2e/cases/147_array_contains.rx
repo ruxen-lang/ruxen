@@ -3,10 +3,10 @@ def main
   v.push(10)
   v.push(20)
   v.push(30)
-  if v.contains(20)
+  if v.include?(20)
     puts "yes"
   end
-  if v.contains(99)
+  if v.include?(99)
     puts "shouldnt print"
   else
     puts "no"

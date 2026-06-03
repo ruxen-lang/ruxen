@@ -128,7 +128,7 @@ impl Parser {
         matches!(
             kind,
             TokenKind::Dot
-                | TokenKind::QuestionDot
+                | TokenKind::AmpDot
                 | TokenKind::LBracket
                 | TokenKind::Question
                 | TokenKind::LParen
@@ -150,7 +150,7 @@ impl Parser {
                 continue;
             }
             // If next meaningful token is `.` or `?.`, skip the newlines
-            if matches!(kind, TokenKind::Dot | TokenKind::QuestionDot) {
+            if matches!(kind, TokenKind::Dot | TokenKind::AmpDot) {
                 // skip all the newlines
                 while self.at(TokenKind::Newline) {
                     self.advance();

@@ -201,7 +201,7 @@ def main
   v.push(1)
   v.push(2)
   v.push(3)
-  puts "#{v.len}"     # 3
+  puts "#{v.size}"     # 3
 end
 ```
 

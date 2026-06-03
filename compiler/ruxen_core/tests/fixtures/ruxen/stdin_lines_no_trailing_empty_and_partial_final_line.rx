@@ -15,5 +15,5 @@ def main
     out.print(unwrap_line(line_result))
     out.println("]")
   end
-  puts "#{lines.len}"
+  puts "#{lines.size}"
 end

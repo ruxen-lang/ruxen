@@ -1,5 +1,5 @@
 def main
   var m: Map[String, Int] = Map.new
   m.entry("a").or_insert_with { || 42 }
-  puts "#{m.len}"
+  puts "#{m.size}"
 end

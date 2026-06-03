@@ -2,7 +2,7 @@ use std.process.Command
 
 def report(out: Output)
   # /tmp on Linux; /private/tmp on macOS — contains catches both.
-  if out.stdout.contains("/tmp")
+  if out.stdout.include?("/tmp")
     puts "cwd_ok"
   else
     puts "cwd_bad=#{out.stdout}"
