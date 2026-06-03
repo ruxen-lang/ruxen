@@ -10,14 +10,13 @@ use cranelift_codegen::ir::types::{self, Type};
 use cranelift_codegen::ir::{AbiParam, Signature};
 use cranelift_frontend::FunctionBuilder;
 use cranelift_module::{DataDescription, FuncId, Linkage, Module};
-use cranelift_object::ObjectModule;
 
 use crate::codegen::runtime::extract_method_name;
 
 use super::runtime_sigs::runtime_signature;
 
-pub(super) struct TranslationEnv<'a> {
-    pub(super) module: &'a mut ObjectModule,
+pub(super) struct TranslationEnv<'a, M: Module> {
+    pub(super) module: &'a mut M,
     pub(super) declared_fns: &'a mut HashMap<String, FuncId>,
     pub(super) string_data: &'a mut HashMap<String, cranelift_module::DataId>,
     pub(super) string_counter: &'a mut u32,
@@ -34,7 +33,7 @@ pub(super) struct TranslationEnv<'a> {
     pub(super) vtable_data: &'a HashMap<String, cranelift_module::DataId>,
 }
 
-impl<'a> TranslationEnv<'a> {
+impl<'a, M: Module> TranslationEnv<'a, M> {
     /// Create a data section for a null-terminated string literal.
     pub(super) fn create_string_data(
         &mut self,

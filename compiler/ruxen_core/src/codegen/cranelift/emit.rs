@@ -94,14 +94,14 @@ pub(super) fn use_local(
 }
 
 /// Translate a single MIR instruction.
-pub(super) fn translate_instruction(
+pub(super) fn translate_instruction<M: Module>(
     inst: &MirInst,
     func: &MirFunction,
     var_map: &HashMap<LocalId, Variable>,
     stack_slots: &HashMap<LocalId, StackSlot>,
     _block_map: &[cranelift_codegen::ir::Block],
     builder: &mut FunctionBuilder,
-    env: &mut TranslationEnv,
+    env: &mut TranslationEnv<M>,
 ) -> Result<(), String> {
     match inst {
         MirInst::Assign { dest, value } => {
@@ -522,14 +522,14 @@ pub(super) fn translate_instruction(
 }
 
 /// Translate a MIR terminator.
-pub(super) fn translate_terminator(
+pub(super) fn translate_terminator<M: Module>(
     term: &Terminator,
     func: &MirFunction,
     var_map: &HashMap<LocalId, Variable>,
     stack_slots: &HashMap<LocalId, StackSlot>,
     block_map: &[cranelift_codegen::ir::Block],
     builder: &mut FunctionBuilder,
-    _env: &mut TranslationEnv,
+    _env: &mut TranslationEnv<M>,
 ) -> Result<(), String> {
     match term {
         Terminator::Return(val) => {
