@@ -19,6 +19,7 @@ use crate::lexer::token::Span;
 use super::infer::{is_bufio_inner_supported, is_iter_sum_compatible, InferenceEngine};
 
 mod concurrency;
+mod fmt;
 mod resolver;
 
 use resolver::MethodResolver;
@@ -55,6 +56,7 @@ fn resolvers() -> Vec<MethodResolver> {
     let mut v = Vec::new();
     v.extend(resolver::declared_method_resolvers()); // TIER 1 — fixes A2
     v.extend(concurrency::resolvers()); // TIER 2 — named stdlib
+    v.extend(fmt::resolvers());
     v.extend(resolver::legacy_resolvers()); // TIER 2 (remaining named stdlib, still legacy-wrapped)
     v.extend(resolver::structural_fallback_resolvers()); // TIER 3 tail
     v
@@ -275,41 +277,8 @@ fn legacy_builtin_method_type(
         // Mutex/MutexGuard/Arc/SharedSync, incl. E1100/E1101/E1102) moved to
         // `concurrency::resolvers()` (tier 2). See Phase 5 Task 4.
 
-        // Phase 2 #06.A3: `std::fmt::Formatter` write surface.
-        // `write_str(&str)` and `write_char(Char)` both return
-        // `Result[(), FmtError]` — caller chooses to propagate
-        // via `?` or match. Phase D wires the runtime semantics;
-        // here we only register the typeck contract so user
-        // `impl Display` bodies can call `f.write_str("x")` etc.
-        // without typeck rejecting the unknown method.
-        (Ty::Class { name, .. }, "write_str") if name == "Formatter" => Some(Ty::Result(
-            Box::new(Ty::Unit),
-            Box::new(Ty::Class {
-                name: "FmtError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "write_char") if name == "Formatter" => Some(Ty::Result(
-            Box::new(Ty::Unit),
-            Box::new(Ty::Class {
-                name: "FmtError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        // `len()` returns the current byte count of the accumulated
-        // buffer — mirrors `ruxen_fmt_formatter_len` (returns int64_t).
-        (Ty::Class { name, .. }, "size") if name == "Formatter" => Some(Ty::Int),
-        // Read-only spec accessors that Phase D will use when
-        // formatting widths / precision / fill. Optional types
-        // because `"#{x}"` (no spec) leaves them all None.
-        (Ty::Class { name, .. }, "width") if name == "Formatter" => {
-            Some(Ty::Option(Box::new(Ty::USize)))
-        }
-        (Ty::Class { name, .. }, "precision") if name == "Formatter" => {
-            Some(Ty::Option(Box::new(Ty::USize)))
-        }
-        (Ty::Class { name, .. }, "align") if name == "Formatter" => Some(Ty::Char),
-        (Ty::Class { name, .. }, "fill") if name == "Formatter" => Some(Ty::Char),
+        // NOTE: the Formatter arms moved to `fmt::resolvers()` (tier 2).
+        // See Phase 5 Task 5.
 
         // Iterator-like methods on any "Iter" class
         //
