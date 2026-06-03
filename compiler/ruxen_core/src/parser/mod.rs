@@ -12,6 +12,7 @@ pub mod methods;
 pub mod patterns;
 pub mod printer;
 pub mod types;
+pub mod visit;
 
 #[cfg(test)]
 mod tests;
