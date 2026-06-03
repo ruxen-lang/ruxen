@@ -55,6 +55,25 @@ fn fixture_add3() -> MirFunction {
     MirFunction::with_parts("add3".to_string(), vec![0, 1], Ty::Int, locals, vec![block], 0)
 }
 
+/// Step 3b reconciliation guard: string `+` still concatenates after the
+/// share deletes the JIT fork's `BinOp::Add` string-concat inline.
+///
+/// The inline (old jit.rs:964-980) was DEAD: the shared MIR lowerer
+/// (`mir/lower/expr/binops.rs`) already rewrites `String + String` to a
+/// `Call ruxen_string_concat` and returns early, so a string `+` never reaches
+/// codegen as a `MirInst::BinOp`. Both backends consume that same lowerer
+/// output, so deleting the inline is behaviour-preserving. This test proves the
+/// REPL still concatenates after the deletion.
+#[test]
+fn repl_string_concat_after_share() {
+    let outs = super::state_persistence::run_session(&[r#"puts("a" + "b")"#]);
+    assert_eq!(
+        outs[0].matches("ab").count(),
+        1,
+        "REPL `\"a\" + \"b\"` should still print `ab` after the share, got: {outs:?}"
+    );
+}
+
 #[test]
 fn both_backends_agree_on_integer_fixture() {
     let mir = fixture_add3();

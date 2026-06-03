@@ -15,27 +15,27 @@ use crate::codegen::runtime::extract_method_name;
 
 use super::runtime_sigs::runtime_signature;
 
-pub(super) struct TranslationEnv<'a, M: Module> {
-    pub(super) module: &'a mut M,
-    pub(super) declared_fns: &'a mut HashMap<String, FuncId>,
-    pub(super) string_data: &'a mut HashMap<String, cranelift_module::DataId>,
-    pub(super) string_counter: &'a mut u32,
+pub struct TranslationEnv<'a, M: Module> {
+    pub module: &'a mut M,
+    pub declared_fns: &'a mut HashMap<String, FuncId>,
+    pub string_data: &'a mut HashMap<String, cranelift_module::DataId>,
+    pub string_counter: &'a mut u32,
     /// Param types of every previously-declared user / FFI fn.  Read-only:
     /// instruction lowering never declares new entries here.  Used so that
     /// `coerce_call_args` can apply the *real* narrow-int signature of
     /// known user fns instead of the default widen-to-i64 fallback.
-    pub(super) user_fn_param_tys: &'a HashMap<String, Vec<Type>>,
+    pub user_fn_param_tys: &'a HashMap<String, Vec<Type>>,
     /// Mixin vtables Phase B-5: pre-declared data symbol IDs for
     /// `__rx_vtable_*` and `__rx_classinfo_*`. Read-only —
     /// instruction lowering never declares new entries here. Used by
     /// `MirInst::DataAddr` lowering to take the address of a vtable
     /// / class_info inside a function body.
-    pub(super) vtable_data: &'a HashMap<String, cranelift_module::DataId>,
+    pub vtable_data: &'a HashMap<String, cranelift_module::DataId>,
 }
 
 impl<'a, M: Module> TranslationEnv<'a, M> {
     /// Create a data section for a null-terminated string literal.
-    pub(super) fn create_string_data(
+    pub fn create_string_data(
         &mut self,
         value: &str,
     ) -> Result<cranelift_module::DataId, String> {
@@ -66,7 +66,7 @@ impl<'a, M: Module> TranslationEnv<'a, M> {
 
     /// Get or declare a function by name, returning a `FuncRef` usable inside
     /// the current Cranelift function being built.
-    pub(super) fn get_or_declare_func(
+    pub fn get_or_declare_func(
         &mut self,
         name: &str,
         arg_vals: &[cranelift_codegen::ir::Value],
@@ -168,7 +168,7 @@ impl<'a, M: Module> TranslationEnv<'a, M> {
     }
 
     /// Declare a runtime function with an explicit signature.
-    pub(super) fn declare_runtime_func(
+    pub fn declare_runtime_func(
         &mut self,
         name: &str,
         params: &[Type],

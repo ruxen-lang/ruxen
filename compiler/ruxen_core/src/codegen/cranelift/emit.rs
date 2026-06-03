@@ -11,7 +11,6 @@ use cranelift_codegen::ir::types::{self, Type};
 use cranelift_codegen::ir::{AbiParam, InstBuilder, MemFlags, Signature, StackSlot};
 use cranelift_frontend::{FunctionBuilder, Variable};
 use cranelift_module::Module;
-use cranelift_object::ObjectModule;
 
 use crate::hir::types::Ty;
 use crate::mir::nodes::*;
@@ -26,7 +25,7 @@ use super::runtime_sigs::runtime_signature;
 use super::translation_env::TranslationEnv;
 
 /// Build a Cranelift `Signature` from a MIR function.
-pub(super) fn build_signature(module: &ObjectModule, func: &MirFunction) -> Signature {
+pub fn build_signature<M: Module>(module: &M, func: &MirFunction) -> Signature {
     let call_conv = module.isa().default_call_conv();
     let mut sig = Signature::new(call_conv);
 
@@ -58,7 +57,7 @@ pub(super) fn build_signature(module: &ObjectModule, func: &MirFunction) -> Sign
 /// other locals it updates the Cranelift SSA variable as before. Stored
 /// values are always widened to I64 when going through a stack slot, since
 /// slots are uniformly 8 bytes wide to match the pointer representation.
-pub(super) fn def_local(
+pub fn def_local(
     var_map: &HashMap<LocalId, Variable>,
     stack_slots: &HashMap<LocalId, StackSlot>,
     builder: &mut FunctionBuilder,
@@ -79,7 +78,7 @@ pub(super) fn def_local(
 /// that a mutation written through a `&mut` pointer (stored back via
 /// `ruxen_store_ptr`) is visible to subsequent uses. Everything else goes
 /// through the Cranelift SSA variable.
-pub(super) fn use_local(
+pub fn use_local(
     var_map: &HashMap<LocalId, Variable>,
     stack_slots: &HashMap<LocalId, StackSlot>,
     builder: &mut FunctionBuilder,
@@ -94,7 +93,7 @@ pub(super) fn use_local(
 }
 
 /// Translate a single MIR instruction.
-pub(super) fn translate_instruction<M: Module>(
+pub fn translate_instruction<M: Module>(
     inst: &MirInst,
     func: &MirFunction,
     var_map: &HashMap<LocalId, Variable>,
@@ -522,7 +521,7 @@ pub(super) fn translate_instruction<M: Module>(
 }
 
 /// Translate a MIR terminator.
-pub(super) fn translate_terminator<M: Module>(
+pub fn translate_terminator<M: Module>(
     term: &Terminator,
     func: &MirFunction,
     var_map: &HashMap<LocalId, Variable>,
@@ -598,7 +597,7 @@ pub(super) fn translate_terminator<M: Module>(
 }
 
 /// Convert a `MirValue` to a Cranelift `Value`.
-pub(super) fn gen_value(
+pub fn gen_value(
     mir_val: &MirValue,
     func: &MirFunction,
     var_map: &HashMap<LocalId, Variable>,
@@ -766,7 +765,7 @@ pub fn coerce_value_signed(
 /// widen any sub-i64 integer argument to i64 as a safe default — this
 /// matches the default signature inference path in
 /// `get_or_declare_func`, which uses i64 everywhere.
-pub(super) fn coerce_call_args(
+pub fn coerce_call_args(
     arg_vals: &mut [cranelift_codegen::ir::Value],
     args: &[MirValue],
     func: &MirFunction,

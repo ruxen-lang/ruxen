@@ -43,3 +43,28 @@ fn shared_helpers_are_public() {
     // assert visibility without spelling the full Cranelift value types.
     let _ = (emit_binop, coerce_value, coerce_value_signed, is_string_typed_value);
 }
+
+// ── Task 4: the env / M-carrying helpers must also be reachable ───────────────
+//
+// build_signature / translate_instruction / translate_terminator carry
+// <M: Module>; def_local / use_local / gen_value / coerce_call_args take no
+// env and so are plain pub. The REPL JIT backend instantiates the M-carrying
+// ones at M = JITModule. This test asserts all seven are pub + re-exported
+// (instantiated here at M = ObjectModule). A regression to pub(super) breaks
+// the cross-crate share and fails to compile here.
+#[test]
+fn shared_m_helpers_are_public() {
+    use ruxen_core::codegen::cranelift::{
+        build_signature, coerce_call_args, def_local, gen_value, translate_instruction,
+        translate_terminator, use_local, TranslationEnv,
+    };
+
+    // M-carrying: instantiable at a concrete M.
+    let _ = build_signature::<cranelift_object::ObjectModule>;
+    let _ = translate_instruction::<cranelift_object::ObjectModule>;
+    let _ = translate_terminator::<cranelift_object::ObjectModule>;
+    // Zero-M: plain pub fns.
+    let _ = (def_local, use_local, gen_value, coerce_call_args);
+    // The env struct itself must be pub (jit.rs constructs it directly).
+    fn _assert_env_is_nameable<'a, M: cranelift_module::Module>(_e: &TranslationEnv<'a, M>) {}
+}

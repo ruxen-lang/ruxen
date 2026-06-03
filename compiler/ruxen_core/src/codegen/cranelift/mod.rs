@@ -26,11 +26,18 @@ pub use runtime_sigs::runtime_signature;
 /// `&mut FunctionBuilder` or pure values and never touch the module, so the
 /// REPL JIT backend shares them verbatim rather than forking. Re-exported as
 /// `pub` (Phase 4); a regression to `pub(super)` breaks `cranelift_share_pin`.
-pub use emit::{coerce_value, coerce_value_signed, emit_binop};
+pub use emit::{
+    build_signature, coerce_call_args, coerce_value, coerce_value_signed, def_local, emit_binop,
+    gen_value, translate_instruction, translate_terminator, use_local,
+};
 pub use helpers::{
     cmpop_to_floatcc, cmpop_to_intcc, is_string_mir_ty, is_string_typed_value, simple_type_size,
     ty_to_cranelift,
 };
+/// The borrow-split translation environment, generic over the Cranelift
+/// module (`ObjectModule` for batch, `JITModule` for the REPL JIT). Re-exported
+/// so the REPL constructs the shared env directly instead of forking it.
+pub use translation_env::TranslationEnv;
 
 use std::collections::{HashMap, HashSet};
 
@@ -46,8 +53,6 @@ use cranelift_object::{ObjectBuilder, ObjectModule};
 
 use crate::mir::nodes::*;
 
-use self::emit::{build_signature, def_local, translate_instruction, translate_terminator};
-use self::translation_env::TranslationEnv;
 
 /// Cranelift code generation engine.
 ///
