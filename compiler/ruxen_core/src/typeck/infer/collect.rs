@@ -795,48 +795,18 @@ impl<'a> InferenceEngine<'a> {
         Self::subst_ty(ret_ty, &subst)
     }
 
+    /// Substitute every `TypeParam` named in `subst` with its bound type,
+    /// recursing through ALL nested `Ty` children via `Ty::map_inner`. The only
+    /// special arm is `TypeParam`; everything else delegates to the exhaustive
+    /// fold, so reference layers (incl. `&'a`/`&'a mut`), `Map`/`Set`/`FixedArray`,
+    /// `Fn`/`Newtype`/`Alias` etc. are all covered automatically. See
+    /// docs/specs/types/typed_ffi_returns.spec.md.
     pub(super) fn subst_ty(ty: &Ty, subst: &std::collections::HashMap<String, Ty>) -> Ty {
         match ty {
             Ty::TypeParam { name, .. } => subst.get(name).cloned().unwrap_or_else(|| ty.clone()),
-            Ty::Ref(inner) => Ty::Ref(Box::new(Self::subst_ty(inner, subst))),
-            Ty::RefMut(inner) => Ty::RefMut(Box::new(Self::subst_ty(inner, subst))),
-            Ty::Option(inner) => Ty::Option(Box::new(Self::subst_ty(inner, subst))),
-            Ty::Array(inner) => Ty::Array(Box::new(Self::subst_ty(inner, subst))),
-            // Typed FFI returns (docs/specs/types/typed_ffi_returns.spec.md):
-            // recurse into nominal types so `MutexGuard[T]` substitutes to
-            // `MutexGuard[Int]` when T is bound to Int from the receiver
-            // (`m: Mutex[Int]; m.lock_raw -> MutexGuard[T]`). Without
-            // this recursion, generic args inside `Ty::Class` /
-            // `Ty::Struct` / `Ty::Enum` / `Ty::Result` / `Ty::Tuple`
-            // pass through verbatim and the chain `g.get` reports
-            // `T` instead of `Int`.
-            Ty::Class { name, generic_args } => Ty::Class {
-                name: name.clone(),
-                generic_args: generic_args
-                    .iter()
-                    .map(|a| Self::subst_ty(a, subst))
-                    .collect(),
-            },
-            Ty::Struct { name, generic_args } => Ty::Struct {
-                name: name.clone(),
-                generic_args: generic_args
-                    .iter()
-                    .map(|a| Self::subst_ty(a, subst))
-                    .collect(),
-            },
-            Ty::Enum { name, generic_args } => Ty::Enum {
-                name: name.clone(),
-                generic_args: generic_args
-                    .iter()
-                    .map(|a| Self::subst_ty(a, subst))
-                    .collect(),
-            },
-            Ty::Result(ok, err) => Ty::Result(
-                Box::new(Self::subst_ty(ok, subst)),
-                Box::new(Self::subst_ty(err, subst)),
-            ),
-            Ty::Tuple(elems) => Ty::Tuple(elems.iter().map(|e| Self::subst_ty(e, subst)).collect()),
-            _ => ty.clone(),
+            other => other
+                .clone()
+                .map_inner(&mut |child| Self::subst_ty(child, subst)),
         }
     }
 
@@ -978,5 +948,64 @@ impl<'a> InferenceEngine<'a> {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod subst_ty_tests {
+    use super::*;
+    use crate::hir::types::Ty;
+    use std::collections::HashMap;
+
+    fn subst1(ty: Ty, name: &str, to: Ty) -> Ty {
+        let mut m = HashMap::new();
+        m.insert(name.to_string(), to);
+        InferenceEngine::subst_ty(&ty, &m)
+    }
+
+    #[test]
+    fn substitutes_through_named_lifetime_ref() {
+        // &'a T  ->  &'a Int   (was a no-op before the map_inner migration: bug #3)
+        let tp = Ty::TypeParam {
+            name: "T".into(),
+            bounds: vec![],
+        };
+        let got = subst1(Ty::RefLifetime("a".into(), Box::new(tp)), "T", Ty::Int);
+        assert_eq!(got, Ty::RefLifetime("a".into(), Box::new(Ty::Int)));
+    }
+
+    #[test]
+    fn substitutes_through_map_value() {
+        // Map[String, T] -> Map[String, Int]   (was a no-op before: bug #3)
+        let tp = Ty::TypeParam {
+            name: "T".into(),
+            bounds: vec![],
+        };
+        let got = subst1(Ty::Map(Box::new(Ty::String), Box::new(tp)), "T", Ty::Int);
+        assert_eq!(got, Ty::Map(Box::new(Ty::String), Box::new(Ty::Int)));
+    }
+
+    #[test]
+    fn preserves_existing_class_generic_substitution() {
+        // Characterization: the behaviour subst_ty ALREADY had must not regress.
+        let tp = Ty::TypeParam {
+            name: "T".into(),
+            bounds: vec![],
+        };
+        let got = subst1(
+            Ty::Class {
+                name: "MutexGuard".into(),
+                generic_args: vec![tp],
+            },
+            "T",
+            Ty::Int,
+        );
+        assert_eq!(
+            got,
+            Ty::Class {
+                name: "MutexGuard".into(),
+                generic_args: vec![Ty::Int],
+            }
+        );
     }
 }
