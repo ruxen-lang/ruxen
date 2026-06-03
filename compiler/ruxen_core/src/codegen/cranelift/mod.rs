@@ -362,6 +362,28 @@ impl CodeGen {
 
     /// Translate one MIR function into Cranelift IR and define it.
     fn compile_function(&mut self, func: &MirFunction) -> Result<(), String> {
+        self.translate_into_ctx(func)?;
+
+        // Define the function in the module.
+        let func_id = *self
+            .declared_fns
+            .get(&func.name)
+            .ok_or_else(|| format!("Function '{}' was not declared", func.name))?;
+
+        self.module
+            .define_function(func_id, &mut self.ctx)
+            .map_err(|e| format!("Failed to define function '{}': {:?}", func.name, e))?;
+
+        self.module.clear_context(&mut self.ctx);
+        Ok(())
+    }
+
+    /// Lower a single MIR function into `self.ctx.func` (the Cranelift IR
+    /// function), leaving it built-but-not-yet-defined. Shared by
+    /// `compile_function` (which then defines + clears the context) and by
+    /// the `clif_for_test` hook (which reads back the CLIF text). Splitting
+    /// this out keeps ONE lowering path — the test hook does not fork it.
+    fn translate_into_ctx(&mut self, func: &MirFunction) -> Result<(), String> {
         let sig = build_signature(&self.module, func);
         self.ctx.func.signature = sig;
 
@@ -517,19 +539,34 @@ impl CodeGen {
             builder.finalize();
         }
 
-        // Define the function in the module.
-        let func_id = *self
-            .declared_fns
-            .get(&func.name)
-            .ok_or_else(|| format!("Function '{}' was not declared", func.name))?;
-
-        self.module
-            .define_function(func_id, &mut self.ctx)
-            .map_err(|e| format!("Failed to define function '{}': {:?}", func.name, e))?;
-
-        self.module.clear_context(&mut self.ctx);
         Ok(())
     }
+}
+
+/// Test-only hook: compile a single MIR function through the batch
+/// `CodeGen` (ObjectModule) and return its Cranelift IR text. Used by the
+/// `cranelift_share_pin` both-backends parity test. `#[doc(hidden)]` so it
+/// is not part of the stable public API, but `pub` so the cross-crate test
+/// can reach it. Drives the SAME `translate_into_ctx` lowering as the real
+/// batch path — it does not fork it.
+#[doc(hidden)]
+pub fn clif_for_test(func: &MirFunction) -> Result<String, String> {
+    let mut cg = CodeGen::new()?;
+
+    // Minimal declare (mirrors compile_program Pass 1 for one function) so
+    // build_signature + any self-call resolves. Local linkage is fine; the
+    // hook never defines or links the function.
+    let sig = build_signature(&cg.module, func);
+    let param_tys: Vec<Type> = sig.params.iter().map(|p| p.value_type).collect();
+    cg.user_fn_param_tys.insert(func.name.clone(), param_tys);
+    let func_id = cg
+        .module
+        .declare_function(&func.name, Linkage::Local, &sig)
+        .map_err(|e| format!("declare '{}': {}", func.name, e))?;
+    cg.declared_fns.insert(func.name.clone(), func_id);
+
+    cg.translate_into_ctx(func)?;
+    Ok(cg.ctx.func.display().to_string())
 }
 
 /// Recognises the synthesised mixin-dispatch helper naming pattern

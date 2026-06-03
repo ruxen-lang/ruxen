@@ -1,24 +1,34 @@
-//! Phase 4 — Cranelift-share pin tests.
+//! Phase 4 — Cranelift-share public-surface pin tests.
 //!
-//! These tests pin the *public surface* of the shared Cranelift core and the
-//! *observable parity* of the two backends (batch ObjectModule + REPL
-//! JITModule). They are the re-fork tripwire: if a helper regresses to
-//! `pub(super)`, or if a backend's lowering drifts, these fail.
+//! These tests pin the *public surface* of the shared Cranelift core: the
+//! helpers the REPL JIT backend depends on must stay `pub` + re-exported. If
+//! any regresses to `pub(super)`, this fails to compile — re-fork prevention
+//! at the type level.
+//!
+//! The *both-backends observable-parity* tripwire (the integer-fixture test
+//! that drives BOTH the batch ObjectModule path and the REPL JITModule path)
+//! lives in `src/ruxen_repl/src/tests/cranelift_share_parity.rs`, NOT here.
+//! Rationale: the JIT half needs the `ruxen_*` C runtime (`libruxenrt.a`)
+//! force-loaded into the test binary; only `ruxen_repl`'s build script emits
+//! that link directive (`-force_load`), and `cargo:rustc-link-arg` does not
+//! propagate to a downstream crate's test binary. `ruxen_repl` already depends
+//! on `ruxen_core`, so the parity test reaches `clif_for_test` from there and
+//! still asserts cross-backend parity in ONE test.
 
 // ── Task 2: module-agnostic helpers must be reachable from outside the crate ──
 //
 // The REPL JIT backend (a separate crate) depends on these. If any goes back
-// to pub(super), this fails to compile — re-fork prevention at the type level.
-// These 8 helpers take only &mut FunctionBuilder (or pure values) and never
-// touch the module, so they are shareable by visibility alone.
+// to pub(super), this fails to compile. These 8 helpers take only
+// &mut FunctionBuilder (or pure values) and never touch the module, so they
+// are shareable by visibility alone.
 #[test]
 fn shared_helpers_are_public() {
+    use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
+    use cranelift_codegen::ir::types::Type;
     use ruxen_core::codegen::cranelift::{
         cmpop_to_floatcc, cmpop_to_intcc, coerce_value, coerce_value_signed, emit_binop,
         is_string_typed_value, simple_type_size, ty_to_cranelift,
     };
-    use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
-    use cranelift_codegen::ir::types::Type;
     use ruxen_core::hir::types::Ty;
     use ruxen_core::mir::nodes::CmpOp;
 

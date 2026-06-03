@@ -1920,6 +1920,40 @@ pub(super) fn is_repl_symbol_allowed(name: &str) -> bool {
     )
 }
 
+/// Test-only hook: JIT-compile a two-`Int`-argument MIR function, run it with
+/// `args`, and return the `i64` result. Used by the `cranelift_share_pin`
+/// both-backends parity test in `ruxen_core` to assert the REPL JIT backend
+/// lowers integer arithmetic identically to the batch backend.
+///
+/// `#[doc(hidden)]` so it is not part of the stable API, but `pub` so the
+/// cross-crate test can reach it. It drives the SAME `compile_repl_input`
+/// path the live REPL uses — it does not fork it.
+///
+/// # Safety contract
+/// `func` must have exactly two `Int`-typed parameters and an `Int` return,
+/// matching the transmuted `extern "C" fn(i64, i64) -> i64` arity. The pin
+/// fixture guarantees this.
+#[doc(hidden)]
+pub fn run_int_fn_for_test(func: &MirFunction, args: &[i64]) -> Result<i64, String> {
+    assert_eq!(
+        args.len(),
+        2,
+        "run_int_fn_for_test is wired for the 2-arg integer pin fixture only"
+    );
+    let mut jit = JITCodeGen::new()?;
+    let code_ptr = jit.compile_repl_input(func)?;
+    if code_ptr.is_null() {
+        return Err("JIT returned a null function pointer".to_string());
+    }
+    // SAFETY: `code_ptr` is the finalized entry point of `func`, which the
+    // caller guarantees is `fn(Int, Int) -> Int`. The JITModule that owns the
+    // executable memory (`jit`) is kept alive until after the call returns.
+    let f: extern "C" fn(i64, i64) -> i64 = unsafe { std::mem::transmute(code_ptr) };
+    let result = f(args[0], args[1]);
+    // `jit` (and its JITModule-owned code memory) drops here, after the call.
+    Ok(result)
+}
+
 #[cfg(test)]
 mod symbol_allowlist_tests {
     use super::is_repl_symbol_allowed;

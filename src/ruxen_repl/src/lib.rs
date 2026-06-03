@@ -15,7 +15,7 @@ mod env;
 mod eval;
 mod highlight;
 #[allow(dead_code)]
-mod jit;
+pub mod jit;
 mod session;
 #[allow(dead_code)]
 mod slots;
