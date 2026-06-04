@@ -26,14 +26,13 @@ class Map
   lib "../hash/runtime/hash.c"
     def self.new as "ruxen_hash_new" -> Int
     def self.with_capacity as "ruxen_hash_with_capacity"(cap: Int) -> Int
-    def self.from_iter as "ruxen_hash_from_iter"(items: Int) -> Int
     def size as "ruxen_hash_len" -> Int
     def empty? as "ruxen_hash_is_empty" -> Bool
     def get as "ruxen_hash_get"(key: Int) -> Int
     def key? as "ruxen_hash_contains_key"(key: Int) -> Bool
     def keys as "ruxen_hash_keys" -> Int
     def values as "ruxen_hash_values" -> Int
-    def iter as "ruxen_hash_iter" -> Int
+    def to_a as "ruxen_hash_iter" -> Int
     def insert as "ruxen_hash_insert"(key: Int, value: Int)
     def remove as "ruxen_hash_remove"(key: Int) -> Int
     def clear as "ruxen_hash_clear"

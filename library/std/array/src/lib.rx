@@ -43,7 +43,6 @@ class Array
   lib "runtime/vec.c"
     def self.new as "ruxen_vec_new" -> Int
     def self.with_capacity as "ruxen_vec_with_capacity"(cap: Int) -> Int
-    def self.from_iter as "ruxen_vec_from_iter"(items: Int) -> Int
     def size as "ruxen_vec_len" -> Int
     def capacity as "ruxen_vec_capacity" -> Int
     def empty? as "ruxen_vec_is_empty" -> Bool
@@ -55,7 +54,6 @@ class Array
     def sum as "ruxen_vec_sum" -> Int
     def clone as "ruxen_vec_clone" -> Int
     def join as "ruxen_vec_join"(sep: &String) -> String
-    def iter as "ruxen_iter_to_vec" -> Int
     def each as "ruxen_vec_each" -> Int
     def push as "ruxen_vec_push"(x: Int)
     def pop as "ruxen_vec_pop" -> Int
@@ -68,5 +66,17 @@ class Array
     def dedup as "ruxen_vec_dedup"
     def reverse as "ruxen_vec_reverse" -> Int
     def sort as "ruxen_vec_sort" -> Int
+    # Ruby `take(n)` / `drop(n)` return a fresh Array directly — no
+    # return a fresh Array directly. They eager-materialise a new
+    # RuxenVec* (every vec is already one at runtime).
+    def take as "ruxen_vec_take"(n: Int) -> Int
+    def drop as "ruxen_vec_skip"(n: Int) -> Int
+    # Ruby `a.zip(b)` / `a.chain(b)` operate directly on arrays.
+    def zip as "ruxen_vec_zip"(other: Int) -> Int
+    def chain as "ruxen_vec_chain"(other: Int) -> Int
+    # Ruby conversions: `arr.to_set` → Set, `pairs.to_h` → Map.
+    def to_a as "ruxen_vec_clone" -> Int
+    def to_set as "ruxen_set_from_iter" -> Int
+    def to_h as "ruxen_hash_from_iter" -> Int
   end
 end

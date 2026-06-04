@@ -5,7 +5,7 @@ def main
   v.push(3)
   v.push(4)
   v.push(5)
-  v.retain { |x| x > 2 }
+  v.select! { |x| x > 2 }
   let n = v.size
   puts "len=#{n}"
   for x in &v

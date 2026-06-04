@@ -104,7 +104,6 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
             {
                 Some(Ty::String)
             }
-            (Ty::String, "from_iter") => Some(Ty::String),
             // `to_s` on String/Str both yield a `String`.
             (Ty::String, "to_s") => Some(Ty::String),
             (Ty::Str, "to_s") => Some(Ty::String),

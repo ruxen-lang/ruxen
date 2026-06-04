@@ -1,6 +1,6 @@
 def main
   let v = [2, 4, 6]
-  let ok = v.iter.all { |n| n % 2 == 0 }
+  let ok = v.all? { |n| n % 2 == 0 }
   if ok
     puts "all even"
   else

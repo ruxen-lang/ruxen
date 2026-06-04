@@ -42,7 +42,7 @@ fn resolve(
         // `first`, `last`, `contains`, `reverse`, `clone`) route to
         // the same `ruxen_vec_*` helpers their `Vec` counterparts use,
         // so all that's missing is the type-check entry.
-        (Ty::Class { name, .. }, "filter") if name.ends_with("Iter") => Some(ty.clone()),
+        (Ty::Class { name, .. }, "select") if name.ends_with("Iter") => Some(ty.clone()),
         (Ty::Class { name, .. }, "map") if name.ends_with("Iter") => Some(Ty::Class {
             name: name.clone(),
             generic_args: vec![eng.ctx.fresh_type_var()],
@@ -54,7 +54,7 @@ fn resolve(
                 .unwrap_or_else(|| eng.ctx.fresh_type_var());
             Some(Ty::Option(Box::new(Ty::Ref(Box::new(elem)))))
         }
-        (Ty::Class { name, .. }, "position") if name.ends_with("Iter") => {
+        (Ty::Class { name, .. }, "index") if name.ends_with("Iter") => {
             Some(Ty::Option(Box::new(Ty::USize)))
         }
         (Ty::Class { name, generic_args }, "sum") if name.ends_with("Iter") => {
@@ -96,22 +96,22 @@ fn resolve(
         // (the MIR inliner reads `args[0].ty` to seed the seed).
         // `all` / `any` always return Bool. Inlining happens at
         // MIR; the runtime never sees a `VecIter_fold` call.
-        (Ty::Class { name, .. }, "fold") if name.ends_with("Iter") => {
+        (Ty::Class { name, .. }, "reduce") if name.ends_with("Iter") => {
             if let Some(init) = args.first() {
                 Some(eng.ctx.resolve(&init.ty))
             } else {
                 Some(eng.ctx.fresh_type_var())
             }
         }
-        (Ty::Class { name, .. }, "all") if name.ends_with("Iter") => Some(Ty::Bool),
-        (Ty::Class { name, .. }, "any") if name.ends_with("Iter") => Some(Ty::Bool),
+        (Ty::Class { name, .. }, "all?") if name.ends_with("Iter") => Some(Ty::Bool),
+        (Ty::Class { name, .. }, "any?") if name.ends_with("Iter") => Some(Ty::Bool),
         // `take(n)` / `skip(n)` are lazy combinators — they return
         // a same-shape iter wrapper. v1 ships eager-materialising
         // runtime helpers (`ruxen_vec_take` / `ruxen_vec_skip`)
         // that hand back a fresh `RuxenVec*`, so the surface type
         // stays the receiver's iter class for chaining.
         (Ty::Class { name, .. }, "take") if name.ends_with("Iter") => Some(ty.clone()),
-        (Ty::Class { name, .. }, "skip") if name.ends_with("Iter") => Some(ty.clone()),
+        (Ty::Class { name, .. }, "drop") if name.ends_with("Iter") => Some(ty.clone()),
         // Phase 2 stdlib (#05 batch 3): `chain(other)` returns the
         // same iter shape (concatenation preserves Item type).
         // `zip(other)` returns an iter whose Item is the pair

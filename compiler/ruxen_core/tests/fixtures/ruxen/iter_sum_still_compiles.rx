@@ -1,6 +1,6 @@
 def main
   let v = [1, 2, 3]
-  let s = v.iter.sum
+  let s = v.sum
   let out = s.to_string
   puts "s=#{out}"
 end

@@ -1,6 +1,6 @@
 def main
   let v = [1, 2, 3, 4, 5, 6]
-  let (evens, odds) = v.iter.partition { |n| n % 2 == 0 }
+  let (evens, odds) = v.partition { |n| n % 2 == 0 }
   puts "evens=#{evens.size}"
   puts "odds=#{odds.size}"
   for e in &evens

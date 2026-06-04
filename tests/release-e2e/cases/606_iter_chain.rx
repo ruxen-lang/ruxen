@@ -1,13 +1,12 @@
 def main
-  let a = [1, 2, 3]
-  let b = [4, 5]
-  let n = a.iter.chain(b.iter).count
+  let n = [1, 2, 3].chain([4, 5]).count
   puts "n=#{n}"
-  let total = a.iter.chain(b.iter).sum
+  let total = [1, 2, 3].chain([4, 5]).sum
   puts "total=#{total}"
   let empty: Array[Int] = Array.new
-  let m = empty.iter.chain(a.iter).count
+  let m = empty.chain([1, 2, 3]).count
   puts "empty_lhs=#{m}"
-  let k = a.iter.chain(empty.iter).count
+  let e2: Array[Int] = Array.new
+  let k = [1, 2, 3].chain(e2).count
   puts "empty_rhs=#{k}"
 end

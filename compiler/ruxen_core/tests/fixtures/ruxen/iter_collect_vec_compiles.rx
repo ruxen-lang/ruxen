@@ -1,6 +1,6 @@
 def main
   let v = [1, 2, 3]
-  let out = v.iter.take(2).collect_vec
+  let out = v.take(2)
   let n = out.size
   let s = n.to_string
   puts "n=#{s}"

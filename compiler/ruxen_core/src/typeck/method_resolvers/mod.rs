@@ -236,7 +236,6 @@ mod golden {
             "parse_int",
             "parse_float",
             "into_bytes",
-            "from_iter",
             "to_s",
         ] {
             v.push(c(Ty::String, m));
@@ -284,14 +283,23 @@ mod golden {
             "pop",
             "get",
             "get_mut",
-            "iter",
-            "into_iter",
             "each",
             "map",
-            "filter",
+            "select",
+            "reject",
+            "reduce",
+            "all?",
+            "any?",
             "find",
-            "position",
-            "to_vec",
+            "index",
+            "take",
+            "drop",
+            "partition",
+            "chain",
+            "zip",
+            "to_a",
+            "to_set",
+            "to_h",
             "new",
             "sum",
             "count",
@@ -310,12 +318,9 @@ mod golden {
             "insert",
             "remove",
             "extend",
-            "iter_mut",
-            "as_slice",
-            "from_iter",
             "dedup",
             "sort_by",
-            "retain",
+            "select!",
         ] {
             v.push(c(arr(), m));
         }
@@ -324,7 +329,6 @@ mod golden {
         let map = || Ty::Map(Box::new(Ty::String), Box::new(Ty::Int));
         for m in [
             "new",
-            "from_iter",
             "insert",
             "get",
             "key?",
@@ -335,7 +339,7 @@ mod golden {
             "clear",
             "keys",
             "values",
-            "iter",
+            "to_a",
         ] {
             v.push(c(map(), m));
         }
@@ -344,7 +348,6 @@ mod golden {
         let set = || Ty::Set(Box::new(Ty::Int));
         for m in [
             "new",
-            "from_iter",
             "insert",
             "include?",
             "size",
@@ -352,7 +355,6 @@ mod golden {
             "with_capacity",
             "remove",
             "clear",
-            "iter",
             "union",
             "intersection",
             "difference",
@@ -443,21 +445,20 @@ mod golden {
         // ── *Iter combinators (TIER 2-ish, name.ends_with("Iter")) ──
         let veciter = || class("VecIter", vec![Ty::Int]);
         for m in [
-            "filter",
+            "select",
             "map",
             "find",
-            "position",
+            "index",
             "sum",
             "count",
-            "fold",
-            "all",
-            "any",
+            "reduce",
+            "all?",
+            "any?",
             "take",
-            "skip",
+            "drop",
             "chain",
             "zip",
             "collect_vec",
-            "to_vec",
             "enumerate",
             "partition",
         ] {

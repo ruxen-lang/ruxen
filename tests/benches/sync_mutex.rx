@@ -15,7 +15,7 @@
 
 def bench_mutex_lock_unlock(b: &var Bencher)
   let m: Mutex[Int] = Mutex.new(0)
-  b.iter("mutex_lock_unlock", do ||
+  b("mutex_lock_unlock", do ||
     let g = m.lock_raw
     let v = g.get
     g.set(v + 1)
@@ -25,7 +25,7 @@ end
 
 def bench_mutex_lock_release_only(b: &var Bencher)
   let m: Mutex[Int] = Mutex.new(0)
-  b.iter("mutex_lock_release_only", do ||
+  b("mutex_lock_release_only", do ||
     let g = m.lock_raw
     g.get
   end)

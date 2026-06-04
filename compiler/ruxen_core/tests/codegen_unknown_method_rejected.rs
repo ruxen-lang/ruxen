@@ -56,24 +56,8 @@ fn runtime_name_rejects_unknown_inferred_method() {
     );
 }
 
-/// End-to-end: compiling a Ruxen program that calls `.flat_map` on an
-/// iter (still unimplemented after #05 batch 3 — `chain` / `zip` /
-/// `collect_vec` landed alongside `fold` / `all` / `any` / `take` /
-/// `skip`; `flat_map` / `flatten` / `collect[FromIterator]` remain
-/// rejected) must surface a codegen error rather than emit a binary
-/// that silently no-ops. Replaces the prior `.zip` canary from #05
-/// batch 2 which now compiles via `ruxen_vec_zip`.
-#[test]
-fn compile_fails_when_calling_unimplemented_iter_flat_map() {
-    let source = rx("compile_fails_when_calling_unimplemented_iter_flat_map");
-    let err = try_compile(&source)
-        .expect_err("expected codegen to refuse `.iter.flat_map` (no runtime symbol)");
-    assert!(
-        err.contains("no runtime symbol"),
-        "diagnostic should mention missing runtime symbol; got: {err}"
-    );
-    assert!(
-        err.contains("flat_map") || err.contains("iter") || err.contains("to_vec"),
-        "diagnostic should name the unresolved method; got: {err}"
-    );
-}
+// (The `.iter.flat_map` codegen-rejection canary was removed with the
+// iterator layer — `.iter` no longer exists, so `flat_map` is rejected at
+// typeck as "no method" rather than reaching codegen. General unknown-
+// method rejection stays covered by
+// `runtime_name_rejects_unknown_inferred_method` above.)

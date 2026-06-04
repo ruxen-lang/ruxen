@@ -114,9 +114,16 @@ impl<'a> Lowerer<'a> {
                 self.inline_each(vec_id, closure_params, closure_body)?;
                 Ok(Some(None))
             }
-            "filter" | "where_matching" => {
+            "select" | "where_matching" => {
                 // result = Vec.new(); for i in 0..vec.len: item = vec[i]; if <pred>: result.push(item)
-                let result = self.inline_filter(expr, vec_id, closure_params, closure_body)?;
+                let result = self.inline_filter(expr, vec_id, closure_params, closure_body, false)?;
+                Ok(Some(Some(result)))
+            }
+            "reject" => {
+                // Ruby `reject` — the inverse of `select`: keep elements
+                // where the predicate is FALSE. Reuses the filter loop with
+                // the predicate negated.
+                let result = self.inline_filter(expr, vec_id, closure_params, closure_body, true)?;
                 Ok(Some(Some(result)))
             }
             "find" => {
@@ -124,8 +131,8 @@ impl<'a> Lowerer<'a> {
                 let result = self.inline_find(expr, vec_id, closure_params, closure_body)?;
                 Ok(Some(Some(result)))
             }
-            "position" => {
-                // for i in 0..vec.len: item = vec[i]; if <pred>: return Some(i); return None
+            "index" => {
+                // for i in 0..vec.len: item = vec[i]; if <pred>: return Some(i); return nil
                 let result = self.inline_position(expr, vec_id, closure_params, closure_body)?;
                 Ok(Some(Some(result)))
             }
@@ -144,7 +151,7 @@ impl<'a> Lowerer<'a> {
             //
             //  * `retain { |x| keep? }`    — in-place filter.
             //  * `sort_by { |a, b| ord }`  — comparator-druxen insertion sort.
-            "retain" => {
+            "select!" => {
                 self.inline_retain(vec_id, closure_params, closure_body)?;
                 Ok(Some(None))
             }
@@ -157,11 +164,11 @@ impl<'a> Lowerer<'a> {
             // `ruxen_vec_len` + `ruxen_vec_get` per-element loop as
             // `each` / `find`, but they accumulate (`fold`) or
             // short-circuit on a boolean predicate (`all` / `any`).
-            "fold" => {
+            "reduce" => {
                 let result = self.inline_fold(expr, vec_id, args, closure_params, closure_body)?;
                 Ok(Some(Some(result)))
             }
-            "all" => {
+            "all?" => {
                 let result = self.inline_all_any(
                     expr,
                     vec_id,
@@ -171,7 +178,7 @@ impl<'a> Lowerer<'a> {
                 )?;
                 Ok(Some(Some(result)))
             }
-            "any" => {
+            "any?" => {
                 let result = self.inline_all_any(
                     expr,
                     vec_id,
@@ -219,7 +226,7 @@ impl<'a> Lowerer<'a> {
                         // These are passthrough — recurse into the object.
                         self.lower_vec_source(object)
                     }
-                    "filter" | "where_matching" if block.is_some() => {
+                    "select" | "reject" | "where_matching" if block.is_some() => {
                         // A filter in the chain: inline it and return the
                         // filtered vec as the source. This handles chained
                         // `.filter { ... }.to_vec`.

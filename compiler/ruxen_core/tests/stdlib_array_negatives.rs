@@ -168,18 +168,6 @@ fn vec_sort_by_closure_typechecks() {
 /// `Vec.from_iter` (#03 batch 2) is the static constructor that
 /// materialises a Vec from any iterator-producing expression. Pins the
 /// typeck contract: it lives on `Vec` like `new` / `with_capacity`.
-#[test]
-fn vec_from_iter_static_typechecks() {
-    let source = rx("vec_from_iter_static_typechecks");
-    let diags = typecheck_diagnostics(&source);
-    let errs = errors(&diags);
-    assert!(
-        errs.is_empty(),
-        "Vec.from_iter(_) must typecheck; got errors: {:#?}",
-        errs
-    );
-}
-
 /// Vec equality — `==` on two Vec[Int] must typecheck and yield Bool.
 /// This pins the BinaryOp::Eq → ruxen_vec_eq routing added in batch 1.
 #[test]

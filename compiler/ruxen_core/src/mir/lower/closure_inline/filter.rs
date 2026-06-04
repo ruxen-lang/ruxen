@@ -1,12 +1,16 @@
 use super::super::*;
 
 impl<'a> Lowerer<'a> {
+    /// Inline `select` / `reject`. `negate = false` keeps elements where the
+    /// predicate is true (`select`); `negate = true` keeps elements where it
+    /// is false (`reject`) by swapping the push/skip branch targets.
     pub(super) fn inline_filter(
         &mut self,
         expr: &HirExpr,
         vec_id: LocalId,
         closure_params: &[HirClosureParam],
         closure_body: &HirExpr,
+        negate: bool,
     ) -> Result<LocalId, String> {
         // result = ruxen_vec_new()
         let result = self.new_temp(expr.ty.clone());
@@ -73,10 +77,17 @@ impl<'a> Lowerer<'a> {
         let pred_result = self.lower_expr(closure_body)?;
         let pred_val = local_to_value(pred_result);
 
+        // `select` pushes when the predicate is true; `reject` pushes when
+        // it is false — swap the branch targets to negate.
+        let (true_target, false_target) = if negate {
+            (inc_block, push_block)
+        } else {
+            (push_block, inc_block)
+        };
         self.set_terminator(Terminator::Branch {
             cond: pred_val,
-            then_block: push_block,
-            else_block: inc_block,
+            then_block: true_target,
+            else_block: false_target,
         });
 
         // Push block: result.push(item)

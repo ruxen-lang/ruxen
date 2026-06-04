@@ -3,7 +3,7 @@ def main
   hs.push({ |n: Int| n + 10 })
   hs.push({ |n: Int| n * 3 })
   var acc: Int = 0
-  for h in hs.iter
+  for h in hs
     acc = acc + h.(5)
   end
   puts "#{acc}"

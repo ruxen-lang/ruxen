@@ -297,25 +297,6 @@ fn sum_on_string_iter_typeck_rejects() {
     );
 }
 
-#[test]
-fn collect_hashmap_rejects_non_pair_items() {
-    let source = rx("collect_hashmap_rejects_non_pair_items");
-    let diags = typecheck_diagnostics(&source);
-    let errors: Vec<&Diagnostic> = diags
-        .iter()
-        .filter(|d| d.level == DiagnosticLevel::Error)
-        .collect();
-    assert!(
-        !errors.is_empty(),
-        "expected collect[HashMap[_, _]] rejection"
-    );
-    assert!(
-        errors.iter().any(|d| d.code.as_deref() == Some("E0700")),
-        "expected E0700; got {:#?}",
-        errors
-    );
-}
-
 /// Keep the prior `Vec[Int].iter.sum` happy-path covered alongside
 /// the new String-rejection guard so a future tightening doesn't
 /// over-broadly reject numeric Items.

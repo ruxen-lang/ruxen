@@ -1,6 +1,6 @@
 def main
   let keys = [1, 2]
   let vals = [10, 20]
-  let m: Map[Int, Int] = Map.from_iter(keys.iter.zip(vals.iter))
+  let m: Map[Int, Int] = keys.zip(vals).to_h
   puts m.size.to_string
 end

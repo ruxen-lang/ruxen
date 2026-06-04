@@ -4,8 +4,10 @@
 //! method typing, carved verbatim out of the legacy match. The `map` /
 //! `map_err` arms mint a fresh type var via `eng`; the rest are pure.
 
+use crate::diagnostics::Diagnostic;
 use crate::hir::types::Ty;
 
+use super::is_iter_sum_compatible;
 use super::resolver::MethodResolver;
 use super::InferenceEngine;
 
@@ -25,22 +27,71 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
             (Ty::Array(elem), "pop") => Some(Ty::Option(elem.clone())),
             (Ty::Array(elem), "get") => Some(Ty::Option(Box::new(Ty::Ref(elem.clone())))),
             (Ty::Array(elem), "get_mut") => Some(Ty::Option(Box::new(Ty::RefMut(elem.clone())))),
-            (Ty::Array(elem), "iter") => Some(Ty::Class {
-                name: "VecIter".to_string(),
-                generic_args: vec![*elem.clone()],
-            }),
-            (Ty::Array(elem), "into_iter") => Some(Ty::Class {
-                name: "VecIntoIter".to_string(),
-                generic_args: vec![*elem.clone()],
-            }),
+            // No `.iter` / `.into_iter` / `.collect` / `.to_vec` — Ruby has no
+            // iterator-adapter layer. Combinators (`map`/`select`/`reduce`/…)
+            // and `for x in arr` work directly on the Array.
             (Ty::Array(_), "each") => Some(Ty::Unit),
             (Ty::Array(_), "map") => Some(Ty::Array(Box::new(eng.ctx.fresh_type_var()))),
-            (Ty::Array(elem), "filter") => Some(Ty::Array(elem.clone())),
+            // Ruby block combinators (inlined in mir/lower/closure_inline).
+            (Ty::Array(elem), "select") => Some(Ty::Array(elem.clone())),
+            (Ty::Array(elem), "reject") => Some(Ty::Array(elem.clone())),
+            (Ty::Array(_), "reduce") => Some(eng.ctx.fresh_type_var()),
+            (Ty::Array(_), "all?") => Some(Ty::Bool),
+            (Ty::Array(_), "any?") => Some(Ty::Bool),
             (Ty::Array(elem), "find") => Some(Ty::Option(Box::new(Ty::Ref(elem.clone())))),
-            (Ty::Array(_), "position") => Some(Ty::Option(Box::new(Ty::USize))),
-            (Ty::Array(_), "to_vec") => Some(ty.clone()),
+            (Ty::Array(_), "index") => Some(Ty::Option(Box::new(Ty::USize))),
+            // Ruby `take(n)` / `drop(n)` return a fresh Array directly.
+            (Ty::Array(elem), "take") => Some(Ty::Array(elem.clone())),
+            (Ty::Array(elem), "drop") => Some(Ty::Array(elem.clone())),
+            // Direct Array combinators (no `.iter` ceremony). `partition`
+            // is inlined; `chain`/`min`/`max` map to runtime vec helpers.
+            (Ty::Array(elem), "partition") => Some(Ty::Tuple(vec![
+                Ty::Array(elem.clone()),
+                Ty::Array(elem.clone()),
+            ])),
+            (Ty::Array(elem), "chain") => Some(Ty::Array(elem.clone())),
+            (Ty::Array(elem), "zip") => {
+                let other = match _args.first() {
+                    Some(a) => match eng.ctx.resolve(&a.ty) {
+                        Ty::Array(e) => *e,
+                        Ty::Ref(inner) | Ty::RefMut(inner) => match *inner {
+                            Ty::Array(e) => *e,
+                            o => o,
+                        },
+                        o => o,
+                    },
+                    None => eng.ctx.fresh_type_var(),
+                };
+                Some(Ty::Array(Box::new(Ty::Tuple(vec![*elem.clone(), other]))))
+            }
+            // Ruby conversions. `arr.to_set` → Set[T]; `pairs.to_h` builds
+            // a Map[K, V] from an Array of (K, V) tuples.
+            (Ty::Array(_), "to_a") => Some(ty.clone()),
+            (Ty::Array(elem), "to_set") => Some(Ty::Set(elem.clone())),
+            (Ty::Array(elem), "to_h") => match elem.as_ref() {
+                Ty::Tuple(kv) if kv.len() == 2 => {
+                    Some(Ty::Map(Box::new(kv[0].clone()), Box::new(kv[1].clone())))
+                }
+                _ => Some(Ty::Map(
+                    Box::new(eng.ctx.fresh_type_var()),
+                    Box::new(eng.ctx.fresh_type_var()),
+                )),
+            },
             (Ty::Array(_), "new") => Some(ty.clone()),
-            (Ty::Array(_), "sum") => Some(Ty::Int),
+            // `sum` integer-sums raw slots — reject non-numeric elements
+            // (Ruby's `["a"].sum` errors too) with a typeck-time E0700.
+            (Ty::Array(elem), "sum") => {
+                let resolved = eng.ctx.resolve(elem);
+                if !is_iter_sum_compatible(&resolved) {
+                    eng.diagnostics.push(Diagnostic::error_with_code(
+                        format!("`sum` requires numeric elements that implement `Add`; `{resolved}` is not numeric"),
+                        _span.clone(),
+                        "E0700",
+                    ));
+                    return Some(Ty::Error);
+                }
+                Some(Ty::Int)
+            }
             (Ty::Array(_), "count") => Some(Ty::USize),
             (Ty::Array(_), "reverse") => Some(ty.clone()),
             (Ty::Array(elem), "first") => Some(Ty::Option(elem.clone())),
@@ -58,17 +109,13 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
             (Ty::Array(_), "insert") => Some(Ty::Unit),
             (Ty::Array(elem), "remove") => Some(*elem.clone()),
             (Ty::Array(_), "extend") => Some(Ty::Unit),
-            (Ty::Array(_), "iter_mut") => Some(ty.clone()),
-            (Ty::Array(_), "as_slice") => Some(ty.clone()),
             // Phase 2 stdlib batch 2 (#03).
-            (Ty::Array(_), "from_iter") => Some(ty.clone()),
             (Ty::Array(_), "dedup") => Some(Ty::Unit),
             (Ty::Array(_), "sort_by") => Some(Ty::Unit),
-            (Ty::Array(_), "retain") => Some(Ty::Unit),
+            (Ty::Array(_), "select!") => Some(Ty::Unit),
 
             // HashMap methods
             (Ty::Map(_, _), "new") => Some(ty.clone()),
-            (Ty::Map(_, _), "from_iter") => Some(ty.clone()),
             (Ty::Map(_, _), "insert") => Some(Ty::Unit),
             (Ty::Map(_, v), "get") => Some(Ty::Option(Box::new(Ty::Ref(v.clone())))),
             (Ty::Map(_, _), "key?") => Some(Ty::Bool),
@@ -80,11 +127,10 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
             (Ty::Map(_, _), "clear") => Some(Ty::Unit),
             (Ty::Map(k, _), "keys") => Some(Ty::Array(Box::new(Ty::Ref(k.clone())))),
             (Ty::Map(_, v), "values") => Some(Ty::Array(Box::new(Ty::Ref(v.clone())))),
-            (Ty::Map(k, _), "iter") => Some(Ty::Array(Box::new(Ty::Ref(k.clone())))),
+            (Ty::Map(k, _), "to_a") => Some(Ty::Array(Box::new(Ty::Ref(k.clone())))),
 
             // Set methods
             (Ty::Set(_), "new") => Some(ty.clone()),
-            (Ty::Set(_), "from_iter") => Some(ty.clone()),
             (Ty::Set(_), "insert") => Some(Ty::Unit),
             (Ty::Set(_), "include?") => Some(Ty::Bool),
             (Ty::Set(_), "size") => Some(Ty::USize),
@@ -93,7 +139,7 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
             (Ty::Set(_), "with_capacity") => Some(ty.clone()),
             (Ty::Set(_), "remove") => Some(Ty::Bool),
             (Ty::Set(_), "clear") => Some(Ty::Unit),
-            (Ty::Set(t), "iter") => Some(Ty::Array(Box::new(Ty::Ref(t.clone())))),
+            (Ty::Set(t), "to_a") => Some(Ty::Array(Box::new(Ty::Ref(t.clone())))),
             (Ty::Set(_), "union") => Some(ty.clone()),
             (Ty::Set(_), "intersection") => Some(ty.clone()),
             (Ty::Set(_), "difference") => Some(ty.clone()),

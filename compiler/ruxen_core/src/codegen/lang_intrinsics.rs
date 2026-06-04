@@ -224,7 +224,7 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
             // — the runtime never sees them, so they are
             // intentionally absent from this dispatch table.
             "take" => Ok("ruxen_vec_take"),
-            "skip" => Ok("ruxen_vec_skip"),
+            "drop" => Ok("ruxen_vec_skip"),
             // Phase 2 stdlib (#05 batch 3): `chain(other)` /
             // `zip(other)` eager-materialise into fresh
             // `RuxenVec*`s via the runtime helpers below.
@@ -237,8 +237,8 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
             "collect_vec" => Ok("ruxen_iter_to_vec"),
             // Known unimplemented combinators — refuse rather
             // than no-op.
-            "filter" | "find" | "position" | "partition" | "fold" | "min" | "max" | "any"
-            | "all" | "collect" | "map" | "reduce" | "flat_map" | "flatten" => {
+            "select" | "reject" | "find" | "index" | "partition" | "reduce" | "min" | "max"
+            | "any?" | "all?" | "collect" | "map" | "flat_map" | "flatten" => {
                 Err(unresolved_method_error(name, "Iter"))
             }
             // Anything else falls through to link-time
@@ -288,8 +288,8 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
             }
             // Known unimplemented Vec methods — historically
             // no-opped.
-            "map" | "filter" | "fold" | "min" | "max" | "any" | "all" | "collect" | "find"
-            | "position" | "partition" | "reduce" | "zip" | "take" | "skip" | "chain"
+            "map" | "select" | "reject" | "reduce" | "min" | "max" | "any?" | "all?"
+            | "collect" | "find" | "index" | "partition" | "zip" | "take" | "drop" | "chain"
             | "flat_map" | "flatten" => Err(unresolved_method_error(name, "Vec")),
             _ => Ok(name),
         };

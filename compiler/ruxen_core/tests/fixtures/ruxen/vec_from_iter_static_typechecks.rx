@@ -1,4 +1,0 @@
-def main
-  let src: Array[Int] = Array.new
-  let _v: Array[Int] = Array.from_iter(src)
-end

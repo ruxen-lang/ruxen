@@ -17,11 +17,10 @@ class Set
   lib "../hash/runtime/hash.c"
     def self.new as "ruxen_set_new" -> Int
     def self.with_capacity as "ruxen_set_with_capacity"(cap: Int) -> Int
-    def self.from_iter as "ruxen_set_from_iter"(items: Int) -> Int
     def size as "ruxen_set_len" -> Int
     def empty? as "ruxen_set_is_empty" -> Bool
     def include? as "ruxen_set_contains"(item: Int) -> Bool
-    def iter as "ruxen_set_iter" -> Int
+    def to_a as "ruxen_set_iter" -> Int
     def union as "ruxen_set_union"(other: Int) -> Int
     def intersection as "ruxen_set_intersection"(other: Int) -> Int
     def difference as "ruxen_set_difference"(other: Int) -> Int
