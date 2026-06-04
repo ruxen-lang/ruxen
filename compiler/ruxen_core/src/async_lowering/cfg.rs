@@ -83,6 +83,20 @@ impl Edge {
 pub struct Cfg {
     pub segments: Vec<Segment>,
     pub edges: Vec<Edge>,
+    /// Run-ONCE statements that precede the loop head, for a loop-shaped
+    /// body (`Edge::Loop` present). These are the `let i = 0` / `var sum
+    /// = 0` accumulator inits the loop machine copies into its `init`
+    /// method ONCE (as `self.<name> = <init>` field assigns), NOT per
+    /// iteration. For non-loop bodies this is empty — the linear path's
+    /// run-once prefix lives in `segments[0].stmts` (it runs once because
+    /// segment 0 is entered exactly once).
+    ///
+    /// Distinguishing these from a loop segment's per-ITERATION `stmts`
+    /// (the `body_pre_await` that re-runs each pass, e.g. `let p = i +
+    /// 100` in 728e) is the piece the loop emitter needs and the flat
+    /// segment list cannot otherwise express: both would have collapsed
+    /// into `segments[0].stmts`.
+    pub pre_loop: Vec<Statement>,
     /// Statements after the loop / after the last suspend that produce the
     /// fn's return value (the terminal `Poll.Ready(<tail>)`).
     pub tail: Vec<Statement>,
@@ -197,6 +211,7 @@ pub fn segment_cfg(body: &Block) -> Option<Cfg> {
                 suspend: None,
             }],
             edges: Vec::new(),
+            pre_loop: Vec::new(),
             tail: body.statements.clone(),
             span: body.span.clone(),
         };
@@ -322,17 +337,17 @@ fn try_loop_cfg(body: &Block) -> Option<Cfg> {
     // The terminal segment's `suspend` is None; the post-loop statements become
     // `Cfg.tail`, and the back-edge's `else_to` points at this terminal segment
     // (cond false → fall through to the post-loop tail).
+    // Each loop segment carries ONLY its per-ITERATION `body_pre_await`
+    // (`phase_pre[i]`) — the run-once `pre_loop_stmts` go in `Cfg.pre_loop`
+    // so the loop emitter copies them into `init` once instead of re-running
+    // them every pass. (The old single/multi loop builders kept these
+    // separate via `shape.pre_loop_stmts` vs `shape.body_pre_await`; the
+    // unified Cfg must preserve that split — see `Cfg::pre_loop`.)
     let mut segments: Vec<Segment> = Vec::with_capacity(n + 1);
     for i in 0..n {
-        let mut stmts = if i == 0 {
-            pre_loop_stmts.clone()
-        } else {
-            Vec::new()
-        };
-        stmts.extend(phase_pre[i].iter().cloned());
         segments.push(Segment {
             id: i,
-            stmts,
+            stmts: phase_pre[i].clone(),
             suspend: Some(Suspend {
                 binding: phase_binding[i].clone(),
                 awaitee: phase_awaitee[i].clone(),
@@ -366,6 +381,7 @@ fn try_loop_cfg(body: &Block) -> Option<Cfg> {
     let cfg = Cfg {
         segments,
         edges,
+        pre_loop: pre_loop_stmts,
         tail: post_loop_stmts,
         span: body.span.clone(),
     };
@@ -490,6 +506,7 @@ fn try_linear_cfg(body: &Block) -> Option<Cfg> {
     let cfg = Cfg {
         segments,
         edges,
+        pre_loop: Vec::new(),
         tail,
         span: body.span.clone(),
     };
@@ -556,6 +573,7 @@ mod tests {
                 },
             ],
             edges: vec![Edge::Next { from: 0, to: 1 }, Edge::Next { from: 1, to: 2 }],
+            pre_loop: vec![],
             tail: vec![],
             span: dummy_span(),
         }
@@ -638,6 +656,46 @@ mod tests {
             cfg.segments.iter().filter(|s| s.suspend.is_some()).count(),
             1
         );
+    }
+
+    #[test]
+    fn segment_cfg_loop_splits_pre_loop_from_per_iteration_body() {
+        // `var i = 0` / `var sum = 0` are run-ONCE pre-loop inits;
+        // `let p = i + 100` is a per-ITERATION body_pre_await. The Cfg
+        // must keep them apart: pre_loop carries the two inits, seg0.stmts
+        // carries the per-iteration `let p`. (728e shape.)
+        let body = parse_fn_body(
+            "async def f\n  var i = 0\n  var sum = 0\n  while i < 2\n    let p = i + 100\n    let v = step(p).await\n    sum = sum + v\n    i = i + 1\n  end\n  sum\nend",
+        );
+        let cfg = segment_cfg(&body).unwrap();
+        // Two run-once pre-loop inits.
+        assert_eq!(cfg.pre_loop.len(), 2, "pre_loop should hold `var i` + `var sum`");
+        // seg0 is the single in-loop suspend; its stmts are the
+        // per-iteration body_pre_await (`let p = i + 100`) ONLY — the
+        // pre-loop inits must NOT be duplicated here.
+        let suspends: Vec<&Segment> = cfg.segments.iter().filter(|s| s.suspend.is_some()).collect();
+        assert_eq!(suspends.len(), 1);
+        assert_eq!(
+            suspends[0].stmts.len(),
+            1,
+            "seg0 per-iteration body should be just `let p = i + 100`"
+        );
+        // post_loop tail (`sum`) is preserved.
+        assert_eq!(cfg.tail.len(), 1);
+    }
+
+    #[test]
+    fn segment_cfg_non_loop_has_empty_pre_loop() {
+        // Linear + no-await bodies have no loop, so pre_loop is empty —
+        // their run-once prefix lives in segments[0].stmts (entered once).
+        for src in [
+            "async def f\n  1 + 2\nend",
+            "async def f\n  let p = setup()\n  let a = g().await\n  a\nend",
+        ] {
+            let body = parse_fn_body(src);
+            let cfg = segment_cfg(&body).unwrap();
+            assert!(cfg.pre_loop.is_empty(), "non-loop pre_loop must be empty for:\n{src}");
+        }
     }
 
     #[test]
