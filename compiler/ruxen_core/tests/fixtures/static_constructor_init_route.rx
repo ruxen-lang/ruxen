@@ -1,0 +1,19 @@
+# Pins the universal-`.new` static-constructor claim (runtime_abi.rs:127-144):
+# `Widget` has a `def init` and NO `def self.new`. Constructing it via `.new`
+# must route through `Widget_init(self, ...)` with `self` prepended — not be
+# misclassified as a runtime collection constructor.
+class Widget
+  size: Int
+
+  def init(@size: Int) end
+
+  def grow -> Int
+    self.size + 1
+  end
+end
+
+def main
+  let w = Widget.new(7)
+  let g = w.grow()
+  puts "#{g}"
+end
