@@ -1,0 +1,10 @@
+[package]
+name = "std-_pin_zero_rust_stdlib"
+version = "0.1.0"
+description = "Trio-leak pin fixture (zero_rust_stdlib_classes.spec.md §B5) — proves adding a stdlib class needs zero edits to compiler/ruxen_core/src/ beyond a single BOOTSTRAP_FILES entry. Renamed from `foobar` so it is not mistaken for cruft."
+
+[dependencies]
+std-core = "= 0.1.0"
+
+[system_libs]
+libs = []

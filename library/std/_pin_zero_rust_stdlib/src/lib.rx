@@ -1,5 +1,8 @@
-## std::foobar — trio-leak detector for B5 of
-## docs/specs/system/zero_rust_stdlib_classes.spec.md.
+## std::_pin_zero_rust_stdlib — trio-leak detector for B5 of
+## docs/specs/system/zero_rust_stdlib_classes.spec.md. (Formerly `foobar`;
+## renamed so the fixture's purpose is self-evident and it is not mistaken
+## for cruft. The internal `foobar_*` symbol names are retained as-is so the
+## C runtime symbol bindings and the trio_leak_pin assertions stay stable.)
 ##
 ## This package is a hand-rolled minimum-faithful exercise of every
 ## bootstrap-side stdlib auto-connect mechanism we expect future stdlib

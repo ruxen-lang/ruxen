@@ -5,11 +5,11 @@
 //! during the multithreading + async sub-phases (bootstrap-merge
 //! skipping class bodies, hardcoded Send/Sync match arms, hardcoded
 //! `-l<lib>` flags in `linker_args`). The pin lives or dies on the
-//! `library/std/foobar/` fixture (see spec §B5) — that fresh stdlib
-//! package exercises every auto-connect path a future stdlib
-//! addition should reach. If adding FooBar requires anything in
-//! `compiler/ruxen_core/src/` beyond a single `BOOTSTRAP_FILES`
-//! entry, the trio leak is still open.
+//! `library/std/_pin_zero_rust_stdlib/` fixture (formerly `foobar`; see
+//! spec §B5) — that fresh stdlib package exercises every auto-connect
+//! path a future stdlib addition should reach. If adding its `FooBar`
+//! class requires anything in `compiler/ruxen_core/src/` beyond a single
+//! `BOOTSTRAP_FILES` entry, the trio leak is still open.
 //!
 //! Three sub-assertions in this file:
 //!
@@ -158,8 +158,8 @@ fn foobar_resolves_through_std_namespace() {
 }
 
 /// Structural trio-leak assertion. Fails if the commit that added
-/// `library/std/foobar/` touches anything in `compiler/ruxen_core/src/`
-/// other than the `BOOTSTRAP_FILES` const itself.
+/// `library/std/_pin_zero_rust_stdlib/` touches anything in
+/// `compiler/ruxen_core/src/` other than the `BOOTSTRAP_FILES` const itself.
 ///
 /// Goes live AFTER B2 (auto-derive walker — removes `hir/types.rs`
 /// carve-outs) and B3 (`[system_libs]` — removes
@@ -170,11 +170,12 @@ fn foobar_resolves_through_std_namespace() {
 ///
 /// Detection is a scan of the CURRENT source tree, not a git-history diff.
 /// The original implementation diffed the commit that introduced
-/// `library/std/foobar/`, but that cannot work under this repo's
-/// squash-merge history (foobar arrived inside a large squashed PR alongside
-/// unrelated compiler changes, so the introducing commit touches hundreds of
-/// files). The invariant we actually care about is structural and holds for
-/// the tree as it stands: the `foobar` fixture package must be referenced in
+/// `library/std/_pin_zero_rust_stdlib/`, but that cannot work under this
+/// repo's squash-merge history (the fixture arrived inside a large squashed
+/// PR alongside unrelated compiler changes, so the introducing commit
+/// touches hundreds of files). The invariant we actually care about is
+/// structural and holds for the tree as it stands: the
+/// `_pin_zero_rust_stdlib` fixture package must be referenced in
 /// `compiler/ruxen_core/src/` ONLY by the stdlib-registration plumbing
 /// (`resolve/bootstrap.rs` + `resolve/stdlib_embedded.rs`) and must never
 /// leak into a compiler phase (typeck / codegen / hir / borrow_check / mir /
@@ -184,9 +185,9 @@ fn foobar_addition_touches_only_bootstrap_files() {
     let repo_root = workspace_root();
     let core_src = repo_root.join("compiler/ruxen_core/src");
 
-    // Files permitted to name the foobar fixture package: the embedded-stdlib
-    // registration plumbing every package goes through. Paths are relative to
-    // compiler/ruxen_core/src/.
+    // Files permitted to name the `_pin_zero_rust_stdlib` fixture package: the
+    // embedded-stdlib registration plumbing every package goes through. Paths
+    // are relative to compiler/ruxen_core/src/.
     const PERMITTED: &[&str] = &["resolve/bootstrap.rs", "resolve/stdlib_embedded.rs"];
 
     fn rs_files(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
@@ -214,7 +215,7 @@ fn foobar_addition_touches_only_bootstrap_files() {
             continue;
         }
         let contents = std::fs::read_to_string(file).unwrap_or_default();
-        if contents.to_lowercase().contains("foobar") {
+        if contents.to_lowercase().contains("_pin_zero_rust_stdlib") {
             offenders.push(rel);
         }
     }
@@ -222,8 +223,9 @@ fn foobar_addition_touches_only_bootstrap_files() {
 
     assert!(
         offenders.is_empty(),
-        "the `foobar` stdlib fixture leaked into compiler/ruxen_core/src/ files \
-         beyond the permitted stdlib-registration plumbing {PERMITTED:?} \
+        "the `_pin_zero_rust_stdlib` stdlib fixture leaked into \
+         compiler/ruxen_core/src/ files beyond the permitted \
+         stdlib-registration plumbing {PERMITTED:?} \
          (trio leak not yet closed): {offenders:?}",
     );
 }
