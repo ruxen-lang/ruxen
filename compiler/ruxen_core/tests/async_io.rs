@@ -318,3 +318,77 @@ fn async_file_round_trip_via_block_on() {
         stderr
     );
 }
+
+// ─── Phase 3 — linear N-await state-machine runtime equivalence gate ──
+//
+// EQUIVALENCE GATE for the async-lowering CFG unification (Phase 3 Path
+// A). Every other in-process `cargo test -p ruxen_core` async test is
+// typeck-only (async_lowering / async_negative) or drives the reactor
+// `block_on` path (the tests above). NONE compiles-and-runs the linear
+// `.await`-chain state machine that `lower_one_async_fn_with_await` +
+// `build_multi_state_poll_body` produce — so deleting/replacing that
+// builder could regress runtime behaviour with the suite still green.
+//
+// This pin closes that hole: an `async def chain()` with TWO chained
+// `.await`s is hand-polled N+1 (=3) times, forcing the synthesised
+// `self.__state` if-chain through state 0 (await make_int) → Pending,
+// state 1 (await make_other) → Pending, state 2 (terminal) →
+// Ready(42 + 35). The asserted stdout `77` only holds if the poll
+// skeleton advances `__state`, stores each await result in its field,
+// and folds the tail correctly. Mirrors e2e fixture
+// `722_async_def_chained_await_handpoll.rx`, inlined so the gate lives
+// in-crate and runs under `cargo test -p ruxen_core --test async_io`.
+//
+// The hand-poll driver (not `block_on`) is deliberate: it exercises the
+// state-machine poll builder directly, with no reactor in the loop, so
+// any divergence in the emitted `__state` skeleton shows up here.
+#[test]
+fn linear_chained_await_runtime_gate() {
+    let source = "\
+async def make_int() -> Int
+  42
+end
+
+async def make_other() -> Int
+  35
+end
+
+async def chain() -> Int
+  let a = make_int().await
+  let b = make_other().await
+  a + b
+end
+
+def main
+  var fut = chain()
+  var ctx = Context.test_dummy
+  var result = 0
+  match (&var fut).poll(&var ctx)
+    Poll.Ready(v) -> result = v
+    Poll.Pending -> result = result
+  end
+  match (&var fut).poll(&var ctx)
+    Poll.Ready(v) -> result = v
+    Poll.Pending -> result = result
+  end
+  match (&var fut).poll(&var ctx)
+    Poll.Ready(v) -> result = v
+    Poll.Pending -> result = result
+  end
+  puts \"#{result}\"
+end
+";
+    let (stdout, stderr, ok) = compile_and_run(source, "async_io_linear_chained_await_gate");
+    assert!(
+        ok,
+        "binary exited non-zero. stdout=[{}] stderr=[{}]",
+        stdout, stderr
+    );
+    assert_eq!(
+        stdout.trim(),
+        "77",
+        "linear two-await chain must fold to 42 + 35 = 77; got stdout=[{}] stderr=[{}]",
+        stdout,
+        stderr
+    );
+}
