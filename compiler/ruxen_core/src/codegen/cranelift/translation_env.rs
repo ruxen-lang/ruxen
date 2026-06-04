@@ -91,6 +91,11 @@ impl<'a, M: Module> TranslationEnv<'a, M> {
         // generics aren't monomorphised yet. Leaving the suffix
         // fallback in place but tracked.
         //
+        // Blast radius (post-Cranelift-share): this `TranslationEnv` is the
+        // SHARED codegen path, so the fallback now ships in BOTH backends —
+        // the batch `CodeGen` (ObjectModule) and the REPL `JITCodeGen`
+        // (JITModule). A fix here corrects both; a regression here breaks both.
+        //
         // For inferred-type method calls (?T..._method), search for a
         // declared function whose name ends with _method.
         // Prefer the shortest match to avoid picking e.g.
