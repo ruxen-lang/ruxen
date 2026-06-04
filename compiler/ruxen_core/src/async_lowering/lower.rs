@@ -1766,107 +1766,47 @@ struct AwaitSub {
     /// `poll(...) -> Poll[T]` method signature).
     result_type: TypeExpr,
 }
-fn expr_references_name(expr: &Expr, name: &str) -> bool {
-    if let ExprKind::Identifier(n) = &expr.kind {
-        return n == name;
-    }
-    match &expr.kind {
-        ExprKind::BinaryOp { left, right, .. } => {
-            expr_references_name(left, name) || expr_references_name(right, name)
-        }
-        ExprKind::UnaryOp { operand, .. } => expr_references_name(operand, name),
-        ExprKind::Borrow(inner)
-        | ExprKind::BorrowMut(inner)
-        | ExprKind::Try(inner)
-        | ExprKind::Await(inner) => expr_references_name(inner, name),
-        ExprKind::FieldAccess { object, .. } => expr_references_name(object, name),
-        ExprKind::MethodCall { object, args, .. } => {
-            expr_references_name(object, name) || args.iter().any(|a| expr_references_name(a, name))
-        }
-        ExprKind::Call { callee, args, .. } | ExprKind::ClosureCall { callee, args } => {
-            expr_references_name(callee, name) || args.iter().any(|a| expr_references_name(a, name))
-        }
-        ExprKind::Index { object, index } => {
-            expr_references_name(object, name) || expr_references_name(index, name)
-        }
-        ExprKind::Assign { target, value } | ExprKind::CompoundAssign { target, value, .. } => {
-            expr_references_name(target, name) || expr_references_name(value, name)
-        }
-        ExprKind::If(IfExpr {
-            condition,
-            then_body,
-            elsif_clauses,
-            else_body,
-            ..
-        }) => {
-            expr_references_name(condition, name)
-                || block_references_name(then_body, name)
-                || elsif_clauses.iter().any(|el| {
-                    expr_references_name(&el.condition, name)
-                        || block_references_name(&el.body, name)
-                })
-                || else_body
-                    .as_ref()
-                    .is_some_and(|b| block_references_name(b, name))
-        }
-        ExprKind::Match(MatchExpr { subject, arms, .. }) => {
-            expr_references_name(subject, name)
-                || arms.iter().any(|a| {
-                    a.guard
-                        .as_ref()
-                        .is_some_and(|g| expr_references_name(g, name))
-                        || match &a.body {
-                            MatchArmBody::Expr(e) => expr_references_name(e, name),
-                            MatchArmBody::Block(b) => block_references_name(b, name),
-                        }
-                })
-        }
-        ExprKind::Block(b) => block_references_name(b, name),
-        ExprKind::Return(Some(inner)) | ExprKind::Break(Some(inner)) => {
-            expr_references_name(inner, name)
-        }
-        ExprKind::ArrayLiteral(items) | ExprKind::TupleLiteral(items) => {
-            items.iter().any(|e| expr_references_name(e, name))
-        }
-        ExprKind::ArrayFill { value, count } => {
-            expr_references_name(value, name) || expr_references_name(count, name)
-        }
-        ExprKind::MapLiteral(pairs) => pairs
-            .iter()
-            .any(|(k, v)| expr_references_name(k, name) || expr_references_name(v, name)),
-        ExprKind::Range { start, end, .. } => {
-            start
-                .as_ref()
-                .is_some_and(|s| expr_references_name(s, name))
-                || end.as_ref().is_some_and(|e| expr_references_name(e, name))
-        }
-        ExprKind::Cast { expr: inner, .. } => expr_references_name(inner, name),
-        ExprKind::Closure(c) => match &c.body {
-            ClosureBody::Expr(e) => expr_references_name(e, name),
-            ClosureBody::Block(b) => block_references_name(b, name),
-        },
-        _ => false,
-    }
+/// Immutable scan for any bare `Identifier(name)` read, via the shared
+/// exhaustive `walk_expr`, with an early-out `found` flag.
+///
+/// Drives crossing-local promotion (a pre-await `let <name>` becomes a
+/// state-machine field IFF `<name>` is read in the post-await tail). The
+/// old hand-rolled scan had the same `_ => false` gap as the rewriter:
+/// it missed `EnumVariant`, `Yield`, `SafeNav`/`SafeNavCall`, `IfLet`,
+/// `WhileLet`, `While`, `For`, `Loop`, `MacroCall` and `UnsafeBlock`. A
+/// tail that read the local only inside e.g. `Result.Ok(acc)` was reported
+/// as a non-reference, so the local was UNDER-promoted (not made a field)
+/// and did not survive the suspend. Routing through `Visit`/`walk_expr`
+/// closes the gap by construction.
+struct NameRefScanner<'a> {
+    name: &'a str,
+    found: bool,
 }
 
-fn block_references_name(block: &Block, name: &str) -> bool {
-    block.statements.iter().any(|s| match s {
-        Statement::Let(lb) => lb
-            .value
-            .as_ref()
-            .is_some_and(|v| expr_references_name(v, name)),
-        Statement::Expression(e) => expr_references_name(e, name),
-    })
+impl Visit for NameRefScanner<'_> {
+    fn visit_expr(&mut self, e: &Expr) {
+        if self.found {
+            return;
+        }
+        if let ExprKind::Identifier(n) = &e.kind {
+            if n == self.name {
+                self.found = true;
+                return;
+            }
+        }
+        walk_expr(self, e);
+    }
 }
 
 fn stmts_reference_name(stmts: &[Statement], name: &str) -> bool {
-    stmts.iter().any(|s| match s {
-        Statement::Let(lb) => lb
-            .value
-            .as_ref()
-            .is_some_and(|v| expr_references_name(v, name)),
-        Statement::Expression(e) => expr_references_name(e, name),
-    })
+    let mut s = NameRefScanner { name, found: false };
+    for stmt in stmts {
+        s.visit_stmt(stmt);
+        if s.found {
+            break;
+        }
+    }
+    s.found
 }
 
 /// Describe a single `let x = <awaitee>.await` await site.

@@ -393,6 +393,58 @@ end
     );
 }
 
+/// FIX 2 regression — crossing-local promotion when the only tail read is
+/// inside an `EnumVariant`.
+///
+/// `expr_references_name` (which drives crossing-local promotion via
+/// `stmts_reference_name`) used to have the same `_ => false` gap as the
+/// rewriter: it missed `EnumVariant` (and `Yield`, etc.). So a pre-await
+/// `let base = ...` whose ONLY post-await read is inside the tail
+/// `Result.Ok(base + v)` was not seen as crossing, was not promoted to a
+/// state-machine field, and so did not survive the suspend — yielding the
+/// wrong fold (or an undefined local) after the resume.
+///
+/// `base = 100` is computed before the await, `v = 5` comes from the
+/// awaited future, and the tail is `Result.Ok(base + v)`. With promotion,
+/// the result is 105.
+#[test]
+fn linear_enum_variant_tail_promotes_crossing_local() {
+    let source = "\
+async def make_five() -> Int
+  5
+end
+
+async def with_base -> Result[Int, Int]
+  let base: Int = 100
+  let v = make_five().await
+  Result.Ok(base + v)
+end
+
+def main
+  let res = block_on(with_base())
+  match res
+    Ok(v)  -> puts \"#{v}\"
+    Err(e) -> puts \"err #{e}\"
+  end
+end
+";
+    let (stdout, stderr, ok) = compile_and_run(source, "async_io_linear_enum_variant_promote");
+    assert!(
+        ok,
+        "binary exited non-zero. stdout=[{}] stderr=[{}]",
+        stdout, stderr
+    );
+    assert_eq!(
+        stdout.trim(),
+        "105",
+        "pre-await `base` read only inside the `Result.Ok(base + v)` tail must \
+         be promoted to a crossing-local field; fold is 100 + 5 = 105. \
+         got stdout=[{}] stderr=[{}]",
+        stdout,
+        stderr
+    );
+}
+
 // ─── Phase 3B — LOOP state-machine runtime equivalence gates ─────────
 //
 // EQUIVALENCE GATES for the async-lowering CFG unification of the LOOP
