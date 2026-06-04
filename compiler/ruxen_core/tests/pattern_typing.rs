@@ -60,7 +60,7 @@ fn compile_and_run(source: &str, basename: &str) -> (String, bool) {
     let root = workspace_root();
     let tmp_dir = root.join("tmp");
     let _ = std::fs::create_dir_all(&tmp_dir);
-    let bin_path = tmp_dir.join(format!("{}.bin", basename));
+    let bin_path = tmp_dir.join(format!("{}-{}-{}.bin", basename, std::process::id(), ruxen_unique_id()));
 
     let mut lexer = Lexer::new(source);
     let tokens = lexer.tokenize().expect("lex");
@@ -81,6 +81,7 @@ fn compile_and_run(source: &str, basename: &str) -> (String, bool) {
     codegen::compile(&mir, bin_path.to_str().unwrap()).expect("codegen");
 
     let output = Command::new(&bin_path).output().expect("run binary");
+    let _ = std::fs::remove_file(&bin_path);
     (
         String::from_utf8_lossy(&output.stdout).to_string(),
         output.status.success(),
@@ -127,4 +128,10 @@ fn string_eq_after_result_ok_destructure_uses_strcmp() {
          stdout: {:?}",
         stdout
     );
+}
+
+fn ruxen_unique_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
 }

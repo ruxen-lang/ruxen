@@ -33,7 +33,7 @@ fn compile_and_run(source: &str, basename: &str) -> (String, String, bool) {
     let root = workspace_root();
     let tmp_dir = root.join("tmp");
     let _ = std::fs::create_dir_all(&tmp_dir);
-    let bin_path = tmp_dir.join(format!("{}.bin", basename));
+    let bin_path = tmp_dir.join(format!("{}-{}-{}.bin", basename, std::process::id(), ruxen_unique_id()));
 
     let mut lexer = Lexer::new(source);
     let tokens = lexer.tokenize().expect("lex");
@@ -54,6 +54,7 @@ fn compile_and_run(source: &str, basename: &str) -> (String, String, bool) {
     codegen::compile(&mir, bin_path.to_str().unwrap()).expect("codegen");
 
     let output = Command::new(&bin_path).output().expect("run binary");
+    let _ = std::fs::remove_file(&bin_path);
     (
         String::from_utf8_lossy(&output.stdout).to_string(),
         String::from_utf8_lossy(&output.stderr).to_string(),
@@ -73,7 +74,7 @@ fn compile_and_run_with_stdin(
     let root = workspace_root();
     let tmp_dir = root.join("tmp");
     let _ = std::fs::create_dir_all(&tmp_dir);
-    let bin_path = tmp_dir.join(format!("{}.bin", basename));
+    let bin_path = tmp_dir.join(format!("{}-{}-{}.bin", basename, std::process::id(), ruxen_unique_id()));
 
     let mut lexer = Lexer::new(source);
     let tokens = lexer.tokenize().expect("lex");
@@ -106,6 +107,7 @@ fn compile_and_run_with_stdin(
     }
 
     let output = child.wait_with_output().expect("wait child");
+    let _ = std::fs::remove_file(&bin_path);
     (
         String::from_utf8_lossy(&output.stdout).to_string(),
         String::from_utf8_lossy(&output.stderr).to_string(),
@@ -332,4 +334,10 @@ fn io_error_exhaustive_20_variant_match_compiles_and_runs() {
     let (stdout, _stderr, ok) = compile_and_run(&source, "stdlib_io_err_exhaustive");
     assert!(ok, "binary failed; stdout=[{stdout}]");
     assert_eq!(stdout, "nf\not\ncr\nom\n", "got: {:?}", stdout);
+}
+
+fn ruxen_unique_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
 }

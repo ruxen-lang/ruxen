@@ -164,11 +164,12 @@ fn instance_lib_method_end_to_end_link_smoke() {
         .lower_program(&result.program)
         .expect("MIR lowering");
 
-    let bin_path = workspace_root().join("tmp/lib_instance_method_link_smoke.bin");
+    let bin_path = workspace_root().join(format!("tmp/lib_instance_method_link_smoke-{}-{}.bin", std::process::id(), ruxen_unique_id()));
     let _ = std::fs::create_dir_all(bin_path.parent().unwrap());
     codegen::compile(&mir, bin_path.to_str().unwrap()).expect("codegen");
 
     let output = Command::new(&bin_path).output().expect("run binary");
+    let _ = std::fs::remove_file(&bin_path);
     assert!(
         output.status.success(),
         "binary should exit 0 (c.tick(41) == 42); got status {:?} stderr={}",
@@ -193,15 +194,22 @@ fn class_lib_method_end_to_end_link_smoke() {
         .lower_program(&result.program)
         .expect("MIR lowering");
 
-    let bin_path = workspace_root().join("tmp/lib_class_method_link_smoke.bin");
+    let bin_path = workspace_root().join(format!("tmp/lib_class_method_link_smoke-{}-{}.bin", std::process::id(), ruxen_unique_id()));
     let _ = std::fs::create_dir_all(bin_path.parent().unwrap());
     codegen::compile(&mir, bin_path.to_str().unwrap()).expect("codegen");
 
     let output = Command::new(&bin_path).output().expect("run binary");
+    let _ = std::fs::remove_file(&bin_path);
     assert!(
         output.status.success(),
         "binary should exit 0 (Foo.bar(41) == 42); got status {:?} stderr={}",
         output.status,
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn ruxen_unique_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
 }

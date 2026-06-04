@@ -59,7 +59,7 @@ fn compile_and_run(rx_path: PathBuf, out_basename: &str) -> (String, String, Opt
     );
 
     let out_dir = std::env::temp_dir();
-    let out_path = out_dir.join(out_basename);
+    let out_path = out_dir.join(format!("{}-{}-{}", out_basename, std::process::id(), ruxen_unique_id()));
     let out_str = out_path.to_string_lossy().to_string();
     codegen::compile(&mir, &out_str).expect("codegen failed");
 
@@ -142,4 +142,10 @@ fn struct_with_nested_derive_debug_enum_field_renders_via_enum_helper() {
         output.status.code(),
         stderr
     );
+}
+
+fn ruxen_unique_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
 }

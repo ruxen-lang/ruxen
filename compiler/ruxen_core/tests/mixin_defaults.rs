@@ -64,13 +64,14 @@ fn mixin_default_body_with_string_interp_typechecks_and_runs() {
         .lower_program(&type_result.program)
         .expect("MIR lowering");
 
-    let bin_path = workspace_root().join("tmp/mixin_default_method_body_with_string_interp.bin");
+    let bin_path = workspace_root().join(format!("tmp/mixin_default_method_body_with_string_interp-{}-{}.bin", std::process::id(), ruxen_unique_id()));
     let _ = std::fs::create_dir_all(bin_path.parent().unwrap());
     codegen::compile(&mir, bin_path.to_str().unwrap()).expect("codegen");
 
     let output = Command::new(&bin_path)
         .output()
         .expect("run compiled binary");
+    let _ = std::fs::remove_file(&bin_path);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         output.status.success(),
@@ -84,4 +85,10 @@ fn mixin_default_body_with_string_interp_typechecks_and_runs() {
         "Hello, Riv!\n",
         "default mixin body should interpolate Bot.name via self.name"
     );
+}
+
+fn ruxen_unique_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
 }

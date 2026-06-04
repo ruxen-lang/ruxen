@@ -19,7 +19,7 @@ fn compile_and_run(name: &str) -> (bool, String, Option<i32>) {
     let root = workspace_root();
     let src_path = root.join(format!("tests/release-e2e/cases/{}.rx", name));
     let expected_path = root.join(format!("tests/release-e2e/expected/{}.out", name));
-    let bin_path = root.join(format!("tmp/{}.bin", name));
+    let bin_path = root.join(format!("tmp/{}-{}-{}.bin", name, std::process::id(), ruxen_unique_id()));
     let _ = std::fs::create_dir_all(root.join("tmp"));
 
     let source = std::fs::read_to_string(&src_path)
@@ -54,6 +54,7 @@ fn compile_and_run(name: &str) -> (bool, String, Option<i32>) {
         Ok(o) => o,
         Err(e) => return (false, format!("run: {}", e), None),
     };
+    let _ = std::fs::remove_file(&bin_path);
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let exit = output.status.code();
     let pass = output.status.success() && stdout == expected;
@@ -126,4 +127,10 @@ fn e2e_98_unwrap_or() {
 #[test]
 fn e2e_99_map_option() {
     check("99_map_option");
+}
+
+fn ruxen_unique_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
 }

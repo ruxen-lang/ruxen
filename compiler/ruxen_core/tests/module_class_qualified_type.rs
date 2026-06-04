@@ -63,17 +63,24 @@ fn class_inside_module_resolves_via_qualified_path() {
         .lower_program(&type_result.program)
         .expect("MIR lowering");
 
-    let bin_path = workspace_root().join("tmp/module_class_qualified_type.bin");
+    let bin_path = workspace_root().join(format!("tmp/module_class_qualified_type-{}-{}.bin", std::process::id(), ruxen_unique_id()));
     let _ = std::fs::create_dir_all(bin_path.parent().unwrap());
     codegen::compile(&mir, bin_path.to_str().unwrap()).expect("codegen");
 
     let output = Command::new(&bin_path)
         .output()
         .expect("run module-class qualified-type binary");
+    let _ = std::fs::remove_file(&bin_path);
     assert!(
         output.status.success(),
         "binary should exit 0 (Outer.Inner.make(41) == 42); status={:?} stderr={}",
         output.status,
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn ruxen_unique_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
 }

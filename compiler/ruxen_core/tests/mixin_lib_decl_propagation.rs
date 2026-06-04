@@ -72,17 +72,24 @@ fn mixin_lib_decl_propagates_through_include() {
         .lower_program(&type_result.program)
         .expect("MIR lowering");
 
-    let bin_path = workspace_root().join("tmp/mixin_lib_decl_propagates.bin");
+    let bin_path = workspace_root().join(format!("tmp/mixin_lib_decl_propagates-{}-{}.bin", std::process::id(), ruxen_unique_id()));
     let _ = std::fs::create_dir_all(bin_path.parent().unwrap());
     codegen::compile(&mir, bin_path.to_str().unwrap()).expect("codegen");
 
     let output = Command::new(&bin_path)
         .output()
         .expect("run mixin-lib-decl propagation binary");
+    let _ = std::fs::remove_file(&bin_path);
     assert!(
         output.status.success(),
         "binary should exit 0 (Thing.add_one(41) == 42); status={:?} stderr={}",
         output.status,
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn ruxen_unique_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
 }

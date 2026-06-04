@@ -54,17 +54,24 @@ fn three_level_nested_module_dispatches_to_aliased_c_symbol() {
         .lower_program(&type_result.program)
         .expect("MIR lowering");
 
-    let bin_path = workspace_root().join("tmp/nested_module_class_dispatches.bin");
+    let bin_path = workspace_root().join(format!("tmp/nested_module_class_dispatches-{}-{}.bin", std::process::id(), ruxen_unique_id()));
     let _ = std::fs::create_dir_all(bin_path.parent().unwrap());
     codegen::compile(&mir, bin_path.to_str().unwrap()).expect("codegen");
 
     let output = Command::new(&bin_path)
         .output()
         .expect("run nested-module class dispatch binary");
+    let _ = std::fs::remove_file(&bin_path);
     assert!(
         output.status.success(),
         "binary should exit 0 (A.B.C.f(21) == 42 via ruxen_test_extern_double); status={:?} stderr={}",
         output.status,
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn ruxen_unique_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
 }

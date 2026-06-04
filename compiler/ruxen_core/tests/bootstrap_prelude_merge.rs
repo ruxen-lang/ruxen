@@ -238,13 +238,14 @@ fn bootstrap_smoke_e2e_via_runtime_file() {
         .lower_program(&type_result.program)
         .expect("MIR lowering");
 
-    let bin_path = workspace_root().join("tmp/bootstrap_smoke_e2e.bin");
+    let bin_path = workspace_root().join(format!("tmp/bootstrap_smoke_e2e-{}-{}.bin", std::process::id(), ruxen_unique_id()));
     let _ = std::fs::create_dir_all(bin_path.parent().unwrap());
     codegen::compile(&mir, bin_path.to_str().unwrap()).expect("codegen");
 
     let output = Command::new(&bin_path)
         .output()
         .expect("run bootstrap-smoke binary");
+    let _ = std::fs::remove_file(&bin_path);
     assert!(
         output.status.success(),
         "binary should exit 0 (bootstrap_smoke_add_one(41) == 42); status={:?} stderr={}",
@@ -290,13 +291,14 @@ fn bootstrap_class_method_e2e_via_runtime_file() {
         .lower_program(&type_result.program)
         .expect("MIR lowering");
 
-    let bin_path = workspace_root().join("tmp/bootstrap_class_method_e2e.bin");
+    let bin_path = workspace_root().join(format!("tmp/bootstrap_class_method_e2e-{}-{}.bin", std::process::id(), ruxen_unique_id()));
     let _ = std::fs::create_dir_all(bin_path.parent().unwrap());
     codegen::compile(&mir, bin_path.to_str().unwrap()).expect("codegen");
 
     let output = Command::new(&bin_path)
         .output()
         .expect("run bootstrap-class-method binary");
+    let _ = std::fs::remove_file(&bin_path);
     assert!(
         output.status.success(),
         "binary should exit 0 (BootstrapSmokeClass.add_one(41) == 42 AND \
@@ -395,4 +397,10 @@ fn bootstrap_program_with_mixin_registers_trait_in_prelude() {
         "expected DefKind::Trait for bootstrap-loaded mixin; got {:?}",
         mixin.kind
     );
+}
+
+fn ruxen_unique_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
 }

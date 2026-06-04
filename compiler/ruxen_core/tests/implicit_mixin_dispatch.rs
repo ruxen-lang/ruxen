@@ -19,7 +19,7 @@ fn workspace_root() -> std::path::PathBuf {
 
 fn compile_and_run(source: &str, name: &str) -> (String, Option<i32>) {
     let root = workspace_root();
-    let bin_path = root.join(format!("tmp/{}.bin", name));
+    let bin_path = root.join(format!("tmp/{}-{}-{}.bin", name, std::process::id(), ruxen_unique_id()));
     let _ = std::fs::create_dir_all(root.join("tmp"));
 
     let mut lexer = Lexer::new(source);
@@ -41,6 +41,7 @@ fn compile_and_run(source: &str, name: &str) -> (String, Option<i32>) {
     codegen::compile(&mir, bin_path.to_str().unwrap()).expect("codegen failed");
 
     let output = Command::new(&bin_path).output().expect("run binary");
+    let _ = std::fs::remove_file(&bin_path);
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     (stdout, output.status.code())
 }
@@ -88,4 +89,10 @@ fn derive_default_emits_concrete_static_method() {
     let (stdout, exit) = compile_and_run(&source, "derive_default_concrete");
     assert_eq!(exit, Some(0), "non-zero exit; stdout={}", stdout);
     assert_eq!(stdout, "0\n");
+}
+
+fn ruxen_unique_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
 }

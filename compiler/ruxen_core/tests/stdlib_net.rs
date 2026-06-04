@@ -38,7 +38,7 @@ fn compile(source: &str, basename: &str) -> std::path::PathBuf {
     let root = workspace_root();
     let tmp_dir = root.join("tmp");
     let _ = std::fs::create_dir_all(&tmp_dir);
-    let bin_path = tmp_dir.join(format!("{}.bin", basename));
+    let bin_path = tmp_dir.join(format!("{}-{}-{}.bin", basename, std::process::id(), ruxen_unique_id()));
 
     let mut lexer = Lexer::new(source);
     let tokens = lexer.tokenize().expect("lex");
@@ -95,6 +95,7 @@ fn tcp_listener_class_bind_ok() {
     let source = rx("tcp_listener_class_bind_ok");
     let bin_path = compile(&source, "stdlib_net_class_bind_ok");
     let output = Command::new(&bin_path).output().expect("run binary");
+    let _ = std::fs::remove_file(&bin_path);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "binary exited non-zero");
     assert!(
@@ -110,6 +111,7 @@ fn tcp_listener_class_bind_malformed_returns_err() {
     let source = rx("tcp_listener_class_bind_malformed_returns_err");
     let bin_path = compile(&source, "stdlib_net_class_bind_malformed");
     let output = Command::new(&bin_path).output().expect("run binary");
+    let _ = std::fs::remove_file(&bin_path);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "binary exited non-zero");
     assert!(
@@ -129,6 +131,7 @@ fn tcp_listener_class_close_idempotent() {
     let source = rx("tcp_listener_class_close_idempotent");
     let bin_path = compile(&source, "stdlib_net_class_close_idempotent");
     let output = Command::new(&bin_path).output().expect("run binary");
+    let _ = std::fs::remove_file(&bin_path);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "binary exited non-zero");
     assert!(
@@ -155,6 +158,7 @@ fn tcp_listener_class_drop_closes_fd() {
     let source = rx("tcp_listener_class_drop_closes_fd");
     let bin_path = compile(&source, "stdlib_net_class_drop_closes_fd");
     let output = Command::new(&bin_path).output().expect("run binary");
+    let _ = std::fs::remove_file(&bin_path);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "binary exited non-zero");
     assert!(
@@ -175,6 +179,7 @@ fn tcp_listener_class_local_addr() {
     let source = rx("tcp_listener_class_local_addr");
     let bin_path = compile(&source, "stdlib_net_class_local_addr");
     let output = Command::new(&bin_path).output().expect("run binary");
+    let _ = std::fs::remove_file(&bin_path);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "binary exited non-zero");
     assert!(
@@ -194,6 +199,7 @@ fn tcp_listener_class_set_nonblocking_would_block() {
     let source = rx("tcp_listener_class_set_nonblocking_would_block");
     let bin_path = compile(&source, "stdlib_net_class_set_nonblocking");
     let output = Command::new(&bin_path).output().expect("run binary");
+    let _ = std::fs::remove_file(&bin_path);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "binary exited non-zero");
     assert!(
@@ -212,6 +218,7 @@ fn tcp_stream_class_connect_unreachable_returns_err() {
     let source = rx("tcp_stream_class_connect_unreachable_returns_err");
     let bin_path = compile(&source, "stdlib_net_class_connect_unreachable");
     let output = Command::new(&bin_path).output().expect("run binary");
+    let _ = std::fs::remove_file(&bin_path);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "binary exited non-zero");
     assert!(
@@ -400,6 +407,7 @@ fn tcp_stream_class_close_idempotent() {
     let source = rx("tcp_stream_class_close_idempotent");
     let bin_path = compile(&source, "stdlib_net_class_stream_close_idempotent");
     let output = Command::new(&bin_path).output().expect("run binary");
+    let _ = std::fs::remove_file(&bin_path);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -824,4 +832,10 @@ fn blocking_tcp_echo_server_with_graceful_sigint_shutdown() {
         "expected server stdout to end with 'bye'; got [{}]",
         stdout
     );
+}
+
+fn ruxen_unique_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
 }

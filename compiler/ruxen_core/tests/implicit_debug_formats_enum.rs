@@ -67,7 +67,7 @@ fn compile_and_run(rx_path: PathBuf, out_basename: &str, expect_fn: &str) -> Run
     let has_synthesized_fn = mir.functions.iter().any(|f| f.name == expect_fn);
 
     let out_dir = std::env::temp_dir();
-    let out_path = out_dir.join(out_basename);
+    let out_path = out_dir.join(format!("{}-{}-{}", out_basename, std::process::id(), ruxen_unique_id()));
     let out_str = out_path.to_string_lossy().to_string();
     codegen::compile(&mir, &out_str).expect("codegen failed");
 
@@ -151,4 +151,10 @@ fn enum_with_derive_debug_named_field_variant_prints_braces() {
         run.code,
         run.stderr
     );
+}
+
+fn ruxen_unique_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
 }

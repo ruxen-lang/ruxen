@@ -413,8 +413,9 @@ fn compile_and_run_with_tracking(name: &str, source: &str) -> (String, String, O
     let root = workspace_root();
     let tmp_dir = root.join("tmp");
     let _ = std::fs::create_dir_all(&tmp_dir);
-    let bin_path = tmp_dir.join(format!("{}.bin", name));
-    let runtime_path = tmp_dir.join(format!("{}_runtime.c", name));
+    let uniq = format!("{}-{}-{}", name, std::process::id(), ruxen_unique_id());
+    let bin_path = tmp_dir.join(format!("{}.bin", uniq));
+    let runtime_path = tmp_dir.join(format!("{}_runtime.c", uniq));
 
     write_tracking_runtime(&runtime_path);
 
@@ -452,6 +453,8 @@ fn compile_and_run_with_tracking(name: &str, source: &str) -> (String, String, O
     compile_result.expect("codegen failed");
 
     let output = Command::new(&bin_path).output().expect("run binary");
+    let _ = std::fs::remove_file(&bin_path);
+    let _ = std::fs::remove_file(&runtime_path);
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     (stdout, stderr, output.status.code())
@@ -999,4 +1002,10 @@ fn p04_hashset_string_releases_every_element() {
         "expected the set spine to be freed: {:#?}",
         report
     );
+}
+
+fn ruxen_unique_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
 }
