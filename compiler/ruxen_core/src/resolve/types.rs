@@ -14,6 +14,22 @@ use super::scope::{ScopeId, ScopeKind, ScopeStack};
 use super::symbols::*;
 use super::{ClosureCaptureContext, ResolveResult, Resolver};
 
+/// The built-in collection type names. These are NOT registered as classes
+/// in the type scope by `register_builtins`; their type resolution is the
+/// three hardcoded arms in [`Resolver::resolve_type_expr`] below
+/// (`"Array" | "Vec"` → `Ty::Array`, `"Map" | "HashMap"` → `Ty::Map`,
+/// `"Set" | "HashSet"` → `Ty::Set`, the last two with E0615 hash-key
+/// validation). The const is the single source of truth shared with
+/// `ffi_registration.rs`'s anchor-only-builtin check, so the membership
+/// test there and the arms here cannot drift apart.
+///
+/// Invariant: this list must contain EXACTLY the names handled by the three
+/// `resolve_type_expr` collection arms. It de-dups the ffi `matches!`; it
+/// does NOT (and cannot) collapse those three arms, which each produce a
+/// different `Ty` and carry distinct validation.
+pub(crate) const COLLECTION_BUILTINS: &[&str] =
+    &["Array", "Vec", "Map", "HashMap", "Set", "HashSet"];
+
 impl Resolver {
     pub fn resolve_type_expr(&mut self, type_expr: &ast::TypeExpr) -> Ty {
         match type_expr {
