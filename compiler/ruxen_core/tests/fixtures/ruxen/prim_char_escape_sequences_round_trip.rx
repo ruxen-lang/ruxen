@@ -1,8 +1,8 @@
 def main
-  let nl: Char    = '\n'
-  let tab: Char   = '\t'
-  let bs: Char    = '\\'
-  let sq: Char    = '\''
+  let nl: Char    = ?\n
+  let tab: Char   = ?\t
+  let bs: Char    = ?\\
+  let sq: Char    = ?\'
 
   puts "[#{nl}]"     # leading newline → multi-line output
   puts "[#{tab}]"    # leading tab
