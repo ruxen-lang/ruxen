@@ -115,60 +115,51 @@ pub fn lower_async_defs_with_bootstrap(program: &mut Program, bootstrap_programs
                 continue;
             }
             if block_contains_await(&func.body) {
-                // Multi-await loop body (2+ awaits per iteration).
-                // Tried FIRST because the single-await recognizer
-                // explicitly rejects N>=2; ordering only matters for
-                // the (degenerate) N==1 case where multi falls
-                // through. Spec: §multi-await extension in
-                // docs/specs/syntax/async_lowering_loop_await.spec.md.
-                if let Some(multi_shape) = recognize_while_multi_await(&func.body) {
-                    if let Some((rewritten, sm_class)) = lower_async_fn_while_multi_await(
-                        func,
-                        &multi_shape,
-                        &async_fn_returns,
-                        &class_static_returns,
-                        &class_instance_returns,
-                        &future_outputs,
-                    ) {
-                        *func = rewritten;
-                        new_classes.push(TopLevelItem::Class(sm_class));
-                        continue;
-                    }
-                }
-                // Single-await loop body (exactly 1 await). Spec:
-                // docs/specs/syntax/async_lowering_loop_await.spec.md.
-                // Falls through to the linear-await path if the body
-                // doesn't match the loop shape.
-                if let Some(while_shape) = recognize_while_single_await(&func.body) {
-                    if let Some((rewritten, sm_class)) = lower_async_fn_while_single_await(
-                        func,
-                        &while_shape,
-                        &async_fn_returns,
-                        &class_static_returns,
-                        &class_instance_returns,
-                        &future_outputs,
-                    ) {
-                        *func = rewritten;
-                        new_classes.push(TopLevelItem::Class(sm_class));
-                        continue;
-                    }
-                }
-                // Phase 3 Path A: the non-loop `.await` shape (linear-N)
-                // lowers through the unified Cfg path. It returns `None`
-                // for loop-shaped or unsupported bodies; loop-shaped
-                // bodies were already handled by the recognizers above,
-                // and any remaining unsupported shape (e.g. `.await`
-                // nested in a non-let expr) is left in its pre-lowering
-                // state for the resolver/typeck to diagnose (E1110 /
-                // E1115). The old linear/no-await builders this subsumes
-                // were deleted in Phase 3 step 4.
-                if let Some((rewritten, sm_class)) = lower_async_fn_via_cfg(
+                // Phase 3B: the unified Cfg path handles ALL await
+                // shapes — linear-N AND the loop shapes (single- and
+                // multi-await), the latter via `lower_loop_via_cfg` on an
+                // `Edge::Loop`. Tried FIRST. Any shape outside the union
+                // `segment_cfg` accepts returns `None` and falls back to
+                // the old loop recognizers below (kept alive in parallel
+                // while the loop run-pins prove equivalence); a truly
+                // unsupported shape (e.g. `.await` nested in a non-let
+                // expr) stays in its pre-lowering state for the
+                // resolver/typeck to diagnose (E1110 / E1115).
+                let lowered = lower_async_fn_via_cfg(
                     func,
                     &async_fn_returns,
                     &class_static_returns,
                     &class_instance_returns,
                     &future_outputs,
-                ) {
+                )
+                .or_else(|| {
+                    // Fallback: old loop builders. Multi tried before
+                    // single (the single recognizer rejects N>=2).
+                    recognize_while_multi_await(&func.body)
+                        .and_then(|shape| {
+                            lower_async_fn_while_multi_await(
+                                func,
+                                &shape,
+                                &async_fn_returns,
+                                &class_static_returns,
+                                &class_instance_returns,
+                                &future_outputs,
+                            )
+                        })
+                        .or_else(|| {
+                            recognize_while_single_await(&func.body).and_then(|shape| {
+                                lower_async_fn_while_single_await(
+                                    func,
+                                    &shape,
+                                    &async_fn_returns,
+                                    &class_static_returns,
+                                    &class_instance_returns,
+                                    &future_outputs,
+                                )
+                            })
+                        })
+                });
+                if let Some((rewritten, sm_class)) = lowered {
                     *func = rewritten;
                     new_classes.push(TopLevelItem::Class(sm_class));
                 }
@@ -399,14 +390,22 @@ fn lower_async_fn_via_cfg(
 
     let cfg = cfg::segment_cfg(&func.body)?;
 
-    // Loop-shaped bodies are OUT of scope for Path A — bail so the
-    // caller's loop recognizers + builders handle them unchanged.
+    // Loop-shaped bodies (an `Edge::Loop` back-edge) lower through the
+    // unified loop machine (Phase 3B), subsuming the old while-single /
+    // while-multi builders.
     if cfg
         .edges
         .iter()
         .any(|e| matches!(e, cfg::Edge::Loop { .. }))
     {
-        return None;
+        return lower_loop_via_cfg(
+            func,
+            &cfg,
+            async_fn_returns,
+            class_static_returns,
+            class_instance_returns,
+            future_outputs,
+        );
     }
 
     // The terminal segment (suspend: None) produces the return value via
@@ -847,6 +846,938 @@ fn build_poll_body_cfg(
 
     // Linear-N: the `self.__state` if/elsif dispatch over N suspends.
     build_linear_state_dispatch(subs, tail_stmts, outer_field_names, span)
+}
+
+/// Phase 3B — unified lowering for the LOOP async-fn shapes (one
+/// top-level awaiting `while`, with N>=1 `.await`s per iteration),
+/// driven by the [`cfg::Cfg`]'s `Edge::Loop` back-edge. Subsumes
+/// `lower_async_fn_while_single_await` + `lower_async_fn_while_multi_await`
+/// (and their two poll-body builders) behind the same
+/// `__phase`/`keep_iterating`/`pending_exit` machine, generalized to
+/// N>=1: the single-await case is just N==1.
+///
+/// Returns `None` for any loop body outside the union the old
+/// recognizers accepted — same rejections, ported through `segment_cfg`
+/// (await in cond, non-ident await-let, etc.) plus the loop-specific
+/// "every pre-loop `let` needs a type annotation" rule (the accumulator
+/// becomes a field that survives across iterations / the next poll).
+fn lower_loop_via_cfg(
+    func: &FuncDef,
+    cfg: &cfg::Cfg,
+    async_fn_returns: &HashMap<String, (String, TypeExpr)>,
+    class_static_returns: &HashMap<(String, String), TypeExpr>,
+    class_instance_returns: &HashMap<(String, String), TypeExpr>,
+    future_outputs: &HashMap<String, TypeExpr>,
+) -> Option<(FuncDef, ClassDef)> {
+    let span = func.span.clone();
+    let class_name = mangle_future_class_name(&func.name);
+    let return_type = func.return_type.clone()?;
+
+    // The single awaiting `while`'s back-edge carries the loop condition
+    // and identifies the loop head. `segment_cfg` emits exactly one
+    // `Edge::Loop` for a loop-shaped body; the caller only routes here
+    // when one is present.
+    let loop_cond = cfg.edges.iter().find_map(|e| match e {
+        cfg::Edge::Loop { cond, .. } => Some(cond.clone()),
+        cfg::Edge::Next { .. } => None,
+    })?;
+
+    // ── Phase 1 — outer-field set + crossing-locals ────────────────
+    //
+    // EVERY pre-loop `let` is promoted to a class field (the loop almost
+    // certainly reads it across iterations — accumulator, counter). An
+    // untyped pre-loop local → bail (we need a typed field; the user can
+    // annotate). Ported verbatim from the old loop builders.
+    let outer_arg_names: Vec<String> = func.params.iter().map(|p| p.name.clone()).collect();
+    let mut crossing_locals: Vec<(String, TypeExpr)> = Vec::new();
+    for s in &cfg.pre_loop {
+        if let Statement::Let(lb) = s {
+            if let Pattern::Identifier { name, .. } = &lb.pattern {
+                let ty = lb.type_annotation.clone()?;
+                crossing_locals.push((name.clone(), ty));
+            }
+        }
+    }
+    let crossing_names: Vec<String> = crossing_locals.iter().map(|(n, _)| n.clone()).collect();
+    let mut outer_field_names: Vec<String> = outer_arg_names.clone();
+    outer_field_names.extend(crossing_names.iter().cloned());
+
+    // Receiver-type map for Shape-3 (instance-method awaitee) lookup.
+    let mut receiver_types: HashMap<String, String> = HashMap::new();
+    for p in &func.params {
+        if let Some(name) = single_named_class(&p.type_expr) {
+            receiver_types.insert(p.name.clone(), name);
+        }
+    }
+    for (name, ty) in &crossing_locals {
+        if let Some(cls) = single_named_class(ty) {
+            receiver_types.insert(name.clone(), cls);
+        }
+    }
+
+    // ── Phase 2 — describe each in-loop suspend's `.await` ─────────
+    //
+    // The in-loop suspends are the non-terminal segments in order; each
+    // segment's `stmts` are its per-iteration `body_pre_await`. Phase i's
+    // awaitee may reference earlier phases' bindings, so accumulate
+    // binding names incrementally (matches the multi-await builder).
+    let suspend_segments: Vec<&cfg::Segment> = cfg
+        .segments
+        .iter()
+        .filter(|s| s.suspend.is_some())
+        .collect();
+    let mut accumulated_fields: Vec<String> = outer_field_names.clone();
+    let mut subs: Vec<AwaitSub> = Vec::with_capacity(suspend_segments.len());
+    let mut phase_pre: Vec<Vec<Statement>> = Vec::with_capacity(suspend_segments.len());
+    for seg in &suspend_segments {
+        let suspend = seg.suspend.as_ref()?;
+        let sub = describe_awaitee(
+            &suspend.binding,
+            &suspend.awaitee,
+            async_fn_returns,
+            class_static_returns,
+            class_instance_returns,
+            future_outputs,
+            &accumulated_fields,
+            &receiver_types,
+        )?;
+        accumulated_fields.push(sub.binding_name.clone());
+        subs.push(sub);
+        phase_pre.push(seg.stmts.clone());
+    }
+    if subs.is_empty() {
+        return None;
+    }
+    let binding_names: Vec<String> = subs.iter().map(|s| s.binding_name.clone()).collect();
+
+    // The terminal segment (suspend: None) carries the post-last-await
+    // stmts (run on the final phase's Ready before the back-edge); its
+    // `stmts` are exactly those. `cfg.tail` is the post-loop tail.
+    let post_last_await_stmts: Vec<Statement> = cfg
+        .segments
+        .iter()
+        .find(|s| s.suspend.is_none())
+        .map(|s| s.stmts.clone())
+        .unwrap_or_default();
+
+    // ── Phase 3 — class fields ────────────────────────────────────
+    //
+    // Field order MUST match the old loop builders so the post-lowering
+    // MIR class layout / field-offset table is identical:
+    //   __state, params, crossing locals, __phase,
+    //   __sub_ready_i*, __sub_i*, bindings.
+    // (The single-await builder used `__sub_ready`/`__sub` with no
+    // `__phase`; the unified machine always uses the indexed `_i` names +
+    // `__phase`, since N==1 is just the degenerate multi-phase case. The
+    // 728d/728e runtime gates confirm this layout is equivalent.)
+    let mut fields: Vec<FieldDecl> = Vec::new();
+    fields.push(FieldDecl {
+        visibility: Visibility::Public,
+        name: "__state".to_string(),
+        type_expr: int_type(&span),
+        span: span.clone(),
+    });
+    for p in &func.params {
+        fields.push(FieldDecl {
+            visibility: Visibility::Public,
+            name: p.name.clone(),
+            type_expr: p.type_expr.clone(),
+            span: p.span.clone(),
+        });
+    }
+    for (name, ty) in &crossing_locals {
+        fields.push(FieldDecl {
+            visibility: Visibility::Public,
+            name: name.clone(),
+            type_expr: ty.clone(),
+            span: span.clone(),
+        });
+    }
+    fields.push(FieldDecl {
+        visibility: Visibility::Public,
+        name: "__phase".to_string(),
+        type_expr: int_type(&span),
+        span: span.clone(),
+    });
+    for i in 0..subs.len() {
+        fields.push(FieldDecl {
+            visibility: Visibility::Public,
+            name: format!("__sub_ready_{i}"),
+            type_expr: int_type(&span),
+            span: span.clone(),
+        });
+    }
+    for (i, sub) in subs.iter().enumerate() {
+        fields.push(FieldDecl {
+            visibility: Visibility::Public,
+            name: format!("__sub_{i}"),
+            type_expr: named_type(&sub.sub_class_name, &span),
+            span: span.clone(),
+        });
+    }
+    for sub in &subs {
+        fields.push(FieldDecl {
+            visibility: Visibility::Public,
+            name: sub.binding_name.clone(),
+            type_expr: sub.result_type.clone(),
+            span: span.clone(),
+        });
+    }
+
+    // ── Phase 4 — init ───────────────────────────────────────────
+    let mut init_params: Vec<Param> = Vec::new();
+    init_params.push(Param {
+        auto_assign: true,
+        name: "__state".to_string(),
+        type_expr: int_type(&span),
+        default: None,
+        span: span.clone(),
+    });
+    for p in &func.params {
+        init_params.push(Param {
+            auto_assign: true,
+            name: p.name.clone(),
+            type_expr: p.type_expr.clone(),
+            default: None,
+            span: p.span.clone(),
+        });
+    }
+
+    let mut init_body_stmts: Vec<Statement> = Vec::new();
+    // __phase = 0
+    init_body_stmts.push(Statement::Expression(Expr {
+        kind: ExprKind::Assign {
+            target: Box::new(self_field("__phase", &span)),
+            value: Box::new(Expr {
+                kind: ExprKind::IntLiteral(0, None),
+                span: span.clone(),
+            }),
+        },
+        span: span.clone(),
+    }));
+    // __sub_ready_i = 0 so the first iteration constructs each __sub_i.
+    for i in 0..subs.len() {
+        init_body_stmts.push(Statement::Expression(Expr {
+            kind: ExprKind::Assign {
+                target: Box::new(self_field(&format!("__sub_ready_{i}"), &span)),
+                value: Box::new(Expr {
+                    kind: ExprKind::IntLiteral(0, None),
+                    span: span.clone(),
+                }),
+            },
+            span: span.clone(),
+        }));
+    }
+    // Pre-loop stmts: crossing `let`s become direct `self.<name> = <init>`
+    // field assigns (avoids the local-vs-field name collision); other
+    // stmts run verbatim with arg-ref rewrites. Ported from the loop
+    // builders.
+    let crossing_set: std::collections::HashSet<String> = crossing_names.iter().cloned().collect();
+    for s in &cfg.pre_loop {
+        match s {
+            Statement::Let(lb) => {
+                if let Pattern::Identifier { name, .. } = &lb.pattern {
+                    if crossing_set.contains(name) {
+                        if let Some(init_val) = &lb.value {
+                            let mut rewritten_val = init_val.as_ref().clone();
+                            rewrite_arg_refs_in_expr(&mut rewritten_val, &outer_arg_names);
+                            init_body_stmts.push(Statement::Expression(Expr {
+                                kind: ExprKind::Assign {
+                                    target: Box::new(self_field(name, &span)),
+                                    value: Box::new(rewritten_val),
+                                },
+                                span: span.clone(),
+                            }));
+                            continue;
+                        }
+                    }
+                }
+                let mut rewritten = s.clone();
+                if let Statement::Let(lbm) = &mut rewritten {
+                    if let Some(v) = lbm.value.as_mut() {
+                        rewrite_arg_refs_in_expr(v, &outer_arg_names);
+                    }
+                }
+                init_body_stmts.push(rewritten);
+            }
+            Statement::Expression(e) => {
+                let mut rewritten_e = e.clone();
+                rewrite_arg_refs_in_expr(&mut rewritten_e, &outer_arg_names);
+                init_body_stmts.push(Statement::Expression(rewritten_e));
+            }
+        }
+    }
+    // Default-init each binding field (so typeck sees a value).
+    for sub in &subs {
+        if let Some(default) = default_value_for_type(&sub.result_type, &span) {
+            init_body_stmts.push(Statement::Expression(Expr {
+                kind: ExprKind::Assign {
+                    target: Box::new(self_field(&sub.binding_name, &span)),
+                    value: Box::new(default),
+                },
+                span: span.clone(),
+            }));
+        }
+    }
+
+    let init_method = FuncDef {
+        visibility: Visibility::Public,
+        is_async: false,
+        self_mode: None,
+        is_class_method: false,
+        name: "init".to_string(),
+        generic_params: None,
+        params: init_params,
+        return_type: None,
+        where_clause: None,
+        body: Block {
+            statements: init_body_stmts,
+            span: span.clone(),
+        },
+        doc_comments: Vec::new(),
+        span: span.clone(),
+    };
+
+    // ── Phase 5 — poll body (unified N>=1 loop machine) ───────────
+    let poll_body = build_loop_poll_body_cfg(
+        &subs,
+        &phase_pre,
+        &loop_cond,
+        &post_last_await_stmts,
+        &cfg.tail,
+        &outer_field_names,
+        &binding_names,
+        &return_type,
+        &span,
+    );
+    let cx_param = Param {
+        auto_assign: false,
+        name: "cx".to_string(),
+        type_expr: TypeExpr::Reference {
+            lifetime: None,
+            mutable: true,
+            inner: Box::new(named_type("Context", &span)),
+            span: span.clone(),
+        },
+        default: None,
+        span: span.clone(),
+    };
+    let poll_method = FuncDef {
+        visibility: Visibility::Public,
+        is_async: false,
+        self_mode: Some(SelfMode::Mutable),
+        is_class_method: false,
+        name: "poll".to_string(),
+        generic_params: None,
+        params: vec![cx_param],
+        return_type: Some(poll_return_type(&return_type, &span)),
+        where_clause: None,
+        body: poll_body,
+        doc_comments: Vec::new(),
+        span: span.clone(),
+    };
+
+    let include_future = InnerImpl {
+        is_unsafe: false,
+        negative_trait: false,
+        trait_name: TypePath {
+            segments: vec!["Future".to_string()],
+            generic_args: None,
+            span: span.clone(),
+            rooted: false,
+        },
+        items: Vec::new(),
+        span: span.clone(),
+    };
+
+    let sm_class = ClassDef {
+        name: class_name.clone(),
+        generic_params: None,
+        parent: None,
+        fields,
+        methods: vec![init_method, poll_method],
+        inner_impls: vec![include_future],
+        derive_traits: Vec::new(),
+        layout: Vec::new(),
+        lib_decls: Vec::new(),
+        doc_comments: vec![format!(
+            " Compiler-synthesised Future state machine for `{}` (loop shape, {} phase(s)). Spec: docs/specs/syntax/async_lowering_loop_await.spec.md (Phase 3B unified Cfg lowering).",
+            func.name,
+            subs.len(),
+        )],
+        where_clause: None,
+        span: span.clone(),
+    };
+
+    // ── Phase 6 — wrapper fn ─────────────────────────────────────
+    let mut ctor_args: Vec<Expr> = Vec::new();
+    ctor_args.push(Expr {
+        kind: ExprKind::IntLiteral(0, None),
+        span: span.clone(),
+    });
+    for p in &func.params {
+        ctor_args.push(Expr {
+            kind: ExprKind::Identifier(p.name.clone()),
+            span: p.span.clone(),
+        });
+    }
+    let ctor_call = Expr {
+        kind: ExprKind::MethodCall {
+            object: Box::new(Expr {
+                kind: ExprKind::Identifier(class_name.clone()),
+                span: span.clone(),
+            }),
+            method: "new".to_string(),
+            generic_args: Vec::new(),
+            args: ctor_args,
+            block: None,
+        },
+        span: span.clone(),
+    };
+    let wrapper = FuncDef {
+        visibility: func.visibility,
+        is_async: false,
+        self_mode: func.self_mode,
+        is_class_method: func.is_class_method,
+        name: func.name.clone(),
+        generic_params: func.generic_params.clone(),
+        params: func.params.clone(),
+        return_type: Some(named_type(&class_name, &span)),
+        where_clause: func.where_clause.clone(),
+        body: Block {
+            statements: vec![Statement::Expression(ctor_call)],
+            span: span.clone(),
+        },
+        doc_comments: func.doc_comments.clone(),
+        span: span.clone(),
+    };
+
+    Some((wrapper, sm_class))
+}
+
+/// Unified loop poll-body builder for N>=1 `.await`s per iteration,
+/// driven by the [`cfg::Cfg`]'s loop data. Generalizes the multi-phase
+/// machine to cover the single-await case (N==1) too:
+///
+///   * outer guard `if __state != 0 return Pending`,
+///   * `keep_iterating` / `pending_exit` control flags,
+///   * inner `while keep_iterating` whose body runs the `if cond`
+///     iteration step (else marks the loop terminated),
+///   * the iteration step is an `if __phase == 0 .. elsif __phase == i ..`
+///     chain so AT MOST ONE phase runs per inner-while pass (keeps `cx`
+///     from being moved into `.poll` in two independent branches),
+///   * each phase lazily re-inits its sub-future (`__sub_ready_i` guard),
+///     polls it, and on Ready advances `__phase` (or, on the last phase,
+///     runs post-last-await + resets `__phase = 0` for the next
+///     iteration),
+///   * post-loop: `if pending_exit then Pending else <post_loop>;
+///     Poll.Ready(<tail>)`.
+#[allow(clippy::too_many_arguments)]
+fn build_loop_poll_body_cfg(
+    subs: &[AwaitSub],
+    phase_pre: &[Vec<Statement>],
+    loop_cond: &Expr,
+    post_last_await_stmts: &[Statement],
+    post_loop_stmts: &[Statement],
+    outer_field_names: &[String],
+    binding_names: &[String],
+    return_ty: &TypeExpr,
+    span: &Span,
+) -> Block {
+    let mut all_field_names = outer_field_names.to_vec();
+    all_field_names.extend(binding_names.iter().cloned());
+
+    let mut cond = loop_cond.clone();
+    rewrite_arg_refs_in_expr(&mut cond, &all_field_names);
+
+    let rewrite_stmts = |stmts: &[Statement]| -> Vec<Statement> {
+        let mut block = Block {
+            statements: stmts.to_vec(),
+            span: span.clone(),
+        };
+        rewrite_arg_refs_in_block(&mut block, &all_field_names);
+        block.statements
+    };
+    let post_last_rewritten = rewrite_stmts(post_last_await_stmts);
+    let post_loop_rewritten = rewrite_stmts(post_loop_stmts);
+
+    let poll_pending = |span: &Span| Expr {
+        kind: ExprKind::EnumVariant {
+            type_path: vec!["Poll".to_string()],
+            variant: "Pending".to_string(),
+            args: Vec::new(),
+        },
+        span: span.clone(),
+    };
+
+    // Outer guard: if __state != 0 return Pending
+    let outer_guard = Expr {
+        kind: ExprKind::If(IfExpr {
+            condition: Box::new(Expr {
+                kind: ExprKind::BinaryOp {
+                    op: BinOp::NotEq,
+                    left: Box::new(self_field("__state", span)),
+                    right: Box::new(Expr {
+                        kind: ExprKind::IntLiteral(0, None),
+                        span: span.clone(),
+                    }),
+                },
+                span: span.clone(),
+            }),
+            then_body: Block {
+                statements: vec![Statement::Expression(Expr {
+                    kind: ExprKind::Return(Some(Box::new(poll_pending(span)))),
+                    span: span.clone(),
+                })],
+                span: span.clone(),
+            },
+            elsif_clauses: Vec::new(),
+            else_body: None,
+            span: span.clone(),
+        }),
+        span: span.clone(),
+    };
+
+    let keep_iter_decl = Statement::Let(LetBinding {
+        mutable: true,
+        pattern: Pattern::Identifier {
+            name: "keep_iterating".to_string(),
+            mutable: true,
+            span: span.clone(),
+        },
+        type_annotation: Some(named_type("Bool", span)),
+        value: Some(Box::new(Expr {
+            kind: ExprKind::BoolLiteral(true),
+            span: span.clone(),
+        })),
+        span: span.clone(),
+    });
+    let pending_exit_decl = Statement::Let(LetBinding {
+        mutable: true,
+        pattern: Pattern::Identifier {
+            name: "pending_exit".to_string(),
+            mutable: true,
+            span: span.clone(),
+        },
+        type_annotation: Some(named_type("Bool", span)),
+        value: Some(Box::new(Expr {
+            kind: ExprKind::BoolLiteral(false),
+            span: span.clone(),
+        })),
+        span: span.clone(),
+    });
+
+    // One phase body per suspend.
+    let mut phase_bodies: Vec<Block> = Vec::with_capacity(subs.len());
+    for (i, sub) in subs.iter().enumerate() {
+        let is_last = i + 1 == subs.len();
+
+        // sub-init: per-iteration body_pre_await (rewritten) + __sub_i =
+        // ctor + __sub_ready_i = 1, guarded by `__sub_ready_i == 0`.
+        let mut sub_init_inner: Vec<Statement> = rewrite_stmts(&phase_pre[i]);
+        sub_init_inner.push(Statement::Expression(Expr {
+            kind: ExprKind::Assign {
+                target: Box::new(self_field(&format!("__sub_{i}"), span)),
+                value: Box::new(sub.awaitee_ctor.clone()),
+            },
+            span: span.clone(),
+        }));
+        sub_init_inner.push(Statement::Expression(Expr {
+            kind: ExprKind::Assign {
+                target: Box::new(self_field(&format!("__sub_ready_{i}"), span)),
+                value: Box::new(Expr {
+                    kind: ExprKind::IntLiteral(1, None),
+                    span: span.clone(),
+                }),
+            },
+            span: span.clone(),
+        }));
+        let sub_init_if = Expr {
+            kind: ExprKind::If(IfExpr {
+                condition: Box::new(Expr {
+                    kind: ExprKind::BinaryOp {
+                        op: BinOp::Eq,
+                        left: Box::new(self_field(&format!("__sub_ready_{i}"), span)),
+                        right: Box::new(Expr {
+                            kind: ExprKind::IntLiteral(0, None),
+                            span: span.clone(),
+                        }),
+                    },
+                    span: span.clone(),
+                }),
+                then_body: Block {
+                    statements: sub_init_inner,
+                    span: span.clone(),
+                },
+                elsif_clauses: Vec::new(),
+                else_body: None,
+                span: span.clone(),
+            }),
+            span: span.clone(),
+        };
+
+        // let __pi = (&var self.__sub_i).poll(cx)
+        let poll_call = Expr {
+            kind: ExprKind::MethodCall {
+                object: Box::new(Expr {
+                    kind: ExprKind::BorrowMut(Box::new(self_field(&format!("__sub_{i}"), span))),
+                    span: span.clone(),
+                }),
+                method: "poll".to_string(),
+                generic_args: Vec::new(),
+                args: vec![Expr {
+                    kind: ExprKind::Identifier("cx".to_string()),
+                    span: span.clone(),
+                }],
+                block: None,
+            },
+            span: span.clone(),
+        };
+        let poll_let_name = format!("__p{i}");
+        let poll_let = Statement::Let(LetBinding {
+            mutable: false,
+            pattern: Pattern::Identifier {
+                name: poll_let_name.clone(),
+                mutable: false,
+                span: span.clone(),
+            },
+            type_annotation: None,
+            value: Some(Box::new(poll_call)),
+            span: span.clone(),
+        });
+
+        // Pending arm: pending_exit = true; keep_iterating = false.
+        let pending_arm_stmts = vec![
+            Statement::Let(LetBinding {
+                mutable: false,
+                pattern: Pattern::Identifier {
+                    name: format!("_stop{i}"),
+                    mutable: false,
+                    span: span.clone(),
+                },
+                type_annotation: None,
+                value: Some(Box::new(Expr {
+                    kind: ExprKind::IntLiteral(0, None),
+                    span: span.clone(),
+                })),
+                span: span.clone(),
+            }),
+            Statement::Expression(Expr {
+                kind: ExprKind::Assign {
+                    target: Box::new(Expr {
+                        kind: ExprKind::Identifier("pending_exit".to_string()),
+                        span: span.clone(),
+                    }),
+                    value: Box::new(Expr {
+                        kind: ExprKind::BoolLiteral(true),
+                        span: span.clone(),
+                    }),
+                },
+                span: span.clone(),
+            }),
+            Statement::Expression(Expr {
+                kind: ExprKind::Assign {
+                    target: Box::new(Expr {
+                        kind: ExprKind::Identifier("keep_iterating".to_string()),
+                        span: span.clone(),
+                    }),
+                    value: Box::new(Expr {
+                        kind: ExprKind::BoolLiteral(false),
+                        span: span.clone(),
+                    }),
+                },
+                span: span.clone(),
+            }),
+        ];
+
+        // Ready arm: self.<binding> = v; __sub_ready_i = 0; then either
+        // (last phase) post-last-await + __phase = 0, or (else) __phase = i+1.
+        let mut ready_arm_stmts: Vec<Statement> = Vec::new();
+        ready_arm_stmts.push(Statement::Let(LetBinding {
+            mutable: false,
+            pattern: Pattern::Identifier {
+                name: format!("_adv{i}"),
+                mutable: false,
+                span: span.clone(),
+            },
+            type_annotation: None,
+            value: Some(Box::new(Expr {
+                kind: ExprKind::IntLiteral(0, None),
+                span: span.clone(),
+            })),
+            span: span.clone(),
+        }));
+        ready_arm_stmts.push(Statement::Expression(Expr {
+            kind: ExprKind::Assign {
+                target: Box::new(self_field(&sub.binding_name, span)),
+                value: Box::new(Expr {
+                    kind: ExprKind::Identifier("v".to_string()),
+                    span: span.clone(),
+                }),
+            },
+            span: span.clone(),
+        }));
+        ready_arm_stmts.push(Statement::Expression(Expr {
+            kind: ExprKind::Assign {
+                target: Box::new(self_field(&format!("__sub_ready_{i}"), span)),
+                value: Box::new(Expr {
+                    kind: ExprKind::IntLiteral(0, None),
+                    span: span.clone(),
+                }),
+            },
+            span: span.clone(),
+        }));
+        if is_last {
+            ready_arm_stmts.extend(post_last_rewritten.iter().cloned());
+            ready_arm_stmts.push(Statement::Expression(Expr {
+                kind: ExprKind::Assign {
+                    target: Box::new(self_field("__phase", span)),
+                    value: Box::new(Expr {
+                        kind: ExprKind::IntLiteral(0, None),
+                        span: span.clone(),
+                    }),
+                },
+                span: span.clone(),
+            }));
+        } else {
+            ready_arm_stmts.push(Statement::Expression(Expr {
+                kind: ExprKind::Assign {
+                    target: Box::new(self_field("__phase", span)),
+                    value: Box::new(Expr {
+                        kind: ExprKind::IntLiteral((i + 1) as i64, None),
+                        span: span.clone(),
+                    }),
+                },
+                span: span.clone(),
+            }));
+        }
+
+        let match_expr = Expr {
+            kind: ExprKind::Match(MatchExpr {
+                subject: Box::new(Expr {
+                    kind: ExprKind::Identifier(poll_let_name.clone()),
+                    span: span.clone(),
+                }),
+                arms: vec![
+                    MatchArm {
+                        pattern: Pattern::Enum {
+                            path: vec!["Poll".to_string()],
+                            variant: "Pending".to_string(),
+                            fields: Vec::new(),
+                            span: span.clone(),
+                        },
+                        guard: None,
+                        body: MatchArmBody::Block(Block {
+                            statements: pending_arm_stmts,
+                            span: span.clone(),
+                        }),
+                        span: span.clone(),
+                    },
+                    MatchArm {
+                        pattern: Pattern::Enum {
+                            path: vec!["Poll".to_string()],
+                            variant: "Ready".to_string(),
+                            fields: vec![Pattern::Identifier {
+                                name: "v".to_string(),
+                                mutable: false,
+                                span: span.clone(),
+                            }],
+                            span: span.clone(),
+                        },
+                        guard: None,
+                        body: MatchArmBody::Block(Block {
+                            statements: ready_arm_stmts,
+                            span: span.clone(),
+                        }),
+                        span: span.clone(),
+                    },
+                ],
+                span: span.clone(),
+            }),
+            span: span.clone(),
+        };
+
+        phase_bodies.push(Block {
+            statements: vec![
+                Statement::Expression(sub_init_if),
+                poll_let,
+                Statement::Expression(match_expr),
+            ],
+            span: span.clone(),
+        });
+    }
+
+    // Phase chain: if __phase == 0 { .. } elsif __phase == i { .. } ...
+    let phase_eq_for = |i: usize, span: &Span| Expr {
+        kind: ExprKind::BinaryOp {
+            op: BinOp::Eq,
+            left: Box::new(self_field("__phase", span)),
+            right: Box::new(Expr {
+                kind: ExprKind::IntLiteral(i as i64, None),
+                span: span.clone(),
+            }),
+        },
+        span: span.clone(),
+    };
+    let mut elsif_clauses: Vec<ElsifClause> = Vec::new();
+    for (i, body) in phase_bodies.iter().enumerate().skip(1) {
+        elsif_clauses.push(ElsifClause {
+            condition: Box::new(phase_eq_for(i, span)),
+            body: body.clone(),
+            span: span.clone(),
+        });
+    }
+    let phase_chain = Expr {
+        kind: ExprKind::If(IfExpr {
+            condition: Box::new(phase_eq_for(0, span)),
+            then_body: phase_bodies[0].clone(),
+            elsif_clauses,
+            else_body: None,
+            span: span.clone(),
+        }),
+        span: span.clone(),
+    };
+
+    let cond_true = Block {
+        statements: vec![Statement::Expression(phase_chain)],
+        span: span.clone(),
+    };
+
+    // cond_false: __state = 1, keep_iterating = false.
+    let cond_false = Block {
+        statements: vec![
+            Statement::Let(LetBinding {
+                mutable: false,
+                pattern: Pattern::Identifier {
+                    name: "_term".to_string(),
+                    mutable: false,
+                    span: span.clone(),
+                },
+                type_annotation: None,
+                value: Some(Box::new(Expr {
+                    kind: ExprKind::IntLiteral(0, None),
+                    span: span.clone(),
+                })),
+                span: span.clone(),
+            }),
+            Statement::Expression(Expr {
+                kind: ExprKind::Assign {
+                    target: Box::new(self_field("__state", span)),
+                    value: Box::new(Expr {
+                        kind: ExprKind::IntLiteral(1, None),
+                        span: span.clone(),
+                    }),
+                },
+                span: span.clone(),
+            }),
+            Statement::Expression(Expr {
+                kind: ExprKind::Assign {
+                    target: Box::new(Expr {
+                        kind: ExprKind::Identifier("keep_iterating".to_string()),
+                        span: span.clone(),
+                    }),
+                    value: Box::new(Expr {
+                        kind: ExprKind::BoolLiteral(false),
+                        span: span.clone(),
+                    }),
+                },
+                span: span.clone(),
+            }),
+        ],
+        span: span.clone(),
+    };
+
+    let iter_if = Expr {
+        kind: ExprKind::If(IfExpr {
+            condition: Box::new(cond),
+            then_body: cond_true,
+            elsif_clauses: Vec::new(),
+            else_body: Some(cond_false),
+            span: span.clone(),
+        }),
+        span: span.clone(),
+    };
+
+    let while_loop = Expr {
+        kind: ExprKind::While(WhileExpr {
+            condition: Box::new(Expr {
+                kind: ExprKind::Identifier("keep_iterating".to_string()),
+                span: span.clone(),
+            }),
+            body: Block {
+                statements: vec![Statement::Expression(iter_if)],
+                span: span.clone(),
+            },
+            span: span.clone(),
+        }),
+        span: span.clone(),
+    };
+
+    // Post-loop: if pending_exit then Pending else <post_loop>; Poll.Ready(tail)
+    let (tail_post_stmts, tail_expr): (Vec<Statement>, Option<Expr>) = {
+        if post_loop_rewritten.is_empty() {
+            (Vec::new(), default_value_for_type(return_ty, span))
+        } else {
+            let mut s = post_loop_rewritten.clone();
+            let last = s.pop().unwrap();
+            match last {
+                Statement::Expression(e) => (s, Some(e)),
+                other => {
+                    s.push(other);
+                    (s, default_value_for_type(return_ty, span))
+                }
+            }
+        }
+    };
+    let tail_expr = tail_expr.unwrap_or(Expr {
+        kind: ExprKind::IntLiteral(0, None),
+        span: span.clone(),
+    });
+    let poll_ready_with_tail = Expr {
+        kind: ExprKind::EnumVariant {
+            type_path: vec!["Poll".to_string()],
+            variant: "Ready".to_string(),
+            args: vec![FieldArg {
+                name: None,
+                value: tail_expr,
+                span: span.clone(),
+            }],
+        },
+        span: span.clone(),
+    };
+    let mut ready_branch_stmts: Vec<Statement> = tail_post_stmts;
+    ready_branch_stmts.push(Statement::Expression(poll_ready_with_tail));
+
+    let exit_if = Expr {
+        kind: ExprKind::If(IfExpr {
+            condition: Box::new(Expr {
+                kind: ExprKind::Identifier("pending_exit".to_string()),
+                span: span.clone(),
+            }),
+            then_body: Block {
+                statements: vec![Statement::Expression(poll_pending(span))],
+                span: span.clone(),
+            },
+            elsif_clauses: Vec::new(),
+            else_body: Some(Block {
+                statements: ready_branch_stmts,
+                span: span.clone(),
+            }),
+            span: span.clone(),
+        }),
+        span: span.clone(),
+    };
+
+    Block {
+        statements: vec![
+            Statement::Expression(outer_guard),
+            keep_iter_decl,
+            pending_exit_decl,
+            Statement::Expression(while_loop),
+            Statement::Expression(exit_if),
+        ],
+        span: span.clone(),
+    }
 }
 
 /// Lower an async fn whose body matches [`WhileSingleAwaitShape`] —
