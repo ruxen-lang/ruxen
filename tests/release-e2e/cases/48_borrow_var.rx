@@ -1,5 +1,5 @@
 def append_bang(s: &var String)
-  s.push('!')
+  s.push(?\u{21})
 end
 
 def main

@@ -1,6 +1,6 @@
 def main
   var s = String.from("hi")
-  s.push('!')
+  s.push(?\u{21})
   puts "len=#{s.size}"
   puts s
 end
