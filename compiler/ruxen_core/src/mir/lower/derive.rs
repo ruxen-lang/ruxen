@@ -248,10 +248,16 @@ impl<'a> Lowerer<'a> {
     /// and returns early from a per-field `diff_block`, so it is a branching
     /// CFG rather than an accumulator fold. `default` does not load `self`
     /// fields at all (it constructs). Both keep their own skeletons.
+    ///
+    /// ENTRY-BLOCK-ONLY: this driver is single-block by design — it emits every
+    /// `GetField` and accumulator step into `mir_fn.entry_block`. eq / hash /
+    /// clone never branch, so they have nowhere else to write; cmp / default
+    /// opt out precisely because they need multiple blocks. A `block` parameter
+    /// used to be threaded here but every caller passed `entry` and the closures
+    /// captured `entry` directly, so it was inert and misleading — removed.
     fn fold_struct_fields(
         &self,
         mir_fn: &mut MirFunction,
-        block: BlockId,
         s: &HirStructDef,
         self_local: LocalId,
         other_local: Option<LocalId>,
@@ -259,17 +265,18 @@ impl<'a> Lowerer<'a> {
         mut per_field: impl FnMut(&mut MirFunction, usize, &Ty, LocalId, Option<LocalId>) -> LocalId,
         mut combine: impl FnMut(&mut MirFunction, LocalId, LocalId) -> LocalId,
     ) -> LocalId {
+        let entry = mir_fn.entry_block;
         let mut acc = init;
         for (idx, field) in s.fields.iter().enumerate() {
             let lhs = mir_fn.new_temp(field.ty.clone());
-            mir_fn.blocks[block].instructions.push(MirInst::GetField {
+            mir_fn.blocks[entry].instructions.push(MirInst::GetField {
                 dest: lhs,
                 base: self_local,
                 field_index: idx,
             });
             let rhs = other_local.map(|ol| {
                 let r = mir_fn.new_temp(field.ty.clone());
-                mir_fn.blocks[block].instructions.push(MirInst::GetField {
+                mir_fn.blocks[entry].instructions.push(MirInst::GetField {
                     dest: r,
                     base: ol,
                     field_index: idx,
@@ -304,7 +311,6 @@ impl<'a> Lowerer<'a> {
 
         let acc = self.fold_struct_fields(
             &mut mir_fn,
-            entry,
             s,
             self_local,
             Some(other_local),
@@ -374,7 +380,6 @@ impl<'a> Lowerer<'a> {
 
         let acc = self.fold_struct_fields(
             &mut mir_fn,
-            entry,
             s,
             self_local,
             None,
@@ -740,7 +745,6 @@ impl<'a> Lowerer<'a> {
         // result is always the freshly-allocated `dest`.
         self.fold_struct_fields(
             &mut mir_fn,
-            entry,
             s,
             self_local,
             None,
