@@ -54,7 +54,11 @@ fn three_level_nested_module_dispatches_to_aliased_c_symbol() {
         .lower_program(&type_result.program)
         .expect("MIR lowering");
 
-    let bin_path = workspace_root().join(format!("tmp/nested_module_class_dispatches-{}-{}.bin", std::process::id(), ruxen_unique_id()));
+    let bin_path = workspace_root().join(format!(
+        "tmp/nested_module_class_dispatches-{}-{}.bin",
+        std::process::id(),
+        ruxen_unique_id()
+    ));
     let _ = std::fs::create_dir_all(bin_path.parent().unwrap());
     codegen::compile(&mir, bin_path.to_str().unwrap()).expect("codegen");
 

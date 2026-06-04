@@ -59,7 +59,12 @@ fn compile_and_run(rx_path: PathBuf, out_basename: &str) -> (String, String, Opt
     );
 
     let out_dir = std::env::temp_dir();
-    let out_path = out_dir.join(format!("{}-{}-{}", out_basename, std::process::id(), ruxen_unique_id()));
+    let out_path = out_dir.join(format!(
+        "{}-{}-{}",
+        out_basename,
+        std::process::id(),
+        ruxen_unique_id()
+    ));
     let out_str = out_path.to_string_lossy().to_string();
     codegen::compile(&mir, &out_str).expect("codegen failed");
 

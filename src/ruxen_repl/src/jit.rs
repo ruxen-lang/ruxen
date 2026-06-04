@@ -7,9 +7,7 @@
 use std::collections::{HashMap, HashSet};
 
 use cranelift_codegen::ir::types::{self, Type};
-use cranelift_codegen::ir::{
-    AbiParam, Signature, StackSlot, StackSlotData, StackSlotKind,
-};
+use cranelift_codegen::ir::{AbiParam, Signature, StackSlot, StackSlotData, StackSlotKind};
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_codegen::Context;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};

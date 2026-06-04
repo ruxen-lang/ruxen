@@ -19,7 +19,12 @@ fn compile_and_run(name: &str) -> (bool, String, Option<i32>) {
     let root = workspace_root();
     let src_path = root.join(format!("tests/release-e2e/cases/{}.rx", name));
     let expected_path = root.join(format!("tests/release-e2e/expected/{}.out", name));
-    let bin_path = root.join(format!("tmp/{}-{}-{}.bin", name, std::process::id(), ruxen_unique_id()));
+    let bin_path = root.join(format!(
+        "tmp/{}-{}-{}.bin",
+        name,
+        std::process::id(),
+        ruxen_unique_id()
+    ));
     let _ = std::fs::create_dir_all(root.join("tmp"));
 
     let source = std::fs::read_to_string(&src_path)

@@ -28,7 +28,11 @@ fn user_drop_runs_at_scope_exit() {
     let root = workspace_root();
     let tmp_dir = root.join("tmp");
     let _ = std::fs::create_dir_all(&tmp_dir);
-    let bin_path = tmp_dir.join(format!("user_drop_runs-{}-{}.bin", std::process::id(), ruxen_unique_id()));
+    let bin_path = tmp_dir.join(format!(
+        "user_drop_runs-{}-{}.bin",
+        std::process::id(),
+        ruxen_unique_id()
+    ));
 
     let source = rx("user_drop_runs_at_scope_exit");
     let mut lexer = Lexer::new(&source);

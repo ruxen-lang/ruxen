@@ -623,20 +623,18 @@ impl<'a> Lexer<'a> {
                 // an identifier is absorbed as a predicate-method name — so a
                 // standalone `?` here is either a char literal (`?a`) or the
                 // try operator.
-                if !self.is_at_end()
-                    && {
-                        // ruby-naming.spec.md §3.10a: `?a` / `?\n` is a char
-                        // literal, but only in an expression-context position
-                        // so postfix-`?` (try) and optional-type `T?` keep
-                        // their operator meaning. The char must follow `?`
-                        // immediately (no whitespace) and be an alphanumeric,
-                        // `_`, or the start of an escape.
-                        let c = self.current();
-                        let prev = self.tokens.last().map(|t| t.kind.clone());
-                        prev_token_starts_expr_context(prev.as_ref())
-                            && (c == '\\' || c.is_ascii_alphanumeric() || c == '_')
-                    }
-                {
+                if !self.is_at_end() && {
+                    // ruby-naming.spec.md §3.10a: `?a` / `?\n` is a char
+                    // literal, but only in an expression-context position
+                    // so postfix-`?` (try) and optional-type `T?` keep
+                    // their operator meaning. The char must follow `?`
+                    // immediately (no whitespace) and be an alphanumeric,
+                    // `_`, or the start of an escape.
+                    let c = self.current();
+                    let prev = self.tokens.last().map(|t| t.kind.clone());
+                    prev_token_starts_expr_context(prev.as_ref())
+                        && (c == '\\' || c.is_ascii_alphanumeric() || c == '_')
+                } {
                     self.lex_question_char(start_byte, start_line, start_col);
                 } else {
                     self.emit(TokenKind::Question, start_byte, start_line, start_col);

@@ -33,10 +33,30 @@ use ruxen_core::parser::ast::BinOp;
 /// One block: BinOp(2, Add, a, b); BinOp(3, Add, _t0, 3); Return(_t1).
 fn fixture_add3() -> MirFunction {
     let locals = vec![
-        MirLocal { id: 0, name: "a".into(), ty: Ty::Int, mutable: false },
-        MirLocal { id: 1, name: "b".into(), ty: Ty::Int, mutable: false },
-        MirLocal { id: 2, name: "_t0".into(), ty: Ty::Int, mutable: false },
-        MirLocal { id: 3, name: "_t1".into(), ty: Ty::Int, mutable: false },
+        MirLocal {
+            id: 0,
+            name: "a".into(),
+            ty: Ty::Int,
+            mutable: false,
+        },
+        MirLocal {
+            id: 1,
+            name: "b".into(),
+            ty: Ty::Int,
+            mutable: false,
+        },
+        MirLocal {
+            id: 2,
+            name: "_t0".into(),
+            ty: Ty::Int,
+            mutable: false,
+        },
+        MirLocal {
+            id: 3,
+            name: "_t1".into(),
+            ty: Ty::Int,
+            mutable: false,
+        },
     ];
 
     let mut block = BasicBlock::new(0);
@@ -54,7 +74,14 @@ fn fixture_add3() -> MirFunction {
     });
     block.terminator = Terminator::Return(Some(MirValue::Use(3)));
 
-    MirFunction::with_parts("add3".to_string(), vec![0, 1], Ty::Int, locals, vec![block], 0)
+    MirFunction::with_parts(
+        "add3".to_string(),
+        vec![0, 1],
+        Ty::Int,
+        locals,
+        vec![block],
+        0,
+    )
 }
 
 /// Post-lowering MIR for `def cat(a: String, b: String) -> String = a + b`.
@@ -69,9 +96,24 @@ fn fixture_add3() -> MirFunction {
 /// locals: 0=a, 1=b, 2=_t0 (concat result); params = [0, 1].
 fn fixture_cat() -> MirFunction {
     let locals = vec![
-        MirLocal { id: 0, name: "a".into(), ty: Ty::String, mutable: false },
-        MirLocal { id: 1, name: "b".into(), ty: Ty::String, mutable: false },
-        MirLocal { id: 2, name: "_t0".into(), ty: Ty::String, mutable: false },
+        MirLocal {
+            id: 0,
+            name: "a".into(),
+            ty: Ty::String,
+            mutable: false,
+        },
+        MirLocal {
+            id: 1,
+            name: "b".into(),
+            ty: Ty::String,
+            mutable: false,
+        },
+        MirLocal {
+            id: 2,
+            name: "_t0".into(),
+            ty: Ty::String,
+            mutable: false,
+        },
     ];
 
     let mut block = BasicBlock::new(0);
@@ -82,7 +124,14 @@ fn fixture_cat() -> MirFunction {
     });
     block.terminator = Terminator::Return(Some(MirValue::Use(2)));
 
-    MirFunction::with_parts("cat".to_string(), vec![0, 1], Ty::String, locals, vec![block], 0)
+    MirFunction::with_parts(
+        "cat".to_string(),
+        vec![0, 1],
+        Ty::String,
+        locals,
+        vec![block],
+        0,
+    )
 }
 
 /// Step 3b reconciliation guard: string `+` still concatenates after the

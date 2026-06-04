@@ -102,7 +102,11 @@ pub fn walk_expr<V: Visit>(v: &mut V, e: &Expr) {
                 v.visit_expr(a);
             }
         }
-        ExprKind::Call { callee, args, block } => {
+        ExprKind::Call {
+            callee,
+            args,
+            block,
+        } => {
             v.visit_expr(callee);
             for a in args {
                 v.visit_expr(a);
@@ -392,7 +396,10 @@ pub fn walk_expr_mut<V: VisitMut>(v: &mut V, e: &mut Expr) {
         ExprKind::Borrow(x) | ExprKind::BorrowMut(x) => v.visit_expr_mut(x),
         ExprKind::FieldAccess { object, .. } => v.visit_expr_mut(object),
         ExprKind::MethodCall {
-            object, args, block, ..
+            object,
+            args,
+            block,
+            ..
         } => {
             // `generic_args` (a `Vec<TypeExpr>`, elided by `..`) is intentionally
             // NOT descended: `VisitMut` has no `visit_type_expr_mut` and no
@@ -412,7 +419,11 @@ pub fn walk_expr_mut<V: VisitMut>(v: &mut V, e: &mut Expr) {
                 v.visit_expr_mut(a);
             }
         }
-        ExprKind::Call { callee, args, block } => {
+        ExprKind::Call {
+            callee,
+            args,
+            block,
+        } => {
             v.visit_expr_mut(callee);
             for a in args {
                 v.visit_expr_mut(a);

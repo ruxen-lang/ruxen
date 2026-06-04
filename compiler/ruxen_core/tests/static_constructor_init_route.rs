@@ -53,9 +53,7 @@ fn user_class_new_routes_through_init_with_self_prepended() {
         .iter()
         .flat_map(|b| b.instructions.iter())
         .find_map(|inst| match inst {
-            MirInst::Call { dest, callee, args } if callee == "Widget_init" => {
-                Some((dest, args))
-            }
+            MirInst::Call { dest, callee, args } if callee == "Widget_init" => Some((dest, args)),
             _ => None,
         })
         .expect("main must emit a Widget_init call for `Widget.new(...)`");
@@ -74,9 +72,11 @@ fn user_class_new_routes_through_init_with_self_prepended() {
         Some(MirValue::Use(l)) => *l,
         other => panic!("Widget_init arg0 must be Use(self); got {other:?}"),
     };
-    let allocs_self = main.blocks.iter().flat_map(|b| b.instructions.iter()).any(
-        |inst| matches!(inst, MirInst::Alloc { dest, .. } if *dest == self_local),
-    );
+    let allocs_self = main
+        .blocks
+        .iter()
+        .flat_map(|b| b.instructions.iter())
+        .any(|inst| matches!(inst, MirInst::Alloc { dest, .. } if *dest == self_local));
     assert!(
         allocs_self,
         "Widget_init arg0 (local {self_local:?}) must be the freshly Alloc'd object (self)"

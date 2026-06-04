@@ -193,7 +193,11 @@ fn end_to_end_link_smoke() {
         .lower_program(&result.program)
         .expect("MIR lowering");
 
-    let bin_path = workspace_root().join(format!("tmp/ffi_c_symbol_link_smoke-{}-{}.bin", std::process::id(), ruxen_unique_id()));
+    let bin_path = workspace_root().join(format!(
+        "tmp/ffi_c_symbol_link_smoke-{}-{}.bin",
+        std::process::id(),
+        ruxen_unique_id()
+    ));
     let _ = std::fs::create_dir_all(bin_path.parent().unwrap());
     codegen::compile(&mir, bin_path.to_str().unwrap()).expect("codegen");
 

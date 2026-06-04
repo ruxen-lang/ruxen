@@ -27,9 +27,7 @@ const NAMES: &[&str] = &[
 
 pub(super) fn resolvers() -> Vec<MethodResolver> {
     vec![MethodResolver {
-        matches: |ty, _method| {
-            matches!(ty, Ty::Class { name, .. } if NAMES.contains(&name.as_str()))
-        },
+        matches: |ty, _method| matches!(ty, Ty::Class { name, .. } if NAMES.contains(&name.as_str())),
         resolve,
     }]
 }

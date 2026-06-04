@@ -41,7 +41,12 @@ fn shared_helpers_are_public() {
     let _ = simple_type_size as fn(&Ty) -> usize;
     // The remaining four take a &mut FunctionBuilder; naming them is enough to
     // assert visibility without spelling the full Cranelift value types.
-    let _ = (emit_binop, coerce_value, coerce_value_signed, is_string_typed_value);
+    let _ = (
+        emit_binop,
+        coerce_value,
+        coerce_value_signed,
+        is_string_typed_value,
+    );
 }
 
 // ── Task 4: the env / M-carrying helpers must also be reachable ───────────────

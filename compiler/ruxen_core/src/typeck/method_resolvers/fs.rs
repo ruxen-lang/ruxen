@@ -13,9 +13,7 @@ const NAMES: &[&str] = &["Metadata", "File", "OpenOptions"];
 
 pub(super) fn resolvers() -> Vec<MethodResolver> {
     vec![MethodResolver {
-        matches: |ty, _method| {
-            matches!(ty, Ty::Class { name, .. } if NAMES.contains(&name.as_str()))
-        },
+        matches: |ty, _method| matches!(ty, Ty::Class { name, .. } if NAMES.contains(&name.as_str())),
         resolve: |_eng, ty, method, _args, _span| match (ty, method) {
             // Phase 2 stdlib (#06): std::fs::Metadata accessors.
             (Ty::Class { name, .. }, "size") if name == "Metadata" => Some(Ty::Int),

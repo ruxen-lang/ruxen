@@ -72,7 +72,11 @@ fn mixin_lib_decl_propagates_through_include() {
         .lower_program(&type_result.program)
         .expect("MIR lowering");
 
-    let bin_path = workspace_root().join(format!("tmp/mixin_lib_decl_propagates-{}-{}.bin", std::process::id(), ruxen_unique_id()));
+    let bin_path = workspace_root().join(format!(
+        "tmp/mixin_lib_decl_propagates-{}-{}.bin",
+        std::process::id(),
+        ruxen_unique_id()
+    ));
     let _ = std::fs::create_dir_all(bin_path.parent().unwrap());
     codegen::compile(&mir, bin_path.to_str().unwrap()).expect("codegen");
 

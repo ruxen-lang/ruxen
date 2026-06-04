@@ -73,7 +73,12 @@ fn compile_and_run(source: &str, basename: &str) -> (String, String, bool) {
     let root = workspace_root();
     let tmp_dir = root.join("tmp");
     let _ = std::fs::create_dir_all(&tmp_dir);
-    let bin_path = tmp_dir.join(format!("{}-{}-{}.bin", basename, std::process::id(), ruxen_unique_id()));
+    let bin_path = tmp_dir.join(format!(
+        "{}-{}-{}.bin",
+        basename,
+        std::process::id(),
+        ruxen_unique_id()
+    ));
 
     let mut lexer = Lexer::new(source);
     let tokens = lexer.tokenize().expect("lex");

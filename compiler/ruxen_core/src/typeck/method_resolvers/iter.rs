@@ -20,9 +20,7 @@ use super::resolver::MethodResolver;
 
 pub(super) fn resolvers() -> Vec<MethodResolver> {
     vec![MethodResolver {
-        matches: |ty, _method| {
-            matches!(ty, Ty::Class { name, .. } if name.ends_with("Iter"))
-        },
+        matches: |ty, _method| matches!(ty, Ty::Class { name, .. } if name.ends_with("Iter")),
         resolve,
     }]
 }

@@ -63,7 +63,11 @@ fn class_inside_module_resolves_via_qualified_path() {
         .lower_program(&type_result.program)
         .expect("MIR lowering");
 
-    let bin_path = workspace_root().join(format!("tmp/module_class_qualified_type-{}-{}.bin", std::process::id(), ruxen_unique_id()));
+    let bin_path = workspace_root().join(format!(
+        "tmp/module_class_qualified_type-{}-{}.bin",
+        std::process::id(),
+        ruxen_unique_id()
+    ));
     let _ = std::fs::create_dir_all(bin_path.parent().unwrap());
     codegen::compile(&mir, bin_path.to_str().unwrap()).expect("codegen");
 

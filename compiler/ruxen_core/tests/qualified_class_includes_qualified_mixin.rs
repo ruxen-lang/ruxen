@@ -66,7 +66,11 @@ fn qualified_class_includes_qualified_mixin_dispatches_correctly() {
         .lower_program(&type_result.program)
         .expect("MIR lowering");
 
-    let bin_path = workspace_root().join(format!("tmp/qualified_class_includes_qualified_mixin-{}-{}.bin", std::process::id(), ruxen_unique_id()));
+    let bin_path = workspace_root().join(format!(
+        "tmp/qualified_class_includes_qualified_mixin-{}-{}.bin",
+        std::process::id(),
+        ruxen_unique_id()
+    ));
     let _ = std::fs::create_dir_all(bin_path.parent().unwrap());
     codegen::compile(&mir, bin_path.to_str().unwrap()).expect("codegen");
 

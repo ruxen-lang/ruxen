@@ -12,9 +12,7 @@ const NAMES: &[&str] = &["Command", "ExitStatus", "Output"];
 
 pub(super) fn resolvers() -> Vec<MethodResolver> {
     vec![MethodResolver {
-        matches: |ty, _method| {
-            matches!(ty, Ty::Class { name, .. } if NAMES.contains(&name.as_str()))
-        },
+        matches: |ty, _method| matches!(ty, Ty::Class { name, .. } if NAMES.contains(&name.as_str())),
         resolve: |_eng, ty, method, _args, _span| match (ty, method) {
             // Phase 2 stdlib (#06): std::process::Command builder.
             // `.arg/.args/.env/.current_dir` return Self (same handle,

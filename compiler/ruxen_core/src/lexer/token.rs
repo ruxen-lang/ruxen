@@ -236,11 +236,11 @@ pub enum TokenKind {
     FatArrow, // =>
 
     // ── Operators: Special ──
-    AmpDot, // &.
-    Question,    // ?
-    At,          // @
-    ColonColon,  // ::
-    AmpMut,      // &mut
+    AmpDot,     // &.
+    Question,   // ?
+    At,         // @
+    ColonColon, // ::
+    AmpMut,     // &mut
 
     // ── Delimiters ──
     LParen,   // (

@@ -1302,10 +1302,7 @@ mod map_inner_tests {
             bounds: vec![],
         };
         let m = Ty::Map(Box::new(tp()), Box::new(tp()));
-        assert_eq!(
-            t_to_int(&m),
-            Ty::Map(Box::new(Ty::Int), Box::new(Ty::Int))
-        );
+        assert_eq!(t_to_int(&m), Ty::Map(Box::new(Ty::Int), Box::new(Ty::Int)));
         let s = Ty::Set(Box::new(tp()));
         assert_eq!(t_to_int(&s), Ty::Set(Box::new(Ty::Int)));
     }

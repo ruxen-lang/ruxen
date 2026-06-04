@@ -161,7 +161,10 @@ pub fn is_static_constructor(type_name: &str, method_name: &str) -> bool {
 /// `new` is handled by the universal rule in `is_static_constructor`, so it is
 /// omitted here.
 const STATIC_CTORS: &[(&str, &[&str])] = &[
-    ("String", &["from", "with_capacity", "from_iter", "from_bytes"]),
+    (
+        "String",
+        &["from", "with_capacity", "from_iter", "from_bytes"],
+    ),
     ("Vec", &["with_capacity", "from_iter"]),
     ("Array", &["with_capacity", "from_iter"]),
     ("Hash", &["with_capacity", "from_iter"]),
@@ -171,7 +174,10 @@ const STATIC_CTORS: &[(&str, &[&str])] = &[
     ("HashSet", &["with_capacity", "from_iter"]),
     ("Thread", &["spawn", "current", "sleep", "yield_now"]),
     // Mutex / Arc / SharedSync: only `.new`, handled by the universal rule.
-    ("Duration", &["from_secs", "from_millis", "from_micros", "from_nanos"]),
+    (
+        "Duration",
+        &["from_secs", "from_millis", "from_micros", "from_nanos"],
+    ),
     ("Instant", &["now"]),
     ("TcpListener", &["bind"]),
     ("TcpStream", &["connect"]),
@@ -511,7 +517,10 @@ mod tests {
             callee_ownership("ruxen_vec_push").arg_transfer,
             ArgMask::single(1)
         );
-        assert_eq!(callee_ownership("Vec_push").arg_transfer, ArgMask::single(1));
+        assert_eq!(
+            callee_ownership("Vec_push").arg_transfer,
+            ArgMask::single(1)
+        );
     }
 
     #[test]

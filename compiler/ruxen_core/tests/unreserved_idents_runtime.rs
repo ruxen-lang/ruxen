@@ -23,7 +23,11 @@ fn e2e_135_unreserved_idents() {
     let root = workspace_root();
     let src_path = root.join("tests/release-e2e/cases/135_unreserved_idents.rx");
     let expected_path = root.join("tests/release-e2e/expected/135_unreserved_idents.out");
-    let bin_path = root.join(format!("tmp/135_unreserved_idents-{}-{}.bin", std::process::id(), ruxen_unique_id()));
+    let bin_path = root.join(format!(
+        "tmp/135_unreserved_idents-{}-{}.bin",
+        std::process::id(),
+        ruxen_unique_id()
+    ));
     let _ = std::fs::create_dir_all(root.join("tmp"));
 
     let source = std::fs::read_to_string(&src_path)

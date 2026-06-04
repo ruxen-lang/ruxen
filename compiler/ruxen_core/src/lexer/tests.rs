@@ -993,10 +993,7 @@ fn test_identifier_with_question_suffix() {
     let kinds = lex_kinds("is_empty?");
     assert_eq!(
         kinds,
-        vec![
-            TokenKind::Identifier("is_empty?".into()),
-            TokenKind::Eof,
-        ]
+        vec![TokenKind::Identifier("is_empty?".into()), TokenKind::Eof,]
     );
 }
 

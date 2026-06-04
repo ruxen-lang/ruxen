@@ -67,7 +67,12 @@ fn compile_and_run(rx_path: PathBuf, out_basename: &str, expect_fn: &str) -> Run
     let has_synthesized_fn = mir.functions.iter().any(|f| f.name == expect_fn);
 
     let out_dir = std::env::temp_dir();
-    let out_path = out_dir.join(format!("{}-{}-{}", out_basename, std::process::id(), ruxen_unique_id()));
+    let out_path = out_dir.join(format!(
+        "{}-{}-{}",
+        out_basename,
+        std::process::id(),
+        ruxen_unique_id()
+    ));
     let out_str = out_path.to_string_lossy().to_string();
     codegen::compile(&mir, &out_str).expect("codegen failed");
 

@@ -53,7 +53,6 @@ use cranelift_object::{ObjectBuilder, ObjectModule};
 
 use crate::mir::nodes::*;
 
-
 /// Cranelift code generation engine.
 ///
 /// Holds the Cranelift module, context objects, and bookkeeping for

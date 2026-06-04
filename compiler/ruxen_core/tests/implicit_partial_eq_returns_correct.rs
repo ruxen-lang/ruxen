@@ -25,7 +25,12 @@ fn workspace_root() -> std::path::PathBuf {
 
 fn compile_and_run(source: &str, name: &str) -> (String, Option<i32>) {
     let root = workspace_root();
-    let bin_path = root.join(format!("tmp/{}-{}-{}.bin", name, std::process::id(), ruxen_unique_id()));
+    let bin_path = root.join(format!(
+        "tmp/{}-{}-{}.bin",
+        name,
+        std::process::id(),
+        ruxen_unique_id()
+    ));
     let _ = std::fs::create_dir_all(root.join("tmp"));
 
     let mut lexer = Lexer::new(source);

@@ -503,7 +503,10 @@ fn into_bytes_is_dual_axis_fresh_result_and_consumed_arg() {
     // raw_outstanding=2, vec_frees=0). Both classifications are load-bearing.
     let s = callee_ownership("ruxen_string_into_bytes");
     assert_eq!(s.result, ResultOwnership::Fresh, "fresh Vec[U8] result");
-    assert!(!s.args_are_borrowed, "source char* is consumed (arg tainted)");
+    assert!(
+        !s.args_are_borrowed,
+        "source char* is consumed (arg tainted)"
+    );
     let m = callee_ownership("String_into_bytes");
     assert_eq!(m.result, ResultOwnership::Fresh);
     assert!(!m.args_are_borrowed);

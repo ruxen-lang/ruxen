@@ -202,20 +202,70 @@ mod golden {
 
         // ── Ty::String structural ──────────────────────────────────
         for m in [
-            "clone", "size", "empty?", "push_str", "trim", "to_lower", "to_upper", "chars",
-            "split", "push", "as_str", "from", "include?", "starts_with", "ends_with", "repeat",
-            "lines", "replace", "new", "with_capacity", "to_string", "bytes", "trim_start",
-            "trim_end", "find", "splitn", "clear", "truncate", "insert", "insert_str", "remove",
-            "parse_int", "parse_float", "into_bytes", "from_iter", "to_s",
+            "clone",
+            "size",
+            "empty?",
+            "push_str",
+            "trim",
+            "to_lower",
+            "to_upper",
+            "chars",
+            "split",
+            "push",
+            "as_str",
+            "from",
+            "include?",
+            "starts_with",
+            "ends_with",
+            "repeat",
+            "lines",
+            "replace",
+            "new",
+            "with_capacity",
+            "to_string",
+            "bytes",
+            "trim_start",
+            "trim_end",
+            "find",
+            "splitn",
+            "clear",
+            "truncate",
+            "insert",
+            "insert_str",
+            "remove",
+            "parse_int",
+            "parse_float",
+            "into_bytes",
+            "from_iter",
+            "to_s",
         ] {
             v.push(c(Ty::String, m));
         }
 
         // ── Ty::Str structural ─────────────────────────────────────
         for m in [
-            "size", "empty?", "trim", "to_lower", "to_upper", "chars", "split", "parse_uint",
-            "as_str", "include?", "starts_with", "ends_with", "lines", "replace", "to_string",
-            "bytes", "trim_start", "trim_end", "find", "splitn", "parse_int", "parse_float",
+            "size",
+            "empty?",
+            "trim",
+            "to_lower",
+            "to_upper",
+            "chars",
+            "split",
+            "parse_uint",
+            "as_str",
+            "include?",
+            "starts_with",
+            "ends_with",
+            "lines",
+            "replace",
+            "to_string",
+            "bytes",
+            "trim_start",
+            "trim_end",
+            "find",
+            "splitn",
+            "parse_int",
+            "parse_float",
             "to_s",
         ] {
             v.push(c(Ty::Str, m));
@@ -228,11 +278,44 @@ mod golden {
         // ── Ty::Array structural ───────────────────────────────────
         let arr = || Ty::Array(Box::new(Ty::Int));
         for m in [
-            "size", "empty?", "push", "pop", "get", "get_mut", "iter", "into_iter", "each", "map",
-            "filter", "find", "position", "to_vec", "new", "sum", "count", "reverse", "first",
-            "last", "clone", "include?", "sort", "join", "with_capacity", "capacity", "clear",
-            "truncate", "swap", "insert", "remove", "extend", "iter_mut", "as_slice", "from_iter",
-            "dedup", "sort_by", "retain",
+            "size",
+            "empty?",
+            "push",
+            "pop",
+            "get",
+            "get_mut",
+            "iter",
+            "into_iter",
+            "each",
+            "map",
+            "filter",
+            "find",
+            "position",
+            "to_vec",
+            "new",
+            "sum",
+            "count",
+            "reverse",
+            "first",
+            "last",
+            "clone",
+            "include?",
+            "sort",
+            "join",
+            "with_capacity",
+            "capacity",
+            "clear",
+            "truncate",
+            "swap",
+            "insert",
+            "remove",
+            "extend",
+            "iter_mut",
+            "as_slice",
+            "from_iter",
+            "dedup",
+            "sort_by",
+            "retain",
         ] {
             v.push(c(arr(), m));
         }
@@ -240,8 +323,19 @@ mod golden {
         // ── Ty::Map structural ─────────────────────────────────────
         let map = || Ty::Map(Box::new(Ty::String), Box::new(Ty::Int));
         for m in [
-            "new", "from_iter", "insert", "get", "key?", "size", "empty?", "with_capacity",
-            "remove", "clear", "keys", "values", "iter",
+            "new",
+            "from_iter",
+            "insert",
+            "get",
+            "key?",
+            "size",
+            "empty?",
+            "with_capacity",
+            "remove",
+            "clear",
+            "keys",
+            "values",
+            "iter",
         ] {
             v.push(c(map(), m));
         }
@@ -249,8 +343,19 @@ mod golden {
         // ── Ty::Set structural ─────────────────────────────────────
         let set = || Ty::Set(Box::new(Ty::Int));
         for m in [
-            "new", "from_iter", "insert", "include?", "size", "empty?", "with_capacity", "remove",
-            "clear", "iter", "union", "intersection", "difference",
+            "new",
+            "from_iter",
+            "insert",
+            "include?",
+            "size",
+            "empty?",
+            "with_capacity",
+            "remove",
+            "clear",
+            "iter",
+            "union",
+            "intersection",
+            "difference",
         ] {
             v.push(c(set(), m));
         }
@@ -258,7 +363,14 @@ mod golden {
         // ── Ty::Option structural ──────────────────────────────────
         let opt = || Ty::Option(Box::new(Ty::Int));
         for m in [
-            "try_op", "unwrap", "expect", "unwrap_or", "unwrap_or_else", "map", "ok_or", "is_some",
+            "try_op",
+            "unwrap",
+            "expect",
+            "unwrap_or",
+            "unwrap_or_else",
+            "map",
+            "ok_or",
+            "is_some",
             "is_none",
         ] {
             v.push(c(opt(), m));
@@ -267,7 +379,14 @@ mod golden {
         // ── Ty::Result structural ──────────────────────────────────
         let res = || Ty::Result(Box::new(Ty::Int), Box::new(Ty::String));
         for m in [
-            "try_op", "unwrap", "expect", "unwrap_or", "unwrap_or_else", "map", "map_err", "is_ok",
+            "try_op",
+            "unwrap",
+            "expect",
+            "unwrap_or",
+            "unwrap_or_else",
+            "map",
+            "map_err",
+            "is_ok",
             "is_err",
         ] {
             v.push(c(res(), m));
@@ -298,7 +417,11 @@ mod golden {
         v.push(c(class("MutexGuard", vec![Ty::Int]), "deref_var"));
         // Arc / SharedSync.new with a Send payload (Int) — no E1102.
         v.push(c_args(class("Arc", vec![]), "new", vec![arg(Ty::Int)]));
-        v.push(c_args(class("SharedSync", vec![]), "new", vec![arg(Ty::Int)]));
+        v.push(c_args(
+            class("SharedSync", vec![]),
+            "new",
+            vec![arg(Ty::Int)],
+        ));
         v.push(c(class("Arc", vec![Ty::Int]), "deref"));
         v.push(c(class("Arc", vec![Ty::Int]), "clone"));
         v.push(c(class("Arc", vec![Ty::Int]), "strong_count"));
@@ -306,7 +429,13 @@ mod golden {
 
         // ── fmt (TIER 2) ───────────────────────────────────────────
         for m in [
-            "write_str", "write_char", "size", "width", "precision", "align", "fill",
+            "write_str",
+            "write_char",
+            "size",
+            "width",
+            "precision",
+            "align",
+            "fill",
         ] {
             v.push(c(class("Formatter", vec![]), m));
         }
@@ -314,8 +443,23 @@ mod golden {
         // ── *Iter combinators (TIER 2-ish, name.ends_with("Iter")) ──
         let veciter = || class("VecIter", vec![Ty::Int]);
         for m in [
-            "filter", "map", "find", "position", "sum", "count", "fold", "all", "any", "take",
-            "skip", "chain", "zip", "collect_vec", "to_vec", "enumerate", "partition",
+            "filter",
+            "map",
+            "find",
+            "position",
+            "sum",
+            "count",
+            "fold",
+            "all",
+            "any",
+            "take",
+            "skip",
+            "chain",
+            "zip",
+            "collect_vec",
+            "to_vec",
+            "enumerate",
+            "partition",
         ] {
             v.push(c(veciter(), m));
         }
@@ -340,13 +484,30 @@ mod golden {
             v.push(c(class("Metadata", vec![]), m));
         }
         for m in [
-            "open", "create", "append", "open_options", "read", "read_to_string", "read_all",
-            "write", "write_all", "write_str", "flush", "seek", "metadata", "close",
+            "open",
+            "create",
+            "append",
+            "open_options",
+            "read",
+            "read_to_string",
+            "read_all",
+            "write",
+            "write_all",
+            "write_str",
+            "flush",
+            "seek",
+            "metadata",
+            "close",
         ] {
             v.push(c(class("File", vec![]), m));
         }
         for m in [
-            "read", "write", "append", "truncate", "create", "create_new",
+            "read",
+            "write",
+            "append",
+            "truncate",
+            "create",
+            "create_new",
         ] {
             v.push(c(class("OpenOptions", vec![]), m));
         }
@@ -364,8 +525,16 @@ mod golden {
 
         // ── time: Duration / Instant ───────────────────────────────
         for m in [
-            "from_secs", "from_millis", "from_micros", "from_nanos", "as_secs", "as_millis",
-            "as_micros", "as_nanos", "add", "sub",
+            "from_secs",
+            "from_millis",
+            "from_micros",
+            "from_nanos",
+            "as_secs",
+            "as_millis",
+            "as_micros",
+            "as_nanos",
+            "add",
+            "sub",
         ] {
             v.push(c(class("Duration", vec![]), m));
         }
@@ -374,13 +543,17 @@ mod golden {
         }
 
         // ── net: TcpListener / TcpStream ───────────────────────────
-        for m in [
-            "bind", "accept", "local_addr", "set_nonblocking", "close",
-        ] {
+        for m in ["bind", "accept", "local_addr", "set_nonblocking", "close"] {
             v.push(c(class("TcpListener", vec![]), m));
         }
         for m in [
-            "connect", "read", "write", "peer_addr", "shutdown", "close", "set_read_timeout",
+            "connect",
+            "read",
+            "write",
+            "peer_addr",
+            "shutdown",
+            "close",
+            "set_read_timeout",
             "set_write_timeout",
         ] {
             v.push(c(class("TcpStream", vec![]), m));
@@ -399,9 +572,15 @@ mod golden {
             "with_capacity",
             vec![arg(Ty::Int), arg(class("File", vec![]))],
         ));
-        v.push(c(class("BufReader", vec![class("File", vec![])]), "read_line"));
+        v.push(c(
+            class("BufReader", vec![class("File", vec![])]),
+            "read_line",
+        ));
         v.push(c(class("BufReader", vec![class("File", vec![])]), "read"));
-        v.push(c(class("BufReader", vec![class("File", vec![])]), "into_inner"));
+        v.push(c(
+            class("BufReader", vec![class("File", vec![])]),
+            "into_inner",
+        ));
         v.push(c_args(
             class("BufWriter", vec![]),
             "new",
@@ -456,15 +635,27 @@ mod golden {
             "new",
             vec![arg(class("NotSend", vec![]))],
         ));
-        v.push(c_args(class("Arc", vec![]), "new", vec![arg(class("NotSend", vec![]))]));
+        v.push(c_args(
+            class("Arc", vec![]),
+            "new",
+            vec![arg(class("NotSend", vec![]))],
+        ));
         // BufReader / BufWriter with an unsupported inner (Int) → E0714.
-        v.push(c_args(class("BufReader", vec![]), "new", vec![arg(Ty::Int)]));
+        v.push(c_args(
+            class("BufReader", vec![]),
+            "new",
+            vec![arg(Ty::Int)],
+        ));
         v.push(c_args(
             class("BufReader", vec![]),
             "with_capacity",
             vec![arg(Ty::Int), arg(Ty::Int)],
         ));
-        v.push(c_args(class("BufWriter", vec![]), "new", vec![arg(Ty::Int)]));
+        v.push(c_args(
+            class("BufWriter", vec![]),
+            "new",
+            vec![arg(Ty::Int)],
+        ));
         v.push(c_args(
             class("BufWriter", vec![]),
             "with_capacity",

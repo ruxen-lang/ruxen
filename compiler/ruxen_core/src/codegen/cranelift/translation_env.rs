@@ -35,10 +35,7 @@ pub struct TranslationEnv<'a, M: Module> {
 
 impl<'a, M: Module> TranslationEnv<'a, M> {
     /// Create a data section for a null-terminated string literal.
-    pub fn create_string_data(
-        &mut self,
-        value: &str,
-    ) -> Result<cranelift_module::DataId, String> {
+    pub fn create_string_data(&mut self, value: &str) -> Result<cranelift_module::DataId, String> {
         if let Some(&data_id) = self.string_data.get(value) {
             return Ok(data_id);
         }
