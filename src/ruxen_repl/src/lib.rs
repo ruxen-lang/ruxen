@@ -3,21 +3,19 @@
 //! Uses Cranelift JIT for in-process compilation and execution. The unified
 //! `ruxen` driver invokes this crate as `ruxen repl` via [`run`].
 
-#[allow(dead_code)]
 mod capture;
-#[allow(dead_code)]
 mod commands;
 mod completion;
+// `display` still carries unused color constants + error/warning formatters
+// kept for the diagnostic surface; `env` keeps an unused slot-lifecycle enum.
 #[allow(dead_code)]
 mod display;
 #[allow(dead_code)]
 mod env;
 mod eval;
 mod highlight;
-#[allow(dead_code)]
 pub mod jit;
 mod session;
-#[allow(dead_code)]
 mod slots;
 mod validate;
 
