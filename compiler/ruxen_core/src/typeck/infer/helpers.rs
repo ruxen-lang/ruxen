@@ -208,76 +208,14 @@ fn substitute_generic_params(ty: &Ty, generic_params: &[String], generic_args: &
             .position(|p| p == name)
             .and_then(|i| generic_args.get(i).cloned())
             .unwrap_or_else(|| ty.clone()),
-        Ty::Ref(inner) => Ty::Ref(Box::new(substitute_generic_params(
-            inner,
-            generic_params,
-            generic_args,
-        ))),
-        Ty::RefMut(inner) => Ty::RefMut(Box::new(substitute_generic_params(
-            inner,
-            generic_params,
-            generic_args,
-        ))),
-        Ty::Option(inner) => Ty::Option(Box::new(substitute_generic_params(
-            inner,
-            generic_params,
-            generic_args,
-        ))),
-        Ty::Result(ok, err) => Ty::Result(
-            Box::new(substitute_generic_params(ok, generic_params, generic_args)),
-            Box::new(substitute_generic_params(err, generic_params, generic_args)),
-        ),
-        Ty::Array(elem) => Ty::Array(Box::new(substitute_generic_params(
-            elem,
-            generic_params,
-            generic_args,
-        ))),
-        Ty::Set(elem) => Ty::Set(Box::new(substitute_generic_params(
-            elem,
-            generic_params,
-            generic_args,
-        ))),
-        Ty::Map(k, v) => Ty::Map(
-            Box::new(substitute_generic_params(k, generic_params, generic_args)),
-            Box::new(substitute_generic_params(v, generic_params, generic_args)),
-        ),
-        Ty::Tuple(slots) => Ty::Tuple(
-            slots
-                .iter()
-                .map(|s| substitute_generic_params(s, generic_params, generic_args))
-                .collect(),
-        ),
-        Ty::Class {
-            name,
-            generic_args: ga,
-        } => Ty::Class {
-            name: name.clone(),
-            generic_args: ga
-                .iter()
-                .map(|g| substitute_generic_params(g, generic_params, generic_args))
-                .collect(),
-        },
-        Ty::Enum {
-            name,
-            generic_args: ga,
-        } => Ty::Enum {
-            name: name.clone(),
-            generic_args: ga
-                .iter()
-                .map(|g| substitute_generic_params(g, generic_params, generic_args))
-                .collect(),
-        },
-        Ty::Struct {
-            name,
-            generic_args: ga,
-        } => Ty::Struct {
-            name: name.clone(),
-            generic_args: ga
-                .iter()
-                .map(|g| substitute_generic_params(g, generic_params, generic_args))
-                .collect(),
-        },
-        other => other.clone(),
+        // Every other variant just folds substitution through its children.
+        // `Ty::map_inner` is the single exhaustive structural-recursion
+        // primitive, so this fold can never silently drop substitution
+        // through a `Ty` child (e.g. `Ty::RefLifetime`, `Ty::Fn`,
+        // `Ty::Newtype`, `Ty::Alias`, `Ty::FixedArray`) — bug #3.
+        other => other
+            .clone()
+            .map_inner(&mut |c| substitute_generic_params(c, generic_params, generic_args)),
     }
 }
 
@@ -610,5 +548,52 @@ pub(super) fn collect_break_types(
         // Other expression kinds cannot contain a break that targets
         // our loop (they are leaves, closures, or type-level nodes).
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod substitute_generic_params_tests {
+    use super::substitute_generic_params;
+    use crate::hir::types::Ty;
+
+    fn tp(name: &str) -> Ty {
+        Ty::TypeParam {
+            name: name.into(),
+            bounds: vec![],
+        }
+    }
+
+    #[test]
+    fn substitutes_through_named_lifetime_ref() {
+        // &'a T  ->  &'a Int   (was a no-op before the map_inner migration:
+        // the tail `other => other.clone()` dropped substitution through
+        // Ty::RefLifetime — bug #3 surviving in this second fold).
+        let got = substitute_generic_params(
+            &Ty::RefLifetime("a".into(), Box::new(tp("T"))),
+            &["T".to_string()],
+            &[Ty::Int],
+        );
+        assert_eq!(got, Ty::RefLifetime("a".into(), Box::new(Ty::Int)));
+    }
+
+    #[test]
+    fn substitutes_through_fn_params_and_return() {
+        // Fn(T) -> U  ->  Fn(Int) -> Bool   (was a no-op before: the tail
+        // arm dropped substitution through Ty::Fn).
+        let got = substitute_generic_params(
+            &Ty::Fn {
+                params: vec![tp("T")],
+                ret: Box::new(tp("U")),
+            },
+            &["T".to_string(), "U".to_string()],
+            &[Ty::Int, Ty::Bool],
+        );
+        assert_eq!(
+            got,
+            Ty::Fn {
+                params: vec![Ty::Int],
+                ret: Box::new(Ty::Bool),
+            }
+        );
     }
 }
