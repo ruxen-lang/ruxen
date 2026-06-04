@@ -220,15 +220,13 @@ pub(super) fn insert_drops(
     for block in &func.blocks {
         for inst in &block.instructions {
             if let MirInst::Call { callee, args, .. } = inst {
-                let moves_args = matches!(
-                    callee.as_str(),
-                    "ruxen_executor_spawn"
-                        | "Task_spawn_raw"
-                        | "Task.spawn_raw"
-                        | "ruxen_thread_spawn"
-                        | "Thread_spawn"
-                        | "Thread_spawn_raw"
-                );
+                // Single source of truth: runtime_abi::MOVE_BY_FFI. Previously
+                // this was a hand-rolled `matches!` that had drifted to include
+                // a dead dotted `"Task.spawn_raw"` spelling the table lacked —
+                // a forward UAF hazard if the two lists were ever read for
+                // opposing decisions. MIR callees are always underscore-mangled,
+                // so the dotted form was unreachable and has been dropped.
+                let moves_args = crate::mir::lower::runtime_abi::is_move_by_ffi(callee.as_str());
                 if moves_args {
                     for arg in args {
                         if let MirValue::Use(local) = arg {

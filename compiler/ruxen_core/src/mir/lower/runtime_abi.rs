@@ -418,6 +418,17 @@ const CONSUME_HELPERS: &[&str] = &[
     "Vec_from_iter",
 ];
 
+/// Does this callee MOVE the ownership of its pointer args into an FFI-owned
+/// runtime structure (the task scheduler / a spawned OS thread)? The single
+/// source of truth, backed by [`MOVE_BY_FFI`]. `drops.rs`'s `moved_to_ffi`
+/// collection consults this instead of re-listing the symbols inline, so the
+/// drop-pass exclusion set and the `callee_ownership` borrow verdict can never
+/// disagree again (they previously did: the inline list carried a dead dotted
+/// `"Task.spawn_raw"` spelling the table never had).
+pub fn is_move_by_ffi(callee: &str) -> bool {
+    MOVE_BY_FFI.contains(&callee)
+}
+
 /// Old `is_move_by_ffi_callee` (drops.rs:1068-1088).
 const MOVE_BY_FFI: &[&str] = &[
     "ruxen_executor_spawn",
@@ -514,6 +525,23 @@ mod tests {
     fn move_by_ffi_does_not_borrow_args() {
         let o = callee_ownership("ruxen_executor_spawn");
         assert!(!o.args_are_borrowed); // default-taint path runs → spawned future moved
+    }
+
+    #[test]
+    fn is_move_by_ffi_matches_table_and_rejects_dotted_and_user() {
+        // Every member of MOVE_BY_FFI is recognized — this is the single
+        // predicate drops.rs's `moved_to_ffi` collection routes through, so
+        // the two can no longer diverge.
+        for &c in MOVE_BY_FFI {
+            assert!(is_move_by_ffi(c), "MOVE_BY_FFI member {c:?} not recognized");
+        }
+        // The dotted `Task.spawn_raw` form is DEAD: MIR call callees are
+        // always underscore-mangled (`Type_method`), so the dotted spelling
+        // never reaches a `MirInst::Call.callee`. It is intentionally NOT in
+        // the table (and absent from the parity SYMBOLS list).
+        assert!(!is_move_by_ffi("Task.spawn_raw"));
+        // User callees never move by FFI.
+        assert!(!is_move_by_ffi("MyClass_method"));
     }
 
     #[test]
