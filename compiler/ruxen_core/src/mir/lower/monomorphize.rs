@@ -147,7 +147,18 @@ impl<'a> Lowerer<'a> {
                         collect_classes(sub, ffi_classes, out);
                     }
                 }
-                _ => {}
+                // No generic-class instances to collect from these. Enumerated
+                // explicitly (no `_`) to match the no-wildcard discipline of
+                // `walk_tys_in_item` / `walk_tys_in_expr` below — a new HirItem
+                // variant must be triaged here at compile time.
+                HirItem::Function(_)
+                | HirItem::Struct(_)
+                | HirItem::Enum(_)
+                | HirItem::Impl(_)
+                | HirItem::Const(_)
+                | HirItem::Mixin(_)
+                | HirItem::TypeAlias(_)
+                | HirItem::Newtype(_) => {}
             }
         }
         let mut classes: HashMap<String, HirClassDef> = HashMap::new();
