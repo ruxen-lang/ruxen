@@ -392,3 +392,141 @@ end
         stderr
     );
 }
+
+// ─── Phase 3B — LOOP state-machine runtime equivalence gates ─────────
+//
+// EQUIVALENCE GATES for the async-lowering CFG unification of the LOOP
+// shapes (Phase 3B). The linear gate above pins the non-loop path; these
+// two pin the two loop shapes that Phase 3B folds into the unified
+// `build_poll_body_cfg` (via `Edge::Loop`):
+//
+//   * `loop_single_await_runtime_gate` — a `while` loop with ONE `.await`
+//     per iteration (mirrors e2e `728d_async_loop_minimal.rx`),
+//   * `loop_multi_await_runtime_gate` — a `while` loop with TWO `.await`s
+//     per iteration (mirrors e2e `728f_async_loop_multi_await.rx`).
+//
+// Both drive the synthesised state machine through `block_on`, which
+// polls the future repeatedly: each `TickFuture` returns Pending once
+// (no reactor I/O — `Thread.yield_now` just spins) then Ready, so the
+// outer loop machine must advance across multiple iterations AND
+// re-init its per-iteration sub-future each pass. The asserted `sum`
+// only holds if the loop machine: (a) runs pre-loop init once, (b)
+// re-runs body_pre_await each iteration, (c) folds each await result
+// into the crossing-local accumulator, (d) re-evaluates the loop cond
+// on the back-edge, and (e) produces the post-loop tail. Any divergence
+// in the emitted loop skeleton (state guard, keep_iterating/pending_exit
+// flags, __sub_ready re-init, __phase advance) shows up as a wrong sum.
+//
+// These gate the deletion of the four hand-specialized loop builders:
+// they MUST stay green when loop lowering is rerouted through the
+// unified Cfg path.
+
+const TICK_FUTURE_PRELUDE: &str = "\
+class TickFuture
+  ticks: Int
+  payload: Int
+  include Future
+  type Output = Int
+
+  def init(ticks: Int, payload: Int)
+    self.ticks = ticks
+    self.payload = payload
+  end
+
+  def self.make(ticks: Int, payload: Int) -> TickFuture
+    TickFuture.new(ticks, payload)
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    if self.ticks == 0
+      Poll.Ready(self.payload)
+    else
+      self.ticks = self.ticks - 1
+      Poll.Pending
+    end
+  end
+end
+";
+
+/// Single-await loop: `while i < 2 { let v = TickFuture.make(1, 10).await; sum += v; i += 1 }`.
+/// Mirrors `728d_async_loop_minimal.rx`. Two iterations, each TickFuture
+/// goes Pending→Ready, so sum = 10 + 10 = 20.
+#[test]
+fn loop_single_await_runtime_gate() {
+    let source = format!(
+        "{TICK_FUTURE_PRELUDE}
+async def loop_two -> Int
+  var i: Int = 0
+  var sum: Int = 0
+  while i < 2
+    let v = TickFuture.make(1, 10).await
+    sum = sum + v
+    i = i + 1
+  end
+  sum
+end
+
+def main
+  let total = block_on(loop_two())
+  puts \"#{{total}}\"
+end
+"
+    );
+    let (stdout, stderr, ok) = compile_and_run(&source, "async_io_loop_single_await_gate");
+    assert!(
+        ok,
+        "binary exited non-zero. stdout=[{}] stderr=[{}]",
+        stdout, stderr
+    );
+    assert_eq!(
+        stdout.trim(),
+        "20",
+        "single-await loop must fold to 10 + 10 = 20 over two iterations; \
+         got stdout=[{}] stderr=[{}]",
+        stdout,
+        stderr
+    );
+}
+
+/// Multi-await loop: two `.await`s per iteration, the second reading the
+/// first's result. Mirrors `728f_async_loop_multi_await.rx`. Two
+/// iterations:
+///   iter 0 (i=0): a=100, b=110, sum=210
+///   iter 1 (i=1): a=110, b=120, sum=440
+#[test]
+fn loop_multi_await_runtime_gate() {
+    let source = format!(
+        "{TICK_FUTURE_PRELUDE}
+async def loop_two_awaits -> Int
+  var i: Int = 0
+  var sum: Int = 0
+  while i < 2
+    let a = TickFuture.make(1, 100 + i * 10).await
+    let b = TickFuture.make(1, a + 10).await
+    sum = sum + a + b
+    i = i + 1
+  end
+  sum
+end
+
+def main
+  let total = block_on(loop_two_awaits())
+  puts \"#{{total}}\"
+end
+"
+    );
+    let (stdout, stderr, ok) = compile_and_run(&source, "async_io_loop_multi_await_gate");
+    assert!(
+        ok,
+        "binary exited non-zero. stdout=[{}] stderr=[{}]",
+        stdout, stderr
+    );
+    assert_eq!(
+        stdout.trim(),
+        "440",
+        "multi-await loop must fold to 210 then 440 over two iterations; \
+         got stdout=[{}] stderr=[{}]",
+        stdout,
+        stderr
+    );
+}
