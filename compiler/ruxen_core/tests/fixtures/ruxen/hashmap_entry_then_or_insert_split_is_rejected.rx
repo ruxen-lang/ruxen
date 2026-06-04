@@ -1,5 +1,5 @@
 def main
-  var m: Map[Int, Int] = Map.new
+  var m: Hash[Int, Int] = Hash.new
   let e = m.entry(1)
   e.or_insert(10)
 end

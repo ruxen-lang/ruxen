@@ -47,7 +47,7 @@ class Match
     def groups as "ruxen_match_groups" -> Array[Option[String]]
 
     ## All successful named captures.
-    def named_groups as "ruxen_match_named_groups" -> HashMap[String, String]
+    def named_groups as "ruxen_match_named_groups" -> Hash[String, String]
   end
 end
 

@@ -258,7 +258,7 @@ pub fn runtime_signature(name: &str) -> Option<(Vec<Type>, Option<Type>)> {
         "ruxen_hash_clear" => Some((vec![types::I64], None)),
         "ruxen_hash_keys" => Some((vec![types::I64], Some(types::I64))),
         "ruxen_hash_values" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_hash_iter" => Some((vec![types::I64], Some(types::I64))),
+        "ruxen_hash_entries" => Some((vec![types::I64], Some(types::I64))),
         "ruxen_hash_eq" => Some((vec![types::I64, types::I64], Some(types::I8))),
         "ruxen_hash_index" => Some((vec![types::I64, types::I64], Some(types::I64))),
         // Phase 2 stdlib (#04): HashSet[T] full surface.

@@ -1,4 +1,4 @@
 def main
-  let _a: Map[Int, Int] = Map.new
-  let _b: Map[Int, Int] = Map.with_capacity(8)
+  let _a: Hash[Int, Int] = Hash.new
+  let _b: Hash[Int, Int] = Hash.with_capacity(8)
 end

@@ -1,5 +1,5 @@
 def main
-  var m: Map[String, Int] = Map.new
+  var m: Hash[String, Int] = Hash.new
   m.entry("a").or_insert(10)
   m.entry("a").or_insert(99)
   m.entry("b").or_insert(20)

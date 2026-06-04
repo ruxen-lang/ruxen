@@ -74,7 +74,7 @@ class Array
     # Ruby `a.zip(b)` / `a.chain(b)` operate directly on arrays.
     def zip as "ruxen_vec_zip"(other: Int) -> Int
     def chain as "ruxen_vec_chain"(other: Int) -> Int
-    # Ruby conversions: `arr.to_set` → Set, `pairs.to_h` → Map.
+    # Ruby conversions: `arr.to_set` → Set, `pairs.to_h` → Hash.
     def to_a as "ruxen_vec_clone" -> Int
     def to_set as "ruxen_set_from_iter" -> Int
     def to_h as "ruxen_hash_from_iter" -> Int

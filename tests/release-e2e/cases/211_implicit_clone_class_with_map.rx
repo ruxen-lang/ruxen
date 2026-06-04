@@ -1,4 +1,4 @@
-## Pin: a class with a `Map[K, V]` field can be cloned via the
+## Pin: a class with a `Hash[K, V]` field can be cloned via the
 ## auto-synthesised `<Class>_clone`. Regression check for the
 ## `ruxen_hash_clone` runtime helper (added 2026-05-22) that
 ## `synthesize_clone_field` (mir/lower/derive.rs) emits at codegen
@@ -6,10 +6,10 @@
 ## `Undefined symbols: _ruxen_hash_clone, referenced from _Box_clone`.
 
 class Box
-  data: Map[String, Int]
+  data: Hash[String, Int]
 
   def init
-    self.data = Map.new
+    self.data = Hash.new
   end
 end
 
@@ -23,7 +23,7 @@ def main
   # The runtime contract for `ruxen_hash_clone` is a shallow copy:
   # the bucket array is fresh, but heap-owned key/value slots alias
   # the source. The point of the pin is that the helper exists and
-  # produces a working Map (right len, lookups succeed) — not deep-
+  # produces a working Hash (right len, lookups succeed) — not deep-
   # clone semantics, which Vec / Hash share as a v1 ceiling.
   puts "clone_len=#{b2.data.size}"
   match b2.data.get(String.from("alpha"))

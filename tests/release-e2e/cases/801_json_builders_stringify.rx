@@ -43,7 +43,7 @@ def main
     Err(_) -> puts "pretty=err"
   end
 
-  var fields: Map[String, Json] = Map.new
+  var fields: Hash[String, Json] = Hash.new
   fields.insert(String.from("title"), s)
   fields.insert(String.from("items"), arr)
   let obj = JSON.object(fields)

@@ -1,6 +1,6 @@
 def main
-  var a: Map[Int, Int] = Map.new
-  var b: Map[Int, Int] = Map.new
+  var a: Hash[Int, Int] = Hash.new
+  var b: Hash[Int, Int] = Hash.new
   a.insert(1, 10)
   b.insert(1, 10)
   let c: Bool = a == b

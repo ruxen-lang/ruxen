@@ -33,22 +33,6 @@ fn errors(diags: &[Diagnostic]) -> Vec<&Diagnostic> {
         .collect()
 }
 
-/// `HashSet[T]` is the v1 alias for `Set[T]`. Both names must work at
-/// the type-annotation site, and `HashSet.new` / `HashSet.with_capacity`
-/// must reach the runtime via the alias dispatch in
-/// `codegen::runtime::runtime_name`.
-#[test]
-fn hashset_alias_constructs_via_either_name() {
-    let source = rx("hashset_alias_constructs_via_either_name");
-    let diags = typecheck_diagnostics(&source);
-    let errs = errors(&diags);
-    assert!(
-        errs.is_empty(),
-        "HashSet/Set constructors must typecheck cleanly; got: {:#?}",
-        errs
-    );
-}
-
 /// `HashSet.insert(T) -> Bool` per the v1 surface (returns true if
 /// newly inserted) — but the v1 runtime currently signals dedup via
 /// the inner hash's len delta, which the typecheck doesn't know.

@@ -17,8 +17,8 @@ use super::{ClosureCaptureContext, ResolveResult, Resolver};
 /// The built-in collection type names. These are NOT registered as classes
 /// in the type scope by `register_builtins`; their type resolution is the
 /// three hardcoded arms in [`Resolver::resolve_type_expr`] below
-/// (`"Array" | "Vec"` → `Ty::Array`, `"Map" | "HashMap"` → `Ty::Map`,
-/// `"Set" | "HashSet"` → `Ty::Set`, the last two with E0615 hash-key
+/// (`"Array" | "Vec"` → `Ty::Array`, `"Hash"` → `Ty::Map`,
+/// `"Set"` → `Ty::Set`, the last two with E0615 hash-key
 /// validation). The const is the single source of truth shared with
 /// `ffi_registration.rs`'s anchor-only-builtin check, so the membership
 /// test there and the arms here cannot drift apart.
@@ -27,8 +27,7 @@ use super::{ClosureCaptureContext, ResolveResult, Resolver};
 /// `resolve_type_expr` collection arms. It de-dups the ffi `matches!`; it
 /// does NOT (and cannot) collapse those three arms, which each produce a
 /// different `Ty` and carry distinct validation.
-pub(crate) const COLLECTION_BUILTINS: &[&str] =
-    &["Array", "Vec", "Map", "HashMap", "Set", "HashSet"];
+pub(crate) const COLLECTION_BUILTINS: &[&str] = &["Array", "Vec", "Hash", "Set"];
 
 impl Resolver {
     pub fn resolve_type_expr(&mut self, type_expr: &ast::TypeExpr) -> Ty {
@@ -429,8 +428,9 @@ impl Resolver {
                     .unwrap_or_else(|| self.type_context.fresh_type_var());
                 return Ty::Array(Box::new(elem));
             }
-            // `Map[K, V]` was `HashMap[K, V]` pre-Ruby-naming.
-            "Map" | "HashMap" => {
+            // `Hash[K, V]` is the Ruby spelling for the map type. The Rust
+            // spellings `Map`/`HashMap` are no longer accepted.
+            "Hash" => {
                 let mut iter = generic_args.into_iter();
                 let k = iter
                     .next()
@@ -443,7 +443,7 @@ impl Resolver {
                 if !const_helpers::ty_is_valid_hash_key(&k, &self.symbols) {
                     self.diagnostics.push(Diagnostic::error_with_code(
                         format!(
-                            "Map key type `{}` is not hashable: K must include Hashable + Eq",
+                            "Hash key type `{}` is not hashable: K must include Hashable + Eq",
                             k
                         ),
                         path.span.clone(),
@@ -452,11 +452,11 @@ impl Resolver {
                 }
                 return Ty::Map(Box::new(k), Box::new(v));
             }
-            "Set" | "HashSet" => {
-                // `HashSet[T]` is the legacy spelling for `Set[T]`. Both
-                // desugar to the same runtime representation; method
-                // dispatch in `codegen::runtime::runtime_name` accepts
-                // either prefix.
+            "Set" => {
+                // `Set[T]` is the Ruby spelling. The Rust `HashSet[T]` is no
+                // longer accepted; the runtime representation is unchanged
+                // (method dispatch in `codegen::runtime::runtime_name` keys
+                // off the `HashSet` runtime prefix).
                 let elem = generic_args
                     .into_iter()
                     .next()

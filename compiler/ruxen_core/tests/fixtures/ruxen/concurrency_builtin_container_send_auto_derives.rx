@@ -1,6 +1,6 @@
 ## Pin: B2 — built-in containers auto-derive Send/Sync when their
 ## type params are Send/Sync. Int is primitive → Send + Sync, so
-## Array[Int] / Option[Int] / Map[Int, Int] all wrap into Mutex without
+## Array[Int] / Option[Int] / Hash[Int, Int] all wrap into Mutex without
 ## triggering E1101. (Negative auto-derive cases live in
 ## concurrency_negative.rs.)
 ## See docs/specs/ownership/send_sync_enforcement.spec.md §B2.

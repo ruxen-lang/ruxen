@@ -1,7 +1,7 @@
 ## std::json — JSON value tree, parser, builders, and stringifier.
 ##
 ## Native C runtime that parses JSON into opaque heap JSON nodes. Arrays and
-## objects can be explicitly built from `Array[Json]` and `Map[String, Json]`;
+## objects can be explicitly built from `Array[Json]` and `Hash[String, Json]`;
 ## callers inspect nodes through `JsonKind` and shallow accessor helpers.
 ##
 ## `JSON.parse` accepts comments and trailing commas for config-file
@@ -43,7 +43,7 @@ class JSON
     def self.float as "ruxen_json_make_float"(value: Float) -> Json
     def self.string as "ruxen_json_make_string"(value: &String) -> Json
     def self.array as "ruxen_json_make_array"(items: Array[Json]) -> Json
-    def self.object as "ruxen_json_make_object"(fields: Map[String, Json]) -> Json
+    def self.object as "ruxen_json_make_object"(fields: Hash[String, Json]) -> Json
     def self.empty_array as "ruxen_json_make_empty_array" -> Json
     def self.empty_object as "ruxen_json_make_empty_object" -> Json
     def self.kind as "ruxen_json_kind"(value: &Json) -> JsonKind

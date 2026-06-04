@@ -65,19 +65,16 @@ fn array_vec_resolve_to_ty_array() {
 }
 
 #[test]
-fn map_hashmap_resolve_to_ty_map() {
-    let tys = let_types(
-        "def main\n  let m: Map[Int, Int] = { 1 => 2 }\n  let h: HashMap[Int, Int] = { 1 => 2 }\nend",
-    );
-    assert_eq!(
-        tys,
-        vec!["Map[Int, Int]".to_string(), "Map[Int, Int]".to_string()]
-    );
+fn hash_resolves_to_ty_map() {
+    // The Ruby spelling `Hash[K, V]` resolves to `Ty::Map`; the Rust
+    // spellings `Map` / `HashMap` are no longer accepted.
+    let tys = let_types("def main\n  let h: Hash[Int, Int] = { 1 => 2 }\nend");
+    assert_eq!(tys, vec!["Hash[Int, Int]".to_string()]);
 }
 
 #[test]
-fn set_hashset_resolve_to_ty_set() {
-    let tys =
-        let_types("def main\n  let s: Set[Int] = Set.new\n  let hs: HashSet[Int] = Set.new\nend");
-    assert_eq!(tys, vec!["Set[Int]".to_string(), "Set[Int]".to_string()]);
+fn set_resolves_to_ty_set() {
+    // `Set[T]` is the Ruby spelling; the Rust `HashSet` is gone.
+    let tys = let_types("def main\n  let s: Set[Int] = Set.new\nend");
+    assert_eq!(tys, vec!["Set[Int]".to_string()]);
 }

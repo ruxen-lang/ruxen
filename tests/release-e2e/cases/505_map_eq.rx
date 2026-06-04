@@ -1,11 +1,11 @@
 def main
-  var a: Map[Int, Int] = Map.new
+  var a: Hash[Int, Int] = Hash.new
   a.insert(1, 10)
   a.insert(2, 20)
-  var b: Map[Int, Int] = Map.new
+  var b: Hash[Int, Int] = Hash.new
   b.insert(2, 20)
   b.insert(1, 10)
-  var c: Map[Int, Int] = Map.new
+  var c: Hash[Int, Int] = Hash.new
   c.insert(1, 99)
   c.insert(2, 20)
   puts "a_eq_b=#{a == b}"

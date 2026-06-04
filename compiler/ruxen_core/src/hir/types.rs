@@ -1049,7 +1049,7 @@ impl fmt::Display for Ty {
             }
             Ty::FixedArray(elem, size) => write!(f, "[{}; {}]", elem, size),
             Ty::Array(elem) => write!(f, "Array[{}]", elem),
-            Ty::Map(k, v) => write!(f, "Map[{}, {}]", k, v),
+            Ty::Map(k, v) => write!(f, "Hash[{}, {}]", k, v),
             Ty::Set(elem) => write!(f, "Set[{}]", elem),
             Ty::Option(inner) => write!(f, "Option[{}]", inner),
             Ty::Result(ok, err) => write!(f, "Result[{}, {}]", ok, err),

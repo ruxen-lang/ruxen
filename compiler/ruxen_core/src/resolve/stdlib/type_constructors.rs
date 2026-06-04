@@ -89,10 +89,8 @@ pub(super) fn register_type_constructors(r: &mut Resolver) {
         let mut v: Vec<(&str, Ty)> = vec![
             ("Array", array_ty.clone()),
             ("Vec", array_ty),
-            ("Map", map_ty.clone()),
-            ("HashMap", map_ty),
-            ("Set", set_ty.clone()),
-            ("HashSet", set_ty),
+            ("Hash", map_ty),
+            ("Set", set_ty),
             ("String", Ty::String),
         ];
         for (name, gens) in SIMPLE_CLASS_CTORS {

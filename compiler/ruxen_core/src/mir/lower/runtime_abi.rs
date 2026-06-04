@@ -303,6 +303,7 @@ const FRESH_ALLOC_CALLEES: &[&str] = &[
     "ruxen_hash_keys",
     "ruxen_hash_values",
     "ruxen_hash_iter",
+    "ruxen_hash_entries",
     "HashMap_remove",
     "Hash_remove",
     "ruxen_hash_remove",

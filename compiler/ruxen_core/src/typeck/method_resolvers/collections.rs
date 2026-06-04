@@ -127,7 +127,11 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
             (Ty::Map(_, _), "clear") => Some(Ty::Unit),
             (Ty::Map(k, _), "keys") => Some(Ty::Array(Box::new(Ty::Ref(k.clone())))),
             (Ty::Map(_, v), "values") => Some(Ty::Array(Box::new(Ty::Ref(v.clone())))),
-            (Ty::Map(k, _), "to_a") => Some(Ty::Array(Box::new(Ty::Ref(k.clone())))),
+            // Ruby's `hash.to_a` returns `[(K, V)]` pairs (owned tuples,
+            // same aliased-heap contract as `zip`), not the bare key list.
+            (Ty::Map(k, v), "to_a") => {
+                Some(Ty::Array(Box::new(Ty::Tuple(vec![*k.clone(), *v.clone()]))))
+            }
 
             // Set methods
             (Ty::Set(_), "new") => Some(ty.clone()),

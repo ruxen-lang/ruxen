@@ -1,5 +1,5 @@
 def main
-  var m: Map[Int, Int] = Map.new
+  var m: Hash[Int, Int] = Hash.new
   m.insert(1, 2)
   let _len = m.size
 end

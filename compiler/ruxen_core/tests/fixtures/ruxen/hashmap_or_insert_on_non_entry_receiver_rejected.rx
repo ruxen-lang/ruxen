@@ -1,4 +1,4 @@
 def main
-  var m: Map[Int, Int] = Map.new
+  var m: Hash[Int, Int] = Hash.new
   m.or_insert(10)
 end

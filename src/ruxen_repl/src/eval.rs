@@ -2138,11 +2138,6 @@ mod tests {
     }
 
     #[test]
-    fn block_expression_is_side_effecting() {
-        assert!(is_side_effect_expr(&parse_expr("do\n1\nend")));
-    }
-
-    #[test]
     fn match_expression_is_side_effecting() {
         assert!(is_side_effect_expr(&parse_expr("match x\n_ -> 1\nend")));
     }

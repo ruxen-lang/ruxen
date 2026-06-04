@@ -558,12 +558,24 @@ RuxenVec *ruxen_hash_values(RuxenHash *h) {
     return out;
 }
 
-/* HashMap.iter -> Vec[K] — v1 ships an eager iterator (lazy iter
-   lands in #05). Returns the keys list; callers using `for k in
-   m.iter` get the same shape they would from a real iterator since
-   the v1 `for` lowering already accepts a `Vec` directly. */
-RuxenVec *ruxen_hash_iter(RuxenHash *h) {
-    return ruxen_hash_keys(h);
+/* HashMap.to_a -> Vec[(K, V)] — Ruby's `hash.to_a` returns key/value
+   pairs. Each slot is a freshly-allocated 16-byte 2-tuple {key, value}
+   (field0 at +0, field1 at +8), matching `ruxen_vec_zip`'s tuple layout
+   and `ruxen_hash_from_iter`'s pair decode. Payloads are shallow-copied
+   (aliased heap for String values, same contract as zip). Bucket-
+   traversal order; callers must not rely on it (per prompt §44). */
+RuxenVec *ruxen_hash_entries(RuxenHash *h) {
+    RuxenVec *out = ruxen_vec_new();
+    if (!h) return out;
+    for (uint64_t i = 0; i < h->bucket_count; i++) {
+        for (RuxenHashEntry *e = h->buckets[i]; e; e = e->next) {
+            int64_t *pair = (int64_t *)ruxen_alloc(16);
+            pair[0] = e->key;
+            pair[1] = e->value;
+            ruxen_vec_push(out, (int64_t)pair);
+        }
+    }
+    return out;
 }
 
 /* HashMap == HashMap — pairwise key/value equality. Mirrors
