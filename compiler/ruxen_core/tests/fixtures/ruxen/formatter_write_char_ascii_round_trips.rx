@@ -1,5 +1,5 @@
 def main
   var f = Formatter.new()
-  let _ = f.write_char('A')
+  let _ = f.write_char(?A)
   println(f.buffer())
 end
