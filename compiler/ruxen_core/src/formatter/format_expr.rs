@@ -954,8 +954,8 @@ fn format_loop_expr(l: &LoopExpr, comments: &CommentMap) -> Doc {
 // ─── Blocks ─────────────────────────────────────────────────────────
 
 pub fn format_block(block: &Block, comments: &CommentMap) -> Doc {
-    // `ExprKind::Block` is a `do ... end` block expression (parser
-    // `parse_do_block_expr`). The `do`/`end` delimiters are part of the
+    // `ExprKind::Block` is a synthesized `do ... end` block (e.g. async
+    // lowering's tail blocks). The `do`/`end` delimiters are part of the
     // surface syntax — emitting only the inner statements collapses the block
     // into its surrounding context and no longer parses.
     if block.statements.is_empty() {

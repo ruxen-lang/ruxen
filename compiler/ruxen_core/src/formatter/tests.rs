@@ -459,7 +459,9 @@ fn const_without_type_omits_annotation() {
 }
 
 #[test]
-fn do_end_block_expression_preserved() {
+fn do_end_closure_preserved() {
+    // `let v = do … end` is a no-param closure bound to `v`; the formatter
+    // must keep the `do…end` wrapper rather than rewriting it to braces.
     let src = fmt_fixture("do_end_block_expression_preserved");
     let out = assert_reparses(&src);
     assert!(out.contains("= do"), "do...end wrapper lost:\n{}", out);

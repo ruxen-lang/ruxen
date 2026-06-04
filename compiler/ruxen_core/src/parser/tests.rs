@@ -915,6 +915,27 @@ end";
     }
 
     #[test]
+    fn closure_do_end_no_params() {
+        // Bare `do…end` (no `|params|`) is a no-param closure, never a
+        // standalone block-value expression (Ruby has no `let v = do…end`).
+        let expr = parse_expr("do\n      1 + 2\n    end");
+        match &expr.kind {
+            ExprKind::Closure(c) => {
+                assert!(!c.is_async);
+                assert!(!c.is_move);
+                assert_eq!(c.params.len(), 0);
+                match &c.body {
+                    ClosureBody::Block(block) => {
+                        assert_eq!(block.statements.len(), 1);
+                    }
+                    other => panic!("expected Block closure body, got {:?}", other),
+                }
+            }
+            other => panic!("expected Closure, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn async_do_closure() {
         let expr = parse_expr("async do |x|\n      x + 1\n    end");
         match &expr.kind {
