@@ -13,11 +13,12 @@
 //!
 //! Module layout (Phase 3 split):
 //!   * [`cfg`] — the await-delimited control-flow graph (`segment_cfg`
-//!     produces a `Cfg` of `Segment`/`Edge`s for the non-loop shapes;
+//!     produces a `Cfg` of `Segment`/`Edge`s for every supported shape;
 //!     loop shapes carry an `Edge::Loop` back-edge).
 //!   * [`lower`] — the lowering itself: the public entry points, the
-//!     unified non-loop `Cfg`-driven path, the three loop builders, the
-//!     awaitee classifier, and the `block_on` poll-loop rewriter.
+//!     unified `Cfg`-driven path (non-loop AND loop, the latter via the
+//!     `Edge::Loop` poll builder), the awaitee classifier, and the
+//!     `block_on` poll-loop rewriter.
 //!   * [`diagnostics`] — the E1112 / E1115 / E1116 collectors over the
 //!     `Visit` trait.
 //!
@@ -35,12 +36,9 @@ mod lower;
 pub use diagnostics::*;
 pub use lower::{lower_async_defs, lower_async_defs_with_bootstrap};
 
-// Shared helpers the sibling modules reach via `super::` / `super::super::`.
-// `cfg` uses the await-scan; `cfg`'s acceptance cross-check and
-// `diagnostics`' E1115 collector use the loop recognizers. Re-exported
-// here (not moved) so those paths resolve after the lowering moved into
-// `lower.rs`.
-pub(crate) use lower::{
-    block_contains_await, expr_contains_await, recognize_while_multi_await,
-    recognize_while_single_await,
-};
+// Shared helpers the sibling modules reach via `super::`. `cfg` uses the
+// await-scan to segment bodies; `diagnostics`' E1115 collector now decides
+// acceptance via `cfg::segment_cfg` directly (the loop recognizers it used
+// to call were deleted in Phase 3B once the unified Cfg lowering became the
+// single source of truth).
+pub(crate) use lower::{block_contains_await, expr_contains_await};

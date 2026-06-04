@@ -13,13 +13,6 @@
 //! exact union of shapes the three old recognizers accepted; `lower.rs`
 //! consumes it.
 
-// The data model is introduced in Task 2 ahead of its consumers: `segment_cfg`
-// (Task 3) populates these fields and `build_poll_body` (Task 4) reads them.
-// Until then several fields/methods have no non-test reader. The allow is
-// removed implicitly once Tasks 3-4 land their consumers.
-#![allow(dead_code)]
-
-use crate::lexer::token::Span;
 use crate::parser::ast::{Block, Expr, ExprKind, Pattern, Statement};
 
 use super::{block_contains_await, expr_contains_await};
@@ -69,16 +62,6 @@ pub enum Edge {
     },
 }
 
-impl Edge {
-    /// The segment this edge departs from.
-    pub fn from(&self) -> usize {
-        match self {
-            Edge::Next { from, .. } => *from,
-            Edge::Loop { from, .. } => *from,
-        }
-    }
-}
-
 /// An await-delimited control-flow graph for one async fn body.
 pub struct Cfg {
     pub segments: Vec<Segment>,
@@ -100,7 +83,6 @@ pub struct Cfg {
     /// Statements after the loop / after the last suspend that produce the
     /// fn's return value (the terminal `Poll.Ready(<tail>)`).
     pub tail: Vec<Statement>,
-    pub span: Span,
 }
 
 impl Cfg {
@@ -213,7 +195,6 @@ pub fn segment_cfg(body: &Block) -> Option<Cfg> {
             edges: Vec::new(),
             pre_loop: Vec::new(),
             tail: body.statements.clone(),
-            span: body.span.clone(),
         };
         return cfg.validate().ok().map(|()| cfg);
     }
@@ -383,7 +364,6 @@ fn try_loop_cfg(body: &Block) -> Option<Cfg> {
         edges,
         pre_loop: pre_loop_stmts,
         tail: post_loop_stmts,
-        span: body.span.clone(),
     };
     cfg.validate().ok().map(|()| cfg)
 }
@@ -508,7 +488,6 @@ fn try_linear_cfg(body: &Block) -> Option<Cfg> {
         edges,
         pre_loop: Vec::new(),
         tail,
-        span: body.span.clone(),
     };
     cfg.validate().ok().map(|()| cfg)
 }
@@ -516,6 +495,7 @@ fn try_linear_cfg(body: &Block) -> Option<Cfg> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lexer::token::Span;
     use crate::parser::ast::ExprKind;
 
     fn dummy_span() -> Span {
@@ -575,7 +555,6 @@ mod tests {
             edges: vec![Edge::Next { from: 0, to: 1 }, Edge::Next { from: 1, to: 2 }],
             pre_loop: vec![],
             tail: vec![],
-            span: dummy_span(),
         }
     }
 
@@ -669,11 +648,19 @@ mod tests {
         );
         let cfg = segment_cfg(&body).unwrap();
         // Two run-once pre-loop inits.
-        assert_eq!(cfg.pre_loop.len(), 2, "pre_loop should hold `var i` + `var sum`");
+        assert_eq!(
+            cfg.pre_loop.len(),
+            2,
+            "pre_loop should hold `var i` + `var sum`"
+        );
         // seg0 is the single in-loop suspend; its stmts are the
         // per-iteration body_pre_await (`let p = i + 100`) ONLY — the
         // pre-loop inits must NOT be duplicated here.
-        let suspends: Vec<&Segment> = cfg.segments.iter().filter(|s| s.suspend.is_some()).collect();
+        let suspends: Vec<&Segment> = cfg
+            .segments
+            .iter()
+            .filter(|s| s.suspend.is_some())
+            .collect();
         assert_eq!(suspends.len(), 1);
         assert_eq!(
             suspends[0].stmts.len(),
@@ -694,7 +681,10 @@ mod tests {
         ] {
             let body = parse_fn_body(src);
             let cfg = segment_cfg(&body).unwrap();
-            assert!(cfg.pre_loop.is_empty(), "non-loop pre_loop must be empty for:\n{src}");
+            assert!(
+                cfg.pre_loop.is_empty(),
+                "non-loop pre_loop must be empty for:\n{src}"
+            );
         }
     }
 
@@ -742,81 +732,61 @@ mod tests {
         assert!(segment_cfg(&body).is_none());
     }
 
-    /// `segment_cfg`'s accepted set must match the union the old lowering
-    /// ladder produced. Each case pins the expected acceptance explicitly
-    /// (the linear/no-await `segment_body` authority is now `try_linear_cfg`
-    /// inside `segment_cfg` itself, so cross-checking against it would be a
-    /// tautology — Phase 3 step 4 deleted `segment_body`). The surviving
-    /// loop recognizers (`recognize_while_single/multi_await`, out of Path
-    /// A's scope) are STILL cross-checked live for the loop-shaped cases so
-    /// a divergence in the loop-acceptance subset trips here.
+    /// `segment_cfg` is now the SOLE authority for the accepted async-fn
+    /// shape set (Phase 3B deleted the old `recognize_while_*` loop
+    /// recognizers + `segment_body` linear recognizer). This pins the
+    /// accepted/rejected verdict explicitly per shape so a future change
+    /// to the segmenter that widens or narrows the allowlist trips here —
+    /// the table is the contract, not a cross-check against another
+    /// (now-gone) recognizer.
     #[test]
     fn segment_cfg_acceptance_matches_old_ladder_union() {
-        // (src, expected_accept, is_loop_shape)
+        // (src, expected_accept)
         let cases = [
-            ("async def f\n  1 + 2\nend", true, false), // no-await
-            ("async def f\n  let a = g().await\n  a\nend", true, false), // linear-1
+            ("async def f\n  1 + 2\nend", true), // no-await
+            ("async def f\n  let a = g().await\n  a\nend", true), // linear-1
             (
                 "async def f\n  let a = g().await\n  let b = h().await\n  a + b\nend",
                 true,
-                false,
             ), // linear-2
             (
                 "async def f\n  let p = setup()\n  let a = g().await\n  a\nend",
                 true,
-                false,
             ), // pre-await + linear
             (
                 "async def f\n  while keep()\n    let x = s().await\n  end\n  0\nend",
                 true,
-                true,
             ), // while-single
             (
                 "async def f\n  while keep()\n    let a = r().await\n    let b = w().await\n  end\n  0\nend",
-                true,
                 true,
             ), // while-multi
             // Rejections:
             (
                 "async def f\n  while c().await\n    let x = s().await\n  end\n  0\nend",
                 false,
-                true,
             ), // await in cond
-            ("async def f\n  g().await\n  0\nend", false, false), // bare await stmt
+            ("async def f\n  g().await\n  0\nend", false), // bare await stmt
             (
                 "async def f\n  let (a, b) = g().await\n  a\nend",
-                false,
                 false,
             ), // non-ident await pattern
             (
                 "async def f\n  while a()\n    let x = s().await\n  end\n  while b()\n    let y = t().await\n  end\n  0\nend",
                 false,
-                true,
             ), // two awaiting loops
             (
                 "async def f\n  let a = if cond then g().await else h().await end\n  a\nend",
                 false,
-                false,
             ), // await nested in non-let expr
         ];
-        for (src, expected_accept, is_loop_shape) in cases {
+        for (src, expected_accept) in cases {
             let body = parse_fn_body(src);
             let new_accepts = segment_cfg(&body).is_some();
             assert_eq!(
                 new_accepts, expected_accept,
                 "acceptance mismatch for src:\n{src}\n(expected={expected_accept}, new={new_accepts})"
             );
-            // For loop-shaped fixtures, the surviving recognizers must still
-            // agree with the pinned expectation (live cross-check of the loop
-            // subset, which Path A left untouched).
-            if is_loop_shape {
-                let loop_accepts = super::super::recognize_while_multi_await(&body).is_some()
-                    || super::super::recognize_while_single_await(&body).is_some();
-                assert_eq!(
-                    loop_accepts, expected_accept,
-                    "loop-recognizer acceptance mismatch for src:\n{src}"
-                );
-            }
         }
     }
 }

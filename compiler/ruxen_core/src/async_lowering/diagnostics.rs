@@ -129,19 +129,20 @@ fn collect_e1115_in_item(
             // surroundings (and at this point there are no nested async fn
             // defs anyway, only methods).
             //
-            // Skip the E1115 check entirely when the body matches a loop shape
-            // the lowering handles correctly. Spec:
+            // Skip the E1115 check entirely when the body matches a shape the
+            // async lowering handles correctly. Spec:
             // docs/specs/syntax/async_lowering_loop_await.spec.md.
             //
-            // NOTE (Phase 3): this guard still calls the (not-yet-deleted)
-            // `recognize_while_*` recognizers so the accepted set is
-            // byte-for-byte the old behaviour. Task 5 re-points it to
-            // `segment_cfg(&func.body).is_some()` once the CFG lowering is the
-            // source of truth.
-            if scope_async
-                && (super::recognize_while_single_await(&func.body).is_some()
-                    || super::recognize_while_multi_await(&func.body).is_some())
-            {
+            // The source of truth is now `segment_cfg`: if it accepts the body
+            // (no-await / linear-N / single- or multi-await loop), the lowering
+            // produces a valid state machine and there is no unsupported
+            // await-in-loop to diagnose. For the no-await / linear shapes the
+            // subsequent `scan_block_e1115` would find nothing anyway (no await
+            // inside a loop), so the skip is behaviour-preserving; for the loop
+            // shapes it suppresses the E1115 the accepted loop would otherwise
+            // trip. Bodies `segment_cfg` REJECTS (e.g. await in the loop cond)
+            // fall through to the scan and still get E1115.
+            if scope_async && super::cfg::segment_cfg(&func.body).is_some() {
                 return;
             }
             scan_block_e1115(&func.body, scope_async, diags);
