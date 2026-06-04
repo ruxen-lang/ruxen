@@ -2443,143 +2443,56 @@ fn self_field(name: &str, span: &Span) -> Expr {
     }
 }
 
-/// Rewrite bare `Identifier(arg)` references to `self.arg` throughout
-/// a block. Conservative — only touches the exact name; doesn't
-/// shadow-detect (since args don't get shadowed by inner lets that
-/// reuse the same name in typical async fn bodies).
+/// Rewrites bare `Identifier(name)` reads of an arg / crossing-local name
+/// to `self.<name>` (a `FieldAccess` off `SelfRef`) throughout an expr or
+/// block, via the shared exhaustive `walk_expr_mut`.
 ///
-/// Milestone 2A doesn't have `.await` so the body is straight-line;
-/// 2B will need a more sophisticated walk that also re-scopes locals
-/// across suspends.
-fn rewrite_arg_refs_in_block(block: &mut Block, arg_names: &[String]) {
-    for stmt in block.statements.iter_mut() {
-        match stmt {
-            Statement::Let(let_binding) => {
-                if let Some(v) = &mut let_binding.value {
-                    rewrite_arg_refs_in_expr(v, arg_names);
-                }
+/// Conservative — only touches the exact name; it does NOT shadow-detect
+/// (args/crossing-locals don't get shadowed by inner lets that reuse the
+/// same name in the async fn bodies this runs on).
+///
+/// The old hand-rolled walker matched a fixed set of expression forms and
+/// ended with a `_ => {}` arm, so it silently skipped `EnumVariant`,
+/// `MacroCall`, `Yield`, `SafeNav`/`SafeNavCall`, `IfLet`, `WhileLet`,
+/// `While`, `For`, `Loop` and `UnsafeBlock`. A crossing-local read inside
+/// e.g. `Result.Ok(acc)` in a poll-body tail was therefore NOT rewritten,
+/// emitting an undefined local in the generated state machine. Routing
+/// through `VisitMut`/`walk_expr_mut` closes that gap by construction.
+struct ArgRefRewriter<'a> {
+    arg_names: &'a [String],
+}
+
+impl VisitMut for ArgRefRewriter<'_> {
+    fn visit_expr_mut(&mut self, expr: &mut Expr) {
+        // Replace bare-identifier reads of an arg/crossing-local name with
+        // `self.<name>`. A `FieldAccess` has no further occurrence of the
+        // bare name to rewrite, so we're done with this node — but we do
+        // NOT recurse into the newly-built `SelfRef` (nothing to do there).
+        if let ExprKind::Identifier(name) = &expr.kind {
+            if self.arg_names.iter().any(|a| a == name) {
+                expr.kind = ExprKind::FieldAccess {
+                    object: Box::new(Expr {
+                        kind: ExprKind::SelfRef,
+                        span: expr.span.clone(),
+                    }),
+                    field: name.clone(),
+                };
+                return;
             }
-            Statement::Expression(e) => rewrite_arg_refs_in_expr(e, arg_names),
         }
+        // Otherwise recurse exhaustively.
+        walk_expr_mut(self, expr);
     }
 }
 
+fn rewrite_arg_refs_in_block(block: &mut Block, arg_names: &[String]) {
+    let mut r = ArgRefRewriter { arg_names };
+    r.visit_block_mut(block);
+}
+
 fn rewrite_arg_refs_in_expr(expr: &mut Expr, arg_names: &[String]) {
-    // Replace bare-identifier reads of an arg name with `self.<arg>`.
-    if let ExprKind::Identifier(name) = &expr.kind {
-        if arg_names.iter().any(|a| a == name) {
-            expr.kind = ExprKind::FieldAccess {
-                object: Box::new(Expr {
-                    kind: ExprKind::SelfRef,
-                    span: expr.span.clone(),
-                }),
-                field: name.clone(),
-            };
-            return;
-        }
-    }
-    // Otherwise recurse.
-    match &mut expr.kind {
-        ExprKind::BinaryOp { left, right, .. } => {
-            rewrite_arg_refs_in_expr(left, arg_names);
-            rewrite_arg_refs_in_expr(right, arg_names);
-        }
-        ExprKind::UnaryOp { operand, .. } => rewrite_arg_refs_in_expr(operand, arg_names),
-        ExprKind::Borrow(inner) | ExprKind::BorrowMut(inner) => {
-            rewrite_arg_refs_in_expr(inner, arg_names)
-        }
-        ExprKind::FieldAccess { object, .. } => rewrite_arg_refs_in_expr(object, arg_names),
-        ExprKind::MethodCall { object, args, .. } => {
-            rewrite_arg_refs_in_expr(object, arg_names);
-            for a in args.iter_mut() {
-                rewrite_arg_refs_in_expr(a, arg_names);
-            }
-        }
-        ExprKind::Call { callee, args, .. } => {
-            rewrite_arg_refs_in_expr(callee, arg_names);
-            for a in args.iter_mut() {
-                rewrite_arg_refs_in_expr(a, arg_names);
-            }
-        }
-        ExprKind::Index { object, index } => {
-            rewrite_arg_refs_in_expr(object, arg_names);
-            rewrite_arg_refs_in_expr(index, arg_names);
-        }
-        ExprKind::ClosureCall { callee, args } => {
-            rewrite_arg_refs_in_expr(callee, arg_names);
-            for a in args.iter_mut() {
-                rewrite_arg_refs_in_expr(a, arg_names);
-            }
-        }
-        ExprKind::Try(inner) | ExprKind::Await(inner) => rewrite_arg_refs_in_expr(inner, arg_names),
-        ExprKind::Assign { target, value } | ExprKind::CompoundAssign { target, value, .. } => {
-            rewrite_arg_refs_in_expr(target, arg_names);
-            rewrite_arg_refs_in_expr(value, arg_names);
-        }
-        ExprKind::If(IfExpr {
-            condition,
-            then_body,
-            elsif_clauses,
-            else_body,
-            ..
-        }) => {
-            rewrite_arg_refs_in_expr(condition, arg_names);
-            rewrite_arg_refs_in_block(then_body, arg_names);
-            for el in elsif_clauses.iter_mut() {
-                rewrite_arg_refs_in_expr(&mut el.condition, arg_names);
-                rewrite_arg_refs_in_block(&mut el.body, arg_names);
-            }
-            if let Some(b) = else_body {
-                rewrite_arg_refs_in_block(b, arg_names);
-            }
-        }
-        ExprKind::Match(MatchExpr { subject, arms, .. }) => {
-            rewrite_arg_refs_in_expr(subject, arg_names);
-            for a in arms.iter_mut() {
-                if let Some(g) = &mut a.guard {
-                    rewrite_arg_refs_in_expr(g, arg_names);
-                }
-                match &mut a.body {
-                    MatchArmBody::Expr(e) => rewrite_arg_refs_in_expr(e, arg_names),
-                    MatchArmBody::Block(b) => rewrite_arg_refs_in_block(b, arg_names),
-                }
-            }
-        }
-        ExprKind::Block(b) => rewrite_arg_refs_in_block(b, arg_names),
-        ExprKind::Return(Some(inner)) | ExprKind::Break(Some(inner)) => {
-            rewrite_arg_refs_in_expr(inner, arg_names)
-        }
-        ExprKind::ArrayLiteral(items) | ExprKind::TupleLiteral(items) => {
-            for it in items.iter_mut() {
-                rewrite_arg_refs_in_expr(it, arg_names);
-            }
-        }
-        ExprKind::ArrayFill { value, count } => {
-            rewrite_arg_refs_in_expr(value, arg_names);
-            rewrite_arg_refs_in_expr(count, arg_names);
-        }
-        ExprKind::MapLiteral(pairs) => {
-            for (k, v) in pairs.iter_mut() {
-                rewrite_arg_refs_in_expr(k, arg_names);
-                rewrite_arg_refs_in_expr(v, arg_names);
-            }
-        }
-        ExprKind::Range { start, end, .. } => {
-            if let Some(s) = start {
-                rewrite_arg_refs_in_expr(s, arg_names);
-            }
-            if let Some(e) = end {
-                rewrite_arg_refs_in_expr(e, arg_names);
-            }
-        }
-        ExprKind::Cast { expr: inner, .. } => rewrite_arg_refs_in_expr(inner, arg_names),
-        ExprKind::Closure(c) => match &mut c.body {
-            ClosureBody::Expr(e) => rewrite_arg_refs_in_expr(e, arg_names),
-            ClosureBody::Block(b) => rewrite_arg_refs_in_block(b, arg_names),
-        },
-        // Leaf / no inner exprs to rewrite.
-        _ => {}
-    }
+    let mut r = ArgRefRewriter { arg_names };
+    r.visit_expr_mut(expr);
 }
 
 /// `Int` named type.

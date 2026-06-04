@@ -530,3 +530,58 @@ end
         stderr
     );
 }
+
+/// FIX 1 regression — crossing-local read inside an `EnumVariant` tail.
+///
+/// `rewrite_arg_refs_in_block`/`_in_expr` used to be a hand-rolled walker
+/// whose `_ => {}` arm silently dropped `ExprKind::EnumVariant` (among
+/// others: MacroCall, Yield, SafeNav(Call), IfLet, WhileLet, While, For,
+/// Loop, UnsafeBlock). So a crossing-local read inside e.g. `Result.Ok(acc)`
+/// in a poll-body tail was NOT rewritten to `self.acc`, emitting an
+/// undefined-local in the generated state machine.
+///
+/// This fn folds an accumulator across a two-iteration await loop, then
+/// produces the terminal tail `Result.Ok(acc)` — an `EnumVariant` whose
+/// argument reads the crossing-local `acc`. With the gap, `acc` stays a
+/// bare identifier (not `self.acc`) and the binary either fails to compile
+/// or prints the wrong value. Expected: acc = 10 + 10 = 20.
+#[test]
+fn loop_enum_variant_tail_crossing_local_runtime_gate() {
+    let source = format!(
+        "{TICK_FUTURE_PRELUDE}
+async def fold_to_result -> Result[Int, Int]
+  var i: Int = 0
+  var acc: Int = 0
+  while i < 2
+    let v = TickFuture.make(1, 10).await
+    acc = acc + v
+    i = i + 1
+  end
+  Result.Ok(acc)
+end
+
+def main
+  let res = block_on(fold_to_result())
+  match res
+    Ok(v)  -> puts \"#{{v}}\"
+    Err(e) -> puts \"err #{{e}}\"
+  end
+end
+"
+    );
+    let (stdout, stderr, ok) = compile_and_run(&source, "async_io_loop_enum_variant_tail_gate");
+    assert!(
+        ok,
+        "binary exited non-zero. stdout=[{}] stderr=[{}]",
+        stdout, stderr
+    );
+    assert_eq!(
+        stdout.trim(),
+        "20",
+        "crossing-local `acc` inside the `Result.Ok(acc)` EnumVariant tail \
+         must be rewritten to `self.acc`; fold is 10 + 10 = 20. \
+         got stdout=[{}] stderr=[{}]",
+        stdout,
+        stderr
+    );
+}
