@@ -18,7 +18,7 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
         ExprKind::FloatLiteral(val, suffix) => format_float(*val, suffix),
         ExprKind::StringLiteral(s) => text(format!("\"{}\"", escape_string(s))),
         ExprKind::InterpolatedString(parts) => format_interpolated_string(parts),
-        ExprKind::CharLiteral(c) => text(format!("'{}'", escape_char(*c))),
+        ExprKind::CharLiteral(c) => text(format_char_literal(*c)),
         ExprKind::BoolLiteral(b) => text(if *b { "true" } else { "false" }),
         ExprKind::UnitLiteral => text("()"),
         ExprKind::NullLiteral => text("nil"),
@@ -159,7 +159,10 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
             end,
             inclusive,
         } => {
-            let op = if *inclusive { "..=" } else { ".." };
+            // ruby-naming.spec.md §3.10b: ranges are Ruby-shaped —
+            // `..` is INCLUSIVE, `...` is EXCLUSIVE. The `..=` spelling is
+            // not valid Ruxen syntax and fails to re-lex (E0009).
+            let op = if *inclusive { ".." } else { "..." };
             let mut parts = Vec::new();
             if let Some(s) = start {
                 parts.push(format_expr(s, comments));
@@ -423,14 +426,23 @@ fn escape_string(s: &str) -> String {
     out
 }
 
-fn escape_char(c: char) -> String {
+/// Render a `Char` literal in the Ruby-style `?` form
+/// (ruby-naming.spec.md §3.11). Single quotes are RAW STRINGS now, so the
+/// old `'c'` spelling would re-parse as a `&str`. The lexer only accepts a
+/// bare char after `?` when it is alphanumeric or `_`; named escapes
+/// (`?\n`, `?\t`, `?\r`, `?\\`, `?\'`) cover the common control chars, and
+/// everything else (spaces, punctuation, non-ASCII) goes through the
+/// `?\u{hex}` escape so the output always re-lexes to the same `CharLiteral`.
+fn format_char_literal(c: char) -> String {
     match c {
-        '\\' => "\\\\".to_string(),
-        '\'' => "\\'".to_string(),
-        '\n' => "\\n".to_string(),
-        '\t' => "\\t".to_string(),
-        '\r' => "\\r".to_string(),
-        c => c.to_string(),
+        '\\' => "?\\\\".to_string(),
+        '\'' => "?\\'".to_string(),
+        '\n' => "?\\n".to_string(),
+        '\t' => "?\\t".to_string(),
+        '\r' => "?\\r".to_string(),
+        '\0' => "?\\u{0}".to_string(),
+        c if c.is_ascii_alphanumeric() || c == '_' => format!("?{}", c),
+        c => format!("?\\u{{{:X}}}", c as u32),
     }
 }
 
@@ -504,7 +516,7 @@ fn token_to_source(token: &crate::lexer::token::Token) -> String {
             }
         }
         TokenKind::StringLiteral(s) => format!("\"{}\"", s),
-        TokenKind::CharLiteral(c) => format!("'{}'", c),
+        TokenKind::CharLiteral(c) => format_char_literal(*c),
         TokenKind::DocComment(s) => format!("## {}", s),
         TokenKind::Dot => ".".to_string(),
         TokenKind::Comma => ",".to_string(),
