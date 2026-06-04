@@ -172,6 +172,23 @@ pub fn lower_async_defs_with_bootstrap(program: &mut Program, bootstrap_programs
                         continue;
                     }
                 }
+                // Phase 3 Path A: the non-loop `.await` shape (linear-N)
+                // now lowers through the unified Cfg path. It returns
+                // `None` for loop-shaped or unsupported bodies, so the
+                // old linear builder below is the parallel fallback
+                // (kept until the run-pin + full suite gate the
+                // equivalence, then deleted in step 4).
+                if let Some((rewritten, sm_class)) = lower_async_fn_via_cfg(
+                    func,
+                    &async_fn_returns,
+                    &class_static_returns,
+                    &class_instance_returns,
+                    &future_outputs,
+                ) {
+                    *func = rewritten;
+                    new_classes.push(TopLevelItem::Class(sm_class));
+                    continue;
+                }
                 // Milestone 2B path: async fn with `.await` suspends.
                 // The lowering is restricted to a canonical straight-
                 // line shape (one or more `let x = g().await; ...`
@@ -194,6 +211,20 @@ pub fn lower_async_defs_with_bootstrap(program: &mut Program, bootstrap_programs
                     new_classes.push(TopLevelItem::Class(sm_class));
                 }
             } else {
+                // Phase 3 Path A: the no-await shape also routes through
+                // the unified Cfg path (degenerate single-segment Cfg).
+                // Falls back to the 2A builder on `None`.
+                if let Some((rewritten, sm_class)) = lower_async_fn_via_cfg(
+                    func,
+                    &async_fn_returns,
+                    &class_static_returns,
+                    &class_instance_returns,
+                    &future_outputs,
+                ) {
+                    *func = rewritten;
+                    new_classes.push(TopLevelItem::Class(sm_class));
+                    continue;
+                }
                 // Milestone 2A path: trivial single-state machine.
                 if let Some((rewritten, sm_class)) = lower_one_async_fn(func) {
                     *func = rewritten;
@@ -387,6 +418,492 @@ fn extract_poll_output(ty: &TypeExpr) -> Option<TypeExpr> {
         return None;
     }
     Some(args[0].clone())
+}
+
+/// Phase 3 Path A — unified lowering for the NON-LOOP async-fn shapes
+/// (no-await + linear-N-await), driven by the await-delimited
+/// [`cfg::Cfg`]. Subsumes `lower_one_async_fn` (no-await) and
+/// `lower_one_async_fn_with_await` (linear-N) behind one
+/// `self.__state`-indexed poll skeleton built by [`build_poll_body_cfg`].
+///
+/// Returns `None` when the body is loop-shaped (the Cfg carries an
+/// [`cfg::Edge::Loop`]) — those still flow through the three dedicated
+/// loop builders (while-single / while-multi / multi-phase), which this
+/// phase deliberately leaves untouched. Also `None` for any body
+/// outside the union the Cfg analysis accepts, or when an awaitee /
+/// crossing-local fails the same checks the linear path enforced.
+fn lower_async_fn_via_cfg(
+    func: &FuncDef,
+    async_fn_returns: &HashMap<String, (String, TypeExpr)>,
+    class_static_returns: &HashMap<(String, String), TypeExpr>,
+    class_instance_returns: &HashMap<(String, String), TypeExpr>,
+    future_outputs: &HashMap<String, TypeExpr>,
+) -> Option<(FuncDef, ClassDef)> {
+    let span = func.span.clone();
+    let class_name = mangle_future_class_name(&func.name);
+
+    let cfg = cfg::segment_cfg(&func.body)?;
+
+    // Loop-shaped bodies are OUT of scope for Path A — bail so the
+    // caller's loop recognizers + builders handle them unchanged.
+    if cfg
+        .edges
+        .iter()
+        .any(|e| matches!(e, cfg::Edge::Loop { .. }))
+    {
+        return None;
+    }
+
+    // The terminal segment (suspend: None) produces the return value via
+    // `cfg.tail`; every other segment carries exactly one suspend. For
+    // the non-loop shapes the suspends are the segments in order, sans
+    // the terminal — `cfg::Edge::Next` chains them 0→1→…→N.
+    let suspend_segments: Vec<&cfg::Segment> = cfg
+        .segments
+        .iter()
+        .filter(|s| s.suspend.is_some())
+        .collect();
+    let n_suspends = suspend_segments.len();
+
+    // Pre-await straight-line statements: segment 0's `stmts`. For the
+    // no-await case segment 0 IS the terminal (no suspend) and its
+    // `stmts` are empty (the whole body is `cfg.tail`). For linear-N,
+    // segment 0 carries the pre-await prefix folded in by `segment_cfg`.
+    let pre_await_stmts: Vec<Statement> = if n_suspends == 0 {
+        Vec::new()
+    } else {
+        cfg.segments[0].stmts.clone()
+    };
+    let tail_stmts: Vec<Statement> = cfg.tail.clone();
+
+    // The no-await body has a different return-type policy than the
+    // await path: 2A infers when the annotation is absent, 2B requires
+    // an explicit return type (it types the terminal `Poll.Ready`
+    // fold). Preserve both.
+    let return_type = if n_suspends == 0 {
+        func.return_type
+            .clone()
+            .unwrap_or_else(|| TypeExpr::Inferred { span: span.clone() })
+    } else {
+        func.return_type.clone()?
+    };
+
+    // ── Crossing-local analysis (ported verbatim from the linear path).
+    //
+    // A pre-await `let <name> = ...` becomes a state-machine field IFF
+    // `<name>` is read in `tail` (after the last await). Crossing locals
+    // need an explicit type annotation; bail otherwise (the resolver
+    // diagnostic for the un-lowered body surfaces).
+    let mut crossing_locals: Vec<(String, TypeExpr)> = Vec::new();
+    for s in &pre_await_stmts {
+        if let Statement::Let(lb) = s {
+            if let Pattern::Identifier { name, .. } = &lb.pattern {
+                if stmts_reference_name(&tail_stmts, name) {
+                    let ty = lb.type_annotation.clone()?;
+                    crossing_locals.push((name.clone(), ty));
+                }
+            }
+        }
+    }
+    let crossing_names: Vec<String> = crossing_locals.iter().map(|(n, _)| n.clone()).collect();
+
+    let outer_arg_names: Vec<String> = func.params.iter().map(|p| p.name.clone()).collect();
+    let mut outer_field_names: Vec<String> = outer_arg_names.clone();
+    outer_field_names.extend(crossing_names.iter().cloned());
+
+    // Receiver-type map for Shape-3 (instance-method awaitee) lookup —
+    // ported verbatim from the linear path.
+    let mut receiver_types: HashMap<String, String> = HashMap::new();
+    for p in &func.params {
+        if let Some(name) = single_named_class(&p.type_expr) {
+            receiver_types.insert(p.name.clone(), name);
+        }
+    }
+    for s in &pre_await_stmts {
+        if let Statement::Let(lb) = s {
+            if let Pattern::Identifier { name, .. } = &lb.pattern {
+                if let Some(ann) = &lb.type_annotation {
+                    if let Some(cls) = single_named_class(ann) {
+                        receiver_types.insert(name.clone(), cls);
+                        continue;
+                    }
+                }
+                if let Some(val) = &lb.value {
+                    if let ExprKind::Identifier(src) = &val.kind {
+                        if let Some(src_ty) = receiver_types.get(src).cloned() {
+                            receiver_types.insert(name.clone(), src_ty);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Describe every suspend's awaitee, reusing the exact classifier the
+    // linear path used (`describe_awaitee`, factored out of
+    // `describe_await`).
+    let mut subs: Vec<AwaitSub> = Vec::with_capacity(n_suspends);
+    for seg in &suspend_segments {
+        let suspend = seg.suspend.as_ref()?;
+        let sub = describe_awaitee(
+            &suspend.binding,
+            &suspend.awaitee,
+            async_fn_returns,
+            class_static_returns,
+            class_instance_returns,
+            future_outputs,
+            &outer_field_names,
+            &receiver_types,
+        )?;
+        subs.push(sub);
+    }
+
+    // ── Fields: __state, outer args, crossing locals, __sub_i, bindings.
+    let mut fields: Vec<FieldDecl> = Vec::new();
+    fields.push(FieldDecl {
+        visibility: Visibility::Public,
+        name: "__state".to_string(),
+        type_expr: int_type(&span),
+        span: span.clone(),
+    });
+    for p in &func.params {
+        fields.push(FieldDecl {
+            visibility: Visibility::Public,
+            name: p.name.clone(),
+            type_expr: p.type_expr.clone(),
+            span: p.span.clone(),
+        });
+    }
+    for (name, ty) in &crossing_locals {
+        fields.push(FieldDecl {
+            visibility: Visibility::Public,
+            name: name.clone(),
+            type_expr: ty.clone(),
+            span: span.clone(),
+        });
+    }
+    for (i, sub) in subs.iter().enumerate() {
+        fields.push(FieldDecl {
+            visibility: Visibility::Public,
+            name: format!("__sub_{i}"),
+            type_expr: named_type(&sub.sub_class_name, &span),
+            span: span.clone(),
+        });
+    }
+    for sub in &subs {
+        fields.push(FieldDecl {
+            visibility: Visibility::Public,
+            name: sub.binding_name.clone(),
+            type_expr: sub.result_type.clone(),
+            span: span.clone(),
+        });
+    }
+
+    // ── Init params + body.
+    let mut init_params: Vec<Param> = Vec::new();
+    init_params.push(Param {
+        auto_assign: true,
+        name: "__state".to_string(),
+        type_expr: int_type(&span),
+        default: None,
+        span: span.clone(),
+    });
+    for p in &func.params {
+        init_params.push(Param {
+            auto_assign: true,
+            name: p.name.clone(),
+            type_expr: p.type_expr.clone(),
+            default: None,
+            span: p.span.clone(),
+        });
+    }
+
+    let mut init_body_stmts: Vec<Statement> = Vec::new();
+    // (1) Pre-await statements (with outer-arg refs → self.<arg>).
+    for s in &pre_await_stmts {
+        let mut rewritten = s.clone();
+        match &mut rewritten {
+            Statement::Let(lb) => {
+                if let Some(v) = lb.value.as_mut() {
+                    rewrite_arg_refs_in_expr(v, &outer_arg_names);
+                }
+            }
+            Statement::Expression(e) => {
+                rewrite_arg_refs_in_expr(e, &outer_arg_names);
+            }
+        }
+        init_body_stmts.push(rewritten);
+    }
+    // (2) Copy crossing locals into their fields.
+    for name in &crossing_names {
+        init_body_stmts.push(Statement::Expression(Expr {
+            kind: ExprKind::Assign {
+                target: Box::new(self_field(name, &span)),
+                value: Box::new(Expr {
+                    kind: ExprKind::Identifier(name.clone()),
+                    span: span.clone(),
+                }),
+            },
+            span: span.clone(),
+        }));
+    }
+    // (3) Sub-future eager construction.
+    for (i, sub) in subs.iter().enumerate() {
+        init_body_stmts.push(Statement::Expression(Expr {
+            kind: ExprKind::Assign {
+                target: Box::new(self_field(&format!("__sub_{i}"), &span)),
+                value: Box::new(sub.awaitee_ctor.clone()),
+            },
+            span: span.clone(),
+        }));
+    }
+    // (4) Default-initialise await-binding fields where synthesisable.
+    for sub in &subs {
+        if let Some(default) = default_value_for_type(&sub.result_type, &span) {
+            init_body_stmts.push(Statement::Expression(Expr {
+                kind: ExprKind::Assign {
+                    target: Box::new(self_field(&sub.binding_name, &span)),
+                    value: Box::new(default),
+                },
+                span: span.clone(),
+            }));
+        }
+    }
+
+    let init_method = FuncDef {
+        visibility: Visibility::Public,
+        is_async: false,
+        self_mode: None,
+        is_class_method: false,
+        name: "init".to_string(),
+        generic_params: None,
+        params: init_params,
+        return_type: None,
+        where_clause: None,
+        body: Block {
+            statements: init_body_stmts,
+            span: span.clone(),
+        },
+        doc_comments: Vec::new(),
+        span: span.clone(),
+    };
+
+    // ── Poll body — unified `self.__state` skeleton.
+    let poll_body = build_poll_body_cfg(
+        &subs,
+        &tail_stmts,
+        &outer_field_names,
+        &func.params,
+        &span,
+    );
+
+    let cx_param = Param {
+        auto_assign: false,
+        name: "cx".to_string(),
+        type_expr: TypeExpr::Reference {
+            lifetime: None,
+            mutable: true,
+            inner: Box::new(named_type("Context", &span)),
+            span: span.clone(),
+        },
+        default: None,
+        span: span.clone(),
+    };
+    let poll_method = FuncDef {
+        visibility: Visibility::Public,
+        is_async: false,
+        self_mode: Some(SelfMode::Mutable),
+        is_class_method: false,
+        name: "poll".to_string(),
+        generic_params: None,
+        params: vec![cx_param],
+        return_type: Some(poll_return_type(&return_type, &span)),
+        where_clause: None,
+        body: poll_body,
+        doc_comments: Vec::new(),
+        span: span.clone(),
+    };
+
+    let include_future = InnerImpl {
+        is_unsafe: false,
+        negative_trait: false,
+        trait_name: TypePath {
+            segments: vec!["Future".to_string()],
+            generic_args: None,
+            span: span.clone(),
+            rooted: false,
+        },
+        items: Vec::new(),
+        span: span.clone(),
+    };
+
+    let sm_class = ClassDef {
+        name: class_name.clone(),
+        generic_params: None,
+        parent: None,
+        fields,
+        methods: vec![init_method, poll_method],
+        inner_impls: vec![include_future],
+        derive_traits: Vec::new(),
+        layout: Vec::new(),
+        lib_decls: Vec::new(),
+        doc_comments: vec![format!(
+            " Compiler-synthesised Future state machine for `{}`. Spec: docs/specs/syntax/async_lowering.spec.md (Path A unified Cfg lowering).",
+            func.name
+        )],
+        where_clause: None,
+        span: span.clone(),
+    };
+
+    // ── Wrapper fn — constructs the state machine.
+    let mut ctor_args: Vec<Expr> = Vec::new();
+    ctor_args.push(Expr {
+        kind: ExprKind::IntLiteral(0, None),
+        span: span.clone(),
+    });
+    for p in &func.params {
+        ctor_args.push(Expr {
+            kind: ExprKind::Identifier(p.name.clone()),
+            span: p.span.clone(),
+        });
+    }
+    let ctor_call = Expr {
+        kind: ExprKind::MethodCall {
+            object: Box::new(Expr {
+                kind: ExprKind::Identifier(class_name.clone()),
+                span: span.clone(),
+            }),
+            method: "new".to_string(),
+            generic_args: Vec::new(),
+            args: ctor_args,
+            block: None,
+        },
+        span: span.clone(),
+    };
+    let wrapper = FuncDef {
+        visibility: func.visibility,
+        is_async: false,
+        self_mode: func.self_mode,
+        is_class_method: func.is_class_method,
+        name: func.name.clone(),
+        generic_params: func.generic_params.clone(),
+        params: func.params.clone(),
+        return_type: Some(named_type(&class_name, &span)),
+        where_clause: func.where_clause.clone(),
+        body: Block {
+            statements: vec![Statement::Expression(ctor_call)],
+            span: span.clone(),
+        },
+        doc_comments: func.doc_comments.clone(),
+        span: span.clone(),
+    };
+
+    Some((wrapper, sm_class))
+}
+
+/// Unified poll-body builder for the non-loop shapes. With `subs`
+/// empty it emits the 2A single-state body (`if __state == 0 {
+/// __state = 1; Poll.Ready(<tail>) } else { Poll.Pending }`); with N
+/// suspends it emits the linear `__state` if/elsif chain identical to
+/// the old `build_multi_state_poll_body`. One algorithm, parameterised
+/// on N — the no-await case is just N == 0.
+fn build_poll_body_cfg(
+    subs: &[AwaitSub],
+    tail_stmts: &[Statement],
+    outer_field_names: &[String],
+    args: &[Param],
+    span: &Span,
+) -> Block {
+    if subs.is_empty() {
+        // No-await: 2A single-state body. The tail IS the whole user
+        // body; rewrite bare arg refs to `self.<arg>` (matching the old
+        // `build_poll_body` which rewrote over `func.params`).
+        let arg_names: Vec<String> = args.iter().map(|p| p.name.clone()).collect();
+        let mut tail_block = Block {
+            statements: tail_stmts.to_vec(),
+            span: span.clone(),
+        };
+        rewrite_arg_refs_in_block(&mut tail_block, &arg_names);
+        let body_value_expr = Expr {
+            kind: ExprKind::Block(tail_block),
+            span: span.clone(),
+        };
+        let poll_ready = Expr {
+            kind: ExprKind::EnumVariant {
+                type_path: vec!["Poll".to_string()],
+                variant: "Ready".to_string(),
+                args: vec![FieldArg {
+                    name: None,
+                    value: body_value_expr,
+                    span: span.clone(),
+                }],
+            },
+            span: span.clone(),
+        };
+        let poll_pending = Expr {
+            kind: ExprKind::EnumVariant {
+                type_path: vec!["Poll".to_string()],
+                variant: "Pending".to_string(),
+                args: Vec::new(),
+            },
+            span: span.clone(),
+        };
+        let state_eq_zero = Expr {
+            kind: ExprKind::BinaryOp {
+                left: Box::new(self_field("__state", span)),
+                op: BinOp::Eq,
+                right: Box::new(Expr {
+                    kind: ExprKind::IntLiteral(0, None),
+                    span: span.clone(),
+                }),
+            },
+            span: span.clone(),
+        };
+        let set_state_one = Expr {
+            kind: ExprKind::Assign {
+                target: Box::new(self_field("__state", span)),
+                value: Box::new(Expr {
+                    kind: ExprKind::IntLiteral(1, None),
+                    span: span.clone(),
+                }),
+            },
+            span: span.clone(),
+        };
+        let then_block = Block {
+            statements: vec![
+                Statement::Expression(set_state_one),
+                Statement::Expression(poll_ready),
+            ],
+            span: span.clone(),
+        };
+        let else_block = Block {
+            statements: vec![Statement::Expression(poll_pending)],
+            span: span.clone(),
+        };
+        let if_expr = Expr {
+            kind: ExprKind::If(IfExpr {
+                condition: Box::new(state_eq_zero),
+                then_body: then_block,
+                elsif_clauses: Vec::new(),
+                else_body: Some(else_block),
+                span: span.clone(),
+            }),
+            span: span.clone(),
+        };
+        return Block {
+            statements: vec![Statement::Expression(if_expr)],
+            span: span.clone(),
+        };
+    }
+
+    // Linear-N: identical skeleton to the old `build_multi_state_poll_body`.
+    build_multi_state_poll_body(
+        subs,
+        tail_stmts,
+        outer_field_names,
+        &TypeExpr::Inferred { span: span.clone() },
+        span,
+    )
 }
 
 /// Lower a single top-level `async def` into a (rewritten sync fn,
@@ -2449,6 +2966,36 @@ fn describe_await(
         ExprKind::Await(inner) => inner,
         _ => return None,
     };
+    describe_awaitee(
+        &binding_name,
+        inner,
+        async_fn_returns,
+        class_static_returns,
+        class_instance_returns,
+        future_outputs,
+        outer_arg_names,
+        receiver_types,
+    )
+}
+
+/// Core awaitee classifier shared by the `LetBinding`-shaped
+/// [`describe_await`] (the still-live loop paths) and the CFG-driven
+/// [`lower_async_fn_via_cfg`], which already carries the unwrapped
+/// `binding` + inner `awaitee` on each [`cfg::Suspend`]. `inner` is the
+/// expression INSIDE the `.await` (`g(args)` / `Class.method(args)`),
+/// never an `ExprKind::Await`.
+#[allow(clippy::too_many_arguments)]
+fn describe_awaitee(
+    binding_name: &str,
+    inner: &Expr,
+    async_fn_returns: &HashMap<String, (String, TypeExpr)>,
+    class_static_returns: &HashMap<(String, String), TypeExpr>,
+    class_instance_returns: &HashMap<(String, String), TypeExpr>,
+    future_outputs: &HashMap<String, TypeExpr>,
+    outer_arg_names: &[String],
+    receiver_types: &HashMap<String, String>,
+) -> Option<AwaitSub> {
+    let binding_name = binding_name.to_string();
     let span = inner.span.clone();
 
     // Shape 1 — free-fn call: `name(args)`.
