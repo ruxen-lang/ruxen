@@ -1211,33 +1211,33 @@ impl Ty {
             Ty::FixedArray(t, n) => Ty::FixedArray(Box::new(f(&t)), n),
 
             // Sequences of children.
-            Ty::Tuple(ts) => Ty::Tuple(ts.iter().map(|t| f(t)).collect()),
+            Ty::Tuple(ts) => Ty::Tuple(ts.iter().map(&mut *f).collect()),
 
             // Nominal types with generic args.
             Ty::Class { name, generic_args } => Ty::Class {
                 name,
-                generic_args: generic_args.iter().map(|a| f(a)).collect(),
+                generic_args: generic_args.iter().map(&mut *f).collect(),
             },
             Ty::Struct { name, generic_args } => Ty::Struct {
                 name,
-                generic_args: generic_args.iter().map(|a| f(a)).collect(),
+                generic_args: generic_args.iter().map(&mut *f).collect(),
             },
             Ty::Enum { name, generic_args } => Ty::Enum {
                 name,
-                generic_args: generic_args.iter().map(|a| f(a)).collect(),
+                generic_args: generic_args.iter().map(&mut *f).collect(),
             },
 
             // Function types.
             Ty::Fn { params, ret } => Ty::Fn {
-                params: params.iter().map(|p| f(p)).collect(),
+                params: params.iter().map(&mut *f).collect(),
                 ret: Box::new(f(&ret)),
             },
             Ty::FnMut { params, ret } => Ty::FnMut {
-                params: params.iter().map(|p| f(p)).collect(),
+                params: params.iter().map(&mut *f).collect(),
                 ret: Box::new(f(&ret)),
             },
             Ty::FnOnce { params, ret } => Ty::FnOnce {
-                params: params.iter().map(|p| f(p)).collect(),
+                params: params.iter().map(&mut *f).collect(),
                 ret: Box::new(f(&ret)),
             },
 

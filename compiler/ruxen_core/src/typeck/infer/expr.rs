@@ -495,7 +495,7 @@ impl<'a> InferenceEngine<'a> {
                     self.substitute_generics_in_return(&derefed, &raw)
                 };
 
-                self.infer_combinator_block(method_name, &block, &ret_ty, &expr.span);
+                self.infer_combinator_block(method_name, block, &ret_ty, &expr.span);
 
                 expr.ty = self.ctx.resolve(&ret_ty);
             }
