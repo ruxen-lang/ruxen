@@ -1929,12 +1929,12 @@ fn describe_awaitee(
         // First try Shape 2 (static method on a class name). Then fall
         // through to Shape 3 (instance method on a typed receiver) if
         // the static lookup misses.
-        let (ret_ty, awaitee_receiver, is_static): (TypeExpr, ExprKind, bool) = if let Some(rt) =
+        let (ret_ty, awaitee_receiver): (TypeExpr, ExprKind) = if let Some(rt) =
             class_static_returns
                 .get(&(receiver_ident.clone(), method.clone()))
                 .cloned()
         {
-            (rt, ExprKind::Identifier(receiver_ident.clone()), true)
+            (rt, ExprKind::Identifier(receiver_ident.clone()))
         } else if let Some(class_name) = receiver_types.get(&receiver_ident) {
             let rt = class_instance_returns
                 .get(&(class_name.clone(), method.clone()))
@@ -1942,11 +1942,10 @@ fn describe_awaitee(
             // For Shape 3 the awaitee receiver stays as the original
             // identifier; the outer-arg-rewrite below promotes it to
             // `self.<name>` when needed.
-            (rt, ExprKind::Identifier(receiver_ident.clone()), false)
+            (rt, ExprKind::Identifier(receiver_ident.clone()))
         } else {
             return None;
         };
-        let _ = is_static; // reserved for future divergence in lowering shapes
 
         let future_class_name = match &ret_ty {
             TypeExpr::Named(path) if path.segments.len() == 1 => path.segments[0].clone(),
@@ -2029,9 +2028,6 @@ fn build_linear_state_dispatch(
         kind: ExprKind::Block(tail_block),
         span: span.clone(),
     };
-
-    let terminal_state_idx = n as i64;
-    let _ = terminal_state_idx; // kept for readability
 
     // Final terminal arm: Poll.Ready(tail).
     let terminal_ready = Expr {
