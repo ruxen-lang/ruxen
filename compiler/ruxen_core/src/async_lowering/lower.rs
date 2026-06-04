@@ -1371,22 +1371,7 @@ fn build_loop_poll_body_cfg(
         };
 
         // let __pi = (&var self.__sub_i).poll(cx)
-        let poll_call = Expr {
-            kind: ExprKind::MethodCall {
-                object: Box::new(Expr {
-                    kind: ExprKind::BorrowMut(Box::new(self_field(&format!("__sub_{i}"), span))),
-                    span: span.clone(),
-                }),
-                method: "poll".to_string(),
-                generic_args: Vec::new(),
-                args: vec![Expr {
-                    kind: ExprKind::Identifier("cx".to_string()),
-                    span: span.clone(),
-                }],
-                block: None,
-            },
-            span: span.clone(),
-        };
+        let poll_call = build_sub_poll_call(i, span);
         let poll_let_name = format!("__p{i}");
         let poll_let = Statement::Let(LetBinding {
             mutable: false,
@@ -2129,24 +2114,7 @@ fn build_linear_state_dispatch(
         };
 
         // (&var self.__sub_i).poll(cx)
-        let sub_field = self_field(&format!("__sub_{i}"), span);
-        let sub_borrow = Expr {
-            kind: ExprKind::BorrowMut(Box::new(sub_field)),
-            span: span.clone(),
-        };
-        let poll_call = Expr {
-            kind: ExprKind::MethodCall {
-                object: Box::new(sub_borrow),
-                method: "poll".to_string(),
-                generic_args: Vec::new(),
-                args: vec![Expr {
-                    kind: ExprKind::Identifier("cx".to_string()),
-                    span: span.clone(),
-                }],
-                block: None,
-            },
-            span: span.clone(),
-        };
+        let poll_call = build_sub_poll_call(i, span);
 
         let poll_match = Expr {
             kind: ExprKind::Match(MatchExpr {
@@ -2378,6 +2346,34 @@ fn self_field(name: &str, span: &Span) -> Expr {
                 span: span.clone(),
             }),
             field: name.to_string(),
+        },
+        span: span.clone(),
+    }
+}
+
+/// The poll call for await sub-future `i`: `(&var self.__sub_i).poll(cx)`.
+///
+/// Built byte-identically by both state-machine emitters — the loop
+/// emitter (`build_loop_poll_body_cfg`) and the linear emitter
+/// (`build_linear_state_dispatch`). Only the poll *call* is shared; the
+/// surrounding match/dispatch scaffolding differs structurally between the
+/// two paths (loop: keep_iterating/pending_exit flags + `__phase` advance +
+/// `__sub_ready` reset bound through a `let __pi`; linear: `__state` bump +
+/// terminal trailer, inline match), so those are intentionally left intact.
+fn build_sub_poll_call(i: usize, span: &Span) -> Expr {
+    Expr {
+        kind: ExprKind::MethodCall {
+            object: Box::new(Expr {
+                kind: ExprKind::BorrowMut(Box::new(self_field(&format!("__sub_{i}"), span))),
+                span: span.clone(),
+            }),
+            method: "poll".to_string(),
+            generic_args: Vec::new(),
+            args: vec![Expr {
+                kind: ExprKind::Identifier("cx".to_string()),
+                span: span.clone(),
+            }],
+            block: None,
         },
         span: span.clone(),
     }
