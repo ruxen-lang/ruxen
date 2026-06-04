@@ -62,3 +62,43 @@ fn derive_partial_eq_compares_fields_struct() {
          differing fields should compare unequal"
     );
 }
+
+/// Characterization (Phase 6 Task 2): pins the runtime behaviour of the
+/// fold-shaped derived methods (`==`, `hash_code`, `.clone`) on a struct
+/// with two integer fields and a `String` field — the exact arms the
+/// shared `fold_struct_fields` driver folds (primitive Compare/Eq, the
+/// FNV hash step, and the per-field clone+SetField). The extraction is
+/// byte-identical MIR; this is the green-before-and-after backstop.
+#[test]
+fn derive_fold_methods_eq_hash_clone_behaviour() {
+    let source = "\
+struct Rec
+  a: Int
+  b: Int
+  s: String
+  include Hashable
+end
+
+def hash_it[T: Hashable](x: &T) -> Int
+  x.hash_code
+end
+
+def main
+  let p = Rec.new(1, 2, \"hi\")
+  let q = Rec.new(1, 2, \"hi\")
+  let r = Rec.new(1, 9, \"hi\")
+  puts \"eq=#{p == q}\"
+  puts \"neq=#{p == r}\"
+  let c = p.clone
+  puts \"clone_eq=#{p == c}\"
+  puts \"hash_match=#{hash_it(&p) == hash_it(&q)}\"
+end
+";
+    let (stdout, exit) = compile_and_run(source, "derive_fold_methods");
+    assert_eq!(exit, Some(0), "non-zero exit; stdout={}", stdout);
+    assert_eq!(
+        stdout, "eq=true\nneq=false\nclone_eq=true\nhash_match=true\n",
+        "fold-shaped derived methods (eq/hash/clone) must agree across \
+         structurally-equal instances and a clone"
+    );
+}
