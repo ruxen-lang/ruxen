@@ -19,6 +19,7 @@ use ruxen_core::parser::ast::{
     Block, Expr, ExprKind, FuncDef, LetBinding, Pattern, Program, ReplInput, ReplParseResult,
     Statement, TopLevelItem, Visibility,
 };
+use ruxen_core::parser::visit::{walk_expr, Visit};
 use ruxen_core::parser::Parser;
 use ruxen_core::typeck;
 use std::collections::HashSet;
@@ -2260,128 +2261,36 @@ fn statements_contain_return(statements: &[Statement]) -> bool {
     })
 }
 
-/// Recurse through every expression node that can host a `return`.
-/// The wildcard arm at the bottom is intentional: if a future
-/// `ExprKind` variant gains an `Expr`/`Block` field that can host
-/// a return, it must be added here or `build_program` will miss the
-/// embedded return and reapply the buggy tail-preservation
-/// transform. Audit when `ExprKind` grows.
-fn expr_contains_return(expr: &Expr) -> bool {
-    match &expr.kind {
-        ExprKind::Return(_) => true,
-        ExprKind::If(if_expr) => {
-            expr_contains_return(&if_expr.condition)
-                || block_contains_return(&if_expr.then_body)
-                || if_expr
-                    .elsif_clauses
-                    .iter()
-                    .any(|c| expr_contains_return(&c.condition) || block_contains_return(&c.body))
-                || if_expr
-                    .else_body
-                    .as_ref()
-                    .is_some_and(block_contains_return)
+/// Scan an expression subtree for a `return` that would exit the
+/// enclosing wrapper function. Recurses through every expression form
+/// via the shared exhaustive [`Visit`] walk EXCEPT closure bodies: a
+/// `return` inside a closure returns from the closure (its own MIR
+/// function with its own signature), not from the wrapper. The
+/// `Closure` arm is therefore deliberately opaque — load-bearing for
+/// `build_program`'s tail-preservation transform, which must NOT be
+/// skipped on a closure-local return.
+struct ReturnScan {
+    found: bool,
+}
+
+impl Visit for ReturnScan {
+    fn visit_expr(&mut self, e: &Expr) {
+        if self.found {
+            return;
         }
-        ExprKind::IfLet(if_let) => {
-            expr_contains_return(&if_let.value)
-                || block_contains_return(&if_let.then_body)
-                || if_let.else_body.as_ref().is_some_and(block_contains_return)
+        match &e.kind {
+            ExprKind::Return(_) => self.found = true,
+            // Closure body is a separate function — do not recurse.
+            ExprKind::Closure(_) => {}
+            _ => walk_expr(self, e),
         }
-        ExprKind::Match(match_expr) => {
-            expr_contains_return(&match_expr.subject)
-                || match_expr.arms.iter().any(|arm| {
-                    let guard_has = arm
-                        .guard
-                        .as_deref()
-                        .map(expr_contains_return)
-                        .unwrap_or(false);
-                    let body_has = match &arm.body {
-                        ruxen_core::parser::ast::MatchArmBody::Expr(e) => expr_contains_return(e),
-                        ruxen_core::parser::ast::MatchArmBody::Block(b) => block_contains_return(b),
-                    };
-                    guard_has || body_has
-                })
-        }
-        ExprKind::While(w) => expr_contains_return(&w.condition) || block_contains_return(&w.body),
-        ExprKind::WhileLet(w) => expr_contains_return(&w.value) || block_contains_return(&w.body),
-        ExprKind::For(f) => expr_contains_return(&f.iterable) || block_contains_return(&f.body),
-        ExprKind::Loop(l) => block_contains_return(&l.body),
-        ExprKind::Block(b) => block_contains_return(b),
-        ExprKind::UnsafeBlock(b) => block_contains_return(b),
-        ExprKind::BinaryOp { left, right, .. } => {
-            expr_contains_return(left) || expr_contains_return(right)
-        }
-        ExprKind::UnaryOp { operand, .. } => expr_contains_return(operand),
-        ExprKind::Borrow(inner) | ExprKind::BorrowMut(inner) => expr_contains_return(inner),
-        ExprKind::FieldAccess { object, .. } | ExprKind::SafeNav { object, .. } => {
-            expr_contains_return(object)
-        }
-        ExprKind::MethodCall { object, args, .. } => {
-            expr_contains_return(object) || args.iter().any(expr_contains_return)
-        }
-        ExprKind::SafeNavCall { object, args, .. } => {
-            expr_contains_return(object) || args.iter().any(expr_contains_return)
-        }
-        ExprKind::Call { callee, args, .. } => {
-            expr_contains_return(callee) || args.iter().any(expr_contains_return)
-        }
-        ExprKind::ClosureCall { callee, args } => {
-            expr_contains_return(callee) || args.iter().any(expr_contains_return)
-        }
-        ExprKind::Index { object, index } => {
-            expr_contains_return(object) || expr_contains_return(index)
-        }
-        ExprKind::Try(inner) | ExprKind::Await(inner) => expr_contains_return(inner),
-        ExprKind::Assign { target, value } => {
-            expr_contains_return(target) || expr_contains_return(value)
-        }
-        ExprKind::CompoundAssign { target, value, .. } => {
-            expr_contains_return(target) || expr_contains_return(value)
-        }
-        ExprKind::Range { start, end, .. } => {
-            start.as_deref().map(expr_contains_return).unwrap_or(false)
-                || end.as_deref().map(expr_contains_return).unwrap_or(false)
-        }
-        ExprKind::ArrayLiteral(items) => items.iter().any(expr_contains_return),
-        ExprKind::ArrayFill { value, count } => {
-            expr_contains_return(value) || expr_contains_return(count)
-        }
-        ExprKind::TupleLiteral(items) => items.iter().any(expr_contains_return),
-        ExprKind::MapLiteral(pairs) => pairs
-            .iter()
-            .any(|(k, v)| expr_contains_return(k) || expr_contains_return(v)),
-        ExprKind::Break(inner) => inner.as_deref().map(expr_contains_return).unwrap_or(false),
-        ExprKind::Yield(items) => items.iter().any(expr_contains_return),
-        ExprKind::MacroCall { args, .. } => args.iter().any(expr_contains_return),
-        ExprKind::Cast { expr, .. } => expr_contains_return(expr),
-        ExprKind::EnumVariant { args, .. } => args.iter().any(|f| expr_contains_return(&f.value)),
-        ExprKind::Closure(_) => {
-            // A closure body is a distinct function — a `return` inside
-            // it returns from the closure, not from the wrapper. So we
-            // intentionally do NOT recurse into closure bodies; the
-            // closure's body is lowered as its own MIR function with
-            // its own signature.
-            false
-        }
-        // Pure leaves — literals, identifiers, self/SelfType,
-        // Continue, NullLiteral. None can host an embedded return.
-        ExprKind::IntLiteral(..)
-        | ExprKind::FloatLiteral(..)
-        | ExprKind::StringLiteral(_)
-        | ExprKind::InterpolatedString(_)
-        | ExprKind::CharLiteral(_)
-        | ExprKind::BoolLiteral(_)
-        | ExprKind::UnitLiteral
-        | ExprKind::Identifier(_)
-        | ExprKind::SelfRef
-        | ExprKind::SelfType
-        | ExprKind::Continue
-        | ExprKind::NullLiteral
-        | ExprKind::RegexLiteral { .. } => false,
     }
 }
 
-fn block_contains_return(block: &Block) -> bool {
-    statements_contain_return(&block.statements)
+fn expr_contains_return(expr: &Expr) -> bool {
+    let mut scan = ReturnScan { found: false };
+    scan.visit_expr(expr);
+    scan.found
 }
 
 /// Get the span from a top-level item.
@@ -2496,5 +2405,122 @@ mod tests {
     #[test]
     fn match_expression_is_side_effecting() {
         assert!(is_side_effect_expr(&parse_expr("match x\n_ -> 1\nend")));
+    }
+
+    fn parse_stmt(src: &str) -> Statement {
+        let tokens = Lexer::new(src).tokenize().expect("lex failed");
+        let mut p = Parser::new(tokens);
+        match p.parse_repl_input() {
+            ReplParseResult::Complete(ReplInput::Statement(s)) => s,
+            ReplParseResult::Complete(ReplInput::Expression(e)) => Statement::Expression(e),
+            other => panic!(
+                "expected statement, got {:?}",
+                match other {
+                    ReplParseResult::Complete(_) => "top-level",
+                    ReplParseResult::Incomplete => "incomplete",
+                    ReplParseResult::Error(_) => "error",
+                }
+            ),
+        }
+    }
+
+    fn names(items: &[&str]) -> HashSet<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    // ── Phase 6 Task 5: walker-migration characterization pins ───────
+    // These pin the per-walker behaviour BEFORE the migration onto the
+    // shared parser::visit::Visit, with special attention to the
+    // closure-opacity contract each walker carries.
+
+    // rhs_mutates_session_var: a method call whose receiver is a session
+    // var counts as a mutation; a closure RHS does NOT (closures are not
+    // inspected — their bodies don't run at let-binding time).
+    #[test]
+    fn rhs_mutate_method_on_session_var_is_true() {
+        let e = parse_expr("v.remove(0)");
+        assert!(rhs_mutates_session_var(&e, &names(&["v"])));
+    }
+
+    #[test]
+    fn rhs_mutate_unrelated_receiver_is_false() {
+        let e = parse_expr("w.remove(0)");
+        assert!(!rhs_mutates_session_var(&e, &names(&["v"])));
+    }
+
+    #[test]
+    fn rhs_mutate_does_not_inspect_closure_body() {
+        // A closure RHS that mentions the session var is NOT inspected;
+        // the let itself carries no side effect until the closure runs.
+        let e = parse_expr("{ || v.remove(0) }");
+        assert!(!rhs_mutates_session_var(&e, &names(&["v"])));
+    }
+
+    // replay_region_mutates_slot: a `count += 1` inside a closure body
+    // (fixture 90) DOES trigger refresh; a read-only closure capture
+    // (fixture 89_closure_capture_immut) does NOT.
+    #[test]
+    fn slot_mutation_inside_closure_body_is_true() {
+        let s = parse_stmt("nums.each { count += 1 }");
+        assert!(replay_region_mutates_slot(
+            std::slice::from_ref(&s),
+            "count"
+        ));
+    }
+
+    #[test]
+    fn slot_readonly_closure_capture_is_false() {
+        let s = parse_stmt("nums.map { |x| x * multiplier }");
+        assert!(!replay_region_mutates_slot(
+            std::slice::from_ref(&s),
+            "multiplier"
+        ));
+    }
+
+    #[test]
+    fn slot_direct_compound_assign_is_true() {
+        let s = parse_stmt("count += 1");
+        assert!(replay_region_mutates_slot(
+            std::slice::from_ref(&s),
+            "count"
+        ));
+    }
+
+    // expr_contains_return: a return inside if/match counts; a return
+    // inside a closure body does NOT (the closure is its own function).
+    #[test]
+    fn return_inside_if_is_detected() {
+        let e = parse_expr("if x\nreturn 1\nelse\n2\nend");
+        assert!(expr_contains_return(&e));
+    }
+
+    #[test]
+    fn return_inside_match_arm_is_detected() {
+        let e = parse_expr("match x\n_ -> return 1\nend");
+        assert!(expr_contains_return(&e));
+    }
+
+    #[test]
+    fn return_inside_closure_body_is_not_detected() {
+        // A `return` inside a closure returns from the closure, not the
+        // enclosing wrapper — the scan must NOT recurse into it.
+        let e = parse_expr("{ || return 1 }");
+        assert!(!expr_contains_return(&e));
+    }
+
+    #[test]
+    fn no_return_in_plain_expr() {
+        let e = parse_expr("1 + 2");
+        assert!(!expr_contains_return(&e));
+    }
+
+    // collect_mutation_targets / walk_expr_for_targets: a control-flow
+    // body assigning a session var collects that var.
+    #[test]
+    fn walk_targets_collects_assignment_in_if_body() {
+        let e = parse_expr("if cond\n  total = 5\nelse\n  0\nend");
+        let mut found = HashSet::new();
+        walk_expr_for_targets(&e, &mut found);
+        assert!(found.contains("total"), "collected: {:?}", found);
     }
 }
