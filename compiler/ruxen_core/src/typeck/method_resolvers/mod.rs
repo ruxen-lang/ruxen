@@ -64,31 +64,40 @@ pub(super) fn builtin_method_type(
             }
         }
     }
+    // (`resolvers()` returns a build-once `&'static [MethodResolver]`, so
+    // this loop iterates a cached slice — no per-call Vec rebuild.)
     // The single, deliberate "nothing claimed it" — was the legacy
     // match's trailing `_ => None`.
     None
 }
 
-/// The ONE precedence decision. During the migration this delegates to a
-/// single legacy-wrapping resolver; each migration task carves a
-/// namespace out of the legacy match into its own slot here, at the
-/// correct precedence position.
-fn resolvers() -> Vec<MethodResolver> {
-    let mut v = Vec::new();
-    v.extend(resolver::declared_method_resolvers()); // TIER 1 — fixes A2
-    v.extend(concurrency::resolvers()); // TIER 2 — named stdlib
-    v.extend(fmt::resolvers());
-    v.extend(io::resolvers());
-    v.extend(fs::resolvers());
-    v.extend(process::resolvers());
-    v.extend(net::resolvers());
-    v.extend(time::resolvers());
-    v.extend(strings::resolvers()); // TIER 3 — structural
-    v.extend(collections::resolvers());
-    v.extend(numeric::resolvers());
-    v.extend(iter::resolvers());
-    v.extend(resolver::structural_fallback_resolvers()); // TIER 3 tail
-    v
+/// The ONE precedence decision. The assembled pipeline is immutable for
+/// the life of the process (every stage is a pair of `fn` pointers with no
+/// captured environment), so it is built exactly once into a `OnceLock`
+/// and every `builtin_method_type` call iterates the cached slice. This
+/// replaces the previous per-method-call rebuild (a `Vec` plus 13 `extend`
+/// calls, each allocating a per-namespace `Vec`) — that work happened once
+/// per method-call inference. Behaviour is identical: the slice order is
+/// exactly the former `extend` order, which the golden parity test pins.
+fn resolvers() -> &'static [MethodResolver] {
+    static PIPELINE: std::sync::OnceLock<Vec<MethodResolver>> = std::sync::OnceLock::new();
+    PIPELINE.get_or_init(|| {
+        let mut v = Vec::new();
+        v.extend(resolver::declared_method_resolvers()); // TIER 1 — fixes A2
+        v.extend(concurrency::resolvers()); // TIER 2 — named stdlib
+        v.extend(fmt::resolvers());
+        v.extend(io::resolvers());
+        v.extend(fs::resolvers());
+        v.extend(process::resolvers());
+        v.extend(net::resolvers());
+        v.extend(time::resolvers());
+        v.extend(strings::resolvers()); // TIER 3 — structural
+        v.extend(collections::resolvers());
+        v.extend(numeric::resolvers());
+        v.extend(iter::resolvers());
+        v.extend(resolver::structural_fallback_resolvers()); // TIER 3 tail
+        v
+    })
 }
 
 #[cfg(test)]
