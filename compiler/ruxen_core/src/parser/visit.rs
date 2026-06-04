@@ -394,6 +394,9 @@ pub fn walk_expr_mut<V: VisitMut>(v: &mut V, e: &mut Expr) {
         ExprKind::MethodCall {
             object, args, block, ..
         } => {
+            // `generic_args` (a `Vec<TypeExpr>`, elided by `..`) is intentionally
+            // NOT descended: `VisitMut` has no `visit_type_expr_mut` and no
+            // consumer mutates type-expression positions.
             v.visit_expr_mut(object);
             for a in args {
                 v.visit_expr_mut(a);
