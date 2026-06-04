@@ -1,4 +1,4 @@
 def main
   let parts = "a,b,c".split(",").to_vec
-  puts "#{parts.len}"
+  puts "#{parts.size}"
 end
