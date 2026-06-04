@@ -684,44 +684,81 @@ mod tests {
         assert!(segment_cfg(&body).is_none());
     }
 
-    /// The accepted set must be the EXACT union of the three old recognizers.
-    /// This pins it: for each fixture, `segment_cfg(..).is_some()` equals the
-    /// old ladder's acceptance — where the ladder accepts an awaiting body iff
-    /// `recognize_while_multi_await` OR `recognize_while_single_await` OR
-    /// `super::segment_body` returns `Some` (and any no-await body is always
-    /// accepted by the 2A path). The recognizers are still present (Task 5
-    /// deletes them) so this cross-check is exact.
+    /// `segment_cfg`'s accepted set must match the union the old lowering
+    /// ladder produced. Each case pins the expected acceptance explicitly
+    /// (the linear/no-await `segment_body` authority is now `try_linear_cfg`
+    /// inside `segment_cfg` itself, so cross-checking against it would be a
+    /// tautology — Phase 3 step 4 deleted `segment_body`). The surviving
+    /// loop recognizers (`recognize_while_single/multi_await`, out of Path
+    /// A's scope) are STILL cross-checked live for the loop-shaped cases so
+    /// a divergence in the loop-acceptance subset trips here.
     #[test]
     fn segment_cfg_acceptance_matches_old_ladder_union() {
+        // (src, expected_accept, is_loop_shape)
         let cases = [
-            // (src, comment)
-            "async def f\n  1 + 2\nend",                                            // no-await
-            "async def f\n  let a = g().await\n  a\nend",                            // linear-1
-            "async def f\n  let a = g().await\n  let b = h().await\n  a + b\nend",   // linear-2
-            "async def f\n  let p = setup()\n  let a = g().await\n  a\nend",         // pre-await + linear
-            "async def f\n  while keep()\n    let x = s().await\n  end\n  0\nend",   // while-single
-            "async def f\n  while keep()\n    let a = r().await\n    let b = w().await\n  end\n  0\nend", // while-multi
+            ("async def f\n  1 + 2\nend", true, false), // no-await
+            ("async def f\n  let a = g().await\n  a\nend", true, false), // linear-1
+            (
+                "async def f\n  let a = g().await\n  let b = h().await\n  a + b\nend",
+                true,
+                false,
+            ), // linear-2
+            (
+                "async def f\n  let p = setup()\n  let a = g().await\n  a\nend",
+                true,
+                false,
+            ), // pre-await + linear
+            (
+                "async def f\n  while keep()\n    let x = s().await\n  end\n  0\nend",
+                true,
+                true,
+            ), // while-single
+            (
+                "async def f\n  while keep()\n    let a = r().await\n    let b = w().await\n  end\n  0\nend",
+                true,
+                true,
+            ), // while-multi
             // Rejections:
-            "async def f\n  while c().await\n    let x = s().await\n  end\n  0\nend", // await in cond
-            "async def f\n  g().await\n  0\nend",                                    // bare await stmt
-            "async def f\n  let (a, b) = g().await\n  a\nend",                       // non-ident await pattern
-            "async def f\n  while a()\n    let x = s().await\n  end\n  while b()\n    let y = t().await\n  end\n  0\nend", // two awaiting loops
-            "async def f\n  let a = if cond then g().await else h().await end\n  a\nend", // await nested in non-let expr
+            (
+                "async def f\n  while c().await\n    let x = s().await\n  end\n  0\nend",
+                false,
+                true,
+            ), // await in cond
+            ("async def f\n  g().await\n  0\nend", false, false), // bare await stmt
+            (
+                "async def f\n  let (a, b) = g().await\n  a\nend",
+                false,
+                false,
+            ), // non-ident await pattern
+            (
+                "async def f\n  while a()\n    let x = s().await\n  end\n  while b()\n    let y = t().await\n  end\n  0\nend",
+                false,
+                true,
+            ), // two awaiting loops
+            (
+                "async def f\n  let a = if cond then g().await else h().await end\n  a\nend",
+                false,
+                false,
+            ), // await nested in non-let expr
         ];
-        for src in cases {
+        for (src, expected_accept, is_loop_shape) in cases {
             let body = parse_fn_body(src);
-            let old_accepts = if !block_contains_await(&body) {
-                true
-            } else {
-                super::super::recognize_while_multi_await(&body).is_some()
-                    || super::super::recognize_while_single_await(&body).is_some()
-                    || super::super::segment_body(&body).is_some()
-            };
             let new_accepts = segment_cfg(&body).is_some();
             assert_eq!(
-                new_accepts, old_accepts,
-                "acceptance mismatch for src:\n{src}\n(old={old_accepts}, new={new_accepts})"
+                new_accepts, expected_accept,
+                "acceptance mismatch for src:\n{src}\n(expected={expected_accept}, new={new_accepts})"
             );
+            // For loop-shaped fixtures, the surviving recognizers must still
+            // agree with the pinned expectation (live cross-check of the loop
+            // subset, which Path A left untouched).
+            if is_loop_shape {
+                let loop_accepts = super::super::recognize_while_multi_await(&body).is_some()
+                    || super::super::recognize_while_single_await(&body).is_some();
+                assert_eq!(
+                    loop_accepts, expected_accept,
+                    "loop-recognizer acceptance mismatch for src:\n{src}"
+                );
+            }
         }
     }
 }

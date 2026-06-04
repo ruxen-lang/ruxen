@@ -173,34 +173,15 @@ pub fn lower_async_defs_with_bootstrap(program: &mut Program, bootstrap_programs
                     }
                 }
                 // Phase 3 Path A: the non-loop `.await` shape (linear-N)
-                // now lowers through the unified Cfg path. It returns
-                // `None` for loop-shaped or unsupported bodies, so the
-                // old linear builder below is the parallel fallback
-                // (kept until the run-pin + full suite gate the
-                // equivalence, then deleted in step 4).
+                // lowers through the unified Cfg path. It returns `None`
+                // for loop-shaped or unsupported bodies; loop-shaped
+                // bodies were already handled by the recognizers above,
+                // and any remaining unsupported shape (e.g. `.await`
+                // nested in a non-let expr) is left in its pre-lowering
+                // state for the resolver/typeck to diagnose (E1110 /
+                // E1115). The old linear/no-await builders this subsumes
+                // were deleted in Phase 3 step 4.
                 if let Some((rewritten, sm_class)) = lower_async_fn_via_cfg(
-                    func,
-                    &async_fn_returns,
-                    &class_static_returns,
-                    &class_instance_returns,
-                    &future_outputs,
-                ) {
-                    *func = rewritten;
-                    new_classes.push(TopLevelItem::Class(sm_class));
-                    continue;
-                }
-                // Milestone 2B path: async fn with `.await` suspends.
-                // The lowering is restricted to a canonical straight-
-                // line shape (one or more `let x = g().await; ...`
-                // statements followed by a tail expression). Anything
-                // outside the supported shape falls back to leaving
-                // the function in its pre-lowering state — the
-                // resolver/typeck will surface a follow-up error
-                // (E1115 for `.await` in loops outside the supported
-                // shape; the dedicated diagnostic for if/match arms is
-                // deferred). Future work will broaden the supported
-                // shape.
-                if let Some((rewritten, sm_class)) = lower_one_async_fn_with_await(
                     func,
                     &async_fn_returns,
                     &class_static_returns,
@@ -211,9 +192,8 @@ pub fn lower_async_defs_with_bootstrap(program: &mut Program, bootstrap_programs
                     new_classes.push(TopLevelItem::Class(sm_class));
                 }
             } else {
-                // Phase 3 Path A: the no-await shape also routes through
-                // the unified Cfg path (degenerate single-segment Cfg).
-                // Falls back to the 2A builder on `None`.
+                // Phase 3 Path A: the no-await shape routes through the
+                // same unified Cfg path (degenerate single-segment Cfg).
                 if let Some((rewritten, sm_class)) = lower_async_fn_via_cfg(
                     func,
                     &async_fn_returns,
@@ -221,12 +201,6 @@ pub fn lower_async_defs_with_bootstrap(program: &mut Program, bootstrap_programs
                     &class_instance_returns,
                     &future_outputs,
                 ) {
-                    *func = rewritten;
-                    new_classes.push(TopLevelItem::Class(sm_class));
-                    continue;
-                }
-                // Milestone 2A path: trivial single-state machine.
-                if let Some((rewritten, sm_class)) = lower_one_async_fn(func) {
                     *func = rewritten;
                     new_classes.push(TopLevelItem::Class(sm_class));
                 }
@@ -316,7 +290,7 @@ fn collect_class_static_returns_into(
 /// `def X(...) -> T` (no `self.` prefix). Drives Shape 3 in
 /// `describe_await`: `<obj>.<method>(args).await` where the receiver's
 /// class is known from a `(receiver_name → class_name)` map built by
-/// the caller (`lower_one_async_fn_with_await`).
+/// the caller (`lower_async_fn_via_cfg`).
 ///
 /// The receiver-type map is the missing piece — it's built from the
 /// outer fn's param annotations + simple let-binding chains, which is
@@ -689,13 +663,8 @@ fn lower_async_fn_via_cfg(
     };
 
     // ── Poll body — unified `self.__state` skeleton.
-    let poll_body = build_poll_body_cfg(
-        &subs,
-        &tail_stmts,
-        &outer_field_names,
-        &func.params,
-        &span,
-    );
+    let poll_body =
+        build_poll_body_cfg(&subs, &tail_stmts, &outer_field_names, &func.params, &span);
 
     let cx_param = Param {
         auto_assign: false,
@@ -805,7 +774,7 @@ fn lower_async_fn_via_cfg(
 /// empty it emits the 2A single-state body (`if __state == 0 {
 /// __state = 1; Poll.Ready(<tail>) } else { Poll.Pending }`); with N
 /// suspends it emits the linear `__state` if/elsif chain identical to
-/// the old `build_multi_state_poll_body`. One algorithm, parameterised
+/// the linear `build_linear_state_dispatch`. One algorithm, parameterised
 /// on N — the no-await case is just N == 0.
 fn build_poll_body_cfg(
     subs: &[AwaitSub],
@@ -816,8 +785,7 @@ fn build_poll_body_cfg(
 ) -> Block {
     if subs.is_empty() {
         // No-await: 2A single-state body. The tail IS the whole user
-        // body; rewrite bare arg refs to `self.<arg>` (matching the old
-        // `build_poll_body` which rewrote over `func.params`).
+        // body; rewrite bare arg refs to `self.<arg>` over `func.params`.
         let arg_names: Vec<String> = args.iter().map(|p| p.name.clone()).collect();
         let mut tail_block = Block {
             statements: tail_stmts.to_vec(),
@@ -896,706 +864,8 @@ fn build_poll_body_cfg(
         };
     }
 
-    // Linear-N: identical skeleton to the old `build_multi_state_poll_body`.
-    build_multi_state_poll_body(
-        subs,
-        tail_stmts,
-        outer_field_names,
-        &TypeExpr::Inferred { span: span.clone() },
-        span,
-    )
-}
-
-/// Lower a single top-level `async def` into a (rewritten sync fn,
-/// generated state-machine class) pair. Returns `None` if the input
-/// shouldn't be lowered (e.g. extern bodies, recovery errors).
-fn lower_one_async_fn(func: &FuncDef) -> Option<(FuncDef, ClassDef)> {
-    let span = func.span.clone();
-    let class_name = mangle_future_class_name(&func.name);
-
-    // ── Synthesise the state-machine class ────────────────────────
-    //
-    // Layout:
-    //   class __<FnName>Future
-    //     __state: Int
-    //     <arg_i>: <Ty_i>            # one field per fn arg
-    //     include Future
-    //
-    //     def init(@__state: Int, @arg_i: Ty_i, ...)
-    //     end
-    //
-    //     def var poll(cx: &var Context) -> Poll[<ret>]
-    //       if self.__state == 0
-    //         self.__state = 1
-    //         Poll.Ready(<original body, with arg refs → self.arg refs>)
-    //       else
-    //         Poll.Pending
-    //       end
-    //     end
-    //   end
-    //
-    // `@__state` makes init take the initial state as an argument so
-    // we can pass `0` from the wrapper without writing manual
-    // assignment code in the body. Same trick for each captured arg.
-
-    let return_type = func
-        .return_type
-        .clone()
-        .unwrap_or_else(|| TypeExpr::Inferred { span: span.clone() });
-
-    // Fields: __state then each fn arg.
-    let mut fields: Vec<FieldDecl> = Vec::new();
-    fields.push(FieldDecl {
-        visibility: Visibility::Public,
-        name: "__state".to_string(),
-        type_expr: int_type(&span),
-        span: span.clone(),
-    });
-    for p in &func.params {
-        fields.push(FieldDecl {
-            visibility: Visibility::Public,
-            name: p.name.clone(),
-            type_expr: p.type_expr.clone(),
-            span: p.span.clone(),
-        });
-    }
-
-    // init params: @__state, then @<arg> for each fn param.
-    let mut init_params: Vec<Param> = Vec::new();
-    init_params.push(Param {
-        auto_assign: true,
-        name: "__state".to_string(),
-        type_expr: int_type(&span),
-        default: None,
-        span: span.clone(),
-    });
-    for p in &func.params {
-        init_params.push(Param {
-            auto_assign: true,
-            name: p.name.clone(),
-            type_expr: p.type_expr.clone(),
-            default: None,
-            span: p.span.clone(),
-        });
-    }
-
-    let init_method = FuncDef {
-        visibility: Visibility::Public,
-        is_async: false,
-        self_mode: None, // init is special; resolver treats it as constructor
-        is_class_method: false,
-        name: "init".to_string(),
-        generic_params: None,
-        params: init_params,
-        return_type: None,
-        where_clause: None,
-        body: Block {
-            statements: Vec::new(),
-            span: span.clone(),
-        },
-        doc_comments: Vec::new(),
-        span: span.clone(),
-    };
-
-    // poll method.
-    //
-    // The poll body:
-    //   if self.__state == 0
-    //     self.__state = 1
-    //     Poll.Ready(<rewritten user body>)
-    //   else
-    //     Poll.Pending
-    //   end
-    let poll_body = build_poll_body(&func.body, &return_type, &func.params, &span);
-
-    let cx_param = Param {
-        auto_assign: false,
-        name: "cx".to_string(),
-        type_expr: TypeExpr::Reference {
-            lifetime: None,
-            mutable: true,
-            inner: Box::new(named_type("Context", &span)),
-            span: span.clone(),
-        },
-        default: None,
-        span: span.clone(),
-    };
-
-    let poll_method = FuncDef {
-        visibility: Visibility::Public,
-        is_async: false,
-        self_mode: Some(SelfMode::Mutable),
-        is_class_method: false,
-        name: "poll".to_string(),
-        generic_params: None,
-        params: vec![cx_param],
-        return_type: Some(poll_return_type(&return_type, &span)),
-        where_clause: None,
-        body: poll_body,
-        doc_comments: Vec::new(),
-        span: span.clone(),
-    };
-
-    // include Future (so the mixin participates in trait resolution).
-    let include_future = InnerImpl {
-        is_unsafe: false,
-        negative_trait: false,
-        trait_name: TypePath {
-            segments: vec!["Future".to_string()],
-            generic_args: None,
-            span: span.clone(),
-            rooted: false,
-        },
-        items: Vec::new(),
-        span: span.clone(),
-    };
-
-    let sm_class = ClassDef {
-        name: class_name.clone(),
-        generic_params: None,
-        parent: None,
-        fields,
-        methods: vec![init_method, poll_method],
-        inner_impls: vec![include_future],
-        derive_traits: Vec::new(),
-        layout: Vec::new(),
-        lib_decls: Vec::new(),
-        doc_comments: vec![format!(
-            " Compiler-synthesised Future state machine for `{}`. Spec: docs/specs/syntax/async_lowering.spec.md B2.",
-            func.name
-        )],
-        where_clause: None,
-        span: span.clone(),
-    };
-
-    // ── Rewrite the original async fn body ────────────────────────
-    //
-    //   def <name>(args...) -> __<Name>Future
-    //     __<Name>Future.new(0, args...)
-    //   end
-    //
-    // is_async is cleared so the typeck signature-lift to
-    // `Future[T]` (see `wrap_async_return` in typeck/infer.rs) no
-    // longer fires; the return is now the concrete state-machine
-    // class.
-
-    let mut ctor_args: Vec<Expr> = Vec::new();
-    ctor_args.push(Expr {
-        kind: ExprKind::IntLiteral(0, None),
-        span: span.clone(),
-    });
-    for p in &func.params {
-        ctor_args.push(Expr {
-            kind: ExprKind::Identifier(p.name.clone()),
-            span: p.span.clone(),
-        });
-    }
-
-    let ctor_call = Expr {
-        kind: ExprKind::MethodCall {
-            object: Box::new(Expr {
-                kind: ExprKind::Identifier(class_name.clone()),
-                span: span.clone(),
-            }),
-            method: "new".to_string(),
-            generic_args: Vec::new(),
-            args: ctor_args,
-            block: None,
-        },
-        span: span.clone(),
-    };
-
-    let wrapper = FuncDef {
-        visibility: func.visibility,
-        is_async: false,
-        self_mode: func.self_mode,
-        is_class_method: func.is_class_method,
-        name: func.name.clone(),
-        generic_params: func.generic_params.clone(),
-        params: func.params.clone(),
-        return_type: Some(named_type(&class_name, &span)),
-        where_clause: func.where_clause.clone(),
-        body: Block {
-            statements: vec![Statement::Expression(ctor_call)],
-            span: span.clone(),
-        },
-        doc_comments: func.doc_comments.clone(),
-        span: span.clone(),
-    };
-
-    Some((wrapper, sm_class))
-}
-
-// ─── Milestone 2B — `.await` suspension-point lowering ──────────────
-//
-// 2B accepts a canonical straight-line shape:
-//
-//     async def f(args...) -> R
-//       let x_1 = g_1(<args from outer/literals>).await
-//       let x_2 = g_2(<args from outer/literals>).await
-//       ...
-//       <tail expr>
-//     end
-//
-// where every awaitee is a direct `Call { callee = Identifier(name) }`
-// against another top-level async fn whose return type the lowering
-// pass already knows (from `async_fn_returns`). Awaitees whose
-// arguments depend on a prior `.await`'s result are NOT supported in
-// v1 (sub-futures are constructed eagerly in `init` from outer args /
-// constants only). Anything more complex causes the pass to bail and
-// leave the fn for downstream stages to diagnose.
-//
-// Generated class layout for the example above:
-//
-//     class __FFuture
-//       __state: Int
-//       <outer_arg_i>: <Ty_i>           # captured at construction
-//       __sub_0: __G_1Future            # eagerly constructed
-//       __sub_1: __G_2Future            # eagerly constructed
-//       x_1: <R_1>                      # placeholder-initialised
-//       x_2: <R_2>
-//       include Future
-//
-//       def init(@__state: Int, @<outer_arg_i>: <Ty_i>...)
-//         self.__sub_0 = __G_1Future.new(0, <args>...)
-//         self.__sub_1 = __G_2Future.new(0, <args>...)
-//         self.x_1 = <default of R_1>
-//         self.x_2 = <default of R_2>
-//       end
-//
-//       def var poll(cx: &var Context) -> Poll[R]
-//         if self.__state == 0
-//           match (&var self.__sub_0).poll(cx)
-//             Poll.Pending  -> Poll.Pending
-//             Poll.Ready(v) ->
-//               self.x_1 = v
-//               self.__state = 1
-//               Poll.Pending
-//           end
-//         elsif self.__state == 1
-//           match (&var self.__sub_1).poll(cx)
-//             Poll.Pending  -> Poll.Pending
-//             Poll.Ready(v) ->
-//               self.x_2 = v
-//               self.__state = 2
-//               Poll.Ready(<tail with self.x_1/x_2/args>)
-//           end
-//         else
-//           Poll.Pending
-//         end
-//       end
-//     end
-//
-// Per spec B5, the v1 lowering returns `Poll.Pending` between states
-// (instead of eager fall-through) — that costs an extra round-trip
-// per state but keeps the lowering pure-functional and trivially
-// correct. The eager-progress optimisation arrives with the sub-
-// phase 3 executor.
-fn lower_one_async_fn_with_await(
-    func: &FuncDef,
-    async_fn_returns: &HashMap<String, (String, TypeExpr)>,
-    class_static_returns: &HashMap<(String, String), TypeExpr>,
-    class_instance_returns: &HashMap<(String, String), TypeExpr>,
-    future_outputs: &HashMap<String, TypeExpr>,
-) -> Option<(FuncDef, ClassDef)> {
-    let span = func.span.clone();
-    let class_name = mangle_future_class_name(&func.name);
-
-    let return_type = func.return_type.clone()?;
-
-    // ── Phase 1 — segment the body into `pre_await | [let x = g().await]* | tail`.
-    //
-    // The segmenter accepts side-effect-free pre-await statements
-    // (Milestone-2B extension — closes the gap noted in
-    // `project_ruxen_milestone_2b_segmenter_constraints.md`). Each
-    // pre-await Statement::Let either becomes a pure init-local (if
-    // it's never read after the first `.await`) or a state-machine
-    // field (if it IS read in `tail`).
-    let segments = segment_body(&func.body)?;
-    let Segments {
-        pre_await: pre_await_stmts,
-        await_lets,
-        tail: tail_stmts,
-    } = segments;
-    if await_lets.is_empty() {
-        // `block_contains_await` saw an await but the segmenter
-        // didn't — the await sits in an unsupported shape (e.g.
-        // inside an if-arm or a loop). Bail; the resolver-side
-        // E1110 / E1115 checks will surface a diagnostic.
-        return None;
-    }
-
-    // ── Phase 1b — classify pre-await locals (crossing vs non-crossing).
-    //
-    // A pre-await `let <name> = ...` becomes a state-machine field IFF
-    // `<name>` is read in `tail_stmts` (i.e., AFTER the last await).
-    // Such locals must carry an explicit type annotation so the
-    // lowering can declare the field type without typeck integration;
-    // we bail on un-annotated crossing locals (the user can either
-    // annotate the let or restructure the body — the resolver-side
-    // diagnostic for the un-lowered body will surface).
-    //
-    // Non-crossing locals stay as plain `Statement::Let`s inside the
-    // `init` body; the awaitee constructor in `describe_await` runs
-    // BEFORE the suspend (eager-init), so any awaitee args that
-    // reference them resolve to the in-scope init-local without
-    // hoisting.
-    let pre_await_let_names = collect_let_names(&pre_await_stmts);
-    let mut crossing_locals: Vec<(String, TypeExpr)> = Vec::new();
-    for s in &pre_await_stmts {
-        if let Statement::Let(lb) = s {
-            if let Pattern::Identifier { name, .. } = &lb.pattern {
-                if stmts_reference_name(&tail_stmts, name) {
-                    let ty = lb.type_annotation.clone()?;
-                    crossing_locals.push((name.clone(), ty));
-                }
-            }
-        }
-    }
-    let crossing_names: Vec<String> = crossing_locals.iter().map(|(n, _)| n.clone()).collect();
-
-    // ── Phase 2 — for each await, locate the awaited fn's synth class.
-    //
-    // The `outer_field_names` set drives `describe_await`'s arg-ref
-    // rewrite: bare references to these names inside awaitee args get
-    // promoted to `self.<name>`. The set unions outer fn params with
-    // crossing pre-await locals (both end up as `self.*` fields), but
-    // NOT non-crossing pre-await locals (those stay init-locals and
-    // resolve naturally inside the init scope where the awaitee ctor
-    // is later assigned via `self.__sub_i = <ctor>`).
-    let outer_arg_names: Vec<String> = func.params.iter().map(|p| p.name.clone()).collect();
-    let mut outer_field_names: Vec<String> = outer_arg_names.clone();
-    outer_field_names.extend(crossing_names.iter().cloned());
-
-    // Receiver-type map for Shape-3 (instance-method awaitee) lookup.
-    // Sources, walked in order so later entries shadow earlier:
-    //   1. Outer fn params — `def handle(s: AsyncTcpStream)` → `s` →
-    //      "AsyncTcpStream". The canonical case.
-    //   2. Pre-await `let x: Class = ...` annotated locals — covers
-    //      the user-pre-binds-then-awaits shape.
-    //   3. Pre-await `var x = ident` / `let x = ident` rebinds —
-    //      `var s = stream` propagates the type from `stream` (in the
-    //      map) to `s`. Mirrors the 4C server fixture pattern.
-    let mut receiver_types: HashMap<String, String> = HashMap::new();
-    for p in &func.params {
-        if let Some(name) = single_named_class(&p.type_expr) {
-            receiver_types.insert(p.name.clone(), name);
-        }
-    }
-    for s in &pre_await_stmts {
-        if let Statement::Let(lb) = s {
-            if let Pattern::Identifier { name, .. } = &lb.pattern {
-                if let Some(ann) = &lb.type_annotation {
-                    if let Some(cls) = single_named_class(ann) {
-                        receiver_types.insert(name.clone(), cls);
-                        continue;
-                    }
-                }
-                if let Some(val) = &lb.value {
-                    if let ExprKind::Identifier(src) = &val.kind {
-                        if let Some(src_ty) = receiver_types.get(src).cloned() {
-                            receiver_types.insert(name.clone(), src_ty);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    let mut subs: Vec<AwaitSub> = Vec::new();
-    for al in &await_lets {
-        let sub = describe_await(
-            al,
-            async_fn_returns,
-            class_static_returns,
-            class_instance_returns,
-            future_outputs,
-            &outer_field_names,
-            &receiver_types,
-        )?;
-        subs.push(sub);
-    }
-
-    // ── Phase 3 — synthesise the state-machine class fields ──────────
-    //
-    // Field order matters for the `init` body that initialises them
-    // (later fields can reference earlier ones via `self.x`).
-    let mut fields: Vec<FieldDecl> = Vec::new();
-    fields.push(FieldDecl {
-        visibility: Visibility::Public,
-        name: "__state".to_string(),
-        type_expr: int_type(&span),
-        span: span.clone(),
-    });
-    for p in &func.params {
-        fields.push(FieldDecl {
-            visibility: Visibility::Public,
-            name: p.name.clone(),
-            type_expr: p.type_expr.clone(),
-            span: p.span.clone(),
-        });
-    }
-    // Hoisted pre-await locals (those referenced in tail). Field name
-    // matches the source `let` so the tail-block rewrite picks them up
-    // via the `outer_field_names + binding_names` union pass.
-    for (name, ty) in &crossing_locals {
-        fields.push(FieldDecl {
-            visibility: Visibility::Public,
-            name: name.clone(),
-            type_expr: ty.clone(),
-            span: span.clone(),
-        });
-    }
-    for (i, sub) in subs.iter().enumerate() {
-        fields.push(FieldDecl {
-            visibility: Visibility::Public,
-            name: format!("__sub_{i}"),
-            type_expr: named_type(&sub.sub_class_name, &span),
-            span: span.clone(),
-        });
-    }
-    for sub in &subs {
-        fields.push(FieldDecl {
-            visibility: Visibility::Public,
-            name: sub.binding_name.clone(),
-            type_expr: sub.result_type.clone(),
-            span: span.clone(),
-        });
-    }
-
-    // ── Phase 4 — init params + body ────────────────────────────────
-    //
-    // Init takes `@__state` + each outer arg. Inside the body we:
-    //   1. Run the user's pre-await statements verbatim, with outer-
-    //      arg refs rewritten to `self.<arg>`. Statement::Let bindings
-    //      defined here are init-scope locals. Side-effecting RHS
-    //      (function calls, allocations) runs eagerly as part of
-    //      construction — see B5 future work for moving sub-future
-    //      construction to per-state.
-    //   2. For each crossing local, copy the init-local into the
-    //      state-machine field (`self.<name> = <name>`) so the tail's
-    //      `self.<name>` reads have a value.
-    //   3. Construct each sub-future eagerly. Awaitee args referencing
-    //      crossing locals or outer args are already rewritten to
-    //      `self.*` by `describe_await`; awaitee args referencing
-    //      non-crossing pre-await locals resolve to those init-locals
-    //      directly.
-    //   4. Default-initialise each await-binding field so the type
-    //      checker sees a value at every read site.
-    let mut init_params: Vec<Param> = Vec::new();
-    init_params.push(Param {
-        auto_assign: true,
-        name: "__state".to_string(),
-        type_expr: int_type(&span),
-        default: None,
-        span: span.clone(),
-    });
-    for p in &func.params {
-        init_params.push(Param {
-            auto_assign: true,
-            name: p.name.clone(),
-            type_expr: p.type_expr.clone(),
-            default: None,
-            span: p.span.clone(),
-        });
-    }
-
-    let mut init_body_stmts: Vec<Statement> = Vec::new();
-    // (1) Pre-await statements (with arg refs → self.<arg>).
-    for s in &pre_await_stmts {
-        let mut rewritten = s.clone();
-        match &mut rewritten {
-            Statement::Let(lb) => {
-                if let Some(v) = lb.value.as_mut() {
-                    rewrite_arg_refs_in_expr(v, &outer_arg_names);
-                }
-            }
-            Statement::Expression(e) => {
-                rewrite_arg_refs_in_expr(e, &outer_arg_names);
-            }
-        }
-        init_body_stmts.push(rewritten);
-    }
-    // (2) Copy crossing locals into their state-machine fields.
-    for name in &crossing_names {
-        init_body_stmts.push(Statement::Expression(Expr {
-            kind: ExprKind::Assign {
-                target: Box::new(self_field(name, &span)),
-                value: Box::new(Expr {
-                    kind: ExprKind::Identifier(name.clone()),
-                    span: span.clone(),
-                }),
-            },
-            span: span.clone(),
-        }));
-    }
-    // (3) Sub-future eager construction.
-    let _ = pre_await_let_names; // reserved for future shadow-checking
-    for (i, sub) in subs.iter().enumerate() {
-        init_body_stmts.push(Statement::Expression(Expr {
-            kind: ExprKind::Assign {
-                target: Box::new(self_field(&format!("__sub_{i}"), &span)),
-                value: Box::new(sub.awaitee_ctor.clone()),
-            },
-            span: span.clone(),
-        }));
-    }
-    // (4) Default values for await bindings.
-    //
-    // Skip rather than bail when a binding's result_type has no
-    // synthesisable default — for class / complex generic types
-    // (`Result[String, IoError]`, `(AsyncTcpStream, String)`, …) the
-    // alloc-zeroed field stays zero-initialised until the poll Ready
-    // arm overwrites it. The earlier "must default" rule prevented
-    // every B2b instance-method await on the stdlib IO futures from
-    // lowering. Pin: docs/rondo_v1_blockers.md B2b.
-    for sub in &subs {
-        if let Some(default) = default_value_for_type(&sub.result_type, &span) {
-            init_body_stmts.push(Statement::Expression(Expr {
-                kind: ExprKind::Assign {
-                    target: Box::new(self_field(&sub.binding_name, &span)),
-                    value: Box::new(default),
-                },
-                span: span.clone(),
-            }));
-        }
-    }
-
-    let init_method = FuncDef {
-        visibility: Visibility::Public,
-        is_async: false,
-        self_mode: None,
-        is_class_method: false,
-        name: "init".to_string(),
-        generic_params: None,
-        params: init_params,
-        return_type: None,
-        where_clause: None,
-        body: Block {
-            statements: init_body_stmts,
-            span: span.clone(),
-        },
-        doc_comments: Vec::new(),
-        span: span.clone(),
-    };
-
-    // ── Phase 5 — poll body (chained if/elsif/else over __state) ────
-    //
-    // Pass `outer_field_names` (outer params ∪ crossing pre-await
-    // locals) so the tail-block rewrite promotes references to either
-    // category into `self.<name>` reads. Non-crossing pre-await
-    // locals are not in the set — they never appear in the tail by
-    // definition (that's the "crossing" criterion), so leaving them
-    // out is correct and avoids accidentally rewriting unrelated
-    // shadowed identifiers.
-    let poll_body =
-        build_multi_state_poll_body(&subs, &tail_stmts, &outer_field_names, &return_type, &span);
-
-    let cx_param = Param {
-        auto_assign: false,
-        name: "cx".to_string(),
-        type_expr: TypeExpr::Reference {
-            lifetime: None,
-            mutable: true,
-            inner: Box::new(named_type("Context", &span)),
-            span: span.clone(),
-        },
-        default: None,
-        span: span.clone(),
-    };
-    let poll_method = FuncDef {
-        visibility: Visibility::Public,
-        is_async: false,
-        self_mode: Some(SelfMode::Mutable),
-        is_class_method: false,
-        name: "poll".to_string(),
-        generic_params: None,
-        params: vec![cx_param],
-        return_type: Some(poll_return_type(&return_type, &span)),
-        where_clause: None,
-        body: poll_body,
-        doc_comments: Vec::new(),
-        span: span.clone(),
-    };
-
-    let include_future = InnerImpl {
-        is_unsafe: false,
-        negative_trait: false,
-        trait_name: TypePath {
-            segments: vec!["Future".to_string()],
-            generic_args: None,
-            span: span.clone(),
-            rooted: false,
-        },
-        items: Vec::new(),
-        span: span.clone(),
-    };
-
-    let sm_class = ClassDef {
-        name: class_name.clone(),
-        generic_params: None,
-        parent: None,
-        fields,
-        methods: vec![init_method, poll_method],
-        inner_impls: vec![include_future],
-        derive_traits: Vec::new(),
-        layout: Vec::new(),
-        lib_decls: Vec::new(),
-        doc_comments: vec![format!(
-            " Compiler-synthesised Future state machine for `{}`. Spec: docs/specs/syntax/async_lowering.spec.md B7-B10.",
-            func.name
-        )],
-        where_clause: None,
-        span: span.clone(),
-    };
-
-    // ── Phase 6 — rewrite original async fn into a wrapper that
-    // constructs the state machine.
-    let mut ctor_args: Vec<Expr> = Vec::new();
-    ctor_args.push(Expr {
-        kind: ExprKind::IntLiteral(0, None),
-        span: span.clone(),
-    });
-    for p in &func.params {
-        ctor_args.push(Expr {
-            kind: ExprKind::Identifier(p.name.clone()),
-            span: p.span.clone(),
-        });
-    }
-
-    let ctor_call = Expr {
-        kind: ExprKind::MethodCall {
-            object: Box::new(Expr {
-                kind: ExprKind::Identifier(class_name.clone()),
-                span: span.clone(),
-            }),
-            method: "new".to_string(),
-            generic_args: Vec::new(),
-            args: ctor_args,
-            block: None,
-        },
-        span: span.clone(),
-    };
-
-    let wrapper = FuncDef {
-        visibility: func.visibility,
-        is_async: false,
-        self_mode: func.self_mode,
-        is_class_method: func.is_class_method,
-        name: func.name.clone(),
-        generic_params: func.generic_params.clone(),
-        params: func.params.clone(),
-        return_type: Some(named_type(&class_name, &span)),
-        where_clause: func.where_clause.clone(),
-        body: Block {
-            statements: vec![Statement::Expression(ctor_call)],
-            span: span.clone(),
-        },
-        doc_comments: func.doc_comments.clone(),
-        span: span.clone(),
-    };
-
-    Some((wrapper, sm_class))
+    // Linear-N: the `self.__state` if/elsif dispatch over N suspends.
+    build_linear_state_dispatch(subs, tail_stmts, outer_field_names, span)
 }
 
 /// Lower an async fn whose body matches [`WhileSingleAwaitShape`] —
@@ -2334,29 +1604,6 @@ struct AwaitSub {
     result_type: TypeExpr,
 }
 
-/// Output of [`segment_body`] — a Milestone-2B-shaped async-fn body
-/// split into three sequential regions:
-///
-///   * `pre_await` — straight-line statements that execute BEFORE the
-///     first `.await`. None of them may contain a nested `.await`.
-///     These run inside the state-machine's `init` body verbatim
-///     (with outer-arg refs rewritten to `self.<arg>`); any local
-///     declared here that is read after the first `.await` (i.e.,
-///     referenced in `tail`) is additionally hoisted to a field by
-///     [`lower_one_async_fn_with_await`].
-///   * `await_lets` — one entry per `.await` suspension point, in
-///     source order. Each is a `let <binding> = <awaitee>.await`.
-///     Bindings ALWAYS become state-machine fields (existing 2B
-///     behaviour — every await result survives the next suspend).
-///   * `tail` — the post-last-await statements. References to outer
-///     args, await-bindings, and crossing pre-await locals are
-///     rewritten to `self.<name>` by the caller.
-struct Segments {
-    pre_await: Vec<Statement>,
-    await_lets: Vec<LetBinding>,
-    tail: Vec<Statement>,
-}
-
 /// One iteration of a multi-await loop body. The phase
 /// represents the stmts up to and including ONE `.await`. A
 /// loop body with N awaits has N phases plus a tail of
@@ -2650,151 +1897,6 @@ fn recognize_while_single_await(body: &Block) -> Option<WhileSingleAwaitShape> {
     })
 }
 
-/// Split an async fn body into `pre_await | [await let-binding]* | tail`.
-///
-/// Returns `None` if the body uses an unsupported shape:
-///   * a pre-await statement whose RHS contains a nested `.await`
-///     (the body must reach the first suspend through straight-line
-///     statements only — branched/looped `.await`s are E1115 / B11),
-///   * an await-let whose RHS isn't a bare `<expr>.await` (await
-///     nested deeper in an expression),
-///   * an await-let whose pattern isn't a plain `Identifier`
-///     (destructuring on await results is deferred),
-///   * a bare `expr.await` statement at the top level (only let-
-///     bound awaits are supported in v1).
-///
-/// Milestone-2B (commit f899788) accepted ONLY the
-/// `[await let-binding]* tail` shape — no pre-await statements at all.
-/// This extension lifts that restriction so the natural server-handler
-/// shape (`let parsed = parse(req); let r = service.call(parsed).await; reply(r)`)
-/// lowers without a workaround.
-fn segment_body(body: &Block) -> Option<Segments> {
-    let mut pre_await: Vec<Statement> = Vec::new();
-    let mut await_lets: Vec<LetBinding> = Vec::new();
-    let mut tail: Vec<Statement> = Vec::new();
-    // Phase tracking: 0 = collecting pre-await prefix, 1 = collecting
-    // await-let chain, 2 = collecting post-last-await tail.
-    //
-    // The transitions are one-way: once we see the first `.await` we
-    // can no longer accept pre-await statements; once we see a non-
-    // await statement after an await-let we move to the tail and
-    // forbid further awaits.
-    let mut seen_first_await = false;
-    let mut in_tail = false;
-
-    for stmt in &body.statements {
-        if in_tail {
-            // Post-last-await: forbid further awaits (unsupported v1).
-            if let Statement::Let(lb) = stmt {
-                if let Some(v) = &lb.value {
-                    if expr_contains_await(v) {
-                        return None;
-                    }
-                }
-            }
-            if let Statement::Expression(e) = stmt {
-                if expr_contains_await(e) {
-                    return None;
-                }
-            }
-            tail.push(stmt.clone());
-            continue;
-        }
-
-        match stmt {
-            Statement::Let(lb) => {
-                let value = lb.value.as_ref()?;
-                if let ExprKind::Await(_) = &value.kind {
-                    // OK — this is `let x = <expr>.await`. Pattern
-                    // must be a plain Identifier binding (no
-                    // destructuring) for v1.
-                    if !matches!(&lb.pattern, Pattern::Identifier { .. }) {
-                        return None;
-                    }
-                    await_lets.push(lb.clone());
-                    seen_first_await = true;
-                } else if expr_contains_await(value) {
-                    // Await nested inside a complex expression — bail.
-                    return None;
-                } else if !seen_first_await {
-                    // Pre-await straight-line let. Side-effecting RHS
-                    // is fine (it runs in `init`); the type system
-                    // and effects checker handle whatever safety
-                    // story applies post-resolve.
-                    pre_await.push(stmt.clone());
-                } else {
-                    // First non-await statement AFTER at least one
-                    // await marks the start of the tail.
-                    in_tail = true;
-                    tail.push(stmt.clone());
-                }
-            }
-            Statement::Expression(e) => {
-                if expr_contains_await(e) {
-                    // Treating a bare `expr.await` as the last
-                    // suspension is feasible but uncommon; v1 only
-                    // accepts the let-bound form. Bail.
-                    return None;
-                }
-                if !seen_first_await {
-                    // Pre-await expression statement (e.g. a side-
-                    // effecting setup call). Runs in `init` verbatim.
-                    pre_await.push(stmt.clone());
-                } else {
-                    // First non-await statement marks the start of
-                    // the tail.
-                    in_tail = true;
-                    tail.push(stmt.clone());
-                }
-            }
-        }
-    }
-
-    // If the body ended with an await let and no tail stmt, the
-    // bound value's identifier is the implicit tail expression. Add
-    // a `self.<binding>` reference so state N's Ready arm has
-    // something to return.
-    if tail.is_empty() {
-        if let Some(last) = await_lets.last() {
-            if let Pattern::Identifier { name, span, .. } = &last.pattern {
-                tail.push(Statement::Expression(Expr {
-                    kind: ExprKind::FieldAccess {
-                        object: Box::new(Expr {
-                            kind: ExprKind::SelfRef,
-                            span: span.clone(),
-                        }),
-                        field: name.clone(),
-                    },
-                    span: span.clone(),
-                }));
-            }
-        }
-    }
-
-    Some(Segments {
-        pre_await,
-        await_lets,
-        tail,
-    })
-}
-
-/// Names introduced by `let <pat> = ...` statements in `stmts`,
-/// considering only plain `Pattern::Identifier` bindings (the
-/// segmenter rejects destructuring on the await branch but pre-await
-/// lets COULD destructure — for those we leave the name set empty so
-/// the caller treats them as pure init-locals with no field hoisting).
-fn collect_let_names(stmts: &[Statement]) -> Vec<String> {
-    let mut names = Vec::new();
-    for s in stmts {
-        if let Statement::Let(lb) = s {
-            if let Pattern::Identifier { name, .. } = &lb.pattern {
-                names.push(name.clone());
-            }
-        }
-    }
-    names
-}
-
 /// Returns `true` if any subtree of `expr` reads the bare identifier
 /// `name`. Conservative: doesn't follow shadowing inside nested blocks
 /// (matches the segmenter's name-set rewrites, which already assume
@@ -2932,7 +2034,7 @@ fn stmts_reference_name(stmts: &[Statement], name: &str) -> bool {
 /// after typeck.
 ///
 /// Returns `None` if the awaitee shape doesn't match either supported
-/// pattern. Downstream `lower_one_async_fn_with_await` returns `None`
+/// pattern. Downstream `lower_async_fn_via_cfg` returns `None`
 /// for the whole function in that case, and the resolver/typeck pass
 /// surfaces a follow-up diagnostic.
 /// Extract a single-segment class name from a `TypeExpr::Named` path
@@ -3133,12 +2235,16 @@ fn describe_awaitee(
     None
 }
 
-/// Build the multi-state poll body for a 2B lowering.
-fn build_multi_state_poll_body(
+/// Emit the linear `self.__state` if/elsif dispatch for N≥1 suspends —
+/// the linear-N branch of [`build_poll_body_cfg`]. State i polls
+/// `self.__sub_i`; on `Ready(v)` it stores `self.<binding_i> = v`, bumps
+/// `__state`, and either re-`Pending`s (i < N-1) or folds the terminal
+/// `Poll.Ready(<tail>)` (i == N-1). The `else` arm returns `Poll.Pending`
+/// forever (poll-after-Ready, per spec B5).
+fn build_linear_state_dispatch(
     subs: &[AwaitSub],
     tail_stmts: &[Statement],
     outer_arg_names: &[String],
-    _return_ty: &TypeExpr,
     span: &Span,
 ) -> Block {
     // Build the chain of `if self.__state == 0 ... elsif self.__state == 1 ... else`.
@@ -4526,7 +3632,7 @@ fn default_value_for_type(ty: &TypeExpr, span: &Span) -> Option<Expr> {
             // Generic-wrapped defaults for the canonical Future Output
             // shapes — Option[T] and Result[T, E]. Without these, B2b
             // Shape-3 awaits bail at the (4) default-value step in
-            // `lower_one_async_fn_with_await` whenever the awaited
+            // `lower_async_fn_via_cfg` whenever the awaited
             // future's Output is generic (every IO-style future).
             //
             // Defaults chosen by safety not by semantic meaning: the
@@ -4587,115 +3693,6 @@ fn default_value_for_type(ty: &TypeExpr, span: &Span) -> Option<Expr> {
         }
     }
     None
-}
-
-/// Build the poll method body.
-///
-///   if self.__state == 0
-///     self.__state = 1
-///     Poll.Ready(<rewritten body>)
-///   else
-///     Poll.Pending
-///   end
-///
-/// The `<rewritten body>` substitutes references to function args
-/// (`a`, `b`, …) with `self.a`, `self.b`, … so they read from the
-/// captured fields.
-fn build_poll_body(user_body: &Block, _return_ty: &TypeExpr, args: &[Param], span: &Span) -> Block {
-    // Walk the body and rewrite Identifier(arg_name) → self.arg_name.
-    let arg_names: Vec<String> = args.iter().map(|p| p.name.clone()).collect();
-    let mut rewritten_body = user_body.clone();
-    rewrite_arg_refs_in_block(&mut rewritten_body, &arg_names);
-
-    // The body might be a block with a tail expr or statements with
-    // a final expression. Turn the whole user body into a single
-    // value expression by wrapping in a Block.
-    let body_value_expr = Expr {
-        kind: ExprKind::Block(rewritten_body),
-        span: span.clone(),
-    };
-
-    // Poll.Ready(<body value>) — `Type.Variant(args)` parses as
-    // `ExprKind::EnumVariant { type_path, variant, args }` in the
-    // user-facing grammar (verified via parser introspection); the
-    // resolver lowers it directly to the variant constructor.
-    let poll_ready = Expr {
-        kind: ExprKind::EnumVariant {
-            type_path: vec!["Poll".to_string()],
-            variant: "Ready".to_string(),
-            args: vec![FieldArg {
-                name: None,
-                value: body_value_expr,
-                span: span.clone(),
-            }],
-        },
-        span: span.clone(),
-    };
-
-    // Poll.Pending — unit-variant form, same AST node with empty
-    // args (matches the existing 720 fixture's `Poll.Pending` arm).
-    let poll_pending = Expr {
-        kind: ExprKind::EnumVariant {
-            type_path: vec!["Poll".to_string()],
-            variant: "Pending".to_string(),
-            args: Vec::new(),
-        },
-        span: span.clone(),
-    };
-
-    // self.__state == 0
-    let state_eq_zero = Expr {
-        kind: ExprKind::BinaryOp {
-            left: Box::new(self_field("__state", span)),
-            op: BinOp::Eq,
-            right: Box::new(Expr {
-                kind: ExprKind::IntLiteral(0, None),
-                span: span.clone(),
-            }),
-        },
-        span: span.clone(),
-    };
-
-    // self.__state = 1
-    let set_state_one = Expr {
-        kind: ExprKind::Assign {
-            target: Box::new(self_field("__state", span)),
-            value: Box::new(Expr {
-                kind: ExprKind::IntLiteral(1, None),
-                span: span.clone(),
-            }),
-        },
-        span: span.clone(),
-    };
-
-    let then_block = Block {
-        statements: vec![
-            Statement::Expression(set_state_one),
-            Statement::Expression(poll_ready),
-        ],
-        span: span.clone(),
-    };
-
-    let else_block = Block {
-        statements: vec![Statement::Expression(poll_pending)],
-        span: span.clone(),
-    };
-
-    let if_expr = Expr {
-        kind: ExprKind::If(IfExpr {
-            condition: Box::new(state_eq_zero),
-            then_body: then_block,
-            elsif_clauses: Vec::new(),
-            else_body: Some(else_block),
-            span: span.clone(),
-        }),
-        span: span.clone(),
-    };
-
-    Block {
-        statements: vec![Statement::Expression(if_expr)],
-        span: span.clone(),
-    }
 }
 
 /// `self.<name>` as a FieldAccess expression.
