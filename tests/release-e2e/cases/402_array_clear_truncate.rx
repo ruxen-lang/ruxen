@@ -8,5 +8,5 @@ def main
   puts "after_trunc=#{v.size}"
   v.clear
   puts "after_clear=#{v.size}"
-  puts "is_empty=#{v.is_empty}"
+  puts "is_empty=#{v.empty?}"
 end

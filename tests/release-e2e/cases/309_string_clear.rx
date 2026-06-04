@@ -3,5 +3,5 @@ def main
   puts "before len=#{s.size}"
   s.clear
   puts "after len=#{s.size}"
-  puts "empty=#{s.is_empty}"
+  puts "empty=#{s.empty?}"
 end

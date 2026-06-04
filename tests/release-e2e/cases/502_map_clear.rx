@@ -6,7 +6,7 @@ def main
   let before = h.size
   h.clear
   let after = h.size
-  let empty = h.is_empty
+  let empty = h.empty?
   puts "before=#{before}"
   puts "after=#{after}"
   puts "empty=#{empty}"
