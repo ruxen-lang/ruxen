@@ -180,31 +180,47 @@ const STATIC_CTORS: &[(&str, &[&str])] = &[
     ("BufWriter", &["with_capacity"]),
 ];
 
+/// The three runtime collection families, keyed off the mangled-callee
+/// type prefix. The `Vec` family folds in `Array`, `Hash` folds in `HashMap`
+/// and `Map`, `Set` folds in `HashSet` — the same aliasing the runtime ABI
+/// uses for these container types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CollectionFamily {
+    Vec,
+    Hash,
+    Set,
+}
+
+/// Classify `callee` by its collection-type prefix (e.g. `Vec_push`,
+/// `HashMap[K, V]_insert`). Single source for the prefix ladder that both
+/// `arg_transfer_mask` and `has_runtime_prefix` consumed in duplicate.
+fn collection_family(callee: &str) -> Option<CollectionFamily> {
+    const VEC: &[&str] = &["Vec_", "Vec[", "Array_", "Array["];
+    const HASH: &[&str] = &["Hash_", "Hash[", "HashMap_", "HashMap[", "Map_", "Map["];
+    const SET: &[&str] = &["Set_", "Set[", "HashSet_", "HashSet["];
+    if VEC.iter().any(|p| callee.starts_with(p)) {
+        Some(CollectionFamily::Vec)
+    } else if HASH.iter().any(|p| callee.starts_with(p)) {
+        Some(CollectionFamily::Hash)
+    } else if SET.iter().any(|p| callee.starts_with(p)) {
+        Some(CollectionFamily::Set)
+    } else {
+        None
+    }
+}
+
 /// Old `transfer_indices` + `is_pointer_store_helper`, folded into one mask.
 fn arg_transfer_mask(callee: &str) -> ArgMask {
     if callee == "ruxen_store_ptr" {
         return ArgMask::single(1);
     }
     let m = extract_method_name(callee);
-    let is_vec = callee.starts_with("Vec_")
-        || callee.starts_with("Vec[")
-        || callee.starts_with("Array_")
-        || callee.starts_with("Array[");
-    let is_hash = callee.starts_with("Hash_")
-        || callee.starts_with("Hash[")
-        || callee.starts_with("HashMap_")
-        || callee.starts_with("HashMap[")
-        || callee.starts_with("Map_")
-        || callee.starts_with("Map[");
-    let is_set = callee.starts_with("Set_")
-        || callee.starts_with("Set[")
-        || callee.starts_with("HashSet_")
-        || callee.starts_with("HashSet[");
-    match (is_vec, is_hash, is_set, m) {
-        (true, _, _, "push") => ArgMask::single(1),
-        (true, _, _, "insert") => ArgMask::single(2),
-        (_, true, _, "insert") => ArgMask::pair(1, 2),
-        (_, _, true, "insert") => ArgMask::single(1),
+    let family = collection_family(callee);
+    match (family, m) {
+        (Some(CollectionFamily::Vec), "push") => ArgMask::single(1),
+        (Some(CollectionFamily::Vec), "insert") => ArgMask::single(2),
+        (Some(CollectionFamily::Hash), "insert") => ArgMask::pair(1, 2),
+        (Some(CollectionFamily::Set), "insert") => ArgMask::single(1),
         _ if callee == "ruxen_vec_push" => ArgMask::single(1),
         _ if callee == "ruxen_vec_insert" => ArgMask::single(2),
         _ if callee == "ruxen_hash_insert" => ArgMask::pair(1, 2),
@@ -214,22 +230,11 @@ fn arg_transfer_mask(callee: &str) -> ArgMask {
 }
 
 /// Old prefix list inside `is_runtime_borrow_helper` (drops.rs:1091-1107).
+/// The collection-prefix ladder is shared with `arg_transfer_mask` via
+/// `collection_family`; this adds the non-collection runtime prefixes.
 fn has_runtime_prefix(c: &str) -> bool {
-    c.starts_with("ruxen_")
-        || c.starts_with("Vec_")
-        || c.starts_with("Vec[")
-        || c.starts_with("Array_")
-        || c.starts_with("Array[")
-        || c.starts_with("Hash_")
-        || c.starts_with("Hash[")
-        || c.starts_with("HashMap_")
-        || c.starts_with("HashMap[")
-        || c.starts_with("Map_")
-        || c.starts_with("Map[")
-        || c.starts_with("Set_")
-        || c.starts_with("Set[")
-        || c.starts_with("HashSet_")
-        || c.starts_with("HashSet[")
+    collection_family(c).is_some()
+        || c.starts_with("ruxen_")
         || c.starts_with("String_")
         || c.starts_with("&str_")
 }
