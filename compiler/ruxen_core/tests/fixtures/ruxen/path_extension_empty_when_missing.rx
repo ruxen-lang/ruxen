@@ -3,7 +3,7 @@ use std.path.path_extension
 def main
   let e1 = path_extension(&"/foo/bar")
   let e2 = path_extension(&"/foo/.hidden")
-  if e1.is_empty() && e2.is_empty()
+  if e1.empty? && e2.empty?
     puts "ok"
   else
     puts "fail e1=[#{e1}] e2=[#{e2}]"
