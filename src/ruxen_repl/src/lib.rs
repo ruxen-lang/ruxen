@@ -6,11 +6,7 @@
 mod capture;
 mod commands;
 mod completion;
-// `display` still carries unused color constants + error/warning formatters
-// kept for the diagnostic surface; `env` keeps an unused slot-lifecycle enum.
-#[allow(dead_code)]
 mod display;
-#[allow(dead_code)]
 mod env;
 mod eval;
 mod highlight;

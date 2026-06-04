@@ -11,8 +11,6 @@ use ruxen_core::typeck;
 const GREEN: &str = "\x1b[32m";
 const DIM: &str = "\x1b[2m";
 const RED: &str = "\x1b[31m";
-const YELLOW: &str = "\x1b[33m";
-const CYAN: &str = "\x1b[36m";
 const RESET: &str = "\x1b[0m";
 const BOLD: &str = "\x1b[1m";
 
@@ -209,16 +207,6 @@ pub fn format_fn_signature(name: &str, params: &[(String, Ty)], return_ty: &Ty) 
 /// Format a REPL error message (compact, 2-4 lines).
 pub fn format_error(message: &str) -> String {
     format!("{RED}{BOLD}Error:{RESET} {RED}{message}{RESET}")
-}
-
-/// Format a REPL error with a hint.
-pub fn format_error_with_hint(message: &str, hint: &str) -> String {
-    format!("{RED}{BOLD}Error:{RESET} {RED}{message}{RESET}\n  {CYAN}Hint:{RESET} {hint}")
-}
-
-/// Format a warning message.
-pub fn format_warning(message: &str) -> String {
-    format!("{YELLOW}Warning:{RESET} {message}")
 }
 #[cfg(test)]
 mod tests {
@@ -474,24 +462,6 @@ mod tests {
         let plain = strip_ansi(&out);
         assert!(plain.contains("Error:"), "got {:?}", plain);
         assert!(plain.contains("oh no"), "got {:?}", plain);
-    }
-
-    #[test]
-    fn format_error_with_hint_contains_both() {
-        let out = format_error_with_hint("bad thing", "try foo instead");
-        let plain = strip_ansi(&out);
-        assert!(plain.contains("Error:"));
-        assert!(plain.contains("bad thing"));
-        assert!(plain.contains("Hint:"));
-        assert!(plain.contains("try foo instead"));
-    }
-
-    #[test]
-    fn format_warning_contains_message() {
-        let out = format_warning("deprecated");
-        let plain = strip_ansi(&out);
-        assert!(plain.contains("Warning:"));
-        assert!(plain.contains("deprecated"));
     }
 
     // ── helpers ─────────────────────────────────────────────────────
