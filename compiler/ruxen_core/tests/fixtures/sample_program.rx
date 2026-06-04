@@ -254,7 +254,7 @@ class Repository[T: Showable]
   end
 
   def display_all
-    if self.items.is_empty
+    if self.items.empty?
       puts "  (empty)"
       return
     end
@@ -373,10 +373,10 @@ def create_task_from_input(
   desc: &str,
   priority_str: &str
 ) -> Result[USize, TodoError]
-  if title.is_empty
+  if title.empty?
     return Err(TodoError.MissingField(name: String.from("title")))
   end
-  if desc.is_empty
+  if desc.empty?
     return Err(TodoError.MissingField(name: String.from("description")))
   end
 
