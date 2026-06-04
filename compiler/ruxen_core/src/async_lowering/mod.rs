@@ -30,6 +30,7 @@ use crate::lexer::token::Span;
 use crate::parser::ast::*;
 use crate::parser::visit::{walk_expr, walk_expr_mut, Visit, VisitMut};
 
+mod cfg;
 mod diagnostics;
 pub use diagnostics::*;
 
