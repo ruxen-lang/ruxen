@@ -949,6 +949,44 @@ impl<'a> InferenceEngine<'a> {
             _ => {}
         }
     }
+
+    /// Harvest `{generic_param → concrete}` bindings from (args × formal
+    /// params) and substitute them into `ret`. This is the single driver
+    /// shared by the `FnCall` path and the selected-method (`MethodCall`)
+    /// path: both build a `param_names` set from `signature.generic_params`,
+    /// match each formal param against the resolved actual arg via
+    /// [`Self::bind_type_params_from_args`], and `subst_ty` the result into
+    /// the return type. Extracting it removes the duplicated driver loop the
+    /// two sites previously hand-rolled.
+    ///
+    /// `ret` is the (already receiver-substituted, async-wrapped) return type;
+    /// when the signature declares no own type params, `ret` is returned
+    /// unchanged.
+    pub(super) fn harvest_and_subst_generics(
+        &self,
+        signature: &crate::resolve::symbols::FnSignature,
+        args: &[HirExpr],
+        ret: &Ty,
+    ) -> Ty {
+        if signature.generic_params.is_empty() {
+            return ret.clone();
+        }
+        let param_names: std::collections::HashSet<String> = signature
+            .generic_params
+            .iter()
+            .map(|gp| gp.name.clone())
+            .collect();
+        let mut bindings: std::collections::HashMap<String, Ty> = std::collections::HashMap::new();
+        for (arg, param) in args.iter().zip(&signature.params) {
+            let actual = self.ctx.resolve(&arg.ty);
+            Self::bind_type_params_from_args(&param_names, &param.ty, &actual, &mut bindings);
+        }
+        if bindings.is_empty() {
+            ret.clone()
+        } else {
+            Self::subst_ty(ret, &bindings)
+        }
+    }
 }
 
 #[cfg(test)]

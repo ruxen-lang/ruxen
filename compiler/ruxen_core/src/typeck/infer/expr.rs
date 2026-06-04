@@ -7,6 +7,7 @@
 use crate::diagnostics::Diagnostic;
 use crate::hir::nodes::*;
 use crate::hir::types::Ty;
+use crate::lexer::token::Span;
 use crate::resolve::symbols::DefKind;
 
 use super::super::coerce::auto_deref;
@@ -484,70 +485,9 @@ impl<'a> InferenceEngine<'a> {
                 let ret_ty = if let Some(ret) = builtin_ret {
                     ret
                 } else if method_name == "new" {
-                    if let Ty::Class { name, generic_args } = &derefed {
-                        if generic_args.is_empty() {
-                            if let Some(inferred) = self.infer_class_generics(name, args) {
-                                Ty::Class {
-                                    name: name.clone(),
-                                    generic_args: inferred,
-                                }
-                            } else {
-                                self.resolve_method_call(&derefed, method_name, args, &expr.span)
-                            }
-                        } else {
-                            self.resolve_method_call(&derefed, method_name, args, &expr.span)
-                        }
-                    } else {
-                        self.resolve_method_call(&derefed, method_name, args, &expr.span)
-                    }
+                    self.infer_constructor_call(&derefed, method_name, args, &expr.span)
                 } else if let Some(selected) = selected_method {
-                    let sig_opt = self.symbols.get(selected).and_then(|def| match &def.kind {
-                        DefKind::Method { signature, .. } => Some(signature.clone()),
-                        _ => None,
-                    });
-                    if let Some(signature) = sig_opt {
-                        for (arg, param) in args.iter().zip(&signature.params) {
-                            let param_ty = self.substitute_generics_in_return(&derefed, &param.ty);
-                            let _ = unify(&arg.ty, &param_ty, self.ctx, &expr.span);
-                            self.check_concurrency_bounds(&param_ty, &arg.ty, &arg.span);
-                        }
-                        let ret = self.wrap_async_return(&signature);
-                        // First substitute the receiver's generic args
-                        // (handles `MutexGuard[T]` from `Mutex[Int].lock_raw`).
-                        let mut ret = self.substitute_generics_in_return(&derefed, &ret);
-                        // Then, for a method that declares its OWN type params
-                        // (`def expect[T](actual: T) -> Matcher[T]`), harvest
-                        // `{T → concrete}` from the actual argument types and
-                        // substitute into the return type — the same binding
-                        // the FnCall path does for free generic functions.
-                        // The receiver-based substitution above can't bind the
-                        // method's own params, so `expect(aString)` previously
-                        // returned `Matcher[T]` instead of `Matcher[String]`.
-                        if !signature.generic_params.is_empty() {
-                            let param_names: std::collections::HashSet<String> = signature
-                                .generic_params
-                                .iter()
-                                .map(|gp| gp.name.clone())
-                                .collect();
-                            let mut bindings: std::collections::HashMap<String, Ty> =
-                                std::collections::HashMap::new();
-                            for (arg, param) in args.iter().zip(&signature.params) {
-                                let actual = self.ctx.resolve(&arg.ty);
-                                Self::bind_type_params_from_args(
-                                    &param_names,
-                                    &param.ty,
-                                    &actual,
-                                    &mut bindings,
-                                );
-                            }
-                            if !bindings.is_empty() {
-                                ret = Self::subst_ty(&ret, &bindings);
-                            }
-                        }
-                        ret
-                    } else {
-                        self.ctx.fresh_type_var()
-                    }
+                    self.infer_selected_method(selected, &derefed, args, &expr.span)
                 } else {
                     // Regular method call — substitute TypeParam in the
                     // return type using the object's generic args.
@@ -555,28 +495,7 @@ impl<'a> InferenceEngine<'a> {
                     self.substitute_generics_in_return(&derefed, &raw)
                 };
 
-                // For block-consuming combinators whose return type carries
-                // a fresh inference variable (e.g. `map` on Option/Vec/
-                // Result), unify that variable with the closure body's
-                // inferred type so the container's element type is concrete.
-                if let Some(ref blk) = block {
-                    if method_name == "map" {
-                        if let HirExprKind::Closure { body, .. } = &blk.kind {
-                            let body_ty = self.ctx.resolve(&body.ty);
-                            match &ret_ty {
-                                Ty::Option(inner) | Ty::Array(inner) | Ty::Result(inner, _) => {
-                                    let _ = unify(inner, &body_ty, self.ctx, &expr.span);
-                                }
-                                Ty::Class { name, generic_args } if name.ends_with("Iter") => {
-                                    if let Some(inner) = generic_args.first() {
-                                        let _ = unify(inner, &body_ty, self.ctx, &expr.span);
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
+                self.infer_combinator_block(method_name, &block, &ret_ty, &expr.span);
 
                 expr.ty = self.ctx.resolve(&ret_ty);
             }
@@ -663,29 +582,8 @@ impl<'a> InferenceEngine<'a> {
                         // argument (return-only / turbofish) stay free —
                         // `bind_type_params_from_args` skips Infer/TypeParam
                         // actuals — preserving existing behaviour.
-                        let mut base_ty = self.wrap_async_return(&signature);
-                        if !signature.generic_params.is_empty() {
-                            let param_names: std::collections::HashSet<String> = signature
-                                .generic_params
-                                .iter()
-                                .map(|gp| gp.name.clone())
-                                .collect();
-                            let mut bindings: std::collections::HashMap<String, Ty> =
-                                std::collections::HashMap::new();
-                            for (arg, param) in args.iter().zip(&signature.params) {
-                                let actual = self.ctx.resolve(&arg.ty);
-                                Self::bind_type_params_from_args(
-                                    &param_names,
-                                    &param.ty,
-                                    &actual,
-                                    &mut bindings,
-                                );
-                            }
-                            if !bindings.is_empty() {
-                                base_ty = Self::subst_ty(&base_ty, &bindings);
-                            }
-                        }
-                        expr.ty = base_ty;
+                        let base_ty = self.wrap_async_return(&signature);
+                        expr.ty = self.harvest_and_subst_generics(&signature, args, &base_ty);
                     }
                 }
             }
@@ -1154,6 +1052,99 @@ impl<'a> InferenceEngine<'a> {
                 // compatibility with the legacy raw-pointer behaviour.
                 expr.ty = self.ctx.fresh_type_var();
             }
+        }
+    }
+
+    /// Constructor (`new`) generic inference: turn `Pair.new(42, "hi")`
+    /// into `Pair[Int, &str]` by inferring the class's generic args from
+    /// the constructor argument types when the receiver class has no
+    /// explicit generic args. Non-`Class` receivers (and classes that
+    /// already carry generic args) fall back to ordinary method resolution.
+    fn infer_constructor_call(
+        &mut self,
+        derefed: &Ty,
+        method_name: &str,
+        args: &[HirExpr],
+        span: &Span,
+    ) -> Ty {
+        if let Ty::Class { name, generic_args } = derefed {
+            if generic_args.is_empty() {
+                if let Some(inferred) = self.infer_class_generics(name, args) {
+                    return Ty::Class {
+                        name: name.clone(),
+                        generic_args: inferred,
+                    };
+                }
+            }
+        }
+        self.resolve_method_call(derefed, method_name, args, span)
+    }
+
+    /// Return-typing for a declared (class-selected) method: unify each
+    /// argument against the (receiver-substituted) parameter type, wrap the
+    /// async return, substitute the receiver's generic args, then harvest the
+    /// method's OWN type params from the actual argument types (so
+    /// `expect[T](actual: T) -> Matcher[T]` called `expect(s)` yields
+    /// `Matcher[<s>]`). The harvest is the shared
+    /// [`Self::harvest_and_subst_generics`] driver — the same one the
+    /// `FnCall` path uses.
+    fn infer_selected_method(
+        &mut self,
+        selected: DefId,
+        derefed: &Ty,
+        args: &[HirExpr],
+        span: &Span,
+    ) -> Ty {
+        let sig_opt = self.symbols.get(selected).and_then(|def| match &def.kind {
+            DefKind::Method { signature, .. } => Some(signature.clone()),
+            _ => None,
+        });
+        let Some(signature) = sig_opt else {
+            return self.ctx.fresh_type_var();
+        };
+        for (arg, param) in args.iter().zip(&signature.params) {
+            let param_ty = self.substitute_generics_in_return(derefed, &param.ty);
+            let _ = unify(&arg.ty, &param_ty, self.ctx, span);
+            self.check_concurrency_bounds(&param_ty, &arg.ty, &arg.span);
+        }
+        let ret = self.wrap_async_return(&signature);
+        // First substitute the receiver's generic args (handles
+        // `MutexGuard[T]` from `Mutex[Int].lock_raw`); then harvest the
+        // method's own type params from the actual arguments.
+        let ret = self.substitute_generics_in_return(derefed, &ret);
+        self.harvest_and_subst_generics(&signature, args, &ret)
+    }
+
+    /// For block-consuming combinators whose return type carries a fresh
+    /// inference variable (currently `map` on Option / Vec / Result / *Iter),
+    /// unify that element variable with the closure body's inferred type so
+    /// the container's element type becomes concrete. Unifies in place;
+    /// returns nothing.
+    fn infer_combinator_block(
+        &mut self,
+        method_name: &str,
+        block: &Option<Box<HirExpr>>,
+        ret_ty: &Ty,
+        span: &Span,
+    ) {
+        if method_name != "map" {
+            return;
+        }
+        let Some(blk) = block else { return };
+        let HirExprKind::Closure { body, .. } = &blk.kind else {
+            return;
+        };
+        let body_ty = self.ctx.resolve(&body.ty);
+        match ret_ty {
+            Ty::Option(inner) | Ty::Array(inner) | Ty::Result(inner, _) => {
+                let _ = unify(inner, &body_ty, self.ctx, span);
+            }
+            Ty::Class { name, generic_args } if name.ends_with("Iter") => {
+                if let Some(inner) = generic_args.first() {
+                    let _ = unify(inner, &body_ty, self.ctx, span);
+                }
+            }
+            _ => {}
         }
     }
 }
