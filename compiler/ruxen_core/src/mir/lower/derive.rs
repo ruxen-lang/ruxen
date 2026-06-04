@@ -197,58 +197,7 @@ impl<'a> Lowerer<'a> {
                 field_index: idx,
             });
 
-            let field_str = if field.ty == Ty::Char {
-                let dest = mir_fn.new_temp(Ty::String);
-                mir_fn.blocks[entry].instructions.push(MirInst::Call {
-                    dest: Some(dest),
-                    callee: "ruxen_char_to_string".to_string(),
-                    args: vec![MirValue::Use(field_local)],
-                });
-                dest
-            } else if field.ty.is_integer() {
-                let dest = mir_fn.new_temp(Ty::String);
-                mir_fn.blocks[entry].instructions.push(MirInst::Call {
-                    dest: Some(dest),
-                    callee: "ruxen_int_to_string".to_string(),
-                    args: vec![MirValue::Use(field_local)],
-                });
-                dest
-            } else if field.ty.is_float() {
-                let dest = mir_fn.new_temp(Ty::String);
-                mir_fn.blocks[entry].instructions.push(MirInst::Call {
-                    dest: Some(dest),
-                    callee: "ruxen_float_to_string".to_string(),
-                    args: vec![MirValue::Use(field_local)],
-                });
-                dest
-            } else if field.ty == Ty::Bool {
-                let dest = mir_fn.new_temp(Ty::String);
-                mir_fn.blocks[entry].instructions.push(MirInst::Call {
-                    dest: Some(dest),
-                    callee: "ruxen_bool_to_string".to_string(),
-                    args: vec![MirValue::Use(field_local)],
-                });
-                dest
-            } else if matches!(field.ty, Ty::String | Ty::Str) {
-                field_local
-            } else if let Some(inner_struct_name) = self.struct_with_derive_debug(&field.ty) {
-                let dest = mir_fn.new_temp(Ty::String);
-                mir_fn.blocks[entry].instructions.push(MirInst::Call {
-                    dest: Some(dest),
-                    callee: format!("{}_to_debug", inner_struct_name),
-                    args: vec![MirValue::Use(field_local)],
-                });
-                dest
-            } else {
-                let dest = mir_fn.new_temp(Ty::String);
-                mir_fn.blocks[entry]
-                    .instructions
-                    .push(MirInst::StringLiteral {
-                        dest,
-                        value: "<...>".to_string(),
-                    });
-                dest
-            };
+            let field_str = self.format_field_for_debug(&mut mir_fn, entry, field_local, &field.ty);
 
             let next = mir_fn.new_temp(Ty::String);
             mir_fn.blocks[entry].instructions.push(MirInst::Call {

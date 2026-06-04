@@ -1,0 +1,15 @@
+enum Color
+  Red
+  Green
+  Blue
+end
+
+struct Tag
+  id: Int
+  color: Color
+end
+
+def main
+  let t = Tag.new(7, Color.Green)
+  puts "#{t}"
+end
