@@ -476,6 +476,24 @@ impl JITCodeGen {
         func: &MirFunction,
         func_id: FuncId,
     ) -> Result<(), String> {
+        self.translate_into_ctx(func)?;
+
+        let define_result = self.module.define_function(func_id, &mut self.ctx);
+        // Always clear the shared context so a failed compilation doesn't
+        // leak IR into the next one (without this, a second REPL input
+        // sees the prior input's instructions and the verifier complains
+        // about stale blocks).
+        self.module.clear_context(&mut self.ctx);
+        define_result.map_err(|e| format!("Failed to define function '{}': {:?}", func.name, e))?;
+
+        Ok(())
+    }
+
+    /// Build `func`'s Cranelift IR into `self.ctx.func`, leaving it populated
+    /// (NOT defined into the module, NOT cleared). Callers either define +
+    /// clear (`compile_function_inner`) or read back the CLIF (`clif_for_test`).
+    /// Mirrors the batch backend's `CodeGen::translate_into_ctx`.
+    fn translate_into_ctx(&mut self, func: &MirFunction) -> Result<(), String> {
         let sig = build_signature(&self.module, func);
         self.ctx.func.signature = sig;
 
@@ -593,14 +611,6 @@ impl JITCodeGen {
             builder.seal_all_blocks();
             builder.finalize();
         }
-
-        let define_result = self.module.define_function(func_id, &mut self.ctx);
-        // Always clear the shared context so a failed compilation doesn't
-        // leak IR into the next one (without this, a second REPL input
-        // sees the prior input's instructions and the verifier complains
-        // about stale blocks).
-        self.module.clear_context(&mut self.ctx);
-        define_result.map_err(|e| format!("Failed to define function '{}': {:?}", func.name, e))?;
 
         Ok(())
     }
@@ -825,6 +835,23 @@ pub(super) fn is_repl_symbol_allowed(name: &str) -> bool {
 /// matching the transmuted `extern "C" fn(i64, i64) -> i64` arity. The pin
 /// fixture guarantees this.
 #[doc(hidden)]
+/// Test seam: compile `func` through the JIT's translation path into the
+/// shared codegen context and return the resulting CLIF text WITHOUT
+/// finalizing (no JIT memory, no execution).
+///
+/// Parallels the batch `ruxen_core::codegen::cranelift::clif_for_test`: same
+/// declare → `compile_function_inner` (no finalize) → `ctx.func.display()`
+/// shape. Used by the share-parity tripwire to compare the JIT's emitted IR
+/// against the batch backend's structurally, not just behaviourally.
+pub fn clif_for_test(func: &MirFunction) -> Result<String, String> {
+    let mut jit = JITCodeGen::new()?;
+    // Declare so build_signature / self-calls resolve, then build the IR into
+    // ctx WITHOUT defining or clearing it, so we can read the CLIF back.
+    jit.declare_function(func)?;
+    jit.translate_into_ctx(func)?;
+    Ok(jit.ctx.func.display().to_string())
+}
+
 pub fn run_int_fn_for_test(func: &MirFunction, args: &[i64]) -> Result<i64, String> {
     assert_eq!(
         args.len(),
