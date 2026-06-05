@@ -751,11 +751,41 @@ impl<'a> InferenceEngine<'a> {
     /// corresponding generic argument from `obj_ty` (a `Ty::Class` or
     /// `Ty::Struct`).
     pub(super) fn substitute_generics_in_return(&self, obj_ty: &Ty, ret_ty: &Ty) -> Ty {
-        let (name, generic_args) = match obj_ty {
+        // Peel references so `(&Array[Int]).pop` substitutes like
+        // `Array[Int].pop` (the receiver of a `&self` method is borrowed).
+        let peeled = match obj_ty {
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => inner.as_ref(),
+            other => other,
+        };
+        // Zero-Rust-stdlib bridge (Phase B / M3): map the builtin generic
+        // heads to the synthetic `(class-name, generic_args)` of their
+        // `.rx` method-home class so the class's declared type params
+        // (`class Array[T]` → `[T]`) substitute against the receiver's
+        // concrete element type. Mirrors `MixinResolver::method_home_key`.
+        let owned_synthetic: (String, Vec<Ty>);
+        let (name, generic_args): (&String, &Vec<Ty>) = match peeled {
             Ty::Class { name, generic_args } | Ty::Struct { name, generic_args }
                 if !generic_args.is_empty() =>
             {
                 (name, generic_args)
+            }
+            Ty::Array(elem) => {
+                owned_synthetic = ("Array".to_string(), vec![elem.as_ref().clone()]);
+                (&owned_synthetic.0, &owned_synthetic.1)
+            }
+            Ty::Set(elem) => {
+                owned_synthetic = ("Set".to_string(), vec![elem.as_ref().clone()]);
+                (&owned_synthetic.0, &owned_synthetic.1)
+            }
+            Ty::Map(k, v) => {
+                owned_synthetic = (
+                    "Map".to_string(),
+                    vec![k.as_ref().clone(), v.as_ref().clone()],
+                );
+                (&owned_synthetic.0, &owned_synthetic.1)
             }
             _ => return ret_ty.clone(),
         };

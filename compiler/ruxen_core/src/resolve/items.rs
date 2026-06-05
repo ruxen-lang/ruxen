@@ -347,38 +347,40 @@ impl Resolver {
             method_def_ids.extend(lib_method_ids.iter().copied());
         }
         if let Some(def) = self.symbols.get_mut(def_id) {
-            // T#21 anchor-mode preservation: when the DefId already points
-            // at a `DefKind::TypeAlias` (e.g. `register_builtins` registered
-            // `String` → `TypeAlias { target: Ty::String }` and the
-            // bootstrap merge anchored `class String` onto the same DefId
-            // via `register_top_level_type_with_ffi`'s `anchor_id` path),
-            // the typeck representation must keep that alias — without it
-            // `let s: String = ...` resolves through the type registry,
-            // hits the Class branch in `resolve/types.rs`, and every
-            // downstream consumer pattern-matching on the canonical
-            // `Ty::String` silently misses. Stdlib-anchored classes carry
-            // their methods through `ffi_libs` + `pass1_class_lib_methods`,
-            // so the side maps remain intact whether we stomp the kind or
-            // not. Pin: `anchor_mode_preserves_type_alias_for_string` in
+            // Zero-Rust-stdlib migration (Phase B / M3): an anchored
+            // builtin (`register_builtins` registered `String` →
+            // `TypeAlias { target: Ty::String }`, then the bootstrap merge
+            // anchored `class String` onto the same DefId) is now stomped
+            // to a real `DefKind::Class` so its `.rx` methods land in
+            // `ClassInfo.methods` and `register_classes_from_registry`
+            // picks them up into `type_methods["String"]` — the general
+            // `lookup_method_with_args` resolution path the migration
+            // relies on.
+            //
+            // CRITICAL INVARIANT (preserved): this changes only the
+            // METHOD-HOME, not the VALUE REPRESENTATION. `resolve_type_expr`
+            // (`resolve/types.rs`) special-cases `name == "String"` with
+            // empty generic args to return `Ty::String` (the primitive
+            // head) even when the DefKind is `Class`, so `let s: String`,
+            // string literals, and the C ABI / runtime repr are unchanged.
+            // Pin: `string_is_class_but_resolves_to_primitive_ty` in
             // `builtin_anchor_class.rs`.
-            if !matches!(def.kind, DefKind::TypeAlias { .. }) {
-                def.kind = DefKind::Class {
-                    info: ClassInfo {
-                        generic_params: class_generic_param_infos,
-                        parent: parent_def,
-                        fields: field_def_ids,
-                        methods: method_def_ids,
-                        derive_traits: class.derive_traits.clone(),
-                        opt_out_send,
-                        opt_out_sync,
-                        manual_send,
-                        manual_sync,
-                        const_predicates,
-                        flat_heap_struct,
-                        runtime_dispatch_includes,
-                    },
-                };
-            }
+            def.kind = DefKind::Class {
+                info: ClassInfo {
+                    generic_params: class_generic_param_infos,
+                    parent: parent_def,
+                    fields: field_def_ids,
+                    methods: method_def_ids,
+                    derive_traits: class.derive_traits.clone(),
+                    opt_out_send,
+                    opt_out_sync,
+                    manual_send,
+                    manual_sync,
+                    const_predicates,
+                    flat_heap_struct,
+                    runtime_dispatch_includes,
+                },
+            };
         }
 
         HirClassDef {

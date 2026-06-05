@@ -302,7 +302,7 @@ impl MixinResolver {
         args: &[HirExpr],
         symbols: &SymbolTable,
     ) -> Option<FnSignature> {
-        let type_name = Self::type_name(ty);
+        let type_name = Self::method_home_key(ty);
 
         // Check direct type methods first
         if let Some(meths) = self.type_methods.get(&type_name) {
@@ -747,6 +747,35 @@ impl MixinResolver {
             Ty::Char => "Char".to_string(),
             Ty::Unit => "()".to_string(),
             other => format!("{}", other),
+        }
+    }
+
+    /// Lookup key for `type_methods` — the `.rx` class that HOMES a
+    /// type's methods (the zero-Rust-stdlib bridge, Phase B / M3).
+    ///
+    /// Differs from `type_name` only for the builtin generic / borrowed
+    /// heads whose `.rx` method-home class is keyed by a bare,
+    /// generic-arg-free name:
+    ///   * `Ty::Array(_)` → `"Array"`   (vs `type_name`'s `"Array[Int]"`)
+    ///   * `Ty::Set(_)`   → `"Set"`
+    ///   * `Ty::Map(_,_)` → `"Map"`
+    ///   * `Ty::Str`      → `"String"`  (`&str` shares `class String`'s
+    ///                                   surface; there is no `class str`)
+    /// References are peeled first. Element-type substitution into the
+    /// looked-up signature's return is handled downstream by
+    /// `InferenceEngine::substitute_generics_in_return`, which carries the
+    /// matching synthetic `(name, generic_args)` mapping for these heads.
+    fn method_home_key(ty: &Ty) -> String {
+        match ty {
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => Self::method_home_key(inner),
+            Ty::Array(_) => "Array".to_string(),
+            Ty::Set(_) => "Set".to_string(),
+            Ty::Map(_, _) => "Map".to_string(),
+            Ty::Str => "String".to_string(),
+            other => Self::type_name(other),
         }
     }
 }
