@@ -30,6 +30,7 @@ use crate::lexer::token::Span;
 
 use super::infer::{is_bufio_inner_supported, is_iter_sum_compatible, InferenceEngine};
 
+mod builtin_bridge;
 mod collections;
 mod concurrency;
 mod io;
@@ -88,7 +89,18 @@ fn resolvers() -> &'static [MethodResolver] {
                                                          //     inner-type check + their generic-representation methods.
         v.extend(concurrency::resolvers());
         v.extend(io::resolvers());
-        v.extend(strings::resolvers()); // TIER 3 — structural
+        // TIER 3 — structural. `strings` now carries ONLY residual arms
+        // (the ABI-divergent `String.remove`, the E0722-blocked
+        // `String.clone`, the structural-head `String.to_s`, and all
+        // `&str` methods); it MUST precede `builtin_bridge` so those
+        // residuals win over the `.rx` delegation for `Ty::String`.
+        v.extend(strings::resolvers());
+        // The delegator: builtin heads (`String` so far) whose methods
+        // were migrated to their `.rx` method-home resolve here via
+        // `bridge_builtin_method` — zero hardcoded method knowledge.
+        // Placed at the inference-order-tolerant pipeline site (line 77)
+        // so it preserves the fixpoint ordering the old arms relied on.
+        v.extend(builtin_bridge::resolvers());
         v.extend(collections::resolvers());
         v.extend(numeric::resolvers());
         // MIGRATED to `.rx` (resolve via `lookup_method_with_args` from the
@@ -212,43 +224,24 @@ mod golden {
     fn corpus() -> Vec<Case> {
         let mut v: Vec<Case> = Vec::new();
 
-        // ── Ty::String structural ──────────────────────────────────
+        // ── Ty::String delegated to .rx (string.rx via builtin_bridge) ─
+        // Most `String` methods resolve from string.rx through the
+        // delegator; the golden runs with an EMPTY symbol table (no `.rx`
+        // loaded) so those would return None and are not pinned here. The
+        // residual arms that stay Rust-side (strings.rs) ARE pinned:
+        // `remove` (ABI divergence), `clone` (E0722 alias), `to_s`
+        // (structural-head), and the mutation methods `push`/`push_str`/
+        // `insert`/`insert_str` (surface `Unit` vs C `char*`). End-to-end
+        // `.rx` resolution is covered by the builtin_receiver_bridge pins
+        // + the e2e suite.
         for m in [
+            "remove",
             "clone",
-            "size",
-            "empty?",
-            "push_str",
-            "trim",
-            "to_lower",
-            "to_upper",
-            "chars",
-            "split",
+            "to_s",
             "push",
-            "as_str",
-            "from",
-            "include?",
-            "starts_with",
-            "ends_with",
-            "repeat",
-            "lines",
-            "replace",
-            "new",
-            "with_capacity",
-            "to_string",
-            "bytes",
-            "trim_start",
-            "trim_end",
-            "find",
-            "splitn",
-            "clear",
-            "truncate",
+            "push_str",
             "insert",
             "insert_str",
-            "remove",
-            "parse_int",
-            "parse_float",
-            "into_bytes",
-            "to_s",
         ] {
             v.push(c(Ty::String, m));
         }
@@ -282,9 +275,9 @@ mod golden {
             v.push(c(Ty::Str, m));
         }
 
-        // ── ParseIntError / ParseFloatError ────────────────────────
-        v.push(c(class("ParseIntError", vec![]), "message"));
-        v.push(c(class("ParseFloatError", vec![]), "message"));
+        // ── ParseIntError / ParseFloatError migrated to .rx ────────
+        // `.message` resolves from string/src/parse_{int,float}_error.rx;
+        // the resolver arms were deleted.
 
         // ── Ty::Array structural ───────────────────────────────────
         let arr = || Ty::Array(Box::new(Ty::Int));

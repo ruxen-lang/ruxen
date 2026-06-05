@@ -4,35 +4,44 @@ class String
     def self.new as "ruxen_string_new" -> String
     def self.with_capacity as "ruxen_string_with_capacity"(cap: Int) -> String
     def self.from_bytes as "ruxen_string_from_bytes"(bytes: &Array[Int]) -> String
-    def size as "ruxen_string_len" -> Int
+    # Surface return types below are the TRUE types (matching the
+    # resolver that previously hard-coded them); each is ABI-identical to
+    # its C symbol's wire width — pointers, boxed Option/Result, and
+    # uint64 all cross the C ABI as I64. Zero-Rust-stdlib migration M3.
+    def size as "ruxen_string_len" -> USize
     def empty? as "ruxen_string_is_empty" -> Bool
     def include? as "ruxen_string_contains"(needle: &String) -> Bool
     def starts_with as "ruxen_string_starts_with"(needle: &String) -> Bool
     def ends_with as "ruxen_string_ends_with"(needle: &String) -> Bool
-    def find as "ruxen_string_find"(needle: &String) -> Int
-    def trim as "ruxen_string_trim" -> String
-    def trim_start as "ruxen_string_trim_start" -> String
-    def trim_end as "ruxen_string_trim_end" -> String
+    def find as "ruxen_string_find"(needle: &String) -> Option[USize]
+    def trim as "ruxen_string_trim" -> str
+    def trim_start as "ruxen_string_trim_start" -> str
+    def trim_end as "ruxen_string_trim_end" -> str
     def to_lower as "ruxen_string_to_lower" -> String
     def to_upper as "ruxen_string_to_upper" -> String
     def repeat as "ruxen_string_repeat"(n: Int) -> String
     def replace as "ruxen_string_replace"(from: &String, to: &String) -> String
-    def as_str as "ruxen_string_as_str" -> String
+    def as_str as "ruxen_string_as_str" -> str
     def to_string as "ruxen_string_to_string" -> String
     def chars as "ruxen_string_chars" -> Array[Char]
     def lines as "ruxen_string_lines" -> Array[String]
     def split as "ruxen_string_split"(delimiter: &String) -> Array[String]
     def splitn as "ruxen_string_splitn"(n: Int, delimiter: &String) -> Array[String]
-    def bytes as "ruxen_string_bytes" -> Array[Int]
-    def into_bytes as "ruxen_string_into_bytes" -> Array[Int]
-    def parse_int as "ruxen_string_parse_int" -> Int
-    def parse_float as "ruxen_string_parse_float" -> Int
+    def bytes as "ruxen_string_bytes" -> Array[UInt8]
+    def into_bytes as "ruxen_string_into_bytes" -> Array[UInt8]
+    def parse_int as "ruxen_string_parse_int" -> Result[Int, ParseIntError]
+    def parse_float as "ruxen_string_parse_float" -> Result[Float, ParseFloatError]
     def push_str as "ruxen_string_push_str"(other: &String) -> String
     def push as "ruxen_string_push"(c: Char) -> String
     def clear as "ruxen_string_clear"
     def truncate as "ruxen_string_truncate"(n: Int)
     def insert as "ruxen_string_insert"(i: Int, codepoint: Int) -> String
     def insert_str as "ruxen_string_insert_str"(i: Int, part: &String) -> String
+    # `remove`: true surface type is Char (I32) but the C symbol returns
+    # void* (I64); a `-> Char` decl would derive a width contradicting the
+    # C ABI, so it stays a Rust resolver residual (strings.rs) and is
+    # declared here as `Int` (ABI-matching, shadowed by the resolver arm).
+    # FOLLOW-UP bug: reconcile the C return vs surface type, then migrate.
     def remove as "ruxen_string_remove"(i: Int) -> Int
   end
 end

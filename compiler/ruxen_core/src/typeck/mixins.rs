@@ -72,12 +72,64 @@ impl MixinResolver {
         if args.len() < required || args.len() > sig.params.len() {
             return false;
         }
-        args.iter().zip(sig.params.iter()).all(|(arg, param)| {
-            arg.ty.is_infer()
-                || arg.ty.is_error()
-                || arg.ty == param.ty
-                || matches!((&arg.ty, &param.ty), (Ty::Str, Ty::String))
-        })
+        args.iter()
+            .zip(sig.params.iter())
+            .all(|(arg, param)| Self::arg_coerces_to_param(&arg.ty, &param.ty))
+    }
+
+    /// Whether an argument type can be passed where a parameter type is
+    /// expected, for method/overload selection. Mirrors
+    /// `InferenceEngine::method_accepts_args` (typeck/infer/collect.rs) so
+    /// the general `lookup_method_with_args` path (now the source of truth
+    /// for builtin-head method resolution via the zero-Rust-stdlib bridge)
+    /// is as permissive as the old hardcoded resolver arms were:
+    ///   * `&str` literal ↔ `String` / `&String` param (the common
+    ///     `String.from("lit")` shape — the arg is `Ty::Str`, the `.rx`
+    ///     param is `&String`);
+    ///   * an owned arg passed where the param borrows (`&T` param, `T`
+    ///     arg) — callers commonly pass an owned value to a `&self`-style
+    ///     borrow.
+    /// Without these, delegating `String.from`/etc. to `.rx` would reject
+    /// the string-literal arg that the arg-ignoring arms accepted.
+    fn arg_coerces_to_param(arg_ty: &Ty, param_ty: &Ty) -> bool {
+        if arg_ty.is_infer() || arg_ty.is_error() || arg_ty == param_ty {
+            return true;
+        }
+        // Peel a single reference layer on the param so `&String` / `&str`
+        // params accept the corresponding value/str args.
+        let param_inner = match param_ty {
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => Some(inner.as_ref()),
+            _ => None,
+        };
+        // `&str` literal ↔ `String` (owned or behind one ref layer).
+        let str_to_string = |a: &Ty, p: &Ty| matches!((a, p), (Ty::Str, Ty::String));
+        if str_to_string(arg_ty, param_ty) {
+            return true;
+        }
+        if let Some(inner) = param_inner {
+            // `&String` param accepting a `String` / `&str` / `str` arg.
+            if arg_ty == inner || str_to_string(arg_ty, inner) {
+                return true;
+            }
+            // `&str` arg vs `&String` param (peel both).
+            if matches!((arg_ty, inner), (Ty::Str, Ty::String)) {
+                return true;
+            }
+            // Owned arg vs borrowing param (`&T` param, `T` arg).
+            if arg_ty == inner {
+                return true;
+            }
+        }
+        // `&str` arg (`Ty::Ref(Str)`) vs `&String` param.
+        if let (Ty::Ref(a), Ty::Ref(p)) = (arg_ty, param_ty) {
+            if matches!((a.as_ref(), p.as_ref()), (Ty::Str, Ty::String)) {
+                return true;
+            }
+        }
+        false
     }
 
     fn select_signature(sigs: Option<&Vec<FnSignature>>, args: &[HirExpr]) -> Option<FnSignature> {

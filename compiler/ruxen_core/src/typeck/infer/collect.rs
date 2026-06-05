@@ -333,6 +333,36 @@ impl<'a> InferenceEngine<'a> {
         super::super::method_resolvers::builtin_method_type(self, ty, method, args, span)
     }
 
+    /// Zero-Rust-stdlib bridge (Phase B / M3+M4), Option C "delegate":
+    /// resolve a method on a BUILTIN `Ty` head (`String`/`&str`/`Array`/
+    /// `Set`/`Map`/scalars) from its `.rx` method-home class, returning the
+    /// fully-substituted surface type. This is the SOURCE OF TRUTH for the
+    /// builtin-head delegating resolver in `typeck/method_resolvers`; the
+    /// resolver arm itself carries zero hardcoded method knowledge.
+    ///
+    /// Called from the resolver pipeline (the inference-order-tolerant site
+    /// at `resolve_method_call` line 77, BEFORE the `is_infer` fallback) so
+    /// it participates in the same inference fixpoint the old hardcoded arms
+    /// did — fixing the interpolation-ordering regression that a
+    /// post-fallback (line 82) lookup hit.
+    ///
+    /// Mirrors the trait-lookup branch (line 82-86) PLUS the call-site
+    /// generic substitution (expr.rs:505): `lookup_method_with_args` →
+    /// `substitute_generics_in_return` (so `Array[Int].pop` yields
+    /// `Option[Int]`, not the declared `Option[T]`) → async wrap.
+    pub(in crate::typeck) fn bridge_builtin_method(
+        &mut self,
+        ty: &Ty,
+        method: &str,
+        args: &[HirExpr],
+    ) -> Option<Ty> {
+        let sig = self
+            .traits
+            .lookup_method_with_args(ty, method, args, self.symbols)?;
+        let raw = self.wrap_async_return(&sig);
+        Some(self.substitute_generics_in_return(ty, &raw))
+    }
+
     pub(super) fn infer_index_ty(&self, obj_ty: &Ty) -> Ty {
         match obj_ty {
             Ty::Array(elem) => *elem.clone(),

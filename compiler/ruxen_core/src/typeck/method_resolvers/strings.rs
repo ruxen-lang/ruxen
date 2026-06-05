@@ -1,8 +1,31 @@
-//! TIER 3 — string-shape structural resolvers.
+//! TIER 3 — string-shape structural resolvers (residual).
 //!
-//! `Ty::String` / `Ty::Str` method typing + the `ParseIntError` /
-//! `ParseFloatError` `.message()` accessors, carved verbatim out of the
-//! legacy match. Pure arms (use `eng` only via static helpers).
+//! After the zero-Rust-stdlib migration (Phase B / M3, Option C), the bulk
+//! of `Ty::String` method typing is delegated to `library/std/string/src/
+//! string.rx` via `builtin_bridge` (which calls
+//! `InferenceEngine::bridge_builtin_method`). `String` is now a
+//! `DefKind::Class` (method-home) whose `.rx` decls were corrected to
+//! their true surface types (`size -> USize`, `find -> Option[USize]`,
+//! `trim -> str`, `parse_int -> Result[Int, ParseIntError]`, …). The
+//! `ParseIntError` / `ParseFloatError` `.message` accessors likewise
+//! resolve from their `.rx` classes. Those arms were deleted.
+//!
+//! What REMAINS here (runs AHEAD of `builtin_bridge` in the pipeline):
+//!   1. Three `String` residual arms that `string.rx` cannot declare:
+//!      * `remove` — ABI divergence: true surface is `Char` (I32) but the
+//!        C symbol `ruxen_string_remove` returns `void*` (I64); a `-> Char`
+//!        `.rx` decl would derive a width contradicting the C ABI.
+//!        FOLLOW-UP bug: reconcile, then migrate.
+//!      * `clone` — aliases the SAME C symbol as `String.from`
+//!        (`ruxen_string_from`); E0722 rejects a second `.rx` alias for one
+//!        c_symbol with an instance-method shape (see lang_intrinsics doc).
+//!      * `to_s` — the structural `to_s` fallback matches only
+//!        `Ty::Class/Struct/Enum`, not the `Ty::String` primitive head.
+//!   2. `Ty::Str` (`&str`) methods — there is no `class str`. The bridge's
+//!      `method_home_key` routes `Ty::Str` → `class String`, but a few
+//!      `&str` surfaces differ (`trim -> str`) and `parse_uint` has no
+//!      String counterpart, so `&str` typing stays here as the source of
+//!      truth. Every return's width matches the shared C symbol.
 
 use crate::hir::types::Ty;
 
@@ -11,57 +34,36 @@ use super::InferenceEngine;
 
 pub(super) fn resolvers() -> Vec<MethodResolver> {
     vec![MethodResolver {
-        matches: |ty, _method| match ty {
-            Ty::String | Ty::Str => true,
-            Ty::Class { name, .. } => name == "ParseIntError" || name == "ParseFloatError",
+        matches: |ty, method| match ty {
+            // Residual `String` arms that shadow string.rx — they run
+            // AHEAD of `builtin_bridge` so they win for these names.
+            Ty::String => matches!(
+                method,
+                "remove" | "clone" | "to_s" | "push" | "push_str" | "insert" | "insert_str"
+            ),
+            // `&str` has no stdlib class — all its methods stay here.
+            Ty::Str => true,
             _ => false,
         },
         resolve: |_eng, ty, method, _args, _span| match (ty, method) {
-            // String methods
-            (Ty::String, "clone") => Some(Ty::String),
-            (Ty::String, "size") => Some(Ty::USize),
-            (Ty::String, "empty?") => Some(Ty::Bool),
-            (Ty::String, "push_str") => Some(Ty::Unit),
-            (Ty::String, "trim") => Some(Ty::Str),
-            (Ty::String, "to_lower") => Some(Ty::String),
-            (Ty::String, "to_upper") => Some(Ty::String),
-            (Ty::String, "chars") => Some(Ty::Array(Box::new(Ty::Char))),
-            // Phase 2 stdlib batch 2 (#02): split returns owned Vec[String]
-            // (per the v1 rule: iterator producers return Vec, not lazy
-            // SplitIter, until prompt 05 ships the lazy iterator story).
-            (Ty::String, "split") => Some(Ty::Array(Box::new(Ty::String))),
-            (Ty::String, "push") => Some(Ty::Unit),
-            (Ty::String, "as_str") => Some(Ty::Str),
-            (Ty::String, "from") => Some(Ty::String),
-            (Ty::String, "include?") => Some(Ty::Bool),
-            (Ty::String, "starts_with") => Some(Ty::Bool),
-            (Ty::String, "ends_with") => Some(Ty::Bool),
-            (Ty::String, "repeat") => Some(Ty::String),
-            (Ty::String, "lines") => Some(Ty::Array(Box::new(Ty::String))),
-            (Ty::String, "replace") => Some(Ty::String),
-            // Phase 2 stdlib (#02).
-            (Ty::String, "new") => Some(Ty::String),
-            (Ty::String, "with_capacity") => Some(Ty::String),
-            (Ty::String, "to_string") => Some(Ty::String),
-            (Ty::String, "bytes") => Some(Ty::Array(Box::new(Ty::UInt8))),
-            (Ty::String, "trim_start") => Some(Ty::Str),
-            (Ty::String, "trim_end") => Some(Ty::Str),
-            (Ty::String, "find") => Some(Ty::Option(Box::new(Ty::USize))),
-            (Ty::String, "splitn") => Some(Ty::Array(Box::new(Ty::String))),
-            (Ty::String, "clear") => Some(Ty::Unit),
-            (Ty::String, "truncate") => Some(Ty::Unit),
-            (Ty::String, "insert") => Some(Ty::Unit),
-            (Ty::String, "insert_str") => Some(Ty::Unit),
+            // ── String residual arms (shadow string.rx) ──────────────
             (Ty::String, "remove") => Some(Ty::Char),
-            (Ty::String, "parse_int") => Some(Ty::Result(
-                Box::new(Ty::Int),
-                Box::new(InferenceEngine::class_ty("ParseIntError", vec![])),
-            )),
-            (Ty::String, "parse_float") => Some(Ty::Result(
-                Box::new(Ty::Float),
-                Box::new(InferenceEngine::class_ty("ParseFloatError", vec![])),
-            )),
-            (Ty::String, "into_bytes") => Some(Ty::Array(Box::new(Ty::UInt8))),
+            (Ty::String, "clone") => Some(Ty::String),
+            (Ty::String, "to_s") => Some(Ty::String),
+            // Mutation methods: the C symbols return `char*` (the new
+            // buffer, I64), so the `.rx` decl is `-> String` (ABI-
+            // faithful) — but the SURFACE type is mutation-style `Unit`
+            // (the value is discarded; `def f(s: &var String); s.push(c);
+            // end` returns nil). Declaring `-> nil` in `.rx` would derive a
+            // void return contradicting the C `char*`, so these stay Rust
+            // residuals returning `Unit`, shadowing the ABI-faithful `.rx`
+            // decl. FOLLOW-UP: reconcile surface-vs-C return, then migrate.
+            (Ty::String, "push")
+            | (Ty::String, "push_str")
+            | (Ty::String, "insert")
+            | (Ty::String, "insert_str") => Some(Ty::Unit),
+
+            // ── Ty::Str (&str) methods — no `class str` to bridge to ──
             (Ty::Str, "size") => Some(Ty::USize),
             (Ty::Str, "empty?") => Some(Ty::Bool),
             (Ty::Str, "trim") => Some(Ty::Str),
@@ -69,13 +71,8 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
             (Ty::Str, "to_upper") => Some(Ty::Str),
             (Ty::Str, "chars") => Some(Ty::Array(Box::new(Ty::Char))),
             // String#split returns Array<String> in Ruby — always. Both
-            // owned-`String` and borrowed-`&str` receivers should produce
-            // the same surface type. The historical `SplitIter` class
-            // shape on the `&str` arm was a Rust-style lazy iterator that
-            // didn't expose `.get(i)` / `.len()`, leaving callers stuck
-            // (every multipart/header parser hits this). Unifying to
-            // Array<String> matches Ruby and removes the footgun. Pin:
-            // `docs/rondo_v1_blockers.md` B13.
+            // owned-`String` and borrowed-`&str` receivers produce the
+            // same surface type (pin: `docs/rondo_v1_blockers.md` B13).
             (Ty::Str, "split") => Some(Ty::Array(Box::new(Ty::String))),
             (Ty::Str, "parse_uint") => Some(Ty::Result(Box::new(Ty::USize), Box::new(Ty::Error))),
             (Ty::Str, "as_str") => Some(Ty::Str),
@@ -98,14 +95,6 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
                 Box::new(Ty::Float),
                 Box::new(InferenceEngine::class_ty("ParseFloatError", vec![])),
             )),
-            // ParseIntError / ParseFloatError accessors.
-            (Ty::Class { name, .. }, "message")
-                if name == "ParseIntError" || name == "ParseFloatError" =>
-            {
-                Some(Ty::String)
-            }
-            // `to_s` on String/Str both yield a `String`.
-            (Ty::String, "to_s") => Some(Ty::String),
             (Ty::Str, "to_s") => Some(Ty::String),
             // Within-namespace fallthrough (not a cross-cutting catch-all).
             _ => None,
