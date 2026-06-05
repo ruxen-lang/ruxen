@@ -14,7 +14,7 @@ true || false
 :type 3.14
 :type "hi"
 :type true
-:type 'R'
+:type ?R
 let x = 10
 x
 let y = x + 5

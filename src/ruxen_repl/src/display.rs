@@ -58,7 +58,10 @@ pub fn format_value(raw: i64, ty: &Ty) -> String {
         }
         Ty::Char => {
             if let Some(c) = char::from_u32(raw as u32) {
-                format!("'{}'", c)
+                // Escape control chars (`\n`, `\t`, …) so the `=>` echo stays
+                // on one line — same intent as the string case below. Printable
+                // chars (`'R'`, `'π'`) are left as-is by `escape_debug`.
+                format!("'{}'", c.escape_debug())
             } else {
                 format!("'\\u{{{:x}}}'", raw)
             }
