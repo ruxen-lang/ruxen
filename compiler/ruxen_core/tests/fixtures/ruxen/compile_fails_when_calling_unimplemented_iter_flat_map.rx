@@ -1,4 +1,0 @@
-def main
-  let a = [1, 2, 3]
-  let _z = a.iter.flat_map { |x| [x, x] }
-end

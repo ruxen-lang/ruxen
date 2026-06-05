@@ -2,8 +2,8 @@ use std.env.args
 
 def main
   let a = args()
-  if a.len() > 0
-    puts "ok len=#{a.len()}"
+  if a.size() > 0
+    puts "ok len=#{a.size()}"
   else
     puts "fail empty"
   end

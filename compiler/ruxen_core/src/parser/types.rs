@@ -214,6 +214,12 @@ impl Parser {
         self.skip_newlines();
 
         if self.at(TokenKind::RParen) {
+            // ruby-naming.spec.md §3.10: the unit type is spelled `nil`,
+            // not `()`. Refuse the empty-paren type with a fix-it; recover
+            // as the empty tuple (== unit) so the rest of the signature
+            // still parses. (The unit *value* `()` is rejected separately
+            // in `parse_paren_or_tuple`.)
+            self.error("`()` is not a valid type — use `nil` for the unit type");
             let span = self.span_from(&start);
             self.advance();
             return TypeExpr::Tuple {

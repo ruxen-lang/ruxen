@@ -29,14 +29,28 @@ fn compile_fixture(name: &str) -> String {
         .lower_program(&result.program)
         .expect("MIR lowering failed");
 
-    let output_path = format!("tests/fixtures/{}_test", name);
+    let output_path = std::env::temp_dir()
+        .join(format!(
+            "ruxen_enum_codegen_{}_{}_{}_test",
+            name,
+            std::process::id(),
+            ruxen_unique_id()
+        ))
+        .to_string_lossy()
+        .into_owned();
     codegen::compile(&mir, &output_path).expect("codegen failed");
     output_path
 }
 
+fn ruxen_unique_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
 fn run_fixture(name: &str, expected: &str) {
     let binary = compile_fixture(name);
-    let output = Command::new(format!("./{}", binary))
+    let output = Command::new(&binary)
         .output()
         .expect("failed to run binary");
 
@@ -77,7 +91,7 @@ fn test_enum_data_output() {
 #[test]
 fn test_tasklist() {
     let binary = compile_fixture("tasklist");
-    let output = Command::new(format!("./{}", binary))
+    let output = Command::new(&binary)
         .output()
         .expect("failed to run binary");
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -99,7 +113,7 @@ fn test_tasklist() {
 #[test]
 fn test_mini_sample() {
     let binary = compile_fixture("mini_sample");
-    let output = Command::new(format!("./{}", binary))
+    let output = Command::new(&binary)
         .output()
         .expect("failed to run binary");
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -139,7 +153,7 @@ fn test_simple_class() {
 #[test]
 fn test_sample_program_compiles_and_runs() {
     let binary = compile_fixture("sample_program");
-    let output = Command::new(format!("./{}", binary))
+    let output = Command::new(&binary)
         .output()
         .expect("failed to run binary");
 

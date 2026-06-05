@@ -126,9 +126,10 @@ impl<'a> Lowerer<'a> {
     /// Synthesize the body of `{StructName}_to_debug(self) -> String` for a
     /// struct that declares `derive Debug`. Output shape:
     /// `Name { field1: <fmt(field1)>, field2: <fmt(field2)>, ... }`.
-    /// v1 limitation: only primitive field types are formatted faithfully;
-    /// other struct fields with `derive Debug` recurse; everything else
-    /// renders as `<...>` so the formatter never panics.
+    /// Each field is formatted by [`Self::format_field_for_debug`], which
+    /// handles primitives, `String`/`Str`, and nested `derive Debug`
+    /// struct/enum fields (recursing into `{Type}_to_debug`); anything
+    /// else renders as `<...>` so the formatter never panics.
     pub(super) fn synthesize_struct_to_debug(&self, s: &HirStructDef) -> MirFunction {
         let fn_name = format!("{}_to_debug", s.name);
         let self_ty = Ty::Struct {
@@ -197,58 +198,7 @@ impl<'a> Lowerer<'a> {
                 field_index: idx,
             });
 
-            let field_str = if field.ty == Ty::Char {
-                let dest = mir_fn.new_temp(Ty::String);
-                mir_fn.blocks[entry].instructions.push(MirInst::Call {
-                    dest: Some(dest),
-                    callee: "ruxen_char_to_string".to_string(),
-                    args: vec![MirValue::Use(field_local)],
-                });
-                dest
-            } else if field.ty.is_integer() {
-                let dest = mir_fn.new_temp(Ty::String);
-                mir_fn.blocks[entry].instructions.push(MirInst::Call {
-                    dest: Some(dest),
-                    callee: "ruxen_int_to_string".to_string(),
-                    args: vec![MirValue::Use(field_local)],
-                });
-                dest
-            } else if field.ty.is_float() {
-                let dest = mir_fn.new_temp(Ty::String);
-                mir_fn.blocks[entry].instructions.push(MirInst::Call {
-                    dest: Some(dest),
-                    callee: "ruxen_float_to_string".to_string(),
-                    args: vec![MirValue::Use(field_local)],
-                });
-                dest
-            } else if field.ty == Ty::Bool {
-                let dest = mir_fn.new_temp(Ty::String);
-                mir_fn.blocks[entry].instructions.push(MirInst::Call {
-                    dest: Some(dest),
-                    callee: "ruxen_bool_to_string".to_string(),
-                    args: vec![MirValue::Use(field_local)],
-                });
-                dest
-            } else if matches!(field.ty, Ty::String | Ty::Str) {
-                field_local
-            } else if let Some(inner_struct_name) = self.struct_with_derive_debug(&field.ty) {
-                let dest = mir_fn.new_temp(Ty::String);
-                mir_fn.blocks[entry].instructions.push(MirInst::Call {
-                    dest: Some(dest),
-                    callee: format!("{}_to_debug", inner_struct_name),
-                    args: vec![MirValue::Use(field_local)],
-                });
-                dest
-            } else {
-                let dest = mir_fn.new_temp(Ty::String);
-                mir_fn.blocks[entry]
-                    .instructions
-                    .push(MirInst::StringLiteral {
-                        dest,
-                        value: "<...>".to_string(),
-                    });
-                dest
-            };
+            let field_str = self.format_field_for_debug(&mut mir_fn, entry, field_local, &field.ty);
 
             let next = mir_fn.new_temp(Ty::String);
             mir_fn.blocks[entry].instructions.push(MirInst::Call {
@@ -280,6 +230,65 @@ impl<'a> Lowerer<'a> {
         mir_fn
     }
 
+    /// Drive the shared per-field walk used by the fold-shaped derived
+    /// struct methods (eq / hash / clone). For each field in declaration
+    /// order it emits the `GetField` load on `self_local` (and, when
+    /// `other_local` is `Some`, a second load on the rhs), then calls
+    /// `per_field` with the field index, its type, and the loaded
+    /// local(s); `per_field` returns the `LocalId` of this field's
+    /// contribution. Contributions are folded left-to-right by `combine`,
+    /// seeded with `init`, and the final accumulator is returned.
+    ///
+    /// Eq passes `other_local = Some(..)` (it needs the rhs field);
+    /// Hash and Clone pass `None`. Clone's `combine` is identity — its
+    /// per-field `SetField` side-effect happens inside `per_field`, which
+    /// is why `per_field` (not `combine`) receives the field index.
+    ///
+    /// `cmp` is NOT routed through this driver: it threads a `current_block`
+    /// and returns early from a per-field `diff_block`, so it is a branching
+    /// CFG rather than an accumulator fold. `default` does not load `self`
+    /// fields at all (it constructs). Both keep their own skeletons.
+    ///
+    /// ENTRY-BLOCK-ONLY: this driver is single-block by design — it emits every
+    /// `GetField` and accumulator step into `mir_fn.entry_block`. eq / hash /
+    /// clone never branch, so they have nowhere else to write; cmp / default
+    /// opt out precisely because they need multiple blocks. A `block` parameter
+    /// used to be threaded here but every caller passed `entry` and the closures
+    /// captured `entry` directly, so it was inert and misleading — removed.
+    fn fold_struct_fields(
+        &self,
+        mir_fn: &mut MirFunction,
+        s: &HirStructDef,
+        self_local: LocalId,
+        other_local: Option<LocalId>,
+        init: LocalId,
+        mut per_field: impl FnMut(&mut MirFunction, usize, &Ty, LocalId, Option<LocalId>) -> LocalId,
+        mut combine: impl FnMut(&mut MirFunction, LocalId, LocalId) -> LocalId,
+    ) -> LocalId {
+        let entry = mir_fn.entry_block;
+        let mut acc = init;
+        for (idx, field) in s.fields.iter().enumerate() {
+            let lhs = mir_fn.new_temp(field.ty.clone());
+            mir_fn.blocks[entry].instructions.push(MirInst::GetField {
+                dest: lhs,
+                base: self_local,
+                field_index: idx,
+            });
+            let rhs = other_local.map(|ol| {
+                let r = mir_fn.new_temp(field.ty.clone());
+                mir_fn.blocks[entry].instructions.push(MirInst::GetField {
+                    dest: r,
+                    base: ol,
+                    field_index: idx,
+                });
+                r
+            });
+            let contribution = per_field(mir_fn, idx, &field.ty, lhs, rhs);
+            acc = combine(mir_fn, acc, contribution);
+        }
+        acc
+    }
+
     pub(super) fn synthesize_struct_eq(&self, s: &HirStructDef) -> MirFunction {
         let fn_name = format!("{}_eq", s.name);
         let self_ty = Ty::Struct {
@@ -294,28 +303,21 @@ impl<'a> Lowerer<'a> {
         mir_fn.params.push(other_local);
 
         let entry = mir_fn.entry_block;
-        let mut acc = mir_fn.new_temp(Ty::Bool);
+        let init = mir_fn.new_temp(Ty::Bool);
         mir_fn.blocks[entry].instructions.push(MirInst::Assign {
-            dest: acc,
+            dest: init,
             value: MirValue::Literal(Literal::Bool(true)),
         });
 
-        for (idx, field) in s.fields.iter().enumerate() {
-            let lhs = mir_fn.new_temp(field.ty.clone());
-            mir_fn.blocks[entry].instructions.push(MirInst::GetField {
-                dest: lhs,
-                base: self_local,
-                field_index: idx,
-            });
-            let rhs = mir_fn.new_temp(field.ty.clone());
-            mir_fn.blocks[entry].instructions.push(MirInst::GetField {
-                dest: rhs,
-                base: other_local,
-                field_index: idx,
-            });
-
-            let field_eq =
-                if let Some(inner_name) = self.struct_with_derive_trait(&field.ty, "PartialEq") {
+        let acc = self.fold_struct_fields(
+            &mut mir_fn,
+            s,
+            self_local,
+            Some(other_local),
+            init,
+            |mir_fn, _idx, field_ty, lhs, rhs| {
+                let rhs = rhs.expect("eq fold supplies an other_local rhs");
+                if let Some(inner_name) = self.struct_with_derive_trait(field_ty, "PartialEq") {
                     let dest = mir_fn.new_temp(Ty::Bool);
                     mir_fn.blocks[entry].instructions.push(MirInst::Call {
                         dest: Some(dest),
@@ -323,7 +325,7 @@ impl<'a> Lowerer<'a> {
                         args: vec![MirValue::Use(lhs), MirValue::Use(rhs)],
                     });
                     dest
-                } else if matches!(field.ty, Ty::String | Ty::Str) {
+                } else if matches!(field_ty, Ty::String | Ty::Str) {
                     let dest = mir_fn.new_temp(Ty::Bool);
                     mir_fn.blocks[entry].instructions.push(MirInst::Call {
                         dest: Some(dest),
@@ -340,17 +342,19 @@ impl<'a> Lowerer<'a> {
                         rhs: MirValue::Use(rhs),
                     });
                     dest
-                };
-
-            let next = mir_fn.new_temp(Ty::Bool);
-            mir_fn.blocks[entry].instructions.push(MirInst::BinOp {
-                dest: next,
-                op: BinOp::And,
-                lhs: MirValue::Use(acc),
-                rhs: MirValue::Use(field_eq),
-            });
-            acc = next;
-        }
+                }
+            },
+            |mir_fn, acc, field_eq| {
+                let next = mir_fn.new_temp(Ty::Bool);
+                mir_fn.blocks[entry].instructions.push(MirInst::BinOp {
+                    dest: next,
+                    op: BinOp::And,
+                    lhs: MirValue::Use(acc),
+                    rhs: MirValue::Use(field_eq),
+                });
+                next
+            },
+        );
 
         mir_fn.blocks[entry].terminator = Terminator::Return(Some(MirValue::Use(acc)));
         mir_fn
@@ -368,59 +372,62 @@ impl<'a> Lowerer<'a> {
         mir_fn.params.push(self_local);
 
         let entry = mir_fn.entry_block;
-        let mut acc = mir_fn.new_temp(Ty::Int);
+        let init = mir_fn.new_temp(Ty::Int);
         mir_fn.blocks[entry].instructions.push(MirInst::Assign {
-            dest: acc,
+            dest: init,
             value: MirValue::Literal(Literal::Int(1469598103934665603_i64)),
         });
 
-        for (idx, field) in s.fields.iter().enumerate() {
-            let field_local = mir_fn.new_temp(field.ty.clone());
-            mir_fn.blocks[entry].instructions.push(MirInst::GetField {
-                dest: field_local,
-                base: self_local,
-                field_index: idx,
-            });
-
-            let field_hash = if let Some(inner_name) = self
-                .struct_with_derive_trait(&field.ty, "Hashable")
-                .or_else(|| self.struct_with_derive_trait(&field.ty, "Hash"))
-            {
-                let dest = mir_fn.new_temp(Ty::Int);
-                mir_fn.blocks[entry].instructions.push(MirInst::Call {
-                    dest: Some(dest),
-                    callee: format!("{}_hash_code", inner_name),
-                    args: vec![MirValue::Use(field_local)],
+        let acc = self.fold_struct_fields(
+            &mut mir_fn,
+            s,
+            self_local,
+            None,
+            init,
+            |mir_fn, _idx, field_ty, field_local, _rhs| {
+                if let Some(inner_name) = self
+                    .struct_with_derive_trait(field_ty, "Hashable")
+                    .or_else(|| self.struct_with_derive_trait(field_ty, "Hash"))
+                {
+                    let dest = mir_fn.new_temp(Ty::Int);
+                    mir_fn.blocks[entry].instructions.push(MirInst::Call {
+                        dest: Some(dest),
+                        callee: format!("{}_hash_code", inner_name),
+                        args: vec![MirValue::Use(field_local)],
+                    });
+                    dest
+                } else if matches!(field_ty, Ty::String | Ty::Str) {
+                    let dest = mir_fn.new_temp(Ty::Int);
+                    mir_fn.blocks[entry].instructions.push(MirInst::Call {
+                        dest: Some(dest),
+                        callee: "ruxen_string_hash".to_string(),
+                        args: vec![MirValue::Use(field_local)],
+                    });
+                    dest
+                } else {
+                    field_local
+                }
+            },
+            // FNV-1a step: acc = (acc ^ field_hash) * FNV_prime. The combine
+            // emits both ops and returns the final `next`.
+            |mir_fn, acc, field_hash| {
+                let xored = mir_fn.new_temp(Ty::Int);
+                mir_fn.blocks[entry].instructions.push(MirInst::BinOp {
+                    dest: xored,
+                    op: BinOp::BitXor,
+                    lhs: MirValue::Use(acc),
+                    rhs: MirValue::Use(field_hash),
                 });
-                dest
-            } else if matches!(field.ty, Ty::String | Ty::Str) {
-                let dest = mir_fn.new_temp(Ty::Int);
-                mir_fn.blocks[entry].instructions.push(MirInst::Call {
-                    dest: Some(dest),
-                    callee: "ruxen_string_hash".to_string(),
-                    args: vec![MirValue::Use(field_local)],
+                let next = mir_fn.new_temp(Ty::Int);
+                mir_fn.blocks[entry].instructions.push(MirInst::BinOp {
+                    dest: next,
+                    op: BinOp::Mul,
+                    lhs: MirValue::Use(xored),
+                    rhs: MirValue::Literal(Literal::Int(1099511628211_i64)),
                 });
-                dest
-            } else {
-                field_local
-            };
-
-            let xored = mir_fn.new_temp(Ty::Int);
-            mir_fn.blocks[entry].instructions.push(MirInst::BinOp {
-                dest: xored,
-                op: BinOp::BitXor,
-                lhs: MirValue::Use(acc),
-                rhs: MirValue::Use(field_hash),
-            });
-            let next = mir_fn.new_temp(Ty::Int);
-            mir_fn.blocks[entry].instructions.push(MirInst::BinOp {
-                dest: next,
-                op: BinOp::Mul,
-                lhs: MirValue::Use(xored),
-                rhs: MirValue::Literal(Literal::Int(1099511628211_i64)),
-            });
-            acc = next;
-        }
+                next
+            },
+        );
 
         mir_fn.blocks[entry].terminator = Terminator::Return(Some(MirValue::Use(acc)));
         mir_fn
@@ -731,20 +738,28 @@ impl<'a> Lowerer<'a> {
             size: self.alloc_size(&self_ty),
         });
 
-        for (idx, field) in s.fields.iter().enumerate() {
-            let field_local = mir_fn.new_temp(field.ty.clone());
-            mir_fn.blocks[entry].instructions.push(MirInst::GetField {
-                dest: field_local,
-                base: self_local,
-                field_index: idx,
-            });
-            let cloned = self.synthesize_clone_field(&mut mir_fn, entry, field_local, &field.ty);
-            mir_fn.blocks[entry].instructions.push(MirInst::SetField {
-                base: dest,
-                field_index: idx,
-                value: MirValue::Use(cloned),
-            });
-        }
+        // Clone is a per-field load-transform-store: the driver supplies the
+        // `GetField` load, `per_field` clones the value and stores it into
+        // `dest` (it needs the field index, hence the SetField lives here),
+        // and `combine` is identity — there is no folded accumulator, the
+        // result is always the freshly-allocated `dest`.
+        self.fold_struct_fields(
+            &mut mir_fn,
+            s,
+            self_local,
+            None,
+            dest,
+            |mir_fn, idx, field_ty, field_local, _rhs| {
+                let cloned = self.synthesize_clone_field(mir_fn, entry, field_local, field_ty);
+                mir_fn.blocks[entry].instructions.push(MirInst::SetField {
+                    base: dest,
+                    field_index: idx,
+                    value: MirValue::Use(cloned),
+                });
+                cloned
+            },
+            |_mir_fn, acc, _contribution| acc,
+        );
 
         mir_fn.blocks[entry].terminator = Terminator::Return(Some(MirValue::Use(dest)));
         mir_fn

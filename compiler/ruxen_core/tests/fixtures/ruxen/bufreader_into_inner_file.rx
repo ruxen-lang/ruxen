@@ -8,7 +8,7 @@ end
 def report_first(opt: Option[String])
   match opt
     Some(line) -> show_first(line)
-    None       -> puts "eof"
+    nil       -> puts "eof"
   end
 end
 
@@ -24,7 +24,7 @@ def exercise(f: File)
   read_first(&var br)
   let inner = br.into_inner()
   match inner.read_to_string()
-    Ok(s)  -> puts "rest_len=#{s.len}"
+    Ok(s)  -> puts "rest_len=#{s.size}"
     Err(_) -> puts "rest_fail"
   end
 end

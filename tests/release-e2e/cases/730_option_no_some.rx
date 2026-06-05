@@ -1,5 +1,5 @@
 ## "Drop Some" sugar: `T?` parses as `Option[T]`, bare value
-## auto-wraps to `Some(value)`, `nil` lowers to `None`. Exercises
+## auto-wraps to `Some(value)`, `nil` lowers to `nil`. Exercises
 ## the let-binding RHS and function-return wrap sites.
 
 def find(id: Int) -> Int?
@@ -17,18 +17,18 @@ def main
   let d = find(-1)
   match a
     Some(n) -> puts "a=#{n}"
-    None    -> puts "a=nil"
+    nil    -> puts "a=nil"
   end
   match b
     Some(n) -> puts "b=#{n}"
-    None    -> puts "b=nil"
+    nil    -> puts "b=nil"
   end
   match c
     Some(n) -> puts "c=#{n}"
-    None    -> puts "c=nil"
+    nil    -> puts "c=nil"
   end
   match d
     Some(n) -> puts "d=#{n}"
-    None    -> puts "d=nil"
+    nil    -> puts "d=nil"
   end
 end

@@ -1,5 +1,5 @@
 # Pin: `nil` is accepted as a generic argument — `Result[nil, String]`
-# parses identically to `Result[(), String]`.
+# parses identically to `Result[nil, String]`.
 
 def g -> Result[nil, String]
   Ok(nil)

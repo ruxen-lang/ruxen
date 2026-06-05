@@ -1,0 +1,3 @@
+lib "runtime/env.c"
+  def args as "ruxen_env_args" -> Array[String]
+end

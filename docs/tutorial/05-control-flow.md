@@ -210,17 +210,18 @@ Iterate over anything iterable — an array, a range, the characters of a string
 
 ```ruxen
 def main
-  for i in 0..5
-    puts "#{i}"           # 0 through 4
+  for i in 0...5
+    puts "#{i}"           # 0 through 4 (exclusive)
   end
 
-  for i in 0..=5
+  for i in 0..5
     puts "#{i}"           # 0 through 5 (inclusive)
   end
 end
 ```
 
-`0..5` is a half-open range (excludes the end). `0..=5` is inclusive.
+Ranges are Ruby-shaped: `0..5` is **inclusive** (0 through 5), and
+`0...5` is **exclusive** (0 through 4). There is no `..=`.
 
 ```ruxen
 def main
@@ -320,7 +321,7 @@ end
 
 …needs both branches to return the same type, or you need to use the `if` for its side-effects only (and not bind the result).
 
-**Confusing `..` and `..=`.** `0..5` does not include 5. If you want 5, write `0..=5`.
+**Confusing `..` and `...`.** Ruby-style: `0..5` includes 5 (inclusive); `0...5` stops at 4 (exclusive). There is no `..=`.
 
 ## Try it
 

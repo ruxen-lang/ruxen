@@ -59,7 +59,12 @@ fn compile_and_run(rx_path: PathBuf, out_basename: &str) -> (String, String, Opt
     );
 
     let out_dir = std::env::temp_dir();
-    let out_path = out_dir.join(out_basename);
+    let out_path = out_dir.join(format!(
+        "{}-{}-{}",
+        out_basename,
+        std::process::id(),
+        ruxen_unique_id()
+    ));
     let out_str = out_path.to_string_lossy().to_string();
     codegen::compile(&mir, &out_str).expect("codegen failed");
 
@@ -88,4 +93,64 @@ fn struct_with_derive_debug_prints_named_fields() {
         code,
         stderr
     );
+}
+
+/// Characterization (Phase 6 Task 1): a struct whose field is a
+/// `derive Debug` enum must render that field via `{Enum}_to_debug`,
+/// not the `<...>` placeholder. The old inline format ladder in
+/// `synthesize_struct_to_debug` omitted the enum arm that
+/// `format_field_for_debug` carries; routing the struct path through
+/// the helper fixes the `<...>` rendering for nested enum fields.
+#[test]
+fn struct_with_nested_derive_debug_enum_field_renders_via_enum_helper() {
+    let root = workspace_root();
+    let rx = root.join("tests/release-e2e/cases/213_implicit_debug_struct_enum_field.rx");
+    let source = std::fs::read_to_string(&rx)
+        .unwrap_or_else(|e| panic!("read {} failed: {}", rx.display(), e));
+
+    let mut lexer = Lexer::new(&source);
+    let tokens = lexer.tokenize().expect("lexer failed");
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse().expect("parser failed");
+    let result = typeck::type_check(&program);
+
+    let errors: Vec<_> = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.level == ruxen_core::diagnostics::DiagnosticLevel::Error)
+        .collect();
+    assert!(errors.is_empty(), "type errors: {:?}", errors);
+
+    let mut lowerer = Lowerer::new(&result.symbols);
+    let mir = lowerer
+        .lower_program(&result.program)
+        .expect("MIR lowering failed");
+
+    let out_dir = std::env::temp_dir();
+    let out_path = out_dir.join("ruxen_derive_debug_struct_enum_field_bin");
+    let out_str = out_path.to_string_lossy().to_string();
+    codegen::compile(&mir, &out_str).expect("codegen failed");
+
+    let output = Command::new(&out_str)
+        .output()
+        .expect("failed to run compiled binary");
+    let _ = std::fs::remove_file(&out_str);
+    let _ = std::fs::remove_file(format!("{}.o", out_str));
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert_eq!(
+        stdout.trim(),
+        "Tag { id: 7, color: Green }",
+        "nested enum field should render via Color_to_debug, not <...> \
+         (exit={:?}, stderr={:?})",
+        output.status.code(),
+        stderr
+    );
+}
+
+fn ruxen_unique_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
 }

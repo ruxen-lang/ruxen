@@ -14,7 +14,7 @@ Here's a function that returns the longer of two strings. It needs lifetime anno
 
 ```ruxen
 def longest[a](x: &a String, y: &a String) -> &a String
-  if x.len > y.len
+  if x.size > y.size
     x
   else
     y
@@ -59,7 +59,7 @@ For context, from [Chapter 4](04-ownership-and-borrowing.md):
 def main
   var data = [1, 2, 3]
   let view = &data
-  puts "#{view.len}"     # last use of view
+  puts "#{view.size}"     # last use of view
   data.push(4)            # OK — view is dead
 end
 ```
@@ -145,7 +145,7 @@ def main
   let needle = String.from("banana")
   match find(&dict, &needle)
     Some(found) -> puts "got #{found}"
-    None        -> puts "missing"
+    nil        -> puts "missing"
   end
 end
 ```
@@ -165,7 +165,7 @@ def main
   var data: Array[Int] = Array.new
   push_one(&var data)
   push_one(&var data)
-  puts "#{data.len}"      # 2
+  puts "#{data.size}"      # 2
 end
 ```
 

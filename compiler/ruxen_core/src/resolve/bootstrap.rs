@@ -93,7 +93,6 @@ pub const BOOTSTRAP_FILES: &[&str] = &[
     "rand/src/lib.rx",
     "path/src/lib.rx",
     "env/src/lib.rx",
-    "iter/src/lib.rx",
     "hash/src/lib.rx",
     "fmt/src/lib.rx",
     "net/src/lib.rx",
@@ -152,12 +151,14 @@ pub const BOOTSTRAP_FILES: &[&str] = &[
     // Keep it after those packages so `Array[Json]`, `Map[String, Json]`,
     // and `String` payload helpers resolve.
     "json/src/lib.rx",
-    // foobar — trio-leak pin fixture (B5 of
+    // _pin_zero_rust_stdlib — trio-leak pin fixture (B5 of
     // docs/specs/system/zero_rust_stdlib_classes.spec.md). Adding a
-    // stdlib class via a fresh package MUST require ONLY this entry
-    // in `compiler/ruxen_core/src/`. Anything else is an auto-connect
-    // gap to fix in the bootstrap pipeline, not in this list.
-    "foobar/src/lib.rx",
+    // stdlib class via a fresh package MUST require ONLY this entry in
+    // `compiler/ruxen_core/src/`. Anything else is an auto-connect gap to
+    // fix in the bootstrap pipeline, not in this list. The first path
+    // segment drives the `std.<pkg>` namespace, so this package is
+    // reachable as `std._pin_zero_rust_stdlib`.
+    "_pin_zero_rust_stdlib/src/lib.rx",
     // regex — PCRE2-backed `Regex`, `Match`, `RegexError` classes.
     // Depends on string/array/map/option_result for return types
     // (`Array[Match]`, `HashMap[String, String]`, `Option[String]`,

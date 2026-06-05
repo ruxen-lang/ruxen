@@ -40,7 +40,7 @@ blocks until the first call completes, then returns immediately.
 | Call                              | Returns                  |
 |-----------------------------------|--------------------------|
 | `OnceLock.new()`                  | `OnceLock[T]`            |
-| `ol.set(value: T)`                | `Result[(), T]`          |
+| `ol.set(value: T)`                | `Result[nil, T]`          |
 | `ol.get()`                        | `Option[&T]`             |
 | `ol.get_or_init(closure)`         | `&T`                     |
 
@@ -59,7 +59,7 @@ ol = OnceLock[Int].new()
 assert_eq(ol.get, None)
 ol.set(42).ok!
 assert_eq(ol.get, Some(42))
-assert(ol.set(99).is_err)   # already populated
+assert(ol.set(99).err?)   # already populated
 ```
 
 ## B5 — Multi-thread `get_or_init` runs closure once

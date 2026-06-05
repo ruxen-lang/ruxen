@@ -1,7 +1,7 @@
 use std.process.Command
 
 def report(out: Output)
-  if out.stderr.contains("err")
+  if out.stderr.include?("err")
     puts "stderr_ok"
   else
     puts "stderr_bad"

@@ -16,7 +16,7 @@ def describe(m: Metadata)
   else
     puts "is_symlink=false"
   end
-  if m.len > 0
+  if m.size > 0
     puts "len_positive"
   else
     puts "len_zero"

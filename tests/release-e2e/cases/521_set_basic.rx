@@ -3,8 +3,8 @@ def main
   s.insert(1)
   s.insert(2)
   s.insert(1)
-  let n = s.len
+  let n = s.size
   puts "len=#{n}"
-  puts "has1=#{s.contains(1)}"
-  puts "has3=#{s.contains(3)}"
+  puts "has1=#{s.include?(1)}"
+  puts "has3=#{s.include?(3)}"
 end

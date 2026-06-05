@@ -1,6 +1,17 @@
 /// Tests for the Ruxen code formatter.
 use super::*;
 
+/// Load a formatter test fixture from `tests/fixtures/fmt/<name>.rx`.
+/// Per the team's no-inline-rx-source rule, formatter inputs live as
+/// real `.rx` files (which the parser/lexer themselves exercise),
+/// not as `\n`-laden Rust string literals.
+fn fmt_fixture(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fmt")
+        .join(format!("{name}.rx"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+}
+
 // ─── Idempotency Helper ─────────────────────────────────────────────
 
 fn assert_idempotent(source: &str) {
@@ -34,65 +45,65 @@ fn assert_unchanged(source: &str) {
 
 #[test]
 fn test_hello_world() {
-    let source = "def main\n  puts \"Hello from Ruxen!\"\nend\n";
-    let result = format(source);
+    let source = fmt_fixture("test_hello_world");
+    let result = format(&source);
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
     assert!(result.output.contains("def main"));
     assert!(result.output.ends_with('\n'));
-    assert_idempotent(source);
+    assert_idempotent(&source);
 }
 
 #[test]
 fn test_simple_function() {
-    let source = "def add(a: Int, b: Int) -> Int\n  a + b\nend\n";
-    let result = format(source);
+    let source = fmt_fixture("test_simple_function");
+    let result = format(&source);
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
     assert!(result.output.contains("def add"));
-    assert_idempotent(source);
+    assert_idempotent(&source);
 }
 
 #[test]
 fn test_class_definition() {
-    let source = "class Point\n  x: Int\n  y: Int\n\n  def init(@x: Int, @y: Int) end\n\n  public def sum -> Int\n    self.x + self.y\n  end\nend\n";
-    let result = format(source);
+    let source = fmt_fixture("test_class_definition");
+    let result = format(&source);
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
     assert!(result.output.contains("class Point"));
     assert!(result.output.contains("x: Int"));
-    assert_idempotent(source);
+    assert_idempotent(&source);
 }
 
 #[test]
 fn test_enum_definition() {
-    let source = "enum Color\n  Red\n  Green\n  Blue\nend\n";
-    let result = format(source);
+    let source = fmt_fixture("test_enum_definition");
+    let result = format(&source);
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
     assert!(result.output.contains("enum Color"));
     assert!(result.output.contains("Red"));
-    assert_idempotent(source);
+    assert_idempotent(&source);
 }
 
 #[test]
 fn test_if_else() {
-    let source = "def main\n  let x = 42\n  if x > 0\n    puts \"positive\"\n  else\n    puts \"non-positive\"\n  end\nend\n";
-    let result = format(source);
+    let source = fmt_fixture("test_if_else");
+    let result = format(&source);
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
     assert!(result.output.contains("if x > 0"));
-    assert_idempotent(source);
+    assert_idempotent(&source);
 }
 
 #[test]
 fn test_match_expression() {
-    let source = "def describe(c: Color) -> String\n  match c\n    Color.Red -> \"red\"\n    Color.Green -> \"green\"\n    Color.Blue -> \"blue\"\n  end\nend\n";
-    let result = format(source);
+    let source = fmt_fixture("test_match_expression");
+    let result = format(&source);
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
     assert!(result.output.contains("match c"));
-    assert_idempotent(source);
+    assert_idempotent(&source);
 }
 
 #[test]
 fn test_trailing_newline() {
-    let source = "def main\n  puts \"hello\"\nend";
-    let result = format(source);
+    let source = fmt_fixture("test_trailing_newline");
+    let result = format(&source);
     assert!(result.output.ends_with('\n'));
 }
 
@@ -100,8 +111,8 @@ fn test_trailing_newline() {
 
 #[test]
 fn test_syntax_error_returns_original() {
-    let source = "def foo(\n  this is invalid syntax!!!@@@\nend\n";
-    let result = format(source);
+    let source = fmt_fixture("test_syntax_error_returns_original");
+    let result = format(&source);
     assert_eq!(result.output, source);
     assert!(!result.changed);
 }
@@ -110,8 +121,8 @@ fn test_syntax_error_returns_original() {
 
 #[test]
 fn test_line_comment_preserved() {
-    let source = "# A comment\ndef main\n  puts \"hello\"\nend\n";
-    let result = format(source);
+    let source = fmt_fixture("test_line_comment_preserved");
+    let result = format(&source);
     assert!(
         result.output.contains("# A comment"),
         "Comment missing from output: {}",
@@ -121,8 +132,8 @@ fn test_line_comment_preserved() {
 
 #[test]
 fn test_doc_comment_preserved() {
-    let source = "## Documentation\ndef main\n  puts \"hello\"\nend\n";
-    let result = format(source);
+    let source = fmt_fixture("test_doc_comment_preserved");
+    let result = format(&source);
     assert!(
         result.output.contains("## Documentation"),
         "Doc comment missing from output: {}",
@@ -134,15 +145,15 @@ fn test_doc_comment_preserved() {
 
 #[test]
 fn test_string_interpolation() {
-    let source = "def main\n  let x = 42\n  puts \"The answer is #{x}\"\nend\n";
-    let result = format(source);
+    let source = fmt_fixture("test_string_interpolation");
+    let result = format(&source);
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
     assert!(
         result.output.contains("#{x}") || result.output.contains("#{"),
         "Interpolation missing: {}",
         result.output
     );
-    assert_idempotent(source);
+    assert_idempotent(&source);
 }
 
 // ─── Mixin Inclusion (ruby-naming.spec.md §3.4 / §10a) ──────────────
@@ -151,30 +162,29 @@ fn test_string_interpolation() {
 
 #[test]
 fn test_class_inherent_methods() {
-    let source = "class Priority\n  def weight -> Int\n    match self\n      Priority.Low -> 1\n      Priority.High -> 3\n    end\n  end\nend\n";
-    let result = format(source);
+    let source = fmt_fixture("test_class_inherent_methods");
+    let result = format(&source);
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
     assert!(result.output.contains("class Priority"));
-    assert_idempotent(source);
+    assert_idempotent(&source);
 }
 
 #[test]
 fn test_class_with_include_directive() {
-    let source =
-        "class Priority\n  include Display\n\n  def to_display -> String\n    \"hello\"\n  end\nend\n";
-    let result = format(source);
+    let source = fmt_fixture("test_class_with_include_directive");
+    let result = format(&source);
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
     assert!(result.output.contains("include Display"));
     assert!(result.output.contains("class Priority"));
-    assert_idempotent(source);
+    assert_idempotent(&source);
 }
 
 // ─── Enum with Data ─────────────────────────────────────────────────
 
 #[test]
 fn test_enum_with_data() {
-    let source = "enum Shape\n  Circle(radius: Int)\n  Rectangle(width: Int, height: Int)\nend\n";
-    let result = format(source);
+    let source = fmt_fixture("test_enum_with_data");
+    let result = format(&source);
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
     // The formatter outputs variant fields with parentheses
     assert!(
@@ -187,18 +197,18 @@ fn test_enum_with_data() {
         "Missing radius in:\n{}",
         result.output
     );
-    assert_idempotent(source);
+    assert_idempotent(&source);
 }
 
 // ─── Mixin Definitions (ruby-naming.spec.md §3.4) ───────────────────
 
 #[test]
 fn test_mixin_definition() {
-    let source = "mixin Serializable\n  def serialize -> String\nend\n";
-    let result = format(source);
+    let source = fmt_fixture("test_mixin_definition");
+    let result = format(&source);
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
     assert!(result.output.contains("Serializable"));
-    assert_idempotent(source);
+    assert_idempotent(&source);
 }
 
 // ─── Fixture File Tests ─────────────────────────────────────────────
@@ -289,16 +299,16 @@ fn test_doc_group_break_on_narrow() {
 
 #[test]
 fn test_comment_collector_multiple() {
-    let source = "# first\n# second\ndef main\n  puts \"hello\"\nend\n";
-    let collector = comments::CommentCollector::new(source);
+    let source = fmt_fixture("test_comment_collector_multiple");
+    let collector = comments::CommentCollector::new(&source);
     let (comments, _) = collector.collect();
     assert_eq!(comments.len(), 2);
 }
 
 #[test]
 fn test_comment_inside_interpolation_ignored() {
-    let source = "let s = \"value: #{x + 1}\"\n# real comment\n";
-    let collector = comments::CommentCollector::new(source);
+    let source = fmt_fixture("test_comment_inside_interpolation_ignored");
+    let collector = comments::CommentCollector::new(&source);
     let (comments, _) = collector.collect();
     assert_eq!(comments.len(), 1);
     assert_eq!(comments[0].kind, comments::CommentKind::Line);
@@ -378,7 +388,7 @@ fn assert_reparses(source: &str) -> String {
 #[test]
 fn fields_have_no_pub_prefix() {
     // Public is the default; `pub fd: Int` is not valid field syntax.
-    let out = assert_reparses("class C\n  fd: Int\n  closed: Int\nend\n");
+    let out = assert_reparses(&fmt_fixture("fields_have_no_pub_prefix"));
     assert!(!out.contains("pub "), "spurious pub prefix:\n{}", out);
     assert!(out.contains("fd: Int"), "{}", out);
 }
@@ -386,8 +396,8 @@ fn fields_have_no_pub_prefix() {
 #[test]
 fn private_fields_use_section_marker() {
     // No corpus file exercises non-public fields; pin the section-marker form.
-    let src = "class C\n  private\n  secret: Int\nend\n";
-    let out = assert_reparses(src);
+    let src = fmt_fixture("private_fields_use_section_marker");
+    let out = assert_reparses(&src);
     assert!(
         out.contains("private"),
         "expected private section marker:\n{}",
@@ -398,8 +408,8 @@ fn private_fields_use_section_marker() {
 
 #[test]
 fn lib_block_name_keeps_quotes() {
-    let src = "lib \"runtime/env.c\"\n  def args as \"ruxen_env_args\" -> Array[String]\nend\n";
-    let out = assert_reparses(src);
+    let src = fmt_fixture("lib_block_name_keeps_quotes");
+    let out = assert_reparses(&src);
     assert!(
         out.contains("lib \"runtime/env.c\""),
         "lib name lost quotes:\n{}",
@@ -409,16 +419,15 @@ fn lib_block_name_keeps_quotes() {
 
 #[test]
 fn ffi_class_method_keeps_self() {
-    let src = "class Env\n  lib \"runtime/env.c\"\n    def self.args as \"ruxen_env_args\" -> Array[String]\n  end\nend\n";
-    let out = assert_reparses(src);
+    let src = fmt_fixture("ffi_class_method_keeps_self");
+    let out = assert_reparses(&src);
     assert!(out.contains("def self.args"), "FFI self. dropped:\n{}", out);
 }
 
 #[test]
 fn mixin_method_sig_def_before_var() {
-    let src =
-        "mixin Future\n  type Output\n  def var poll(cx: &var Context) -> Poll[Self.Output]\nend\n";
-    let out = assert_reparses(src);
+    let src = fmt_fixture("mixin_method_sig_def_before_var");
+    let out = assert_reparses(&src);
     assert!(
         out.contains("def var poll"),
         "expected `def var`, got:\n{}",
@@ -429,8 +438,8 @@ fn mixin_method_sig_def_before_var() {
 
 #[test]
 fn extension_keyword_not_impl() {
-    let src = "extension Int\n  def to_s -> String\n    \"#{self}\"\n  end\nend\n";
-    let out = assert_reparses(src);
+    let src = fmt_fixture("extension_keyword_not_impl");
+    let out = assert_reparses(&src);
     assert!(
         out.contains("extension Int"),
         "expected `extension`, got:\n{}",
@@ -440,7 +449,7 @@ fn extension_keyword_not_impl() {
 
 #[test]
 fn const_without_type_omits_annotation() {
-    let out = assert_reparses("const MAX = 100\n");
+    let out = assert_reparses(&fmt_fixture("const_without_type_omits_annotation"));
     assert!(
         !out.contains(": _"),
         "spurious inferred-type annotation:\n{}",
@@ -450,17 +459,19 @@ fn const_without_type_omits_annotation() {
 }
 
 #[test]
-fn do_end_block_expression_preserved() {
-    let src = "def main\n  let v = do\n    let a = 1\n    a + 1\n  end\n  puts \"#{v}\"\nend\n";
-    let out = assert_reparses(src);
+fn do_end_closure_preserved() {
+    // `let v = do … end` is a no-param closure bound to `v`; the formatter
+    // must keep the `do…end` wrapper rather than rewriting it to braces.
+    let src = fmt_fixture("do_end_block_expression_preserved");
+    let out = assert_reparses(&src);
     assert!(out.contains("= do"), "do...end wrapper lost:\n{}", out);
     assert!(out.contains("end"), "{}", out);
 }
 
 #[test]
 fn move_closure_keeps_move() {
-    let src = "def f -> some Fn(Int) -> Int\n  move { |x| x + 1 }\nend\n";
-    let out = assert_reparses(src);
+    let src = fmt_fixture("move_closure_keeps_move");
+    let out = assert_reparses(&src);
     assert!(
         out.contains("move {") || out.contains("move do"),
         "move keyword lost:\n{}",
@@ -470,16 +481,16 @@ fn move_closure_keeps_move() {
 
 #[test]
 fn never_type_spelled_never() {
-    let src = "lib \"runtime/process.c\"\n  def exit as \"ruxen_process_exit\"(code: Int) -> Never\nend\n";
-    let out = assert_reparses(src);
+    let src = fmt_fixture("never_type_spelled_never");
+    let out = assert_reparses(&src);
     assert!(out.contains("-> Never"), "Never emitted as `!`:\n{}", out);
     assert!(!out.contains("-> !"), "{}", out);
 }
 
 #[test]
 fn multi_statement_match_arm_has_no_end() {
-    let src = "def main\n  match x\n    Some(v) ->\n      puts \"a\"\n      puts \"b\"\n    None -> puts \"c\"\n  end\nend\n";
-    let out = assert_reparses(src);
+    let src = fmt_fixture("multi_statement_match_arm_has_no_end");
+    let out = assert_reparses(&src);
     // Exactly two `end`s: the match and the def. A per-arm `end` would make 3.
     assert_eq!(
         out.matches("end").count(),

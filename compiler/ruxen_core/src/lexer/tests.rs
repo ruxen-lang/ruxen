@@ -149,16 +149,23 @@ fn test_ruby_naming_legacy_keywords_lex_as_identifiers() {
 }
 
 #[test]
-fn test_ruby_naming_legacy_none_lexes_as_type_identifier() {
-    // `None` was the only legacy TypeIdentifier-cased keyword. With ruby-
-    // naming it loses its keyword status and falls back to the ordinary
-    // `TypeIdentifier` rule because it begins with an uppercase letter.
-    let kinds = lex_kinds("None");
-    assert_eq!(
-        kinds,
-        vec![TokenKind::TypeIdentifier("None".into()), TokenKind::Eof,],
-        "`None` should now lex as TypeIdentifier, not NoneKw"
+fn test_ruby_naming_none_is_forbidden_use_nil() {
+    // ruby-naming.spec.md §3.10: `None` is not a valid spelling. The single
+    // empty literal is `nil` (Option::None, null, and unit). The lexer
+    // rejects the identifier `None` with E0008 so the fix-it surfaces in
+    // every position (expression, pattern, type) uniformly.
+    let (_tokens, diags) = lex_with_errors("None");
+    assert!(
+        diags.iter().any(|d| d.code.as_deref() == Some("E0008")),
+        "`None` should be rejected with E0008; got: {diags:?}"
     );
+}
+
+#[test]
+fn test_nil_lexes_as_nil_keyword() {
+    // The canonical empty literal lexes as the dedicated `Nil` token.
+    let kinds = lex_kinds("nil");
+    assert_eq!(kinds, vec![TokenKind::Nil, TokenKind::Eof]);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -240,9 +247,9 @@ fn test_multi_char_operators() {
         ("*=", TokenKind::StarEq),
         ("%=", TokenKind::PercentEq),
         ("..", TokenKind::DotDot),
-        ("..=", TokenKind::DotDotEq),
+        ("...", TokenKind::DotDotDot),
         ("->", TokenKind::Arrow),
-        ("?.", TokenKind::QuestionDot),
+        ("&.", TokenKind::AmpDot),
         ("::", TokenKind::ColonColon),
     ];
 
@@ -481,13 +488,22 @@ fn test_range_not_float() {
 }
 
 #[test]
-fn test_inclusive_range() {
-    let kinds = lex_kinds("0..=10");
+fn test_ruby_ranges_dotdot_inclusive_dotdotdot_exclusive() {
+    // ruby-naming.spec.md §3.10b: `..` is inclusive, `...` is exclusive.
     assert_eq!(
-        kinds,
+        lex_kinds("0..10"),
         vec![
             TokenKind::IntLiteral(0, None),
-            TokenKind::DotDotEq,
+            TokenKind::DotDot,
+            TokenKind::IntLiteral(10, None),
+            TokenKind::Eof,
+        ]
+    );
+    assert_eq!(
+        lex_kinds("0...10"),
+        vec![
+            TokenKind::IntLiteral(0, None),
+            TokenKind::DotDotDot,
             TokenKind::IntLiteral(10, None),
             TokenKind::Eof,
         ]
@@ -884,8 +900,10 @@ fn test_multiline_string() {
 }
 
 #[test]
-fn test_raw_string() {
-    let kinds = lex_kinds(r#"r"no\escape""#);
+fn test_raw_string_single_quote() {
+    // ruby-naming.spec.md §3.10a: single quotes are RAW strings — no
+    // escape processing. `'no\escape'` keeps the backslash verbatim.
+    let kinds = lex_kinds(r"'no\escape'");
     assert_eq!(
         kinds,
         vec![
@@ -896,8 +914,10 @@ fn test_raw_string() {
 }
 
 #[test]
-fn test_raw_string_with_hashes() {
-    let kinds = lex_kinds(r###"r#"can contain "quotes""#"###);
+fn test_raw_string_can_hold_double_quotes() {
+    // A single-quoted raw string carries embedded double quotes verbatim
+    // (the role the retired `r#"…"#` form used to play).
+    let kinds = lex_kinds(r#"'can contain "quotes"'"#);
     assert_eq!(
         kinds,
         vec![
@@ -908,24 +928,24 @@ fn test_raw_string_with_hashes() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Character Literals
+// Character Literals (ruby-naming §3.11: `?a`, `?\n`, `?\u{…}`)
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_char_literal() {
-    let kinds = lex_kinds("'a'");
+    let kinds = lex_kinds("?a");
     assert_eq!(kinds, vec![TokenKind::CharLiteral('a'), TokenKind::Eof]);
 }
 
 #[test]
 fn test_char_escape() {
-    let kinds = lex_kinds(r"'\n'");
+    let kinds = lex_kinds(r"?\n");
     assert_eq!(kinds, vec![TokenKind::CharLiteral('\n'), TokenKind::Eof]);
 }
 
 #[test]
 fn test_char_unicode() {
-    let kinds = lex_kinds(r"'\u{1F600}'");
+    let kinds = lex_kinds(r"?\u{1F600}");
     assert_eq!(
         kinds,
         vec![TokenKind::CharLiteral('\u{1F600}'), TokenKind::Eof]
@@ -968,15 +988,12 @@ fn test_type_identifier() {
 
 #[test]
 fn test_identifier_with_question_suffix() {
-    // ? is emitted as a separate token; parser combines identifier + ? for method names
+    // Ruby predicate methods: a trailing `?` (not followed by `.`) is
+    // absorbed into a lowercase identifier, so `is_empty?` is one token.
     let kinds = lex_kinds("is_empty?");
     assert_eq!(
         kinds,
-        vec![
-            TokenKind::Identifier("is_empty".into()),
-            TokenKind::Question,
-            TokenKind::Eof,
-        ]
+        vec![TokenKind::Identifier("is_empty?".into()), TokenKind::Eof,]
     );
 }
 
@@ -1279,12 +1296,13 @@ fn test_generic_type() {
 
 #[test]
 fn test_safe_navigation() {
-    let kinds = lex_kinds("user?.name");
+    // Ruby safe navigation is `&.` (not `?.`): `user&.name`.
+    let kinds = lex_kinds("user&.name");
     assert_eq!(
         kinds,
         vec![
             TokenKind::Identifier("user".into()),
-            TokenKind::QuestionDot,
+            TokenKind::AmpDot,
             TokenKind::Identifier("name".into()),
             TokenKind::Eof,
         ]
@@ -1292,13 +1310,30 @@ fn test_safe_navigation() {
 }
 
 #[test]
-fn test_try_operator() {
-    let kinds = lex_kinds("result?");
+fn test_predicate_suffix_and_try_and_safenav() {
+    // `result?` (lowercase + trailing `?`) is a Ruby predicate method name.
     assert_eq!(
-        kinds,
+        lex_kinds("result?"),
+        vec![TokenKind::Identifier("result?".into()), TokenKind::Eof]
+    );
+    // The try operator survives after `)`: `f()?` → `f` `(` `)` `?`.
+    assert_eq!(
+        lex_kinds("f()?"),
         vec![
-            TokenKind::Identifier("result".into()),
+            TokenKind::Identifier("f".into()),
+            TokenKind::LParen,
+            TokenKind::RParen,
             TokenKind::Question,
+            TokenKind::Eof,
+        ]
+    );
+    // Safe navigation is Ruby's `&.` (not `?.`): `h&.now`.
+    assert_eq!(
+        lex_kinds("h&.now"),
+        vec![
+            TokenKind::Identifier("h".into()),
+            TokenKind::AmpDot,
+            TokenKind::Identifier("now".into()),
             TokenKind::Eof,
         ]
     );
@@ -1441,24 +1476,34 @@ fn test_newline_suppressed_after_pipe() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[test]
-fn test_lifetime() {
-    let kinds = lex_kinds("'a");
-    assert_eq!(kinds, vec![TokenKind::Lifetime("a".into()), TokenKind::Eof]);
-}
-
-#[test]
-fn test_lifetime_long_name() {
-    let kinds = lex_kinds("'input");
-    assert_eq!(
-        kinds,
-        vec![TokenKind::Lifetime("input".into()), TokenKind::Eof]
+fn test_lifetime_sigil_is_rejected_no_sigil_form() {
+    // ruby-naming.spec.md §3.3 / G7: there is no `'a` lifetime sigil.
+    // A leading `'` with no closing quote on the line is an unterminated
+    // raw string (E0002), not a lifetime. Lifetimes are bare lowercase
+    // names in the `[...]` parameter slot — see the parser tests.
+    let (_t, diags) = lex_with_errors("'a");
+    assert!(
+        diags.iter().any(|d| d.code.as_deref() == Some("E0002")),
+        "`'a` should be rejected (no lifetime sigil); got: {diags:?}"
+    );
+    let (_t2, diags2) = lex_with_errors("'input");
+    assert!(
+        diags2.iter().any(|d| d.code.as_deref() == Some("E0002")),
+        "`'input` should be rejected (no lifetime sigil); got: {diags2:?}"
     );
 }
 
 #[test]
-fn test_char_literal_still_works() {
-    // 'a' (with closing quote) is still a char literal
+fn test_single_quote_is_raw_string_not_char() {
+    // After ruby-naming §3.11, `'a'` is a one-char RAW STRING (char
+    // literals moved to `?a`). A bare `'input` with no closing quote
+    // on the line stays a lifetime (see test_lifetime_*).
     let kinds = lex_kinds("'a'");
+    assert_eq!(
+        kinds,
+        vec![TokenKind::StringLiteral("a".into()), TokenKind::Eof]
+    );
+    let kinds = lex_kinds("?a");
     assert_eq!(kinds, vec![TokenKind::CharLiteral('a'), TokenKind::Eof]);
 }
 
@@ -1495,7 +1540,8 @@ fn test_empty_string() {
 
 #[test]
 fn test_escaped_single_quote_in_char() {
-    let kinds = lex_kinds(r"'\''");
+    // `?\'` — a char literal of a single quote via the `?` form.
+    let kinds = lex_kinds(r"?\'");
     assert_eq!(kinds, vec![TokenKind::CharLiteral('\''), TokenKind::Eof]);
 }
 

@@ -8,8 +8,8 @@
 ## counts are accumulated on the active Runner via the C-static slot.
 class Tester
   name: String
-  hooks_before: Array[any Fn[Fn() -> ()]]
-  hooks_after: Array[any Fn[Fn() -> ()]]
+  hooks_before: Array[any Fn[Fn() -> nil]]
+  hooks_after: Array[any Fn[Fn() -> nil]]
 
   def init(name: &String)
     self.name = name.clone
@@ -17,7 +17,7 @@ class Tester
     self.hooks_after = Array.new
   end
 
-  def self.describe(name: &String, body: any Fn[Fn(&var Tester) -> ()]) -> ()
+  def self.describe(name: &String, body: any Fn[Fn(&var Tester) -> nil]) -> nil
     let addr = Runner.get_current
     if addr != 0
       let r = Runner.from_handle(addr)
@@ -27,7 +27,7 @@ class Tester
     body.(&var root)
   end
 
-  def context(name: &String, body: any Fn[Fn(&var Tester) -> ()]) -> ()
+  def context(name: &String, body: any Fn[Fn(&var Tester) -> nil]) -> nil
     var child = Tester.new(name)
     for h in &self.hooks_before
       child.hooks_before.push(h)
@@ -35,11 +35,11 @@ class Tester
     body.(&var child)
   end
 
-  def before(hook: any Fn[Fn() -> ()]) -> () { self.hooks_before.push(hook) }
+  def before(hook: any Fn[Fn() -> nil]) -> nil { self.hooks_before.push(hook) }
 
-  def after(hook: any Fn[Fn() -> ()]) -> () { self.hooks_after.push(hook) }
+  def after(hook: any Fn[Fn() -> nil]) -> nil { self.hooks_after.push(hook) }
 
-  def it(name: &String, body: any Fn[Fn() -> ()]) -> ()
+  def it(name: &String, body: any Fn[Fn() -> nil]) -> nil
     let runner_addr = Runner.get_current
     if runner_addr == 0
       return
@@ -73,7 +73,7 @@ class Tester
     end
   end
 
-  def it_panics(name: &String, expected_substr: &String, body: any Fn[Fn() -> ()]) -> ()
+  def it_panics(name: &String, expected_substr: &String, body: any Fn[Fn() -> nil]) -> nil
     let runner_addr = Runner.get_current
     if runner_addr == 0
       return
@@ -101,7 +101,7 @@ class Tester
     end
   end
 
-  def xit(name: &String, body: any Fn[Fn() -> ()]) -> ()
+  def xit(name: &String, body: any Fn[Fn() -> nil]) -> nil
     let runner_addr = Runner.get_current
     if runner_addr == 0
       return

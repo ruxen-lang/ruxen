@@ -1,0 +1,3 @@
+def main
+  puts "Hello from Ruxen!"
+end

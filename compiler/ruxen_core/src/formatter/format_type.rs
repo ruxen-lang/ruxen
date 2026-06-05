@@ -27,7 +27,11 @@ pub fn format_type_expr(ty: &TypeExpr, _comments: &CommentMap) -> Doc {
 
         TypeExpr::Tuple { elements, .. } => {
             if elements.is_empty() {
-                text("()")
+                // ruby-naming.spec.md §3.10: the unit type is spelled `nil`,
+                // not `()`. The parser maps both spellings to an empty-tuple
+                // node but REJECTS `()` in type position, so the formatter
+                // must emit `nil` here or its output fails to re-parse.
+                text("nil")
             } else {
                 let items: Vec<Doc> = elements
                     .iter()

@@ -44,6 +44,15 @@ pub fn format_pattern(pat: &Pattern, comments: &CommentMap) -> Doc {
             fields,
             ..
         } => {
+            // The Option::None variant is spelled `nil` on the surface
+            // (ruby-naming.spec.md §3.10); its internal variant name is
+            // still "None", so emit `nil` when printing a bare `None`
+            // pattern — otherwise the formatter round-trips to the now-
+            // forbidden `None` identifier and the reparse fails E0008.
+            if path.is_empty() && variant == "None" && fields.is_empty() {
+                return text("nil");
+            }
+
             let path_str = if path.is_empty() {
                 variant.clone()
             } else {

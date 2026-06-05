@@ -1,4 +1,4 @@
 def main
-  let r = r"no\escape\here"
+  let r = 'no\escape\here'
   puts "#{r}"
 end

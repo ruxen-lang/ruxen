@@ -10,7 +10,7 @@ See §3.4a of the canonical surface-syntax spec for the `include Drop`
 + `def var drop` pattern.
 
 Ruxen elaborates drop calls on MIR so that every owned heap value
-(`String`, `Array`, `Map`, `Set`, user types that own them) is
+(`String`, `Array`, `Hash`, `Set`, user types that own them) is
 released at scope exit.  The `drop_fixtures.rs` test suite uses a
 specially-rewritten runtime that counts `free` calls so we can assert
 "every alloc has a matching free".
@@ -46,9 +46,9 @@ drop calls for any live owned bindings before transferring control.
 
 - `Array[String]` frees every element string when the Array is dropped.
 - `Array[Array[Int]]` frees every inner Array.
-- `Map[String, Int]` frees every key string.
-- `Map[Int, String]` frees every value string.
-- `Map[String, Array[Int]]` frees every key and every value.
+- `Hash[String, Int]` frees every key string.
+- `Hash[Int, String]` frees every value string.
+- `Hash[String, Array[Int]]` frees every key and every value.
 - `Set[String]` frees every element.
 
 ## B6 — `String.push(s)` does not leak the appended slice
@@ -91,7 +91,7 @@ For every fixture the suite runs, `allocs == frees` at process exit
 | B4        | `break_drops_loop_body_local` + `continue_drops_loop_body_local` | `drop_fixtures.rs` |
 | B5 String | `string_local_is_freed_on_scope_exit`                  | `drop_fixtures.rs`  |
 | B5 Array  | `vec_local_is_freed_on_scope_exit` + `vec_of_string_releases_every_element` + `vec_of_vec_int_releases_every_inner_vec` | `drop_fixtures.rs` |
-| B5 Map    | `hashmap_local_is_freed_on_scope_exit` + `p04_hashmap_string_to_int_releases_every_key` + `p04_hashmap_int_to_string_releases_every_value` + `p04_hashmap_string_to_vec_int_releases_every_value` | `drop_fixtures.rs` |
+| B5 Hash   | `hashmap_local_is_freed_on_scope_exit` + `p04_hashmap_string_to_int_releases_every_key` + `p04_hashmap_int_to_string_releases_every_value` + `p04_hashmap_string_to_vec_int_releases_every_value` | `drop_fixtures.rs` |
 | B5 Set    | `p04_hashset_string_releases_every_element`           | `drop_fixtures.rs`  |
 
 <!-- TODO(migration): pin-test fn names still mention `vec_*`, `hashmap_*`, `hashset_*` — internal Rust identifiers, rename when in scope. -->

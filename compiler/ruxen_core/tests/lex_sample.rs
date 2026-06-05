@@ -77,7 +77,7 @@ fn test_sample_program_contains_key_tokens() {
     assert!(kinds.contains(&&TokenKind::Amp));
     assert!(kinds.contains(&&TokenKind::Lt));
     assert!(kinds.contains(&&TokenKind::PlusEq));
-    assert!(kinds.contains(&&TokenKind::QuestionDot));
+    assert!(kinds.contains(&&TokenKind::AmpDot));
     assert!(kinds.contains(&&TokenKind::Consume));
     assert!(kinds.contains(&&TokenKind::Ref));
     assert!(kinds.contains(&&TokenKind::True));

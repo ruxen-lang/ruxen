@@ -5,13 +5,13 @@ class Router
     self.handlers = Array.new
   end
 
-  def add(h: any Fn(Int) -> Int) -> ()
+  def add(h: any Fn(Int) -> Int) -> nil
     self.handlers.push(h)
   end
 
   def dispatch_all(x: Int) -> Int
     var acc: Int = 0
-    for h in self.handlers.iter
+    for h in self.handlers
       acc = acc + h.(x)
     end
     acc

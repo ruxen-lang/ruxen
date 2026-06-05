@@ -54,7 +54,7 @@ no Ruby idiom maps cleanly.
   words are chosen for English readability, not protocol-language
   precedent.
 - **G6.** Stdlib type names use the Ruby word where one exists
-  (`Array`, `Set`, `Map`), the descriptive English word where Ruby
+  (`Array`, `Set`, `Hash`), the descriptive English word where Ruby
   has no analogue (`Shared`, `SharedSync`), and the existing name
   where Ruxen made a deliberate semantic departure (`Option`,
   `Result`, `Box`, `String`, `&str`).
@@ -241,9 +241,13 @@ exists only to flip back from a prior `private`/`protected` section.
 Lifetimes are generic parameters in the same `[...]` slot as types.
 **Lowercase identifier = lifetime, uppercase = type.** No sigil.
 
+There is **no `'a` sigil** (G7). A leading `'` always opens a raw
+string (§3.10a); a stray `'a` is rejected as an unterminated raw
+string (E0002), not read as a lifetime.
+
 ```ruxen
 def longest[a](x: &a String, y: &a String) -> &a String
-  if x.len > y.len; x; else; y; end
+  if x.size > y.size; x; else; y; end
 end
 
 class Slice[T, a]
@@ -431,6 +435,14 @@ concrete type must itself satisfy `static`).
 
 ### 3.4a Methods on a type
 
+Method names may carry Ruby's conventional suffixes: `?` for
+predicates (`empty?`, `include?`, `any?`) and `!` for in-place / bang
+variants (`sort!`). The suffix is part of the name. Because `?`
+belongs to method names, **safe navigation is `&.`** (Ruby), not
+`?.`: `user&.name&.upcase`. (The standalone `?` after a call is still
+the try operator: `parse(s)?`; uppercase `T?` is still an optional
+type.)
+
 A class, struct, or enum's methods live inside the type body — there
 are no separate "methods-for-this-type" blocks for the common case:
 
@@ -443,7 +455,7 @@ class Container[T]
   end
 
   def count -> Int
-    self.items.len
+    self.items.size
   end
 end
 ```
@@ -477,7 +489,7 @@ class SafeBuffer
   def init(size: USize)
     unsafe
       self.ptr = malloc(size) as *var UInt8
-      self.len = size
+      self.size = size
     end
   end
 
@@ -730,7 +742,7 @@ Group imports and aliases:
 ```ruxen
 use std.io.{ Stdin, Stdout, Stderr }
 use std.io.Stdout as Out
-use std.collections.{ Map, Set }
+use std.collections.{ Hash, Set }
 ```
 
 ### 3.9a User modules
@@ -767,7 +779,7 @@ use Http.Request
 
 ### 3.10 Nil — the universal absence literal
 
-`nil` is the absence keyword. It is polymorphic across two
+`nil` is the **single empty literal**. It is polymorphic across three
 syntactic positions:
 
 1. The absence case of `Option[T]` (safe code):
@@ -784,6 +796,24 @@ syntactic positions:
      if some_ptr == nil; return Err("got null"); end
    end
    ```
+3. The unit value and the unit return type — "this carries / returns
+   nothing":
+   ```ruxen
+   def log(msg: &String) -> nil
+     puts msg
+     nil
+   end
+   let r: Result[nil, String] = Ok(nil)
+   ```
+
+**`None` is not a valid spelling.** There is no `None` keyword or
+identifier; writing `None` is rejected at lex time with `E0008`
+("use `nil`"). The empty case of an `Option[T]` is always `nil`.
+
+**`()` is not a valid spelling either.** The Rust-style unit literal /
+unit type `()` is rejected by the parser in both positions (a fix-it
+points at `nil`). Write `nil` for the unit type (`def f -> nil`,
+`Result[nil, E]`) and the unit value (`Ok(nil)`).
 
 Equality comparisons (`==` / `!=`) with `nil` pick whichever of the
 two domains matches the other operand's type.
@@ -822,12 +852,62 @@ by construction. If you want a possibly-missing reference, use
 `Option[&T]`.
 
 Array literals use bare `[...]` and produce an `Array[T]` (see
-§4.4). Map literals use bare `{ k => v, ... }` and produce a
-`Map[K, V]`. There is no dedicated `Set` literal — use
-`Set.from_iter([…])` since `{…}` is reserved for `Map` (the parser
+§4.4). Hash literals use bare `{ k => v, ... }` and produce a
+`Hash[K, V]`. There is no dedicated `Set` literal — use
+`[…].to_set` since `{…}` is reserved for `Hash` (the parser
 distinguishes the struct/enum literal form `Path { field: value }`
-from a Map literal by the presence of a leading identifier or path —
+from a Hash literal by the presence of a leading identifier or path —
 see §3.22).
+
+### 3.10a String and character literals
+
+Ruxen has three text-literal forms, distinguished by their delimiter:
+
+| Form        | Delimiter | Escapes | `#{}` interpolation | Notes |
+|-------------|-----------|---------|---------------------|-------|
+| Interpolated string | `"…"` | yes | yes | the default string form |
+| Raw string  | `'…'`     | no      | no    | content verbatim; can hold `"` but not `'` |
+| Character   | `?c`      | via `?\…` | n/a | a single `Char` (Unicode scalar) |
+
+```ruxen
+let greeting = "hi #{name}\n"     # interpolated: name spliced in, \n is newline
+let path     = 'C:\Users\me'      # raw: backslashes literal, no interpolation
+let newline  = ?\n                # Char (the newline scalar)
+let letter   = ?A                 # Char
+```
+
+Rationale and rules:
+
+- **Single quotes are raw strings, not char literals.** The Rust-style
+  `r"…"` / `r#"…"#` raw-string prefix is retired — single quotes cover
+  the raw case. A raw string cannot contain a `'`; reach for a `"…"`
+  string (escaping as needed) when you need one.
+- **Character literals use the `?c` form** (Ruby-style): `?a`, `?\n`,
+  `?\t`, `?\\`, `?\'`, `?\u{1F600}`. A `?` is only read as a char
+  literal in an *expression-context* position so postfix `?` (try),
+  `?.` (safe-navigation), and optional-type `T?` keep their operator
+  meaning.
+- **Lifetimes** still use the leading-quote form (`'a`, `'input`): a
+  single quote with no closing quote on the same line is a lifetime,
+  not a raw string.
+
+### 3.10b Ranges
+
+Ranges follow **Ruby** semantics, not Rust's:
+
+| Form     | Meaning   | Example   | Iterates |
+|----------|-----------|-----------|----------|
+| `a..b`   | inclusive | `0..3`    | 0, 1, 2, 3 |
+| `a...b`  | exclusive | `0...3`   | 0, 1, 2 |
+
+```ruxen
+for i in 0..n      # inclusive: 0 through n
+for i in 0...n     # exclusive: 0 through n-1
+```
+
+The Rust `..=` inclusive form **does not exist** — `..=` is rejected
+at lex time (E0009) with a fix-it pointing at `..`. (The `..` rest
+pattern in array/struct destructuring is unchanged; it's not a range.)
 
 ### 3.11 Stdlib type names
 
@@ -835,7 +915,7 @@ see §3.22).
 |-----------------|-------------------------------------------|
 | `Array[T]`      | Growable heap-allocated sequence          |
 | `Set[T]`        | Hash-based unique set                     |
-| `Map[K, V]`     | Hash-based key-value map                  |
+| `Hash[K, V]`    | Hash-based key-value map (Ruby's `Hash`)  |
 | `Option[T]`     | `Some(v)` or `nil` — replaces nullability  |
 | `Result[T, E]`  | `Ok(v)` or `Err(e)` — replaces exceptions |
 | `Box[T]`        | Owning heap pointer                       |
@@ -849,7 +929,7 @@ Stdlib import paths and constructor names follow:
 ```ruxen
 let words: Array[String] = Array.new
 let seen: Set[Int] = Set.new
-let counts: Map[String, Int] = Map.new
+let counts: Hash[String, Int] = Hash.new
 let boxed: Box[Point] = Box.new(Point.new(1, 2))
 let shared: Shared[Counter] = Shared.new(Counter.new)
 let cross: SharedSync[State] = SharedSync.new(State.new)
@@ -858,12 +938,13 @@ let cross: SharedSync[State] = SharedSync.new(State.new)
 The canonical constructor convention:
 
 - `.new(args)` — no-conversion constructor; arguments are stored as-is
-  (`Array.new`, `Map.new`, `User.new("alice")`).
+  (`Array.new`, `Hash.new`, `User.new("alice")`).
 - `.from(value)` — conversion constructor; takes a value of a related
   type and converts it (`String.from(&str)`, `Box.new(point)` —
   note: `Box` uses `.new` because no conversion is implied).
-- `.from_iter(iter)` — drain an iterator into a fresh collection
-  (`Set.from_iter([1, 2, 3])`, `String.from_iter(chars)`).
+- Ruby `to_*` conversions build one collection from another — there is
+  no `.from_iter` (the iterator layer is gone): `[1, 2, 3].to_set`,
+  `pairs.to_h`, `chars.join("")`.
 - `.with_capacity(n)` — pre-allocate a heap-backed collection of size
   `n` (`Array.with_capacity(64)`).
 
@@ -1176,21 +1257,20 @@ loop
 end
 ```
 
-For ergonomics on collections, the iter expression follows these
-rules:
+For ergonomics on collections, the binding mode follows the
+borrow on the source expression. There is no `.iter` / `.into_iter`
+desugaring (the iterator layer is gone — see §3.23); the loop reads
+the collection's backing directly:
 
-| Source                     | What `__it` is                  |
+| Source                     | How elements bind              |
 |----------------------------|---------------------------------|
-| `for x in collection`      | `collection.into_iter()` — moves the collection; elements bind by value |
-| `for x in &collection`     | `collection.iter()` — read-only borrow; elements bind as `&T` |
-| `for x in &var collection` | `collection.iter_var()` — writable borrow; elements bind as `&var T` |
+| `for x in collection`      | moves the collection; elements bind by value |
+| `for x in &collection`     | read-only borrow; elements bind as `&T` |
+| `for x in &var collection` | writable borrow; elements bind as `&var T` |
 
-A type that includes `Iterator` directly may be used as the source
-expression with no further desugaring — the type *is* the iterator.
-
-`for i in 0..10` uses the range form `..`, which produces an
-`Iterator[Item = Int]` covering `0..9`. `0..=10` is the inclusive
-form, covering `0..10`.
+`for i in 0..10` uses the inclusive range form `..`, covering `0`
+through `10`. `0...10` is the exclusive form, covering `0` through
+`9`.
 
 ### 3.22 Struct and enum literals
 
@@ -1206,10 +1286,10 @@ let m  = Color.Custom { r: 1, g: 2, b: 3 }  # enum struct-variant
 let s  = Some(42)                       # enum tuple-variant
 ```
 
-The named form is **disambiguated from `Map` literals** by what
+The named form is **disambiguated from `Hash` literals** by what
 precedes the opening `{`:
 
-- `{ ... }` with no preceding identifier or path → `Map` literal
+- `{ ... }` with no preceding identifier or path → `Hash` literal
   (`{ "k" => v }`).
 - `Capitalized.Path { field: value, ... }` → struct or enum
   literal.
@@ -1224,6 +1304,51 @@ types and for any type that has a custom `def init(...)` body
 `init`). The field-literal form is preferred for the round-trip with
 `Debug` output and for simple data structs without an explicit
 `init`.
+
+### 3.23 Collections are Ruby `Enumerable`-shaped (no `.iter`)
+
+There is no iterator layer. `Array`, `Hash`, and `Set` expose the
+Ruby `Enumerable` surface **directly** — there is no `.iter` /
+`.into_iter` / `.iter_mut` / `.collect` / `from_iter`. The block
+combinators are methods on the collection and take a **trailing
+block**:
+
+```ruxen
+let evens = a.select { |x| x % 2 == 0 }      # was a.iter().filter(...)
+let total = a.reduce(0) { |acc, x| acc + x } # was a.iter().fold(...)
+a.each { |x| puts "#{x}" }
+a.each_with_index { |x, i| puts "#{i}: #{x}" }
+let doubled = a.map { |x| x * 2 }
+```
+
+The combinator vocabulary is Ruby, not Rust:
+
+| Rust iterator           | Ruxen (direct on the collection) |
+|-------------------------|----------------------------------|
+| `.iter().filter { }`    | `.select { }`                    |
+| (negated filter)        | `.reject { }`                    |
+| `.iter().fold(i) { }`   | `.reduce(i) { }`                 |
+| `.iter().position { }`  | `.index { }`                     |
+| `.retain { }`           | `.select! { }`                   |
+| `.iter().all(...)`      | `.all? { }`                      |
+| `.iter().any(...)`      | `.any? { }`                      |
+| `.skip(n)` / `.take(n)` | `.drop(n)` / `.take(n)`          |
+| `.contains(x)`          | `.include?(x)`                   |
+| `.len()` / `.is_empty()`| `.size` / `.empty?`              |
+| `.enumerate()`          | `.each_with_index { \|x, i\| }`  |
+
+Conversions build one collection from another via Ruby `to_*`
+methods rather than `collect` / `from_iter`:
+
+```ruxen
+let s = [1, 2, 2, 3].to_set            # Array -> Set
+let m: Hash[Int, Int] = pairs.to_h     # Array[(K, V)] -> Hash
+let joined = words.join(", ")          # Array[String] -> String
+let pairs = h.to_a                     # Hash -> Array[(K, V)]
+```
+
+`for x in collection` (§3.21) iterates the collection's backing
+directly; it does not desugar through an iterator object.
 
 ---
 
@@ -1478,7 +1603,7 @@ This is not stable ABI for FFI use. Internal layout only.
   structural match alone is rejected.
 - T-SEM-06: `some Mixin` accepts structural match.
 - T-SEM-07: `layout transparent` on multi-field rejected.
-- T-SEM-08: Using a struct with a non-`Hash` field as a `Map` key is rejected with a use-site error naming the offending field.
+- T-SEM-08: Using a struct with a non-`Hashable` field as a `Hash` key is rejected with a use-site error naming the offending field.
 - T-SEM-09: Private method called outside class rejected.
 - T-SEM-10: Protected method callable from subclass.
 - T-SEM-11: Lowercase `a` in `[a]` slot is a lifetime, not a type.
@@ -1561,28 +1686,28 @@ mention of the prior forms.
 | `crate` (in path or keyword)        | `package`                                                 |
 | `null` (FFI null literal)           | `nil`                                                     |
 | `Vec[T]`                            | `Array[T]`                                                |
-| `HashMap[K, V]`                     | `Map[K, V]`                                               |
+| `HashMap[K, V]` / `Map[K, V]`       | `Hash[K, V]`                                              |
 | `HashSet[T]`                        | `Set[T]`                                                  |
 | `Rc[T]`                             | `Shared[T]`                                               |
 | `Arc[T]`                            | `SharedSync[T]`                                           |
 | `[…]` macro                     | bare `[…]` literal — produces an `Array[T]`               |
-| `{…}` macro                    | bare `{ k => v, … }` literal — produces a `Map[K, V]`     |
-| `set!{…}` macro                     | `Set.from_iter([…])` (stdlib constructor; no dedicated literal — `{…}` is reserved for `Map`) |
+| `{…}` macro                    | bare `{ k => v, … }` literal — produces a `Hash[K, V]`    |
+| `set!{…}` macro                     | `[…].to_set` (no dedicated literal — `{…}` is reserved for `Hash`) |
 | `::` path separator                 | `.` everywhere (`std.io`, `Color.Red`, `package.utils`)   |
 | `extern "C" ... end` with no link name | `lib "c" ... end`                                      |
 | tutorial language `&self` / `&mut self` | "reading method" / "writing method"                   |
 | `Hash` (mixin name)                 | `Hashable`                                                |
 | `Displayable` (mixin name)          | `Display`                                                 |
 | `Comparable` (mixin name)           | `Ord` (full order) and/or `PartialOrd` (partial order)    |
-| `Iterable` (mixin name)             | `Iterator` (one mixin covers both — a type that yields items via `def var next` is iterable) |
+| `Iterable` / `Iterator` (mixin name) | retired — collections are Ruby `Enumerable`-shaped; the block combinators work directly on `Array` (see §3.23) |
 | `derive` keyword                    | DELETE — implicit-include for structural mixins (§3.6); loud form is `include D1, D2` |
 | `@[derive(D1, D2)]` prefix attribute | same as above                                           |
 | `T::method` qualified call          | `T.method`                                                |
 | `'a` lifetime sigil in error text   | bare `a` (no sigil — error messages show the identifier as written) |
 | `None` literal                      | `nil`                                                     |
 | `null` literal (FFI)                | `nil` (the same token; context disambiguates per §3.10)   |
-| `Hash[K, V]` (as collection alias)  | `Map[K, V]` only (`Hash` as a type alias for `Map` is retired — the noun is the mixin `Hashable`) |
-| `HashSet[T]` / `HashMap[K, V]`      | `Set[T]` / `Map[K, V]` (the public names; internal type names may still appear in compiler source) |
+| `Hash` (as a derivable-trait / mixin noun) | `Hashable` — the bare word `Hash` now names the **map type** `Hash[K, V]` (Ruby's `Hash`); the hashing mixin is `Hashable` |
+| `HashSet[T]` / `HashMap[K, V]` / `Map[K, V]` | `Set[T]` / `Hash[K, V]` (the public names; internal compiler type names like `Ty::Map` are unchanged) |
 | `File.read_string(path)`            | `fs.read_to_string(path)` (canonical stdlib spelling)     |
 | `String.new(s)` (for converting from `&str`) | `String.from(s)` — `.new` is reserved for the no-arg / pre-allocated constructor |
 | `def mut foo`                       | `def var foo` — method's receiver is writable                |

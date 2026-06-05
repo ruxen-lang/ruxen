@@ -25,7 +25,6 @@ class Metadata
   modified_secs: Int
   kind: Int
 
-  def len -> Int { self.size }
 
   def modified -> Int { self.modified_secs }
 
@@ -36,6 +35,6 @@ class Metadata
   def is_symlink -> Bool { self.kind == 2 }
 
   lib "../fs/runtime/fs.c"
-    def free as "ruxen_metadata_free" -> ()
+    def free as "ruxen_metadata_free" -> nil
   end
 end

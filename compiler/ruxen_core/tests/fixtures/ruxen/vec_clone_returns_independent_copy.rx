@@ -5,6 +5,6 @@ def main
   original.push(3)
   let copy = original.clone
   original.push(99)
-  puts "orig_len=#{original.len}"
-  puts "copy_len=#{copy.len}"
+  puts "orig_len=#{original.size}"
+  puts "copy_len=#{copy.size}"
 end

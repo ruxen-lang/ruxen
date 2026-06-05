@@ -349,7 +349,7 @@ mod tests {
         s.source_history.push("1 + 1".into());
         s.input_counter = 7;
         s.let_bindings.push(parse_let_binding("let x = 42"));
-        s.env.set_i64("x", 42, Ty::Int);
+        s.env.set_i64("x", 42);
 
         s.reset().expect("reset");
 

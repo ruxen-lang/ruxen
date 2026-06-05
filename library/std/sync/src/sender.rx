@@ -10,6 +10,6 @@ class Sender[T: Send]
   lib "runtime/channel.c"
     def send_raw as "ruxen_channel_send"(value: T) -> Int
     def clone as "ruxen_channel_sender_clone" -> Sender[T]
-    def drop as "ruxen_channel_sender_drop" -> ()
+    def drop as "ruxen_channel_sender_drop" -> nil
   end
 end

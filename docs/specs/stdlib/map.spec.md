@@ -1,4 +1,4 @@
-# Spec — `Map[K, V]`
+# Spec — `Hash[K, V]`
 
 **Source docs:**
 [docs/requirements/tier1_01_stdlib.md §5.2](../../requirements/tier1_01_stdlib.md).
@@ -6,7 +6,7 @@
 **Status:** shipped Phase 2 #04-#05; method surface self-hosted in
 `library/std/src/map.rx` since #06.8 T#15.
 
-`Map` is a separate-chaining hash table over keys that satisfy
+`Hash` is a separate-chaining hash table over keys that satisfy
 `Hashable + Eq`.  The runtime uses FNV-style hashing; collisions resolve
 by walking a linked list per bucket.
 
@@ -14,7 +14,7 @@ by walking a linked list per bucket.
 
 ## B1 — Constructors typecheck
 
-`Map.new()` and the bare literal form `{ k => v, ... }` (per §3.22)
+`Hash.new()` and the bare literal form `{ k => v, ... }` (per §3.22)
 both construct the same type at type-check time.
 
 ## B2 — `insert(k, v)` returns the previous value as `Option[V]`
@@ -52,20 +52,20 @@ Same as B7 but only evaluates the closure when the key is absent.
 
 ## B9 — Key types: `String` keys + non-hashable rejection
 
-**Given** `Map[String, V]` where `V: Hashable`
+**Given** `Hash[String, V]` where `V: Hashable`
 **Then** construction typechecks.
 
-**Given** `Map[T, V]` where `T` is not `Hashable` (e.g. nested
-Map, plain `Array`)
+**Given** `Hash[T, V]` where `T` is not `Hashable` (e.g. nested
+Hash, plain `Array`)
 **Then** typeck emits diagnostic `E0615 type does not implement Hashable`.
 
-**Given** `Map[K, Array[T]]` (Array value, hashable key)
+**Given** `Hash[K, Array[T]]` (Array value, hashable key)
 **Then** construction typechecks — only **keys** need `Hashable`.
 
 ## B10 — Entry method receiver constraint
 
 `.or_insert(...)` is only callable on the result of `.entry(k)` — not
-on a plain `Map` receiver.  Same for `or_insert_with`.
+on a plain `Hash` receiver.  Same for `or_insert_with`.
 
 ## B11 — Entry method shape: must chain through
 

@@ -4,7 +4,7 @@ use std.bufio.BufReader
 def handle(opt: Option[String]) -> Bool
   match opt
     Some(line) -> handle_some(line)
-    None       -> true
+    nil       -> true
   end
 end
 

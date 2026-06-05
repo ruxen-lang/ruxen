@@ -60,13 +60,13 @@ class Bencher
     self.total_ns = 0
   end
 
-  def iter(name: &String, f: any Fn[Fn() -> Int]) -> ()
+  def iter(name: &String, f: any Fn[Fn() -> Int]) -> nil
     var iters: Int = self.iterations
     var total: Int = 0
     var stop: Int = 0
     while stop == 0
       let start = Instant.now
-      for _i in 0..iters
+      for _i in 0...iters
         let v = f.()
         let _ = Bencher.black_box(v)
       end

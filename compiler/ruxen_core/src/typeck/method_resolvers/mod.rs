@@ -4,20 +4,52 @@
 //! lived as the 774-LOC `InferenceEngine::builtin_method_type` method,
 //! a single `match (recv_ty, method_name) { … }` table).
 //!
-//! Future follow-up (tracked separately): split this single
-//! `builtin_method_type` function into per-namespace files
-//! (`primitives.rs`, `string.rs`, `array.rs`, `option.rs`, `result.rs`,
-//! `iter.rs`, `io.rs`, `fs.rs`, `time.rs`, …) and have each contribute a
-//! `pub fn resolvers() -> Vec<MethodResolver>` that the dispatcher walks.
-//! The internal arm groupings below already mark the cut lines.
+//! Phase 5 (thermonuke) completed the split this header originally
+//! envisioned: the ~290-arm match is now an ORDERED resolver pipeline.
+//! `builtin_method_type` walks `resolvers()`; the FIRST resolver whose
+//! `resolve` returns `Some` wins, so precedence is ONE decision (the Vec
+//! order) instead of being smeared across arm positions. Three tiers:
+//!
+//!   1. declared-method (`resolver::declared_method_resolvers`) — a user
+//!      class's own `new` beats a builtin (bug A2 fix), scoped away from
+//!      the stdlib types that own a payload-inferring named `new` arm.
+//!   2. named-stdlib — `concurrency`/`fmt`/`io`/`fs`/`process`/`net`/
+//!      `time`, each a `resolvers()` table keyed on the receiver class
+//!      name (incl. the E1100/E1101/E1102/E0714 construction checks).
+//!   3. structural — `strings`/`collections`/`numeric`/`iter` (keyed on
+//!      `Ty` shape) + `resolver::structural_fallback_resolvers` (the
+//!      generic Class/Struct/Enum `to_s`/`clone`/`new`/`default` tail).
+//!
+//! No resolver may match all receivers and no `_ => Some(...)` may claim
+//! an arbitrary type; the only `_ => None` arms are within-namespace
+//! "method not in this type" fallthroughs and the dispatcher's tail.
 
-use crate::diagnostics::Diagnostic;
 use crate::hir::nodes::*;
 use crate::hir::types::Ty;
 use crate::lexer::token::Span;
 
 use super::infer::{is_bufio_inner_supported, is_iter_sum_compatible, InferenceEngine};
 
+mod collections;
+mod concurrency;
+mod fmt;
+mod fs;
+mod io;
+mod iter;
+mod net;
+mod numeric;
+mod process;
+mod resolver;
+mod strings;
+mod time;
+
+use resolver::MethodResolver;
+
+/// The method-resolution entry point. Signature UNCHANGED — callers in
+/// `infer/collect.rs:333` and `infer/expr.rs` stay byte-identical. Walks
+/// the ordered resolver pipeline; the first resolver to return `Some`
+/// wins. The pipeline (one ordered `Vec`) is the single precedence
+/// decision, replacing the smear of ~290 arm positions.
 pub(super) fn builtin_method_type(
     eng: &mut InferenceEngine<'_>,
     ty: &Ty,
@@ -25,1172 +57,892 @@ pub(super) fn builtin_method_type(
     args: &[HirExpr],
     span: &Span,
 ) -> Option<Ty> {
-    match (ty, method) {
-        // String methods
-        (Ty::String, "clone") => Some(Ty::String),
-        (Ty::String, "len") => Some(Ty::USize),
-        (Ty::String, "is_empty") => Some(Ty::Bool),
-        (Ty::String, "push_str") => Some(Ty::Unit),
-        (Ty::String, "trim") => Some(Ty::Str),
-        (Ty::String, "to_lower") => Some(Ty::String),
-        (Ty::String, "to_upper") => Some(Ty::String),
-        (Ty::String, "chars") => Some(Ty::Array(Box::new(Ty::Char))),
-        // Phase 2 stdlib batch 2 (#02): split returns owned Vec[String]
-        // (per the v1 rule: iterator producers return Vec, not lazy
-        // SplitIter, until prompt 05 ships the lazy iterator story).
-        (Ty::String, "split") => Some(Ty::Array(Box::new(Ty::String))),
-        (Ty::String, "push") => Some(Ty::Unit),
-        (Ty::String, "as_str") => Some(Ty::Str),
-        (Ty::String, "from") => Some(Ty::String),
-        (Ty::String, "contains") => Some(Ty::Bool),
-        (Ty::String, "starts_with") => Some(Ty::Bool),
-        (Ty::String, "ends_with") => Some(Ty::Bool),
-        (Ty::String, "repeat") => Some(Ty::String),
-        (Ty::String, "lines") => Some(Ty::Array(Box::new(Ty::String))),
-        (Ty::String, "replace") => Some(Ty::String),
-        // Phase 2 stdlib (#02).
-        (Ty::String, "new") => Some(Ty::String),
-        (Ty::String, "with_capacity") => Some(Ty::String),
-        (Ty::String, "to_string") => Some(Ty::String),
-        (Ty::String, "bytes") => Some(Ty::Array(Box::new(Ty::UInt8))),
-        (Ty::String, "trim_start") => Some(Ty::Str),
-        (Ty::String, "trim_end") => Some(Ty::Str),
-        (Ty::String, "find") => Some(Ty::Option(Box::new(Ty::USize))),
-        (Ty::String, "splitn") => Some(Ty::Array(Box::new(Ty::String))),
-        (Ty::String, "clear") => Some(Ty::Unit),
-        (Ty::String, "truncate") => Some(Ty::Unit),
-        (Ty::String, "insert") => Some(Ty::Unit),
-        (Ty::String, "insert_str") => Some(Ty::Unit),
-        (Ty::String, "remove") => Some(Ty::Char),
-        (Ty::String, "parse_int") => Some(Ty::Result(
-            Box::new(Ty::Int),
-            Box::new(InferenceEngine::class_ty("ParseIntError", vec![])),
-        )),
-        (Ty::String, "parse_float") => Some(Ty::Result(
-            Box::new(Ty::Float),
-            Box::new(InferenceEngine::class_ty("ParseFloatError", vec![])),
-        )),
-        (Ty::String, "into_bytes") => Some(Ty::Array(Box::new(Ty::UInt8))),
-        (Ty::Str, "len") => Some(Ty::USize),
-        (Ty::Str, "is_empty") => Some(Ty::Bool),
-        (Ty::Str, "trim") => Some(Ty::Str),
-        (Ty::Str, "to_lower") => Some(Ty::Str),
-        (Ty::Str, "to_upper") => Some(Ty::Str),
-        (Ty::Str, "chars") => Some(Ty::Array(Box::new(Ty::Char))),
-        // String#split returns Array<String> in Ruby — always. Both
-        // owned-`String` and borrowed-`&str` receivers should produce
-        // the same surface type. The historical `SplitIter` class
-        // shape on the `&str` arm was a Rust-style lazy iterator that
-        // didn't expose `.get(i)` / `.len()`, leaving callers stuck
-        // (every multipart/header parser hits this). Unifying to
-        // Array<String> matches Ruby and removes the footgun. Pin:
-        // `docs/rondo_v1_blockers.md` B13.
-        (Ty::Str, "split") => Some(Ty::Array(Box::new(Ty::String))),
-        (Ty::Str, "parse_uint") => Some(Ty::Result(Box::new(Ty::USize), Box::new(Ty::Error))),
-        (Ty::Str, "as_str") => Some(Ty::Str),
-        (Ty::Str, "contains") => Some(Ty::Bool),
-        (Ty::Str, "starts_with") => Some(Ty::Bool),
-        (Ty::Str, "ends_with") => Some(Ty::Bool),
-        (Ty::Str, "lines") => Some(Ty::Array(Box::new(Ty::String))),
-        (Ty::Str, "replace") => Some(Ty::String),
-        (Ty::Str, "to_string") => Some(Ty::String),
-        (Ty::Str, "bytes") => Some(Ty::Array(Box::new(Ty::UInt8))),
-        (Ty::Str, "trim_start") => Some(Ty::Str),
-        (Ty::Str, "trim_end") => Some(Ty::Str),
-        (Ty::Str, "find") => Some(Ty::Option(Box::new(Ty::USize))),
-        (Ty::Str, "splitn") => Some(Ty::Array(Box::new(Ty::String))),
-        (Ty::Str, "parse_int") => Some(Ty::Result(
-            Box::new(Ty::Int),
-            Box::new(InferenceEngine::class_ty("ParseIntError", vec![])),
-        )),
-        (Ty::Str, "parse_float") => Some(Ty::Result(
-            Box::new(Ty::Float),
-            Box::new(InferenceEngine::class_ty("ParseFloatError", vec![])),
-        )),
-        // ParseIntError / ParseFloatError accessors.
-        (Ty::Class { name, .. }, "message")
-            if name == "ParseIntError" || name == "ParseFloatError" =>
-        {
-            Some(Ty::String)
+    for r in resolvers() {
+        if (r.matches)(ty, method) {
+            if let Some(ret) = (r.resolve)(eng, ty, method, args, span) {
+                return Some(ret);
+            }
+        }
+    }
+    // (`resolvers()` returns a build-once `&'static [MethodResolver]`, so
+    // this loop iterates a cached slice — no per-call Vec rebuild.)
+    // The single, deliberate "nothing claimed it" — was the legacy
+    // match's trailing `_ => None`.
+    None
+}
+
+/// The ONE precedence decision. The assembled pipeline is immutable for
+/// the life of the process (every stage is a pair of `fn` pointers with no
+/// captured environment), so it is built exactly once into a `OnceLock`
+/// and every `builtin_method_type` call iterates the cached slice. This
+/// replaces the previous per-method-call rebuild (a `Vec` plus 13 `extend`
+/// calls, each allocating a per-namespace `Vec`) — that work happened once
+/// per method-call inference. Behaviour is identical: the slice order is
+/// exactly the former `extend` order, which the golden parity test pins.
+fn resolvers() -> &'static [MethodResolver] {
+    static PIPELINE: std::sync::OnceLock<Vec<MethodResolver>> = std::sync::OnceLock::new();
+    PIPELINE.get_or_init(|| {
+        let mut v = Vec::new();
+        v.extend(resolver::declared_method_resolvers()); // TIER 1 — fixes A2
+        v.extend(concurrency::resolvers()); // TIER 2 — named stdlib
+        v.extend(fmt::resolvers());
+        v.extend(io::resolvers());
+        v.extend(fs::resolvers());
+        v.extend(process::resolvers());
+        v.extend(net::resolvers());
+        v.extend(time::resolvers());
+        v.extend(strings::resolvers()); // TIER 3 — structural
+        v.extend(collections::resolvers());
+        v.extend(numeric::resolvers());
+        v.extend(iter::resolvers());
+        v.extend(resolver::structural_fallback_resolvers()); // TIER 3 tail
+        v
+    })
+}
+
+#[cfg(test)]
+mod golden {
+    //! Golden parity corpus for `builtin_method_type` (Phase 5).
+    //!
+    //! This module is the migration oracle: it captures the CURRENT
+    //! `match (ty, method)` answer (the `Option<Ty>` return AND any
+    //! diagnostic codes pushed) for one representative triple per arm,
+    //! freezes it in a committed snapshot, and asserts every later
+    //! migration task reproduces it byte-for-byte. The corpus uses
+    //! stdlib-named receivers with an EMPTY symbol table (no user-declared
+    //! methods), so it pins stdlib/structural behaviour only — bug A2
+    //! (user class shadowing a stdlib name) is deliberately NOT exercised
+    //! here and is pinned separately.
+    //!
+    //! Record mode (regenerate the snapshot from the current code):
+    //!   `RECORD_GOLDEN=1 cargo test -p ruxen_core --lib \
+    //!        method_resolvers::golden::golden_parity -- --nocapture`
+    //! Assert mode (default): the test compares against the committed
+    //! snapshot and fails on any divergence.
+
+    use super::*;
+    use crate::hir::context::TypeContext;
+    use crate::hir::nodes::{HirExpr, HirExprKind};
+    use crate::hir::types::Ty;
+    use crate::lexer::token::Span;
+    use crate::resolve::symbols::SymbolTable;
+    use crate::typeck::infer::InferenceEngine;
+    use crate::typeck::mixins::MixinResolver;
+
+    fn span() -> Span {
+        Span {
+            start: 0,
+            end: 0,
+            line: 1,
+            column: 1,
+        }
+    }
+
+    /// An argument expression whose `.ty` is what the effectful arms read
+    /// (e.g. `Mutex.new` reads `args[0].ty`). The `kind` is irrelevant to
+    /// the resolvers except `Thread.spawn`'s closure-capture scan, which
+    /// is exercised with a dedicated closure-free arg below (a non-closure
+    /// arg simply skips the E1100 capture loop).
+    fn arg(ty: Ty) -> HirExpr {
+        HirExpr {
+            kind: HirExprKind::UnitLiteral,
+            ty,
+            span: span(),
+        }
+    }
+
+    fn class(name: &str, generic_args: Vec<Ty>) -> Ty {
+        Ty::Class {
+            name: name.to_string(),
+            generic_args,
+        }
+    }
+
+    fn enum_ty(name: &str) -> Ty {
+        Ty::Enum {
+            name: name.to_string(),
+            generic_args: vec![],
+        }
+    }
+
+    fn struct_ty(name: &str) -> Ty {
+        Ty::Struct {
+            name: name.to_string(),
+            generic_args: vec![],
+        }
+    }
+
+    /// One corpus triple: receiver, method, and the args the (effectful)
+    /// arm inspects. Most arms ignore args, so the common case is `&[]`.
+    struct Case {
+        recv: Ty,
+        method: &'static str,
+        args: Vec<HirExpr>,
+    }
+
+    fn c(recv: Ty, method: &'static str) -> Case {
+        Case {
+            recv,
+            method,
+            args: vec![],
+        }
+    }
+
+    fn c_args(recv: Ty, method: &'static str, args: Vec<HirExpr>) -> Case {
+        Case { recv, method, args }
+    }
+
+    /// The full corpus — one entry per distinct `(Ty-head, guard, method)`
+    /// arm in `mod.rs`. Effectful arms carry the args they read. Built
+    /// programmatically per receiver group; transcribed from the live
+    /// arms, then cross-checked for completeness against the source's
+    /// method-literal set by `golden_covers_every_method`.
+    fn corpus() -> Vec<Case> {
+        let mut v: Vec<Case> = Vec::new();
+
+        // ── Ty::String structural ──────────────────────────────────
+        for m in [
+            "clone",
+            "size",
+            "empty?",
+            "push_str",
+            "trim",
+            "to_lower",
+            "to_upper",
+            "chars",
+            "split",
+            "push",
+            "as_str",
+            "from",
+            "include?",
+            "starts_with",
+            "ends_with",
+            "repeat",
+            "lines",
+            "replace",
+            "new",
+            "with_capacity",
+            "to_string",
+            "bytes",
+            "trim_start",
+            "trim_end",
+            "find",
+            "splitn",
+            "clear",
+            "truncate",
+            "insert",
+            "insert_str",
+            "remove",
+            "parse_int",
+            "parse_float",
+            "into_bytes",
+            "to_s",
+        ] {
+            v.push(c(Ty::String, m));
         }
 
-        // Vec methods
-        (Ty::Array(_), "len") => Some(Ty::USize),
-        (Ty::Array(_), "is_empty") => Some(Ty::Bool),
-        (Ty::Array(_), "push") => Some(Ty::Unit),
-        (Ty::Array(elem), "pop") => Some(Ty::Option(elem.clone())),
-        (Ty::Array(elem), "get") => Some(Ty::Option(Box::new(Ty::Ref(elem.clone())))),
-        (Ty::Array(elem), "get_mut") => Some(Ty::Option(Box::new(Ty::RefMut(elem.clone())))),
-        (Ty::Array(elem), "iter") => Some(Ty::Class {
-            name: "VecIter".to_string(),
-            generic_args: vec![*elem.clone()],
-        }),
-        (Ty::Array(elem), "into_iter") => Some(Ty::Class {
-            name: "VecIntoIter".to_string(),
-            generic_args: vec![*elem.clone()],
-        }),
-        (Ty::Array(_), "each") => Some(Ty::Unit),
-        (Ty::Array(_), "map") => Some(Ty::Array(Box::new(eng.ctx.fresh_type_var()))),
-        (Ty::Array(elem), "filter") => Some(Ty::Array(elem.clone())),
-        (Ty::Array(elem), "find") => Some(Ty::Option(Box::new(Ty::Ref(elem.clone())))),
-        (Ty::Array(_), "position") => Some(Ty::Option(Box::new(Ty::USize))),
-        (Ty::Array(_), "to_vec") => Some(ty.clone()),
-        (Ty::Array(_), "new") => Some(ty.clone()),
-        (Ty::Array(_), "sum") => Some(Ty::Int),
-        (Ty::Array(_), "count") => Some(Ty::USize),
-        (Ty::Array(_), "reverse") => Some(ty.clone()),
-        (Ty::Array(elem), "first") => Some(Ty::Option(elem.clone())),
-        (Ty::Array(elem), "last") => Some(Ty::Option(elem.clone())),
-        (Ty::Array(_), "clone") => Some(ty.clone()),
-        (Ty::Array(_), "contains") => Some(Ty::Bool),
-        (Ty::Array(_), "sort") => Some(ty.clone()),
-        (Ty::Array(_), "join") => Some(Ty::String),
-        // Phase 2 stdlib batch 1 (#03).
-        (Ty::Array(_), "with_capacity") => Some(ty.clone()),
-        (Ty::Array(_), "capacity") => Some(Ty::USize),
-        (Ty::Array(_), "clear") => Some(Ty::Unit),
-        (Ty::Array(_), "truncate") => Some(Ty::Unit),
-        (Ty::Array(_), "swap") => Some(Ty::Unit),
-        (Ty::Array(_), "insert") => Some(Ty::Unit),
-        (Ty::Array(elem), "remove") => Some(*elem.clone()),
-        (Ty::Array(_), "extend") => Some(Ty::Unit),
-        (Ty::Array(_), "iter_mut") => Some(ty.clone()),
-        (Ty::Array(_), "as_slice") => Some(ty.clone()),
-        // Phase 2 stdlib batch 2 (#03).
-        (Ty::Array(_), "from_iter") => Some(ty.clone()),
-        (Ty::Array(_), "dedup") => Some(Ty::Unit),
-        (Ty::Array(_), "sort_by") => Some(Ty::Unit),
-        (Ty::Array(_), "retain") => Some(Ty::Unit),
-        (Ty::String, "from_iter") => Some(Ty::String),
-
-        // HashMap methods
-        (Ty::Map(_, _), "new") => Some(ty.clone()),
-        (Ty::Map(_, _), "from_iter") => Some(ty.clone()),
-        (Ty::Map(_, _), "insert") => Some(Ty::Unit),
-        (Ty::Map(_, v), "get") => Some(Ty::Option(Box::new(Ty::Ref(v.clone())))),
-        (Ty::Map(_, _), "contains_key") => Some(Ty::Bool),
-        (Ty::Map(_, _), "len") => Some(Ty::USize),
-        (Ty::Map(_, _), "is_empty") => Some(Ty::Bool),
-        // Phase 2 stdlib (#04): full HashMap[K,V] surface.
-        (Ty::Map(_, _), "with_capacity") => Some(ty.clone()),
-        (Ty::Map(_, v), "remove") => Some(Ty::Option(v.clone())),
-        (Ty::Map(_, _), "clear") => Some(Ty::Unit),
-        (Ty::Map(k, _), "keys") => Some(Ty::Array(Box::new(Ty::Ref(k.clone())))),
-        (Ty::Map(_, v), "values") => Some(Ty::Array(Box::new(Ty::Ref(v.clone())))),
-        (Ty::Map(k, _), "iter") => Some(Ty::Array(Box::new(Ty::Ref(k.clone())))),
-
-        // Set methods
-        (Ty::Set(_), "new") => Some(ty.clone()),
-        (Ty::Set(_), "from_iter") => Some(ty.clone()),
-        (Ty::Set(_), "insert") => Some(Ty::Unit),
-        (Ty::Set(_), "contains") => Some(Ty::Bool),
-        (Ty::Set(_), "len") => Some(Ty::USize),
-        (Ty::Set(_), "is_empty") => Some(Ty::Bool),
-        // Phase 2 stdlib (#04): full HashSet[T] surface.
-        (Ty::Set(_), "with_capacity") => Some(ty.clone()),
-        (Ty::Set(_), "remove") => Some(Ty::Bool),
-        (Ty::Set(_), "clear") => Some(Ty::Unit),
-        (Ty::Set(t), "iter") => Some(Ty::Array(Box::new(Ty::Ref(t.clone())))),
-        (Ty::Set(_), "union") => Some(ty.clone()),
-        (Ty::Set(_), "intersection") => Some(ty.clone()),
-        (Ty::Set(_), "difference") => Some(ty.clone()),
-
-        // Option try_op (the ? operator desugars to this)
-        (Ty::Option(inner), "try_op") => Some(*inner.clone()),
-
-        // Option methods
-        (Ty::Option(inner), "unwrap") => Some(*inner.clone()),
-        (Ty::Option(inner), "expect") => Some(*inner.clone()),
-        (Ty::Option(inner), "unwrap_or") => Some(*inner.clone()),
-        (Ty::Option(inner), "unwrap_or_else") => Some(*inner.clone()),
-        (Ty::Option(_), "map") => Some(Ty::Option(Box::new(eng.ctx.fresh_type_var()))),
-        (Ty::Option(inner), "ok_or") => Some(Ty::Result(inner.clone(), Box::new(Ty::Error))),
-        (Ty::Option(_), "is_some") => Some(Ty::Bool),
-        (Ty::Option(_), "is_none") => Some(Ty::Bool),
-
-        // Result try_op (the ? operator desugars to this)
-        (Ty::Result(ok, _), "try_op") => Some(*ok.clone()),
-
-        // Result methods
-        (Ty::Result(ok, _), "unwrap") => Some(*ok.clone()),
-        (Ty::Result(ok, _), "expect") => Some(*ok.clone()),
-        (Ty::Result(ok, _), "unwrap_or") => Some(*ok.clone()),
-        (Ty::Result(ok, _), "unwrap_or_else") => Some(*ok.clone()),
-        (Ty::Result(_, _), "map") => Some(Ty::Result(
-            Box::new(eng.ctx.fresh_type_var()),
-            Box::new(Ty::Error),
-        )),
-        (Ty::Result(_, err), "map_err") => {
-            Some(Ty::Result(Box::new(eng.ctx.fresh_type_var()), err.clone()))
+        // ── Ty::Str structural ─────────────────────────────────────
+        for m in [
+            "size",
+            "empty?",
+            "trim",
+            "to_lower",
+            "to_upper",
+            "chars",
+            "split",
+            "parse_uint",
+            "as_str",
+            "include?",
+            "starts_with",
+            "ends_with",
+            "lines",
+            "replace",
+            "to_string",
+            "bytes",
+            "trim_start",
+            "trim_end",
+            "find",
+            "splitn",
+            "parse_int",
+            "parse_float",
+            "to_s",
+        ] {
+            v.push(c(Ty::Str, m));
         }
-        (Ty::Result(_, _), "is_ok") => Some(Ty::Bool),
-        (Ty::Result(_, _), "is_err") => Some(Ty::Bool),
 
-        (Ty::Class { name, generic_args }, "await") if name == "Future" => {
-            generic_args.first().cloned()
+        // ── ParseIntError / ParseFloatError ────────────────────────
+        v.push(c(class("ParseIntError", vec![]), "message"));
+        v.push(c(class("ParseFloatError", vec![]), "message"));
+
+        // ── Ty::Array structural ───────────────────────────────────
+        let arr = || Ty::Array(Box::new(Ty::Int));
+        for m in [
+            "size",
+            "empty?",
+            "push",
+            "pop",
+            "get",
+            "get_mut",
+            "each",
+            "each_with_index",
+            "map",
+            "select",
+            "reject",
+            "reduce",
+            "all?",
+            "any?",
+            "find",
+            "index",
+            "take",
+            "drop",
+            "partition",
+            "chain",
+            "zip",
+            "to_a",
+            "to_set",
+            "to_h",
+            "new",
+            "sum",
+            "count",
+            "reverse",
+            "first",
+            "last",
+            "clone",
+            "include?",
+            "sort",
+            "join",
+            "with_capacity",
+            "capacity",
+            "clear",
+            "truncate",
+            "swap",
+            "insert",
+            "remove",
+            "extend",
+            "dedup",
+            "sort_by",
+            "select!",
+        ] {
+            v.push(c(arr(), m));
         }
-        (Ty::Class { name, .. }, "spawn") if name == "Thread" => {
-            // Spec B6 (send_sync_enforcement.spec.md) — `Thread.spawn`
-            // rejects closures whose captures don't satisfy Send (or
-            // Sync, for by-ref captures per B7). The check fires only
-            // at this construction site; closures used in
-            // `Array.each` / `Array.map` / … are unaffected.
-            if let Some(arg) = args.first() {
-                if let HirExprKind::Closure {
-                    captures, is_move, ..
-                } = &arg.kind
-                {
-                    for cap in captures {
-                        // The capture's stored `ty` is recorded at
-                        // resolve time (control_flow.rs:323) — for
-                        // un-annotated `let` bindings that's
-                        // `Ty::Infer(_)`. Re-fetch the variable's
-                        // current type from the symbol table; typeck
-                        // updates it in-place when inferring `let`
-                        // bindings (see `update_ty` in
-                        // resolve/symbols.rs). Fall back to the
-                        // capture's stored ty if no def is registered.
-                        let cap_ty = eng
-                            .symbols
-                            .def_ty(cap.def_id)
-                            .map(|t| eng.ctx.resolve(&t))
-                            .unwrap_or_else(|| eng.ctx.resolve(&cap.ty));
-                        // Class-typed values are moved by default at
-                        // the Ruxen level (no `&` was written), even
-                        // if the recorded `by_move` flag is false (the
-                        // resolver only sets it when an explicit `move`
-                        // keyword precedes the closure body). Treat
-                        // a non-Copy class capture as by-move for the
-                        // Send check; primitives are Copy and Send so
-                        // the branch doesn't matter for them.
-                        let by_move = cap.by_move
-                            || *is_move
-                            || matches!(
-                                cap_ty,
-                                Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
-                            );
-                        let satisfied = if by_move {
-                            cap_ty.is_send_with(eng.symbols)
-                        } else {
-                            // B7 — by-ref capture requires `&T: Send`,
-                            // which means `T: Sync`. The Sync auto-derive
-                            // walks fields, so a user class without
-                            // `include Sync` is still rejected when its
-                            // field set isn't all Sync. We use the
-                            // existing `is_sync_with` here (the strict
-                            // rule on Sync is left as v2 polish).
-                            cap_ty.is_sync_with(eng.symbols)
-                        };
-                        if !satisfied {
-                            let note = if by_move {
-                                format!(
-                                    "captured value `{}` of type `{}` is not `Send`. \
-                                     Add `include Send` to the type if it is safe to share across threads.",
-                                    cap.name, cap_ty
-                                )
-                            } else {
-                                format!(
-                                    "captured value `{}` is held by reference; the closure \
-                                     requires `&{}: Send`, which means `{}` must implement `Sync`.",
-                                    cap.name, cap_ty, cap_ty
-                                )
-                            };
-                            eng.diagnostics.push(Diagnostic::error_with_code(
-                                note,
-                                arg.span.clone(),
-                                "E1100",
-                            ));
-                        }
+
+        // ── Ty::Map structural ─────────────────────────────────────
+        let map = || Ty::Map(Box::new(Ty::String), Box::new(Ty::Int));
+        for m in [
+            "new",
+            "insert",
+            "get",
+            "key?",
+            "size",
+            "empty?",
+            "with_capacity",
+            "remove",
+            "clear",
+            "keys",
+            "values",
+            "to_a",
+        ] {
+            v.push(c(map(), m));
+        }
+
+        // ── Ty::Set structural ─────────────────────────────────────
+        let set = || Ty::Set(Box::new(Ty::Int));
+        for m in [
+            "new",
+            "insert",
+            "include?",
+            "size",
+            "empty?",
+            "with_capacity",
+            "remove",
+            "clear",
+            "union",
+            "intersection",
+            "difference",
+        ] {
+            v.push(c(set(), m));
+        }
+
+        // ── Ty::Option structural ──────────────────────────────────
+        let opt = || Ty::Option(Box::new(Ty::Int));
+        for m in [
+            "try_op",
+            "unwrap",
+            "expect",
+            "unwrap_or",
+            "unwrap_or_else",
+            "map",
+            "ok_or",
+            "nil?",
+            "present?",
+        ] {
+            v.push(c(opt(), m));
+        }
+
+        // ── Ty::Result structural ──────────────────────────────────
+        let res = || Ty::Result(Box::new(Ty::Int), Box::new(Ty::String));
+        for m in [
+            "try_op",
+            "unwrap",
+            "expect",
+            "unwrap_or",
+            "unwrap_or_else",
+            "map",
+            "map_err",
+            "ok?",
+            "err?",
+        ] {
+            v.push(c(res(), m));
+        }
+
+        // ── concurrency (TIER 2) ───────────────────────────────────
+        v.push(c(class("Future", vec![Ty::Int]), "await"));
+        // Thread.spawn with a non-closure arg (skips the E1100 loop, hits
+        // the fresh-var output fallback).
+        v.push(c_args(class("Thread", vec![]), "spawn", vec![arg(Ty::Int)]));
+        v.push(c(class("Thread", vec![]), "current"));
+        v.push(c(class("Thread", vec![]), "sleep"));
+        v.push(c(class("Thread", vec![]), "yield_now"));
+        v.push(c(class("Thread", vec![]), "id"));
+        v.push(c(class("Thread", vec![]), "name"));
+        v.push(c(class("JoinHandle", vec![Ty::Int]), "join"));
+        v.push(c(class("JoinHandle", vec![Ty::Int]), "join!"));
+        v.push(c(class("JoinHandle", vec![Ty::Int]), "thread_id"));
+        v.push(c(class("ThreadPanic", vec![]), "message"));
+        // Mutex.new with a Send payload (Int) — no E1101.
+        v.push(c_args(class("Mutex", vec![]), "new", vec![arg(Ty::Int)]));
+        v.push(c(class("Mutex", vec![Ty::Int]), "lock"));
+        v.push(c(class("Mutex", vec![Ty::Int]), "lock!"));
+        v.push(c(class("Mutex", vec![Ty::Int]), "try_lock"));
+        v.push(c(class("Mutex", vec![Ty::Int]), "into_inner"));
+        v.push(c(class("MutexGuard", vec![Ty::Int]), "deref"));
+        v.push(c(class("MutexGuard", vec![Ty::Int]), "deref_mut"));
+        v.push(c(class("MutexGuard", vec![Ty::Int]), "deref_var"));
+        // Arc / SharedSync.new with a Send payload (Int) — no E1102.
+        v.push(c_args(class("Arc", vec![]), "new", vec![arg(Ty::Int)]));
+        v.push(c_args(
+            class("SharedSync", vec![]),
+            "new",
+            vec![arg(Ty::Int)],
+        ));
+        v.push(c(class("Arc", vec![Ty::Int]), "deref"));
+        v.push(c(class("Arc", vec![Ty::Int]), "clone"));
+        v.push(c(class("Arc", vec![Ty::Int]), "strong_count"));
+        v.push(c(class("Arc", vec![Ty::Int]), "weak_count"));
+
+        // ── fmt (TIER 2) ───────────────────────────────────────────
+        for m in [
+            "write_str",
+            "write_char",
+            "size",
+            "width",
+            "precision",
+            "align",
+            "fill",
+        ] {
+            v.push(c(class("Formatter", vec![]), m));
+        }
+
+        // ── *Iter combinators (TIER 2-ish, name.ends_with("Iter")) ──
+        let veciter = || class("VecIter", vec![Ty::Int]);
+        for m in [
+            "select",
+            "map",
+            "find",
+            "index",
+            "sum",
+            "count",
+            "reduce",
+            "all?",
+            "any?",
+            "take",
+            "drop",
+            "chain",
+            "zip",
+            "collect_vec",
+            "enumerate",
+            "partition",
+        ] {
+            v.push(c(veciter(), m));
+        }
+        // SplitIter.to_vec yields &str segments (distinct branch).
+        v.push(c(class("SplitIter", vec![]), "to_vec"));
+
+        // ── io: Stdin / Stdout / Stderr / IoError ──────────────────
+        for m in ["read_line", "read_to_string", "lines"] {
+            v.push(c(class("Stdin", vec![]), m));
+        }
+        for m in ["write_str", "flush", "print", "println"] {
+            v.push(c(class("Stdout", vec![]), m));
+        }
+        for m in ["write_str", "flush", "eprint", "eprintln"] {
+            v.push(c(class("Stderr", vec![]), m));
+        }
+        v.push(c(enum_ty("IoError"), "message"));
+        v.push(c(enum_ty("IoError"), "kind"));
+
+        // ── fs: Metadata / File / OpenOptions ──────────────────────
+        for m in ["size", "modified", "is_file", "is_dir", "is_symlink"] {
+            v.push(c(class("Metadata", vec![]), m));
+        }
+        for m in [
+            "open",
+            "create",
+            "append",
+            "open_options",
+            "read",
+            "read_to_string",
+            "read_all",
+            "write",
+            "write_all",
+            "write_str",
+            "flush",
+            "seek",
+            "metadata",
+            "close",
+        ] {
+            v.push(c(class("File", vec![]), m));
+        }
+        for m in [
+            "read",
+            "write",
+            "append",
+            "truncate",
+            "create",
+            "create_new",
+        ] {
+            v.push(c(class("OpenOptions", vec![]), m));
+        }
+
+        // ── process: Command / ExitStatus / Output ─────────────────
+        for m in ["arg", "args", "env", "current_dir", "status", "output"] {
+            v.push(c(class("Command", vec![]), m));
+        }
+        for m in ["code", "success"] {
+            v.push(c(class("ExitStatus", vec![]), m));
+        }
+        for m in ["status", "stdout", "stderr"] {
+            v.push(c(class("Output", vec![]), m));
+        }
+
+        // ── time: Duration / Instant ───────────────────────────────
+        for m in [
+            "from_secs",
+            "from_millis",
+            "from_micros",
+            "from_nanos",
+            "as_secs",
+            "as_millis",
+            "as_micros",
+            "as_nanos",
+            "add",
+            "sub",
+        ] {
+            v.push(c(class("Duration", vec![]), m));
+        }
+        for m in ["now", "elapsed", "duration_since", "sub"] {
+            v.push(c(class("Instant", vec![]), m));
+        }
+
+        // ── net: TcpListener / TcpStream ───────────────────────────
+        for m in ["bind", "accept", "local_addr", "set_nonblocking", "close"] {
+            v.push(c(class("TcpListener", vec![]), m));
+        }
+        for m in [
+            "connect",
+            "read",
+            "write",
+            "peer_addr",
+            "shutdown",
+            "close",
+            "set_read_timeout",
+            "set_write_timeout",
+        ] {
+            v.push(c(class("TcpStream", vec![]), m));
+        }
+
+        // ── BufReader / BufWriter (effectful E0714) ────────────────
+        // `new` with a supported inner (File) — no diagnostic.
+        v.push(c_args(
+            class("BufReader", vec![]),
+            "new",
+            vec![arg(class("File", vec![]))],
+        ));
+        // `with_capacity(cap, inner)` reads args[1].
+        v.push(c_args(
+            class("BufReader", vec![]),
+            "with_capacity",
+            vec![arg(Ty::Int), arg(class("File", vec![]))],
+        ));
+        v.push(c(
+            class("BufReader", vec![class("File", vec![])]),
+            "read_line",
+        ));
+        v.push(c(class("BufReader", vec![class("File", vec![])]), "read"));
+        v.push(c(
+            class("BufReader", vec![class("File", vec![])]),
+            "into_inner",
+        ));
+        v.push(c_args(
+            class("BufWriter", vec![]),
+            "new",
+            vec![arg(class("File", vec![]))],
+        ));
+        v.push(c_args(
+            class("BufWriter", vec![]),
+            "with_capacity",
+            vec![arg(Ty::Int), arg(class("File", vec![]))],
+        ));
+        for m in ["write", "write_all", "write_str", "flush", "into_inner"] {
+            v.push(c(class("BufWriter", vec![class("File", vec![])]), m));
+        }
+
+        // ── Enum / numeric / scalar structural (TIER 3) ────────────
+        v.push(c(enum_ty("Priority"), "weight"));
+        v.push(c(Ty::Bool, "to_string"));
+        v.push(c(Ty::Int, "to_string"));
+        v.push(c(Ty::USize, "to_string"));
+        v.push(c(Ty::Float, "to_string"));
+        v.push(c(Ty::Int, "to_f"));
+        v.push(c(Ty::Float, "to_i"));
+        v.push(c(Ty::Int, "to_s"));
+        v.push(c(Ty::USize, "to_s"));
+        v.push(c(Ty::Float, "to_s"));
+        v.push(c(Ty::Bool, "to_s"));
+        v.push(c(Ty::Char, "to_s"));
+        // generic to_s / clone / new / default fallbacks
+        v.push(c(class("Widget", vec![]), "to_s"));
+        v.push(c(struct_ty("Point"), "to_s"));
+        v.push(c(enum_ty("Color"), "to_s"));
+        v.push(c(class("Widget", vec![]), "new"));
+        v.push(c(class("Widget", vec![]), "clone"));
+        v.push(c(struct_ty("Point"), "new"));
+        v.push(c(struct_ty("Point"), "clone"));
+        v.push(c(enum_ty("Color"), "clone"));
+        v.push(c(struct_ty("Point"), "default"));
+        v.push(c(class("Widget", vec![]), "default"));
+
+        // ── Effectful-arm DIAGNOSTIC pins ──────────────────────────
+        // These exercise the early-return + pushed-diagnostic branches
+        // of the effectful arms, so the oracle captures the error code
+        // AND the `Some(Ty::Error)` return. With an empty symbol table an
+        // unknown class is non-Send, so `Mutex.new(NotSend)` fires E1101.
+        v.push(c_args(
+            class("Mutex", vec![]),
+            "new",
+            vec![arg(class("NotSend", vec![]))],
+        ));
+        v.push(c_args(
+            class("SharedSync", vec![]),
+            "new",
+            vec![arg(class("NotSend", vec![]))],
+        ));
+        v.push(c_args(
+            class("Arc", vec![]),
+            "new",
+            vec![arg(class("NotSend", vec![]))],
+        ));
+        // BufReader / BufWriter with an unsupported inner (Int) → E0714.
+        v.push(c_args(
+            class("BufReader", vec![]),
+            "new",
+            vec![arg(Ty::Int)],
+        ));
+        v.push(c_args(
+            class("BufReader", vec![]),
+            "with_capacity",
+            vec![arg(Ty::Int), arg(Ty::Int)],
+        ));
+        v.push(c_args(
+            class("BufWriter", vec![]),
+            "new",
+            vec![arg(Ty::Int)],
+        ));
+        v.push(c_args(
+            class("BufWriter", vec![]),
+            "with_capacity",
+            vec![arg(Ty::Int), arg(Ty::Int)],
+        ));
+        // *Iter.sum on a non-numeric element type → E0700.
+        v.push(c(class("VecIter", vec![Ty::String]), "sum"));
+
+        v
+    }
+
+    /// Build a minimal real engine with an EMPTY symbol table. With no
+    /// user-declared methods, `lookup_class_method_return` returns `None`,
+    /// so the declared-`new` arm (mod.rs:1173) falls through to the
+    /// stdlib/structural answer — exactly the oracle we want to pin.
+    fn run_case(case: &Case) -> (Option<Ty>, Vec<String>) {
+        let mut ctx = TypeContext::new();
+        let mut symbols = SymbolTable::new();
+        let traits = MixinResolver::new();
+        let mut eng = InferenceEngine::new(&mut ctx, &mut symbols, &traits);
+        let ret = builtin_method_type(&mut eng, &case.recv, case.method, &case.args, &span());
+        let codes: Vec<String> = eng
+            .diagnostics
+            .iter()
+            .filter_map(|d| d.code.clone())
+            .collect();
+        (ret, codes)
+    }
+
+    fn render(case: &Case, ret: &Option<Ty>, codes: &[String]) -> String {
+        format!(
+            "{:?} :: {} => {:?} | diag={:?}",
+            case.recv, case.method, ret, codes
+        )
+    }
+
+    fn snapshot_path() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/method_resolver_golden.snapshot")
+    }
+
+    /// The parity oracle. In record mode (`RECORD_GOLDEN=1`) it writes the
+    /// snapshot; otherwise it asserts each case matches the committed line.
+    #[test]
+    fn golden_parity() {
+        let cases = corpus();
+        let lines: Vec<String> = cases
+            .iter()
+            .map(|case| {
+                let (ret, codes) = run_case(case);
+                render(case, &ret, &codes)
+            })
+            .collect();
+
+        if std::env::var("RECORD_GOLDEN").is_ok() {
+            std::fs::write(snapshot_path(), format!("{}\n", lines.join("\n")))
+                .expect("write golden snapshot");
+            eprintln!("recorded {} golden lines", lines.len());
+            return;
+        }
+
+        let expected = std::fs::read_to_string(snapshot_path())
+            .expect("golden snapshot missing — run with RECORD_GOLDEN=1 first");
+        let expected_lines: Vec<&str> = expected.lines().collect();
+        assert_eq!(
+            lines.len(),
+            expected_lines.len(),
+            "corpus size ({}) != snapshot size ({}); re-record if you added arms",
+            lines.len(),
+            expected_lines.len()
+        );
+        for (i, (got, want)) in lines.iter().zip(expected_lines.iter()).enumerate() {
+            assert_eq!(
+                got, want,
+                "golden parity divergence at corpus index {i}:\n  got:  {got}\n  want: {want}"
+            );
+        }
+    }
+
+    /// Task 2: the dispatcher (`resolvers()` walked by `builtin_method_type`)
+    /// must reproduce the legacy match's answer for the whole corpus. Since
+    /// `builtin_method_type` IS the dispatcher after Task 2, this asserts the
+    /// dispatcher is behaviour-identical to the legacy match it wraps, and
+    /// that the resolver pipeline is actually assembled (non-empty).
+    #[test]
+    fn dispatcher_matches_legacy_for_whole_corpus() {
+        assert!(
+            !super::resolvers().is_empty(),
+            "dispatcher must assemble at least one resolver"
+        );
+        // Re-run the corpus through the public dispatcher entry and compare
+        // to the frozen oracle — identical assertion to `golden_parity`,
+        // named to document that the dispatcher path is what's exercised.
+        let cases = corpus();
+        let expected = std::fs::read_to_string(snapshot_path())
+            .expect("golden snapshot missing — run with RECORD_GOLDEN=1 first");
+        let expected_lines: Vec<&str> = expected.lines().collect();
+        for (i, case) in cases.iter().enumerate() {
+            let (ret, codes) = run_case(case);
+            assert_eq!(
+                render(case, &ret, &codes),
+                expected_lines[i],
+                "dispatcher diverged from legacy at corpus index {i}"
+            );
+        }
+    }
+
+    /// Task 2 — bug-A2 precedence DECISION (decided empirically, per plan).
+    ///
+    /// The plan posed: is the real stdlib `Mutex.new` a builtin arm only
+    /// (no symbol-table `DefKind::Method`)? If so, tier-1-first would be
+    /// safe. This test records the empirical answer: it is NOT — the
+    /// stdlib `class Mutex[T]` in `library/std/sync/src/mutex.rx` declares
+    /// `def self.new as "ruxen_mutex_new"(initial: T) -> Mutex[T]`, so
+    /// `lookup_class_method_return("Mutex", "new")` returns `Some(Mutex[T])`.
+    ///
+    /// CONSEQUENCE (load-bearing for Task 3): tier-1-first is UNSAFE — a
+    /// declared-method resolver running before the named-stdlib arms would
+    /// return the unsubstituted `Mutex[T]` instead of the named arm's
+    /// payload-inferred `Mutex[<args[0].ty>]` + E1101 Send check, changing
+    /// stdlib behaviour and breaking the golden corpus. Therefore tier 1
+    /// (declared-method) MUST be scoped to USER-DEFINED receivers only: it
+    /// skips any receiver whose name is in the stdlib type-name set
+    /// (`resolver::STDLIB_TYPE_NAMES`). This test pins that precondition so
+    /// a future change to the stdlib surface that removed the declared
+    /// `new` would re-open the tier-1-first option deliberately.
+    #[test]
+    fn stdlib_mutex_new_is_a_declared_method_so_tier1_is_user_scoped() {
+        let mut bootstrap_diagnostics = Vec::new();
+        let bootstrap_packages =
+            crate::resolve::bootstrap::run_bootstrap_with_package_names(&mut bootstrap_diagnostics);
+        // A trivial user program; we only need the stdlib symbols loaded.
+        let src = "def main\nend\n";
+        let mut lx = crate::lexer::Lexer::new(src);
+        let toks = lx.tokenize().expect("lex");
+        let mut p = crate::parser::Parser::new(toks);
+        let prog = p.parse().expect("parse");
+        let resolver = crate::resolve::Resolver::new();
+        let result = resolver.resolve_with_bootstrap_packages(&prog, &bootstrap_packages);
+
+        let mut ctx = result.type_context;
+        let mut symbols = result.symbols;
+        let traits = MixinResolver::new();
+        let eng = InferenceEngine::new(&mut ctx, &mut symbols, &traits);
+        let mutex_new = eng.lookup_class_method_return("Mutex", "new");
+        assert!(
+            matches!(mutex_new, Some(Ty::Class { ref name, .. }) if name == "Mutex"),
+            "stdlib Mutex declares its own `new` (FFI) returning Mutex[T]; \
+             tier-1 must therefore be scoped to user-defined receivers only. \
+             got {mutex_new:?}"
+        );
+    }
+
+    /// Resolve `builtin_method_type(receiver, method, [])` against a real
+    /// engine built from the given user `src` (no stdlib prelude — the
+    /// program is self-contained), so a user-declared `new` is present in
+    /// the symbol table for the declared-method tier to find.
+    fn resolve_method_in_program(src: &str, recv: Ty, method: &str) -> Option<Ty> {
+        let mut lx = crate::lexer::Lexer::new(src);
+        let toks = lx.tokenize().expect("lex");
+        let mut p = crate::parser::Parser::new(toks);
+        let prog = p.parse().expect("parse");
+        let resolver = crate::resolve::Resolver::new();
+        let result = resolver.resolve(&prog);
+        let mut ctx = result.type_context;
+        let mut symbols = result.symbols;
+        let traits = MixinResolver::new();
+        let mut eng = InferenceEngine::new(&mut ctx, &mut symbols, &traits);
+        builtin_method_type(&mut eng, &recv, method, &[], &span())
+    }
+
+    /// Bug A2 (the ONE intended behaviour change in Phase 5): a user class
+    /// that declares its own `new` returning a `Result` must honour that
+    /// DECLARED return type, not be overridden by the builtin's structural
+    /// `Some(Self)` constructor fallback.
+    ///
+    /// Collision choice (per the Task 11 implementer obligation): verified
+    /// against the real fs.rs arms — the stdlib `File` arms claim
+    /// `open`/`create`/`read`/`metadata`/… but NOT `new` (there is no
+    /// named `File.new` arm; `File.new` flowed to the generic
+    /// `(Ty::Class, "new")` declared-lookup at legacy `mod.rs:1214`). So
+    /// the real, fixable A2 collision IS `new` via the structural
+    /// fallback, exactly the case the plan flagged as "correct as written".
+    /// We exercise it with BOTH a stdlib-shaped name (`File`, the plan's
+    /// example) and a plain user name to show the fix is general.
+    ///
+    /// Before Phase 5 the declared-`new` lookup sat positionally AFTER the
+    /// generic structural arm only in spirit; the tier split now guarantees
+    /// declared (tier 1) precedes the structural fallback (tier 3 tail).
+    #[test]
+    fn user_class_named_like_stdlib_honours_declared_new_return_a2() {
+        // A user class literally named `File` (a stdlib type name, but NOT
+        // one with a payload-inferring named `new` arm) declaring its own
+        // `self.new -> Result[File, String]`.
+        let src = "\
+class File
+  def self.new -> Result[File, String]
+    Err(\"nope\")
+  end
+end
+def main
+  let _f = File.new
+end
+";
+        let ret = resolve_method_in_program(src, class("File", vec![]), "new");
+        assert!(
+            matches!(ret, Some(Ty::Result(..))),
+            "user-declared `File.new -> Result` must win over the builtin \
+             structural `Some(Self)` fallback; got {ret:?}"
+        );
+
+        // And the same fix for an ordinary user name (no stdlib shadow at
+        // all) — declared `new` is honoured.
+        let src2 = "\
+class Config
+  def self.new -> Result[Config, String]
+    Err(\"nope\")
+  end
+end
+def main
+  let _c = Config.new
+end
+";
+        let ret2 = resolve_method_in_program(src2, class("Config", vec![]), "new");
+        assert!(
+            matches!(ret2, Some(Ty::Result(..))),
+            "user-declared `Config.new -> Result` must be honoured; got {ret2:?}"
+        );
+    }
+
+    /// Counterpart to A2: a stdlib type that owns a payload-inferring named
+    /// `new` arm (`Mutex`) must keep that arm's behaviour — the named arm
+    /// wins over the declared-method tier, so `Mutex.new(7)` is still
+    /// `Mutex[Int]` (not the unsubstituted declared `Mutex[T]`). This is
+    /// the non-contradiction the corpus and A2 must both satisfy.
+    #[test]
+    fn stdlib_named_new_arm_still_wins_over_declared() {
+        let mut ctx = TypeContext::new();
+        let mut symbols = SymbolTable::new();
+        let traits = MixinResolver::new();
+        let mut eng = InferenceEngine::new(&mut ctx, &mut symbols, &traits);
+        let ret = builtin_method_type(
+            &mut eng,
+            &class("Mutex", vec![]),
+            "new",
+            &[arg(Ty::Int)],
+            &span(),
+        );
+        assert!(
+            matches!(ret, Some(Ty::Class { ref name, ref generic_args, .. })
+                if name == "Mutex" && generic_args == &vec![Ty::Int]),
+            "Mutex.new(Int) must stay the named arm's Mutex[Int]; got {ret:?}"
+        );
+    }
+
+    /// Completeness backstop: every method-name literal that appears in a
+    /// `mod.rs` arm pattern must be exercised by at least one corpus case.
+    /// This turns "I forgot to transcribe an arm" from a silent gap into a
+    /// test failure.
+    #[test]
+    fn golden_covers_every_method() {
+        let src = include_str!("mod.rs");
+        let mut source_methods: std::collections::BTreeSet<String> = Default::default();
+        for line in src.lines() {
+            let s = line.trim_start();
+            if s.starts_with("(Ty::") || s.starts_with("| (Ty::") {
+                // method literals: `, "name")` inside the tuple pattern.
+                let mut rest = line;
+                while let Some(pos) = rest.find(", \"") {
+                    let after = &rest[pos + 3..];
+                    if let Some(end) = after.find("\")") {
+                        source_methods.insert(after[..end].to_string());
+                        rest = &after[end + 2..];
+                    } else {
+                        break;
                     }
                 }
             }
-            let output = args
-                .first()
-                .and_then(|arg| InferenceEngine::callable_return_ty(&arg.ty))
-                .unwrap_or_else(|| eng.ctx.fresh_type_var());
-            Some(InferenceEngine::class_ty("JoinHandle", vec![output]))
         }
-        (Ty::Class { name, .. }, "current") if name == "Thread" => {
-            Some(InferenceEngine::class_ty("Thread", vec![]))
-        }
-        (Ty::Class { name, .. }, "sleep") if name == "Thread" => Some(Ty::Unit),
-        (Ty::Class { name, .. }, "yield_now") if name == "Thread" => Some(Ty::Unit),
-        (Ty::Class { name, generic_args }, "join") if name == "JoinHandle" => {
-            let output = generic_args.first().cloned().unwrap_or(Ty::Error);
-            Some(InferenceEngine::result_ty(output, "ThreadPanic"))
-        }
-        (Ty::Class { name, generic_args }, "join!") if name == "JoinHandle" => {
-            generic_args.first().cloned()
-        }
-        (Ty::Class { name, .. }, "thread_id") if name == "JoinHandle" => {
-            Some(InferenceEngine::class_ty("ThreadId", vec![]))
-        }
-        (Ty::Class { name, .. }, "id") if name == "Thread" => {
-            Some(InferenceEngine::class_ty("ThreadId", vec![]))
-        }
-        (Ty::Class { name, .. }, "name") if name == "Thread" => {
-            Some(InferenceEngine::option_ty(Ty::String))
-        }
-        (Ty::Class { name, .. }, "message") if name == "ThreadPanic" => Some(Ty::String),
-        (Ty::Class { name, .. }, "new") if name == "Mutex" => {
-            let inner = args
-                .first()
-                .map(|arg| arg.ty.clone())
-                .unwrap_or_else(|| eng.ctx.fresh_type_var());
-            // Spec B3 (send_sync_enforcement.spec.md) — Mutex.new
-            // requires the payload to be Send. `Mutex[T]` itself is
-            // declared without a `T: Send` bound (sync.rx line 118)
-            // so the regular bound-checker can't catch this; the check
-            // fires at the construction site.
-            let inner_resolved = eng.ctx.resolve(&inner);
-            if let Some(arg) = args.first() {
-                if !inner_resolved.is_send_with(eng.symbols) {
-                    eng.diagnostics.push(Diagnostic::error_with_code(
-                        format!(
-                            "cannot construct `Mutex[{}]` — payload type `{}` is not `Send`. \
-                             Add `include Send` to the class if it is safe to share across threads.",
-                            inner_resolved, inner_resolved
-                        ),
-                        arg.span.clone(),
-                        "E1101",
-                    ));
-                }
-            }
-            Some(InferenceEngine::class_ty("Mutex", vec![inner]))
-        }
-        (Ty::Class { name, generic_args }, "lock") if name == "Mutex" => {
-            let inner = generic_args.first().cloned().unwrap_or(Ty::Error);
-            Some(InferenceEngine::result_ty(
-                InferenceEngine::class_ty("MutexGuard", vec![inner]),
-                "PoisonError",
-            ))
-        }
-        (Ty::Class { name, generic_args }, "lock!") if name == "Mutex" => {
-            let inner = generic_args.first().cloned().unwrap_or(Ty::Error);
-            Some(InferenceEngine::class_ty("MutexGuard", vec![inner]))
-        }
-        (Ty::Class { name, generic_args }, "try_lock") if name == "Mutex" => {
-            let inner = generic_args.first().cloned().unwrap_or(Ty::Error);
-            Some(InferenceEngine::option_ty(InferenceEngine::class_ty(
-                "MutexGuard",
-                vec![inner],
-            )))
-        }
-        (Ty::Class { name, generic_args }, "into_inner") if name == "Mutex" => {
-            let inner = generic_args.first().cloned().unwrap_or(Ty::Error);
-            Some(InferenceEngine::result_ty(inner, "PoisonError"))
-        }
-        (Ty::Class { name, generic_args }, "deref")
-            if name == "MutexGuard" || name == "Arc" || name == "SharedSync" =>
-        {
-            let inner = generic_args.first().cloned().unwrap_or(Ty::Error);
-            Some(Ty::Ref(Box::new(inner)))
-        }
-        (Ty::Class { name, generic_args }, "deref_mut") if name == "MutexGuard" => {
-            let inner = generic_args.first().cloned().unwrap_or(Ty::Error);
-            Some(Ty::RefMut(Box::new(inner)))
-        }
-        // ruby-naming.spec.md §10a: Arc → SharedSync. Internal name
-        // kept as alias; new code uses SharedSync.
-        (Ty::Class { name, generic_args }, "deref_var") if name == "MutexGuard" => {
-            let inner = generic_args.first().cloned().unwrap_or(Ty::Error);
-            Some(Ty::RefMut(Box::new(inner)))
-        }
-        (Ty::Class { name, .. }, "new") if name == "Arc" || name == "SharedSync" => {
-            let inner = args
-                .first()
-                .map(|arg| arg.ty.clone())
-                .unwrap_or_else(|| eng.ctx.fresh_type_var());
-            // Spec B4 (send_sync_enforcement.spec.md) — SharedSync.new
-            // requires the payload to be Send (the wrapper itself
-            // doesn't permit mutable sharing, so Sync isn't required of
-            // T; only the cross-thread move). `SharedSync[T]` is
-            // declared without a `T: Send` bound (sync.rx line 142)
-            // so the regular bound-checker can't catch this.
-            let inner_resolved = eng.ctx.resolve(&inner);
-            if let Some(arg) = args.first() {
-                if !inner_resolved.is_send_with(eng.symbols) {
-                    eng.diagnostics.push(Diagnostic::error_with_code(
-                        format!(
-                            "cannot construct `{}[{}]` — payload type `{}` is not `Send`. \
-                             Add `include Send` to the class if it is safe to share across threads.",
-                            name, inner_resolved, inner_resolved
-                        ),
-                        arg.span.clone(),
-                        "E1102",
-                    ));
-                }
-            }
-            Some(InferenceEngine::class_ty(name, vec![inner]))
-        }
-        (Ty::Class { name, .. }, "clone") if name == "Arc" || name == "SharedSync" => {
-            Some(ty.clone())
-        }
-        (Ty::Class { name, .. }, "strong_count") if name == "Arc" || name == "SharedSync" => {
-            Some(Ty::USize)
-        }
-        (Ty::Class { name, .. }, "weak_count") if name == "Arc" || name == "SharedSync" => {
-            Some(Ty::USize)
-        }
-
-        // Phase 2 #06.A3: `std::fmt::Formatter` write surface.
-        // `write_str(&str)` and `write_char(Char)` both return
-        // `Result[(), FmtError]` — caller chooses to propagate
-        // via `?` or match. Phase D wires the runtime semantics;
-        // here we only register the typeck contract so user
-        // `impl Display` bodies can call `f.write_str("x")` etc.
-        // without typeck rejecting the unknown method.
-        (Ty::Class { name, .. }, "write_str") if name == "Formatter" => Some(Ty::Result(
-            Box::new(Ty::Unit),
-            Box::new(Ty::Class {
-                name: "FmtError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "write_char") if name == "Formatter" => Some(Ty::Result(
-            Box::new(Ty::Unit),
-            Box::new(Ty::Class {
-                name: "FmtError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        // `len()` returns the current byte count of the accumulated
-        // buffer — mirrors `ruxen_fmt_formatter_len` (returns int64_t).
-        (Ty::Class { name, .. }, "len") if name == "Formatter" => Some(Ty::Int),
-        // Read-only spec accessors that Phase D will use when
-        // formatting widths / precision / fill. Optional types
-        // because `"#{x}"` (no spec) leaves them all None.
-        (Ty::Class { name, .. }, "width") if name == "Formatter" => {
-            Some(Ty::Option(Box::new(Ty::USize)))
-        }
-        (Ty::Class { name, .. }, "precision") if name == "Formatter" => {
-            Some(Ty::Option(Box::new(Ty::USize)))
-        }
-        (Ty::Class { name, .. }, "align") if name == "Formatter" => Some(Ty::Char),
-        (Ty::Class { name, .. }, "fill") if name == "Formatter" => Some(Ty::Char),
-
-        // Iterator-like methods on any "Iter" class
-        //
-        // Phase 2 stdlib (#05): the Iterator surface lives at the MIR
-        // layer — `vec.iter` returns a `*Iter` class which is a
-        // run-time no-op pass-through (`ruxen_iter_to_vec`). Eager
-        // terminators that don't take a closure (`sum`, `count`,
-        // `first`, `last`, `contains`, `reverse`, `clone`) route to
-        // the same `ruxen_vec_*` helpers their `Vec` counterparts use,
-        // so all that's missing is the type-check entry.
-        (Ty::Class { name, .. }, "filter") if name.ends_with("Iter") => Some(ty.clone()),
-        (Ty::Class { name, .. }, "map") if name.ends_with("Iter") => Some(Ty::Class {
-            name: name.clone(),
-            generic_args: vec![eng.ctx.fresh_type_var()],
-        }),
-        (Ty::Class { name, generic_args }, "find") if name.ends_with("Iter") => {
-            let elem = generic_args
-                .first()
-                .cloned()
-                .unwrap_or_else(|| eng.ctx.fresh_type_var());
-            Some(Ty::Option(Box::new(Ty::Ref(Box::new(elem)))))
-        }
-        (Ty::Class { name, .. }, "position") if name.ends_with("Iter") => {
-            Some(Ty::Option(Box::new(Ty::USize)))
-        }
-        (Ty::Class { name, generic_args }, "sum") if name.ends_with("Iter") => {
-            // Sum returns the element type for numeric Items. The
-            // runtime path is `ruxen_vec_sum` which integer-sums
-            // raw 64-bit slots — calling it on a non-`Add` element
-            // type produces nonsensical bytes-as-int sums (e.g.
-            // `Vec[String].iter.sum` would add string pointers).
-            //
-            // Phase 2 stdlib (#05 batch 3): reject non-`Add` Items
-            // up front. The v1 trait machinery only models a few
-            // built-in numeric types as `Add`; surface the rejection
-            // here rather than at the runtime layer so users get a
-            // typeck-time error with a real source span. Inferred
-            // element types (`Ty::Infer`) and the type-error sentinel
-            // pass through silently — they will be either pinned by
-            // a downstream constraint (still numeric) or already
-            // surfaced as a separate diagnostic.
-            let elem = generic_args.first().cloned().unwrap_or(Ty::Int);
-            let resolved = eng.ctx.resolve(&elem);
-            if !is_iter_sum_compatible(&resolved) {
-                eng.diagnostics.push(Diagnostic::error_with_code(
-                    format!(
-                        "`sum` requires an iterator whose Item implements `Add`; \
-                             `{resolved}` is not numeric"
-                    ),
-                    span.clone(),
-                    "E0700",
-                ));
-                return Some(Ty::Error);
-            }
-            Some(resolved)
-        }
-        (Ty::Class { name, .. }, "count") if name.ends_with("Iter") => Some(Ty::USize),
-        // Phase 2 stdlib (#05 batch 2): closure-taking eager
-        // terminators. `fold` returns the accumulator type — for
-        // v1 we surface a fresh inference variable that the
-        // closure-body unification will pin to the real type
-        // (the MIR inliner reads `args[0].ty` to seed the seed).
-        // `all` / `any` always return Bool. Inlining happens at
-        // MIR; the runtime never sees a `VecIter_fold` call.
-        (Ty::Class { name, .. }, "fold") if name.ends_with("Iter") => {
-            if let Some(init) = args.first() {
-                Some(eng.ctx.resolve(&init.ty))
-            } else {
-                Some(eng.ctx.fresh_type_var())
-            }
-        }
-        (Ty::Class { name, .. }, "all") if name.ends_with("Iter") => Some(Ty::Bool),
-        (Ty::Class { name, .. }, "any") if name.ends_with("Iter") => Some(Ty::Bool),
-        // `take(n)` / `skip(n)` are lazy combinators — they return
-        // a same-shape iter wrapper. v1 ships eager-materialising
-        // runtime helpers (`ruxen_vec_take` / `ruxen_vec_skip`)
-        // that hand back a fresh `RuxenVec*`, so the surface type
-        // stays the receiver's iter class for chaining.
-        (Ty::Class { name, .. }, "take") if name.ends_with("Iter") => Some(ty.clone()),
-        (Ty::Class { name, .. }, "skip") if name.ends_with("Iter") => Some(ty.clone()),
-        // Phase 2 stdlib (#05 batch 3): `chain(other)` returns the
-        // same iter shape (concatenation preserves Item type).
-        // `zip(other)` returns an iter whose Item is the pair
-        // `(Self.Item, Other.Item)` — for v1 we surface a fresh
-        // `*Iter[(T, U)]` so downstream `.count` and `.collect_vec`
-        // see the right element type.  `collect_vec` is the v1
-        // type-specific shorthand for `collect[Vec[T]]` — it
-        // materialises the iter into a `Vec[T]`.
-        (Ty::Class { name, .. }, "chain") if name.ends_with("Iter") => Some(ty.clone()),
-        (Ty::Class { name, generic_args }, "zip") if name.ends_with("Iter") => {
-            let self_item = generic_args
-                .first()
-                .cloned()
-                .unwrap_or_else(|| eng.ctx.fresh_type_var());
-            let other_item = match args.first() {
-                Some(arg) => match eng.ctx.resolve(&arg.ty) {
-                    Ty::Class { generic_args, .. } => generic_args
-                        .first()
-                        .cloned()
-                        .unwrap_or_else(|| eng.ctx.fresh_type_var()),
-                    Ty::Array(elem) => *elem,
-                    other => other,
-                },
-                None => eng.ctx.fresh_type_var(),
-            };
-            Some(Ty::Class {
-                name: name.clone(),
-                generic_args: vec![Ty::Tuple(vec![self_item, other_item])],
-            })
-        }
-        (Ty::Class { name, generic_args }, "collect_vec") if name.ends_with("Iter") => {
-            let elem = generic_args
-                .first()
-                .cloned()
-                .unwrap_or_else(|| eng.ctx.fresh_type_var());
-            Some(Ty::Array(Box::new(elem)))
-        }
-        (Ty::Class { name, .. }, "read_line") if name == "Stdin" => Some(Ty::Result(
-            Box::new(Ty::String),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "read_to_string") if name == "Stdin" => Some(Ty::Result(
-            Box::new(Ty::String),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        // Phase 2 stdlib (#06.2): `Stdin.lines()` returns
-        // `Vec[Result[String, IoError]]`. v1 simplification of
-        // Rust's `BufRead::lines` iterator — every line is read
-        // up front (see `ruxen_stdin_lines` in runtime.c). On
-        // read failure the vec holds a single Err element.
-        (Ty::Class { name, .. }, "lines") if name == "Stdin" => {
-            Some(Ty::Array(Box::new(Ty::Result(
-                Box::new(Ty::String),
-                Box::new(Ty::Enum {
-                    name: "IoError".to_string(),
-                    generic_args: vec![],
-                }),
-            ))))
-        }
-        (Ty::Class { name, .. }, "write_str") if name == "Stdout" || name == "Stderr" => {
-            Some(Ty::Result(
-                Box::new(Ty::Unit),
-                Box::new(Ty::Enum {
-                    name: "IoError".to_string(),
-                    generic_args: vec![],
-                }),
-            ))
-        }
-        (Ty::Class { name, .. }, "flush") if name == "Stdout" || name == "Stderr" => {
-            Some(Ty::Result(
-                Box::new(Ty::Unit),
-                Box::new(Ty::Enum {
-                    name: "IoError".to_string(),
-                    generic_args: vec![],
-                }),
-            ))
-        }
-        // Phase 2 stdlib (#06.1): Stdout / Stderr convenience methods
-        // that swallow errors and return `Unit`. Mirror Rust's
-        // `print!` / `println!` / `eprint!` / `eprintln!` macros at
-        // method-shape level. Use `write_str` + `match` if you need
-        // the IoError back.
-        (Ty::Class { name, .. }, "print") if name == "Stdout" => Some(Ty::Unit),
-        (Ty::Class { name, .. }, "println") if name == "Stdout" => Some(Ty::Unit),
-        (Ty::Class { name, .. }, "eprint") if name == "Stderr" => Some(Ty::Unit),
-        (Ty::Class { name, .. }, "eprintln") if name == "Stderr" => Some(Ty::Unit),
-        // Phase 2 stdlib (#06): std::fs::Metadata accessors.
-        // Backed by `ruxen_metadata_*` runtime fns reading from
-        // the flat 24-byte heap struct produced by
-        // `ruxen_fs_metadata`. `modified` is a UNIX timestamp in
-        // seconds (Int), matching `std.time.unix_ns / 1_000_000_000`.
-        (Ty::Class { name, .. }, "len") if name == "Metadata" => Some(Ty::Int),
-        (Ty::Class { name, .. }, "modified") if name == "Metadata" => Some(Ty::Int),
-        (Ty::Class { name, .. }, "is_file") if name == "Metadata" => Some(Ty::Bool),
-        (Ty::Class { name, .. }, "is_dir") if name == "Metadata" => Some(Ty::Bool),
-        (Ty::Class { name, .. }, "is_symlink") if name == "Metadata" => Some(Ty::Bool),
-        // Phase 2 stdlib (#06): std::process::Command builder.
-        // `.arg/.args/.env/.current_dir` return Self (same handle,
-        // mutate-in-place — the source local is tainted by the
-        // method-call default in `compute_dealloc_safe_locals` so
-        // double-free is avoided in chained-let bindings).
-        // `.status` / `.output` consume self and return Result.
-        (Ty::Class { name, .. }, "arg") if name == "Command" => Some(ty.clone()),
-        (Ty::Class { name, .. }, "args") if name == "Command" => Some(ty.clone()),
-        (Ty::Class { name, .. }, "env") if name == "Command" => Some(ty.clone()),
-        (Ty::Class { name, .. }, "current_dir") if name == "Command" => Some(ty.clone()),
-        (Ty::Class { name, .. }, "status") if name == "Command" => Some(Ty::Result(
-            Box::new(InferenceEngine::class_ty("ExitStatus", vec![])),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "output") if name == "Command" => Some(Ty::Result(
-            Box::new(InferenceEngine::class_ty("Output", vec![])),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        // ExitStatus accessors.
-        (Ty::Class { name, .. }, "code") if name == "ExitStatus" => Some(Ty::Int),
-        (Ty::Class { name, .. }, "success") if name == "ExitStatus" => Some(Ty::Bool),
-        // Output accessors. `.status` returns a fresh ExitStatus
-        // (cloned in the runtime so the Output can be dropped
-        // independently).
-        (Ty::Class { name, .. }, "status") if name == "Output" => {
-            Some(InferenceEngine::class_ty("ExitStatus", vec![]))
-        }
-        (Ty::Class { name, .. }, "stdout") if name == "Output" => Some(Ty::String),
-        (Ty::Class { name, .. }, "stderr") if name == "Output" => Some(Ty::String),
-        // Phase 2 stdlib (#06.5 T2): std::io::File static-style
-        // constructors. Receiver type is `File` (the class identifier
-        // promoted to a type via resolve::IdentifierKind promotion).
-        // All return `Result[File, IoError]`.
-        (Ty::Class { name, .. }, "open") if name == "File" => Some(Ty::Result(
-            Box::new(InferenceEngine::class_ty("File", vec![])),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "create") if name == "File" => Some(Ty::Result(
-            Box::new(InferenceEngine::class_ty("File", vec![])),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "append") if name == "File" => Some(Ty::Result(
-            Box::new(InferenceEngine::class_ty("File", vec![])),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "open_options") if name == "File" => Some(Ty::Result(
-            Box::new(InferenceEngine::class_ty("File", vec![])),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        // Phase 2 stdlib (#06.5 T2): std::io::File instance methods.
-        // Every path that can fail returns `Result[_, IoError]`. The
-        // io_error_ty helper would be cleaner but inferring it here
-        // matches the existing Command-arm style above.
-        (Ty::Class { name, .. }, "read") if name == "File" => Some(Ty::Result(
-            Box::new(Ty::Int),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "read_to_string") if name == "File" => Some(Ty::Result(
-            Box::new(Ty::String),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "read_all") if name == "File" => Some(Ty::Result(
-            Box::new(Ty::Array(Box::new(Ty::Int))),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "write") if name == "File" => Some(Ty::Result(
-            Box::new(Ty::Int),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "write_all") if name == "File" => Some(Ty::Result(
-            Box::new(Ty::Unit),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "write_str") if name == "File" => Some(Ty::Result(
-            Box::new(Ty::Unit),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "flush") if name == "File" => Some(Ty::Result(
-            Box::new(Ty::Unit),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "seek") if name == "File" => Some(Ty::Result(
-            Box::new(Ty::Int),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "metadata") if name == "File" => Some(Ty::Result(
-            Box::new(InferenceEngine::class_ty("Metadata", vec![])),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "close") if name == "File" => Some(Ty::Result(
-            Box::new(Ty::Unit),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        // OpenOptions builder methods — each returns Self.
-        (Ty::Class { name, .. }, "read") if name == "OpenOptions" => Some(ty.clone()),
-        (Ty::Class { name, .. }, "write") if name == "OpenOptions" => Some(ty.clone()),
-        (Ty::Class { name, .. }, "append") if name == "OpenOptions" => Some(ty.clone()),
-        (Ty::Class { name, .. }, "truncate") if name == "OpenOptions" => Some(ty.clone()),
-        (Ty::Class { name, .. }, "create") if name == "OpenOptions" => Some(ty.clone()),
-        (Ty::Class { name, .. }, "create_new") if name == "OpenOptions" => Some(ty.clone()),
-        // Phase 2 stdlib (#06.5 T4): Duration static-style
-        // constructors. Receiver type-name resolves to `Duration`
-        // (class identifier promoted to its Ty by the resolver).
-        // Each `from_*` takes `Int` and returns `Duration`.
-        (Ty::Class { name, .. }, "from_secs")
-        | (Ty::Class { name, .. }, "from_millis")
-        | (Ty::Class { name, .. }, "from_micros")
-        | (Ty::Class { name, .. }, "from_nanos")
-            if name == "Duration" =>
-        {
-            Some(InferenceEngine::class_ty("Duration", vec![]))
-        }
-        // Duration instance accessors — integer division.
-        (Ty::Class { name, .. }, "as_secs")
-        | (Ty::Class { name, .. }, "as_millis")
-        | (Ty::Class { name, .. }, "as_micros")
-        | (Ty::Class { name, .. }, "as_nanos")
-            if name == "Duration" =>
-        {
-            Some(Ty::Int)
-        }
-        // Duration named arithmetic methods. The `+`/`-` operator
-        // path also routes here (see mir/lower/expr/binops.rs);
-        // `.add()` / `.sub()` are the explicit named surface,
-        // load-bearing when the binop site isn't statically
-        // resolvable (e.g. generic over Duration).
-        (Ty::Class { name, .. }, "add") if name == "Duration" => {
-            Some(InferenceEngine::class_ty("Duration", vec![]))
-        }
-        (Ty::Class { name, .. }, "sub") if name == "Duration" => {
-            Some(InferenceEngine::class_ty("Duration", vec![]))
-        }
-        // Phase 2 stdlib (#06.5 T4): Instant.now / elapsed /
-        // duration_since. CLOCK_MONOTONIC under the hood.
-        (Ty::Class { name, .. }, "now") if name == "Instant" => {
-            Some(InferenceEngine::class_ty("Instant", vec![]))
-        }
-        (Ty::Class { name, .. }, "elapsed") if name == "Instant" => {
-            Some(InferenceEngine::class_ty("Duration", vec![]))
-        }
-        (Ty::Class { name, .. }, "duration_since") if name == "Instant" => {
-            Some(InferenceEngine::class_ty("Duration", vec![]))
-        }
-        // `.sub()` as the named alias for `Instant - Instant`.
-        (Ty::Class { name, .. }, "sub") if name == "Instant" => {
-            Some(InferenceEngine::class_ty("Duration", vec![]))
-        }
-        // Phase 2 stdlib (#06.5 T5): std::net::TcpListener surface.
-        // Every fallible op returns `Result[_, IoError]`. Static
-        // constructor `bind` (Ty::Class receiver promoted from the
-        // class identifier by the resolver) returns
-        // `Result[TcpListener, IoError]`.
-        (Ty::Class { name, .. }, "bind") if name == "TcpListener" => Some(Ty::Result(
-            Box::new(InferenceEngine::class_ty("TcpListener", vec![])),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "accept") if name == "TcpListener" => Some(Ty::Result(
-            Box::new(InferenceEngine::class_ty("TcpStream", vec![])),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "local_addr") if name == "TcpListener" => Some(Ty::Result(
-            Box::new(Ty::String),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "set_nonblocking") if name == "TcpListener" => Some(Ty::Result(
-            Box::new(Ty::Unit),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "close") if name == "TcpListener" => Some(Ty::Result(
-            Box::new(Ty::Unit),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        // Phase 2 stdlib (#06.5 T5): std::net::TcpStream surface.
-        (Ty::Class { name, .. }, "connect") if name == "TcpStream" => Some(Ty::Result(
-            Box::new(InferenceEngine::class_ty("TcpStream", vec![])),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "read") if name == "TcpStream" => Some(Ty::Result(
-            Box::new(Ty::Int),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "write") if name == "TcpStream" => Some(Ty::Result(
-            Box::new(Ty::Int),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "peer_addr") if name == "TcpStream" => Some(Ty::Result(
-            Box::new(Ty::String),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "shutdown") if name == "TcpStream" => Some(Ty::Result(
-            Box::new(Ty::Unit),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "close") if name == "TcpStream" => Some(Ty::Result(
-            Box::new(Ty::Unit),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        // Phase 2 #06.5 T5 additions: socket read/write timeouts.
-        // Both take a `&Duration` and return Result[(), IoError].
-        (Ty::Class { name, .. }, "set_read_timeout") if name == "TcpStream" => Some(Ty::Result(
-            Box::new(Ty::Unit),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "set_write_timeout") if name == "TcpStream" => Some(Ty::Result(
-            Box::new(Ty::Unit),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        // Phase 2 #06.5 T6: `std::io::BufReader[R]` / `BufWriter[W]`
-        // surface. Static-style constructors (`new` / `with_capacity`)
-        // are dispatched through the collection-ctor fast path in
-        // mir/lower/expr/method_call.rs alongside File / TcpStream.
-        // The inner type R / W is restricted to the closed set
-        // {File, TcpStream} — anything else is E0714 here.
-        //
-        // For `with_capacity(cap: Int, inner: R)` the inner is args[1],
-        // for `new(inner: R)` it's args[0]. We pick the right slot
-        // below.
-        (Ty::Class { name, .. }, "new") if name == "BufReader" => {
-            let inner = args
-                .first()
-                .map(|arg| eng.ctx.resolve(&arg.ty))
-                .unwrap_or_else(|| eng.ctx.fresh_type_var());
-            if !is_bufio_inner_supported(&inner) {
-                eng.diagnostics.push(Diagnostic::error_with_code(
-                    format!(
-                        "`BufReader.new` requires inner type to be `File` or `TcpStream`; got `{inner}`"
-                    ),
-                    span.clone(),
-                    "E0714",
-                ));
-                return Some(Ty::Error);
-            }
-            Some(InferenceEngine::class_ty("BufReader", vec![inner]))
-        }
-        (Ty::Class { name, .. }, "with_capacity") if name == "BufReader" => {
-            let inner = args
-                .get(1)
-                .map(|arg| eng.ctx.resolve(&arg.ty))
-                .unwrap_or_else(|| eng.ctx.fresh_type_var());
-            if !is_bufio_inner_supported(&inner) {
-                eng.diagnostics.push(Diagnostic::error_with_code(
-                    format!(
-                        "`BufReader.with_capacity` requires inner type to be `File` or `TcpStream`; got `{inner}`"
-                    ),
-                    span.clone(),
-                    "E0714",
-                ));
-                return Some(Ty::Error);
-            }
-            Some(InferenceEngine::class_ty("BufReader", vec![inner]))
-        }
-        (Ty::Class { name, generic_args }, "read_line") if name == "BufReader" => {
-            let _ = generic_args; // shape-only; runtime ignores type param
-            Some(Ty::Result(
-                Box::new(InferenceEngine::option_ty(Ty::String)),
-                Box::new(Ty::Enum {
-                    name: "IoError".to_string(),
-                    generic_args: vec![],
-                }),
-            ))
-        }
-        (Ty::Class { name, .. }, "read") if name == "BufReader" => Some(Ty::Result(
-            Box::new(Ty::Int),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, generic_args }, "into_inner") if name == "BufReader" => {
-            // Surrender the inner — return R directly (not wrapped).
-            Some(generic_args.first().cloned().unwrap_or(Ty::Error))
-        }
-        (Ty::Class { name, .. }, "new") if name == "BufWriter" => {
-            let inner = args
-                .first()
-                .map(|arg| eng.ctx.resolve(&arg.ty))
-                .unwrap_or_else(|| eng.ctx.fresh_type_var());
-            if !is_bufio_inner_supported(&inner) {
-                eng.diagnostics.push(Diagnostic::error_with_code(
-                    format!(
-                        "`BufWriter.new` requires inner type to be `File` or `TcpStream`; got `{inner}`"
-                    ),
-                    span.clone(),
-                    "E0714",
-                ));
-                return Some(Ty::Error);
-            }
-            Some(InferenceEngine::class_ty("BufWriter", vec![inner]))
-        }
-        (Ty::Class { name, .. }, "with_capacity") if name == "BufWriter" => {
-            let inner = args
-                .get(1)
-                .map(|arg| eng.ctx.resolve(&arg.ty))
-                .unwrap_or_else(|| eng.ctx.fresh_type_var());
-            if !is_bufio_inner_supported(&inner) {
-                eng.diagnostics.push(Diagnostic::error_with_code(
-                    format!(
-                        "`BufWriter.with_capacity` requires inner type to be `File` or `TcpStream`; got `{inner}`"
-                    ),
-                    span.clone(),
-                    "E0714",
-                ));
-                return Some(Ty::Error);
-            }
-            Some(InferenceEngine::class_ty("BufWriter", vec![inner]))
-        }
-        (Ty::Class { name, .. }, "write") if name == "BufWriter" => Some(Ty::Result(
-            Box::new(Ty::Int),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "write_all") if name == "BufWriter" => Some(Ty::Result(
-            Box::new(Ty::Unit),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "write_str") if name == "BufWriter" => Some(Ty::Result(
-            Box::new(Ty::Unit),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "flush") if name == "BufWriter" => Some(Ty::Result(
-            Box::new(Ty::Unit),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, generic_args }, "into_inner") if name == "BufWriter" => {
-            // Result[W, IoError] — flush failure surfaces here.
-            let inner = generic_args.first().cloned().unwrap_or(Ty::Error);
-            Some(Ty::Result(
-                Box::new(inner),
-                Box::new(Ty::Enum {
-                    name: "IoError".to_string(),
-                    generic_args: vec![],
-                }),
-            ))
-        }
-        // Phase 2 #06.5: `IoError` is a tagged enum, not a class.
-        // `.message() -> String` dispatches on tag in the runtime
-        // (see `ruxen_io_error_get_message` in runtime.c).
-        (Ty::Enum { name, .. }, "message") if name == "IoError" => Some(Ty::String),
-        // Phase 2 #06.5 T1: `.kind() -> IoErrorKind` returns the
-        // discriminant as a sibling 20-unit-variant enum. Lets
-        // user code branch on the variant tag without binding the
-        // payload. Wired through `ruxen_io_error_kind`.
-        (Ty::Enum { name, .. }, "kind") if name == "IoError" => Some(Ty::Enum {
-            name: "IoErrorKind".to_string(),
-            generic_args: vec![],
-        }),
-        (Ty::Class { name, generic_args }, "to_vec") if name.ends_with("Iter") => {
-            let elem = if name == "SplitIter" {
-                // SplitIter yields &str segments
-                Ty::Str
-            } else {
-                generic_args.first().cloned().unwrap_or(Ty::Error)
-            };
-            Some(Ty::Array(Box::new(elem)))
-        }
-        (Ty::Class { name, .. }, "enumerate")
-            if name.ends_with("Iter") || name.ends_with("IntoIter") =>
-        {
-            Some(ty.clone())
-        }
-        (Ty::Class { name, generic_args }, "partition") if name.ends_with("Iter") => {
-            let elem = generic_args.first().cloned().unwrap_or(Ty::Error);
-            Some(Ty::Tuple(vec![
-                Ty::Array(Box::new(elem.clone())),
-                Ty::Array(Box::new(elem)),
-            ]))
-        }
-
-        // Enum weight (Priority.weight)
-        (Ty::Enum { .. }, "weight") => Some(Ty::Int),
-
-        // Bool methods
-        (Ty::Bool, "to_string") => Some(Ty::String),
-
-        // Int methods
-        (Ty::Int, "to_string") => Some(Ty::String),
-        (Ty::USize, "to_string") => Some(Ty::String),
-        (Ty::Float, "to_string") => Some(Ty::String),
-
-        // Numeric conversions. Ruxen has no implicit Int<->Float coercion
-        // (see E0707), so these explicit methods are the supported way to
-        // cross the integer/float boundary. `to_f` widens an `Int` to a
-        // `Float`; `to_i` truncates a `Float` toward zero to an `Int`.
-        (Ty::Int, "to_f") => Some(Ty::Float),
-        (Ty::Float, "to_i") => Some(Ty::Int),
-
-        // Universal `to_s` (Ruby convention) on scalar primitives — every
-        // value can be rendered to a `String`. Backed by the same
-        // `ruxen_*_to_string` runtime helpers as string interpolation
-        // (`lang_intrinsics::runtime_name` maps the mangled `<Type>_to_s`
-        // names). User-defined class/struct/enum `to_s` is handled in the
-        // MIR display-dispatch path, not here.
-        (Ty::Int, "to_s") => Some(Ty::String),
-        (Ty::USize, "to_s") => Some(Ty::String),
-        (Ty::Float, "to_s") => Some(Ty::String),
-        (Ty::Bool, "to_s") => Some(Ty::String),
-        (Ty::Char, "to_s") => Some(Ty::String),
-        (Ty::String, "to_s") => Some(Ty::String),
-        (Ty::Str, "to_s") => Some(Ty::String),
-        // `to_s` on user-defined types also yields a `String`. The MIR
-        // method-call lowering routes it through the same display dispatch
-        // as `"#{obj}"` (unless the type defines its own `to_s`, which
-        // wins). A user `to_s` conventionally returns `String` too, so
-        // reporting `String` here is correct in both cases.
-        (Ty::Class { .. }, "to_s") => Some(Ty::String),
-        (Ty::Struct { .. }, "to_s") => Some(Ty::String),
-        (Ty::Enum { .. }, "to_s") => Some(Ty::String),
-
-        // Generic class methods
-        (Ty::Class { .. }, "new") => Some(ty.clone()),
-        (Ty::Class { .. }, "clone") => Some(ty.clone()),
-
-        // Struct constructors and clone (structs have `.new` generated by
-        // the compiler, and `.clone` is available via derive Clone).
-        (Ty::Struct { .. }, "new") => Some(ty.clone()),
-        (Ty::Struct { .. }, "clone") => Some(ty.clone()),
-
-        // ruby-naming.spec.md §3.6: enums get `.clone` whenever
-        // every variant field structurally supports Clone (which
-        // is the implicit-include condition).
-        (Ty::Enum { .. }, "clone") => Some(ty.clone()),
-
-        // ruby-naming.spec.md §3.6: Default — implicit when every
-        // field has a default value. Spec includes Struct, Class,
-        // and Enum; for enums Default is conservative (no canonical
-        // variant) so we only synthesise it for Struct and Class
-        // here.
-        (Ty::Struct { .. }, "default") | (Ty::Class { .. }, "default") => Some(ty.clone()),
-
-        // NOTE: six wildcard catch-all arms here (`to_display`, `summary`,
-        // `is_actionable`, `is_done`, `serialize`, `message`) used to
-        // claim `Ty::String` / `Ty::Bool` for ANY receiver type. They
-        // were quality-review §1.3 / §4 — domain-named ones (`is_done`,
-        // `is_actionable`) leaked from the sample_program.rx fixture;
-        // `to_display`/`summary` were a fallback for an earlier era when
-        // mixin-bound dispatch on `&T where T: Mixin` didn't reach the
-        // hardcoded signature registry. With the ref-peel fix in
-        // `lookup_on_type_param_bounds` (commit b840862) and the proper
-        // return types on the Showable/Summarizable mixins, normal
-        // dispatch handles them. Real receiver types resolve through
-        // `lookup_method` / `lookup_method_on_bounds` above; a typo on
-        // an unrelated value (`42.summary`) now surfaces as the
-        // intended "unknown method" diagnostic instead of typechecking.
-        _ => None,
+        let covered: std::collections::BTreeSet<String> =
+            corpus().iter().map(|c| c.method.to_string()).collect();
+        let missing: Vec<&String> = source_methods.difference(&covered).collect();
+        assert!(
+            missing.is_empty(),
+            "corpus is missing source-arm methods: {missing:?}"
+        );
     }
 }

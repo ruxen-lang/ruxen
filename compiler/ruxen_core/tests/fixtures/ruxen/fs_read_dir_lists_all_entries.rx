@@ -10,7 +10,7 @@ end
 
 def main
   let entries = or_empty(read_dir("__DIR__"))
-  puts "len=#{entries.len}"
+  puts "len=#{entries.size}"
   for name in entries
     puts "name=#{name}"
   end

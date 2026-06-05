@@ -66,31 +66,31 @@ end
 lib "runtime/async_net.c"
   def ruxen_async_bind_state_new(addr: &String) -> Int
   def ruxen_async_bind_state_to_result(state: Int) -> Result[AsyncTcpListener, IoError]
-  def ruxen_async_bind_state_free(state: Int) -> ()
+  def ruxen_async_bind_state_free(state: Int) -> nil
   def ruxen_async_accept_state_new(listener_fd: Int) -> Int
   def ruxen_async_accept_state_get_fd(state: Int) -> Int
   def ruxen_async_accept_step(state: Int) -> Int
   def ruxen_async_accept_state_take_fd(state: Int) -> Int
   def ruxen_async_accept_state_take_peer(state: Int) -> String
   def ruxen_async_accept_state_get_err(state: Int) -> Int
-  def ruxen_async_accept_state_mark_taken(state: Int) -> ()
-  def ruxen_async_accept_state_free(state: Int) -> ()
+  def ruxen_async_accept_state_mark_taken(state: Int) -> nil
+  def ruxen_async_accept_state_free(state: Int) -> nil
   def ruxen_async_connect_state_new(addr: &String) -> Int
   def ruxen_async_connect_state_get_fd(state: Int) -> Int
   def ruxen_async_connect_step(state: Int) -> Int
   def ruxen_async_connect_state_take_fd(state: Int) -> Int
   def ruxen_async_connect_state_get_err(state: Int) -> Int
-  def ruxen_async_connect_state_mark_taken(state: Int) -> ()
-  def ruxen_async_connect_state_free(state: Int) -> ()
+  def ruxen_async_connect_state_mark_taken(state: Int) -> nil
+  def ruxen_async_connect_state_free(state: Int) -> nil
   def ruxen_async_tcp_read_state_new(fd: Int, max_bytes: Int) -> Int
   def ruxen_async_tcp_read_state_get_fd(state: Int) -> Int
   def ruxen_async_tcp_read_step(state: Int) -> Int
   def ruxen_async_tcp_read_state_take_result(state: Int) -> Result[String, IoError]
-  def ruxen_async_tcp_read_state_free(state: Int) -> ()
+  def ruxen_async_tcp_read_state_free(state: Int) -> nil
   def ruxen_async_net_make_timeout_result -> Result[String, IoError]
   def ruxen_async_tcp_write_state_new(fd: Int, content: &String) -> Int
   def ruxen_async_tcp_write_state_get_fd(state: Int) -> Int
   def ruxen_async_tcp_write_step(state: Int) -> Int
   def ruxen_async_tcp_write_state_take_result(state: Int) -> Result[Int, IoError]
-  def ruxen_async_tcp_write_state_free(state: Int) -> ()
+  def ruxen_async_tcp_write_state_free(state: Int) -> nil
 end

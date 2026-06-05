@@ -31,7 +31,9 @@ impl Parser {
             TokenKind::SlashEq => self.make_compound_assign(lhs, BinOp::Div, r_bp, &start_span),
             TokenKind::PercentEq => self.make_compound_assign(lhs, BinOp::Mod, r_bp, &start_span),
 
-            // Range
+            // Range — Ruby semantics (ruby-naming.spec.md §3.10b):
+            // `..` is INCLUSIVE, `...` is EXCLUSIVE. The Rust `..=` form
+            // is retired and rejected with a fix-it.
             TokenKind::DotDot => {
                 let rhs = if self.is_expression_start() {
                     Some(Box::new(self.parse_expr_bp(r_bp)))
@@ -43,19 +45,23 @@ impl Parser {
                     kind: ExprKind::Range {
                         start: Some(Box::new(lhs)),
                         end: rhs,
-                        inclusive: false,
+                        inclusive: true,
                     },
                     span,
                 }
             }
-            TokenKind::DotDotEq => {
-                let rhs = self.parse_expr_bp(r_bp);
+            TokenKind::DotDotDot => {
+                let rhs = if self.is_expression_start() {
+                    Some(Box::new(self.parse_expr_bp(r_bp)))
+                } else {
+                    None
+                };
                 let span = self.span_from(&start_span);
                 Expr {
                     kind: ExprKind::Range {
                         start: Some(Box::new(lhs)),
-                        end: Some(Box::new(rhs)),
-                        inclusive: true,
+                        end: rhs,
+                        inclusive: false,
                     },
                     span,
                 }

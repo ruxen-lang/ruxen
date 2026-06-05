@@ -4,7 +4,7 @@ def main
   s.insert(2)
   let removed = s.remove(1)
   let missing = s.remove(99)
-  let n = s.len
+  let n = s.size
   puts "removed=#{removed}"
   puts "missing=#{missing}"
   puts "len=#{n}"

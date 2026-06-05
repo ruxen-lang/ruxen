@@ -1,10 +1,10 @@
 def main
-  var h: Map[Int, Int] = Map.new
+  var h: Hash[Int, Int] = Hash.new
   h.insert(1, 10)
   h.insert(2, 20)
   h.insert(3, 30)
   let ks = h.keys
   let vs = h.values
-  puts "keys_len=#{ks.len}"
-  puts "values_len=#{vs.len}"
+  puts "keys_len=#{ks.size}"
+  puts "values_len=#{vs.size}"
 end

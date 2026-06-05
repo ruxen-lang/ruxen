@@ -1,0 +1,48 @@
+## std::_pin_zero_rust_stdlib — trio-leak detector for B5 of
+## docs/specs/system/zero_rust_stdlib_classes.spec.md. (Formerly `foobar`;
+## renamed so the fixture's purpose is self-evident and it is not mistaken
+## for cruft. The internal `foobar_*` symbol names are retained as-is so the
+## C runtime symbol bindings and the trio_leak_pin assertions stay stable.)
+##
+## This package is a hand-rolled minimum-faithful exercise of every
+## bootstrap-side stdlib auto-connect mechanism we expect future stdlib
+## additions to use. If a fresh class needs to touch
+## `compiler/ruxen_core/src/` for ANYTHING beyond appending one line to
+## `BOOTSTRAP_FILES`, this fixture flushes the gap out before it
+## blocks real work.
+##
+## Surfaces exercised:
+## 1. Class with user-body `def init` + `def get` — B1 (bootstrap pass-2).
+## 2. Class-body `lib "..."` block declaring a drop hook — B4 (`def drop`
+##    sweep) + drop-elaboration finds the class through `program.items`.
+## 3. `include Send` / `include Sync` mixins — B2 (auto-derive walker).
+## 4. Module-scope `lib "..."` free-fn declarations + a pure-Ruxen
+##    helper that calls them — proves the free-fn FFI path is also
+##    zero-Rust.
+## 5. `[system_libs]` table in Ruxen.toml — B3 (linker aggregation).
+## Module-scope free-fn lib decls. Mirrors the shape used by sync.rx
+## for `sleep` / `signal_install_sigint`, by executor.rx for
+## `block_on`, and by time.rx for the reactor primitives.
+lib "runtime/foobar.c"
+  def foobar_runtime_double as "ruxen_foobar_runtime_double"(x: Int) -> Int
+end
+
+## Pure-Ruxen free fn that calls the module-scope FFI binding. Proves
+## the call site dispatches correctly without compiler edits.
+def foobar_double_plus_one(x: Int) -> Int { foobar_runtime_double(x) + 1 }
+
+class FooBar[T]
+  payload: T
+
+  def init(value: T) { self.payload = value }
+
+  def get -> T { self.payload }
+
+  include Send
+
+  include Sync
+
+  lib "runtime/foobar.c"
+    def drop as "ruxen_foobar_drop" -> nil
+  end
+end

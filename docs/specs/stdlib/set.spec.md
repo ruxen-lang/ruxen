@@ -6,15 +6,15 @@
 **Status:** shipped Phase 2 #04-#05; method surface self-hosted in
 `library/std/src/set.rx` since #06.8 T#16.
 
-`Set[T]` is a thin layer over `Map[T, ()]` — same hashing
+`Set[T]` is a thin layer over `Hash[T, nil]` — same hashing
 semantics, same `Hashable` bound on `T`.
 
 ---
 
 ## B1 — `Set[T]` is the canonical name
 
-`Set.new()` and `Set.from_iter([...])` (the `{...}` literal is
-reserved for `Map` per §3.22) construct the same runtime type.
+`Set.new()` and `[...].to_set` (the `{...}` literal is
+reserved for `Hash` per §3.22) construct the same runtime type.
 
 ## B2 — `insert(x)` typechecks as `Unit` (v1 simplification)
 
@@ -44,7 +44,7 @@ elements (order-independent).
 
 ## B7 — Element type must be `Hashable`
 
-**Given** `Set[Map[K, V]]` (set of maps — maps are not
+**Given** `Set[Hash[K, V]]` (set of hashes — hashes are not
 hashable)
 **Then** typeck emits diagnostic `E0615`.
 

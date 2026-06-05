@@ -19,8 +19,8 @@ impl<'a> Lowerer<'a> {
                     && is_option_type(&expr.ty)
                     && !matches!(
                         field_name.as_str(),
-                        "is_some"
-                            | "is_none"
+                        "present?"
+                            | "nil?"
                             | "map"
                             | "unwrap_or"
                             | "unwrap_or_else"

@@ -28,7 +28,7 @@ Land 4A first; commit; then 4B; then 4C.
 
 ## Milestone 4A — reactor + time.sleep
 
-### B1 — `time.sleep(d: &Duration) -> some Future[Output = ()]`
+### B1 — `time.sleep(d: &Duration) -> some Future[Output = nil]`
 
 ```rx
 use std.time.Duration
@@ -58,7 +58,7 @@ Internally the timer future:
   Stashes the registration handle in the future's `__handle: Int`
   field. Returns `Poll.Pending`.
 - On subsequent poll: checks if the registration fired. If yes,
-  returns `Poll.Ready(())`. If no, returns `Pending` (executor will
+  returns `Poll.Ready(nil)`. If no, returns `Pending` (executor will
   re-park on the reactor).
 
 ### B2 — Executor's park/wake uses the reactor
@@ -119,7 +119,7 @@ the reactor's wake-on-readable fires when more data is available.
 For v1 the read loop accumulates into a heap buffer and finally
 returns the String. v2 could stream chunks.
 
-### B6 — `AsyncFile.write_all(content: &str) -> some Future[Output = Result[(), IoError]]`
+### B6 — `AsyncFile.write_all(content: &str) -> some Future[Output = Result[nil, IoError]]`
 
 Writes until either EOF on the writer or all of `content` is
 flushed. Yields `Pending` when `write()` returns `EAGAIN`.
@@ -157,15 +157,15 @@ Non-blocking `connect(2)`. The future:
 
 ### B8 — `AsyncTcpStream.read(&var self, buf: &var Array[Int]) -> some Future[Output = Result[Int, IoError]]`
 
-Reads up to buf.len bytes. Returns the count read, or `Err(IoError)`
+Reads up to buf.size bytes. Returns the count read, or `Err(IoError)`
 on failure. Yields Pending when read returns EAGAIN; reactor wakes
 on EPOLLIN.
 
 ### B9 — `AsyncTcpStream.write(&var self, content: &str) -> some Future[Output = Result[Int, IoError]]`
 
-Writes up to content.len bytes. Returns count written.
+Writes up to content.size bytes. Returns count written.
 
-### B10 — `AsyncTcpStream.close(self) -> some Future[Output = ()]`
+### B10 — `AsyncTcpStream.close(self) -> some Future[Output = nil]`
 
 Shuts down the fd cleanly (`shutdown(SHUT_RDWR)` + `close`). The
 `self` is consumed by-move.

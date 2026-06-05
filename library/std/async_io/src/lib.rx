@@ -46,5 +46,5 @@ lib "runtime/async_io.c"
   def ruxen_async_stdin_state_get_fd(state: Int) -> Int
   def ruxen_async_stdin_step(state: Int) -> Int
   def ruxen_async_stdin_state_take_result(state: Int) -> Result[String, IoError]
-  def ruxen_async_stdin_state_free(state: Int) -> ()
+  def ruxen_async_stdin_state_free(state: Int) -> nil
 end

@@ -1,6 +1,6 @@
 ## Sub-phase 4A B1: hand-written future from std.time must
 ## typecheck end-to-end — class registration + Future mixin +
-## Output = () + def var poll + def init + def drop.
+## Output = nil + def var poll + def init + def drop.
 ##
 ## Constructs a TimeSleepFuture but never polls it; the surface
 ## check here is enough to assert the bootstrap pass-2 pickup

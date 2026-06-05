@@ -23,7 +23,11 @@ fn e2e_135_unreserved_idents() {
     let root = workspace_root();
     let src_path = root.join("tests/release-e2e/cases/135_unreserved_idents.rx");
     let expected_path = root.join("tests/release-e2e/expected/135_unreserved_idents.out");
-    let bin_path = root.join("tmp/135_unreserved_idents.bin");
+    let bin_path = root.join(format!(
+        "tmp/135_unreserved_idents-{}-{}.bin",
+        std::process::id(),
+        ruxen_unique_id()
+    ));
     let _ = std::fs::create_dir_all(root.join("tmp"));
 
     let source = std::fs::read_to_string(&src_path)
@@ -50,6 +54,7 @@ fn e2e_135_unreserved_idents() {
     codegen::compile(&mir, bin_path.to_str().unwrap()).expect("codegen");
 
     let output = Command::new(&bin_path).output().expect("run binary");
+    let _ = std::fs::remove_file(&bin_path);
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     assert!(
         output.status.success(),
@@ -64,4 +69,10 @@ fn e2e_135_unreserved_idents() {
         stdout.escape_debug(),
         expected.escape_debug()
     );
+}
+
+fn ruxen_unique_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
 }

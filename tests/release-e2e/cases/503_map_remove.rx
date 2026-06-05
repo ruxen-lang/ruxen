@@ -1,5 +1,5 @@
 def main
-  var h: Map[Int, Int] = Map.new
+  var h: Hash[Int, Int] = Hash.new
   h.insert(1, 10)
   h.insert(2, 20)
   match h.remove(1)
@@ -10,6 +10,6 @@ def main
     Some(v) -> puts "miss=#{v}"
     nil     -> puts "miss=none"
   end
-  let n = h.len
+  let n = h.size
   puts "len=#{n}"
 end

@@ -177,7 +177,7 @@ At the call site, `match` exhaustively or compose with `?`:
 ```ruxen
 match find_user(42)
   Some(user) -> greet(user)
-  None       -> puts "not found"
+  nil       -> puts "not found"
 end
 ```
 
@@ -201,7 +201,7 @@ end
 
 def main
   let argv = args()
-  if argv.len < 2
+  if argv.size < 2
     eputs "usage: tool <file>"
     exit(1)
   end

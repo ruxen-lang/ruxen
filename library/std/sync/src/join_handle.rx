@@ -9,6 +9,6 @@ class JoinHandle[T: Send]
 
   lib "runtime/thread.c"
     def join_raw as "ruxen_thread_join" -> T
-    def drop as "ruxen_thread_join_handle_drop" -> ()
+    def drop as "ruxen_thread_join_handle_drop" -> nil
   end
 end

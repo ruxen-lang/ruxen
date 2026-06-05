@@ -1,6 +1,6 @@
 ## Signature help fixture — callee identifier doesn't resolve to any
 ## known function. The HIR FnCall.callee will be UNRESOLVED_DEF, so
-## the symbol lookup fails and signature_help must return None.
+## the symbol lookup fails and signature_help must return nil.
 
 def main
   unknown_callee_zzz(cursor_unresolved_anchor)

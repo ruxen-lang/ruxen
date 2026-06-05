@@ -88,15 +88,10 @@ impl<'a> Lowerer<'a> {
     /// Push an instruction onto the current basic block.
     pub(super) fn emit(&mut self, inst: MirInst) {
         if let MirInst::Call { callee, args, .. } = &inst {
-            let moves_args = matches!(
-                callee.as_str(),
-                "ruxen_executor_spawn"
-                    | "Task_spawn_raw"
-                    | "Task.spawn_raw"
-                    | "ruxen_thread_spawn"
-                    | "Thread_spawn"
-                    | "Thread_spawn_raw"
-            );
+            // Single source of truth: runtime_abi::MOVE_BY_FFI (the dead dotted
+            // `"Task.spawn_raw"` spelling was dropped — MIR callees are always
+            // underscore-mangled, so it was unreachable).
+            let moves_args = crate::mir::lower::runtime_abi::is_move_by_ffi(callee.as_str());
             let init_moves_non_self_args = callee.ends_with("_init");
             if moves_args || init_moves_non_self_args {
                 for (idx, arg) in args.iter().enumerate() {

@@ -11,8 +11,6 @@ use ruxen_core::typeck;
 const GREEN: &str = "\x1b[32m";
 const DIM: &str = "\x1b[2m";
 const RED: &str = "\x1b[31m";
-const YELLOW: &str = "\x1b[33m";
-const CYAN: &str = "\x1b[36m";
 const RESET: &str = "\x1b[0m";
 const BOLD: &str = "\x1b[1m";
 
@@ -60,7 +58,10 @@ pub fn format_value(raw: i64, ty: &Ty) -> String {
         }
         Ty::Char => {
             if let Some(c) = char::from_u32(raw as u32) {
-                format!("'{}'", c)
+                // Escape control chars (`\n`, `\t`, …) so the `=>` echo stays
+                // on one line — same intent as the string case below. Printable
+                // chars (`'R'`, `'π'`) are left as-is by `escape_debug`.
+                format!("'{}'", c.escape_debug())
             } else {
                 format!("'\\u{{{:x}}}'", raw)
             }
@@ -120,7 +121,7 @@ pub fn format_type(ty: &Ty) -> String {
         Ty::String => "String".to_string(),
         Ty::Str => "&str".to_string(),
         Ty::Array(inner) => format!("Array[{}]", format_type(inner)),
-        Ty::Map(k, v) => format!("Map[{}, {}]", format_type(k), format_type(v)),
+        Ty::Map(k, v) => format!("Hash[{}, {}]", format_type(k), format_type(v)),
         Ty::Set(inner) => format!("Set[{}]", format_type(inner)),
         Ty::Option(inner) => format!("Option[{}]", format_type(inner)),
         Ty::Result(ok, err) => format!("Result[{}, {}]", format_type(ok), format_type(err)),
@@ -210,16 +211,6 @@ pub fn format_fn_signature(name: &str, params: &[(String, Ty)], return_ty: &Ty) 
 pub fn format_error(message: &str) -> String {
     format!("{RED}{BOLD}Error:{RESET} {RED}{message}{RESET}")
 }
-
-/// Format a REPL error with a hint.
-pub fn format_error_with_hint(message: &str, hint: &str) -> String {
-    format!("{RED}{BOLD}Error:{RESET} {RED}{message}{RESET}\n  {CYAN}Hint:{RESET} {hint}")
-}
-
-/// Format a warning message.
-pub fn format_warning(message: &str) -> String {
-    format!("{YELLOW}Warning:{RESET} {message}")
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,7 +247,7 @@ mod tests {
         assert_eq!(format_type(&Ty::Array(Box::new(Ty::Int))), "Array[Int]");
         assert_eq!(
             format_type(&Ty::Map(Box::new(Ty::String), Box::new(Ty::Int))),
-            "Map[String, Int]",
+            "Hash[String, Int]",
         );
         assert_eq!(format_type(&Ty::Set(Box::new(Ty::Bool))), "Set[Bool]");
         assert_eq!(format_type(&Ty::Option(Box::new(Ty::Int))), "Option[Int]");
@@ -474,24 +465,6 @@ mod tests {
         let plain = strip_ansi(&out);
         assert!(plain.contains("Error:"), "got {:?}", plain);
         assert!(plain.contains("oh no"), "got {:?}", plain);
-    }
-
-    #[test]
-    fn format_error_with_hint_contains_both() {
-        let out = format_error_with_hint("bad thing", "try foo instead");
-        let plain = strip_ansi(&out);
-        assert!(plain.contains("Error:"));
-        assert!(plain.contains("bad thing"));
-        assert!(plain.contains("Hint:"));
-        assert!(plain.contains("try foo instead"));
-    }
-
-    #[test]
-    fn format_warning_contains_message() {
-        let out = format_warning("deprecated");
-        let plain = strip_ansi(&out);
-        assert!(plain.contains("Warning:"));
-        assert!(plain.contains("deprecated"));
     }
 
     // ── helpers ─────────────────────────────────────────────────────

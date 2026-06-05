@@ -35,7 +35,7 @@ stores JSON nodes as heap values owned by the JSON runtime.
   JSON.
 - `JSON.stringify_pretty(value: &Json, indent: Int) -> Result[String, JsonError]`
   emits newline-indented JSON. Negative indent is treated as zero.
-- Object key order follows the current `Map` bucket traversal order and is
+- Object key order follows the current `Hash` bucket traversal order and is
   not stable API.
 
 ## Explicit Marshalling
@@ -49,7 +49,7 @@ nodes:
 - `JSON.float(value: Float) -> Json`
 - `JSON.string(value: &String) -> Json`
 - `JSON.array(items: Array[Json]) -> Json`
-- `JSON.object(fields: Map[String, Json]) -> Json`
+- `JSON.object(fields: Hash[String, Json]) -> Json`
 - `JSON.empty_array() -> Json`
 - `JSON.empty_object() -> Json`
 

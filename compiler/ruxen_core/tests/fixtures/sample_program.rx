@@ -149,10 +149,10 @@ class Todo
   end
 
   def self.deserialize(data: &str) -> Result[Todo, TodoError]
-    let parts: Array[String] = data.split("|").to_vec
-    if parts.len < 4
+    let parts: Array[String] = data.split("|")
+    if parts.size < 4
       return Err(TodoError.ParseFailed(
-        message: String.from("expected 4 fields, got #{parts.len}")
+        message: String.from("expected 4 fields, got #{parts.size}")
       ))
     end
 
@@ -224,7 +224,7 @@ class Repository[T: Showable]
   end
 
   def count -> USize
-    self.items.len
+    self.items.size
   end
 
   def get(index: USize) -> Option[&T]
@@ -241,20 +241,20 @@ class Repository[T: Showable]
 
   # Takes a predicate block, returns borrowed references to matching items
   def where_matching(&block: Block(&T) -> Bool) -> Array[&T]
-    self.items.iter
-      .filter { |item| yield item }
-      .to_vec
+    self.items
+      .select { |item| yield item }
+      
   end
 
   # Consumes the repository, returns only items that pass the predicate
   def consume into_filtered(predicate: Fn(&T) -> Bool) -> Array[T]
-    self.items.into_iter
-      .filter { |item| predicate.(&item) }
-      .to_vec
+    self.items
+      .select { |item| predicate.(&item) }
+      
   end
 
   def display_all
-    if self.items.is_empty
+    if self.items.empty?
       puts "  (empty)"
       return
     end
@@ -277,12 +277,12 @@ class TodoList
   end
 
   def find_by_id(id: USize) -> Option[&Todo]
-    self.repo.all.iter.find { |t| t.id == id }
+    self.repo.all.find { |t| t.id == id }
   end
 
-  def var update_status(id: USize, status: Status) -> Result[(), TodoError]
-    let task = self.repo.all.iter
-      .position { |t| t.id == id }
+  def var update_status(id: USize, status: Status) -> Result[nil, TodoError]
+    let task = self.repo.all
+      .index { |t| t.id == id }
       .ok_or(TodoError.NotFound(id: id))?
 
     match self.repo.get_var(task)
@@ -333,11 +333,11 @@ end
 def generate_report(tasks: &Array[&Todo]) -> String
   var report = String.from("=== Todo Report ===\n")
 
-  let (done, active): (Array[&&Todo], Array[&&Todo]) = tasks.iter
+  let (done, active): (Array[&&Todo], Array[&&Todo]) = tasks
     .partition { |t| t.is_done }
 
-  report.push_str("Active: #{active.len}\n")
-  report.push_str("Completed: #{done.len}\n\n")
+  report.push_str("Active: #{active.size}\n")
+  report.push_str("Completed: #{done.size}\n\n")
 
   for task in active
     report.push_str("  [ ] #{task.summary}\n")
@@ -363,7 +363,7 @@ end
 
 # Demonstrates closure stored in a variable
 def apply_filter[T](items: &Array[T], predicate: &Fn(&T) -> Bool) -> Array[&T]
-  items.iter.filter { |item| predicate.(item) }.to_vec
+  items.select { |item| predicate.(item) }
 end
 
 # Demonstrates error propagation with ?
@@ -373,10 +373,10 @@ def create_task_from_input(
   desc: &str,
   priority_str: &str
 ) -> Result[USize, TodoError]
-  if title.is_empty
+  if title.empty?
     return Err(TodoError.MissingField(name: String.from("title")))
   end
-  if desc.is_empty
+  if desc.empty?
     return Err(TodoError.MissingField(name: String.from("description")))
   end
 
@@ -407,7 +407,7 @@ def main
   ]
 
   # ── Report creation results (pattern matching) ──
-  for (i, result) in results.into_iter.enumerate
+  for result in results
     match result
       Ok(id)  -> puts "  Created task ##{id}"
       Err(e)  -> puts "  Failed: #{e.message}"
@@ -458,7 +458,7 @@ def main
     end
   }
   let pending = apply_filter(list.repo.all, &is_pending)
-  puts "--- Pending Tasks (#{pending.len}) ---"
+  puts "--- Pending Tasks (#{pending.size}) ---"
   pending.each { |t| puts "  #{t.to_display}" }
 
   puts ""
@@ -471,7 +471,7 @@ def main
 
   # Safe navigation chain
   let deadline_info = list.find_by_id(0)
-    ?.title_ref
+    &.title_ref
     .map { |title| "Found: #{title}" }
     .unwrap_or(String.from("Not found"))
   puts deadline_info
@@ -479,7 +479,7 @@ def main
   puts ""
 
   # ── Generate report (demonstrates borrowing — list is NOT consumed) ──
-  let all_refs: Array[&Todo] = list.repo.all.iter.to_vec
+  let all_refs: Array[&Todo] = list.repo.all
   let report = generate_report(&all_refs)
   puts report
 
@@ -493,7 +493,7 @@ def main
   let completed = list.into_completed
   # `list` is now consumed — cannot be used
 
-  puts "Archived #{completed.len} completed tasks:"
+  puts "Archived #{completed.size} completed tasks:"
   completed.each { |t| puts "  #{t.to_display}" }
 
   # This would be a compile error:

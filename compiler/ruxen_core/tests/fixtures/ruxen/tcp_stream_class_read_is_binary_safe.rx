@@ -26,9 +26,9 @@ def drain_up_to(s: TcpStream, out: &var Array[Int])
 end
 
 def report(buf: &var Array[Int])
-  puts "read_len=#{buf.len}"
+  puts "read_len=#{buf.size}"
   var i = 0
-  while i < buf.len
+  while i < buf.size
     let b = buf[i]
     puts "b#{i}=#{b}"
     i = i + 1

@@ -1,6 +1,6 @@
 def main
   let v = [1, 2, 2, 3]
-  let s = v.iter.collect[Set[Int]]
-  puts "#{s.len}"
-  puts "#{s.contains(2)}"
+  let s = v.to_set
+  puts "#{s.size}"
+  puts "#{s.include?(2)}"
 end

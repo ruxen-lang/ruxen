@@ -8,9 +8,9 @@ def main
   b.insert(3)
   b.insert(4)
   let i = a.intersection(&b)
-  let n = i.len
+  let n = i.size
   puts "len=#{n}"
-  puts "has1=#{i.contains(1)}"
-  puts "has2=#{i.contains(2)}"
-  puts "has3=#{i.contains(3)}"
+  puts "has1=#{i.include?(1)}"
+  puts "has2=#{i.include?(2)}"
+  puts "has3=#{i.include?(3)}"
 end

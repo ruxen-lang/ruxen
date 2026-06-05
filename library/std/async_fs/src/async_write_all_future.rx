@@ -1,14 +1,14 @@
 ## --- AsyncWriteAllFuture (B6) --------------------------------------
 ##
 ## Writes the entire `content` to `fd`, looping on EAGAIN with reactor
-## registration for write-readiness. Returns Ok(()) once flushed,
+## registration for write-readiness. Returns Ok(nil) once flushed,
 ## Err(IoError) on hard failure.
 class AsyncWriteAllFuture
   state_ptr: Int
   handle: Int
   done: Int
   include Future
-  type Output = Result[(), IoError]
+  type Output = Result[nil, IoError]
 
   def init(fd: Int, content: &String)
     self.state_ptr = ruxen_async_write_state_new(fd, content)
@@ -16,7 +16,7 @@ class AsyncWriteAllFuture
     self.done = 0
   end
 
-  def var poll(cx: &var Context) -> Poll[Result[(), IoError]]
+  def var poll(cx: &var Context) -> Poll[Result[nil, IoError]]
     if self.done != 0
       return Poll.Ready(ruxen_async_write_state_take_result(self.state_ptr))
     end

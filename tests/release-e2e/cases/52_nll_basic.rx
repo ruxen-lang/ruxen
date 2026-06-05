@@ -1,7 +1,7 @@
 def main
   var data = [1, 2, 3]
   let view = &data
-  puts "#{view.len}"
+  puts "#{view.size}"
   data.push(4)
-  puts "#{data.len}"
+  puts "#{data.size}"
 end

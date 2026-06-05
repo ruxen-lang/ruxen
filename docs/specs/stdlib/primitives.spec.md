@@ -23,7 +23,7 @@ typechecker resolves and the runtime helpers that back them.
 **Then** the result is `"42"`.
 
 Same surface holds for `USize` (the type sometimes inferred for array
-sizes and `Array.len`).
+sizes and `Array.size`).
 
 ## B2 — `Float.to_string() -> String`
 
@@ -89,9 +89,9 @@ fine (literal narrows on assignment).
 
 | Escape   | Codepoint        |
 |----------|------------------|
-| `'\n'`   | `0x0A`           |
+| `?\n`   | `0x0A`           |
 | `'\r'`   | `0x0D`           |
-| `'\t'`   | `0x09`           |
+| `?\t`   | `0x09`           |
 | `'\\'`   | `0x5C`           |
 | `'\''`   | `0x27`           |
 | `'\"'`   | `0x22`           |

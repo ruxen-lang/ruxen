@@ -76,8 +76,8 @@ end
 
 class Waker
   lib "runtime/executor.c"
-    def wake as "ruxen_waker_wake"(self) -> ()
-    def wake_by_ref as "ruxen_waker_wake_by_ref"(self) -> ()
+    def wake as "ruxen_waker_wake"(self) -> nil
+    def wake_by_ref as "ruxen_waker_wake_by_ref"(self) -> nil
   end
 end
 ```

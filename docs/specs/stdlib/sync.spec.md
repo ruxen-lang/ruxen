@@ -180,8 +180,8 @@ required methods. Users opt in by writing `include Send` (and/or
 - All primitive types (`Int`, `Bool`, `Float`, `Char`) auto-derive
   both `Send` and `Sync`.
 - `String` auto-derives both (immutable + reference-counted).
-- `Array[T]`, `Option[T]`, `Result[T, E]`, `Box[T]`, `HashMap[K, V]`,
-  `HashSet[T]` auto-derive `Send` iff all type parameters are `Send`;
+- `Array[T]`, `Option[T]`, `Result[T, E]`, `Box[T]`, `Hash[K, V]`,
+  `Set[T]` auto-derive `Send` iff all type parameters are `Send`;
   `Sync` iff all type parameters are `Sync`.
 - `Mutex[T]` auto-derives `Send + Sync` iff `T: Send`.
 - `SharedSync[T]` auto-derives `Send + Sync` iff `T: Send`.

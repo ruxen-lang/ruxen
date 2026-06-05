@@ -44,10 +44,6 @@ pub const BOOTSTRAP_EMBEDDED: &[(&str, &str)] = &[
         include_str!("../../../../library/std/env/src/lib.rx"),
     ),
     (
-        "iter/src/lib.rx",
-        include_str!("../../../../library/std/iter/src/lib.rx"),
-    ),
-    (
         "hash/src/lib.rx",
         include_str!("../../../../library/std/hash/src/lib.rx"),
     ),
@@ -124,8 +120,8 @@ pub const BOOTSTRAP_EMBEDDED: &[(&str, &str)] = &[
         include_str!("../../../../library/std/json/src/lib.rx"),
     ),
     (
-        "foobar/src/lib.rx",
-        include_str!("../../../../library/std/foobar/src/lib.rx"),
+        "_pin_zero_rust_stdlib/src/lib.rx",
+        include_str!("../../../../library/std/_pin_zero_rust_stdlib/src/lib.rx"),
     ),
     (
         "regex/src/lib.rx",

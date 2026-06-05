@@ -3,5 +3,5 @@ def main
   parts.push(String.from("alpha"))
   parts.push(String.from("beta"))
   parts.push(String.from("gamma"))
-  let _len = parts.len
+  let _len = parts.size
 end

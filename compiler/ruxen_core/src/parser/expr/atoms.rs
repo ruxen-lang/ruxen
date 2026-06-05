@@ -195,23 +195,10 @@ impl Parser {
             // `{ k => v, ... }` Map literal or `{ |x| ... }` brace closure.
             TokenKind::LBrace => self.parse_brace_map_or_closure(false, false),
 
-            // do ... end — either a closure (if `|params|` follow) or a
-            // block expression whose value is the last expression.
-            TokenKind::Do => {
-                // Peek past newlines for closure-param markers.
-                let mut look = 1;
-                while matches!(self.peek_at_kind(look), TokenKind::Newline) {
-                    look += 1;
-                }
-                if matches!(
-                    self.peek_at_kind(look),
-                    TokenKind::Pipe | TokenKind::PipePipe
-                ) {
-                    self.parse_do_closure(false, false)
-                } else {
-                    self.parse_do_block_expr()
-                }
-            }
+            // do ... end is always a closure (Ruby: `do…end` is a block, never a
+            // standalone value). With no `|params|` it is a no-param closure;
+            // `parse_do_closure` handles the missing-pipe case.
+            TokenKind::Do => self.parse_do_closure(false, false),
 
             // move closure
             TokenKind::Move => {
@@ -1071,22 +1058,6 @@ impl Parser {
                 body,
                 span: span.clone(),
             }),
-            span,
-        }
-    }
-
-    /// Parse `do NL statements NL end` as a block expression.
-    /// The value of the block is the value of its last expression,
-    /// following the same tail-expression rule used by `resolve_block_as_expr`.
-    fn parse_do_block_expr(&mut self) -> Expr {
-        let start = self.current_span();
-        self.advance(); // consume `do`
-        self.skip_newlines();
-        let body = self.parse_body();
-        self.expect(TokenKind::End);
-        let span = self.span_from(&start);
-        Expr {
-            kind: ExprKind::Block(body),
             span,
         }
     }

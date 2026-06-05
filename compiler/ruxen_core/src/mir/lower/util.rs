@@ -30,6 +30,7 @@ pub(super) fn is_collection_method(method_name: &str) -> bool {
     matches!(
         method_name,
         "each"
+            | "each_with_index"
             | "filter"
             | "where_matching"
             | "find"
@@ -71,64 +72,12 @@ pub(super) fn is_vec_or_iterator_type(ty: &Ty) -> bool {
 /// Check if a method on a built-in type is a static/class method
 /// (no `self` argument). These are methods like `String.from(...)`,
 /// `Vec.new()`, etc. that are called on the type itself.
+///
+/// Single source: delegates to `runtime_abi::is_static_constructor`, the
+/// reconciled union of this list and the formerly-diverged method_call.rs
+/// `is_*_static_ctor` cascade. See that function for the reconciliation notes.
 pub(super) fn is_builtin_static_method(type_name: &str, method_name: &str) -> bool {
-    // Handle both exact matches and generic type names (e.g., "Vec[T]").
-    let base_type = if let Some(pos) = type_name.find('[') {
-        &type_name[..pos]
-    } else {
-        type_name
-    };
-    match base_type {
-        "String" => matches!(
-            method_name,
-            "from" | "new" | "with_capacity" | "from_iter" | "from_bytes"
-        ),
-        // `Vec.with_capacity(n)` is a stateless static constructor — like
-        // `Vec.new` but takes one Int arg. Phase 2 stdlib batch 1 (#03).
-        // `Vec.from_iter(iter)` (#03 batch 2) takes any iterator-producing
-        // expression and treats it as a fresh allocation.
-        // ruby-naming.spec.md §10a: `Vec[T]` → `Array[T]`. Both names
-        // route here while the migration shim is in place.
-        "Vec" | "Array" => matches!(method_name, "new" | "with_capacity" | "from_iter"),
-        // Phase 2 stdlib (#04): full HashMap[K,V] / HashSet[T] surface.
-        // The `Hash`, `HashMap`, and `Map` (ruby-naming.spec.md §10a)
-        // aliases all reach here for the `Map.new` /
-        // `Map.with_capacity(n)` / `Map.from_iter(iter)` constructors;
-        // same for `Set` / `HashSet`. Without `Map` in the alias list
-        // the static-dispatch detector at the method call site
-        // (`is_builtin_static_method`) classifies the call as an
-        // instance method and prepends a phantom `Unit` self arg,
-        // producing a 2-arg call against the 1-arg `ruxen_hash_from_iter`
-        // runtime symbol — the Cranelift verifier rejects with
-        // "mismatched argument count".
-        "Hash" | "HashMap" | "Map" => {
-            matches!(method_name, "new" | "with_capacity" | "from_iter")
-        }
-        "Set" | "HashSet" => matches!(method_name, "new" | "with_capacity" | "from_iter"),
-        "Thread" => matches!(method_name, "spawn" | "current" | "sleep" | "yield_now"),
-        "Mutex" => matches!(method_name, "new"),
-        "Arc" | "SharedSync" => matches!(method_name, "new"),
-        // Phase 2 stdlib (#06.5 T4): Duration / Instant static-style
-        // constructors. `Duration.from_secs(5)` / `Instant.now()` must
-        // classify as static here so the method-call lowerer doesn't
-        // synthesise a phantom `self` arg ahead of the runtime symbol
-        // — `ruxen_duration_from_secs` takes one i64, `ruxen_instant_now`
-        // takes none.
-        "Duration" => matches!(
-            method_name,
-            "from_secs" | "from_millis" | "from_micros" | "from_nanos"
-        ),
-        "Instant" => matches!(method_name, "now"),
-        // Phase 2 #06.5 T5: TcpListener / TcpStream class-static
-        // constructors. `TcpListener.bind(&addr)` /
-        // `TcpStream.connect(&addr)` dispatch directly to their
-        // runtime symbol with no synthetic `self`. The runtime entries
-        // (`ruxen_tcp_listener_bind`, `ruxen_tcp_stream_connect`) take
-        // one `const char*`, not `self + char*`.
-        "TcpListener" => matches!(method_name, "bind"),
-        "TcpStream" => matches!(method_name, "connect"),
-        _ => false,
-    }
+    crate::mir::lower::runtime_abi::is_static_constructor(type_name, method_name)
 }
 
 /// Extract the element type from a collection or iterator type.

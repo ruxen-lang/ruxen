@@ -1,0 +1,3 @@
+mixin Serializable
+  def serialize -> String
+end

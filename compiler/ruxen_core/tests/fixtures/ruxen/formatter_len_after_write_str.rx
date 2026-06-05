@@ -1,6 +1,6 @@
 def main
   var f = Formatter.new()
   let _ = f.write_str("hi")
-  let n = f.len()
+  let n = f.size()
   println("#{n}")
 end

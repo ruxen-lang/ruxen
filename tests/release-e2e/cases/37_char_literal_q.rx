@@ -1,0 +1,14 @@
+def main
+  if ?a == ?a
+    puts "eq"
+  end
+  if ?a == ?b
+    puts "bad"
+  else
+    puts "neq"
+  end
+  let nl = ?\n
+  if nl == ?\n
+    puts "nl-ok"
+  end
+end

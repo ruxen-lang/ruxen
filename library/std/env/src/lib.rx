@@ -19,7 +19,7 @@ class Env
   lib "runtime/env.c"
     def self.args as "ruxen_env_args" -> Array[String]
     def self.get as "ruxen_env_var"(name: &String) -> Result[String, IoError]
-    def self.vars as "ruxen_env_vars" -> Map[String, String]
+    def self.vars as "ruxen_env_vars" -> Hash[String, String]
     def self.current_dir as "ruxen_env_current_dir" -> Result[String, IoError]
   end
 end
@@ -28,6 +28,6 @@ end
 lib "runtime/env.c"
   def args as "ruxen_env_args" -> Array[String]
   def get as "ruxen_env_var"(name: &String) -> Result[String, IoError]
-  def vars as "ruxen_env_vars" -> Map[String, String]
+  def vars as "ruxen_env_vars" -> Hash[String, String]
   def current_dir as "ruxen_env_current_dir" -> Result[String, IoError]
 end

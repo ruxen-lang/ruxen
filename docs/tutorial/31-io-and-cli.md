@@ -60,7 +60,7 @@ use std.io.{puts, eputs}
 
 def main
   let argv = args()
-  if argv.len < 2
+  if argv.size < 2
     eputs "usage: tool <input>"
     exit(1)
   end
@@ -153,7 +153,7 @@ end
 ```ruxen
 def show_meta(f: File)
   match f.metadata()
-    Ok(m)  -> puts "size=#{m.len} file=#{m.is_file}"
+    Ok(m)  -> puts "size=#{m.size} file=#{m.is_file}"
     Err(_) -> puts "meta failed"
   end
 end
@@ -205,7 +205,7 @@ end
 def handle(opt: String?) -> Bool
   match opt
     Some(line) -> show(line)
-    None       -> true            # EOF
+    nil       -> true            # EOF
   end
 end
 
@@ -227,7 +227,7 @@ def main
 end
 ```
 
-`BufReader.read_line` returns `Result[Option[String], IoError]` — `Ok(None)` means clean EOF.
+`BufReader.read_line` returns `Result[Option[String], IoError]` — `Ok(nil)` means clean EOF.
 
 `BufWriter` is the writing equivalent:
 
@@ -332,7 +332,7 @@ end
 
 def main
   let argv = args()
-  if argv.len < 2
+  if argv.size < 2
     eputs "usage: shout <file>"
     exit(1)
   end

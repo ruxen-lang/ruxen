@@ -1,6 +1,6 @@
 def main
   let v = [1, 2, 3]
-  let n = v.iter.count
+  let n = v.count
   let s = n.to_string
   puts "n=#{s}"
 end

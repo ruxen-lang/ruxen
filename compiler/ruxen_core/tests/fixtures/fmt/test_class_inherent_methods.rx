@@ -1,0 +1,8 @@
+class Priority
+  def weight -> Int
+    match self
+      Priority.Low -> 1
+      Priority.High -> 3
+    end
+  end
+end

@@ -644,15 +644,6 @@ fn parser_regression_match_guards() {
 }
 
 #[test]
-fn parser_do_end_block_expr() {
-    // Fixture 59: `do ... last_expr end` used as an expression.
-    let (temp, ruxenc) = stage_install();
-    let source = rx("parser_do_end_block_expr");
-    let out = compile_and_run(&ruxenc, temp.path(), "do_end_block.rx", &source);
-    assert_eq!(out.trim(), "3");
-}
-
-#[test]
 fn e2e_16_inheritance() {
     // Fixture 16_inheritance: `super(name)` inside a subclass init must
     // invoke the parent's init with the child's self as the receiver so

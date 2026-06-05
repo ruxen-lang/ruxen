@@ -17,7 +17,7 @@ one or more Rust integration tests in `crates/ruxen-core/tests/`.
 ## B1 — `Display` mixin surface
 
 `std.fmt.Display` is resolvable at the type level with method
-signature `def fmt(f: &var Formatter) -> Result[(), FmtError]`.
+signature `def fmt(f: &var Formatter) -> Result[nil, FmtError]`.
 
 **Given** a user type `T` with `include Display` in its body
 **When** `T` is used in an interpolation `"#{t}"`
@@ -43,10 +43,10 @@ structs; `Variant(<payload>)` / `Variant { .. }` for enums).
 | Method                                          | Returns                  |
 |-------------------------------------------------|--------------------------|
 | `Formatter.new()`                               | `Formatter`              |
-| `f.write_str(s: &str)`                          | `Result[(), FmtError]`   |
-| `f.write_char(c: Char)`                         | `Result[(), FmtError]`   |
+| `f.write_str(s: &str)`                          | `Result[nil, FmtError]`   |
+| `f.write_char(c: Char)`                         | `Result[nil, FmtError]`   |
 | `f.buffer()`                                    | `String` (consumes `f`)  |
-| `f.len()`                                       | `Int`                    |
+| `f.size()`                                      | `Int`                    |
 | `f.width()` / `precision()` / `align()` / `fill()` | accessors (read-only)  |
 
 **Invariant:** `f.buffer()` transfers ownership of the accumulated bytes
@@ -198,7 +198,7 @@ E2E coverage: `tests/release-e2e/cases/070_interp_display_dispatch.rx`
   Formatter and goes through `{T}_to_debug` directly, so width is lost.
 - Sign / `#` alternate / `0` zero-pad / radix flags (`x`, `X`, `b`,
   `o`, `e`) — not yet parsed in `lex_format_spec`.
-- Blanket `Display` includes for `Array` / `Map` / `Set` / `Option` /
+- Blanket `Display` includes for `Array` / `Hash` / `Set` / `Option` /
   `Result` / tuples / arrays — only primitives + user types covered.
 - The `Err(e).message()` inference gap inside `include Display` bodies
   on Result-returning expressions (separately tracked).

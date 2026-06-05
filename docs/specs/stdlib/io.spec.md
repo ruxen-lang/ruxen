@@ -36,16 +36,16 @@ Same as B3 but no trailing newline.
 
 **Given** `Stdout.new().write_str("raw")`
 **Then** stdout contains exactly `"raw"` (no newline).  Returns
-`Result[(), IoError]`.
+`Result[nil, IoError]`.
 
 ## B6 — `Stderr.write_str` routes to stderr
 
 Mirror of B5 for stderr.
 
-## B7 — `Stdout.flush()` and `Stderr.flush()` return `Ok(())`
+## B7 — `Stdout.flush()` and `Stderr.flush()` return `Ok(nil)`
 
-`flush` is callable and returns `Result[(), IoError]`.  On the v1
-runtime it never fails (no buffered writer) — always `Ok(())`.
+`flush` is callable and returns `Result[nil, IoError]`.  On the v1
+runtime it never fails (no buffered writer) — always `Ok(nil)`.
 
 ## B8 — `Stdin.lines()` yields each line
 

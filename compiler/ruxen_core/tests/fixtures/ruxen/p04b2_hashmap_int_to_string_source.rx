@@ -1,7 +1,7 @@
 def main
-  var m: Map[Int, String] = Map.new
+  var m: Hash[Int, String] = Hash.new
   m.insert(1, String.from("alpha"))
   m.insert(2, String.from("beta"))
   m.insert(3, String.from("gamma"))
-  let _len = m.len
+  let _len = m.size
 end

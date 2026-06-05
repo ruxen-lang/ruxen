@@ -1,7 +1,7 @@
 use std.process.Command
 
 def report(out: Output)
-  if out.stdout.contains("RUXEN_TEST=1")
+  if out.stdout.include?("RUXEN_TEST=1")
     puts "env_ok"
   else
     puts "env_missing"

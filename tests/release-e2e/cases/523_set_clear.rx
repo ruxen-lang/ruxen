@@ -3,10 +3,10 @@ def main
   s.insert(1)
   s.insert(2)
   s.insert(3)
-  let before = s.len
+  let before = s.size
   s.clear
-  let after = s.len
-  let empty = s.is_empty
+  let after = s.size
+  let empty = s.empty?
   puts "before=#{before}"
   puts "after=#{after}"
   puts "empty=#{empty}"

@@ -1049,7 +1049,7 @@ impl fmt::Display for Ty {
             }
             Ty::FixedArray(elem, size) => write!(f, "[{}; {}]", elem, size),
             Ty::Array(elem) => write!(f, "Array[{}]", elem),
-            Ty::Map(k, v) => write!(f, "Map[{}, {}]", k, v),
+            Ty::Map(k, v) => write!(f, "Hash[{}, {}]", k, v),
             Ty::Set(elem) => write!(f, "Set[{}]", elem),
             Ty::Option(inner) => write!(f, "Option[{}]", inner),
             Ty::Result(ok, err) => write!(f, "Result[{}, {}]", ok, err),
@@ -1146,5 +1146,170 @@ impl fmt::Display for Ty {
             Ty::Error => write!(f, "<error>"),
             Ty::ConstArg(e) => write!(f, "{}", e),
         }
+    }
+}
+
+impl Ty {
+    /// Apply `f` to every directly-nested `Ty` child, rebuilding `self` with the
+    /// results. EXHAUSTIVE: every variant is matched explicitly — there is no
+    /// `_ =>` arm, so adding a new `Ty` variant is a compile error here until it
+    /// is handled. This is the single structural-recursion primitive for `Ty`;
+    /// folds like `subst_ty` are written as `match { interesting arms; other =>
+    /// other.map_inner(f) }`.
+    pub fn map_inner(self, f: &mut impl FnMut(&Ty) -> Ty) -> Ty {
+        match self {
+            // Leaves — no nested Ty. `SomeMixin`/`AnyMixin` carry `Vec<MixinRef>`,
+            // not `Ty`, so they have no direct `Ty` child and are leaves here.
+            Ty::Int
+            | Ty::Int8
+            | Ty::Int16
+            | Ty::Int32
+            | Ty::Int64
+            | Ty::UInt
+            | Ty::UInt8
+            | Ty::UInt16
+            | Ty::UInt32
+            | Ty::UInt64
+            | Ty::ISize
+            | Ty::USize
+            | Ty::Float
+            | Ty::Float32
+            | Ty::Float64
+            | Ty::Bool
+            | Ty::Char
+            | Ty::Unit
+            | Ty::Never
+            | Ty::String
+            | Ty::Str
+            | Ty::ConstArg(_)
+            | Ty::SomeMixin(_)
+            | Ty::AnyMixin(_)
+            | Ty::Infer(_)
+            | Ty::TypeParam { .. }
+            | Ty::RawPtrVoid
+            | Ty::RawPtrMutVoid
+            | Ty::Error => self,
+
+            // Single-child wrappers.
+            Ty::Array(t) => Ty::Array(Box::new(f(&t))),
+            Ty::Set(t) => Ty::Set(Box::new(f(&t))),
+            Ty::Option(t) => Ty::Option(Box::new(f(&t))),
+            Ty::Ref(t) => Ty::Ref(Box::new(f(&t))),
+            Ty::RefMut(t) => Ty::RefMut(Box::new(f(&t))),
+            Ty::RawPtr(t) => Ty::RawPtr(Box::new(f(&t))),
+            Ty::RawPtrMut(t) => Ty::RawPtrMut(Box::new(f(&t))),
+
+            // Named-lifetime refs (bug #3: these were skipped by subst_ty).
+            Ty::RefLifetime(l, t) => Ty::RefLifetime(l, Box::new(f(&t))),
+            Ty::RefMutLifetime(l, t) => Ty::RefMutLifetime(l, Box::new(f(&t))),
+
+            // Two-child.
+            Ty::Map(k, v) => Ty::Map(Box::new(f(&k)), Box::new(f(&v))),
+            Ty::Result(ok, err) => Ty::Result(Box::new(f(&ok)), Box::new(f(&err))),
+
+            // Const-sized array: fold the element, keep the const expr.
+            Ty::FixedArray(t, n) => Ty::FixedArray(Box::new(f(&t)), n),
+
+            // Sequences of children.
+            Ty::Tuple(ts) => Ty::Tuple(ts.iter().map(&mut *f).collect()),
+
+            // Nominal types with generic args.
+            Ty::Class { name, generic_args } => Ty::Class {
+                name,
+                generic_args: generic_args.iter().map(&mut *f).collect(),
+            },
+            Ty::Struct { name, generic_args } => Ty::Struct {
+                name,
+                generic_args: generic_args.iter().map(&mut *f).collect(),
+            },
+            Ty::Enum { name, generic_args } => Ty::Enum {
+                name,
+                generic_args: generic_args.iter().map(&mut *f).collect(),
+            },
+
+            // Function types.
+            Ty::Fn { params, ret } => Ty::Fn {
+                params: params.iter().map(&mut *f).collect(),
+                ret: Box::new(f(&ret)),
+            },
+            Ty::FnMut { params, ret } => Ty::FnMut {
+                params: params.iter().map(&mut *f).collect(),
+                ret: Box::new(f(&ret)),
+            },
+            Ty::FnOnce { params, ret } => Ty::FnOnce {
+                params: params.iter().map(&mut *f).collect(),
+                ret: Box::new(f(&ret)),
+            },
+
+            // Transparent / opaque wrappers — fold the inner.
+            Ty::Alias { name, target } => Ty::Alias {
+                name,
+                target: Box::new(f(&target)),
+            },
+            Ty::Newtype { name, inner } => Ty::Newtype {
+                name,
+                inner: Box::new(f(&inner)),
+            },
+        }
+    }
+
+    /// Peel every reference layer (`&`, `&mut`, `&'a`, `&'a mut`) off `self`,
+    /// returning the first non-reference inner type. The single canonical
+    /// reference-peeler — replaces the several partial hand-rolled peels.
+    pub fn peel_refs(&self) -> &Ty {
+        match self {
+            Ty::Ref(t) | Ty::RefMut(t) | Ty::RefLifetime(_, t) | Ty::RefMutLifetime(_, t) => {
+                t.peel_refs()
+            }
+            other => other,
+        }
+    }
+}
+
+#[cfg(test)]
+mod map_inner_tests {
+    use super::*;
+
+    // A fold that renames every TypeParam "T" to Int, recursing everywhere.
+    fn t_to_int(ty: &Ty) -> Ty {
+        match ty {
+            Ty::TypeParam { name, .. } if name == "T" => Ty::Int,
+            other => other.clone().map_inner(&mut |c| t_to_int(c)),
+        }
+    }
+
+    #[test]
+    fn substitutes_through_explicit_lifetime_refs() {
+        // &'a T  — the variant subst_ty historically MISSED (bug #3)
+        let ty = Ty::RefLifetime(
+            "a".into(),
+            Box::new(Ty::TypeParam {
+                name: "T".into(),
+                bounds: vec![],
+            }),
+        );
+        assert_eq!(
+            t_to_int(&ty),
+            Ty::RefLifetime("a".into(), Box::new(Ty::Int))
+        );
+    }
+
+    #[test]
+    fn substitutes_through_map_and_set() {
+        // Map[T, T] and Set[T] — also historically missed by subst_ty.
+        let tp = || Ty::TypeParam {
+            name: "T".into(),
+            bounds: vec![],
+        };
+        let m = Ty::Map(Box::new(tp()), Box::new(tp()));
+        assert_eq!(t_to_int(&m), Ty::Map(Box::new(Ty::Int), Box::new(Ty::Int)));
+        let s = Ty::Set(Box::new(tp()));
+        assert_eq!(t_to_int(&s), Ty::Set(Box::new(Ty::Int)));
+    }
+
+    #[test]
+    fn leaves_unrelated_leaves_untouched() {
+        assert_eq!(t_to_int(&Ty::Int), Ty::Int);
+        assert_eq!(t_to_int(&Ty::String), Ty::String);
     }
 }

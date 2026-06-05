@@ -134,13 +134,13 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // category as the `String_*` MIR-synthesised callees above.
         "&str_split" => return Ok("ruxen_str_split"),
         "&str_parse_uint" => return Ok("ruxen_str_parse_uint"),
-        "&str_len" => return Ok("ruxen_string_len"),
-        "&str_is_empty" => return Ok("ruxen_string_is_empty"),
+        "&str_size" => return Ok("ruxen_string_len"),
+        "&str_empty?" => return Ok("ruxen_string_is_empty"),
         "&str_trim" => return Ok("ruxen_string_trim"),
         "&str_to_lower" => return Ok("ruxen_string_to_lower"),
         "&str_to_upper" => return Ok("ruxen_string_to_upper"),
         "&str_chars" => return Ok("ruxen_string_chars"),
-        "&str_contains" => return Ok("ruxen_string_contains"),
+        "&str_include?" => return Ok("ruxen_string_contains"),
         "&str_starts_with" => return Ok("ruxen_string_starts_with"),
         "&str_ends_with" => return Ok("ruxen_string_ends_with"),
         "&str_lines" => return Ok("ruxen_string_lines"),
@@ -213,7 +213,7 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
             "first" => Ok("ruxen_vec_first"),
             "last" => Ok("ruxen_vec_last"),
             "clone" => Ok("ruxen_vec_clone"),
-            "contains" => Ok("ruxen_vec_contains_int"),
+            "include?" => Ok("ruxen_vec_contains_int"),
             "sort" => Ok("ruxen_vec_sort"),
             "join" => Ok("ruxen_vec_join"),
             // Phase 2 stdlib (#05 batch 2): lazy combinators
@@ -224,7 +224,7 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
             // — the runtime never sees them, so they are
             // intentionally absent from this dispatch table.
             "take" => Ok("ruxen_vec_take"),
-            "skip" => Ok("ruxen_vec_skip"),
+            "drop" => Ok("ruxen_vec_skip"),
             // Phase 2 stdlib (#05 batch 3): `chain(other)` /
             // `zip(other)` eager-materialise into fresh
             // `RuxenVec*`s via the runtime helpers below.
@@ -237,8 +237,8 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
             "collect_vec" => Ok("ruxen_iter_to_vec"),
             // Known unimplemented combinators — refuse rather
             // than no-op.
-            "filter" | "find" | "position" | "partition" | "fold" | "min" | "max" | "any"
-            | "all" | "collect" | "map" | "reduce" | "flat_map" | "flatten" => {
+            "select" | "reject" | "find" | "index" | "partition" | "reduce" | "min" | "max"
+            | "any?" | "all?" | "collect" | "map" | "flat_map" | "flatten" => {
                 Err(unresolved_method_error(name, "Iter"))
             }
             // Anything else falls through to link-time
@@ -288,8 +288,8 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
             }
             // Known unimplemented Vec methods — historically
             // no-opped.
-            "map" | "filter" | "fold" | "min" | "max" | "any" | "all" | "collect" | "find"
-            | "position" | "partition" | "reduce" | "zip" | "take" | "skip" | "chain"
+            "map" | "select" | "reject" | "reduce" | "min" | "max" | "any?" | "all?"
+            | "collect" | "find" | "index" | "partition" | "zip" | "take" | "drop" | "chain"
             | "flat_map" | "flatten" => Err(unresolved_method_error(name, "Vec")),
             _ => Ok(name),
         };
@@ -369,8 +369,8 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
             "trim" => Ok("ruxen_string_trim"),
             "to_lower" => Ok("ruxen_string_to_lower"),
             // Vec/collection operations with real symbols.
-            "len" => Ok("ruxen_vec_len"),
-            "is_empty" => Ok("ruxen_vec_is_empty"),
+            "size" => Ok("ruxen_vec_len"),
+            "empty?" => Ok("ruxen_vec_is_empty"),
             "push" => Ok("ruxen_vec_push"),
             "pop" => Ok("ruxen_vec_pop"),
             "get" | "get_mut" | "get_var" => Ok("ruxen_vec_get_opt"),

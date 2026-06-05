@@ -1,5 +1,5 @@
 def main
   let v = [1, 2, 3]
-  let out = v.iter.map { |n| "#{n}" }.collect[String]
+  let out = v.map { |n| "#{n}" }.join("")
   puts out
 end

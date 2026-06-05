@@ -59,7 +59,7 @@ def main
   let y = 3.14               # Float
   let name = "Ruxen"         # &str (a borrowed piece of text)
   let flag = true            # Bool
-  let ch = 'R'               # Char (a single Unicode character)
+  let ch = ?R                # Char (a single Unicode character)
 
   puts "#{x} #{y} #{name} #{flag} #{ch}"
 end
@@ -152,9 +152,13 @@ Chapter 17 goes deeper on formatting; this much is enough for now.
 
 ### Raw and multiline strings
 
+Single quotes make a **raw** string — backslashes stay literal and there's
+no `#{}` interpolation. Double quotes interpolate and process escapes. (A
+raw string can hold `"` freely, but not a `'`.)
+
 ```ruxen
-let raw = r"no\escape\here"           # backslashes stay literal
-let raw2 = r#"can have "quotes""#     # use r#"..."# when you need a quote
+let raw = 'no\escape\here'            # backslashes stay literal, no interpolation
+let raw2 = 'can have "quotes" inside' # double quotes are fine in a raw string
 
 let multi = """
   This is a
@@ -197,7 +201,7 @@ def main
   v.push(1)
   v.push(2)
   v.push(3)
-  puts "#{v.len}"     # 3
+  puts "#{v.size}"     # 3
 end
 ```
 

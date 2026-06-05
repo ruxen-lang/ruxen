@@ -10,5 +10,5 @@ end
 
 def main
   let xs = wrapper
-  let n = xs.len
+  let n = xs.size
 end

@@ -136,7 +136,7 @@ use std.io.IoError
 
 def main
   let args = env.args
-  if args.len < 2
+  if args.size < 2
     eputs "usage: wc <file>"
     std.process.exit(1)
   end
@@ -152,7 +152,7 @@ end
 def count(text: &str)
   var lines = 0
   var words = 0
-  var bytes = text.len
+  var bytes = text.size
 
   for line in text.lines
     lines += 1

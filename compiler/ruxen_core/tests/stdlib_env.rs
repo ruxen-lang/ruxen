@@ -40,7 +40,12 @@ where
     let root = workspace_root();
     let tmp_dir = root.join("tmp");
     let _ = std::fs::create_dir_all(&tmp_dir);
-    let bin_path = tmp_dir.join(format!("{}.bin", basename));
+    let bin_path = tmp_dir.join(format!(
+        "{}-{}-{}.bin",
+        basename,
+        std::process::id(),
+        ruxen_unique_id()
+    ));
 
     let mut lexer = Lexer::new(source);
     let tokens = lexer.tokenize().expect("lex");
@@ -72,6 +77,7 @@ where
         cmd.env(k, v);
     }
     let output = cmd.output().expect("run binary");
+    let _ = std::fs::remove_file(&bin_path);
     (
         String::from_utf8_lossy(&output.stdout).to_string(),
         String::from_utf8_lossy(&output.stderr).to_string(),
@@ -185,4 +191,10 @@ fn env_args_includes_program_name() {
         "expected non-empty args, got: {}",
         stdout
     );
+}
+
+fn ruxen_unique_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
 }

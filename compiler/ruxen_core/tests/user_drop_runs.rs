@@ -28,7 +28,11 @@ fn user_drop_runs_at_scope_exit() {
     let root = workspace_root();
     let tmp_dir = root.join("tmp");
     let _ = std::fs::create_dir_all(&tmp_dir);
-    let bin_path = tmp_dir.join("user_drop_runs.bin");
+    let bin_path = tmp_dir.join(format!(
+        "user_drop_runs-{}-{}.bin",
+        std::process::id(),
+        ruxen_unique_id()
+    ));
 
     let source = rx("user_drop_runs_at_scope_exit");
     let mut lexer = Lexer::new(&source);
@@ -51,6 +55,7 @@ fn user_drop_runs_at_scope_exit() {
     codegen::compile(&mir, bin_path.to_str().unwrap()).expect("codegen");
 
     let output = Command::new(&bin_path).output().expect("run binary");
+    let _ = std::fs::remove_file(&bin_path);
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
 
     assert!(
@@ -77,4 +82,10 @@ fn user_drop_runs_at_scope_exit() {
         "drop ran before the last use. stdout=[{}]",
         stdout
     );
+}
+
+fn ruxen_unique_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
 }

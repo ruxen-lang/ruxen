@@ -1,7 +1,7 @@
 def main
-  var h: Map[Int, Int] = Map.new
+  var h: Hash[Int, Int] = Hash.new
   h.insert(1, 10)
   h.insert(2, 20)
-  puts "has1=#{h.contains_key(1)}"
-  puts "has5=#{h.contains_key(5)}"
+  puts "has1=#{h.key?(1)}"
+  puts "has5=#{h.key?(5)}"
 end

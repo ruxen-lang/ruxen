@@ -1,0 +1,3 @@
+lib "runtime/process.c"
+  def exit as "ruxen_process_exit"(code: Int) -> Never
+end

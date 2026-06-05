@@ -1,0 +1,5 @@
+# first
+# second
+def main
+  puts "hello"
+end

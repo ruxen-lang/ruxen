@@ -1,6 +1,6 @@
 def main
   let v = [1, 2, 3]
-  let out = v.iter.map { |n| "#{n}" }.collect_vec
+  let out = v.map { |n| "#{n}" }
   let joined = out.join(",")
   puts joined
 end

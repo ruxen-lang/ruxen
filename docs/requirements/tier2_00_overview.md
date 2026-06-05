@@ -127,7 +127,7 @@ pointer-sized element types and already leaks silently on tuples and
 structs larger than 8 bytes (tier1_01 §2.1 note at line 29). A
 well-specified monomorphization pass simultaneously unblocks:
 
-1. the tier-1 stdlib (which needs `Map[K, V]` where `V` is not
+1. the tier-1 stdlib (which needs `Hash[K, V]` where `V` is not
    pointer-sized),
 2. associated types as concrete types,
 3. GATs,

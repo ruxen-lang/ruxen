@@ -2,7 +2,7 @@ use std.env.vars
 
 def main
   let m = vars()
-  if m.len > 0
+  if m.size > 0
     puts "non_empty"
   else
     puts "empty"

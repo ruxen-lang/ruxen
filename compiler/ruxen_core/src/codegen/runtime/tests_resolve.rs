@@ -25,10 +25,10 @@ fn unimplemented_vec_combinators_are_rejected() {
     // — see `implemented_vec_combinators_resolve`. The list here is
     // limited to combinators with no MIR inliner and no runtime symbol.
     for m in [
-        "Vec[Int]_fold",
+        "Vec[Int]_reduce",
         "Vec[Int]_collect",
         "Vec[Int]_map",
-        "Vec[Int]_filter",
+        "Vec[Int]_select",
     ] {
         assert!(
             runtime_name(m).is_err(),

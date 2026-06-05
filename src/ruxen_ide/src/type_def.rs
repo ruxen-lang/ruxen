@@ -15,8 +15,8 @@
 //!   call returns the span of `class Counter` (the return type of
 //!   `build_counter`).
 //! - Cursor on `x: Int` returns `None` — primitives have no source.
-//! - Cursor on `let v: &Vec[T] = ...` peels `&` and `[T]` and returns
-//!   the span of `class Vec`.
+//! - Cursor on `let v: &Array[T] = ...` peels `&` and `[T]` and returns
+//!   the span of `class Array`.
 
 use ruxen_core::hir::types::Ty;
 use ruxen_core::resolve::symbols::{DefKind, SymbolTable};
@@ -128,8 +128,8 @@ fn field_ty(symbols: &SymbolTable, object_ty: &Ty, field_name: &str) -> Option<T
 /// hit a named (Class/Struct/Enum) carrier — or fail.
 ///
 /// Container generics like `Array[T]`, `Option[T]`, `Result[T, E]`,
-/// `Map[K, V]`, `Set[T]`, `Tuple(...)`, `FixedArray(T, N)` are NOT
-/// auto-unwrapped: the spec says `Vec[T]` should land on `Vec`'s
+/// `Hash[K, V]`, `Set[T]`, `Tuple(...)`, `FixedArray(T, N)` are NOT
+/// auto-unwrapped: the spec says `Array[T]` should land on `Array`'s
 /// declaration, not on `T`'s. These primitive containers also have no
 /// source span, so they return `None` at the lookup step.
 fn peel_to_named(ty: &Ty) -> Option<NamedType> {

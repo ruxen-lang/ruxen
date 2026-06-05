@@ -1,7 +1,7 @@
 def main
-  var h: Map[Int, Int] = Map.new
+  var h: Hash[Int, Int] = Hash.new
   h.insert(1, 10)
   let _ks: Array[&Int] = h.keys
   let _vs: Array[&Int] = h.values
-  let _it: Array[&Int] = h.iter
+  let _ps: Array[(Int, Int)] = h.to_a
 end

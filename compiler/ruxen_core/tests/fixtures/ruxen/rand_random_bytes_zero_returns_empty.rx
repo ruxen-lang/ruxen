@@ -4,10 +4,10 @@ use std.rand.random_bytes
 def main
   match random_bytes(0)
     Ok(buf) ->
-      if buf.len == 0
+      if buf.size == 0
         puts "ok"
       else
-        puts "fail len=#{buf.len}"
+        puts "fail len=#{buf.size}"
       end
     Err(_) -> puts "fail err"
   end

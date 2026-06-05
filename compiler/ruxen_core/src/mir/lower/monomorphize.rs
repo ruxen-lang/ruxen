@@ -147,7 +147,18 @@ impl<'a> Lowerer<'a> {
                         collect_classes(sub, ffi_classes, out);
                     }
                 }
-                _ => {}
+                // No generic-class instances to collect from these. Enumerated
+                // explicitly (no `_`) to match the no-wildcard discipline of
+                // `walk_tys_in_item` / `walk_tys_in_expr` below — a new HirItem
+                // variant must be triaged here at compile time.
+                HirItem::Function(_)
+                | HirItem::Struct(_)
+                | HirItem::Enum(_)
+                | HirItem::Impl(_)
+                | HirItem::Const(_)
+                | HirItem::Mixin(_)
+                | HirItem::TypeAlias(_)
+                | HirItem::Newtype(_) => {}
             }
         }
         let mut classes: HashMap<String, HirClassDef> = HashMap::new();
@@ -367,7 +378,26 @@ fn walk_tys_in_item(item: &HirItem, f: &mut impl FnMut(&Ty)) {
                 walk_tys_in_item(sub, f);
             }
         }
-        _ => {}
+        // Const initializers and mixin default-method bodies CAN host
+        // generic-class instantiations; walk them so a class used only there
+        // is still monomorphized (same hole class as the map-literal value).
+        HirItem::Const(c) => {
+            f(&c.ty);
+            walk_tys_in_expr(&c.value, f);
+        }
+        HirItem::Mixin(m) => {
+            for it in &m.items {
+                if let HirMixinItem::DefaultMethod(func) = it {
+                    walk_tys_in_func(func, f);
+                }
+            }
+        }
+        // Type aliases / newtypes only re-name an existing type; the
+        // underlying instantiation is recorded at the use site, and the alias
+        // target itself is not a fresh generic-class use to monomorphize.
+        // Enumerated explicitly (no `_ =>`) so a new `HirItem` variant that
+        // carries methods/exprs becomes a compile error here.
+        HirItem::TypeAlias(_) | HirItem::Newtype(_) => {}
     }
 }
 
@@ -501,7 +531,33 @@ fn walk_tys_in_expr(expr: &HirExpr, f: &mut impl FnMut(&Ty)) {
                 walk_tys_in_expr(a, f);
             }
         }
-        _ => {}
+        // Map literals carry key/value sub-expressions whose types (and the
+        // generic-class instantiations inside them) must be walked. The
+        // previous `_ => {}` silently dropped these, so a generic class used
+        // ONLY as a map-literal value (e.g. `{ 1 => Box.new(5) }`) was never
+        // monomorphized — a latent link-failure hole the exhaustive match
+        // now closes.
+        HirExprKind::MapLiteral(pairs) => {
+            for (k, v) in pairs {
+                walk_tys_in_expr(k, f);
+                walk_tys_in_expr(v, f);
+            }
+        }
+        // Leaves with no nested `HirExpr` / `Ty` to walk. Enumerated
+        // explicitly (no `_ =>`) so a new `HirExprKind` variant that DOES
+        // carry a reachable type becomes a compile error here instead of a
+        // silently-skipped monomorphization target.
+        HirExprKind::IntLiteral(_)
+        | HirExprKind::FloatLiteral(_)
+        | HirExprKind::StringLiteral(_)
+        | HirExprKind::BoolLiteral(_)
+        | HirExprKind::CharLiteral(_)
+        | HirExprKind::UnitLiteral
+        | HirExprKind::RegexLiteral { .. }
+        | HirExprKind::VarRef(_)
+        | HirExprKind::Continue
+        | HirExprKind::NullLiteral
+        | HirExprKind::Error => {}
     }
 }
 

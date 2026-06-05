@@ -1,10 +1,10 @@
 use std.io.{stdout, stderr, Stdout, Stderr, IoError}
 
-def write_stdout(out: Stdout) -> Result[(), IoError]
+def write_stdout(out: Stdout) -> Result[nil, IoError]
   out.write_str("hello stdout")
 end
 
-def write_stderr(err: Stderr) -> Result[(), IoError]
+def write_stderr(err: Stderr) -> Result[nil, IoError]
   err.write_str("hello stderr")
 end
 

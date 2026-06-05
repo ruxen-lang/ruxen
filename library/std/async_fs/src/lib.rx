@@ -14,7 +14,7 @@
 ##   AsyncFile.create(path)       -> AsyncOpenFuture (write+create+trunc)
 ##   f.read_to_string()           -> AsyncReadToStringFuture
 ##   f.write_all(content)         -> AsyncWriteAllFuture
-##   f.close                      -> Result[(), IoError]   (sync convenience)
+##   f.close                      -> Result[nil, IoError]   (sync convenience)
 ##
 ## Why a separate `async_fs` package rather than extending `fs/src/lib.rx`:
 ##   - `fs/src/lib.rx` loads BEFORE `future/src/lib.rx` in
@@ -51,12 +51,12 @@ lib "runtime/async_fs.c"
   def ruxen_async_read_state_get_fd(state: Int) -> Int
   def ruxen_async_read_step(state: Int) -> Int
   def ruxen_async_read_state_take_result(state: Int) -> Result[String, IoError]
-  def ruxen_async_read_state_free(state: Int) -> ()
+  def ruxen_async_read_state_free(state: Int) -> nil
   def ruxen_async_write_state_new(fd: Int, content: &String) -> Int
   def ruxen_async_write_state_get_fd(state: Int) -> Int
   def ruxen_async_write_step(state: Int) -> Int
-  def ruxen_async_write_state_take_result(state: Int) -> Result[(), IoError]
-  def ruxen_async_write_state_free(state: Int) -> ()
+  def ruxen_async_write_state_take_result(state: Int) -> Result[nil, IoError]
+  def ruxen_async_write_state_free(state: Int) -> nil
 end
 
 ## Workaround for the 4B e2e fixture: the canonical `String == String`

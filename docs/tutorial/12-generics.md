@@ -126,7 +126,7 @@ class Stack[T]
   end
 
   def is_empty -> Bool
-    self.items.is_empty
+    self.items.empty?
   end
 end
 ```
@@ -208,7 +208,7 @@ Add methods to a generic type only when the type parameter satisfies a bound:
 ```ruxen
 extension Container[T]
   def count -> Int
-    self.items.len
+    self.items.size
   end
 end
 
@@ -232,7 +232,7 @@ When you start returning references from generic functions, you may see the comp
 
 ```ruxen
 def longest[a](x: &a String, y: &a String) -> &a String
-  if x.len > y.len
+  if x.size > y.size
     x
   else
     y

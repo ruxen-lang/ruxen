@@ -40,14 +40,14 @@ class TimeSleepFuture
   remaining_nanos: Int
   handle: Int
   include Future
-  type Output = ()
+  type Output = nil
 
   def init(d: &Duration)
     self.remaining_nanos = d.as_nanos
     self.handle = 0
   end
 
-  def var poll(cx: &var Context) -> Poll[()]
+  def var poll(cx: &var Context) -> Poll[nil]
     # user-written Ruxen body that calls FFI helpers
     ...
   end
@@ -174,7 +174,7 @@ The trio-leak detector. Add a fresh dummy package
     end
 
     lib "runtime/foobar.c"
-      def drop as "ruxen_foobar_drop"(self) -> ()
+      def drop as "ruxen_foobar_drop"(self) -> nil
     end
   end
   ```

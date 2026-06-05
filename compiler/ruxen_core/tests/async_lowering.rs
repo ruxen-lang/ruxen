@@ -591,3 +591,29 @@ fn tail_referencing_pre_await_local_works() {
         field_names
     );
 }
+
+// ─── Bug #1 — await inside an enum-variant constructor arg ──────────
+
+/// `let x = Option.Some(make_int().await)` — the `.await` lives inside
+/// an `ExprKind::EnumVariant` argument. The OLD hand-rolled
+/// `expr_contains_await` had a `_ => false` arm and missed `EnumVariant`,
+/// so the fn routed to the no-await lowering path and the resolver then
+/// misreported E1110 ("`.await` only valid inside async def"). After the
+/// Visit migration the await-scan recurses into the variant arg, so the
+/// await-aware path is taken and NO E1110 is emitted.
+#[test]
+fn await_inside_enum_variant_arg_is_detected() {
+    let result = typeck_result(&rx("async_await_in_enum_variant"));
+    let codes: Vec<String> = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.level == DiagnosticLevel::Error)
+        .filter_map(|d| d.code.clone())
+        .collect();
+    assert!(
+        !codes.iter().any(|c| c == "E1110"),
+        "must NOT misreport E1110 for `.await` inside an enum-variant arg; got codes: {:?} ({:?})",
+        codes,
+        error_messages(&result.diagnostics)
+    );
+}

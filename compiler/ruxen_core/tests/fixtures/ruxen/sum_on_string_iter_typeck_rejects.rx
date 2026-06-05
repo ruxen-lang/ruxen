@@ -1,4 +1,4 @@
 def main
   let v: Array[String] = Array.new
-  let _ = v.iter.sum
+  let _ = v.sum
 end

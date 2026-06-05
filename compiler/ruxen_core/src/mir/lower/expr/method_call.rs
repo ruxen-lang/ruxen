@@ -159,35 +159,30 @@ impl<'a> Lowerer<'a> {
                 // two, so the Cranelift verifier rejects the call. We
                 // route these names through the same direct-dispatch
                 // path as `Command.new` instead.
+                // Static-constructor fast-path GATE. This is a fast-path
+                // allowlist, NOT the static-vs-instance authority — the
+                // downstream `String_new` special-case (line ~396) and the
+                // base-type dispatch allowlist (line ~277) make the accepted
+                // method set here behaviourally narrower than
+                // `runtime_abi::is_static_constructor` (the reconciled union).
+                // Routing this gate through the union would reroute
+                // `String.from` / `String.with_capacity` / collection
+                // `from_iter` into the `String_new` / `Class_init` fast path —
+                // a silent dispatch change. Per the Phase 2 plan obligation
+                // ("do not silently widen the fast path"), the per-type cascade
+                // stays explicit here; `is_static_constructor` is the authority
+                // only for the static-vs-instance decision in `util.rs`.
                 let is_file_static_ctor = (type_name == "File" || type_name.starts_with("File["))
                     && matches!(
                         method_name.as_str(),
                         "open" | "create" | "append" | "open_options"
                     );
-                // Phase 2 #06.5 T5: TcpListener.bind / TcpStream.connect
-                // are static-style constructors — runtime entries
-                // (`ruxen_tcp_listener_bind`, `ruxen_tcp_stream_connect`)
-                // take a single `const char*` and return Result. Same
-                // fast-path reasoning as File.open / File.create.
                 let is_tcp_listener_static_ctor =
                     type_name == "TcpListener" && method_name == "bind";
                 let is_tcp_stream_static_ctor =
                     type_name == "TcpStream" && method_name == "connect";
-                // Phase 2 #06.5 T6: BufReader / BufWriter static ctors.
-                // `.new(inner)` and `.with_capacity(cap, inner)` both
-                // dispatch through the fast path. The runtime callee
-                // is suffix-picked (`_new_file` vs `_new_tcp`) below
-                // from the inner argument's type.
                 let is_bufio_static_ctor = matches!(type_name.as_str(), "BufReader" | "BufWriter")
                     && matches!(method_name.as_str(), "new" | "with_capacity");
-                // Phase 2 stdlib (#06.5 T4): Duration / Instant
-                // static-style constructors join the same fast path.
-                // `Duration.from_secs(5)` / `Duration.from_millis(ms)`
-                // / `Duration.from_micros(us)` /
-                // `Duration.from_nanos(ns)` and `Instant.now()`
-                // dispatch directly to their runtime symbol with no
-                // synthetic `self`. Same reason as File: the runtime
-                // entry points take 0–1 args, not `self + args`.
                 let is_duration_static_ctor = type_name == "Duration"
                     && matches!(
                         method_name.as_str(),

@@ -858,7 +858,7 @@ end";
 
     #[test]
     fn safe_navigation() {
-        let expr = parse_expr("user?.name");
+        let expr = parse_expr("user&.name");
         match &expr.kind {
             ExprKind::SafeNav { object, field } => {
                 assert_eq!(field, "name");
@@ -877,17 +877,14 @@ end";
 
     #[test]
     fn try_operator() {
-        let expr = parse_expr("file.read?");
+        // After ruby-naming, a trailing `?` on a lowercase name is a
+        // predicate method (`read?`), so the try operator binds after a
+        // call/index: `file.read()?` is `Try(file.read())`.
+        let expr = parse_expr("file.read()?");
         match &expr.kind {
             ExprKind::Try(inner) => match &inner.kind {
-                ExprKind::FieldAccess { object, field } => {
-                    assert_eq!(field, "read");
-                    match &object.kind {
-                        ExprKind::Identifier(name) => assert_eq!(name, "file"),
-                        other => panic!("expected Identifier(file), got {:?}", other),
-                    }
-                }
-                other => panic!("expected FieldAccess, got {:?}", other),
+                ExprKind::MethodCall { method, .. } => assert_eq!(method, "read"),
+                other => panic!("expected MethodCall, got {:?}", other),
             },
             other => panic!("expected Try, got {:?}", other),
         }
@@ -906,6 +903,27 @@ end";
                 assert!(!c.is_move);
                 assert_eq!(c.params.len(), 1);
                 assert_eq!(c.params[0].name, "x");
+                match &c.body {
+                    ClosureBody::Block(block) => {
+                        assert_eq!(block.statements.len(), 1);
+                    }
+                    other => panic!("expected Block closure body, got {:?}", other),
+                }
+            }
+            other => panic!("expected Closure, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn closure_do_end_no_params() {
+        // Bare `do…end` (no `|params|`) is a no-param closure, never a
+        // standalone block-value expression (Ruby has no `let v = do…end`).
+        let expr = parse_expr("do\n      1 + 2\n    end");
+        match &expr.kind {
+            ExprKind::Closure(c) => {
+                assert!(!c.is_async);
+                assert!(!c.is_move);
+                assert_eq!(c.params.len(), 0);
                 match &c.body {
                     ClosureBody::Block(block) => {
                         assert_eq!(block.statements.len(), 1);
@@ -1038,7 +1056,8 @@ end";
 
     #[test]
     fn range_exclusive() {
-        let expr = parse_expr("0..10");
+        // ruby-naming.spec.md §3.10b: `...` is the EXCLUSIVE range.
+        let expr = parse_expr("0...10");
         match &expr.kind {
             ExprKind::Range {
                 start,
@@ -1063,7 +1082,8 @@ end";
 
     #[test]
     fn range_inclusive() {
-        let expr = parse_expr("0..=10");
+        // ruby-naming.spec.md §3.10b: `..` is the INCLUSIVE range.
+        let expr = parse_expr("0..10");
         match &expr.kind {
             ExprKind::Range {
                 start,
@@ -1665,5 +1685,36 @@ end";
             }
             other => panic!("expected BinaryOp(MatchOp) at top, got {:?}", other),
         }
+    }
+
+    /// ruby-naming.spec.md §3.10: `()` is not Ruxen syntax — the unit
+    /// type and value are both spelled `nil`. The parser rejects `()`
+    /// in both positions with a fix-it pointing at `nil`.
+    fn parse_errors(input: &str) -> Vec<crate::diagnostics::Diagnostic> {
+        let mut lexer = Lexer::new(input);
+        let tokens = lexer.tokenize().expect("lexer failed");
+        let mut parser = Parser::new(tokens);
+        match parser.parse() {
+            Ok(_) => vec![],
+            Err(diags) => diags,
+        }
+    }
+
+    #[test]
+    fn unit_paren_type_is_rejected_use_nil() {
+        let diags = parse_errors("def f(x: Int) -> ()\n  x\nend\n");
+        assert!(
+            diags.iter().any(|d| d.message.contains("use `nil`")),
+            "`-> ()` should be rejected with a `nil` fix-it; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn unit_paren_value_is_rejected_use_nil() {
+        let diags = parse_errors("def f\n  let x = ()\n  x\nend\n");
+        assert!(
+            diags.iter().any(|d| d.message.contains("nil")),
+            "`()` value should be rejected with a `nil` fix-it; got: {diags:?}"
+        );
     }
 }

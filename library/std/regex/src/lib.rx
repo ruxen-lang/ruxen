@@ -34,11 +34,11 @@ class Match
     def end_pos as "ruxen_match_end" -> Int
 
     ## Numbered capture group. `group(0)` returns the whole match for
-    ## symmetry with JS `match[0]`. Returns None if `n` exceeds the
+    ## symmetry with JS `match[0]`. Returns nil if `n` exceeds the
     ## group count or the group didn't participate in the match.
     def group as "ruxen_match_group"(n: Int) -> Option[String]
 
-    ## Named capture from `(?<name>...)`. None if no such group or it
+    ## Named capture from `(?<name>...)`. nil if no such group or it
     ## didn't participate.
     def named as "ruxen_match_named"(name: &String) -> Option[String]
 
@@ -47,7 +47,7 @@ class Match
     def groups as "ruxen_match_groups" -> Array[Option[String]]
 
     ## All successful named captures.
-    def named_groups as "ruxen_match_named_groups" -> HashMap[String, String]
+    def named_groups as "ruxen_match_named_groups" -> Hash[String, String]
   end
 end
 
@@ -60,7 +60,7 @@ class Regex
     ## Predicate. The `~=` operator desugars to this.
     def is_match as "ruxen_regex_is_match"(text: &String) -> Bool
 
-    ## First match, with capture data, or None.
+    ## First match, with capture data, or nil.
     ## Named `find` (not `match`) because `match` is a reserved
     ## keyword in Ruxen — block opener for pattern matching. The C
     ## symbol stays `ruxen_regex_match`; only the surface name

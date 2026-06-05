@@ -6,7 +6,7 @@ def main
   b.push(3)
   b.push(4)
   a.extend(&b)
-  puts "len=#{a.len}"
+  puts "len=#{a.size}"
   for x in &a
     puts "#{x}"
   end

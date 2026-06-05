@@ -1,6 +1,6 @@
 def main
   let v = [1, 2, 3, 4, 5, 6]
-  let n = v.iter.skip(1).take(3).count
+  let n = v.drop(1).take(3).count
   let s = n.to_string
   puts "n=#{s}"
 end

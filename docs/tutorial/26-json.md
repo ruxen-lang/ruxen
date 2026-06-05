@@ -28,9 +28,9 @@ def main
   match JSON.object_get(&root, "name")
     Some(v) -> match JSON.as_string(&v)
       Some(s) -> puts "name = #{s}"
-      None    -> puts "name not a string"
+      nil    -> puts "name not a string"
     end
-    None -> puts "no name"
+    nil -> puts "no name"
   end
 
   let back = JSON.stringify(&root).expect!("stringify")
@@ -105,7 +105,7 @@ end
 
 ### Scalar extraction
 
-Each returns `Option[T]` — `None` when the underlying kind doesn't match:
+Each returns `Option[T]` — `nil` when the underlying kind doesn't match:
 
 - `JSON.as_bool   (v: &Json) -> Option[Bool]`
 - `JSON.as_int    (v: &Json) -> Option[Int]`
@@ -116,7 +116,7 @@ Each returns `Option[T]` — `None` when the underlying kind doesn't match:
 def show_int(v: Json, label: &String)
   match JSON.as_int(&v)
     Some(n) -> puts "#{label}=#{n}"
-    None    -> puts "#{label}=missing"
+    nil    -> puts "#{label}=missing"
   end
 end
 ```
@@ -133,7 +133,7 @@ let f = JSON.float(1.5)
 let s = JSON.string("hi")
 ```
 
-Composite builders take ownership of an `Array[Json]` or `Map[String, Json]`:
+Composite builders take ownership of an `Array[Json]` or `Hash[String, Json]`:
 
 ```ruxen
 var items: Array[Json] = Array.new
@@ -141,7 +141,7 @@ items.push(JSON.int(1))
 items.push(JSON.int(2))
 let arr = JSON.array(items)
 
-var fields: Map[String, Json] = Map.new
+var fields: Hash[String, Json] = Hash.new
 fields.insert(String.from("name"), JSON.string("ruxen"))
 fields.insert(String.from("items"), arr)
 let obj = JSON.object(fields)
@@ -186,7 +186,7 @@ def main
   items.push(JSON.int(2))
   let arr = JSON.array(items)
 
-  var fields: Map[String, Json] = Map.new
+  var fields: Hash[String, Json] = Hash.new
   fields.insert(String.from("title"), JSON.string("demo"))
   fields.insert(String.from("items"), arr)
   let obj = JSON.object(fields)
@@ -199,9 +199,9 @@ def main
   match JSON.object_get(&round, "title")
     Some(title) -> match JSON.as_string(&title)
       Some(v) -> puts "title=#{v}"
-      None    -> puts "title=missing"
+      nil    -> puts "title=missing"
     end
-    None -> puts "title=missing"
+    nil -> puts "title=missing"
   end
 end
 ```
@@ -215,9 +215,9 @@ title=demo
 
 ## 7. Common mistakes
 
-- **Calling `as_int` on a node that was parsed as a float.** JSON numbers with a `.` parse as `Float`-tagged nodes; `as_int` returns `None`. Use `as_float` and convert if you want an integer view.
+- **Calling `as_int` on a node that was parsed as a float.** JSON numbers with a `.` parse as `Float`-tagged nodes; `as_int` returns `nil`. Use `as_float` and convert if you want an integer view.
 - **`unwrap!` on the parse `Result` for wire data.** Even strict-mode JSON from a trusted source can be truncated. Match and report a clean error instead.
-- **Assuming key order in objects.** The stringifier emits keys in iteration order of the source `Map`, which is insertion order for `std.map.Map`. Don't rely on this for cross-language protocol compatibility — JSON itself says key order is unspecified.
+- **Assuming key order in objects.** The stringifier emits keys in iteration order of the source `Hash`, which is insertion order for `std.map.Hash`. Don't rely on this for cross-language protocol compatibility — JSON itself says key order is unspecified.
 - **Mutating an existing `Json`.** The API is build-then-stringify, not mutate-in-place. To change a field, build a new object containing the new field set.
 
 > **Try it:** modify the round-trip example to also pull out the `items` array and print its length.

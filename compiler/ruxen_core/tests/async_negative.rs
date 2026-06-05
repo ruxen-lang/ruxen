@@ -201,3 +201,38 @@ fn await_in_for_body_rejected_e1115() {
             .collect::<Vec<_>>()
     );
 }
+
+/// Bug-by-construction (Phase 3 Task 1): `.await` nested inside an
+/// `EnumVariant` argument (`Some(g().await)`) inside a loop body must
+/// still raise E1115. The pre-Phase-3 hand-rolled `collect_e1115_in_expr`
+/// matched a fixed set of expression forms and ended with a trailing
+/// `_ => {}`, so it never descended into `EnumVariant` args — the
+/// `.await` was invisible and no diagnostic fired. Migrating the
+/// collector onto the exhaustive `parser::visit::walk_expr` closes the
+/// drift: every expression form is now traversed.
+#[test]
+fn await_in_loop_inside_enum_variant_arg_is_diagnosed_e1115() {
+    let source = r#"
+async def g() -> Int
+  1
+end
+
+async def run() -> Int
+  let var i = 0
+  while i < 3
+    let _x = Some(g().await)
+    i = i + 1
+  end
+  i
+end
+"#;
+    let errors = typeck_errors(source);
+    assert!(
+        errors.iter().any(|d| d.code.as_deref() == Some("E1115")),
+        "await nested in EnumVariant arg inside a loop must raise E1115; got {:?}",
+        errors
+            .iter()
+            .map(|d| (d.code.clone(), d.message.clone()))
+            .collect::<Vec<_>>()
+    );
+}

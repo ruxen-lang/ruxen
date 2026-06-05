@@ -3,7 +3,7 @@ use std.fs.read_to_string
 use std.io.{IoError, eputs, puts}
 use std.process.exit
 
-def print_file(path: &String) -> Result[(), IoError]
+def print_file(path: &String) -> Result[nil, IoError]
   let text = read_to_string(path)?
   puts(text)
   Ok(nil)
@@ -11,7 +11,7 @@ end
 
 def main
   let argv = args
-  if argv.len < 2
+  if argv.size < 2
     eputs("usage: cli-utility <file>")
     exit(1)
   end

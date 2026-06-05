@@ -4,7 +4,7 @@
 [docs/requirements/tier1_01_stdlib.md §2.3](../../requirements/tier1_01_stdlib.md),
 [docs/requirements/tier1_05_implicit_includes.md](../../requirements/tier1_05_implicit_includes.md).
 
-**Status:** shipped Phase 2 #04-#05 (mixin + implicit include + Map key
+**Status:** shipped Phase 2 #04-#05 (mixin + implicit include + Hash key
 wiring).  Spec backfilled here so the v1 hash surface has a single
 source of truth.
 
@@ -13,7 +13,7 @@ Ruxen's hashing surface is intentionally thin.  There is one mixin —
 slot free for the type) — exposing one method that returns a single
 `Int`.  No `Hasher` builder, no `BuildHasher`, no DOS-resistant
 random seed.  Custom hashers and incremental builders are explicit
-v2 work; v1 ships exactly enough for `Map[K, V]` and
+v2 work; v1 ships exactly enough for `Hash[K, V]` and
 `Set[T]` to key on user types via implicit `include Hashable`.
 
 ---
@@ -39,7 +39,7 @@ needs no `import` to refer to it.
 
 `Int`, `Int8`/`Int16`/`Int32`/`Int64`, `UInt8`/`UInt16`/`UInt32`/
 `UInt64`, `USize`/`ISize`, `Bool`, `Char`, `String`, and `&str` are
-all valid `Map` keys / `Set` elements: the runtime hashes
+all valid `Hash` keys / `Set` elements: the runtime hashes
 them with a stable 64-bit FNV-style mix
 (`runtime/runtime.c::ruxen_hash_bits` for ints, `ruxen_hash_str` for
 strings; bool / char widen into `ruxen_hash_bits`).
@@ -53,11 +53,11 @@ is a v2 follow-up that needs primitive-Hashable includes and method
 mangling support (`Int_hash_code`, `String_hash_code`) wired
 through `runtime_name`.
 
-`Float` / `Float32` / `Float64` are **not** valid Map keys —
+`Float` / `Float32` / `Float64` are **not** valid Hash keys —
 NaN ≠ NaN breaks the equality contract `Hashable` shares with `Eq`.
 `ty_is_valid_hash_key` rejects them.
 
-`Array[T]`, `Map[K, V]`, and `Set[T]` are also explicitly
+`Array[T]`, `Hash[K, V]`, and `Set[T]` are also explicitly
 non-keys; aggregating container hashes belongs to v2 once a
 `Hasher` builder exists.
 
@@ -83,9 +83,9 @@ let s = Score.new("alice", 42)
 puts "#{s.hash_code}"   # prints a stable Int
 ```
 
-## B4 — `Map[K, V]` and `Set[T]` require `K: Hashable`
+## B4 — `Hash[K, V]` and `Set[T]` require `K: Hashable`
 
-The container constructors propagate the bound: `Map[K, V].new`
+The container constructors propagate the bound: `Hash[K, V].new`
 where `K` is non-`Hashable` is rejected at type-check time.  This
 check is rooted at the type-construction site
 (`resolve/mod.rs::ty_is_valid_hash_key`) so a bad `K` is caught
@@ -118,7 +118,7 @@ This is the exact pattern pin-tested by
   architecture.
 - 64-bit `Int` width on every supported target.
 - **Not** DOS-resistant (no random seed).  An attacker who controls
-  the keys inserted into a `Map` can force pathological bucket
+  the keys inserted into a `Hash` can force pathological bucket
   distributions.  v2 will gain a randomly seeded default hasher;
   for v1, server code that hashes attacker-controlled input should
   layer its own keyed cryptographic hash on top.
@@ -134,9 +134,9 @@ This is the exact pattern pin-tested by
 |-----------------------------------------------------|-------------------------------------------------------|----------------------------------------------|
 | B1 / B5 — bound dispatches `hash_code` on user types with implicit include | `derive_hashable_dispatches_through_trait_bounds`     | `tests/implicit_mixin_dispatch.rs`             |
 | B3 — implicit include rejects non-Hashable field (E0615) | `derive_hash_on_struct_with_non_hash_field_emits_e0615` | `tests/implicit_negatives.rs` (`NotHashable` fixture) |
-| B2 — primitive `String` / `Int` hash via runtime    | covered indirectly via `Map[String, V]` / `Map[Int, V]` insert + lookup pin tests | `tests/hashmap_*.rs`                         |
+| B2 — primitive `String` / `Int` hash via runtime    | covered indirectly via `Hash[String, V]` / `Hash[Int, V]` insert + lookup pin tests | `tests/hashmap_*.rs`                         |
 | B2 v2 follow-up — `T: Hashable` dispatch for primitive `T` | `primitive_int_and_string_dispatch_through_hashable_bound` (`#[ignore]` pending v2) | `tests/implicit_mixin_dispatch.rs`             |
-| B4 — `Map[K, V]` rejects non-Hashable K             | covered by `ty_is_valid_hash_key` rejection diags     | `tests/hashmap_*.rs`                         |
+| B4 — `Hash[K, V]` rejects non-Hashable K             | covered by `ty_is_valid_hash_key` rejection diags     | `tests/hashmap_*.rs`                         |
 
 The B6 stability claims are attested by the v1 release checklist
 rather than runtime tests; persisting hash codes is not a supported
@@ -149,14 +149,14 @@ use case so a regression test would be a costly noise generator.
 - User-callable `.hash_code` on primitives (`42.hash_code`,
   `"x".hash_code`) and the corresponding monomorphisation of a
   `T: Hashable` bound for primitive `T`.  The runtime already
-  hashes primitives for `Map` keys; v2 will expose the same
+  hashes primitives for `Hash` keys; v2 will expose the same
   bit-mix as a method via `Int_hash_code` / `String_hash_code`
   shims wired through `runtime_name`.
 - `Hasher` mixin — incremental hash builder (`update(&[u8])`,
   `finish -> Int`).  v1's `hash_code` is one-shot.
-- `BuildHasher` / pluggable hash strategies on `Map`.
+- `BuildHasher` / pluggable hash strategies on `Hash`.
 - DOS-resistant default hasher with random seed.
-- `Hashable` include for `Array[T]` / `Map[K, V]` / `Set[T]`
+- `Hashable` include for `Array[T]` / `Hash[K, V]` / `Set[T]`
   (needs `Hasher` to fold per-element hashes deterministically).
 - `Hashable` include for `Float*` (deferred until the NaN-equality
   question has a v2 ruling).
@@ -169,7 +169,7 @@ use case so a regression test would be a costly noise generator.
 
 ## Cross-references
 
-- `Map[K, V]` surface: [map.spec.md](map.spec.md).
+- `Hash[K, V]` surface: [map.spec.md](map.spec.md).
 - `Set[T]` surface: [set.spec.md](set.spec.md).
 - Implicit-include validator that rejects non-Hashable fields: see the
   E0615 entry in `docs/errors/`.

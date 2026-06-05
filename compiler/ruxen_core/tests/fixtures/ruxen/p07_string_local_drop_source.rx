@@ -1,4 +1,4 @@
 def main
   let s = String.from("hello")
-  let _len = s.len
+  let _len = s.size
 end

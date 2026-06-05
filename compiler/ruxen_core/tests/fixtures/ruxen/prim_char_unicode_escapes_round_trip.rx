@@ -1,7 +1,7 @@
 def main
-  let a: Char = '\u{41}'          # 'A'
-  let n: Char = '\u{00F1}'        # ñ
-  let h: Char = '\u{6C34}'        # 水
+  let a: Char = ?\u{41}          # 'A'
+  let n: Char = ?\u{00F1}        # ñ
+  let h: Char = ?\u{6C34}        # 水
   puts "a=#{a}"
   puts "n=#{n}"
   puts "h=#{h}"

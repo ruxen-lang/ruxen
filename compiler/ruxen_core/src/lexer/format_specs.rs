@@ -88,7 +88,7 @@ impl<'a> Lexer<'a> {
                     continue;
                 }
                 '"' => self.lex_string(),
-                '\'' => self.lex_char(),
+                '\'' => self.lex_single_quote(),
                 '0'..='9' => self.lex_number(),
                 'a'..='z' | '_' => self.lex_identifier_or_keyword(),
                 'A'..='Z' => self.lex_type_identifier_or_keyword(),

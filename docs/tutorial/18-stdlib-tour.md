@@ -119,7 +119,7 @@ end
 |-----------------|-------------------------------|-----------------------------|
 | `args()`        | `Array[String]`               | Element 0 is the program name |
 | `var(name)`     | `Result[String, VarError]`    | `Err(NotPresent)` when unset  |
-| `vars()`        | `Map[String, String]`         | Snapshot at call time         |
+| `vars()`        | `Hash[String, String]`        | Snapshot at call time         |
 | `current_dir()` | `Result[String, IoError]`     |                             |
 
 Read-only — there is no `set_var`.
@@ -230,10 +230,10 @@ This is where `Display`, `Debug`, and the format-spec machinery live. The full w
 
 ## 10. Collections
 
-`Array`, `Map`, and `Set` are documented in [Chapter 13](13-collections.md). The patterns you'll use most:
+`Array`, `Hash`, and `Set` are documented in [Chapter 13](13-collections.md). The patterns you'll use most:
 
 ```ruxen
-var counts: Map[String, Int] = Map.new
+var counts: Hash[String, Int] = Hash.new
 for word in text.split(" ")
   counts.entry(word).or_insert(0)
 end
@@ -245,7 +245,7 @@ unique.insert(2)
 # unique now has 2 elements
 
 let v: Array[Int] = Array.new
-let doubled: Array[Int] = v.iter.map(|x| x * 2).collect[Array[Int]]()
+let doubled: Array[Int] = v.map { |x| x * 2 }
 ```
 
 ---

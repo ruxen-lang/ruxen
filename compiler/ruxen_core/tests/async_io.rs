@@ -73,7 +73,12 @@ fn compile_and_run(source: &str, basename: &str) -> (String, String, bool) {
     let root = workspace_root();
     let tmp_dir = root.join("tmp");
     let _ = std::fs::create_dir_all(&tmp_dir);
-    let bin_path = tmp_dir.join(format!("{}.bin", basename));
+    let bin_path = tmp_dir.join(format!(
+        "{}-{}-{}.bin",
+        basename,
+        std::process::id(),
+        ruxen_unique_id()
+    ));
 
     let mut lexer = Lexer::new(source);
     let tokens = lexer.tokenize().expect("lex");
@@ -94,6 +99,7 @@ fn compile_and_run(source: &str, basename: &str) -> (String, String, bool) {
     codegen::compile(&mir, bin_path.to_str().unwrap()).expect("codegen");
 
     let output = Command::new(&bin_path).output().expect("run binary");
+    let _ = std::fs::remove_file(&bin_path);
     (
         String::from_utf8_lossy(&output.stdout).to_string(),
         String::from_utf8_lossy(&output.stderr).to_string(),
@@ -317,4 +323,329 @@ fn async_file_round_trip_via_block_on() {
         stdout,
         stderr
     );
+}
+
+// ─── Phase 3 — linear N-await state-machine runtime equivalence gate ──
+//
+// EQUIVALENCE GATE for the async-lowering CFG unification (Phase 3 Path
+// A). Every other in-process `cargo test -p ruxen_core` async test is
+// typeck-only (async_lowering / async_negative) or drives the reactor
+// `block_on` path (the tests above). NONE compiles-and-runs the linear
+// `.await`-chain state machine that `lower_one_async_fn_with_await` +
+// `build_multi_state_poll_body` produce — so deleting/replacing that
+// builder could regress runtime behaviour with the suite still green.
+//
+// This pin closes that hole: an `async def chain()` with TWO chained
+// `.await`s is hand-polled N+1 (=3) times, forcing the synthesised
+// `self.__state` if-chain through state 0 (await make_int) → Pending,
+// state 1 (await make_other) → Pending, state 2 (terminal) →
+// Ready(42 + 35). The asserted stdout `77` only holds if the poll
+// skeleton advances `__state`, stores each await result in its field,
+// and folds the tail correctly. Mirrors e2e fixture
+// `722_async_def_chained_await_handpoll.rx`, inlined so the gate lives
+// in-crate and runs under `cargo test -p ruxen_core --test async_io`.
+//
+// The hand-poll driver (not `block_on`) is deliberate: it exercises the
+// state-machine poll builder directly, with no reactor in the loop, so
+// any divergence in the emitted `__state` skeleton shows up here.
+#[test]
+fn linear_chained_await_runtime_gate() {
+    let source = "\
+async def make_int() -> Int
+  42
+end
+
+async def make_other() -> Int
+  35
+end
+
+async def chain() -> Int
+  let a = make_int().await
+  let b = make_other().await
+  a + b
+end
+
+def main
+  var fut = chain()
+  var ctx = Context.test_dummy
+  var result = 0
+  match (&var fut).poll(&var ctx)
+    Poll.Ready(v) -> result = v
+    Poll.Pending -> result = result
+  end
+  match (&var fut).poll(&var ctx)
+    Poll.Ready(v) -> result = v
+    Poll.Pending -> result = result
+  end
+  match (&var fut).poll(&var ctx)
+    Poll.Ready(v) -> result = v
+    Poll.Pending -> result = result
+  end
+  puts \"#{result}\"
+end
+";
+    let (stdout, stderr, ok) = compile_and_run(source, "async_io_linear_chained_await_gate");
+    assert!(
+        ok,
+        "binary exited non-zero. stdout=[{}] stderr=[{}]",
+        stdout, stderr
+    );
+    assert_eq!(
+        stdout.trim(),
+        "77",
+        "linear two-await chain must fold to 42 + 35 = 77; got stdout=[{}] stderr=[{}]",
+        stdout,
+        stderr
+    );
+}
+
+/// FIX 2 regression — crossing-local promotion when the only tail read is
+/// inside an `EnumVariant`.
+///
+/// `expr_references_name` (which drives crossing-local promotion via
+/// `stmts_reference_name`) used to have the same `_ => false` gap as the
+/// rewriter: it missed `EnumVariant` (and `Yield`, etc.). So a pre-await
+/// `let base = ...` whose ONLY post-await read is inside the tail
+/// `Result.Ok(base + v)` was not seen as crossing, was not promoted to a
+/// state-machine field, and so did not survive the suspend — yielding the
+/// wrong fold (or an undefined local) after the resume.
+///
+/// `base = 100` is computed before the await, `v = 5` comes from the
+/// awaited future, and the tail is `Result.Ok(base + v)`. With promotion,
+/// the result is 105.
+#[test]
+fn linear_enum_variant_tail_promotes_crossing_local() {
+    let source = "\
+async def make_five() -> Int
+  5
+end
+
+async def with_base -> Result[Int, Int]
+  let base: Int = 100
+  let v = make_five().await
+  Result.Ok(base + v)
+end
+
+def main
+  let res = block_on(with_base())
+  match res
+    Ok(v)  -> puts \"#{v}\"
+    Err(e) -> puts \"err #{e}\"
+  end
+end
+";
+    let (stdout, stderr, ok) = compile_and_run(source, "async_io_linear_enum_variant_promote");
+    assert!(
+        ok,
+        "binary exited non-zero. stdout=[{}] stderr=[{}]",
+        stdout, stderr
+    );
+    assert_eq!(
+        stdout.trim(),
+        "105",
+        "pre-await `base` read only inside the `Result.Ok(base + v)` tail must \
+         be promoted to a crossing-local field; fold is 100 + 5 = 105. \
+         got stdout=[{}] stderr=[{}]",
+        stdout,
+        stderr
+    );
+}
+
+// ─── Phase 3B — LOOP state-machine runtime equivalence gates ─────────
+//
+// EQUIVALENCE GATES for the async-lowering CFG unification of the LOOP
+// shapes (Phase 3B). The linear gate above pins the non-loop path; these
+// two pin the two loop shapes that Phase 3B folds into the unified
+// `build_poll_body_cfg` (via `Edge::Loop`):
+//
+//   * `loop_single_await_runtime_gate` — a `while` loop with ONE `.await`
+//     per iteration (mirrors e2e `728d_async_loop_minimal.rx`),
+//   * `loop_multi_await_runtime_gate` — a `while` loop with TWO `.await`s
+//     per iteration (mirrors e2e `728f_async_loop_multi_await.rx`).
+//
+// Both drive the synthesised state machine through `block_on`, which
+// polls the future repeatedly: each `TickFuture` returns Pending once
+// (no reactor I/O — `Thread.yield_now` just spins) then Ready, so the
+// outer loop machine must advance across multiple iterations AND
+// re-init its per-iteration sub-future each pass. The asserted `sum`
+// only holds if the loop machine: (a) runs pre-loop init once, (b)
+// re-runs body_pre_await each iteration, (c) folds each await result
+// into the crossing-local accumulator, (d) re-evaluates the loop cond
+// on the back-edge, and (e) produces the post-loop tail. Any divergence
+// in the emitted loop skeleton (state guard, keep_iterating/pending_exit
+// flags, __sub_ready re-init, __phase advance) shows up as a wrong sum.
+//
+// These gate the deletion of the four hand-specialized loop builders:
+// they MUST stay green when loop lowering is rerouted through the
+// unified Cfg path.
+
+const TICK_FUTURE_PRELUDE: &str = "\
+class TickFuture
+  ticks: Int
+  payload: Int
+  include Future
+  type Output = Int
+
+  def init(ticks: Int, payload: Int)
+    self.ticks = ticks
+    self.payload = payload
+  end
+
+  def self.make(ticks: Int, payload: Int) -> TickFuture
+    TickFuture.new(ticks, payload)
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    if self.ticks == 0
+      Poll.Ready(self.payload)
+    else
+      self.ticks = self.ticks - 1
+      Poll.Pending
+    end
+  end
+end
+";
+
+/// Single-await loop: `while i < 2 { let v = TickFuture.make(1, 10).await; sum += v; i += 1 }`.
+/// Mirrors `728d_async_loop_minimal.rx`. Two iterations, each TickFuture
+/// goes Pending→Ready, so sum = 10 + 10 = 20.
+#[test]
+fn loop_single_await_runtime_gate() {
+    let source = format!(
+        "{TICK_FUTURE_PRELUDE}
+async def loop_two -> Int
+  var i: Int = 0
+  var sum: Int = 0
+  while i < 2
+    let v = TickFuture.make(1, 10).await
+    sum = sum + v
+    i = i + 1
+  end
+  sum
+end
+
+def main
+  let total = block_on(loop_two())
+  puts \"#{{total}}\"
+end
+"
+    );
+    let (stdout, stderr, ok) = compile_and_run(&source, "async_io_loop_single_await_gate");
+    assert!(
+        ok,
+        "binary exited non-zero. stdout=[{}] stderr=[{}]",
+        stdout, stderr
+    );
+    assert_eq!(
+        stdout.trim(),
+        "20",
+        "single-await loop must fold to 10 + 10 = 20 over two iterations; \
+         got stdout=[{}] stderr=[{}]",
+        stdout,
+        stderr
+    );
+}
+
+/// Multi-await loop: two `.await`s per iteration, the second reading the
+/// first's result. Mirrors `728f_async_loop_multi_await.rx`. Two
+/// iterations:
+///   iter 0 (i=0): a=100, b=110, sum=210
+///   iter 1 (i=1): a=110, b=120, sum=440
+#[test]
+fn loop_multi_await_runtime_gate() {
+    let source = format!(
+        "{TICK_FUTURE_PRELUDE}
+async def loop_two_awaits -> Int
+  var i: Int = 0
+  var sum: Int = 0
+  while i < 2
+    let a = TickFuture.make(1, 100 + i * 10).await
+    let b = TickFuture.make(1, a + 10).await
+    sum = sum + a + b
+    i = i + 1
+  end
+  sum
+end
+
+def main
+  let total = block_on(loop_two_awaits())
+  puts \"#{{total}}\"
+end
+"
+    );
+    let (stdout, stderr, ok) = compile_and_run(&source, "async_io_loop_multi_await_gate");
+    assert!(
+        ok,
+        "binary exited non-zero. stdout=[{}] stderr=[{}]",
+        stdout, stderr
+    );
+    assert_eq!(
+        stdout.trim(),
+        "440",
+        "multi-await loop must fold to 210 then 440 over two iterations; \
+         got stdout=[{}] stderr=[{}]",
+        stdout,
+        stderr
+    );
+}
+
+/// FIX 1 regression — crossing-local read inside an `EnumVariant` tail.
+///
+/// `rewrite_arg_refs_in_block`/`_in_expr` used to be a hand-rolled walker
+/// whose `_ => {}` arm silently dropped `ExprKind::EnumVariant` (among
+/// others: MacroCall, Yield, SafeNav(Call), IfLet, WhileLet, While, For,
+/// Loop, UnsafeBlock). So a crossing-local read inside e.g. `Result.Ok(acc)`
+/// in a poll-body tail was NOT rewritten to `self.acc`, emitting an
+/// undefined-local in the generated state machine.
+///
+/// This fn folds an accumulator across a two-iteration await loop, then
+/// produces the terminal tail `Result.Ok(acc)` — an `EnumVariant` whose
+/// argument reads the crossing-local `acc`. With the gap, `acc` stays a
+/// bare identifier (not `self.acc`) and the binary either fails to compile
+/// or prints the wrong value. Expected: acc = 10 + 10 = 20.
+#[test]
+fn loop_enum_variant_tail_crossing_local_runtime_gate() {
+    let source = format!(
+        "{TICK_FUTURE_PRELUDE}
+async def fold_to_result -> Result[Int, Int]
+  var i: Int = 0
+  var acc: Int = 0
+  while i < 2
+    let v = TickFuture.make(1, 10).await
+    acc = acc + v
+    i = i + 1
+  end
+  Result.Ok(acc)
+end
+
+def main
+  let res = block_on(fold_to_result())
+  match res
+    Ok(v)  -> puts \"#{{v}}\"
+    Err(e) -> puts \"err #{{e}}\"
+  end
+end
+"
+    );
+    let (stdout, stderr, ok) = compile_and_run(&source, "async_io_loop_enum_variant_tail_gate");
+    assert!(
+        ok,
+        "binary exited non-zero. stdout=[{}] stderr=[{}]",
+        stdout, stderr
+    );
+    assert_eq!(
+        stdout.trim(),
+        "20",
+        "crossing-local `acc` inside the `Result.Ok(acc)` EnumVariant tail \
+         must be rewritten to `self.acc`; fold is 10 + 10 = 20. \
+         got stdout=[{}] stderr=[{}]",
+        stdout,
+        stderr
+    );
+}
+
+fn ruxen_unique_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
 }

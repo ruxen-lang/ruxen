@@ -3,5 +3,5 @@ def main
   s.insert(String.from("alpha"))
   s.insert(String.from("beta"))
   s.insert(String.from("gamma"))
-  let _len = s.len
+  let _len = s.size
 end

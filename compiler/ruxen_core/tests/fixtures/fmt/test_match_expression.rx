@@ -1,0 +1,7 @@
+def describe(c: Color) -> String
+  match c
+    Color.Red -> "red"
+    Color.Green -> "green"
+    Color.Blue -> "blue"
+  end
+end

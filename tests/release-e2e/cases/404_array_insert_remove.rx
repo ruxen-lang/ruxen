@@ -4,13 +4,13 @@ def main
   v.push(3)
   v.push(4)
   v.insert(1, 2)
-  puts "after_insert=#{v.len}"
+  puts "after_insert=#{v.size}"
   for x in &v
     puts "i #{x}"
   end
   let removed = v.remove(0)
   puts "removed=#{removed}"
-  puts "after_remove=#{v.len}"
+  puts "after_remove=#{v.size}"
   for x in &v
     puts "r #{x}"
   end

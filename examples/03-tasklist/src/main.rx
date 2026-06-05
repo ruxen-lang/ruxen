@@ -14,7 +14,7 @@ class TaskList
   def var complete { self.done = self.done + 1 }
 
   def remaining -> Int
-    let total: Int = self.items.len as Int
+    let total: Int = self.items.size as Int
     total - self.done
   end
 end

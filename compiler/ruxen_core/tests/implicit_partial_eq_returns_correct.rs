@@ -25,7 +25,12 @@ fn workspace_root() -> std::path::PathBuf {
 
 fn compile_and_run(source: &str, name: &str) -> (String, Option<i32>) {
     let root = workspace_root();
-    let bin_path = root.join(format!("tmp/{}.bin", name));
+    let bin_path = root.join(format!(
+        "tmp/{}-{}-{}.bin",
+        name,
+        std::process::id(),
+        ruxen_unique_id()
+    ));
     let _ = std::fs::create_dir_all(root.join("tmp"));
 
     let mut lexer = Lexer::new(source);
@@ -47,6 +52,7 @@ fn compile_and_run(source: &str, name: &str) -> (String, Option<i32>) {
     codegen::compile(&mir, bin_path.to_str().unwrap()).expect("codegen failed");
 
     let output = Command::new(&bin_path).output().expect("run binary");
+    let _ = std::fs::remove_file(&bin_path);
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     (stdout, output.status.code())
 }
@@ -61,4 +67,50 @@ fn derive_partial_eq_compares_fields_struct() {
         "structurally equal P.new(1,2) instances should compare equal; \
          differing fields should compare unequal"
     );
+}
+
+/// Characterization (Phase 6 Task 2): pins the runtime behaviour of the
+/// fold-shaped derived methods (`==`, `hash_code`, `.clone`) on a struct
+/// with two integer fields and a `String` field — the exact arms the
+/// shared `fold_struct_fields` driver folds (primitive Compare/Eq, the
+/// FNV hash step, and the per-field clone+SetField). The extraction is
+/// byte-identical MIR; this is the green-before-and-after backstop.
+#[test]
+fn derive_fold_methods_eq_hash_clone_behaviour() {
+    let source = "\
+struct Rec
+  a: Int
+  b: Int
+  s: String
+  include Hashable
+end
+
+def hash_it[T: Hashable](x: &T) -> Int
+  x.hash_code
+end
+
+def main
+  let p = Rec.new(1, 2, \"hi\")
+  let q = Rec.new(1, 2, \"hi\")
+  let r = Rec.new(1, 9, \"hi\")
+  puts \"eq=#{p == q}\"
+  puts \"neq=#{p == r}\"
+  let c = p.clone
+  puts \"clone_eq=#{p == c}\"
+  puts \"hash_match=#{hash_it(&p) == hash_it(&q)}\"
+end
+";
+    let (stdout, exit) = compile_and_run(source, "derive_fold_methods");
+    assert_eq!(exit, Some(0), "non-zero exit; stdout={}", stdout);
+    assert_eq!(
+        stdout, "eq=true\nneq=false\nclone_eq=true\nhash_match=true\n",
+        "fold-shaped derived methods (eq/hash/clone) must agree across \
+         structurally-equal instances and a clone"
+    );
+}
+
+fn ruxen_unique_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
 }

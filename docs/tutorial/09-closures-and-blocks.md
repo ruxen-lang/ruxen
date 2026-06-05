@@ -69,7 +69,7 @@ def main
   let nums = [1, 2, 3, 4, 5, 6]
 
   let doubled = nums.map { |n| n * 2 }
-  let evens = nums.filter { |n| n % 2 == 0 }
+  let evens = nums.select { |n| n % 2 == 0 }
   let big = nums.find { |n| *n > 3 }       # Option[&Int]
 
   for n in doubled
@@ -78,7 +78,7 @@ def main
 end
 ```
 
-`.map`, `.filter`, `.find`, `.each`, `.partition`, and friends all take closures and form the iterator vocabulary you'll use most days.
+`.map`, `.select`, `.find`, `.each`, `.partition`, and friends all take closures and form the Enumerable vocabulary you'll use most days.
 
 ## Capturing variables
 
@@ -208,7 +208,7 @@ let nums = [1, 2, 3, 4, 5]
 let doubled = nums.map { |n| n * 2 }
 ```
 
-1. Add a `.filter` step that keeps only values greater than 4.
+1. Add a `.select` step that keeps only values greater than 4.
 2. Print each result with `.each`.
 3. Write `make_multiplier(k: Int) -> some Fn(Int) -> Int` modelled on `make_adder` above, and use it to build `times_seven`.
 

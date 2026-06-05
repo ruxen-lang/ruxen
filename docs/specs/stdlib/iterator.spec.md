@@ -1,10 +1,21 @@
-# Spec — `std.iter` (Iterator mixin)
+# Spec — `std.iter` (Iterator mixin) — RETIRED
+
+> **RETIRED by the Ruby-surface migration.** The iterator layer no
+> longer exists: there is no `.iter` / `.into_iter` / `.collect` /
+> `from_iter`, and the `Iterator` / `FromIterator` mixins are removed
+> (`library/std/iter/` is deleted and dropped from the bootstrap). The
+> block combinators (`each` / `map` / `select` / `reject` / `reduce` /
+> `find` / `index` / `all?` / `any?` / `each_with_index` / …) are
+> methods **directly on `Array`** (and `Hash` / `Set`), inlined at the
+> MIR layer — collections are Ruby `Enumerable`-shaped. See
+> `docs/specs/syntax/ruby-naming.spec.md` §3.23. The historical
+> `*Iter` design below is kept only as a record of the v1 shortcut.
 
 **Source docs:**
 [docs/requirements/tier1_01_stdlib.md §5.8](../../requirements/tier1_01_stdlib.md).
 
-**Status:** shipped Phase 2 #05 (typeck surface; runtime is a
-pass-through to `Array` helpers).
+**Status:** RETIRED (was: shipped Phase 2 #05 as a typeck surface with
+a runtime pass-through to `Array` helpers).
 
 `.iter()` on an `Array[T]` returns a `*Iter` class.  Ruxen v1 takes a
 pragmatic shortcut: the `Iter` is a runtime no-op (`ruxen_iter_to_vec`)
@@ -26,30 +37,30 @@ runtime round-trip (the runtime layer reuses the audited
 
 | B# | Pipeline                                              | Result type     |
 |----|-------------------------------------------------------|-----------------|
-| B1 | `arr.iter().fold(init, |acc, x| acc + x)`             | accumulator type|
-| B2 | `arr.iter().all(|x| pred(x))`                         | `Bool`          |
-| B3 | `arr.iter().any(|x| pred(x))`                         | `Bool`          |
-| B4 | `arr.iter().take(n)` / `.skip(n)`                     | `*Iter[T]`      |
-| B5 | `.take(n).sum()` / `.skip(n).sum()`                   | element type    |
-| B6 | `.enumerate()` passthrough                            | `*Iter[(USize, T)]` |
-| B7 | `.filter(pred).count()`                               | `USize` (Int)   |
-| B8 | `.map(f).collect[Array[U]]()`                         | `Array[U]`      |
-| B9 | `.sum()` / `.count()` on `*Iter[Int]`                 | `Int`           |
-| B10| `.skip(a).take(b).count()`                            | `USize`         |
-| B11| `.take(n).fold(init, f)`                              | accumulator     |
-| B12| `.skip(n).all(pred)`                                  | `Bool`          |
-| B13| `.chain(other)` / `.chain(other).sum()`               | `*Iter[T]` / `T`|
+| B1 | `arr.reduce(init) { |acc, x| acc + x }`              | accumulator type|
+| B2 | `arr.all? { |x| pred(x) }`                            | `Bool`          |
+| B3 | `arr.any? { |x| pred(x) }`                            | `Bool`          |
+| B4 | `arr.take(n)` / `.drop(n)`                            | `Array[T]`      |
+| B5 | `.take(n).sum()` / `.drop(n).sum()`                   | element type    |
+| B6 | `.each_with_index` passthrough                        | `Array[(USize, T)]` |
+| B7 | `.select(pred).count()`                              | `USize` (Int)   |
+| B8 | `.map(f)`                                             | `Array[U]`      |
+| B9 | `.sum()` / `.count()` on `Array[Int]`                | `Int`           |
+| B10| `.drop(a).take(b).count()`                           | `USize`         |
+| B11| `.take(n).reduce(init, f)`                            | accumulator     |
+| B12| `.drop(n).all?(pred)`                                 | `Bool`          |
+| B13| `.chain(other)` / `.chain(other).sum()`               | `Array[T]` / `T`|
 | B14| `.zip(other).count()`                                 | `USize`         |
-| B15| `.collect[Array[T]]()` / `[String]()` / `[Map]()` / `[Set]()` | named collection |
-| B16| `String.from_iter(iter)`, `Map.from_iter(iter)`, `Set.from_iter(iter)` | named collection |
+| B15| `.map(f)` / `.join("")` / `.to_h` / `.to_set`         | named collection |
+| B16| `v.join("")`, `pairs.to_h`, `v.to_set`               | named collection |
 
 ## Negative behaviours (rejection)
 
 | B# | Mis-use                                              | Diagnostic       |
 |----|------------------------------------------------------|------------------|
-| B17| `sum()` on `*Iter[String]`                           | typeck error     |
-| B18| `collect[Map[K,V]]()` on a non-pair iterator         | typeck error     |
-| B19| `sum()` on `*Iter[Int]` still passes (tightening did not break the positive case) | none |
+| B17| `sum()` on `Array[String]`                          | typeck error     |
+| B18| `.to_h` on a non-pair array                          | typeck error     |
+| B19| `sum()` on `Array[Int]` still passes (tightening did not break the positive case) | none |
 
 ---
 

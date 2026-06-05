@@ -12,7 +12,7 @@
 ## `project_ruxen_async_compiler_gaps.md` (#2).
 ##
 ## Shape:
-##   async def doit() -> ()
+##   async def doit() -> nil
 ##     let _ = Async.sleep(Duration.from_millis(50)).await
 ##     ()
 ##   end
@@ -20,11 +20,11 @@
 ## The `.await` desugar treats `Async.sleep(d)` as an awaitee whose
 ## Future class is `TimeSleepFuture` (declared in
 ## library/std/future/src/lib.rx) and whose Output is `()` (read from
-## the future's `poll(...) -> Poll[()]` method signature). The synth
+## the future's `poll(...) -> Poll[nil]` method signature). The synth
 ## state machine has:
 ##   __state: Int
 ##   __sub_0: TimeSleepFuture   # constructed via `Async.sleep(...)` directly
-##   sleep_done: ()             # hoisted from the .await binding
+##   sleep_done: nil             # hoisted from the .await binding
 ##
 ## NOTE on binding shape: the await-let binding uses a named
 ## identifier (`sleep_done`), not `_` — the AST async-lowering
@@ -42,7 +42,7 @@
 use std.time.Instant
 use std.time.Duration
 
-async def doit() -> ()
+async def doit() -> nil
   let sleep_done = Async.sleep(Duration.from_millis(50)).await
   sleep_done
 end

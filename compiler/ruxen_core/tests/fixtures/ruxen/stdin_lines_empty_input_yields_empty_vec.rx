@@ -2,5 +2,5 @@
 def main
   let stream = stdin()
   let lines = stream.lines()
-  puts "#{lines.len}"
+  puts "#{lines.size}"
 end

@@ -488,13 +488,13 @@ impl Resolver {
                 // resolves `Array` via type-scope BEFORE the
                 // hardcoded arm runs, producing `Ty::Class { name:
                 // "Array", ... }` instead of `Ty::Array(Int)` and
-                // breaking the entire collection ABI. The list
-                // mirrors the arms in `resolve_type_expr` lines
-                // ~4605-4659 1:1.
-                let is_anchor_only_builtin = matches!(
-                    class.name.as_str(),
-                    "Array" | "Vec" | "Map" | "HashMap" | "Set" | "HashSet"
-                );
+                // breaking the entire collection ABI. The single
+                // source of truth for this set is
+                // `resolve::types::COLLECTION_BUILTINS`, shared so this
+                // membership test and the `resolve_type_expr` arms
+                // cannot drift.
+                let is_anchor_only_builtin =
+                    crate::resolve::types::COLLECTION_BUILTINS.contains(&class.name.as_str());
                 // Phase E.E of #06.95: when the class is declared
                 // INSIDE a module (`module BufReader { class File }`),
                 // anchor-mode must look up the QUALIFIED name in

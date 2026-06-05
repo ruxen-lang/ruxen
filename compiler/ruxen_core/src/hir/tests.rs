@@ -473,7 +473,7 @@ mod tests {
         assert_eq!(format!("{}", Ty::Array(Box::new(Ty::Int))), "Array[Int]");
         assert_eq!(
             format!("{}", Ty::Map(Box::new(Ty::String), Box::new(Ty::Int))),
-            "Map[String, Int]"
+            "Hash[String, Int]"
         );
         assert_eq!(format!("{}", Ty::Option(Box::new(Ty::Int))), "Option[Int]");
         assert_eq!(

@@ -1,9 +1,9 @@
 def main
-  var m: Map[String, Int] = Map.new
+  var m: Hash[String, Int] = Hash.new
   m.entry("a").or_insert(10)
   m.entry("a").or_insert(99)
   m.entry("b").or_insert(20)
-  puts "len=#{m.len}"
+  puts "len=#{m.size}"
   puts "a=#{m["a"]}"
   puts "b=#{m["b"]}"
 end

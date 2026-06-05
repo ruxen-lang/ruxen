@@ -5,8 +5,8 @@ def main
   v.push(30)
   v.push(40)
   v.truncate(2)
-  puts "after_trunc=#{v.len}"
+  puts "after_trunc=#{v.size}"
   v.clear
-  puts "after_clear=#{v.len}"
-  puts "is_empty=#{v.is_empty}"
+  puts "after_clear=#{v.size}"
+  puts "is_empty=#{v.empty?}"
 end

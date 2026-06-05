@@ -1,4 +1,4 @@
 def main
-  let c = 'R'
+  let c = ?R
   puts "#{c}"
 end

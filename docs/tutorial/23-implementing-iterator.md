@@ -1,4 +1,17 @@
-# Implementing `Iterator` for Your Own Type
+# Implementing `Iterator` for Your Own Type — RETIRED
+
+> **This chapter is retired.** The Ruby-surface migration removed the
+> iterator layer: the `Iterator` / `FromIterator` mixins, `.iter` /
+> `.into_iter`, and `.collect` / `from_iter` no longer exist. Built-in
+> collections (`Array`, `Hash`, `Set`) are Ruby `Enumerable`-shaped —
+> the block combinators (`each`, `map`, `select`, `reduce`,
+> `each_with_index`, …) are methods directly on the collection (see
+> chapter 13, *Collections*, and `ruby-naming.spec.md` §3.23). A
+> user-defined-type `Enumerable`-style mixin with default combinators
+> is deferred until mixin default-method lowering lands; until then a
+> custom collection exposes its own methods or its backing `Array`.
+> The original chapter is preserved below for historical context only
+> and does **not** reflect the current language.
 
 You've written a custom collection — a counter, a tree, a streaming buffer — and now you want `.map`, `.filter`, `.collect`, `.fold`, and `for x in ...` to just work on it. That's what the `Iterator` mixin is for. Implement one tiny method (`next`) and you get the whole pipeline for free.
 
@@ -88,13 +101,13 @@ Because `Counter` includes `Iterator`, you immediately get the whole pipeline:
 ```ruxen
 let total = Counter.new(10).fold(0, |acc, x| acc + x)
 let evens: Array[Int] = Counter.new(10).filter(|x| x % 2 == 0).collect[Array[Int]]()
-puts "total=#{total} evens.len=#{evens.len}"
+puts "total=#{total} evens.size=#{evens.size}"
 ```
 
 Output:
 
 ```
-total=45 evens.len=5
+total=45 evens.size=5
 ```
 
 You wrote `next`; the mixin gives you `map`, `filter`, `fold`, `collect`, `take`, `skip`, `count`, `sum`, `min`, `max`, and more.
@@ -181,7 +194,7 @@ class WindowIter[T, a]
   type Item = &a T
 
   def var next -> Option[&a T]
-    if self.pos >= self.source.len
+    if self.pos >= self.source.size
       return nil
     end
     let item = &self.source[self.pos]
@@ -198,7 +211,7 @@ The compiler enforces that `WindowIter` can't outlive the array it points into �
 - **Forgetting `def var` on `next`.** The iterator has to mutate its state (advance `pos`, etc.). Without `var`, you'll get a type-mismatch error against the mixin's required signature.
 - **Forgetting `type Item = ...`** in the class body. `Iterator` won't know what your sequence produces and you'll see "associated type Item is unbound" at compile time.
 - **Mismatched return type.** `def var next -> Option[String]` paired with `type Item = Int` is an immediate error — the two must agree.
-- **Trying to call `.iter()` on your own type.** Only `Array`, `Map`, `Set`, and `String` expose `.iter()`. Your type *is* the iterator — there's nothing to "enter iter mode" for.
+- **Trying to call `.iter()` on your own type.** Only `Array`, `Hash`, `Set`, and `String` expose `.iter()`. Your type *is* the iterator — there's nothing to "enter iter mode" for.
 - **Using the wrong shape for the mixin.** It's an associated type (`type Item`), not a generic parameter (`mixin Iterator[T]`). Match what the standard library expects.
 
 > **Try it:** modify `Counter` to count *downward* from `limit` to zero. Then use it with `.collect[Array[Int]]()` and `puts` the result.

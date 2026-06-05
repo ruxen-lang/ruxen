@@ -1,0 +1,5 @@
+class Env
+  lib "runtime/env.c"
+    def self.args as "ruxen_env_args" -> Array[String]
+  end
+end

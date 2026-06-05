@@ -18,7 +18,7 @@ class AsyncTcpListener
   end
 
   lib "runtime/async_net.c"
-    def drop as "ruxen_async_tcp_listener_drop" -> ()
+    def drop as "ruxen_async_tcp_listener_drop" -> nil
   end
 end
 

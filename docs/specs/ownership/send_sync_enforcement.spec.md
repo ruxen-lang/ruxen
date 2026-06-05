@@ -40,7 +40,7 @@ the user needing to write `include`:
 | `Option[T]`                   | T?     | T?     | Iff T: Send/Sync                             |
 | `Result[T, E]`                | T?, E? | T?, E? | Iff both T and E: Send/Sync                  |
 | `Box[T]`                      | T?     | T?     | Iff T: Send/Sync                             |
-| `HashMap[K, V]`, `HashSet[T]` | K?, V? | K?, V? | Iff all type params: Send/Sync               |
+| `Hash[K, V]`, `Set[T]`        | K?, V? | K?, V? | Iff all type params: Send/Sync               |
 | `Mutex[T]`                    | T?     | T?     | Iff T: Send (Mutex makes Sync from Send)     |
 | `SharedSync[T]`               | T?     | T?     | Iff T: Send                                  |
 | `JoinHandle[T: Send]`         | ✅     | ✅     | T: Send required at construction (B3)        |

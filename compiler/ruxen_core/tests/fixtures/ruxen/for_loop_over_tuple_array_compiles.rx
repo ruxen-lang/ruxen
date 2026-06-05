@@ -1,0 +1,8 @@
+def main
+  let xs = [(1, 2), (3, 4)]
+  var s = 0
+  for p in xs
+    s = s + p.0 + p.1
+  end
+  puts "#{s}"
+end

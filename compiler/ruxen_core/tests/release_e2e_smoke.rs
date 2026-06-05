@@ -115,7 +115,12 @@ fn compile_and_run(case_name: &str, bootstrap_packages: &[(String, Program)]) ->
     let expected_path = root.join(format!("tests/release-e2e/expected/{}.out", case_name));
     let tmp_dir = root.join("tmp");
     let _ = std::fs::create_dir_all(&tmp_dir);
-    let bin_path = tmp_dir.join(format!("e2e_{}.bin", case_name));
+    let bin_path = tmp_dir.join(format!(
+        "e2e_{}-{}-{}.bin",
+        case_name,
+        std::process::id(),
+        ruxen_unique_id()
+    ));
 
     let source = match std::fs::read_to_string(&src_path) {
         Ok(s) => s,
@@ -211,6 +216,7 @@ fn compile_and_run(case_name: &str, bootstrap_packages: &[(String, Program)]) ->
             }
         }
     };
+    let _ = std::fs::remove_file(&bin_path);
     if outcome.timed_out {
         return CaseOutcome {
             name: case_name.to_string(),
@@ -449,4 +455,10 @@ fn release_e2e_all_fixtures() {
             failures.join("\n")
         );
     }
+}
+
+fn ruxen_unique_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
 }

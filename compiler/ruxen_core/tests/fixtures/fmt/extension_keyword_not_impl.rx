@@ -1,0 +1,5 @@
+extension Int
+  def to_s -> String
+    "#{self}"
+  end
+end

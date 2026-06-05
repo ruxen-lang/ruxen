@@ -1,5 +1,5 @@
 def main
   let s = String.new
-  puts "len=#{s.len}"
-  puts "empty=#{s.is_empty}"
+  puts "len=#{s.size}"
+  puts "empty=#{s.empty?}"
 end

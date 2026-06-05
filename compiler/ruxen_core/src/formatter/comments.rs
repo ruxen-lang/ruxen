@@ -600,380 +600,277 @@ impl CommentAttacher {
 }
 
 /// Collect all AST node spans from a program for comment attachment.
+///
+/// The expression / block / statement / pattern / type-expr recursion is
+/// delegated to the shared [`crate::parser::visit::Visit`] walk (one
+/// exhaustive match, no `_ =>` arm — a new `ExprKind` variant becomes a
+/// compile error). [`SpanCollector`] overrides each `visit_*` to record the
+/// node's span and to add the auxiliary spans the formatter also attaches to
+/// (elsif / match-arm / closure-param / struct-field-pattern / enum-variant-arg
+/// / let-statement). A few arms (`MethodCall`/`Cast` type args, `Named`
+/// generic args, `Array` size, `ConstExprArg`) deliberately do NOT recurse
+/// into their type-expr / expr children — the previous hand-rolled walk did
+/// not collect those spans, and widening the set could shift comment
+/// attachment. Item-level traversal (modules/classes/funcs/lib decls) stays
+/// hand-rolled: `Visit` covers expressions, not top-level items.
 pub fn collect_node_spans(program: &crate::parser::ast::Program) -> Vec<(usize, usize)> {
     use crate::parser::ast::*;
-    let mut spans = Vec::new();
+    use crate::parser::visit::{walk_expr, walk_pattern, Visit};
 
-    fn add_span(spans: &mut Vec<(usize, usize)>, span: &Span) {
-        spans.push((span.start, span.end));
+    struct SpanCollector {
+        spans: Vec<(usize, usize)>,
     }
 
-    fn visit_type_expr(spans: &mut Vec<(usize, usize)>, ty: &TypeExpr) {
-        match ty {
-            TypeExpr::Named(tp) => add_span(spans, &tp.span),
-            TypeExpr::Reference { span, inner, .. } => {
-                add_span(spans, span);
-                visit_type_expr(spans, inner);
-            }
-            TypeExpr::Tuple { span, elements, .. } => {
-                add_span(spans, span);
-                for e in elements {
-                    visit_type_expr(spans, e);
-                }
-            }
-            TypeExpr::Array { span, element, .. } => {
-                add_span(spans, span);
-                visit_type_expr(spans, element);
-            }
-            TypeExpr::Function {
-                span,
-                params,
-                return_type,
-            } => {
-                add_span(spans, span);
-                for p in params {
-                    visit_type_expr(spans, p);
-                }
-                visit_type_expr(spans, return_type);
-            }
-            TypeExpr::SomeMixin { span, .. }
-            | TypeExpr::AnyMixin { span, .. }
-            | TypeExpr::Never { span }
-            | TypeExpr::Inferred { span } => add_span(spans, span),
-            TypeExpr::RawPointer { span, inner, .. } => {
-                add_span(spans, span);
-                visit_type_expr(spans, inner);
-            }
-            TypeExpr::ConstLit { span, .. } => add_span(spans, span),
-            TypeExpr::ConstExprArg { span, .. } => add_span(spans, span),
+    impl SpanCollector {
+        fn add(&mut self, span: &Span) {
+            self.spans.push((span.start, span.end));
         }
-    }
 
-    fn visit_pattern(spans: &mut Vec<(usize, usize)>, pat: &Pattern) {
-        match pat {
-            Pattern::Literal { span, expr } => {
-                add_span(spans, span);
-                visit_expr(spans, expr);
+        fn visit_func(&mut self, func: &FuncDef) {
+            self.add(&func.span);
+            for p in &func.params {
+                self.add(&p.span);
+                self.visit_type_expr(&p.type_expr);
             }
-            Pattern::Identifier { span, .. }
-            | Pattern::Wildcard { span }
-            | Pattern::Rest { span }
-            | Pattern::Ref { span, .. } => add_span(spans, span),
-            Pattern::Tuple { span, elements } => {
-                add_span(spans, span);
-                for e in elements {
-                    visit_pattern(spans, e);
-                }
+            if let Some(rt) = &func.return_type {
+                self.visit_type_expr(rt);
             }
-            Pattern::Enum { span, fields, .. } => {
-                add_span(spans, span);
-                for f in fields {
-                    visit_pattern(spans, f);
-                }
-            }
-            Pattern::Struct { span, fields, .. } => {
-                add_span(spans, span);
-                for f in fields {
-                    add_span(spans, &f.span);
-                    visit_pattern(spans, &f.pattern);
-                }
-            }
-            Pattern::Or { span, patterns } => {
-                add_span(spans, span);
-                for p in patterns {
-                    visit_pattern(spans, p);
-                }
-            }
+            self.visit_block(&func.body);
         }
-    }
 
-    fn visit_expr(spans: &mut Vec<(usize, usize)>, expr: &Expr) {
-        add_span(spans, &expr.span);
-        match &expr.kind {
-            ExprKind::BinaryOp { left, right, .. } => {
-                visit_expr(spans, left);
-                visit_expr(spans, right);
-            }
-            ExprKind::UnaryOp { operand, .. } => visit_expr(spans, operand),
-            ExprKind::Borrow(e) | ExprKind::BorrowMut(e) | ExprKind::Try(e) => visit_expr(spans, e),
-            ExprKind::FieldAccess { object, .. } | ExprKind::SafeNav { object, .. } => {
-                visit_expr(spans, object)
-            }
-            ExprKind::MethodCall {
-                object,
-                args,
-                block,
-                ..
-            } => {
-                visit_expr(spans, object);
-                for a in args {
-                    visit_expr(spans, a);
-                }
-                if let Some(b) = block {
-                    visit_expr(spans, b);
-                }
-            }
-            ExprKind::SafeNavCall { object, args, .. } => {
-                visit_expr(spans, object);
-                for a in args {
-                    visit_expr(spans, a);
-                }
-            }
-            ExprKind::Call {
-                callee,
-                args,
-                block,
-            } => {
-                visit_expr(spans, callee);
-                for a in args {
-                    visit_expr(spans, a);
-                }
-                if let Some(b) = block {
-                    visit_expr(spans, b);
-                }
-            }
-            ExprKind::Index { object, index } => {
-                visit_expr(spans, object);
-                visit_expr(spans, index);
-            }
-            ExprKind::ClosureCall { callee, args } => {
-                visit_expr(spans, callee);
-                for a in args {
-                    visit_expr(spans, a);
-                }
-            }
-            ExprKind::Assign { target, value } | ExprKind::CompoundAssign { target, value, .. } => {
-                visit_expr(spans, target);
-                visit_expr(spans, value);
-            }
-            ExprKind::If(if_expr) => {
-                visit_expr(spans, &if_expr.condition);
-                visit_block(spans, &if_expr.then_body);
-                for elsif in &if_expr.elsif_clauses {
-                    add_span(spans, &elsif.span);
-                    visit_expr(spans, &elsif.condition);
-                    visit_block(spans, &elsif.body);
-                }
-                if let Some(else_body) = &if_expr.else_body {
-                    visit_block(spans, else_body);
-                }
-            }
-            ExprKind::IfLet(if_let) => {
-                visit_pattern(spans, &if_let.pattern);
-                visit_expr(spans, &if_let.value);
-                visit_block(spans, &if_let.then_body);
-                if let Some(else_body) = &if_let.else_body {
-                    visit_block(spans, else_body);
-                }
-            }
-            ExprKind::Match(match_expr) => {
-                visit_expr(spans, &match_expr.subject);
-                for arm in &match_expr.arms {
-                    add_span(spans, &arm.span);
-                    visit_pattern(spans, &arm.pattern);
-                    if let Some(g) = &arm.guard {
-                        visit_expr(spans, g);
-                    }
-                    match &arm.body {
-                        MatchArmBody::Expr(e) => visit_expr(spans, e),
-                        MatchArmBody::Block(b) => visit_block(spans, b),
+        fn visit_item(&mut self, item: &TopLevelItem) {
+            match item {
+                TopLevelItem::Module(m) => {
+                    self.add(&m.span);
+                    for i in &m.items {
+                        self.visit_item(i);
                     }
                 }
-            }
-            ExprKind::While(w) => {
-                visit_expr(spans, &w.condition);
-                visit_block(spans, &w.body);
-            }
-            ExprKind::WhileLet(wl) => {
-                visit_pattern(spans, &wl.pattern);
-                visit_expr(spans, &wl.value);
-                visit_block(spans, &wl.body);
-            }
-            ExprKind::For(f) => {
-                visit_pattern(spans, &f.pattern);
-                visit_expr(spans, &f.iterable);
-                visit_block(spans, &f.body);
-            }
-            ExprKind::Loop(l) => visit_block(spans, &l.body),
-            ExprKind::Block(b) => visit_block(spans, b),
-            ExprKind::Closure(c) => {
-                for p in &c.params {
-                    add_span(spans, &p.span);
-                }
-                match &c.body {
-                    ClosureBody::Expr(e) => visit_expr(spans, e),
-                    ClosureBody::Block(b) => visit_block(spans, b),
-                }
-            }
-            ExprKind::Range { start, end, .. } => {
-                if let Some(s) = start {
-                    visit_expr(spans, s);
-                }
-                if let Some(e) = end {
-                    visit_expr(spans, e);
-                }
-            }
-            ExprKind::ArrayLiteral(elems) => {
-                for e in elems {
-                    visit_expr(spans, e);
-                }
-            }
-            ExprKind::ArrayFill { value, count } => {
-                visit_expr(spans, value);
-                visit_expr(spans, count);
-            }
-            ExprKind::TupleLiteral(elems) => {
-                for e in elems {
-                    visit_expr(spans, e);
-                }
-            }
-            ExprKind::Return(Some(e)) | ExprKind::Break(Some(e)) => visit_expr(spans, e),
-            ExprKind::Yield(exprs) => {
-                for e in exprs {
-                    visit_expr(spans, e);
-                }
-            }
-            ExprKind::MacroCall { args, .. } => {
-                for a in args {
-                    visit_expr(spans, a);
-                }
-            }
-            ExprKind::Cast { expr, .. } => visit_expr(spans, expr),
-            ExprKind::EnumVariant { args, .. } => {
-                for a in args {
-                    add_span(spans, &a.span);
-                    visit_expr(spans, &a.value);
-                }
-            }
-            ExprKind::UnsafeBlock(b) => visit_block(spans, b),
-            _ => {}
-        }
-    }
-
-    fn visit_block(spans: &mut Vec<(usize, usize)>, block: &Block) {
-        add_span(spans, &block.span);
-        for stmt in &block.statements {
-            match stmt {
-                Statement::Let(l) => {
-                    add_span(spans, &l.span);
-                    visit_pattern(spans, &l.pattern);
-                    if let Some(ty) = &l.type_annotation {
-                        visit_type_expr(spans, ty);
+                TopLevelItem::Class(c) => {
+                    self.add(&c.span);
+                    for f in &c.fields {
+                        self.add(&f.span);
                     }
-                    if let Some(val) = &l.value {
-                        visit_expr(spans, val);
+                    for m in &c.methods {
+                        self.visit_func(m);
+                    }
+                    // Class-body `lib "..." ... end` blocks: register each FFI
+                    // def span so `##` doc comments attached above them survive
+                    // formatting (otherwise `ruxen fmt` drops the docs).
+                    for lib in &c.lib_decls {
+                        self.add(&lib.span);
+                        for f in &lib.functions {
+                            self.add(&f.span);
+                        }
                     }
                 }
-                Statement::Expression(e) => visit_expr(spans, e),
-            }
-        }
-    }
-
-    fn visit_func(spans: &mut Vec<(usize, usize)>, func: &FuncDef) {
-        add_span(spans, &func.span);
-        for p in &func.params {
-            add_span(spans, &p.span);
-            visit_type_expr(spans, &p.type_expr);
-        }
-        if let Some(rt) = &func.return_type {
-            visit_type_expr(spans, rt);
-        }
-        visit_block(spans, &func.body);
-    }
-
-    fn visit_item(spans: &mut Vec<(usize, usize)>, item: &TopLevelItem) {
-        match item {
-            TopLevelItem::Module(m) => {
-                add_span(spans, &m.span);
-                for i in &m.items {
-                    visit_item(spans, i);
-                }
-            }
-            TopLevelItem::Class(c) => {
-                add_span(spans, &c.span);
-                for f in &c.fields {
-                    add_span(spans, &f.span);
-                }
-                for m in &c.methods {
-                    visit_func(spans, m);
-                }
-                // Class-body `lib "..." ... end` blocks: register each FFI
-                // def span so `##` doc comments attached above them survive
-                // formatting (otherwise `ruxen fmt` drops the docs).
-                for lib in &c.lib_decls {
-                    add_span(spans, &lib.span);
-                    for f in &lib.functions {
-                        add_span(spans, &f.span);
+                TopLevelItem::Struct(s) => {
+                    self.add(&s.span);
+                    for f in &s.fields {
+                        self.add(&f.span);
                     }
                 }
-            }
-            TopLevelItem::Struct(s) => {
-                add_span(spans, &s.span);
-                for f in &s.fields {
-                    add_span(spans, &f.span);
-                }
-            }
-            TopLevelItem::Enum(e) => {
-                add_span(spans, &e.span);
-                for v in &e.variants {
-                    add_span(spans, &v.span);
-                }
-            }
-            TopLevelItem::Mixin(t) => {
-                add_span(spans, &t.span);
-                for ti in &t.items {
-                    match ti {
-                        MixinItem::AssocType { span, .. } => add_span(spans, span),
-                        MixinItem::MethodSig(ms) => add_span(spans, &ms.span),
-                        MixinItem::DefaultMethod(f) => visit_func(spans, f),
+                TopLevelItem::Enum(e) => {
+                    self.add(&e.span);
+                    for v in &e.variants {
+                        self.add(&v.span);
                     }
                 }
-            }
-            TopLevelItem::Impl(imp) => {
-                add_span(spans, &imp.span);
-                for ii in &imp.items {
-                    match ii {
-                        ImplItem::AssocType { span, .. } => add_span(spans, span),
-                        ImplItem::Method(f) => visit_func(spans, f),
-                        ImplItem::Include { span, .. } => add_span(spans, span),
+                TopLevelItem::Mixin(t) => {
+                    self.add(&t.span);
+                    for ti in &t.items {
+                        match ti {
+                            MixinItem::AssocType { span, .. } => self.add(span),
+                            MixinItem::MethodSig(ms) => self.add(&ms.span),
+                            MixinItem::DefaultMethod(f) => self.visit_func(f),
+                        }
                     }
                 }
-            }
-            TopLevelItem::Function(f) => visit_func(spans, f),
-            TopLevelItem::Use(u) => add_span(spans, &u.span),
-            TopLevelItem::TypeAlias(ta) => {
-                add_span(spans, &ta.span);
-                visit_type_expr(spans, &ta.type_expr);
-            }
-            TopLevelItem::Newtype(nt) => {
-                add_span(spans, &nt.span);
-                visit_type_expr(spans, &nt.inner_type);
-            }
-            TopLevelItem::Const(c) => {
-                add_span(spans, &c.span);
-                visit_type_expr(spans, &c.type_expr);
-                visit_expr(spans, &c.value);
-            }
-            TopLevelItem::Lib(l) => {
-                add_span(spans, &l.span);
-                for f in &l.functions {
-                    add_span(spans, &f.span);
+                TopLevelItem::Impl(imp) => {
+                    self.add(&imp.span);
+                    for ii in &imp.items {
+                        match ii {
+                            ImplItem::AssocType { span, .. } => self.add(span),
+                            ImplItem::Method(f) => self.visit_func(f),
+                            ImplItem::Include { span, .. } => self.add(span),
+                        }
+                    }
                 }
-            }
-            TopLevelItem::Extern(e) => {
-                add_span(spans, &e.span);
-                for f in &e.functions {
-                    add_span(spans, &f.span);
+                TopLevelItem::Function(f) => self.visit_func(f),
+                TopLevelItem::Use(u) => self.add(&u.span),
+                TopLevelItem::TypeAlias(ta) => {
+                    self.add(&ta.span);
+                    self.visit_type_expr(&ta.type_expr);
+                }
+                TopLevelItem::Newtype(nt) => {
+                    self.add(&nt.span);
+                    self.visit_type_expr(&nt.inner_type);
+                }
+                TopLevelItem::Const(c) => {
+                    self.add(&c.span);
+                    self.visit_type_expr(&c.type_expr);
+                    self.visit_expr(&c.value);
+                }
+                TopLevelItem::Lib(l) => {
+                    self.add(&l.span);
+                    for f in &l.functions {
+                        self.add(&f.span);
+                    }
+                }
+                TopLevelItem::Extern(e) => {
+                    self.add(&e.span);
+                    for f in &e.functions {
+                        self.add(&f.span);
+                    }
                 }
             }
         }
     }
 
-    add_span(&mut spans, &program.span);
+    impl Visit for SpanCollector {
+        fn visit_expr(&mut self, expr: &Expr) {
+            self.add(&expr.span);
+            match &expr.kind {
+                // Arms that record an auxiliary (non-`expr.span`) span the
+                // previous walk attached to, then recurse via the shared walk.
+                ExprKind::If(if_expr) => {
+                    for elsif in &if_expr.elsif_clauses {
+                        self.add(&elsif.span);
+                    }
+                    walk_expr(self, expr);
+                }
+                ExprKind::Match(match_expr) => {
+                    for arm in &match_expr.arms {
+                        self.add(&arm.span);
+                    }
+                    walk_expr(self, expr);
+                }
+                ExprKind::Closure(c) => {
+                    for p in &c.params {
+                        self.add(&p.span);
+                    }
+                    walk_expr(self, expr);
+                }
+                ExprKind::EnumVariant { args, .. } => {
+                    for a in args {
+                        self.add(&a.span);
+                    }
+                    walk_expr(self, expr);
+                }
+                // `MethodCall`/`Cast` carry type-expr children (generic_args /
+                // target_type) the previous walk did NOT visit; recurse only
+                // into the value children to keep the collected set identical.
+                ExprKind::MethodCall {
+                    object,
+                    args,
+                    block,
+                    ..
+                } => {
+                    self.visit_expr(object);
+                    for a in args {
+                        self.visit_expr(a);
+                    }
+                    if let Some(b) = block {
+                        self.visit_expr(b);
+                    }
+                }
+                ExprKind::Cast { expr: inner, .. } => self.visit_expr(inner),
+                // Everything else recurses through the shared exhaustive walk.
+                _ => walk_expr(self, expr),
+            }
+        }
+
+        fn visit_block(&mut self, block: &Block) {
+            self.add(&block.span);
+            for stmt in &block.statements {
+                self.visit_stmt(stmt);
+            }
+        }
+
+        fn visit_stmt(&mut self, stmt: &Statement) {
+            if let Statement::Let(l) = stmt {
+                // The previous walk attached the `let`-statement span; the
+                // shared `walk_stmt` does not, so record it here.
+                self.add(&l.span);
+            }
+            crate::parser::visit::walk_stmt(self, stmt);
+        }
+
+        fn visit_pattern(&mut self, pat: &Pattern) {
+            match pat {
+                Pattern::Literal { span, .. }
+                | Pattern::Identifier { span, .. }
+                | Pattern::Wildcard { span }
+                | Pattern::Rest { span }
+                | Pattern::Ref { span, .. }
+                | Pattern::Tuple { span, .. }
+                | Pattern::Enum { span, .. }
+                | Pattern::Or { span, .. } => self.add(span),
+                Pattern::Struct { span, fields, .. } => {
+                    self.add(span);
+                    for f in fields {
+                        self.add(&f.span);
+                    }
+                }
+            }
+            walk_pattern(self, pat);
+        }
+
+        fn visit_type_expr(&mut self, ty: &TypeExpr) {
+            // The previous walk recorded a span for every type-expr node but
+            // did NOT recurse into `Named` generic args, `Array` sizes, or
+            // `ConstExprArg` expressions. Preserve that exact set: add this
+            // node's span and recurse only into the type-expr children the old
+            // walk descended into (Reference / Tuple / Array element /
+            // Function params+return / RawPointer inner).
+            match ty {
+                TypeExpr::Named(tp) => self.add(&tp.span),
+                TypeExpr::Reference { span, inner, .. } => {
+                    self.add(span);
+                    self.visit_type_expr(inner);
+                }
+                TypeExpr::Tuple { span, elements, .. } => {
+                    self.add(span);
+                    for e in elements {
+                        self.visit_type_expr(e);
+                    }
+                }
+                TypeExpr::Array { span, element, .. } => {
+                    self.add(span);
+                    self.visit_type_expr(element);
+                }
+                TypeExpr::Function {
+                    span,
+                    params,
+                    return_type,
+                } => {
+                    self.add(span);
+                    for p in params {
+                        self.visit_type_expr(p);
+                    }
+                    self.visit_type_expr(return_type);
+                }
+                TypeExpr::SomeMixin { span, .. }
+                | TypeExpr::AnyMixin { span, .. }
+                | TypeExpr::Never { span }
+                | TypeExpr::Inferred { span } => self.add(span),
+                TypeExpr::RawPointer { span, inner, .. } => {
+                    self.add(span);
+                    self.visit_type_expr(inner);
+                }
+                TypeExpr::ConstLit { span, .. } => self.add(span),
+                TypeExpr::ConstExprArg { span, .. } => self.add(span),
+            }
+        }
+    }
+
+    let mut collector = SpanCollector { spans: Vec::new() };
+    collector.add(&program.span);
     for item in &program.items {
-        visit_item(&mut spans, item);
+        collector.visit_item(item);
     }
 
+    let mut spans = collector.spans;
     spans.sort_by_key(|&(start, _)| start);
     spans
 }
