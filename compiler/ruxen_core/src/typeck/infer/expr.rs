@@ -738,8 +738,34 @@ impl<'a> InferenceEngine<'a> {
                 expr.ty = break_ty.unwrap_or(Ty::Unit);
             }
 
-            HirExprKind::For { iterable, body, .. } => {
+            HirExprKind::For {
+                binding,
+                iterable,
+                body,
+                ..
+            } => {
                 self.infer_expr(iterable);
+                // Forward-bind the loop variable to the iterable's element
+                // type. The body would otherwise have to back-infer it from
+                // usage, which works for arithmetic (`x + 1` unifies `x` to
+                // `Int`) but NOT for tuple/field access: `p.0` on an
+                // unresolved `?T` is a no-op, so `p` would never be
+                // constrained to a tuple and codegen lowers `.0` as a bogus
+                // method call. Array/Set yield the element; Hash yields a
+                // `(K, V)` pair (Ruby's `hash.each`). Other iterables (ranges,
+                // *Iter) keep the back-inference path unchanged.
+                let iter_ty = self.ctx.resolve(&iterable.ty);
+                let (_, iter_derefed) = auto_deref(&iter_ty, self.ctx);
+                let elem_ty: Option<Ty> = match &iter_derefed {
+                    Ty::Array(e) | Ty::Set(e) => Some((**e).clone()),
+                    Ty::Map(k, v) => Some(Ty::Tuple(vec![(**k).clone(), (**v).clone()])),
+                    _ => None,
+                };
+                if let Some(elem_ty) = elem_ty {
+                    if let Some(binding_ty) = self.symbols.def_ty(*binding) {
+                        let _ = unify(&binding_ty, &elem_ty, self.ctx, &expr.span);
+                    }
+                }
                 self.infer_expr(body);
                 expr.ty = Ty::Unit;
             }

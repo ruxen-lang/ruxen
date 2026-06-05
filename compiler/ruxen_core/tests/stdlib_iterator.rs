@@ -139,6 +139,18 @@ fn iter_filter_then_count_compiles() {
 }
 
 #[test]
+fn for_loop_over_tuple_array_compiles() {
+    // Regression: `for p in [(1,2),(3,4)]` must bind `p` to the element
+    // tuple `(Int, Int)` so `p.0` / `p.1` lower as tuple-field reads. The
+    // loop's typeck now forward-binds the loop var to the iterable's
+    // element type (previously `p` stayed an unresolved `?T` and `p.0`
+    // lowered to a bogus `?T_0` method call). Also covers `for p in
+    // h.to_a` over Hash pairs.
+    let source = rx("for_loop_over_tuple_array_compiles");
+    assert_compiles(&source);
+}
+
+#[test]
 fn iter_each_with_index_compiles() {
     // Ruby `each_with_index { |element, index| }` — yields the element
     // and its 0-based Int index; inlined as a per-element loop.
