@@ -58,10 +58,9 @@ pub(super) fn is_vec_or_iterator_type(ty: &Ty) -> bool {
             } else {
                 name.as_str()
             };
-            matches!(
-                base,
-                "Vec" | "VecIter" | "VecIntoIter" | "SplitIter" | "HashIter" | "SetIter"
-            )
+            // `*Iter` wrapper names removed with the orphaned iterator
+            // machinery (Phase B / Milestone 2) — nothing produces them.
+            matches!(base, "Vec")
         }
         // For inferred types, check if the type name suggests a collection.
         Ty::Infer(_) => false,
@@ -80,11 +79,12 @@ pub(super) fn is_builtin_static_method(type_name: &str, method_name: &str) -> bo
     crate::mir::lower::runtime_abi::is_static_constructor(type_name, method_name)
 }
 
-/// Extract the element type from a collection or iterator type.
+/// Extract the element type from a collection type.
 ///
-/// For `Vec[T]`, returns `T`. For iterator wrappers like `VecIter[T]`,
-/// `VecIntoIter[T]`, returns `T`. For references to collections, unwraps
-/// the reference first. Falls back to `Ty::Int` for unrecognized types.
+/// For `Vec[T]`, returns `T`. For references to collections, unwraps the
+/// reference first. Falls back to `Ty::Int` for unrecognized types. (The
+/// former `*Iter` wrapper branch was removed with the orphaned iterator
+/// machinery — Phase B / Milestone 2.)
 pub(super) fn element_type_of(ty: &Ty) -> Ty {
     match ty {
         Ty::Array(inner) => *inner.clone(),
@@ -92,16 +92,7 @@ pub(super) fn element_type_of(ty: &Ty) -> Ty {
         | Ty::RefMut(inner)
         | Ty::RefLifetime(_, inner)
         | Ty::RefMutLifetime(_, inner) => element_type_of(inner),
-        Ty::Class { name, generic_args } => {
-            // Iterator wrapper types: VecIter[T], VecIntoIter[T], etc.
-            if (name == "VecIter" || name == "VecIntoIter" || name == "SplitIter")
-                && !generic_args.is_empty()
-            {
-                return generic_args[0].clone();
-            }
-            // Fall back to I64 (pointer-sized, covers most cases).
-            Ty::Int
-        }
+        // Fall back to I64 (pointer-sized, covers most cases).
         _ => Ty::Int,
     }
 }

@@ -498,35 +498,10 @@ impl<'a> BorrowChecker<'a> {
                     }
                 }
 
-                // Name-based iterator ownership
-                match method_name {
-                    "iter" => {
-                        let scope = self.scopes.current();
-                        self.borrows.create(
-                            BorrowKind::Shared,
-                            *obj_id,
-                            *obj_id,
-                            span.clone(),
-                            scope,
-                        );
-                    }
-                    "into_iter" => {
-                        if !self.ty_is_effectively_copy(&object.ty) {
-                            self.moves.process_call_move(
-                                *obj_id,
-                                "into_iter".to_string(),
-                                &object.ty,
-                                span.clone(),
-                            );
-                            self.ownership.record_move_into_call(
-                                *obj_id,
-                                "into_iter".to_string(),
-                                span.clone(),
-                            );
-                        }
-                    }
-                    _ => {}
-                }
+                // (The name-based `iter` / `into_iter` borrow/move
+                // ownership tracking was removed with the orphaned
+                // iterator machinery — Phase B / Milestone 2. Nothing
+                // produces those calls.)
             }
         }
 

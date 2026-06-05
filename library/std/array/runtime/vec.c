@@ -877,14 +877,10 @@ char *ruxen_string_replace(const char *s, const char *from, const char *to) {
     return out;
 }
 
-/* ── Iterator → Vec collection ────────────────────────────────────────
- * `Iter::to_vec` collects an iterator into a Vec. In the v1 runtime
- * every iterator producer (`ruxen_str_split`, `ruxen_vec_iter`, …)
- * already returns a `RuxenVec *` rather than a separate iterator
- * struct, so `to_vec` is an identity passthrough. When real iterator
- * types land later this can dispatch to a per-iterator collector.
- */
-RuxenVec *ruxen_iter_to_vec(RuxenVec *iter) {
-    return iter;
-}
+/* The `ruxen_iter_to_vec` identity collector was removed with the
+ * orphaned iterator machinery (zero-Rust-stdlib migration, Phase B /
+ * Milestone 2): nothing produced a `*Iter` wrapper, and no surface call
+ * (`.iter`/`.into_iter`/`.to_vec`/`.enumerate`/`.as_slice`) reached it.
+ * The Ruby collectors `ruxen_string_from_iter` / `ruxen_set_from_iter` /
+ * `ruxen_hash_from_iter` are unrelated and preserved. */
 

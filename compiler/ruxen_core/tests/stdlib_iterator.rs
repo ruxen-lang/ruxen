@@ -236,10 +236,11 @@ fn iter_zip_then_count_compiles() {
 #[test]
 fn iter_collect_vec_compiles() {
     // `collect_vec` is v1's type-specific shorthand for
-    // `collect[Vec[T]]`. Since every `*Iter` in the v1 runtime is
-    // already a `RuxenVec*` (`ruxen_iter_to_vec`), `collect_vec` is
-    // the same identity passthrough — but the typeck arm pins the
-    // result to `Vec[T]` so users can chain Vec methods on it.
+    // `collect[Vec[T]]`. The fixture exercises live array combinators
+    // (`take`/`size`); array combinators materialise to a `RuxenVec*`
+    // directly via the array.rx alias map — the orphaned `*Iter`
+    // wrapper machinery (and `ruxen_iter_to_vec`) was removed in
+    // Phase B / Milestone 2 and is not on this path.
     let source = rx("iter_collect_vec_compiles");
     assert_compiles(&source);
 }

@@ -230,10 +230,11 @@ impl<'a> Lowerer<'a> {
                 ..
             } => {
                 match method_name.as_str() {
-                    "iter" | "into_iter" | "to_vec" | "enumerate" => {
-                        // These are passthrough — recurse into the object.
-                        self.lower_vec_source(object)
-                    }
+                    // (The `iter`/`into_iter`/`to_vec`/`enumerate`
+                    // passthrough peel was removed with the orphaned
+                    // iterator machinery — Phase B / Milestone 2. Nothing
+                    // produces those calls, so the `_ =>` arm below covers
+                    // any residual shape by lowering normally.)
                     "select" | "reject" | "where_matching" if block.is_some() => {
                         // A filter in the chain: inline it and return the
                         // filtered vec as the source. This handles chained
@@ -252,13 +253,11 @@ impl<'a> Lowerer<'a> {
                 field_name,
                 ..
             } => {
-                // .iter, .into_iter etc. may be parsed as FieldAccess (no parens)
-                match field_name.as_str() {
-                    "iter" | "into_iter" | "to_vec" | "enumerate" => {
-                        self.lower_vec_source(inner_obj)
-                    }
-                    _ => self.lower_expr(expr),
-                }
+                // (`.iter`/`.into_iter`/`.to_vec`/`.enumerate` field-access
+                // peel removed with the orphaned iterator machinery —
+                // Phase B / Milestone 2.)
+                let _ = (inner_obj, field_name);
+                self.lower_expr(expr)
             }
             _ => self.lower_expr(expr),
         }

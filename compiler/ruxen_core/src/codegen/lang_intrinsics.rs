@@ -13,14 +13,14 @@
 //!    elsewhere.
 //!
 //! 2. **Aliased clusters + bang variants + inferred-type dispatch.**
-//!    `Vec[T]_into_iter` / `Vec[T]_iter_mut` / `Vec[T]_to_vec` /
-//!    `Vec[T]_enumerate` / `Vec[T]_as_slice` all share the C symbol
-//!    `ruxen_iter_to_vec` with the migrated `Vec[T]_iter`. E0722
-//!    rejects duplicate aliases for the same `c_symbol` with
-//!    different wire shapes, so they cannot ride the
-//!    `library/std/array/src/lib.rx` alias map. Same story for
-//!    `Vec[T]_get_mut` / `Vec[T]_get_var` aliasing
-//!    `ruxen_vec_get_opt` with `get`. The `Option[T]_unwrap!` /
+//!    `Vec[T]_get_mut` / `Vec[T]_get_var` alias `ruxen_vec_get_opt`
+//!    (canonical `get` is in `library/std/array/src/lib.rx`); E0722
+//!    rejects duplicate aliases for the same `c_symbol` with different
+//!    wire shapes, so they cannot ride the array.rx alias map. (The
+//!    former `into_iter`/`iter_mut`/`to_vec`/`enumerate`/`as_slice`
+//!    cluster sharing `ruxen_iter_to_vec` was deleted with the
+//!    orphaned iterator machinery — Phase B / Milestone 2.) The
+//!    `Option[T]_unwrap!` /
 //!    `Option[T]_expect!` bang variants can't ride the alias map
 //!    either — `!` is part of the surface method name but isn't
 //!    yet accepted inside a `def NAME as ...` lib decl. The
@@ -186,66 +186,14 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         return Ok("ruxen_noop_passthrough");
     }
 
-    // VecIter_, VecIntoIter_, SplitIter_ — iterator combinators.
-    // Historically every method here silently no-opped. Only
-    // forward user-defined-style names (which downstream link
-    // checks will reject if missing); reject anything that *looks*
-    // like a known stdlib combinator we haven't actually
-    // implemented.
-    if name.starts_with("VecIter")
-        || name.starts_with("VecIntoIter")
-        || name.starts_with("SplitIter")
-    {
-        return match method {
-            // Identity passthroughs: every iterator producer in
-            // the v1 runtime already hands back a `RuxenVec *`,
-            // so `to_vec` and `enumerate` are no-ops at the
-            // runtime layer. The for-loop lowering
-            // (`HirExprKind::For`) detects the `(i, x)` tuple
-            // binding shape and synthesises the index counter
-            // directly, so `enumerate` only needs to survive
-            // type-checking + codegen — no real iterator
-            // transform.
-            "to_vec" | "enumerate" => Ok("ruxen_iter_to_vec"),
-            "sum" => Ok("ruxen_vec_sum"),
-            "count" => Ok("ruxen_vec_count"),
-            "reverse" => Ok("ruxen_vec_reverse"),
-            "first" => Ok("ruxen_vec_first"),
-            "last" => Ok("ruxen_vec_last"),
-            "clone" => Ok("ruxen_vec_clone"),
-            "include?" => Ok("ruxen_vec_contains_int"),
-            "sort" => Ok("ruxen_vec_sort"),
-            "join" => Ok("ruxen_vec_join"),
-            // Phase 2 stdlib (#05 batch 2): lazy combinators
-            // `take(n)` / `skip(n)` eager-materialise into a
-            // fresh `RuxenVec *` via the `ruxen_vec_take` /
-            // `ruxen_vec_skip` helpers. Closure-taking
-            // terminators (`fold`, `all`, `any`) inline at MIR
-            // — the runtime never sees them, so they are
-            // intentionally absent from this dispatch table.
-            "take" => Ok("ruxen_vec_take"),
-            "drop" => Ok("ruxen_vec_skip"),
-            // Phase 2 stdlib (#05 batch 3): `chain(other)` /
-            // `zip(other)` eager-materialise into fresh
-            // `RuxenVec*`s via the runtime helpers below.
-            // `collect_vec` is the v1 type-specific shorthand
-            // for `collect[Vec[T]]` — since every `*Iter` is
-            // already a `RuxenVec*` at runtime, the collector
-            // is the same identity passthrough as `to_vec`.
-            "chain" => Ok("ruxen_vec_chain"),
-            "zip" => Ok("ruxen_vec_zip"),
-            "collect_vec" => Ok("ruxen_iter_to_vec"),
-            // Known unimplemented combinators — refuse rather
-            // than no-op.
-            "select" | "reject" | "find" | "index" | "partition" | "reduce" | "min" | "max"
-            | "any?" | "all?" | "collect" | "map" | "flat_map" | "flatten" => {
-                Err(unresolved_method_error(name, "Iter"))
-            }
-            // Anything else falls through to link-time
-            // resolution.
-            _ => Ok(name),
-        };
-    }
+    // NOTE: the `VecIter` / `VecIntoIter` / `SplitIter` combinator
+    // dispatch block was removed with the rest of the orphaned iterator
+    // machinery (zero-Rust-stdlib migration, Phase B / Milestone 2).
+    // Nothing produces those iterator wrapper types — `split`/`chars`/
+    // `lines`/`bytes` return `Array`, and no `.rx`/fixture calls
+    // `.iter`/`.into_iter`/`.to_vec`/`.enumerate`. The Ruby collectors
+    // (`String.from_iter`/`to_set`/`to_h`) are unrelated and preserved
+    // via their `ruxen_*_from_iter` symbols.
 
     // Array[...] / Vec[...] methods.
     //
@@ -272,20 +220,9 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
     //
     //   * `get_mut`, `get_var` → `ruxen_vec_get_opt` (canonical
     //     spelling `get` is in array.rx)
-    //   * `into_iter`, `iter_mut`, `to_vec`, `enumerate`,
-    //     `as_slice` → `ruxen_iter_to_vec` (canonical spelling
-    //     `iter` is in array.rx)
     if name.starts_with("Array") || name.starts_with("Vec") {
         return match method {
             "get_mut" | "get_var" => Ok("ruxen_vec_get_opt"),
-            // Iterator producers + the identity collector are
-            // passthroughs — every iterator in the v1 runtime
-            // is already represented by a `RuxenVec *`, so
-            // `vec.into_iter`, `iter.to_vec`, etc. are all
-            // no-ops.
-            "into_iter" | "iter_mut" | "to_vec" | "enumerate" | "as_slice" => {
-                Ok("ruxen_iter_to_vec")
-            }
             // Known unimplemented Vec methods — historically
             // no-opped.
             "map" | "select" | "reject" | "reduce" | "min" | "max" | "any?" | "all?"

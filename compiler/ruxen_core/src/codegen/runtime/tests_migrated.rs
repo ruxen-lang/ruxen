@@ -52,14 +52,6 @@ fn migrated_vec_combinators_fall_through_runtime_table() {
         runtime_name("Vec[Int]_get_mut").unwrap(),
         "ruxen_vec_get_opt"
     );
-    assert_eq!(
-        runtime_name("Vec[Int]_into_iter").unwrap(),
-        "ruxen_iter_to_vec"
-    );
-    assert_eq!(
-        runtime_name("Vec[Int]_to_vec").unwrap(),
-        "ruxen_iter_to_vec"
-    );
 }
 
 #[test]
@@ -119,30 +111,11 @@ fn migrated_string_methods_fall_through_runtime_table() {
     );
 }
 
-#[test]
-fn iterator_passthrough_collectors_resolve() {
-    // The non-migrated identity passthroughs (`into_iter`,
-    // `iter_mut`, `to_vec`, `enumerate`, `as_slice`) all share
-    // the `ruxen_iter_to_vec` C symbol with the migrated `iter`.
-    // E0722 keeps us from declaring all five in
-    // `library/std/array/src/lib.rx`, so the runtime_table arm is
-    // still the source of truth for the aliases. `iter` ALONE
-    // moved to the alias map.
-    assert_eq!(
-        runtime_name("Vec[Int]_into_iter").unwrap(),
-        "ruxen_iter_to_vec",
-    );
-    assert_eq!(
-        runtime_name("Vec[Int]_to_vec").unwrap(),
-        "ruxen_iter_to_vec",
-    );
-    assert_eq!(
-        runtime_name("SplitIter_to_vec").unwrap(),
-        "ruxen_iter_to_vec",
-    );
-    // `Vec[Int]_iter` itself now falls through (migrated).
-    assert_eq!(runtime_name("Vec[Int]_iter").unwrap(), "Vec[Int]_iter");
-}
+// NOTE: `iterator_passthrough_collectors_resolve` was deleted with the
+// orphaned iterator machinery (Phase B / Milestone 2). The
+// `into_iter`/`iter_mut`/`to_vec`/`enumerate`/`as_slice` →
+// `ruxen_iter_to_vec` cluster no longer exists; nothing produces those
+// calls and `ruxen_iter_to_vec` was removed from the runtime.
 
 #[test]
 fn migrated_option_result_combinators_fall_through_runtime_table() {
