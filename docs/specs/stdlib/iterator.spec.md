@@ -3,7 +3,7 @@
 > **RETIRED by the Ruby-surface migration.** The iterator layer no
 > longer exists: there is no `.iter` / `.into_iter` / `.collect` /
 > `from_iter`, and the `Iterator` / `FromIterator` mixins are removed
-> (`library/std/iter/src/lib.rx` is now an empty no-op module). The
+> (`library/std/iter/` is deleted and dropped from the bootstrap). The
 > block combinators (`each` / `map` / `select` / `reject` / `reduce` /
 > `find` / `index` / `all?` / `any?` / `each_with_index` / …) are
 > methods **directly on `Array`** (and `Hash` / `Set`), inlined at the

@@ -93,7 +93,6 @@ pub const BOOTSTRAP_FILES: &[&str] = &[
     "rand/src/lib.rx",
     "path/src/lib.rx",
     "env/src/lib.rx",
-    "iter/src/lib.rx",
     "hash/src/lib.rx",
     "fmt/src/lib.rx",
     "net/src/lib.rx",
