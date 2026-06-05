@@ -880,7 +880,10 @@ impl MixinResolver {
     /// generic-arg-free name:
     ///   * `Ty::Array(_)` → `"Array"`   (vs `type_name`'s `"Array[Int]"`)
     ///   * `Ty::Set(_)`   → `"Set"`
-    ///   * `Ty::Map(_,_)` → `"Map"`
+    ///   * `Ty::Map(_,_)` → `"Hash"`    (`Ty::Map` Displays as `Hash[K, V]`;
+    ///                                   its method-home class is `class
+    ///                                   Hash[K, V]` in `map/src/lib.rx`,
+    ///                                   keyed in `type_methods` by `"Hash"`)
     ///   * `Ty::Str`      → `"String"`  (`&str` shares `class String`'s
     ///                                   surface; there is no `class str`)
     /// References are peeled first. Element-type substitution into the
@@ -895,7 +898,7 @@ impl MixinResolver {
             | Ty::RefMutLifetime(_, inner) => Self::method_home_key(inner),
             Ty::Array(_) => "Array".to_string(),
             Ty::Set(_) => "Set".to_string(),
-            Ty::Map(_, _) => "Map".to_string(),
+            Ty::Map(_, _) => "Hash".to_string(),
             Ty::Str => "String".to_string(),
             other => Self::type_name(other),
         }

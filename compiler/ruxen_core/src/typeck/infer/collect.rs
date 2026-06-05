@@ -811,8 +811,12 @@ impl<'a> InferenceEngine<'a> {
                 (&owned_synthetic.0, &owned_synthetic.1)
             }
             Ty::Map(k, v) => {
+                // `Ty::Map` Displays as `Hash[K, V]`; its method-home class
+                // is `class Hash[K, V]` (map/src/lib.rx), so substitute
+                // against that class's declared `[K, V]` params. Mirrors
+                // `MixinResolver::method_home_key`'s `Ty::Map → "Hash"`.
                 owned_synthetic = (
-                    "Map".to_string(),
+                    "Hash".to_string(),
                     vec![k.as_ref().clone(), v.as_ref().clone()],
                 );
                 (&owned_synthetic.0, &owned_synthetic.1)

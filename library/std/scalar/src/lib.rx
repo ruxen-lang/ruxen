@@ -1,0 +1,44 @@
+## std::scalar — scalar primitive method-home class (Int).
+##
+## Zero-Rust-stdlib migration, Phase 3 (Option C). `class Int` below is
+## the METHOD-HOME class for the `Ty::Int` primitive head: it carries
+## the FFI alias decls (`Int_to_s` → `ruxen_int_to_string`, etc.) AND
+## the true surface return types delegated via the builtin-receiver
+## bridge (`bridge_builtin_method`, reached because
+## `builtin_bridge::is_delegated_head` includes `Ty::Int`).
+##
+## CRITICAL INVARIANT — this class changes only the METHOD-HOME, NOT the
+## value representation. `Int` is registered as `TypeAlias { target:
+## Ty::Int }` by `register_primitives`; the bootstrap merge anchors this
+## class onto the same DefId and stomps it to `Class`, but
+## `resolve_type_expr`'s `primitive_class_ty` fast-path returns the
+## primitive head for a bare `let x: Int` annotation, so literals,
+## arithmetic, comparisons, and the C ABI / runtime repr are unchanged.
+## The receiver is passed by value (i64) at the call site — `42.to_s`.
+##
+## ## ABI notes — why ONLY Int (not Float/Bool/Char)
+##
+## The instance-method receiver is prepended to the derived FFI param
+## list as `Ty::Class { name: "Int" }` (`register_class_lib_method_in`),
+## which `ty_to_cranelift` lowers to a pointer-sized **I64**. That
+## happens to MATCH `ruxen_int_to_string(int64_t)` / `ruxen_int_to_f(
+## int64_t)` exactly, so Int migrates cleanly (the parity guard
+## `tests/runtime_abi_derivation.rs` confirms it).
+##
+## Float / Bool / Char do NOT migrate — the prepended class receiver is
+## always I64, but their C symbols take a `double` (Float → F64) or an
+## `int64_t` that a `class Bool` / `class Char` receiver would derive to
+## I8 / I32. The derived receiver width would contradict the C ABI and
+## fail the parity guard. They stay Rust residuals in
+## `typeck/method_resolvers/numeric.rs` — same divergence rule as
+## `String.remove`. FOLLOW-UP: teach the receiver-prepend to use the
+## primitive head (or widen the C receivers) and migrate Float/Bool/Char.
+## `USize.to_s` / `to_string` likewise stay residual — there is no
+## `class USize` (it shares `ruxen_int_to_string` with Int).
+class Int
+  lib "../../string/runtime/string.c"
+    def to_string as "ruxen_int_to_string" -> String
+    def to_s as "ruxen_int_to_string" -> String
+    def to_f as "ruxen_int_to_f" -> Float
+  end
+end

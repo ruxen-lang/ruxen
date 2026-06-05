@@ -1,27 +1,51 @@
 ## std::map — `Hash[K, V]` method surface (Ruby's Hash).
 ##
+## Zero-Rust-stdlib migration, Phase 3 (Option C). `class Hash[K, V]`
+## below carries BOTH the FFI alias decls (`Hash_<m>` → `ruxen_hash_<m>`,
+## consumed by `Lowerer::resolve_ffi_alias_callee`) AND the TRUE surface
+## return types delegated via the builtin-receiver bridge
+## (`bridge_builtin_method`, reached for `Ty::Map(_,_)` because
+## `builtin_bridge::is_delegated_head` now includes the Map head).
+##
+## `Ty::Map` Displays as `Hash[K, V]`, so the call-site mangling and the
+## method-home key both use `"Hash"`: `method_home_key(Ty::Map) → "Hash"`
+## and `substitute_generics_in_return`'s synthetic name is `"Hash"`, so
+## the class's declared `[K, V]` substitute against the receiver's
+## concrete key/value types.
+##
 ## `Hash` is NOT in `register_builtins`'s type-scope map — `let h:
 ## Hash[K, V]` resolves via the hardcoded arm in `resolve_type_expr`
-## that builds `Ty::Map(_, _)` directly. The class below exists to
-## register the FFI aliases (`Hash_<m>` → `ruxen_hash_<m>`) consumed
-## by `Lowerer::resolve_ffi_alias_callee`.
+## that builds `Ty::Map(_, _)` directly. The class below homes the
+## METHODS without touching the receiver TYPE.
+##
+## ## ABI notes
+##
+## Every method's true surface type is ABI-identical to its C symbol's
+## wire width: `void*` (`get`/`remove`, boxed `Option`) / `RuxenVec*`
+## (`keys`/`values`/`to_a`) / `RuxenHash*` (`new`/`with_capacity`) cross
+## the C ABI as I64, `uint64_t` (len) as I64 (= `USize`), `int8_t`
+## (`contains_key`) as I8 (= `Bool`). The parity guard
+## `tests/runtime_abi_derivation.rs` pins the widths.
+##
+## No residuals — every Hash method has a real C symbol and a statically
+## substitutable return.
 ##
 ## The internal `Ty::Map` variant and the `ruxen_hash_*` runtime
 ## symbols keep their legacy names; only the surface spelling is
 ## Ruby (`Hash`, never the Rust `Map` / `HashMap`).
-class Hash
+class Hash[K, V]
   lib "../hash/runtime/hash.c"
-    def self.new as "ruxen_hash_new" -> Int
-    def self.with_capacity as "ruxen_hash_with_capacity"(cap: Int) -> Int
-    def size as "ruxen_hash_len" -> Int
+    def self.new as "ruxen_hash_new" -> Hash[K, V]
+    def self.with_capacity as "ruxen_hash_with_capacity"(cap: Int) -> Hash[K, V]
+    def size as "ruxen_hash_len" -> USize
     def empty? as "ruxen_hash_is_empty" -> Bool
-    def get as "ruxen_hash_get"(key: Int) -> Int
-    def key? as "ruxen_hash_contains_key"(key: Int) -> Bool
-    def keys as "ruxen_hash_keys" -> Int
-    def values as "ruxen_hash_values" -> Int
-    def to_a as "ruxen_hash_entries" -> Int
-    def insert as "ruxen_hash_insert"(key: Int, value: Int)
-    def remove as "ruxen_hash_remove"(key: Int) -> Int
+    def get as "ruxen_hash_get"(key: K) -> Option[&V]
+    def key? as "ruxen_hash_contains_key"(key: K) -> Bool
+    def keys as "ruxen_hash_keys" -> Array[&K]
+    def values as "ruxen_hash_values" -> Array[&V]
+    def to_a as "ruxen_hash_entries" -> Array[(K, V)]
+    def insert as "ruxen_hash_insert"(key: K, value: V)
+    def remove as "ruxen_hash_remove"(key: K) -> Option[V]
     def clear as "ruxen_hash_clear"
   end
 end

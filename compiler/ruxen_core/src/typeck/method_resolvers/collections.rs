@@ -100,24 +100,10 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
             (Ty::Array(_), "sort_by") => Some(Ty::Unit),
             (Ty::Array(_), "select!") => Some(Ty::Unit),
 
-            // HashMap methods
-            (Ty::Map(_, _), "new") => Some(ty.clone()),
-            (Ty::Map(_, _), "insert") => Some(Ty::Unit),
-            (Ty::Map(_, v), "get") => Some(Ty::Option(Box::new(Ty::Ref(v.clone())))),
-            (Ty::Map(_, _), "key?") => Some(Ty::Bool),
-            (Ty::Map(_, _), "size") => Some(Ty::USize),
-            (Ty::Map(_, _), "empty?") => Some(Ty::Bool),
-            // Phase 2 stdlib (#04): full HashMap[K,V] surface.
-            (Ty::Map(_, _), "with_capacity") => Some(ty.clone()),
-            (Ty::Map(_, v), "remove") => Some(Ty::Option(v.clone())),
-            (Ty::Map(_, _), "clear") => Some(Ty::Unit),
-            (Ty::Map(k, _), "keys") => Some(Ty::Array(Box::new(Ty::Ref(k.clone())))),
-            (Ty::Map(_, v), "values") => Some(Ty::Array(Box::new(Ty::Ref(v.clone())))),
-            // Ruby's `hash.to_a` returns `[(K, V)]` pairs (owned tuples,
-            // same aliased-heap contract as `zip`), not the bare key list.
-            (Ty::Map(k, v), "to_a") => {
-                Some(Ty::Array(Box::new(Ty::Tuple(vec![*k.clone(), *v.clone()]))))
-            }
+            // Hash (Map) methods MIGRATED to `library/std/map/src/lib.rx`
+            // (`class Hash[K, V]`) — every Map method has a real C symbol
+            // and a statically substitutable return, so all resolve
+            // through `builtin_bridge`; no residual Map arms remain.
 
             // Set methods MIGRATED to `library/std/set/src/lib.rx`
             // (`class Set[T]`) — every Set method has a real C symbol and

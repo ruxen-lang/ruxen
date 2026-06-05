@@ -147,6 +147,12 @@ pub const BOOTSTRAP_FILES: &[&str] = &[
     "array/src/lib.rx",
     "map/src/lib.rx",
     "set/src/lib.rx",
+    // scalar — method-home `class Int` / `class Float` for the scalar
+    // primitive heads (zero-Rust-stdlib Phase 3). Depends on `string`
+    // (loaded above) for the `-> String` return type of `to_s` /
+    // `to_string` and the shared `string/runtime/string.c` symbols
+    // (`ruxen_int_to_string` / `ruxen_int_to_f` / `ruxen_float_*`).
+    "scalar/src/lib.rx",
     // json depends on array/map/string for its explicit builder surface.
     // Keep it after those packages so `Array[Json]`, `Map[String, Json]`,
     // and `String` payload helpers resolve.

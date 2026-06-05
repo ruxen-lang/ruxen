@@ -326,24 +326,12 @@ mod golden {
             v.push(c(arr(), m));
         }
 
-        // ── Ty::Map structural ─────────────────────────────────────
-        let map = || Ty::Map(Box::new(Ty::String), Box::new(Ty::Int));
-        for m in [
-            "new",
-            "insert",
-            "get",
-            "key?",
-            "size",
-            "empty?",
-            "with_capacity",
-            "remove",
-            "clear",
-            "keys",
-            "values",
-            "to_a",
-        ] {
-            v.push(c(map(), m));
-        }
+        // ── Ty::Map structural — fully migrated to map.rx (class Hash) ─
+        // Every Map method (new/with_capacity/size/empty?/get/key?/keys/
+        // values/to_a/insert/remove/clear) resolves from map.rx via the
+        // bridge; with an EMPTY symbol table they return None, so there
+        // is NOTHING to pin here. End-to-end resolution is covered by
+        // `hash_resolves_to_ty_map` + the e2e suite.
 
         // ── Ty::Set structural — fully migrated to set.rx ──────────
         // Every Set method (new/with_capacity/size/empty?/include?/to_a/
@@ -482,15 +470,17 @@ mod golden {
             v.push(c(class("BufWriter", vec![class("File", vec![])]), m));
         }
 
-        // ── Enum / numeric / scalar structural (TIER 3) ────────────
+        // ── Enum / numeric / scalar structural RESIDUAL (TIER 3) ───
+        // Int `to_s` / `to_string` / `to_f` MIGRATED to scalar.rx
+        // (`class Int`) and resolve via the bridge; with an EMPTY symbol
+        // table they return None, so they are NOT pinned here. The
+        // ABI-divergent Float/Bool/Char and the class-less USize
+        // residuals stay in numeric.rs and ARE pinned.
         v.push(c(enum_ty("Priority"), "weight"));
         v.push(c(Ty::Bool, "to_string"));
-        v.push(c(Ty::Int, "to_string"));
         v.push(c(Ty::USize, "to_string"));
         v.push(c(Ty::Float, "to_string"));
-        v.push(c(Ty::Int, "to_f"));
         v.push(c(Ty::Float, "to_i"));
-        v.push(c(Ty::Int, "to_s"));
         v.push(c(Ty::USize, "to_s"));
         v.push(c(Ty::Float, "to_s"));
         v.push(c(Ty::Bool, "to_s"));
