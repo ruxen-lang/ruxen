@@ -30,7 +30,6 @@
 use crate::hir::types::Ty;
 
 use super::resolver::MethodResolver;
-use super::InferenceEngine;
 
 pub(super) fn resolvers() -> Vec<MethodResolver> {
     vec![MethodResolver {
@@ -41,8 +40,15 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
                 method,
                 "remove" | "to_s" | "push" | "push_str" | "insert" | "insert_str"
             ),
-            // `&str` has no stdlib class — all its methods stay here.
-            Ty::Str => true,
+            // `&str` routes to `class String` via the bridge
+            // (`method_home_key: Ty::Str → "String"`); only the surfaces
+            // that genuinely DIFFER from `class String`'s declared return
+            // stay here, running AHEAD of the bridge to shadow it:
+            //   * `to_lower`/`to_upper` — `&str` yields `str`, the `.rx`
+            //     decl yields `String`.
+            //   * `parse_uint` — no `class String` counterpart.
+            //   * `to_s` — `class String` declares only `to_string`.
+            Ty::Str => matches!(method, "to_lower" | "to_upper" | "parse_uint" | "to_s"),
             _ => false,
         },
         resolve: |_eng, ty, method, _args, _span| match (ty, method) {
@@ -67,38 +73,24 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
             | (Ty::String, "insert")
             | (Ty::String, "insert_str") => Some(Ty::Unit),
 
-            // ── Ty::Str (&str) methods — no `class str` to bridge to ──
-            (Ty::Str, "size") => Some(Ty::USize),
-            (Ty::Str, "empty?") => Some(Ty::Bool),
-            (Ty::Str, "trim") => Some(Ty::Str),
+            // ── Ty::Str (&str) RESIDUAL arms — shadow the bridge ──────
+            // The exact-match `&str` surfaces (size/empty?/trim/
+            // trim_start/trim_end/chars/lines/split/splitn/bytes/as_str/
+            // include?/starts_with/ends_with/find/replace/to_string/
+            // parse_int/parse_float) MIGRATED to `class String` via the
+            // bridge (`method_home_key: Ty::Str → "String"`); their
+            // returns are ABI-identical to the shared `ruxen_string_*`
+            // symbols. Only the genuinely-divergent surfaces stay:
+            //   * `to_lower`/`to_upper` — `&str` yields `str` (the C
+            //     symbol returns a borrowed slice into the source); the
+            //     `.rx` `class String` decl yields an owned `String`.
+            //   * `parse_uint` — no `class String` counterpart symbol.
+            //   * `to_s` — `class String` declares only `to_string`; the
+            //     structural `to_s` fallback matches Class/Struct/Enum,
+            //     not the `Ty::Str` primitive head.
             (Ty::Str, "to_lower") => Some(Ty::Str),
             (Ty::Str, "to_upper") => Some(Ty::Str),
-            (Ty::Str, "chars") => Some(Ty::Array(Box::new(Ty::Char))),
-            // String#split returns Array<String> in Ruby — always. Both
-            // owned-`String` and borrowed-`&str` receivers produce the
-            // same surface type (pin: `docs/rondo_v1_blockers.md` B13).
-            (Ty::Str, "split") => Some(Ty::Array(Box::new(Ty::String))),
             (Ty::Str, "parse_uint") => Some(Ty::Result(Box::new(Ty::USize), Box::new(Ty::Error))),
-            (Ty::Str, "as_str") => Some(Ty::Str),
-            (Ty::Str, "include?") => Some(Ty::Bool),
-            (Ty::Str, "starts_with") => Some(Ty::Bool),
-            (Ty::Str, "ends_with") => Some(Ty::Bool),
-            (Ty::Str, "lines") => Some(Ty::Array(Box::new(Ty::String))),
-            (Ty::Str, "replace") => Some(Ty::String),
-            (Ty::Str, "to_string") => Some(Ty::String),
-            (Ty::Str, "bytes") => Some(Ty::Array(Box::new(Ty::UInt8))),
-            (Ty::Str, "trim_start") => Some(Ty::Str),
-            (Ty::Str, "trim_end") => Some(Ty::Str),
-            (Ty::Str, "find") => Some(Ty::Option(Box::new(Ty::USize))),
-            (Ty::Str, "splitn") => Some(Ty::Array(Box::new(Ty::String))),
-            (Ty::Str, "parse_int") => Some(Ty::Result(
-                Box::new(Ty::Int),
-                Box::new(InferenceEngine::class_ty("ParseIntError", vec![])),
-            )),
-            (Ty::Str, "parse_float") => Some(Ty::Result(
-                Box::new(Ty::Float),
-                Box::new(InferenceEngine::class_ty("ParseFloatError", vec![])),
-            )),
             (Ty::Str, "to_s") => Some(Ty::String),
             // Within-namespace fallthrough (not a cross-cutting catch-all).
             _ => None,

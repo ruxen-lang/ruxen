@@ -253,32 +253,16 @@ mod golden {
             v.push(c(Ty::String, m));
         }
 
-        // ── Ty::Str structural ─────────────────────────────────────
-        for m in [
-            "size",
-            "empty?",
-            "trim",
-            "to_lower",
-            "to_upper",
-            "chars",
-            "split",
-            "parse_uint",
-            "as_str",
-            "include?",
-            "starts_with",
-            "ends_with",
-            "lines",
-            "replace",
-            "to_string",
-            "bytes",
-            "trim_start",
-            "trim_end",
-            "find",
-            "splitn",
-            "parse_int",
-            "parse_float",
-            "to_s",
-        ] {
+        // ── Ty::Str residual (shadow the bridge) ───────────────────
+        // The exact-match `&str` surfaces MIGRATED to `class String` via
+        // the bridge (`method_home_key: Ty::Str → "String"`); under the
+        // golden's EMPTY symbol table they return None and are NOT pinned.
+        // Only the genuinely-divergent residual arms in strings.rs ARE
+        // pinned: `to_lower`/`to_upper` (yield `str` not `String`),
+        // `parse_uint` (no `class String` counterpart), `to_s` (no `.rx`
+        // `to_s` decl). End-to-end `.rx` resolution for the migrated
+        // surface is covered by the builtin_receiver_bridge pins + e2e.
+        for m in ["to_lower", "to_upper", "parse_uint", "to_s"] {
             v.push(c(Ty::Str, m));
         }
 

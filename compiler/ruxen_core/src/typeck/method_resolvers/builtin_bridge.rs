@@ -38,9 +38,19 @@ fn is_delegated_head(ty: &Ty) -> bool {
     // `double` (F64) and `Bool`/`Char`'s narrower heads (I8/I32). Their
     // `to_s` / conversions stay Rust residuals in `numeric.rs` — same
     // ABI-divergence rule as `String.remove`.
+    //
+    // `Ty::Str` (`&str`) IS delegated: `method_home_key` routes it to
+    // `class String` (there is no `class str`), and a `&str` receiver is
+    // a pointer-sized I64 — wire-compatible with the `ruxen_string_*`
+    // symbols those decls bind. Both `&str` and `&String` cross the C ABI
+    // as one pointer, so the receiver-prepend is ABI-faithful. The few
+    // `&str` surfaces that genuinely DIFFER from `class String`'s return
+    // (`to_lower`/`to_upper` yield `str` not `String`, `parse_uint` has
+    // no `String` counterpart, `to_s`) stay as residual arms in
+    // `strings.rs`, which run AHEAD of this bridge and shadow it.
     matches!(
         ty,
-        Ty::String | Ty::Array(_) | Ty::Set(_) | Ty::Map(_, _) | Ty::Int
+        Ty::String | Ty::Str | Ty::Array(_) | Ty::Set(_) | Ty::Map(_, _) | Ty::Int
     )
 }
 
