@@ -32,16 +32,10 @@ use super::infer::{is_bufio_inner_supported, is_iter_sum_compatible, InferenceEn
 
 mod collections;
 mod concurrency;
-mod fmt;
-mod fs;
 mod io;
-mod iter;
-mod net;
 mod numeric;
-mod process;
 mod resolver;
 mod strings;
-mod time;
 
 use resolver::MethodResolver;
 
@@ -84,17 +78,35 @@ fn resolvers() -> &'static [MethodResolver] {
     PIPELINE.get_or_init(|| {
         let mut v = Vec::new();
         v.extend(resolver::declared_method_resolvers()); // TIER 1 — fixes A2
-        v.extend(concurrency::resolvers()); // TIER 2 — named stdlib
-        v.extend(fmt::resolvers());
+                                                         // TIER 2 — named-stdlib residual. After the zero-Rust-stdlib
+                                                         // migration (Phase B), only the resolvers carrying genuine
+                                                         // compiler logic remain:
+                                                         //   * `concurrency` — Mutex/Arc/JoinHandle generic-payload
+                                                         //     substitution + the E1100/E1101/E1102 Send construction
+                                                         //     checks (Problem-3 residual, not a static `.rx` return).
+                                                         //   * `io` — BufReader/BufWriter `new`/`with_capacity` E0714
+                                                         //     inner-type check + their generic-representation methods.
+        v.extend(concurrency::resolvers());
         v.extend(io::resolvers());
-        v.extend(fs::resolvers());
-        v.extend(process::resolvers());
-        v.extend(net::resolvers());
-        v.extend(time::resolvers());
         v.extend(strings::resolvers()); // TIER 3 — structural
         v.extend(collections::resolvers());
         v.extend(numeric::resolvers());
-        v.extend(iter::resolvers());
+        // MIGRATED to `.rx` (resolve via `lookup_method_with_args` from the
+        // general `DefKind::Method` path), resolver tables deleted:
+        //   * `time`    — Duration/Instant       (library/std/time/src/lib.rx)
+        //   * `fs`      — File/Metadata/OpenOptions
+        //                 (library/std/io/src/{file,metadata,open_options}.rx)
+        //   * `net`     — TcpListener/TcpStream   (library/std/net/src/lib.rx)
+        //   * `process` — Command/ExitStatus/Output
+        //                 (library/std/process/src/lib.rx)
+        //   * `fmt`     — Formatter               (library/std/fmt/src/lib.rx)
+        //   * `io` Stdin/Stdout/Stderr/IoError
+        //                 (library/std/io/src/{stdin,stdout,stderr,lib}.rx)
+        //
+        // The `*Iter` combinator resolver was deleted with the rest of the
+        // orphaned iterator machinery — `split`/`chars`/`lines`/`bytes`
+        // return `Array`, nothing produces `VecIter`/`SplitIter`, and no
+        // `.rx`/fixture calls `.iter`/`.into_iter`.
         v.extend(resolver::structural_fallback_resolvers()); // TIER 3 tail
         v
     })
@@ -430,136 +442,31 @@ mod golden {
         v.push(c(class("Arc", vec![Ty::Int]), "strong_count"));
         v.push(c(class("Arc", vec![Ty::Int]), "weak_count"));
 
-        // ── fmt (TIER 2) ───────────────────────────────────────────
-        for m in [
-            "write_str",
-            "write_char",
-            "size",
-            "width",
-            "precision",
-            "align",
-            "fill",
-        ] {
-            v.push(c(class("Formatter", vec![]), m));
-        }
+        // ── fmt (Formatter) migrated to .rx ────────────────────────
+        // Resolve from `library/std/fmt/src/lib.rx` via
+        // `lookup_method_with_args`; the fmt resolver was deleted.
 
-        // ── *Iter combinators (TIER 2-ish, name.ends_with("Iter")) ──
-        let veciter = || class("VecIter", vec![Ty::Int]);
-        for m in [
-            "select",
-            "map",
-            "find",
-            "index",
-            "sum",
-            "count",
-            "reduce",
-            "all?",
-            "any?",
-            "take",
-            "drop",
-            "chain",
-            "zip",
-            "collect_vec",
-            "enumerate",
-            "partition",
-        ] {
-            v.push(c(veciter(), m));
-        }
-        // SplitIter.to_vec yields &str segments (distinct branch).
-        v.push(c(class("SplitIter", vec![]), "to_vec"));
+        // ── *Iter combinators removed (orphaned iterator machinery) ─
+        // The `iter` resolver was deleted; nothing produces VecIter/
+        // SplitIter and no surface calls `.iter`/`.into_iter`.
 
-        // ── io: Stdin / Stdout / Stderr / IoError ──────────────────
-        for m in ["read_line", "read_to_string", "lines"] {
-            v.push(c(class("Stdin", vec![]), m));
-        }
-        for m in ["write_str", "flush", "print", "println"] {
-            v.push(c(class("Stdout", vec![]), m));
-        }
-        for m in ["write_str", "flush", "eprint", "eprintln"] {
-            v.push(c(class("Stderr", vec![]), m));
-        }
-        v.push(c(enum_ty("IoError"), "message"));
-        v.push(c(enum_ty("IoError"), "kind"));
+        // ── io: Stdin / Stdout / Stderr / IoError migrated to .rx ──
+        // Resolve from `library/std/io/src/{stdin,stdout,stderr,lib}.rx`
+        // via `lookup_method_with_args`; those io resolver arms were
+        // deleted. BufReader / BufWriter remain Rust residual (E0714 +
+        // generic representation) — exercised below.
 
-        // ── fs: Metadata / File / OpenOptions ──────────────────────
-        for m in ["size", "modified", "is_file", "is_dir", "is_symlink"] {
-            v.push(c(class("Metadata", vec![]), m));
-        }
-        for m in [
-            "open",
-            "create",
-            "append",
-            "open_options",
-            "read",
-            "read_to_string",
-            "read_all",
-            "write",
-            "write_all",
-            "write_str",
-            "flush",
-            "seek",
-            "metadata",
-            "close",
-        ] {
-            v.push(c(class("File", vec![]), m));
-        }
-        for m in [
-            "read",
-            "write",
-            "append",
-            "truncate",
-            "create",
-            "create_new",
-        ] {
-            v.push(c(class("OpenOptions", vec![]), m));
-        }
+        // ── fs (Metadata / File / OpenOptions) migrated to .rx ─────
+        // Those methods resolve from
+        // `library/std/io/src/{file,metadata,open_options}.rx` via
+        // `lookup_method_with_args`; the fs resolver was deleted, so the
+        // golden corpus (empty symbol table) no longer pins them.
 
-        // ── process: Command / ExitStatus / Output ─────────────────
-        for m in ["arg", "args", "env", "current_dir", "status", "output"] {
-            v.push(c(class("Command", vec![]), m));
-        }
-        for m in ["code", "success"] {
-            v.push(c(class("ExitStatus", vec![]), m));
-        }
-        for m in ["status", "stdout", "stderr"] {
-            v.push(c(class("Output", vec![]), m));
-        }
+        // ── process (Command/ExitStatus/Output) migrated to .rx ────
+        // Resolve from `library/std/process/src/lib.rx`.
 
-        // ── time: Duration / Instant ───────────────────────────────
-        for m in [
-            "from_secs",
-            "from_millis",
-            "from_micros",
-            "from_nanos",
-            "as_secs",
-            "as_millis",
-            "as_micros",
-            "as_nanos",
-            "add",
-            "sub",
-        ] {
-            v.push(c(class("Duration", vec![]), m));
-        }
-        for m in ["now", "elapsed", "duration_since", "sub"] {
-            v.push(c(class("Instant", vec![]), m));
-        }
-
-        // ── net: TcpListener / TcpStream ───────────────────────────
-        for m in ["bind", "accept", "local_addr", "set_nonblocking", "close"] {
-            v.push(c(class("TcpListener", vec![]), m));
-        }
-        for m in [
-            "connect",
-            "read",
-            "write",
-            "peer_addr",
-            "shutdown",
-            "close",
-            "set_read_timeout",
-            "set_write_timeout",
-        ] {
-            v.push(c(class("TcpStream", vec![]), m));
-        }
+        // ── net (TcpListener/TcpStream) migrated to .rx ────────────
+        // Resolve from `library/std/net/src/lib.rx`.
 
         // ── BufReader / BufWriter (effectful E0714) ────────────────
         // `new` with a supported inner (File) — no diagnostic.
@@ -663,9 +570,6 @@ mod golden {
             "with_capacity",
             vec![arg(Ty::Int), arg(Ty::Int)],
         ));
-        // *Iter.sum on a non-numeric element type → E0700.
-        v.push(c(class("VecIter", vec![Ty::String]), "sum"));
-
         v
     }
 
