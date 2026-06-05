@@ -95,6 +95,24 @@ impl MixinResolver {
         if arg_ty.is_infer() || arg_ty.is_error() || arg_ty == param_ty {
             return true;
         }
+        // Zero-Rust-stdlib bridge (Phase 2): the migrated collection
+        // classes declare arg-bearing methods against their OWN generic
+        // params — `class Set[T]`'s `include?(item: T)`,
+        // `union(other: Set[T])`; `class Array[T]`'s `push(x: T)`,
+        // `chain(other: Array[T])`. When `lookup_method_with_args`
+        // selects such a method for a CONCRETE receiver (`Set[Int]`),
+        // the arg type is the concrete element (`Int`) while the declared
+        // param is still the unbound `TypeParam(T)`. The element
+        // substitution that would bind `T → Int` happens DOWNSTREAM (in
+        // `substitute_generics_in_return`), AFTER selection — so at
+        // selection time an unbound generic param must accept any arg of
+        // the matching structural shape, or the method is never selected
+        // and the receiver stays `Ty::Infer` (the `?T_method` mangling
+        // the bridge exists to prevent). Mirrors
+        // `InferenceEngine::method_accepts_args`.
+        if Self::param_admits_generic_arg(arg_ty, param_ty) {
+            return true;
+        }
         // Peel a single reference layer on the param so `&String` / `&str`
         // params accept the corresponding value/str args.
         let param_inner = match param_ty {
@@ -130,6 +148,58 @@ impl MixinResolver {
             }
         }
         false
+    }
+
+    /// Whether `param_ty` is (or structurally contains, at its leaves) the
+    /// class's own unbound generic param, such that a concrete `arg_ty`
+    /// satisfies it at SELECTION time. Reference layers are peeled
+    /// symmetrically (an owned arg also satisfies a `&T` borrow); a bare
+    /// `TypeParam` param is a wildcard; a same-head container param
+    /// (`Set[T]` vs `Set[Int]`, `Array[T]` vs `Array[Int]`, `Option[T]`
+    /// vs `Option[Int]`, …) recurses into the element position.
+    ///
+    /// Deliberately narrow: it accepts ONLY when a generic param is
+    /// actually present in the param type. A fully-concrete param
+    /// (`&String`, `Int`) is left to the concrete arms above, so a
+    /// genuine type mismatch (`push("x")` on `Array[Int]`) is NOT
+    /// silently admitted here.
+    fn param_admits_generic_arg(arg_ty: &Ty, param_ty: &Ty) -> bool {
+        // Peel a reference layer off the param (a `&T` / `&Set[T]` borrow
+        // is satisfied by the corresponding owned arg, and by a borrowed
+        // arg — both shapes show up at call sites like `a.union(&b)`).
+        let param_peeled = match param_ty {
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => inner.as_ref(),
+            other => other,
+        };
+        // Peel the matching reference layer off the arg too.
+        let arg_peeled = match arg_ty {
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => inner.as_ref(),
+            other => other,
+        };
+        match param_peeled {
+            // An unbound generic param accepts any concrete arg.
+            Ty::TypeParam { .. } => true,
+            // Same-head containers: recurse into the element/key/value so
+            // `Set[T]` admits `Set[Int]`, `Array[T]` admits `Array[Int]`.
+            Ty::Array(p) => matches!(arg_peeled, Ty::Array(a)
+                if Self::param_admits_generic_arg(a, p)),
+            Ty::Set(p) => {
+                matches!(arg_peeled, Ty::Set(a) if Self::param_admits_generic_arg(a, p))
+            }
+            Ty::Option(p) => matches!(arg_peeled, Ty::Option(a)
+                if Self::param_admits_generic_arg(a, p)),
+            Ty::Map(pk, pv) => matches!(arg_peeled, Ty::Map(ak, av)
+                if Self::param_admits_generic_arg(ak, pk)
+                    && Self::param_admits_generic_arg(av, pv)),
+            // No generic param present → defer to the concrete arms.
+            _ => false,
+        }
     }
 
     fn select_signature(sigs: Option<&Vec<FnSignature>>, args: &[HirExpr]) -> Option<FnSignature> {

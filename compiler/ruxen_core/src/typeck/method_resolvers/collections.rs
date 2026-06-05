@@ -20,16 +20,26 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
             )
         },
         resolve: |eng: &mut InferenceEngine<'_>, ty, method, _args, _span| match (ty, method) {
-            // Vec methods
-            (Ty::Array(_), "size") => Some(Ty::USize),
-            (Ty::Array(_), "empty?") => Some(Ty::Bool),
-            (Ty::Array(_), "push") => Some(Ty::Unit),
-            (Ty::Array(elem), "pop") => Some(Ty::Option(elem.clone())),
-            (Ty::Array(elem), "get") => Some(Ty::Option(Box::new(Ty::Ref(elem.clone())))),
+            // ── Array RESIDUAL arms (run AHEAD of builtin_bridge) ──────
+            // The non-residual Array methods (size/empty?/push/pop/get/
+            // first/last/include?/clone/to_a/reverse/sort/join/clear/
+            // truncate/swap/insert/remove/extend/dedup/take/drop/chain/
+            // to_set/new/with_capacity/capacity/count) were MIGRATED to
+            // `library/std/array/src/lib.rx` (`class Array[T]`) and now
+            // resolve through `builtin_bridge`. What stays here:
+            //
+            //   * CLOSURE combinators — inlined in mir/lower/closure_inline;
+            //     their return types are closure-inferred (a fresh type var
+            //     or an element-derived shape), not a static `.rx` return.
+            //   * `zip` — the pair's second element type is read from the
+            //     ARG, so it cannot be a fixed declared return.
+            //   * `to_h` — the Map key/value types are read from the
+            //     receiver's tuple element, likewise arg/receiver-derived.
+            //   * `sum` — carries the E0700 non-numeric-element check.
+            //   * `get_mut` — `Option[&var T]` aliases `ruxen_vec_get_opt`
+            //     with a wire shape that differs from `get`'s `&T`, so a
+            //     second `.rx` alias would trip E0722.
             (Ty::Array(elem), "get_mut") => Some(Ty::Option(Box::new(Ty::RefMut(elem.clone())))),
-            // No `.iter` / `.into_iter` / `.collect` / `.to_vec` — Ruby has no
-            // iterator-adapter layer. Combinators (`map`/`select`/`reduce`/…)
-            // and `for x in arr` work directly on the Array.
             (Ty::Array(_), "each") => Some(Ty::Unit),
             // Ruby `each_with_index { |element, index| }` — yields the element
             // and its 0-based index. Inlined in closure_inline/each_with_index.
@@ -43,16 +53,11 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
             (Ty::Array(_), "any?") => Some(Ty::Bool),
             (Ty::Array(elem), "find") => Some(Ty::Option(Box::new(Ty::Ref(elem.clone())))),
             (Ty::Array(_), "index") => Some(Ty::Option(Box::new(Ty::USize))),
-            // Ruby `take(n)` / `drop(n)` return a fresh Array directly.
-            (Ty::Array(elem), "take") => Some(Ty::Array(elem.clone())),
-            (Ty::Array(elem), "drop") => Some(Ty::Array(elem.clone())),
-            // Direct Array combinators (no `.iter` ceremony). `partition`
-            // is inlined; `chain`/`min`/`max` map to runtime vec helpers.
+            // `partition` is inlined; returns a (matching, rest) tuple.
             (Ty::Array(elem), "partition") => Some(Ty::Tuple(vec![
                 Ty::Array(elem.clone()),
                 Ty::Array(elem.clone()),
             ])),
-            (Ty::Array(elem), "chain") => Some(Ty::Array(elem.clone())),
             (Ty::Array(elem), "zip") => {
                 let other = match _args.first() {
                     Some(a) => match eng.ctx.resolve(&a.ty) {
@@ -67,10 +72,8 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
                 };
                 Some(Ty::Array(Box::new(Ty::Tuple(vec![*elem.clone(), other]))))
             }
-            // Ruby conversions. `arr.to_set` → Set[T]; `pairs.to_h` builds
-            // a Map[K, V] from an Array of (K, V) tuples.
-            (Ty::Array(_), "to_a") => Some(ty.clone()),
-            (Ty::Array(elem), "to_set") => Some(Ty::Set(elem.clone())),
+            // `pairs.to_h` builds a Map[K, V] from an Array of (K, V) tuples
+            // — the K/V come from the receiver's tuple element.
             (Ty::Array(elem), "to_h") => match elem.as_ref() {
                 Ty::Tuple(kv) if kv.len() == 2 => {
                     Some(Ty::Map(Box::new(kv[0].clone()), Box::new(kv[1].clone())))
@@ -80,7 +83,6 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
                     Box::new(eng.ctx.fresh_type_var()),
                 )),
             },
-            (Ty::Array(_), "new") => Some(ty.clone()),
             // `sum` integer-sums raw slots — reject non-numeric elements
             // (Ruby's `["a"].sum` errors too) with a typeck-time E0700.
             (Ty::Array(elem), "sum") => {
@@ -95,25 +97,6 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
                 }
                 Some(Ty::Int)
             }
-            (Ty::Array(_), "count") => Some(Ty::USize),
-            (Ty::Array(_), "reverse") => Some(ty.clone()),
-            (Ty::Array(elem), "first") => Some(Ty::Option(elem.clone())),
-            (Ty::Array(elem), "last") => Some(Ty::Option(elem.clone())),
-            (Ty::Array(_), "clone") => Some(ty.clone()),
-            (Ty::Array(_), "include?") => Some(Ty::Bool),
-            (Ty::Array(_), "sort") => Some(ty.clone()),
-            (Ty::Array(_), "join") => Some(Ty::String),
-            // Phase 2 stdlib batch 1 (#03).
-            (Ty::Array(_), "with_capacity") => Some(ty.clone()),
-            (Ty::Array(_), "capacity") => Some(Ty::USize),
-            (Ty::Array(_), "clear") => Some(Ty::Unit),
-            (Ty::Array(_), "truncate") => Some(Ty::Unit),
-            (Ty::Array(_), "swap") => Some(Ty::Unit),
-            (Ty::Array(_), "insert") => Some(Ty::Unit),
-            (Ty::Array(elem), "remove") => Some(*elem.clone()),
-            (Ty::Array(_), "extend") => Some(Ty::Unit),
-            // Phase 2 stdlib batch 2 (#03).
-            (Ty::Array(_), "dedup") => Some(Ty::Unit),
             (Ty::Array(_), "sort_by") => Some(Ty::Unit),
             (Ty::Array(_), "select!") => Some(Ty::Unit),
 
@@ -136,20 +119,10 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
                 Some(Ty::Array(Box::new(Ty::Tuple(vec![*k.clone(), *v.clone()]))))
             }
 
-            // Set methods
-            (Ty::Set(_), "new") => Some(ty.clone()),
-            (Ty::Set(_), "insert") => Some(Ty::Unit),
-            (Ty::Set(_), "include?") => Some(Ty::Bool),
-            (Ty::Set(_), "size") => Some(Ty::USize),
-            (Ty::Set(_), "empty?") => Some(Ty::Bool),
-            // Phase 2 stdlib (#04): full HashSet[T] surface.
-            (Ty::Set(_), "with_capacity") => Some(ty.clone()),
-            (Ty::Set(_), "remove") => Some(Ty::Bool),
-            (Ty::Set(_), "clear") => Some(Ty::Unit),
-            (Ty::Set(t), "to_a") => Some(Ty::Array(Box::new(Ty::Ref(t.clone())))),
-            (Ty::Set(_), "union") => Some(ty.clone()),
-            (Ty::Set(_), "intersection") => Some(ty.clone()),
-            (Ty::Set(_), "difference") => Some(ty.clone()),
+            // Set methods MIGRATED to `library/std/set/src/lib.rx`
+            // (`class Set[T]`) — every Set method has a real C symbol and
+            // a statically substitutable return, so all resolve through
+            // `builtin_bridge`; no residual Set arms remain.
 
             // Option try_op (the ? operator desugars to this)
             (Ty::Option(inner), "try_op") => Some(*inner.clone()),

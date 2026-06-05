@@ -26,9 +26,12 @@ use crate::hir::types::Ty;
 use super::resolver::MethodResolver;
 
 /// Builtin heads currently delegated to their `.rx` method-home. Grows as
-/// each migration step lands (Array/Set/Map/scalars).
+/// each migration step lands (Map/scalars next). The receiver shape that
+/// reaches this resolver is the un-reffed head (the same as the `String`
+/// arm relied on); `method_home_key` and `substitute_generics_in_return`
+/// peel any reference layers downstream when the bridge resolves.
 fn is_delegated_head(ty: &Ty) -> bool {
-    matches!(ty, Ty::String)
+    matches!(ty, Ty::String | Ty::Array(_) | Ty::Set(_))
 }
 
 pub(super) fn resolvers() -> Vec<MethodResolver> {

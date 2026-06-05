@@ -89,20 +89,32 @@ fn resolvers() -> &'static [MethodResolver] {
                                                          //     inner-type check + their generic-representation methods.
         v.extend(concurrency::resolvers());
         v.extend(io::resolvers());
-        // TIER 3 — structural. `strings` now carries ONLY residual arms
-        // (the ABI-divergent `String.remove`, the E0722-blocked
-        // `String.clone`, the structural-head `String.to_s`, and all
-        // `&str` methods); it MUST precede `builtin_bridge` so those
-        // residuals win over the `.rx` delegation for `Ty::String`.
+        // TIER 3 — structural RESIDUAL resolvers. After the
+        // zero-Rust-stdlib migration these carry ONLY the arms that
+        // CANNOT be a static `.rx` return, and they MUST precede
+        // `builtin_bridge` so those residuals win over the `.rx`
+        // delegation for their shared heads:
+        //   * `strings` — `String` ABI-divergent `remove`, E0722-blocked
+        //     `clone`, structural-head `to_s`, mutation `push`/…, and all
+        //     `&str` methods (no `class str`).
+        //   * `collections` — `Array`/`Set`/`Map` CLOSURE combinators
+        //     (`map`/`select`/`reduce`/…, MIR-inlined), the arg-dependent
+        //     `zip`/`to_h`, the E0700 `sum` check, and `get_mut`/`get_var`
+        //     (E0722 alias cluster); PLUS `Option`/`Result` (enum heads
+        //     the bridge does not cover at all).
+        //   * `numeric` — the `Enum.weight` accessor (scalar `to_s`/
+        //     conversions migrate in Phase 3 but the enum arm stays).
         v.extend(strings::resolvers());
-        // The delegator: builtin heads (`String` so far) whose methods
-        // were migrated to their `.rx` method-home resolve here via
-        // `bridge_builtin_method` — zero hardcoded method knowledge.
-        // Placed at the inference-order-tolerant pipeline site (line 77)
-        // so it preserves the fixpoint ordering the old arms relied on.
-        v.extend(builtin_bridge::resolvers());
         v.extend(collections::resolvers());
         v.extend(numeric::resolvers());
+        // The delegator: builtin heads (`String`/`Array`/`Set` so far)
+        // whose non-residual methods were migrated to their `.rx`
+        // method-home resolve here via `bridge_builtin_method` — zero
+        // hardcoded method knowledge. Placed AFTER the residual
+        // resolvers (so they shadow it) but still at the
+        // inference-order-tolerant pipeline site (line 77), preserving
+        // the fixpoint ordering the old arms relied on.
+        v.extend(builtin_bridge::resolvers());
         // MIGRATED to `.rx` (resolve via `lookup_method_with_args` from the
         // general `DefKind::Method` path), resolver tables deleted:
         //   * `time`    — Duration/Instant       (library/std/time/src/lib.rx)
@@ -279,14 +291,20 @@ mod golden {
         // `.message` resolves from string/src/parse_{int,float}_error.rx;
         // the resolver arms were deleted.
 
-        // ── Ty::Array structural ───────────────────────────────────
+        // ── Ty::Array structural RESIDUAL ──────────────────────────
+        // The migrated Array methods (size/empty?/push/pop/get/first/
+        // last/include?/clone/to_a/reverse/sort/join/clear/truncate/
+        // swap/insert/remove/extend/dedup/take/drop/chain/to_set/new/
+        // with_capacity/capacity/count) resolve from array.rx via the
+        // bridge; the golden runs with an EMPTY symbol table (no `.rx`),
+        // so those return None and are NOT pinned here. Only the residual
+        // arms in collections.rs (closure combinators, arg-dependent
+        // `zip`/`to_h`, the E0700 `sum`, and the E0722 `get_mut` alias)
+        // resolve against the empty table and ARE pinned. End-to-end
+        // `.rx` resolution is covered by the builtin_receiver_bridge pins
+        // + the e2e suite.
         let arr = || Ty::Array(Box::new(Ty::Int));
         for m in [
-            "size",
-            "empty?",
-            "push",
-            "pop",
-            "get",
             "get_mut",
             "each",
             "each_with_index",
@@ -298,33 +316,10 @@ mod golden {
             "any?",
             "find",
             "index",
-            "take",
-            "drop",
             "partition",
-            "chain",
             "zip",
-            "to_a",
-            "to_set",
             "to_h",
-            "new",
             "sum",
-            "count",
-            "reverse",
-            "first",
-            "last",
-            "clone",
-            "include?",
-            "sort",
-            "join",
-            "with_capacity",
-            "capacity",
-            "clear",
-            "truncate",
-            "swap",
-            "insert",
-            "remove",
-            "extend",
-            "dedup",
             "sort_by",
             "select!",
         ] {
@@ -350,23 +345,13 @@ mod golden {
             v.push(c(map(), m));
         }
 
-        // ── Ty::Set structural ─────────────────────────────────────
-        let set = || Ty::Set(Box::new(Ty::Int));
-        for m in [
-            "new",
-            "insert",
-            "include?",
-            "size",
-            "empty?",
-            "with_capacity",
-            "remove",
-            "clear",
-            "union",
-            "intersection",
-            "difference",
-        ] {
-            v.push(c(set(), m));
-        }
+        // ── Ty::Set structural — fully migrated to set.rx ──────────
+        // Every Set method (new/with_capacity/size/empty?/include?/to_a/
+        // union/intersection/difference/insert/remove/clear) resolves
+        // from set.rx via the bridge; with an EMPTY symbol table they
+        // return None, so there is NOTHING to pin here. End-to-end
+        // resolution is covered by `set_methods_resolve_via_general_path`
+        // + the e2e suite.
 
         // ── Ty::Option structural ──────────────────────────────────
         let opt = || Ty::Option(Box::new(Ty::Int));

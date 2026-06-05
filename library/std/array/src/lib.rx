@@ -1,84 +1,101 @@
-## std::array — Array (formerly `Vec`) method surface, routed through FFI alias.
+## std::array — Array (Ruby's Array) method surface.
 ##
-## #06.8 T#14: every method here was a `Vec[...]_<m>` /
-## `Array[...]_<m>` entry in the `name.starts_with("Array")` arm of
-## `compiler/ruxen_core/src/codegen/runtime_table/mod.rs` until T#21's
-## namespace-anchor mechanism was extended in T#14 to cover collection
-## type names. `Array`/`Vec` is NOT in `register_builtins`'s type-scope
-## map — `let x: Array[Int]` resolves through a hardcoded match arm in
-## `resolve_type_expr` that builds `Ty::Array(Int)` directly. The
-## anchor branch for these names creates a `DefId` for bookkeeping but
-## does NOT insert into type-scope, so the hardcoded type resolver
-## remains authoritative.
+## Zero-Rust-stdlib migration, Phase 2 (Option C). `class Array[T]`
+## below carries BOTH the FFI alias decls (`Array_<m>` →
+## `ruxen_vec_<m>`, consumed by `Lowerer::resolve_ffi_alias_callee`)
+## AND the TRUE surface return types that typeck delegates to via the
+## builtin-receiver bridge (`InferenceEngine::bridge_builtin_method`,
+## reached for `Ty::Array(_)` because `builtin_bridge::is_delegated_head`
+## now includes the Array head). `method_home_key` maps `Ty::Array(_)` →
+## `"Array"` (generic suffix stripped); element substitution into the
+## declared `T` is done by `substitute_generics_in_return`.
 ##
-## ## Generic-stripping at the call site (T#17 mechanism)
+## `Array` is NOT in `register_builtins`'s type-scope map — `let x:
+## Array[Int]` resolves through the hardcoded arm in `resolve_type_expr`
+## that builds `Ty::Array(Int)` directly. The anchor branch creates a
+## `DefId` for FFI bookkeeping without inserting into type-scope, so the
+## hardcoded type resolver stays authoritative for the receiver TYPE
+## while the class below homes the METHODS.
+##
+## ## Generic-stripping at the call site
 ##
 ## MIR mangles the surface generic in the call: `Vec[Int]_push`,
-## `Array[String]_clone`, etc. The anchor `class Array` shell
-## registers methods under the parent NAME, so the alias-map key is
+## `Array[String]_clone`, etc. The class shell registers under the
+## generic-free parent name `Array`, so the alias-map key is
 ## `Array_push` / `Array_clone`. The lookup site in
 ## `mir/lower/expr/method_call.rs` peels the `[...]` segment from the
-## mangled callee and retries with the generic-stripped key — that
-## same fallback added for Option/Result in T#17 makes the entries
-## below load-bearing.
+## mangled callee and retries with the generic-stripped key.
 ##
-## ## Aliased entries kept in runtime_table
+## ## ABI notes
 ##
-## Multiple Ruxen names sharing a single C symbol trip the E0722
-## conflict check in `register_class_lib_method` (the check compares
-## explicit param lists; instance-vs-class shape differences look
-## like incompatible sigs even when wire-compatible). For collections
-## the aliased clusters are:
+## Every migrated method's true surface type is ABI-identical to its C
+## symbol's wire width: `RuxenVec*` / `void*` / boxed `Option` cross the
+## C ABI as I64, `uint64_t` (len/count/capacity) as I64 (= `USize`), and
+## `T`-by-value `remove` is I64 for every element head. `ty_to_cranelift`
+## lowers each to the matching width; the parity guard
+## `tests/runtime_abi_derivation.rs` pins that the derived widths equal
+## the hand-rolled `runtime_signature` table.
 ##
-##   * `get_mut`, `get_var` → `ruxen_vec_get_opt` (same as `get`)
+## ## Residual — typed by the collections.rs resolver arms that run
+## ## AHEAD of the bridge (these decls below stay laundered to `Int`
+## ## purely for the FFI alias / codegen call rewrite; the resolver arm
+## ## supplies the user-visible type)
 ##
-## (The `into_iter`/`iter_mut`/`to_vec`/`enumerate`/`as_slice` →
-## `ruxen_iter_to_vec` cluster was removed with the orphaned iterator
-## machinery — Phase B / Milestone 2. Nothing produces those calls.)
-##
-## We declare ONE Ruxen name per cluster (the canonical surface
-## spelling) and leave the aliases in `runtime_table` until the E0722
-## check is taught to compare at the wire level. The migration is
-## therefore mechanically incomplete by a handful of low-traffic
-## aliases — same shape as the `String_clone` outlier from T#13.
-class Array
+##   * closure combinators — `map` / `select` / `reject` / `reduce` /
+##     `find` / `index` / `each` / `each_with_index` / `all?` / `any?` /
+##     `partition` / `sort_by` / `select!`: MIR-inlined (closure_inline);
+##     `each` keeps its (vestigial) alias decl, the rest never reach
+##     codegen as a call. Return types are closure-inferred.
+##   * `zip` / `to_h`: the result element type is computed from the ARG
+##     (`zip`) or the receiver's tuple element (`to_h`) — not expressible
+##     as a static declared return — so the resolver arm computes it.
+##     Their decls stay for the FFI alias (`ruxen_vec_zip` /
+##     `ruxen_hash_from_iter` emit real calls).
+##   * `sum`: carries the E0700 non-numeric-element typeck check.
+##   * `get_mut` / `get_var`: alias `ruxen_vec_get_opt` with a `&var T`
+##     return that differs from `get`'s `&T`; a second `.rx` alias for
+##     the same C symbol with a different wire shape trips E0722. Kept as
+##     a lang_intrinsics alias + collections.rs resolver arm.
+class Array[T]
   lib "runtime/vec.c"
-    def self.new as "ruxen_vec_new" -> Int
-    def self.with_capacity as "ruxen_vec_with_capacity"(cap: Int) -> Int
-    def size as "ruxen_vec_len" -> Int
-    def capacity as "ruxen_vec_capacity" -> Int
+    # ── migrated: true surface types, delegated via the bridge ──
+    def self.new as "ruxen_vec_new" -> Array[T]
+    def self.with_capacity as "ruxen_vec_with_capacity"(cap: Int) -> Array[T]
+    def size as "ruxen_vec_len" -> USize
+    def capacity as "ruxen_vec_capacity" -> USize
+    def count as "ruxen_vec_count" -> USize
     def empty? as "ruxen_vec_is_empty" -> Bool
-    def get as "ruxen_vec_get_opt"(i: Int) -> Int
-    def first as "ruxen_vec_first" -> Int
-    def last as "ruxen_vec_last" -> Int
-    def count as "ruxen_vec_count" -> Int
-    def include? as "ruxen_vec_contains_int"(x: Int) -> Bool
-    def sum as "ruxen_vec_sum" -> Int
-    def clone as "ruxen_vec_clone" -> Int
+    def get as "ruxen_vec_get_opt"(i: Int) -> Option[&T]
+    def first as "ruxen_vec_first" -> Option[T]
+    def last as "ruxen_vec_last" -> Option[T]
+    def include? as "ruxen_vec_contains_int"(x: T) -> Bool
+    def clone as "ruxen_vec_clone" -> Array[T]
+    def to_a as "ruxen_vec_clone" -> Array[T]
+    def reverse as "ruxen_vec_reverse" -> Array[T]
+    def sort as "ruxen_vec_sort" -> Array[T]
     def join as "ruxen_vec_join"(sep: &String) -> String
-    def each as "ruxen_vec_each" -> Int
-    def push as "ruxen_vec_push"(x: Int)
-    def pop as "ruxen_vec_pop" -> Int
+    def push as "ruxen_vec_push"(x: T)
+    def pop as "ruxen_vec_pop" -> Option[T]
     def clear as "ruxen_vec_clear"
     def truncate as "ruxen_vec_truncate"(n: Int)
     def swap as "ruxen_vec_swap"(i: Int, j: Int)
-    def insert as "ruxen_vec_insert"(i: Int, x: Int)
-    def remove as "ruxen_vec_remove"(i: Int) -> Int
-    def extend as "ruxen_vec_extend"(other: Int)
+    def insert as "ruxen_vec_insert"(i: Int, x: T)
+    def remove as "ruxen_vec_remove"(i: Int) -> T
+    def extend as "ruxen_vec_extend"(other: Array[T])
     def dedup as "ruxen_vec_dedup"
-    def reverse as "ruxen_vec_reverse" -> Int
-    def sort as "ruxen_vec_sort" -> Int
-    # Ruby `take(n)` / `drop(n)` return a fresh Array directly — no
-    # return a fresh Array directly. They eager-materialise a new
-    # RuxenVec* (every vec is already one at runtime).
-    def take as "ruxen_vec_take"(n: Int) -> Int
-    def drop as "ruxen_vec_skip"(n: Int) -> Int
-    # Ruby `a.zip(b)` / `a.chain(b)` operate directly on arrays.
+    # Ruby `take(n)` / `drop(n)` eager-materialise a fresh Array.
+    def take as "ruxen_vec_take"(n: Int) -> Array[T]
+    def drop as "ruxen_vec_skip"(n: Int) -> Array[T]
+    # `a.chain(b)` concatenates two arrays directly.
+    def chain as "ruxen_vec_chain"(other: Array[T]) -> Array[T]
+    # `arr.to_set` → Set[T].
+    def to_set as "ruxen_set_from_iter" -> Set[T]
+    # ── residual: laundered `Int` decls kept ONLY for the FFI alias;
+    #    the collections.rs resolver (ahead of the bridge) supplies the
+    #    user-visible return type. See header.
+    def sum as "ruxen_vec_sum" -> Int
+    def each as "ruxen_vec_each" -> Int
     def zip as "ruxen_vec_zip"(other: Int) -> Int
-    def chain as "ruxen_vec_chain"(other: Int) -> Int
-    # Ruby conversions: `arr.to_set` → Set, `pairs.to_h` → Hash.
-    def to_a as "ruxen_vec_clone" -> Int
-    def to_set as "ruxen_set_from_iter" -> Int
     def to_h as "ruxen_hash_from_iter" -> Int
   end
 end
