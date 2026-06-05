@@ -99,7 +99,33 @@ Key compiler files touched (for orientation):
 
 ## 3. Remaining tasks (to finish in the new session)
 
-### 3a. Empty `||` optional in `do … end` closures  ← user's last request
+> **Session 2026-06-05 — status update.** Completed and committed on
+> `codegen-bug`:
+> - **§3a** — bare `do…end` is always a no-param closure (block-value form
+>   dropped); Ruby trailing-block calls `f(args) do…end` confirmed working;
+>   benches migrated. (commit `0ac31bc`)
+> - **§3b** — `Hash#to_a` returns `[(K, V)]` pairs (`ruxen_hash_entries`
+>   runtime helper). (commit `f204b1c`)
+> - **Surface `Map`/`HashMap`/`HashSet` → `Hash`/`Set`** (user directive
+>   "we use Hash") — Rust spellings removed from the resolver; `Ty::Map`
+>   variant + `ruxen_hash_*` runtime unchanged; Display prints `Hash`; all
+>   fixtures + golden migrated; full suite green. (commit `f204b1c`)
+> - **§3e** — Option `is_some`/`is_none` → `present?`/`nil?`; Result
+>   `is_ok`/`is_err` → `ok?`/`err?`; added inlined `each_with_index`;
+>   retired the vestigial `std::iter` mixins. (commit `e981325`)
+> - **§3g** — docs swept to the Ruby Enumerable API + `Map`→`Hash`;
+>   canonical `ruby-naming.spec.md` §3.23 added. (commit `7dae11f`)
+> - **Bonus fix** — for-loop over tuple arrays (`for p in [(1,2)]; p.0`)
+>   now forward-binds the loop var to the element type; makes `for p in
+>   h.to_a` iterable. (commit `9f1bde7`)
+>
+> Still open: **§3c** (zip/chain consume arg), **§3d** (USize#to_string —
+> appears handled via `to_s`, verify), **§3f** (extension generics on
+> builtins). Two pre-existing bugs found and noted: `let o: Option[T] =
+> Some(x)` types `o` as `T` (breaks `unwrap`/`present?` on direct-bound
+> Options); and the stale `target/debug/ruxenc` binary trap (use `ruxen`).
+
+### 3a. Empty `||` optional in `do … end` closures  ← user's last request  ✅ DONE
 - Today: `{ … }` (no `||`) already parses as a no-param closure, but
   `do … end` (no `||`) parses as a **block-value** expression — inconsistent.
   The user wants `do … end` (no `||`) to be a no-param closure too (drop the `||`).
