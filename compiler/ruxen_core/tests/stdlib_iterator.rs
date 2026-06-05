@@ -139,6 +139,14 @@ fn iter_filter_then_count_compiles() {
 }
 
 #[test]
+fn iter_each_with_index_compiles() {
+    // Ruby `each_with_index { |element, index| }` — yields the element
+    // and its 0-based Int index; inlined as a per-element loop.
+    let source = rx("iter_each_with_index_compiles");
+    assert_compiles(&source);
+}
+
+#[test]
 fn iter_map_changes_item_type_then_collect_vec_compiles() {
     let source = rx("iter_map_changes_item_type_then_collect_vec_compiles");
     assert_compiles(&source);

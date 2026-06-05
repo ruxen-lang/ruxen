@@ -2,6 +2,7 @@ use super::*;
 
 mod all_any;
 mod each;
+mod each_with_index;
 mod entry_or_insert;
 mod filter;
 mod find;
@@ -112,6 +113,11 @@ impl<'a> Lowerer<'a> {
             "each" => {
                 // for i in 0..vec.len: item = vec[i]; <body>
                 self.inline_each(vec_id, closure_params, closure_body)?;
+                Ok(Some(None))
+            }
+            "each_with_index" => {
+                // for i in 0..vec.len: item = vec[i]; idx = i; <body>
+                self.inline_each_with_index(vec_id, closure_params, closure_body)?;
                 Ok(Some(None))
             }
             "select" | "where_matching" => {

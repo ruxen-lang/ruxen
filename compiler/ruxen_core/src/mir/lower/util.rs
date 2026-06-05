@@ -30,6 +30,7 @@ pub(super) fn is_collection_method(method_name: &str) -> bool {
     matches!(
         method_name,
         "each"
+            | "each_with_index"
             | "filter"
             | "where_matching"
             | "find"

@@ -31,6 +31,9 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
             // iterator-adapter layer. Combinators (`map`/`select`/`reduce`/…)
             // and `for x in arr` work directly on the Array.
             (Ty::Array(_), "each") => Some(Ty::Unit),
+            // Ruby `each_with_index { |element, index| }` — yields the element
+            // and its 0-based index. Inlined in closure_inline/each_with_index.
+            (Ty::Array(_), "each_with_index") => Some(Ty::Unit),
             (Ty::Array(_), "map") => Some(Ty::Array(Box::new(eng.ctx.fresh_type_var()))),
             // Ruby block combinators (inlined in mir/lower/closure_inline).
             (Ty::Array(elem), "select") => Some(Ty::Array(elem.clone())),
@@ -158,8 +161,10 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
             (Ty::Option(inner), "unwrap_or_else") => Some(*inner.clone()),
             (Ty::Option(_), "map") => Some(Ty::Option(Box::new(eng.ctx.fresh_type_var()))),
             (Ty::Option(inner), "ok_or") => Some(Ty::Result(inner.clone(), Box::new(Ty::Error))),
-            (Ty::Option(_), "is_some") => Some(Ty::Bool),
-            (Ty::Option(_), "is_none") => Some(Ty::Bool),
+            // Ruby predicate spellings: `nil?` (was `is_none`) and `present?`
+            // (was `is_some`). The Rust `is_some`/`is_none` are removed.
+            (Ty::Option(_), "nil?") => Some(Ty::Bool),
+            (Ty::Option(_), "present?") => Some(Ty::Bool),
 
             // Result try_op (the ? operator desugars to this)
             (Ty::Result(ok, _), "try_op") => Some(*ok.clone()),
@@ -176,8 +181,10 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
             (Ty::Result(_, err), "map_err") => {
                 Some(Ty::Result(Box::new(eng.ctx.fresh_type_var()), err.clone()))
             }
-            (Ty::Result(_, _), "is_ok") => Some(Ty::Bool),
-            (Ty::Result(_, _), "is_err") => Some(Ty::Bool),
+            // Ruby predicate spellings: `ok?` (was `is_ok`) / `err?` (was
+            // `is_err`). The Rust `is_ok`/`is_err` are removed.
+            (Ty::Result(_, _), "ok?") => Some(Ty::Bool),
+            (Ty::Result(_, _), "err?") => Some(Ty::Bool),
 
             // Within-namespace fallthrough (not a cross-cutting catch-all).
             _ => None,

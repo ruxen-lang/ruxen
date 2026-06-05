@@ -146,8 +146,8 @@ fn iterator_passthrough_collectors_resolve() {
 
 #[test]
 fn migrated_option_result_combinators_fall_through_runtime_table() {
-    // #06.8 T#17 moved `Option_{unwrap_or, is_some, is_none,
-    // ok_or}` and `Result_{unwrap_or, is_ok, is_err, ok, err}`
+    // #06.8 T#17 moved `Option_{unwrap_or, present?, nil?,
+    // ok_or}` and `Result_{unwrap_or, ok?, err?, ok, err}`
     // into library/std/option_result/src/lib.rx. The lookup site in
     // `mir/lower/expr/method_call.rs` peels the surface
     // `[Int,Err]` generic args and consults `ffi_alias_map` with
@@ -159,10 +159,10 @@ fn migrated_option_result_combinators_fall_through_runtime_table() {
     for m in [
         "Result[Int,Err]_unwrap_or",
         "Option[Int]_ok_or",
-        "Option[String]_is_some",
-        "Option[String]_is_none",
-        "Result[Int,IoError]_is_ok",
-        "Result[Int,IoError]_is_err",
+        "Option[String]_present?",
+        "Option[String]_nil?",
+        "Result[Int,IoError]_ok?",
+        "Result[Int,IoError]_err?",
         "Result[Int,IoError]_ok",
         "Result[Int,IoError]_err",
     ] {

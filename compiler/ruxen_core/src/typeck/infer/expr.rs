@@ -442,6 +442,16 @@ impl<'a> InferenceEngine<'a> {
                             }
                         }
                     }
+                    // `each_with_index { |element, index| }` — the SECOND
+                    // closure param is the 0-based index, always an `Int`.
+                    // (The element param stays `Infer`, resolved like `each`.)
+                    if method_name == "each_with_index" {
+                        if let HirExprKind::Closure { params, .. } = &blk.kind {
+                            if let Some(index_param) = params.get(1) {
+                                let _ = unify(&index_param.ty, &Ty::Int, self.ctx, &expr.span);
+                            }
+                        }
+                    }
                     self.infer_expr(blk);
                 }
 

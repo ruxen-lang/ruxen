@@ -284,6 +284,7 @@ mod golden {
             "get",
             "get_mut",
             "each",
+            "each_with_index",
             "map",
             "select",
             "reject",
@@ -372,8 +373,8 @@ mod golden {
             "unwrap_or_else",
             "map",
             "ok_or",
-            "is_some",
-            "is_none",
+            "nil?",
+            "present?",
         ] {
             v.push(c(opt(), m));
         }
@@ -388,8 +389,8 @@ mod golden {
             "unwrap_or_else",
             "map",
             "map_err",
-            "is_ok",
-            "is_err",
+            "ok?",
+            "err?",
         ] {
             v.push(c(res(), m));
         }
