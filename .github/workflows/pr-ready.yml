@@ -38,6 +38,20 @@ jobs:
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@v2
 
+      # Build the runtime archive ONCE up front. `ruxen_repl`'s build
+      # script compiles every `library/std/*/runtime/*.c` (incl. the
+      # vendored PCRE2 tree) into `libruxenrt.a`. The e2e harness's
+      # `find_prebuilt_runtime_archive()` then auto-detects it and takes
+      # the whole-archive fast-path link, so each of the 318 fixtures
+      # links against the prebuilt archive instead of re-forking ~180
+      # `cc -c -O2` compiles per fixture (~57k C-compiles per run). That
+      # per-fixture C recompilation was the dominant cost of the sweep
+      # (Ubuntu ~27m / macOS ~15m); with the archive present both drop
+      # to a few minutes and the per-fixture work is just Ruxen codegen
+      # plus one link.
+      - name: Build runtime archive (fast-path link)
+        run: cargo build -p ruxen_repl
+
       - name: cargo test (release-e2e fixtures)
         run: cargo test -p ruxen_core --test release_e2e_smoke -- --ignored --nocapture
 
