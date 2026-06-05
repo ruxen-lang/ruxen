@@ -49,7 +49,7 @@ the first `ruxen test` in a new project is already green.
 - `t.expect(actual).not_to_eq(expected)` — inequality.
 - `BoolMatcher.new(actual).to_be_truthy` / `.to_be_falsy` — boolean
   assertions decoupled from the `PartialEq` constraint.
-- `OptionMatcher.new(option.is_some).to_be_nil` / `.not_to_be_nil`.
+- `OptionMatcher.new(option.present?).to_be_nil` / `.not_to_be_nil`.
 - `ArrayMatcher.new(&xs).to_include(value)`.
 - `StringMatcher.new(&s).to_include(needle)`.
 

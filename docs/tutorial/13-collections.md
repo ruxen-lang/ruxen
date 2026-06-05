@@ -3,7 +3,7 @@
 Three standard collections cover most day-to-day storage:
 
 - **`Array[T]`** — a growable ordered sequence (the workhorse).
-- **`Map[K, V]`** — a key-to-value dictionary.
+- **`Hash[K, V]`** — a key-to-value dictionary.
 - **`Set[T]`** — a collection of unique values.
 
 This chapter walks through each, then shows the borrowing rules that apply to all of them.
@@ -75,15 +75,15 @@ def main
 
   nums.each { |n| puts "#{n}" }                  # side effects
   let doubled = nums.map { |n| n * 2 }           # transform
-  let evens = nums.filter { |n| n % 2 == 0 }     # subset
+  let evens = nums.select { |n| n % 2 == 0 }     # subset
   let first_big = nums.find { |n| *n > 3 }       # Option[&Int]
   let (evens, odds) = nums.partition { |n| n % 2 == 0 }
 end
 ```
 
-`.each`, `.map`, `.filter`, `.find`, `.partition` are part of the iterator vocabulary that works on every iterable type. Closures power them — see Chapter 9.
+`.each`, `.map`, `.select`, `.find`, `.partition` are part of the Enumerable vocabulary that works on every iterable type. Closures power them — see Chapter 9.
 
-## `Map[K, V]` — key-to-value lookup
+## `Hash[K, V]` — key-to-value lookup
 
 ```ruxen
 def main
@@ -109,7 +109,7 @@ z=missing
 ### Building and inserting
 
 ```ruxen
-var h: Map[String, Int] = Map.new
+var h: Hash[String, Int] = Hash.new
 h.insert(String.from("a"), 1)
 h.insert(String.from("b"), 2)
 ```
@@ -236,20 +236,20 @@ let x = h.get("a")              # Option[&V]
 
 **Mutating while iterating.** Adding to or removing from a collection while iterating over it is a borrow-rule violation — the iterator borrows the collection, and `.push` needs a writable borrow. Build the changes in a separate list, then apply them after the loop.
 
-**Using non-Hashable types as `Map`/`Set` keys.** Keys must include the `Hashable` mixin. Structs of hashable fields qualify implicitly; classes and custom types might need an explicit `include Hashable` plus a `def hash` method.
+**Using non-Hashable types as `Hash`/`Set` keys.** Keys must include the `Hashable` mixin. Structs of hashable fields qualify implicitly; classes and custom types might need an explicit `include Hashable` plus a `def hash` method.
 
 ## Try it
 
-1. Build an `Array[Int]` of the numbers 1 to 10. Use `.filter` to get the evens, `.map` to double them, then `.each` to print them.
-2. Build a `Map[String, Int]` recording the count of each word in a string. Iterate the words with `.split`, use `.get` + `.insert` (or a get-or-default helper).
+1. Build an `Array[Int]` of the numbers 1 to 10. Use `.select` to get the evens, `.map` to double them, then `.each` to print them.
+2. Build a `Hash[String, Int]` recording the count of each word in a string. Iterate the words with `.split`, use `.get` + `.insert` (or a get-or-default helper).
 3. Build a `Set[Int]` from the same input and print its `.size` — that's the count of distinct values.
 
 ## Recap
 
-- `Array[T]` is the everyday growable sequence; `[1, 2, 3]` builds one; `Map[K, V]` and `Set[T]` round out the trio.
+- `Array[T]` is the everyday growable sequence; `[1, 2, 3]` builds one; `Hash[K, V]` and `Set[T]` round out the trio.
 - Use `.get` for safe lookup; `[]` panics on missing keys.
-- The iterator vocabulary (`.each`, `.map`, `.filter`, `.find`, `.partition`) takes closures and chains cleanly.
+- The Enumerable vocabulary (`.each`, `.map`, `.select`, `.find`, `.partition`) takes closures and chains cleanly.
 - Borrowing rules apply: `for x in &v` borrows; `for x in v` moves.
-- Map/Set keys must be `Hashable`.
+- Hash/Set keys must be `Hashable`.
 
 **Next:** [FFI](14-ffi.md) — calling C code and exposing Ruxen types to C.

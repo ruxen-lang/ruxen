@@ -160,7 +160,7 @@ Invariant dominates.
 | `Cell[T]`, `RefCell[T]` (future) | **invariant** in `T` |
 | `[T; N]` (array) | covariant in `T` |
 | `Array[T]` | **invariant** in `T` |
-| `Map[K, V]` | **invariant** in `K`, **invariant** in `V` |
+| `Hash[K, V]` | **invariant** in `K`, **invariant** in `V` |
 | `Set[T]` | **invariant** in `T` |
 | `Option[T]` | covariant in `T` |
 | `Result[T, E]` | covariant in `T`, covariant in `E` |
@@ -175,7 +175,7 @@ Invariant dominates.
 **Rationale for the non-obvious cases:**
 
 - `&var T` invariant in `T`: the classic soundness proof. If `&var T` were covariant in `T` and `Child <: Parent`, then `&var Child` would be usable as `&var Parent`, and writing a `Parent` through it would leave an invalid `Child` behind.
-- `Array[T]` and `Map[K, V]` invariant: because `Array` exposes `&var` to its elements, even though the `Array` value itself is owned.
+- `Array[T]` and `Hash[K, V]` invariant: because `Array` exposes `&var` to its elements, even though the `Array` value itself is owned.
 - `fn(A) -> R` contravariant in `A`: a function accepting `Parent` can be used wherever a function accepting `Child` is expected, because `Child <: Parent` means every `Child` is a valid `Parent` — so the function will accept it.
 
 ### 5.3 Inference algorithm for user types
@@ -356,7 +356,7 @@ Total ~6 weeks linear, 3-4 weeks if 7c and the PhantomData work parallelize with
 | V7 | `fn(&long T) -> ()` → `fn(&short T) -> ()` | ❌ E0706 |
 | V8 | `fn() -> &long T` → `fn() -> &short T` | ✅ covariance of return |
 | V9 | `(T1, T2)` tuple with T1 covariant + T2 covariant | ✅ |
-| V10 | `Map[&long K, V]` → `Map[&short K, V]` | ❌ E0705 (Map invariant in K) |
+| V10 | `Hash[&long K, V]` → `Hash[&short K, V]` | ❌ E0705 (Hash invariant in K) |
 | V11 | Recursive `List[T]` inference converges | ✅ |
 | V12 | `Cell[T]` (future) `Cell[Child]` → `Cell[Parent]` | ❌ E0705 (interior mutability → invariant) |
 | V13 | `Box[Child]` → `Box[Parent]` | ✅ covariance |

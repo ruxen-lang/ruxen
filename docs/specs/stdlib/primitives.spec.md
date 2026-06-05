@@ -23,7 +23,7 @@ typechecker resolves and the runtime helpers that back them.
 **Then** the result is `"42"`.
 
 Same surface holds for `USize` (the type sometimes inferred for array
-sizes and `Array.len`).
+sizes and `Array.size`).
 
 ## B2 — `Float.to_string() -> String`
 

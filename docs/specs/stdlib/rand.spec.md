@@ -7,7 +7,7 @@ the OS kernel. Pin tests in `compiler/ruxen_core/tests/stdlib_rand.rs`
 are the canonical docs for behaviour.
 
 - `random_bytes(n: Int) -> Result[Array[U8], IoError]` — returns
-  `Ok(buf)` with `buf.len == n` filled from the kernel CSPRNG;
+  `Ok(buf)` with `buf.size == n` filled from the kernel CSPRNG;
   `Ok(empty)` when `n == 0`; `Err(IoError.InvalidInput)` when `n < 0`;
   `Err(IoError.Other(msg))` on CSPRNG hard failure (never panics).
 - `random_u64() -> Int` — returns 64 random bits in an int64 carrier
@@ -15,7 +15,7 @@ are the canonical docs for behaviour.
   failure.
 - `random_fill(buf: &var Array[U8]) -> Result[nil, IoError]` —
   overwrites every existing slot of `buf` with one random byte each;
-  preserves `buf.len`; `Ok(nil)` when `buf` is empty.
+  preserves `buf.size`; `Ok(nil)` when `buf` is empty.
 
 **Backends** (compile-time `#if` selected, not user-visible):
 - Linux: `getrandom(buf, len, 0)` from `<sys/random.h>`, EINTR retry.

@@ -105,7 +105,7 @@ loops can break out.
 ### C8 — `TcpStream.write(bytes: &Array[U8]) -> Result[Int, IoError]`
 
 Single `send(2)` call. Returns `Ok(n)` where `n` may be less than
-`bytes.len` on partial writes; caller may loop or use a future
+`bytes.size` on partial writes; caller may loop or use a future
 `write_all`. Returns `Err(IoError.BrokenPipe)` if the peer closed
 mid-write.
 

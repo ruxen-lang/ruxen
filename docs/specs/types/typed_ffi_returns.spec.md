@@ -78,7 +78,7 @@ the structured type to the user.
 **Then** the result is `SharedSync[String]`.
 
 When the class has multiple type params (`Result[T, E]`,
-`HashMap[K, V]`), T is bound positionally from arg order matching
+`Hash[K, V]`), T is bound positionally from arg order matching
 the class's declared generic params.
 
 ## B4 — T binding from class-generic context
@@ -211,7 +211,7 @@ class) does NOT get the lift. The lift is keyed on
 ## Out of scope (later)
 
 - **Type-level generic substitution beyond positional matching.**
-  `HashMap[K, V]` with `HashMap.from_iter(iter)` doesn't bind K/V
+  `Hash[K, V]` with `Hash.from_iter(iter)` doesn't bind K/V
   positionally — needs HRTBs (#08) or richer constructor inference.
 - **Multiple constructors with conflicting T binding rules.**
   Today the lift uses the first constructor's first arg. Classes

@@ -85,8 +85,8 @@ cross-link rather than duplicate.
 - [std.net](stdlib/net.spec.md) — minimal TCP surface.
 - [std.iter (Iterator)](stdlib/iterator.spec.md) — pipeline +
   collect surface.
-- [Map](stdlib/map.spec.md) — separate-chaining hash table.
-- [Set](stdlib/set.spec.md) — `Map[T, nil]` alias.
+- [Hash](stdlib/map.spec.md) — separate-chaining hash table.
+- [Set](stdlib/set.spec.md) — `Hash[T, nil]` alias.
 - [Array](stdlib/array.spec.md) — growable contiguous array.
 - [String / &str](stdlib/string.spec.md) — UTF-8 owned + borrowed
   string surface and ownership negatives.
@@ -148,7 +148,7 @@ cross-link rather than duplicate.
 
 ### Future (backfill as we touch them)
 
-- std.hash (top-level hashing utilities — separate from `Map` /
+- std.hash (top-level hashing utilities — separate from `Hash` /
   `Set`).
 - Error-code registry as its own spec (currently informal —
   `implicit_includes.spec.md` B12 lists the relevant codes).

@@ -107,7 +107,7 @@ end
 let trimmed = "   hello   ".trim     # "hello"
 ```
 
-`split(sep)` and `lines` both return iterators. You can `for`-loop over them directly, or `.collect[Array[String]]()` if you need a vector.
+`split(sep)` and `lines` both return an `Array[String]`. You can `for`-loop over them directly, or index into the array if you need a specific element.
 
 ## 7. Case, trim, replace
 

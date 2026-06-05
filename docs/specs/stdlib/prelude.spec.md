@@ -24,7 +24,7 @@ The following type names are in scope at program start without any
 | `Float`, `Float32`, `Float64` | builtin |
 | `Bool`, `Char`, `String`, `str` (= `&str`) | builtin |
 | `Array[T]`      | `std.array`        |
-| `Map[K, V]`     | `std.collections`  |
+| `Hash[K, V]`    | `std.collections`  |
 | `Set[T]`        | `std.collections`  |
 | `Option[T]`     | `std.option`       |
 | `Result[T, E]`  | `std.result`       |

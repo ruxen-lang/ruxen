@@ -157,13 +157,13 @@ Non-blocking `connect(2)`. The future:
 
 ### B8 — `AsyncTcpStream.read(&var self, buf: &var Array[Int]) -> some Future[Output = Result[Int, IoError]]`
 
-Reads up to buf.len bytes. Returns the count read, or `Err(IoError)`
+Reads up to buf.size bytes. Returns the count read, or `Err(IoError)`
 on failure. Yields Pending when read returns EAGAIN; reactor wakes
 on EPOLLIN.
 
 ### B9 — `AsyncTcpStream.write(&var self, content: &str) -> some Future[Output = Result[Int, IoError]]`
 
-Writes up to content.len bytes. Returns count written.
+Writes up to content.size bytes. Returns count written.
 
 ### B10 — `AsyncTcpStream.close(self) -> some Future[Output = nil]`
 

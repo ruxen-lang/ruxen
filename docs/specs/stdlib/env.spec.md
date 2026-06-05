@@ -28,9 +28,9 @@ Looks up a single environment variable.
 **Given** the variable is unset
 **Then** the result is `Result.Err(VarError.NotPresent)`.
 
-## B3 — `vars() -> Map[String, String]`
+## B3 — `vars() -> Hash[String, String]`
 
-Returns a snapshot of every environment variable as a `Map`.
+Returns a snapshot of every environment variable as a `Hash`.
 
 **Given** an environment with at least one variable set
 **Then** `env.vars()` returns a non-empty map containing that key →

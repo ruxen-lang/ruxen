@@ -350,10 +350,10 @@ res.expect!("msg")
 ```ruxen
 [1, 2, 3]                             # Array literal
 [1, 2, 3] : [Int; 3]                  # fixed-size
-{ "a" => 1, "b" => 2 }                # Map literal
-Set.from_iter([1, 2, 3])              # Set
+{ "a" => 1, "b" => 2 }                # Hash literal
+[1, 2, 3].to_set                      # Set
 Array.new    Array.with_capacity(64)
-Map.new      Set.new
+Hash.new     Set.new
 ```
 
 ### Closures

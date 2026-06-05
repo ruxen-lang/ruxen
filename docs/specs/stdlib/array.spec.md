@@ -49,9 +49,12 @@ Filters in-place; the closure receives `&T` and returns `Bool`.
 Stable sort in place.  The closure receives `&T, &T` and returns
 `Int` (Ordering — negative / zero / positive).
 
-## B8 — `Array.from_iter(iter)` typechecks (static method)
+## B8 — `Array.from_iter(iter)` — REMOVED
 
-Constructs an `Array[T]` by draining the iterator.
+Retired by the Ruby-surface migration (no iterator layer). Build a new
+collection with the Ruby `to_*` conversions instead: `[…].to_set`,
+`pairs.to_h`, `chars.join("")`. An `Array` is built from a literal
+`[…]` or grown with `.push`.
 
 ## B9 — Equality (`==`) yields `Bool`
 
@@ -70,7 +73,7 @@ Pairwise comparison of two arrays at corresponding indices.
 | B5        | `vec_dedup_typechecks_as_unit`                         | `stdlib_array_negatives.rs`  |
 | B6        | `vec_retain_closure_typechecks`                        | `stdlib_array_negatives.rs`  |
 | B7        | `vec_sort_by_closure_typechecks`                       | `stdlib_array_negatives.rs`  |
-| B8        | `vec_from_iter_static_typechecks`                      | `stdlib_array_negatives.rs`  |
+| B8        | _removed — `from_iter` retired_                        | —                            |
 | B9        | `vec_equality_yields_bool`                             | `stdlib_array_negatives.rs`  |
 
 Runtime round-trips covered by E2E fixtures
