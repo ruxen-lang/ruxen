@@ -66,6 +66,15 @@ class Array[T]
     def count as "ruxen_vec_count" -> USize
     def empty? as "ruxen_vec_is_empty" -> Bool
     def get as "ruxen_vec_get_opt"(i: Int) -> Option[&T]
+    # `get_mut` / `get_var` alias the SAME C symbol as `get`
+    # (`ruxen_vec_get_opt`); they differ only in surface mutability of
+    # the borrowed element (`&var T` vs `get`'s `&T`). Both lower to a
+    # pointer and the boxed `Option` is one pointer, so all three share
+    # the WIRE shape `(self:I64, i:I64) -> Option:I64`. The E0722 check
+    # (relaxed to compare post-self-prepend wire widths,
+    # `resolve/ffi_registration.rs`) admits these second/third aliases.
+    def get_mut as "ruxen_vec_get_opt"(i: Int) -> Option[&var T]
+    def get_var as "ruxen_vec_get_opt"(i: Int) -> Option[&var T]
     def first as "ruxen_vec_first" -> Option[T]
     def last as "ruxen_vec_last" -> Option[T]
     def include? as "ruxen_vec_contains_int"(x: T) -> Bool

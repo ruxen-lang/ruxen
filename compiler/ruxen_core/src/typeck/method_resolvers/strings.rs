@@ -39,7 +39,7 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
             // AHEAD of `builtin_bridge` so they win for these names.
             Ty::String => matches!(
                 method,
-                "remove" | "clone" | "to_s" | "push" | "push_str" | "insert" | "insert_str"
+                "remove" | "to_s" | "push" | "push_str" | "insert" | "insert_str"
             ),
             // `&str` has no stdlib class — all its methods stay here.
             Ty::Str => true,
@@ -48,7 +48,11 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
         resolve: |_eng, ty, method, _args, _span| match (ty, method) {
             // ── String residual arms (shadow string.rx) ──────────────
             (Ty::String, "remove") => Some(Ty::Char),
-            (Ty::String, "clone") => Some(Ty::String),
+            // `clone` MIGRATED to string.rx: with E0722 relaxed to a
+            // wire-level compare, its `ruxen_string_from` alias (whose
+            // implicit `&self` is wire-identical to `from`'s explicit
+            // `&String` param) is now admitted and resolves via the
+            // bridge.
             (Ty::String, "to_s") => Some(Ty::String),
             // Mutation methods: the C symbols return `char*` (the new
             // buffer, I64), so the `.rx` decl is `-> String` (ABI-

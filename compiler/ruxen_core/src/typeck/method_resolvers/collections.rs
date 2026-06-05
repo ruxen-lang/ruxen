@@ -36,10 +36,13 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
             //   * `to_h` — the Map key/value types are read from the
             //     receiver's tuple element, likewise arg/receiver-derived.
             //   * `sum` — carries the E0700 non-numeric-element check.
-            //   * `get_mut` — `Option[&var T]` aliases `ruxen_vec_get_opt`
-            //     with a wire shape that differs from `get`'s `&T`, so a
-            //     second `.rx` alias would trip E0722.
-            (Ty::Array(elem), "get_mut") => Some(Ty::Option(Box::new(Ty::RefMut(elem.clone())))),
+            //
+            // `get_mut` / `get_var` MIGRATED to `array/src/lib.rx`: with
+            // E0722 relaxed to a wire-level compare (`&T` and `&var T`
+            // are wire-identical pointers), the second/third aliases of
+            // `ruxen_vec_get_opt` are now admitted, so they resolve via
+            // the bridge against `class Array[T]`'s declared
+            // `Option[&var T]` return.
             (Ty::Array(_), "each") => Some(Ty::Unit),
             // Ruby `each_with_index { |element, index| }` — yields the element
             // and its 0-based index. Inlined in closure_inline/each_with_index.

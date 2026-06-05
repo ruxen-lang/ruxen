@@ -241,20 +241,15 @@ mod golden {
         // delegator; the golden runs with an EMPTY symbol table (no `.rx`
         // loaded) so those would return None and are not pinned here. The
         // residual arms that stay Rust-side (strings.rs) ARE pinned:
-        // `remove` (ABI divergence), `clone` (E0722 alias), `to_s`
-        // (structural-head), and the mutation methods `push`/`push_str`/
-        // `insert`/`insert_str` (surface `Unit` vs C `char*`). End-to-end
-        // `.rx` resolution is covered by the builtin_receiver_bridge pins
-        // + the e2e suite.
-        for m in [
-            "remove",
-            "clone",
-            "to_s",
-            "push",
-            "push_str",
-            "insert",
-            "insert_str",
-        ] {
+        // `remove` (ABI divergence), `to_s` (structural-head), and the
+        // mutation methods `push`/`push_str`/`insert`/`insert_str`
+        // (surface `Unit` vs C `char*`). `clone` is NO LONGER pinned: it
+        // MIGRATED to string.rx (its `ruxen_string_from` alias is admitted
+        // now that E0722 compares wire shapes), so it resolves via the
+        // bridge and returns None under the empty table. End-to-end `.rx`
+        // resolution is covered by the builtin_receiver_bridge pins + the
+        // e2e suite.
+        for m in ["remove", "to_s", "push", "push_str", "insert", "insert_str"] {
             v.push(c(Ty::String, m));
         }
 
@@ -299,13 +294,15 @@ mod golden {
         // bridge; the golden runs with an EMPTY symbol table (no `.rx`),
         // so those return None and are NOT pinned here. Only the residual
         // arms in collections.rs (closure combinators, arg-dependent
-        // `zip`/`to_h`, the E0700 `sum`, and the E0722 `get_mut` alias)
-        // resolve against the empty table and ARE pinned. End-to-end
+        // `zip`/`to_h`, the E0700 `sum`) resolve against the empty table
+        // and ARE pinned. `get_mut`/`get_var` are NO LONGER pinned: they
+        // MIGRATED to array.rx (their `ruxen_vec_get_opt` aliases are
+        // admitted now that E0722 compares wire shapes), so they resolve
+        // via the bridge and return None under the empty table. End-to-end
         // `.rx` resolution is covered by the builtin_receiver_bridge pins
         // + the e2e suite.
         let arr = || Ty::Array(Box::new(Ty::Int));
         for m in [
-            "get_mut",
             "each",
             "each_with_index",
             "map",

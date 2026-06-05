@@ -116,15 +116,14 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // class-body decl can attach to it (it has no surface
         // method name on `String`).
         "String_from_iter" => return Ok("ruxen_string_from_iter"),
-        // `String_clone` aliases the SAME C symbol as `String.from`
-        // (`ruxen_string_from`) but with an instance-method
-        // receiver shape. Two FFI decls aliasing the same C symbol
-        // with different wire shapes trip the E0722 conflict check
-        // in `register_class_lib_method`. Until that check is
-        // relaxed to compare at the wire level
-        // (post-instance-self-prepend), this stays as an explicit
-        // lang_intrinsics arm.
-        "String_clone" => return Ok("ruxen_string_from"),
+        // `String_clone` MIGRATED to `string.rx` (`def clone as
+        // "ruxen_string_from"`). The E0722 conflict check now compares
+        // post-self-prepend WIRE shapes, so the second alias of
+        // `ruxen_string_from` (whose implicit `&self` is wire-identical
+        // to `from`'s explicit `&String` param) is admitted. The MIR
+        // `ffi_alias_map` rewrites `String_clone → ruxen_string_from`
+        // before codegen consults `runtime_name`, so the explicit arm
+        // here is no longer needed.
         // Phase E-rest 5 of #06.95: `&str_*` instance-method aliases.
         // The `&str` type is a Ruxen primitive (not a class shell),
         // so there's no .rx surface for these — the C runtime
@@ -213,16 +212,13 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
     // call-site mangle `Vec[Int]_push` reach the alias-map key
     // `Array_push` and rewrite to the C symbol.
     //
-    // Two aliased clusters stay below because they share a C
-    // symbol with a migrated entry and the E0722 check rejects
-    // duplicate aliases for the same `c_symbol` with different
-    // wire shapes:
-    //
-    //   * `get_mut`, `get_var` → `ruxen_vec_get_opt` (canonical
-    //     spelling `get` is in array.rx)
+    // `get_mut` / `get_var` MIGRATED to `array.rx` (aliases of
+    // `ruxen_vec_get_opt` alongside `get`). The E0722 check now compares
+    // post-self-prepend WIRE shapes, so the `&var T` return — a pointer,
+    // wire-identical to `get`'s `&T` — no longer conflicts; the MIR
+    // `ffi_alias_map` rewrites them before codegen reaches here.
     if name.starts_with("Array") || name.starts_with("Vec") {
         return match method {
-            "get_mut" | "get_var" => Ok("ruxen_vec_get_opt"),
             // Known unimplemented Vec methods — historically
             // no-opped.
             "map" | "select" | "reject" | "reduce" | "min" | "max" | "any?" | "all?"

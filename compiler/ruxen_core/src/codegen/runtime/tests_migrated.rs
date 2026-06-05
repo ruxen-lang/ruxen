@@ -35,6 +35,13 @@ fn migrated_vec_combinators_fall_through_runtime_table() {
         "Vec[Int]_clear",
         "Vec[Int]_extend",
         "Array[Int]_clone",
+        // `get_mut` / `get_var` MIGRATED to array.rx now that E0722
+        // compares post-self-prepend WIRE shapes (`&var T` is a pointer,
+        // wire-identical to `get`'s `&T`), so their `ruxen_vec_get_opt`
+        // aliases are admitted alongside `get`. They fall through
+        // runtime_table like the rest of the migrated surface.
+        "Vec[Int]_get_mut",
+        "Vec[Int]_get_var",
     ] {
         assert_eq!(
             runtime_name(m).unwrap(),
@@ -44,14 +51,6 @@ fn migrated_vec_combinators_fall_through_runtime_table() {
              generic-stripped `Array_<m>` key"
         );
     }
-    // Aliased clusters that share a C symbol with a migrated
-    // entry survive in runtime_table — `register_class_lib_method`'s
-    // E0722 check rejects duplicate aliases for the same `c_symbol`
-    // with different wire shapes.
-    assert_eq!(
-        runtime_name("Vec[Int]_get_mut").unwrap(),
-        "ruxen_vec_get_opt"
-    );
 }
 
 #[test]
@@ -68,14 +67,13 @@ fn migrated_string_methods_fall_through_runtime_table() {
     // mask the alias path and silently keep the old dispatch alive
     // across future refactors.
     //
-    // `String_clone` is the only outlier: it aliases the SAME C
-    // symbol as `String.from` (`ruxen_string_from`) but with an
-    // instance-method receiver shape, which trips E0722 in
-    // `register_class_lib_method`. Until that check is relaxed
-    // to compare at the wire level, it stays as an explicit
-    // runtime_table entry — pinned below alongside the migrated
-    // set.
+    // `String_clone` MIGRATED to string.rx now that E0722 compares
+    // post-self-prepend WIRE shapes: its `ruxen_string_from` alias
+    // (implicit `&self` wire-identical to `from`'s explicit `&String`
+    // param) is admitted as a second alias. It falls through
+    // runtime_table like the rest of the migrated set.
     for m in [
+        "String_clone",
         "String_contains",
         "String_starts_with",
         "String_ends_with",
@@ -103,12 +101,6 @@ fn migrated_string_methods_fall_through_runtime_table() {
              a specific `ruxen_*` mapping here would mask the alias path"
         );
     }
-    assert_eq!(
-        runtime_name("String_clone").unwrap(),
-        "ruxen_string_from",
-        "String_clone must stay in lang_intrinsics — E0722 keeps it \
-         out of string.rx (see lang_intrinsics doc comment)"
-    );
 }
 
 // NOTE: `iterator_passthrough_collectors_resolve` was deleted with the

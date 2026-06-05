@@ -235,12 +235,43 @@ impl Resolver {
 
     /// #06.8 Phase 2: emit **E0722** when a Ruxen `lib`/`extern` block
     /// declares the same C symbol that an earlier block already
-    /// declared with an incompatible signature (arity, param types, or
-    /// return type differ). The first decl wins; subsequent matching
-    /// decls are silently allowed (a redundant restatement is a no-op,
-    /// not an error). The check is keyed on the LINKED symbol so two
-    /// Ruxen names that alias the same C symbol must agree on its
-    /// type — otherwise codegen would produce a mis-typed call.
+    /// declared with an incompatible signature. The first decl wins;
+    /// subsequent matching decls are silently allowed (a redundant
+    /// restatement is a no-op, not an error). The check is keyed on the
+    /// LINKED symbol so two Ruxen names that alias the same C symbol
+    /// must agree on its ABI — otherwise codegen would produce a
+    /// mis-typed call.
+    ///
+    /// ## What "match" means: the WIRE shape, not the surface signature
+    ///
+    /// The conflict is decided on the POST-self-prepend WIRE shape — the
+    /// list of ABI register widths the call actually crosses — rather
+    /// than on surface-`Ty` equality. This is exactly what the linker
+    /// sees: a C symbol carries no type info, so the only thing that can
+    /// mis-compile is passing an argument in the wrong register or
+    /// reading the return at the wrong width (see `docs/errors/E0722.md`
+    /// §Background). Comparing surface `Ty` was a stricter
+    /// over-approximation that rejected two BENIGN alias families whose
+    /// wire shapes are identical:
+    ///
+    ///   * `String.from(s: &String) -> String` vs the receiver-style
+    ///     `String.clone(&self) -> String`: the explicit `&String` param
+    ///     and the implicit `&self` receiver are BOTH pointer-sized
+    ///     (I64), so post-prepend both are `(I64) -> I64`.
+    ///   * `Array.get(i) -> Option[&T]` vs
+    ///     `Array.get_mut(i) -> Option[&var T]`: `&T` and `&var T` differ
+    ///     only in surface mutability; both lower to a pointer, and the
+    ///     boxed `Option` is one pointer either way — `(I64,I64) -> I64`
+    ///     for both.
+    ///
+    /// The relaxation discards ONLY distinctions codegen itself discards.
+    /// A genuine width mismatch — the E0722.md example `(I32) -> I32` vs
+    /// `(I32) -> I64`, or an arity mismatch `(Int)` vs `(Int, Int)` — is
+    /// still rejected, because `abi_wire_class` returns the same
+    /// discriminant codegen's `ty_to_cranelift` uses. With this change
+    /// `String.clone` / `Array.get_mut` / `Array.get_var` migrate to
+    /// their `.rx` method-home (they no longer trip E0722); previously
+    /// they were forced to stay as `lang_intrinsics` residual arms.
     pub(super) fn check_ffi_signature_conflict(
         &mut self,
         link_symbol: &str,
@@ -248,15 +279,7 @@ impl Resolver {
         new_span: &Span,
     ) {
         if let Some((existing_sig, _existing_span)) = self.extern_symbol_table.get(link_symbol) {
-            let arity_ok = existing_sig.params.len() == new_sig.params.len();
-            let params_ok = arity_ok
-                && existing_sig
-                    .params
-                    .iter()
-                    .zip(new_sig.params.iter())
-                    .all(|(a, b)| a.ty == b.ty);
-            let return_ok = existing_sig.return_ty == new_sig.return_ty;
-            if !(params_ok && return_ok) {
+            if Self::ffi_wire_shape(existing_sig) != Self::ffi_wire_shape(new_sig) {
                 self.diagnostics.push(Diagnostic::error_with_code(
                     format!(
                         "conflicting FFI declarations for the same C symbol `{}` — \
@@ -268,6 +291,64 @@ impl Resolver {
                 ));
             }
         }
+    }
+
+    /// The ABI register-class discriminant of a single `Ty`, mirroring
+    /// codegen's `ty_to_cranelift` (`codegen/cranelift/helpers.rs`)
+    /// WITHOUT depending on the cranelift backend crate from the
+    /// resolver. The discriminant is `(width_bits, is_float)`:
+    ///   * scalars carry their true width; floats are flagged so an
+    ///     integer and a float of the SAME width still conflict (they
+    ///     use different ABI register files — GP vs SSE — so a call that
+    ///     disagrees on int-vs-float would mis-pass the argument);
+    ///   * every pointer-like / heap type (String, Array, Map, Set,
+    ///     Ref/RefMut, Option, Result, Class, Struct, Enum, Fn, raw
+    ///     pointers, Tuple, FixedArray, TypeParam, Infer, …) is the
+    ///     integer-class 64-bit pointer `(64, false)`;
+    ///   * `None` for `Unit`/`Never`/`Error` (no value in argument /
+    ///     return position).
+    /// `Ty::bit_width` is NOT reused: it returns `None` for pointer-like
+    /// types, which would make a pointer indistinguishable from a
+    /// no-value return.
+    fn abi_wire_class(ty: &Ty) -> Option<(u32, bool)> {
+        match ty {
+            Ty::Bool | Ty::Int8 | Ty::UInt8 => Some((8, false)),
+            Ty::Int16 | Ty::UInt16 => Some((16, false)),
+            Ty::Int32 | Ty::UInt32 | Ty::Char => Some((32, false)),
+            Ty::Int | Ty::Int64 | Ty::UInt | Ty::UInt64 | Ty::ISize | Ty::USize => {
+                Some((64, false))
+            }
+            Ty::Float32 => Some((32, true)),
+            Ty::Float | Ty::Float64 => Some((64, true)),
+            Ty::Unit | Ty::Never | Ty::Error | Ty::ConstArg(_) => None,
+            // Everything else is pointer-like at the C ABI → I64 (GP).
+            _ => Some((64, false)),
+        }
+    }
+
+    /// The full WIRE shape of an FFI signature: the ABI width-class of
+    /// every C-ABI argument (the implicit `self` receiver pointer
+    /// PREPENDED for instance methods, since it IS a wire arg) followed
+    /// by the return width-class. Two decls aliasing one C symbol
+    /// conflict iff their wire shapes differ. The receiver, when
+    /// present, is always pointer-sized (`Some(64)`) regardless of the
+    /// owning class.
+    fn ffi_wire_shape(sig: &FnSignature) -> Vec<Option<(u32, bool)>> {
+        let mut shape = Vec::with_capacity(sig.params.len() + 2);
+        if sig.self_mode.is_some() {
+            // Instance-method receiver: one pointer-sized GP arg the MIR
+            // method-call lowering prepends (see the receiver-prepend in
+            // `register_class_lib_method_in`).
+            shape.push(Some((64, false)));
+        }
+        for p in &sig.params {
+            shape.push(Self::abi_wire_class(&p.ty));
+        }
+        // A sentinel separates the arg list from the return so a
+        // trailing arg can never collide with the return slot.
+        shape.push(None);
+        shape.push(Self::abi_wire_class(&sig.return_ty));
+        shape
     }
 
     /// Typed FFI returns (docs/specs/types/typed_ffi_returns.spec.md):
