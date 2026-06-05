@@ -1,0 +1,87 @@
+name: PR Ready
+
+# Runs the heavy coverage that otherwise only happens at release time:
+#   - the 213-fixture release-e2e sweep (compile-and-run each fixture), and
+#   - a 4-target cross build check (arm + x86_64 on Linux and macOS).
+# Fires on two events:
+#   - push to master (post-merge safety net), and
+#   - a PR being flipped from draft to "ready for review" (the single
+#     `ready_for_review` transition — NOT later pushes to an already-ready
+#     PR; plain `ci.yml` covers those).
+# Re-run the e2e sweep locally with:
+#   cargo test -p ruxen_core --test release_e2e_smoke -- --ignored
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+    types: [ready_for_review]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  release-e2e:
+    name: Release E2E (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo test (release-e2e fixtures)
+        run: cargo test -p ruxen_core --test release_e2e_smoke -- --ignored --nocapture
+
+  build-check:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            cross: true
+          # x86_64-apple-darwin is a cross-compile on the arm64 macOS
+          # runner; `cargo build --target` produces a valid artifact (we
+          # only build here, never run, so no host/target mismatch).
+          - target: x86_64-apple-darwin
+            os: macos-14
+          - target: aarch64-apple-darwin
+            os: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cross (Linux aarch64 only)
+        if: matrix.cross
+        run: cargo install cross --locked
+
+      - name: Build release binary
+        shell: bash
+        run: |
+          # One binary ships: `ruxen`. Building it transitively builds
+          # ruxenc / ruxen_lsp / ruxen_repl as libraries.
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }} --bin ruxen
+          else
+            cargo build --release --target ${{ matrix.target }} --bin ruxen
+          fi
