@@ -122,14 +122,16 @@ impl<'a> Lowerer<'a> {
             }
             "select" | "where_matching" => {
                 // result = Vec.new(); for i in 0..vec.len: item = vec[i]; if <pred>: result.push(item)
-                let result = self.inline_filter(expr, vec_id, closure_params, closure_body, false)?;
+                let result =
+                    self.inline_filter(expr, vec_id, closure_params, closure_body, false)?;
                 Ok(Some(Some(result)))
             }
             "reject" => {
                 // Ruby `reject` — the inverse of `select`: keep elements
                 // where the predicate is FALSE. Reuses the filter loop with
                 // the predicate negated.
-                let result = self.inline_filter(expr, vec_id, closure_params, closure_body, true)?;
+                let result =
+                    self.inline_filter(expr, vec_id, closure_params, closure_body, true)?;
                 Ok(Some(Some(result)))
             }
             "find" => {

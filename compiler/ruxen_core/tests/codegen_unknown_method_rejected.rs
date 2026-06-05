@@ -9,37 +9,11 @@
 //! produce the expected output for some fixtures. The fallback is gone;
 //! these tests pin that behavior in place.
 
-use ruxen_core::codegen;
 use ruxen_core::codegen::runtime::runtime_name;
-use ruxen_core::lexer::Lexer;
-use ruxen_core::mir::lower::Lowerer;
-use ruxen_core::parser::Parser;
-use ruxen_core::typeck;
 
-fn rx(name: &str) -> String {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/ruxen")
-        .join(format!("{name}.rx"));
-    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
-}
-
-fn try_compile(source: &str) -> Result<(), String> {
-    let mut lexer = Lexer::new(source);
-    let tokens = lexer.tokenize().map_err(|e| format!("lex: {e:?}"))?;
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse().map_err(|e| format!("parse: {e:?}"))?;
-    let result = typeck::type_check(&program);
-    // Type errors mask the codegen path we're trying to test, so allow
-    // them through here — we only care about the codegen step.
-    let mut lowerer = Lowerer::new(&result.symbols);
-    let mir = lowerer
-        .lower_program(&result.program)
-        .map_err(|e| format!("mir: {e:?}"))?;
-    let tmp = std::env::temp_dir().join(format!("ruxen_p05_reject_{}", std::process::id()));
-    codegen::compile(&mir, tmp.to_str().unwrap())?;
-    let _ = std::fs::remove_file(&tmp);
-    Ok(())
-}
+// (The `rx` / `try_compile` end-to-end helpers were removed with the
+// `.iter.flat_map` codegen-rejection canary — see the note at the bottom
+// of this file. The surviving test drives `runtime_name` directly.)
 
 /// `runtime_name` directly: an unrecognised `?T_…_method` mangled name
 /// must produce an error that names the method, not silently no-op.
