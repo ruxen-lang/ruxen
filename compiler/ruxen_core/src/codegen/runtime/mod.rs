@@ -1,10 +1,12 @@
 //! Runtime function declarations and name mapping.
 //!
-//! Documents the C runtime functions available at link time (see
-//! [`symbols`] for the grouped catalogue) and provides the shared
-//! `runtime_name()` mapping used by both Cranelift and LLVM backends.
-
-mod symbols;
+//! Provides the shared `runtime_name()` mapping used by both Cranelift and
+//! LLVM backends. The historical grouped "known runtime symbol" catalogue
+//! (`symbols/`, ~273 strings) was retired by the
+//! `docs/specs/system/zero_rust_stdlib_classes.spec.md` ABI-derivation
+//! migration: the set of valid runtime symbols is now "present in the
+//! lib-decl-derived FFI map (codegen Pass-0) or in the compiler-internal
+//! residual" — the catalogue had no consumer and was deleted.
 
 #[cfg(test)]
 mod tests_migrated;

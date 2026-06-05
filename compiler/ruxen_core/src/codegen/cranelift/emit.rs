@@ -21,7 +21,7 @@ use crate::codegen::runtime::runtime_name;
 use super::helpers::{
     cmpop_to_floatcc, cmpop_to_intcc, is_string_typed_value, simple_type_size, ty_to_cranelift,
 };
-use super::runtime_sigs::runtime_signature;
+use super::runtime_sigs::compiler_internal_signature;
 use super::translation_env::TranslationEnv;
 
 /// Build a Cranelift `Signature` from a MIR function.
@@ -759,12 +759,11 @@ pub fn coerce_value_signed(
 /// `arg N has type iXX, expected i64`.
 ///
 /// This helper inspects each MIR argument, pairs it with the expected
-/// Cranelift param type (from `runtime_signature` when known), and inserts
-/// a sign- or zero-extend using the MIR type's signedness. For callees
-/// whose signature isn't known here (user-defined or FFI functions), we
-/// widen any sub-i64 integer argument to i64 as a safe default — this
-/// matches the default signature inference path in
-/// `get_or_declare_func`, which uses i64 everywhere.
+/// Cranelift param type, and inserts a sign- or zero-extend using the MIR
+/// type's signedness. For callees whose signature isn't known here
+/// (user-defined or FFI functions), we widen any sub-i64 integer argument
+/// to i64 as a safe default — this matches the default signature inference
+/// path in `get_or_declare_func`, which uses i64 everywhere.
 pub fn coerce_call_args(
     arg_vals: &mut [cranelift_codegen::ir::Value],
     args: &[MirValue],
@@ -773,18 +772,27 @@ pub fn coerce_call_args(
     user_fn_param_tys: &HashMap<String, Vec<Type>>,
     builder: &mut FunctionBuilder,
 ) {
-    // Resolve the callee's signature in priority order:
-    //   1. `runtime_signature` — hand-rolled signature table for the C
-    //      runtime helpers (`ruxen_*`).  Wins for known runtime fns.
-    //   2. `user_fn_param_tys` — recorded at Pass 0/1 of compile_program
-    //      for FFI fns and every MIR function in the program.  This
-    //      catches synthesized fns like `Bool_fmt` (`(i8, i64) -> ()`)
-    //      that legitimately take narrow params.
+    // Resolve the callee's param widths in priority order. Post
+    // ABI-derivation migration (zero_rust_stdlib_classes.spec.md) the
+    // DERIVED widths are the source of truth:
+    //   1. `user_fn_param_tys` — recorded at Pass 0/1 of compile_program
+    //      from each FFI fn's `.rx`-declared `Ty`s (via `ty_to_cranelift`)
+    //      and every user MIR function's signature. This IS the binding
+    //      `Linkage::Import` width for every `.rx`-declared symbol, so it
+    //      must win — making arg coercion consistent with the import
+    //      cranelift was given. Also catches synthesized fns like
+    //      `Bool_fmt` (`(i8, i64) -> ()`) that legitimately take narrow
+    //      params.
+    //   2. `compiler_internal_signature` — the residual table for symbols
+    //      emitted directly by codegen that no `.rx` block declares
+    //      (alloc, `==`/`<=>` lowering, drop glue, fmt synthesis, …), so
+    //      Pass 0/1 never recorded them in `user_fn_param_tys`.
     //   3. fallback — widen narrow ints to i64 (variadic-style for
     //      unknown imports).
-    let known_sig: Option<Vec<Type>> = runtime_signature(callee)
-        .map(|(p, _)| p)
-        .or_else(|| user_fn_param_tys.get(callee).cloned());
+    let known_sig: Option<Vec<Type>> = user_fn_param_tys
+        .get(callee)
+        .cloned()
+        .or_else(|| compiler_internal_signature(callee).map(|(p, _)| p));
     for (i, arg_val) in arg_vals.iter_mut().enumerate() {
         let val_ty = builder.func.dfg.value_type(*arg_val);
 

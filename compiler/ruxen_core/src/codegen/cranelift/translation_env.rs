@@ -13,7 +13,7 @@ use cranelift_module::{DataDescription, FuncId, Linkage, Module};
 
 use crate::codegen::runtime::extract_method_name;
 
-use super::runtime_sigs::runtime_signature;
+use super::runtime_sigs::compiler_internal_signature;
 
 pub struct TranslationEnv<'a, M: Module> {
     pub module: &'a mut M,
@@ -143,8 +143,14 @@ impl<'a, M: Module> TranslationEnv<'a, M> {
             }
         }
 
-        // Try known runtime signatures first.
-        if let Some((param_tys, ret_ty)) = runtime_signature(name) {
+        // Compiler-internal residual symbols (alloc, `==`/`<=>` lowering,
+        // drop glue, fmt synthesis, …) are emitted directly by codegen and
+        // declared by no `.rx` lib block, so Pass-0 never put them in
+        // `declared_fns`. Their ABI lives in the residual table. Every
+        // `.rx`-declared FFI symbol was already declared in Pass-0 and
+        // hits the `declared_fns` early-return above, so it never reaches
+        // here — the derived width is its binding signature.
+        if let Some((param_tys, ret_ty)) = compiler_internal_signature(name) {
             return self.declare_runtime_func(name, &param_tys, ret_ty, builder);
         }
 

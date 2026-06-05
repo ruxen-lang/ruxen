@@ -721,6 +721,12 @@ pub(super) fn emit_binop<'ctx>(
                 .unwrap()
                 .into()
         }
+        // Mirrors `cranelift/emit.rs::emit_binop`: the `=~` match operator
+        // is desugared to a method call at MIR-lowering time and never
+        // reaches binop emission.
+        BinOp::MatchOp => {
+            unreachable!("BinOp::MatchOp should have been desugared to a method call at MIR-lower")
+        }
     })
 }
 

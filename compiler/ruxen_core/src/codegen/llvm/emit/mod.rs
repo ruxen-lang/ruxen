@@ -38,15 +38,22 @@ pub fn compile_program<'ctx>(
     module: &Module<'ctx>,
     context: &'ctx Context,
 ) -> Result<(), String> {
-    // Declare runtime functions
-    runtime_decl::declare_runtime_functions(module, context);
-
-    // Declare FFI functions
+    // Declare the DERIVED FFI imports FIRST so every `.rx`-declared
+    // `ruxen_*` symbol is created from its lib-decl-derived signature
+    // (`ty_to_llvm` per declared `Ty`). The residual
+    // `declare_runtime_functions` runs AFTER and its per-name `is_none`
+    // guard skips anything already declared here — so derived wins for
+    // declared symbols, and the residual table answers only for the
+    // compiler-internal symbols no `.rx` block declares. Post
+    // zero_rust_stdlib_classes.spec.md ABI-derivation migration.
     for lib in &program.ffi_libs {
         for ffi_fn in &lib.functions {
             declare_ffi_function(module, context, ffi_fn, &lib.name);
         }
     }
+
+    // Declare compiler-internal residual runtime functions.
+    runtime_decl::declare_runtime_functions(module, context);
 
     // Pass 1: declare all user functions
     for func in &program.functions {
@@ -451,7 +458,10 @@ pub(super) fn simple_type_size(ty: &Ty) -> usize {
         Ty::Option(_) => 16,
         Ty::Result(_, _) => 16,
         Ty::Tuple(elems) => elems.len().max(1) * 8,
-        Ty::FixedArray(_, n) => n * 8,
+        // T2.02 stage 4: `n` is a `ConstExpr`; pre-stage-7 codegen only
+        // resolves `Lit` values. Mirrors
+        // `cranelift/helpers.rs::simple_type_size`.
+        Ty::FixedArray(_, n) => n.as_lit().unwrap_or(0) as usize * 8,
         _ => 8,
     }
 }

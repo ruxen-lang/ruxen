@@ -60,6 +60,10 @@ pub fn ty_to_llvm<'ctx>(ty: &Ty, context: &'ctx Context) -> Option<BasicTypeEnum
 
         // No runtime representation
         Ty::Unit | Ty::Never | Ty::Error => None,
+        // T2.02 S6: const-arg markers never reach codegen on their own —
+        // they live inside a parent type's generic_args list. Mirrors
+        // `cranelift/helpers.rs::ty_to_cranelift`.
+        Ty::ConstArg(_) => None,
     }
 }
 
