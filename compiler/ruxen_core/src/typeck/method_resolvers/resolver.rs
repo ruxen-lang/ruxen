@@ -88,19 +88,23 @@ pub(super) fn declared_method_resolvers() -> Vec<MethodResolver> {
 ///
 /// Two concerns, in precedence order:
 ///
-/// 1. **Constructor fallback** (`new`) and the still-structural
-///    `to_s`/`default` arms (being migrated to the derive mechanism, one
-///    at a time — see Feature D in `generic-compiler.spec.md`). `.new`
-///    yields `Self` and is NOT a derive: every `class`/`struct` has a
-///    compiler-generated constructor (the `None` branch of the legacy
-///    `(Ty::Class,"new")` arm). `to_s`/`default` will move to the derive
-///    resolver in their own commits.
+/// 1. **Constructor fallback** (`new`) and the still-structural `default`
+///    arm (being migrated to the derive mechanism — see Feature D in
+///    `generic-compiler.spec.md`). `.new` yields `Self` and is NOT a
+///    derive: every `class`/`struct` has a compiler-generated constructor
+///    (the `None` branch of the legacy `(Ty::Class,"new")` arm).
+///    `default` will move to the derive resolver in its own commit.
 /// 2. **Derive resolver** — methods that resolve through the DERIVE
 ///    MECHANISM (`ty_has_derive_trait`), the same predicate the MIR derive
 ///    synthesis (`mir/lower/derive.rs`) gates on, so typeck's return-type
 ///    answer stays in lockstep with whether codegen will actually
 ///    synthesize the body:
 ///      - `clone` → `Self` when the type derives `Clone`.
+///      - `to_s`  → `String` when the type derives `Debug` (Displayable).
+///        The structural implicit-include rule (`ruby-naming.spec.md`
+///        §3.6) makes every aggregate derive `Debug`, so this matches the
+///        old blanket `to_s → String`; the universal `to_s` is routed
+///        through the interpolation display dispatch at lower time.
 ///
 /// Precedence-LAST: a named stdlib resolver (tier 2), the declared tier
 /// (tier 1), and a user-defined `clone`/`to_s`/`default` method (resolved
@@ -109,18 +113,14 @@ pub(super) fn declared_method_resolvers() -> Vec<MethodResolver> {
 pub(super) fn structural_fallback_resolvers() -> Vec<MethodResolver> {
     use crate::resolve::symbols::ty_has_derive_trait;
     vec![
-        // Structural fallback — `.new` (constructor), plus `to_s`/`default`
+        // Structural fallback — `.new` (constructor), plus `default`
         // pending migration to the derive resolver below.
         MethodResolver {
             matches: |ty, method| {
                 matches!(ty, Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. })
-                    && matches!(method, "to_s" | "new" | "default")
+                    && matches!(method, "new" | "default")
             },
             resolve: |_eng, ty, method, _args, _span| match (ty, method) {
-                (Ty::Class { .. }, "to_s") => Some(Ty::String),
-                (Ty::Struct { .. }, "to_s") => Some(Ty::String),
-                (Ty::Enum { .. }, "to_s") => Some(Ty::String),
-
                 // Generic `.new` — constructor yields Self. (The declared-`new`
                 // override is tier 1; this is the legacy arm's `None` branch.)
                 (Ty::Class { .. }, "new") | (Ty::Struct { .. }, "new") => Some(ty.clone()),
@@ -131,19 +131,17 @@ pub(super) fn structural_fallback_resolvers() -> Vec<MethodResolver> {
                 _ => None,
             },
         },
-        // Derive resolver — `clone` gated on the derive mechanism, in
-        // lockstep with `mir/lower/derive.rs`.
+        // Derive resolver — `clone`/`to_s` gated on the derive mechanism,
+        // in lockstep with `mir/lower/derive.rs`.
         MethodResolver {
             matches: |ty, method| {
-                method == "clone"
-                    && matches!(ty, Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. })
+                matches!(ty, Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. })
+                    && matches!(method, "clone" | "to_s")
             },
-            resolve: |eng, ty, method, _args, _span| {
-                if method == "clone" && ty_has_derive_trait(ty, eng.symbols, "Clone") {
-                    Some(ty.clone())
-                } else {
-                    None
-                }
+            resolve: |eng, ty, method, _args, _span| match method {
+                "clone" if ty_has_derive_trait(ty, eng.symbols, "Clone") => Some(ty.clone()),
+                "to_s" if ty_has_derive_trait(ty, eng.symbols, "Debug") => Some(Ty::String),
+                _ => None,
             },
         },
     ]
