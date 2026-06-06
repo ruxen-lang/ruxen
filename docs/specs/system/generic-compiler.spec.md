@@ -113,3 +113,18 @@ behind.
   (`Hash_each`), which materializes entries via the FFI-on-self `self.to_a` and
   forwards each tuple. Pin: `tests/release-e2e/cases/605_generic_self_ffi_method.rx`.
   `class Hash[K, V]` now carries a `def each` `.rx` body over `self.to_a`.
+- [FIXED] Closure call inside a match arm of an opaque generic body
+  (`Option#map`/`Result#map`/`Result#map_err` migrated to `.rx` bodies). Three
+  faults, all now fixed: (1) `match self` in the opaque body sees `self` typed
+  `Ty::Class { name: "Option"|"Result" }`, not structural `Ty::Option`/
+  `Ty::Result`, so payload-field typing fell back to the variant's declared
+  TypeParam → wrong field type → segfault. Fixed with
+  `normalize_option_result_class` in `mir/lower/match_arms.rs`. (2) The call
+  site mis-inlined `.map` on an Option/Result via the `is_collection_method`
+  field-0 vec path (same class as the Map/Set bug) → fall through to the real
+  `Option_map`/`Result_map` body. (3) typeck: `Result#map` dropped the err type
+  (returned `Result[U, Error]` not `Result[U, E]`) and `map_err` had ok/err
+  swapped; the `map_err` closure-return harvest was missing in
+  `infer_combinator_block`. Pins: `99_map_option` / `115_option_map_chain` /
+  `118_option_map_unwrap_or` (now over `.rx` Option.map) +
+  `tests/release-e2e/cases/606_result_map_chain.rx`.

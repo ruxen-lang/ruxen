@@ -7,10 +7,8 @@ mod entry_or_insert;
 mod filter;
 mod find;
 mod map;
-mod option_map;
 mod partition;
 mod position;
-mod result_map;
 mod retain;
 mod unwrap_or_else;
 
@@ -32,35 +30,17 @@ impl<'a> Lowerer<'a> {
             _ => return Ok(None), // Not a closure — can't inline.
         };
 
-        // Handle Option.map { |x| expr } inline: check tag, transform payload.
-        if is_option_type(&object.ty) && method_name == "map" {
-            return self.inline_option_map(expr, object, closure_params, closure_body);
-        }
-
-        // Result.map / Result.map_err — same shape: branch on tag,
-        // run the closure on the matching arm's payload, repackage.
-        if is_result_type(&object.ty) {
-            match method_name {
-                "map" => {
-                    return self.inline_result_map(
-                        expr,
-                        object,
-                        closure_params,
-                        closure_body,
-                        /*on_ok=*/ true,
-                    );
-                }
-                "map_err" => {
-                    return self.inline_result_map(
-                        expr,
-                        object,
-                        closure_params,
-                        closure_body,
-                        /*on_ok=*/ false,
-                    );
-                }
-                _ => {}
-            }
+        // `Option#map` / `Result#map` / `Result#map_err` are migrated to
+        // real `.rx` bodies (`Option_map` / `Result_map`,
+        // option_result/src/lib.rx). Fall through so the normal
+        // method-call path emits a call to the opaque body rather than
+        // inlining here. Without this, the `is_collection_method` field-0
+        // branch below would dereference an Option/Result box at offset 0
+        // as a backing Vec and iterate garbage (segfault).
+        if (is_option_type(&object.ty) && method_name == "map")
+            || (is_result_type(&object.ty) && matches!(method_name, "map" | "map_err"))
+        {
+            return Ok(None);
         }
 
         // Result.unwrap_or_else { |e| ... } / Option.unwrap_or_else { |e| ... }

@@ -1,0 +1,25 @@
+def divide(a: Int, b: Int) -> Result[Int, String]
+  if b == 0
+    Err(String.from("divide by zero"))
+  else
+    Ok(a / b)
+  end
+end
+
+def main
+  let r = divide(20, 2).map { |n| n + 1 }.map { |n| n * 10 }
+  match r
+    Ok(v)  -> puts "ok #{v}"
+    Err(e) -> puts "err #{e}"
+  end
+  let z = divide(5, 0).map { |n| n + 1 }
+  match z
+    Ok(v)  -> puts "ok #{v}"
+    Err(e) -> puts "err #{e}"
+  end
+  let m = divide(5, 0).map_err { |e| String.from("wrapped") }
+  match m
+    Ok(v)  -> puts "ok #{v}"
+    Err(e) -> puts "err #{e}"
+  end
+end

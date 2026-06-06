@@ -9,17 +9,25 @@ impl<'a> Lowerer<'a> {
         scrutinee: &HirExpr,
         arms: &[HirMatchArm],
     ) -> Result<Option<LocalId>, String> {
+        // Inside an opaque `Option_map` / `Result_map` `.rx` body (T/E
+        // abstract), the `self` scrutinee is typed `Ty::Class { name:
+        // "Option"|"Result", generic_args }` — the FFI-shell receiver
+        // shape — NOT the structural `Ty::Option(_)` / `Ty::Result(_,_)`
+        // the enum-match payload-typing below keys on. Normalize it to the
+        // structural form so the `Some(x)` payload field type is derived
+        // from the (possibly abstract) inner type, not from the variant's
+        // declared TypeParam via `lookup_variant_field_types` — which
+        // yields a wrong field type and a segfault / `ok 0`.
+        let scrut_ty = normalize_option_result_class(&scrutinee.ty);
         let scrut_local = self.lower_expr(scrutinee)?;
 
         // For enum-like types (Enum, Result, Option), use tag-based
         // switch. Also treat unresolved Infer types as enum if any arm
         // uses an Enum pattern (e.g., Ok/Err, Some/None).
-        let is_enum = matches!(
-            scrutinee.ty,
-            Ty::Enum { .. } | Ty::Result(_, _) | Ty::Option(_)
-        ) || arms
-            .iter()
-            .any(|arm| matches!(arm.pattern, HirPattern::Enum { .. }));
+        let is_enum = matches!(scrut_ty, Ty::Enum { .. } | Ty::Result(_, _) | Ty::Option(_))
+            || arms
+                .iter()
+                .any(|arm| matches!(arm.pattern, HirPattern::Enum { .. }));
 
         let merge_block = self.new_block();
         let result_local = if expr.ty != Ty::Unit && expr.ty != Ty::Never {
@@ -149,7 +157,7 @@ impl<'a> Lowerer<'a> {
                         // Variant indices (defined in resolve/stdlib/{option,result}.rs):
                         //   Option: None=0, Some=1
                         //   Result: Ok=0,   Err=1
-                        let variant_field_types = match &scrutinee.ty {
+                        let variant_field_types = match &scrut_ty {
                             Ty::Option(inner) if *variant_idx == 1 => {
                                 // Some(T) — the field type is the inner type
                                 vec![*inner.clone()]
@@ -166,11 +174,11 @@ impl<'a> Lowerer<'a> {
                         };
 
                         // Get the payload pointer (offset 8 from enum base).
-                        let payload_ptr = self.new_temp(scrutinee.ty.clone());
+                        let payload_ptr = self.new_temp(scrut_ty.clone());
                         self.emit(MirInst::GetPayload {
                             dest: payload_ptr,
                             src: scrut,
-                            ty: scrutinee.ty.clone(),
+                            ty: scrut_ty.clone(),
                         });
 
                         for (idx, field_pat) in fields.iter().enumerate() {
@@ -328,7 +336,7 @@ impl<'a> Lowerer<'a> {
                 } = &arm.pattern
                 {
                     // Bind the scrutinee value to the variable — use the scrutinee's type.
-                    let binding_ty = scrutinee.ty.clone();
+                    let binding_ty = scrut_ty.clone();
                     let local = self.new_local_named(name, binding_ty, *mutable);
                     self.def_to_local.insert(*def_id, local);
                     self.emit(MirInst::Assign {
@@ -371,13 +379,7 @@ impl<'a> Lowerer<'a> {
             }
         } else {
             // Non-enum match: cascading branches (if/else chain).
-            self.lower_match_cascading(
-                scrut_local,
-                &scrutinee.ty,
-                arms,
-                result_local,
-                merge_block,
-            )?;
+            self.lower_match_cascading(scrut_local, &scrut_ty, arms, result_local, merge_block)?;
         }
 
         self.current_block = merge_block;
@@ -669,5 +671,30 @@ impl<'a> Lowerer<'a> {
         }
         self.set_terminator(Terminator::Goto(match_target));
         Ok(())
+    }
+}
+
+/// Map the FFI-shell receiver spelling of Option / Result
+/// (`Ty::Class { name: "Option"|"Result", generic_args }`) to the
+/// structural `Ty::Option(_)` / `Ty::Result(_,_)` the enum-match
+/// payload-typing keys on. Inside an opaque `Option_map` / `Result_map`
+/// `.rx` body, `self`'s type is the class shape with abstract type-param
+/// args; the structural form lets `Some(x)` derive its payload field
+/// type directly from the (abstract) inner type rather than from the
+/// variant's declared placeholder. Any other type passes through
+/// unchanged. Arity mismatches (a "Result" with ≠2 args, etc.) also pass
+/// through so a malformed shape never silently loses information.
+fn normalize_option_result_class(ty: &Ty) -> Ty {
+    match ty {
+        Ty::Class { name, generic_args } if name == "Option" && generic_args.len() == 1 => {
+            Ty::Option(Box::new(generic_args[0].clone()))
+        }
+        Ty::Class { name, generic_args } if name == "Result" && generic_args.len() == 2 => {
+            Ty::Result(
+                Box::new(generic_args[0].clone()),
+                Box::new(generic_args[1].clone()),
+            )
+        }
+        other => other.clone(),
     }
 }

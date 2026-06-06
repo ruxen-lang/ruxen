@@ -116,12 +116,19 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
 
             (Ty::Result(ok, _), "try_op") => Some(*ok.clone()),
             (Ty::Result(ok, _), "unwrap_or_else") => Some(*ok.clone()),
-            (Ty::Result(_, _), "map") => Some(Ty::Result(
-                Box::new(eng.ctx.fresh_type_var()),
-                Box::new(Ty::Error),
-            )),
-            (Ty::Result(_, err), "map_err") => {
+            // `map` transforms the Ok type (fresh `U`) and PRESERVES the
+            // err type `E`; `map_err` PRESERVES the Ok type `T` and
+            // transforms the err type (fresh `F`). The migrated `.rx`
+            // bodies (`Result_map` / `Result_map_err`) re-wrap the
+            // untouched arm's payload, so dropping the preserved type here
+            // (the previous `Ty::Error` placeholder) mis-typed the
+            // propagated `Err(e)` and formatted a `String` payload via
+            // `Int_fmt`.
+            (Ty::Result(_, err), "map") => {
                 Some(Ty::Result(Box::new(eng.ctx.fresh_type_var()), err.clone()))
+            }
+            (Ty::Result(ok, _), "map_err") => {
+                Some(Ty::Result(ok.clone(), Box::new(eng.ctx.fresh_type_var())))
             }
 
             // Within-namespace fallthrough (not a cross-cutting catch-all).
