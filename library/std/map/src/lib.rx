@@ -48,4 +48,15 @@ class Hash[K, V]
     def remove as "ruxen_hash_remove"(key: K) -> Option[V]
     def clear as "ruxen_hash_clear"
   end
+
+  # Generic `each`: yield every `(K, V)` entry to the user closure. The
+  # `.rx` body is lowered ONCE as the opaque `Hash_each` (K/V abstract);
+  # it materializes the entries via the FFI call on `self` (`self.to_a`)
+  # and forwards each tuple to `f`. Proves the FFI-on-self result flows
+  # out of the opaque body into the iteration.
+  def each(f: any Fn[Fn((K, V)) -> nil]) -> nil
+    let entries = self.to_a
+    entries.each do |kv| f.(kv) end
+    nil
+  end
 end

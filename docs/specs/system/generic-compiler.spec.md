@@ -104,3 +104,12 @@ behind.
   `type_methods`, not trait/mixin default signatures — so the closure param
   stayed `Infer`. Fixed by falling through to `trait_method_sigs` for any
   implemented trait. Pin: `tests/release-e2e/cases/604_closure_tuple_param_field.rx`.
+- [FIXED] `h.each { }` on a `Ty::Map`/`Ty::Set` receiver was mis-inlined by
+  `try_inline_closure_method`'s `is_collection_method` branch — it treated the
+  builtin collection as a user-defined Vec-wrapping class and dereferenced a
+  non-existent backing Vec at field 0, so the closure was never called over the
+  real entries (`Hash#each` "yields nothing"). Now builtin `Map`/`Set`
+  receivers fall through to a real call to the migrated opaque `.rx` body
+  (`Hash_each`), which materializes entries via the FFI-on-self `self.to_a` and
+  forwards each tuple. Pin: `tests/release-e2e/cases/605_generic_self_ffi_method.rx`.
+  `class Hash[K, V]` now carries a `def each` `.rx` body over `self.to_a`.

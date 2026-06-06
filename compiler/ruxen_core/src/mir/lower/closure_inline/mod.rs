@@ -87,6 +87,30 @@ impl<'a> Lowerer<'a> {
             }
         }
 
+        // Builtin collection receivers that are NOT a plain Vec/Array
+        // (`Ty::Map` / `Ty::Set`) have their combinators migrated to real
+        // `.rx` method bodies (`Hash_each`, `Set_each`, …). Such a receiver
+        // is NOT a user-defined Vec-wrapping class, so the
+        // `is_collection_method` field-0 branch below would dereference a
+        // non-existent backing Vec at offset 0 and iterate garbage (the
+        // observed `Hash#each` "yields nothing" bug). Fall through so the
+        // normal method-call path emits a real call to the opaque body.
+        {
+            let mut recv = &object.ty;
+            loop {
+                match recv {
+                    Ty::Ref(inner)
+                    | Ty::RefMut(inner)
+                    | Ty::RefLifetime(_, inner)
+                    | Ty::RefMutLifetime(_, inner) => recv = inner,
+                    _ => break,
+                }
+            }
+            if matches!(recv, Ty::Map(_, _) | Ty::Set(_)) {
+                return Ok(None);
+            }
+        }
+
         // Determine the Vec source. For Vec/iterator types, peel through
         // method call chains. For user-defined classes with known
         // collection-wrapping methods (where_matching, display_all,
