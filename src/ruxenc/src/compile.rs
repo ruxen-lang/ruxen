@@ -222,8 +222,10 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // User-side runtime C (`--runtime-c=`): always compiled, independent of
     // the prebuilt stdlib archive — these are project sources, not stdlib.
     if !extra_runtime_c.is_empty() {
-        let extra_paths: Vec<std::path::PathBuf> =
-            extra_runtime_c.iter().map(std::path::PathBuf::from).collect();
+        let extra_paths: Vec<std::path::PathBuf> = extra_runtime_c
+            .iter()
+            .map(std::path::PathBuf::from)
+            .collect();
         let extra_objects =
             ruxen_core::codegen::object::compile_runtime_sources(&extra_paths, false)
                 .map_err(|e| format!("Failed to compile project runtime C: {}", e))?;

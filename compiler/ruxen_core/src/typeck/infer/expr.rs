@@ -466,11 +466,12 @@ impl<'a> InferenceEngine<'a> {
                 // `resolve_method_call` fresh-var path and the result type
                 // stayed `?T`, breaking any chained `.field` / `.method`.
                 let selected_method = match &derefed {
-                    Ty::Class { name, .. } | Ty::Struct { name, .. } | Ty::Enum { name, .. } => self
-                        .select_class_method(name, method_name, args)
-                        .inspect(|selected| {
-                            *method = *selected;
-                        }),
+                    Ty::Class { name, .. } | Ty::Struct { name, .. } | Ty::Enum { name, .. } => {
+                        self.select_class_method(name, method_name, args)
+                            .inspect(|selected| {
+                                *method = *selected;
+                            })
+                    }
                     _ => None,
                 };
                 if let Some(selected) = selected_method {

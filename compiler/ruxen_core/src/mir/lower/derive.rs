@@ -416,10 +416,12 @@ impl<'a> Lowerer<'a> {
                         Ty::Int
                     };
                     let dest = mir_fn.new_temp(bits_ty);
-                    mir_fn.blocks[entry].instructions.push(MirInst::FloatToBits {
-                        dest,
-                        src: field_local,
-                    });
+                    mir_fn.blocks[entry]
+                        .instructions
+                        .push(MirInst::FloatToBits {
+                            dest,
+                            src: field_local,
+                        });
                     dest
                 } else {
                     field_local

@@ -53,10 +53,16 @@ fn compile_and_run(label: &str, source: &str) -> String {
         .iter()
         .filter(|d| d.level == ruxen_core::diagnostics::DiagnosticLevel::Error)
         .collect();
-    assert!(errors.is_empty(), "[{label}] typecheck errors: {:?}", errors);
+    assert!(
+        errors.is_empty(),
+        "[{label}] typecheck errors: {:?}",
+        errors
+    );
 
     let mut lowerer = Lowerer::new(&result.symbols);
-    let mir = lowerer.lower_program(&result.program).expect("MIR lowering");
+    let mir = lowerer
+        .lower_program(&result.program)
+        .expect("MIR lowering");
 
     codegen::compile(&mir, bin_path.to_str().unwrap())
         .unwrap_or_else(|e| panic!("[{label}] codegen failed: {e}"));
