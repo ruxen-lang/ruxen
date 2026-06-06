@@ -443,20 +443,14 @@ mod golden {
         }
 
         // ── Enum / numeric / scalar structural RESIDUAL (TIER 3) ───
-        // Int `to_s` / `to_string` / `to_f` MIGRATED to scalar.rx
-        // (`class Int`) and resolve via the bridge; with an EMPTY symbol
-        // table they return None, so they are NOT pinned here. The
-        // ABI-divergent Float/Bool/Char and the class-less USize
-        // residuals stay in numeric.rs and ARE pinned.
+        // Int AND the Float/Bool/Char/USize scalar conversions
+        // (`to_s`/`to_string`/`to_i`) MIGRATED to scalar.rx and resolve
+        // via the bridge; with an EMPTY symbol table they return None, so
+        // they are NOT pinned here. Only `Enum.weight` (a compiler
+        // accessor, no runtime symbol) stays in numeric.rs and IS pinned.
+        // The receiver-width correctness (Float→F64, the rest→I64) is
+        // pinned by `tests/runtime_abi_derivation.rs`.
         v.push(c(enum_ty("Priority"), "weight"));
-        v.push(c(Ty::Bool, "to_string"));
-        v.push(c(Ty::USize, "to_string"));
-        v.push(c(Ty::Float, "to_string"));
-        v.push(c(Ty::Float, "to_i"));
-        v.push(c(Ty::USize, "to_s"));
-        v.push(c(Ty::Float, "to_s"));
-        v.push(c(Ty::Bool, "to_s"));
-        v.push(c(Ty::Char, "to_s"));
         // generic to_s / clone / new / default fallbacks
         v.push(c(class("Widget", vec![]), "to_s"));
         v.push(c(struct_ty("Point"), "to_s"));

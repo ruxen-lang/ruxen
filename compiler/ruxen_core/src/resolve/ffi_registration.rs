@@ -210,10 +210,22 @@ impl Resolver {
         let final_param_tys = if ffi_fn.is_class_method {
             param_tys
         } else {
-            let receiver_ty = Ty::Class {
-                name: parent_name.to_string(),
-                generic_args: vec![],
-            };
+            // The receiver crosses the C ABI as the FIRST arg. Its WIRE
+            // WIDTH must match what the C symbol expects. For most
+            // method-homes the receiver is a pointer / boxed handle /
+            // int64-by-value → a pointer-sized `Ty::Class { name }`
+            // (I64), which is correct for `String`, the collections, and
+            // the scalar homes whose C symbols take `int64_t`
+            // (`Int`/`Bool`/`Char`/`USize`: `ruxen_int_to_string`,
+            // `ruxen_bool_to_string(int64_t)`, `ruxen_char_to_string(
+            // int64_t)`). The ONE exception is `Float`: its C symbols
+            // take a `double` (`ruxen_float_to_string(double)`,
+            // `ruxen_float_to_i(double)`), so the receiver must derive
+            // F64 — prepend `Ty::Float`, not the I64 class handle. Using
+            // the I64 class receiver there would pass the float bits in a
+            // GP register and read garbage. The parity guard
+            // (`tests/runtime_abi_derivation.rs`) pins each derived width.
+            let receiver_ty = primitive_ffi_receiver_ty(parent_name);
             let mut tys = Vec::with_capacity(param_tys.len() + 1);
             tys.push(receiver_ty);
             tys.extend(param_tys);
@@ -232,6 +244,9 @@ impl Resolver {
             parent_type: Some(parent_name.to_string()),
         });
     }
+
+    // (free helper below; see `final_param_tys` for the receiver-width
+    // contract it implements.)
 
     /// #06.8 Phase 2: emit **E0722** when a Ruxen `lib`/`extern` block
     /// declares the same C symbol that an earlier block already
@@ -1290,4 +1305,32 @@ impl Resolver {
     }
 
     // ─── Pass 2: Full Resolution ────────────────────────────────────
+}
+
+/// The `Ty` to prepend as the implicit `self` receiver of an
+/// instance-method FFI decl, chosen so its `ty_to_cranelift` width
+/// matches the C symbol's first parameter.
+///
+/// Default: `Ty::Class { name }` — pointer-sized I64. Correct for every
+/// pointer / boxed-handle / `int64_t`-by-value receiver, which is all of
+/// `String`, the collections (`Array`/`Set`/`Hash`), the enum homes
+/// (`Option`/`Result`), and the scalar homes whose C symbols take
+/// `int64_t` (`Int`/`Bool`/`Char`/`USize` → `ruxen_int_to_string`,
+/// `ruxen_bool_to_string(int64_t)`, `ruxen_char_to_string(int64_t)`).
+///
+/// The ONE primitive whose C symbols take the value in a FLOAT register
+/// is `Float` (`ruxen_float_to_string(double)` / `ruxen_float_to_i(
+/// double)`): its receiver must derive F64, so prepend `Ty::Float`.
+/// Without this, the I64 class handle would pass the double's bits in a
+/// GP register and the C side would read garbage. The parity guard
+/// `tests/runtime_abi_derivation.rs` pins the derived width for every
+/// shared symbol, so a wrong receiver here fails the guard immediately.
+fn primitive_ffi_receiver_ty(parent_name: &str) -> Ty {
+    match parent_name {
+        "Float" => Ty::Float,
+        _ => Ty::Class {
+            name: parent_name.to_string(),
+            generic_args: vec![],
+        },
+    }
 }

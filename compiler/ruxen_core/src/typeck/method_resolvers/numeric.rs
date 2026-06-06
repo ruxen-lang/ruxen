@@ -32,30 +32,18 @@ use super::resolver::MethodResolver;
 
 pub(super) fn resolvers() -> Vec<MethodResolver> {
     vec![MethodResolver {
-        matches: |ty, _method| {
-            matches!(
-                ty,
-                Ty::USize | Ty::Float | Ty::Bool | Ty::Char | Ty::Enum { .. }
-            )
-        },
+        matches: |ty, _method| matches!(ty, Ty::Enum { .. }),
         resolve: |_eng, ty, method, _args, _span| match (ty, method) {
-            // Enum weight (Priority.weight)
+            // `Enum.weight` (Priority.weight) — a compiler accessor, not a
+            // runtime FFI symbol, so it cannot be a `.rx` decl.
+            //
+            // The scalar conversions (Float/Bool/Char/USize `to_s`/
+            // `to_string`/`to_i`) MIGRATED to their `.rx` method-home
+            // classes (scalar/src/lib.rx) once `primitive_ffi_receiver_ty`
+            // taught the receiver-prepend to use each C symbol's true
+            // register class (Float→F64, the rest→I64). They resolve via
+            // builtin_bridge now; their residual arms are removed.
             (Ty::Enum { .. }, "weight") => Some(Ty::Int),
-
-            // ── ABI-divergent residuals (I64 class receiver ≠ C wire) ──
-            // Float: C takes `double` (F64), class receiver derives I64.
-            (Ty::Float, "to_string") => Some(Ty::String),
-            (Ty::Float, "to_s") => Some(Ty::String),
-            (Ty::Float, "to_i") => Some(Ty::Int),
-            // Bool / Char: C takes `int64_t`, narrower head receiver.
-            (Ty::Bool, "to_string") => Some(Ty::String),
-            (Ty::Bool, "to_s") => Some(Ty::String),
-            (Ty::Char, "to_s") => Some(Ty::String),
-
-            // ── USize: no `class USize` to bridge to ──
-            (Ty::USize, "to_string") => Some(Ty::String),
-            (Ty::USize, "to_s") => Some(Ty::String),
-            // Within-namespace fallthrough (not a cross-cutting catch-all).
             _ => None,
         },
     }]

@@ -31,13 +31,12 @@ use super::resolver::MethodResolver;
 /// arm relied on); `method_home_key` and `substitute_generics_in_return`
 /// peel any reference layers downstream when the bridge resolves.
 fn is_delegated_head(ty: &Ty) -> bool {
-    // NB: `Float` / `Bool` / `Char` are deliberately ABSENT. The
-    // instance-method receiver prepended to the derived FFI sig is
-    // `Ty::Class { name }` → a pointer-sized I64. That matches `Int`'s C
-    // symbols (`ruxen_int_to_string(int64_t)`), but contradicts `Float`'s
-    // `double` (F64) and `Bool`/`Char`'s narrower heads (I8/I32). Their
-    // `to_s` / conversions stay Rust residuals in `numeric.rs` — same
-    // ABI-divergence rule as `String.remove`.
+    // Feature A: `Float`/`Bool`/`Char`/`USize` now delegate their
+    // `to_s`/`to_string`/`to_i` to their `.rx` method-home classes
+    // (scalar/src/lib.rx). The receiver-prepend uses each symbol's true
+    // register class (`primitive_ffi_receiver_ty`: `Float`→F64, the rest
+    // →I64), so the derived FFI width matches the C symbol and the parity
+    // guard passes. Their numeric.rs residual arms are removed.
     //
     // `Ty::Str` (`&str`) IS delegated: `method_home_key` routes it to
     // `class String` (there is no `class str`), and a `&str` receiver is
@@ -62,6 +61,10 @@ fn is_delegated_head(ty: &Ty) -> bool {
             | Ty::Set(_)
             | Ty::Map(_, _)
             | Ty::Int
+            | Ty::Float
+            | Ty::Bool
+            | Ty::Char
+            | Ty::USize
             | Ty::Option(_)
             | Ty::Result(_, _)
     )

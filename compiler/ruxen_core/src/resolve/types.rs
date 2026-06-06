@@ -45,12 +45,19 @@ fn primitive_class_ty(name: &str) -> Option<Ty> {
     match name {
         "String" => Some(Ty::String),
         "Int" => Some(Ty::Int),
-        // NB: no `Float` / `Bool` / `Char` — the prepended class receiver
-        // in a `.rx` instance-method FFI decl is pointer-sized (I64),
-        // which matches `Int`'s C symbols but contradicts `Float`'s
-        // `double` and `Bool`/`Char`'s narrower heads. They keep their
-        // `to_s` / conversions in `numeric.rs` and are never anchored, so
-        // they never reach this normalisation.
+        // Zero-Rust-stdlib Phase 3 follow-up (Feature A): the scalar
+        // primitives now have `.rx` method-home classes. A bare
+        // annotation (`let x: Float`) must still resolve to the PRIMITIVE
+        // head so literals, arithmetic, comparisons, and the value repr
+        // stay unchanged — only METHOD dispatch is homed on the class.
+        // The receiver WIDTH for their FFI decls is handled separately by
+        // `primitive_ffi_receiver_ty` (`Float`→F64 for `double` symbols;
+        // `Bool`/`Char`/`USize`→I64 for their `int64_t` symbols), so each
+        // method-home anchors here regardless of its C receiver register.
+        "Float" => Some(Ty::Float),
+        "Bool" => Some(Ty::Bool),
+        "Char" => Some(Ty::Char),
+        "USize" => Some(Ty::USize),
         _ => None,
     }
 }
