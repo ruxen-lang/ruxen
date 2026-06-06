@@ -48,7 +48,11 @@
 ##     collections.rs arms: `map` preserves `E` (`Result[U, E]`), `map_err`
 ##     preserves `T` (`Result[T, F]`); the transformed type var is harvested
 ##     from the closure body by `infer_combinator_block`.
-##   * `unwrap_or_else` — closure (return the success element).
+##   * `unwrap_or_else` — MIGRATED to `.rx` bodies below: return the success
+##     payload on the present arm, run the fallback closure otherwise
+##     (`match self { Some(x) -> x; nil -> f.() }`; Result passes the err to
+##     `f.(e)`). The return is the success element `T`, a static declared
+##     return that substitutes through the bridge — no resolver arm needed.
 ##   * `try_op` — the `?` operator desugaring.
 ##   * `ok_or` — the err type comes from the ARG, not a static return
 ##     (like `Array.zip`); kept laundered for the FFI alias.
@@ -71,6 +75,17 @@ class Option[T]
     match self
       Some(x) -> Option.Some(f.(x))
       nil -> nil
+    end
+  end
+
+  # Ruby `Option#unwrap_or_else` — return the contained value if present,
+  # otherwise compute the fallback by calling `f` (no argument). Lowered
+  # ONCE as the opaque `Option_unwrap_or_else` body (closure call in a
+  # match arm of the opaque body, Bug 1 path).
+  def unwrap_or_else(f: any Fn[Fn() -> T]) -> T
+    match self
+      Some(x) -> x
+      nil -> f.()
     end
   end
 end
@@ -103,6 +118,17 @@ class Result[T, E]
     match self
       Ok(x) -> Result.Ok(x)
       Err(e) -> Result.Err(f.(e))
+    end
+  end
+
+  # Ruby `Result#unwrap_or_else` — return the `Ok` value if present,
+  # otherwise compute the fallback by calling `f` with the `Err` payload.
+  # Lowered ONCE as the opaque `Result_unwrap_or_else` body (closure call
+  # in a match arm of the opaque body, Bug 1 path).
+  def unwrap_or_else(f: any Fn[Fn(E) -> T]) -> T
+    match self
+      Ok(x) -> x
+      Err(e) -> f.(e)
     end
   end
 end

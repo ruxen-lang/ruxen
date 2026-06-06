@@ -1,0 +1,20 @@
+def main
+  # Option#unwrap_or_else — present arm returns the payload; nil arm
+  # runs the no-arg fallback closure. Migrated to the .rx body
+  # (`match self { Some(x) -> x; nil -> f.() }`).
+  let some_v: Option[Int] = Option.Some(7)
+  let a = some_v.unwrap_or_else do 99 end
+  puts "a=#{a}"
+  let none_v: Option[Int] = nil
+  let b = none_v.unwrap_or_else do 99 end
+  puts "b=#{b}"
+
+  # Result#unwrap_or_else — Ok arm returns the payload; Err arm runs the
+  # fallback closure with the error payload.
+  let ok_v: Result[Int, Int] = Result.Ok(3)
+  let c = ok_v.unwrap_or_else do |e| e + 1000 end
+  puts "c=#{c}"
+  let err_v: Result[Int, Int] = Result.Err(5)
+  let d = err_v.unwrap_or_else do |e| e + 1000 end
+  puts "d=#{d}"
+end

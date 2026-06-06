@@ -10,7 +10,6 @@ mod map;
 mod partition;
 mod position;
 mod retain;
-mod unwrap_or_else;
 
 impl<'a> Lowerer<'a> {
     pub(super) fn try_inline_closure_method(
@@ -30,41 +29,19 @@ impl<'a> Lowerer<'a> {
             _ => return Ok(None), // Not a closure — can't inline.
         };
 
-        // `Option#map` / `Result#map` / `Result#map_err` are migrated to
-        // real `.rx` bodies (`Option_map` / `Result_map`,
+        // `Option#map` / `Result#map` / `Result#map_err` /
+        // `unwrap_or_else` are migrated to real `.rx` bodies
+        // (`Option_map` / `Result_map` / `Option_unwrap_or_else` / …,
         // option_result/src/lib.rx). Fall through so the normal
         // method-call path emits a call to the opaque body rather than
         // inlining here. Without this, the `is_collection_method` field-0
         // branch below would dereference an Option/Result box at offset 0
         // as a backing Vec and iterate garbage (segfault).
-        if (is_option_type(&object.ty) && method_name == "map")
-            || (is_result_type(&object.ty) && matches!(method_name, "map" | "map_err"))
+        if (is_option_type(&object.ty) && matches!(method_name, "map" | "unwrap_or_else"))
+            || (is_result_type(&object.ty)
+                && matches!(method_name, "map" | "map_err" | "unwrap_or_else"))
         {
             return Ok(None);
-        }
-
-        // Result.unwrap_or_else { |e| ... } / Option.unwrap_or_else { |e| ... }
-        // — branch on tag, return payload on the success arm, evaluate
-        // closure with the error payload otherwise.
-        if method_name == "unwrap_or_else" {
-            if is_result_type(&object.ty) {
-                return self.inline_unwrap_or_else(
-                    expr,
-                    object,
-                    closure_params,
-                    closure_body,
-                    /*ok_tag=*/ 0,
-                );
-            }
-            if is_option_type(&object.ty) {
-                return self.inline_unwrap_or_else(
-                    expr,
-                    object,
-                    closure_params,
-                    closure_body,
-                    /*ok_tag=*/ 1,
-                );
-            }
         }
 
         // Builtin collection receivers that are NOT a plain Vec/Array

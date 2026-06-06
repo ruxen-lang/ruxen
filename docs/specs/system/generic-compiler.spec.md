@@ -72,13 +72,26 @@ behind.
       partition/each_with_index/find/index/sort_by/reduce/zip` done.
       `mixin Enumerable[T]` now CONSOLIDATES `map/select/reject/all?/any?/
       partition/each_with_index/find/index/reduce` over a single required
-      `each`; `class Array include Enumerable[T]` (bodies deleted from Array).
-      Mixin generic params now scope into method sigs (`resolve_trait`); MIR
-      emits the included defaults as opaque `Array_<m>` bodies and registers
-      them in `lib_body_methods` (`collect_lib_body_methods` walks includes).
+      `each`; `Array`, `Set`, and `Hash` all `include Enumerable[T]` (Hash
+      over `(K, V)` pairs) — no per-collection combinator bodies. Set/Hash
+      supply only `each` (over the FFI-on-self `self.to_a`). Mixin generic
+      params now scope into method sigs (`resolve_trait`); MIR emits the
+      included defaults as opaque `<Class>_<m>` bodies and registers them in
+      `lib_body_methods` (`collect_lib_body_methods` walks includes).
       Array-specific `sort_by`/`zip`/`to_h`/`sum`/`select!`/`each` stay on the
-      class (positional / arg-typed / FFI). **NEXT: `include Enumerable[T]` in
-      Set + Hash (provide their `each`); migrate Option/Result closures.**
+      class (positional / arg-typed / FFI). Option/Result `map`/`map_err`/
+      `unwrap_or_else` migrated to `.rx` bodies (match-arm + closure call).
+      Three compiler fixes for Set/Hash routing (`50825e6`): closure_inline
+      fall-through for the `Ty::Class{Set|Hash|Map}` opaque-body self;
+      `mixin_element_subst` (records each include's trait args so `Fn(T)`
+      seeds to `(K, V)` for Hash); cell-promotion retypes the captured local
+      to pointer width (fixed `load.i8` verifier error when a real capturing
+      closure is passed to `Set_each`/`Hash_each`). Pins 612/613/614.
+      **RESIDUAL:** `collections.rs` Option/Result arms are now `try_op`
+      (`?`-intrinsic), `map` (fresh-var return), `ok_or` (arg-derived err);
+      Array `each`/`to_h`/`sum`/`select!`/`get_mut`/`get_var`. `ok_or` left
+      as documented residual (err type comes from the ARG, not a static
+      return — same shape as `Array.zip`; no clean static `.rx` return).
 - [ ] Feature D: derive Clone/Debug/Default (retire `resolver.rs` structural).
 - [ ] Feature E: String reconcile (`remove`/`push`/… C-vs-surface).
 - [ ] Feature B: trait-bound enforcement (move Send/E0714/sum-Add to `.rx`

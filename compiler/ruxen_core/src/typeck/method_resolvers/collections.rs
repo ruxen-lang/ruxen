@@ -105,17 +105,18 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
             //   * `map` / `map_err` — closure combinators; the result
             //     element is the closure body's type (a fresh var unified
             //     by `infer_combinator_block`), not a static return.
-            //   * `unwrap_or_else` — closure; returns the success element
-            //     but the closure body is inlined (closure_inline).
             //   * `ok_or` — the err type is read from the ARG (like
             //     `Array.zip`), not expressible as a static `.rx` return.
+            //
+            // `unwrap_or_else` MIGRATED to `.rx` bodies (`Option_unwrap_or_else`
+            // / `Result_unwrap_or_else`, option_result/src/lib.rx): its return
+            // is the static success element `T`, substituted through the
+            // bridge — no resolver arm.
             (Ty::Option(inner), "try_op") => Some(*inner.clone()),
-            (Ty::Option(inner), "unwrap_or_else") => Some(*inner.clone()),
             (Ty::Option(_), "map") => Some(Ty::Option(Box::new(eng.ctx.fresh_type_var()))),
             (Ty::Option(inner), "ok_or") => Some(Ty::Result(inner.clone(), Box::new(Ty::Error))),
 
             (Ty::Result(ok, _), "try_op") => Some(*ok.clone()),
-            (Ty::Result(ok, _), "unwrap_or_else") => Some(*ok.clone()),
             // `map` transforms the Ok type (fresh `U`) and PRESERVES the
             // err type `E`; `map_err` PRESERVES the Ok type `T` and
             // transforms the err type (fresh `F`). The migrated `.rx`
