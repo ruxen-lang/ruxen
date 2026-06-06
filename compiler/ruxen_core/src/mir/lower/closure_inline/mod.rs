@@ -75,6 +75,16 @@ impl<'a> Lowerer<'a> {
         // non-existent backing Vec at offset 0 and iterate garbage (the
         // observed `Hash#each` "yields nothing" bug). Fall through so the
         // normal method-call path emits a real call to the opaque body.
+        //
+        // The receiver shows up in TWO shapes: structurally as
+        // `Ty::Map`/`Ty::Set` at a user call site (`s.map { … }`), and as
+        // `Ty::Class { name: "Set"|"Hash"|"Map" }` for the `self` inside an
+        // opaque mixin-default combinator body (`Set_map`'s `self.each`),
+        // because a class's self-type is `Ty::Class { name }` not the
+        // primitive head. Both must fall through to the real `Set_each` /
+        // `Hash_each` call — only `Array`'s self IS a backing Vec (handled
+        // by `is_vec_or_iterator_type`). Without this, `Set`/`Hash`
+        // combinators routed through `Enumerable[T]` "yield nothing".
         {
             let mut recv = &object.ty;
             loop {
@@ -86,7 +96,15 @@ impl<'a> Lowerer<'a> {
                     _ => break,
                 }
             }
-            if matches!(recv, Ty::Map(_, _) | Ty::Set(_)) {
+            let is_builtin_non_vec_collection = match recv {
+                Ty::Map(_, _) | Ty::Set(_) => true,
+                Ty::Class { name, .. } => {
+                    let base = name.split('[').next().unwrap_or(name);
+                    matches!(base, "Set" | "Hash" | "Map")
+                }
+                _ => false,
+            };
+            if is_builtin_non_vec_collection {
                 return Ok(None);
             }
         }

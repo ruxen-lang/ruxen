@@ -1,0 +1,20 @@
+def main
+  var s: Set[Int] = Set.new
+  s.insert(1)
+  s.insert(2)
+  s.insert(3)
+  s.insert(4)
+  # Combinators come from `mixin Enumerable[T]` over Set's `each`.
+  # Set iteration order is unspecified, so only order-independent
+  # aggregates are asserted.
+  let total = s.reduce(0) do |acc, x| acc + x end
+  puts "sum=#{total}"
+  let evens = s.select do |x| x % 2 == 0 end
+  puts "evens=#{evens.size}"
+  let all_pos = s.all? do |x| x > 0 end
+  puts "all_pos=#{all_pos}"
+  let any_big = s.any? do |x| x > 3 end
+  puts "any_big=#{any_big}"
+  let none_neg = s.any? do |x| x < 0 end
+  puts "none_neg=#{none_neg}"
+end

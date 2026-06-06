@@ -23,6 +23,16 @@
 ##
 ## No residuals — every Set method has a real C symbol and a statically
 ## substitutable return.
+##
+## ## Enumerable
+##
+## `Set` `include`s `Enumerable[T]` (core/lib.rx) and supplies only the
+## required `each` primitive: the whole combinator family
+## (`map`/`select`/`reject`/`find`/`reduce`/`all?`/`any?`/`partition`/…)
+## comes from the shared mixin default bodies over `each`. Set's `each`
+## is expressed over the FFI-on-self `self.to_a` (the materialized
+## element vector), forwarding each element to the closure — the same
+## shape as `Hash#each` (`605_generic_self_ffi_method`).
 class Set[T]
   lib "../hash/runtime/hash.c"
     def self.new as "ruxen_set_new" -> Set[T]
@@ -37,5 +47,19 @@ class Set[T]
     def insert as "ruxen_set_insert"(item: T)
     def remove as "ruxen_set_remove"(item: T) -> Bool
     def clear as "ruxen_set_clear"
+  end
+
+  # The combinator family (`map`/`select`/`reject`/`find`/`reduce`/
+  # `all?`/`any?`/`partition`/`each_with_index`/`index`) comes from the
+  # shared `mixin Enumerable[T]` over the single `each` primitive below.
+  include Enumerable[T]
+
+  # Generic `each`: yield every element to the user closure. Lowered
+  # ONCE as the opaque `Set_each` (T abstract); materializes the elements
+  # via the FFI call on `self` (`self.to_a`) and forwards each to `f`.
+  def each(f: any Fn[Fn(T) -> nil]) -> nil
+    let items = self.to_a
+    items.each do |x| f.(x) end
+    nil
   end
 end

@@ -49,6 +49,14 @@ class Hash[K, V]
     def clear as "ruxen_hash_clear"
   end
 
+  # The combinator family (`map`/`select`/`reject`/`find`/`reduce`/
+  # `all?`/`any?`/`partition`/…) comes from the shared `mixin
+  # Enumerable[T]` over the single `each` primitive below. Hash's
+  # ELEMENT is the `(K, V)` pair, so it includes `Enumerable[(K, V)]`:
+  # every combinator closure receives a `(K, V)` tuple (tuple-field
+  # access `kv.0` / `kv.1` is sound — Bug 3, `604_closure_tuple_param_field`).
+  include Enumerable[(K, V)]
+
   # Generic `each`: yield every `(K, V)` entry to the user closure. The
   # `.rx` body is lowered ONCE as the opaque `Hash_each` (K/V abstract);
   # it materializes the entries via the FFI call on `self` (`self.to_a`)

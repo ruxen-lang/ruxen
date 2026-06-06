@@ -479,8 +479,21 @@ impl<'a> InferenceEngine<'a> {
                                 .iter()
                                 .find(|p| Self::param_fn_signature(&p.ty).is_some())
                             {
-                                let subst_param_ty = self
-                                    .substitute_generics_in_return(&derefed_sig, &closure_param.ty);
+                                // Apply the receiver's `include Mixin[Args]`
+                                // element binding first (`Enumerable.T → (K,
+                                // V)` for `Hash`), THEN the receiver-generic
+                                // substitution (`K → String`, `V → Int`), so
+                                // a combinator param typed `Fn(T)` resolves to
+                                // the concrete element. A no-op for `Array
+                                // include Enumerable[T]` (maps `T → T`).
+                                let mixin_subst = self.traits.mixin_element_subst(&derefed_sig);
+                                let pre = if mixin_subst.is_empty() {
+                                    closure_param.ty.clone()
+                                } else {
+                                    Self::subst_ty(&closure_param.ty, &mixin_subst)
+                                };
+                                let subst_param_ty =
+                                    self.substitute_generics_in_return(&derefed_sig, &pre);
                                 if let Some((fn_params, _)) =
                                     Self::param_fn_signature(&subst_param_ty)
                                 {

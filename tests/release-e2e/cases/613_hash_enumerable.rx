@@ -1,0 +1,17 @@
+def main
+  let h: Hash[String, Int] = Hash.new
+  h.insert("a", 1)
+  h.insert("b", 2)
+  h.insert("c", 3)
+  # Combinators come from `mixin Enumerable[(K, V)]` over Hash's `each`.
+  # The closure element is the `(K, V)` tuple; Hash order is
+  # unspecified, so only order-independent aggregates are asserted.
+  let total = h.reduce(0) do |acc, kv| acc + kv.1 end
+  puts "sum=#{total}"
+  let big = h.select do |kv| kv.1 >= 2 end
+  puts "big=#{big.size}"
+  let all_pos = h.all? do |kv| kv.1 > 0 end
+  puts "all_pos=#{all_pos}"
+  let any_three = h.any? do |kv| kv.1 == 3 end
+  puts "any_three=#{any_three}"
+end

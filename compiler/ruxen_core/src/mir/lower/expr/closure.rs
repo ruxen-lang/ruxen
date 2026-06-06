@@ -82,6 +82,23 @@ impl<'a> Lowerer<'a> {
                             dest: *outer_local,
                             value: MirValue::Use(cell),
                         });
+                        // The local now holds an 8-byte cell POINTER, not the
+                        // original value — retype it to `Ty::Int` so codegen
+                        // treats it as a 64-bit pointer base for the
+                        // `GetField`/`SetField` cell accesses. Without this, a
+                        // promoted `Bool` (i8) / `Char` (i32) local keeps its
+                        // narrow type and the cell deref lowers to a
+                        // `load.i8`/`i32` from a non-pointer-width value
+                        // (cranelift verifier: "invalid pointer width"). Only
+                        // bites when the capturing closure is a REAL value
+                        // (e.g. passed to `Set_each`/`Hash_each`); the inlined
+                        // combinator path never promotes, which is why it
+                        // surfaced only with Set/Hash `include Enumerable`.
+                        if let Some(f) = self.current_fn.as_mut() {
+                            if let Some(slot) = f.locals.get_mut(*outer_local as usize) {
+                                slot.ty = Ty::Int;
+                            }
+                        }
                         self.cell_promoted.insert(*def);
                     }
                 }

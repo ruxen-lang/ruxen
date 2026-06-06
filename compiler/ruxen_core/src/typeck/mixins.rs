@@ -40,6 +40,19 @@ pub struct MixinResolver {
     /// (both required method signatures and default methods). Used to
     /// dispatch method calls on a generic `T: Trait` receiver.
     trait_method_sigs: HashMap<String, HashMap<String, Vec<FnSignature>>>,
+    /// trait_name → its declared generic parameter NAMES, in order
+    /// (`mixin Enumerable[T]` → `["T"]`). Paired with `mixin_include_args`
+    /// to recover the mixin-element binding an including class chose.
+    trait_generic_params: HashMap<String, Vec<String>>,
+    /// (target_type_name, trait_name) → the generic args the `include`
+    /// supplied, in order. `class Hash[K, V] include Enumerable[(K, V)]`
+    /// records `("Hash", "Enumerable") → [(K, V)]`. Closure-param seeding
+    /// composes this (mixin param `T` → `(K, V)`) BEFORE the receiver
+    /// substitution (`K → String`, `V → Int`), so a combinator closure
+    /// param typed `Fn(T)` in the shared `Enumerable[T]` default resolves
+    /// to the concrete element `(String, Int)` — without it `kv` stays the
+    /// abstract `T` and `kv.1` fails (`no field 1 on type T`).
+    mixin_include_args: HashMap<(String, String), Vec<Ty>>,
 }
 
 #[derive(Debug, Clone)]
@@ -60,6 +73,8 @@ impl MixinResolver {
             nominal_impls: HashMap::new(),
             type_methods: HashMap::new(),
             trait_method_sigs: HashMap::new(),
+            trait_generic_params: HashMap::new(),
+            mixin_include_args: HashMap::new(),
         }
     }
 
@@ -509,6 +524,34 @@ impl MixinResolver {
         None
     }
 
+    /// The substitution a receiver's `include Mixin[Args]` chose for the
+    /// mixin's own generic params, e.g. `class Hash[K, V] include
+    /// Enumerable[(K, V)]` → `{ "T" → (K, V) }` (`T` is Enumerable's
+    /// declared param). Empty when the receiver implements no parameterized
+    /// mixin (the common case — `Array include Enumerable[T]` maps `T → T`,
+    /// a no-op once the receiver substitution runs). Closure-param seeding
+    /// applies this BEFORE the receiver-generic substitution so a combinator
+    /// param typed `Fn(T)` resolves through the mixin element binding.
+    pub fn mixin_element_subst(&self, ty: &Ty) -> std::collections::HashMap<String, Ty> {
+        let type_name = Self::method_home_key(ty);
+        let mut subst = std::collections::HashMap::new();
+        for ((target, trait_name), include_args) in &self.mixin_include_args {
+            if *target != type_name {
+                continue;
+            }
+            let Some(param_names) = self.trait_generic_params.get(trait_name) else {
+                continue;
+            };
+            if param_names.len() != include_args.len() {
+                continue;
+            }
+            for (pname, arg) in param_names.iter().zip(include_args.iter()) {
+                subst.insert(pname.clone(), arg.clone());
+            }
+        }
+        subst
+    }
+
     pub fn lookup_method_with_args(
         &self,
         ty: &Ty,
@@ -699,6 +742,16 @@ impl MixinResolver {
                 for (k, v) in new_entries {
                     entry.entry(k).or_default().push(v);
                 }
+                // Record the mixin's declared generic param names so an
+                // including class's `Enumerable[(K, V)]` args can be mapped
+                // positionally onto them (mixin element binding).
+                self.trait_generic_params.insert(
+                    tdef.name.clone(),
+                    tdef.generic_params
+                        .iter()
+                        .map(|gp| gp.name.clone())
+                        .collect(),
+                );
             }
             HirItem::Class(class) => {
                 // Phase E.E of #06.95: module-nested classes need the
@@ -758,6 +811,12 @@ impl MixinResolver {
                             })
                             .collect();
                         self.register_impl(&type_name, Some(&trait_ref.name), methods);
+                        if !trait_ref.generic_args.is_empty() {
+                            self.mixin_include_args.insert(
+                                (type_name.clone(), trait_ref.name.clone()),
+                                trait_ref.generic_args.clone(),
+                            );
+                        }
                     }
                 }
             }
