@@ -337,6 +337,13 @@ pub enum MirInst {
         callee: LocalId,
         args: Vec<MirValue>,
     },
+    /// `dest = bit-reinterpret(src)` — reinterpret a float's storage bits
+    /// as an integer of the same width (f64→i64, f32→i32) without value
+    /// conversion. Used by the derived `Hashable` impl so float fields can
+    /// participate in the integer FNV mix (`bxor`/`mul`) — feeding a raw
+    /// `f64` into an integer `BinOp` otherwise fails Cranelift verification.
+    /// `dest`'s declared MIR type selects the integer width.
+    FloatToBits { dest: LocalId, src: LocalId },
     /// No operation — placeholder / removed instruction.
     Nop,
 }

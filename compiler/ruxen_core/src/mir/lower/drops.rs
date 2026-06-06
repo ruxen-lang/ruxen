@@ -663,11 +663,13 @@ fn compute_dealloc_safe_locals(func: &MirFunction) -> std::collections::HashSet<
                 | MirInst::RefMut { dest, .. }
                 | MirInst::StringLiteral { dest, .. }
                 | MirInst::FuncAddr { dest, .. }
+                | MirInst::FloatToBits { dest, .. }
                 | MirInst::DataAddr { dest, .. } => {
                     // Phase B-5: a static data pointer (vtable /
                     // class_info) is not a heap allocation — taint
                     // the dest so dealloc-tracking treats it as a
-                    // non-owning pointer.
+                    // non-owning pointer. `FloatToBits` likewise produces
+                    // a scalar integer, never a heap allocation.
                     tainted_perm.insert(*dest);
                     alloc_rooted.remove(dest);
                 }

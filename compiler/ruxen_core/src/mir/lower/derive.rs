@@ -404,6 +404,25 @@ impl<'a> Lowerer<'a> {
                         args: vec![MirValue::Use(field_local)],
                     });
                     dest
+                } else if field_ty.is_float() {
+                    // Float fields cannot feed the integer FNV mix directly
+                    // (`bxor`/`mul` reject an `f32`/`f64` operand). Reinterpret
+                    // the float's storage bits as a same-width integer first.
+                    // Float32 → i32 bits, Float/Float64 → i64 bits; the i32
+                    // case is then a valid integer the mix widens implicitly.
+                    let bits_ty = if matches!(field_ty, Ty::Float32) {
+                        Ty::Int32
+                    } else {
+                        Ty::Int
+                    };
+                    let dest = mir_fn.new_temp(bits_ty);
+                    mir_fn.blocks[entry]
+                        .instructions
+                        .push(MirInst::FloatToBits {
+                            dest,
+                            src: field_local,
+                        });
+                    dest
                 } else {
                     field_local
                 }

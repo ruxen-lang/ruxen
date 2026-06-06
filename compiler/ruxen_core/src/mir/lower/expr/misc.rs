@@ -4,9 +4,67 @@ impl<'a> Lowerer<'a> {
     pub(super) fn lower_misc(&mut self, expr: &HirExpr) -> Result<Option<LocalId>, String> {
         match &expr.kind {
             // ── Cast ────────────────────────────────────────────────
-            HirExprKind::Cast { expr: inner, .. } => {
-                // For now, pass through the inner expression.
-                self.lower_expr(inner)
+            HirExprKind::Cast {
+                expr: inner,
+                target,
+            } => {
+                let inner_local = self.lower_expr(inner)?;
+                let Some(src) = inner_local else {
+                    // No materialised value (e.g. a Unit/void inner) — nothing
+                    // to convert; pass through.
+                    return Ok(None);
+                };
+                // A numeric cast (`v as UInt32`) must materialise a value at
+                // the TARGET width, not pass the source through unchanged. The
+                // pass-through form left an `Int8`/`UInt8` value flowing into
+                // an enclosing `<<` / arithmetic op; Cranelift then performed
+                // the op at the source width and masked the shift amount
+                // (`x << 16` on an 8-bit value masks to `16 % 8 == 0`), so an
+                // inline `(1u8 as UInt32) << 16` term silently contributed 0.
+                // Let-binding the cast first hid the bug because the `let`'s
+                // declared type forced the widening Assign coercion — do the
+                // same here by binding into a fresh target-typed local. (We
+                // intentionally reuse the existing Assign `coerce_value` path,
+                // so signedness behaviour matches let-bound casts exactly.)
+                // Types are already resolved by typeck's finalisation pass,
+                // so `target` and the inner's type are concrete here.
+                let resolved_target = target.clone();
+                // Re-materialise ONLY for integer→integer (incl. Bool/Char,
+                // which are integer-shaped) width changes — the case Bug B
+                // hits. The Assign codegen path coerces via `coerce_value`
+                // (`ireduce`/`uextend`), which only handles int↔int. Int↔float
+                // and float↔float casts are left as pass-through exactly as
+                // before (they already require dedicated fcvt handling that
+                // this pass does not add, and routing them through the
+                // integer-only `coerce_value` would mistype the SSA value).
+                let is_int_like = |ty: &Ty| {
+                    matches!(
+                        ty,
+                        Ty::Int
+                            | Ty::Int8
+                            | Ty::Int16
+                            | Ty::Int32
+                            | Ty::Int64
+                            | Ty::UInt
+                            | Ty::UInt8
+                            | Ty::UInt16
+                            | Ty::UInt32
+                            | Ty::UInt64
+                            | Ty::ISize
+                            | Ty::USize
+                            | Ty::Bool
+                            | Ty::Char
+                    )
+                };
+                if !is_int_like(&resolved_target) || !is_int_like(&inner.ty) {
+                    return Ok(Some(src));
+                }
+                let dest = self.new_temp(resolved_target);
+                self.emit(MirInst::Assign {
+                    dest,
+                    value: MirValue::Use(src),
+                });
+                Ok(Some(dest))
             }
 
             // ── Array literal ───────────────────────────────────────

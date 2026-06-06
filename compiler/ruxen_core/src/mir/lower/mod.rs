@@ -1132,12 +1132,24 @@ impl<'a> Lowerer<'a> {
         } else {
             base
         };
-        // Collect every Class def matching the base name.
+        // Collect every Class / Struct / Enum def matching the base name.
+        // Structs and enums carry inline `def self.X` statics too
+        // (ruby-naming.spec.md §3.4a); their methods are registered as
+        // `DefKind::Method` with the struct/enum DefId as parent, exactly
+        // like classes. Only classes have an inheritance `parent`, so the
+        // struct/enum candidates record `None`. Without including them here,
+        // a struct zero-arg static (`C3.white`) was mis-classified as an
+        // instance call and a phantom `self` (constant 0) was prepended at
+        // the call site, tripping the Cranelift arg-count verifier.
         let mut candidates: Vec<(DefId, Option<DefId>)> = Vec::new();
         for def in self.symbols.iter() {
             if def.name == lookup_name {
-                if let DefKind::Class { ref info } = def.kind {
-                    candidates.push((def.id, info.parent));
+                match def.kind {
+                    DefKind::Class { ref info } => candidates.push((def.id, info.parent)),
+                    DefKind::Struct { .. } | DefKind::Enum { .. } => {
+                        candidates.push((def.id, None))
+                    }
+                    _ => {}
                 }
             }
         }

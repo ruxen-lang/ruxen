@@ -261,6 +261,20 @@ fn resolve_item_types(item: &mut crate::hir::nodes::HirItem, ctx: &TypeContext) 
             for field in &mut s.fields {
                 field.ty = ctx.resolve(&field.ty);
             }
+            // Finalize inferred types in inline methods / impl-block methods
+            // (ruby-naming.spec.md §3.4a) — without this, struct-method
+            // bodies keep `Infer(_)` types after inference and codegen
+            // mis-lowers field reads.
+            for method in &mut s.methods {
+                resolve_func_types(method, ctx);
+            }
+            for imp in &mut s.impl_blocks {
+                for ii in &mut imp.items {
+                    if let crate::hir::nodes::HirImplItem::Method(m) = ii {
+                        resolve_func_types(m, ctx);
+                    }
+                }
+            }
         }
         HirItem::Enum(e) => {
             for variant in &mut e.variants {
@@ -272,6 +286,16 @@ fn resolve_item_types(item: &mut crate::hir::nodes::HirItem, ctx: &TypeContext) 
                         }
                     }
                     crate::hir::nodes::HirVariantKind::Unit => {}
+                }
+            }
+            for method in &mut e.methods {
+                resolve_func_types(method, ctx);
+            }
+            for imp in &mut e.impl_blocks {
+                for ii in &mut imp.items {
+                    if let crate::hir::nodes::HirImplItem::Method(m) = ii {
+                        resolve_func_types(m, ctx);
+                    }
                 }
             }
         }
@@ -486,6 +510,30 @@ fn validate_item(
             for ii in &imp.items {
                 if let crate::hir::nodes::HirImplItem::Method(m) = ii {
                     validate_func(m, symbols, ctx, diags);
+                }
+            }
+        }
+        HirItem::Struct(s) => {
+            for method in &s.methods {
+                validate_func(method, symbols, ctx, diags);
+            }
+            for imp in &s.impl_blocks {
+                for ii in &imp.items {
+                    if let crate::hir::nodes::HirImplItem::Method(m) = ii {
+                        validate_func(m, symbols, ctx, diags);
+                    }
+                }
+            }
+        }
+        HirItem::Enum(e) => {
+            for method in &e.methods {
+                validate_func(method, symbols, ctx, diags);
+            }
+            for imp in &e.impl_blocks {
+                for ii in &imp.items {
+                    if let crate::hir::nodes::HirImplItem::Method(m) = ii {
+                        validate_func(m, symbols, ctx, diags);
+                    }
                 }
             }
         }
