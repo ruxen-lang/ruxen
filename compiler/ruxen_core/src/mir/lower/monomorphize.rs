@@ -234,6 +234,7 @@ impl<'a> Lowerer<'a> {
         fn collect_lib_body_methods(
             item: &HirItem,
             ffi_classes: &HashSet<String>,
+            trait_defaults: &HashMap<String, HashMap<String, HirFuncDef>>,
             out: &mut HashSet<String>,
         ) {
             match item {
@@ -243,11 +244,40 @@ impl<'a> Lowerer<'a> {
                         for m in &c.methods {
                             out.insert(format!("{}_{}", class_cs, m.name));
                         }
+                        // Combinators pulled in via `include Mixin` (e.g.
+                        // `class Array[T] include Enumerable[T]`) are emitted
+                        // as opaque `{Class}_{method}` bodies by
+                        // `lower_impl_block_with_outer_methods` (the trait-
+                        // default monomorphization arm), exactly like an own
+                        // body method. Register each included default the
+                        // class does NOT itself override so the call site can
+                        // route the generic-suffixed `Array[Int]_reduce`
+                        // callee to the opaque body, same as the own-body
+                        // surface above.
+                        let own: HashSet<&str> =
+                            c.methods.iter().map(|m| m.name.as_str()).collect();
+                        for inner in &c.impl_blocks {
+                            let Some(trait_ref) = &inner.trait_ref else {
+                                continue;
+                            };
+                            if inner.negative_trait {
+                                continue;
+                            }
+                            let Some(defaults) = trait_defaults.get(&trait_ref.name) else {
+                                continue;
+                            };
+                            for mname in defaults.keys() {
+                                if own.contains(mname.as_str()) {
+                                    continue;
+                                }
+                                out.insert(format!("{}_{}", class_cs, mname));
+                            }
+                        }
                     }
                 }
                 HirItem::Module(m) => {
                     for sub in &m.items {
-                        collect_lib_body_methods(sub, ffi_classes, out);
+                        collect_lib_body_methods(sub, ffi_classes, trait_defaults, out);
                     }
                 }
                 HirItem::Function(_)
@@ -262,7 +292,12 @@ impl<'a> Lowerer<'a> {
         }
         let mut lib_body_methods: HashSet<String> = HashSet::new();
         for item in &program.items {
-            collect_lib_body_methods(item, &ffi_classes, &mut lib_body_methods);
+            collect_lib_body_methods(
+                item,
+                &ffi_classes,
+                &self.trait_default_methods,
+                &mut lib_body_methods,
+            );
         }
         self.lib_body_methods = lib_body_methods;
     }

@@ -104,148 +104,27 @@ class Array[T]
     #    user-visible return type. See header.
     def sum as "ruxen_vec_sum" -> Int
     def each as "ruxen_vec_each" -> Int
-    # `zip` pairs each element with the corresponding element of `other`,
-    # truncating to the shorter length. The result element type `(T, U)`
-    # is now expressed directly as a method-level generic so it resolves
-    # through the bridge; the `ruxen_vec_zip` C symbol still does the
-    # work (FFI alias).
-    def zip[U] as "ruxen_vec_zip"(other: Array[U]) -> Array[(T, U)]
     def to_h as "ruxen_hash_from_iter" -> Int
   end
 
-  # ── Closure combinators (Feature C migration) ──────────────────────
-  # Real Ruxen bodies over the `each` primitive. `each` is the only
-  # genuine iteration primitive kept hardcoded (MIR-inlined,
-  # closure_inline/each.rs); every combinator below is expressed in
-  # terms of it. Typeck resolves these through the builtin-receiver
-  # bridge (`bridge_builtin_method` → `lookup_method_by_name` /
-  # `lookup_method_with_args`, with the trailing block counted as the
-  # closure arg and method-level `[U]` harvested from the closure's
-  # return). MIR emits ONE opaque `Array_<m>` body (type params left
-  # abstract — sound because the bodies only push / closure-call /
-  # iterate, never dispatch on the concrete `T`); the call site routes
-  # the generic-suffixed `Array[Int]_map` callee to it via
-  # `lib_body_methods` + `strip_generic_suffix`.
-
-  # Ruby `map` — apply `f` to each element, collect the results.
-  def map[U](f: any Fn[Fn(T) -> U]) -> Array[U]
-    var out: Array[U] = Array.new
-    self.each do |x| out.push(f.(x)) end
-    out
-  end
-
-  # Ruby `select` / `filter` — keep elements where the predicate holds.
-  def select(pred: any Fn[Fn(T) -> Bool]) -> Array[T]
-    var out: Array[T] = Array.new
-    self.each do |x|
-      if pred.(x)
-        out.push(x)
-      end
-    end
-    out
-  end
-
-  # Ruby `reject` — the inverse of `select`.
-  def reject(pred: any Fn[Fn(T) -> Bool]) -> Array[T]
-    var out: Array[T] = Array.new
-    self.each do |x|
-      if pred.(x)
-      else
-        out.push(x)
-      end
-    end
-    out
-  end
-
-  # Ruby `all?` — true iff the predicate holds for every element.
-  def all?(pred: any Fn[Fn(T) -> Bool]) -> Bool
-    var ok: Bool = true
-    self.each do |x|
-      if pred.(x)
-      else
-        ok = false
-      end
-    end
-    ok
-  end
-
-  # Ruby `any?` — true iff the predicate holds for at least one element.
-  def any?(pred: any Fn[Fn(T) -> Bool]) -> Bool
-    var found: Bool = false
-    self.each do |x|
-      if pred.(x)
-        found = true
-      end
-    end
-    found
-  end
-
-  # Ruby `partition` — split into (matching, non-matching) by predicate.
-  def partition(pred: any Fn[Fn(T) -> Bool]) -> (Array[T], Array[T])
-    var yes: Array[T] = Array.new
-    var no: Array[T] = Array.new
-    self.each do |x|
-      if pred.(x)
-        yes.push(x)
-      else
-        no.push(x)
-      end
-    end
-    (yes, no)
-  end
-
-  # Ruby `each_with_index` — yield each element together with its
-  # 0-based position. An external counter is bumped per iteration.
-  def each_with_index(f: any Fn[Fn(T, Int) -> nil]) -> nil
-    var i: Int = 0
-    self.each do |x|
-      f.(x, i)
-      i = i + 1
-    end
-    nil
-  end
-
-  # Ruby `find` / `detect` — the first element matching the predicate,
-  # or `nil`. Accumulates into an `Option[T]` result that stays at the
-  # first hit (a `found` flag freezes it). The hit wraps explicitly via
-  # `Option.Some(x)`; the initial `nil` is the absent case. (Explicit
-  # `Some` rather than the bare-value "drop Some" sugar, which only
-  # fires at let-binding RHS / function-tail positions, not at an
-  # in-loop assignment.)
-  def find(pred: any Fn[Fn(T) -> Bool]) -> Option[T]
-    var out: Option[T] = nil
-    var found: Bool = false
-    self.each do |x|
-      if found
-      else
-        if pred.(x)
-          out = Option.Some(x)
-          found = true
-        end
-      end
-    end
-    out
-  end
-
-  # Ruby `index` — the 0-based position of the first matching element,
-  # or `nil`. Walks with an external counter, freezing the result on the
-  # first hit via a `found` flag.
-  def index(pred: any Fn[Fn(T) -> Bool]) -> Option[Int]
-    var out: Option[Int] = nil
-    var found: Bool = false
-    var i: Int = 0
-    self.each do |x|
-      if found
-      else
-        if pred.(x)
-          out = Option.Some(i)
-          found = true
-        end
-      end
-      i = i + 1
-    end
-    out
-  end
+  # ── Enumerable combinators ─────────────────────────────────────────
+  # `map` / `select` / `reject` / `all?` / `any?` / `partition` /
+  # `each_with_index` / `find` / `index` / `reduce` are defined ONCE in
+  # `mixin Enumerable[T]` (core/lib.rx) over the `each` primitive and
+  # pulled in here by the include below — no per-class bodies. Typeck
+  # resolves them through the builtin-receiver bridge: `Ty::Array(_)`'s
+  # `method_home_key` is `"Array"`, the include registers the
+  # `("Array", "Enumerable")` nominal impl, and the bridge's
+  # trait-default-method arm supplies each signature (the trailing block
+  # is the closure arg; method-level `[U]` is harvested from the
+  # closure's return). MIR emits ONE opaque `Array_<m>` body per
+  # combinator (type params abstract — sound because the bodies only
+  # push / closure-call / iterate, never dispatch on `T`); the call site
+  # routes the generic-suffixed `Array[Int]_map` callee to it via
+  # `lib_body_methods` + `strip_generic_suffix`. `each` is the sole
+  # iteration primitive kept hardcoded (MIR-inlined, closure_inline/
+  # each.rs) — every combinator is expressed over it.
+  include Enumerable[T]
 
   # Ruby `sort_by` — in-place comparator sort. The closure returns a
   # negative / zero / positive `Int` ordering of its two arguments; a
@@ -268,16 +147,25 @@ class Array[T]
     nil
   end
 
-  # Ruby `reduce` / `inject` — left-fold the elements into an
-  # accumulator seeded by `seed`. The closure receives the running
-  # accumulator and the current element and returns the next
-  # accumulator. Expressed over `each`; the result element type `U` is
-  # the accumulator / closure-return type.
-  def reduce[U](seed: U, f: any Fn[Fn(U, T) -> U]) -> U
-    var acc: U = seed
-    self.each do |x|
-      acc = f.(acc, x)
+  # Ruby `zip` — pair each element with the corresponding element of
+  # `other`, truncating to the shorter length. Expressed over indexed
+  # reads (`self[i]` / `other[i]`); the result element type `(T, U)` is
+  # a static declared return, so no resolver arm is needed. (The
+  # `ruxen_vec_zip` C symbol is retired — the `.rx` body materialises
+  # the pairs directly.)
+  def zip[U](other: Array[U]) -> Array[(T, U)]
+    var out: Array[(T, U)] = Array.new
+    var n: Int = self.size as Int
+    var m: Int = other.size as Int
+    var limit: Int = n
+    if m < n
+      limit = m
     end
-    acc
+    var i: Int = 0
+    while i < limit
+      out.push((self[i], other[i]))
+      i = i + 1
+    end
+    out
   end
 end

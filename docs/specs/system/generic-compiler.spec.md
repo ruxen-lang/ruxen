@@ -63,9 +63,16 @@ llvm` (no llvm-config here; changes are backend-agnostic). Never stage
 - [x] String/Array/Set/Hash/Int delegation via `builtin_bridge`.
 - [x] Feature A: width-correct FFI receiver (Float→F64).
 - [~] Feature C: combinators → `.rx`. Array `map/select/reject/all?/any?/
-      partition/each_with_index/find/index/sort_by` done. **NEXT: consolidate
-      into `mixin Enumerable[T]` over `each`; include in Array/Set/Hash; migrate
-      remaining `zip`/`to_h`/`reduce` + Option/Result closures.**
+      partition/each_with_index/find/index/sort_by/reduce/zip` done.
+      `mixin Enumerable[T]` now CONSOLIDATES `map/select/reject/all?/any?/
+      partition/each_with_index/find/index/reduce` over a single required
+      `each`; `class Array include Enumerable[T]` (bodies deleted from Array).
+      Mixin generic params now scope into method sigs (`resolve_trait`); MIR
+      emits the included defaults as opaque `Array_<m>` bodies and registers
+      them in `lib_body_methods` (`collect_lib_body_methods` walks includes).
+      Array-specific `sort_by`/`zip`/`to_h`/`sum`/`select!`/`each` stay on the
+      class (positional / arg-typed / FFI). **NEXT: `include Enumerable[T]` in
+      Set + Hash (provide their `each`); migrate Option/Result closures.**
 - [ ] Feature D: derive Clone/Debug/Default (retire `resolver.rs` structural).
 - [ ] Feature E: String reconcile (`remove`/`push`/… C-vs-surface).
 - [ ] Feature B: trait-bound enforcement (move Send/E0714/sum-Add to `.rx`

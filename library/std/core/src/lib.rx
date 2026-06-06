@@ -24,6 +24,154 @@ mixin Iterable
 
 end
 
+# `Enumerable[T]` — the shared collection-combinator surface, defined
+# ONCE over a single required primitive `each`. Any collection that
+# yields its elements through `each` gets the whole combinator family
+# for free by `include Enumerable[T]` (Array / Set / Hash). This is the
+# "identical methods reused everywhere" mechanism (generic-compiler
+# spec, Feature C): the bodies live here, not duplicated per class.
+#
+# The element type is the mixin parameter `T`; combinators that
+# transform elements introduce their own method-level generic `[U]`.
+# Each body is expressed purely in terms of `self.each` plus `push` /
+# closure-call, so it never dispatches on the concrete `T` — sound to
+# lower as one opaque body per including class.
+mixin Enumerable[T]
+  # The single required primitive: yield every element to `f`, in
+  # order. Each including collection provides this (Array over its
+  # backing vec, Set/Hash over their iterators).
+  def each(f: any Fn[Fn(T) -> nil]) -> nil
+
+  # Ruby `map` — apply `f` to each element, collect the results.
+  def map[U](f: any Fn[Fn(T) -> U]) -> Array[U]
+    var out: Array[U] = Array.new
+    self.each do |x| out.push(f.(x)) end
+    out
+  end
+
+  # Ruby `select` / `filter` — keep elements where the predicate holds.
+  def select(pred: any Fn[Fn(T) -> Bool]) -> Array[T]
+    var out: Array[T] = Array.new
+    self.each do |x|
+      if pred.(x)
+        out.push(x)
+      end
+    end
+    out
+  end
+
+  # Ruby `reject` — the inverse of `select`.
+  def reject(pred: any Fn[Fn(T) -> Bool]) -> Array[T]
+    var out: Array[T] = Array.new
+    self.each do |x|
+      if pred.(x)
+      else
+        out.push(x)
+      end
+    end
+    out
+  end
+
+  # Ruby `all?` — true iff the predicate holds for every element.
+  def all?(pred: any Fn[Fn(T) -> Bool]) -> Bool
+    var ok: Bool = true
+    self.each do |x|
+      if pred.(x)
+      else
+        ok = false
+      end
+    end
+    ok
+  end
+
+  # Ruby `any?` — true iff the predicate holds for at least one element.
+  def any?(pred: any Fn[Fn(T) -> Bool]) -> Bool
+    var found: Bool = false
+    self.each do |x|
+      if pred.(x)
+        found = true
+      end
+    end
+    found
+  end
+
+  # Ruby `partition` — split into (matching, non-matching) by predicate.
+  def partition(pred: any Fn[Fn(T) -> Bool]) -> (Array[T], Array[T])
+    var yes: Array[T] = Array.new
+    var no: Array[T] = Array.new
+    self.each do |x|
+      if pred.(x)
+        yes.push(x)
+      else
+        no.push(x)
+      end
+    end
+    (yes, no)
+  end
+
+  # Ruby `each_with_index` — yield each element together with its
+  # 0-based position. An external counter is bumped per iteration.
+  def each_with_index(f: any Fn[Fn(T, Int) -> nil]) -> nil
+    var i: Int = 0
+    self.each do |x|
+      f.(x, i)
+      i = i + 1
+    end
+    nil
+  end
+
+  # Ruby `find` / `detect` — the first element matching the predicate,
+  # or `nil`. A `found` flag freezes the result at the first hit; the
+  # hit wraps explicitly via `Option.Some(x)` (the bare-value "drop
+  # Some" sugar only fires at let / function-tail positions, not at an
+  # in-loop assignment).
+  def find(pred: any Fn[Fn(T) -> Bool]) -> Option[T]
+    var out: Option[T] = nil
+    var found: Bool = false
+    self.each do |x|
+      if found
+      else
+        if pred.(x)
+          out = Option.Some(x)
+          found = true
+        end
+      end
+    end
+    out
+  end
+
+  # Ruby `index` — the 0-based position of the first matching element,
+  # or `nil`. Walks with an external counter, freezing on the first hit.
+  def index(pred: any Fn[Fn(T) -> Bool]) -> Option[Int]
+    var out: Option[Int] = nil
+    var found: Bool = false
+    var i: Int = 0
+    self.each do |x|
+      if found
+      else
+        if pred.(x)
+          out = Option.Some(i)
+          found = true
+        end
+      end
+      i = i + 1
+    end
+    out
+  end
+
+  # Ruby `reduce` / `inject` — left-fold the elements into an
+  # accumulator seeded by `seed`. The closure receives the running
+  # accumulator and the current element and returns the next
+  # accumulator. The result type `U` is the accumulator type.
+  def reduce[U](seed: U, f: any Fn[Fn(U, T) -> U]) -> U
+    var acc: U = seed
+    self.each do |x|
+      acc = f.(acc, x)
+    end
+    acc
+  end
+end
+
 mixin Copy
 
 end
