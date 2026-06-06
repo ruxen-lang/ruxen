@@ -47,20 +47,12 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
             // Ruby `each_with_index { |element, index| }` — yields the element
             // and its 0-based index. Inlined in closure_inline/each_with_index.
             (Ty::Array(_), "each_with_index") => Some(Ty::Unit),
-            (Ty::Array(_), "map") => Some(Ty::Array(Box::new(eng.ctx.fresh_type_var()))),
-            // Ruby block combinators (inlined in mir/lower/closure_inline).
-            (Ty::Array(elem), "select") => Some(Ty::Array(elem.clone())),
-            (Ty::Array(elem), "reject") => Some(Ty::Array(elem.clone())),
+            // `map` / `select` / `reject` / `all?` / `any?` / `partition`
+            // MIGRATED to real `.rx` bodies over `each` (Feature C,
+            // array/src/lib.rx) and resolve through the builtin bridge.
             (Ty::Array(_), "reduce") => Some(eng.ctx.fresh_type_var()),
-            (Ty::Array(_), "all?") => Some(Ty::Bool),
-            (Ty::Array(_), "any?") => Some(Ty::Bool),
             (Ty::Array(elem), "find") => Some(Ty::Option(Box::new(Ty::Ref(elem.clone())))),
             (Ty::Array(_), "index") => Some(Ty::Option(Box::new(Ty::USize))),
-            // `partition` is inlined; returns a (matching, rest) tuple.
-            (Ty::Array(elem), "partition") => Some(Ty::Tuple(vec![
-                Ty::Array(elem.clone()),
-                Ty::Array(elem.clone()),
-            ])),
             (Ty::Array(elem), "zip") => {
                 let other = match _args.first() {
                     Some(a) => match eng.ctx.resolve(&a.ty) {

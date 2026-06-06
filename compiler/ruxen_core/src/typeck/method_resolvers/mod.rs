@@ -287,19 +287,23 @@ mod golden {
         // via the bridge and return None under the empty table. End-to-end
         // `.rx` resolution is covered by the builtin_receiver_bridge pins
         // + the e2e suite.
+        // `map`/`select`/`reject`/`all?`/`any?`/`partition` MIGRATED to
+        // real `.rx` bodies over `each` (Feature C). They now resolve via
+        // the bridge against `class Array[T]` and, under the golden's EMPTY
+        // symbol table, return None — so they are NO LONGER pinned here
+        // (same treatment as the already-migrated size/push/pop/… surface).
+        // End-to-end resolution is covered by the e2e suite. The residual
+        // arms that still live in collections.rs ARE pinned: `each` /
+        // `each_with_index` (the iteration primitives), `reduce` / `find` /
+        // `index` (MIR-inlined), arg-dependent `zip` / `to_h`, the E0700
+        // `sum`, and in-place `sort_by` / `select!`.
         let arr = || Ty::Array(Box::new(Ty::Int));
         for m in [
             "each",
             "each_with_index",
-            "map",
-            "select",
-            "reject",
             "reduce",
-            "all?",
-            "any?",
             "find",
             "index",
-            "partition",
             "zip",
             "to_h",
             "sum",

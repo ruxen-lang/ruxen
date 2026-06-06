@@ -60,7 +60,16 @@ pub(super) fn is_vec_or_iterator_type(ty: &Ty) -> bool {
             };
             // `*Iter` wrapper names removed with the orphaned iterator
             // machinery (Phase B / Milestone 2) — nothing produces them.
-            matches!(base, "Vec")
+            //
+            // `Array` appears here (alongside the legacy `Vec`) because the
+            // `self` receiver INSIDE an `Array[T]` stdlib method body is
+            // typed `Ty::Class { name: "Array" }`, not `Ty::Array`. The
+            // closure combinators migrated to `array/src/lib.rx` invoke
+            // `self.each { … }`; that inline path must recognise this
+            // receiver as a backing Vec (it shares the `RuxenVec*` repr),
+            // not fall through to the `is_collection_method` wrapper-class
+            // branch that dereferences a non-existent field 0.
+            matches!(base, "Vec" | "Array")
         }
         // For inferred types, check if the type name suggests a collection.
         Ty::Infer(_) => false,

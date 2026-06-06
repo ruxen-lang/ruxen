@@ -18,6 +18,42 @@ use super::helpers::{
 use super::InferenceEngine;
 
 impl<'a> InferenceEngine<'a> {
+    /// Extract `(params, ret)` from a callable parameter type — a bare
+    /// `Ty::Fn`/`FnMut`/`FnOnce` or the surface `any Fn[Fn(T) -> U]` /
+    /// `some Fn[…]` mixin spelling the `.rx` combinators use (the inner
+    /// `Ty::Fn` rides in the `Fn` bound's first generic arg). Peels one
+    /// reference layer. Returns `None` for non-callable params.
+    fn param_fn_signature(ty: &Ty) -> Option<(&[Ty], &Ty)> {
+        let peeled = match ty {
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => inner.as_ref(),
+            other => other,
+        };
+        match peeled {
+            Ty::Fn { params, ret } | Ty::FnMut { params, ret } | Ty::FnOnce { params, ret } => {
+                Some((params.as_slice(), ret.as_ref()))
+            }
+            Ty::AnyMixin(bounds) | Ty::SomeMixin(bounds) => {
+                for bound in bounds {
+                    if matches!(bound.name.as_str(), "Fn" | "FnMut" | "FnOnce") {
+                        if let Some(
+                            Ty::Fn { params, ret }
+                            | Ty::FnMut { params, ret }
+                            | Ty::FnOnce { params, ret },
+                        ) = bound.generic_args.first()
+                        {
+                            return Some((params.as_slice(), ret.as_ref()));
+                        }
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
     fn seed_closure_param_types(arg: &mut HirExpr, expected_ty: &Ty) {
         let HirExprKind::Closure { params, .. } = &mut arg.kind else {
             return;
@@ -414,6 +450,51 @@ impl<'a> InferenceEngine<'a> {
                 // would start emitting literal "T: Displayable_method"
                 // symbols the linker cannot resolve.
                 if let Some(ref mut blk) = block {
+                    // Signature-based closure-param seeding for builtin-head
+                    // receivers (`Array`/`Option`/`Result`/…). The migrated
+                    // `.rx` closure combinators declare `f: any Fn[Fn(T) ->
+                    // U]`; their generic `U` can only be harvested from the
+                    // closure body's inferred return type, and that body can
+                    // only be inferred concretely once its parameter (`x`) is
+                    // seeded with the receiver's element type (`T → Int`).
+                    // Look the method up on the method-home class, substitute
+                    // the receiver generics into the closure parameter's
+                    // `Fn(...)` param list, and unify the block's params with
+                    // it BEFORE inferring the body. Runs for ANY block method
+                    // (not a hardcoded name list) so every migrated combinator
+                    // is covered; falls through harmlessly when no closure
+                    // param is found (the hardcoded element-seed below still
+                    // handles the residual MIR-inlined combinators).
+                    if let HirExprKind::Closure {
+                        params: blk_params, ..
+                    } = &blk.kind
+                    {
+                        let obj_ty_sig = self.ctx.resolve(&object.ty);
+                        let (_, derefed_sig) = auto_deref(&obj_ty_sig, self.ctx);
+                        if let Some(sig) =
+                            self.traits.lookup_method_by_name(&derefed_sig, method_name)
+                        {
+                            if let Some(closure_param) = sig
+                                .params
+                                .iter()
+                                .find(|p| Self::param_fn_signature(&p.ty).is_some())
+                            {
+                                let subst_param_ty = self
+                                    .substitute_generics_in_return(&derefed_sig, &closure_param.ty);
+                                if let Some((fn_params, _)) =
+                                    Self::param_fn_signature(&subst_param_ty)
+                                {
+                                    for (blk_p, expected) in blk_params.iter().zip(fn_params.iter())
+                                    {
+                                        if !expected.is_infer() {
+                                            let _ =
+                                                unify(&blk_p.ty, expected, self.ctx, &expr.span);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     if matches!(
                         method_name.as_str(),
                         "map" | "filter" | "find" | "all" | "any"
@@ -487,10 +568,37 @@ impl<'a> InferenceEngine<'a> {
                 // Constructor calls on a generic class: infer the class's
                 // generic arguments from the types of the constructor args.
                 // This turns `Pair.new(42, "hi")` into `Pair[Int, String]`.
+                //
+                // A trailing `do…end` block satisfies the method's final
+                // closure parameter (`xs.map { |x| … }` → `map(f)`), but the
+                // parser keeps it in `block`, NOT in `args`. The builtin
+                // method-type bridge selects an overload by `params.len() ==
+                // args.len()`, so a closure combinator migrated to a real
+                // `.rx` body (`def map[U](f: …) -> Array[U]`) would fail
+                // arity and the call's type would degrade to a fresh `Infer`.
+                // Append the block as the effective last arg so the bridge's
+                // overload selection AND the `Ty::Fn` generic harvester
+                // (which binds `U` from the closure's return type) both see
+                // it. Inlined combinators (still typed by the hardcoded
+                // `collections.rs` arms ahead of the bridge) ignore the
+                // extra arg — those arms match on method name, not arity.
+                let args_with_block: Vec<HirExpr> = match &block {
+                    Some(b) => {
+                        let mut v = args.to_vec();
+                        v.push((**b).clone());
+                        v
+                    }
+                    None => Vec::new(),
+                };
+                let effective_args: &[HirExpr] = if block.is_some() {
+                    &args_with_block
+                } else {
+                    args
+                };
                 let builtin_ret = if method_name == "new" {
                     None
                 } else {
-                    self.builtin_method_type(&derefed, method_name, args, &expr.span)
+                    self.builtin_method_type(&derefed, method_name, effective_args, &expr.span)
                 };
                 let ret_ty = if let Some(ret) = builtin_ret {
                     ret

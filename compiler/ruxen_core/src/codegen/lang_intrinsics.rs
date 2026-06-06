@@ -225,11 +225,23 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
     // `ffi_alias_map` rewrites them before codegen reaches here.
     if name.starts_with("Array") || name.starts_with("Vec") {
         return match method {
-            // Known unimplemented Vec methods — historically
-            // no-opped.
-            "map" | "select" | "reject" | "reduce" | "min" | "max" | "any?" | "all?"
-            | "collect" | "find" | "index" | "partition" | "zip" | "take" | "drop" | "chain"
-            | "flat_map" | "flatten" => Err(unresolved_method_error(name, "Vec")),
+            // `map` / `select` / `reject` / `all?` / `any?` / `partition`
+            // MIGRATED to real `.rx` bodies over `each` (Feature C). They
+            // now reach codegen as genuine `Array_<m>` MIR functions, so
+            // they must FALL THROUGH to the `Ok(name)` arm — the MIR
+            // function definition supplies the symbol. (The old blocklist
+            // assumed these were always MIR-inlined and never emitted a
+            // call; that assumption no longer holds for the Array head.)
+            //
+            // Still-residual / unimplemented Vec combinators stay blocked:
+            // `reduce` / `find` / `index` are MIR-inlined (closure_inline);
+            // `min` / `max` / `collect` / `flat_map` / `flatten` are
+            // unimplemented; `zip` / `take` / `drop` / `chain` have FFI
+            // symbols and never reach this arm (rewritten via the alias
+            // map first), but stay listed defensively.
+            "reduce" | "min" | "max" | "collect" | "find" | "index" | "flat_map" | "flatten" => {
+                Err(unresolved_method_error(name, "Vec"))
+            }
             _ => Ok(name),
         };
     }

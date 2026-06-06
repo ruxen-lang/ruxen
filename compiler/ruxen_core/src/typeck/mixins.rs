@@ -113,6 +113,20 @@ impl MixinResolver {
         if Self::param_admits_generic_arg(arg_ty, param_ty) {
             return true;
         }
+        // A closure/`Ty::Fn` arg (a trailing `do…end` block or a passed
+        // closure value) satisfies a callable parameter — `any Fn[Fn(T) ->
+        // U]` / `Fn[…]` / bare `Ty::Fn`. The migrated `.rx` closure
+        // combinators (`map`/`select`/…) declare `f: any Fn[…]`; the
+        // overload-selection structural check must admit the closure arg or
+        // the body method is never selected and the call's type degrades to
+        // `Infer`. The precise param/return shapes inside the `Fn` are
+        // reconciled DOWNSTREAM by `harvest_and_subst_generics` (the
+        // `Ty::Fn` arm that binds the method's `[U]` from the closure's
+        // return), so selection only needs the coarse "callable vs
+        // callable" match here.
+        if Self::param_is_callable(param_ty) && Self::arg_is_callable(arg_ty) {
+            return true;
+        }
         // Peel a single reference layer on the param so `&String` / `&str`
         // params accept the corresponding value/str args.
         let param_inner = match param_ty {
@@ -200,6 +214,44 @@ impl MixinResolver {
             // No generic param present → defer to the concrete arms.
             _ => false,
         }
+    }
+
+    /// Whether `param_ty` is a callable parameter — a bare function type
+    /// (`Ty::Fn`/`FnMut`/`FnOnce`) or a `some`/`any` mixin bound whose
+    /// first ref names the `Fn` family (`any Fn[Fn(T) -> U]`). Peels one
+    /// reference layer (`&any Fn[…]`). Used by overload selection so a
+    /// closure arg can satisfy the migrated `.rx` combinators' closure
+    /// parameter without the precise `Fn` shape having to match yet.
+    fn param_is_callable(param_ty: &Ty) -> bool {
+        let peeled = match param_ty {
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => inner.as_ref(),
+            other => other,
+        };
+        match peeled {
+            Ty::Fn { .. } | Ty::FnMut { .. } | Ty::FnOnce { .. } => true,
+            Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds) => bounds
+                .iter()
+                .any(|b| matches!(b.name.as_str(), "Fn" | "FnMut" | "FnOnce")),
+            _ => false,
+        }
+    }
+
+    /// Whether `arg_ty` is a callable value — a closure / `Ty::Fn` family
+    /// type produced by a `do…end` block or a passed closure local.
+    fn arg_is_callable(arg_ty: &Ty) -> bool {
+        let peeled = match arg_ty {
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => inner.as_ref(),
+            other => other,
+        };
+        matches!(peeled, Ty::Fn { .. } | Ty::FnMut { .. } | Ty::FnOnce { .. })
+            || matches!(peeled, Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds)
+            if bounds.iter().any(|b| matches!(b.name.as_str(), "Fn" | "FnMut" | "FnOnce")))
     }
 
     fn select_signature(sigs: Option<&Vec<FnSignature>>, args: &[HirExpr]) -> Option<FnSignature> {
@@ -417,6 +469,26 @@ impl MixinResolver {
         self.lookup_method_with_args(ty, method_name, &[], symbols)
     }
 
+    /// Look up a method's signature by NAME only, with no arity / arg-type
+    /// filtering. Used by closure-param seeding, which must find the
+    /// combinator's signature (to read the closure parameter's expected
+    /// `Fn(T) -> U` shape) BEFORE the closure's own arity/types are known —
+    /// the arg-aware [`Self::lookup_method_with_args`] would reject the
+    /// zero-arg probe against a one-closure-param method. Returns the first
+    /// name-matching method on the type's own home key.
+    pub fn lookup_method_by_name(&self, ty: &Ty, method_name: &str) -> Option<FnSignature> {
+        let type_name = Self::method_home_key(ty);
+        if let Some(meths) = self.type_methods.get(&type_name) {
+            if let Some(m) = meths
+                .iter()
+                .find(|m| Self::name_matches(&m.name, method_name))
+            {
+                return Some(m.signature.clone());
+            }
+        }
+        None
+    }
+
     pub fn lookup_method_with_args(
         &self,
         ty: &Ty,
@@ -533,13 +605,22 @@ impl MixinResolver {
             // `ClassInfo.methods` stays empty even when lib decls were
             // registered in Pass 1 via `pass1_class_lib_methods`. Scan
             // the symbol table for `DefKind::Method { parent: def_id }`
-            // to find them.
-            if methods.is_empty() {
-                for m_def in symbols.iter() {
-                    if let DefKind::Method { parent, signature } = &m_def.kind {
-                        if *parent == def_id && !methods.iter().any(|(n, _)| n == &m_def.name) {
-                            methods.push((m_def.name.clone(), signature.clone()));
-                        }
+            // to find them. This runs UNCONDITIONALLY (not only when
+            // `info.methods` was empty): an FFI-shell builtin class like
+            // `Array[T]` / `Option[T]` / `Result[T,E]` registers its `lib`
+            // FFI decls into `info.methods` AND defines real `def`-body
+            // closure combinators (`map` / `select` / …) as `DefKind::
+            // Method { parent }` entries that are NOT in `info.methods`.
+            // The old `if methods.is_empty()` guard dropped those body
+            // methods whenever any lib decl was present, so a call like
+            // `xs.map { … }` resolved to no signature and the call's
+            // return type degraded to a fresh `Infer` — breaking
+            // downstream `ys[i]` index lowering. The `any(name)` dedup
+            // keeps lib decls authoritative when a name collides.
+            for m_def in symbols.iter() {
+                if let DefKind::Method { parent, signature } = &m_def.kind {
+                    if *parent == def_id && !methods.iter().any(|(n, _)| n == &m_def.name) {
+                        methods.push((m_def.name.clone(), signature.clone()));
                     }
                 }
             }

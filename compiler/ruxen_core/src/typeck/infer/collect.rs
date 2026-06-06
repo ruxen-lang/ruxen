@@ -930,6 +930,32 @@ impl<'a> InferenceEngine<'a> {
     pub(super) fn subst_ty(ty: &Ty, subst: &std::collections::HashMap<String, Ty>) -> Ty {
         match ty {
             Ty::TypeParam { name, .. } => subst.get(name).cloned().unwrap_or_else(|| ty.clone()),
+            // `Ty::map_inner` treats `Some/AnyMixin` as LEAVES (their
+            // children are `MixinRef`, not `Ty`), so a generic param nested
+            // inside a mixin bound's generic args — e.g. the `T`/`U` in
+            // `any Fn[Fn(T) -> U]` — would NOT be substituted by the fold
+            // below. The `.rx` closure combinators carry exactly that shape
+            // in their closure parameter, and receiver-generic substitution
+            // (`T → Int`) must reach the inner `Fn(T)` so the closure param
+            // seeds concretely. Substitute through each bound's generic args
+            // explicitly here.
+            Ty::AnyMixin(bounds) | Ty::SomeMixin(bounds) => {
+                let new_bounds: Vec<crate::hir::types::MixinRef> = bounds
+                    .iter()
+                    .map(|b| crate::hir::types::MixinRef {
+                        name: b.name.clone(),
+                        generic_args: b
+                            .generic_args
+                            .iter()
+                            .map(|g| Self::subst_ty(g, subst))
+                            .collect(),
+                    })
+                    .collect();
+                match ty {
+                    Ty::AnyMixin(_) => Ty::AnyMixin(new_bounds),
+                    _ => Ty::SomeMixin(new_bounds),
+                }
+            }
             other => other
                 .clone()
                 .map_inner(&mut |child| Self::subst_ty(child, subst)),

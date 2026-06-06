@@ -107,4 +107,85 @@ class Array[T]
     def zip as "ruxen_vec_zip"(other: Int) -> Int
     def to_h as "ruxen_hash_from_iter" -> Int
   end
+
+  # ── Closure combinators (Feature C migration) ──────────────────────
+  # Real Ruxen bodies over the `each` primitive. `each` is the only
+  # genuine iteration primitive kept hardcoded (MIR-inlined,
+  # closure_inline/each.rs); every combinator below is expressed in
+  # terms of it. Typeck resolves these through the builtin-receiver
+  # bridge (`bridge_builtin_method` → `lookup_method_by_name` /
+  # `lookup_method_with_args`, with the trailing block counted as the
+  # closure arg and method-level `[U]` harvested from the closure's
+  # return). MIR emits ONE opaque `Array_<m>` body (type params left
+  # abstract — sound because the bodies only push / closure-call /
+  # iterate, never dispatch on the concrete `T`); the call site routes
+  # the generic-suffixed `Array[Int]_map` callee to it via
+  # `lib_body_methods` + `strip_generic_suffix`.
+
+  # Ruby `map` — apply `f` to each element, collect the results.
+  def map[U](f: any Fn[Fn(T) -> U]) -> Array[U]
+    var out: Array[U] = Array.new
+    self.each do |x| out.push(f.(x)) end
+    out
+  end
+
+  # Ruby `select` / `filter` — keep elements where the predicate holds.
+  def select(pred: any Fn[Fn(T) -> Bool]) -> Array[T]
+    var out: Array[T] = Array.new
+    self.each do |x|
+      if pred.(x)
+        out.push(x)
+      end
+    end
+    out
+  end
+
+  # Ruby `reject` — the inverse of `select`.
+  def reject(pred: any Fn[Fn(T) -> Bool]) -> Array[T]
+    var out: Array[T] = Array.new
+    self.each do |x|
+      if pred.(x)
+      else
+        out.push(x)
+      end
+    end
+    out
+  end
+
+  # Ruby `all?` — true iff the predicate holds for every element.
+  def all?(pred: any Fn[Fn(T) -> Bool]) -> Bool
+    var ok: Bool = true
+    self.each do |x|
+      if pred.(x)
+      else
+        ok = false
+      end
+    end
+    ok
+  end
+
+  # Ruby `any?` — true iff the predicate holds for at least one element.
+  def any?(pred: any Fn[Fn(T) -> Bool]) -> Bool
+    var found: Bool = false
+    self.each do |x|
+      if pred.(x)
+        found = true
+      end
+    end
+    found
+  end
+
+  # Ruby `partition` — split into (matching, non-matching) by predicate.
+  def partition(pred: any Fn[Fn(T) -> Bool]) -> (Array[T], Array[T])
+    var yes: Array[T] = Array.new
+    var no: Array[T] = Array.new
+    self.each do |x|
+      if pred.(x)
+        yes.push(x)
+      else
+        no.push(x)
+      end
+    end
+    (yes, no)
+  end
 end

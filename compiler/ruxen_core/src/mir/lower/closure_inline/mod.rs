@@ -109,6 +109,42 @@ impl<'a> Lowerer<'a> {
             return Ok(None);
         };
 
+        // Feature C: `map` / `select` / `reject` / `all?` / `any?` /
+        // `partition` are now real `.rx` method bodies on `class Array[T]`
+        // (resolved through the builtin bridge, lowered as opaque
+        // `Array_<m>` functions). For a genuine `Ty::Array` receiver these
+        // must NOT be inlined here — fall through (`Ok(None)`) so the normal
+        // method-call path emits the call to the migrated body. The inline
+        // path is RETAINED for user-defined collection classes that wrap a
+        // Vec (the `is_collection_method` branch above lowered such a
+        // receiver's field-0 Vec into `vec_id`): those classes have no
+        // `Array_<m>` body to call, so they still need the inline expansion.
+        let recv_ty = {
+            let mut t = &object.ty;
+            loop {
+                match t {
+                    Ty::Ref(inner)
+                    | Ty::RefMut(inner)
+                    | Ty::RefLifetime(_, inner)
+                    | Ty::RefMutLifetime(_, inner) => t = inner,
+                    other => break other,
+                }
+            }
+        };
+        let array_receiver = matches!(recv_ty, Ty::Array(_))
+            || matches!(recv_ty, Ty::Class { name, .. } if {
+                let base = name.split('[').next().unwrap_or(name);
+                base == "Array"
+            });
+        if array_receiver
+            && matches!(
+                method_name,
+                "map" | "select" | "reject" | "all?" | "any?" | "partition"
+            )
+        {
+            return Ok(None);
+        }
+
         match method_name {
             "each" => {
                 // for i in 0..vec.len: item = vec[i]; <body>

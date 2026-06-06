@@ -222,6 +222,49 @@ impl<'a> Lowerer<'a> {
         self.mono_classes = classes;
         self.mono_instances = instances;
         self.mono_emitted = emitted;
+
+        // Record real (non-FFI) body methods on FFI-shell GENERIC builtin
+        // classes (`Array[T]`, `Option[T]`, `Result[T,E]`). Such classes
+        // are excluded from monomorphization above, so a body method emits
+        // ONCE as an opaque `{Class}_{method}` (type params abstract). The
+        // call site mangles the generic-suffixed `Array[Int]_map`; record
+        // the stripped `Array_map` so `resolve_ffi_alias_callee` can route
+        // the suffixed callee to the opaque body. (Closure combinators only
+        // shuffle pointer/word values, so the abstract body is ABI-sound.)
+        fn collect_lib_body_methods(
+            item: &HirItem,
+            ffi_classes: &HashSet<String>,
+            out: &mut HashSet<String>,
+        ) {
+            match item {
+                HirItem::Class(c) => {
+                    if !c.generic_params.is_empty() && ffi_classes.contains(&c.name) {
+                        let class_cs = c.name.replace('.', "_");
+                        for m in &c.methods {
+                            out.insert(format!("{}_{}", class_cs, m.name));
+                        }
+                    }
+                }
+                HirItem::Module(m) => {
+                    for sub in &m.items {
+                        collect_lib_body_methods(sub, ffi_classes, out);
+                    }
+                }
+                HirItem::Function(_)
+                | HirItem::Struct(_)
+                | HirItem::Enum(_)
+                | HirItem::Impl(_)
+                | HirItem::Const(_)
+                | HirItem::Mixin(_)
+                | HirItem::TypeAlias(_)
+                | HirItem::Newtype(_) => {}
+            }
+        }
+        let mut lib_body_methods: HashSet<String> = HashSet::new();
+        for item in &program.items {
+            collect_lib_body_methods(item, &ffi_classes, &mut lib_body_methods);
+        }
+        self.lib_body_methods = lib_body_methods;
     }
 
     /// Emit one monomorphized MIR copy of every user-defined method (incl.
