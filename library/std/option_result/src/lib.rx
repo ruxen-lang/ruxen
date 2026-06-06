@@ -30,25 +30,44 @@
 ## int64_t-bit-cast results; typeck still serves the user-facing
 ## generic-aware types from its hardcoded table in
 ## `typeck/method_resolvers`.
-class Option
+## ## Migrated surface returns (zero-Rust-stdlib bridge)
+##
+## The decls below carry the TRUE generic-aware surface returns that
+## typeck delegates to via the builtin-receiver bridge
+## (`is_delegated_head` now includes `Ty::Option`/`Ty::Result`;
+## `method_home_key` maps them to `Option`/`Result`; element
+## substitution into `T`/`E` is done by `substitute_generics_in_return`
+## against these enums' declared params). Each return is ABI-identical
+## to its C symbol's wire width — `T`/`E` by value, boxed `Option`, and
+## `Bool` all cross the C ABI as I64, matching the int64_t-bit-cast
+## results the `ruxen_option_*` / `ruxen_result_*` symbols return.
+##
+## RESIDUAL (still typed by collections.rs arms ahead of the bridge):
+##   * `map` / `map_err` — closure combinators (return a fresh element).
+##   * `unwrap_or_else` — closure (return the success element).
+##   * `try_op` — the `?` operator desugaring.
+##   * `ok_or` — the err type comes from the ARG, not a static return
+##     (like `Array.zip`); kept laundered for the FFI alias.
+class Option[T]
   lib "../core/runtime/alloc.c"
-    def unwrap_or as "ruxen_option_unwrap_or"(default: Int) -> Int
-    def unwrap as "ruxen_option_unwrap" -> Int
-    def expect as "ruxen_option_expect"(msg: &String) -> Int
+    def unwrap_or as "ruxen_option_unwrap_or"(default: T) -> T
+    def unwrap as "ruxen_option_unwrap" -> T
+    def expect as "ruxen_option_expect"(msg: &String) -> T
     def present? as "ruxen_option_is_some" -> Bool
     def nil? as "ruxen_option_is_none" -> Bool
+    # `ok_or` residual: E is read from the arg, kept laundered Int.
     def ok_or as "ruxen_option_ok_or"(err: Int) -> Int
   end
 end
 
-class Result
+class Result[T, E]
   lib "../core/runtime/alloc.c"
-    def unwrap_or as "ruxen_result_unwrap_or"(default: Int) -> Int
-    def unwrap as "ruxen_result_unwrap" -> Int
-    def expect as "ruxen_result_expect"(msg: &String) -> Int
+    def unwrap_or as "ruxen_result_unwrap_or"(default: T) -> T
+    def unwrap as "ruxen_result_unwrap" -> T
+    def expect as "ruxen_result_expect"(msg: &String) -> T
     def ok? as "ruxen_result_is_ok" -> Bool
     def err? as "ruxen_result_is_err" -> Bool
-    def ok as "ruxen_result_ok" -> Int
-    def err as "ruxen_result_err" -> Int
+    def ok as "ruxen_result_ok" -> Option[T]
+    def err as "ruxen_result_err" -> Option[E]
   end
 end

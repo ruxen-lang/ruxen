@@ -821,6 +821,24 @@ impl<'a> InferenceEngine<'a> {
                 );
                 (&owned_synthetic.0, &owned_synthetic.1)
             }
+            // `Ty::Option`/`Ty::Result` home their methods on the builtin
+            // `enum Option[T]` / `enum Result[T, E]` (registered by
+            // `resolve/stdlib/{option,result}.rs`). Substitute against
+            // those enums' declared params so `Option[Int].unwrap`
+            // yields `Int` (not the declared `T`) and
+            // `Result[Foo, IoError].unwrap` yields `Foo`. Mirrors
+            // `MixinResolver::method_home_key`'s Option/Result arms.
+            Ty::Option(inner) => {
+                owned_synthetic = ("Option".to_string(), vec![inner.as_ref().clone()]);
+                (&owned_synthetic.0, &owned_synthetic.1)
+            }
+            Ty::Result(ok, err) => {
+                owned_synthetic = (
+                    "Result".to_string(),
+                    vec![ok.as_ref().clone(), err.as_ref().clone()],
+                );
+                (&owned_synthetic.0, &owned_synthetic.1)
+            }
             _ => return ret_ty.clone(),
         };
 
@@ -838,6 +856,18 @@ impl<'a> InferenceEngine<'a> {
                         break;
                     }
                     if let DefKind::Struct { info } = &def.kind {
+                        out = info
+                            .generic_params
+                            .iter()
+                            .map(|gp| gp.name.clone())
+                            .collect();
+                        break;
+                    }
+                    // Builtin `enum Option[T]` / `enum Result[T, E]` —
+                    // their method-home is the enum, so read the enum's
+                    // declared params for the synthetic Option/Result
+                    // heads above.
+                    if let DefKind::Enum { info } = &def.kind {
                         out = info
                             .generic_params
                             .iter()

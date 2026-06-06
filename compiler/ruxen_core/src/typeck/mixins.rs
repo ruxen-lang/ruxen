@@ -900,6 +900,13 @@ impl MixinResolver {
             Ty::Set(_) => "Set".to_string(),
             Ty::Map(_, _) => "Hash".to_string(),
             Ty::Str => "String".to_string(),
+            // `Option[T]` / `Result[T, E]` home their methods on the
+            // builtin `enum Option` / `enum Result` (option_result/src/
+            // lib.rx). Element substitution into the looked-up signature's
+            // return is handled by `substitute_generics_in_return`'s
+            // Option/Result synthetic arms.
+            Ty::Option(_) => "Option".to_string(),
+            Ty::Result(_, _) => "Result".to_string(),
             other => Self::type_name(other),
         }
     }

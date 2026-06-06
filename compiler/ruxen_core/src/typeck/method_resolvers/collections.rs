@@ -113,28 +113,28 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
             // a statically substitutable return, so all resolve through
             // `builtin_bridge`; no residual Set arms remain.
 
-            // Option try_op (the ? operator desugars to this)
+            // ── Option / Result RESIDUAL arms (ahead of the bridge) ───
+            // The NON-closure Option/Result methods (unwrap/expect/
+            // unwrap_or/nil?/present? and Result unwrap/expect/unwrap_or/
+            // ok?/err?/ok/err) MIGRATED to the builtin `enum Option[T]` /
+            // `enum Result[T, E]` (option_result/src/lib.rx) and resolve
+            // through `builtin_bridge` with element substitution. What
+            // STAYS here, running AHEAD of the bridge:
+            //   * `try_op` — the `?` operator desugaring (no surface
+            //     method / C symbol; a compiler intrinsic).
+            //   * `map` / `map_err` — closure combinators; the result
+            //     element is the closure body's type (a fresh var unified
+            //     by `infer_combinator_block`), not a static return.
+            //   * `unwrap_or_else` — closure; returns the success element
+            //     but the closure body is inlined (closure_inline).
+            //   * `ok_or` — the err type is read from the ARG (like
+            //     `Array.zip`), not expressible as a static `.rx` return.
             (Ty::Option(inner), "try_op") => Some(*inner.clone()),
-
-            // Option methods
-            (Ty::Option(inner), "unwrap") => Some(*inner.clone()),
-            (Ty::Option(inner), "expect") => Some(*inner.clone()),
-            (Ty::Option(inner), "unwrap_or") => Some(*inner.clone()),
             (Ty::Option(inner), "unwrap_or_else") => Some(*inner.clone()),
             (Ty::Option(_), "map") => Some(Ty::Option(Box::new(eng.ctx.fresh_type_var()))),
             (Ty::Option(inner), "ok_or") => Some(Ty::Result(inner.clone(), Box::new(Ty::Error))),
-            // Ruby predicate spellings: `nil?` (was `is_none`) and `present?`
-            // (was `is_some`). The Rust `is_some`/`is_none` are removed.
-            (Ty::Option(_), "nil?") => Some(Ty::Bool),
-            (Ty::Option(_), "present?") => Some(Ty::Bool),
 
-            // Result try_op (the ? operator desugars to this)
             (Ty::Result(ok, _), "try_op") => Some(*ok.clone()),
-
-            // Result methods
-            (Ty::Result(ok, _), "unwrap") => Some(*ok.clone()),
-            (Ty::Result(ok, _), "expect") => Some(*ok.clone()),
-            (Ty::Result(ok, _), "unwrap_or") => Some(*ok.clone()),
             (Ty::Result(ok, _), "unwrap_or_else") => Some(*ok.clone()),
             (Ty::Result(_, _), "map") => Some(Ty::Result(
                 Box::new(eng.ctx.fresh_type_var()),
@@ -143,10 +143,6 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
             (Ty::Result(_, err), "map_err") => {
                 Some(Ty::Result(Box::new(eng.ctx.fresh_type_var()), err.clone()))
             }
-            // Ruby predicate spellings: `ok?` (was `is_ok`) / `err?` (was
-            // `is_err`). The Rust `is_ok`/`is_err` are removed.
-            (Ty::Result(_, _), "ok?") => Some(Ty::Bool),
-            (Ty::Result(_, _), "err?") => Some(Ty::Bool),
 
             // Within-namespace fallthrough (not a cross-cutting catch-all).
             _ => None,

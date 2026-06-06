@@ -48,9 +48,22 @@ fn is_delegated_head(ty: &Ty) -> bool {
     // (`to_lower`/`to_upper` yield `str` not `String`, `parse_uint` has
     // no `String` counterpart, `to_s`) stay as residual arms in
     // `strings.rs`, which run AHEAD of this bridge and shadow it.
+    // `Option`/`Result` delegate their NON-closure methods (unwrap/
+    // expect/unwrap_or/nil?/present?/ok_or/ok?/err?/ok/err) to their
+    // builtin enums (option_result/src/lib.rx). Their closure /
+    // operator residuals (`map`/`map_err`/`unwrap_or_else`/`try_op`)
+    // stay in collections.rs and run AHEAD of this bridge, shadowing the
+    // delegation for those names.
     matches!(
         ty,
-        Ty::String | Ty::Str | Ty::Array(_) | Ty::Set(_) | Ty::Map(_, _) | Ty::Int
+        Ty::String
+            | Ty::Str
+            | Ty::Array(_)
+            | Ty::Set(_)
+            | Ty::Map(_, _)
+            | Ty::Int
+            | Ty::Option(_)
+            | Ty::Result(_, _)
     )
 }
 

@@ -324,35 +324,24 @@ mod golden {
         // resolution is covered by `set_methods_resolve_via_general_path`
         // + the e2e suite.
 
-        // ── Ty::Option structural ──────────────────────────────────
+        // ── Ty::Option residual (shadow the bridge) ────────────────
+        // The non-closure Option methods (unwrap/expect/unwrap_or/nil?/
+        // present?) MIGRATED to `enum Option[T]` (option_result/src/
+        // lib.rx) and resolve via the bridge; under the empty table they
+        // return None and are NOT pinned. Only the residual arms ARE
+        // pinned: `try_op` (`?`-operator intrinsic), `unwrap_or_else` /
+        // `map` (closure combinators), `ok_or` (arg-derived err type).
         let opt = || Ty::Option(Box::new(Ty::Int));
-        for m in [
-            "try_op",
-            "unwrap",
-            "expect",
-            "unwrap_or",
-            "unwrap_or_else",
-            "map",
-            "ok_or",
-            "nil?",
-            "present?",
-        ] {
+        for m in ["try_op", "unwrap_or_else", "map", "ok_or"] {
             v.push(c(opt(), m));
         }
 
-        // ── Ty::Result structural ──────────────────────────────────
+        // ── Ty::Result residual (shadow the bridge) ────────────────
+        // The non-closure Result methods (unwrap/expect/unwrap_or/ok?/
+        // err?/ok/err) MIGRATED to `enum Result[T, E]`; only the residual
+        // arms are pinned: `try_op`, `unwrap_or_else`, `map`/`map_err`.
         let res = || Ty::Result(Box::new(Ty::Int), Box::new(Ty::String));
-        for m in [
-            "try_op",
-            "unwrap",
-            "expect",
-            "unwrap_or",
-            "unwrap_or_else",
-            "map",
-            "map_err",
-            "ok?",
-            "err?",
-        ] {
+        for m in ["try_op", "unwrap_or_else", "map", "map_err"] {
             v.push(c(res(), m));
         }
 
