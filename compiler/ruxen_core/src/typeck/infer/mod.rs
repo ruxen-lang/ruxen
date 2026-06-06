@@ -324,7 +324,7 @@ impl<'a> InferenceEngine<'a> {
                 }
             }
         }
-        self.check_concurrency_bounds(&func.return_ty, &body_ty, &func.span);
+        self.check_declared_bounds(&func.return_ty, &body_ty, &func.span);
 
         // Resolve the return type now
         func.return_ty = self.ctx.resolve(&func.return_ty);
@@ -370,7 +370,7 @@ impl<'a> InferenceEngine<'a> {
                     if let Err(e) = self.unify_or_coerce(ty, &val_ty, &val.span) {
                         self.type_error(e);
                     }
-                    self.check_concurrency_bounds(ty, &val_ty, &val.span);
+                    self.check_declared_bounds(ty, &val_ty, &val.span);
                 }
                 let resolved = self.ctx.resolve(ty);
                 *ty = resolved.clone();

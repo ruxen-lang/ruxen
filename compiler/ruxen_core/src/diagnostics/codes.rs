@@ -326,6 +326,18 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E1014",
         title: "invalid `unsafe include` declaration",
     },
+    // E1015 — general declared trait-bound enforcement (Feature B). Fires
+    // when a `[T: Bound]` / `where T: Bound` generic param is instantiated
+    // (or a `some`/`any Mixin` parameter is passed) with a concrete type
+    // that does not satisfy `Bound`, for any Bound other than the ones with
+    // a dedicated code (Send → E1011, Sync → E1012, the numeric `Add` on
+    // `sum` → E0700, the Send-payload construction sites → E1101/E1102).
+    // Emitted by `typeck::infer::ops::check_declared_bounds` /
+    // `check_generic_param_bounds`.
+    CodeInfo {
+        code: "E1015",
+        title: "type does not satisfy declared mixin bound",
+    },
     // Send/Sync enforcement at thread-boundary construction sites
     // (docs/specs/ownership/send_sync_enforcement.spec.md). E1011 / E1012
     // (above) fire when a Send/Sync-bounded generic param sees a

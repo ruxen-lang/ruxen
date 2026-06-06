@@ -1214,8 +1214,25 @@ impl<'a> InferenceEngine<'a> {
         args: &[HirExpr],
         ret: &Ty,
     ) -> Ty {
+        self.harvest_and_subst_generics_bindings(signature, args, ret)
+            .0
+    }
+
+    /// Same as [`Self::harvest_and_subst_generics`] but ALSO returns the
+    /// `{param_name → concrete}` bindings it harvested, so the caller can
+    /// run the declared-bound enforcement seam (`check_generic_param_bounds`)
+    /// against them. Feature B (trait-bound enforcement): the bindings are
+    /// exactly the `{T → concrete}` map a `[T: Bound]` declaration must be
+    /// checked against, computed once here rather than re-derived at the
+    /// call site.
+    pub(super) fn harvest_and_subst_generics_bindings(
+        &self,
+        signature: &crate::resolve::symbols::FnSignature,
+        args: &[HirExpr],
+        ret: &Ty,
+    ) -> (Ty, std::collections::HashMap<String, Ty>) {
         if signature.generic_params.is_empty() {
-            return ret.clone();
+            return (ret.clone(), std::collections::HashMap::new());
         }
         let param_names: std::collections::HashSet<String> = signature
             .generic_params
@@ -1227,11 +1244,12 @@ impl<'a> InferenceEngine<'a> {
             let actual = self.ctx.resolve(&arg.ty);
             Self::bind_type_params_from_args(&param_names, &param.ty, &actual, &mut bindings);
         }
-        if bindings.is_empty() {
+        let out = if bindings.is_empty() {
             ret.clone()
         } else {
             Self::subst_ty(ret, &bindings)
-        }
+        };
+        (out, bindings)
     }
 }
 

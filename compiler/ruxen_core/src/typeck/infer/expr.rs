@@ -696,7 +696,7 @@ impl<'a> InferenceEngine<'a> {
                         } else {
                             for (arg, param) in args.iter().zip(&signature.params) {
                                 let _ = unify(&arg.ty, &param.ty, self.ctx, &expr.span);
-                                self.check_concurrency_bounds(&param.ty, &arg.ty, &arg.span);
+                                self.check_declared_bounds(&param.ty, &arg.ty, &arg.span);
                             }
                         }
                         // Generic free-function call inference: when the
@@ -714,7 +714,20 @@ impl<'a> InferenceEngine<'a> {
                         // `bind_type_params_from_args` skips Infer/TypeParam
                         // actuals — preserving existing behaviour.
                         let base_ty = self.wrap_async_return(&signature);
-                        expr.ty = self.harvest_and_subst_generics(&signature, args, &base_ty);
+                        // Feature B enforcement point (b): check the
+                        // function's own declared generic bounds against the
+                        // harvested concrete bindings. Free functions have no
+                        // class owner → owner = None (Send → E1011, Add →
+                        // E0700, others → E0277). Only bounded params fire.
+                        let (subst_ty, bindings) =
+                            self.harvest_and_subst_generics_bindings(&signature, args, &base_ty);
+                        self.check_generic_param_bounds(
+                            &signature.generic_params,
+                            &bindings,
+                            None,
+                            &expr.span,
+                        );
+                        expr.ty = subst_ty;
                     }
                 }
             }
@@ -1262,14 +1275,43 @@ impl<'a> InferenceEngine<'a> {
         for (arg, param) in args.iter().zip(&signature.params) {
             let param_ty = self.substitute_generics_in_return(derefed, &param.ty);
             let _ = unify(&arg.ty, &param_ty, self.ctx, span);
-            self.check_concurrency_bounds(&param_ty, &arg.ty, &arg.span);
+            self.check_declared_bounds(&param_ty, &arg.ty, &arg.span);
         }
         let ret = self.wrap_async_return(&signature);
         // First substitute the receiver's generic args (handles
         // `MutexGuard[T]` from `Mutex[Int].lock_raw`); then harvest the
         // method's own type params from the actual arguments.
         let ret = self.substitute_generics_in_return(derefed, &ret);
-        self.harvest_and_subst_generics(&signature, args, &ret)
+        // Feature B enforcement point (b): check the method's own declared
+        // generic bounds against the harvested bindings. The owner is the
+        // receiver class (so `class Mutex[T: Send]` reports E1101, etc. via
+        // the preserved-code bridge). Only bounded params fire.
+        let owner = Self::bound_owner_name(derefed);
+        let (subst_ty, bindings) = self.harvest_and_subst_generics_bindings(&signature, args, &ret);
+        self.check_generic_param_bounds(
+            &signature.generic_params,
+            &bindings,
+            owner.as_deref(),
+            span,
+        );
+        subst_ty
+    }
+
+    /// The receiver class/struct/enum name used as the bound-check owner
+    /// (so the preserved-code bridge can pick a class-appropriate
+    /// diagnostic code). References are peeled. Builtin heads and bare
+    /// type params have no owning declaration → `None`.
+    fn bound_owner_name(ty: &Ty) -> Option<String> {
+        match ty {
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => Self::bound_owner_name(inner),
+            Ty::Class { name, .. } | Ty::Struct { name, .. } | Ty::Enum { name, .. } => {
+                Some(name.clone())
+            }
+            _ => None,
+        }
     }
 
     /// For block-consuming combinators whose return type carries a fresh

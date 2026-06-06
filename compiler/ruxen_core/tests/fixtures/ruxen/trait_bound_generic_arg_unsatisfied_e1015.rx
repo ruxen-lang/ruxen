@@ -1,0 +1,35 @@
+## Pin (Feature B — generic trait-bound enforcement, point b):
+## a `def needs[T: Greet](x: &T)` called with a type that does NOT
+## `include Greet` must be rejected with the general E0277
+## unsatisfied-bound diagnostic. Mirrors the design's `[T: Display]`
+## red case. The bound is checked AFTER `{T -> Plain}` is harvested
+## from the call's actual argument.
+
+mixin Greet
+  def greet -> String
+end
+
+class Greeter
+  def init
+  end
+
+  include Greet
+
+  def greet -> String
+    "hi"
+  end
+end
+
+class Plain
+  def init
+  end
+end
+
+def needs[T: Greet](x: &T) -> String
+  x.greet
+end
+
+def main
+  let p = Plain.new()
+  let _r = needs(&p)
+end

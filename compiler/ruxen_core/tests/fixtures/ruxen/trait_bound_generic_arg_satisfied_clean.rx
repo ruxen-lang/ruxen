@@ -1,0 +1,29 @@
+## Pin (Feature B — generic trait-bound enforcement, point b):
+## the GREEN counterpart to the E0277 red case. A `def needs[T: Greet]`
+## called with a type that DOES `include Greet` must typecheck with no
+## bound diagnostic. Proves the enforcement is precise (only the
+## unsatisfied case fires), not a blanket rejection of bounded generics.
+
+mixin Greet
+  def greet -> String
+end
+
+class Greeter
+  def init
+  end
+
+  include Greet
+
+  def greet -> String
+    "hi"
+  end
+end
+
+def needs[T: Greet](x: &T) -> String
+  x.greet
+end
+
+def main
+  let g = Greeter.new()
+  let _r = needs(&g)
+end
