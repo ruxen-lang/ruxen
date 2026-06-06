@@ -569,6 +569,21 @@ pub(super) fn translate_instruction<'ctx>(
             }
         }
 
+        MirInst::FloatToBits { dest, src } => {
+            // Reinterpret a float's bits as a same-width integer (no numeric
+            // conversion) so float fields can fold through the integer FNV
+            // mix in the derived Hashable impl.
+            let src_val = gen_value(&MirValue::Use(*src), func, local_allocas, builder, context)?;
+            let dest_ty = ty_to_llvm(&func.locals[*dest as usize].ty, context)
+                .unwrap_or(context.i64_type().into());
+            let bits = builder
+                .build_bit_cast(src_val, dest_ty, "float_bits")
+                .map_err(|e| format!("Failed to bitcast float to bits: {:?}", e))?;
+            builder
+                .build_store(local_allocas[dest], bits)
+                .map_err(|e| format!("Failed to store float bits: {:?}", e))?;
+        }
+
         MirInst::Nop => {}
     }
 

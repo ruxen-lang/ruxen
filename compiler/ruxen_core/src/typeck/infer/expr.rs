@@ -551,8 +551,18 @@ impl<'a> InferenceEngine<'a> {
 
                 let obj_ty = self.ctx.resolve(&object.ty);
                 let (_, derefed) = auto_deref(&obj_ty, self.ctx);
+                // Structs and enums carry inline `def self.X` statics and
+                // instance methods registered as `DefKind::Method` keyed by
+                // the type name (ruby-naming.spec.md §3.4a), exactly like
+                // classes. `select_class_method` resolves by name, so it works
+                // for all three. Without including Struct/Enum here, a struct
+                // static call (`C4.white()`) fell through to the lenient
+                // `resolve_method_call` fresh-var path and the result type
+                // stayed `?T`, breaking any chained `.field` / `.method`.
                 let selected_method = match &derefed {
-                    Ty::Class { name, .. } => self
+                    Ty::Class { name, .. }
+                    | Ty::Struct { name, .. }
+                    | Ty::Enum { name, .. } => self
                         .select_class_method(name, method_name, args, block.is_some())
                         .inspect(|selected| {
                             *method = *selected;

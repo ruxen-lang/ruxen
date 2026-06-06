@@ -194,8 +194,31 @@ impl<'a> InferenceEngine<'a> {
     fn infer_item(&mut self, item: &mut HirItem) {
         match item {
             HirItem::Class(class) => self.infer_class(class),
-            HirItem::Struct(_) => {} // struct fields already have types
-            HirItem::Enum(_) => {}   // enum variants already have types
+            // Struct fields already have types, but inline methods and
+            // `include Mixin` impl blocks (ruby-naming.spec.md §3.4a) carry
+            // un-inferred bodies — their `self.field` accesses must be
+            // type-checked so `FieldAccess.field_idx` / result types are
+            // resolved. Skipping this left struct-method field reads with
+            // `field_idx = 0` (always field 0) and an `Infer` result type
+            // that codegen lowered as a raw i64 load at offset 0.
+            HirItem::Struct(s) => {
+                for method in &mut s.methods {
+                    self.infer_func(method);
+                }
+                for imp in &mut s.impl_blocks {
+                    self.infer_impl(imp);
+                }
+            }
+            // Enum variants already have types; inline methods / impl blocks
+            // need the same body inference as structs (same §3.4a surface).
+            HirItem::Enum(e) => {
+                for method in &mut e.methods {
+                    self.infer_func(method);
+                }
+                for imp in &mut e.impl_blocks {
+                    self.infer_impl(imp);
+                }
+            }
             HirItem::Mixin(t) => {
                 // Default method bodies need inference so that expressions
                 // like `self.name` acquire a concrete return type (e.g.

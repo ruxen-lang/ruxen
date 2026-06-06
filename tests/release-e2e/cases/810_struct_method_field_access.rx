@@ -1,0 +1,39 @@
+struct Wide
+  x: Int
+  y: Int
+
+  def gety -> Int
+    self.y
+  end
+end
+
+struct Color
+  r: UInt8
+  g: UInt8
+  b: UInt8
+  a: UInt8
+
+  def describe -> String
+    "r=#{self.r} g=#{self.g} b=#{self.b} a=#{self.a}"
+  end
+end
+
+struct P
+  x: Float32
+  y: Float32
+
+  def sum -> Float32
+    self.x + self.y
+  end
+end
+
+def main
+  let w = Wide.new(10, 20)
+  puts "wide y=#{w.gety}"
+
+  let c = Color.new(1u8, 2u8, 3u8, 255u8)
+  puts c.describe
+
+  let p = P.new(1.5f32, 2.5f32)
+  puts "sum=#{p.sum}"
+end

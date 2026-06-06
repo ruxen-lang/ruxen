@@ -1,0 +1,8 @@
+## Regression: an INLINE `(small_int as UInt32) << N` term must contribute the
+## widened, shifted value. The cast must materialise a 32-bit value so the
+## enclosing `<<` does not run at the source (8-bit) width and mask the shift
+## amount. The packed result must be 0xFF010203 (4278256131).
+def main
+  let x = (255u8 as UInt32) << 24 | ((1u8 as UInt32) << 16) | ((2u8 as UInt32) << 8) | (3u8 as UInt32)
+  puts "#{x}"
+end

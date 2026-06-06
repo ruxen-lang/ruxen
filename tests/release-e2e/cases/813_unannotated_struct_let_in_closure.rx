@@ -1,0 +1,24 @@
+## Regression: an un-annotated `let c = Struct.new(...)` (and a struct static
+## constructor `Struct.rgb(...)`) followed by field access, inside a closure
+## body, must resolve the binding's type to the struct so field access lowers
+## to a real GetField rather than a `?T<n>_field` method call.
+struct Color
+  r: UInt8
+  g: UInt8
+  b: UInt8
+  a: UInt8
+
+  def self.rgb(r: UInt8, g: UInt8, b: UInt8) -> Color
+    Color.new(r, g, b, 255u8)
+  end
+end
+
+def main
+  let nums = [1]
+  nums.each do |_n|
+    let c = Color.new(10u8, 20u8, 30u8, 255u8)
+    puts "a=#{c.a} r=#{c.r}"
+    let d = Color.rgb(1u8, 2u8, 3u8)
+    puts "da=#{d.a} dr=#{d.r}"
+  end
+end

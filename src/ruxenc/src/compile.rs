@@ -44,11 +44,20 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let mut opt_level_override: Option<String> = None;
     let mut force = false;
     let mut verbose = false;
+    let mut extra_runtime_c: Vec<String> = Vec::new();
     let mut i = 2;
     while i < args.len() {
         if args[i] == "-o" && i + 1 < args.len() {
             output_path = Some(args[i + 1].clone());
             i += 2;
+        } else if args[i].starts_with("--runtime-c=") {
+            // Additional user C source to compile and link alongside the
+            // stdlib runtime (a project's `runtime/*.c`). Repeatable.
+            // `ruxen test` passes these so `lib "runtime/foo.c"` decls in
+            // library code resolve inside test binaries, mirroring what
+            // `ruxen build` does via `find_runtime_sources_in_dir`.
+            extra_runtime_c.push(args[i]["--runtime-c=".len()..].to_string());
+            i += 1;
         } else if args[i].starts_with("--emit=") {
             emit_mode = Some(args[i][7..].to_string());
             i += 1;
@@ -95,11 +104,27 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // ─── Cached compile path ─────────────────────────────────────
     let store = CacheStore::new(project_target_ruxen());
     let opt_level_label = if release_mode { "release" } else { "debug" };
+    // Fold the extra runtime C sources (path + content hash) into the cache
+    // flags so editing a project's `runtime/*.c` invalidates the cached
+    // binary even when no `.rx` source changed.
+    let runtime_c_fingerprint = {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut h = DefaultHasher::new();
+        for p in &extra_runtime_c {
+            p.hash(&mut h);
+            if let Ok(bytes) = fs::read(p) {
+                bytes.hash(&mut h);
+            }
+        }
+        h.finish()
+    };
     let flags = format!(
-        "backend={} opt={} release={}",
+        "backend={} opt={} release={} runtime_c={:x}",
         backend_override.as_deref().unwrap_or("default"),
         opt_level_override.as_deref().unwrap_or("default"),
-        release_mode
+        release_mode,
+        runtime_c_fingerprint
     );
     let build_opts = BuildOptions {
         force,
@@ -186,13 +211,26 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let prebuilt_archive: Option<std::path::PathBuf> =
         ruxen_core::codegen::find_prebuilt_runtime_archive();
 
-    let runtime_objects: Vec<std::path::PathBuf> = if prebuilt_archive.is_some() {
+    let mut runtime_objects: Vec<std::path::PathBuf> = if prebuilt_archive.is_some() {
         Vec::new()
     } else {
         let runtime_sources = ruxen_core::codegen::find_runtime_sources()?;
         ruxen_core::codegen::object::compile_runtime_sources(&runtime_sources, false)
             .map_err(|e| format!("Failed to compile runtime: {}", e))?
     };
+
+    // User-side runtime C (`--runtime-c=`): always compiled, independent of
+    // the prebuilt stdlib archive — these are project sources, not stdlib.
+    if !extra_runtime_c.is_empty() {
+        let extra_paths: Vec<std::path::PathBuf> = extra_runtime_c
+            .iter()
+            .map(std::path::PathBuf::from)
+            .collect();
+        let extra_objects =
+            ruxen_core::codegen::object::compile_runtime_sources(&extra_paths, false)
+                .map_err(|e| format!("Failed to compile project runtime C: {}", e))?;
+        runtime_objects.extend(extra_objects);
+    }
 
     let mut link_flags: Vec<String> = Vec::new();
     if let Some(ar) = &prebuilt_archive {

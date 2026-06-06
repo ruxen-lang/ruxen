@@ -448,6 +448,22 @@ pub fn translate_instruction<M: Module>(
             def_local(var_map, stack_slots, builder, *dest, val);
         }
 
+        MirInst::FloatToBits { dest, src } => {
+            // Reinterpret the float's bits as an integer of the same width.
+            // The destination local's declared type picks i32 (from f32) or
+            // i64 (from f64). `bitcast` is a pure reinterpretation — no
+            // numeric conversion — which is exactly what the derived hash
+            // mix needs so floats fold through `bxor`/`mul`.
+            let src_val = use_local(var_map, stack_slots, builder, *src);
+            let dest_ty = func
+                .locals
+                .get(*dest as usize)
+                .and_then(|l| ty_to_cranelift(&l.ty))
+                .unwrap_or(types::I64);
+            let bits = builder.ins().bitcast(dest_ty, MemFlags::new(), src_val);
+            def_local(var_map, stack_slots, builder, *dest, bits);
+        }
+
         MirInst::Nop => {}
 
         MirInst::FuncAddr { dest, func_name } => {
