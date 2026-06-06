@@ -44,15 +44,11 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
             // the bridge against `class Array[T]`'s declared
             // `Option[&var T]` return.
             (Ty::Array(_), "each") => Some(Ty::Unit),
-            // Ruby `each_with_index { |element, index| }` — yields the element
-            // and its 0-based index. Inlined in closure_inline/each_with_index.
-            (Ty::Array(_), "each_with_index") => Some(Ty::Unit),
-            // `map` / `select` / `reject` / `all?` / `any?` / `partition`
-            // MIGRATED to real `.rx` bodies over `each` (Feature C,
-            // array/src/lib.rx) and resolve through the builtin bridge.
+            // `map` / `select` / `reject` / `all?` / `any?` / `partition` /
+            // `each_with_index` / `find` / `index` MIGRATED to real `.rx`
+            // bodies over `each` (Feature C, array/src/lib.rx) and resolve
+            // through the builtin bridge.
             (Ty::Array(_), "reduce") => Some(eng.ctx.fresh_type_var()),
-            (Ty::Array(elem), "find") => Some(Ty::Option(Box::new(Ty::Ref(elem.clone())))),
-            (Ty::Array(_), "index") => Some(Ty::Option(Box::new(Ty::USize))),
             (Ty::Array(elem), "zip") => {
                 let other = match _args.first() {
                     Some(a) => match eng.ctx.resolve(&a.ty) {

@@ -188,4 +188,57 @@ class Array[T]
     end
     (yes, no)
   end
+
+  # Ruby `each_with_index` — yield each element together with its
+  # 0-based position. An external counter is bumped per iteration.
+  def each_with_index(f: any Fn[Fn(T, Int) -> nil]) -> nil
+    var i: Int = 0
+    self.each do |x|
+      f.(x, i)
+      i = i + 1
+    end
+    nil
+  end
+
+  # Ruby `find` / `detect` — the first element matching the predicate,
+  # or `nil`. Accumulates into an `Option[T]` result that stays at the
+  # first hit (a `found` flag freezes it). The hit wraps explicitly via
+  # `Option.Some(x)`; the initial `nil` is the absent case. (Explicit
+  # `Some` rather than the bare-value "drop Some" sugar, which only
+  # fires at let-binding RHS / function-tail positions, not at an
+  # in-loop assignment.)
+  def find(pred: any Fn[Fn(T) -> Bool]) -> Option[T]
+    var out: Option[T] = nil
+    var found: Bool = false
+    self.each do |x|
+      if found
+      else
+        if pred.(x)
+          out = Option.Some(x)
+          found = true
+        end
+      end
+    end
+    out
+  end
+
+  # Ruby `index` — the 0-based position of the first matching element,
+  # or `nil`. Walks with an external counter, freezing the result on the
+  # first hit via a `found` flag.
+  def index(pred: any Fn[Fn(T) -> Bool]) -> Option[Int]
+    var out: Option[Int] = nil
+    var found: Bool = false
+    var i: Int = 0
+    self.each do |x|
+      if found
+      else
+        if pred.(x)
+          out = Option.Some(i)
+          found = true
+        end
+      end
+      i = i + 1
+    end
+    out
+  end
 end

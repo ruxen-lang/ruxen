@@ -139,7 +139,15 @@ impl<'a> Lowerer<'a> {
         if array_receiver
             && matches!(
                 method_name,
-                "map" | "select" | "reject" | "all?" | "any?" | "partition"
+                "map"
+                    | "select"
+                    | "reject"
+                    | "all?"
+                    | "any?"
+                    | "partition"
+                    | "each_with_index"
+                    | "find"
+                    | "index"
             )
         {
             return Ok(None);
