@@ -24,7 +24,7 @@
 
 ---
 
-## Status snapshot (as of 2026-06-06, HEAD ~`79866af`)
+## Status snapshot (as of 2026-06-07, HEAD `92294d0`)
 
 **Done & committed (green):**
 | Phase | SHAs |
@@ -35,10 +35,23 @@
 | String/Array/Set/Hash/Int delegation (`builtin_bridge`) | `c4bc2f7`,`f88d96c`,`f2a07d8`,`993858a` |
 | Feature A — width-correct FFI receiver (Float→F64) | `676d79f` |
 | 3 codegen bugs (closure-in-match-arm / FFI-on-self / closure-param seeding) | `446ef33`,`617cfb5`,`48c51aa` |
-| Feature C — Array/Set/Hash `mixin Enumerable[T]`; Option/Result `map`/`map_err`/`unwrap_or_else` | `5b6fd3c`,`a61ee37`,`66ff588`,`759758c`,`df6fe07`,`f413d17`,`50825e6`,`79866af` |
-| CI fast-path; build-artifact untrack; plan/spec docs | `8714d97`,`a626769`,`7145f5d` |
+| Feature C — Array/Set/Hash `mixin Enumerable[T]`; Option/Result `map`/`map_err`/`unwrap_or_else` | …,`50825e6`,`79866af` |
+| **Feature D — `Clone`/`Debug`/`Default` derive** (retired structural arms; `Enum.weight` dead-code removed; `numeric.rs` empty) | `019a60a`,`8c78170`,`5a271d1`,`a6f73ef`,`344a427` |
+| **Feature E — String reconcile** (`&str.to_lower`/`to_upper`/`parse_uint`→`.rx`; `remove`+mutation methods = irreducible floor) | `218b2ce` |
+| **Feature B — trait-bound enforcement** (general `check_declared_bounds`; `Mutex`/`Arc`/`SharedSync[T: Send]`→E1101/E1102; new E1015; `Thread.spawn` E1100=floor; BufReader E0714=deferred) | `bd9007b`,`dfbcf3c`,`7828685` |
+| **Merge `origin/master`** (struct/enum inline-method codegen + `FloatToBits`) — clears the deferred Float-enum bug, pinned by `218` | `03f28f2`,`92294d0` |
+| CI fast-path; build-artifact untrack; plan/spec docs | `8714d97`,`a626769`,`7145f5d`,`881dcb5` |
 
-**~48% by effort.** `collections.rs` residual ≈ 7–9 arms. Remaining tasks below.
+**~64% by effort.** Done through Feature B + master merge. Lib 561/0, e2e **338/0**.
+
+**Residual / debt (tracked):**
+- `collections.rs` ≈ 7 arms (Array `each`/`to_h`/`sum`/`select!`; Option/Result `try_op`/`map`/`map_err`/`ok_or`) — closure/operator/diagnostic floor + the `sum`/E0700 fork.
+- **`sum`/E0700 fork (from Feature B):** needs a *receiver-element method-call bound seam* (sum's `Add` bound is on the Array class generic `T`, argless — can't flow through the harvest seam; the `where` merge in `resolve/funcs.rs` only targets a method's own generics). **Same seam the operator wave needs** (`a + b`→`a.+(b)`) → folded into Task OP.
+- **BufReader/BufWriter E0714** — DEFERRED to Task DEPRIM (closed-set `module BufReader` has no generic param to bind; re-examine whether per-variant constructor param-types already enforce the inner type). NOT permanent floor.
+- **Genuine permanent floor:** `Thread.spawn` E1100 capture-Send; `String.remove`/`push`/`push_str`/`insert`/`insert_str` ABI-divergence; the `.new` aggregate constructor.
+- **Workspace-health (NEW, must clear before merge to master):** `cargo test --workspace` has 6 PRE-EXISTING failing targets unrelated to the migration's gated work — `ruxen_ide --lib`, `ruxen_lsp --test server_integration`, `ruxen_repl --lib`, `ruxen_core --test std_use_resolution`, `ruxen_cli --test installed_pkg_manager`, `ruxenc --test installed_binary`. These drifted because the gate is narrow (rule 42). Triage + fix as **Task WS** before this branch merges to master.
+
+Remaining tasks below.
 
 ---
 
