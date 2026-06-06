@@ -58,6 +58,12 @@ all fixtures 0-fail → golden re-record + `git diff` (only intended lines) →
 llvm` (no llvm-config here; changes are backend-agnostic). Never stage
 `src/ruxenc/target/` (gitignored).
 
+**Testing convention (NON-NEGOTIABLE):** every compile-and-run Ruxen program
+is a release-e2e fixture (`tests/release-e2e/cases/<name>.rx` +
+`expected/<name>.out`). NEVER embed a compile-and-run program as an inline
+`r#"..."#` raw string in a Rust test, and never leave scratch/debug files
+behind.
+
 ## Phases & status (update as you go)
 - [x] ABI derivation; class-typed resolvers → `.rx`; `*Iter` teardown.
 - [x] String/Array/Set/Hash/Int delegation via `builtin_bridge`.
@@ -91,3 +97,10 @@ llvm` (no llvm-config here; changes are backend-agnostic). Never stage
 - `Array.get` surfaces a raw element not `Option[&T]` (Option-construct gap);
   index with `xs[i]` in `.rx` bodies.
 - `Map` displays as `Hash[K,V]`; method-home key is `"Hash"`.
+- [FIXED] Closure-param seeding for mixin-default combinators: a `kv.1`
+  tuple-field access on a closure param of a mixin combinator (`reduce`/`map`/…
+  from `include Enumerable[T]`) lowered to an unresolved `?T::1` method call
+  because `MixinResolver::lookup_method_by_name` only consulted own
+  `type_methods`, not trait/mixin default signatures — so the closure param
+  stayed `Infer`. Fixed by falling through to `trait_method_sigs` for any
+  implemented trait. Pin: `tests/release-e2e/cases/604_closure_tuple_param_field.rx`.

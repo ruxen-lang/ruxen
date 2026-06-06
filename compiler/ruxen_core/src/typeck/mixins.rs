@@ -486,6 +486,26 @@ impl MixinResolver {
                 return Some(m.signature.clone());
             }
         }
+        // Fall through to mixin/trait default signatures for any trait the
+        // type implements (e.g. `class Array[T] include Enumerable[T]`
+        // supplies `reduce`/`map`/… as Enumerable defaults, not as own
+        // `type_methods`). Without this, closure-param seeding in
+        // `infer/expr.rs` never finds the combinator's `Fn(U, T)` signature
+        // and the closure param stays `Infer` — so a `kv.1` tuple-field
+        // access inside the closure body lowers to an unresolved `?T::1`
+        // method call. Mirrors the trait-default arm of
+        // `lookup_method_with_args` but selects by name only (no args here).
+        for (impl_target, trait_name) in self.nominal_impls.keys() {
+            if *impl_target == type_name {
+                if let Some(methods) = self.trait_method_sigs.get(trait_name) {
+                    if let Some(sigs) = methods.get(method_name) {
+                        if let Some(sig) = sigs.first() {
+                            return Some(sig.clone());
+                        }
+                    }
+                }
+            }
+        }
         None
     }
 
