@@ -241,15 +241,16 @@ mod golden {
         // delegator; the golden runs with an EMPTY symbol table (no `.rx`
         // loaded) so those would return None and are not pinned here. The
         // residual arms that stay Rust-side (strings.rs) ARE pinned:
-        // `remove` (ABI divergence), `to_s` (structural-head), and the
-        // mutation methods `push`/`push_str`/`insert`/`insert_str`
-        // (surface `Unit` vs C `char*`). `clone` is NO LONGER pinned: it
-        // MIGRATED to string.rx (its `ruxen_string_from` alias is admitted
-        // now that E0722 compares wire shapes), so it resolves via the
-        // bridge and returns None under the empty table. End-to-end `.rx`
+        // `remove` (ABI divergence) and the mutation methods
+        // `push`/`push_str`/`insert`/`insert_str` (surface `Unit` vs C
+        // `char*`). `clone` and `to_s` are NO LONGER pinned: they
+        // MIGRATED to string.rx (second wire-identical aliases of
+        // `ruxen_string_from` / `ruxen_string_to_string`, admitted now
+        // that E0722 compares wire shapes), so they resolve via the
+        // bridge and return None under the empty table. End-to-end `.rx`
         // resolution is covered by the builtin_receiver_bridge pins + the
         // e2e suite.
-        for m in ["remove", "to_s", "push", "push_str", "insert", "insert_str"] {
+        for m in ["remove", "push", "push_str", "insert", "insert_str"] {
             v.push(c(Ty::String, m));
         }
 
@@ -258,11 +259,12 @@ mod golden {
         // the bridge (`method_home_key: Ty::Str → "String"`); under the
         // golden's EMPTY symbol table they return None and are NOT pinned.
         // Only the genuinely-divergent residual arms in strings.rs ARE
-        // pinned: `to_lower`/`to_upper` (yield `str` not `String`),
-        // `parse_uint` (no `class String` counterpart), `to_s` (no `.rx`
-        // `to_s` decl). End-to-end `.rx` resolution for the migrated
-        // surface is covered by the builtin_receiver_bridge pins + e2e.
-        for m in ["to_lower", "to_upper", "parse_uint", "to_s"] {
+        // pinned: `to_lower`/`to_upper` (yield `str` not `String`) and
+        // `parse_uint` (no `class String` counterpart). `to_s` MIGRATED
+        // too (`class String` now declares it). End-to-end `.rx`
+        // resolution for the migrated surface is covered by the
+        // builtin_receiver_bridge pins + e2e.
+        for m in ["to_lower", "to_upper", "parse_uint"] {
             v.push(c(Ty::Str, m));
         }
 

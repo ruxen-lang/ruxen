@@ -38,7 +38,7 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
             // AHEAD of `builtin_bridge` so they win for these names.
             Ty::String => matches!(
                 method,
-                "remove" | "to_s" | "push" | "push_str" | "insert" | "insert_str"
+                "remove" | "push" | "push_str" | "insert" | "insert_str"
             ),
             // `&str` routes to `class String` via the bridge
             // (`method_home_key: Ty::Str → "String"`); only the surfaces
@@ -47,19 +47,17 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
             //   * `to_lower`/`to_upper` — `&str` yields `str`, the `.rx`
             //     decl yields `String`.
             //   * `parse_uint` — no `class String` counterpart.
-            //   * `to_s` — `class String` declares only `to_string`.
-            Ty::Str => matches!(method, "to_lower" | "to_upper" | "parse_uint" | "to_s"),
+            Ty::Str => matches!(method, "to_lower" | "to_upper" | "parse_uint"),
             _ => false,
         },
         resolve: |_eng, ty, method, _args, _span| match (ty, method) {
             // ── String residual arms (shadow string.rx) ──────────────
             (Ty::String, "remove") => Some(Ty::Char),
-            // `clone` MIGRATED to string.rx: with E0722 relaxed to a
-            // wire-level compare, its `ruxen_string_from` alias (whose
-            // implicit `&self` is wire-identical to `from`'s explicit
-            // `&String` param) is now admitted and resolves via the
-            // bridge.
-            (Ty::String, "to_s") => Some(Ty::String),
+            // `clone` and `to_s` MIGRATED to string.rx: with E0722
+            // relaxed to a wire-level compare, their second aliases of
+            // `ruxen_string_from` / `ruxen_string_to_string` (wire-
+            // identical to `from` / `to_string`) are admitted and resolve
+            // via the bridge.
             // Mutation methods: the C symbols return `char*` (the new
             // buffer, I64), so the `.rx` decl is `-> String` (ABI-
             // faithful) — but the SURFACE type is mutation-style `Unit`
@@ -85,13 +83,12 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
             //     symbol returns a borrowed slice into the source); the
             //     `.rx` `class String` decl yields an owned `String`.
             //   * `parse_uint` — no `class String` counterpart symbol.
-            //   * `to_s` — `class String` declares only `to_string`; the
-            //     structural `to_s` fallback matches Class/Struct/Enum,
-            //     not the `Ty::Str` primitive head.
+            // (`to_s` MIGRATED: `class String` now declares `to_s` as a
+            // wire-identical alias of `ruxen_string_to_string`, so
+            // `&str.to_s` resolves through the bridge.)
             (Ty::Str, "to_lower") => Some(Ty::Str),
             (Ty::Str, "to_upper") => Some(Ty::Str),
             (Ty::Str, "parse_uint") => Some(Ty::Result(Box::new(Ty::USize), Box::new(Ty::Error))),
-            (Ty::Str, "to_s") => Some(Ty::String),
             // Within-namespace fallthrough (not a cross-cutting catch-all).
             _ => None,
         },

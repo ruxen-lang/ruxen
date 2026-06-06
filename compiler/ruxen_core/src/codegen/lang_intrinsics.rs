@@ -94,8 +94,14 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "Float_to_s" => return Ok("ruxen_float_to_string"),
         "Bool_to_s" => return Ok("ruxen_bool_to_string"),
         "Char_to_s" => return Ok("ruxen_char_to_string"),
-        // `String`/`&str` are already strings; `to_s` clones to an owned
-        // `String` (matching `String.to_string`'s `ruxen_string_to_string`).
+        // `&str_to_s`: the `&str` primitive has no `.rx` class shell, so
+        // its mangled `&str_to_s` callee resolves here (same category as
+        // the other `&str_*` codegen arms below). `String_to_s` is now
+        // ALSO homed in string.rx (`def to_s as "ruxen_string_to_string"`)
+        // and the MIR `ffi_alias_map` rewrites `String_to_s` before
+        // codegen reaches here; this arm stays as a belt-and-suspenders
+        // fallback for the `String` spelling and the authoritative path
+        // for `&str`. Both clone to an owned `String`.
         "String_to_s" | "&str_to_s" => return Ok("ruxen_string_to_string"),
         "String_truncate_chars" => return Ok("ruxen_string_truncate_chars"),
         // Phase E-rest 3 of #06.95: MIR-synthesised Formatter callees

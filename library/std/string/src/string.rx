@@ -30,6 +30,12 @@ class String
     def replace as "ruxen_string_replace"(from: &String, to: &String) -> String
     def as_str as "ruxen_string_as_str" -> str
     def to_string as "ruxen_string_to_string" -> String
+    # `to_s` is the Ruby spelling of `to_string` — same C symbol, same
+    # wire shape `(I64) -> I64`, admitted as a second alias by the
+    # wire-level E0722 check. Homing it here lets BOTH `String.to_s` and
+    # (via `method_home_key: Ty::Str → "String"`) `&str.to_s` resolve
+    # through the bridge, retiring their strings.rs residual arms.
+    def to_s as "ruxen_string_to_string" -> String
     def chars as "ruxen_string_chars" -> Array[Char]
     def lines as "ruxen_string_lines" -> Array[String]
     def split as "ruxen_string_split"(delimiter: &String) -> Array[String]
