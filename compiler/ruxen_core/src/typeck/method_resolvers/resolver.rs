@@ -88,23 +88,25 @@ pub(super) fn declared_method_resolvers() -> Vec<MethodResolver> {
 ///
 /// Two concerns, in precedence order:
 ///
-/// 1. **Constructor fallback** (`new`) and the still-structural `default`
-///    arm (being migrated to the derive mechanism — see Feature D in
-///    `generic-compiler.spec.md`). `.new` yields `Self` and is NOT a
-///    derive: every `class`/`struct` has a compiler-generated constructor
-///    (the `None` branch of the legacy `(Ty::Class,"new")` arm).
-///    `default` will move to the derive resolver in its own commit.
-/// 2. **Derive resolver** — methods that resolve through the DERIVE
-///    MECHANISM (`ty_has_derive_trait`), the same predicate the MIR derive
-///    synthesis (`mir/lower/derive.rs`) gates on, so typeck's return-type
-///    answer stays in lockstep with whether codegen will actually
-///    synthesize the body:
-///      - `clone` → `Self` when the type derives `Clone`.
-///      - `to_s`  → `String` when the type derives `Debug` (Displayable).
+/// 1. **Constructor fallback** (`new`) — the only remaining structural
+///    arm. `.new` yields `Self` and is NOT a derive: every `class`/`struct`
+///    has a compiler-generated all-fields constructor (the `None` branch
+///    of the legacy `(Ty::Class,"new")` arm — when no declared `new`
+///    exists, the constructor yields `Self`).
+/// 2. **Derive resolver** — `clone`/`to_s`/`default` resolve through the
+///    DERIVE MECHANISM (`ty_has_derive_trait`), the same predicate the MIR
+///    derive synthesis (`mir/lower/derive.rs`) gates on, so typeck's
+///    return-type answer stays in lockstep with whether codegen will
+///    actually synthesize the body:
+///      - `clone`   → `Self` when the type derives `Clone`.
+///      - `to_s`    → `String` when the type derives `Debug` (Displayable).
 ///        The structural implicit-include rule (`ruby-naming.spec.md`
 ///        §3.6) makes every aggregate derive `Debug`, so this matches the
 ///        old blanket `to_s → String`; the universal `to_s` is routed
 ///        through the interpolation display dispatch at lower time.
+///      - `default` → `Self` when the type derives `Default`
+///        (`Struct`/`Class` only; enums are excluded from `Default`, which
+///        the field-default synthesis in `mir/lower/derive.rs` mirrors).
 ///
 /// Precedence-LAST: a named stdlib resolver (tier 2), the declared tier
 /// (tier 1), and a user-defined `clone`/`to_s`/`default` method (resolved
@@ -113,34 +115,33 @@ pub(super) fn declared_method_resolvers() -> Vec<MethodResolver> {
 pub(super) fn structural_fallback_resolvers() -> Vec<MethodResolver> {
     use crate::resolve::symbols::ty_has_derive_trait;
     vec![
-        // Structural fallback — `.new` (constructor), plus `default`
-        // pending migration to the derive resolver below.
+        // Structural fallback — `.new` constructor yields Self.
         MethodResolver {
             matches: |ty, method| {
-                matches!(ty, Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. })
-                    && matches!(method, "new" | "default")
+                method == "new" && matches!(ty, Ty::Class { .. } | Ty::Struct { .. })
             },
             resolve: |_eng, ty, method, _args, _span| match (ty, method) {
-                // Generic `.new` — constructor yields Self. (The declared-`new`
-                // override is tier 1; this is the legacy arm's `None` branch.)
                 (Ty::Class { .. }, "new") | (Ty::Struct { .. }, "new") => Some(ty.clone()),
-
-                // Default — implicit for Struct/Class (enums excluded).
-                (Ty::Struct { .. }, "default") | (Ty::Class { .. }, "default") => Some(ty.clone()),
-
                 _ => None,
             },
         },
-        // Derive resolver — `clone`/`to_s` gated on the derive mechanism,
-        // in lockstep with `mir/lower/derive.rs`.
+        // Derive resolver — `clone`/`to_s`/`default` gated on the derive
+        // mechanism, in lockstep with `mir/lower/derive.rs`.
         MethodResolver {
             matches: |ty, method| {
                 matches!(ty, Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. })
-                    && matches!(method, "clone" | "to_s")
+                    && matches!(method, "clone" | "to_s" | "default")
             },
             resolve: |eng, ty, method, _args, _span| match method {
                 "clone" if ty_has_derive_trait(ty, eng.symbols, "Clone") => Some(ty.clone()),
                 "to_s" if ty_has_derive_trait(ty, eng.symbols, "Debug") => Some(Ty::String),
+                // Default is implicit for Struct/Class (enums excluded).
+                "default"
+                    if matches!(ty, Ty::Class { .. } | Ty::Struct { .. })
+                        && ty_has_derive_trait(ty, eng.symbols, "Default") =>
+                {
+                    Some(ty.clone())
+                }
                 _ => None,
             },
         },

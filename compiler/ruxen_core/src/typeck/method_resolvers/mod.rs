@@ -449,21 +449,20 @@ mod golden {
         // The receiver-width correctness (Float→F64, the rest→I64) is
         // pinned by `tests/runtime_abi_derivation.rs`.
         v.push(c(enum_ty("Priority"), "weight"));
-        // generic new / default structural fallbacks (still pinned).
+        // generic `.new` constructor fallback (still pinned — not a derive).
         v.push(c(class("Widget", vec![]), "new"));
         v.push(c(struct_ty("Point"), "new"));
-        v.push(c(struct_ty("Point"), "default"));
-        v.push(c(class("Widget", vec![]), "default"));
-        // `clone` and `to_s` MIGRATED to the DERIVE MECHANISM (Feature D):
-        // `clone` resolves via `ty_has_derive_trait(ty, "Clone")` and `to_s`
-        // via `ty_has_derive_trait(ty, "Debug")`, in lockstep with the MIR
-        // synthesis (`mir/lower/derive.rs`), so they require the type to be
-        // present in the symbol table. The golden runs with an EMPTY symbol
-        // table, so `Widget`/`Point`/`Color` `clone`/`to_s` return None and
-        // are NO LONGER pinned here (same treatment as the `.rx`-bridged
-        // surface). End-to-end behaviour is pinned by the e2e fixtures
-        // (`2xx_implicit_clone_*`, `49_clone_explicit`, `145_array_clone`,
-        // `810_to_s_universal`, `2xx_implicit_debug_*`).
+        // `clone`, `to_s`, and `default` MIGRATED to the DERIVE MECHANISM
+        // (Feature D): they resolve via `ty_has_derive_trait(ty, "Clone")` /
+        // `(ty, "Debug")` / `(ty, "Default")` respectively, in lockstep with
+        // the MIR synthesis (`mir/lower/derive.rs`), so they require the type
+        // to be present in the symbol table. The golden runs with an EMPTY
+        // symbol table, so `Widget`/`Point`/`Color` `clone`/`to_s`/`default`
+        // return None and are NO LONGER pinned here (same treatment as the
+        // `.rx`-bridged surface). End-to-end behaviour is pinned by the e2e
+        // fixtures (`2xx_implicit_clone_*`, `49_clone_explicit`,
+        // `145_array_clone`, `810_to_s_universal`, `2xx_implicit_debug_*`,
+        // `208_implicit_default`, `216_derive_default_include`).
 
         // ── Effectful-arm DIAGNOSTIC pins ──────────────────────────
         // These exercise the early-return + pushed-diagnostic branches
