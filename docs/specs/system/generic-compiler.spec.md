@@ -129,9 +129,32 @@ behind.
       `631_string_push_str`, `632_str_to_lower_upper`, `633_str_parse_uint`
       (+ existing `311`/`313`/`315`/`45`/`113`). `strings.rs` residual count:
       5 `String` arms (`remove`+4 mutation), 0 `Str` arms.
-- [ ] Feature B: trait-bound enforcement (move Send/E0714/sum-Add to `.rx`
-      bounds; generalize `check_concurrency_bounds`). Genuine floor: Thread.spawn
-      capture-Send.
+- [~] Feature B: trait-bound enforcement. DONE: generalized
+      `check_concurrency_bounds` → `check_declared_bounds` +
+      `check_generic_param_bounds` (harvested-generic seam) +
+      `check_constructor_generic_bounds` (construction seam), all dispatching
+      through `MixinResolver::check_satisfaction`. New general code **E1015**
+      ("type does not satisfy declared mixin bound") for non-Send/Sync bounds;
+      Send/Sync keep E1011/E1012. Preserved-code bridge (`ops.rs::
+      bound_diagnostic_code`) maps owner+bound → code. **Moved to `.rx`
+      bounds:** `class Mutex[T: Send]` (→ E1101) and `class SharedSync[T: Send]`
+      (→ E1102) — the `concurrency.rs` E1101/E1102 arms were DELETED; enforced
+      at the construction seam reading the `.rx` bound. Zero-regression rule
+      (only bounded params fire; abstract/unresolved skipped) holds — full
+      suite stayed 561/0 + e2e 333/0 through the inert landing. Red/green pin
+      `tests/trait_bound_enforcement.rs` (`needs[T: Greet]` → E1015 / clean).
+      GENUINE FLOOR: `Thread.spawn`'s **E1100** capture-Send (closure captures,
+      not a param/generic bound). **DEFERRED(de-primitivize), NOT floor:**
+      BufReader/BufWriter **E0714** — post-#06.95 the `.rx` is a module+mixin
+      closed-set with no generic `BufReader[R]` param to bind `[R: Read]` to;
+      migrating it would revert that reshape (regression). De-prim phase must
+      re-examine whether per-variant constructors already enforce the inner
+      type. **STILL PENDING (fork):** `sum`'s **E0700** `Add` bound is an
+      argless method bound on the receiver's *element* (class generic in a
+      method where-clause) — neither the harvest seam (no args) nor the
+      `resolve/funcs.rs` where-clause merge (matches only a method's OWN
+      generics) can express it; needs a NEW receiver-element method-call bound
+      seam. `bound_diagnostic_code`'s `Add`→E0700 mapping is wired and ready.
 - [ ] Operator wave: `def +`/`[]`/`<=>` parser support; desugar; delete
       binops/ops arms; `Comparable` mixin.
 - [ ] Literals→primitives + de-primitivize `Ty::String`/`Ty::Array`.

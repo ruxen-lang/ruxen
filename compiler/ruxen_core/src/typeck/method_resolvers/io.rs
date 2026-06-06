@@ -6,7 +6,7 @@
 //! `DefKind::Method` path (`lookup_method_with_args`) — those arms were
 //! deleted.
 //!
-//! What REMAINS here is the irreducible residual: `BufReader` /
+//! What REMAINS here is the residual: `BufReader` /
 //! `BufWriter` `new` / `with_capacity` carry the **E0714** check that the
 //! inner reader/writer is `File` or `TcpStream` — genuine compiler logic
 //! computed from `args` + `eng`, not expressible as a static `.rx` return
@@ -17,6 +17,21 @@
 //! BufReader/BufWriter instance methods (`read_line`/`read`/`write`/… /
 //! `into_inner`) are ALSO kept here because they read `generic_args` off
 //! that resolver-side generic representation.
+//!
+//! DEFERRED(de-primitivize): E0714 is NOT settled as a permanent floor —
+//! it is still a hardcoded-stdlib check (the `"BufReader"`/`"File"`/
+//! `"TcpStream"` names below) that the zero-hardcoding north-star targets.
+//! Feature B did NOT migrate it to a `[R: Read]` bound because post-#06.95
+//! the `.rx` surface is the `module BufReader { class File; class Tcp }`
+//! CLOSED-SET (no generic `BufReader[R]` param to bind a `Read` bound to);
+//! introducing one would require reverting that intentional module reshape
+//! — a net regression for a worse architecture (see
+//! `library/std/bufio/CLAUDE.md`). The de-primitivization phase must
+//! re-examine this: the per-variant constructor param types
+//! (`BufReader.File.new(inner: File)` only accepts `File`) may ALREADY
+//! enforce the inner type structurally, making E0714 removable — OR it
+//! stays. Decision is OPEN, not floor. Contrast `Thread.spawn`'s E1100,
+//! which IS a permanent floor (capture analysis, not a bound).
 
 use crate::diagnostics::Diagnostic;
 use crate::hir::types::Ty;
