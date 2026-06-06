@@ -92,7 +92,26 @@ behind.
       Array `each`/`to_h`/`sum`/`select!`/`get_mut`/`get_var`. `ok_or` left
       as documented residual (err type comes from the ARG, not a static
       return — same shape as `Array.zip`; no clean static `.rx` return).
-- [ ] Feature D: derive Clone/Debug/Default (retire `resolver.rs` structural).
+- [x] Feature D: derive Clone/Debug/Default (retire `resolver.rs` structural).
+      `clone`/`to_s`/`default` now resolve via the DERIVE MECHANISM in
+      `resolver.rs::structural_fallback_resolvers`, gated on
+      `ty_has_derive_trait(ty, "Clone"|"Debug"|"Default")` (`resolve/symbols.rs`)
+      in lockstep with the MIR synthesis (`mir/lower/derive.rs`
+      `synthesize_*_clone`/`_to_debug`/`_default`, gated identically in
+      `mir/lower/mod.rs::lower_item`). `include Clone`/`Debug`/`Default` →
+      `impl_blocks` → `collected_derives` merges into `derive_traits`; the
+      structural §3.6 implicit-include also auto-derives field-supported
+      types. The ONLY surviving structural arm is `.new` (all-fields
+      constructor — genuine floor, not a derive). Pins: `208_implicit_default`,
+      `216_derive_default_include` (+ existing `2xx_implicit_*`). Commits
+      `019a60a`(clone)/`8c78170`(to_s)/`5a271d1`(default).
+      `Enum.weight` ASSESSMENT: NOT a derive, NOT a floor — a dead
+      golden-only arm with no real user that shadowed
+      `lookup_class_method_return` (a `def weight -> Float` would mis-type as
+      `Int`). REMOVED (`a6f73ef`); `numeric::resolvers()` now empty. Pin
+      `217_enum_declared_method.rx`. (Uncovered a pre-existing, unrelated
+      cranelift width bug in `Float`-returning enum-method codegen — out of
+      Feature D scope, noted for a future codegen phase.)
 - [ ] Feature E: String reconcile (`remove`/`push`/… C-vs-surface).
 - [ ] Feature B: trait-bound enforcement (move Send/E0714/sum-Add to `.rx`
       bounds; generalize `check_concurrency_bounds`). Genuine floor: Thread.spawn
