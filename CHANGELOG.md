@@ -21,6 +21,26 @@ once 1.0.0 ships.
   emits invalid IR (`bxor.i64` fed an `f64`). Float fields are now
   bit-reinterpreted to a same-width integer (new `MirInst::FloatToBits`) before
   the FNV mix.
+- A zero-argument `def self.X` static on a `struct`/`enum` now dispatches
+  correctly at the call site. `is_user_static_method` only recognised
+  `DefKind::Class`, so a struct static (`C3.white`) was mis-classified as an
+  instance call and a phantom `self` (constant `0`) was prepended — tripping
+  the Cranelift verifier (`got 1, expected 0`). It now also matches
+  `DefKind::Struct`/`DefKind::Enum`.
+- Static methods on a `struct`/`enum` now resolve their return type during
+  inference. `typeck`'s method selection only fired `select_class_method` for
+  `Ty::Class`, so a struct static (`C4.white()`, `Color.rgb(...)`) fell through
+  to the lenient fresh-var path and its result type stayed `?T` — breaking any
+  chained `.field`/`.method` and any un-annotated `let` bound to the result
+  (notably inside closure bodies, which lower to standalone functions). The
+  selector now covers `Ty::Struct`/`Ty::Enum` too.
+- An inline `(small_int as WiderInt) << N` term no longer silently contributes
+  the wrong value. The `Cast` MIR lowering passed the inner value through
+  unchanged, so an integer cast nested inside a `<<`/arithmetic expression ran
+  at the SOURCE width and Cranelift masked the shift amount
+  (`(1u8 as UInt32) << 16` became 0). Integer→integer casts now materialise a
+  value at the target width (matching the existing let-bound coercion), so
+  inline bit-packing (`(a << 24) | (b << 16) | …`) produces the correct result.
 
 ## [0.1.0] - 2026-05-30
 

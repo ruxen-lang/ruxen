@@ -1,0 +1,32 @@
+## Regression: a zero-arg `def self.X` static on a STRUCT, called chained in
+## both paren-less (`C3.white.val`) and parenthesised (`C4.white().val`) form,
+## must dispatch statically (no phantom receiver) AND resolve the static's
+## return type so the chained instance method resolves.
+struct C3
+  r: UInt8
+
+  def self.white -> C3
+    C3.new(255u8)
+  end
+
+  def val -> Int
+    self.r as Int
+  end
+end
+
+struct C4
+  r: UInt8
+
+  def self.white() -> C4
+    C4.new(7u8)
+  end
+
+  def val -> Int
+    self.r as Int
+  end
+end
+
+def main
+  puts "noparens=#{C3.white.val}"
+  puts "parens=#{C4.white().val}"
+end

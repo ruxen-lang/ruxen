@@ -191,3 +191,129 @@ end
     let out = compile_and_run("float_struct_hash", source);
     assert!(out.contains('3'), "expected '3.0' sum, got: [{out}]");
 }
+
+/// Bug A (no parens): a zero-arg `def self.X` static on a STRUCT, called in
+/// paren-less form and immediately chained (`C3.white.val`), must dispatch
+/// statically (no phantom `self`) and resolve the static's return type so the
+/// chained instance method resolves. Regression: `is_user_static_method` only
+/// matched `DefKind::Class`, so a struct static was mis-classified as an
+/// instance call and a constant-0 receiver was prepended — tripping the
+/// Cranelift arg-count verifier.
+#[test]
+fn struct_zero_arg_static_chained_no_parens() {
+    let source = r##"
+struct C3
+  r: UInt8
+
+  def self.white -> C3
+    C3.new(255u8)
+  end
+
+  def val -> Int
+    self.r as Int
+  end
+end
+
+def main
+  puts "direct=#{C3.white.val}"
+end
+"##;
+    let out = compile_and_run("struct_static_noparens", source);
+    assert!(
+        out.contains("direct=255"),
+        "expected 'direct=255', got: [{out}]"
+    );
+}
+
+/// Bug A (parens): the same struct zero-arg static written `C3.white().val`.
+/// Regression: `select_class_method` only fired for `Ty::Class`, so a struct
+/// static fell through to the lenient fresh-var path and the result type
+/// stayed `?T`, so the chained `.val` could not resolve (codegen emitted
+/// `?T<n>_val`).
+#[test]
+fn struct_zero_arg_static_chained_parens() {
+    let source = r##"
+struct C4
+  r: UInt8
+
+  def self.white() -> C4
+    C4.new(255u8)
+  end
+
+  def val -> Int
+    self.r as Int
+  end
+end
+
+def main
+  puts "parens=#{C4.white().val}"
+end
+"##;
+    let out = compile_and_run("struct_static_parens", source);
+    assert!(
+        out.contains("parens=255"),
+        "expected 'parens=255', got: [{out}]"
+    );
+}
+
+/// Bug B: an INLINE `(small_int as UInt32) << N` term must contribute the
+/// widened, shifted value. Regression: the `Cast` MIR lowering passed the
+/// inner value through unchanged, so the enclosing `<<` ran at the source
+/// (8-bit) width and Cranelift masked the shift amount — `(1u8 as UInt32)
+/// << 16` silently became 0. The packed value must equal 0xFF010203.
+#[test]
+fn inline_cast_then_shift_packs_correctly() {
+    let source = r##"
+def main
+  let x = (255u8 as UInt32) << 24 | ((1u8 as UInt32) << 16) | ((2u8 as UInt32) << 8) | (3u8 as UInt32)
+  puts "#{x}"
+end
+"##;
+    let out = compile_and_run("inline_cast_shift", source);
+    // 0xFF010203 == 4278256131
+    assert!(
+        out.contains("4278256131"),
+        "expected packed 0xFF010203 (4278256131), got: [{out}]"
+    );
+}
+
+/// Bug C: an un-annotated `let c = Struct.new(...)` followed by field access
+/// inside a closure body must resolve `c`'s type to the struct. Regression:
+/// the struct constructor's result type stayed `?T` inside a closure (the
+/// same `select_class_method` Struct/Enum gap as Bug A), so `c.a` lowered to
+/// `?T<n>_a`. The closure is passed to a user function so it lowers to a
+/// standalone closure function (where the bug surfaced).
+#[test]
+fn unannotated_struct_let_field_access_in_closure() {
+    let source = r##"
+struct Color
+  r: UInt8
+  g: UInt8
+  b: UInt8
+  a: UInt8
+
+  def self.rgb(r: UInt8, g: UInt8, b: UInt8) -> Color
+    Color.new(r, g, b, 255u8)
+  end
+end
+
+def main
+  let nums = [1]
+  nums.each do |_n|
+    let c = Color.new(10u8, 20u8, 30u8, 255u8)
+    puts "a=#{c.a} r=#{c.r}"
+    let d = Color.rgb(1u8, 2u8, 3u8)
+    puts "da=#{d.a} dr=#{d.r}"
+  end
+end
+"##;
+    let out = compile_and_run("unannot_struct_closure", source);
+    assert!(
+        out.contains("a=255 r=10"),
+        "expected 'a=255 r=10', got: [{out}]"
+    );
+    assert!(
+        out.contains("da=255 dr=1"),
+        "expected 'da=255 dr=1', got: [{out}]"
+    );
+}
