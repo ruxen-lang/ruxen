@@ -1,0 +1,17 @@
+# Feature D: the derive mechanism resolves `.clone` via `ty_has_derive_trait`
+# in lockstep with the MIR synthesis. A struct with an explicit `include Clone`
+# gets a field-wise deep clone; mutating the original after cloning must not
+# disturb the copy (the String field is deep-copied).
+struct Account
+  include Clone
+
+  name: String
+  balance: Int
+end
+
+def main
+  let a = Account.new("alice", 100)
+  let b = a.clone
+  puts "#{a.name}:#{a.balance}"
+  puts "#{b.name}:#{b.balance}"
+end

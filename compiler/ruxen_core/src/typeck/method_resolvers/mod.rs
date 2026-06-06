@@ -449,17 +449,22 @@ mod golden {
         // The receiver-width correctness (Float→F64, the rest→I64) is
         // pinned by `tests/runtime_abi_derivation.rs`.
         v.push(c(enum_ty("Priority"), "weight"));
-        // generic to_s / clone / new / default fallbacks
+        // generic to_s / new / default structural fallbacks (still pinned).
         v.push(c(class("Widget", vec![]), "to_s"));
         v.push(c(struct_ty("Point"), "to_s"));
         v.push(c(enum_ty("Color"), "to_s"));
         v.push(c(class("Widget", vec![]), "new"));
-        v.push(c(class("Widget", vec![]), "clone"));
         v.push(c(struct_ty("Point"), "new"));
-        v.push(c(struct_ty("Point"), "clone"));
-        v.push(c(enum_ty("Color"), "clone"));
         v.push(c(struct_ty("Point"), "default"));
         v.push(c(class("Widget", vec![]), "default"));
+        // `clone` MIGRATED to the DERIVE MECHANISM (Feature D): it now
+        // resolves via `ty_has_derive_trait(ty, "Clone")` in lockstep with
+        // the MIR synthesis (`mir/lower/derive.rs`), so it requires the type
+        // to be present in the symbol table. The golden runs with an EMPTY
+        // symbol table, so `Widget`/`Point`/`Color` `clone` return None and
+        // are NO LONGER pinned here (same treatment as the `.rx`-bridged
+        // surface). End-to-end behaviour is pinned by the e2e fixtures
+        // (`2xx_implicit_clone_*`, `49_clone_explicit`, `145_array_clone`).
 
         // ── Effectful-arm DIAGNOSTIC pins ──────────────────────────
         // These exercise the early-return + pushed-diagnostic branches
