@@ -6,7 +6,6 @@ mod each_with_index;
 mod entry_or_insert;
 mod filter;
 mod find;
-mod fold;
 mod map;
 mod option_map;
 mod partition;
@@ -21,7 +20,10 @@ impl<'a> Lowerer<'a> {
         expr: &HirExpr,
         object: &HirExpr,
         method_name: &str,
-        args: &[HirExpr],
+        // Closure-method args (`reduce`'s `init`) were consumed only by the
+        // now-migrated `inline_fold`; retained in the signature for the
+        // caller's uniform dispatch but no longer read here.
+        _args: &[HirExpr],
         block_expr: &HirExpr,
     ) -> Result<Option<Option<LocalId>>, String> {
         // Extract closure params and body from the block expression.
@@ -148,6 +150,7 @@ impl<'a> Lowerer<'a> {
                     | "find"
                     | "index"
                     | "sort_by"
+                    | "reduce"
             )
         {
             return Ok(None);
@@ -210,15 +213,9 @@ impl<'a> Lowerer<'a> {
                 self.inline_retain(vec_id, closure_params, closure_body)?;
                 Ok(Some(None))
             }
-            // Phase 2 stdlib (#05 batch 2): closure-taking eager
-            // terminators on `*Iter` receivers. These inline the same
-            // `ruxen_vec_len` + `ruxen_vec_get` per-element loop as
-            // `each` / `find`, but they accumulate (`fold`) or
-            // short-circuit on a boolean predicate (`all` / `any`).
-            "reduce" => {
-                let result = self.inline_fold(expr, vec_id, args, closure_params, closure_body)?;
-                Ok(Some(Some(result)))
-            }
+            // `reduce` MIGRATED to a real `.rx` body over `each` (Feature C);
+            // for a `Ty::Array` receiver it is intercepted by the
+            // array-receiver fall-through above and never reaches this match.
             "all?" => {
                 let result = self.inline_all_any(
                     expr,
@@ -244,22 +241,6 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Emit an inlined `vec.retain { |item| pred }` — in-place filter.
-    /// Read-write cursor walks the backing array; elements where the
-    /// closure returns `true` are kept (compacted into the prefix);
-    /// elements where it returns `false` are dropped (the slot at
-    /// position `read` is overwritten by a future kept element). Final
-    /// `len` becomes the count of survivors. The element backing
-    /// (e.g. `Vec[String]` slot strings) is NOT freed by this lowering
-    /// — v1 documents `retain` as a slot-level forget, the same
-    /// contract as `clear` / `truncate` (#03 batch 1).
-    pub(super) fn fn_local_ty(&self, local_id: LocalId) -> Ty {
-        self.current_fn
-            .as_ref()
-            .and_then(|f| f.locals.iter().find(|l| l.id == local_id))
-            .map(|l| l.ty.clone())
-            .unwrap_or(Ty::Int)
-    }
-
     /// Lower the "vec source" from a method call chain, peeling through
     /// iterator adaptors and passthrough method calls to find the underlying
     /// Vec local. E.g., `self.items.iter.filter { ... }` -> the local for

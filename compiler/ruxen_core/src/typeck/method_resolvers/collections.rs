@@ -45,10 +45,10 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
             // `Option[&var T]` return.
             (Ty::Array(_), "each") => Some(Ty::Unit),
             // `map` / `select` / `reject` / `all?` / `any?` / `partition` /
-            // `each_with_index` / `find` / `index` MIGRATED to real `.rx`
-            // bodies over `each` (Feature C, array/src/lib.rx) and resolve
+            // `each_with_index` / `find` / `index` / `reduce` / `sort_by`
+            // MIGRATED to real `.rx` bodies over `each` (or `swap`+indexed
+            // reads for `sort_by`) (Feature C, array/src/lib.rx) and resolve
             // through the builtin bridge.
-            (Ty::Array(_), "reduce") => Some(eng.ctx.fresh_type_var()),
             (Ty::Array(elem), "zip") => {
                 let other = match _args.first() {
                     Some(a) => match eng.ctx.resolve(&a.ty) {

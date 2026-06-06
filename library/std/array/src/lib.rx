@@ -262,4 +262,17 @@ class Array[T]
     end
     nil
   end
+
+  # Ruby `reduce` / `inject` — left-fold the elements into an
+  # accumulator seeded by `seed`. The closure receives the running
+  # accumulator and the current element and returns the next
+  # accumulator. Expressed over `each`; the result element type `U` is
+  # the accumulator / closure-return type.
+  def reduce[U](seed: U, f: any Fn[Fn(U, T) -> U]) -> U
+    var acc: U = seed
+    self.each do |x|
+      acc = f.(acc, x)
+    end
+    acc
+  end
 end
