@@ -394,6 +394,12 @@ fn build_one(
     if release {
         compile_args.push("--release".to_string());
     }
+    // The project's own `runtime/*.c` must link into every test binary so
+    // `lib "runtime/foo.c"` declarations in library code resolve — the same
+    // discovery `ruxen build` performs (codegen::find_runtime_sources_in_dir).
+    for c in ruxen_core::codegen::find_runtime_sources_in_dir(project_dir)? {
+        compile_args.push(format!("--runtime-c={}", c.display()));
+    }
     crate::compile::run(&compile_args).map_err(|e| format!("compile of {test_path}: {e}"))?;
     Ok(bin_path)
 }
