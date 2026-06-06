@@ -1,0 +1,6 @@
+def main
+  var s = String.from("foo")
+  s.push_str("bar")
+  puts "len=#{s.size}"
+  puts s
+end

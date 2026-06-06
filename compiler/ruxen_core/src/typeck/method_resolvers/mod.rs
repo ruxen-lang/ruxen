@@ -94,9 +94,11 @@ fn resolvers() -> &'static [MethodResolver] {
         // CANNOT be a static `.rx` return, and they MUST precede
         // `builtin_bridge` so those residuals win over the `.rx`
         // delegation for their shared heads:
-        //   * `strings` — `String` ABI-divergent `remove`, E0722-blocked
-        //     `clone`, structural-head `to_s`, mutation `push`/…, and all
-        //     `&str` methods (no `class str`).
+        //   * `strings` — the irreducible `String` surface residuals:
+        //     `remove` (Char/I32 vs C struct-pointer/I64) and the mutation
+        //     methods `push`/`push_str`/`insert`/`insert_str` (surface
+        //     `Unit` vs C `char*`). Feature E migrated the `&str`
+        //     `to_lower`/`to_upper`/`parse_uint` arms to string.rx.
         //   * `collections` — `Array`/`Set`/`Map` CLOSURE combinators
         //     (`map`/`select`/`reduce`/…, MIR-inlined), the arg-dependent
         //     `zip`/`to_h`, the E0700 `sum` check, and `get_mut`/`get_var`
@@ -237,32 +239,30 @@ mod golden {
         // delegator; the golden runs with an EMPTY symbol table (no `.rx`
         // loaded) so those would return None and are not pinned here. The
         // residual arms that stay Rust-side (strings.rs) ARE pinned:
-        // `remove` (ABI divergence) and the mutation methods
-        // `push`/`push_str`/`insert`/`insert_str` (surface `Unit` vs C
-        // `char*`). `clone` and `to_s` are NO LONGER pinned: they
-        // MIGRATED to string.rx (second wire-identical aliases of
-        // `ruxen_string_from` / `ruxen_string_to_string`, admitted now
-        // that E0722 compares wire shapes), so they resolve via the
-        // bridge and return None under the empty table. End-to-end `.rx`
-        // resolution is covered by the builtin_receiver_bridge pins + the
-        // e2e suite.
+        // `remove` (Char/I32 surface vs C struct-pointer/I64) and the
+        // mutation methods `push`/`push_str`/`insert`/`insert_str` (surface
+        // `Unit` vs C `char*` — pin `48_borrow_var` proves the Unit tail).
+        // Both are genuinely irreducible (no single `.rx` return type
+        // expresses surface + ABI). `clone`/`to_s` MIGRATED earlier (wire-
+        // identical aliases). End-to-end coverage: builtin_receiver_bridge
+        // pins + e2e (`313_string_remove`, `315_string_push`,
+        // `311_string_insert_str`, `630_string_insert_char`,
+        // `631_string_push_str`).
         for m in ["remove", "push", "push_str", "insert", "insert_str"] {
             v.push(c(Ty::String, m));
         }
 
-        // ── Ty::Str residual (shadow the bridge) ───────────────────
-        // The exact-match `&str` surfaces MIGRATED to `class String` via
-        // the bridge (`method_home_key: Ty::Str → "String"`); under the
-        // golden's EMPTY symbol table they return None and are NOT pinned.
-        // Only the genuinely-divergent residual arms in strings.rs ARE
-        // pinned: `to_lower`/`to_upper` (yield `str` not `String`) and
-        // `parse_uint` (no `class String` counterpart). `to_s` MIGRATED
-        // too (`class String` now declares it). End-to-end `.rx`
-        // resolution for the migrated surface is covered by the
-        // builtin_receiver_bridge pins + e2e.
-        for m in ["to_lower", "to_upper", "parse_uint"] {
-            v.push(c(Ty::Str, m));
-        }
+        // ── Ty::Str — fully migrated to `class String` via the bridge ──
+        // The exact-match `&str` surfaces, AND (Feature E) `to_lower`/
+        // `to_upper`/`parse_uint`, now resolve from `class String` via the
+        // bridge (`method_home_key: Ty::Str → "String"`); under the
+        // golden's EMPTY symbol table they return None, so there is NOTHING
+        // to pin here. `to_lower`/`to_upper` yield `String` (the C symbols
+        // `malloc` an owned buffer — the old `-> str` arm wrongly claimed a
+        // borrowed slice); `parse_uint` is now declared on `class String`
+        // (`def parse_uint -> Result[USize, Error]`). End-to-end coverage:
+        // `45_string_methods`, `113_string_methods_chain`,
+        // `632_str_to_lower_upper`, `633_str_parse_uint`.
 
         // ── ParseIntError / ParseFloatError migrated to .rx ────────
         // `.message` resolves from string/src/parse_{int,float}_error.rx;

@@ -10,22 +10,39 @@
 //! `ParseIntError` / `ParseFloatError` `.message` accessors likewise
 //! resolve from their `.rx` classes. Those arms were deleted.
 //!
-//! What REMAINS here (runs AHEAD of `builtin_bridge` in the pipeline):
-//!   1. Three `String` residual arms that `string.rx` cannot declare:
-//!      * `remove` — ABI divergence: true surface is `Char` (I32) but the
-//!        C symbol `ruxen_string_remove` returns `void*` (I64); a `-> Char`
-//!        `.rx` decl would derive a width contradicting the C ABI.
-//!        FOLLOW-UP bug: reconcile, then migrate.
-//!      * `clone` — aliases the SAME C symbol as `String.from`
-//!        (`ruxen_string_from`); E0722 rejects a second `.rx` alias for one
-//!        c_symbol with an instance-method shape (see lang_intrinsics doc).
-//!      * `to_s` — the structural `to_s` fallback matches only
-//!        `Ty::Class/Struct/Enum`, not the `Ty::String` primitive head.
-//!   2. `Ty::Str` (`&str`) methods — there is no `class str`. The bridge's
-//!      `method_home_key` routes `Ty::Str` → `class String`, but a few
-//!      `&str` surfaces differ (`trim -> str`) and `parse_uint` has no
-//!      String counterpart, so `&str` typing stays here as the source of
-//!      truth. Every return's width matches the shared C symbol.
+//! What REMAINS here after Feature E (String reconcile) — the two genuinely
+//! irreducible `String`-surface residuals:
+//!   * `remove` — the C symbol `ruxen_string_remove` returns a 16-byte
+//!     struct *pointer* (`void*`/I64) carrying BOTH the removed codepoint
+//!     (field 0) and the rewritten buffer (field 1); the MIR special-case
+//!     reads both fields and stores the new buffer back through the
+//!     `&mut String`. The true surface type is `Char` (I32). No single
+//!     `.rx` return type expresses both an I64-wide pointer ABI (needed so
+//!     the GetField base is not truncated) AND a `Char` surface, so this
+//!     arm stays Rust-side: the `.rx` decl is `-> Int` (ABI-faithful,
+//!     shadowed) and the resolver reports the true `Char`.
+//!   * `push`/`push_str`/`insert`/`insert_str` — these are MUTATION methods
+//!     whose MIR special-cases perform the `&mut String` deref/store dance
+//!     and return NO value (`Ok(None)`), so their true SURFACE type is
+//!     `Unit` (e.g. `def append_bang(s: &var String); s.push(?!); end`
+//!     returns nil — pin `48_borrow_var`). But the C symbols return the
+//!     fresh `char*` buffer (I64), which the deref/store dance MUST capture,
+//!     so the `.rx` decls are `-> String` (ABI-faithful). Declaring `-> nil`
+//!     would derive a void import sig, leaving the captured `new_buf`
+//!     undefined and breaking the store-back. So surface `Unit` and C
+//!     `char*` cannot collapse to one `.rx` return type: the resolver arms
+//!     report `Unit` and shadow the ABI-faithful `.rx` `-> String` decls.
+//!
+//! MIGRATED to `string.rx` (Feature E) — these arms were deleted:
+//!   * `&str.to_lower`/`to_upper` — resolve via the bridge
+//!     (`method_home_key: Ty::Str → "String"`) to `class String`'s
+//!     `-> String`. The C symbols `malloc` a fresh owned buffer, so
+//!     `String` is the CORRECT surface (the old `-> str` arm wrongly
+//!     claimed a borrowed slice). These use the normal call path (a real
+//!     dest), so unlike the mutation methods there is no Unit conflict.
+//!   * `&str.parse_uint` — now declared on `class String`
+//!     (`def parse_uint as "ruxen_str_parse_uint" -> Result[USize, Error]`)
+//!     and resolves via the bridge.
 
 use crate::hir::types::Ty;
 
@@ -34,61 +51,29 @@ use super::resolver::MethodResolver;
 pub(super) fn resolvers() -> Vec<MethodResolver> {
     vec![MethodResolver {
         matches: |ty, method| match ty {
-            // Residual `String` arms that shadow string.rx — they run
-            // AHEAD of `builtin_bridge` so they win for these names.
+            // The residual `String` arms — shadow string.rx (whose decls
+            // are ABI-faithful) so the true SURFACE type wins. Run AHEAD of
+            // `builtin_bridge`. See the module header for why neither can
+            // collapse to a single `.rx` return type.
             Ty::String => matches!(
                 method,
                 "remove" | "push" | "push_str" | "insert" | "insert_str"
             ),
-            // `&str` routes to `class String` via the bridge
-            // (`method_home_key: Ty::Str → "String"`); only the surfaces
-            // that genuinely DIFFER from `class String`'s declared return
-            // stay here, running AHEAD of the bridge to shadow it:
-            //   * `to_lower`/`to_upper` — `&str` yields `str`, the `.rx`
-            //     decl yields `String`.
-            //   * `parse_uint` — no `class String` counterpart.
-            Ty::Str => matches!(method, "to_lower" | "to_upper" | "parse_uint"),
             _ => false,
         },
         resolve: |_eng, ty, method, _args, _span| match (ty, method) {
-            // ── String residual arms (shadow string.rx) ──────────────
+            // `remove`'s true surface is `Char` (the removed codepoint);
+            // the C symbol returns a 16-byte struct *pointer* (I64) and the
+            // `.rx` decl is `-> Int` (ABI-faithful, shadowed here).
             (Ty::String, "remove") => Some(Ty::Char),
-            // `clone` and `to_s` MIGRATED to string.rx: with E0722
-            // relaxed to a wire-level compare, their second aliases of
-            // `ruxen_string_from` / `ruxen_string_to_string` (wire-
-            // identical to `from` / `to_string`) are admitted and resolve
-            // via the bridge.
-            // Mutation methods: the C symbols return `char*` (the new
-            // buffer, I64), so the `.rx` decl is `-> String` (ABI-
-            // faithful) — but the SURFACE type is mutation-style `Unit`
-            // (the value is discarded; `def f(s: &var String); s.push(c);
-            // end` returns nil). Declaring `-> nil` in `.rx` would derive a
-            // void return contradicting the C `char*`, so these stay Rust
-            // residuals returning `Unit`, shadowing the ABI-faithful `.rx`
-            // decl. FOLLOW-UP: reconcile surface-vs-C return, then migrate.
+            // Mutation methods: the MIR special-cases drive the deref/store
+            // dance and return NO value, so the SURFACE is `Unit` (pin
+            // `48_borrow_var`). The `.rx` decls are `-> String` (ABI-
+            // faithful, capturing the fresh C `char*` buffer), shadowed here.
             (Ty::String, "push")
             | (Ty::String, "push_str")
             | (Ty::String, "insert")
             | (Ty::String, "insert_str") => Some(Ty::Unit),
-
-            // ── Ty::Str (&str) RESIDUAL arms — shadow the bridge ──────
-            // The exact-match `&str` surfaces (size/empty?/trim/
-            // trim_start/trim_end/chars/lines/split/splitn/bytes/as_str/
-            // include?/starts_with/ends_with/find/replace/to_string/
-            // parse_int/parse_float) MIGRATED to `class String` via the
-            // bridge (`method_home_key: Ty::Str → "String"`); their
-            // returns are ABI-identical to the shared `ruxen_string_*`
-            // symbols. Only the genuinely-divergent surfaces stay:
-            //   * `to_lower`/`to_upper` — `&str` yields `str` (the C
-            //     symbol returns a borrowed slice into the source); the
-            //     `.rx` `class String` decl yields an owned `String`.
-            //   * `parse_uint` — no `class String` counterpart symbol.
-            // (`to_s` MIGRATED: `class String` now declares `to_s` as a
-            // wire-identical alias of `ruxen_string_to_string`, so
-            // `&str.to_s` resolves through the bridge.)
-            (Ty::Str, "to_lower") => Some(Ty::Str),
-            (Ty::Str, "to_upper") => Some(Ty::Str),
-            (Ty::Str, "parse_uint") => Some(Ty::Result(Box::new(Ty::USize), Box::new(Ty::Error))),
             // Within-namespace fallthrough (not a cross-cutting catch-all).
             _ => None,
         },

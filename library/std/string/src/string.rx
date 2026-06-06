@@ -44,17 +44,27 @@ class String
     def into_bytes as "ruxen_string_into_bytes" -> Array[UInt8]
     def parse_int as "ruxen_string_parse_int" -> Result[Int, ParseIntError]
     def parse_float as "ruxen_string_parse_float" -> Result[Float, ParseFloatError]
+    # `parse_uint` shares the `&str` C symbol `ruxen_str_parse_uint` (a
+    # tagged Result-like `void*`, I64). Homed here so BOTH `String.parse_uint`
+    # and (via `method_home_key: Ty::Str → "String"`) `&str.parse_uint`
+    # resolve through the bridge, retiring the strings.rs residual arm.
+    def parse_uint as "ruxen_str_parse_uint" -> Result[USize, Error]
     def push_str as "ruxen_string_push_str"(other: &String) -> String
     def push as "ruxen_string_push"(c: Char) -> String
     def clear as "ruxen_string_clear"
     def truncate as "ruxen_string_truncate"(n: Int)
     def insert as "ruxen_string_insert"(i: Int, codepoint: Int) -> String
     def insert_str as "ruxen_string_insert_str"(i: Int, part: &String) -> String
-    # `remove`: true surface type is Char (I32) but the C symbol returns
-    # void* (I64); a `-> Char` decl would derive a width contradicting the
-    # C ABI, so it stays a Rust resolver residual (strings.rs) and is
-    # declared here as `Int` (ABI-matching, shadowed by the resolver arm).
-    # FOLLOW-UP bug: reconcile the C return vs surface type, then migrate.
+    # `remove`: a genuinely-irreducible residual (Feature E). The C symbol
+    # returns a 16-byte struct *pointer* (void*/I64) carrying both the
+    # removed codepoint and the rewritten buffer; the MIR special-case reads
+    # both fields. The true surface type is Char (I32). No single return type
+    # expresses both an I64-wide pointer ABI and a Char surface, so this
+    # stays declared `-> Int` (ABI-faithful) and is shadowed by the
+    # strings.rs resolver arm that reports the true `Char`. The mutation
+    # methods push/push_str/insert/insert_str above are residuals for the
+    # same reason (surface `Unit` vs C `char*`). See the strings.rs module
+    # header for the full rationale.
     def remove as "ruxen_string_remove"(i: Int) -> Int
   end
 end
