@@ -2,7 +2,11 @@
 ## All non-Int-shaped returns lifted: `.new` -> SharedSync[T] with T
 ## inferred from the constructor's first arg (B1+B3); `.clone` ->
 ## SharedSync[T] (B5: Self in return); `.get` -> T (B4).
-class SharedSync[T]
+## `SharedSync[T: Send]` — the payload must be `Send` to be shared across
+## threads. Feature B (generic trait-bound enforcement) checks this bound
+## at the `SharedSync.new(value)` construction site (E1102), replacing the
+## old hardcoded `concurrency.rs` Send check.
+class SharedSync[T: Send]
   include Send
 
   include Sync

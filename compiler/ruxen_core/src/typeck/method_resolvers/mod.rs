@@ -465,8 +465,18 @@ mod golden {
         // ── Effectful-arm DIAGNOSTIC pins ──────────────────────────
         // These exercise the early-return + pushed-diagnostic branches
         // of the effectful arms, so the oracle captures the error code
-        // AND the `Some(Ty::Error)` return. With an empty symbol table an
-        // unknown class is non-Send, so `Mutex.new(NotSend)` fires E1101.
+        // AND the `Some(Ty::Error)` return.
+        //
+        // Mutex/SharedSync/Arc `new(NotSend)` now record `diag=[]` here:
+        // the E1101/E1102 payload-Send check MIGRATED (Feature B) to the
+        // `.rx` bounds `class Mutex[T: Send]` / `class SharedSync[T: Send]`
+        // and fires from the CONSTRUCTION-SEAM check (`check_constructor_
+        // generic_bounds`, typeck/infer/expr.rs), which needs the `.rx`
+        // class definition loaded. The golden runs with an EMPTY symbol
+        // table (no `.rx`), so the bound isn't visible and no diagnostic
+        // fires here — the resolver arm only TYPES the constructor now.
+        // End-to-end E1101/E1102 enforcement is pinned by the
+        // `concurrency_negative.rs` integration tests (which load stdlib).
         v.push(c_args(
             class("Mutex", vec![]),
             "new",

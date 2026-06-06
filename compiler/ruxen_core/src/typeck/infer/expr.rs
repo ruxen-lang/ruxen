@@ -1240,14 +1240,61 @@ impl<'a> InferenceEngine<'a> {
         if let Ty::Class { name, generic_args } = derefed {
             if generic_args.is_empty() {
                 if let Some(inferred) = self.infer_class_generics(name, args) {
-                    return Ty::Class {
+                    let result = Ty::Class {
                         name: name.clone(),
                         generic_args: inferred,
                     };
+                    self.check_constructor_generic_bounds(&result, span);
+                    return result;
                 }
             }
         }
-        self.resolve_method_call(derefed, method_name, args, span)
+        let result = self.resolve_method_call(derefed, method_name, args, span);
+        self.check_constructor_generic_bounds(&result, span);
+        result
+    }
+
+    /// Feature B enforcement at the construction seam: when a `class
+    /// C[T: Bound]` is instantiated as `C[Concrete]`, check each declared
+    /// generic-param bound against the corresponding concrete arg. The
+    /// owner is the class itself, so `class Mutex[T: Send]` reports E1101
+    /// and `Arc`/`SharedSync` report E1102 via the preserved-code bridge.
+    /// Reads the bounds from the class definition — no hardcoded type
+    /// names. Only bounded params fire (zero-regression).
+    fn check_constructor_generic_bounds(&mut self, result: &Ty, span: &Span) {
+        let Ty::Class { name, generic_args } = result else {
+            return;
+        };
+        if generic_args.is_empty() {
+            return;
+        }
+        let Some(generic_params) = self.class_generic_params(name) else {
+            return;
+        };
+        // Map declared param names positionally onto the concrete args.
+        let mut bindings: std::collections::HashMap<String, Ty> = std::collections::HashMap::new();
+        for (gp, arg) in generic_params.iter().zip(generic_args.iter()) {
+            bindings.insert(gp.name.clone(), arg.clone());
+        }
+        let owner = name.clone();
+        self.check_generic_param_bounds(&generic_params, &bindings, Some(&owner), span);
+    }
+
+    /// The declared generic params (with their bounds) of a class by name,
+    /// or `None` if no such class is known. Used by the constructor-seam
+    /// bound check.
+    fn class_generic_params(
+        &self,
+        class_name: &str,
+    ) -> Option<Vec<crate::resolve::symbols::GenericParamInfo>> {
+        for def in self.symbols.iter() {
+            if def.name == class_name {
+                if let DefKind::Class { info } = &def.kind {
+                    return Some(info.generic_params.clone());
+                }
+            }
+        }
+        None
     }
 
     /// Return-typing for a declared (class-selected) method: unify each

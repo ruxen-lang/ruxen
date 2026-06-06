@@ -147,29 +147,16 @@ fn resolve(
         }
         (Ty::Class { name, .. }, "message") if name == "ThreadPanic" => Some(Ty::String),
         (Ty::Class { name, .. }, "new") if name == "Mutex" => {
+            // The payload-Send check (E1101) MIGRATED to the `.rx` bound
+            // `class Mutex[T: Send]` (sync/src/mutex.rx) — Feature B's
+            // construction-seam enforcement (`check_constructor_generic_
+            // bounds` in typeck/infer/expr.rs) reads that bound and emits
+            // E1101 via the preserved-code bridge. This arm only types the
+            // constructor now (the payload type into `Mutex[inner]`).
             let inner = args
                 .first()
                 .map(|arg| arg.ty.clone())
                 .unwrap_or_else(|| eng.ctx.fresh_type_var());
-            // Spec B3 (send_sync_enforcement.spec.md) — Mutex.new
-            // requires the payload to be Send. `Mutex[T]` itself is
-            // declared without a `T: Send` bound (sync.rx line 118)
-            // so the regular bound-checker can't catch this; the check
-            // fires at the construction site.
-            let inner_resolved = eng.ctx.resolve(&inner);
-            if let Some(arg) = args.first() {
-                if !inner_resolved.is_send_with(eng.symbols) {
-                    eng.diagnostics.push(Diagnostic::error_with_code(
-                        format!(
-                            "cannot construct `Mutex[{}]` — payload type `{}` is not `Send`. \
-                             Add `include Send` to the class if it is safe to share across threads.",
-                            inner_resolved, inner_resolved
-                        ),
-                        arg.span.clone(),
-                        "E1101",
-                    ));
-                }
-            }
             Some(InferenceEngine::class_ty("Mutex", vec![inner]))
         }
         (Ty::Class { name, generic_args }, "lock") if name == "Mutex" => {
@@ -211,30 +198,17 @@ fn resolve(
             Some(Ty::RefMut(Box::new(inner)))
         }
         (Ty::Class { name, .. }, "new") if name == "Arc" || name == "SharedSync" => {
+            // The payload-Send check (E1102) MIGRATED to the `.rx` bound
+            // `class SharedSync[T: Send]` (sync/src/shared_sync.rx) —
+            // Feature B's construction-seam enforcement reads that bound
+            // and emits E1102 via the preserved-code bridge. `Arc` is the
+            // internal back-compat alias for the same class; the owner the
+            // bridge sees is whichever name the receiver carries. This arm
+            // only types the constructor now.
             let inner = args
                 .first()
                 .map(|arg| arg.ty.clone())
                 .unwrap_or_else(|| eng.ctx.fresh_type_var());
-            // Spec B4 (send_sync_enforcement.spec.md) — SharedSync.new
-            // requires the payload to be Send (the wrapper itself
-            // doesn't permit mutable sharing, so Sync isn't required of
-            // T; only the cross-thread move). `SharedSync[T]` is
-            // declared without a `T: Send` bound (sync.rx line 142)
-            // so the regular bound-checker can't catch this.
-            let inner_resolved = eng.ctx.resolve(&inner);
-            if let Some(arg) = args.first() {
-                if !inner_resolved.is_send_with(eng.symbols) {
-                    eng.diagnostics.push(Diagnostic::error_with_code(
-                        format!(
-                            "cannot construct `{}[{}]` — payload type `{}` is not `Send`. \
-                             Add `include Send` to the class if it is safe to share across threads.",
-                            name, inner_resolved, inner_resolved
-                        ),
-                        arg.span.clone(),
-                        "E1102",
-                    ));
-                }
-            }
             Some(InferenceEngine::class_ty(name, vec![inner]))
         }
         (Ty::Class { name, .. }, "clone") if name == "Arc" || name == "SharedSync" => {
