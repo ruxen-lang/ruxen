@@ -360,7 +360,16 @@ impl<'a> InferenceEngine<'a> {
             .traits
             .lookup_method_with_args(ty, method, args, self.symbols)?;
         let raw = self.wrap_async_return(&sig);
-        Some(self.substitute_generics_in_return(ty, &raw))
+        // Receiver-generic substitution (`Array[Int].pop` → `Option[Int]`)
+        // first, then METHOD-LEVEL generic harvesting from the args. The
+        // latter is a no-op for every stdlib method declared today (none
+        // carry their own `generic_params`), but it is the load-bearing
+        // step for the `.rx` closure combinators: `map[U](f: any Fn[Fn(T)
+        // -> U]) -> Array[U]` binds `U` from the closure argument's return
+        // type so the call expression's type is `Array[<closure-ret>]`
+        // rather than the un-substituted `Array[U]`.
+        let receiver_subst = self.substitute_generics_in_return(ty, &raw);
+        Some(self.harvest_and_subst_generics(&sig, args, &receiver_subst))
     }
 
     pub(super) fn infer_index_ty(&self, obj_ty: &Ty) -> Ty {
@@ -1040,8 +1049,88 @@ impl<'a> InferenceEngine<'a> {
                     }
                 }
             }
+            // Closure-typed formal parameter — the load-bearing arm for
+            // the `.rx` closure combinators (`map[U](f: any Fn[Fn(T) ->
+            // U])`). The function's own generic `U` lives in the closure's
+            // RETURN position, so it can only be bound from the actual
+            // closure argument's return type. Match the formal's params
+            // and ret against the actual's structurally; the `TypeParam`
+            // arm above binds `U` once it reaches the ret leaf.
+            Ty::Fn {
+                params: fparams,
+                ret: fret,
+            }
+            | Ty::FnMut {
+                params: fparams,
+                ret: fret,
+            }
+            | Ty::FnOnce {
+                params: fparams,
+                ret: fret,
+            } => {
+                if let Ty::Fn {
+                    params: aparams,
+                    ret: aret,
+                }
+                | Ty::FnMut {
+                    params: aparams,
+                    ret: aret,
+                }
+                | Ty::FnOnce {
+                    params: aparams,
+                    ret: aret,
+                } = actual
+                {
+                    if fparams.len() == aparams.len() {
+                        for (f, a) in fparams.iter().zip(aparams.iter()) {
+                            Self::bind_type_params_from_args(param_names, f, a, out);
+                        }
+                    }
+                    Self::bind_type_params_from_args(param_names, fret, aret, out);
+                }
+            }
+            // `any Fn[Fn(T) -> U]` / `some Fn[...]` formal — the surface
+            // spelling the `.rx` combinators use. The underlying
+            // `Ty::Fn { params, ret }` rides in the `Fn`/`FnMut`/`FnOnce`
+            // bound's first generic arg (mirrors the `call` dispatch peel
+            // at the top of `resolve_method_call`). Peel the bound and
+            // recurse so the inner `Ty::Fn` arm above binds `U`. The
+            // actual closure arg may itself be a bare `Ty::Fn` (a closure
+            // literal) or an identically-wrapped mixin (a forwarded dyn
+            // closure value) — both are handled by recursing with the
+            // peeled formal against the un-peeled actual (the inner arm
+            // peels the actual's wrapper too if present).
+            Ty::AnyMixin(bounds) | Ty::SomeMixin(bounds) => {
+                for bound in bounds {
+                    if matches!(bound.name.as_str(), "Fn" | "FnMut" | "FnOnce") {
+                        if let Some(inner) = bound.generic_args.first() {
+                            let actual_inner = Self::peel_fn_mixin(actual);
+                            Self::bind_type_params_from_args(param_names, inner, actual_inner, out);
+                        }
+                    }
+                }
+            }
             _ => {}
         }
+    }
+
+    /// Peel an `any Fn[Fn(...)]` / `some Fn[...]` wrapper down to the
+    /// underlying `Ty::Fn { params, ret }` it carries. A bare `Ty::Fn`
+    /// (closure literal) is returned unchanged. Used by
+    /// `bind_type_params_from_args` so a closure ARGUMENT that is itself
+    /// dyn-erased (a forwarded `any Fn` value) still exposes its
+    /// `params`/`ret` for generic-param harvesting.
+    fn peel_fn_mixin(ty: &Ty) -> &Ty {
+        if let Ty::AnyMixin(bounds) | Ty::SomeMixin(bounds) = ty {
+            for bound in bounds {
+                if matches!(bound.name.as_str(), "Fn" | "FnMut" | "FnOnce") {
+                    if let Some(inner) = bound.generic_args.first() {
+                        return inner;
+                    }
+                }
+            }
+        }
+        ty
     }
 
     /// Harvest `{generic_param → concrete}` bindings from (args × formal
