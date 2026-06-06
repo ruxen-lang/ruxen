@@ -21,27 +21,37 @@ fn migrated_vec_combinators_fall_through_runtime_table() {
     // sample of the migrated surface; a `ruxen_*` mapping
     // reappearing here for any of them would silently mask the
     // alias path.
+    // The CANONICAL surface spelling is `Array` (ruby-naming §3.11): the
+    // instance-method call-site mangle types the `Ty::Array` receiver via
+    // `type_name_from_ty`, which renders `Array[Int]` (the `Ty::Array`
+    // Display). The legacy `Vec` spelling appears ONLY at the final
+    // runtime-symbol step (the `Array → Vec` map in method_call.rs /
+    // field_access.rs constructor paths) and as a defensive acceptor in
+    // the lang_intrinsics `starts_with("Vec")` matcher. These pins use
+    // the uniform `Array[Int]_*` form the live mangle actually emits;
+    // they all fall through to the unmapped name (the MIR ffi_alias_map
+    // carries the generic-stripped `Array_<m>` key and rewrites earlier).
     for m in [
-        "Vec[Int]_sum",
-        "Vec[Int]_count",
-        "Vec[Int]_reverse",
-        "Vec[Int]_first",
-        "Vec[Int]_last",
-        "Vec[Int]_push",
-        "Vec[Int]_pop",
-        "Vec[Int]_len",
-        "Vec[Int]_is_empty",
-        "Vec[Int]_get",
-        "Vec[Int]_clear",
-        "Vec[Int]_extend",
+        "Array[Int]_sum",
+        "Array[Int]_count",
+        "Array[Int]_reverse",
+        "Array[Int]_first",
+        "Array[Int]_last",
+        "Array[Int]_push",
+        "Array[Int]_pop",
+        "Array[Int]_len",
+        "Array[Int]_is_empty",
+        "Array[Int]_get",
+        "Array[Int]_clear",
+        "Array[Int]_extend",
         "Array[Int]_clone",
         // `get_mut` / `get_var` MIGRATED to array.rx now that E0722
         // compares post-self-prepend WIRE shapes (`&var T` is a pointer,
         // wire-identical to `get`'s `&T`), so their `ruxen_vec_get_opt`
         // aliases are admitted alongside `get`. They fall through
         // runtime_table like the rest of the migrated surface.
-        "Vec[Int]_get_mut",
-        "Vec[Int]_get_var",
+        "Array[Int]_get_mut",
+        "Array[Int]_get_var",
     ] {
         assert_eq!(
             runtime_name(m).unwrap(),
