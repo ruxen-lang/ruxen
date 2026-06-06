@@ -7,6 +7,21 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+### Fixed
+- Struct inline-method bodies are now type-checked. Previously `typeck::infer`
+  skipped them (`HirItem::Struct(_)`), so a `self.<field>` read inside a struct
+  `def` kept `field_idx = 0` and an unresolved (`Infer`) result type — codegen
+  then loaded the FIRST field as a raw `i64` regardless of which field was
+  named. Reading a non-first integer field returned the wrong value, `UInt8`
+  fields all returned field 0's byte, and `Float`/`Float32` field reads failed
+  Cranelift verification (`i64` result vs `f32`/`f64` signature). Enum inline
+  methods (same `§3.4a` surface) are now inferred and validated alongside
+  structs.
+- Derived `hash_code` for a struct with `Float`/`Float32` fields no longer
+  emits invalid IR (`bxor.i64` fed an `f64`). Float fields are now
+  bit-reinterpreted to a same-width integer (new `MirInst::FloatToBits`) before
+  the FNV mix.
+
 ## [0.1.0] - 2026-05-30
 
 ### Fixed
