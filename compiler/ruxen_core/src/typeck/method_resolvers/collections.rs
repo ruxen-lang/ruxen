@@ -49,20 +49,11 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
             // MIGRATED to real `.rx` bodies over `each` (or `swap`+indexed
             // reads for `sort_by`) (Feature C, array/src/lib.rx) and resolve
             // through the builtin bridge.
-            (Ty::Array(elem), "zip") => {
-                let other = match _args.first() {
-                    Some(a) => match eng.ctx.resolve(&a.ty) {
-                        Ty::Array(e) => *e,
-                        Ty::Ref(inner) | Ty::RefMut(inner) => match *inner {
-                            Ty::Array(e) => *e,
-                            o => o,
-                        },
-                        o => o,
-                    },
-                    None => eng.ctx.fresh_type_var(),
-                };
-                Some(Ty::Array(Box::new(Ty::Tuple(vec![*elem.clone(), other]))))
-            }
+            // `zip` MIGRATED to a generic `.rx` decl
+            // (`zip[U](other: Array[U]) -> Array[(T, U)]`) that resolves
+            // through the bridge; the `ruxen_vec_zip` FFI alias still emits
+            // the real call. The result element `(T, U)` is now expressible
+            // as a static declared return, so no resolver arm is needed.
             // `pairs.to_h` builds a Map[K, V] from an Array of (K, V) tuples
             // — the K/V come from the receiver's tuple element.
             (Ty::Array(elem), "to_h") => match elem.as_ref() {

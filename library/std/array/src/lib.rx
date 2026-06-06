@@ -104,7 +104,12 @@ class Array[T]
     #    user-visible return type. See header.
     def sum as "ruxen_vec_sum" -> Int
     def each as "ruxen_vec_each" -> Int
-    def zip as "ruxen_vec_zip"(other: Int) -> Int
+    # `zip` pairs each element with the corresponding element of `other`,
+    # truncating to the shorter length. The result element type `(T, U)`
+    # is now expressed directly as a method-level generic so it resolves
+    # through the bridge; the `ruxen_vec_zip` C symbol still does the
+    # work (FFI alias).
+    def zip[U] as "ruxen_vec_zip"(other: Array[U]) -> Array[(T, U)]
     def to_h as "ruxen_hash_from_iter" -> Int
   end
 

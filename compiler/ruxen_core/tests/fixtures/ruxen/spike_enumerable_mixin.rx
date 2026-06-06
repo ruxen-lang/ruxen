@@ -1,0 +1,50 @@
+## SPIKE — does a generic mixin default-method body compose with
+## method-level closure-return inference through `include`?
+##
+## `Enumerable[T]` defines `map[U]` ONCE over a required `each`. `Box[T]`
+## provides `each` and `include Enumerable[T]`. We check that
+## `box.map { |x| x.to_s }` types as `Array[String]` and runs.
+mixin Enumerable[T]
+  def each(f: any Fn[Fn(T) -> nil]) -> nil
+
+  def map[U](f: any Fn[Fn(T) -> U]) -> Array[U]
+    var out: Array[U] = Array.new
+    self.each do |x| out.push(f.(x)) end
+    out
+  end
+end
+
+class Box[T]
+  items: Array[T]
+
+  def init(@items: Array[T])
+  end
+
+  include Enumerable[T]
+
+  def each(f: any Fn[Fn(T) -> nil]) -> nil
+    let data: Array[T] = self.items
+    var i: Int = 0
+    var n: Int = data.size as Int
+    while i < n
+      f.(data[i])
+      i = i + 1
+    end
+    nil
+  end
+end
+
+def main
+  var xs: Array[Int] = Array.new
+  xs.push(1)
+  xs.push(2)
+  xs.push(3)
+  let b = Box.new(xs)
+  let strs: Array[String] = b.map do |x| x.to_s end
+  var i: Int = 0
+  var n: Int = strs.size as Int
+  while i < n
+    puts "#{strs[i]}"
+    i = i + 1
+  end
+end

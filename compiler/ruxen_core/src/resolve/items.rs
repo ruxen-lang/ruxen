@@ -716,6 +716,22 @@ impl Resolver {
 
         self.scopes.push(ScopeKind::Trait);
 
+        // Register the mixin's own generic type parameters in scope so they
+        // resolve inside required-method signatures and default-method bodies
+        // (e.g. `mixin Enumerable[T]` referencing `T` in `def each(f: Fn(T))`).
+        // Mirrors the class/struct/enum generic-param registration.
+        for gp in &generic_params {
+            let gp_def = self.symbols.define(
+                gp.name.clone(),
+                DefKind::TypeParam {
+                    bounds: gp.bounds.clone(),
+                },
+                Visibility::Private,
+                gp.span.clone(),
+            );
+            self.scopes.insert_type(gp.name.clone(), gp_def);
+        }
+
         // Register Self as a type alias pointing to a TypeParam with this trait as bound
         let self_ty = Ty::TypeParam {
             name: "Self".to_string(),

@@ -23,13 +23,12 @@ fn unknown_inferred_type_method_is_rejected() {
 fn unimplemented_vec_combinators_are_rejected() {
     // `sum` and `count` now resolve to `ruxen_vec_sum`/`ruxen_vec_count`
     // — see `implemented_vec_combinators_resolve`. `map` / `select` /
-    // `reject` / `all?` / `any?` / `partition` MIGRATED to real `.rx`
-    // bodies (Feature C) and now PASS THROUGH as `Array_<m>` MIR
-    // functions — see `migrated_vec_combinators_forward`. The list here
-    // is limited to combinators that still have no MIR inliner and no
-    // runtime symbol (`reduce`/`find`/`index` are MIR-inlined; `collect`
-    // is unimplemented).
-    for m in ["Vec[Int]_reduce", "Vec[Int]_collect"] {
+    // `reject` / `all?` / `any?` / `partition` / `reduce` MIGRATED to
+    // real `.rx` bodies (Feature C) and now PASS THROUGH as `Array_<m>`
+    // MIR functions — see `migrated_vec_combinators_forward`. The list
+    // here is limited to combinators that still have no MIR inliner and
+    // no runtime symbol (`collect` is unimplemented).
+    for m in ["Vec[Int]_collect"] {
         assert!(
             runtime_name(m).is_err(),
             "expected `{m}` to be rejected (was {:?})",
@@ -51,6 +50,7 @@ fn migrated_vec_combinators_forward() {
         "Array_all?",
         "Array_any?",
         "Array_partition",
+        "Array_reduce",
     ] {
         assert_eq!(
             runtime_name(m).unwrap(),
