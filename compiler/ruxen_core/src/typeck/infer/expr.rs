@@ -459,7 +459,7 @@ impl<'a> InferenceEngine<'a> {
                 let (_, derefed) = auto_deref(&obj_ty, self.ctx);
                 let selected_method = match &derefed {
                     Ty::Class { name, .. } => self
-                        .select_class_method(name, method_name, args)
+                        .select_class_method(name, method_name, args, block.is_some())
                         .inspect(|selected| {
                             *method = *selected;
                         }),

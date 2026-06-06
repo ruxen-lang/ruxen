@@ -487,14 +487,26 @@ impl<'a> InferenceEngine<'a> {
         argc >= required && argc <= signature.params.len()
     }
 
-    fn method_accepts_args(&self, method_id: DefId, args: &[HirExpr]) -> bool {
+    /// Effective argument count for method selection: the positional
+    /// `args` plus any trailing `do…end` block, which satisfies the
+    /// method's final (closure) parameter slot. A call like
+    /// `b.probe do |x| … end` parses the block separately from `args`,
+    /// so without this the closure parameter is invisible to arity
+    /// selection and the method is rejected — degrading the call's
+    /// return type to a fresh inference var (`Infer`). See
+    /// `tests/release-e2e/cases/100_closure_method_heap_return.rx`.
+    pub(super) fn effective_argc(args: &[HirExpr], has_block: bool) -> usize {
+        args.len() + usize::from(has_block)
+    }
+
+    fn method_accepts_args(&self, method_id: DefId, args: &[HirExpr], has_block: bool) -> bool {
         let Some(def) = self.symbols.get(method_id) else {
             return false;
         };
         let DefKind::Method { signature, .. } = &def.kind else {
             return false;
         };
-        if !self.method_accepts_arg_count(method_id, args.len()) {
+        if !self.method_accepts_arg_count(method_id, Self::effective_argc(args, has_block)) {
             return false;
         }
         args.iter()
@@ -556,17 +568,19 @@ impl<'a> InferenceEngine<'a> {
         &self,
         candidates: &[DefId],
         args: &[HirExpr],
+        has_block: bool,
     ) -> Option<DefId> {
+        let effective_argc = Self::effective_argc(args, has_block);
         candidates
             .iter()
             .copied()
-            .filter(|candidate| self.method_accepts_args(*candidate, args))
+            .filter(|candidate| self.method_accepts_args(*candidate, args, has_block))
             .find(|candidate| {
                 self.symbols
                     .get(*candidate)
                     .and_then(|def| match &def.kind {
                         DefKind::Method { signature, .. } => {
-                            Some(signature.params.len() == args.len())
+                            Some(signature.params.len() == effective_argc)
                         }
                         _ => None,
                     })
@@ -576,7 +590,7 @@ impl<'a> InferenceEngine<'a> {
                 candidates
                     .iter()
                     .copied()
-                    .find(|candidate| self.method_accepts_args(*candidate, args))
+                    .find(|candidate| self.method_accepts_args(*candidate, args, has_block))
             })
     }
 
@@ -584,11 +598,13 @@ impl<'a> InferenceEngine<'a> {
         &self,
         candidates: &[DefId],
         args: &[HirExpr],
+        has_block: bool,
     ) -> Option<DefId> {
+        let effective_argc = Self::effective_argc(args, has_block);
         candidates
             .iter()
             .copied()
-            .find(|candidate| self.method_accepts_arg_count(*candidate, args.len()))
+            .find(|candidate| self.method_accepts_arg_count(*candidate, effective_argc))
     }
 
     pub(super) fn select_class_method(
@@ -596,6 +612,7 @@ impl<'a> InferenceEngine<'a> {
         type_name: &str,
         method_name: &str,
         args: &[HirExpr],
+        has_block: bool,
     ) -> Option<DefId> {
         // First walk the inheritance chain looking for a candidate whose
         // parameter TYPES accept the call args. This prevents a child's
@@ -603,8 +620,12 @@ impl<'a> InferenceEngine<'a> {
         // an inherited overload that actually matches. Only after no
         // ancestor has a strict match do we fall back to arity-only
         // matching, again walking the chain from this class up.
-        self.select_class_method_strict(type_name, method_name, args)
-            .or_else(|| self.select_class_method_arity(type_name, method_name, args))
+        //
+        // `has_block` carries whether the call site supplied a trailing
+        // `do…end` block; it occupies the method's final (closure)
+        // parameter slot and is counted toward arity by `effective_argc`.
+        self.select_class_method_strict(type_name, method_name, args, has_block)
+            .or_else(|| self.select_class_method_arity(type_name, method_name, args, has_block))
     }
 
     fn select_class_method_strict(
@@ -612,13 +633,14 @@ impl<'a> InferenceEngine<'a> {
         type_name: &str,
         method_name: &str,
         args: &[HirExpr],
+        has_block: bool,
     ) -> Option<DefId> {
         let candidates = self.class_method_candidates(type_name, method_name);
-        if let Some(selected) = self.select_method_candidate_strict(&candidates, args) {
+        if let Some(selected) = self.select_method_candidate_strict(&candidates, args, has_block) {
             return Some(selected);
         }
         let parent = self.parent_class_name(type_name)?;
-        self.select_class_method_strict(&parent, method_name, args)
+        self.select_class_method_strict(&parent, method_name, args, has_block)
     }
 
     fn select_class_method_arity(
@@ -626,13 +648,14 @@ impl<'a> InferenceEngine<'a> {
         type_name: &str,
         method_name: &str,
         args: &[HirExpr],
+        has_block: bool,
     ) -> Option<DefId> {
         let candidates = self.class_method_candidates(type_name, method_name);
-        if let Some(selected) = self.select_method_candidate_arity(&candidates, args) {
+        if let Some(selected) = self.select_method_candidate_arity(&candidates, args, has_block) {
             return Some(selected);
         }
         let parent = self.parent_class_name(type_name)?;
-        self.select_class_method_arity(&parent, method_name, args)
+        self.select_class_method_arity(&parent, method_name, args, has_block)
     }
 
     fn default_ast_to_hir(&mut self, default: &ast::Expr) -> Option<HirExpr> {

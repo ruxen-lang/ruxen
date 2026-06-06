@@ -1,0 +1,26 @@
+## Regression: an instance method that takes a closure/any-Fn parameter
+## AND returns a heap value (Array) must round-trip the return value across
+## the call boundary intact.
+##
+## Root cause (fixed): method selection counted only positional args and
+## ignored a trailing `do…end` block satisfying the method's closure
+## parameter, so the call's return type degraded to a fresh inference var
+## (`Infer`) instead of `Array[Int]`. With the return un-typed as an Array,
+## the MIR index lowering bailed and `arr[0]` read a stale buffer pointer.
+class Box
+  v: Int
+  def init(v: Int)
+    self.v = v
+  end
+  def probe(f: any Fn[Fn(Int) -> Int]) -> Array[Int]
+    var out: Array[Int] = Array.new
+    out.push(f.(3))
+    out
+  end
+end
+
+def main
+  let b = Box.new(0)
+  let arr = b.probe do |x| x + 100 end
+  puts "#{arr[0]}"
+end
