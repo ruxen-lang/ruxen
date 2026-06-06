@@ -376,6 +376,20 @@ impl<'a> InferenceEngine<'a> {
         match obj_ty {
             Ty::Array(elem) => *elem.clone(),
             Ty::FixedArray(elem, _) => *elem.clone(),
+            // `self[i]` INSIDE a migrated `class Array[T]` stdlib method
+            // body: `self` is typed as the FFI-shell `Ty::Class { name:
+            // "Array" | "Vec", generic_args: [T] }`, not `Ty::Array`. Yield
+            // the first generic arg as the element type so `.rx` combinator
+            // bodies can index their receiver (mirrors the lower.rs Index
+            // dispatch's `is_indexable_vec_ty`).
+            Ty::Class { name, generic_args }
+                if {
+                    let base = name.split('[').next().unwrap_or(name);
+                    matches!(base, "Vec" | "Array")
+                } =>
+            {
+                generic_args.first().cloned().unwrap_or(Ty::Error)
+            }
             // `m[&k]` panics on missing keys (mirrors Rust's `Index for
             // HashMap`); the runtime helper `ruxen_hash_index` returns the
             // raw value slot rather than an Option, so the surface type is

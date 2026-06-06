@@ -288,16 +288,18 @@ mod golden {
         // `.rx` resolution is covered by the builtin_receiver_bridge pins
         // + the e2e suite.
         // `map`/`select`/`reject`/`all?`/`any?`/`partition`/`each_with_index`/
-        // `find`/`index` MIGRATED to real `.rx` bodies over `each` (Feature C).
-        // They now resolve via the bridge against `class Array[T]` and, under
-        // the golden's EMPTY symbol table, return None — so they are NO LONGER
-        // pinned here (same treatment as the already-migrated size/push/pop/…
-        // surface). End-to-end resolution is covered by the e2e suite. The
-        // residual arms that still live in collections.rs ARE pinned: `each`
-        // (the iteration primitive), `reduce` (MIR-inlined), arg-dependent
-        // `zip` / `to_h`, the E0700 `sum`, and in-place `sort_by` / `select!`.
+        // `find`/`index`/`sort_by` MIGRATED to real `.rx` bodies (Feature C —
+        // `each`-based for the collectors, `swap`+indexed-read selection sort
+        // for `sort_by`). They now resolve via the bridge against
+        // `class Array[T]` and, under the golden's EMPTY symbol table, return
+        // None — so they are NO LONGER pinned here (same treatment as the
+        // already-migrated size/push/pop/… surface). End-to-end resolution is
+        // covered by the e2e suite. The residual arms that still live in
+        // collections.rs ARE pinned: `each` (the iteration primitive),
+        // `reduce` (MIR-inlined), arg-dependent `zip` / `to_h`, the E0700
+        // `sum`, and the in-place `select!` (no indexed-write `.rx` surface).
         let arr = || Ty::Array(Box::new(Ty::Int));
-        for m in ["each", "reduce", "zip", "to_h", "sum", "sort_by", "select!"] {
+        for m in ["each", "reduce", "zip", "to_h", "sum", "select!"] {
             v.push(c(arr(), m));
         }
 

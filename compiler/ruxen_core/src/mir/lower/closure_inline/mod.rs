@@ -13,7 +13,6 @@ mod partition;
 mod position;
 mod result_map;
 mod retain;
-mod sort_by;
 mod unwrap_or_else;
 
 impl<'a> Lowerer<'a> {
@@ -148,6 +147,7 @@ impl<'a> Lowerer<'a> {
                     | "each_with_index"
                     | "find"
                     | "index"
+                    | "sort_by"
             )
         {
             return Ok(None);
@@ -202,13 +202,12 @@ impl<'a> Lowerer<'a> {
             // same per-element loop machinery as `each` / `filter`.
             //
             //  * `retain { |x| keep? }`    — in-place filter.
-            //  * `sort_by { |a, b| ord }`  — comparator-druxen insertion sort.
+            //
+            // `sort_by` MIGRATED to a real `.rx` body (Feature C); for a
+            // `Ty::Array` receiver it is intercepted by the array-receiver
+            // fall-through above and never reaches this match.
             "select!" => {
                 self.inline_retain(vec_id, closure_params, closure_body)?;
-                Ok(Some(None))
-            }
-            "sort_by" => {
-                self.inline_sort_by(vec_id, closure_params, closure_body)?;
                 Ok(Some(None))
             }
             // Phase 2 stdlib (#05 batch 2): closure-taking eager

@@ -1,5 +1,24 @@
 use super::super::*;
 
+/// `vec[i]` lowers to `ruxen_vec_get_or_panic` for any receiver that is
+/// a backing Vec — a genuine `Ty::Array`, a reference to one, OR the
+/// `Ty::Class { name: "Array" | "Vec" }` shape that `self` carries
+/// INSIDE a migrated `class Array[T]` stdlib method body (the FFI-shell
+/// class, repr-identical to `RuxenVec*`). Without the latter, indexed
+/// reads inside `.rx` combinator bodies (`self[i]`) silently no-op.
+/// Mirrors `util::is_vec_or_iterator_type`'s receiver classification.
+fn is_indexable_vec_ty(ty: &Ty) -> bool {
+    match ty {
+        Ty::Array(_) => true,
+        Ty::Ref(inner) | Ty::RefMut(inner) => is_indexable_vec_ty(inner),
+        Ty::Class { name, .. } => {
+            let base = name.split('[').next().unwrap_or(name);
+            matches!(base, "Vec" | "Array")
+        }
+        _ => false,
+    }
+}
+
 impl<'a> Lowerer<'a> {
     pub(super) fn lower_index(&mut self, expr: &HirExpr) -> Result<Option<LocalId>, String> {
         match &expr.kind {
@@ -28,13 +47,7 @@ impl<'a> Lowerer<'a> {
                 // descriptive message ("index N out of range, len M").
                 // The runtime fn returns the raw 64-bit slot; the
                 // typeck-emitted result type pulls out the element T.
-                if matches!(object.ty, Ty::Array(_))
-                    || matches!(
-                        &object.ty,
-                        Ty::Ref(inner) | Ty::RefMut(inner)
-                            if matches!(inner.as_ref(), Ty::Array(_))
-                    )
-                {
+                if is_indexable_vec_ty(&object.ty) {
                     let base_local = self.lower_expr(object)?;
                     let idx_local = self.lower_expr(index)?;
                     let base_val = local_to_value(base_local);

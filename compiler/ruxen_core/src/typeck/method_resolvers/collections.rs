@@ -88,7 +88,8 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
                 }
                 Some(Ty::Int)
             }
-            (Ty::Array(_), "sort_by") => Some(Ty::Unit),
+            // `sort_by` MIGRATED to a real `.rx` body over `swap` + indexed
+            // reads (Feature C); it resolves through the builtin bridge.
             (Ty::Array(_), "select!") => Some(Ty::Unit),
 
             // Hash (Map) methods MIGRATED to `library/std/map/src/lib.rx`

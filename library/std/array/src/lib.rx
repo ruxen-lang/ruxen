@@ -241,4 +241,25 @@ class Array[T]
     end
     out
   end
+
+  # Ruby `sort_by` — in-place comparator sort. The closure returns a
+  # negative / zero / positive `Int` ordering of its two arguments; a
+  # positive result means the pair is out of order, so they are
+  # swapped. Selection-sort shape over the migrated `swap` primitive
+  # and indexed reads (`self[i]`); mutates the receiver, yields `nil`.
+  def sort_by(cmp: any Fn[Fn(T, T) -> Int]) -> nil
+    var n: Int = self.size as Int
+    var i: Int = 0
+    while i < n
+      var j: Int = i + 1
+      while j < n
+        if cmp.(self[i], self[j]) > 0
+          self.swap(i, j)
+        end
+        j = j + 1
+      end
+      i = i + 1
+    end
+    nil
+  end
 end
