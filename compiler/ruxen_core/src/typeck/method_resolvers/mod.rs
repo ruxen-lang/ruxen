@@ -102,8 +102,11 @@ fn resolvers() -> &'static [MethodResolver] {
         //     `zip`/`to_h`, the E0700 `sum` check, and `get_mut`/`get_var`
         //     (E0722 alias cluster); PLUS `Option`/`Result` (enum heads
         //     the bridge does not cover at all).
-        //   * `numeric` — the `Enum.weight` accessor (scalar `to_s`/
-        //     conversions migrate in Phase 3 but the enum arm stays).
+        //   * `numeric` — now an EMPTY pipeline stage. The scalar `to_s`/
+        //     conversions migrated to scalar.rx in Phase 3; the lone
+        //     `Enum.weight` arm was a dead golden-only artifact and was
+        //     removed (see numeric.rs). Kept in the pipeline as a no-op so
+        //     a future numeric residual lands without re-threading wiring.
         v.extend(strings::resolvers());
         v.extend(collections::resolvers());
         v.extend(numeric::resolvers());
@@ -191,13 +194,6 @@ mod golden {
         Ty::Class {
             name: name.to_string(),
             generic_args,
-        }
-    }
-
-    fn enum_ty(name: &str) -> Ty {
-        Ty::Enum {
-            name: name.to_string(),
-            generic_args: vec![],
         }
     }
 
@@ -444,11 +440,13 @@ mod golden {
         // Int AND the Float/Bool/Char/USize scalar conversions
         // (`to_s`/`to_string`/`to_i`) MIGRATED to scalar.rx and resolve
         // via the bridge; with an EMPTY symbol table they return None, so
-        // they are NOT pinned here. Only `Enum.weight` (a compiler
-        // accessor, no runtime symbol) stays in numeric.rs and IS pinned.
-        // The receiver-width correctness (Float→F64, the rest→I64) is
-        // pinned by `tests/runtime_abi_derivation.rs`.
-        v.push(c(enum_ty("Priority"), "weight"));
+        // they are NOT pinned here. The receiver-width correctness
+        // (Float→F64, the rest→I64) is pinned by
+        // `tests/runtime_abi_derivation.rs`. The `Enum.weight` arm was
+        // REMOVED (dead golden-only artifact — see numeric.rs); a real
+        // user enum accessor resolves via `lookup_class_method_return`,
+        // pinned by `217_enum_declared_method.rx`. `numeric::resolvers()`
+        // is now an empty pipeline stage, so nothing here is pinned.
         // generic `.new` constructor fallback (still pinned — not a derive).
         v.push(c(class("Widget", vec![]), "new"));
         v.push(c(struct_ty("Point"), "new"));

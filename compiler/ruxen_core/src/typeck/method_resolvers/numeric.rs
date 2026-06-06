@@ -20,31 +20,34 @@
 //!   * `Ty::USize` `to_s` / `to_string` — shares `ruxen_int_to_string`
 //!     with `Int`, but there is no `class USize` (it is not in the
 //!     `primitive_class_ty` set); kept here.
-//!   * `Ty::Enum` `.weight` (Priority.weight) — a compiler accessor, not a
-//!     runtime symbol.
 //!
 //! Same ABI-divergence rule as `String.remove`. These run AHEAD of
 //! `builtin_bridge` so they shadow the `.rx` delegation for these heads.
-
-use crate::hir::types::Ty;
+//!
+//! REMOVED (Feature D assessment): the `Ty::Enum` `.weight` arm. It was a
+//! vestigial golden-corpus-only artifact with NO real user — the only
+//! `enum Priority` fixture (`20_enum_methods.rx`) declares `label`, not
+//! `weight`, and resolves it via `lookup_class_method_return` (the
+//! declared-method fallback in `infer/expr.rs`'s `Ty::Enum` arm), not via
+//! a resolver arm. The hardcoded `Some(Int)` was neither a derive
+//! candidate (it has a user-authored body, not a structural derivation)
+//! nor a genuine floor; worse, it SHADOWED `lookup_class_method_return`,
+//! so a user `def weight -> Float` on any enum would mis-type as `Int`.
+//! Real user enum accessors resolve through the declared-method path
+//! unchanged — pinned by `217_enum_declared_method.rx` (`weight -> Int`).
+//! The golden pin was dropped alongside the arm. (NB: a `Float`-returning
+//! enum method hits a PRE-EXISTING, unrelated cranelift width bug in enum
+//! method codegen — independent of this resolver change, since the deleted
+//! arm only ever matched `weight`, never a `Float` accessor — so the pin
+//! uses `Int`. See the final report.)
+//!
+//! No residual numeric/enum arms remain. `resolvers()` returns an empty
+//! pipeline stage so the wiring in `mod.rs::resolvers()` and its slot in
+//! the precedence order are unchanged; the next stdlib head that needs a
+//! numeric residual lands here without re-threading the pipeline.
 
 use super::resolver::MethodResolver;
 
 pub(super) fn resolvers() -> Vec<MethodResolver> {
-    vec![MethodResolver {
-        matches: |ty, _method| matches!(ty, Ty::Enum { .. }),
-        resolve: |_eng, ty, method, _args, _span| match (ty, method) {
-            // `Enum.weight` (Priority.weight) — a compiler accessor, not a
-            // runtime FFI symbol, so it cannot be a `.rx` decl.
-            //
-            // The scalar conversions (Float/Bool/Char/USize `to_s`/
-            // `to_string`/`to_i`) MIGRATED to their `.rx` method-home
-            // classes (scalar/src/lib.rx) once `primitive_ffi_receiver_ty`
-            // taught the receiver-prepend to use each C symbol's true
-            // register class (Float→F64, the rest→I64). They resolve via
-            // builtin_bridge now; their residual arms are removed.
-            (Ty::Enum { .. }, "weight") => Some(Ty::Int),
-            _ => None,
-        },
-    }]
+    vec![]
 }
