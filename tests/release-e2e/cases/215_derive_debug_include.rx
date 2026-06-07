@@ -1,0 +1,27 @@
+# Feature D: the derive mechanism resolves the universal `to_s` via
+# `ty_has_derive_trait(ty, "Debug")`, in lockstep with the MIR synthesis
+# (`{Type}_to_debug`). A struct/enum with an explicit `include Debug` renders
+# the structural Debug form both through `"#{value}"` interpolation and an
+# explicit `.to_s` call (the two are byte-identical by construction).
+struct Pair
+  include Debug
+
+  a: Int
+  b: Int
+end
+
+enum Light
+  include Debug
+
+  Red
+  Green
+end
+
+def main
+  let p = Pair.new(7, 9)
+  puts "#{p}"
+  puts p.to_s()
+  let g = Light.Green
+  puts "#{g}"
+  puts g.to_s()
+end

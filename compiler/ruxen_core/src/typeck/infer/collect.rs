@@ -126,7 +126,10 @@ impl<'a> InferenceEngine<'a> {
         let resolved = self.ctx.resolve(obj_ty);
         if resolved.is_numeric() || matches!(resolved, Ty::Bool | Ty::Char) {
             self.error(
-                format!("no method `{method_name}` on type `{resolved}`"),
+                format!(
+                    "no method `{method_name}` on type `{resolved}`{}",
+                    Self::predicate_suffix_hint(method_name)
+                ),
                 span,
             );
             return Ty::Error;
@@ -333,10 +336,88 @@ impl<'a> InferenceEngine<'a> {
         super::super::method_resolvers::builtin_method_type(self, ty, method, args, span)
     }
 
+    /// Zero-Rust-stdlib bridge (Phase B / M3+M4), Option C "delegate":
+    /// resolve a method on a BUILTIN `Ty` head (`String`/`&str`/`Array`/
+    /// `Set`/`Map`/scalars) from its `.rx` method-home class, returning the
+    /// fully-substituted surface type. This is the SOURCE OF TRUTH for the
+    /// builtin-head delegating resolver in `typeck/method_resolvers`; the
+    /// resolver arm itself carries zero hardcoded method knowledge.
+    ///
+    /// Called from the resolver pipeline (the inference-order-tolerant site
+    /// at `resolve_method_call` line 77, BEFORE the `is_infer` fallback) so
+    /// it participates in the same inference fixpoint the old hardcoded arms
+    /// did — fixing the interpolation-ordering regression that a
+    /// post-fallback (line 82) lookup hit.
+    ///
+    /// Mirrors the trait-lookup branch (line 82-86) PLUS the call-site
+    /// generic substitution (expr.rs:505): `lookup_method_with_args` →
+    /// `substitute_generics_in_return` (so `Array[Int].pop` yields
+    /// `Option[Int]`, not the declared `Option[T]`) → async wrap.
+    pub(in crate::typeck) fn bridge_builtin_method(
+        &mut self,
+        ty: &Ty,
+        method: &str,
+        args: &[HirExpr],
+        span: &Span,
+    ) -> Option<Ty> {
+        let sig = self
+            .traits
+            .lookup_method_with_args(ty, method, args, self.symbols)?;
+
+        // Receiver-element bound seam: a `.rx` method whose `where` clause
+        // bounds the receiver class's OWN generic (`class Array[T]`'s
+        // `def sum -> Int where T: Add`) carries that bound as a synthetic
+        // generic param in its signature (threaded by `resolve/funcs.rs`).
+        // Bind those params to the receiver's concrete generic args
+        // (`{T → Int}`) and run the SAME declared-bound enforcement the
+        // construction / method-own-generic seams use. This is what closes
+        // the historical `sum`/E0700 fork — `[1,2].sum` is fine, `["a"].sum`
+        // emits E0700 (via `bound_diagnostic_code`'s `Add` arm). Only
+        // bounded params fire, and the receiver class is the owner so the
+        // preserved code is chosen correctly.
+        if sig.generic_params.iter().any(|gp| !gp.bounds.is_empty()) {
+            if let Some(bindings) = self.receiver_generic_bindings(ty) {
+                let owner = Self::bound_owner_name(ty);
+                self.check_generic_param_bounds(
+                    &sig.generic_params,
+                    &bindings,
+                    owner.as_deref(),
+                    span,
+                );
+            }
+        }
+
+        let raw = self.wrap_async_return(&sig);
+        // Receiver-generic substitution (`Array[Int].pop` → `Option[Int]`)
+        // first, then METHOD-LEVEL generic harvesting from the args. The
+        // latter is a no-op for every stdlib method declared today (none
+        // carry their own `generic_params`), but it is the load-bearing
+        // step for the `.rx` closure combinators: `map[U](f: any Fn[Fn(T)
+        // -> U]) -> Array[U]` binds `U` from the closure argument's return
+        // type so the call expression's type is `Array[<closure-ret>]`
+        // rather than the un-substituted `Array[U]`.
+        let receiver_subst = self.substitute_generics_in_return(ty, &raw);
+        Some(self.harvest_and_subst_generics(&sig, args, &receiver_subst))
+    }
+
     pub(super) fn infer_index_ty(&self, obj_ty: &Ty) -> Ty {
         match obj_ty {
             Ty::Array(elem) => *elem.clone(),
             Ty::FixedArray(elem, _) => *elem.clone(),
+            // `self[i]` INSIDE a migrated `class Array[T]` stdlib method
+            // body: `self` is typed as the FFI-shell `Ty::Class { name:
+            // "Array" | "Vec", generic_args: [T] }`, not `Ty::Array`. Yield
+            // the first generic arg as the element type so `.rx` combinator
+            // bodies can index their receiver (mirrors the lower.rs Index
+            // dispatch's `is_indexable_vec_ty`).
+            Ty::Class { name, generic_args }
+                if {
+                    let base = name.split('[').next().unwrap_or(name);
+                    matches!(base, "Vec" | "Array")
+                } =>
+            {
+                generic_args.first().cloned().unwrap_or(Ty::Error)
+            }
             // `m[&k]` panics on missing keys (mirrors Rust's `Index for
             // HashMap`); the runtime helper `ruxen_hash_index` returns the
             // raw value slot rather than an Option, so the surface type is
@@ -448,21 +529,61 @@ impl<'a> InferenceEngine<'a> {
         argc >= required && argc <= signature.params.len()
     }
 
-    fn method_accepts_args(&self, method_id: DefId, args: &[HirExpr]) -> bool {
+    /// Effective argument count for method selection: the positional
+    /// `args` plus any trailing `do…end` block, which satisfies the
+    /// method's final (closure) parameter slot. A call like
+    /// `b.probe do |x| … end` parses the block separately from `args`,
+    /// so without this the closure parameter is invisible to arity
+    /// selection and the method is rejected — degrading the call's
+    /// return type to a fresh inference var (`Infer`). See
+    /// `tests/release-e2e/cases/100_closure_method_heap_return.rx`.
+    pub(super) fn effective_argc(args: &[HirExpr], has_block: bool) -> usize {
+        args.len() + usize::from(has_block)
+    }
+
+    fn method_accepts_args(&self, method_id: DefId, args: &[HirExpr], has_block: bool) -> bool {
         let Some(def) = self.symbols.get(method_id) else {
             return false;
         };
         let DefKind::Method { signature, .. } = &def.kind else {
             return false;
         };
-        if !self.method_accepts_arg_count(method_id, args.len()) {
+        if !self.method_accepts_arg_count(method_id, Self::effective_argc(args, has_block)) {
             return false;
+        }
+        // Q1 (do-block variant): a trailing `do…end` block fills the method's
+        // LAST (closure) parameter, so an overload accepts the block only when
+        // its final param is callable. Without this, `c.text do…end` (empty
+        // `args`) matched the first-declared `text(&str)` overload by arity.
+        if has_block {
+            let last_is_callable = signature
+                .params
+                .last()
+                .map(|p| Self::ty_is_callable(&self.ctx.resolve(&p.ty)))
+                .unwrap_or(false);
+            if !last_is_callable {
+                return false;
+            }
         }
         args.iter()
             .zip(signature.params.iter())
             .all(|(arg, param)| {
                 let arg_ty = self.ctx.resolve(&arg.ty);
                 let param_ty = self.ctx.resolve(&param.ty);
+                // Q1: a CALLABLE argument — a closure literal (whose type may
+                // still be `Infer` at overload-selection time), or any value
+                // of `Fn`/`any Fn`/`some Fn` type — matches ONLY a callable
+                // parameter, never a `&str`/other param. Without this, a
+                // closure argument fell through to the `is_infer()` arm below
+                // and the first-declared overload (`text(&str)`) was chosen,
+                // mis-storing the closure pointer as a `String` → heap
+                // corruption. Checking `arg.kind` (syntactic) makes selection
+                // correct even before the closure's type is inferred.
+                let arg_is_callable = matches!(arg.kind, HirExprKind::Closure { .. })
+                    || Self::ty_is_callable(&arg_ty);
+                if arg_is_callable {
+                    return Self::ty_is_callable(&param_ty);
+                }
                 arg_ty.is_infer()
                     || arg_ty.is_error()
                     || arg_ty == param_ty
@@ -473,6 +594,27 @@ impl<'a> InferenceEngine<'a> {
                     )
                     || matches!(&param_ty, Ty::Ref(inner) | Ty::RefMut(inner) if **inner == arg_ty)
             })
+    }
+
+    /// True when `ty` is a callable shape — a bare `Ty::Fn`/`FnMut`/`FnOnce`
+    /// or the surface `any Fn[…]` / `some Fn[…]` mixin spelling (peeling one
+    /// reference layer). Used by overload selection so a closure argument is
+    /// matched against a closure parameter, not a `&str` one (Q1).
+    fn ty_is_callable(ty: &Ty) -> bool {
+        let peeled = match ty {
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => inner.as_ref(),
+            other => other,
+        };
+        match peeled {
+            Ty::Fn { .. } | Ty::FnMut { .. } | Ty::FnOnce { .. } => true,
+            Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds) => bounds
+                .iter()
+                .any(|b| matches!(b.name.as_str(), "Fn" | "FnMut" | "FnOnce")),
+            _ => false,
+        }
     }
 
     fn class_method_candidates(&self, type_name: &str, method_name: &str) -> Vec<DefId> {
@@ -517,17 +659,19 @@ impl<'a> InferenceEngine<'a> {
         &self,
         candidates: &[DefId],
         args: &[HirExpr],
+        has_block: bool,
     ) -> Option<DefId> {
+        let effective_argc = Self::effective_argc(args, has_block);
         candidates
             .iter()
             .copied()
-            .filter(|candidate| self.method_accepts_args(*candidate, args))
+            .filter(|candidate| self.method_accepts_args(*candidate, args, has_block))
             .find(|candidate| {
                 self.symbols
                     .get(*candidate)
                     .and_then(|def| match &def.kind {
                         DefKind::Method { signature, .. } => {
-                            Some(signature.params.len() == args.len())
+                            Some(signature.params.len() == effective_argc)
                         }
                         _ => None,
                     })
@@ -537,7 +681,7 @@ impl<'a> InferenceEngine<'a> {
                 candidates
                     .iter()
                     .copied()
-                    .find(|candidate| self.method_accepts_args(*candidate, args))
+                    .find(|candidate| self.method_accepts_args(*candidate, args, has_block))
             })
     }
 
@@ -545,11 +689,13 @@ impl<'a> InferenceEngine<'a> {
         &self,
         candidates: &[DefId],
         args: &[HirExpr],
+        has_block: bool,
     ) -> Option<DefId> {
+        let effective_argc = Self::effective_argc(args, has_block);
         candidates
             .iter()
             .copied()
-            .find(|candidate| self.method_accepts_arg_count(*candidate, args.len()))
+            .find(|candidate| self.method_accepts_arg_count(*candidate, effective_argc))
     }
 
     pub(super) fn select_class_method(
@@ -557,6 +703,7 @@ impl<'a> InferenceEngine<'a> {
         type_name: &str,
         method_name: &str,
         args: &[HirExpr],
+        has_block: bool,
     ) -> Option<DefId> {
         // First walk the inheritance chain looking for a candidate whose
         // parameter TYPES accept the call args. This prevents a child's
@@ -564,8 +711,12 @@ impl<'a> InferenceEngine<'a> {
         // an inherited overload that actually matches. Only after no
         // ancestor has a strict match do we fall back to arity-only
         // matching, again walking the chain from this class up.
-        self.select_class_method_strict(type_name, method_name, args)
-            .or_else(|| self.select_class_method_arity(type_name, method_name, args))
+        //
+        // `has_block` carries whether the call site supplied a trailing
+        // `do…end` block; it occupies the method's final (closure)
+        // parameter slot and is counted toward arity by `effective_argc`.
+        self.select_class_method_strict(type_name, method_name, args, has_block)
+            .or_else(|| self.select_class_method_arity(type_name, method_name, args, has_block))
     }
 
     fn select_class_method_strict(
@@ -573,13 +724,14 @@ impl<'a> InferenceEngine<'a> {
         type_name: &str,
         method_name: &str,
         args: &[HirExpr],
+        has_block: bool,
     ) -> Option<DefId> {
         let candidates = self.class_method_candidates(type_name, method_name);
-        if let Some(selected) = self.select_method_candidate_strict(&candidates, args) {
+        if let Some(selected) = self.select_method_candidate_strict(&candidates, args, has_block) {
             return Some(selected);
         }
         let parent = self.parent_class_name(type_name)?;
-        self.select_class_method_strict(&parent, method_name, args)
+        self.select_class_method_strict(&parent, method_name, args, has_block)
     }
 
     fn select_class_method_arity(
@@ -587,13 +739,14 @@ impl<'a> InferenceEngine<'a> {
         type_name: &str,
         method_name: &str,
         args: &[HirExpr],
+        has_block: bool,
     ) -> Option<DefId> {
         let candidates = self.class_method_candidates(type_name, method_name);
-        if let Some(selected) = self.select_method_candidate_arity(&candidates, args) {
+        if let Some(selected) = self.select_method_candidate_arity(&candidates, args, has_block) {
             return Some(selected);
         }
         let parent = self.parent_class_name(type_name)?;
-        self.select_class_method_arity(&parent, method_name, args)
+        self.select_class_method_arity(&parent, method_name, args, has_block)
     }
 
     fn default_ast_to_hir(&mut self, default: &ast::Expr) -> Option<HirExpr> {
@@ -652,67 +805,103 @@ impl<'a> InferenceEngine<'a> {
     /// type. Returns `None` if the class has no generic params or if
     /// inference cannot cover every parameter.
     pub(super) fn infer_class_generics(
-        &self,
+        &mut self,
         class_name: &str,
         args: &[HirExpr],
     ) -> Option<Vec<Ty>> {
-        // Find the class definition.
-        let generic_params: Vec<String> = {
-            let mut result = None;
-            for def in self.symbols.iter() {
-                if def.name == class_name {
-                    if let DefKind::Class { info } = &def.kind {
-                        result = Some(
-                            info.generic_params
-                                .iter()
-                                .map(|gp| gp.name.clone())
-                                .collect(),
-                        );
-                        break;
-                    }
-                }
-            }
-            result?
-        };
+        // Declared generic params of the class OR struct.
+        let generic_params = self.type_generic_param_names(class_name);
         if generic_params.is_empty() {
             return None;
         }
 
-        // Find the init method's parameter types.
-        let init_params: Vec<Ty> = {
-            let mut result = None;
-            for def in self.symbols.iter() {
-                if def.name == "init" {
-                    if let DefKind::Method { parent, signature } = &def.kind {
-                        if let Some(parent_def) = self.symbols.get(*parent) {
-                            if parent_def.name == class_name {
-                                result =
-                                    Some(signature.params.iter().map(|p| p.ty.clone()).collect());
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            result?
-        };
+        // Constructor parameter types: the `init` method's params when one
+        // exists, otherwise the type's declared fields in order (the implicit
+        // positional `.new`). Structs typically take the field path.
+        let ctor_params = self.constructor_param_types(class_name);
 
         // Walk the parameters and capture TypeParam positions.
         let mut bindings: std::collections::HashMap<String, Ty> = std::collections::HashMap::new();
-        for (param_ty, arg) in init_params.iter().zip(args.iter()) {
-            Self::collect_typeparam_bindings(param_ty, &self.ctx.resolve(&arg.ty), &mut bindings);
+        for (param_ty, arg) in ctor_params.iter().zip(args.iter()) {
+            let actual = self.ctx.resolve(&arg.ty);
+            Self::collect_typeparam_bindings(param_ty, &actual, &mut bindings);
         }
 
-        // Assemble generic args in declaration order. If any is missing,
-        // fall back to Error so downstream substitution leaves it alone.
+        // Assemble generic args in declaration order. A param not determined
+        // by any constructor argument (a "phantom" param like `Sig[T]` with
+        // `T` unused in fields) becomes a FRESH inference var rather than
+        // collapsing the head to the bare `Sig` — the call's expected type
+        // (e.g. a declared `-> Sig[T]` return) then binds it via unification
+        // (Q21). Previously this returned `None`, yielding `Sig` with no
+        // generic args, which failed to unify with `Sig[T]`.
         let mut out = Vec::with_capacity(generic_params.len());
         for gp in &generic_params {
             match bindings.get(gp) {
                 Some(ty) => out.push(ty.clone()),
-                None => return None,
+                None => out.push(self.ctx.fresh_type_var()),
             }
         }
         Some(out)
+    }
+
+    /// Declared generic-parameter names of a class or struct by name, in
+    /// declaration order. Empty when the type is non-generic or unknown.
+    fn type_generic_param_names(&self, type_name: &str) -> Vec<String> {
+        for def in self.symbols.iter() {
+            if def.name == type_name {
+                let params = match &def.kind {
+                    DefKind::Class { info } => Some(&info.generic_params),
+                    DefKind::Struct { info } => Some(&info.generic_params),
+                    _ => None,
+                };
+                if let Some(params) = params {
+                    return params.iter().map(|gp| gp.name.clone()).collect();
+                }
+            }
+        }
+        Vec::new()
+    }
+
+    /// The positional constructor parameter types for a class/struct: the
+    /// `init` method's params if declared, else the type's declared field
+    /// types (the implicit all-fields `.new`). Used to harvest generic-param
+    /// bindings from constructor arguments.
+    fn constructor_param_types(&self, type_name: &str) -> Vec<Ty> {
+        // Prefer an explicit `init` method's params.
+        for def in self.symbols.iter() {
+            if def.name == "init" {
+                if let DefKind::Method { parent, signature } = &def.kind {
+                    if self
+                        .symbols
+                        .get(*parent)
+                        .map(|p| p.name == type_name)
+                        .unwrap_or(false)
+                    {
+                        return signature.params.iter().map(|p| p.ty.clone()).collect();
+                    }
+                }
+            }
+        }
+        // Fall back to the declared fields (positional `.new`).
+        for def in self.symbols.iter() {
+            if def.name == type_name {
+                let field_ids = match &def.kind {
+                    DefKind::Class { info } => Some(info.fields.clone()),
+                    DefKind::Struct { info } => Some(info.fields.clone()),
+                    _ => None,
+                };
+                if let Some(field_ids) = field_ids {
+                    return field_ids
+                        .iter()
+                        .filter_map(|fid| match self.symbols.get(*fid).map(|d| &d.kind) {
+                            Some(DefKind::Field { ty, .. }) => Some(ty.clone()),
+                            _ => None,
+                        })
+                        .collect();
+                }
+            }
+        }
+        Vec::new()
     }
 
     /// Walk a parameter type and an argument type in parallel, capturing
@@ -751,13 +940,82 @@ impl<'a> InferenceEngine<'a> {
     /// corresponding generic argument from `obj_ty` (a `Ty::Class` or
     /// `Ty::Struct`).
     pub(super) fn substitute_generics_in_return(&self, obj_ty: &Ty, ret_ty: &Ty) -> Ty {
-        let (name, generic_args) = match obj_ty {
+        let Some(subst) = self.receiver_generic_bindings(obj_ty) else {
+            return ret_ty.clone();
+        };
+        Self::subst_ty(ret_ty, &subst)
+    }
+
+    /// Build the `{class-param-name → receiver-concrete-arg}` map for a
+    /// builtin/user generic receiver — e.g. `Array[Int]` → `{T: Int}`,
+    /// `Hash[K, V]` → `{K: …, V: …}`. Returns `None` when the receiver
+    /// is non-generic, or the declared arity doesn't match (caller falls
+    /// back to no substitution). This is the single mapping consumed by
+    /// both return-type substitution and the receiver-element bound seam
+    /// (`bridge_builtin_method`'s `where T: Add` check).
+    pub(super) fn receiver_generic_bindings(
+        &self,
+        obj_ty: &Ty,
+    ) -> Option<std::collections::HashMap<String, Ty>> {
+        // Peel references so `(&Array[Int]).pop` substitutes like
+        // `Array[Int].pop` (the receiver of a `&self` method is borrowed).
+        let peeled = match obj_ty {
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => inner.as_ref(),
+            other => other,
+        };
+        // Zero-Rust-stdlib bridge (Phase B / M3): map the builtin generic
+        // heads to the synthetic `(class-name, generic_args)` of their
+        // `.rx` method-home class so the class's declared type params
+        // (`class Array[T]` → `[T]`) substitute against the receiver's
+        // concrete element type. Mirrors `MixinResolver::method_home_key`.
+        let owned_synthetic: (String, Vec<Ty>);
+        let (name, generic_args): (&String, &Vec<Ty>) = match peeled {
             Ty::Class { name, generic_args } | Ty::Struct { name, generic_args }
                 if !generic_args.is_empty() =>
             {
                 (name, generic_args)
             }
-            _ => return ret_ty.clone(),
+            Ty::Array(elem) => {
+                owned_synthetic = ("Array".to_string(), vec![elem.as_ref().clone()]);
+                (&owned_synthetic.0, &owned_synthetic.1)
+            }
+            Ty::Set(elem) => {
+                owned_synthetic = ("Set".to_string(), vec![elem.as_ref().clone()]);
+                (&owned_synthetic.0, &owned_synthetic.1)
+            }
+            Ty::Map(k, v) => {
+                // `Ty::Map` Displays as `Hash[K, V]`; its method-home class
+                // is `class Hash[K, V]` (map/src/lib.rx), so substitute
+                // against that class's declared `[K, V]` params. Mirrors
+                // `MixinResolver::method_home_key`'s `Ty::Map → "Hash"`.
+                owned_synthetic = (
+                    "Hash".to_string(),
+                    vec![k.as_ref().clone(), v.as_ref().clone()],
+                );
+                (&owned_synthetic.0, &owned_synthetic.1)
+            }
+            // `Ty::Option`/`Ty::Result` home their methods on the builtin
+            // `enum Option[T]` / `enum Result[T, E]` (registered by
+            // `resolve/stdlib/{option,result}.rs`). Substitute against
+            // those enums' declared params so `Option[Int].unwrap`
+            // yields `Int` (not the declared `T`) and
+            // `Result[Foo, IoError].unwrap` yields `Foo`. Mirrors
+            // `MixinResolver::method_home_key`'s Option/Result arms.
+            Ty::Option(inner) => {
+                owned_synthetic = ("Option".to_string(), vec![inner.as_ref().clone()]);
+                (&owned_synthetic.0, &owned_synthetic.1)
+            }
+            Ty::Result(ok, err) => {
+                owned_synthetic = (
+                    "Result".to_string(),
+                    vec![ok.as_ref().clone(), err.as_ref().clone()],
+                );
+                (&owned_synthetic.0, &owned_synthetic.1)
+            }
+            _ => return None,
         };
 
         // Build a name→type map using the class's declared generic params.
@@ -781,18 +1039,30 @@ impl<'a> InferenceEngine<'a> {
                             .collect();
                         break;
                     }
+                    // Builtin `enum Option[T]` / `enum Result[T, E]` —
+                    // their method-home is the enum, so read the enum's
+                    // declared params for the synthetic Option/Result
+                    // heads above.
+                    if let DefKind::Enum { info } = &def.kind {
+                        out = info
+                            .generic_params
+                            .iter()
+                            .map(|gp| gp.name.clone())
+                            .collect();
+                        break;
+                    }
                 }
             }
             out
         };
         if class_params.len() != generic_args.len() {
-            return ret_ty.clone();
+            return None;
         }
         let subst: std::collections::HashMap<String, Ty> = class_params
             .into_iter()
             .zip(generic_args.iter().cloned())
             .collect();
-        Self::subst_ty(ret_ty, &subst)
+        Some(subst)
     }
 
     /// Substitute every `TypeParam` named in `subst` with its bound type,
@@ -804,6 +1074,32 @@ impl<'a> InferenceEngine<'a> {
     pub(super) fn subst_ty(ty: &Ty, subst: &std::collections::HashMap<String, Ty>) -> Ty {
         match ty {
             Ty::TypeParam { name, .. } => subst.get(name).cloned().unwrap_or_else(|| ty.clone()),
+            // `Ty::map_inner` treats `Some/AnyMixin` as LEAVES (their
+            // children are `MixinRef`, not `Ty`), so a generic param nested
+            // inside a mixin bound's generic args — e.g. the `T`/`U` in
+            // `any Fn[Fn(T) -> U]` — would NOT be substituted by the fold
+            // below. The `.rx` closure combinators carry exactly that shape
+            // in their closure parameter, and receiver-generic substitution
+            // (`T → Int`) must reach the inner `Fn(T)` so the closure param
+            // seeds concretely. Substitute through each bound's generic args
+            // explicitly here.
+            Ty::AnyMixin(bounds) | Ty::SomeMixin(bounds) => {
+                let new_bounds: Vec<crate::hir::types::MixinRef> = bounds
+                    .iter()
+                    .map(|b| crate::hir::types::MixinRef {
+                        name: b.name.clone(),
+                        generic_args: b
+                            .generic_args
+                            .iter()
+                            .map(|g| Self::subst_ty(g, subst))
+                            .collect(),
+                    })
+                    .collect();
+                match ty {
+                    Ty::AnyMixin(_) => Ty::AnyMixin(new_bounds),
+                    _ => Ty::SomeMixin(new_bounds),
+                }
+            }
             other => other
                 .clone()
                 .map_inner(&mut |child| Self::subst_ty(child, subst)),
@@ -946,8 +1242,88 @@ impl<'a> InferenceEngine<'a> {
                     }
                 }
             }
+            // Closure-typed formal parameter — the load-bearing arm for
+            // the `.rx` closure combinators (`map[U](f: any Fn[Fn(T) ->
+            // U])`). The function's own generic `U` lives in the closure's
+            // RETURN position, so it can only be bound from the actual
+            // closure argument's return type. Match the formal's params
+            // and ret against the actual's structurally; the `TypeParam`
+            // arm above binds `U` once it reaches the ret leaf.
+            Ty::Fn {
+                params: fparams,
+                ret: fret,
+            }
+            | Ty::FnMut {
+                params: fparams,
+                ret: fret,
+            }
+            | Ty::FnOnce {
+                params: fparams,
+                ret: fret,
+            } => {
+                if let Ty::Fn {
+                    params: aparams,
+                    ret: aret,
+                }
+                | Ty::FnMut {
+                    params: aparams,
+                    ret: aret,
+                }
+                | Ty::FnOnce {
+                    params: aparams,
+                    ret: aret,
+                } = actual
+                {
+                    if fparams.len() == aparams.len() {
+                        for (f, a) in fparams.iter().zip(aparams.iter()) {
+                            Self::bind_type_params_from_args(param_names, f, a, out);
+                        }
+                    }
+                    Self::bind_type_params_from_args(param_names, fret, aret, out);
+                }
+            }
+            // `any Fn[Fn(T) -> U]` / `some Fn[...]` formal — the surface
+            // spelling the `.rx` combinators use. The underlying
+            // `Ty::Fn { params, ret }` rides in the `Fn`/`FnMut`/`FnOnce`
+            // bound's first generic arg (mirrors the `call` dispatch peel
+            // at the top of `resolve_method_call`). Peel the bound and
+            // recurse so the inner `Ty::Fn` arm above binds `U`. The
+            // actual closure arg may itself be a bare `Ty::Fn` (a closure
+            // literal) or an identically-wrapped mixin (a forwarded dyn
+            // closure value) — both are handled by recursing with the
+            // peeled formal against the un-peeled actual (the inner arm
+            // peels the actual's wrapper too if present).
+            Ty::AnyMixin(bounds) | Ty::SomeMixin(bounds) => {
+                for bound in bounds {
+                    if matches!(bound.name.as_str(), "Fn" | "FnMut" | "FnOnce") {
+                        if let Some(inner) = bound.generic_args.first() {
+                            let actual_inner = Self::peel_fn_mixin(actual);
+                            Self::bind_type_params_from_args(param_names, inner, actual_inner, out);
+                        }
+                    }
+                }
+            }
             _ => {}
         }
+    }
+
+    /// Peel an `any Fn[Fn(...)]` / `some Fn[...]` wrapper down to the
+    /// underlying `Ty::Fn { params, ret }` it carries. A bare `Ty::Fn`
+    /// (closure literal) is returned unchanged. Used by
+    /// `bind_type_params_from_args` so a closure ARGUMENT that is itself
+    /// dyn-erased (a forwarded `any Fn` value) still exposes its
+    /// `params`/`ret` for generic-param harvesting.
+    fn peel_fn_mixin(ty: &Ty) -> &Ty {
+        if let Ty::AnyMixin(bounds) | Ty::SomeMixin(bounds) = ty {
+            for bound in bounds {
+                if matches!(bound.name.as_str(), "Fn" | "FnMut" | "FnOnce") {
+                    if let Some(inner) = bound.generic_args.first() {
+                        return inner;
+                    }
+                }
+            }
+        }
+        ty
     }
 
     /// Harvest `{generic_param → concrete}` bindings from (args × formal
@@ -968,8 +1344,25 @@ impl<'a> InferenceEngine<'a> {
         args: &[HirExpr],
         ret: &Ty,
     ) -> Ty {
+        self.harvest_and_subst_generics_bindings(signature, args, ret)
+            .0
+    }
+
+    /// Same as [`Self::harvest_and_subst_generics`] but ALSO returns the
+    /// `{param_name → concrete}` bindings it harvested, so the caller can
+    /// run the declared-bound enforcement seam (`check_generic_param_bounds`)
+    /// against them. Feature B (trait-bound enforcement): the bindings are
+    /// exactly the `{T → concrete}` map a `[T: Bound]` declaration must be
+    /// checked against, computed once here rather than re-derived at the
+    /// call site.
+    pub(super) fn harvest_and_subst_generics_bindings(
+        &self,
+        signature: &crate::resolve::symbols::FnSignature,
+        args: &[HirExpr],
+        ret: &Ty,
+    ) -> (Ty, std::collections::HashMap<String, Ty>) {
         if signature.generic_params.is_empty() {
-            return ret.clone();
+            return (ret.clone(), std::collections::HashMap::new());
         }
         let param_names: std::collections::HashSet<String> = signature
             .generic_params
@@ -981,11 +1374,12 @@ impl<'a> InferenceEngine<'a> {
             let actual = self.ctx.resolve(&arg.ty);
             Self::bind_type_params_from_args(&param_names, &param.ty, &actual, &mut bindings);
         }
-        if bindings.is_empty() {
+        let out = if bindings.is_empty() {
             ret.clone()
         } else {
             Self::subst_ty(ret, &bindings)
-        }
+        };
+        (out, bindings)
     }
 }
 

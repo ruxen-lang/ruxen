@@ -5,6 +5,48 @@ impl<'a> Lowerer<'a> {
         match &expr.kind {
             // ── Unary operations ────────────────────────────────────
             HirExprKind::UnaryOp { op, operand } => {
+                // ── Operator → method desugar (Task OP, Step 3) ──
+                // `-a` → `a.-@()`, `!a` → `a.!()` when the operand is a
+                // NOMINAL receiver (user/stdlib class). Machine primitives
+                // (`Int`/`Float`/`Bool`) fall through to the direct
+                // `Negate`/`Not` instructions below — the machine floor.
+                // `Deref` is never a method. (`+@` has no surface operator.)
+                fn peel(t: &Ty) -> &Ty {
+                    match t {
+                        Ty::Ref(i)
+                        | Ty::RefMut(i)
+                        | Ty::RefLifetime(_, i)
+                        | Ty::RefMutLifetime(_, i) => peel(i),
+                        _ => t,
+                    }
+                }
+                let nominal = matches!(
+                    peel(&operand.ty),
+                    Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
+                );
+                let unary_method = match op {
+                    UnaryOp::Neg => Some("-@"),
+                    UnaryOp::Not => Some("!"),
+                    UnaryOp::Deref => None,
+                };
+                if nominal {
+                    if let Some(method) = unary_method {
+                        let synthetic = HirExpr {
+                            kind: HirExprKind::MethodCall {
+                                object: Box::new((**operand).clone()),
+                                method: UNRESOLVED_DEF,
+                                method_name: method.to_string(),
+                                generic_args: vec![],
+                                args: vec![],
+                                block: None,
+                            },
+                            ty: expr.ty.clone(),
+                            span: expr.span.clone(),
+                        };
+                        return self.lower_method_call(&synthetic);
+                    }
+                }
+
                 let src = self.lower_expr(operand)?;
                 let val = local_to_value(src);
                 let dest = self.new_temp(expr.ty.clone());

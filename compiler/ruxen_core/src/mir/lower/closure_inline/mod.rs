@@ -6,15 +6,10 @@ mod each_with_index;
 mod entry_or_insert;
 mod filter;
 mod find;
-mod fold;
 mod map;
-mod option_map;
 mod partition;
 mod position;
-mod result_map;
 mod retain;
-mod sort_by;
-mod unwrap_or_else;
 
 impl<'a> Lowerer<'a> {
     pub(super) fn try_inline_closure_method(
@@ -22,7 +17,10 @@ impl<'a> Lowerer<'a> {
         expr: &HirExpr,
         object: &HirExpr,
         method_name: &str,
-        args: &[HirExpr],
+        // Closure-method args (`reduce`'s `init`) were consumed only by the
+        // now-migrated `inline_fold`; retained in the signature for the
+        // caller's uniform dispatch but no longer read here.
+        _args: &[HirExpr],
         block_expr: &HirExpr,
     ) -> Result<Option<Option<LocalId>>, String> {
         // Extract closure params and body from the block expression.
@@ -31,58 +29,60 @@ impl<'a> Lowerer<'a> {
             _ => return Ok(None), // Not a closure — can't inline.
         };
 
-        // Handle Option.map { |x| expr } inline: check tag, transform payload.
-        if is_option_type(&object.ty) && method_name == "map" {
-            return self.inline_option_map(expr, object, closure_params, closure_body);
+        // `Option#map` / `Result#map` / `Result#map_err` /
+        // `unwrap_or_else` are migrated to real `.rx` bodies
+        // (`Option_map` / `Result_map` / `Option_unwrap_or_else` / …,
+        // option_result/src/lib.rx). Fall through so the normal
+        // method-call path emits a call to the opaque body rather than
+        // inlining here. Without this, the `is_collection_method` field-0
+        // branch below would dereference an Option/Result box at offset 0
+        // as a backing Vec and iterate garbage (segfault).
+        if (is_option_type(&object.ty) && matches!(method_name, "map" | "unwrap_or_else"))
+            || (is_result_type(&object.ty)
+                && matches!(method_name, "map" | "map_err" | "unwrap_or_else"))
+        {
+            return Ok(None);
         }
 
-        // Result.map / Result.map_err — same shape: branch on tag,
-        // run the closure on the matching arm's payload, repackage.
-        if is_result_type(&object.ty) {
-            match method_name {
-                "map" => {
-                    return self.inline_result_map(
-                        expr,
-                        object,
-                        closure_params,
-                        closure_body,
-                        /*on_ok=*/ true,
-                    );
+        // Builtin collection receivers that are NOT a plain Vec/Array
+        // (`Ty::Map` / `Ty::Set`) have their combinators migrated to real
+        // `.rx` method bodies (`Hash_each`, `Set_each`, …). Such a receiver
+        // is NOT a user-defined Vec-wrapping class, so the
+        // `is_collection_method` field-0 branch below would dereference a
+        // non-existent backing Vec at offset 0 and iterate garbage (the
+        // observed `Hash#each` "yields nothing" bug). Fall through so the
+        // normal method-call path emits a real call to the opaque body.
+        //
+        // The receiver shows up in TWO shapes: structurally as
+        // `Ty::Map`/`Ty::Set` at a user call site (`s.map { … }`), and as
+        // `Ty::Class { name: "Set"|"Hash"|"Map" }` for the `self` inside an
+        // opaque mixin-default combinator body (`Set_map`'s `self.each`),
+        // because a class's self-type is `Ty::Class { name }` not the
+        // primitive head. Both must fall through to the real `Set_each` /
+        // `Hash_each` call — only `Array`'s self IS a backing Vec (handled
+        // by `is_vec_or_iterator_type`). Without this, `Set`/`Hash`
+        // combinators routed through `Enumerable[T]` "yield nothing".
+        {
+            let mut recv = &object.ty;
+            loop {
+                match recv {
+                    Ty::Ref(inner)
+                    | Ty::RefMut(inner)
+                    | Ty::RefLifetime(_, inner)
+                    | Ty::RefMutLifetime(_, inner) => recv = inner,
+                    _ => break,
                 }
-                "map_err" => {
-                    return self.inline_result_map(
-                        expr,
-                        object,
-                        closure_params,
-                        closure_body,
-                        /*on_ok=*/ false,
-                    );
+            }
+            let is_builtin_non_vec_collection = match recv {
+                Ty::Map(_, _) | Ty::Set(_) => true,
+                Ty::Class { name, .. } => {
+                    let base = name.split('[').next().unwrap_or(name);
+                    matches!(base, "Set" | "Hash" | "Map")
                 }
-                _ => {}
-            }
-        }
-
-        // Result.unwrap_or_else { |e| ... } / Option.unwrap_or_else { |e| ... }
-        // — branch on tag, return payload on the success arm, evaluate
-        // closure with the error payload otherwise.
-        if method_name == "unwrap_or_else" {
-            if is_result_type(&object.ty) {
-                return self.inline_unwrap_or_else(
-                    expr,
-                    object,
-                    closure_params,
-                    closure_body,
-                    /*ok_tag=*/ 0,
-                );
-            }
-            if is_option_type(&object.ty) {
-                return self.inline_unwrap_or_else(
-                    expr,
-                    object,
-                    closure_params,
-                    closure_body,
-                    /*ok_tag=*/ 1,
-                );
+                _ => false,
+            };
+            if is_builtin_non_vec_collection {
+                return Ok(None);
             }
         }
 
@@ -108,6 +108,52 @@ impl<'a> Lowerer<'a> {
         } else {
             return Ok(None);
         };
+
+        // Feature C: `map` / `select` / `reject` / `all?` / `any?` /
+        // `partition` are now real `.rx` method bodies on `class Array[T]`
+        // (resolved through the builtin bridge, lowered as opaque
+        // `Array_<m>` functions). For a genuine `Ty::Array` receiver these
+        // must NOT be inlined here — fall through (`Ok(None)`) so the normal
+        // method-call path emits the call to the migrated body. The inline
+        // path is RETAINED for user-defined collection classes that wrap a
+        // Vec (the `is_collection_method` branch above lowered such a
+        // receiver's field-0 Vec into `vec_id`): those classes have no
+        // `Array_<m>` body to call, so they still need the inline expansion.
+        let recv_ty = {
+            let mut t = &object.ty;
+            loop {
+                match t {
+                    Ty::Ref(inner)
+                    | Ty::RefMut(inner)
+                    | Ty::RefLifetime(_, inner)
+                    | Ty::RefMutLifetime(_, inner) => t = inner,
+                    other => break other,
+                }
+            }
+        };
+        let array_receiver = matches!(recv_ty, Ty::Array(_))
+            || matches!(recv_ty, Ty::Class { name, .. } if {
+                let base = name.split('[').next().unwrap_or(name);
+                base == "Array"
+            });
+        if array_receiver
+            && matches!(
+                method_name,
+                "map"
+                    | "select"
+                    | "reject"
+                    | "all?"
+                    | "any?"
+                    | "partition"
+                    | "each_with_index"
+                    | "find"
+                    | "index"
+                    | "sort_by"
+                    | "reduce"
+            )
+        {
+            return Ok(None);
+        }
 
         match method_name {
             "each" => {
@@ -158,24 +204,17 @@ impl<'a> Lowerer<'a> {
             // same per-element loop machinery as `each` / `filter`.
             //
             //  * `retain { |x| keep? }`    — in-place filter.
-            //  * `sort_by { |a, b| ord }`  — comparator-druxen insertion sort.
+            //
+            // `sort_by` MIGRATED to a real `.rx` body (Feature C); for a
+            // `Ty::Array` receiver it is intercepted by the array-receiver
+            // fall-through above and never reaches this match.
             "select!" => {
                 self.inline_retain(vec_id, closure_params, closure_body)?;
                 Ok(Some(None))
             }
-            "sort_by" => {
-                self.inline_sort_by(vec_id, closure_params, closure_body)?;
-                Ok(Some(None))
-            }
-            // Phase 2 stdlib (#05 batch 2): closure-taking eager
-            // terminators on `*Iter` receivers. These inline the same
-            // `ruxen_vec_len` + `ruxen_vec_get` per-element loop as
-            // `each` / `find`, but they accumulate (`fold`) or
-            // short-circuit on a boolean predicate (`all` / `any`).
-            "reduce" => {
-                let result = self.inline_fold(expr, vec_id, args, closure_params, closure_body)?;
-                Ok(Some(Some(result)))
-            }
+            // `reduce` MIGRATED to a real `.rx` body over `each` (Feature C);
+            // for a `Ty::Array` receiver it is intercepted by the
+            // array-receiver fall-through above and never reaches this match.
             "all?" => {
                 let result = self.inline_all_any(
                     expr,
@@ -201,22 +240,6 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Emit an inlined `vec.retain { |item| pred }` — in-place filter.
-    /// Read-write cursor walks the backing array; elements where the
-    /// closure returns `true` are kept (compacted into the prefix);
-    /// elements where it returns `false` are dropped (the slot at
-    /// position `read` is overwritten by a future kept element). Final
-    /// `len` becomes the count of survivors. The element backing
-    /// (e.g. `Vec[String]` slot strings) is NOT freed by this lowering
-    /// — v1 documents `retain` as a slot-level forget, the same
-    /// contract as `clear` / `truncate` (#03 batch 1).
-    pub(super) fn fn_local_ty(&self, local_id: LocalId) -> Ty {
-        self.current_fn
-            .as_ref()
-            .and_then(|f| f.locals.iter().find(|l| l.id == local_id))
-            .map(|l| l.ty.clone())
-            .unwrap_or(Ty::Int)
-    }
-
     /// Lower the "vec source" from a method call chain, peeling through
     /// iterator adaptors and passthrough method calls to find the underlying
     /// Vec local. E.g., `self.items.iter.filter { ... }` -> the local for
@@ -230,10 +253,11 @@ impl<'a> Lowerer<'a> {
                 ..
             } => {
                 match method_name.as_str() {
-                    "iter" | "into_iter" | "to_vec" | "enumerate" => {
-                        // These are passthrough — recurse into the object.
-                        self.lower_vec_source(object)
-                    }
+                    // (The `iter`/`into_iter`/`to_vec`/`enumerate`
+                    // passthrough peel was removed with the orphaned
+                    // iterator machinery — Phase B / Milestone 2. Nothing
+                    // produces those calls, so the `_ =>` arm below covers
+                    // any residual shape by lowering normally.)
                     "select" | "reject" | "where_matching" if block.is_some() => {
                         // A filter in the chain: inline it and return the
                         // filtered vec as the source. This handles chained
@@ -252,13 +276,11 @@ impl<'a> Lowerer<'a> {
                 field_name,
                 ..
             } => {
-                // .iter, .into_iter etc. may be parsed as FieldAccess (no parens)
-                match field_name.as_str() {
-                    "iter" | "into_iter" | "to_vec" | "enumerate" => {
-                        self.lower_vec_source(inner_obj)
-                    }
-                    _ => self.lower_expr(expr),
-                }
+                // (`.iter`/`.into_iter`/`.to_vec`/`.enumerate` field-access
+                // peel removed with the orphaned iterator machinery —
+                // Phase B / Milestone 2.)
+                let _ = (inner_obj, field_name);
+                self.lower_expr(expr)
             }
             _ => self.lower_expr(expr),
         }

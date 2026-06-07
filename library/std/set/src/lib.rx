@@ -1,31 +1,65 @@
-## std::set — Set (formerly `Set`) method surface.
+## std::set — Set (Ruby's Set) method surface.
 ##
-## #06.8 T#16: every method here was a `Set[T]_<m>` / `Set[T]_<m>`
-## entry in the `name.starts_with("Set[") || ...` arm of
-## `compiler/ruxen_core/src/codegen/runtime_table/mod.rs` until T#14's
-## anchor-extension. Same shape as the Hash migration: `Set` is NOT in
-## type-scope (`resolve_type_expr` builds `Ty::Set(_)` from a
-## hardcoded arm); the anchor branch creates a parent DefId for FFI
-## bookkeeping without touching type-scope.
+## Zero-Rust-stdlib migration, Phase 2 (Option C). `class Set[T]` below
+## carries BOTH the FFI alias decls (`Set_<m>` → `ruxen_set_<m>`) AND
+## the TRUE surface return types delegated via the builtin-receiver
+## bridge (`bridge_builtin_method`, reached for `Ty::Set(_)` because
+## `builtin_bridge::is_delegated_head` now includes the Set head).
+## `method_home_key` maps `Ty::Set(_)` → `"Set"`; element substitution
+## into the declared `T` is done by `substitute_generics_in_return`.
 ##
-## Runtime C symbols carry the original `ruxen_set_*` prefix; the
-## `Lowerer::resolve_ffi_alias_callee` fallback handles both `Set.new`
-## (surface) and `Set.new` (legacy value-scope alias) by retrying
-## the lookup with the base_type-mangled key after the runtime_base
-## form misses.
-class Set
+## `Set` is NOT in type-scope (`resolve_type_expr` builds `Ty::Set(_)`
+## from a hardcoded arm); the anchor branch creates a parent DefId for
+## FFI bookkeeping without touching type-scope, so the hardcoded type
+## resolver stays authoritative for the receiver TYPE while the class
+## below homes the METHODS.
+##
+## ## ABI notes
+##
+## Every method's true surface type is ABI-identical to its C symbol's
+## wire width: `RuxenSet*` / `RuxenVec*` (`to_a`) cross the C ABI as
+## I64, `uint64_t` (len) as I64 (= `USize`), `int` bools as I8 (`Bool`).
+## The parity guard `tests/runtime_abi_derivation.rs` pins the widths.
+##
+## No residuals — every Set method has a real C symbol and a statically
+## substitutable return.
+##
+## ## Enumerable
+##
+## `Set` `include`s `Enumerable[T]` (core/lib.rx) and supplies only the
+## required `each` primitive: the whole combinator family
+## (`map`/`select`/`reject`/`find`/`reduce`/`all?`/`any?`/`partition`/…)
+## comes from the shared mixin default bodies over `each`. Set's `each`
+## is expressed over the FFI-on-self `self.to_a` (the materialized
+## element vector), forwarding each element to the closure — the same
+## shape as `Hash#each` (`605_generic_self_ffi_method`).
+class Set[T]
   lib "../hash/runtime/hash.c"
-    def self.new as "ruxen_set_new" -> Int
-    def self.with_capacity as "ruxen_set_with_capacity"(cap: Int) -> Int
-    def size as "ruxen_set_len" -> Int
+    def self.new as "ruxen_set_new" -> Set[T]
+    def self.with_capacity as "ruxen_set_with_capacity"(cap: Int) -> Set[T]
+    def size as "ruxen_set_len" -> USize
     def empty? as "ruxen_set_is_empty" -> Bool
-    def include? as "ruxen_set_contains"(item: Int) -> Bool
-    def to_a as "ruxen_set_iter" -> Int
-    def union as "ruxen_set_union"(other: Int) -> Int
-    def intersection as "ruxen_set_intersection"(other: Int) -> Int
-    def difference as "ruxen_set_difference"(other: Int) -> Int
-    def insert as "ruxen_set_insert"(item: Int)
-    def remove as "ruxen_set_remove"(item: Int) -> Bool
+    def include? as "ruxen_set_contains"(item: T) -> Bool
+    def to_a as "ruxen_set_iter" -> Array[&T]
+    def union as "ruxen_set_union"(other: Set[T]) -> Set[T]
+    def intersection as "ruxen_set_intersection"(other: Set[T]) -> Set[T]
+    def difference as "ruxen_set_difference"(other: Set[T]) -> Set[T]
+    def insert as "ruxen_set_insert"(item: T)
+    def remove as "ruxen_set_remove"(item: T) -> Bool
     def clear as "ruxen_set_clear"
+  end
+
+  # The combinator family (`map`/`select`/`reject`/`find`/`reduce`/
+  # `all?`/`any?`/`partition`/`each_with_index`/`index`) comes from the
+  # shared `mixin Enumerable[T]` over the single `each` primitive below.
+  include Enumerable[T]
+
+  # Generic `each`: yield every element to the user closure. Lowered
+  # ONCE as the opaque `Set_each` (T abstract); materializes the elements
+  # via the FFI call on `self` (`self.to_a`) and forwards each to `f`.
+  def each(f: any Fn[Fn(T) -> nil]) -> nil
+    let items = self.to_a
+    items.each do |x| f.(x) end
+    nil
   end
 end

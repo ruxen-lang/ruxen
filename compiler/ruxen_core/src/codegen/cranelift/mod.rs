@@ -7,7 +7,9 @@
 //!   3. Emit the finished object bytes.
 //!
 //! This module is split for navigability:
-//!   * `runtime_sigs` — the big `runtime_signature` lookup table.
+//!   * `runtime_sigs` — the compiler-internal ABI residual
+//!     (`compiler_internal_signature`); the per-symbol table for
+//!     `.rx`-declared FFI is derived, not hand-rolled (see that module).
 //!   * `helpers`      — pure `Ty`/`CmpOp` ↔ Cranelift mappings.
 //!   * `translation_env` — module-state borrow split from `FunctionBuilder`.
 //!   * `emit`         — free functions for MIR instruction / terminator lowering.
@@ -17,10 +19,13 @@ mod helpers;
 mod runtime_sigs;
 mod translation_env;
 
-/// The authoritative C-runtime ABI signature table. Re-exported so the
-/// REPL's standalone JIT backend (`ruxen_repl`) shares it rather than
-/// keeping a subset that drifts out of sync.
-pub use runtime_sigs::runtime_signature;
+/// The compiler-internal runtime ABI residual: signatures of `ruxen_*`
+/// symbols emitted directly by codegen that no `.rx` lib block declares.
+/// `.rx`-declared FFI ABI is derived from the declared `Ty`s at codegen
+/// Pass-0, not from this table. Re-exported `pub` for source
+/// compatibility; the REPL JIT derives its own widths from
+/// `HirFfiFunc::param_types`.
+pub use runtime_sigs::compiler_internal_signature;
 
 /// Module-agnostic Cranelift lowering helpers. These take only
 /// `&mut FunctionBuilder` or pure values and never touch the module, so the
@@ -72,10 +77,13 @@ pub struct CodeGen {
     /// definitions complete (`emit_mixin_vtables`).
     vtable_data: HashMap<String, cranelift_module::DataId>,
     /// Cranelift parameter types for every function declared in this
-    /// module (FFI + user MIR fns).  Used by `coerce_call_args` to apply
-    /// the *correct* narrow-int signature when the callee is a known
-    /// user-defined function — runtime helpers still flow through
-    /// `runtime_signature`.  Without this, an `i8` argument to e.g.
+    /// module (FFI + user MIR fns), recorded in Pass 0/1. This is the
+    /// DERIVED-ABI source of truth `coerce_call_args` consults FIRST: for
+    /// `.rx`-declared FFI it holds the lib-decl-derived widths (= the
+    /// binding `Linkage::Import` signature); for user fns it holds the
+    /// real narrow-int signature (e.g. synth `Bool_fmt` `(i8, i64)`).
+    /// Compiler-internal residual symbols not declared here fall through
+    /// to `compiler_internal_signature`. Without this, an `i8` argument to
     /// `Bool_fmt` would be unconditionally widened to `i64` by the
     /// fallback widening rule and fail Cranelift IR verification.
     user_fn_param_tys: HashMap<String, Vec<Type>>,

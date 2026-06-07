@@ -50,6 +50,26 @@ impl Parser {
         self.expect(TokenKind::Arrow);
         self.skip_newlines();
 
+        // Q7: `-> do … end` is the explicit multi-statement BLOCK arm form
+        // (decision: `{ expr }` stays a single-expression arm; `do … end` is
+        // the block). Parse the block directly so the expression parser
+        // doesn't take `do` as a closure literal (which produced a spurious
+        // `Fn() -> T` arm type). A block arm is also not a closure, so the
+        // arm's body sees the surrounding bindings live (no stale-capture).
+        if self.at(TokenKind::Do) {
+            self.advance(); // consume `do`
+            self.skip_newlines();
+            let block = self.parse_body();
+            self.expect(TokenKind::End);
+            let span = self.span_from(&start);
+            return MatchArm {
+                pattern,
+                guard,
+                body: MatchArmBody::Block(block),
+                span,
+            };
+        }
+
         // Arm body: always go through `parse_match_arm_body`, which
         // collects statements until the next sibling arm header,
         // closing `end`, or EOF (using the `looks_like_sibling_match_arm`

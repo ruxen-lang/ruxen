@@ -103,12 +103,14 @@ end
     );
 }
 
-/// Job 3 (the harvest): a declared method `expect[T](actual: T) -> Matcher[T]`
-/// called with a String argument must yield `Matcher[String]`.
+/// Job 3 (the harvest): a declared method `wrap[T](actual: T) -> Holder[T]`
+/// called with a String argument must yield `Holder[String]`.
+/// (Uses `Holder`, not `Matcher` — the latter is an auto-loaded `std.test`
+/// type and now correctly trips the E0727 name-collision check, Q14.)
 #[test]
 fn selected_method_harvests_own_type_params() {
     let src = "\
-class Matcher[T]
+class Holder[T]
   v: T
   def init(@v: T)
   end
@@ -117,22 +119,22 @@ end
 class Asserter
   def init
   end
-  def expect[T](actual: T) -> Matcher[T]
-    Matcher.new(actual)
+  def wrap[T](actual: T) -> Holder[T]
+    Holder.new(actual)
   end
 end
 
 def main
   let a = Asserter.new
-  let m = a.expect(\"hello\")
+  let m = a.wrap(\"hello\")
 end
 ";
     let tys = let_types_in(src, "main");
     assert_eq!(
         tys,
-        vec!["Asserter".to_string(), "Matcher[&str]".to_string()],
-        "expect(\"hello\") should harvest T -> &str from the argument, \
-         yielding Matcher[&str] (without the harvest it stays Matcher[T])"
+        vec!["Asserter".to_string(), "Holder[&str]".to_string()],
+        "wrap(\"hello\") should harvest T -> &str from the argument, \
+         yielding Holder[&str] (without the harvest it stays Holder[T])"
     );
 }
 

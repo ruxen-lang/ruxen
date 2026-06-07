@@ -1,0 +1,34 @@
+## Q8 (gui-stack-v1-issues) — self-referential class types. Before the fix
+## these crashed the COMPILER with a stack overflow: the structural
+## auto-derive check (typeck) and the layout/size computation (codegen)
+## both recursed through the self-reference with no cycle detection. A
+## class instance is a heap pointer, so `Array[Node]` / `Option[Node]` are
+## representable; cycle detection now terminates both walks (coinductive /
+## pointer-sized on a cycle). Covers a container self-ref AND a direct
+## Option self-ref, with field access through the recursion.
+
+class Node
+  label: String
+  children: Array[Node]
+  next: Option[Node]
+  def init(@label: String)
+    self.children = Array.new
+    self.next = nil
+  end
+end
+
+def main
+  var root = Node.new(String.from("root"))
+  root.children.push(Node.new(String.from("kid1")))
+  root.children.push(Node.new(String.from("kid2")))
+  puts "kids: #{root.children.size}"
+  if let Some(first) = root.children.get(0)
+    puts "first: #{first.label}"
+  end
+
+  root.next = Some(Node.new(String.from("sibling")))
+  match root.next
+    Some(n) -> puts "next: #{n.label}"
+    nil     -> puts "next: none"
+  end
+end

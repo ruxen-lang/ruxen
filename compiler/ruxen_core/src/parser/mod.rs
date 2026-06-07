@@ -519,6 +519,127 @@ impl Parser {
         }
     }
 
+    /// Parse a method name in `def` position, accepting operator-symbol
+    /// method names in addition to plain identifiers / `init`.
+    ///
+    /// Operators become overridable methods named by their symbol
+    /// (`def +` → method `"+"`, `def []` → `"[]"`, `def -@` → `"-@"`).
+    /// This is the SYNTACTIC half of the operator wave: the parser only
+    /// learns the *name*; the desugar from `a + b` to `a.+(b)` happens
+    /// post-typeck (it needs `left.ty` to choose the machine-primitive
+    /// floor vs. a real method call), so `ExprKind::BinaryOp` / `UnaryOp`
+    /// / `Index` stay as parser nodes. See `mir/lower/expr/binops.rs` and
+    /// `typeck/infer/ops.rs` for the consuming side.
+    ///
+    /// Multi-token names: `[]` is `LBracket RBracket`, `[]=` adds `Eq`,
+    /// and `-@` / `+@` are `Minus`/`Plus` followed by `At`. The `@`-suffix
+    /// disambiguates the unary forms from the binary `-` / `+`.
+    ///
+    /// NOTE: `**` (power) is intentionally absent — the language has no
+    /// `**` operator (no lexer token, no `BinOp` variant), so there is no
+    /// call site to desugar. It joins the set when the operator lands.
+    pub(crate) fn parse_def_name(&mut self) -> String {
+        self.try_parse_operator_name()
+            .unwrap_or_else(|| self.expect_identifier())
+    }
+
+    /// Recognise an operator-symbol method name at the cursor, consuming
+    /// its tokens and returning the canonical name. Returns `None` (cursor
+    /// unmoved) when the cursor is not on an operator — the caller then
+    /// falls back to its own identifier path. Shared by `def`-name parsing
+    /// (`parse_def_name`, lowercase fallback) and method-call parsing
+    /// (`a.+(b)`, `expect_any_identifier` fallback).
+    /// True when `kind` is the first token of an operator-symbol method
+    /// name. Used by the `def var <op>` self-mode lookahead so an operator
+    /// name following `var` is recognised as a method name, not a binding.
+    pub(crate) fn is_operator_name_start(kind: &TokenKind) -> bool {
+        matches!(
+            kind,
+            TokenKind::Plus
+                | TokenKind::Minus
+                | TokenKind::Star
+                | TokenKind::Slash
+                | TokenKind::Percent
+                | TokenKind::Amp
+                | TokenKind::Pipe
+                | TokenKind::Caret
+                | TokenKind::Shl
+                | TokenKind::Shr
+                | TokenKind::Bang
+                | TokenKind::LBracket
+        )
+    }
+
+    pub(crate) fn try_parse_operator_name(&mut self) -> Option<String> {
+        let name = match self.current_kind() {
+            TokenKind::Plus => {
+                self.advance();
+                if self.eat(TokenKind::At) {
+                    "+@"
+                } else {
+                    "+"
+                }
+            }
+            TokenKind::Minus => {
+                self.advance();
+                if self.eat(TokenKind::At) {
+                    "-@"
+                } else {
+                    "-"
+                }
+            }
+            TokenKind::Star => {
+                self.advance();
+                "*"
+            }
+            TokenKind::Slash => {
+                self.advance();
+                "/"
+            }
+            TokenKind::Percent => {
+                self.advance();
+                "%"
+            }
+            TokenKind::Amp => {
+                self.advance();
+                "&"
+            }
+            TokenKind::Pipe => {
+                self.advance();
+                "|"
+            }
+            TokenKind::Caret => {
+                self.advance();
+                "^"
+            }
+            TokenKind::Shl => {
+                self.advance();
+                "<<"
+            }
+            TokenKind::Shr => {
+                self.advance();
+                ">>"
+            }
+            TokenKind::Bang => {
+                self.advance();
+                "!"
+            }
+            TokenKind::LBracket => {
+                self.advance();
+                self.expect(TokenKind::RBracket);
+                if self.eat(TokenKind::Eq) {
+                    "[]="
+                } else {
+                    "[]"
+                }
+            }
+            // Not an operator name — let the caller pick its own
+            // identifier fallback (lowercase vs. any-identifier).
+            _ => return None,
+        };
+        Some(name.to_string())
+    }
+
     // ─── Span Helpers ────────────────────────────────────────────────
 
     pub(crate) fn span_from(&self, start: &Span) -> Span {

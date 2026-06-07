@@ -30,25 +30,121 @@
 ## int64_t-bit-cast results; typeck still serves the user-facing
 ## generic-aware types from its hardcoded table in
 ## `typeck/method_resolvers`.
-class Option
+## ## Migrated surface returns (zero-Rust-stdlib bridge)
+##
+## The decls below carry the TRUE generic-aware surface returns that
+## typeck delegates to via the builtin-receiver bridge
+## (`is_delegated_head` now includes `Ty::Option`/`Ty::Result`;
+## `method_home_key` maps them to `Option`/`Result`; element
+## substitution into `T`/`E` is done by `substitute_generics_in_return`
+## against these enums' declared params). Each return is ABI-identical
+## to its C symbol's wire width — `T`/`E` by value, boxed `Option`, and
+## `Bool` all cross the C ABI as I64, matching the int64_t-bit-cast
+## results the `ruxen_option_*` / `ruxen_result_*` symbols return.
+##
+## Fully bridge-resolved (zero collections.rs arms):
+##   * `map` / `map_err` — MIGRATED (Task H) to method-level generic
+##     harvesting through the bridge. The decls below carry the transformed
+##     type as a method-level generic (`map[U] -> Option[U]`/`Result[U, E]`,
+##     `map_err[F] -> Result[T, F]`); `bridge_builtin_method` →
+##     `harvest_and_subst_generics` binds it from the closure argument's
+##     inferred return type (the same direct path `Array.map`/`zip[U]` use).
+##     The collections.rs arms that minted a fresh type var (and the
+##     `infer_combinator_block` that unified it) are RETIRED.
+##   * `unwrap_or_else` — MIGRATED to `.rx` bodies below: return the success
+##     payload on the present arm, run the fallback closure otherwise
+##     (`match self { Some(x) -> x; nil -> f.() }`; Result passes the err to
+##     `f.(e)`). The return is the success element `T`, a static declared
+##     return that substitutes through the bridge — no resolver arm needed.
+##
+## RESIDUAL (still typed by collections.rs arms ahead of the bridge):
+##   * `try_op` — the `?` operator desugaring (compiler intrinsic).
+##   * `ok_or` — the err type comes from the ARG, not a static return
+##     (like the pre-Task-H `map`); kept laundered for the FFI alias.
+class Option[T]
   lib "../core/runtime/alloc.c"
-    def unwrap_or as "ruxen_option_unwrap_or"(default: Int) -> Int
-    def unwrap as "ruxen_option_unwrap" -> Int
-    def expect as "ruxen_option_expect"(msg: &String) -> Int
+    def unwrap_or as "ruxen_option_unwrap_or"(default: T) -> T
+    def unwrap as "ruxen_option_unwrap" -> T
+    def expect as "ruxen_option_expect"(msg: &String) -> T
     def present? as "ruxen_option_is_some" -> Bool
     def nil? as "ruxen_option_is_none" -> Bool
-    def ok_or as "ruxen_option_ok_or"(err: Int) -> Int
+  end
+
+  # Ruby `Option#ok_or` — convert to a `Result`, using `err` as the `Err`
+  # payload when empty. MIGRATED (Task H) to a `.rx` body: the method-level
+  # generic `E` is harvested from the `err` argument by the bridge
+  # (`harvest_and_subst_generics`, the direct-arg path `zip[U]` also uses), so
+  # the surface return `Result[T, E]` resolves from here — no laundered FFI
+  # alias / resolver arm.
+  def ok_or[E](err: E) -> Result[T, E]
+    match self
+      Some(x) -> Result.Ok(x)
+      nil -> Result.Err(err)
+    end
+  end
+
+  # Ruby `Option#map` — apply `f` to the contained value, repackage as
+  # `Some`; propagate `nil` unchanged. Lowered ONCE as the opaque
+  # `Option_map` body (T/U abstract). Exercises a closure call inside a
+  # match arm of an opaque generic body.
+  def map[U](f: any Fn[Fn(T) -> U]) -> Option[U]
+    match self
+      Some(x) -> Option.Some(f.(x))
+      nil -> nil
+    end
+  end
+
+  # Ruby `Option#unwrap_or_else` — return the contained value if present,
+  # otherwise compute the fallback by calling `f` (no argument). Lowered
+  # ONCE as the opaque `Option_unwrap_or_else` body (closure call in a
+  # match arm of the opaque body, Bug 1 path).
+  def unwrap_or_else(f: any Fn[Fn() -> T]) -> T
+    match self
+      Some(x) -> x
+      nil -> f.()
+    end
   end
 end
 
-class Result
+class Result[T, E]
   lib "../core/runtime/alloc.c"
-    def unwrap_or as "ruxen_result_unwrap_or"(default: Int) -> Int
-    def unwrap as "ruxen_result_unwrap" -> Int
-    def expect as "ruxen_result_expect"(msg: &String) -> Int
+    def unwrap_or as "ruxen_result_unwrap_or"(default: T) -> T
+    def unwrap as "ruxen_result_unwrap" -> T
+    def expect as "ruxen_result_expect"(msg: &String) -> T
     def ok? as "ruxen_result_is_ok" -> Bool
     def err? as "ruxen_result_is_err" -> Bool
-    def ok as "ruxen_result_ok" -> Int
-    def err as "ruxen_result_err" -> Int
+    def ok as "ruxen_result_ok" -> Option[T]
+    def err as "ruxen_result_err" -> Option[E]
+  end
+
+  # Ruby `Result#map` — apply `f` to the `Ok` value, repackage as `Ok`;
+  # propagate `Err` unchanged. Lowered ONCE as the opaque `Result_map`
+  # body (T/U/E abstract). Closure call inside a match arm of an opaque
+  # generic body.
+  def map[U](f: any Fn[Fn(T) -> U]) -> Result[U, E]
+    match self
+      Ok(x) -> Result.Ok(f.(x))
+      Err(e) -> Result.Err(e)
+    end
+  end
+
+  # Ruby `Result#map_err` — apply `f` to the `Err` value; propagate `Ok`
+  # unchanged.
+  def map_err[F](f: any Fn[Fn(E) -> F]) -> Result[T, F]
+    match self
+      Ok(x) -> Result.Ok(x)
+      Err(e) -> Result.Err(f.(e))
+    end
+  end
+
+  # Ruby `Result#unwrap_or_else` — return the `Ok` value if present,
+  # otherwise compute the fallback by calling `f` with the `Err` payload.
+  # Lowered ONCE as the opaque `Result_unwrap_or_else` body (closure call
+  # in a match arm of the opaque body, Bug 1 path).
+  def unwrap_or_else(f: any Fn[Fn(E) -> T]) -> T
+    match self
+      Ok(x) -> x
+      Err(e) -> f.(e)
+    end
   end
 end

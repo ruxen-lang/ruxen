@@ -3,11 +3,14 @@ name: PR Ready
 # Runs the heavy coverage that otherwise only happens at release time:
 #   - the 213-fixture release-e2e sweep (compile-and-run each fixture), and
 #   - a 4-target cross build check (arm + x86_64 on Linux and macOS).
-# Fires on two events:
+# Fires for:
 #   - push to master (post-merge safety net), and
-#   - a PR being flipped from draft to "ready for review" (the single
-#     `ready_for_review` transition — NOT later pushes to an already-ready
-#     PR; plain `ci.yml` covers those).
+#   - any non-draft PR targeting master — whether it was opened directly as
+#     ready (`opened`), flipped from draft (`ready_for_review`), reopened, or
+#     pushed to while ready (`synchronize`). The per-job `if:` below skips
+#     DRAFT PRs so the heavy sweep stays off work-in-progress branches; the
+#     previous config only fired on the one draft→ready transition, so a PR
+#     opened already-ready (or updated while ready) never ran it.
 # Re-run the e2e sweep locally with:
 #   cargo test -p ruxen_core --test release_e2e_smoke -- --ignored
 on:
@@ -15,7 +18,7 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
-    types: [ready_for_review]
+    types: [opened, reopened, synchronize, ready_for_review]
 
 env:
   CARGO_TERM_COLOR: always
@@ -24,6 +27,9 @@ env:
 jobs:
   release-e2e:
     name: Release E2E (${{ matrix.os }})
+    # Always on push; on PRs only when NOT a draft (covers already-ready PRs,
+    # not just the draft→ready flip).
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -38,11 +44,26 @@ jobs:
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@v2
 
+      # Build the runtime archive ONCE up front. `ruxen_repl`'s build
+      # script compiles every `library/std/*/runtime/*.c` (incl. the
+      # vendored PCRE2 tree) into `libruxenrt.a`. The e2e harness's
+      # `find_prebuilt_runtime_archive()` then auto-detects it and takes
+      # the whole-archive fast-path link, so each of the 318 fixtures
+      # links against the prebuilt archive instead of re-forking ~180
+      # `cc -c -O2` compiles per fixture (~57k C-compiles per run). That
+      # per-fixture C recompilation was the dominant cost of the sweep
+      # (Ubuntu ~27m / macOS ~15m); with the archive present both drop
+      # to a few minutes and the per-fixture work is just Ruxen codegen
+      # plus one link.
+      - name: Build runtime archive (fast-path link)
+        run: cargo build -p ruxen_repl
+
       - name: cargo test (release-e2e fixtures)
         run: cargo test -p ruxen_core --test release_e2e_smoke -- --ignored --nocapture
 
   build-check:
     name: Build ${{ matrix.target }}
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

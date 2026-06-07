@@ -269,9 +269,12 @@ impl<'a> BorrowChecker<'a> {
                 }
             }
             // If arg is a VarRef and type is Move, record the move.
-            // Structs that `derive Copy` are treated as Copy here.
+            // Structs that `derive Copy` are treated as Copy here. A
+            // reference-typed arg (`&T`/`&var T`) is an implicit REBORROW,
+            // not a move (Q12) — skip it so the same reference can be passed
+            // to several calls without a false E1001.
             if let HirExprKind::VarRef(source_id) = &arg.kind {
-                if !self.ty_is_effectively_copy(&arg.ty) {
+                if !self.ty_is_effectively_copy(&arg.ty) && !arg_is_reborrowed_reference(&arg.ty) {
                     self.moves.process_call_move(
                         *source_id,
                         callee_name.to_string(),
@@ -381,8 +384,9 @@ impl<'a> BorrowChecker<'a> {
         // Check args
         for arg in args {
             self.check_expr(arg);
+            // Reference-typed args reborrow rather than move (Q12).
             if let HirExprKind::VarRef(source_id) = &arg.kind {
-                if !self.ty_is_effectively_copy(&arg.ty) {
+                if !self.ty_is_effectively_copy(&arg.ty) && !arg_is_reborrowed_reference(&arg.ty) {
                     self.moves.process_call_move(
                         *source_id,
                         method_name.to_string(),
@@ -498,35 +502,10 @@ impl<'a> BorrowChecker<'a> {
                     }
                 }
 
-                // Name-based iterator ownership
-                match method_name {
-                    "iter" => {
-                        let scope = self.scopes.current();
-                        self.borrows.create(
-                            BorrowKind::Shared,
-                            *obj_id,
-                            *obj_id,
-                            span.clone(),
-                            scope,
-                        );
-                    }
-                    "into_iter" => {
-                        if !self.ty_is_effectively_copy(&object.ty) {
-                            self.moves.process_call_move(
-                                *obj_id,
-                                "into_iter".to_string(),
-                                &object.ty,
-                                span.clone(),
-                            );
-                            self.ownership.record_move_into_call(
-                                *obj_id,
-                                "into_iter".to_string(),
-                                span.clone(),
-                            );
-                        }
-                    }
-                    _ => {}
-                }
+                // (The name-based `iter` / `into_iter` borrow/move
+                // ownership tracking was removed with the orphaned
+                // iterator machinery — Phase B / Milestone 2. Nothing
+                // produces those calls.)
             }
         }
 
@@ -571,4 +550,17 @@ impl<'a> BorrowChecker<'a> {
             }
         }
     }
+}
+
+/// A reference-typed argument is reborrowed at the call site, not moved
+/// (Q12, gui-stack-v1-issues). `&T` / `&var T` passed to a callee that
+/// expects a reference is an implicit reborrow — recording it as a move
+/// produces a false E1001 on any later use of the same reference (e.g. a
+/// closure that passes its `&var Ui` param to two different calls).
+fn arg_is_reborrowed_reference(ty: &crate::hir::types::Ty) -> bool {
+    use crate::hir::types::Ty;
+    matches!(
+        ty,
+        Ty::Ref(_) | Ty::RefMut(_) | Ty::RefLifetime(_, _) | Ty::RefMutLifetime(_, _)
+    )
 }

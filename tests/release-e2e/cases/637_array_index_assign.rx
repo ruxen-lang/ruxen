@@ -1,0 +1,19 @@
+## Q9 (gui-stack-v1-issues) — array indexing with a non-literal index (read)
+## and index ASSIGNMENT (write). The read (`xs[i]`) regressed-then-fixed;
+## the write (`xs[0] = v`) compiled but silently no-op'd (printed the old
+## value). Now it lowers to ruxen_vec_set (bounds-checked).
+
+def main
+  let xs = [10, 20, 30]
+  let i = 1
+  puts "#{xs[0]}"      # literal index read
+  puts "#{xs[i]}"      # non-literal index read (Q9a)
+
+  var ys = [10, 20, 30]
+  ys[0] = 99           # index assignment, literal index (Q9b)
+  let j = 2
+  ys[j] = 77           # index assignment, non-literal index
+  puts "#{ys[0]}"
+  puts "#{ys[1]}"
+  puts "#{ys[j]}"
+end

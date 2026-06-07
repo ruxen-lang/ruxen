@@ -1,0 +1,29 @@
+## Q3 (gui-stack-v1-issues) — a `do … end` block passed to a FREE function
+## with an explicit closure parameter. Before the fix this compiled but
+## segfaulted: a block-bearing free call was lowered as `runit.call(block)`
+## (treating the function as a closure value) instead of forwarding the block
+## as `runit`'s argument. Covers no-arg, plain `Fn`, and a block with params.
+
+def runit(f: any Fn[Fn() -> nil]) -> nil
+  f.()
+end
+
+def withn(f: any Fn[Fn(Int) -> nil]) -> nil
+  f.(7)
+end
+
+def plain(f: Fn() -> nil) -> nil
+  f.()
+end
+
+def main
+  runit do
+    puts "plain-any"
+  end
+  withn do |n|
+    puts "n=#{n}"
+  end
+  plain do
+    puts "plain-fn"
+  end
+end

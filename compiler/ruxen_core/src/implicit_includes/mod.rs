@@ -19,6 +19,15 @@ const SUPPORTED_DERIVES: [&str; 10] = [
     "PartialOrd",
 ];
 
+/// Whether `name` is a compiler-synthesizable derive marker (the closed
+/// `SUPPORTED_DERIVES` set). Used by `MixinResolver::check_satisfaction` to
+/// decide that a zero-required-method bound (`K: Hashable`, `T: Ord`, …) is
+/// satisfied STRUCTURALLY via auto-derive, vs a pure-capability marker
+/// (`Add`) that must be opted into nominally.
+pub(crate) fn is_supported_derive(name: &str) -> bool {
+    SUPPORTED_DERIVES.contains(&name)
+}
+
 pub fn validate_program(program: &HirProgram, symbols: &SymbolTable) -> Vec<Diagnostic> {
     let mut diags = Vec::new();
     for item in &program.items {
@@ -531,7 +540,7 @@ fn validate_per_field_traits<'a>(
 /// "Ord" | "PartialOrd"`. `Eq` collapses to `PartialEq` (Eq is a
 /// marker), and `Hash` is treated identically to `Hashable` to keep
 /// the TEC-13 rename working through the transition release.
-fn ty_satisfies_named_trait(ty: &Ty, trait_name: &str, symbols: &SymbolTable) -> bool {
+pub(crate) fn ty_satisfies_named_trait(ty: &Ty, trait_name: &str, symbols: &SymbolTable) -> bool {
     let canonical = match trait_name {
         "Eq" => "PartialEq",
         "Hashable" => "Hash",

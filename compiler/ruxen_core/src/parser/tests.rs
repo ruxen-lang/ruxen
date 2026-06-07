@@ -634,6 +634,38 @@ end";
         }
     }
 
+    // Q10 (gui-stack-v1-issues): a `##` doc comment BETWEEN two bodiless
+    // method signatures in a mixin must terminate the first signature (the
+    // doc floats forward to the next sig), not be parsed as the first
+    // method's body. Before the fix the parser fell into the "default
+    // method with body" branch and choked ("expected expression, found
+    // Def") on the following `def`.
+    #[test]
+    fn mixin_doc_comment_between_signatures() {
+        let src = "\
+mixin Surface
+  ## comment before first sig
+  def a(x: Int) -> nil
+  ## comment between sigs
+  def b(x: Int) -> nil
+end";
+        let program = parse(src);
+        let tr = match &program.items[0] {
+            TopLevelItem::Mixin(t) => t,
+            other => panic!("expected mixin, got {:?}", other),
+        };
+        assert_eq!(tr.items.len(), 2, "both signatures should parse");
+        let names: Vec<&str> = tr
+            .items
+            .iter()
+            .map(|it| match it {
+                MixinItem::MethodSig(sig) => sig.name.as_str(),
+                other => panic!("expected method signature, got {:?}", other),
+            })
+            .collect();
+        assert_eq!(names, vec!["a", "b"]);
+    }
+
     // ═══════════════════════════════════════════════════════════════════
     //  Mixin Inclusion via `include` (ruby-naming.spec.md §3.4)
     //

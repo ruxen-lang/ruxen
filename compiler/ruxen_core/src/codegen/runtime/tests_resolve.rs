@@ -22,18 +22,40 @@ fn unknown_inferred_type_method_is_rejected() {
 #[test]
 fn unimplemented_vec_combinators_are_rejected() {
     // `sum` and `count` now resolve to `ruxen_vec_sum`/`ruxen_vec_count`
-    // — see `implemented_vec_combinators_resolve`. The list here is
-    // limited to combinators with no MIR inliner and no runtime symbol.
-    for m in [
-        "Vec[Int]_reduce",
-        "Vec[Int]_collect",
-        "Vec[Int]_map",
-        "Vec[Int]_select",
-    ] {
+    // — see `implemented_vec_combinators_resolve`. `map` / `select` /
+    // `reject` / `all?` / `any?` / `partition` / `reduce` MIGRATED to
+    // real `.rx` bodies (Feature C) and now PASS THROUGH as `Array_<m>`
+    // MIR functions — see `migrated_vec_combinators_forward`. The list
+    // here is limited to combinators that still have no MIR inliner and
+    // no runtime symbol (`collect` is unimplemented).
+    for m in ["Vec[Int]_collect"] {
         assert!(
             runtime_name(m).is_err(),
             "expected `{m}` to be rejected (was {:?})",
             runtime_name(m)
+        );
+    }
+}
+
+#[test]
+fn migrated_vec_combinators_forward() {
+    // Feature C: the closure combinators migrated to real `.rx` bodies
+    // over `each` reach codegen as genuine `Array_<m>` MIR functions, so
+    // `runtime_name` must forward them (identity) rather than reject. The
+    // MIR function definition supplies the symbol at link time.
+    for m in [
+        "Array_map",
+        "Array_select",
+        "Array_reject",
+        "Array_all?",
+        "Array_any?",
+        "Array_partition",
+        "Array_reduce",
+    ] {
+        assert_eq!(
+            runtime_name(m).unwrap(),
+            m,
+            "expected migrated combinator `{m}` to forward as identity"
         );
     }
 }

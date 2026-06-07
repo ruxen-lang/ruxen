@@ -29,6 +29,39 @@ use super::{ClosureCaptureContext, ResolveResult, Resolver};
 /// different `Ty` and carry distinct validation.
 pub(crate) const COLLECTION_BUILTINS: &[&str] = &["Array", "Vec", "Hash", "Set"];
 
+/// The primitive type names whose method-home `.rx` class is anchored onto
+/// their `register_primitives` `TypeAlias` DefId (then stomped to `Class`),
+/// mapped back to the canonical primitive `Ty`. `resolve_type_expr`
+/// special-cases these so a bare annotation (`let x: Int`) keeps producing
+/// the primitive head even though the DefKind is now `Class` — the class
+/// only homes the methods (`Int.to_s`, `Float.to_i`, …), it does NOT change
+/// the value representation. `String` is included for symmetry with the
+/// original f88d96c fast-path (it predates this table). Generic-args-free
+/// callers only; a parameterised name was never a primitive head.
+///
+/// Pin: `string_is_class_but_resolves_to_primitive_ty` +
+/// `scalar_class_resolves_to_primitive_ty` in `builtin_anchor_class.rs`.
+fn primitive_class_ty(name: &str) -> Option<Ty> {
+    match name {
+        "String" => Some(Ty::String),
+        "Int" => Some(Ty::Int),
+        // Zero-Rust-stdlib Phase 3 follow-up (Feature A): the scalar
+        // primitives now have `.rx` method-home classes. A bare
+        // annotation (`let x: Float`) must still resolve to the PRIMITIVE
+        // head so literals, arithmetic, comparisons, and the value repr
+        // stay unchanged — only METHOD dispatch is homed on the class.
+        // The receiver WIDTH for their FFI decls is handled separately by
+        // `primitive_ffi_receiver_ty` (`Float`→F64 for `double` symbols;
+        // `Bool`/`Char`/`USize`→I64 for their `int64_t` symbols), so each
+        // method-home anchors here regardless of its C receiver register.
+        "Float" => Some(Ty::Float),
+        "Bool" => Some(Ty::Bool),
+        "Char" => Some(Ty::Char),
+        "USize" => Some(Ty::USize),
+        _ => None,
+    }
+}
+
 impl Resolver {
     pub fn resolve_type_expr(&mut self, type_expr: &ast::TypeExpr) -> Ty {
         match type_expr {
@@ -558,8 +591,19 @@ impl Resolver {
                         // typed `Ty::String` already resolves through
                         // `typeck/method_resolvers` and the FFI alias
                         // map keyed on the class name.
-                        if name == "String" && generic_args.is_empty() {
-                            return Ty::String;
+                        // Zero-Rust-stdlib migration: the same anchoring
+                        // applies to the scalar primitives whose method-home
+                        // `.rx` classes were added in Phase 3 (`class Int`,
+                        // `Float`, `Bool`, `Char`). They are registered as
+                        // `TypeAlias { target: Ty::Int/… }`, anchored, then
+                        // stomped to `Class`; `primitive_class_ty` returns
+                        // the canonical primitive head so `let x: Int`,
+                        // literals, arithmetic, and the C ABI stay unchanged
+                        // while the class homes `Int.to_s`/`to_f`/… dispatch.
+                        if generic_args.is_empty() {
+                            if let Some(prim) = primitive_class_ty(&name) {
+                                return prim;
+                            }
                         }
                         return Ty::Class { name, generic_args };
                     }

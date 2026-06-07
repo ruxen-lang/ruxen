@@ -16,10 +16,13 @@
 //! and therefore in MIR's `ffi_alias_map`), but the type-scope binding
 //! is untouched.
 //!
-//! Two invariants pinned here:
+//! Invariants pinned here (post zero-Rust-stdlib migration, Phase B/M3):
 //!
-//! 1. After anchor merge, the type-scope `String` binding is STILL a
-//!    `DefKind::TypeAlias` (not replaced by `DefKind::Class`).
+//! 1. After the anchor merge + `resolve_class`, the `String` binding is a
+//!    `DefKind::Class` (its METHOD-HOME) — BUT the `String` type
+//!    annotation still resolves to the primitive `Ty::String` head, not
+//!    `Ty::Class { name: "String" }`. The conversion changed the
+//!    method-home, NOT the value representation.
 //! 2. The class-body `lib` decl lands on `HirProgram.ffi_libs` with the
 //!    mangled `String_<method>` ruxen_name and the C-symbol alias —
 //!    proving the FFI route is wired all the way through to MIR.
@@ -51,7 +54,20 @@ fn parse_fixture(name: &str) -> Program {
 }
 
 #[test]
-fn anchor_mode_preserves_type_alias_for_string() {
+fn string_is_class_but_resolves_to_primitive_ty() {
+    // Zero-Rust-stdlib migration (Phase B / M3): `String` is now a real
+    // `DefKind::Class` (its method-home, so `register_classes_from_registry`
+    // lifts its `.rx` methods into `type_methods["String"]` for the general
+    // `lookup_method_with_args` path). The CRITICAL INVARIANT is that this
+    // changed only the METHOD-HOME, not the VALUE REPRESENTATION: the
+    // `String` type annotation must STILL resolve to the primitive
+    // `Ty::String` head (not `Ty::Class { name: "String" }`), preserving
+    // the runtime layout / C ABI / every `Ty::String`-matching consumer.
+    // `resolve_type_expr` enforces this via its `name == "String"`
+    // normalization arm (resolve/types.rs).
+    use ruxen_core::hir::types::Ty;
+    use ruxen_core::resolve::symbols::FnSignature;
+
     let bootstrap_program = parse_fixture("builtin_anchor_string_lib");
     let user_program = parse_fixture("builtin_anchor_string_caller");
 
@@ -69,40 +85,36 @@ fn anchor_mode_preserves_type_alias_for_string() {
         errors
     );
 
-    // Invariant 1: `String` is still a TypeAlias (canonical Ty::String).
-    // Without anchor mode the bootstrap class arm would have replaced
-    // this with a fresh `DefKind::Class { ... }` — flip that and the
-    // assertion below fails immediately, which is the whole point.
     let symbols = &result.symbols;
-    let string_defs: Vec<_> = (0..)
-        .take_while(|&i| symbols.get(i as u32).is_some())
-        .filter_map(|i| symbols.get(i as u32).map(|d| (i, d)))
-        .filter(|(_, d)| d.name == "String")
-        .collect();
-    let type_alias_count = string_defs
+
+    // Invariant 1 (NEW): the anchored `String` binding is now a
+    // `DefKind::Class` carrying its `.rx` methods — the method-home.
+    let string_class = symbols
         .iter()
-        .filter(|(_, d)| matches!(d.kind, DefKind::TypeAlias { .. }))
-        .count();
-    let class_count = string_defs
-        .iter()
-        .filter(|(_, d)| matches!(d.kind, DefKind::Class { .. }))
-        .count();
+        .any(|d| d.name == "String" && matches!(d.kind, DefKind::Class { .. }));
     assert!(
-        type_alias_count >= 1,
-        "expected at least one `String` DefKind::TypeAlias in symbol table; got defs = {:?}",
-        string_defs
-            .iter()
-            .map(|(i, d)| (
-                *i,
-                format!("{:?}", d.kind).chars().take(40).collect::<String>()
-            ))
-            .collect::<Vec<_>>()
+        string_class,
+        "expected `String` to be a DefKind::Class (method-home) after the \
+         zero-Rust-stdlib conversion; it is no longer kept as a TypeAlias"
     );
+
+    // Invariant 2 (the load-bearing one): the `String` *annotation* on
+    // `takes_string(s: String)` still resolved to the primitive
+    // `Ty::String` head — NOT `Ty::Class { name: "String" }`. This is the
+    // representation invariant the conversion must not break.
+    let sig: &FnSignature = symbols
+        .iter()
+        .find_map(|d| match &d.kind {
+            DefKind::Function { signature } if d.name == "takes_string" => Some(signature),
+            _ => None,
+        })
+        .expect("takes_string should be registered");
+    let param_ty = &sig.params.first().expect("one param").ty;
     assert_eq!(
-        class_count, 0,
-        "anchor mode must NOT create a fresh `DefKind::Class` for `String`; got {} class def(s) — \
-         this means register_top_level_type_with_ffi fell through the non-anchor branch",
-        class_count
+        param_ty,
+        &Ty::String,
+        "the `String` annotation must resolve to the primitive `Ty::String` \
+         head even though `String` is now a DefKind::Class; got {param_ty:?}"
     );
 }
 

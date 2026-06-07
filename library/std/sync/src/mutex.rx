@@ -4,7 +4,11 @@
 ## `ruxen_mutex_new(int64_t initial)` is called unchanged. Per B1+B3
 ## of the spec, T is bound from the constructor's first arg type;
 ## `Mutex.new(7)` reports `Mutex[Int]` at the let-binding site.
-class Mutex[T]
+## `Mutex[T: Send]` — the payload must be `Send` to be guarded across
+## threads. Feature B (generic trait-bound enforcement) checks this bound
+## at the `Mutex.new(value)` construction site (E1101), replacing the old
+## hardcoded `concurrency.rs` Send check.
+class Mutex[T: Send]
   include Send
 
   include Sync

@@ -140,6 +140,14 @@ impl Resolver {
         // — FFI decls are no exception. Instance-method FFI decls take
         // an implicit `self` receiver as their first arg to the C
         // symbol; class methods do not.
+        // Receiver-element bound: a `where T: Bound` on a class FFI method
+        // whose `T` is the ENCLOSING class's generic (e.g. `class Array[T]`'s
+        // `def sum -> Int where T: Add`). Thread it into the signature as a
+        // synthetic bounded generic param so the call-site seam
+        // (`bridge_builtin_method`) can bind `{T → element}` and enforce it.
+        // Only predicates naming an actual class generic are kept; FFI defs
+        // have no own generics.
+        let generic_params = self.ffi_receiver_element_bounds(parent, ffi_fn);
         let signature = FnSignature {
             self_mode: if ffi_fn.is_class_method {
                 None
@@ -148,7 +156,7 @@ impl Resolver {
             },
             is_class_method: ffi_fn.is_class_method,
             is_async: false,
-            generic_params: vec![],
+            generic_params,
             params,
             return_ty,
             c_symbol: ffi_fn.c_symbol.clone(),
@@ -210,10 +218,22 @@ impl Resolver {
         let final_param_tys = if ffi_fn.is_class_method {
             param_tys
         } else {
-            let receiver_ty = Ty::Class {
-                name: parent_name.to_string(),
-                generic_args: vec![],
-            };
+            // The receiver crosses the C ABI as the FIRST arg. Its WIRE
+            // WIDTH must match what the C symbol expects. For most
+            // method-homes the receiver is a pointer / boxed handle /
+            // int64-by-value → a pointer-sized `Ty::Class { name }`
+            // (I64), which is correct for `String`, the collections, and
+            // the scalar homes whose C symbols take `int64_t`
+            // (`Int`/`Bool`/`Char`/`USize`: `ruxen_int_to_string`,
+            // `ruxen_bool_to_string(int64_t)`, `ruxen_char_to_string(
+            // int64_t)`). The ONE exception is `Float`: its C symbols
+            // take a `double` (`ruxen_float_to_string(double)`,
+            // `ruxen_float_to_i(double)`), so the receiver must derive
+            // F64 — prepend `Ty::Float`, not the I64 class handle. Using
+            // the I64 class receiver there would pass the float bits in a
+            // GP register and read garbage. The parity guard
+            // (`tests/runtime_abi_derivation.rs`) pins each derived width.
+            let receiver_ty = primitive_ffi_receiver_ty(parent_name);
             let mut tys = Vec::with_capacity(param_tys.len() + 1);
             tys.push(receiver_ty);
             tys.extend(param_tys);
@@ -233,14 +253,112 @@ impl Resolver {
         });
     }
 
+    // (free helper below; see `final_param_tys` for the receiver-width
+    // contract it implements.)
+
     /// #06.8 Phase 2: emit **E0722** when a Ruxen `lib`/`extern` block
     /// declares the same C symbol that an earlier block already
-    /// declared with an incompatible signature (arity, param types, or
-    /// return type differ). The first decl wins; subsequent matching
-    /// decls are silently allowed (a redundant restatement is a no-op,
-    /// not an error). The check is keyed on the LINKED symbol so two
-    /// Ruxen names that alias the same C symbol must agree on its
-    /// type — otherwise codegen would produce a mis-typed call.
+    /// declared with an incompatible signature. The first decl wins;
+    /// subsequent matching decls are silently allowed (a redundant
+    /// restatement is a no-op, not an error). The check is keyed on the
+    /// LINKED symbol so two Ruxen names that alias the same C symbol
+    /// must agree on its ABI — otherwise codegen would produce a
+    /// mis-typed call.
+    ///
+    /// ## What "match" means: the WIRE shape, not the surface signature
+    ///
+    /// The conflict is decided on the POST-self-prepend WIRE shape — the
+    /// list of ABI register widths the call actually crosses — rather
+    /// than on surface-`Ty` equality. This is exactly what the linker
+    /// sees: a C symbol carries no type info, so the only thing that can
+    /// mis-compile is passing an argument in the wrong register or
+    /// reading the return at the wrong width (see `docs/errors/E0722.md`
+    /// §Background). Comparing surface `Ty` was a stricter
+    /// over-approximation that rejected two BENIGN alias families whose
+    /// wire shapes are identical:
+    ///
+    ///   * `String.from(s: &String) -> String` vs the receiver-style
+    ///     `String.clone(&self) -> String`: the explicit `&String` param
+    ///     and the implicit `&self` receiver are BOTH pointer-sized
+    ///     (I64), so post-prepend both are `(I64) -> I64`.
+    ///   * `Array.get(i) -> Option[&T]` vs
+    ///     `Array.get_mut(i) -> Option[&var T]`: `&T` and `&var T` differ
+    ///     only in surface mutability; both lower to a pointer, and the
+    ///     boxed `Option` is one pointer either way — `(I64,I64) -> I64`
+    ///     for both.
+    ///
+    /// The relaxation discards ONLY distinctions codegen itself discards.
+    /// A genuine width mismatch — the E0722.md example `(I32) -> I32` vs
+    /// `(I32) -> I64`, or an arity mismatch `(Int)` vs `(Int, Int)` — is
+    /// still rejected, because `abi_wire_class` returns the same
+    /// discriminant codegen's `ty_to_cranelift` uses. With this change
+    /// `String.clone` / `Array.get_mut` / `Array.get_var` migrate to
+    /// their `.rx` method-home (they no longer trip E0722); previously
+    /// they were forced to stay as `lang_intrinsics` residual arms.
+    /// Build the synthetic generic-param list for an FFI class method from
+    /// its `where` clause: each predicate whose LHS names the ENCLOSING
+    /// class's own generic becomes a bounded `GenericParamInfo`. This is
+    /// the receiver-element bound seam (`def sum -> Int where T: Add` on
+    /// `class Array[T]`). Predicates on non-class-generic names are dropped
+    /// — an FFI def carries no own generics, so there is nothing else a
+    /// `where` could constrain. Returns an empty vec when there is no
+    /// `where` clause (the historical case), so every existing FFI decl is
+    /// byte-identical (`generic_params: vec![]`).
+    fn ffi_receiver_element_bounds(
+        &mut self,
+        parent: DefId,
+        ffi_fn: &ast::FfiFunction,
+    ) -> Vec<GenericParamInfo> {
+        let Some(wc) = ffi_fn.where_clause.as_ref() else {
+            return vec![];
+        };
+        // The enclosing class's declared generic-param names.
+        let class_param_names: Vec<String> = self
+            .symbols
+            .get(parent)
+            .map(|d| match &d.kind {
+                DefKind::Class { info } => {
+                    info.generic_params.iter().map(|g| g.name.clone()).collect()
+                }
+                DefKind::Struct { info } => {
+                    info.generic_params.iter().map(|g| g.name.clone()).collect()
+                }
+                DefKind::Enum { info } => {
+                    info.generic_params.iter().map(|g| g.name.clone()).collect()
+                }
+                _ => vec![],
+            })
+            .unwrap_or_default();
+        let mut out = Vec::new();
+        for pred in &wc.predicates {
+            let ast::TypeExpr::Named(path) = &pred.type_expr else {
+                continue;
+            };
+            if path.segments.len() != 1 || path.generic_args.is_some() {
+                continue;
+            }
+            let name = &path.segments[0];
+            if !class_param_names.contains(name) {
+                continue;
+            }
+            let refs: Vec<MixinRef> = pred
+                .bounds
+                .iter()
+                .map(|bound| MixinRef {
+                    name: bound.path.segments.join("."),
+                    generic_args: bound
+                        .path
+                        .generic_args
+                        .as_ref()
+                        .map(|args| args.iter().map(|a| self.resolve_type_expr(a)).collect())
+                        .unwrap_or_default(),
+                })
+                .collect();
+            out.push(GenericParamInfo::type_param(name.clone(), refs));
+        }
+        out
+    }
+
     pub(super) fn check_ffi_signature_conflict(
         &mut self,
         link_symbol: &str,
@@ -248,15 +366,7 @@ impl Resolver {
         new_span: &Span,
     ) {
         if let Some((existing_sig, _existing_span)) = self.extern_symbol_table.get(link_symbol) {
-            let arity_ok = existing_sig.params.len() == new_sig.params.len();
-            let params_ok = arity_ok
-                && existing_sig
-                    .params
-                    .iter()
-                    .zip(new_sig.params.iter())
-                    .all(|(a, b)| a.ty == b.ty);
-            let return_ok = existing_sig.return_ty == new_sig.return_ty;
-            if !(params_ok && return_ok) {
+            if Self::ffi_wire_shape(existing_sig) != Self::ffi_wire_shape(new_sig) {
                 self.diagnostics.push(Diagnostic::error_with_code(
                     format!(
                         "conflicting FFI declarations for the same C symbol `{}` — \
@@ -268,6 +378,64 @@ impl Resolver {
                 ));
             }
         }
+    }
+
+    /// The ABI register-class discriminant of a single `Ty`, mirroring
+    /// codegen's `ty_to_cranelift` (`codegen/cranelift/helpers.rs`)
+    /// WITHOUT depending on the cranelift backend crate from the
+    /// resolver. The discriminant is `(width_bits, is_float)`:
+    ///   * scalars carry their true width; floats are flagged so an
+    ///     integer and a float of the SAME width still conflict (they
+    ///     use different ABI register files — GP vs SSE — so a call that
+    ///     disagrees on int-vs-float would mis-pass the argument);
+    ///   * every pointer-like / heap type (String, Array, Map, Set,
+    ///     Ref/RefMut, Option, Result, Class, Struct, Enum, Fn, raw
+    ///     pointers, Tuple, FixedArray, TypeParam, Infer, …) is the
+    ///     integer-class 64-bit pointer `(64, false)`;
+    ///   * `None` for `Unit`/`Never`/`Error` (no value in argument /
+    ///     return position).
+    /// `Ty::bit_width` is NOT reused: it returns `None` for pointer-like
+    /// types, which would make a pointer indistinguishable from a
+    /// no-value return.
+    fn abi_wire_class(ty: &Ty) -> Option<(u32, bool)> {
+        match ty {
+            Ty::Bool | Ty::Int8 | Ty::UInt8 => Some((8, false)),
+            Ty::Int16 | Ty::UInt16 => Some((16, false)),
+            Ty::Int32 | Ty::UInt32 | Ty::Char => Some((32, false)),
+            Ty::Int | Ty::Int64 | Ty::UInt | Ty::UInt64 | Ty::ISize | Ty::USize => {
+                Some((64, false))
+            }
+            Ty::Float32 => Some((32, true)),
+            Ty::Float | Ty::Float64 => Some((64, true)),
+            Ty::Unit | Ty::Never | Ty::Error | Ty::ConstArg(_) => None,
+            // Everything else is pointer-like at the C ABI → I64 (GP).
+            _ => Some((64, false)),
+        }
+    }
+
+    /// The full WIRE shape of an FFI signature: the ABI width-class of
+    /// every C-ABI argument (the implicit `self` receiver pointer
+    /// PREPENDED for instance methods, since it IS a wire arg) followed
+    /// by the return width-class. Two decls aliasing one C symbol
+    /// conflict iff their wire shapes differ. The receiver, when
+    /// present, is always pointer-sized (`Some(64)`) regardless of the
+    /// owning class.
+    fn ffi_wire_shape(sig: &FnSignature) -> Vec<Option<(u32, bool)>> {
+        let mut shape = Vec::with_capacity(sig.params.len() + 2);
+        if sig.self_mode.is_some() {
+            // Instance-method receiver: one pointer-sized GP arg the MIR
+            // method-call lowering prepends (see the receiver-prepend in
+            // `register_class_lib_method_in`).
+            shape.push(Some((64, false)));
+        }
+        for p in &sig.params {
+            shape.push(Self::abi_wire_class(&p.ty));
+        }
+        // A sentinel separates the arg list from the return so a
+        // trailing arg can never collide with the return slot.
+        shape.push(None);
+        shape.push(Self::abi_wire_class(&sig.return_ty));
+        shape
     }
 
     /// Typed FFI returns (docs/specs/types/typed_ffi_returns.spec.md):
@@ -517,6 +685,30 @@ impl Resolver {
                 } else {
                     None
                 };
+
+                // Q14: a USER (non-bootstrap) top-level class whose name is
+                // already a built-in / stdlib type in scope collides in the
+                // flat symbol namespace — both would emit the same mangled
+                // symbols (e.g. `Signal_clone`). Flag it now with a rename
+                // hint (E0727) instead of a late codegen `DuplicateDefinition`.
+                if !ctx.merging_bootstrap
+                    && module_path.is_empty()
+                    && anchor_id.is_none()
+                    && !is_anchor_only_builtin
+                    && self.scopes.lookup_type(&class.name).is_some()
+                {
+                    self.diagnostics.push(Diagnostic::error_with_code(
+                        format!(
+                            "type `{}` collides with a built-in or standard-library type of \
+                             the same name. The symbol namespace is currently flat, so both \
+                             would emit the same mangled symbols (e.g. `{}_clone`). Rename \
+                             your type.",
+                            class.name, class.name
+                        ),
+                        class.span.clone(),
+                        "E0727",
+                    ));
+                }
 
                 let id = if let Some(existing) = anchor_id {
                     existing
@@ -1209,4 +1401,32 @@ impl Resolver {
     }
 
     // ─── Pass 2: Full Resolution ────────────────────────────────────
+}
+
+/// The `Ty` to prepend as the implicit `self` receiver of an
+/// instance-method FFI decl, chosen so its `ty_to_cranelift` width
+/// matches the C symbol's first parameter.
+///
+/// Default: `Ty::Class { name }` — pointer-sized I64. Correct for every
+/// pointer / boxed-handle / `int64_t`-by-value receiver, which is all of
+/// `String`, the collections (`Array`/`Set`/`Hash`), the enum homes
+/// (`Option`/`Result`), and the scalar homes whose C symbols take
+/// `int64_t` (`Int`/`Bool`/`Char`/`USize` → `ruxen_int_to_string`,
+/// `ruxen_bool_to_string(int64_t)`, `ruxen_char_to_string(int64_t)`).
+///
+/// The ONE primitive whose C symbols take the value in a FLOAT register
+/// is `Float` (`ruxen_float_to_string(double)` / `ruxen_float_to_i(
+/// double)`): its receiver must derive F64, so prepend `Ty::Float`.
+/// Without this, the I64 class handle would pass the double's bits in a
+/// GP register and the C side would read garbage. The parity guard
+/// `tests/runtime_abi_derivation.rs` pins the derived width for every
+/// shared symbol, so a wrong receiver here fails the guard immediately.
+fn primitive_ffi_receiver_ty(parent_name: &str) -> Ty {
+    match parent_name {
+        "Float" => Ty::Float,
+        _ => Ty::Class {
+            name: parent_name.to_string(),
+            generic_args: vec![],
+        },
+    }
 }

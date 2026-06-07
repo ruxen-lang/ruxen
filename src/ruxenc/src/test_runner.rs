@@ -309,6 +309,113 @@ fn gather_project_lib_sources(project_dir: &Path) -> Result<Option<String>, Stri
     Ok(Some(combined))
 }
 
+/// Q18: split a test file into (top-level items to hoist ABOVE the
+/// synthesised `def main`, test statements to keep INSIDE it).
+///
+/// A column-0 line beginning a top-level item — `use` / `const` / `type`
+/// (single-line), or a block item `def` / `pub def` / `class` / `struct` /
+/// `enum` / `mixin` / `module` / `extension` / `impl` (spanning to its
+/// column-0 `end`) — plus any `##` doc-comment lines immediately preceding
+/// such an item, is hoisted. A `##` doc that is NOT attached to a hoisted
+/// item is neutralised to a plain `#` comment so it doesn't parse as a
+/// statement inside `main`. Everything else stays in the main body.
+fn split_test_body(body: &str) -> (String, String) {
+    let lines: Vec<&str> = body.lines().collect();
+    let mut hoisted = String::new();
+    let mut main_body = String::new();
+
+    let is_block_item_start = |t: &str| {
+        let t = t.strip_prefix("pub ").unwrap_or(t);
+        let t = t.strip_prefix("protected ").unwrap_or(t);
+        let t = t.strip_prefix("private ").unwrap_or(t);
+        [
+            "def ",
+            "class ",
+            "struct ",
+            "enum ",
+            "mixin ",
+            "module ",
+            "extension ",
+            "impl ",
+        ]
+        .iter()
+        .any(|kw| t.starts_with(kw))
+            || t == "def"
+    };
+    let is_single_line_item =
+        |t: &str| t.starts_with("use ") || t.starts_with("const ") || t.starts_with("type ");
+
+    let mut i = 0;
+    // Doc-comment lines pending attachment to the NEXT line.
+    let mut pending_docs: Vec<&str> = Vec::new();
+    while i < lines.len() {
+        let line = lines[i];
+        let col0 = !line.starts_with([' ', '\t']);
+        let trimmed = line.trim_start();
+
+        // Accumulate column-0 doc comments; decide where they go once we see
+        // the line they precede.
+        if col0 && trimmed.starts_with("##") {
+            pending_docs.push(line);
+            i += 1;
+            continue;
+        }
+
+        if col0 && is_single_line_item(trimmed) {
+            // `use`/`const`/`type` don't carry the file-level docs that
+            // typically precede them — neutralise those into the main body
+            // so a stray `## …` never lands as a top-level doc.
+            for d in pending_docs.drain(..) {
+                main_body.push_str(&d.replacen("##", "#", 1));
+                main_body.push('\n');
+            }
+            hoisted.push_str(line);
+            hoisted.push('\n');
+            i += 1;
+            continue;
+        }
+
+        if col0 && is_block_item_start(trimmed) {
+            for d in pending_docs.drain(..) {
+                hoisted.push_str(d);
+                hoisted.push('\n');
+            }
+            // Consume through the matching column-0 `end`.
+            hoisted.push_str(line);
+            hoisted.push('\n');
+            i += 1;
+            while i < lines.len() {
+                let l = lines[i];
+                hoisted.push_str(l);
+                hoisted.push('\n');
+                i += 1;
+                if !l.starts_with([' ', '\t']) && l.trim() == "end" {
+                    break;
+                }
+            }
+            continue;
+        }
+
+        // Not a hoisted item — flush any pending docs as PLAIN comments
+        // (a `##` doc in statement position is a parse error inside `main`).
+        for d in pending_docs.drain(..) {
+            let neutralised = d.replacen("##", "#", 1);
+            main_body.push_str(&neutralised);
+            main_body.push('\n');
+        }
+        main_body.push_str(line);
+        main_body.push('\n');
+        i += 1;
+    }
+    // Trailing docs with nothing after them → neutralise into the main body.
+    for d in pending_docs.drain(..) {
+        main_body.push_str(&d.replacen("##", "#", 1));
+        main_body.push('\n');
+    }
+
+    (hoisted, main_body)
+}
+
 /// Recursively collect every `.rx` under `dir` except `skip` (the entry).
 fn collect_rx(dir: &Path, skip: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {
@@ -347,12 +454,21 @@ fn synthesise_wrapper(
 
     let project_src = gather_project_lib_sources(project_dir)?.unwrap_or_default();
 
+    // Q18: a test file mixes TOP-LEVEL items (helper `def`s, `use`s, type
+    // defs, `##` docs) with TEST STATEMENTS (`Tester.describe …`). Wrapping
+    // the whole file in `def main` nests the items inside `main` — a
+    // top-level `def`'s `end` closes `main` early, a `use` is a syntax error
+    // mid-fn, and a leading `##` doc parses as a statement. Split the body:
+    // hoist top-level items ABOVE `def main`, keep the test statements inside.
+    let (hoisted_items, main_body) = split_test_body(&body);
+
     let prelude = format!(
         "# AUTO-GENERATED from {} — do not edit.\n\
          use std.test.Tester\n\
          use std.test.Runner\n\
          \n\
          {project_src}\n\
+         {hoisted_items}\n\
          def main\n  \
            let r = Runner.new(\"{}\")\n  \
            Runner.set_current(r.handle_addr)\n",
@@ -361,7 +477,7 @@ fn synthesise_wrapper(
     );
     let postlude = "\n  r.execute\nend\n";
 
-    let synth = format!("{prelude}{body}\n{postlude}");
+    let synth = format!("{prelude}{main_body}\n{postlude}");
 
     fs::create_dir_all(out_dir).map_err(|e| format!("mkdir {}: {}", out_dir.display(), e))?;
     let synth_path = out_dir.join(format!("{}.synth.rx", test_path.replace('.', "_")));
@@ -470,6 +586,56 @@ fn parse_summary_line(stdout: &str) -> (u32, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Q18: top-level items (use / def / type defs / docs) hoist ABOVE the
+    // synthesised `def main`; test statements stay inside it; an unattached
+    // `##` doc is neutralised to `#`.
+    #[test]
+    fn split_test_body_hoists_top_level_items() {
+        let body = "\
+## file doc that breaks
+use own_pkg.Helper
+
+def make -> Int
+  let x = 1
+  x
+end
+
+Tester.describe(\"x\") do
+  it(\"works\")
+end
+";
+        let (hoisted, main_body) = split_test_body(body);
+        assert!(
+            hoisted.contains("use own_pkg.Helper"),
+            "use hoisted: {hoisted}"
+        );
+        assert!(
+            hoisted.contains("def make -> Int"),
+            "def hoisted: {hoisted}"
+        );
+        assert!(
+            hoisted.contains("\n  x\nend"),
+            "def body+end hoisted: {hoisted}"
+        );
+        assert!(
+            main_body.contains("Tester.describe"),
+            "test stmt stays in main: {main_body}"
+        );
+        assert!(
+            !main_body.contains("use own_pkg"),
+            "use must not remain in main: {main_body}"
+        );
+        assert!(
+            !main_body.contains("def make"),
+            "def must not remain in main: {main_body}"
+        );
+        // The unattached file doc became a plain `#` comment in main.
+        assert!(
+            main_body.contains("# file doc that breaks") && !main_body.contains("## file doc"),
+            "stray doc neutralised: {main_body}"
+        );
+    }
     use std::fs;
 
     #[test]

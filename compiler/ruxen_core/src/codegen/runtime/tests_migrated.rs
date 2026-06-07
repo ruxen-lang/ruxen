@@ -21,20 +21,37 @@ fn migrated_vec_combinators_fall_through_runtime_table() {
     // sample of the migrated surface; a `ruxen_*` mapping
     // reappearing here for any of them would silently mask the
     // alias path.
+    // The CANONICAL surface spelling is `Array` (ruby-naming §3.11): the
+    // instance-method call-site mangle types the `Ty::Array` receiver via
+    // `type_name_from_ty`, which renders `Array[Int]` (the `Ty::Array`
+    // Display). The legacy `Vec` spelling appears ONLY at the final
+    // runtime-symbol step (the `Array → Vec` map in method_call.rs /
+    // field_access.rs constructor paths) and as a defensive acceptor in
+    // the lang_intrinsics `starts_with("Vec")` matcher. These pins use
+    // the uniform `Array[Int]_*` form the live mangle actually emits;
+    // they all fall through to the unmapped name (the MIR ffi_alias_map
+    // carries the generic-stripped `Array_<m>` key and rewrites earlier).
     for m in [
-        "Vec[Int]_sum",
-        "Vec[Int]_count",
-        "Vec[Int]_reverse",
-        "Vec[Int]_first",
-        "Vec[Int]_last",
-        "Vec[Int]_push",
-        "Vec[Int]_pop",
-        "Vec[Int]_len",
-        "Vec[Int]_is_empty",
-        "Vec[Int]_get",
-        "Vec[Int]_clear",
-        "Vec[Int]_extend",
+        "Array[Int]_sum",
+        "Array[Int]_count",
+        "Array[Int]_reverse",
+        "Array[Int]_first",
+        "Array[Int]_last",
+        "Array[Int]_push",
+        "Array[Int]_pop",
+        "Array[Int]_len",
+        "Array[Int]_is_empty",
+        "Array[Int]_get",
+        "Array[Int]_clear",
+        "Array[Int]_extend",
         "Array[Int]_clone",
+        // `get_mut` / `get_var` MIGRATED to array.rx now that E0722
+        // compares post-self-prepend WIRE shapes (`&var T` is a pointer,
+        // wire-identical to `get`'s `&T`), so their `ruxen_vec_get_opt`
+        // aliases are admitted alongside `get`. They fall through
+        // runtime_table like the rest of the migrated surface.
+        "Array[Int]_get_mut",
+        "Array[Int]_get_var",
     ] {
         assert_eq!(
             runtime_name(m).unwrap(),
@@ -44,22 +61,6 @@ fn migrated_vec_combinators_fall_through_runtime_table() {
              generic-stripped `Array_<m>` key"
         );
     }
-    // Aliased clusters that share a C symbol with a migrated
-    // entry survive in runtime_table — `register_class_lib_method`'s
-    // E0722 check rejects duplicate aliases for the same `c_symbol`
-    // with different wire shapes.
-    assert_eq!(
-        runtime_name("Vec[Int]_get_mut").unwrap(),
-        "ruxen_vec_get_opt"
-    );
-    assert_eq!(
-        runtime_name("Vec[Int]_into_iter").unwrap(),
-        "ruxen_iter_to_vec"
-    );
-    assert_eq!(
-        runtime_name("Vec[Int]_to_vec").unwrap(),
-        "ruxen_iter_to_vec"
-    );
 }
 
 #[test]
@@ -76,14 +77,13 @@ fn migrated_string_methods_fall_through_runtime_table() {
     // mask the alias path and silently keep the old dispatch alive
     // across future refactors.
     //
-    // `String_clone` is the only outlier: it aliases the SAME C
-    // symbol as `String.from` (`ruxen_string_from`) but with an
-    // instance-method receiver shape, which trips E0722 in
-    // `register_class_lib_method`. Until that check is relaxed
-    // to compare at the wire level, it stays as an explicit
-    // runtime_table entry — pinned below alongside the migrated
-    // set.
+    // `String_clone` MIGRATED to string.rx now that E0722 compares
+    // post-self-prepend WIRE shapes: its `ruxen_string_from` alias
+    // (implicit `&self` wire-identical to `from`'s explicit `&String`
+    // param) is admitted as a second alias. It falls through
+    // runtime_table like the rest of the migrated set.
     for m in [
+        "String_clone",
         "String_contains",
         "String_starts_with",
         "String_ends_with",
@@ -111,44 +111,22 @@ fn migrated_string_methods_fall_through_runtime_table() {
              a specific `ruxen_*` mapping here would mask the alias path"
         );
     }
-    assert_eq!(
-        runtime_name("String_clone").unwrap(),
-        "ruxen_string_from",
-        "String_clone must stay in lang_intrinsics — E0722 keeps it \
-         out of string.rx (see lang_intrinsics doc comment)"
-    );
 }
 
-#[test]
-fn iterator_passthrough_collectors_resolve() {
-    // The non-migrated identity passthroughs (`into_iter`,
-    // `iter_mut`, `to_vec`, `enumerate`, `as_slice`) all share
-    // the `ruxen_iter_to_vec` C symbol with the migrated `iter`.
-    // E0722 keeps us from declaring all five in
-    // `library/std/array/src/lib.rx`, so the runtime_table arm is
-    // still the source of truth for the aliases. `iter` ALONE
-    // moved to the alias map.
-    assert_eq!(
-        runtime_name("Vec[Int]_into_iter").unwrap(),
-        "ruxen_iter_to_vec",
-    );
-    assert_eq!(
-        runtime_name("Vec[Int]_to_vec").unwrap(),
-        "ruxen_iter_to_vec",
-    );
-    assert_eq!(
-        runtime_name("SplitIter_to_vec").unwrap(),
-        "ruxen_iter_to_vec",
-    );
-    // `Vec[Int]_iter` itself now falls through (migrated).
-    assert_eq!(runtime_name("Vec[Int]_iter").unwrap(), "Vec[Int]_iter");
-}
+// NOTE: `iterator_passthrough_collectors_resolve` was deleted with the
+// orphaned iterator machinery (Phase B / Milestone 2). The
+// `into_iter`/`iter_mut`/`to_vec`/`enumerate`/`as_slice` →
+// `ruxen_iter_to_vec` cluster no longer exists; nothing produces those
+// calls and `ruxen_iter_to_vec` was removed from the runtime.
 
 #[test]
 fn migrated_option_result_combinators_fall_through_runtime_table() {
-    // #06.8 T#17 moved `Option_{unwrap_or, present?, nil?,
-    // ok_or}` and `Result_{unwrap_or, ok?, err?, ok, err}`
-    // into library/std/option_result/src/lib.rx. The lookup site in
+    // #06.8 T#17 moved `Option_{unwrap_or, present?, nil?}` and
+    // `Result_{unwrap_or, ok?, err?, ok, err}`
+    // into library/std/option_result/src/lib.rx. (`ok_or` was later
+    // migrated again — Task H increment 2 — from an FFI alias to a `.rx`
+    // body, so it is no longer an alias-mapped symbol and is dropped from
+    // this list.) The lookup site in
     // `mir/lower/expr/method_call.rs` peels the surface
     // `[Int,Err]` generic args and consults `ffi_alias_map` with
     // the generic-stripped key, so the alias rewrite reaches the
@@ -158,7 +136,6 @@ fn migrated_option_result_combinators_fall_through_runtime_table() {
     // mask the alias path.
     for m in [
         "Result[Int,Err]_unwrap_or",
-        "Option[Int]_ok_or",
         "Option[String]_present?",
         "Option[String]_nil?",
         "Result[Int,IoError]_ok?",

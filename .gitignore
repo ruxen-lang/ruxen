@@ -1,5 +1,7 @@
 /target
 crates/*/target/
+src/*/target/
+**/target/ruxen/
 
 CLAUDE.md
 .claude-flow/

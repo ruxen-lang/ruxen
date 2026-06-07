@@ -1,0 +1,14 @@
+## Q6 (gui-stack-v1-issues) — arithmetic embedded in string interpolation.
+## Regression pin: a `#{w / 2}` segment once printed the un-divided operand
+## (tally's PPM header printed "112" instead of "56 84"). Lock division,
+## the multi-segment case, and a mix of operators inside one interpolation.
+
+def main
+  let w = 112
+  let h = 168
+  puts "#{w / 2} #{h / 2}"
+  puts "P3\n#{w / 2} #{h / 2}\n255"
+  let a = 7
+  let b = 3
+  puts "#{a + b} #{a - b} #{a * b} #{a % b}"
+end

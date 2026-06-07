@@ -40,6 +40,19 @@ pub struct MixinResolver {
     /// (both required method signatures and default methods). Used to
     /// dispatch method calls on a generic `T: Trait` receiver.
     trait_method_sigs: HashMap<String, HashMap<String, Vec<FnSignature>>>,
+    /// trait_name → its declared generic parameter NAMES, in order
+    /// (`mixin Enumerable[T]` → `["T"]`). Paired with `mixin_include_args`
+    /// to recover the mixin-element binding an including class chose.
+    trait_generic_params: HashMap<String, Vec<String>>,
+    /// (target_type_name, trait_name) → the generic args the `include`
+    /// supplied, in order. `class Hash[K, V] include Enumerable[(K, V)]`
+    /// records `("Hash", "Enumerable") → [(K, V)]`. Closure-param seeding
+    /// composes this (mixin param `T` → `(K, V)`) BEFORE the receiver
+    /// substitution (`K → String`, `V → Int`), so a combinator closure
+    /// param typed `Fn(T)` in the shared `Enumerable[T]` default resolves
+    /// to the concrete element `(String, Int)` — without it `kv` stays the
+    /// abstract `T` and `kv.1` fails (`no field 1 on type T`).
+    mixin_include_args: HashMap<(String, String), Vec<Ty>>,
 }
 
 #[derive(Debug, Clone)]
@@ -60,6 +73,8 @@ impl MixinResolver {
             nominal_impls: HashMap::new(),
             type_methods: HashMap::new(),
             trait_method_sigs: HashMap::new(),
+            trait_generic_params: HashMap::new(),
+            mixin_include_args: HashMap::new(),
         }
     }
 
@@ -72,12 +87,186 @@ impl MixinResolver {
         if args.len() < required || args.len() > sig.params.len() {
             return false;
         }
-        args.iter().zip(sig.params.iter()).all(|(arg, param)| {
-            arg.ty.is_infer()
-                || arg.ty.is_error()
-                || arg.ty == param.ty
-                || matches!((&arg.ty, &param.ty), (Ty::Str, Ty::String))
-        })
+        args.iter()
+            .zip(sig.params.iter())
+            .all(|(arg, param)| Self::arg_coerces_to_param(&arg.ty, &param.ty))
+    }
+
+    /// Whether an argument type can be passed where a parameter type is
+    /// expected, for method/overload selection. Mirrors
+    /// `InferenceEngine::method_accepts_args` (typeck/infer/collect.rs) so
+    /// the general `lookup_method_with_args` path (now the source of truth
+    /// for builtin-head method resolution via the zero-Rust-stdlib bridge)
+    /// is as permissive as the old hardcoded resolver arms were:
+    ///   * `&str` literal ↔ `String` / `&String` param (the common
+    ///     `String.from("lit")` shape — the arg is `Ty::Str`, the `.rx`
+    ///     param is `&String`);
+    ///   * an owned arg passed where the param borrows (`&T` param, `T`
+    ///     arg) — callers commonly pass an owned value to a `&self`-style
+    ///     borrow.
+    /// Without these, delegating `String.from`/etc. to `.rx` would reject
+    /// the string-literal arg that the arg-ignoring arms accepted.
+    fn arg_coerces_to_param(arg_ty: &Ty, param_ty: &Ty) -> bool {
+        if arg_ty.is_infer() || arg_ty.is_error() || arg_ty == param_ty {
+            return true;
+        }
+        // Zero-Rust-stdlib bridge (Phase 2): the migrated collection
+        // classes declare arg-bearing methods against their OWN generic
+        // params — `class Set[T]`'s `include?(item: T)`,
+        // `union(other: Set[T])`; `class Array[T]`'s `push(x: T)`,
+        // `chain(other: Array[T])`. When `lookup_method_with_args`
+        // selects such a method for a CONCRETE receiver (`Set[Int]`),
+        // the arg type is the concrete element (`Int`) while the declared
+        // param is still the unbound `TypeParam(T)`. The element
+        // substitution that would bind `T → Int` happens DOWNSTREAM (in
+        // `substitute_generics_in_return`), AFTER selection — so at
+        // selection time an unbound generic param must accept any arg of
+        // the matching structural shape, or the method is never selected
+        // and the receiver stays `Ty::Infer` (the `?T_method` mangling
+        // the bridge exists to prevent). Mirrors
+        // `InferenceEngine::method_accepts_args`.
+        if Self::param_admits_generic_arg(arg_ty, param_ty) {
+            return true;
+        }
+        // A closure/`Ty::Fn` arg (a trailing `do…end` block or a passed
+        // closure value) satisfies a callable parameter — `any Fn[Fn(T) ->
+        // U]` / `Fn[…]` / bare `Ty::Fn`. The migrated `.rx` closure
+        // combinators (`map`/`select`/…) declare `f: any Fn[…]`; the
+        // overload-selection structural check must admit the closure arg or
+        // the body method is never selected and the call's type degrades to
+        // `Infer`. The precise param/return shapes inside the `Fn` are
+        // reconciled DOWNSTREAM by `harvest_and_subst_generics` (the
+        // `Ty::Fn` arm that binds the method's `[U]` from the closure's
+        // return), so selection only needs the coarse "callable vs
+        // callable" match here.
+        if Self::param_is_callable(param_ty) && Self::arg_is_callable(arg_ty) {
+            return true;
+        }
+        // Peel a single reference layer on the param so `&String` / `&str`
+        // params accept the corresponding value/str args.
+        let param_inner = match param_ty {
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => Some(inner.as_ref()),
+            _ => None,
+        };
+        // `&str` literal ↔ `String` (owned or behind one ref layer).
+        let str_to_string = |a: &Ty, p: &Ty| matches!((a, p), (Ty::Str, Ty::String));
+        if str_to_string(arg_ty, param_ty) {
+            return true;
+        }
+        if let Some(inner) = param_inner {
+            // `&String` param accepting a `String` / `&str` / `str` arg.
+            if arg_ty == inner || str_to_string(arg_ty, inner) {
+                return true;
+            }
+            // `&str` arg vs `&String` param (peel both).
+            if matches!((arg_ty, inner), (Ty::Str, Ty::String)) {
+                return true;
+            }
+            // Owned arg vs borrowing param (`&T` param, `T` arg).
+            if arg_ty == inner {
+                return true;
+            }
+        }
+        // `&str` arg (`Ty::Ref(Str)`) vs `&String` param.
+        if let (Ty::Ref(a), Ty::Ref(p)) = (arg_ty, param_ty) {
+            if matches!((a.as_ref(), p.as_ref()), (Ty::Str, Ty::String)) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Whether `param_ty` is (or structurally contains, at its leaves) the
+    /// class's own unbound generic param, such that a concrete `arg_ty`
+    /// satisfies it at SELECTION time. Reference layers are peeled
+    /// symmetrically (an owned arg also satisfies a `&T` borrow); a bare
+    /// `TypeParam` param is a wildcard; a same-head container param
+    /// (`Set[T]` vs `Set[Int]`, `Array[T]` vs `Array[Int]`, `Option[T]`
+    /// vs `Option[Int]`, …) recurses into the element position.
+    ///
+    /// Deliberately narrow: it accepts ONLY when a generic param is
+    /// actually present in the param type. A fully-concrete param
+    /// (`&String`, `Int`) is left to the concrete arms above, so a
+    /// genuine type mismatch (`push("x")` on `Array[Int]`) is NOT
+    /// silently admitted here.
+    fn param_admits_generic_arg(arg_ty: &Ty, param_ty: &Ty) -> bool {
+        // Peel a reference layer off the param (a `&T` / `&Set[T]` borrow
+        // is satisfied by the corresponding owned arg, and by a borrowed
+        // arg — both shapes show up at call sites like `a.union(&b)`).
+        let param_peeled = match param_ty {
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => inner.as_ref(),
+            other => other,
+        };
+        // Peel the matching reference layer off the arg too.
+        let arg_peeled = match arg_ty {
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => inner.as_ref(),
+            other => other,
+        };
+        match param_peeled {
+            // An unbound generic param accepts any concrete arg.
+            Ty::TypeParam { .. } => true,
+            // Same-head containers: recurse into the element/key/value so
+            // `Set[T]` admits `Set[Int]`, `Array[T]` admits `Array[Int]`.
+            Ty::Array(p) => matches!(arg_peeled, Ty::Array(a)
+                if Self::param_admits_generic_arg(a, p)),
+            Ty::Set(p) => {
+                matches!(arg_peeled, Ty::Set(a) if Self::param_admits_generic_arg(a, p))
+            }
+            Ty::Option(p) => matches!(arg_peeled, Ty::Option(a)
+                if Self::param_admits_generic_arg(a, p)),
+            Ty::Map(pk, pv) => matches!(arg_peeled, Ty::Map(ak, av)
+                if Self::param_admits_generic_arg(ak, pk)
+                    && Self::param_admits_generic_arg(av, pv)),
+            // No generic param present → defer to the concrete arms.
+            _ => false,
+        }
+    }
+
+    /// Whether `param_ty` is a callable parameter — a bare function type
+    /// (`Ty::Fn`/`FnMut`/`FnOnce`) or a `some`/`any` mixin bound whose
+    /// first ref names the `Fn` family (`any Fn[Fn(T) -> U]`). Peels one
+    /// reference layer (`&any Fn[…]`). Used by overload selection so a
+    /// closure arg can satisfy the migrated `.rx` combinators' closure
+    /// parameter without the precise `Fn` shape having to match yet.
+    fn param_is_callable(param_ty: &Ty) -> bool {
+        let peeled = match param_ty {
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => inner.as_ref(),
+            other => other,
+        };
+        match peeled {
+            Ty::Fn { .. } | Ty::FnMut { .. } | Ty::FnOnce { .. } => true,
+            Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds) => bounds
+                .iter()
+                .any(|b| matches!(b.name.as_str(), "Fn" | "FnMut" | "FnOnce")),
+            _ => false,
+        }
+    }
+
+    /// Whether `arg_ty` is a callable value — a closure / `Ty::Fn` family
+    /// type produced by a `do…end` block or a passed closure local.
+    fn arg_is_callable(arg_ty: &Ty) -> bool {
+        let peeled = match arg_ty {
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => inner.as_ref(),
+            other => other,
+        };
+        matches!(peeled, Ty::Fn { .. } | Ty::FnMut { .. } | Ty::FnOnce { .. })
+            || matches!(peeled, Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds)
+            if bounds.iter().any(|b| matches!(b.name.as_str(), "Fn" | "FnMut" | "FnOnce")))
     }
 
     fn select_signature(sigs: Option<&Vec<FnSignature>>, args: &[HirExpr]) -> Option<FnSignature> {
@@ -208,9 +397,70 @@ impl MixinResolver {
             };
         }
 
+        // Builtin marker FAMILIES are satisfied by their REAL semantics, not by
+        // a manual required-method set (their methods are auto-derived /
+        // intrinsic, so the structural "does the type define this method" check
+        // below would wrongly reject them). Handle them before that check:
+        //   * derive markers (`Hashable`/`Ord`/`Eq`/`Clone`/`Copy`/`Default`/
+        //     `Debug`/`PartialEq`/`PartialOrd` — the `SUPPORTED_DERIVES` set):
+        //     the ruby-naming §3.6 structural auto-derive (primitives +
+        //     containers trivially; structs/enums when every field supports it;
+        //     incl. the Hash↔Hashable / Eq↔PartialEq naming duality). Without
+        //     this a struct that auto-derives Hashable but never writes
+        //     `include Hashable` is wrongly rejected (E1015) — regressing every
+        //     Map-key / derived-Ord program.
+        //   * `Fn`/`FnMut`/`FnOnce`: any callable value (closure / `Ty::Fn`
+        //     family) satisfies it, regardless of the marker's `call` signature.
+        // Pure-capability markers with neither (e.g. `Add`, opted into only via
+        // `include`) fall through and are rejected unless explicitly included —
+        // so `["a"].sum` still emits E0700. (Send/Sync handled earlier.)
+        if crate::implicit_includes::is_supported_derive(&trait_ref.name) {
+            return if crate::implicit_includes::ty_satisfies_named_trait(
+                ty,
+                &trait_ref.name,
+                symbols,
+            ) {
+                MixinSatisfaction::Structural
+            } else {
+                MixinSatisfaction::Unsatisfied {
+                    missing_methods: vec![format!(
+                        "type `{}` does not auto-derive `{}`",
+                        ty, trait_ref.name
+                    )],
+                }
+            };
+        }
+        if matches!(trait_ref.name.as_str(), "Fn" | "FnMut" | "FnOnce") {
+            return if Self::arg_is_callable(ty) {
+                MixinSatisfaction::Structural
+            } else {
+                MixinSatisfaction::Unsatisfied {
+                    missing_methods: vec![format!(
+                        "type `{}` is not callable, cannot satisfy `{}`",
+                        ty, trait_ref.name
+                    )],
+                }
+            };
+        }
+
         // Check structural satisfaction: does the type have all required methods?
         let trait_info = self.find_trait_info(&trait_ref.name, symbols);
         if let Some(info) = trait_info {
+            // MARKER mixins (zero required methods) that reach here are NEITHER
+            // derive markers nor the Fn-family (both returned above) — they are
+            // pure-capability bounds (e.g. `Add`) satisfiable ONLY by an
+            // explicit `include` (already checked above as nominal). A vacuous
+            // structural pass (every type trivially has zero methods) is
+            // meaningless for a capability bound, so reaching here means
+            // unsatisfied — which keeps `["a"].sum` → E0700.
+            if info.required_methods.is_empty() {
+                return MixinSatisfaction::Unsatisfied {
+                    missing_methods: vec![format!(
+                        "no explicit `include {}` in `{}`",
+                        trait_ref.name, type_name
+                    )],
+                };
+            }
             let type_meths = self.type_methods.get(&type_name);
             let mut missing = Vec::new();
 
@@ -295,6 +545,74 @@ impl MixinResolver {
         self.lookup_method_with_args(ty, method_name, &[], symbols)
     }
 
+    /// Look up a method's signature by NAME only, with no arity / arg-type
+    /// filtering. Used by closure-param seeding, which must find the
+    /// combinator's signature (to read the closure parameter's expected
+    /// `Fn(T) -> U` shape) BEFORE the closure's own arity/types are known —
+    /// the arg-aware [`Self::lookup_method_with_args`] would reject the
+    /// zero-arg probe against a one-closure-param method. Returns the first
+    /// name-matching method on the type's own home key.
+    pub fn lookup_method_by_name(&self, ty: &Ty, method_name: &str) -> Option<FnSignature> {
+        let type_name = Self::method_home_key(ty);
+        if let Some(meths) = self.type_methods.get(&type_name) {
+            if let Some(m) = meths
+                .iter()
+                .find(|m| Self::name_matches(&m.name, method_name))
+            {
+                return Some(m.signature.clone());
+            }
+        }
+        // Fall through to mixin/trait default signatures for any trait the
+        // type implements (e.g. `class Array[T] include Enumerable[T]`
+        // supplies `reduce`/`map`/… as Enumerable defaults, not as own
+        // `type_methods`). Without this, closure-param seeding in
+        // `infer/expr.rs` never finds the combinator's `Fn(U, T)` signature
+        // and the closure param stays `Infer` — so a `kv.1` tuple-field
+        // access inside the closure body lowers to an unresolved `?T::1`
+        // method call. Mirrors the trait-default arm of
+        // `lookup_method_with_args` but selects by name only (no args here).
+        for (impl_target, trait_name) in self.nominal_impls.keys() {
+            if *impl_target == type_name {
+                if let Some(methods) = self.trait_method_sigs.get(trait_name) {
+                    if let Some(sigs) = methods.get(method_name) {
+                        if let Some(sig) = sigs.first() {
+                            return Some(sig.clone());
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// The substitution a receiver's `include Mixin[Args]` chose for the
+    /// mixin's own generic params, e.g. `class Hash[K, V] include
+    /// Enumerable[(K, V)]` → `{ "T" → (K, V) }` (`T` is Enumerable's
+    /// declared param). Empty when the receiver implements no parameterized
+    /// mixin (the common case — `Array include Enumerable[T]` maps `T → T`,
+    /// a no-op once the receiver substitution runs). Closure-param seeding
+    /// applies this BEFORE the receiver-generic substitution so a combinator
+    /// param typed `Fn(T)` resolves through the mixin element binding.
+    pub fn mixin_element_subst(&self, ty: &Ty) -> std::collections::HashMap<String, Ty> {
+        let type_name = Self::method_home_key(ty);
+        let mut subst = std::collections::HashMap::new();
+        for ((target, trait_name), include_args) in &self.mixin_include_args {
+            if *target != type_name {
+                continue;
+            }
+            let Some(param_names) = self.trait_generic_params.get(trait_name) else {
+                continue;
+            };
+            if param_names.len() != include_args.len() {
+                continue;
+            }
+            for (pname, arg) in param_names.iter().zip(include_args.iter()) {
+                subst.insert(pname.clone(), arg.clone());
+            }
+        }
+        subst
+    }
+
     pub fn lookup_method_with_args(
         &self,
         ty: &Ty,
@@ -302,7 +620,7 @@ impl MixinResolver {
         args: &[HirExpr],
         symbols: &SymbolTable,
     ) -> Option<FnSignature> {
-        let type_name = Self::type_name(ty);
+        let type_name = Self::method_home_key(ty);
 
         // Check direct type methods first
         if let Some(meths) = self.type_methods.get(&type_name) {
@@ -411,13 +729,22 @@ impl MixinResolver {
             // `ClassInfo.methods` stays empty even when lib decls were
             // registered in Pass 1 via `pass1_class_lib_methods`. Scan
             // the symbol table for `DefKind::Method { parent: def_id }`
-            // to find them.
-            if methods.is_empty() {
-                for m_def in symbols.iter() {
-                    if let DefKind::Method { parent, signature } = &m_def.kind {
-                        if *parent == def_id && !methods.iter().any(|(n, _)| n == &m_def.name) {
-                            methods.push((m_def.name.clone(), signature.clone()));
-                        }
+            // to find them. This runs UNCONDITIONALLY (not only when
+            // `info.methods` was empty): an FFI-shell builtin class like
+            // `Array[T]` / `Option[T]` / `Result[T,E]` registers its `lib`
+            // FFI decls into `info.methods` AND defines real `def`-body
+            // closure combinators (`map` / `select` / …) as `DefKind::
+            // Method { parent }` entries that are NOT in `info.methods`.
+            // The old `if methods.is_empty()` guard dropped those body
+            // methods whenever any lib decl was present, so a call like
+            // `xs.map { … }` resolved to no signature and the call's
+            // return type degraded to a fresh `Infer` — breaking
+            // downstream `ys[i]` index lowering. The `any(name)` dedup
+            // keeps lib decls authoritative when a name collides.
+            for m_def in symbols.iter() {
+                if let DefKind::Method { parent, signature } = &m_def.kind {
+                    if *parent == def_id && !methods.iter().any(|(n, _)| n == &m_def.name) {
+                        methods.push((m_def.name.clone(), signature.clone()));
                     }
                 }
             }
@@ -476,6 +803,16 @@ impl MixinResolver {
                 for (k, v) in new_entries {
                     entry.entry(k).or_default().push(v);
                 }
+                // Record the mixin's declared generic param names so an
+                // including class's `Enumerable[(K, V)]` args can be mapped
+                // positionally onto them (mixin element binding).
+                self.trait_generic_params.insert(
+                    tdef.name.clone(),
+                    tdef.generic_params
+                        .iter()
+                        .map(|gp| gp.name.clone())
+                        .collect(),
+                );
             }
             HirItem::Class(class) => {
                 // Phase E.E of #06.95: module-nested classes need the
@@ -535,6 +872,12 @@ impl MixinResolver {
                             })
                             .collect();
                         self.register_impl(&type_name, Some(&trait_ref.name), methods);
+                        if !trait_ref.generic_args.is_empty() {
+                            self.mixin_include_args.insert(
+                                (type_name.clone(), trait_ref.name.clone()),
+                                trait_ref.generic_args.clone(),
+                            );
+                        }
                     }
                 }
             }
@@ -747,6 +1090,45 @@ impl MixinResolver {
             Ty::Char => "Char".to_string(),
             Ty::Unit => "()".to_string(),
             other => format!("{}", other),
+        }
+    }
+
+    /// Lookup key for `type_methods` — the `.rx` class that HOMES a
+    /// type's methods (the zero-Rust-stdlib bridge, Phase B / M3).
+    ///
+    /// Differs from `type_name` only for the builtin generic / borrowed
+    /// heads whose `.rx` method-home class is keyed by a bare,
+    /// generic-arg-free name:
+    ///   * `Ty::Array(_)` → `"Array"`   (vs `type_name`'s `"Array[Int]"`)
+    ///   * `Ty::Set(_)`   → `"Set"`
+    ///   * `Ty::Map(_,_)` → `"Hash"`    (`Ty::Map` Displays as `Hash[K, V]`;
+    ///                                   its method-home class is `class
+    ///                                   Hash[K, V]` in `map/src/lib.rx`,
+    ///                                   keyed in `type_methods` by `"Hash"`)
+    ///   * `Ty::Str`      → `"String"`  (`&str` shares `class String`'s
+    ///                                   surface; there is no `class str`)
+    /// References are peeled first. Element-type substitution into the
+    /// looked-up signature's return is handled downstream by
+    /// `InferenceEngine::substitute_generics_in_return`, which carries the
+    /// matching synthetic `(name, generic_args)` mapping for these heads.
+    fn method_home_key(ty: &Ty) -> String {
+        match ty {
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => Self::method_home_key(inner),
+            Ty::Array(_) => "Array".to_string(),
+            Ty::Set(_) => "Set".to_string(),
+            Ty::Map(_, _) => "Hash".to_string(),
+            Ty::Str => "String".to_string(),
+            // `Option[T]` / `Result[T, E]` home their methods on the
+            // builtin `enum Option` / `enum Result` (option_result/src/
+            // lib.rx). Element substitution into the looked-up signature's
+            // return is handled by `substitute_generics_in_return`'s
+            // Option/Result synthetic arms.
+            Ty::Option(_) => "Option".to_string(),
+            Ty::Result(_, _) => "Result".to_string(),
+            other => Self::type_name(other),
         }
     }
 }

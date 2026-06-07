@@ -1,0 +1,7 @@
+def main
+  let xs = [(1, 10), (2, 20), (3, 30)]
+  let total = xs.reduce(0) { |acc, kv| acc + kv.1 }
+  puts "total=#{total}"
+  let keys = xs.reduce(0) { |acc, kv| acc + kv.0 }
+  puts "keys=#{keys}"
+end

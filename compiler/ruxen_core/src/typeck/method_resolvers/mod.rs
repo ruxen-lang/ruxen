@@ -28,20 +28,15 @@ use crate::hir::nodes::*;
 use crate::hir::types::Ty;
 use crate::lexer::token::Span;
 
-use super::infer::{is_bufio_inner_supported, is_iter_sum_compatible, InferenceEngine};
+use super::infer::{is_bufio_inner_supported, InferenceEngine};
 
+mod builtin_bridge;
 mod collections;
 mod concurrency;
-mod fmt;
-mod fs;
 mod io;
-mod iter;
-mod net;
 mod numeric;
-mod process;
 mod resolver;
 mod strings;
-mod time;
 
 use resolver::MethodResolver;
 
@@ -84,17 +79,63 @@ fn resolvers() -> &'static [MethodResolver] {
     PIPELINE.get_or_init(|| {
         let mut v = Vec::new();
         v.extend(resolver::declared_method_resolvers()); // TIER 1 — fixes A2
-        v.extend(concurrency::resolvers()); // TIER 2 — named stdlib
-        v.extend(fmt::resolvers());
+                                                         // TIER 2 — named-stdlib residual. After the zero-Rust-stdlib
+                                                         // migration (Phase B), only the resolvers carrying genuine
+                                                         // compiler logic remain:
+                                                         //   * `concurrency` — Mutex/Arc/JoinHandle generic-payload
+                                                         //     substitution + the E1100/E1101/E1102 Send construction
+                                                         //     checks (Problem-3 residual, not a static `.rx` return).
+                                                         //   * `io` — BufReader/BufWriter `new`/`with_capacity` E0714
+                                                         //     inner-type check + their generic-representation methods.
+        v.extend(concurrency::resolvers());
         v.extend(io::resolvers());
-        v.extend(fs::resolvers());
-        v.extend(process::resolvers());
-        v.extend(net::resolvers());
-        v.extend(time::resolvers());
-        v.extend(strings::resolvers()); // TIER 3 — structural
+        // TIER 3 — structural RESIDUAL resolvers. After the
+        // zero-Rust-stdlib migration these carry ONLY the arms that
+        // CANNOT be a static `.rx` return, and they MUST precede
+        // `builtin_bridge` so those residuals win over the `.rx`
+        // delegation for their shared heads:
+        //   * `strings` — the irreducible `String` surface residuals:
+        //     `remove` (Char/I32 vs C struct-pointer/I64) and the mutation
+        //     methods `push`/`push_str`/`insert`/`insert_str` (surface
+        //     `Unit` vs C `char*`). Feature E migrated the `&str`
+        //     `to_lower`/`to_upper`/`parse_uint` arms to string.rx.
+        //   * `collections` — `Array`/`Set`/`Map` CLOSURE combinators
+        //     (`map`/`select`/`reduce`/…, MIR-inlined), the arg-dependent
+        //     `zip`/`to_h`, the E0700 `sum` check, and `get_mut`/`get_var`
+        //     (E0722 alias cluster); PLUS `Option`/`Result` (enum heads
+        //     the bridge does not cover at all).
+        //   * `numeric` — now an EMPTY pipeline stage. The scalar `to_s`/
+        //     conversions migrated to scalar.rx in Phase 3; the lone
+        //     `Enum.weight` arm was a dead golden-only artifact and was
+        //     removed (see numeric.rs). Kept in the pipeline as a no-op so
+        //     a future numeric residual lands without re-threading wiring.
+        v.extend(strings::resolvers());
         v.extend(collections::resolvers());
         v.extend(numeric::resolvers());
-        v.extend(iter::resolvers());
+        // The delegator: builtin heads (`String`/`Array`/`Set` so far)
+        // whose non-residual methods were migrated to their `.rx`
+        // method-home resolve here via `bridge_builtin_method` — zero
+        // hardcoded method knowledge. Placed AFTER the residual
+        // resolvers (so they shadow it) but still at the
+        // inference-order-tolerant pipeline site (line 77), preserving
+        // the fixpoint ordering the old arms relied on.
+        v.extend(builtin_bridge::resolvers());
+        // MIGRATED to `.rx` (resolve via `lookup_method_with_args` from the
+        // general `DefKind::Method` path), resolver tables deleted:
+        //   * `time`    — Duration/Instant       (library/std/time/src/lib.rx)
+        //   * `fs`      — File/Metadata/OpenOptions
+        //                 (library/std/io/src/{file,metadata,open_options}.rx)
+        //   * `net`     — TcpListener/TcpStream   (library/std/net/src/lib.rx)
+        //   * `process` — Command/ExitStatus/Output
+        //                 (library/std/process/src/lib.rx)
+        //   * `fmt`     — Formatter               (library/std/fmt/src/lib.rx)
+        //   * `io` Stdin/Stdout/Stderr/IoError
+        //                 (library/std/io/src/{stdin,stdout,stderr,lib}.rx)
+        //
+        // The `*Iter` combinator resolver was deleted with the rest of the
+        // orphaned iterator machinery — `split`/`chars`/`lines`/`bytes`
+        // return `Array`, nothing produces `VecIter`/`SplitIter`, and no
+        // `.rx`/fixture calls `.iter`/`.into_iter`.
         v.extend(resolver::structural_fallback_resolvers()); // TIER 3 tail
         v
     })
@@ -158,13 +199,6 @@ mod golden {
         }
     }
 
-    fn enum_ty(name: &str) -> Ty {
-        Ty::Enum {
-            name: name.to_string(),
-            generic_args: vec![],
-        }
-    }
-
     fn struct_ty(name: &str) -> Ty {
         Ty::Struct {
             name: name.to_string(),
@@ -200,198 +234,116 @@ mod golden {
     fn corpus() -> Vec<Case> {
         let mut v: Vec<Case> = Vec::new();
 
-        // ── Ty::String structural ──────────────────────────────────
-        for m in [
-            "clone",
-            "size",
-            "empty?",
-            "push_str",
-            "trim",
-            "to_lower",
-            "to_upper",
-            "chars",
-            "split",
-            "push",
-            "as_str",
-            "from",
-            "include?",
-            "starts_with",
-            "ends_with",
-            "repeat",
-            "lines",
-            "replace",
-            "new",
-            "with_capacity",
-            "to_string",
-            "bytes",
-            "trim_start",
-            "trim_end",
-            "find",
-            "splitn",
-            "clear",
-            "truncate",
-            "insert",
-            "insert_str",
-            "remove",
-            "parse_int",
-            "parse_float",
-            "into_bytes",
-            "to_s",
-        ] {
+        // ── Ty::String delegated to .rx (string.rx via builtin_bridge) ─
+        // Most `String` methods resolve from string.rx through the
+        // delegator; the golden runs with an EMPTY symbol table (no `.rx`
+        // loaded) so those would return None and are not pinned here. The
+        // residual arms that stay Rust-side (strings.rs) ARE pinned:
+        // `remove` (Char/I32 surface vs C struct-pointer/I64) and the
+        // mutation methods `push`/`push_str`/`insert`/`insert_str` (surface
+        // `Unit` vs C `char*` — pin `48_borrow_var` proves the Unit tail).
+        // Both are genuinely irreducible (no single `.rx` return type
+        // expresses surface + ABI). `clone`/`to_s` MIGRATED earlier (wire-
+        // identical aliases). End-to-end coverage: builtin_receiver_bridge
+        // pins + e2e (`313_string_remove`, `315_string_push`,
+        // `311_string_insert_str`, `630_string_insert_char`,
+        // `631_string_push_str`).
+        for m in ["remove", "push", "push_str", "insert", "insert_str"] {
             v.push(c(Ty::String, m));
         }
 
-        // ── Ty::Str structural ─────────────────────────────────────
-        for m in [
-            "size",
-            "empty?",
-            "trim",
-            "to_lower",
-            "to_upper",
-            "chars",
-            "split",
-            "parse_uint",
-            "as_str",
-            "include?",
-            "starts_with",
-            "ends_with",
-            "lines",
-            "replace",
-            "to_string",
-            "bytes",
-            "trim_start",
-            "trim_end",
-            "find",
-            "splitn",
-            "parse_int",
-            "parse_float",
-            "to_s",
-        ] {
-            v.push(c(Ty::Str, m));
-        }
+        // ── Ty::Str — fully migrated to `class String` via the bridge ──
+        // The exact-match `&str` surfaces, AND (Feature E) `to_lower`/
+        // `to_upper`/`parse_uint`, now resolve from `class String` via the
+        // bridge (`method_home_key: Ty::Str → "String"`); under the
+        // golden's EMPTY symbol table they return None, so there is NOTHING
+        // to pin here. `to_lower`/`to_upper` yield `String` (the C symbols
+        // `malloc` an owned buffer — the old `-> str` arm wrongly claimed a
+        // borrowed slice); `parse_uint` is now declared on `class String`
+        // (`def parse_uint -> Result[USize, Error]`). End-to-end coverage:
+        // `45_string_methods`, `113_string_methods_chain`,
+        // `632_str_to_lower_upper`, `633_str_parse_uint`.
 
-        // ── ParseIntError / ParseFloatError ────────────────────────
-        v.push(c(class("ParseIntError", vec![]), "message"));
-        v.push(c(class("ParseFloatError", vec![]), "message"));
+        // ── ParseIntError / ParseFloatError migrated to .rx ────────
+        // `.message` resolves from string/src/parse_{int,float}_error.rx;
+        // the resolver arms were deleted.
 
-        // ── Ty::Array structural ───────────────────────────────────
+        // ── Ty::Array structural RESIDUAL ──────────────────────────
+        // The migrated Array methods (size/empty?/push/pop/get/first/
+        // last/include?/clone/to_a/reverse/sort/join/clear/truncate/
+        // swap/insert/remove/extend/dedup/take/drop/chain/to_set/new/
+        // with_capacity/capacity/count) resolve from array.rx via the
+        // bridge; the golden runs with an EMPTY symbol table (no `.rx`),
+        // so those return None and are NOT pinned here. Only the residual
+        // arms in collections.rs (closure combinators, arg-dependent
+        // `zip`/`to_h`, the E0700 `sum`) resolve against the empty table
+        // and ARE pinned. `get_mut`/`get_var` are NO LONGER pinned: they
+        // MIGRATED to array.rx (their `ruxen_vec_get_opt` aliases are
+        // admitted now that E0722 compares wire shapes), so they resolve
+        // via the bridge and return None under the empty table. End-to-end
+        // `.rx` resolution is covered by the builtin_receiver_bridge pins
+        // + the e2e suite.
+        // `map`/`select`/`reject`/`all?`/`any?`/`partition`/`each_with_index`/
+        // `find`/`index`/`sort_by`/`reduce` MIGRATED to real `.rx` bodies
+        // (Feature C — `each`-based for the collectors / fold, `swap`+indexed-
+        // read selection sort for `sort_by`); `zip` MIGRATED to a generic
+        // `.rx` FFI decl (`zip[U](other: Array[U]) -> Array[(T, U)]`). They
+        // now resolve via the bridge against `class Array[T]` and, under the
+        // golden's EMPTY symbol table, return None — so they are NO LONGER
+        // pinned here (same treatment as the already-migrated size/push/pop/…
+        // surface). End-to-end resolution is covered by the e2e suite. The
+        // residual arms that still live in collections.rs ARE pinned: `each`
+        // (the iteration primitive), receiver-derived `to_h`, the E0700
+        // `sum`, and the in-place `select!` (no indexed-write `.rx` surface).
         let arr = || Ty::Array(Box::new(Ty::Int));
-        for m in [
-            "size",
-            "empty?",
-            "push",
-            "pop",
-            "get",
-            "get_mut",
-            "each",
-            "each_with_index",
-            "map",
-            "select",
-            "reject",
-            "reduce",
-            "all?",
-            "any?",
-            "find",
-            "index",
-            "take",
-            "drop",
-            "partition",
-            "chain",
-            "zip",
-            "to_a",
-            "to_set",
-            "to_h",
-            "new",
-            "sum",
-            "count",
-            "reverse",
-            "first",
-            "last",
-            "clone",
-            "include?",
-            "sort",
-            "join",
-            "with_capacity",
-            "capacity",
-            "clear",
-            "truncate",
-            "swap",
-            "insert",
-            "remove",
-            "extend",
-            "dedup",
-            "sort_by",
-            "select!",
-        ] {
+        for m in ["each", "to_h", "sum", "select!"] {
             v.push(c(arr(), m));
         }
 
-        // ── Ty::Map structural ─────────────────────────────────────
-        let map = || Ty::Map(Box::new(Ty::String), Box::new(Ty::Int));
-        for m in [
-            "new",
-            "insert",
-            "get",
-            "key?",
-            "size",
-            "empty?",
-            "with_capacity",
-            "remove",
-            "clear",
-            "keys",
-            "values",
-            "to_a",
-        ] {
-            v.push(c(map(), m));
-        }
+        // ── Ty::Map structural — fully migrated to map.rx (class Hash) ─
+        // Every Map method (new/with_capacity/size/empty?/get/key?/keys/
+        // values/to_a/insert/remove/clear) resolves from map.rx via the
+        // bridge; with an EMPTY symbol table they return None, so there
+        // is NOTHING to pin here. End-to-end resolution is covered by
+        // `hash_resolves_to_ty_map` + the e2e suite.
 
-        // ── Ty::Set structural ─────────────────────────────────────
-        let set = || Ty::Set(Box::new(Ty::Int));
-        for m in [
-            "new",
-            "insert",
-            "include?",
-            "size",
-            "empty?",
-            "with_capacity",
-            "remove",
-            "clear",
-            "union",
-            "intersection",
-            "difference",
-        ] {
-            v.push(c(set(), m));
-        }
+        // ── Ty::Set structural — fully migrated to set.rx ──────────
+        // Every Set method (new/with_capacity/size/empty?/include?/to_a/
+        // union/intersection/difference/insert/remove/clear) resolves
+        // from set.rx via the bridge; with an EMPTY symbol table they
+        // return None, so there is NOTHING to pin here. End-to-end
+        // resolution is covered by `set_methods_resolve_via_general_path`
+        // + the e2e suite.
 
-        // ── Ty::Option structural ──────────────────────────────────
+        // ── Ty::Option residual (shadow the bridge) ────────────────
+        // The non-closure Option methods (unwrap/expect/unwrap_or/nil?/
+        // present?) MIGRATED to `enum Option[T]` (option_result/src/
+        // lib.rx) and resolve via the bridge; under the empty table they
+        // return None and are NOT pinned. `unwrap_or_else` likewise
+        // MIGRATED to a `.rx` body (its return is the static success
+        // element). `map` MIGRATED (Task H) to method-level generic
+        // harvesting through the bridge (`def map[U] -> Option[U]`, `U`
+        // harvested from the closure return) — under the empty table it
+        // returns None, NOT pinned. `ok_or` MIGRATED (Task H increment 2) to
+        // a `.rx` body (`def ok_or[E](err: E) -> Result[T, E]`, `E` harvested
+        // from the arg) — bridge-resolved, None under the empty table. Only
+        // the residual arm is pinned: `try_op` (`?`-operator intrinsic).
         let opt = || Ty::Option(Box::new(Ty::Int));
-        for m in [
-            "try_op",
-            "unwrap",
-            "expect",
-            "unwrap_or",
-            "unwrap_or_else",
-            "map",
-            "ok_or",
-            "nil?",
-            "present?",
-        ] {
+        for m in ["try_op"] {
             v.push(c(opt(), m));
         }
 
-        // ── Ty::Result structural ──────────────────────────────────
+        // ── Ty::Result residual (shadow the bridge) ────────────────
+        // The non-closure Result methods (unwrap/expect/unwrap_or/ok?/
+        // err?/ok/err) MIGRATED to `enum Result[T, E]`; `unwrap_or_else`
+        // likewise MIGRATED to a `.rx` body. `map`/`map_err` MIGRATED
+        // (Task H) to method-level generic harvesting through the bridge
+        // (`def map[U] -> Result[U, E]` / `def map_err[F] -> Result[T, F]`,
+        // the transformed var harvested from the closure return) — under
+        // the empty table they return None, NOT pinned. Only the residual
+        // arm is pinned: `try_op` (`?`-operator intrinsic).
         let res = || Ty::Result(Box::new(Ty::Int), Box::new(Ty::String));
-        for m in [
-            "try_op",
-            "unwrap",
-            "expect",
-            "unwrap_or",
-            "unwrap_or_else",
-            "map",
-            "map_err",
-            "ok?",
-            "err?",
-        ] {
+        for m in ["try_op"] {
             v.push(c(res(), m));
         }
 
@@ -430,136 +382,31 @@ mod golden {
         v.push(c(class("Arc", vec![Ty::Int]), "strong_count"));
         v.push(c(class("Arc", vec![Ty::Int]), "weak_count"));
 
-        // ── fmt (TIER 2) ───────────────────────────────────────────
-        for m in [
-            "write_str",
-            "write_char",
-            "size",
-            "width",
-            "precision",
-            "align",
-            "fill",
-        ] {
-            v.push(c(class("Formatter", vec![]), m));
-        }
+        // ── fmt (Formatter) migrated to .rx ────────────────────────
+        // Resolve from `library/std/fmt/src/lib.rx` via
+        // `lookup_method_with_args`; the fmt resolver was deleted.
 
-        // ── *Iter combinators (TIER 2-ish, name.ends_with("Iter")) ──
-        let veciter = || class("VecIter", vec![Ty::Int]);
-        for m in [
-            "select",
-            "map",
-            "find",
-            "index",
-            "sum",
-            "count",
-            "reduce",
-            "all?",
-            "any?",
-            "take",
-            "drop",
-            "chain",
-            "zip",
-            "collect_vec",
-            "enumerate",
-            "partition",
-        ] {
-            v.push(c(veciter(), m));
-        }
-        // SplitIter.to_vec yields &str segments (distinct branch).
-        v.push(c(class("SplitIter", vec![]), "to_vec"));
+        // ── *Iter combinators removed (orphaned iterator machinery) ─
+        // The `iter` resolver was deleted; nothing produces VecIter/
+        // SplitIter and no surface calls `.iter`/`.into_iter`.
 
-        // ── io: Stdin / Stdout / Stderr / IoError ──────────────────
-        for m in ["read_line", "read_to_string", "lines"] {
-            v.push(c(class("Stdin", vec![]), m));
-        }
-        for m in ["write_str", "flush", "print", "println"] {
-            v.push(c(class("Stdout", vec![]), m));
-        }
-        for m in ["write_str", "flush", "eprint", "eprintln"] {
-            v.push(c(class("Stderr", vec![]), m));
-        }
-        v.push(c(enum_ty("IoError"), "message"));
-        v.push(c(enum_ty("IoError"), "kind"));
+        // ── io: Stdin / Stdout / Stderr / IoError migrated to .rx ──
+        // Resolve from `library/std/io/src/{stdin,stdout,stderr,lib}.rx`
+        // via `lookup_method_with_args`; those io resolver arms were
+        // deleted. BufReader / BufWriter remain Rust residual (E0714 +
+        // generic representation) — exercised below.
 
-        // ── fs: Metadata / File / OpenOptions ──────────────────────
-        for m in ["size", "modified", "is_file", "is_dir", "is_symlink"] {
-            v.push(c(class("Metadata", vec![]), m));
-        }
-        for m in [
-            "open",
-            "create",
-            "append",
-            "open_options",
-            "read",
-            "read_to_string",
-            "read_all",
-            "write",
-            "write_all",
-            "write_str",
-            "flush",
-            "seek",
-            "metadata",
-            "close",
-        ] {
-            v.push(c(class("File", vec![]), m));
-        }
-        for m in [
-            "read",
-            "write",
-            "append",
-            "truncate",
-            "create",
-            "create_new",
-        ] {
-            v.push(c(class("OpenOptions", vec![]), m));
-        }
+        // ── fs (Metadata / File / OpenOptions) migrated to .rx ─────
+        // Those methods resolve from
+        // `library/std/io/src/{file,metadata,open_options}.rx` via
+        // `lookup_method_with_args`; the fs resolver was deleted, so the
+        // golden corpus (empty symbol table) no longer pins them.
 
-        // ── process: Command / ExitStatus / Output ─────────────────
-        for m in ["arg", "args", "env", "current_dir", "status", "output"] {
-            v.push(c(class("Command", vec![]), m));
-        }
-        for m in ["code", "success"] {
-            v.push(c(class("ExitStatus", vec![]), m));
-        }
-        for m in ["status", "stdout", "stderr"] {
-            v.push(c(class("Output", vec![]), m));
-        }
+        // ── process (Command/ExitStatus/Output) migrated to .rx ────
+        // Resolve from `library/std/process/src/lib.rx`.
 
-        // ── time: Duration / Instant ───────────────────────────────
-        for m in [
-            "from_secs",
-            "from_millis",
-            "from_micros",
-            "from_nanos",
-            "as_secs",
-            "as_millis",
-            "as_micros",
-            "as_nanos",
-            "add",
-            "sub",
-        ] {
-            v.push(c(class("Duration", vec![]), m));
-        }
-        for m in ["now", "elapsed", "duration_since", "sub"] {
-            v.push(c(class("Instant", vec![]), m));
-        }
-
-        // ── net: TcpListener / TcpStream ───────────────────────────
-        for m in ["bind", "accept", "local_addr", "set_nonblocking", "close"] {
-            v.push(c(class("TcpListener", vec![]), m));
-        }
-        for m in [
-            "connect",
-            "read",
-            "write",
-            "peer_addr",
-            "shutdown",
-            "close",
-            "set_read_timeout",
-            "set_write_timeout",
-        ] {
-            v.push(c(class("TcpStream", vec![]), m));
-        }
+        // ── net (TcpListener/TcpStream) migrated to .rx ────────────
+        // Resolve from `library/std/net/src/lib.rx`.
 
         // ── BufReader / BufWriter (effectful E0714) ────────────────
         // `new` with a supported inner (File) — no diagnostic.
@@ -597,36 +444,47 @@ mod golden {
             v.push(c(class("BufWriter", vec![class("File", vec![])]), m));
         }
 
-        // ── Enum / numeric / scalar structural (TIER 3) ────────────
-        v.push(c(enum_ty("Priority"), "weight"));
-        v.push(c(Ty::Bool, "to_string"));
-        v.push(c(Ty::Int, "to_string"));
-        v.push(c(Ty::USize, "to_string"));
-        v.push(c(Ty::Float, "to_string"));
-        v.push(c(Ty::Int, "to_f"));
-        v.push(c(Ty::Float, "to_i"));
-        v.push(c(Ty::Int, "to_s"));
-        v.push(c(Ty::USize, "to_s"));
-        v.push(c(Ty::Float, "to_s"));
-        v.push(c(Ty::Bool, "to_s"));
-        v.push(c(Ty::Char, "to_s"));
-        // generic to_s / clone / new / default fallbacks
-        v.push(c(class("Widget", vec![]), "to_s"));
-        v.push(c(struct_ty("Point"), "to_s"));
-        v.push(c(enum_ty("Color"), "to_s"));
+        // ── Enum / numeric / scalar structural RESIDUAL (TIER 3) ───
+        // Int AND the Float/Bool/Char/USize scalar conversions
+        // (`to_s`/`to_string`/`to_i`) MIGRATED to scalar.rx and resolve
+        // via the bridge; with an EMPTY symbol table they return None, so
+        // they are NOT pinned here. The receiver-width correctness
+        // (Float→F64, the rest→I64) is pinned by
+        // `tests/runtime_abi_derivation.rs`. The `Enum.weight` arm was
+        // REMOVED (dead golden-only artifact — see numeric.rs); a real
+        // user enum accessor resolves via `lookup_class_method_return`,
+        // pinned by `217_enum_declared_method.rx`. `numeric::resolvers()`
+        // is now an empty pipeline stage, so nothing here is pinned.
+        // generic `.new` constructor fallback (still pinned — not a derive).
         v.push(c(class("Widget", vec![]), "new"));
-        v.push(c(class("Widget", vec![]), "clone"));
         v.push(c(struct_ty("Point"), "new"));
-        v.push(c(struct_ty("Point"), "clone"));
-        v.push(c(enum_ty("Color"), "clone"));
-        v.push(c(struct_ty("Point"), "default"));
-        v.push(c(class("Widget", vec![]), "default"));
+        // `clone`, `to_s`, and `default` MIGRATED to the DERIVE MECHANISM
+        // (Feature D): they resolve via `ty_has_derive_trait(ty, "Clone")` /
+        // `(ty, "Debug")` / `(ty, "Default")` respectively, in lockstep with
+        // the MIR synthesis (`mir/lower/derive.rs`), so they require the type
+        // to be present in the symbol table. The golden runs with an EMPTY
+        // symbol table, so `Widget`/`Point`/`Color` `clone`/`to_s`/`default`
+        // return None and are NO LONGER pinned here (same treatment as the
+        // `.rx`-bridged surface). End-to-end behaviour is pinned by the e2e
+        // fixtures (`2xx_implicit_clone_*`, `49_clone_explicit`,
+        // `145_array_clone`, `810_to_s_universal`, `2xx_implicit_debug_*`,
+        // `208_implicit_default`, `216_derive_default_include`).
 
         // ── Effectful-arm DIAGNOSTIC pins ──────────────────────────
         // These exercise the early-return + pushed-diagnostic branches
         // of the effectful arms, so the oracle captures the error code
-        // AND the `Some(Ty::Error)` return. With an empty symbol table an
-        // unknown class is non-Send, so `Mutex.new(NotSend)` fires E1101.
+        // AND the `Some(Ty::Error)` return.
+        //
+        // Mutex/SharedSync/Arc `new(NotSend)` now record `diag=[]` here:
+        // the E1101/E1102 payload-Send check MIGRATED (Feature B) to the
+        // `.rx` bounds `class Mutex[T: Send]` / `class SharedSync[T: Send]`
+        // and fires from the CONSTRUCTION-SEAM check (`check_constructor_
+        // generic_bounds`, typeck/infer/expr.rs), which needs the `.rx`
+        // class definition loaded. The golden runs with an EMPTY symbol
+        // table (no `.rx`), so the bound isn't visible and no diagnostic
+        // fires here — the resolver arm only TYPES the constructor now.
+        // End-to-end E1101/E1102 enforcement is pinned by the
+        // `concurrency_negative.rs` integration tests (which load stdlib).
         v.push(c_args(
             class("Mutex", vec![]),
             "new",
@@ -663,9 +521,6 @@ mod golden {
             "with_capacity",
             vec![arg(Ty::Int), arg(Ty::Int)],
         ));
-        // *Iter.sum on a non-numeric element type → E0700.
-        v.push(c(class("VecIter", vec![Ty::String]), "sum"));
-
         v
     }
 

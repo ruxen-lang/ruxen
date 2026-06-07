@@ -1,24 +1,52 @@
-//! Known runtime function signatures.
+//! Compiler-internal runtime function signatures (the ABI residual).
 //!
-//! Hand-rolled signature table for every `ruxen_*` C runtime helper that
-//! `coerce_call_args` / `get_or_declare_func` consult to widen narrow-int
-//! arguments correctly. Split out of the original monolithic
-//! `cranelift.rs` for navigability — the contents are otherwise unchanged.
+//! After `docs/specs/system/zero_rust_stdlib_classes.spec.md`, the C-ABI
+//! of every `ruxen_*` symbol that a stdlib `.rx` `lib` block declares is
+//! DERIVED from that declaration (resolver records the declared `Ty`s;
+//! `ty_to_cranelift` lowers them; codegen Pass-0 declares the
+//! `Linkage::Import` from that). The hand-rolled per-symbol table that
+//! used to mirror those widths is gone.
+//!
+//! What remains here is the IRREDUCIBLE residual: symbols emitted
+//! DIRECTLY by codegen / MIR lowering, declared by NO `.rx` lib block, so
+//! there is no declared `Ty` to derive their ABI from. These are language
+//! features (allocation, equality/ordering lowering, panic, the formatter
+//! synthesis surface, pointer-indirection helpers, the no-op sentinel)
+//! plus a handful of conversion/accessor helpers the compiler calls
+//! implicitly. The parity guard
+//! `compiler/ruxen_core/tests/runtime_abi_derivation.rs` proves this set
+//! is exactly the table-minus-derived difference at the migration
+//! baseline (74 symbols, incl. the non-`ruxen_` I/O aliases).
+//!
+//! Consumers:
+//!   * `cranelift/emit.rs::coerce_call_args` — consulted only as a
+//!     FALLBACK, after the derived `user_fn_param_tys` (codegen Pass-0
+//!     populated that from the lib-decl `Ty`s, so derived wins for every
+//!     `.rx`-declared symbol). This table answers for the residual.
+//!   * `cranelift/translation_env.rs::get_or_declare_func` — the path for
+//!     a callee never declared in Pass-0/1, i.e. a residual symbol emitted
+//!     mid-body.
+//!
+//! Adding a stdlib runtime function NO LONGER touches this file: declare
+//! it in the package's `.rx` + `.c` and its ABI is derived. Only a NEW
+//! compiler-emitted-but-undeclared symbol belongs here.
 
 use cranelift_codegen::ir::types::{self, Type};
 
-/// Known runtime function signatures.
+/// Compiler-internal runtime signatures (the residual that cannot be
+/// derived from a `.rx` lib declaration). Returns `(param_types,
+/// optional_return_type)`.
 ///
-/// Returns `(param_types, optional_return_type)`.
-///
-/// `pub` (re-exported from `codegen::cranelift`) so the REPL's separate
-/// JIT backend can share this single authoritative ABI table instead of
-/// maintaining a drifting subset — a missing entry there silently
-/// derives the wrong width from the HIR (`Char`→i32) and the JIT
-/// verifier rejects the call.
-pub fn runtime_signature(name: &str) -> Option<(Vec<Type>, Option<Type>)> {
+/// `pub` (re-exported from `codegen::cranelift` as `runtime_signature` for
+/// source compatibility) so any external consumer keeps resolving; the
+/// REPL JIT derives FFI widths from `HirFfiFunc::param_types` itself and
+/// does not call this.
+pub fn compiler_internal_signature(name: &str) -> Option<(Vec<Type>, Option<Type>)> {
     match name {
-        // I/O
+        // ── Implicit I/O entry points ────────────────────────────────
+        // The bare verbs (`puts`, `print`, …) and their `ruxen_*` forms
+        // are emitted by `print`/`puts` statement lowering and by the
+        // string-interpolation path, not declared in a `.rx` lib block.
         "puts" | "ruxen_puts" => Some((vec![types::I64], None)),
         "eputs" | "ruxen_eputs" => Some((vec![types::I64], None)),
         "print" | "ruxen_print" => Some((vec![types::I64], None)),
@@ -28,286 +56,115 @@ pub fn runtime_signature(name: &str) -> Option<(Vec<Type>, Option<Type>)> {
         "stdin" | "ruxen_stdin" => Some((vec![], Some(types::I64))),
         "stdout" | "ruxen_stdout" => Some((vec![], Some(types::I64))),
         "stderr" | "ruxen_stderr" => Some((vec![], Some(types::I64))),
-        "ruxen_stdin_read_line" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_stdin_read_to_string" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_stdin_lines" => Some((vec![types::I64], Some(types::I64))),
-        // Phase 2 stdlib (#06.A3): std::fmt::Formatter buffer surface.
-        "ruxen_fmt_formatter_new" => Some((vec![], Some(types::I64))),
-        "ruxen_fmt_formatter_free" => Some((vec![types::I64], None)),
-        "ruxen_fmt_formatter_write_str" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_fmt_formatter_write_char" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_fmt_formatter_buffer" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_fmt_formatter_len" => Some((vec![types::I64], Some(types::I64))),
-        // Phase 2 stdlib (#06.D4): spec helpers.
+        "ruxen_print_int" => Some((vec![types::I64], None)),
+        // `main` prologue calls this directly (see cranelift/mod.rs
+        // entry-block setup); never `.rx`-declared.
+        "ruxen_env_init" => Some((vec![types::I32, types::I64], None)),
+        "ruxen_env_args_count" => Some((vec![], Some(types::I64))),
+        "ruxen_env_args_at" => Some((vec![types::I64], Some(types::I64))),
+        "args" | "ruxen_env_args" => Some((vec![], Some(types::I64))),
+
+        // ── Implicit conversions (interpolation / `to_s` synthesis) ──
+        "ruxen_int_to_string" => Some((vec![types::I64], Some(types::I64))),
+        "ruxen_float_to_string" => Some((vec![types::F64], Some(types::I64))),
+        "ruxen_bool_to_string" => Some((vec![types::I64], Some(types::I64))),
+        "ruxen_char_to_string" => Some((vec![types::I64], Some(types::I64))),
+        "ruxen_int_to_f" => Some((vec![types::I64], Some(types::F64))),
+        "ruxen_float_to_i" => Some((vec![types::F64], Some(types::I64))),
+
+        // ── Formatter synthesis surface (Debug/Display derive) ───────
+        // Emitted by `_fmt` helper synthesis (Phase 2 #06.D4); the spec
+        // helpers take an internal spec struct the surface `.rx` never
+        // names.
+        "ruxen_float_to_string_prec" => Some((vec![types::F64, types::I64], Some(types::I64))),
+        "ruxen_string_truncate_chars" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "ruxen_fmt_formatter_new_with_spec" => Some((
             vec![types::I64, types::I64, types::I64, types::I64],
             Some(types::I64),
         )),
         "ruxen_fmt_formatter_precision" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_float_to_string_prec" => Some((vec![types::F64, types::I64], Some(types::I64))),
-        "ruxen_string_truncate_chars" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_stdout_write_str" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_stdout_flush" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_stderr_write_str" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_stderr_flush" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_env_init" => Some((vec![types::I32, types::I64], None)),
-        "ruxen_env_args_count" => Some((vec![], Some(types::I64))),
-        "ruxen_env_args_at" => Some((vec![types::I64], Some(types::I64))),
-        "args" | "ruxen_env_args" => Some((vec![], Some(types::I64))),
-        "ruxen_env_var" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_process_exit" => Some((vec![types::I64], None)),
-        "ruxen_fs_read_to_string" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_fs_write" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_fs_exists" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_fs_remove_file" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_fs_create_dir" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_fs_create_dir_all" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_fs_rename" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        // Phase 2 stdlib (#06.5 T3): fs completeness.
-        "ruxen_fs_copy" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_fs_remove_dir_all" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_fs_canonicalize" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_fs_write_atomic" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_fs_read_link" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_fs_symlink" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        // Phase 2 stdlib (#06): fs::metadata + Metadata accessors.
-        "ruxen_fs_metadata" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_metadata_len" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_metadata_modified" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_metadata_is_file" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_metadata_is_dir" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_metadata_is_symlink" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_metadata_free" => Some((vec![types::I64], None)),
-        // Phase 2 stdlib (#06): std::process::Command builder + Output /
-        // ExitStatus accessors.
-        "ruxen_command_new" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_command_arg" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_command_args" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_command_env" => Some((vec![types::I64, types::I64, types::I64], Some(types::I64))),
-        "ruxen_command_current_dir" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_command_status" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_command_output" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_command_drop" => Some((vec![types::I64], None)),
-        "ruxen_exit_status_code" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_exit_status_success" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_exit_status_free" => Some((vec![types::I64], None)),
-        "ruxen_output_stdout" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_output_stderr" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_output_status" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_output_drop" => Some((vec![types::I64], None)),
-        // Phase 2 stdlib (#06.5 T2): File + OpenOptions surface.
-        "ruxen_file_open" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_file_create" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_file_append" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_file_open_options" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_file_read" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_file_read_to_string" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_file_read_all" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_file_write" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_file_write_all" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_file_write_str" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_file_flush" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_file_seek" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_file_metadata" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_file_close" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_file_drop" => Some((vec![types::I64], None)),
-        "ruxen_open_options_new" => Some((vec![], Some(types::I64))),
-        "ruxen_open_options_read" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_open_options_write" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_open_options_append" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_open_options_truncate" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_open_options_create" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_open_options_create_new" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_print_int" => Some((vec![types::I64], None)),
-        // Conversions
-        "ruxen_int_to_string" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_float_to_string" => Some((vec![types::F64], Some(types::I64))),
-        "ruxen_bool_to_string" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_char_to_string" => Some((vec![types::I64], Some(types::I64))),
-        // Numeric conversions: Int.to_f (i64 -> f64) and Float.to_i
-        // (f64 -> i64). Floats cross the C ABI as a real F64 here (cf.
-        // `ruxen_float_to_string` above), so the C bodies are plain casts.
-        "ruxen_int_to_f" => Some((vec![types::I64], Some(types::F64))),
-        "ruxen_float_to_i" => Some((vec![types::F64], Some(types::I64))),
-        // String operations
+
+        // ── Equality / ordering / hashing lowering (`==`, `<=>`) ─────
+        // `cranelift/emit` and `llvm/emit/instructions` emit these for
+        // the `Compare` instruction on string/collection operands.
         "ruxen_string_concat" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_string_from" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_string_push_str" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        // Pointer-to-pointer helpers used to implement &mut T mutation.
-        "ruxen_deref_ptr" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_store_ptr" => Some((vec![types::I64, types::I64], None)),
-        "ruxen_string_len" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_string_is_empty" => Some((vec![types::I64], Some(types::I8))),
-        "ruxen_string_trim" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_string_to_lower" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_string_to_upper" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_string_chars" => Some((vec![types::I64], Some(types::I64))),
-        // String stdlib (#02): all char* / Vec ptr / Option / Result are
-        // pointer-sized, so they ride the I64 calling convention.
-        "ruxen_string_new" => Some((vec![], Some(types::I64))),
-        "ruxen_string_with_capacity" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_string_as_str" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_string_to_string" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_string_bytes" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_string_trim_start" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_string_trim_end" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_string_find" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_string_splitn" => Some((vec![types::I64, types::I64, types::I64], Some(types::I64))),
-        "ruxen_string_clear" => Some((vec![types::I64], None)),
-        "ruxen_string_truncate" => Some((vec![types::I64, types::I64], None)),
-        "ruxen_string_insert" => Some((vec![types::I64, types::I64, types::I64], Some(types::I64))),
-        "ruxen_string_insert_str" => {
-            Some((vec![types::I64, types::I64, types::I64], Some(types::I64)))
-        }
-        "ruxen_string_remove" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_string_parse_int" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_string_parse_float" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_parse_error_message" => Some((vec![types::I64], Some(types::I64))),
-        // String stdlib batch 2 (#02): split / push / into_bytes.
-        "ruxen_string_split" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_string_push" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_string_into_bytes" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_string_eq" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "ruxen_string_cmp" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "ruxen_string_hash" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_thread_sleep_ns" => Some((vec![types::I64], None)),
-        "ruxen_thread_yield" => Some((vec![], None)),
-        // Phase 2 stdlib (#06.5 T4): Duration / Instant ABI.
-        //   `from_*` : (i64) -> ptr<RuxenDuration>
-        //   `as_*`   : (ptr<RuxenDuration>) -> i64
-        //   `add/sub`: (ptr, ptr) -> ptr<RuxenDuration>
-        //   `Instant.now`                  : () -> ptr<RuxenInstant>
-        //   `Instant.elapsed`              : (ptr<RuxenInstant>) -> ptr<RuxenDuration>
-        //   `Instant.{duration_since,sub}` : (ptr, ptr) -> ptr<RuxenDuration>
-        //   `sleep`                        : (ptr<RuxenDuration>) -> void
-        // All pointers surface as I64 per the existing convention.
-        "ruxen_duration_from_secs"
-        | "ruxen_duration_from_millis"
-        | "ruxen_duration_from_micros"
-        | "ruxen_duration_from_nanos" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_duration_as_secs"
-        | "ruxen_duration_as_millis"
-        | "ruxen_duration_as_micros"
-        | "ruxen_duration_as_nanos" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_duration_add" | "ruxen_duration_sub" => {
-            Some((vec![types::I64, types::I64], Some(types::I64)))
-        }
-        "ruxen_instant_now" => Some((vec![], Some(types::I64))),
-        "ruxen_instant_elapsed" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_instant_duration_since" | "ruxen_instant_sub" => {
-            Some((vec![types::I64, types::I64], Some(types::I64)))
-        }
-        "ruxen_thread_sleep_duration" => Some((vec![types::I64], None)),
+        "ruxen_string_from_iter" => Some((vec![types::I64], Some(types::I64))),
         "ruxen_str_split" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "ruxen_str_parse_uint" => Some((vec![types::I64], Some(types::I64))),
-        // Memory
+        "ruxen_hash_eq" => Some((vec![types::I64, types::I64], Some(types::I8))),
+        "ruxen_hash_index" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "ruxen_set_eq" => Some((vec![types::I64, types::I64], Some(types::I8))),
+
+        // ── Indexing / element access emitted by `a[i]` lowering ─────
+        // `Array#get` is `.rx`-declared as `ruxen_vec_get_opt`; the bare
+        // `ruxen_vec_get` (+ mut variants) are the panic-on-OOB forms the
+        // index operator lowers to directly.
+        "ruxen_vec_get" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "ruxen_vec_get_mut" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "ruxen_vec_get_mut_opt" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "ruxen_vec_set" => Some((vec![types::I64, types::I64, types::I64], None)),
+        "ruxen_vec_from_iter" => Some((vec![types::I64], Some(types::I64))),
+
+        // ── Pointer indirection helpers (`&mut T` mutation lowering) ──
+        "ruxen_deref_ptr" => Some((vec![types::I64], Some(types::I64))),
+        "ruxen_store_ptr" => Some((vec![types::I64, types::I64], None)),
+
+        // ── Allocation + panic (core language runtime) ───────────────
         "ruxen_alloc" => Some((vec![types::I64], Some(types::I64))),
         "ruxen_dealloc" => Some((vec![types::I64], None)),
         "ruxen_realloc" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        // Heap-owned built-in drops (P0.7).
+        "ruxen_panic" => Some((vec![types::I64], None)),
+
+        // ── Drop-glue selectors emitted by the MIR drop pass ─────────
+        // Per-element drop helpers the drop elaboration chooses by the
+        // local's element type; no `.rx` decl names them.
         "ruxen_string_free" => Some((vec![types::I64], None)),
         "ruxen_vec_free" => Some((vec![types::I64], None)),
         "ruxen_hash_free" => Some((vec![types::I64], None)),
-        // Phase 2 stdlib (#04 batch 2): set spine + HashMap/Set
-        // per-element drop selectors.
         "ruxen_set_free" => Some((vec![types::I64], None)),
         "ruxen_hash_drop_string_v" => Some((vec![types::I64], None)),
         "ruxen_hash_drop_v_string" => Some((vec![types::I64], None)),
         "ruxen_hash_drop_string_string" => Some((vec![types::I64], None)),
         "ruxen_hash_drop_v_vec" => Some((vec![types::I64], None)),
         "ruxen_set_drop_string" => Some((vec![types::I64], None)),
-        // Phase 2 stdlib batch 2 (#03): element-aware Vec drop helpers
-        // and the new from_iter / dedup / set surface.
         "ruxen_vec_drop_string" => Some((vec![types::I64], None)),
         "ruxen_vec_drop_vec" => Some((vec![types::I64], None)),
-        "ruxen_vec_from_iter" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_string_from_iter" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_vec_dedup" => Some((vec![types::I64], None)),
-        "ruxen_vec_set" => Some((vec![types::I64, types::I64, types::I64], None)),
-        // Panic
-        "ruxen_panic" => Some((vec![types::I64], None)),
-        // Vec operations
-        "ruxen_vec_new" => Some((vec![], Some(types::I64))),
-        "ruxen_vec_push" => Some((vec![types::I64, types::I64], None)),
-        "ruxen_vec_pop" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_vec_len" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_vec_get" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_vec_get_opt" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_vec_get_mut" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_vec_get_mut_opt" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_vec_is_empty" => Some((vec![types::I64], Some(types::I8))),
-        "ruxen_vec_each" => Some((vec![types::I64, types::I64], None)),
-        // Hash operations
-        "ruxen_hash_new" => Some((vec![], Some(types::I64))),
-        "ruxen_hash_from_iter" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_hash_insert" => Some((vec![types::I64, types::I64, types::I64], None)),
-        "ruxen_hash_get" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_hash_contains_key" => Some((vec![types::I64, types::I64], Some(types::I8))),
-        "ruxen_hash_len" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_hash_is_empty" => Some((vec![types::I64], Some(types::I8))),
-        // Set operations
-        "ruxen_set_new" => Some((vec![], Some(types::I64))),
-        "ruxen_set_from_iter" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_set_insert" => Some((vec![types::I64, types::I64], None)),
-        "ruxen_set_contains" => Some((vec![types::I64, types::I64], Some(types::I8))),
-        "ruxen_set_len" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_set_is_empty" => Some((vec![types::I64], Some(types::I8))),
-        // Phase 2 stdlib (#04): HashMap[K,V] full surface.
-        "ruxen_hash_with_capacity" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_hash_remove" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_hash_clear" => Some((vec![types::I64], None)),
-        "ruxen_hash_keys" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_hash_values" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_hash_entries" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_hash_eq" => Some((vec![types::I64, types::I64], Some(types::I8))),
-        "ruxen_hash_index" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        // Phase 2 stdlib (#04): HashSet[T] full surface.
-        "ruxen_set_with_capacity" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_set_remove" => Some((vec![types::I64, types::I64], Some(types::I8))),
-        "ruxen_set_clear" => Some((vec![types::I64], None)),
-        "ruxen_set_iter" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_set_eq" => Some((vec![types::I64, types::I64], Some(types::I8))),
-        "ruxen_set_union" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_set_intersection" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_set_difference" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        // Option/Result helpers
-        "ruxen_option_unwrap_or" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_result_unwrap_or_else" => Some((vec![types::I64, types::I64], Some(types::I64))),
+
+        // ── Result `?`-operator + closure-fallback helpers ───────────
         "ruxen_result_try_op" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_result_expect" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_result_unwrap" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_option_expect" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_option_unwrap" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_result_ok" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_result_err" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_option_is_some" => Some((vec![types::I64], Some(types::I8))),
-        "ruxen_option_is_none" => Some((vec![types::I64], Some(types::I8))),
-        "ruxen_result_is_ok" => Some((vec![types::I64], Some(types::I8))),
-        "ruxen_result_is_err" => Some((vec![types::I64], Some(types::I8))),
-        // std::regex — see library/std/regex/runtime/regex.c
-        "ruxen_regex_new" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "ruxen_result_unwrap_or_else" => Some((vec![types::I64, types::I64], Some(types::I64))),
+
+        // ── Implicit accessor/conversion helpers without a `.rx` decl ─
+        // FOLLOW-UP (coverage gap, not a language primitive): the
+        // Duration `as_*` accessors, fs `Metadata` accessors, regex
+        // `compile_const`/`drop`/`error_drop`, `match_drop`, the
+        // ExitStatus accessors, and the thread-sleep helper below are
+        // stdlib runtime functions the compiler currently emits
+        // implicitly rather than routing through an `.rx`-declared
+        // method. They are residual only because no `.rx` lib block
+        // declares the linked symbol; a follow-up should declare them so
+        // they too become derived. See the migration report's residual
+        // bucketing.
+        "ruxen_duration_as_secs"
+        | "ruxen_duration_as_millis"
+        | "ruxen_duration_as_micros"
+        | "ruxen_duration_as_nanos" => Some((vec![types::I64], Some(types::I64))),
+        "ruxen_thread_sleep_ns" => Some((vec![types::I64], None)),
+        "ruxen_metadata_len" => Some((vec![types::I64], Some(types::I64))),
+        "ruxen_metadata_modified" => Some((vec![types::I64], Some(types::I64))),
+        "ruxen_metadata_is_file" => Some((vec![types::I64], Some(types::I64))),
+        "ruxen_metadata_is_dir" => Some((vec![types::I64], Some(types::I64))),
+        "ruxen_metadata_is_symlink" => Some((vec![types::I64], Some(types::I64))),
+        "ruxen_exit_status_code" => Some((vec![types::I64], Some(types::I64))),
+        "ruxen_exit_status_success" => Some((vec![types::I64], Some(types::I64))),
         "ruxen_regex_compile_const" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_regex_is_match" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_regex_match" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_regex_scan" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_regex_replace" => Some((vec![types::I64, types::I64, types::I64], Some(types::I64))),
-        "ruxen_regex_replace_all" => {
-            Some((vec![types::I64, types::I64, types::I64], Some(types::I64)))
-        }
-        "ruxen_regex_split" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "ruxen_regex_drop" => Some((vec![types::I64], None)),
-        "ruxen_regex_error_message" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_regex_error_offset" => Some((vec![types::I64], Some(types::I64))),
         "ruxen_regex_error_drop" => Some((vec![types::I64], None)),
-        "ruxen_match_matched" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_match_start" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_match_end" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_match_group" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_match_named" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_match_groups" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_match_named_groups" => Some((vec![types::I64], Some(types::I64))),
         "ruxen_match_drop" => Some((vec![types::I64], None)),
-        // No-ops: these are declared via call-site inference (variable arity).
+
+        // ── No-op sentinel (declared via call-site inference) ────────
         "ruxen_noop" => Some((vec![], None)),
         _ => None,
     }

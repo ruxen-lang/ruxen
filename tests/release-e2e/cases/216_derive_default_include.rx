@@ -1,0 +1,20 @@
+# Feature D: the derive mechanism resolves `Type.default()` via
+# `ty_has_derive_trait(ty, "Default")`, in lockstep with the MIR synthesis
+# (`{Type}_default`). A struct with an explicit `include Default` zero-inits
+# every field (`0` / `false` / `""`).
+struct Config
+  include Default
+
+  retries: Int
+  verbose: Bool
+  label: String
+end
+
+def main
+  let c = Config.default()
+  puts "#{c.retries}"
+  if !c.verbose
+    puts "quiet"
+  end
+  puts "label=[#{c.label}]"
+end

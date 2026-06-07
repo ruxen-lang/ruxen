@@ -32,6 +32,15 @@ pub struct HirProgram {
     /// `HirItem`s (they emit no executable code), so we surface them
     /// here as a side-channel on the program.
     pub ffi_libs: Vec<HirFfiLib>,
+    /// Number of leading `items` that came from the stdlib bootstrap/prelude
+    /// merge (they are PREPENDED in front of user items — see
+    /// `resolve/bootstrap_merge.rs`). The borrow checker skips this prefix:
+    /// the prelude is trusted + e2e-verified, and its generic combinator
+    /// bodies (e.g. `Enumerable#select`'s `pred.(x)` over an abstract `T`)
+    /// trip false-positive move/borrow errors that don't reflect the
+    /// monomorphized reality. 0 when no bootstrap was merged (plain
+    /// `resolve`, unit-test programs) → the whole program is checked.
+    pub prelude_item_count: usize,
 }
 
 /// #06.8 Phase 2: a single FFI library declaration carried on `HirProgram`.

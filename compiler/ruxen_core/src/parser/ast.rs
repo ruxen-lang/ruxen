@@ -481,6 +481,41 @@ pub enum BinOp {
     MatchOp,
 }
 
+impl BinOp {
+    /// The method name this operator desugars to, for the MIGRATED
+    /// operator families only (Task OP, Step 3): arithmetic (`+ - * / %`)
+    /// and bitwise (`& | ^ << >>`). Comparison / equality / logical /
+    /// regex-match return `None` — they are deliberately EXCLUDED from the
+    /// operator-as-method wave (they stay on the existing binop paths and
+    /// the later `Comparable` increment), so a `None` here means "do not
+    /// desugar; use the structural lowering". This is the SINGLE source of
+    /// the operator→method-name map, shared by typeck (`infer_binop`
+    /// routing) and MIR (`lower_binops`).
+    pub fn method_name(self) -> Option<&'static str> {
+        Some(match self {
+            BinOp::Add => "+",
+            BinOp::Sub => "-",
+            BinOp::Mul => "*",
+            BinOp::Div => "/",
+            BinOp::Mod => "%",
+            BinOp::BitAnd => "&",
+            BinOp::BitOr => "|",
+            BinOp::BitXor => "^",
+            BinOp::Shl => "<<",
+            BinOp::Shr => ">>",
+            BinOp::Eq
+            | BinOp::NotEq
+            | BinOp::Lt
+            | BinOp::Gt
+            | BinOp::LtEq
+            | BinOp::GtEq
+            | BinOp::And
+            | BinOp::Or
+            | BinOp::MatchOp => return None,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnaryOp {
     Neg,
@@ -974,6 +1009,15 @@ pub struct FfiFunction {
     pub c_symbol: Option<String>,
     pub params: Vec<FfiParam>,
     pub return_type: Option<TypeExpr>,
+    /// Optional `where T: Bound` clause. The ONLY supported form today is a
+    /// receiver-element bound: a predicate on the ENCLOSING class's generic
+    /// (e.g. `class Array[T]`'s `def sum -> Int where T: Add`). The
+    /// resolver (`ffi_registration.rs`) threads such a predicate into the
+    /// registered signature's `generic_params` so the call-site bound seam
+    /// can enforce it against the receiver's concrete element. Predicates on
+    /// names that aren't a class generic are dropped (FFI defs have no own
+    /// generics).
+    pub where_clause: Option<WhereClause>,
     pub is_variadic: bool,
     pub span: Span,
 }

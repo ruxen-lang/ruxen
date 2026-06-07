@@ -5,6 +5,43 @@ impl<'a> Lowerer<'a> {
         match &expr.kind {
             // ── Assignment ──────────────────────────────────────────
             HirExprKind::Assign { target, value, .. } => {
+                // ── Operator → method desugar (Task OP, Step 3) ──
+                // `a[i] = v` → `a.[]=(i, v)` when the indexed receiver is
+                // NOMINAL (user/stdlib class with `def []=`). Done BEFORE
+                // lowering `value` so the synthetic method call lowers its
+                // args exactly once. Builtin collection index-assign is not
+                // handled here (Array/Map mutation goes through their own
+                // methods); only a nominal `def []=` receiver routes.
+                if let HirExprKind::Index { object, index } = &target.kind {
+                    fn peel(t: &Ty) -> &Ty {
+                        match t {
+                            Ty::Ref(i)
+                            | Ty::RefMut(i)
+                            | Ty::RefLifetime(_, i)
+                            | Ty::RefMutLifetime(_, i) => peel(i),
+                            _ => t,
+                        }
+                    }
+                    if matches!(
+                        peel(&object.ty),
+                        Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
+                    ) {
+                        let synthetic = HirExpr {
+                            kind: HirExprKind::MethodCall {
+                                object: Box::new((**object).clone()),
+                                method: UNRESOLVED_DEF,
+                                method_name: "[]=".to_string(),
+                                generic_args: vec![],
+                                args: vec![(**index).clone(), (**value).clone()],
+                                block: None,
+                            },
+                            ty: Ty::Unit,
+                            span: expr.span.clone(),
+                        };
+                        return self.lower_method_call(&synthetic);
+                    }
+                }
+
                 let val_local = self.lower_expr(value)?;
                 let val = local_to_value(val_local);
 
@@ -79,8 +116,40 @@ impl<'a> Lowerer<'a> {
                             });
                         }
                     }
+                    // `xs[i] = v` index assignment (Q9). Mirrors the read
+                    // path in `lower_index`: a fixed-array with a literal
+                    // index stores a slot directly; a backing-Vec receiver
+                    // calls the bounds-checked `ruxen_vec_set`. Previously
+                    // this fell to the no-op arm below and the write was
+                    // silently dropped (compiled, did nothing). Map (`m[k]
+                    // = v`) still goes through `.insert`; not handled here.
+                    HirExprKind::Index { object, index } => {
+                        if matches!(object.ty, Ty::FixedArray(_, _)) {
+                            if let HirExprKind::IntLiteral(n) = &index.kind {
+                                if let Some(base) = self.lower_expr(object)? {
+                                    self.emit(MirInst::SetField {
+                                        base,
+                                        field_index: *n as usize,
+                                        value: val,
+                                    });
+                                }
+                                return Ok(None);
+                            }
+                        }
+                        if super::index::is_indexable_vec_ty(&object.ty) {
+                            let base_local = self.lower_expr(object)?;
+                            let idx_local = self.lower_expr(index)?;
+                            if let (Some(base), Some(idx)) = (base_local, idx_local) {
+                                self.emit(MirInst::Call {
+                                    dest: None,
+                                    callee: "ruxen_vec_set".to_string(),
+                                    args: vec![MirValue::Use(base), MirValue::Use(idx), val],
+                                });
+                            }
+                        }
+                    }
                     _ => {
-                        // Other assignment targets (index, etc.) — skip for now
+                        // Other assignment targets — skip for now.
                     }
                 }
                 Ok(None)

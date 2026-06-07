@@ -127,7 +127,12 @@ impl Parser {
             false
         };
 
-        let name = self.expect_any_identifier();
+        // Operator-symbol method names (`def + as "..."`) parse here too —
+        // a class FFI method can be an operator overload aliasing a C
+        // symbol (e.g. `Duration` `def + as "ruxen_duration_add"`).
+        let name = self
+            .try_parse_operator_name()
+            .unwrap_or_else(|| self.expect_any_identifier());
 
         // Optional `as "<c-symbol>"` rename clause. The C symbol is taken
         // verbatim — no mangling, no namespacing — same contract as
@@ -219,6 +224,16 @@ impl Parser {
             None
         };
 
+        // Optional `where T: Bound` — used for receiver-element bounds on
+        // a class FFI method (`def sum -> Int where T: Add`). Same surface
+        // as a regular `def`; the resolver threads a class-generic
+        // predicate into the signature's generic params.
+        let where_clause = if self.at(TokenKind::Where) {
+            Some(self.parse_where_clause())
+        } else {
+            None
+        };
+
         let span = self.span_from(&start);
         FfiFunction {
             name,
@@ -226,6 +241,7 @@ impl Parser {
             c_symbol,
             params,
             return_type,
+            where_clause,
             is_variadic,
             span,
         }

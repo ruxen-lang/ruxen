@@ -1,0 +1,12 @@
+def main
+  let h: Hash[String, Int] = Hash.new
+  h.insert("a", 1)
+  h.insert("b", 2)
+  h.insert("c", 3)
+  var total: Int = 0
+  var keys: Int = 0
+  h.each do |kv| total = total + kv.1 end
+  h.each do |kv| keys = keys + 1 end
+  puts "sum=#{total}"
+  puts "keys=#{keys}"
+end

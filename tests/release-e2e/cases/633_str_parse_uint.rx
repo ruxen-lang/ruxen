@@ -1,0 +1,12 @@
+def main
+  let s = "123"
+  match s.parse_uint
+    Ok(v)  -> puts "got #{v}"
+    Err(_) -> puts "err"
+  end
+  let bad = "xyz"
+  match bad.parse_uint
+    Ok(v)  -> puts "got #{v}"
+    Err(_) -> puts "err"
+  end
+end

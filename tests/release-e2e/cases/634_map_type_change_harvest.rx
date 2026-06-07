@@ -1,0 +1,48 @@
+## Task H harvest pin — method-level generic `U` bound from a closure-arg
+## return through the bridge. Each `map` CHANGES the element type, and the
+## next stage calls a method that only exists on the NEW type — so a broken
+## harvest (leaving `U` unresolved or mis-bound to the receiver element)
+## fails to type-check (`String.size`/`Int` mismatch) rather than silently
+## passing as a same-type map would. Covers both Option and Result heads.
+
+def find(n: Int) -> Int?
+  if n > 0
+    n
+  else
+    nil
+  end
+end
+
+def divide(a: Int, b: Int) -> Result[Int, String]
+  if b == 0
+    Err(String.from("divide by zero"))
+  else
+    Ok(a / b)
+  end
+end
+
+def main
+  # Option[Int] -> Option[String] -> Option[USize]
+  let a = find(7).map { |n| "vv#{n}" }.map { |s| s.size }
+  match a
+    Some(v) -> puts "len #{v}"
+    nil     -> puts "none"
+  end
+  let b = find(-1).map { |n| "vv#{n}" }.map { |s| s.size }
+  match b
+    Some(v) -> puts "len #{v}"
+    nil     -> puts "none"
+  end
+
+  # Result[Int, String] -> Result[String, String] -> Result[USize, String]
+  let r = divide(20, 2).map { |n| "got#{n}" }.map { |s| s.size }
+  match r
+    Ok(v)  -> puts "ok #{v}"
+    Err(e) -> puts "err #{e}"
+  end
+  let z = divide(5, 0).map { |n| "got#{n}" }.map { |s| s.size }
+  match z
+    Ok(v)  -> puts "ok #{v}"
+    Err(e) -> puts "err #{e}"
+  end
+end

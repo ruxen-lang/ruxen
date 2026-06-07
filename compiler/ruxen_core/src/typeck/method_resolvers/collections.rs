@@ -4,10 +4,8 @@
 //! method typing, carved verbatim out of the legacy match. The `map` /
 //! `map_err` arms mint a fresh type var via `eng`; the rest are pure.
 
-use crate::diagnostics::Diagnostic;
 use crate::hir::types::Ty;
 
-use super::is_iter_sum_compatible;
 use super::resolver::MethodResolver;
 use super::InferenceEngine;
 
@@ -20,57 +18,42 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
             )
         },
         resolve: |eng: &mut InferenceEngine<'_>, ty, method, _args, _span| match (ty, method) {
-            // Vec methods
-            (Ty::Array(_), "size") => Some(Ty::USize),
-            (Ty::Array(_), "empty?") => Some(Ty::Bool),
-            (Ty::Array(_), "push") => Some(Ty::Unit),
-            (Ty::Array(elem), "pop") => Some(Ty::Option(elem.clone())),
-            (Ty::Array(elem), "get") => Some(Ty::Option(Box::new(Ty::Ref(elem.clone())))),
-            (Ty::Array(elem), "get_mut") => Some(Ty::Option(Box::new(Ty::RefMut(elem.clone())))),
-            // No `.iter` / `.into_iter` / `.collect` / `.to_vec` — Ruby has no
-            // iterator-adapter layer. Combinators (`map`/`select`/`reduce`/…)
-            // and `for x in arr` work directly on the Array.
+            // ── Array RESIDUAL arms (run AHEAD of builtin_bridge) ──────
+            // The non-residual Array methods (size/empty?/push/pop/get/
+            // first/last/include?/clone/to_a/reverse/sort/join/clear/
+            // truncate/swap/insert/remove/extend/dedup/take/drop/chain/
+            // to_set/new/with_capacity/capacity/count) were MIGRATED to
+            // `library/std/array/src/lib.rx` (`class Array[T]`) and now
+            // resolve through `builtin_bridge`. What stays here:
+            //
+            //   * CLOSURE combinators — inlined in mir/lower/closure_inline;
+            //     their return types are closure-inferred (a fresh type var
+            //     or an element-derived shape), not a static `.rx` return.
+            //   * `zip` — the pair's second element type is read from the
+            //     ARG, so it cannot be a fixed declared return.
+            //   * `to_h` — the Map key/value types are read from the
+            //     receiver's tuple element, likewise arg/receiver-derived.
+            //   * `sum` — carries the E0700 non-numeric-element check.
+            //
+            // `get_mut` / `get_var` MIGRATED to `array/src/lib.rx`: with
+            // E0722 relaxed to a wire-level compare (`&T` and `&var T`
+            // are wire-identical pointers), the second/third aliases of
+            // `ruxen_vec_get_opt` are now admitted, so they resolve via
+            // the bridge against `class Array[T]`'s declared
+            // `Option[&var T]` return.
             (Ty::Array(_), "each") => Some(Ty::Unit),
-            // Ruby `each_with_index { |element, index| }` — yields the element
-            // and its 0-based index. Inlined in closure_inline/each_with_index.
-            (Ty::Array(_), "each_with_index") => Some(Ty::Unit),
-            (Ty::Array(_), "map") => Some(Ty::Array(Box::new(eng.ctx.fresh_type_var()))),
-            // Ruby block combinators (inlined in mir/lower/closure_inline).
-            (Ty::Array(elem), "select") => Some(Ty::Array(elem.clone())),
-            (Ty::Array(elem), "reject") => Some(Ty::Array(elem.clone())),
-            (Ty::Array(_), "reduce") => Some(eng.ctx.fresh_type_var()),
-            (Ty::Array(_), "all?") => Some(Ty::Bool),
-            (Ty::Array(_), "any?") => Some(Ty::Bool),
-            (Ty::Array(elem), "find") => Some(Ty::Option(Box::new(Ty::Ref(elem.clone())))),
-            (Ty::Array(_), "index") => Some(Ty::Option(Box::new(Ty::USize))),
-            // Ruby `take(n)` / `drop(n)` return a fresh Array directly.
-            (Ty::Array(elem), "take") => Some(Ty::Array(elem.clone())),
-            (Ty::Array(elem), "drop") => Some(Ty::Array(elem.clone())),
-            // Direct Array combinators (no `.iter` ceremony). `partition`
-            // is inlined; `chain`/`min`/`max` map to runtime vec helpers.
-            (Ty::Array(elem), "partition") => Some(Ty::Tuple(vec![
-                Ty::Array(elem.clone()),
-                Ty::Array(elem.clone()),
-            ])),
-            (Ty::Array(elem), "chain") => Some(Ty::Array(elem.clone())),
-            (Ty::Array(elem), "zip") => {
-                let other = match _args.first() {
-                    Some(a) => match eng.ctx.resolve(&a.ty) {
-                        Ty::Array(e) => *e,
-                        Ty::Ref(inner) | Ty::RefMut(inner) => match *inner {
-                            Ty::Array(e) => *e,
-                            o => o,
-                        },
-                        o => o,
-                    },
-                    None => eng.ctx.fresh_type_var(),
-                };
-                Some(Ty::Array(Box::new(Ty::Tuple(vec![*elem.clone(), other]))))
-            }
-            // Ruby conversions. `arr.to_set` → Set[T]; `pairs.to_h` builds
-            // a Map[K, V] from an Array of (K, V) tuples.
-            (Ty::Array(_), "to_a") => Some(ty.clone()),
-            (Ty::Array(elem), "to_set") => Some(Ty::Set(elem.clone())),
+            // `map` / `select` / `reject` / `all?` / `any?` / `partition` /
+            // `each_with_index` / `find` / `index` / `reduce` / `sort_by`
+            // MIGRATED to real `.rx` bodies over `each` (or `swap`+indexed
+            // reads for `sort_by`) (Feature C, array/src/lib.rx) and resolve
+            // through the builtin bridge.
+            // `zip` MIGRATED to a generic `.rx` decl
+            // (`zip[U](other: Array[U]) -> Array[(T, U)]`) that resolves
+            // through the bridge; the `ruxen_vec_zip` FFI alias still emits
+            // the real call. The result element `(T, U)` is now expressible
+            // as a static declared return, so no resolver arm is needed.
+            // `pairs.to_h` builds a Map[K, V] from an Array of (K, V) tuples
+            // — the K/V come from the receiver's tuple element.
             (Ty::Array(elem), "to_h") => match elem.as_ref() {
                 Ty::Tuple(kv) if kv.len() == 2 => {
                     Some(Ty::Map(Box::new(kv[0].clone()), Box::new(kv[1].clone())))
@@ -80,111 +63,52 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
                     Box::new(eng.ctx.fresh_type_var()),
                 )),
             },
-            (Ty::Array(_), "new") => Some(ty.clone()),
-            // `sum` integer-sums raw slots — reject non-numeric elements
-            // (Ruby's `["a"].sum` errors too) with a typeck-time E0700.
-            (Ty::Array(elem), "sum") => {
-                let resolved = eng.ctx.resolve(elem);
-                if !is_iter_sum_compatible(&resolved) {
-                    eng.diagnostics.push(Diagnostic::error_with_code(
-                        format!("`sum` requires numeric elements that implement `Add`; `{resolved}` is not numeric"),
-                        _span.clone(),
-                        "E0700",
-                    ));
-                    return Some(Ty::Error);
-                }
-                Some(Ty::Int)
-            }
-            (Ty::Array(_), "count") => Some(Ty::USize),
-            (Ty::Array(_), "reverse") => Some(ty.clone()),
-            (Ty::Array(elem), "first") => Some(Ty::Option(elem.clone())),
-            (Ty::Array(elem), "last") => Some(Ty::Option(elem.clone())),
-            (Ty::Array(_), "clone") => Some(ty.clone()),
-            (Ty::Array(_), "include?") => Some(Ty::Bool),
-            (Ty::Array(_), "sort") => Some(ty.clone()),
-            (Ty::Array(_), "join") => Some(Ty::String),
-            // Phase 2 stdlib batch 1 (#03).
-            (Ty::Array(_), "with_capacity") => Some(ty.clone()),
-            (Ty::Array(_), "capacity") => Some(Ty::USize),
-            (Ty::Array(_), "clear") => Some(Ty::Unit),
-            (Ty::Array(_), "truncate") => Some(Ty::Unit),
-            (Ty::Array(_), "swap") => Some(Ty::Unit),
-            (Ty::Array(_), "insert") => Some(Ty::Unit),
-            (Ty::Array(elem), "remove") => Some(*elem.clone()),
-            (Ty::Array(_), "extend") => Some(Ty::Unit),
-            // Phase 2 stdlib batch 2 (#03).
-            (Ty::Array(_), "dedup") => Some(Ty::Unit),
-            (Ty::Array(_), "sort_by") => Some(Ty::Unit),
+            // `sum` MIGRATED to the receiver-element bound seam (Task OP):
+            // its E0700 non-numeric-element check is now the `.rx` bound
+            // `class Array[T]`'s `def sum -> Int where T: Add`, enforced in
+            // `bridge_builtin_method` against the receiver's concrete
+            // element via `check_generic_param_bounds`. The return type
+            // (`Int`) comes from the laundered `.rx` decl through the
+            // bridge. No arm here.
+            //
+            // `sort_by` MIGRATED to a real `.rx` body over `swap` + indexed
+            // reads (Feature C); it resolves through the builtin bridge.
             (Ty::Array(_), "select!") => Some(Ty::Unit),
 
-            // HashMap methods
-            (Ty::Map(_, _), "new") => Some(ty.clone()),
-            (Ty::Map(_, _), "insert") => Some(Ty::Unit),
-            (Ty::Map(_, v), "get") => Some(Ty::Option(Box::new(Ty::Ref(v.clone())))),
-            (Ty::Map(_, _), "key?") => Some(Ty::Bool),
-            (Ty::Map(_, _), "size") => Some(Ty::USize),
-            (Ty::Map(_, _), "empty?") => Some(Ty::Bool),
-            // Phase 2 stdlib (#04): full HashMap[K,V] surface.
-            (Ty::Map(_, _), "with_capacity") => Some(ty.clone()),
-            (Ty::Map(_, v), "remove") => Some(Ty::Option(v.clone())),
-            (Ty::Map(_, _), "clear") => Some(Ty::Unit),
-            (Ty::Map(k, _), "keys") => Some(Ty::Array(Box::new(Ty::Ref(k.clone())))),
-            (Ty::Map(_, v), "values") => Some(Ty::Array(Box::new(Ty::Ref(v.clone())))),
-            // Ruby's `hash.to_a` returns `[(K, V)]` pairs (owned tuples,
-            // same aliased-heap contract as `zip`), not the bare key list.
-            (Ty::Map(k, v), "to_a") => {
-                Some(Ty::Array(Box::new(Ty::Tuple(vec![*k.clone(), *v.clone()]))))
-            }
+            // Hash (Map) methods MIGRATED to `library/std/map/src/lib.rx`
+            // (`class Hash[K, V]`) — every Map method has a real C symbol
+            // and a statically substitutable return, so all resolve
+            // through `builtin_bridge`; no residual Map arms remain.
 
-            // Set methods
-            (Ty::Set(_), "new") => Some(ty.clone()),
-            (Ty::Set(_), "insert") => Some(Ty::Unit),
-            (Ty::Set(_), "include?") => Some(Ty::Bool),
-            (Ty::Set(_), "size") => Some(Ty::USize),
-            (Ty::Set(_), "empty?") => Some(Ty::Bool),
-            // Phase 2 stdlib (#04): full HashSet[T] surface.
-            (Ty::Set(_), "with_capacity") => Some(ty.clone()),
-            (Ty::Set(_), "remove") => Some(Ty::Bool),
-            (Ty::Set(_), "clear") => Some(Ty::Unit),
-            (Ty::Set(t), "to_a") => Some(Ty::Array(Box::new(Ty::Ref(t.clone())))),
-            (Ty::Set(_), "union") => Some(ty.clone()),
-            (Ty::Set(_), "intersection") => Some(ty.clone()),
-            (Ty::Set(_), "difference") => Some(ty.clone()),
+            // Set methods MIGRATED to `library/std/set/src/lib.rx`
+            // (`class Set[T]`) — every Set method has a real C symbol and
+            // a statically substitutable return, so all resolve through
+            // `builtin_bridge`; no residual Set arms remain.
 
-            // Option try_op (the ? operator desugars to this)
+            // ── Option / Result RESIDUAL arms (ahead of the bridge) ───
+            // The NON-closure Option/Result methods (unwrap/expect/
+            // unwrap_or/nil?/present? and Result unwrap/expect/unwrap_or/
+            // ok?/err?/ok/err) MIGRATED to the builtin `enum Option[T]` /
+            // `enum Result[T, E]` (option_result/src/lib.rx) and resolve
+            // through `builtin_bridge` with element substitution. What
+            // STAYS here, running AHEAD of the bridge:
+            //   * `try_op` — the `?` operator desugaring (no surface
+            //     method / C symbol; a compiler intrinsic).
+            //
+            // `map` / `map_err` / `ok_or` MIGRATED (Task H) to method-level generic
+            // harvesting through the bridge: the `.rx` decls
+            // `def map[U](f: any Fn[Fn(T) -> U]) -> Option[U]` /
+            // `-> Result[U, E]` and `def map_err[F](...) -> Result[T, F]`
+            // carry the transformed type as a method-level generic, and
+            // `bridge_builtin_method` → `harvest_and_subst_generics` binds
+            // it from the closure argument's inferred return type (the same
+            // path Array `map` and `zip[U]` already use). The arms below
+            // that minted a fresh type var + relied on `infer_combinator_block`
+            // to unify it are retired. `unwrap_or_else` likewise MIGRATED to
+            // `.rx` bodies (its return is the static success element `T`).
             (Ty::Option(inner), "try_op") => Some(*inner.clone()),
 
-            // Option methods
-            (Ty::Option(inner), "unwrap") => Some(*inner.clone()),
-            (Ty::Option(inner), "expect") => Some(*inner.clone()),
-            (Ty::Option(inner), "unwrap_or") => Some(*inner.clone()),
-            (Ty::Option(inner), "unwrap_or_else") => Some(*inner.clone()),
-            (Ty::Option(_), "map") => Some(Ty::Option(Box::new(eng.ctx.fresh_type_var()))),
-            (Ty::Option(inner), "ok_or") => Some(Ty::Result(inner.clone(), Box::new(Ty::Error))),
-            // Ruby predicate spellings: `nil?` (was `is_none`) and `present?`
-            // (was `is_some`). The Rust `is_some`/`is_none` are removed.
-            (Ty::Option(_), "nil?") => Some(Ty::Bool),
-            (Ty::Option(_), "present?") => Some(Ty::Bool),
-
-            // Result try_op (the ? operator desugars to this)
             (Ty::Result(ok, _), "try_op") => Some(*ok.clone()),
-
-            // Result methods
-            (Ty::Result(ok, _), "unwrap") => Some(*ok.clone()),
-            (Ty::Result(ok, _), "expect") => Some(*ok.clone()),
-            (Ty::Result(ok, _), "unwrap_or") => Some(*ok.clone()),
-            (Ty::Result(ok, _), "unwrap_or_else") => Some(*ok.clone()),
-            (Ty::Result(_, _), "map") => Some(Ty::Result(
-                Box::new(eng.ctx.fresh_type_var()),
-                Box::new(Ty::Error),
-            )),
-            (Ty::Result(_, err), "map_err") => {
-                Some(Ty::Result(Box::new(eng.ctx.fresh_type_var()), err.clone()))
-            }
-            // Ruby predicate spellings: `ok?` (was `is_ok`) / `err?` (was
-            // `is_err`). The Rust `is_ok`/`is_err` are removed.
-            (Ty::Result(_, _), "ok?") => Some(Ty::Bool),
-            (Ty::Result(_, _), "err?") => Some(Ty::Bool),
 
             // Within-namespace fallthrough (not a cross-cutting catch-all).
             _ => None,

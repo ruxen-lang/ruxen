@@ -1,10 +1,37 @@
-//! TIER 2 — I/O namespace resolvers.
+//! TIER 2 — I/O namespace resolvers (Problem-3 residual only).
 //!
-//! `Stdin` / `Stdout` / `Stderr` / `BufReader` / `BufWriter` (Class) and
-//! `IoError` (Enum) method typing, carved verbatim out of the legacy
-//! match. Includes the `is_bufio_inner_supported` E0714 guard +
-//! `return Some(Ty::Error)` early-returns for `BufReader`/`BufWriter`
-//! `new`/`with_capacity`.
+//! After the zero-Rust-stdlib migration (Phase B), the `Stdin` / `Stdout`
+//! / `Stderr` typing arms and `IoError.message`/`.kind` resolve from
+//! `library/std/io/src/{stdin,stdout,stderr,lib}.rx` via the general
+//! `DefKind::Method` path (`lookup_method_with_args`) — those arms were
+//! deleted.
+//!
+//! What REMAINS here is the residual: `BufReader` /
+//! `BufWriter` `new` / `with_capacity` carry the **E0714** check that the
+//! inner reader/writer is `File` or `TcpStream` — genuine compiler logic
+//! computed from `args` + `eng`, not expressible as a static `.rx` return
+//! type. (The `.rx` surface models these as module-nested monomorphic
+//! variants `BufReader.File` / `BufReader.Tcp` with per-inner C symbols;
+//! the resolver keeps the single generic `BufReader[inner]` representation
+//! the corpus + downstream typing depend on, plus the E0714 gate.) The
+//! BufReader/BufWriter instance methods (`read_line`/`read`/`write`/… /
+//! `into_inner`) are ALSO kept here because they read `generic_args` off
+//! that resolver-side generic representation.
+//!
+//! DEFERRED(de-primitivize): E0714 is NOT settled as a permanent floor —
+//! it is still a hardcoded-stdlib check (the `"BufReader"`/`"File"`/
+//! `"TcpStream"` names below) that the zero-hardcoding north-star targets.
+//! Feature B did NOT migrate it to a `[R: Read]` bound because post-#06.95
+//! the `.rx` surface is the `module BufReader { class File; class Tcp }`
+//! CLOSED-SET (no generic `BufReader[R]` param to bind a `Read` bound to);
+//! introducing one would require reverting that intentional module reshape
+//! — a net regression for a worse architecture (see
+//! `library/std/bufio/CLAUDE.md`). The de-primitivization phase must
+//! re-examine this: the per-variant constructor param types
+//! (`BufReader.File.new(inner: File)` only accepts `File`) may ALREADY
+//! enforce the inner type structurally, making E0714 removable — OR it
+//! stays. Decision is OPEN, not floor. Contrast `Thread.spawn`'s E1100,
+//! which IS a permanent floor (capture analysis, not a bound).
 
 use crate::diagnostics::Diagnostic;
 use crate::hir::types::Ty;
@@ -12,13 +39,12 @@ use crate::hir::types::Ty;
 use super::resolver::MethodResolver;
 use super::{is_bufio_inner_supported, InferenceEngine};
 
-const CLASS_NAMES: &[&str] = &["Stdin", "Stdout", "Stderr", "BufReader", "BufWriter"];
+const CLASS_NAMES: &[&str] = &["BufReader", "BufWriter"];
 
 pub(super) fn resolvers() -> Vec<MethodResolver> {
     vec![MethodResolver {
         matches: |ty, _method| match ty {
             Ty::Class { name, .. } => CLASS_NAMES.contains(&name.as_str()),
-            Ty::Enum { name, .. } => name == "IoError",
             _ => false,
         },
         resolve,
@@ -33,61 +59,6 @@ fn resolve(
     span: &crate::lexer::token::Span,
 ) -> Option<Ty> {
     match (ty, method) {
-        (Ty::Class { name, .. }, "read_line") if name == "Stdin" => Some(Ty::Result(
-            Box::new(Ty::String),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        (Ty::Class { name, .. }, "read_to_string") if name == "Stdin" => Some(Ty::Result(
-            Box::new(Ty::String),
-            Box::new(Ty::Enum {
-                name: "IoError".to_string(),
-                generic_args: vec![],
-            }),
-        )),
-        // Phase 2 stdlib (#06.2): `Stdin.lines()` returns
-        // `Vec[Result[String, IoError]]`. v1 simplification of
-        // Rust's `BufRead::lines` iterator — every line is read
-        // up front (see `ruxen_stdin_lines` in runtime.c). On
-        // read failure the vec holds a single Err element.
-        (Ty::Class { name, .. }, "lines") if name == "Stdin" => {
-            Some(Ty::Array(Box::new(Ty::Result(
-                Box::new(Ty::String),
-                Box::new(Ty::Enum {
-                    name: "IoError".to_string(),
-                    generic_args: vec![],
-                }),
-            ))))
-        }
-        (Ty::Class { name, .. }, "write_str") if name == "Stdout" || name == "Stderr" => {
-            Some(Ty::Result(
-                Box::new(Ty::Unit),
-                Box::new(Ty::Enum {
-                    name: "IoError".to_string(),
-                    generic_args: vec![],
-                }),
-            ))
-        }
-        (Ty::Class { name, .. }, "flush") if name == "Stdout" || name == "Stderr" => {
-            Some(Ty::Result(
-                Box::new(Ty::Unit),
-                Box::new(Ty::Enum {
-                    name: "IoError".to_string(),
-                    generic_args: vec![],
-                }),
-            ))
-        }
-        // Phase 2 stdlib (#06.1): Stdout / Stderr convenience methods
-        // that swallow errors and return `Unit`. Mirror Rust's
-        // `print!` / `println!` / `eprint!` / `eprintln!` macros at
-        // method-shape level. Use `write_str` + `match` if you need
-        // the IoError back.
-        (Ty::Class { name, .. }, "print") if name == "Stdout" => Some(Ty::Unit),
-        (Ty::Class { name, .. }, "println") if name == "Stdout" => Some(Ty::Unit),
-        (Ty::Class { name, .. }, "eprint") if name == "Stderr" => Some(Ty::Unit),
-        (Ty::Class { name, .. }, "eprintln") if name == "Stderr" => Some(Ty::Unit),
         // Phase 2 #06.5 T6: `std::io::BufReader[R]` / `BufWriter[W]`
         // surface. Static-style constructors (`new` / `with_capacity`)
         // are dispatched through the collection-ctor fast path in
@@ -226,18 +197,6 @@ fn resolve(
                 }),
             ))
         }
-        // Phase 2 #06.5: `IoError` is a tagged enum, not a class.
-        // `.message() -> String` dispatches on tag in the runtime
-        // (see `ruxen_io_error_get_message` in runtime.c).
-        (Ty::Enum { name, .. }, "message") if name == "IoError" => Some(Ty::String),
-        // Phase 2 #06.5 T1: `.kind() -> IoErrorKind` returns the
-        // discriminant as a sibling 20-unit-variant enum. Lets
-        // user code branch on the variant tag without binding the
-        // payload. Wired through `ruxen_io_error_kind`.
-        (Ty::Enum { name, .. }, "kind") if name == "IoError" => Some(Ty::Enum {
-            name: "IoErrorKind".to_string(),
-            generic_args: vec![],
-        }),
         // Within-namespace fallthrough (not a cross-cutting catch-all).
         _ => None,
     }

@@ -129,6 +129,18 @@ pub struct Lowerer<'a> {
     /// its receiver instantiation's base is in this set — otherwise the
     /// opaque `{Class}_{method}` fallback is kept.
     mono_emitted: HashSet<String>,
+    /// Real (non-FFI) body methods defined directly on an FFI-shell
+    /// generic builtin class (`Array[T]`, `Option[T]`, `Result[T,E]`).
+    /// Keyed by the generic-STRIPPED mangled name (`Array_map`,
+    /// `Option_unwrap_or_else`). These classes are excluded from
+    /// monomorphization (gating rule #1) so their body methods emit as a
+    /// single opaque `{Class}_{method}` function with type params left
+    /// abstract — sound for the closure combinators, which only shuffle
+    /// pointer/word-sized values (push / closure-call / inlined `each`)
+    /// and never dispatch on the concrete `T`. The call site mangles
+    /// `Array[Int]_map`; `resolve_ffi_alias_callee` strips the generic
+    /// suffix to reach the opaque body when the stripped name is in here.
+    lib_body_methods: HashSet<String>,
 }
 
 /// A captured variable's storage inside the captures struct.
@@ -195,6 +207,7 @@ impl<'a> Lowerer<'a> {
             captures_ptr_local: None,
             initialized_heap_locals: HashSet::new(),
             ffi_alias_map: HashMap::new(),
+            lib_body_methods: HashSet::new(),
             mono_classes: HashMap::new(),
             mono_instances: HashMap::new(),
             mono_emitted: HashSet::new(),
@@ -308,6 +321,17 @@ impl<'a> Lowerer<'a> {
         args.iter()
             .zip(signature.params.iter())
             .all(|(arg, param)| {
+                // Q1: a CALLABLE argument (closure literal, or a value of
+                // `Fn`/`any Fn`/`some Fn` type) matches ONLY a callable
+                // parameter — never a `&str`/other one. Mirrors the typeck
+                // overload selector; without it the MIR symbol selection
+                // mangled `text(closure)` to the `text(&str)` overload and
+                // stored the closure pointer as a String (heap corruption).
+                let arg_is_callable =
+                    matches!(arg.kind, HirExprKind::Closure { .. }) || ty_is_callable(&arg.ty);
+                if arg_is_callable {
+                    return ty_is_callable(&param.ty);
+                }
                 arg.ty.is_infer()
                     || arg.ty.is_error()
                     || arg.ty == param.ty
@@ -1103,7 +1127,19 @@ impl<'a> Lowerer<'a> {
     /// POINT for the lookup). This wrapper preserves the historical
     /// "miss → unchanged-mangled-name" caller surface.
     pub(super) fn resolve_ffi_alias_callee(&self, mangled: String) -> String {
-        self.lookup_ffi_alias(&mangled).unwrap_or(mangled)
+        if let Some(c) = self.lookup_ffi_alias(&mangled) {
+            return c;
+        }
+        // No FFI alias: this may be a real BODY method on an FFI-shell
+        // generic builtin class (`Array[Int]_map` → opaque `Array_map`).
+        // Strip the balanced generic suffix and, if the stripped name is a
+        // recorded lib body method, route to it.
+        if let Some(stripped) = strip_generic_suffix(&mangled) {
+            if self.lib_body_methods.contains(&stripped) {
+                return stripped;
+            }
+        }
+        mangled
     }
 
     /// Returns `true` if the named method on `class_name` is a static/class
@@ -1261,6 +1297,30 @@ impl<'a> Lowerer<'a> {
 
         self.resolve_method_class(class_name, method_name)
     }
+}
+
+/// Strip a single balanced generic suffix from a mangled callee:
+/// `Array[Int]_map` → `Array_map`, `Result[Int,IoError]_map` →
+/// `Result_map`. Uses balanced bracket matching so nested generics
+/// (`Array[any Fn[Fn(Int) -> Int]]_map`) peel the whole outer `[...]`.
+/// Returns `None` when there is no `[` to strip.
+fn strip_generic_suffix(mangled: &str) -> Option<String> {
+    let bracket_pos = mangled.find('[')?;
+    let bytes = mangled.as_bytes();
+    let mut depth: i32 = 0;
+    for (i, &b) in bytes.iter().enumerate().skip(bracket_pos) {
+        match b {
+            b'[' => depth += 1,
+            b']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(format!("{}{}", &mangled[..bracket_pos], &mangled[i + 1..]));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 // ─── Standalone entry point (backward compat) ───────────────────────────────

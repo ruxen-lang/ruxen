@@ -48,7 +48,7 @@ mod ops;
 
 // Free-function helpers that need to be reachable from `super::infer::*`
 // (e.g. `typeck::method_resolvers` consumes them through that path).
-pub(super) use helpers::{is_bufio_inner_supported, is_iter_sum_compatible};
+pub(super) use helpers::is_bufio_inner_supported;
 
 /// The type inference engine — walks HIR and resolves all types.
 pub struct InferenceEngine<'a> {
@@ -347,7 +347,7 @@ impl<'a> InferenceEngine<'a> {
                 }
             }
         }
-        self.check_concurrency_bounds(&func.return_ty, &body_ty, &func.span);
+        self.check_declared_bounds(&func.return_ty, &body_ty, &func.span);
 
         // Resolve the return type now
         func.return_ty = self.ctx.resolve(&func.return_ty);
@@ -393,7 +393,7 @@ impl<'a> InferenceEngine<'a> {
                     if let Err(e) = self.unify_or_coerce(ty, &val_ty, &val.span) {
                         self.type_error(e);
                     }
-                    self.check_concurrency_bounds(ty, &val_ty, &val.span);
+                    self.check_declared_bounds(ty, &val_ty, &val.span);
                 }
                 let resolved = self.ctx.resolve(ty);
                 *ty = resolved.clone();
@@ -657,6 +657,23 @@ impl<'a> InferenceEngine<'a> {
     pub(super) fn error(&mut self, message: String, span: &Span) {
         self.diagnostics
             .push(Diagnostic::error(message, span.clone()));
+    }
+
+    /// Q13: `obj.foo?` lexes the trailing `?` into the member NAME (Ruby
+    /// predicate names like `empty?` are legal), so when such a name resolves
+    /// to no field/method the user most likely meant the try-operator or
+    /// safe navigation. Return a hint distinguishing the three Ruby forms, or
+    /// an empty string when the name has no `?` suffix. Appended to the
+    /// "no field/method" message (the typeck `Diagnostic` has no help slot).
+    pub(super) fn predicate_suffix_hint(name: &str) -> String {
+        match name.strip_suffix('?') {
+            Some(base) if !base.is_empty() => format!(
+                " — note: `?` is part of a predicate method name here; \
+                 for the try-operator write `{base}()?`, and for safe \
+                 navigation use Ruby's `&.` (e.g. `x&.{base}`)"
+            ),
+            _ => String::new(),
+        }
     }
 
     /// Returns `true` if the type is acceptable as an argument to `puts`,

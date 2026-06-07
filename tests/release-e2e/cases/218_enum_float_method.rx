@@ -1,0 +1,24 @@
+# Master-merge pin: a Float-returning enum INSTANCE method.
+# The Feature-D agent flagged this as a deferred cranelift width bug
+# (`declared type of variable doesn't match type of value` — an i64 result
+# fed where an f64 was declared). Fixed by the `MirInst::FloatToBits`
+# primitive + struct/enum inline-method type-checking merged from master
+# (1b6ced0 / PR #6). This pins that the Float case now compiles and runs.
+enum Priority
+  Low
+  Medium
+  High
+
+  def score -> Float
+    match self
+      Priority.Low    -> 1.5
+      Priority.Medium -> 2.5
+      Priority.High   -> 9.5
+    end
+  end
+end
+
+def main
+  puts "#{Priority.High.score}"
+  puts "#{Priority.Low.score}"
+end

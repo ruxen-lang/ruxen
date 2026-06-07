@@ -1,0 +1,23 @@
+# Feature D assessment pin: a user-declared enum instance method resolves
+# via the declared-method fallback (`lookup_class_method_return` in
+# `infer/expr.rs`'s `Ty::Enum` arm), NOT via a hardcoded resolver arm.
+# This pins the removal of the vestigial `Enum.weight => Some(Int)` arm:
+# the method body's own return type is authoritative.
+enum Priority
+  Low
+  Medium
+  High
+
+  def weight -> Int
+    match self
+      Priority.Low    -> 1
+      Priority.Medium -> 2
+      Priority.High   -> 3
+    end
+  end
+end
+
+def main
+  puts "#{Priority.High.weight}"
+  puts "#{Priority.Low.weight}"
+end

@@ -13,14 +13,14 @@
 //!    elsewhere.
 //!
 //! 2. **Aliased clusters + bang variants + inferred-type dispatch.**
-//!    `Vec[T]_into_iter` / `Vec[T]_iter_mut` / `Vec[T]_to_vec` /
-//!    `Vec[T]_enumerate` / `Vec[T]_as_slice` all share the C symbol
-//!    `ruxen_iter_to_vec` with the migrated `Vec[T]_iter`. E0722
-//!    rejects duplicate aliases for the same `c_symbol` with
-//!    different wire shapes, so they cannot ride the
-//!    `library/std/array/src/lib.rx` alias map. Same story for
-//!    `Vec[T]_get_mut` / `Vec[T]_get_var` aliasing
-//!    `ruxen_vec_get_opt` with `get`. The `Option[T]_unwrap!` /
+//!    `Vec[T]_get_mut` / `Vec[T]_get_var` alias `ruxen_vec_get_opt`
+//!    (canonical `get` is in `library/std/array/src/lib.rx`); E0722
+//!    rejects duplicate aliases for the same `c_symbol` with different
+//!    wire shapes, so they cannot ride the array.rx alias map. (The
+//!    former `into_iter`/`iter_mut`/`to_vec`/`enumerate`/`as_slice`
+//!    cluster sharing `ruxen_iter_to_vec` was deleted with the
+//!    orphaned iterator machinery — Phase B / Milestone 2.) The
+//!    `Option[T]_unwrap!` /
 //!    `Option[T]_expect!` bang variants can't ride the alias map
 //!    either — `!` is part of the surface method name but isn't
 //!    yet accepted inside a `def NAME as ...` lib decl. The
@@ -94,8 +94,14 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "Float_to_s" => return Ok("ruxen_float_to_string"),
         "Bool_to_s" => return Ok("ruxen_bool_to_string"),
         "Char_to_s" => return Ok("ruxen_char_to_string"),
-        // `String`/`&str` are already strings; `to_s` clones to an owned
-        // `String` (matching `String.to_string`'s `ruxen_string_to_string`).
+        // `&str_to_s`: the `&str` primitive has no `.rx` class shell, so
+        // its mangled `&str_to_s` callee resolves here (same category as
+        // the other `&str_*` codegen arms below). `String_to_s` is now
+        // ALSO homed in string.rx (`def to_s as "ruxen_string_to_string"`)
+        // and the MIR `ffi_alias_map` rewrites `String_to_s` before
+        // codegen reaches here; this arm stays as a belt-and-suspenders
+        // fallback for the `String` spelling and the authoritative path
+        // for `&str`. Both clone to an owned `String`.
         "String_to_s" | "&str_to_s" => return Ok("ruxen_string_to_string"),
         "String_truncate_chars" => return Ok("ruxen_string_truncate_chars"),
         // Phase E-rest 3 of #06.95: MIR-synthesised Formatter callees
@@ -116,15 +122,14 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // class-body decl can attach to it (it has no surface
         // method name on `String`).
         "String_from_iter" => return Ok("ruxen_string_from_iter"),
-        // `String_clone` aliases the SAME C symbol as `String.from`
-        // (`ruxen_string_from`) but with an instance-method
-        // receiver shape. Two FFI decls aliasing the same C symbol
-        // with different wire shapes trip the E0722 conflict check
-        // in `register_class_lib_method`. Until that check is
-        // relaxed to compare at the wire level
-        // (post-instance-self-prepend), this stays as an explicit
-        // lang_intrinsics arm.
-        "String_clone" => return Ok("ruxen_string_from"),
+        // `String_clone` MIGRATED to `string.rx` (`def clone as
+        // "ruxen_string_from"`). The E0722 conflict check now compares
+        // post-self-prepend WIRE shapes, so the second alias of
+        // `ruxen_string_from` (whose implicit `&self` is wire-identical
+        // to `from`'s explicit `&String` param) is admitted. The MIR
+        // `ffi_alias_map` rewrites `String_clone → ruxen_string_from`
+        // before codegen consults `runtime_name`, so the explicit arm
+        // here is no longer needed.
         // Phase E-rest 5 of #06.95: `&str_*` instance-method aliases.
         // The `&str` type is a Ruxen primitive (not a class shell),
         // so there's no .rx surface for these — the C runtime
@@ -186,66 +191,14 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         return Ok("ruxen_noop_passthrough");
     }
 
-    // VecIter_, VecIntoIter_, SplitIter_ — iterator combinators.
-    // Historically every method here silently no-opped. Only
-    // forward user-defined-style names (which downstream link
-    // checks will reject if missing); reject anything that *looks*
-    // like a known stdlib combinator we haven't actually
-    // implemented.
-    if name.starts_with("VecIter")
-        || name.starts_with("VecIntoIter")
-        || name.starts_with("SplitIter")
-    {
-        return match method {
-            // Identity passthroughs: every iterator producer in
-            // the v1 runtime already hands back a `RuxenVec *`,
-            // so `to_vec` and `enumerate` are no-ops at the
-            // runtime layer. The for-loop lowering
-            // (`HirExprKind::For`) detects the `(i, x)` tuple
-            // binding shape and synthesises the index counter
-            // directly, so `enumerate` only needs to survive
-            // type-checking + codegen — no real iterator
-            // transform.
-            "to_vec" | "enumerate" => Ok("ruxen_iter_to_vec"),
-            "sum" => Ok("ruxen_vec_sum"),
-            "count" => Ok("ruxen_vec_count"),
-            "reverse" => Ok("ruxen_vec_reverse"),
-            "first" => Ok("ruxen_vec_first"),
-            "last" => Ok("ruxen_vec_last"),
-            "clone" => Ok("ruxen_vec_clone"),
-            "include?" => Ok("ruxen_vec_contains_int"),
-            "sort" => Ok("ruxen_vec_sort"),
-            "join" => Ok("ruxen_vec_join"),
-            // Phase 2 stdlib (#05 batch 2): lazy combinators
-            // `take(n)` / `skip(n)` eager-materialise into a
-            // fresh `RuxenVec *` via the `ruxen_vec_take` /
-            // `ruxen_vec_skip` helpers. Closure-taking
-            // terminators (`fold`, `all`, `any`) inline at MIR
-            // — the runtime never sees them, so they are
-            // intentionally absent from this dispatch table.
-            "take" => Ok("ruxen_vec_take"),
-            "drop" => Ok("ruxen_vec_skip"),
-            // Phase 2 stdlib (#05 batch 3): `chain(other)` /
-            // `zip(other)` eager-materialise into fresh
-            // `RuxenVec*`s via the runtime helpers below.
-            // `collect_vec` is the v1 type-specific shorthand
-            // for `collect[Vec[T]]` — since every `*Iter` is
-            // already a `RuxenVec*` at runtime, the collector
-            // is the same identity passthrough as `to_vec`.
-            "chain" => Ok("ruxen_vec_chain"),
-            "zip" => Ok("ruxen_vec_zip"),
-            "collect_vec" => Ok("ruxen_iter_to_vec"),
-            // Known unimplemented combinators — refuse rather
-            // than no-op.
-            "select" | "reject" | "find" | "index" | "partition" | "reduce" | "min" | "max"
-            | "any?" | "all?" | "collect" | "map" | "flat_map" | "flatten" => {
-                Err(unresolved_method_error(name, "Iter"))
-            }
-            // Anything else falls through to link-time
-            // resolution.
-            _ => Ok(name),
-        };
-    }
+    // NOTE: the `VecIter` / `VecIntoIter` / `SplitIter` combinator
+    // dispatch block was removed with the rest of the orphaned iterator
+    // machinery (zero-Rust-stdlib migration, Phase B / Milestone 2).
+    // Nothing produces those iterator wrapper types — `split`/`chars`/
+    // `lines`/`bytes` return `Array`, and no `.rx`/fixture calls
+    // `.iter`/`.into_iter`/`.to_vec`/`.enumerate`. The Ruby collectors
+    // (`String.from_iter`/`to_set`/`to_h`) are unrelated and preserved
+    // via their `ruxen_*_from_iter` symbols.
 
     // Array[...] / Vec[...] methods.
     //
@@ -265,32 +218,30 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
     // call-site mangle `Vec[Int]_push` reach the alias-map key
     // `Array_push` and rewrite to the C symbol.
     //
-    // Two aliased clusters stay below because they share a C
-    // symbol with a migrated entry and the E0722 check rejects
-    // duplicate aliases for the same `c_symbol` with different
-    // wire shapes:
-    //
-    //   * `get_mut`, `get_var` → `ruxen_vec_get_opt` (canonical
-    //     spelling `get` is in array.rx)
-    //   * `into_iter`, `iter_mut`, `to_vec`, `enumerate`,
-    //     `as_slice` → `ruxen_iter_to_vec` (canonical spelling
-    //     `iter` is in array.rx)
+    // `get_mut` / `get_var` MIGRATED to `array.rx` (aliases of
+    // `ruxen_vec_get_opt` alongside `get`). The E0722 check now compares
+    // post-self-prepend WIRE shapes, so the `&var T` return — a pointer,
+    // wire-identical to `get`'s `&T` — no longer conflicts; the MIR
+    // `ffi_alias_map` rewrites them before codegen reaches here.
     if name.starts_with("Array") || name.starts_with("Vec") {
         return match method {
-            "get_mut" | "get_var" => Ok("ruxen_vec_get_opt"),
-            // Iterator producers + the identity collector are
-            // passthroughs — every iterator in the v1 runtime
-            // is already represented by a `RuxenVec *`, so
-            // `vec.into_iter`, `iter.to_vec`, etc. are all
-            // no-ops.
-            "into_iter" | "iter_mut" | "to_vec" | "enumerate" | "as_slice" => {
-                Ok("ruxen_iter_to_vec")
+            // `map` / `select` / `reject` / `all?` / `any?` / `partition` /
+            // `each_with_index` / `find` / `index` / `sort_by` / `reduce`
+            // MIGRATED to real `.rx` bodies (Feature C). They now reach
+            // codegen as genuine `Array_<m>` MIR functions, so they must
+            // FALL THROUGH to the `Ok(name)` arm — the MIR function
+            // definition supplies the symbol. (The old blocklist assumed
+            // these were always MIR-inlined and never emitted a call; that
+            // assumption no longer holds for the Array head.)
+            //
+            // Still-unimplemented Vec combinators stay blocked: `min` /
+            // `max` / `collect` / `flat_map` / `flatten`. (`zip` / `take` /
+            // `drop` / `chain` have FFI symbols and never reach this arm —
+            // rewritten via the alias map first — but stay listed
+            // defensively.)
+            "min" | "max" | "collect" | "flat_map" | "flatten" => {
+                Err(unresolved_method_error(name, "Vec"))
             }
-            // Known unimplemented Vec methods — historically
-            // no-opped.
-            "map" | "select" | "reject" | "reduce" | "min" | "max" | "any?" | "all?"
-            | "collect" | "find" | "index" | "partition" | "zip" | "take" | "drop" | "chain"
-            | "flat_map" | "flatten" => Err(unresolved_method_error(name, "Vec")),
             _ => Ok(name),
         };
     }

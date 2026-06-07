@@ -443,18 +443,27 @@ impl Resolver {
                 // Try to resolve the callee
                 match &callee.kind {
                     ast::ExprKind::Identifier(name) => {
-                        // If `name` names a function that takes an implicit
-                        // block (i.e. its body contains `yield`), forward
-                        // the trailing block as the last argument and emit
-                        // a plain `FnCall`.  The callee's signature was
-                        // given an extra trailing `__block` parameter.
-                        let takes_implicit_block = self.yield_fns.contains_key(name);
-                        if takes_implicit_block {
-                            if let Some(blk) = block_hir.take() {
-                                args_hir.push(*blk);
-                            }
-                            if let Some(def_id) = self.scopes.lookup(name) {
-                                let def_id = self.select_overload_by_args(def_id, &args_hir);
+                        if let Some(orig_def_id) = self.scopes.lookup(name) {
+                            // A trailing `do…end` block on a call whose callee
+                            // is a FUNCTION (a `def`, including yield-based
+                            // implicit-block fns) is block-as-arg sugar:
+                            // `runit do…end` == `runit({ ||…end })`. Forward
+                            // the block as the last argument and emit a plain
+                            // `FnCall`. The `.call` MethodCall path below is
+                            // ONLY for a closure-typed VARIABLE identifier
+                            // (`let f = {…}; f do…end`). (Q3: previously every
+                            // block-bearing call took the `.call` path, so
+                            // `runit do…end` treated the function `runit` as a
+                            // closure value and passed a bad closure → segfault.)
+                            let callee_is_function = matches!(
+                                self.symbols.get(orig_def_id).map(|d| &d.kind),
+                                Some(DefKind::Function { .. }) | Some(DefKind::OverloadSet { .. })
+                            );
+                            if callee_is_function {
+                                if let Some(blk) = block_hir.take() {
+                                    args_hir.push(*blk);
+                                }
+                                let def_id = self.select_overload_by_args(orig_def_id, &args_hir);
                                 self.append_default_args(def_id, &mut args_hir);
                                 let callee_name = self
                                     .symbols
@@ -472,9 +481,8 @@ impl Resolver {
                                     span,
                                 };
                             }
-                        }
-                        if let Some(def_id) = self.scopes.lookup(name) {
-                            let def_id = self.select_overload_by_args(def_id, &args_hir);
+
+                            let def_id = self.select_overload_by_args(orig_def_id, &args_hir);
                             self.append_default_args(def_id, &mut args_hir);
                             let resolved_callee_name = self
                                 .symbols
@@ -482,7 +490,8 @@ impl Resolver {
                                 .map(|d| d.name.clone())
                                 .unwrap_or_else(|| name.clone());
                             let ty = self.type_context.fresh_type_var();
-                            // Check if this is a function or a closure call
+                            // Closure-typed variable identifier: a trailing
+                            // block invokes it via `.call`.
                             let kind = match block_hir {
                                 Some(blk) => HirExprKind::MethodCall {
                                     object: Box::new(HirExpr {

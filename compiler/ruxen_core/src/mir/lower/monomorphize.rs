@@ -222,6 +222,84 @@ impl<'a> Lowerer<'a> {
         self.mono_classes = classes;
         self.mono_instances = instances;
         self.mono_emitted = emitted;
+
+        // Record real (non-FFI) body methods on FFI-shell GENERIC builtin
+        // classes (`Array[T]`, `Option[T]`, `Result[T,E]`). Such classes
+        // are excluded from monomorphization above, so a body method emits
+        // ONCE as an opaque `{Class}_{method}` (type params abstract). The
+        // call site mangles the generic-suffixed `Array[Int]_map`; record
+        // the stripped `Array_map` so `resolve_ffi_alias_callee` can route
+        // the suffixed callee to the opaque body. (Closure combinators only
+        // shuffle pointer/word values, so the abstract body is ABI-sound.)
+        fn collect_lib_body_methods(
+            item: &HirItem,
+            ffi_classes: &HashSet<String>,
+            trait_defaults: &HashMap<String, HashMap<String, HirFuncDef>>,
+            out: &mut HashSet<String>,
+        ) {
+            match item {
+                HirItem::Class(c) => {
+                    if !c.generic_params.is_empty() && ffi_classes.contains(&c.name) {
+                        let class_cs = c.name.replace('.', "_");
+                        for m in &c.methods {
+                            out.insert(format!("{}_{}", class_cs, m.name));
+                        }
+                        // Combinators pulled in via `include Mixin` (e.g.
+                        // `class Array[T] include Enumerable[T]`) are emitted
+                        // as opaque `{Class}_{method}` bodies by
+                        // `lower_impl_block_with_outer_methods` (the trait-
+                        // default monomorphization arm), exactly like an own
+                        // body method. Register each included default the
+                        // class does NOT itself override so the call site can
+                        // route the generic-suffixed `Array[Int]_reduce`
+                        // callee to the opaque body, same as the own-body
+                        // surface above.
+                        let own: HashSet<&str> =
+                            c.methods.iter().map(|m| m.name.as_str()).collect();
+                        for inner in &c.impl_blocks {
+                            let Some(trait_ref) = &inner.trait_ref else {
+                                continue;
+                            };
+                            if inner.negative_trait {
+                                continue;
+                            }
+                            let Some(defaults) = trait_defaults.get(&trait_ref.name) else {
+                                continue;
+                            };
+                            for mname in defaults.keys() {
+                                if own.contains(mname.as_str()) {
+                                    continue;
+                                }
+                                out.insert(format!("{}_{}", class_cs, mname));
+                            }
+                        }
+                    }
+                }
+                HirItem::Module(m) => {
+                    for sub in &m.items {
+                        collect_lib_body_methods(sub, ffi_classes, trait_defaults, out);
+                    }
+                }
+                HirItem::Function(_)
+                | HirItem::Struct(_)
+                | HirItem::Enum(_)
+                | HirItem::Impl(_)
+                | HirItem::Const(_)
+                | HirItem::Mixin(_)
+                | HirItem::TypeAlias(_)
+                | HirItem::Newtype(_) => {}
+            }
+        }
+        let mut lib_body_methods: HashSet<String> = HashSet::new();
+        for item in &program.items {
+            collect_lib_body_methods(
+                item,
+                &ffi_classes,
+                &self.trait_default_methods,
+                &mut lib_body_methods,
+            );
+        }
+        self.lib_body_methods = lib_body_methods;
     }
 
     /// Emit one monomorphized MIR copy of every user-defined method (incl.

@@ -1,0 +1,32 @@
+## Q5 (gui-stack-v1-issues) — Int<->Float / Float<->Float32 casts.
+## Before the fix, `i as Float32` crashed the compiler (a cranelift
+## variable-type mismatch): the int value was stored into an f32 slot with
+## no conversion. Covers all four numeric-conversion directions plus
+## SIGNEDNESS (negative Int->Float must stay negative; Float->signed-Int
+## must round toward zero, not reinterpret bits).
+
+def show_f32(x: Float32) -> nil
+  puts "f32=#{x}"
+end
+
+def main
+  let i = 21
+  let a: Float32 = i as Float32       # Int -> Float32
+  show_f32(a)
+
+  let n = -5
+  let g: Float = n as Float           # negative Int -> Float (signedness)
+  puts "g=#{g}"
+
+  let w: Float = 3.5
+  let h: Float32 = w as Float32       # Float -> Float32 (narrowing)
+  show_f32(h)
+
+  let big: Float = 7.0
+  let k = big as Int                  # Float -> Int
+  puts "k=#{k}"
+
+  let neg: Float = -7.0
+  let m = neg as Int                  # negative Float -> signed Int
+  puts "m=#{m}"
+end
