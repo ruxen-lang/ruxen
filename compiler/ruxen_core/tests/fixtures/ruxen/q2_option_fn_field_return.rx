@@ -1,0 +1,16 @@
+class Box
+  cb: Option[any Fn[Fn() -> Int]]
+  def init
+    self.cb = Some({ || 42 })
+  end
+  def run -> Int
+    if let Some(f) = self.cb
+      return f.()
+    end
+    return 0
+  end
+end
+def main
+  let b = Box.new
+  print("#{b.run}")
+end

@@ -1,0 +1,22 @@
+class Sink
+  out: Array[String]
+  def init
+    self.out = []
+  end
+  def add(f: any Fn[Fn() -> String]) -> nil
+    self.out.push(f.())
+  end
+  def add(s: &str) -> nil
+    self.out.push(s.to_s)
+  end
+end
+def main
+  let s = Sink.new
+  s.add("static")
+  s.add({ || "dynamic" })
+  if let Some(a) = s.out.get(0)
+    if let Some(b) = s.out.get(1)
+      print("#{a} #{b}")
+    end
+  end
+end
