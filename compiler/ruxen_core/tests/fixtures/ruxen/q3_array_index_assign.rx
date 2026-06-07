@@ -1,0 +1,9 @@
+def main
+  var xs = [10, 20, 30]
+  let i = 1
+  xs[i] = 99
+  xs[0] = 7
+  let j = 2
+  xs[j] = 55
+  print("#{xs[0]} #{xs[i]} #{xs[j]}")
+end
