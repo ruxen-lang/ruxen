@@ -126,7 +126,10 @@ impl<'a> InferenceEngine<'a> {
         let resolved = self.ctx.resolve(obj_ty);
         if resolved.is_numeric() || matches!(resolved, Ty::Bool | Ty::Char) {
             self.error(
-                format!("no method `{method_name}` on type `{resolved}`"),
+                format!(
+                    "no method `{method_name}` on type `{resolved}`{}",
+                    Self::predicate_suffix_hint(method_name)
+                ),
                 span,
             );
             return Ty::Error;

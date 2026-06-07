@@ -659,6 +659,23 @@ impl<'a> InferenceEngine<'a> {
             .push(Diagnostic::error(message, span.clone()));
     }
 
+    /// Q13: `obj.foo?` lexes the trailing `?` into the member NAME (Ruby
+    /// predicate names like `empty?` are legal), so when such a name resolves
+    /// to no field/method the user most likely meant the try-operator or
+    /// safe navigation. Return a hint distinguishing the three Ruby forms, or
+    /// an empty string when the name has no `?` suffix. Appended to the
+    /// "no field/method" message (the typeck `Diagnostic` has no help slot).
+    pub(super) fn predicate_suffix_hint(name: &str) -> String {
+        match name.strip_suffix('?') {
+            Some(base) if !base.is_empty() => format!(
+                " — note: `?` is part of a predicate method name here; \
+                 for the try-operator write `{base}()?`, and for safe \
+                 navigation use Ruby's `&.` (e.g. `x&.{base}`)"
+            ),
+            _ => String::new(),
+        }
+    }
+
     /// Returns `true` if the type is acceptable as an argument to `puts`,
     /// `eputs`, or `print`.  Strings in any common form (`String`, `&str`,
     /// `&String`, `&&str`) qualify, as do zero-arg functions that return

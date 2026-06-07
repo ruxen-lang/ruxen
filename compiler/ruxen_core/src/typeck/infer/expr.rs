@@ -163,7 +163,12 @@ impl<'a> InferenceEngine<'a> {
                                 expr.ty = self.substitute_generics_in_return(&derefed, &ret);
                             } else {
                                 self.error(
-                                    format!("no field `{}` on type `{}`", field_name, name),
+                                    format!(
+                                        "no field `{}` on type `{}`{}",
+                                        field_name,
+                                        name,
+                                        Self::predicate_suffix_hint(field_name)
+                                    ),
                                     &expr.span,
                                 );
                                 expr.ty = Ty::Error;

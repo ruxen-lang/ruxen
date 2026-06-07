@@ -356,7 +356,7 @@ rule but make the diagnostic suggest `&var *x`.
 > (Rust-like). A reference-typed param passed as an argument is reborrowed,
 > not moved. Fix borrowck so `flag.get(u)` then `a.get(u)` is clean.
 
-## Q13 · S3 — zero-arg method + `?` parses as a field access
+## Q13 · S3 — zero-arg method + `?` parses as a field access  ✅ FIXED (diagnostic)
 
 ```ruxen
 cv.begin_frame?      # error: no field `begin_frame?` on type `Canvas`
