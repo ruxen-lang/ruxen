@@ -529,7 +529,17 @@ The runner wraps each test file's body in a synthesized `def main`
   found Use" mid-file) — own-package symbols are already merged; the line
   must be omitted.
 
-## Q19 · S4 — `Stdin.new` doesn't link; tutorial shows the wrong API
+## Q19 · S4 — `Stdin.new` doesn't link; tutorial shows the wrong API  ✅ FIXED
+
+> **FIXED** (stdlib-rust-cleanup): (1) typeck now emits a clear error for `.new`
+> on a class with NO constructor — no `init`, no `new` static (FFI alias), no
+> fields, no parent (the FFI-handle case, e.g. `Stdin`/`Stdout`/`Stderr`) —
+> instead of the late "undefined `_Stdin_init`" linker error, suggesting the
+> free function (`stdin()` etc.). Both `Type.new` (field-access) and
+> `Type.new()` (call) forms are covered. Classes with a real `def self.new` FFI
+> constructor (e.g. `OpenOptions`) are unaffected. (2) `docs/tutorial/31-io-and-cli.md`
+> now uses `stdin()`. Pin: `tests/stdin_new_diagnostic.rs`.
+
 
 `let s = Stdin.new` → `undefined reference to 'Stdin_init'`. The working API
 is the free fn `stdin()` (`library/std/io`). But

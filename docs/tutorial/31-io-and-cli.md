@@ -260,7 +260,9 @@ def handle(line: Result[String, IoError])
 end
 
 def main
-  let stdin = Stdin.new
+  # `Stdin` is a handle type with no constructor — get one from the free
+  # function `stdin()` (likewise `stdout()` / `stderr()`).
+  let stdin = stdin()
   for line in stdin.lines()
     handle(line)
   end

@@ -139,6 +139,26 @@ impl<'a> InferenceEngine<'a> {
 
                 match &derefed {
                     Ty::Class { name, .. } | Ty::Struct { name, .. } => {
+                        // Q19: a no-parens `Type.new` parses as a field access.
+                        // If the class has no constructor (no `init`, no
+                        // fields, no parent) this is the FFI-handle case that
+                        // link-errors on a missing `_init` — flag it clearly.
+                        if field_name == "new"
+                            && matches!(&derefed, Ty::Class { .. })
+                            && self.class_has_no_constructor(name)
+                        {
+                            self.error(
+                                format!(
+                                    "type `{name}` has no constructor: it declares no `init` \
+                                     and no fields. If it is an FFI handle type, obtain a value \
+                                     from its free function instead of `{name}.new` (e.g. \
+                                     `stdin()` / `stdout()` / `stderr()` for the IO handles)."
+                                ),
+                                &expr.span,
+                            );
+                            expr.ty = derefed.clone();
+                            return;
+                        }
                         // Look up field in symbol table (including parent classes)
                         if let Some((field_ty, idx)) =
                             self.lookup_field_with_parents(name, field_name)
@@ -1345,6 +1365,33 @@ impl<'a> InferenceEngine<'a> {
         // arguments, minting fresh vars for phantom params so the call's
         // expected type can bind them (Q21). Build the result with the same
         // head kind (Struct vs Class) so downstream typing stays correct.
+        // Q19: `.new` on a class that declares no `init`, no fields, and has
+        // no parent has no constructor at all — `<Class>_init` is never
+        // emitted and the program fails to LINK ("undefined _Stdin_init").
+        // These are FFI handle types (Stdin/Stdout/Stderr/…) obtained from a
+        // free function. Surface a clear typeck error instead of a late
+        // linker error. (Guarded so normal classes — any field, any `init`,
+        // any parent — are untouched; such a `.new` always link-errored, so
+        // this only turns a link error into a clear diagnostic.)
+        if method_name == "new" {
+            if let Ty::Class { name, .. } = derefed {
+                if self.class_has_no_constructor(name) {
+                    self.error(
+                        format!(
+                            "type `{name}` has no constructor: it declares no `init` and no \
+                             fields. If it is an FFI handle type, obtain a value from its free \
+                             function instead of `{name}.new` (e.g. `stdin()` / `stdout()` / \
+                             `stderr()` for the IO handles)."
+                        ),
+                        span,
+                    );
+                    return Ty::Class {
+                        name: name.clone(),
+                        generic_args: vec![],
+                    };
+                }
+            }
+        }
         if let Ty::Class { name, generic_args } | Ty::Struct { name, generic_args } = derefed {
             if generic_args.is_empty() {
                 if let Some(inferred) = self.infer_class_generics(name, args) {
@@ -1367,6 +1414,35 @@ impl<'a> InferenceEngine<'a> {
         let result = self.resolve_method_call(derefed, method_name, args, span);
         self.check_constructor_generic_bounds(&result, span);
         result
+    }
+
+    /// Q19: true when `class_name` is a class that has NO constructor at all
+    /// — no declared `init` method, no fields, and no parent class — so
+    /// `<class_name>.new` would emit a call to a non-existent `_init` symbol
+    /// and fail at link time. Conservative: any field / `init` / parent makes
+    /// it return false (those `.new`s are real, or already worked).
+    fn class_has_no_constructor(&self, class_name: &str) -> bool {
+        let Some(def) = self
+            .symbols
+            .iter()
+            .find(|d| d.name == class_name && matches!(d.kind, DefKind::Class { .. }))
+        else {
+            return false;
+        };
+        let DefKind::Class { info } = &def.kind else {
+            return false;
+        };
+        if !info.fields.is_empty() || info.parent.is_some() {
+            return false;
+        }
+        // A declared `init` OR a static `new` (e.g. an FFI alias
+        // `def self.new as "ruxen_open_options_new"`) IS a constructor.
+        let has_ctor_method = self.symbols.iter().any(|d| {
+            (d.name == "init" || d.name == "new")
+                && matches!(&d.kind, DefKind::Method { parent, .. }
+                    if self.symbols.get(*parent).map(|p| p.name == class_name).unwrap_or(false))
+        });
+        !has_ctor_method
     }
 
     /// Feature B enforcement at the construction seam: when a `class
