@@ -207,7 +207,19 @@ Multi-statement arms need a real grammar decision (block arms vs mandatory
 `if let`/helper-fn). Until then: never write `-> { … }`; use `if let` or a
 named helper. Both quiver and canvas now carry comments warning about this.
 
-## Q8 · S2 — recursive class types crash the compiler (stack overflow)
+## Q8 · S2 — recursive class types crash the compiler (stack overflow)  ✅ FIXED
+
+> **FIXED** (stdlib-rust-cleanup): two type-walks recursed through the
+> self-reference with no cycle guard — the structural auto-derive check
+> (`resolve/symbols.rs::ty_has_derive_trait`, typeck) and the layout/size
+> computation (`codegen/layout.rs`). Both now carry a visited-set: the
+> derive check returns `true` on a cycle (coinductive — a recursive type
+> auto-derives iff its non-recursive parts do, like Rust); the layout
+> returns pointer-size on a cycle (a class instance is a heap pointer, and
+> `alloc_size` sizes slot-by-slot anyway). Recursive classes now compile
+> AND run. Pin: `tests/release-e2e/cases/638_recursive_class` (Array[Node]
+> + Option[Node] self-ref, field access through the recursion).
+
 
 ```ruxen
 class Node

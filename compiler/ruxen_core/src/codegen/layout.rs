@@ -212,42 +212,77 @@ fn layout_user_type(
     name: &str,
     symbols: &SymbolTable,
     bindings: &std::collections::HashMap<String, u64>,
+    visited: &mut std::collections::HashSet<String>,
 ) -> TypeLayout {
+    // Cycle guard (Q8): a self-referential aggregate
+    // (`class Node { next: Node }` / `children: Array[Node]`) would recurse
+    // forever here. A class instance is a heap POINTER, so a recursive
+    // reference contributes one pointer-sized slot — and the real
+    // allocation size is computed slot-by-slot in `alloc_size` anyway, so
+    // this only feeds the `.max()` base. Returning pointer-size on a cycle
+    // both terminates and matches the runtime representation. Non-cyclic
+    // types never hit this branch, so their layouts are unchanged.
+    if !visited.insert(name.to_string()) {
+        return TypeLayout::primitive(8, 8);
+    }
     // Find the class or struct definition by name.
     let def = symbols.iter().find(|d| {
         d.name == name && matches!(d.kind, DefKind::Class { .. } | DefKind::Struct { .. })
     });
 
-    let field_def_ids: Vec<u32> = match def {
+    let field_def_ids: Option<Vec<u32>> = match def {
         Some(d) => match &d.kind {
-            DefKind::Class { info } => info.fields.clone(),
-            DefKind::Struct { info } => info.fields.clone(),
-            _ => return TypeLayout::primitive(0, 1),
+            DefKind::Class { info } => Some(info.fields.clone()),
+            DefKind::Struct { info } => Some(info.fields.clone()),
+            _ => None,
         },
-        None => return TypeLayout::primitive(0, 1),
+        None => None,
     };
 
-    // Collect field layouts, sorted by their declared index.
-    let mut indexed_fields: Vec<(usize, TypeLayout)> = field_def_ids
-        .iter()
-        .filter_map(|&fid| {
-            let fdef = symbols.get(fid)?;
-            if let DefKind::Field { ty, index, .. } = &fdef.kind {
-                Some((*index, layout_of_inner(ty, symbols, bindings)))
-            } else {
-                None
-            }
-        })
-        .collect();
+    let result = match field_def_ids {
+        None => TypeLayout::primitive(0, 1),
+        Some(field_def_ids) => {
+            // Collect field layouts, sorted by their declared index.
+            let mut indexed_fields: Vec<(usize, TypeLayout)> = field_def_ids
+                .iter()
+                .filter_map(|&fid| {
+                    let fdef = symbols.get(fid)?;
+                    if let DefKind::Field { ty, index, .. } = &fdef.kind {
+                        Some((*index, layout_of_inner(ty, symbols, bindings, visited)))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
 
-    indexed_fields.sort_by_key(|(idx, _)| *idx);
-    let field_layouts: Vec<TypeLayout> = indexed_fields.into_iter().map(|(_, l)| l).collect();
-    layout_struct_fields(&field_layouts)
+            indexed_fields.sort_by_key(|(idx, _)| *idx);
+            let field_layouts: Vec<TypeLayout> =
+                indexed_fields.into_iter().map(|(_, l)| l).collect();
+            layout_struct_fields(&field_layouts)
+        }
+    };
+
+    // Pop the DFS stack so a SIBLING field of the same nominal type still
+    // gets its full layout (only true ancestors-on-stack are cycles).
+    visited.remove(name);
+    result
 }
 
 /// Resolve a user-defined enum from the symbol table and compute its layout
 /// as a tagged union over all variant payloads.
-fn layout_user_enum(name: &str, symbols: &SymbolTable) -> TypeLayout {
+fn layout_user_enum(
+    name: &str,
+    symbols: &SymbolTable,
+    visited: &mut std::collections::HashSet<String>,
+) -> TypeLayout {
+    // Cycle guard (Q8): an enum whose variant payload refers back to itself
+    // (`enum Tree { Leaf, Node(Tree, Tree) }`) would recurse forever. A
+    // payload referencing the enum under construction is a pointer-sized
+    // slot; return that on a cycle. Non-cyclic enums are unaffected.
+    if !visited.insert(name.to_string()) {
+        return TypeLayout::primitive(8, 8);
+    }
+
     let def = symbols
         .iter()
         .find(|d| d.name == name && matches!(d.kind, DefKind::Enum { .. }));
@@ -255,9 +290,15 @@ fn layout_user_enum(name: &str, symbols: &SymbolTable) -> TypeLayout {
     let variant_def_ids: Vec<u32> = match def {
         Some(d) => match &d.kind {
             DefKind::Enum { info } => info.variants.clone(),
-            _ => return TypeLayout::primitive(4, 4), // just the tag
+            _ => {
+                visited.remove(name);
+                return TypeLayout::primitive(4, 4); // just the tag
+            }
         },
-        None => return TypeLayout::primitive(4, 4),
+        None => {
+            visited.remove(name);
+            return TypeLayout::primitive(4, 4);
+        }
     };
 
     let mut payload_sizes = Vec::with_capacity(variant_def_ids.len());
@@ -273,15 +314,33 @@ fn layout_user_enum(name: &str, symbols: &SymbolTable) -> TypeLayout {
                     }
                     VariantDefKind::Tuple(tys) => {
                         // Lay out tuple payload.
-                        let field_layouts: Vec<TypeLayout> =
-                            tys.iter().map(|t| layout_of(t, symbols)).collect();
+                        let field_layouts: Vec<TypeLayout> = tys
+                            .iter()
+                            .map(|t| {
+                                layout_of_inner(
+                                    t,
+                                    symbols,
+                                    &std::collections::HashMap::new(),
+                                    visited,
+                                )
+                            })
+                            .collect();
                         let pl = layout_struct_fields(&field_layouts);
                         payload_sizes.push(pl.size);
                         payload_aligns.push(pl.alignment);
                     }
                     VariantDefKind::Struct(fields) => {
-                        let field_layouts: Vec<TypeLayout> =
-                            fields.iter().map(|(_, t)| layout_of(t, symbols)).collect();
+                        let field_layouts: Vec<TypeLayout> = fields
+                            .iter()
+                            .map(|(_, t)| {
+                                layout_of_inner(
+                                    t,
+                                    symbols,
+                                    &std::collections::HashMap::new(),
+                                    visited,
+                                )
+                            })
+                            .collect();
                         let pl = layout_struct_fields(&field_layouts);
                         payload_sizes.push(pl.size);
                         payload_aligns.push(pl.alignment);
@@ -290,6 +349,8 @@ fn layout_user_enum(name: &str, symbols: &SymbolTable) -> TypeLayout {
             }
         }
     }
+
+    visited.remove(name);
 
     if payload_sizes.is_empty() {
         // Enum with no variants — degenerate (never-constructable).
@@ -305,7 +366,12 @@ fn layout_user_enum(name: &str, symbols: &SymbolTable) -> TypeLayout {
 /// - `ty` — the type to compute the layout for
 /// - `symbols` — the symbol table (used for user-defined types)
 pub fn layout_of(ty: &Ty, symbols: &SymbolTable) -> TypeLayout {
-    layout_of_inner(ty, symbols, &std::collections::HashMap::new())
+    layout_of_inner(
+        ty,
+        symbols,
+        &std::collections::HashMap::new(),
+        &mut std::collections::HashSet::new(),
+    )
 }
 
 /// Internal entry that threads a const-generic binding map through
@@ -325,6 +391,7 @@ fn layout_of_inner(
     ty: &Ty,
     symbols: &SymbolTable,
     bindings: &std::collections::HashMap<String, u64>,
+    visited: &mut std::collections::HashSet<String>,
 ) -> TypeLayout {
     match ty {
         // ── Primitives ──────────────────────────────────────────────────────
@@ -367,14 +434,14 @@ fn layout_of_inner(
 
         // ── Option[T] ───────────────────────────────────────────────────────
         Ty::Option(inner) => {
-            let inner_layout = layout_of_inner(inner, symbols, bindings);
+            let inner_layout = layout_of_inner(inner, symbols, bindings, visited);
             layout_tagged_union(&[inner_layout.size], &[inner_layout.alignment])
         }
 
         // ── Result[T, E] ────────────────────────────────────────────────────
         Ty::Result(ok, err) => {
-            let ok_layout = layout_of_inner(ok, symbols, bindings);
-            let err_layout = layout_of_inner(err, symbols, bindings);
+            let ok_layout = layout_of_inner(ok, symbols, bindings, visited);
+            let err_layout = layout_of_inner(err, symbols, bindings, visited);
             layout_tagged_union(
                 &[ok_layout.size, err_layout.size],
                 &[ok_layout.alignment, err_layout.alignment],
@@ -388,14 +455,14 @@ fn layout_of_inner(
             }
             let field_layouts: Vec<TypeLayout> = elems
                 .iter()
-                .map(|e| layout_of_inner(e, symbols, bindings))
+                .map(|e| layout_of_inner(e, symbols, bindings, visited))
                 .collect();
             layout_struct_fields(&field_layouts)
         }
 
         // ── Array ───────────────────────────────────────────────────────────
         Ty::FixedArray(elem, n) => {
-            let elem_layout = layout_of_inner(elem, symbols, bindings);
+            let elem_layout = layout_of_inner(elem, symbols, bindings, visited);
             // T2.02 S7 binding-threading: `Lit(N)` resolves directly;
             // `Param(name)` resolves through the supplied bindings;
             // `Op(...)` arithmetic folds via the S8.S1 evaluator
@@ -428,13 +495,13 @@ fn layout_of_inner(
             name, generic_args, ..
         } => {
             let class_bindings = bindings_from_generic_args(name, generic_args, symbols);
-            layout_user_type(name, symbols, &class_bindings)
+            layout_user_type(name, symbols, &class_bindings, visited)
         }
-        Ty::Enum { name, .. } => layout_user_enum(name, symbols),
+        Ty::Enum { name, .. } => layout_user_enum(name, symbols, visited),
 
         // ── Transparent wrappers ────────────────────────────────────────────
-        Ty::Alias { target, .. } => layout_of_inner(target, symbols, bindings),
-        Ty::Newtype { inner, .. } => layout_of_inner(inner, symbols, bindings),
+        Ty::Alias { target, .. } => layout_of_inner(target, symbols, bindings, visited),
+        Ty::Newtype { inner, .. } => layout_of_inner(inner, symbols, bindings, visited),
 
         // ── Function types ──────────────────────────────────────────────────
         // Fn, FnMut, FnOnce are represented as a single function pointer.

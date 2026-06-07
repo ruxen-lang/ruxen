@@ -410,16 +410,53 @@ pub fn ty_is_effectively_copy(ty: &Ty, symbols: &SymbolTable) -> bool {
 /// for backwards compatibility, then falls back to the spec's
 /// implicit-include rule when applicable.
 pub fn ty_has_derive_trait(ty: &Ty, symbols: &SymbolTable, trait_name: &str) -> bool {
+    ty_has_derive_trait_seen(
+        ty,
+        symbols,
+        trait_name,
+        &mut std::collections::HashSet::new(),
+    )
+}
+
+/// Cycle-aware core of [`ty_has_derive_trait`]. `seen` holds the nominal
+/// type names currently on the structural-support recursion stack. A
+/// self-referential type (`class Node { children: Array[Node] }`) would
+/// otherwise recurse forever — `ty_has_derive_trait(Node)` →
+/// `Array[Node]` field → `ty_has_derive_trait(Node)` → … (Q8 stack
+/// overflow). On revisiting a name we return `true` (coinductive): a
+/// recursive type structurally supports a derive iff its NON-recursive
+/// parts do, exactly like Rust deriving `Clone`/`Debug` on a recursive
+/// `enum`. The non-recursive fields are still checked on the first visit,
+/// so a genuinely unsupported field still fails (`.all()`/`&&` below).
+fn ty_has_derive_trait_seen(
+    ty: &Ty,
+    symbols: &SymbolTable,
+    trait_name: &str,
+    seen: &mut std::collections::HashSet<String>,
+) -> bool {
     let name = match ty {
         Ty::Struct { name, .. } | Ty::Class { name, .. } | Ty::Enum { name, .. } => name,
         Ty::Ref(inner)
         | Ty::RefMut(inner)
         | Ty::RefLifetime(_, inner)
-        | Ty::RefMutLifetime(_, inner) => return ty_has_derive_trait(inner, symbols, trait_name),
-        Ty::Alias { target, .. } => return ty_has_derive_trait(target, symbols, trait_name),
-        Ty::Newtype { inner, .. } => return ty_has_derive_trait(inner, symbols, trait_name),
+        | Ty::RefMutLifetime(_, inner) => {
+            return ty_has_derive_trait_seen(inner, symbols, trait_name, seen)
+        }
+        Ty::Alias { target, .. } => {
+            return ty_has_derive_trait_seen(target, symbols, trait_name, seen)
+        }
+        Ty::Newtype { inner, .. } => {
+            return ty_has_derive_trait_seen(inner, symbols, trait_name, seen)
+        }
         _ => return false,
     };
+
+    // Cycle: this nominal type is already being evaluated higher up the
+    // stack. Assume it supports the trait (coinductive); the real
+    // determination happens at the first (outermost) visit.
+    if !seen.insert(name.clone()) {
+        return true;
+    }
 
     symbols.iter().any(|def| {
         if def.name != *name {
@@ -437,13 +474,13 @@ pub fn ty_has_derive_trait(ty: &Ty, symbols: &SymbolTable, trait_name: &str) -> 
                 if trait_name == "Copy" {
                     return false;
                 }
-                struct_or_class_fields_all_support(symbols, &info.fields, trait_name)
+                struct_or_class_fields_all_support(symbols, &info.fields, trait_name, seen)
             }
             DefKind::Struct { info } => {
                 if info.derive_traits.iter().any(|t| t == trait_name) {
                     return true;
                 }
-                struct_or_class_fields_all_support(symbols, &info.fields, trait_name)
+                struct_or_class_fields_all_support(symbols, &info.fields, trait_name, seen)
             }
             DefKind::Enum { info } => {
                 if info.derive_traits.iter().any(|t| t == trait_name) {
@@ -456,7 +493,7 @@ pub fn ty_has_derive_trait(ty: &Ty, symbols: &SymbolTable, trait_name: &str) -> 
                 // conservative — enums in v1 stay non-Copy unless all
                 // variants are unit-only with primitive payloads, so
                 // we still gate on the field check.
-                enum_variant_fields_all_support(symbols, &info.variants, trait_name)
+                enum_variant_fields_all_support(symbols, &info.variants, trait_name, seen)
             }
             _ => false,
         }
@@ -470,6 +507,7 @@ fn enum_variant_fields_all_support(
     symbols: &SymbolTable,
     variant_def_ids: &[DefId],
     trait_name: &str,
+    seen: &mut std::collections::HashSet<String>,
 ) -> bool {
     variant_def_ids.iter().all(|vid| {
         let def = match symbols.get(*vid) {
@@ -481,10 +519,10 @@ fn enum_variant_fields_all_support(
                 VariantDefKind::Unit => true,
                 VariantDefKind::Tuple(types) => types
                     .iter()
-                    .all(|ty| ty_supports_structural_mixin(ty, symbols, trait_name)),
+                    .all(|ty| ty_supports_structural_mixin(ty, symbols, trait_name, seen)),
                 VariantDefKind::Struct(fields) => fields
                     .iter()
-                    .all(|(_, ty)| ty_supports_structural_mixin(ty, symbols, trait_name)),
+                    .all(|(_, ty)| ty_supports_structural_mixin(ty, symbols, trait_name, seen)),
             },
             _ => false,
         }
@@ -495,15 +533,16 @@ fn struct_or_class_fields_all_support(
     symbols: &SymbolTable,
     field_def_ids: &[DefId],
     trait_name: &str,
+    seen: &mut std::collections::HashSet<String>,
 ) -> bool {
     field_def_ids
         .iter()
         .all(|field_id| match symbols.get(*field_id).map(|d| &d.kind) {
             Some(DefKind::Field { ty, .. }) => {
-                ty_supports_structural_mixin(ty, symbols, trait_name)
+                ty_supports_structural_mixin(ty, symbols, trait_name, seen)
             }
             Some(DefKind::Variable { ty, .. }) => {
-                ty_supports_structural_mixin(ty, symbols, trait_name)
+                ty_supports_structural_mixin(ty, symbols, trait_name, seen)
             }
             _ => false,
         })
@@ -512,36 +551,44 @@ fn struct_or_class_fields_all_support(
 /// Returns true when the given type structurally supports the named
 /// structural mixin. Primitives & references satisfy everything; nested
 /// nominal types delegate back to `ty_has_derive_trait`.
-fn ty_supports_structural_mixin(ty: &Ty, symbols: &SymbolTable, trait_name: &str) -> bool {
+fn ty_supports_structural_mixin(
+    ty: &Ty,
+    symbols: &SymbolTable,
+    trait_name: &str,
+    seen: &mut std::collections::HashSet<String>,
+) -> bool {
     if trait_name == "Copy" {
         return ty.is_copy_with(symbols);
     }
     // For every other structural mixin (Clone, Debug, Eq, Hash, …),
     // primitives and references satisfy unconditionally; user types
-    // recurse through `ty_has_derive_trait`.
+    // recurse through `ty_has_derive_trait_seen` (which carries the
+    // cycle-detection `seen` set for self-referential types — Q8).
     match ty {
         Ty::Struct { .. } | Ty::Class { .. } | Ty::Enum { .. } => {
-            ty_has_derive_trait(ty, symbols, trait_name)
+            ty_has_derive_trait_seen(ty, symbols, trait_name, seen)
         }
         Ty::Ref(inner)
         | Ty::RefMut(inner)
         | Ty::RefLifetime(_, inner)
-        | Ty::RefMutLifetime(_, inner) => ty_supports_structural_mixin(inner, symbols, trait_name),
+        | Ty::RefMutLifetime(_, inner) => {
+            ty_supports_structural_mixin(inner, symbols, trait_name, seen)
+        }
         Ty::Newtype { inner, .. } | Ty::Alias { target: inner, .. } => {
-            ty_supports_structural_mixin(inner, symbols, trait_name)
+            ty_supports_structural_mixin(inner, symbols, trait_name, seen)
         }
         Ty::Tuple(elems) => elems
             .iter()
-            .all(|e| ty_supports_structural_mixin(e, symbols, trait_name)),
-        Ty::FixedArray(elem, _) => ty_supports_structural_mixin(elem, symbols, trait_name),
+            .all(|e| ty_supports_structural_mixin(e, symbols, trait_name, seen)),
+        Ty::FixedArray(elem, _) => ty_supports_structural_mixin(elem, symbols, trait_name, seen),
         // Array, Map, Set, Option, Result are containers — they
         // forward the structural mixin to their element type.
         Ty::Array(elem) | Ty::Set(elem) | Ty::Option(elem) => {
-            ty_supports_structural_mixin(elem, symbols, trait_name)
+            ty_supports_structural_mixin(elem, symbols, trait_name, seen)
         }
         Ty::Map(k, v) | Ty::Result(k, v) => {
-            ty_supports_structural_mixin(k, symbols, trait_name)
-                && ty_supports_structural_mixin(v, symbols, trait_name)
+            ty_supports_structural_mixin(k, symbols, trait_name, seen)
+                && ty_supports_structural_mixin(v, symbols, trait_name, seen)
         }
         _ => true,
     }
