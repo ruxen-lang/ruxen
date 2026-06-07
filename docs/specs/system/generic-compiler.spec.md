@@ -175,10 +175,19 @@ behind.
       `+@`/`!` + the call form `a.+(b)`/`a.[](i)`/etc. (inert; `ExprKind` nodes
       unchanged). `**` omitted (no operator exists). Pin
       `631_operator_overload_explicit`. **Step 2 DONE:** receiver-element bound
-      seam + `sum`/E0700 closure (above). **Remaining:** desugar (post-typeck)
-      arithmetic/bitwise/index/unary → `def OP`, machine-primitive floor stays
-      direct, delete migrated binops/ops arms, Duration `.rx def +`/`-`; then the
-      SEPARATE comparison/equality + `Comparable` increment (deferred, `<=>` token
+      seam + `sum`/E0700 closure (above). **Step 3 DONE:** post-typeck desugar of
+      arithmetic (`+ - * / %`) / bitwise (`& | ^ << >>`) / index (`[]`/`[]=`) /
+      unary (`-@`/`!`) — a NOMINAL receiver routes to `def OP` (typeck
+      `is_nominal_operator_receiver` + `BinOp::method_name` → `resolve_method_call`;
+      MIR `binops.rs`/`unaryops.rs`/`index.rs`/`assign.rs` synthesize the
+      `MethodCall` and reuse `lower_method_call`). Machine primitives stay on the
+      direct instruction (`MirInst::BinOp`/`Negate`/`Not`) — perf flat (Int-arith
+      loop 0.99–1.06s before & after). Hardcoded Duration/Instant arithmetic arms
+      DELETED; Duration declares `def +`/`def -` (Instant `def -`) in `.rx`. Twin
+      pins `631`(explicit)/`632`(sugared) with byte-identical `.out` lock
+      desugar↔explicit equivalence. **Remaining:** the SEPARATE comparison/equality
+      + `Comparable` increment (deferred; `==`/`<`/… stay on the existing
+      binops PartialEq-derive / Vec-Map-Set-eq / Ord-derive paths; `<=>` token
       vs reuse-`cmp` TBD).
 - [ ] Literals→primitives + de-primitivize `Ty::String`/`Ty::Array`.
 - [ ] Generic small-method inliner (perf).

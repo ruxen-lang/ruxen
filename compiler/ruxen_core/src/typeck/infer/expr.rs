@@ -746,13 +746,47 @@ impl<'a> InferenceEngine<'a> {
                 self.infer_expr(right);
                 let left_ty = self.ctx.resolve(&left.ty);
                 let right_ty = self.ctx.resolve(&right.ty);
-                expr.ty = self.infer_binop(*op, &left_ty, &right_ty, &expr.span);
+                // Operator → method desugar (Task OP, Step 3): a NOMINAL
+                // receiver (Duration, a user operator class) with a MIGRATED
+                // op (`+ - * / %`, `& | ^ << >>`) resolves to its `.rx`
+                // `def OP` — `a + b` is `a.+(b)`. Machine primitives, String,
+                // and the collection heads keep their `infer_binop` arms (the
+                // machine floor / special cases). The MIR side mirrors this
+                // (`lower_binops`): primitive head → instruction, nominal
+                // head → method call.
+                let routed = op
+                    .method_name()
+                    .filter(|_| Self::is_nominal_operator_receiver(&left_ty))
+                    .map(|m| {
+                        let args = std::slice::from_ref(right.as_ref());
+                        self.resolve_method_call(&left_ty, m, args, &expr.span)
+                    });
+                expr.ty = match routed {
+                    Some(ty) => ty,
+                    None => self.infer_binop(*op, &left_ty, &right_ty, &expr.span),
+                };
             }
 
             HirExprKind::UnaryOp { op, operand } => {
                 self.infer_expr(operand);
                 let operand_ty = self.ctx.resolve(&operand.ty);
-                expr.ty = self.infer_unaryop(*op, &operand_ty, &expr.span);
+                // Operator → method desugar (Task OP, Step 3): `-a` →
+                // `a.-@()`, `!a` → `a.!()` on a NOMINAL receiver. Machine
+                // primitives keep `infer_unaryop` (the machine floor).
+                // `Deref` is never a method.
+                use crate::parser::ast::UnaryOp;
+                let unary_method = match op {
+                    UnaryOp::Neg => Some("-@"),
+                    UnaryOp::Not => Some("!"),
+                    UnaryOp::Deref => None,
+                };
+                let routed = unary_method
+                    .filter(|_| Self::is_nominal_operator_receiver(&operand_ty))
+                    .map(|m| self.resolve_method_call(&operand_ty, m, &[], &expr.span));
+                expr.ty = match routed {
+                    Some(ty) => ty,
+                    None => self.infer_unaryop(*op, &operand_ty, &expr.span),
+                };
             }
 
             HirExprKind::Borrow {
@@ -918,16 +952,44 @@ impl<'a> InferenceEngine<'a> {
                 value,
                 semantics,
             } => {
-                self.infer_expr(target);
-                self.infer_expr(value);
-                let target_ty = self.ctx.resolve(&target.ty);
-                let value_ty = self.ctx.resolve(&value.ty);
-                let _ = unify(&target_ty, &value_ty, self.ctx, &expr.span);
+                // Operator → method desugar (Task OP, Step 3): `a[i] = v`
+                // on a NOMINAL receiver resolves the `def []=` method
+                // (NOT the `[]` read). We infer the object + index + value,
+                // then type-check the call against `[]=`; the assignment
+                // itself is Unit. Builtin collections fall through to the
+                // normal target/value unify below.
+                let nominal_index_assign =
+                    if let HirExprKind::Index { object, index } = &mut target.kind {
+                        self.infer_expr(object);
+                        self.infer_expr(index);
+                        let obj_ty = self.ctx.resolve(&object.ty);
+                        Self::is_nominal_operator_receiver(&obj_ty).then_some(obj_ty)
+                    } else {
+                        None
+                    };
+                if let Some(obj_ty) = nominal_index_assign {
+                    self.infer_expr(value);
+                    // Re-borrow the index/value out of the target now that
+                    // object/index are inferred, to build the `[]=` args.
+                    if let HirExprKind::Index { index, .. } = &target.kind {
+                        let args = [(**index).clone(), (**value).clone()];
+                        let _ = self.resolve_method_call(&obj_ty, "[]=", &args, &expr.span);
+                    }
+                    let resolved = self.ctx.resolve(&value.ty);
+                    *semantics = resolved.move_semantics();
+                    expr.ty = Ty::Unit;
+                } else {
+                    self.infer_expr(target);
+                    self.infer_expr(value);
+                    let target_ty = self.ctx.resolve(&target.ty);
+                    let value_ty = self.ctx.resolve(&value.ty);
+                    let _ = unify(&target_ty, &value_ty, self.ctx, &expr.span);
 
-                // Determine copy/move semantics
-                let resolved = self.ctx.resolve(&value_ty);
-                *semantics = resolved.move_semantics();
-                expr.ty = Ty::Unit;
+                    // Determine copy/move semantics
+                    let resolved = self.ctx.resolve(&value_ty);
+                    *semantics = resolved.move_semantics();
+                    expr.ty = Ty::Unit;
+                }
             }
 
             HirExprKind::CompoundAssign {
@@ -1099,7 +1161,16 @@ impl<'a> InferenceEngine<'a> {
                 self.infer_expr(object);
                 self.infer_expr(index);
                 let obj_ty = self.ctx.resolve(&object.ty);
-                expr.ty = self.infer_index_ty(&obj_ty);
+                // Operator → method desugar (Task OP, Step 3): `a[i]` →
+                // `a.[](i)` on a NOMINAL receiver (user/stdlib class with
+                // `def []`). Builtin collection heads (Array/Map/String/
+                // tuple) keep `infer_index_ty` (the machine floor).
+                expr.ty = if Self::is_nominal_operator_receiver(&obj_ty) {
+                    let args = std::slice::from_ref(index.as_ref());
+                    self.resolve_method_call(&obj_ty, "[]", args, &expr.span)
+                } else {
+                    self.infer_index_ty(&obj_ty)
+                };
             }
 
             HirExprKind::Cast {

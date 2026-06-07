@@ -182,6 +182,31 @@ impl<'a> InferenceEngine<'a> {
         }
     }
 
+    // ─── Operator → method desugar (Task OP, Step 3) ────────────────
+    //
+    // The operator→method-name map is `BinOp::method_name` (parser/ast.rs)
+    // — the SINGLE source shared with MIR's `lower_binops`. Only the
+    // MIGRATED families (arithmetic `+ - * / %`, bitwise `& | ^ << >>`)
+    // return a name; comparison/equality/logical/regex-match return `None`
+    // (they keep their existing paths + the later `Comparable` increment).
+
+    /// True when `ty` is a NOMINAL receiver (user/stdlib class, struct, or
+    /// enum) — the receivers whose operators are real overridable `.rx`
+    /// methods (Duration, user operator classes). Machine primitives
+    /// (`Int`/`Float`/`Bool`/widths), `String`/`&str`, and the builtin
+    /// collection heads (`Array`/`Set`/`Map`) are NOT nominal here: they
+    /// keep their machine-floor / special-case binop lowering. Peels refs.
+    pub(super) fn is_nominal_operator_receiver(ty: &Ty) -> bool {
+        match ty {
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => Self::is_nominal_operator_receiver(inner),
+            Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. } => true,
+            _ => false,
+        }
+    }
+
     // ─── Binary Operation Type Inference ────────────────────────────
 
     pub(super) fn infer_binop(&mut self, op: BinOp, left: &Ty, right: &Ty, span: &Span) -> Ty {
@@ -201,41 +226,12 @@ impl<'a> InferenceEngine<'a> {
                     return Ty::String;
                 }
 
-                // Phase 2 stdlib (#06.5 T4): Duration / Instant operator
-                // overloads. The mir/lower/expr/binops.rs special-case
-                // routes the actual call to `ruxen_duration_add` /
-                // `ruxen_duration_sub` / `ruxen_instant_sub`; here we
-                // only need typeck to assign the right result Ty so
-                // downstream `.as_nanos()` / `.as_secs()` method
-                // resolution can find the Duration instance methods.
-                //
-                // `Duration + Duration` -> Duration
-                // `Duration - Duration` -> Duration (saturating in runtime)
-                // `Instant - Instant`   -> Duration (duration_since semantics)
-                fn class_named(ty: &Ty, target: &str) -> bool {
-                    match ty {
-                        Ty::Class { name, .. } => name == target,
-                        Ty::Ref(inner)
-                        | Ty::RefMut(inner)
-                        | Ty::RefLifetime(_, inner)
-                        | Ty::RefMutLifetime(_, inner) => class_named(inner, target),
-                        _ => false,
-                    }
-                }
-                let duration_ty = || Ty::Class {
-                    name: "Duration".to_string(),
-                    generic_args: vec![],
-                };
-                if matches!(op, BinOp::Add | BinOp::Sub)
-                    && class_named(left, "Duration")
-                    && class_named(right, "Duration")
-                {
-                    return duration_ty();
-                }
-                if op == BinOp::Sub && class_named(left, "Instant") && class_named(right, "Instant")
-                {
-                    return duration_ty();
-                }
+                // Duration / Instant arithmetic MIGRATED (Task OP, Step 3)
+                // to overridable `.rx` `def +`/`def -` methods. A nominal
+                // receiver routes to the method in the `BinaryOp` handler
+                // (`expr.rs`) BEFORE `infer_binop` is reached, so there is
+                // no Duration/Instant arm here anymore — the result type
+                // comes from the method's declared return.
 
                 if left.is_numeric() && right.is_numeric() {
                     // Unify the two sides

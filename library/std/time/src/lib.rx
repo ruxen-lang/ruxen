@@ -37,6 +37,11 @@ class Duration
     def self.from_nanos as "ruxen_duration_from_nanos"(ns: Int) -> Duration
     def add as "ruxen_duration_add"(other: Duration) -> Duration
     def sub as "ruxen_duration_sub"(other: Duration) -> Duration
+    # Operator overloads (Task OP): `d1 + d2` / `d1 - d2` desugar to
+    # these `def +`/`def -` methods (nominal receiver → method call).
+    # Same C symbols as `add`/`sub`; the relaxed E0722 admits the aliases.
+    def + as "ruxen_duration_add"(other: Duration) -> Duration
+    def - as "ruxen_duration_sub"(other: Duration) -> Duration
   end
 end
 
@@ -46,6 +51,8 @@ class Instant
     def elapsed as "ruxen_instant_elapsed" -> Duration
     def duration_since as "ruxen_instant_duration_since"(earlier: Instant) -> Duration
     def sub as "ruxen_instant_sub"(other: Instant) -> Duration
+    # Operator overload (Task OP): `i1 - i2` → `def -` (→ Duration).
+    def - as "ruxen_instant_sub"(other: Instant) -> Duration
   end
 end
 

@@ -84,6 +84,39 @@ impl<'a> Lowerer<'a> {
                     });
                     return Ok(Some(dest));
                 }
+                // ── Operator → method desugar (Task OP, Step 3) ──
+                // `a[i]` → `a.[](i)` on a NOMINAL receiver (user/stdlib
+                // class that defines `def []`). The builtin collection heads
+                // (Array/Vec FFI-shell above, Map above, FixedArray above)
+                // are already handled; this catches everything else nominal.
+                fn peel(t: &Ty) -> &Ty {
+                    match t {
+                        Ty::Ref(i)
+                        | Ty::RefMut(i)
+                        | Ty::RefLifetime(_, i)
+                        | Ty::RefMutLifetime(_, i) => peel(i),
+                        _ => t,
+                    }
+                }
+                if matches!(
+                    peel(&object.ty),
+                    Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
+                ) {
+                    let synthetic = HirExpr {
+                        kind: HirExprKind::MethodCall {
+                            object: Box::new((**object).clone()),
+                            method: UNRESOLVED_DEF,
+                            method_name: "[]".to_string(),
+                            generic_args: vec![],
+                            args: vec![(**index).clone()],
+                            block: None,
+                        },
+                        ty: expr.ty.clone(),
+                        span: expr.span.clone(),
+                    };
+                    return self.lower_method_call(&synthetic);
+                }
+
                 // Dynamic index / other collection kinds still need runtime
                 // support; fall through as a no-op.
                 let _ = (object, index);

@@ -1,0 +1,70 @@
+# Task OP — operator overload, SUGARED twin of 631 (Step 3 desugar).
+# The SAME `Vec2` class, driven via the SUGARED operator forms:
+#   `a + b`     desugars to `a.+(b)`
+#   `c[0]`      desugars to `c.[](0)`
+#   `-a`        desugars to `a.-@()`
+#   `m[0] = 99` desugars to `m.[]=(0, 99)`
+#   `!origin`   desugars to `origin.!()`
+# Its `.out` is BYTE-IDENTICAL to 631_operator_overload_explicit.out —
+# the pair LOCKS desugar↔explicit equivalence: `a + b` must dispatch to
+# the user `def +` (non-primitive receiver → method, post-typeck split),
+# never to a machine instruction.
+#
+# Field arithmetic in the bodies (`self.x + other.x`) is on Int — the
+# machine floor (direct instruction), not a recursive `+` method call.
+class Vec2
+  x: Int
+  y: Int
+
+  def init(x: Int, y: Int)
+    self.x = x
+    self.y = y
+  end
+
+  def +(other: Vec2) -> Vec2
+    Vec2.new(self.x + other.x, self.y + other.y)
+  end
+
+  def -@() -> Vec2
+    Vec2.new(0 - self.x, 0 - self.y)
+  end
+
+  def [](i: Int) -> Int
+    if i == 0
+      self.x
+    else
+      self.y
+    end
+  end
+
+  def var []=(i: Int, value: Int)
+    if i == 0
+      self.x = value
+    else
+      self.y = value
+    end
+  end
+
+  def !() -> Bool
+    self.x == 0 && self.y == 0
+  end
+end
+
+def main
+  let a = Vec2.new(1, 2)
+  let b = Vec2.new(10, 20)
+
+  let c = a + b
+  puts "sum=#{c[0]},#{c[1]}"
+
+  let n = -a
+  puts "neg=#{n[0]},#{n[1]}"
+
+  var m = Vec2.new(3, 4)
+  m[0] = 99
+  puts "set=#{m[0]},#{m[1]}"
+
+  let origin = Vec2.new(0, 0)
+  puts "origin_is_empty=#{!origin}"
+  puts "a_is_empty=#{!a}"
+end

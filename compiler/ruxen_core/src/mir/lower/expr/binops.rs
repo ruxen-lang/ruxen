@@ -45,6 +45,55 @@ impl<'a> Lowerer<'a> {
                     }
                 }
 
+                // ── Operator → method desugar (Task OP, Step 3) ──
+                // A NOMINAL receiver (user class / struct / enum, and
+                // stdlib classes like Duration) with a MIGRATED op
+                // (`+ - * / %`, `& | ^ << >>`) lowers as a real method
+                // call `left.OP(right)` to its `.rx` `def OP`. This is the
+                // generic mechanism that REPLACED the hardcoded
+                // Duration/Instant arithmetic arms (Duration now declares
+                // `def +`/`def -` in `.rx`). Machine primitives, String, and
+                // the collection heads fall through to the instruction /
+                // special-case lowering below — the machine floor, no
+                // method-call overhead on the hot path.
+                //
+                // We synthesize the same `MethodCall` HIR node the explicit
+                // `a.+(b)` surface produces and delegate to
+                // `lower_method_call`, so there is ONE method-call lowering
+                // path (overload selection, FFI alias rewrite, receiver
+                // prepend). This MUST run before the operands are lowered
+                // below, or they'd be lowered twice.
+                fn unwrap_ref(t: &Ty) -> &Ty {
+                    match t {
+                        Ty::Ref(inner)
+                        | Ty::RefMut(inner)
+                        | Ty::RefLifetime(_, inner)
+                        | Ty::RefMutLifetime(_, inner) => unwrap_ref(inner),
+                        _ => t,
+                    }
+                }
+                let lhs_nominal = matches!(
+                    unwrap_ref(&left.ty),
+                    Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
+                );
+                if lhs_nominal {
+                    if let Some(method) = op.method_name() {
+                        let synthetic = HirExpr {
+                            kind: HirExprKind::MethodCall {
+                                object: Box::new((**left).clone()),
+                                method: UNRESOLVED_DEF,
+                                method_name: method.to_string(),
+                                generic_args: vec![],
+                                args: vec![(**right).clone()],
+                                block: None,
+                            },
+                            ty: expr.ty.clone(),
+                            span: expr.span.clone(),
+                        };
+                        return self.lower_method_call(&synthetic);
+                    }
+                }
+
                 let lhs_local = self.lower_expr(left)?;
                 let rhs_local = self.lower_expr(right)?;
                 let lhs_val = local_to_value(lhs_local);
@@ -143,64 +192,12 @@ impl<'a> Lowerer<'a> {
                     return Ok(Some(dest));
                 }
 
-                // ── Phase 2 stdlib (#06.5 T4): Duration + Duration ──
-                // The language has no general user-side `+`/`-`
-                // overload mechanism. Built-in scalar-wrapper classes
-                // get hard-coded special-cases here, mirroring the
-                // String + String concat above. The named `.add()` /
-                // `.sub()` methods are wired in parallel: the binop
-                // path covers the ergonomic site, the named methods
-                // survive generic code where the operator isn't
-                // statically resolvable.
-                //
-                // `Duration - Duration` saturates to zero in the
-                // runtime helper; `Instant - Instant` panics if the
-                // RHS is later than the LHS.
-                let duration_ty = Ty::Class {
-                    name: "Duration".to_string(),
-                    generic_args: vec![],
-                };
-                fn unwrap_ref(t: &Ty) -> &Ty {
-                    match t {
-                        Ty::Ref(inner)
-                        | Ty::RefMut(inner)
-                        | Ty::RefLifetime(_, inner)
-                        | Ty::RefMutLifetime(_, inner) => unwrap_ref(inner),
-                        _ => t,
-                    }
-                }
-                let lhs_is = |target: &str| -> bool {
-                    matches!(unwrap_ref(&left.ty), Ty::Class { name, .. } if name == target)
-                };
-                let rhs_is = |target: &str| -> bool {
-                    matches!(unwrap_ref(&right.ty), Ty::Class { name, .. } if name == target)
-                };
-                if matches!(op, BinOp::Add | BinOp::Sub) && lhs_is("Duration") && rhs_is("Duration")
-                {
-                    let dest = self.new_temp(duration_ty.clone());
-                    let callee = if matches!(op, BinOp::Add) {
-                        "ruxen_duration_add"
-                    } else {
-                        "ruxen_duration_sub"
-                    };
-                    self.emit(MirInst::Call {
-                        dest: Some(dest),
-                        callee: callee.to_string(),
-                        args: vec![lhs_val, rhs_val],
-                    });
-                    return Ok(Some(dest));
-                }
-
-                // ── Phase 2 stdlib (#06.5 T4): Instant - Instant ──
-                if matches!(op, BinOp::Sub) && lhs_is("Instant") && rhs_is("Instant") {
-                    let dest = self.new_temp(duration_ty.clone());
-                    self.emit(MirInst::Call {
-                        dest: Some(dest),
-                        callee: "ruxen_instant_sub".to_string(),
-                        args: vec![lhs_val, rhs_val],
-                    });
-                    return Ok(Some(dest));
-                }
+                // Duration / Instant arithmetic special-cases REMOVED
+                // (Task OP, Step 3): `Duration + Duration` / `- ` and
+                // `Instant - Instant` now flow through the generic
+                // nominal-receiver method route above (they declare
+                // `def +`/`def -` in time/src/lib.rx aliasing the same
+                // `ruxen_duration_add`/`_sub`/`ruxen_instant_sub` symbols).
 
                 // ── std.regex (#06.96): `String ~= Regex` -> `Bool` ──
                 // Desugars to `ruxen_regex_is_match(regex_handle, text)`

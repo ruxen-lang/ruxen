@@ -127,7 +127,12 @@ impl Parser {
             false
         };
 
-        let name = self.expect_any_identifier();
+        // Operator-symbol method names (`def + as "..."`) parse here too —
+        // a class FFI method can be an operator overload aliasing a C
+        // symbol (e.g. `Duration` `def + as "ruxen_duration_add"`).
+        let name = self
+            .try_parse_operator_name()
+            .unwrap_or_else(|| self.expect_any_identifier());
 
         // Optional `as "<c-symbol>"` rename clause. The C symbol is taken
         // verbatim — no mangling, no namespacing — same contract as
