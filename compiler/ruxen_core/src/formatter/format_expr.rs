@@ -452,14 +452,23 @@ fn format_interpolated_string(parts: &[StringPart]) -> Doc {
         match part {
             StringPart::Literal(s) => segments.push(text(escape_string(s))),
             StringPart::Expr { tokens, spec } => {
-                // Preserve interpolation content exactly as-is. Phase
-                // 2 #06.B: spec is also reconstructed when non-default,
-                // matching the input syntax (`:?`, `:>10.2`, etc.).
-                let content: String = tokens
-                    .iter()
-                    .map(|t| token_to_source(t).to_string())
-                    .collect::<Vec<_>>()
-                    .join("");
+                // Reconstruct the interpolation expression from its tokens.
+                // Operators get surrounding spaces so the result re-lexes to
+                // the SAME token stream: a bare `#{w/2}` re-lexes the `/` as a
+                // regex literal ("unterminated regex" / non-idempotent), so we
+                // emit `#{w / 2}`. Non-operators (idents, `.`, `(`, …) stay
+                // tight so `a.b` / `f(x)` are unchanged. Phase 2 #06.B: spec
+                // is reconstructed when non-default (`:?`, `:>10.2`, …).
+                let mut content = String::new();
+                for (i, tok) in tokens.iter().enumerate() {
+                    let src = token_to_source(tok);
+                    let prev_spaced = i > 0 && interp_token_is_spaced(&tokens[i - 1].kind);
+                    let cur_spaced = interp_token_is_spaced(&tok.kind);
+                    if i > 0 && (prev_spaced || cur_spaced) {
+                        content.push(' ');
+                    }
+                    content.push_str(&src);
+                }
                 let spec_str = format_spec_to_source(spec);
                 segments.push(text(format!("#{{{}{}}}", content, spec_str)));
             }
@@ -497,6 +506,36 @@ fn format_spec_to_source(spec: &crate::lexer::token::FormatSpec) -> String {
 }
 
 /// Best-effort reconstruction of a token to its source form.
+/// True for interpolation tokens that must carry surrounding spaces when an
+/// interpolation expression is reconstructed, so the result re-lexes to the
+/// same token stream. The critical case is `/` (Slash): `#{w/2}` re-lexes the
+/// `/` as a regex-literal start, but `#{w / 2}` is unambiguous division.
+/// Spacing every binary/comparison/logical/bitwise/assignment operator (and
+/// keyword operators like `as`) is also what keeps the formatter idempotent.
+fn interp_token_is_spaced(kind: &crate::lexer::token::TokenKind) -> bool {
+    use crate::lexer::token::TokenKind as K;
+    matches!(
+        kind,
+        K::Plus
+            | K::Minus
+            | K::Star
+            | K::Slash
+            | K::Percent
+            | K::EqEq
+            | K::NotEq
+            | K::Lt
+            | K::Gt
+            | K::LtEq
+            | K::GtEq
+            | K::AmpAmp
+            | K::PipePipe
+            | K::Eq
+            | K::As
+            | K::Arrow
+            | K::FatArrow
+    )
+}
+
 fn token_to_source(token: &crate::lexer::token::Token) -> String {
     use crate::lexer::token::TokenKind;
     match &token.kind {

@@ -20,11 +20,23 @@ impl<'a> Lexer<'a> {
     pub(super) fn lex_interpolation_expr(
         &mut self,
     ) -> (Vec<Token>, crate::lexer::token::FormatSpec) {
-        let mut tokens = Vec::new();
         let mut spec = crate::lexer::token::FormatSpec::default();
         let mut brace_depth = 1u32; // we've already consumed #{
         let mut paren_depth = 0u32;
         let mut bracket_depth = 0u32;
+
+        // Interpolation tokens accumulate in the MAIN `self.tokens` buffer
+        // while we lex, and are drained out at the end. This is load-bearing
+        // for the context-sensitive `/` (regex-vs-division) and `?`
+        // (char-vs-try) decisions: those read `self.tokens.last()`, which must
+        // be the PREVIOUS INTERPOLATION token, not the token before the
+        // enclosing string. Removing each token immediately (the old code)
+        // made `#{w / 2}` after a `(` lex `/` as a regex literal — so
+        // `puts("#{w / 2}")` mis-lexed while `puts "#{w / 2}"` did not.
+        let interp_start = self.tokens.len();
+        // Index up to which we've folded paren/bracket depth (so a later `:`
+        // knows whether it's inside a grouping construct).
+        let mut scanned = interp_start;
 
         while !self.is_at_end() && brace_depth > 0 {
             self.skip_whitespace();
@@ -60,7 +72,7 @@ impl<'a> Lexer<'a> {
                 let sl = self.line;
                 let sc = self.column;
                 self.advance();
-                tokens.push(Token::new(
+                self.tokens.push(Token::new(
                     TokenKind::RBrace,
                     Span::new(sb, self.byte_pos, sl, sc),
                 ));
@@ -73,15 +85,15 @@ impl<'a> Lexer<'a> {
                 let sl = self.line;
                 let sc = self.column;
                 self.advance();
-                tokens.push(Token::new(
+                self.tokens.push(Token::new(
                     TokenKind::LBrace,
                     Span::new(sb, self.byte_pos, sl, sc),
                 ));
                 continue;
             }
 
-            // Lex one token and capture it
-            let before = self.tokens.len();
+            // Lex one token; it is emitted into `self.tokens` (kept there so
+            // `self.tokens.last()` is the previous interpolation token).
             match ch {
                 '\n' => {
                     self.advance();
@@ -95,22 +107,23 @@ impl<'a> Lexer<'a> {
                 _ => self.lex_operator_or_punct(),
             }
 
-            // Move any newly emitted tokens to our local vec, and track
-            // paren/bracket depth on the fly so a later `:` knows
-            // whether it's inside a grouping construct.
-            while self.tokens.len() > before {
-                let tok = self.tokens.remove(before);
-                match tok.kind {
+            // Fold paren/bracket depth for any newly emitted tokens WITHOUT
+            // removing them (they stay in `self.tokens` for the prev-token
+            // context decisions above; drained after the loop).
+            while scanned < self.tokens.len() {
+                match self.tokens[scanned].kind {
                     TokenKind::LParen => paren_depth += 1,
                     TokenKind::RParen => paren_depth = paren_depth.saturating_sub(1),
                     TokenKind::LBracket => bracket_depth += 1,
                     TokenKind::RBracket => bracket_depth = bracket_depth.saturating_sub(1),
                     _ => {}
                 }
-                tokens.push(tok);
+                scanned += 1;
             }
         }
 
+        // Drain the interpolation tokens out of the main buffer.
+        let tokens = self.tokens.split_off(interp_start);
         (tokens, spec)
     }
 
