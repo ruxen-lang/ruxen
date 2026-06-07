@@ -469,7 +469,16 @@ is the free fn `stdin()` (`library/std/io`). But
 Either synthesize a default init for FFI-only classes (or error at typeck),
 and fix the tutorial.
 
-## Q20 · S3 — `T: Send` bound required for `Mutex[T]`/`SharedSync[T]` construction in generics
+## Q20 · S3 — `T: Send` bound required for `Mutex[T]`/`SharedSync[T]` construction in generics  ✅ FIXED (diagnostic)
+
+> **FIXED** (stdlib-rust-cleanup): the E1101/E1102 message now detects when the
+> non-`Send`-ness traces to unbounded generic parameters nested in the payload
+> (`SharedSync[Mutex[T]]` → `T`) and tells the user to add the bound where it's
+> declared (`[T: Send]` on the enclosing class/function), instead of the
+> misleading "add `include Send` to the class" (which pointed at `Mutex`, not
+> editable). A concrete non-`Send` payload keeps the include-Send guidance.
+> Pin: `tests/send_bound_hint.rs`.
+
 
 `class Cell[T] { cell: SharedSync[Mutex[T]] … }` fails with
 `[E1101] cannot construct Mutex[T] — payload type T is not Send` until the

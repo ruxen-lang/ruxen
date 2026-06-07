@@ -61,6 +61,51 @@ fn bound_diagnostic_code(owner: Option<&str>, bound_name: &str) -> &'static str 
     }
 }
 
+/// Q20: collect the names of generic parameters (`Ty::TypeParam`) nested
+/// anywhere inside `ty` that do NOT already carry a `Send` bound — these are
+/// the parameters a user should add `[<name>: Send]` to. De-duplicated,
+/// declaration-order-stable. Empty when the un-`Send`-ness is due to a
+/// concrete type rather than an unbounded generic parameter.
+fn collect_unsend_type_params(ty: &Ty) -> Vec<String> {
+    fn walk(ty: &Ty, out: &mut Vec<String>) {
+        match ty {
+            Ty::TypeParam { name, bounds } => {
+                if !bounds.iter().any(|b| b.name == "Send") && !out.contains(name) {
+                    out.push(name.clone());
+                }
+            }
+            Ty::Class { generic_args, .. }
+            | Ty::Struct { generic_args, .. }
+            | Ty::Enum { generic_args, .. } => {
+                for g in generic_args {
+                    walk(g, out);
+                }
+            }
+            Ty::Array(inner)
+            | Ty::Set(inner)
+            | Ty::Option(inner)
+            | Ty::FixedArray(inner, _)
+            | Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => walk(inner, out),
+            Ty::Map(k, v) | Ty::Result(k, v) => {
+                walk(k, out);
+                walk(v, out);
+            }
+            Ty::Tuple(elems) => {
+                for e in elems {
+                    walk(e, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(ty, &mut out);
+    out
+}
+
 impl<'a> InferenceEngine<'a> {
     /// Param-typed enforcement seam. `expected` is a parameter / binding /
     /// return type; when it is a bounded `TypeParam` / `some`/`any` mixin,
@@ -167,10 +212,35 @@ impl<'a> InferenceEngine<'a> {
             }
             let code = bound_diagnostic_code(owner, &bound.name);
             let message = match (owner, bound.name.as_str()) {
-                (Some(cls), "Send") => format!(
-                    "cannot construct `{cls}[{found}]` — payload type `{found}` is not `Send`. \
-                     Add `include Send` to the class if it is safe to share across threads."
-                ),
+                (Some(cls), "Send") => {
+                    // Q20: when the non-`Send`-ness traces to one or more
+                    // generic parameters (`Mutex[T]` where `T` is unbounded),
+                    // point at WHERE to add the bound (`[T: Send]` on the
+                    // enclosing class/function) instead of the misleading
+                    // "add `include Send` to the class" (the user can't edit
+                    // `Mutex`). A concrete non-`Send` payload keeps the
+                    // include-Send guidance.
+                    let unsend = collect_unsend_type_params(found);
+                    if unsend.is_empty() {
+                        format!(
+                            "cannot construct `{cls}[{found}]` — payload type `{found}` is not \
+                             `Send`. Add `include Send` to `{found}` if it is safe to share \
+                             across threads."
+                        )
+                    } else {
+                        let names = unsend.join("`, `");
+                        let bounds = unsend
+                            .iter()
+                            .map(|n| format!("{n}: Send"))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!(
+                            "cannot construct `{cls}[{found}]` — generic parameter(s) `{names}` \
+                             are not known to be `Send`. Add the bound where they are declared, \
+                             e.g. `[{bounds}]` on the enclosing class/function."
+                        )
+                    }
+                }
                 (_, "Add") => format!(
                     "`sum` requires numeric elements that implement `Add`; \
                      `{found}` is not numeric"
